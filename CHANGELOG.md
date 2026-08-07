@@ -9,6 +9,40 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The graphical file listing lines its columns up again:** size and modified
+  sat wherever the name happened to end, so every row put them in a different
+  place while the header — painted outside the list, and therefore full width —
+  lined up with nothing. The list virtualiser hands each row a definite space
+  but leaves the row itself auto-width, so the name column had nothing to
+  absorb; rows now take the width they were given.
+
+- **The graphical help is readable, navigable with the mouse, and sized to your
+  window:** what a screenshot showed and no test could. A paragraph did not
+  wrap — it ran off the panel and was cut mid-word — and rows painted over each
+  other, so a long page appeared duplicated and overlapping. Text is now laid
+  out as text: one run per line that breaks at a word, with table rows kept in
+  columns instead of run together.
+  The overlay was a fixed 720×520 box, a stamp in the middle of a large window;
+  it now takes 86% of the window, up to a width where a line of prose is still
+  a line of prose. How many rows fit is derived from that size rather than
+  guessed at, which is what used to let the sidebar cursor walk off the bottom
+  edge and vanish while the keyboard said it had moved.
+  The mouse works: click a topic to open it, click a runnable row or a link to
+  activate it through the same path `Enter` uses — so a row the keyboard
+  refuses is a row the mouse refuses — and the wheel scrolls the page. Both
+  panels show a scroll indicator when there is more than fits. Dragging that
+  indicator is not wired yet.
+  Two things that were simply hard to read: links and command names took the
+  colour of the quick-search highlight, which a theme guarantees against ITS
+  background and not against this panel, and the sidebar drew group headers
+  almost exactly like the pages under them. Secondary text is now derived from
+  the prose colour, links are underlined as well as coloured, and a group looks
+  like a group. The page title moved out of the scrolling body into a header of
+  its own, so a long page stays labelled.
+  A command that no key runs now paints its NAME and never its dispatch key:
+  the dialog verbs live in a different catalogue, and the page about answering
+  a dialog used to read `dialog.confirm accepts what the dialog is showing`.
+
 - **The key that opens the GUI's help now closes it — all of them:** the close
   was spelled `f1` inside the overlay, so the two halves of one switch could
   disagree. No rebinding was needed to see it: the **vim** preset binds

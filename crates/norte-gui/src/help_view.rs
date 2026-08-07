@@ -204,6 +204,13 @@ impl ChordResolver for GuiChords {
     /// map for why it is filled the way it is, and
     /// `norte_frontend::keymap::paint_chord` for why nothing raw leaves here.
     fn chord(&self, command: &str) -> Option<String> {
+        // Un verbo de diálogo no tiene chord que enseñar en esta GUI, y no es
+        // un olvido: sus overlays resuelven teclas FIJAS en código y cada uno
+        // acepta un subconjunto distinto — la confirmación destructiva pide
+        // `y`, el selector `⏎`, la colisión `o`/`s`/`c`. Inventar UNA tecla
+        // para la marca sería mentir en dos de los tres sitios, así que la
+        // marca cae a la ETIQUETA del catálogo y la prosa de la página dice lo
+        // que hay que decir: se contesta con la tecla que enseña el diálogo.
         self.chords.get(command).cloned()
     }
 
@@ -224,6 +231,19 @@ impl ChordResolver for GuiChords {
     /// public builder and a built-in command's label must not be overridable by
     /// data that came off the wire even in principle.
     fn label(&self, command: &str) -> String {
+        // Los verbos de diálogo viven en OTRO catálogo (`dialog-cmd-*`, la
+        // etiqueta corta que la TUI ya usa en los pies generados), no en
+        // `help-cmd-*`. Sin esta rama la búsqueda fallaba, `label` devolvía
+        // vacío y `norte_help::label_or_id` caía al ID DE DESPACHO: la página
+        // «Contestar a un diálogo» se leía «dialog.confirm accepts what the
+        // dialog is showing», con la clave interna pintada como si fuera prosa.
+        if let Some(suffix) = command.strip_prefix("dialog.") {
+            let id = format!("dialog-cmd-{}", suffix.replace('.', "-"));
+            let text = norte_i18n::t_in(self.lang, &id);
+            if text != id {
+                return text;
+            }
+        }
         if norte_frontend::availability::plugin_of_command(command).is_some()
             && let Some(title) = self.plugin_labels.get(command)
         {
@@ -577,7 +597,7 @@ pub fn on_key(
     key_char: Option<&str>,
     chords: &GuiChords,
 ) -> HelpOutcome {
-    use norte_frontend::help::{Action, Focus};
+    use norte_frontend::help::Focus;
 
     // The filter is a REGIME, not a flag. While it is open the keys that leave
     // it must leave it, and nothing else may be routed as if it were closed:
@@ -639,17 +659,7 @@ pub fn on_key(
                 view.state.open_selected();
                 return HelpOutcome::None;
             }
-            return match view.state.action().cloned() {
-                Some(Action::Open(id)) => {
-                    view.state.open(&id);
-                    HelpOutcome::None
-                }
-                Some(Action::Run(cmd)) => match chords.availability(&cmd) {
-                    Availability::Available => HelpOutcome::Run(cmd),
-                    Availability::Unavailable { reason } => HelpOutcome::Blocked(reason),
-                },
-                None => HelpOutcome::None,
-            };
+            return activate(view, chords);
         }
         _ => {
             // Outside the filter regime a typed char means one thing only:
@@ -661,6 +671,30 @@ pub fn on_key(
         }
     }
     HelpOutcome::None
+}
+
+/// Does what the body's cursor is on: follows a link, or asks to run a command.
+///
+/// Shared by `Enter` and by a CLICK on the same row, so the two cannot drift
+/// into two dispatch semantics — a mouse that runs what the keyboard refuses is
+/// the bug this function exists to make impossible. The availability check is
+/// against the FROZEN resolver, so a row the reader sees dimmed answers
+/// `Blocked` however it was activated.
+#[must_use]
+pub fn activate(view: &mut HelpView, chords: &GuiChords) -> HelpOutcome {
+    use norte_frontend::help::Action;
+
+    match view.state.action().cloned() {
+        Some(Action::Open(id)) => {
+            view.state.open(&id);
+            HelpOutcome::None
+        }
+        Some(Action::Run(cmd)) => match chords.availability(&cmd) {
+            Availability::Available => HelpOutcome::Run(cmd),
+            Availability::Unavailable { reason } => HelpOutcome::Blocked(reason),
+        },
+        None => HelpOutcome::None,
+    }
 }
 
 /// `ctrl+p` from the help: the palette opens carrying the filter the reader
@@ -811,6 +845,38 @@ mod tests {
         assert_eq!(r.chord("pane.copy").as_deref(), Some("F5"));
         // …and a command nobody bound names nothing rather than inventing a key.
         assert_eq!(r.chord("no.such.command"), None);
+    }
+
+    /// Ninguna marca del corpus ENVIADO puede pintar una clave de despacho.
+    ///
+    /// El defecto que lo pedía: los verbos de diálogo viven en `dialog-cmd-*`
+    /// y `label` solo miraba `help-cmd-*`, así que devolvía vacío,
+    /// `norte_help::label_or_id` caía al id y la página «Contestar a un
+    /// diálogo» se leía «dialog.confirm accepts what the dialog is showing».
+    /// Un id de comando es una clave interna, no prosa.
+    ///
+    /// Se cruza el corpus ENTERO en los dos idiomas, no la página que falló:
+    /// lo que hay que impedir es la clase, no el caso.
+    #[test]
+    fn ninguna_marca_del_corpus_pinta_un_id_de_despacho() {
+        let (browse, viewer) = effectives();
+        for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+            let r = GuiChords::new(&browse, &viewer, lang);
+            for topic in norte_help::topics(lang) {
+                for command in &topic.commands {
+                    let pintado = match norte_help::render_command(command, &r) {
+                        norte_help::CommandText::Chord(k) => k,
+                        norte_help::CommandText::Name(n) => n,
+                    };
+                    assert_ne!(
+                        &pintado, command,
+                        "[{lang:?}] `{}` pinta su id de despacho: sin chord NI \
+                         etiqueta, `label_or_id` cae a la clave interna",
+                        topic.id
+                    );
+                }
+            }
+        }
     }
 
     #[test]

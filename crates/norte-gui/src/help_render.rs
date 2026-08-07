@@ -39,6 +39,13 @@ pub struct HelpSpan {
     /// Theme role. `main.rs` maps it to a colour through the same
     /// `ChromeColors`/`theme_map` path every other view uses.
     pub role: Role,
+    /// The fragment is a LINK to another page.
+    ///
+    /// Painted differently on purpose: a link that is only a shade of the
+    /// prose colour is a link nobody sees. Colour alone would not do it
+    /// either — a theme is free to make its secondary text any colour — so the
+    /// painter underlines it, which no theme can take away.
+    pub link: bool,
 }
 
 impl HelpSpan {
@@ -47,6 +54,15 @@ impl HelpSpan {
         Self {
             text: text.into(),
             role,
+            link: false,
+        }
+    }
+
+    /// A fragment that opens another page.
+    fn link(text: impl Into<String>, role: Role) -> Self {
+        Self {
+            link: true,
+            ..Self::new(text, role)
         }
     }
 }
@@ -69,6 +85,20 @@ pub struct HelpLine {
     pub dim: bool,
     /// The provenance line of a plugin page.
     pub badge: bool,
+    /// The line is the page TITLE.
+    ///
+    /// The painter lifts it out of the scroll and into a header of its own, so
+    /// the reader can always see which page they are on — the title used to
+    /// scroll away with the first paragraph, which on a long page left the
+    /// detail panel unlabelled.
+    pub title: bool,
+    /// The line is a TABLE row: its spans are CELLS, not a running sentence.
+    ///
+    /// The distinction earns its keep in the painter. Prose is one wrapping
+    /// text run, so a paragraph breaks at a word instead of at the edge of the
+    /// panel; a table row has to keep its columns apart, and concatenating its
+    /// cells into one run reads as `confirmationshall I touch these files`.
+    pub columns: bool,
     /// Monospace line (a code fence).
     pub mono: bool,
 }
@@ -120,7 +150,10 @@ const SEP: &str = " — ";
 /// orders is one page a reader cannot carry between them.
 #[must_use]
 pub fn render_topic(topic: &Topic, lang: Lang, r: &(impl ChordResolver + ?Sized)) -> Vec<HelpLine> {
-    let mut lines = vec![HelpLine::one(topic.title.clone(), Role::Title)];
+    let mut lines = vec![HelpLine {
+        title: true,
+        ..HelpLine::one(topic.title.clone(), Role::Title)
+    }];
 
     if let Some(badge) = plugin_badge(topic, lang) {
         let mut line = HelpLine::one(badge, Role::Info);
@@ -203,6 +236,8 @@ fn row_line(row: &norte_help::ResolvedRow, index: usize, lang: Lang) -> HelpLine
         dim: !available,
         badge: false,
         mono: false,
+        title: false,
+        columns: false,
     }
 }
 
@@ -275,6 +310,7 @@ fn table(header: &[String], rows: &[Vec<String>]) -> Vec<HelpLine> {
             .map(|h| HelpSpan::new(h.clone(), Role::Title))
             .collect(),
         indent: 1,
+        columns: true,
         ..HelpLine::default()
     }];
     for row in rows {
@@ -285,6 +321,7 @@ fn table(header: &[String], rows: &[Vec<String>]) -> Vec<HelpLine> {
                 .map(|(cell, _)| HelpSpan::new(cell.clone(), Role::Regular))
                 .collect(),
             indent: 1,
+            columns: true,
             ..HelpLine::default()
         });
     }
@@ -308,7 +345,7 @@ fn frags(spans: &[Span], lang: Lang, r: &(impl ChordResolver + ?Sized)) -> Vec<H
             // The page's TITLE, exactly as the `see_also` rows and the sidebar
             // paint it: one thing spelled one way. An unresolvable id keeps the
             // id, for the reason the `see_also` arm gives.
-            Span::TopicLink(id) => HelpSpan::new(
+            Span::TopicLink(id) => HelpSpan::link(
                 norte_help::topic(lang, id.as_str())
                     .map_or_else(|| id.to_string(), |t| t.title.clone()),
                 Role::Info,

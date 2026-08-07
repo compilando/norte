@@ -2537,7 +2537,63 @@ impl NorteGui {
     /// costs a page key that scrolls slightly less than a screenful, or a
     /// revealed row landing a line or two from the edge — never a row the
     /// reader cannot reach, because `reveal` only ever scrolls TOWARDS it.
-    const HELP_BODY_ROWS: usize = 24;
+    /// Proporción de la ventana que ocupa el marco de la ayuda.
+    ///
+    /// Relativo y no fijo: un panel de 720×520 en una ventana de 2560 px es un
+    /// sello en medio de una pared, y en una ventana pequeña se salía. Los
+    /// topes de abajo evitan los dos extremos — una ayuda tan ancha que la
+    /// prosa se lea en renglones de 200 caracteres, y una tan pequeña que no
+    /// quepa nada.
+    const HELP_FRAME_FRAC: f32 = 0.86;
+    /// Ancho máximo del marco: más allá, la MEDIDA tipográfica sufre.
+    const HELP_FRAME_MAX_W: f32 = 1180.0;
+    /// Mínimos por debajo de los cuales el overlay deja de ser usable.
+    const HELP_FRAME_MIN_W: f32 = 480.0;
+    /// Mínimo de alto, por lo mismo.
+    const HELP_FRAME_MIN_H: f32 = 320.0;
+
+    /// El tamaño del marco de la ayuda para ESTE viewport.
+    fn help_frame(&self, viewport: gpui::Size<gpui::Pixels>) -> (f32, f32) {
+        let w = (f32::from(viewport.width) * Self::HELP_FRAME_FRAC)
+            .clamp(Self::HELP_FRAME_MIN_W, Self::HELP_FRAME_MAX_W);
+        let h = (f32::from(viewport.height) * Self::HELP_FRAME_FRAC).max(Self::HELP_FRAME_MIN_H);
+        (w, h)
+    }
+
+    /// Cuántas filas caben DE VERDAD en la lateral y en el cuerpo.
+    ///
+    /// Derivado, no estimado, y ese es el arreglo: `HELP_BODY_ROWS` era 24 por
+    /// aproximación y la ventana pinta menos, así que
+    /// [`Self::sidebar_offset`] daba por visible un cursor que ya estaba fuera
+    /// del panel — bajando por el índice con el teclado, el cursor
+    /// desaparecía y no había forma de saber dónde estaba.
+    ///
+    /// El marco son [`Self::HELP_FRAME_H`] px menos la cabecera y el pie, que
+    /// son una línea con su `py` cada uno, y el resto se reparte en filas de
+    /// `row_h`. Suelo de 1: una ventana absurda (fuente gigante) tiene que
+    /// dejar al menos una fila, o `skip`/`take` no enseñan nada.
+    fn help_rows_for(&self, frame_h: f32) -> usize {
+        let row_h = f32::from(self.fonts.row_h);
+        // Cabecera, pie y TÍTULO del detalle miden EXACTAMENTE una fila cada
+        // uno porque se lo fijamos al pintarlos, y cada fila de la lateral
+        // mide una fila por lo mismo. Sin esas alturas definidas esto volvería
+        // a ser una estimación, y una estimación de más esconde el cursor por
+        // debajo del borde.
+        let libre = frame_h - 3.0 * row_h;
+        ((libre / row_h).floor() as usize).max(1)
+    }
+
+    /// Las filas que caben con el viewport VIGENTE.
+    fn help_rows(&self, viewport: gpui::Size<gpui::Pixels>) -> usize {
+        self.help_rows_for(self.help_frame(viewport).1)
+    }
+
+    /// Líneas por muesca de rueda en la ayuda.
+    ///
+    /// Tres, como el desplazamiento por defecto de casi cualquier lista: una
+    /// sola línea obliga a girar la rueda una eternidad en una página larga, y
+    /// una pantalla entera por muesca convierte la rueda en `PgDn`.
+    const HELP_WHEEL_LINES: isize = 3;
 
     /// The facts the help overlay is frozen against: the same table the
     /// context menu builds from, seeded from the FOCUSED pane's cursor.
@@ -2638,7 +2694,7 @@ impl NorteGui {
     /// Handles ONE key with the help open — same ctrl/alt/platform gate as
     /// [`Self::on_palette_key`], with `ctrl+p` intercepted BEFORE it as the
     /// bridge into the palette (the pure router never sees a modifier).
-    fn on_help_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+    fn on_help_key(&mut self, ks: &gpui::Keystroke, window: &Window, cx: &mut Context<Self>) {
         // La tecla que ABRE la ayuda la CIERRA, y la decide el keymap
         // (`help_view::closes_help`), no una `f1` escrita en el router. Va
         // ANTES del gate de modificadores de abajo: ese gate existe para que
@@ -2737,10 +2793,11 @@ impl NorteGui {
                 .flatten();
             (lines.len(), focused)
         });
+        let rows = self.help_rows(window.viewport_size());
         if let Some(view) = &mut self.help {
             view.state.clamp_scroll(total);
             if let Some(line) = focused_line {
-                view.state.reveal(line, Self::HELP_BODY_ROWS);
+                view.state.reveal(line, rows);
             }
         }
         self.fetch_help_page();
@@ -2767,6 +2824,52 @@ impl NorteGui {
     /// Closes the overlay and drops the frozen resolver with it — the two are
     /// one photograph, and a resolver outliving its page would freeze the NEXT
     /// one against facts nobody looked at.
+    /// Un clic sobre una fila ejecutable de la página, o sobre un enlace.
+    ///
+    /// Mueve el cursor de acciones y ACTIVA, por el mismo `help_view::activate`
+    /// que usa `Enter` — incluida la rama de fila atenuada, que contesta en el
+    /// pie del propio overlay porque el flash de ventana se pinta debajo de su
+    /// scrim. El despacho de un comando es el de la paleta, como en la rama de
+    /// teclado: un solo camino, así que nada de esto puede saltarse la política
+    /// ni la aprobación de un plugin.
+    fn on_help_action_click(&mut self, action: usize, cx: &mut Context<Self>) {
+        let Some(chords) = self.help_chords.clone() else {
+            return;
+        };
+        let outcome = {
+            let Some(view) = &mut self.help else {
+                return;
+            };
+            view.status = None;
+            view.state.click_action(action);
+            help_view::activate(view, &chords)
+        };
+        match outcome {
+            help_view::HelpOutcome::None | help_view::HelpOutcome::Palette(_) => {}
+            help_view::HelpOutcome::Close => self.close_help(),
+            help_view::HelpOutcome::Run(key) => {
+                self.close_help();
+                if let Some((id, command)) = parse_plugin_palette_key(&key) {
+                    let _ = self.cmds.send(SessionCmd::PluginRunCommand {
+                        id: id.to_owned(),
+                        command: command.to_owned(),
+                        arg: String::new(),
+                    });
+                } else {
+                    self.run_command(&key, cx);
+                }
+            }
+            help_view::HelpOutcome::Blocked(reason) => {
+                if let Some(view) = &mut self.help {
+                    view.status = Some(norte_i18n::t(norte_frontend::availability::reason_key(
+                        reason,
+                    )));
+                }
+            }
+        }
+        cx.notify();
+    }
+
     fn close_help(&mut self) {
         self.help = None;
         self.help_chords = None;
@@ -3288,7 +3391,7 @@ impl NorteGui {
         // (el puente del filtro), y con el orden inverso esa tecla nunca
         // llegaría aquí.
         if self.help.is_some() {
-            self.on_help_key(ks, cx);
+            self.on_help_key(ks, window, cx);
             cx.notify();
             return;
         }
@@ -3725,6 +3828,34 @@ impl NorteGui {
                 self.panes[pane].cursor_down();
             }
             self.follow_cursor(pane);
+        }
+        cx.notify();
+    }
+
+    /// Rueda del ratón sobre la ayuda: desplaza el CUERPO, tenga el foco donde
+    /// tenga.
+    ///
+    /// La regla es la de los panes —se desplaza lo que está bajo el puntero— y
+    /// la página `mouse` del corpus ya la promete. Con una salvedad honesta: la
+    /// barra lateral no tiene scroll propio (su ventana la deriva
+    /// `sidebar_offset` del cursor), así que la rueda sobre ella mueve el
+    /// cuerpo igual. Mover la lateral pediría un scroll independiente en el
+    /// modelo, que es más que lo que esta deuda pedía.
+    fn on_help_scroll(&mut self, delta: ScrollDelta, cx: &mut Context<Self>) {
+        let Some(view) = self.help.as_mut() else {
+            return;
+        };
+        let y = scroll_y(delta);
+        if y > 0.0 {
+            view.state.scroll_body(-Self::HELP_WHEEL_LINES);
+        } else if y < 0.0 {
+            view.state.scroll_body(Self::HELP_WHEEL_LINES);
+        }
+        // El tope de abajo lo pone el pintor, que es quien sabe cuántas líneas
+        // tiene la página maquetada — mismo cierre que la rama de teclado.
+        let total = self.help.as_ref().map_or(0, |v| self.help_body(v).len());
+        if let Some(view) = self.help.as_mut() {
+            view.state.clamp_scroll(total);
         }
         cx.notify();
     }
@@ -4290,6 +4421,15 @@ impl NorteGui {
                 gpui::Toggled::False
             })
             .h(self.fonts.row_h)
+            // ANCHO COMPLETO, y no es cosmético: `uniform_list` maqueta cada
+            // fila con `layout_as_root`, donde el espacio disponible es
+            // definido pero el ancho de la fila sigue siendo `auto` — es
+            // decir, el de su CONTENIDO. Sin esto el `flex_1` del nombre no
+            // tenía nada que absorber, las celdas de tamaño y fecha salían
+            // pegadas al nombre (cada fila en una x distinta) y la cabecera
+            // —que se pinta FUERA de la lista y sí recibe el ancho del pane—
+            // quedaba alineada con nada.
+            .w_full()
             .px(px(sp::S))
             .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
             // Redondeo sutil (GP): constante en TODAS las filas en vez de
@@ -4916,16 +5056,34 @@ impl NorteGui {
         &self,
         view: &help_view::HelpView,
         chrome: &ChromeColors,
+        window: &Window,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let state = &view.state;
         let focus_topics = state.focus() == norte_frontend::help::Focus::Topics;
+        let (frame_w, frame_h) = self.help_frame(window.viewport_size());
+        let rows = self.help_rows_for(frame_h);
+        // La lateral crece con el marco pero no sin freno: pasado cierto ancho
+        // solo aleja el índice de la página que describe.
+        let side_w = (frame_w * 0.26).clamp(180.0, 320.0);
+        // Texto SECUNDARIO derivado de la prosa, no del color de quick-search.
+        // Ese era `quick_fg` y un tema puede darle el contraste que quiera
+        // contra SU fondo (el del resaltado), no contra este panel: los
+        // enlaces y los nombres de comando salían casi ilegibles. Derivarlo
+        // del `fg` que el tema sí garantiza aquí lo hace legible en cualquier
+        // tema, y sigue leyéndose como secundario.
+        let secondary = gpui::Rgba {
+            a: 0.8,
+            ..chrome.fg
+        };
 
         // ── sidebar ──────────────────────────────────────────────────────
         let mut side = div()
             .id("help-topics")
             .role(gpui::Role::List)
             .aria_label(norte_i18n::t("help-title"))
-            .w(px(200.0))
+            .w(px(side_w))
+            .relative()
             .flex()
             .flex_col()
             .overflow_hidden()
@@ -4939,15 +5097,8 @@ impl NorteGui {
         // The sidebar scrolls like the body does: with enough plugin pages the
         // list outgrows the panel, and without an offset the cursor walks off
         // the bottom while the body keeps changing for a row nobody can see.
-        let side_first =
-            Self::sidebar_offset(state.cursor(), state.rows().len(), Self::HELP_BODY_ROWS);
-        for (i, row) in state
-            .rows()
-            .iter()
-            .enumerate()
-            .skip(side_first)
-            .take(Self::HELP_BODY_ROWS)
-        {
+        let side_first = Self::sidebar_offset(state.cursor(), state.rows().len(), rows);
+        for (i, row) in state.rows().iter().enumerate().skip(side_first).take(rows) {
             let Some(label) = Self::sidebar_label(row) else {
                 // A group header with nothing to say: today only the synthetic
                 // keyboard group, whose single member already wears the same
@@ -4962,32 +5113,100 @@ impl NorteGui {
             let mut r = div()
                 .id(format!("help-topic-{i}"))
                 .role(gpui::Role::ListItem)
+                // Una fila = una fila, por la misma razón que la cabecera:
+                // `help_rows` cuenta con ello, y con filas de alto variable el
+                // cursor se salía por debajo del panel sin que nada lo dijera.
+                .h(self.fonts.row_h)
+                .flex()
+                .items_center()
+                // Mismo motivo que en el cuerpo: una fila que encoge deja su
+                // texto pintado sobre la de abajo. Aquí no se ha visto porque
+                // cada fila es una línea `truncate()`, pero con bastantes
+                // páginas de extensión la lista desborda la altura del panel y
+                // el defecto es idéntico.
+                .flex_shrink_0()
                 .px(px(sp::S))
                 .py(px(1.0)) // sub-XS: acento fino de una línea
                 .rounded(px(sp::RADIUS_ROW))
                 .truncate();
             r = match row {
+                // Cabecera de GRUPO: separada por arriba, con línea, en el
+                // color secundario y SIN la sangría de los temas. Antes era
+                // una fila más en un color parecido, así que el índice se leía
+                // como una lista plana de catorce cosas — la jerarquía estaba
+                // en los datos y no en la pantalla.
                 norte_frontend::help::SidebarRow::Group { .. } => r
-                    .text_color(chrome.quick_fg)
+                    .mt(px(sp::M))
+                    .border_t_1()
+                    .border_color(chrome.border_unfocus)
+                    .text_color(secondary)
                     .child(SharedString::from(label)),
+                // Un TEMA cuelga de su grupo: sangría mayor, y el seleccionado
+                // lleva además una barra de acento a la izquierda — el fondo
+                // solo ya se perdía contra el del panel en los temas oscuros.
                 norte_frontend::help::SidebarRow::Topic { .. } => r
-                    .pl(px(sp::S * 2.0))
+                    .pl(px(sp::L))
                     .aria_selected(selected)
                     .child(SharedString::from(label)),
             };
             if selected {
-                r = r.bg(chrome.sel_bg);
+                r = r
+                    .bg(chrome.sel_bg)
+                    .border_l_2()
+                    .border_color(chrome.border_focus)
+                    .pl(px(sp::L - 2.0));
                 if let Some(fg) = chrome.sel_fg {
                     r = r.text_color(fg);
                 }
             }
+            // El puntero (deuda que oscar cazó mirando la ventana): un clic
+            // ATERRIZA donde aterrizaría la flecha — enseña la página y no
+            // empuja un paso al rastro. Solo en filas de tema: una cabecera de
+            // grupo no es una página, y `HelpState::click_row` lo ignora de
+            // todos modos (el pintor puede ir un frame por detrás del modelo).
+            if matches!(row, norte_frontend::help::SidebarRow::Topic { .. }) {
+                let hover_bg = chrome.hover_bg;
+                r = r
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover_bg))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                            if let Some(view) = &mut this.help {
+                                view.state.click_row(i);
+                            }
+                            cx.notify();
+                        }),
+                    );
+            }
             side = side.child(r);
+        }
+        // La barra de la lateral: su ventana la deriva `sidebar_offset` del
+        // cursor, así que el pulgar dice dónde cae esa ventana en la lista
+        // entera — con muchas extensiones, la lista no cabe y hasta ahora nada
+        // lo decía.
+        if let Some(thumb) =
+            scroll_thumb(side_first, rows, state.rows().len(), chrome.border_unfocus)
+        {
+            side = side.child(thumb);
         }
 
         // ── body ─────────────────────────────────────────────────────────
+        let cuerpo = self.help_body(view);
+        let cuerpo_total = cuerpo.len();
+        // El TÍTULO sale del scroll y se convierte en la cabecera del panel de
+        // detalle, con el mismo texto que la fila del índice: la página se
+        // queda etiquetada por larga que sea, en vez de perder su nombre en
+        // cuanto el lector baja un párrafo.
+        let titulo = cuerpo
+            .iter()
+            .find(|l| l.title)
+            .map(|l| l.spans.iter().map(|s| s.text.as_str()).collect::<String>())
+            .unwrap_or_default();
         let mut body = div()
             .id("help-body")
             .role(gpui::Role::Document)
+            .relative()
             .flex_1()
             .flex()
             .flex_col()
@@ -5001,19 +5220,47 @@ impl NorteGui {
         // and without a bound every one of them was laid out and shaped by GPUI
         // on every frame the overlay stayed open. The window height is already
         // known, so the bound already existed; it simply was not applied.
-        for line in self
-            .help_body(view)
+        for (n, line) in cuerpo
             .into_iter()
+            // El título ya vive en la cabecera del panel: pintarlo otra vez
+            // aquí sería el mismo texto dos veces, una de ellas moviéndose.
+            .filter(|l| !l.title)
             .skip(state.body_scroll())
-            .take(Self::HELP_BODY_ROWS)
+            .take(rows)
+            .enumerate()
         {
             let dim = line.dim;
             let focused = !focus_topics && line.action == Some(state.action_cursor());
+            // Con `id` SIEMPRE, y no solo en las filas ejecutables: `id`
+            // cambia el tipo del elemento (`Div` → `Stateful<Div>`), así que
+            // ponerlo en una rama daría dos tipos para el mismo hijo. El
+            // índice es la posición en la VENTANA visible, que es lo único
+            // estable dentro de un frame.
+            // BLOQUE, no fila flex: el hijo de un contenedor de bloque recibe
+            // el ancho del contenedor, que es la restricción con la que
+            // `StyledText` decide dónde partir. Como flex-row, el texto se
+            // medía a su ancho natural (MaxContent) y no partía nunca. Ya no
+            // hay varios hijos que colocar en línea — los fragmentos son runs
+            // de UN texto, ver abajo.
             let mut l = div()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .items_center()
+                .id(("help-line", n))
+                // Las dos mitades del mismo defecto, y ninguna es cosmética.
+                //
+                // `w_full`: sin ancho definido la fila se dimensiona a su
+                // CONTENIDO, así que `flex_wrap` no tenía dónde envolver y una
+                // línea larga se salía de la caja — el `overflow_hidden` de la
+                // columna la cortaba a media palabra. Una página de plugin,
+                // que es la que trae texto que nadie escribió pensando en este
+                // ancho, se leía a la mitad.
+                //
+                // `flex_shrink_0`: por defecto un hijo de flex ENCOGE, y el
+                // texto no encoge con él — se sale de su caja y se pinta
+                // ENCIMA de la fila siguiente. Con párrafos largos la página
+                // entera aparecía duplicada y superpuesta. Que una fila
+                // conserve su alto natural es lo que hace que apilarlas sea
+                // apilarlas.
+                .w_full()
+                .flex_shrink_0()
                 // NO `gap` between the fragments of one line: they are the
                 // pieces of a running sentence (`Block::Paragraph` emits one
                 // line whose spans split at every `code`/`**strong**`), and a
@@ -5036,17 +5283,88 @@ impl NorteGui {
             if focused {
                 l = l.bg(chrome.sel_bg);
             }
-            for span in &line.spans {
-                let color = if dim {
-                    chrome.quick_fg
-                } else {
-                    self.help_role_color(span.role, chrome)
-                };
-                l = l.child(
-                    div()
-                        .text_color(color)
-                        .child(SharedString::from(span.text.clone())),
-                );
+            // Una fila EJECUTABLE (o un enlace) responde al clic por el MISMO
+            // camino que `Enter`: `help_view::activate`, contra el resolver
+            // congelado. Un ratón que ejecuta lo que el teclado rechaza es
+            // exactamente lo que ese camino compartido impide.
+            if let Some(k) = line.action {
+                let hover_bg = chrome.hover_bg;
+                l = l
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover_bg))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                            this.on_help_action_click(k, cx);
+                        }),
+                    );
+            }
+            // UN elemento de texto por línea, con los colores como RUNS, y no
+            // un `div` por fragmento.
+            //
+            // El motivo es la envoltura, no el ahorro: un `div` por fragmento
+            // se mide sin restricción de ancho, así que un párrafo largo —un
+            // solo fragmento— se salía de la caja y el `overflow_hidden` lo
+            // cortaba a media palabra; lo único que envolvía era la frontera
+            // ENTRE fragmentos, que es por lo que un `F1` acababa solo en su
+            // renglón con la frase debajo. `StyledText` recibe el ancho de la
+            // fila y parte por palabras, que es lo que hace un párrafo.
+            if line.columns {
+                // Una fila de TABLA: sus fragmentos son CELDAS. Van en una fila
+                // flex, cada una con su parte del ancho, porque concatenarlas
+                // en un solo texto las pega («confirmationshall I touch…») y
+                // porque una tabla sin columnas no es una tabla. Cada celda
+                // envuelve dentro de lo suyo: el ancho definido de la celda es
+                // la restricción, igual que el de la fila lo es para la prosa.
+                let mut fila = div().flex().flex_row().w_full().gap(px(sp::M));
+                for span in &line.spans {
+                    let color = if dim {
+                        secondary
+                    } else {
+                        self.help_role_color(span.role, chrome)
+                    };
+                    fila = fila.child(
+                        div()
+                            .flex_1()
+                            .text_color(color)
+                            .child(SharedString::from(span.text.clone())),
+                    );
+                }
+                l = l.child(fila);
+            } else if !line.spans.is_empty() {
+                let mut texto = String::new();
+                let mut runs: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> = Vec::new();
+                for span in &line.spans {
+                    let color = if dim {
+                        secondary
+                    } else if span.link {
+                        // Un enlace se ve como un enlace: el acento del tema.
+                        chrome.border_focus
+                    } else if span.role == Role::Info {
+                        secondary
+                    } else {
+                        self.help_role_color(span.role, chrome)
+                    };
+                    let desde = texto.len();
+                    texto.push_str(&span.text);
+                    runs.push((
+                        desde..texto.len(),
+                        gpui::HighlightStyle {
+                            color: Some(color.into()),
+                            // Subrayado, y no solo color: un tema es libre de
+                            // elegir sus colores y el subrayado no se lo puede
+                            // quitar. Es lo que distingue un enlace de una
+                            // palabra en otro tono.
+                            underline: span.link.then(|| gpui::UnderlineStyle {
+                                thickness: px(1.0),
+                                color: Some(chrome.border_focus.into()),
+                                wavy: false,
+                            }),
+                            ..Default::default()
+                        },
+                    ));
+                }
+                l = l.child(gpui::StyledText::new(SharedString::from(texto)).with_highlights(runs));
             }
             // A blank line still occupies one: it is the paragraph separation
             // the renderer emitted, and collapsing it would run the prose
@@ -5055,6 +5373,18 @@ impl NorteGui {
                 l = l.child(div().child(SharedString::from(" ")));
             }
             body = body.child(l);
+        }
+        // La del cuerpo, con la misma salvedad que `HELP_BODY_ROWS`: el total
+        // son LÍNEAS del modelo y una línea larga ocupa varios renglones al
+        // envolver, así que el pulgar es una aproximación por arriba. Dice
+        // "queda página", que es lo que no decía nada.
+        if let Some(thumb) = scroll_thumb(
+            state.body_scroll(),
+            rows,
+            cuerpo_total,
+            chrome.border_unfocus,
+        ) {
+            body = body.child(thumb);
         }
 
         // ── frame ────────────────────────────────────────────────────────
@@ -5067,8 +5397,11 @@ impl NorteGui {
             .id("help-view")
             .role(gpui::Role::Document)
             .aria_label(norte_i18n::t("help-title"))
-            .w(px(720.0))
-            .h(px(520.0))
+            .on_scroll_wheel(cx.listener(|this, ev: &gpui::ScrollWheelEvent, _w, cx| {
+                this.on_help_scroll(ev.delta, cx);
+            }))
+            .w(px(frame_w))
+            .h(px(frame_h))
             .flex()
             .flex_col()
             .border_2()
@@ -5076,8 +5409,14 @@ impl NorteGui {
             .bg(chrome.pane_bg_focus)
             .child(
                 div()
+                    // Alto de UNA fila, y no un `py` que lo deje al azar del
+                    // interlineado: `help_rows` divide por él para saber
+                    // cuántas filas caben, y una cabecera de alto desconocido
+                    // convertía esa cuenta en una estimación.
+                    .h(self.fonts.row_h)
+                    .flex()
+                    .items_center()
                     .px(px(sp::S))
-                    .py(px(sp::XS))
                     .bg(chrome.header_bg)
                     .text_color(chrome.header_fg)
                     .truncate()
@@ -5090,12 +5429,37 @@ impl NorteGui {
                     .flex_row()
                     .overflow_hidden()
                     .child(side)
-                    .child(body),
+                    .child(
+                        // El panel de detalle: su propio título arriba, con
+                        // regla debajo, y el cuerpo desplazable por debajo.
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .h(self.fonts.row_h)
+                                    .flex()
+                                    .items_center()
+                                    .px(px(sp::M))
+                                    .border_b_1()
+                                    .border_color(chrome.border_unfocus)
+                                    .text_color(chrome.fg)
+                                    .truncate()
+                                    .child(SharedString::from(titulo)),
+                            )
+                            .child(body),
+                    ),
             )
             .child(
                 div()
+                    // Alto de UNA fila, como la cabecera y por lo mismo:
+                    // `help_rows` resta las dos para saber qué queda.
+                    .h(self.fonts.row_h)
+                    .flex()
+                    .items_center()
                     .px(px(sp::S))
-                    .py(px(1.0)) // sub-XS: acento fino de una línea
                     .bg(chrome.quick_bg)
                     // The footer says why a dimmed row did nothing when there
                     // is something to say, and the key hints otherwise. INSIDE
@@ -6948,6 +7312,49 @@ fn chrome_mark_fg(theme: &Theme) -> gpui::Rgba {
     chrome(theme, Role::Mark, true, MARK_FG)
 }
 
+/// Una barra de scroll fina para una ventana de N filas sobre un total.
+///
+/// La ayuda no usa el scroll de GPUI: su lateral y su cuerpo son ventanas
+/// calculadas a mano (`skip`/`take` sobre el modelo compartido), así que
+/// tampoco hay un `Scrollbar` que pintar por debajo. Esto es lo mínimo honesto
+/// —dónde estás y cuánto queda— en proporciones RELATIVAS, que es lo único
+/// que se puede saber sin medir la caja: el pintor no conoce su propia altura
+/// en píxeles.
+///
+/// `None` cuando cabe todo: una barra que ocupa el canal entero no informa de
+/// nada y solo roba ancho a la prosa.
+///
+/// NO se arrastra todavía. Arrastrarla pide las bounds del canal en píxeles
+/// (un `canvas` que las guarde, o el hitbox), y el gesto que falta de verdad
+/// —la rueda— ya está. Deuda anotada en el CHANGELOG, no un olvido.
+fn scroll_thumb(
+    offset: usize,
+    visible: usize,
+    total: usize,
+    color: gpui::Rgba,
+) -> Option<gpui::Div> {
+    if total == 0 || visible >= total {
+        return None;
+    }
+    let total_f = total as f32;
+    // Un mínimo visible: con 2000 líneas la proporción exacta sería un pelo de
+    // medio píxel, que es lo mismo que no pintar nada.
+    let alto = (visible as f32 / total_f).max(0.04);
+    // El tope de arriba se acota para que el pulgar no se salga por abajo
+    // cuando el `offset` está al final.
+    let arriba = (offset as f32 / total_f).min(1.0 - alto);
+    Some(
+        div()
+            .absolute()
+            .top(gpui::relative(arriba))
+            .right_0()
+            .w(px(sp::XS))
+            .h(gpui::relative(alto))
+            .rounded(px(sp::XS / 2.0))
+            .bg(color),
+    )
+}
+
 /// Chrome horizontal fijo de un pane (#108 b6): `border_2` a ambos lados
 /// (2px × 2) + `px(sp::S)` de padding a ambos lados + la MITAD del hueco
 /// entre panes (`gap(px(sp::XS))` de la fila de panes — viewport/2 lo
@@ -7465,7 +7872,7 @@ impl Render for NorteGui {
                     .items_center()
                     .justify_center()
                     .bg(rgba(0x000000aa))
-                    .child(self.render_help(view, &chrome)),
+                    .child(self.render_help(view, &chrome, window, cx)),
             );
         }
 
