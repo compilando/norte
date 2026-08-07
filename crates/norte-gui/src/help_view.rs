@@ -11,7 +11,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use norte_frontend::availability::Facts;
-use norte_frontend::keymap::{Chord, Effective, paint_chord, parse_chord};
+use norte_frontend::keymap::{Effective, paint_chord};
 use norte_help::{Availability, ChordResolver};
 
 /// The facts of a context with nothing in the way: what [`GuiChords`] answers
@@ -107,20 +107,6 @@ pub struct GuiChords {
     /// Values are already masked and capped ([`plugin_text`]): the resolver
     /// hands strings straight to a painter.
     plugin_labels: HashMap<String, String>,
-    /// EVERY chord bound to `app.help`, and not just the first.
-    ///
-    /// The overlay's own close keys ([`closes_help`]). Plural because the vim
-    /// preset ships two — `f1` and `?` — and picking one would leave the other
-    /// opening a page it cannot close: exactly the asymmetry this field exists
-    /// to remove, reachable today without anybody rebinding anything.
-    ///
-    /// Kept as `Chord`s and not as the painted strings beside them in
-    /// [`Self::chords`]: one is for a reader to recognise, the other is for a
-    /// keystroke to match, and matching on the label would make the close
-    /// depend on how a chord is spelled for humans.
-    ///
-    /// SEQUENCES are excluded — see [`closes_help`] for why.
-    close_chords: Vec<Chord>,
 }
 
 impl GuiChords {
@@ -136,23 +122,12 @@ impl GuiChords {
                     .or_insert_with(|| paint_chord(&seq));
             }
         }
-        // From BROWSE alone: the help opens from the panes, and the viewer
-        // captures every key through its own resolver, so a `app.help` bound
-        // only in the viewer screen is not a key this overlay can be closed
-        // with.
-        let close_chords = browse
-            .bindings()
-            .into_iter()
-            .filter(|(seq, cmd)| *cmd == "app.help" && !seq.contains(' '))
-            .filter_map(|(seq, _)| parse_chord(&seq).ok())
-            .collect();
         Self {
             chords,
             lang,
             facts: NO_IMPEDIMENT,
             active_plugins: BTreeSet::new(),
             plugin_labels: HashMap::new(),
-            close_chords,
         }
     }
 
@@ -327,6 +302,15 @@ pub struct HelpView {
     /// is painted before this overlay's scrim and would be covered by it. It is
     /// cleared by the next key, so it never outlives the question it answers.
     pub status: Option<String>,
+    /// The overlay was opened OVER a live modal.
+    ///
+    /// It then owns the keyboard — the modal's own verbs are unreachable until
+    /// it closes, which is the point: nothing gets confirmed through a page
+    /// covering the question. The modal stays painted underneath (this overlay
+    /// is drawn last), so the question is never hidden, only unanswerable for
+    /// as long as the reader is reading about it. Same contract as the TUI's
+    /// `HelpView::over_modal`.
+    pub over_modal: bool,
 }
 
 impl HelpView {
@@ -341,6 +325,7 @@ impl HelpView {
         Self {
             state: norte_frontend::help::HelpState::new(lang, norte_i18n::t("help-topic-keys")),
             keys_lines,
+            over_modal: false,
             asked: BTreeSet::new(),
             publishers: HashMap::new(),
             active: BTreeSet::new(),
@@ -555,41 +540,6 @@ const PAGE: usize = 10;
 /// `chords` is the FROZEN resolver the open page was painted through
 /// ([`HelpView::freeze`]): Enter has to be answered by the verdict the reader
 /// can SEE, never by a fresher one that would run what the page shows dimmed.
-/// Does this keystroke mean `app.help` — that is, is it a key the reader opens
-/// the help WITH, and therefore one that closes it?
-///
-/// Asked BEFORE the router's modifier gate, because a rebind can put the
-/// command behind `ctrl+h` and that gate exists to keep modified keys out of
-/// the filter, not to keep them from closing the overlay.
-///
-/// The comparison is between `Chord`s and never between painted strings: a
-/// painted chord is for a human to read (`Ctrl+H`), and matching on it would
-/// make the close depend on the spelling of a label.
-///
-/// EVERY chord bound to the command answers `true`, which is the case that
-/// exists today without anybody editing a keymap: the vim preset binds both
-/// `f1` and `?`, and until this function existed `?` opened a page that only
-/// `f1` and `Esc` could close.
-///
-/// A MULTI-chord binding (`g h`) answers `false`. The overlay has no sequence
-/// state — the TUI's resolver does, this router does not — so the honest answer
-/// is that the first chord of a sequence is not the sequence. Such a reader
-/// still closes with `Esc`, which is why that one is hardcoded.
-#[must_use]
-pub fn closes_help(
-    chords: &GuiChords,
-    key: &str,
-    key_char: Option<&str>,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-) -> bool {
-    let Some(pressed) = crate::keymap::gpui_chord(key, ctrl, alt, shift, key_char) else {
-        return false;
-    };
-    chords.close_chords.contains(&pressed)
-}
-
 #[must_use]
 pub fn on_key(
     view: &mut HelpView,
@@ -752,37 +702,38 @@ mod tests {
     }
 
     /// La tecla que ABRE la ayuda la CIERRA, y son TODAS las teclas del
-    /// lector, no `F1` hardcodeada.
+    /// lector.
     ///
     /// El caso no necesita que nadie edite un keymap: el preset **vim** liga
-    /// `f1` y `?` a `app.help`, así que hasta ahora `?` abría una página que
-    /// solo cerraban `f1` y `Esc` — una tecla que hace la mitad de su trabajo.
+    /// `f1` y `?` a `app.help`, así que hasta H3h `?` abría una página que solo
+    /// cerraban `f1` y `Esc` — una tecla que hace la mitad de su trabajo.
+    ///
+    /// Vive aquí y no en `keymap.rs` porque lo que fija es una propiedad de
+    /// ESTE overlay; lo que se prueba es el predicado que usan sus dos mitades.
     #[test]
     fn cierran_todas_las_teclas_de_app_help() {
-        let (browse, viewer) = crate::keymap::build_effectives_preset_only("vim");
-        let chords = GuiChords::new(&browse, &viewer, norte_i18n::Lang::En);
+        let (browse, _) = crate::keymap::build_effectives_preset_only("vim");
+        let means = |key: &str, chr: Option<&str>, ctrl: bool| {
+            crate::keymap::means_command(&browse, "app.help", key, ctrl, false, false, chr)
+        };
+        assert!(means("f1", None, false), "la tecla obvia sigue cerrando");
         assert!(
-            closes_help(&chords, "f1", None, false, false, false),
-            "la tecla obvia sigue cerrando"
-        );
-        assert!(
-            closes_help(&chords, "?", Some("?"), false, false, false),
+            means("?", Some("?"), false),
             "y la OTRA que el mismo preset liga a `app.help` también"
         );
         assert!(
-            !closes_help(&chords, "x", Some("x"), false, false, false),
+            !means("x", Some("x"), false),
             "una tecla que no es `app.help` no cierra nada"
         );
 
         // Y una capa de usuario que añade su propio chord entra igual: lo que
-        // manda es el keymap, no una lista escrita aquí.
-        let (browse, viewer) = effectives_con_help_tambien_en("ctrl+h");
-        let chords = GuiChords::new(&browse, &viewer, norte_i18n::Lang::En);
-        assert!(closes_help(&chords, "h", None, true, false, false));
-        assert!(
-            closes_help(&chords, "f1", None, false, false, false),
-            "sin quitarle la suya al preset"
-        );
+        // manda es el keymap, no una lista escrita a mano.
+        let (browse, _) = effectives_con_help_tambien_en("ctrl+h");
+        let means = |key: &str, chr: Option<&str>, ctrl: bool| {
+            crate::keymap::means_command(&browse, "app.help", key, ctrl, false, false, chr)
+        };
+        assert!(means("h", None, true));
+        assert!(means("f1", None, false), "sin quitarle la suya al preset");
     }
 
     /// El router puro ya no conoce `f1`: quien decide es el keymap

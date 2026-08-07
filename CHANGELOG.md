@@ -9,6 +9,27 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The graphical help answers where you ARE, from every screen:** `F1` opened
+  the index no matter what was on screen. It now opens the page about the
+  screen you are on — the viewer, the collision dialog, the rename prompt, the
+  AI plan — through a table that a new modal cannot compile without extending,
+  so nobody can add a screen without deciding which page explains it.
+  Two places the key could not even reach: with a dialog open the modal ate it,
+  and with the viewer open its own resolver did. Both now reach the help, and a
+  help opened over a dialog takes the keyboard while it is up — the dialog
+  stays painted underneath, so the question is never hidden, only unanswerable
+  until you close the page about it. Nothing gets confirmed through a page
+  covering the question.
+  From the command palette, `F1` on a row opens that command's page — the other
+  direction of the bridge that already carried your filter INTO the palette. A
+  row nothing documents says so instead of dropping you in the index, where you
+  could not tell whether your command was in there somewhere or simply
+  undocumented.
+  The help's scrollbar can be dragged now, and clicking the track jumps there.
+  The sidebar's stays an indicator on purpose: its window is derived from the
+  cursor, and moving the cursor OPENS the page it lands on — a scrollbar that
+  changes what you are reading is not a scrollbar.
+
 - **The graphical file listing lines its columns up again:** size and modified
   sat wherever the name happened to end, so every row put them in a different
   place while the header — painted outside the list, and therefore full width —
@@ -141,14 +162,8 @@ independently through `PROTOCOL_VERSION`.
   underneath the overlay's own scrim; the search box could be entered and never
   left, so letters meant for the page silently edited it; and the body laid out
   every line of a document, not the ones on screen.
-  Deliberately not done: `F1` in the GUI always opens the index, because the GUI
-  has no dialog-context table to map a screen onto a page (the terminal app's
-  contextual `F1` is H3c); the GUI's palette still does not offer `F1` on a row
-  to open that command's page; and the help is unreachable while the viewer is
-  open, since the viewer captures every key through its own resolver. The two
-  keyboard defects this entry used to list — `F1` closing regardless of what
-  `app.help` is bound to, and a keymap reload never reaching the open page —
-  are fixed; see below.
+  Everything this entry once listed as deliberately not done is done; see
+  below.
 - **Plugins bring their own help page (H3e):** a plugin can ship a `help.md`
   next to its `plugin.toml`, and it becomes one more page in the help overlay,
   under an *Extensions* group, with the plugin's own commands as rows you can

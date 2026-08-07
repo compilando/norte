@@ -131,6 +131,40 @@ pub fn help_id(cmd: &str) -> String {
     format!("help-cmd-{}", cmd.replace('.', "-"))
 }
 
+/// ¿Esta pulsación significa `command` en `eff`?
+///
+/// Contra el keymap VIVO, y ahí está la gracia: quien pregunta es el overlay
+/// abierto (¿esta tecla me cierra?) o la rama del modal (¿esta tecla abre la
+/// ayuda?), y las dos quieren la tecla que el lector tiene AHORA, no la que
+/// tenía cuando se congeló un resolver.
+///
+/// Contesta a TODOS los chords ligados al comando, no al primero: el preset
+/// **vim** liga `app.help` a `f1` y a `?`, y quedarse con uno dejaba al otro
+/// abriendo una página que no podía cerrar.
+///
+/// Una SECUENCIA (`g h`) contesta `false`. Estos sitios no llevan estado de
+/// secuencia —el resolver del pane sí, ellos no—, así que la respuesta honesta
+/// es que el primer chord de una secuencia no es la secuencia.
+#[must_use]
+pub fn means_command(
+    eff: &Effective,
+    command: &str,
+    key: &str,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    key_char: Option<&str>,
+) -> bool {
+    let Some(pressed) = gpui_chord(key, ctrl, alt, shift, key_char) else {
+        return false;
+    };
+    eff.bindings()
+        .into_iter()
+        .filter(|(seq, cmd)| *cmd == command && !seq.contains(' '))
+        .filter_map(|(seq, _)| norte_frontend::keymap::parse_chord(&seq).ok())
+        .any(|c| c == pressed)
+}
+
 /// Preset por nombre, tomado del catálogo COMPARTIDO
 /// `norte_frontend::keymap::presets` (decisión de diseño C2/G0: el preset
 /// compartido es canónico — la GUI adopta sus chords para ir alineada con la

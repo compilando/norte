@@ -159,6 +159,12 @@ mod sp {
 struct NorteGui {
     /// Los dos panes (modelo puro compartido con la TUI).
     panes: [PaneState; 2],
+    /// El lector tiene agarrado el pulgar de la barra del cuerpo de la ayuda.
+    ///
+    /// Un `bool` y no las bounds del canal: la geometría se DERIVA (ver
+    /// `help_body_track`), así que lo único que hay que recordar entre eventos
+    /// es que el botón sigue abajo.
+    help_dragging: bool,
     /// Config de columnas resuelta (#108 b4): hoy la GUI solo consume el
     /// SORT por scheme (las celdas llegan en el bloque 6). OJO: `columns`
     /// (a secas) son las columnas de PLUGIN por pane (G3c) — otra cosa.
@@ -992,6 +998,7 @@ impl NorteGui {
                 session::spawn(socket, cmd_rx, event_tx);
 
                 let mut gui = Self {
+                    help_dragging: false,
                     panes: [
                         PaneState::new(dir.clone(), Vec::new()),
                         PaneState::new(dir.clone(), Vec::new()),
@@ -1071,6 +1078,7 @@ impl NorteGui {
                 // falla en silencio, no hay `cd` de por medio aquí).
                 let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
                 Self {
+                    help_dragging: false,
                     panes: [
                         PaneState::new(placeholder.clone(), Vec::new()),
                         PaneState::new(placeholder, Vec::new()),
@@ -2504,6 +2512,37 @@ impl NorteGui {
     /// `SessionCmd::PluginRunCommand`) — mismo criterio inequívoco que la
     /// TUI's `parse_plugin_key`.
     fn on_palette_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+        // `app.help` sobre una fila abre LA PÁGINA DE ESE COMANDO — la otra
+        // dirección del puente que ya existía (desde la ayuda, `ctrl+p` lleva
+        // el filtro a la paleta). Dos vistas del mismo modelo a dos
+        // densidades: cruzar entre ellas no debería costar una re-lectura.
+        //
+        // Sin página no se abre NADA y se dice: aterrizar en el índice tras
+        // preguntar por un comando concreto deja al lector sin saber si su
+        // comando está ahí dentro o simplemente no está documentado. Una fila
+        // de PLUGIN toma ese mismo camino — su clave es de un manifiesto de
+        // terceros y ningún tema del corpus la documenta.
+        if self.means_help(ks) {
+            let target = self
+                .palette
+                .as_ref()
+                .and_then(palette_view::PaletteView::selected_key)
+                .filter(|k| parse_plugin_palette_key(k).is_none())
+                .and_then(|k| norte_help::topic_for_command(norte_i18n::active(), k))
+                .map(|t| t.id.clone());
+            match target {
+                Some(id) => {
+                    self.palette = None;
+                    self.open_help();
+                    if let Some(view) = &mut self.help {
+                        view.state.open_as_root(&id);
+                    }
+                }
+                None => self.flash = Some((norte_i18n::t("msg-palette-no-help"), false)),
+            }
+            cx.notify();
+            return;
+        }
         if ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform {
             return;
         }
@@ -2630,12 +2669,81 @@ impl NorteGui {
     /// when `plugin.list` answers. A catalogue that never arrives leaves that
     /// group empty and every `plugin:` row dimmed — the honest answer to "I
     /// could not find out", and fail-closed is the direction to fail in.
+    /// Dónde está el lector, en el vocabulario CERRADO de contextos del corpus.
+    ///
+    /// El equivalente del `help_context` de la TUI, con su misma disciplina: un
+    /// `match` sin comodín sobre `Modal`, para que un modal nuevo no compile
+    /// hasta que alguien decida qué página lo explica. Los ids son los del
+    /// corpus, no de esta GUI: quien decide qué explica cada pantalla es la
+    /// prosa, no el frontend.
+    fn help_context(&self) -> &'static str {
+        if let Some(m) = &self.modal {
+            return match m {
+                // Borrar y transferir son la MISMA pregunta ("¿toco estos
+                // ficheros?"); salir no lo es —no muta nada— y tiene id propio.
+                Modal::ConfirmTransfer { .. } | Modal::ConfirmDelete { .. } => "dialog.confirm",
+                Modal::ConflictResolve { .. } => "dialog.collision",
+                Modal::ConfirmQuit { .. } => "dialog.quit",
+                // El nombre editable de una transferencia y el renombrado son
+                // el mismo diálogo.
+                Modal::RenamePrompt { .. } => "dialog.transfer-name",
+                // Prompt y plan son dos pasos de UNA función, y una página
+                // explica los dos: partirlos pediría media página cada uno.
+                Modal::AiRenamePrompt { .. } | Modal::AiRenamePlan { .. } => "dialog.ai-rename",
+                Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => {
+                    "dialog.semantic-search"
+                }
+            };
+        }
+        if self.viewer.is_some() {
+            return "viewer";
+        }
+        "browse"
+    }
+
+    /// Abre la ayuda por la página que explica DONDE ESTÁ el lector.
+    ///
+    /// Sobre un modal, un contexto sin página no abre NADA y lo dice: tapar una
+    /// pregunta viva con el índice —«Esto es norte. Dos paneles…»— le roba las
+    /// teclas al diálogo para contarle al lector algo que no preguntó. Desde un
+    /// pane o el visor, en cambio, el índice es un aterrizaje razonable: allí
+    /// nadie está esperando una decisión. Mismo criterio que la TUI.
+    /// ¿Esta pulsación es `app.help` según el keymap VIGENTE?
+    ///
+    /// La usan las dos mitades del mismo interruptor —abrir sobre un modal y
+    /// cerrar desde dentro— y por eso pregunta al keymap y no a un resolver
+    /// congelado: la tecla que cuenta es la que el lector tiene ahora.
+    fn means_help(&self, ks: &gpui::Keystroke) -> bool {
+        crate::keymap::means_command(
+            self.resolver.effective(),
+            "app.help",
+            &ks.key,
+            ks.modifiers.control,
+            ks.modifiers.alt,
+            ks.modifiers.shift,
+            ks.key_char.as_deref(),
+        )
+    }
+
     fn open_help(&mut self) {
         let lang = norte_i18n::active();
-        let view = help_view::HelpView::new(
+        let context = self.help_context();
+        let over_modal = self.modal.is_some();
+        let page = norte_help::topic_for_context(lang, context);
+        if over_modal && page.is_none() {
+            self.flash = Some((norte_i18n::t("msg-help-no-dialog-page"), false));
+            return;
+        }
+        let mut view = help_view::HelpView::new(
             lang,
             help_view::keys_lines(self.resolver.effective(), self.viewer_resolver.effective()),
         );
+        view.over_modal = over_modal;
+        if let Some(topic) = page {
+            // Como RAÍZ del rastro: un `Esc` sale, en vez de dejar al lector
+            // caminando hacia atrás hasta un índice que nunca pidió.
+            view.state.open_as_root(&topic.id);
+        }
         let base = help_view::GuiChords::new(
             self.resolver.effective(),
             self.viewer_resolver.effective(),
@@ -2648,11 +2756,9 @@ impl NorteGui {
         // does not cache a plugin list of its own — the palette and the
         // extension manager ask for it when they open, and so does this.
         //
-        // KNOWN GAP: a keymap hot reload while the overlay is open does not
-        // reach it. `keys_lines` and the chord map are snapshots taken right
-        // here, so a rebind landing from the config watcher would leave the
-        // page teaching the old keys until it is reopened. The fix is to
-        // rebuild both where `apply_keymap_live` swaps the resolvers.
+        // Un hot-reload de keymap con el overlay abierto SÍ lo alcanza desde
+        // H3h: `apply_keymap_live` llama a `rebuild_help_chords`, que rehace
+        // estos dos snapshots arrastrando los hechos congelados.
         let _ = self.cmds.send(SessionCmd::PluginsList);
     }
 
@@ -2703,16 +2809,7 @@ impl NorteGui {
         // legal. Y antes también del puente `ctrl+p`, que jamás puede ser
         // `app.help` (`ctrl+p` es `app.palette` en los tres presets) pero cuyo
         // orden no debería depender de eso.
-        if let Some(chords) = self.help_chords.as_ref()
-            && help_view::closes_help(
-                chords,
-                &ks.key,
-                ks.key_char.as_deref(),
-                ks.modifiers.control,
-                ks.modifiers.alt,
-                ks.modifiers.shift,
-            )
-        {
+        if self.means_help(ks) {
             self.close_help();
             cx.notify();
             return;
@@ -2872,6 +2969,10 @@ impl NorteGui {
 
     fn close_help(&mut self) {
         self.help = None;
+        // Un arrastre no puede sobrevivir a lo que estaba arrastrando: sin
+        // esto, cerrar con el botón pulsado dejaba el flag puesto y el
+        // siguiente movimiento sobre la ayuda REABIERTA la desplazaba sola.
+        self.help_dragging = false;
         self.help_chords = None;
     }
 
@@ -3254,6 +3355,31 @@ impl NorteGui {
             return;
         }
 
+        // La ayuda ABIERTA SOBRE un modal se queda con las teclas, y va ANTES
+        // de la rama del modal por eso: mientras el lector lee la página que
+        // explica la pregunta, los verbos de la pregunta son inalcanzables —
+        // que es la garantía, no un efecto colateral: nada se confirma a
+        // través de una página que lo tapa. El modal se sigue pintando debajo
+        // (este overlay se dibuja el último), así que la pregunta nunca
+        // desaparece; solo espera.
+        if self
+            .help
+            .as_ref()
+            .is_some_and(|v| v.over_modal && self.modal.is_some())
+        {
+            self.on_help_key(ks, window, cx);
+            cx.notify();
+            return;
+        }
+        // Y `app.help` ALCANZA a abrirla aunque haya un modal delante: es la
+        // tecla con la que se pregunta «¿qué es esto que me está preguntando?»,
+        // y hasta aquí la comía la captura del modal.
+        if self.modal.is_some() && self.means_help(ks) {
+            self.open_help();
+            cx.notify();
+            return;
+        }
+
         // Con un modal abierto, la tecla va al modal (captura fija).
         if let Some(m) = &mut self.modal {
             // Los prompts IA/semántico aceptan tecleo libre: un
@@ -3412,6 +3538,15 @@ impl NorteGui {
         // aquí — el visor y el dual-pane son pantallas mutuamente excluyentes).
         if self.viewer.is_some() {
             if ks.modifiers.platform {
+                cx.notify();
+                return;
+            }
+            // La ayuda ALCANZA al visor. El visor resuelve por su propio
+            // contexto y `app.help` no vive en él, así que la tecla se perdía:
+            // la única pantalla desde la que no se podía preguntar era la que
+            // tiene su propio juego de teclas que aprender.
+            if self.means_help(ks) {
+                self.open_help();
                 cx.notify();
                 return;
             }
@@ -3828,6 +3963,44 @@ impl NorteGui {
                 self.panes[pane].cursor_down();
             }
             self.follow_cursor(pane);
+        }
+        cx.notify();
+    }
+
+    /// El canal vertical de la barra del cuerpo, en píxeles de ventana.
+    ///
+    /// DERIVADO de la misma aritmética con la que se pinta el marco, y no
+    /// medido: el overlay se centra en el viewport (`items_center` +
+    /// `justify_center` sobre `inset_0`), así que su origen es una resta y su
+    /// canal es el marco menos el borde, la cabecera, el título del detalle y
+    /// el pie — cada uno de altura FIJA y conocida, que es justo por lo que se
+    /// les fijó.
+    ///
+    /// El acoplamiento con el pintor es real y por eso está escrito aquí: si
+    /// alguien mueve una de esas piezas, esta cuenta se entera por un salto
+    /// del pulgar. Medir de verdad pediría guardar las bounds desde un
+    /// `canvas`, que es más maquinaria de la que este gesto merece.
+    fn help_body_track(&self, viewport: gpui::Size<gpui::Pixels>) -> (f32, f32) {
+        let (_, frame_h) = self.help_frame(viewport);
+        let row_h = f32::from(self.fonts.row_h);
+        let frame_y = (f32::from(viewport.height) - frame_h) / 2.0;
+        // borde superior + cabecera del overlay + título del panel de detalle
+        let y0 = frame_y + 2.0 + row_h + row_h;
+        // …hasta el pie, con su borde inferior.
+        let y1 = frame_y + frame_h - 2.0 - row_h;
+        (y0, (y1 - y0).max(1.0))
+    }
+
+    /// Lleva el cuerpo al punto del canal donde está el puntero.
+    fn help_scroll_to(&mut self, y: gpui::Pixels, window: &Window, cx: &mut Context<Self>) {
+        let rows = self.help_rows(window.viewport_size());
+        let (y0, alto) = self.help_body_track(window.viewport_size());
+        let total = self.help.as_ref().map_or(0, |v| self.help_body(v).len());
+        let fraccion = ((f32::from(y) - y0) / alto).clamp(0.0, 1.0);
+        let destino = scroll_offset_at(fraccion, rows, total);
+        if let Some(view) = &mut self.help {
+            view.state.scroll_body_to(destino);
+            view.state.clamp_scroll(total);
         }
         cx.notify();
     }
@@ -5185,10 +5358,22 @@ impl NorteGui {
         // cursor, así que el pulgar dice dónde cae esa ventana en la lista
         // entera — con muchas extensiones, la lista no cabe y hasta ahora nada
         // lo decía.
-        if let Some(thumb) =
-            scroll_thumb(side_first, rows, state.rows().len(), chrome.border_unfocus)
-        {
-            side = side.child(thumb);
+        // Indicador, no control: la ventana de la lateral la DERIVA
+        // `sidebar_offset` del cursor, así que arrastrar este pulgar solo
+        // podría mover el cursor — y mover el cursor ABRE la página que pisa.
+        // Una barra de scroll que cambia lo que estás leyendo no es una barra
+        // de scroll. La rueda y las flechas hacen el trabajo.
+        if let Some((arriba, alto)) = scroll_geometry(side_first, rows, state.rows().len()) {
+            side = side.child(
+                div()
+                    .absolute()
+                    .top(gpui::relative(arriba))
+                    .right_0()
+                    .w(px(sp::XS))
+                    .h(gpui::relative(alto))
+                    .rounded(px(sp::XS / 2.0))
+                    .bg(chrome.border_unfocus),
+            );
         }
 
         // ── body ─────────────────────────────────────────────────────────
@@ -5378,13 +5563,38 @@ impl NorteGui {
         // son LÍNEAS del modelo y una línea larga ocupa varios renglones al
         // envolver, así que el pulgar es una aproximación por arriba. Dice
         // "queda página", que es lo que no decía nada.
-        if let Some(thumb) = scroll_thumb(
-            state.body_scroll(),
-            rows,
-            cuerpo_total,
-            chrome.border_unfocus,
-        ) {
-            body = body.child(thumb);
+        if let Some((arriba, alto)) = scroll_geometry(state.body_scroll(), rows, cuerpo_total) {
+            // El canal ENTERO es la superficie de ratón, no solo el pulgar:
+            // pulsar en el canal salta ahí (el gesto que espera cualquiera) y
+            // el arrastre continúa aunque el puntero se salga de ocho píxeles
+            // de ancho, porque el movimiento se escucha en el marco.
+            body = body.child(
+                div()
+                    .id("help-body-scroll")
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .bottom_0()
+                    .w(px(sp::M))
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
+                            this.help_dragging = true;
+                            this.help_scroll_to(ev.position.y, window, cx);
+                        }),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(gpui::relative(arriba))
+                            .right_0()
+                            .w(px(sp::XS))
+                            .h(gpui::relative(alto))
+                            .rounded(px(sp::XS / 2.0))
+                            .bg(chrome.border_focus),
+                    ),
+            );
         }
 
         // ── frame ────────────────────────────────────────────────────────
@@ -5400,6 +5610,24 @@ impl NorteGui {
             .on_scroll_wheel(cx.listener(|this, ev: &gpui::ScrollWheelEvent, _w, cx| {
                 this.on_help_scroll(ev.delta, cx);
             }))
+            // El arrastre se escucha en el MARCO y no en el canal: ocho píxeles
+            // de ancho son imposibles de seguir con el ratón, y quien arrastra
+            // una barra se sale de ella constantemente. Soltar cuenta aquí por
+            // lo mismo.
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
+                if this.help_dragging {
+                    this.help_scroll_to(ev.position.y, window, cx);
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _ev: &MouseUpEvent, _w, cx| {
+                    if this.help_dragging {
+                        this.help_dragging = false;
+                        cx.notify();
+                    }
+                }),
+            )
             .w(px(frame_w))
             .h(px(frame_h))
             .flex()
@@ -7312,47 +7540,45 @@ fn chrome_mark_fg(theme: &Theme) -> gpui::Rgba {
     chrome(theme, Role::Mark, true, MARK_FG)
 }
 
-/// Una barra de scroll fina para una ventana de N filas sobre un total.
+/// Geometría del pulgar de una barra de scroll, en FRACCIONES del canal.
 ///
-/// La ayuda no usa el scroll de GPUI: su lateral y su cuerpo son ventanas
-/// calculadas a mano (`skip`/`take` sobre el modelo compartido), así que
-/// tampoco hay un `Scrollbar` que pintar por debajo. Esto es lo mínimo honesto
-/// —dónde estás y cuánto queda— en proporciones RELATIVAS, que es lo único
-/// que se puede saber sin medir la caja: el pintor no conoce su propia altura
-/// en píxeles.
+/// Una sola función para las dos mitades: el pintor la usa para colocar el
+/// pulgar y el ratón para traducir una posición en un desplazamiento. Con dos
+/// cuentas paralelas, arrastrar el pulgar lo dejaría donde el pintor no lo
+/// pinta, que es peor que no poder arrastrarlo.
 ///
 /// `None` cuando cabe todo: una barra que ocupa el canal entero no informa de
 /// nada y solo roba ancho a la prosa.
-///
-/// NO se arrastra todavía. Arrastrarla pide las bounds del canal en píxeles
-/// (un `canvas` que las guarde, o el hitbox), y el gesto que falta de verdad
-/// —la rueda— ya está. Deuda anotada en el CHANGELOG, no un olvido.
-fn scroll_thumb(
-    offset: usize,
-    visible: usize,
-    total: usize,
-    color: gpui::Rgba,
-) -> Option<gpui::Div> {
+fn scroll_geometry(offset: usize, visible: usize, total: usize) -> Option<(f32, f32)> {
     if total == 0 || visible >= total {
         return None;
     }
     let total_f = total as f32;
-    // Un mínimo visible: con 2000 líneas la proporción exacta sería un pelo de
-    // medio píxel, que es lo mismo que no pintar nada.
+    // Un mínimo visible: con 2000 líneas la proporción exacta sería medio
+    // píxel, que es lo mismo que no pintar nada.
     let alto = (visible as f32 / total_f).max(0.04);
     // El tope de arriba se acota para que el pulgar no se salga por abajo
     // cuando el `offset` está al final.
     let arriba = (offset as f32 / total_f).min(1.0 - alto);
-    Some(
-        div()
-            .absolute()
-            .top(gpui::relative(arriba))
-            .right_0()
-            .w(px(sp::XS))
-            .h(gpui::relative(alto))
-            .rounded(px(sp::XS / 2.0))
-            .bg(color),
-    )
+    Some((arriba, alto))
+}
+
+/// La primera línea visible que corresponde a soltar el pulgar en `fraccion`
+/// del canal.
+///
+/// La inversa de [`scroll_geometry`], y por eso vive a su lado: el pulgar se
+/// agarra por su CENTRO, así que la fracción se corrige por media altura de
+/// pulgar antes de convertirla en líneas. Sin esa corrección, agarrar el
+/// pulgar por el medio lo tira hacia arriba en cuanto el ratón se mueve un
+/// píxel.
+fn scroll_offset_at(fraccion: f32, visible: usize, total: usize) -> usize {
+    let Some((_, alto)) = scroll_geometry(0, visible, total) else {
+        return 0;
+    };
+    let util = (1.0 - alto).max(f32::EPSILON);
+    let rel = ((fraccion - alto / 2.0) / util).clamp(0.0, 1.0);
+    let ultimo = total.saturating_sub(visible);
+    (rel * ultimo as f32).round() as usize
 }
 
 /// Chrome horizontal fijo de un pane (#108 b6): `border_2` a ambos lados
@@ -8360,6 +8586,37 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+
+    /// Cada pantalla que esta GUI sabe abrir tiene su página, y `F1` abre ESA.
+    ///
+    /// La otra mitad de lo que la puerta de documentación cruza en la TUI,
+    /// comprobada aquí desde el lado del lector: el `match` sin comodín de
+    /// `help_context` impide que un modal nuevo llegue sin que alguien decida
+    /// qué lo explica, y esto impide que decida un id que el corpus no tiene.
+    #[test]
+    fn todo_contexto_de_esta_gui_tiene_pagina() {
+        for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+            for context in ["browse", "viewer"] {
+                assert!(
+                    norte_help::topic_for_context(lang, context).is_some(),
+                    "[{lang:?}] el contexto `{context}` no tiene página"
+                );
+            }
+            for context in [
+                "dialog.confirm",
+                "dialog.collision",
+                "dialog.quit",
+                "dialog.transfer-name",
+                "dialog.ai-rename",
+                "dialog.semantic-search",
+            ] {
+                assert!(
+                    norte_help::topic_for_context(lang, context).is_some(),
+                    "[{lang:?}] el contexto de modal `{context}` no tiene página"
+                );
+            }
+        }
+    }
     use super::MouseValidity;
     use super::effects;
     use super::expire_stale_gesture;
