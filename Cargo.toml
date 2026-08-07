@@ -24,12 +24,42 @@ members = [
     "crates/norte-plugin-host",
     "crates/norte-mcp",
     "crates/norte-ai",
+    # M5: miembro del workspace para que `dist` lo vea como un binario más y
+    # para que haya UN lockfile. FUERA de `default-members` (abajo): las deps
+    # de GPU no deben entrar en un `cargo build`/`cargo test` sin `-p`, que es
+    # lo que hacía valiosa la exclusión anterior. Su gate propio sigue siendo
+    # `just gui-ci`.
+    "crates/norte-gui",
+]
+
+# Lo que se construye SIN `-p`: todo menos la GUI. `just ci` cuesta lo mismo
+# que antes de que la GUI entrase al workspace.
+default-members = [
+    "crates/norte-proto",
+    "crates/norte-vfs",
+    "crates/norte-vfs-local",
+    "crates/norte-vfs-sftp",
+    "crates/norte-vfs-object",
+    "crates/norte-vfs-archive",
+    "crates/norte-connect",
+    "crates/norte-config",
+    "crates/norte-testkit",
+    "crates/norte-core",
+    "crates/norte-index",
+    "crates/norte-cli",
+    "crates/norte-tui",
+    "crates/norte-frontend",
+    "crates/norte-help",
+    "crates/norte-encoding",
+    "crates/norte-theme",
+    "crates/norte-i18n",
+    "crates/norte-plugin-host",
+    "crates/norte-mcp",
+    "crates/norte-ai",
 ]
 # Los guests WASM de ejemplo (M4-P2) NO son miembros del workspace: compilan a
 # wasm32-wasip2 con su propio perfil, no comparten el lockfile del host.
-# norte-gui (M5 spike): EXCLUIDO — GPUI puede exigir nightly/deps GPU pesadas;
-# jamás debe contaminar el gate del core (regla 7: solo habla norte-proto).
-exclude = ["crates/norte-plugin-host/examples-wasm", "crates/norte-gui"]
+exclude = ["crates/norte-plugin-host/examples-wasm"]
 
 # Dev/test: debuginfo SOLO de tablas de líneas (backtraces + nº de línea, que es
 # lo que este proyecto depura vía `tracing`; no gdb con inspección de variables).

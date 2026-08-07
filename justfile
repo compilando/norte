@@ -13,6 +13,22 @@ default: ci
 # un test nightly contra Docker (ADR 0013) y no debe ni compilar aquí.
 features := "--features norte-tui/schema --features norte-config/watch --features norte-proto/schema"
 
+# Los paquetes del gate: TODO el workspace MENOS la GUI. Esto NO es una
+# optimización de tiempo, es de corrección, y `default-members` no basta porque
+# `--workspace` lo pisa.
+#
+# GPUI activa `serde_json/preserve_order`. Las features de cargo se UNIFICAN
+# por invocación: si `norte-gui` entra en el mismo `cargo` que el core, el
+# `serde_json` del core pasa de mapas ordenados (BTreeMap) a orden de inserción
+# (IndexMap) — y con él cambia el JSON Schema que PUBLICAMOS, el `--json` del
+# CLI y los goldens. Se descubrió al meter la GUI en `members`: cinco tests en
+# rojo, ninguno por un cambio de código.
+#
+# Así que el core se compila y se prueba EXACTAMENTE como se distribuye: sin la
+# GUI en la invocación. La GUI tiene su gate propio (`just gui-ci`), donde la
+# unificación es asunto suyo.
+core_pkgs := "--workspace --exclude norte-gui"
+
 # Suelo de disco libre (GiB) por debajo del cual `just ci` se niega a
 # arrancar. Un `cargo build` del workspace más el target instrumentado de
 # cobertura necesitan del orden de 40 G; quedarse sin disco a mitad no da un
@@ -36,7 +52,7 @@ fmt-check:
     cargo fmt --all -- --check
 
 lint: fmt-check
-    CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets {{features}} -- -D warnings
+    CARGO_INCREMENTAL=0 cargo clippy {{core_pkgs}} --all-targets {{features}} -- -D warnings
     cargo deny check
 
 # --no-tests=pass: el esqueleto de fase 1 no tiene tests aún; con código real
@@ -46,8 +62,8 @@ lint: fmt-check
 # CARGO_INCREMENTAL=0 porque la compilación incremental no aporta nada a una
 # corrida completa (se recompila todo igual) y su caché pesa ~8 G por universo.
 test:
-    CARGO_INCREMENTAL=0 cargo nextest run --workspace {{features}} --no-tests=pass --no-fail-fast
-    CARGO_INCREMENTAL=0 cargo test --workspace {{features}} --doc
+    CARGO_INCREMENTAL=0 cargo nextest run {{core_pkgs}} {{features}} --no-tests=pass --no-fail-fast
+    CARGO_INCREMENTAL=0 cargo test {{core_pkgs}} {{features}} --doc
 
 # Gate de cobertura (mismo umbral que CI): solo crates de lógica (spec §12).
 #
@@ -60,17 +76,15 @@ cov:
     CARGO_INCREMENTAL=0 cargo llvm-cov nextest -p norte-proto -p norte-vfs -p norte-core --fail-under-lines 85
 
 docs:
-    RUSTDOCFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo doc --workspace --no-deps
+    RUSTDOCFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo doc {{core_pkgs}} --no-deps
 
-# Chequeo barato de norte-gui (GP review): el crate está EXCLUIDO del
-# workspace (regla 7 / GPU pesada), así que `cargo check --workspace` NUNCA
-# lo toca — un bump de proto/frontend/core podía romper la GUI sin que nada
-# lo notara hasta correr `gui-ci` a mano. Solo `cargo check` (no el gate
-# completo `gui-ci`: nextest+clippy+fmt son caros para correr en cada `just
-# ci`) — suficiente para atrapar una API rota. MINOR-5 (H1 close): `--locked`
-# — norte-gui tiene su PROPIO Cargo.lock (excluido del workspace); sin
-# `--locked` este chequeo podía silenciosamente actualizarlo y el drift no
-# se detectaba hasta `gui-ci` (o nunca, en CI).
+# Chequeo barato de norte-gui (GP review): el gate del core la deja fuera a
+# propósito (ver `core_pkgs`), así que un bump de proto/frontend/core puede
+# romper la GUI sin que nada lo note hasta correr `gui-ci` a mano. Solo
+# `cargo check` (no el gate completo `gui-ci`: nextest+clippy+fmt son caros
+# para correr en cada `just ci`) — suficiente para atrapar una API rota.
+# `--locked`: el lockfile es ahora el del workspace (la GUI es miembro y ya no
+# tiene el suyo); sin esta bandera el chequeo podría reescribirlo en silencio.
 check-gui:
     cd crates/norte-gui && cargo check --locked
 
@@ -214,7 +228,7 @@ c crate:
 
 # Loop de desarrollo: tests del workspace en cada guardado (exige cargo-watch).
 watch:
-    cargo watch -x "nextest run --workspace"
+    cargo watch -x "nextest run {{core_pkgs}}"
 
 # Tests de integración NIGHTLY contra servidores REALES por Docker (ADR 0013/
 # 0016): sftp contra OpenSSH real (atmoz/sftp) y S3 real. EXIGEN Docker; fuera
@@ -247,9 +261,16 @@ uninstall:
     cargo uninstall norte-tui
     cargo uninstall norte-cli
 
-# Gate PROPIO de norte-gui (M5): el crate está EXCLUIDO del workspace a
-# propósito (GPUI = deps GPU pesadas; regla 7: solo habla norte-proto) y
-# `just ci` no lo cubre — este es su gate a un comando. Correrlo al tocar
-# norte-gui o cualquier crate que la GUI consume (frontend/proto/core).
+# Gate PROPIO de norte-gui (M5): el crate es miembro del workspace pero está
+# FUERA de `default-members` a propósito (GPUI = deps GPU pesadas; regla 7:
+# solo habla norte-proto), así que `just ci` no lo cubre — este es su gate a un
+# comando. Correrlo al tocar norte-gui o cualquier crate que la GUI consume
+# (frontend/proto/core).
 gui-ci:
     cd crates/norte-gui && cargo nextest run && cargo clippy --all-targets -- -D warnings && cargo fmt --check
+    # La GUI es miembro del workspace pero está FUERA del grafo de `cargo deny`
+    # del core (`[graph] exclude`): el árbol de GPUI trae git-sources y
+    # licencias que no deben relajar la auditoría de las librerías publicables.
+    # Se audita aquí, contra su propia política, con su manifiesto como ÚNICA
+    # raíz del grafo.
+    cargo deny --manifest-path crates/norte-gui/Cargo.toml check --config crates/norte-gui/deny.toml
