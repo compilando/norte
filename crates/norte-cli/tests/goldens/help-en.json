@@ -10,6 +10,8 @@
         "selection",
         "mouse",
         "help",
+        "dialogs",
+        "settings",
         "copying",
         "finding",
         "columns",
@@ -20,7 +22,7 @@
       "tags": [
         "basics"
       ],
-      "text": "Welcome to norte\n────────────────\n\nnorte is an orthodox file manager. Two panes, the keyboard first, and one set of commands whether the files are on this machine, on an SSH host, in an S3-compatible bucket, or inside a .zip.\n\nThat last part is the whole idea. A backend is not a mode you enter and leave; it is only what a pane happens to be showing. Copying out of an archive into a bucket is the same two keys as copying between two local directories.\n\nWhere to go next\n\n  • Two panes, one destination — the two panes, focus, and why the other one is the destination\n  • Marking what to act on — marking the entries a command will act on\n  • Using the mouse — click, wheel and drag, and what capture costs the terminal\n  • Reading this help — moving around these pages, and where the keys in them come from\n  • Copying, moving and deleting — copying, moving, deleting, and cancelling without losing data\n  • Reading a file without leaving — reading a file in place, and handing one to another program\n  • Finding things — the quick filter, the subtree search, and hidden entries\n  • What the listing shows — which columns the listing shows, and how it is sorted\n  • SFTP, FTP and object storage — SFTP, FTP and S3-compatible object storage\n  • Inside an archive — walking into a .zip or a .tar as if it were a directory\n\n  tip: The keys in this help are not written into the text: each one is looked up in your keymap as the page is drawn. Rebind a command and these pages name the key you chose.\n\nSee also: Two panes, one destination, Marking what to act on, Using the mouse, Reading this help, Copying, moving and deleting, Finding things, What the listing shows, Reading a file without leaving, SFTP, FTP and object storage, Inside an archive\n",
+      "text": "Welcome to norte\n────────────────\n\nnorte is an orthodox file manager. Two panes, the keyboard first, and one set of commands whether the files are on this machine, on an SSH host, in an S3-compatible bucket, or inside a .zip.\n\nThat last part is the whole idea. A backend is not a mode you enter and leave; it is only what a pane happens to be showing. Copying out of an archive into a bucket is the same two keys as copying between two local directories.\n\nWhere to go next\n\n  • Two panes, one destination — the two panes, focus, and why the other one is the destination\n  • Marking what to act on — marking the entries a command will act on\n  • Using the mouse — click, wheel and drag, and what capture costs the terminal\n  • Reading this help — moving around these pages, and where the keys in them come from\n  • Answering a dialog — the six verbs every overlay speaks, and the rule about defaults\n  • Settings and themes — where norte.toml lives, and choosing a theme\n  • Copying, moving and deleting — copying, moving, deleting, and cancelling without losing data\n  • Reading a file without leaving — reading a file in place, and handing one to another program\n  • Finding things — the quick filter, the subtree search, and hidden entries\n  • What the listing shows — which columns the listing shows, and how it is sorted\n  • SFTP, FTP and object storage — SFTP, FTP and S3-compatible object storage\n  • Inside an archive — walking into a .zip or a .tar as if it were a directory\n\n  tip: The keys in this help are not written into the text: each one is looked up in your keymap as the page is drawn. Rebind a command and these pages name the key you chose.\n\nSee also: Two panes, one destination, Marking what to act on, Using the mouse, Reading this help, Answering a dialog, Settings and themes, Copying, moving and deleting, Finding things, What the listing shows, Reading a file without leaving, SFTP, FTP and object storage, Inside an archive\n",
       "title": "Welcome to norte"
     },
     {
@@ -207,6 +209,85 @@
       ],
       "text": "Reading this help\n─────────────────\n\nF1 opens this overlay from anywhere. The list on the left is every page; the panel on the right is the page you are on.\n\nTab moves between the two. On the left, up and down change the page, and the cursor OPENS what it lands on — arrowing down the list is reading it, not choosing what to read. On the right they walk the runnable rows and the links at the bottom. Enter on a runnable row closes the help and runs the command exactly as its own key would: the same confirmation, the same policy gate, the same journal entry. Enter on a link follows it, and Backspace returns to the page you came from.\n\nRows for the overlay's own verbs — the three on this page — are the exception. They are listed so their keys can be looked up, but they mean something only inside an overlay, so a pane has nothing to run: Enter on one says so and leaves the help open.\n\n/ starts filtering the list on the left. It matches page titles, page ids and the commands each page documents — a command from the start of the id or of any of its dotted parts — so copy brings up every page that documents pane.copy, not only the one named after it. Leaving the search box keeps what you typed; emptying it is what backspace is for.\n\nThe keys here are yours\n\nNo key in these pages is written into the text. Each one is looked up in your effective keymap as the page is drawn, so a rebind changes the prose. A command with no key at all shows its name instead of claiming one.\n\nThe last entry in the list, keys, is the other direction: the whole effective keymap, generated, including the dialog.* verbs that overlay footers leave out for want of width.\n\n  tip: Ctrl+p is the fast version of the same model: type, Enter, gone. This help is the version that explains.\n\n  F1             this help\n  Ctrl+p         command palette\n  /              filter\n  Tab            other pane\n  Backspace      back\n\nSee also: Welcome to norte, Two panes, one destination\n",
       "title": "Reading this help"
+    },
+    {
+      "commands": [
+        {
+          "chord": "Enter",
+          "command": "dialog.confirm",
+          "label": "confirm"
+        },
+        {
+          "chord": "Esc",
+          "command": "dialog.cancel",
+          "label": "cancel"
+        },
+        {
+          "chord": "Up",
+          "command": "dialog.up",
+          "label": "up"
+        },
+        {
+          "chord": "Down",
+          "command": "dialog.down",
+          "label": "down"
+        },
+        {
+          "chord": "PgUp",
+          "command": "dialog.page-up",
+          "label": "pg up"
+        },
+        {
+          "chord": "PgDn",
+          "command": "dialog.page-down",
+          "label": "pg dn"
+        },
+        {
+          "chord": "q",
+          "command": "app.quit",
+          "label": "quit norte"
+        }
+      ],
+      "context": [
+        "dialog.quit"
+      ],
+      "id": "dialogs",
+      "see_also": [
+        "copying",
+        "help",
+        "panes"
+      ],
+      "tags": [
+        "basics"
+      ],
+      "text": "Answering a dialog\n──────────────────\n\nEvery overlay in norte — a confirmation, a picker, a list, this help — speaks the same six verbs:\n\n  • Enter accepts what the dialog is showing\n  • Esc closes it, changing nothing\n  • Up and Down move through it\n  • PgUp and PgDn move a screen at a time\n\nEach dialog supports the subset that means something in it, and the footer is GENERATED from that subset rather than written by hand. What the footer offers is what the dialog accepts — there is no key it takes quietly and none it advertises and ignores.\n\nRebind any of them and every overlay follows, including this page. The keys in this help are looked up in your keymap as the page is drawn; see Reading this help.\n\nThe rule that matters\n\nA dialog that can destroy data has no default answer. Confirming is not bound to a key you would press by reflex to get past something, and a collision does not resolve itself towards overwrite because you leaned on ⏎. You answer with the key the dialog shows, having read what it says.\n\nThat rule shapes the ones you will meet most:\n\n  Dialog        What it is asking\n  ────────────  ─────────────────────────────────────────────────────\n  confirmation  shall I touch these files, and how many\n  collision     the name at the destination is already taken\n  approval      an agent wants to act; approving is never the default\n  host key      this host is new, or its key changed\n\nAn overlay that only changes your own configuration is the exception, and it says so by behaving differently: the column picker and the theme picker apply on ⏎, because the worst outcome is a listing you did not want and one more keystroke to undo it.\n\nQuitting\n\nq is the one confirmation that mutates nothing, which makes it a good place to learn the grammar: it asks, ⏎ accepts and cancel goes back to where you were.\n\nBy default it only asks when something is pending — a running task, marks you have not used — and closes straight away when there is nothing to lose. You can make it always ask, or never ask, from the settings. See Settings and themes.\n\n  warning: Quitting cancels the tasks that are still running. A cancelled copy leaves each file it finished intact and the directory it was filling partial; nothing sweeps it up for you.\n\nAn emergency exit, where your keymap binds one, bypasses the question entirely. That is deliberate: a shortcut whose purpose is getting out of a wedged screen cannot be the shortcut that opens another dialog.\n\n  Enter          confirm\n  Esc            cancel\n  Up             up\n  Down           down\n  PgUp           pg up\n  PgDn           pg dn\n  q              quit norte\n\nSee also: Copying, moving and deleting, Reading this help, Two panes, one destination\n",
+      "title": "Answering a dialog"
+    },
+    {
+      "commands": [
+        {
+          "chord": "F11",
+          "command": "app.settings",
+          "label": "settings"
+        },
+        {
+          "chord": "F9",
+          "command": "app.theme",
+          "label": "choose theme"
+        }
+      ],
+      "context": [],
+      "id": "settings",
+      "see_also": [
+        "dialogs",
+        "mouse",
+        "help"
+      ],
+      "tags": [
+        "basics"
+      ],
+      "text": "Settings and themes\n───────────────────\n\nF11 opens the settings screen: every option norte has, with its current value and a line saying what it does. Changing one writes it to norte.toml.\n\nThat file is the real interface — the screen is a way to edit it without remembering the key names. Editing it in a text editor is equally supported, and a save is picked up without a restart.\n\nWhere the file lives\n\nThree layers, each overriding the one before it:\n\n  Layer    Where                         When it applies\n  ───────  ────────────────────────────  ───────────────────────\n  system   `/etc/norte`                  always\n  user     `~/.config/norte`             always\n  project  `./.norte` next to your work  only after you trust it\n\nA project layer is a file in a directory you may have just cloned, so it does nothing until you say so. The same caution applies to a project init.lua, which is a script and not a setting.\n\nThe settings screen writes to your USER layer. A value a trusted project layer overrides goes on being overridden after you change it: the screen wrote what you asked, and the more specific file still wins.\n\n  tip: A few options only take effect on a restart — a font, a language. Their row says so instead of pretending the change landed.\n\nThemes\n\nF9 lists the themes and previews the highlighted one as you move: what you are looking at while you choose is what you are choosing. Confirming keeps it and writes it; cancelling puts back the one you had.\n\nThe picker lists the themes that ship with norte. A theme of your own is a TOML file, and theme under [ui] takes a path to one as readily as a name — it just will not be in the list, since the list is what is built in.\n\nEvery surface takes its colours from the theme in force: the panes, the dialogs, this help. A page that ignored your theme would be the one screen that does not look like the program.\n\nThe two settings people look for first\n\n  • Mouse. mouse = false under [ui] gives the terminal its own selection back. See Using the mouse for what capture costs and for the Shift trick that needs no setting at all.\n  • Confirm on quit. auto asks only when work is pending, always asks every time, never closes straight away. See Answering a dialog.\n\n  F11            settings\n  F9             choose theme\n\nSee also: Answering a dialog, Using the mouse, Reading this help\n",
+      "title": "Settings and themes"
     },
     {
       "commands": [

@@ -861,8 +861,12 @@ mod palette_help_tests {
     /// dejar al lector buscando qué tenía que ver con lo que pidió.
     #[test]
     fn una_fila_sin_pagina_lo_dice() {
-        // `app.theme` sigue en la allowlist de la puerta de documentación.
-        let mut app = app_with_palette_on("app.theme");
+        // Un id SINTÉTICO, y no un comando real de la allowlist: desde H3h no
+        // queda ninguno sin página, así que un test que se apoyara en ese
+        // hueco mediría el corpus y no la rama. Esta rama sigue existiendo —
+        // `topic_for_command` puede contestar `None` — y lo que se pinta
+        // entonces es lo que hay que fijar.
+        let mut app = app_with_palette_on("app.no-such-command");
         assert!(palette_help_target(&app, norte_help::Lang::En).is_none());
         palette_help(&mut app, norte_help::Lang::En, &[]);
         assert!(app.help.is_none(), "no se abre el índice por consolar");

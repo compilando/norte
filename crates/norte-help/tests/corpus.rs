@@ -27,12 +27,14 @@ const LANGS: [Lang; 2] = [Lang::En, Lang::Es];
 /// the corpus so that DELETING a topic file is a test failure too: a check
 /// that reads the corpus to decide what the corpus should contain cannot see
 /// an absence.
-const EXPECTED: [&str; 11] = [
+const EXPECTED: [&str; 13] = [
     "index",
     "panes",
     "selection",
     "mouse",
     "help",
+    "dialogs",
+    "settings",
     "copying",
     "finding",
     "columns",
@@ -470,17 +472,26 @@ fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 50] = [
+const DOCUMENTED: [&str; 59] = [
     "app.help",
     "app.palette",
+    "app.quit",
+    "app.settings",
+    "app.theme",
     "dialog.back",
+    "dialog.cancel",
+    "dialog.confirm",
     "dialog.cycle-format",
+    "dialog.down",
     "dialog.filter",
     "dialog.move-down",
     "dialog.move-up",
+    "dialog.page-down",
+    "dialog.page-up",
     "dialog.pane",
     "dialog.sort",
     "dialog.toggle-enabled",
+    "dialog.up",
     "mark.all",
     "mark.clear",
     "mark.invert",
@@ -598,7 +609,6 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
         [
             "dialog.approval",
             "dialog.trust-lua",
-            "dialog.quit",
             "dialog.transfer-name",
             "dialog.mkdir",
             "dialog.ai-rename",
@@ -609,22 +619,27 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
 
 #[test]
 fn a_command_the_corpus_never_mentions_is_reported_undocumented() {
-    // The shape task 9 depends on: the TUI's vocabulary is far bigger than
-    // what six topics cover, and every uncovered command must surface as ONE
+    // The shape the frontend's gate depends on: every command the vocabulary
+    // has and the corpus does not mention must surface as ONE
     // `UndocumentedCommand` rather than being rounded off silently.
+    //
+    // The uncovered command is SYNTHETIC and not a real id. It used to be
+    // `app.quit`, which broke the day H3h documented it — and a test that has
+    // to be rewritten every time a page is written measures the corpus, not
+    // the check. This one measures the check.
     let mut known = DOCUMENTED.to_vec();
-    known.push("app.quit");
+    known.push("no.such-command");
     let issues = check_commands(&known, &[]);
     assert_eq!(
         issues,
         vec![Issue::UndocumentedCommand {
-            command: "app.quit".to_owned(),
+            command: "no.such-command".to_owned(),
             lang: Lang::En,
         }],
         "exactly the uncovered command, and nothing else"
     );
     assert_eq!(
-        check_commands(&known, &["app.quit"]),
+        check_commands(&known, &["no.such-command"]),
         Vec::new(),
         "the allowlist silences ONLY what it enumerates"
     );

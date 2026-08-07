@@ -72,31 +72,22 @@ fn vocabulario() -> Vec<&'static str> {
 /// corpus taparía cualquier regresión futura por construcción, que es
 /// justamente lo contrario de una puerta.
 const PENDIENTES: &[&str] = &[
-    "app.quit",
     "cursor.up",
     "cursor.down",
     "cursor.page-up",
     "cursor.page-down",
     "cursor.top",
     "cursor.bottom",
-    "app.theme",
     "app.extensions",
-    "app.settings",
     "pane.ai-rename",
     "pane.semantic-search",
     "pane.mkdir",
-    "dialog.confirm",
-    "dialog.cancel",
     "dialog.approve",
     "dialog.deny",
     "dialog.overwrite",
     "dialog.skip",
     "dialog.rename",
     "dialog.newer",
-    "dialog.up",
-    "dialog.down",
-    "dialog.page-up",
-    "dialog.page-down",
     "dialog.add",
     "dialog.remove",
 ];
@@ -109,7 +100,7 @@ const PENDIENTES: &[&str] = &[
 /// edición deliberada, en el mismo diff, que un revisor ve. El número solo
 /// puede bajar — y cuando H3h lo deje en 0, la lista desaparece con él.
 const _: () = assert!(
-    PENDIENTES.len() <= 27,
+    PENDIENTES.len() <= 18,
     "la allowlist de la puerta de documentación solo puede MENGUAR: \
      documenta el comando en vez de añadirlo aquí"
 );
@@ -147,9 +138,6 @@ const CONTEXTOS_PENDIENTES: &[&str] = &[
     // El TOFU del `init.lua` de un proyecto: ningún tema menciona ni los
     // plugins ni el `init.lua`.
     "dialog.trust-lua",
-    // Salir: `app.quit` sigue en PENDIENTES, así que tampoco hay prosa que
-    // explique la pregunta.
-    "dialog.quit",
     // El nombre editable de una transferencia (y el renombrado, que abre el
     // mismo modal): `copying` cuenta que el destino es el otro panel, no que
     // se pueda teclear el nombre, y `mouse` solo NOMBRA `pane.rename` en la
@@ -167,7 +155,7 @@ const CONTEXTOS_PENDIENTES: &[&str] = &[
 /// [`PENDIENTES`]: la lista solo puede bajar, y subir el número es una
 /// edición deliberada que un revisor ve en el mismo diff.
 const _: () = assert!(
-    CONTEXTOS_PENDIENTES.len() <= 27,
+    CONTEXTOS_PENDIENTES.len() <= 6,
     "la allowlist de contextos solo puede MENGUAR: escribe la página en vez \
      de añadir el contexto aquí"
 );
