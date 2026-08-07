@@ -2247,3 +2247,108 @@ header = "Size"
         assert_eq!(help.markdown, "");
     }
 }
+
+/// Qué hizo [`install`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallReport {
+    /// Id del plugin instalado (leído del manifiesto, no del nombre del
+    /// directorio de origen).
+    pub id: String,
+    /// Nombre legible declarado en el manifiesto.
+    pub name: String,
+    /// `true` si había ya un plugin con ese id y se reemplazó (solo con
+    /// `force`). Cuando es `true`, su consentimiento se ha RETIRADO.
+    pub replaced: bool,
+}
+
+/// Por qué no se pudo instalar.
+#[derive(Debug, thiserror::Error)]
+pub enum InstallError {
+    /// El origen no tiene `plugin.toml`, o no se puede leer.
+    #[error("no hay `plugin.toml` legible en {0}")]
+    NoManifest(PathBuf),
+    /// El manifiesto no valida (id, capabilities, hooks…).
+    #[error("`plugin.toml` inválido: {0}")]
+    Manifest(#[from] norte_plugin_host::ManifestError),
+    /// El origen no tiene `plugin.wasm`.
+    #[error("no hay `plugin.wasm` en {0}")]
+    NoWasm(PathBuf),
+    /// Ya hay un plugin instalado con ese id y no se pidió reemplazarlo.
+    #[error(
+        "`{0}` ya está instalado; reemplazarlo RETIRA su consentimiento — repite con `--force` si es lo que quieres"
+    )]
+    AlreadyInstalled(String),
+    /// Error de I/O copiando.
+    #[error("instalando: {0}")]
+    Io(#[from] io::Error),
+}
+
+/// Instala el plugin de `src` (un directorio con `plugin.toml` + `plugin.wasm`)
+/// bajo `config_dir/plugins/<id>/`.
+///
+/// El id sale del MANIFIESTO, nunca del nombre del directorio de origen: es lo
+/// que el descubridor va a usar, y dejar que un directorio llamado de otra
+/// forma decidiera dónde aterriza sería una vía para pisar a un tercero.
+///
+/// **Instalar no es consentir.** El plugin queda descubierto y sin aprobar; lo
+/// aprueba y lo activa un humano en el gestor. Un instalador que consintiera
+/// por su cuenta convertiría «traigo este fichero» en «le doy sus
+/// capabilities», que es la decisión entera.
+///
+/// **Reemplazar RETIRA el consentimiento**, y esta es la parte que no es
+/// cosmética: el digest de aprobación cubre el MANIFIESTO —capabilities,
+/// categoría, contribuciones— y no el `.wasm`. Sin retirarlo, instalar encima
+/// de un plugin ya aprobado dejaría un binario nuevo corriendo bajo el permiso
+/// que un humano le dio a otro. Por eso reemplazar exige `force` y, cuando
+/// ocurre, el estado del id se borra.
+///
+/// # Errors
+/// [`InstallError`] si falta el manifiesto o el `.wasm`, si el manifiesto no
+/// valida, si el id ya está instalado sin `force`, o por I/O.
+pub fn install(config_dir: &Path, src: &Path, force: bool) -> Result<InstallReport, InstallError> {
+    let manifest_path = src.join("plugin.toml");
+    let raw = std::fs::read_to_string(&manifest_path)
+        .map_err(|_| InstallError::NoManifest(manifest_path.clone()))?;
+    let manifest = norte_plugin_host::Manifest::from_toml(&raw)?;
+
+    let wasm_src = src.join("plugin.wasm");
+    if !wasm_src.is_file() {
+        return Err(InstallError::NoWasm(wasm_src));
+    }
+
+    let dest = config_dir.join("plugins").join(&manifest.id);
+    let replaced = dest.exists();
+    if replaced && !force {
+        return Err(InstallError::AlreadyInstalled(manifest.id.clone()));
+    }
+
+    std::fs::create_dir_all(&dest)?;
+    std::fs::write(dest.join("plugin.toml"), &raw)?;
+    std::fs::copy(&wasm_src, dest.join("plugin.wasm"))?;
+    // La ayuda viaja con el plugin si la trae (H3e); su ausencia no es error.
+    let help_src = src.join("help.md");
+    if help_src.is_file() {
+        std::fs::copy(&help_src, dest.join("help.md"))?;
+    }
+
+    if replaced {
+        // Consentimiento retirado: el `.wasm` es otro y el digest del
+        // manifiesto no lo habría notado.
+        //
+        // Se SOBRESCRIBE la entrada a "sin aprobar" en vez de borrarla del
+        // mapa: `persist_state` fusiona sobre el documento existente, así que
+        // quitar la clave del mapa la dejaría intacta en el fichero — el
+        // plugin seguiría aprobado y nada lo diría. Escribir la entrada apagada
+        // es además lo que un humano querría leer en `plugins-state.toml`:
+        // "esto estuvo aprobado y ya no", no un hueco.
+        let mut state = PluginRegistry::read_state(&config_dir.join(PluginRegistry::STATE_FILE))?;
+        state.insert(manifest.id.clone(), PluginState::default());
+        persist_state(config_dir, &state)?;
+    }
+
+    Ok(InstallReport {
+        id: manifest.id,
+        name: manifest.name,
+        replaced,
+    })
+}

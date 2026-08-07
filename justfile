@@ -310,6 +310,26 @@ gui-ci:
     # raíz del grafo.
     cargo deny --manifest-path crates/norte-gui/Cargo.toml check --config crates/norte-gui/deny.toml
 
+# Construye e INSTALA el previewer de syntect: el primer plugin real que se
+# puede tener instalado, en vez de existir solo como fixture de un test.
+#
+# Se monta en `target/plugin-stage/` y se instala desde ahí: el `plugin.wasm`
+# es un artefacto de build y no tiene por qué aparecer junto al `plugin.toml`
+# en el árbol de fuentes.
+#
+# Instalar NO aprueba: el plugin queda descubierto y sin consentir, y se
+# aprueba y activa en el gestor de extensiones (F12 en la TUI).
+plugin-syntect:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    origen=crates/norte-plugin-host/examples-wasm/previewer-syntect
+    cargo build --release --target wasm32-wasip2 --manifest-path $origen/Cargo.toml
+    stage=target/plugin-stage/previewer-syntect
+    rm -rf "$stage" && mkdir -p "$stage"
+    cp $origen/plugin.toml "$stage/plugin.toml"
+    cp $origen/target/wasm32-wasip2/release/previewer_syntect.wasm "$stage/plugin.wasm"
+    cargo run --quiet -p norte-cli -- plugin install "$stage" "$@"
+
 # ---------- distribución ----------
 
 # Construye los artefactos de release para ESTA máquina.

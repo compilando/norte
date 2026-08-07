@@ -419,6 +419,31 @@ independently through `PROTOCOL_VERSION`.
   hostile or broken daemon aborts the whole apply before any move is
   submitted (shared `validate_ai_plan` belt in `norte-frontend`).
 
+- **The plugin system has an installable plugin, and a way to install one.**
+  It shipped with neither: discovery reads `~/.config/norte/plugins/<id>/` and
+  nothing ever put anything there, while a finished syntax-highlighting
+  previewer existed only as a test fixture. `norte plugin install <dir>` brings
+  one in, `just plugin-syntect` builds and installs that one, and its manifest
+  is now a real file the test reads rather than a literal the test invented.
+  Installing is not consenting: the plugin arrives discovered and unapproved,
+  because turning "I brought this file" into "it has its capabilities" is the
+  whole decision. Replacing an installed plugin requires `--force` and
+  **withdraws its consent** — the approval digest covers the manifest and not
+  the `.wasm`, so without that, a new binary would run under a permission a
+  human granted to a different one, with the manifest identical so nothing
+  noticed.
+
+- **A plugin's WIT no longer breaks every other plugin.** The package version
+  travels inside each interface name, so one shared package meant any change to
+  `provider` renamed `previewer` and every previously compiled plugin stopped
+  loading — verified twice and never fixed, invisible here because the example
+  guests are rebuilt every time, fatal for anybody else. Three packages now, so
+  the interface that is going to keep moving moves alone.
+
+- **A plugin that declares a hook is refused instead of installed.** There is no
+  hook interface, no world, and no call site: the manifest accepted one, the
+  manager listed it, and nothing would ever have run it.
+
 ### Fixed
 
 - **Eight invisible characters were walking straight past the mask (#125).**

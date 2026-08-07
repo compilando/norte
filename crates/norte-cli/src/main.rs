@@ -368,6 +368,14 @@ enum PluginCmd {
         #[arg(default_value = "")]
         arg: String,
     },
+    /// Instala un plugin desde un directorio local (`plugin.toml` + `plugin.wasm`)
+    Install {
+        /// Directorio con el plugin
+        path: std::path::PathBuf,
+        /// Reemplaza uno ya instalado con el mismo id. RETIRA su consentimiento
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// Subcomandos MCP.
@@ -1058,18 +1066,52 @@ async fn append_line_0600(path: &std::path::Path, line: &str) -> anyhow::Result<
 /// `Backend` elegido con los flags globales (`--daemon`/`--socket`), como el
 /// resto de operaciones (regla 7).
 async fn plugin_cmd(backend: &Backend, cmd: PluginCmd) -> anyhow::Result<ExitCode> {
-    let PluginCmd::Run { id, command, arg } = cmd;
-    match backend.plugin_run_command(&id, &command, &arg).await {
-        Ok(output) => {
-            println!("{output}");
-            Ok(ExitCode::SUCCESS)
+    match cmd {
+        PluginCmd::Run { id, command, arg } => {
+            match backend.plugin_run_command(&id, &command, &arg).await {
+                Ok(output) => {
+                    println!("{output}");
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "{}",
+                        norte_i18n::ta("cli-plugin-run-failed", &[("error", &e.to_string())])
+                    );
+                    Ok(ExitCode::FAILURE)
+                }
+            }
         }
-        Err(e) => {
-            eprintln!(
-                "{}",
-                norte_i18n::ta("cli-plugin-run-failed", &[("error", &e.to_string())])
-            );
-            Ok(ExitCode::FAILURE)
+        // Copia local, SIN daemon: instalar es mover ficheros al directorio de
+        // config, y hacerlo depender de un daemon vivo sería pedirle al usuario
+        // que arranque el programa para poder instalarle algo.
+        PluginCmd::Install { path, force } => {
+            let dir = norte_core::connect::config_dir();
+            match norte_core::plugins::install(&dir, &path, force) {
+                Ok(rep) => {
+                    let verbo = if rep.replaced {
+                        "reemplazado"
+                    } else {
+                        "instalado"
+                    };
+                    // El nombre viene del manifiesto de un tercero: se pinta
+                    // saneado, como en el gestor.
+                    let (nombre, _) = norte_frontend::display_name(rep.name.as_bytes());
+                    println!("{verbo}: {} ({nombre})", rep.id);
+                    if rep.replaced {
+                        println!(
+                            "consentimiento RETIRADO: el `.wasm` es otro y el digest del \
+                             manifiesto no lo habría notado"
+                        );
+                    }
+                    println!("queda SIN aprobar: apruébalo y actívalo en el gestor de extensiones");
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
         }
     }
 }

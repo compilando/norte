@@ -13,22 +13,24 @@ use std::process::Command;
 use norte_core::PluginRegistry;
 use norte_plugin_host::PluginRuntime;
 
-/// Manifiesto del previewer syntect: declara `text/*` y `application/json`
-/// (para que un JSON resuelva contra un syntax real) + `fs-read=scoped`.
-const MANIFEST: &str = r#"
-[plugin]
-id = "org.norte.syntect"
-name = "Syntect Highlighter"
-publisher = "norte"
-version = "0.1.0"
-category = "previewer"
+/// El manifiesto REAL del plugin, leído de su directorio — no una copia.
+///
+/// Era un literal aquí, y eso hacía que este test probara lo que un manifiesto
+/// habría dicho en vez de lo que el plugin distribuye. Ahora `plugin.toml` es
+/// la fuente y el test lo lee: si el manifiesto que se instala deja de declarar
+/// `application/json` o pierde `fs-read`, este E2E se cae, que es justo lo que
+/// tiene que pasar.
+fn manifest() -> String {
+    let p = guest_dir("previewer-syntect").join("plugin.toml");
+    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("leyendo {}: {e}", p.display()))
+}
 
-[contributions]
-previewer = [{ mimetypes = ["text/*", "application/json"] }]
-
-[capabilities]
-fs-read = "scoped"
-"#;
+/// Directorio del guest, desde el manifiesto de ESTE crate.
+fn guest_dir(nombre: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../norte-plugin-host/examples-wasm")
+        .join(nombre)
+}
 
 /// JSON de prueba: syntect tiene un syntax `JSON`, así que el resaltado es
 /// determinista (claves/valores en colores distintos).
@@ -44,7 +46,7 @@ fn plugin_preview_syntect_e2e_wasm_real() {
     let cfg = tempfile::tempdir().expect("tempdir");
     let plugin_dir = cfg.path().join("plugins").join("org.norte.syntect");
     std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin dir");
-    std::fs::write(plugin_dir.join("plugin.toml"), MANIFEST).expect("write manifest");
+    std::fs::write(plugin_dir.join("plugin.toml"), manifest()).expect("write manifest");
     std::fs::copy(&wasm, plugin_dir.join("plugin.wasm")).expect("copy .wasm");
 
     let rt = PluginRuntime::new().expect("PluginRuntime::new");

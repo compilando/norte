@@ -1,0 +1,25 @@
+# El manifiesto REAL de este plugin, y el que sus tests leen.
+#
+# Vivía como literal dentro de `plugins_preview_syntect_e2e.rs`, lo que dejaba
+# el plugin sin manifiesto propio: no había nada que instalar, solo un fixture
+# que describía lo que un manifiesto habría dicho. Ahora el fichero es la
+# fuente y el test lo lee — probar una copia de lo que se distribuye no prueba
+# lo que se distribuye.
+
+[plugin]
+id = "org.norte.syntect"
+name = "Syntect Highlighter"
+publisher = "norte"
+version = "0.1.0"
+category = "previewer"
+description = "Resaltado de sintaxis en el visor, con los conjuntos por defecto de syntect."
+
+[contributions]
+previewer = [{ mimetypes = ["text/*", "application/json"] }]
+
+# `fs-read = "scoped"`: el guest NO abre ficheros. Lee los bytes que el host ya
+# leyó y le entrega bajo token (regla 9). La capability existe porque el host
+# comprueba que esté declarada antes de servir ese token, no porque el plugin
+# tenga acceso a nada.
+[capabilities]
+fs-read = "scoped"

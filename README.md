@@ -64,6 +64,32 @@ The `norte` command itself is the non-interactive side: `ls`, `cp`, `mv`,
 `rm`, `mkdir`, `connect`, `daemon`, `mcp`, `policy`, `undo`, `index`, `ai`,
 `audit`, `doctor`. Run `norte --help` for the full list.
 
+## Plugins
+
+norte loads WASM plugins from `~/.config/norte/plugins/<id>/`. One ships with
+the source tree — a syntax highlighter for the viewer:
+
+```sh
+just plugin-syntect
+```
+
+Installing is not consenting. The plugin arrives discovered and **unapproved**;
+you approve its capabilities and enable it in the extensions manager. To install
+any other plugin from a local directory holding a `plugin.toml` and a
+`plugin.wasm`:
+
+```sh
+norte plugin install <dir>          # refuses to replace an installed id
+norte plugin install <dir> --force  # replaces it, and withdraws its consent
+```
+
+`--force` withdraws consent on purpose: the approval digest covers the manifest,
+not the `.wasm`, so replacing the binary under an identical manifest would
+otherwise keep running new code under a permission granted to old code.
+
+Signing and a registry are deliberately absent — installing from a local path
+needs neither, and both need decisions this project has not made yet.
+
 ## Documentation
 
 - [Project documentation](docs/README.md)
