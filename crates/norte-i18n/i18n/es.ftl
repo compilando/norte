@@ -294,6 +294,7 @@ help-group-remote = Remoto y archivos
 # H3e: el grupo bajo el que van las páginas de plugin, detrás de todo lo que
 # escribió el host. No es un tag del corpus — lo emite `norte_frontend::help`
 # para las filas de plugin.
+help-group-agents = Agentes y política
 help-group-extensions = Extensiones
 # H3e: la línea de procedencia bajo el título de una página de plugin.
 # `help-plugin-origin` es INCONDICIONAL en toda página de plugin y el resto se

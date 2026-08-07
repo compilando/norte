@@ -2,7 +2,7 @@
 id = "index"
 title = "Welcome to norte"
 tags = ["basics"]
-see_also = ["panes", "selection", "mouse", "help", "dialogs", "settings", "copying", "finding", "columns", "viewer", "remote", "archives"]
+see_also = ["panes", "selection", "mouse", "help", "dialogs", "settings", "copying", "finding", "columns", "viewer", "remote", "archives", "agents", "plugins"]
 +++
 norte is an orthodox file manager. Two panes, the keyboard first, and one set
 of commands whether the files are on this machine, on an SSH host, in an
@@ -26,5 +26,7 @@ bucket is the same two keys as copying between two local directories.
 - [[columns]] — which columns the listing shows, and how it is sorted
 - [[remote]] — SFTP, FTP and S3-compatible object storage
 - [[archives]] — walking into a `.zip` or a `.tar` as if it were a directory
+- [[agents]] — what an AI agent may do here, and how you take it back
+- [[plugins]] — approving an extension, and the sandbox it runs in
 
 > 💡 The keys in this help are not written into the text: each one is looked up in **your** keymap as the page is drawn. Rebind a command and these pages name the key you chose.

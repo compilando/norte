@@ -78,12 +78,9 @@ const PENDIENTES: &[&str] = &[
     "cursor.page-down",
     "cursor.top",
     "cursor.bottom",
-    "app.extensions",
     "pane.ai-rename",
     "pane.semantic-search",
     "pane.mkdir",
-    "dialog.approve",
-    "dialog.deny",
     "dialog.overwrite",
     "dialog.skip",
     "dialog.rename",
@@ -100,7 +97,7 @@ const PENDIENTES: &[&str] = &[
 /// edición deliberada, en el mismo diff, que un revisor ve. El número solo
 /// puede bajar — y cuando H3h lo deje en 0, la lista desaparece con él.
 const _: () = assert!(
-    PENDIENTES.len() <= 18,
+    PENDIENTES.len() <= 15,
     "la allowlist de la puerta de documentación solo puede MENGUAR: \
      documenta el comando en vez de añadirlo aquí"
 );
@@ -131,13 +128,6 @@ fn contextos() -> Vec<&'static str> {
 /// alguien escribió la página y se dejó la línea, silenciando al siguiente
 /// contexto que caiga ahí.
 const CONTEXTOS_PENDIENTES: &[&str] = &[
-    // Ni página de agentes y política: también H3h. Ningún tema habla hoy de
-    // aprobaciones, y hacer que `copying` reclame este contexto para callar
-    // la puerta sería contarle al lector lo que no ha preguntado.
-    "dialog.approval",
-    // El TOFU del `init.lua` de un proyecto: ningún tema menciona ni los
-    // plugins ni el `init.lua`.
-    "dialog.trust-lua",
     // El nombre editable de una transferencia (y el renombrado, que abre el
     // mismo modal): `copying` cuenta que el destino es el otro panel, no que
     // se pueda teclear el nombre, y `mouse` solo NOMBRA `pane.rename` en la
@@ -155,7 +145,7 @@ const CONTEXTOS_PENDIENTES: &[&str] = &[
 /// [`PENDIENTES`]: la lista solo puede bajar, y subir el número es una
 /// edición deliberada que un revisor ve en el mismo diff.
 const _: () = assert!(
-    CONTEXTOS_PENDIENTES.len() <= 6,
+    CONTEXTOS_PENDIENTES.len() <= 4,
     "la allowlist de contextos solo puede MENGUAR: escribe la página en vez \
      de añadir el contexto aquí"
 );

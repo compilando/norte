@@ -36,6 +36,8 @@ const EN: &[(&str, &str)] = &[
     ("viewer", include_str!("../topics/en/viewer.md")),
     ("remote", include_str!("../topics/en/remote.md")),
     ("archives", include_str!("../topics/en/archives.md")),
+    ("agents", include_str!("../topics/en/agents.md")),
+    ("plugins", include_str!("../topics/en/plugins.md")),
 ];
 
 /// `(id, source)` of every Spanish topic. Same ids, in the same order: the
@@ -56,6 +58,8 @@ const ES: &[(&str, &str)] = &[
     ("viewer", include_str!("../topics/es/viewer.md")),
     ("remote", include_str!("../topics/es/remote.md")),
     ("archives", include_str!("../topics/es/archives.md")),
+    ("agents", include_str!("../topics/es/agents.md")),
+    ("plugins", include_str!("../topics/es/plugins.md")),
 ];
 
 /// The raw table for a locale.

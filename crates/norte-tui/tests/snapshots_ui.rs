@@ -1413,16 +1413,18 @@ fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
     );
 
     // Frame de sobra: la página entra entera y el indicador SOBRA — un `1/9`
-    // sobre nueve líneas visibles no informa de nada.
-    let texto = render_ayuda(&mut app, 120, 60);
+    // sobre nueve líneas visibles no informa de nada. El alto va holgado a
+    // propósito: el índice CRECE con cada página que H3h escribe, y un frame
+    // ajustado convertiría "escribir una página" en "arreglar este test".
+    let texto = render_ayuda(&mut app, 120, 90);
     let view = app.help.as_ref().expect("overlay abierto");
     let total = view.body().0.len();
     let (_, alto) =
-        ui::help_body_size(ratatui::layout::Rect::new(0, 0, 120, 60), view.state.lang());
+        ui::help_body_size(ratatui::layout::Rect::new(0, 0, 120, 90), view.state.lang());
     assert!(total <= alto, "la página cabe en {alto} filas ({total})");
     let pie = texto
         .lines()
-        .nth(help_footer_row(120, 60))
+        .nth(help_footer_row(120, 90))
         .expect("el pie cae dentro del frame");
     assert!(
         !pie.contains(&format!("/{total}")),

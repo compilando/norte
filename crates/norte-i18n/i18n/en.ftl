@@ -289,6 +289,7 @@ help-group-doing = Doing things
 help-group-remote = Remote & archives
 # H3e: the group the plugin pages sit under, after everything the host wrote.
 # Not a corpus tag — `norte_frontend::help` emits it for the plugin rows.
+help-group-agents = Agents & policy
 help-group-extensions = Extensions
 # H3e: the provenance line under a plugin page's title. `help-plugin-origin` is
 # UNCONDITIONAL on any plugin page and the others are appended when true — a

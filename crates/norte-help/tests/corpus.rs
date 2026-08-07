@@ -27,7 +27,7 @@ const LANGS: [Lang; 2] = [Lang::En, Lang::Es];
 /// the corpus so that DELETING a topic file is a test failure too: a check
 /// that reads the corpus to decide what the corpus should contain cannot see
 /// an absence.
-const EXPECTED: [&str; 13] = [
+const EXPECTED: [&str; 15] = [
     "index",
     "panes",
     "selection",
@@ -41,6 +41,8 @@ const EXPECTED: [&str; 13] = [
     "viewer",
     "remote",
     "archives",
+    "agents",
+    "plugins",
 ];
 
 /// The directory holding a locale's `.md` files, from `CARGO_MANIFEST_DIR`.
@@ -472,16 +474,19 @@ fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 59] = [
+const DOCUMENTED: [&str; 62] = [
+    "app.extensions",
     "app.help",
     "app.palette",
     "app.quit",
     "app.settings",
     "app.theme",
+    "dialog.approve",
     "dialog.back",
     "dialog.cancel",
     "dialog.confirm",
     "dialog.cycle-format",
+    "dialog.deny",
     "dialog.down",
     "dialog.filter",
     "dialog.move-down",
@@ -607,8 +612,6 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
     assert_eq!(
         sin_pagina,
         [
-            "dialog.approval",
-            "dialog.trust-lua",
             "dialog.transfer-name",
             "dialog.mkdir",
             "dialog.ai-rename",

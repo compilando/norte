@@ -2,7 +2,7 @@
 id = "index"
 title = "Esto es norte"
 tags = ["basics"]
-see_also = ["panes", "selection", "mouse", "help", "dialogs", "settings", "copying", "finding", "columns", "viewer", "remote", "archives"]
+see_also = ["panes", "selection", "mouse", "help", "dialogs", "settings", "copying", "finding", "columns", "viewer", "remote", "archives", "agents", "plugins"]
 +++
 norte es un gestor de ficheros ortodoxo. Dos paneles, el teclado por delante y
 los mismos comandos tanto si los ficheros están en esta máquina como si viven
@@ -27,5 +27,7 @@ directorios locales.
 - [[columns]] — qué columnas enseña el listado, y cómo se ordena
 - [[remote]] — SFTP, FTP y almacenamiento de objetos compatible con S3
 - [[archives]] — entrar en un `.zip` o un `.tar` como si fuera un directorio
+- [[agents]] — qué puede hacer aquí un agente de IA, y cómo se lo quitas
+- [[plugins]] — aprobar una extensión, y el aislamiento en el que corre
 
 > 💡 Las teclas de esta ayuda no están escritas en el texto: cada una se consulta en **tu** keymap al dibujar la página. Reasigna un comando y estas páginas dirán la tecla que hayas elegido.

@@ -555,6 +555,20 @@ fn close_stale_overlays(app: &mut App) {
 /// an empty catalogue land in the same place: no plugin rows in the sidebar and
 /// every `plugin:` command dimmed, which is the honest answer to "I could not
 /// find out".
+/// Whether `F1` must refuse to open here: over a modal, with no page for this
+/// context.
+///
+/// Pulled out of [`open_contextual_help`] so the refusal can be tested for what
+/// it IS rather than through whichever modal happens to be undocumented. Since
+/// H3h no context is: the documentation gate has no allowlist left, so a new
+/// context arrives with its page or fails the build. That makes this guard
+/// unreachable through the UI today and worth keeping anyway — it is the
+/// fail-safe for the one way a context could still lose its page, which is
+/// somebody deleting the page.
+fn refuses_over_modal(lang: norte_help::Lang, context: &str, over_modal: bool) -> bool {
+    over_modal && norte_help::topic_for_context(lang, context).is_none()
+}
+
 fn open_contextual_help(
     app: &mut App,
     lang: norte_help::Lang,
@@ -563,7 +577,7 @@ fn open_contextual_help(
 ) {
     let context = norte_tui::help_context::help_context(app);
     let over_modal = app.modal.is_some();
-    if over_modal && norte_help::topic_for_context(lang, context).is_none() {
+    if refuses_over_modal(lang, context, over_modal) {
         app.message = Some(t("msg-help-no-dialog-page"));
         return;
     }
@@ -3441,27 +3455,38 @@ mod help_key_tests {
     /// donde importa más.
     #[test]
     fn f1_sobre_un_modal_sin_pagina_no_tapa_la_pregunta() {
+        // Se prueba la GUARDA, no el hueco: desde H3h todo contexto tiene
+        // página (la puerta de documentación se quedó sin allowlist), así que
+        // un test que necesitara un modal indocumentado se quedaría sin sujeto
+        // y habría que reescribirlo con cada página nueva. El contexto es
+        // sintético; lo que se fija es que sobre un modal la respuesta a «no
+        // hay página» es no abrir nada.
+        for lang in [Lang::En, Lang::Es] {
+            assert!(
+                refuses_over_modal(lang, "dialog.no-such-context", true),
+                "sobre un modal, sin página, F1 no abre nada"
+            );
+            assert!(
+                !refuses_over_modal(lang, "dialog.no-such-context", false),
+                "desde un pane el índice SÍ es un aterrizaje razonable"
+            );
+            assert!(
+                !refuses_over_modal(lang, "dialog.approval", true),
+                "y con página escrita se abre esa página"
+            );
+        }
+    }
+
+    /// Y sobre un modal con página, `F1` la abre sin tapar la pregunta.
+    #[test]
+    fn f1_sobre_una_aprobacion_abre_su_pagina() {
         let mut app = app_with_help_closed();
         app.modal = Some(approval_modal_de_test());
-        assert!(
-            norte_help::topic_for_context(Lang::En, "dialog.approval").is_none(),
-            "precondición: nadie ha escrito todavía la página de la aprobación"
-        );
         abrir_ayuda(&mut app);
-        assert!(
-            app.help.is_none(),
-            "el índice NO tapa una aprobación de agente por consolar"
-        );
-        assert!(app.modal.is_some(), "y la pregunta sigue ahí…");
-        assert!(
-            !help_owns_keys(&app),
-            "…contestable: la tecla siguiente es del modal, no de una página"
-        );
-        assert_eq!(
-            app.message.as_deref(),
-            Some(norte_i18n::t("msg-help-no-dialog-page").as_str()),
-            "y el F1 no desaparece en silencio"
-        );
+        let help = app.help.as_ref().expect("la ayuda se abrió");
+        assert_eq!(help.state.current().as_str(), "agents");
+        assert!(help.over_modal, "la ayuda sabe que hay una pregunta detrás");
+        assert!(app.modal.is_some(), "y la pregunta sigue ahí");
     }
 
     /// `F1` sobre un modal abre la página de ESE modal (o el índice mientras
