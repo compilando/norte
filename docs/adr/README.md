@@ -46,3 +46,4 @@ edits.
 | [0038](0038-protocol-json-schema-and-semver-gate.md) | Protocol JSON Schema artifact and cargo-semver-checks gate | accepted |
 | [0039](0039-provider-attributes-wire.md) | Provider attributes on the wire (typed, on-demand, degrading) | accepted |
 | [0040](0040-help-corpus-and-markdown-lite.md) | Help corpus and markdown-lite | accepted |
+| [0041](0041-core-providers-versus-plugin-providers.md) | Which providers live in the core, and which arrive as plugins | accepted |

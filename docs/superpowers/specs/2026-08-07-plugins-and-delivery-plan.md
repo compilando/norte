@@ -12,7 +12,22 @@ thing that decides both is a limit nobody has written down yet.
 
 ---
 
-## The finding that governs everything below
+## Decided since this was written
+
+**ADR 0041 (2026-08-08) settled the boundary this document was circling.** The
+four built-in providers — local, SFTP, object storage, archives — stay in the
+core. The plugin path is how NEW backends arrive. The gaps in the `provider`
+WIT close on demand, driven by the first plugin that needs each one. And the
+package split moved to the front, because closing gaps on demand means the WIT
+keeps moving and a third-party plugin currently survives exactly one release.
+
+The reasoning is in the ADR; the short version is that S3 as a plugin would
+speak plaintext HTTP (`aws-lc-rs` does not compile to wasm) and would lose
+server-side copy, attributes, trash, resume and cancellation. Independent
+maintenance, which was the actual motivation, does not need a plugin — a crate
+boundary already gives it.
+
+## The finding that shaped the plugin sections below
 
 **The plugin system cannot express the one plugin the specification explicitly
 promises.**
@@ -29,16 +44,19 @@ already opened and read**. There is no way to walk a directory, and a
 per-file-token API for a repository is not a workaround, it is a different
 program.
 
-So the sandbox boundary is not a detail of the git feature. It decides:
+**And the specification is on the other side of that gap.** §7.1 says a
+manifest "declares scoped filesystem, network-host, AI, and execution
+capabilities" and that "the host mediates every capability **through WASI** and
+norte policy". A WASI-mediated, policy-gated, read-only view of one directory
+is therefore what §7.1 describes; `read-scoped` is a narrowing that ADR 0022
+chose, not the boundary the spec drew. Rule 9 forbids *direct* access — it does
+not forbid a mediated one, which is what "the host mediates every capability"
+means.
 
-- whether git status can be a plugin at all (§17 says it must be),
-- whether RAR-by-delegation can be a plugin (it cannot — a wasm guest cannot
-  execute `unrar`; that needs §7.3, external programs, which does not exist),
-- what a third-party plugin is actually able to do, which is the whole point of
-  M4's exit criterion.
-
-**Nothing expensive below should start before this is decided.** It is a design
-session, not an implementation one.
+So the sandbox boundary decides whether git status can be a plugin at all
+(§17 says it must be). Under ADR 0041 that is no longer a gate over the whole
+plan — it is one gap on the list, and git is the plugin that forces it. It gets
+its own spike and its own ADR, in B3.
 
 ---
 
@@ -62,7 +80,7 @@ of the interface.
 | Filesystem edge cases | **Core** | Symlink policy is an invariant, not a preference. |
 | Observability | **Core** | |
 | Daemon lifecycle | **Core** | |
-| **RAR read-only** | **Neither — §7.3** | Product decision 5 says delegate to an installed `unrar`/`7z` with no non-free code in the graph. A wasm guest cannot exec. This needs the external-program mechanism the spec declares in §7.3 and nobody has built. |
+| **RAR read-only** | **Core provider that delegates** | Product decision 5: delegate to an installed `unrar`/`7z`, no non-free code in the graph. Not a plugin — a wasm guest cannot exec, and `exec` is a hard `none` in the manifest. Not §7.3 either: that is `openers.toml`, which opens a file in another application and is explicitly "declarative configuration, not plugins". So it is a provider in the core that shells out, next to the archive providers. |
 | Packaging tier two | **Core** | |
 
 The pattern: **everything that mutates stays in the core, and everything that
@@ -82,10 +100,16 @@ the catalog's category list, and appear in the plugin UI. There is **no `hook`
 interface in the WIT, no world, and no call site anywhere in the host or the
 core.** A manifest can declare a hook today; nothing will ever run it.
 
-That is a lie the UI tells. Either build it or delete it — and it should be
-deleted until there is a hook somebody wants, because "what should a hook hook
-into" has never been answered and inventing an answer to justify an enum
-variant is backwards.
+That is a lie the UI tells. It cannot simply be deleted: §7.1 names "operation
+hooks" among the interfaces WIT is meant to cover, so removing the category
+would put the code further from the specification rather than closer. The two
+honest moves are to build it — which first requires answering what an operation
+hook hooks into, and what it may do when a mutation is about to happen, which
+is a policy and journal question before it is a WIT question — or to keep the
+category and stop offering it, so a manifest that declares one is rejected at
+parse time with "not implemented yet" instead of installing something inert.
+
+The second is a session; the first is a milestone. Take the second now.
 
 ### 2. `previewer-syntect` — a finished plugin nobody can install
 
@@ -144,21 +168,38 @@ directories in `examples-wasm/` for a plugin ecosystem.
 Each block is one session's work with a single purpose. Blocks marked
 **[gate]** unblock later ones and should not be skipped or reordered.
 
-### Phase A — decide, then stop lying
+### Phase A — make the plugin story true before extending it
 
-**A1 [gate]. ADR: what may a plugin read?**
-No code. Decide between: a scoped read-only `wasi:filesystem` preopen for the
-pane's directory; a host-side batched directory read behind a capability; the
-§7.3 external-program mechanism; or "git stays in the core and §17 changes".
-Whatever is chosen, the security review is part of this session, not after it —
-this is the sandbox boundary, and rule 9 exists because of it.
-*Decides A4, B3 and C2.*
+**A0 [gate]. Split the WIT package.**
+Promoted out of Phase C by ADR 0041 decision 4. Today any bump to the shared
+package makes every previously compiled `.wasm` fail to instantiate, on the
+import side, verified twice. So a third-party plugin survives exactly one norte
+release — and decision 3 (close the gaps on demand) guarantees the WIT keeps
+moving, which makes it worse, not better.
 
-**A2. Delete `Category::Hook`, or specify it.**
-Recommended: delete. A category that can be declared and never runs is worse
-than an absent one, because the UI shows it. If it is kept instead, this
-session writes the interface, the world and the call site — not the enum
-variant alone, which is what it has today.
+Split `norte:provider` out of `norte:plugin`. First thing the session does is
+re-test ADR 0032's recorded blocker: `wit-parser` was 0.239 then and is 0.251
+now. If the blocker is gone this is mechanical; if it is not, the session's
+output is what it would take, and A4 ships with a stated version tie.
+
+*Blocks: publishing anything a third party is meant to keep.*
+
+**A1 [gate]. ADR 0041 — which providers are core, which are plugins. DONE.**
+Decided 2026-08-08. The four built-in providers stay in the core; the plugin
+path is how NEW backends arrive; the WIT gaps close on demand, driven by the
+first plugin that needs them; and the package split (C1) is a precondition for
+inviting anyone outside this repository to write one.
+
+*What this displaced:* the session was originally scoped as "what may a plugin
+read", aimed at unblocking a git plugin. That was the smaller question. The
+sandbox boundary still has to be decided before B3, but it is now one item
+inside the gap list rather than the gate over the whole plan — see B3.
+
+**A2. Stop offering `Category::Hook`.**
+Reject a manifest that declares one, with a reason that says "not implemented
+yet" rather than installing something inert. The category stays, because §7.1
+names operation hooks; what goes away is the pretence that declaring one does
+anything.
 
 **A3. Close #120.**
 Picker offers declared plugin columns; duplicate bare ids disambiguated.
@@ -184,9 +225,20 @@ Streaming comparison across two providers, a plan as a first-class wire type,
 results in an operable virtual pane, execution through B1's transactional
 executor. `sha2` is already in the tree.
 
-**B3. Git status plugin.** *(needs A1)*
-The proof that the plugin interfaces are real, on something people want, under
-whatever the A1 decision permits.
+**B3. Git status plugin.** *(needs its own sandbox decision first)*
+The first plugin that forces a WIT gap, and therefore the first test of
+ADR 0041's decision 3 — the gap closes because a real plugin needs it.
+
+The gap here is reading: a git plugin has to read `.git`, and the guest's only
+door is `read-scoped`, a token for one blob the host already read. Options are
+a read-only WASI preopen scoped to one directory (which is what §7.1 describes
+— "the host mediates every capability through WASI"), a host-mediated read over
+the VFS, or gix in the core with §17 amended.
+
+**Spike before deciding:** does any git implementation build for
+`wasm32-wasip2`? If none does, the plugin route is closed on facts rather than
+on preference, and the honest answer is the third option. The spike is a day;
+the ADR after it writes itself.
 
 **B4. Shell integration.**
 cd-on-quit for bash/zsh/fish (NUL-delimited — a directory is bytes), `--pick`
@@ -199,18 +251,14 @@ Includes free space, which a copy should be checking before it starts.
 
 ### Phase C — the second extension mechanism
 
-**C1 [gate]. WIT package split.**
-`norte:provider` out of `norte:plugin`, re-testing whether `wit-parser` 0.251
-lifts ADR 0032's blocker. Without this a third-party plugin cannot survive a
-norte release, which makes A4's install path a promise with an expiry date.
+**C1 [gate]. WIT package split. — MOVED UP, see Phase A.**
 
-**C2. §7.3 external programs.** *(shaped by A1)*
-The declared-but-unbuilt third mechanism. Under policy, with the argument
-vector and the working directory as the whole of what the program gets.
+**C2. RAR read-only, as a core provider that delegates.**
+Product decision 5. `unrar`/`7z` invoked from the archive side of the core,
+never from a guest; honest failure when the executable is absent; the delegate
+gets an argument vector and a pipe, nothing else.
 
-**C3. RAR read-only by delegation.** *(needs C2)*
-
-**C4. `renamer` plugin category.** *(needs B1)*
+**C3. `renamer` plugin category.** *(needs B1)*
 A plugin proposes name pairs; the core executes them transactionally. The
 interface is nearly `ai.rename_plan` with a different producer.
 
@@ -228,20 +276,24 @@ needs them.
 ## Order at a glance
 
 ```
-A1 [gate: sandbox] ──┬─────────────► B3 git plugin
-                     └─► C2 external ─► C3 RAR
-A2 hook  A3 #120  A4 ship syntect
+A1 ADR 0041 ✔ done
+A0 [gate: WIT split] ──► a third-party plugin survives more than one release
+A2 hook   A3 #120   A4 ship syntect
 B1 rename ─┬─► B2 compare/sync
-           └─► C4 renamer category
-C1 [gate: WIT split] ─► third-party plugins survive releases
+           └─► C3 renamer category
+B3 git ──► needs its own spike + sandbox ADR (no longer gates anything else)
+C2 RAR (core provider, delegates to unrar/7z)
 B4 shell   B5 volumes   B6 GUI watch
 D1 logs    D2 fs edges   D3 upgrade   D4 packaging tier 2
 ```
 
-A1 first because it is cheap and three blocks depend on it. A2–A4 next because
-they are small and each removes something untrue. B1 before B2 because the
-compare plan wants a transactional executor and B1 builds one. C1 whenever —
-but before anybody outside this repo is invited to write a plugin.
+A0 first: it used to sit in Phase C on the assumption that nothing depended on
+it, and ADR 0041 decision 3 turned that around — closing WIT gaps on demand
+means the package will keep moving, so the split has to precede the movement
+rather than follow it. A2–A4 next because each is small and each removes
+something untrue. B1 before B2 because the compare plan wants a transactional
+executor and B1 builds one. B3 is now free-standing: it needs a spike and an
+ADR of its own, and nothing else waits on it.
 
 ---
 
