@@ -626,6 +626,63 @@ impl HelpState {
         }
     }
 
+    /// Puts the sidebar cursor on ROW `row` and shows what it lands on — what
+    /// a CLICK on that row means.
+    ///
+    /// The same landing the arrow keys perform (`show`, not `open`): moving
+    /// the cursor over the sidebar is reading it, and it does not push a step
+    /// onto the trail that `Backspace` would then have to walk back. Clicking
+    /// a row the reader can already see should not behave differently from
+    /// arrowing onto it.
+    ///
+    /// A GROUP header and an out-of-range index are both no-ops: a header is
+    /// not a page, and the caller is a painter that may be one frame behind
+    /// the model. The focus moves to the sidebar, because the click says where
+    /// the reader is now looking.
+    pub fn click_row(&mut self, row: usize) {
+        if !matches!(self.rows.get(row), Some(SidebarRow::Topic { .. })) {
+            return;
+        }
+        self.focus = Focus::Topics;
+        self.cursor = row;
+        if let Some(landed) = self.selected_topic().cloned() {
+            self.show(&landed);
+        }
+    }
+
+    /// Puts the body cursor on action `i` — what a CLICK on a runnable row or
+    /// a link means, one half of it.
+    ///
+    /// Only moves the cursor; the caller decides whether the click also RUNS
+    /// it, because running is what needs the frozen resolver's verdict and a
+    /// dispatch path this model knows nothing about. Out of range is a no-op,
+    /// for the same reason [`click_row`](Self::click_row) tolerates it.
+    ///
+    /// The focus moves to the body: the next arrow key belongs where the
+    /// reader just pointed.
+    pub fn click_action(&mut self, i: usize) {
+        if i >= self.actions.len() {
+            return;
+        }
+        self.focus = Focus::Body;
+        self.action_cursor = i;
+    }
+
+    /// Scrolls the body by `lines`, negative up — the wheel.
+    ///
+    /// Unlike [`page_up`](Self::page_up) it does NOT depend on the focus: the
+    /// wheel scrolls what the pointer is over, which is the rule the panes
+    /// already follow (`mouse`'s own help page says so). Saturating at zero;
+    /// the far end is clamped by [`clamp_scroll`](Self::clamp_scroll) once the
+    /// painter knows how many lines there are.
+    pub fn scroll_body(&mut self, lines: isize) {
+        self.body_scroll = if lines < 0 {
+            self.body_scroll.saturating_sub(lines.unsigned_abs())
+        } else {
+            self.body_scroll.saturating_add(lines.unsigned_abs())
+        };
+    }
+
     /// Hands the focus to the other half. Focusing a body with nothing
     /// runnable on it (the keyboard page, a topic with neither commands nor
     /// `see_also`) is a no-op: a focus the arrow keys cannot move is a dead
@@ -969,6 +1026,77 @@ mod tests {
 
     fn state() -> HelpState {
         HelpState::new(Lang::En, KEYS_LABEL.to_owned())
+    }
+
+    /// Un CLIC en una fila de la barra lateral aterriza donde aterrizaría la
+    /// flecha: enseña la página y NO empuja un paso al rastro (`Backspace`
+    /// desde ahí sigue cerrando, no deshaciendo el clic).
+    #[test]
+    fn un_clic_en_la_lateral_aterriza_como_la_flecha() {
+        let mut s = state();
+        let fila = s
+            .rows()
+            .iter()
+            .position(|r| matches!(r, SidebarRow::Topic { id, .. } if id.as_str() == "copying"))
+            .expect("`copying` está en la lateral");
+        s.click_row(fila);
+        assert_eq!(s.cursor(), fila);
+        assert_eq!(s.current().as_str(), "copying");
+        assert_eq!(s.focus(), Focus::Topics);
+        assert!(
+            !s.back(),
+            "aterrizar no es navegar: no hay paso que deshacer"
+        );
+    }
+
+    /// Un clic sobre una CABECERA de grupo no hace nada: no es una página, y
+    /// mover ahí el cursor dejaría la lateral en una fila que las flechas se
+    /// saltan.
+    #[test]
+    fn un_clic_en_una_cabecera_de_grupo_no_hace_nada() {
+        let mut s = state();
+        let antes = (s.cursor(), s.current().clone());
+        let grupo = s
+            .rows()
+            .iter()
+            .position(|r| matches!(r, SidebarRow::Group { .. }))
+            .expect("hay cabeceras de grupo");
+        s.click_row(grupo);
+        assert_eq!((s.cursor(), s.current().clone()), antes);
+        // Y un índice fuera de rango tampoco: el pintor puede ir un frame por
+        // detrás del modelo.
+        s.click_row(usize::MAX);
+        assert_eq!((s.cursor(), s.current().clone()), antes);
+    }
+
+    /// Un clic sobre una fila ejecutable mueve el cursor de acciones y pasa el
+    /// foco al cuerpo — ejecutarla la decide el frontend, que es quien tiene
+    /// el veredicto congelado.
+    #[test]
+    fn un_clic_en_una_fila_ejecutable_mueve_el_cursor_de_acciones() {
+        let mut s = state();
+        s.open(&TopicId::new("copying"));
+        assert!(s.actions().len() > 1, "`copying` tiene filas ejecutables");
+        s.click_action(1);
+        assert_eq!(s.action_cursor(), 1);
+        assert_eq!(s.focus(), Focus::Body);
+        let antes = s.action_cursor();
+        s.click_action(s.actions().len());
+        assert_eq!(s.action_cursor(), antes, "fuera de rango es no-op");
+    }
+
+    /// La rueda mueve el cuerpo tenga el foco donde tenga: se desplaza lo que
+    /// está bajo el puntero, la misma regla que los panes.
+    #[test]
+    fn la_rueda_desplaza_el_cuerpo_con_el_foco_en_la_lateral() {
+        let mut s = state();
+        assert_eq!(s.focus(), Focus::Topics);
+        s.scroll_body(3);
+        assert_eq!(s.body_scroll(), 3);
+        s.scroll_body(-1);
+        assert_eq!(s.body_scroll(), 2);
+        s.scroll_body(-99);
+        assert_eq!(s.body_scroll(), 0, "satura en cero");
     }
 
     /// FIX 2: the keyboard page has to be findable by the name it is PAINTED
