@@ -15,13 +15,12 @@
 //! de la página, que es donde puede decidirse — ninguna aserción sabe si un
 //! párrafo explica algo.
 //!
-//! [`PENDIENTES`] es la deuda visible mientras H3h redacta el corpus
-//! completo. Está escrita a mano, un comando por línea, para que el `git
-//! diff` de cada tema muestre exactamente qué se saldó, y solo puede MENGUAR
-//! porque hay dos mecanismos, no una promesa: `check_commands` reporta las
-//! entradas que dejaron de tapar algo ([`norte_help::Stale`]), y el
-//! `const _` de debajo de la lista impide que crezca sin que alguien suba el
-//! techo a mano en el mismo diff.
+//! Hasta H3h esto llevaba una allowlist encogiente: los comandos que ningún
+//! tema documentaba todavía, escritos a mano y con un techo que solo podía
+//! bajar. H3h la dejó en cero y la lista se borró con ella, que era el plan
+//! desde el principio. Lo que queda es la puerta desnuda: un comando nuevo sin
+//! página rompe la suite y NO hay dónde apuntarlo — el arreglo es escribir el
+//! párrafo.
 //!
 //! # La otra mitad: los CONTEXTOS
 //!
@@ -29,8 +28,8 @@
 //! estar (H3c): un tema no puede reclamar una pantalla que la TUI no tiene, y
 //! una pantalla que la TUI sabe abrir no puede quedarse sin página — F1 ahí
 //! abriría el índice y nadie se quejaría. El vocabulario sale de una sola
-//! fuente ([`contextos`]) y la deuda de [`CONTEXTOS_PENDIENTES`] tiene los
-//! mismos dos mecanismos de menguado que [`PENDIENTES`].
+//! fuente ([`contextos`]), y su allowlist se agotó en H3h igual que la de
+//! comandos: hoy todo contexto que la TUI sabe abrir tiene página.
 //!
 //! Aquí la puerta mide algo MÁS que una mención: reclamar un contexto es
 //! decirle al lector "esto es lo que explica lo que tienes delante". Que la
@@ -50,12 +49,11 @@ use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS};
 /// pero con un vocabulario recortado a `COMMANDS` saldría como
 /// `UnknownCommand`, es decir "ese comando no existe", que es falso. El
 /// autor solo tendría dos salidas: no documentarlo, o ensanchar el
-/// vocabulario aquí. Mejor ensancharlo YA, con los 19 verbos `dialog.*`
-/// entrando en [`PENDIENTES`] como la deuda que son.
+/// vocabulario aquí. Se ensanchó, y H3h pagó la factura: los 19 verbos
+/// `dialog.*` tienen página.
 ///
 /// Se calcula (los dos listados ya están escritos a mano en `keymap.rs`, y
-/// duplicarlos aquí sería una tercera copia que se desincroniza). La
-/// allowlist, en cambio, es literal: ver [`PENDIENTES`].
+/// duplicarlos aquí sería una tercera copia que se desincroniza).
 fn vocabulario() -> Vec<&'static str> {
     COMMANDS
         .iter()
@@ -63,42 +61,6 @@ fn vocabulario() -> Vec<&'static str> {
         .chain(DIALOG_COMMANDS.iter().copied())
         .collect()
 }
-
-/// Comandos que ningún tema documenta todavía. Se borran, uno a uno,
-/// conforme H3h escribe las páginas.
-///
-/// A MANO y en orden de vocabulario (primero `COMMANDS`, después
-/// `DIALOG_COMMANDS`), jamás calculada: una allowlist derivada del propio
-/// corpus taparía cualquier regresión futura por construcción, que es
-/// justamente lo contrario de una puerta.
-const PENDIENTES: &[&str] = &[
-    "cursor.up",
-    "cursor.down",
-    "cursor.page-up",
-    "cursor.page-down",
-    "cursor.top",
-    "cursor.bottom",
-    "pane.mkdir",
-    "dialog.overwrite",
-    "dialog.skip",
-    "dialog.rename",
-    "dialog.newer",
-    "dialog.add",
-    "dialog.remove",
-];
-
-/// El TECHO de la deuda: la puerta no solo obliga a que la lista mengüe
-/// (eso ya lo vigila `StaleAllowEntry`), sino que impide que CREZCA.
-///
-/// Sin esto, "un comando nuevo cuesta un párrafo" sería falso: se saldaría
-/// con una línea aquí y nadie se enteraría. Con esto, subir el techo es una
-/// edición deliberada, en el mismo diff, que un revisor ve. El número solo
-/// puede bajar — y cuando H3h lo deje en 0, la lista desaparece con él.
-const _: () = assert!(
-    PENDIENTES.len() <= 13,
-    "la allowlist de la puerta de documentación solo puede MENGUAR: \
-     documenta el comando en vez de añadirlo aquí"
-);
 
 /// Los contextos que la TUI sabe abrir. UNA fuente: el vocabulario cerrado de
 /// [`norte_tui::help_context::CONTEXTS`], anclado a `Modal` allí — el `match`
@@ -108,41 +70,10 @@ const _: () = assert!(
 /// Duplicar la lista aquí sería la tercera copia que se desincroniza (y la
 /// segunda ya se desincronizó: hasta H3c esta puerta pedía un contexto
 /// `dialog` que ningún modal produce). Se calcula, como [`vocabulario`], y por
-/// la misma razón; la allowlist, en cambio, es literal.
+/// la misma razón.
 fn contextos() -> Vec<&'static str> {
     norte_tui::help_context::CONTEXTS.to_vec()
 }
-
-/// Contextos que todavía no tienen página. Se borran, uno a uno, conforme H3h
-/// escribe el corpus.
-///
-/// A MANO y en orden de vocabulario, jamás calculada, por lo mismo que
-/// [`PENDIENTES`]: una lista derivada del propio corpus taparía la regresión
-/// por construcción.
-///
-/// Y solo puede MENGUAR por dos mecanismos, no por una promesa: el `const _`
-/// de debajo impide que crezca sin subir el techo a mano en el mismo diff, y
-/// el test de abajo reporta como fallo la entrada que ya no tapa nada —
-/// alguien escribió la página y se dejó la línea, silenciando al siguiente
-/// contexto que caiga ahí.
-const CONTEXTOS_PENDIENTES: &[&str] = &[
-    // El nombre editable de una transferencia (y el renombrado, que abre el
-    // mismo modal): `copying` cuenta que el destino es el otro panel, no que
-    // se pueda teclear el nombre, y `mouse` solo NOMBRA `pane.rename` en la
-    // lista del menú contextual.
-    "dialog.transfer-name",
-    // Crear directorio: `pane.mkdir` está en PENDIENTES.
-    "dialog.mkdir",
-];
-
-/// El TECHO de la deuda de contextos, con el mismo papel que el de
-/// [`PENDIENTES`]: la lista solo puede bajar, y subir el número es una
-/// edición deliberada que un revisor ve en el mismo diff.
-const _: () = assert!(
-    CONTEXTOS_PENDIENTES.len() <= 2,
-    "la allowlist de contextos solo puede MENGUAR: escribe la página en vez \
-     de añadir el contexto aquí"
-);
 
 #[test]
 fn el_corpus_que_enviamos_esta_integro() {
@@ -162,9 +93,8 @@ fn el_corpus_no_nombra_comandos_que_no_existen() {
     // SIN allowlist (`&[]`, literalmente), y no es una omisión: un tema que
     // nombra un comando inexistente es siempre un bug — prosa que promete
     // una tecla que no hace nada, o un id mal escrito. No hay deuda que
-    // tapar aquí, solo erratas que arreglar. Pasar `PENDIENTES` daría el
-    // mismo resultado hoy (la allowlist no toca esta dirección del cruce),
-    // pero diría lo contrario de lo que este test afirma.
+    // tapar aquí, solo erratas que arreglar — y desde H3h tampoco queda
+    // allowlist que pasar en la otra dirección.
     let desconocidos: Vec<Issue> = check_commands(&vocabulario(), &[])
         .into_iter()
         .filter(|i| matches!(i, Issue::UnknownCommand { .. }))
@@ -177,8 +107,11 @@ fn el_corpus_no_nombra_comandos_que_no_existen() {
 }
 
 #[test]
-fn todo_comando_del_vocabulario_esta_documentado_o_en_pendientes() {
-    let issues = check_commands(&vocabulario(), PENDIENTES);
+fn todo_comando_del_vocabulario_esta_documentado() {
+    // `&[]` y no una allowlist: desde H3h no hay deuda que tapar. Un comando
+    // sin página es un fallo con un solo arreglo — escribir el párrafo — y no
+    // existe la línea que lo aplazaría.
+    let issues = check_commands(&vocabulario(), &[]);
 
     let sin_documentar: Vec<&Issue> = issues
         .iter()
@@ -186,27 +119,9 @@ fn todo_comando_del_vocabulario_esta_documentado_o_en_pendientes() {
         .collect();
     assert!(
         sin_documentar.is_empty(),
-        "comandos sin tema y sin entrada en PENDIENTES. Escribe el párrafo, \
-         o añade el comando a la lista si toca esperar a H3h:\n{}",
+        "comandos que ningún tema documenta. Escribe el párrafo: la \
+         allowlist que aplazaba esto se agotó en H3h y no va a volver.\n{}",
         sin_documentar
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-
-    // La otra mitad de la puerta: una entrada que ya no tapa nada. Sin
-    // esto la allowlist deja de menguar y nadie se entera — el comando se
-    // documentó (o se renombró) y la línea sigue ahí, silenciando el
-    // siguiente comando que se llame igual.
-    let rancias: Vec<&Issue> = issues
-        .iter()
-        .filter(|i| matches!(i, Issue::StaleAllowEntry { .. }))
-        .collect();
-    assert!(
-        rancias.is_empty(),
-        "entradas de PENDIENTES que ya no tapan nada; bórralas:\n{}",
-        rancias
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
@@ -251,9 +166,8 @@ fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
             .join("\n")
     );
 
-    // La otra: cada contexto que la TUI sabe abrir tiene una página, o está
-    // enumerado en CONTEXTOS_PENDIENTES. Sin esto, F1 en una pantalla sin
-    // página abre el índice y nadie se queja.
+    // La otra: cada contexto que la TUI sabe abrir tiene una página. Sin
+    // esto, F1 en una pantalla sin página abre el índice y nadie se queja.
     let sin_pagina: Vec<&str> = issues
         .iter()
         .filter_map(|i| match i {
@@ -261,36 +175,11 @@ fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
             _ => None,
         })
         .collect();
-    let sin_tapar: Vec<&&str> = sin_pagina
-        .iter()
-        .filter(|c| !CONTEXTOS_PENDIENTES.contains(c))
-        .collect();
     assert!(
-        sin_tapar.is_empty(),
-        "contextos sin página y sin entrada en CONTEXTOS_PENDIENTES. \
-         Reclámalos desde el `context` de la página que ya los explica, o \
-         añádelos a la lista si toca esperar a H3h: {sin_tapar:?}"
-    );
-
-    // Y la mitad que hace que la allowlist mengüe de verdad: una entrada que
-    // ya no tapa nada. O bien la página se escribió y la línea sobrevivió —
-    // silenciando al siguiente contexto que caiga ahí — o bien el id salió
-    // del vocabulario y la línea no silencia nada.
-    let rancias: Vec<String> = CONTEXTOS_PENDIENTES
-        .iter()
-        .filter(|c| !sin_pagina.contains(*c))
-        .map(|c| {
-            if contextos.contains(c) {
-                format!("`{c}` ya tiene página: borra la línea")
-            } else {
-                format!("`{c}` ya no está en el vocabulario de la TUI: borra la línea")
-            }
-        })
-        .collect();
-    assert!(
-        rancias.is_empty(),
-        "entradas de CONTEXTOS_PENDIENTES que ya no tapan nada:\n{}",
-        rancias.join("\n")
+        sin_pagina.is_empty(),
+        "contextos sin página. Reclámalos desde el `context` de la página que \
+         los explica, o escribe esa página: la allowlist que los aplazaba se \
+         agotó en H3h. {sin_pagina:?}"
     );
 
     // Y nada más, por lo mismo que en la puerta de comandos: una variante

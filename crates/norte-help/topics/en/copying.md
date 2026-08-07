@@ -1,16 +1,27 @@
 +++
 id = "copying"
-title = "Copying, moving and deleting"
+title = "Copying, moving, renaming, deleting"
 tags = ["doing"]
 see_also = ["selection", "remote", "archives"]
 commands = [
     "pane.copy",
     "pane.move",
+    "pane.rename",
+    "pane.mkdir",
     "pane.delete",
     "pane.delete-permanent",
     "task.cancel",
+    "dialog.overwrite",
+    "dialog.skip",
+    "dialog.rename",
+    "dialog.newer",
 ]
-context = ["dialog.confirm", "dialog.collision"]
+context = [
+    "dialog.confirm",
+    "dialog.collision",
+    "dialog.transfer-name",
+    "dialog.mkdir",
+]
 +++
 Mark what you want in the focused pane and press {{cmd:pane.copy}}. The other
 pane is the destination, whatever it is holding — a local directory, an SSH
@@ -26,6 +37,24 @@ this machine — does it degrade into a copy followed by a delete of the source.
 permanently when it does not. {{cmd:pane.delete-permanent}} never uses the
 trash. Both confirm first, and the confirmation says which of the two is about
 to happen.
+
+# Naming things
+
+The confirmation for a copy or a move carries the destination NAME, and it is
+editable. Leave it and the entry keeps the name it has; type over it and the
+same operation lands under the name you typed. Copying something to a new name
+is not a second feature — it is this field.
+
+{{cmd:pane.rename}} opens that same prompt with both ends in the current
+directory, which is what renaming is: a move that does not go anywhere. Within
+one backend it costs nothing, whatever the size.
+
+{{cmd:pane.mkdir}} asks for a name and creates a directory in the focused
+pane. It is the one thing on this page that creates rather than moves, and it
+is here because everything that follows — the collision, the trash, the undo —
+applies to it too.
+
+> ⚠ A name is bytes, and what you are shown is a rendering of them. When the text on screen is not what is on disk — bytes that did not decode, an override that reorders what you read — it is MARKED. Retype a name carrying the replacement character rather than confirming it: confirming would name the file after what you saw, not what was there.
 
 # Every transfer is a task
 
@@ -62,6 +91,10 @@ one answer governs every collision the rest of the way.
 | skip       | the colliding entries are left alone                         |
 | rename     | the copy lands beside it: report.txt becomes report (1).txt  |
 | keep newer | replaced only where the source is more recent, else left     |
+
+Those four are commands like any other — {{cmd:dialog.overwrite}},
+{{cmd:dialog.skip}}, {{cmd:dialog.rename}} and {{cmd:dialog.newer}} — so the
+keys are yours to rebind and this page names the ones you chose.
 
 Answer with the key the dialog shows, not with a default: there is none, because
 a dialog that can destroy data should not be answerable by leaning on a key.

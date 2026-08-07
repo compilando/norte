@@ -3477,6 +3477,23 @@ mod help_key_tests {
         }
     }
 
+    /// La otra mitad, y lo que de verdad cambió en H3h: ningún modal que la
+    /// TUI sepa abrir se queda sin página. Es lo mismo que cruza la puerta de
+    /// documentación (`tests/help_gate.rs`), comprobado aquí desde el lado del
+    /// lector — `F1` sobre una pregunta viva abre prosa sobre ESA pregunta, y
+    /// nunca el mensaje de arriba.
+    #[test]
+    fn todo_contexto_de_modal_tiene_pagina() {
+        for lang in [Lang::En, Lang::Es] {
+            for context in norte_tui::help_context::CONTEXTS {
+                assert!(
+                    !refuses_over_modal(lang, context, true),
+                    "[{lang:?}] el contexto `{context}` no tiene página que abrir"
+                );
+            }
+        }
+    }
+
     /// Y sobre un modal con página, `F1` la abre sin tapar la pregunta.
     #[test]
     fn f1_sobre_una_aprobacion_abre_su_pagina() {

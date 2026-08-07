@@ -5,6 +5,12 @@ tags = ["basics"]
 see_also = ["selection", "copying"]
 commands = [
     "pane.switch",
+    "cursor.up",
+    "cursor.down",
+    "cursor.page-up",
+    "cursor.page-down",
+    "cursor.top",
+    "cursor.bottom",
     "nav.enter",
     "nav.parent",
     "pane.refresh",
@@ -33,6 +39,20 @@ verdad sobre ellos.
 Ningún comando pregunta *hacia dónde*. Por eso a un gestor ortodoxo le bastan
 tan pocas teclas, y por eso el segundo panel no es una preferencia de
 disposición con la que se pueda discutir.
+
+# Mover el cursor
+
+{{cmd:cursor.up}} y {{cmd:cursor.down}} avanzan una fila,
+{{cmd:cursor.page-up}} y {{cmd:cursor.page-down}} una pantalla, y
+{{cmd:cursor.top}} y {{cmd:cursor.bottom}} van a los extremos del listado.
+
+El cursor es del panel, no de la pantalla: cada uno lleva el suyo, y un panel
+al que vuelves está donde lo dejaste, en la fila en la que lo dejaste. Eso es
+también lo que hace utilizable el segundo panel como destino mientras trabajas
+en el primero.
+
+El cursor es a lo que recurre un comando cuando no hay nada marcado: una fila
+es un lote de uno, y no necesita tecla propia. De eso va [[selection]].
 
 # El destino es un panel, no un disco
 

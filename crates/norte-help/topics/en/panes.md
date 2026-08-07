@@ -5,6 +5,12 @@ tags = ["basics"]
 see_also = ["selection", "copying"]
 commands = [
     "pane.switch",
+    "cursor.up",
+    "cursor.down",
+    "cursor.page-up",
+    "cursor.page-down",
+    "cursor.top",
+    "cursor.bottom",
     "nav.enter",
     "nav.parent",
     "pane.refresh",
@@ -33,6 +39,20 @@ tells you the truth about them.
 No command ever asks *where to*. That is why an orthodox manager needs so few
 keys, and why the second pane is not a layout preference you can talk it out
 of.
+
+# Moving the cursor
+
+{{cmd:cursor.up}} and {{cmd:cursor.down}} step a row,
+{{cmd:cursor.page-up}} and {{cmd:cursor.page-down}} a screen, and
+{{cmd:cursor.top}} and {{cmd:cursor.bottom}} go to the ends of the listing.
+
+The cursor belongs to the pane, not to the screen: each one keeps its own, and
+a pane you come back to is where you left it, on the row you left it on. That
+is also what makes the second pane usable as a destination while you work in
+the first.
+
+The cursor is what a command falls back to when nothing is marked — one row is
+a batch of one, and needs no special key. See [[selection]].
 
 # The destination is a pane, not a disk
 

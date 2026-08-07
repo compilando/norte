@@ -1296,10 +1296,12 @@ fn la_lateral_de_la_ayuda_se_dimensiona_a_sus_titulos() {
     };
     let es = ancho_pedido(Lang::Es);
     let en = ancho_pedido(Lang::En);
-    assert!(
-        es > en,
-        "el corpus español tiene los títulos más largos ({es} vs {en}); si eso \
-         deja de ser cierto, este test compara dos cosas iguales"
+    assert_ne!(
+        es, en,
+        "los dos corpus miden lo mismo ({es}); con títulos igual de anchos, \
+         una lateral de ancho CONSTANTE pasaría lo de abajo y este test no \
+         distinguiría «manda el contenido» de «siempre lo mismo». Cámbiale el \
+         título a un tema o compara contra otro par."
     );
 
     // Frame ANCHO: manda el contenido, y dos corpus distintos dan dos anchos

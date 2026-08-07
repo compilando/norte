@@ -475,13 +475,20 @@ fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 64] = [
+const DOCUMENTED: [&str; 77] = [
     "app.extensions",
     "app.help",
     "app.palette",
     "app.quit",
     "app.settings",
     "app.theme",
+    "cursor.bottom",
+    "cursor.down",
+    "cursor.page-down",
+    "cursor.page-up",
+    "cursor.top",
+    "cursor.up",
+    "dialog.add",
     "dialog.approve",
     "dialog.back",
     "dialog.cancel",
@@ -492,9 +499,14 @@ const DOCUMENTED: [&str; 64] = [
     "dialog.filter",
     "dialog.move-down",
     "dialog.move-up",
+    "dialog.newer",
+    "dialog.overwrite",
     "dialog.page-down",
     "dialog.page-up",
     "dialog.pane",
+    "dialog.remove",
+    "dialog.rename",
+    "dialog.skip",
     "dialog.sort",
     "dialog.toggle-enabled",
     "dialog.up",
@@ -516,6 +528,7 @@ const DOCUMENTED: [&str; 64] = [
     "pane.history",
     "pane.hotlist",
     "pane.mirror",
+    "pane.mkdir",
     "pane.move",
     "pane.names-encoding",
     "pane.open",
@@ -598,13 +611,11 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
         .collect();
     assert!(del_corpus.is_empty(), "{del_corpus:?}");
 
-    // The mirror direction is real debt, so it is NAMED here rather than
-    // filtered away in silence: the places that have a page which really
-    // explains them are gone from this list, and what is left is what phase
-    // H3h has still to write. The frontend's gate is what carries the
-    // shrinking allowlist; this assertion is what makes writing one of those
-    // pages show up as a failure in this file too — and it is a failure that
-    // asks for a deletion, which is the shape debt should have.
+    // The mirror direction: every place the reader can be has a page to open.
+    // It was real debt until H3h — a list of contexts nobody had written yet,
+    // named here rather than filtered away in silence — and H3h emptied it.
+    // What the assertion pins now is that it STAYS empty: a context added
+    // without its page fails here as well as in the frontend's gate.
     let sin_pagina: Vec<&str> = issues
         .iter()
         .filter_map(|i| match i {
@@ -612,9 +623,9 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
             _ => None,
         })
         .collect();
-    assert_eq!(
-        sin_pagina,
-        ["dialog.transfer-name", "dialog.mkdir"]
+    assert!(
+        sin_pagina.is_empty(),
+        "every context the UI can open must have a page: {sin_pagina:?}"
     );
 }
 

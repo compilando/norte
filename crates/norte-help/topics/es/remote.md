@@ -3,7 +3,13 @@ id = "remote"
 title = "SFTP, FTP y almacenamiento de objetos"
 tags = ["remote"]
 see_also = ["copying", "archives"]
-commands = ["pane.hotlist", "pane.history", "pane.refresh"]
+commands = [
+    "pane.hotlist",
+    "pane.history",
+    "pane.refresh",
+    "dialog.add",
+    "dialog.remove",
+]
 context = ["dialog.trust-host"]
 +++
 Un panel sostiene un sitio remoto igual que sostiene un directorio. La
@@ -36,6 +42,13 @@ viaja allí. {{cmd:pane.history}} te devuelve a donde el panel ya ha estado
 durante esta sesión. Desde ese momento todos los comandos de esta ayuda
 funcionan igual — {{cmd:pane.refresh}} sobre todo, porque un directorio remoto
 no se vigila y no se entera solo de que algo ha cambiado.
+
+No hace falta editar el fichero para mantener esa lista: dentro del popup de
+favoritos, {{cmd:dialog.add}} añade la ubicación actual del panel con el nombre
+que teclees y {{cmd:dialog.remove}} quita la resaltada. Los dos escriben en
+`norte.toml`, que es la misma lista que habrías editado a mano. El popup de
+historial no admite ninguno de los dos: no hay nada que nombrar en un sitio por
+el que simplemente pasaste, ni nada que borrar de un registro de esta sesión.
 
 Un favorito es solo una dirección. Cómo se autentica una conexión, y qué se le
 permite hacer, vive aparte en `connections.toml`: compartir un favorito no

@@ -3,7 +3,13 @@ id = "remote"
 title = "SFTP, FTP and object storage"
 tags = ["remote"]
 see_also = ["copying", "archives"]
-commands = ["pane.hotlist", "pane.history", "pane.refresh"]
+commands = [
+    "pane.hotlist",
+    "pane.history",
+    "pane.refresh",
+    "dialog.add",
+    "dialog.remove",
+]
 context = ["dialog.trust-host"]
 +++
 A pane holds a remote location the same way it holds a directory. The address
@@ -36,6 +42,13 @@ Then {{cmd:pane.hotlist}} opens the list and confirming takes that pane there.
 this session. From that point on every command in this help works unchanged —
 {{cmd:pane.refresh}} especially, since a remote directory is not watched and
 will not notice a change on its own.
+
+You do not have to edit the file to keep that list: inside the favourites popup
+{{cmd:dialog.add}} adds the pane's current location under a name you type, and
+{{cmd:dialog.remove}} drops the highlighted one. Both write `norte.toml`, which
+is the same list you would have edited by hand. The history popup takes
+neither — there is nothing to name in a place you have simply been, and nothing
+to delete from a record of this session.
 
 A favourite is only an address. How a connection authenticates, and what it is
 allowed to do, lives separately in `connections.toml` — so a favourite gives
