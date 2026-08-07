@@ -72,11 +72,6 @@ ignore = [
     # norte-connect fase 6). Sin impacto en runtime ni superficie de ataque.
     # Vigilado: se quita cuando age/i18n-embed-fl migren (issue #41).
     "RUSTSEC-2026-0173",
-    # opendal 0.58.0 YANKEADO upstream (2026-07-18) sin sucesor publicado
-    # (lo último no-yanked es 0.57; downgrade = riesgo de API en fase 7b).
-    # El lockfile lo retiene y compila; el yank solo impide resoluciones
-    # nuevas. Se quita con el 0.58.x/0.59 que lo reemplace (issue #76).
-    { crate = "opendal@0.58.0", reason = "yanked sin sucesor; migración en #76" },
 ]
 
 [bans]
