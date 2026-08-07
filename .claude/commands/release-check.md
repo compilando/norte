@@ -4,7 +4,11 @@ description: Run a release dry run covering semver, licenses, advisories, change
 Run the release checklist without publishing:
 
 1. Run `just semver` (cargo-semver-checks against the latest tag). It is
-   installed; an absent tool is now a BLOCKER, not a note.
+   installed; an absent tool is now a BLOCKER, not a note. It refuses to run
+   until the workspace version has been raised above the baseline tag's,
+   because at equal versions the tool skips every check and reports success —
+   so bump the version FIRST, then run this. It covers the publishable
+   MIT/Apache libraries only; the AGPL binaries have no public API to break.
 2. Run `cargo deny check` for licenses and advisories, and
    `cargo deny --manifest-path crates/norte-gui/Cargo.toml check --config
    crates/norte-gui/deny.toml` for the GUI, which the workspace graph excludes.

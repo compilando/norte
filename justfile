@@ -90,15 +90,40 @@ check-gui:
 
 # Rupturas de API pública contra el último tag (ADR 0038, #13).
 #
-# Los frontends (`norte-cli`/`norte-tui`/`norte-gui`) son BINARIOS: no tienen
-# API pública que romper. Lo que importa aquí son las librerías publicables
-# —proto, vfs, testkit—, que es lo que consume un tercero. La GUI queda fuera
-# por el mismo motivo que en `core_pkgs`: no debe entrar en la invocación.
+# Se nombran los paquetes UNO A UNO, y no con `--workspace`, por dos razones
+# distintas que empujan en la misma dirección:
+#
+# 1. Lo que importa son las librerías PUBLICABLES (MIT/Apache): son las que
+#    consume un tercero. Los binarios AGPL —cli, tui, gui— y las librerías
+#    internas AGPL no tienen API pública que romper.
+# 2. `--workspace` ABORTA, no avisa, cuando un miembro no existía en la
+#    baseline: contra `v0.3.0-alpha.2` se para en `norte-help` con «package
+#    not found in <rev>» y no comprueba nada. `norte-help` nació después de
+#    ese tag; entra en esta lista con la primera baseline que lo contenga.
 #
 # NO está en `ci`: cablearla antes de tener release publicado rompería cada
 # `just ci` (decisión de gate del ADR 0038). Corre en `just release-check`.
 semver baseline="v0.3.0-alpha.2":
-    cargo semver-checks {{core_pkgs}} --baseline-rev {{baseline}}
+    #!/usr/bin/env bash
+    # La versión del workspace tiene que haber SUBIDO respecto a la baseline.
+    # Si son iguales, cargo-semver-checks decide «no change; assume major» y se
+    # salta las 254 comprobaciones de cada crate: sale verde, en cero coma, sin
+    # haber mirado nada. Eso es peor que rojo — un gate que puede no comprobar
+    # nada y decir que sí no es un gate. Se falla aquí, con el motivo.
+    set -euo pipefail
+    actual=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+    previa=$(git show {{baseline}}:Cargo.toml | grep -m1 '^version = ' | cut -d'"' -f2)
+    if [ "$actual" = "$previa" ]; then
+        echo "semver: la versión del workspace ($actual) es la de {{baseline}}." >&2
+        echo "cargo-semver-checks se saltaría TODAS las comprobaciones." >&2
+        echo "Sube la versión en Cargo.toml antes de correr esto." >&2
+        exit 1
+    fi
+    cargo semver-checks --baseline-rev {{baseline}} \
+        -p norte-proto -p norte-vfs -p norte-testkit \
+        -p norte-vfs-local -p norte-vfs-sftp -p norte-vfs-object \
+        -p norte-vfs-archive -p norte-config -p norte-encoding \
+        -p norte-frontend -p norte-i18n -p norte-theme
 
 # Lo que corre CI. `_disk` primero: quedarse sin disco a mitad de un build no
 # falla limpio, corrompe artefactos.
