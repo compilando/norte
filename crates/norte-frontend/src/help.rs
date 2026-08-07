@@ -668,6 +668,17 @@ impl HelpState {
         self.action_cursor = i;
     }
 
+    /// Puts the body's first visible line AT `line` — dragging a scrollbar.
+    ///
+    /// Absolute where [`scroll_body`](Self::scroll_body) is relative, because a
+    /// drag says "show me THIS part of the page" and a wheel says "a bit
+    /// further". The far end is clamped by
+    /// [`clamp_scroll`](Self::clamp_scroll) once the painter knows how many
+    /// lines there are.
+    pub fn scroll_body_to(&mut self, line: usize) {
+        self.body_scroll = line;
+    }
+
     /// Scrolls the body by `lines`, negative up — the wheel.
     ///
     /// Unlike [`page_up`](Self::page_up) it does NOT depend on the focus: the
@@ -1083,6 +1094,23 @@ mod tests {
         let antes = s.action_cursor();
         s.click_action(s.actions().len());
         assert_eq!(s.action_cursor(), antes, "fuera de rango es no-op");
+    }
+
+    /// Arrastrar la barra lleva el cuerpo a un punto ABSOLUTO, a diferencia de
+    /// la rueda, que es relativa: un arrastre dice «enséñame ESTA parte» y una
+    /// muesca dice «un poco más allá».
+    #[test]
+    fn arrastrar_la_barra_va_a_una_linea_absoluta() {
+        let mut s = state();
+        s.scroll_body_to(40);
+        assert_eq!(s.body_scroll(), 40);
+        s.scroll_body_to(0);
+        assert_eq!(s.body_scroll(), 0, "y vuelve al principio sin restar");
+        // El tope de abajo lo sigue poniendo el pintor, que es quien sabe
+        // cuántas líneas tiene la página maquetada.
+        s.scroll_body_to(9999);
+        s.clamp_scroll(12);
+        assert!(s.body_scroll() < 12);
     }
 
     /// La rueda mueve el cuerpo tenga el foco donde tenga: se desplaza lo que
