@@ -419,6 +419,29 @@ independently through `PROTOCOL_VERSION`.
   hostile or broken daemon aborts the whole apply before any move is
   submitted (shared `validate_ai_plan` belt in `norte-frontend`).
 
+### Fixed
+
+- **Eight invisible characters were walking straight past the mask (#125).**
+  `is_terminal_hazard` claimed in its own documentation to cover "the invisible
+  Cf/Zl/Zp", and it was a list somebody wrote by hand. `U+2064` INVISIBLE PLUS,
+  `U+2061` FUNCTION APPLICATION, `U+206E`, `U+FFF9`, `U+180E` and `U+2800`
+  BRAILLE PATTERN BLANK were not in it — and `U+3164` HANGUL FILLER and
+  `U+115F` never could have been, because they are category **Lo**: letters
+  that paint nothing. No enumeration of Cf was ever going to catch them, and
+  they are the classic invisible-smuggling code points.
+  What that costs is the premise the mask exists to protect. `a<U+3164>b.txt`
+  and `ab.txt` are two different names that look identical, and neither one
+  raised the hostile badge — so approving the one you read approved the one you
+  did not. Every frontend delegates here, so there was no defence downstream.
+  The set is now decided by the Unicode property
+  `Default_Ignorable_Code_Point` plus the characters that paint nothing without
+  being ignorable to anyone (braille blank, the interlinear annotations, the
+  line and paragraph separators). ZWJ and the variation selectors stay allowed,
+  deliberately and now explicitly: they are default-ignorable too, and masking
+  them would break composed emoji for the sake of a twin that differs only in
+  that. Two corpus fixtures pin each half of the hole, and a test walks the
+  whole code point space so a set that grows by accident is loud.
+
 ### Changed
 
 - **The terminal binary is `ntc`.** Nobody types `norte-tui` twice a day;

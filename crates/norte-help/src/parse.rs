@@ -104,14 +104,20 @@ impl Closers {
     }
 }
 
-/// Characters that paint NOTHING and are not in
-/// `norte_encoding::is_terminal_hazard`.
+/// Characters that paint NOTHING and must read as blank even in text that was
+/// never masked.
 ///
-/// That predicate is a cross-crate contract (`norte-frontend` names, the
-/// viewer, this parser) and widening it is not this crate's call, so the
-/// local consequence is handled locally: these characters are treated as
-/// BLANK. Without that, `title = "ㅤㅤㅤ"` — three U+3164 HANGUL FILLERs —
-/// is a non-empty string that renders as a nameless page.
+/// These WERE the gap in `norte_encoding::is_terminal_hazard`, which this
+/// crate could not widen on its own; #125 widened it, and every one of them is
+/// a hazard now. The list stays for a different reason, and the difference
+/// matters: `is_blank_id` is PUBLIC and callers ask it of text that has NOT
+/// been through masking — a plugin's `name`, its `publisher`. For those, "is
+/// this a hazard?" is the wrong question and "does this paint anything?" is
+/// the right one, so `title = "ㅤㅤㅤ"` (three U+3164 HANGUL FILLERs) has to
+/// read as blank rather than as a nameless page.
+///
+/// A caller that masks first gets the same answer by the other road: masking
+/// turns each of these into `U+FFFD`, which is blank here too.
 const INVISIBLE: [char; 5] = [
     '\u{2064}', // INVISIBLE PLUS
     '\u{3164}', // HANGUL FILLER
@@ -268,9 +274,12 @@ fn is_own_command(id: &str, plugin: &str) -> bool {
     }
     // `U+FFFD` too: it is what a masked hazard and an undecodable byte both
     // become, and neither is part of a command anyone can dispatch.
+    // `INVISIBLE` no longer needs naming here: since #125 every one of those
+    // characters is a terminal hazard, so the predicate below already covers
+    // them. Naming both would suggest they are two different sets.
     if id
         .chars()
-        .any(|c| c == '\u{FFFD}' || INVISIBLE.contains(&c) || norte_encoding::is_terminal_hazard(c))
+        .any(|c| c == '\u{FFFD}' || norte_encoding::is_terminal_hazard(c))
     {
         return false;
     }

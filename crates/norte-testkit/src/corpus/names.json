@@ -162,7 +162,17 @@
   {
     "id": "invisible_filler_blank",
     "hex": "e385a4e385a4e385a4",
-    "why": "U+3164 HANGUL FILLER x3: NO es un hazard (sobrevive intacto a mask_terminal_hazards, y ampliar ese set es contrato entre crates) y aun asi no pinta NADA — un nombre que existe y se ve vacio. Con H3e cruza dos superficies nuevas: una fila de plugin sin nombre en la barra lateral de la ayuda, y un segmento de badge en blanco. Es la clase que obligo a norte-help a inventarse `is_blank_id`, asi que la fixture hace que las dos crates compartan UN adversario en vez de que una guarde su constante privada. En forma mixta `a<U+3164>b.txt` es ademas un gemelo de `ab.txt` que ninguna mascara marca: dos entradas indistinguibles en un dialogo de aprobacion (mismo ataque que zwsp_twin, pero SIN badge que avise)"
+    "why": "U+3164 HANGUL FILLER x3: un nombre que existe y se ve VACIO. Desde #125 SI es un hazard —is_terminal_hazard decide por Default_Ignorable_Code_Point, y U+3164 esta ahi pese a ser Lo, que es justo por lo que ninguna enumeracion de Cf lo cogia—, asi que el enmascarado lo convierte en U+FFFD y el badge de hostil avisa. La fixture sigue siendo necesaria por la otra mitad: `is_blank_id` de norte-help responde sobre texto SIN enmascarar (el `name` de un plugin, su `publisher`), donde la pregunta no es si es peligroso sino si pinta algo. Cruza dos superficies: una fila de plugin sin nombre en la barra lateral de la ayuda, y un segmento de badge en blanco"
+  },
+  {
+    "id": "invisible_cf_unenumerated",
+    "hex": "61e281a462",
+    "why": "a<U+2064 INVISIBLE PLUS>b: gemelo de `ab` por un Cf que la lista escrita a mano de is_terminal_hazard NO enumeraba (#125). Es la mitad Cf del agujero —la que uno esperaria que una lista de 'invisibles Cf' cogiera y no cogia—, y pinea que el set se decide ahora por propiedad Unicode y no por memoria de quien lo escribio. Sin el, dos entradas indistinguibles en un dialogo de aprobacion: aprobar la que viste aprueba la que no"
+  },
+  {
+    "id": "hangul_filler_twin",
+    "hex": "61e385a462",
+    "why": "a<U+3164 HANGUL FILLER>b: el mismo gemelo por la mitad que NINGUNA enumeracion de Cf/Zl/Zp podia coger, porque U+3164 es categoria Lo — una LETRA que no pinta nada. Separado de invisible_filler_blank a proposito: aquel es el caso 'todo el nombre es invisible' (lo ve `is_blank_id`), este es 'el nombre lleva uno dentro' (lo ve el enmascarado, y solo desde #125). Mismo ataque que zwsp_twin por una puerta que llevaba abierta desde el principio"
   },
   {
     "id": "plugin_id_bidi_segment",

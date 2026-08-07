@@ -12,10 +12,14 @@ use unicode_width::UnicodeWidthChar;
 /// frontend directo los ejecutaría), los overrides bidi Cf (spoofing RTL del
 /// orden visual) y los INVISIBLES Cf/Zl/Zp (encoding-auditor H4 de M3-3b: dos
 /// nombres visualmente idénticos que difieren en bytes engañan a un humano que
-/// aprueba "el que ya vio"): ZWSP/ZWNJ, LRM/RLM/ALM, WORD JOINER, BOM/ZWNBSP,
-/// SOFT HYPHEN, TAG chars y los separadores Zl/Zp. ZWJ (U+200D) se PERMITE a
-/// sabiendas: enmascararlo rompería los emoji compuestos legítimos (fixture
-/// `emoji_zwj_family`) — fidelidad de emoji > el residual de un twin invisible.
+/// aprueba "el que ya vio"). Los invisibles se deciden por la propiedad
+/// Unicode `Default_Ignorable_Code_Point` más los que se pintan en blanco sin
+/// serlo (BRAILLE BLANK, las anotaciones interlineales, Zl/Zp) — antes era una
+/// lista escrita a mano que se dejaba fuera los rellenos Hangul, que ni
+/// siquiera son Cf (#125). ZWJ (U+200D) y los selectores de variación se
+/// PERMITEN a sabiendas: enmascararlos rompería los emoji compuestos legítimos
+/// (fixture `emoji_zwj_family`) — fidelidad de emoji > el residual de un twin
+/// invisible.
 fn must_mask(c: char) -> bool {
     norte_encoding::is_terminal_hazard(c)
 }

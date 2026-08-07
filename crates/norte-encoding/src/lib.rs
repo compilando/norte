@@ -327,38 +327,122 @@ pub fn encode_lossless(enc: &'static Encoding, text: &str) -> Option<Vec<u8>> {
     Some(bytes.into_owned())
 }
 
-/// ¿Es `c` un peligro para un terminal? Cc (controles: `\n`, ESC — un
-/// frontend directo los EJECUTARÍA: inyección ANSI/OSC), los overrides bidi
-/// Cf (spoofing RTL del orden visual: `202A..=202E`, `2066..=2069`) y los
-/// INVISIBLES Cf/Zl/Zp (dos textos visualmente idénticos que difieren en
-/// bytes engañan a un humano): ZWSP/ZWNJ, LRM/RLM/ALM, WORD JOINER,
-/// BOM/ZWNBSP, SOFT HYPHEN, TAG chars (strings enteros invisibles) y los
-/// separadores Zl/Zp (`U+2028`/`U+2029`, que `is_control` no coge).
+/// Rangos de `Default_Ignorable_Code_Point` (UCD `DerivedCoreProperties`,
+/// Unicode 16.0) — la propiedad que dice «esto no se pinta».
 ///
-/// ZWJ (`U+200D`) se PERMITE a sabiendas: enmascararlo rompería los emoji
-/// compuestos legítimos — fidelidad de emoji > el residual de un twin
-/// invisible solo-ZWJ.
+/// Va como TABLA y no como llamada a una librería porque ninguna del árbol la
+/// expone: `unicode-properties` da categoría general y emoji, y nada más. Una
+/// tabla derivada de la UCD, con su versión escrita al lado y un test que la
+/// recorre, es auditable; la lista de codepoints sueltos que había antes no lo
+/// era — se escribió a mano, afirmaba en su rustdoc cubrir «los INVISIBLES
+/// Cf/Zl/Zp», y se dejaba fuera ocho (#125), entre ellos los dos rellenos
+/// Hangul, que son **Lo** y ninguna enumeración de Cf iba a coger nunca.
+///
+/// Ordenada: [`is_terminal_hazard`] la recorre con búsqueda binaria.
+const DEFAULT_IGNORABLE: &[(char, char)] = &[
+    ('\u{00AD}', '\u{00AD}'),   // SOFT HYPHEN
+    ('\u{034F}', '\u{034F}'),   // COMBINING GRAPHEME JOINER
+    ('\u{061C}', '\u{061C}'),   // ARABIC LETTER MARK
+    ('\u{115F}', '\u{1160}'),   // rellenos HANGUL (Lo)
+    ('\u{17B4}', '\u{17B5}'),   // vocales inherentes khmer
+    ('\u{180B}', '\u{180F}'),   // selectores de variación mongoles + MVS
+    ('\u{200B}', '\u{200F}'),   // ZWSP/ZWNJ/ZWJ/LRM/RLM
+    ('\u{202A}', '\u{202E}'),   // embedding y overrides bidi
+    ('\u{2060}', '\u{2064}'),   // WORD JOINER … INVISIBLE PLUS
+    ('\u{2065}', '\u{2069}'),   // no asignado + isolates bidi
+    ('\u{206A}', '\u{206F}'),   // deprecados de formato (NATIONAL DIGIT SHAPES…)
+    ('\u{3164}', '\u{3164}'),   // HANGUL FILLER (Lo)
+    ('\u{FE00}', '\u{FE0F}'),   // selectores de variación
+    ('\u{FEFF}', '\u{FEFF}'),   // ZWNBSP / BOM
+    ('\u{FFA0}', '\u{FFA0}'),   // HALFWIDTH HANGUL FILLER
+    ('\u{FFF0}', '\u{FFF8}'),   // no asignados reservados
+    ('\u{1BCA0}', '\u{1BCA3}'), // controles de formato Duployan
+    ('\u{1D173}', '\u{1D17A}'), // controles de formato musical
+    ('\u{E0000}', '\u{E0FFF}'), // TAG chars y selectores de variación suplementarios
+];
+
+/// Invisibles que `Default_Ignorable_Code_Point` NO cubre y que aun así se
+/// pintan en blanco. Cada uno con su motivo, porque cada uno es una excepción
+/// y una excepción sin motivo es una lista a la que se le añaden cosas.
+/// Ordenada, como las demás: la recorre la misma búsqueda binaria.
+const INVISIBLES_FUERA_DE_DI: &[(char, char)] = &[
+    // Zl/Zp: separadores de línea y de párrafo, que `is_control` no coge.
+    ('\u{2028}', '\u{2029}'),
+    // BRAILLE PATTERN BLANK: categoría So, ni Cf ni ignorable para nadie —
+    // simplemente es un braille sin puntos, o sea, un carácter en blanco de
+    // ancho completo.
+    ('\u{2800}', '\u{2800}'),
+    // Cf, pero la UCD los EXCLUYE de DI (llevan semántica de anotación). Se
+    // pintan en blanco igual, así que sirven para fabricar un gemelo.
+    ('\u{FFF9}', '\u{FFFB}'),
+];
+
+/// Ignorables que se PERMITEN a sabiendas: componen emoji legítimos, y
+/// enmascararlos rompería nombres reales a cambio del residual de un gemelo
+/// que solo se diferencia en esto.
+///
+/// ZWJ une las partes de un emoji compuesto (familia, profesiones); los
+/// selectores de variación eligen presentación emoji frente a texto. Ambos son
+/// `Default_Ignorable`, así que sin esta excepción la propiedad los cogería.
+const IGNORABLES_PERMITIDOS: &[(char, char)] = &[
+    ('\u{200D}', '\u{200D}'),   // ZERO WIDTH JOINER
+    ('\u{FE00}', '\u{FE0F}'),   // selectores de variación 1..16
+    ('\u{E0100}', '\u{E01EF}'), // selectores de variación suplementarios
+];
+
+/// ¿Está `c` en alguno de los rangos ORDENADOS de `tabla`?
+fn en_rangos(tabla: &[(char, char)], c: char) -> bool {
+    tabla
+        .binary_search_by(|(lo, hi)| {
+            if c < *lo {
+                std::cmp::Ordering::Greater
+            } else if c > *hi {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
+/// ¿Es `c` un peligro para un terminal? Tres familias:
+///
+/// - **Cc, los controles** (`\n`, ESC): un frontend directo los EJECUTARÍA —
+///   inyección ANSI/OSC.
+/// - **Los overrides bidi**: falsifican el ORDEN VISUAL del texto sin tocar
+///   sus bytes (`202A..=202E`, `2066..=2069`).
+/// - **Los invisibles**: dos textos visualmente idénticos que difieren en
+///   bytes engañan a un humano, y con él a cualquier «aprueba lo que ya
+///   viste». Se deciden por la propiedad Unicode
+///   `Default_Ignorable_Code_Point` (`DEFAULT_IGNORABLE`) más los que se
+///   pintan en blanco sin ser ignorables (`INVISIBLES_FUERA_DE_DI`).
+///
+/// ZWJ (`U+200D`) y los selectores de variación se PERMITEN a sabiendas
+/// (`IGNORABLES_PERMITIDOS`): enmascararlos rompería los emoji compuestos —
+/// fidelidad de emoji > el residual de un gemelo que solo se diferencia en
+/// eso.
 ///
 /// Fuente ÚNICA del set (spec §6: jamás controles/bidi crudos en superficies
 /// de terminal). La consumen el saneo de preview de `fs.search` (productor,
-/// en origen) y el `display_name`/`must_mask` de la TUI.
+/// en origen) y el `display_name`/`must_mask` de los frontends.
 ///
 /// ```
 /// use norte_encoding::is_terminal_hazard;
 /// assert!(is_terminal_hazard('\u{202E}')); // RLO (bidi)
 /// assert!(is_terminal_hazard('\u{001B}')); // ESC (control)
 /// assert!(is_terminal_hazard('\u{FEFF}')); // BOM/ZWNBSP (invisible)
+/// assert!(is_terminal_hazard('\u{3164}')); // HANGUL FILLER (Lo, #125)
+/// assert!(is_terminal_hazard('\u{2800}')); // BRAILLE BLANK (So, #125)
 /// assert!(!is_terminal_hazard('\u{200D}')); // ZWJ permitido (emoji)
+/// assert!(!is_terminal_hazard('\u{FE0F}')); // VS16 permitido (emoji)
 /// assert!(!is_terminal_hazard('a'));
 /// ```
 #[must_use]
 pub fn is_terminal_hazard(c: char) -> bool {
-    c.is_control()
-        || matches!(c,
-            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-            | '\u{200B}' | '\u{200C}' | '\u{200E}' | '\u{200F}' | '\u{061C}'
-            | '\u{2060}' | '\u{FEFF}' | '\u{00AD}' | '\u{2028}' | '\u{2029}'
-            | '\u{E0000}'..='\u{E007F}')
+    if en_rangos(IGNORABLES_PERMITIDOS, c) {
+        return false;
+    }
+    c.is_control() || en_rangos(DEFAULT_IGNORABLE, c) || en_rangos(INVISIBLES_FUERA_DE_DI, c)
 }
 
 /// Reemplaza cada char de [`is_terminal_hazard`] por `U+FFFD` (`�`). Sanea
