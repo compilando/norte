@@ -20,7 +20,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::bindings::NortePlugin;
 use crate::bindings::exports::norte::plugin::previewer::{PreviewInput, Span};
-use crate::bindings::norte::plugin::{host_config, host_log};
+use crate::bindings::norte::host::{host_config, host_log};
 use crate::capability::Capabilities;
 
 /// Tope de líneas de log que un plugin puede acumular (anti-DoS: el guest no
@@ -702,7 +702,7 @@ impl PluginInstance {
 /// Tipos del export `provider` (records/enums generados: `Entry`, `Page`,
 /// `Caps`, `VfsError`, `EntryKind`) — re-exportados para que el adapter host
 /// los use sin cavar en el módulo de bindings generado (#30 stage 2).
-pub use crate::bindings::provider_world::exports::norte::plugin::provider as provider_iface;
+pub use crate::bindings::provider_world::exports::norte::provider::provider as provider_iface;
 
 /// Una instancia viva de un guest PROVIDER (#30 stage 2, world
 /// `norte-provider`): su `Store` (estado host + sandbox) y los bindings para
@@ -735,7 +735,7 @@ impl ProviderInstance {
     /// [`RuntimeError::Trap`] si el guest atrapa.
     pub fn capabilities(&mut self) -> Result<provider_iface::Caps, RuntimeError> {
         self.bindings
-            .norte_plugin_provider()
+            .norte_provider_provider()
             .call_capabilities(&mut self.store)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
     }
@@ -750,7 +750,7 @@ impl ProviderInstance {
         segments: &[Vec<u8>],
     ) -> Result<Result<provider_iface::Entry, provider_iface::VfsError>, RuntimeError> {
         self.bindings
-            .norte_plugin_provider()
+            .norte_provider_provider()
             .call_stat(&mut self.store, segments)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
     }
@@ -767,7 +767,7 @@ impl ProviderInstance {
         cursor: Option<&[u8]>,
     ) -> Result<Result<provider_iface::Page, provider_iface::VfsError>, RuntimeError> {
         self.bindings
-            .norte_plugin_provider()
+            .norte_provider_provider()
             .call_list_dir(&mut self.store, segments, cursor)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
     }
@@ -792,7 +792,7 @@ impl ProviderInstance {
     ) -> Result<Result<Vec<u8>, provider_iface::VfsError>, RuntimeError> {
         let out = self
             .bindings
-            .norte_plugin_provider()
+            .norte_provider_provider()
             .call_read(&mut self.store, segments, offset, len)
             .map_err(|e| RuntimeError::Trap(e.to_string()))?;
         if let Ok(bytes) = &out
@@ -818,7 +818,7 @@ impl ProviderInstance {
         cfg: &provider_iface::ProviderConfig,
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
         self.bindings
-            .norte_plugin_provider()
+            .norte_provider_provider()
             .call_configure(&mut self.store, cfg)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
     }
@@ -836,7 +836,7 @@ impl ProviderInstance {
         segments: &[Vec<u8>],
     ) -> Result<Result<ResourceAny, provider_iface::VfsError>, RuntimeError> {
         self.bindings
-            .norte_plugin_provider()
+            .norte_provider_provider()
             .call_open_writer(&mut self.store, segments)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
     }
@@ -851,7 +851,7 @@ impl ProviderInstance {
         chunk: &[u8],
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
         self.bindings
-            .norte_plugin_provider()
+            .norte_provider_provider()
             .writer()
             .call_write(&mut self.store, writer, chunk)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
@@ -866,7 +866,7 @@ impl ProviderInstance {
         writer: ResourceAny,
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
         self.bindings
-            .norte_plugin_provider()
+            .norte_provider_provider()
             .writer()
             .call_commit(&mut self.store, writer)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
@@ -881,7 +881,7 @@ impl ProviderInstance {
         writer: ResourceAny,
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
         self.bindings
-            .norte_plugin_provider()
+            .norte_provider_provider()
             .writer()
             .call_abort(&mut self.store, writer)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
@@ -907,7 +907,7 @@ impl ProviderInstance {
         segments: &[Vec<u8>],
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
         self.bindings
-            .norte_plugin_provider()
+            .norte_provider_provider()
             .call_make_dir(&mut self.store, segments)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
     }
@@ -921,7 +921,7 @@ impl ProviderInstance {
         segments: &[Vec<u8>],
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
         self.bindings
-            .norte_plugin_provider()
+            .norte_provider_provider()
             .call_remove(&mut self.store, segments)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
     }
@@ -936,7 +936,7 @@ impl ProviderInstance {
         dst: &[Vec<u8>],
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
         self.bindings
-            .norte_plugin_provider()
+            .norte_provider_provider()
             .call_rename(&mut self.store, src, dst)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
     }

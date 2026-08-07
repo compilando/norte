@@ -1,0 +1,46 @@
+// Las DOS puertas que el host abre a cualquier guest, en su propio paquete.
+//
+// Separadas de `norte:plugin` por el motivo del ADR 0041 decisión 4: la
+// versión del paquete viaja DENTRO del nombre de cada interfaz
+// (`norte:host/host-log@0.1.0`), así que cualquier bump de un paquete
+// invalida todo artefacto `.wasm` compilado contra él — por el lado de
+// IMPORT, verificado empíricamente dos veces en la historia de
+// `norte-plugin.wit`. Mientras todo vivía en un paquete, tocar `provider`
+// rompía a los previewers.
+//
+// Estas dos interfaces son la superficie que MENOS se mueve, y las importan
+// todos los worlds. Su paquete se versiona aparte y a propósito casi nunca:
+// subirlo sigue rompiéndolo todo, que es exactamente lo que debe costar.
+package norte:host@0.1.0;
+
+/// La puerta de host MÍNIMA (demuestra el gating host↔guest): un plugin puede
+/// pedir al host que registre una línea de log (inocua, sin capability) y leer
+/// un recurso que el host abrió bajo `fs-read=scoped` (gateado en el HOST).
+interface host-log {
+    log: func(message: string);
+
+    /// Lee un recurso que el host preparó y referenció con `token`
+    /// (fs-read=scoped). Si el plugin NO declaró fs-read, el host devuelve
+    /// Err — el enforcement vive en el HOST, no en el guest (ADR 0022 D4).
+    read-scoped: func(token: string) -> result<list<u8>, string>;
+}
+
+/// Settings VALIDADAS de `[config]` del plugin (P2 decisión 4): el host ya
+/// resolvió los defaults del esquema del manifiesto con `config.toml`
+/// superpuesto y validado (`norte-plugin-host::resolve_settings`) ANTES de
+/// instanciar — el guest NUNCA ve el `config.toml` crudo ni decide sobre su
+/// propia validez, solo lee el resultado. Codificación canónica de string
+/// (mismo criterio en host y guest): `bool` → `"true"`/`"false"`; `int` →
+/// decimal; `string`/`enum` → el texto crudo.
+///
+/// Puramente de LECTURA sobre un mapa en memoria del host: ninguna función
+/// toca FS, red ni reloj (el sandbox de M4-P2 sigue intacto — esto no abre
+/// una puerta nueva, solo expone datos que el host YA tenía resueltos antes de
+/// instanciar).
+interface host-config {
+    /// El valor de `key`, o `none` si `key` no está declarada en `[config]`
+    /// del manifiesto.
+    get: func(key: string) -> option<string>;
+    /// Todos los pares clave/valor resueltos (defaults + overrides).
+    all: func() -> list<tuple<string, string>>;
+}

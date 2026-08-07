@@ -1,9 +1,15 @@
 //! Bindings del Component Model generados por wasmtime desde el WIT (M4-P2).
+//!
+//! El WIT son TRES paquetes desde ADR 0041 decisión 4 (`norte:host`,
+//! `norte:plugin`, `norte:provider`), así que `path` apunta al DIRECTORIO
+//! `wit/` — no a un fichero — y wasmtime resuelve `wit/deps/` solo. Los worlds
+//! que viven fuera del paquete de arriba se nombran completos
+//! (`norte:provider/norte-provider`).
 #![allow(missing_docs)] // el código generado no lleva rustdoc
 
 wasmtime::component::bindgen!({
     world: "norte-plugin",
-    path: "wit/norte-plugin.wit",
+    path: "wit",
 });
 
 /// Bindings del world `norte-provider` (#30 stage 2). En su propio módulo para
@@ -11,13 +17,16 @@ wasmtime::component::bindgen!({
 /// `host-log` y `host-config` (P2 Task 3) del world de arriba (`with`) para no
 /// duplicar el trait `Host` ni el `add_to_linker` — [`crate::runtime::HostState`]
 /// las implementa una vez.
+///
+/// El world se nombra COMPLETO: desde la partición del paquete vive en
+/// `norte:provider`, no en el paquete de arriba.
 pub mod provider_world {
     wasmtime::component::bindgen!({
-        world: "norte-provider",
-        path: "wit/norte-plugin.wit",
+        world: "norte:provider/norte-provider",
+        path: "wit",
         with: {
-            "norte:plugin/host-log": crate::bindings::norte::plugin::host_log,
-            "norte:plugin/host-config": crate::bindings::norte::plugin::host_config,
+            "norte:host/host-log": crate::bindings::norte::host::host_log,
+            "norte:host/host-config": crate::bindings::norte::host::host_config,
         },
     });
 }
@@ -28,10 +37,10 @@ pub mod provider_world {
 pub mod decorator_world {
     wasmtime::component::bindgen!({
         world: "norte-decorator",
-        path: "wit/norte-plugin.wit",
+        path: "wit",
         with: {
-            "norte:plugin/host-log": crate::bindings::norte::plugin::host_log,
-            "norte:plugin/host-config": crate::bindings::norte::plugin::host_config,
+            "norte:host/host-log": crate::bindings::norte::host::host_log,
+            "norte:host/host-config": crate::bindings::norte::host::host_config,
         },
     });
 }
@@ -41,10 +50,10 @@ pub mod decorator_world {
 pub mod columns_world {
     wasmtime::component::bindgen!({
         world: "norte-columns",
-        path: "wit/norte-plugin.wit",
+        path: "wit",
         with: {
-            "norte:plugin/host-log": crate::bindings::norte::plugin::host_log,
-            "norte:plugin/host-config": crate::bindings::norte::plugin::host_config,
+            "norte:host/host-log": crate::bindings::norte::host::host_log,
+            "norte:host/host-config": crate::bindings::norte::host::host_config,
         },
     });
 }

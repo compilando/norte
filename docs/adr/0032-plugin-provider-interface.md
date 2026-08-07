@@ -201,3 +201,45 @@ El WIT es un contrato de wire (Component Model). Disciplina:
   overhead per chunk), the fallback is to wait for `wasi:io` async streams in a
   later wasmtime — but the paginated design is the pragmatic path that works
   with the runtime in the tree today.
+
+## Amendment 2026-08-08: the shared package is split, and the blocker is gone
+
+This ADR recorded a known debt: `provider` shared the `norte:plugin` package
+with `previewer`, `command`, `decorator` and `columns`, so any bump to it
+renamed every interface in the package and every previously compiled `.wasm`
+stopped instantiating — on the import side, verified empirically twice in the
+WIT header's own comments. The blocker on fixing it was recorded as
+`wit-parser` 0.239 not supporting nested `wit/deps/` packages.
+
+**That blocker is lifted.** The tree is on `wit-parser` 0.251, which resolves a
+`wit/deps/` layout without complaint; the split's first attempt failed only
+because cross-package references need an explicit version
+(`import norte:host/host-log@0.1.0;`, not `import norte:host/host-log;`).
+
+The WIT is now three packages:
+
+- `norte:host@0.1.0` — `host-log` and `host-config`, the two doors every world
+  imports. The leaf of the graph, versioned apart and deliberately almost
+  never bumped.
+- `norte:plugin@0.7.0` — `previewer`, `command`, `decorator`, `columns` and
+  their three worlds.
+- `norte:provider@0.1.0` — the `provider` interface and the `norte-provider`
+  world. It starts at 0.1.0 rather than inheriting 0.6.0: it is a new package,
+  and its history stays in the header it came from.
+
+ADR 0041 decision 3 is what made this urgent rather than tidy: the gaps in
+`provider` — server-side copy, trash, attributes, resume, cancellation — close
+when a real plugin needs them, so this interface is going to keep moving. Split,
+that movement no longer renames `norte:plugin/previewer`.
+
+The split is itself the last break of every guest at once, since `host-log` and
+`host-config` changed package. Every guest in `examples-wasm/` and the embedded
+`crates/norte-core/resources/ftp-provider.wasm` were recompiled in the same
+change. Guest-side `wit_bindgen::generate!` needed `generate_all` added: it
+refuses to guess what to do with imports from outside the world's own package.
+
+`crates/norte-plugin-host/tests/wit_packages.rs` guards the structure, because
+nothing else can. Every guest here is recompiled from the current WIT on every
+build, so the suite is exactly as green with one package as with three — the
+damage from merging them back would land on somebody else's already-compiled
+artefact, outside this repository.

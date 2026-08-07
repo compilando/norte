@@ -26,11 +26,15 @@ use suppaftp::types::FileType;
 use suppaftp::{FtpError, FtpStream, Status};
 
 wit_bindgen::generate!({
-    world: "norte-provider",
+    world: "norte:provider/norte-provider",
     path: "wit",
+    // `host-log`/`host-config` viven en OTRO paquete desde la partición
+    // (ADR 0041 decisión 4); wit-bindgen exige decidir explícitamente qué
+    // hacer con los imports de fuera del paquete del world.
+    generate_all,
 });
 
-use exports::norte::plugin::provider::{
+use exports::norte::provider::provider::{
     Caps, Entry, EntryKind, Guest, GuestWriter, Page, ProviderConfig, VfsError, Writer,
 };
 

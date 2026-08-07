@@ -1,0 +1,146 @@
+// La interfaz de provider, en su propio paquete (ADR 0041 decisión 4).
+//
+// Vive aparte de `norte:plugin` porque es la que MÁS se va a mover: ADR 0041
+// decisión 3 dice que sus huecos —copia en servidor, papelera, atributos,
+// reanudación, cancelación— se tapan cuando un plugin real los pida, y cada
+// uno es un bump. Mientras compartía paquete con `previewer`, cada uno de esos
+// bumps dejaba de instanciar a todos los previewers ya compilados.
+//
+// Empieza en 0.1.0 y no hereda el 0.6.0 del paquete del que sale: es un
+// paquete nuevo, y su historia previa está en la cabecera de
+// `norte-plugin.wit`.
+package norte:provider@0.1.0;
+
+/// Interfaz `provider` (#30, ADR 0032): proyección SÍNCRONA del trait
+/// `norte_vfs::Provider`. El streaming async se proyecta a llamadas ACOTADAS
+/// (list paginado, read por rango) que el host reensambla. Paths y nombres
+/// cruzan como BYTES CRUDOS (regla 1) — un path es su lista de segmentos, cada
+/// segmento su lista de bytes; jamás un `string`. STAGE 2 = solo-lectura, sin
+/// red: de-risk de la proyección.
+interface provider {
+    /// Tipo de una entrada del árbol.
+    enum entry-kind { file, dir, symlink, other }
+
+    /// Una entrada listada/consultada. `name` en bytes crudos (regla 1).
+    record entry {
+        name: list<u8>,
+        kind: entry-kind,
+        size: option<u64>,
+    }
+
+    /// Error del provider: proyección de `norte_proto::Error`. Se incluyen las
+    /// variantes relevantes al camino de lectura para que la taxonomía NO se
+    /// pierda (review): `cursor-expired` (la paginación lo necesita),
+    /// `provider-unavailable` (transitorio remoto, stage 3), `loop` (symlinks).
+    /// El flag `retryable` de `io`/`provider-unavailable` se difiere a stage 3
+    /// (exigiría un `variant`, no un `enum`). `other` = variante conocida aún
+    /// no mapeada — un `enum` WIT es CERRADO, no absorbe variantes futuras (a
+    /// diferencia del `Unknown` de proto): añadir una es un cambio de wire.
+    enum vfs-error {
+        not-found,
+        permission-denied,
+        unsupported,
+        invalid-path,
+        io,
+        corrupt,
+        cursor-expired,
+        provider-unavailable,
+        %loop,
+        conflict,
+        no-space,
+        other,
+    }
+
+    /// Capabilities proyectadas. Además del flag de solo-lectura, el guest
+    /// declara HONESTAMENTE (fase 10a) la sensibilidad y preservación de caja
+    /// (deciden qué casos de colisión de caja aplican en la suite contractual).
+    /// Un flag que el guest no ponga se traduce a "capability ausente" en el
+    /// adapter host. (Resume/APPEND no viaja: el adapter usa el `open_resumable`
+    /// por defecto del trait, que NO reanuda — declararlo mentiría.)
+    record caps {
+        /// Solo-lectura: el adapter rechaza toda mutación.
+        read-only: bool,
+        /// El backend distingue `Caja` de `caja` (POSIX). Sin él, el adapter
+        /// asume case-insensitive y la suite exige `CaseCollision`.
+        case-sensitive: bool,
+        /// El backend preserva la caja de los nombres al crearlos.
+        case-preserving: bool,
+    }
+
+    /// Una página de entradas + el cursor OPACO de la siguiente (`none` = fin).
+    /// El cursor es `list<u8>` (bytes opacos, como el token expirable de #27) —
+    /// NO un índice: un provider remoto (continuación S3/FTP) no cabe en un u32.
+    record page {
+        entries: list<entry>,
+        next-cursor: option<list<u8>>,
+    }
+
+    /// Capabilities del provider.
+    capabilities: func() -> caps;
+
+    /// Metadatos de una entrada (equiv. `Provider::stat`).
+    stat: func(segments: list<list<u8>>) -> result<entry, vfs-error>;
+
+    /// Lista PAGINADA (equiv. `Provider::list`): una página + el cursor opaco de
+    /// la siguiente. El host reensambla el `EntryStream` llamando en bucle.
+    /// (`list` es palabra reservada del WIT — de ahí `list-dir`.)
+    list-dir: func(segments: list<list<u8>>, cursor: option<list<u8>>) -> result<page, vfs-error>;
+
+    /// Lee un RANGO acotado (equiv. una porción del `ByteStream`): a lo sumo
+    /// `len` bytes desde `offset`. Un chunk más corto que `len` = EOF.
+    read: func(segments: list<list<u8>>, offset: u64, len: u64) -> result<list<u8>, vfs-error>;
+
+    /// Configuración de un provider que ESTABLECE SU PROPIA conexión (#30 stage
+    /// 3c, FTP). El HOST resuelve el hostname a IP, concede la capability `net`
+    /// acotada a esa IP y llama a `configure` con el endpoint YA resuelto
+    /// (`ip:puerto`) — el guest jamás resuelve DNS. Las credenciales cruzan a la
+    /// memoria del guest (sandbox aislado): imprescindibles para el `login`;
+    /// sobre FTP en claro (FTPS = deuda, aws-lc-rs no compila a wasm) ya viajan
+    /// sin cifrar por el cable. `base` = raíz remota absoluta bajo la que vive
+    /// todo. Un provider que no necesita conexión (mem) lo implementa como no-op.
+    record provider-config {
+        /// Endpoint YA resuelto por el host: `ip:puerto`.
+        endpoint: string,
+        /// Usuario de login (`anonymous` por convención guest).
+        user: string,
+        /// Password de login (viaja a memoria del guest para autenticar).
+        password: string,
+        /// Raíz remota absoluta (sin `..`, sin barra final significativa).
+        base: string,
+    }
+    configure: func(cfg: provider-config) -> result<_, vfs-error>;
+
+    /// Escritura TRANSACCIONAL (#30 stage 2b-write): proyección de
+    /// `norte_vfs::ByteSink`. `open-writer` devuelve un `writer` (staging propio
+    /// del guest; el path final NO existe hasta `commit`); `write` añade un
+    /// chunk; `commit` publica atómicamente; `abort` descarta el staging. Soltar
+    /// el `writer` sin commit debe limpiar (best-effort). El host reensambla el
+    /// `ByteSink` sobre este recurso.
+    resource writer {
+        write: func(chunk: list<u8>) -> result<_, vfs-error>;
+        commit: func() -> result<_, vfs-error>;
+        abort: func() -> result<_, vfs-error>;
+    }
+
+    /// Abre un `writer` transaccional sobre el path (equiv. `Provider::write`).
+    open-writer: func(segments: list<list<u8>>) -> result<writer, vfs-error>;
+
+    /// Crea un directorio (equiv. `Provider::mkdir`).
+    make-dir: func(segments: list<list<u8>>) -> result<_, vfs-error>;
+
+    /// Borra una entrada (equiv. `Provider::remove`).
+    remove: func(segments: list<list<u8>>) -> result<_, vfs-error>;
+
+    /// Renombra/mueve (equiv. `Provider::rename`). (`from`/`to` son palabras
+    /// reservadas del WIT — de ahí `src`/`dst`.)
+    rename: func(src: list<list<u8>>, dst: list<list<u8>>) -> result<_, vfs-error>;
+}
+
+/// World de un plugin-provider (#30 stage 2): expone `provider` e importa
+/// `host-log`. Separado de `norte-plugin` — un guest de provider no implementa
+/// previewer/command.
+world norte-provider {
+    import norte:host/host-log@0.1.0;
+    import norte:host/host-config@0.1.0;
+    export provider;
+}

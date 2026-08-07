@@ -19,11 +19,15 @@ use alloc::string::{String, ToString};
 wit_bindgen::generate!({
     world: "norte-plugin",
     path: "wit",
+    // `host-log`/`host-config` viven en OTRO paquete desde la partición
+    // (ADR 0041 decisión 4); wit-bindgen exige decidir explícitamente qué
+    // hacer con los imports de fuera del paquete del world.
+    generate_all,
 });
 
 use exports::norte::plugin::command::Guest as CommandGuest;
 use exports::norte::plugin::previewer::{Guest as PreviewerGuest, PreviewInput, Span};
-use norte::plugin::{host_config, host_log};
+use norte::host::{host_config, host_log};
 
 struct Demo;
 
