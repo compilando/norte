@@ -62,10 +62,30 @@ for most of the binary. cargo-dist is a development/CI dependency only.
 Two facts about this ADR are no longer true, and they are recorded here rather
 than edited into the text above — the decision stands, its consequences moved.
 
-**The installer URLs name `ntc`, not `norte-tui`.** The terminal binary was
-renamed (`crates/norte-tui/Cargo.toml`; the crate is unchanged), and dist
-derives the installer name from the binary. The URLs in the sections above are
-the ones this ADR shipped with; the current ones are in `README.md`.
+**The terminal binary is `ntc`; the installer URLs are unchanged.** The binary
+was renamed in `crates/norte-tui/Cargo.toml` and the crate was not. An earlier
+draft of this amendment claimed the installer would follow the binary to
+`ntc-installer.sh`; running dist disproved it — installers are named after the
+PACKAGE, so `norte-tui-installer.sh` in the section above is still correct.
+
+**`norte-cli` is distributed too.** "Distribute only `norte-tui`" was written
+when `norte` was an M0 engine test bed. It is now the non-interactive half of
+the product — daemon, connections, policy, undo, index, AI, audit, `doctor` —
+and an artefact carrying `ntc` alone leaves a user without any of it.
+`dist = false` became `dist = true`; there are two archives and two installers,
+one per package, and `README.md` gives both.
+
+**dist builds one package at a time (`precise-builds = true`).** By default it
+builds the whole workspace in a single cargo invocation, which put `norte-gui`
+— a package that is NOT distributed — in the same invocation as `ntc` and
+`norte`. Cargo unifies features per invocation, so GPUI's
+`serde_json/preserve_order` was being compiled into the binaries we publish:
+key ordering the gate never tested, in the artefacts users download. The same
+boundary is drawn in the justfile (`core_pkgs`).
+
+**The graphical binary is not distributed.** A GPUI binary links against the
+graphics stack of the machine that built it. It stays source-only, which is
+also what keeps the contamination above from having anywhere to enter.
 
 **"The workflow can only be exercised fully in GitHub Actions" is now the
 problem, not a note.** Actions is off for billing, so the workflow this ADR

@@ -1270,9 +1270,9 @@ const VALUE_FLAGS: &[&str] = &["--preset", "--socket"];
 /// Texto de `--help`. En INGLÉS y sin Fluent a propósito: se imprime ANTES
 /// de negociar el idioma (que sale de la config, que aún no se ha leído).
 const USAGE: &str = "\
-norte-tui — orthodox file manager, terminal frontend
+ntc — orthodox file manager, terminal frontend
 
-Usage: norte-tui [OPTIONS] [DIR]
+Usage: ntc [OPTIONS] [DIR]
 
 Arguments:
   [DIR]  Directory to start in (default: the current directory)
@@ -1319,11 +1319,11 @@ fn args_or_exit(args: norte_frontend::cli::Cli) -> Result<Option<norte_frontend:
         return Ok(None);
     }
     if args.version {
-        println!("norte-tui {}", env!("CARGO_PKG_VERSION"));
+        println!("ntc {}", env!("CARGO_PKG_VERSION"));
         return Ok(None);
     }
     if let Some(flag) = &args.unknown {
-        anyhow::bail!("unknown flag `{flag}` — try `norte-tui --help`");
+        anyhow::bail!("unknown flag `{flag}` — try `ntc --help`");
     }
     Ok(Some(args))
 }
@@ -1420,7 +1420,10 @@ async fn make_backend(
             socket,
             Some(spawn_cmd),
             norte_proto::methods::ClientInfo {
-                name: "norte-tui".into(),
+                // El nombre del BINARIO, no el del crate: es lo que el daemon
+                // registra y lo que un humano lee en un log o en `norte
+                // doctor`, y ahí tiene que aparecer el programa que arrancó.
+                name: "ntc".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
             },
         )
