@@ -144,3 +144,27 @@ native provider contract informs the WIT design. Wasmtime is a large dependency,
 guest authors need a WASI component toolchain, and several interfaces and
 policy/journal wiring remain incomplete. Guest bindings should eventually live
 in a separate permissively licensed SDK; the host remains part of the AGPL core.
+
+## Amendment 2026-08-08: a declared hook is now rejected, not accepted and ignored
+
+"provider/columns/hook interfaces remain deferred" was written when all three
+were deferred together. Two of them arrived — `provider` in ADR 0032, `columns`
+in ADR 0037. `hook` did not, and the manifest kept accepting it: `Category::Hook`
+and `HookContrib` parse, reach the catalog, and would appear in the plugin
+manager as a plugin like any other. Nothing anywhere would ever call it. There
+is no `hook` interface in the WIT, no world, and no call site in the host or the
+core.
+
+So a manifest declaring a hook installed something inert, and its author would
+have found out by nothing ever happening. `Manifest::from_toml` now rejects it —
+by primary category or by contribution, since it is the declaration that makes
+the promise — with `ManifestError::HookNotImplemented` and a reason that says so.
+
+`Category::Hook` stays. Spec §7.1 names operation hooks among the interfaces WIT
+is meant to cover, so removing the variant would move the code away from the
+specification rather than towards it; and its `digest_tag` is part of the
+approval digest, which is never reordered.
+
+What a hook may do is a policy and journal question before it is a WIT one — a
+guest that runs before a mutation can veto, delay or observe it, and each of
+those is a different contract. That design is not attempted here.

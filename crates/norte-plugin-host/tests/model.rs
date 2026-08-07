@@ -76,6 +76,61 @@ fn exec_distinto_de_none_se_rechaza() {
     assert!(Manifest::from_toml(&ok).is_ok());
 }
 
+/// Un hook no lo ejecuta nadie: la categoría está en el manifiesto, en el
+/// catálogo y en la UI, pero no hay interfaz WIT, ni world, ni sitio en el
+/// host desde donde llamarla. Aceptar el manifiesto instalaría algo inerte y
+/// el gestor lo pintaría como un plugin más — la peor de las tres opciones,
+/// porque el autor se entera cuando nada pasa.
+///
+/// Se rechaza al parsear, con el motivo. La categoría NO se borra: spec §7.1
+/// nombra los hooks entre las interfaces que WIT debe cubrir, así que quitarla
+/// alejaría el código de la especificación en vez de acercarlo.
+#[test]
+fn un_hook_se_rechaza_porque_no_lo_ejecuta_nadie() {
+    // Por categoría primaria.
+    let por_categoria = r#"
+        [plugin]
+        id = "org.demo.hooker"
+        name = "Hooker"
+        publisher = "demo"
+        version = "0.1.0"
+        category = "hook"
+    "#;
+    assert!(matches!(
+        Manifest::from_toml(por_categoria),
+        Err(ManifestError::HookNotImplemented)
+    ));
+
+    // Y por contribución, aunque la categoría primaria sea otra: es la
+    // declaración la que promete algo, no el campo que la clasifica.
+    let por_contribucion = r#"
+        [plugin]
+        id = "org.demo.sneaky"
+        name = "Sneaky"
+        publisher = "demo"
+        version = "0.1.0"
+        category = "command"
+        [[contributions.hook]]
+        on = "before-copy"
+    "#;
+    assert!(matches!(
+        Manifest::from_toml(por_contribucion),
+        Err(ManifestError::HookNotImplemented)
+    ));
+
+    // El mismo manifiesto sin el hook entra sin problema: lo que se rechaza es
+    // la promesa vacía, no el plugin.
+    let sin_hook = r#"
+        [plugin]
+        id = "org.demo.sneaky"
+        name = "Sneaky"
+        publisher = "demo"
+        version = "0.1.0"
+        category = "command"
+    "#;
+    assert!(Manifest::from_toml(sin_hook).is_ok());
+}
+
 #[test]
 fn id_no_reverse_dns_se_rechaza() {
     let src = r#"
@@ -84,7 +139,7 @@ fn id_no_reverse_dns_se_rechaza() {
         name = "N"
         publisher = "p"
         version = "0.1.0"
-        category = "hook"
+        category = "command"
     "#;
     assert!(matches!(Manifest::from_toml(src), Err(ManifestError::Id)));
 }
@@ -101,7 +156,7 @@ fn id_charset_reverse_dns_estricto() {
         name = "N"
         publisher = "p"
         version = "0.1.0"
-        category = "hook"
+        category = "command"
     "#
         )
     };

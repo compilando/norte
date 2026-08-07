@@ -22,7 +22,12 @@ pub enum Category {
     Command,
     /// Columnas custom en el listado.
     Columns,
-    /// Hooks before/after de operaciones.
+    /// Hooks before/after de operaciones. **Declararlo se RECHAZA hoy**
+    /// ([`ManifestError::HookNotImplemented`]): no existe interfaz WIT `hook`,
+    /// ni world, ni sitio en el host desde el que llamarla, así que aceptarlo
+    /// instalaría un plugin inerte. La variante se conserva porque spec §7.1
+    /// nombra los hooks entre las interfaces que WIT debe cubrir — y porque su
+    /// `digest_tag` es parte del digest de aprobación, que no se reordena.
     Hook,
     /// Decora entradas visibles con un badge/rol tipo "git status" (ADR
     /// 0037 decisión 2, interfaz WIT `decorator`, world `norte-decorator`).
@@ -565,6 +570,21 @@ pub enum ManifestError {
     /// `exec` distinto de `none`: PROHIBIDO (spec §7.1, invariante dura).
     #[error("capability `exec` prohibida: debe ser `none` (o ausente)")]
     ExecForbidden,
+    /// Un hook declarado —como categoría primaria o como contribución— cuando
+    /// NADA lo ejecuta: no hay interfaz WIT `hook`, ni world, ni sitio en el
+    /// host que la llame. Aceptarlo instalaría algo inerte que el gestor
+    /// pintaría como un plugin normal, y su autor se enteraría porque nunca
+    /// pasa nada.
+    ///
+    /// La categoría [`Category::Hook`] NO se retira: spec §7.1 nombra los
+    /// hooks entre las interfaces que WIT debe cubrir, así que borrarla
+    /// alejaría el código de la especificación. Lo que se retira es la
+    /// pretensión de que declarar uno sirva de algo hoy.
+    #[error(
+        "los hooks aún no están implementados: no hay interfaz WIT que los ejecute, \
+         así que declarar uno instalaría un plugin inerte"
+    )]
+    HookNotImplemented,
     /// Dos o más directorios declaran el MISMO `plugin.id` (issue #69): se
     /// rechazan TODOS (fail-closed). Un segundo directorio no puede reclamar el
     /// id de un plugin aprobado para colar su propio `plugin.wasm`.
@@ -715,6 +735,16 @@ impl Manifest {
         // permitiría inyección en el log o spoofing del diálogo de consentimiento.
         if !is_valid_plugin_id(&raw.plugin.id) {
             return Err(ManifestError::Id);
+        }
+        // Hooks: declarados pero sin nadie que los ejecute. Se mira la
+        // categoría Y las contribuciones — es la DECLARACIÓN la que promete
+        // algo, no el campo que clasifica al plugin.
+        //
+        // DESPUÉS del id a propósito: un manifiesto cuyo id no es de fiar se
+        // rechaza por el id, que es lo accionable. Decirle a su autor que los
+        // hooks no están implementados le mandaría a arreglar lo otro.
+        if raw.plugin.category == Category::Hook || !raw.contributions.hook.is_empty() {
+            return Err(ManifestError::HookNotImplemented);
         }
         // Tope de 280 CARACTERES (no bytes: un idioma no-ASCII no debe pagar
         // el tope antes de tiempo). Cosmética pero fail-loud, como `id`.
