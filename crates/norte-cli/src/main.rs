@@ -31,6 +31,20 @@ fn frontend_program(exe: Option<&std::path::Path>, bin: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(bin))
 }
 
+/// Nombre del binario del frontend de TERMINAL.
+///
+/// Una constante y no un literal en el `match`: es la MISMA cadena que el
+/// `[[bin]]` de `crates/norte-tui/Cargo.toml`, y un test las cruza
+/// (`tui_lanza_el_binario_que_el_manifiesto_construye`). Sin ese cruce, el
+/// nombre es un string que compila igual de bien esté bien o mal y falla en el
+/// `exec`, con el usuario delante.
+const TUI_BIN: &str = "ntc";
+
+/// Nombre del binario del frontend GRÁFICO. Mismo criterio que [`TUI_BIN`],
+/// sin el cruce: `norte-gui` está fuera del `default-members`, así que su
+/// manifiesto no se compila en el gate del core.
+const GUI_BIN: &str = "norte-gui";
+
 /// Localiza un binario HERMANO (`norte-tui`/`norte-gui`) y le cede el
 /// proceso. Busca primero JUNTO a este ejecutable —así un `norte` recién
 /// instalado usa el `norte-tui` de la misma tanda, y no otro más viejo que
@@ -490,8 +504,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // abre ventana): este CLI solo los localiza y les cede el proceso —
     // nada de engine ni daemon aquí.
     match cli.cmd {
-        Cmd::Tui { ref args } => return exec_frontend("norte-tui", args),
-        Cmd::Gui { ref args } => return exec_frontend("norte-gui", args),
+        Cmd::Tui { ref args } => return exec_frontend(TUI_BIN, args),
+        Cmd::Gui { ref args } => return exec_frontend(GUI_BIN, args),
         _ => {}
     }
     // Doctor es solo-lectura sobre config/keymaps (H2): ni engine ni daemon.
@@ -2098,6 +2112,35 @@ mod tests {
 #[cfg(test)]
 mod frontend_tests {
     use super::frontend_program;
+
+    /// El CLI lanza el frontend por NOMBRE DE BINARIO, así que el nombre que
+    /// pasa tiene que ser el que el manifiesto construye. Un string que no
+    /// corresponde a ningún binario compila igual de bien y falla en el
+    /// `exec`, con el usuario delante: `norte tui` deja de funcionar y nada lo
+    /// dice antes.
+    ///
+    /// El nombre esperado se LEE del `Cargo.toml` del crate hermano, no se
+    /// escribe aquí: una constante en el test se renombraría con el mismo
+    /// buscar-y-reemplazar que rompería el código, y entonces el test
+    /// acompañaría al defecto en vez de cazarlo.
+    #[test]
+    fn tui_lanza_el_binario_que_el_manifiesto_construye() {
+        let manifest =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../norte-tui/Cargo.toml");
+        let toml = std::fs::read_to_string(&manifest).expect("el manifiesto del TUI");
+        let esperado = toml
+            .split("[[bin]]")
+            .nth(1)
+            .and_then(|s| s.lines().find_map(|l| l.trim().strip_prefix("name = ")))
+            .map(|n| n.trim_matches('"').to_owned())
+            .expect("el manifiesto declara [[bin]] name");
+        assert_eq!(
+            super::TUI_BIN,
+            esperado,
+            "el CLI lanza `{}` y el manifiesto construye `{esperado}`",
+            super::TUI_BIN
+        );
+    }
 
     /// El hermano de al lado GANA al `PATH`: `norte` y `norte-tui` se
     /// instalan juntos, y mezclarlos con otra tanda es justo el fallo que

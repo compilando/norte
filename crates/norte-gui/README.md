@@ -82,7 +82,7 @@ cargo build -p norte-cli -p norte-tui
 
 # 3a. In a real terminal, start the TUI against that socket
 cd /tmp/norte-demo
-./target/debug/norte-tui --daemon --socket /tmp/norte-demo/daemon.sock
+./target/debug/ntc --daemon --socket /tmp/norte-demo/daemon.sock
 
 # A CLI client can be used when no TTY is available
 ./target/debug/norte --daemon --socket /tmp/norte-demo/daemon.sock ls /tmp/norte-demo

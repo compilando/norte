@@ -233,13 +233,16 @@ bench:
 # ---------- instalación ----------
 
 # Instala en $CARGO_HOME/bin —~/.cargo/bin por defecto— (release):
-# `norte-tui` (el TUI) y `norte` (el CLI).
+# `ntc` (el gestor) y `norte` (el CLI).
 # --locked: exactamente las versiones del Cargo.lock que pasó CI.
 install:
     cargo install --path crates/norte-tui --locked
     cargo install --path crates/norte-cli --locked
-    @echo "instalados: $(command -v norte-tui) y $(command -v norte)"
+    @echo "instalados: $(command -v ntc) y $(command -v norte)"
 
+# `cargo uninstall` toma el nombre del CRATE, no el del binario: el paquete
+# sigue llamándose `norte-tui` aunque instale un `ntc`. No es un despiste de la
+# línea de arriba.
 uninstall:
     cargo uninstall norte-tui
     cargo uninstall norte-cli

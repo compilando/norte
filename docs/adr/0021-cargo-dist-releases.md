@@ -56,3 +56,22 @@ project-specific release scripts, and the binary is roughly one third smaller.
 The workflow can only be exercised fully in GitHub Actions after a new tag.
 musl remains deferred, and the embedded remote-provider stack still accounts
 for most of the binary. cargo-dist is a development/CI dependency only.
+
+## Amendment 2026-08-07: the binary is `ntc`, and the release is built by hand
+
+Two facts about this ADR are no longer true, and they are recorded here rather
+than edited into the text above — the decision stands, its consequences moved.
+
+**The installer URLs name `ntc`, not `norte-tui`.** The terminal binary was
+renamed (`crates/norte-tui/Cargo.toml`; the crate is unchanged), and dist
+derives the installer name from the binary. The URLs in the sections above are
+the ones this ADR shipped with; the current ones are in `README.md`.
+
+**"The workflow can only be exercised fully in GitHub Actions" is now the
+problem, not a note.** Actions is off for billing, so the workflow this ADR
+committed has never run: two tags produced no downloadable artefact. Releases
+are built locally (`just dist`) and uploaded by hand (`just dist-publish`),
+which means x86_64 Linux only. `dist-workspace.toml` keeps declaring all five
+targets — it describes the release CI would produce, and the release notes say
+which platforms are actually in the release. See
+`docs/superpowers/specs/2026-08-07-packaging-design.md`.

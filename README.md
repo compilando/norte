@@ -19,20 +19,20 @@ On Linux and macOS, install the prebuilt binary from the latest release:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/compilando/norte/releases/latest/download/norte-tui-installer.sh | sh
+  https://github.com/compilando/norte/releases/latest/download/ntc-installer.sh | sh
 ```
 
 On Windows, run this command in PowerShell:
 
 ```powershell
-irm https://github.com/compilando/norte/releases/latest/download/norte-tui-installer.ps1 | iex
+irm https://github.com/compilando/norte/releases/latest/download/ntc-installer.ps1 | iex
 ```
 
 To install from source instead, run `make setup`, followed by:
 
 ```sh
 cargo install --path crates/norte-cli --locked   # the `norte` command
-cargo install --path crates/norte-tui --locked   # terminal interface
+cargo install --path crates/norte-tui --locked   # the `ntc` file manager
 cargo install --path crates/norte-gui --locked   # graphical interface (optional, GPU)
 ```
 
@@ -46,7 +46,7 @@ norte gui              # graphical interface
 norte gui ~/code       # ...in another directory
 ```
 
-`norte tui` and `norte gui` hand the process over to `norte-tui` and
+`norte tui` and `norte gui` hand the process over to `ntc` and
 `norte-gui`, which can also be launched directly — both take `[DIR]` and
 `--socket` (`--help` lists the rest). They read the same configuration. The
 TUI runs the core embedded unless `--daemon` says otherwise; the GUI always

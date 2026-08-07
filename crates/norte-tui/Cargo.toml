@@ -8,8 +8,12 @@ rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+# El binario se llama `ntc` (norte commander): es lo que se teclea a diario y
+# nadie escribe `norte-tui` dos veces al día. El CRATE conserva su nombre —
+# renombrarlo arrastraría los manifiestos de sus dependientes y la identidad en
+# crates.io sin comprar nada, porque un nombre de crate no se teclea.
 [[bin]]
-name = "norte-tui"
+name = "ntc"
 path = "src/main.rs"
 
 [dependencies]
