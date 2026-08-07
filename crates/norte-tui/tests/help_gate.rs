@@ -78,8 +78,6 @@ const PENDIENTES: &[&str] = &[
     "cursor.page-down",
     "cursor.top",
     "cursor.bottom",
-    "pane.ai-rename",
-    "pane.semantic-search",
     "pane.mkdir",
     "dialog.overwrite",
     "dialog.skip",
@@ -97,7 +95,7 @@ const PENDIENTES: &[&str] = &[
 /// edición deliberada, en el mismo diff, que un revisor ve. El número solo
 /// puede bajar — y cuando H3h lo deje en 0, la lista desaparece con él.
 const _: () = assert!(
-    PENDIENTES.len() <= 15,
+    PENDIENTES.len() <= 13,
     "la allowlist de la puerta de documentación solo puede MENGUAR: \
      documenta el comando en vez de añadirlo aquí"
 );
@@ -135,17 +133,13 @@ const CONTEXTOS_PENDIENTES: &[&str] = &[
     "dialog.transfer-name",
     // Crear directorio: `pane.mkdir` está en PENDIENTES.
     "dialog.mkdir",
-    // Renombrado por IA: `pane.ai-rename` está en PENDIENTES.
-    "dialog.ai-rename",
-    // Búsqueda semántica: `pane.semantic-search` está en PENDIENTES.
-    "dialog.semantic-search",
 ];
 
 /// El TECHO de la deuda de contextos, con el mismo papel que el de
 /// [`PENDIENTES`]: la lista solo puede bajar, y subir el número es una
 /// edición deliberada que un revisor ve en el mismo diff.
 const _: () = assert!(
-    CONTEXTOS_PENDIENTES.len() <= 4,
+    CONTEXTOS_PENDIENTES.len() <= 2,
     "la allowlist de contextos solo puede MENGUAR: escribe la página en vez \
      de añadir el contexto aquí"
 );
