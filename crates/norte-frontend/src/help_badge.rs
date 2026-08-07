@@ -155,6 +155,33 @@ mod tests {
     }
 
     #[test]
+    fn el_corpus_trae_su_propio_publisher_de_doble_ancho() {
+        // La misma propiedad que el test de arriba, pero con el adversario que
+        // ya vive en el corpus canónico (`name_max_255_multibyte`: あ hasta el
+        // tope de 255 bytes) en vez de con un `repeat` inventado aquí. Un
+        // publisher no es un nombre de fichero, pero el defecto es el mismo —
+        // celdas, no chars — y compartir la fixture es lo que hace que quien
+        // toque el presupuesto de una superficie se entere de la otra.
+        let wide = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "name_max_255_multibyte")
+            .expect("la fixture vive en el corpus canónico");
+        let wide = String::from_utf8(wide.bytes).expect("la fixture es UTF-8");
+        assert!(
+            cells(&wide) > MAX_BADGE_CELLS,
+            "si la fixture cupiera, este test no probaría nada ({} celdas)",
+            cells(&wide)
+        );
+        let badge = plugin_badge(Some(&wide), true, false, Lang::En)
+            .expect("a plugin topic always has a badge");
+        assert!(
+            badge.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
+            "la bandera del host sobrevive al publisher ancho: {badge}"
+        );
+        assert!(cells(&badge) <= MAX_BADGE_CELLS, "{}", cells(&badge));
+    }
+
+    #[test]
     fn a_publisher_that_fits_is_painted_whole() {
         let badge = plugin_badge(Some("ACME Tools"), false, false, Lang::En)
             .expect("a plugin topic always has a badge");

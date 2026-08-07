@@ -784,12 +784,21 @@ mod tests {
     /// business receiving is DROPPED, never rewritten — it becomes a `TopicId`,
     /// is folded by the filter on every keystroke, and goes back out as the
     /// argument of `plugin.help`.
+    /// The bidi id comes from the shared corpus (`plugin_id_bidi_segment`) and
+    /// not from a literal here: an id is a lookup key that crosses the wire as
+    /// the argument of `plugin.help`, so the two frontends must be tested
+    /// against ONE adversary rather than each keeping its own spelling of it.
     #[test]
     fn un_id_invalido_no_entra_en_el_modelo() {
+        let bidi = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "plugin_id_bidi_segment")
+            .expect("la fixture vive en el corpus canónico");
+        let bidi = String::from_utf8(bidi.bytes).expect("la fixture es UTF-8");
         for bad in [
             String::new(),
             "has:colon".to_owned(),
-            "acme.\u{202e}ftp".to_owned(),
+            bidi,
             "a".repeat(4096),
         ] {
             let mut p = info("placeholder", true, true, true);
@@ -811,7 +820,14 @@ mod tests {
     fn un_titulo_de_comando_en_blanco_no_secuestra_la_etiqueta() {
         let (browse, viewer) = effectives();
         let mut p = info("acme.ftp", true, true, true);
-        p.commands[0].title = "\u{3164}".to_owned();
+        // Same corpus fixture the blank NAME test above uses, on the sibling
+        // branch three lines from it in `set_plugins`: one adversary, both
+        // guards.
+        let filler = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "invisible_filler_blank")
+            .expect("la fixture vive en el corpus canónico");
+        p.commands[0].title = String::from_utf8(filler.bytes).expect("la fixture es UTF-8");
         let mut view = HelpView::new(norte_i18n::Lang::En, Vec::new());
         view.set_plugins(&[p]);
         let r = view.freeze(

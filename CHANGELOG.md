@@ -9,6 +9,40 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A wide publisher no longer pushes a warning off a plugin's help page:** the
+  provenance line under a plugin page title is `from an extension · published
+  by X`, followed by the host's own flags — cut short, some bytes did not
+  decode. The publisher comes from the plugin and is capped at 280 characters,
+  which in CJK is 560 columns; the graphical frontend paints that line
+  unwrapped in a fixed-width panel, so those flags — the only part of the line
+  a reader acts on — were pushed off the right edge by text the plugin chose.
+  The publisher now gets what a 96-cell budget has left once the host's
+  segments are reserved. The clamp is on the publisher and never on the
+  finished line, because truncating that would eat the flags.
+
+- **The help now covers everything, and the gate has nothing left to forgive
+  (H3h):** every command norte can dispatch and every screen it can open is
+  explained by a page, in English and in Spanish. Sixteen topics per locale,
+  up from eight: the viewer, finding things, what the listing shows, answering
+  a dialog, settings and themes, AI rename and semantic search, what an agent
+  may do here, and extensions — plus the sections the existing pages were
+  missing, from the cursor keys to renaming, creating a directory and the four
+  answers to a collision.
+  The part that outlives the prose is the gate underneath it. Since the corpus
+  existed, a command with no page was carried by an explicit allowlist that
+  could only shrink, with a compile-time ceiling so it could not quietly grow.
+  H3h emptied it, and the list and the ceiling are deleted: a new command or a
+  new screen that arrives without a page now fails the suite with nowhere to
+  write it down. That is permanent friction on adding a command, and it is the
+  point.
+  `F1` over any dialog opens prose about THAT dialog — the fallback that
+  refused to cover a live question with the index is still there, but it is now
+  a guard against someone deleting a page rather than a state the app ships in.
+  Three hostile cases the audit asked for are covered from the shared corpus
+  rather than from literals: a plugin id carrying a bidi override (a new
+  fixture, since an id is a lookup key that crosses the wire), a command title
+  that is blank after masking, and a double-width publisher.
+
 - **`norte help` reads the same corpus from the command line (H3g):** the index,
   one page by id, `--list`, `--search`, and `keys` — the keyboard sheet
   generated from *your* effective keymap, not a written list. Embedded: no

@@ -163,5 +163,10 @@
     "id": "invisible_filler_blank",
     "hex": "e385a4e385a4e385a4",
     "why": "U+3164 HANGUL FILLER x3: NO es un hazard (sobrevive intacto a mask_terminal_hazards, y ampliar ese set es contrato entre crates) y aun asi no pinta NADA — un nombre que existe y se ve vacio. Con H3e cruza dos superficies nuevas: una fila de plugin sin nombre en la barra lateral de la ayuda, y un segmento de badge en blanco. Es la clase que obligo a norte-help a inventarse `is_blank_id`, asi que la fixture hace que las dos crates compartan UN adversario en vez de que una guarde su constante privada. En forma mixta `a<U+3164>b.txt` es ademas un gemelo de `ab.txt` que ninguna mascara marca: dos entradas indistinguibles en un dialogo de aprobacion (mismo ataque que zwsp_twin, pero SIN badge que avise)"
+  },
+  {
+    "id": "plugin_id_bidi_segment",
+    "hex": "61636d652ee280ae667470",
+    "why": "acme.<RLO>ftp: un id de plugin CON un override bidi dentro. `is_valid_plugin_id` lo rechaza (alfabeto ASCII cerrado: alfanumérico y `-` por segmento), y esa es exactamente la razón por la que existe ese alfabeto — un id NO es prosa: es clave de búsqueda, argumento de `plugin.help` por el wire, y lo que el filtro de la ayuda pliega en cada tecla. La superficie que lo destapó fue la barra lateral de la ayuda (H3f), donde un id sin validar entraba como TopicId; la fixture hace que los dos frontends prueben contra el MISMO adversario en vez de escribirse cada uno su literal. Como nombre de fichero es además un segmento VÁLIDO, que es lo que lo hace transportable hasta un manifiesto"
   }
 ]

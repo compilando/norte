@@ -164,9 +164,10 @@ House pattern, extended:
 - **Command integrity**: every `{{cmd:id}}` and every `commands:` entry exists
   in the frontend's `COMMANDS`.
 - **Documentation gate**: every command in `COMMANDS` appears in at least one
-  topic. A new command without documentation fails the build. Until phase H3h
-  an explicit, shrinking allowlist carries the undocumented remainder — the
-  allowlist is data in the test, so it is visible and reviewable.
+  topic. A new command without documentation fails the build. The shrinking
+  allowlist that carried the undocumented remainder was emptied by H3h and
+  deleted with its ceiling: there is no longer anywhere to write a new command
+  down instead of documenting it.
 - **Context integrity**: every `context:` value is a real context, and every
   known context has exactly one topic.
 - **Hostile corpus**: plugin-mode parsing of the `norte-testkit` hostile
@@ -320,7 +321,7 @@ Enter.
 | H3e | Proto bump (`has_help`, `plugin.help`, `settings`) + registry `help.md` + doctor + extension manager | protocol-guardian, security, encoding |
 | H3f | GUI view; `app.help` in GUI `COMMANDS` | rust |
 | H3g | CLI `norte help` (`--list/--search/--json/keys`) | rust |
-| H3h | Full EN/ES corpus; documentation gate at zero allowlist | encoding |
+| H3h | Full EN/ES corpus; documentation gate at zero allowlist. **Done 2026-08-07** | encoding |
 
 H3a first — everything consumes it. Then H3b → H3c → H3d in sequence; H3e and
 H3g in parallel with them; H3f after H3b (it copies the settled layout); H3h
@@ -341,7 +342,10 @@ closes.
 
 - **H3h is writing work, not coding.** 53 commands and roughly 15 topics in
   two languages. This is where a project of this shape dies; the allowlist
-  keeps every earlier phase shippable without it.
+  kept every earlier phase shippable without it. *Closed 2026-08-07*: 16
+  topics per locale, both allowlists empty and deleted. The count landed
+  where the risk predicted, which is the argument for having written the
+  allowlist as data instead of as a promise.
 - **The documentation gate adds permanent friction** to adding a command.
   Deliberate, and worth stating plainly.
 - **H3b likely exceeds the 400-line PR guideline.** Split into state and

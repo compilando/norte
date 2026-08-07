@@ -6666,27 +6666,34 @@ mod help_plugin_snapshot_tests {
 
     /// La misma puerta, en la mitad del RESOLVER: ni el conjunto de activos ni
     /// el mapa de títulos pueden guardar un id que el host no debió anunciar.
+    ///
+    /// El id sale del corpus canónico (`plugin_id_bidi_segment`) y no de un
+    /// literal: la GUI prueba su mitad de esta misma puerta contra la misma
+    /// fixture, y dos frontends con su propia ortografía del adversario es
+    /// justo la deriva que el corpus existe para no tener.
     #[test]
     fn un_id_invalido_no_entra_en_la_foto_del_resolver() {
+        let fixture = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "plugin_id_bidi_segment")
+            .expect("la fixture vive en el corpus canónico");
+        let id = String::from_utf8(fixture.bytes).expect("la fixture es UTF-8");
+        let key = format!("plugin:{id}:sync");
         let mut app = app();
         app.help = Some(super::HelpView::new(norte_help::Lang::En, Vec::new()));
-        let mut malo = plugin("acme.\u{202E}ftp", true, true);
+        let mut malo = plugin(&id, true, true);
         malo.commands = vec![norte_proto::methods::PluginCommandInfo {
             id: "sync".to_owned(),
             title: "Sincronizar".to_owned(),
         }];
         app.freeze_help_plugins(&[malo]);
         assert_eq!(
-            norte_help::ChordResolver::availability(
-                &*app.help_chords,
-                "plugin:acme.\u{202E}ftp:sync"
-            )
-            .reason(),
+            norte_help::ChordResolver::availability(&*app.help_chords, &key).reason(),
             Some(norte_help::Reason::PluginInactive),
             "no está activo: su id nunca entró en el conjunto"
         );
         assert_eq!(
-            norte_help::ChordResolver::label(&*app.help_chords, "plugin:acme.\u{202E}ftp:sync")
+            norte_help::ChordResolver::label(&*app.help_chords, &key)
                 .chars()
                 .filter(|c| norte_encoding::is_terminal_hazard(*c))
                 .count(),
