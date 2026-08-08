@@ -5212,3 +5212,367 @@ async fn semantic_k_desmesurado_no_es_error() {
         "el clamp acota los hits"
     );
 }
+
+// ---------- fs.rename_batch{,_plan,_report} (0.36.0, ADR 0042) ----------
+
+/// Un nombre base desde sus BYTES: lo que un `String` no habría podido llevar.
+fn sg(bytes: &[u8]) -> norte_proto::Segment {
+    norte_proto::Segment::new(bytes.to_vec()).expect("segment de test")
+}
+
+/// Contenido completo de un fichero del `MemProvider` (para comprobar QUÉ
+/// fichero acabó bajo cada nombre tras una permutación).
+async fn read_all(mem: &MemProvider, wire: &str) -> Vec<u8> {
+    use futures::StreamExt;
+    let mut stream = mem.read(&vp(wire), None).await.expect("read abre");
+    let mut out = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        out.extend_from_slice(&chunk.expect("chunk"));
+    }
+    out
+}
+
+fn pair(from: &[u8], to: &[u8]) -> methods::RenamePair {
+    methods::RenamePair {
+        from: sg(from),
+        to: sg(to),
+    }
+}
+
+/// El plan cruza el socket con un nombre NO-UTF8 intacto, y NO muta nada.
+///
+/// El nombre viaja percent-encoded (`caf%FF.txt`) y vuelve como los mismos
+/// bytes: es el caso que motiva que `RenamePair` lleve `Segment` y no `String`
+/// (regla dura 1).
+#[tokio::test]
+async fn rename_batch_plan_responde_por_el_socket() {
+    let d = spawn_daemon(None).await;
+    let hostile = b"caf\xff.txt";
+    write_file(&d.mem, "mem:///caf%FF.txt", b"x").await;
+    write_file(&d.mem, "mem:///b.txt", b"y").await;
+    let c = connected_client(&d).await;
+
+    let plan: methods::FsRenameBatchPlanResult = c
+        .call(
+            methods::FS_RENAME_BATCH_PLAN,
+            &methods::FsRenameBatchPlanParams {
+                dir: vp("mem:///"),
+                pairs: vec![pair(hostile, b"cafe.txt")],
+            },
+        )
+        .await
+        .expect("fs.rename_batch_plan");
+
+    assert!(plan.executable, "{:?}", plan.collisions);
+    assert_eq!(plan.steps.len(), 1);
+    assert_eq!(
+        plan.steps[0].from.as_bytes(),
+        hostile,
+        "los bytes hostiles sobreviven al viaje de ida y vuelta",
+    );
+    assert_eq!(plan.steps[0].to.as_bytes(), b"cafe.txt");
+    assert_eq!(plan.plan_hash.to_string().len(), 64);
+    // Planificar NO muta: el fichero sigue con su nombre.
+    assert!(d.mem.stat(&vp("mem:///caf%FF.txt")).await.is_ok());
+    assert!(matches!(
+        d.mem.stat(&vp("mem:///cafe.txt")).await,
+        Err(Error::NotFound)
+    ));
+}
+
+/// El caso que el bucle de un `fs.move` por pareja NUNCA pudo hacer: una
+/// permutación `a→b, b→a` como UNA Task por el socket.
+#[tokio::test]
+async fn rename_batch_ejecuta_una_permutacion_por_el_socket() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///a", b"soy-a").await;
+    write_file(&d.mem, "mem:///b", b"soy-b").await;
+    let c = connected_client(&d).await;
+    let pairs = vec![pair(b"a", b"b"), pair(b"b", b"a")];
+
+    let plan: methods::FsRenameBatchPlanResult = c
+        .call(
+            methods::FS_RENAME_BATCH_PLAN,
+            &methods::FsRenameBatchPlanParams {
+                dir: vp("mem:///"),
+                pairs: pairs.clone(),
+            },
+        )
+        .await
+        .expect("plan");
+    assert!(plan.executable, "{:?}", plan.collisions);
+    assert_eq!(plan.steps.len(), 3, "dos renames y un temporal");
+
+    let task: FsTaskResult = c
+        .call(
+            methods::FS_RENAME_BATCH,
+            &methods::FsRenameBatchParams {
+                dir: vp("mem:///"),
+                pairs,
+                plan_hash: plan.plan_hash.clone(),
+            },
+        )
+        .await
+        .expect("fs.rename_batch");
+    assert_eq!(wait_terminal(&c, task.task_id).await, TaskState::Completed);
+    assert_eq!(read_all(&d.mem, "mem:///a").await, b"soy-b");
+    assert_eq!(read_all(&d.mem, "mem:///b").await, b"soy-a");
+
+    // El informe del lote por el wire: la corrida fue limpia.
+    let report: methods::FsRenameBatchReportResult = c
+        .call(
+            methods::FS_RENAME_BATCH_REPORT,
+            &methods::FsRenameBatchReportParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect("fs.rename_batch_report");
+    assert_eq!(report.applied, 3);
+    assert_eq!(report.rolled_back, 0);
+    assert!(report.stuck.is_none());
+    assert!(report.uncertain.is_none());
+    assert_eq!(report.compensations_lost, 0);
+}
+
+/// Un lote que falla a mitad se desanda entero, y el INFORME lo cuenta por el
+/// wire: el `Failed` de la Task solo dice la causa.
+#[tokio::test]
+async fn rename_batch_fallido_cuenta_su_rollback_por_el_socket() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///a", b"1").await;
+    write_file(&d.mem, "mem:///b", b"2").await;
+    let c = connected_client(&d).await;
+    let pairs = vec![pair(b"a", b"x"), pair(b"b", b"y")];
+    let plan: methods::FsRenameBatchPlanResult = c
+        .call(
+            methods::FS_RENAME_BATCH_PLAN,
+            &methods::FsRenameBatchPlanParams {
+                dir: vp("mem:///"),
+                pairs: pairs.clone(),
+            },
+        )
+        .await
+        .expect("plan");
+    // El SEGUNDO paso muere; el primero ya se aplicó y hay que desandarlo.
+    d.mem.faults().fail_rename_at(&vp("mem:///b"));
+
+    let task: FsTaskResult = c
+        .call(
+            methods::FS_RENAME_BATCH,
+            &methods::FsRenameBatchParams {
+                dir: vp("mem:///"),
+                pairs,
+                plan_hash: plan.plan_hash,
+            },
+        )
+        .await
+        .expect("fs.rename_batch");
+    assert!(
+        matches!(
+            wait_terminal(&c, task.task_id).await,
+            TaskState::Failed { .. }
+        ),
+        "el lote falla entero"
+    );
+    assert!(d.mem.stat(&vp("mem:///a")).await.is_ok(), "a volvió");
+    assert!(matches!(
+        d.mem.stat(&vp("mem:///x")).await,
+        Err(Error::NotFound)
+    ));
+
+    let report: methods::FsRenameBatchReportResult = c
+        .call(
+            methods::FS_RENAME_BATCH_REPORT,
+            &methods::FsRenameBatchReportParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect("fs.rename_batch_report");
+    assert_eq!(report.applied, 1);
+    assert_eq!(report.rolled_back, 1);
+    assert_eq!(report.failed_pair, Some(1), "la fila `b → y`");
+    assert!(report.stuck.is_none(), "el rollback SÍ pudo terminar");
+}
+
+/// Un `task_id` que jamás fue un lote es `INVALID_PARAMS`, no un informe en
+/// blanco que se pudiera leer como «fue todo bien».
+#[tokio::test]
+async fn rename_batch_report_de_una_task_desconocida_es_invalid_params() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, methods::FsRenameBatchReportResult>(
+            methods::FS_RENAME_BATCH_REPORT,
+            &methods::FsRenameBatchReportParams {
+                task_id: norte_proto::TaskId::new(4242),
+            },
+        )
+        .await
+        .expect_err("id desconocido");
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// La DERIVA se rehúsa con la categoría accionable (`plan_stale`), no con un
+/// error interno genérico: el humano sabe que tiene que volver a planificar.
+#[tokio::test]
+async fn rename_batch_con_hash_rancio_es_plan_stale() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///a", b"1").await;
+    let c = connected_client(&d).await;
+    let pairs = vec![pair(b"a", b"z")];
+    let plan: methods::FsRenameBatchPlanResult = c
+        .call(
+            methods::FS_RENAME_BATCH_PLAN,
+            &methods::FsRenameBatchPlanParams {
+                dir: vp("mem:///"),
+                pairs: pairs.clone(),
+            },
+        )
+        .await
+        .expect("plan");
+    assert!(plan.executable);
+
+    // El destino aparece A ESPALDAS del daemon: el re-plan lo ve ocupado y
+    // concluye otra cosa.
+    write_file(&d.mem, "mem:///z", b"intruso").await;
+
+    let err = c
+        .call::<_, FsTaskResult>(
+            methods::FS_RENAME_BATCH,
+            &methods::FsRenameBatchParams {
+                dir: vp("mem:///"),
+                pairs,
+                plan_hash: plan.plan_hash,
+            },
+        )
+        .await
+        .expect_err("el plan aprobado ya no vale");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PlanStale)),
+            "PlanStale, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+    // Y no tocó nada.
+    assert!(d.mem.stat(&vp("mem:///a")).await.is_ok());
+    assert_eq!(read_all(&d.mem, "mem:///z").await, b"intruso");
+}
+
+/// #80: `fs.rename_batch_plan` es una LECTURA de directorio disfrazada — sus
+/// veredictos dicen qué nombres existen —, así que pasa por el mismo
+/// `read_gate` que `fs.list`. Un agente sin scope recibe `PolicyDenied`, jamás
+/// un plan, y jamás la diferencia entre «ese fichero está» y «no está».
+#[tokio::test]
+async fn agente_sin_scope_no_puede_rename_batch_plan() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///proj/secreto.txt", b"x").await;
+    let agent = connected_agent(&d, "s1").await;
+
+    let err = agent
+        .call::<_, methods::FsRenameBatchPlanResult>(
+            methods::FS_RENAME_BATCH_PLAN,
+            &methods::FsRenameBatchPlanParams {
+                dir: vp("mem:///proj"),
+                pairs: vec![pair(b"secreto.txt", b"otro.txt")],
+            },
+        )
+        .await
+        .expect_err("agente sin scope denegado");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+            "PolicyDenied out-of-scope, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+
+    // Y el veredicto es el MISMO para un nombre que no existe: el error no
+    // distingue lo que hay dentro del directorio de lo que no.
+    let err = agent
+        .call::<_, methods::FsRenameBatchPlanResult>(
+            methods::FS_RENAME_BATCH_PLAN,
+            &methods::FsRenameBatchPlanParams {
+                dir: vp("mem:///proj"),
+                pairs: vec![pair(b"no-existe.txt", b"otro.txt")],
+            },
+        )
+        .await
+        .expect_err("agente sin scope denegado");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+            "PolicyDenied out-of-scope, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// El tope de parejas se impone EN LA FRONTERA y RECHAZA (no recorta): un lote
+/// recortado ejecutaría un plan distinto del pedido. Los DOS métodos.
+#[tokio::test]
+async fn rename_batch_por_encima_del_tope_de_parejas_es_invalid_params() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let too_many: Vec<methods::RenamePair> = (0..=methods::FS_RENAME_BATCH_MAX_PAIRS)
+        .map(|i| pair(format!("f{i}").as_bytes(), format!("g{i}").as_bytes()))
+        .collect();
+    assert_eq!(too_many.len(), methods::FS_RENAME_BATCH_MAX_PAIRS + 1);
+
+    let err = c
+        .call::<_, methods::FsRenameBatchPlanResult>(
+            methods::FS_RENAME_BATCH_PLAN,
+            &methods::FsRenameBatchPlanParams {
+                dir: vp("mem:///"),
+                pairs: too_many.clone(),
+            },
+        )
+        .await
+        .expect_err("por encima del tope");
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+
+    let err = c
+        .call::<_, FsTaskResult>(
+            methods::FS_RENAME_BATCH,
+            &methods::FsRenameBatchParams {
+                dir: vp("mem:///"),
+                pairs: too_many,
+                plan_hash: methods::PlanHash::parse(&"0".repeat(64)).expect("hash"),
+            },
+        )
+        .await
+        .expect_err("por encima del tope");
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+
+    // Justo en el tope NO es error de params (muere por otra cosa o pasa): el
+    // rechazo es del EXCESO, no del tamaño legal.
+    let at_cap: Vec<methods::RenamePair> = (0..methods::FS_RENAME_BATCH_MAX_PAIRS)
+        .map(|i| pair(format!("f{i}").as_bytes(), format!("g{i}").as_bytes()))
+        .collect();
+    let plan: methods::FsRenameBatchPlanResult = c
+        .call(
+            methods::FS_RENAME_BATCH_PLAN,
+            &methods::FsRenameBatchPlanParams {
+                dir: vp("mem:///"),
+                pairs: at_cap,
+            },
+        )
+        .await
+        .expect("el tope exacto se planifica");
+    assert!(!plan.executable, "ninguno de esos ficheros existe");
+}

@@ -717,17 +717,22 @@ fn golden_methods() {
     // 113 → 114 en 0.35.0: + plugin_column_values_params_scoped (#120 — la
     // petición que NOMBRA al plugin; la que no lo nombra conserva su fixture
     // byte a byte, que es lo que `skip_serializing_if` promete).
-    // 114 → 116 en 0.36.0: + fs_rename_batch_plan_params y fs_rename_batch_params
+    // 114 → 119 en 0.36.0: + fs_rename_batch_plan_params y fs_rename_batch_params
     // (el batch de renames; el RESULT del plan tiene fichero propio, porque su
-    // familia pinea varias formas de plan).
-    assert_eq!(fixtures.len(), 116, "[methods.json] fixtures sin caso Rust");
+    // familia pinea varias formas de plan) + fs_rename_batch_report_params y
+    // fs_rename_batch_report_result(/_clean) — el informe del lote, con y sin
+    // atasco.
+    assert_eq!(fixtures.len(), 119, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `fs.rename_batch*` (0.36.0): las PETICIONES de plan y de ejecución.
 /// La intención (`pairs`) es lo único que el cliente manda — el orden lo decide
 /// el core —, y la ejecución añade el `plan_hash` que el humano aprobó.
 fn check_methods_rename_batch(fixtures: &BTreeMap<String, Value>) {
-    use norte_proto::methods::{FsRenameBatchParams, FsRenameBatchPlanParams, RenamePair};
+    use norte_proto::methods::{
+        FsRenameBatchParams, FsRenameBatchPlanParams, FsRenameBatchReportParams,
+        FsRenameBatchReportResult, RenamePair, RenameStuckStep,
+    };
     // Dir HOSTIL + una permutación `a→b, b→a`: el caso que motiva el método.
     check_one(
         fixtures,
@@ -761,6 +766,49 @@ fn check_methods_rename_batch(fixtures: &BTreeMap<String, Value>) {
                 to: seg(b"ep01.mkv"),
             }],
             plan_hash: plan_hash(&"1".repeat(64)),
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_rename_batch_report_params",
+        &FsRenameBatchReportParams {
+            task_id: norte_proto::TaskId::new(7),
+        },
+    );
+    // El informe que MOTIVA el método: el rollback se atascó, así que hay un
+    // fichero bajo un nombre que nadie pidió y el informe lo NOMBRA. Con el
+    // nombre hostil, que es donde un `String` habría mentido.
+    check_one(
+        fixtures,
+        "fs_rename_batch_report_result",
+        &FsRenameBatchReportResult {
+            applied: 2,
+            rolled_back: 1,
+            failed_pair: Some(1),
+            stuck: Some(RenameStuckStep {
+                from: vpath("file:///home/user/fotos/caf%FF.txt"),
+                to: vpath("file:///home/user/fotos/.norte-rename-0a1b2c3d-0"),
+                pair_index: 0,
+                error: norte_proto::Error::Io { retryable: false },
+                journalled: true,
+                still_applied: 1,
+            }),
+            uncertain: None,
+            compensations_lost: 0,
+        },
+    );
+    // Corrida limpia: lo ausente se OMITE, y `compensations_lost` viaja en
+    // cero como el resto de contadores.
+    check_one(
+        fixtures,
+        "fs_rename_batch_report_result_clean",
+        &FsRenameBatchReportResult {
+            applied: 3,
+            rolled_back: 0,
+            failed_pair: None,
+            stuck: None,
+            uncertain: None,
+            compensations_lost: 0,
         },
     );
 }
@@ -1519,7 +1567,7 @@ fn check_methods_plugin_decorate_and_columns(fixtures: &BTreeMap<String, Value>)
 fn check_methods_session(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
         PolicyUndoReportParams, PolicyUndoReportResult, PolicyUndoSessionParams,
-        PolicyUndoSessionResult, UndoBlocked,
+        PolicyUndoSessionResult, RenameStuckStep, UndoBlocked,
     };
     check_one(
         fixtures,
@@ -1543,6 +1591,10 @@ fn check_methods_session(fixtures: &BTreeMap<String, Value>) {
             task_id: norte_proto::TaskId::new(9),
         },
     );
+    // 0.36.0 (batch rename): `batch_stuck` viaja JUNTO a `blocked` y no en su
+    // lugar — dicen cosas distintas («paré, el árbol está consistente» frente a
+    // «no pude devolverlo»), y una fixture que solo pudiera llevar uno de los
+    // dos dejaría creer que se excluyen.
     check_one(
         fixtures,
         "policy_undo_report_result",
@@ -1556,9 +1608,21 @@ fn check_methods_session(fixtures: &BTreeMap<String, Value>) {
                     conflict: norte_proto::ConflictKind::Exists,
                 },
             }),
+            batch_stuck: Some(RenameStuckStep {
+                from: vpath("file:///home/user/fotos/a%FF"),
+                to: vpath("file:///home/user/fotos/b"),
+                pair_index: 0,
+                error: norte_proto::Error::Io { retryable: false },
+                journalled: true,
+                still_applied: 2,
+            }),
+            compensations_lost: 1,
         },
     );
-    // Sin bloqueo: `blocked` se OMITE (skip_serializing_if), no `null`.
+    // Sin bloqueo: `blocked` y `batch_stuck` se OMITEN (skip_serializing_if),
+    // no `null`. `compensations_lost` sí viaja en cero, como los otros
+    // contadores: un contador ausente y un contador en cero no deben poder
+    // confundirse.
     check_one(
         fixtures,
         "policy_undo_report_result_clean",
@@ -1567,6 +1631,8 @@ fn check_methods_session(fixtures: &BTreeMap<String, Value>) {
             skipped_irreversible: 0,
             skipped_created_no_trash: 0,
             blocked: None,
+            batch_stuck: None,
+            compensations_lost: 0,
         },
     );
 }
@@ -2267,6 +2333,8 @@ fn method_names_frozen() {
     // ligadas por el `plan_hash` que el humano aprobó.
     assert_eq!(methods::FS_RENAME_BATCH_PLAN, "fs.rename_batch_plan");
     assert_eq!(methods::FS_RENAME_BATCH, "fs.rename_batch");
+    // …y el informe del lote, que es lo que un `Failed` no puede contar.
+    assert_eq!(methods::FS_RENAME_BATCH_REPORT, "fs.rename_batch_report");
     // Los LITERALES, no los símbolos, por el mismo motivo que
     // `PLUGIN_HELP_MAX_BYTES` arriba: un receptor dimensiona contra ellos —
     // rechaza el lote antes de mandarlo, reserva el buffer del hash — así que

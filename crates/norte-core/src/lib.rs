@@ -29,7 +29,7 @@ pub mod search;
 mod sessions;
 mod undo;
 
-pub use engine::{Engine, RENAME_BATCH_MAX_LISTING, TransferOptions};
+pub use engine::{BATCH_REPORTS_MAX, Engine, RENAME_BATCH_MAX_LISTING, TransferOptions};
 pub use journal::{Actor, ChainStatus, Journal, JournalEntry, NewEntry, Reversal, SqliteJournal};
 pub use norte_index::Index;
 /// ¿Es esto un id de plugin válido? Re-export de `norte-plugin-host` para que

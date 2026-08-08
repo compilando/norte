@@ -1231,6 +1231,79 @@
       ],
       "type": "object"
     },
+    "FsRenameBatchReportParams": {
+      "description": "Params de [`FS_RENAME_BATCH_REPORT`] (0.36.0).",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "Task del lote cuyo informe se pide (la de [`FsTaskResult::task_id`]\nque devolvió [`FS_RENAME_BATCH`])."
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "FsRenameBatchReportResult": {
+      "description": "Result de [`FS_RENAME_BATCH_REPORT`] (0.36.0): qué hizo el lote.\n\nUna corrida limpia deja `applied` == el número de pasos del plan y todo lo\ndemás en cero/ausente. **Cualquier otra forma es el ejecutor diciendo la\nverdad sobre un directorio que no pudo dejar como lo encontró** — léelo\naunque la Task haya fallado, y sobre todo cuando diga `cancelled`.\n\n```\nuse norte_proto::methods::FsRenameBatchReportResult;\nlet r = FsRenameBatchReportResult {\n    applied: 3,\n    rolled_back: 0,\n    failed_pair: None,\n    stuck: None,\n    uncertain: None,\n    compensations_lost: 0,\n};\nlet json = serde_json::to_value(&r).expect(\"json\");\n// Lo ausente se OMITE: un lote limpio no manda tres `null`.\nassert_eq!(json.get(\"stuck\"), None);\nassert_eq!(json[\"applied\"], serde_json::json!(3));\n```",
+      "properties": {
+        "applied": {
+          "description": "Pasos aplicados Y journalizados.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "compensations_lost": {
+          "default": 0,
+          "description": "Reversas que se APLICARON pero cuya entrada compensatoria no se pudo\nescribir. El árbol volvió; el journal sigue diciendo que el rename\ndirecto está en vigor, así que un `policy.undo_session` posterior\nllegará a esa entrada y se BLOQUEARÁ ahí. Un valor distinto de cero es\nel único aviso de eso.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failed_pair": {
+          "description": "La pareja pedida cuyo paso falló, si falló alguno.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rolled_back": {
+          "description": "Pasos que el rollback consiguió devolver.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stuck": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RenameStuckStep"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "El rollback se rehusó AQUÍ y paró: el directorio está medio\nrenombrado."
+        },
+        "uncertain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RenameStuckStep"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Un paso cuyo provider reportó fallo y que después no se pudo SONDEAR,\nasí que si surtió efecto o no es desconocido. No se asumió ninguna de\nlas dos cosas: `to` es dónde mirar."
+        }
+      },
+      "required": [
+        "applied",
+        "rolled_back"
+      ],
+      "type": "object"
+    },
     "FsSearchParams": {
       "description": "Params de [`FS_SEARCH`].",
       "properties": {
@@ -2375,6 +2448,17 @@
     "PolicyUndoReportResult": {
       "description": "Result de [`POLICY_UNDO_REPORT`]: el informe del undo. Todo cero y sin\n`blocked` = no había nada que deshacer SOLO si la Task terminó\n`Completed`: una Task `Failed`/`Cancelled` deja contadores PARCIALES con\n`blocked` ausente (el motivo vive en su `task.progress` terminal) — el\nestado de la Task se consulta aparte, este result no lo lleva.",
       "properties": {
+        "batch_stuck": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RenameStuckStep"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "**Deshacer un LOTE de renames (0.36.0) se quedó a medias**: el ejecutor\nno pudo devolver un paso de undo que ya había aplicado, así que el\ndirectorio NO volvió a como estaba.\n\nEs una categoría propia y no un `blocked`: `blocked` dice «paré aquí y\nel árbol está consistente», y esto dice justo lo contrario. Cuando está\npresente la Task termina `Failed` — un undo que dijera `Completed`\nprometería un árbol restaurado que no lo está."
+        },
         "blocked": {
           "anyOf": [
             {
@@ -2385,6 +2469,13 @@
             }
           ],
           "description": "Primer paso donde el LIFO paró (estricto), si lo hubo. El undo va de\nla entrada MÁS NUEVA hacia atrás: lo posterior al bloqueo en el\njournal ya se deshizo; lo ANTERIOR a él en el journal (seq menor)\nquedó SIN deshacer."
+        },
+        "compensations_lost": {
+          "default": 0,
+          "description": "Reversas del undo de un lote que se APLICARON pero cuya compensación no\nse pudo escribir (0.36.0). Cada una deja una entrada que sigue\npareciendo pendiente aunque su efecto ya volvió: un undo posterior la\nencontrará y se bloqueará ahí. Es la única señal de eso.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "skipped_created_no_trash": {
           "description": "Reversas de `Created` saltadas porque el provider no tiene papelera\n(#65): el nodo SIGUE en el destino — deshacerlo habría sido un borrado\npermanente y el undo jamás destruye de forma irrecuperable.",
@@ -2531,6 +2622,48 @@
         "from",
         "to",
         "temp"
+      ],
+      "type": "object"
+    },
+    "RenameStuckStep": {
+      "description": "Un paso de un lote que se quedó APLICADO y que el core no pudo devolver a\nsu sitio (0.36.0). Dicho de otro modo: el directorio está medio renombrado\ny esto dice dónde mirar.\n\nLos dos lados van como [`VPath`] absoluto y no como [`Segment`]: quien lee\nesto está buscando un fichero, y darle el nombre suelto le obligaría a\nrecomponer el directorio de la petición para poder ir a por él.\n\n```\nuse norte_proto::{VPath, methods::RenameStuckStep};\nlet s = RenameStuckStep {\n    from: VPath::parse(\"file:///fotos/a\").expect(\"path\"),\n    to: VPath::parse(\"file:///fotos/b\").expect(\"path\"),\n    pair_index: 0,\n    error: norte_proto::Error::Io { retryable: false },\n    journalled: true,\n    still_applied: 1,\n};\nlet json = serde_json::to_value(&s).expect(\"json\");\nassert_eq!(json[\"to\"], serde_json::json!(\"file:///fotos/b\"));\nassert_eq!(json[\"journalled\"], serde_json::json!(true));\n```",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/Error",
+          "description": "Por qué se rehusó la reversa, o por qué el destino del paso es\ndesconocido (taxonomía de errores del protocolo)."
+        },
+        "from": {
+          "$ref": "#/$defs/VPath",
+          "description": "El nombre que el fichero tenía ANTES del lote: donde no se pudo\ndevolver."
+        },
+        "journalled": {
+          "description": "¿Hay entrada de journal detrás de este paso?\n\nDecide QUIÉN tiene que limpiar. `true`: la entrada describe el rename,\nasí que un `policy.undo_session` posterior puede rematarlo cuando el\nobstáculo desaparezca. `false`: el rename surtió efecto pero su entrada\nnunca aterrizó (regla dura 4 — el journal no sabe que ocurrió), así que\nningún undo lo encontrará y solo un humano puede deshacerlo.",
+          "type": "boolean"
+        },
+        "pair_index": {
+          "description": "Índice, dentro de `pairs` de la petición, de la pareja de la que\ndesciende el paso. Un temporal parte una pareja en dos pasos, así que\ndos atascos distintos pueden citar la misma pareja.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "still_applied": {
+          "description": "Cuántos pasos de ese lote siguen aplicados, este incluido.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "to": {
+          "$ref": "#/$defs/VPath",
+          "description": "El nombre que el fichero lleva AHORA. Es el que hay que buscar."
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "pair_index",
+        "error",
+        "journalled",
+        "still_applied"
       ],
       "type": "object"
     },
@@ -3174,6 +3307,12 @@
     "fs_rename_batch_plan_result": {
       "$ref": "#/$defs/FsRenameBatchPlanResult"
     },
+    "fs_rename_batch_report_params": {
+      "$ref": "#/$defs/FsRenameBatchReportParams"
+    },
+    "fs_rename_batch_report_result": {
+      "$ref": "#/$defs/FsRenameBatchReportResult"
+    },
     "fs_search_params": {
       "$ref": "#/$defs/FsSearchParams"
     },
@@ -3446,6 +3585,8 @@
     "fs_rename_batch_params",
     "fs_rename_batch_plan_params",
     "fs_rename_batch_plan_result",
+    "fs_rename_batch_report_params",
+    "fs_rename_batch_report_result",
     "fs_search_params",
     "fs_stat_params",
     "fs_stat_result",

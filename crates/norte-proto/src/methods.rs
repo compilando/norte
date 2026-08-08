@@ -328,13 +328,25 @@ use crate::{
 /// `absent_source` y `ambiguous_source` — este último para el directorio con
 /// gemelos, donde el origen pedido se pliega sobre dos entradas y el core se
 /// niega a elegir.
+/// Aparece además [`FS_RENAME_BATCH_REPORT`]
+/// ([`FsRenameBatchReportParams`] → [`FsRenameBatchReportResult`]), gemelo de
+/// [`POLICY_UNDO_REPORT`] (#71): un lote cuyo rollback se atascó deja el
+/// directorio medio renombrado, y eso no cabe en el `Failed` de una Task —
+/// hace falta poder NOMBRAR el fichero que se quedó donde no debía. Por lo
+/// mismo, [`PolicyUndoReportResult`] gana `batch_stuck` y
+/// `compensations_lost`: el undo de sesión ya podía deshacer un lote, y hasta
+/// ahora el humano remoto solo veía `blocked` — que dice «paré, el árbol está
+/// consistente», justo lo contrario de lo que había pasado. Los dos campos son
+/// ADITIVOS y opcionales.
 /// Ventana N=0.36.x / N-1=0.35.x: un cliente 0.35 no conoce los métodos nuevos
 /// y no los llama, y degrada el `TaskKind` nuevo a `TaskKind::Unknown` por su
 /// `serde(other)`; las dos categorías de error nuevas caen en su
 /// `Error::Unknown` (mismo patrón que `CursorExpired` en 0.8.0) — nada que
 /// gatear en emisión, porque solo aparecen contestando a métodos que ese
-/// cliente no invoca. La inversa la corta [`version_compatible`] en el
-/// handshake.
+/// cliente no invoca. Los campos nuevos de `PolicyUndoReportResult` los IGNORA
+/// (serde no es `deny_unknown_fields`), que es exactamente lo que hacía antes
+/// de que existieran: pierde el aviso, no el informe. La inversa la corta
+/// [`version_compatible`] en el handshake.
 ///
 /// Quien reciba `MethodNotFound` a un `plugin.help` debe tratarlo como «este
 /// plugin no tiene página», nunca como un fallo. La razón es que la ayuda es
@@ -546,6 +558,24 @@ pub const FS_RENAME_BATCH_PLAN: &str = "fs.rename_batch_plan";
 /// tiene colisiones. Result = el [`FsTaskResult`] existente (`{task_id}`), como
 /// `fs.copy`/`fs.move`/`fs.delete`.
 pub const FS_RENAME_BATCH: &str = "fs.rename_batch";
+/// `fs.rename_batch_report` — el informe de una Task de [`FS_RENAME_BATCH`]
+/// (0.36.0): qué se aplicó, qué se deshizo, y —lo único que no cabe en un
+/// error— QUÉ SE QUEDÓ A MEDIAS y con qué nombres.
+/// [`FsRenameBatchReportParams`] → [`FsRenameBatchReportResult`].
+///
+/// Existe por la misma razón que [`POLICY_UNDO_REPORT`] (#71): un `Failed` en
+/// `task.progress` cuenta la CAUSA, y un lote cuyo rollback se atascó deja al
+/// humano con un directorio medio renombrado que hay que poder NOMBRAR. Sin
+/// este método el ejecutor cumple su promesa («nunca un error pelado») solo
+/// para el llamante embebido, que recibe el informe en la mano.
+///
+/// Snapshot: definitivo cuando la Task es terminal. El server retiene los
+/// informes en un anillo acotado, así que un id demasiado viejo —o que jamás
+/// fue un lote— es `INVALID_PARAMS`. Lo ve quien podría ver la Task: su dueño,
+/// o cualquier conexión humana; para todo lo demás la respuesta es
+/// indistinguible de la de un id desconocido (no se filtra existencia, mismo
+/// criterio que `task.cancel`).
+pub const FS_RENAME_BATCH_REPORT: &str = "fs.rename_batch_report";
 
 /// Tope de parejas de UNA petición a [`FS_RENAME_BATCH_PLAN`] o
 /// [`FS_RENAME_BATCH`] (0.36.0). A diferencia de [`FS_LIST_MAX_PAGE`] NO se
@@ -1528,6 +1558,114 @@ pub struct FsRenameBatchParams {
     pub plan_hash: PlanHash,
 }
 
+/// Un paso de un lote que se quedó APLICADO y que el core no pudo devolver a
+/// su sitio (0.36.0). Dicho de otro modo: el directorio está medio renombrado
+/// y esto dice dónde mirar.
+///
+/// Los dos lados van como [`VPath`] absoluto y no como [`Segment`]: quien lee
+/// esto está buscando un fichero, y darle el nombre suelto le obligaría a
+/// recomponer el directorio de la petición para poder ir a por él.
+///
+/// ```
+/// use norte_proto::{VPath, methods::RenameStuckStep};
+/// let s = RenameStuckStep {
+///     from: VPath::parse("file:///fotos/a").expect("path"),
+///     to: VPath::parse("file:///fotos/b").expect("path"),
+///     pair_index: 0,
+///     error: norte_proto::Error::Io { retryable: false },
+///     journalled: true,
+///     still_applied: 1,
+/// };
+/// let json = serde_json::to_value(&s).expect("json");
+/// assert_eq!(json["to"], serde_json::json!("file:///fotos/b"));
+/// assert_eq!(json["journalled"], serde_json::json!(true));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameStuckStep {
+    /// El nombre que el fichero tenía ANTES del lote: donde no se pudo
+    /// devolver.
+    pub from: VPath,
+    /// El nombre que el fichero lleva AHORA. Es el que hay que buscar.
+    pub to: VPath,
+    /// Índice, dentro de `pairs` de la petición, de la pareja de la que
+    /// desciende el paso. Un temporal parte una pareja en dos pasos, así que
+    /// dos atascos distintos pueden citar la misma pareja.
+    pub pair_index: u32,
+    /// Por qué se rehusó la reversa, o por qué el destino del paso es
+    /// desconocido (taxonomía de errores del protocolo).
+    pub error: crate::Error,
+    /// ¿Hay entrada de journal detrás de este paso?
+    ///
+    /// Decide QUIÉN tiene que limpiar. `true`: la entrada describe el rename,
+    /// así que un `policy.undo_session` posterior puede rematarlo cuando el
+    /// obstáculo desaparezca. `false`: el rename surtió efecto pero su entrada
+    /// nunca aterrizó (regla dura 4 — el journal no sabe que ocurrió), así que
+    /// ningún undo lo encontrará y solo un humano puede deshacerlo.
+    pub journalled: bool,
+    /// Cuántos pasos de ese lote siguen aplicados, este incluido.
+    pub still_applied: u64,
+}
+
+/// Params de [`FS_RENAME_BATCH_REPORT`] (0.36.0).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsRenameBatchReportParams {
+    /// Task del lote cuyo informe se pide (la de [`FsTaskResult::task_id`]
+    /// que devolvió [`FS_RENAME_BATCH`]).
+    pub task_id: TaskId,
+}
+
+/// Result de [`FS_RENAME_BATCH_REPORT`] (0.36.0): qué hizo el lote.
+///
+/// Una corrida limpia deja `applied` == el número de pasos del plan y todo lo
+/// demás en cero/ausente. **Cualquier otra forma es el ejecutor diciendo la
+/// verdad sobre un directorio que no pudo dejar como lo encontró** — léelo
+/// aunque la Task haya fallado, y sobre todo cuando diga `cancelled`.
+///
+/// ```
+/// use norte_proto::methods::FsRenameBatchReportResult;
+/// let r = FsRenameBatchReportResult {
+///     applied: 3,
+///     rolled_back: 0,
+///     failed_pair: None,
+///     stuck: None,
+///     uncertain: None,
+///     compensations_lost: 0,
+/// };
+/// let json = serde_json::to_value(&r).expect("json");
+/// // Lo ausente se OMITE: un lote limpio no manda tres `null`.
+/// assert_eq!(json.get("stuck"), None);
+/// assert_eq!(json["applied"], serde_json::json!(3));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsRenameBatchReportResult {
+    /// Pasos aplicados Y journalizados.
+    pub applied: u64,
+    /// Pasos que el rollback consiguió devolver.
+    pub rolled_back: u64,
+    /// La pareja pedida cuyo paso falló, si falló alguno.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_pair: Option<u32>,
+    /// El rollback se rehusó AQUÍ y paró: el directorio está medio
+    /// renombrado.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stuck: Option<RenameStuckStep>,
+    /// Un paso cuyo provider reportó fallo y que después no se pudo SONDEAR,
+    /// así que si surtió efecto o no es desconocido. No se asumió ninguna de
+    /// las dos cosas: `to` es dónde mirar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncertain: Option<RenameStuckStep>,
+    /// Reversas que se APLICARON pero cuya entrada compensatoria no se pudo
+    /// escribir. El árbol volvió; el journal sigue diciendo que el rename
+    /// directo está en vigor, así que un `policy.undo_session` posterior
+    /// llegará a esa entrada y se BLOQUEARÁ ahí. Un valor distinto de cero es
+    /// el único aviso de eso.
+    #[serde(default)]
+    pub compensations_lost: u64,
+}
+
 /// Identidad de un cliente (va en [`InitializeParams`]).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2000,6 +2138,22 @@ pub struct PolicyUndoReportResult {
     /// quedó SIN deshacer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked: Option<UndoBlocked>,
+    /// **Deshacer un LOTE de renames (0.36.0) se quedó a medias**: el ejecutor
+    /// no pudo devolver un paso de undo que ya había aplicado, así que el
+    /// directorio NO volvió a como estaba.
+    ///
+    /// Es una categoría propia y no un `blocked`: `blocked` dice «paré aquí y
+    /// el árbol está consistente», y esto dice justo lo contrario. Cuando está
+    /// presente la Task termina `Failed` — un undo que dijera `Completed`
+    /// prometería un árbol restaurado que no lo está.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_stuck: Option<RenameStuckStep>,
+    /// Reversas del undo de un lote que se APLICARON pero cuya compensación no
+    /// se pudo escribir (0.36.0). Cada una deja una entrada que sigue
+    /// pareciendo pendiente aunque su efecto ya volvió: un undo posterior la
+    /// encontrará y se bloqueará ahí. Es la única señal de eso.
+    #[serde(default)]
+    pub compensations_lost: u64,
 }
 
 /// Un bloqueo del undo: dónde y por qué (elemento de

@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use norte_proto::{
     CapabilityFlags, CollisionPolicy, DeleteMode, Entry, Error, ResumePolicy, Segment,
-    SymlinkPolicy, TaskKind, VPath, VerifyPolicy, methods::PlanHash,
+    SymlinkPolicy, TaskId, TaskKind, VPath, VerifyPolicy, methods::PlanHash,
 };
 use norte_vfs::{EntryStream, Provider};
 
@@ -88,6 +88,15 @@ pub struct Engine {
     /// (`index.*` → `Unsupported`, fail-closed como la IA). Inyectado con
     /// [`Self::with_index`]; lo instala el daemon.
     index: Option<Arc<norte_index::Index>>,
+    /// Anillo ACOTADO de informes de lotes de renames, por `task_id`
+    /// ([`Self::rename_batch_report`]).
+    ///
+    /// El informe se retiene AQUÍ, y no en el daemon, porque hay dos
+    /// consumidores —el socket (`fs.rename_batch_report`) y el `Backend`
+    /// embebido— y dos anillos serían dos políticas de retención que se
+    /// contradicen a la primera. El actor guardado es el DUEÑO de la task: el
+    /// daemon lo necesita para decidir quién puede leerlo.
+    batch_reports: std::sync::Mutex<std::collections::VecDeque<BatchReportEntry>>,
 }
 
 impl Engine {
@@ -115,6 +124,7 @@ impl Engine {
             ai_embed: RwLock::new(None),
             ai_config: RwLock::new(crate::ai::AiConfig::default()),
             index: None,
+            batch_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -152,6 +162,7 @@ impl Engine {
             ai_embed: RwLock::new(None),
             ai_config: RwLock::new(crate::ai::AiConfig::default()),
             index: None,
+            batch_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -1234,6 +1245,7 @@ impl Engine {
         let report = Arc::new(std::sync::Mutex::new(crate::rename::BatchReport::default()));
         let report_task = Arc::clone(&report);
         let key = dir.scheme().to_owned();
+        let owner = actor.clone();
         let handle = self.sched.submit(
             &key,
             TaskKind::RenameBatch,
@@ -1266,7 +1278,41 @@ impl Engine {
                 })
             }),
         );
+        // Retiene el informe para quien solo tiene el `task_id`: el socket
+        // (`fs.rename_batch_report`) y el `Backend` embebido. El llamante
+        // directo ya se lleva el `Arc` VIVO en la mano; esto es para los otros
+        // dos, que solo pueden pedirlo después. Anillo acotado: la memoria de
+        // un daemon de meses no crece con cada lote.
+        {
+            let mut ring = self.batch_reports.lock().expect("batch_reports lock sano");
+            ring.push_back((handle.id(), owner, Arc::clone(&report)));
+            while ring.len() > BATCH_REPORTS_MAX {
+                ring.pop_front();
+            }
+        }
         Ok((handle, report))
+    }
+
+    /// Informe de un lote ya lanzado, por `task_id`, más el ACTOR que lo pidió
+    /// (spec §17). `None` si ese id nunca fue un lote de esta instancia o si el
+    /// anillo ya lo desalojó ([`BATCH_REPORTS_MAX`]).
+    ///
+    /// Es un SNAPSHOT: definitivo cuando la Task es terminal, parcial antes.
+    /// El actor sale con él porque quien sirve esto por el wire tiene que
+    /// decidir si el que pregunta podía ver esa task — decidirlo aquí obligaría
+    /// al engine a conocer las reglas de visibilidad del daemon.
+    ///
+    /// # Panics
+    /// Solo por envenenamiento de los locks (otro hilo panicó sosteniéndolos).
+    #[must_use]
+    pub fn rename_batch_report(
+        &self,
+        task_id: TaskId,
+    ) -> Option<(crate::journal::Actor, crate::rename::BatchReport)> {
+        let ring = self.batch_reports.lock().expect("batch_reports lock sano");
+        ring.iter()
+            .find(|(id, _, _)| *id == task_id)
+            .map(|(_, owner, r)| (owner.clone(), r.lock().expect("batch report lock").clone()))
     }
 
     /// Borrado PERMANENTE (recursivo post-order) como Task. La papelera
@@ -1618,6 +1664,23 @@ const APPROVAL_PATHS_SHOWN: usize = 32;
 /// pararlo. Un directorio que un humano va a revisar entrada por entrada cabe
 /// de sobra aquí; por encima, `LimitExceeded` es honesto y barato.
 pub const RENAME_BATCH_MAX_LISTING: usize = 100_000;
+
+/// Una entrada del anillo de informes: la Task, el ACTOR que la pidió (para
+/// que quien sirva el informe por el wire pueda decidir si el que pregunta
+/// podía ver esa task) y el informe VIVO, que la Task sigue rellenando.
+type BatchReportEntry = (
+    TaskId,
+    crate::journal::Actor,
+    Arc<std::sync::Mutex<crate::rename::BatchReport>>,
+);
+
+/// Cuántos informes de lote retiene [`Engine::rename_batch_report`].
+///
+/// Anillo, no mapa: un informe se pide una vez, justo después del terminal de
+/// su Task, y el que nadie recoja tiene que caducar solo o el daemon acumula
+/// memoria por cada lote que corrió en su vida. El mismo criterio (y el mismo
+/// orden de magnitud) que el anillo de informes de undo del daemon.
+pub const BATCH_REPORTS_MAX: usize = 32;
 
 /// Todos los nombres base de `dir`, en bytes crudos (regla 1).
 ///

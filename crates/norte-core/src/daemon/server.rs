@@ -1578,6 +1578,16 @@ async fn handle_value(
                     | methods::FS_MKDIR
                     | methods::AI_RENAME_PLAN
                     | methods::INDEX_SEARCH_SEMANTIC
+                    // 0.36.0: `fs.rename_batch` gatea el lote ENTERO antes de
+                    // reservar nada, así que puede quedarse suspendido en un Ask
+                    // exactamente igual que un fs.move; y `fs.rename_batch_plan`
+                    // lista y planifica un directorio dentro del despacho, como
+                    // `ai.rename_plan`. Retirar cualquiera de los dos es seguro
+                    // por construcción: el gate muere PRE-efecto, y entre el
+                    // submit del engine y el register no hay ningún `.await`
+                    // (#64).
+                    | methods::FS_RENAME_BATCH
+                    | methods::FS_RENAME_BATCH_PLAN
             );
             let response = if cancelable {
                 let cancel = CancellationToken::new();
@@ -2102,6 +2112,15 @@ fn handle_policy_undo_report(
         blocked: snapshot
             .blocked
             .map(|(seq, error)| methods::UndoBlocked { seq, error }),
+        // 0.36.0: deshacer un LOTE puede quedarse a medias, y eso no es un
+        // `blocked` — `blocked` dice «paré y el árbol está consistente». Sin
+        // estos dos campos, el humano REMOTO cuyo undo dejó un directorio medio
+        // renombrado veía exactamente lo mismo que uno que fue bien.
+        batch_stuck: snapshot
+            .batch_stuck
+            .as_ref()
+            .map(crate::rename::stuck_to_proto),
+        compensations_lost: snapshot.compensations_lost,
     })
 }
 
@@ -2882,6 +2901,60 @@ async fn handle_fs_search(
     to_value(&methods::FsTaskResult { task_id })
 }
 
+/// El tope de parejas de un lote de renames (0.36.0), aplicado EN LA FRONTERA.
+///
+/// La constante es el contrato ([`methods::FS_RENAME_BATCH_MAX_PAIRS`]) y el
+/// daemon es donde se impone: aquí es donde llega input de un peer que puede
+/// ser un agente. RECHAZA, no recorta —recortar ejecutaría un plan distinto del
+/// pedido, y para el plan devolvería veredictos de un lote que nadie mandó—, y
+/// rechaza ANTES de tocar el engine, que planifica en tiempo lineal sobre las
+/// parejas Y sobre el listado. El engine vuelve a comprobarlo por su cuenta
+/// (es API pública embebida); esta comprobación es la de la frontera, no un
+/// duplicado ocioso.
+///
+/// `INVALID_PARAMS` y no una categoría de la taxonomía: el lote es del propio
+/// peticionario, así que decirle cuál es el techo no le revela nada del mundo.
+fn check_pairs_cap(
+    pairs: &[methods::RenamePair],
+) -> Result<Vec<crate::rename::PairBytes>, RpcError> {
+    let max = methods::FS_RENAME_BATCH_MAX_PAIRS;
+    if pairs.len() > max {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            format!("pairs supera el tope de {max} por petición"),
+        ));
+    }
+    Ok(crate::rename::pairs_from_wire(pairs))
+}
+
+/// `fs.rename_batch_report` (0.36.0): el informe de un lote ya lanzado.
+///
+/// Lo ve quien podría ver la Task ([`may_observe`]): su dueño, o cualquier
+/// conexión humana. Para el resto la respuesta es la MISMA que la de un id
+/// desconocido — el informe lleva rutas del directorio de otro actor, y
+/// distinguir «no es tuya» de «no existe» ya sería filtrar que existió (mismo
+/// criterio que `task.cancel`).
+fn handle_rename_batch_report(
+    actor: &Actor,
+    p: &methods::FsRenameBatchReportParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let unknown = || {
+        RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "unknown rename batch task (never a batch, or evicted from the ring)",
+        )
+    };
+    let (owner, report) = shared
+        .engine
+        .rename_batch_report(p.task_id)
+        .ok_or_else(unknown)?;
+    if !may_observe(actor, &owner) {
+        return Err(unknown());
+    }
+    to_value(&crate::rename::report_to_proto(&report))
+}
+
 /// Las familias `fs.*`/`task.*` del dispatch (separadas por tamaño). El
 /// `actor` viene de la conexión (M3-3b): las mutaciones se journalizan y
 /// evalúan bajo él.
@@ -3075,6 +3148,50 @@ async fn dispatch_fs_task(
                 .await
                 .map_err(RpcError::from)?;
             register_task(shared, handle, actor)
+        }
+        // fs.rename_batch_plan (0.36.0, ADR 0042): el plan REVISABLE de un lote
+        // de renames. Respuesta DIRECTA: ni Task, ni journal, ni mutación —
+        // pero SÍ una lectura de directorio, y por eso pasa por el `read_gate`
+        // como `fs.list`/`fs.stat` (#80). Sus veredictos `External`,
+        // `AbsentSource` y `AmbiguousSource` dicen qué nombres existen y cuáles
+        // no: sin gate esto es un oráculo de nombres —y de gemelos NFC/NFD, que
+        // `fs.list` ni siquiera expone— para un agente sin scope.
+        methods::FS_RENAME_BATCH_PLAN => {
+            let p: methods::FsRenameBatchPlanParams = parse_params(req.params)?;
+            read_gate(&actor, &p.dir, shared)?; // #80
+            let pairs = check_pairs_cap(&p.pairs)?;
+            let plan = shared
+                .engine
+                .rename_batch_plan_as(&p.dir, &pairs, actor)
+                .await
+                .map_err(RpcError::from)?;
+            to_value(&crate::rename::plan_to_proto(&plan).map_err(RpcError::from)?)
+        }
+        // fs.rename_batch (0.36.0, ADR 0042): UNA Task, UN lote del journal,
+        // rollback si algo falla. El engine RE-PLANIFICA y compara el hash: lo
+        // que cruza el wire es intención (`pairs`), jamás un orden.
+        methods::FS_RENAME_BATCH => {
+            let p: methods::FsRenameBatchParams = parse_params(req.params)?;
+            let pairs = check_pairs_cap(&p.pairs)?;
+            let (handle, _report) = shared
+                .engine
+                .rename_batch_as(&p.dir, &pairs, &p.plan_hash, actor.clone())
+                .await
+                .map_err(RpcError::from)?;
+            // El informe NO se retiene aquí: vive en el anillo del engine
+            // (`Engine::rename_batch_report`), que es de donde lo sirve
+            // `fs.rename_batch_report` — un solo anillo para el socket y para
+            // el `Backend` embebido.
+            //
+            // INVARIANTE (#64): CERO `.await` entre el submit del engine y este
+            // register, igual que fs.copy/fs.move.
+            register_task(shared, handle, actor)
+        }
+        // fs.rename_batch_report (0.36.0): lo que un `Failed` no puede contar —
+        // qué paso se quedó aplicado y con qué nombre.
+        methods::FS_RENAME_BATCH_REPORT => {
+            let p: methods::FsRenameBatchReportParams = parse_params(req.params)?;
+            handle_rename_batch_report(&actor, &p, shared)
         }
         // fs.mkdir (0.31.0, #104): Task, mismo molde que delete.
         methods::FS_MKDIR => {

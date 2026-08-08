@@ -189,6 +189,31 @@
       }
     ]
   },
+  "fs_rename_batch_report_params": {
+    "task_id": 7
+  },
+  "fs_rename_batch_report_result": {
+    "applied": 2,
+    "compensations_lost": 0,
+    "failed_pair": 1,
+    "rolled_back": 1,
+    "stuck": {
+      "error": {
+        "kind": "io",
+        "retryable": false
+      },
+      "from": "file:///home/user/fotos/caf%FF.txt",
+      "journalled": true,
+      "pair_index": 0,
+      "still_applied": 1,
+      "to": "file:///home/user/fotos/.norte-rename-0a1b2c3d-0"
+    }
+  },
+  "fs_rename_batch_report_result_clean": {
+    "applied": 3,
+    "compensations_lost": 0,
+    "rolled_back": 0
+  },
   "fs_search_params": {
     "case_sensitive": true,
     "content": "año",
@@ -626,6 +651,17 @@
     "task_id": 9
   },
   "policy_undo_report_result": {
+    "batch_stuck": {
+      "error": {
+        "kind": "io",
+        "retryable": false
+      },
+      "from": "file:///home/user/fotos/a%FF",
+      "journalled": true,
+      "pair_index": 0,
+      "still_applied": 2,
+      "to": "file:///home/user/fotos/b"
+    },
     "blocked": {
       "error": {
         "conflict": "exists",
@@ -633,11 +669,13 @@
       },
       "seq": 41
     },
+    "compensations_lost": 1,
     "skipped_created_no_trash": 2,
     "skipped_irreversible": 1,
     "undone": 3
   },
   "policy_undo_report_result_clean": {
+    "compensations_lost": 0,
     "skipped_created_no_trash": 0,
     "skipped_irreversible": 0,
     "undone": 4

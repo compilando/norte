@@ -51,6 +51,8 @@ struct ProtocolSchema {
     fs_rename_batch_params: FsRenameBatchParams,
     fs_rename_batch_plan_params: FsRenameBatchPlanParams,
     fs_rename_batch_plan_result: FsRenameBatchPlanResult,
+    fs_rename_batch_report_params: FsRenameBatchReportParams,
+    fs_rename_batch_report_result: FsRenameBatchReportResult,
     fs_search_params: FsSearchParams,
     fs_stat_params: FsStatParams,
     fs_stat_result: FsStatResult,

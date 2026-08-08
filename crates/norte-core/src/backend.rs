@@ -484,6 +484,98 @@ impl Backend {
         }
     }
 
+    /// El plan REVISABLE de un lote de renames dentro de `dir` (spec §17, ADR
+    /// 0042). NO muta nada: ni Task, ni journal.
+    ///
+    /// Lo que se manda es INTENCIÓN — parejas de nombres base. El orden, los
+    /// temporales y los veredictos los decide el core (regla dura 7), y el
+    /// `plan_hash` que vuelve es el que hay que devolver a
+    /// [`Backend::rename_batch`] para ejecutar EXACTAMENTE lo que se enseñó.
+    ///
+    /// # Errors
+    /// [`Error::InvalidPath`] si un nombre no es una entrada de directorio
+    /// legal o si hay más de `FS_RENAME_BATCH_MAX_PAIRS` parejas;
+    /// [`Error::Unsupported`] sin provider o con uno de solo lectura;
+    /// [`Error::LimitExceeded`] en un directorio inabarcable;
+    /// [`Error::PolicyDenied`] del gate de lectura (remoto, agente sin scope);
+    /// taxonomía del protocolo.
+    pub async fn rename_batch_plan(
+        &self,
+        dir: &VPath,
+        pairs: &[norte_proto::methods::RenamePair],
+    ) -> Result<norte_proto::methods::FsRenameBatchPlanResult, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let raw = crate::rename::pairs_from_wire(pairs);
+                let plan = engine.rename_batch_plan(dir, &raw).await?;
+                crate::rename::plan_to_proto(&plan)
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.rename_batch_plan(dir, pairs).await,
+        }
+    }
+
+    /// Ejecuta el lote aprobado como UNA Task y UNA unidad deshacible del
+    /// journal (spec §17, ADR 0042).
+    ///
+    /// `plan_hash` es el token de [`Backend::rename_batch_plan`]. El core
+    /// re-planifica el directorio TAL COMO ESTÁ AHORA y compara: si derivó,
+    /// esto es [`Error::PlanStale`] y no se toca nada. El informe de lo que
+    /// pasó se pide con [`Backend::rename_batch_report`] — la Task terminal
+    /// cuenta la causa, no lo que se quedó a medias.
+    ///
+    /// # Errors
+    /// [`Error::PlanStale`] si el directorio derivó desde el plan;
+    /// [`Error::PlanNotExecutable`] si el plan aprobado tenía colisiones;
+    /// [`Error::PolicyDenied`] del gate de mutación; más las de
+    /// [`Backend::rename_batch_plan`].
+    pub async fn rename_batch(
+        &self,
+        dir: &VPath,
+        pairs: &[norte_proto::methods::RenamePair],
+        plan_hash: &norte_proto::methods::PlanHash,
+    ) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let raw = crate::rename::pairs_from_wire(pairs);
+                let (handle, _report) = engine.rename_batch(dir, &raw, plan_hash).await?;
+                // El informe queda en el anillo del engine, que es de donde lo
+                // lee `rename_batch_report`: los dos brazos se piden igual.
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.rename_batch(dir, pairs, plan_hash).await,
+        }
+    }
+
+    /// El informe de un lote ya lanzado (`fs.rename_batch_report`, 0.36.0):
+    /// cuántos pasos se aplicaron, cuántos se deshicieron y —lo que ningún
+    /// error pelado puede decir— QUÉ paso se quedó aplicado y bajo qué nombre.
+    ///
+    /// Míralo también cuando la Task diga `cancelled`: cancelar un lote lo
+    /// deshace, y un rollback también puede atascarse.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si ese `task_id` nunca fue un lote de este proceso
+    /// o si el anillo ya lo desalojó; [`Error::Unsupported`] contra un daemon
+    /// N-1 que no conoce el método; taxonomía del protocolo.
+    pub async fn rename_batch_report(
+        &self,
+        task_id: TaskId,
+    ) -> Result<norte_proto::methods::FsRenameBatchReportResult, Error> {
+        match self {
+            Self::Embedded(engine) => engine
+                .rename_batch_report(task_id)
+                .map(|(_owner, r)| crate::rename::report_to_proto(&r))
+                // Embebido no hay actor que comprobar: este `Backend` ES el
+                // humano en proceso (mismo criterio que
+                // `plugins_set_approval`).
+                .ok_or(Error::NotFound),
+            #[cfg(unix)]
+            Self::Remote(r) => r.rename_batch_report(task_id).await,
+        }
+    }
+
     /// (Re)construye el índice de `root` como Task (M4, ADR 0034).
     ///
     /// # Errors
@@ -2316,6 +2408,73 @@ pub mod remote {
                 )
                 .await?;
             Ok(self.own_task(result.task_id, TaskKind::Delete))
+        }
+
+        /// `fs.rename_batch_plan` (0.36.0, ADR 0042): respuesta DIRECTA, sin
+        /// Task. El daemon la tiene en su brazo de cancelación (#72), así que
+        /// abandonar la espera corta el dispatch en vez de dejarlo planificando
+        /// un directorio enorme.
+        pub(super) async fn rename_batch_plan(
+            &self,
+            dir: &VPath,
+            pairs: &[methods::RenamePair],
+        ) -> Result<methods::FsRenameBatchPlanResult, Error> {
+            self.call_timed_guarded(
+                methods::FS_RENAME_BATCH_PLAN,
+                &methods::FsRenameBatchPlanParams {
+                    dir: dir.clone(),
+                    pairs: pairs.to_vec(),
+                },
+            )
+            .await
+        }
+
+        /// `fs.rename_batch` (0.36.0, ADR 0042): UNA Task para el lote entero.
+        /// Se manda la MISMA intención que produjo el `plan_hash`; el orden
+        /// jamás cruza el wire.
+        pub(super) async fn rename_batch(
+            &self,
+            dir: &VPath,
+            pairs: &[methods::RenamePair],
+            plan_hash: &methods::PlanHash,
+        ) -> Result<TaskRef, Error> {
+            let result: FsTaskResult = self
+                .call_timed_guarded(
+                    methods::FS_RENAME_BATCH,
+                    &methods::FsRenameBatchParams {
+                        dir: dir.clone(),
+                        pairs: pairs.to_vec(),
+                        plan_hash: plan_hash.clone(),
+                    },
+                )
+                .await?;
+            Ok(self.own_task(result.task_id, TaskKind::RenameBatch))
+        }
+
+        /// `fs.rename_batch_report` (0.36.0): informe del lote. Un daemon N-1
+        /// sin el método responde `METHOD_NOT_FOUND` → `Unsupported`, para que
+        /// el caller lo distinga de un fallo REAL — mismo criterio que
+        /// `policy.undo_report` (#71): el informe es la ÚNICA señal de que un
+        /// lote dejó el directorio a medias, y no se degrada en silencio.
+        pub(super) async fn rename_batch_report(
+            &self,
+            task_id: TaskId,
+        ) -> Result<methods::FsRenameBatchReportResult, Error> {
+            let client = self.client().await?;
+            let params = methods::FsRenameBatchReportParams { task_id };
+            let call = client.call::<_, methods::FsRenameBatchReportResult>(
+                methods::FS_RENAME_BATCH_REPORT,
+                &params,
+            );
+            match tokio::time::timeout(CALL_TIMEOUT, call).await {
+                Ok(Err(ClientError::Rpc(ref rpc)))
+                    if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+                {
+                    Err(Error::Unsupported)
+                }
+                Ok(res) => res.map_err(to_taxonomy),
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            }
         }
 
         pub(super) async fn mkdir(&self, path: &VPath) -> Result<TaskRef, Error> {
