@@ -54,15 +54,39 @@ const SELECT_VERIFY: &str = "SELECT seq, ts_ms, actor_kind, actor_id, op, path, 
 const SELECT_VERIFY_NO_BATCH: &str = "SELECT seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash, NULL FROM journal ORDER BY seq ASC";
 const SELECT_ENTRIES: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, batch_id FROM journal ORDER BY seq ASC";
 const SELECT_ENTRIES_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, NULL FROM journal ORDER BY seq ASC";
+/// Una entrada está DESHECHA si tiene una compensación VIVA: una entrada con
+/// su `seq` en `undoes_seq` que a su vez nadie haya compensado.
+///
+/// La condición ingenua —«existe alguna compensación»— era correcta mientras
+/// una compensación jamás se desandaba. El undo de un LOTE (§17) rompió eso:
+/// se ejecuta por el mismo ejecutor que la ida, así que si un paso del undo
+/// falla, el ejecutor DESANDA los pasos de undo que ya había aplicado y
+/// journaliza esa vuelta como compensación de la compensación. El árbol queda
+/// como estaba —el lote sigue aplicado—, pero con la condición ingenua sus
+/// entradas quedaban tapadas por unas compensaciones que ya no valen, y el
+/// lote se volvía INDESHACIBLE para siempre, en silencio.
+///
+/// La cadena que este código puede producir es `O ← C ← D` y nada más hondo:
+/// una compensación nace con `undoes_seq` no nulo, así que jamás es revertible
+/// por sí misma y nadie la vuelve a compensar salvo el desandado de su propio
+/// lote de undo. Un nivel de anidamiento cubre exactamente eso.
 const SELECT_REVERTIBLE: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, batch_id \
      FROM journal \
      WHERE undoes_seq IS NULL AND actor_kind = ? AND actor_id IS ? \
-       AND seq NOT IN (SELECT undoes_seq FROM journal WHERE undoes_seq IS NOT NULL) \
+       AND seq NOT IN ( \
+         SELECT c.undoes_seq FROM journal c \
+         WHERE c.undoes_seq IS NOT NULL \
+           AND c.seq NOT IN (SELECT d.undoes_seq FROM journal d WHERE d.undoes_seq IS NOT NULL) \
+       ) \
      ORDER BY seq DESC";
 const SELECT_REVERTIBLE_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, NULL \
      FROM journal \
      WHERE undoes_seq IS NULL AND actor_kind = ? AND actor_id IS ? \
-       AND seq NOT IN (SELECT undoes_seq FROM journal WHERE undoes_seq IS NOT NULL) \
+       AND seq NOT IN ( \
+         SELECT c.undoes_seq FROM journal c \
+         WHERE c.undoes_seq IS NOT NULL \
+           AND c.seq NOT IN (SELECT d.undoes_seq FROM journal d WHERE d.undoes_seq IS NOT NULL) \
+       ) \
      ORDER BY seq DESC";
 
 /// Errores del journal.
@@ -793,8 +817,14 @@ impl Journal {
     }
 
     /// Las entradas REVERTIBLES de la sesión `actor`, en orden LIFO (`seq`
-    /// DESC): mutaciones normales (`undoes_seq IS NULL`) de ese actor que nadie
-    /// ha compensado todavía. Base de [`crate::Engine::undo_session`] (M3-2).
+    /// DESC): mutaciones normales (`undoes_seq IS NULL`) de ese actor cuya
+    /// compensación no exista o haya sido a su vez desandada. Base de
+    /// [`crate::Engine::undo_session`] (M3-2).
+    ///
+    /// «Compensada» significa compensada VIVA, no «compensada alguna vez»: un
+    /// undo de lote que falla a mitad desanda sus propias compensaciones, y el
+    /// lote tiene que volver a ser deshacible. El porqué, con la forma exacta
+    /// de la cadena, está sobre la constante `SELECT_REVERTIBLE`.
     ///
     /// # Errors
     /// [`JournalError::Sqlx`].
@@ -1401,6 +1431,68 @@ mod tests {
         assert_eq!(rev_user.len(), 1);
         assert_eq!(rev_user[0].seq, 2);
         assert_eq!(rev_user[0].undoes_seq, None);
+    }
+
+    /// Una compensación DESANDADA no tapa a su original: la mutación vuelve a
+    /// ser revertible.
+    ///
+    /// Es la forma que produce el undo de un lote cuando falla a mitad: el
+    /// ejecutor desanda los pasos de undo que ya había aplicado y journaliza
+    /// esa vuelta como compensación de la compensación (`O ← C ← D`). El árbol
+    /// queda con el lote aplicado, así que decir «ya está deshecho» lo dejaría
+    /// indeshacible para siempre y en silencio.
+    #[tokio::test]
+    async fn a_compensation_that_was_itself_undone_reopens_its_entry() {
+        let j = Journal::open_in_memory().await.expect("open");
+        // seq 1: la mutación original.
+        j.record(
+            "renamed",
+            b"file:///x",
+            Some(b"file:///a"),
+            Reversal::RenameBack,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("1");
+        // seq 2: su compensación → la 1 deja de ser revertible.
+        let comp = j
+            .record_undoing(
+                "renamed",
+                b"file:///a",
+                Some(b"file:///x"),
+                Reversal::RenameBack,
+                None,
+                &Actor::User,
+                Some(1),
+            )
+            .await
+            .expect("2");
+        assert!(
+            j.revertible_for(&Actor::User)
+                .await
+                .expect("revertible")
+                .is_empty(),
+        );
+        // seq 3: la compensación se DESANDA (el undo del lote se cayó y el
+        // ejecutor la devolvió) → la 1 vuelve a estar pendiente.
+        j.record_undoing(
+            "renamed",
+            b"file:///x",
+            Some(b"file:///a"),
+            Reversal::RenameBack,
+            None,
+            &Actor::User,
+            Some(comp),
+        )
+        .await
+        .expect("3");
+        let rev = j.revertible_for(&Actor::User).await.expect("revertible");
+        assert_eq!(
+            rev.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![1],
+            "la compensación ya no vale, así que la 1 sigue por deshacer",
+        );
     }
 
     #[tokio::test]

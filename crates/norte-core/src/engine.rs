@@ -1449,47 +1449,28 @@ impl Engine {
 
         let report = Arc::new(std::sync::Mutex::new(crate::UndoReport::default()));
 
+        // Un lote (`fs.rename_batch`) es UNA unidad: se revierte entero o no se
+        // toca (diseño §7). El agrupado va antes del gate para que la policy vea
+        // el lote completo, igual que en la ida.
+        let units = crate::undo::undo_units(entries);
+
         // Planning: gatea cada reversa por policy y resuelve su provider ANTES de
         // spawnear (el cuerpo de la Task es 'static y no puede tener `&self`).
         // Gate → provider (para no conectar a schemes del journal sin policy).
-        let mut plan: Vec<(crate::journal::JournalEntry, Arc<dyn Provider>)> =
-            Vec::with_capacity(entries.len());
-        for e in entries {
-            let p = wire_engine(&e.path)?;
-            // Reversa de un Created BORRA → Delete (una ruta), y desde #65 va
-            // SIEMPRE a papelera (o se salta): se gatea como `Trash`, no como
-            // `Permanent` — un deny de "solo-permanente" no debe parar el LIFO
-            // por una reversa que jamás borra permanente. rename_back /
-            // restore_trash REUBICAN → Move con DOS endpoints (origen+destino de
-            // la restauración): ambos deben pasar el gate, igual que un Move
-            // normal (security M2). El segundo endpoint es `path_to` (rename) o
-            // `reversal_ref` (trash).
-            let (undo_op, second) = match e.reversal.as_str() {
-                "rename_back" => (
-                    crate::policy::PolicyOp::Move,
-                    e.path_to.as_deref().map(wire_engine).transpose()?,
-                ),
-                "restore_trash" => (
-                    crate::policy::PolicyOp::Move,
-                    e.reversal_ref.as_deref().map(wire_engine).transpose()?,
-                ),
-                _ => (
-                    crate::policy::PolicyOp::Delete {
-                        mode: DeleteMode::Trash,
-                    },
-                    None,
-                ),
+        let mut plan: Vec<(Vec<crate::journal::JournalEntry>, Arc<dyn Provider>)> =
+            Vec::with_capacity(units.len());
+        for unit in units {
+            let Some((undo_op, paths)) = undo_gate_targets(&unit)? else {
+                continue; // imposible: `undo_units` no produce unidades vacías.
             };
-            let mut gate_paths: Vec<&VPath> = vec![&p];
-            if let Some(s) = &second {
-                gate_paths.push(s);
-            }
+            let Some(first) = unit.first() else { continue };
+            let gate_paths: Vec<&VPath> = paths.iter().collect();
             if let Err(err) = self.gate(&executor, undo_op, &gate_paths).await {
-                report.lock().expect("undo report lock").blocked = Some((e.seq, err));
+                report.lock().expect("undo report lock").blocked = Some((first.seq, err));
                 break; // estricto: para al primer bloqueo de policy (LIFO).
             }
-            let provider = self.provider_for(&p).await?;
-            plan.push((e, provider));
+            let provider = self.provider_for(&paths[0]).await?;
+            plan.push((unit, provider));
         }
 
         let report_task = Arc::clone(&report);
@@ -1501,17 +1482,41 @@ impl Engine {
             executor,
             Box::new(move |ctx| {
                 Box::pin(async move {
+                    // El total son UNIDADES: un lote avanza el contador una vez,
+                    // porque para el humano es un solo paso del undo.
                     let total = plan.len() as u64;
+                    let task_id = ctx.progress.snapshot().task_id;
                     ctx.progress.update(|p| p.entries_total = Some(total));
-                    for (entry, provider) in plan {
+                    for (unit, provider) in plan {
                         if ctx.cancel.is_cancelled() {
                             return Err(Error::Cancelled);
                         }
-                        match crate::undo::revert_entry(&*provider, &journal, &entry, &ctx.actor)
-                            .await?
-                        {
+                        // `undone` sí cuenta ENTRADAS: es lo que la unidad
+                        // deshizo del journal, y un lote deshace las suyas.
+                        let members = unit.len() as u64;
+                        let outcome = match unit.split_first() {
+                            // Unidad de una: el camino de siempre, intacto.
+                            Some((entry, [])) => {
+                                crate::undo::revert_entry(&*provider, &journal, entry, &ctx.actor)
+                                    .await?
+                            }
+                            // Unidad de varias: un lote, entero o nada.
+                            _ => {
+                                crate::undo::revert_batch(
+                                    &*provider,
+                                    &journal,
+                                    &unit,
+                                    &ctx.actor,
+                                    &ctx.cancel,
+                                    task_id,
+                                    &report_task,
+                                )
+                                .await?
+                            }
+                        };
+                        match outcome {
                             crate::undo::Reverted::Done => {
-                                report_task.lock().expect("undo report lock").undone += 1;
+                                report_task.lock().expect("undo report lock").undone += members;
                             }
                             crate::undo::Reverted::SkippedIrreversible => {
                                 report_task
@@ -1525,10 +1530,19 @@ impl Engine {
                                     .expect("undo report lock")
                                     .skipped_created_no_trash += 1;
                             }
-                            crate::undo::Reverted::Blocked(err) => {
+                            crate::undo::Reverted::Blocked { seq, error } => {
                                 report_task.lock().expect("undo report lock").blocked =
-                                    Some((entry.seq, err));
+                                    Some((seq, error));
                                 break; // estricto: para en el primer bloqueo.
+                            }
+                            // El árbol NO volvió: la Task FALLA. `Completed`
+                            // promete un árbol restaurado y aquí no lo está;
+                            // el paso que se quedó puesto va con nombres en
+                            // `UndoReport::batch_stuck`.
+                            crate::undo::Reverted::Stuck { seq, error } => {
+                                report_task.lock().expect("undo report lock").blocked =
+                                    Some((seq, error.clone()));
+                                return Err(error);
                             }
                         }
                         ctx.progress.update(|p| p.entries_done += 1);
@@ -1611,7 +1625,10 @@ pub const RENAME_BATCH_MAX_LISTING: usize = 100_000;
 /// completo para juzgar las colisiones, y un listado a medias produciría
 /// veredictos a medias. Por eso un error a mitad de stream PROPAGA en vez de
 /// devolver lo que se alcanzó a leer.
-async fn list_base_names(provider: &dyn Provider, dir: &VPath) -> Result<Vec<Vec<u8>>, Error> {
+pub(crate) async fn list_base_names(
+    provider: &dyn Provider,
+    dir: &VPath,
+) -> Result<Vec<Vec<u8>>, Error> {
     use futures::StreamExt;
     let mut stream = provider.list(dir).await?;
     let mut names = Vec::with_capacity(64);
@@ -1631,6 +1648,63 @@ async fn list_base_names(provider: &dyn Provider, dir: &VPath) -> Result<Vec<Vec
         }
     }
     Ok(names)
+}
+
+/// Qué evaluar en la policy para deshacer UNA unidad de undo: la operación y
+/// TODAS las rutas que tocará.
+///
+/// Reversa de un `Created` BORRA → `Delete` (una ruta), y desde #65 va SIEMPRE
+/// a papelera (o se salta): se gatea como `Trash`, no como `Permanent` — un
+/// deny de «solo-permanente» no debe parar el LIFO por una reversa que jamás
+/// borra permanente. `rename_back` / `restore_trash` REUBICAN → `Move` con DOS
+/// endpoints (origen y destino de la restauración): ambos deben pasar el gate,
+/// igual que un Move normal (security M2). El segundo endpoint es `path_to`
+/// (rename) o `reversal_ref` (trash).
+///
+/// De un LOTE se recogen los endpoints de TODOS sus miembros para gatear UNA
+/// vez: la policy resuelve el slice a lo más restrictivo, así que un lote que
+/// roza un nombre denegado se deniega entero y jamás a medias — la misma regla
+/// que [`Engine::rename_batch_as`] aplica en la ida.
+///
+/// `None` solo para una unidad vacía, que [`crate::undo::undo_units`] no
+/// produce.
+fn undo_gate_targets(
+    unit: &[crate::journal::JournalEntry],
+) -> Result<Option<(crate::policy::PolicyOp, Vec<VPath>)>, Error> {
+    let mut paths: Vec<VPath> = Vec::with_capacity(unit.len() * 2);
+    let mut op: Option<crate::policy::PolicyOp> = None;
+    for e in unit {
+        let (undo_op, second) = match e.reversal.as_str() {
+            "rename_back" => (
+                crate::policy::PolicyOp::Move,
+                e.path_to.as_deref().map(wire_engine).transpose()?,
+            ),
+            "restore_trash" => (
+                crate::policy::PolicyOp::Move,
+                e.reversal_ref.as_deref().map(wire_engine).transpose()?,
+            ),
+            _ => (
+                crate::policy::PolicyOp::Delete {
+                    mode: DeleteMode::Trash,
+                },
+                None,
+            ),
+        };
+        paths.push(wire_engine(&e.path)?);
+        if let Some(s) = second {
+            paths.push(s);
+        }
+        // Una unidad de varias es un lote de renames: mismo op para todos, así
+        // que este merge no se ejerce hoy. Si un journal corrupto los mezclara,
+        // gana `Delete` sobre `Move` porque quita un nodo de en medio y `Move`
+        // solo lo reubica: ante la duda, la que un usuario querría que le
+        // preguntaran. `revert_batch` bloquea la unidad de todas formas.
+        op = Some(match (op, undo_op) {
+            (Some(prev @ crate::policy::PolicyOp::Delete { .. }), _) => prev,
+            _ => undo_op,
+        });
+    }
+    Ok(op.map(|o| (o, paths)))
 }
 
 /// Reconstruye un `VPath` desde los bytes `to_wire` del journal (undo M3-2).

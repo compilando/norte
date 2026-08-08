@@ -69,6 +69,36 @@ async fn engine_with(names: &[&[u8]]) -> (Engine, Arc<MemProvider>, Arc<SqliteJo
     (engine, provider, journal, dir)
 }
 
+/// Applies `from → to` inside `dir` and journals it as the executor would,
+/// optionally inside `batch`. Lets a test build a journal whose entry ORDER is
+/// exact instead of racing two tasks for it.
+async fn rename_and_record(
+    provider: &MemProvider,
+    journal: &SqliteJournal,
+    dir: &VPath,
+    from: &[u8],
+    to: &[u8],
+    batch: Option<i64>,
+) {
+    let (src, dst) = (dir.join(seg(from)), dir.join(seg(to)));
+    provider.rename(&src, &dst).await.expect("rename");
+    let (path, path_to) = (dst.to_wire().into_bytes(), src.to_wire().into_bytes());
+    journal
+        .journal()
+        .record_entry(&norte_core::NewEntry {
+            op: "renamed",
+            path: &path,
+            path_to: Some(&path_to),
+            reversal: norte_core::Reversal::RenameBack,
+            reversal_ref: None,
+            actor: &norte_core::journal::Actor::User,
+            undoes_seq: None,
+            batch_id: batch,
+        })
+        .await
+        .expect("record");
+}
+
 /// The directory's base names, sorted.
 async fn names_in(provider: &MemProvider, dir: &VPath) -> Vec<Vec<u8>> {
     let mut stream = provider.list(dir).await.expect("list");
@@ -430,6 +460,426 @@ async fn a_cancelled_batch_rolls_back() {
             .expect("revertible")
             .is_empty(),
         "un lote cancelado no deja trabajo al undo",
+    );
+}
+
+// ---- session undo consumes the batch as ONE block --------------------------
+
+/// Undo of a batch is ONE step for the user: the permutation goes back whole.
+///
+/// It is also the case a per-entry undo can never do. Walking the three
+/// entries of a swap in LIFO order reverts `T → b` first, which frees nothing
+/// and puts the file back under a temporary name — and the next entry then
+/// finds its destination occupied. The batch has to reach the undo as one item.
+#[tokio::test]
+async fn undoing_a_session_reverts_the_whole_batch() {
+    let (engine, provider, journal, dir) = engine_with(&[b"a", b"b"]).await;
+    let before = names_in(&provider, &dir).await;
+    let ps = pairs(&[(b"a", b"b"), (b"b", b"a")]);
+    let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
+    let (applied, _r) = engine
+        .rename_batch(&dir, &ps, plan.hash())
+        .await
+        .expect("submit");
+    assert_eq!(applied.join().await, TaskState::Completed);
+
+    let (handle, report) = engine
+        .undo_session(norte_core::journal::Actor::User)
+        .await
+        .expect("undo");
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(names_in(&provider, &dir).await, before);
+    // Y cada fichero volvió a SU nombre, no solo el conjunto de nombres.
+    assert_eq!(
+        read_all(&provider, &dir.join(seg(b"a"))).await,
+        b"a".to_vec()
+    );
+    assert_eq!(
+        read_all(&provider, &dir.join(seg(b"b"))).await,
+        b"b".to_vec()
+    );
+    let r = report.lock().expect("report lock").clone();
+    assert!(r.blocked.is_none(), "{:?}", r.blocked);
+    assert_eq!(r.undone, 3, "las tres entradas del lote, deshechas");
+
+    // El undo es a su vez UN lote, y compensa las tres entradas originales, así
+    // que un segundo undo no tiene nada que hacer.
+    let es = journal.journal().entries().await.expect("entries");
+    let batches: std::collections::HashSet<_> = es.iter().filter_map(|e| e.batch_id).collect();
+    assert_eq!(batches.len(), 2, "el lote original y el que lo deshace");
+    assert_eq!(
+        es.iter().filter(|e| e.undoes_seq.is_some()).count(),
+        3,
+        "una compensación por entrada original",
+    );
+    assert!(
+        journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact(),
+    );
+    assert!(
+        journal
+            .journal()
+            .revertible_for(&norte_core::journal::Actor::User)
+            .await
+            .expect("revertible")
+            .is_empty(),
+        "un lote deshecho no deja trabajo a un undo posterior",
+    );
+}
+
+/// All or nothing: if ONE member of the batch cannot be reverted, the batch is
+/// not touched at all — no half-undo.
+#[tokio::test]
+async fn a_batch_whose_member_is_blocked_is_left_untouched() {
+    let (engine, provider, journal, dir) = engine_with(&[b"a", b"b"]).await;
+    let ps = pairs(&[(b"a", b"x"), (b"b", b"y")]);
+    let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
+    let (applied, _r) = engine
+        .rename_batch(&dir, &ps, plan.hash())
+        .await
+        .expect("submit");
+    assert_eq!(applied.join().await, TaskState::Completed);
+    // Alguien devolvió `a` a mano: revertir `x → a` lo pisaría.
+    write_file(&provider, &dir.join(seg(b"a")), b"mine").await;
+    let after_squat = names_in(&provider, &dir).await;
+
+    let (handle, report) = engine
+        .undo_session(norte_core::journal::Actor::User)
+        .await
+        .expect("undo");
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(
+        names_in(&provider, &dir).await,
+        after_squat,
+        "el lote bloqueado no se deshace a medias",
+    );
+    // Y `y` sigue siendo `y`: el miembro que SÍ se podía revertir tampoco se
+    // tocó. Esta es la propiedad; el listado de nombres por sí solo la deja
+    // pasar si alguien revierte `y → b` y luego se queda atascado en `x`.
+    assert_eq!(
+        read_all(&provider, &dir.join(seg(b"y"))).await,
+        b"b".to_vec(),
+    );
+    assert_eq!(
+        read_all(&provider, &dir.join(seg(b"a"))).await,
+        b"mine".to_vec(),
+        "el fichero del usuario sigue intacto",
+    );
+    let r = report.lock().expect("report lock").clone();
+    assert_eq!(r.undone, 0, "nada del lote se deshizo");
+    let (seq, err) = r.blocked.expect("el lote se bloquea");
+    assert!(matches!(err, Error::Conflict { .. }), "{err:?}");
+    // El `seq` señala la entrada CONCRETA que no se puede revertir, no el lote
+    // entero: es lo que el humano tiene que ir a mirar.
+    let es = journal.journal().entries().await.expect("entries");
+    let blocked_entry = es.iter().find(|e| e.seq == seq).expect("la entrada");
+    assert_eq!(
+        blocked_entry.path,
+        dir.join(seg(b"x")).to_wire().into_bytes(),
+        "la entrada bloqueada es la de `a → x`",
+    );
+
+    // Nada se compensó, así que el lote sigue pendiente entero: un undo
+    // posterior (una vez quitado el ocupante) lo encuentra completo.
+    assert_eq!(
+        journal
+            .journal()
+            .revertible_for(&norte_core::journal::Actor::User)
+            .await
+            .expect("revertible")
+            .len(),
+        2,
+    );
+    assert!(
+        journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact(),
+    );
+}
+
+/// Lo que para el lote bloqueado es el `feasible` de `undo.rs`, y NO el rechazo
+/// del provider.
+///
+/// `a_batch_whose_member_is_blocked_is_left_untouched` no distingue las dos
+/// cosas: sobre un `MemProvider` que ya rechaza un destino ocupado, borrar la
+/// simulación entera deja ese test verde igual, porque el paso que sobra falla
+/// en el provider y el ejecutor desanda lo que llevaba. El árbol acaba en el
+/// mismo sitio por un camino peor — pasando de verdad por el estado medio
+/// deshecho que el todo-o-nada existe para no visitar nunca.
+///
+/// Aquí el provider PISA (`rename_clobbers`, el posix-rename de sftp y el
+/// copy+delete de object): el cinturón de abajo desaparece y el fichero del
+/// usuario se destruye si la unidad llega a ejecutarse. Sin red debajo, lo
+/// único que puede dejar el directorio intacto es haber respondido ANTES de
+/// tocar el provider.
+#[tokio::test]
+async fn a_blocked_batch_is_stopped_by_the_gate_not_by_the_provider() {
+    let (engine, provider, journal, dir) = engine_with(&[b"a", b"b"]).await;
+    let user = norte_core::journal::Actor::User;
+    let ps = pairs(&[(b"a", b"x"), (b"b", b"y")]);
+    let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
+    let (applied, _r) = engine
+        .rename_batch(&dir, &ps, plan.hash())
+        .await
+        .expect("submit");
+    assert_eq!(applied.join().await, TaskState::Completed);
+    // Alguien devolvió `a` a mano: revertir `x → a` lo pisaría.
+    write_file(&provider, &dir.join(seg(b"a")), b"mine").await;
+    // …y este provider PISA en vez de rechazar. El no-clobber ya no lo pone él.
+    provider.faults().rename_clobbers(true);
+    let after_squat = names_in(&provider, &dir).await;
+
+    let (handle, report) = engine.undo_session(user.clone()).await.expect("undo");
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(
+        names_in(&provider, &dir).await,
+        after_squat,
+        "el lote bloqueado no se deshace a medias",
+    );
+    // LA propiedad: el fichero del usuario sigue vivo. Con la simulación
+    // neutralizada, el paso `x → a` lo habría BORRADO — el `mine` se pierde y
+    // en su sitio queda el contenido de `a`.
+    assert_eq!(
+        read_all(&provider, &dir.join(seg(b"a"))).await,
+        b"mine".to_vec(),
+        "el fichero del usuario sigue intacto: nadie llegó a renombrar encima",
+    );
+    // Y el miembro que SÍ se podía revertir tampoco se tocó.
+    assert_eq!(
+        read_all(&provider, &dir.join(seg(b"y"))).await,
+        b"b".to_vec(),
+    );
+    let r = report.lock().expect("report lock").clone();
+    assert_eq!(r.undone, 0, "nada del lote se deshizo");
+    assert!(r.batch_stuck.is_none(), "{:?}", r.batch_stuck);
+    assert_eq!(r.compensations_lost, 0);
+    let (_seq, err) = r.blocked.expect("el lote se bloquea");
+    assert!(matches!(err, Error::Conflict { .. }), "{err:?}");
+    // El lote sigue pendiente ENTERO: no se aplicó ni se compensó ni un paso.
+    assert_eq!(
+        journal
+            .journal()
+            .revertible_for(&user)
+            .await
+            .expect("revertible")
+            .len(),
+        2,
+    );
+    assert!(
+        journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact(),
+    );
+}
+
+/// Un lote PARTIDO por una mutación intercalada, con un miembro bloqueado: o
+/// vuelve entero o no vuelve nada.
+///
+/// Es la mitad que `a_batch_interleaved_with_another_mutation_is_still_one_unit`
+/// no llega a probar. Allí la suelta es inocua, así que agrupar por entradas
+/// CONTIGUAS parte el lote en dos y aun así el resultado sale bien: los
+/// fragmentos se aplican en el mismo orden LIFO global y cada uno cabe por su
+/// cuenta. El agrupado por contigüidad solo se delata cuando un fragmento cabe
+/// y el otro no — y entonces el primero ya se aplicó.
+///
+/// Con el ocupante en `a`, agrupar por contigüidad devuelve `y → b` (fragmento
+/// nuevo, viable) y se atasca luego en `x → a` (fragmento viejo): media
+/// permutación deshecha, que es el estado que toda esta funcionalidad existe
+/// para impedir. Agrupando por `batch_id` la unidad se juzga entera y no se
+/// toca nada.
+///
+/// El entrelazado se FABRICA (efectos reales + apuntes a mano) en vez de
+/// provocarse con dos tasks concurrentes: la carrera que interesa es un
+/// instante, y perseguirla con relojes es un test que un día se pone rojo por
+/// carga.
+#[tokio::test]
+async fn an_interleaved_batch_with_a_blocked_member_is_never_half_undone() {
+    let (engine, provider, journal, dir) = engine_with(&[b"a", b"b", b"lone"]).await;
+    let user = norte_core::journal::Actor::User;
+    let batch = journal.journal().alloc_batch().await.expect("alloc");
+
+    // Lote de dos renames independientes, con la suelta EN MEDIO.
+    rename_and_record(&provider, &journal, &dir, b"a", b"x", Some(batch)).await;
+    rename_and_record(&provider, &journal, &dir, b"lone", b"lone2", None).await;
+    rename_and_record(&provider, &journal, &dir, b"b", b"y", Some(batch)).await;
+    // Alguien devolvió `a` a mano: el miembro más VIEJO del lote ya no cabe.
+    write_file(&provider, &dir.join(seg(b"a")), b"mine").await;
+    let before = names_in(&provider, &dir).await;
+
+    let (handle, report) = engine.undo_session(user.clone()).await.expect("undo");
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(
+        names_in(&provider, &dir).await,
+        before,
+        "el lote partido no se deshace a medias",
+    );
+    // El miembro NUEVO del lote es el que un agrupado por contigüidad habría
+    // revertido solo: `y` tiene que seguir siendo `y`.
+    assert_eq!(
+        read_all(&provider, &dir.join(seg(b"y"))).await,
+        b"b".to_vec(),
+        "el fragmento viable del lote tampoco se toca",
+    );
+    assert_eq!(
+        read_all(&provider, &dir.join(seg(b"a"))).await,
+        b"mine".to_vec(),
+    );
+    let r = report.lock().expect("report lock").clone();
+    assert_eq!(r.undone, 0, "nada se deshizo: ni el lote ni la suelta");
+    let (_seq, err) = r.blocked.expect("el lote se bloquea");
+    assert!(matches!(err, Error::Conflict { .. }), "{err:?}");
+    // Las tres siguen pendientes: las dos del lote y la suelta, que el LIFO
+    // estricto no llega a tocar porque la unidad de arriba se bloqueó.
+    assert_eq!(
+        journal
+            .journal()
+            .revertible_for(&user)
+            .await
+            .expect("revertible")
+            .len(),
+        3,
+    );
+    assert!(
+        journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact(),
+    );
+}
+
+/// Un undo de lote que se cae DESPUÉS de aplicar un paso deja el lote otra vez
+/// deshacible: el ejecutor desanda lo que llevaba y las compensaciones que
+/// escribió dejan de valer.
+///
+/// La trampa que esto pincha es de contabilidad, no de ficheros. El undo del
+/// paso ya aplicado escribió una compensación `C` que TAPA su entrada original;
+/// al desandarse, se escribe `D` que compensa a `C`. Con la condición ingenua
+/// («existe alguna compensación») la original quedaba tapada para siempre por
+/// una `C` que ya no vale: el árbol seguía con el lote aplicado y el journal
+/// decía que no había nada que deshacer. Silencioso e irrecuperable.
+#[tokio::test]
+async fn an_undo_that_rolls_itself_back_leaves_the_batch_revertible() {
+    let (engine, provider, journal, dir) = engine_with(&[b"a", b"b"]).await;
+    let user = norte_core::journal::Actor::User;
+    let ps = pairs(&[(b"a", b"x"), (b"b", b"y")]);
+    let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
+    let (applied, _r) = engine
+        .rename_batch(&dir, &ps, plan.hash())
+        .await
+        .expect("submit");
+    assert_eq!(applied.join().await, TaskState::Completed);
+    let after_batch = names_in(&provider, &dir).await;
+
+    // El segundo paso del undo (`x → a`) falla; el primero (`y → b`) ya se
+    // aplicó y se desanda. `feasible` no lo ve: el ocupante no existe, es el
+    // provider el que se cae.
+    provider.faults().fail_rename_at(&dir.join(seg(b"x")));
+    let (handle, report) = engine.undo_session(user.clone()).await.expect("undo");
+    assert_eq!(handle.join().await, TaskState::Completed);
+    let r = report.lock().expect("report lock").clone();
+    assert_eq!(r.undone, 0, "el lote no se deshizo");
+    assert!(r.blocked.is_some());
+    assert!(r.batch_stuck.is_none(), "{:?}", r.batch_stuck);
+    assert_eq!(
+        names_in(&provider, &dir).await,
+        after_batch,
+        "el ejecutor devolvió el paso que había aplicado",
+    );
+
+    // LA propiedad: el lote sigue pendiente ENTERO.
+    let rev = journal
+        .journal()
+        .revertible_for(&user)
+        .await
+        .expect("revertible");
+    assert_eq!(
+        rev.len(),
+        2,
+        "las dos entradas del lote siguen por deshacer"
+    );
+
+    // Y quitado el fallo, el undo lo termina — sin haber pasado nunca por un
+    // estado medio deshecho.
+    provider.faults().clear();
+    let (handle, report) = engine.undo_session(user.clone()).await.expect("undo");
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert!(report.lock().expect("report lock").blocked.is_none());
+    assert_eq!(
+        names_in(&provider, &dir).await,
+        vec![b"a".to_vec(), b"b".to_vec()],
+    );
+    assert!(
+        journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact(),
+    );
+}
+
+/// Un lote y una mutación suelta ENTRELAZADOS en el journal: el lote se sigue
+/// consumiendo entero.
+///
+/// El agrupado no puede ser «entradas consecutivas». El scheduler corre hasta
+/// cuatro tasks por provider, así que otra mutación del MISMO actor puede
+/// aterrizar entre dos entradas del lote; con agrupado por contigüidad el lote
+/// se partiría en dos unidades y la primera lo dejaría a medias — que es
+/// exactamente lo que esta función existe para impedir.
+///
+/// El entrelazado se FABRICA (efectos reales sobre el provider + apuntes a
+/// mano) en vez de provocarse con dos tasks concurrentes: la carrera que
+/// interesa es un instante, y un test que la persiga con relojes es un test
+/// que un día se pone rojo por carga.
+#[tokio::test]
+async fn a_batch_interleaved_with_another_mutation_is_still_one_unit() {
+    let (engine, provider, journal, dir) = engine_with(&[b"a", b"b", b"lone"]).await;
+    let user = norte_core::journal::Actor::User;
+    let batch = journal.journal().alloc_batch().await.expect("alloc");
+    let temp = b".norte-rename-tmp";
+    let step = |from: &'static [u8], to: &'static [u8], b: Option<i64>| {
+        rename_and_record(&provider, &journal, &dir, from, to, b)
+    };
+
+    // Permutación `a ↔ b` aplicada a mano, con la suelta EN MEDIO.
+    step(b"a", temp, Some(batch)).await;
+    // …y aquí se cuela la mutación suelta, entre la primera y la última del lote.
+    step(b"lone", b"lone2", None).await;
+    step(b"b", b"a", Some(batch)).await;
+    step(temp, b"b", Some(batch)).await;
+
+    let (handle, report) = engine.undo_session(user.clone()).await.expect("undo");
+    assert_eq!(handle.join().await, TaskState::Completed);
+    let r = report.lock().expect("report lock").clone();
+    assert!(r.blocked.is_none(), "{:?}", r.blocked);
+    assert_eq!(r.undone, 4, "las tres del lote más la suelta");
+    let mut want = vec![b"a".to_vec(), b"b".to_vec(), b"lone".to_vec()];
+    want.sort();
+    assert_eq!(names_in(&provider, &dir).await, want);
+    assert_eq!(
+        read_all(&provider, &dir.join(seg(b"a"))).await,
+        b"a".to_vec(),
+        "la permutación volvió del todo",
+    );
+    assert!(
+        journal
+            .journal()
+            .revertible_for(&user)
+            .await
+            .expect("revertible")
+            .is_empty(),
     );
 }
 
