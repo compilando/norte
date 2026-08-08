@@ -187,10 +187,15 @@ impl Authority {
 /// Invariantes (validadas en construcción, nunca saneadas en silencio):
 /// no vacío, sin NUL, sin `/`, distinto de `.` y `..`.
 ///
+/// The wire form is a percent-encoded string (ADR 0001, the same codec
+/// `VPath` uses), and it is what serde (de)serializes — see
+/// [`Segment::to_wire`] / [`Segment::parse_wire`].
+///
 /// ```
 /// use norte_proto::Segment;
 /// let s = Segment::new(vec![0xFF, 0xFE]).unwrap(); // bytes no-UTF8: válidos
 /// assert_eq!(s.as_bytes(), &[0xFF, 0xFE]);
+/// assert_eq!(s.to_string(), "%FF%FE");
 /// assert!(Segment::new(b"a/b".to_vec()).is_err());
 /// ```
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -224,11 +229,52 @@ impl Segment {
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
+
+    /// The percent-encoded wire form (ADR 0001) — the same codec `VPath`
+    /// uses, and what serde serializes.
+    ///
+    /// ```
+    /// use norte_proto::Segment;
+    /// let s = Segment::new(vec![0xFF, 0xFE]).unwrap();
+    /// assert_eq!(s.to_wire(), "%FF%FE");
+    /// ```
+    #[must_use]
+    pub fn to_wire(&self) -> String {
+        let mut out = String::new();
+        vpath_codec::encode_segment(&self.0, &mut out);
+        out
+    }
+
+    /// Parses the percent-encoded wire form of a single segment. Accepts
+    /// non-canonical forms (`%41` ≡ `A`); [`Self::to_wire`] canonicalizes.
+    ///
+    /// # Errors
+    /// [`VPathError::BadEscape`] for a malformed escape, or whatever
+    /// [`Segment::new`] would return once decoded (empty, NUL, `/`, `.`/`..`
+    /// — the invariant is validated POST-decode, so `%2E%2E` cannot smuggle
+    /// in a `..`).
+    ///
+    /// ```
+    /// use norte_proto::Segment;
+    /// let s = Segment::parse_wire("%FF%FE").unwrap();
+    /// assert_eq!(s.as_bytes(), &[0xFF, 0xFE]);
+    /// ```
+    pub fn parse_wire(wire: &str) -> Result<Self, VPathError> {
+        let bytes = vpath_codec::decode_segment(wire)?;
+        Self::new(bytes)
+    }
 }
 
 impl fmt::Debug for Segment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Segment({:?})", String::from_utf8_lossy(&self.0))
+    }
+}
+
+/// `Display` es la forma wire (lossless), igual que en `VPath`.
+impl fmt::Display for Segment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_wire())
     }
 }
 
@@ -687,6 +733,56 @@ impl schemars::JsonSchema for VPath {
             "description": "VPath wire string: `scheme://authority/segments`. \
                             Filenames are bytes; non-UTF-8 segments use the \
                             percent-encoded wire form.",
+        })
+    }
+}
+
+impl Serialize for Segment {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_wire())
+    }
+}
+
+impl<'de> Deserialize<'de> for Segment {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SegmentVisitor;
+
+        impl Visitor<'_> for SegmentVisitor {
+            type Value = Segment;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a percent-encoded path segment")
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Segment, E> {
+                Segment::parse_wire(v).map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(SegmentVisitor)
+    }
+}
+
+// A `Segment` is (de)serialized as a single wire string with the same codec
+// `VPath` uses (ADR 0001), so its JSON Schema is a string — it cannot be
+// derived because the serde is hand-written (filenames are bytes).
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Segment {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Segment".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "minLength": 1,
+            "description": "One path component in its percent-encoded wire form \
+                            (ADR 0001). Never assume UTF-8: the decoded bytes are \
+                            the name. A literal `%` is always `%25`, and C0/DEL \
+                            control bytes are always escaped, even inside \
+                            otherwise-valid UTF-8. The decoded bytes must be \
+                            non-empty, must not contain `/` or NUL, and must not \
+                            be `.` or `..`.",
         })
     }
 }

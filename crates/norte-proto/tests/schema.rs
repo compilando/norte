@@ -109,6 +109,7 @@ struct ProtocolSchema {
     resume_policy: ResumePolicy,
     rpc_cancel_params: RpcCancelParams,
     search_hits: SearchHits,
+    segment: Segment,
     semantic_hit: SemanticHit,
     server_info: ServerInfo,
     span_wire: SpanWire,

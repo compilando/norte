@@ -118,6 +118,24 @@ proptest! {
         prop_assert_eq!(p, q);
     }
 
+    /// Serde roundtrip de `Segment` por JSON real — la propiedad análoga a
+    /// `prop_serde_roundtrip` pero para el tipo de UN componente.
+    #[test]
+    fn prop_segment_serde_roundtrip(bytes in arb_segment_bytes()) {
+        let s = Segment::new(bytes).expect("estrategia genera segmentos válidos");
+        let json = serde_json::to_string(&s).expect("serializable");
+        let q: Segment = serde_json::from_str(&json).expect("deserializable");
+        prop_assert_eq!(s, q);
+    }
+
+    /// El wire de un `Segment` jamás lleva controles crudos (terminal
+    /// injection en logs) — análoga a `prop_wire_no_raw_controls` para `VPath`.
+    #[test]
+    fn prop_segment_wire_no_raw_controls(bytes in arb_segment_bytes()) {
+        let s = Segment::new(bytes).expect("estrategia genera segmentos válidos");
+        prop_assert!(!s.to_wire().chars().any(|c| c.is_ascii_control()));
+    }
+
     /// display_lossy termina siempre; segmentos UTF-8 limpios (sin U+FFFD
     /// legítimo ni controles) no introducen `�`.
     #[test]

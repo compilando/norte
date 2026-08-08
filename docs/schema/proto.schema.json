@@ -2447,6 +2447,11 @@
       ],
       "type": "object"
     },
+    "Segment": {
+      "description": "One path component in its percent-encoded wire form (ADR 0001). Never assume UTF-8: the decoded bytes are the name. A literal `%` is always `%25`, and C0/DEL control bytes are always escaped, even inside otherwise-valid UTF-8. The decoded bytes must be non-empty, must not contain `/` or NUL, and must not be `.` or `..`.",
+      "minLength": 1,
+      "type": "string"
+    },
     "SemanticHit": {
       "description": "Un hit semántico: path + similitud coseno. Sin `Eq` (a diferencia de sus\nhermanos de `index.*`): `score` es `f64`.",
       "properties": {
@@ -3126,6 +3131,9 @@
     "search_hits": {
       "$ref": "#/$defs/SearchHits"
     },
+    "segment": {
+      "$ref": "#/$defs/Segment"
+    },
     "semantic_hit": {
       "$ref": "#/$defs/SemanticHit"
     },
@@ -3267,6 +3275,7 @@
     "resume_policy",
     "rpc_cancel_params",
     "search_hits",
+    "segment",
     "semantic_hit",
     "server_info",
     "span_wire",

@@ -217,6 +217,80 @@ fn segment_rejects_invalid() {
     );
 }
 
+// ---------- serde de Segment ----------
+
+/// A `Segment` crosses the wire as ONE percent-encoded string, with the same
+/// codec `VPath` uses, and non-UTF-8 bytes survive the round trip (rule 1).
+#[test]
+fn segment_round_trips_non_utf8_bytes_as_percent_encoded_string() {
+    let raw = b"caf\xff\xfe.txt".to_vec();
+    let s = seg(&raw);
+    let json = serde_json::to_string(&s).unwrap();
+    assert_eq!(json, "\"caf%FF%FE.txt\"");
+    let back: Segment = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.as_bytes(), &raw[..]);
+}
+
+/// A name that already LOOKS like a percent-escape (`%41` ≡ `A`) is not a
+/// silent-corruption trap: `Segment::new` takes the bytes literally (this is
+/// a filename that contains a `%`, not an escape), so the codec must escape
+/// that literal `%` on encode (`%` -> `%25`) and decode it back to the SAME
+/// bytes — never to `aAb`, which is what a codec that forgot to escape the
+/// literal `%` would silently produce (mirrors `serde_ser_is_wire`'s
+/// `50%25` case for `VPath`, above).
+#[test]
+fn segment_round_trips_a_name_that_looks_like_an_escape() {
+    let s = seg(b"a%41b");
+    let json = serde_json::to_string(&s).unwrap();
+    assert_eq!(json, "\"a%2541b\"");
+    let back: Segment = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.as_bytes(), b"a%41b");
+}
+
+/// The WTF-8 lone-surrogate shape (Windows, `OsStr::as_encoded_bytes`, see
+/// the module header) round trips like any other non-UTF-8 byte sequence.
+#[test]
+fn segment_serde_roundtrip_wtf8_lone_surrogate() {
+    let s = seg(&[0xED, 0xA0, 0x80]);
+    let json = serde_json::to_string(&s).unwrap();
+    let back: Segment = serde_json::from_str(&json).unwrap();
+    assert_eq!(s, back);
+}
+
+/// A malformed escape is a deserialization ERROR, never a lossy salvage.
+#[test]
+fn segment_rejects_a_malformed_percent_escape() {
+    let err = serde_json::from_str::<Segment>("\"a%G1\"").unwrap_err();
+    assert!(
+        err.to_string().contains("malformed percent escape"),
+        "unexpected error: {err}",
+    );
+}
+
+/// A segment that `Segment::new` would refuse (a `/`, a NUL, `.`, `..`, the
+/// empty string) is refused on the wire too — including the ESCAPED spelling
+/// of a dot-segment (`%2E%2E`), which is the actual traversal-bypass attempt
+/// (mirrors `err_encoded_dotdot` for `VPath`, above). The invariant is not
+/// bypassable by deserializing, and asserting on the message rules out
+/// rejection coming from the wrong stage (decode vs. `Segment::new`).
+#[test]
+fn segment_rejects_wire_forms_that_break_its_invariant() {
+    for (wire, expect) in [
+        ("\"a%2Fb\"", "invalid byte in segment"),
+        ("\"a%00b\"", "NUL byte in segment"),
+        ("\"..\"", "dot segment"),
+        ("\"%2E%2E\"", "dot segment"),
+        ("\".\"", "dot segment"),
+        ("\"\"", "empty path segment"),
+    ] {
+        let err = serde_json::from_str::<Segment>(wire).unwrap_err();
+        assert!(
+            err.to_string().contains(expect),
+            "{wire} should be rejected with a message containing {expect:?}, got {err}",
+        );
+    }
+}
+
 // ---------- constructor de Authority ----------
 
 #[test]
