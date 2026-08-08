@@ -12,7 +12,6 @@ use std::collections::{HashMap, HashSet};
 use unicode_normalization::{UnicodeNormalization, is_nfc};
 
 use super::naming::{TempNames, intent_tag, plan_hash};
-use crate::hashing::hex_lower;
 
 /// What the DESTINATION DIRECTORY says about names.
 ///
@@ -150,12 +149,6 @@ impl RenamePlan {
     #[must_use]
     pub fn executable(&self) -> bool {
         self.collisions.is_empty()
-    }
-
-    /// [`hash`](Self::hash) as lowercase hex, the form it travels in.
-    #[must_use]
-    pub fn hash_hex(&self) -> String {
-        hex_lower(&self.hash)
     }
 }
 
@@ -375,7 +368,7 @@ impl<'a> Listing<'a> {
 /// let plan = plan_batch(&pairs, &[b"a".to_vec(), b"b".to_vec()], caps);
 /// assert!(plan.executable());
 /// assert_eq!(plan.steps.len(), 3);
-/// assert_eq!(plan.hash_hex().len(), 64);
+/// assert_eq!(plan.hash.len(), 32);
 /// ```
 #[must_use]
 pub fn plan_batch(pairs: &[(Vec<u8>, Vec<u8>)], listing: &[Vec<u8>], caps: NameCaps) -> RenamePlan {
@@ -1123,7 +1116,7 @@ mod tests {
         let p = plan_batch(&[], &[name(b"a")], SENSITIVE);
         assert!(p.executable());
         assert!(p.steps.is_empty());
-        assert_eq!(p.hash_hex().len(), 64);
+        assert_eq!(p.hash.len(), 32);
     }
 
     /// The temporary steps ASIDE for a real file that already owns the name it
@@ -1219,11 +1212,12 @@ mod tests {
         );
     }
 
-    /// The hex form is what the wire carries: 64 lowercase hex digits.
+    /// The hash is a full sha256, and its hex form (which the DIRECTORY-bound
+    /// token in `rename::exec` is built from) is 64 lowercase hex digits.
     #[test]
     fn hash_hex_is_sixty_four_lowercase_hex_digits() {
         let p = plan_batch(&pairs(&[(b"a", b"x")]), &[name(b"a")], SENSITIVE);
-        let hex = p.hash_hex();
+        let hex = crate::hashing::hex_lower(&p.hash);
         assert_eq!(hex.len(), 64);
         assert!(
             hex.bytes()

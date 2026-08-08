@@ -944,9 +944,22 @@ impl Provider for MemProvider {
         if let Some(real_to) = resolve(&tree, lk, &canon_to)
             && real_to != real_from
         {
-            return Err(Error::Conflict {
-                conflict: collision_kind(&real_to, &canon_to),
-            });
+            if !self.faults.renames_clobber() {
+                return Err(Error::Conflict {
+                    conflict: collision_kind(&real_to, &canon_to),
+                });
+            }
+            // Provider que PISA (fallo inyectado): el destino y su subárbol
+            // desaparecen, como haría un posix-rename.
+            let victims: Vec<SegPath> = tree
+                .nodes
+                .keys()
+                .filter(|k| k.starts_with(&real_to))
+                .cloned()
+                .collect();
+            for k in victims {
+                tree.nodes.remove(&k);
+            }
         }
         // Mueve el nodo y todo su subárbol.
         let moved: Vec<(SegPath, Node)> = tree

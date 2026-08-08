@@ -39,6 +39,7 @@ use crate::journal::{Actor, NewEntry, Reversal, SqliteJournal};
 use crate::observer::{Mutation, MutationObserver};
 use crate::progress::ProgressReporter;
 use crate::rename::plan::{RenamePlan, Step};
+use crate::undo::is_free;
 
 /// A plan plus the token that binds it to the DIRECTORY it was planned
 /// against.
@@ -51,9 +52,13 @@ use crate::rename::plan::{RenamePlan, Step};
 /// what the caller receives and hands back is always the bound form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirPlan {
-    /// What the planner decided: ordered steps, verdicts, and its own hash
-    /// (which is NOT the token — see [`Self::hash`]).
-    pub plan: RenamePlan,
+    /// What the planner decided. PRIVATE on purpose: `RenamePlan` carries its
+    /// own unbound hash, which is another 64-char lowercase hex string and is
+    /// indistinguishable from the token at a call site. Handing the wrong one
+    /// to the wire would either break the feature outright or, worse, be
+    /// "fixed" by comparing the unbound hash — which is the cross-directory
+    /// replay this type exists to prevent, with no test to notice.
+    plan: RenamePlan,
     /// The token, bound to the directory.
     hash: PlanHash,
 }
@@ -75,10 +80,17 @@ impl DirPlan {
     }
 
     /// The token to approve and hand back to
-    /// [`Engine::rename_batch`](crate::Engine::rename_batch).
+    /// [`Engine::rename_batch`](crate::Engine::rename_batch). The ONLY hash
+    /// that method accepts.
     #[must_use]
     pub fn hash(&self) -> &PlanHash {
         &self.hash
+    }
+
+    /// The steps and the verdicts, for rendering.
+    #[must_use]
+    pub fn plan(&self) -> &RenamePlan {
+        &self.plan
     }
 
     /// Can this plan run as it is?
@@ -218,9 +230,10 @@ impl StepJournal for BatchJournal {
     }
 }
 
-/// The step the rollback could not undo. `Some` in a [`BatchReport`] means the
-/// directory is HALF RENAMED and the user has to be told exactly where — a
-/// bare error would leave them hunting for it.
+/// A step this batch could not clean up after, and exactly where it is.
+///
+/// `Some` in a [`BatchReport`] means the directory is HALF RENAMED. A bare
+/// error would leave the user hunting for the file; this names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StuckStep {
     /// The name the file had before the batch — where it could not be put
@@ -230,19 +243,28 @@ pub struct StuckStep {
     pub to: VPath,
     /// The requested pair this step descends from.
     pub pair_index: u32,
-    /// Why the reversal was refused.
+    /// Why the reversal was refused, or why the step's fate is unknown.
     pub error: Error,
+    /// Whether this step has a journal entry behind it.
+    ///
+    /// It decides who has to clean up. `true`: the entry describes the rename,
+    /// so a later `undo` can finish the job once the obstacle is gone. `false`:
+    /// the rename took effect but its entry never landed (rule 4 — the journal
+    /// does not know it happened), so no undo will ever find it and only a
+    /// human can put this one back.
+    pub journalled: bool,
     /// How many steps of this batch are still applied, this one included.
-    /// Every one of them is still described by its journal entry, so a later
-    /// `undo` can finish the job once the obstacle is gone.
+    /// Everything under it in the stack is journalled — the unjournalled step
+    /// is always the last one pushed and therefore the first one popped.
     pub still_applied: u64,
 }
 
 /// What a batch did. Complete once the task reaches a terminal state.
 ///
-/// A clean run leaves `applied == steps` and everything else empty. Any other
-/// shape is the executor telling the truth about a directory it could not
-/// leave the way it found it.
+/// A clean run leaves `applied == steps` and everything else empty. **Any
+/// other shape is the executor telling the truth about a directory it could
+/// not leave the way it found it** — read it even when the task failed, and
+/// especially when the task says `Cancelled`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BatchReport {
     /// Steps applied AND journalled.
@@ -251,17 +273,27 @@ pub struct BatchReport {
     pub rolled_back: u64,
     /// The requested pair whose step failed, if one did.
     pub failed_pair: Option<u32>,
-    /// Set when the rollback itself was refused; see [`StuckStep`].
+    /// The rollback was refused here and stopped; see [`StuckStep`].
     pub stuck: Option<StuckStep>,
-}
-
-/// `true` when `p` does not exist.
-async fn is_free(provider: &dyn Provider, p: &VPath) -> Result<bool, Error> {
-    match provider.stat(p).await {
-        Err(Error::NotFound) => Ok(true),
-        Ok(_) => Ok(false),
-        Err(e) => Err(e),
-    }
+    /// A step whose provider reported failure and which could not then be
+    /// PROBED, so whether it took effect is unknown — the connection that
+    /// dropped mid-rename is also the connection the two `stat`s need.
+    ///
+    /// It is reported rather than assumed in either direction: assuming it
+    /// landed would rename a file that may not be there, and assuming it did
+    /// not is how an unjournalled rename ends up outside both the journal and
+    /// this report. Nothing was done about it. `to` is where to look.
+    pub uncertain: Option<StuckStep>,
+    /// Reversals that were APPLIED but whose compensating journal entry could
+    /// not be written.
+    ///
+    /// The tree is back; the journal still says the forward rename is in
+    /// effect. That is not cosmetic: the forward entry keeps `undoes_seq IS
+    /// NULL`, so a later `undo_session` will reach it, find the destination
+    /// already vacated, and block — and `undo_session` is strict LIFO, so it
+    /// stops there and everything older in that session stops with it. A
+    /// non-zero count here is the only warning of that.
+    pub compensations_lost: u64,
 }
 
 /// One step that has been applied and may have to be put back.
@@ -289,18 +321,64 @@ impl Applied {
             journalled: false,
         }
     }
+
+    /// This step as a report entry, with the rest of the stack counted in.
+    fn stuck(&self, error: Error, below: usize) -> StuckStep {
+        StuckStep {
+            from: self.from.clone(),
+            to: self.to.clone(),
+            pair_index: self.pair_index,
+            error,
+            journalled: self.journalled,
+            still_applied: below as u64 + 1,
+        }
+    }
+}
+
+/// What a probe could establish about a step whose `rename` reported failure.
+enum Landed {
+    /// It took effect: the destination is there and the source is gone.
+    Yes,
+    /// It did not: the destination is free, or the source is still there.
+    No,
+    /// The probe itself could not answer.
+    Unknown,
 }
 
 /// Did `s` take effect despite the provider reporting failure?
 ///
-/// Only `true` when the destination is there AND the source is gone: a
-/// destination alone could be a file somebody else just created, and guessing
-/// wrong here means renaming a stranger's file during a rollback. Anything the
-/// probe cannot establish — a `stat` that errors too — answers `false`, which
-/// leaves the step alone rather than acting on a guess.
-async fn landed(provider: &dyn Provider, s: &PlannedStep) -> bool {
-    matches!(is_free(provider, &s.to).await, Ok(false))
-        && matches!(is_free(provider, &s.from).await, Ok(true))
+/// BOTH halves are load-bearing. A destination that exists proves nothing on
+/// its own — it could be a file somebody else just created — and acting on it
+/// would rename a stranger's file during a rollback. A source that is still
+/// there proves the rename did not happen whatever the destination looks like.
+async fn landed(provider: &dyn Provider, s: &PlannedStep) -> Landed {
+    // `Ok(false)` = the destination exists; `Ok(true)` = the source is gone.
+    let dest = is_free(provider, &s.to).await;
+    let src = is_free(provider, &s.from).await;
+    match (dest, src) {
+        (Ok(false), Ok(true)) => Landed::Yes,
+        (Ok(true), _) | (_, Ok(false)) => Landed::No,
+        _ => Landed::Unknown,
+    }
+}
+
+/// Could this `rename` error have been reported AFTER the effect landed?
+///
+/// A closed list of the categories that mean "nothing happened", and probe for
+/// everything else — the safe direction, since the cost of probing needlessly
+/// is two `stat`s on a path that already failed. `NotFound` matters most: it is
+/// what a racing delete of the source produces, and probing there is what would
+/// let a third party who then creates the destination steer the rollback.
+fn may_have_applied(e: &Error) -> bool {
+    !matches!(
+        e,
+        Error::NotFound
+            | Error::Conflict { .. }
+            | Error::InvalidPath
+            | Error::PermissionDenied
+            | Error::Unsupported
+            | Error::PolicyDenied { .. }
+    )
 }
 
 /// Executes `steps` in order against `provider`, recording each one.
@@ -336,8 +414,12 @@ pub(crate) async fn run(
         // half-applied `rename` is not a thing, and a cancelled batch has to
         // roll back exactly like a failed one.
         if cancel.is_cancelled() {
-            unwind(provider, recorder, &mut applied, report).await;
-            return Err(Error::Cancelled);
+            let blocked = unwind(provider, recorder, &mut applied, progress, report).await;
+            // A rollback that got stuck must NOT answer `Cancelled`. The whole
+            // repo reads a cancelled task as "the tree is as it was" (the same
+            // promise a cancelled copy makes), and here it is not: the error
+            // sends the task to `Failed`, where nobody assumes anything.
+            return Err(blocked.unwrap_or(Error::Cancelled));
         }
         if let Err(e) = provider.rename(&s.from, &s.to).await {
             report.lock().expect("batch report lock").failed_pair = Some(s.pair_index);
@@ -345,16 +427,33 @@ pub(crate) async fn run(
             // effect (issue #17): sftp acknowledges and the connection dies,
             // object storage is copy+delete. Believing the error would leave
             // that one rename applied, unjournalled and outside the report —
-            // the exact state this module exists to make impossible. Two stats
-            // on the error path settle it.
-            if landed(provider, s).await {
-                tracing::warn!(
-                    pair_index = s.pair_index,
-                    "el rename falló DESPUÉS de aplicarse; se desanda igual",
-                );
-                applied.push(Applied::unjournalled(s));
+            // the exact state this module exists to make impossible.
+            if may_have_applied(&e) {
+                match landed(provider, s).await {
+                    Landed::Yes => {
+                        tracing::warn!(
+                            pair_index = s.pair_index,
+                            "el rename falló DESPUÉS de aplicarse; se desanda igual",
+                        );
+                        applied.push(Applied::unjournalled(s));
+                    }
+                    Landed::No => {}
+                    // The connection that dropped mid-rename is the same one
+                    // the probe needs. Say so instead of guessing: guessing
+                    // "landed" renames a file that may not be there, and
+                    // guessing "did not" is how an unjournalled rename ends up
+                    // outside both the journal and this report.
+                    Landed::Unknown => {
+                        tracing::error!(
+                            pair_index = s.pair_index,
+                            "no se pudo determinar si el rename llegó a aplicarse",
+                        );
+                        let unknown = Applied::unjournalled(s).stuck(e.clone(), applied.len());
+                        report.lock().expect("batch report lock").uncertain = Some(unknown);
+                    }
+                }
             }
-            unwind(provider, recorder, &mut applied, report).await;
+            unwind(provider, recorder, &mut applied, progress, report).await;
             return Err(e);
         }
         match recorder.renamed(&s.from, &s.to, s.undoes).await {
@@ -381,7 +480,7 @@ pub(crate) async fn run(
                 // that a later undo would dutifully try to reverse.
                 report.lock().expect("batch report lock").failed_pair = Some(s.pair_index);
                 applied.push(Applied::unjournalled(s));
-                unwind(provider, recorder, &mut applied, report).await;
+                unwind(provider, recorder, &mut applied, progress, report).await;
                 return Err(e);
             }
         }
@@ -392,25 +491,33 @@ pub(crate) async fn run(
 /// Renames every applied step back, newest first, journalling each reversal as
 /// a compensation of the entry it undoes (the M3-2 mechanism, not a new one).
 ///
+/// Returns the error that stopped it, if one did — the caller prefers that over
+/// [`Error::Cancelled`], because a task that answers "cancelled" is promising a
+/// tree that came back.
+///
 /// It is deliberately NOT cancellable: a cancelled rollback is the half-renamed
 /// directory the whole feature exists to prevent, and the token that got us
-/// here is already cancelled.
+/// here is already cancelled. It has no deadline either, so a batch that dies
+/// on a hung connection holds its scheduler permit for the sum of the
+/// reversals' timeouts — accepted, and the cost of the alternative (a partial
+/// rollback on a slow but healthy link) is worse.
 async fn unwind(
     provider: &dyn Provider,
     recorder: &dyn StepJournal,
     applied: &mut Vec<Applied>,
+    progress: &ProgressReporter,
     report: &Mutex<BatchReport>,
-) {
+) -> Option<Error> {
     while let Some(step) = applied.pop() {
-        // No-clobber, checked explicitly and only on this path. `rename` is
-        // contractually non-overwriting and local closes it atomically with
-        // `renameat2(NOREPLACE)`, but sftp and object cannot (posix-rename
-        // clobbers; object is copy+delete), and here the file that would be
-        // destroyed is one the user created WHILE the batch was failing. One
-        // `stat` per rolled-back step, on the error path only, is worth it.
-        // The same check is not made on the way forward: there `rename`'s own
-        // refusal is the guard, it costs nothing, and it is atomic where a
-        // stat is merely a guess about the next instant.
+        // No-clobber, checked explicitly and only on this path. `Provider::
+        // rename` already refuses an occupied destination — atomically on
+        // local (`renameat2(NOREPLACE)`), by its own check-then-act on sftp and
+        // object. So this buys a clearer verdict and a slightly narrower window
+        // on the providers that race, not a new guarantee; what makes it worth
+        // one `stat` per rolled-back step is that the file at stake here is one
+        // the user created WHILE the batch was failing. The same check is not
+        // made on the way forward, where `rename`'s refusal is the guard and a
+        // stat would only be a guess about the next instant.
         let occupied = match is_free(provider, &step.from).await {
             Ok(true) => None,
             Ok(false) => Some(Error::Conflict {
@@ -426,33 +533,41 @@ async fn unwind(
             tracing::error!(
                 error = %error,
                 pair_index = step.pair_index,
+                journalled = step.journalled,
                 "rollback del lote bloqueado: el directorio queda a medio renombrar",
             );
-            report.lock().expect("batch report lock").stuck = Some(StuckStep {
-                from: step.from,
-                to: step.to,
-                pair_index: step.pair_index,
-                error,
-                // This step plus everything still under it in the stack.
-                still_applied: applied.len() as u64 + 1,
-            });
-            return;
+            let stuck = step.stuck(error.clone(), applied.len());
+            report.lock().expect("batch report lock").stuck = Some(stuck);
+            return Some(error);
         }
         if step.journalled {
-            // The compensation is itself a mutation. If IT cannot be recorded
-            // the effect has already happened, so the loop carries on and the
-            // journal is left describing more than the tree holds — logged
-            // loudly, because that is the one direction a `verify_chain` will
-            // not catch.
+            // The compensation is itself a mutation, and it is what marks the
+            // forward entry as undone. If it does not land, the tree is back
+            // but the journal is not: the forward entry stays revertible, a
+            // later `undo_session` reaches it, finds the destination already
+            // vacated and BLOCKS — and being strict LIFO it stops there, taking
+            // everything older in that session with it. Hence the counter: this
+            // is the one direction `verify_chain` cannot see.
             if let Err(e) = recorder.renamed(&step.to, &step.from, step.seq).await {
                 tracing::error!(
                     error = %e,
-                    "paso de rollback aplicado pero NO registrado en el journal",
+                    pair_index = step.pair_index,
+                    "reversa aplicada pero NO compensada en el journal: el undo de \
+                     esta sesión se bloqueará aquí",
                 );
+                report.lock().expect("batch report lock").compensations_lost += 1;
             }
+            // The step gave progress back, so progress gives it back too — a
+            // fully rolled-back batch that still read `8/12 done` would be the
+            // third teller of a different story.
+            progress.update(|p| {
+                p.entries_done = p.entries_done.saturating_sub(1);
+                p.current = None;
+            });
         }
         report.lock().expect("batch report lock").rolled_back += 1;
     }
+    None
 }
 
 #[cfg(test)]
@@ -872,6 +987,299 @@ mod tests {
         assert_eq!(recorder.n.load(Ordering::SeqCst), 2);
     }
 
+    /// The executor's OWN no-clobber guard, proved against a provider that
+    /// really does overwrite.
+    ///
+    /// `the_rollback_refuses_to_overwrite_a_name_someone_took_back` passes with
+    /// the `is_free` check deleted, because `MemProvider::rename` refuses on its
+    /// own — so what it proves is the provider's contract, not this belt. The
+    /// providers the belt was written for (sftp posix-rename, object
+    /// copy+delete) are exactly the ones that cannot refuse, and `rename_clobbers`
+    /// is how the testkit can now speak for them.
+    #[tokio::test]
+    async fn the_rollback_holds_even_when_the_provider_would_overwrite() {
+        struct SquatThenFail {
+            mem: Arc<MemProvider>,
+            squat: VPath,
+            n: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl StepJournal for SquatThenFail {
+            async fn renamed(
+                &self,
+                _from: &VPath,
+                _to: &VPath,
+                _undoes: Option<i64>,
+            ) -> Result<Option<i64>, Error> {
+                if self.n.fetch_add(1, Ordering::SeqCst) == 1 {
+                    write_file(&self.mem, &self.squat, b"mine").await;
+                    return Err(Error::Internal { panic: false });
+                }
+                Ok(Some(1))
+            }
+        }
+
+        let mem = Arc::new(MemProvider::new());
+        let dir = MemProvider::root();
+        write_file(&mem, &dir.join(seg(b"a")), b"a").await;
+        write_file(&mem, &dir.join(seg(b"b")), b"b").await;
+        let pairs = vec![
+            (b"a".to_vec(), b"x".to_vec()),
+            (b"b".to_vec(), b"y".to_vec()),
+        ];
+        let steps = steps_for(&mem, &dir, &pairs).await;
+        let recorder = SquatThenFail {
+            mem: Arc::clone(&mem),
+            squat: dir.join(seg(b"a")),
+            n: AtomicUsize::new(0),
+        };
+        // A provider whose `rename` overwrites, like the two remote ones.
+        mem.faults().rename_clobbers(true);
+        let report = Mutex::new(BatchReport::default());
+        let _ = run(
+            &*mem,
+            &recorder,
+            &steps,
+            &CancellationToken::new(),
+            &reporter(),
+            &report,
+        )
+        .await;
+        assert_eq!(
+            read_all(&mem, &dir.join(seg(b"a"))).await,
+            b"mine".to_vec(),
+            "el fichero del usuario sobrevive a un provider que pisa",
+        );
+        let r = report.lock().expect("report lock").clone();
+        let stuck = r.stuck.as_ref().expect("un paso atascado");
+        assert_eq!(
+            stuck.error,
+            Error::Conflict {
+                conflict: ConflictKind::Exists
+            },
+            "y el veredicto es NUESTRO, no el del provider",
+        );
+        assert!(stuck.journalled, "este paso sí tiene apunte: el undo puede");
+    }
+
+    /// `landed` needs BOTH halves. A destination that exists proves nothing on
+    /// its own: here the rename failed with the source still in place, and a
+    /// third party owns the destination name. Probing only the destination
+    /// would answer "it landed" and the rollback would rename a stranger's
+    /// file — and rename it OUTSIDE the journal, since an unjournalled step
+    /// records nothing.
+    #[tokio::test]
+    async fn a_destination_a_stranger_created_does_not_look_like_a_landed_rename() {
+        let mem = MemProvider::new();
+        let dir = MemProvider::root();
+        write_file(&mem, &dir.join(seg(b"a")), b"a").await;
+        write_file(&mem, &dir.join(seg(b"b")), b"b").await;
+        let pairs = vec![
+            (b"a".to_vec(), b"x".to_vec()),
+            (b"b".to_vec(), b"y".to_vec()),
+        ];
+        let steps = steps_for(&mem, &dir, &pairs).await;
+        // El segundo paso falla con `b` INTACTO, y alguien ocupa `y`.
+        mem.faults().fail_rename_at(&dir.join(seg(b"b")));
+        write_file(&mem, &dir.join(seg(b"y")), b"suya").await;
+        let recorder = FailAt {
+            n: AtomicUsize::new(0),
+            fail_on: usize::MAX,
+        };
+        let report = Mutex::new(BatchReport::default());
+        let err = run(
+            &mem,
+            &recorder,
+            &steps,
+            &CancellationToken::new(),
+            &reporter(),
+            &report,
+        )
+        .await
+        .expect_err("el lote falla");
+        assert!(matches!(err, Error::Io { .. }), "{err:?}");
+        assert_eq!(
+            read_all(&mem, &dir.join(seg(b"y"))).await,
+            b"suya".to_vec(),
+            "el fichero ajeno sigue siendo suyo",
+        );
+        assert!(
+            mem.stat(&dir.join(seg(b"b"))).await.is_ok(),
+            "`b` no se movió"
+        );
+        let r = report.lock().expect("report lock").clone();
+        assert_eq!(r.rolled_back, 1, "solo el primer paso había que desandar");
+        assert!(r.stuck.is_none());
+        assert!(r.uncertain.is_none());
+    }
+
+    /// `still_applied` counts the whole stack, not just the blocked step. It is
+    /// the number the user is told to go and clean up, so a batch stuck with
+    /// three renames in effect has to say three.
+    #[tokio::test]
+    async fn still_applied_counts_everything_left_in_effect() {
+        struct SquatOn {
+            mem: Arc<MemProvider>,
+            squat: VPath,
+            n: AtomicUsize,
+            at: usize,
+        }
+
+        #[async_trait]
+        impl StepJournal for SquatOn {
+            async fn renamed(
+                &self,
+                _from: &VPath,
+                _to: &VPath,
+                _undoes: Option<i64>,
+            ) -> Result<Option<i64>, Error> {
+                let i = self.n.fetch_add(1, Ordering::SeqCst);
+                if i + 1 == self.at {
+                    write_file(&self.mem, &self.squat, b"ocupado").await;
+                    return Err(Error::Internal { panic: false });
+                }
+                Ok(Some(i64::try_from(i).unwrap_or(i64::MAX) + 1))
+            }
+        }
+
+        let mem = MemProvider::new();
+        let dir = MemProvider::root();
+        for n in [b"a", b"b", b"c", b"d"] {
+            write_file(&mem, &dir.join(seg(n)), n).await;
+        }
+        // Una permutación de cuatro: un rodeo por temporal, y el rodeo es el
+        // único paso cuya reversa se puede bloquear sin bloquear la ida.
+        let pairs = vec![
+            (b"a".to_vec(), b"b".to_vec()),
+            (b"b".to_vec(), b"c".to_vec()),
+            (b"c".to_vec(), b"d".to_vec()),
+            (b"d".to_vec(), b"a".to_vec()),
+        ];
+        let steps = steps_for(&mem, &dir, &pairs).await;
+        assert_eq!(steps.len(), 5, "cuatro renames y un rodeo");
+        let temp = steps[0].to.clone();
+        mem.faults().fail_rename_at(&temp);
+        let recorder = FailAt {
+            n: AtomicUsize::new(0),
+            fail_on: usize::MAX,
+        };
+        let report = Mutex::new(BatchReport::default());
+        let _ = run(
+            &mem,
+            &recorder,
+            &steps,
+            &CancellationToken::new(),
+            &reporter(),
+            &report,
+        )
+        .await;
+        let r = report.lock().expect("report lock").clone();
+        let stuck = r.stuck.as_ref().expect("un paso atascado");
+        // El último paso (temp → destino) muere; los tres de en medio vuelven;
+        // el primero (origen → temp) no puede, y ES el único que sigue puesto.
+        assert_eq!(r.rolled_back, 3);
+        assert_eq!(stuck.still_applied, 1);
+        assert!(stuck.journalled, "ese paso sí tiene apunte");
+
+        // Y el caso feo: el ÚLTIMO paso es el que se queda puesto, con los
+        // cuatro anteriores debajo — y es el paso SIN apunte de journal, que
+        // por construcción se apila el último y se desapila el primero. Nadie
+        // podrá deshacerlo nunca: el journal no sabe que ocurrió.
+        let mem2 = Arc::new(MemProvider::new());
+        for n in [b"a", b"b", b"c", b"d"] {
+            write_file(&mem2, &dir.join(seg(n)), n).await;
+        }
+        let steps2 = steps_for(&mem2, &dir, &pairs).await;
+        let temp2 = steps2[0].to.clone();
+        // El quinto apunte falla Y deja ocupado el nombre al que ese mismo paso
+        // tendría que volver (`temp`), así que la reversa se bloquea de entrada.
+        let recorder2 = SquatOn {
+            mem: Arc::clone(&mem2),
+            squat: temp2,
+            n: AtomicUsize::new(0),
+            at: 5,
+        };
+        let report2 = Mutex::new(BatchReport::default());
+        let _ = run(
+            &*mem2,
+            &recorder2,
+            &steps2,
+            &CancellationToken::new(),
+            &reporter(),
+            &report2,
+        )
+        .await;
+        let r2 = report2.lock().expect("report lock").clone();
+        let stuck2 = r2.stuck.as_ref().expect("un paso atascado");
+        assert_eq!(
+            stuck2.still_applied, 5,
+            "el bloqueado más los cuatro que quedan debajo",
+        );
+        assert_eq!(r2.rolled_back, 0);
+        assert!(
+            !stuck2.journalled,
+            "y sin apunte: este no lo arregla ningún undo",
+        );
+    }
+
+    /// The observer path (`Engine::new`, no journal): the renames still reach
+    /// the observer and so do the reversals. Without a journal there is no undo
+    /// either, so recording the reversal as a plain `Renamed` is honest — but
+    /// it should be pinned, because it is the path every embedded caller takes.
+    #[tokio::test]
+    async fn the_observer_path_reports_both_the_step_and_its_reversal() {
+        struct Counting {
+            n: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl MutationObserver for Counting {
+            async fn on_mutation(
+                &self,
+                mutation: &Mutation<'_>,
+                _actor: &Actor,
+            ) -> Result<(), Error> {
+                assert!(
+                    matches!(mutation, Mutation::Renamed { batch: None, .. }),
+                    "sin journal no hay lote que agrupar",
+                );
+                self.n.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let mem = MemProvider::new();
+        let dir = MemProvider::root();
+        write_file(&mem, &dir.join(seg(b"a")), b"a").await;
+        write_file(&mem, &dir.join(seg(b"b")), b"b").await;
+        let pairs = vec![
+            (b"a".to_vec(), b"x".to_vec()),
+            (b"b".to_vec(), b"y".to_vec()),
+        ];
+        let steps = steps_for(&mem, &dir, &pairs).await;
+        mem.faults().fail_rename_at(&dir.join(seg(b"b")));
+        let observer = Arc::new(Counting {
+            n: AtomicUsize::new(0),
+        });
+        let recorder = ObserverJournal {
+            observer: Arc::clone(&observer) as Arc<dyn MutationObserver>,
+            actor: Actor::User,
+        };
+        let report = Mutex::new(BatchReport::default());
+        let _ = run(
+            &mem,
+            &recorder,
+            &steps,
+            &CancellationToken::new(),
+            &reporter(),
+            &report,
+        )
+        .await;
+        assert!(mem.stat(&dir.join(seg(b"a"))).await.is_ok());
+        assert_eq!(observer.n.load(Ordering::SeqCst), 2, "la ida y la vuelta");
+    }
+
     /// Binding is what stops a hash approved for one directory from being
     /// replayed against another whose re-plan happens to produce the same
     /// steps.
@@ -885,7 +1293,7 @@ mod tests {
         let plan = plan_batch(&pairs, &listing, caps);
         let here = DirPlan::bind(&VPath::parse("mem:///here").expect("path"), plan.clone());
         let there = DirPlan::bind(&VPath::parse("mem:///there").expect("path"), plan.clone());
-        assert_eq!(here.plan.hash, there.plan.hash, "el planner es puro");
+        assert_eq!(here.plan().hash, there.plan().hash, "el planner es puro");
         assert_ne!(here.hash(), there.hash(), "el token no lo es");
         // And it is stable: the same directory and the same plan, twice.
         let again = DirPlan::bind(&VPath::parse("mem:///here").expect("path"), plan);

@@ -38,6 +38,11 @@ struct FaultState {
     /// `Error::Io`, SIN aplicar su efecto. Para el ejecutor transaccional de
     /// lotes: el paso que dispara el rollback.
     fail_rename_at: Option<SegPath>,
+    /// `rename` PISA el destino en vez de rechazarlo (posix-rename de sftp,
+    /// copy+delete de object). Para probar los guardas anti-clobber de quien
+    /// llama, que sobre un provider que ya rechaza no se pueden distinguir del
+    /// rechazo del provider.
+    rename_clobbers: bool,
     /// `Some(n)`: quedan `n` operaciones antes de la desconexión.
     disconnect_after: Option<u64>,
     /// Las próximas `n` operaciones fallan retryable (indisponibilidad
@@ -103,6 +108,24 @@ impl Faults {
     /// camino «la reversa tampoco pudo». Desármalo con [`Self::clear`].
     pub fn fail_rename_at(&self, path: &VPath) {
         self.lock().fail_rename_at = Some(seg_path(path));
+    }
+
+    /// `rename` deja de rechazar un destino ocupado y lo PISA, como hacen de
+    /// verdad los providers cuyo rename no es atómico: posix-rename en sftp y
+    /// copy+delete en object.
+    ///
+    /// Existe para que un guarda anti-clobber del LLAMANTE se pueda probar. Sin
+    /// esto, un test contra `MemProvider` —que rechaza por su cuenta— pasa
+    /// igual con el guarda borrado: lo que demuestra es el contrato del
+    /// provider, no el cinturón de quien lo usa.
+    pub fn rename_clobbers(&self, clobber: bool) {
+        self.lock().rename_clobbers = clobber;
+    }
+
+    /// `true` si `rename` debe pisar el destino en vez de rechazarlo.
+    #[must_use]
+    pub(crate) fn renames_clobber(&self) -> bool {
+        self.lock().rename_clobbers
     }
 
     /// Tras `n` operaciones más, TODA operación devuelve

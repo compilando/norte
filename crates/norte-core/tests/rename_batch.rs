@@ -90,7 +90,7 @@ async fn a_permutation_lands_and_is_one_batch() {
     let (engine, provider, journal, dir) = engine_with(&[b"a", b"b"]).await;
     let ps = pairs(&[(b"a", b"b"), (b"b", b"a")]);
     let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
-    assert!(plan.executable(), "{:?}", plan.plan.collisions);
+    assert!(plan.executable(), "{:?}", plan.plan().collisions);
     let (handle, report) = engine
         .rename_batch(&dir, &ps, plan.hash())
         .await
@@ -118,6 +118,20 @@ async fn a_permutation_lands_and_is_one_batch() {
     let es = journal.journal().entries().await.expect("entries");
     let batches: std::collections::HashSet<_> = es.iter().filter_map(|e| e.batch_id).collect();
     assert_eq!(batches.len(), 1, "un lote para toda la permutación");
+    // La DIRECCIÓN, no solo el recuento. `undo.rs` revierte un `"renamed"` con
+    // `rename(entry.path → entry.path_to)`: con los dos campos cambiados, la
+    // cadena queda perfectamente íntegra y el undo de la sesión renombra todo
+    // al revés. Contar entradas no lo ve; comparar bytes sí.
+    let wire = |n: &[u8]| dir.join(seg(n)).to_wire().into_bytes();
+    for (entry, step) in es.iter().zip(plan.plan().steps.iter()) {
+        assert_eq!(entry.op, "renamed");
+        assert_eq!(entry.reversal, "rename_back");
+        assert_eq!(
+            (entry.path.clone(), entry.path_to.clone()),
+            (wire(&step.to), Some(wire(&step.from))),
+            "path = DESTINO, path_to = ORIGEN",
+        );
+    }
     assert_eq!(
         es.iter().filter(|e| e.batch_id.is_some()).count(),
         3,
@@ -142,7 +156,7 @@ async fn a_permutation_of_hostile_names_survives_byte_for_byte() {
     let (engine, provider, journal, dir) = engine_with(&[&one, &two]).await;
     let ps = vec![(one.clone(), two.clone()), (two.clone(), one.clone())];
     let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
-    assert!(plan.executable(), "{:?}", plan.plan.collisions);
+    assert!(plan.executable(), "{:?}", plan.plan().collisions);
     let (handle, _report) = engine
         .rename_batch(&dir, &ps, plan.hash())
         .await
@@ -222,7 +236,8 @@ async fn a_token_from_another_directory_is_stale() {
     let plan = engine.rename_batch_plan(&here, &ps).await.expect("plan");
     let other = engine.rename_batch_plan(&there, &ps).await.expect("plan");
     assert_eq!(
-        plan.plan, other.plan,
+        plan.plan(),
+        other.plan(),
         "el planificador es puro: mismos pasos, mismos veredictos",
     );
     assert_ne!(plan.hash(), other.hash(), "el token no es el mismo");
@@ -278,7 +293,10 @@ async fn a_failing_step_rolls_the_whole_batch_back() {
     let ps = pairs(&[(b"a", b"x"), (b"b", b"y"), (b"c", b"d")]);
     let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
     // `c → d` is the last step (independent pairs keep the caller's order).
-    assert_eq!(plan.plan.steps.last().expect("un paso").from, b"c".to_vec());
+    assert_eq!(
+        plan.plan().steps.last().expect("un paso").from,
+        b"c".to_vec()
+    );
     provider.faults().fail_rename_at(&dir.join(seg(b"c")));
 
     let (handle, report) = engine
@@ -297,6 +315,8 @@ async fn a_failing_step_rolls_the_whole_batch_back() {
     let r = report.lock().expect("report lock").clone();
     assert_eq!(r.applied, 2);
     assert_eq!(r.rolled_back, 2);
+    assert_eq!(r.compensations_lost, 0);
+    assert!(r.uncertain.is_none());
     assert_eq!(
         r.failed_pair,
         Some(2),
@@ -341,15 +361,20 @@ async fn a_failing_step_rolls_the_whole_batch_back() {
 /// Cancellation is the same rollback: a cancelled batch leaves the tree as it
 /// was (rule 3, and the same promise a cancelled copy makes).
 ///
-/// The margin is structural rather than a slept-at guess: the batch is twelve
-/// steps of injected latency, so after the first destination appears there are
-/// eleven more `rename`s of ≥10 ms each still to go, and every one of them is
-/// preceded by a check of the token.
+/// The margin is made of STEPS, not of milliseconds. Cancelling after the first
+/// destination appears leaves ~200 renames still to run, each preceded by a
+/// check of the token, so losing the race would take the test process being
+/// descheduled for the whole remaining tail — and the tail grows with the pair
+/// count rather than with the injected latency, which is the knob somebody
+/// might lower later. The rollback stays at one step whatever the count.
+/// (`rename::exec`'s unit test pins the same property with no clock at all,
+/// cancelling from inside the recorder; what THIS one adds is the wiring:
+/// `TaskHandle::cancel` → `TaskState::Cancelled` → tree restored.)
 #[tokio::test]
 async fn a_cancelled_batch_rolls_back() {
-    let names: Vec<Vec<u8>> = (0..12u8).map(|i| format!("f{i}").into_bytes()).collect();
+    let names: Vec<Vec<u8>> = (0..200u16).map(|i| format!("f{i}").into_bytes()).collect();
     let refs: Vec<&[u8]> = names.iter().map(Vec::as_slice).collect();
-    let (engine, provider, _j, dir) = engine_with(&refs).await;
+    let (engine, provider, journal, dir) = engine_with(&refs).await;
     let before = names_in(&provider, &dir).await;
     let ps: Vec<(Vec<u8>, Vec<u8>)> = names
         .iter()
@@ -360,12 +385,12 @@ async fn a_cancelled_batch_rolls_back() {
         })
         .collect();
     let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
-    let first_dest = dir.join(seg(&plan.plan.steps[0].to));
+    let first_dest = dir.join(seg(&plan.plan().steps[0].to));
 
     provider
         .faults()
         .set_latency_per_op(Some(Duration::from_millis(10)));
-    let (handle, _report) = engine
+    let (handle, report) = engine
         .rename_batch(&dir, &ps, plan.hash())
         .await
         .expect("submit");
@@ -381,5 +406,130 @@ async fn a_cancelled_batch_rolls_back() {
     handle.cancel();
     assert_eq!(handle.join().await, TaskState::Cancelled);
     provider.faults().clear();
+    assert_eq!(names_in(&provider, &dir).await, before);
+    let r = report.lock().expect("report lock").clone();
+    assert!(r.applied >= 1, "el sondeo vio aterrizar un paso");
+    assert_eq!(r.rolled_back, r.applied, "y todos volvieron");
+    assert!(r.stuck.is_none(), "{:?}", r.stuck);
+    assert_eq!(r.compensations_lost, 0);
+    // El camino cancelado corre el MISMO código de compensación que el fallido,
+    // y hasta ahora nadie miraba si dejaba entradas sin compensar.
+    assert!(
+        journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact(),
+    );
+    assert!(
+        journal
+            .journal()
+            .revertible_for(&norte_core::journal::Actor::User)
+            .await
+            .expect("revertible")
+            .is_empty(),
+        "un lote cancelado no deja trabajo al undo",
+    );
+}
+
+// ---- the policy gate -------------------------------------------------------
+
+/// A gate that records every path it was asked about and answers `verdict`.
+struct Recording {
+    seen: std::sync::Mutex<Vec<Vec<u8>>>,
+    verdict: norte_core::policy::Decision,
+}
+
+impl norte_core::policy::PolicyGate for Recording {
+    fn evaluate(
+        &self,
+        _actor: &norte_core::journal::Actor,
+        _op: norte_core::policy::PolicyOp,
+        paths: &[&VPath],
+    ) -> norte_core::policy::Decision {
+        let mut seen = self.seen.lock().expect("seen lock");
+        for p in paths {
+            if let Some(n) = p.file_name() {
+                seen.push(n.as_bytes().to_vec());
+            }
+        }
+        self.verdict.clone()
+    }
+}
+
+async fn engine_gated(
+    names: &[&[u8]],
+    verdict: norte_core::policy::Decision,
+) -> (Engine, Arc<MemProvider>, Arc<Recording>, VPath) {
+    let provider = Arc::new(MemProvider::new());
+    let dir = MemProvider::root();
+    for n in names {
+        write_file(&provider, &dir.join(seg(n)), n).await;
+    }
+    let gate = Arc::new(Recording {
+        seen: std::sync::Mutex::new(Vec::new()),
+        verdict,
+    });
+    let engine = Engine::new().with_policy(
+        Arc::clone(&gate) as Arc<dyn norte_core::policy::PolicyGate>,
+        Arc::new(norte_core::approval::DenyAll),
+    );
+    engine.register_provider(Arc::clone(&provider) as Arc<dyn Provider>);
+    (engine, provider, gate, dir)
+}
+
+/// ONE gate for the whole batch, and it sees EVERY path the batch touches —
+/// the planner's temporary names included, which are files created in the
+/// user's directory and which no `pairs` list ever mentions.
+///
+/// Without this the claim is prose: a refactor that gated only the non-temp
+/// steps would leave every test green while an agent scoped away from
+/// `.norte-rename-*` renamed through it.
+#[tokio::test]
+async fn the_gate_sees_every_path_including_the_temporaries() {
+    let (engine, _p, gate, dir) =
+        engine_gated(&[b"a", b"b"], norte_core::policy::Decision::Allow).await;
+    let ps = pairs(&[(b"a", b"b"), (b"b", b"a")]);
+    let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
+    let temp = plan
+        .plan()
+        .steps
+        .iter()
+        .find(|s| s.temp && s.to.starts_with(b".norte-rename-"))
+        .expect("un temporal")
+        .to
+        .clone();
+    let (handle, _r) = engine
+        .rename_batch(&dir, &ps, plan.hash())
+        .await
+        .expect("submit");
+    assert_eq!(handle.join().await, TaskState::Completed);
+
+    let seen = gate.seen.lock().expect("seen lock").clone();
+    assert!(
+        seen.contains(&temp),
+        "el temporal pasa por el gate: {seen:?}"
+    );
+    assert!(seen.contains(&b"a".to_vec()) && seen.contains(&b"b".to_vec()));
+    // Un solo gate: las tres parejas de rutas llegan en UNA evaluación (2 por
+    // paso × 3 pasos), no una evaluación por paso.
+    assert_eq!(seen.len(), 6, "{seen:?}");
+}
+
+/// A denied batch is denied WHOLE and before any effect. The policy resolves a
+/// slice to the most restrictive verdict, so one denied name stops everything.
+#[tokio::test]
+async fn a_denied_batch_applies_nothing() {
+    let (engine, provider, _g, dir) = engine_gated(
+        &[b"a", b"b"],
+        norte_core::policy::Decision::Deny(norte_core::policy::DenyReason::OutOfScope),
+    )
+    .await;
+    let before = names_in(&provider, &dir).await;
+    let ps = pairs(&[(b"a", b"b"), (b"b", b"a")]);
+    let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
+    let e = refusal(engine.rename_batch(&dir, &ps, plan.hash()).await);
+    assert!(matches!(e, Error::PolicyDenied { .. }), "{e:?}");
     assert_eq!(names_in(&provider, &dir).await, before);
 }

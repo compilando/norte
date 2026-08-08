@@ -41,7 +41,11 @@ fn wire(bytes: &[u8]) -> Result<VPath, Error> {
 }
 
 /// `true` si `p` NO existe (libre) en `provider`.
-async fn is_free(provider: &dyn Provider, p: &VPath) -> Result<bool, Error> {
+///
+/// Compartida con el rollback del ejecutor de lotes
+/// (`crate::rename::exec`): el primitivo del no-clobber tiene que ser UNO, o
+/// las dos copias dejan de tratar igual un `stat` que falla por otra cosa.
+pub(crate) async fn is_free(provider: &dyn Provider, p: &VPath) -> Result<bool, Error> {
     match provider.stat(p).await {
         Err(Error::NotFound) => Ok(true),
         Ok(_) => Ok(false),

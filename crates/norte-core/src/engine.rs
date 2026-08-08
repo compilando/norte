@@ -201,7 +201,21 @@ impl Engine {
                     op,
                     // Redactadas como los spans (regla 10): son SOLO display
                     // para el frontend que aprueba, jamás se reparsean.
-                    paths: paths.iter().map(|p| span_path(p)).collect(),
+                    //
+                    // Y ACOTADAS. La DECISIÓN se toma sobre `paths` entero
+                    // (arriba, `policy.evaluate`); lo que se recorta es lo que
+                    // se le enseña al humano. Desde el rename por lotes un solo
+                    // gate puede traer miles de rutas, y esta lista se difunde a
+                    // cada conexión humana y se retiene durante el TTL: sin
+                    // tope, un agente bajo una regla `ask` convierte cada
+                    // petición en megabytes de notificación y expulsa a los
+                    // suscriptores lentos por outbox lleno. Ningún frontend
+                    // pinta tantas rutas de todos modos.
+                    paths: paths
+                        .iter()
+                        .take(APPROVAL_PATHS_SHOWN)
+                        .map(|p| span_path(p))
+                        .collect(),
                 };
                 match self.approvals.request(req).await {
                     crate::approval::ApprovalOutcome::Approved => Ok(()),
@@ -995,23 +1009,34 @@ impl Engine {
     /// `dir`: un hash aprobado para un directorio no vale contra otro cuyo
     /// re-plan produzca los mismos pasos.
     ///
-    /// **Gate de policy: NINGUNO**, igual que [`Self::list`] y
-    /// [`Self::search_as`]. Planificar es leer el directorio y no hay
-    /// `PolicyOp` de lectura; el gate de mutación se aplica entero en
-    /// [`Self::rename_batch`], que es donde hay efecto.
+    /// **Gate de policy: NINGUNO AQUÍ**, igual que [`Self::list`],
+    /// [`Self::stat`] y [`Self::search_as`]. No hay `PolicyOp` de lectura: el
+    /// gate de LECTURA vive en el daemon (`read_gate`, #80), que es quien
+    /// decide si un actor puede mirar dentro de un directorio, y el de
+    /// MUTACIÓN se aplica entero en [`Self::rename_batch`], que es donde hay
+    /// efecto.
+    ///
+    /// **OBLIGACIÓN DEL DAEMON**: `fs.rename_batch_plan` tiene que pasar por
+    /// `read_gate` como `fs.list`. Sin él, este método es un oráculo de
+    /// nombres —cada nombre del directorio, más la estructura de gemelos
+    /// NFC/NFD que `fs.list` ni siquiera expone— para un agente sin scope, y
+    /// además revela `Unsupported`/`NotFound`/`PlanStale` de un directorio
+    /// sobre el que no tiene derechos.
     ///
     /// # Errors
     /// [`Error::InvalidPath`] si algún nombre no es una entrada de directorio
     /// legal o si `pairs` supera
     /// [`FS_RENAME_BATCH_MAX_PAIRS`](norte_proto::methods::FS_RENAME_BATCH_MAX_PAIRS);
-    /// [`Error::Unsupported`] si el scheme de `dir` no tiene provider o el
-    /// provider es de solo lectura; los del provider al listar.
+    /// [`Error::LimitExceeded`] si `dir` tiene más de
+    /// [`RENAME_BATCH_MAX_LISTING`] entradas; [`Error::Unsupported`] si el
+    /// scheme de `dir` no tiene provider o el provider es de solo lectura; los
+    /// del provider al listar.
     pub async fn rename_batch_plan(
         &self,
         dir: &VPath,
         pairs: &[(Vec<u8>, Vec<u8>)],
     ) -> Result<crate::rename::DirPlan, Error> {
-        self.rename_batch_plan_as(dir, pairs, &crate::journal::Actor::User)
+        self.rename_batch_plan_as(dir, pairs, crate::journal::Actor::User)
             .await
     }
 
@@ -1028,7 +1053,7 @@ impl Engine {
         &self,
         dir: &VPath,
         pairs: &[(Vec<u8>, Vec<u8>)],
-        _actor: &crate::journal::Actor,
+        _actor: crate::journal::Actor,
     ) -> Result<crate::rename::DirPlan, Error> {
         let (plan, _provider) = self.plan_for(dir, pairs).await?;
         Ok(plan)
@@ -1080,8 +1105,9 @@ impl Engine {
             .await
             .map(|plan| (crate::rename::DirPlan::bind(dir, plan), provider))
             .map_err(|e| {
-                tracing::error!(error = %e, "el planificador de renames no terminó");
-                Error::Internal { panic: true }
+                let panic = e.is_panic();
+                tracing::error!(error = %e, panic, "el planificador de renames no terminó");
+                Error::Internal { panic }
             })
     }
 
@@ -1160,7 +1186,7 @@ impl Engine {
             return Err(Error::PlanNotExecutable);
         }
         let steps: Vec<crate::rename::exec::PlannedStep> = plan
-            .plan
+            .plan()
             .steps
             .iter()
             .map(|s| crate::rename::exec::absolute(dir, s))
@@ -1192,6 +1218,13 @@ impl Engine {
             // Sin journal (tests embebidos, `Engine::new`): los renames ocurren
             // y llegan al observer, pero no hay lote que agrupar ni undo que
             // servir. Honesto: sin journal tampoco hay undo.
+            //
+            // OJO al día en que el observer deje de ser el journal: con
+            // `with_journal` los dos son el MISMO objeto (ver su constructor),
+            // así que escribir directo en el journal no se salta a nadie. Si
+            // alguna vez se instala un observer en abanico JUNTO a un journal,
+            // esta rama tiene que emitir a los dos o los renames por lotes
+            // serán los únicos invisibles para él.
             None => Arc::new(crate::rename::exec::ObserverJournal {
                 observer: Arc::clone(&self.observer),
                 actor: actor.clone(),
@@ -1555,6 +1588,23 @@ pub(crate) fn ai_to_proto_error(e: &norte_ai::AiError) -> Error {
     }
 }
 
+/// Cuántas rutas de una operación llegan al frontend que la aprueba.
+///
+/// Un tope de PRESENTACIÓN, no de decisión: la policy se evalúa siempre sobre
+/// la lista completa. Ver el comentario en [`Engine::gate`].
+const APPROVAL_PATHS_SHOWN: usize = 32;
+
+/// Tope de entradas de directorio que un rename por lotes planifica.
+///
+/// La cota de parejas (`FS_RENAME_BATCH_MAX_PAIRS`) no acota la otra dimensión,
+/// y el planificador es lineal en AMBAS: una clave de comparación por entrada
+/// del listado, más dos índices. `fs.rename_batch_plan` es respuesta DIRECTA
+/// (ADR 0042): sin Task, sin token de cancelación y dentro del despacho, así
+/// que un directorio de millones de entradas sería trabajo sin cota ni forma de
+/// pararlo. Un directorio que un humano va a revisar entrada por entrada cabe
+/// de sobra aquí; por encima, `LimitExceeded` es honesto y barato.
+pub const RENAME_BATCH_MAX_LISTING: usize = 100_000;
+
 /// Todos los nombres base de `dir`, en bytes crudos (regla 1).
 ///
 /// MATERIALIZA el listado entero: el planificador necesita ver el directorio
@@ -1564,9 +1614,18 @@ pub(crate) fn ai_to_proto_error(e: &norte_ai::AiError) -> Error {
 async fn list_base_names(provider: &dyn Provider, dir: &VPath) -> Result<Vec<Vec<u8>>, Error> {
     use futures::StreamExt;
     let mut stream = provider.list(dir).await?;
-    let mut names = Vec::new();
+    let mut names = Vec::with_capacity(64);
     while let Some(item) = stream.next().await {
         let entry = item?;
+        if names.len() >= RENAME_BATCH_MAX_LISTING {
+            tracing::warn!(
+                max = RENAME_BATCH_MAX_LISTING,
+                "directorio por encima del tope planificable para un rename por lotes",
+            );
+            return Err(Error::LimitExceeded {
+                limit: Error::LIMIT_ENTRIES.into(),
+            });
+        }
         if let Some(n) = entry.path.file_name() {
             names.push(n.as_bytes().to_vec());
         }
