@@ -22,6 +22,7 @@ use hmac::{Hmac, Mac};
 use serde::Serialize;
 use sha2::Sha256;
 
+use crate::hashing::hex_lower as hex;
 use crate::journal::JournalEntry;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -70,14 +71,6 @@ fn anchor_mac(key: &[u8], seq: i64, head: &[u8; 32]) -> [u8; 32] {
     mac.update(&seq.to_le_bytes());
     mac.update(head);
     mac.finalize().into_bytes().into()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::new(), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
 }
 
 fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {

@@ -15,6 +15,8 @@ use std::str::FromStr;
 
 use norte_proto::Error as ProtoError;
 use sha2::{Digest, Sha256};
+
+use crate::hashing::{feed, feed_opt};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Row, SqlitePool};
 use tokio::sync::Mutex;
@@ -203,23 +205,6 @@ pub(crate) struct Record<'a> {
     pub reversal: &'a str,
     pub reversal_ref: Option<&'a [u8]>,
     pub undoes_seq: Option<i64>,
-}
-
-fn feed(h: &mut Sha256, bytes: &[u8]) {
-    h.update((bytes.len() as u64).to_le_bytes());
-    h.update(bytes);
-}
-
-/// Campo opcional con BYTE DE PRESENCIA (0/1) → `None` y `Some(vacío)` NUNCA
-/// colisionan (sin él, ambos serían `len=0` — hallazgo security B1).
-fn feed_opt(h: &mut Sha256, o: Option<&[u8]>) {
-    match o {
-        None => h.update([0u8]),
-        Some(b) => {
-            h.update([1u8]);
-            feed(h, b);
-        }
-    }
 }
 
 /// `entry_hash = sha256(prev_hash ‖ campos con longitud prefijada y presencia)`.
@@ -770,6 +755,40 @@ mod tests {
         assert_eq!(h1, chain_hash(&zero, &rec(1)), "determinista");
         assert_ne!(h1, chain_hash(&h1, &rec(1)));
         assert_ne!(h1, chain_hash(&zero, &rec(2)));
+    }
+
+    /// VECTOR CONGELADO de la cadena, con TODOS los campos poblados: los dos
+    /// `Option` presentes (uno de ellos vacío, para fijar el byte de
+    /// presencia), `undoes_seq` presente, y rutas que NO son UTF-8.
+    ///
+    /// Los demás tests de `chain_hash` son relativos (`assert_ne!` entre dos
+    /// digests) y seguirían verdes si el prefijo de longitud pasara de `u64` a
+    /// `u32`, de little-endian a big-endian, o si el orden de los campos
+    /// cambiara — y cualquiera de esas cosas invalida `verify_chain` en TODOS
+    /// los journals que ya están en disco. Este es el único guardarraíl
+    /// mecánico que tiene esa promesa.
+    ///
+    /// Si se pone rojo: NO actualices la constante. Revierte el cambio de
+    /// framing, o versiona el formato de la cadena y migra los journals.
+    #[test]
+    fn the_chain_hash_is_frozen() {
+        let r = Record {
+            seq: 7,
+            ts_ms: 1_726_000_000_000,
+            actor_kind: "agent",
+            actor_id: Some("sesion-1"),
+            op: "renamed",
+            path: b"file:///caf\xff",
+            path_to: Some(b"file:///caf\xfe"),
+            reversal: "rename",
+            reversal_ref: Some(&[]),
+            undoes_seq: Some(3),
+        };
+        let got = chain_hash(&[0u8; 32], &r);
+        assert_eq!(
+            crate::hashing::hex_lower(&got),
+            "b00a2da6db1199742aa42f4811370bf02fcc21a294d77741ae7a26ad2b794ecc",
+        );
     }
 
     #[test]

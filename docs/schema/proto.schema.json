@@ -2447,10 +2447,10 @@
         },
         "name": {
           "$ref": "#/$defs/Segment",
-          "description": "El nombre ofensor: el DESTINO para `Internal`/`External`, el ORIGEN que\nfalta para `AbsentSource`. Su significado depende de `kind`; el que no\ndepende de nada es `pair_index`."
+          "description": "El nombre ofensor. QUÉ nombre depende de `kind`:\n\n- `Internal` — el DESTINO que esta pareja no va a conseguir;\n- `External` — el fichero que ESTORBA, escrito como lo escribe el\n  directorio, que no tiene por qué ser como lo escribió la petición: un\n  gemelo NFD tapa un destino NFC y lo que el humano necesita ver es el\n  gemelo, no un eco de lo que ya tecleó;\n- `AbsentSource` / `AmbiguousSource` — el ORIGEN, tal cual lo mandó\n  quien pidió, porque ese es el texto que tiene que corregir.\n\nEl que no depende de nada es `pair_index`."
         },
         "pair_index": {
-          "description": "Índice, dentro de `pairs` de la petición, de la pareja que este\nveredicto RECHAZA. Para `Internal` es la pareja POSTERIOR en el orden de\n`pairs` (la primera se señala sola si también resulta rechazada). No hay\npareja «ganadora» que un frontend pueda pintar como aceptada: un plan con\nveredictos no ejecuta NADA.\n\nEstá definido para toda clase, incluidas las futuras, y ese es su\nmotivo: `name` cambia de significado con `kind` (destino en\n`Internal`/`External`, origen ausente en `AbsentSource`), así que bajo\n[`RenameCollisionKind::Unknown`] un cliente no sabría qué está mirando.\nCon el índice siempre puede señalar la fila culpable, aunque no entienda\nel veredicto — que es justo lo que el fallback promete.",
+          "description": "Índice, dentro de `pairs` de la petición, de la pareja que este\nveredicto RECHAZA. Para `Internal` es la pareja POSTERIOR en el orden de\n`pairs` (la primera se señala sola si también resulta rechazada). No hay\npareja «ganadora» que un frontend pueda pintar como aceptada: un plan con\nveredictos no ejecuta NADA.\n\nEstá definido para toda clase, incluidas las futuras, y ese es su\nmotivo: `name` cambia de significado con `kind` (ver ahí abajo), así que\nbajo [`RenameCollisionKind::Unknown`] un cliente no sabría qué está\nmirando. Con el índice siempre puede señalar la fila culpable, aunque no\nentienda el veredicto — que es justo lo que el fallback promete.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -2468,17 +2468,22 @@
       "oneOf": [
         {
           "const": "internal",
-          "description": "Dos parejas apuntan al mismo destino.",
+          "description": "Una pareja ANTERIOR del mismo lote hace imposible esta: le tomó el\ndestino, o le tomó el ORIGEN. Ambas cosas se miden con la equivalencia\nde colisiones del directorio (NFC, y plegado de caja donde la caja se\npliega), no byte a byte, así que dos parejas que nombran ficheros\ndistintos que ese directorio no distingue también caen aquí.",
           "type": "string"
         },
         {
           "const": "external",
-          "description": "El destino ya existe y no es el origen de ninguna pareja.",
+          "description": "El destino ya existe y NINGUNA pareja del lote lo va a quitar de en\nmedio. Que exista una pareja cuyo origen sea ese nombre no basta: si esa\npareja es nula, o su origen es un fichero GEMELO del que estorba (`café`\nen NFC frente a `café` en NFD), el fichero sigue ahí.",
           "type": "string"
         },
         {
           "const": "absent_source",
           "description": "El origen de la pareja no está en el directorio (el plan se construyó\ncontra un listado rancio).",
+          "type": "string"
+        },
+        {
+          "const": "ambiguous_source",
+          "description": "El origen no coincide EXACTAMENTE con ningún nombre del directorio y se\npliega sobre DOS O MÁS a la vez — dos ficheros que las reglas de ese\ndirectorio no distinguen, típicamente `café` en NFC y en NFD conviviendo\nen un ext4, o `Foo` y `foo` en un listado que contradice sus propias\ncapacidades.\n\nEl origen NO falta: sobra. El core no adivina cuál de los dos se pedía,\nporque acertar la mitad de las veces es peor que no hacer nada. Lo que\nresuelve ESTE veredicto es escribir el nombre BYTE A BYTE como lo\ndevuelve `fs.list`: con la ortografía exacta hay coincidencia exacta y\nel origen queda identificado.\n\nOjo, no es una llave maestra para el directorio gemelo. Renombrar los\nDOS gemelos en un mismo lote sigue sin poder ser, porque las colisiones\nse miden plegadas y el segundo se lleva un [`Self::Internal`]. Hay que\nmandarlos en lotes distintos.",
           "type": "string"
         },
         {

@@ -112,8 +112,8 @@ types carries one.
 
 ### 5. A closed verdict vocabulary that still carries `serde(other)`
 
-`RenameCollisionKind` is closed — the core emits `internal`, `external` or
-`absent_source` and never invents a value. It nevertheless carries
+`RenameCollisionKind` is closed — the core emits `internal`, `external`,
+`absent_source` or `ambiguous_source` and never invents a value. It nevertheless carries
 `#[serde(other)] Unknown` and `#[non_exhaustive]`, like `ConflictKind`.
 
 The reason is specific and was verified in the tree, not assumed.
@@ -137,7 +137,9 @@ they were about to approve.
 For the fallback to be worth anything, an unknown verdict must still be
 *addressable*: `RenameCollision` therefore carries `pair_index`, the index into
 the request's `pairs`. `name` changes meaning with `kind` (the destination for
-`internal` and `external`, the missing source for `absent_source`), so under
+`internal`; the file that is IN THE WAY, as the directory spells it, for
+`external`; the source as the caller wrote it for `absent_source` and
+`ambiguous_source`), so under
 `Unknown` a client could not tell what it was looking at. The index is
 well-defined for every kind, present and future, so the offending row can always
 be highlighted even when the reason cannot be explained.
@@ -193,7 +195,10 @@ An agent gains a directory-existence oracle. `fs.rename_batch_plan` mutates
 nothing, but its `external` and `absent_source` verdicts report which names
 exist, so it is a read and is gated as one — the same read gate as `fs.list` and
 `fs.stat` (#80). The method's rustdoc says so explicitly, because "no task, no
-journal, no mutation" reads as harmless and is not.
+journal, no mutation" reads as harmless and is not. `ambiguous_source` is a
+strictly stronger oracle — it discloses that two entries fold onto one key, not
+merely that one entry exists — and needs no separate gate for exactly that
+reason: anything that can ask it can already ask `fs.list`.
 
 The N-1 window moves to 0.35.x. A 0.35 client never calls the new methods,
 degrades `TaskKind::RenameBatch` to `Unknown` through its existing

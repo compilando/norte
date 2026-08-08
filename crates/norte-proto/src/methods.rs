@@ -323,7 +323,11 @@ use crate::{
 /// que puede ser un AGENTE, no puede colar un orden que nadie revisó. Los
 /// nombres viajan como [`Segment`] (percent-encoded, regla dura 1), no como
 /// `String`: un lote de renames es exactamente donde un nombre no-UTF8 tiene
-/// que sobrevivir byte a byte.
+/// que sobrevivir byte a byte. El vocabulario CERRADO de
+/// [`RenameCollisionKind`] son CUATRO veredictos: `internal`, `external`,
+/// `absent_source` y `ambiguous_source` — este último para el directorio con
+/// gemelos, donde el origen pedido se pliega sobre dos entradas y el core se
+/// niega a elegir.
 /// Ventana N=0.36.x / N-1=0.35.x: un cliente 0.35 no conoce los métodos nuevos
 /// y no los llama, y degrada el `TaskKind` nuevo a `TaskKind::Unknown` por su
 /// `serde(other)`; las dos categorías de error nuevas caen en su
@@ -1336,13 +1340,37 @@ pub struct RenameStep {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RenameCollisionKind {
-    /// Dos parejas apuntan al mismo destino.
+    /// Una pareja ANTERIOR del mismo lote hace imposible esta: le tomó el
+    /// destino, o le tomó el ORIGEN. Ambas cosas se miden con la equivalencia
+    /// de colisiones del directorio (NFC, y plegado de caja donde la caja se
+    /// pliega), no byte a byte, así que dos parejas que nombran ficheros
+    /// distintos que ese directorio no distingue también caen aquí.
     Internal,
-    /// El destino ya existe y no es el origen de ninguna pareja.
+    /// El destino ya existe y NINGUNA pareja del lote lo va a quitar de en
+    /// medio. Que exista una pareja cuyo origen sea ese nombre no basta: si esa
+    /// pareja es nula, o su origen es un fichero GEMELO del que estorba (`café`
+    /// en NFC frente a `café` en NFD), el fichero sigue ahí.
     External,
     /// El origen de la pareja no está en el directorio (el plan se construyó
     /// contra un listado rancio).
     AbsentSource,
+    /// El origen no coincide EXACTAMENTE con ningún nombre del directorio y se
+    /// pliega sobre DOS O MÁS a la vez — dos ficheros que las reglas de ese
+    /// directorio no distinguen, típicamente `café` en NFC y en NFD conviviendo
+    /// en un ext4, o `Foo` y `foo` en un listado que contradice sus propias
+    /// capacidades.
+    ///
+    /// El origen NO falta: sobra. El core no adivina cuál de los dos se pedía,
+    /// porque acertar la mitad de las veces es peor que no hacer nada. Lo que
+    /// resuelve ESTE veredicto es escribir el nombre BYTE A BYTE como lo
+    /// devuelve `fs.list`: con la ortografía exacta hay coincidencia exacta y
+    /// el origen queda identificado.
+    ///
+    /// Ojo, no es una llave maestra para el directorio gemelo. Renombrar los
+    /// DOS gemelos en un mismo lote sigue sin poder ser, porque las colisiones
+    /// se miden plegadas y el segundo se lleva un [`Self::Internal`]. Hay que
+    /// mandarlos en lotes distintos.
+    AmbiguousSource,
     /// Clase de un protocolo más nuevo (fallback de deserialización).
     /// El core JAMÁS la emite.
     #[doc(hidden)]
@@ -1374,15 +1402,22 @@ pub struct RenameCollision {
     /// veredictos no ejecuta NADA.
     ///
     /// Está definido para toda clase, incluidas las futuras, y ese es su
-    /// motivo: `name` cambia de significado con `kind` (destino en
-    /// `Internal`/`External`, origen ausente en `AbsentSource`), así que bajo
-    /// [`RenameCollisionKind::Unknown`] un cliente no sabría qué está mirando.
-    /// Con el índice siempre puede señalar la fila culpable, aunque no entienda
-    /// el veredicto — que es justo lo que el fallback promete.
+    /// motivo: `name` cambia de significado con `kind` (ver ahí abajo), así que
+    /// bajo [`RenameCollisionKind::Unknown`] un cliente no sabría qué está
+    /// mirando. Con el índice siempre puede señalar la fila culpable, aunque no
+    /// entienda el veredicto — que es justo lo que el fallback promete.
     pub pair_index: u32,
-    /// El nombre ofensor: el DESTINO para `Internal`/`External`, el ORIGEN que
-    /// falta para `AbsentSource`. Su significado depende de `kind`; el que no
-    /// depende de nada es `pair_index`.
+    /// El nombre ofensor. QUÉ nombre depende de `kind`:
+    ///
+    /// - `Internal` — el DESTINO que esta pareja no va a conseguir;
+    /// - `External` — el fichero que ESTORBA, escrito como lo escribe el
+    ///   directorio, que no tiene por qué ser como lo escribió la petición: un
+    ///   gemelo NFD tapa un destino NFC y lo que el humano necesita ver es el
+    ///   gemelo, no un eco de lo que ya tecleó;
+    /// - `AbsentSource` / `AmbiguousSource` — el ORIGEN, tal cual lo mandó
+    ///   quien pidió, porque ese es el texto que tiene que corregir.
+    ///
+    /// El que no depende de nada es `pair_index`.
     pub name: Segment,
     /// El veredicto.
     pub kind: RenameCollisionKind,

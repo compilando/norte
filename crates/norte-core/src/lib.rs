@@ -12,6 +12,7 @@ pub mod connect;
 pub mod daemon;
 mod engine;
 pub mod ftp_plugin;
+mod hashing;
 mod index_build;
 mod index_embed;
 pub mod journal;

@@ -4,3 +4,8 @@
 
 mod naming;
 pub mod plan;
+
+// The planner's whole public surface, re-exported here so the executor task
+// (§5) and the daemon dispatch (§7) import it from ONE place and a later split
+// of `plan.rs` does not touch either of them.
+pub use plan::{Collision, CollisionKind, NameCaps, RenamePlan, Step, name_key, plan_batch};

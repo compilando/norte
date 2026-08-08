@@ -248,7 +248,7 @@ fn el_schema_de_attr_value_cubre_las_etiquetas_de_la_golden() {
 /// (0.36.0) Mismo mecanismo que el test de arriba, para
 /// [`RenameCollisionKind`]. El `check_family` de `golden_types.rs` NO cubre
 /// este fallo: compara las fixtures contra una lista de casos Rust escrita a
-/// mano, así que una CUARTA variante sin fixture y sin caso deja los dos lados
+/// mano, así que una variante NUEVA sin fixture y sin caso deja los dos lados
 /// de acuerdo y el test verde. El artefacto, en cambio, se genera del tipo, así
 /// que cruzarlo contra la golden convierte «añadí un veredicto, olvidé
 /// congelarlo» en rojo.

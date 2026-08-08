@@ -579,6 +579,22 @@ fn golden_rename_batch_types() {
                     kind: RenameCollisionKind::Internal,
                 },
             ),
+            // El origen SOBRA en vez de faltar: el nombre pedido se pliega
+            // sobre dos entradas del directorio y no coincide exacto con
+            // ninguna. `name` es el origen tal como lo escribió quien pidió.
+            (
+                "ambiguous_source",
+                RenameCollision {
+                    pair_index: 3,
+                    // NFD ON PURPOSE, and escaped on both sides: this
+                    // verdict exists FOR the NFC/NFD twin, and NFC is
+                    // the one spelling a stray normalisation pass
+                    // would leave untouched. The fixture writes it
+                    // `\u0301` so no editor can undo it.
+                    name: seg("cafe\u{301}".as_bytes()),
+                    kind: RenameCollisionKind::AmbiguousSource,
+                },
+            ),
         ],
     );
 }
