@@ -1600,12 +1600,15 @@ mod tests {
         /// invent a step whose sides are the same name.
         #[test]
         fn planning_terminates_and_keeps_its_invariants(
-            // Any byte EXCEPT the two the preconditions rule out: a `/` or a
-            // NUL is not a directory entry at all, and feeding one here would
-            // only be testing the `debug_assert` that says so.
+            // Any byte EXCEPT what the preconditions rule out: a `/`, a NUL,
+            // and the names `.`/`..` are not directory entries at all, and
+            // feeding one here would only test the `debug_assert` that says so.
             names in proptest::collection::vec(
                 proptest::collection::vec(
-                    (1u8..=255).prop_filter("no separator", |b| *b != b'/'), 1..4),
+                    (1u8..=255).prop_filter("no separator", |b| *b != b'/'), 1..4)
+                    .prop_filter("a directory ENTRY, not `.`/`..`", |n: &Vec<u8>| {
+                        n.as_slice() != b"." && n.as_slice() != b".."
+                    }),
                 1..8),
             idx in proptest::collection::vec((0usize..8, 0usize..8), 0..8),
             insensitive in any::<bool>(),

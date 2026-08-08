@@ -332,6 +332,7 @@ mod tests {
             reversal: "delete".into(),
             reversal_ref: None,
             undoes_seq: None,
+            batch_id: None,
         }
     }
 

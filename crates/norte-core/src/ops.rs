@@ -1263,7 +1263,14 @@ async fn rename_with_policy(
     let conflict = match first {
         Ok(()) => {
             observer
-                .on_mutation(&Mutation::Renamed { from, to }, &ctx.actor)
+                .on_mutation(
+                    &Mutation::Renamed {
+                        from,
+                        to,
+                        batch: None,
+                    },
+                    &ctx.actor,
+                )
                 .await?;
             return Ok(RenameOutcome::Renamed);
         }
@@ -1280,7 +1287,14 @@ async fn rename_with_policy(
             overwrite_existing(src, to, &existing, observer, ctx).await?;
             rename_retrying(src, from, to, from_id, &ctx.cancel).await?;
             observer
-                .on_mutation(&Mutation::Renamed { from, to }, &ctx.actor)
+                .on_mutation(
+                    &Mutation::Renamed {
+                        from,
+                        to,
+                        batch: None,
+                    },
+                    &ctx.actor,
+                )
                 .await?;
             Ok(RenameOutcome::Renamed)
         }
@@ -1293,7 +1307,14 @@ async fn rename_with_policy(
                     overwrite_existing(src, to, &existing, observer, ctx).await?;
                     rename_retrying(src, from, to, from_id, &ctx.cancel).await?;
                     observer
-                        .on_mutation(&Mutation::Renamed { from, to }, &ctx.actor)
+                        .on_mutation(
+                            &Mutation::Renamed {
+                                from,
+                                to,
+                                batch: None,
+                            },
+                            &ctx.actor,
+                        )
                         .await?;
                     Ok(RenameOutcome::Renamed)
                 }
@@ -1314,7 +1335,14 @@ async fn rename_with_policy(
                 match rename_retrying(src, from, &cand, from_id, &ctx.cancel).await {
                     Ok(()) => {
                         observer
-                            .on_mutation(&Mutation::Renamed { from, to: &cand }, &ctx.actor)
+                            .on_mutation(
+                                &Mutation::Renamed {
+                                    from,
+                                    to: &cand,
+                                    batch: None,
+                                },
+                                &ctx.actor,
+                            )
                             .await?;
                         return Ok(RenameOutcome::Renamed);
                     }

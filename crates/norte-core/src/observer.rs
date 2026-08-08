@@ -30,6 +30,10 @@ pub enum Mutation<'a> {
         from: &'a VPath,
         /// Path nuevo.
         to: &'a VPath,
+        /// Lote al que pertenece el rename (`fs.rename_batch`): las entradas
+        /// que comparten `batch` son UNA unidad deshacible. `None` para un
+        /// rename suelto — que es todo lo que hay fuera del ejecutor de lotes.
+        batch: Option<i64>,
     },
 }
 

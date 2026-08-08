@@ -37,6 +37,13 @@ CREATE TABLE IF NOT EXISTS journal (
     entry_hash   BLOB    NOT NULL
 );";
 
+/// Migración IDEMPOTENTE de la columna de lote (batch rename, §17). Va fuera de
+/// `SCHEMA` a propósito: `CREATE TABLE IF NOT EXISTS` NO altera una tabla que ya
+/// existe, así que una DB escrita antes de esta versión se quedaría sin columna.
+/// Un `ALTER TABLE` sobre una DB ya migrada responde «duplicate column name» y
+/// eso es un no-op, no un fallo.
+const MIGRATE_BATCH_ID: &str = "ALTER TABLE journal ADD COLUMN batch_id INTEGER";
+
 /// Errores del journal.
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
@@ -147,11 +154,15 @@ pub struct JournalEntry {
     /// Si esta entrada COMPENSA un undo, el `seq` original que deshace; `None`
     /// si es una mutación normal.
     pub undoes_seq: Option<i64>,
+    /// Lote al que pertenece la entrada (`fs.rename_batch`): las entradas que
+    /// comparten `batch_id` son UNA unidad deshacible. `None` para una mutación
+    /// suelta — y para toda entrada escrita antes de que existieran los lotes.
+    pub batch_id: Option<i64>,
 }
 
 /// Materializa un `JournalEntry` desde una fila con el orden de columnas
 /// `seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to,
-/// reversal, reversal_ref, undoes_seq` (compartido por `entries` y
+/// reversal, reversal_ref, undoes_seq, batch_id` (compartido por `entries` y
 /// `revertible_for`).
 fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> JournalEntry {
     JournalEntry {
@@ -166,7 +177,22 @@ fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> JournalEntry {
         reversal: row.get(8),
         reversal_ref: row.get(9),
         undoes_seq: row.get(10),
+        batch_id: row.get(11),
     }
+}
+
+/// ¿Existe ya la columna `batch_id`? Se pregunta al catálogo en vez de asumir:
+/// el handle de SOLO-LECTURA (audit) no puede migrar una DB antigua y aun así
+/// tiene que leerla. Una tabla ausente responde CERO filas → `false`, y la
+/// primera query real fallará con su error propio, sin enmascarar nada.
+async fn has_batch_id_column(pool: &SqlitePool) -> Result<bool, JournalError> {
+    let rows = sqlx::query("PRAGMA table_info(journal)")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.iter().any(|r| {
+        let name: String = r.get(1);
+        name == "batch_id"
+    }))
 }
 
 /// Veredicto de [`Journal::verify_chain`] (B2 de #63): si la cadena se
@@ -205,6 +231,7 @@ pub(crate) struct Record<'a> {
     pub reversal: &'a str,
     pub reversal_ref: Option<&'a [u8]>,
     pub undoes_seq: Option<i64>,
+    pub batch_id: Option<i64>,
 }
 
 /// `entry_hash = sha256(prev_hash ‖ campos con longitud prefijada y presencia)`.
@@ -227,6 +254,16 @@ pub(crate) fn chain_hash(prev: &[u8; 32], r: &Record<'_>) -> [u8; 32] {
             feed(&mut h, &s.to_le_bytes());
         }
     }
+    // AL FINAL y SOLO si hay lote. `None` no alimenta NADA —ni siquiera el byte
+    // de presencia que usan los demás `Option`— porque una entrada escrita antes
+    // de que existiera `batch_id` tiene que hashear EXACTAMENTE igual que
+    // entonces: si no, `verify_chain` gritaría «manipulado» sobre una DB que
+    // solo se migró. `Some` sí alimenta presencia + id con longitud prefijada,
+    // así que ni quitar un lote ni inventarlo sobrevive a la verificación.
+    if let Some(b) = r.batch_id {
+        h.update([1u8]);
+        feed(&mut h, &b.to_le_bytes());
+    }
     h.finalize().into()
 }
 
@@ -236,12 +273,45 @@ pub(crate) fn chain_hash(prev: &[u8; 32], r: &Record<'_>) -> [u8; 32] {
 struct ChainState {
     last_seq: i64,
     last_hash: [u8; 32],
+    /// Último id de lote entregado. Vive AQUÍ, bajo el mismo lock que `seq`,
+    /// para que dos tareas de batch concurrentes no puedan compartir id.
+    batch_counter: i64,
 }
 
 /// El journal transaccional sobre `SQLite` (WAL).
 pub struct Journal {
     pub(crate) pool: SqlitePool,
     chain: Mutex<ChainState>,
+    /// ¿Tiene la tabla la columna `batch_id`? Siempre `true` tras un [`Journal::open`]
+    /// (migra), puede ser `false` en [`Journal::open_read_only`] sobre una DB
+    /// pre-migración, que no se puede alterar y aun así hay que poder auditar.
+    has_batch_id: bool,
+}
+
+/// Todo lo que necesita UNA entrada del journal. Una struct en vez de ocho
+/// argumentos posicionales: la llamada se lee, y añadir un campo más adelante no
+/// vuelve a barajarlos. Los `path*` son BYTES de [`norte_proto::VPath::to_wire`]
+/// (regla 1).
+#[derive(Debug, Clone, Copy)]
+pub struct NewEntry<'a> {
+    /// Operación: `"created" | "removed" | "trashed" | "renamed"`.
+    pub op: &'a str,
+    /// Path afectado (bytes `to_wire`).
+    pub path: &'a [u8],
+    /// Destino de un `renamed` (bytes `to_wire`).
+    pub path_to: Option<&'a [u8]>,
+    /// Cómo revertir.
+    pub reversal: Reversal,
+    /// Referencia necesaria para revertir (p. ej. el destino en la papelera
+    /// lógica), bytes `to_wire`.
+    pub reversal_ref: Option<&'a [u8]>,
+    /// Quién la causó.
+    pub actor: &'a Actor,
+    /// El `seq` que esta entrada COMPENSA, si es un undo.
+    pub undoes_seq: Option<i64>,
+    /// El lote al que pertenece, si formó parte de uno ([`Journal::alloc_batch`]).
+    /// Las entradas que comparten lote son UNA unidad deshacible.
+    pub batch_id: Option<i64>,
 }
 
 impl Journal {
@@ -328,13 +398,27 @@ impl Journal {
             .await?;
         // Sin CREATE TABLE (readonly): si el fichero no es un journal, la
         // primera query fallará con su error real — no se enmascara.
+        let has_batch_id = has_batch_id_column(&pool).await?;
         Ok(Self {
             pool,
             chain: Mutex::new(ChainState {
                 last_seq: 0,
                 last_hash: [0u8; 32],
+                batch_counter: 0,
             }),
+            has_batch_id,
         })
+    }
+
+    /// La columna de lote, o el literal `NULL` cuando la DB es pre-migración y
+    /// no se puede alterar (solo-lectura). Devuelve uno de DOS literales fijos:
+    /// nada de esto viene de fuera.
+    fn batch_col(&self) -> &'static str {
+        if self.has_batch_id {
+            "batch_id"
+        } else {
+            "NULL"
+        }
     }
 
     async fn from_options(opts: SqliteConnectOptions) -> Result<Self, JournalError> {
@@ -345,6 +429,15 @@ impl Journal {
             .connect_with(opts)
             .await?;
         sqlx::query(SCHEMA).execute(&pool).await?;
+        // Migración idempotente: una DB ya migrada responde «duplicate column
+        // name» y se deja en paz. Cualquier OTRO error se propaga (falla en
+        // seguro: sin columna no se puede journalizar un lote, y escribir sin
+        // ella sería perder el agrupamiento en silencio).
+        if let Err(e) = sqlx::query(MIGRATE_BATCH_ID).execute(&pool).await
+            && !e.to_string().contains("duplicate column name")
+        {
+            return Err(JournalError::Sqlx(e));
+        }
         let (last_seq, last_hash) =
             sqlx::query("SELECT seq, entry_hash FROM journal ORDER BY seq DESC LIMIT 1")
                 .fetch_optional(&pool)
@@ -359,12 +452,20 @@ impl Journal {
                     h.copy_from_slice(&v);
                     Ok((seq, h))
                 })?;
+        // El contador de lotes arranca del MÁXIMO ya escrito: reabrir jamás
+        // reutiliza un id que alguna entrada lleva puesto.
+        let batch_counter: i64 = sqlx::query("SELECT COALESCE(MAX(batch_id), 0) FROM journal")
+            .fetch_one(&pool)
+            .await?
+            .get(0);
         Ok(Self {
             pool,
             chain: Mutex::new(ChainState {
                 last_seq,
                 last_hash,
+                batch_counter,
             }),
+            has_batch_id: true,
         })
     }
 
@@ -406,6 +507,57 @@ impl Journal {
         actor: &Actor,
         undoes_seq: Option<i64>,
     ) -> Result<i64, JournalError> {
+        self.record_entry(&NewEntry {
+            op,
+            path,
+            path_to,
+            reversal,
+            reversal_ref,
+            actor,
+            undoes_seq,
+            batch_id: None,
+        })
+        .await
+    }
+
+    /// Entrega un id de lote fresco. Monótono y libre de carreras: el contador
+    /// vive en el estado de la cadena, BAJO EL MISMO LOCK que asigna `seq`, así
+    /// que dos tareas de batch concurrentes del mismo daemon no pueden
+    /// compartirlo (un `SELECT MAX(batch_id) + 1` sí las dejaría). Al reabrir,
+    /// el contador arranca del máximo escrito, así que tampoco se reutiliza
+    /// entre arranques.
+    ///
+    /// Un id entregado y nunca usado (la tarea murió antes del primer paso) se
+    /// pierde sin más: los ids son etiquetas de agrupación, no un contador
+    /// auditable.
+    ///
+    /// # Errors
+    /// Hoy no falla nunca; el `Result` se mantiene para que persistir el
+    /// contador más adelante no cambie la firma.
+    pub async fn alloc_batch(&self) -> Result<i64, JournalError> {
+        let mut chain = self.chain.lock().await;
+        chain.batch_counter += 1;
+        Ok(chain.batch_counter)
+    }
+
+    /// Registra UNA entrada. Es el cuerpo real: [`Self::record`] y
+    /// [`Self::record_undoing`] son envoltorios sobre esta. El `seq` se asigna
+    /// DENTRO del lock de la cadena (junto al encadenado) → orden de `seq` ==
+    /// orden de hash. Si el insert falla, ni `seq` ni `last_hash` avanzan.
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`] al insertar.
+    pub async fn record_entry(&self, e: &NewEntry<'_>) -> Result<i64, JournalError> {
+        let NewEntry {
+            op,
+            path,
+            path_to,
+            reversal,
+            reversal_ref,
+            actor,
+            undoes_seq,
+            batch_id,
+        } = *e;
         let (actor_kind, actor_id) = actor.parts();
         let ts_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -425,12 +577,13 @@ impl Journal {
             reversal: reversal.as_str(),
             reversal_ref,
             undoes_seq,
+            batch_id,
         };
         let entry_hash = chain_hash(&prev, &rec);
 
         sqlx::query(
-            "INSERT INTO journal (seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO journal (seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, batch_id, prev_hash, entry_hash) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(seq)
         .bind(ts_ms)
@@ -442,6 +595,7 @@ impl Journal {
         .bind(reversal.as_str())
         .bind(reversal_ref)
         .bind(undoes_seq)
+        .bind(batch_id)
         .bind(&prev[..])
         .bind(&entry_hash[..])
         .execute(&self.pool)
@@ -472,10 +626,11 @@ impl Journal {
     /// # Errors
     /// [`JournalError::Sqlx`].
     pub async fn verify_chain(&self) -> Result<ChainStatus, JournalError> {
-        let rows = sqlx::query(
-            "SELECT seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash \
+        let rows = sqlx::query(&format!(
+            "SELECT seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash, {} \
              FROM journal ORDER BY seq ASC",
-        )
+            self.batch_col(),
+        ))
         .fetch_all(&self.pool)
         .await?;
         let mut prev = [0u8; 32];
@@ -492,6 +647,7 @@ impl Journal {
             let undoes_seq: Option<i64> = row.get(9);
             let stored_prev: Vec<u8> = row.get(10);
             let stored_hash: Vec<u8> = row.get(11);
+            let batch_id: Option<i64> = row.get(12);
             if stored_prev != prev {
                 return Ok(ChainStatus::Broken { first_bad_seq: seq });
             }
@@ -506,6 +662,7 @@ impl Journal {
                 reversal: &reversal,
                 reversal_ref: reversal_ref.as_deref(),
                 undoes_seq,
+                batch_id,
             };
             let computed = chain_hash(&prev, &rec);
             if computed[..] != stored_hash[..] {
@@ -564,10 +721,11 @@ impl Journal {
     /// # Errors
     /// [`JournalError::Sqlx`].
     pub async fn entries(&self) -> Result<Vec<JournalEntry>, JournalError> {
-        let rows = sqlx::query(
-            "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq \
+        let rows = sqlx::query(&format!(
+            "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, {} \
              FROM journal ORDER BY seq ASC",
-        )
+            self.batch_col(),
+        ))
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.iter().map(row_to_entry).collect())
@@ -581,13 +739,14 @@ impl Journal {
     /// [`JournalError::Sqlx`].
     pub async fn revertible_for(&self, actor: &Actor) -> Result<Vec<JournalEntry>, JournalError> {
         let (actor_kind, actor_id) = actor.parts();
-        let rows = sqlx::query(
-            "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq \
+        let rows = sqlx::query(&format!(
+            "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, {} \
              FROM journal \
              WHERE undoes_seq IS NULL AND actor_kind = ? AND actor_id IS ? \
                AND seq NOT IN (SELECT undoes_seq FROM journal WHERE undoes_seq IS NOT NULL) \
              ORDER BY seq DESC",
-        )
+            self.batch_col(),
+        ))
         .bind(actor_kind)
         .bind(actor_id)
         .fetch_all(&self.pool)
@@ -600,6 +759,19 @@ impl Journal {
     async fn corrupt_path_for_test(&self, seq: i64, path: &[u8]) -> Result<(), JournalError> {
         sqlx::query("UPDATE journal SET path = ? WHERE seq = ?")
             .bind(path)
+            .bind(seq)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// SOLO TESTS: cambia el `batch_id` de una entrada sin recomputar su hash
+    /// (simula a un atacante DESAGRUPANDO un lote, o inventándole uno a una
+    /// mutación suelta).
+    #[cfg(test)]
+    async fn set_batch_for_test(&self, seq: i64, batch: Option<i64>) -> Result<(), JournalError> {
+        sqlx::query("UPDATE journal SET batch_id = ? WHERE seq = ?")
+            .bind(batch)
             .bind(seq)
             .execute(&self.pool)
             .await?;
@@ -671,12 +843,13 @@ impl crate::observer::MutationObserver for SqliteJournal {
         actor: &Actor,
     ) -> Result<(), ProtoError> {
         use crate::observer::Mutation;
-        let (op, path, path_to, reversal, reversal_ref): (
+        let (op, path, path_to, reversal, reversal_ref, batch_id): (
             &str,
             Vec<u8>,
             Option<Vec<u8>>,
             Reversal,
             Option<Vec<u8>>,
+            Option<i64>,
         ) = match mutation {
             Mutation::Created(p) => (
                 "created",
@@ -684,12 +857,14 @@ impl crate::observer::MutationObserver for SqliteJournal {
                 None,
                 Reversal::Delete,
                 None,
+                None,
             ),
             Mutation::Removed(p) => (
                 "removed",
                 p.to_wire().into_bytes(),
                 None,
                 Reversal::Irreversible,
+                None,
                 None,
             ),
             // Papelera lógica → `dest` es la ruta recuperable (reversal_ref).
@@ -700,26 +875,30 @@ impl crate::observer::MutationObserver for SqliteJournal {
                 None,
                 Reversal::RestoreTrash,
                 dest.map(|d| d.to_wire().into_bytes()),
+                None,
             ),
-            Mutation::Renamed { from, to } => (
+            Mutation::Renamed { from, to, batch } => (
                 "renamed",
                 to.to_wire().into_bytes(),
                 Some(from.to_wire().into_bytes()),
                 Reversal::RenameBack,
                 None,
+                *batch,
             ),
         };
         // El error se PROPAGA (regla 4): la op no se considera completa si su
         // entrada de journal no quedó durable. El detalle va por tracing.
         self.journal
-            .record(
+            .record_entry(&NewEntry {
                 op,
-                &path,
-                path_to.as_deref(),
+                path: &path,
+                path_to: path_to.as_deref(),
                 reversal,
-                reversal_ref.as_deref(),
+                reversal_ref: reversal_ref.as_deref(),
                 actor,
-            )
+                undoes_seq: None,
+                batch_id,
+            })
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "fallo al escribir el journal");
@@ -745,6 +924,7 @@ mod tests {
             reversal: "delete",
             reversal_ref: None,
             undoes_seq: None,
+            batch_id: None,
         }
     }
 
@@ -783,6 +963,10 @@ mod tests {
             reversal: "rename",
             reversal_ref: Some(&[]),
             undoes_seq: Some(3),
+            // SIN lote, como toda entrada anterior al batch rename: la
+            // constante de abajo NO cambia por añadir el campo, y eso es
+            // exactamente la promesa de compatibilidad.
+            batch_id: None,
         };
         let got = chain_hash(&[0u8; 32], &r);
         assert_eq!(
@@ -1219,6 +1403,349 @@ mod tests {
         assert_eq!(
             crate::audit::verify_anchor_line(&key, &line, at),
             crate::audit::AnchorVerdict::MissingSeq(crate::audit::Anchor { seq, head })
+        );
+    }
+
+    /// El schema del journal ANTES de que existiera `batch_id`, copiado tal
+    /// cual se envió. Los tests de compatibilidad crean la DB con ESTE texto:
+    /// si el `SCHEMA` de arriba cambia, ellos siguen describiendo el disco que
+    /// ya existe, que es de lo que va la migración.
+    const SCHEMA_BEFORE_BATCH_ID: &str = "\
+CREATE TABLE IF NOT EXISTS journal (
+    seq          INTEGER PRIMARY KEY,
+    ts_ms        INTEGER NOT NULL,
+    actor_kind   TEXT    NOT NULL,
+    actor_id     TEXT,
+    op           TEXT    NOT NULL,
+    path         BLOB    NOT NULL,
+    path_to      BLOB,
+    reversal     TEXT    NOT NULL,
+    reversal_ref BLOB,
+    undoes_seq   INTEGER,
+    prev_hash    BLOB    NOT NULL,
+    entry_hash   BLOB    NOT NULL
+);";
+
+    fn unhex(s: &str) -> Vec<u8> {
+        let b = s.as_bytes();
+        assert!(b.len().is_multiple_of(2), "hex de longitud par");
+        b.chunks(2)
+            .map(|p| u8::from_str_radix(std::str::from_utf8(p).expect("ascii"), 16).expect("hex"))
+            .collect()
+    }
+
+    /// Escribe en `path` una DB con el schema PRE-migración y UNA fila cuyo
+    /// `entry_hash` es la constante congelada de `the_chain_hash_is_frozen` —
+    /// es decir, un hash calculado por el código ANTERIOR a esta tarea, que
+    /// nada de este test recomputa.
+    async fn write_pre_migration_journal(path: &std::path::Path) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(path)
+                    .create_if_missing(true)
+                    // WAL como lo dejaba `Journal::open` de entonces: un
+                    // journal pre-migración REAL está en WAL, y el handle de
+                    // solo-lectura no podría cambiar el modo (eso es escribir).
+                    .journal_mode(SqliteJournalMode::Wal),
+            )
+            .await
+            .expect("pool viejo");
+        sqlx::query(SCHEMA_BEFORE_BATCH_ID)
+            .execute(&pool)
+            .await
+            .expect("schema viejo");
+        sqlx::query(
+            "INSERT INTO journal (seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(7i64)
+        .bind(1_726_000_000_000i64)
+        .bind("agent")
+        .bind(Some("sesion-1"))
+        .bind("renamed")
+        .bind(&b"file:///caf\xff"[..])
+        .bind(Some(&b"file:///caf\xfe"[..]))
+        .bind("rename")
+        .bind(Some(&[][..]))
+        .bind(Some(3i64))
+        .bind(&[0u8; 32][..])
+        // El MISMO hex que pinea `the_chain_hash_is_frozen`, duplicado a
+        // propósito: este test no debe poder «arreglarse» tocando aquella
+        // constante.
+        .bind(unhex("b00a2da6db1199742aa42f4811370bf02fcc21a294d77741ae7a26ad2b794ecc"))
+        .execute(&pool)
+        .await
+        .expect("insert de la era pre-batch");
+        pool.close().await;
+    }
+
+    /// EL test de la regla del hash: un journal escrito ANTES de que existiera
+    /// `batch_id` sigue verificando después de migrarlo. Su fila lleva un
+    /// `entry_hash` de la era anterior; si `None` alimentara algo (aunque fuera
+    /// un byte de presencia), `verify_chain` gritaría «manipulado» sobre una
+    /// base de datos que nadie tocó.
+    #[tokio::test]
+    async fn a_pre_migration_journal_still_verifies_and_keeps_chaining() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("viejo.db");
+        write_pre_migration_journal(&path).await;
+
+        let j = Journal::open(&path).await.expect("open migra la DB");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Intact { entries: 1 },
+            "la migración no puede romper una cadena ya escrita"
+        );
+        let es = j.entries().await.expect("entries");
+        assert_eq!(es.len(), 1);
+        assert_eq!(es[0].batch_id, None, "la fila migrada no tiene lote");
+
+        // Y la cadena SIGUE desde ahí: la entrada nueva encadena con el head
+        // heredado y la cadena entera vuelve a verificar.
+        let seq = j
+            .record(
+                "created",
+                b"file:///nuevo",
+                None,
+                Reversal::Delete,
+                None,
+                &Actor::User,
+            )
+            .await
+            .expect("record tras migrar");
+        assert_eq!(seq, 8, "el seq continúa desde la fila heredada");
+        assert!(j.verify_chain().await.expect("verify").is_intact());
+        assert_eq!(
+            j.alloc_batch().await.expect("alloc"),
+            1,
+            "sin lotes previos, el contador arranca en 1"
+        );
+    }
+
+    /// `open` es la vía de migración; `open_read_only` (audit, M3-5) NO puede
+    /// hacer `ALTER TABLE`, así que tiene que LEER una DB pre-migración sin
+    /// reventar con «no such column».
+    #[tokio::test]
+    async fn a_pre_migration_journal_is_readable_read_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("viejo-ro.db");
+        write_pre_migration_journal(&path).await;
+
+        let ro = Journal::open_read_only(&path).await.expect("open ro");
+        let es = ro.entries().await.expect("entries");
+        assert_eq!(es.len(), 1);
+        assert_eq!(es[0].batch_id, None);
+        assert!(
+            ro.verify_chain().await.expect("verify").is_intact(),
+            "la cadena vieja verifica igual en solo-lectura"
+        );
+        assert_eq!(
+            ro.revertible_for(&Actor::User)
+                .await
+                .expect("revertible")
+                .len(),
+            0,
+            "la fila es de un agente, no del usuario"
+        );
+    }
+
+    /// VECTOR CONGELADO del campo NUEVO: el mismo registro que
+    /// `the_chain_hash_is_frozen` pero CON lote. Pinea la otra mitad de la
+    /// regla (byte de presencia + id con longitud prefijada, al final del
+    /// todo). Si se pone rojo, has cambiado el framing del `batch_id` y has
+    /// invalidado la cadena de los journals que ya lo usan.
+    #[test]
+    fn the_batch_id_framing_is_frozen() {
+        let r = Record {
+            seq: 7,
+            ts_ms: 1_726_000_000_000,
+            actor_kind: "agent",
+            actor_id: Some("sesion-1"),
+            op: "renamed",
+            path: b"file:///caf\xff",
+            path_to: Some(b"file:///caf\xfe"),
+            reversal: "rename",
+            reversal_ref: Some(&[]),
+            undoes_seq: Some(3),
+            batch_id: Some(42),
+        };
+        assert_eq!(
+            crate::hashing::hex_lower(&chain_hash(&[0u8; 32], &r)),
+            "c0bf7ed670bbbb496d5b47defe0181f8a2b3ead1e6ce690d12aaa13a1ae8055b",
+        );
+    }
+
+    /// Un id de lote es monótono y no se reutiliza, ni entre dos asignaciones
+    /// sin insert de por medio ni al reabrir el journal.
+    #[tokio::test]
+    async fn batch_ids_are_monotonic_across_allocs_and_reopens() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("j.db");
+        let usados;
+        {
+            let j = Journal::open(&path).await.expect("open");
+            let a = j.alloc_batch().await.expect("alloc");
+            let b = j.alloc_batch().await.expect("alloc");
+            assert_eq!(b, a + 1, "monótono sin insert de por medio");
+            j.record_entry(&NewEntry {
+                op: "renamed",
+                path: b"file:///b",
+                path_to: Some(b"file:///a"),
+                reversal: Reversal::RenameBack,
+                reversal_ref: None,
+                actor: &Actor::User,
+                undoes_seq: None,
+                batch_id: Some(b),
+            })
+            .await
+            .expect("record");
+            usados = b;
+        }
+        let j = Journal::open(&path).await.expect("reopen");
+        assert!(
+            j.alloc_batch().await.expect("alloc") > usados,
+            "tras reabrir, jamás se repite un lote ya escrito"
+        );
+    }
+
+    /// Dos tareas concurrentes en el mismo daemon JAMÁS comparten lote (un
+    /// `MAX(batch_id) + 1` sí podría).
+    #[tokio::test]
+    async fn concurrent_alloc_batch_never_repeats_an_id() {
+        use std::collections::HashSet;
+        use std::sync::Arc;
+
+        let j = Arc::new(Journal::open_in_memory().await.expect("open"));
+        let mut handles = Vec::new();
+        for _ in 0..32 {
+            let j = Arc::clone(&j);
+            handles.push(tokio::spawn(async move { j.alloc_batch().await }));
+        }
+        let mut vistos = HashSet::new();
+        for h in handles {
+            let id = h.await.expect("join").expect("alloc");
+            assert!(vistos.insert(id), "id de lote repetido: {id}");
+        }
+        assert_eq!(vistos.len(), 32);
+    }
+
+    /// El lote es parte de la cadena: quitárselo a una fila rompe
+    /// `verify_chain` justo ahí (un atacante no puede DESAGRUPAR un batch).
+    #[tokio::test]
+    async fn stripping_a_batch_id_breaks_the_chain() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let batch = j.alloc_batch().await.expect("alloc");
+        let seq = j
+            .record_entry(&NewEntry {
+                op: "renamed",
+                path: b"file:///b",
+                path_to: Some(b"file:///a"),
+                reversal: Reversal::RenameBack,
+                reversal_ref: None,
+                actor: &Actor::User,
+                undoes_seq: None,
+                batch_id: Some(batch),
+            })
+            .await
+            .expect("record");
+        assert!(j.verify_chain().await.expect("verify").is_intact());
+        j.set_batch_for_test(seq, None).await.expect("tamper");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: seq },
+        );
+    }
+
+    /// Y en la otra dirección: INVENTARLE un lote a una entrada suelta también
+    /// rompe la cadena. La compatibilidad con lo viejo no es un agujero.
+    #[tokio::test]
+    async fn inventing_a_batch_id_breaks_the_chain() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let seq = j
+            .record(
+                "created",
+                b"file:///a",
+                None,
+                Reversal::Delete,
+                None,
+                &Actor::User,
+            )
+            .await
+            .expect("record");
+        assert!(j.verify_chain().await.expect("verify").is_intact());
+        j.set_batch_for_test(seq, Some(1)).await.expect("tamper");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: seq },
+        );
+    }
+
+    /// El lector expone el lote, que es lo que permite al undo consumir el
+    /// grupo entero como UNA unidad.
+    #[tokio::test]
+    async fn entries_and_revertible_report_their_batch() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let batch = j.alloc_batch().await.expect("alloc");
+        j.record_entry(&NewEntry {
+            op: "renamed",
+            path: b"file:///b",
+            path_to: Some(b"file:///a"),
+            reversal: Reversal::RenameBack,
+            reversal_ref: None,
+            actor: &Actor::User,
+            undoes_seq: None,
+            batch_id: Some(batch),
+        })
+        .await
+        .expect("record");
+        let es = j.entries().await.expect("entries");
+        assert_eq!(es[0].batch_id, Some(batch));
+        let rev = j.revertible_for(&Actor::User).await.expect("revertible");
+        assert_eq!(rev[0].batch_id, Some(batch));
+    }
+
+    /// Un rename suelto (el camino de `fs.move`) sigue sin lote; uno de un
+    /// batch lo arrastra hasta la fila.
+    #[tokio::test]
+    async fn on_mutation_threads_the_batch_of_a_rename() {
+        use crate::observer::{Mutation, MutationObserver};
+        use norte_proto::VPath;
+
+        let obs = SqliteJournal::new(Journal::open_in_memory().await.expect("open"));
+        let from = VPath::parse("file:///a").expect("vpath");
+        let to = VPath::parse("file:///b").expect("vpath");
+        obs.on_mutation(
+            &Mutation::Renamed {
+                from: &from,
+                to: &to,
+                batch: None,
+            },
+            &Actor::User,
+        )
+        .await
+        .expect("suelto");
+        let batch = obs.journal().alloc_batch().await.expect("alloc");
+        obs.on_mutation(
+            &Mutation::Renamed {
+                from: &from,
+                to: &to,
+                batch: Some(batch),
+            },
+            &Actor::User,
+        )
+        .await
+        .expect("en lote");
+        let es = obs.journal().entries().await.expect("entries");
+        assert_eq!(es[0].batch_id, None, "un rename suelto no inventa lote");
+        assert_eq!(es[1].batch_id, Some(batch));
+        assert!(
+            obs.journal()
+                .verify_chain()
+                .await
+                .expect("verify")
+                .is_intact()
         );
     }
 
