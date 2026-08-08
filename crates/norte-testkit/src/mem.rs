@@ -924,6 +924,10 @@ impl Provider for MemProvider {
         self.faults.op_gate().await?;
         let from_key = seg_path(from);
         let to_key = seg_path(to);
+        // ANTES de tocar el árbol: un fallo inyectado no aplica su efecto.
+        if self.faults.rename_fails_from(&from_key) {
+            return Err(Error::Io { retryable: false });
+        }
         if from_key.is_empty() || to_key.is_empty() {
             return Err(Error::InvalidPath);
         }

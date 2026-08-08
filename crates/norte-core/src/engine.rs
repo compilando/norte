@@ -4,8 +4,8 @@
 use std::sync::{Arc, RwLock};
 
 use norte_proto::{
-    CollisionPolicy, DeleteMode, Entry, Error, ResumePolicy, SymlinkPolicy, TaskKind, VPath,
-    VerifyPolicy,
+    CapabilityFlags, CollisionPolicy, DeleteMode, Entry, Error, ResumePolicy, Segment,
+    SymlinkPolicy, TaskKind, VPath, VerifyPolicy, methods::PlanHash,
 };
 use norte_vfs::{EntryStream, Provider};
 
@@ -983,6 +983,259 @@ impl Engine {
         ))
     }
 
+    /// El plan REVISABLE de un lote de renames dentro de `dir` (spec §17, ADR
+    /// 0042). LEE el directorio y sus capabilities; no muta ni journaliza nada.
+    ///
+    /// `pairs` son `(from, to)` en BYTES crudos de nombre base (regla 1): el
+    /// llamante manda INTENCIÓN. El orden, los temporales y los veredictos los
+    /// decide el core, así que un cliente —que puede ser un agente— no puede
+    /// colar un orden que el humano no vio.
+    ///
+    /// El token que devuelve ([`crate::rename::DirPlan::hash`]) va ATADO a
+    /// `dir`: un hash aprobado para un directorio no vale contra otro cuyo
+    /// re-plan produzca los mismos pasos.
+    ///
+    /// **Gate de policy: NINGUNO**, igual que [`Self::list`] y
+    /// [`Self::search_as`]. Planificar es leer el directorio y no hay
+    /// `PolicyOp` de lectura; el gate de mutación se aplica entero en
+    /// [`Self::rename_batch`], que es donde hay efecto.
+    ///
+    /// # Errors
+    /// [`Error::InvalidPath`] si algún nombre no es una entrada de directorio
+    /// legal o si `pairs` supera
+    /// [`FS_RENAME_BATCH_MAX_PAIRS`](norte_proto::methods::FS_RENAME_BATCH_MAX_PAIRS);
+    /// [`Error::Unsupported`] si el scheme de `dir` no tiene provider o el
+    /// provider es de solo lectura; los del provider al listar.
+    pub async fn rename_batch_plan(
+        &self,
+        dir: &VPath,
+        pairs: &[(Vec<u8>, Vec<u8>)],
+    ) -> Result<crate::rename::DirPlan, Error> {
+        self.rename_batch_plan_as(dir, pairs, &crate::journal::Actor::User)
+            .await
+    }
+
+    /// [`Self::rename_batch_plan`] con ACTOR explícito (camino agéntico).
+    ///
+    /// El actor viaja por simetría con las mutaciones y para auditoría futura,
+    /// pero NO gatea nada: planificar es una lectura, y un agente que puede
+    /// listar un directorio puede ver qué haría un rename en él. Lo que se
+    /// gatea es ejecutarlo ([`Self::rename_batch_as`]).
+    ///
+    /// # Errors
+    /// Las de [`Self::rename_batch_plan`].
+    pub async fn rename_batch_plan_as(
+        &self,
+        dir: &VPath,
+        pairs: &[(Vec<u8>, Vec<u8>)],
+        _actor: &crate::journal::Actor,
+    ) -> Result<crate::rename::DirPlan, Error> {
+        let (plan, _provider) = self.plan_for(dir, pairs).await?;
+        Ok(plan)
+    }
+
+    /// Planifica contra el directorio TAL COMO ESTÁ AHORA y devuelve también el
+    /// provider que lo sirvió, para que el camino de ejecución re-planifique
+    /// con exactamente las mismas entradas.
+    #[tracing::instrument(skip(self, pairs), fields(dir = %span_path(dir), pairs = pairs.len()))]
+    async fn plan_for(
+        &self,
+        dir: &VPath,
+        pairs: &[(Vec<u8>, Vec<u8>)],
+    ) -> Result<(crate::rename::DirPlan, Arc<dyn Provider>), Error> {
+        // Tope del wire, comprobado también aquí: el engine embebido es una API
+        // pública y el planificador es lineal en pares Y en entradas del
+        // listado — un lote sin cota es trabajo sin cota.
+        if pairs.len() > norte_proto::methods::FS_RENAME_BATCH_MAX_PAIRS {
+            tracing::debug!(pairs = pairs.len(), "lote de renames por encima del tope");
+            return Err(Error::InvalidPath);
+        }
+        // La precondición del planificador (cada lado es UNA entrada de
+        // directorio) se comprueba AQUÍ, en el único punto impuro por el que
+        // pasan los nombres. `plan_batch` es `pub` y trata los nombres como
+        // bytes opacos: en release planificaría feliz un `to = "../.."`.
+        for name in pairs.iter().flat_map(|(f, t)| [f, t]) {
+            if Segment::new(name.clone()).is_err() {
+                tracing::debug!("nombre de rename que no es una entrada de directorio");
+                return Err(Error::InvalidPath);
+            }
+        }
+        let provider = self.provider_for(dir).await?;
+        let caps = provider.capabilities();
+        if caps.flags.contains(CapabilityFlags::READ_ONLY) {
+            return Err(Error::Unsupported);
+        }
+        let names = list_base_names(&*provider, dir).await?;
+        let name_caps = crate::rename::NameCaps {
+            case_sensitive: caps.flags.contains(CapabilityFlags::CASE_SENSITIVE),
+        };
+        let owned: Vec<(Vec<u8>, Vec<u8>)> = pairs.to_vec();
+        // El planificador es SÍNCRONO y asigna una clave de comparación por
+        // entrada del listado: sobre un directorio de cien mil ficheros eso es
+        // trabajo de CPU medible, y `fs.rename_batch_plan` es una respuesta
+        // DIRECTA (ADR 0042) que corre en el executor async. Fuera de él
+        // (reglas 2 y 3): un hilo de bloqueo no puede dejar sin atender al
+        // resto de conexiones del daemon.
+        tokio::task::spawn_blocking(move || crate::rename::plan_batch(&owned, &names, name_caps))
+            .await
+            .map(|plan| (crate::rename::DirPlan::bind(dir, plan), provider))
+            .map_err(|e| {
+                tracing::error!(error = %e, "el planificador de renames no terminó");
+                Error::Internal { panic: true }
+            })
+    }
+
+    /// Ejecuta un lote de renames dentro de `dir` como UNA Task y UNA unidad
+    /// deshacible del journal (spec §17, ADR 0042).
+    ///
+    /// `plan_hash` es el token del plan que el humano aprobó
+    /// ([`Self::rename_batch_plan`]). El directorio se re-planifica aquí y los
+    /// tokens tienen que coincidir: una deriva que cambie algún veredicto
+    /// responde [`Error::PlanStale`] en vez de ejecutar algo que nadie aprobó.
+    ///
+    /// Devuelve la Task y su [`crate::rename::BatchReport`], que se rellena
+    /// mientras corre y queda completo al terminar. **Míralo aunque la Task
+    /// falle**: si el rollback se quedó a medias, ahí está el paso que siguió
+    /// aplicado y con qué nombres — el `Failed{error}` solo cuenta la causa.
+    ///
+    /// Ningún paso sobrescribe nada: son [`norte_vfs::Provider::rename`]
+    /// pelados, y el planificador rechaza el plan entero ante cualquier
+    /// colisión.
+    ///
+    /// # Errors
+    /// [`Error::PlanNotExecutable`] si el plan tiene colisiones;
+    /// [`Error::PlanStale`] si el directorio derivó; [`Error::PolicyDenied`]
+    /// si el gate deniega; las de [`Self::rename_batch_plan`].
+    pub async fn rename_batch(
+        &self,
+        dir: &VPath,
+        pairs: &[(Vec<u8>, Vec<u8>)],
+        plan_hash: &PlanHash,
+    ) -> Result<
+        (
+            TaskHandle,
+            Arc<std::sync::Mutex<crate::rename::BatchReport>>,
+        ),
+        Error,
+    > {
+        self.rename_batch_as(dir, pairs, plan_hash, crate::journal::Actor::User)
+            .await
+    }
+
+    /// [`Self::rename_batch`] con ACTOR explícito (camino agéntico, M3-3).
+    ///
+    /// # Errors
+    /// Las de [`Self::rename_batch`].
+    ///
+    /// # Panics
+    /// Solo por envenenamiento del `Mutex` del reporte (otro hilo panicó
+    /// sosteniéndolo) — irrecuperable, mismo criterio que el resto del core.
+    #[tracing::instrument(skip(self, pairs, plan_hash, actor), fields(dir = %span_path(dir)))]
+    pub async fn rename_batch_as(
+        &self,
+        dir: &VPath,
+        pairs: &[(Vec<u8>, Vec<u8>)],
+        plan_hash: &PlanHash,
+        actor: crate::journal::Actor,
+    ) -> Result<
+        (
+            TaskHandle,
+            Arc<std::sync::Mutex<crate::rename::BatchReport>>,
+        ),
+        Error,
+    > {
+        let (plan, provider) = self.plan_for(dir, pairs).await?;
+        // La DERIVA se comprueba primero, y el orden es contractual (ver la
+        // doc de `Error::PlanStale`): «re-planificar las mismas parejas produjo
+        // un plan distinto del que se aprobó». Un directorio que derivó hasta
+        // volverse colisionante contestando `PlanNotExecutable` le diría al
+        // humano que el plan que leyó tenía colisiones — y no las tenía. Con
+        // este orden, `PlanNotExecutable` queda para lo que de verdad nombra:
+        // el llamante aprobó un plan que ya venía muerto (ignoró
+        // `executable: false`), y su token casa.
+        if plan.hash() != plan_hash {
+            return Err(Error::PlanStale);
+        }
+        if !plan.executable() {
+            return Err(Error::PlanNotExecutable);
+        }
+        let steps: Vec<crate::rename::exec::PlannedStep> = plan
+            .plan
+            .steps
+            .iter()
+            .map(|s| crate::rename::exec::absolute(dir, s))
+            .collect::<Result<_, _>>()?;
+        // UN gate para el lote entero, con TODAS las rutas que toca — los
+        // temporales incluidos, que también son ficheros creados en el
+        // directorio. La policy resuelve el slice a lo MÁS restrictivo, así que
+        // un lote que roza un nombre denegado se deniega ENTERO y jamás a
+        // medias. Va antes de reservar el id de lote: un lote denegado no
+        // consume nada.
+        let mut gate_paths: Vec<&VPath> = Vec::with_capacity(steps.len() * 2);
+        for s in &steps {
+            gate_paths.push(&s.from);
+            gate_paths.push(&s.to);
+        }
+        self.gate(&actor, crate::policy::PolicyOp::Move, &gate_paths)
+            .await?;
+        drop(gate_paths);
+
+        let recorder: Arc<dyn crate::rename::exec::StepJournal> = match &self.journal {
+            Some(j) => {
+                let batch_id = j.journal().alloc_batch().await.map_err(Error::from)?;
+                Arc::new(crate::rename::exec::BatchJournal {
+                    journal: Arc::clone(j),
+                    actor: actor.clone(),
+                    batch_id,
+                })
+            }
+            // Sin journal (tests embebidos, `Engine::new`): los renames ocurren
+            // y llegan al observer, pero no hay lote que agrupar ni undo que
+            // servir. Honesto: sin journal tampoco hay undo.
+            None => Arc::new(crate::rename::exec::ObserverJournal {
+                observer: Arc::clone(&self.observer),
+                actor: actor.clone(),
+            }),
+        };
+
+        let report = Arc::new(std::sync::Mutex::new(crate::rename::BatchReport::default()));
+        let report_task = Arc::clone(&report);
+        let key = dir.scheme().to_owned();
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::RenameBatch,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    let out = crate::rename::exec::run(
+                        &*provider,
+                        &*recorder,
+                        &steps,
+                        &ctx.cancel,
+                        &ctx.progress,
+                        &report_task,
+                    )
+                    .await;
+                    // Un rollback que no pudo terminar no es un detalle: nombra
+                    // el paso que se quedó aplicado.
+                    let stuck = report_task.lock().expect("batch report lock").stuck.clone();
+                    if let Some(s) = stuck {
+                        tracing::error!(
+                            from = %span_path(&s.from),
+                            to = %span_path(&s.to),
+                            pair_index = s.pair_index,
+                            still_applied = s.still_applied,
+                            "el lote de renames dejó un rename aplicado que no pudo deshacerse",
+                        );
+                    }
+                    out
+                })
+            }),
+        );
+        Ok((handle, report))
+    }
+
     /// Borrado PERMANENTE (recursivo post-order) como Task. La papelera
     /// es [`Self::delete_with`] con [`DeleteMode::Trash`].
     ///
@@ -1300,6 +1553,25 @@ pub(crate) fn ai_to_proto_error(e: &norte_ai::AiError) -> Error {
             Error::Internal { panic: false }
         }
     }
+}
+
+/// Todos los nombres base de `dir`, en bytes crudos (regla 1).
+///
+/// MATERIALIZA el listado entero: el planificador necesita ver el directorio
+/// completo para juzgar las colisiones, y un listado a medias produciría
+/// veredictos a medias. Por eso un error a mitad de stream PROPAGA en vez de
+/// devolver lo que se alcanzó a leer.
+async fn list_base_names(provider: &dyn Provider, dir: &VPath) -> Result<Vec<Vec<u8>>, Error> {
+    use futures::StreamExt;
+    let mut stream = provider.list(dir).await?;
+    let mut names = Vec::new();
+    while let Some(item) = stream.next().await {
+        let entry = item?;
+        if let Some(n) = entry.path.file_name() {
+            names.push(n.as_bytes().to_vec());
+        }
+    }
+    Ok(names)
 }
 
 /// Reconstruye un `VPath` desde los bytes `to_wire` del journal (undo M3-2).

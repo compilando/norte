@@ -34,6 +34,10 @@ struct FaultState {
     /// árbol se lista normal. Para un walker que debe SEGUIR pese a un subdir
     /// ilegible (fs.search).
     fail_list_at: Option<SegPath>,
+    /// El `rename` cuyo ORIGEN es este path (byte-exacto) falla con
+    /// `Error::Io`, SIN aplicar su efecto. Para el ejecutor transaccional de
+    /// lotes: el paso que dispara el rollback.
+    fail_rename_at: Option<SegPath>,
     /// `Some(n)`: quedan `n` operaciones antes de la desconexión.
     disconnect_after: Option<u64>,
     /// Las próximas `n` operaciones fallan retryable (indisponibilidad
@@ -83,6 +87,22 @@ impl Faults {
     /// SIGUE ante un subdir ilegible.
     pub fn fail_list_at(&self, path: &VPath) {
         self.lock().fail_list_at = Some(seg_path(path));
+    }
+
+    /// El `rename` cuyo ORIGEN es `path` (clave byte-exacta, sin fold de caja)
+    /// falla con [`Error::Io`](norte_proto::Error::Io) `{retryable: false}` y
+    /// **sin aplicar su efecto**: el árbol queda exactamente como estaba.
+    ///
+    /// Es el fallo que un ejecutor transaccional necesita — el paso k muere y
+    /// todo lo anterior tiene que desandarse. No retryable a propósito: un
+    /// fallo inyectado no se cura reintentando, y un lote que se reintentase
+    /// solo taparía el rollback que el test quiere observar.
+    ///
+    /// El fallo NO se consume: mientras esté armado, TODO rename desde ese
+    /// origen falla — incluido el del rollback, que es como se prueba el
+    /// camino «la reversa tampoco pudo». Desármalo con [`Self::clear`].
+    pub fn fail_rename_at(&self, path: &VPath) {
+        self.lock().fail_rename_at = Some(seg_path(path));
     }
 
     /// Tras `n` operaciones más, TODA operación devuelve
@@ -203,6 +223,12 @@ impl Faults {
     /// `true` si el `list` de `key` debe fallar (fallo inyectado byte-exacto).
     pub(crate) fn list_fails_for(&self, key: &SegPath) -> bool {
         self.lock().fail_list_at.as_ref() == Some(key)
+    }
+
+    /// `true` si el `rename` DESDE `key` debe fallar (fallo inyectado
+    /// byte-exacto) antes de tocar nada.
+    pub(crate) fn rename_fails_from(&self, key: &SegPath) -> bool {
+        self.lock().fail_rename_at.as_ref() == Some(key)
     }
 
     /// Snapshot del fallo de escritura para `path`, si aplica.
