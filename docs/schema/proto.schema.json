@@ -1693,11 +1693,18 @@
           "type": "string"
         },
         "paths": {
-          "description": "Rutas implicadas (wire, redactadas). SOLO display: jamás se reparsan a\nuna operación — la op real va ligada server-side por `approval_id`.",
+          "description": "Rutas implicadas (wire, redactadas). SOLO display: jamás se reparsan a\nuna operación — la op real va ligada server-side por `approval_id`.\n\nPuede ser un PREFIJO: ver `paths_total`.",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "paths_total": {
+          "default": 0,
+          "description": "Cuántas rutas cubre la decisión (0.36.0). Mismo contrato que\n[`PolicyApprovalRequired::paths_total`], incluido `0` = desconocido.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "session": {
           "description": "Sesión de agente que pidió la op (si aplica).",
@@ -2364,11 +2371,18 @@
           "type": "string"
         },
         "paths": {
-          "description": "Rutas implicadas (wire, redactadas). SOLO display: jamás se reparsan a\nuna operación — la op real va ligada server-side por `approval_id`.",
+          "description": "Rutas implicadas (wire, redactadas). SOLO display: jamás se reparsan a\nuna operación — la op real va ligada server-side por `approval_id`.\n\nPuede ser un PREFIJO de las rutas que la decisión cubre: ver\n`paths_total`.",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "paths_total": {
+          "default": 0,
+          "description": "Cuántas rutas cubre de verdad la decisión (0.36.0). `0` = DESCONOCIDO\n(un server N-1 no lo mandaba), y entonces vale `paths.len()`.\n\nNORMATIVO para un frontend: si es mayor que `paths.len()`, la lista está\nRECORTADA y hay que decírselo al humano. Un lote de renames\n([`FS_RENAME_BATCH`]) gatea dos rutas por paso y puede traer miles; el\nserver recorta lo que difunde —la notificación va a cada conexión humana\ny se retiene durante el TTL—, pero la DECISIÓN se toma sobre todas. Un\nhumano que aprueba 32 rutas de aspecto inocente sin saber que había ocho\nmil no está consintiendo lo que cree.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "session": {
           "description": "Sesión de agente que pidió la op (si aplica).",

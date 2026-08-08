@@ -184,6 +184,47 @@ The executor arrives in a later task, but the wire is what commits us: a single
 `task_id` for the whole batch is a promise that undoing it is one act, and
 `PlanNotExecutable` is a promise that a rejected plan attempted nothing at all.
 
+### 8. The report is pulled by `task_id`, not pushed
+
+A batch that could not clean up after itself leaves a file under a name nobody
+asked for. That fact does not fit in a task's terminal state: `Failed{error}`
+names the *cause*, and what a human needs is the *place*. So
+`fs.rename_batch_report` returns the executor's report — counters, the failed
+pair, and the step that stayed applied with both of its absolute paths — keyed
+by the `task_id` the execution already handed back.
+
+**Pulled, not pushed.** A terminal notification is droppable exactly when the
+daemon is busiest (the outbox is bounded and a saturated subscriber is evicted),
+and a client that reconnects after the task ended could never resync it. The
+same reasoning produced the `policy.pending` resync. This method is the twin of
+`policy.undo_report` (#71), which exists for the same reason on the same shape
+of problem.
+
+By the same token `PolicyUndoReportResult` gains `batch_stuck` and
+`compensations_lost`: session undo reverts a batch as one unit, so it can get
+stuck the same way, and until now a remote human saw only `blocked` — which
+says "I stopped and the tree is consistent", the opposite of what happened.
+
+**Retention is a declared ceiling, like the others in decision 6.** Reports live
+in a ring of `BATCH_REPORTS_MAX` (32), with a sub-cap of
+`BATCH_REPORTS_AGENTS_MAX` (16) for non-human owners so an agent's batches
+cannot evict a human's warning, and eviction prefers a report that says nothing
+went wrong over one that does. A client polls after the terminal state and does
+not sit on the id for hours.
+
+**A `pair_index` on the wire is not the step→pair mapping decision 2 declined.**
+That decision is about *input*: the client never sends an order. A stuck step is
+*output*, and the whole point of it is to be addressable to the row the user
+typed — `RenameCollision` carries `pair_index` for the same reason.
+
+An evicted id, an id that was never a batch, and someone else's id all answer
+one `INVALID_PARAMS`. Conflating the third with the others is deliberate: it is
+what stops the method reporting whether another actor's task existed. Not
+minting a `ReportExpired` category to separate the first two is a smaller
+judgement — `Error::CursorExpired` (ADR 0017) is the precedent that would
+justify one — and it can be added additively if a client ever demonstrates it
+would retry differently.
+
 ## Consequences
 
 A permutation becomes expressible, so AI rename stops failing at its most

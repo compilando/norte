@@ -713,6 +713,7 @@ mod palette_modal_guard_tests {
                 session: Some("s1".into()),
                 op: "copy".into(),
                 paths: vec!["mem:///a".into()],
+                paths_total: 0,
                 ttl_ms: 60_000,
             },
         }
@@ -3438,6 +3439,7 @@ mod help_key_tests {
                 session: Some("s1".into()),
                 op: "copy".into(),
                 paths: vec!["mem:///a".into()],
+                paths_total: 0,
                 ttl_ms: 60_000,
             },
         }

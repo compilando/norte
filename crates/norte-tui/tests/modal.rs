@@ -49,6 +49,7 @@ fn approval() -> Modal {
             session: Some("s1".into()),
             op: "copy".into(),
             paths: vec!["mem:///proj/a".into(), "mem:///proj/b".into()],
+            paths_total: 0,
             ttl_ms: 60_000,
         },
     }

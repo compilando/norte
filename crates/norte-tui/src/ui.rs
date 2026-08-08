@@ -1656,10 +1656,14 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         // contra el frame, así que un alto sin tope dejaba las últimas líneas
         // sin pintar. La última es el aviso de que las teclas están inertes.
         Modal::ApproveAgentOp { req } => {
-            let lineas = 1
-                + req.paths.len().min(norte_frontend::MODAL_ITEM_LIMIT)
-                + usize::from(req.paths.len() > norte_frontend::MODAL_ITEM_LIMIT)
-                + 1;
+            // Mismo cómputo que `approval_modal_text`: la línea de resumen
+            // aparece cuando la DECISIÓN cubre más rutas de las que se pintan,
+            // aunque el recorte lo haya hecho el server (`paths_total`).
+            let mostradas = req.paths.len().min(norte_frontend::MODAL_ITEM_LIMIT);
+            let total = usize::try_from(req.paths_total)
+                .unwrap_or(usize::MAX)
+                .max(req.paths.len());
+            let lineas = 1 + mostradas + usize::from(total > mostradas) + 1;
             // `+ 2` (los bordes), no el `+ 3` de ConfirmDelete: este modal
             // siempre ajustó exacto y acotar la lista no es motivo para
             // moverle la caja una fila.
@@ -1970,19 +1974,30 @@ fn approval_modal_text(
             ],
         ));
     }
-    if req.paths.len() > limite {
-        let oculta_hostil = req.paths[limite..]
+    // Cuántas cubre la DECISIÓN, no cuántas llegaron: el server recorta la
+    // notificación (un lote de renames gatea miles de rutas) y sin
+    // `paths_total` el modal enseñaría 32 rutas inocentes como si fueran todas
+    // — que es aprobar a ciegas creyendo que se aprueba a la vista. `0` =
+    // server N-1 que no lo mandaba: entonces lo recibido ES todo lo que hubo.
+    let total = usize::try_from(req.paths_total)
+        .unwrap_or(usize::MAX)
+        .max(req.paths.len());
+    let mostradas = req.paths.len().min(limite);
+    if total > mostradas {
+        // El badge solo puede hablar de lo que se PUEDE mirar: las rutas que
+        // el server recortó no están aquí para inspeccionarlas. Lo que no se
+        // calla es el NÚMERO, que es lo que decide el consentimiento.
+        let oculta_hostil = req
+            .paths
             .iter()
+            .skip(mostradas)
             .any(|p| display_name(p.as_bytes()).1);
         // Clave COMPARTIDA con `item_lines_with` (la de ConfirmDelete): el
         // resumen dice lo mismo en los dos sitios o el lector aprende dos
         // frases para un solo hecho.
         lineas.push(badge_prefixed(
             oculta_hostil,
-            ta(
-                "gui-modal-more",
-                &[("n", &(req.paths.len() - limite).to_string())],
-            ),
+            ta("gui-modal-more", &[("n", &(total - mostradas).to_string())]),
         ));
     }
     lineas.push(hint.to_owned());
@@ -3831,6 +3846,7 @@ mod approval_modal_tests {
             approval_id: 1,
             session: Some("s1".into()),
             op: "copy".into(),
+            paths_total: paths.len() as u64,
             paths,
             ttl_ms: 60_000,
         }
@@ -3838,6 +3854,45 @@ mod approval_modal_tests {
 
     fn rutas(n: usize) -> Vec<String> {
         (1..=n).map(|i| format!("mem:///proj/f{i}.txt")).collect()
+    }
+
+    /// El recorte del SERVER también se cuenta (0.36.0). Un lote de renames
+    /// gatea miles de rutas y el daemon difunde solo las primeras: si el modal
+    /// pintara `paths.len()` como si fuera todo, el humano aprobaría 32 rutas
+    /// inocentes sin saber que la decisión cubría ocho mil. Eso no es una
+    /// aprobación informada, es una aprobación engañada.
+    #[test]
+    fn el_recorte_del_server_se_le_dice_al_humano() {
+        let mut r = req(rutas(3));
+        r.paths_total = 8192;
+        let (_, body) = approval_modal_text(&r, "PIE");
+        let lines: Vec<&str> = body.lines().collect();
+        // cabecera + 3 rutas + resumen + pie.
+        assert_eq!(lines.len(), 6, "{body:?}");
+        assert!(
+            lines[4].contains(&(8192 - 3).to_string()),
+            "el resumen cuenta las que la DECISIÓN cubre y no se ven: {body:?}"
+        );
+        assert_eq!(lines[5], "PIE", "y el pie sigue siendo la última: {body:?}");
+        assert_eq!(
+            modal_height(&crate::app::Modal::ApproveAgentOp { req: r }),
+            8,
+            "el alto cuenta la línea de resumen que acaba de aparecer",
+        );
+    }
+
+    /// `paths_total: 0` es un server N-1 que no lo mandaba: lo recibido ES
+    /// todo lo que hubo, y no se inventa un resumen que mentiría al revés.
+    #[test]
+    fn sin_paths_total_no_se_inventa_recorte() {
+        let mut r = req(rutas(2));
+        r.paths_total = 0;
+        let (_, body) = approval_modal_text(&r, "PIE");
+        assert_eq!(
+            body.lines().count(),
+            4,
+            "cabecera + 2 rutas + pie: {body:?}"
+        );
     }
 
     /// Review MINOR-5: el número de rutas lo elige el AGENTE, y el alto no

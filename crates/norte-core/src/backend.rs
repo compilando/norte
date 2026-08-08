@@ -518,9 +518,12 @@ impl Backend {
     /// Ejecuta el lote aprobado como UNA Task y UNA unidad deshacible del
     /// journal (spec §17, ADR 0042).
     ///
-    /// `plan_hash` es el token de [`Backend::rename_batch_plan`]. El core
-    /// re-planifica el directorio TAL COMO ESTÁ AHORA y compara: si derivó,
-    /// esto es [`Error::PlanStale`] y no se toca nada. El informe de lo que
+    /// `plan_hash` es el token de FRESCURA de [`Backend::rename_batch_plan`],
+    /// atado al directorio. El core re-planifica el directorio TAL COMO ESTÁ
+    /// AHORA y compara: si derivó, esto es [`Error::PlanStale`] y no se toca
+    /// nada. No es una prueba de aprobación —el digest es público y calculable
+    /// sin haber pedido el plan—: garantiza QUÉ se ejecuta, no que alguien lo
+    /// mirara. El informe de lo que
     /// pasó se pide con [`Backend::rename_batch_report`] — la Task terminal
     /// cuenta la causa, no lo que se quedó a medias.
     ///
@@ -557,8 +560,10 @@ impl Backend {
     ///
     /// # Errors
     /// [`Error::NotFound`] si ese `task_id` nunca fue un lote de este proceso
-    /// o si el anillo ya lo desalojó; [`Error::Unsupported`] contra un daemon
-    /// N-1 que no conoce el método; taxonomía del protocolo.
+    /// o si el anillo ya lo desalojó — y el brazo remoto contesta lo MISMO,
+    /// porque el daemon manda esa categoría y no un `-32602` sin taxonomía;
+    /// [`Error::Unsupported`] contra un daemon N-1 que no conoce el método;
+    /// taxonomía del protocolo.
     pub async fn rename_batch_report(
         &self,
         task_id: TaskId,
@@ -1926,6 +1931,7 @@ pub mod remote {
                             session: p.session,
                             op: p.op,
                             paths: p.paths,
+                            paths_total: p.paths_total,
                             // El TTL restante no viaja en `policy.pending`:
                             // 0 = desconocido (documentado en proto).
                             ttl_ms: 0,

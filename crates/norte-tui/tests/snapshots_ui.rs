@@ -613,6 +613,7 @@ fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
             session: Some("s1".into()),
             op: "copy".into(),
             paths: vec!["mem:///a".into()],
+            paths_total: 0,
             ttl_ms: 60_000,
         },
     });

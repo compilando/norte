@@ -717,12 +717,12 @@ fn golden_methods() {
     // 113 → 114 en 0.35.0: + plugin_column_values_params_scoped (#120 — la
     // petición que NOMBRA al plugin; la que no lo nombra conserva su fixture
     // byte a byte, que es lo que `skip_serializing_if` promete).
-    // 114 → 119 en 0.36.0: + fs_rename_batch_plan_params y fs_rename_batch_params
+    // 114 → 116 en 0.36.0: + fs_rename_batch_plan_params y fs_rename_batch_params
     // (el batch de renames; el RESULT del plan tiene fichero propio, porque su
-    // familia pinea varias formas de plan) + fs_rename_batch_report_params y
-    // fs_rename_batch_report_result(/_clean) — el informe del lote, con y sin
-    // atasco.
-    assert_eq!(fixtures.len(), 119, "[methods.json] fixtures sin caso Rust");
+    // familia pinea varias formas de plan). 116 → 120: + fs_rename_batch_report_params y
+    // fs_rename_batch_report_result(/_clean/_uncertain) — el informe del lote:
+    // limpio, atascado, y con el paso de destino desconocido.
+    assert_eq!(fixtures.len(), 120, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `fs.rename_batch*` (0.36.0): las PETICIONES de plan y de ejecución.
@@ -795,6 +795,30 @@ fn check_methods_rename_batch(fixtures: &BTreeMap<String, Value>) {
             }),
             uncertain: None,
             compensations_lost: 0,
+        },
+    );
+    // La forma que NINGUNA otra fixture cubre: el paso cuyo destino se
+    // desconoce (`uncertain`), sin entrada de journal detrás (`journalled:
+    // false` — nadie lo va a deshacer, solo un humano) y con compensaciones
+    // perdidas. Es el peor desenlace posible y es exactamente por el que existe
+    // el método: si su forma no está congelada, no lo está la que importa.
+    check_one(
+        fixtures,
+        "fs_rename_batch_report_result_uncertain",
+        &FsRenameBatchReportResult {
+            applied: 1,
+            rolled_back: 1,
+            failed_pair: Some(0),
+            stuck: None,
+            uncertain: Some(RenameStuckStep {
+                from: vpath("file:///home/user/fotos/a"),
+                to: vpath("file:///home/user/fotos/b"),
+                pair_index: 0,
+                error: norte_proto::Error::ProviderUnavailable { retryable: true },
+                journalled: false,
+                still_applied: 1,
+            }),
+            compensations_lost: 2,
         },
     );
     // Corrida limpia: lo ausente se OMITE, y `compensations_lost` viaja en
@@ -1686,6 +1710,11 @@ fn check_methods_policy(fixtures: &BTreeMap<String, Value>) {
             session: Some("s1".into()),
             op: "delete".into(),
             paths: vec!["file:///work/x".into()],
+            // 0.36.0: la lista está RECORTADA — una ruta enseñada de nueve. Es
+            // la forma que importa congelar: con `paths_total == paths.len()`
+            // la fixture no demostraría nada, y es justo el caso en el que un
+            // frontend tiene que avisar al humano.
+            paths_total: 9,
             ttl_ms: 30_000,
         },
     );
@@ -1706,6 +1735,7 @@ fn check_methods_policy(fixtures: &BTreeMap<String, Value>) {
             session: Some("s1".into()),
             op: "delete".into(),
             paths: vec!["file:///work/x".into()],
+            paths_total: 9,
         },
     );
     check_one(
@@ -1717,6 +1747,7 @@ fn check_methods_policy(fixtures: &BTreeMap<String, Value>) {
                 session: Some("s1".into()),
                 op: "delete".into(),
                 paths: vec!["file:///work/x".into()],
+                paths_total: 9,
             }],
         },
     );

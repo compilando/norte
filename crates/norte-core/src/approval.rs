@@ -15,8 +15,14 @@ pub struct ApprovalRequest {
     pub actor: Actor,
     /// Qué operación.
     pub op: PolicyOp,
-    /// Rutas implicadas (wire).
+    /// Rutas implicadas (wire). Puede ser un PREFIJO de las que la decisión
+    /// cubre: ver `paths_total`.
     pub paths: Vec<String>,
+    /// Cuántas rutas cubre la decisión de verdad. Un lote de renames trae dos
+    /// por paso y puede traer miles; `paths` se recorta para no inundar la
+    /// notificación, y este número es lo que impide que el recorte se le
+    /// enseñe al humano como si fuera la lista entera.
+    pub paths_total: u64,
 }
 
 /// Resultado de la aprobación.

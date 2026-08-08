@@ -1586,6 +1586,12 @@ async fn handle_value(
                     // por construcción: el gate muere PRE-efecto, y entre el
                     // submit del engine y el register no hay ningún `.await`
                     // (#64).
+                    //
+                    // Retirar es retirar la RESPUESTA, no el trabajo: el
+                    // planificador ya corre en `spawn_blocking` y dropear su
+                    // `JoinHandle` no lo para — termina solo, acotado por
+                    // `RENAME_BATCH_MAX_LISTING` y por el tope de parejas. El
+                    // cliente deja de esperar; la CPU ya gastada no vuelve.
                     | methods::FS_RENAME_BATCH
                     | methods::FS_RENAME_BATCH_PLAN
             );
@@ -2912,17 +2918,22 @@ async fn handle_fs_search(
 /// (es API pública embebida); esta comprobación es la de la frontera, no un
 /// duplicado ocioso.
 ///
-/// `INVALID_PARAMS` y no una categoría de la taxonomía: el lote es del propio
-/// peticionario, así que decirle cuál es el techo no le revela nada del mundo.
+/// El veredicto es [`Error::InvalidPath`] de la TAXONOMÍA, el mismo que
+/// devuelve `plan_for` cuando la comprobación gemela del engine se dispara. Un
+/// `-32602` pelado no lleva categoría en `data`, así que el `Backend` remoto lo
+/// entregaría como `Internal` mientras el embebido dice `InvalidPath`: dos
+/// respuestas distintas al mismo suceso según por dónde se entre.
 fn check_pairs_cap(
     pairs: &[methods::RenamePair],
 ) -> Result<Vec<crate::rename::PairBytes>, RpcError> {
     let max = methods::FS_RENAME_BATCH_MAX_PAIRS;
     if pairs.len() > max {
-        return Err(RpcError::protocol(
-            codes::INVALID_PARAMS,
-            format!("pairs supera el tope de {max} por petición"),
-        ));
+        tracing::debug!(
+            pairs = pairs.len(),
+            max,
+            "lote de renames por encima del tope"
+        );
+        return Err(RpcError::from(norte_proto::Error::InvalidPath));
     }
     Ok(crate::rename::pairs_from_wire(pairs))
 }
@@ -2934,22 +2945,39 @@ fn check_pairs_cap(
 /// desconocido — el informe lleva rutas del directorio de otro actor, y
 /// distinguir «no es tuya» de «no existe» ya sería filtrar que existió (mismo
 /// criterio que `task.cancel`).
+///
+/// Un id DESALOJADO del anillo contesta lo mismo que uno que nunca fue un lote,
+/// y eso sí es una renuncia: existe el precedente de
+/// [`Error::CursorExpired`](norte_proto::Error::CursorExpired) (ADR 0017) para
+/// «tu asa envejeció fuera de un anillo acotado del server». No se acuña
+/// categoría porque hoy ningún cliente reintentaría distinto —el informe de una
+/// task terminal se pide una vez, justo después— y porque separar las dos cosas
+/// solo tiene sentido si además se separa de la tercera, que es justo la que no
+/// puede separarse. Aditiva el día que un cliente enseñe el caso (ADR 0042 §8).
 fn handle_rename_batch_report(
     actor: &Actor,
     p: &methods::FsRenameBatchReportParams,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
-    let unknown = || {
-        RpcError::protocol(
-            codes::INVALID_PARAMS,
-            "unknown rename batch task (never a batch, or evicted from the ring)",
-        )
-    };
+    // `NotFound` de la taxonomía, que es exactamente lo que contesta el brazo
+    // embebido del `Backend` para el mismo caso. Una sola respuesta para las
+    // TRES situaciones —desalojado del anillo, nunca fue un lote, es de otro
+    // actor— y la tercera es la razón: separarla confirmaría que la task de
+    // otro existió.
+    let unknown = || RpcError::from(norte_proto::Error::NotFound);
     let (owner, report) = shared
         .engine
         .rename_batch_report(p.task_id)
         .ok_or_else(unknown)?;
     if !may_observe(actor, &owner) {
+        // Material de auditoría (M3-5), igual que la rama denegada de
+        // `task.cancel`: el que pregunta por informes ajenos deja rastro
+        // aunque su respuesta no le diga nada. Ni el id ni el dueño: la
+        // traza cuenta que hubo sondeo, no qué había al otro lado.
+        tracing::warn!(
+            actor = ?actor,
+            "informe de lote de otro actor: denegado (respuesta = id desconocido)"
+        );
         return Err(unknown());
     }
     to_value(&crate::rename::report_to_proto(&report))
@@ -3172,6 +3200,16 @@ async fn dispatch_fs_task(
         // que cruza el wire es intención (`pairs`), jamás un orden.
         methods::FS_RENAME_BATCH => {
             let p: methods::FsRenameBatchParams = parse_params(req.params)?;
+            // #80, y aquí NO es una precaución de más. Ejecutar EMPIEZA por
+            // planificar: `rename_batch_as` lista el directorio y compara el
+            // hash ANTES de llegar a su gate de mutación, así que sin este
+            // gate este método es el mismo oráculo que su gemelo — y uno mejor,
+            // porque el `plan_hash` es determinista y calculable offline: un
+            // agente sin scope manda el hash de la hipótesis «existe X» y
+            // distingue `PolicyDenied` (existía) de `PlanStale` (no existía),
+            // un bit exacto por petición. Que el efecto esté gateado más
+            // adentro no salva a la LECTURA que hay antes.
+            read_gate(&actor, &p.dir, shared)?;
             let pairs = check_pairs_cap(&p.pairs)?;
             let (handle, _report) = shared
                 .engine

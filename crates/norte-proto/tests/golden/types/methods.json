@@ -214,6 +214,23 @@
     "compensations_lost": 0,
     "rolled_back": 0
   },
+  "fs_rename_batch_report_result_uncertain": {
+    "applied": 1,
+    "compensations_lost": 2,
+    "failed_pair": 0,
+    "rolled_back": 1,
+    "uncertain": {
+      "error": {
+        "kind": "provider_unavailable",
+        "retryable": true
+      },
+      "from": "file:///home/user/fotos/a",
+      "journalled": false,
+      "pair_index": 0,
+      "still_applied": 1,
+      "to": "file:///home/user/fotos/b"
+    }
+  },
   "fs_search_params": {
     "case_sensitive": true,
     "content": "año",
@@ -335,6 +352,7 @@
     "paths": [
       "file:///work/x"
     ],
+    "paths_total": 9,
     "session": "s1"
   },
   "plugin_column_values_params": {
@@ -627,6 +645,7 @@
     "paths": [
       "file:///work/x"
     ],
+    "paths_total": 9,
     "session": "s1",
     "ttl_ms": 30000
   },
@@ -643,6 +662,7 @@
         "paths": [
           "file:///work/x"
         ],
+        "paths_total": 9,
         "session": "s1"
       }
     ]

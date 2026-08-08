@@ -381,6 +381,7 @@ fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
                 format!("{from_largo}\n[y] approve\u{202e}"),
                 "mem:///proj/dst.txt".into(),
             ],
+            paths_total: 0,
             ttl_ms: 30_000,
         },
     });
@@ -443,6 +444,7 @@ fn el_pie_del_modal_de_aprobacion_se_pinta_con_un_lote_gigante() {
             session: Some("s1".into()),
             op: "copy".into(),
             paths: (1..=400).map(|i| format!("mem:///proj/f{i}.txt")).collect(),
+            paths_total: 0,
             ttl_ms: 60_000,
         },
     });
@@ -563,6 +565,7 @@ fn footer_de_aprobacion_enmascara_chord_hostil_de_una_capa() {
                 session: Some("s1".into()),
                 op: "copy".into(),
                 paths: vec!["mem:///proj/src.txt".into(), "mem:///proj/dst.txt".into()],
+                paths_total: 0,
                 ttl_ms: 30_000,
             },
         });

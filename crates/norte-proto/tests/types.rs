@@ -546,6 +546,38 @@ fn rename_collision_unknown_kind_degrades_nested() {
     assert_eq!(r.collisions[0].pair_index, 3);
 }
 
+/// (0.36.0) Tolerancia N-1 sobre un tipo que SÍ estaba vivo: un daemon 0.35
+/// emite `PolicyUndoReportResult` sin `batch_stuck` ni `compensations_lost`, y
+/// ese informe tiene que seguir deserializando aquí. La ausencia significa
+/// exactamente lo que parece — ese daemon no sabía deshacer lotes, así que no
+/// pudo dejar ninguno a medias.
+///
+/// Es el `serde(default)` de `compensations_lost` lo que se está demostrando:
+/// las goldens llevan la clave SIEMPRE (viaja incluso en cero), así que sin
+/// este test se podría borrar el atributo y la suite seguiría verde.
+#[test]
+fn policy_undo_report_result_shape_0_35_tolerada() {
+    use norte_proto::methods::{FsRenameBatchReportResult, PolicyUndoReportResult};
+    let old_shape = r#"{
+        "undone": 4,
+        "skipped_irreversible": 1,
+        "skipped_created_no_trash": 0
+    }"#;
+    let r: PolicyUndoReportResult = serde_json::from_str(old_shape).expect("shape 0.35.x tolerada");
+    assert_eq!(r.undone, 4);
+    assert!(r.batch_stuck.is_none());
+    assert_eq!(r.compensations_lost, 0);
+
+    // Y el informe del LOTE, nacido en este mismo bump, aguanta lo mismo: sus
+    // tres opcionales ausentes son «no pasó nada de eso», no un error de parse.
+    let minimo: FsRenameBatchReportResult =
+        serde_json::from_str(r#"{"applied":3,"rolled_back":0}"#).expect("mínimo tolerado");
+    assert!(minimo.stuck.is_none());
+    assert!(minimo.uncertain.is_none());
+    assert!(minimo.failed_pair.is_none());
+    assert_eq!(minimo.compensations_lost, 0);
+}
+
 /// El `plan_hash` se valida en la DESERIALIZACIÓN, así que una forma
 /// equivocada muere en el borde (`-32602` para el daemon) y jamás llega al
 /// comparador, que es donde se convertiría en un `PlanStale` mentiroso.
@@ -939,11 +971,19 @@ fn policy_types_roundtrip() {
         session: Some("s1".into()),
         op: "delete".into(),
         paths: vec!["file:///work/x".into()],
+        paths_total: 9,
         ttl_ms: 30_000,
     };
     let back: PolicyApprovalRequired =
         serde_json::from_str(&serde_json::to_string(&ar).unwrap()).unwrap();
     assert_eq!(back, ar);
+    // Tolerancia N-1 (0.36.0): un server 0.35 no manda `paths_total`, y su
+    // ausencia cae a 0 = DESCONOCIDO, que es lo que ese server podía decir.
+    let viejo: PolicyApprovalRequired = serde_json::from_str(
+        r#"{"approval_id":7,"op":"delete","paths":["file:///work/x"],"ttl_ms":30000}"#,
+    )
+    .expect("shape 0.35.x tolerada");
+    assert_eq!(viejo.paths_total, 0);
     let dec: PolicyDecideParams =
         serde_json::from_str(r#"{"approval_id":7,"approve":true}"#).unwrap();
     assert!(dec.approve);

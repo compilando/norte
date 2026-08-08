@@ -45,6 +45,11 @@ struct PendingEntry {
     session: Option<String>,
     op: String,
     paths: Vec<String>,
+    /// Cuántas rutas cubre la decisión (`paths` puede ser un prefijo). Se
+    /// retiene para que el RESYNC de `policy.pending` diga lo mismo que dijo la
+    /// notificación: un frontend que reconecta no puede ver una lista recortada
+    /// creyendo que está entera.
+    paths_total: u64,
     decide: oneshot::Sender<bool>,
 }
 
@@ -152,6 +157,7 @@ impl DaemonApprovalResolver {
                 session: e.session.clone(),
                 op: e.op.clone(),
                 paths: e.paths.clone(),
+                paths_total: e.paths_total,
             })
             .collect();
         out.sort_by_key(|p| p.approval_id);
@@ -224,6 +230,7 @@ impl ApprovalResolver for DaemonApprovalResolver {
                     session: session.clone(),
                     op: op.clone(),
                     paths: req.paths.clone(),
+                    paths_total: req.paths_total,
                     decide: tx,
                 },
             );
@@ -249,6 +256,7 @@ impl ApprovalResolver for DaemonApprovalResolver {
                 session,
                 op,
                 paths: req.paths,
+                paths_total: req.paths_total,
                 ttl_ms: u64::try_from(self.ttl.as_millis()).unwrap_or(u64::MAX),
             });
         }
@@ -276,6 +284,7 @@ mod tests {
                 },
                 op: PolicyOp::Copy,
                 paths: vec!["mem:///a".into()],
+                paths_total: 1,
             })
             .await
         })

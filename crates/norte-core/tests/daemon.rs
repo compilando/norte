@@ -5412,9 +5412,99 @@ async fn rename_batch_report_de_una_task_desconocida_es_invalid_params() {
         .await
         .expect_err("id desconocido");
     match err {
-        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::NotFound)),
+            "NotFound de la taxonomía — la MISMA que da el brazo embebido, \
+             fue {:?}",
+            rpc.data
+        ),
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
+}
+
+/// El informe de un lote AJENO contesta lo mismo que un id que nunca existió:
+/// lleva rutas del directorio de otro actor, y distinguir «no es tuya» de «no
+/// existe» ya sería confirmar que existió (mismo criterio que `task.cancel`).
+/// El humano, en cambio, ve el informe del lote del agente — es quien tiene que
+/// limpiar si se atascó.
+#[tokio::test]
+async fn un_agente_no_lee_el_informe_de_un_lote_ajeno() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///proj/a", b"1").await;
+    let human = connected_client(&d).await;
+    let agent = connected_agent(&d, "s1").await;
+
+    // Lote del HUMANO.
+    let pairs = vec![pair(b"a", b"b")];
+    let plan: methods::FsRenameBatchPlanResult = human
+        .call(
+            methods::FS_RENAME_BATCH_PLAN,
+            &methods::FsRenameBatchPlanParams {
+                dir: vp("mem:///proj"),
+                pairs: pairs.clone(),
+            },
+        )
+        .await
+        .expect("plan");
+    let task: FsTaskResult = human
+        .call(
+            methods::FS_RENAME_BATCH,
+            &methods::FsRenameBatchParams {
+                dir: vp("mem:///proj"),
+                pairs,
+                plan_hash: plan.plan_hash,
+            },
+        )
+        .await
+        .expect("lote del humano");
+    assert_eq!(
+        wait_terminal(&human, task.task_id).await,
+        TaskState::Completed
+    );
+
+    // El agente pide ESE informe: respuesta indistinguible de un id inventado.
+    let ajeno = agent
+        .call::<_, methods::FsRenameBatchReportResult>(
+            methods::FS_RENAME_BATCH_REPORT,
+            &methods::FsRenameBatchReportParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect_err("informe ajeno");
+    let inventado = agent
+        .call::<_, methods::FsRenameBatchReportResult>(
+            methods::FS_RENAME_BATCH_REPORT,
+            &methods::FsRenameBatchReportParams {
+                task_id: norte_proto::TaskId::new(9999),
+            },
+        )
+        .await
+        .expect_err("id inventado");
+    match (ajeno, inventado) {
+        (ClientError::Rpc(a), ClientError::Rpc(b)) => {
+            assert!(matches!(a.data, Some(Error::NotFound)), "{:?}", a.data);
+            assert_eq!(
+                (a.code, a.message),
+                (b.code, b.message),
+                "las dos respuestas tienen que ser LA MISMA",
+            );
+        }
+        other => panic!("esperaba dos Rpc, fue {other:?}"),
+    }
+
+    // Y el humano sí lo lee.
+    let report: methods::FsRenameBatchReportResult = human
+        .call(
+            methods::FS_RENAME_BATCH_REPORT,
+            &methods::FsRenameBatchReportParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect("el dueño lee su informe");
+    assert_eq!(report.applied, 1);
 }
 
 /// La DERIVA se rehúsa con la categoría accionable (`plan_stale`), no con un
@@ -5517,6 +5607,64 @@ async fn agente_sin_scope_no_puede_rename_batch_plan() {
     }
 }
 
+/// #80 en el gemelo que MUTA, que es donde el oráculo era peor: ejecutar
+/// empieza por planificar, y el `plan_hash` es determinista y calculable
+/// offline — sin este gate, un agente sin scope mandaría el hash de la
+/// hipótesis «X existe» y distinguiría la denegación (existía) de `PlanStale`
+/// (no existía), un bit exacto por petición. Con él, las CUATRO combinaciones
+/// (directorio que está / que no está, hash que casa / que no) contestan lo
+/// mismo.
+#[tokio::test]
+async fn agente_sin_scope_no_puede_rename_batch_ni_como_oraculo() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///proj/secreto.txt", b"x").await;
+    let agent = connected_agent(&d, "s1").await;
+
+    let ceros = methods::PlanHash::parse(&"0".repeat(64)).expect("hash");
+    let unos = methods::PlanHash::parse(&"1".repeat(64)).expect("hash");
+    let casos = [
+        // (directorio, nombre de origen): existe/no existe, en las dos
+        // combinaciones que el oráculo usaría para separar los mundos.
+        (vp("mem:///proj"), b"secreto.txt".to_vec()),
+        (vp("mem:///proj"), b"no-existe.txt".to_vec()),
+        (vp("mem:///no-hay"), b"secreto.txt".to_vec()),
+    ];
+    let mut respuestas = Vec::new();
+    for (dir, from) in casos {
+        for hash in [&ceros, &unos] {
+            let err = agent
+                .call::<_, FsTaskResult>(
+                    methods::FS_RENAME_BATCH,
+                    &methods::FsRenameBatchParams {
+                        dir: dir.clone(),
+                        pairs: vec![pair(&from, b"otro.txt")],
+                        plan_hash: hash.clone(),
+                    },
+                )
+                .await
+                .expect_err("agente sin scope denegado");
+            match err {
+                ClientError::Rpc(rpc) => {
+                    assert!(
+                        matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+                        "PolicyDenied out-of-scope, fue {:?}",
+                        rpc.data
+                    );
+                    respuestas.push((rpc.code, rpc.message));
+                }
+                other => panic!("esperaba Rpc, fue {other:?}"),
+            }
+        }
+    }
+    assert!(
+        respuestas.windows(2).all(|w| w[0] == w[1]),
+        "las seis respuestas tienen que ser LA MISMA: {respuestas:?}",
+    );
+    // Y no se tocó nada.
+    assert!(d.mem.stat(&vp("mem:///proj/secreto.txt")).await.is_ok());
+}
+
 /// El tope de parejas se impone EN LA FRONTERA y RECHAZA (no recorta): un lote
 /// recortado ejecutaría un plan distinto del pedido. Los DOS métodos.
 #[tokio::test]
@@ -5539,7 +5687,11 @@ async fn rename_batch_por_encima_del_tope_de_parejas_es_invalid_params() {
         .await
         .expect_err("por encima del tope");
     match err {
-        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::InvalidPath)),
+            "InvalidPath, fue {:?}",
+            rpc.data
+        ),
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
 
@@ -5555,7 +5707,11 @@ async fn rename_batch_por_encima_del_tope_de_parejas_es_invalid_params() {
         .await
         .expect_err("por encima del tope");
     match err {
-        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::InvalidPath)),
+            "InvalidPath, fue {:?}",
+            rpc.data
+        ),
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
 

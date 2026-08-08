@@ -227,6 +227,11 @@ impl Engine {
                         .take(APPROVAL_PATHS_SHOWN)
                         .map(|p| span_path(p))
                         .collect(),
+                    // Y el TOTAL viaja con ellas. Recortar la lista es
+                    // necesario; recortarla EN SILENCIO convertiría el modal en
+                    // una mentira — el humano aprobaría 32 rutas inocentes sin
+                    // saber que la decisión cubría ocho mil.
+                    paths_total: paths.len() as u64,
                 };
                 match self.approvals.request(req).await {
                     crate::approval::ApprovalOutcome::Approved => Ok(()),
@@ -1027,12 +1032,28 @@ impl Engine {
     /// MUTACIÓN se aplica entero en [`Self::rename_batch`], que es donde hay
     /// efecto.
     ///
-    /// **OBLIGACIÓN DEL DAEMON**: `fs.rename_batch_plan` tiene que pasar por
-    /// `read_gate` como `fs.list`. Sin él, este método es un oráculo de
-    /// nombres —cada nombre del directorio, más la estructura de gemelos
-    /// NFC/NFD que `fs.list` ni siquiera expone— para un agente sin scope, y
-    /// además revela `Unsupported`/`NotFound`/`PlanStale` de un directorio
-    /// sobre el que no tiene derechos.
+    /// **OBLIGACIÓN DEL DAEMON**: `fs.rename_batch_plan` **y también
+    /// `fs.rename_batch`** tienen que pasar por `read_gate` como `fs.list`. Sin
+    /// él, este método es un oráculo de nombres —cada nombre del directorio,
+    /// más la estructura de gemelos NFC/NFD que `fs.list` ni siquiera expone—
+    /// para un agente sin scope, y además revela
+    /// `Unsupported`/`NotFound`/`PlanStale` de un directorio sobre el que no
+    /// tiene derechos.
+    ///
+    /// Que el segundo sea una MUTACIÓN no lo exime, y es el error fácil de
+    /// cometer: [`Self::rename_batch_as`] empieza planificando, o sea leyendo,
+    /// y su gate de mutación no puede correr antes porque no se sabe qué rutas
+    /// hay que gatear hasta que el plan existe. Sin `read_gate` delante, un
+    /// agente sin scope obtiene por ahí exactamente el oráculo que este párrafo
+    /// cierra aquí — y uno más fino, porque el `plan_hash` es determinista y
+    /// calculable offline, así que la respuesta contesta a una hipótesis
+    /// concreta sobre un nombre concreto.
+    ///
+    /// El gate vive en el daemon y no aquí porque es el daemon quien ata una
+    /// conexión a un actor: por la API embebida no existe un `Actor::Agent` que
+    /// no se haya escrito el propio proceso (mismo criterio que documenta
+    /// `Backend::plugins_set_approval`). Duplicarlo aquí, además,
+    /// preguntaría DOS veces bajo una regla `ask`.
     ///
     /// # Errors
     /// [`Error::InvalidPath`] si algún nombre no es una entrada de directorio
@@ -1060,12 +1081,17 @@ impl Engine {
     ///
     /// # Errors
     /// Las de [`Self::rename_batch_plan`].
+    #[tracing::instrument(skip(self, pairs), fields(actor = ?actor, pairs = pairs.len()))]
     pub async fn rename_batch_plan_as(
         &self,
         dir: &VPath,
         pairs: &[(Vec<u8>, Vec<u8>)],
-        _actor: crate::journal::Actor,
+        actor: crate::journal::Actor,
     ) -> Result<crate::rename::DirPlan, Error> {
+        // El actor no GATEA nada aquí (eso es el `read_gate` del daemon), pero
+        // sí se traza: un plan que sale bien enumera un directorio entero y el
+        // `read_gate` solo deja rastro cuando DENIEGA — sin esto, la lectura
+        // agéntica que sí se permitió no es atribuible en la auditoría (M3-5).
         let (plan, _provider) = self.plan_for(dir, pairs).await?;
         Ok(plan)
     }
@@ -1125,10 +1151,19 @@ impl Engine {
     /// Ejecuta un lote de renames dentro de `dir` como UNA Task y UNA unidad
     /// deshacible del journal (spec §17, ADR 0042).
     ///
-    /// `plan_hash` es el token del plan que el humano aprobó
-    /// ([`Self::rename_batch_plan`]). El directorio se re-planifica aquí y los
-    /// tokens tienen que coincidir: una deriva que cambie algún veredicto
-    /// responde [`Error::PlanStale`] en vez de ejecutar algo que nadie aprobó.
+    /// `plan_hash` es el token de FRESCURA del plan
+    /// ([`Self::rename_batch_plan`]), atado al directorio. El directorio se
+    /// re-planifica aquí y los tokens tienen que coincidir: una deriva que
+    /// cambie algún veredicto responde [`Error::PlanStale`] en vez de ejecutar
+    /// un plan distinto del que se pidió.
+    ///
+    /// Ojo con lo que NO garantiza. El digest es una función pública y
+    /// determinista de `(dir, pasos, veredictos)`, sin secreto ni estado en el
+    /// server, así que cualquiera puede calcularlo sin haber llamado nunca a
+    /// [`Self::rename_batch_plan`]: casar el token NO demuestra que un humano
+    /// viera el plan. Lo que demuestra es que el plan que se ejecuta es el que
+    /// el re-plan produce AHORA. El consentimiento lo aporta el gate de policy,
+    /// no este hash.
     ///
     /// Devuelve la Task y su [`crate::rename::BatchReport`], que se rellena
     /// mientras corre y queda completo al terminar. **Míralo aunque la Task
@@ -1286,9 +1321,7 @@ impl Engine {
         {
             let mut ring = self.batch_reports.lock().expect("batch_reports lock sano");
             ring.push_back((handle.id(), owner, Arc::clone(&report)));
-            while ring.len() > BATCH_REPORTS_MAX {
-                ring.pop_front();
-            }
+            evict_batch_reports(&mut ring);
         }
         Ok((handle, report))
     }
@@ -1302,17 +1335,31 @@ impl Engine {
     /// decidir si el que pregunta podía ver esa task — decidirlo aquí obligaría
     /// al engine a conocer las reglas de visibilidad del daemon.
     ///
-    /// # Panics
-    /// Solo por envenenamiento de los locks (otro hilo panicó sosteniéndolos).
+    /// Este camino NO panica ante un lock envenenado: es de LECTURA y lo
+    /// atraviesa cada `fs.rename_batch_report`, así que un panic ajeno con el
+    /// mutex en la mano convertiría el método entero en una bomba por
+    /// conexión. Un informe posiblemente rancio le sirve más a quien busca su
+    /// fichero que un error — y el informe es datos, no un invariante que un
+    /// panic a medias pudiera haber roto.
     #[must_use]
     pub fn rename_batch_report(
         &self,
         task_id: TaskId,
     ) -> Option<(crate::journal::Actor, crate::rename::BatchReport)> {
-        let ring = self.batch_reports.lock().expect("batch_reports lock sano");
+        let ring = self
+            .batch_reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         ring.iter()
             .find(|(id, _, _)| *id == task_id)
-            .map(|(_, owner, r)| (owner.clone(), r.lock().expect("batch report lock").clone()))
+            .map(|(_, owner, r)| {
+                (
+                    owner.clone(),
+                    r.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone(),
+                )
+            })
     }
 
     /// Borrado PERMANENTE (recursivo post-order) como Task. La papelera
@@ -1674,6 +1721,57 @@ type BatchReportEntry = (
     Arc<std::sync::Mutex<crate::rename::BatchReport>>,
 );
 
+/// Poda el anillo de informes de lote hasta sus topes, sacrificando SIEMPRE lo
+/// que menos hace falta.
+///
+/// Dos reglas, y las dos existen porque este anillo es el ÚNICO canal por el
+/// que alguien se entera de que su directorio quedó a medio renombrar:
+///
+/// 1. **Sub-tope por clase** ([`BATCH_REPORTS_AGENTS_MAX`], mismo patrón que el
+///    de scopes de M3-3b): los lotes de agentes no agotan el anillo. Sin él,
+///    `fs.rename_batch` es alcanzable por un agente con scope y 33 lotes
+///    triviales desalojan el informe que el humano no ha leído todavía —
+///    incluido el del lote que ese mismo agente dejó aplicado a medias.
+/// 2. **Se desaloja primero lo que no cuenta nada**: entre dos informes, se tira
+///    el que dice que todo fue bien antes que el que nombra un paso atascado.
+///    Un informe limpio es reconstruible mirando el directorio; uno atascado no.
+///
+/// La ANTIGÜEDAD sigue siendo el criterio dentro de cada categoría, y si todo lo
+/// retenido es ruidoso se tira lo más viejo igualmente: la memoria de un daemon
+/// de meses no puede crecer con cada lote, ni siquiera con los malos.
+fn evict_batch_reports(ring: &mut std::collections::VecDeque<BatchReportEntry>) {
+    // ¿Este informe tiene algo que solo él sabe? Se evalúa AHORA y no al
+    // insertarlo: al insertarlo todo informe está vacío — es al desalojar
+    // cuando los viejos ya terminaron y se sabe cuáles duelen.
+    fn loud(e: &BatchReportEntry) -> bool {
+        let r = e.2.lock().expect("batch report lock");
+        r.stuck.is_some() || r.uncertain.is_some() || r.compensations_lost > 0
+    }
+    fn drop_one(ring: &mut std::collections::VecDeque<BatchReportEntry>, agents_only: bool) {
+        let candidates = || {
+            ring.iter()
+                .enumerate()
+                .filter(|(_, e)| !agents_only || !matches!(e.1, crate::journal::Actor::User))
+        };
+        let quiet = candidates().find(|(_, e)| !loud(e)).map(|(i, _)| i);
+        let victim = quiet.or_else(|| candidates().map(|(i, _)| i).next());
+        if let Some(i) = victim {
+            ring.remove(i);
+        }
+    }
+    while ring
+        .iter()
+        .filter(|e| !matches!(e.1, crate::journal::Actor::User))
+        .count()
+        > BATCH_REPORTS_AGENTS_MAX
+    {
+        drop_one(ring, true);
+    }
+    while ring.len() > BATCH_REPORTS_MAX {
+        drop_one(ring, false);
+    }
+}
+
 /// Cuántos informes de lote retiene [`Engine::rename_batch_report`].
 ///
 /// Anillo, no mapa: un informe se pide una vez, justo después del terminal de
@@ -1681,6 +1779,12 @@ type BatchReportEntry = (
 /// memoria por cada lote que corrió en su vida. El mismo criterio (y el mismo
 /// orden de magnitud) que el anillo de informes de undo del daemon.
 pub const BATCH_REPORTS_MAX: usize = 32;
+
+/// Cuántos de los [`BATCH_REPORTS_MAX`] puede ocupar el conjunto de los actores
+/// NO humanos. Sub-tope por clase, como el de scopes por conexión de M3-3b: el
+/// humano conserva su margen pase lo que pase al otro lado. Ver
+/// [`evict_batch_reports`].
+pub const BATCH_REPORTS_AGENTS_MAX: usize = 16;
 
 /// Todos los nombres base de `dir`, en bytes crudos (regla 1).
 ///
@@ -1779,5 +1883,83 @@ fn wire_engine(bytes: &[u8]) -> Result<VPath, Error> {
 impl Default for Engine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod batch_report_ring_tests {
+    use super::*;
+    use crate::journal::Actor;
+    use crate::rename::{BatchReport, StuckStep};
+
+    fn entry(id: u64, owner: Actor, loud: bool) -> BatchReportEntry {
+        let mut r = BatchReport::default();
+        if loud {
+            r.stuck = Some(StuckStep {
+                from: VPath::parse("mem:///a").expect("path"),
+                to: VPath::parse("mem:///b").expect("path"),
+                pair_index: 0,
+                error: Error::Io { retryable: false },
+                journalled: true,
+                still_applied: 1,
+            });
+        }
+        (TaskId::new(id), owner, Arc::new(std::sync::Mutex::new(r)))
+    }
+
+    fn agent() -> Actor {
+        Actor::Agent {
+            session: "s1".into(),
+        }
+    }
+
+    fn ids(ring: &std::collections::VecDeque<BatchReportEntry>) -> Vec<u64> {
+        ring.iter().map(|e| e.0.get()).collect()
+    }
+
+    /// Un informe que NOMBRA un paso atascado sobrevive a uno que dice que todo
+    /// fue bien, aunque sea más viejo: el limpio se puede reconstruir mirando el
+    /// directorio y el otro no.
+    #[test]
+    fn el_desalojo_sacrifica_primero_el_informe_que_no_cuenta_nada() {
+        let mut ring: std::collections::VecDeque<BatchReportEntry> = (0..BATCH_REPORTS_MAX as u64)
+            .map(|i| entry(i, Actor::User, i == 0))
+            .collect();
+        ring.push_back(entry(999, Actor::User, false));
+        evict_batch_reports(&mut ring);
+        assert_eq!(ring.len(), BATCH_REPORTS_MAX);
+        assert!(ids(&ring).contains(&0), "el atascado se queda");
+        assert!(!ids(&ring).contains(&1), "el limpio más viejo se va");
+    }
+
+    /// Sub-tope por clase: los lotes de un AGENTE no desalojan el informe que el
+    /// humano todavía no ha leído — ni aunque el agente mande muchos más.
+    #[test]
+    fn los_lotes_de_un_agente_no_desalojan_el_informe_del_humano() {
+        let mut ring: std::collections::VecDeque<BatchReportEntry> =
+            std::collections::VecDeque::new();
+        ring.push_back(entry(1, Actor::User, true));
+        for i in 0..(BATCH_REPORTS_MAX as u64 * 2) {
+            ring.push_back(entry(100 + i, agent(), false));
+            evict_batch_reports(&mut ring);
+        }
+        assert!(ids(&ring).contains(&1), "el informe del humano sigue ahí");
+        assert!(
+            ring.iter().filter(|e| !matches!(e.1, Actor::User)).count() <= BATCH_REPORTS_AGENTS_MAX,
+            "el sub-tope de agentes se respeta",
+        );
+    }
+
+    /// Si TODO lo retenido es ruidoso se tira lo más viejo igualmente: la
+    /// memoria de un daemon de meses no puede crecer ni con los lotes malos.
+    #[test]
+    fn con_todo_ruidoso_el_anillo_sigue_acotado() {
+        let mut ring: std::collections::VecDeque<BatchReportEntry> =
+            (0..(BATCH_REPORTS_MAX as u64 + 5))
+                .map(|i| entry(i, Actor::User, true))
+                .collect();
+        evict_batch_reports(&mut ring);
+        assert_eq!(ring.len(), BATCH_REPORTS_MAX);
+        assert!(!ids(&ring).contains(&0), "se fue el más viejo");
     }
 }

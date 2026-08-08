@@ -78,9 +78,17 @@ fn kind_to_proto(kind: CollisionKind) -> methods::RenameCollisionKind {
 /// rather than dropped anyway: a plan silently missing a step or a verdict is a
 /// plan that says something the core did not decide.
 pub fn plan_to_proto(plan: &DirPlan) -> Result<methods::FsRenameBatchPlanResult, Error> {
-    fn seg(bytes: &[u8]) -> Result<Segment, Error> {
+    // `what` dice DÓNDE (paso o veredicto) y en qué índice: un error de
+    // «no puede pasar» es justo el que hay que poder diagnosticar desde una
+    // sola línea de log, y `Error::Internal` no se distingue de ningún otro.
+    fn seg(bytes: &[u8], what: &str, index: usize) -> Result<Segment, Error> {
         Segment::new(bytes.to_vec()).map_err(|e| {
-            tracing::error!(error = %e, "un nombre del plan no es una entrada de directorio");
+            tracing::error!(
+                error = %e,
+                what,
+                index,
+                "un nombre del plan no es una entrada de directorio"
+            );
             Error::Internal { panic: false }
         })
     }
@@ -89,10 +97,11 @@ pub fn plan_to_proto(plan: &DirPlan) -> Result<methods::FsRenameBatchPlanResult,
         steps: inner
             .steps
             .iter()
-            .map(|s| {
+            .enumerate()
+            .map(|(i, s)| {
                 Ok(methods::RenameStep {
-                    from: seg(&s.from)?,
-                    to: seg(&s.to)?,
+                    from: seg(&s.from, "step.from", i)?,
+                    to: seg(&s.to, "step.to", i)?,
                     temp: s.temp,
                 })
             })
@@ -100,10 +109,11 @@ pub fn plan_to_proto(plan: &DirPlan) -> Result<methods::FsRenameBatchPlanResult,
         collisions: inner
             .collisions
             .iter()
-            .map(|c| {
+            .enumerate()
+            .map(|(i, c)| {
                 Ok(methods::RenameCollision {
                     pair_index: c.pair_index,
-                    name: seg(&c.name)?,
+                    name: seg(&c.name, "collision.name", i)?,
                     kind: kind_to_proto(c.kind),
                 })
             })

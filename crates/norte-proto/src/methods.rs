@@ -337,7 +337,17 @@ use crate::{
 /// `compensations_lost`: el undo de sesión ya podía deshacer un lote, y hasta
 /// ahora el humano remoto solo veía `blocked` — que dice «paré, el árbol está
 /// consistente», justo lo contrario de lo que había pasado. Los dos campos son
-/// ADITIVOS y opcionales.
+/// ADITIVOS, pero no del mismo modo: `batch_stuck` se omite cuando no lo hay,
+/// mientras que `compensations_lost` es opcional a la ENTRADA (`serde(default)`)
+/// y obligatorio a la SALIDA — viaja siempre, incluso en cero, como los otros
+/// tres contadores del informe. Eso rompe la identidad byte a byte del payload
+/// limpio de un tipo que existe desde 0.16.0, y se acepta a sabiendas: un
+/// contador que se omite en cero es un contador cuya ausencia es ambigua, y ese
+/// informe es el único sitio donde se cuenta esto.
+/// Los TOPES declarados de este bump también son contrato:
+/// [`FS_RENAME_BATCH_MAX_PAIRS`] (rechaza, no recorta) y [`PLAN_HASH_LEN`], que
+/// el newtype [`PlanHash`] impone al deserializar — un hash con otra forma es
+/// error de params y jamás `plan_stale`.
 /// Ventana N=0.36.x / N-1=0.35.x: un cliente 0.35 no conoce los métodos nuevos
 /// y no los llama, y degrada el `TaskKind` nuevo a `TaskKind::Unknown` por su
 /// `serde(other)`; las dos categorías de error nuevas caen en su
@@ -345,8 +355,13 @@ use crate::{
 /// gatear en emisión, porque solo aparecen contestando a métodos que ese
 /// cliente no invoca. Los campos nuevos de `PolicyUndoReportResult` los IGNORA
 /// (serde no es `deny_unknown_fields`), que es exactamente lo que hacía antes
-/// de que existieran: pierde el aviso, no el informe. La inversa la corta
-/// [`version_compatible`] en el handshake.
+/// de que existieran: pierde el aviso, no el informe. Los dos avisos no pesan
+/// igual, eso sí. Un undo con `batch_stuck` FALLA la Task, así que un cliente
+/// 0.35 ve `Failed` y sabe que algo pasó, aunque no qué. `compensations_lost`,
+/// en cambio, no cambia el desenlace: para ese cliente el undo dice `Completed`
+/// y la sesión se bloqueará en el siguiente intento sin que nada lo haya
+/// avisado — que es justo por lo que el campo dice de sí mismo ser «la única
+/// señal de eso». La inversa la corta [`version_compatible`] en el handshake.
 ///
 /// Quien reciba `MethodNotFound` a un `plugin.help` debe tratarlo como «este
 /// plugin no tiene página», nunca como un fallo. La razón es que la ayuda es
@@ -551,12 +566,20 @@ pub const AI_RENAME_PLAN: &str = "ai.rename_plan";
 pub const FS_RENAME_BATCH_PLAN: &str = "fs.rename_batch_plan";
 /// `fs.rename_batch` — ejecuta un lote de renames como UNA Task
 /// ([`TaskKind::RenameBatch`](crate::TaskKind)) y UNA unidad deshacible del
-/// journal (0.36.0). Lleva el `plan_hash` del plan que el humano aprobó: el
+/// journal (0.36.0). Lleva el `plan_hash` del plan que se revisó: el
 /// core re-planifica y rehúsa con [`Error::PlanStale`](crate::Error::PlanStale)
 /// si el directorio se movió entre la vista previa y la ejecución, y con
 /// [`Error::PlanNotExecutable`](crate::Error::PlanNotExecutable) si el plan
 /// tiene colisiones. Result = el [`FsTaskResult`] existente (`{task_id}`), como
 /// `fs.copy`/`fs.move`/`fs.delete`.
+///
+/// El hash es un token de FRESCURA, no una prueba de aprobación: es una función
+/// pública y determinista de `(dir, pasos, veredictos)`, sin secreto ni estado
+/// server-side, así que un cliente puede calcularlo sin haber llamado jamás a
+/// [`FS_RENAME_BATCH_PLAN`]. Lo que garantiza es que se ejecuta el plan que el
+/// re-plan produce AHORA, y —por la atadura al directorio— que un hash
+/// aprobado para un directorio no vale contra otro. Quien decide si esta
+/// llamada puede ocurrir es la policy.
 pub const FS_RENAME_BATCH: &str = "fs.rename_batch";
 /// `fs.rename_batch_report` — el informe de una Task de [`FS_RENAME_BATCH`]
 /// (0.36.0): qué se aplicó, qué se deshizo, y —lo único que no cabe en un
@@ -571,16 +594,22 @@ pub const FS_RENAME_BATCH: &str = "fs.rename_batch";
 ///
 /// Snapshot: definitivo cuando la Task es terminal. El server retiene los
 /// informes en un anillo acotado, así que un id demasiado viejo —o que jamás
-/// fue un lote— es `INVALID_PARAMS`. Lo ve quien podría ver la Task: su dueño,
-/// o cualquier conexión humana; para todo lo demás la respuesta es
-/// indistinguible de la de un id desconocido (no se filtra existencia, mismo
-/// criterio que `task.cancel`).
+/// fue un lote— es [`Error::NotFound`](crate::Error::NotFound). Lo ve quien
+/// podría ver la Task: su dueño, o cualquier conexión humana; para todo lo
+/// demás la respuesta es LA MISMA que la de un id desconocido (no se filtra
+/// existencia, mismo criterio que `task.cancel`). Que un id desalojado del
+/// anillo no se distinga de uno que nunca existió es deliberado: separarlos
+/// obligaría a separar también el tercer caso, que es justo el que no puede
+/// separarse (ADR 0042 §8).
 pub const FS_RENAME_BATCH_REPORT: &str = "fs.rename_batch_report";
 
 /// Tope de parejas de UNA petición a [`FS_RENAME_BATCH_PLAN`] o
 /// [`FS_RENAME_BATCH`] (0.36.0). A diferencia de [`FS_LIST_MAX_PAGE`] NO se
 /// recorta: recortar un lote de renames ejecutaría un plan distinto del pedido,
-/// así que el daemon RECHAZA la petición entera (`-32602`).
+/// así que el daemon RECHAZA la petición entera con
+/// [`Error::InvalidPath`](crate::Error::InvalidPath) — la misma categoría que
+/// contesta la API embebida ante el mismo exceso, para que un cliente no tenga
+/// que aprender dos respuestas según por dónde entre.
 ///
 /// 4096 porque un lote humano — una temporada de serie, un carrete de fotos —
 /// vive dos órdenes de magnitud por debajo, y porque el planificador es
@@ -2030,7 +2059,22 @@ pub struct PolicyApprovalRequired {
     pub op: String,
     /// Rutas implicadas (wire, redactadas). SOLO display: jamás se reparsan a
     /// una operación — la op real va ligada server-side por `approval_id`.
+    ///
+    /// Puede ser un PREFIJO de las rutas que la decisión cubre: ver
+    /// `paths_total`.
     pub paths: Vec<String>,
+    /// Cuántas rutas cubre de verdad la decisión (0.36.0). `0` = DESCONOCIDO
+    /// (un server N-1 no lo mandaba), y entonces vale `paths.len()`.
+    ///
+    /// NORMATIVO para un frontend: si es mayor que `paths.len()`, la lista está
+    /// RECORTADA y hay que decírselo al humano. Un lote de renames
+    /// ([`FS_RENAME_BATCH`]) gatea dos rutas por paso y puede traer miles; el
+    /// server recorta lo que difunde —la notificación va a cada conexión humana
+    /// y se retiene durante el TTL—, pero la DECISIÓN se toma sobre todas. Un
+    /// humano que aprueba 32 rutas de aspecto inocente sin saber que había ocho
+    /// mil no está consintiendo lo que cree.
+    #[serde(default)]
+    pub paths_total: u64,
     /// TTL de la aprobación en milisegundos. `0` = DESCONOCIDO (p. ej. una
     /// pendiente reconstruida del resync de `policy.pending`, que no
     /// transporta el TTL restante): el frontend no pinta cuenta atrás.
@@ -2065,7 +2109,13 @@ pub struct PendingApproval {
     pub op: String,
     /// Rutas implicadas (wire, redactadas). SOLO display: jamás se reparsan a
     /// una operación — la op real va ligada server-side por `approval_id`.
+    ///
+    /// Puede ser un PREFIJO: ver `paths_total`.
     pub paths: Vec<String>,
+    /// Cuántas rutas cubre la decisión (0.36.0). Mismo contrato que
+    /// [`PolicyApprovalRequired::paths_total`], incluido `0` = desconocido.
+    #[serde(default)]
+    pub paths_total: u64,
 }
 
 /// Result de [`POLICY_PENDING`] (resync de aprobaciones pendientes).
