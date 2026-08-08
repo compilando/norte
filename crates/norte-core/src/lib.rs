@@ -22,6 +22,7 @@ pub mod plugin_provider;
 pub mod plugins;
 pub mod policy;
 mod progress;
+pub mod rename;
 mod scheduler;
 pub mod search;
 mod sessions;

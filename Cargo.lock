@@ -6307,6 +6307,7 @@ dependencies = [
  "norte-vfs-object",
  "norte-vfs-sftp",
  "opendal",
+ "proptest",
  "rand 0.10.2",
  "regex",
  "russh",

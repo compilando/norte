@@ -68,6 +68,10 @@ norte-ai = { workspace = true, features = ["testutil"] }
 # Servidores SSH y FTP in-process para el test de integración del connection
 # manager (mismo arnés que norte-connect; sin Docker).
 libunftp.workspace = true
+# El planificador de rename por lotes es puro: la propiedad «todo plan
+# ejecutable aterriza exactamente los destinos pedidos» se comprueba generando
+# permutaciones, no enumerándolas a mano. Ya es dep del workspace.
+proptest.workspace = true
 rand.workspace = true
 russh.workspace = true
 russh-sftp.workspace = true
