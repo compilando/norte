@@ -32,8 +32,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CollisionPolicy, DeleteMode, Entry, EntryKind, ResumePolicy, SymlinkPolicy, TaskId, VPath,
-    VerifyPolicy,
+    CollisionPolicy, DeleteMode, Entry, EntryKind, ResumePolicy, Segment, SymlinkPolicy, TaskId,
+    VPath, VerifyPolicy,
 };
 
 /// Versión del protocolo (semver). El core soporta N y N-1 (spec §11).
@@ -308,12 +308,34 @@ use crate::{
 /// payload de una petición sin plugin idéntico byte a byte al de 0.34. La
 /// inversa la corta [`version_compatible`] en el handshake, como siempre.
 ///
+/// 0.36.0 (batch rename, ADR 0042): un lote de renames dentro de UN directorio
+/// pasa a ser UNA transacción. Aparecen [`FS_RENAME_BATCH_PLAN`]
+/// ([`FsRenameBatchPlanParams`] → [`FsRenameBatchPlanResult`], respuesta
+/// DIRECTA) y [`FS_RENAME_BATCH`] ([`FsRenameBatchParams`] → el
+/// [`FsTaskResult`] existente), más [`TaskKind::RenameBatch`](crate::TaskKind)
+/// y las categorías [`Error::PlanStale`](crate::Error::PlanStale) y
+/// [`Error::PlanNotExecutable`](crate::Error::PlanNotExecutable). Los dos
+/// métodos van ligados por el `plan_hash`: el cliente manda INTENCIÓN
+/// (`pairs`), jamás el orden, y la ejecución devuelve el hash del plan que el
+/// humano aprobó para que el core re-planifique y compare — así un cliente,
+/// que puede ser un AGENTE, no puede colar un orden que nadie revisó. Los
+/// nombres viajan como [`Segment`] (percent-encoded, regla dura 1), no como
+/// `String`: un lote de renames es exactamente donde un nombre no-UTF8 tiene
+/// que sobrevivir byte a byte.
+/// Ventana N=0.36.x / N-1=0.35.x: un cliente 0.35 no conoce los métodos nuevos
+/// y no los llama, y degrada el `TaskKind` nuevo a `TaskKind::Unknown` por su
+/// `serde(other)`; las dos categorías de error nuevas caen en su
+/// `Error::Unknown` (mismo patrón que `CursorExpired` en 0.8.0) — nada que
+/// gatear en emisión, porque solo aparecen contestando a métodos que ese
+/// cliente no invoca. La inversa la corta [`version_compatible`] en el
+/// handshake.
+///
 /// Quien reciba `MethodNotFound` a un `plugin.help` debe tratarlo como «este
 /// plugin no tiene página», nunca como un fallo. La razón es que la ayuda es
 /// COSMÉTICA: si el peer no implementa el método, no hay página que pintar y no
 /// hay nada roto. No es que un daemon N-1 conteste eso — nunca recibe la
 /// llamada, porque el handshake ya lo rechazó.
-pub const PROTOCOL_VERSION: &str = "0.35.0";
+pub const PROTOCOL_VERSION: &str = "0.36.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -494,6 +516,50 @@ pub const INDEX_SEMANTIC_MAX_K: u32 = 100;
 /// [`FS_MOVE`] ordinarios (journal + undo + policy).
 /// [`AiRenamePlanParams`] → [`AiRenamePlanResult`].
 pub const AI_RENAME_PLAN: &str = "ai.rename_plan";
+/// `fs.rename_batch_plan` — el plan REVISABLE de un lote de renames dentro de
+/// UN directorio (0.36.0). Respuesta DIRECTA: ni Task, ni journal, ni mutación.
+/// El cliente manda intención (`pairs`); el core decide orden, temporales y
+/// colisiones, así que un cliente — que puede ser un agente — nunca puede colar
+/// un orden que el humano no vio (regla dura 7: la lógica vive en el core).
+/// [`FsRenameBatchPlanParams`] → [`FsRenameBatchPlanResult`].
+///
+/// «No muta» NO quiere decir «inocuo». Es una LECTURA de directorio disfrazada:
+/// los veredictos `External` y `AbsentSource` dicen qué nombres existen y
+/// cuáles no, así que este método es un ORÁCULO de existencia y va sujeto al
+/// MISMO gate de lectura que [`FS_LIST`]/[`FS_STAT`] (#80) — un agente sin
+/// scope sobre `dir` recibe `PolicyDenied`, no un plan. Quien implemente el
+/// dispatch no puede leer «ni Task, ni journal, ni mutación» y concluir lo
+/// contrario.
+pub const FS_RENAME_BATCH_PLAN: &str = "fs.rename_batch_plan";
+/// `fs.rename_batch` — ejecuta un lote de renames como UNA Task
+/// ([`TaskKind::RenameBatch`](crate::TaskKind)) y UNA unidad deshacible del
+/// journal (0.36.0). Lleva el `plan_hash` del plan que el humano aprobó: el
+/// core re-planifica y rehúsa con [`Error::PlanStale`](crate::Error::PlanStale)
+/// si el directorio se movió entre la vista previa y la ejecución, y con
+/// [`Error::PlanNotExecutable`](crate::Error::PlanNotExecutable) si el plan
+/// tiene colisiones. Result = el [`FsTaskResult`] existente (`{task_id}`), como
+/// `fs.copy`/`fs.move`/`fs.delete`.
+pub const FS_RENAME_BATCH: &str = "fs.rename_batch";
+
+/// Tope de parejas de UNA petición a [`FS_RENAME_BATCH_PLAN`] o
+/// [`FS_RENAME_BATCH`] (0.36.0). A diferencia de [`FS_LIST_MAX_PAGE`] NO se
+/// recorta: recortar un lote de renames ejecutaría un plan distinto del pedido,
+/// así que el daemon RECHAZA la petición entera (`-32602`).
+///
+/// 4096 porque un lote humano — una temporada de serie, un carrete de fotos —
+/// vive dos órdenes de magnitud por debajo, y porque el planificador es
+/// superlineal sobre el listado del directorio y `fs.rename_batch_plan` es una
+/// respuesta DIRECTA: el trabajo ocurre en el camino de la petición, no en una
+/// Task cancelable, y `fs.*` es alcanzable por un agente. El techo es la
+/// diferencia entre un lote grande y una petición que ocupa el hilo del
+/// dispatch.
+pub const FS_RENAME_BATCH_MAX_PAIRS: u32 = 4096;
+
+/// Longitud EXACTA de `plan_hash` (0.36.0): sha256 en hex minúscula, 64
+/// caracteres. Un hash con otra forma es un error de PARAMS (`-32602`), jamás
+/// [`Error::PlanStale`](crate::Error::PlanStale) — decirle «el directorio
+/// cambió» a quien mandó basura es mentirle sobre el mundo.
+pub const PLAN_HASH_LEN: usize = 64;
 /// `search.hits` — notificación server→client con un LOTE de resultados de
 /// [`FS_SEARCH`]. SOLO viaja a la conexión que lanzó la búsqueda (jamás
 /// broadcast, mismo criterio direccional que
@@ -1062,6 +1128,229 @@ pub struct AiRenameEntry {
 pub struct AiRenamePlanResult {
     /// Parejas from→to (solo las que cambian de nombre).
     pub entries: Vec<AiRenameEntry>,
+}
+
+/// Un rename PEDIDO dentro de un directorio: nombres base, no rutas.
+///
+/// A diferencia de [`AiRenameEntry`] (donde el proveedor de IA garantiza UTF-8
+/// y el engine rechaza lo demás fail-loud), aquí los nombres son [`Segment`]:
+/// un lote de renames es exactamente donde un nombre no-UTF8 tiene que
+/// sobrevivir byte a byte (regla dura 1).
+///
+/// ```
+/// use norte_proto::{Segment, methods::RenamePair};
+/// let p = RenamePair {
+///     from: Segment::new(b"ep1.mkv".to_vec()).expect("segment"),
+///     to: Segment::new(b"ep01.mkv".to_vec()).expect("segment"),
+/// };
+/// assert_eq!(serde_json::to_string(&p).expect("json"),
+///            r#"{"from":"ep1.mkv","to":"ep01.mkv"}"#);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenamePair {
+    /// Nombre existente en el directorio.
+    pub from: Segment,
+    /// Nombre propuesto.
+    pub to: Segment,
+}
+
+/// Un paso del plan ORDENADO. `temp` marca un paso que es MAQUINARIA del
+/// planificador (romper un ciclo), no algo que el usuario haya pedido.
+///
+/// Una permutación `a→b, b→a` son TRES pasos, y el temporal aparece en dos:
+/// `a → .norte-rename-XXXXXXXX-0` (`temp`), `b → a`, y
+/// `.norte-rename-XXXXXXXX-0 → b` (`temp`). Sin el tercero el fichero que
+/// empezó como `a` se queda aparcado bajo el nombre de máquina.
+///
+/// ```
+/// use norte_proto::{Segment, methods::RenameStep};
+/// let s = RenameStep {
+///     from: Segment::new(b"caf\xff.txt".to_vec()).expect("segment"),
+///     to: Segment::new(b"cafe.txt".to_vec()).expect("segment"),
+///     temp: false,
+/// };
+/// assert_eq!(serde_json::to_string(&s).expect("json"),
+///            r#"{"from":"caf%FF.txt","to":"cafe.txt","temp":false}"#);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameStep {
+    /// Nombre antes de este paso.
+    pub from: Segment,
+    /// Nombre después de este paso.
+    pub to: Segment,
+    /// `true` si ALGUNO de los dos lados de este paso es un nombre temporal
+    /// propiedad del planificador — propiedad del PASO, no de `to`: el paso que
+    /// saca al fichero del temporal lo lleva en `from` y es maquinaria igual.
+    /// Un frontend jamás lo presenta como propuesta del usuario.
+    pub temp: bool,
+}
+
+/// Por qué un plan no se puede ejecutar. Vocabulario CERRADO: el core jamás
+/// inventa una clase.
+///
+/// Tolerancia N/N-1 (ADR 0004/0005, mismo patrón que
+/// [`ConflictKind`](crate::ConflictKind)): una clase desconocida deserializa a
+/// [`RenameCollisionKind::Unknown`] en vez de reventar el parse del plan
+/// entero. Importa aunque el vocabulario nazca cerrado: un cliente 0.36 negocia
+/// con un daemon 0.37, y un veredicto nuevo allí no puede dejarlo sin plan que
+/// pintar — degrada a «rechazado, motivo que no entiendo».
+///
+/// ```
+/// use norte_proto::methods::RenameCollisionKind;
+/// assert_eq!(
+///     serde_json::to_string(&RenameCollisionKind::AbsentSource).expect("json"),
+///     r#""absent_source""#
+/// );
+/// let futuro: RenameCollisionKind =
+///     serde_json::from_str(r#""clase_del_futuro""#).expect("json");
+/// assert_eq!(futuro, RenameCollisionKind::Unknown);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RenameCollisionKind {
+    /// Dos parejas apuntan al mismo destino.
+    Internal,
+    /// El destino ya existe y no es el origen de ninguna pareja.
+    External,
+    /// El origen de la pareja no está en el directorio (el plan se construyó
+    /// contra un listado rancio).
+    AbsentSource,
+    /// Clase de un protocolo más nuevo (fallback de deserialización).
+    /// El core JAMÁS la emite.
+    #[doc(hidden)]
+    #[serde(other)]
+    Unknown,
+}
+
+/// Un nombre rechazado más su veredicto, DIRECCIONABLE a la pareja que lo
+/// provocó.
+///
+/// ```
+/// use norte_proto::Segment;
+/// use norte_proto::methods::{RenameCollision, RenameCollisionKind};
+/// let c = RenameCollision {
+///     pair_index: 1,
+///     name: Segment::new(b"ep01.mkv".to_vec()).expect("segment"),
+///     kind: RenameCollisionKind::Internal,
+/// };
+/// assert_eq!(serde_json::to_string(&c).expect("json"),
+///            r#"{"pair_index":1,"name":"ep01.mkv","kind":"internal"}"#);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameCollision {
+    /// Índice, dentro de `pairs` de la petición, de la pareja que este
+    /// veredicto RECHAZA. Para `Internal` es la pareja rechazada — la SEGUNDA
+    /// en llegar al destino disputado, no la que se queda con él.
+    ///
+    /// Está definido para toda clase, incluidas las futuras, y ese es su
+    /// motivo: `name` cambia de significado con `kind` (destino en
+    /// `Internal`/`External`, origen ausente en `AbsentSource`), así que bajo
+    /// [`RenameCollisionKind::Unknown`] un cliente no sabría qué está mirando.
+    /// Con el índice siempre puede señalar la fila culpable, aunque no entienda
+    /// el veredicto — que es justo lo que el fallback promete.
+    pub pair_index: u32,
+    /// El nombre ofensor: el DESTINO para `Internal`/`External`, el ORIGEN que
+    /// falta para `AbsentSource`. Su significado depende de `kind`; el que no
+    /// depende de nada es `pair_index`.
+    pub name: Segment,
+    /// El veredicto.
+    pub kind: RenameCollisionKind,
+}
+
+/// Params de [`FS_RENAME_BATCH_PLAN`] (0.36.0).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsRenameBatchPlanParams {
+    /// El directorio en el que viven TODAS las parejas.
+    pub dir: VPath,
+    /// Los renames pedidos. Más de [`FS_RENAME_BATCH_MAX_PAIRS`] es error de
+    /// params (`-32602`), no un recorte.
+    pub pairs: Vec<RenamePair>,
+}
+
+/// Result de [`FS_RENAME_BATCH_PLAN`] (0.36.0).
+///
+/// **Invariante estructural: un plan MUERTO no lleva pasos.** Si `collisions`
+/// no está vacío, `steps` está vacío y `executable` es `false` — el core no
+/// ordena a medias un plan que no va a ejecutar (decisión 4 del diseño). Las
+/// dos listas JAMÁS están pobladas a la vez, y esa es la defensa de fondo:
+/// un cliente que ignorase `executable` y ejecutara `steps` a ciegas no
+/// tendría nada que ejecutar. `executable` sigue siendo el campo NORMATIVO —
+/// esto es el cinturón, no el tirante.
+///
+/// ```
+/// use norte_proto::methods::FsRenameBatchPlanResult;
+/// let r = FsRenameBatchPlanResult {
+///     steps: vec![],
+///     collisions: vec![],
+///     executable: true,
+///     plan_hash: "0".repeat(64),
+/// };
+/// let json = serde_json::to_value(&r).expect("json");
+/// // `collisions` vacío es una lista vacía, jamás una clave ausente.
+/// assert_eq!(json["collisions"], serde_json::json!([]));
+/// assert_eq!(json["plan_hash"].as_str().expect("hex").len(), 64);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsRenameBatchPlanResult {
+    /// Pasos en ORDEN de ejecución, temporales incluidos. Acotado por
+    /// [`FS_RENAME_BATCH_MAX_PAIRS`]: como mucho una pareja no nula más un
+    /// temporal por ciclo, y un ciclo consume al menos dos parejas — el techo
+    /// duro es `pairs * 3 / 2`. Sin constante propia: lo acota el tope de
+    /// parejas.
+    ///
+    /// VACÍO siempre que `collisions` no lo esté (ver el invariante del tipo).
+    pub steps: Vec<RenameStep>,
+    /// Todo lo que detiene el plan; vacío cuando `executable`. Como mucho una
+    /// entrada por pareja, así que lo acota [`FS_RENAME_BATCH_MAX_PAIRS`]
+    /// igual que a `steps`.
+    ///
+    /// Es la EXPLICACIÓN, no el veredicto: quien decide si se puede ejecutar es
+    /// `executable`.
+    pub collisions: Vec<RenameCollision>,
+    /// `true` cuando el plan se puede ejecutar tal cual. Campo NORMATIVO: el
+    /// frontend deshabilita el confirmar con `!executable`, y no deduce nada de
+    /// `collisions`.
+    ///
+    /// Es derivable de `collisions.is_empty()` HOY, y aun así manda este campo:
+    /// un veredicto futuro podría parar un plan sin nombre ofensor que listar,
+    /// y un cliente que dedujera de la lista lo ejecutaría. Invariante que el
+    /// core mantiene y que un cliente puede asumir: jamás emite
+    /// `executable: true` con `collisions` no vacío, ni `steps` poblado con
+    /// `executable: false`.
+    pub executable: bool,
+    /// sha256 en hex minúscula sobre las CONCLUSIONES del plan (directorio,
+    /// parejas ordenadas, pasos resultantes, veredictos, banderas de caja y
+    /// normalización). Devuélvelo en [`FsRenameBatchParams`]: el core
+    /// re-planifica y compara. Es una cadena hex a propósito — legible en un
+    /// log, sin ambigüedad de base64, sin bytes en el wire.
+    ///
+    /// Longitud EXACTA [`PLAN_HASH_LEN`]. Una cadena de otra forma es un error
+    /// de PARAMS, no [`Error::PlanStale`](crate::Error::PlanStale): «no casa»
+    /// y «el directorio cambió» son cosas distintas, y contestar lo segundo a
+    /// quien mandó basura le miente sobre el estado del mundo.
+    pub plan_hash: String,
+}
+
+/// Params de [`FS_RENAME_BATCH`] (0.36.0).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsRenameBatchParams {
+    /// El directorio en el que viven TODAS las parejas.
+    pub dir: VPath,
+    /// Los renames pedidos — la MISMA intención que produjo `plan_hash`. Tope
+    /// [`FS_RENAME_BATCH_MAX_PAIRS`], igual que en el plan.
+    pub pairs: Vec<RenamePair>,
+    /// El hash del plan que el humano aprobó, [`PLAN_HASH_LEN`] caracteres hex.
+    /// Otra forma es error de params; que no case es
+    /// [`Error::PlanStale`](crate::Error::PlanStale).
+    pub plan_hash: String,
 }
 
 /// Identidad de un cliente (va en [`InitializeParams`]).

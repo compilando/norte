@@ -1,0 +1,22 @@
+{
+  "from_temp": {
+    "from": ".norte-rename-0a1b2c3d-0",
+    "to": "b",
+    "temp": true
+  },
+  "hostile": {
+    "from": "caf%FF.txt",
+    "to": "caf%FE.txt",
+    "temp": false
+  },
+  "plain": {
+    "from": "b",
+    "to": "a",
+    "temp": false
+  },
+  "to_temp": {
+    "from": "a",
+    "to": ".norte-rename-0a1b2c3d-0",
+    "temp": true
+  }
+}

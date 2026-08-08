@@ -1,0 +1,17 @@
+{
+  "absent_source": {
+    "pair_index": 0,
+    "name": "ep7.mkv",
+    "kind": "absent_source"
+  },
+  "external": {
+    "pair_index": 2,
+    "name": "caf%FF.txt",
+    "kind": "external"
+  },
+  "internal": {
+    "pair_index": 1,
+    "name": "ep01.mkv",
+    "kind": "internal"
+  }
+}

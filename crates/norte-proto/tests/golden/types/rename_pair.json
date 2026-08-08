@@ -1,0 +1,10 @@
+{
+  "hostile": {
+    "from": "caf%FF.txt",
+    "to": "caf%FE.txt"
+  },
+  "plain": {
+    "from": "ep1.mkv",
+    "to": "ep01.mkv"
+  }
+}

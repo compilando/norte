@@ -4105,6 +4105,10 @@ pub fn error_key(e: &Error) -> &'static str {
         Error::HostKeyUnknown { .. } => "err-host-key-unknown",
         Error::HostKeyMismatch { .. } => "err-host-key-mismatch",
         Error::CursorExpired => "err-cursor-expired",
+        // 0.36.0 (batch rename): las dos son ACCIONABLES — caer en
+        // `err-unknown` sería lo contrario de lo que su rustdoc promete.
+        Error::PlanStale => "err-plan-stale",
+        Error::PlanNotExecutable => "err-plan-not-executable",
         _ => "err-unknown",
     }
 }

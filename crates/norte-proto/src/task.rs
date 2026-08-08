@@ -85,6 +85,12 @@ pub enum TaskKind {
     /// Un cliente N-1 (0.32.x) la degrada a [`TaskKind::Unknown`] por su
     /// `serde(other)`.
     Embed,
+    /// Un lote de renames dentro de UN directorio ejecutado como UNA
+    /// transacción con UNA unidad deshacible del journal (`fs.rename_batch`,
+    /// 0.36.0). El progreso es `i/n` PASOS, no bytes. Un cliente N-1 (0.35.x)
+    /// la degrada a [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual
+    /// que `Search`/`Index`/`Embed`.
+    RenameBatch,
     /// Clase desconocida: un daemon N+1 (0.11+) envió un kind que ESTE proto no
     /// conoce → se acepta como genérica en vez de fallar el parse (forward-compat
     /// desde 0.10, como [`TaskState::Unknown`]). No cubre el borde hacia atrás

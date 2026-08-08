@@ -1,0 +1,53 @@
+{
+  "executable": {
+    "steps": [
+      {
+        "from": "ep1.mkv",
+        "to": "ep01.mkv",
+        "temp": false
+      }
+    ],
+    "collisions": [],
+    "executable": true,
+    "plan_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "not_executable": {
+    "steps": [],
+    "collisions": [
+      {
+        "pair_index": 1,
+        "name": "ep01.mkv",
+        "kind": "internal"
+      },
+      {
+        "pair_index": 2,
+        "name": "caf%FF.txt",
+        "kind": "external"
+      }
+    ],
+    "executable": false,
+    "plan_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "permutation": {
+    "steps": [
+      {
+        "from": "a",
+        "to": ".norte-rename-0a1b2c3d-0",
+        "temp": true
+      },
+      {
+        "from": "b",
+        "to": "a",
+        "temp": false
+      },
+      {
+        "from": ".norte-rename-0a1b2c3d-0",
+        "to": "b",
+        "temp": true
+      }
+    ],
+    "collisions": [],
+    "executable": true,
+    "plan_hash": "2222222222222222222222222222222222222222222222222222222222222222"
+  }
+}

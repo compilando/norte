@@ -6760,6 +6760,7 @@ fn task_line(p: &norte_proto::TaskProgress) -> String {
         TaskKind::Mkdir => "gui-task-kind-mkdir",
         TaskKind::Index => "gui-task-kind-index",
         TaskKind::Embed => "gui-task-kind-embed",
+        TaskKind::RenameBatch => "gui-task-kind-rename-batch",
         TaskKind::Unknown => "gui-task-kind-unknown",
     });
     let pct = match p.entries_total {

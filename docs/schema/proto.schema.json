@@ -850,6 +850,32 @@
           "type": "object"
         },
         {
+          "description": "El directorio cambió entre la vista previa y la ejecución de un lote de\nrenames (`fs.rename_batch`, 0.36.0): re-planificar las MISMAS parejas\nprodujo un plan distinto del `plan_hash` que el llamante aprobó. Nada se\nintentó. Accionable: re-planificar y volver a confirmar. NO reintentable\ntal cual — el humano tiene que ver el plan nuevo. Un cliente N-1\n(0.35.x) jamás la ve (no llama al método) pero degradaría a `Unknown`.",
+          "properties": {
+            "kind": {
+              "const": "plan_stale",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "El plan de renames tiene colisiones, así que no se intentó nada\n(`fs.rename_batch`, 0.36.0). Accionable: corregir los nombres (o el\ndirectorio de origen) y re-planificar. Un cliente N-1 (0.35.x) jamás la\nve pero degradaría a `Unknown`.",
+          "properties": {
+            "kind": {
+              "const": "plan_not_executable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Categoría de un protocolo más nuevo (fallback de deserialización).\nEl core JAMÁS la emite; existe para que un cliente N degrade con\nelegancia ante categorías N+1.",
           "properties": {
             "kind": {
@@ -1119,6 +1145,87 @@
       "required": [
         "content_b64",
         "eof"
+      ],
+      "type": "object"
+    },
+    "FsRenameBatchParams": {
+      "description": "Params de [`FS_RENAME_BATCH`] (0.36.0).",
+      "properties": {
+        "dir": {
+          "$ref": "#/$defs/VPath",
+          "description": "El directorio en el que viven TODAS las parejas."
+        },
+        "pairs": {
+          "description": "Los renames pedidos — la MISMA intención que produjo `plan_hash`. Tope\n[`FS_RENAME_BATCH_MAX_PAIRS`], igual que en el plan.",
+          "items": {
+            "$ref": "#/$defs/RenamePair"
+          },
+          "type": "array"
+        },
+        "plan_hash": {
+          "description": "El hash del plan que el humano aprobó, [`PLAN_HASH_LEN`] caracteres hex.\nOtra forma es error de params; que no case es\n[`Error::PlanStale`](crate::Error::PlanStale).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dir",
+        "pairs",
+        "plan_hash"
+      ],
+      "type": "object"
+    },
+    "FsRenameBatchPlanParams": {
+      "description": "Params de [`FS_RENAME_BATCH_PLAN`] (0.36.0).",
+      "properties": {
+        "dir": {
+          "$ref": "#/$defs/VPath",
+          "description": "El directorio en el que viven TODAS las parejas."
+        },
+        "pairs": {
+          "description": "Los renames pedidos. Más de [`FS_RENAME_BATCH_MAX_PAIRS`] es error de\nparams (`-32602`), no un recorte.",
+          "items": {
+            "$ref": "#/$defs/RenamePair"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "dir",
+        "pairs"
+      ],
+      "type": "object"
+    },
+    "FsRenameBatchPlanResult": {
+      "description": "Result de [`FS_RENAME_BATCH_PLAN`] (0.36.0).\n\n**Invariante estructural: un plan MUERTO no lleva pasos.** Si `collisions`\nno está vacío, `steps` está vacío y `executable` es `false` — el core no\nordena a medias un plan que no va a ejecutar (decisión 4 del diseño). Las\ndos listas JAMÁS están pobladas a la vez, y esa es la defensa de fondo:\nun cliente que ignorase `executable` y ejecutara `steps` a ciegas no\ntendría nada que ejecutar. `executable` sigue siendo el campo NORMATIVO —\nesto es el cinturón, no el tirante.\n\n```\nuse norte_proto::methods::FsRenameBatchPlanResult;\nlet r = FsRenameBatchPlanResult {\n    steps: vec![],\n    collisions: vec![],\n    executable: true,\n    plan_hash: \"0\".repeat(64),\n};\nlet json = serde_json::to_value(&r).expect(\"json\");\n// `collisions` vacío es una lista vacía, jamás una clave ausente.\nassert_eq!(json[\"collisions\"], serde_json::json!([]));\nassert_eq!(json[\"plan_hash\"].as_str().expect(\"hex\").len(), 64);\n```",
+      "properties": {
+        "collisions": {
+          "description": "Todo lo que detiene el plan; vacío cuando `executable`. Como mucho una\nentrada por pareja, así que lo acota [`FS_RENAME_BATCH_MAX_PAIRS`]\nigual que a `steps`.\n\nEs la EXPLICACIÓN, no el veredicto: quien decide si se puede ejecutar es\n`executable`.",
+          "items": {
+            "$ref": "#/$defs/RenameCollision"
+          },
+          "type": "array"
+        },
+        "executable": {
+          "description": "`true` cuando el plan se puede ejecutar tal cual. Campo NORMATIVO: el\nfrontend deshabilita el confirmar con `!executable`, y no deduce nada de\n`collisions`.\n\nEs derivable de `collisions.is_empty()` HOY, y aun así manda este campo:\nun veredicto futuro podría parar un plan sin nombre ofensor que listar,\ny un cliente que dedujera de la lista lo ejecutaría. Invariante que el\ncore mantiene y que un cliente puede asumir: jamás emite\n`executable: true` con `collisions` no vacío, ni `steps` poblado con\n`executable: false`.",
+          "type": "boolean"
+        },
+        "plan_hash": {
+          "description": "sha256 en hex minúscula sobre las CONCLUSIONES del plan (directorio,\nparejas ordenadas, pasos resultantes, veredictos, banderas de caja y\nnormalización). Devuélvelo en [`FsRenameBatchParams`]: el core\nre-planifica y compara. Es una cadena hex a propósito — legible en un\nlog, sin ambigüedad de base64, sin bytes en el wire.\n\nLongitud EXACTA [`PLAN_HASH_LEN`]. Una cadena de otra forma es un error\nde PARAMS, no [`Error::PlanStale`](crate::Error::PlanStale): «no casa»\ny «el directorio cambió» son cosas distintas, y contestar lo segundo a\nquien mandó basura le miente sobre el estado del mundo.",
+          "type": "string"
+        },
+        "steps": {
+          "description": "Pasos en ORDEN de ejecución, temporales incluidos. Acotado por\n[`FS_RENAME_BATCH_MAX_PAIRS`]: como mucho una pareja no nula más un\ntemporal por ciclo, y un ciclo consume al menos dos parejas — el techo\nduro es `pairs * 3 / 2`. Sin constante propia: lo acota el tope de\nparejas.\n\nVACÍO siempre que `collisions` no lo esté (ver el invariante del tipo).",
+          "items": {
+            "$ref": "#/$defs/RenameStep"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "steps",
+        "collisions",
+        "executable",
+        "plan_hash"
       ],
       "type": "object"
     },
@@ -2322,6 +2429,97 @@
       ],
       "type": "object"
     },
+    "RenameCollision": {
+      "description": "Un nombre rechazado más su veredicto, DIRECCIONABLE a la pareja que lo\nprovocó.\n\n```\nuse norte_proto::Segment;\nuse norte_proto::methods::{RenameCollision, RenameCollisionKind};\nlet c = RenameCollision {\n    pair_index: 1,\n    name: Segment::new(b\"ep01.mkv\".to_vec()).expect(\"segment\"),\n    kind: RenameCollisionKind::Internal,\n};\nassert_eq!(serde_json::to_string(&c).expect(\"json\"),\n           r#\"{\"pair_index\":1,\"name\":\"ep01.mkv\",\"kind\":\"internal\"}\"#);\n```",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/RenameCollisionKind",
+          "description": "El veredicto."
+        },
+        "name": {
+          "$ref": "#/$defs/Segment",
+          "description": "El nombre ofensor: el DESTINO para `Internal`/`External`, el ORIGEN que\nfalta para `AbsentSource`. Su significado depende de `kind`; el que no\ndepende de nada es `pair_index`."
+        },
+        "pair_index": {
+          "description": "Índice, dentro de `pairs` de la petición, de la pareja que este\nveredicto RECHAZA. Para `Internal` es la pareja rechazada — la SEGUNDA\nen llegar al destino disputado, no la que se queda con él.\n\nEstá definido para toda clase, incluidas las futuras, y ese es su\nmotivo: `name` cambia de significado con `kind` (destino en\n`Internal`/`External`, origen ausente en `AbsentSource`), así que bajo\n[`RenameCollisionKind::Unknown`] un cliente no sabría qué está mirando.\nCon el índice siempre puede señalar la fila culpable, aunque no entienda\nel veredicto — que es justo lo que el fallback promete.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pair_index",
+        "name",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "RenameCollisionKind": {
+      "description": "Por qué un plan no se puede ejecutar. Vocabulario CERRADO: el core jamás\ninventa una clase.\n\nTolerancia N/N-1 (ADR 0004/0005, mismo patrón que\n[`ConflictKind`](crate::ConflictKind)): una clase desconocida deserializa a\n[`RenameCollisionKind::Unknown`] en vez de reventar el parse del plan\nentero. Importa aunque el vocabulario nazca cerrado: un cliente 0.36 negocia\ncon un daemon 0.37, y un veredicto nuevo allí no puede dejarlo sin plan que\npintar — degrada a «rechazado, motivo que no entiendo».\n\n```\nuse norte_proto::methods::RenameCollisionKind;\nassert_eq!(\n    serde_json::to_string(&RenameCollisionKind::AbsentSource).expect(\"json\"),\n    r#\"\"absent_source\"\"#\n);\nlet futuro: RenameCollisionKind =\n    serde_json::from_str(r#\"\"clase_del_futuro\"\"#).expect(\"json\");\nassert_eq!(futuro, RenameCollisionKind::Unknown);\n```",
+      "oneOf": [
+        {
+          "const": "internal",
+          "description": "Dos parejas apuntan al mismo destino.",
+          "type": "string"
+        },
+        {
+          "const": "external",
+          "description": "El destino ya existe y no es el origen de ninguna pareja.",
+          "type": "string"
+        },
+        {
+          "const": "absent_source",
+          "description": "El origen de la pareja no está en el directorio (el plan se construyó\ncontra un listado rancio).",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Clase de un protocolo más nuevo (fallback de deserialización).\nEl core JAMÁS la emite.",
+          "type": "string"
+        }
+      ]
+    },
+    "RenamePair": {
+      "description": "Un rename PEDIDO dentro de un directorio: nombres base, no rutas.\n\nA diferencia de [`AiRenameEntry`] (donde el proveedor de IA garantiza UTF-8\ny el engine rechaza lo demás fail-loud), aquí los nombres son [`Segment`]:\nun lote de renames es exactamente donde un nombre no-UTF8 tiene que\nsobrevivir byte a byte (regla dura 1).\n\n```\nuse norte_proto::{Segment, methods::RenamePair};\nlet p = RenamePair {\n    from: Segment::new(b\"ep1.mkv\".to_vec()).expect(\"segment\"),\n    to: Segment::new(b\"ep01.mkv\".to_vec()).expect(\"segment\"),\n};\nassert_eq!(serde_json::to_string(&p).expect(\"json\"),\n           r#\"{\"from\":\"ep1.mkv\",\"to\":\"ep01.mkv\"}\"#);\n```",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/Segment",
+          "description": "Nombre existente en el directorio."
+        },
+        "to": {
+          "$ref": "#/$defs/Segment",
+          "description": "Nombre propuesto."
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "RenameStep": {
+      "description": "Un paso del plan ORDENADO. `temp` marca un paso que es MAQUINARIA del\nplanificador (romper un ciclo), no algo que el usuario haya pedido.\n\nUna permutación `a→b, b→a` son TRES pasos, y el temporal aparece en dos:\n`a → .norte-rename-XXXXXXXX-0` (`temp`), `b → a`, y\n`.norte-rename-XXXXXXXX-0 → b` (`temp`). Sin el tercero el fichero que\nempezó como `a` se queda aparcado bajo el nombre de máquina.\n\n```\nuse norte_proto::{Segment, methods::RenameStep};\nlet s = RenameStep {\n    from: Segment::new(b\"caf\\xff.txt\".to_vec()).expect(\"segment\"),\n    to: Segment::new(b\"cafe.txt\".to_vec()).expect(\"segment\"),\n    temp: false,\n};\nassert_eq!(serde_json::to_string(&s).expect(\"json\"),\n           r#\"{\"from\":\"caf%FF.txt\",\"to\":\"cafe.txt\",\"temp\":false}\"#);\n```",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/Segment",
+          "description": "Nombre antes de este paso."
+        },
+        "temp": {
+          "description": "`true` si ALGUNO de los dos lados de este paso es un nombre temporal\npropiedad del planificador — propiedad del PASO, no de `to`: el paso que\nsaca al fichero del temporal lo lleva en `from` y es maquinaria igual.\nUn frontend jamás lo presenta como propuesta del usuario.",
+          "type": "boolean"
+        },
+        "to": {
+          "$ref": "#/$defs/Segment",
+          "description": "Nombre después de este paso."
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "temp"
+      ],
+      "type": "object"
+    },
     "RequestId": {
       "anyOf": [
         {
@@ -2608,6 +2806,11 @@
         {
           "const": "embed",
           "description": "`index.embed` (0.33.0): generación de embeddings del índice semántico.\nUn cliente N-1 (0.32.x) la degrada a [`TaskKind::Unknown`] por su\n`serde(other)`.",
+          "type": "string"
+        },
+        {
+          "const": "rename_batch",
+          "description": "Un lote de renames dentro de UN directorio ejecutado como UNA\ntransacción con UNA unidad deshacible del journal (`fs.rename_batch`,\n0.36.0). El progreso es `i/n` PASOS, no bytes. Un cliente N-1 (0.35.x)\nla degrada a [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual\nque `Search`/`Index`/`Embed`.",
           "type": "string"
         },
         {
@@ -2948,6 +3151,15 @@
     "fs_read_result": {
       "$ref": "#/$defs/FsReadResult"
     },
+    "fs_rename_batch_params": {
+      "$ref": "#/$defs/FsRenameBatchParams"
+    },
+    "fs_rename_batch_plan_params": {
+      "$ref": "#/$defs/FsRenameBatchPlanParams"
+    },
+    "fs_rename_batch_plan_result": {
+      "$ref": "#/$defs/FsRenameBatchPlanResult"
+    },
     "fs_search_params": {
       "$ref": "#/$defs/FsSearchParams"
     },
@@ -3131,9 +3343,6 @@
     "search_hits": {
       "$ref": "#/$defs/SearchHits"
     },
-    "segment": {
-      "$ref": "#/$defs/Segment"
-    },
     "semantic_hit": {
       "$ref": "#/$defs/SemanticHit"
     },
@@ -3214,6 +3423,9 @@
     "fs_move_params",
     "fs_read_params",
     "fs_read_result",
+    "fs_rename_batch_params",
+    "fs_rename_batch_plan_params",
+    "fs_rename_batch_plan_result",
     "fs_search_params",
     "fs_stat_params",
     "fs_stat_result",
@@ -3275,7 +3487,6 @@
     "resume_policy",
     "rpc_cancel_params",
     "search_hits",
-    "segment",
     "semantic_hit",
     "server_info",
     "span_wire",

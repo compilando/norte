@@ -48,6 +48,9 @@ struct ProtocolSchema {
     fs_move_params: FsMoveParams,
     fs_read_params: FsReadParams,
     fs_read_result: FsReadResult,
+    fs_rename_batch_params: FsRenameBatchParams,
+    fs_rename_batch_plan_params: FsRenameBatchPlanParams,
+    fs_rename_batch_plan_result: FsRenameBatchPlanResult,
     fs_search_params: FsSearchParams,
     fs_stat_params: FsStatParams,
     fs_stat_result: FsStatResult,
@@ -109,7 +112,10 @@ struct ProtocolSchema {
     resume_policy: ResumePolicy,
     rpc_cancel_params: RpcCancelParams,
     search_hits: SearchHits,
-    segment: Segment,
+    // `Segment` NO lleva campo propio: desde 0.36.0 es alcanzable vía
+    // `RenamePair` (dentro de los dos params del batch de renames), así que una
+    // propiedad de primer nivel para él sería una entrada del artefacto que no
+    // corresponde a ningún método. Sigue en `$defs`, que es lo que importa.
     semantic_hit: SemanticHit,
     server_info: ServerInfo,
     span_wire: SpanWire,

@@ -412,6 +412,7 @@ fn task_kind_wire_strings() {
         (TaskKind::Undo, "\"undo\""),
         (TaskKind::Search, "\"search\""),
         (TaskKind::Index, "\"index\""),
+        (TaskKind::RenameBatch, "\"rename_batch\""),
     ] {
         assert_eq!(serde_json::to_string(&kind).unwrap(), wire);
     }
@@ -517,6 +518,26 @@ fn conflict_unknown_subtype_degrades_nested() {
             conflict: ConflictKind::Unknown
         }
     );
+}
+
+#[test]
+fn rename_collision_unknown_kind_degrades_nested() {
+    // Mismo criterio que `conflict_unknown_subtype_degrades_nested` (ADR 0005),
+    // y aquí lo que está en juego es el PLAN entero: un veredicto de un daemon
+    // 0.37 (que `version_compatible` acepta frente a un cliente 0.36) no puede
+    // dejar al humano sin plan que revisar — degrada esa línea, no el documento.
+    use norte_proto::methods::{FsRenameBatchPlanResult, RenameCollisionKind};
+    let r: FsRenameBatchPlanResult = serde_json::from_str(
+        r#"{"steps":[],"collisions":[{"pair_index":3,"name":"a","kind":"veredicto_del_futuro"}],
+            "executable":false,"plan_hash":"00"}"#,
+    )
+    .expect("un veredicto desconocido NO revienta el plan");
+    assert_eq!(r.collisions.len(), 1);
+    assert_eq!(r.collisions[0].kind, RenameCollisionKind::Unknown);
+    assert_eq!(r.collisions[0].name.as_bytes(), b"a");
+    // Y la fila SIGUE siendo señalable: `pair_index` no depende de `kind`, que
+    // es justo lo que hace útil al fallback en vez de decorativo.
+    assert_eq!(r.collisions[0].pair_index, 3);
 }
 
 #[test]
@@ -899,11 +920,12 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.35.0 (#120): acepta 0.35.x (N) y 0.34.x (N-1), rechaza 0.33.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.35.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.34.0"), "N-1");
+    // 0.36.0 (batch rename): acepta 0.36.x (N) y 0.35.x (N-1), rechaza 0.34.x
+    // (N-2) — la ventana se desplaza con el bump, no se ensancha.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.36.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.35.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.33.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.34.9"),
         "N-2 fuera de la ventana"
     );
 }

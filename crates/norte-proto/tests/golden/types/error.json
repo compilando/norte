@@ -80,6 +80,12 @@
   "permission_denied": {
     "kind": "permission_denied"
   },
+  "plan_not_executable": {
+    "kind": "plan_not_executable"
+  },
+  "plan_stale": {
+    "kind": "plan_stale"
+  },
   "policy_denied": {
     "kind": "policy_denied",
     "rule": "no_delete_home"

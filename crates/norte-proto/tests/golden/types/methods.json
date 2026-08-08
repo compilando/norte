@@ -166,6 +166,29 @@
     "content_b64": "MDEy",
     "eof": false
   },
+  "fs_rename_batch_params": {
+    "dir": "file:///home/user/fotos-a%FF%FE",
+    "pairs": [
+      {
+        "from": "caf%FF.txt",
+        "to": "cafe.txt"
+      }
+    ],
+    "plan_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "fs_rename_batch_plan_params": {
+    "dir": "file:///home/user/fotos-a%FF%FE",
+    "pairs": [
+      {
+        "from": "a",
+        "to": "b"
+      },
+      {
+        "from": "b",
+        "to": "a"
+      }
+    ]
+  },
   "fs_search_params": {
     "case_sensitive": true,
     "content": "año",

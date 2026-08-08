@@ -52,5 +52,15 @@
     "entries_done": 0,
     "entries_total": 2,
     "current": null
+  },
+  "running_rename_batch": {
+    "task_id": 13,
+    "kind": "rename_batch",
+    "state": { "kind": "running" },
+    "bytes_done": 0,
+    "bytes_total": null,
+    "entries_done": 2,
+    "entries_total": 3,
+    "current": "file:///home/user/fotos/informe%FF%FE.dat"
   }
 }

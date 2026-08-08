@@ -28,6 +28,13 @@ fn vpath(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire válido de fixture")
 }
 
+/// Un nombre BASE desde sus bytes crudos (0.36.0): las fixtures del batch de
+/// renames se escriben en bytes, no en la forma percent-encoded — que es
+/// justamente lo que el golden tiene que demostrar.
+fn seg(b: &[u8]) -> norte_proto::Segment {
+    norte_proto::Segment::new(b.to_vec()).expect("segment")
+}
+
 fn load(name: &str) -> BTreeMap<String, Value> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden/types")
@@ -328,6 +335,11 @@ fn golden_error() {
                 },
             ),
             ("cursor_expired", Error::CursorExpired),
+            // 0.36.0 (batch rename): las dos negativas del ejecutor. Ambas
+            // significan «no se intentó nada», y ambas son accionables desde el
+            // frontend (re-planificar).
+            ("plan_stale", Error::PlanStale),
+            ("plan_not_executable", Error::PlanNotExecutable),
         ],
     );
 }
@@ -393,6 +405,24 @@ fn golden_task_progress() {
                 },
             ),
             (
+                // 0.36.0 (batch rename): TaskKind::RenameBatch en el wire, y
+                // con él la SEMÁNTICA del progreso de un lote — `entries_*`
+                // cuenta PASOS del plan (2 de 3), y `bytes_*` es `None` porque
+                // un rename no mueve bytes. Un frontend que pintara una barra
+                // de bytes aquí pintaría cero para siempre.
+                "running_rename_batch",
+                TaskProgress {
+                    task_id: TaskId::new(13),
+                    kind: TaskKind::RenameBatch,
+                    state: TaskState::Running,
+                    bytes_done: 0,
+                    bytes_total: None,
+                    entries_done: 2,
+                    entries_total: Some(3),
+                    current: Some(vpath("file:///home/user/fotos/informe%FF%FE.dat")),
+                },
+            ),
+            (
                 // 0.31.0 (#104): TaskKind::Mkdir en el wire.
                 "running_mkdir",
                 TaskProgress {
@@ -436,6 +466,204 @@ fn golden_task_progress() {
     );
 }
 
+/// Los tipos SUELTOS del batch de renames (0.36.0): la pareja pedida, el paso
+/// del plan y el veredicto. Todos llevan nombres BASE como `Segment`, así que
+/// cada fixture demuestra además que un nombre no-UTF8 viaja percent-encoded y
+/// vuelve byte a byte (regla dura 1).
+#[test]
+fn golden_rename_batch_types() {
+    use norte_proto::methods::{RenameCollision, RenameCollisionKind, RenamePair, RenameStep};
+    check_family(
+        "rename_pair.json",
+        &[
+            (
+                "plain",
+                RenamePair {
+                    from: seg(b"ep1.mkv"),
+                    to: seg(b"ep01.mkv"),
+                },
+            ),
+            // Nombre HOSTIL a los dos lados: el wire lo escapa, el round-trip
+            // devuelve los bytes exactos.
+            (
+                "hostile",
+                RenamePair {
+                    from: seg(b"caf\xff.txt"),
+                    to: seg(b"caf\xfe.txt"),
+                },
+            ),
+        ],
+    );
+    check_family(
+        "rename_step.json",
+        &[
+            (
+                "plain",
+                RenameStep {
+                    from: seg(b"b"),
+                    to: seg(b"a"),
+                    temp: false,
+                },
+            ),
+            // Los DOS pasos de maquinaria: entrar al temporal y SALIR de él.
+            // `temp` es del PASO, no de `to` — el que saca al fichero lo lleva
+            // en `from` y es maquinaria igual, así que ambos se pinean.
+            (
+                "to_temp",
+                RenameStep {
+                    from: seg(b"a"),
+                    to: seg(b".norte-rename-0a1b2c3d-0"),
+                    temp: true,
+                },
+            ),
+            (
+                "from_temp",
+                RenameStep {
+                    from: seg(b".norte-rename-0a1b2c3d-0"),
+                    to: seg(b"b"),
+                    temp: true,
+                },
+            ),
+            (
+                "hostile",
+                RenameStep {
+                    from: seg(b"caf\xff.txt"),
+                    to: seg(b"caf\xfe.txt"),
+                    temp: false,
+                },
+            ),
+        ],
+    );
+    // Las TRES clases del vocabulario cerrado, una fixture cada una: añadir una
+    // clase sin fixture deja este `check_family` en rojo por cobertura 1:1.
+    // Cada una con `pair_index` DISTINTO: es el campo que no depende de `kind`
+    // y el que permite señalar la fila culpable bajo un veredicto que el
+    // cliente no entiende.
+    check_family(
+        "rename_collision.json",
+        &[
+            (
+                "absent_source",
+                RenameCollision {
+                    pair_index: 0,
+                    name: seg(b"ep7.mkv"),
+                    kind: RenameCollisionKind::AbsentSource,
+                },
+            ),
+            (
+                "external",
+                RenameCollision {
+                    pair_index: 2,
+                    name: seg(b"caf\xff.txt"),
+                    kind: RenameCollisionKind::External,
+                },
+            ),
+            (
+                "internal",
+                RenameCollision {
+                    pair_index: 1,
+                    name: seg(b"ep01.mkv"),
+                    kind: RenameCollisionKind::Internal,
+                },
+            ),
+        ],
+    );
+}
+
+/// El plan es wire-frozen: un paso, una colisión y el hash tienen nombres de
+/// campo fijos, y los nombres son segmentos percent-encoded.
+#[test]
+fn golden_fs_rename_batch_plan_result() {
+    use norte_proto::methods::{
+        FsRenameBatchPlanResult, RenameCollision, RenameCollisionKind, RenameStep,
+    };
+    check_family(
+        "fs_rename_batch_plan_result.json",
+        &[
+            // LA FORMA DE REFERENCIA: la permutación `a→b, b→a`, el caso que
+            // hoy es imposible con N `fs.move` sueltos. Son TRES pasos, y el
+            // tercero es el que la cierra: sin `.norte-rename-… → b`, el
+            // fichero que empezó como `a` se queda aparcado bajo el nombre de
+            // máquina y `b` nunca llega a existir. Contra esta fixture se
+            // escribe el planificador, así que un plan truncado aquí sería un
+            // planificador truncado allí.
+            (
+                "permutation",
+                FsRenameBatchPlanResult {
+                    steps: vec![
+                        RenameStep {
+                            from: seg(b"a"),
+                            to: seg(b".norte-rename-0a1b2c3d-0"),
+                            temp: true,
+                        },
+                        RenameStep {
+                            from: seg(b"b"),
+                            to: seg(b"a"),
+                            temp: false,
+                        },
+                        RenameStep {
+                            from: seg(b".norte-rename-0a1b2c3d-0"),
+                            to: seg(b"b"),
+                            temp: true,
+                        },
+                    ],
+                    collisions: vec![],
+                    executable: true,
+                    plan_hash: "2".repeat(64),
+                },
+            ),
+            // El plan MUERTO, y su forma importa tanto como la de arriba:
+            // `steps` VACÍO. Un plan con veredictos no se ordena a medias — el
+            // planificador no emite pasos para él —, así que un caller que
+            // ignorase `executable` no tendría nada que ejecutar de todos
+            // modos. Pasos y colisiones NO coexisten en nada que emita el core
+            // (decisión 4 del diseño), y una fixture que los mezclara pinearía
+            // una forma que no existe.
+            //
+            // Dos veredictos sobre parejas distintas: el índice es lo que hace
+            // señalable la fila, y el nombre hostil viaja percent-encoded.
+            (
+                "not_executable",
+                FsRenameBatchPlanResult {
+                    steps: vec![],
+                    collisions: vec![
+                        RenameCollision {
+                            pair_index: 1,
+                            name: seg(b"ep01.mkv"),
+                            kind: RenameCollisionKind::Internal,
+                        },
+                        RenameCollision {
+                            pair_index: 2,
+                            name: seg(b"caf\xff.txt"),
+                            kind: RenameCollisionKind::External,
+                        },
+                    ],
+                    executable: false,
+                    plan_hash: "0".repeat(64),
+                },
+            ),
+            // El plan ejecutable: `collisions` vacío es una LISTA VACÍA en el
+            // wire, jamás una clave ausente ni `null`. El hash es SINTÉTICO a
+            // propósito: un sha256 real de algo — el del input vacío, por
+            // ejemplo — dejaría pasar este golden a un hasher que no alimentara
+            // nada.
+            (
+                "executable",
+                FsRenameBatchPlanResult {
+                    steps: vec![RenameStep {
+                        from: seg(b"ep1.mkv"),
+                        to: seg(b"ep01.mkv"),
+                        temp: false,
+                    }],
+                    collisions: vec![],
+                    executable: true,
+                    plan_hash: "1".repeat(64),
+                },
+            ),
+        ],
+    );
+}
+
 #[test]
 fn golden_methods() {
     let fixtures = load("methods.json");
@@ -449,6 +677,7 @@ fn golden_methods() {
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
     check_methods_ai(&fixtures);
+    check_methods_rename_batch(&fixtures);
     // 98 → 101 en 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
     // ADR 0031). 101 → 106 en 0.33.0: + index_embed_params,
     // index_search_semantic_params(/_no_root)/result y semantic_hit (M4-IA-2,
@@ -459,7 +688,47 @@ fn golden_methods() {
     // 113 → 114 en 0.35.0: + plugin_column_values_params_scoped (#120 — la
     // petición que NOMBRA al plugin; la que no lo nombra conserva su fixture
     // byte a byte, que es lo que `skip_serializing_if` promete).
-    assert_eq!(fixtures.len(), 114, "[methods.json] fixtures sin caso Rust");
+    // 114 → 116 en 0.36.0: + fs_rename_batch_plan_params y fs_rename_batch_params
+    // (el batch de renames; el RESULT del plan tiene fichero propio, porque su
+    // familia pinea varias formas de plan).
+    assert_eq!(fixtures.len(), 116, "[methods.json] fixtures sin caso Rust");
+}
+
+/// Familia `fs.rename_batch*` (0.36.0): las PETICIONES de plan y de ejecución.
+/// La intención (`pairs`) es lo único que el cliente manda — el orden lo decide
+/// el core —, y la ejecución añade el `plan_hash` que el humano aprobó.
+fn check_methods_rename_batch(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{FsRenameBatchParams, FsRenameBatchPlanParams, RenamePair};
+    // Dir HOSTIL + una permutación `a→b, b→a`: el caso que motiva el método.
+    check_one(
+        fixtures,
+        "fs_rename_batch_plan_params",
+        &FsRenameBatchPlanParams {
+            dir: vpath("file:///home/user/fotos-a%FF%FE"),
+            pairs: vec![
+                RenamePair {
+                    from: seg(b"a"),
+                    to: seg(b"b"),
+                },
+                RenamePair {
+                    from: seg(b"b"),
+                    to: seg(b"a"),
+                },
+            ],
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_rename_batch_params",
+        &FsRenameBatchParams {
+            dir: vpath("file:///home/user/fotos-a%FF%FE"),
+            pairs: vec![RenamePair {
+                from: seg(b"caf\xff.txt"),
+                to: seg(b"cafe.txt"),
+            }],
+            plan_hash: "0".repeat(64),
+        },
+    );
 }
 
 /// Familia `ai.*` (0.32.0, M4-IA, ADR 0031): plan de rename revisable.
@@ -1959,7 +2228,12 @@ fn method_names_frozen() {
     assert_eq!(methods::PLUGIN_HELP, "plugin.help");
     // 0.35.0 (#120): PluginColumnValuesParams gana `plugin_id` — sin método
     // nuevo, así que aquí solo se mueve la versión.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.35.0");
+    // 0.36.0 (batch rename): las DOS mitades del ejecutor — el plan revisable
+    // (respuesta directa) y su ejecución (Task, `TaskKind::RenameBatch`),
+    // ligadas por el `plan_hash` que el humano aprobó.
+    assert_eq!(methods::FS_RENAME_BATCH_PLAN, "fs.rename_batch_plan");
+    assert_eq!(methods::FS_RENAME_BATCH, "fs.rename_batch");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.36.0");
 }
 
 #[test]

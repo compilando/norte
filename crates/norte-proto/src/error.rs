@@ -206,6 +206,20 @@ pub enum Error {
     /// ve — no envía cursores — pero degrada a `Unknown` si la recibiera.
     #[error("list cursor expired; restart the listing")]
     CursorExpired,
+    /// El directorio cambió entre la vista previa y la ejecución de un lote de
+    /// renames (`fs.rename_batch`, 0.36.0): re-planificar las MISMAS parejas
+    /// produjo un plan distinto del `plan_hash` que el llamante aprobó. Nada se
+    /// intentó. Accionable: re-planificar y volver a confirmar. NO reintentable
+    /// tal cual — el humano tiene que ver el plan nuevo. Un cliente N-1
+    /// (0.35.x) jamás la ve (no llama al método) pero degradaría a `Unknown`.
+    #[error("rename plan is stale; re-plan and confirm again")]
+    PlanStale,
+    /// El plan de renames tiene colisiones, así que no se intentó nada
+    /// (`fs.rename_batch`, 0.36.0). Accionable: corregir los nombres (o el
+    /// directorio de origen) y re-planificar. Un cliente N-1 (0.35.x) jamás la
+    /// ve pero degradaría a `Unknown`.
+    #[error("rename plan has collisions; nothing was attempted")]
+    PlanNotExecutable,
     /// Categoría de un protocolo más nuevo (fallback de deserialización).
     /// El core JAMÁS la emite; existe para que un cliente N degrade con
     /// elegancia ante categorías N+1.
