@@ -29,6 +29,8 @@
 //! assert_eq!(result.task_id.get(), 7);
 //! ```
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -553,7 +555,13 @@ pub const FS_RENAME_BATCH: &str = "fs.rename_batch";
 /// Task cancelable, y `fs.*` es alcanzable por un agente. El techo es la
 /// diferencia entre un lote grande y una petición que ocupa el hilo del
 /// dispatch.
-pub const FS_RENAME_BATCH_MAX_PAIRS: u32 = 4096;
+///
+/// `usize` y no `u32` como [`FS_LIST_MAX_PAGE`]: aquellos acotan un CAMPO
+/// entero del wire (`limit`, `k`), este solo se mide contra `pairs.len()` —
+/// mismo criterio que [`SEARCH_HITS_MAX_BATCH`] y [`PLUGIN_HELP_MAX_BYTES`],
+/// que también acotan tamaños de colección. Un `u32` aquí solo compraría un
+/// `as usize` en el daemon, en el engine y en el planificador.
+pub const FS_RENAME_BATCH_MAX_PAIRS: usize = 4096;
 
 /// Longitud EXACTA de `plan_hash` (0.36.0): sha256 en hex minúscula, 64
 /// caracteres. Un hash con otra forma es un error de PARAMS (`-32602`), jamás
@@ -1130,6 +1138,110 @@ pub struct AiRenamePlanResult {
     pub entries: Vec<AiRenameEntry>,
 }
 
+/// Por qué una cadena no es un [`PlanHash`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum PlanHashError {
+    /// Longitud distinta de [`PLAN_HASH_LEN`].
+    #[error("plan hash must be exactly {PLAN_HASH_LEN} characters")]
+    BadLength,
+    /// Algún carácter no es hex MINÚSCULA (`0`-`9`, `a`-`f`).
+    #[error("plan hash must be lowercase hex (0-9, a-f)")]
+    NotLowercaseHex,
+}
+
+/// El hash de un plan de renames: sha256 en hex MINÚSCULA, exactamente
+/// [`PLAN_HASH_LEN`] caracteres.
+///
+/// Es un TIPO y no un `String` por el mismo motivo que [`Segment`] lo es: la
+/// regla «una forma equivocada es error de PARAMS, no
+/// [`Error::PlanStale`](crate::Error::PlanStale)» escrita solo en prosa se
+/// re-implementa en el dispatch del daemon, otra vez en el puente MCP y otra
+/// vez allí donde un frontend devuelva el hash que recibió — y lo que una de
+/// esas copias se deja es justo la minúscula, que es el detalle que hace que
+/// dos escrituras del MISMO hash comparen distinto. Validado en la
+/// DESERIALIZACIÓN, se cumple una vez para todas las capas: un valor inválido
+/// no llega a existir.
+///
+/// ```
+/// use norte_proto::methods::PlanHash;
+/// let h = PlanHash::parse(&"ab".repeat(32)).expect("64 hex en minúscula");
+/// assert_eq!(h.as_str().len(), 64);
+/// assert_eq!(serde_json::to_string(&h).expect("json"), format!("\"{h}\""));
+/// // Mayúsculas, longitud y basura: rechazadas en construcción...
+/// assert!(PlanHash::parse(&"AB".repeat(32)).is_err());
+/// assert!(PlanHash::parse("00").is_err());
+/// // ...y por el wire, que es donde importa.
+/// assert!(serde_json::from_str::<PlanHash>(r#""00""#).is_err());
+/// assert!(serde_json::from_str::<PlanHash>(&format!(r#""{}""#, "ab".repeat(32))).is_ok());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct PlanHash(String);
+
+impl PlanHash {
+    /// Valida y construye desde la forma hex. Es el ÚNICO camino: el core la
+    /// usa sobre el hex que produce su hasher, y el wire la usa al
+    /// deserializar.
+    ///
+    /// # Errors
+    /// [`PlanHashError::BadLength`] si no mide [`PLAN_HASH_LEN`];
+    /// [`PlanHashError::NotLowercaseHex`] si algún carácter no es `0`-`9` o
+    /// `a`-`f`.
+    pub fn parse(hex: &str) -> Result<Self, PlanHashError> {
+        if hex.len() != PLAN_HASH_LEN {
+            return Err(PlanHashError::BadLength);
+        }
+        if !hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+            return Err(PlanHashError::NotLowercaseHex);
+        }
+        Ok(Self(hex.to_owned()))
+    }
+
+    /// La forma hex, tal cual viaja.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PlanHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for PlanHash {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let hex = String::deserialize(deserializer)?;
+        Self::parse(&hex).map_err(serde::de::Error::custom)
+    }
+}
+
+// El serde es a mano (valida al deserializar), así que el schema también: es un
+// string con patrón, y el patrón sale de `PLAN_HASH_LEN` para que no pueda
+// separarse del validador.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for PlanHash {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "PlanHash".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "minLength": PLAN_HASH_LEN,
+            "maxLength": PLAN_HASH_LEN,
+            "pattern": format!("^[0-9a-f]{{{PLAN_HASH_LEN}}}$"),
+            "description": "sha256 of a rename plan's conclusions, as exactly 64 \
+                            LOWERCASE hex digits. Uppercase is rejected: two \
+                            spellings of one hash must not compare differently. A \
+                            string of any other shape is a params error, never \
+                            `plan_stale`.",
+        })
+    }
+}
+
 /// Un rename PEDIDO dentro de un directorio: nombres base, no rutas.
 ///
 /// A diferencia de [`AiRenameEntry`] (donde el proveedor de IA garantiza UTF-8
@@ -1139,12 +1251,16 @@ pub struct AiRenamePlanResult {
 ///
 /// ```
 /// use norte_proto::{Segment, methods::RenamePair};
+/// // Un nombre que NO es UTF-8 a la izquierda: el wire lo escapa y los bytes
+/// // vuelven intactos, que es justo lo que un `String` no podría prometer.
 /// let p = RenamePair {
-///     from: Segment::new(b"ep1.mkv".to_vec()).expect("segment"),
-///     to: Segment::new(b"ep01.mkv".to_vec()).expect("segment"),
+///     from: Segment::new(b"caf\xff.txt".to_vec()).expect("segment"),
+///     to: Segment::new(b"cafe.txt".to_vec()).expect("segment"),
 /// };
-/// assert_eq!(serde_json::to_string(&p).expect("json"),
-///            r#"{"from":"ep1.mkv","to":"ep01.mkv"}"#);
+/// let json = serde_json::to_string(&p).expect("json");
+/// assert_eq!(json, r#"{"from":"caf%FF.txt","to":"cafe.txt"}"#);
+/// let back: RenamePair = serde_json::from_str(&json).expect("json");
+/// assert_eq!(back.from.as_bytes(), b"caf\xff.txt");
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1162,6 +1278,14 @@ pub struct RenamePair {
 /// `a → .norte-rename-XXXXXXXX-0` (`temp`), `b → a`, y
 /// `.norte-rename-XXXXXXXX-0 → b` (`temp`). Sin el tercero el fichero que
 /// empezó como `a` se queda aparcado bajo el nombre de máquina.
+///
+/// Un paso NO dice de qué pareja viene, y es deliberado: los pasos son
+/// MAQUINARIA opaca. Un frontend pinta las parejas del usuario — que ya tiene —
+/// más los veredictos, que sí llevan `pair_index`; el ORDEN es asunto del core
+/// (ver [`FS_RENAME_BATCH_PLAN`]), y un temporal parte una pareja en dos pasos
+/// justo porque lo es. Si algún día un frontend demuestra que necesita el
+/// mapeo, añadir el campo es un cambio ADITIVO — la forma correcta para una
+/// necesidad que todavía no se ha enseñado.
 ///
 /// ```
 /// use norte_proto::{Segment, methods::RenameStep};
@@ -1244,8 +1368,10 @@ pub enum RenameCollisionKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenameCollision {
     /// Índice, dentro de `pairs` de la petición, de la pareja que este
-    /// veredicto RECHAZA. Para `Internal` es la pareja rechazada — la SEGUNDA
-    /// en llegar al destino disputado, no la que se queda con él.
+    /// veredicto RECHAZA. Para `Internal` es la pareja POSTERIOR en el orden de
+    /// `pairs` (la primera se señala sola si también resulta rechazada). No hay
+    /// pareja «ganadora» que un frontend pueda pintar como aceptada: un plan con
+    /// veredictos no ejecuta NADA.
     ///
     /// Está definido para toda clase, incluidas las futuras, y ese es su
     /// motivo: `name` cambia de significado con `kind` (destino en
@@ -1270,31 +1396,32 @@ pub struct FsRenameBatchPlanParams {
     pub dir: VPath,
     /// Los renames pedidos. Más de [`FS_RENAME_BATCH_MAX_PAIRS`] es error de
     /// params (`-32602`), no un recorte.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("maxItems" = FS_RENAME_BATCH_MAX_PAIRS))
+    )]
     pub pairs: Vec<RenamePair>,
 }
 
 /// Result de [`FS_RENAME_BATCH_PLAN`] (0.36.0).
 ///
-/// **Invariante estructural: un plan MUERTO no lleva pasos.** Si `collisions`
-/// no está vacío, `steps` está vacío y `executable` es `false` — el core no
-/// ordena a medias un plan que no va a ejecutar (decisión 4 del diseño). Las
-/// dos listas JAMÁS están pobladas a la vez, y esa es la defensa de fondo:
-/// un cliente que ignorase `executable` y ejecutara `steps` a ciegas no
-/// tendría nada que ejecutar. `executable` sigue siendo el campo NORMATIVO —
-/// esto es el cinturón, no el tirante.
+/// **Un plan que no se puede ejecutar no lleva pasos** — el core no ordena a
+/// medias un plan que no va a ejecutar (decisión 4 del diseño). El invariante
+/// NORMATIVO, con su dirección exacta, está enunciado UNA vez, en `executable`.
 ///
 /// ```
-/// use norte_proto::methods::FsRenameBatchPlanResult;
+/// use norte_proto::methods::{FsRenameBatchPlanResult, PlanHash};
 /// let r = FsRenameBatchPlanResult {
 ///     steps: vec![],
 ///     collisions: vec![],
 ///     executable: true,
-///     plan_hash: "0".repeat(64),
+///     plan_hash: PlanHash::parse(&"0".repeat(64)).expect("hex"),
 /// };
 /// let json = serde_json::to_value(&r).expect("json");
 /// // `collisions` vacío es una lista vacía, jamás una clave ausente.
 /// assert_eq!(json["collisions"], serde_json::json!([]));
-/// assert_eq!(json["plan_hash"].as_str().expect("hex").len(), 64);
+/// // El hash viaja como el string desnudo, sin envoltorio del newtype.
+/// assert_eq!(json["plan_hash"], serde_json::json!("0".repeat(64)));
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1305,11 +1432,13 @@ pub struct FsRenameBatchPlanResult {
     /// duro es `pairs * 3 / 2`. Sin constante propia: lo acota el tope de
     /// parejas.
     ///
-    /// VACÍO siempre que `collisions` no lo esté (ver el invariante del tipo).
+    /// VACÍO siempre que `executable` sea `false` (ver el invariante en ese
+    /// campo).
     pub steps: Vec<RenameStep>,
-    /// Todo lo que detiene el plan; vacío cuando `executable`. Como mucho una
-    /// entrada por pareja, así que lo acota [`FS_RENAME_BATCH_MAX_PAIRS`]
-    /// igual que a `steps`.
+    /// Todo lo que detiene el plan; vacío cuando `executable`. Como mucho UNA
+    /// entrada por pareja, así que su techo es exactamente
+    /// [`FS_RENAME_BATCH_MAX_PAIRS`] — no el de `steps`, que es mayor porque
+    /// los temporales añaden pasos sin añadir parejas.
     ///
     /// Es la EXPLICACIÓN, no el veredicto: quien decide si se puede ejecutar es
     /// `executable`.
@@ -1320,10 +1449,15 @@ pub struct FsRenameBatchPlanResult {
     ///
     /// Es derivable de `collisions.is_empty()` HOY, y aun así manda este campo:
     /// un veredicto futuro podría parar un plan sin nombre ofensor que listar,
-    /// y un cliente que dedujera de la lista lo ejecutaría. Invariante que el
-    /// core mantiene y que un cliente puede asumir: jamás emite
-    /// `executable: true` con `collisions` no vacío, ni `steps` poblado con
-    /// `executable: false`.
+    /// y un cliente que dedujera de la lista lo ejecutaría.
+    ///
+    /// INVARIANTE (el core lo mantiene, un cliente puede asumirlo):
+    /// `executable == false` ⟹ `steps` vacío, y `collisions` no vacío ⟹
+    /// `executable == false`. Nótese la DIRECCIÓN: lo que vacía `steps` es
+    /// `!executable`, no la presencia de veredictos — así el invariante sigue
+    /// en pie para ese veredicto futuro sin nombre que listar, y un cliente que
+    /// ignorase este campo y ejecutase `steps` a ciegas no tendría, en ningún
+    /// caso, nada que ejecutar.
     pub executable: bool,
     /// sha256 en hex minúscula sobre las CONCLUSIONES del plan (directorio,
     /// parejas ordenadas, pasos resultantes, veredictos, banderas de caja y
@@ -1331,11 +1465,12 @@ pub struct FsRenameBatchPlanResult {
     /// re-planifica y compara. Es una cadena hex a propósito — legible en un
     /// log, sin ambigüedad de base64, sin bytes en el wire.
     ///
-    /// Longitud EXACTA [`PLAN_HASH_LEN`]. Una cadena de otra forma es un error
-    /// de PARAMS, no [`Error::PlanStale`](crate::Error::PlanStale): «no casa»
-    /// y «el directorio cambió» son cosas distintas, y contestar lo segundo a
-    /// quien mandó basura le miente sobre el estado del mundo.
-    pub plan_hash: String,
+    /// Su tipo YA impone la forma ([`PLAN_HASH_LEN`] caracteres hex minúscula):
+    /// una cadena de otra forma es un error de PARAMS que muere en la
+    /// deserialización, no [`Error::PlanStale`](crate::Error::PlanStale) — «no
+    /// casa» y «el directorio cambió» son cosas distintas, y contestar lo
+    /// segundo a quien mandó basura le miente sobre el estado del mundo.
+    pub plan_hash: PlanHash,
 }
 
 /// Params de [`FS_RENAME_BATCH`] (0.36.0).
@@ -1346,11 +1481,16 @@ pub struct FsRenameBatchParams {
     pub dir: VPath,
     /// Los renames pedidos — la MISMA intención que produjo `plan_hash`. Tope
     /// [`FS_RENAME_BATCH_MAX_PAIRS`], igual que en el plan.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("maxItems" = FS_RENAME_BATCH_MAX_PAIRS))
+    )]
     pub pairs: Vec<RenamePair>,
-    /// El hash del plan que el humano aprobó, [`PLAN_HASH_LEN`] caracteres hex.
-    /// Otra forma es error de params; que no case es
+    /// El hash del plan que el humano aprobó. Que la FORMA sea válida lo
+    /// garantiza [`PlanHash`] al deserializar; que el CONTENIDO case es lo que
+    /// comprueba el core, y no casar es
     /// [`Error::PlanStale`](crate::Error::PlanStale).
-    pub plan_hash: String,
+    pub plan_hash: PlanHash,
 }
 
 /// Identidad de un cliente (va en [`InitializeParams`]).

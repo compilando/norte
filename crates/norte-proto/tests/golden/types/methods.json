@@ -170,11 +170,11 @@
     "dir": "file:///home/user/fotos-a%FF%FE",
     "pairs": [
       {
-        "from": "caf%FF.txt",
-        "to": "cafe.txt"
+        "from": "ep1.mkv",
+        "to": "ep01.mkv"
       }
     ],
-    "plan_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+    "plan_hash": "1111111111111111111111111111111111111111111111111111111111111111"
   },
   "fs_rename_batch_plan_params": {
     "dir": "file:///home/user/fotos-a%FF%FE",

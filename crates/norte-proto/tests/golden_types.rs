@@ -28,6 +28,13 @@ fn vpath(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire válido de fixture")
 }
 
+/// Un [`PlanHash`] desde su forma hex (0.36.0). Las fixtures usan hashes
+/// SINTÉTICOS: un sha256 real de algo dejaría pasar un hasher que no alimentara
+/// nada. El tipo valida igual, que es de lo que se trata.
+fn plan_hash(hex: &str) -> norte_proto::methods::PlanHash {
+    norte_proto::methods::PlanHash::parse(hex).expect("plan hash de fixture")
+}
+
 /// Un nombre BASE desde sus bytes crudos (0.36.0): las fixtures del batch de
 /// renames se escriben en bytes, no en la forma percent-encoded — que es
 /// justamente lo que el golden tiene que demostrar.
@@ -534,8 +541,14 @@ fn golden_rename_batch_types() {
             ),
         ],
     );
-    // Las TRES clases del vocabulario cerrado, una fixture cada una: añadir una
-    // clase sin fixture deja este `check_family` en rojo por cobertura 1:1.
+    // Las TRES clases del vocabulario cerrado, una fixture cada una. Que sigan
+    // siendo TODAS no lo garantiza este `check_family` — compara fixtures
+    // contra esta lista escrita a mano, así que una cuarta variante sin ninguna
+    // de las dos cosas pasa desapercibida —, sino el cruce contra el artefacto
+    // en `schema.rs`
+    // (`el_schema_de_rename_collision_kind_cubre_los_veredictos_de_la_golden`),
+    // que sí se genera del tipo.
+    //
     // Cada una con `pair_index` DISTINTO: es el campo que no depende de `kind`
     // y el que permite señalar la fila culpable bajo un veredicto que el
     // cliente no entiende.
@@ -609,7 +622,7 @@ fn golden_fs_rename_batch_plan_result() {
                     ],
                     collisions: vec![],
                     executable: true,
-                    plan_hash: "2".repeat(64),
+                    plan_hash: plan_hash(&"2".repeat(64)),
                 },
             ),
             // El plan MUERTO, y su forma importa tanto como la de arriba:
@@ -639,7 +652,7 @@ fn golden_fs_rename_batch_plan_result() {
                         },
                     ],
                     executable: false,
-                    plan_hash: "0".repeat(64),
+                    plan_hash: plan_hash(&"0".repeat(64)),
                 },
             ),
             // El plan ejecutable: `collisions` vacío es una LISTA VACÍA en el
@@ -657,7 +670,7 @@ fn golden_fs_rename_batch_plan_result() {
                     }],
                     collisions: vec![],
                     executable: true,
-                    plan_hash: "1".repeat(64),
+                    plan_hash: plan_hash(&"1".repeat(64)),
                 },
             ),
         ],
@@ -717,16 +730,21 @@ fn check_methods_rename_batch(fixtures: &BTreeMap<String, Value>) {
             ],
         },
     );
+    // La petición de EJECUCIÓN apunta al plan EJECUTABLE de
+    // `fs_rename_batch_plan_result.json`: mismas parejas y su mismo hash. Con
+    // el del plan muerto — `"0"×64` — esta fixture sería una petición de
+    // aspecto legal para un plan que el core tiene que rechazar, y quien
+    // copiara la fixture a un test de la task 7 escribiría ese test al revés.
     check_one(
         fixtures,
         "fs_rename_batch_params",
         &FsRenameBatchParams {
             dir: vpath("file:///home/user/fotos-a%FF%FE"),
             pairs: vec![RenamePair {
-                from: seg(b"caf\xff.txt"),
-                to: seg(b"cafe.txt"),
+                from: seg(b"ep1.mkv"),
+                to: seg(b"ep01.mkv"),
             }],
-            plan_hash: "0".repeat(64),
+            plan_hash: plan_hash(&"1".repeat(64)),
         },
     );
 }
@@ -2233,6 +2251,14 @@ fn method_names_frozen() {
     // ligadas por el `plan_hash` que el humano aprobó.
     assert_eq!(methods::FS_RENAME_BATCH_PLAN, "fs.rename_batch_plan");
     assert_eq!(methods::FS_RENAME_BATCH, "fs.rename_batch");
+    // Los LITERALES, no los símbolos, por el mismo motivo que
+    // `PLUGIN_HELP_MAX_BYTES` arriba: un receptor dimensiona contra ellos —
+    // rechaza el lote antes de mandarlo, reserva el buffer del hash — así que
+    // moverlos mueve el contrato y algo tiene que ponerse rojo. El tope de
+    // parejas RECHAZA (no recorta como `FS_LIST_MAX_PAGE`), y por eso importa
+    // aún más que un tercero lo conozca.
+    assert_eq!(methods::FS_RENAME_BATCH_MAX_PAIRS, 4096);
+    assert_eq!(methods::PLAN_HASH_LEN, 64);
     assert_eq!(norte_proto::PROTOCOL_VERSION, "0.36.0");
 }
 

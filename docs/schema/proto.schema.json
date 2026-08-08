@@ -1160,11 +1160,12 @@
           "items": {
             "$ref": "#/$defs/RenamePair"
           },
+          "maxItems": 4096,
           "type": "array"
         },
         "plan_hash": {
-          "description": "El hash del plan que el humano aprobó, [`PLAN_HASH_LEN`] caracteres hex.\nOtra forma es error de params; que no case es\n[`Error::PlanStale`](crate::Error::PlanStale).",
-          "type": "string"
+          "$ref": "#/$defs/PlanHash",
+          "description": "El hash del plan que el humano aprobó. Que la FORMA sea válida lo\ngarantiza [`PlanHash`] al deserializar; que el CONTENIDO case es lo que\ncomprueba el core, y no casar es\n[`Error::PlanStale`](crate::Error::PlanStale)."
         }
       },
       "required": [
@@ -1186,6 +1187,7 @@
           "items": {
             "$ref": "#/$defs/RenamePair"
           },
+          "maxItems": 4096,
           "type": "array"
         }
       },
@@ -1196,25 +1198,25 @@
       "type": "object"
     },
     "FsRenameBatchPlanResult": {
-      "description": "Result de [`FS_RENAME_BATCH_PLAN`] (0.36.0).\n\n**Invariante estructural: un plan MUERTO no lleva pasos.** Si `collisions`\nno está vacío, `steps` está vacío y `executable` es `false` — el core no\nordena a medias un plan que no va a ejecutar (decisión 4 del diseño). Las\ndos listas JAMÁS están pobladas a la vez, y esa es la defensa de fondo:\nun cliente que ignorase `executable` y ejecutara `steps` a ciegas no\ntendría nada que ejecutar. `executable` sigue siendo el campo NORMATIVO —\nesto es el cinturón, no el tirante.\n\n```\nuse norte_proto::methods::FsRenameBatchPlanResult;\nlet r = FsRenameBatchPlanResult {\n    steps: vec![],\n    collisions: vec![],\n    executable: true,\n    plan_hash: \"0\".repeat(64),\n};\nlet json = serde_json::to_value(&r).expect(\"json\");\n// `collisions` vacío es una lista vacía, jamás una clave ausente.\nassert_eq!(json[\"collisions\"], serde_json::json!([]));\nassert_eq!(json[\"plan_hash\"].as_str().expect(\"hex\").len(), 64);\n```",
+      "description": "Result de [`FS_RENAME_BATCH_PLAN`] (0.36.0).\n\n**Un plan que no se puede ejecutar no lleva pasos** — el core no ordena a\nmedias un plan que no va a ejecutar (decisión 4 del diseño). El invariante\nNORMATIVO, con su dirección exacta, está enunciado UNA vez, en `executable`.\n\n```\nuse norte_proto::methods::{FsRenameBatchPlanResult, PlanHash};\nlet r = FsRenameBatchPlanResult {\n    steps: vec![],\n    collisions: vec![],\n    executable: true,\n    plan_hash: PlanHash::parse(&\"0\".repeat(64)).expect(\"hex\"),\n};\nlet json = serde_json::to_value(&r).expect(\"json\");\n// `collisions` vacío es una lista vacía, jamás una clave ausente.\nassert_eq!(json[\"collisions\"], serde_json::json!([]));\n// El hash viaja como el string desnudo, sin envoltorio del newtype.\nassert_eq!(json[\"plan_hash\"], serde_json::json!(\"0\".repeat(64)));\n```",
       "properties": {
         "collisions": {
-          "description": "Todo lo que detiene el plan; vacío cuando `executable`. Como mucho una\nentrada por pareja, así que lo acota [`FS_RENAME_BATCH_MAX_PAIRS`]\nigual que a `steps`.\n\nEs la EXPLICACIÓN, no el veredicto: quien decide si se puede ejecutar es\n`executable`.",
+          "description": "Todo lo que detiene el plan; vacío cuando `executable`. Como mucho UNA\nentrada por pareja, así que su techo es exactamente\n[`FS_RENAME_BATCH_MAX_PAIRS`] — no el de `steps`, que es mayor porque\nlos temporales añaden pasos sin añadir parejas.\n\nEs la EXPLICACIÓN, no el veredicto: quien decide si se puede ejecutar es\n`executable`.",
           "items": {
             "$ref": "#/$defs/RenameCollision"
           },
           "type": "array"
         },
         "executable": {
-          "description": "`true` cuando el plan se puede ejecutar tal cual. Campo NORMATIVO: el\nfrontend deshabilita el confirmar con `!executable`, y no deduce nada de\n`collisions`.\n\nEs derivable de `collisions.is_empty()` HOY, y aun así manda este campo:\nun veredicto futuro podría parar un plan sin nombre ofensor que listar,\ny un cliente que dedujera de la lista lo ejecutaría. Invariante que el\ncore mantiene y que un cliente puede asumir: jamás emite\n`executable: true` con `collisions` no vacío, ni `steps` poblado con\n`executable: false`.",
+          "description": "`true` cuando el plan se puede ejecutar tal cual. Campo NORMATIVO: el\nfrontend deshabilita el confirmar con `!executable`, y no deduce nada de\n`collisions`.\n\nEs derivable de `collisions.is_empty()` HOY, y aun así manda este campo:\nun veredicto futuro podría parar un plan sin nombre ofensor que listar,\ny un cliente que dedujera de la lista lo ejecutaría.\n\nINVARIANTE (el core lo mantiene, un cliente puede asumirlo):\n`executable == false` ⟹ `steps` vacío, y `collisions` no vacío ⟹\n`executable == false`. Nótese la DIRECCIÓN: lo que vacía `steps` es\n`!executable`, no la presencia de veredictos — así el invariante sigue\nen pie para ese veredicto futuro sin nombre que listar, y un cliente que\nignorase este campo y ejecutase `steps` a ciegas no tendría, en ningún\ncaso, nada que ejecutar.",
           "type": "boolean"
         },
         "plan_hash": {
-          "description": "sha256 en hex minúscula sobre las CONCLUSIONES del plan (directorio,\nparejas ordenadas, pasos resultantes, veredictos, banderas de caja y\nnormalización). Devuélvelo en [`FsRenameBatchParams`]: el core\nre-planifica y compara. Es una cadena hex a propósito — legible en un\nlog, sin ambigüedad de base64, sin bytes en el wire.\n\nLongitud EXACTA [`PLAN_HASH_LEN`]. Una cadena de otra forma es un error\nde PARAMS, no [`Error::PlanStale`](crate::Error::PlanStale): «no casa»\ny «el directorio cambió» son cosas distintas, y contestar lo segundo a\nquien mandó basura le miente sobre el estado del mundo.",
-          "type": "string"
+          "$ref": "#/$defs/PlanHash",
+          "description": "sha256 en hex minúscula sobre las CONCLUSIONES del plan (directorio,\nparejas ordenadas, pasos resultantes, veredictos, banderas de caja y\nnormalización). Devuélvelo en [`FsRenameBatchParams`]: el core\nre-planifica y compara. Es una cadena hex a propósito — legible en un\nlog, sin ambigüedad de base64, sin bytes en el wire.\n\nSu tipo YA impone la forma ([`PLAN_HASH_LEN`] caracteres hex minúscula):\nuna cadena de otra forma es un error de PARAMS que muere en la\ndeserialización, no [`Error::PlanStale`](crate::Error::PlanStale) — «no\ncasa» y «el directorio cambió» son cosas distintas, y contestar lo\nsegundo a quien mandó basura le miente sobre el estado del mundo."
         },
         "steps": {
-          "description": "Pasos en ORDEN de ejecución, temporales incluidos. Acotado por\n[`FS_RENAME_BATCH_MAX_PAIRS`]: como mucho una pareja no nula más un\ntemporal por ciclo, y un ciclo consume al menos dos parejas — el techo\nduro es `pairs * 3 / 2`. Sin constante propia: lo acota el tope de\nparejas.\n\nVACÍO siempre que `collisions` no lo esté (ver el invariante del tipo).",
+          "description": "Pasos en ORDEN de ejecución, temporales incluidos. Acotado por\n[`FS_RENAME_BATCH_MAX_PAIRS`]: como mucho una pareja no nula más un\ntemporal por ciclo, y un ciclo consume al menos dos parejas — el techo\nduro es `pairs * 3 / 2`. Sin constante propia: lo acota el tope de\nparejas.\n\nVACÍO siempre que `executable` sea `false` (ver el invariante en ese\ncampo).",
           "items": {
             "$ref": "#/$defs/RenameStep"
           },
@@ -1638,6 +1640,13 @@
         "paths"
       ],
       "type": "object"
+    },
+    "PlanHash": {
+      "description": "sha256 of a rename plan's conclusions, as exactly 64 LOWERCASE hex digits. Uppercase is rejected: two spellings of one hash must not compare differently. A string of any other shape is a params error, never `plan_stale`.",
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
     },
     "PluginColumnInfo": {
       "description": "Una columna que un plugin `columns` contribuye (elemento de\n[`PluginInfo::columns`], 0.28.0, G3c, ADR 0037): discovery — con QUÉ\n`column_id` llamar a [`PLUGIN_COLUMN_VALUES`] y QUÉ cabecera pintar, sin\nque el frontend tenga que adivinar por `category == \"columns\"`. `header`\nes texto del plugin — NO confiable, un frontend debe enmascararlo antes\nde renderizarlo (mismo trato que [`PluginCommandInfo::title`]).\n\n```\nuse norte_proto::methods::PluginColumnInfo;\nlet c: PluginColumnInfo =\n    serde_json::from_str(r#\"{\"id\":\"git-status\",\"header\":\"Git\"}\"#).unwrap();\nassert_eq!(c.id, \"git-status\");\nassert_eq!(c.header, \"Git\");\n```",
@@ -2441,7 +2450,7 @@
           "description": "El nombre ofensor: el DESTINO para `Internal`/`External`, el ORIGEN que\nfalta para `AbsentSource`. Su significado depende de `kind`; el que no\ndepende de nada es `pair_index`."
         },
         "pair_index": {
-          "description": "Índice, dentro de `pairs` de la petición, de la pareja que este\nveredicto RECHAZA. Para `Internal` es la pareja rechazada — la SEGUNDA\nen llegar al destino disputado, no la que se queda con él.\n\nEstá definido para toda clase, incluidas las futuras, y ese es su\nmotivo: `name` cambia de significado con `kind` (destino en\n`Internal`/`External`, origen ausente en `AbsentSource`), así que bajo\n[`RenameCollisionKind::Unknown`] un cliente no sabría qué está mirando.\nCon el índice siempre puede señalar la fila culpable, aunque no entienda\nel veredicto — que es justo lo que el fallback promete.",
+          "description": "Índice, dentro de `pairs` de la petición, de la pareja que este\nveredicto RECHAZA. Para `Internal` es la pareja POSTERIOR en el orden de\n`pairs` (la primera se señala sola si también resulta rechazada). No hay\npareja «ganadora» que un frontend pueda pintar como aceptada: un plan con\nveredictos no ejecuta NADA.\n\nEstá definido para toda clase, incluidas las futuras, y ese es su\nmotivo: `name` cambia de significado con `kind` (destino en\n`Internal`/`External`, origen ausente en `AbsentSource`), así que bajo\n[`RenameCollisionKind::Unknown`] un cliente no sabría qué está mirando.\nCon el índice siempre puede señalar la fila culpable, aunque no entienda\nel veredicto — que es justo lo que el fallback promete.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -2480,7 +2489,7 @@
       ]
     },
     "RenamePair": {
-      "description": "Un rename PEDIDO dentro de un directorio: nombres base, no rutas.\n\nA diferencia de [`AiRenameEntry`] (donde el proveedor de IA garantiza UTF-8\ny el engine rechaza lo demás fail-loud), aquí los nombres son [`Segment`]:\nun lote de renames es exactamente donde un nombre no-UTF8 tiene que\nsobrevivir byte a byte (regla dura 1).\n\n```\nuse norte_proto::{Segment, methods::RenamePair};\nlet p = RenamePair {\n    from: Segment::new(b\"ep1.mkv\".to_vec()).expect(\"segment\"),\n    to: Segment::new(b\"ep01.mkv\".to_vec()).expect(\"segment\"),\n};\nassert_eq!(serde_json::to_string(&p).expect(\"json\"),\n           r#\"{\"from\":\"ep1.mkv\",\"to\":\"ep01.mkv\"}\"#);\n```",
+      "description": "Un rename PEDIDO dentro de un directorio: nombres base, no rutas.\n\nA diferencia de [`AiRenameEntry`] (donde el proveedor de IA garantiza UTF-8\ny el engine rechaza lo demás fail-loud), aquí los nombres son [`Segment`]:\nun lote de renames es exactamente donde un nombre no-UTF8 tiene que\nsobrevivir byte a byte (regla dura 1).\n\n```\nuse norte_proto::{Segment, methods::RenamePair};\n// Un nombre que NO es UTF-8 a la izquierda: el wire lo escapa y los bytes\n// vuelven intactos, que es justo lo que un `String` no podría prometer.\nlet p = RenamePair {\n    from: Segment::new(b\"caf\\xff.txt\".to_vec()).expect(\"segment\"),\n    to: Segment::new(b\"cafe.txt\".to_vec()).expect(\"segment\"),\n};\nlet json = serde_json::to_string(&p).expect(\"json\");\nassert_eq!(json, r#\"{\"from\":\"caf%FF.txt\",\"to\":\"cafe.txt\"}\"#);\nlet back: RenamePair = serde_json::from_str(&json).expect(\"json\");\nassert_eq!(back.from.as_bytes(), b\"caf\\xff.txt\");\n```",
       "properties": {
         "from": {
           "$ref": "#/$defs/Segment",
@@ -2498,7 +2507,7 @@
       "type": "object"
     },
     "RenameStep": {
-      "description": "Un paso del plan ORDENADO. `temp` marca un paso que es MAQUINARIA del\nplanificador (romper un ciclo), no algo que el usuario haya pedido.\n\nUna permutación `a→b, b→a` son TRES pasos, y el temporal aparece en dos:\n`a → .norte-rename-XXXXXXXX-0` (`temp`), `b → a`, y\n`.norte-rename-XXXXXXXX-0 → b` (`temp`). Sin el tercero el fichero que\nempezó como `a` se queda aparcado bajo el nombre de máquina.\n\n```\nuse norte_proto::{Segment, methods::RenameStep};\nlet s = RenameStep {\n    from: Segment::new(b\"caf\\xff.txt\".to_vec()).expect(\"segment\"),\n    to: Segment::new(b\"cafe.txt\".to_vec()).expect(\"segment\"),\n    temp: false,\n};\nassert_eq!(serde_json::to_string(&s).expect(\"json\"),\n           r#\"{\"from\":\"caf%FF.txt\",\"to\":\"cafe.txt\",\"temp\":false}\"#);\n```",
+      "description": "Un paso del plan ORDENADO. `temp` marca un paso que es MAQUINARIA del\nplanificador (romper un ciclo), no algo que el usuario haya pedido.\n\nUna permutación `a→b, b→a` son TRES pasos, y el temporal aparece en dos:\n`a → .norte-rename-XXXXXXXX-0` (`temp`), `b → a`, y\n`.norte-rename-XXXXXXXX-0 → b` (`temp`). Sin el tercero el fichero que\nempezó como `a` se queda aparcado bajo el nombre de máquina.\n\nUn paso NO dice de qué pareja viene, y es deliberado: los pasos son\nMAQUINARIA opaca. Un frontend pinta las parejas del usuario — que ya tiene —\nmás los veredictos, que sí llevan `pair_index`; el ORDEN es asunto del core\n(ver [`FS_RENAME_BATCH_PLAN`]), y un temporal parte una pareja en dos pasos\njusto porque lo es. Si algún día un frontend demuestra que necesita el\nmapeo, añadir el campo es un cambio ADITIVO — la forma correcta para una\nnecesidad que todavía no se ha enseñado.\n\n```\nuse norte_proto::{Segment, methods::RenameStep};\nlet s = RenameStep {\n    from: Segment::new(b\"caf\\xff.txt\".to_vec()).expect(\"segment\"),\n    to: Segment::new(b\"cafe.txt\".to_vec()).expect(\"segment\"),\n    temp: false,\n};\nassert_eq!(serde_json::to_string(&s).expect(\"json\"),\n           r#\"{\"from\":\"caf%FF.txt\",\"to\":\"cafe.txt\",\"temp\":false}\"#);\n```",
       "properties": {
         "from": {
           "$ref": "#/$defs/Segment",
@@ -3214,6 +3223,9 @@
     "pending_approval": {
       "$ref": "#/$defs/PendingApproval"
     },
+    "plan_hash": {
+      "$ref": "#/$defs/PlanHash"
+    },
     "plugin_column_info": {
       "$ref": "#/$defs/PluginColumnInfo"
     },
@@ -3343,6 +3355,9 @@
     "search_hits": {
       "$ref": "#/$defs/SearchHits"
     },
+    "segment": {
+      "$ref": "#/$defs/Segment"
+    },
     "semantic_hit": {
       "$ref": "#/$defs/SemanticHit"
     },
@@ -3444,6 +3459,7 @@
     "initialize_result",
     "match_info",
     "pending_approval",
+    "plan_hash",
     "plugin_column_info",
     "plugin_column_values_params",
     "plugin_column_values_result",
@@ -3487,6 +3503,7 @@
     "resume_policy",
     "rpc_cancel_params",
     "search_hits",
+    "segment",
     "semantic_hit",
     "server_info",
     "span_wire",

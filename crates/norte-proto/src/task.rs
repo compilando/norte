@@ -43,6 +43,13 @@ impl fmt::Display for TaskId {
 }
 
 /// Clase de operación que ejecuta una Task (M0: las tres mutaciones del VFS).
+///
+// TODO(#126): es el ÚNICO enum de wire sin `#[non_exhaustive]`, así que cada
+// variante nueva rompe la API de Rust para quien haga match exhaustivo (por eso
+// `Mkdir`, `Embed` y `RenameBatch` tocaron los dos frontends en su propio
+// commit). El wire está cubierto por el `serde(other)` de abajo; lo que falta es
+// decidir si ese match exhaustivo es un coste o una función — hoy es lo que
+// obliga a etiquetar un kind nuevo en vez de pintarlo como «task».
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

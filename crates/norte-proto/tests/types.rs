@@ -527,17 +527,50 @@ fn rename_collision_unknown_kind_degrades_nested() {
     // 0.37 (que `version_compatible` acepta frente a un cliente 0.36) no puede
     // dejar al humano sin plan que revisar — degrada esa línea, no el documento.
     use norte_proto::methods::{FsRenameBatchPlanResult, RenameCollisionKind};
-    let r: FsRenameBatchPlanResult = serde_json::from_str(
-        r#"{"steps":[],"collisions":[{"pair_index":3,"name":"a","kind":"veredicto_del_futuro"}],
-            "executable":false,"plan_hash":"00"}"#,
-    )
-    .expect("un veredicto desconocido NO revienta el plan");
+    // El hash es uno VÁLIDO (64 hex minúscula): con `"00"` este test pasaba
+    // por el camino equivocado y, de paso, pineaba que cualquier cadena es un
+    // plan hash. Lo que aquí se demuestra es el fallback del veredicto, nada
+    // más.
+    let json = format!(
+        r#"{{"steps":[],"collisions":[{{"pair_index":3,"name":"a","kind":"veredicto_del_futuro"}}],
+            "executable":false,"plan_hash":"{}"}}"#,
+        "ab".repeat(32)
+    );
+    let r: FsRenameBatchPlanResult =
+        serde_json::from_str(&json).expect("un veredicto desconocido NO revienta el plan");
     assert_eq!(r.collisions.len(), 1);
     assert_eq!(r.collisions[0].kind, RenameCollisionKind::Unknown);
     assert_eq!(r.collisions[0].name.as_bytes(), b"a");
     // Y la fila SIGUE siendo señalable: `pair_index` no depende de `kind`, que
     // es justo lo que hace útil al fallback en vez de decorativo.
     assert_eq!(r.collisions[0].pair_index, 3);
+}
+
+/// El `plan_hash` se valida en la DESERIALIZACIÓN, así que una forma
+/// equivocada muere en el borde (`-32602` para el daemon) y jamás llega al
+/// comparador, que es donde se convertiría en un `PlanStale` mentiroso.
+#[test]
+fn plan_hash_malformado_muere_en_el_wire() {
+    use norte_proto::methods::{FsRenameBatchParams, PlanHash};
+    let params = |hash: &str| format!(r#"{{"dir":"file:///d","pairs":[],"plan_hash":"{hash}"}}"#);
+    // Mayúsculas: MISMO hash, otra escritura — se rechaza para que dos formas
+    // del mismo valor no comparen distinto según quién lo escribió.
+    for malo in [
+        "00",
+        &"AB".repeat(32),
+        &"ab".repeat(33),
+        &format!("{}g", "a".repeat(63)),
+    ] {
+        assert!(
+            serde_json::from_str::<FsRenameBatchParams>(&params(malo)).is_err(),
+            "{malo} no es un plan hash"
+        );
+    }
+    let bueno = "ab".repeat(32);
+    let ok: FsRenameBatchParams = serde_json::from_str(&params(&bueno)).expect("64 hex minúscula");
+    assert_eq!(ok.plan_hash, PlanHash::parse(&bueno).expect("hash"));
+    // Round-trip: lo que sale es exactamente lo que entró.
+    assert_eq!(ok.plan_hash.as_str(), bueno);
 }
 
 #[test]

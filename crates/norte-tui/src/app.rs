@@ -6037,6 +6037,16 @@ mod error_message_tests {
         assert_eq!(error_key(&Error::NotFound), "err-not-found");
         assert_eq!(error_key(&Error::Cancelled), "err-cancelled");
         assert_eq!(error_key(&Error::Unknown), "err-unknown");
+        // 0.36.0: los dos brazos del batch de renames viven sobre un
+        // `_ => "err-unknown"`, así que borrarlos COMPILA y la suite seguiría
+        // verde — con dos errores que su rustdoc llama accionables cayendo en
+        // «error desconocido», que es lo contrario. Estos asserts son lo único
+        // que lo impide.
+        assert_eq!(error_key(&Error::PlanStale), "err-plan-stale");
+        assert_eq!(
+            error_key(&Error::PlanNotExecutable),
+            "err-plan-not-executable"
+        );
         // La categoría es exactamente t(clave).
         assert_eq!(
             error_category(&Error::NotFound),

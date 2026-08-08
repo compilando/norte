@@ -49,6 +49,17 @@ unrelated file changes no verdict, so the hash still matches and the batch runs.
 Adding a file that creates a collision changes a verdict, so it does not, and
 the call fails `PlanStale` having touched nothing.
 
+One exception, and it is deliberate: a file appearing under exactly the name the
+planner picked for a temporary *does* change a step, and therefore the hash. The
+temporary is derived from the intent, so it is predictable, which means an agent
+with write access to that directory can invalidate a human's approval loop
+indefinitely by re-creating that name. We accept it. The alternative — excluding
+the temporaries from the hash — would let the plan the human approved and the
+plan the core executes differ in exactly the steps the human never saw, which
+trades a nuisance for the property this whole design exists to hold. Griefing by
+an agent that already has write access to the directory is bounded by the scope
+grant that gave it that access.
+
 The alternative — returning a plan token the client hands back — was rejected.
 A token makes the server hold state per preview, with a lifetime, an eviction
 policy and a denial-of-service surface, to answer a question the core can answer
@@ -68,6 +79,14 @@ list, an agent could present one plan to the human and submit another; the human
 would approve `ep1 → ep01` and the core would execute whatever arrived. Because
 the only thing that crosses is intent, the worst an agent can do is send pairs —
 and pairs are what the human reviewed.
+
+The same reasoning is why a `RenameStep` does not say which pair it came from.
+Steps are the core's machinery: a frontend renders the user's own pairs, which
+it already holds, plus the verdicts, which carry `pair_index`. Nothing in this
+design renders a step-to-pair mapping, and a temporary deliberately splits one
+pair across two steps — the order is the core's business. Should a frontend ever
+demonstrate that it needs the mapping, an optional field is an additive change,
+which is the right shape for a need that has not been shown.
 
 ### 3. `dir` plus base names, never full paths
 
@@ -126,7 +145,9 @@ be highlighted even when the reason cannot be explained.
 ### 6. Declared ceilings, because the preview is a direct response
 
 `FS_RENAME_BATCH_MAX_PAIRS` (4096) is part of the contract, following the house
-pattern of `FS_READ_MAX_CHUNK`, `FS_LIST_MAX_PAGE` and `INDEX_SEMANTIC_MAX_K`.
+pattern of the five constants already in `methods.rs`: `FS_READ_MAX_CHUNK`,
+`FS_LIST_MAX_PAGE`, `PLUGIN_HELP_MAX_BYTES`, `INDEX_SEMANTIC_MAX_K` and
+`SEARCH_HITS_MAX_BATCH`.
 Unlike `FS_LIST_MAX_PAGE` it does **not** clamp: truncating a rename batch would
 execute a different plan from the one requested, so an oversized request is
 rejected whole.
@@ -139,8 +160,13 @@ their own: one collision per pair at most, and one temporary per cycle where a
 cycle consumes at least two pairs.
 
 `plan_hash` is a lowercase hex string of exactly `PLAN_HASH_LEN` (64)
-characters — readable in a log, no base64 ambiguity, no bytes on the wire. A
-string of the wrong shape is a params error, deliberately **not** `PlanStale`:
+characters — readable in a log, no base64 ambiguity, no bytes on the wire. It is
+a validating newtype (`PlanHash`) rather than a `String` for the reason
+`Segment` is one: a rule written only in prose gets re-implemented in the daemon
+dispatch, in the MCP bridge and in every frontend that echoes a hash back, and
+the detail one of those copies drops is the lowercase. In the type it is
+enforced once, at deserialization, for every layer. A string of the wrong shape
+is a params error, deliberately **not** `PlanStale`:
 "your hash is malformed" and "the directory changed" are different facts, and
 answering the second to a client that sent garbage lies to it about the state of
 the world.
@@ -200,6 +226,6 @@ group id.** Rejected in the design doc: one row of unbounded size, poorer audit,
 and after a crash the row does not say what actually happened, whereas N rows do.
 
 **No cap on `pairs`, validating at the daemon only.** Rejected: the limit is
-part of what a third-party implementer must know, and the four sibling methods
-already declare theirs in `methods.rs`. A limit that lives only in the server is
+part of what a third-party implementer must know, and the five sibling
+constants are already declared in `methods.rs`. A limit that lives only in the server is
 a limit that only appears as a surprise.

@@ -69,6 +69,7 @@ struct ProtocolSchema {
     initialize_result: InitializeResult,
     match_info: MatchInfo,
     pending_approval: PendingApproval,
+    plan_hash: PlanHash,
     plugin_column_info: PluginColumnInfo,
     plugin_column_values_params: PluginColumnValuesParams,
     plugin_column_values_result: PluginColumnValuesResult,
@@ -112,10 +113,7 @@ struct ProtocolSchema {
     resume_policy: ResumePolicy,
     rpc_cancel_params: RpcCancelParams,
     search_hits: SearchHits,
-    // `Segment` NO lleva campo propio: desde 0.36.0 es alcanzable vía
-    // `RenamePair` (dentro de los dos params del batch de renames), así que una
-    // propiedad de primer nivel para él sería una entrada del artefacto que no
-    // corresponde a ningún método. Sigue en `$defs`, que es lo que importa.
+    segment: Segment,
     semantic_hit: SemanticHit,
     server_info: ServerInfo,
     span_wire: SpanWire,
@@ -244,6 +242,55 @@ fn el_schema_de_attr_value_cubre_las_etiquetas_de_la_golden() {
     assert_eq!(
         del_schema, de_la_golden,
         "las properties de $defs/AttrValue y las etiquetas de attr_value.json deben coincidir"
+    );
+}
+
+/// (0.36.0) Mismo mecanismo que el test de arriba, para
+/// [`RenameCollisionKind`]. El `check_family` de `golden_types.rs` NO cubre
+/// este fallo: compara las fixtures contra una lista de casos Rust escrita a
+/// mano, así que una CUARTA variante sin fixture y sin caso deja los dos lados
+/// de acuerdo y el test verde. El artefacto, en cambio, se genera del tipo, así
+/// que cruzarlo contra la golden convierte «añadí un veredicto, olvidé
+/// congelarlo» en rojo.
+///
+/// `unknown` queda fuera a propósito: es el fallback de deserialización
+/// (`serde(other)`), el core JAMÁS lo emite y por eso no le corresponde
+/// fixture — pinearlo obligaría a congelar un valor que no existe en el wire.
+#[test]
+fn el_schema_de_rename_collision_kind_cubre_los_veredictos_de_la_golden() {
+    let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+    let variantes = schema
+        .pointer("/$defs/RenameCollisionKind/oneOf")
+        .and_then(serde_json::Value::as_array)
+        .expect("RenameCollisionKind es un oneOf en el artefacto");
+    let del_schema: std::collections::BTreeSet<&str> = variantes
+        .iter()
+        .filter_map(|v| v.get("const").and_then(serde_json::Value::as_str))
+        .filter(|v| *v != "unknown")
+        .collect();
+    assert!(
+        !del_schema.is_empty(),
+        "¿cambió la forma del enum en el artefacto?"
+    );
+
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/types/rename_collision.json");
+    let raw = std::fs::read_to_string(&fixture).expect("leer rename_collision.json");
+    let casos: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&raw).expect("fixture JSON válida");
+    let de_la_golden: std::collections::BTreeSet<&str> = casos
+        .values()
+        .map(|caso| {
+            caso.get("kind")
+                .and_then(serde_json::Value::as_str)
+                .expect("cada colisión lleva su veredicto")
+        })
+        .collect();
+
+    assert_eq!(
+        del_schema, de_la_golden,
+        "todo veredicto que el core puede emitir necesita fixture en \
+         rename_collision.json (y al revés)"
     );
 }
 
@@ -394,6 +441,67 @@ fn el_schema_de_los_campos_de_metodo_lleva_los_topes_del_tipo() {
             Some(r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$"),
             "[{tipo}] el patrón es el MISMO que el de Entry.attrs \
              (traducción ECMA-262 de is_valid_attr_id)"
+        );
+    }
+}
+
+/// (0.36.0) Mismo criterio que el test de los campos de `attrs`: el artefacto
+/// es lo único que lee un implementador de TERCEROS, y un `array` sin techo le
+/// diría que un lote de un millón de renames es legal. Aquí importa más que en
+/// `attrs`, porque pasarse NO se recorta — es `-32602`, la petición entera —,
+/// así que un cliente que no conozca el número manda algo que el daemon tira.
+///
+/// Los números salen de las MISMAS constantes que aplica el código, y el patrón
+/// del hash sale del `JsonSchema` de [`PlanHash`], que a su vez lo construye
+/// desde `PLAN_HASH_LEN`: una sola fuente para el validador y para el contrato.
+#[test]
+fn el_schema_del_batch_de_renames_lleva_los_topes_del_tipo() {
+    use norte_proto::methods::{FS_RENAME_BATCH_MAX_PAIRS, PLAN_HASH_LEN};
+
+    let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+
+    for tipo in ["FsRenameBatchPlanParams", "FsRenameBatchParams"] {
+        let pairs = schema
+            .pointer(&format!("/$defs/{tipo}/properties/pairs"))
+            .unwrap_or_else(|| panic!("{tipo}.pairs está en el artefacto"));
+        assert_eq!(
+            pairs.get("maxItems").and_then(serde_json::Value::as_u64),
+            Some(FS_RENAME_BATCH_MAX_PAIRS as u64),
+            "[{tipo}] el tope de parejas viaja en el schema"
+        );
+        assert_eq!(
+            pairs
+                .pointer("/items/$ref")
+                .and_then(serde_json::Value::as_str),
+            Some("#/$defs/RenamePair"),
+            "[{tipo}] el elemento es un RenamePair, no un objeto libre"
+        );
+    }
+
+    // El hash lleva su forma en el TIPO, así que los dos campos son un `$ref`
+    // y las restricciones viven una sola vez.
+    let hash = schema
+        .pointer("/$defs/PlanHash")
+        .expect("PlanHash está en el artefacto");
+    assert_eq!(
+        hash.get("pattern").and_then(serde_json::Value::as_str),
+        Some(format!("^[0-9a-f]{{{PLAN_HASH_LEN}}}$").as_str()),
+        "el patrón es la traducción ECMA-262 de PlanHash::parse"
+    );
+    for tope in ["minLength", "maxLength"] {
+        assert_eq!(
+            hash.get(tope).and_then(serde_json::Value::as_u64),
+            Some(PLAN_HASH_LEN as u64),
+            "[{tope}] la longitud EXACTA viaja en el schema"
+        );
+    }
+    for tipo in ["FsRenameBatchPlanResult", "FsRenameBatchParams"] {
+        assert_eq!(
+            schema
+                .pointer(&format!("/$defs/{tipo}/properties/plan_hash/$ref"))
+                .and_then(serde_json::Value::as_str),
+            Some("#/$defs/PlanHash"),
+            "[{tipo}] plan_hash es el tipo con patrón, no un string cualquiera"
         );
     }
 }
