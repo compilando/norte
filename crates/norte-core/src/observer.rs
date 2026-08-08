@@ -30,9 +30,23 @@ pub enum Mutation<'a> {
         from: &'a VPath,
         /// Path nuevo.
         to: &'a VPath,
-        /// Lote al que pertenece el rename (`fs.rename_batch`): las entradas
-        /// que comparten `batch` son UNA unidad deshacible. `None` para un
-        /// rename suelto — que es todo lo que hay fuera del ejecutor de lotes.
+        /// Lote al que pertenece el rename (`fs.rename_batch`): la etiqueta que
+        /// agrupa n entradas del journal para deshacerlas juntas. `None` para
+        /// un rename suelto — que es todo lo que hay fuera del ejecutor de
+        /// lotes.
+        ///
+        /// El lote vive en ESTA variante y no en el contexto de la task porque
+        /// el ejecutor de lotes solo emite renames.
+        ///
+        /// OBLIGACIÓN DEL EJECUTOR: cada paso llama a `Provider::rename`
+        /// DIRECTAMENTE. Si en su lugar pasara por el camino de move con
+        /// política de colisión, una sobrescritura emitiría un
+        /// [`Mutation::Removed`] —clasificado `Irreversible`— que se quedaría
+        /// FUERA del grupo: un borrado permanente dentro de una operación que
+        /// el wire anuncia como una unidad deshacible, y que un undo por lote
+        /// ni siquiera vería para bloquearse. El planificador ya rechaza el
+        /// plan entero ante cualquier colisión, así que el ejecutor nunca tiene
+        /// motivo para sobrescribir nada.
         batch: Option<i64>,
     },
 }

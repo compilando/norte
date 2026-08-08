@@ -214,6 +214,13 @@ struct AuditRow<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     undoes_seq: Option<i64>,
     entry_hash: String,
+    /// Al FINAL, y omitido cuando no hay lote: un export viejo y uno nuevo de
+    /// las mismas entradas sueltas siguen siendo idénticos. Sin él, cuarenta
+    /// renames de UNA acción de un agente se leen como cuarenta acciones
+    /// independientes, que es justo la pregunta que un audit existe para
+    /// responder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    batch_id: Option<i64>,
 }
 
 /// Campo de bytes-wire: `(utf8, hex_fallback)`.
@@ -243,6 +250,7 @@ fn row(e: &JournalEntry) -> AuditRow<'_> {
         reversal: &e.reversal,
         undoes_seq: e.undoes_seq,
         entry_hash: hex(&e.entry_hash),
+        batch_id: e.batch_id,
     }
 }
 
@@ -288,8 +296,10 @@ fn csv_field(s: &str) -> String {
 /// `path`/`path_hex` en campos distintos.
 #[must_use]
 pub fn export_csv(entries: &[JournalEntry]) -> String {
+    // `batch_id` se AÑADE al final: las columnas que ya existían no se mueven,
+    // así que un consumidor por posición sigue leyendo lo mismo.
     let mut out = String::from(
-        "seq,ts_ms,actor_kind,actor_id,op,path,path_to,reversal,undoes_seq,entry_hash\n",
+        "seq,ts_ms,actor_kind,actor_id,op,path,path_to,reversal,undoes_seq,entry_hash,batch_id\n",
     );
     let wire = |b: &[u8]| match std::str::from_utf8(b) {
         Ok(s) => s.to_owned(),
@@ -307,6 +317,7 @@ pub fn export_csv(entries: &[JournalEntry]) -> String {
             e.reversal.clone(),
             e.undoes_seq.map(|s| s.to_string()).unwrap_or_default(),
             hex(&e.entry_hash),
+            e.batch_id.map(|b| b.to_string()).unwrap_or_default(),
         ];
         let line: Vec<String> = cols.iter().map(|c| csv_field(c)).collect();
         out.push_str(&line.join(","));
@@ -355,6 +366,33 @@ mod tests {
             serde_json::from_str(export_jsonl(&e).lines().next().unwrap()).unwrap();
         assert!(v.get("path").is_none(), "sin path lossy");
         assert_eq!(v["path_hex"], "fffe");
+    }
+
+    /// El lote SALE en los dos exports: sin él, n renames de UNA acción de un
+    /// agente se leen como n acciones sueltas. Ausente ⇒ ausente (JSONL) y
+    /// vacío (CSV), así que un export de entradas sueltas no cambia.
+    #[test]
+    fn el_lote_sale_en_ambos_exports_y_ausente_no_cambia_nada() {
+        let suelta = entry(1, b"mem:///a.txt");
+        let mut agrupada = entry(2, b"mem:///b.txt");
+        agrupada.batch_id = Some(7);
+        let e = [suelta, agrupada];
+
+        let jsonl = export_jsonl(&e);
+        let mut lines = jsonl.lines();
+        let v0: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        let v1: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert!(v0.get("batch_id").is_none(), "sin lote, sin clave");
+        assert_eq!(v1["batch_id"], 7);
+
+        let csv = export_csv(&e);
+        let header = csv.lines().next().unwrap();
+        assert!(header.ends_with(",batch_id"), "columna al final: {header}");
+        assert!(
+            csv.lines().nth(1).unwrap().ends_with(','),
+            "sin lote, vacío"
+        );
+        assert!(csv.lines().nth(2).unwrap().ends_with(",7"));
     }
 
     #[test]

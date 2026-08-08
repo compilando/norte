@@ -1096,6 +1096,18 @@ mod tests {
         assert_eq!(p.steps[0].to, name(b"coffee"));
     }
 
+    /// The precondition is enforced, loudly, in a debug build. The property
+    /// test used to reach this by accident (it could draw `.` as a name) and
+    /// now deliberately cannot, so the behaviour needs its own test: a caller
+    /// that hands the planner something that is not a directory entry gets a
+    /// panic, not a plan that renames `../../etc/passwd`.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a rename pair is two directory ENTRIES")]
+    fn a_pair_that_is_not_a_directory_entry_trips_the_precondition() {
+        let _ = plan_batch(&pairs(&[(b"..", b"x")]), &[name(b"..")], SENSITIVE);
+    }
+
     /// A source that is absent because the request spells it in another case on
     /// a case-SENSITIVE directory. The directory decides here too.
     #[test]
