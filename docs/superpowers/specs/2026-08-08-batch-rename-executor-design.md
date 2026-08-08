@@ -121,11 +121,16 @@ emitted first; repeat. What remains are pure cycles. Each cycle is broken by
 renaming ONE node to a temporary name, running the rest of the cycle, and
 landing the temporary last. Cost: one extra rename per cycle, not per entry.
 
-Temporary names are `.norte-rename-<batch>-<n>`, checked against both the
-listing and the plan's destinations, incrementing `n` on conflict. The name is
-length-bounded so it cannot exceed the 255-byte component limit that MinIO
-already taught us about; when the base name is long it is truncated by bytes,
-respecting a character boundary when the name is UTF-8.
+Temporary names are `.norte-rename-<8 hex>-<n>`, where the hex is the first four
+bytes of a digest of the INTENT (the sorted pairs plus the case regime) and `n`
+increments while the name is taken in the directory. Two properties matter:
+
+- the name never embeds the base name, so it is ~25 bytes whatever the real
+  names are and the 255-byte component limit MinIO taught us about cannot be
+  reached — there is nothing to truncate;
+- the digest is of the intent, not of the steps, so the temporary is identical
+  in a plan and in its re-plan. Hashing the steps would be circular, since the
+  steps contain the temporary.
 
 ### 6. `plan_hash` hashes conclusions, so irrelevant changes do not invalidate it
 
