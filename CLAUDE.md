@@ -120,6 +120,37 @@ they stop — a forgotten worktree is 30 GB of nothing (`just disk` lists them).
 - Record decisions that affect the protocol, licensing, security, or structural
   dependencies in a new ADR. Use the `/adr` project command.
 
+## Review workflow
+
+The reviewer agents (`rust-reviewer`, `protocol-guardian`, `security-reviewer`,
+`encoding-auditor`, `test-engineer`) earn their keep — they have caught data
+loss, wrong-file renames and overclaimed tamper evidence. What costs time is
+*when* they run, not *that* they run.
+
+**The agent doing the work dispatches its own reviewers before committing**, and
+reports once with the findings already applied. One agent lifecycle instead of
+three, and the reviewer's context is the code that is still warm. Pick by
+surface, not by habit:
+
+| surface touched | reviewer |
+| --- | --- |
+| `norte-proto`, JSON-RPC handlers | `protocol-guardian` (mandatory) |
+| journal, policy, daemon auth, secrets, plugin-host, MCP | `security-reviewer` |
+| paths, filenames, archives, viewers, search | `encoding-auditor` |
+| any substantial Rust diff | `rust-reviewer` |
+
+A second, external review pass is for work whose failure is expensive and
+silent — the journal, the wire, the policy gate. Frontends, tests and
+end-to-end wiring do not need one.
+
+Give a reviewer the commit range, what the change is *for*, and the specific
+questions you are unsure about. A reviewer told only "review this diff" returns
+a checklist; one told "I chose X over Y here, and I am unsure whether Z can
+race" returns the bug.
+
+Apply BLOCKER and MAJOR findings. Say which MINORs you skipped and why —
+silently dropping them is how a review becomes theatre.
+
 ## Definition of done
 
 A pull request includes the code, unit tests, integration tests at OS or
