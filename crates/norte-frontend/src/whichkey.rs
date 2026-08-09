@@ -19,7 +19,7 @@
 
 use norte_i18n::Lang;
 
-use crate::keymap::{Availability, Chord, Effective, paint_chord};
+use crate::keymap::{Availability, Chord, Effective, paint_chord, short_unavailable_message};
 
 /// ONE row of the which-key panel.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,10 +45,12 @@ pub struct WhichKeyRow {
     /// frontend marks these (a trailing `…`) rather than naming a command the
     /// key does not run.
     pub opens_sequence: bool,
-    /// Why the key does nothing, short form (`reason (#issue)`), already
-    /// translated. EMPTY when the row is available — the long form, with the
-    /// command in it, is [`unavailable_message`](crate::keymap::unavailable_message),
-    /// which is what the status bar prints when the key is actually pressed.
+    /// Why the key does nothing, already translated:
+    /// [`short_unavailable_message`], shared with the reference sheet (K3b) so
+    /// the two surfaces cannot word the same fact differently. EMPTY when the
+    /// row is available — the long form, with the command in it, is
+    /// [`unavailable_message`](crate::keymap::unavailable_message), which is
+    /// what the status bar prints when the key is actually pressed.
     pub reason: String,
 }
 
@@ -135,7 +137,7 @@ impl WhichKeyRows {
                     },
                     avail,
                     opens_sequence,
-                    reason: short_reason(avail, lang),
+                    reason: short_unavailable_message(avail, lang),
                 }
             })
             .collect();
@@ -226,32 +228,6 @@ pub fn command_label(command: &str, lang: Lang) -> String {
     };
     let text = norte_i18n::t_in(lang, &id);
     if text == id { command.to_owned() } else { text }
-}
-
-/// The SHORT form of why a key does nothing: the catalogue's reason and the
-/// issue, without the command name (the row already spells the key, and the
-/// label already names the command).
-///
-/// The long form —
-/// [`unavailable_message`](crate::keymap::unavailable_message) — is what the
-/// status bar prints when the key is actually PRESSED, where there is no row
-/// to give it context.
-fn short_reason(avail: Availability, lang: Lang) -> String {
-    match avail {
-        Availability::Here => String::new(),
-        // `reason` is a Fluent id, not prose (see the catalogue): translate
-        // it, then interpolate. Interpolating the id would print English
-        // inside a Spanish panel.
-        Availability::NotBuilt { reason, issue } => norte_i18n::ta_in(
-            lang,
-            "whichkey-unavailable-not-built",
-            &[
-                ("reason", &norte_i18n::t_in(lang, reason)),
-                ("issue", &issue.to_string()),
-            ],
-        ),
-        Availability::NotHere => norte_i18n::t_in(lang, "whichkey-unavailable-not-here"),
-    }
 }
 
 #[cfg(test)]

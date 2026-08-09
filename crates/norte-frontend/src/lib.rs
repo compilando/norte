@@ -24,6 +24,7 @@ mod format;
 pub mod help;
 pub mod help_badge;
 pub mod keymap;
+pub mod keysheet;
 mod modal;
 pub mod mouse;
 pub mod nav;

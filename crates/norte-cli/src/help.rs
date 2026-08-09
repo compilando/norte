@@ -26,7 +26,10 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::process::ExitCode;
 
-use norte_frontend::keymap::{Effective, KeymapFile, Screen, presets};
+use norte_frontend::keymap::{
+    Availability as KeyAvailability, Effective, KeymapFile, Screen, presets,
+};
+use norte_frontend::keysheet;
 use norte_help::{Availability, Block, Callout, ChordResolver, CommandText, Lang, Span, Topic};
 
 /// Id of the synthetic keyboard page, the one entry of this command that is
@@ -61,6 +64,25 @@ const NO_CHORD: &str = "—";
 /// row would be a claim; answering `Available` is the absence of one, and it is
 /// also what `norte_frontend::availability::verdict` does when it has no fact
 /// to go on.
+///
+/// # Two questions, and this type answers only one of them
+///
+/// [`norte_help::Availability`] — what [`Self::availability`] returns — is
+/// about RIGHT NOW: is there a selection, is the pane read-only, is the
+/// connection up. This process has no such state, hence `Available`.
+///
+/// The keyboard page answers the OTHER question, added by K3b: has norte
+/// BUILT the command this key is bound to — a fact about the shared catalogue
+/// (`Status::Live` vs `Status::Planned`), identical in every process. That one
+/// arrives through [`norte_frontend::keysheet::SheetRow`] and never through
+/// this trait; the two enums are unrelated types with unrelated meanings, and
+/// merging them would make `norte help keys` claim to know things about a pane
+/// it does not have.
+///
+/// It answers only the catalogue's half of that question. Which of the TUI and
+/// the GUI implements a built command is a third question, and needs a
+/// frontend's own command set — which this process does not have and must not
+/// grow (rule 7). See [`JsonAvailability`].
 pub struct CliChords {
     /// The effective keymap of each screen, kept per screen because the
     /// cheatsheet has to say WHICH screen a binding belongs to — a single
@@ -138,6 +160,33 @@ impl CliChords {
                 // Commander migrant reads to learn the keys would be the one
                 // that lies about them — the exact trap ADR 0043 exists to
                 // close. Filter to what the catalogue calls Live.
+                //
+                // K3b keeps that intent and moves the mechanism. This filter
+                // is what makes the availability TRUE — with the `Planned`
+                // names out of `known`, the catalogue is consulted and answers
+                // `NotBuilt` — and it is no longer what hides the row: since
+                // K2b's four imported presets bind ~30 such commands
+                // (#131..#140), `keys_page` renders them from
+                // `keysheet::sheet`, marked and with their issue, instead of
+                // walking the filtered `bindings()`. Never presenting an
+                // unbuilt command as a working shortcut is still the rule; a
+                // row that says "not built yet" does not break it, and a
+                // missing row taught the migrant nothing at all.
+                //
+                // `chords` below still comes from `bindings()`, and must: it
+                // answers "which key runs this command" for the prose pages
+                // ({{cmd:…}} marks), where there is no room to explain, and a
+                // chord printed there IS the claim that pressing it works.
+                //
+                // What this `known` set is NOT is a frontend's command list.
+                // It is every name the bundled presets bind, minus the planned
+                // ones, so `Availability::Here` here means "the catalogue
+                // calls it Live" and `NotHere` means "no bundled preset binds
+                // it" — neither is a statement about the TUI or the GUI. Both
+                // the page and `JsonAvailability` are careful to claim only
+                // the first; a fourth `COMMANDS` table in the CLI would break
+                // rule 7 and would go stale the first time a frontend grew a
+                // command.
                 let known = norte_frontend::keymap::preset_commands(screen);
                 let known: Vec<&str> = known
                     .iter()
@@ -411,27 +460,67 @@ fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
 /// Generated, never a maintained list — a rebind rewrites this page. It
 /// describes the keys of the interactive frontends, which is what a keymap IS:
 /// shared config that this command can read without running either of them.
+///
+/// Since K3b it prints the keys norte has NOT BUILT as well, in their place in
+/// key order, each with the reason and the issue tracking it — see
+/// [`norte_frontend::keysheet`], whose rows the three surfaces now share. This
+/// stream cannot dim anything, so the row carries the whole answer as words.
+///
+/// "Not built" is the only unavailability this command can honestly report,
+/// and the page says so once under its title: whether a BUILT command is
+/// implemented by the TUI or by the GUI is a question about a frontend, and
+/// this process is neither (see [`JsonAvailability`], and
+/// [`CliChords`]'s "two questions").
 #[must_use]
 pub fn keys_page(chords: &CliChords, lang: Lang) -> String {
     let mut out = format!("{}\n\n", norte_i18n::t_in(lang, "help-topic-keys"));
+    let _ = writeln!(out, "{}\n", norte_i18n::t_in(lang, "keys-page-note"));
+    let rows = keysheet::sheet(&chords.effectives);
     for (screen, title_id) in SCREENS {
-        let Some((_, eff)) = chords.effectives.iter().find(|(s, _)| *s == screen) else {
+        if !chords.effectives.iter().any(|(s, _)| *s == screen) {
             continue;
-        };
+        }
         let _ = writeln!(out, "── {} ──", norte_i18n::t_in(lang, title_id));
         if screen == Screen::Dialog {
             // #113's note, kept: each overlay supports its own SUBSET of these
             // verbs, and a flat list without it reads as a promise.
             let _ = writeln!(out, "  {}", norte_i18n::t_in(lang, "help-dialog-note"));
         }
-        for (seq, cmd) in eff.bindings() {
-            let seq = norte_frontend::keymap::paint_chord(&seq);
-            let _ = writeln!(
-                out,
-                "  {seq}{} {}",
-                pad_to(&seq, CHORD_COLUMN),
-                norte_i18n::t_in(lang, &CliChords::label_id(cmd))
-            );
+        for row in rows.iter().filter(|r| r.screen == screen) {
+            // The shared label router, with its fallback to the command NAME:
+            // an unbuilt command has no help text — nobody writes help for
+            // something that does not exist — and `t_in` answers a missing
+            // message with the id, which would print `help-cmd-pane-pack` at
+            // the reader.
+            let label = norte_frontend::whichkey::command_label(&row.command, lang);
+            // ONLY `NotBuilt` earns a suffix. `NotHere` means "absent from the
+            // command set this `Effective` was built with", and this command's
+            // set is the bundled presets' vocabulary, not a frontend's — so
+            // here it means "no bundled preset binds it", which says nothing
+            // about availability and must not be printed as if it did. See
+            // `JsonAvailability`, which collapses the same two states for the
+            // same reason.
+            let why = match row.avail {
+                KeyAvailability::NotBuilt { .. } => {
+                    norte_frontend::keymap::short_unavailable_message(row.avail, lang)
+                }
+                KeyAvailability::Here | KeyAvailability::NotHere => String::new(),
+            };
+            let _ = if why.is_empty() {
+                writeln!(
+                    out,
+                    "  {}{} {label}",
+                    row.chord,
+                    pad_to(&row.chord, CHORD_COLUMN)
+                )
+            } else {
+                writeln!(
+                    out,
+                    "  {}{} {label} — {why}",
+                    row.chord,
+                    pad_to(&row.chord, CHORD_COLUMN)
+                )
+            };
         }
         out.push('\n');
     }
@@ -535,7 +624,97 @@ struct JsonTopic {
     context: Vec<String>,
     see_also: Vec<String>,
     commands: Vec<JsonRow>,
+    /// The keyboard rows, on the synthetic [`KEYS_ID`] page and nowhere else —
+    /// hence absent, rather than an empty array, on every prose page (which
+    /// keeps them byte-identical to v1). `Some(vec![])` and `None` are
+    /// different answers on purpose: a keyboard page whose every layer failed
+    /// to build has no keys, and must not be mistaken for a page that never
+    /// had any. Structured, because the alternative is a consumer parsing
+    /// [`Self::text`] with a regex to find out whether a key works.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keys: Option<Vec<JsonKey>>,
     text: String,
+}
+
+/// One key of the keyboard page (v2).
+#[derive(serde::Serialize)]
+struct JsonKey {
+    /// `browse` | `viewer` | `dialog`: the flat list stays groupable.
+    screen: &'static str,
+    /// The sequence as a reader presses it, painted and masked.
+    chord: String,
+    command: String,
+    /// Translated, falling back to [`Self::command`] — an unbuilt command has
+    /// no help text.
+    label: String,
+    availability: JsonAvailability,
+}
+
+/// Whether norte has BUILT the command a key is bound to — the catalogue's
+/// question, not `norte_help::Availability` (which is about the state of a
+/// running app and is unknowable here; see [`CliChords`]).
+///
+/// **Two states, not three, and that is a limit of this process rather than a
+/// simplification.** `norte_frontend::keymap::Availability` also distinguishes
+/// `NotHere` — built, but not by THIS frontend — and that distinction needs a
+/// frontend's command set to make. This command has none: it feeds
+/// `Effective::build_for` the bundled presets' own vocabulary, so `Here` there
+/// means "the catalogue calls it Live" and `NotHere` means "no bundled preset
+/// binds it", neither of which is a claim about the TUI or the GUI. Reporting
+/// them as `here`/`not-here` would tell an agent that `Alt+Left` goes back in
+/// the GUI, which it does not — the exact class of lie the `MAJOR-4` filter in
+/// [`CliChords::build`] exists to close. So both collapse to `built`, and the
+/// page says once that which frontend implements a built key is not knowable
+/// from here.
+///
+/// Tagged rather than a bare string so the two fields that exist for only one
+/// variant travel with it: an agent reading `not-built` gets the issue to
+/// point a human at. Every wire word is spelled out with `rename`, for the
+/// reason [`screen_key`] is a hand-written table: v2 freezes these words, and
+/// a Rust identifier renamed while tidying must not silently rename a field of
+/// a consumed contract.
+#[derive(serde::Serialize)]
+#[serde(tag = "state")]
+enum JsonAvailability {
+    /// `Status::Live`: norte has built it. Which frontend implements it is a
+    /// question this process cannot answer.
+    #[serde(rename = "built")]
+    Built,
+    /// `Status::Planned`: norte has not built it, and the key does nothing in
+    /// any frontend.
+    #[serde(rename = "not-built")]
+    NotBuilt {
+        /// Translated short reason (the catalogue holds a Fluent id).
+        reason: String,
+        /// The issue tracking it. Never invented, never zero.
+        issue: u32,
+    },
+}
+
+impl JsonAvailability {
+    fn of(avail: KeyAvailability, lang: Lang) -> Self {
+        match avail {
+            // `NotHere` collapses into `built` deliberately — see the type's
+            // doc. It is a fact about the command set this `Effective` was
+            // built with, and this command's set is not a frontend's.
+            KeyAvailability::Here | KeyAvailability::NotHere => Self::Built,
+            KeyAvailability::NotBuilt { reason, issue } => Self::NotBuilt {
+                reason: norte_i18n::t_in(lang, reason),
+                issue,
+            },
+        }
+    }
+}
+
+/// The `screen` string of [`JsonKey`]. A stable wire word, spelled here rather
+/// than derived from `Debug`: a rename of the enum variant must not silently
+/// rename a field of a consumed contract.
+const fn screen_key(screen: Screen) -> &'static str {
+    match screen {
+        Screen::Browse => "browse",
+        Screen::Viewer => "viewer",
+        Screen::Dialog => "dialog",
+    }
 }
 
 /// One runnable row in [`JsonTopic`].
@@ -549,7 +728,17 @@ struct JsonRow {
 
 /// Version of the `--json` shape. Bump it when a field's MEANING changes;
 /// adding a field is additive and does not.
-const JSON_VERSION: u32 = 1;
+///
+/// - **1** — the original H3g shape.
+/// - **2** (K3b) — the `keys` page changed what it CONTAINS, which no added
+///   field can describe. Until now every key it listed was a key that worked,
+///   because the ones this build cannot run were filtered out of the page
+///   entirely; now they are listed too, in their place in key order, and a
+///   consumer that read "every listed key works" from v1 would silently start
+///   reading keys that do nothing. The `keys` array (structured rows, each
+///   with its [`JsonAvailability`]) is what makes the distinction machine-
+///   readable instead of a phrase inside `text`.
+const JSON_VERSION: u32 = 2;
 
 /// The pages `--json` emits, filtered to `only` when the caller named a page.
 fn json_doc(lang: Lang, chords: &CliChords, only: Option<&str>) -> JsonDoc {
@@ -570,12 +759,14 @@ fn json_doc(lang: Lang, chords: &CliChords, only: Option<&str>) -> JsonDoc {
                     chord: row.chord,
                 })
                 .collect(),
+            keys: None,
             text: render_topic(t, lang, chords),
         })
         .collect();
     // The keyboard page is a page: it is listed, it is reachable by id, and an
     // agent asking for "everything norte documents" must not have to know it is
-    // generated. It has no commands — a chord is not something Enter runs.
+    // generated. It has no commands — a chord is not something Enter runs —
+    // and since v2 it has `keys` instead, which is what it always was.
     if only.is_none_or(|id| id == KEYS_ID) {
         topics.push(JsonTopic {
             id: KEYS_ID.to_owned(),
@@ -584,6 +775,18 @@ fn json_doc(lang: Lang, chords: &CliChords, only: Option<&str>) -> JsonDoc {
             context: Vec::new(),
             see_also: Vec::new(),
             commands: Vec::new(),
+            keys: Some(
+                keysheet::sheet(&chords.effectives)
+                    .into_iter()
+                    .map(|row| JsonKey {
+                        screen: screen_key(row.screen),
+                        chord: row.chord,
+                        label: norte_frontend::whichkey::command_label(&row.command, lang),
+                        command: row.command,
+                        availability: JsonAvailability::of(row.avail, lang),
+                    })
+                    .collect(),
+            ),
             text: keys_page(chords, lang),
         });
     }
@@ -647,10 +850,14 @@ pub fn run(topic: Option<&str>, list: bool, search: Option<&str>, json: bool) ->
         }
         if json {
             let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+            // ONE document, then filtered. It used to be built twice — once
+            // for `lang`, once for `topics` — which since K3b means rendering
+            // every page and walking the whole keyboard sheet a second time.
+            let all = json_doc(lang, &chords, None);
             let doc = JsonDoc {
                 version: JSON_VERSION,
-                lang: json_doc(lang, &chords, None).lang,
-                topics: json_doc(lang, &chords, None)
+                lang: all.lang,
+                topics: all
                     .topics
                     .into_iter()
                     .filter(|t| ids.contains(&t.id.as_str()))
@@ -860,6 +1067,114 @@ mod tests {
         assert!(
             !out.contains("help-cmd-") && !out.contains("dialog-cmd-"),
             "untranslated id in the sheet"
+        );
+    }
+
+    /// K3b: the rows K2b's imported presets made necessary. Total Commander's
+    /// `Alt+F5` packs; norte does not pack yet. Before K3b the page simply had
+    /// no such line, so the one artefact a migrant reads to learn the keys was
+    /// silent about a third of the preset.
+    #[test]
+    fn una_tecla_no_construida_es_una_fila_que_dice_por_que() {
+        let chords = CliChords::from_preset("total-commander", Lang::En);
+        let out = keys_page(&chords, Lang::En);
+        let row = out
+            .lines()
+            .find(|l| l.contains("Alt+F5"))
+            .expect("the key is where a Total Commander migrant looks for it");
+        assert!(
+            row.contains("pane.pack"),
+            "no help text exists for an unbuilt command, so the label is its NAME: {row}"
+        );
+        assert!(row.contains("132"), "the issue is the way out: {row}");
+        assert!(
+            row.contains(&norte_i18n::t_in(Lang::En, "keymap-reason-archive-write")),
+            "the reason is TRANSLATED, not the catalogue's Fluent id: {row}"
+        );
+    }
+
+    /// The v2 wire words, pinned as LITERALS. Nothing else pins them: the
+    /// golden is generated from the default preset, which binds no planned
+    /// command, so it contains `built` and nothing else. A rename of a Rust
+    /// variant (`NotBuilt` → `Planned` is the natural tidy-up, since that is
+    /// what the catalogue calls it) would otherwise silently retire a
+    /// consumer's `state === "not-built"` branch with the whole suite green.
+    #[test]
+    fn las_palabras_del_contrato_v2_son_literales() {
+        let json = |a: &JsonAvailability| serde_json::to_string(a).expect("serializa");
+        assert_eq!(json(&JsonAvailability::Built), r#"{"state":"built"}"#);
+        assert_eq!(
+            json(&JsonAvailability::NotBuilt {
+                reason: "writing archives".to_owned(),
+                issue: 132,
+            }),
+            r#"{"state":"not-built","reason":"writing archives","issue":132}"#,
+            "the issue is a NUMBER: an agent points a human at it"
+        );
+        assert_eq!(
+            [Screen::Browse, Screen::Viewer, Screen::Dialog].map(screen_key),
+            ["browse", "viewer", "dialog"]
+        );
+    }
+
+    /// And a real `not-built` row reaches the wire end to end — the golden
+    /// cannot show one, because the default preset binds no planned command.
+    #[test]
+    fn una_fila_no_construida_llega_al_json_con_su_issue() {
+        let chords = CliChords::from_preset("total-commander", Lang::En);
+        let doc = json_doc(Lang::En, &chords, Some(KEYS_ID));
+        let keys = doc.topics[0].keys.as_ref().expect("the keyboard page");
+        let pack = keys
+            .iter()
+            .find(|k| k.command == "pane.pack")
+            .expect("total-commander binds pane.pack");
+        let json = serde_json::to_value(&pack.availability).expect("serializa");
+        assert_eq!(json["state"], "not-built");
+        assert_eq!(json["issue"], 132);
+        assert_eq!(
+            json["reason"],
+            norte_i18n::t_in(Lang::En, "keymap-reason-archive-write"),
+            "translated prose, not the catalogue's Fluent id"
+        );
+        assert!(
+            keys.iter().any(
+                |k| serde_json::to_value(&k.availability).expect("serializa")["state"] == "built"
+            ),
+            "and the built ones are still built"
+        );
+    }
+
+    /// Interleaved in key order, never a section of leftovers at the bottom:
+    /// the sheet answers "what does this key do", and a reader scanning the
+    /// F-keys must find the unavailable one between its neighbours.
+    #[test]
+    fn las_filas_no_disponibles_no_se_agrupan_al_final() {
+        let chords = CliChords::from_preset("total-commander", Lang::En);
+        let out = keys_page(&chords, Lang::En);
+        let lines: Vec<&str> = out.lines().collect();
+        let pack = lines
+            .iter()
+            .position(|l| l.contains("Alt+F5"))
+            .expect("the pane.pack row");
+        let viewer = lines
+            .iter()
+            .position(|l| l.contains(&norte_i18n::t_in(Lang::En, "help-section-viewer")))
+            .expect("the viewer section");
+        assert!(
+            pack < viewer,
+            "it belongs to the browse section it is bound in"
+        );
+        // `Ctrl+u` (pane.swap) is bound AFTER Alt+F5 in the preset and this
+        // build runs it: an available row after an unavailable one is exactly
+        // what a segregated sheet could not produce. (Painted lowercase — a
+        // character token is the key as typed; only named keys are prettified.)
+        let swap = lines
+            .iter()
+            .position(|l| l.contains("Ctrl+u"))
+            .expect("the pane.swap row");
+        assert!(
+            pack < swap && swap < viewer,
+            "the sheet is one list in key order, not two: pack={pack} swap={swap}"
         );
     }
 

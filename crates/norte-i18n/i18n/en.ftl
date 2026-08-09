@@ -315,6 +315,11 @@ help-section-browse = Browsing (panes)
 help-section-viewer = Viewer
 help-section-dialog = Dialogs and overlays
 help-dialog-note = each dialog supports its own subset of these keys
+# The caveat of the KEYBOARD sheet (K3b), printed once under its title. Two
+# claims, and the second is the one worth the line: a row without the mark is
+# a command norte has built, but this command has no frontend, so it cannot
+# say which of the two implements it — asking would need a running app.
+keys-page-note = Keys norte has not built yet are listed too, marked with the issue that tracks them. A key without that mark is built; which frontend implements it is not knowable from here.
 # --- Help overlay (H3b) — sidebar group headers and the synthetic keyboard
 # page. `help-group-{tag}` is looked up from the corpus' OWN first tag (see
 # the front matter of `norte-help/topics/*/*.md`): a new tag there needs its
@@ -689,14 +694,22 @@ keymap-reason-tabs = panel tabs
 keymap-reason-sort = sort commands
 keymap-reason-properties = properties and directory size
 keymap-reason-connections = connection management
+# The SHORT form, for a surface whose ROW already names the command: the
+# which-key panel (K3a) and the reference sheet (K3b, `norte help keys`
+# included). Unlike `keymap-unavailable-*` — the sentence the status bar
+# prints on a key that was pressed — it drops the command, but it keeps
+# "not built yet": the CLI sheet writes to a pipe and cannot dim a row, and
+# the bare reason would read as a description of what the key does.
+# `#132` and not `issue #132`, unlike the long form: the which-key panel is
+# the surface with no room, and the six extra characters pushed the NUMBER —
+# the only actionable part — off the right edge of a 60-column panel. The
+# clause already says "not built yet", so `#` needs no introduction.
+keymap-short-not-built = not built yet ({ $reason }, #{ $issue })
+keymap-short-not-here = not available here
 
 # which-key overlay (K3a): the panel that lists what can follow a pending
-# prefix. The reason is the SHORT form — the row already spells the key and
-# names the command, so it says only why, unlike `keymap-unavailable-*`,
-# which is the sentence the status bar prints on a key that was pressed.
+# prefix.
 whichkey-more-keys = more keys
-whichkey-unavailable-not-built = { $reason } (#{ $issue })
-whichkey-unavailable-not-here = not available here
 # A row the panel had no room for is COUNTED, never silently dropped:
 # a box that just ends implies the list ended with it.
 whichkey-truncated = … { $shown }/{ $total }

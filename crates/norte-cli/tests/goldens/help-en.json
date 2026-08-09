@@ -714,13 +714,915 @@
       "commands": [],
       "context": [],
       "id": "keys",
+      "keys": [
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Up",
+          "command": "cursor.up",
+          "label": "move cursor up",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Down",
+          "command": "cursor.down",
+          "label": "move cursor down",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "PgUp",
+          "command": "cursor.page-up",
+          "label": "page up",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "PgDn",
+          "command": "cursor.page-down",
+          "label": "page down",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Home",
+          "command": "cursor.top",
+          "label": "go to top",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "End",
+          "command": "cursor.bottom",
+          "label": "go to bottom",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Enter",
+          "command": "nav.enter",
+          "label": "enter the selected directory",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Backspace",
+          "command": "nav.parent",
+          "label": "go to parent directory",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Alt+Left",
+          "command": "nav.back",
+          "label": "back to the previous directory",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Alt+Right",
+          "command": "nav.forward",
+          "label": "forward again",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Alt+i",
+          "command": "pane.mirror",
+          "label": "send this location to the other pane",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Alt+u",
+          "command": "pane.pull",
+          "label": "go where the other pane is",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+u",
+          "command": "pane.swap",
+          "label": "swap the two panes",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F5",
+          "command": "pane.copy",
+          "label": "copy selection to the other pane",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F6",
+          "command": "pane.move",
+          "label": "move selection to the other pane",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F7",
+          "command": "pane.mkdir",
+          "label": "create a directory (F7)",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Shift+F6",
+          "command": "pane.rename",
+          "label": "rename in place (Shift+F6)",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F8",
+          "command": "pane.delete",
+          "label": "delete (trash when available)",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Shift+F8",
+          "command": "pane.delete-permanent",
+          "label": "PERMANENT delete",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+k",
+          "command": "task.cancel",
+          "label": "cancel the most recent task",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F3",
+          "command": "pane.view",
+          "label": "view the selected file",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F4",
+          "command": "pane.open",
+          "label": "open the selected file with an external program (openers.toml)",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "/",
+          "command": "pane.quick-search",
+          "label": "quick search in pane (filter/jump)",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Alt+Down",
+          "command": "pane.history",
+          "label": "directory history",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Alt+F7",
+          "command": "pane.search",
+          "label": "search by name/content (Alt+F7)",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Alt+e",
+          "command": "pane.names-encoding",
+          "label": "show names as… (cp437/cp866/Shift-JIS/GBK/…; display only)",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+r",
+          "command": "pane.refresh",
+          "label": "reload both panes (Ctrl+R)",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+h",
+          "command": "pane.toggle-hidden",
+          "label": "show or hide hidden entries",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Alt+.",
+          "command": "pane.toggle-hidden",
+          "label": "show or hide hidden entries",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Alt+c",
+          "command": "pane.columns",
+          "label": "column picker",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+d",
+          "command": "pane.hotlist",
+          "label": "favorite directories",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Insert",
+          "command": "mark.toggle",
+          "label": "toggle mark on the entry under the cursor",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Space",
+          "command": "mark.toggle",
+          "label": "toggle mark on the entry under the cursor",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+a",
+          "command": "mark.all",
+          "label": "mark every visible entry",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+A",
+          "command": "mark.clear",
+          "label": "clear every mark",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "*",
+          "command": "mark.invert",
+          "label": "invert the marks",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Plus",
+          "command": "mark.pattern-add",
+          "label": "mark by pattern",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "-",
+          "command": "mark.pattern-remove",
+          "label": "unmark by pattern",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "q",
+          "command": "app.quit",
+          "label": "quit norte",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F10",
+          "command": "app.quit",
+          "label": "quit norte",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+c",
+          "command": "app.quit",
+          "label": "quit norte",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Tab",
+          "command": "pane.switch",
+          "label": "switch pane",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F1",
+          "command": "app.help",
+          "label": "this help",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F9",
+          "command": "app.theme",
+          "label": "choose theme",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F11",
+          "command": "app.settings",
+          "label": "settings",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F12",
+          "command": "app.extensions",
+          "label": "extension manager",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+p",
+          "command": "app.palette",
+          "label": "command palette",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "q",
+          "command": "viewer.close",
+          "label": "close the viewer",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Esc",
+          "command": "viewer.close",
+          "label": "close the viewer",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F3",
+          "command": "viewer.close",
+          "label": "close the viewer",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F10",
+          "command": "viewer.close",
+          "label": "close the viewer",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Up",
+          "command": "viewer.up",
+          "label": "one line up",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Down",
+          "command": "viewer.down",
+          "label": "one line down",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "PgUp",
+          "command": "viewer.page-up",
+          "label": "page up",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "PgDn",
+          "command": "viewer.page-down",
+          "label": "page down",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Home",
+          "command": "viewer.top",
+          "label": "go to top",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "End",
+          "command": "viewer.bottom",
+          "label": "go to bottom",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "e",
+          "command": "viewer.encoding",
+          "label": "reload as… (next encoding)",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "E",
+          "command": "viewer.encoding-auto",
+          "label": "back to auto-detection",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "x",
+          "command": "viewer.hex",
+          "label": "toggle hex view",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+c",
+          "command": "app.quit",
+          "label": "quit norte",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Tab",
+          "command": "pane.switch",
+          "label": "switch pane",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F1",
+          "command": "app.help",
+          "label": "this help",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F9",
+          "command": "app.theme",
+          "label": "choose theme",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F11",
+          "command": "app.settings",
+          "label": "settings",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F12",
+          "command": "app.extensions",
+          "label": "extension manager",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+p",
+          "command": "app.palette",
+          "label": "command palette",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Enter",
+          "command": "dialog.confirm",
+          "label": "confirm",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "y",
+          "command": "dialog.approve",
+          "label": "approve",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "n",
+          "command": "dialog.deny",
+          "label": "deny",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Esc",
+          "command": "dialog.cancel",
+          "label": "cancel",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "o",
+          "command": "dialog.overwrite",
+          "label": "overwrite",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "s",
+          "command": "dialog.skip",
+          "label": "skip",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "r",
+          "command": "dialog.rename",
+          "label": "rename",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "w",
+          "command": "dialog.newer",
+          "label": "keep newer",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Up",
+          "command": "dialog.up",
+          "label": "up",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Down",
+          "command": "dialog.down",
+          "label": "down",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "PgUp",
+          "command": "dialog.page-up",
+          "label": "pg up",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "PgDn",
+          "command": "dialog.page-down",
+          "label": "pg dn",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "a",
+          "command": "dialog.add",
+          "label": "add",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "e",
+          "command": "dialog.toggle-enabled",
+          "label": "toggle",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Space",
+          "command": "dialog.toggle-enabled",
+          "label": "toggle",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "d",
+          "command": "dialog.remove",
+          "label": "remove",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Shift+Up",
+          "command": "dialog.move-up",
+          "label": "move up",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Shift+Down",
+          "command": "dialog.move-down",
+          "label": "move down",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "K",
+          "command": "dialog.move-up",
+          "label": "move up",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "J",
+          "command": "dialog.move-down",
+          "label": "move down",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+s",
+          "command": "dialog.sort",
+          "label": "sort by",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "f",
+          "command": "dialog.cycle-format",
+          "label": "format",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Tab",
+          "command": "dialog.pane",
+          "label": "other pane",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Backspace",
+          "command": "dialog.back",
+          "label": "back",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "/",
+          "command": "dialog.filter",
+          "label": "filter",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "q",
+          "command": "app.quit",
+          "label": "quit norte",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F10",
+          "command": "app.quit",
+          "label": "quit norte",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+c",
+          "command": "app.quit",
+          "label": "quit norte",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F1",
+          "command": "app.help",
+          "label": "this help",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F9",
+          "command": "app.theme",
+          "label": "choose theme",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F11",
+          "command": "app.settings",
+          "label": "settings",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "F12",
+          "command": "app.extensions",
+          "label": "extension manager",
+          "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+p",
+          "command": "app.palette",
+          "label": "command palette",
+          "screen": "dialog"
+        }
+      ],
       "see_also": [],
       "tags": [
         "keys"
       ],
-      "text": "Keyboard\n\n── Browsing (panes) ──\n  Up             move cursor up\n  Down           move cursor down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  Enter          enter the selected directory\n  Backspace      go to parent directory\n  Alt+Left       back to the previous directory\n  Alt+Right      forward again\n  Alt+i          send this location to the other pane\n  Alt+u          go where the other pane is\n  Ctrl+u         swap the two panes\n  F5             copy selection to the other pane\n  F6             move selection to the other pane\n  F7             create a directory (F7)\n  Shift+F6       rename in place (Shift+F6)\n  F8             delete (trash when available)\n  Shift+F8       PERMANENT delete\n  Ctrl+k         cancel the most recent task\n  F3             view the selected file\n  F4             open the selected file with an external program (openers.toml)\n  /              quick search in pane (filter/jump)\n  Alt+Down       directory history\n  Alt+F7         search by name/content (Alt+F7)\n  Alt+e          show names as… (cp437/cp866/Shift-JIS/GBK/…; display only)\n  Ctrl+r         reload both panes (Ctrl+R)\n  Ctrl+h         show or hide hidden entries\n  Alt+.          show or hide hidden entries\n  Alt+c          column picker\n  Ctrl+d         favorite directories\n  Insert         toggle mark on the entry under the cursor\n  Space          toggle mark on the entry under the cursor\n  Ctrl+a         mark every visible entry\n  Ctrl+A         clear every mark\n  *              invert the marks\n  Plus           mark by pattern\n  -              unmark by pattern\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n── Viewer ──\n  q              close the viewer\n  Esc            close the viewer\n  F3             close the viewer\n  F10            close the viewer\n  Up             one line up\n  Down           one line down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  e              reload as… (next encoding)\n  E              back to auto-detection\n  x              toggle hex view\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n── Dialogs and overlays ──\n  each dialog supports its own subset of these keys\n  Enter          confirm\n  y              approve\n  n              deny\n  Esc            cancel\n  o              overwrite\n  s              skip\n  r              rename\n  w              keep newer\n  Up             up\n  Down           down\n  PgUp           pg up\n  PgDn           pg dn\n  a              add\n  e              toggle\n  Space          toggle\n  d              remove\n  Shift+Up       move up\n  Shift+Down     move down\n  K              move up\n  J              move down\n  Ctrl+s         sort by\n  f              format\n  Tab            other pane\n  Backspace      back\n  /              filter\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n",
+      "text": "Keyboard\n\nKeys norte has not built yet are listed too, marked with the issue that tracks them. A key without that mark is built; which frontend implements it is not knowable from here.\n\n── Browsing (panes) ──\n  Up             move cursor up\n  Down           move cursor down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  Enter          enter the selected directory\n  Backspace      go to parent directory\n  Alt+Left       back to the previous directory\n  Alt+Right      forward again\n  Alt+i          send this location to the other pane\n  Alt+u          go where the other pane is\n  Ctrl+u         swap the two panes\n  F5             copy selection to the other pane\n  F6             move selection to the other pane\n  F7             create a directory (F7)\n  Shift+F6       rename in place (Shift+F6)\n  F8             delete (trash when available)\n  Shift+F8       PERMANENT delete\n  Ctrl+k         cancel the most recent task\n  F3             view the selected file\n  F4             open the selected file with an external program (openers.toml)\n  /              quick search in pane (filter/jump)\n  Alt+Down       directory history\n  Alt+F7         search by name/content (Alt+F7)\n  Alt+e          show names as… (cp437/cp866/Shift-JIS/GBK/…; display only)\n  Ctrl+r         reload both panes (Ctrl+R)\n  Ctrl+h         show or hide hidden entries\n  Alt+.          show or hide hidden entries\n  Alt+c          column picker\n  Ctrl+d         favorite directories\n  Insert         toggle mark on the entry under the cursor\n  Space          toggle mark on the entry under the cursor\n  Ctrl+a         mark every visible entry\n  Ctrl+A         clear every mark\n  *              invert the marks\n  Plus           mark by pattern\n  -              unmark by pattern\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n── Viewer ──\n  q              close the viewer\n  Esc            close the viewer\n  F3             close the viewer\n  F10            close the viewer\n  Up             one line up\n  Down           one line down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  e              reload as… (next encoding)\n  E              back to auto-detection\n  x              toggle hex view\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n── Dialogs and overlays ──\n  each dialog supports its own subset of these keys\n  Enter          confirm\n  y              approve\n  n              deny\n  Esc            cancel\n  o              overwrite\n  s              skip\n  r              rename\n  w              keep newer\n  Up             up\n  Down           down\n  PgUp           pg up\n  PgDn           pg dn\n  a              add\n  e              toggle\n  Space          toggle\n  d              remove\n  Shift+Up       move up\n  Shift+Down     move down\n  K              move up\n  J              move down\n  Ctrl+s         sort by\n  f              format\n  Tab            other pane\n  Backspace      back\n  /              filter\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n",
       "title": "Keyboard"
     }
   ],
-  "version": 1
+  "version": 2
 }

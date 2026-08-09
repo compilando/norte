@@ -266,6 +266,58 @@ pub fn unavailable_message(command: &str, why: Availability) -> String {
     }
 }
 
+/// The SHORT form of the same fact, for a surface that already names the
+/// command in the row it is decorating: the which-key panel (K3a) and the
+/// reference sheet (K3b). No command in it, and the language is a parameter
+/// rather than the process-wide one, because both callers render a whole page
+/// in one language chosen by the caller.
+///
+/// It still says "not built yet" rather than only the reason, because the
+/// third surface that prints it — `norte help keys` — writes to a pipe and
+/// cannot dim anything: on its own, `writing archives (#132)` reads like a
+/// description of what the key DOES. The wording has to carry the meaning that
+/// styling carries elsewhere.
+///
+/// One function and not one per surface, next to [`unavailable_message`], so
+/// the long form and the short form cannot drift into disagreeing about the
+/// same `Availability`.
+///
+/// ```
+/// use norte_frontend::keymap::{Availability, short_unavailable_message};
+/// use norte_i18n::Lang;
+///
+/// let m = short_unavailable_message(
+///     Availability::NotBuilt { reason: "keymap-reason-archive-write", issue: 132 },
+///     Lang::En,
+/// );
+/// assert!(m.contains("132"), "{m}");
+/// // It SAYS "not built": the bare reason would read as a description of
+/// // what the key does on the one surface that cannot dim a row.
+/// assert!(m.contains("not built"), "{m}");
+/// // The catalogue holds a Fluent ID: it must be TRANSLATED, not pasted.
+/// assert!(!m.contains("keymap-reason-"), "{m}");
+/// // The command is the row's job, not this sentence's.
+/// assert!(!m.contains("pane.pack"), "{m}");
+/// assert!(short_unavailable_message(Availability::Here, Lang::En).is_empty());
+/// ```
+#[must_use]
+pub fn short_unavailable_message(why: Availability, lang: norte_i18n::Lang) -> String {
+    match why {
+        Availability::Here => String::new(),
+        // Same rule as the long form: `reason` is a Fluent id, so translate it
+        // before interpolating, or a Spanish page carries an English clause.
+        Availability::NotBuilt { reason, issue } => norte_i18n::ta_in(
+            lang,
+            "keymap-short-not-built",
+            &[
+                ("reason", &norte_i18n::t_in(lang, reason)),
+                ("issue", &issue.to_string()),
+            ],
+        ),
+        Availability::NotHere => norte_i18n::t_in(lang, "keymap-short-not-here"),
+    }
+}
+
 /// The user-facing sentence for a count that landed on a command that takes
 /// none. Lives here, like [`unavailable_message`], so the TUI and the GUI
 /// cannot word it differently.
@@ -1800,6 +1852,52 @@ keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
                     m.escape_debug()
                 );
             }
+        }
+    }
+
+    /// The same tripwire for the SHORT form (K3b), which is now the one that
+    /// reaches a pipe (`norte help keys`) and a JSON field, in both locales.
+    #[test]
+    fn el_mensaje_corto_tampoco_lleva_un_hazard_de_terminal() {
+        for d in CATALOGUE {
+            let why = match d.status {
+                Status::Live => Availability::NotHere,
+                Status::Planned { reason, issue } => Availability::NotBuilt { reason, issue },
+            };
+            for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+                let m = short_unavailable_message(why, lang);
+                assert!(
+                    !m.chars().any(norte_encoding::is_terminal_hazard),
+                    "{} [{lang:?}]: {:?}",
+                    d.name,
+                    m.escape_debug()
+                );
+            }
+        }
+    }
+
+    /// The short form SAYS the key is not built, in both locales. The wording
+    /// is not decoration: `norte help keys` writes to a pipe and cannot dim a
+    /// row, so `writing archives (#132)` on its own reads as a description of
+    /// what the key does. A later edit back to the bare reason would restore
+    /// exactly the confusion K3b removed, and would otherwise be green.
+    #[test]
+    fn el_mensaje_corto_dice_que_no_esta_construido_en_ambos_locales() {
+        let why = Availability::NotBuilt {
+            reason: "keymap-reason-archive-write",
+            issue: 132,
+        };
+        for (lang, marker) in [
+            (norte_i18n::Lang::En, "not built"),
+            (norte_i18n::Lang::Es, "aún no construido"),
+        ] {
+            let m = short_unavailable_message(why, lang);
+            assert!(m.contains(marker), "{lang:?}: {m}");
+            assert!(m.contains("132"), "{lang:?}: {m}");
+            assert!(
+                !m.contains("keymap-reason-"),
+                "the reason is a Fluent id and must be TRANSLATED: {lang:?}: {m}"
+            );
         }
     }
 

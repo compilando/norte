@@ -175,7 +175,7 @@ fn una_pagina_sola_en_json_lleva_sus_filas_resueltas() {
         .unwrap();
     assert!(out.status.success());
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON válido");
-    assert_eq!(v["version"], 1);
+    assert_eq!(v["version"], 2);
     let topics = v["topics"].as_array().expect("topics");
     assert_eq!(topics.len(), 1);
     assert_eq!(topics[0]["id"], "copying");
@@ -186,6 +186,51 @@ fn una_pagina_sola_en_json_lleva_sus_filas_resueltas() {
     assert!(
         !topics[0]["text"].as_str().expect("text").is_empty(),
         "the rendered page rides along, which is what an agent reads"
+    );
+}
+
+/// v2 (K3b): the keyboard page carries STRUCTURED rows, each saying whether
+/// this build runs the key. Before it, `--json` gave a consumer only prose,
+/// and the prose listed nothing but working keys — which is the reading the
+/// version bump exists to invalidate.
+#[test]
+fn la_pagina_de_teclas_en_json_lleva_filas_con_su_disponibilidad() {
+    let out = norte().args(["help", "keys", "--json"]).output().unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON válido");
+    assert_eq!(
+        v["version"], 2,
+        "the shape's meaning changed, not just a field"
+    );
+    let topics = v["topics"].as_array().expect("topics");
+    assert_eq!(topics.len(), 1);
+    let keys = topics[0]["keys"].as_array().expect("keys rows");
+    assert!(!keys.is_empty());
+    for key in keys {
+        assert!(key["chord"].is_string(), "{key}");
+        assert!(key["command"].is_string(), "{key}");
+        assert!(
+            ["browse", "viewer", "dialog"].contains(&key["screen"].as_str().expect("screen")),
+            "{key}"
+        );
+        // Always there, and one of the two words this process can honestly
+        // say: a row with no availability would be a row a consumer has to
+        // guess about, and `here`/`not-here` would be claims about a frontend
+        // this command is not.
+        assert!(
+            ["built", "not-built"].contains(&key["availability"]["state"].as_str().expect("state")),
+            "{key}"
+        );
+    }
+    // The prose pages keep the v1 shape and gain no empty array.
+    let copying = norte()
+        .args(["help", "copying", "--json"])
+        .output()
+        .unwrap();
+    let c: serde_json::Value = serde_json::from_slice(&copying.stdout).expect("JSON válido");
+    assert!(
+        c["topics"][0].get("keys").is_none(),
+        "only the keyboard page has keys"
     );
 }
 

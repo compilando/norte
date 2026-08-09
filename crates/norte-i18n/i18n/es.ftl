@@ -319,6 +319,12 @@ help-section-browse = Navegación (panes)
 help-section-viewer = Viewer
 help-section-dialog = Diálogos y overlays
 help-dialog-note = cada diálogo soporta su propio subconjunto de estas teclas
+# La advertencia de la hoja de TECLADO (K3b), impresa una vez bajo su título.
+# Dos afirmaciones, y la segunda es la que merece la línea: una fila sin la
+# marca es un comando que norte SÍ ha construido, pero este comando no tiene
+# frontend y no puede decir cuál de los dos lo implementa — preguntarlo
+# exigiría una app en marcha.
+keys-page-note = Las teclas que norte aún no ha construido también se listan, marcadas con el issue que las sigue. Una tecla sin esa marca está construida; qué frontend la implementa no se puede saber desde aquí.
 # --- Overlay de ayuda (H3b) — cabeceras de grupo de la lateral y página
 # sintética de teclado. `help-group-{tag}` se busca por el PRIMER tag del
 # propio corpus (ver el front matter de `norte-help/topics/*/*.md`): un tag
@@ -705,15 +711,24 @@ keymap-reason-tabs = pestañas de panel
 keymap-reason-sort = comandos de ordenación
 keymap-reason-properties = propiedades y tamaño de directorio
 keymap-reason-connections = gestión de conexiones
+# Forma CORTA, para una superficie cuya FILA ya nombra el comando: el panel
+# which-key (K3a) y la hoja de referencia (K3b, `norte help keys` incluido).
+# A diferencia de `keymap-unavailable-*` — la frase que pinta la barra de
+# estado cuando la tecla SÍ se ha pulsado — quita el comando, pero mantiene
+# «aún no construido»: la hoja de la CLI escribe a una tubería y no puede
+# atenuar una fila, y el motivo a secas se leería como una descripción de lo
+# que la tecla hace.
+# `#132` y no `issue #132`, a diferencia de la forma larga: el panel
+# which-key es la superficie sin sitio, y esos seis caracteres de más echaban
+# el NÚMERO —lo único accionable— fuera del borde derecho de un panel de 60
+# columnas. La frase ya dice «aún no construido», así que `#` no necesita
+# presentación.
+keymap-short-not-built = aún no construido ({ $reason }, #{ $issue })
+keymap-short-not-here = no está disponible aquí
 
 # Overlay which-key (K3a): el panel que lista lo que puede seguir a un
-# prefijo pendiente. El motivo va en forma CORTA — la fila ya escribe la
-# tecla y nombra el comando, así que solo dice por qué, a diferencia de
-# `keymap-unavailable-*`, que es la frase que pinta la barra de estado
-# cuando la tecla SÍ se ha pulsado.
+# prefijo pendiente.
 whichkey-more-keys = más teclas
-whichkey-unavailable-not-built = { $reason } (#{ $issue })
-whichkey-unavailable-not-here = no está disponible aquí
 # Una fila que no cupo en el panel se CUENTA, jamás se cae en
 # silencio: una caja que simplemente termina da a entender que la
 # lista terminó con ella.
