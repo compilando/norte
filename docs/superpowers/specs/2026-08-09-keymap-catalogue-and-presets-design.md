@@ -1,7 +1,9 @@
 # Keymap presets for the managers people already know — design
 
 **Date:** 2026-08-09
-**Status:** approved, not yet planned
+**Status:** approved. **K1 built** (2026-08-09, `9b750c0..9b37cb0`, ADR 0043,
+`just ci` and `just gui-ci` green). K2 designed and split into K2a/K2b below;
+K3 still a sketch.
 **Related:** ADR 0006 (keymap resolution), specification §12, roadmap item 5
 
 ## The problem
@@ -201,35 +203,68 @@ Pure movement, no behaviour change in the same commit as the split.
 - Fluent coverage: every `Planned` reason has a string in both locales, pinned
   the same way `help_id` coverage already is.
 
-## K2 — counts and the four presets (sketch)
+## K2 — counts and the four presets
 
-Numeric counts: `5j` moves five. The catalogue's `counts` field says who
-accepts one. Three rules decided during design:
+Split in two, because the engine and the data fail in different ways and the
+presets should be written against an engine that has stopped moving.
 
-- A count over a command whose `counts` is false is **not swallowed**. The
+### K2a — the engine
+
+**Numeric counts.** `Resolution::Run` becomes `Run { command, count:
+Option<u32> }` and **the frontend repeats the dispatch**. That leaves the ~80
+commands' signatures untouched and works for everything the catalogue marks
+`counts: true` without a per-command arm — the alternative, passing the count
+into `dispatch`, needs an arm per command and a command that forgets to read it
+returns to exactly the silence K1 removed. Four rules:
+
+- The count is capped at four digits. `5000j` on a 200-entry listing stops at
+  the end; it does not hang.
+- A count over a command whose `counts` is false is **not swallowed** — the
   status bar says it was ignored.
-- If a preset enables counts and also binds a digit key in the same context,
-  that is a **load error**, not silent precedence — the same spirit as ADR
-  0006's prefix-free rule: conflicts surface when the file loads, not when a
-  finger slips.
-- Counts are opt-in per preset. `orthodox` does not get them.
+- A digit key bound in a context whose preset enables counts is a **load
+  error**, not silent precedence. Same spirit as the prefix-free rule:
+  conflicts surface when the file loads, not when a finger slips.
+- Counts are opt-in per preset (`counts = true`), and only `vim` and `far` set
+  it. Neither Total Commander, Krusader, Norton nor CUA has counts, and
+  enabling them there would steal the digit keys.
 
-The presets, with rough sizes measured against the current catalogue:
+**The sacred keys.** A preset that rebinds `Tab` is a load error (`SacredKey`,
+specification §12). K1 deliberately left this out because a prohibition with no
+violator ends up untested; K2a is where the violator becomes possible.
 
-| preset | bindings | of those, `Planned` |
+**Two debts settled here**, both raised by K1's reviewers:
+
+- `build_effectives_with` becomes `Result`. It is the GUI's error-recovery
+  path, and K1's shadowing decision gave it a live panic route.
+- `means_command` stops round-tripping every binding through
+  `Display`/`parse_chord` on every key event — about 140 allocations per
+  keystroke today, about 450 once four more presets exist.
+
+### K2b — the four presets
+
+Each file records the program, its version, the source, and the date it was
+transcribed, so that when it ages the staleness is dated rather than unknown.
+
+| preset | source | status |
 | --- | --- | --- |
-| `total-commander.toml` | ~120 | ~35 |
-| `krusader.toml` | ~90 | ~20 |
-| `norton.toml` | ~45 | ~5 |
-| `far.toml` | ~140 | ~40 |
+| `total-commander.toml` | `KEYBOARD.TXT` from Total Commander **11.58** (2026-07-01), 141 entries | First-hand. Not published on the web — it ships inside the installer, which is a zip SFX containing `INSTALL.CAB`; the text file is extracted without running anything |
+| `krusader.toml` | KDE handbook, Key-Bindings chapter (`docs.kde.org/trunk_kf6/en/krusader/krusader/key_bindings.html`), ~150 entries | First-hand, fetchable |
+| `far.toml` | `far/FarEng.hlf.m4` in the official `FarGroup/FarManager` repository | First-hand, fetchable — it is the source the program's own help is compiled from |
+| `norton.toml` | none | **No first-hand source.** `NC.HLP` is internally compressed and the distribution ships no plaintext key list. Transcribes the uncontroversial core (F1–F10, `Ctrl+O`, `Ctrl+U`, `Alt+F1`/`Alt+F2`, `Insert`, grey `+`/`-`, `Ctrl+\`) and says so in its header. The fabrication risk is low here in a way it is not for Total Commander's modifier matrix |
 
 Far is deliberately included: its full F1–F12 × four-modifier matrix is the
 hardest case, so an engine that carries Far carries the rest. Double Commander
 is a near-duplicate of Total Commander and is a cheap follow-up, not first-cut.
 
-Each preset lands with the `Planned` catalogue entries it needs, and each of
-those entries links an issue — which incidentally produces an honest, ranked
-list of what norte still owes an orthodox user.
+**`Planned` entries point at the capability, not the command.** The four
+presets will name roughly a hundred commands norte does not have, but those are
+about eight capabilities — volumes, pack/unpack, directory compare, split/join,
+FTP, tree view, and so on. One issue per capability, with several commands
+pointing at the same one. A hundred issues would be noise; eight is the actual
+work, and it already lines up with the roadmap's items.
+
+The presets do **not** carry their own `[dialog]` section: they inherit
+`orthodox`'s, because norte's dialogs are norte's, not the imitated program's.
 
 ## K3 — the surface (sketch)
 
