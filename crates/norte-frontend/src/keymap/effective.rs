@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use super::catalogue::{self, Status};
-use super::chord::{Chord, parse_chord};
+use super::chord::{Chord, KeyCode, Mods, parse_chord};
 use super::layer::{KeymapFile, RawBinding, Screen, check_layer_keys, merged_bindings};
 use super::{KeymapDiagnostic, KeymapError};
 
@@ -169,6 +169,67 @@ fn check_prefix_free(bindings: &[Binding]) -> Result<(), KeymapError> {
     Ok(())
 }
 
+/// Specification §12: `Tab` switches panes, and no preset or layer takes it.
+/// BROWSE only — every bundled preset binds `tab` to `dialog.pane` inside
+/// `[dialog]`, which is not pane switching, and banning the key outright would
+/// break the dialogs norte already ships.
+///
+/// The table holds the [`KeyCode`], not the text that spells it: a `&str`
+/// would have to go through [`parse_chord`], and a hardcoded constant that can
+/// return [`KeymapError::BadChord`] is a fallible path with no failure — it
+/// would either be `unwrap`ed (rule 6) or blame the user's file for a typo in
+/// ours. The spelling in the diagnostic comes back out of `Display`, so the
+/// round trip is closed by construction.
+const SACRED_BROWSE: &[(KeyCode, &str)] = &[(KeyCode::Tab, "pane.switch")];
+
+/// A reserved key bound to anything else is a LOAD error, in the spirit of
+/// prefix-free (ADR 0006): the conflict surfaces when the file loads, not when
+/// a finger slips. Runs over EVERY binding, available or not, for the same
+/// reason [`check_prefix_free`] does — the shape of the map is a load-time
+/// property. Returns the first offender; shared by both builders.
+fn check_sacred(bindings: &[Binding], screen: Screen) -> Result<(), KeymapError> {
+    if screen != Screen::Browse {
+        return Ok(());
+    }
+    for (code, reserved_for) in SACRED_BROWSE {
+        let sacred = Chord::new(Mods::default(), *code);
+        for b in bindings {
+            if b.seq.as_slice() == [sacred] && b.run != *reserved_for {
+                return Err(KeymapError::SacredKey {
+                    chord: sacred.to_string(),
+                    reserved_for,
+                    run: b.run.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// With counts on, a bare digit 1-9 cannot ALSO open a binding. `0` is exempt:
+/// a count never starts with zero, so the two never compete for it.
+///
+/// Only the FIRST chord of a sequence is inspected, which is exactly what the
+/// accumulator does — it never opens a count with a sequence in flight, so a
+/// digit anywhere but the front is an ordinary key. The two share
+/// [`super::resolve::digit_of`] rather than each deciding what a digit is:
+/// two answers to that question is how the rules would drift apart.
+fn check_digits_free(bindings: &[Binding], counts: bool) -> Result<(), KeymapError> {
+    if !counts {
+        return Ok(());
+    }
+    for b in bindings {
+        let Some(first) = b.seq.first() else { continue };
+        if super::resolve::digit_of(*first).is_some_and(|d| d != 0) {
+            return Err(KeymapError::DigitBoundWithCounts {
+                chord: first.to_string(),
+                run: b.run.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 impl Effective {
     /// Fusiona `preset` + capa opcional de usuario (ADR 0006). Azúcar de
     /// [`Self::build_layered`] con cero o una capa.
@@ -244,6 +305,8 @@ impl Effective {
             }
         }
         check_prefix_free(&bindings)?;
+        check_digits_free(&bindings, preset.counts)?;
+        check_sacred(&bindings, screen)?;
         Ok(Self {
             bindings,
             counts: preset.counts,
@@ -265,8 +328,9 @@ impl Effective {
     /// is reported.
     ///
     /// Findings appear in walk order: wrong-layer-key (if any), then each
-    /// binding's defect, then the first ambiguous prefix. An empty result
-    /// means the keymap is clean.
+    /// binding's defect, then the whole-map rules — the first ambiguous
+    /// prefix, the first digit bound while counts are on, the first reserved
+    /// key taken. An empty result means the keymap is clean.
     #[must_use]
     pub fn build_diagnostics(
         preset: &KeymapFile,
@@ -311,10 +375,19 @@ impl Effective {
                 }),
             }
         }
-        if let Err(e) = check_prefix_free(&bindings) {
-            diags.push(KeymapDiagnostic::Structural {
-                message: e.to_string(),
-            });
+        // The three whole-map rules each report their FIRST offender, like
+        // `build_for` does — but here none of them stops the walk, so a keymap
+        // that breaks all three gets all three rows in one pass.
+        for check in [
+            check_prefix_free(&bindings),
+            check_digits_free(&bindings, preset.counts),
+            check_sacred(&bindings, screen),
+        ] {
+            if let Err(e) = check {
+                diags.push(KeymapDiagnostic::Structural {
+                    message: e.to_string(),
+                });
+            }
         }
         diags
     }

@@ -1,6 +1,13 @@
 # Preset vim-like. Prefix-free (ADR 0006): sin pares tipo `d`/`d d` — los
 # modos visual/normal de la spec llegarán como CONTEXTOS, no timeouts.
 
+# Prefijo numérico (`5j`): vim lo tiene, así que este preset lo tiene. Es
+# opt-in POR PRESET y no por gusto: encenderlo aquí le quita a `1`..`9` la
+# posibilidad de ser teclas (regla de carga K2a), y `orthodox`/`cua` las
+# necesitan libres — sus originales no cuentan, y robarles los dígitos a
+# espaldas del usuario sería exactamente el silencio que K1 quitó.
+counts = true
+
 [global]
 keymap = [
     { on = ["q"], run = "app.quit" },

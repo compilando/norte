@@ -80,6 +80,32 @@ pub enum KeymapError {
         /// La secuencia larga (la inalcanzable).
         longer: String,
     },
+    /// Un dígito abre la secuencia de un binding en un contexto cuyo preset
+    /// habilita los contadores numéricos (K2a). Las dos cosas no pueden ser
+    /// ciertas a la vez, y elegir en silencio por el usuario es como un
+    /// keymap se vuelve impredecible. El `0` está exento: un contador jamás
+    /// empieza por cero, así que nunca se disputan la tecla.
+    #[error(
+        "{chord:?} no puede ser tecla y contador a la vez: está ligada a {run:?} y el preset activa contadores (el 0 sí es ligable)"
+    )]
+    DigitBoundWithCounts {
+        /// El chord ofensor, tal y como se escribe.
+        chord: String,
+        /// A qué está ligado.
+        run: String,
+    },
+    /// Un binding toma una tecla que la especificación reserva (§12: `Tab`
+    /// cambia de panel). Un preset que imita a otro programa DOCUMENTA la
+    /// diferencia; no se queda con la tecla.
+    #[error("{chord:?} está reservada para {reserved_for} (spec §12) y no puede ligarse a {run:?}")]
+    SacredKey {
+        /// El chord reservado, tal y como se escribe.
+        chord: String,
+        /// El comando para el que está reservado.
+        reserved_for: &'static str,
+        /// Lo que el binding ofensor intentaba ejecutar en su lugar.
+        run: String,
+    },
 }
 
 /// One finding from [`Effective::build_diagnostics`]: reported WITHOUT
@@ -2030,5 +2056,171 @@ prepend_keymap = [ { on = ["k"], run = "cursor.up" } ]
             matches!(e, KeymapError::WrongLayerKey { key: "counts", .. }),
             "{e:?}"
         );
+    }
+
+    /// With counts on, a digit key bound in the same context is a LOAD error,
+    /// not silent precedence. Same spirit as prefix-free: the conflict
+    /// surfaces when the file loads, not when a finger slips.
+    #[test]
+    fn un_digito_ligado_con_contadores_es_error_de_carga() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [ { on = ["5"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let e = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap_err();
+        assert!(
+            matches!(e, KeymapError::DigitBoundWithCounts { .. }),
+            "{e:?}"
+        );
+    }
+
+    /// `0` is exempt, because a count never starts with zero — binding it
+    /// stays legal even with counts on.
+    #[test]
+    fn el_cero_sigue_siendo_ligable_con_contadores() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [ { on = ["0"], run = "cursor.top" } ]
+"#,
+        )
+        .unwrap();
+        Effective::build_for(&preset, &[], &["cursor.top"], Screen::Browse)
+            .expect("0 con contadores es legal");
+    }
+
+    /// A digit MID-sequence is an ordinary key: the rule looks at the first
+    /// chord only, exactly like the accumulator, which never opens a count
+    /// with a sequence in flight.
+    #[test]
+    fn un_digito_a_mitad_de_secuencia_sigue_siendo_ligable_con_contadores() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [ { on = ["g", "5"], run = "cursor.top" } ]
+"#,
+        )
+        .unwrap();
+        Effective::build_for(&preset, &[], &["cursor.top"], Screen::Browse)
+            .expect("un dígito no inicial es una tecla más");
+    }
+
+    /// Specification §12: Tab switches panes and a preset may not take it.
+    /// K2b imports four foreign keymaps, which is when this stops being
+    /// theoretical.
+    #[test]
+    fn un_preset_no_puede_repinar_tab() {
+        let preset = parse_keymap(
+            r#"
+[pane]
+keymap = [ { on = ["tab"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let e = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap_err();
+        assert!(matches!(e, KeymapError::SacredKey { .. }), "{e:?}");
+    }
+
+    /// The prohibition is on the BROWSE screen only. Every bundled preset
+    /// binds `tab` to `dialog.pane` inside `[dialog]`, and that is not pane
+    /// switching — blanket-banning the key would break the dialogs we ship.
+    #[test]
+    fn tab_sigue_siendo_libre_en_el_contexto_de_dialogo() {
+        let preset = parse_keymap(
+            r#"
+[dialog]
+keymap = [ { on = ["tab"], run = "dialog.pane" } ]
+"#,
+        )
+        .unwrap();
+        Effective::build_for(&preset, &[], &["dialog.pane"], Screen::Dialog)
+            .expect("tab en dialog es legal");
+    }
+
+    /// A user layer cannot take Tab either — the rule is about the effective
+    /// map, not about who wrote the line.
+    #[test]
+    fn una_capa_de_usuario_tampoco_puede_tomar_tab() {
+        let preset = parse_keymap(
+            r#"
+[pane]
+keymap = [ { on = ["tab"], run = "pane.switch" } ]
+"#,
+        )
+        .unwrap();
+        let layer = parse_keymap(
+            r#"
+[pane]
+prepend_keymap = [ { on = ["tab"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let known = ["pane.switch", "cursor.down"];
+        let e = Effective::build_for(&preset, &[layer], &known, Screen::Browse).unwrap_err();
+        assert!(matches!(e, KeymapError::SacredKey { .. }), "{e:?}");
+    }
+
+    /// `norte doctor` must not be the one path that stays quiet: both new
+    /// rules are reported by the diagnostic walk too, which is the contract
+    /// [`check_binding`]'s rustdoc states for every load-time rule.
+    #[test]
+    fn el_diagnostico_tambien_reporta_las_dos_reglas_nuevas() {
+        let digito = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [ { on = ["5"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let d = Effective::build_diagnostics(&digito, &[], &["cursor.down"], Screen::Browse);
+        assert!(
+            d.iter().any(|f| matches!(
+                f,
+                KeymapDiagnostic::Structural { message } if message.contains('5')
+            )),
+            "{d:?}"
+        );
+
+        let tab = parse_keymap(
+            r#"
+[pane]
+keymap = [ { on = ["tab"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let d = Effective::build_diagnostics(&tab, &[], &["cursor.down"], Screen::Browse);
+        assert!(
+            d.iter().any(|f| matches!(
+                f,
+                KeymapDiagnostic::Structural { message } if message.contains("tab")
+            )),
+            "{d:?}"
+        );
+    }
+
+    /// The three bundled presets must survive both rules unchanged.
+    #[test]
+    fn los_presets_de_fabrica_pasan_las_dos_reglas_nuevas() {
+        for name in presets::NAMES {
+            let src = presets::source(name).expect("NAMES resuelve");
+            let kf = parse_keymap(src).expect("preset parsea");
+            for screen in [Screen::Browse, Screen::Viewer, Screen::Dialog] {
+                let known = preset_commands(screen);
+                let known: Vec<&str> = known.iter().map(String::as_str).collect();
+                Effective::build_for(&kf, &[], &known, screen)
+                    .unwrap_or_else(|e| panic!("{name} en {screen:?}: {e:?}"));
+            }
+        }
     }
 }
