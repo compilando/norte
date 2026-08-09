@@ -23,6 +23,11 @@ mod resolve;
 pub use catalogue::{CATALOGUE, CommandDef, Status};
 pub use chord::{Chord, KeyCode, ModKey, Mods, mod_key, paint_chord, parse_chord, set_mod_key};
 pub use effective::{Availability, Continuation, Effective, valid_lua_name};
+// Not public API: the spelling a sequence has IN THE FILE, which the keyboard
+// sheet paints (after `paint_chord`) and the shortcut editor hands to the
+// `keymap.toml` writer. Two copies of it is how the writer and the loader
+// would eventually disagree about what `g g` is called.
+pub(crate) use effective::render_seq;
 pub use layer::{KeymapFile, Screen, parse_keymap, parse_keymap_layer};
 pub use rebind::{
     Rebind, RebindError, RebindSources, RebindSplit, RebindWrite, rebind_check, rebind_dry_run,

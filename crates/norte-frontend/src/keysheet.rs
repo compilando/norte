@@ -22,7 +22,7 @@
 //!   `alt+f5` where it belongs, greyed and explained, not discover much later
 //!   that the sheet was two lists.
 
-use crate::keymap::{Availability, Effective, Screen, paint_chord};
+use crate::keymap::{Availability, Chord, Effective, Screen, paint_chord, render_seq};
 
 /// One row of the keyboard reference sheet: what the key IS, not what the
 /// preset wished it were.
@@ -42,6 +42,15 @@ pub struct SheetRow {
     /// can bind any lone codepoint and this string reaches a terminal — see
     /// [`paint_chord`].
     pub chord: String,
+    /// The same sequence in CHORDS, unpainted: what the shortcut editor (K3c)
+    /// hands to [`rebind_check`](crate::keymap::rebind_check) and, spelled
+    /// with `Display`, to `norte_config::persist_keymap_unbind`.
+    ///
+    /// Carried rather than parsed back out of [`Self::chord`], which is
+    /// painted — masking is not reversible, so the display string is a
+    /// dead end for anything that needs to ACT on the row. Renderers ignore
+    /// it.
+    pub seq: Vec<Chord>,
     /// The command name, raw. The LABEL is the renderer's:
     /// [`command_label`](crate::whichkey::command_label) is the shared router
     /// (`help-cmd-*` / `dialog-cmd-*`, falling back to this name), and a
@@ -101,15 +110,28 @@ pub struct SheetRow {
 pub fn sheet(effectives: &[(Screen, Effective)]) -> Vec<SheetRow> {
     effectives
         .iter()
-        .flat_map(|(screen, eff)| {
-            eff.bindings_all()
-                .into_iter()
-                .map(move |(seq, command, avail)| SheetRow {
-                    screen: *screen,
-                    chord: paint_chord(&seq),
-                    command: command.to_owned(),
-                    avail,
-                })
+        .flat_map(|(screen, eff)| sheet_of(*screen, eff))
+        .collect()
+}
+
+/// One screen's rows, from a BORROWED map — [`sheet`] over a single entry.
+///
+/// [`sheet`] takes its maps by value because every help surface owns a clone
+/// of the three effectives; the shortcut editor (K3c) does not — the TUI's
+/// live maps sit inside its resolvers and are handed out as `&Effective`.
+/// Cloning three keymaps to ask them what they contain would be a strange
+/// price to pay, so the row builder is the borrowing one and [`sheet`] is the
+/// convenience over it.
+#[must_use]
+pub fn sheet_of(screen: Screen, eff: &Effective) -> Vec<SheetRow> {
+    eff.bindings_all_seq()
+        .into_iter()
+        .map(|(seq, command, avail)| SheetRow {
+            screen,
+            chord: paint_chord(&render_seq(seq)),
+            seq: seq.to_vec(),
+            command: command.to_owned(),
+            avail,
         })
         .collect()
 }

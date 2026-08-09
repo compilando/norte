@@ -4,9 +4,10 @@
 //! keep compiling, and keeps the TUI-only async wrapper.
 
 pub use norte_config::{
-    ConfigError, ConfirmQuit, DEFAULT_PRESET, DaemonMode, HotlistItem, Layer, Layers, NorteToml,
-    PersistSort, Watch, WatchMode, persist_column_format, persist_columns, persist_hotlist_add,
-    persist_hotlist_remove, persist_set, persist_ui_theme, persist_ui_theme_to, standard_layers,
+    ConfigError, ConfirmQuit, DEFAULT_PRESET, DaemonMode, HotlistItem, KeymapList, KeymapWrite,
+    Layer, Layers, NorteToml, PersistSort, Watch, WatchMode, persist_column_format,
+    persist_columns, persist_hotlist_add, persist_hotlist_remove, persist_keymap_bind,
+    persist_keymap_unbind, persist_set, persist_ui_theme, persist_ui_theme_to, standard_layers,
     user_config_dir, watch, watch_polling,
 };
 pub use norte_frontend::config::{FrontendConfig as LoadedConfig, load};

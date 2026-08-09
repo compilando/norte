@@ -713,3 +713,50 @@ whichkey-more-keys = more keys
 # A row the panel had no room for is COUNTED, never silently dropped:
 # a box that just ends implies the list ended with it.
 whichkey-truncated = … { $shown }/{ $total }
+
+# Shortcut editor (K3c): the Shortcuts screen, opened from Settings. It lists
+# every bound key AND every runnable command nothing presses — the reference
+# sheet above answers "what does this key do", an editor must also answer "how
+# do I press X".
+shortcuts-title = Shortcuts
+shortcuts-hint = [↑/↓/pgup/pgdn] navigate · [enter] rebind · [ctrl+u] unbind · [esc] close
+# Capture mode. Esc is what cancels it, so Esc is the one chord the editor
+# cannot capture, and the reader is told rather than left pressing it. `mod+`
+# is the other honesty: crossterm never delivers Cmd without the Kitty
+# keyboard protocol, which norte does not enable, so a chord captured here is
+# a Ctrl one on every platform (ADR 0043 decision 9).
+shortcuts-capture-hint = press the new key · [esc] cancel
+shortcuts-capture-note = esc cancels (so it cannot be bound here) · mod+ is ctrl in the terminal
+shortcuts-confirm-hint = [enter] save · [backspace] another key · [esc] cancel
+# A row for a command no key presses.
+shortcuts-no-key = (no key)
+# The verdict, shown BEFORE the confirmation. Only the first two can be
+# confirmed at all; the rest are what the loader would reject, and refusing
+# here is what stops a keymap.toml that reverts the whole map on reload.
+shortcuts-verdict-free = free — nothing else uses it
+shortcuts-verdict-replaces = replaces { $command }
+shortcuts-verdict-replaces-unavailable = replaces { $command } ({ $reason })
+shortcuts-verdict-prefix-clash = refused: { $chord } already uses it ({ $command })
+shortcuts-verdict-sacred = refused: reserved for { $command }
+shortcuts-verdict-digit = refused: this preset reads digits as repeat counts
+shortcuts-verdict-empty = refused: no key captured
+shortcuts-verdict-esc = refused: esc always cancels a pending sequence
+shortcuts-verdict-unwritable = refused: { $chord } cannot be written to keymap.toml
+# The door (`rebind_dry_run`) refused after the confirm. The load diagnostic
+# is NOT quoted: it may embed text from a project layer that arrived with a
+# cloned repository, and this goes to the status bar (#73).
+shortcuts-refused-load = not saved: that binding would leave a keymap that does not load
+shortcuts-refused-shadowed = not saved: { $command } keeps that key (a project keymap outranks yours)
+shortcuts-refused-shadowed-unavailable = not saved: { $command } keeps that key ({ $reason }, a project keymap outranks yours)
+# Unreachable while the editor is open (the same preset lookup built the maps
+# it is showing), and worded rather than asserted away: rule 6 does not make
+# exceptions for unreachable.
+shortcuts-refused-preset = not saved: the active keymap preset is unknown
+msg-shortcut-bound = { $chord } now runs { $command }
+# Both unbind messages speak about the FILE, never about what the key does
+# now: the unbind matches byte-exactly on this section and this spelling, so a
+# `[global]` binding, a twin spelling (`mod+p` for `ctrl+p`) or another layer
+# still binding the key would each make "no longer runs" a lie (#141).
+msg-shortcut-unbound = removed from your keymap.toml: { $chord } → { $command }
+msg-shortcut-nothing-to-unbind = nothing removed: nothing in that section of your keymap.toml matched that key
+msg-shortcut-not-bindable = that key cannot be captured here

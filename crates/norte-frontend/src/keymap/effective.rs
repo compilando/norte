@@ -541,6 +541,38 @@ impl Effective {
             .collect()
     }
 
+    /// The same rows as [`Self::bindings_all`], with the sequence in CHORDS
+    /// instead of rendered — what an EDITOR needs and the rendered form cannot
+    /// give back.
+    ///
+    /// The shortcut editor (K3c) has to hand a row's existing sequence to
+    /// [`rebind_check`](super::rebind_check) and to
+    /// `norte_config::persist_keymap_unbind`, and it cannot re-derive it from
+    /// what it painted: the sheet's chord goes through
+    /// [`paint_chord`](super::paint_chord), which masks, and masking is not
+    /// reversible. Reading it here also keeps the editor off a round trip
+    /// through the grammar for a sequence that came out of it three lines
+    /// earlier.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::{Effective, Screen, parse_chord, parse_keymap};
+    ///
+    /// let preset = parse_keymap(
+    ///     "[pane]\nkeymap = [{ on = [\"g\", \"g\"], run = \"cursor.top\" }]\n",
+    /// )
+    /// .unwrap();
+    /// let eff = Effective::build_for(&preset, &[], &["cursor.top"], Screen::Browse).unwrap();
+    /// let g = parse_chord("g").unwrap();
+    /// assert_eq!(eff.bindings_all_seq()[0].0, &[g, g]);
+    /// ```
+    #[must_use]
+    pub fn bindings_all_seq(&self) -> Vec<(&[Chord], &str, Availability)> {
+        self.bindings
+            .iter()
+            .map(|b| (b.seq.as_slice(), b.run.as_str(), b.avail))
+            .collect()
+    }
+
     /// Is `chord`, pressed ALONE, bound to `command` and runnable here?
     ///
     /// The question a frontend asks on EVERY key event — "did this press mean
@@ -709,7 +741,7 @@ impl Effective {
 /// A sequence as the help spells it: each chord's `Display`, space-joined.
 /// RAW (lower case, unmasked) — a surface that shows it to a reader runs it
 /// through [`paint_chord`](super::paint_chord) first.
-pub(super) fn render_seq(seq: &[Chord]) -> String {
+pub(crate) fn render_seq(seq: &[Chord]) -> String {
     let keys: Vec<String> = seq.iter().map(ToString::to_string).collect();
     keys.join(" ")
 }

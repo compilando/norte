@@ -293,6 +293,14 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(settings) = &app.settings {
         draw_settings(frame, settings, &app.theme);
     }
+    // K3c: el editor de atajos se abre DESDE ajustes y se pinta encima, con
+    // el overlay de ajustes abierto detrás — es una pantalla suya, no un
+    // reemplazo, y al cerrarla el lector vuelve donde estaba. También se queda
+    // las teclas antes que él (`main`), así que los píxeles y el enrutado
+    // dicen lo mismo.
+    if let Some(sc) = &app.shortcuts {
+        draw_shortcuts(frame, sc, &app.theme);
+    }
     // K3a: el panel which-key va tras los overlays y ANTES del modal. Es el
     // único que no se queda ninguna tecla —el resolver del pane las conserva
     // mientras está arriba—, así que no compite por el teclado con nada de lo
@@ -1616,6 +1624,155 @@ fn draw_settings(frame: &mut Frame<'_>, settings: &crate::app::Settings, theme: 
     ));
     frame.render_widget(
         Paragraph::new(desc_line).style(theme.role(Role::BorderUnfocused)),
+        split[1],
+    );
+}
+
+/// Column the label starts at, in CELLS — a chord wider than this pushes it
+/// right instead of overlapping, same rule as the generated keys page.
+const SHORTCUT_CHORD_COLUMN: usize = 16;
+
+/// La cabecera de sección de una pantalla, la MISMA que la página de teclas
+/// generada (`crate::help::build`): dos superficies que listan lo mismo no
+/// pueden llamarlo distinto.
+fn shortcuts_section(screen: norte_frontend::keymap::Screen) -> String {
+    match screen {
+        norte_frontend::keymap::Screen::Browse => t("help-section-browse"),
+        norte_frontend::keymap::Screen::Viewer => t("help-section-viewer"),
+        norte_frontend::keymap::Screen::Dialog => t("help-section-dialog"),
+    }
+}
+
+/// Editor de atajos (`app.shortcuts`, K3c): mismo idioma visual que
+/// [`draw_settings`] —Paragraph con cabeceras de sección, filtro en el pie,
+/// línea de detalle reservada abajo— con dos diferencias que son el editor:
+///
+/// - la lista SCROLLEA. Ajustes cabe en una pantalla; esto son todas las
+///   teclas de las tres pantallas MÁS cada comando que no pulsa ninguna, y una
+///   lista sin ventana dejaría el cursor fuera de la caja a las veinte filas.
+/// - la línea de detalle lleva el VEREDICTO mientras se captura, que es lo que
+///   el lector necesita ANTES de confirmar, y el resto del tiempo lleva las dos
+///   verdades de esta terminal: `esc` cancela (así que es el único chord que no
+///   se puede capturar aquí) y `mod+` es Ctrl, porque crossterm no entrega ⌘.
+///
+/// Chords y etiquetas ya vienen pintados y traducidos del modelo compartido
+/// (`norte_frontend::shortcuts`), incluido el enmascarado de
+/// [`paint_chord`](norte_frontend::keymap::paint_chord) — una capa de proyecto
+/// puede bindear cualquier codepoint suelto y esto va a una terminal. Aquí solo
+/// queda el ancho.
+fn draw_shortcuts(frame: &mut Frame<'_>, sc: &crate::app::Shortcuts, theme: &TuiTheme) {
+    let ancho = frame
+        .area()
+        .width
+        .saturating_sub(4)
+        .clamp(30, 92)
+        .min(frame.area().width);
+    let alto = frame.area().height.saturating_sub(2).max(6);
+    let area = centered(frame.area(), ancho, alto);
+    clear_themed(frame, area, theme);
+
+    let capture = sc.capture();
+    let footer = match capture {
+        Some(c) if c.is_waiting() => Line::raw(format!(" {} ", t("shortcuts-capture-hint"))),
+        Some(_) => Line::raw(format!(" {} ", t("shortcuts-confirm-hint"))),
+        None => {
+            let (query, _) = display_name(sc.query_display().as_bytes());
+            Line::raw(format!(" /{query}  {} ", t("shortcuts-hint")))
+        }
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("shortcuts-title")))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(footer)
+        .border_style(theme.role(Role::ModalBorder));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let inner_w = usize::from(inner.width);
+
+    let mut items: Vec<Line<'static>> = Vec::new();
+    let mut cursor_line = 0usize;
+    if sc.visible().is_empty() {
+        items.push(Line::raw(" —"));
+    } else {
+        let mut last: Option<norte_frontend::keymap::Screen> = None;
+        for (pos, &real) in sc.visible().iter().enumerate() {
+            let row = &sc.rows()[real];
+            if last != Some(row.screen) {
+                items.push(Line::styled(
+                    format!("── {} ──", shortcuts_section(row.screen)),
+                    theme.role(Role::Title),
+                ));
+                last = Some(row.screen);
+            }
+            let selected = pos == sc.cursor();
+            if selected {
+                cursor_line = items.len();
+            }
+            let marker = if selected { ">" } else { " " };
+            // Un comando sin tecla NO se atenúa: se puede ejecutar, es solo que
+            // nada lo pulsa — y esa es justo la fila que el lector vino a
+            // buscar. Atenuada se leería como «no disponible», que es la otra
+            // cosa.
+            let chord = if row.is_bound() {
+                row.chord.clone()
+            } else {
+                t("shortcuts-no-key")
+            };
+            let pad = " ".repeat(SHORTCUT_CHORD_COLUMN.saturating_sub(chord.width()));
+            let text = if row.reason.is_empty() {
+                format!("{marker} {chord}{pad} {}", row.label)
+            } else {
+                format!("{marker} {chord}{pad} {} — {}", row.label, row.reason)
+            };
+            let mut line = Line::raw(middle_ellipsis(&text, inner_w));
+            // La selección se PARCHEA sobre el atenuado, no lo sustituye: un
+            // `Line::style` reemplaza el estilo entero, y una fila no
+            // construida bajo el cursor dejaría de parecerlo justo cuando el
+            // lector está a punto de actuar sobre ella.
+            if selected {
+                line = line.patch_style(theme.role(Role::Selection));
+            }
+            if row.avail != norte_frontend::keymap::Availability::Here {
+                line =
+                    line.patch_style(Style::default().add_modifier(ratatui::style::Modifier::DIM));
+            }
+            items.push(line);
+        }
+    }
+    // Ventana alrededor del cursor: sin ella la fila seleccionada desaparece
+    // por debajo del borde en cuanto la lista pasa del alto de la caja.
+    let h = usize::from(split[0].height).max(1);
+    let start = cursor_line
+        .saturating_sub(h / 2)
+        .min(items.len().saturating_sub(h));
+    let end = (start + h).min(items.len());
+    frame.render_widget(Paragraph::new(items[start..end].to_vec()), split[0]);
+
+    let detail = match capture {
+        Some(c) => {
+            let target = norte_frontend::whichkey::pending_title(c.seq(), None);
+            match c.verdict() {
+                Some(v) => format!(
+                    "{target} → {}",
+                    norte_frontend::shortcuts::verdict_message(v, norte_i18n::active())
+                ),
+                None => t("shortcuts-capture-hint"),
+            }
+        }
+        None => t("shortcuts-capture-note"),
+    };
+    let detail_line = Line::raw(format!(
+        " {}",
+        middle_ellipsis(&detail, inner_w.saturating_sub(1))
+    ));
+    frame.render_widget(
+        Paragraph::new(detail_line).style(theme.role(Role::BorderUnfocused)),
         split[1],
     );
 }
@@ -4695,6 +4852,122 @@ keymap = [
         for (w, h) in [(4_u16, 1_u16), (1, 3), (2, 2), (1, 10), (3, 12)] {
             let mut tiny = Terminal::new(TestBackend::new(w, h)).expect("terminal de test");
             tiny.draw(|f| draw_which_key(f, &panel(None), &theme))
+                .expect("draw");
+        }
+    }
+}
+
+#[cfg(test)]
+mod draw_shortcuts_tests {
+    use super::{TuiTheme, draw_shortcuts};
+    use norte_frontend::keymap::{Effective, Screen, parse_chord, parse_keymap};
+    use norte_frontend::shortcuts::{ScreenKeys, ShortcutsState, build_rows};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    // `pane.move` no lo bindea nadie: es la fila SIN TECLA que la hoja de
+    // referencia no puede tener.
+    const BINDABLE: &[&str] = &["pane.copy", "pane.mkdir", "pane.move"];
+
+    fn eff() -> Effective {
+        // Un chord HOSTIL (U+202E RIGHT-TO-LEFT OVERRIDE) bindeado como
+        // codepoint suelto: legal, y sin confianza — una capa de proyecto
+        // llega con un repositorio clonado.
+        let src = "[pane]\nkeymap = [\n  { on = [\"f5\"], run = \"pane.copy\" },\n  { on = [\"alt+f5\"], run = \"pane.pack\" },\n  { on = [\"\u{202e}\"], run = \"pane.mkdir\" },\n]\n";
+        let preset = parse_keymap(src).expect("fixture parsea");
+        Effective::build_for(&preset, &[], BINDABLE, Screen::Browse).expect("fixture construye")
+    }
+
+    fn state(eff: &Effective) -> ShortcutsState {
+        ShortcutsState::new(build_rows(
+            &[ScreenKeys {
+                screen: Screen::Browse,
+                eff,
+                bindable: BINDABLE,
+            }],
+            norte_i18n::active(),
+        ))
+    }
+
+    fn painted(sc: &ShortcutsState) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(90, 14)).expect("terminal de test");
+        terminal
+            .draw(|f| draw_shortcuts(f, sc, &TuiTheme::default()))
+            .expect("draw");
+        terminal.backend().to_string()
+    }
+
+    /// La pantalla DICE las dos cosas que esta terminal no puede hacer: `esc`
+    /// cancela (así que es el único chord no capturable) y `mod+` es Ctrl,
+    /// porque crossterm no entrega ⌘ sin el protocolo de Kitty. Sin esa línea
+    /// el lector descubre ambas cosas pulsando.
+    #[test]
+    fn la_pantalla_dice_lo_que_esta_terminal_no_puede_capturar() {
+        let eff = eff();
+        let text = painted(&state(&eff));
+        assert!(text.contains("esc"), "{text}");
+        assert!(text.contains("mod+"), "{text}");
+    }
+
+    /// Un comando sin tecla se ve (la fila que la hoja de referencia no puede
+    /// tener), y una tecla que este build no puede ejecutar se ve con su
+    /// razón — nada se cae en silencio.
+    #[test]
+    fn se_ven_la_fila_sin_tecla_y_la_no_construida() {
+        let eff = eff();
+        let text = painted(&state(&eff));
+        assert!(text.contains(&norte_i18n::t("shortcuts-no-key")), "{text}");
+        assert!(text.contains("132"), "la razón con su issue: {text}");
+    }
+
+    /// El veredicto se pinta ANTES de confirmar, y el chord capturado va
+    /// PINTADO: un codepoint hostil no llega crudo a la terminal por la línea
+    /// de detalle más de lo que llega por la lista.
+    #[test]
+    fn el_veredicto_se_pinta_y_los_chords_van_enmascarados() {
+        let eff = eff();
+        let mut sc = state(&eff);
+        assert!(sc.begin_capture());
+        sc.capture_chord(parse_chord("\u{202e}").expect("chord"), &eff);
+        let text = painted(&sc);
+        // Por LÍNEA: los `\n` que une `to_string` son del harness, no del
+        // buffer (mismo criterio que el resto de tests de render de aquí).
+        assert!(
+            text.lines()
+                .all(|l| !l.chars().any(norte_encoding::is_terminal_hazard)),
+            "{text}"
+        );
+        // `Replaces`: el codepoint hostil ya está ligado a `pane.mkdir`, y el
+        // veredicto que se pinta es EL del modelo, no una frase paralela.
+        // Fluent aísla sus argumentos con marcas de dirección (U+2066..U+2069)
+        // que el buffer de ratatui, de ancho cero, no llega a pintar: se
+        // quitan para comparar, en vez de comparar contra otra cosa.
+        let verdict = norte_frontend::shortcuts::verdict_message(
+            sc.capture()
+                .and_then(norte_frontend::shortcuts::Capture::verdict)
+                .expect("hay veredicto"),
+            norte_i18n::active(),
+        );
+        let want: String = verdict
+            .chars()
+            .filter(|c| !('\u{2066}'..='\u{2069}').contains(c))
+            .collect();
+        assert!(text.contains(&want), "{want:?} en {text}");
+    }
+
+    /// Geometrías degeneradas: ni pánico ni pintar fuera del frame. La caja
+    /// tiene una ventana sobre la lista, y una ventana mal calculada es la
+    /// forma habitual de salirse por abajo.
+    #[test]
+    fn geometrias_degeneradas_no_revientan() {
+        let eff = eff();
+        let mut sc = state(&eff);
+        for _ in 0..20 {
+            sc.down();
+        }
+        for (w, h) in [(4_u16, 1_u16), (1, 3), (2, 2), (1, 10), (3, 12), (30, 5)] {
+            let mut tiny = Terminal::new(TestBackend::new(w, h)).expect("terminal de test");
+            tiny.draw(|f| draw_shortcuts(f, &sc, &TuiTheme::default()))
                 .expect("draw");
         }
     }

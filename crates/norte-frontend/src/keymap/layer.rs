@@ -183,7 +183,7 @@ pub enum Screen {
 impl Screen {
     /// The `keymap.toml` section that holds this screen's SPECIFIC context —
     /// the section a writer must put a binding in for this screen to see it,
-    /// and the inverse of the mapping [`Self::specific`] reads.
+    /// and the inverse of the mapping `Self::specific` (private) reads.
     ///
     /// It never answers `"global"`, and for a writer that is the point. The
     /// specific context is merged WHOLE before `global` (`merged_bindings`),

@@ -335,6 +335,10 @@ fn overlay_open(app: &App) -> bool {
         || app.help.is_some()
         || app.palette.is_some()
         || app.settings.is_some()
+        // K3c: el editor de atajos. Hoy está siempre detrás de `settings`, que
+        // ya está en esta lista, pero eso es una propiedad de CÓMO se abre y no
+        // del tipo — y la GUI (c4) lo abrirá por su cuenta.
+        || app.shortcuts.is_some()
         || app.theme_picker.is_some()
         || app.columns_picker.is_some()
         || app.extensions.is_some()

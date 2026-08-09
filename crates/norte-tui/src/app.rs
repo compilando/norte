@@ -928,6 +928,21 @@ pub struct App {
     /// `palette`/`help`, que se CIERRAN, este overlay se queda abierto y se
     /// refresca en su sitio (ver el doc de `Settings::refresh`).
     pub settings: Option<Settings>,
+    /// Shortcut editor open (K3c, `Ctrl+K` from the settings overlay):
+    /// `None` = closed.
+    ///
+    /// Sits IN FRONT of `settings`, which stays open behind it — the editor is
+    /// a screen of Settings, not a replacement for it, and closing it returns
+    /// the reader where they were.
+    ///
+    /// Like `settings` it is REFRESHED and not closed on a hot reload
+    /// (`main::reload_config`), because that reload is usually its own write
+    /// coming back through the watcher: an editor that closed on the write it
+    /// just made would be unusable for a second rebind. Its capture, unlike a
+    /// settings edit buffer, does NOT survive the refresh — see
+    /// `ShortcutsState::refresh`, whose verdict belongs to the map that was
+    /// just replaced.
+    pub shortcuts: Option<Shortcuts>,
     /// How many times the two panes have been exchanged (`pane.swap`).
     ///
     /// It exists because nothing else in the model records that a swap
@@ -1623,6 +1638,12 @@ mod palette_tests {
 // resolving unchanged. See `norte_frontend::settings` module doc.
 pub use norte_frontend::settings::{PendingWrite, SettingsEditError, SettingsState as Settings};
 
+// K3c: the shortcut editor's state machine is shared with the GUI for the same
+// reason as the settings one — it is pure (rows, a filter, a cursor and a
+// capture with its verdict), and two frontends deciding separately what a
+// collision is would be two answers to one question.
+pub use norte_frontend::shortcuts::ShortcutsState as Shortcuts;
+
 impl App {
     /// App con foco en el pane izquierdo.
     #[must_use]
@@ -1666,6 +1687,7 @@ impl App {
             palette_rows: Vec::new(),
             mouse: crate::mouse::MouseState::default(),
             settings: None,
+            shortcuts: None,
             swap_seq: 0,
         }
     }
@@ -2234,6 +2256,27 @@ impl App {
             && let Some(retry) = self.pending_collisions.pop_front()
         {
             self.modal = Some(Modal::Collision { retry });
+            self.abandon_shortcut_capture();
+        }
+    }
+
+    /// A modal is taking the keyboard, so the shortcut editor stops ASKING for
+    /// a blind keypress (K3c).
+    ///
+    /// Capture mode paints "press the new key" and the reader is primed to
+    /// press anything at all. A modal that arrives on its own — a policy
+    /// approval off the bus, a collision at the end of a copy — takes the keys
+    /// and is painted on top, so that next key answers a question the reader
+    /// did not know was being asked, and on `Modal::ApproveAgentOp` the letter
+    /// `y` approves an agent operation. The key still reaches the modal (that
+    /// part is the modal's right); what norte must not do is keep inviting it.
+    ///
+    /// The editor itself SURVIVES: the reader gets their list back after
+    /// answering, unless the modal arm of the key chain retires it
+    /// (`main::close_stale_overlays`).
+    fn abandon_shortcut_capture(&mut self) {
+        if let Some(sc) = &mut self.shortcuts {
+            sc.cancel_capture();
         }
     }
 
@@ -2245,6 +2288,7 @@ impl App {
             && let Some(req) = self.pending_approvals.pop_front()
         {
             self.modal = Some(Modal::ApproveAgentOp { req });
+            self.abandon_shortcut_capture();
             return;
         }
         self.open_next_collision();

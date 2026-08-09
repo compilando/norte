@@ -733,3 +733,51 @@ whichkey-more-keys = más teclas
 # silencio: una caja que simplemente termina da a entender que la
 # lista terminó con ella.
 whichkey-truncated = … { $shown }/{ $total }
+
+# Editor de atajos (K3c): la pantalla de Atajos, abierta desde Ajustes. Lista
+# cada tecla ligada Y cada comando ejecutable que no pulsa nada — la hoja de
+# referencia de arriba responde «qué hace esta tecla», y un editor tiene que
+# responder además «cómo pulso X».
+shortcuts-title = Atajos
+shortcuts-hint = [↑/↓/repág/avpág] navegar · [enter] reasignar · [ctrl+u] desligar · [esc] cerrar
+# Modo captura. Esc es lo que lo cancela, así que Esc es el único chord que el
+# editor NO puede capturar, y se dice en vez de dejar al lector pulsándolo.
+# `mod+` es la otra honestidad: crossterm no entrega ⌘ sin el protocolo de
+# teclado de Kitty, que norte no activa, así que un chord capturado aquí es
+# uno de Ctrl en cualquier plataforma (ADR 0043 decisión 9).
+shortcuts-capture-hint = pulsa la tecla nueva · [esc] cancelar
+shortcuts-capture-note = esc cancela (así que no se puede ligar aquí) · mod+ es ctrl en la terminal
+shortcuts-confirm-hint = [enter] guardar · [retroceso] otra tecla · [esc] cancelar
+# Una fila para un comando que ninguna tecla pulsa.
+shortcuts-no-key = (sin tecla)
+# El veredicto, mostrado ANTES de confirmar. Solo los dos primeros se pueden
+# confirmar; el resto es lo que el cargador rechazaría, y negarse aquí es lo
+# que evita un keymap.toml que revierte el mapa entero al recargar.
+shortcuts-verdict-free = libre — no la usa nada más
+shortcuts-verdict-replaces = sustituye a { $command }
+shortcuts-verdict-replaces-unavailable = sustituye a { $command } ({ $reason })
+shortcuts-verdict-prefix-clash = rechazada: { $chord } ya la usa ({ $command })
+shortcuts-verdict-sacred = rechazada: reservada para { $command }
+shortcuts-verdict-digit = rechazada: este preset lee los dígitos como repeticiones
+shortcuts-verdict-empty = rechazada: no se capturó ninguna tecla
+shortcuts-verdict-esc = rechazada: esc siempre cancela una secuencia pendiente
+shortcuts-verdict-unwritable = rechazada: { $chord } no se puede escribir en keymap.toml
+# La puerta (`rebind_dry_run`) se negó tras confirmar. El diagnóstico de carga
+# NO se cita: puede llevar texto de una capa de proyecto que llegó con un
+# repositorio clonado, y esto va a la barra de estado (#73).
+shortcuts-refused-load = sin guardar: ese binding dejaría un keymap que no carga
+shortcuts-refused-shadowed = sin guardar: { $command } se queda esa tecla (un keymap de proyecto manda sobre el tuyo)
+shortcuts-refused-shadowed-unavailable = sin guardar: { $command } se queda esa tecla ({ $reason }, un keymap de proyecto manda sobre el tuyo)
+# Inalcanzable mientras el editor está abierto (la misma búsqueda de preset
+# construyó los mapas que enseña), y redactado en vez de dado por imposible:
+# la regla 6 no hace excepciones con lo inalcanzable.
+shortcuts-refused-preset = sin guardar: el preset de keymap activo es desconocido
+msg-shortcut-bound = { $chord } ahora ejecuta { $command }
+# Los dos mensajes del desligado hablan del FICHERO, jamás de lo que la tecla
+# hace ahora: el escritor casa byte a byte sobre esta sección y esta
+# ortografía, así que un binding de `[global]`, un gemelo (`mod+p` por
+# `ctrl+p`) u otra capa que siga ligando la tecla convertirían «ya no ejecuta»
+# en una mentira (#141).
+msg-shortcut-unbound = quitado de tu keymap.toml: { $chord } → { $command }
+msg-shortcut-nothing-to-unbind = no se quitó nada: nada de esa sección de tu keymap.toml casó con esa tecla
+msg-shortcut-not-bindable = esa tecla no se puede capturar aquí
