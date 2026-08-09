@@ -47,6 +47,14 @@ pub fn chord_from_crossterm(mods: CtMods, code: CtCode) -> Option<Chord> {
         ctrl: mods.contains(CtMods::CONTROL),
         alt: mods.contains(CtMods::ALT),
         shift: mods.contains(CtMods::SHIFT),
+        // JAMÁS puede ser otra cosa en la TUI. `CtMods::SUPER` existe en el
+        // tipo, pero el terminal solo lo entrega bajo
+        // `PushKeyboardEnhancementFlags` (protocolo de teclado de Kitty), que
+        // norte no activa: leerlo aquí devolvería `false` siempre y fingiría
+        // una capacidad que no hay. Por eso `mod+` es Ctrl en la TUI en TODAS
+        // las plataformas, macOS incluido, y lo decimos en vez de prometer
+        // una tecla que el terminal nunca va a entregar.
+        cmd: false,
     };
     Some(Chord::new(m, neutral))
 }

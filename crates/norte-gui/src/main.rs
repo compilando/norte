@@ -483,10 +483,27 @@ struct DropRequest {
 }
 
 /// Los dos modificadores que el marcado entiende. `platform` (⌘) se deja
-/// fuera a propósito, igual que en `on_key`: aquí sigue siendo asunto del
-/// keymap, no de estos gestos.
+/// fuera a propósito: es asunto del keymap (ver [`keymap_mods`]), no de estos
+/// gestos.
 fn mouse_mods(m: Modifiers) -> Mods {
     Mods::new(m.control, m.shift)
+}
+
+/// Modificadores de GPUI → los del keymap NEUTRO, `platform` (⌘/Super)
+/// incluido.
+///
+/// La GUI es el único frontend que puede OBSERVAR ⌘: gpui lo reporta en
+/// `Modifiers::platform`. La TUI no puede (crossterm no entrega super sin
+/// `PushKeyboardEnhancementFlags`, que norte no activa), y por eso `mod+` es
+/// Ctrl allí en todas las plataformas. Aquí ⌘ viaja hasta el chord y el
+/// keymap decide, en vez de morir en un early-return de `on_key`.
+fn keymap_mods(m: Modifiers) -> norte_frontend::keymap::Mods {
+    norte_frontend::keymap::Mods {
+        ctrl: m.control,
+        alt: m.alt,
+        shift: m.shift,
+        cmd: m.platform,
+    }
 }
 
 /// El índice ABSOLUTO de la fila RESALTADA de un pane: el ancla desde la que
@@ -2776,9 +2793,7 @@ impl NorteGui {
             self.resolver.effective(),
             "app.help",
             &ks.key,
-            ks.modifiers.control,
-            ks.modifiers.alt,
-            ks.modifiers.shift,
+            keymap_mods(ks.modifiers),
             ks.key_char.as_deref(),
         )
     }
@@ -3608,10 +3623,11 @@ impl NorteGui {
         // Visor abierto: las teclas van al contexto Viewer (no hay modal/quick
         // aquí — el visor y el dual-pane son pantallas mutuamente excluyentes).
         if self.viewer.is_some() {
-            if ks.modifiers.platform {
-                cx.notify();
-                return;
-            }
+            // K1 T5: aquí había el MISMO early-return sobre `platform` que el
+            // del dual-pane de abajo, y por la misma razón (⌘ no tenía dónde
+            // ir y la tecla colapsaba al chord desnudo). Ahora `Mods` tiene
+            // `cmd`, así que ⌘ viaja hasta el resolver y, si nada lo liga,
+            // sale `Reset` — que es lo que hace cualquier otra tecla suelta.
             // La ayuda ALCANZA al visor. El visor resuelve por su propio
             // contexto y `app.help` no vive en él, así que la tecla se perdía:
             // la única pantalla desde la que no se podía preguntar era la que
@@ -3621,13 +3637,9 @@ impl NorteGui {
                 cx.notify();
                 return;
             }
-            if let Some(chord) = keymap::gpui_chord(
-                &ks.key,
-                ks.modifiers.control,
-                ks.modifiers.alt,
-                ks.modifiers.shift,
-                ks.key_char.as_deref(),
-            ) {
+            if let Some(chord) =
+                keymap::gpui_chord(&ks.key, keymap_mods(ks.modifiers), ks.key_char.as_deref())
+            {
                 match self.viewer_resolver.push(chord) {
                     norte_frontend::keymap::Resolution::Run(cmd) => {
                         self.run_viewer_command(&cmd, cx);
@@ -3674,23 +3686,20 @@ impl NorteGui {
             return;
         }
 
-        // Super/Cmd no lo modela el keymap (`gpui_chord` solo recibe
-        // ctrl/alt/shift): no lo rutees al resolver — evita que Cmd+q
-        // colapse al chord `q` desnudo y dispare su binding (MINOR 2,
-        // review T3).
-        if mods.platform {
-            cx.notify();
-            return;
-        }
+        // K1 T5: aquí había un early-return sobre `mods.platform`. Existía
+        // porque el keymap NO modelaba ⌘ — `gpui_chord` solo recibía
+        // ctrl/alt/shift, así que `Cmd+q` llegaba al resolver como la `q`
+        // DESNUDA y disparaba `app.quit` (MINOR 2, review T3). El bail-out
+        // era la única forma de que no lo hiciera. Ya no: `Mods` tiene `cmd`
+        // y ⌘ tiene dónde ir, así que `Cmd+q` es el chord `cmd+q`, no casa
+        // ningún binding y cae en `Reset` — sin abrir el quick search, que
+        // sigue gateado por `platform` en su rama. Sustituir el bail-out por
+        // el campo, y no simplemente quitarlo, es lo que hace segura la
+        // eliminación.
 
         // (3) keymap: nombre GPUI → Chord → resolver.
-        if let Some(chord) = keymap::gpui_chord(
-            &ks.key,
-            mods.control,
-            mods.alt,
-            mods.shift,
-            ks.key_char.as_deref(),
-        ) {
+        if let Some(chord) = keymap::gpui_chord(&ks.key, keymap_mods(mods), ks.key_char.as_deref())
+        {
             match self.resolver.push(chord) {
                 norte_frontend::keymap::Resolution::Run(cmd) => {
                     resolution_dbg = "run";
@@ -8706,6 +8715,19 @@ fn main() {
         norte_i18n::Lang::from_env()
     };
     let _ = norte_i18n::force(lang);
+
+    // Qué significa `mod+` en ESTE proceso — misma forma que el idioma de
+    // arriba: un hecho de plataforma que se decide UNA vez, antes de que
+    // nadie construya un keymap (el primero nace dentro de `NorteGui::new`,
+    // ya con la ventana abierta). La GUI puede OBSERVAR ⌘ (gpui lo reporta
+    // en `Modifiers::platform`); la TUI no, así que allí no se llama a esto y
+    // el default —Ctrl— es su única respuesta honesta. Un preset con `mod+c`
+    // es Cmd+C en la GUI de macOS y Ctrl+C en el resto, siendo UN fichero.
+    norte_frontend::keymap::set_mod_key(if cfg!(target_os = "macos") {
+        norte_frontend::keymap::ModKey::Cmd
+    } else {
+        norte_frontend::keymap::ModKey::Ctrl
+    });
 
     application().run(move |cx: &mut App| {
         // Fuente mono bundled (GP review, hallazgo CRÍTICO): registrada

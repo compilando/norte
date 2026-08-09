@@ -13,7 +13,7 @@ pub mod presets;
 mod resolve;
 
 pub use catalogue::{CATALOGUE, CommandDef, Status};
-pub use chord::{Chord, KeyCode, Mods, paint_chord, parse_chord};
+pub use chord::{Chord, KeyCode, ModKey, Mods, mod_key, paint_chord, parse_chord, set_mod_key};
 pub use effective::{Availability, Effective, valid_lua_name};
 pub use layer::{KeymapFile, Screen, parse_keymap};
 pub use resolve::{Resolution, Resolver};
@@ -311,6 +311,116 @@ mod tests {
                 KeyCode::Char('+')
             )
         );
+        // …y bajo los modificadores nuevos igual: `plus` sigue siendo la
+        // única grafía, el separador no cambia de significado.
+        assert_eq!(
+            parse_chord("cmd+plus").unwrap(),
+            Chord::new(
+                Mods {
+                    cmd: true,
+                    ..Default::default()
+                },
+                KeyCode::Char('+')
+            )
+        );
+        assert_eq!(
+            parse_chord("mod+plus").unwrap(),
+            parse_chord("ctrl+plus").unwrap(),
+            "la política por defecto es Ctrl"
+        );
+        assert!(matches!(
+            parse_chord("cmd++"),
+            Err(KeymapError::BadChord { .. })
+        ));
+    }
+
+    /// `mod+` is the one per-OS mechanism: a preset stays a single file. The
+    /// process picks which physical modifier it means, once, at startup.
+    #[test]
+    fn mod_es_ctrl_por_defecto() {
+        let c = parse_chord("mod+c").unwrap();
+        assert_eq!(c, parse_chord("ctrl+c").unwrap());
+    }
+
+    /// `cmd+` is literal, for a preset that means Cmd and nothing else.
+    #[test]
+    fn cmd_es_su_propio_modificador_y_no_es_ctrl() {
+        let cmd = parse_chord("cmd+c").unwrap();
+        let ctrl = parse_chord("ctrl+c").unwrap();
+        assert_ne!(cmd, ctrl);
+    }
+
+    /// The resolution is a pure function of the policy, so it is testable
+    /// without a macOS machine — which matters, because CI is off and nobody
+    /// here has one. NOTE: no test may call `set_mod_key`; the policy is
+    /// process-wide and a test that sets it would poison every later test in
+    /// the same binary. `apply` is the pure half, and it is the half worth
+    /// pinning.
+    #[test]
+    fn la_politica_decide_a_que_se_traduce_mod() {
+        assert_eq!(
+            ModKey::Ctrl.apply(Mods::default()),
+            Mods {
+                ctrl: true,
+                ..Mods::default()
+            }
+        );
+        assert_eq!(
+            ModKey::Cmd.apply(Mods::default()),
+            Mods {
+                cmd: true,
+                ..Mods::default()
+            }
+        );
+    }
+
+    /// The repeated-modifier check sees THROUGH the alias: with the default
+    /// policy `mod` IS `ctrl`, so `ctrl+mod+x` names the same key twice and
+    /// dies as `BadChord`, exactly like `ctrl+ctrl+x`. `cmd+mod+x` is the
+    /// same story on the other side, and stays legal here only because the
+    /// default policy resolves `mod` to Ctrl.
+    #[test]
+    fn el_alias_cuenta_como_su_modificador_para_el_repetido() {
+        assert!(matches!(
+            parse_chord("ctrl+mod+x"),
+            Err(KeymapError::BadChord { .. })
+        ));
+        assert!(matches!(
+            parse_chord("mod+ctrl+x"),
+            Err(KeymapError::BadChord { .. })
+        ));
+        assert!(matches!(
+            parse_chord("cmd+cmd+x"),
+            Err(KeymapError::BadChord { .. })
+        ));
+        // Distintos modificadores: legal bajo la política por defecto.
+        assert_eq!(
+            parse_chord("cmd+mod+x").unwrap(),
+            Chord::new(
+                Mods {
+                    cmd: true,
+                    ctrl: true,
+                    ..Mods::default()
+                },
+                KeyCode::Char('x')
+            )
+        );
+    }
+
+    /// `cmd` sorts BEFORE `ctrl` in `Display`, so a chord carrying both has
+    /// exactly ONE spelling and the round trip is closed.
+    #[test]
+    fn cmd_precede_a_ctrl_en_la_grafia_canonica() {
+        let c = Chord::new(
+            Mods {
+                cmd: true,
+                ctrl: true,
+                ..Mods::default()
+            },
+            KeyCode::Char('x'),
+        );
+        assert_eq!(c.to_string(), "cmd+ctrl+x");
+        assert_eq!(parse_chord(&c.to_string()).unwrap(), c);
     }
 
     #[test]
@@ -361,6 +471,34 @@ mod tests {
         for ch in [' ', '+', 'G', 'ñ'] {
             let c = Chord::new(Mods::default(), KeyCode::Char(ch));
             assert_eq!(parse_chord(&c.to_string()).unwrap(), c, "{ch:?}");
+        }
+        // The MODIFIER half of the table, swept exhaustively — `cmd` joined
+        // it and the round trip has to close over the new spelling too. On a
+        // non-`Char` key all four bits are independent, so the whole product
+        // is legal; `Display` orders them `cmd+ctrl+alt+shift+`, which is the
+        // one canonical spelling `parse_chord` reads back.
+        for bits in 0..16u8 {
+            let mods = Mods {
+                cmd: bits & 1 != 0,
+                ctrl: bits & 2 != 0,
+                alt: bits & 4 != 0,
+                shift: bits & 8 != 0,
+            };
+            let c = Chord::new(mods, KeyCode::F(5));
+            assert_eq!(parse_chord(&c.to_string()).unwrap(), c, "{mods:?}");
+        }
+        // On a `Char`, `shift` is dropped by `Chord::new` and rejected by
+        // `parse_chord` (the character already encodes it), so the sweep is
+        // over the other three.
+        for bits in 0..8u8 {
+            let mods = Mods {
+                cmd: bits & 1 != 0,
+                ctrl: bits & 2 != 0,
+                alt: bits & 4 != 0,
+                shift: false,
+            };
+            let c = Chord::new(mods, KeyCode::Char('k'));
+            assert_eq!(parse_chord(&c.to_string()).unwrap(), c, "{mods:?}");
         }
     }
 
@@ -1188,6 +1326,10 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
             ("f12", "F12"),
             ("shift+f8", "Shift+F8"),
             ("ctrl+alt+f5", "Ctrl+Alt+F5"),
+            // `cmd` joined the modifier table; `Display` writes it FIRST, so
+            // this fixture is also the canonical-order pin.
+            ("cmd+f5", "Cmd+F5"),
+            ("cmd+ctrl+alt+shift+f5", "Cmd+Ctrl+Alt+Shift+F5"),
             ("enter", "Enter"),
             ("tab", "Tab"),
             ("esc", "Esc"),

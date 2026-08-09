@@ -714,7 +714,16 @@ mod tests {
     fn cierran_todas_las_teclas_de_app_help() {
         let (browse, _) = crate::keymap::build_effectives_preset_only("vim");
         let means = |key: &str, chr: Option<&str>, ctrl: bool| {
-            crate::keymap::means_command(&browse, "app.help", key, ctrl, false, false, chr)
+            crate::keymap::means_command(
+                &browse,
+                "app.help",
+                key,
+                norte_frontend::keymap::Mods {
+                    ctrl,
+                    ..norte_frontend::keymap::Mods::default()
+                },
+                chr,
+            )
         };
         assert!(means("f1", None, false), "la tecla obvia sigue cerrando");
         assert!(
@@ -730,7 +739,16 @@ mod tests {
         // manda es el keymap, no una lista escrita a mano.
         let (browse, _) = effectives_con_help_tambien_en("ctrl+h");
         let means = |key: &str, chr: Option<&str>, ctrl: bool| {
-            crate::keymap::means_command(&browse, "app.help", key, ctrl, false, false, chr)
+            crate::keymap::means_command(
+                &browse,
+                "app.help",
+                key,
+                norte_frontend::keymap::Mods {
+                    ctrl,
+                    ..norte_frontend::keymap::Mods::default()
+                },
+                chr,
+            )
         };
         assert!(means("h", None, true));
         assert!(means("f1", None, false), "sin quitarle la suya al preset");

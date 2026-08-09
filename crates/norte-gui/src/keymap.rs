@@ -152,12 +152,10 @@ pub fn means_command(
     eff: &Effective,
     command: &str,
     key: &str,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
+    mods: Mods,
     key_char: Option<&str>,
 ) -> bool {
-    let Some(pressed) = gpui_chord(key, ctrl, alt, shift, key_char) else {
+    let Some(pressed) = gpui_chord(key, mods, key_char) else {
         return false;
     };
     eff.bindings()
@@ -373,14 +371,15 @@ pub fn build_effectives_with(preset_name: &str, layers: &[KeymapFile]) -> (Effec
 /// Adaptador: nombre de tecla GPUI (+mods +key_char) → `Chord` neutro. `None`
 /// si la tecla no la modela el keymap (p. ej. teclas raras). Reusa el
 /// vocabulario de nombres que entrega `gpui::Keystroke::key`.
+///
+/// `mods` llega ya traducido desde `gpui::Modifiers` (ver `keymap_mods` en
+/// `main.rs`), `platform` (⌘/Super) incluido: la GUI SÍ puede observarlo, a
+/// diferencia de la TUI. Que viaje en un `Mods` en vez de en cuatro `bool`
+/// sueltos es deliberado — un adaptador que crece un modificador no debe
+/// crecer también un parámetro posicional más que confundir con el de al
+/// lado.
 #[must_use]
-pub fn gpui_chord(
-    key: &str,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-    key_char: Option<&str>,
-) -> Option<Chord> {
+pub fn gpui_chord(key: &str, mods: Mods, key_char: Option<&str>) -> Option<Chord> {
     let code = match key {
         "enter" => KeyCode::Enter,
         "tab" => KeyCode::Tab,
@@ -430,7 +429,7 @@ pub fn gpui_chord(
             }
         }
     };
-    Some(Chord::new(Mods { ctrl, alt, shift }, code))
+    Some(Chord::new(mods, code))
 }
 
 #[cfg(test)]
@@ -674,32 +673,62 @@ prepend_keymap = [{ on = ["insert"], run = "cursor.up" }]
         );
     }
 
+    /// `Mods` con solo `ctrl`, para no repetir el `..Default::default()` en
+    /// cada caso de los tests de abajo.
+    fn ctrl() -> Mods {
+        Mods {
+            ctrl: true,
+            ..Mods::default()
+        }
+    }
+
     #[test]
     fn gpui_chord_nombres_y_char() {
         assert_eq!(
-            gpui_chord("f5", false, false, false, None),
+            gpui_chord("f5", Mods::default(), None),
             Some(Chord::new(Mods::default(), KeyCode::F(5)))
         );
         assert_eq!(
-            gpui_chord("up", false, false, false, None),
+            gpui_chord("up", Mods::default(), None),
             Some(Chord::new(Mods::default(), KeyCode::Up))
         );
         assert_eq!(
-            gpui_chord("k", true, false, false, Some("k")),
-            Some(Chord::new(
-                Mods {
-                    ctrl: true,
-                    ..Default::default()
-                },
-                KeyCode::Char('k')
-            ))
+            gpui_chord("k", ctrl(), Some("k")),
+            Some(Chord::new(ctrl(), KeyCode::Char('k')))
         );
-        assert_eq!(gpui_chord("f99", false, false, false, None), None);
+        assert_eq!(gpui_chord("f99", Mods::default(), None), None);
         // Un `key_char` compuesto (dead-key/IME multi-codepoint) → None, jamás
         // un `Char` parcial (é descompuesto = e + U+0301).
+        assert_eq!(gpui_chord("e", Mods::default(), Some("e\u{0301}")), None);
+    }
+
+    /// K1 T5. La GUI SÍ observa ⌘ (`gpui::Modifiers::platform`), y desde que
+    /// `Mods` tiene un sitio donde ponerlo, `on_key` ya no tiene que abortar
+    /// al verlo: `Cmd+q` produce el chord `cmd+q`, NO la `q` desnuda que
+    /// habría disparado `app.quit` (MINOR 2 de la revisión T3 — el bail-out
+    /// que este campo sustituye). Sin `set_mod_key` de por medio: el bit
+    /// físico se observa, no se interpreta.
+    #[test]
+    fn cmd_q_no_colapsa_a_la_q_desnuda() {
+        let cmd = Mods {
+            cmd: true,
+            ..Mods::default()
+        };
+        let chord = gpui_chord("q", cmd, Some("q")).expect("⌘+q se modela");
+        assert_eq!(chord, Chord::new(cmd, KeyCode::Char('q')));
+        assert_ne!(
+            chord,
+            Chord::new(Mods::default(), KeyCode::Char('q')),
+            "la q desnuda dispararía app.quit: ese era el bug"
+        );
+        assert_eq!(chord.to_string(), "cmd+q");
+        // …y NO casa el binding de `q` del preset, que es lo que importaba.
+        let (browse, _) = build_effectives_from("orthodox", None).expect("construye");
+        let mut r = norte_frontend::keymap::Resolver::new(browse);
         assert_eq!(
-            gpui_chord("e", false, false, false, Some("e\u{0301}")),
-            None
+            r.push(chord),
+            norte_frontend::keymap::Resolution::Reset,
+            "hoy ningún preset liga cmd+: la tecla no hace nada, en vez de salir"
         );
     }
 
@@ -716,17 +745,17 @@ prepend_keymap = [{ on = ["insert"], run = "cursor.up" }]
         let cases = [("plus", '+'), ("asterisk", '*'), ("minus", '-')];
         for (key, ch) in cases {
             assert_eq!(
-                gpui_chord(key, false, false, false, Some(&ch.to_string())),
+                gpui_chord(key, Mods::default(), Some(&ch.to_string())),
                 Some(Chord::new(Mods::default(), KeyCode::Char(ch))),
                 "{key}: con key_char presente"
             );
             assert_eq!(
-                gpui_chord(key, false, false, false, None),
+                gpui_chord(key, Mods::default(), None),
                 Some(Chord::new(Mods::default(), KeyCode::Char(ch))),
                 "{key}: sin key_char"
             );
             assert_eq!(
-                gpui_chord(key, false, false, false, Some("")),
+                gpui_chord(key, Mods::default(), Some("")),
                 Some(Chord::new(Mods::default(), KeyCode::Char(ch))),
                 "{key}: key_char vacío"
             );

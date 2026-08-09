@@ -43,7 +43,13 @@ pub enum KeyCode {
 }
 
 /// Modificadores NEUTROS de una tecla.
+///
+/// (Cuatro bools INDEPENDIENTES, no los estados de una máquina: cualquier
+/// combinación es una pulsación real —`cmd+ctrl+alt+shift+f5` incluida— así
+/// que no hay enum en el que colapsarlos. Es el bitset que el teclado
+/// entrega; mismo criterio que `availability::Facts`.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Mods {
     /// Ctrl.
     pub ctrl: bool,
@@ -51,6 +57,88 @@ pub struct Mods {
     pub alt: bool,
     /// Shift.
     pub shift: bool,
+    /// Cmd / Super / Meta. Only a frontend that can OBSERVE it ever sets it:
+    /// the TUI cannot, because crossterm does not report super without
+    /// `PushKeyboardEnhancementFlags`, which norte does not enable.
+    pub cmd: bool,
+}
+
+/// Which physical modifier `mod+` means in THIS process. Set once at startup
+/// by the frontend, before any keymap is built — the same shape as the
+/// language in `norte_i18n` (a process-wide platform fact, decided once).
+///
+/// ```
+/// use norte_frontend::keymap::{ModKey, Mods};
+///
+/// // Pure: the mapping is testable without the platform it describes.
+/// assert!(ModKey::Ctrl.apply(Mods::default()).ctrl);
+/// assert!(ModKey::Cmd.apply(Mods::default()).cmd);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModKey {
+    /// `mod+` is Ctrl. The default, and the only honest answer for the TUI on
+    /// every platform: crossterm cannot deliver Cmd.
+    Ctrl,
+    /// `mod+` is Cmd. A frontend that can observe Cmd — the GUI on macOS.
+    Cmd,
+}
+
+impl ModKey {
+    /// `mods` with this policy's bit set. Pure, so the mapping is testable
+    /// without the platform it describes.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::{ModKey, Mods};
+    ///
+    /// let m = ModKey::Cmd.apply(Mods { alt: true, ..Mods::default() });
+    /// assert!(m.cmd && m.alt, "solo AÑADE el bit de la política");
+    /// assert!(!m.ctrl);
+    /// ```
+    #[must_use]
+    pub fn apply(self, mods: Mods) -> Mods {
+        match self {
+            Self::Ctrl => Mods { ctrl: true, ..mods },
+            Self::Cmd => Mods { cmd: true, ..mods },
+        }
+    }
+}
+
+static MOD_KEY: std::sync::OnceLock<ModKey> = std::sync::OnceLock::new();
+
+/// Fix what `mod+` means. Call once, at startup, BEFORE building any keymap.
+/// Returns `false` if the policy was already fixed to a different value —
+/// never panics, never silently changes a keymap that is already resolved.
+///
+/// There is deliberately NO reset: the value is read by [`parse_chord`], so
+/// changing it mid-run would make two keymaps built from the same file
+/// disagree. That also means no TEST may call this with anything but the
+/// current value — the policy is process-wide and a test that changed it
+/// would poison every later test in the same binary. That includes DOCTESTS:
+/// since the 2024 edition they are merged into ONE binary and share this
+/// `OnceLock`. Test [`ModKey::apply`], which is pure.
+///
+/// ```
+/// use norte_frontend::keymap::{ModKey, mod_key, set_mod_key};
+///
+/// // Setting it to what it already is (or to the default nobody set) is a
+/// // no-op that reports success.
+/// assert!(set_mod_key(mod_key()));
+/// ```
+pub fn set_mod_key(k: ModKey) -> bool {
+    *MOD_KEY.get_or_init(|| k) == k
+}
+
+/// The active policy; [`ModKey::Ctrl`] if nobody set one.
+///
+/// ```
+/// use norte_frontend::keymap::{ModKey, mod_key};
+///
+/// // No frontend runs inside a doctest, so nobody has fixed the policy.
+/// assert_eq!(mod_key(), ModKey::Ctrl);
+/// ```
+#[must_use]
+pub fn mod_key() -> ModKey {
+    *MOD_KEY.get_or_init(|| ModKey::Ctrl)
 }
 
 /// Una tecla con modificadores, en forma canónica. Los frontends la
@@ -85,6 +173,11 @@ impl Chord {
 
 impl std::fmt::Display for Chord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `cmd` FIRST: a chord carrying both must have exactly one spelling,
+        // or `parse(display(c)) == c` stops closing.
+        if self.mods.cmd {
+            f.write_str("cmd+")?;
+        }
         if self.mods.ctrl {
             f.write_str("ctrl+")?;
         }
@@ -148,8 +241,10 @@ impl std::fmt::Display for Chord {
 /// `plus`. Each token is then mapped:
 ///
 /// - function keys: `f1`…`f12` → `F1`…`F12` (any `f` followed by digits);
-/// - modifiers: `ctrl`/`alt`/`shift`/`super`/`meta` → `Ctrl`/`Alt`/`Shift`/
-///   `Super`/`Meta`, the `+` joins preserved;
+/// - modifiers: `ctrl`/`alt`/`shift`/`cmd`/`super`/`meta` → `Ctrl`/`Alt`/
+///   `Shift`/`Cmd`/`Super`/`Meta`, the `+` joins preserved. `mod` is NOT in
+///   the table: it is an input alias [`parse_chord`] resolves, so `Display`
+///   already wrote the physical modifier it became;
 /// - named keys: `enter`, `tab`, `esc`, `backspace`, `space`, `plus`, `up`,
 ///   `down`, `left`, `right`, `home`, `end`, `pgup`, `pgdn`, `insert`,
 ///   `delete` → `Enter`, `Tab`, `Esc`, `Backspace`, `Space`, `Plus`, `Up`,
@@ -203,8 +298,13 @@ fn pretty_token(token: &str) -> String {
         "ctrl" => "Ctrl",
         "alt" => "Alt",
         "shift" => "Shift",
+        "cmd" => "Cmd",
         // Not spellings `Display` produces today (`Mods` has no such flag),
         // but a frontend that grows them must not have to touch this table.
+        // `mod` is deliberately ABSENT: it is an INPUT alias resolved by
+        // `parse_chord`, so `Display` writes the physical modifier it became
+        // (`ctrl`/`cmd`) and a reader is told the key they actually press,
+        // never a name they cannot find on their keyboard.
         "super" => "Super",
         "meta" => "Meta",
         "enter" => "Enter",
@@ -242,6 +342,16 @@ fn pretty_token(token: &str) -> String {
 /// `+` es el separador de modificadores, así que `plus` es la ÚNICA forma de
 /// expresar esa tecla.
 ///
+/// # `mod+` y `cmd+`
+///
+/// `cmd` es literal (Cmd/Super/Meta), para un preset que quiere decir Cmd y
+/// nada más. `mod` es el ALIAS por-OS: se resuelve a lo que [`mod_key`] diga
+/// en ESTE proceso — Ctrl por defecto, Cmd si la política lo fijó — de modo
+/// que un preset sigue siendo UN fichero en macOS y en Linux/Windows. El
+/// alias cuenta como aquello en lo que se resuelve para el rechazo de
+/// modificador repetido: bajo la política Ctrl, `ctrl+mod+x` es la misma
+/// tecla dos veces y es [`KeymapError::BadChord`].
+///
 /// # Errors
 /// [`KeymapError::BadChord`] si el texto no describe una tecla.
 pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
@@ -261,10 +371,20 @@ pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
             "ctrl" => &mut mods.ctrl,
             "alt" => &mut mods.alt,
             "shift" => &mut mods.shift,
+            "cmd" => &mut mods.cmd,
+            // `mod` is the alias: whichever physical modifier this process
+            // decided at startup. One preset file, two platforms.
+            "mod" => match mod_key() {
+                ModKey::Ctrl => &mut mods.ctrl,
+                ModKey::Cmd => &mut mods.cmd,
+            },
             _ => return Err(bad()),
         };
         if *slot {
-            return Err(bad()); // modificador repetido
+            // Modificador repetido. El alias cuenta como AQUELLO en lo que se
+            // resuelve, así que `ctrl+mod+x` con la política Ctrl es la misma
+            // tecla dos veces y muere aquí — correcto.
+            return Err(bad());
         }
         *slot = true;
     }
