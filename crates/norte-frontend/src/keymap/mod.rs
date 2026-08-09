@@ -1717,6 +1717,28 @@ keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
                 h.id
             );
         }
+        // K2a widened the argument. `count_ignored_message` interpolates a
+        // command name unmasked too, and its reachable domain is STRICTLY
+        // larger than `unavailable_message`'s: a `lua:` command never becomes
+        // `Unavailable` (it is always `Availability::Here`) but a count over
+        // one is ALWAYS `Ignored`, so a Lua name reaches the status bar
+        // through this sentence and no other. It is safe because
+        // `valid_lua_name` is ASCII by construction — pin that leg too, so
+        // the day someone widens the Lua charset this fails instead of the
+        // status line.
+        for hostile in ["lua:aa\u{202E}bb", "lua:x\u{0007}y", "lua:ñ"] {
+            let name = hostile.strip_prefix("lua:").expect("prefijo lua:");
+            assert!(
+                !valid_lua_name(name),
+                "{hostile}: un nombre lua con hazards debe ser rechazado por el charset"
+            );
+        }
+        let m = count_ignored_message("lua:mi-script.v2", 3);
+        assert!(
+            !m.chars().any(|c| c.is_control()
+                || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}')),
+            "el mensaje de contador ignorado no puede llevar hazards: {m:?}"
+        );
     }
 
     /// The tripwire for the obvious next change. `unavailable_message` names
@@ -2153,6 +2175,34 @@ keymap = [ { on = ["0"], run = "cursor.top" } ]
             .expect("0 con contadores es legal");
     }
 
+    /// "Digit" means ASCII 0-9 and nothing else, in BOTH paths — they share
+    /// `digit_of`, and `char::to_digit(10)` is ASCII-only. So U+0665 ARABIC-
+    /// INDIC DIGIT FIVE and U+FF15 FULLWIDTH FIVE are ordinary bindable keys
+    /// that load fine AND never open a count. Pinned in both directions
+    /// because the two answers must stay the same one: an "improvement" to
+    /// `is_numeric()` in either path would make a key that loads as a binding
+    /// and then resolves as a count, or the reverse.
+    #[test]
+    fn un_digito_no_ascii_es_una_tecla_normal_en_los_dos_caminos() {
+        for exotico in ['\u{0665}', '\u{FF15}'] {
+            let preset = parse_keymap(&format!(
+                "counts = true\n\n[pane]\nkeymap = [ {{ on = [\"{exotico}\"], run = \"cursor.down\" }} ]\n"
+            ))
+            .unwrap();
+            let eff = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse)
+                .unwrap_or_else(|e| panic!("{exotico:?} debe poder ligarse: {e:?}"));
+            let mut r = Resolver::new(eff);
+            assert_eq!(
+                r.push(parse_chord(&exotico.to_string()).unwrap()),
+                Resolution::Run {
+                    command: "cursor.down".to_owned(),
+                    count: Count::None,
+                },
+                "{exotico:?} no abre un contador: es una tecla"
+            );
+        }
+    }
+
     /// A digit MID-sequence is an ordinary key: the rule looks at the first
     /// chord only, exactly like the accumulator, which never opens a count
     /// with a sequence in flight.
@@ -2282,6 +2332,132 @@ keymap = [ { on = ["tab"], run = "cursor.down" } ]
         );
     }
 
+    /// The two loaders must denounce the SAME defect, which is the contract
+    /// [`check_binding`]'s rustdoc states for every load-time rule: they share
+    /// the checks precisely so they cannot drift.
+    ///
+    /// `el_diagnostico_tambien_reporta_las_dos_reglas_nuevas` proves less than
+    /// it looks. It pins two keymaps and asks only whether SOMETHING
+    /// `Structural` came back mentioning `5` or `tab` — a `build_diagnostics`
+    /// that had lost `check_sacred` but kept `check_prefix_free` would still
+    /// pass it if any other rule fired, and nothing at all pins the rules the
+    /// two new ones were bolted next to. This walks every rule, one keymap per
+    /// rule, and compares the RENDERED message against the error
+    /// [`Effective::build_for`] returns for the same input: a rule wired into
+    /// one path and not the other fails here, and so does a rule wired into
+    /// both with different arguments (`check_digits_free(.., false)` in the
+    /// diagnostic walk, say).
+    #[test]
+    fn los_dos_cargadores_denuncian_el_mismo_defecto() {
+        const KNOWN: &[&str] = &["app.quit", "cursor.down", "cursor.top", "pane.switch"];
+        // (nombre, preset, capa de usuario)
+        let casos: &[(&str, &str, Option<&str>)] = &[
+            (
+                "tecla inválida",
+                "[pane]\nkeymap = [{ on = [\"megatecla\"], run = \"cursor.down\" }]\n",
+                None,
+            ),
+            (
+                "secuencia vacía",
+                "[pane]\nkeymap = [{ on = [], run = \"cursor.down\" }]\n",
+                None,
+            ),
+            (
+                "esc dentro de una secuencia",
+                "[pane]\nkeymap = [{ on = [\"esc\", \"a\"], run = \"cursor.down\" }]\n",
+                None,
+            ),
+            (
+                "comando desconocido",
+                "[pane]\nkeymap = [{ on = [\"x\"], run = \"typo.no-existe\" }]\n",
+                None,
+            ),
+            (
+                "nombre lua fuera del charset",
+                "[pane]\nkeymap = [{ on = [\"x\"], run = \"lua:Nombre Malo\" }]\n",
+                None,
+            ),
+            (
+                "prefijo ambiguo",
+                "[pane]\nkeymap = [\n { on = [\"z\"], run = \"cursor.down\" },\n { on = [\"z\", \"z\"], run = \"cursor.top\" },\n]\n",
+                None,
+            ),
+            (
+                "clave en la capa equivocada",
+                "[pane]\nkeymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n",
+                Some("[pane]\nkeymap = [{ on = [\"k\"], run = \"cursor.top\" }]\n"),
+            ),
+            (
+                "la capa enciende los contadores",
+                "[pane]\nkeymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n",
+                Some(
+                    "counts = true\n[pane]\nprepend_keymap = [{ on = [\"k\"], run = \"cursor.top\" }]\n",
+                ),
+            ),
+            (
+                "dígito ligado con contadores",
+                "counts = true\n[pane]\nkeymap = [{ on = [\"5\"], run = \"cursor.down\" }]\n",
+                None,
+            ),
+            (
+                "tab repinada",
+                "[pane]\nkeymap = [{ on = [\"tab\"], run = \"cursor.down\" }]\n",
+                None,
+            ),
+            (
+                "tab abriendo una secuencia",
+                "[pane]\nkeymap = [{ on = [\"tab\", \"j\"], run = \"cursor.down\" }]\n",
+                None,
+            ),
+        ];
+        for (nombre, preset_src, layer_src) in casos {
+            let preset = parse_keymap(preset_src).unwrap_or_else(|e| panic!("{nombre}: {e}"));
+            let layers: Vec<KeymapFile> = layer_src
+                .iter()
+                .map(|s| parse_keymap(s).unwrap_or_else(|e| panic!("{nombre}: capa: {e}")))
+                .collect();
+            let e = Effective::build_for(&preset, &layers, KNOWN, Screen::Browse)
+                .err()
+                .unwrap_or_else(|| panic!("{nombre}: build_for lo aceptó"));
+            let d = Effective::build_diagnostics(&preset, &layers, KNOWN, Screen::Browse);
+            let mismo = d.iter().any(|f| match f {
+                KeymapDiagnostic::Structural { message } => *message == e.to_string(),
+                // El único hallazgo que NO se renderiza desde el error: el
+                // nombre desconocido llano es recuperable, así que viaja
+                // tipado. Se compara el `run`, que es lo que lo identifica.
+                KeymapDiagnostic::UnknownCommand { run } => {
+                    matches!(&e, KeymapError::UnknownCommand { run: r } if r == run)
+                }
+            });
+            assert!(
+                mismo,
+                "{nombre}: build_for dijo {e:?}, el diagnóstico dijo {d:?}"
+            );
+        }
+
+        // Y el otro lado del contrato: lo que `build_for` acepta no puede
+        // dejar hallazgos. Las dos reglas de K2a tienen una forma LEGAL cada
+        // una (el `0` ligado con contadores encendidos, `tab` en su comando
+        // reservado) y un falso positivo aquí llenaría `norte doctor` de
+        // ruido sobre un keymap sano.
+        let limpio = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [
+    { on = ["tab"], run = "pane.switch" },
+    { on = ["0"], run = "cursor.top" },
+    { on = ["g", "5"], run = "cursor.down" },
+]
+"#,
+        )
+        .expect("el keymap limpio parsea");
+        Effective::build_for(&limpio, &[], KNOWN, Screen::Browse).expect("build_for lo acepta");
+        let d = Effective::build_diagnostics(&limpio, &[], KNOWN, Screen::Browse);
+        assert!(d.is_empty(), "falso positivo del diagnóstico: {d:?}");
+    }
+
     /// The three bundled presets must survive both rules unchanged.
     #[test]
     fn los_presets_de_fabrica_pasan_las_dos_reglas_nuevas() {
@@ -2294,6 +2470,28 @@ keymap = [ { on = ["tab"], run = "cursor.down" } ]
                 Effective::build_for(&kf, &[], &known, screen)
                     .unwrap_or_else(|e| panic!("{name} en {screen:?}: {e:?}"));
             }
+        }
+    }
+
+    /// WHICH presets count is a decision, not an implementation detail: `vim`
+    /// does because vim does, `orthodox` and `cua` do not because their
+    /// originals do not and turning it on would take `1`..`9` away from them.
+    ///
+    /// Nothing else in the suite notices if `counts = true` leaves
+    /// `vim.toml` — no bundled preset binds a bare digit, so the load rule
+    /// stays quiet either way and the only symptom would be that `5j` silently
+    /// stops counting. K2b lands four more imported keymaps; this is the line
+    /// that says which of them may flip the flag.
+    #[test]
+    fn solo_vim_trae_los_contadores_encendidos() {
+        let known = preset_commands(Screen::Browse);
+        let known: Vec<&str> = known.iter().map(String::as_str).collect();
+        for name in presets::NAMES {
+            let src = presets::source(name).expect("NAMES resuelve");
+            let kf = parse_keymap(src).expect("preset parsea");
+            let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            assert_eq!(eff.counts(), *name == "vim", "preset {name}");
         }
     }
 }

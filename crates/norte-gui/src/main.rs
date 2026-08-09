@@ -3697,12 +3697,10 @@ impl NorteGui {
                                 true,
                             ));
                         }
-                        let times = match count {
-                            norte_frontend::keymap::Count::Repeat(n) => n.max(1),
-                            norte_frontend::keymap::Count::None
-                            | norte_frontend::keymap::Count::Ignored(_) => 1,
-                        };
-                        for _ in 0..times {
+                        // `Count::times` es la ÚNICA política de repetición
+                        // (ADR 0044): tres sitios con su propio `match` es
+                        // como los tres acaban discrepando.
+                        for _ in 0..count.times() {
                             self.run_viewer_command(&cmd, cx);
                             // `viewer.close` deja `self.viewer` en None: lo
                             // que quede del contador correría contra un visor
@@ -3790,12 +3788,9 @@ impl NorteGui {
                     // ninguna firma cambia y ninguno puede olvidarse de
                     // honrarlo. `run_command` es un `match cmd` sin returns
                     // tempranos del caller, así que el bucle no puede saltarse.
-                    let times = match count {
-                        norte_frontend::keymap::Count::Repeat(n) => n.max(1),
-                        norte_frontend::keymap::Count::None
-                        | norte_frontend::keymap::Count::Ignored(_) => 1,
-                    };
-                    for _ in 0..times {
+                    // Misma política única que el visor de arriba y que la TUI:
+                    // `Count::times` (ADR 0044).
+                    for _ in 0..count.times() {
                         self.run_command(&cmd, cx);
                         // Parar en seco si algo se puso DELANTE del dual-pane
                         // (modal de confirmación de salida, visor, ajustes…):

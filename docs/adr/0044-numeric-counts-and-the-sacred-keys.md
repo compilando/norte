@@ -82,9 +82,22 @@ one.
 ### 2. The catalogue decides who takes a count, and a count over a command that takes none is `Ignored`, never swallowed
 
 `CommandDef.counts` (ADR 0043 decision 3, recorded unread) is the authority.
-Fourteen entries carry `counts: true` today: `cursor.{up,down,page-up,page-down}`,
-`nav.{back,forward}`, `viewer.{up,down,page-up,page-down}` and
-`dialog.{up,down,page-up,page-down}` — movers, all of them.
+Ten entries carry `counts: true`: `cursor.{up,down,page-up,page-down}`,
+`nav.{back,forward}` and `viewer.{up,down,page-up,page-down}` — clamped,
+in-memory, relative movers, all of them. A test pins that set **by name**, so
+that adding an eleventh is a decision made in review rather than discovered by
+a user who typed a number: `counts: true` is a licence to run something 9 999
+times from one keystroke.
+
+The four `dialog.*` movers are the shape that would take a count and declare
+`counts: false` anyway. No overlay dispatcher honours one: every overlay
+resolves against the dialog screen and then resets the resolver on
+`Resolution::Counting` — the same decision that gives overlays no multi-key
+sequences either — so a count typed over a dialog is destroyed at the digit and
+can never reach the command. Declaring `true` there would be the catalogue
+claiming a capability nothing implements, which is exactly the drift the shared
+catalogue exists to end. It is debt, recorded as such, and the flag flips the
+day an overlay learns to repeat.
 
 `3q` does not quit three times and it does not quit silently either: it quits
 once and says *"app.quit does not take a count (3 ignored)"*. The sentence lives
@@ -233,17 +246,42 @@ either. Both of K1's deferred debts are closed, one of them on a hot path.
 
 **Negative, and accepted.**
 
-*The repeat loop lives in the frontends, twice.* The TUI's loop wraps the whole
-outcome tail (`cd_landed_pane` → `apply_cd` → `reap_search_run` → `pending_open`),
-because a `dispatch` without its outcome leaves tasks alive and panes
-unrefreshed. It terminates on `app.quit` (a count before an exit key must not
-queue 9 998 more exits) and on `app.modal.is_some()` (a command that opened a
-modal must not have the rest of the count fire *behind* it). The GUI's two loops
-terminate on `overlay_in_front() || help.is_some()` and on
-`viewer.is_none()` respectively. Every early `continue` of the outer event loop
-that the TUI arm used to contain — the `lua:` branch and the `Command::parse`
-guard — now sits **above** the loop, because a `continue` that skips the loop
-counter turns `5j` into an infinite loop.
+*The repeat loop lives in the frontends, three times.* How many times to run is
+**not** repeated: `Count::times()` is the single policy, and the TUI's key arm
+and the GUI's two sites call it. Three private copies of the same `match` is how
+three sites come to disagree, and the first review of this work found them
+already differing in their stopping conditions.
+
+Where they legitimately differ is *when to stop*, because they guard different
+screens, and each guard is now complete rather than a hand-listed pair:
+
+- The TUI wraps the whole outcome tail (`cd_landed_pane` → `apply_cd` →
+  `reap_search_run` → `pending_open`), because a `dispatch` without its outcome
+  leaves tasks alive and panes unrefreshed. It stops on `app.quit`, on
+  `nav_stalled` (below), and on **any change** to `keyboard_owner(app)` — a
+  fingerprint of the eleven surfaces the run loop routes keys by. Comparing
+  rather than testing is required: `5` then `viewer.down` starts with the
+  viewer already open, and a guard that stopped on "a viewer is open" would kill
+  that count on its first turn.
+- The GUI's dual pane stops on `overlay_in_front() || help.is_some()`; its
+  viewer loop stops when the viewer closes.
+
+Every early `continue` of the outer event loop that the TUI arm used to contain
+— the `lua:` branch and the `Command::parse` guard — sits **above** the loop,
+because a `continue` that skips the loop counter turns `5j` into an infinite
+loop.
+
+*A repeated navigation stops the moment a step does not land.* `nav.back` and
+`nav.forward` are the only `counts: true` commands that reach the network, and
+they interact badly with the trail: a `Failed` or `Cancelled` step is put BACK
+on the trail (correctly — the pane never moved), so the next turn of the count
+would take the same step and issue the identical listing. One keystroke would
+become up to 9 999 sequential remote calls on a slow or dead host, and `Esc`
+during a listing *is* `Cd::Cancelled`, so the key pressed to stop it would feed
+the next retry and the only way out would be killing norte. `nav_stalled` is
+asked of those two commands only, deliberately: `Cd::Cancelled` is also the
+default outcome of every command that is not a `cd`, so a blanket break on it
+would stop `5j` after one row.
 
 *A user-visible behaviour change in the GUI.* With `vim` and counts on, a bare
 digit on the dual pane resolves as `Counting` instead of `Reset`, and the
@@ -260,9 +298,11 @@ That is acceptable only because every `counts: true` command is a pure in-memory
 mover — and it stays acceptable only as long as that is true. **Adding
 `counts: true` to a command that submits a task, does I/O or allocates per call
 turns a four-keystroke sequence into 9 999 of those.** `nav.back`/`nav.forward`
-are the closest to the line and are safe by a second bound: `nav::HISTORY_MAX`
-is 30, so the repeats past the end of the history are no-ops. Any future
-`counts: true` entry needs the same argument made explicitly.
+are the two exceptions and are held by three bounds together, not one:
+`nav::HISTORY_MAX` caps the trail at 30 steps, `nav_stalled` stops the repeat
+on the first step that does not land, and the by-name test makes the next
+addition argue its case. Any future `counts: true` entry needs the same
+argument made explicitly.
 
 *`Ignored` is honest but not always visible.* In the GUI's viewer the flash is
 not painted while the viewer is open (the debt ADR 0043 already recorded), so a

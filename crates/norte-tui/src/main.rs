@@ -2948,11 +2948,8 @@ async fn run(
                                     // brazo (la rama Lua y el guard del parse)
                                     // quedan ARRIBA, antes del bucle, así que
                                     // el contador no puede saltarse.
-                                    let times = match count {
-                                        Count::Repeat(n) => n.max(1),
-                                        Count::None | Count::Ignored(_) => 1,
-                                    };
-                                    for _ in 0..times {
+                                    let owner_before = keyboard_owner(app);
+                                    for _ in 0..count.times() {
                                         let outcome = dispatch(
                                             app,
                                             backend,
@@ -2965,6 +2962,9 @@ async fn run(
                                             cmd,
                                         )
                                         .await;
+                                        // Leído ANTES de que `apply_cd`
+                                        // consuma el outcome.
+                                        let stalled = nav_stalled(cmd, &outcome);
                                         if let Some(pane) = cd_landed_pane(&outcome) {
                                             app.apply_scheme_sort(pane);
                                             let dir = app.panes[pane].dir().clone();
@@ -3009,11 +3009,20 @@ async fn run(
                                         // loop exterior comprueba `app.quit`
                                         // tras el draw, así que sin este break
                                         // el resto de las vueltas correría con
-                                        // la app muerta. Un modal abierto
-                                        // (ConfirmQuit) es el mismo caso: lo
-                                        // que quede del contador dispararía
-                                        // comandos DETRÁS del modal.
-                                        if app.quit || app.modal.is_some() {
+                                        // la app muerta. Lo mismo si el
+                                        // despacho movió el teclado a otra
+                                        // superficie (modal, visor, overlay):
+                                        // lo que quede del contador dispararía
+                                        // comandos DETRÁS de ella
+                                        // (`keyboard_owner` los cubre todos, no
+                                        // solo el modal). Y lo mismo si un paso
+                                        // del rastro no aterrizó: se rebobina,
+                                        // así que la vuelta siguiente repetiría
+                                        // el MISMO listado remoto.
+                                        if app.quit
+                                            || stalled
+                                            || keyboard_owner(app) != owner_before
+                                        {
                                             break;
                                         }
                                     }
@@ -7176,6 +7185,60 @@ fn rewind_trail(app: &mut App, pane: usize, step: TrailStep, dir: &VPath, rewind
     }
 }
 
+/// Whether a REPEATED navigation must stop because this step did not land.
+///
+/// `nav.back`/`nav.forward` are the only two `counts: true` commands that
+/// reach the network (ADR 0044), and [`rewind_for`] puts a `Failed` or
+/// `Cancelled` step BACK on the trail — the pane never moved, so the trail
+/// must not claim it did. That is right for the trail and fatal for a count:
+/// the next turn would take the SAME step and issue the SAME listing, turning
+/// one keystroke into up to 9 999 sequential remote calls on a slow or dead
+/// host. Worse, `Esc` during a listing IS `Cd::Cancelled`, so the key the
+/// reader presses to stop it would be rewound into the next retry and the
+/// only way out would be killing norte.
+///
+/// Asked ONLY of the two trail commands, and that is not tidiness:
+/// `Cd::Cancelled` is also the outcome of every command that is not a `cd`
+/// (`dispatch` starts from it), so a blanket break on it would stop `5j`
+/// after one row.
+fn nav_stalled(cmd: Command, outcome: &Cd) -> bool {
+    matches!(cmd, Command::NavBack | Command::NavForward)
+        && matches!(outcome, Cd::Failed(_) | Cd::Cancelled)
+}
+
+/// A fingerprint of WHICH surface owns the keyboard, sampled before and after
+/// each turn of a repeated dispatch.
+///
+/// A count repeats the dispatch, and a dispatched command can put a modal, a
+/// viewer or one of seven overlays in front of the panes. Everything left of
+/// the count would then fire BEHIND it, against a pane the reader is no
+/// longer looking at and cannot see change. The run loop routes a key event
+/// by testing exactly these fields, so comparing them is the same question
+/// the router asks.
+///
+/// It is COMPARED, never merely tested: `5` then `viewer.down` starts with
+/// the viewer already open, and a guard that broke on "a viewer is open"
+/// would stop that count after one row. Only a CHANGE means the dispatch
+/// moved the keyboard.
+fn keyboard_owner(app: &App) -> u16 {
+    let bits = [
+        app.modal.is_some(),
+        app.viewer.is_some(),
+        app.help.is_some(),
+        app.theme_picker.is_some(),
+        app.columns_picker.is_some(),
+        app.extensions.is_some(),
+        app.nav_popup.is_some(),
+        app.search_dialog.is_some(),
+        app.palette.is_some(),
+        app.settings.is_some(),
+        app.focused().quick_visible().is_some(),
+    ];
+    bits.iter()
+        .enumerate()
+        .fold(0u16, |acc, (i, &on)| acc | (u16::from(on) << i))
+}
+
 /// Settles the trail of a navigation the TOFU prompt SUSPENDED, once that
 /// prompt has been answered.
 ///
@@ -7673,8 +7736,9 @@ async fn plugin_config_summaries(
 #[cfg(test)]
 mod pane_gestures_tests {
     use super::{
-        App, Cd, Pane, Rewind, Trail, TrailStep, back_target, forward_target, mirror_plan,
-        pull_plan, record_step, rewind_for, rewind_trail, settle_suspended_trail,
+        App, Cd, Command, Modal, Palette, Pane, Rewind, Trail, TrailStep, Viewer, back_target,
+        forward_target, keyboard_owner, mirror_plan, nav_stalled, pull_plan, record_step,
+        rewind_for, rewind_trail, settle_suspended_trail,
     };
     use norte_proto::{Error, VPath};
 
@@ -7953,6 +8017,94 @@ mod pane_gestures_tests {
         assert_eq!(rewind_for(&Cd::Replaced(0)), Rewind::No);
         assert_eq!(rewind_for(&Cd::Refreshed([true, true])), Rewind::No);
         assert_eq!(rewind_for(&Cd::Swapped), Rewind::No);
+    }
+
+    // --- El freno del CONTADOR sobre el rastro (`nav_stalled`, ADR 0044).
+
+    /// Un paso del rastro que no aterriza para el contador EN SECO. El paso
+    /// se rebobina (los tests de arriba lo fijan), así que la vuelta
+    /// siguiente pediría el MISMO listado: `20` + `nav.back` contra un host
+    /// caído serían veinte llamadas remotas idénticas. Y `Esc` durante un
+    /// listado ES `Cd::Cancelled`, de modo que sin este freno la tecla con la
+    /// que el lector intenta pararlo alimentaría el reintento siguiente.
+    #[test]
+    fn un_paso_del_rastro_que_no_aterriza_para_el_contador() {
+        for (etiqueta, outcome) in [
+            ("abandonado", Cd::Cancelled),
+            ("no existe", Cd::Failed(Error::NotFound)),
+            ("sin permiso", Cd::Failed(Error::PermissionDenied)),
+        ] {
+            assert!(
+                nav_stalled(Command::NavBack, &outcome),
+                "atrás {etiqueta} debe parar"
+            );
+            assert!(
+                nav_stalled(Command::NavForward, &outcome),
+                "adelante {etiqueta} debe parar"
+            );
+        }
+    }
+
+    /// Un paso que SÍ aterriza deja seguir al contador: `3` + `nav.back` son
+    /// tres pasos cuando los tres existen.
+    #[test]
+    fn un_paso_del_rastro_que_aterriza_deja_seguir_al_contador() {
+        assert!(!nav_stalled(Command::NavBack, &Cd::Replaced(0)));
+        assert!(!nav_stalled(
+            Command::NavForward,
+            &Cd::Refreshed([true, true])
+        ));
+        // Suspendido es el TOFU: lo para el cambio de dueño del teclado (el
+        // modal), no este freno — y rebobinar aquí contaría dos veces el
+        // reintento.
+        assert!(!nav_stalled(Command::NavBack, &Cd::Suspended));
+    }
+
+    /// Y el freno es SOLO de los dos comandos del rastro. `Cd::Cancelled` es
+    /// el desenlace por defecto de `dispatch`, así que todo comando que no es
+    /// un cd lo devuelve: preguntar por él en general pararía `5j` en la
+    /// primera fila.
+    #[test]
+    fn el_freno_del_rastro_no_alcanza_a_un_comando_que_no_navega() {
+        assert!(!nav_stalled(Command::CursorDown, &Cd::Cancelled));
+        assert!(!nav_stalled(Command::ViewerDown, &Cd::Cancelled));
+    }
+
+    /// El contador para cuando el despacho MUEVE el teclado a otra
+    /// superficie. Se compara un antes con un después justamente porque el
+    /// visor puede estar abierto DESDE EL PRINCIPIO (`5` + `viewer.down`): un
+    /// guard que preguntara «¿hay visor?» mataría ese contador en la primera
+    /// vuelta.
+    #[test]
+    fn el_dueno_del_teclado_cambia_cuando_un_comando_abre_algo() {
+        let mut app = app_en("mem:///izq", "mem:///der");
+        let solo_paneles = keyboard_owner(&app);
+        app.modal = Some(Modal::ConfirmQuit);
+        assert_ne!(
+            keyboard_owner(&app),
+            solo_paneles,
+            "un modal se pone delante"
+        );
+        app.modal = None;
+        assert_eq!(keyboard_owner(&app), solo_paneles, "y al cerrarlo vuelve");
+        app.palette = Some(Palette::new(Vec::new()));
+        assert_ne!(keyboard_owner(&app), solo_paneles, "la palette también");
+        app.palette = None;
+        // Y el caso que obliga a COMPARAR en vez de preguntar: con el visor
+        // abierto desde el principio (`5` + `viewer.down`), el dueño no ha
+        // cambiado entre vueltas y el contador tiene que seguir.
+        app.viewer = Some(Viewer::new(
+            vp("mem:///izq/x.txt"),
+            b"hola\n".to_vec(),
+            false,
+        ));
+        let con_visor = keyboard_owner(&app);
+        assert_ne!(con_visor, solo_paneles, "el visor es otro dueño");
+        assert_eq!(
+            keyboard_owner(&app),
+            con_visor,
+            "pero no CAMBIA entre dos vueltas del contador"
+        );
     }
 
     /// Un paso atrás que ATERRIZA en un cd fallido no puede dejar el rastro

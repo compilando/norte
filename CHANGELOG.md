@@ -9,6 +9,31 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A number before a key repeats it, on the presets whose originals do that:**
+  typing `5` then `j` under the `vim` preset moves down five rows, `12` then a
+  page key turns twelve pages. The number is visible at the status bar while
+  you type it, `Esc` cancels it, and a key that misses clears it — a count can
+  never end up glued to the keystroke after it. A count over a command that
+  does not take one runs the command once and says so rather than swallowing
+  the number: `3` then a quit key quits, and tells you the 3 was ignored.
+  It is opt-in per preset, so `orthodox` and `cua` are unchanged and their
+  digit keys still mean what they meant. **Two things a `vim` user will
+  notice.** Digits are now counts there, so on the GUI a bare digit starts a
+  count instead of opening the type-to-filter quick search. And `12gg` does
+  **not** mean "go to line 12": norte repeats the command twelve times, and
+  twelve "go to the top" is still the top, so norte reports the count as
+  ignored instead of pretending. Absolute positioning needs a command that
+  takes a line number, which does not exist yet (ADR 0044).
+- **A keymap that would break pane switching, or that fights its own counts,
+  now fails to load with a diagnostic** instead of doing something unexpected
+  under your fingers. `Tab` is reserved for switching panes on the file
+  screen — a preset or a layer that binds it to something else, or that merely
+  starts a two-key sequence with it, is rejected at load, because a `Tab` that
+  sits waiting for a second key has lost you pane switching just as
+  completely. And with counts enabled, binding a bare `1`-`9` is rejected too,
+  since the key cannot be a digit of a count and a command at the same time.
+  `0` stays bindable: a count never starts with zero. Both are reported by
+  `norte doctor` as well.
 - **A batch of renames is one transaction, so a permutation finally works:** AI
   rename used to apply its plan one `fs.move` at a time. Ask it to number a
   season of episodes correctly and the very first move refuses, because the name

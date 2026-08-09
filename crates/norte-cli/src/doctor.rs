@@ -308,7 +308,9 @@ pub fn check_keymaps(layers: &Layers) -> Vec<Finding> {
 ///   NO finding, which is why the false positives went away.
 /// - [`KeymapDiagnostic::Structural`] → [`Severity::Error`]
 ///   (`keymap-structural`): bad chord, empty/`esc` sequence, wrong layer key,
-///   ambiguous prefix, or a `lua:` name that fails the charset.
+///   ambiguous prefix, a `lua:` name that fails the charset, or — since K2a
+///   (ADR 0044) — a digit key bound while the preset enables counts, or a
+///   reserved key (`Tab`) taken from `pane.switch` on the Browse screen.
 ///
 /// No diagnostics → one [`Severity::Ok`] `keymap-ok`. The one-pass builder
 /// reports EVERY finding at once, so this needs no retry loop, no anti-DoS

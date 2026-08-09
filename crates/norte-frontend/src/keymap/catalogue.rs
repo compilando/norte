@@ -133,10 +133,19 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("dialog.skip", false),
     live("dialog.rename", false),
     live("dialog.newer", false),
-    live("dialog.up", true),
-    live("dialog.down", true),
-    live("dialog.page-up", true),
-    live("dialog.page-down", true),
+    // The four dialog movers are the shape that WOULD take a count, and they
+    // declare `false` anyway (ADR 0044, rust-reviewer MAJOR-2): no overlay
+    // dispatcher honours one. Every overlay handler resolves against this
+    // screen and then resets the resolver on `Resolution::Counting` — the
+    // same decision that gives overlays no multi-key sequences — so a count
+    // typed over a dialog is destroyed at the digit and can never reach the
+    // command. `true` here would be the catalogue claiming a capability
+    // nothing implements, which is precisely the drift the shared catalogue
+    // exists to end. Flip them the day an overlay learns to repeat.
+    live("dialog.up", false),
+    live("dialog.down", false),
+    live("dialog.page-up", false),
+    live("dialog.page-down", false),
     live("dialog.add", false),
     live("dialog.toggle-enabled", false),
     live("dialog.remove", false),
@@ -210,6 +219,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `counts: true` is a licence to run a command up to 9 999 times from
+    /// ONE keystroke (ADR 0044), so the set that holds it is pinned by name
+    /// rather than by a rule. Every entry here is a clamped, in-memory,
+    /// relative mover: no task submitted, no allocation per call, no screen
+    /// opened. Adding to the set must fail this test, so that the argument
+    /// gets made once — in review — instead of being discovered by a user who
+    /// typed a number.
+    ///
+    /// `nav.back`/`nav.forward` are the two that reach the network, and they
+    /// are here on a second bound: `nav::HISTORY_MAX` caps the trail at 30
+    /// steps, and the TUI's repeat stops the moment a step does not land
+    /// (a failed or cancelled step is put BACK on the trail, so without that
+    /// the next turn would re-issue the identical listing).
+    #[test]
+    fn el_conjunto_con_contador_es_exactamente_este() {
+        let mut con_contador: Vec<&str> = CATALOGUE
+            .iter()
+            .filter(|d| d.counts)
+            .map(|d| d.name)
+            .collect();
+        con_contador.sort_unstable();
+        assert_eq!(
+            con_contador,
+            [
+                "cursor.down",
+                "cursor.page-down",
+                "cursor.page-up",
+                "cursor.up",
+                "nav.back",
+                "nav.forward",
+                "viewer.down",
+                "viewer.page-down",
+                "viewer.page-up",
+                "viewer.up",
+            ],
+            "un comando ganó o perdió `counts`: ver ADR 0044 antes de tocar esta lista"
+        );
     }
 
     #[test]

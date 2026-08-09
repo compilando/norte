@@ -59,6 +59,35 @@ pub(super) fn digit_of(chord: Chord) -> Option<u32> {
     }
 }
 
+impl Count {
+    /// How many times the frontend runs the dispatch. **Never zero** — an
+    /// `Ignored` count runs the command once, exactly like no count at all,
+    /// and `Repeat(0)` cannot be typed (zero never opens a count) but is
+    /// clamped anyway rather than silently dropping the keystroke.
+    ///
+    /// The policy lives HERE, not in each frontend: three call sites (the
+    /// TUI's key arm, the GUI's dual pane, the GUI's viewer) had a private
+    /// copy of the same `match`, which is how the three of them come to
+    /// disagree.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::Count;
+    ///
+    /// assert_eq!(Count::None.times(), 1);
+    /// assert_eq!(Count::Repeat(5).times(), 5);
+    /// // A count the command does not take runs it ONCE — never zero times,
+    /// // and never five.
+    /// assert_eq!(Count::Ignored(5).times(), 1);
+    /// ```
+    #[must_use]
+    pub fn times(self) -> u32 {
+        match self {
+            Self::Repeat(n) => n.max(1),
+            Self::None | Self::Ignored(_) => 1,
+        }
+    }
+}
+
 /// Resultado de empujar una tecla al [`Resolver`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
