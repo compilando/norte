@@ -1696,18 +1696,19 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         | Modal::Mkdir { error: Some(_), .. }
         | Modal::AiRenameInstruction { error: Some(_), .. }
         | Modal::SemanticQuery { error: Some(_), .. } => 7,
-        // M4-IA: la línea del dir (audit MAJOR-1) + dos por pareja de la
-        // VENTANA + el indicador (si el plan no cabe entero) + las líneas del
-        // veredicto del LOTE (§17, contadas por `rename_batch_lines` — la
-        // MISMA función que las pinta, no una fórmula paralela que se
-        // desincronice) + el hint, más bordes — mismo cómputo dinámico
-        // `body_lines + 3` que ConfirmDelete/ConfirmTransfer. Estable al
-        // scroll: la ventana clampada siempre pinta `min(len, LIMIT)` parejas.
+        // M4-IA: la línea del dir (audit MAJOR-1) + el veredicto del LOTE
+        // (§17) + dos por pareja de la VENTANA + el indicador (si el plan no
+        // cabe entero) + el detalle del lote (contado por
+        // `rename_batch_detail_lines` — la MISMA función que lo pinta, no una
+        // fórmula paralela que se desincronice) + el hint, más bordes — mismo
+        // cómputo dinámico `body_lines + 3` que
+        // ConfirmDelete/ConfirmTransfer. Estable al scroll: la ventana
+        // clampada siempre pinta `min(len, LIMIT)` parejas.
         Modal::AiRenamePlan { entries, plan, .. } => {
-            let lineas = 1
+            let lineas = 2
                 + 2 * entries.len().min(AI_RENAME_PAIR_LIMIT)
                 + usize::from(entries.len() > AI_RENAME_PAIR_LIMIT)
-                + rename_batch_lines(plan.as_ref()).len()
+                + plan.detail_line_count()
                 + 1;
             u16::try_from(lineas).unwrap_or(u16::MAX).saturating_add(3)
         }
@@ -1860,7 +1861,7 @@ fn modal_title_body(
             entries,
             offset,
             plan,
-        } => ai_rename_plan_modal_text(dir, entries, *offset, hints, plan.as_ref()),
+        } => ai_rename_plan_modal_text(dir, entries, *offset, hints, plan),
         // M4-IA-2: mismo enmascarado que la instrucción IA — consulta y
         // error son texto de usuario.
         Modal::SemanticQuery { query, error } => semantic_query_modal_text(query, error.as_deref()),
@@ -2129,7 +2130,7 @@ fn ai_rename_plan_modal_text(
     entries: &[norte_proto::methods::AiRenameEntry],
     offset: usize,
     dialog_hints: &crate::hints::DialogHints,
-    plan: Option<&norte_proto::methods::FsRenameBatchPlanResult>,
+    plan: &norte_frontend::BatchPlan,
 ) -> (String, String) {
     // Cinturón de render: el clamp vive en `App::ai_plan_scroll`, pero un
     // offset fuera de rango jamás debe pintar una ventana vacía.
@@ -2143,6 +2144,11 @@ fn ai_rename_plan_modal_text(
             &[("dir", &middle_ellipsis(&dir_txt, 46))],
         ),
     )];
+    // El VEREDICTO del lote va arriba, pegado al dir y ANTES de las parejas
+    // (§17): un modal más alto que el terminal lo recorta `centered` por
+    // ABAJO, y de todas las líneas del cuerpo esta es la que no puede
+    // perderse — es la que dice si esto va a renombrar algo.
+    lines.push(t(plan.status_key()));
     for (i, e) in entries.iter().enumerate().take(last).skip(offset) {
         let (from, from_hostil) = display_name(e.from.as_bytes());
         let (to, to_hostil) = display_name(e.to.as_bytes());
@@ -2180,7 +2186,16 @@ fn ai_rename_plan_modal_text(
             ),
         ));
     }
-    lines.extend(rename_batch_lines(plan));
+    // El saneado del detalle (enmascarado, elipsis, índice de pareja, tope
+    // de colisiones) vive en `norte-frontend`, compartido byte a byte con la
+    // GUI: `norte-gui` está FUERA del workspace y `just ci` no la compila, así
+    // que una política duplicada aquí se le desviaría sin que nada avisara.
+    // Este frontend solo pone SU badge.
+    lines.extend(
+        plan.detail_lines(entries.len())
+            .into_iter()
+            .map(|(linea, hostil)| badge_prefixed(hostil, linea)),
+    );
     // H3c: con una ayuda encima, `y`/`n` no responden — el pie dice eso en
     // vez de ofrecerlos (gemelo de `DialogHints::with_modals_inert`, para los
     // dos modales cuya pista es prosa y no hint generado).
@@ -2190,71 +2205,12 @@ fn ai_rename_plan_modal_text(
     // que miente (misma doctrina que `modals_inert`).
     lines.push(if dialog_hints.modals_inert {
         t("modal-hint-help-open")
-    } else if plan.is_some_and(|p| p.executable) {
+    } else if plan.confirmable() {
         t("modal-ai-rename-plan-hint")
     } else {
         t("modal-rename-batch-plan-hint-blocked")
     });
     (t("modal-ai-rename-plan"), lines.join("\n"))
-}
-
-/// Las líneas del veredicto del LOTE bajo las parejas (spec §17). Separada
-/// de `ai_rename_plan_modal_text` para que `modal_height` cuente lo MISMO que
-/// se pinta: el alto es `líneas + 3`, y un descuadre deja el modal recortando
-/// justo la línea que dice que el plan no se puede aplicar.
-fn rename_batch_lines(plan: Option<&norte_proto::methods::FsRenameBatchPlanResult>) -> Vec<String> {
-    let mut lines = vec![t(norte_frontend::plan_status_key(plan))];
-    let Some(plan) = plan else {
-        return lines;
-    };
-    let temps = norte_frontend::plan_temp_steps(plan);
-    if temps > 0 {
-        lines.push(ta("modal-rename-batch-temp", &[("n", &temps.to_string())]));
-    }
-    let mostradas = plan
-        .collisions
-        .len()
-        .min(norte_frontend::RENAME_COLLISION_LIMIT);
-    for c in plan.collisions.iter().take(mostradas) {
-        let (name, hostil) = display_name(c.name.as_bytes());
-        lines.push(badge_prefixed(
-            hostil,
-            ta(
-                "modal-rename-batch-collision",
-                &[
-                    // Índice de PAREJA (1-based, como la etiqueta del `from`):
-                    // el veredicto señala la fila culpable aunque su clase sea
-                    // de un protocolo más nuevo.
-                    ("n", &c.pair_index.saturating_add(1).to_string()),
-                    ("kind", &t(norte_frontend::collision_kind_key(c.kind))),
-                    // El nombre va el ÚLTIMO y con elipsis MEDIA: recortarlo
-                    // no puede expulsar de la caja ni el índice ni el
-                    // veredicto, que es lo accionable.
-                    ("name", &middle_ellipsis(&name, 34)),
-                ],
-            ),
-        ));
-    }
-    if plan.collisions.len() > mostradas {
-        // Lo escondido no se cuela limpio (molde del indicador de parejas):
-        // una colisión OCULTA con nombre hostil marca el resumen.
-        let hidden_hostil = plan
-            .collisions
-            .iter()
-            .skip(mostradas)
-            .any(|c| display_name(c.name.as_bytes()).1);
-        lines.push(badge_prefixed(
-            hidden_hostil,
-            ta(
-                "modal-rename-batch-collision-more",
-                &[
-                    ("shown", &mostradas.to_string()),
-                    ("total", &plan.collisions.len().to_string()),
-                ],
-            ),
-        ));
-    }
-    lines
 }
 
 /// Título+cuerpo de `Modal::SemanticQuery` (M4-IA-2): mismo contrato de
@@ -3542,8 +3498,8 @@ mod ai_rename_plan_modal_tests {
     }
 
     /// El caso NORMAL: el core contestó que el lote se puede ejecutar.
-    fn plan_ok() -> FsRenameBatchPlanResult {
-        FsRenameBatchPlanResult {
+    fn plan_ok() -> norte_frontend::BatchPlan {
+        listo(FsRenameBatchPlanResult {
             steps: vec![RenameStep {
                 from: seg(b"a"),
                 to: seg(b"b"),
@@ -3552,13 +3508,18 @@ mod ai_rename_plan_modal_tests {
             collisions: vec![],
             executable: true,
             plan_hash: hash(),
-        }
+        })
+    }
+
+    /// Envuelve un plan del core en el estado «ya contestó».
+    fn listo(p: FsRenameBatchPlanResult) -> norte_frontend::BatchPlan {
+        norte_frontend::BatchPlan::Ready(Box::new(p))
     }
 
     /// Un lote PARADO por un veredicto (`steps` vacío: el invariante del
     /// proto — un plan no ejecutable jamás viene ordenado a medias).
-    fn plan_con_colision(kind: RenameCollisionKind, name: &[u8]) -> FsRenameBatchPlanResult {
-        FsRenameBatchPlanResult {
+    fn plan_con_colision(kind: RenameCollisionKind, name: &[u8]) -> norte_frontend::BatchPlan {
+        listo(FsRenameBatchPlanResult {
             steps: vec![],
             collisions: vec![RenameCollision {
                 pair_index: 0,
@@ -3567,7 +3528,7 @@ mod ai_rename_plan_modal_tests {
             }],
             executable: false,
             plan_hash: hash(),
-        }
+        })
     }
 
     /// H3c: con una ayuda abierta ENCIMA, las teclas del modal no responden,
@@ -3587,7 +3548,7 @@ mod ai_rename_plan_modal_tests {
         use norte_i18n::t;
         let vivas = crate::hints::DialogHints::default();
         let (_, normal) =
-            ai_rename_plan_modal_text(&dir(), &[entry("a", "b")], 0, &vivas, Some(&plan_ok()));
+            ai_rename_plan_modal_text(&dir(), &[entry("a", "b")], 0, &vivas, &plan_ok());
         assert!(
             normal.contains(&t("modal-ai-rename-plan-hint")),
             "sin ayuda encima, el pie ofrece sus teclas: {normal}"
@@ -3595,7 +3556,7 @@ mod ai_rename_plan_modal_tests {
 
         let inertes = vivas.with_modals_inert();
         let (_, tapado) =
-            ai_rename_plan_modal_text(&dir(), &[entry("a", "b")], 0, &inertes, Some(&plan_ok()));
+            ai_rename_plan_modal_text(&dir(), &[entry("a", "b")], 0, &inertes, &plan_ok());
         assert!(
             !tapado.contains(&t("modal-ai-rename-plan-hint")),
             "con la ayuda encima NO puede ofrecer y/n: {tapado}"
@@ -3625,7 +3586,7 @@ mod ai_rename_plan_modal_tests {
                     &[entry(&from, &to)],
                     0,
                     &crate::hints::DialogHints::default(),
-                    Some(&plan_ok()),
+                    &plan_ok(),
                 );
                 // Por LÍNEA: el `\n` que separa las líneas del cuerpo es un
                 // control legítimo del formato, no contenido pintado.
@@ -3663,14 +3624,15 @@ mod ai_rename_plan_modal_tests {
             &[entry(&from, "real.txt")],
             0,
             &crate::hints::DialogHints::default(),
-            Some(&plan_ok()),
+            &plan_ok(),
         );
         let lines: Vec<&str> = body.lines().collect();
-        // dir + from + to + hint = 4 líneas exactas: el spoof no añade una.
+        // dir + estado + from + to + hint = 5 líneas exactas: el spoof no
+        // añade una.
         assert_eq!(lines.len(), 5, "{body:?}");
-        assert!(lines[1].contains("1."), "etiqueta fuera de banda: {body:?}");
+        assert!(lines[2].contains("1."), "etiqueta fuera de banda: {body:?}");
         assert!(
-            lines[2].starts_with('→') && lines[2].contains("real.txt"),
+            lines[3].starts_with('→') && lines[3].contains("real.txt"),
             "el destino real conserva SU línea: {body:?}"
         );
     }
@@ -3689,9 +3651,9 @@ mod ai_rename_plan_modal_tests {
             &[entry("limpio.txt", &to)],
             0,
             &crate::hints::DialogHints::default(),
-            Some(&plan_ok()),
+            &plan_ok(),
         );
-        let to_line = body.lines().nth(2).expect("línea del destino");
+        let to_line = body.lines().nth(3).expect("línea del destino");
         assert!(to_line.starts_with(HOSTILE_BADGE), "{body:?}");
         assert!(to_line.contains('\u{FFFD}'), "{body:?}");
         assert!(
@@ -3713,16 +3675,16 @@ mod ai_rename_plan_modal_tests {
             &entries,
             0,
             &crate::hints::DialogHints::default(),
-            Some(&plan_ok()),
+            &plan_ok(),
         );
         let lines: Vec<&str> = body.lines().collect();
-        // dir + 5 parejas × 2 + indicador + estado del lote + hint = 14.
+        // dir + estado del lote + 5 parejas × 2 + indicador + hint = 14.
         assert_eq!(lines.len(), 14, "{body:?}");
         assert!(
-            lines[1].contains("1.") && lines[1].contains("f1"),
+            lines[2].contains("1.") && lines[2].contains("f1"),
             "{body:?}"
         );
-        assert!(lines[11].contains("5/7"), "indicador: {body:?}");
+        assert!(lines[12].contains("5/7"), "indicador: {body:?}");
         assert!(!body.contains("f6"), "la cola espera al scroll: {body:?}");
         // offset 2 = parejas 3..=7, numeración absoluta, indicador al tope.
         let (_, body2) = ai_rename_plan_modal_text(
@@ -3730,23 +3692,23 @@ mod ai_rename_plan_modal_tests {
             &entries,
             2,
             &crate::hints::DialogHints::default(),
-            Some(&plan_ok()),
+            &plan_ok(),
         );
         let lines2: Vec<&str> = body2.lines().collect();
         assert_eq!(lines2.len(), 14, "alto ESTABLE al scroll: {body2:?}");
         assert!(
-            lines2[1].contains("3.") && lines2[1].contains("f3"),
+            lines2[2].contains("3.") && lines2[2].contains("f3"),
             "{body2:?}"
         );
         assert!(body2.contains("f7"), "{body2:?}");
-        assert!(lines2[11].contains("7/7"), "{body2:?}");
+        assert!(lines2[12].contains("7/7"), "{body2:?}");
         // Un offset desbocado se clampa en el render (cinturón).
         let (_, body3) = ai_rename_plan_modal_text(
             &dir(),
             &entries,
             999,
             &crate::hints::DialogHints::default(),
-            Some(&plan_ok()),
+            &plan_ok(),
         );
         assert!(body3.contains("f7"), "{body3:?}");
         // Alto: 14 líneas de cuerpo + 3 de marco.
@@ -3754,7 +3716,7 @@ mod ai_rename_plan_modal_tests {
             dir: dir(),
             entries,
             offset: 0,
-            plan: Some(plan_ok()),
+            plan: plan_ok(),
         };
         assert_eq!(modal_height(&modal), 17);
     }
@@ -3773,9 +3735,9 @@ mod ai_rename_plan_modal_tests {
             &entries,
             0,
             &crate::hints::DialogHints::default(),
-            Some(&plan_ok()),
+            &plan_ok(),
         );
-        let ind = body.lines().nth(11).expect("indicador");
+        let ind = body.lines().nth(12).expect("indicador");
         assert!(ind.starts_with(HOSTILE_BADGE), "{body:?}");
         // offset 1: la hostil entra en la ventana; la oculta (pareja 1) es
         // limpia — el indicador ya no marca.
@@ -3784,9 +3746,9 @@ mod ai_rename_plan_modal_tests {
             &entries,
             1,
             &crate::hints::DialogHints::default(),
-            Some(&plan_ok()),
+            &plan_ok(),
         );
-        let ind2 = body2.lines().nth(11).expect("indicador");
+        let ind2 = body2.lines().nth(12).expect("indicador");
         assert!(!ind2.starts_with(HOSTILE_BADGE), "{body2:?}");
     }
 
@@ -3802,12 +3764,12 @@ mod ai_rename_plan_modal_tests {
             &[entry("a.txt", "z.txt")],
             0,
             &crate::hints::DialogHints::default(),
-            Some(&plan),
+            &plan,
         );
         let lines: Vec<&str> = body.lines().collect();
-        // dir + pareja × 2 + estado + colisión + hint = 6.
+        // dir + estado + pareja × 2 + colisión + hint = 6.
         assert_eq!(lines.len(), 6, "{body:?}");
-        assert_eq!(lines[3], t("modal-rename-batch-not-applicable"), "{body:?}");
+        assert_eq!(lines[1], t("modal-rename-batch-not-applicable"), "{body:?}");
         assert!(
             lines[4].contains(&t("modal-rename-batch-collision-external")),
             "el veredicto se enseña: {body:?}"
@@ -3840,16 +3802,16 @@ mod ai_rename_plan_modal_tests {
             &[entry("a.txt", "z.txt")],
             0,
             &crate::hints::DialogHints::default(),
-            Some(&plan),
+            &plan,
         );
         let lines: Vec<&str> = body.lines().collect();
         assert_eq!(lines.len(), 6, "el modal sigue entero: {body:?}");
-        assert!(lines[1].contains("a.txt"), "las parejas se siguen viendo");
+        assert!(lines[2].contains("a.txt"), "las parejas se siguen viendo");
         assert!(
             lines[4].contains(&t("modal-rename-batch-collision-unknown")),
             "{body:?}"
         );
-        assert_eq!(lines[3], t("modal-rename-batch-not-applicable"), "{body:?}");
+        assert_eq!(lines[1], t("modal-rename-batch-not-applicable"), "{body:?}");
     }
 
     /// Un paso temporal es MAQUINARIA del planificador: se dice CUÁNTOS hay,
@@ -3858,7 +3820,7 @@ mod ai_rename_plan_modal_tests {
     #[test]
     fn un_paso_temporal_se_cuenta_jamas_se_nombra() {
         use norte_i18n::t;
-        let plan = FsRenameBatchPlanResult {
+        let plan = listo(FsRenameBatchPlanResult {
             steps: vec![
                 RenameStep {
                     from: seg(b"a"),
@@ -3879,13 +3841,13 @@ mod ai_rename_plan_modal_tests {
             collisions: vec![],
             executable: true,
             plan_hash: hash(),
-        };
+        });
         let (_, body) = ai_rename_plan_modal_text(
             &dir(),
             &[entry("a", "b"), entry("b", "a")],
             0,
             &crate::hints::DialogHints::default(),
-            Some(&plan),
+            &plan,
         );
         assert!(
             !body.contains(".norte-rename-"),
@@ -3914,7 +3876,7 @@ mod ai_rename_plan_modal_tests {
             &[entry("a", "b")],
             0,
             &crate::hints::DialogHints::default(),
-            None,
+            &norte_frontend::BatchPlan::Pending,
         );
         assert!(body.contains(&t("modal-rename-batch-pending")), "{body:?}");
         assert!(!body.contains(&t("modal-ai-rename-plan-hint")), "{body:?}");
@@ -3923,7 +3885,7 @@ mod ai_rename_plan_modal_tests {
             dir: dir(),
             entries: vec![entry("a", "b")],
             offset: 0,
-            plan: None,
+            plan: norte_frontend::BatchPlan::Pending,
         };
         assert_eq!(modal_height(&modal), 8);
         assert_eq!(body.lines().count(), 5, "{body:?}");
@@ -3943,7 +3905,7 @@ mod ai_rename_plan_modal_tests {
                 &[entry("a", "b")],
                 0,
                 &crate::hints::DialogHints::default(),
-                Some(&plan),
+                &plan,
             );
             assert!(
                 !body
@@ -3985,21 +3947,21 @@ mod ai_rename_plan_modal_tests {
             .collect();
         collisions[7].name = seg("x\u{202e}y".as_bytes());
         let total = collisions.len();
-        let plan = FsRenameBatchPlanResult {
+        let plan = listo(FsRenameBatchPlanResult {
             steps: vec![],
             collisions,
             executable: false,
             plan_hash: hash(),
-        };
+        });
         let (_, body) = ai_rename_plan_modal_text(
             &dir(),
             &[entry("a", "b")],
             0,
             &crate::hints::DialogHints::default(),
-            Some(&plan),
+            &plan,
         );
         let lines: Vec<&str> = body.lines().collect();
-        // dir + pareja × 2 + estado + 5 colisiones + resumen + hint = 11.
+        // dir + estado + pareja × 2 + 5 colisiones + resumen + hint = 11.
         assert_eq!(lines.len(), 11, "{body:?}");
         let resumen = lines[9];
         assert!(

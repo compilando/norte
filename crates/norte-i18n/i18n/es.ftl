@@ -53,6 +53,10 @@ modal-rename-batch-plan-hint-blocked = n/Esc: descartar
 modal-rename-batch-pending = lote: comprobando…
 modal-rename-batch-applicable = lote: aplicable — una task, un deshacer
 modal-rename-batch-not-applicable = lote: NO aplicable — no se renombrará nada
+# La comprobación no llegó a hacerse (o falló). Distinto de «comprobando…»:
+# aquel se resuelve solo, este no, y un spinner que no avanza nunca es una
+# mentira. El motivo se fue a la barra.
+modal-rename-batch-unchecked = lote: SIN comprobar — no se renombrará nada
 # Maquinaria del planificador: renames por un nombre temporal para romper un
 # ciclo. Solo se enseña el NÚMERO; los nombres temporales jamás se presentan
 # como propuestas.
@@ -60,11 +64,14 @@ modal-rename-batch-temp = con { $n } paso(s) interno(s) (un ciclo necesita un ro
 # Una colisión POR LÍNEA. El nombre ofensor va el ÚLTIMO para que un recorte
 # jamás pueda comerse el veredicto.
 modal-rename-batch-collision = ✗ { $n }. { $kind }: { $name }
+# La misma línea para un veredicto cuyo pair_index no señala ninguna fila de
+# la petición: se cae el índice antes que señalar una fila que no está.
+modal-rename-batch-collision-unindexed = ✗ { $kind }: { $name }
 modal-rename-batch-collision-internal = otra pareja se lo llevó
 modal-rename-batch-collision-external = ya existe
-modal-rename-batch-collision-absent-source = el origen no está en el directorio
-modal-rename-batch-collision-ambiguous-source = el origen casa con dos ficheros
-modal-rename-batch-collision-unknown = rechazado (motivo que este binario no conoce)
+modal-rename-batch-collision-absent-source = el origen no está
+modal-rename-batch-collision-ambiguous-source = origen ambiguo
+modal-rename-batch-collision-unknown = veredicto desconocido
 modal-rename-batch-collision-more = … { $shown }/{ $total } colisiones
 modal-semantic = Búsqueda semántica
 modal-semantic-hint = Enter busca · Esc cancela
@@ -260,7 +267,6 @@ gui-msg-ai-rename-running = Renombrado IA: pensando…
 gui-msg-ai-rename-superseded = Renombrado IA: plan anterior descartado (nueva petición)
 msg-ai-rename-empty = Renombrado IA: el modelo no propuso cambios
 msg-ai-rename-failed = el renombrado IA falló: { $error }
-msg-ai-rename-applied = Renombrado IA: { $n } movimientos enviados
 msg-ai-rename-invalid-plan = renombrado IA: plan inválido del daemon — no se aplicó nada
 msg-ai-rename-in-search = el renombrado IA no está disponible en un pane de búsqueda
 # El plan IA se aplica por el ejecutor transaccional de lotes (spec §17): UNA

@@ -108,17 +108,27 @@ struct AiRenameRun {
 }
 
 /// Un plan IA YA cosechado que espera a que se cierre el modal de turno
-/// (M4-IA). Lleva el plan del LOTE (§17) que le contestó
-/// `fs.rename_batch_plan` en el MISMO viaje: sin él, el modal abriría sin
-/// hash aprobado y confirmar quedaría mudo hasta un segundo viaje que nadie
-/// dispara.
+/// (M4-IA). Lleva el estado del plan del LOTE (§17), que se pide en cuanto
+/// llega el plan IA: sin él, el modal abriría sin hash aprobado y confirmar
+/// quedaría mudo hasta un segundo viaje que nadie dispara.
 struct PendingAiPlan {
     /// Dir del pane al LANZAR (donde aterriza el lote).
     dir: VPath,
     /// Parejas from→to del modelo.
     entries: Vec<norte_proto::methods::AiRenameEntry>,
-    /// Veredicto del lote, o `None` si el core no pudo planificar.
-    plan: Option<norte_proto::methods::FsRenameBatchPlanResult>,
+    /// Veredicto del lote: en vuelo, resuelto, o fallido.
+    plan: norte_frontend::BatchPlan,
+}
+
+/// Petición `fs.rename_batch_plan` EN VUELO (§17). Spawneada por el mismo
+/// motivo que [`AiRenameRun`]: es un `fs.list` del dir entero contra el
+/// provider que toque, y esperarla dentro del `select!` dejaría el loop sin
+/// dibujar, sin leer teclas y sin poder cancelar. A lo sumo una — el prompt
+/// del rename IA no abre sobre otro modal, así que no hay dos planes IA
+/// vivos a la vez que pudieran pisarse.
+struct RenameBatchRun {
+    /// La llamada al core, spawneada.
+    handle: tokio::task::JoinHandle<Result<norte_proto::methods::FsRenameBatchPlanResult, Error>>,
 }
 
 /// Hits que pide la búsqueda semántica (M4-IA-2): compartido con la GUI
@@ -1562,6 +1572,9 @@ async fn run(
     // de `App` es específica de aprobaciones) y se abre en cuanto no haya
     // modal — jamás pisar (disciplina `open_next_pending`).
     let mut pending_ai_plan: Option<PendingAiPlan> = None;
+    // Petición fs.rename_batch_plan en vuelo (§17): a lo sumo una, cosechada
+    // en el select como `ai_rename_run`.
+    let mut rename_batch_run: Option<RenameBatchRun> = None;
     // Búsqueda semántica en vuelo (M4-IA-2): mismo molde que `ai_rename_run`
     // — a lo sumo una, relanzar aborta la anterior, Esc (BROWSE) cancela.
     let mut semantic_run: Option<SemanticRun> = None;
@@ -1865,13 +1878,41 @@ async fn run(
                             // `plan_hash` para que confirmar haga algo, y un
                             // plan retenido tras otro modal no tendría quién
                             // se lo pidiera después.
-                            let (lote, aviso) =
-                                rename_batch_preview(backend, &run.dir, &plan.entries).await;
-                            app.message = aviso;
+                            //
+                            // SPAWNEADO, como la llamada al modelo: contra un
+                            // dir enorme o un daemon lento esto es un `fs.list`
+                            // entero, y esperarlo aquí congelaría el loop —
+                            // sin dibujo, sin teclas, sin Esc. El modal abre en
+                            // `Pending` y se rellena solo.
+                            //
+                            // Cinturón fail-loud COMPARTIDO con la GUI (audit
+                            // MAJOR-2): una pareja que no es un `Segment`
+                            // delata un daemon hostil/roto — ni se le pide
+                            // plan al core, y confirmar queda muerto.
+                            let estado = if let Some(pairs) =
+                                norte_frontend::rename_pairs(&plan.entries)
+                            {
+                                let b = backend.clone();
+                                let d = run.dir.clone();
+                                let handle =
+                                    tokio::spawn(
+                                        async move { b.rename_batch_plan(&d, &pairs).await },
+                                    );
+                                if let Some(old) =
+                                    rename_batch_run.replace(RenameBatchRun { handle })
+                                {
+                                    old.handle.abort();
+                                }
+                                app.message = None;
+                                norte_frontend::BatchPlan::Pending
+                            } else {
+                                app.message = Some(t("msg-ai-rename-invalid-plan"));
+                                norte_frontend::BatchPlan::Failed
+                            };
                             let ready = PendingAiPlan {
                                 dir: run.dir,
                                 entries: plan.entries,
-                                plan: lote,
+                                plan: estado,
                             };
                             if app.modal.is_none() {
                                 app.modal = Some(Modal::AiRenamePlan {
@@ -1899,6 +1940,40 @@ async fn run(
                         // (Un pánico del future del backend cae aquí también:
                         // no hay plan que abrir, el run ya está cosechado.)
                         Err(_join) => {}
+                    }
+                }
+            }
+            res = async {
+                // fs.rename_batch_plan en vuelo (§17): cosecha sin bloquear,
+                // molde del brazo de `ai_rename_run`.
+                match &mut rename_batch_run {
+                    Some(r) => (&mut r.handle).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if rename_batch_run.take().is_some() {
+                    let estado = match res {
+                        Ok(Ok(plan)) => norte_frontend::BatchPlan::Ready(Box::new(plan)),
+                        Ok(Err(e)) => {
+                            app.message = Some(ta(
+                                "msg-rename-batch-plan-failed",
+                                &[("error", &detail_for_bar(&error_category(&e)))],
+                            ));
+                            norte_frontend::BatchPlan::Failed
+                        }
+                        // Abortado (otra petición lo relevó) o pánico del
+                        // future: no hay plan y no hay nada más que decir —
+                        // quien lo relevó ya puso SU mensaje.
+                        Err(_join) => norte_frontend::BatchPlan::Failed,
+                    };
+                    // El modal puede estar abierto, RETENIDO tras otro, o ya
+                    // cerrado por el humano. En los dos primeros casos se
+                    // rellena; en el tercero la respuesta se tira.
+                    if !app.settle_ai_batch_plan(&estado)
+                        && let Some(p) = &mut pending_ai_plan
+                        && p.plan == norte_frontend::BatchPlan::Pending
+                    {
+                        p.plan = estado;
                     }
                 }
             }
@@ -6014,7 +6089,7 @@ async fn on_dialog_key(
                 Modal::AiRenamePlan {
                     dir, entries, plan, ..
                 } => {
-                    apply_ai_rename(app, backend, &dir, &entries, plan.as_ref()).await;
+                    apply_ai_rename(app, backend, &dir, &entries, &plan).await;
                 }
                 // M4-IA-2: confirmar NAVEGA al hit bajo el cursor
                 // (`semantic_hit_cd`). El `Cd` vuelve al caller (apply_cd +
@@ -6177,40 +6252,6 @@ async fn submit_transfer(
     }
 }
 
-/// Pide al core el plan REVISABLE del lote (`fs.rename_batch_plan`, spec
-/// §17) para las parejas que propuso la IA. NO muta nada: es la vista previa
-/// que el humano aprueba, y el `plan_hash` que devuelve es lo que ata esa
-/// aprobación a lo que se ejecuta.
-///
-/// Devuelve `(plan, aviso para la barra)`. Un fallo deja el plan en `None` —
-/// el modal abre igual, con las parejas visibles y confirmar deshabilitado
-/// ([`norte_tui::app::dialog_action`]): sin hash aprobado no hay nada
-/// honesto que mandar.
-async fn rename_batch_preview(
-    backend: &Backend,
-    dir: &VPath,
-    entries: &[norte_proto::methods::AiRenameEntry],
-) -> (
-    Option<norte_proto::methods::FsRenameBatchPlanResult>,
-    Option<String>,
-) {
-    // Cinturón fail-loud COMPARTIDO con la GUI (audit MAJOR-2): una pareja
-    // inválida delata un daemon hostil/roto — ni se pide el plan.
-    let Some(pairs) = norte_frontend::rename_pairs(entries) else {
-        return (None, Some(t("msg-ai-rename-invalid-plan")));
-    };
-    match backend.rename_batch_plan(dir, &pairs).await {
-        Ok(plan) => (Some(plan), None),
-        Err(e) => (
-            None,
-            Some(ta(
-                "msg-rename-batch-plan-failed",
-                &[("error", &detail_for_bar(&error_category(&e)))],
-            )),
-        ),
-    }
-}
-
 /// Aplica un plan de rename IA CONFIRMADO (M4-IA) por el ejecutor
 /// TRANSACCIONAL de lotes (spec §17, ADR 0042): UNA task, UNA unidad
 /// deshacible del journal, rollback si un paso falla.
@@ -6237,27 +6278,28 @@ async fn apply_ai_rename(
     backend: &Backend,
     dir: &VPath,
     entries: &[norte_proto::methods::AiRenameEntry],
-    plan: Option<&norte_proto::methods::FsRenameBatchPlanResult>,
+    plan: &norte_frontend::BatchPlan,
 ) {
     let Some(pairs) = norte_frontend::rename_pairs(entries) else {
         app.message = Some(t("msg-ai-rename-invalid-plan"));
         return;
     };
-    let Some(plan) = plan else {
+    let Some(resuelto) = plan.ready() else {
         app.message = Some(t("msg-rename-batch-no-plan"));
         return;
     };
-    if !plan.executable {
+    if !resuelto.executable {
         app.message = Some(t("msg-rename-batch-collisions"));
         return;
     }
-    match backend.rename_batch(dir, &pairs, &plan.plan_hash).await {
+    // Lo que se anuncia son los renames que el core se comprometió a hacer,
+    // no las parejas PEDIDAS: el planificador tira las nulas (`from == to`),
+    // y prometer más de lo que va a pasar es mentir en la barra.
+    let n = plan.real_steps();
+    match backend.rename_batch(dir, &pairs, &resuelto.plan_hash).await {
         Ok(task) => {
             app.board.push(task, None);
-            app.message = Some(ta(
-                "msg-rename-batch-applied",
-                &[("n", &pairs.len().to_string())],
-            ));
+            app.message = Some(ta("msg-rename-batch-applied", &[("n", &n.to_string())]));
         }
         Err(e) => {
             app.message = Some(ta(

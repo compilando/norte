@@ -52,17 +52,24 @@ modal-rename-batch-plan-hint-blocked = n/Esc: discard
 modal-rename-batch-pending = batch: checking…
 modal-rename-batch-applicable = batch: applicable — one task, one undo
 modal-rename-batch-not-applicable = batch: NOT applicable — nothing will be renamed
+# The check itself did not happen (or failed). Distinct from "checking…": that
+# one resolves by itself, this one does not, and a spinner that never advances
+# is a lie. The reason went to the bar.
+modal-rename-batch-unchecked = batch: NOT checked — nothing will be renamed
 # Planner machinery: renames through a temporary name to break a cycle. Only
 # the COUNT is shown; the temporary names are never presented as proposals.
 modal-rename-batch-temp = via { $n } internal step(s) (a cycle needs a detour)
 # One collision per line. The offending name goes LAST so a truncation can
 # never swallow the verdict.
 modal-rename-batch-collision = ✗ { $n }. { $kind }: { $name }
+# Same line for a verdict whose pair_index does not point at any row of the
+# request: the index is dropped rather than pointing at a row that is not there.
+modal-rename-batch-collision-unindexed = ✗ { $kind }: { $name }
 modal-rename-batch-collision-internal = another pair took it
 modal-rename-batch-collision-external = already exists
-modal-rename-batch-collision-absent-source = source not in the directory
-modal-rename-batch-collision-ambiguous-source = source matches two files
-modal-rename-batch-collision-unknown = rejected (reason unknown to this build)
+modal-rename-batch-collision-absent-source = source not there
+modal-rename-batch-collision-ambiguous-source = ambiguous source
+modal-rename-batch-collision-unknown = unknown verdict
 modal-rename-batch-collision-more = … { $shown }/{ $total } collisions
 modal-semantic = Semantic search
 modal-semantic-hint = Enter searches · Esc cancels
@@ -258,7 +265,6 @@ gui-msg-ai-rename-running = AI rename: thinking…
 gui-msg-ai-rename-superseded = AI rename: previous plan discarded (new request)
 msg-ai-rename-empty = AI rename: the model proposed no changes
 msg-ai-rename-failed = AI rename failed: { $error }
-msg-ai-rename-applied = AI rename: { $n } move(s) submitted
 msg-ai-rename-invalid-plan = AI rename: invalid plan from the daemon — nothing applied
 msg-ai-rename-in-search = AI rename is not available in a search pane
 # The AI plan is applied through the transactional batch executor (spec §17):

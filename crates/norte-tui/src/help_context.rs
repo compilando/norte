@@ -253,7 +253,7 @@ mod tests {
                     to: "b".into(),
                 }],
                 offset: 0,
-                plan: None,
+                plan: norte_frontend::BatchPlan::Pending,
             },
             Modal::SemanticQuery {
                 query: "facturas".into(),

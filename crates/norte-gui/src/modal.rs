@@ -153,10 +153,10 @@ pub enum Modal {
         /// ADR 0042): veredictos, si es aplicable y el `plan_hash` que hay
         /// que devolver para ejecutar EXACTAMENTE lo que se enseñó.
         ///
-        /// `None` mientras está en vuelo o si el core no pudo planificar — y
-        /// sin plan no hay hash aprobado, así que `y`/`enter` queda MUDO
-        /// ([`on_key`] contesta `Ignored`) y el pie deja de ofrecerlo.
-        plan: Option<norte_proto::methods::FsRenameBatchPlanResult>,
+        /// Sin un plan APLICABLE `y`/`enter` queda MUDO ([`on_key`] contesta
+        /// `Ignored`) y el pie deja de ofrecerlo: no hay hash aprobado que
+        /// mandar.
+        plan: norte_frontend::BatchPlan,
     },
     /// Renombrar in situ (`pane.rename`, shift+F6 — paridad de SEMÁNTICA con
     /// el `TransferName` de la TUI en su modo rename, no de widget).
@@ -479,7 +479,10 @@ pub fn on_key(modal: &mut Modal, key: &str, key_char: Option<&str>) -> ModalOutc
                 // de ofrecerla (paridad con el gate de `dialog_action` en la
                 // TUI) — la decisión de si un lote se puede ejecutar es del
                 // core, aquí solo se lee `executable`.
-                let Some(plan) = plan.as_ref().filter(|p| p.executable) else {
+                if !plan.confirmable() {
+                    return ModalOutcome::Ignored;
+                }
+                let Some(resuelto) = plan.ready() else {
                     return ModalOutcome::Ignored;
                 };
                 // UNA op para el lote entero: una task, un deshacer, y el
@@ -487,7 +490,7 @@ pub fn on_key(modal: &mut Modal, key: &str, key_char: Option<&str>) -> ModalOutc
                 ModalOutcome::Submit(vec![PendingOp::RenameBatch {
                     dir: dir.clone(),
                     pairs,
-                    plan_hash: plan.plan_hash.clone(),
+                    plan_hash: resuelto.plan_hash.clone(),
                 }])
             }
             "n" | "escape" => ModalOutcome::Dismiss,
@@ -823,14 +826,15 @@ mod tests {
         assert_eq!(query, b"a", "la ñ (2 bytes) se retiró entera");
     }
 
-    /// Plan de lote (`fs.rename_batch_plan`) con el veredicto que se pida.
-    fn batch_plan(executable: bool) -> norte_proto::methods::FsRenameBatchPlanResult {
-        norte_proto::methods::FsRenameBatchPlanResult {
+    /// Plan de lote (`fs.rename_batch_plan`) con el veredicto que se pida, ya
+    /// en el estado «el core contestó».
+    fn batch_plan(executable: bool) -> norte_frontend::BatchPlan {
+        norte_frontend::BatchPlan::Ready(Box::new(norte_proto::methods::FsRenameBatchPlanResult {
             steps: Vec::new(),
             collisions: Vec::new(),
             executable,
             plan_hash: norte_proto::methods::PlanHash::parse(&"0".repeat(64)).expect("64 hex"),
-        }
+        }))
     }
 
     /// §17: `y` aplica el plan como UN lote transaccional (`fs.rename_batch`,
@@ -846,7 +850,7 @@ mod tests {
             dir: vp("mem:///docs"),
             entries: vec![entry],
             offset: 0,
-            plan: Some(plan.clone()),
+            plan: plan.clone(),
         };
         assert_eq!(
             on_key(&mut m, "y", None),
@@ -856,7 +860,7 @@ mod tests {
                     from: norte_proto::Segment::new(b"a.txt".to_vec()).expect("segmento"),
                     to: norte_proto::Segment::new(b"b.txt".to_vec()).expect("segmento"),
                 }],
-                plan_hash: plan.plan_hash.clone(),
+                plan_hash: plan.ready().expect("listo").plan_hash.clone(),
             }])
         );
         assert_eq!(on_key(&mut m, "n", None), ModalOutcome::Dismiss);
@@ -873,7 +877,11 @@ mod tests {
     /// en las dos vueltas y rompe este test.)
     #[test]
     fn ai_plan_no_somete_sin_un_lote_aplicable() {
-        for plan in [None, Some(batch_plan(false))] {
+        for plan in [
+            norte_frontend::BatchPlan::Pending,
+            norte_frontend::BatchPlan::Failed,
+            batch_plan(false),
+        ] {
             let mut m = Modal::AiRenamePlan {
                 dir: vp("mem:///docs"),
                 entries: vec![norte_proto::methods::AiRenameEntry {
@@ -909,7 +917,7 @@ mod tests {
                 offset: 0,
                 // Con un lote aplicable: lo que aborta es el CINTURÓN de las
                 // parejas, que corre ANTES de mirar el plan.
-                plan: Some(batch_plan(true)),
+                plan: batch_plan(true),
             };
             assert_eq!(on_key(&mut m, "y", None), ModalOutcome::InvalidPlan);
             assert_eq!(on_key(&mut m, "enter", None), ModalOutcome::InvalidPlan);
@@ -931,7 +939,7 @@ mod tests {
             dir: vp("mem:///d"),
             entries,
             offset: 0,
-            plan: Some(batch_plan(true)),
+            plan: batch_plan(true),
         };
         for expected in [1, 2, 2, 2] {
             assert_eq!(on_key(&mut m, "down", None), ModalOutcome::StayOpen);

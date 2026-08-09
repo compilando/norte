@@ -117,6 +117,24 @@ pub fn rename_pairs(
 /// aplicable un plan que el core marcó como no aplicable.
 pub const RENAME_COLLISION_LIMIT: usize = 5;
 
+/// Celdas a las que se acota la línea ENTERA de una colisión.
+///
+/// El presupuesto es de la LÍNEA, no del nombre, porque lo que hay que
+/// impedir es el recorte mudo por la derecha que hace cada frontend cuando la
+/// línea no cabe (el ancho de la caja en la TUI —suelo de 60 columnas, 56 de
+/// interior con bordes y padding—, el `.truncate()` del div en la GUI). Del
+/// presupuesto se descuenta lo que ocupa el prefijo YA TRADUCIDO —marca,
+/// índice de pareja y veredicto— y lo que sobra es lo que se le da al nombre:
+/// un veredicto largo (o un locale con etiquetas largas) acorta el nombre en
+/// vez de empujarlo fuera de la caja sin marca.
+const COLLISION_LINE_COLS: usize = 56;
+
+/// Suelo de celdas para el nombre ofensor: por muy largo que sea el
+/// veredicto, el nombre no se queda en nada. Si el prefijo se come el
+/// presupuesto, quien se recorta es la línea —marcada por `middle_ellipsis`—
+/// y no el nombre hasta desaparecer.
+const COLLISION_NAME_MIN_COLS: usize = 12;
+
 /// Clave Fluent del VEREDICTO de una colisión de lote (spec §17): única
 /// fuente para TUI y GUI — el frontend pinta la etiqueta, jamás deduce el
 /// veredicto.
@@ -152,65 +170,196 @@ pub fn collision_kind_key(kind: norte_proto::methods::RenameCollisionKind) -> &'
     }
 }
 
-/// Clave Fluent del ESTADO del plan de lote que se enseña bajo las parejas:
-/// `None` = todavía en vuelo, `Some` aplicable, `Some` no aplicable. Única
-/// fuente para TUI y GUI.
+/// En qué punto está el plan de lote (`fs.rename_batch_plan`, spec §17) que
+/// el modal del rename IA necesita para poder confirmar.
 ///
-/// Lee `executable`, JAMÁS `collisions.is_empty()`: el campo es normativo
-/// (ver su rustdoc en `norte_proto`) y un veredicto futuro puede parar un
-/// plan sin nombre ofensor que listar.
+/// Tres estados y no un `Option`, porque «todavía no ha contestado» y «no va
+/// a contestar» no se le pueden enseñar igual al humano: el primero se
+/// resuelve solo, el segundo no, y una etiqueta de «comprobando…» que no
+/// avanza nunca es una mentira con forma de spinner.
 ///
-/// ```
-/// use norte_proto::methods::{FsRenameBatchPlanResult, PlanHash};
-/// assert_eq!(
-///     norte_frontend::plan_status_key(None),
-///     "modal-rename-batch-pending",
-/// );
-/// let p = FsRenameBatchPlanResult {
-///     steps: vec![],
-///     collisions: vec![],
-///     executable: true,
-///     plan_hash: PlanHash::parse(&"0".repeat(64)).expect("hex"),
-/// };
-/// assert_eq!(
-///     norte_frontend::plan_status_key(Some(&p)),
-///     "modal-rename-batch-applicable",
-/// );
-/// ```
-#[must_use]
-pub fn plan_status_key(
-    plan: Option<&norte_proto::methods::FsRenameBatchPlanResult>,
-) -> &'static str {
-    match plan {
-        None => "modal-rename-batch-pending",
-        Some(p) if p.executable => "modal-rename-batch-applicable",
-        Some(_) => "modal-rename-batch-not-applicable",
-    }
+/// El tipo es COMPARTIDO por TUI y GUI, y con él toda la política de
+/// presentación del veredicto ([`Self::status_key`],
+/// [`Self::detail_lines`]): las dos superficies pintan nombres que un
+/// atacante controla, y una sola de las dos derivando por su cuenta es
+/// exactamente cómo se pierde el saneado en una de ellas sin que nadie lo
+/// note (`norte-gui` está FUERA del workspace y `just ci` no la compila).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchPlan {
+    /// Pedido al core y en vuelo: el modal abre y se rellena.
+    Pending,
+    /// El core contestó.
+    Ready(Box<norte_proto::methods::FsRenameBatchPlanResult>),
+    /// El core no pudo contestar (o ni se le pudo preguntar). El motivo
+    /// concreto fue a la barra; aquí solo se sabe que NO hay plan, y sin plan
+    /// no hay `plan_hash` aprobado que mandar.
+    Failed,
 }
 
-/// Cuántos pasos del plan son MAQUINARIA del planificador (temporales que
-/// rompen un ciclo). Se cuenta, jamás se enseña el nombre: un
-/// `.norte-rename-…` no es nada que el humano haya pedido, y pintarlo entre
-/// sus parejas le haría creer que norte va a dejar ese nombre en el disco.
-///
-/// ```
-/// use norte_proto::Segment;
-/// use norte_proto::methods::{FsRenameBatchPlanResult, PlanHash, RenameStep};
-/// let seg = |b: &[u8]| Segment::new(b.to_vec()).expect("segmento");
-/// let p = FsRenameBatchPlanResult {
-///     steps: vec![
-///         RenameStep { from: seg(b"a"), to: seg(b".norte-rename-0"), temp: true },
-///         RenameStep { from: seg(b"b"), to: seg(b"a"), temp: false },
-///     ],
-///     collisions: vec![],
-///     executable: true,
-///     plan_hash: PlanHash::parse(&"0".repeat(64)).expect("hex"),
-/// };
-/// assert_eq!(norte_frontend::plan_temp_steps(&p), 1);
-/// ```
-#[must_use]
-pub fn plan_temp_steps(plan: &norte_proto::methods::FsRenameBatchPlanResult) -> usize {
-    plan.steps.iter().filter(|s| s.temp).count()
+impl BatchPlan {
+    /// El plan si lo hay. `None` en [`Self::Pending`] y [`Self::Failed`].
+    #[must_use]
+    pub fn ready(&self) -> Option<&norte_proto::methods::FsRenameBatchPlanResult> {
+        match self {
+            Self::Ready(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Si confirmar puede hacer algo: hace falta un plan y que el CORE lo
+    /// haya marcado aplicable. Única fuente del gate en ambos frontends — la
+    /// TUI enmudece sus comandos de confirmar y la GUI su tecla, y las dos
+    /// preguntan aquí.
+    ///
+    /// Lee `executable`, JAMÁS `collisions.is_empty()`: el campo es normativo
+    /// (ver su rustdoc en `norte_proto`) y un veredicto futuro puede parar un
+    /// plan sin nombre ofensor que listar.
+    ///
+    /// ```
+    /// use norte_frontend::BatchPlan;
+    /// assert!(!BatchPlan::Pending.confirmable());
+    /// assert!(!BatchPlan::Failed.confirmable());
+    /// ```
+    #[must_use]
+    pub fn confirmable(&self) -> bool {
+        self.ready().is_some_and(|p| p.executable)
+    }
+
+    /// Clave Fluent del ESTADO, la línea que va ARRIBA del modal (junto al
+    /// dir, antes de las parejas): un modal más alto que el terminal se
+    /// recorta por abajo, y de todo el cuerpo esta es la línea que no puede
+    /// perderse.
+    ///
+    /// ```
+    /// use norte_frontend::BatchPlan;
+    /// assert_eq!(BatchPlan::Pending.status_key(), "modal-rename-batch-pending");
+    /// assert_eq!(BatchPlan::Failed.status_key(), "modal-rename-batch-unchecked");
+    /// ```
+    #[must_use]
+    pub fn status_key(&self) -> &'static str {
+        match self {
+            Self::Pending => "modal-rename-batch-pending",
+            Self::Failed => "modal-rename-batch-unchecked",
+            Self::Ready(p) if p.executable => "modal-rename-batch-applicable",
+            Self::Ready(_) => "modal-rename-batch-not-applicable",
+        }
+    }
+
+    /// Cuántos pasos del plan son MAQUINARIA del planificador (temporales que
+    /// rompen un ciclo). Se cuentan, jamás se enseña el nombre: un
+    /// `.norte-rename-…` no es nada que el humano haya pedido, y pintarlo
+    /// entre sus parejas le haría creer que norte va a dejar ese nombre en su
+    /// disco.
+    #[must_use]
+    pub fn temp_steps(&self) -> usize {
+        self.ready()
+            .map_or(0, |p| p.steps.iter().filter(|s| s.temp).count())
+    }
+
+    /// Renames que este lote va a hacer DE VERDAD: los pasos que no son
+    /// maquinaria. No es `pairs.len()`: el planificador tira las parejas
+    /// nulas (`from == to`), así que contar lo PEDIDO le prometería al humano
+    /// más renombrados de los que el core se comprometió a hacer.
+    #[must_use]
+    pub fn real_steps(&self) -> usize {
+        self.ready()
+            .map_or(0, |p| p.steps.iter().filter(|s| !s.temp).count())
+    }
+
+    /// El DETALLE del veredicto, que va BAJO las parejas: la maquinaria del
+    /// planificador (su número) y las colisiones, UNA POR LÍNEA, hasta
+    /// [`RENAME_COLLISION_LIMIT`] más un resumen de las que no caben.
+    ///
+    /// Cada línea vuelve con su flag HOSTIL: el badge lo pone cada frontend
+    /// (la TUI usa `!` ASCII, la GUI `⚠`), pero el saneado —quién se
+    /// enmascara, quién se acorta y por dónde— se decide aquí una sola vez.
+    ///
+    /// `pair_count` es cuántas parejas tiene la petición, y sirve para UNA
+    /// cosa: un `pair_index` que se salga de ella no se pinta. Un daemon
+    /// hostil que conteste «pareja 41» sobre un plan de 3 no puede hacer que
+    /// el modal señale una fila que no existe; la línea pierde el índice y
+    /// conserva el veredicto.
+    #[must_use]
+    pub fn detail_lines(&self, pair_count: usize) -> Vec<(String, bool)> {
+        let mut lines = Vec::new();
+        let Some(plan) = self.ready() else {
+            return lines;
+        };
+        let temps = self.temp_steps();
+        if temps > 0 {
+            lines.push((
+                norte_i18n::ta("modal-rename-batch-temp", &[("n", &temps.to_string())]),
+                false,
+            ));
+        }
+        let shown = plan.collisions.len().min(RENAME_COLLISION_LIMIT);
+        for c in plan.collisions.iter().take(shown) {
+            let (name, hostil) = crate::display_name(c.name.as_bytes());
+            let kind = norte_i18n::t(collision_kind_key(c.kind));
+            // El índice de pareja es 1-based, como la etiqueta del `from`, y
+            // solo se pinta si de verdad señala una fila de la petición.
+            let indexado = (c.pair_index as usize) < pair_count;
+            let render = |name: &str| {
+                if indexado {
+                    norte_i18n::ta(
+                        "modal-rename-batch-collision",
+                        &[
+                            ("n", &c.pair_index.saturating_add(1).to_string()),
+                            ("kind", &kind),
+                            ("name", name),
+                        ],
+                    )
+                } else {
+                    norte_i18n::ta(
+                        "modal-rename-batch-collision-unindexed",
+                        &[("kind", &kind), ("name", name)],
+                    )
+                }
+            };
+            // El presupuesto del nombre sale de lo que MIDE el prefijo ya
+            // traducido, no de una constante adivinada contra la etiqueta más
+            // corta: se pinta la línea con el nombre vacío, se mide, y lo que
+            // queda del presupuesto de línea es lo que se le da al nombre.
+            let prefijo = crate::cells(&render(""));
+            let presupuesto = COLLISION_LINE_COLS
+                .saturating_sub(prefijo)
+                .max(COLLISION_NAME_MIN_COLS);
+            lines.push((render(&crate::middle_ellipsis(&name, presupuesto)), hostil));
+        }
+        if plan.collisions.len() > shown {
+            // Lo escondido no se cuela limpio (molde del indicador de
+            // parejas): una colisión OCULTA con nombre hostil marca el
+            // resumen.
+            let hidden_hostil = plan
+                .collisions
+                .iter()
+                .skip(shown)
+                .any(|c| crate::display_name(c.name.as_bytes()).1);
+            lines.push((
+                norte_i18n::ta(
+                    "modal-rename-batch-collision-more",
+                    &[
+                        ("shown", &shown.to_string()),
+                        ("total", &plan.collisions.len().to_string()),
+                    ],
+                ),
+                hidden_hostil,
+            ));
+        }
+        lines
+    }
+
+    /// Cuántas líneas pinta [`Self::detail_lines`], sin construirlas. El alto
+    /// del modal de la TUI se recalcula en CADA frame; interpolar Fluent y
+    /// alocar un `Vec<String>` solo para contar sería trabajo por frame.
+    #[must_use]
+    pub fn detail_line_count(&self) -> usize {
+        let Some(plan) = self.ready() else {
+            return 0;
+        };
+        let shown = plan.collisions.len().min(RENAME_COLLISION_LIMIT);
+        usize::from(self.temp_steps() > 0) + shown + usize::from(plan.collisions.len() > shown)
+    }
 }
 
 /// Cinturón de INGESTIÓN de los hits semánticos (M4-IA-2, paridad con el
@@ -351,6 +500,257 @@ mod ai_plan_tests {
     #[test]
     fn un_plan_vacio_es_valido() {
         assert_eq!(validate_ai_plan(&[]).expect("vacío válido").len(), 0);
+    }
+
+    /// Regla 1, en la costura: `AiRenameEntry` viaja como `String` porque el
+    /// core rechaza fail-loud un dir con nombres no-UTF8 ANTES de llamar al
+    /// proveedor, así que su `from_utf8_lossy` es la identidad. Eso valía
+    /// mientras el valor solo se PINTABA; ahora es el `from` de un rename de
+    /// verdad, y lo que hay que pinear es qué pasa si esa premisa se rompiera:
+    /// un `U+FFFD` es un `Segment` perfectamente legal, así que la pareja
+    /// viaja tal cual y el core contesta `AbsentSource` — el lote no ejecuta
+    /// NADA. Falla cerrado, nunca renombra el fichero equivocado.
+    #[test]
+    fn un_nombre_con_residuo_lossy_viaja_tal_cual_y_muere_en_el_core() {
+        let pares = super::rename_pairs(&[e("caf\u{FFFD}.txt", "cafe.txt")]).expect("segmento");
+        assert_eq!(
+            pares[0].from.as_bytes(),
+            "caf\u{FFFD}.txt".as_bytes(),
+            "el frontend no inventa bytes: manda lo que le dieron",
+        );
+    }
+}
+
+#[cfg(test)]
+mod batch_plan_tests {
+    use super::{BatchPlan, COLLISION_LINE_COLS, RENAME_COLLISION_LIMIT};
+    use norte_i18n::Lang;
+    use norte_proto::Segment;
+    use norte_proto::methods::{
+        FsRenameBatchPlanResult, PlanHash, RenameCollision, RenameCollisionKind, RenameStep,
+    };
+
+    fn seg(b: &[u8]) -> Segment {
+        Segment::new(b.to_vec()).expect("segmento")
+    }
+
+    fn listo(
+        collisions: Vec<RenameCollision>,
+        steps: Vec<RenameStep>,
+        executable: bool,
+    ) -> BatchPlan {
+        BatchPlan::Ready(Box::new(FsRenameBatchPlanResult {
+            steps,
+            collisions,
+            executable,
+            plan_hash: PlanHash::parse(&"0".repeat(64)).expect("64 hex"),
+        }))
+    }
+
+    fn colision(pair_index: u32, name: &[u8], kind: RenameCollisionKind) -> RenameCollision {
+        RenameCollision {
+            pair_index,
+            name: seg(name),
+            kind,
+        }
+    }
+
+    /// Los tres estados dicen cosas DISTINTAS y solo uno deja confirmar. Sin
+    /// esto, «en vuelo» y «no se pudo comprobar» se pintarían igual y el
+    /// segundo sería un spinner que no avanza nunca.
+    #[test]
+    fn los_tres_estados_no_se_confunden() {
+        assert!(!BatchPlan::Pending.confirmable());
+        assert!(!BatchPlan::Failed.confirmable());
+        assert!(!listo(vec![], vec![], false).confirmable());
+        assert!(listo(vec![], vec![], true).confirmable());
+        let claves = [
+            BatchPlan::Pending.status_key(),
+            BatchPlan::Failed.status_key(),
+            listo(vec![], vec![], true).status_key(),
+            listo(vec![], vec![], false).status_key(),
+        ];
+        for (i, a) in claves.iter().enumerate() {
+            for b in &claves[i + 1..] {
+                assert_ne!(a, b, "dos estados con la misma etiqueta: {a}");
+            }
+        }
+        // Sin plan no hay detalle que pintar (ni una línea fantasma).
+        assert!(BatchPlan::Pending.detail_lines(1).is_empty());
+        assert!(BatchPlan::Failed.detail_lines(1).is_empty());
+    }
+
+    /// El VEREDICTO es lo accionable y va antes del nombre, en los DOS
+    /// locales: un traductor que reordenase `{ $name }` delante de `{ $kind }`
+    /// dejaría el veredicto a merced del recorte mudo por la derecha.
+    #[test]
+    fn el_veredicto_precede_al_nombre_en_los_dos_locales() {
+        let plan = listo(
+            vec![colision(0, b"zzzzz.txt", RenameCollisionKind::External)],
+            vec![],
+            false,
+        );
+        for lang in [Lang::En, Lang::Es] {
+            let _ = norte_i18n::force(lang);
+            let verdicto = norte_i18n::t(super::collision_kind_key(RenameCollisionKind::External));
+            let (linea, _) = plan.detail_lines(1).remove(0);
+            let iv = linea.find(&verdicto).expect("el veredicto está");
+            let inom = linea.find("zzzzz.txt").expect("el nombre está");
+            assert!(iv < inom, "{lang:?}: veredicto DESPUÉS del nombre: {linea}");
+        }
+        let _ = norte_i18n::force(Lang::En);
+    }
+
+    /// El presupuesto es de la LÍNEA: con la etiqueta más larga de cada
+    /// locale y un nombre kilométrico, la línea entera sigue cabiendo — quien
+    /// se acorta es el nombre, y el recorte va MARCADO.
+    #[test]
+    fn la_linea_entera_cabe_en_su_presupuesto_en_los_dos_locales() {
+        let largo = vec![b'x'; 300];
+        for lang in [Lang::En, Lang::Es] {
+            let _ = norte_i18n::force(lang);
+            for kind in [
+                RenameCollisionKind::Internal,
+                RenameCollisionKind::External,
+                RenameCollisionKind::AbsentSource,
+                RenameCollisionKind::AmbiguousSource,
+                RenameCollisionKind::Unknown,
+            ] {
+                let plan = listo(vec![colision(0, &largo, kind)], vec![], false);
+                let (linea, _) = plan.detail_lines(1).remove(0);
+                assert!(
+                    crate::cells(&linea) <= COLLISION_LINE_COLS,
+                    "{lang:?} {kind:?}: {} celdas > {COLLISION_LINE_COLS}: {linea}",
+                    crate::cells(&linea),
+                );
+                assert!(linea.contains('…'), "el recorte se MARCA: {linea}");
+            }
+        }
+        let _ = norte_i18n::force(Lang::En);
+    }
+
+    /// Dos nombres que solo se distinguen por la COLA no pueden renderizarse
+    /// idénticos: si el presupuesto se los come, la elipsis media conserva la
+    /// cola. (Mutación de control: cambiar `middle_ellipsis` por un truncado
+    /// por la derecha rompe este test.)
+    #[test]
+    fn dos_nombres_gemelos_por_la_cola_no_se_pintan_iguales() {
+        let _ = norte_i18n::force(Lang::Es);
+        let v2 = b"factura-2024-enero-final-revisada-v2.pdf";
+        let v3 = b"factura-2024-enero-final-revisada-v3.pdf";
+        let render = |n: &[u8]| {
+            listo(
+                vec![colision(0, n, RenameCollisionKind::Unknown)],
+                vec![],
+                false,
+            )
+            .detail_lines(1)
+            .remove(0)
+            .0
+        };
+        assert_ne!(render(v2), render(v3), "la cola distingue, y sobrevive");
+        let _ = norte_i18n::force(Lang::En);
+    }
+
+    /// Un `pair_index` que no señala ninguna fila de la petición se CAE: un
+    /// daemon hostil no puede hacer que el modal apunte a una pareja que no
+    /// existe. El veredicto y el nombre siguen ahí.
+    #[test]
+    fn un_indice_fuera_de_rango_no_senala_una_fila_inexistente() {
+        let _ = norte_i18n::force(Lang::En);
+        let plan = listo(
+            vec![colision(u32::MAX, b"z.txt", RenameCollisionKind::Internal)],
+            vec![],
+            false,
+        );
+        let (linea, _) = plan.detail_lines(3).remove(0);
+        assert!(
+            !linea.contains("4294967295") && !linea.contains("4294967296"),
+            "{linea}"
+        );
+        assert!(linea.contains("z.txt"), "{linea}");
+        // Con la petición de verdad detrás, el índice SÍ se pinta 1-based.
+        let plan = listo(
+            vec![colision(1, b"z.txt", RenameCollisionKind::Internal)],
+            vec![],
+            false,
+        );
+        assert!(plan.detail_lines(3).remove(0).0.contains("2."));
+    }
+
+    /// El tope de colisiones se respeta, el resumen no calla cuántas quedan
+    /// fuera, y `detail_line_count` cuenta EXACTAMENTE lo que se pinta (el
+    /// alto del modal de la TUI se calcula con él).
+    #[test]
+    fn el_tope_de_colisiones_y_el_contador_van_a_una() {
+        let _ = norte_i18n::force(Lang::En);
+        for n in [
+            0usize,
+            1,
+            RENAME_COLLISION_LIMIT,
+            RENAME_COLLISION_LIMIT + 3,
+        ] {
+            let cs: Vec<_> = (0..n)
+                .map(|i| {
+                    colision(
+                        u32::try_from(i).expect("cabe"),
+                        format!("f{i}.txt").as_bytes(),
+                        RenameCollisionKind::Internal,
+                    )
+                })
+                .collect();
+            let plan = listo(
+                cs,
+                vec![RenameStep {
+                    from: seg(b"a"),
+                    to: seg(b".norte-rename-0"),
+                    temp: true,
+                }],
+                false,
+            );
+            let lines = plan.detail_lines(n.max(1));
+            assert_eq!(lines.len(), plan.detail_line_count(), "n={n}");
+            assert!(
+                lines.len() <= 1 + RENAME_COLLISION_LIMIT + 1,
+                "n={n}: {lines:?}"
+            );
+            if n > RENAME_COLLISION_LIMIT {
+                let (resumen, _) = lines.last().expect("resumen");
+                assert!(resumen.contains(&n.to_string()), "n={n}: {resumen}");
+            }
+            // Un temporal se CUENTA, jamás se nombra.
+            assert!(!lines.iter().any(|(l, _)| l.contains(".norte-rename-")));
+        }
+    }
+
+    /// Cada nombre del corpus canónico: ninguna línea trae un hazard, ninguna
+    /// se parte en dos, y el enmascarado viene MARCADO para que el frontend
+    /// pueda ponerle su badge.
+    #[test]
+    fn barrido_del_corpus_en_el_nombre_ofensor() {
+        let _ = norte_i18n::force(Lang::En);
+        for fixture in norte_testkit::corpus::hostile_names() {
+            let plan = listo(
+                vec![colision(0, &fixture.bytes, RenameCollisionKind::External)],
+                vec![],
+                false,
+            );
+            let lines = plan.detail_lines(1);
+            assert_eq!(lines.len(), 1, "corpus {}: {lines:?}", fixture.id);
+            let (fila, marcado) = &lines[0];
+            assert!(
+                !fila.chars().any(norte_encoding::is_terminal_hazard),
+                "corpus {}: hazard vivo: {fila:?}",
+                fixture.id
+            );
+            assert!(!fila.contains('\n'), "corpus {}: {fila:?}", fixture.id);
+            assert_eq!(
+                *marcado,
+                crate::display_name(&fixture.bytes).1,
+                "corpus {}: el flag hostil tiene que llegar al frontend",
+                fixture.id
+            );
+        }
     }
 }
 

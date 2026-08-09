@@ -275,12 +275,12 @@ fn app() -> norte_tui::app::App {
 /// Plan de rename IA con una pareja y un plan de LOTE aplicable (fixture
 /// del test de allowlist: el caso en que confirmar SÍ tiene qué mandar).
 fn ai_plan() -> Modal {
-    ai_plan_con(Some(batch_plan(true)))
+    ai_plan_con(batch_plan(true))
 }
 
 /// El mismo fixture con el plan de lote que se le pase: `None` = todavía en
 /// vuelo, `Some(no ejecutable)` = el core lo paró con veredictos.
-fn ai_plan_con(plan: Option<norte_proto::methods::FsRenameBatchPlanResult>) -> Modal {
+fn ai_plan_con(plan: norte_frontend::BatchPlan) -> Modal {
     Modal::AiRenamePlan {
         dir: vp("file:///x"),
         entries: vec![norte_proto::methods::AiRenameEntry {
@@ -292,14 +292,15 @@ fn ai_plan_con(plan: Option<norte_proto::methods::FsRenameBatchPlanResult>) -> M
     }
 }
 
-/// Plan de lote de `fs.rename_batch_plan` con el veredicto que se pida.
-fn batch_plan(executable: bool) -> norte_proto::methods::FsRenameBatchPlanResult {
-    norte_proto::methods::FsRenameBatchPlanResult {
+/// Plan de lote de `fs.rename_batch_plan` con el veredicto que se pida, ya
+/// en el estado «el core contestó».
+fn batch_plan(executable: bool) -> norte_frontend::BatchPlan {
+    norte_frontend::BatchPlan::Ready(Box::new(norte_proto::methods::FsRenameBatchPlanResult {
         steps: Vec::new(),
         collisions: Vec::new(),
         executable,
         plan_hash: norte_proto::methods::PlanHash::parse(&"0".repeat(64)).expect("64 hex"),
-    }
+    }))
 }
 
 /// M4-IA: el prompt de instrucción sigue la disciplina de `Mkdir` (#104
@@ -380,7 +381,11 @@ fn plan_ia_confirma_como_confirmacion_no_como_aprobacion_de_agente() {
 /// `Some(Confirmed)` en las dos primeras vueltas y rompe este test.)
 #[test]
 fn plan_ia_no_confirma_sin_un_lote_aplicable() {
-    for plan in [None, Some(batch_plan(false))] {
+    for plan in [
+        norte_frontend::BatchPlan::Pending,
+        norte_frontend::BatchPlan::Failed,
+        batch_plan(false),
+    ] {
         let modal = ai_plan_con(plan);
         for cmd in ["dialog.confirm", "dialog.approve"] {
             assert_eq!(
@@ -406,6 +411,41 @@ fn plan_ia_no_confirma_sin_un_lote_aplicable() {
     assert_eq!(dialog_action(&prompt, "dialog.approve"), None);
 }
 
+/// §17: la respuesta de `fs.rename_batch_plan` llega ASÍNCRONA (el modal
+/// abre en `Pending` y se rellena), así que tiene que aterrizar en el modal
+/// abierto — y solo si ese modal sigue esperando. Una respuesta jamás pisa un
+/// plan ya resuelto, y sin modal no aterriza en ninguna parte.
+///
+/// (Mutación de control: quitar el guard de `Pending` hace que la segunda
+/// vuelta sobrescriba y rompe este test.)
+#[test]
+fn el_plan_del_lote_solo_rellena_al_modal_que_lo_esperaba() {
+    let mut app = app();
+    // Sin modal: la respuesta se tira, y lo DICE.
+    assert!(!app.settle_ai_batch_plan(&batch_plan(true)));
+
+    app.modal = Some(ai_plan_con(norte_frontend::BatchPlan::Pending));
+    assert!(app.settle_ai_batch_plan(&batch_plan(true)));
+    let Some(Modal::AiRenamePlan { plan, .. }) = &app.modal else {
+        panic!("modal inesperado: {:?}", app.modal);
+    };
+    assert!(plan.confirmable(), "el plan aterrizó: {plan:?}");
+
+    // Ya resuelto: una segunda respuesta NO lo pisa.
+    assert!(!app.settle_ai_batch_plan(&norte_frontend::BatchPlan::Failed));
+    let Some(Modal::AiRenamePlan { plan, .. }) = &app.modal else {
+        panic!("modal inesperado: {:?}", app.modal);
+    };
+    assert!(
+        plan.confirmable(),
+        "una respuesta tardía no degrada: {plan:?}"
+    );
+
+    // Otro modal encima: tampoco (el run loop lo busca en su stash).
+    app.modal = Some(confirm());
+    assert!(!app.settle_ai_batch_plan(&batch_plan(true)));
+}
+
 /// Audit MAJOR-3: el scroll del plan clampa la ventana a `[0, len - 5]`
 /// (jamás pasa de largo ni se hace negativo) y avanza/retrocede de una en
 /// una con numeración estable.
@@ -425,7 +465,7 @@ fn scroll_del_plan_clampa_en_ambos_extremos() {
             })
             .collect(),
         offset: 0,
-        plan: Some(batch_plan(true)),
+        plan: batch_plan(true),
     });
     app.ai_plan_scroll(false);
     assert_eq!(offset_de(&app), 0, "no retrocede bajo cero");

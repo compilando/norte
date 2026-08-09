@@ -491,12 +491,14 @@ fn modal_de_plan_ai_enmascara_y_no_oculta_el_destino() {
             to: "destino-final.txt".into(),
         }],
         offset: 0,
-        plan: Some(norte_proto::methods::FsRenameBatchPlanResult {
-            steps: Vec::new(),
-            collisions: Vec::new(),
-            executable: true,
-            plan_hash: norte_proto::methods::PlanHash::parse(&"0".repeat(64)).expect("64 hex"),
-        }),
+        plan: norte_frontend::BatchPlan::Ready(Box::new(
+            norte_proto::methods::FsRenameBatchPlanResult {
+                steps: Vec::new(),
+                collisions: Vec::new(),
+                executable: true,
+                plan_hash: norte_proto::methods::PlanHash::parse(&"0".repeat(64)).expect("64 hex"),
+            },
+        )),
     });
     let mut terminal = Terminal::new(TestBackend::new(60, 14)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
@@ -514,6 +516,63 @@ fn modal_de_plan_ai_enmascara_y_no_oculta_el_destino() {
     assert!(
         contenido.contains('→'),
         "flecha fuera de banda en la línea del destino: {contenido}"
+    );
+}
+
+/// §17: un plan grande con veredictos hace el modal MÁS ALTO que el
+/// terminal, y `centered` lo recorta por ABAJO. La línea que dice que el
+/// lote NO se puede aplicar va arriba, pegada al dir, precisamente por eso:
+/// un recorte puede comerse la cola de las colisiones, jamás el veredicto.
+///
+/// (Mutación de control: mover el estado del lote al final del cuerpo — que
+/// es donde estaba— hace que este test no lo encuentre.)
+#[test]
+fn el_veredicto_del_lote_sobrevive_a_un_terminal_corto() {
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir.clone(), Vec::new()),
+    );
+    let entries: Vec<_> = (1..=8)
+        .map(|i| norte_proto::methods::AiRenameEntry {
+            from: format!("f{i}.txt"),
+            to: format!("t{i}.txt"),
+        })
+        .collect();
+    let collisions: Vec<_> = (0..8)
+        .map(|i| norte_proto::methods::RenameCollision {
+            pair_index: i,
+            name: norte_proto::Segment::new(format!("t{}.txt", i + 1).into_bytes())
+                .expect("segmento"),
+            kind: norte_proto::methods::RenameCollisionKind::External,
+        })
+        .collect();
+    app.modal = Some(norte_tui::app::Modal::AiRenamePlan {
+        dir,
+        entries,
+        offset: 0,
+        plan: norte_frontend::BatchPlan::Ready(Box::new(
+            norte_proto::methods::FsRenameBatchPlanResult {
+                steps: Vec::new(),
+                collisions,
+                executable: false,
+                plan_hash: norte_proto::methods::PlanHash::parse(&"0".repeat(64)).expect("64 hex"),
+            },
+        )),
+    });
+    // 14 filas: el modal pide 21 y no cabe.
+    let mut terminal = Terminal::new(TestBackend::new(80, 14)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+
+    assert!(
+        contenido.contains(&norte_i18n::t("modal-rename-batch-not-applicable")),
+        "el veredicto sobrevive al recorte: {contenido}"
+    );
+    assert!(
+        !contenido.contains(&norte_i18n::t("modal-ai-rename-plan-hint")),
+        "y el pie jamás ofrece una tecla muda: {contenido}"
     );
 }
 

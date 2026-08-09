@@ -2718,6 +2718,23 @@ impl App {
         }
     }
 
+    /// Deja el plan del LOTE (§17) en el modal del plan IA que lo estaba
+    /// esperando. Devuelve `false` si no había ninguno —el humano ya cerró el
+    /// modal, o el plan está RETENIDO tras otro modal y lo rellena el run
+    /// loop—, para que el caller sepa que tiene que buscarlo en su stash.
+    ///
+    /// Solo rellena un modal en [`norte_frontend::BatchPlan::Pending`]: una
+    /// respuesta jamás pisa a un plan ya resuelto.
+    pub fn settle_ai_batch_plan(&mut self, resuelto: &norte_frontend::BatchPlan) -> bool {
+        if let Some(Modal::AiRenamePlan { plan, .. }) = &mut self.modal
+            && *plan == norte_frontend::BatchPlan::Pending
+        {
+            *plan = resuelto.clone();
+            return true;
+        }
+        false
+    }
+
     /// Abre el prompt de consulta de la búsqueda semántica (M4-IA-2).
     pub fn open_semantic_search(&mut self) {
         self.modal = Some(Modal::SemanticQuery {
@@ -3723,10 +3740,11 @@ pub enum Modal {
         /// ADR 0042): veredictos, si es aplicable y el `plan_hash` que hay
         /// que devolver para ejecutar EXACTAMENTE lo que se enseñó.
         ///
-        /// `None` mientras está en vuelo (el modal abre y se rellena) o si
-        /// el core no pudo planificar — y sin plan no hay hash aprobado, así
-        /// que confirmar está DESHABILITADO ([`dialog_action`]).
-        plan: Option<norte_proto::methods::FsRenameBatchPlanResult>,
+        /// Nace [`norte_frontend::BatchPlan::Pending`] —el modal abre y se
+        /// rellena cuando el core contesta— y sin un plan APLICABLE
+        /// confirmar está DESHABILITADO ([`dialog_action`]): no hay hash
+        /// aprobado que mandar.
+        plan: norte_frontend::BatchPlan,
     },
     /// Prompt de consulta de la búsqueda semántica (M4-IA-2). Texto libre,
     /// molde [`Modal::AiRenameInstruction`]: la consulta CRUDA del usuario,
@@ -3953,7 +3971,7 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
                 return None;
             }
             let confirma = matches!(cmd, "dialog.approve" | "dialog.confirm");
-            if confirma && !plan.as_ref().is_some_and(|p| p.executable) {
+            if confirma && !plan.confirmable() {
                 return None;
             }
             Some(if confirma {
