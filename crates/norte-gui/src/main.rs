@@ -303,6 +303,28 @@ struct NorteGui {
     viewer_image: Option<ImagePreview>,
     /// Resolver del contexto Viewer (teclas del visor, GUI-d T3).
     viewer_resolver: norte_frontend::keymap::Resolver,
+    /// The which-key panel's CACHED rows (K3a), or `None` while nothing is
+    /// pending. Written ONLY by [`NorteGui::refresh_which_key`] /
+    /// [`NorteGui::refresh_which_key_viewer`] (the resolver-transition arms
+    /// of `on_key`) and by [`NorteGui::apply_keymap_live`] (a hot-reloaded
+    /// keymap makes any cached rows describe a map that no longer exists).
+    ///
+    /// `render` reads this field but never builds one:
+    /// [`norte_frontend::whichkey::WhichKeyRows::build`] costs several
+    /// `String`s and one or two Fluent formats PER ROW (see its doc), and
+    /// `render` runs at 60 Hz — building a twenty-row panel there would be
+    /// exactly the `means_command` allocation pattern K2a deleted from this
+    /// crate, rebuilt in a new place.
+    ///
+    /// This alone does not prove the panel is CURRENT: the resolver that owns
+    /// the keyboard can change without going through either refresh method —
+    /// a mouse double-click opens the viewer directly, no key involved. So
+    /// `render` gates painting on the LIVE `active_resolver.pending()` used
+    /// for the plain-text strip (`#91`) as well: a resolver switch away from
+    /// the one these rows describe empties that slice at once, and a stale
+    /// `Some` here simply does not get painted until the next transition
+    /// refreshes or clears it.
+    which_key: Option<norte_frontend::whichkey::WhichKeyRows>,
     /// Generación del `OpenViewer` en vuelo (guard anti-stale, como
     /// `generation` de los panes): un `ViewerOpened`/`ViewerFailed` con una
     /// generación vieja se descarta (F3 tardío no reabre por sorpresa; dos
@@ -1086,6 +1108,7 @@ impl NorteGui {
                     viewer: None,
                     viewer_image: None,
                     viewer_resolver,
+                    which_key: None,
                     viewer_gen: 0,
                     viewer_loading: false,
                     fonts,
@@ -1176,6 +1199,7 @@ impl NorteGui {
                     viewer: None,
                     viewer_image: None,
                     viewer_resolver,
+                    which_key: None,
                     viewer_gen: 0,
                     viewer_loading: false,
                     fonts,
@@ -2511,6 +2535,33 @@ impl NorteGui {
         self.fonts = FontSet::resolve(&ui, &mono, cfg.common.ui_font_size);
     }
 
+    /// Publishes the PANE resolver's pending state to [`Self::which_key`]
+    /// (K3a). The ONE place that decides whether the panel is open for the
+    /// dual-pane screen, and it decides it from the resolver rather than from
+    /// which [`Resolution`](norte_frontend::keymap::Resolution) arm called
+    /// it:
+    ///
+    /// - a pending SEQUENCE opens it — at once, with no delay of any kind
+    ///   (ADR 0006's resolution is timing-free);
+    /// - a bare COUNT does not: its pending prefix is empty, so there are no
+    ///   rows, and the continuation of a count is any key at all.
+    ///
+    /// Called from the `Pending`/`Counting` arm of the pane match in
+    /// `on_key`. Every OTHER arm of that match, and the non-modelled-key
+    /// `else`, clear the field directly instead — the sequence just ended, so
+    /// there is nothing left to build.
+    fn refresh_which_key(&mut self) {
+        self.which_key = which_key_for(&self.resolver, norte_i18n::active());
+    }
+
+    /// [`Self::refresh_which_key`]'s twin for the VIEWER resolver: while the
+    /// viewer owns the keyboard, the panel must describe what the viewer's
+    /// keymap does next, not the pane's (`render`'s `active_resolver` makes
+    /// the same swap for the plain-text pending strip, `#91`).
+    fn refresh_which_key_viewer(&mut self) {
+        self.which_key = which_key_for(&self.viewer_resolver, norte_i18n::active());
+    }
+
     /// Reemplaza `resolver`/`viewer_resolver` con los efectivos frescos
     /// (S4, tras `keymap.preset` con OK): `fresh_keymap` ya viene calculado
     /// desde el hilo de fondo (`commit_settings_write`, evita releer
@@ -2533,6 +2584,10 @@ impl NorteGui {
             Some(Ok((browse, viewer))) => {
                 self.resolver = norte_frontend::keymap::Resolver::new(browse);
                 self.viewer_resolver = norte_frontend::keymap::Resolver::new(viewer);
+                // K3a: the resolvers were just REPLACED — any cached rows
+                // describe the map that no longer exists, and the fresh
+                // resolvers start with nothing pending regardless.
+                self.which_key = None;
                 self.rebuild_help_chords();
                 true
             }
@@ -3682,15 +3737,14 @@ impl NorteGui {
                         command: cmd,
                         count,
                     } => {
+                        // K3a: la secuencia terminó — con ella, el panel.
+                        self.which_key = None;
                         // K2a: el contador repite el DESPACHO (ninguna firma
                         // de comando cambia). `viewer.up/down/page-*` son los
-                        // que lo aceptan; el resto llega como `Ignored`.
-                        // MISMA deuda honesta que la rama `Unavailable` de
-                        // abajo: el flash NO se pinta con el visor abierto, así
-                        // que el estado es correcto pero el aviso hoy no se ve.
-                        // Se pone igualmente — el día que el visor tenga línea
-                        // de estado (K3) aparece solo, y hasta entonces callar
-                        // aquí sería una segunda decisión que nadie tomó.
+                        // que lo aceptan; el resto llega como `Ignored`. K3a
+                        // pagó la deuda de la rama `Unavailable` de abajo: el
+                        // flash SÍ se pinta con el visor abierto ahora
+                        // (`render_viewer`).
                         if let norte_frontend::keymap::Count::Ignored(n) = count {
                             self.flash = Some((
                                 norte_frontend::keymap::count_ignored_message(&cmd, n),
@@ -3710,32 +3764,44 @@ impl NorteGui {
                             }
                         }
                     }
-                    // K2a: un contador a medio teclear se pinta al pie, igual
-                    // que una secuencia pendiente (ver `render`).
+                    // K3a: la secuencia sigue viva — el panel describe el
+                    // resolver del VISOR mientras es él quien tiene el
+                    // teclado (`refresh_which_key_viewer`, gemela de
+                    // `refresh_which_key` para el pane). Sin temporizador: el
+                    // panel aparece con la misma tecla que deja el prefijo
+                    // pendiente (ADR 0006). Un contador a medio teclear no
+                    // abre nada (su prefijo pendiente está vacío); el pie lo
+                    // sigue pintando (`render`, #91).
                     norte_frontend::keymap::Resolution::Pending(_)
-                    | norte_frontend::keymap::Resolution::Counting(_) => {}
+                    | norte_frontend::keymap::Resolution::Counting(_) => {
+                        self.refresh_which_key_viewer();
+                    }
                     // K1 T4 + rust-reviewer MAJOR-1. Esta rama SÍ se alcanza:
                     // cada pantalla se valida contra el set que ELLA despacha
                     // (`screen_commands`), así que F9/F11/F12/Ctrl+P/Tab —
                     // bindings de `[global]` que el visor ve pero
                     // `apply_viewer_command` no atiende — salen `NotHere` en
                     // vez de fingir `Here` y morir en un `_ => {}`.
-                    // AVISO HONESTO, Y ES DEUDA: el flash NO se pinta con el
-                    // visor abierto (`render`, gate de la revisión 7c
-                    // MINOR-4b), así que hoy el estado es CORRECTO pero el
-                    // mensaje sigue sin verse. Que el usuario lo LEA necesita
-                    // una línea de estado mutable en el visor — K3, con la
-                    // hoja de referencia.
+                    // K3a pagó la deuda: el flash SÍ se pinta con el visor
+                    // abierto (`render_viewer`), y con él se va el panel.
                     norte_frontend::keymap::Resolution::Unavailable { command, why } => {
+                        self.which_key = None;
                         self.flash = Some((
                             norte_frontend::keymap::unavailable_message(&command, why),
                             true,
                         ));
                     }
-                    norte_frontend::keymap::Resolution::Reset => {}
+                    norte_frontend::keymap::Resolution::Reset => {
+                        self.which_key = None;
+                    }
                 }
             } else {
                 self.viewer_resolver.reset();
+                // K3a: como el `Reset` de arriba — la tecla no la modela el
+                // adaptador, y el resolver se resetea EXPLÍCITAMENTE, así que
+                // cualquier panel construido sobre el prefijo anterior queda
+                // obsoleto.
+                self.which_key = None;
             }
             cx.notify();
             return;
@@ -3776,6 +3842,8 @@ impl NorteGui {
                     count,
                 } => {
                     resolution_dbg = "run";
+                    // K3a: la secuencia terminó — con ella, el panel.
+                    self.which_key = None;
                     // K2a: un contador sobre un comando que no lo acepta NO se
                     // traga — corre UNA vez y el flash lo dice. Antes del
                     // despacho: si el comando tiene algo que decir, su flash
@@ -3803,12 +3871,18 @@ impl NorteGui {
                 }
                 // K2a: un contador a medio teclear no ejecuta nada todavía; el
                 // pie lo pinta junto a la secuencia pendiente (ver `render`).
+                // K3a: y el MISMO estado abre (o no) el panel which-key —
+                // `refresh_which_key` es quien sabe que un contador suelto no
+                // tiene panel (su prefijo pendiente está vacío), no este
+                // `match`. Sin temporizador de ningún tipo: el panel aparece
+                // con la tecla que deja el prefijo pendiente (ADR 0006).
                 norte_frontend::keymap::Resolution::Pending(_)
                 | norte_frontend::keymap::Resolution::Counting(_) => {
                     // Secuencia en curso: nada que ejecutar todavía. El
                     // indicador de secuencia pendiente lo pinta `render` al
                     // pie leyendo `resolver.pending()` (#91).
                     resolution_dbg = "pending";
+                    self.refresh_which_key();
                 }
                 norte_frontend::keymap::Resolution::Unavailable { command, why } => {
                     // 16 de los 47 bindings de Browse son `NotHere` en este
@@ -3818,6 +3892,7 @@ impl NorteGui {
                     // la siguiente tecla (`on_key` lo limpia arriba) y SÍ se
                     // pinta sobre el dual-pane, que es donde estamos.
                     resolution_dbg = "unavailable";
+                    self.which_key = None;
                     self.flash = Some((
                         norte_frontend::keymap::unavailable_message(&command, why),
                         true,
@@ -3825,6 +3900,7 @@ impl NorteGui {
                 }
                 norte_frontend::keymap::Resolution::Reset => {
                     resolution_dbg = "reset";
+                    self.which_key = None;
                     // Sin binding: si es un imprimible sin ctrl/alt/super,
                     // ABRE el quick search.
                     if !(mods.control || mods.alt || mods.platform) {
@@ -3837,6 +3913,9 @@ impl NorteGui {
             // cualquier secuencia pendiente, como un Miss del resolver
             // (ver el test `reset_rompe_la_secuencia_pendiente` del motor).
             self.resolver.reset();
+            // K3a: ídem — el panel construido sobre el prefijo anterior
+            // queda obsoleto en el mismo instante.
+            self.which_key = None;
         }
 
         self.debug_log_key(&ks.key, resolution_dbg);
@@ -6207,6 +6286,7 @@ impl NorteGui {
         &self,
         window: &Window,
         chrome: &ChromeColors,
+        extra_chrome_rows: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         // INVARIANTE: solo se llama desde `render` cuando `self.viewer` es
@@ -6226,11 +6306,23 @@ impl NorteGui {
         };
 
         // Filas que caben en el viewport real, menos la cabecera+status
-        // (`VIEWER_CHROME_ROWS`); el sobrante (redondeo, chrome del root) lo
-        // recorta `overflow_hidden` del contenedor. Mínimo 1: una ventana
-        // minúscula no debe pedir un rango vacío a `v.rows`.
+        // (`VIEWER_CHROME_ROWS`) y menos `extra_chrome_rows` — el banner de
+        // arranque y/o el flash (K3a MAJOR-1) que `render` pueda haber
+        // pintado ARRIBA de este árbol esta misma vuelta, y que por tanto se
+        // comen del `flex_1` real del visor sin que este `h` lo supiera. Sin
+        // este término, el cuerpo pedía más filas de las que el contenedor
+        // `overflow_hidden` iba a dejar sitio, y la última línea real
+        // desaparecía en vez de que el visor pidiera una menos — silencioso,
+        // y desde K3a rutinario (cualquiera de los 16/47 bindings `NotHere`
+        // de Browse deja un flash mientras el visor está abierto). El
+        // sobrante restante (redondeo, chrome del root) lo sigue recortando
+        // `overflow_hidden`. Mínimo 1: una ventana minúscula no debe pedir un
+        // rango vacío a `v.rows`.
         let viewport_rows = (window.viewport_size().height / self.fonts.row_h) as usize;
-        let h = viewport_rows.saturating_sub(VIEWER_CHROME_ROWS).max(1);
+        let h = viewport_rows
+            .saturating_sub(VIEWER_CHROME_ROWS)
+            .saturating_sub(extra_chrome_rows)
+            .max(1);
 
         // Cuerpo del visor: en modo imagen, el elemento `img` (o un aviso si el
         // decode falló); si no, las filas de texto/hex. `object_fit` de GPUI es
@@ -6340,6 +6432,97 @@ impl NorteGui {
             .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _w, cx| {
                 this.on_viewer_scroll(ev.delta, cx);
             }))
+    }
+
+    /// The which-key panel (K3a): while a chord sequence is PENDING, what can
+    /// follow it — every continuation, the unavailable ones included and
+    /// dimmed, with the reason they do nothing.
+    ///
+    /// `wk` is the CACHED [`Self::which_key`] — this method only PAINTS it,
+    /// never builds it (see the field's doc for the allocation cost that
+    /// rules out calling [`WhichKeyRows::build`](norte_frontend::whichkey::WhichKeyRows::build)
+    /// from here).
+    ///
+    /// Inline flow at the same slot as the plain-text pending strip (`#91`),
+    /// not an absolute overlay: it reflows the dual-pane/viewer above it
+    /// exactly like that strip always did, and it is gated by the same
+    /// suppression and the same LIVE `pending` check (see the call site in
+    /// `render`).
+    fn render_which_key(
+        &self,
+        wk: &norte_frontend::whichkey::WhichKeyRows,
+        chrome: &ChromeColors,
+    ) -> impl IntoElement {
+        let mut panel = div()
+            .id("which-key")
+            .role(gpui::Role::List)
+            .aria_label(wk.title.clone())
+            .flex()
+            .flex_col()
+            .max_h(px(240.0))
+            .overflow_hidden()
+            .border_1()
+            .border_color(chrome.border_focus)
+            .bg(chrome.pane_bg_focus)
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea
+                    .bg(chrome.header_bg)
+                    .text_color(chrome.header_fg)
+                    .truncate()
+                    .child(SharedString::from(wk.title.clone())),
+            );
+        for (i, row) in wk.rows.iter().enumerate() {
+            let tail = if row.opens_sequence { " …" } else { "" };
+            let label = if row.reason.is_empty() {
+                format!("{}{tail}", row.label)
+            } else {
+                format!("{}{tail} — {}", row.label, row.reason)
+            };
+            // Dimmed, not hidden: the key IS bound, it just cannot run — the
+            // panel says why instead of pretending the key does not exist.
+            // Same "dim relativo" alpha as the context menu's disabled rows
+            // (GPUI has no terminal DIM attribute) — the CHORD itself stays
+            // full-strength either way, same as the TUI panel: the key does
+            // something (it resolves), only the command it would run is what
+            // the dimming is about.
+            let label_fg = if row.avail == norte_frontend::keymap::Availability::Here {
+                chrome.fg
+            } else {
+                gpui::Rgba {
+                    a: 0.45,
+                    ..chrome.fg
+                }
+            };
+            // `ListItem` paired with the panel's `List` (N1): every other
+            // list container in this file pairs the two.
+            let aria = format!("{} {label}", row.chord);
+            panel = panel.child(
+                div()
+                    .id(format!("which-key-row-{i}"))
+                    .role(gpui::Role::ListItem)
+                    .aria_label(aria)
+                    .flex()
+                    .flex_row()
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea
+                    .gap(px(sp::S))
+                    .child(
+                        div()
+                            .text_color(chrome.header_fg)
+                            .child(SharedString::from(row.chord.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .text_color(label_fg)
+                            .child(SharedString::from(label)),
+                    ),
+            );
+        }
+        panel
     }
 
     /// Pinta el panel del modal activo (overlay centrado, ver `render`): título
@@ -6817,6 +7000,79 @@ fn pending_indicator(
         None => String::new(),
     };
     Some(format!("{head}{}…", pending_hint(chords)))
+}
+
+/// The which-key rows for `resolver`'s CURRENT pending state (K3a), or
+/// `None` while nothing is pending — same "a bare count opens nothing" rule
+/// as [`norte_frontend::whichkey::WhichKeyRows::build`] (its own doc has the
+/// reasoning): `resolver.pending()` is empty for a bare count, so this
+/// returns `None` right along with it.
+///
+/// PURA (sin GPUI): the one thing [`NorteGui::refresh_which_key`] and
+/// [`NorteGui::refresh_which_key_viewer`] do beyond a plain field read, and
+/// pulled out so it is testable against a VIEWER-context resolver without a
+/// window — the mistake this exists to catch is reading `self.resolver` in
+/// the viewer's arm, which would silently paint the pane's rows while the
+/// viewer owns the keyboard.
+#[must_use]
+fn which_key_for(
+    resolver: &norte_frontend::keymap::Resolver,
+    lang: norte_i18n::Lang,
+) -> Option<norte_frontend::whichkey::WhichKeyRows> {
+    if resolver.pending().is_empty() {
+        None
+    } else {
+        Some(norte_frontend::whichkey::WhichKeyRows::build(
+            resolver.effective(),
+            resolver.pending(),
+            resolver.count(),
+            lang,
+        ))
+    }
+}
+
+/// Whether the transient flash line (`#108` 7c, K3a) paints THIS frame,
+/// given which full-screen views are open. PURA (sin GPUI): testeable sin
+/// ventana.
+///
+/// The viewer is deliberately NOT a parameter: it used to be
+/// (`main.rs` pre-K3a), which is exactly the debt K3a paid — the viewer has
+/// no status line of its own to protect (its `status`, see `render_viewer`,
+/// is read-only content, not a place for a transient notice), so a flash
+/// landing while it is open pushes it down like any other banner instead of
+/// vanishing unseen.
+#[must_use]
+fn flash_paints(settings_open: bool, extensions_open: bool) -> bool {
+    !settings_open && !extensions_open
+}
+
+/// Whether the which-key panel (K3a) paints THIS frame. PURA (sin GPUI):
+/// testeable sin ventana.
+///
+/// `pending_is_empty`/`wk_present` come from the LIVE resolver read already
+/// done at the call site (see its comment): they catch a resolver SWITCH
+/// (settings/extensions/palette/picker/menu opening, or the viewer opening
+/// from a mouse double-click) because the new resolver's `pending()` is
+/// empty until the next keystroke.
+///
+/// `modal_open`/`help_open` exist because that live-`pending` guard alone is
+/// NOT enough: a modal can open from a background task landing (a conflict,
+/// an AI-rename reply, a semantic-search reply — none of them touch a
+/// resolver), and F1 opens help from inside the viewer's key handler before
+/// `viewer_resolver.push` ever runs. Neither clears `self.which_key`, and
+/// neither should — the pending prefix underneath is still live, and the
+/// panel is meant to reappear once the overlay closes (same design as the
+/// TUI's `app.modal.is_none()` draw guard). This function is the difference
+/// between "reappears when the overlay closes" and "bleeds through the
+/// overlay's translucent scrim while it's still up."
+#[must_use]
+fn which_key_paints(
+    pending_is_empty: bool,
+    wk_present: bool,
+    modal_open: bool,
+    help_open: bool,
+) -> bool {
+    !pending_is_empty && wk_present && !modal_open && !help_open
 }
 
 /// Retiene solo las tasks NO terminales en `order` y `progress`, mutando
@@ -8211,6 +8467,14 @@ impl Render for NorteGui {
         // un div truncado POR LÍNEA en vez de un separador textual — así
         // cada aviso se lee entero (hasta el ancho) sin competir por el
         // mismo renglón.
+        //
+        // K3a MAJOR-1: el número de líneas se guarda (`keymap_error_lines`)
+        // — `render_viewer` lo necesita para no pedirle a `v.rows` más filas
+        // de las que este banner (si aparece) va a dejarle sitio.
+        let keymap_error_lines = self
+            .keymap_error
+            .as_deref()
+            .map_or(0, |m| m.split('\n').count());
         if let Some(msg) = &self.keymap_error {
             // Revisión final (contraste WCAG): `header_bg`+`err_fg` medía
             // 1.1:1 en catppuccin — `err_fg` está pensado para el fondo
@@ -8237,14 +8501,28 @@ impl Render for NorteGui {
         // una línea, mismo lenguaje visual que el banner de arranque
         // (err_fg sobre bg para errores; header para éxito). Se despide con
         // la siguiente tecla o click (`on_key`/`on_row_click`/
-        // `on_sort_click`). Solo sobre el dual-pane: un persist que aterrice
-        // con F11/F12/visor abiertos no pinta una línea suelta encima
-        // (review 7c MINOR-4b).
-        if self.settings_view.is_none()
-            && self.extensions.is_none()
-            && self.viewer.is_none()
-            && let Some((msg, is_error)) = &self.flash
-        {
+        // `on_sort_click`). Excluido de ajustes/extensiones (F11/F12): esas
+        // vistas a pantalla completa tienen su PROPIA línea de estado y un
+        // persist que aterriza mientras están abiertas no debe pintar una
+        // línea suelta encima de la suya (review 7c MINOR-4b).
+        //
+        // K3a pagó la deuda del visor: hasta aquí el visor SE EXCLUÍA
+        // también, así que un `Resolution::Unavailable` tecleado con el
+        // visor abierto ponía este campo a `Some` sin que nada lo pintara
+        // (`main.rs` T4/T5 arriba). El visor no tiene su propia franja de
+        // estado editable (su `status` es de solo lectura, ver
+        // `render_viewer`), así que esta línea es EXACTAMENTE donde debía
+        // aparecer: en flujo normal, empuja el visor hacia abajo como
+        // cualquier otro banner (`keymap_error` ya lo hacía sin caso
+        // especial) — nunca lo tapa, porque no es un overlay absoluto.
+        //
+        // K3a MAJOR-1: `flash_shown` se guarda por la misma razón que
+        // `keymap_error_lines` — `render_viewer` necesita saber SI esta
+        // línea va a aparecer antes de decidir cuántas filas pedirle a
+        // `v.rows`.
+        let flash_shown = flash_paints(self.settings_view.is_some(), self.extensions.is_some())
+            && self.flash.is_some();
+        if flash_shown && let Some((msg, is_error)) = &self.flash {
             let (bg, fg) = if *is_error {
                 (chrome.bg, chrome.err_fg)
             } else {
@@ -8296,7 +8574,13 @@ impl Render for NorteGui {
         } else if self.extensions.is_some() {
             root = root.child(self.render_extensions(&chrome));
         } else if self.viewer.is_some() {
-            root = root.child(self.render_viewer(window, &chrome, cx));
+            // K3a MAJOR-1: cuántas filas de chrome EXTRA (más allá de las
+            // propias del visor, `VIEWER_CHROME_ROWS`) ya se pintaron ARRIBA
+            // de este árbol esta misma vuelta — el banner de arranque, el
+            // flash — para que `render_viewer` deje de pedirle a `v.rows`
+            // más filas de las que el `flex_1` real le va a dejar sitio.
+            let extra_chrome_rows = keymap_error_lines + usize::from(flash_shown);
+            root = root.child(self.render_viewer(window, &chrome, extra_chrome_rows, cx));
         } else if self.viewer_loading {
             root = root.child(
                 div()
@@ -8345,7 +8629,47 @@ impl Render for NorteGui {
         } else {
             (active_resolver.count(), active_resolver.pending())
         };
-        if let Some(hint) = pending_indicator(count, pending) {
+        // K3a: the which-key panel — what a pending PREFIX can do next. Same
+        // anchor and suppression as the strip above; a bare count has no
+        // prefix (`pending` empty) so it stays with the plain-text line,
+        // matching "a bare count does not open it" (`whichkey`'s rule).
+        //
+        // Gated on the LIVE `pending` just computed, not on `self.which_key`
+        // alone: `active_resolver` above already reflects whichever resolver
+        // owns the keyboard THIS frame, including a switch that happened
+        // with no keystroke at all (settings/extensions/palette/picker/menu
+        // opening, or the viewer opening from a mouse double-click). When
+        // that switch lands, the new resolver's `pending()` is what changes
+        // — the cached rows may still describe the OLD one for one frame,
+        // but `!pending.is_empty()` is false in that case and nothing about
+        // them gets painted. The cache catches up on the next transition
+        // that calls `refresh_which_key`/`refresh_which_key_viewer`.
+        //
+        // `self.modal`/`self.help` are NOT in the suppression list above —
+        // rust-reviewer BLOCKER: both can take the keyboard away from the
+        // active resolver WITHOUT a keystroke that would have cleared
+        // `self.which_key`, so the live-`pending` guard alone does not catch
+        // them. A modal can open from a background task landing (a
+        // conflict, an AI-rename reply, a semantic-search reply — none of
+        // them go through `on_key`); F1 opens help from INSIDE the viewer's
+        // key handler, before `viewer_resolver.push` ever runs. Both leave
+        // the resolver's pending prefix (and these cached rows) exactly as
+        // they were — correct, mirroring the TUI's `app.modal.is_none()`
+        // draw guard (`norte-tui/src/ui.rs`): the sequence is still live
+        // underneath and the panel reappears once the overlay closes. It
+        // just must not bleed through the overlay's translucent scrim
+        // (`rgba(0x000000aa)`, not opaque) while that overlay is up —
+        // `which_key_paints` is the extracted, testable gate for that.
+        let wk_ready = self.which_key.as_ref().filter(|wk| !wk.is_empty());
+        if which_key_paints(
+            pending.is_empty(),
+            wk_ready.is_some(),
+            self.modal.is_some(),
+            self.help.is_some(),
+        ) && let Some(wk) = wk_ready
+        {
+            root = root.child(self.render_which_key(wk, &chrome));
+        } else if let Some(hint) = pending_indicator(count, pending) {
             root = root.child(
                 div()
                     .px(px(sp::S))
@@ -8979,13 +9303,14 @@ mod tests {
     use super::{
         ChromeColors, ConfirmQuit, FontSet, ImagePreview, MouseState, affected_dirs,
         apply_viewer_command, banner_safe, chrome_mark_fg, confirm_quit_should_open,
-        confirm_quit_task_count, decoration_badge_color, first_cancelable, flicker_factor,
-        flicker_scale, generation_is_current, glowed, has_pending_work, hydration_batch,
-        image_preview_from, image_status, keymap_error_detail, modal_footer_colors,
-        modal_panel_colors, modal_title_colors, motion_active, mouse_motion, mouse_press,
-        mouse_release, pane_inner_cells, pending_hint, pending_indicator, retain_active, row_label,
-        styled_span_color, task_at_cursor, theme_map, unknown_preset_banner, validated_family,
-        viewer_header, viewer_status,
+        confirm_quit_task_count, decoration_badge_color, first_cancelable, flash_paints,
+        flicker_factor, flicker_scale, generation_is_current, glowed, has_pending_work,
+        hydration_batch, image_preview_from, image_status, keymap_error_detail,
+        modal_footer_colors, modal_panel_colors, modal_title_colors, motion_active, mouse_motion,
+        mouse_press, mouse_release, pane_inner_cells, pending_hint, pending_indicator,
+        retain_active, row_label, styled_span_color, task_at_cursor, theme_map,
+        unknown_preset_banner, validated_family, viewer_header, viewer_status, which_key_for,
+        which_key_paints,
     };
     // Menú contextual (tarea 4 del plan de ratón).
     use super::{
@@ -10737,6 +11062,94 @@ mod tests {
                 hazard.id
             );
         }
+    }
+
+    /// K3a: `which_key_for` reads whatever [`Resolver`](norte_frontend::keymap::Resolver)
+    /// it is GIVEN — proof that [`NorteGui::refresh_which_key_viewer`] cannot
+    /// silently paint the pane's rows while the viewer owns the keyboard, the
+    /// mistake `which_key_for` exists to catch: build it against a
+    /// VIEWER-context resolver, and the row is the viewer's own command, not
+    /// anything from Browse.
+    #[test]
+    fn which_key_for_reads_the_viewer_resolver_not_the_pane() {
+        use norte_frontend::keymap::{Effective, Resolver, Screen, parse_chord, parse_keymap};
+        let src = r#"
+[viewer]
+keymap = [
+    { on = ["g", "g"], run = "viewer.top" },
+]
+"#;
+        let preset = parse_keymap(src).expect("fixture parses");
+        let known = ["viewer.top"];
+        let eff =
+            Effective::build_for(&preset, &[], &known, Screen::Viewer).expect("fixture builds");
+        let mut resolver = Resolver::new(eff);
+        resolver.push(parse_chord("g").expect("chord"));
+
+        let panel =
+            which_key_for(&resolver, norte_i18n::Lang::En).expect("g is pending: panel opens");
+        assert_eq!(panel.title, "g");
+        assert_eq!(panel.rows.len(), 1);
+        assert_eq!(panel.rows[0].chord, "g");
+
+        // A bare count opens nothing (whichkey's own rule) — same guard the
+        // pane path relies on, exercised here against the viewer resolver.
+        let mut counting = Resolver::new(
+            Effective::build_for(&preset, &[], &known, Screen::Viewer).expect("fixture builds"),
+        );
+        counting.push(parse_chord("1").expect("chord"));
+        assert!(
+            which_key_for(&counting, norte_i18n::Lang::En).is_none(),
+            "a bare count has no panel"
+        );
+    }
+
+    /// K3a paid the documented debt: the viewer used to be a THIRD exclusion
+    /// alongside settings/extensions (`main.rs`, pre-K3a), so an
+    /// `unavailable_message` set while the viewer was open landed in
+    /// `self.flash` and never painted. `flash_paints` is the extracted gate
+    /// `render` now calls, and it takes only the two screens that still have
+    /// their OWN status line to protect — the viewer is not a parameter, so
+    /// there is no way for it to suppress this line again.
+    #[test]
+    fn the_flash_reaches_the_viewer_now() {
+        assert!(
+            flash_paints(false, false),
+            "dual-pane AND the viewer: both paint it"
+        );
+        assert!(!flash_paints(true, false), "settings has its own status");
+        assert!(!flash_paints(false, true), "extensions has its own status");
+    }
+
+    /// K3a BLOCKER fix: a modal opened by a background task landing (a
+    /// conflict, an AI-rename reply) or help opened from inside the viewer's
+    /// key handler (F1, before `viewer_resolver.push` runs) can take the
+    /// keyboard away from the resolver `self.which_key` describes WITHOUT
+    /// going through the two `refresh_which_key*` methods, and without
+    /// emptying its live `pending()` either — so those two flags are the
+    /// only thing that can still suppress the panel once modal/help are up.
+    #[test]
+    fn which_key_paints_is_suppressed_by_modal_and_help() {
+        assert!(
+            which_key_paints(false, true, false, false),
+            "pending prefix, rows ready, nothing else in front: paints"
+        );
+        assert!(
+            !which_key_paints(true, true, false, false),
+            "nothing pending: no panel, even with stale rows cached"
+        );
+        assert!(
+            !which_key_paints(false, false, false, false),
+            "no cached rows yet: nothing to paint"
+        );
+        assert!(
+            !which_key_paints(false, true, true, false),
+            "a modal took the keyboard without a keystroke"
+        );
+        assert!(
+            !which_key_paints(false, true, false, true),
+            "F1 opened help without ever reaching the resolver"
+        );
     }
 
     /// `retain_active` (#83, `task.dismiss`): quita de `order`/`progress`
