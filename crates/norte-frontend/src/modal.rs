@@ -84,6 +84,135 @@ pub fn validate_ai_plan(
         .collect()
 }
 
+/// Las MISMAS parejas de [`validate_ai_plan`], ya en la forma que piden
+/// `fs.rename_batch_plan` y `fs.rename_batch` (spec §17, ADR 0042).
+///
+/// Único convertidor plan-IA → parejas de lote para TUI y GUI: los dos
+/// frontends mandan exactamente la misma INTENCIÓN, y por tanto el core les
+/// contesta el mismo `plan_hash`. `None` con el mismo criterio fail-loud que
+/// [`validate_ai_plan`] — un segmento inválido tumba el lote ENTERO.
+///
+/// ```
+/// use norte_proto::methods::AiRenameEntry;
+/// let e = AiRenameEntry { from: "ep1.mkv".into(), to: "ep01.mkv".into() };
+/// let pares = norte_frontend::rename_pairs(std::slice::from_ref(&e)).expect("válido");
+/// assert_eq!(pares[0].from.as_bytes(), b"ep1.mkv");
+/// assert_eq!(pares[0].to.as_bytes(), b"ep01.mkv");
+/// ```
+#[must_use]
+pub fn rename_pairs(
+    entries: &[norte_proto::methods::AiRenameEntry],
+) -> Option<Vec<norte_proto::methods::RenamePair>> {
+    Some(
+        validate_ai_plan(entries)?
+            .into_iter()
+            .map(|(from, to)| norte_proto::methods::RenamePair { from, to })
+            .collect(),
+    )
+}
+
+/// Colisiones del plan de lote que se pintan antes de resumir el resto
+/// (molde [`AI_RENAME_PAIR_LIMIT`]). Tope de LEGIBILIDAD, no de seguridad: el
+/// resumen final jamás calla cuántas quedan fuera, y ninguna colisión hace
+/// aplicable un plan que el core marcó como no aplicable.
+pub const RENAME_COLLISION_LIMIT: usize = 5;
+
+/// Clave Fluent del VEREDICTO de una colisión de lote (spec §17): única
+/// fuente para TUI y GUI — el frontend pinta la etiqueta, jamás deduce el
+/// veredicto.
+///
+/// [`RenameCollisionKind::Unknown`](norte_proto::methods::RenameCollisionKind)
+/// (clase de un daemon N+1) tiene su propia
+/// clave genérica: degrada UNA línea, jamás el modal entero.
+///
+/// ```
+/// use norte_proto::methods::RenameCollisionKind as K;
+/// assert_eq!(
+///     norte_frontend::collision_kind_key(K::External),
+///     "modal-rename-batch-collision-external",
+/// );
+/// // Un veredicto que este binario no conoce sigue teniendo etiqueta.
+/// assert_eq!(
+///     norte_frontend::collision_kind_key(K::Unknown),
+///     "modal-rename-batch-collision-unknown",
+/// );
+/// ```
+#[must_use]
+pub fn collision_kind_key(kind: norte_proto::methods::RenameCollisionKind) -> &'static str {
+    use norte_proto::methods::RenameCollisionKind as K;
+    match kind {
+        K::Internal => "modal-rename-batch-collision-internal",
+        K::External => "modal-rename-batch-collision-external",
+        K::AbsentSource => "modal-rename-batch-collision-absent-source",
+        K::AmbiguousSource => "modal-rename-batch-collision-ambiguous-source",
+        // Cualquier clase futura cae aquí (el enum es `non_exhaustive` y
+        // `Unknown` es su fallback de deserialización): «rechazado, motivo que
+        // no entiendo» es honesto; adivinar no lo sería.
+        _ => "modal-rename-batch-collision-unknown",
+    }
+}
+
+/// Clave Fluent del ESTADO del plan de lote que se enseña bajo las parejas:
+/// `None` = todavía en vuelo, `Some` aplicable, `Some` no aplicable. Única
+/// fuente para TUI y GUI.
+///
+/// Lee `executable`, JAMÁS `collisions.is_empty()`: el campo es normativo
+/// (ver su rustdoc en `norte_proto`) y un veredicto futuro puede parar un
+/// plan sin nombre ofensor que listar.
+///
+/// ```
+/// use norte_proto::methods::{FsRenameBatchPlanResult, PlanHash};
+/// assert_eq!(
+///     norte_frontend::plan_status_key(None),
+///     "modal-rename-batch-pending",
+/// );
+/// let p = FsRenameBatchPlanResult {
+///     steps: vec![],
+///     collisions: vec![],
+///     executable: true,
+///     plan_hash: PlanHash::parse(&"0".repeat(64)).expect("hex"),
+/// };
+/// assert_eq!(
+///     norte_frontend::plan_status_key(Some(&p)),
+///     "modal-rename-batch-applicable",
+/// );
+/// ```
+#[must_use]
+pub fn plan_status_key(
+    plan: Option<&norte_proto::methods::FsRenameBatchPlanResult>,
+) -> &'static str {
+    match plan {
+        None => "modal-rename-batch-pending",
+        Some(p) if p.executable => "modal-rename-batch-applicable",
+        Some(_) => "modal-rename-batch-not-applicable",
+    }
+}
+
+/// Cuántos pasos del plan son MAQUINARIA del planificador (temporales que
+/// rompen un ciclo). Se cuenta, jamás se enseña el nombre: un
+/// `.norte-rename-…` no es nada que el humano haya pedido, y pintarlo entre
+/// sus parejas le haría creer que norte va a dejar ese nombre en el disco.
+///
+/// ```
+/// use norte_proto::Segment;
+/// use norte_proto::methods::{FsRenameBatchPlanResult, PlanHash, RenameStep};
+/// let seg = |b: &[u8]| Segment::new(b.to_vec()).expect("segmento");
+/// let p = FsRenameBatchPlanResult {
+///     steps: vec![
+///         RenameStep { from: seg(b"a"), to: seg(b".norte-rename-0"), temp: true },
+///         RenameStep { from: seg(b"b"), to: seg(b"a"), temp: false },
+///     ],
+///     collisions: vec![],
+///     executable: true,
+///     plan_hash: PlanHash::parse(&"0".repeat(64)).expect("hex"),
+/// };
+/// assert_eq!(norte_frontend::plan_temp_steps(&p), 1);
+/// ```
+#[must_use]
+pub fn plan_temp_steps(plan: &norte_proto::methods::FsRenameBatchPlanResult) -> usize {
+    plan.steps.iter().filter(|s| s.temp).count()
+}
+
 /// Cinturón de INGESTIÓN de los hits semánticos (M4-IA-2, paridad con el
 /// belt del plan IA, compartido por TUI y GUI): un daemon CONFORME jamás
 /// supera [`norte_proto::methods::INDEX_SEMANTIC_MAX_K`] (el server recorta

@@ -42,8 +42,9 @@ pub use display::{
 };
 pub use format::human_bytes;
 pub use modal::{
-    AI_RENAME_PAIR_LIMIT, MAX_AI_PLAN_ENTRIES, MODAL_ITEM_LIMIT, SEMANTIC_HIT_LIMIT, SEMANTIC_K,
-    item_lines, item_lines_with, validate_ai_plan, validate_semantic_hits,
+    AI_RENAME_PAIR_LIMIT, MAX_AI_PLAN_ENTRIES, MODAL_ITEM_LIMIT, RENAME_COLLISION_LIMIT,
+    SEMANTIC_HIT_LIMIT, SEMANTIC_K, collision_kind_key, item_lines, item_lines_with,
+    plan_status_key, plan_temp_steps, rename_pairs, validate_ai_plan, validate_semantic_hits,
 };
 pub use pane::{DEFAULT_PAGE, PaneState, PatternError};
 pub use sort::{SortColumn, SortDir, SortSpec, sort_entries, sort_entries_with};

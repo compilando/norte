@@ -253,6 +253,7 @@ mod tests {
                     to: "b".into(),
                 }],
                 offset: 0,
+                plan: None,
             },
             Modal::SemanticQuery {
                 query: "facturas".into(),

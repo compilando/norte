@@ -272,8 +272,15 @@ fn app() -> norte_tui::app::App {
     )
 }
 
-/// Plan de rename IA con una pareja (fixture del test de allowlist).
+/// Plan de rename IA con una pareja y un plan de LOTE aplicable (fixture
+/// del test de allowlist: el caso en que confirmar SÍ tiene qué mandar).
 fn ai_plan() -> Modal {
+    ai_plan_con(Some(batch_plan(true)))
+}
+
+/// El mismo fixture con el plan de lote que se le pase: `None` = todavía en
+/// vuelo, `Some(no ejecutable)` = el core lo paró con veredictos.
+fn ai_plan_con(plan: Option<norte_proto::methods::FsRenameBatchPlanResult>) -> Modal {
     Modal::AiRenamePlan {
         dir: vp("file:///x"),
         entries: vec![norte_proto::methods::AiRenameEntry {
@@ -281,6 +288,17 @@ fn ai_plan() -> Modal {
             to: "b".into(),
         }],
         offset: 0,
+        plan,
+    }
+}
+
+/// Plan de lote de `fs.rename_batch_plan` con el veredicto que se pida.
+fn batch_plan(executable: bool) -> norte_proto::methods::FsRenameBatchPlanResult {
+    norte_proto::methods::FsRenameBatchPlanResult {
+        steps: Vec::new(),
+        collisions: Vec::new(),
+        executable,
+        plan_hash: norte_proto::methods::PlanHash::parse(&"0".repeat(64)).expect("64 hex"),
     }
 }
 
@@ -351,6 +369,34 @@ fn plan_ia_confirma_como_confirmacion_no_como_aprobacion_de_agente() {
     assert_eq!(dialog_action(&ai_plan(), "dialog.overwrite"), None);
     assert_eq!(dialog_action(&ai_plan(), "dialog.up"), None);
     assert_eq!(dialog_action(&ai_plan(), "dialog.down"), None);
+}
+
+/// §17: confirmar está DESHABILITADO sin un plan de lote APLICABLE — sin
+/// plan no hay `plan_hash` aprobado que mandar, y con veredictos el core no
+/// ejecutaría nada. Cancelar sigue vivo en los dos casos: un modal del que
+/// no se pudiera salir sería peor que uno que no aplica.
+///
+/// (Mutación de control: quitar el gate de `dialog_action` pone
+/// `Some(Confirmed)` en las dos primeras vueltas y rompe este test.)
+#[test]
+fn plan_ia_no_confirma_sin_un_lote_aplicable() {
+    for plan in [None, Some(batch_plan(false))] {
+        let modal = ai_plan_con(plan);
+        for cmd in ["dialog.confirm", "dialog.approve"] {
+            assert_eq!(
+                dialog_action(&modal, cmd),
+                None,
+                "{cmd} no puede confirmar un lote que no se puede ejecutar: {modal:?}"
+            );
+        }
+        for cmd in ["dialog.cancel", "dialog.deny"] {
+            assert_eq!(
+                dialog_action(&modal, cmd),
+                Some(DialogOutcome::Cancelled),
+                "cancelar SIEMPRE vale: {modal:?}"
+            );
+        }
+    }
     // Texto libre (como Mkdir/MarkPattern): el run loop lo intercepta ANTES.
     let prompt = Modal::AiRenameInstruction {
         instruction: String::new(),
@@ -379,6 +425,7 @@ fn scroll_del_plan_clampa_en_ambos_extremos() {
             })
             .collect(),
         offset: 0,
+        plan: Some(batch_plan(true)),
     });
     app.ai_plan_scroll(false);
     assert_eq!(offset_de(&app), 0, "no retrocede bajo cero");

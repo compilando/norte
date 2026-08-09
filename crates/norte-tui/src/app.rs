@@ -3710,7 +3710,7 @@ pub enum Modal {
     /// Plan de rename IA revisable (M4-IA): superficie de DECISIÓN. Confirmar
     /// aplica (contenido revisado por el humano); Esc/cancel descarta.
     AiRenamePlan {
-        /// Dir sobre el que se aplican los moves.
+        /// Dir sobre el que se aplican los renames.
         dir: VPath,
         /// Parejas from→to del modelo (proto, UTF-8 garantizado).
         entries: Vec<norte_proto::methods::AiRenameEntry>,
@@ -3719,6 +3719,14 @@ pub enum Modal {
         /// esto, la cola de un plan > [`AI_RENAME_PAIR_LIMIT`] se aplicaba
         /// sin poder verse.
         offset: usize,
+        /// El plan del LOTE que contestó `fs.rename_batch_plan` (spec §17,
+        /// ADR 0042): veredictos, si es aplicable y el `plan_hash` que hay
+        /// que devolver para ejecutar EXACTAMENTE lo que se enseñó.
+        ///
+        /// `None` mientras está en vuelo (el modal abre y se rellena) o si
+        /// el core no pudo planificar — y sin plan no hay hash aprobado, así
+        /// que confirmar está DESHABILITADO ([`dialog_action`]).
+        plan: Option<norte_proto::methods::FsRenameBatchPlanResult>,
     },
     /// Prompt de consulta de la búsqueda semántica (M4-IA-2). Texto libre,
     /// molde [`Modal::AiRenameInstruction`]: la consulta CRUDA del usuario,
@@ -3932,13 +3940,34 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         // INICIADO y REVISADO por el humano — semántica [`ALLOW_CONFIRM`]
         // (Enter confirma, como un delete/transfer), NO el allowlist de
         // aprobación de agentes (`ALLOW_APPROVAL`, que excluye confirm).
+        //
+        // Con una salvedad que este brazo aparte existe para imponer (spec
+        // §17): confirmar necesita un plan de lote APLICABLE. Sin plan no hay
+        // `plan_hash` aprobado que mandar, y con veredictos el core no
+        // ejecutaría nada — en ambos casos la tecla de confirmar queda MUDA
+        // (cancelar sigue vivo), y el pie del modal deja de ofrecerla
+        // (`modal-rename-batch-plan-hint-blocked`). La decisión de si un plan
+        // se puede ejecutar es del core: aquí solo se lee `executable`.
+        Modal::AiRenamePlan { plan, .. } => {
+            if !ALLOW_CONFIRM.contains(&cmd) {
+                return None;
+            }
+            let confirma = matches!(cmd, "dialog.approve" | "dialog.confirm");
+            if confirma && !plan.as_ref().is_some_and(|p| p.executable) {
+                return None;
+            }
+            Some(if confirma {
+                DialogOutcome::Confirmed
+            } else {
+                DialogOutcome::Cancelled // dialog.deny | dialog.cancel
+            })
+        }
         // M4-IA-2: `SemanticHits` es igualmente una superficie de decisión
         // sobre contenido PEDIDO por el humano — Enter navega al hit bajo el
         // cursor, no muta nada.
         Modal::ConfirmDelete { .. }
         | Modal::ConfirmTransfer { .. }
         | Modal::ConfirmQuit
-        | Modal::AiRenamePlan { .. }
         | Modal::SemanticHits { .. } => {
             if !ALLOW_CONFIRM.contains(&cmd) {
                 return None;

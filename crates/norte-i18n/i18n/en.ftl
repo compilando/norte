@@ -44,6 +44,26 @@ modal-ai-rename-pair-from = { $n }. { $from }
 modal-ai-rename-pair-to = → { $to }
 modal-ai-rename-more = … { $shown }/{ $total } (scroll: ↓/↑)
 modal-ai-rename-plan-hint = y/Enter: apply · n/Esc: discard
+# The plan cannot be applied (collisions, or still being checked): the footer
+# must not offer a key that does nothing.
+modal-rename-batch-plan-hint-blocked = n/Esc: discard
+# State of the transactional batch plan (fs.rename_batch_plan), shown under
+# the pairs. "pending" = the core has not answered yet.
+modal-rename-batch-pending = batch: checking…
+modal-rename-batch-applicable = batch: applicable — one task, one undo
+modal-rename-batch-not-applicable = batch: NOT applicable — nothing will be renamed
+# Planner machinery: renames through a temporary name to break a cycle. Only
+# the COUNT is shown; the temporary names are never presented as proposals.
+modal-rename-batch-temp = via { $n } internal step(s) (a cycle needs a detour)
+# One collision per line. The offending name goes LAST so a truncation can
+# never swallow the verdict.
+modal-rename-batch-collision = ✗ { $n }. { $kind }: { $name }
+modal-rename-batch-collision-internal = another pair took it
+modal-rename-batch-collision-external = already exists
+modal-rename-batch-collision-absent-source = source not in the directory
+modal-rename-batch-collision-ambiguous-source = source matches two files
+modal-rename-batch-collision-unknown = rejected (reason unknown to this build)
+modal-rename-batch-collision-more = … { $shown }/{ $total } collisions
 modal-semantic = Semantic search
 modal-semantic-hint = Enter searches · Esc cancels
 modal-semantic-empty-query = Type a query first
@@ -241,6 +261,13 @@ msg-ai-rename-failed = AI rename failed: { $error }
 msg-ai-rename-applied = AI rename: { $n } move(s) submitted
 msg-ai-rename-invalid-plan = AI rename: invalid plan from the daemon — nothing applied
 msg-ai-rename-in-search = AI rename is not available in a search pane
+# The AI plan is applied through the transactional batch executor (spec §17):
+# ONE task, ONE undoable journal unit, rollback on failure.
+msg-rename-batch-plan-failed = batch rename: could not check the plan: { $error }
+msg-rename-batch-no-plan = batch rename: no checked plan — nothing applied
+msg-rename-batch-collisions = batch rename: the plan collides — nothing applied
+msg-rename-batch-applied = batch rename: { $n } rename(s) submitted as one batch
+msg-rename-batch-failed = batch rename failed: { $error }
 msg-semantic-running = Semantic search: thinking… (Esc cancels)
 # GUI variant: the GUI has no path to abort the in-flight request, so it must
 # not promise "Esc cancels" (never a false affordance).

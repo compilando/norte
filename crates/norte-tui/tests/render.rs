@@ -491,6 +491,12 @@ fn modal_de_plan_ai_enmascara_y_no_oculta_el_destino() {
             to: "destino-final.txt".into(),
         }],
         offset: 0,
+        plan: Some(norte_proto::methods::FsRenameBatchPlanResult {
+            steps: Vec::new(),
+            collisions: Vec::new(),
+            executable: true,
+            plan_hash: norte_proto::methods::PlanHash::parse(&"0".repeat(64)).expect("64 hex"),
+        }),
     });
     let mut terminal = Terminal::new(TestBackend::new(60, 14)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");

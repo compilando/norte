@@ -45,6 +45,27 @@ modal-ai-rename-pair-from = { $n }. { $from }
 modal-ai-rename-pair-to = → { $to }
 modal-ai-rename-more = … { $shown }/{ $total } (desplazar: ↓/↑)
 modal-ai-rename-plan-hint = y/Enter: aplicar · n/Esc: descartar
+# El plan no se puede aplicar (colisiones, o aún comprobándose): el pie no
+# puede ofrecer una tecla que no hace nada.
+modal-rename-batch-plan-hint-blocked = n/Esc: descartar
+# Estado del plan transaccional del lote (fs.rename_batch_plan), bajo las
+# parejas. "pending" = el core todavía no ha contestado.
+modal-rename-batch-pending = lote: comprobando…
+modal-rename-batch-applicable = lote: aplicable — una task, un deshacer
+modal-rename-batch-not-applicable = lote: NO aplicable — no se renombrará nada
+# Maquinaria del planificador: renames por un nombre temporal para romper un
+# ciclo. Solo se enseña el NÚMERO; los nombres temporales jamás se presentan
+# como propuestas.
+modal-rename-batch-temp = con { $n } paso(s) interno(s) (un ciclo necesita un rodeo)
+# Una colisión POR LÍNEA. El nombre ofensor va el ÚLTIMO para que un recorte
+# jamás pueda comerse el veredicto.
+modal-rename-batch-collision = ✗ { $n }. { $kind }: { $name }
+modal-rename-batch-collision-internal = otra pareja se lo llevó
+modal-rename-batch-collision-external = ya existe
+modal-rename-batch-collision-absent-source = el origen no está en el directorio
+modal-rename-batch-collision-ambiguous-source = el origen casa con dos ficheros
+modal-rename-batch-collision-unknown = rechazado (motivo que este binario no conoce)
+modal-rename-batch-collision-more = … { $shown }/{ $total } colisiones
 modal-semantic = Búsqueda semántica
 modal-semantic-hint = Enter busca · Esc cancela
 modal-semantic-empty-query = escribe una consulta primero
@@ -242,6 +263,13 @@ msg-ai-rename-failed = el renombrado IA falló: { $error }
 msg-ai-rename-applied = Renombrado IA: { $n } movimientos enviados
 msg-ai-rename-invalid-plan = renombrado IA: plan inválido del daemon — no se aplicó nada
 msg-ai-rename-in-search = el renombrado IA no está disponible en un pane de búsqueda
+# El plan IA se aplica por el ejecutor transaccional de lotes (spec §17): UNA
+# task, UNA unidad deshacible del journal, rollback si falla.
+msg-rename-batch-plan-failed = lote de renombrado: no se pudo comprobar el plan: { $error }
+msg-rename-batch-no-plan = lote de renombrado: sin plan comprobado — no se aplicó nada
+msg-rename-batch-collisions = lote de renombrado: el plan colisiona — no se aplicó nada
+msg-rename-batch-applied = lote de renombrado: { $n } renombrado(s) enviados como UN lote
+msg-rename-batch-failed = el lote de renombrado falló: { $error }
 msg-semantic-running = Búsqueda semántica: pensando… (Esc cancela)
 # Variante GUI: la GUI no tiene camino para abortar la petición en vuelo, así
 # que no debe prometer "Esc cancela" (jamás una affordance falsa).
