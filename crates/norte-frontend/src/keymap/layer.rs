@@ -190,7 +190,7 @@ fn parse_raw(s: &str) -> Result<KeymapFile, KeymapError> {
 }
 
 /// Parses a PRESET's `keymap.toml` and resolves its `dialog_from` (see
-/// [`KeymapFile::dialog_from`]): the named preset's `[dialog]` section is
+/// `KeymapFile::dialog_from`): the named preset's `[dialog]` section is
 /// copied in, so that every later reader sees an ordinary [`KeymapFile`] and
 /// need not know inheritance exists. User and project layers go through
 /// [`parse_keymap_layer`] instead, which refuses the key.
@@ -228,7 +228,7 @@ pub fn parse_keymap(s: &str) -> Result<KeymapFile, KeymapError> {
 /// (`config::load_keymap_layer` checks [`KeymapFile::has_full_keymap`] right
 /// after parsing, and that reads `dialog.keymap`).
 ///
-/// [`check_layer_keys`] carries the same refusal, and keeps carrying it:
+/// `check_layer_keys` carries the same refusal, and keeps carrying it:
 /// this function is the door every real layer comes through, but a caller
 /// that builds a [`KeymapFile`] some other way and passes it as a layer must
 /// still be told no.
