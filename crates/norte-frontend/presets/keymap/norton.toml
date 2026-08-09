@@ -1,0 +1,78 @@
+# Norton Commander — transcribed 2026-08-09. No first-hand source: NC.HLP is
+# internally compressed and no plaintext extraction of it exists, so unlike
+# the other three presets there is no `far-*.txt`-style document to check a
+# binding against. This file transcribes only the uncontroversial core: the
+# F-key row, panel swap/refresh, drive change, Ctrl+PgUp/PgDn navigation, and
+# Insert/Gray selection are common knowledge — TC and Krusader are widely
+# known as NC's successors, and the same F5/F6/F7/F8/Ctrl+U bindings recur
+# unchanged in `total-commander.toml`/`krusader.toml`, both transcribed from
+# real sources — but neither source document actually names Norton
+# Commander, so that recurrence is corroborating, not first-hand attestation.
+# If you know a binding here is wrong, or one is missing that belongs, open
+# an issue rather than silently changing it — nobody has checked this preset
+# against a running copy of NC.
+#
+# Divergences from the original: panel cursor movement (arrows, PgUp/PgDn,
+# Home/End, Enter) follows the same well-known convention TC and Krusader
+# themselves bind it by, for the same reason — it predates any of the three
+# programs' own written documentation. No bare letter is ever bound, matching
+# the other three presets' convention (NC's own quicksearch-by-typing is the
+# feature that makes it necessary here too).
+#
+# Omitted families (norte has no concept): the pull-down menu bar (F9) and
+# the user menu (F2); Ctrl+Q and Ctrl+L — no first-hand description survives
+# to say what either did in NC, so both are left unbound rather than guessed
+# at; jumping to the filesystem root (Ctrl+\\, matching TC/Krusader's own
+# omission); secure wipe (NC predates the feature — DOS had no equivalent to
+# Far's Alt+Del); select-all/deselect-all and pattern-scoped selection
+# variants beyond the plain Gray +/-/* already bound (undocumented at this
+# level of certainty).
+
+dialog_from = "orthodox"
+
+[global]
+keymap = [
+    { on = ["tab"], run = "pane.switch" },
+    { on = ["f1"], run = "app.help" },
+    { on = ["f10"], run = "app.quit" },
+    { on = ["ctrl+o"], run = "app.toggle-panels" },
+]
+
+[pane]
+keymap = [
+    { on = ["up"], run = "cursor.up" },
+    { on = ["down"], run = "cursor.down" },
+    { on = ["pgup"], run = "cursor.page-up" },
+    { on = ["pgdn"], run = "cursor.page-down" },
+    { on = ["home"], run = "cursor.top" },
+    { on = ["end"], run = "cursor.bottom" },
+    { on = ["enter"], run = "nav.enter" },
+    { on = ["ctrl+pgdn"], run = "nav.enter" },
+    { on = ["ctrl+pgup"], run = "nav.parent" },
+    { on = ["f3"], run = "pane.view" },
+    { on = ["f4"], run = "pane.edit" },
+    { on = ["f5"], run = "pane.copy" },
+    { on = ["f6"], run = "pane.move" },
+    { on = ["f7"], run = "pane.mkdir" },
+    { on = ["f8"], run = "pane.delete" },
+    { on = ["alt+f1"], run = "pane.select-drive-left" },
+    { on = ["alt+f2"], run = "pane.select-drive-right" },
+    { on = ["ctrl+u"], run = "pane.swap" },
+    { on = ["ctrl+r"], run = "pane.refresh" },
+    { on = ["insert"], run = "mark.toggle" },
+    { on = ["plus"], run = "mark.pattern-add" },
+    { on = ["-"], run = "mark.pattern-remove" },
+    { on = ["*"], run = "mark.invert" },
+]
+
+[viewer]
+keymap = [
+    { on = ["esc"], run = "viewer.close" },
+    { on = ["f3"], run = "viewer.close" },
+    { on = ["up"], run = "viewer.up" },
+    { on = ["down"], run = "viewer.down" },
+    { on = ["pgup"], run = "viewer.page-up" },
+    { on = ["pgdn"], run = "viewer.page-down" },
+    { on = ["home"], run = "viewer.top" },
+    { on = ["end"], run = "viewer.bottom" },
+]

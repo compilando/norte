@@ -18,6 +18,14 @@ pub const CUA: &str = include_str!("../../presets/keymap/cua.toml");
 pub const TOTAL_COMMANDER: &str = include_str!("../../presets/keymap/total-commander.toml");
 /// Krusader-style preset (K2b).
 pub const KRUSADER: &str = include_str!("../../presets/keymap/krusader.toml");
+/// Far Manager-style preset (K2b). No numeric prefix in the original — Far
+/// spends `Ctrl+1..Ctrl+0` on panel view modes — so, like every preset in
+/// this module, it never sets `counts`.
+pub const FAR: &str = include_str!("../../presets/keymap/far.toml");
+/// Norton Commander-style preset (K2b). No first-hand source (`NC.HLP` is
+/// internally compressed); the file transcribes the uncontroversial core —
+/// see this file's own header comment.
+pub const NORTON: &str = include_str!("../../presets/keymap/norton.toml");
 
 /// Names of every embedded preset (final review MINOR 4: this catalog
 /// used to be mirrored as a hardcoded `&[&str]` in each frontend that
@@ -25,7 +33,15 @@ pub const KRUSADER: &str = include_str!("../../presets/keymap/krusader.toml");
 /// — TUI, GUI — with no single source of truth. `source()` and `NAMES`
 /// are now tested against each other below, so a preset added to one and
 /// not the other fails CI instead of drifting silently.
-pub const NAMES: &[&str] = &["orthodox", "vim", "cua", "total-commander", "krusader"];
+pub const NAMES: &[&str] = &[
+    "orthodox",
+    "vim",
+    "cua",
+    "total-commander",
+    "krusader",
+    "far",
+    "norton",
+];
 
 /// Preset source by name; `None` if unknown (caller falls back +
 /// reports, same contract the TUI had).
@@ -37,6 +53,8 @@ pub fn source(name: &str) -> Option<&'static str> {
         "cua" => Some(CUA),
         "total-commander" => Some(TOTAL_COMMANDER),
         "krusader" => Some(KRUSADER),
+        "far" => Some(FAR),
+        "norton" => Some(NORTON),
         _ => None,
     }
 }
@@ -64,7 +82,7 @@ mod presets_catalog_tests {
     /// ya no son tres, y el nombre viejo mentiría sobre el tamaño real.
     #[test]
     fn names_tiene_los_presets_de_fabrica() {
-        assert_eq!(NAMES.len(), 5);
+        assert_eq!(NAMES.len(), 7);
     }
 
     /// Un preset embebido que no parsea no es un fallo ruidoso: los

@@ -269,6 +269,44 @@ prepend_keymap = [
     # this (`shift+f1` in TC's own source); krusader has no columns-view
     # concept documented at all, so this is its only door.
     { on = ["alt+c"], run = "pane.columns" },
+    # K2b Task 3: `far`/`norton` bind `mark.all`/`mark.clear` nowhere. Both
+    # sources' only "select/deselect everything" keys are Shift+Gray+/-,
+    # which `parse_chord` cannot express (it rejects `shift+<char>` for ANY
+    # single-character key, not only letters, and Gray+/-/* are
+    # single-character keys) — see the two presets' own header comments.
+    # `ctrl+a` — the chord orthodox/vim/cua/total-commander/krusader all use
+    # for `mark.all` — is already Far's own `pane.properties` ("Set file
+    # attributes") and stays that in the preset (rule 1: approximating is
+    # worse than omitting), so it cannot double as the fallback either.
+    #
+    # `ctrl+g` was the first choice and is wrong: Far's own source binds it
+    # to "Apply command to selected files" (far-funccmd.txt) and `far.toml`'s
+    # own header lists Ctrl+G as OMITTED rather than approximated — this
+    # supplement would have silently approximated it one layer up, breaking
+    # the promise the preset file next to it makes. `alt+g`/`alt+G` are not
+    # mentioned by any of the four bundled sources' own documentation at all
+    # (not just unbound in the seven `.toml` files — checked against
+    # `far-funccmd.txt`/`far-panelcmd.txt`/`tc-11.58-KEYBOARD.TXT`/
+    # `krusader-keys.txt` directly), so nothing real gets shadowed.
+    { on = ["alt+g"], run = "mark.all" },
+    { on = ["alt+G"], run = "mark.clear" },
+    # K2b Task 3: `far`/`norton` bind `pane.rename` nowhere. Both sources'
+    # F6 is "rename OR move" as one combined action (Far: "Rename or move
+    # file under cursor", same wording for the plain and Shift+F6 forms —
+    # neither is rename-only the way total-commander's own Shift+F6 or
+    # krusader's F2 is), so it is bound to `pane.move` and no key is left
+    # to approximate a separate rename with.
+    #
+    # `ctrl+m` was the first choice and is wrong for the same reason as
+    # `ctrl+g` above, three times over: Far's own source binds it to
+    # "Restore previous selection" (far-panelcmd.txt, and `far.toml`'s
+    # header lists it as omitted, not approximated); Total Commander's own
+    # source binds it to the Multi-Rename Tool, a batch feature with no
+    # single-file analogue (`tc-11.58-KEYBOARD.TXT`, and `total-commander
+    # .toml`'s own header omits it for exactly that reason); Krusader's own
+    # source binds it to "Open media list" (`krusader-keys.txt`). `alt+h` is
+    # not mentioned by any of the four sources' own documentation.
+    { on = ["alt+h"], run = "pane.rename" },
 ]
 
 [viewer]
