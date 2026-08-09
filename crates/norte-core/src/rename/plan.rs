@@ -156,14 +156,33 @@ impl RenamePlan {
 ///
 /// NFC when the name is valid UTF-8 — macOS hands out NFD and the same name
 /// typed elsewhere is NFC, and on APFS they are ONE file — plus a lowercase
-/// fold when the directory does not distinguish case. A name that is not UTF-8
-/// is its own bytes: never normalised, never folded (hard rule 1).
+/// fold when the directory does not distinguish case, and then NFC once more,
+/// because folding can compose what normalising had left decomposed and the two
+/// steps do not commute. A name that is not UTF-8 is its own bytes: never
+/// normalised, never folded (hard rule 1).
 ///
 /// **This is the collision equality, not the "did anything change" equality**,
 /// and the planner deliberately uses two. Folded here, it can OVER-report on a
 /// filesystem that does not normalise: a plan aiming at `café` is refused when
 /// an NFD twin sits in the directory, even though ext4 would have held both.
-/// That direction is safe — the user gets a verdict and nothing is clobbered.
+/// On the FORWARD path that direction is safe — the user gets a verdict, and
+/// the cost is a re-plan. On the UNDO path it is not symmetric: `crate::undo`
+/// asks the same question of the inverse chain, so a batch that moved one twin
+/// away cannot be reverted while the other survives, and strict LIFO strands
+/// everything older in the session behind it. That is
+/// <https://github.com/compilando/norte/issues/128>, and it is why "erring
+/// towards a verdict is safe" is a claim about `plan_batch` and not about every
+/// caller of this function.
+///
+/// **It also UNDER-reports, and the residue is named.** A filesystem folds case
+/// with case FOLDING; this folds with `str::to_lowercase`, a lowercase mapping.
+/// They agree on almost everything and diverge on about twenty code points —
+/// Greek final sigma, `U+00B5` MICRO SIGN against `U+03BC`, `U+017F` long s,
+/// the Greek symbol variants — where a case-insensitive volume says one file
+/// and this says two. Same shape as the bug the second NFC pass closes, still
+/// open, tracked in
+/// <https://github.com/compilando/norte/issues/129>.
+///
 /// Whether a step is a no-op is decided on RAW BYTES instead
 /// ([`plan_batch`]), because there the failure mode is the opposite one:
 /// silently not doing the work that was asked for. Do not unify them.
@@ -193,7 +212,21 @@ pub fn name_key(name: &[u8], caps: NameCaps) -> Cow<'_, [u8]> {
     let needs_fold =
         !caps.case_sensitive && (!nfc.is_ascii() || nfc.bytes().any(|b| b.is_ascii_uppercase()));
     if needs_fold {
-        return Cow::Owned(nfc.to_lowercase().into_bytes());
+        // NFC AGAIN, and it is not belt-and-braces: folding can COMPOSE what
+        // normalising had left decomposed, so the two do not commute and one
+        // pass is not a fixed point. `J`+U+030C has no precomposed uppercase —
+        // NFC leaves it alone — and its lowercase `j`+U+030C composes to U+01F0
+        // `ǰ`. Stopping at `to_lowercase` answers two keys for two names every
+        // case-insensitive volume calls ONE file, which under batch rename is
+        // a missing collision and a `rename` onto an occupied name. Pinned by
+        // `folding_case_can_recompose_so_the_key_normalises_again` against the
+        // corpus pair.
+        let lowered = nfc.to_lowercase();
+        return Cow::Owned(if is_nfc(&lowered) {
+            lowered.into_bytes()
+        } else {
+            lowered.nfc().collect::<String>().into_bytes()
+        });
     }
     match nfc {
         Cow::Borrowed(_) => Cow::Borrowed(name),
@@ -1212,6 +1245,65 @@ mod tests {
         );
     }
 
+    /// **Fold, then normalise AGAIN.** Lowercasing can COMPOSE a name that NFC
+    /// had left decomposed, so normalising once and folding afterwards is not
+    /// enough — the two operations do not commute.
+    ///
+    /// The corpus pair is the proof. `J` + U+030C
+    /// (`nfd_uppercase_composed_only_lowercase`) has no precomposed UPPERCASE,
+    /// so NFC leaves it as it is; lowercase it and the result is `j` + U+030C,
+    /// whose NFC *is* U+01F0 `ǰ` (`precomposed_lowercase_j_caron`). Every
+    /// case-insensitive volume calls those two names one file — APFS and HFS+
+    /// decompose before folding, an ext4 `+F` directory folds with the same
+    /// tables — so a key that answered two different values would have the
+    /// planner see no collision and the executor rename onto an occupied name.
+    ///
+    /// This is not a matter of taste about which fold to use: no reasonable
+    /// implementation disagrees here, because the two names are equal under
+    /// simple folding, full folding and canonical equivalence alike.
+    #[test]
+    fn folding_case_can_recompose_so_the_key_normalises_again() {
+        let by_id = |id: &str| -> Vec<u8> {
+            norte_testkit::corpus::hostile_names()
+                .into_iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("the corpus has no fixture `{id}`"))
+                .bytes
+        };
+        let upper = by_id("nfd_uppercase_composed_only_lowercase");
+        let lower = by_id("precomposed_lowercase_j_caron");
+        assert_ne!(upper, lower, "two names, or there is nothing to fold");
+        assert_eq!(
+            name_key(&upper, INSENSITIVE),
+            name_key(&lower, INSENSITIVE),
+            "a case-insensitive directory holds ONE of these, not two",
+        );
+        // And the same pair stays DISTINCT where case is significant: the fix
+        // is about folding, and it must not quietly merge names on ext4.
+        assert_ne!(name_key(&upper, SENSITIVE), name_key(&lower, SENSITIVE));
+    }
+
+    /// The consequence, end to end through the planner: on a case-insensitive
+    /// directory holding the uppercase spelling, a batch aiming at the
+    /// lowercase one is an EXTERNAL collision — not an executable plan whose
+    /// only step overwrites a file.
+    #[test]
+    fn a_recomposing_fold_is_caught_as_a_collision_not_planned_over() {
+        let upper = "J\u{30c}.txt".as_bytes().to_vec();
+        let lower = "\u{1f0}.txt".as_bytes().to_vec();
+        let p = plan_batch(
+            &[(name(b"x.txt"), lower)],
+            &[name(b"x.txt"), upper.clone()],
+            INSENSITIVE,
+        );
+        assert!(!p.executable(), "{:?}", p.steps);
+        assert_eq!(p.collisions[0].kind, CollisionKind::External);
+        assert_eq!(
+            p.collisions[0].name, upper,
+            "the verdict names the blocker as the DIRECTORY spells it",
+        );
+    }
+
     /// The hash is a full sha256, and its hex form (which the DIRECTORY-bound
     /// token in `rename::exec` is built from) is 64 lowercase hex digits.
     #[test]
@@ -1652,7 +1744,13 @@ mod tests {
     /// `name_key` is the identity and the flag changes nothing at all, and the
     /// third draws random bytes that essentially never form valid non-NFC
     /// UTF-8. Every bug this module has had lived in this alphabet.
-    const HOSTILE: [&[u8]; 7] = [
+    ///
+    /// The last two are the corpus pair `nfd_uppercase_composed_only_lowercase`
+    /// and `precomposed_lowercase_j_caron`, and they are here because the bug
+    /// they pin (folding can COMPOSE, so the key has to normalise again) lived
+    /// in this module while this property test was green: an alphabet that does
+    /// not contain the adversary cannot generate it.
+    const HOSTILE: [&[u8]; 9] = [
         "café".as_bytes(),
         "cafe\u{301}".as_bytes(),
         "CAFÉ".as_bytes(),
@@ -1660,6 +1758,8 @@ mod tests {
         b"a",
         "\u{130}".as_bytes(),
         b"\xff\xfe",
+        "J\u{30c}.txt".as_bytes(),
+        "\u{1f0}.txt".as_bytes(),
     ];
 
     proptest! {
@@ -1675,8 +1775,8 @@ mod tests {
         /// to have been in the directory already.
         #[test]
         fn hostile_names_land_or_are_explained(
-            listing_idx in proptest::collection::vec(0usize..7, 1..5),
-            pair_idx in proptest::collection::vec((0usize..7, 0usize..7), 1..5),
+            listing_idx in proptest::collection::vec(0usize..9, 1..5),
+            pair_idx in proptest::collection::vec((0usize..9, 0usize..9), 1..5),
             insensitive in any::<bool>(),
         ) {
             let caps = NameCaps { case_sensitive: !insensitive };
