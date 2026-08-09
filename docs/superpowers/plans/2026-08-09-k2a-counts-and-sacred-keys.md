@@ -1080,6 +1080,50 @@ presets. It compares chords."
 - Create: `docs/adr/0044-numeric-counts-and-the-sacred-keys.md`
 - Modify: `crates/norte-frontend/src/keymap/mod.rs` (ADR reference in the header)
 
+- [ ] **Step 0: Close the sacred-key hole Task 2 left visible**
+
+Task 2 implemented the rule as the plan wrote it: only a **single-chord** `tab`
+binding is rejected. It then said plainly that a sequence like
+`["tab", "j"]`, in a preset that binds no bare `tab`, would still take the key —
+and declined to widen the rule, because that is policy a plan has to authorise.
+It is authorised now: **pressing Tab and having it sit pending is exactly as
+much a loss of pane switching as rebinding it**, so the rule is about the FIRST
+chord.
+
+In `check_sacred` in `crates/norte-frontend/src/keymap/effective.rs`, change the
+condition from "the sequence is exactly the sacred chord" to "the sequence
+*starts* with the sacred chord, and is not exactly that chord bound to its
+reserved command":
+
+```rust
+            let starts_sacred = b.seq.first() == Some(&sacred);
+            let is_the_reserved_binding = b.seq.as_slice() == [sacred] && b.run == *reserved_for;
+            if starts_sacred && !is_the_reserved_binding {
+```
+
+Add the test that Task 2 correctly refused to write as a pin of the old hole:
+
+```rust
+/// Tab may not OPEN a sequence either. A preset that binds `["tab","j"]` and
+/// no bare `tab` would leave Tab sitting pending, which loses pane switching
+/// just as completely as rebinding it (specification §12).
+#[test]
+fn tab_tampoco_puede_abrir_una_secuencia() {
+    let preset = parse_keymap(
+        r#"
+[pane]
+keymap = [ { on = ["tab", "j"], run = "cursor.down" } ]
+"#,
+    )
+    .unwrap();
+    let e = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap_err();
+    assert!(matches!(e, KeymapError::SacredKey { .. }), "{e:?}");
+}
+```
+
+Re-run `just t norte-frontend` and `just t norte-tui`. Record the widening in
+the ADR: the rule is about the first chord, and why.
+
 - [ ] **Step 1: Write the ADR**
 
 ```
