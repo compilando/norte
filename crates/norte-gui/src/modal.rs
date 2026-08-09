@@ -68,6 +68,23 @@ pub enum PendingOp {
         /// Papelera (default) o permanente.
         mode: DeleteMode,
     },
+    /// Lote de renames dentro de UN directorio ejecutado como UNA task y UNA
+    /// unidad deshacible del journal (`fs.rename_batch`, spec §17, ADR 0042).
+    ///
+    /// No es «N transfers en una op»: el core decide el ORDEN y mete los
+    /// temporales que hagan falta, así que una permutación (`a→b, b→a`) —el
+    /// caso normal del rename IA— se puede hacer, y un fallo a mitad se
+    /// deshace entero.
+    RenameBatch {
+        /// El directorio en el que viven TODAS las parejas.
+        dir: VPath,
+        /// Las parejas from→to, en nombres BASE (no rutas).
+        pairs: Vec<norte_proto::methods::RenamePair>,
+        /// El hash del plan que el humano aprobó: ata esta ejecución a lo que
+        /// se le enseñó. Si el directorio derivó, el core contesta
+        /// `PlanStale` y no toca nada.
+        plan_hash: norte_proto::methods::PlanHash,
+    },
 }
 
 /// Modal activo. Uno a la vez; el render lo pinta como overlay.
@@ -119,11 +136,11 @@ pub enum Modal {
     },
     /// Plan de rename IA revisable (M4-IA): superficie de DECISIÓN —
     /// `y`/`enter` aplica (tras el cinturón
-    /// [`norte_frontend::validate_ai_plan`]), `n`/Esc
+    /// [`norte_frontend::rename_pairs`]), `n`/Esc
     /// descarta, `up`/`down` desplazan la ventana de
     /// [`AI_RENAME_PAIR_LIMIT`] parejas.
     AiRenamePlan {
-        /// Dir sobre el que se aplican los moves.
+        /// Dir sobre el que se aplican los renames.
         dir: VPath,
         /// Parejas from→to del modelo (proto; UTF-8 garantizado por el
         /// engine, pero se re-valida y se pinta a la defensiva igual).
@@ -132,6 +149,14 @@ pub enum Modal {
         /// audit MAJOR-3: sin esto, la cola de un plan largo se aplicaría
         /// sin poder verse).
         offset: usize,
+        /// El plan del LOTE que contestó `fs.rename_batch_plan` (spec §17,
+        /// ADR 0042): veredictos, si es aplicable y el `plan_hash` que hay
+        /// que devolver para ejecutar EXACTAMENTE lo que se enseñó.
+        ///
+        /// `None` mientras está en vuelo o si el core no pudo planificar — y
+        /// sin plan no hay hash aprobado, así que `y`/`enter` queda MUDO
+        /// ([`on_key`] contesta `Ignored`) y el pie deja de ofrecerlo.
+        plan: Option<norte_proto::methods::FsRenameBatchPlanResult>,
     },
     /// Renombrar in situ (`pane.rename`, shift+F6 — paridad de SEMÁNTICA con
     /// el `TransferName` de la TUI en su modo rename, no de widget).
@@ -436,6 +461,7 @@ pub fn on_key(modal: &mut Modal, key: &str, key_char: Option<&str>) -> ModalOutc
             dir,
             entries,
             offset,
+            plan,
         } => match key {
             // La convención "Enter jamás confirma" aplica a modales de
             // CONSENTIMIENTO/destructivos (aprobación de agente, quit); este
@@ -443,20 +469,26 @@ pub fn on_key(modal: &mut Modal, key: &str, key_char: Option<&str>) -> ModalOutc
             // que la TUI (`modal-ai-rename-plan-hint`).
             "y" | "enter" => {
                 // Cinturón fail-loud (paridad TUI audit MAJOR-2): TODAS las
-                // parejas se validan ANTES de someter la primera.
-                let Some(pairs) = norte_frontend::validate_ai_plan(entries) else {
+                // parejas se validan ANTES de someter nada.
+                let Some(pairs) = norte_frontend::rename_pairs(entries) else {
                     return ModalOutcome::InvalidPlan;
                 };
-                let ops = pairs
-                    .into_iter()
-                    .map(|(from, to)| PendingOp::Transfer {
-                        kind: TransferKind::Move,
-                        from: dir.join(from),
-                        to: dir.join(to),
-                        opts: TransferOptions::default(),
-                    })
-                    .collect();
-                ModalOutcome::Submit(ops)
+                // §17: confirmar necesita un plan de lote APLICABLE. Sin plan
+                // no hay `plan_hash` aprobado que mandar; con veredictos el
+                // core no ejecutaría nada. La tecla queda MUDA y el pie deja
+                // de ofrecerla (paridad con el gate de `dialog_action` en la
+                // TUI) — la decisión de si un lote se puede ejecutar es del
+                // core, aquí solo se lee `executable`.
+                let Some(plan) = plan.as_ref().filter(|p| p.executable) else {
+                    return ModalOutcome::Ignored;
+                };
+                // UNA op para el lote entero: una task, un deshacer, y el
+                // orden lo pone el core (regla dura 7).
+                ModalOutcome::Submit(vec![PendingOp::RenameBatch {
+                    dir: dir.clone(),
+                    pairs,
+                    plan_hash: plan.plan_hash.clone(),
+                }])
             }
             "n" | "escape" => ModalOutcome::Dismiss,
             "down" | "up" => {
@@ -791,31 +823,70 @@ mod tests {
         assert_eq!(query, b"a", "la ñ (2 bytes) se retiró entera");
     }
 
-    /// M4-IA: `y` aplica el plan como moves `dir/from → dir/to` (opciones
-    /// default) y `n` descarta.
+    /// Plan de lote (`fs.rename_batch_plan`) con el veredicto que se pida.
+    fn batch_plan(executable: bool) -> norte_proto::methods::FsRenameBatchPlanResult {
+        norte_proto::methods::FsRenameBatchPlanResult {
+            steps: Vec::new(),
+            collisions: Vec::new(),
+            executable,
+            plan_hash: norte_proto::methods::PlanHash::parse(&"0".repeat(64)).expect("64 hex"),
+        }
+    }
+
+    /// §17: `y` aplica el plan como UN lote transaccional (`fs.rename_batch`,
+    /// con el `plan_hash` aprobado), no como N moves sueltos; `n` descarta.
     #[test]
-    fn ai_plan_y_aplica_como_moves_y_n_descarta() {
+    fn ai_plan_y_aplica_como_un_lote_y_n_descarta() {
         let entry = norte_proto::methods::AiRenameEntry {
             from: "a.txt".into(),
             to: "b.txt".into(),
         };
+        let plan = batch_plan(true);
         let mut m = Modal::AiRenamePlan {
             dir: vp("mem:///docs"),
             entries: vec![entry],
             offset: 0,
+            plan: Some(plan.clone()),
         };
         assert_eq!(
             on_key(&mut m, "y", None),
-            ModalOutcome::Submit(vec![PendingOp::Transfer {
-                kind: TransferKind::Move,
-                from: vp("mem:///docs/a.txt"),
-                to: vp("mem:///docs/b.txt"),
-                opts: TransferOptions::default(),
+            ModalOutcome::Submit(vec![PendingOp::RenameBatch {
+                dir: vp("mem:///docs"),
+                pairs: vec![norte_proto::methods::RenamePair {
+                    from: norte_proto::Segment::new(b"a.txt".to_vec()).expect("segmento"),
+                    to: norte_proto::Segment::new(b"b.txt".to_vec()).expect("segmento"),
+                }],
+                plan_hash: plan.plan_hash.clone(),
             }])
         );
         assert_eq!(on_key(&mut m, "n", None), ModalOutcome::Dismiss);
         assert_eq!(on_key(&mut m, "escape", None), ModalOutcome::Dismiss);
         assert_eq!(on_key(&mut m, "x", None), ModalOutcome::Ignored);
+    }
+
+    /// §17 (paridad con el gate de `dialog_action` en la TUI): confirmar está
+    /// MUDO sin un plan de lote aplicable — sin plan no hay `plan_hash`
+    /// aprobado que mandar, y con veredictos el core no ejecutaría nada.
+    /// Descartar sigue vivo en los dos casos.
+    ///
+    /// (Mutación de control: quitar el gate de `on_key` devuelve un `Submit`
+    /// en las dos vueltas y rompe este test.)
+    #[test]
+    fn ai_plan_no_somete_sin_un_lote_aplicable() {
+        for plan in [None, Some(batch_plan(false))] {
+            let mut m = Modal::AiRenamePlan {
+                dir: vp("mem:///docs"),
+                entries: vec![norte_proto::methods::AiRenameEntry {
+                    from: "a.txt".into(),
+                    to: "b.txt".into(),
+                }],
+                offset: 0,
+                plan,
+            };
+            assert_eq!(on_key(&mut m, "y", None), ModalOutcome::Ignored);
+            assert_eq!(on_key(&mut m, "enter", None), ModalOutcome::Ignored);
+            assert_eq!(on_key(&mut m, "escape", None), ModalOutcome::Dismiss);
+        }
     }
 
     /// M4-IA cinturón fail-loud (paridad TUI audit MAJOR-2): UNA pareja
@@ -836,6 +907,9 @@ mod tests {
                 dir: vp("mem:///docs"),
                 entries,
                 offset: 0,
+                // Con un lote aplicable: lo que aborta es el CINTURÓN de las
+                // parejas, que corre ANTES de mirar el plan.
+                plan: Some(batch_plan(true)),
             };
             assert_eq!(on_key(&mut m, "y", None), ModalOutcome::InvalidPlan);
             assert_eq!(on_key(&mut m, "enter", None), ModalOutcome::InvalidPlan);
@@ -857,6 +931,7 @@ mod tests {
             dir: vp("mem:///d"),
             entries,
             offset: 0,
+            plan: Some(batch_plan(true)),
         };
         for expected in [1, 2, 2, 2] {
             assert_eq!(on_key(&mut m, "down", None), ModalOutcome::StayOpen);

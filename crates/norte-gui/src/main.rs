@@ -253,7 +253,15 @@ struct NorteGui {
     /// con otro modal abierto (aprobación, colisión…) y espera su turno —
     /// jamás lo pisa. Se abre al cerrarse el modal activo, DESPUÉS de drenar
     /// `conflict_backlog` (los conflictos van primero, como en la TUI).
-    pending_ai_plan: Option<(VPath, Vec<norte_proto::methods::AiRenameEntry>)>,
+    ///
+    /// Lleva el plan del LOTE (§17) que llegó en el mismo evento: sin él, el
+    /// modal abriría sin `plan_hash` aprobado y confirmar quedaría mudo
+    /// hasta un segundo viaje que nadie dispara.
+    pending_ai_plan: Option<(
+        VPath,
+        Vec<norte_proto::methods::AiRenameEntry>,
+        Option<norte_proto::methods::FsRenameBatchPlanResult>,
+    )>,
     /// Hits semánticos retenidos (M4-IA-2, molde `pending_ai_plan`): llegaron
     /// con otro modal abierto y esperan su turno — jamás lo pisan. Se abren
     /// al cerrarse el modal activo, DESPUÉS de `conflict_backlog` y de
@@ -1649,7 +1657,7 @@ impl NorteGui {
             // deuda (#121): el banner llega al pane ENFOCADO, no al solicitante
             // (igual que PluginRunResult) — un `pane.switch` durante el
             // "pensando…" deja el aviso en el pane equivocado.
-            SessionEvent::AiRenamePlan { dir, result } => match result {
+            SessionEvent::AiRenamePlan { dir, result, plan } => match result {
                 Ok(entries) if entries.is_empty() => {
                     self.errors[self.focus] = Some(norte_i18n::t("msg-ai-rename-empty"));
                 }
@@ -1662,13 +1670,30 @@ impl NorteGui {
                 }
                 Ok(entries) => {
                     // Retira el "pensando…" del banner: el plan ES la
-                    // respuesta.
-                    self.errors[self.focus] = None;
+                    // respuesta. Si el plan del LOTE (§17) falló, el banner
+                    // lo dice — el modal abre igual, con las parejas
+                    // visibles y confirmar deshabilitado: sin `plan_hash`
+                    // aprobado no hay nada honesto que mandar.
+                    let plan = match plan {
+                        Some(Ok(p)) => Some(p),
+                        Some(Err(msg)) => {
+                            self.errors[self.focus] = Some(norte_i18n::ta(
+                                "msg-rename-batch-plan-failed",
+                                &[("error", banner_safe(&msg).as_str())],
+                            ));
+                            None
+                        }
+                        None => None,
+                    };
+                    if plan.is_some() {
+                        self.errors[self.focus] = None;
+                    }
                     if self.modal.is_none() {
                         self.modal = Some(Modal::AiRenamePlan {
                             dir,
                             entries,
                             offset: 0,
+                            plan,
                         });
                     } else {
                         // Otro modal abierto (colisión…): el plan espera su
@@ -1676,7 +1701,7 @@ impl NorteGui {
                         // `pending_ai_plan`). Si YA había un plan retenido,
                         // gana el más NUEVO y la pérdida se DICE (quality
                         // review 78eb243 MINOR-3: jamás un descarte mudo).
-                        if self.pending_ai_plan.replace((dir, entries)).is_some() {
+                        if self.pending_ai_plan.replace((dir, entries, plan)).is_some() {
                             self.errors[self.focus] =
                                 Some(norte_i18n::t("gui-msg-ai-rename-superseded"));
                         }
@@ -1811,11 +1836,12 @@ impl NorteGui {
         if self.modal.is_some() {
             return;
         }
-        if let Some((dir, entries)) = self.pending_ai_plan.take() {
+        if let Some((dir, entries, plan)) = self.pending_ai_plan.take() {
             self.modal = Some(Modal::AiRenamePlan {
                 dir,
                 entries,
                 offset: 0,
+                plan,
             });
         }
     }
@@ -3426,11 +3452,19 @@ impl NorteGui {
                 ModalOutcome::Submit(ops) => {
                     self.modal = None;
                     if was_ai_plan {
-                        // Paridad TUI (`msg-ai-rename-applied`): el banner
-                        // resume cuántos moves salieron del plan confirmado.
-                        let n = ops.len().to_string();
+                        // Paridad TUI (`msg-rename-batch-applied`): el banner
+                        // resume cuántos renames salieron — del LOTE, no de
+                        // `ops`, que ahora es UNA op para todos ellos (§17).
+                        let n = ops
+                            .iter()
+                            .map(|op| match op {
+                                PendingOp::RenameBatch { pairs, .. } => pairs.len(),
+                                _ => 0,
+                            })
+                            .sum::<usize>()
+                            .to_string();
                         self.errors[self.focus] = Some(norte_i18n::ta(
-                            "msg-ai-rename-applied",
+                            "msg-rename-batch-applied",
                             &[("n", n.as_str())],
                         ));
                     }
@@ -6479,6 +6513,9 @@ fn affected_dirs(op: &PendingOp) -> Vec<VPath> {
             [from.parent(), to.parent()].into_iter().flatten().collect()
         }
         PendingOp::Delete { path, .. } => path.parent().into_iter().collect(),
+        // §17: el lote entero vive en UN directorio, origen y destino — ese
+        // es el único que hay que relistar.
+        PendingOp::RenameBatch { dir, .. } => vec![dir.clone()],
     }
 }
 
@@ -6944,6 +6981,7 @@ fn modal_lines(m: &Modal) -> Vec<String> {
             dir,
             entries,
             offset,
+            plan,
         } => {
             // Cinturón de render: el clamp vive en `modal::on_key`, pero un
             // offset fuera de rango jamás debe pintar una ventana vacía.
@@ -6989,6 +7027,7 @@ fn modal_lines(m: &Modal) -> Vec<String> {
                     ),
                 ));
             }
+            lines.extend(rename_batch_lines(plan.as_ref()));
             lines
         }
         Modal::SemanticQuery { query } => {
@@ -7077,6 +7116,76 @@ fn modal_lines(m: &Modal) -> Vec<String> {
             lines
         }
     }
+}
+
+/// Las líneas del veredicto del LOTE bajo las parejas del plan IA (spec §17,
+/// paridad byte a byte con `rename_batch_lines` de la TUI): el estado del
+/// plan que contestó `fs.rename_batch_plan` (en vuelo / aplicable / no
+/// aplicable), cuántos pasos son maquinaria del planificador —el NÚMERO, no
+/// los nombres `.norte-rename-…`, que nadie pidió— y las colisiones, UNA POR
+/// LÍNEA.
+///
+/// El nombre ofensor va el ÚLTIMO campo y acotado con `middle_ellipsis`
+/// ANTES de interpolarlo (doctrina audit H1, igual que el score del modal
+/// semántico): el veredicto y el índice de pareja son lo ACCIONABLE y no
+/// pueden depender del `.truncate()` del div, que recorta por la derecha en
+/// silencio. Un veredicto de un daemon más nuevo degrada ESA línea a una
+/// etiqueta genérica, jamás el modal entero.
+#[must_use]
+fn rename_batch_lines(plan: Option<&norte_proto::methods::FsRenameBatchPlanResult>) -> Vec<String> {
+    let mut lines = vec![norte_i18n::t(norte_frontend::plan_status_key(plan))];
+    let Some(plan) = plan else {
+        return lines;
+    };
+    let temps = norte_frontend::plan_temp_steps(plan);
+    if temps > 0 {
+        let n = temps.to_string();
+        lines.push(norte_i18n::ta(
+            "modal-rename-batch-temp",
+            &[("n", n.as_str())],
+        ));
+    }
+    let mostradas = plan
+        .collisions
+        .len()
+        .min(norte_frontend::RENAME_COLLISION_LIMIT);
+    for c in plan.collisions.iter().take(mostradas) {
+        let (name, hostil) = norte_frontend::display_name(c.name.as_bytes());
+        let name = norte_frontend::middle_ellipsis(&name, 34);
+        // Índice de PAREJA (1-based, como la etiqueta del `from`): la fila
+        // culpable es señalable aunque la clase sea de un protocolo nuevo.
+        let n = c.pair_index.saturating_add(1).to_string();
+        let kind = norte_i18n::t(norte_frontend::collision_kind_key(c.kind));
+        lines.push(hostile_badged(
+            hostil,
+            norte_i18n::ta(
+                "modal-rename-batch-collision",
+                &[
+                    ("n", n.as_str()),
+                    ("kind", kind.as_str()),
+                    ("name", name.as_str()),
+                ],
+            ),
+        ));
+    }
+    if plan.collisions.len() > mostradas {
+        // Lo escondido no se cuela limpio (molde del indicador de parejas).
+        let hidden_hostil = plan
+            .collisions
+            .iter()
+            .skip(mostradas)
+            .any(|c| norte_frontend::display_name(c.name.as_bytes()).1);
+        let shown = mostradas.to_string();
+        let total = plan.collisions.len().to_string();
+        lines.push(hostile_badged(
+            hidden_hostil,
+            norte_i18n::ta(
+                "modal-rename-batch-collision-more",
+                &[("shown", shown.as_str()), ("total", total.as_str())],
+            ),
+        ));
+    }
+    lines
 }
 
 /// Prefija el badge hostil FUERA de la traducción (paridad TUI
@@ -8927,6 +9036,7 @@ mod tests {
                         },
                     ],
                     offset: 0,
+                    plan: None,
                 },
                 // Prompt IA con la query PEGADA en bytes crudos (el buffer
                 // admite cualquier cosa que entre por un paste).
@@ -8969,6 +9079,200 @@ mod tests {
         }
     }
 
+    /// §17: una colisión es VISIBLE con su veredicto y su índice de pareja,
+    /// y el modal dice que el lote NO se puede aplicar (paridad TUI
+    /// `una_colision_se_pinta_y_el_plan_se_marca_inaplicable`).
+    #[test]
+    fn ai_plan_modal_pinta_la_colision_y_marca_el_lote_inaplicable() {
+        use super::Modal;
+        use norte_proto::methods::{RenameCollision, RenameCollisionKind};
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        let m = Modal::AiRenamePlan {
+            dir: VPath::parse("mem:///docs").unwrap(),
+            entries: vec![norte_proto::methods::AiRenameEntry {
+                from: "a.txt".into(),
+                to: "z.txt".into(),
+            }],
+            offset: 0,
+            plan: Some(norte_proto::methods::FsRenameBatchPlanResult {
+                steps: Vec::new(),
+                collisions: vec![RenameCollision {
+                    pair_index: 0,
+                    name: norte_proto::Segment::new(b"z.txt".to_vec()).unwrap(),
+                    kind: RenameCollisionKind::External,
+                }],
+                executable: false,
+                plan_hash: norte_proto::methods::PlanHash::parse(&"0".repeat(64)).unwrap(),
+            }),
+        };
+        let lines = super::modal_lines(&m);
+        // título + dir + pareja × 2 + estado + colisión = 6.
+        assert_eq!(lines.len(), 6, "{lines:?}");
+        assert_eq!(
+            lines[4],
+            norte_i18n::t("modal-rename-batch-not-applicable"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[5].contains(&norte_i18n::t("modal-rename-batch-collision-external")),
+            "el veredicto se enseña: {lines:?}"
+        );
+        assert!(lines[5].contains("z.txt"), "y el nombre ofensor: {lines:?}");
+        // `pair_index` 0 se pinta 1-based, como la etiqueta del `from`.
+        assert!(lines[5].contains("1."), "{lines:?}");
+    }
+
+    /// §17: un veredicto de un daemon MÁS NUEVO degrada UNA línea a una
+    /// etiqueta genérica, jamás el modal entero; y un paso temporal se
+    /// CUENTA, jamás se nombra (un `.norte-rename-…` entre las parejas haría
+    /// creer que norte va a dejar ese nombre en el disco).
+    #[test]
+    fn ai_plan_modal_degrada_el_veredicto_desconocido_y_no_nombra_temporales() {
+        use super::Modal;
+        use norte_proto::Segment;
+        use norte_proto::methods::{RenameCollision, RenameCollisionKind, RenameStep};
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        // El fallback `serde(other)` al que deserializa una clase de un
+        // protocolo más nuevo (el round-trip por JSON se pinea en el proto y
+        // en la TUI; aquí solo interesa cómo se PINTA).
+        let futuro = RenameCollisionKind::Unknown;
+        let entries = vec![
+            norte_proto::methods::AiRenameEntry {
+                from: "a".into(),
+                to: "b".into(),
+            },
+            norte_proto::methods::AiRenameEntry {
+                from: "b".into(),
+                to: "a".into(),
+            },
+        ];
+        let seg = |b: &[u8]| Segment::new(b.to_vec()).unwrap();
+
+        // Ciclo aplicable: DOS pasos temporales, ningún nombre a la vista.
+        let m = Modal::AiRenamePlan {
+            dir: VPath::parse("mem:///docs").unwrap(),
+            entries: entries.clone(),
+            offset: 0,
+            plan: Some(norte_proto::methods::FsRenameBatchPlanResult {
+                steps: vec![
+                    RenameStep {
+                        from: seg(b"a"),
+                        to: seg(b".norte-rename-0a1b2c3d-0"),
+                        temp: true,
+                    },
+                    RenameStep {
+                        from: seg(b"b"),
+                        to: seg(b"a"),
+                        temp: false,
+                    },
+                    RenameStep {
+                        from: seg(b".norte-rename-0a1b2c3d-0"),
+                        to: seg(b"b"),
+                        temp: true,
+                    },
+                ],
+                collisions: Vec::new(),
+                executable: true,
+                plan_hash: norte_proto::methods::PlanHash::parse(&"0".repeat(64)).unwrap(),
+            }),
+        };
+        let lines = super::modal_lines(&m);
+        assert!(
+            !lines.iter().any(|l| l.contains(".norte-rename-")),
+            "un temporal jamás se pinta como propuesta: {lines:?}"
+        );
+        assert!(
+            lines.contains(&norte_i18n::ta("modal-rename-batch-temp", &[("n", "2")])),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&norte_i18n::t("modal-rename-batch-applicable")),
+            "el rodeo no es una colisión: {lines:?}"
+        );
+
+        // Veredicto del futuro: UNA línea genérica, el modal sigue entero.
+        let m = Modal::AiRenamePlan {
+            dir: VPath::parse("mem:///docs").unwrap(),
+            entries,
+            offset: 0,
+            plan: Some(norte_proto::methods::FsRenameBatchPlanResult {
+                steps: Vec::new(),
+                collisions: vec![RenameCollision {
+                    pair_index: 1,
+                    name: seg(b"a"),
+                    kind: futuro,
+                }],
+                executable: false,
+                plan_hash: norte_proto::methods::PlanHash::parse(&"0".repeat(64)).unwrap(),
+            }),
+        };
+        let lines = super::modal_lines(&m);
+        // título + dir + 2 parejas × 2 + estado + colisión = 8.
+        assert_eq!(lines.len(), 8, "el modal sigue entero: {lines:?}");
+        assert!(
+            lines[7].contains(&norte_i18n::t("modal-rename-batch-collision-unknown")),
+            "{lines:?}"
+        );
+        assert!(
+            lines[7].contains("2."),
+            "señala la fila culpable: {lines:?}"
+        );
+    }
+
+    /// §17: el nombre ofensor de una colisión pasa por el MISMO saneado que
+    /// el resto del modal — barrido del corpus canónico: ningún hazard
+    /// sobrevive, el enmascarado MARCA la línea, y el veredicto (lo
+    /// accionable) jamás se lo come el nombre.
+    #[test]
+    fn colision_hostil_se_enmascara_marca_y_no_desplaza_el_veredicto() {
+        use super::Modal;
+        use norte_proto::methods::{RenameCollision, RenameCollisionKind};
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        let verdicto = norte_i18n::t("modal-rename-batch-collision-internal");
+        for fixture in norte_testkit::corpus::hostile_names() {
+            let m = Modal::AiRenamePlan {
+                dir: VPath::parse("mem:///docs").unwrap(),
+                entries: vec![norte_proto::methods::AiRenameEntry {
+                    from: "a".into(),
+                    to: "b".into(),
+                }],
+                offset: 0,
+                plan: Some(norte_proto::methods::FsRenameBatchPlanResult {
+                    steps: Vec::new(),
+                    collisions: vec![RenameCollision {
+                        pair_index: 0,
+                        name: norte_proto::Segment::new(fixture.bytes.clone()).unwrap(),
+                        kind: RenameCollisionKind::Internal,
+                    }],
+                    executable: false,
+                    plan_hash: norte_proto::methods::PlanHash::parse(&"0".repeat(64)).unwrap(),
+                }),
+            };
+            let lines = super::modal_lines(&m);
+            assert!(
+                !lines
+                    .iter()
+                    .any(|l| l.chars().any(norte_encoding::is_terminal_hazard)),
+                "corpus {}: un hazard sobrevivió al render: {lines:?}",
+                fixture.id
+            );
+            // UNA línea por colisión: un nombre no puede fabricar otra.
+            assert_eq!(lines.len(), 6, "corpus {}: {lines:?}", fixture.id);
+            assert!(
+                lines[5].contains(&verdicto),
+                "corpus {}: el veredicto sobrevive al nombre: {lines:?}",
+                fixture.id
+            );
+            if norte_frontend::display_name(&fixture.bytes).1 {
+                assert!(
+                    lines[5].starts_with(super::HOSTILE_BADGE),
+                    "corpus {}: enmascarado SIN badge: {lines:?}",
+                    fixture.id
+                );
+            }
+        }
+    }
+
     /// M4-IA (paridad TUI audit MAJOR-3/MINOR-5): la ventana del plan pinta
     /// [`crate::modal::AI_RENAME_PAIR_LIMIT`] parejas desde `offset`, el
     /// indicador de desbordamiento dice `shown/total` y lleva el badge si
@@ -8990,10 +9294,12 @@ mod tests {
             dir: VPath::parse("mem:///docs").unwrap(),
             entries: entries.clone(),
             offset: 0,
+            plan: None,
         };
         let lines = super::modal_lines(&m);
-        // título + dir + 5 parejas × 2 líneas + desbordamiento.
-        assert_eq!(lines.len(), 2 + limit * 2 + 1, "{lines:?}");
+        // título + dir + 5 parejas × 2 líneas + desbordamiento + estado del
+        // lote (§17: sin plan todavía, «comprobando…»).
+        assert_eq!(lines.len(), 2 + limit * 2 + 2, "{lines:?}");
         assert!(
             lines[2].contains("1.") && lines[2].contains("f1.txt"),
             "from numerado fuera de banda: {:?}",
@@ -9004,7 +9310,8 @@ mod tests {
             "flecha al INICIO de la línea del to: {:?}",
             lines[3]
         );
-        let more = lines.last().unwrap();
+        // El desbordamiento es la penúltima: la ÚLTIMA es el estado del lote.
+        let more = &lines[lines.len() - 2];
         assert!(
             more.starts_with(super::HOSTILE_BADGE),
             "pareja oculta hostil ⇒ badge en el desbordamiento: {more:?}"
@@ -9024,6 +9331,7 @@ mod tests {
             dir: VPath::parse("mem:///docs").unwrap(),
             entries,
             offset: 1,
+            plan: None,
         };
         let lines = super::modal_lines(&m);
         assert!(
@@ -9032,7 +9340,7 @@ mod tests {
                 .any(|l| l.starts_with(super::HOSTILE_BADGE) && l.contains("6.")),
             "la pareja hostil visible lleva SU badge: {lines:?}"
         );
-        let more = lines.last().unwrap();
+        let more = &lines[lines.len() - 2];
         assert!(
             more.contains("6/6") && !more.starts_with(super::HOSTILE_BADGE),
             "sin ocultas hostiles el desbordamiento va limpio: {more:?}"

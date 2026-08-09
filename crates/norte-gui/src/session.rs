@@ -437,6 +437,18 @@ pub enum SessionEvent {
         dir: VPath,
         /// Parejas from→to o error ya renderizable.
         result: Result<Vec<norte_proto::methods::AiRenameEntry>, String>,
+        /// El plan del LOTE (`fs.rename_batch_plan`, §17) de las MISMAS
+        /// parejas, pedido en el MISMO viaje que el plan IA.
+        ///
+        /// Va aquí, y no en un evento aparte, para que llegue ATÓMICAMENTE
+        /// con las parejas que describe: dos eventos podrían cruzarse con
+        /// una segunda petición y pegar un veredicto a un plan que no es el
+        /// suyo.
+        ///
+        /// `None` = ni se intentó (plan IA vacío, desbordado o con un
+        /// segmento inválido: el cinturón de la GUI lo rechaza igual);
+        /// `Some(Err)` = el core no pudo planificar.
+        plan: Option<Result<norte_proto::methods::FsRenameBatchPlanResult, String>>,
     },
     /// Resultado de `SemanticSearch` (M4-IA-2): los hits path+score
     /// (posiblemente vacíos = sin resultados) o el error aplanado a String
@@ -701,7 +713,29 @@ pub fn spawn(
                                 .await
                                 .map(|r| r.entries)
                                 .map_err(|e| format!("{e}"));
-                            let _ = tx.send(SessionEvent::AiRenamePlan { dir, result });
+                            // §17: el plan del LOTE, en el MISMO viaje. Se
+                            // pide solo si hay parejas que puedan llegar a
+                            // aplicarse — un plan vacío, uno desbordado o uno
+                            // con un segmento inválido lo rechaza el cinturón
+                            // de la GUI, así que ni se molesta al daemon.
+                            let plan = match &result {
+                                Ok(entries)
+                                    if !entries.is_empty()
+                                        && entries.len() <= norte_frontend::MAX_AI_PLAN_ENTRIES =>
+                                {
+                                    match norte_frontend::rename_pairs(entries) {
+                                        Some(pairs) => Some(
+                                            backend
+                                                .rename_batch_plan(&dir, &pairs)
+                                                .await
+                                                .map_err(|e| format!("{e}")),
+                                        ),
+                                        None => None,
+                                    }
+                                }
+                                _ => None,
+                            };
+                            let _ = tx.send(SessionEvent::AiRenamePlan { dir, result, plan });
                         });
                     }
                     SessionCmd::SemanticSearch { query } => {
@@ -968,6 +1002,13 @@ async fn submit(
             opts,
         } => backend.move_(from, to, *opts).await,
         PendingOp::Delete { path, mode } => backend.delete(path, *mode).await,
+        // §17: UNA task para el lote entero (el core reordena, mete los
+        // temporales y deshace si un paso falla).
+        PendingOp::RenameBatch {
+            dir,
+            pairs,
+            plan_hash,
+        } => backend.rename_batch(dir, pairs, plan_hash).await,
     };
     match res {
         Ok(task) => {
