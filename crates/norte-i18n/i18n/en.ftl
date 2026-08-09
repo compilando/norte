@@ -689,3 +689,14 @@ keymap-reason-tabs = panel tabs
 keymap-reason-sort = sort commands
 keymap-reason-properties = properties and directory size
 keymap-reason-connections = connection management
+
+# which-key overlay (K3a): the panel that lists what can follow a pending
+# prefix. The reason is the SHORT form — the row already spells the key and
+# names the command, so it says only why, unlike `keymap-unavailable-*`,
+# which is the sentence the status bar prints on a key that was pressed.
+whichkey-more-keys = more keys
+whichkey-unavailable-not-built = { $reason } (#{ $issue })
+whichkey-unavailable-not-here = not available here
+# A row the panel had no room for is COUNTED, never silently dropped:
+# a box that just ends implies the list ended with it.
+whichkey-truncated = … { $shown }/{ $total }

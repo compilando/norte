@@ -5,7 +5,7 @@
 //! y el I/O (`main`) viven aparte; los scripts Lua (M4) consumen de aquí la
 //! clave ESTABLE de [`error_key`].
 
-use norte_i18n::{t, ta};
+use norte_i18n::{Lang, t, ta};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 
 /// Un panel: directorio actual y sus entradas YA ordenadas.
@@ -780,8 +780,26 @@ pub struct App {
     focus: usize,
     /// `true` cuando el usuario pidió salir.
     pub quit: bool,
-    /// Secuencia de teclas pendiente, ya formateada (status bar).
+    /// Secuencia de teclas pendiente, ya formateada (status bar). Se escribe
+    /// SOLO por [`App::show_pending`]/[`App::clear_pending`], que la mantienen
+    /// de acuerdo con [`App::which_key`].
     pub pending: String,
+    /// The which-key panel, open exactly while a chord sequence is pending
+    /// (K3a). `None` = closed.
+    ///
+    /// It takes NO keys of its own — the pane (or viewer) resolver keeps the
+    /// keyboard while it is up, which is the whole point: the reader carries
+    /// on typing the sequence and watches the panel narrow. It is the one
+    /// overlay of this crate for which that is true, so `keyboard_owner`
+    /// counts it only so a dispatch that opens or closes it is noticed, never
+    /// to route a key to it.
+    ///
+    /// Written ONLY by [`App::show_pending`]/[`App::clear_pending`], next to
+    /// [`App::pending`]: the panel and the status-bar segment describe the
+    /// same resolver state, and two fields that can be updated separately are
+    /// two fields that will eventually disagree — a panel left open over a
+    /// keymap that was hot-reloaded under it would teach keys nobody has.
+    pub which_key: Option<norte_frontend::whichkey::WhichKeyRows>,
     /// Diálogo modal activo (bloquea el keymap hasta resolverse).
     pub modal: Option<Modal>,
     /// Último mensaje para la barra (error por categoría o resultado).
@@ -1618,6 +1636,7 @@ impl App {
             focus: 0,
             quit: false,
             pending: String::new(),
+            which_key: None,
             modal: None,
             message: None,
             board: crate::tasks::TaskBoard::default(),
@@ -1649,6 +1668,67 @@ impl App {
             settings: None,
             swap_seq: 0,
         }
+    }
+
+    /// Publishes a resolver's in-flight state to the screen: the status-bar
+    /// segment ([`Self::pending`]) and the which-key panel
+    /// ([`Self::which_key`]), which must never disagree about it.
+    ///
+    /// The ONE place that decides whether the panel is open, and it decides it
+    /// from the resolver rather than from the [`Resolution`] variant that got
+    /// us here:
+    ///
+    /// - a pending SEQUENCE opens it — immediately, with no delay of any kind.
+    ///   ADR 0006's resolution is timing-free and a panel that waited 400 ms
+    ///   would put timing back into what the reader sees;
+    /// - a bare COUNT does not. Its pending sequence is empty, so there are no
+    ///   rows: the continuation of a count is any key at all, and the panel
+    ///   would be the whole keymap. K2a already paints the count in the bar,
+    ///   and a count typed BEHIND a prefix still shows — in the panel's title.
+    ///
+    /// [`Resolution`]: norte_frontend::keymap::Resolution
+    pub fn show_pending(&mut self, resolver: &norte_frontend::keymap::Resolver, lang: Lang) {
+        self.pending = crate::keymap::pending_display(resolver);
+        self.which_key = (!resolver.pending().is_empty()).then(|| {
+            norte_frontend::whichkey::WhichKeyRows::build(
+                resolver.effective(),
+                resolver.pending(),
+                resolver.count(),
+                lang,
+            )
+        });
+    }
+
+    /// Nothing is pending any more: the bar segment and the panel go together.
+    ///
+    /// Called by every arm that ENDS a pending state — a command ran, the key
+    /// was unavailable, `Esc` reset it, a key the frontend does not model
+    /// arrived — and by the hot reload, which replaces the resolvers whole
+    /// (ADR 0007): a panel built from the old effective map would survive its
+    /// keymap and list keys the new one does not have.
+    pub fn clear_pending(&mut self) {
+        self.pending.clear();
+        self.which_key = None;
+    }
+
+    /// The reader is no longer typing a sequence, and it was not a key of that
+    /// sequence that ended it: a gesture (a double click), or a key SWALLOWED
+    /// before the resolver ever saw it (the `Esc` that cancels a Lua command,
+    /// an AI rename or a semantic search in flight).
+    ///
+    /// Resets the resolver too, which [`Self::clear_pending`] alone does not:
+    /// the pending chords live in the resolver, and clearing only the screen
+    /// would leave `g` armed inside it, so the NEXT key would complete a
+    /// sequence the reader had already abandoned. It is the same treatment the
+    /// run loop gives a key the frontend does not model.
+    ///
+    /// The visible symptom this exists for: with a Lua command running and `g`
+    /// pending, `Esc` is consumed by the cancellation and the panel used to
+    /// stay on screen — the one key that means "never mind" appearing to do
+    /// nothing at all.
+    pub fn abandon_pending(&mut self, resolver: &mut norte_frontend::keymap::Resolver) {
+        resolver.reset();
+        self.clear_pending();
     }
 
     /// Lays the open help overlay out for a body of `width`×`height` cells,
@@ -6784,5 +6864,148 @@ mod help_plugin_snapshot_tests {
                 .availability("plugin:acme.ftp:sync")
                 .is_available()
         );
+    }
+}
+
+#[cfg(test)]
+mod which_key_tests {
+    use super::{App, Pane};
+    use norte_frontend::keymap::{
+        Availability, Effective, Resolution, Resolver, Screen, parse_chord, parse_keymap,
+    };
+    use norte_i18n::Lang;
+    use norte_proto::{Scheme, VPath};
+
+    /// Counts ON, one `g` prefix with an available branch, an unavailable one
+    /// (`pane.pack` is `Planned`, #132 — with K2b's presets that is a normal
+    /// row, not an edge case) and a deeper branch.
+    fn resolver() -> Resolver {
+        let src = r#"
+counts = true
+
+[pane]
+keymap = [
+    { on = ["g", "g"], run = "cursor.top" },
+    { on = ["g", "p"], run = "pane.pack" },
+    { on = ["j"], run = "cursor.down" },
+]
+"#;
+        let preset = parse_keymap(src).expect("fixture parses");
+        let known = ["cursor.top", "cursor.down"];
+        let eff =
+            Effective::build_for(&preset, &[], &known, Screen::Browse).expect("fixture builds");
+        Resolver::new(eff)
+    }
+
+    fn app() -> App {
+        let root = VPath::root(Scheme::new("mem").expect("scheme"), None);
+        App::new(
+            Pane::new(root.clone(), Vec::new()),
+            Pane::new(root, Vec::new()),
+        )
+    }
+
+    fn push(app: &mut App, r: &mut Resolver, key: &str) -> Resolution {
+        let res = r.push(parse_chord(key).expect("chord"));
+        match res {
+            Resolution::Pending(_) | Resolution::Counting(_) => app.show_pending(r, Lang::En),
+            _ => app.clear_pending(),
+        }
+        res
+    }
+
+    /// The pending arm OPENS it — on the keystroke itself, with no delay of
+    /// any kind (ADR 0006) — and the `Run` that ends the sequence closes it.
+    #[test]
+    fn a_pending_prefix_opens_the_panel_and_a_run_closes_it() {
+        let (mut app, mut r) = (app(), resolver());
+        assert!(matches!(
+            push(&mut app, &mut r, "g"),
+            Resolution::Pending(1)
+        ));
+        let wk = app.which_key.as_ref().expect("the panel is open");
+        assert_eq!(wk.title, "g");
+        let chords: Vec<&str> = wk.rows.iter().map(|row| row.chord.as_str()).collect();
+        assert_eq!(chords, vec!["g", "p"], "{chords:?}");
+
+        assert!(matches!(
+            push(&mut app, &mut r, "g"),
+            Resolution::Run { .. }
+        ));
+        assert!(
+            app.which_key.is_none(),
+            "the sequence ended: so does the panel"
+        );
+        assert!(app.pending.is_empty(), "and the bar segment goes with it");
+    }
+
+    /// A BARE count does not open it: the continuation of a count is any key
+    /// at all, so the panel would be the whole keymap. The bar still paints
+    /// the number (K2a) — a count that cannot be seen cannot be cancelled.
+    #[test]
+    fn a_bare_count_does_not_open_the_panel() {
+        let (mut app, mut r) = (app(), resolver());
+        assert!(matches!(
+            push(&mut app, &mut r, "1"),
+            Resolution::Counting(1)
+        ));
+        assert!(matches!(
+            push(&mut app, &mut r, "2"),
+            Resolution::Counting(12)
+        ));
+        assert!(app.which_key.is_none(), "a bare count has no panel");
+        assert_eq!(app.pending, "12", "but the bar shows it");
+    }
+
+    /// A count BEHIND a prefix is the state a reader most often cannot
+    /// explain, so the panel that opens says the number is still in flight.
+    #[test]
+    fn a_count_behind_a_prefix_shows_in_the_title() {
+        let (mut app, mut r) = (app(), resolver());
+        push(&mut app, &mut r, "1");
+        push(&mut app, &mut r, "2");
+        push(&mut app, &mut r, "g");
+        let wk = app.which_key.as_ref().expect("the panel is open");
+        assert_eq!(wk.title, "12 g");
+    }
+
+    /// An unavailable continuation is a ROW, dimmed and explained — hiding it
+    /// would recreate the silence K1 removed.
+    #[test]
+    fn the_rows_include_an_unavailable_binding_with_its_reason() {
+        let (mut app, mut r) = (app(), resolver());
+        push(&mut app, &mut r, "g");
+        let wk = app.which_key.as_ref().expect("the panel is open");
+        let p = wk
+            .rows
+            .iter()
+            .find(|row| row.chord == "p")
+            .expect("the pane.pack row");
+        assert!(matches!(p.avail, Availability::NotBuilt { issue: 132, .. }));
+        assert!(p.reason.contains("132"), "{:?}", p.reason);
+    }
+
+    /// `Esc` cancels a sequence, and every other end of the pending state
+    /// closes the panel with the bar segment: the two are written by the same
+    /// pair of methods precisely so they cannot disagree.
+    #[test]
+    fn esc_and_a_miss_close_it_too() {
+        let (mut app, mut r) = (app(), resolver());
+        push(&mut app, &mut r, "g");
+        assert!(matches!(push(&mut app, &mut r, "esc"), Resolution::Reset));
+        assert!(app.which_key.is_none(), "Esc cancelled the sequence");
+
+        push(&mut app, &mut r, "g");
+        // A chord that continues nothing is a miss: same treatment.
+        assert!(matches!(push(&mut app, &mut r, "z"), Resolution::Reset));
+        assert!(app.which_key.is_none());
+
+        // And a key the frontend does not model at all reaches neither arm:
+        // the run loop resets the resolver and clears both by hand.
+        push(&mut app, &mut r, "g");
+        r.reset();
+        app.clear_pending();
+        assert!(app.which_key.is_none());
+        assert!(app.pending.is_empty());
     }
 }

@@ -35,6 +35,7 @@ pub mod settings;
 mod sort;
 pub mod theme;
 pub mod viewer;
+pub mod whichkey;
 
 pub use decoration::{BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_decoration};
 pub use display::{

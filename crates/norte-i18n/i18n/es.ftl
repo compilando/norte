@@ -705,3 +705,16 @@ keymap-reason-tabs = pestañas de panel
 keymap-reason-sort = comandos de ordenación
 keymap-reason-properties = propiedades y tamaño de directorio
 keymap-reason-connections = gestión de conexiones
+
+# Overlay which-key (K3a): el panel que lista lo que puede seguir a un
+# prefijo pendiente. El motivo va en forma CORTA — la fila ya escribe la
+# tecla y nombra el comando, así que solo dice por qué, a diferencia de
+# `keymap-unavailable-*`, que es la frase que pinta la barra de estado
+# cuando la tecla SÍ se ha pulsado.
+whichkey-more-keys = más teclas
+whichkey-unavailable-not-built = { $reason } (#{ $issue })
+whichkey-unavailable-not-here = no está disponible aquí
+# Una fila que no cupo en el panel se CUENTA, jamás se cae en
+# silencio: una caja que simplemente termina da a entender que la
+# lista terminó con ella.
+whichkey-truncated = … { $shown }/{ $total }

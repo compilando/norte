@@ -255,19 +255,17 @@ pub fn presets() -> Vec<(&'static str, KeymapFile)> {
 /// contador que no se puede cancelar.
 ///
 /// Vacío cuando no hay ni contador ni secuencia: la barra calla.
+///
+/// K3a: la composición vive en `norte_frontend::whichkey::pending_title`, que
+/// es también el TÍTULO del panel which-key. Las dos superficies pintan el
+/// MISMO estado a una línea de distancia, así que dos strings distintos serían
+/// dos ortografías de una sola cosa (`f5 g` abajo, `F5 g` arriba) — y solo una
+/// de ellas iba por `paint_chord`, que es quien ENMASCARA: un `keymap.toml` de
+/// proyecto no lleva confianza y puede ligar un RLO o un BEL, y este string se
+/// pinta en un terminal.
 #[must_use]
 pub fn pending_display(resolver: &Resolver) -> String {
-    let chords = resolver
-        .pending()
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(" ");
-    match (resolver.count(), chords.is_empty()) {
-        (None, _) => chords,
-        (Some(n), true) => n.to_string(),
-        (Some(n), false) => format!("{n} {chords}"),
-    }
+    norte_frontend::whichkey::pending_title(resolver.pending(), resolver.count())
 }
 
 #[cfg(test)]

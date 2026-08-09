@@ -32,7 +32,7 @@ use norte_tui::help::TuiChords;
 use norte_tui::hints::DialogHints;
 use norte_tui::keymap::{
     COMMANDS, Command, Count, DIALOG_COMMANDS, Effective, Resolution, Resolver, Screen,
-    chord_from_crossterm, count_ignored_message, pending_display, presets, unavailable_message,
+    chord_from_crossterm, count_ignored_message, presets, unavailable_message,
 };
 use norte_tui::lua::{
     CommandRun, Layer, LuaHost, PaneCtx, RunOutcome, StatusInput, TrustDecision, TrustStore,
@@ -2152,6 +2152,12 @@ async fn run(
                         // camino para entrar en un directorio sería un
                         // segundo sitio donde arreglar cada bug de cd.
                         mouse::After::Enter => {
+                            // K3a: un gesto es OTRA entrada. La secuencia que
+                            // el lector estuviera tecleando se abandona con su
+                            // panel — no la completa el ratón, y dejarla
+                            // armada haría que la siguiente tecla disparase un
+                            // comando pedido antes de cambiar de directorio.
+                            app.abandon_pending(resolver);
                             let outcome = dispatch(
                                 app,
                                 backend,
@@ -2711,6 +2717,11 @@ async fn run(
                             && let Some((_, token)) = &lua_run
                         {
                             token.cancel();
+                            // K3a: la tecla se CONSUME aquí, así que el
+                            // resolver no la ve — y una secuencia a medias
+                            // (con su panel which-key encima) se quedaría
+                            // armada mientras el lector cree haber cancelado.
+                            app.abandon_pending(resolver);
                             continue;
                         }
                         // Esc con ai.rename_plan en vuelo (BROWSE, M4-IA):
@@ -2724,6 +2735,9 @@ async fn run(
                         {
                             run.handle.abort();
                             app.message = None;
+                            // K3a: ídem — Esc consumido aquí también cancela
+                            // la secuencia en vuelo, jamás solo su pintura.
+                            app.abandon_pending(resolver);
                             continue;
                         }
                         // Esc con una búsqueda semántica en vuelo (BROWSE,
@@ -2735,6 +2749,7 @@ async fn run(
                         {
                             run.handle.abort();
                             app.message = None;
+                            app.abandon_pending(resolver);
                             continue;
                         }
                         // Pane virtual de búsqueda (liveSearch T6): con un
@@ -2905,7 +2920,13 @@ async fn run(
                         if let Some(chord) = chord_from_crossterm(key.modifiers, key.code) {
                             match active.push(chord) {
                                 Resolution::Run { command: cmd, count } => {
-                                    app.pending.clear();
+                                    // K3a: cierra TAMBIÉN el panel which-key, y
+                                    // antes de `keyboard_owner(app)` — el
+                                    // fingerprint del contador se toma con el
+                                    // panel ya cerrado, así que el cierre no
+                                    // cuenta como «el despacho movió el
+                                    // teclado» y no parte un `5j`.
+                                    app.clear_pending();
                                     // K2a: un contador sobre un comando que no
                                     // lo acepta NO se traga — corre una vez y
                                     // se dice. Se pone ANTES del despacho a
@@ -3032,22 +3053,32 @@ async fn run(
                                 // `pending_display` compone los dos (en `12gg`
                                 // conviven). Un contador que no se ve es un
                                 // contador que no se puede cancelar.
+                                //
+                                // K3a: y el mismo estado abre (o no) el panel
+                                // which-key. Los dos brazos llaman a UNA sola
+                                // función porque la barra y el panel describen
+                                // el MISMO resolver: es `show_pending` quien
+                                // sabe que un contador suelto no tiene panel
+                                // (su secuencia pendiente está vacía), no este
+                                // `match`. Sin temporizador de ningún tipo: el
+                                // panel aparece con la tecla que deja el
+                                // prefijo pendiente (ADR 0006).
                                 Resolution::Pending(_) | Resolution::Counting(_) => {
-                                    app.pending = pending_display(active);
+                                    app.show_pending(active, lang);
                                 }
                                 // K1 T4: la tecla ESTÁ ligada y esta build no
                                 // puede correr lo que tiene ligado. Antes se
                                 // despachaba un nombre sin brazo; ahora la
                                 // barra de estado dice por qué.
                                 Resolution::Unavailable { command, why } => {
-                                    app.pending.clear();
+                                    app.clear_pending();
                                     app.message = Some(unavailable_message(&command, why));
                                 }
-                                Resolution::Reset => app.pending.clear(),
+                                Resolution::Reset => app.clear_pending(),
                             }
                         } else {
                             active.reset();
-                            app.pending.clear();
+                            app.clear_pending();
                         }
                     }
                 }
@@ -5380,7 +5411,10 @@ async fn reload_config(
                 *resolver = Resolver::new(browse);
                 *viewer_resolver = Resolver::new(viewer);
                 *dialog_resolver = Resolver::new(dialog);
-                app.pending.clear();
+                // K3a: y con la barra se va el panel which-key — sus filas
+                // salieron del efectivo que se acaba de sustituir, así que un
+                // panel superviviente enseñaría teclas que ya no existen.
+                app.clear_pending();
                 app.message = Some(t("msg-config-reloaded"));
                 // El tema también es hot-reloadable (ADR 0020): si falla, el
                 // mensaje de error del tema pisa el de "config recargada".
@@ -7233,6 +7267,18 @@ fn keyboard_owner(app: &App) -> u16 {
         app.palette.is_some(),
         app.settings.is_some(),
         app.focused().quick_visible().is_some(),
+        // K3a: the which-key panel takes no keys — the pane resolver keeps
+        // them while it is up — and, unlike its neighbours, this bit is
+        // CONSTANT across the comparison by construction: `Resolution::Run`
+        // clears the panel before `owner_before` is sampled, and nothing
+        // reachable from `dispatch` can open one (the only two writers are
+        // `App::show_pending`/`clear_pending`, both of them on the key path).
+        // So it can never break a `5j`, and it can never save one either. It
+        // is here as a DEFENSIVE entry: the day a command opens a which-key of
+        // its own (a "show me everything" key is the obvious candidate), the
+        // count must notice, and the alternative is remembering to add it
+        // then.
+        app.which_key.is_some(),
     ];
     bits.iter()
         .enumerate()

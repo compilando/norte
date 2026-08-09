@@ -293,6 +293,27 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(settings) = &app.settings {
         draw_settings(frame, settings, &app.theme);
     }
+    // K3a: el panel which-key va tras los overlays y ANTES del modal. Es el
+    // único que no se queda ninguna tecla —el resolver del pane las conserva
+    // mientras está arriba—, así que no compite por el teclado con nada de lo
+    // de arriba; se pinta encima porque describe la secuencia que el lector
+    // está tecleando AHORA, y taparla con un overlay abierto antes sería
+    // esconder la respuesta a la pregunta que acaba de hacer.
+    //
+    // CON UN MODAL ABIERTO NO se pinta, y esta es la excepción que confirma lo
+    // anterior: un modal puede abrirse SOLO (una aprobación de policy que
+    // llega por el bus, una colisión al terminar una copia) sin que nadie haya
+    // tocado una tecla, y a partir de ahí las teclas van al `dialog_resolver`.
+    // Un panel que siguiera diciendo «g → ir arriba» junto a un diálogo que se
+    // queda la `g` es exactamente la mentira de píxeles que documenta el
+    // comentario del modal, más abajo. La secuencia sigue viva en el resolver
+    // del pane (el modal no la cancela, como no cancela el `[g …]` de la
+    // barra): se vuelve a ver al cerrarse el diálogo.
+    if let Some(wk) = &app.which_key
+        && app.modal.is_none()
+    {
+        draw_which_key(frame, wk, &app.theme);
+    }
     // Revisión S, M3: el modal se pinta ÚLTIMO, por encima de CUALQUIER otro
     // overlay — el enrutado de teclas ya lo trata como AUTORITATIVO en
     // presencia de la palette o el overlay de ajustes (`modal_preempts_
@@ -858,6 +879,121 @@ fn plugin_description_line(
 /// sizing que [`draw_nav_popup`]/[`draw_extensions`], footer en CELDAS
 /// (`Line::width`), suelo 34 (el listado de nombres de preset ya cabía),
 /// tope el ancho del frame.
+/// The which-key panel (K3a): while a chord sequence is PENDING, what can
+/// follow it — every continuation, the unavailable ones included and dimmed,
+/// with the reason they do nothing.
+///
+/// It appears with the keystroke that leaves the prefix pending and vanishes
+/// with the one that ends it. No delay, ever: ADR 0006's resolution is
+/// timing-free, and a panel on a 400 ms timer would make the same keystrokes
+/// show different things depending on how fast they were typed.
+///
+/// Anchored at the bottom left, just above the status bar, where the pending
+/// segment it explains is already painted — the panes stay readable above it.
+/// It takes NO keys: the resolver keeps the keyboard, so the reader carries on
+/// typing the sequence and watches the panel narrow.
+///
+/// Every string it paints is masked at the source: chords come through
+/// `paint_chord` (a project layer can bind any lone codepoint) and the rest is
+/// Fluent text or a catalogue command name.
+fn draw_which_key(
+    frame: &mut Frame<'_>,
+    wk: &norte_frontend::whichkey::WhichKeyRows,
+    theme: &TuiTheme,
+) {
+    use norte_frontend::keymap::Availability;
+
+    if wk.is_empty() {
+        return;
+    }
+    let base = frame.area();
+    // The status bar owns the last line and the panel never paints over it:
+    // that segment is what survives when there is no room for the box, which
+    // is exactly the case below. FOUR rows above the bar and not three,
+    // because with three the only line inside the borders would be the
+    // "… 0/12" counter — three of the reader's rows spent saying that there
+    // was no room to say anything. The floor is "at least one real key".
+    let outside = base.height.saturating_sub(1);
+    if outside < 4 {
+        return;
+    }
+    let cap = usize::from(outside.saturating_sub(2)); // lines inside the borders
+    let total = wk.rows.len();
+    // A dropped row is a key the panel does not mention, so the count of what
+    // was dropped COSTS a line of its own: taking `cap` rows and then adding
+    // the count on top is how the count itself gets clipped, and a box that
+    // just ends implies the list ended with it.
+    let (shown, truncated) = if total <= cap {
+        (total, false)
+    } else {
+        (cap.saturating_sub(1), true)
+    };
+    let body = shown + usize::from(truncated);
+    let chord_w = wk
+        .rows
+        .iter()
+        .take(shown)
+        .map(|r| r.chord.width())
+        .max()
+        .unwrap_or(0);
+    let text = |r: &norte_frontend::whichkey::WhichKeyRow| {
+        let sep = if r.reason.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", r.reason)
+        };
+        let tail = if r.opens_sequence { " …" } else { "" };
+        format!("{}{}{}", r.label, tail, sep)
+    };
+    let mut lines: Vec<Line<'_>> = wk
+        .rows
+        .iter()
+        .take(shown)
+        .map(|r| {
+            let pad = " ".repeat(chord_w.saturating_sub(r.chord.width()));
+            let chord = Span::styled(format!(" {}{pad}  ", r.chord), theme.role(Role::Title));
+            // Dimmed, not hidden: the key IS bound, it just cannot run — the
+            // panel says why instead of pretending the key does not exist.
+            let style = if r.avail == Availability::Here {
+                Style::default()
+            } else {
+                Style::default().add_modifier(ratatui::style::Modifier::DIM)
+            };
+            Line::from(vec![chord, Span::styled(text(r), style)])
+        })
+        .collect();
+    if truncated {
+        lines.push(Line::raw(format!(
+            " {}",
+            ta(
+                "whichkey-truncated",
+                &[("shown", &shown.to_string()), ("total", &total.to_string()),],
+            )
+        )));
+    }
+    let title = format!(" {} … ", wk.title);
+    let content = lines.iter().map(Line::width).max().unwrap_or(0);
+    let width = u16::try_from(content.max(title.width()).saturating_add(2))
+        .unwrap_or(u16::MAX)
+        .min(base.width);
+    let height = u16::try_from(body.saturating_add(2))
+        .unwrap_or(u16::MAX)
+        .min(outside.max(1));
+    let area = Rect {
+        x: base.x,
+        y: base.y + outside.saturating_sub(height),
+        width,
+        height,
+    };
+    clear_themed(frame, area, theme);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(Role::ModalBorder));
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 fn draw_theme_picker(
     frame: &mut Frame<'_>,
     picker: &crate::app::ThemePicker,
@@ -3174,8 +3310,11 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let (dir_texto, dir_hostil) =
         norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
     let marca = if dir_hostil { HOSTILE_BADGE } else { "" };
-    // Sin chuleta de teclas: mentiría según el preset (el which-key overlay
-    // llega en fase 5). La secuencia pendiente SÍ se pinta (ADR 0006).
+    // Sin chuleta de teclas: mentiría según el preset. La secuencia pendiente
+    // SÍ se pinta (ADR 0006), y desde K3a el panel which-key
+    // ([`draw_which_key`]) pinta encima de esta barra lo que puede SEGUIR a
+    // esa secuencia. Este segmento no desaparece con él: es la única línea que
+    // sobrevive a un panel recortado en un terminal bajo.
     let seq = if app.pending.is_empty() {
         String::new()
     } else {
@@ -4447,5 +4586,116 @@ mod plugin_description_line_tests {
         let texto = line_text(&line);
         assert!(!texto.contains('\u{202E}'));
         assert!(texto.contains('\u{FFFD}'));
+    }
+}
+
+#[cfg(test)]
+mod which_key_render_tests {
+    use super::draw_which_key;
+    use crate::theme::TuiTheme;
+    use norte_frontend::keymap::{Effective, Screen, parse_chord, parse_keymap};
+    use norte_frontend::whichkey::WhichKeyRows;
+    use norte_i18n::Lang;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::style::Modifier;
+
+    fn panel(count: Option<u32>) -> WhichKeyRows {
+        let src = r#"
+counts = true
+
+[pane]
+keymap = [
+    { on = ["g", "g"], run = "cursor.top" },
+    { on = ["g", "p"], run = "pane.pack" },
+    { on = ["g", "a", "b"], run = "mark.all" },
+]
+"#;
+        let preset = parse_keymap(src).expect("fixture parses");
+        let known = ["cursor.top", "mark.all"];
+        let eff =
+            Effective::build_for(&preset, &[], &known, Screen::Browse).expect("fixture builds");
+        WhichKeyRows::build(&eff, &[parse_chord("g").expect("chord")], count, Lang::En)
+    }
+
+    /// The panel paints its title (count included), one row per continuation,
+    /// and the unavailable row DIMMED with its reason — the reader is told why
+    /// the key does nothing instead of not finding the key at all.
+    #[test]
+    fn the_panel_paints_every_continuation_and_dims_the_unavailable_one() {
+        let theme = TuiTheme::default();
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).expect("terminal de test");
+        terminal
+            .draw(|f| draw_which_key(f, &panel(Some(12)), &theme))
+            .expect("draw");
+        let text = terminal.backend().to_string();
+        assert!(text.contains("12 g"), "the count in flight: {text}");
+        assert!(text.contains("go to top"), "the available row: {text}");
+        // No help text exists for a command that is not built: the row falls
+        // back to the NAME, never to a raw `help-cmd-…` id.
+        assert!(text.contains("pane.pack"), "the unavailable row: {text}");
+        assert!(!text.contains("help-cmd-"), "a raw Fluent id: {text}");
+        assert!(text.contains("#132"), "the issue that tracks it: {text}");
+        assert!(text.contains('…'), "the row that opens more keys: {text}");
+
+        // The `p` row is dimmed; the `g` row is not.
+        let buf = terminal.backend().buffer();
+        let dim_of = |needle: &str| -> bool {
+            for y in 0..buf.area.height {
+                let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+                if row.contains(needle) {
+                    return (0..buf.area.width)
+                        .any(|x| buf[(x, y)].modifier.contains(Modifier::DIM));
+                }
+            }
+            panic!("no row painted {needle}");
+        };
+        assert!(dim_of("pane.pack"), "an unavailable row is dimmed");
+        assert!(!dim_of("go to top"), "an available one is not");
+    }
+
+    /// A terminal too short for the rows keeps the status line free, stays
+    /// inside the frame and COUNTS what it dropped: a box that just ends
+    /// implies the list ended with it.
+    #[test]
+    fn a_short_terminal_truncates_with_a_count_and_never_overflows() {
+        let theme = TuiTheme::default();
+        // Five rows: one for the status bar, two borders, and two lines
+        // inside — one real key and the count of the two that did not fit.
+        let mut terminal = Terminal::new(TestBackend::new(24, 5)).expect("terminal de test");
+        terminal
+            .draw(|f| draw_which_key(f, &panel(None), &theme))
+            .expect("draw");
+        let text = terminal.backend().to_string();
+        assert!(text.contains("1/3"), "the rows it could not show: {text}");
+        // The last line — the status bar's — was not painted over.
+        let last = text.lines().last().expect("a last line").to_owned();
+        assert!(
+            last.chars().all(|c| c.is_whitespace() || c == '"'),
+            "the status line was overwritten: {last:?}"
+        );
+
+        // Too short for even one real key: the panel does not open at all, and
+        // the bar's pending segment is what the reader is left with — a box
+        // whose one line says "… 0/3" would spend three rows saying nothing.
+        let mut squeezed = Terminal::new(TestBackend::new(24, 4)).expect("terminal de test");
+        squeezed
+            .draw(|f| draw_which_key(f, &panel(None), &theme))
+            .expect("draw");
+        let painted = squeezed.backend().to_string();
+        assert!(
+            painted.chars().all(|c| c.is_whitespace() || c == '"'),
+            "nothing is painted: {painted}"
+        );
+
+        // Degenerate geometry must not panic or paint outside the frame. The
+        // narrow-but-TALL one is the interesting case: it is the only one that
+        // reaches the drawing code, with `width` clamped to a box that is all
+        // border and no inside.
+        for (w, h) in [(4_u16, 1_u16), (1, 3), (2, 2), (1, 10), (3, 12)] {
+            let mut tiny = Terminal::new(TestBackend::new(w, h)).expect("terminal de test");
+            tiny.draw(|f| draw_which_key(f, &panel(None), &theme))
+                .expect("draw");
+        }
     }
 }

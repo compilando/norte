@@ -49,6 +49,31 @@ pub(super) struct Binding {
     pub(super) avail: Availability,
 }
 
+/// ONE key that may follow a pending prefix — a row of the which-key panel
+/// ([`Effective::continuations`]).
+///
+/// Borrows its command from the map it was read out of: building one copies
+/// nothing but two words and a flag, so the panel's cost is the `Vec` and the
+/// frontend's own strings, not a clone of the keymap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Continuation<'a> {
+    /// The chord to press next.
+    pub next: Chord,
+    /// Length of the WHOLE sequence this row was taken from. Greater than
+    /// `prefix.len() + 1` means [`Self::next`] opens yet another sequence
+    /// rather than running [`Self::command`] — the overlay marks those with a
+    /// trailing `…` instead of claiming they run something.
+    pub seq_len: usize,
+    /// The command at the end of that sequence. When several sequences share
+    /// [`Self::next`], it is the first in precedence order — see
+    /// [`Effective::continuations`].
+    pub command: &'a str,
+    /// Whether this build can run [`Self::command`]. Unavailable rows are
+    /// painted, dimmed and with their reason: a key that cannot run must say
+    /// so, not vanish from the panel that lists it.
+    pub avail: Availability,
+}
+
 /// Keymap EFECTIVO: capas y contextos ya fusionados y validados
 /// (prefix-free). Inmutable tras construir; clonable barato (el hot-reload
 /// construye uno nuevo y lo cambia entero, ADR 0007).
@@ -515,6 +540,104 @@ impl Effective {
         })
     }
 
+    /// Every binding whose sequence CONTINUES `prefix`: the rows a which-key
+    /// overlay paints while `prefix` is pending. The next chord of each match,
+    /// its command and its availability — unavailable ones INCLUDED, because a
+    /// which-key panel that hides them recreates the silence K1 removed: the
+    /// key still resolves, it just says why it does nothing.
+    ///
+    /// One row per NEXT chord, in [`paint_chord`](super::paint_chord) order, so the panel does not
+    /// reshuffle between two builds of the same map. When several sequences
+    /// share a next chord (`g a b` and `g a c` under `g`), the FIRST in
+    /// precedence order supplies `command`/`avail` — meaningful only when
+    /// `seq_len == prefix.len() + 1`, which is exactly when the chord runs
+    /// something rather than opening more keys. A caller that paints
+    /// `command` without testing `seq_len` is claiming a prefix runs the
+    /// command at the end of one arbitrary branch of it.
+    ///
+    /// The two are never in doubt at once: the map is validated prefix-free
+    /// (ADR 0006), so `g a` and `g a b` cannot both exist, and therefore
+    /// sequences sharing a next chord always AGREE on whether that chord runs
+    /// something. And "first wins" is the resolver's own rule —
+    /// `lookup` scans the same `bindings` in the same order — so the
+    /// panel cannot disagree with the key about which binding a chord means.
+    ///
+    /// An empty `prefix` returns every single-chord binding, and every first
+    /// chord of a longer one. Legal, and what a future "show me everything"
+    /// key would use; K3a's frontends never call it that way — a bare count
+    /// does not open the panel, because the continuation of a count is any key
+    /// at all.
+    ///
+    /// **Not the per-keystroke path.** Call it once per keystroke that leaves
+    /// the resolver PENDING — the one that opens the sequence and each one
+    /// that deepens it, since the rows change — never on every key event the
+    /// way [`Self::single_chord_runs`] is asked, and never from inside a
+    /// per-frame `render`. It allocates one `Vec` and one sort key per row,
+    /// and the row builder on top of it
+    /// ([`WhichKeyRows::build`](crate::whichkey::WhichKeyRows::build)) is the
+    /// expensive half: a Fluent format and several `String`s per row. At
+    /// typing speed that is nothing; at 60 Hz it is the ~140-allocations-per-
+    /// keystroke pattern K2a deleted from `means_command`, wearing a hat. The
+    /// remedy is the one `norte-tui` uses: build the snapshot on the resolver
+    /// transition, store it, and let the renderer read the stored value.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::{Effective, Screen, parse_chord, parse_keymap};
+    ///
+    /// let src = r#"
+    /// [pane]
+    /// keymap = [
+    ///     { on = ["g", "g"], run = "cursor.top" },
+    ///     { on = ["g", "h"], run = "cursor.bottom" },
+    ///     { on = ["f5"], run = "pane.copy" },
+    /// ]
+    /// "#;
+    /// let preset = parse_keymap(src).unwrap();
+    /// let known = ["cursor.top", "cursor.bottom", "pane.copy"];
+    /// let eff = Effective::build_for(&preset, &[], &known, Screen::Browse).unwrap();
+    ///
+    /// let g = parse_chord("g").unwrap();
+    /// let rows = eff.continuations(&[g]);
+    /// assert_eq!(rows.len(), 2);
+    /// assert_eq!(rows[0].command, "cursor.top");
+    /// assert_eq!(rows[1].command, "cursor.bottom");
+    /// // `f5` continues nothing: it is a whole binding, not a prefix.
+    /// assert!(eff.continuations(&[parse_chord("f5").unwrap()]).is_empty());
+    /// ```
+    #[must_use]
+    pub fn continuations(&self, prefix: &[Chord]) -> Vec<Continuation<'_>> {
+        // Decorate-sort-undecorate: the sort key is the chord as it is
+        // PAINTED — the string the reader actually sees, so the panel is in
+        // the order it looks like it is in (`F5` before `a`, not after it,
+        // which raw `Display` would give) — and computing it inside a
+        // comparator would allocate a String per comparison instead of one
+        // per row.
+        let mut rows: Vec<(String, Continuation<'_>)> = Vec::new();
+        for b in &self.bindings {
+            if b.seq.len() <= prefix.len() || b.seq[..prefix.len()] != prefix[..] {
+                continue;
+            }
+            let next = b.seq[prefix.len()];
+            // Dedup by NEXT chord: `g g` and `g h` are two rows, one chord
+            // reachable through two longer sequences is one. First wins,
+            // which is precedence order.
+            if rows.iter().any(|(_, c)| c.next == next) {
+                continue;
+            }
+            rows.push((
+                super::chord::paint_chord(&next.to_string()),
+                Continuation {
+                    next,
+                    seq_len: b.seq.len(),
+                    command: b.run.as_str(),
+                    avail: b.avail,
+                },
+            ));
+        }
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows.into_iter().map(|(_, c)| c).collect()
+    }
+
     pub(super) fn lookup(&self, candidate: &[Chord]) -> Lookup<'_> {
         for b in &self.bindings {
             if b.seq[..] == candidate[..] {
@@ -543,4 +666,124 @@ pub(super) enum Lookup<'a> {
     Exact(&'a str, Availability),
     Prefix,
     Miss,
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::super::{Screen, parse_chord, parse_keymap};
+    use super::{Availability, Effective};
+
+    /// Vim-shaped fixture: a `g` prefix with two branches, one three-chord
+    /// branch under it, a plain binding that is nobody's prefix, and one
+    /// binding this build cannot run (`pane.pack` is `Planned`, #132).
+    fn vim_shaped() -> Effective {
+        let src = r#"
+[pane]
+keymap = [
+    { on = ["g", "g"], run = "cursor.top" },
+    { on = ["g", "h"], run = "cursor.bottom" },
+    { on = ["g", "a", "b"], run = "mark.all" },
+    { on = ["g", "a", "c"], run = "mark.invert" },
+    { on = ["g", "p"], run = "pane.pack" },
+    { on = ["f5"], run = "pane.copy" },
+]
+"#;
+        let preset = parse_keymap(src).expect("fixture parses");
+        let known = [
+            "cursor.top",
+            "cursor.bottom",
+            "mark.all",
+            "mark.invert",
+            "pane.copy",
+        ];
+        Effective::build_for(&preset, &[], &known, Screen::Browse).expect("fixture builds")
+    }
+
+    #[test]
+    fn continuations_of_a_prefix_are_its_next_chords_deduplicated() {
+        let eff = vim_shaped();
+        let g = parse_chord("g").expect("chord");
+        let rows = eff.continuations(&[g]);
+        let painted: Vec<String> = rows.iter().map(|c| c.next.to_string()).collect();
+        // `a` ONCE, although two sequences (`g a b`, `g a c`) reach it.
+        assert_eq!(painted, vec!["a", "g", "h", "p"], "{painted:?}");
+        let a = rows
+            .iter()
+            .find(|c| c.next == parse_chord("a").expect("chord"));
+        let a = a.expect("the `a` row");
+        assert_eq!(a.seq_len, 3, "`g a` opens a longer sequence");
+        assert_eq!(a.command, "mark.all", "first in precedence order");
+        let gg = rows.iter().find(|c| c.next == g).expect("the `g` row");
+        assert_eq!(gg.seq_len, 2, "`g g` runs something");
+        assert_eq!(gg.command, "cursor.top");
+    }
+
+    #[test]
+    fn a_complete_binding_that_is_nobody_prefix_continues_nothing() {
+        let eff = vim_shaped();
+        let f5 = parse_chord("f5").expect("chord");
+        assert!(eff.continuations(&[f5]).is_empty());
+    }
+
+    /// A key bound to something this build has not got is a ROW, not a hole:
+    /// hiding it is the silence K1 removed, and with K2b's presets naming
+    /// ~30 `Planned` commands it is the common case, not an edge one.
+    #[test]
+    fn an_unavailable_continuation_is_listed_with_its_reason() {
+        let eff = vim_shaped();
+        let rows = eff.continuations(&[parse_chord("g").expect("chord")]);
+        let p = rows
+            .iter()
+            .find(|c| c.command == "pane.pack")
+            .expect("the unavailable row");
+        assert!(
+            matches!(
+                p.avail,
+                Availability::NotBuilt {
+                    issue: 132,
+                    reason: "keymap-reason-archive-write"
+                }
+            ),
+            "{:?}",
+            p.avail
+        );
+    }
+
+    /// Same map, same order, every time: the panel must not reshuffle between
+    /// two builds, or a reader's muscle memory reads the wrong row.
+    #[test]
+    fn the_order_is_deterministic_across_builds() {
+        let first = vim_shaped();
+        let second = vim_shaped();
+        let g = parse_chord("g").expect("chord");
+        let a: Vec<String> = first
+            .continuations(&[g])
+            .iter()
+            .map(|c| c.next.to_string())
+            .collect();
+        let b: Vec<String> = second
+            .continuations(&[g])
+            .iter()
+            .map(|c| c.next.to_string())
+            .collect();
+        assert_eq!(a, b);
+    }
+
+    /// The empty prefix is the whole first level — legal, and what a future
+    /// "show me everything" key would ask for. Every binding contributes its
+    /// FIRST chord, so `g` appears once for its four branches.
+    #[test]
+    fn an_empty_prefix_returns_the_first_level() {
+        let eff = vim_shaped();
+        let rows = eff.continuations(&[]);
+        let painted: Vec<String> = rows.iter().map(|c| c.next.to_string()).collect();
+        assert_eq!(painted, vec!["f5", "g"], "{painted:?}");
+        let g = rows.iter().find(|c| c.next.to_string() == "g").expect("g");
+        assert_eq!(g.seq_len, 2, "`g` opens a sequence, it runs nothing");
+        let f5 = rows
+            .iter()
+            .find(|c| c.next.to_string() == "f5")
+            .expect("f5");
+        assert_eq!(f5.seq_len, 1, "`f5` is the whole binding");
+    }
 }
