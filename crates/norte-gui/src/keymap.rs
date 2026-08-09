@@ -393,10 +393,20 @@ fn build_effectives_layers(
 /// `tests::build_effectives_preset_only_no_panica` sobre [`KNOWN_PRESETS`]
 /// entero, no solo sobre orthodox. **K2b:** cada preset nuevo entra en ese test
 /// o esta `expect` deja de ser honesta.
+///
+/// Y una advertencia sobre DÓNDE vive ese test (rust-reviewer, K2a T5):
+/// `norte-gui` está fuera de `just ci` (GPUI enciende
+/// `serde_json/preserve_order` y contaminaría los goldens del core), así que el
+/// invariante solo lo comprueba `just gui-ci`. Quien añada un preset tiene que
+/// correrlo: el gate principal se quedaría verde con esta `expect` ya rota.
 #[must_use]
 pub fn build_effectives_preset_only(preset_name: &str) -> (Effective, Effective) {
-    build_effectives_with(preset_name, &[])
-        .expect("preset de fábrica + supplemento (constantes compiladas) construyen")
+    // El nombre va en el mensaje: un crash que dice CUÁL preset es un
+    // diagnóstico; uno que solo dice «un preset de fábrica» es un informe de
+    // crash que hay que reproducir para entender.
+    build_effectives_with(preset_name, &[]).unwrap_or_else(|e| {
+        panic!("preset de fábrica {preset_name:?} + supplemento (constantes compiladas): {e}")
+    })
 }
 
 /// [`build_effectives_preset_only`] MÁS las capas que se le pasen, sobre el
