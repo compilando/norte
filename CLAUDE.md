@@ -22,10 +22,12 @@ just prune                              # Reclaim it without a full rebuild
 **The gate is billed per PLAN, not per task.** Measured on the batch-rename
 session (10 tasks, 17 agents): the gate ran 50 times and consumed 7.3 of the
 12 hours — 60% of the whole session. The implementing agents spent 77%, 87%
-and 98% of their lifetime waiting on it. That is the single largest cost in
-this repository, and the fix is fewer runs, not faster ones: `target/` takes an
-exclusive cargo lock, so a second compile in the same tree does not overlap,
-it queues.
+and 98% of their lifetime waiting on it. The fix is fewer runs, not faster
+ones: `target/` takes an exclusive cargo lock, so a second compile in the same
+tree does not overlap, it queues.
+
+This budget works — the session after it went from 50 gate runs to 3. It is
+**not** the largest cost, though; that is the token budget below. Keep both.
 
 | when | run | budget |
 | --- | --- | --- |
@@ -58,6 +60,57 @@ gate time, the cheapest part of the session.
 
 `cov` is the bulk of `just ci` and can only move if you touched proto/vfs/core
 — the sole crates under the 85% gate — so it stays out of the loop entirely.
+
+### The token budget
+
+**Generated tokens are the wall clock.** Measured on the keymap session (K1 +
+K2a, 11 dispatches, 9.7 hours): about **one million output tokens at ~48
+tokens/second**, which alone accounts for roughly five and a half hours. The
+gate was 78 minutes of it. Everything else — reading, editing, git — was two
+minutes.
+
+| where the session went | |
+| --- | --- |
+| token generation (controller + subagents) | ~1M tokens, ~5.5h equivalent |
+| gate (`ci`, `ci-fast`, `t`, `c`, `gui-ci`) | 78 min |
+| agents idling on `sleep` / `tail -f /dev/null` | 19 min |
+| waiting for a human to answer a question | 4.9h, of which 4.6h was two questions |
+
+So the lever is **write less**, and it is mostly the controller's to pull.
+
+**Dispatch prompts point at the plan; they do not contain it.** Pasting a
+task's full text into a subagent prompt costs 3–6k tokens of *controller
+output* — 80 seconds of generation each, eleven times a session. The subagent
+reading `docs/superpowers/plans/<plan>.md` costs it ~2k tokens of *input*,
+which is instant. A dispatch prompt is the plan path, the task number, and the
+one thing the subagent cannot derive from the file: **what the previous task
+discovered.** That last part is the only reason the prompt exists; everything
+else is duplication. (This contradicts `superpowers:subagent-driven-development`,
+which says to inline the text. Its reasoning is file-reading overhead, and that
+is not what costs here.)
+
+**Use the cheapest model that can do the task.** Pass `model:` on the Agent
+call. A pure file move, a mechanical pattern adaptation, a TOML transcribed
+from a source document — none of these need the largest model, and using it
+anyway is the single easiest thing to stop doing.
+
+**Never let an agent idle.** `sleep` in the foreground is blocked; agents route
+around it with `timeout N tail -f /dev/null`, which is the same waste wearing a
+hat. Forbid both in dispatch prompts. If something must be waited on, it is a
+background job the harness will report, not a wall-clock guess.
+
+**Plans carry code where determinism pays for it, and not elsewhere.** A plan
+with every test body written out costs thousands of controller tokens and is
+the work done twice — but on this repository it has twice caught a design error
+*before* an agent ran (a count over `cursor.top` cannot mean "go to line 12"; a
+sacred key must also not open a sequence). Spend the tokens on the tests and
+the tricky signatures; leave mechanical bodies to the agent.
+
+**Do not block on a question you can answer yourself.** Nine of eleven
+questions in that session were answered within four minutes and cost 18 minutes
+total; two cost 4.6 hours because nobody was there. Every avoidable question is
+a potential three-hour stall, so batch what must be asked, and otherwise state
+the assumption and keep going.
 
 **An intermittently red test is a bug, not noise.** Do not re-run it until it
 goes green: that demonstrates nothing and hides the cause. There are ~26
