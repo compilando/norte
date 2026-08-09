@@ -158,6 +158,50 @@ pub fn preset_commands(screen: Screen) -> Vec<String> {
     out
 }
 
+/// The user-facing sentence for an unavailable key. Lives here rather than in
+/// each frontend so the TUI and the GUI cannot word it differently.
+///
+/// [`Availability::Here`] has nothing to say — the key runs — so it renders
+/// empty; a caller only ever builds this from a
+/// [`Resolution::Unavailable`](crate::keymap::Resolution::Unavailable), which
+/// never carries it.
+///
+/// ```
+/// use norte_frontend::keymap::{Availability, unavailable_message};
+///
+/// let m = unavailable_message(
+///     "pane.select-drive",
+///     Availability::NotBuilt { reason: "keymap-reason-volume-enumeration", issue: 131 },
+/// );
+/// assert!(m.contains("pane.select-drive"), "{m}");
+/// assert!(m.contains("131"), "{m}");
+/// // The catalogue holds a Fluent ID: it must be TRANSLATED, not pasted.
+/// assert!(!m.contains("keymap-reason-"), "{m}");
+///
+/// assert!(unavailable_message("pane.hotlist", Availability::NotHere).contains("pane.hotlist"));
+/// assert!(unavailable_message("pane.copy", Availability::Here).is_empty());
+/// ```
+#[must_use]
+pub fn unavailable_message(command: &str, why: Availability) -> String {
+    match why {
+        Availability::Here => String::new(),
+        // `reason` is a Fluent ID, not prose (see the catalogue): translate it
+        // first, then interpolate. Interpolating the id would print English
+        // inside a Spanish sentence.
+        Availability::NotBuilt { reason, issue } => norte_i18n::ta(
+            "keymap-unavailable-not-built",
+            &[
+                ("command", command),
+                ("reason", &norte_i18n::t(reason)),
+                ("issue", &issue.to_string()),
+            ],
+        ),
+        Availability::NotHere => {
+            norte_i18n::ta("keymap-unavailable-not-here", &[("command", command)])
+        }
+    }
+}
+
 #[cfg(test)]
 mod preset_commands_tests {
     use super::{Screen, preset_commands};
@@ -1346,6 +1390,51 @@ keymap = [
         .unwrap();
         let e = Effective::build_for(&preset, &[], &["cursor.top"], Screen::Browse).unwrap_err();
         assert!(matches!(e, KeymapError::AmbiguousPrefix { .. }), "{e:?}");
+    }
+
+    /// Pressing a key bound to something norte has not built returns a third
+    /// outcome. `Reset` would be indistinguishable from an unbound key, which is
+    /// precisely the silence this work exists to remove.
+    #[test]
+    fn una_tecla_no_disponible_resuelve_a_unavailable() {
+        let preset = parse_keymap(
+            r#"
+[pane]
+keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["pane.copy"], Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        let chord = parse_chord("alt+f1").unwrap();
+        match r.push(chord) {
+            Resolution::Unavailable { command, why } => {
+                assert_eq!(command, "pane.select-drive");
+                assert!(matches!(why, Availability::NotBuilt { .. }), "{why:?}");
+            }
+            other => panic!("esperaba Unavailable, salió {other:?}"),
+        }
+        assert!(r.pending().is_empty(), "la secuencia debe quedar limpia");
+    }
+
+    /// The message must NAME the command and, when the reason exists, carry it —
+    /// a "not available" with no subject is the silence with extra steps.
+    #[test]
+    fn el_mensaje_de_no_disponible_nombra_el_comando_y_el_motivo() {
+        let m = unavailable_message(
+            "pane.select-drive",
+            Availability::NotBuilt {
+                reason: "keymap-reason-volume-enumeration",
+                issue: 131,
+            },
+        );
+        assert!(m.contains("pane.select-drive"), "{m}");
+        assert!(m.contains("131"), "{m}");
+        // The ID must have been TRANSLATED, not interpolated raw.
+        assert!(!m.contains("keymap-reason-"), "{m}");
+
+        let m = unavailable_message("pane.hotlist", Availability::NotHere);
+        assert!(m.contains("pane.hotlist"), "{m}");
     }
 
     /// Masking runs FIRST and the cosmetics cannot undo it (encoding audit

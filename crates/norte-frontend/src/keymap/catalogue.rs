@@ -30,7 +30,9 @@ pub enum Status {
     /// A preset may legitimately bind it; norte has not built it yet. Carries
     /// the reason a user is owed and the issue that tracks it.
     Planned {
-        /// Short, user-facing: "volume enumeration".
+        /// Fluent id of the short, user-facing reason — NOT the prose itself.
+        /// The catalogue must not carry a locale; the frontend translates it
+        /// when it prints the message.
         reason: &'static str,
         /// The GitHub issue. Never zero, never invented — pinned by test.
         issue: u32,
@@ -146,7 +148,7 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("dialog.back", false),
     live("dialog.filter", false),
     // --- planned: named by a preset, not built yet ---
-    planned("pane.select-drive", "volume enumeration", 131),
+    planned("pane.select-drive", "keymap-reason-volume-enumeration", 131),
 ];
 
 /// The entry for `name`, or `None` if the vocabulary has never heard of it —
@@ -191,6 +193,21 @@ mod tests {
             if let Status::Planned { reason, issue } = d.status {
                 assert!(!reason.is_empty(), "{} sin motivo", d.name);
                 assert!(issue > 0, "{} sin issue", d.name);
+            }
+        }
+    }
+
+    /// A reason id with no Fluent message renders as the raw id — an unbuilt
+    /// key would then explain itself with `keymap-reason-...`, which is worse
+    /// than saying nothing. Pin both locales.
+    #[test]
+    fn todo_motivo_planned_esta_traducido_en_ambos_locales() {
+        for d in CATALOGUE {
+            if let Status::Planned { reason, .. } = d.status {
+                for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+                    let s = norte_i18n::t_in(lang, reason);
+                    assert_ne!(s, reason, "{} sin traducir en {lang:?}", d.name);
+                }
             }
         }
     }

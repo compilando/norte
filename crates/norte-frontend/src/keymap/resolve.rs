@@ -2,7 +2,7 @@
 //! hot-reload (ADR 0007) builds a new one and swaps the resolver whole.
 
 use super::chord::Chord;
-use super::effective::{Effective, Lookup};
+use super::effective::{Availability, Effective, Lookup};
 
 /// Resultado de empujar una tecla al [`Resolver`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,6 +11,14 @@ pub enum Resolution {
     Run(String),
     /// Prefijo válido de alguna secuencia: esperando (profundidad actual).
     Pending(usize),
+    /// La tecla SÍ está ligada, y lo que tiene ligado no puede ejecutarse
+    /// aquí. El frontend lo dice; jamás se queda sin hacer nada.
+    Unavailable {
+        /// El comando al que la tecla está ligada.
+        command: String,
+        /// Por qué no puede ejecutarse.
+        why: Availability,
+    },
     /// Sin binding (o cancelación): estado limpio, tecla descartada.
     Reset,
 }
@@ -66,12 +74,19 @@ impl Resolver {
         }
         self.pending.push(chord);
         match self.eff.lookup(&self.pending) {
-            // K1 T3: la disponibilidad viaja en el `Lookup` pero AÚN no
-            // cambia el desenlace — la salida «no disponible» del resolver es
-            // la tarea 4. Hoy se ignora para preservar el comportamiento.
-            Lookup::Exact(run, _avail) => {
+            Lookup::Exact(run, Availability::Here) => {
                 self.pending.clear();
                 Resolution::Run(run.to_owned())
+            }
+            // K1 T4: la tecla está ligada pero esta build no puede correr lo
+            // que tiene ligado. Un `Reset` aquí sería indistinguible de una
+            // tecla sin ligar: exactamente el silencio que K1 elimina.
+            Lookup::Exact(run, why) => {
+                self.pending.clear();
+                Resolution::Unavailable {
+                    command: run.to_owned(),
+                    why,
+                }
             }
             Lookup::Prefix => Resolution::Pending(self.pending.len()),
             Lookup::Miss => {

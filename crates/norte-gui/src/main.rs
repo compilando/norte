@@ -3633,6 +3633,23 @@ impl NorteGui {
                         self.run_viewer_command(&cmd, cx);
                     }
                     norte_frontend::keymap::Resolution::Pending(_) => {}
+                    // K1 T4. Hoy INALCANZABLE por construcción: ambos
+                    // contextos se validan contra `all_commands()`
+                    // (COMMANDS ∪ VIEWER_COMMANDS), así que un binding de
+                    // `[global]` visible desde el visor sale `Here`. Se
+                    // escribe igual porque el día que los catálogos se
+                    // separen la rama tiene que existir — y con la MISMA
+                    // frase que el dual-pane. AVISO HONESTO: el flash NO se
+                    // pinta con el visor abierto (`render`, gate de la
+                    // revisión 7c MINOR-4b), así que si esta rama llegara a
+                    // dispararse el mensaje no se vería hasta que el visor
+                    // tenga su propia línea de estado mutable.
+                    norte_frontend::keymap::Resolution::Unavailable { command, why } => {
+                        self.flash = Some((
+                            norte_frontend::keymap::unavailable_message(&command, why),
+                            true,
+                        ));
+                    }
                     norte_frontend::keymap::Resolution::Reset => {}
                 }
             } else {
@@ -3684,6 +3701,19 @@ impl NorteGui {
                     // indicador de secuencia pendiente lo pinta `render` al
                     // pie leyendo `resolver.pending()` (#91).
                     resolution_dbg = "pending";
+                }
+                norte_frontend::keymap::Resolution::Unavailable { command, why } => {
+                    // 16 de los 47 bindings de Browse son `NotHere` en este
+                    // frontend. Antes de K1 desaparecían al cargar; entre la
+                    // tarea 3 de K1 y aquí despachaban un nombre de comando
+                    // sin brazo. Ahora dicen lo que son. El flash vive hasta
+                    // la siguiente tecla (`on_key` lo limpia arriba) y SÍ se
+                    // pinta sobre el dual-pane, que es donde estamos.
+                    resolution_dbg = "unavailable";
+                    self.flash = Some((
+                        norte_frontend::keymap::unavailable_message(&command, why),
+                        true,
+                    ));
                 }
                 norte_frontend::keymap::Resolution::Reset => {
                     resolution_dbg = "reset";

@@ -692,3 +692,6 @@ setting-ui-confirm-quit-name = Confirmar antes de salir
 setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca. Un atajo de salida de emergencia, donde esté ligado (p. ej. Ctrl+C en la TUI), siempre lo evita.
 setting-keymap-preset-name = Preset de keymap
 setting-keymap-preset-desc = Preset base de atajos de teclado (orthodox, vim o cua). Las capas de usuario/proyecto pueden seguir rebindeando encima.
+keymap-unavailable-not-built = { $command }: aún no está construido ({ $reason }, issue #{ $issue })
+keymap-unavailable-not-here = { $command }: no está disponible en esta interfaz
+keymap-reason-volume-enumeration = enumeración de volúmenes

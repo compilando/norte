@@ -2972,6 +2972,16 @@ async fn run(
                                         .collect::<Vec<_>>()
                                         .join(" ");
                                 }
+                                // K1 T4: la tecla ESTÁ ligada y esta build no
+                                // puede correr lo que tiene ligado. Antes se
+                                // despachaba un nombre sin brazo; ahora la
+                                // barra de estado dice por qué.
+                                Resolution::Unavailable { command, why } => {
+                                    app.pending.clear();
+                                    app.message = Some(
+                                        norte_frontend::keymap::unavailable_message(&command, why),
+                                    );
+                                }
                                 Resolution::Reset => app.pending.clear(),
                             }
                         } else {
@@ -3032,9 +3042,10 @@ async fn on_theme_picker_key(
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run(cmd) => cmd,
-        // Sin semántica de secuencia definida para overlays (T2): ignorar y
-        // reiniciar el estado de resolución.
-        Resolution::Pending(_) => {
+        // Sin semántica de secuencia definida para overlays (T2), y lo mismo
+        // para una tecla ligada a algo que esta build no corre (K1 T4):
+        // ignorar y reiniciar el estado de resolución.
+        Resolution::Pending(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return;
         }
@@ -3112,9 +3123,10 @@ async fn on_columns_key(
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run(cmd) => cmd,
-        // Sin semántica de secuencia definida para overlays (T2): ignorar y
-        // reiniciar el estado de resolución.
-        Resolution::Pending(_) => {
+        // Sin semántica de secuencia definida para overlays (T2), y lo mismo
+        // para una tecla ligada a algo que esta build no corre (K1 T4):
+        // ignorar y reiniciar el estado de resolución.
+        Resolution::Pending(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return false;
         }
@@ -3291,9 +3303,10 @@ fn on_help_key(
     let chord = chord_from_crossterm(mods, code)?;
     let cmd = match resolver.push(chord) {
         Resolution::Run(cmd) => cmd,
-        // Sin semántica de secuencia definida para overlays (T2): ignorar y
-        // reiniciar el estado de resolución.
-        Resolution::Pending(_) => {
+        // Sin semántica de secuencia definida para overlays (T2), y lo mismo
+        // para una tecla ligada a algo que esta build no corre (K1 T4):
+        // ignorar y reiniciar el estado de resolución.
+        Resolution::Pending(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return None;
         }
@@ -4842,7 +4855,9 @@ async fn on_extensions_key(
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run(cmd) => cmd,
-        Resolution::Pending(_) => {
+        // Secuencia en curso, o tecla ligada a algo que esta build no corre
+        // (K1 T4): ignorar y reiniciar el estado de resolución.
+        Resolution::Pending(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return;
         }
@@ -5097,7 +5112,9 @@ async fn on_nav_popup_key(
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run(cmd) => cmd,
-        Resolution::Pending(_) => {
+        // Secuencia en curso, o tecla ligada a algo que esta build no corre
+        // (K1 T4): ignorar y reiniciar el estado de resolución.
+        Resolution::Pending(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return Cd::Cancelled;
         }
@@ -6009,9 +6026,10 @@ async fn on_dialog_key(
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run(cmd) => cmd,
-        // Sin semántica de secuencia definida para overlays (T2): ignorar y
-        // reiniciar el estado de resolución.
-        Resolution::Pending(_) => {
+        // Sin semántica de secuencia definida para overlays (T2), y lo mismo
+        // para una tecla ligada a algo que esta build no corre (K1 T4):
+        // ignorar y reiniciar el estado de resolución.
+        Resolution::Pending(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return Cd::Cancelled;
         }

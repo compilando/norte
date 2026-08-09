@@ -676,3 +676,6 @@ setting-ui-confirm-quit-name = Confirm before quitting
 setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never. An emergency-exit shortcut, where bound (e.g. the TUI's Ctrl+C), always bypasses this.
 setting-keymap-preset-name = Keymap preset
 setting-keymap-preset-desc = Base key-binding preset (orthodox, vim, or cua). User/project layers can still rebind on top.
+keymap-unavailable-not-built = { $command }: not built yet ({ $reason }, issue #{ $issue })
+keymap-unavailable-not-here = { $command }: not available in this interface
+keymap-reason-volume-enumeration = volume enumeration
