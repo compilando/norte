@@ -80,6 +80,14 @@ pub struct Continuation<'a> {
 #[derive(Debug, Clone)]
 pub struct Effective {
     bindings: Vec<Binding>,
+    /// The screen this map was built FOR. Carried rather than passed around
+    /// because two of the load rules are screen-dependent (`check_sacred` only
+    /// applies to Browse) and an [`Effective`] plus a screen given separately
+    /// is a pair a caller can get wrong: asking the browse map about
+    /// [`Screen::Dialog`] would hand out `Tab`, which is exactly the load
+    /// error a rebind gate exists to stop
+    /// ([`rebind_check`](super::rebind_check)).
+    screen: Screen,
     /// Whether the PRESET this map was built from enables numeric counts
     /// (K2a). Copied here so the resolver — which owns only the effective map
     /// — can answer "is a bare digit a count?" without keeping the source
@@ -207,6 +215,18 @@ fn check_prefix_free(bindings: &[Binding]) -> Result<(), KeymapError> {
 /// round trip is closed by construction.
 const SACRED_BROWSE: &[(KeyCode, &str)] = &[(KeyCode::Tab, "pane.switch")];
 
+/// The reserved keys of `screen` and what each is reserved FOR — empty
+/// outside Browse, for the reason [`SACRED_BROWSE`] gives. The single source
+/// shared by the load-time rule ([`check_sacred`]) and the editor's pre-write
+/// refusal ([`rebind_check`](super::rebind_check)), so the two can never
+/// disagree about which keys are not for sale.
+pub(super) fn sacred_chords(screen: Screen) -> &'static [(KeyCode, &'static str)] {
+    match screen {
+        Screen::Browse => SACRED_BROWSE,
+        Screen::Viewer | Screen::Dialog => &[],
+    }
+}
+
 /// A reserved key bound to anything else is a LOAD error, in the spirit of
 /// prefix-free (ADR 0006): the conflict surfaces when the file loads, not when
 /// a finger slips. Runs over EVERY binding, available or not, for the same
@@ -218,10 +238,7 @@ const SACRED_BROWSE: &[(KeyCode, &str)] = &[(KeyCode::Tab, "pane.switch")];
 /// which loses pane switching just as completely as rebinding it. The single
 /// legal shape is the reserved chord bound, alone, to its reserved command.
 fn check_sacred(bindings: &[Binding], screen: Screen) -> Result<(), KeymapError> {
-    if screen != Screen::Browse {
-        return Ok(());
-    }
-    for (code, reserved_for) in SACRED_BROWSE {
+    for (code, reserved_for) in sacred_chords(screen) {
         let sacred = Chord::new(Mods::default(), *code);
         for b in bindings {
             let starts_sacred = b.seq.first() == Some(&sacred);
@@ -341,6 +358,7 @@ impl Effective {
         check_sacred(&bindings, screen)?;
         Ok(Self {
             bindings,
+            screen,
             counts: preset.counts,
             discarded_lua_bindings,
         })
@@ -445,6 +463,38 @@ impl Effective {
     #[must_use]
     pub fn counts(&self) -> bool {
         self.counts
+    }
+
+    /// The screen this map was built for ([`Effective::build_for`]).
+    ///
+    /// The shortcut editor needs it twice over: to ask
+    /// [`rebind_check`](super::rebind_check) the screen-dependent questions,
+    /// and to know which `keymap.toml` section a binding for this map goes in
+    /// ([`Screen::section`]). Taking it from the map instead of carrying it
+    /// alongside is what stops the two from ever being about different
+    /// screens.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::{Effective, Screen, parse_keymap};
+    ///
+    /// let preset = parse_keymap("[viewer]\nkeymap = [{ on = [\"q\"], run = \"viewer.close\" }]\n")
+    ///     .unwrap();
+    /// let eff = Effective::build_for(&preset, &[], &["viewer.close"], Screen::Viewer).unwrap();
+    /// assert_eq!(eff.screen(), Screen::Viewer);
+    /// assert_eq!(eff.screen().section(), "viewer");
+    /// ```
+    #[must_use]
+    pub fn screen(&self) -> Screen {
+        self.screen
+    }
+
+    /// The validated bindings themselves — sequences as [`Chord`]s, not as the
+    /// rendered strings [`Self::bindings_all`] hands out. Only
+    /// [`rebind_check`](super::rebind_check) needs this: it compares a captured
+    /// sequence against the map, and re-parsing rendered text to do that would
+    /// put a second grammar between the two.
+    pub(super) fn raw_bindings(&self) -> &[Binding] {
+        &self.bindings
     }
 
     /// Bindings `lua:` descartados por venir de la capa de PROYECTO (`./
@@ -657,7 +707,9 @@ impl Effective {
 }
 
 /// A sequence as the help spells it: each chord's `Display`, space-joined.
-fn render_seq(seq: &[Chord]) -> String {
+/// RAW (lower case, unmasked) — a surface that shows it to a reader runs it
+/// through [`paint_chord`](super::paint_chord) first.
+pub(super) fn render_seq(seq: &[Chord]) -> String {
     let keys: Vec<String> = seq.iter().map(ToString::to_string).collect();
     keys.join(" ")
 }

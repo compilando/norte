@@ -17,12 +17,14 @@ mod chord;
 mod effective;
 mod layer;
 pub mod presets;
+mod rebind;
 mod resolve;
 
 pub use catalogue::{CATALOGUE, CommandDef, Status};
 pub use chord::{Chord, KeyCode, ModKey, Mods, mod_key, paint_chord, parse_chord, set_mod_key};
 pub use effective::{Availability, Continuation, Effective, valid_lua_name};
 pub use layer::{KeymapFile, Screen, parse_keymap, parse_keymap_layer};
+pub use rebind::{Rebind, RebindError, RebindSources, RebindWrite, rebind_check, rebind_dry_run};
 pub use resolve::{Count, Resolution, Resolver};
 
 use layer::RawSection;
@@ -191,11 +193,7 @@ pub enum KeymapDiagnostic {
 /// footer for the caveat).
 #[must_use]
 pub fn preset_commands(screen: Screen) -> Vec<String> {
-    let specific: fn(&KeymapFile) -> &RawSection = match screen {
-        Screen::Browse => |f| &f.pane,
-        Screen::Viewer => |f| &f.viewer,
-        Screen::Dialog => |f| &f.dialog,
-    };
+    let specific = screen.specific();
     let mut out: Vec<String> = Vec::new();
     let push_all = |section: &RawSection, out: &mut Vec<String>| {
         for list in [

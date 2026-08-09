@@ -127,6 +127,20 @@ pub struct KeymapFile {
 }
 
 impl KeymapFile {
+    /// The section of `screen`'s SPECIFIC context, mutably — the same choice
+    /// [`Screen::specific`] makes for reading, so a writer cannot put a
+    /// binding in a context the reader will not look in. Used to build the
+    /// PROSPECTIVE layer of
+    /// [`rebind_dry_run`](super::rebind_dry_run); nothing else mutates a
+    /// parsed keymap.
+    pub(super) fn section_mut(&mut self, screen: Screen) -> &mut RawSection {
+        match screen {
+            Screen::Browse => &mut self.pane,
+            Screen::Viewer => &mut self.viewer,
+            Screen::Dialog => &mut self.dialog,
+        }
+    }
+
     /// ¿Define `keymap` (lista completa de preset)? Las CAPAS de usuario
     /// no lo admiten — el diagnóstico con archivo vive en `config::load`.
     #[must_use]
@@ -164,6 +178,51 @@ pub enum Screen {
     /// ALLOWLIST de qué `dialog.*` comandos soporta (la semántica de
     /// seguridad vive en código, no aquí).
     Dialog,
+}
+
+impl Screen {
+    /// The `keymap.toml` section that holds this screen's SPECIFIC context —
+    /// the section a writer must put a binding in for this screen to see it,
+    /// and the inverse of the mapping [`Self::specific`] reads.
+    ///
+    /// It never answers `"global"`, and for a writer that is the point. The
+    /// specific context is merged WHOLE before `global` (`merged_bindings`),
+    /// so a binding here beats a preset binding in `global` just as it beats
+    /// one in the same context — it is never the weaker choice — and it cannot
+    /// touch the other two screens. A shortcut editor that wrote `[global]`
+    /// would change the viewer and every dialog from a row that named one
+    /// screen.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::Screen;
+    ///
+    /// assert_eq!(Screen::Browse.section(), "pane");
+    /// assert_eq!(Screen::Viewer.section(), "viewer");
+    /// assert_eq!(Screen::Dialog.section(), "dialog");
+    /// ```
+    #[must_use]
+    pub fn section(self) -> &'static str {
+        match self {
+            Self::Browse => "pane",
+            Self::Viewer => "viewer",
+            Self::Dialog => "dialog",
+        }
+    }
+
+    /// How to READ this screen's specific context out of a [`KeymapFile`].
+    /// One function pointer instead of the same three-arm match written once
+    /// per reader: [`merged_bindings`],
+    /// [`preset_commands`](super::preset_commands) and [`Self::section`] all
+    /// describe the same mapping, and three copies of it is how the writer and
+    /// the reader would eventually disagree about where a `[viewer]` binding
+    /// lives.
+    pub(super) fn specific(self) -> fn(&KeymapFile) -> &RawSection {
+        match self {
+            Self::Browse => |f| &f.pane,
+            Self::Viewer => |f| &f.viewer,
+            Self::Dialog => |f| &f.dialog,
+        }
+    }
 }
 
 /// Diagnóstico compacto de un error de parseo TOML: `"line N: msg"` si el
@@ -400,12 +459,7 @@ pub(super) fn merged_bindings<'a>(
     screen: Screen,
     discarded_lua_bindings: &mut usize,
 ) -> Vec<(&'a RawBinding, Origin)> {
-    let specific: fn(&KeymapFile) -> &RawSection = match screen {
-        Screen::Browse => |f| &f.pane,
-        Screen::Viewer => |f| &f.viewer,
-        Screen::Dialog => |f| &f.dialog,
-    };
-    merge_ctx(preset, layers, specific, discarded_lua_bindings)
+    merge_ctx(preset, layers, screen.specific(), discarded_lua_bindings)
         .into_iter()
         .chain(merge_ctx(
             preset,
