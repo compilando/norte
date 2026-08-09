@@ -694,4 +694,5 @@ setting-keymap-preset-name = Preset de keymap
 setting-keymap-preset-desc = Preset base de atajos de teclado (orthodox, vim o cua). Las capas de usuario/proyecto pueden seguir rebindeando encima.
 keymap-unavailable-not-built = { $command }: aún no está construido ({ $reason }, issue #{ $issue })
 keymap-unavailable-not-here = { $command }: no está disponible aquí
+keymap-count-ignored = { $command } no acepta un contador (se ignoró { $count })
 keymap-reason-volume-enumeration = enumeración de volúmenes

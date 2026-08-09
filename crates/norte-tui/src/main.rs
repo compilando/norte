@@ -31,8 +31,8 @@ use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::help::TuiChords;
 use norte_tui::hints::DialogHints;
 use norte_tui::keymap::{
-    COMMANDS, Command, DIALOG_COMMANDS, Effective, Resolution, Resolver, Screen,
-    chord_from_crossterm, presets, unavailable_message,
+    COMMANDS, Command, Count, DIALOG_COMMANDS, Effective, Resolution, Resolver, Screen,
+    chord_from_crossterm, count_ignored_message, pending_display, presets, unavailable_message,
 };
 use norte_tui::lua::{
     CommandRun, Layer, LuaHost, PaneCtx, RunOutcome, StatusInput, TrustDecision, TrustStore,
@@ -2904,10 +2904,21 @@ async fn run(
                         // medias viva.
                         if let Some(chord) = chord_from_crossterm(key.modifiers, key.code) {
                             match active.push(chord) {
-                                Resolution::Run { command: cmd, .. } => {
+                                Resolution::Run { command: cmd, count } => {
                                     app.pending.clear();
+                                    // K2a: un contador sobre un comando que no
+                                    // lo acepta NO se traga — corre una vez y
+                                    // se dice. Se pone ANTES del despacho a
+                                    // propósito: si el comando tiene algo que
+                                    // decir, su mensaje es el que manda.
+                                    if let Count::Ignored(n) = count {
+                                        app.message = Some(count_ignored_message(&cmd, n));
+                                    }
                                     // `lua:<nombre>` (M4): al despachador Lua —
                                     // jamás a `dispatch` (no es comando fijo).
+                                    // Un `lua:` no está en el catálogo, así que
+                                    // su contador siempre es `Ignored`: corre
+                                    // UNA vez, sin bucle.
                                     if let Some(name) = cmd.strip_prefix("lua:") {
                                         run_lua_command(
                                             app,
@@ -2926,56 +2937,95 @@ async fn run(
                                         debug_assert!(false, "keymap fuera de COMMANDS");
                                         continue;
                                     };
-                                    let outcome = dispatch(
-                                        app,
-                                        backend,
-                                        &mut events,
-                                        help_lines,
-                                        lang,
-                                        quick_mode,
-                                        confirm_quit,
-                                        &cfg,
-                                        cmd,
-                                    )
-                                    .await;
-                                    if let Some(pane) = cd_landed_pane(&outcome) {
-                            app.apply_scheme_sort(pane);
-                            let dir = app.panes[pane].dir().clone();
-                            let paths: Vec<VPath> =
-                                app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
-                            let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
-                            decorate_fetch[pane] =
-                                spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
-                        }
-                        apply_cd(
-                            &mut fill,
-                            &mut decorate_fetch,
-                            &mut last_probed,
-                            &mut search_run,
-                            outcome,
-                        );
-                                    // Un cd (nav.parent…) apagó el modo virtual del
-                                    // pane de búsqueda: suelta el run y cancela.
-                                    reap_search_run(app, &mut search_run);
-                                    // #28: `pane.open` dejó un comando externo
-                                    // resuelto — el run loop (dueño de la
-                                    // terminal) sondea el binario y lo lanza.
-                                    if let Some(pending) = app.pending_open.take() {
-                                        app.message = Some(launch_opener(terminal, capture, pending).await);
+                                    // El contador repite el DESPACHO: ninguna
+                                    // firma de comando cambia y ninguno puede
+                                    // olvidarse de honrarlo. El cuerpo entero
+                                    // (outcome, cd, cosecha, opener) va DENTRO
+                                    // — un `dispatch` sin su outcome deja
+                                    // Tasks vivas y panes sin refrescar.
+                                    // Ningún `continue` del loop exterior vive
+                                    // aquí dentro: los dos que tenía este
+                                    // brazo (la rama Lua y el guard del parse)
+                                    // quedan ARRIBA, antes del bucle, así que
+                                    // el contador no puede saltarse.
+                                    let times = match count {
+                                        Count::Repeat(n) => n.max(1),
+                                        Count::None | Count::Ignored(_) => 1,
+                                    };
+                                    for _ in 0..times {
+                                        let outcome = dispatch(
+                                            app,
+                                            backend,
+                                            &mut events,
+                                            help_lines,
+                                            lang,
+                                            quick_mode,
+                                            confirm_quit,
+                                            &cfg,
+                                            cmd,
+                                        )
+                                        .await;
+                                        if let Some(pane) = cd_landed_pane(&outcome) {
+                                            app.apply_scheme_sort(pane);
+                                            let dir = app.panes[pane].dir().clone();
+                                            let paths: Vec<VPath> = app.panes[pane]
+                                                .entries()
+                                                .iter()
+                                                .map(|e| e.path.clone())
+                                                .collect();
+                                            let plugin_cols =
+                                                app.columns.plugin_ids_for(dir.scheme());
+                                            decorate_fetch[pane] = spawn_decorate_fetch(
+                                                backend,
+                                                pane,
+                                                dir,
+                                                paths,
+                                                plugin_cols,
+                                            );
+                                        }
+                                        apply_cd(
+                                            &mut fill,
+                                            &mut decorate_fetch,
+                                            &mut last_probed,
+                                            &mut search_run,
+                                            outcome,
+                                        );
+                                        // Un cd (nav.parent…) apagó el modo
+                                        // virtual del pane de búsqueda: suelta
+                                        // el run y cancela.
+                                        reap_search_run(app, &mut search_run);
+                                        // #28: `pane.open` dejó un comando
+                                        // externo resuelto — el run loop (dueño
+                                        // de la terminal) sondea el binario y
+                                        // lo lanza.
+                                        if let Some(pending) = app.pending_open.take() {
+                                            app.message = Some(
+                                                launch_opener(terminal, capture, pending).await,
+                                            );
+                                        }
+                                        // Parar en seco si la app se va:
+                                        // `9999` seguido de una tecla de salida
+                                        // no puede encolar 9998 salidas más. El
+                                        // loop exterior comprueba `app.quit`
+                                        // tras el draw, así que sin este break
+                                        // el resto de las vueltas correría con
+                                        // la app muerta. Un modal abierto
+                                        // (ConfirmQuit) es el mismo caso: lo
+                                        // que quede del contador dispararía
+                                        // comandos DETRÁS del modal.
+                                        if app.quit || app.modal.is_some() {
+                                            break;
+                                        }
                                     }
                                 }
-                                Resolution::Pending(_) => {
-                                    app.pending = active
-                                        .pending()
-                                        .iter()
-                                        .map(ToString::to_string)
-                                        .collect::<Vec<_>>()
-                                        .join(" ");
+                                // K2a: una secuencia a medias y un contador a
+                                // medio teclear se pintan IGUAL y a la vez —
+                                // `pending_display` compone los dos (en `12gg`
+                                // conviven). Un contador que no se ve es un
+                                // contador que no se puede cancelar.
+                                Resolution::Pending(_) | Resolution::Counting(_) => {
+                                    app.pending = pending_display(active);
                                 }
-                                // K2a task 1 leaves this inert ON PURPOSE:
-                                // painting the count in the status bar (and
-                                // repeating the dispatch above) is task 3.
-                                Resolution::Counting(_) => {}
                                 // K1 T4: la tecla ESTÁ ligada y esta build no
                                 // puede correr lo que tiene ligado. Antes se
                                 // despachaba un nombre sin brazo; ahora la

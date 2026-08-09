@@ -126,6 +126,44 @@ fn the_names_encoding_badge_survives_clipping_ahead_of_the_marked_summary() {
     );
 }
 
+/// K2a: un contador a medio teclear se VE en la barra de estado. Un contador
+/// invisible es un contador que no se puede cancelar: el usuario que pulsó
+/// `5` sin querer no tiene forma de saber que la próxima tecla se multiplica
+/// por cinco. Recorre el camino real (resolver → `pending_display` →
+/// `app.pending` → `draw_status`), no el literal.
+#[test]
+fn the_status_bar_shows_a_count_while_it_is_being_typed() {
+    use norte_tui::keymap::{
+        Effective, Resolution, Resolver, Screen, parse_chord, parse_keymap, pending_display,
+    };
+
+    let preset = parse_keymap(
+        r"
+counts = true
+
+[pane]
+keymap = [ { on = ['j'], run = 'cursor.down' } ]
+",
+    )
+    .expect("preset de test");
+    let eff = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse)
+        .expect("efectivo de test");
+    let mut resolver = Resolver::new(eff);
+    assert!(matches!(
+        resolver.push(parse_chord("5").expect("chord")),
+        Resolution::Counting(5)
+    ));
+
+    let mut app = app_with_sized_entries(vec![("a", 10), ("b", 20)]);
+    assert!(
+        !status_text(&app).contains('['),
+        "sin contador la barra no abre el segmento"
+    );
+    app.pending = pending_display(&resolver);
+    let text = status_text(&app);
+    assert!(text.contains("[5 …]"), "el contador debe verse: {text}");
+}
+
 /// #107: la ocultación activa con entradas apartadas se anuncia en la barra
 /// — un listado que enseña menos de lo que hay jamás es silencioso (misma
 /// disciplina que `status-archive-skipped`). Con la ocultación apagada, o

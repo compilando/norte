@@ -11,7 +11,8 @@
 /// que no lo ofrece.
 pub use norte_frontend::keymap::{
     Availability, Chord, Count, Effective, KeyCode, KeymapError, KeymapFile, Mods, Resolution,
-    Resolver, Screen, paint_chord, parse_chord, parse_keymap, unavailable_message,
+    Resolver, Screen, count_ignored_message, paint_chord, parse_chord, parse_keymap,
+    unavailable_message,
 };
 
 use crossterm::event::{KeyCode as CtCode, KeyModifiers as CtMods};
@@ -248,9 +249,91 @@ pub fn presets() -> Vec<(&'static str, KeymapFile)> {
     .collect()
 }
 
+/// El segmento «pendiente» de la barra de estado (`[… ]` en `draw_status`):
+/// el contador tecleado hasta ahora (K2a) seguido de los chords ya pulsados.
+/// Los dos van JUNTOS porque en `12gg` conviven — el `12` sigue vivo mientras
+/// la secuencia `g g` se teclea, y pintar solo uno de los dos miente sobre lo
+/// que va a pasar al soltar la próxima tecla. Un contador que no se ve es un
+/// contador que no se puede cancelar.
+///
+/// Vacío cuando no hay ni contador ni secuencia: la barra calla.
+#[must_use]
+pub fn pending_display(resolver: &Resolver) -> String {
+    let chords = resolver
+        .pending()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    match (resolver.count(), chords.is_empty()) {
+        (None, _) => chords,
+        (Some(n), true) => n.to_string(),
+        (Some(n), false) => format!("{n} {chords}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// K2a: la barra pinta el contador MIENTRAS se teclea, y lo sigue
+    /// pintando con una secuencia a medias encima (`12` + `g`). Sin contador
+    /// vivo el segmento es el de siempre; sin nada, calla.
+    #[test]
+    fn el_segmento_pendiente_pinta_contador_y_secuencia() {
+        let preset = parse_keymap(
+            r"
+counts = true
+
+[pane]
+keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
+",
+        )
+        .expect("preset de test");
+        let eff = Effective::build_for(&preset, &[], &["cursor.top"], Screen::Browse)
+            .expect("efectivo de test");
+        let mut r = Resolver::new(eff);
+        assert_eq!(pending_display(&r), "", "sin nada, calla");
+        assert!(matches!(
+            r.push(parse_chord("1").expect("chord")),
+            Resolution::Counting(1)
+        ));
+        assert!(matches!(
+            r.push(parse_chord("2").expect("chord")),
+            Resolution::Counting(12)
+        ));
+        assert_eq!(pending_display(&r), "12", "el contador se ve al teclearlo");
+        assert!(matches!(
+            r.push(parse_chord("g").expect("chord")),
+            Resolution::Pending(1)
+        ));
+        assert_eq!(
+            pending_display(&r),
+            "12 g",
+            "el contador SOBREVIVE a la secuencia a medias"
+        );
+    }
+
+    /// Sin contadores en el preset el segmento es exactamente el de antes de
+    /// K2a: los chords unidos por espacio, sin prefijo numérico inventado.
+    #[test]
+    fn sin_contadores_el_segmento_es_solo_la_secuencia() {
+        let preset = parse_keymap(
+            r"
+[pane]
+keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
+",
+        )
+        .expect("preset de test");
+        let eff = Effective::build_for(&preset, &[], &["cursor.top"], Screen::Browse)
+            .expect("efectivo de test");
+        let mut r = Resolver::new(eff);
+        assert!(matches!(
+            r.push(parse_chord("g").expect("chord")),
+            Resolution::Pending(1)
+        ));
+        assert_eq!(pending_display(&r), "g");
+    }
 
     /// #112: `COMMANDS` y `Command` nacen del MISMO macro — cada nombre
     /// parsea a su variante. Trivial por construcción; pinea contra un

@@ -227,6 +227,29 @@ pub fn unavailable_message(command: &str, why: Availability) -> String {
     }
 }
 
+/// The user-facing sentence for a count that landed on a command that takes
+/// none. Lives here, like [`unavailable_message`], so the TUI and the GUI
+/// cannot word it differently.
+///
+/// The count is never swallowed: the command runs ONCE and this says the
+/// number went nowhere. Silence would leave the user believing `3q` did
+/// something three times.
+///
+/// ```
+/// use norte_frontend::keymap::count_ignored_message;
+///
+/// let m = count_ignored_message("app.quit", 3);
+/// assert!(m.contains("app.quit"), "{m}");
+/// assert!(m.contains('3'), "{m}");
+/// ```
+#[must_use]
+pub fn count_ignored_message(command: &str, count: u32) -> String {
+    norte_i18n::ta(
+        "keymap-count-ignored",
+        &[("command", command), ("count", &count.to_string())],
+    )
+}
+
 #[cfg(test)]
 mod preset_commands_tests {
     use super::{Screen, preset_commands};
@@ -1610,6 +1633,33 @@ keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
                 &[("command", "pane.hotlist")],
             );
             assert!(m.contains("pane.hotlist"), "{lang:?}: {m}");
+        }
+    }
+
+    /// The ignored-count sentence must NAME both halves: which command refused
+    /// the count and which number went nowhere. "A count was ignored" tells
+    /// the user nothing they can act on.
+    #[test]
+    fn el_mensaje_de_contador_ignorado_nombra_comando_y_numero() {
+        let m = count_ignored_message("app.quit", 3);
+        assert!(m.contains("app.quit"), "{m}");
+        assert!(m.contains('3'), "{m}");
+    }
+
+    /// Same reasoning as `..._en_ambos_locales` above: the assertion over the
+    /// ambient locale pins exactly one of the two, and which one depends on
+    /// the developer's `LANG`. A locale that dropped `{ $count }` would lose
+    /// the number in half the world.
+    #[test]
+    fn el_mensaje_de_contador_ignorado_lleva_los_dos_argumentos_en_ambos_locales() {
+        for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+            let m = norte_i18n::ta_in(
+                lang,
+                "keymap-count-ignored",
+                &[("command", "app.quit"), ("count", "3")],
+            );
+            assert!(m.contains("app.quit"), "{lang:?}: {m}");
+            assert!(m.contains('3'), "{lang:?}: {m}");
         }
     }
 

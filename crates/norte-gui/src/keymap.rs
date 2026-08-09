@@ -568,18 +568,27 @@ mod tests {
         let mut rb = norte_frontend::keymap::Resolver::new(browse);
         assert_eq!(
             rb.push(Chord::new(Mods::default(), KeyCode::F(3))),
-            norte_frontend::keymap::Resolution::Run("pane.view".into()),
+            norte_frontend::keymap::Resolution::Run {
+                command: "pane.view".into(),
+                count: norte_frontend::keymap::Count::None
+            },
             "F3 en Browse abre el visor"
         );
         let mut rv = norte_frontend::keymap::Resolver::new(viewer);
         assert_eq!(
             rv.push(Chord::new(Mods::default(), KeyCode::F(3))),
-            norte_frontend::keymap::Resolution::Run("viewer.close".into()),
+            norte_frontend::keymap::Resolution::Run {
+                command: "viewer.close".into(),
+                count: norte_frontend::keymap::Count::None
+            },
             "F3 en Viewer cierra el visor"
         );
         assert_eq!(
             rv.push(Chord::new(Mods::default(), KeyCode::Esc)),
-            norte_frontend::keymap::Resolution::Run("viewer.close".into())
+            norte_frontend::keymap::Resolution::Run {
+                command: "viewer.close".into(),
+                count: norte_frontend::keymap::Count::None
+            }
         );
     }
 
@@ -624,7 +633,10 @@ mod tests {
         let mut r = norte_frontend::keymap::Resolver::new(browse);
         assert_eq!(
             r.push(Chord::new(Mods::default(), KeyCode::F(3))),
-            norte_frontend::keymap::Resolution::Run("pane.view".into()),
+            norte_frontend::keymap::Resolution::Run {
+                command: "pane.view".into(),
+                count: norte_frontend::keymap::Count::None
+            },
             "F3 en el preset vim (pane) resuelve a pane.view"
         );
     }
@@ -687,7 +699,10 @@ mod tests {
         for (code, cmd) in cases {
             assert_eq!(
                 r.push(Chord::new(Mods::default(), code)),
-                norte_frontend::keymap::Resolution::Run(cmd.into()),
+                norte_frontend::keymap::Resolution::Run {
+                    command: cmd.into(),
+                    count: norte_frontend::keymap::Count::None
+                },
                 "{code:?} debe resolver a {cmd:?}"
             );
         }
@@ -710,7 +725,10 @@ mod tests {
             );
             assert_eq!(
                 r.push(chord),
-                norte_frontend::keymap::Resolution::Run(cmd.into()),
+                norte_frontend::keymap::Resolution::Run {
+                    command: cmd.into(),
+                    count: norte_frontend::keymap::Count::None
+                },
                 "ctrl+{code:?} debe resolver a {cmd:?}"
             );
         }
@@ -733,7 +751,10 @@ mod tests {
         );
         assert_eq!(
             r.push(chord),
-            norte_frontend::keymap::Resolution::Run("app.palette".into())
+            norte_frontend::keymap::Resolution::Run {
+                command: "app.palette".into(),
+                count: norte_frontend::keymap::Count::None
+            }
         );
     }
 
@@ -756,7 +777,10 @@ prepend_keymap = [{ on = ["insert"], run = "cursor.up" }]
         let mut r = norte_frontend::keymap::Resolver::new(browse);
         assert_eq!(
             r.push(Chord::new(Mods::default(), KeyCode::Insert)),
-            norte_frontend::keymap::Resolution::Run("cursor.up".into()),
+            norte_frontend::keymap::Resolution::Run {
+                command: "cursor.up".into(),
+                count: norte_frontend::keymap::Count::None
+            },
             "la capa de usuario rebindeó insert por encima del supplemento"
         );
     }
@@ -883,12 +907,18 @@ prepend_keymap = [{ on = ["j"], run = "cursor.down" }, { on = ["k"], run = "curs
         let mut r = norte_frontend::keymap::Resolver::new(eff);
         assert_eq!(
             r.push(Chord::new(Mods::default(), KeyCode::Char('j'))),
-            norte_frontend::keymap::Resolution::Run("cursor.down".into()),
+            norte_frontend::keymap::Resolution::Run {
+                command: "cursor.down".into(),
+                count: norte_frontend::keymap::Count::None
+            },
             "la capa de usuario rebindeó j a cursor.down"
         );
         assert_eq!(
             r.push(Chord::new(Mods::default(), KeyCode::Char('k'))),
-            norte_frontend::keymap::Resolution::Run("cursor.up".into())
+            norte_frontend::keymap::Resolution::Run {
+                command: "cursor.up".into(),
+                count: norte_frontend::keymap::Count::None
+            }
         );
     }
 
@@ -933,7 +963,10 @@ prepend_keymap = [{ on = ["z"], run = "lua:foo" }]
         let mut r = norte_frontend::keymap::Resolver::new(eff);
         assert_eq!(
             r.push(Chord::new(Mods::default(), KeyCode::Char('z'))),
-            norte_frontend::keymap::Resolution::Run("lua:foo".into()),
+            norte_frontend::keymap::Resolution::Run {
+                command: "lua:foo".into(),
+                count: norte_frontend::keymap::Count::None
+            },
             "el motor resuelve el binding — la GUI (sin host) lo ignora en \
              `run_command`, cuyo `_ => {{}}` cubre cualquier comando no \
              reconocido en runtime"

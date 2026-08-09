@@ -678,4 +678,5 @@ setting-keymap-preset-name = Keymap preset
 setting-keymap-preset-desc = Base key-binding preset (orthodox, vim, or cua). User/project layers can still rebind on top.
 keymap-unavailable-not-built = { $command }: not built yet ({ $reason }, issue #{ $issue })
 keymap-unavailable-not-here = { $command }: not available here
+keymap-count-ignored = { $command } does not take a count ({ $count } ignored)
 keymap-reason-volume-enumeration = volume enumeration

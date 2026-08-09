@@ -3678,10 +3678,44 @@ impl NorteGui {
                 keymap::gpui_chord(&ks.key, keymap_mods(ks.modifiers), ks.key_char.as_deref())
             {
                 match self.viewer_resolver.push(chord) {
-                    norte_frontend::keymap::Resolution::Run(cmd) => {
-                        self.run_viewer_command(&cmd, cx);
+                    norte_frontend::keymap::Resolution::Run {
+                        command: cmd,
+                        count,
+                    } => {
+                        // K2a: el contador repite el DESPACHO (ninguna firma
+                        // de comando cambia). `viewer.up/down/page-*` son los
+                        // que lo aceptan; el resto llega como `Ignored`.
+                        // MISMA deuda honesta que la rama `Unavailable` de
+                        // abajo: el flash NO se pinta con el visor abierto, así
+                        // que el estado es correcto pero el aviso hoy no se ve.
+                        // Se pone igualmente — el día que el visor tenga línea
+                        // de estado (K3) aparece solo, y hasta entonces callar
+                        // aquí sería una segunda decisión que nadie tomó.
+                        if let norte_frontend::keymap::Count::Ignored(n) = count {
+                            self.flash = Some((
+                                norte_frontend::keymap::count_ignored_message(&cmd, n),
+                                true,
+                            ));
+                        }
+                        let times = match count {
+                            norte_frontend::keymap::Count::Repeat(n) => n.max(1),
+                            norte_frontend::keymap::Count::None
+                            | norte_frontend::keymap::Count::Ignored(_) => 1,
+                        };
+                        for _ in 0..times {
+                            self.run_viewer_command(&cmd, cx);
+                            // `viewer.close` deja `self.viewer` en None: lo
+                            // que quede del contador correría contra un visor
+                            // que ya no existe.
+                            if self.viewer.is_none() {
+                                break;
+                            }
+                        }
                     }
-                    norte_frontend::keymap::Resolution::Pending(_) => {}
+                    // K2a: un contador a medio teclear se pinta al pie, igual
+                    // que una secuencia pendiente (ver `render`).
+                    norte_frontend::keymap::Resolution::Pending(_)
+                    | norte_frontend::keymap::Resolution::Counting(_) => {}
                     // K1 T4 + rust-reviewer MAJOR-1. Esta rama SÍ se alcanza:
                     // cada pantalla se valida contra el set que ELLA despacha
                     // (`screen_commands`), así que F9/F11/F12/Ctrl+P/Tab —
@@ -3739,11 +3773,43 @@ impl NorteGui {
         if let Some(chord) = keymap::gpui_chord(&ks.key, keymap_mods(mods), ks.key_char.as_deref())
         {
             match self.resolver.push(chord) {
-                norte_frontend::keymap::Resolution::Run(cmd) => {
+                norte_frontend::keymap::Resolution::Run {
+                    command: cmd,
+                    count,
+                } => {
                     resolution_dbg = "run";
-                    self.run_command(&cmd, cx);
+                    // K2a: un contador sobre un comando que no lo acepta NO se
+                    // traga — corre UNA vez y el flash lo dice. Antes del
+                    // despacho: si el comando tiene algo que decir, su flash
+                    // manda sobre este.
+                    if let norte_frontend::keymap::Count::Ignored(n) = count {
+                        self.flash =
+                            Some((norte_frontend::keymap::count_ignored_message(&cmd, n), true));
+                    }
+                    // El contador repite el DESPACHO, no llega al comando:
+                    // ninguna firma cambia y ninguno puede olvidarse de
+                    // honrarlo. `run_command` es un `match cmd` sin returns
+                    // tempranos del caller, así que el bucle no puede saltarse.
+                    let times = match count {
+                        norte_frontend::keymap::Count::Repeat(n) => n.max(1),
+                        norte_frontend::keymap::Count::None
+                        | norte_frontend::keymap::Count::Ignored(_) => 1,
+                    };
+                    for _ in 0..times {
+                        self.run_command(&cmd, cx);
+                        // Parar en seco si algo se puso DELANTE del dual-pane
+                        // (modal de confirmación de salida, visor, ajustes…):
+                        // lo que quede del contador dispararía comandos por
+                        // detrás de una pantalla que ya tiene el teclado.
+                        if self.overlay_in_front() || self.help.is_some() {
+                            break;
+                        }
+                    }
                 }
-                norte_frontend::keymap::Resolution::Pending(_) => {
+                // K2a: un contador a medio teclear no ejecuta nada todavía; el
+                // pie lo pinta junto a la secuencia pendiente (ver `render`).
+                norte_frontend::keymap::Resolution::Pending(_)
+                | norte_frontend::keymap::Resolution::Counting(_) => {
                     // Secuencia en curso: nada que ejecutar todavía. El
                     // indicador de secuencia pendiente lo pinta `render` al
                     // pie leyendo `resolver.pending()` (#91).
@@ -6734,6 +6800,30 @@ fn pending_hint(chords: &[norte_frontend::keymap::Chord]) -> String {
         .collect()
 }
 
+/// El indicador del pie completo (#91 + K2a): el contador tecleado hasta ahora
+/// seguido de los chords pendientes y el «…». `None` cuando no hay ni lo uno
+/// ni lo otro — el pie calla.
+///
+/// Los dos van JUNTOS porque en `12gg` conviven: el `12` sigue vivo mientras
+/// la secuencia `g g` se teclea, y pintar solo uno miente sobre lo que hará la
+/// próxima tecla. El contador es un `u32` que rendereamos nosotros (solo
+/// dígitos ASCII), así que no necesita el enmascarado que sí necesita cada
+/// chord — ver [`pending_hint`]. PURA (sin GPUI): testeable sin ventana.
+#[must_use]
+fn pending_indicator(
+    count: Option<u32>,
+    chords: &[norte_frontend::keymap::Chord],
+) -> Option<String> {
+    if count.is_none() && chords.is_empty() {
+        return None;
+    }
+    let head = match count {
+        Some(n) => format!("{n} "),
+        None => String::new(),
+    };
+    Some(format!("{head}{}…", pending_hint(chords)))
+}
+
 /// Retiene solo las tasks NO terminales en `order` y `progress`, mutando
 /// ambos in place (#83, `task.dismiss`): usada por `dismiss_terminal_tasks`.
 /// PURA (sin GPUI): testeable sin levantar ventana.
@@ -8247,24 +8337,27 @@ impl Render for NorteGui {
         } else {
             &self.resolver
         };
-        let pending = if self.settings_view.is_some()
+        // K2a: el CONTADOR a medio teclear se pinta en el mismo sitio y por la
+        // misma razón — un contador que no se ve es un contador que no se
+        // puede cancelar. Se suprime con los mismos overlays que la secuencia.
+        let (count, pending) = if self.settings_view.is_some()
             || self.extensions.is_some()
             || self.palette.is_some()
             || self.columns_picker.is_some()
             || self.context_menu.is_some()
         {
-            &[][..]
+            (None, &[][..])
         } else {
-            active_resolver.pending()
+            (active_resolver.count(), active_resolver.pending())
         };
-        if !pending.is_empty() {
+        if let Some(hint) = pending_indicator(count, pending) {
             root = root.child(
                 div()
                     .px(px(sp::S))
                     .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
                     .bg(chrome.quick_bg)
                     .text_color(chrome.quick_fg)
-                    .child(SharedString::from(format!("{}…", pending_hint(pending)))),
+                    .child(SharedString::from(hint)),
             );
         }
 
@@ -8613,8 +8706,21 @@ fn keymap_error_detail(e: &norte_frontend::keymap::KeymapError) -> String {
             banner_safe(run)
         }
         KeymapError::EscInSequence { sequence } => banner_safe(sequence),
-        KeymapError::AmbiguousPrefix { shorter, longer } => {
-            format!("{} / {}", banner_safe(shorter), banner_safe(longer))
+        // K2a: las dos reglas de carga nuevas traen DOS fragmentos de usuario
+        // cada una (el chord y el comando), igual que `AmbiguousPrefix` — el
+        // mismo par saneado. `reserved_for` de `SacredKey` NO entra: es un
+        // literal `&'static str` del motor (`"pane.switch"`), sin payload de
+        // usuario, y repetir el nombre del comando reservado no dice nada que
+        // el banner no diga ya.
+        KeymapError::AmbiguousPrefix {
+            shorter: a,
+            longer: b,
+        }
+        | KeymapError::DigitBoundWithCounts { chord: a, run: b }
+        | KeymapError::SacredKey {
+            chord: a, run: b, ..
+        } => {
+            format!("{} / {}", banner_safe(a), banner_safe(b))
         }
         KeymapError::WrongLayerKey { .. } => banner_safe(&e.to_string()),
     }
@@ -8870,9 +8976,9 @@ mod tests {
         flicker_scale, generation_is_current, glowed, has_pending_work, hydration_batch,
         image_preview_from, image_status, keymap_error_detail, modal_footer_colors,
         modal_panel_colors, modal_title_colors, motion_active, mouse_motion, mouse_press,
-        mouse_release, pane_inner_cells, pending_hint, retain_active, row_label, styled_span_color,
-        task_at_cursor, theme_map, unknown_preset_banner, validated_family, viewer_header,
-        viewer_status,
+        mouse_release, pane_inner_cells, pending_hint, pending_indicator, retain_active, row_label,
+        styled_span_color, task_at_cursor, theme_map, unknown_preset_banner, validated_family,
+        viewer_header, viewer_status,
     };
     // Menú contextual (tarea 4 del plan de ratón).
     use super::{
@@ -10512,6 +10618,42 @@ mod tests {
         assert_eq!(detail, sin_payload.to_string());
     }
 
+    /// K2a: las DOS reglas de carga nuevas entran por el mismo saneado que
+    /// `AmbiguousPrefix` — dos fragmentos de usuario, enmascarados y topados,
+    /// sin la prosa castellana del `Display`. `reserved_for` de `SacredKey` es
+    /// un literal del motor y NO se pinta: no aporta y no está saneado como
+    /// contenido de usuario porque no lo es.
+    #[test]
+    fn keymap_error_detail_sanea_las_dos_reglas_de_carga_de_k2a() {
+        use norte_frontend::keymap::KeymapError;
+
+        let detail = keymap_error_detail(&KeymapError::DigitBoundWithCounts {
+            chord: "5".to_owned(),
+            run: "cursor.down".to_owned(),
+        });
+        assert_eq!(detail, "5 / cursor.down");
+
+        let detail = keymap_error_detail(&KeymapError::SacredKey {
+            chord: "tab".to_owned(),
+            reserved_for: "pane.switch",
+            run: "cursor.down".to_owned(),
+        });
+        assert_eq!(detail, "tab / cursor.down");
+
+        // Un `run` hostil de un `./.norte/keymap.toml` ajeno: enmascarado,
+        // jamás crudo en el banner (mismo contrato que `banner_safe` ya tiene
+        // para el resto de las variantes).
+        let detail = keymap_error_detail(&KeymapError::SacredKey {
+            chord: "tab".to_owned(),
+            reserved_for: "pane.switch",
+            run: "cursor\u{202e}down".to_owned(),
+        });
+        assert!(
+            !detail.contains('\u{202e}'),
+            "override bidi crudo en el banner: {detail:?}"
+        );
+    }
+
     /// `task_at_cursor` (#91): devuelve la task en el índice dado, y `None`
     /// para un índice fuera de rango o una franja vacía (defensivo).
     #[test]
@@ -10541,6 +10683,29 @@ mod tests {
             KeyCode::Char('k'),
         );
         assert_eq!(pending_hint(&[ctrl_k, g]), "ctrl+k g ");
+    }
+
+    /// K2a: el pie pinta el contador a medio teclear, solo o junto a la
+    /// secuencia — un contador que no se ve es un contador que no se puede
+    /// cancelar. Sin nada de lo uno ni de lo otro, `None`: el pie calla (el
+    /// comportamiento de antes de K2a, que el `!pending.is_empty()` de
+    /// `render` daba por sentado).
+    #[test]
+    fn pending_indicator_pinta_contador_secuencia_o_calla() {
+        use norte_frontend::keymap::{Chord, KeyCode, Mods};
+        let g = Chord::new(Mods::default(), KeyCode::Char('g'));
+        assert_eq!(pending_indicator(None, &[]), None, "nada → el pie calla");
+        assert_eq!(pending_indicator(None, &[g]), Some("g …".to_owned()));
+        assert_eq!(
+            pending_indicator(Some(12), &[]),
+            Some("12 …".to_owned()),
+            "el contador solo YA se ve"
+        );
+        assert_eq!(
+            pending_indicator(Some(12), &[g]),
+            Some("12 g …".to_owned()),
+            "el contador SOBREVIVE a la secuencia a medias"
+        );
     }
 
     /// Encoding audit H1: un chord hostil (ligado desde un `keymap.toml` de
