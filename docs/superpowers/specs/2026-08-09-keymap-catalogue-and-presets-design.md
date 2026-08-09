@@ -2,8 +2,9 @@
 
 **Date:** 2026-08-09
 **Status:** approved. **K1 built** (2026-08-09, `9b750c0..9b37cb0`, ADR 0043,
-`just ci` and `just gui-ci` green). K2 designed and split into K2a/K2b below;
-K3 still a sketch.
+`just ci` and `just gui-ci` green). **K2a built** (2026-08-09, `5d770e2..27a565e`,
+ADR 0044). **K2b built** (2026-08-09, `562dbbc..e4528f5`, `just ci`/`just gui-ci`
+green — see its section below for the numbers). K3 still a sketch.
 **Related:** ADR 0006 (keymap resolution), specification §12, roadmap item 5
 
 ## The problem
@@ -224,9 +225,11 @@ returns to exactly the silence K1 removed. Four rules:
 - A digit key bound in a context whose preset enables counts is a **load
   error**, not silent precedence. Same spirit as the prefix-free rule:
   conflicts surface when the file loads, not when a finger slips.
-- Counts are opt-in per preset (`counts = true`), and only `vim` and `far` set
-  it. Neither Total Commander, Krusader, Norton nor CUA has counts, and
-  enabling them there would steal the digit keys.
+- Counts are opt-in per preset (`counts = true`), and only `vim` sets it. Far
+  has no numeric prefix either — it spends `Ctrl+1..Ctrl+0` on panel view
+  modes — so it does not set the flag; neither do Total Commander, Krusader,
+  Norton or CUA. Enabling it on any of them would steal digit keys their
+  originals spend elsewhere.
 
 **The sacred keys.** A preset that rebinds `Tab` is a load error (`SacredKey`,
 specification §12). K1 deliberately left this out because a prohibition with no
@@ -242,26 +245,35 @@ violator ends up untested; K2a is where the violator becomes possible.
 
 ### K2b — the four presets
 
+**Built** (2026-08-09, `562dbbc..e4528f5`, `just ci`/`just gui-ci` green).
+
 Each file records the program, its version, the source, and the date it was
 transcribed, so that when it ages the staleness is dated rather than unknown.
 
-| preset | source | status |
-| --- | --- | --- |
-| `total-commander.toml` | `KEYBOARD.TXT` from Total Commander **11.58** (2026-07-01), 141 entries | First-hand. Not published on the web — it ships inside the installer, which is a zip SFX containing `INSTALL.CAB`; the text file is extracted without running anything |
-| `krusader.toml` | KDE handbook, Key-Bindings chapter (`docs.kde.org/trunk_kf6/en/krusader/krusader/key_bindings.html`), ~150 entries | First-hand, fetchable |
-| `far.toml` | `far/FarEng.hlf.m4` in the official `FarGroup/FarManager` repository | First-hand, fetchable — it is the source the program's own help is compiled from |
-| `norton.toml` | none | **No first-hand source.** `NC.HLP` is internally compressed and the distribution ships no plaintext key list. Transcribes the uncontroversial core (F1–F10, `Ctrl+O`, `Ctrl+U`, `Alt+F1`/`Alt+F2`, `Insert`, grey `+`/`-`, `Ctrl+\`) and says so in its header. The fabrication risk is low here in a way it is not for Total Commander's modifier matrix |
+| preset | source | status | bindings |
+| --- | --- | --- | --- |
+| `total-commander.toml` | `KEYBOARD.TXT` from Total Commander **11.58** (2026-07-01), 141 entries | First-hand. Not published on the web — it ships inside the installer, which is a zip SFX containing `INSTALL.CAB`; the text file is extracted without running anything | 68 |
+| `krusader.toml` | KDE handbook, Key-Bindings chapter (`docs.kde.org/trunk_kf6/en/krusader/krusader/key_bindings.html`), ~150 entries | First-hand, fetchable | 64 |
+| `far.toml` | `far/FarEng.hlf.m4` in the official `FarGroup/FarManager` repository | First-hand, fetchable — it is the source the program's own help is compiled from | 53 |
+| `norton.toml` | none | **No first-hand source.** `NC.HLP` is internally compressed and the distribution ships no plaintext key list. Transcribes the uncontroversial core (F1–F10, `Ctrl+O`, `Ctrl+U`, `Alt+F1`/`Alt+F2`, `Insert`, grey `+`/`-`, `Ctrl+\`) and says so in its header. The fabrication risk is low here in a way it is not for Total Commander's modifier matrix | 35 |
+
+(For scale: the three native presets — `orthodox`, the `dialog_from` donor
+every K2b preset inherits, plus `vim` and `cua` — sit at 85, 97 and 85
+bindings respectively.)
 
 Far is deliberately included: its full F1–F12 × four-modifier matrix is the
 hardest case, so an engine that carries Far carries the rest. Double Commander
 is a near-duplicate of Total Commander and is a cheap follow-up, not first-cut.
 
 **`Planned` entries point at the capability, not the command.** The four
-presets will name roughly a hundred commands norte does not have, but those are
-about eight capabilities — volumes, pack/unpack, directory compare, split/join,
-FTP, tree view, and so on. One issue per capability, with several commands
-pointing at the same one. A hundred issues would be noise; eight is the actual
-work, and it already lines up with the roadmap's items.
+presets name roughly a hundred commands norte does not have, but those are
+nine NEW capabilities — volumes' two siblings joined the one that already
+existed (`pane.select-drive`, issue #131), then archive write, editor,
+directory compare/sync, shell, tree view, tabs, sort, properties, and
+connections (issues **#132–#140**, one new issue per capability). Twenty-eight
+`Planned` catalogue entries in total, several commands pointing at the same
+issue apiece — a hundred issues would be noise; nine is the actual work, and
+it already lines up with the roadmap's items.
 
 The presets do **not** carry their own `[dialog]` section: they inherit
 `orthodox`'s, because norte's dialogs are norte's, not the imitated program's.

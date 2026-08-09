@@ -597,10 +597,11 @@ pub fn gpui_chord(key: &str, mods: Mods, key_char: Option<&str>) -> Option<Chord
 mod tests {
     use super::*;
 
-    /// Los TRES presets compartidos parsean y construyen para el contexto
-    /// Browse de la GUI: la GUI no implementa el catálogo entero de la
-    /// TUI/CLI, y desde K1 lo que no implementa sobrevive marcado
-    /// (`Availability::NotHere`) en vez de tumbar la carga.
+    /// Todos los presets compartidos (`KNOWN_PRESETS`, no un array
+    /// hardcodeado de tres — el nombre es de cuando eran tres) parsean y
+    /// construyen para el contexto Browse de la GUI: la GUI no implementa el
+    /// catálogo entero de la TUI/CLI, y desde K1 lo que no implementa
+    /// sobrevive marcado (`Availability::NotHere`) en vez de tumbar la carga.
     #[test]
     fn los_tres_presets_compartidos_parsean_y_construyen_para_la_gui() {
         for &name in KNOWN_PRESETS {
@@ -608,6 +609,32 @@ mod tests {
                 build_effective_from(&preset(name), &[]).is_ok(),
                 "preset {name}: debe construir en modo subset para la GUI"
             );
+        }
+    }
+
+    /// K2b Task 4, check 1 — HALF B of two. Every bundled preset
+    /// (`KNOWN_PRESETS`, the shared `presets::NAMES`) builds for all three
+    /// `Screen`s against the GUI's OWN vocabulary. See the TUI's twin pin
+    /// (`norte_tui::keymap::tests::todos_los_presets_construyen_las_tres_pantallas_del_tui`)
+    /// for why this check is split across two crates rather than living in
+    /// `norte-frontend`: only a frontend that owns a `COMMANDS` list can
+    /// check a preset against it.
+    ///
+    /// `screen_commands` already carries the exhaustive `Screen` match (it
+    /// maps `Dialog` to `COMMANDS`, same as `Browse`, purely so the match
+    /// compiles — the GUI has no `[dialog]` overlay CONTEXT, its overlays
+    /// dispatch in code, and production never builds a `Dialog` effective).
+    /// Reusing it here instead of re-deriving the mapping means this test
+    /// exercises the SAME function `build_effectives_layers` does, not a
+    /// parallel guess at what Dialog "should" mean for the GUI.
+    #[test]
+    fn todos_los_presets_construyen_las_tres_pantallas_de_la_gui() {
+        for &name in KNOWN_PRESETS {
+            let kf = preset(name);
+            for screen in [Screen::Browse, Screen::Viewer, Screen::Dialog] {
+                Effective::build_for(&kf, &[], screen_commands(screen), screen)
+                    .unwrap_or_else(|e| panic!("preset {name} en {screen:?}: {e}"));
+            }
         }
     }
 

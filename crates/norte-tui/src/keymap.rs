@@ -409,6 +409,42 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
         }
     }
 
+    /// K2b Task 4, check 1 — HALF A of two. Every bundled preset
+    /// (`presets()`, driven by the shared `presets::NAMES`, not a hardcoded
+    /// three) builds for all three `Screen`s against the TUI's OWN
+    /// vocabulary: `COMMANDS` for Browse/Viewer, `COMMANDS` ∪
+    /// `DIALOG_COMMANDS` for Dialog — the same union `main.rs` passes at
+    /// startup (`Effective::build_for(preset, &cfg.keymap_layers,
+    /// &dialog_known, Screen::Dialog)`).
+    ///
+    /// Split across two crates on purpose: `norte-frontend` (where
+    /// `presets::NAMES` and the shared catalogue live) cannot see EITHER
+    /// frontend's `COMMANDS` list — it is upstream of both — so only a
+    /// frontend that owns a list can check a preset against it. This is
+    /// HALF A; half B is
+    /// `norte_gui::keymap::tests::todos_los_presets_construyen_las_tres_pantallas_de_la_gui`,
+    /// covered only by `just gui-ci` (`norte-gui` sits outside the
+    /// workspace).
+    #[test]
+    fn todos_los_presets_construyen_las_tres_pantallas_del_tui() {
+        let dialog_known: Vec<&str> = COMMANDS
+            .iter()
+            .copied()
+            .chain(DIALOG_COMMANDS.iter().copied())
+            .collect();
+        for (nombre, preset) in presets() {
+            for screen in [Screen::Browse, Screen::Viewer, Screen::Dialog] {
+                let known: &[&str] = if screen == Screen::Dialog {
+                    &dialog_known
+                } else {
+                    COMMANDS
+                };
+                Effective::build_for(&preset, &[], known, screen)
+                    .unwrap_or_else(|e| panic!("preset {nombre} en {screen:?}: {e}"));
+            }
+        }
+    }
+
     /// Decisión #23 pineada: en el preset `cua`, Ctrl+C SALE (emergencia
     /// universal) — jamás copy. `pane.copy` se queda en F5. Ligar Ctrl+C a
     /// copy divergiría del Ctrl-C hardcodeado que aborta el cd/refresh (loops
