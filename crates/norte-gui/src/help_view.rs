@@ -699,6 +699,7 @@ mod tests {
         ))
         .expect("la capa de test parsea");
         crate::keymap::build_effectives_with("orthodox", &[capa])
+            .expect("la capa del test no rompe el mapa efectivo")
     }
 
     /// La tecla que ABRE la ayuda la CIERRA, y son TODAS las teclas del

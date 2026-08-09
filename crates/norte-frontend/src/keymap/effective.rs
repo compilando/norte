@@ -459,6 +459,55 @@ impl Effective {
             .collect()
     }
 
+    /// Is `chord`, pressed ALONE, bound to `command` and runnable here?
+    ///
+    /// The question a frontend asks on EVERY key event — "did this press mean
+    /// the command this overlay/menu item cares about?" — so it must not
+    /// allocate. It replaces the round trip the GUI used to do
+    /// ([`Self::bindings`] renders every sequence with `Display` and the caller
+    /// re-parsed each one with [`parse_chord`]): ~3 allocations per binding,
+    /// ~140 per keystroke with the presets of today.
+    ///
+    /// Two answers are deliberately `false`, and both are load-bearing:
+    ///
+    /// - a SEQUENCE (`g g`) never matches a single press. These callers keep no
+    ///   pending state — the pane's [`Resolver`](super::Resolver) does, they do
+    ///   not — so the honest answer is that the first chord of a sequence is
+    ///   not the sequence;
+    /// - a binding this build cannot run ([`Availability`] other than
+    ///   [`Availability::Here`]) is not a match. It still RESOLVES, so the
+    ///   resolver can say why the key does nothing; what it must not do is
+    ///   light up a menu item or close an overlay.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::{Effective, Screen, parse_chord, parse_keymap};
+    ///
+    /// let src = r#"
+    /// [pane]
+    /// keymap = [
+    ///     { on = ["f5"], run = "pane.copy" },
+    ///     { on = ["g", "g"], run = "cursor.top" },
+    ///     { on = ["ctrl+d"], run = "pane.hotlist" },
+    /// ]
+    /// "#;
+    /// let preset = parse_keymap(src).unwrap();
+    /// // `pane.hotlist` is NOT in this frontend's command list: it survives,
+    /// // marked, but it is not a shortcut match.
+    /// let known = ["pane.copy", "cursor.top"];
+    /// let eff = Effective::build_for(&preset, &[], &known, Screen::Browse).unwrap();
+    ///
+    /// assert!(eff.single_chord_runs(parse_chord("f5").unwrap(), "pane.copy"));
+    /// assert!(!eff.single_chord_runs(parse_chord("f5").unwrap(), "pane.move"));
+    /// assert!(!eff.single_chord_runs(parse_chord("g").unwrap(), "cursor.top"));
+    /// assert!(!eff.single_chord_runs(parse_chord("ctrl+d").unwrap(), "pane.hotlist"));
+    /// ```
+    #[must_use]
+    pub fn single_chord_runs(&self, chord: Chord, command: &str) -> bool {
+        self.bindings.iter().any(|b| {
+            b.avail == Availability::Here && b.run == command && b.seq.as_slice() == [chord]
+        })
+    }
+
     pub(super) fn lookup(&self, candidate: &[Chord]) -> Lookup<'_> {
         for b in &self.bindings {
             if b.seq[..] == candidate[..] {

@@ -146,7 +146,18 @@ pub fn help_id(cmd: &str) -> String {
 ///
 /// Una SECUENCIA (`g h`) contesta `false`. Estos sitios no llevan estado de
 /// secuencia —el resolver del pane sí, ellos no—, así que la respuesta honesta
-/// es que el primer chord de una secuencia no es la secuencia.
+/// es que el primer chord de una secuencia no es la secuencia. Un binding que
+/// esta build NO puede ejecutar tampoco casa: resuelve (y el resolver dice por
+/// qué la tecla no hace nada), pero no enciende un item de menú.
+///
+/// K2a T4 (deuda de K1): esto corre en CADA evento de teclado, y hasta aquí
+/// pedía `eff.bindings()` —que RENDERIZA cada secuencia con `Display`— para
+/// volver a parsear el texto con `parse_chord`: ~3 asignaciones por binding,
+/// ~140 por pulsación con los presets de hoy, ~450 con los cuatro de K2b. La
+/// pregunta la contesta ahora [`Effective::single_chord_runs`] comparando
+/// `Chord`s, sin renderizar nada. Misma respuesta, incluidos los dos casos
+/// sutiles (secuencia y no-disponible), que el filtro de texto acertaba
+/// pasando por `bindings()`.
 #[must_use]
 pub fn means_command(
     eff: &Effective,
@@ -155,14 +166,7 @@ pub fn means_command(
     mods: Mods,
     key_char: Option<&str>,
 ) -> bool {
-    let Some(pressed) = gpui_chord(key, mods, key_char) else {
-        return false;
-    };
-    eff.bindings()
-        .into_iter()
-        .filter(|(seq, cmd)| *cmd == command && !seq.contains(' '))
-        .filter_map(|(seq, _)| norte_frontend::keymap::parse_chord(&seq).ok())
-        .any(|c| c == pressed)
+    gpui_chord(key, mods, key_char).is_some_and(|pressed| eff.single_chord_runs(pressed, command))
 }
 
 /// Preset por nombre, tomado del catálogo COMPARTIDO
@@ -364,15 +368,35 @@ fn build_effectives_layers(
     Ok((browse, viewer))
 }
 
-/// Fallback: los dos `Effective` del preset `preset_name` + [`gui_supplement`]
-/// (no puede fallar — test), sin capas de usuario/proyecto (que es justo lo
-/// que se descarta cuando [`build_effectives`] falló). El supplemento SIGUE
-/// aplicando aquí: si no, una capa de usuario rota tumbaría también
+/// Fallback: los dos `Effective` del preset `preset_name` + [`gui_supplement`],
+/// sin capas de usuario/proyecto (que es justo lo que se descarta cuando
+/// [`build_effectives`] falló). El supplemento SIGUE aplicando aquí: si no, una
+/// capa de usuario rota tumbaría también
 /// `mark.toggle`/`task.next`/`task.prev`/`task.dismiss` en el fallback
 /// (revisión C2/G0 CRITICAL 1 — misma clase de regresión).
+///
+/// # Panics
+///
+/// Nunca con las entradas que existen: sus DOS entradas —el TOML del preset
+/// resuelto y el del supplemento— son constantes compiladas, y un `preset_name`
+/// desconocido ya cayó a `orthodox` dentro de [`preset`] ANTES de parsear.
+/// Aquí no entra NADA del usuario: las capas, que son lo único que un usuario
+/// escribe, ya no pasan por este camino — llegan por [`build_effectives`], que
+/// devuelve `Err`, y por [`build_effectives_with`], que desde K2a T4 también.
+///
+/// El invariante que hace segura la `expect`, entonces, es exactamente uno:
+/// **cada preset de fábrica construye, con el supplemento encima, para el
+/// SUBCONJUNTO de comandos de la GUI, en las dos pantallas**. No es gratis —
+/// desde K1 (ADR 0043, decisión 4) los bindings no disponibles participan en el
+/// chequeo prefix-free, así que un preset con una secuencia cuyo prefijo choque
+/// con un binding que esta build no ejecuta lo rompería— y por eso lo fija
+/// `tests::build_effectives_preset_only_no_panica` sobre [`KNOWN_PRESETS`]
+/// entero, no solo sobre orthodox. **K2b:** cada preset nuevo entra en ese test
+/// o esta `expect` deja de ser honesta.
 #[must_use]
 pub fn build_effectives_preset_only(preset_name: &str) -> (Effective, Effective) {
     build_effectives_with(preset_name, &[])
+        .expect("preset de fábrica + supplemento (constantes compiladas) construyen")
 }
 
 /// [`build_effectives_preset_only`] MÁS las capas que se le pasen, sobre el
@@ -386,48 +410,40 @@ pub fn build_effectives_preset_only(preset_name: &str) -> (Effective, Effective)
 /// son privados y así siguen: lo que se expone es la composición ya hecha, que
 /// es la que tiene el orden correcto.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Con `layers` VACÍO —el único uso fuera de tests, vía
-/// [`build_effectives_preset_only`]— no puede: el preset y el supplemento son
-/// constantes compiladas, y los construyen los tres en cada `just gui-ci`
-/// (`los_tres_presets_compartidos_parsean_y_construyen` y
-/// `build_effectives_preset_only_no_panica`). Con `layers` no vacío (solo
-/// tests) sí puede, y el invariante es del test que los escribe.
+/// El primer [`KeymapError`] de cualquiera de las dos pantallas.
 ///
-/// rust-reviewer MAJOR-5: el invariante NO es el que era. Antes se apoyaba en
-/// «un comando que la GUI no tiene se filtra y desaparece»; desde K1 (ADR
+/// K1 rust-reviewer MAJOR-5, saldado aquí (K2a T4): esto terminaba en dos
+/// `.expect`, y el invariante en el que se apoyaban NO era el que decía. Antes
+/// era «un comando que la GUI no tiene se filtra y desaparece»; desde K1 (ADR
 /// 0043, decisión 4) los bindings no disponibles PARTICIPAN en el chequeo
-/// prefix-free, así que una secuencia de preset cuyo prefijo choque con un
-/// binding que este frontend no puede ejecutar es ahora un `AmbiguousPrefix`
-/// duro — una vía nueva para que esto reviente. Hoy ningún preset la toca
-/// (la única secuencia de fábrica es `g g` de vim, y nada bindea un `g`
-/// suelto), pero los cuatro presets de K2 son justo donde secuencias y
-/// bindings no disponibles se encuentran, y esta función es la ruta de
-/// RECUPERACIÓN de errores (`main.rs`, cuando el keymap del usuario no
-/// carga): un panic aquí sustituye el banner por un crash de arranque. K2
-/// debe convertirla en `Result` en cuanto añada su primera secuencia.
-#[must_use]
-pub fn build_effectives_with(preset_name: &str, layers: &[KeymapFile]) -> (Effective, Effective) {
+/// prefix-free, así que una secuencia cuyo prefijo choque con un binding que
+/// este frontend no puede ejecutar es un `AmbiguousPrefix` duro. K2a añadió dos
+/// vías más, y las dos las abre el USUARIO: con `vim` (`counts = true`) una
+/// capa que ligue `1`-`9` es `DigitBoundWithCounts`, y una que tome `tab` es
+/// `SacredKey`. Un panic aquí sustituiría el banner de arranque por un crash,
+/// que es justo lo contrario de lo que esta función existe para hacer.
+pub fn build_effectives_with(
+    preset_name: &str,
+    layers: &[KeymapFile],
+) -> Result<(Effective, Effective), KeymapError> {
     let preset = preset(preset_name);
     let mut kfs = vec![gui_supplement()];
     kfs.extend_from_slice(layers);
-    (
-        Effective::build_for(
-            &preset,
-            &kfs,
-            screen_commands(Screen::Browse),
-            Screen::Browse,
-        )
-        .expect("preset browse válido"),
-        Effective::build_for(
-            &preset,
-            &kfs,
-            screen_commands(Screen::Viewer),
-            Screen::Viewer,
-        )
-        .expect("preset viewer válido"),
-    )
+    let browse = Effective::build_for(
+        &preset,
+        &kfs,
+        screen_commands(Screen::Browse),
+        Screen::Browse,
+    )?;
+    let viewer = Effective::build_for(
+        &preset,
+        &kfs,
+        screen_commands(Screen::Viewer),
+        Screen::Viewer,
+    )?;
+    Ok((browse, viewer))
 }
 
 /// Adaptador: nombre de tecla GPUI (+mods +key_char) → `Chord` neutro. `None`
@@ -592,11 +608,145 @@ mod tests {
         );
     }
 
-    /// `build_effectives_preset_only` no puede fallar (test de la invariante
-    /// documentada en su `.expect`).
+    /// El invariante COMPLETO de la `.expect` de
+    /// [`build_effectives_preset_only`], que es lo único que queda entre el
+    /// fallback de arranque y un crash.
+    ///
+    /// Antes de K2a T4 este test decía `build_effectives_preset_only("orthodox")`
+    /// y nada más: pinchaba UN preset y confiaba en que los otros dos se
+    /// parecían. Eso bastaba mientras la `.expect` estuviera dentro de
+    /// `build_effectives_with`, donde el fallo que se temía llegaba por las
+    /// CAPAS del usuario; ahora las capas devuelven `Err` y lo único que puede
+    /// romper este camino es el contenido de un preset de fábrica contra el
+    /// subconjunto de comandos de la GUI. Así que el test recorre
+    /// [`KNOWN_PRESETS`] entero —el listado del catálogo compartido, no una
+    /// copia: un preset que K2b añada entra aquí solo— más un nombre
+    /// desconocido, que es la otra entrada real (cae a orthodox dentro de
+    /// `preset`).
+    ///
+    /// Comprueba primero el `Result` y después llama al fallback: si un preset
+    /// rompe, el fallo dice CUÁL y con qué error, en vez de un panic con el
+    /// texto de la `expect`.
     #[test]
     fn build_effectives_preset_only_no_panica() {
-        let _ = build_effectives_preset_only("orthodox");
+        for name in KNOWN_PRESETS.iter().copied().chain(["no-existe-este"]) {
+            let built = build_effectives_with(name, &[]);
+            assert!(
+                built.is_ok(),
+                "preset {name} + supplemento debe construir en las dos pantallas: {:?}",
+                built.err()
+            );
+            let _ = build_effectives_preset_only(name);
+        }
+    }
+
+    /// La ruta de RECUPERACIÓN no puede entrar en pánico con la entrada de la
+    /// que existe para recuperarse: una capa que deja el mapa efectivo ambiguo
+    /// es la errata de un usuario, no un bug de norte (K1 rust-reviewer
+    /// MAJOR-5).
+    #[test]
+    fn una_capa_ambigua_devuelve_error_en_vez_de_entrar_en_panico() {
+        let layer = norte_frontend::keymap::parse_keymap(
+            r#"
+[pane]
+prepend_keymap = [
+    { on = ["z"], run = "cursor.down" },
+    { on = ["z", "z"], run = "cursor.up" },
+]
+"#,
+        )
+        .expect("la capa parsea");
+        let e = build_effectives_with("orthodox", &[layer]).unwrap_err();
+        assert!(
+            matches!(e, KeymapError::AmbiguousPrefix { .. }),
+            "esperaba AmbiguousPrefix, fue {e:?}"
+        );
+    }
+
+    /// La segunda vía viva, y la nueva: `vim` trae `counts = true` desde K2a
+    /// T2, así que una capa de usuario que ligue un dígito es un error de
+    /// CARGA (`DigitBoundWithCounts`). Es entrada de usuario llegando a la
+    /// ruta de recuperación — exactamente lo que no puede terminar en `.expect`.
+    #[test]
+    fn una_capa_con_digito_sobre_vim_devuelve_error_en_vez_de_entrar_en_panico() {
+        let layer = norte_frontend::keymap::parse_keymap(
+            r#"
+[pane]
+prepend_keymap = [{ on = ["5"], run = "cursor.down" }]
+"#,
+        )
+        .expect("la capa parsea");
+        let e = build_effectives_with("vim", &[layer]).unwrap_err();
+        assert!(
+            matches!(e, KeymapError::DigitBoundWithCounts { .. }),
+            "esperaba DigitBoundWithCounts, fue {e:?}"
+        );
+        // Y sobre un preset SIN contadores la misma capa es legal: lo que
+        // falla es la combinación, no el dígito.
+        let layer = norte_frontend::keymap::parse_keymap(
+            r#"
+[pane]
+prepend_keymap = [{ on = ["5"], run = "cursor.down" }]
+"#,
+        )
+        .expect("la capa parsea");
+        assert!(build_effectives_with("orthodox", &[layer]).is_ok());
+    }
+
+    /// `means_command` contesta lo MISMO tras dejar de renderizar y reparsear
+    /// cada binding (K2a T4), incluidos los dos casos que hacían sutil al
+    /// filtro de texto: una secuencia no casa con una pulsación suelta, y un
+    /// binding no disponible tampoco casa.
+    #[test]
+    fn means_command_ignora_secuencias_y_no_disponibles() {
+        let (vim, _) = build_effectives_with("vim", &[]).expect("vim construye");
+        // `g g` es una secuencia de dos chords: pulsar `g` sola no es
+        // `cursor.top`.
+        assert!(
+            !means_command(&vim, "cursor.top", "g", Mods::default(), Some("g")),
+            "el primer chord de una secuencia no es la secuencia"
+        );
+        // Y el caso positivo, para que lo de arriba no pase por vacío.
+        assert!(means_command(
+            &vim,
+            "pane.view",
+            "f3",
+            Mods::default(),
+            None
+        ));
+        assert!(!means_command(
+            &vim,
+            "pane.view",
+            "f4",
+            Mods::default(),
+            None
+        ));
+        // Una tecla que el adaptador GPUI no modela contesta `false` sin
+        // mirar el keymap.
+        assert!(!means_command(
+            &vim,
+            "pane.view",
+            "f99",
+            Mods::default(),
+            None
+        ));
+
+        // `ctrl+d` → `pane.hotlist` lo liga `orthodox` y la GUI NO lo
+        // implementa: sobrevive marcado (`NotHere`), y un binding que no corre
+        // no es un atajo que casa — si lo fuera, un item de menú se encendería
+        // con una tecla que no hace nada.
+        let (ortho, _) = build_effectives_with("orthodox", &[]).expect("orthodox construye");
+        assert!(
+            ortho
+                .bindings_all()
+                .iter()
+                .any(|(seq, cmd, _)| *cmd == "pane.hotlist" && seq == "ctrl+d"),
+            "el binding debe SEGUIR ahí, marcado — si no, este test no prueba nada"
+        );
+        assert!(
+            !means_command(&ortho, "pane.hotlist", "d", ctrl(), Some("d")),
+            "un binding no disponible no casa"
+        );
     }
 
     /// H3f: the bug this closes is one of OMISSION — the presets bound `f1`
