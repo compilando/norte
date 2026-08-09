@@ -1,6 +1,9 @@
 # 0006 - Keymap resolution semantics
 
 - Status: accepted
+- Superseded in part by [0043](0043-keymap-availability-and-the-mod-alias.md):
+  a binding to a command this build does not implement is no longer a load
+  error, it is a declared unavailability. Everything else here stands.
 - Date: 2026-07-11
 - Decision makers: Oscar González
 - Related: specification section 12 and M1 phase 4

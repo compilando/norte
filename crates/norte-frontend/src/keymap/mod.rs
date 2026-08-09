@@ -1,5 +1,5 @@
-//! Motor de keymap PURO compartido por los frontends (ADR 0006/0007): mapa
-//! `(contexto, secuencia) → comando`, capas estilo Yazi, efectivo prefix-free
+//! Motor de keymap PURO compartido por los frontends (ADR 0006/0007/0043):
+//! mapa `(contexto, secuencia) → comando`, capas estilo Yazi, prefix-free
 //! validado al cargar — la resolución es un scan lineal determinista sobre el
 //! efectivo (≤ centenas de bindings), sin timeouts. Tecla NEUTRA (sin
 //! crossterm/gpui): cada frontend convierte su evento nativo a [`Chord`] con
