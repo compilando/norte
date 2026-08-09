@@ -188,6 +188,18 @@ file disagree. That constraint reaches tests too — including doctests, which
 since the 2024 edition are merged into one binary and share the `OnceLock`. The
 mapping is tested through `ModKey::apply`, which is pure.
 
+**The policy is per PROCESS, so it is also per BINARY, and they do not agree.**
+The GUI sets it (`ModKey::Cmd` under `cfg!(target_os = "macos")`); the TUI
+cannot; the CLI does not. On macOS, therefore, once K2 ships a preset using
+`mod+`, the GUI will render that binding as `Cmd+C` while `norte help` renders
+the same preset line as `Ctrl+C` — and the CLI is the documentation surface.
+This is accepted for K1 because no preset uses `mod+` yet, so the divergence
+has no consumer, and because it is not obvious that it is a bug: a terminal
+program documenting terminal keys is arguably right to say `Ctrl`. It is
+recorded because the answer belongs with K3's per-preset reference sheet, which
+has to decide *which frontend* a rendered chord is documenting, and the
+divergence must not be discovered there as a surprise.
+
 `Display` never writes `mod`. `mod` is an *input* spelling; the canonical form
 writes the physical modifier it became (`ctrl+x` or `cmd+x`), so a reader is
 always shown the key they actually press rather than a name they cannot find on
@@ -206,6 +218,13 @@ chord layer is pinned on.
 alternative — accepting it because the two tokens differ as text — would let a
 preset ship a chord that is a duplicate on one platform and not on the other,
 discovered by whoever runs the platform where it is broken.
+
+That reasoning cuts both ways, and the first draft of this decision missed the
+mirror case: `cmd+mod+x` is a duplicate under the `Cmd` policy and *not* under
+`Ctrl`, so it would have loaded on Linux and hard-failed on macOS — the same
+asymmetry, discovered by the mac user instead. `cmd` and `mod` in one chord are
+therefore rejected **unconditionally**, whatever the policy. Whether a chord is
+well-formed must not depend on the operating system.
 
 ### 9. The TUI cannot observe ⌘, and says so instead of pretending
 
@@ -270,13 +289,44 @@ number to measure against is now larger than it was.
 
 `discarded_lua_bindings` is the last silent-drop mechanism in the engine: it
 counts `lua:` bindings dropped from a project layer for security, but does not
-name them. K1 deliberately left it alone — it is a *security* drop with a
-distinct rationale, and the frontend does warn once — but it is the same shape
-as the bug these five commits removed, and it is recorded here so it is not
-mistaken for having been reviewed and blessed.
+name them. The *drop* is correct and must stay — a project layer that could
+shadow instead of drop would let a cloned repository rebind every key to a
+command from the user's unsandboxed `init.lua`, so falling through to the
+preset is the secure outcome, and `NotBuilt`/`NotHere` are the wrong vocabulary
+for a registry that is populated at runtime. What was **not** correct is that
+only the TUI surfaced the count: the GUI threw it away, which made it a
+genuinely silent drop of exactly the shape these commits removed. The GUI now
+raises the same banner. The count still does not name the bindings, and that
+is the remaining gap.
+
+`Availability` is a *load-time* verdict, and a frontend can still lie by
+passing a `known_commands` set wider than what it dispatches. The review found
+the GUI doing precisely that — validating both screens against the union of
+its Browse and Viewer vocabularies, so `[global]` bindings visible from the
+viewer (F9, F11, F12, Ctrl+P, Tab) reported `Here` and then no-oped in a
+`_ => {}`. Fixed by giving each screen the set it actually dispatches. The
+lesson generalises: **the catalogue removes drift between frontends; it does
+not remove drift between a frontend's declared set and its dispatcher.** Only a
+per-screen totality test does that, and both frontends now carry one.
+
+In the GUI's viewer the verdict is now right but still not *visible*: the flash
+is not painted while the viewer is open, so an unavailable key there says
+nothing until the viewer grows a mutable status line. That is K3's, with the
+reference sheet.
 
 `ModKey::Cmd` and the GUI's ⌘ handling are unexercised on the platform they
 exist for (decision 10).
+
+Two things K2 must carry, found by review and left here on purpose. A preset
+binding a bare alphanumeric to a command a frontend does not implement will
+print a message instead of opening the GUI's type-to-filter quick search, which
+only runs on `Resolution::Reset`; no bundled preset does that today. And
+`build_effectives_with` — the GUI's *error-recovery* path, used when the user's
+keymap fails to load — still `expect`s, and decision 4 gave it a new way to
+fail: a preset sequence whose prefix collides with an unavailable binding is now
+a hard `AmbiguousPrefix`. Nothing triggers it now (the only bundled sequence is
+vim's `g g`), but K2's presets are where sequences and unavailable bindings
+first meet, and it must become a `Result` before then.
 
 The sacred-key rule of specification §12 — a preset may not rebind `Tab` — is
 **not implemented**. It has no violator until the first preset exists, all four
@@ -289,8 +339,14 @@ preset.
 **A `#[cfg(target_os = "macos")]` constant instead of a runtime policy.**
 Rejected: it cannot be tested from the platform that is not it — and with no
 mac and no CI, "cannot be tested here" means "is not tested at all". A runtime
-policy is exercised in both directions from one machine, and it also serves the
-real configuration where a user on Linux drives a mac-style keyboard.
+policy is exercised in both directions from one machine.
+
+Be honest about what that buys, though: the sole caller passes
+`cfg!(target_os = "macos")`, and there is no `[keymap] mod_key` setting, so in
+shipped form the policy *is* a compile-time constant reached through a runtime
+indirection. The indirection buys testability and a place for a future setting
+to land. It does not, today, serve the user on Linux with a mac-style keyboard
+— that would need the config knob, and this ADR does not claim one exists.
 
 **A `ModKey` parameter on `build_for`.** Rejected on decision 6: ~60 call sites
 for a value that is constant for the life of the process, with the failure mode

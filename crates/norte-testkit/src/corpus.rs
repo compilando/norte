@@ -286,6 +286,81 @@ pub fn hostile_chords() -> Vec<HostileChord> {
     ]
 }
 
+/// A hostile COMMAND NAME: the `run = "..."` side of a keymap binding.
+///
+/// [`hostile_chords`] covers the KEY side of a `keymap.toml` — one codepoint,
+/// because `parse_chord` rejects anything longer. `run` is the other half of
+/// the same untrusted line and a different shape: a whole string, from the
+/// same file, and since K1 (ADR 0043) the shared catalogue decides whether it
+/// becomes a *declared unavailability* (catalogue-known, so byte-equal to a
+/// `&'static str`) or an `UnknownCommand` diagnostic (anything else — which
+/// is to say, every string in this family). The diagnostic path is the one
+/// that prints attacker-controlled bytes, so it is the one that must mask.
+#[derive(Debug, Clone)]
+pub struct HostileRun {
+    /// Identificador estable (para nombres de test y mensajes).
+    pub id: &'static str,
+    /// El nombre de comando, tal como iría en `run = "..."` de un
+    /// keymap.toml — todos expresables con `\uXXXX` en una cadena TOML
+    /// básica, que es como llegarían de verdad.
+    pub run: &'static str,
+    /// Por qué es hostil (documentación viva).
+    pub why: &'static str,
+}
+
+/// Los 4 `run` hostiles canónicos. NINGUNO está en el catálogo compartido
+/// (la búsqueda es igualdad de bytes), así que los cuatro son
+/// `KeymapError::UnknownCommand` — la clasificación es correcta y lo que
+/// miente es el RENDER. Por eso este corpus ejercita el enmascarado, no la
+/// búsqueda.
+///
+/// ```
+/// let runs = norte_testkit::corpus::hostile_runs();
+/// assert_eq!(runs.len(), 4);
+/// // Cada uno lleva al menos un hazard de terminal, por la fuente única.
+/// for r in &runs {
+///     assert!(
+///         r.run.chars().any(norte_encoding::is_terminal_hazard),
+///         "{}",
+///         r.id
+///     );
+/// }
+/// ```
+#[must_use]
+pub fn hostile_runs() -> Vec<HostileRun> {
+    vec![
+        HostileRun {
+            id: "run_rlo_catalogue_twin",
+            run: "app.\u{202E}tiuq",
+            why: "RIGHT-TO-LEFT OVERRIDE: se PINTA como `app.quit`. El aviso \
+                  de `norte doctor` nombra un comando que el usuario no \
+                  puede distinguir del legítimo, así que «corrige» el que no \
+                  es. Prueba que el arreglo es enmascarar, no buscar mejor",
+        },
+        HostileRun {
+            id: "run_zwsp_catalogue_twin",
+            run: "app.qu\u{200B}it",
+            why: "ZERO WIDTH SPACE: invisible. El nombre impreso es idéntico \
+                  al real y distinto en bytes, así que el diagnóstico es \
+                  literalmente inaccionable",
+        },
+        HostileRun {
+            id: "run_osc_title_injection",
+            run: "app.quit\u{001B}]0;pwned\u{0007}",
+            why: "ESC + OSC 0 + BEL: un terminal sin sanear EJECUTA la \
+                  secuencia y le cambia el título. La mitad C0 es la que \
+                  `escape_debug` sí caza — por eso no basta con `{:?}`",
+        },
+        HostileRun {
+            id: "run_lo_invisible",
+            run: "pane.copy\u{3164}",
+            why: "HANGUL FILLER: hazard de norte (#125) que `escape_debug` \
+                  NO escapa, porque es Lo y no Cf. Este es el que demuestra \
+                  que la protección accidental del camino `{:?}` no alcanza",
+        },
+    ]
+}
+
 /// A hostile DISPLAY TITLE: prose meant to be painted into a narrow column,
 /// not a filename.
 ///

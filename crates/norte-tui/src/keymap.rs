@@ -3,9 +3,15 @@
 //! de comandos de la TUI y sus presets de fábrica. El motor en sí (tipos
 //! neutros, parseo, fusión de capas, resolución) vive en `norte-frontend`
 //! (GUI-c T1/T2) — este módulo es una capa fina TUI-específica.
+/// `ModKey`/`set_mod_key` están DELIBERADAMENTE ausentes de esta lista (ADR
+/// 0043 decisión 9): la TUI no puede observar ⌘ —crossterm no entrega super
+/// sin `PushKeyboardEnhancementFlags`, que norte no activa— así que no puede
+/// honrar ninguna política que no sea Ctrl, y por tanto no debe poder
+/// nombrarla. Una API que acepta un ajuste que va a ignorar es peor que una
+/// que no lo ofrece.
 pub use norte_frontend::keymap::{
-    Chord, Effective, KeyCode, KeymapError, KeymapFile, Mods, Resolution, Resolver, Screen,
-    paint_chord, parse_chord, parse_keymap,
+    Availability, Chord, Effective, KeyCode, KeymapError, KeymapFile, Mods, Resolution, Resolver,
+    Screen, paint_chord, parse_chord, parse_keymap, unavailable_message,
 };
 
 use crossterm::event::{KeyCode as CtCode, KeyModifiers as CtMods};

@@ -182,8 +182,10 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
     findings
 }
 
-/// Un id de columna viene de un TOML del usuario pero puede llegar por
-/// copy-paste hostil: enmascarado + tope, jamás crudo en la salida.
+/// Un id de columna —o un `run` de keymap— viene de un TOML del usuario pero
+/// puede llegar por copy-paste hostil: enmascarado + tope, jamás crudo en la
+/// salida. El tope de 64 chars es holgado para ambos: el nombre de comando
+/// más largo del catálogo compartido no llega a 24.
 fn sanitize_detail(raw: &str) -> String {
     let masked = norte_frontend::display_name(raw.as_bytes()).0;
     masked.chars().take(64).collect()
@@ -298,9 +300,12 @@ pub fn check_keymaps(layers: &Layers) -> Vec<Finding> {
 /// [`KeymapDiagnostic`] into a [`Finding`]:
 ///
 /// - [`KeymapDiagnostic::UnknownCommand`] → [`Severity::Warn`]
-///   (`keymap-unknown-cmd`): a layer binding to a `run` name no bundled
-///   preset recognizes for this screen (decision 1 — a typo or a newer
-///   version's command, not fatal).
+///   (`keymap-unknown-cmd`): a layer binding to a `run` name **the shared
+///   catalogue** has never heard of (decision 1 — a typo or a newer version's
+///   command, not fatal). Since K1 (ADR 0043) this is no longer "no bundled
+///   preset recognizes it for this screen": a name the catalogue knows but
+///   this screen does not implement is a declared unavailability and produces
+///   NO finding, which is why the false positives went away.
 /// - [`KeymapDiagnostic::Structural`] → [`Severity::Error`]
 ///   (`keymap-structural`): bad chord, empty/`esc` sequence, wrong layer key,
 ///   ambiguous prefix, or a `lua:` name that fails the charset.
@@ -329,17 +334,32 @@ fn check_keymap_screen(
     diags
         .into_iter()
         .map(|d| match d {
+            // `run` is UNTRUSTED config text, verbatim from a user's — or a
+            // cloned repository's — `keymap.toml`, and this line goes to a
+            // terminal. Unmasked, `"app.\u{202E}tiuq"` PAINTS as `app.quit`,
+            // so the warning names a command the user cannot tell from the
+            // real one, and `"app.quit\u{1B}]0;x\u{7}"` sets the title. The
+            // same rule the column-id and plugin arms already follow.
             KeymapDiagnostic::UnknownCommand { run } => Finding {
                 section: "keymap",
                 severity: Severity::Warn,
                 code: "keymap-unknown-cmd",
-                detail: format!("{label}: {run}"),
+                detail: format!("{label}: {}", sanitize_detail(&run)),
             },
+            // `KeymapError`'s `Display` interpolates the offending text with
+            // `{:?}`, and `escape_debug` catches Cf — but NOT U+3164 HANGUL
+            // FILLER or U+2800 BRAILLE BLANK, which norte classifies as
+            // hazards (#125). Do not rely on the accident; mask. No cap:
+            // unlike a command name, a structural diagnostic is norte's own
+            // prose and needs its length to stay actionable.
             KeymapDiagnostic::Structural { message } => Finding {
                 section: "keymap",
                 severity: Severity::Error,
                 code: "keymap-structural",
-                detail: format!("{label}: {message}"),
+                detail: format!(
+                    "{label}: {}",
+                    norte_encoding::mask_terminal_hazards(&message)
+                ),
             },
         })
         .collect()
@@ -1010,6 +1030,49 @@ mod tests {
             .unwrap_or_else(|| panic!("expected an unknown-cmd finding: {findings:?}"));
         assert_eq!(warn.severity, Severity::Warn);
         assert!(warn.detail.contains("invented.command"), "{}", warn.detail);
+    }
+
+    /// encoding-auditor MAJOR: `run` is untrusted config text — a cloned
+    /// repository's `./.norte/keymap.toml` is loaded without trust — and this
+    /// finding goes to a terminal. Unmasked, `"app.\u{202E}tiuq"` PAINTS as
+    /// `app.quit`, so the warning names a command the user cannot tell from
+    /// the real one; `"app.quit\u{1B}]0;x\u{7}"` sets the terminal title.
+    /// `--json` is no refuge: `serde_json` escapes C0 but not U+202E.
+    #[test]
+    fn keymap_run_hostil_sale_enmascarado_jamas_crudo() {
+        for h in norte_testkit::corpus::hostile_runs() {
+            let dir = tempfile::tempdir().unwrap();
+            // TOML basic string: escape the hazards the way an attacker would
+            // ship them, so the fixture reaches `run` as the bytes it names.
+            let escaped: String = h
+                .run
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '.' {
+                        c.to_string()
+                    } else {
+                        format!("\\u{:04X}", c as u32)
+                    }
+                })
+                .collect();
+            std::fs::write(
+                dir.path().join("keymap.toml"),
+                format!("[pane]\nappend_keymap = [{{ on = [\"z\"], run = \"{escaped}\" }}]\n"),
+            )
+            .unwrap();
+            let layers = Layers {
+                dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+            };
+            for f in check_keymaps(&layers) {
+                assert!(
+                    !f.detail.chars().any(norte_encoding::is_terminal_hazard),
+                    "{}: {} salió crudo — {}",
+                    h.id,
+                    f.detail.escape_debug(),
+                    h.why
+                );
+            }
+        }
     }
 
     /// A `lua:<name>` binding whose name fails the charset (`valid_lua_name`)

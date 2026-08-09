@@ -951,6 +951,24 @@ impl NorteGui {
                     )
                 }
             };
+        // rust-reviewer MAJOR-3: `lua:` bindings coming from the PROJECT
+        // layer (`./.norte`, content that arrives with a cloned repo) are
+        // dropped for security — rebinding a common key to a command from
+        // the USER's unsandboxed `init.lua` would be repo-directed execution.
+        // Dropping is right; dropping in SILENCE is the bug K1 spent five
+        // commits removing. The TUI has warned since M4; the GUI threw the
+        // count away, so a user saw F5 behave normally and was never told a
+        // binding from that repo had been refused.
+        let discarded = browse_eff
+            .discarded_lua_bindings()
+            .max(viewer_eff.discarded_lua_bindings());
+        if discarded > 0 {
+            let msg = norte_i18n::ta(
+                "msg-lua-keymap-project",
+                &[("n", discarded.to_string().as_str())],
+            );
+            keymap_error = Some(push_banner(keymap_error, msg));
+        }
         let resolver = norte_frontend::keymap::Resolver::new(browse_eff);
         let viewer_resolver = norte_frontend::keymap::Resolver::new(viewer_eff);
 
@@ -2213,9 +2231,28 @@ impl NorteGui {
             "pane.toggle-hidden" => {
                 self.panes[f].toggle_hidden();
             }
-            // Inalcanzable: todo keymap se valida contra COMMANDS al cargar
-            // (fuente única) — mismo guard que la TUI (#103 review MINOR-7).
-            _ => debug_assert!(false, "comando validado sin brazo: {cmd}"),
+            // rust-reviewer MAJOR-2: este brazo NO era inalcanzable. Un
+            // `lua:<nombre>` con charset válido sale SIEMPRE
+            // `Availability::Here` (el registro Lua es dinámico, jamás puede
+            // estar en un catálogo estático — ADR 0043 decisión 2), y la GUI
+            // no tiene host Lua: ni mlua, ni `norte.command`, ni un brazo
+            // `lua:` en ningún sitio. Un `keymap.toml` del PROPIO usuario con
+            // `run = "lua:foo"` abortaba una GUI compilada en debug a la
+            // primera pulsación, y no hacía nada en release. Ahora lo dice
+            // con la misma frase que el resto de K1.
+            other => {
+                debug_assert!(
+                    other.starts_with("lua:"),
+                    "comando validado sin brazo y no es lua: {other}"
+                );
+                self.flash = Some((
+                    norte_frontend::keymap::unavailable_message(
+                        other,
+                        norte_frontend::keymap::Availability::NotHere,
+                    ),
+                    true,
+                ));
+            }
         }
         // Tras un movimiento de cursor, sigue el scroll (issue #87).
         self.follow_cursor(f);
@@ -3645,17 +3682,18 @@ impl NorteGui {
                         self.run_viewer_command(&cmd, cx);
                     }
                     norte_frontend::keymap::Resolution::Pending(_) => {}
-                    // K1 T4. Hoy INALCANZABLE por construcción: ambos
-                    // contextos se validan contra `all_commands()`
-                    // (COMMANDS ∪ VIEWER_COMMANDS), así que un binding de
-                    // `[global]` visible desde el visor sale `Here`. Se
-                    // escribe igual porque el día que los catálogos se
-                    // separen la rama tiene que existir — y con la MISMA
-                    // frase que el dual-pane. AVISO HONESTO: el flash NO se
-                    // pinta con el visor abierto (`render`, gate de la
-                    // revisión 7c MINOR-4b), así que si esta rama llegara a
-                    // dispararse el mensaje no se vería hasta que el visor
-                    // tenga su propia línea de estado mutable.
+                    // K1 T4 + rust-reviewer MAJOR-1. Esta rama SÍ se alcanza:
+                    // cada pantalla se valida contra el set que ELLA despacha
+                    // (`screen_commands`), así que F9/F11/F12/Ctrl+P/Tab —
+                    // bindings de `[global]` que el visor ve pero
+                    // `apply_viewer_command` no atiende — salen `NotHere` en
+                    // vez de fingir `Here` y morir en un `_ => {}`.
+                    // AVISO HONESTO, Y ES DEUDA: el flash NO se pinta con el
+                    // visor abierto (`render`, gate de la revisión 7c
+                    // MINOR-4b), así que hoy el estado es CORRECTO pero el
+                    // mensaje sigue sin verse. Que el usuario lo LEA necesita
+                    // una línea de estado mutable en el visor — K3, con la
+                    // hoja de referencia.
                     norte_frontend::keymap::Resolution::Unavailable { command, why } => {
                         self.flash = Some((
                             norte_frontend::keymap::unavailable_message(&command, why),
@@ -8647,6 +8685,33 @@ Options:
 ";
 
 fn main() {
+    // Qué significa `mod+` en ESTE proceso — LA PRIMERA sentencia de `main`,
+    // antes incluso de parsear argumentos. El valor solo depende de
+    // `cfg!(target_os)`, así que nada obliga a que sea tarde, y tarde es
+    // frágil: `mod_key()` es un `OnceLock` con `get_or_init`, de modo que el
+    // primer `parse_chord` que corriese antes de esta línea congelaría la
+    // política en Ctrl para siempre, sin que ningún test fallase
+    // (rust-reviewer MINOR-2 — la garantía era posicional y estaba sostenida
+    // por un comentario). La GUI puede OBSERVAR ⌘ (gpui lo reporta en
+    // `Modifiers::platform`); la TUI no, así que allí no se llama a esto y el
+    // default —Ctrl— es su única respuesta honesta. Un preset con `mod+c` es
+    // Cmd+C en la GUI de macOS y Ctrl+C en el resto, siendo UN fichero.
+    //
+    // El bool se comprueba: es la única señal de que la política ya estaba
+    // fijada a otra cosa, y este es el único sitio que la fija.
+    // OJO: la llamada va FUERA del `debug_assert!`, que en release no
+    // compila su argumento — dentro, `mod+` se quedaría en Ctrl en el
+    // binario que se distribuye y en ningún otro.
+    let mod_key_fixed = norte_frontend::keymap::set_mod_key(if cfg!(target_os = "macos") {
+        norte_frontend::keymap::ModKey::Cmd
+    } else {
+        norte_frontend::keymap::ModKey::Ctrl
+    });
+    debug_assert!(
+        mod_key_fixed,
+        "la política de `mod+` ya estaba fijada a otro valor"
+    );
+
     // Argumentos (mismo parser COMPARTIDO que el TUI,
     // `norte_frontend::cli`): `[DIR]` posicional y `--socket`. `--help`/
     // `--version` salen antes de abrir ventana; un flag desconocido se
@@ -8716,18 +8781,7 @@ fn main() {
     };
     let _ = norte_i18n::force(lang);
 
-    // Qué significa `mod+` en ESTE proceso — misma forma que el idioma de
-    // arriba: un hecho de plataforma que se decide UNA vez, antes de que
-    // nadie construya un keymap (el primero nace dentro de `NorteGui::new`,
-    // ya con la ventana abierta). La GUI puede OBSERVAR ⌘ (gpui lo reporta
-    // en `Modifiers::platform`); la TUI no, así que allí no se llama a esto y
-    // el default —Ctrl— es su única respuesta honesta. Un preset con `mod+c`
-    // es Cmd+C en la GUI de macOS y Ctrl+C en el resto, siendo UN fichero.
-    norte_frontend::keymap::set_mod_key(if cfg!(target_os = "macos") {
-        norte_frontend::keymap::ModKey::Cmd
-    } else {
-        norte_frontend::keymap::ModKey::Ctrl
-    });
+    // (`set_mod_key` ya corrió: es la primera sentencia de `main`.)
 
     application().run(move |cx: &mut App| {
         // Fuente mono bundled (GP review, hallazgo CRÍTICO): registrada

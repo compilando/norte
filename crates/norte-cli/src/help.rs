@@ -127,8 +127,26 @@ impl CliChords {
                 // The command vocabulary comes from the PRESETS themselves: the
                 // CLI has no `COMMANDS` table of its own, and inventing one
                 // would be a third list to keep in step with two frontends.
+                //
+                // rust-reviewer MAJOR-4: but `preset_commands` returns every
+                // name any bundled preset BINDS, which is by construction a
+                // superset that includes the `Planned` ones. `check_binding`
+                // never consults the catalogue for a name already in `known`,
+                // so a `Planned` command came out `Here` and `ntc keys`
+                // printed it as a working shortcut. The moment K2 ships
+                // `alt+f1 → pane.select-drive`, the one artefact a Total
+                // Commander migrant reads to learn the keys would be the one
+                // that lies about them — the exact trap ADR 0043 exists to
+                // close. Filter to what the catalogue calls Live.
                 let known = norte_frontend::keymap::preset_commands(screen);
-                let known: Vec<&str> = known.iter().map(String::as_str).collect();
+                let known: Vec<&str> = known
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|n| {
+                        norte_frontend::keymap::catalogue::lookup(n)
+                            .is_none_or(|d| d.status == norte_frontend::keymap::Status::Live)
+                    })
+                    .collect();
                 let Ok(eff) = Effective::build_for(&preset_kf, layers, &known, screen) else {
                     continue;
                 };

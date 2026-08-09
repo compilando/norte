@@ -124,6 +124,11 @@ static MOD_KEY: std::sync::OnceLock<ModKey> = std::sync::OnceLock::new();
 /// // no-op that reports success.
 /// assert!(set_mod_key(mod_key()));
 /// ```
+///
+/// `#[must_use]` on purpose: the bool is the ONLY signal that the policy was
+/// already fixed to something else, and discarding it silently is the exact
+/// pattern this work exists to remove.
+#[must_use]
 pub fn set_mod_key(k: ModKey) -> bool {
     *MOD_KEY.get_or_init(|| k) == k
 }
@@ -365,6 +370,16 @@ pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
         .copied()
         .filter(|k| !k.is_empty())
         .ok_or_else(bad)?;
+    // `cmd` y `mod` JUNTOS se rechazan SIEMPRE, mire quien mire (rust-reviewer
+    // MINOR-10). Bajo la política Cmd son la misma tecla dos veces y el
+    // rechazo de modificador repetido de abajo ya los mataría; bajo Ctrl no,
+    // y el resultado sería un chord que carga en Linux y revienta en macOS —
+    // la asimetría exacta que la decisión 8 del ADR 0043 dice evitar,
+    // descubierta por quien corre la plataforma donde está rota. Que un
+    // chord sea válido o no NO puede depender del sistema operativo.
+    if mods_txt.contains(&"cmd") && mods_txt.contains(&"mod") {
+        return Err(bad());
+    }
     let mut mods = Mods::default();
     for m in mods_txt {
         let slot = match *m {

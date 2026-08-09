@@ -44,6 +44,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 
 [dev-dependencies]
 assert_cmd.workspace = true
+norte-testkit.workspace = true
 tempfile.workspace = true
 
 [lints]

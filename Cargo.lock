@@ -6221,6 +6221,7 @@ dependencies = [
  "norte-i18n",
  "norte-mcp",
  "norte-proto",
+ "norte-testkit",
  "norte-vfs",
  "norte-vfs-local",
  "serde",

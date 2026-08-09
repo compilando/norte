@@ -249,10 +249,29 @@ prepend_keymap = [
     parse_keymap(TOML).unwrap_or_else(|e| panic!("supplemento GUI embebido inválido: {e}"))
 }
 
-/// La unión de comandos de Browse + Viewer (para validar el keymap ENTERO —
-/// `build_for` mezcla `global` con el contexto de la pantalla).
-fn all_commands() -> Vec<&'static str> {
-    COMMANDS.iter().chain(VIEWER_COMMANDS).copied().collect()
+/// Los comandos que ESTA pantalla despacha de verdad.
+///
+/// rust-reviewer MAJOR-1: antes esto era `all_commands()`, la UNIÓN de
+/// `COMMANDS` y `VIEWER_COMMANDS`, y se pasaba a los DOS `build_for`. Como
+/// `build_for` mezcla `[global]` con el contexto de la pantalla, el efectivo
+/// del visor lleva `f9→app.theme`, `f11→app.settings`, `f12→app.extensions`,
+/// `ctrl+p→app.palette` y `tab→pane.switch` — y la unión contiene esos
+/// nombres, así que salían `Availability::Here`. Pero el despacho del visor
+/// es `apply_viewer_command`, que solo tiene brazos `viewer.*` y termina en
+/// `_ => {}`: abrir el visor con F3 y pulsar F11 no hacía NADA y nada lo
+/// decía. Es exactamente la clase de bug (F1 muerta) que K1 existe para
+/// matar, sobreviviendo dentro del propio K1.
+///
+/// Cada pantalla se valida ahora contra el set que ELLA despacha, de modo que
+/// esos bindings de `[global]` salen `NotHere` y la rama `Unavailable` deja
+/// de ser inalcanzable por mentira.
+fn screen_commands(screen: Screen) -> &'static [&'static str] {
+    match screen {
+        Screen::Viewer => VIEWER_COMMANDS,
+        // La GUI no construye un efectivo de `Screen::Dialog` (no tiene
+        // contexto de diálogo como keymap), pero el match debe ser total.
+        Screen::Browse | Screen::Dialog => COMMANDS,
+    }
 }
 
 /// Build the two `Effective`s (Browse and Viewer) from `preset_name` +
@@ -330,9 +349,18 @@ fn build_effectives_layers(
             kfs.push(kf);
         } // ausente: la capa no aporta; ilegible = error (banner + preset).
     }
-    let cmds = all_commands();
-    let browse = Effective::build_for(&preset, &kfs, &cmds, Screen::Browse)?;
-    let viewer = Effective::build_for(&preset, &kfs, &cmds, Screen::Viewer)?;
+    let browse = Effective::build_for(
+        &preset,
+        &kfs,
+        screen_commands(Screen::Browse),
+        Screen::Browse,
+    )?;
+    let viewer = Effective::build_for(
+        &preset,
+        &kfs,
+        screen_commands(Screen::Viewer),
+        Screen::Viewer,
+    )?;
     Ok((browse, viewer))
 }
 
@@ -353,18 +381,52 @@ pub fn build_effectives_preset_only(preset_name: &str) -> (Effective, Effective)
 /// Existe para los tests que necesitan un keymap con algo REASIGNADO — la
 /// mitad de la ayuda que se cierra con la tecla del lector, por ejemplo, no se
 /// puede probar con el preset de fábrica, donde esa tecla ya es `F1`. Los
-/// helpers que componen las capas (`preset`, `gui_supplement`, `all_commands`)
+/// helpers que componen las capas (`preset`, `gui_supplement`,
+/// `screen_commands`)
 /// son privados y así siguen: lo que se expone es la composición ya hecha, que
 /// es la que tiene el orden correcto.
+///
+/// # Panics
+///
+/// Con `layers` VACÍO —el único uso fuera de tests, vía
+/// [`build_effectives_preset_only`]— no puede: el preset y el supplemento son
+/// constantes compiladas, y los construyen los tres en cada `just gui-ci`
+/// (`los_tres_presets_compartidos_parsean_y_construyen` y
+/// `build_effectives_preset_only_no_panica`). Con `layers` no vacío (solo
+/// tests) sí puede, y el invariante es del test que los escribe.
+///
+/// rust-reviewer MAJOR-5: el invariante NO es el que era. Antes se apoyaba en
+/// «un comando que la GUI no tiene se filtra y desaparece»; desde K1 (ADR
+/// 0043, decisión 4) los bindings no disponibles PARTICIPAN en el chequeo
+/// prefix-free, así que una secuencia de preset cuyo prefijo choque con un
+/// binding que este frontend no puede ejecutar es ahora un `AmbiguousPrefix`
+/// duro — una vía nueva para que esto reviente. Hoy ningún preset la toca
+/// (la única secuencia de fábrica es `g g` de vim, y nada bindea un `g`
+/// suelto), pero los cuatro presets de K2 son justo donde secuencias y
+/// bindings no disponibles se encuentran, y esta función es la ruta de
+/// RECUPERACIÓN de errores (`main.rs`, cuando el keymap del usuario no
+/// carga): un panic aquí sustituye el banner por un crash de arranque. K2
+/// debe convertirla en `Result` en cuanto añada su primera secuencia.
 #[must_use]
 pub fn build_effectives_with(preset_name: &str, layers: &[KeymapFile]) -> (Effective, Effective) {
     let preset = preset(preset_name);
     let mut kfs = vec![gui_supplement()];
     kfs.extend_from_slice(layers);
-    let cmds = all_commands();
     (
-        Effective::build_for(&preset, &kfs, &cmds, Screen::Browse).expect("preset browse válido"),
-        Effective::build_for(&preset, &kfs, &cmds, Screen::Viewer).expect("preset viewer válido"),
+        Effective::build_for(
+            &preset,
+            &kfs,
+            screen_commands(Screen::Browse),
+            Screen::Browse,
+        )
+        .expect("preset browse válido"),
+        Effective::build_for(
+            &preset,
+            &kfs,
+            screen_commands(Screen::Viewer),
+            Screen::Viewer,
+        )
+        .expect("preset viewer válido"),
     )
 }
 
@@ -462,6 +524,32 @@ mod tests {
                 def.status,
                 Status::Live,
                 "{name} lo implementa la GUI pero el catálogo lo declara Planned"
+            );
+        }
+    }
+
+    /// rust-reviewer MAJOR-1: every name a screen's effective reports as
+    /// `Here` must have an arm in THAT screen's dispatcher. The viewer
+    /// dispatches `viewer.*` and nothing else, so a `[global]` binding
+    /// visible from the viewer (F9/F11/F12/Ctrl+P/Tab) must NOT come out
+    /// runnable. Before this pin they did, and the keys were dead.
+    #[test]
+    fn el_visor_no_declara_ejecutable_lo_que_no_despacha() {
+        for preset_name in ["orthodox", "vim", "cua"] {
+            let (_browse, viewer) = build_effectives_from(preset_name, None).expect("construye");
+            for (seq, cmd) in viewer.bindings() {
+                assert!(
+                    VIEWER_COMMANDS.contains(&cmd),
+                    "{preset_name}: el visor declara {cmd:?} ({seq}) ejecutable y \
+                     `apply_viewer_command` no tiene brazo para él"
+                );
+            }
+            // Y lo recíproco: siguen estando, marcados.
+            let all = viewer.bindings_all();
+            assert!(
+                all.len() > viewer.bindings().len(),
+                "{preset_name}: los bindings de [global] deben SOBREVIVIR marcados, \
+                 no desaparecer — ese era el bug de K1"
             );
         }
     }

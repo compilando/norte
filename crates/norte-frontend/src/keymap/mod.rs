@@ -163,8 +163,7 @@ pub fn preset_commands(screen: Screen) -> Vec<String> {
 ///
 /// [`Availability::Here`] has nothing to say — the key runs — so it renders
 /// empty; a caller only ever builds this from a
-/// [`Resolution::Unavailable`](crate::keymap::Resolution::Unavailable), which
-/// never carries it.
+/// [`Resolution::Unavailable`], which never carries it.
 ///
 /// ```
 /// use norte_frontend::keymap::{Availability, unavailable_message};
@@ -393,18 +392,21 @@ mod tests {
             parse_chord("cmd+cmd+x"),
             Err(KeymapError::BadChord { .. })
         ));
-        // Distintos modificadores: legal bajo la política por defecto.
-        assert_eq!(
-            parse_chord("cmd+mod+x").unwrap(),
-            Chord::new(
-                Mods {
-                    cmd: true,
-                    ctrl: true,
-                    ..Mods::default()
-                },
-                KeyCode::Char('x')
-            )
-        );
+        // rust-reviewer MINOR-10: `cmd`+`mod` se rechaza SIEMPRE, no solo
+        // bajo la política Cmd (donde sería la misma tecla dos veces). Este
+        // test pinaba antes lo contrario —«legal bajo la política por
+        // defecto»— y eso hacía que la validez de un chord dependiera del
+        // sistema operativo: cargaba en Linux y reventaba en macOS, que es la
+        // asimetría que la decisión 8 del ADR 0043 dice evitar.
+        assert!(matches!(
+            parse_chord("cmd+mod+x"),
+            Err(KeymapError::BadChord { .. })
+        ));
+        // Y el orden no importa: es la combinación lo que se rechaza.
+        assert!(matches!(
+            parse_chord("mod+cmd+x"),
+            Err(KeymapError::BadChord { .. })
+        ));
     }
 
     /// `cmd` sorts BEFORE `ctrl` in `Display`, so a chord carrying both has
@@ -435,7 +437,8 @@ mod tests {
     /// key, `F(1..=12)`, and a char sample (space, `+`, an uppercase ASCII
     /// letter, and a non-ASCII char).
     ///
-    /// `F(n > 12)` is deliberately EXCLUDED: `Display` renders ANY `F(n)` as
+    /// `F(n)` OUTSIDE `1..=12` is deliberately EXCLUDED — `F(0)` as much as
+    /// `F(13)`: `Display` renders ANY `F(n)` as
     /// `"f{n}"`, but `parse_chord` accepts only `1..=12`, so the two domains
     /// disagree there. Since #109 both frontend adapters clamp to `1..=12`
     /// (classic xterm reports Shift+F1 as F13 — the TUI adapter used to
@@ -460,45 +463,40 @@ mod tests {
             KeyCode::Insert,
             KeyCode::Delete,
         ];
-        for code in non_char {
-            let c = Chord::new(Mods::default(), code);
-            assert_eq!(parse_chord(&c.to_string()).unwrap(), c, "{code:?}");
-        }
-        for n in 1..=12u8 {
-            let c = Chord::new(Mods::default(), KeyCode::F(n));
-            assert_eq!(parse_chord(&c.to_string()).unwrap(), c, "F({n})");
-        }
-        for ch in [' ', '+', 'G', 'ñ'] {
-            let c = Chord::new(Mods::default(), KeyCode::Char(ch));
-            assert_eq!(parse_chord(&c.to_string()).unwrap(), c, "{ch:?}");
-        }
-        // The MODIFIER half of the table, swept exhaustively — `cmd` joined
-        // it and the round trip has to close over the new spelling too. On a
-        // non-`Char` key all four bits are independent, so the whole product
-        // is legal; `Display` orders them `cmd+ctrl+alt+shift+`, which is the
-        // one canonical spelling `parse_chord` reads back.
-        for bits in 0..16u8 {
-            let mods = Mods {
-                cmd: bits & 1 != 0,
-                ctrl: bits & 2 != 0,
-                alt: bits & 4 != 0,
-                shift: bits & 8 != 0,
-            };
-            let c = Chord::new(mods, KeyCode::F(5));
-            assert_eq!(parse_chord(&c.to_string()).unwrap(), c, "{mods:?}");
-        }
-        // On a `Char`, `shift` is dropped by `Chord::new` and rejected by
-        // `parse_chord` (the character already encodes it), so the sweep is
-        // over the other three.
-        for bits in 0..8u8 {
-            let mods = Mods {
-                cmd: bits & 1 != 0,
-                ctrl: bits & 2 != 0,
-                alt: bits & 4 != 0,
-                shift: false,
-            };
-            let c = Chord::new(mods, KeyCode::Char('k'));
-            assert_eq!(parse_chord(&c.to_string()).unwrap(), c, "{mods:?}");
+        // encoding-auditor MINOR 1+2: this is the CROSS PRODUCT, not two
+        // sweeps that never meet. The previous shape ran all 16 modifier
+        // combinations against `F(5)` only, and every key against
+        // `Mods::default()` only — so no modifier was ever applied to
+        // `space`. That gap was load-bearing: `Char(' ')` and `Char('+')`
+        // spell as WORDS precisely because the raw characters collide with
+        // `render_seq`'s space join and `paint_chord`'s `split`, and a
+        // refactor that "simplified" `Display` back to the raw char would
+        // have kept the old test green while quietly turning a two-key
+        // sequence into a three-key one in the help.
+        //
+        // `shift` is fed in unconditionally rather than masked off for
+        // `Char`: `Chord::new` DROPS it there (the character already encodes
+        // it) and `parse_chord` rejects the spelling, so running the bit
+        // exercises that normalisation inside the round trip instead of
+        // assuming it.
+        let codes = non_char
+            .into_iter()
+            .chain((1..=12u8).map(KeyCode::F))
+            .chain([' ', '+', 'G', 'ñ'].map(KeyCode::Char));
+        for code in codes {
+            for bits in 0..16u8 {
+                let mods = Mods {
+                    cmd: bits & 1 != 0,
+                    ctrl: bits & 2 != 0,
+                    alt: bits & 4 != 0,
+                    shift: bits & 8 != 0,
+                };
+                // `Display` orders them `cmd+ctrl+alt+shift+`, the one
+                // canonical spelling `parse_chord` reads back whatever order
+                // it was written in.
+                let c = Chord::new(mods, code);
+                assert_eq!(parse_chord(&c.to_string()).unwrap(), c, "{mods:?} {code:?}");
+            }
         }
     }
 
@@ -1577,6 +1575,116 @@ keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
 
         let m = unavailable_message("pane.hotlist", Availability::NotHere);
         assert!(m.contains("pane.hotlist"), "{m}");
+    }
+
+    /// encoding-auditor MINOR 6: the assertion above runs in the AMBIENT
+    /// locale (`Lang::from_env`), so exactly one of the two is pinned and
+    /// which one depends on the developer's `LANG`. A locale that dropped
+    /// `{ $issue }` would silently lose the issue number — undoing, at the
+    /// last step, precisely what `todo_planned_tiene_motivo_e_issue` exists
+    /// to guarantee. Pin both explicitly.
+    #[test]
+    fn el_mensaje_de_no_disponible_lleva_los_tres_argumentos_en_ambos_locales() {
+        for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+            let m = norte_i18n::ta_in(
+                lang,
+                "keymap-unavailable-not-built",
+                &[
+                    ("command", "pane.select-drive"),
+                    ("reason", "MOTIVO"),
+                    ("issue", "131"),
+                ],
+            );
+            assert!(m.contains("pane.select-drive"), "{lang:?}: {m}");
+            assert!(m.contains("MOTIVO"), "{lang:?}: {m}");
+            assert!(m.contains("131"), "{lang:?}: {m}");
+
+            let m = norte_i18n::ta_in(
+                lang,
+                "keymap-unavailable-not-here",
+                &[("command", "pane.hotlist")],
+            );
+            assert!(m.contains("pane.hotlist"), "{lang:?}: {m}");
+        }
+    }
+
+    /// encoding-auditor MINOR 5: `unavailable_message` interpolates its
+    /// `command` into a terminal sentence WITHOUT masking, and the argument
+    /// that this is safe is that the string is always byte-equal to a
+    /// `CommandDef.name` — `catalogue::lookup` is byte-exact `&str` equality,
+    /// so a hostile `run` can only ever miss and become a load error. That
+    /// argument is real, and until now nothing held it in place. Pin both
+    /// halves: the catalogue is ASCII, and a hostile `run` classifies as
+    /// `UnknownCommand` rather than surfacing as `Unavailable`.
+    #[test]
+    fn un_run_hostil_es_error_de_carga_jamas_una_indisponibilidad() {
+        for d in CATALOGUE {
+            assert!(
+                d.name.bytes().all(|b| b.is_ascii_lowercase()
+                    || b.is_ascii_digit()
+                    || matches!(b, b'.' | b'-')),
+                "{} no es ASCII seguro — el mensaje de indisponibilidad lo \
+                 interpola SIN enmascarar y esa es la única razón por la que \
+                 puede",
+                d.name
+            );
+        }
+        for h in norte_testkit::corpus::hostile_runs() {
+            // Through `parse_keymap`, with the hazards written as `\uXXXX` —
+            // a TOML basic string is exactly how such a name would ship.
+            let escaped: String = h
+                .run
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '.' {
+                        c.to_string()
+                    } else {
+                        format!("\\u{:04X}", c as u32)
+                    }
+                })
+                .collect();
+            let kf = parse_keymap(&format!(
+                "[pane]\nkeymap = [{{ on = [\"alt+f1\"], run = \"{escaped}\" }}]\n"
+            ))
+            .unwrap_or_else(|e| panic!("{}: el TOML debe parsear: {e}", h.id));
+            let err = Effective::build_for(&kf, &[], &["pane.copy"], Screen::Browse)
+                .expect_err(&format!("{}: debe fallar la carga — {}", h.id, h.why));
+            assert!(
+                matches!(err, KeymapError::UnknownCommand { .. }),
+                "{}: {err:?}",
+                h.id
+            );
+        }
+    }
+
+    /// The tripwire for the obvious next change. `unavailable_message` names
+    /// the COMMAND but not the KEY, and "Alt+F1: not built yet" is the
+    /// natural improvement someone will make in K3. The chord is exactly
+    /// where the hostile bytes live — `parse_chord` accepts any lone
+    /// codepoint as `Char`, `Chord`'s `Display` is raw on purpose, and
+    /// `norte_i18n` runs with `set_use_isolating(false)` (a terminal wants no
+    /// FSI/PDI cells), so there is no second line of defence: one RLO
+    /// reorders the whole status line. Trivially true today; it fails the day
+    /// the chord arrives unmasked, which is the entire point.
+    #[test]
+    fn el_mensaje_de_no_disponible_jamas_lleva_un_hazard_de_terminal() {
+        for d in CATALOGUE {
+            for why in [
+                Availability::NotHere,
+                Availability::NotBuilt {
+                    reason: "keymap-reason-volume-enumeration",
+                    issue: 131,
+                },
+            ] {
+                let m = unavailable_message(d.name, why);
+                assert!(
+                    !m.chars().any(norte_encoding::is_terminal_hazard),
+                    "{}: {:?}",
+                    d.name,
+                    m.escape_debug()
+                );
+            }
+        }
     }
 
     /// Masking runs FIRST and the cosmetics cannot undo it (encoding audit

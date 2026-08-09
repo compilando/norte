@@ -32,7 +32,7 @@ use norte_tui::help::TuiChords;
 use norte_tui::hints::DialogHints;
 use norte_tui::keymap::{
     COMMANDS, Command, DIALOG_COMMANDS, Effective, Resolution, Resolver, Screen,
-    chord_from_crossterm, presets,
+    chord_from_crossterm, presets, unavailable_message,
 };
 use norte_tui::lua::{
     CommandRun, Layer, LuaHost, PaneCtx, RunOutcome, StatusInput, TrustDecision, TrustStore,
@@ -2978,9 +2978,7 @@ async fn run(
                                 // barra de estado dice por qué.
                                 Resolution::Unavailable { command, why } => {
                                     app.pending.clear();
-                                    app.message = Some(
-                                        norte_frontend::keymap::unavailable_message(&command, why),
-                                    );
+                                    app.message = Some(unavailable_message(&command, why));
                                 }
                                 Resolution::Reset => app.pending.clear(),
                             }
