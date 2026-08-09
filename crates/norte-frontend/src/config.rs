@@ -20,7 +20,25 @@ pub struct FrontendConfig {
     /// treat it as a set of files that participated, not an ordered log.
     pub common: CommonConfig,
     /// `keymap.toml` layers present, ascending precedence.
+    ///
+    /// One entry per layer dir that HAS the file — a dir without one
+    /// contributes nothing, so the position of a layer here does NOT say
+    /// which layer it is. That is what [`Self::keymap_layer_kinds`] is for;
+    /// see it before cutting this list at any index.
     pub keymap_layers: Vec<KeymapFile>,
+    /// The [`Layer`] each entry of [`Self::keymap_layers`] came from — same
+    /// length, same order, index by index.
+    ///
+    /// Carried rather than inferred because the two are not recoverable from
+    /// each other and a wrong guess is silent: with only the system dir
+    /// holding a `keymap.toml`, `keymap_layers` is a one-element list whose
+    /// entry is the SYSTEM layer, and with a project layer present the last
+    /// entry is `./.norte`. A shortcut editor that cut this list positionally
+    /// would model its write into the wrong layer and approve a binding that
+    /// never fires — see
+    /// [`RebindSources::split_at`](crate::keymap::RebindSources::split_at),
+    /// which is the only supported way to make that cut.
+    pub keymap_layer_kinds: Vec<Layer>,
     /// Quick-search mode mapped onto the navigation enum.
     pub quick_search_mode: nav::Mode,
     /// Merged declarative openers (#28): System/User only, fail-closed.
@@ -109,10 +127,16 @@ pub fn load_openers(
 pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
     let mut common = norte_config::load(layers)?;
     let mut keymap_layers = Vec::new();
+    let mut keymap_layer_kinds = Vec::new();
     let mut openers = OpenersConfig::empty();
     for (dir, kind) in &layers.dirs {
         if let Some(parsed) = load_keymap_layer(dir, *kind, &mut common.sources)? {
             keymap_layers.push(parsed);
+            // In lockstep with the push above and never apart from it: the
+            // two vectors are one table, and a layer whose kind was dropped
+            // cannot be recovered by position (a dir with no `keymap.toml`
+            // leaves no gap here).
+            keymap_layer_kinds.push(*kind);
         }
         if let Some(parsed) = load_openers(dir, *kind, &mut common.sources)? {
             openers.extend_front(parsed);
@@ -125,6 +149,7 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
     Ok(FrontendConfig {
         common,
         keymap_layers,
+        keymap_layer_kinds,
         quick_search_mode,
         openers,
     })
@@ -291,6 +316,50 @@ mod tests {
         assert!(
             !msg.contains("prepend_keymap"),
             "el diagnóstico habla de la clave equivocada: {msg}"
+        );
+    }
+
+    /// K3c c2: `keymap_layers` carries one entry per dir that HAS the file, so
+    /// its INDICES say nothing about which layer is which — here the user dir
+    /// has no `keymap.toml` and the list is `[system, project]`, with the
+    /// system layer sitting at index 0 where a positional guess would look for
+    /// the user's. `keymap_layer_kinds` is the answer, parallel index by
+    /// index; without it a shortcut editor cutting this list would model its
+    /// write into the system layer (see `RebindSources::split_at`).
+    #[test]
+    fn keymap_layer_kinds_va_en_paralelo_a_las_capas_presentes() {
+        let sistema = tempfile::tempdir().unwrap();
+        std::fs::write(
+            sistema.path().join("keymap.toml"),
+            "[pane]\nprepend_keymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n",
+        )
+        .unwrap();
+        // El usuario todavía no tiene fichero: el primer rebind de una
+        // instalación nueva.
+        let usuario = tempfile::tempdir().unwrap();
+        let proyecto = tempfile::tempdir().unwrap();
+        std::fs::write(
+            proyecto.path().join("keymap.toml"),
+            "[pane]\nprepend_keymap = [{ on = [\"k\"], run = \"cursor.up\" }]\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (sistema.path().to_path_buf(), Layer::System),
+                (usuario.path().to_path_buf(), Layer::User),
+                (proyecto.path().to_path_buf(), Layer::Project),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.keymap_layers.len(), 2, "el usuario no aporta fichero");
+        assert_eq!(
+            cfg.keymap_layer_kinds,
+            vec![Layer::System, Layer::Project],
+            "el kind viaja con la capa, no con el índice"
+        );
+        assert!(
+            cfg.keymap_layers[1].is_project(),
+            "y la de proyecto sigue marcada"
         );
     }
 

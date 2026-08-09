@@ -37,7 +37,7 @@
 //! Both are pure and both live in the engine, because the TUI and the GUI must
 //! not each decide what a collision is.
 
-use norte_config::KeymapList;
+use norte_config::{KeymapList, Layer};
 
 use super::chord::Chord;
 use super::effective::{Availability, Effective, Lookup, render_seq, sacred_chords};
@@ -179,9 +179,13 @@ impl Rebind {
 ///   and no longer knows which layer each binding came from, so it cannot see
 ///   a `./.norte` project layer outranking the user's, nor a differently
 ///   SPELLED twin of the same chord sitting earlier in the very list the write
-///   goes into — `alt+ctrl+p` for what `Display` writes as `ctrl+alt+p`, or
-///   `mod+p` for `ctrl+p`. Both make a write that loads and never fires — the
-///   silent failure this whole module exists to stop — so answering it is
+///   goes into. There are two independent twin pairs: modifier ORDER
+///   (`alt+ctrl+p` for what `Display` writes as `ctrl+alt+p`) and the per-OS
+///   ALIAS (`mod+p` for `ctrl+p` — `mod` resolves to ONE physical modifier,
+///   this process's [`mod_key`](super::mod_key), so the pair holds under
+///   [`ModKey::Ctrl`](super::ModKey::Ctrl) and is `cmd+p` under the Cmd
+///   policy). Each makes a write that loads and never fires — the silent
+///   failure this whole module exists to stop — so answering it is
 ///   [`rebind_dry_run`]'s job, which models the write and then asks the built
 ///   map who won.
 ///
@@ -314,28 +318,31 @@ pub struct RebindWrite {
 /// goes into ONE layer — the user's — and a `./.norte` project layer still
 /// outranks it afterwards.
 ///
-/// # Where the three slices come from
+/// # Do not cut it by hand: [`Self::split_at`]
 ///
-/// **Not** from `FrontendConfig::keymap_layers`. That is a bare
-/// `Vec<KeymapFile>` with one entry per layer dir that HAS a `keymap.toml`,
-/// and the [`Layer`](norte_config::Layer) kind is dropped — so the cut cannot
-/// be recovered from it, and the two ways of guessing are both wrong in a way
-/// nothing would report:
+/// The cut is NOT derivable from
+/// [`FrontendConfig::keymap_layers`](crate::config::FrontendConfig::keymap_layers)
+/// alone. That is a bare `Vec<KeymapFile>` with one entry per layer dir that
+/// HAS a `keymap.toml`, so a dir without one leaves no gap and the position of
+/// an entry says nothing about which layer it is. Both ways of guessing are
+/// wrong, and wrong silently:
 ///
 /// - taking the last layer as `target` hands over the PROJECT layer when there
-///   is one. The write is then modelled above the layer that actually outranks
-///   it, and [`RebindError::Shadowed`] — the whole reason for the split —
-///   stops firing;
+///   is one. The write is then modelled ABOVE the layer that actually outranks
+///   it, [`RebindError::Shadowed`] — the whole reason for the split — stops
+///   firing, and the door approves a write the real user layer cannot make
+///   stick;
 /// - taking the last non-project layer hands over the SYSTEM layer when the
 ///   user has no file yet, which is the first rebind of every new install. The
-///   model puts the write below the user's own layer and refuses writes that
-///   would have worked.
+///   model then puts the write into a file nothing ever writes: a broken
+///   system entry looks repairable, and the spelling handed to the writer is
+///   the system file's rather than the new user layer's.
 ///
-/// Build it from [`Layers`](norte_config::Layers), which does carry the kinds,
-/// re-reading each layer with [`load_keymap_layer`](crate::config::load_keymap_layer):
-/// `below` is every dir before the one being written, `target` is that dir's
-/// layer or [`KeymapFile::default`] when it has no file, `above` is every dir
-/// after it. One extra read of files the writer is about to lock anyway.
+/// [`KeymapFile::is_project`] identifies `above`, and nothing on a
+/// `KeymapFile` distinguishes System from User — which is the half that
+/// matters. [`Self::split_at`] takes the kinds
+/// ([`FrontendConfig::keymap_layer_kinds`](crate::config::FrontendConfig::keymap_layer_kinds))
+/// and makes the cut once, so no caller has to.
 ///
 /// The target must NOT also appear in `below` or `above`. A duplicate is not
 /// harmless: `check_binding` runs per raw binding BEFORE the dedup, so the
@@ -351,9 +358,17 @@ pub struct RebindSources<'a> {
     /// layer), in ascending precedence — as [`Effective::build_for`] takes them.
     pub below: &'a [KeymapFile],
     /// The layer the write lands in, as loaded. [`KeymapFile::default`] when
-    /// there is no file yet. Never a PROJECT layer: `./.norte` is not the
-    /// editor's to write, and a project layer here would also have its `lua:`
-    /// bindings discarded on merge, which the write cannot reproduce.
+    /// there is no file yet.
+    ///
+    /// **Never a PROJECT layer**, and that is a precondition rather than
+    /// advice: `./.norte` is not the editor's to write, and a project layer
+    /// here has its `lua:` bindings discarded on merge — so the model would
+    /// disagree with the file about a binding that was never written, and a
+    /// `lua:` command would come back as [`RebindError::Shadowed`] with an
+    /// EMPTY `by` (nothing runs the key at all), which is not a sentence any
+    /// editor can show. [`rebind_dry_run`] states the precondition with a
+    /// `debug_assert!`; in release it is the caller's error, not an
+    /// assumption. [`Self::split_at`] cannot violate it.
     pub target: &'a KeymapFile,
     /// Layers of HIGHER precedence (the project layer), ascending. These still
     /// outrank the write, which is why they are modelled instead of assumed
@@ -368,6 +383,119 @@ pub struct RebindSources<'a> {
     /// [`Effective::screen`] of the map [`rebind_check`] was asked about; the
     /// two must be the same screen or the two answers are about different maps.
     pub screen: Screen,
+}
+
+impl<'a> RebindSources<'a> {
+    /// Cut a frontend's loaded keymap layers at the one a rebind is written
+    /// to — the USER layer — using the kinds that came with them.
+    ///
+    /// `kinds` and `layers` are
+    /// [`FrontendConfig::keymap_layer_kinds`](crate::config::FrontendConfig::keymap_layer_kinds)
+    /// and
+    /// [`FrontendConfig::keymap_layers`](crate::config::FrontendConfig::keymap_layers):
+    /// parallel, index by index, in ascending precedence. Everything of lower
+    /// precedence than the user layer becomes `below`, the user layer itself
+    /// becomes `target` — [`KeymapFile::default`] when the user has no
+    /// `keymap.toml` yet, which is why the result OWNS it and hands out
+    /// [`RebindSources`] by reference ([`RebindSplit::sources`]) — and
+    /// everything above becomes `above`.
+    ///
+    /// This exists so the cut is made once, in the place that can be tested,
+    /// rather than at each frontend's editor: [`RebindSources`]'s own
+    /// documentation lists the two ways of guessing it and what each one
+    /// silently breaks.
+    ///
+    /// Anything that is not a leading run of [`Layer::System`] followed by at
+    /// most one [`Layer::User`] lands in `above`, which is the FAIL-CLOSED
+    /// side: an unexpected order makes the door refuse writes it cannot model,
+    /// never approve one it did not. The two vectors should be the same
+    /// length (a `debug_assert!` says so); a shorter `kinds` also degrades
+    /// into `above`.
+    ///
+    /// ```
+    /// use norte_config::Layer;
+    /// use norte_frontend::keymap::{
+    ///     RebindSources, Screen, parse_chord, parse_keymap, parse_keymap_layer, rebind_dry_run,
+    /// };
+    ///
+    /// let preset = parse_keymap("[pane]\nkeymap = [{ on = [\"f5\"], run = \"pane.copy\" }]\n")
+    ///     .unwrap();
+    /// // A new install: only the system dir ships a `keymap.toml`.
+    /// let system =
+    ///     parse_keymap_layer("[pane]\nprepend_keymap = [{ on = [\"f5\"], run = \"pane.copy\" }]\n")
+    ///         .unwrap();
+    /// let layers = [system];
+    /// let kinds = [Layer::System];
+    /// let known = ["pane.copy", "pane.move"];
+    /// let split = RebindSources::split_at(&preset, &kinds, &layers, &known, Screen::Browse);
+    /// // The write goes into the user's own (still absent) layer, above the system one.
+    /// let w = rebind_dry_run(&split.sources(), &[parse_chord("f5").unwrap()], "pane.move").unwrap();
+    /// assert_eq!((w.section, &w.chords[..]), ("pane", &["f5".to_owned()][..]));
+    /// ```
+    #[must_use]
+    pub fn split_at(
+        preset: &'a KeymapFile,
+        kinds: &[Layer],
+        layers: &'a [KeymapFile],
+        known_commands: &'a [&'a str],
+        screen: Screen,
+    ) -> RebindSplit<'a> {
+        debug_assert_eq!(
+            kinds.len(),
+            layers.len(),
+            "the kinds are parallel to the layers, one per layer that has a file"
+        );
+        let n = kinds.len().min(layers.len());
+        let cut = kinds[..n]
+            .iter()
+            .take_while(|k| **k == Layer::System)
+            .count();
+        let (target, above_from) = if cut < n && kinds[cut] == Layer::User {
+            (layers[cut].clone(), cut + 1)
+        } else {
+            // No user layer at this position: the user has no `keymap.toml`
+            // (the common case on a fresh install), so the write creates one.
+            (KeymapFile::default(), cut)
+        };
+        RebindSplit {
+            preset,
+            below: &layers[..cut],
+            target,
+            above: &layers[above_from..],
+            known_commands,
+            screen,
+        }
+    }
+}
+
+/// The layers cut at the write target ([`RebindSources::split_at`]), owning
+/// the target because it may not exist as a file yet.
+///
+/// Hold it for as long as the [`RebindSources`] borrowed from it
+/// ([`Self::sources`]) — which for an editor is the span of one confirm.
+#[derive(Debug, Clone)]
+pub struct RebindSplit<'a> {
+    preset: &'a KeymapFile,
+    below: &'a [KeymapFile],
+    target: KeymapFile,
+    above: &'a [KeymapFile],
+    known_commands: &'a [&'a str],
+    screen: Screen,
+}
+
+impl RebindSplit<'_> {
+    /// The borrowed view [`rebind_dry_run`] takes.
+    #[must_use]
+    pub fn sources(&self) -> RebindSources<'_> {
+        RebindSources {
+            preset: self.preset,
+            below: self.below,
+            target: &self.target,
+            above: self.above,
+            known_commands: self.known_commands,
+            screen: self.screen,
+        }
+    }
 }
 
 /// Why a rebind cannot be written.
@@ -420,9 +548,12 @@ pub enum RebindError {
 ///
 /// One is a differently SPELLED twin of the sequence sitting earlier in the
 /// very list being written — `alt+ctrl+p` for what [`Chord`]'s `Display` writes
-/// as `ctrl+alt+p`, or `mod+p` for `ctrl+p`, both perfectly legal to hand-write
-/// — which the byte-exact writer would walk past, leaving two entries for one
-/// chord and the OLDER one winning. That is the deliberate difference: the
+/// as `ctrl+alt+p` (modifier order), or `mod+p` for `ctrl+p` (the per-OS alias:
+/// `mod` resolves to ONE physical modifier, so this pair holds under
+/// [`ModKey::Ctrl`](super::ModKey::Ctrl) and is `cmd+p` under the Cmd policy),
+/// both perfectly legal to hand-write — which the byte-exact writer would walk
+/// past, leaving two entries for one chord and the OLDER one winning. That is
+/// the deliberate difference: the
 /// match here is by PARSED sequence, so the twin is found, and
 /// [`RebindWrite::chords`] carries the spelling ALREADY IN THE FILE so the
 /// writer lands on that entry after all. Repaired, not refused.
@@ -928,6 +1059,130 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
             ..only_user(&preset, &none, Screen::Browse)
         };
         rebind_dry_run(&src, &[c("ctrl+j")], "pane.move").expect("a lower layer loses, as it must");
+    }
+
+    /// J1, first miscut: the user has no `keymap.toml` and the system dir
+    /// does, so `keymap_layers` is `[system]` — and a caller taking "the last
+    /// non-project layer" as the target would hand over the SYSTEM layer. The
+    /// tell is that the system file's own broken entry would then look
+    /// REPAIRABLE, when the write only ever reaches the user's dir; and the
+    /// spelling handed back would be the system file's rather than the new
+    /// layer's. `split_at` puts it in `below`, where it belongs.
+    #[test]
+    fn a_system_only_stack_targets_a_new_user_layer() {
+        let preset = parse_keymap(BROWSE).expect("preset");
+        let broken = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [{ on = [\"ctrl+j\"], run = \"pane.telport\" }]\n",
+        )
+        .expect("it parses; the COMMAND is the typo");
+        let layers = [broken];
+        let kinds = [Layer::System];
+        let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
+        assert_eq!(split.below.len(), 1, "el sistema va DEBAJO de la escritura");
+        assert!(split.above.is_empty());
+        assert!(!split.target.is_project());
+        let err = rebind_dry_run(&split.sources(), &[c("ctrl+j")], "pane.move")
+            .expect_err("a user rebind cannot repair the SYSTEM file");
+        assert!(
+            matches!(
+                &err,
+                RebindError::Load(crate::keymap::KeymapError::UnknownCommand { run })
+                    if run == "pane.telport"
+            ),
+            "{err:?}"
+        );
+
+        // And with a system layer that loads: the write wins over it, and the
+        // spelling is `Display`'s — the target list is EMPTY, so the system
+        // file's `mod+j` is not a twin the write may land on.
+        let system = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [{ on = [\"mod+j\"], run = \"cursor.top\" }]\n",
+        )
+        .expect("system layer");
+        let layers = [system];
+        let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
+        let w = rebind_dry_run(&split.sources(), &[c("ctrl+j")], "pane.move")
+            .expect("the user's own layer outranks the system one");
+        assert_eq!(
+            w.chords,
+            vec!["ctrl+j".to_owned()],
+            "la capa destino está vacía: se escribe la grafía de `Display`"
+        );
+    }
+
+    /// J1, second miscut: a project layer is LAST in `keymap_layers`, so a
+    /// caller taking "the last layer" as the target would model the write
+    /// ABOVE the user's own — and `Shadowed`, the whole reason the split
+    /// exists, would stop firing. `split_at` puts it in `above` and keeps the
+    /// USER layer as the target, which the second half checks is not merely
+    /// `KeymapFile::default()`: rebinding the user's own entry replaces it in
+    /// place.
+    #[test]
+    fn a_project_layer_goes_above_the_write_and_the_user_layer_stays_the_target() {
+        let preset = parse_keymap(BROWSE).expect("preset");
+        let user = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [{ on = [\"mod+k\"], run = \"cursor.top\" }]\n",
+        )
+        .expect("user layer");
+        let mut project = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [{ on = [\"ctrl+j\"], run = \"cursor.top\" }]\n",
+        )
+        .expect("project layer");
+        project.mark_project();
+        let layers = [user, project];
+        let kinds = [Layer::User, Layer::Project];
+        let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
+        assert!(split.below.is_empty());
+        assert_eq!(split.above.len(), 1, "el proyecto manda ENCIMA");
+        assert!(
+            !split.target.is_project(),
+            "el destino jamás es la capa de proyecto"
+        );
+        let err = rebind_dry_run(&split.sources(), &[c("ctrl+j")], "pane.move")
+            .expect_err("the project layer keeps that key whatever the user writes");
+        assert!(matches!(&err, RebindError::Shadowed { .. }), "{err:?}");
+        // The target really is the USER layer and not an empty one: its own
+        // entry is rebound in place, spelling included.
+        let w = rebind_dry_run(&split.sources(), &[c("ctrl+k")], "pane.move")
+            .expect("rebinding your own binding is legal");
+        assert_eq!(
+            w.chords,
+            vec!["mod+k".to_owned()],
+            "la grafía YA EN EL FICHERO del usuario: el destino es su capa"
+        );
+    }
+
+    /// `Shadowed` carries the availability for the same reason `Replaces`
+    /// does: "`pane.pack` keeps that key, and it is not built yet" is a
+    /// different sentence from "`cursor.top` keeps it", and only the editor
+    /// that can say which one avoids sending a user to look for a feature
+    /// that does not exist.
+    #[test]
+    fn shadowed_says_whether_what_keeps_the_key_even_works() {
+        let preset = parse_keymap(BROWSE).expect("preset");
+        let none = KeymapFile::default();
+        let project = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [{ on = [\"ctrl+j\"], run = \"pane.pack\" }]\n",
+        )
+        .expect("project layer");
+        let src = RebindSources {
+            above: std::slice::from_ref(&project),
+            ..only_user(&preset, &none, Screen::Browse)
+        };
+        let err = rebind_dry_run(&src, &[c("ctrl+j")], "pane.move").expect_err("shadowed");
+        assert!(
+            matches!(
+                &err,
+                RebindError::Shadowed {
+                    by,
+                    avail: Availability::NotBuilt {
+                        reason: "keymap-reason-archive-write",
+                        issue: 132,
+                    },
+                } if by == "pane.pack"
+            ),
+            "{err:?}"
+        );
     }
 
     /// Each screen's binding lands in its OWN section and is invisible to the
