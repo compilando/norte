@@ -43,6 +43,13 @@ confidence, and the plan records which criterion produced each decision.
 
 ## 2. Batch rename, and the executor AI rename was supposed to feed
 
+**Built, 2026-08-09** — the executor, not the rules engine. `fs.rename_batch`
+plans and executes as one transactional unit with whole-plan collision preview,
+permutation support and single-step undo (proto 0.36.0, ADR 0042); AI rename now
+feeds it. What remains of this item is the rules engine on top — counters,
+slices, regex, case, cleanup — plus CLI/MCP surfaces and #121.
+
+
 **§17.** Counters, slices, regular expressions, case changes and character
 cleanup, with collision preview and transactional undo. "AI rename feeds the
 same executor."
@@ -119,7 +126,53 @@ visit. None of it exists.
 
 ---
 
-## 5. Git status as the official columns plugin
+## 5. The keyboard of the managers people already know
+
+**§12** bundles orthodox, Vim and CUA presets. Three is not the sector: someone
+arriving from Total Commander, Krusader, Norton Commander or Far Manager has to
+relearn the keyboard, which is the one thing an orthodox file manager should
+never ask of them.
+
+The engine is in good shape and in the right place — `norte-frontend::keymap`,
+shared by both frontends, with layers, contexts, multi-key sequences and a
+prefix-free guarantee that makes resolution timing-free and testable (ADR 0006).
+What blocks the four presets is not the engine's resolution model but its
+honesty model, and it is worth stating plainly because it is the whole cost:
+
+- **The command catalogue belongs to each frontend, separately.** `COMMANDS`
+  lives twice, once in the TUI and once in the GUI, and the two lists differ. So
+  the same preset resolves differently in each, silently. This has already shipped
+  as a bug: F1 did nothing in the GUI for several releases because the shared
+  presets bound it and the GUI's private list did not name it.
+- **A binding to a command norte has not built is a load error, or vanishes.**
+  Around a third of a faithful Total Commander preset names commands that do not
+  exist yet — `Alt+F1` selects a drive, and volumes are item 3. A preset cannot
+  be both faithful and loadable until "not built yet" is a declared state with a
+  reason, rather than a typo or a silent deletion.
+
+So the work is a shared catalogue where each command declares whether it is live
+or planned-with-a-reason, one modifier alias (`mod+` = Cmd on macOS, Ctrl
+elsewhere) so a preset stays one file, and then the four presets — Far included
+deliberately, because its full F1–F12 × four-modifier matrix is the hardest case
+the engine will ever be asked to carry. Numeric counts (`5j`) come with them.
+
+On top of that the keyboard finally becomes discoverable: a which-key overlay on
+a pending prefix, a reference sheet generated from the *active* preset rather
+than written by hand — unavailable keys in grey, with the reason — and a
+shortcut editor in settings that shows the collision instead of making the user
+find it by reloading TOML.
+
+A pleasant side effect: the planned entries, each with an issue, are an honest
+ranked list of what norte still owes an orthodox user.
+
+**Design:** `docs/superpowers/specs/2026-08-09-keymap-catalogue-and-presets-design.md`
+(decomposed K1 catalogue → K2 counts and presets → K3 surface).
+**Depends on nothing.** Gets better as items 1 and 3 land, because the greyed-out
+keys turn on.
+
+---
+
+## 6. Git status as the official columns plugin
 
 **§17.** "Ship status as an official columns plugin, not a Git client in the
 core."
@@ -142,7 +195,7 @@ between a working tree and a branch is the natural next thought.
 
 ---
 
-## 6. Directory watching in the graphical frontend (#106)
+## 7. Directory watching in the graphical frontend (#106)
 
 The TUI half landed: `notify` over the visible `file://` directories, a
 debouncer with a real floor between refreshes, and a documented degradation to
@@ -157,7 +210,7 @@ notes.
 
 ---
 
-## 7. The filesystem edge cases the spec names
+## 8. The filesystem edge cases the spec names
 
 **§17.** Explicit symlink policy, cycle detection, sparse files, Windows
 reparse points, bounded retry for locked files.
@@ -173,7 +226,7 @@ CI is off, which is its own decision (see the end).
 
 ---
 
-## 8. Local observability
+## 9. Local observability
 
 **§17.** Structured tracing by task and session, rotating local logs,
 inspectable task traces; nothing leaves the machine.
@@ -189,7 +242,7 @@ stable release needs more than it needs another feature. It pairs with
 
 ---
 
-## 9. Daemon lifecycle hardening
+## 10. Daemon lifecycle hardening
 
 **§17.** Start on demand, shut down after configurable idle time, upgrade
 gracefully, authenticate local peers, never run as root, loopback TCP with a
@@ -205,7 +258,7 @@ protects something real.
 
 ---
 
-## 10. RAR, read-only, by delegation
+## 11. RAR, read-only, by delegation
 
 **Product decision 5.** Read-only RAR through an installed `unrar` or `7z`,
 with no non-free code in the dependency graph.
@@ -219,7 +272,7 @@ it gets a path and a pipe, never the user's whole filesystem.
 
 ---
 
-## 11. Packaging, tier two
+## 12. Packaging, tier two
 
 **§17.** Signed artifacts, common package managers, update notification.
 
@@ -236,7 +289,7 @@ Worth doing when there is a release cadence to attach them to.
 
 **CI.** Off for billing, so there is no three-OS matrix and the gate is one
 developer's Linux machine. That is not a feature to build; it is a decision to
-make, and it decides whether items 3, 7 and 9 can honestly claim Windows and
+make, and it decides whether items 3, 8 and 10 can honestly claim Windows and
 macOS support. Two open issues — a Windows trash path that can destroy
 non-recyclable items (#25) and the missing named-pipe transport (#33) — are
 unverifiable until it comes back.
