@@ -17,20 +17,47 @@ just disk                               # Where the build cache went
 just prune                              # Reclaim it without a full rebuild
 ```
 
-Pace CI to avoid slowing iteration. **The ladder, cheap to expensive — climb a
-rung only when the one below it is green:**
+### The gate budget
 
-| step | when | warm cost |
+**The gate is billed per PLAN, not per task.** Measured on the batch-rename
+session (10 tasks, 17 agents): the gate ran 50 times and consumed 7.3 of the
+12 hours — 60% of the whole session. The implementing agents spent 77%, 87%
+and 98% of their lifetime waiting on it. That is the single largest cost in
+this repository, and the fix is fewer runs, not faster ones: `target/` takes an
+exclusive cargo lock, so a second compile in the same tree does not overlap,
+it queues.
+
+| when | run | budget |
 | --- | --- | --- |
-| `just t <crate>` | the RED→GREEN loop | ~10s |
-| `just ci-fast` | before calling a task done | ~34s |
-| `just ci` | before a commit or a push | ~143s |
+| the RED→GREEN loop | `just t <crate>` (+ `just c` if you touched lint surface) | unlimited |
+| every ~3 tasks of a plan | `just ci-fast` | ONE run |
+| closing the branch, before the merge | `just ci` | ONE run |
 
-`cov` is 76% of `just ci` (109s of 143s) and can only move if you touched
-proto/vfs/core — the sole crates under the 85% gate — so keep it out of the
-loop. Filtering tests (`-E 'test(...)'`) buys nothing: compilation dominates,
-and running the whole suite is ~12s. Run the full `just ci` once per change,
-never on a loop.
+**Costs, measured under real load** — the numbers that used to be here (10s /
+34s / 143s) were 3–7× optimistic, and budgeting against them is what produced
+the 50 runs:
+
+| step | observed |
+| --- | --- |
+| `just t <crate>` | ~78s |
+| `just ci-fast` | ~4min |
+| `just ci` | 4–10min |
+
+**Never use the gate as a debugger.** A red gate tells you WHICH test failed;
+re-running it to see whether your fix worked costs 4–10 minutes for a test that
+takes three seconds. Reproduce the single failure (`just t <crate>` — filtering
+with `-E 'test(...)'` buys nothing, compilation dominates and the whole crate
+suite is seconds), fix it there, and spend the gate run once, afterwards.
+
+**Batch the fix rounds.** Reviewer findings from three tasks are applied in ONE
+pass with ONE gate run at the end, not one gate run per finding.
+
+**Reviewer agents never compile.** They read the diff and reason. A reviewer
+that runs `just ci` has doubled the cost of a review that was, at ~0 seconds of
+gate time, the cheapest part of the session.
+
+`cov` is the bulk of `just ci` and can only move if you touched proto/vfs/core
+— the sole crates under the 85% gate — so it stays out of the loop entirely.
 
 **An intermittently red test is a bug, not noise.** Do not re-run it until it
 goes green: that demonstrates nothing and hides the cause. There are ~26
