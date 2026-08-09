@@ -983,3 +983,125 @@ async fn a_denied_batch_applies_nothing() {
     assert!(matches!(e, Error::PolicyDenied { .. }), "{e:?}");
     assert_eq!(names_in(&provider, &dir).await, before);
 }
+
+/// A provider whose `capabilities()` LIES until its first async operation —
+/// which is not a contrivance but the shape `LocalProvider` really has: the
+/// case regime is probed in `spawn_blocking` by the first async call, and until
+/// that has run `capabilities()` answers `cfg!(target_os)`'s guess.
+///
+/// It exists to pin the ORDER inside `Engine::plan_for`. Asking for the caps
+/// before listing the directory plans a case-INSENSITIVE volume as if it
+/// distinguished case, which means a destination that is already taken is not
+/// reported as a collision and the executor is handed a `rename` onto an
+/// occupied name. The first operation on a provider is exactly the case an MCP
+/// bridge or a one-shot CLI hits every time.
+struct LazyCaps {
+    inner: Arc<MemProvider>,
+    probed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl LazyCaps {
+    fn probe(&self) {
+        self.probed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl norte_vfs::Provider for LazyCaps {
+    fn scheme(&self) -> &str {
+        self.inner.scheme()
+    }
+
+    fn capabilities(&self) -> norte_vfs::Capabilities {
+        if self.probed.load(std::sync::atomic::Ordering::SeqCst) {
+            self.inner.capabilities()
+        } else {
+            // The unprobed guess: "this is a unix filesystem, so it
+            // distinguishes case". Wrong here, and wrong on any folding volume.
+            let mut caps = self.inner.capabilities();
+            caps.flags |= norte_vfs::CapabilityFlags::CASE_SENSITIVE;
+            caps
+        }
+    }
+
+    async fn stat(&self, p: &VPath) -> Result<norte_vfs::Entry, Error> {
+        self.probe();
+        self.inner.stat(p).await
+    }
+
+    async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+        self.probe();
+        self.inner.list(p).await
+    }
+
+    async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, Error> {
+        self.probe();
+        self.inner.read(p, range).await
+    }
+
+    async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+        self.probe();
+        self.inner.write(p).await
+    }
+
+    async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
+        self.probe();
+        self.inner.mkdir(p).await
+    }
+
+    async fn remove(&self, p: &VPath) -> Result<(), Error> {
+        self.probe();
+        self.inner.remove(p).await
+    }
+
+    async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
+        self.probe();
+        self.inner.rename(from, to).await
+    }
+}
+
+/// The FIRST plan a provider is ever asked for must use the case regime that
+/// provider really has, not the one it guesses before it has looked.
+///
+/// `A.txt` sits in a directory that does not distinguish case, and the batch
+/// aims `x.txt` at `a.txt`. That is an external collision, and there is no
+/// second chance to notice it: the plan either refuses here or the executor
+/// renames over a file.
+#[tokio::test]
+async fn the_first_plan_uses_the_probed_case_regime_not_the_guess() {
+    use norte_vfs::CapabilityFlags as F;
+    let inner = Arc::new(MemProvider::with_flags(
+        F::RENAME_ATOMIC | F::CASE_PRESERVING,
+    ));
+    let dir = MemProvider::root();
+    for n in [b"A.txt".as_slice(), b"x.txt".as_slice()] {
+        write_file(&inner, &dir.join(seg(n)), n).await;
+    }
+    let probed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let provider = LazyCaps {
+        inner,
+        probed: Arc::clone(&probed),
+    };
+    let engine = Engine::new();
+    engine.register_provider(Arc::new(provider) as Arc<dyn Provider>);
+
+    assert!(
+        !probed.load(std::sync::atomic::Ordering::SeqCst),
+        "the point of the test is that nothing has probed yet",
+    );
+    let ps = pairs(&[(b"x.txt", b"a.txt")]);
+    let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
+    assert!(
+        !plan.executable(),
+        "`A.txt` is in the way on a directory that folds case: {:?}",
+        plan.plan().steps,
+    );
+    assert_eq!(
+        plan.plan().collisions[0].kind,
+        norte_core::rename::CollisionKind::External,
+    );
+}

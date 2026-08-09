@@ -1123,11 +1123,22 @@ impl Engine {
             }
         }
         let provider = self.provider_for(dir).await?;
+        // El LISTADO va primero, y el orden es la corrección, no un detalle de
+        // estilo. `Provider::capabilities` es síncrono (regla 2: no puede hacer
+        // I/O) y `norte-vfs-local` sondea el régimen de mayúsculas de forma
+        // PEREZOSA, dentro de la primera operación async; hasta entonces
+        // contesta el default de `cfg!(target_os)` — justo lo que la doc de
+        // `NameCaps` promete que no se hace. Preguntar antes de listar
+        // planifica un volumen que pliega el caso como si lo distinguiera: una
+        // colisión `External` que no se reporta, y un plan que el humano
+        // aprueba sin la línea que le importaba. Es el caso normal de un
+        // puente MCP o un CLI de un solo tiro, donde planificar ES la primera
+        // operación del provider.
+        let names = list_base_names(&*provider, dir).await?;
         let caps = provider.capabilities();
         if caps.flags.contains(CapabilityFlags::READ_ONLY) {
             return Err(Error::Unsupported);
         }
-        let names = list_base_names(&*provider, dir).await?;
         let name_caps = crate::rename::NameCaps {
             case_sensitive: caps.flags.contains(CapabilityFlags::CASE_SENSITIVE),
         };
