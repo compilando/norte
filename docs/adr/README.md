@@ -49,3 +49,4 @@ edits.
 | [0041](0041-core-providers-versus-plugin-providers.md) | Which providers live in the core, and which arrive as plugins | accepted |
 | [0042](0042-batch-rename-wire.md) | Two-phase batch rename: a reviewed plan, executed by hash | accepted |
 | [0043](0043-keymap-availability-and-the-mod-alias.md) | Keymap availability is declared, and `mod+` is a process policy | accepted |
+| [0044](0044-numeric-counts-and-the-sacred-keys.md) | A count repeats the dispatch, and two keys are not for sale | accepted |

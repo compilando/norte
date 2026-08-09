@@ -1,9 +1,16 @@
-//! Motor de keymap PURO compartido por los frontends (ADR 0006/0007/0043):
+//! Motor de keymap PURO compartido por los frontends (ADR 0006/0007/0043/0044):
 //! mapa `(contexto, secuencia) → comando`, capas estilo Yazi, prefix-free
 //! validado al cargar — la resolución es un scan lineal determinista sobre el
 //! efectivo (≤ centenas de bindings), sin timeouts. Tecla NEUTRA (sin
 //! crossterm/gpui): cada frontend convierte su evento nativo a [`Chord`] con
 //! [`Chord::new`].
+//!
+//! ADR 0044 añade el prefijo numérico (`5j`) y las dos reglas de carga que lo
+//! acompañan: el contador viaja CON el comando ([`Count`]) y es el frontend
+//! quien repite el despacho, así que ninguna firma de comando cambia; un
+//! dígito 1-9 no puede ser binding con contadores activos, y `Tab` está
+//! reservada a `pane.switch` en Browse (la regla mira el PRIMER acorde de la
+//! secuencia).
 
 pub mod catalogue;
 mod chord;
