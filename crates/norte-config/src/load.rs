@@ -14,6 +14,15 @@ use norte_proto::VPath;
 use crate::dirs::{Layer, Layers};
 use crate::schema::{self, ConfigError, DaemonMode, NorteToml, toml_diag};
 
+/// The scalar config layer: the file every `persist_*` helper below writes.
+const NORTE_TOML: &str = "norte.toml";
+
+/// The keymap layer (ADR 0006/0007) — a SECOND writable config file since
+/// K3c ([`persist_keymap_append`]/[`persist_keymap_remove`]). It has its own
+/// lock and its own tmp sibling; see [`ConfigFileLock`] for why sharing
+/// `norte.toml`'s would be a bug rather than a saving.
+const KEYMAP_TOML: &str = "keymap.toml";
+
 /// Fija `[ui].theme = name` en el `norte.toml` del usuario, PRESERVANDO
 /// comentarios y formato (`toml_edit`). Crea el fichero/directorio si no
 /// existen. Devuelve la ruta escrita.
@@ -72,8 +81,8 @@ pub fn persist_ui_theme_to(dir: &std::path::Path, name: &str) -> std::io::Result
 ///
 /// Desde #116 la escritura es SEGURA entre procesos: toma el lock advisory
 /// `norte.toml.lock` ANTES de leer (puede bloquear mientras otro proceso
-/// persiste — ver `lock_user_toml`) y reemplaza el fichero vía tmp +
-/// `rename` atómico (`write_user_toml`): un lector concurrente jamás ve
+/// persiste — ver `lock_config_file`) y reemplaza el fichero vía tmp +
+/// `rename` atómico (`write_config_file`): un lector concurrente jamás ve
 /// un fichero a medias. Aplica a TODA la familia `persist_*`.
 ///
 /// # Errors
@@ -89,8 +98,8 @@ pub fn persist_set(
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
     // #116: lock ANTES de leer — el RMW entero es la sección crítica.
-    let _lock = lock_user_toml(dir)?;
-    let path = dir.join("norte.toml");
+    let lock = lock_config_file(dir, NORTE_TOML)?;
+    let path = lock.target().to_path_buf();
     let mut doc = match std::fs::read_to_string(&path) {
         Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
             // security review item 4 (C1, NIT F4): `toml_edit`'s parse
@@ -134,7 +143,7 @@ pub fn persist_set(
         toml_edit::Item::Table(t)
     });
     table[key] = toml_edit::Item::Value(value);
-    write_user_toml(&path, &doc)?;
+    write_config_file(&lock, &doc)?;
     Ok(path)
 }
 
@@ -187,9 +196,9 @@ pub fn persist_columns(
 ) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     // #116: lock ANTES de leer — el RMW entero es la sección crítica.
-    let _lock = lock_user_toml(dir)?;
-    let path = dir.join("norte.toml");
-    let mut doc = open_user_toml(&path)?;
+    let lock = lock_config_file(dir, NORTE_TOML)?;
+    let path = lock.target().to_path_buf();
+    let mut doc = open_config_toml(&path)?;
     let segs: Vec<&str> = match scheme {
         None => vec!["ui", "columns"],
         Some(s) => vec!["ui", "columns", "scheme", s],
@@ -220,27 +229,47 @@ pub fn persist_columns(
         "sort",
         toml_edit::Item::Value(toml_edit::Value::InlineTable(sort_tbl)),
     );
-    write_user_toml(&path, &doc)?;
+    write_config_file(&lock, &doc)?;
     Ok(path)
 }
 
-/// Lock advisory cross-process del `norte.toml` (#116): `flock`/`LockFileEx`
-/// sobre el hermano DEDICADO `norte.toml.lock` — jamás sobre el propio
-/// `norte.toml`: la escritura atómica lo reemplaza por `rename` (inode
+/// Lock advisory cross-process de UN fichero de config (#116): `flock`/
+/// `LockFileEx` sobre el hermano DEDICADO `<fichero>.lock` — jamás sobre el
+/// fichero mismo: la escritura atómica lo reemplaza por `rename` (inode
 /// nuevo) y un lock sobre el inode viejo no excluiría al siguiente
 /// escritor. Los escritores lo toman ANTES de leer: la sección crítica es
 /// el ciclo lee-modifica-escribe ENTERO (lost update cerrado, también
 /// entre procesos — GUI + TUI sobre el mismo fichero). Se libera al soltar
 /// el guard (cerrar el descriptor); el SO lo suelta igualmente si el
 /// proceso muere — no hay locks rancios tras un crash.
-struct UserTomlLock {
+///
+/// K3c: hay DOS ficheros escribibles (`norte.toml` y `keymap.toml`) y cada
+/// uno tiene su PROPIO lock — compartir uno serializaría dos ficheros que no
+/// se tocan y, mucho peor, dejaría a un escritor futuro reemplazar un fichero
+/// mientras sostiene el lock del OTRO, creyéndose protegido. Que eso sea
+/// imposible es estructural, no una convención: el guard lleva su
+/// [`ConfigFileLock::target`] y [`write_config_file`] toma de ahí la ruta que
+/// escribe, así que el único fichero que un escritor puede nombrar es el que
+/// bloqueó.
+struct ConfigFileLock {
     /// Mantiene vivo el descriptor bloqueado; drop = cerrar = unlock.
     _file: std::fs::File,
+    /// El fichero de config que este lock protege (`dir/<fichero>`), NO el
+    /// `.lock` hermano.
+    target: PathBuf,
 }
 
-/// Toma (bloqueando) el lock de escritores de `dir`. BLOQUEANTE como el
-/// resto del persistidor (regla 2: el caller ya envuelve en
-/// `spawn_blocking`); los escritores son cortos — retener el lock
+impl ConfigFileLock {
+    /// El fichero de config protegido — el ÚNICO que su portador puede
+    /// escribir (ver la doc del tipo).
+    fn target(&self) -> &Path {
+        &self.target
+    }
+}
+
+/// Toma (bloqueando) el lock de escritores de `file` dentro de `dir`.
+/// BLOQUEANTE como el resto del persistidor (regla 2: el caller ya envuelve
+/// en `spawn_blocking`); los escritores son cortos — retener el lock
 /// milisegundos — y no hay locks anidados, así que la espera no acota:
 /// un peer VIVO pero colgado reteniéndolo es el único caso patológico
 /// (decisión: bloquear simple; el SO libera al morir el proceso).
@@ -251,34 +280,58 @@ struct UserTomlLock {
 /// llegar al `lock()` que espera — exactamente la contención GUI+TUI que
 /// este lock cierra. En POSIX truncar un fichero vacío era inocuo, pero la
 /// forma canónica de abrir un lockfile es no tocarlo jamás.
-fn lock_user_toml(dir: &Path) -> std::io::Result<UserTomlLock> {
-    let file = std::fs::OpenOptions::new()
+///
+/// `file` es SIEMPRE una constante de este módulo ([`NORTE_TOML`],
+/// [`KEYMAP_TOML`]) — nunca un nombre que venga del usuario.
+fn lock_config_file(dir: &Path, file: &str) -> std::io::Result<ConfigFileLock> {
+    let handle = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(false)
-        .open(dir.join("norte.toml.lock"))?;
-    file.lock()?;
-    Ok(UserTomlLock { _file: file })
+        .open(dir.join(format!("{file}.lock")))?;
+    handle.lock()?;
+    Ok(ConfigFileLock {
+        _file: handle,
+        target: dir.join(file),
+    })
 }
 
-/// Escritura ATÓMICA del `norte.toml` (#116): tmp hermano + `rename`
-/// (atómico en POSIX; `std::fs::rename` reemplaza también en Windows). Un
-/// lector concurrente ve el fichero viejo o el nuevo COMPLETO — jamás un
-/// truncado a medias que parsee "bien" y del que un escritor posterior
-/// reconstruya el documento perdiendo secciones ajenas. `sync_all` antes
-/// del rename evita la ventana fichero-vacío-tras-crash; el rename mismo
-/// puede perderse en un corte de luz (sin fsync del dir, a propósito):
+/// Escritura ATÓMICA del fichero que `lock` protege (#116): tmp hermano +
+/// `rename` (atómico en POSIX; `std::fs::rename` reemplaza también en
+/// Windows). Un lector concurrente ve el fichero viejo o el nuevo COMPLETO —
+/// jamás un truncado a medias que parsee "bien" y del que un escritor
+/// posterior reconstruya el documento perdiendo secciones ajenas. `sync_all`
+/// antes del rename evita la ventana fichero-vacío-tras-crash; el rename
+/// mismo puede perderse en un corte de luz (sin fsync del dir, a propósito):
 /// reaparece la config VIEJA — consistente, solo rancia. Un tmp huérfano
 /// de un crash es inocuo: la siguiente escritura (mismo nombre, bajo el
 /// lock) lo pisa. Los permisos del fichero existente se COPIAN al tmp
 /// (review #116 MINOR-2: sin esto un `chmod 600` del usuario se ensanchaba
 /// al umask en el reemplazo). Limitación Windows conocida: un proceso
-/// externo (editor, AV) con `norte.toml` abierto sin `FILE_SHARE_DELETE`
+/// externo (editor, AV) con el fichero abierto sin `FILE_SHARE_DELETE`
 /// hace fallar el rename con sharing violation — la persistencia falla
 /// visible, sin retry (los lectores de Rust std comparten en modo full).
-fn write_user_toml(path: &Path, doc: &toml_edit::DocumentMut) -> std::io::Result<()> {
+///
+/// K3c: la ruta viene del `lock` (no del caller) y el tmp se DERIVA del
+/// nombre de esa ruta. Hardcodear `norte.toml.tmp` era inocuo con un solo
+/// fichero escribible; con dos, dos escritores de ficheros distintos
+/// competirían por un mismo tmp y el rename aterrizaría con el contenido del
+/// otro. El nombre se compone en `OsString` (regla 1: los nombres son bytes,
+/// jamás se asume UTF-8).
+fn write_config_file(lock: &ConfigFileLock, doc: &toml_edit::DocumentMut) -> std::io::Result<()> {
     use std::io::Write;
-    let tmp = path.with_file_name("norte.toml.tmp");
+    let path = lock.target();
+    let mut tmp_name = path
+        .file_name()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "ruta de config sin nombre de fichero",
+            )
+        })?
+        .to_os_string();
+    tmp_name.push(".tmp");
+    let tmp = path.with_file_name(tmp_name);
     {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(doc.to_string().as_bytes())?;
@@ -292,13 +345,14 @@ fn write_user_toml(path: &Path, doc: &toml_edit::DocumentMut) -> std::io::Result
     std::fs::rename(&tmp, path)
 }
 
-/// Lee (o crea, si no existe) el `norte.toml` de `path` como documento
+/// Lee (o crea, si no existe) el fichero de config de `path` como documento
 /// `toml_edit`, con el error de parseo SANEADO — el `Display` de
 /// `toml_edit` cita la línea ofensora, y un `name`/`path` hostil
 /// persistido antes llegaría a quien muestre este `io::Error` (la status
 /// bar, #73): se nombra el fichero, jamás el contenido. Compartido por los
-/// escritores de columnas (`persist_columns`/`persist_column_format`).
-fn open_user_toml(path: &std::path::Path) -> std::io::Result<toml_edit::DocumentMut> {
+/// escritores de columnas (`persist_columns`/`persist_column_format`) y por
+/// los de keymap (`persist_keymap_append`/`persist_keymap_remove`).
+fn open_config_toml(path: &std::path::Path) -> std::io::Result<toml_edit::DocumentMut> {
     use std::io::{Error, ErrorKind};
     match std::fs::read_to_string(path) {
         Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
@@ -401,9 +455,9 @@ pub fn persist_column_format(dir: &Path, id: &str, format: &str) -> std::io::Res
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
     // #116: lock ANTES de leer — el RMW entero es la sección crítica.
-    let _lock = lock_user_toml(dir)?;
-    let path = dir.join("norte.toml");
-    let mut doc = open_user_toml(&path)?;
+    let lock = lock_config_file(dir, NORTE_TOML)?;
+    let path = lock.target().to_path_buf();
+    let mut doc = open_config_toml(&path)?;
     let t = nested_table_mut(&mut doc, &path, &["ui", "columns"])?;
     let arr = t
         .entry("spec")
@@ -437,7 +491,7 @@ pub fn persist_column_format(dir: &Path, id: &str, format: &str) -> std::io::Res
         tb["format"] = toml_edit::value(format);
         arr.push(tb);
     }
-    write_user_toml(&path, &doc)?;
+    write_config_file(&lock, &doc)?;
     Ok(path)
 }
 
@@ -459,8 +513,8 @@ pub fn persist_hotlist_add(dir: &Path, name: &str, wire_path: &str) -> std::io::
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
     // #116: lock ANTES de leer — el RMW entero es la sección crítica.
-    let _lock = lock_user_toml(dir)?;
-    let path = dir.join("norte.toml");
+    let lock = lock_config_file(dir, NORTE_TOML)?;
+    let path = lock.target().to_path_buf();
     let mut doc = match std::fs::read_to_string(&path) {
         Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
             // security review item 4 (C1, NIT F4): `toml_edit`'s parse
@@ -499,7 +553,7 @@ pub fn persist_hotlist_add(dir: &Path, name: &str, wire_path: &str) -> std::io::
         t["path"] = toml_edit::value(wire_path);
         arr.push(t);
     }
-    write_user_toml(&path, &doc)?;
+    write_config_file(&lock, &doc)?;
     Ok(path)
 }
 
@@ -519,15 +573,18 @@ pub fn persist_hotlist_add(dir: &Path, name: &str, wire_path: &str) -> std::io::
 /// [`std::io::Error`] si el TOML existente no parsea o falla el I/O.
 pub fn persist_hotlist_remove(dir: &Path, name: &str) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
-    let path = dir.join("norte.toml");
     // #116: lock ANTES de leer. Este writer no crea el dir (solo borra):
     // dir inexistente = nada que borrar = el mismo no-op documentado que
-    // el `norte.toml` ausente de abajo.
-    let _lock = match lock_user_toml(dir) {
+    // el `norte.toml` ausente de abajo — y ese no-op necesita la ruta ANTES
+    // de que exista el guard, único motivo de que aquí se componga a mano
+    // (el resto de la familia la toma de `lock.target()`, que no puede
+    // divergir del fichero bloqueado).
+    let lock = match lock_config_file(dir, NORTE_TOML) {
         Ok(l) => l,
-        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(path),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(dir.join(NORTE_TOML)),
         Err(e) => return Err(e),
     };
+    let path = lock.target().to_path_buf();
     let mut doc = match std::fs::read_to_string(&path) {
         Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
             // security review item 4 (C1, NIT F4): `toml_edit`'s parse
@@ -557,10 +614,488 @@ pub fn persist_hotlist_remove(dir: &Path, name: &str) -> std::io::Result<PathBuf
         let before = arr.len();
         arr.retain(|t| t.get("name").and_then(|v| v.as_str()) != Some(name));
         if arr.len() != before {
-            write_user_toml(&path, &doc)?;
+            write_config_file(&lock, &doc)?;
         }
     }
     Ok(path)
+}
+
+/// The keymap CONTEXTS a binding can be written into (ADR 0006): the four
+/// sections of `keymap.toml`, and a CLOSED vocabulary. Mirror of
+/// `KeymapFile`'s fields in `norte-frontend` (`keymap/layer.rs`), which is
+/// `deny_unknown_fields`: a section this writer invented would not be
+/// ignored, it would make the WHOLE layer fail to parse — and a layer that
+/// fails to parse reverts the user's entire keymap on the next reload, with
+/// the editor having reported success. `norte-config` cannot call that parser
+/// (the dependency runs frontend → config, never back), so the vocabulary is
+/// mirrored here and pinned from the other side by
+/// `norte_frontend::config::tests::un_binding_persistido_carga_y_resuelve`.
+const KEYMAP_SECTIONS: [&str; 4] = ["global", "pane", "viewer", "dialog"];
+
+/// Which of a user layer's two binding lists a write goes into (ADR 0006).
+///
+/// NOT interchangeable, and choosing the wrong one fails SILENTLY. The merge
+/// order is: every layer's `prepend_keymap`, then the preset's `keymap`, then
+/// every layer's `append_keymap` (`merge_ctx`, `norte-frontend`
+/// `keymap/layer.rs`), and the FIRST binding of a sequence wins
+/// (`Effective::build_for`). So a chord the preset already binds IN THE SAME
+/// context is overridden only by a [`KeymapList::Prepend`]: an append for it
+/// parses, loads, validates — and never fires, while the editor reports
+/// success. ADR 0006 states the rule for what an append DOES win: "a user
+/// append in `pane` overrides a preset binding in `global`" — across
+/// contexts, not within one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeymapList {
+    /// Wins over the preset: what a REBIND has to use.
+    Prepend,
+    /// Loses to the preset: for a chord the preset leaves free, where the
+    /// binding says "also this" rather than "mine instead".
+    Append,
+}
+
+impl KeymapList {
+    /// The TOML key of this list — the only two a user layer may declare
+    /// (`check_layer_keys` refuses the preset's `keymap` in a layer).
+    #[must_use]
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Prepend => "prepend_keymap",
+            Self::Append => "append_keymap",
+        }
+    }
+
+    /// Both lists, in merge order — what [`persist_keymap_unbind`] walks.
+    const BOTH: [Self; 2] = [Self::Prepend, Self::Append];
+}
+
+/// What a `keymap.toml` write did (K3c).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeymapWrite {
+    /// The `keymap.toml` that was written, or would have been.
+    pub path: PathBuf,
+    /// Whether the file's bytes actually changed. `false` means NOTHING was
+    /// written: a bind whose chord already ran that command, or an unbind that
+    /// matched nothing. The file keeps its bytes AND its mtime, so the config
+    /// watcher does not see a phantom edit and reload for nothing (the rule
+    /// [`persist_hotlist_remove`] already documents), and a double confirm in
+    /// the editor cannot write the same binding twice.
+    pub changed: bool,
+}
+
+/// Refuses a binding whose section/chords/command could not make a legal
+/// `keymap.toml` entry, BEFORE anything is opened or locked.
+///
+/// The diagnostics never quote `section`, a chord or `command` (#73): all
+/// three are caller data, and this error travels to a status bar.
+///
+/// CONTRACT — read this before wiring a UI onto these writers. What is
+/// rejected here is only what is invalid under ANY chord grammar: an empty
+/// sequence, an empty token, an empty command. The chord grammar itself
+/// (`keymap::parse_chord`), the command catalogue, ADR 0006's prefix-free
+/// rule, the sacred keys and the digit-under-`counts` rule ALL live in
+/// `norte-frontend`, which is ABOVE this crate — `norte-config` cannot call
+/// them, and a binding that breaks any of them makes `Effective::build_for`
+/// fail after the file has loaded perfectly. The caller must run
+/// `rebind_check` (K3c c2) against the merged map first; these functions
+/// guard the FILE, not the keymap.
+fn check_keymap_binding(section: &str, chords: &[String], command: &str) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    if !KEYMAP_SECTIONS.contains(&section) {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "unknown keymap section; the contexts are: {}",
+                KEYMAP_SECTIONS.join(", ")
+            ),
+        ));
+    }
+    if chords.is_empty() || chords.iter().any(String::is_empty) {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "a binding needs at least one non-empty chord",
+        ));
+    }
+    if command.is_empty() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "a binding needs a command to run",
+        ));
+    }
+    Ok(())
+}
+
+/// The bindings of a binding list, in EITHER shape TOML (and therefore serde)
+/// admits: the inline-table array the bundled presets use
+/// (`append_keymap = [ { on = […], run = "…" } ]`) and the array of tables a
+/// hand-written file may well use (`[[pane.append_keymap]]`). A writer that
+/// only knew the first would refuse a file it should extend — or, worse, miss
+/// the binding that is already there and write a duplicate.
+///
+/// `None` = not a list of bindings at all (a scalar, or an array with a
+/// non-table element): the caller turns that into a clean shape error instead
+/// of writing into something the loader will reject.
+fn binding_list(item: &toml_edit::Item) -> Option<Vec<&dyn toml_edit::TableLike>> {
+    if let Some(arr) = item.as_array() {
+        let mut out: Vec<&dyn toml_edit::TableLike> = Vec::with_capacity(arr.len());
+        for v in arr {
+            out.push(v.as_inline_table()?);
+        }
+        return Some(out);
+    }
+    if let Some(aot) = item.as_array_of_tables() {
+        return Some(aot.iter().map(|t| t as &dyn toml_edit::TableLike).collect());
+    }
+    None
+}
+
+/// Is this entry's `on` EXACTLY `chords`? Byte-exact, with no normalisation of
+/// any kind: a chord token is a wire vocabulary and two tokens that differ by
+/// a byte are two chords — a rebind must never silently replace an entry the
+/// user wrote differently (NFC/NFD twins included, the same rule the hotlist
+/// keys follow).
+fn chord_seq_is(t: &dyn toml_edit::TableLike, chords: &[String]) -> bool {
+    t.get("on")
+        .and_then(toml_edit::Item::as_array)
+        .is_some_and(|on| {
+            on.len() == chords.len()
+                && on
+                    .iter()
+                    .zip(chords)
+                    .all(|(v, c)| v.as_str() == Some(c.as_str()))
+        })
+}
+
+/// Does this entry bind `chords` to `command`? Both fields, byte-exact (see
+/// [`chord_seq_is`]).
+fn binding_is(t: &dyn toml_edit::TableLike, chords: &[String], command: &str) -> bool {
+    t.get("run").and_then(toml_edit::Item::as_str) == Some(command) && chord_seq_is(t, chords)
+}
+
+/// The shape error for a binding list that is not one. `section` and the list
+/// key are both from closed vocabularies when this is reached, so the message
+/// quotes only our own words, never caller data (#73).
+fn bad_binding_list(path: &Path, section: &str, list: KeymapList) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!(
+            "{}: [{section}] {} is not a list of bindings (unexpected shape); fix it or delete it",
+            path.display(),
+            list.key()
+        ),
+    )
+}
+
+/// Refuses a `keymap.toml` that is not a legal USER LAYER before writing into
+/// it. `counts = true`, `dialog_from` and a non-empty `keymap` list are
+/// PRESET-only, and `check_layer_keys` (`norte-frontend`, `keymap/layer.rs`)
+/// makes each of them a LOAD error — which costs the user their whole keymap.
+/// This writer can never produce one, but it must not extend a file that
+/// already carries one either: the new binding would land in a file that
+/// cannot load and the editor would have said "saved".
+///
+/// Each rule mirrors the loader's EXACTLY, value and all — `counts = false`
+/// and `keymap = []` are legal there, so they are legal here. A writer
+/// stricter than the loader refuses to save into a file the app itself
+/// accepted, and blames the user for it.
+///
+/// Deliberately NOT a re-implementation of the whole grammar: an unknown key
+/// elsewhere in the file also breaks the load (`deny_unknown_fields`), but
+/// refusing it here would buy nothing — the file was already broken and this
+/// write cannot make it worse — at the price of a second copy of the schema
+/// that would rot. What is checked is what this writer is ADJACENT to: the
+/// keys that live in, or next to, the sections it writes into.
+fn check_user_layer_shape(doc: &toml_edit::DocumentMut, path: &Path) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    let refuse = |key: &str| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "{}: `{key}` is a PRESET key, not legal in a user layer (ADR 0006); fix it or delete it",
+                path.display()
+            ),
+        )
+    };
+    // The loader refuses `if layer.counts` — the VALUE, not the key. An
+    // explicit `counts = false` is a legal layer that loads today.
+    if doc
+        .as_table()
+        .get("counts")
+        .is_some_and(|it| it.as_bool() != Some(false))
+    {
+        return Err(refuse("counts"));
+    }
+    // TOML has no null, so presence means `Some(..)`: the same thing
+    // `check_layer_keys` refuses.
+    if doc.as_table().contains_key("dialog_from") {
+        return Err(refuse("dialog_from"));
+    }
+    for section in KEYMAP_SECTIONS {
+        let Some(full) = doc
+            .as_table()
+            .get(section)
+            .and_then(toml_edit::Item::as_table_like)
+            .and_then(|t| t.get("keymap"))
+        else {
+            continue;
+        };
+        match binding_list(full) {
+            // `check_layer_keys` refuses a NON-EMPTY `keymap` only.
+            Some(l) if l.is_empty() => {}
+            Some(_) => return Err(refuse("keymap")),
+            // Not a list at all: it cannot load either, but calling it a
+            // preset key would send the reader to the wrong ADR.
+            None => {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "{}: [{section}] keymap is not a list of bindings (unexpected shape); fix it or delete it",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Binds `chords` to `command` in `[<section>] <list>` of the `keymap.toml` of
+/// `dir` (K3c — the shortcut editor's writer), creating the directory, the
+/// file, the section and the list as needed, PRESERVING comments and
+/// formatting (`toml_edit`) like the rest of the `persist_*` family.
+/// `section` is one of `global`/`pane`/`viewer`/`dialog`; `list` decides
+/// whether the binding wins over the preset or loses to it — read
+/// [`KeymapList`], the difference is silent.
+///
+/// INSERT-OR-REPLACE, by chord sequence: an entry in that list already bound
+/// to `chords` has its `run` REPLACED in place, keeping its position and the
+/// comment beside it. Appending instead would leave two entries for one chord
+/// with the OLDER one winning (first wins, in file order), so the second
+/// rebind of a key would do nothing — the same silent failure as writing into
+/// the wrong list. A later duplicate of the same chord is left alone: it was
+/// already inert, and deleting it would take the comment TOML attaches to the
+/// element after it.
+///
+/// IDEMPOTENT: if that entry already runs `command`, nothing is written and
+/// [`KeymapWrite::changed`] is `false` — see the field's doc for why an
+/// identical rewrite would not be equivalent.
+///
+/// The two lists are the ONLY ones a user layer may declare; a `keymap` list
+/// there is a load error, which is also why a file already carrying a
+/// preset-only key is refused rather than extended (`check_user_layer_shape`).
+/// This does NOT make every write safe to load: see the CONTRACT on
+/// `check_keymap_binding` — the chord grammar, the command catalogue and
+/// ADR 0006's whole-map rules live above this crate and are the caller's to
+/// check with `rebind_check` (K3c c2) BEFORE calling.
+///
+/// Cross-process safe like the rest of the family, and with its OWN lock:
+/// `keymap.toml.lock`, never `norte.toml.lock` (see [`ConfigFileLock`]).
+/// BLOCKING: synchronous FS I/O — the caller MUST wrap it in
+/// `spawn_blocking` (rule 2), the same as `persist_hotlist_add`.
+///
+/// # Errors
+/// [`std::io::Error`] if `section` is not a keymap context or the binding is
+/// empty ([`std::io::ErrorKind::InvalidInput`]); if the existing TOML does
+/// not parse, the section is not a table, the list is not a list of bindings,
+/// or the file carries a preset-only key
+/// ([`std::io::ErrorKind::InvalidData`]); or if the I/O fails.
+pub fn persist_keymap_bind(
+    dir: &Path,
+    section: &str,
+    list: KeymapList,
+    chords: &[String],
+    command: &str,
+) -> std::io::Result<KeymapWrite> {
+    check_keymap_binding(section, chords, command)?;
+    std::fs::create_dir_all(dir)?;
+    // #116: lock BEFORE reading — the whole RMW is the critical section.
+    let lock = lock_config_file(dir, KEYMAP_TOML)?;
+    let path = lock.target().to_path_buf();
+    let mut doc = open_config_toml(&path)?;
+    check_user_layer_shape(&doc, &path)?;
+    // Read-only pass FIRST: it validates the list's shape before anything is
+    // mutated, and it decides idempotence before anything is CREATED — a
+    // repeated bind must not materialise an empty section on its way to
+    // "nothing changed" and touch the mtime for it.
+    if let Some(item) = doc
+        .as_table()
+        .get(section)
+        .and_then(toml_edit::Item::as_table_like)
+        .and_then(|t| t.get(list.key()))
+    {
+        let entries = binding_list(item).ok_or_else(|| bad_binding_list(&path, section, list))?;
+        if entries
+            .iter()
+            .find(|t| chord_seq_is(**t, chords))
+            .is_some_and(|t| binding_is(*t, chords, command))
+        {
+            return Ok(KeymapWrite {
+                path,
+                changed: false,
+            });
+        }
+    }
+    let table = nested_table_mut(&mut doc, &path, &[section])?;
+    let item = table.entry(list.key()).or_insert_with(|| {
+        let mut fresh = toml_edit::Array::new();
+        // A list born here reads like the bundled presets: one binding per
+        // line, trailing comma, so the next hand edit has nothing to reflow.
+        fresh.set_trailing("\n");
+        fresh.set_trailing_comma(true);
+        toml_edit::Item::Value(toml_edit::Value::Array(fresh))
+    });
+    bind_in_list(item, chords, command).ok_or_else(|| bad_binding_list(&path, section, list))?;
+    write_config_file(&lock, &doc)?;
+    Ok(KeymapWrite {
+        path,
+        changed: true,
+    })
+}
+
+/// Replaces the `run` of the FIRST entry bound to `chords`, or pushes a new
+/// entry, in whichever of the two legal shapes the list already has (see
+/// [`binding_list`]). `None` = not a binding list; the caller has already
+/// validated that, so it is the belt to that braces (rule 6: a clean `Err`
+/// rather than an `unwrap` on "cannot happen").
+///
+/// Chords and command go in TAL CUAL: `toml_edit` escapes, it never injects
+/// TOML (the pin lives in `persist_set`'s hostile round-trip test).
+fn bind_in_list(item: &mut toml_edit::Item, chords: &[String], command: &str) -> Option<()> {
+    let mut on = toml_edit::Array::new();
+    for c in chords {
+        on.push(c.as_str());
+    }
+    if let Some(arr) = item.as_array_mut() {
+        for v in arr.iter_mut() {
+            let existing = v.as_inline_table_mut()?;
+            if chord_seq_is(existing, chords) {
+                existing.insert("run", command.into());
+                return Some(());
+            }
+        }
+        let mut inline = toml_edit::InlineTable::new();
+        inline.insert("on", toml_edit::Value::Array(on));
+        inline.insert("run", command.into());
+        // The array's `trailing` is everything between the last comma and the
+        // `]`, INCLUDING a trailing comment on the last binding. Pushing after
+        // it would hand the user's comment to the new binding, so the comment
+        // travels as the new element's prefix — it stays on the line of the
+        // binding it annotates.
+        let carried = arr
+            .trailing()
+            .as_str()
+            .filter(|t| !t.trim().is_empty())
+            .map(str::to_owned);
+        let prefix = match &carried {
+            Some(t) => format!("{t}    "),
+            None => "\n    ".to_owned(),
+        };
+        if carried.is_some() {
+            arr.set_trailing("\n");
+        }
+        // `push_formatted`, not `push`: `push` applies default formatting and
+        // would drop the prefix, packing a growing list onto one unreadable
+        // line and dropping the carried comment with it.
+        arr.push_formatted(toml_edit::Value::InlineTable(inline).decorated(prefix, ""));
+        return Some(());
+    }
+    if let Some(aot) = item.as_array_of_tables_mut() {
+        for existing in aot.iter_mut() {
+            if chord_seq_is(existing, chords) {
+                existing["run"] = toml_edit::value(command);
+                return Some(());
+            }
+        }
+        let mut tb = toml_edit::Table::new();
+        tb["on"] = toml_edit::Item::Value(toml_edit::Value::Array(on));
+        tb["run"] = toml_edit::value(command);
+        aot.push(tb);
+        return Some(());
+    }
+    None
+}
+
+/// Removes the binding `chords` → `command` from BOTH of `[<section>]`'s user
+/// lists in the `keymap.toml` of `dir` (K3c) — the inverse of
+/// [`persist_keymap_bind`], and the reason the editor can fix a mistake
+/// instead of only making them. Matches both fields byte-exactly, so it only
+/// ever deletes the row the editor showed; every copy of it goes, in both
+/// lists, because leaving one behind would leave the key firing after the
+/// editor said it was unbound.
+///
+/// A binding that is not there — or a missing `keymap.toml`, section or list —
+/// is a documented NO-OP: [`KeymapWrite::changed`] is `false` and the file is
+/// not rewritten (an identical rewrite would still move the mtime and wake the
+/// watcher). An emptied value array stays as `<list> = []` rather than being
+/// deleted, so a comment attached to the key survives; an emptied array of
+/// tables has no such carrier and disappears with its last `[[…]]` header.
+/// Note that removing an entry can take a comment written between it and the
+/// PREVIOUS binding with it: TOML attaches such a comment to the element that
+/// follows it. Nothing else in the file is touched.
+///
+/// Unlike the bind, a layer carrying a preset-only key is NOT refused here: a
+/// removal cannot introduce an illegal shape, and refusing would leave a user
+/// whose file has a stray `counts` unable to undo anything through the editor.
+///
+/// BLOCKING: synchronous FS I/O — the caller MUST wrap it in
+/// `spawn_blocking` (rule 2).
+///
+/// # Errors
+/// [`std::io::Error`] if `section` is not a keymap context or the binding is
+/// empty ([`std::io::ErrorKind::InvalidInput`]), if the existing TOML does
+/// not parse ([`std::io::ErrorKind::InvalidData`]), or if the I/O fails.
+pub fn persist_keymap_unbind(
+    dir: &Path,
+    section: &str,
+    chords: &[String],
+    command: &str,
+) -> std::io::Result<KeymapWrite> {
+    check_keymap_binding(section, chords, command)?;
+    // No `create_dir_all`: a removal creates nothing. A missing dir is the
+    // same documented no-op as a binding that is not there.
+    let declared = dir.join(KEYMAP_TOML);
+    let lock = match lock_config_file(dir, KEYMAP_TOML) {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(KeymapWrite {
+                path: declared,
+                changed: false,
+            });
+        }
+        Err(e) => return Err(e),
+    };
+    let path = lock.target().to_path_buf();
+    // A missing file parses as an empty document here, which matches nothing
+    // and therefore writes nothing — the no-op above, reached by walking.
+    let mut doc = open_config_toml(&path)?;
+    let mut changed = false;
+    for list in KeymapList::BOTH {
+        let Some(item) = doc
+            .as_table_mut()
+            .get_mut(section)
+            .and_then(toml_edit::Item::as_table_like_mut)
+            .and_then(|t| t.get_mut(list.key()))
+        else {
+            continue;
+        };
+        if let Some(arr) = item.as_array_mut() {
+            let before = arr.len();
+            arr.retain(|v| {
+                !v.as_inline_table()
+                    .is_some_and(|t| binding_is(t, chords, command))
+            });
+            changed |= arr.len() != before;
+        } else if let Some(aot) = item.as_array_of_tables_mut() {
+            let before = aot.len();
+            aot.retain(|t| !binding_is(t, chords, command));
+            changed |= aot.len() != before;
+        }
+        // Any other shape: nothing to remove, and nothing this function can
+        // fix — the no-op stands (see the rustdoc).
+    }
+    if changed {
+        write_config_file(&lock, &doc)?;
+    }
+    Ok(KeymapWrite { path, changed })
 }
 
 /// Una entrada de hotlist YA fusionada y validada por [`load`]. `target` es
@@ -2676,7 +3211,7 @@ mod persist_atomicity_tests {
     #[test]
     fn persist_set_espera_el_lock_de_otro_escritor() {
         let dir = tempfile::tempdir().unwrap();
-        // Mismo open SIN truncar que `lock_user_toml` (review MAJOR-1).
+        // Mismo open SIN truncar que `lock_config_file` (review MAJOR-1).
         let holder = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -2761,5 +3296,782 @@ mod persist_atomicity_tests {
             .filter(|n| n.contains("tmp"))
             .collect();
         assert!(residuales.is_empty(), "tmp residual: {residuales:?}");
+    }
+}
+
+/// Tests for the `keymap.toml` writer (K3c c1) — the SECOND writable config
+/// file, and the first value shape that is an array of inline TABLES. The
+/// load-bearing ones are the lock (a keymap write must never take
+/// `norte.toml`'s), idempotence (a double confirm cannot double-write),
+/// replace-in-place (a SECOND rebind of the same key must take effect) and
+/// the refusal to extend a file that would not load.
+#[cfg(test)]
+mod persist_keymap_tests {
+    use super::*;
+
+    /// `&["g", "g"]` as the writer wants it.
+    fn seq(cs: &[&str]) -> Vec<String> {
+        cs.iter().map(|c| (*c).to_owned()).collect()
+    }
+
+    /// Reads back `dir/keymap.toml`.
+    fn read(dir: &std::path::Path) -> String {
+        std::fs::read_to_string(dir.join("keymap.toml")).expect("keymap.toml")
+    }
+
+    /// Neither the file nor the dir exist: both are created, and the binding
+    /// lands under an EXPLICIT `[pane]` with the presets' one-per-line shape.
+    #[test]
+    fn bind_creates_the_file_the_dir_and_the_section() {
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("subdir/not-yet");
+        let w = persist_keymap_bind(
+            &dir,
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["g", "g"]),
+            "cursor.top",
+        )
+        .unwrap();
+        assert!(w.changed, "the first bind writes");
+        assert_eq!(w.path, dir.join("keymap.toml"));
+        let s = std::fs::read_to_string(&w.path).unwrap();
+        assert!(s.contains("[pane]"), "explicit section: {s}");
+        assert!(
+            s.contains(r#"{ on = ["g", "g"], run = "cursor.top" }"#),
+            "{s}"
+        );
+        let doc: toml_edit::DocumentMut = s.parse().expect("the written file parses");
+        assert_eq!(doc["pane"]["prepend_keymap"].as_array().unwrap().len(), 1);
+    }
+
+    /// The list is the caller's choice and it is not cosmetic: a rebind needs
+    /// `Prepend` (it wins over the preset), `Append` loses to it. Each writes
+    /// into ITS key and neither touches the other.
+    #[test]
+    fn each_list_is_written_under_its_own_key() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["f5"]),
+            "pane.copy",
+        )
+        .unwrap();
+        persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Append,
+            &seq(&["f6"]),
+            "pane.move",
+        )
+        .unwrap();
+        let doc: toml_edit::DocumentMut = read(dir.path()).parse().unwrap();
+        let prepend = doc["pane"]["prepend_keymap"].as_array().unwrap();
+        let append = doc["pane"]["append_keymap"].as_array().unwrap();
+        assert_eq!(prepend.len(), 1, "{prepend}");
+        assert_eq!(append.len(), 1, "{append}");
+        assert!(prepend.to_string().contains("pane.copy"));
+        assert!(append.to_string().contains("pane.move"));
+    }
+
+    /// A repeated bind (the double confirm) writes NOTHING: same bytes, and
+    /// `changed == false` says so instead of the caller having to diff.
+    #[test]
+    fn bind_is_idempotent_and_rewrites_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["g", "g"]),
+            "cursor.top",
+        )
+        .unwrap();
+        let before = read(dir.path());
+        let w = persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["g", "g"]),
+            "cursor.top",
+        )
+        .unwrap();
+        assert!(!w.changed, "the binding was already there");
+        assert_eq!(read(dir.path()), before, "not one byte moved");
+        assert_eq!(before.matches("cursor.top").count(), 1, "{before}");
+    }
+
+    /// A SECOND rebind of the same chord REPLACES the first in place. Appending
+    /// instead would leave two entries for one chord with the older one
+    /// winning (first wins, in file order): the user's second choice would do
+    /// nothing, with the editor reporting success.
+    #[test]
+    fn rebinding_a_chord_replaces_it_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("keymap.toml"),
+            "[pane]\nprepend_keymap = [\n    { on = [\"f9\"], run = \"pane.mkdir\" },\n    { on = [\"g\"], run = \"cursor.top\" },\n]\n",
+        )
+        .unwrap();
+        let w = persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["g"]),
+            "cursor.bottom",
+        )
+        .unwrap();
+        assert!(w.changed);
+        let s = read(dir.path());
+        assert!(!s.contains("cursor.top"), "the old command is gone: {s}");
+        assert_eq!(s.matches("[\"g\"]").count(), 1, "ONE entry for `g`: {s}");
+        let doc: toml_edit::DocumentMut = s.parse().unwrap();
+        let arr = doc["pane"]["prepend_keymap"].as_array().unwrap();
+        assert_eq!(arr.len(), 2, "the sibling stays");
+        // Position preserved: `g` is still the second row, not moved to the end.
+        assert_eq!(
+            arr.get(1).unwrap().as_inline_table().unwrap()["run"].as_str(),
+            Some("cursor.bottom")
+        );
+    }
+
+    /// Same chord, other section or other list: different binding, no replace.
+    #[test]
+    fn a_chord_bound_elsewhere_is_not_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        for (section, list) in [
+            ("pane", KeymapList::Prepend),
+            ("pane", KeymapList::Append),
+            ("viewer", KeymapList::Prepend),
+            ("global", KeymapList::Prepend),
+            ("dialog", KeymapList::Prepend),
+        ] {
+            assert!(
+                persist_keymap_bind(dir.path(), section, list, &seq(&["g"]), "cursor.top")
+                    .unwrap()
+                    .changed,
+                "{section}/{}",
+                list.key()
+            );
+        }
+        let s = read(dir.path());
+        assert_eq!(s.matches("cursor.top").count(), 5, "{s}");
+    }
+
+    /// Binding into an existing layer keeps its comments, its formatting and
+    /// every binding that was already there — and the comment that annotated
+    /// the LAST binding stays on that binding's line instead of being handed
+    /// to the new one.
+    #[test]
+    fn bind_keeps_comments_on_the_binding_they_annotate() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("keymap.toml"),
+            "# my keymap\n[pane]\nprepend_keymap = [\n    { on = [\"f9\"], run = \"pane.mkdir\" }, # mine\n]\n",
+        )
+        .unwrap();
+        persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["g", "g"]),
+            "cursor.top",
+        )
+        .unwrap();
+        let s = read(dir.path());
+        assert!(s.contains("# my keymap"), "file comment: {s}");
+        assert!(s.contains("pane.mkdir"), "previous binding intact: {s}");
+        assert!(s.contains("cursor.top"), "{s}");
+        let annotated = s
+            .lines()
+            .find(|l| l.contains("# mine"))
+            .expect("the comment survives");
+        assert!(
+            annotated.contains("pane.mkdir"),
+            "the comment stays on the binding it annotates, it does not migrate: {s}"
+        );
+    }
+
+    /// The array-of-tables shape (`[[pane.append_keymap]]`) is legal TOML and
+    /// serde reads it: this writer must extend it in place, see the binding
+    /// that is already there instead of writing a duplicate in the other
+    /// shape, and replace in place there too.
+    #[test]
+    fn an_array_of_tables_layer_is_written_in_its_own_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("keymap.toml"),
+            "[[pane.prepend_keymap]]\non = [\"f9\"]\nrun = \"pane.mkdir\"\n",
+        )
+        .unwrap();
+        assert!(
+            !persist_keymap_bind(
+                dir.path(),
+                "pane",
+                KeymapList::Prepend,
+                &seq(&["f9"]),
+                "pane.mkdir"
+            )
+            .unwrap()
+            .changed,
+            "already bound, in the other shape"
+        );
+        persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["g", "g"]),
+            "cursor.top",
+        )
+        .unwrap();
+        let s = read(dir.path());
+        assert_eq!(
+            s.matches("[[pane.prepend_keymap]]").count(),
+            2,
+            "extended in its own shape: {s}"
+        );
+        // Replace in place reaches the AoT shape too.
+        assert!(
+            persist_keymap_bind(
+                dir.path(),
+                "pane",
+                KeymapList::Prepend,
+                &seq(&["f9"]),
+                "pane.pack"
+            )
+            .unwrap()
+            .changed
+        );
+        let s = read(dir.path());
+        assert!(!s.contains("pane.mkdir"), "{s}");
+        assert_eq!(s.matches("[[pane.prepend_keymap]]").count(), 2, "{s}");
+        // And the unbind reaches it there.
+        assert!(
+            persist_keymap_unbind(dir.path(), "pane", &seq(&["f9"]), "pane.pack")
+                .unwrap()
+                .changed
+        );
+        assert!(!read(dir.path()).contains("pane.pack"));
+    }
+
+    /// A section outside the CLOSED vocabulary of keymap contexts is refused
+    /// before anything is opened: `KeymapFile` is `deny_unknown_fields`, so
+    /// `[panel]` would not be ignored — it would make the whole layer fail to
+    /// load and cost the user their keymap.
+    #[test]
+    fn an_unknown_section_is_refused_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = persist_keymap_bind(
+            dir.path(),
+            "panel",
+            KeymapList::Prepend,
+            &seq(&["g"]),
+            "cursor.top",
+        )
+        .expect_err("`panel` is not a keymap context");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            !dir.path().join("keymap.toml").exists(),
+            "nothing is created on the refusal path"
+        );
+        assert!(
+            !dir.path().join("keymap.toml.lock").exists(),
+            "not even the lock: the vocabulary is checked first"
+        );
+    }
+
+    /// An empty chord sequence, an empty token or an empty command are
+    /// refused: none of them can make a binding under ANY chord grammar.
+    #[test]
+    fn an_empty_binding_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        for (chords, command) in [
+            (Vec::new(), "cursor.top"),
+            (seq(&["g", ""]), "cursor.top"),
+            (seq(&["g"]), ""),
+        ] {
+            let err =
+                persist_keymap_bind(dir.path(), "pane", KeymapList::Prepend, &chords, command)
+                    .expect_err("empty binding");
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+            let err = persist_keymap_unbind(dir.path(), "pane", &chords, command)
+                .expect_err("empty binding");
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        }
+    }
+
+    /// A `[pane]` that is not a table (a hand-edited file) is a CLEAN error,
+    /// never the `toml_edit` index panic — same guard, and same reasoning, as
+    /// `persist_set_seccion_escalar_es_err_no_panic`. The file is untouched.
+    #[test]
+    fn a_non_table_section_is_an_error_not_a_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("keymap.toml"), "pane = 3\n").unwrap();
+        let err = persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["g"]),
+            "cursor.top",
+        )
+        .expect_err("[pane] scalar must be refused, not panic");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(read(dir.path()), "pane = 3\n", "file untouched");
+    }
+
+    /// A binding list that is not a list of bindings is a clean error too —
+    /// writing into it would produce a file the loader rejects.
+    #[test]
+    fn a_non_list_binding_list_is_an_error() {
+        for src in [
+            "[pane]\nprepend_keymap = 3\n",
+            "[pane]\nprepend_keymap = [3]\n",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("keymap.toml"), src).unwrap();
+            let err = persist_keymap_bind(
+                dir.path(),
+                "pane",
+                KeymapList::Prepend,
+                &seq(&["g"]),
+                "cursor.top",
+            )
+            .expect_err("not a list of bindings");
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+            assert_eq!(read(dir.path()), src, "untouched");
+        }
+    }
+
+    /// A file that already carries a PRESET-only key is REFUSED rather than
+    /// extended: `check_layer_keys` (norte-frontend) makes `counts = true`,
+    /// `dialog_from` and a non-empty `keymap` list load errors, and a layer
+    /// that fails to load costs the user their whole keymap — with the editor
+    /// having reported success.
+    #[test]
+    fn a_layer_carrying_a_preset_key_is_refused() {
+        for broken in [
+            "counts = true\n",
+            "dialog_from = \"orthodox\"\n",
+            "[pane]\nkeymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n",
+            "[pane]\nkeymap = 3\n",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("keymap.toml"), broken).unwrap();
+            let err = persist_keymap_bind(
+                dir.path(),
+                "pane",
+                KeymapList::Prepend,
+                &seq(&["g"]),
+                "cursor.top",
+            )
+            .expect_err("preset key in a user layer");
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+            assert_eq!(read(dir.path()), broken, "file untouched: {broken}");
+        }
+    }
+
+    /// The mirror of the rule above, and the reason each guard checks the
+    /// VALUE the loader checks: `counts = false` and an empty `keymap = []`
+    /// are legal layers that load today. A writer stricter than the loader
+    /// would refuse to save into a file the app itself accepted.
+    #[test]
+    fn a_layer_the_loader_accepts_is_not_refused() {
+        for legal in ["counts = false\n", "[pane]\nkeymap = []\n"] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("keymap.toml"), legal).unwrap();
+            persist_keymap_bind(
+                dir.path(),
+                "pane",
+                KeymapList::Prepend,
+                &seq(&["g"]),
+                "cursor.top",
+            )
+            .unwrap_or_else(|e| panic!("the loader accepts `{legal}`, so must the writer: {e}"));
+        }
+    }
+
+    /// THE risk of reusing the `norte.toml` writers as-is: a keymap write must
+    /// take `keymap.toml.lock` and nothing else. Holding `norte.toml`'s lock
+    /// does not delay it, and it never creates that lock either.
+    #[test]
+    fn a_keymap_write_does_not_take_the_norte_toml_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.path().join("norte.toml.lock"))
+            .unwrap();
+        holder.lock().unwrap();
+        persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["g"]),
+            "cursor.top",
+        )
+        .expect("norte.toml's lock must not serialise a keymap write");
+        drop(holder);
+        assert!(dir.path().join("keymap.toml.lock").exists(), "its own lock");
+    }
+
+    /// And the other half: a keymap write DOES wait for another writer of
+    /// `keymap.toml` — the whole read-modify-write is the critical section,
+    /// so two editors cannot lose each other's binding.
+    #[test]
+    fn a_keymap_write_waits_for_the_keymap_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.path().join("keymap.toml.lock"))
+            .unwrap();
+        holder.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let d = dir.path().to_path_buf();
+        let writer = std::thread::spawn(move || {
+            let r =
+                persist_keymap_bind(&d, "pane", KeymapList::Prepend, &seq(&["g"]), "cursor.top");
+            let _ = tx.send(());
+            r
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "must not complete while another writer holds the lock"
+        );
+        assert!(
+            !dir.path().join("keymap.toml").exists(),
+            "nothing written while the lock is held elsewhere"
+        );
+        drop(holder);
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the lock released, the writer completes");
+        writer.join().unwrap().expect("write");
+        assert!(read(dir.path()).contains("cursor.top"));
+    }
+
+    /// Two concurrent editors do not lose each other's binding (the lock
+    /// covers the read, not just the write).
+    #[test]
+    fn concurrent_keymap_writers_do_not_lose_bindings() {
+        let dir = tempfile::tempdir().unwrap();
+        let d1 = dir.path().to_path_buf();
+        let d2 = dir.path().to_path_buf();
+        let a = std::thread::spawn(move || {
+            for i in 0..15 {
+                persist_keymap_bind(
+                    &d1,
+                    "pane",
+                    KeymapList::Prepend,
+                    &seq(&[&format!("f{i}")]),
+                    "cursor.top",
+                )
+                .expect("a");
+            }
+        });
+        let b = std::thread::spawn(move || {
+            for i in 0..15 {
+                persist_keymap_bind(
+                    &d2,
+                    "viewer",
+                    KeymapList::Append,
+                    &seq(&[&format!("g{i}")]),
+                    "viewer.close",
+                )
+                .expect("b");
+            }
+        });
+        a.join().unwrap();
+        b.join().unwrap();
+        let doc: toml_edit::DocumentMut = read(dir.path()).parse().expect("parses");
+        assert_eq!(doc["pane"]["prepend_keymap"].as_array().unwrap().len(), 15);
+        assert_eq!(doc["viewer"]["append_keymap"].as_array().unwrap().len(), 15);
+    }
+
+    /// The tmp sibling is DERIVED from the target: a keymap write goes through
+    /// `keymap.toml.tmp`. Observed deterministically — a DIRECTORY where the
+    /// tmp would go makes `File::create` fail, so the write fails only if it
+    /// is that name the writer picked.
+    #[test]
+    fn the_tmp_sibling_is_the_keymap_one() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("keymap.toml.tmp")).unwrap();
+        persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["g"]),
+            "cursor.top",
+        )
+        .expect_err("the tmp is keymap.toml.tmp");
+
+        // ...and `norte.toml.tmp` is NOT in its way: hardcoding that name (as
+        // the writer did while `norte.toml` was the only writable file) would
+        // have two writers racing over one tmp.
+        let other = tempfile::tempdir().unwrap();
+        std::fs::create_dir(other.path().join("norte.toml.tmp")).unwrap();
+        persist_keymap_bind(
+            other.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["g"]),
+            "cursor.top",
+        )
+        .expect("norte.toml's tmp is not the keymap writer's");
+    }
+
+    /// A keymap write leaves no residual tmp, and does not touch `norte.toml`.
+    #[test]
+    fn a_keymap_write_leaves_no_tmp_and_does_not_touch_norte_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord")).unwrap();
+        let norte = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["g"]),
+            "cursor.top",
+        )
+        .unwrap();
+        persist_keymap_unbind(dir.path(), "pane", &seq(&["g"]), "cursor.top").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("norte.toml")).unwrap(),
+            norte,
+            "the scalar layer is untouched"
+        );
+        let residual: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("tmp"))
+            .collect();
+        assert!(residual.is_empty(), "residual tmp: {residual:?}");
+    }
+
+    /// Unbind takes the binding out of BOTH user lists and leaves everything
+    /// else where it was. Both, because "unbound" must be true afterwards: a
+    /// copy left in the other list would keep the key firing.
+    #[test]
+    fn unbind_reaches_both_lists_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("keymap.toml"),
+            "# my keymap\n[pane]\nprepend_keymap = [{ on = [\"g\"], run = \"cursor.top\" }]\nappend_keymap = [\n    { on = [\"g\"], run = \"cursor.top\" },\n    { on = [\"f9\"], run = \"pane.mkdir\" },\n]\n",
+        )
+        .unwrap();
+        let w = persist_keymap_unbind(dir.path(), "pane", &seq(&["g"]), "cursor.top").unwrap();
+        assert!(w.changed);
+        let s = read(dir.path());
+        assert!(!s.contains("cursor.top"), "gone from both lists: {s}");
+        assert!(s.contains("pane.mkdir"), "the sibling stays: {s}");
+        assert!(s.contains("# my keymap"), "the comment stays: {s}");
+    }
+
+    /// Every duplicate goes: leaving one behind would leave the binding in
+    /// force after the editor said it was unbound.
+    #[test]
+    fn unbind_takes_out_every_duplicate() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("keymap.toml"),
+            "[pane]\nappend_keymap = [\n    { on = [\"g\"], run = \"cursor.top\" },\n    { on = [\"g\"], run = \"cursor.top\" },\n]\n",
+        )
+        .unwrap();
+        assert!(
+            persist_keymap_unbind(dir.path(), "pane", &seq(&["g"]), "cursor.top")
+                .unwrap()
+                .changed
+        );
+        assert!(!read(dir.path()).contains("cursor.top"));
+    }
+
+    /// Unbind matches BOTH fields: it can only ever delete the row the editor
+    /// showed, never another command that happens to share the chord.
+    #[test]
+    fn unbind_of_something_absent_does_not_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&["g"]),
+            "cursor.top",
+        )
+        .unwrap();
+        let before = read(dir.path());
+        let mtime = std::fs::metadata(dir.path().join("keymap.toml"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        for (section, chords, command) in [
+            ("pane", seq(&["g"]), "cursor.bottom"),
+            ("pane", seq(&["h"]), "cursor.top"),
+            ("viewer", seq(&["g"]), "cursor.top"),
+        ] {
+            let w = persist_keymap_unbind(dir.path(), section, &chords, command).unwrap();
+            assert!(!w.changed, "nothing matched");
+        }
+        assert_eq!(read(dir.path()), before);
+        assert_eq!(
+            std::fs::metadata(dir.path().join("keymap.toml"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            mtime,
+            "not even the mtime moved"
+        );
+    }
+
+    /// No file, no dir, nothing to remove: a documented no-op that creates
+    /// neither the file nor the lock's directory.
+    #[test]
+    fn unbind_without_a_file_is_a_no_op() {
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("never-existed");
+        let w = persist_keymap_unbind(&dir, "pane", &seq(&["g"]), "cursor.top").unwrap();
+        assert!(!w.changed);
+        assert_eq!(w.path, dir.join("keymap.toml"));
+        assert!(!dir.exists(), "a removal creates nothing");
+
+        let empty = tempfile::tempdir().unwrap();
+        assert!(
+            !persist_keymap_unbind(empty.path(), "pane", &seq(&["g"]), "cursor.top")
+                .unwrap()
+                .changed
+        );
+        assert!(!empty.path().join("keymap.toml").exists());
+    }
+
+    /// Encoding pin (#73 discipline, rule 1): a hostile chord token — quote,
+    /// newline, an embedded TOML header and a bidi override — round-trips
+    /// ESCAPED and byte-identical. `toml_edit` escapes; it never injects TOML.
+    /// The chord grammar lives in the frontend, so this writer's job is only
+    /// that nothing the caller hands it can break the document.
+    #[test]
+    fn a_hostile_chord_round_trips_escaped() {
+        let dir = tempfile::tempdir().unwrap();
+        let hostile = "ctrl+\"x\n[[evil]]\u{202e}y";
+        persist_keymap_bind(
+            dir.path(),
+            "pane",
+            KeymapList::Prepend,
+            &seq(&[hostile]),
+            "cursor.top",
+        )
+        .unwrap();
+        let doc: toml_edit::DocumentMut = read(dir.path()).parse().expect("still parses");
+        assert_eq!(
+            doc["pane"]["prepend_keymap"][0]["on"][0].as_str(),
+            Some(hostile),
+            "byte-identical after the round trip"
+        );
+        // And it is found again: idempotence compares the same bytes.
+        assert!(
+            !persist_keymap_bind(
+                dir.path(),
+                "pane",
+                KeymapList::Prepend,
+                &seq(&[hostile]),
+                "cursor.top"
+            )
+            .unwrap()
+            .changed
+        );
+        assert!(
+            persist_keymap_unbind(dir.path(), "pane", &seq(&[hostile]), "cursor.top")
+                .unwrap()
+                .changed
+        );
+    }
+
+    /// #73, same discipline as `persist_helpers_no_citan_el_error_crudo_de_toml_edit`
+    /// for the scalar layer: an unparseable `keymap.toml` names the FILE and
+    /// never quotes its content — `toml_edit`'s own `Display` cites the
+    /// offending line, and a hostile chord persisted earlier would ride it
+    /// into whatever shows this `io::Error` (the status bar).
+    #[test]
+    fn an_unparseable_layer_names_the_file_not_its_content() {
+        let hostile = "not toml \u{202e}[[pane.append_keymap]]\u{202c} = [unterminated\n";
+        for op in ["bind", "unbind"] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("keymap.toml"), hostile).unwrap();
+            let err = if op == "bind" {
+                persist_keymap_bind(
+                    dir.path(),
+                    "pane",
+                    KeymapList::Prepend,
+                    &seq(&["g"]),
+                    "cursor.top",
+                )
+                .unwrap_err()
+            } else {
+                persist_keymap_unbind(dir.path(), "pane", &seq(&["g"]), "cursor.top").unwrap_err()
+            };
+            let msg = err.to_string();
+            assert!(
+                !msg.contains("append_keymap") && !msg.contains('\u{202e}'),
+                "{op}: the error must not echo the hostile document: {msg:?}"
+            );
+            assert!(msg.contains("keymap.toml"), "{op}: names the file: {msg:?}");
+            assert_eq!(read(dir.path()), hostile, "{op}: file untouched");
+        }
+    }
+
+    /// Two more section shapes a hand-written layer may legally use, and that
+    /// serde reads: a DOTTED key (`pane.prepend_keymap = [...]`) and an INLINE
+    /// table (`pane = { … }`). `persist_set` has the same positive pin
+    /// (`persist_set_seccion_inline_table_no_se_rechaza`): a guard stricter
+    /// than `toml_edit` would refuse a file the library indexes happily, and
+    /// a write that reflowed either shape could stop it parsing — the
+    /// top-ranked failure of this writer.
+    #[test]
+    fn dotted_and_inline_sections_are_extended_without_breaking() {
+        for src in [
+            "pane.prepend_keymap = [{ on = [\"f9\"], run = \"pane.mkdir\" }]\n",
+            "pane = { prepend_keymap = [{ on = [\"f9\"], run = \"pane.mkdir\" }] }\n",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("keymap.toml"), src).unwrap();
+            // Seen through the shape: no duplicate written.
+            assert!(
+                !persist_keymap_bind(
+                    dir.path(),
+                    "pane",
+                    KeymapList::Prepend,
+                    &seq(&["f9"]),
+                    "pane.mkdir"
+                )
+                .unwrap()
+                .changed,
+                "{src}"
+            );
+            persist_keymap_bind(
+                dir.path(),
+                "pane",
+                KeymapList::Prepend,
+                &seq(&["g"]),
+                "cursor.top",
+            )
+            .unwrap();
+            let s = read(dir.path());
+            let doc: toml_edit::DocumentMut = s
+                .parse()
+                .unwrap_or_else(|e| panic!("the extended file must still parse ({src}): {e}\n{s}"));
+            let arr = doc["pane"]["prepend_keymap"]
+                .as_array()
+                .unwrap_or_else(|| panic!("still a binding list ({src}): {s}"));
+            assert_eq!(arr.len(), 2, "{s}");
+            // And `toml` (the loader's parser, not the editor's) agrees.
+            let v: toml::Value = toml::from_str(&s).unwrap_or_else(|e| panic!("{e}\n{s}"));
+            assert_eq!(
+                v["pane"]["prepend_keymap"].as_array().unwrap().len(),
+                2,
+                "{s}"
+            );
+        }
     }
 }

@@ -171,6 +171,103 @@ mod tests {
         );
     }
 
+    /// K3c c1, from the other side: what `norte_config::persist_keymap_bind`
+    /// writes LOADS — through the real loader — and the binding it wrote
+    /// RESOLVES. This is the pin for the whole point of that writer: it lives
+    /// in `norte-config`, which is below the keymap grammar and cannot call
+    /// `parse_keymap_layer`/`check_layer_keys`, so a section name or a list
+    /// key that drifted there would only show up as a user's entire keymap
+    /// silently reverting on the next reload.
+    #[test]
+    fn un_binding_persistido_carga_y_resuelve() {
+        use crate::keymap::{Effective, Screen, parse_chord, parse_keymap};
+
+        let dir = tempfile::tempdir().unwrap();
+        for section in ["global", "pane", "viewer", "dialog"] {
+            norte_config::persist_keymap_bind(
+                dir.path(),
+                section,
+                norte_config::KeymapList::Prepend,
+                &["ctrl+g".to_owned()],
+                "cursor.top",
+            )
+            .expect("persist");
+        }
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("lo escrito por el persistidor CARGA");
+        assert_eq!(cfg.keymap_layers.len(), 1);
+        // Un preset mínimo: el pin es sobre la CAPA, no sobre un preset
+        // concreto, y así `ctrl+g` no puede chocar con lo que el preset del
+        // día bindee.
+        let preset =
+            parse_keymap("[pane]\nkeymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n").unwrap();
+        // `build_for` es quien corre `check_layer_keys`: si el escritor
+        // hubiese producido `keymap` (o `counts`, o `dialog_from`) esto sería
+        // `Err` y la config del usuario se habría revertido entera.
+        let eff = Effective::build_for(
+            &preset,
+            &cfg.keymap_layers,
+            // El set del frontend: sin él un comando del catálogo resuelve
+            // `NotHere` (no lo sirve ESTA pantalla) y `single_chord_runs`
+            // diría `false` por una razón que no es la que se prueba.
+            &["cursor.top", "cursor.down"],
+            Screen::Browse,
+        )
+        .expect("la capa escrita es una capa legal");
+        assert!(
+            eff.single_chord_runs(parse_chord("ctrl+g").unwrap(), "cursor.top"),
+            "el binding persistido resuelve"
+        );
+    }
+
+    /// K3c c1, la razón de que `persist_keymap_bind` lleve `KeymapList`: sobre
+    /// una tecla que el PRESET ya bindea EN EL MISMO contexto, solo un
+    /// `prepend_keymap` gana. Un `append_keymap` parsea, carga, valida — y no
+    /// dispara nunca, porque el orden de fusión es prepends → preset →
+    /// appends y gana el PRIMERO. Escrito como test y no como comentario
+    /// porque es exactamente el fallo que un editor de atajos comete callando:
+    /// "guardado", y la tecla sigue haciendo lo de antes.
+    #[test]
+    fn solo_un_prepend_pisa_al_preset_en_su_propio_contexto() {
+        use crate::keymap::{Effective, Screen, parse_chord, parse_keymap};
+
+        let preset =
+            parse_keymap("[pane]\nkeymap = [{ on = [\"f5\"], run = \"pane.copy\" }]\n").unwrap();
+        let efectivo = |list| {
+            let dir = tempfile::tempdir().unwrap();
+            norte_config::persist_keymap_bind(
+                dir.path(),
+                "pane",
+                list,
+                &["f5".to_owned()],
+                "pane.move",
+            )
+            .expect("persist");
+            let layers = Layers {
+                dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+            };
+            let cfg = load(&layers).expect("carga");
+            Effective::build_for(
+                &preset,
+                &cfg.keymap_layers,
+                &["pane.copy", "pane.move"],
+                Screen::Browse,
+            )
+            .expect("capa legal")
+        };
+        let f5 = parse_chord("f5").unwrap();
+        assert!(
+            efectivo(norte_config::KeymapList::Prepend).single_chord_runs(f5, "pane.move"),
+            "un prepend pisa al preset: es lo que un rebind necesita"
+        );
+        assert!(
+            efectivo(norte_config::KeymapList::Append).single_chord_runs(f5, "pane.copy"),
+            "un append NO pisa al preset — el binding se escribe y no hace nada"
+        );
+    }
+
     /// `dialog_from` es clave de PRESET (ADR 0045). Una capa que la use tiene
     /// que enterarse por su nombre: si la capa se parsease con `parse_keymap`,
     /// la herencia se resolvería ANTES del chequeo de `has_full_keymap`, que
