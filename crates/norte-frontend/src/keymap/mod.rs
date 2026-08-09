@@ -16,7 +16,7 @@ pub use catalogue::{CATALOGUE, CommandDef, Status};
 pub use chord::{Chord, KeyCode, ModKey, Mods, mod_key, paint_chord, parse_chord, set_mod_key};
 pub use effective::{Availability, Effective, valid_lua_name};
 pub use layer::{KeymapFile, Screen, parse_keymap};
-pub use resolve::{Resolution, Resolver};
+pub use resolve::{Count, Resolution, Resolver};
 
 use layer::RawSection;
 
@@ -238,6 +238,15 @@ mod tests {
         let preset = parse_keymap(preset)?;
         let user = user.map(parse_keymap).transpose()?;
         Effective::build(&preset, user.as_ref(), COMANDOS)
+    }
+
+    /// A `Resolution::Run` with NO count — what every assertion written before
+    /// K2a means, and what a preset without `counts = true` can ever produce.
+    fn run(command: &str) -> Resolution {
+        Resolution::Run {
+            command: command.to_owned(),
+            count: Count::None,
+        }
     }
 
     #[test]
@@ -566,25 +575,16 @@ mod tests {
             Resolution::Pending(1),
             "prefijo válido: espera"
         );
-        assert_eq!(
-            r.push(parse_chord("g").unwrap()),
-            Resolution::Run("cursor.top".into())
-        );
+        assert_eq!(r.push(parse_chord("g").unwrap()), run("cursor.top"));
         // Tras ejecutar, el estado queda limpio.
-        assert_eq!(
-            r.push(parse_chord("G").unwrap()),
-            Resolution::Run("cursor.bottom".into())
-        );
+        assert_eq!(r.push(parse_chord("G").unwrap()), run("cursor.bottom"));
         // Tecla sin binding: reset silencioso.
         assert_eq!(r.push(parse_chord("z").unwrap()), Resolution::Reset);
         // Prefijo pendiente + tecla que no continúa: reset (no ejecuta nada).
         r.push(parse_chord("g").unwrap());
         assert_eq!(r.push(parse_chord("q").unwrap()), Resolution::Reset);
         // q suelto (contexto global) sí corre.
-        assert_eq!(
-            r.push(parse_chord("q").unwrap()),
-            Resolution::Run("app.quit".into())
-        );
+        assert_eq!(r.push(parse_chord("q").unwrap()), run("app.quit"));
     }
 
     #[test]
@@ -602,10 +602,7 @@ mod tests {
         // Con secuencia pendiente, Esc SIEMPRE cancela (jamás ejecuta binding).
         assert_eq!(r.push(parse_chord("esc").unwrap()), Resolution::Reset);
         // Sin pendiente, Esc es una tecla más.
-        assert_eq!(
-            r.push(parse_chord("esc").unwrap()),
-            Resolution::Run("app.quit".into())
-        );
+        assert_eq!(r.push(parse_chord("esc").unwrap()), run("app.quit"));
     }
 
     #[test]
@@ -687,13 +684,13 @@ mod tests {
         let mut r = Resolver::new(eff.clone());
         assert_eq!(
             r.push(parse_chord("q").unwrap()),
-            Resolution::Run("cursor.up".into()),
+            run("cursor.up"),
             "pane.append gana a global.keymap (especificidad > capa)"
         );
         // …y un prepend de usuario en [global] NO pisa al keymap [pane].
         assert_eq!(
             r.push(parse_chord("j").unwrap()),
-            Resolution::Run("cursor.down".into()),
+            run("cursor.down"),
             "global.prepend no pisa a pane.keymap"
         );
     }
@@ -738,7 +735,7 @@ mod tests {
         let mut r = Resolver::new(eff(preset, None).expect("lua: con nombre válido pasa"));
         assert_eq!(
             r.push(parse_chord("x").unwrap()),
-            Resolution::Run("lua:mi-comando.v2".into()),
+            run("lua:mi-comando.v2"),
             "el binding resuelve al comando lua: completo"
         );
 
@@ -779,17 +776,17 @@ mod tests {
         let mut r = Resolver::new(eff.clone());
         assert_eq!(
             r.push(parse_chord("j").unwrap()),
-            Resolution::Run("cursor.top".into()),
+            run("cursor.top"),
             "prepend PISA al preset"
         );
         assert_eq!(
             r.push(parse_chord("k").unwrap()),
-            Resolution::Run("cursor.up".into()),
+            run("cursor.up"),
             "append NO pisa una secuencia existente"
         );
         assert_eq!(
             r.push(parse_chord("x").unwrap()),
-            Resolution::Run("app.quit".into()),
+            run("app.quit"),
             "append añade lo nuevo"
         );
     }
@@ -807,14 +804,8 @@ mod tests {
         "#;
         let eff = eff(preset, None).unwrap();
         let mut r = Resolver::new(eff.clone());
-        assert_eq!(
-            r.push(parse_chord("q").unwrap()),
-            Resolution::Run("cursor.up".into())
-        );
-        assert_eq!(
-            r.push(parse_chord("tab").unwrap()),
-            Resolution::Run("pane.switch".into())
-        );
+        assert_eq!(r.push(parse_chord("q").unwrap()), run("cursor.up"));
+        assert_eq!(r.push(parse_chord("tab").unwrap()), run("pane.switch"));
     }
 
     #[test]
@@ -855,12 +846,12 @@ mod tests {
         let mut r = Resolver::new(eff);
         assert_eq!(
             r.push(parse_chord("j").unwrap()),
-            Resolution::Run("cursor.top".into()),
+            run("cursor.top"),
             "el prepend de la capa MÁS alta gana"
         );
         assert_eq!(
             r.push(parse_chord("x").unwrap()),
-            Resolution::Run("cursor.bottom".into()),
+            run("cursor.bottom"),
             "entre appends también gana la capa más alta"
         );
     }
@@ -882,21 +873,12 @@ mod tests {
         // En Browse, el q global manda y enter existe.
         let browse = Effective::build_for(&preset, &[], COMANDOS, Screen::Browse).unwrap();
         let mut r = Resolver::new(browse);
-        assert_eq!(
-            r.push(parse_chord("q").unwrap()),
-            Resolution::Run("app.quit".into())
-        );
-        assert_eq!(
-            r.push(parse_chord("enter").unwrap()),
-            Resolution::Run("nav.enter".into())
-        );
+        assert_eq!(r.push(parse_chord("q").unwrap()), run("app.quit"));
+        assert_eq!(r.push(parse_chord("enter").unwrap()), run("nav.enter"));
         // En Viewer, su q específico PISA al global y enter NO existe.
         let viewer = Effective::build_for(&preset, &[], COMANDOS, Screen::Viewer).unwrap();
         let mut r = Resolver::new(viewer);
-        assert_eq!(
-            r.push(parse_chord("q").unwrap()),
-            Resolution::Run("cursor.top".into())
-        );
+        assert_eq!(r.push(parse_chord("q").unwrap()), run("cursor.top"));
         assert_eq!(r.push(parse_chord("enter").unwrap()), Resolution::Reset);
     }
 
@@ -973,7 +955,7 @@ mod tests {
         let mut r = Resolver::new(eff);
         assert_eq!(
             r.push(parse_chord("j").unwrap()),
-            Resolution::Run("cursor.down".into()),
+            run("cursor.down"),
             "la tecla cae al builtin, jamás al lua: del proyecto"
         );
 
@@ -985,7 +967,7 @@ mod tests {
         let mut r = Resolver::new(eff);
         assert_eq!(
             r.push(parse_chord("j").unwrap()),
-            Resolution::Run("lua:pwn".into()),
+            run("lua:pwn"),
             "en capa de usuario el binding lua: es legítimo"
         );
 
@@ -1003,10 +985,7 @@ mod tests {
             Effective::build_layered(&preset, std::slice::from_ref(&proyecto), COMANDOS).unwrap();
         assert_eq!(eff.discarded_lua_bindings(), 0);
         let mut r = Resolver::new(eff);
-        assert_eq!(
-            r.push(parse_chord("x").unwrap()),
-            Resolution::Run("cursor.up".into())
-        );
+        assert_eq!(r.push(parse_chord("x").unwrap()), run("cursor.up"));
     }
 
     /// Nuevo (GUI-c T1): el motor NO conoce comandos concretos — valida
@@ -1277,7 +1256,7 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
         let mut r = Resolver::new(eff);
         assert_eq!(
             r.push(Chord::new(Mods::default(), KeyCode::Char('y'))),
-            Resolution::Run("dialog.approve".into())
+            run("dialog.approve")
         );
     }
 
@@ -1300,7 +1279,7 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
         let mut r = Resolver::new(eff);
         assert_eq!(
             r.push(Chord::new(Mods::default(), KeyCode::Char('y'))),
-            Resolution::Run("dialog.deny".into())
+            run("dialog.deny")
         );
     }
 
@@ -1713,5 +1692,343 @@ keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
                 );
             }
         }
+    }
+
+    // --- K2a: el contador numérico -------------------------------------
+
+    /// `5j` runs the command five times. The count rides WITH the command; the
+    /// frontend is what repeats, so no command signature changes.
+    #[test]
+    fn un_contador_llega_con_el_comando() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [ { on = ["j"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        assert_eq!(r.push(parse_chord("5").unwrap()), Resolution::Counting(5));
+        assert_eq!(
+            r.push(parse_chord("j").unwrap()),
+            Resolution::Run {
+                command: "cursor.down".to_owned(),
+                count: Count::Repeat(5),
+            }
+        );
+    }
+
+    /// Digits accumulate left to right, and the count survives a multi-key
+    /// sequence: `12gj` is twelve, not one then two.
+    ///
+    /// The sequence deliberately runs `cursor.down` and not `cursor.top`.
+    /// K2a's plan wrote this fixture as vim's `12gg`, but the catalogue marks
+    /// `cursor.top` as taking NO count — and it is right: the count REPEATS
+    /// the dispatch, so twelve "go to the top" is still the top. `12gg`
+    /// meaning "go to line 12" would need the count to reach the command,
+    /// which is exactly the design this task rejected. A count over
+    /// `cursor.top` is therefore [`Count::Ignored`], pinned by
+    /// `un_contador_sobre_un_comando_sin_contador_no_se_traga`.
+    #[test]
+    fn los_digitos_se_acumulan_y_sobreviven_a_una_secuencia() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [ { on = ["g", "j"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        assert_eq!(r.push(parse_chord("1").unwrap()), Resolution::Counting(1));
+        assert_eq!(r.push(parse_chord("2").unwrap()), Resolution::Counting(12));
+        assert_eq!(r.push(parse_chord("g").unwrap()), Resolution::Pending(1));
+        assert_eq!(
+            r.push(parse_chord("j").unwrap()),
+            Resolution::Run {
+                command: "cursor.down".to_owned(),
+                count: Count::Repeat(12),
+            }
+        );
+    }
+
+    /// A digit typed MID-sequence is a key, not a count: with `g` pending,
+    /// `5` must reach the lookup. Otherwise a preset could never bind a
+    /// sequence whose second chord is a digit, and the count would silently
+    /// eat it.
+    #[test]
+    fn un_digito_a_mitad_de_secuencia_es_una_tecla() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [ { on = ["g", "5"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        assert_eq!(r.push(parse_chord("2").unwrap()), Resolution::Counting(2));
+        assert_eq!(r.push(parse_chord("g").unwrap()), Resolution::Pending(1));
+        assert_eq!(
+            r.push(parse_chord("5").unwrap()),
+            Resolution::Run {
+                command: "cursor.down".to_owned(),
+                count: Count::Repeat(2),
+            }
+        );
+    }
+
+    /// A count over a command the catalogue says takes none is NOT swallowed:
+    /// the command runs once and the frontend is told the count was ignored.
+    #[test]
+    fn un_contador_sobre_un_comando_sin_contador_no_se_traga() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[global]
+keymap = [ { on = ["q"], run = "app.quit" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["app.quit"], Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        r.push(parse_chord("3").unwrap());
+        assert_eq!(
+            r.push(parse_chord("q").unwrap()),
+            Resolution::Run {
+                command: "app.quit".to_owned(),
+                count: Count::Ignored(3),
+            }
+        );
+    }
+
+    /// Zero never STARTS a count — `0` stays a bindable key, which is what
+    /// vim's "go to the first column" and mc's mask keys rely on. It does
+    /// accumulate once a count is open: `10` is ten.
+    #[test]
+    fn el_cero_no_abre_un_contador_pero_si_acumula() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [
+    { on = ["0"], run = "cursor.top" },
+    { on = ["j"], run = "cursor.down" },
+]
+"#,
+        )
+        .unwrap();
+        let known = ["cursor.top", "cursor.down"];
+        let eff = Effective::build_for(&preset, &[], &known, Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        // A bare 0 is the binding, not a count.
+        assert_eq!(
+            r.push(parse_chord("0").unwrap()),
+            Resolution::Run {
+                command: "cursor.top".to_owned(),
+                count: Count::None
+            }
+        );
+        // But 1 then 0 is ten.
+        assert_eq!(r.push(parse_chord("1").unwrap()), Resolution::Counting(1));
+        assert_eq!(r.push(parse_chord("0").unwrap()), Resolution::Counting(10));
+        assert_eq!(
+            r.push(parse_chord("j").unwrap()),
+            Resolution::Run {
+                command: "cursor.down".to_owned(),
+                count: Count::Repeat(10)
+            }
+        );
+    }
+
+    /// Four digits is the ceiling. A fifth is dropped rather than wrapping the
+    /// accumulator — 99999 must not silently become something else.
+    #[test]
+    fn el_contador_topa_en_cuatro_digitos() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [ { on = ["j"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        for _ in 0..5 {
+            r.push(parse_chord("9").unwrap());
+        }
+        assert_eq!(
+            r.push(parse_chord("j").unwrap()),
+            Resolution::Run {
+                command: "cursor.down".to_owned(),
+                count: Count::Repeat(9999)
+            }
+        );
+    }
+
+    /// Esc clears the count as well as the pending sequence. A count left
+    /// stuck to the next keystroke is the worst failure this feature can have.
+    #[test]
+    fn esc_limpia_el_contador() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [ { on = ["j"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        r.push(parse_chord("7").unwrap());
+        assert_eq!(r.push(parse_chord("esc").unwrap()), Resolution::Reset);
+        assert_eq!(
+            r.push(parse_chord("j").unwrap()),
+            Resolution::Run {
+                command: "cursor.down".to_owned(),
+                count: Count::None
+            }
+        );
+    }
+
+    /// An unbound key clears the count too — otherwise a typo leaves a number
+    /// glued to whatever you press next.
+    #[test]
+    fn una_tecla_sin_binding_limpia_el_contador() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [ { on = ["j"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        r.push(parse_chord("4").unwrap());
+        assert_eq!(r.push(parse_chord("z").unwrap()), Resolution::Reset);
+        assert_eq!(
+            r.push(parse_chord("j").unwrap()),
+            Resolution::Run {
+                command: "cursor.down".to_owned(),
+                count: Count::None
+            }
+        );
+    }
+
+    /// A key the FRONTEND does not model (`Resolver::reset`, the explicit
+    /// equivalent of a miss) clears the count for the same reason an unbound
+    /// key does: a number must never outlive the keystroke that ended it.
+    #[test]
+    fn reset_limpia_el_contador() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [ { on = ["j"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        r.push(parse_chord("6").unwrap());
+        assert_eq!(r.count(), Some(6));
+        r.reset();
+        assert_eq!(r.count(), None);
+        assert_eq!(
+            r.push(parse_chord("j").unwrap()),
+            Resolution::Run {
+                command: "cursor.down".to_owned(),
+                count: Count::None
+            }
+        );
+    }
+
+    /// Without the preset flag a digit is just a key: `orthodox` and `cua`
+    /// must not grow counts behind their users' backs.
+    #[test]
+    fn sin_el_flag_del_preset_un_digito_es_una_tecla() {
+        let preset = parse_keymap(
+            r#"
+[pane]
+keymap = [ { on = ["5"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        assert_eq!(
+            r.push(parse_chord("5").unwrap()),
+            Resolution::Run {
+                command: "cursor.down".to_owned(),
+                count: Count::None
+            }
+        );
+    }
+
+    /// A digit with a modifier was never a count: `ctrl+5` is an ordinary
+    /// chord, even with counts on.
+    #[test]
+    fn un_digito_con_modificador_no_es_un_contador() {
+        let preset = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+keymap = [ { on = ["ctrl+5"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        assert_eq!(
+            r.push(parse_chord("ctrl+5").unwrap()),
+            Resolution::Run {
+                command: "cursor.down".to_owned(),
+                count: Count::None
+            }
+        );
+    }
+
+    /// The count POLICY belongs to the preset: a user layer that could flip it
+    /// on would silently change what every digit key means.
+    #[test]
+    fn una_capa_de_usuario_no_puede_encender_los_contadores() {
+        let preset = parse_keymap(
+            r#"
+[pane]
+keymap = [ { on = ["j"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let layer = parse_keymap(
+            r#"
+counts = true
+
+[pane]
+prepend_keymap = [ { on = ["k"], run = "cursor.up" } ]
+"#,
+        )
+        .unwrap();
+        let known = ["cursor.down", "cursor.up"];
+        let e = Effective::build_for(&preset, &[layer], &known, Screen::Browse).unwrap_err();
+        assert!(
+            matches!(e, KeymapError::WrongLayerKey { key: "counts", .. }),
+            "{e:?}"
+        );
     }
 }

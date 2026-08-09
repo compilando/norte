@@ -171,6 +171,29 @@ impl Chord {
         Self { mods, code }
     }
 
+    /// The chord's parts, for the few callers that must INSPECT one rather
+    /// than compare it (K2a's count accumulator asks "is this a bare digit?").
+    /// It is deliberately not a pair of getters: a caller that has to reason
+    /// about a chord needs both halves at once, and splitting them invites
+    /// checking the key without checking the modifiers — which is how
+    /// `ctrl+5` would become a count.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::{KeyCode, Mods, parse_chord};
+    ///
+    /// let (mods, code) = parse_chord("5").unwrap().parts();
+    /// assert_eq!(mods, Mods::default());
+    /// assert_eq!(code, KeyCode::Char('5'));
+    ///
+    /// let (mods, code) = parse_chord("ctrl+5").unwrap().parts();
+    /// assert!(mods.ctrl, "un dígito con modificador jamás fue un contador");
+    /// assert_eq!(code, KeyCode::Char('5'));
+    /// ```
+    #[must_use]
+    pub fn parts(self) -> (Mods, KeyCode) {
+        (self.mods, self.code)
+    }
+
     pub(super) fn is_bare_esc(self) -> bool {
         self.code == KeyCode::Esc && self.mods == Mods::default()
     }

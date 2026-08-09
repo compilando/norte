@@ -50,6 +50,11 @@
   "additionalProperties": false,
   "description": "A parsed `keymap.toml` preset or user layer.",
   "properties": {
+    "counts": {
+      "default": false,
+      "description": "Whether a numeric prefix multiplies the next command (`5j`). Opt-in per\nPRESET: `vim` and `far` set it because their originals have counts;\n`orthodox`, `cua`, Total Commander, Krusader and Norton do not, and\nturning it on there would steal their digit keys.",
+      "type": "boolean"
+    },
     "dialog": {
       "$ref": "#/$defs/RawSection",
       "description": "Contexto `dialog` (H1, issue #24): teclas de modales/overlays\n(confirmación, aprobación, popups de navegación…) como keymap de\ndatos en vez de handlers ad hoc — la ayuda generada nunca puede\ndesincronizarse de un rebind. Se fusiona con `global` igual que\n`pane`/`viewer` (ver [`Screen::Dialog`])."

@@ -33,6 +33,12 @@ pub(super) struct RawSection {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct KeymapFile {
+    /// Whether a numeric prefix multiplies the next command (`5j`). Opt-in per
+    /// PRESET: `vim` and `far` set it because their originals have counts;
+    /// `orthodox`, `cua`, Total Commander, Krusader and Norton do not, and
+    /// turning it on there would steal their digit keys.
+    #[serde(default)]
+    pub(super) counts: bool,
     #[serde(default)]
     pub(super) global: RawSection,
     #[serde(default)]
@@ -193,6 +199,16 @@ pub(super) fn check_layer_keys(
         }
     }
     for layer in layers {
+        // The count POLICY is the preset's. A layer that could turn counts on
+        // would silently change what EVERY digit key means — the "weird
+        // behaviour" ADR 0006 forbids, so it is a load error like any other
+        // wrong key.
+        if layer.counts {
+            return Err(KeymapError::WrongLayerKey {
+                layer: "usuario",
+                key: "counts",
+            });
+        }
         for section in [&layer.global, &layer.pane, &layer.viewer, &layer.dialog] {
             if !section.keymap.is_empty() {
                 return Err(KeymapError::WrongLayerKey {

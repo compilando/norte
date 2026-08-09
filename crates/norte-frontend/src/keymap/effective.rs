@@ -55,6 +55,11 @@ pub(super) struct Binding {
 #[derive(Debug, Clone)]
 pub struct Effective {
     bindings: Vec<Binding>,
+    /// Whether the PRESET this map was built from enables numeric counts
+    /// (K2a). Copied here so the resolver — which owns only the effective map
+    /// — can answer "is a bare digit a count?" without keeping the source
+    /// files alive.
+    counts: bool,
     /// Bindings `lua:` DESCARTADOS por venir de la capa de proyecto
     /// (seguridad, ver [`KeymapFile::mark_project`]). El frontend lo avisa una
     /// vez (jamás descarte mudo); el mensaje concreto es cosa del frontend.
@@ -241,6 +246,7 @@ impl Effective {
         check_prefix_free(&bindings)?;
         Ok(Self {
             bindings,
+            counts: preset.counts,
             discarded_lua_bindings,
         })
     }
@@ -311,6 +317,29 @@ impl Effective {
             });
         }
         diags
+    }
+
+    /// Whether this effective keymap's preset enables numeric counts (`5j`).
+    /// The resolver asks it before treating a bare digit as a count; the
+    /// status bar asks it before offering to paint one.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::{Effective, Screen, parse_keymap};
+    ///
+    /// let plain = parse_keymap("[pane]\nkeymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n")
+    ///     .unwrap();
+    /// let eff = Effective::build_for(&plain, &[], &["cursor.down"], Screen::Browse).unwrap();
+    /// assert!(!eff.counts(), "opt-in: sin la clave, un dígito es una tecla");
+    ///
+    /// let counting =
+    ///     parse_keymap("counts = true\n[pane]\nkeymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n")
+    ///         .unwrap();
+    /// let eff = Effective::build_for(&counting, &[], &["cursor.down"], Screen::Browse).unwrap();
+    /// assert!(eff.counts());
+    /// ```
+    #[must_use]
+    pub fn counts(&self) -> bool {
+        self.counts
     }
 
     /// Bindings `lua:` descartados por venir de la capa de PROYECTO (`./
