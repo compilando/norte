@@ -3158,9 +3158,10 @@ pub struct HelpView {
     /// Sidebar, body scroll, filter, history and focus.
     pub state: norte_frontend::help::HelpState,
     /// The effective-keymap cheatsheet ([`crate::help::build`]), the body of
-    /// the synthetic `keys` entry. Rebuilt on hot reload with everything else
+    /// the synthetic `keys` entry — already styled (K3b: an unavailable row
+    /// is dimmed there, not here). Rebuilt on hot reload with everything else
     /// derived from the keymap.
-    pub keys_lines: Vec<String>,
+    pub keys_lines: Vec<ratatui::text::Line<'static>>,
     /// Body lines and the action→line map of whatever `state.current()` is,
     /// laid out for `width`. See [`HelpView::refresh`].
     ///
@@ -3233,7 +3234,7 @@ impl HelpView {
     /// knows how wide the terminal is. [`refresh`](Self::refresh) is what
     /// fills it, and the run loop calls it before every paint.
     #[must_use]
-    pub fn new(lang: norte_help::Lang, keys_lines: Vec<String>) -> Self {
+    pub fn new(lang: norte_help::Lang, keys_lines: Vec<ratatui::text::Line<'static>>) -> Self {
         Self {
             state: norte_frontend::help::HelpState::new(lang, t("help-topic-keys")),
             keys_lines,
@@ -3265,7 +3266,7 @@ impl HelpView {
     #[must_use]
     pub fn new_at(
         lang: norte_help::Lang,
-        keys_lines: Vec<String>,
+        keys_lines: Vec<ratatui::text::Line<'static>>,
         context: &str,
         over_modal: bool,
     ) -> Self {
@@ -3292,7 +3293,7 @@ impl HelpView {
     #[must_use]
     pub fn new_at_topic(
         lang: norte_help::Lang,
-        keys_lines: Vec<String>,
+        keys_lines: Vec<ratatui::text::Line<'static>>,
         topic: &norte_help::TopicId,
         over_modal: bool,
     ) -> Self {
@@ -3346,12 +3347,11 @@ impl HelpView {
             // this binary (the catalogue is only ever installed on the open
             // path, before any filter), but "unreachable" is a claim about
             // callers and this is a claim about the id.
+            // Already styled (K3b: an unavailable row is dimmed by
+            // `crate::help::build`, not here) — no `Line::raw` mapping left
+            // to do.
             crate::help_render::Rendered {
-                lines: self
-                    .keys_lines
-                    .iter()
-                    .map(|l| ratatui::text::Line::raw(l.clone()))
-                    .collect(),
+                lines: self.keys_lines.clone(),
                 action_lines: Vec::new(),
             }
         } else {
@@ -6409,7 +6409,10 @@ mod help_view_tests {
     fn the_keys_page_paints_keys_lines_and_maps_no_action() {
         let mut view = HelpView::new(
             Lang::En,
-            vec!["── Browsing ──".to_owned(), "  f5   copy".to_owned()],
+            vec![
+                ratatui::text::Line::raw("── Browsing ──"),
+                ratatui::text::Line::raw("  f5   copy"),
+            ],
         );
         view.state.open(&TopicId::new(KEYS_ID));
         assert!(view.on_keys_page());
@@ -6454,7 +6457,7 @@ mod help_view_tests {
     /// bajo el nombre de una extensión, leyéndose como su documentación.
     #[test]
     fn una_pagina_de_plugin_en_vuelo_sale_vacia_y_no_es_el_teclado() {
-        let mut view = HelpView::new(Lang::En, vec!["  f5   copy".to_owned()]);
+        let mut view = HelpView::new(Lang::En, vec![ratatui::text::Line::raw("  f5   copy")]);
         view.set_plugins(&[plugin("acme.ftp", "FTP")]);
         view.state.open(&TopicId::new("acme.ftp"));
         assert!(

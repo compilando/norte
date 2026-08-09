@@ -123,10 +123,16 @@ impl HelpLine {
     /// That page is built from the effective keymap rather than the corpus, so
     /// it never goes through [`render_topic`] — and its chord column is aligned
     /// with SPACES, which line up only under a fixed pitch.
+    ///
+    /// `dim` (K3b): the row names a key this build cannot run — the same
+    /// muted colour a disabled palette row already wears, applied here so an
+    /// unbuilt or frontend-missing binding reads as unavailable instead of as
+    /// a working shortcut.
     #[must_use]
-    pub fn mono_text(text: impl Into<String>) -> Self {
+    pub fn mono_text(text: impl Into<String>, dim: bool) -> Self {
         Self {
             mono: true,
+            dim,
             ..Self::one(text, Role::Regular)
         }
     }

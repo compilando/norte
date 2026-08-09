@@ -21,8 +21,11 @@
 use std::collections::HashMap;
 
 use norte_frontend::availability::Facts;
+use norte_frontend::keysheet::{SheetRow, sheet};
 use norte_help::{Availability, ChordResolver};
 use norte_i18n::t;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::Line;
 use unicode_width::UnicodeWidthStr;
 
 use crate::keymap::{Effective, Screen, dialog_hint_id, help_id, paint_chord};
@@ -68,24 +71,35 @@ fn pad_to(seq: &str, col: usize) -> String {
 }
 
 /// Builds the help lines from the effective keymaps of the three screens:
-/// every binding with its catalogue description, in real precedence order
-/// (what the key DOES, not what the preset says).
+/// EVERY binding of every screen — built or not (K3b) — with its catalogue
+/// label, in real precedence order (what the key DOES, not what the preset
+/// says).
+///
+/// A renderer over [`keysheet::sheet`](norte_frontend::keysheet::sheet)'s
+/// rows: padding and dimming are this function's job, the DATA — which keys
+/// exist and which of them this build can run — is the sheet's. An
+/// unavailable row is dimmed with the theme's bare `Modifier::DIM` (the same
+/// convention the which-key panel uses, K3a) and carries the short reason
+/// `keysheet::sheet`'s doc names — interleaved where the sheet puts it, not
+/// gathered into a section of leftovers, so a reader scanning the F-keys
+/// finds `alt+f5` where it belongs.
 #[must_use]
-pub fn build(browse: &Effective, viewer: &Effective, dialog: &Effective) -> Vec<String> {
+pub fn build(browse: &Effective, viewer: &Effective, dialog: &Effective) -> Vec<Line<'static>> {
+    let lang = norte_i18n::active();
+    let rows = sheet(&[
+        (Screen::Browse, browse.clone()),
+        (Screen::Viewer, viewer.clone()),
+        (Screen::Dialog, dialog.clone()),
+    ]);
     let mut out = Vec::new();
-    for (title, eff) in [
-        (t("help-section-browse"), browse),
-        (t("help-section-viewer"), viewer),
+    for (screen, title) in [
+        (Screen::Browse, t("help-section-browse")),
+        (Screen::Viewer, t("help-section-viewer")),
     ] {
-        out.push(String::new());
-        out.push(format!("── {title} ──"));
-        for (seq, cmd) in eff.bindings() {
-            let seq = paint_chord(&seq);
-            out.push(format!(
-                "  {seq}{} {}",
-                pad_to(&seq, CHORD_COLUMN),
-                t(&help_id(cmd))
-            ));
+        out.push(Line::default());
+        out.push(Line::raw(format!("── {title} ──")));
+        for row in rows.iter().filter(|r| r.screen == screen) {
+            out.push(sheet_row_line(row, lang));
         }
     }
     // #113: the `dialog.*` verbs were invisible in the app (overlay footers
@@ -93,18 +107,38 @@ pub fn build(browse: &Effective, viewer: &Effective, dialog: &Effective) -> Vec<
     // be learnt from the docs). Help has no such budget: the whole `dialog`
     // effective, with a note that each overlay supports its own SUBSET
     // (allowlists).
-    out.push(String::new());
-    out.push(format!("── {} ──", t("help-section-dialog")));
-    out.push(format!("  {}", t("help-dialog-note")));
-    for (seq, cmd) in dialog.bindings() {
-        let seq = paint_chord(&seq);
-        out.push(format!(
-            "  {seq}{} {}",
-            pad_to(&seq, CHORD_COLUMN),
-            t(&label_id(cmd))
-        ));
+    out.push(Line::default());
+    out.push(Line::raw(format!("── {} ──", t("help-section-dialog"))));
+    out.push(Line::raw(format!("  {}", t("help-dialog-note"))));
+    for row in rows.iter().filter(|r| r.screen == Screen::Dialog) {
+        out.push(sheet_row_line(row, lang));
     }
     out
+}
+
+/// One row of the generated keys page: the painted chord in its padded
+/// column, then the catalogue label — dimmed, with the short reason, when
+/// `row.avail` is not [`norte_frontend::keymap::Availability::Here`].
+///
+/// `command_label` (not [`label_id`]/[`t`]) is deliberate: it is the SAME
+/// router the which-key panel uses, and it falls back to the command NAME
+/// rather than echoing a Fluent id — the common case for a `NotBuilt`
+/// command, since nothing has written help text for one that does not exist.
+fn sheet_row_line(row: &SheetRow, lang: norte_i18n::Lang) -> Line<'static> {
+    let pad = pad_to(&row.chord, CHORD_COLUMN);
+    let label = norte_frontend::whichkey::command_label(&row.command, lang);
+    let reason = norte_frontend::keymap::short_unavailable_message(row.avail, lang);
+    let text = if reason.is_empty() {
+        format!("  {}{pad} {label}", row.chord)
+    } else {
+        format!("  {}{pad} {label} — {reason}", row.chord)
+    };
+    let style = if row.avail == norte_frontend::keymap::Availability::Here {
+        Style::default()
+    } else {
+        Style::default().add_modifier(Modifier::DIM)
+    };
+    Line::styled(text, style)
 }
 
 /// Fluent id of a command's short label: `dialog.*` verbs live in
@@ -467,6 +501,22 @@ mod tests {
     use crate::keymap::{COMMANDS, DIALOG_COMMANDS, parse_keymap, presets};
     use crate::palette::first_chord;
 
+    /// Flattens painted lines into their text, for a `.contains()` check —
+    /// this module's twin of `help_render`'s own test helper of the same
+    /// name (K3b: `build` now returns styled `Line`s, not `String`s).
+    fn flatten(lines: &[Line<'_>]) -> String {
+        lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// The orthodox preset, the only one the fixtures need.
     fn orthodox() -> crate::keymap::KeymapFile {
         presets()
@@ -546,7 +596,7 @@ mod tests {
         let viewer = Effective::build_for(&preset, &[], &known, Screen::Viewer).unwrap();
         let dialog = Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
         let lines = build(&browse, &viewer, &dialog);
-        let all = lines.join("\n");
+        let all = flatten(&lines);
         assert!(
             all.contains(&t("help-section-dialog")),
             "sección de diálogos presente: {all}"
@@ -590,9 +640,10 @@ mod tests {
         let viewer = Effective::build_for(&preset, &[], &known, Screen::Viewer).unwrap();
         let dialog = Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
         for line in build(&browse, &viewer, &dialog) {
+            let text = flatten(std::slice::from_ref(&line));
             assert!(
-                !line.contains("help-cmd-") && !line.contains("dialog-cmd-"),
-                "a catalogue miss echoed its lookup key at the reader: {line:?}"
+                !text.contains("help-cmd-") && !text.contains("dialog-cmd-"),
+                "a catalogue miss echoed its lookup key at the reader: {text:?}"
             );
         }
         // And the global commands that exposed it are still LISTED in the
@@ -600,13 +651,94 @@ mod tests {
         let lines = build(&browse, &viewer, &dialog);
         let dialog_section = lines
             .iter()
-            .skip_while(|l| !l.contains(&t("help-section-dialog")))
-            .fold(String::new(), |acc, l| acc + l + "\n");
+            .skip_while(|l| !flatten(std::slice::from_ref(l)).contains(&t("help-section-dialog")))
+            .fold(String::new(), |acc, l| {
+                acc + &flatten(std::slice::from_ref(l)) + "\n"
+            });
         assert!(
             dialog_section.contains(&t("help-cmd-app-quit")),
             "the global verbs reachable from a dialog stay visible: \
              {dialog_section}"
         );
+    }
+
+    /// The three effectives of `preset`, built against the TUI's REAL
+    /// command vocabulary (`COMMANDS`/`DIALOG_COMMANDS`) rather than the
+    /// preset's own — the same set `main.rs` builds production effectives
+    /// with, and the reason a Total Commander preset's `pane.pack` comes out
+    /// `NotBuilt` here instead of quietly resolving.
+    fn build_effectives_of(preset: &str) -> (Effective, Effective, Effective) {
+        let (_, kf) = presets()
+            .into_iter()
+            .find(|(n, _)| *n == preset)
+            .unwrap_or_else(|| panic!("preset {preset}"));
+        let known: Vec<&str> = COMMANDS
+            .iter()
+            .copied()
+            .chain(DIALOG_COMMANDS.iter().copied())
+            .collect();
+        let browse = Effective::build_for(&kf, &[], &known, Screen::Browse).unwrap();
+        let viewer = Effective::build_for(&kf, &[], &known, Screen::Viewer).unwrap();
+        let dialog = Effective::build_for(&kf, &[], &known, Screen::Dialog).unwrap();
+        (browse, viewer, dialog)
+    }
+
+    /// K3b: a preset with a `Planned` binding — Total Commander's `Alt+F5`
+    /// packs (K2b, #131..#140) — is a DIMMED row carrying its reason, never a
+    /// silently dropped one. `sheet_row_line` dims with the bare
+    /// `Modifier::DIM` the which-key panel (K3a, `ui.rs::draw_which_key`)
+    /// already uses, checked here at the LINE'S OWN style
+    /// (`Line::styled` sets it there, not per-span).
+    #[test]
+    fn un_binding_no_construido_sale_atenuado_y_con_su_razon() {
+        let (browse, viewer, dialog) = build_effectives_of("total-commander");
+        let lines = build(&browse, &viewer, &dialog);
+        let dimmed: Vec<&Line<'_>> = lines
+            .iter()
+            .filter(|l| l.style.add_modifier.contains(Modifier::DIM))
+            .collect();
+        assert!(
+            !dimmed.is_empty(),
+            "total-commander must carry at least one unavailable row for \
+             this test to mean anything"
+        );
+        for line in &dimmed {
+            let text = flatten(std::slice::from_ref(line));
+            assert!(
+                text.contains('—'),
+                "a dimmed row must carry its reason: {text:?}"
+            );
+        }
+    }
+
+    /// `build`'s row count can never drift from `keysheet::sheet`'s: it is a
+    /// renderer over the sheet's rows plus a FIXED amount of scaffolding (a
+    /// blank separator and a `── … ──` header per screen — three screens,
+    /// six lines — plus the dialog note). A `sheet_row_line` call dropped or
+    /// doubled anywhere in `build`'s three loops fails here.
+    #[test]
+    fn cada_fila_del_sheet_es_exactamente_una_linea_generada() {
+        for preset in ["orthodox", "total-commander", "vim", "krusader"] {
+            let (browse, viewer, dialog) = build_effectives_of(preset);
+            let rows = sheet(&[
+                (Screen::Browse, browse.clone()),
+                (Screen::Viewer, viewer.clone()),
+                (Screen::Dialog, dialog.clone()),
+            ]);
+            let lines = build(&browse, &viewer, &dialog);
+            // Three screens × (blank separator + header) = 6, plus the
+            // dialog note = 7.
+            let scaffolding = 3 * 2 + 1;
+            assert_eq!(
+                lines.len() - scaffolding,
+                rows.len(),
+                "[{preset}] a generated line per sheet row, no more, no \
+                 fewer: {} lines, {scaffolding} of them scaffolding, {} \
+                 sheet rows",
+                lines.len(),
+                rows.len()
+            );
+        }
     }
 
     #[test]
@@ -742,9 +874,10 @@ mod tests {
             // a joined haystack would flag the joiner. One line is exactly
             // what `Line::raw` receives.
             for line in &lines {
+                let text = flatten(std::slice::from_ref(line));
                 assert!(
-                    !line.chars().any(norte_encoding::is_terminal_hazard),
-                    "[{}] raw hazard on the F1 page: {line:?}",
+                    !text.chars().any(norte_encoding::is_terminal_hazard),
+                    "[{}] raw hazard on the F1 page: {text:?}",
                     hazard.id
                 );
             }
@@ -754,7 +887,7 @@ mod tests {
             assert_eq!(
                 lines
                     .iter()
-                    .map(|l| l.matches('\u{FFFD}').count())
+                    .map(|l| flatten(std::slice::from_ref(l)).matches('\u{FFFD}').count())
                     .sum::<usize>(),
                 3,
                 "[{}] one masked chord per screen section",

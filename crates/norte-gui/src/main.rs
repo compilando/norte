@@ -303,6 +303,16 @@ struct NorteGui {
     viewer_image: Option<ImagePreview>,
     /// Resolver del contexto Viewer (teclas del visor, GUI-d T3).
     viewer_resolver: norte_frontend::keymap::Resolver,
+    /// The `Dialog`-screen effective (K3b): NOT a [`norte_frontend::keymap::Resolver`]
+    /// like [`Self::resolver`]/[`Self::viewer_resolver`], because nothing
+    /// dispatches through it — this GUI's overlays resolve fixed keys in code
+    /// (`help_view::GuiChords::chord`'s rustdoc says why). Its one reader is
+    /// [`help_view::keys_lines`], which needed the section to exist at all
+    /// (K3b: "the GUI's sheet gains the dialog section it never had").
+    /// Rebuilt everywhere [`Self::resolver`] is, from the same layers, so the
+    /// three screens of the reference sheet can never drift out of sync with
+    /// each other.
+    dialog_effective: norte_frontend::keymap::Effective,
     /// The which-key panel's CACHED rows (K3a), or `None` while nothing is
     /// pending. Written ONLY by [`NorteGui::refresh_which_key`] /
     /// [`NorteGui::refresh_which_key_viewer`] (the resolver-transition arms
@@ -959,16 +969,16 @@ impl NorteGui {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
-        let ((browse_eff, viewer_eff), mut keymap_error) =
-            match keymap::build_effectives(&preset_name) {
-                Ok(pair) => (pair, startup_banner),
+        let ((browse_eff, viewer_eff, dialog_eff), mut keymap_error) =
+            match keymap::build_effectives3(&preset_name) {
+                Ok(triple) => (triple, startup_banner),
                 Err(e) => {
                     let msg = norte_i18n::ta(
                         "gui-banner-keymap-error",
                         &[("error", keymap_error_detail(&e).as_str())],
                     );
                     (
-                        keymap::build_effectives_preset_only(&preset_name),
+                        keymap::build_effectives3_preset_only(&preset_name),
                         Some(push_banner(startup_banner, msg)),
                     )
                 }
@@ -1108,6 +1118,7 @@ impl NorteGui {
                     viewer: None,
                     viewer_image: None,
                     viewer_resolver,
+                    dialog_effective: dialog_eff,
                     which_key: None,
                     viewer_gen: 0,
                     viewer_loading: false,
@@ -1199,6 +1210,7 @@ impl NorteGui {
                     viewer: None,
                     viewer_image: None,
                     viewer_resolver,
+                    dialog_effective: dialog_eff,
                     which_key: None,
                     viewer_gen: 0,
                     viewer_loading: false,
@@ -2395,8 +2407,14 @@ impl NorteGui {
                     let fresh_cfg = persisted
                         .is_ok()
                         .then(|| norte_frontend::config::load(&norte_config::standard_layers()));
+                    // K3b: the THREE-screen builder, so a preset switch
+                    // rebuilds `dialog_effective` in the same breath as
+                    // `resolver`/`viewer_resolver` — one call, one moment,
+                    // never a Dialog section one preset behind the other two.
                     let fresh_keymap = match (&fresh_cfg, needs_keymap_rebuild) {
-                        (Some(Ok(cfg)), true) => Some(keymap::build_effectives(&cfg.common.preset)),
+                        (Some(Ok(cfg)), true) => {
+                            Some(keymap::build_effectives3(&cfg.common.preset))
+                        }
                         _ => None,
                     };
                     (persisted, fresh_cfg, fresh_keymap)
@@ -2443,6 +2461,7 @@ impl NorteGui {
         fresh_keymap: Option<
             Result<
                 (
+                    norte_frontend::keymap::Effective,
                     norte_frontend::keymap::Effective,
                     norte_frontend::keymap::Effective,
                 ),
@@ -2562,17 +2581,20 @@ impl NorteGui {
         self.which_key = which_key_for(&self.viewer_resolver, norte_i18n::active());
     }
 
-    /// Reemplaza `resolver`/`viewer_resolver` con los efectivos frescos
-    /// (S4, tras `keymap.preset` con OK): `fresh_keymap` ya viene calculado
-    /// desde el hilo de fondo (`commit_settings_write`, evita releer
-    /// `keymap.toml` en el hilo de UI). Un preset roto/capa de usuario
-    /// inválida en el momento del commit CONSERVA el resolver vigente
-    /// (nunca deja la GUI sin bindings) y devuelve `false`.
+    /// Reemplaza `resolver`/`viewer_resolver`/`dialog_effective` con los
+    /// efectivos frescos (S4, tras `keymap.preset` con OK): `fresh_keymap` ya
+    /// viene calculado desde el hilo de fondo (`commit_settings_write`, evita
+    /// releer `keymap.toml` en el hilo de UI) — las TRES pantallas, K3b, así
+    /// que `dialog_effective` nunca queda un preset por detrás de las otras
+    /// dos. Un preset roto/capa de usuario inválida en el momento del commit
+    /// CONSERVA los tres efectivos vigentes (nunca deja la GUI sin bindings)
+    /// y devuelve `false`.
     fn apply_keymap_live(
         &mut self,
         fresh_keymap: Option<
             Result<
                 (
+                    norte_frontend::keymap::Effective,
                     norte_frontend::keymap::Effective,
                     norte_frontend::keymap::Effective,
                 ),
@@ -2581,9 +2603,10 @@ impl NorteGui {
         >,
     ) -> bool {
         match fresh_keymap {
-            Some(Ok((browse, viewer))) => {
+            Some(Ok((browse, viewer, dialog))) => {
                 self.resolver = norte_frontend::keymap::Resolver::new(browse);
                 self.viewer_resolver = norte_frontend::keymap::Resolver::new(viewer);
+                self.dialog_effective = dialog;
                 // K3a: the resolvers were just REPLACED — any cached rows
                 // describe the map that no longer exists, and the fresh
                 // resolvers start with nothing pending regardless.
@@ -2628,8 +2651,11 @@ impl NorteGui {
             self.viewer_resolver.effective(),
             norte_i18n::active(),
         );
-        let keys =
-            help_view::keys_lines(self.resolver.effective(), self.viewer_resolver.effective());
+        let keys = help_view::keys_lines(
+            self.resolver.effective(),
+            self.viewer_resolver.effective(),
+            &self.dialog_effective,
+        );
         let prev = self
             .help_chords
             .clone()
@@ -2901,7 +2927,11 @@ impl NorteGui {
         }
         let mut view = help_view::HelpView::new(
             lang,
-            help_view::keys_lines(self.resolver.effective(), self.viewer_resolver.effective()),
+            help_view::keys_lines(
+                self.resolver.effective(),
+                self.viewer_resolver.effective(),
+                &self.dialog_effective,
+            ),
         );
         view.over_modal = over_modal;
         if let Some(topic) = page {
@@ -6008,15 +6038,11 @@ impl NorteGui {
     fn help_body(&self, view: &help_view::HelpView) -> Vec<help_render::HelpLine> {
         let state = &view.state;
         if state.current().as_str() == norte_frontend::help::KEYS_ID {
-            // MONOSPACED, because the cheatsheet is a TABLE: its chord column
-            // is padded with spaces (`help_view::keys_lines`), and space
-            // padding under a proportional face aligns nothing — the labels
-            // came out ragged, which is the one thing a key sheet must not be.
-            return view
-                .keys_lines
-                .iter()
-                .map(|l| help_render::HelpLine::mono_text(l.clone()))
-                .collect();
+            // Already `HelpLine`s (K3b, `help_view::keys_lines`), MONOSPACED
+            // because the cheatsheet is a TABLE — its chord column is padded
+            // with spaces, and space padding under a proportional face aligns
+            // nothing, which is the one thing a key sheet must not be.
+            return view.keys_lines.clone();
         }
         let Some(chords) = &self.help_chords else {
             return Vec::new();

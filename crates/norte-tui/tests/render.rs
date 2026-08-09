@@ -980,7 +980,7 @@ fn la_ayuda_se_pinta_sobre_el_viewer() {
     // hace el run loop.
     let mut help = norte_tui::app::HelpView::new(
         norte_i18n::Lang::En,
-        vec!["  f1             this help".to_owned()],
+        vec![ratatui::text::Line::raw("  f1             this help")],
     );
     help.state
         .open(&norte_help::TopicId::new(norte_frontend::help::KEYS_ID));

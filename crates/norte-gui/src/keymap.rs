@@ -358,8 +358,16 @@ fn screen_commands(screen: Screen) -> &'static [&'static str] {
 /// (system → user → project, `NORTE_CONFIG_DIR` override included) instead of
 /// the GUI's hand-rolled fork — see Task 9 of the M5 config-layer migration.
 ///
+/// `#[cfg(test)]` since K3b: production now calls [`build_effectives3`]
+/// (`main.rs` needs the `Dialog` screen too, for `help_view::keys_lines`),
+/// so this two-screen sibling has no production caller left — only the tests
+/// below and in `help_view`/`palette_view`. Gating it avoids a `dead_code`
+/// lint in this binary crate (no lib target means `pub` alone doesn't count
+/// as reachable).
+///
 /// # Errors
 /// The first `KeymapError` from any layer.
+#[cfg(test)]
 pub fn build_effectives(preset_name: &str) -> Result<(Effective, Effective), KeymapError> {
     build_effectives_layers(&norte_config::standard_layers(), preset_name)
 }
@@ -408,12 +416,37 @@ pub fn build_effectives_from(
 /// `app.palette` binding entirely; freeing the chord is what makes the
 /// shared binding reach the palette once `app.palette` joins [`COMMANDS`].
 ///
+/// `#[cfg(test)]` for the same reason [`build_effectives`] is: its only
+/// callers are that function and [`build_effectives_from`], both test-only
+/// since K3b.
+///
 /// # Errors
 /// The first `KeymapError` from any layer.
+#[cfg(test)]
 fn build_effectives_layers(
     layers: &Layers,
     preset_name: &str,
 ) -> Result<(Effective, Effective), KeymapError> {
+    let (browse, viewer, _dialog) = build_effectives_layers3(layers, preset_name)?;
+    Ok((browse, viewer))
+}
+
+/// [`build_effectives_layers`] plus the `Dialog`-screen effective, for K3b's
+/// reference sheet (`help_view::keys_lines`) — the ONE caller in this
+/// frontend that needs it: the GUI dispatches no dialog verb through a
+/// resolver (its overlays hardcode their keys, see [`screen_commands`]'s
+/// Dialog arm), so nothing else here builds a `Dialog` effective. A third
+/// function rather than changing [`build_effectives_layers`]'s return type
+/// keeps the other 40-odd callers of the two-screen builders untouched.
+///
+/// Same `kfs` for all three screens, built ONCE: the alternative — a
+/// standalone dialog-only builder that re-reads the layers — could drift
+/// from what Browse/Viewer resolved if a file changed on disk between the
+/// two reads.
+fn build_effectives_layers3(
+    layers: &Layers,
+    preset_name: &str,
+) -> Result<(Effective, Effective, Effective), KeymapError> {
     let preset = preset(preset_name);
     let mut kfs: Vec<KeymapFile> = vec![gui_supplement()];
     // La GUI no expone diagnósticos de "qué ficheros se cargaron" (a
@@ -438,9 +471,32 @@ fn build_effectives_layers(
         screen_commands(Screen::Viewer),
         Screen::Viewer,
     )?;
-    Ok((browse, viewer))
+    let dialog = Effective::build_for(
+        &preset,
+        &kfs,
+        screen_commands(Screen::Dialog),
+        Screen::Dialog,
+    )?;
+    Ok((browse, viewer, dialog))
 }
 
+/// [`build_effectives`] plus the `Dialog`-screen effective. See
+/// [`build_effectives_layers3`] for why this exists as a sibling rather than
+/// a change to [`build_effectives`]'s return type.
+///
+/// # Errors
+/// The first `KeymapError` from any layer.
+pub fn build_effectives3(
+    preset_name: &str,
+) -> Result<(Effective, Effective, Effective), KeymapError> {
+    build_effectives_layers3(&norte_config::standard_layers(), preset_name)
+}
+
+/// `#[cfg(test)]` since K3b: production's fallback is now
+/// [`build_effectives3_preset_only`] (the reference sheet needs `Dialog`
+/// too), so this two-screen sibling is a test helper — see
+/// [`build_effectives`] for the same shift on the non-fallback path.
+///
 /// Fallback: los dos `Effective` del preset `preset_name` + [`gui_supplement`],
 /// sin capas de usuario/proyecto (que es justo lo que se descarta cuando
 /// [`build_effectives`] falló). El supplemento SIGUE aplicando aquí: si no, una
@@ -472,6 +528,7 @@ fn build_effectives_layers(
 /// `serde_json/preserve_order` y contaminaría los goldens del core), así que el
 /// invariante solo lo comprueba `just gui-ci`. Quien añada un preset tiene que
 /// correrlo: el gate principal se quedaría verde con esta `expect` ya rota.
+#[cfg(test)]
 #[must_use]
 pub fn build_effectives_preset_only(preset_name: &str) -> (Effective, Effective) {
     // El nombre va en el mensaje: un crash que dice CUÁL preset es un
@@ -507,10 +564,27 @@ pub fn build_effectives_preset_only(preset_name: &str) -> (Effective, Effective)
 /// capa que ligue `1`-`9` es `DigitBoundWithCounts`, y una que tome `tab` es
 /// `SacredKey`. Un panic aquí sustituiría el banner de arranque por un crash,
 /// que es justo lo contrario de lo que esta función existe para hacer.
+///
+/// `#[cfg(test)]` since K3b, for the same reason [`build_effectives`] is:
+/// [`build_effectives_with3`] is production's version now.
+#[cfg(test)]
 pub fn build_effectives_with(
     preset_name: &str,
     layers: &[KeymapFile],
 ) -> Result<(Effective, Effective), KeymapError> {
+    let (browse, viewer, _dialog) = build_effectives_with3(preset_name, layers)?;
+    Ok((browse, viewer))
+}
+
+/// [`build_effectives_with`] plus the `Dialog`-screen effective — see
+/// [`build_effectives_layers3`] for why this is a sibling function.
+///
+/// # Errors
+/// The first [`KeymapError`] of any of the three screens.
+pub fn build_effectives_with3(
+    preset_name: &str,
+    layers: &[KeymapFile],
+) -> Result<(Effective, Effective, Effective), KeymapError> {
     let preset = preset(preset_name);
     let mut kfs = vec![gui_supplement()];
     kfs.extend_from_slice(layers);
@@ -526,7 +600,27 @@ pub fn build_effectives_with(
         screen_commands(Screen::Viewer),
         Screen::Viewer,
     )?;
-    Ok((browse, viewer))
+    let dialog = Effective::build_for(
+        &preset,
+        &kfs,
+        screen_commands(Screen::Dialog),
+        Screen::Dialog,
+    )?;
+    Ok((browse, viewer, dialog))
+}
+
+/// [`build_effectives_preset_only`] plus the `Dialog`-screen effective, for
+/// tests that need K3b's third section without a full config resolve — the
+/// same fallback [`build_effectives3`] takes when `standard_layers()` fails
+/// to load.
+///
+/// # Panics
+/// Never, for the same reason [`build_effectives_preset_only`] never does.
+#[must_use]
+pub fn build_effectives3_preset_only(preset_name: &str) -> (Effective, Effective, Effective) {
+    build_effectives_with3(preset_name, &[]).unwrap_or_else(|e| {
+        panic!("preset de fábrica {preset_name:?} + supplemento (constantes compiladas): {e}")
+    })
 }
 
 /// Adaptador: nombre de tecla GPUI (+mods +key_char) → `Chord` neutro. `None`
@@ -747,6 +841,26 @@ mod tests {
                 built.err()
             );
             let _ = build_effectives_preset_only(name);
+        }
+    }
+
+    /// [`build_effectives_preset_only_no_panica`]'s twin for the THREE-screen
+    /// builder K3b added: `todos_los_presets_construyen_las_tres_pantallas_de_la_gui`
+    /// already proves the bare preset (no `gui_supplement`) builds Dialog for
+    /// every bundled preset, but `build_effectives3_preset_only`'s `# Panics`
+    /// claims the SAME never-panics invariant WITH the supplement layered in
+    /// — a `prepend_keymap` entry is lower precedence, not lower risk, so it
+    /// deserves its own pin rather than borrowing the other test's proof.
+    #[test]
+    fn build_effectives3_preset_only_no_panica() {
+        for name in KNOWN_PRESETS.iter().copied().chain(["no-existe-este"]) {
+            let built = build_effectives_with3(name, &[]);
+            assert!(
+                built.is_ok(),
+                "preset {name} + supplemento debe construir en las tres pantallas: {:?}",
+                built.err()
+            );
+            let _ = build_effectives3_preset_only(name);
         }
     }
 

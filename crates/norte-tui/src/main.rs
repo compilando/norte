@@ -596,7 +596,7 @@ fn refuses_over_modal(lang: norte_help::Lang, context: &str, over_modal: bool) -
 fn open_contextual_help(
     app: &mut App,
     lang: norte_help::Lang,
-    help_lines: &[String],
+    help_lines: &[ratatui::text::Line<'static>],
     plugins: Option<&norte_proto::methods::PluginListResult>,
 ) {
     let context = norte_tui::help_context::help_context(app);
@@ -703,7 +703,11 @@ fn palette_help_target(app: &App, lang: norte_help::Lang) -> Option<&'static nor
 /// `over_modal` is `false` and not `app.modal.is_some()`: the palette's arm of
 /// the key chain only runs when no modal is on screen (`modal_wins`), so there
 /// is no modal for this help to have been opened over.
-fn palette_help(app: &mut App, lang: norte_help::Lang, help_lines: &[String]) {
+fn palette_help(
+    app: &mut App,
+    lang: norte_help::Lang,
+    help_lines: &[ratatui::text::Line<'static>],
+) {
     match palette_help_target(app, lang).map(|topic| topic.id.clone()) {
         Some(id) => {
             app.palette = None;
@@ -1517,7 +1521,7 @@ async fn run(
     resolver: &mut Resolver,
     viewer_resolver: &mut Resolver,
     dialog_resolver: &mut Resolver,
-    help_lines: &mut Vec<String>,
+    help_lines: &mut Vec<ratatui::text::Line<'static>>,
     // H3b: the NEGOTIATED language (`NORTE_LANG` > `[ui] lang` > environment,
     // the same value handed to `norte_i18n::force`). The help corpus is
     // per-locale, so the overlay must open on the locale the rest of the UI
@@ -4809,7 +4813,11 @@ mod settings_message_tests {
 /// looks exactly like one that does, and a key that appears to do nothing reads
 /// as a broken app. `over_modal` is `false`: this arm only runs with no modal on
 /// screen (`modal_wins`).
-fn extensions_help(app: &mut App, lang: norte_help::Lang, help_lines: &[String]) {
+fn extensions_help(
+    app: &mut App,
+    lang: norte_help::Lang,
+    help_lines: &[ratatui::text::Line<'static>],
+) {
     let Some(plugin) = app.extensions.as_ref().and_then(ExtensionManager::selected) else {
         return;
     };
@@ -4918,7 +4926,7 @@ async fn on_extensions_key(
     backend: &Backend,
     resolver: &mut Resolver,
     lang: norte_help::Lang,
-    help_lines: &[String],
+    help_lines: &[ratatui::text::Line<'static>],
     mods: KeyModifiers,
     code: KeyCode,
 ) {
@@ -5337,7 +5345,7 @@ async fn reload_config(
     resolver: &mut Resolver,
     viewer_resolver: &mut Resolver,
     dialog_resolver: &mut Resolver,
-    help_lines: &mut Vec<String>,
+    help_lines: &mut Vec<ratatui::text::Line<'static>>,
     // H3b: the negotiated language, so the rebuilt `TuiChords` answers in the
     // same locale it did at startup. Session-fixed (`norte_i18n::force` runs
     // once), so a `[ui] lang` edited in the file does NOT take effect here —
@@ -6111,7 +6119,7 @@ async fn on_dialog_key(
     mods: KeyModifiers,
     code: KeyCode,
     lang: norte_help::Lang,
-    help_lines: &[String],
+    help_lines: &[ratatui::text::Line<'static>],
 ) -> Cd {
     let Some(modal) = app.modal.clone() else {
         return Cd::Cancelled;
@@ -6758,7 +6766,7 @@ fn modal_help_toggle(
     app: &mut App,
     cmd: &str,
     lang: norte_help::Lang,
-    help_lines: &[String],
+    help_lines: &[ratatui::text::Line<'static>],
 ) -> bool {
     if cmd != "app.help" {
         return false;
@@ -7354,7 +7362,7 @@ async fn dispatch(
     app: &mut App,
     backend: &Backend,
     events: &mut EventStream,
-    help_lines: &[String],
+    help_lines: &[ratatui::text::Line<'static>],
     // H3b: the negotiated language `Command::AppHelp` opens the corpus in.
     // See the same parameter on `run`.
     lang: norte_i18n::Lang,

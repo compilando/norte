@@ -176,7 +176,7 @@ fn ningun_texto_hereda_el_frente_del_terminal_con_tema_de_fondo() {
         app.render_now_ms = Some(2);
         app.help = Some(norte_tui::app::HelpView::new(
             norte_i18n::Lang::En,
-            vec!["  f1             ayuda".to_owned()],
+            vec![ratatui::text::Line::raw("  f1             ayuda")],
         ));
         // H3b: el cuerpo se maqueta antes de pintar (lo hace el run loop);
         // sin esto el overlay pintaría solo su lateral y el barrido de

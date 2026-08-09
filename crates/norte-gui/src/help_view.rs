@@ -11,8 +11,11 @@
 use std::collections::{BTreeSet, HashMap};
 
 use norte_frontend::availability::Facts;
-use norte_frontend::keymap::{Effective, paint_chord};
+use norte_frontend::keymap::{Effective, Screen, paint_chord};
+use norte_frontend::keysheet::{self, SheetRow};
 use norte_help::{Availability, ChordResolver};
+
+use crate::help_render;
 
 /// The facts of a context with nothing in the way: what [`GuiChords`] answers
 /// against until the overlay opens and freezes the real ones.
@@ -270,8 +273,9 @@ impl ChordResolver for GuiChords {
 pub struct HelpView {
     /// Sidebar, body scroll, filter, history and focus — shared with the TUI.
     pub state: norte_frontend::help::HelpState,
-    /// Body of the synthetic keyboard page ([`keys_lines`]).
-    pub keys_lines: Vec<String>,
+    /// Body of the synthetic keyboard page ([`keys_lines`]) — already styled
+    /// (K3b: an unavailable row is dimmed there, not in `main.rs`'s painter).
+    pub keys_lines: Vec<help_render::HelpLine>,
     /// Plugin ids whose page has already been ASKED FOR in this overlay.
     ///
     /// `HelpState::plugin_needs_fetch` is a POLLING question, not an event: it
@@ -321,7 +325,7 @@ impl HelpView {
     /// this is the frontend that names the page. Resolving it once, at the
     /// seam, keeps the sidebar and the filter looking at the same string.
     #[must_use]
-    pub fn new(lang: norte_i18n::Lang, keys_lines: Vec<String>) -> Self {
+    pub fn new(lang: norte_i18n::Lang, keys_lines: Vec<help_render::HelpLine>) -> Self {
         Self {
             state: norte_frontend::help::HelpState::new(lang, norte_i18n::t("help-topic-keys")),
             keys_lines,
@@ -456,7 +460,7 @@ impl HelpView {
     /// That page is GENERATED from the effective keymaps rather than read from
     /// the corpus, so it goes stale on a rebind exactly like the chords do —
     /// and it is the one page whose entire content is keys.
-    pub fn set_keys_lines(&mut self, lines: Vec<String>) {
+    pub fn set_keys_lines(&mut self, lines: Vec<help_render::HelpLine>) {
         self.keys_lines = lines;
     }
 }
@@ -469,32 +473,82 @@ impl HelpView {
 /// shifts the label instead of pushing it off the pane.
 const CHORD_COLUMN: usize = 14;
 
-/// The body of the synthetic keyboard page: every binding of both screens with
-/// its catalogue description, in real precedence order (what the key DOES, not
-/// what the preset says).
+/// The body of the synthetic keyboard page: EVERY binding of the three
+/// screens — built or not, and (K3b) implemented by this frontend or not —
+/// with its catalogue label, in real precedence order (what the key DOES,
+/// not what the preset says).
 ///
-/// GENERATED, never a maintained list — rebinding changes the sheet. The GUI
-/// has no `Dialog` screen, so unlike the TUI's `help::build` there is no third
-/// section.
+/// A renderer over [`keysheet::sheet`]'s rows: padding and dimming are this
+/// function's job, the DATA — which keys exist and which of them this build
+/// can run — is the sheet's. GENERATED, never a maintained list — rebinding
+/// changes the sheet.
+///
+/// `dialog` is new (K3b): this GUI dispatches no dialog verb through a
+/// resolver — its overlays resolve fixed keys in code, see
+/// [`GuiChords::chord`]'s rustdoc — so production never built a `Dialog`
+/// effective before, and the reference sheet was missing the section the
+/// TUI's has always had. `main.rs` builds it once, alongside `browse`/
+/// `viewer`, via `keymap::build_effectives3`/`dialog_effective`.
 #[must_use]
-pub fn keys_lines(browse: &Effective, viewer: &Effective) -> Vec<String> {
+pub fn keys_lines(
+    browse: &Effective,
+    viewer: &Effective,
+    dialog: &Effective,
+) -> Vec<help_render::HelpLine> {
+    let lang = norte_i18n::active();
+    let rows = keysheet::sheet(&[
+        (Screen::Browse, browse.clone()),
+        (Screen::Viewer, viewer.clone()),
+        (Screen::Dialog, dialog.clone()),
+    ]);
     let mut out = Vec::new();
-    for (title, eff) in [
-        (norte_i18n::t("help-section-browse"), browse),
-        (norte_i18n::t("help-section-viewer"), viewer),
+    for (screen, title_id) in [
+        (Screen::Browse, "help-section-browse"),
+        (Screen::Viewer, "help-section-viewer"),
+        (Screen::Dialog, "help-section-dialog"),
     ] {
-        out.push(String::new());
-        out.push(format!("── {title} ──"));
-        for (seq, cmd) in eff.bindings() {
-            let seq = paint_chord(&seq);
-            let pad = " ".repeat(CHORD_COLUMN.saturating_sub(seq.chars().count()));
-            out.push(format!(
-                "  {seq}{pad} {}",
-                norte_i18n::t(&crate::keymap::help_id(cmd))
+        out.push(help_render::HelpLine::mono_text(String::new(), false));
+        out.push(help_render::HelpLine::mono_text(
+            format!("── {} ──", norte_i18n::t_in(lang, title_id)),
+            false,
+        ));
+        if screen == Screen::Dialog {
+            // #113's note, kept: each overlay supports its own SUBSET of
+            // these verbs, and a flat list without it reads as a promise.
+            out.push(help_render::HelpLine::mono_text(
+                format!("  {}", norte_i18n::t_in(lang, "help-dialog-note")),
+                false,
             ));
+        }
+        for row in rows.iter().filter(|r| r.screen == screen) {
+            out.push(sheet_row_line(row, lang));
         }
     }
     out
+}
+
+/// One row of the generated keys page: the painted chord in its padded
+/// column, the catalogue label, then — when this build cannot run it — the
+/// short reason, and the whole line dimmed.
+///
+/// [`norte_frontend::whichkey::command_label`] and not
+/// `crate::keymap::help_id` + `norte_i18n::t`: it is the SAME router the
+/// which-key panel uses, and it falls back to the command NAME rather than
+/// echoing a Fluent id — the common case for a `NotBuilt` command, since
+/// nothing has written help text for one that does not exist.
+fn sheet_row_line(row: &SheetRow, lang: norte_i18n::Lang) -> help_render::HelpLine {
+    let pad = " ".repeat(CHORD_COLUMN.saturating_sub(row.chord.chars().count()));
+    let label = norte_frontend::whichkey::command_label(&row.command, lang);
+    let reason = norte_frontend::keymap::short_unavailable_message(row.avail, lang);
+    let text = if reason.is_empty() {
+        format!("  {}{pad} {label}", row.chord)
+    } else {
+        format!("  {}{pad} {label} — {reason}", row.chord)
+    };
+    help_render::HelpLine::mono_text(
+        text,
+        row.avail != norte_frontend::keymap::Availability::Here,
+    )
 }
 
 /// What the caller (`main.rs`) must do after a key.
@@ -685,6 +739,13 @@ mod tests {
 
     fn effectives() -> (Effective, Effective) {
         crate::keymap::build_effectives_preset_only("orthodox")
+    }
+
+    /// [`effectives`] plus the `Dialog`-screen effective (K3b) — only
+    /// [`keys_lines`]'s own tests need the third screen; every other test in
+    /// this module keeps using the two-screen helper untouched.
+    fn effectives3() -> (Effective, Effective, Effective) {
+        crate::keymap::build_effectives3_preset_only("orthodox")
     }
 
     /// Un keymap con `app.help` en un chord MÁS, para la mitad del
@@ -1138,13 +1199,32 @@ mod tests {
         );
     }
 
+    /// Flattens a [`help_render::HelpLine`]'s spans into its painted text —
+    /// the GUI twin of `help_render`'s own `flatten` test helper (TUI), which
+    /// this module has no access to.
+    fn flatten_line(line: &help_render::HelpLine) -> String {
+        line.spans.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    fn flatten(lines: &[help_render::HelpLine]) -> String {
+        lines
+            .iter()
+            .map(flatten_line)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
-    fn keys_lines_cubre_ambas_pantallas_y_traduce_cada_binding() {
-        let (browse, viewer) = effectives();
-        let lines = keys_lines(&browse, &viewer);
-        let joined = lines.join("\n");
+    fn keys_lines_cubre_las_tres_pantallas_y_traduce_cada_binding() {
+        let (browse, viewer, dialog) = effectives3();
+        let lines = keys_lines(&browse, &viewer, &dialog);
+        let joined = flatten(&lines);
         assert!(joined.contains(&norte_i18n::t("help-section-browse")));
         assert!(joined.contains(&norte_i18n::t("help-section-viewer")));
+        // K3b: the section this GUI never had before — production built no
+        // `Dialog` effective at all, so this sheet was two lists, not three.
+        assert!(joined.contains(&norte_i18n::t("help-section-dialog")));
+        assert!(joined.contains(&norte_i18n::t("help-dialog-note")));
         // A real binding, spelled the way the documentation spells it.
         assert!(joined.contains("F5"), "no browse chord: {joined}");
         // Nothing paints a bare Fluent id at the reader.
@@ -1152,6 +1232,64 @@ mod tests {
             !joined.contains("help-cmd-"),
             "untranslated id in the sheet: {joined}"
         );
+    }
+
+    /// The keyboard page and `keysheet::sheet` cannot drift apart on ROW
+    /// COUNT: every sheet row must land on exactly one generated line, or a
+    /// binding could go missing (or be doubled) between the shared builder
+    /// and this renderer without either surface's own tests catching it.
+    #[test]
+    fn cada_fila_del_sheet_es_exactamente_una_linea_generada() {
+        let (browse, viewer, dialog) = effectives3();
+        let rows = keysheet::sheet(&[
+            (Screen::Browse, browse.clone()),
+            (Screen::Viewer, viewer.clone()),
+            (Screen::Dialog, dialog.clone()),
+        ]);
+        let lines = keys_lines(&browse, &viewer, &dialog);
+        // The non-row scaffolding is FIXED and counted, rather than filtered
+        // out by a text pattern — the dialog note (`"  {note}"`) starts with
+        // the same two-space indent a row does, so a prefix filter cannot
+        // tell them apart. Per screen: one blank separator, one `── … ──`
+        // header; Dialog also gets the note line.
+        let scaffolding = 3 * 2 + 1;
+        assert_eq!(
+            lines.len() - scaffolding,
+            rows.len(),
+            "a generated line per sheet row, no more, no fewer: {} lines, \
+             {scaffolding} of them scaffolding, {} sheet rows",
+            lines.len(),
+            rows.len()
+        );
+    }
+
+    /// K3b: an unavailable row (K2b binds ~30 commands norte has not built)
+    /// is DIMMED and carries its reason — never silently dropped, and never
+    /// painted as if the key worked.
+    #[test]
+    fn una_fila_no_construida_sale_atenuada_y_con_su_razon() {
+        let (browse, viewer, dialog) = effectives3();
+        let lines = keys_lines(&browse, &viewer, &dialog);
+        let rows = keysheet::sheet(&[
+            (Screen::Browse, browse),
+            (Screen::Viewer, viewer),
+            (Screen::Dialog, dialog),
+        ]);
+        assert!(
+            rows.iter()
+                .any(|r| r.avail != norte_frontend::keymap::Availability::Here),
+            "orthodox + the GUI's subset must carry at least one unavailable \
+             row for this test to mean anything"
+        );
+        let dimmed: Vec<&help_render::HelpLine> = lines.iter().filter(|l| l.dim).collect();
+        assert!(!dimmed.is_empty(), "no row came out dimmed");
+        for line in &dimmed {
+            let text = flatten_line(line);
+            assert!(
+                text.contains('—'),
+                "a dimmed row must carry its reason: {text:?}"
+            );
+        }
     }
 
     fn chords() -> GuiChords {
