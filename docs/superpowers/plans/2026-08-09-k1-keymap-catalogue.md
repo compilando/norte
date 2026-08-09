@@ -1135,13 +1135,59 @@ just t norte-frontend 2>&1 | tail -10
 
 Expected: PASS.
 
-- [ ] **Step 5: Add the two Fluent messages**
+- [ ] **Step 5a: The catalogue's `reason` becomes a Fluent id**
+
+Task 3's implementer caught this: `Status::Planned { reason }` holds English
+prose (`"volume enumeration"`), and Step 5b is about to interpolate it into a
+Spanish sentence. The convention is that user-facing strings go through Fluent,
+so the catalogue holds an **id**, not prose — that also keeps `norte-frontend`'s
+catalogue free of any locale.
+
+In `crates/norte-frontend/src/keymap/catalogue.rs`, change the field's rustdoc
+and the one entry:
+
+```rust
+    /// Fluent id of the short, user-facing reason — NOT the prose itself. The
+    /// catalogue must not carry a locale; the frontend translates it when it
+    /// prints the message.
+    reason: &'static str,
+```
+
+```rust
+    planned("pane.select-drive", "keymap-reason-volume-enumeration", 131),
+```
+
+Add a test next to the others in `catalogue.rs` pinning that the id resolves in
+both locales, so a `Planned` entry can never ship a reason nobody translated:
+
+```rust
+    /// A reason id with no Fluent message renders as the raw id — an unbuilt
+    /// key would then explain itself with `keymap-reason-...`, which is worse
+    /// than saying nothing. Pin both locales.
+    #[test]
+    fn todo_motivo_planned_esta_traducido_en_ambos_locales() {
+        for d in CATALOGUE {
+            if let Status::Planned { reason, .. } = d.status {
+                for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+                    let s = norte_i18n::t_in(lang, reason);
+                    assert_ne!(s, reason, "{} sin traducir en {lang:?}", d.name);
+                }
+            }
+        }
+    }
+```
+
+Check `norte_i18n`'s actual `Lang` variant names before writing this — use what
+the crate exports, not what I guessed.
+
+- [ ] **Step 5b: Add the Fluent messages**
 
 Append to `crates/norte-i18n/i18n/en.ftl`:
 
 ```
 keymap-unavailable-not-built = { $command }: not built yet ({ $reason }, issue #{ $issue })
 keymap-unavailable-not-here = { $command }: not available in this interface
+keymap-reason-volume-enumeration = volume enumeration
 ```
 
 Append to `crates/norte-i18n/i18n/es.ftl`:
@@ -1149,6 +1195,7 @@ Append to `crates/norte-i18n/i18n/es.ftl`:
 ```
 keymap-unavailable-not-built = { $command }: aún no está construido ({ $reason }, issue #{ $issue })
 keymap-unavailable-not-here = { $command }: no está disponible en esta interfaz
+keymap-reason-volume-enumeration = enumeración de volúmenes
 ```
 
 - [ ] **Step 6: Verify the locale parity test still passes**
@@ -1171,11 +1218,14 @@ In `crates/norte-frontend/src/keymap/mod.rs`, after the re-exports:
 pub fn unavailable_message(command: &str, why: Availability) -> String {
     match why {
         Availability::Here => String::new(),
+        // `reason` is a Fluent ID, not prose (see the catalogue): translate it
+        // first, then interpolate. Interpolating the id would print English
+        // inside a Spanish sentence.
         Availability::NotBuilt { reason, issue } => norte_i18n::ta(
             "keymap-unavailable-not-built",
             &[
                 ("command", command),
-                ("reason", reason),
+                ("reason", &norte_i18n::t(reason)),
                 ("issue", &issue.to_string()),
             ],
         ),
@@ -1196,13 +1246,14 @@ fn el_mensaje_de_no_disponible_nombra_el_comando_y_el_motivo() {
     let m = unavailable_message(
         "pane.select-drive",
         Availability::NotBuilt {
-            reason: "volume enumeration",
+            reason: "keymap-reason-volume-enumeration",
             issue: 131,
         },
     );
     assert!(m.contains("pane.select-drive"), "{m}");
-    assert!(m.contains("volume enumeration"), "{m}");
     assert!(m.contains("131"), "{m}");
+    // The ID must have been TRANSLATED, not interpolated raw.
+    assert!(!m.contains("keymap-reason-"), "{m}");
 
     let m = unavailable_message("pane.hotlist", Availability::NotHere);
     assert!(m.contains("pane.hotlist"), "{m}");
