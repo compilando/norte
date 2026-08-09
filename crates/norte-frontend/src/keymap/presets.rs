@@ -58,4 +58,19 @@ mod presets_catalog_tests {
     fn names_tiene_los_tres_presets_de_fabrica() {
         assert_eq!(NAMES.len(), 3);
     }
+
+    /// Un preset embebido que no parsea no es un fallo ruidoso: los
+    /// consumidores lo ignoran en silencio. `preset_commands` hace
+    /// `let Ok(kf) = parse_keymap(src) else { continue }`, así que un typo en
+    /// —por ejemplo— el `dialog_from` de un preset de K2b encogería el
+    /// vocabulario que `norte doctor` y `ntc keys` tratan por conocido, y el
+    /// síntoma serían avisos de «comando desconocido» en otro sitio. Que
+    /// falle aquí, con el nombre del preset y el diagnóstico.
+    #[test]
+    fn todos_los_presets_de_fabrica_parsean() {
+        for name in NAMES {
+            let src = source(name).expect("NAMES resuelve");
+            crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {name}: {e}"));
+        }
+    }
 }

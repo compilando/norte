@@ -157,7 +157,53 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("dialog.back", false),
     live("dialog.filter", false),
     // --- planned: named by a preset, not built yet ---
+    //
+    // K2b imports four foreign keymaps (Total Commander, Krusader, Norton,
+    // Far), and every one of them binds keys norte has not built. The choice
+    // is between binding them HONESTLY — the key exists, says what it would
+    // do and names the issue — and leaving them unbound, where the user
+    // presses F4 and gets silence. Twenty-eight entries in ten families
+    // (nine of them new: `pane.select-drive` was already here and its family
+    // just grows two siblings). Each family is one capability and one issue;
+    // `planned()` forces `counts: false`, which is right for all of them —
+    // none is a clamped in-memory mover (ADR 0044).
     planned("pane.select-drive", "keymap-reason-volume-enumeration", 131),
+    planned(
+        "pane.select-drive-left",
+        "keymap-reason-volume-enumeration",
+        131,
+    ),
+    planned(
+        "pane.select-drive-right",
+        "keymap-reason-volume-enumeration",
+        131,
+    ),
+    planned("pane.pack", "keymap-reason-archive-write", 132),
+    planned("pane.unpack", "keymap-reason-archive-write", 132),
+    planned("pane.test-archive", "keymap-reason-archive-write", 132),
+    planned("pane.split-file", "keymap-reason-archive-write", 132),
+    planned("pane.combine-files", "keymap-reason-archive-write", 132),
+    planned("pane.edit", "keymap-reason-editor", 133),
+    planned("pane.edit-new", "keymap-reason-editor", 133),
+    planned("pane.compare-dirs", "keymap-reason-compare-sync", 134),
+    planned("pane.sync-dirs", "keymap-reason-compare-sync", 134),
+    planned("app.terminal", "keymap-reason-shell", 135),
+    planned("app.toggle-panels", "keymap-reason-shell", 135),
+    planned("pane.command-line", "keymap-reason-shell", 135),
+    planned("pane.tree", "keymap-reason-tree", 136),
+    planned("pane.tab-new", "keymap-reason-tabs", 137),
+    planned("pane.tab-close", "keymap-reason-tabs", 137),
+    planned("pane.tab-next", "keymap-reason-tabs", 137),
+    planned("pane.tab-prev", "keymap-reason-tabs", 137),
+    planned("pane.sort-name", "keymap-reason-sort", 138),
+    planned("pane.sort-ext", "keymap-reason-sort", 138),
+    planned("pane.sort-size", "keymap-reason-sort", 138),
+    planned("pane.sort-time", "keymap-reason-sort", 138),
+    planned("pane.sort-menu", "keymap-reason-sort", 138),
+    planned("pane.properties", "keymap-reason-properties", 139),
+    planned("pane.dir-size", "keymap-reason-properties", 139),
+    planned("pane.connect", "keymap-reason-connections", 140),
+    planned("pane.disconnect", "keymap-reason-connections", 140),
 ];
 
 /// The entry for `name`, or `None` if the vocabulary has never heard of it —
@@ -258,6 +304,28 @@ mod tests {
             ],
             "un comando ganó o perdió `counts`: ver ADR 0044 antes de tocar esta lista"
         );
+    }
+
+    /// A reason id is the name of ONE capability, so it must name ONE issue.
+    /// K2b adds twenty-six Planned entries in nine families, transcribed by
+    /// hand: a family whose issue number drifts on one line would send a user
+    /// to the wrong tracker and nothing else would notice.
+    #[test]
+    fn cada_motivo_apunta_a_un_solo_issue() {
+        let mut vistos: Vec<(&str, u32)> = Vec::new();
+        for d in CATALOGUE {
+            if let Status::Planned { reason, issue } = d.status {
+                if let Some(&(_, otro)) = vistos.iter().find(|(r, _)| *r == reason) {
+                    assert_eq!(
+                        otro, issue,
+                        "{reason} apunta a #{otro} y a #{issue} ({})",
+                        d.name
+                    );
+                } else {
+                    vistos.push((reason, issue));
+                }
+            }
+        }
     }
 
     #[test]

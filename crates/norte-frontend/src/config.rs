@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use norte_config::schema::read_optional;
 use norte_config::{CommonConfig, ConfigError, Layer, Layers, QuickSearch};
 
-use crate::keymap::{KeymapFile, parse_keymap};
+use crate::keymap::{KeymapFile, parse_keymap_layer};
 use crate::nav;
 use crate::openers::OpenersConfig;
 
@@ -37,7 +37,8 @@ pub struct FrontendConfig {
 /// keymap layers without going through this module's combined `load`.
 ///
 /// # Errors
-/// [`ConfigError::Toml`] if it doesn't parse or a layer uses `keymap`.
+/// [`ConfigError::Toml`] if it doesn't parse, or a layer uses `keymap` or
+/// `dialog_from` (both are preset-only keys).
 pub fn load_keymap_layer(
     dir: &Path,
     kind: Layer,
@@ -47,7 +48,13 @@ pub fn load_keymap_layer(
     let Some(raw) = read_optional(&keymap)? else {
         return Ok(None);
     };
-    let mut parsed = parse_keymap(&raw).map_err(|e| ConfigError::Toml {
+    // `parse_keymap_layer`, not `parse_keymap`: a layer may not inherit a
+    // `[dialog]` (ADR 0045), and refusing the key BEFORE resolving it is what
+    // makes the error name `dialog_from` instead of the `keymap` list the
+    // resolution would have copied in — `has_full_keymap` below reads
+    // `dialog.keymap` and would otherwise fire first, on a key the user never
+    // wrote.
+    let mut parsed = parse_keymap_layer(&raw).map_err(|e| ConfigError::Toml {
         path: keymap.clone(),
         message: e.to_string(),
     })?;
@@ -161,6 +168,32 @@ mod tests {
                 .program(),
             "bat",
             "el opener de proyecto se ignora fail-closed"
+        );
+    }
+
+    /// `dialog_from` es clave de PRESET (ADR 0045). Una capa que la use tiene
+    /// que enterarse por su nombre: si la capa se parsease con `parse_keymap`,
+    /// la herencia se resolvería ANTES del chequeo de `has_full_keymap`, que
+    /// mira `dialog.keymap` — y el usuario recibiría un error sobre `keymap`,
+    /// una clave que no escribió. Este test es la única red que hay a la
+    /// altura del cargador; `check_layer_keys` se prueba aparte y no ve esto.
+    #[test]
+    fn una_capa_con_dialog_from_falla_nombrando_dialog_from() {
+        let usuario = tempfile::tempdir().unwrap();
+        std::fs::write(
+            usuario.path().join("keymap.toml"),
+            "dialog_from = \"orthodox\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![(usuario.path().to_path_buf(), Layer::User)],
+        };
+        let e = load(&layers).expect_err("una capa no puede heredar [dialog]");
+        let msg = e.to_string();
+        assert!(msg.contains("dialog_from"), "{msg}");
+        assert!(
+            !msg.contains("prepend_keymap"),
+            "el diagnóstico habla de la clave equivocada: {msg}"
         );
     }
 

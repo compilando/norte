@@ -22,7 +22,7 @@ mod resolve;
 pub use catalogue::{CATALOGUE, CommandDef, Status};
 pub use chord::{Chord, KeyCode, ModKey, Mods, mod_key, paint_chord, parse_chord, set_mod_key};
 pub use effective::{Availability, Effective, valid_lua_name};
-pub use layer::{KeymapFile, Screen, parse_keymap};
+pub use layer::{KeymapFile, Screen, parse_keymap, parse_keymap_layer};
 pub use resolve::{Count, Resolution, Resolver};
 
 use layer::RawSection;
@@ -70,6 +70,38 @@ pub enum KeymapError {
         layer: &'static str,
         /// La clave que sobra.
         key: &'static str,
+    },
+    /// `dialog_from` y una sección `[dialog]` propia a la vez (K2b): dos
+    /// respuestas a la misma pregunta, y elegir una en silencio dejaría al
+    /// usuario con un contexto de overlays que no escribió.
+    #[error("dialog_from = {name:?} junto a un [dialog] {list} propio: elige una de las dos")]
+    DialogFromAndDialog {
+        /// El preset que se pretendía heredar.
+        name: String,
+        /// Cuál de las tres listas de la sección lo desencadenó — sin esto el
+        /// mensaje manda a buscar un `keymap` que quizá no existe.
+        list: &'static str,
+    },
+    /// `dialog_from` nombra algo que no es un preset de fábrica (typo, o un
+    /// preset de otra versión).
+    #[error("dialog_from = {name:?}: no hay ningún preset de fábrica con ese nombre ({known})")]
+    UnknownDialogFrom {
+        /// El nombre que no resuelve.
+        name: String,
+        /// Los que sí, separados por comas (viene de `presets::NAMES`).
+        known: String,
+    },
+    /// El preset heredado hereda a su vez: la herencia es de UN nivel, sin
+    /// cadenas — si no, el `[dialog]` efectivo depende de un salto que no se
+    /// ve leyendo el fichero.
+    #[error(
+        "dialog_from = {name:?}, pero ese preset hereda a su vez de {then:?}: la herencia de [dialog] es de un solo nivel"
+    )]
+    DialogFromChain {
+        /// El preset nombrado por el fichero que se está cargando.
+        name: String,
+        /// A quién hereda ESE, que es lo que cierra la cadena.
+        then: String,
     },
     /// `esc` dentro de una secuencia multi-tecla: inalcanzable, porque
     /// `Esc` SIEMPRE cancela un pendiente (solo vale como binding suelto).

@@ -52,12 +52,19 @@
   "properties": {
     "counts": {
       "default": false,
-      "description": "Whether a numeric prefix multiplies the next command (`5j`). Opt-in per\nPRESET: `vim` and `far` set it because their originals have counts;\n`orthodox`, `cua`, Total Commander, Krusader and Norton do not, and\nturning it on there would steal their digit keys.",
+      "description": "Whether a numeric prefix multiplies the next command (`5j`). Opt-in per\nPRESET, and `vim` is the only bundled preset that takes the option up:\nvi's counts are the reason vi is imitated at all. Every other original\nspends its digits elsewhere and would have them stolen — `orthodox`,\n`cua`, Total Commander, Krusader and Norton plainly, and Far too: Far\nhas no numeric prefix, it binds `Ctrl+1`..`Ctrl+0` to panel view modes.",
       "type": "boolean"
     },
     "dialog": {
       "$ref": "#/$defs/RawSection",
       "description": "Contexto `dialog` (H1, issue #24): teclas de modales/overlays\n(confirmación, aprobación, popups de navegación…) como keymap de\ndatos en vez de handlers ad hoc — la ayuda generada nunca puede\ndesincronizarse de un rebind. Se fusiona con `global` igual que\n`pane`/`viewer` (ver [`Screen::Dialog`])."
+    },
+    "dialog_from": {
+      "description": "The preset whose `[dialog]` section this one adopts. norte's dialogs are\nnorte's, not the imitated program's: a Total Commander user expects TC's\npanel keys, not a TC confirmation dialog that TC never had. Only legal in\na PRESET (a user layer that set it would silently redefine every overlay\nkey — the same reason `counts` is refused there), only one level deep, and\nonly naming a bundled preset. Declaring it together with a `[dialog]`\nsection of your own is an error rather than a precedence puzzle.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "global": {
       "$ref": "#/$defs/RawSection"
