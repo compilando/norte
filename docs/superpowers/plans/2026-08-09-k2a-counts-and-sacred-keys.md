@@ -808,10 +808,25 @@ fn el_mensaje_de_contador_ignorado_nombra_comando_y_numero() {
 Give it a doctest (the crate warns on missing docs and its public items carry
 them) and verify with `cargo test --doc -p norte-frontend`.
 
+**What Task 1 already did here.** `just t <crate>` compiles the whole workspace
+and filters at run time, so leaving `norte-tui` uncompilable would have stopped
+Task 1 running its own tests. Task 1 therefore made the TUI's nine sites
+compile against the struct variant, mechanically and with no count semantics:
+`command` bound, count dropped, `Counting(_)` folded into the six overlay
+or-patterns that already reset and ignore, and the main loop's `Counting` arm
+left empty with a comment naming this task. `norte-gui` is untouched and still
+does not compile — its sites are `main.rs:3681`, `main.rs:3742`, and test
+expressions in `keymap.rs` at 571, 577, 582, 627, 690, 713, 736, 759, 886, 891
+and 936. It uses fully-qualified paths, so it wants
+`norte_frontend::keymap::Count`.
+
+**So your job in the TUI is the behaviour, not the pattern surgery:** the
+repeat loop, the `Ignored` message, and the status bar.
+
 - [ ] **Step 3: The TUI main loop**
 
-At the main-loop site in `crates/norte-tui/src/main.rs`, replace the
-`Resolution::Run(cmd)` arm. The repeat wraps only the fixed-command path:
+At the main-loop site in `crates/norte-tui/src/main.rs`, fill in the
+`Resolution::Run { command, count }` arm. The repeat wraps only the fixed-command path:
 `lua:` commands are never `Count::Repeat` (they are not in the catalogue), so
 the Lua branch is unchanged and runs once.
 
@@ -1093,6 +1108,13 @@ What it must record:
 - **Resolution is still timing-free.** A count terminates on the first
   non-digit; there is no timeout anywhere, which is what ADR 0006 bought and
   this must not spend.
+- **What repeating buys, and what it does not.** Task 1 found this while
+  writing the tests: vim's `12gg` means "go to line 12", and repeating the
+  dispatch twelve times cannot produce it — twelve "go to the top" is still the
+  top. The catalogue is right to declare `cursor.top` as `counts: false`, and a
+  count over it is honestly `Ignored`. A real `12gg` needs a new command that
+  takes a line number (`cursor.goto-line`), not a flag flip. Say so, so that
+  K2b does not try to buy it with `counts = true`.
 
 It extends ADR 0006 and ADR 0043; say which parts.
 
