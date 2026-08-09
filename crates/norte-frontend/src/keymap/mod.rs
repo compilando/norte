@@ -2180,6 +2180,22 @@ keymap = [ { on = ["tab"], run = "cursor.down" } ]
         assert!(matches!(e, KeymapError::SacredKey { .. }), "{e:?}");
     }
 
+    /// Tab may not OPEN a sequence either. A preset that binds `["tab","j"]`
+    /// and no bare `tab` would leave Tab sitting pending, which loses pane
+    /// switching just as completely as rebinding it (specification §12).
+    #[test]
+    fn tab_tampoco_puede_abrir_una_secuencia() {
+        let preset = parse_keymap(
+            r#"
+[pane]
+keymap = [ { on = ["tab", "j"], run = "cursor.down" } ]
+"#,
+        )
+        .unwrap();
+        let e = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse).unwrap_err();
+        assert!(matches!(e, KeymapError::SacredKey { .. }), "{e:?}");
+    }
+
     /// The prohibition is on the BROWSE screen only. Every bundled preset
     /// binds `tab` to `dialog.pane` inside `[dialog]`, and that is not pane
     /// switching — blanket-banning the key would break the dialogs we ship.

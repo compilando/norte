@@ -187,6 +187,11 @@ const SACRED_BROWSE: &[(KeyCode, &str)] = &[(KeyCode::Tab, "pane.switch")];
 /// a finger slips. Runs over EVERY binding, available or not, for the same
 /// reason [`check_prefix_free`] does — the shape of the map is a load-time
 /// property. Returns the first offender; shared by both builders.
+///
+/// The rule is about the FIRST chord, not the whole sequence (ADR 0044):
+/// binding `["tab", "j"]` and no bare `tab` would leave Tab sitting pending,
+/// which loses pane switching just as completely as rebinding it. The single
+/// legal shape is the reserved chord bound, alone, to its reserved command.
 fn check_sacred(bindings: &[Binding], screen: Screen) -> Result<(), KeymapError> {
     if screen != Screen::Browse {
         return Ok(());
@@ -194,7 +199,9 @@ fn check_sacred(bindings: &[Binding], screen: Screen) -> Result<(), KeymapError>
     for (code, reserved_for) in SACRED_BROWSE {
         let sacred = Chord::new(Mods::default(), *code);
         for b in bindings {
-            if b.seq.as_slice() == [sacred] && b.run != *reserved_for {
+            let starts_sacred = b.seq.first() == Some(&sacred);
+            let is_the_reserved_binding = b.seq.as_slice() == [sacred] && b.run == *reserved_for;
+            if starts_sacred && !is_the_reserved_binding {
                 return Err(KeymapError::SacredKey {
                     chord: sacred.to_string(),
                     reserved_for,
