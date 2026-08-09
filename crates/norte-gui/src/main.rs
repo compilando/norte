@@ -8717,7 +8717,19 @@ fn keymap_error_detail(e: &norte_frontend::keymap::KeymapError) -> String {
         } => {
             format!("{} / {}", banner_safe(a), banner_safe(b))
         }
-        KeymapError::WrongLayerKey { .. } => banner_safe(&e.to_string()),
+        // `dialog_from` is refused outright in a user/project layer
+        // (`parse_keymap_layer` → `WrongLayerKey`, before it is ever
+        // resolved), so these three can only fire while resolving a
+        // FACTORY preset's own `dialog_from` — a build-time bug in a
+        // bundled `.toml`, never end-user content from `./.norte`. Same
+        // footing as `WrongLayerKey`: no untrusted payload, full `Display`
+        // is fine as-is (K2b Task 2, `just gui-ci` first compiled this
+        // arm — Task 1 verified with `just t norte-frontend`/`just c`
+        // only, which do not build `norte-gui`).
+        KeymapError::WrongLayerKey { .. }
+        | KeymapError::DialogFromAndDialog { .. }
+        | KeymapError::UnknownDialogFrom { .. }
+        | KeymapError::DialogFromChain { .. } => banner_safe(&e.to_string()),
     }
 }
 
@@ -10416,7 +10428,7 @@ mod tests {
     /// el mensaje (accionable, no un aviso mudo).
     #[test]
     fn preset_desconocido_avisa() {
-        for name in ["orthodox", "vim", "cua"] {
+        for &name in keymap::KNOWN_PRESETS {
             assert!(
                 unknown_preset_banner(name).is_none(),
                 "preset de fábrica {name:?}: no debe avisar"

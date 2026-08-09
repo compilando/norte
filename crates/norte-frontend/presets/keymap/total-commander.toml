@@ -1,0 +1,116 @@
+# Total Commander 11.58 — transcribed 2026-08-09 from tc-11.58-KEYBOARD.TXT
+# (the installer's own KEYBOARD.TXT).
+#
+# Divergences from the original: panel cursor movement (arrows, PgUp/PgDn,
+# Home/End) is not itemized in the source — it is the Windows default and the
+# file only documents what TC adds on top of it — so it is bound the same way
+# orthodox binds it. TC's own Lister (F3) has no documented key list either
+# (this file is the *outer* program's shortcuts); its close/movement keys
+# mirror the same minimal convention. No bare letter is ever bound: TC
+# redirects an unbound letter straight to the command line (see the source's
+# own "Letter -> Redirected to command line" line), so binding one here would
+# steal a keystroke TC gives to something else.
+#
+# Omitted families (norte has no concept): the menu bar (F9, F10 non-Alt+F4,
+# Shift+F10); button bars and breadcrumb bars (Alt+F11/F12, Alt+Shift+F11/12);
+# window minimize (Shift+Esc); clipboard file/text ops (Ctrl+C/X/V, and the
+# same inside the command line); the alternate/Lister viewer variants
+# (Alt+F3, Alt+Shift+F3, Alt+Shift+F7 "find in separate process"); in-place
+# copy/rename and shortcut-creation variants (Shift+F5, Shift+Ctrl+F5,
+# Shift+F7); panel view-mode switches (Ctrl+F1/F2/F7/F10/F11/F12,
+# Ctrl+Shift+F1/F2/F8, "Unsorted"); the directory-tree popup dialog
+# (Alt+F10, a second presentation of the same tree Ctrl+F8 already opens);
+# command-line history and in-line editing (Alt+F8, and the whole
+# "Command Line: Keys" section — history, cut/copy/paste, word-delete);
+# file comments (Ctrl+Z); directory-branch flattening (Ctrl+B,
+# Ctrl+Shift+B); the open-tabs list menu (Ctrl+Shift+A); the Multi-Rename
+# Tool (Ctrl+M, a batch feature with no single-file analogue); FTP
+# transfer-mode and new-connection dialogs (Ctrl+Shift+M, Ctrl+N — Ctrl+F
+# already covers connect); printing (Ctrl+F9); extension-based and
+# files-vs-folders selection nuances (Alt+NUM+/-, Shift+NUM+/-/*,
+# Ctrl+Shift+NUM+/-, NUM/ "restore selection"); jumping to the filesystem
+# root (Ctrl+< / Ctrl+\, no such concept exists); target-window navigation
+# (Ctrl+Left/Right); per-letter quicksearch (AltGr+Letter / Ctrl+Alt+Letter
+# — not one chord, cannot be expressed).
+
+dialog_from = "orthodox"
+
+[global]
+keymap = [
+    { on = ["tab"], run = "pane.switch" },
+    { on = ["f1"], run = "app.help" },
+    { on = ["alt+f4"], run = "app.quit" },
+]
+
+[pane]
+keymap = [
+    { on = ["up"], run = "cursor.up" },
+    { on = ["down"], run = "cursor.down" },
+    { on = ["pgup"], run = "cursor.page-up" },
+    { on = ["pgdn"], run = "cursor.page-down" },
+    { on = ["home"], run = "cursor.top" },
+    { on = ["end"], run = "cursor.bottom" },
+    { on = ["enter"], run = "nav.enter" },
+    { on = ["ctrl+pgdn"], run = "nav.enter" },
+    { on = ["backspace"], run = "nav.parent" },
+    { on = ["ctrl+pgup"], run = "nav.parent" },
+    { on = ["alt+left"], run = "nav.back" },
+    { on = ["alt+right"], run = "nav.forward" },
+    { on = ["ctrl+i"], run = "pane.pull" },
+    { on = ["f3"], run = "pane.view" },
+    { on = ["f4"], run = "pane.edit" },
+    { on = ["f5"], run = "pane.copy" },
+    { on = ["f6"], run = "pane.move" },
+    { on = ["f7"], run = "pane.mkdir" },
+    { on = ["shift+f6"], run = "pane.rename" },
+    { on = ["f8"], run = "pane.delete" },
+    { on = ["shift+f8"], run = "pane.delete-permanent" },
+    { on = ["f2"], run = "pane.refresh" },
+    { on = ["ctrl+r"], run = "pane.refresh" },
+    { on = ["alt+f1"], run = "pane.select-drive-left" },
+    { on = ["alt+f2"], run = "pane.select-drive-right" },
+    { on = ["alt+f7"], run = "pane.search" },
+    { on = ["alt+f5"], run = "pane.pack" },
+    { on = ["alt+f6"], run = "pane.unpack" },
+    { on = ["alt+shift+f9"], run = "pane.test-archive" },
+    { on = ["ctrl+f8"], run = "pane.tree" },
+    { on = ["alt+enter"], run = "pane.properties" },
+    { on = ["ctrl+u"], run = "pane.swap" },
+    { on = ["ctrl+l"], run = "pane.dir-size" },
+    { on = ["ctrl+d"], run = "pane.hotlist" },
+    { on = ["ctrl+f"], run = "pane.connect" },
+    { on = ["ctrl+F"], run = "pane.disconnect" },
+    { on = ["ctrl+p"], run = "pane.copy-path" },
+    { on = ["ctrl+s"], run = "pane.quick-search" },
+    { on = ["ctrl+t"], run = "pane.tab-new" },
+    { on = ["ctrl+w"], run = "pane.tab-close" },
+    { on = ["ctrl+tab"], run = "pane.tab-next" },
+    { on = ["ctrl+shift+tab"], run = "pane.tab-prev" },
+    { on = ["shift+f1"], run = "pane.columns" },
+    { on = ["shift+f2"], run = "pane.compare-dirs" },
+    { on = ["shift+f4"], run = "pane.edit-new" },
+    { on = ["alt+down"], run = "pane.history" },
+    { on = ["ctrl+f3"], run = "pane.sort-name" },
+    { on = ["ctrl+f4"], run = "pane.sort-ext" },
+    { on = ["ctrl+f5"], run = "pane.sort-time" },
+    { on = ["ctrl+f6"], run = "pane.sort-size" },
+    { on = ["insert"], run = "mark.toggle" },
+    { on = ["space"], run = "mark.toggle" },
+    { on = ["ctrl+a"], run = "mark.all" },
+    { on = ["ctrl+-"], run = "mark.clear" },
+    { on = ["plus"], run = "mark.pattern-add" },
+    { on = ["-"], run = "mark.pattern-remove" },
+    { on = ["*"], run = "mark.invert" },
+]
+
+[viewer]
+keymap = [
+    { on = ["esc"], run = "viewer.close" },
+    { on = ["f3"], run = "viewer.close" },
+    { on = ["up"], run = "viewer.up" },
+    { on = ["down"], run = "viewer.down" },
+    { on = ["pgup"], run = "viewer.page-up" },
+    { on = ["pgdn"], run = "viewer.page-down" },
+    { on = ["home"], run = "viewer.top" },
+    { on = ["end"], run = "viewer.bottom" },
+]

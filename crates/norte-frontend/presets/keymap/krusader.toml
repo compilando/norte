@@ -1,0 +1,138 @@
+# Krusader — transcribed 2026-08-09 from krusader-keys.txt
+# (docs.kde.org key_bindings.html rendered to text).
+#
+# Divergences from the original: panel cursor movement (arrows, PgUp/PgDn)
+# is not itemized in the source beyond Home/End ("Other keys" table), which
+# ARE documented explicitly — arrows/PgUp/PgDn follow the same default and
+# are bound like orthodox's. Krusader's own viewer (KrViewer, opened by F3)
+# is explicitly named but not detailed on this page ("Other Key-bindings ->
+# KrViewer"); its close/movement keys mirror the same minimal convention as
+# Total Commander's. No bare letter is ever bound: the source's own "Other
+# keys" table reserves an unmodified letter for quicksearch/quickselect/
+# quickfilter ("foo -> Quick search, quick select or quick filter"), so
+# binding one here would shadow that.
+#
+# Omitted families (norte has no concept): Alt+F1..F12 and Ctrl+F1..F12 /
+# Ctrl+Shift+F1..F12 are explicitly "Standard (Plasma) key-bindings" per the
+# source itself, not Krusader's — never Krusader's to bind (this is also why
+# there is no drive-select binding: Linux has no drive letters, and MountMan,
+# the closest concept, is its own omitted feature below); the menu/context
+# menu (Esc-loses-menu-focus, Menu key); view-mode switches (Alt+Shift+B/D
+# "Brief/Detailed View", Shift+F10/F12); What's-this help (Shift+F1); the
+# Multi-Rename tool (Shift+F2, Krename — a batch feature, see TC's Ctrl+M);
+# viewing an entered URL (Shift+F3); queued copy/move (Shift+F5/F6); root-mode
+# relaunch (Alt+Shift+K); panel profiles (Alt+Shift+L); the Queue Manager
+# (Alt+Shift+Q); MountMan and the media list (Alt+/, Ctrl+M, Ctrl+Shift+
+# Left/Right); the User Menu (Alt+`); jumping to $HOME (Alt+Home); the
+# Sidebar (Alt+Down); per-panel bookmark menus, distinct from the Ctrl+D
+# hotlist (Alt+Left/Right); privileged edit-as-root (Ctrl+E, both listings);
+# the QuickFilter/Quickselect bars, distinct from the Ctrl+F quicksearch bar
+# already bound (Ctrl+I, Ctrl+Shift+S); Safari-style jump-back-to-a-marked-
+# point, not a stack-based history (Ctrl+J, Ctrl+Shift+J — nav.back/forward
+# have no faithful key here); the Location Toolbar/address bar (Ctrl+L, a
+# breadcrumb-bar concept); a folder-open file-picker dialog (Ctrl+O); Popular
+# URLs (Ctrl+Z); an ambiguous "move to the lower part of the folder" distinct
+# from End (Ctrl+PgDn); jumping to the filesystem root (Ctrl+Backspace);
+# adopting the other panel's cursor target (Ctrl+Left/Right); the media
+# mount/unmount menu (Ctrl+Return); moving a tab to the other panel or
+# reordering it, distinct from switching to it (Ctrl+Shift+O, Ctrl+Shift+
+# PgUp/PgDn); swap-with-all-tabs, a variant of the plain swap already bound
+# (Ctrl+Shift+U); an external "Locate" GUI launcher (Ctrl+Shift+L);
+# disconnecting the embedded terminal from focus, a nuance of the Terminal
+# already bound at F9 (Ctrl+Shift+Up/Down, Ctrl+Alt+E); mounting and
+# symlink creation (Ctrl+Alt+M, Ctrl+Alt+S); panel layout/orientation and
+# equal-sizing (Ctrl+Alt+R, Ctrl+Alt+=); duplicating or tab-scoped opening
+# variants of the tab-new already bound (Ctrl+Alt+Shift+N, Ctrl+Alt+Enter);
+# in-cmdline text insertion and its history list (Ctrl+/, Ctrl+Enter,
+# Ctrl+Shift+Enter, the Up/Down-arrow "Command Line" and "Terminal emulator"
+# tables); the Synchronizer tool's own screen, which norte does not model as
+# a distinct context (Ctrl+W-inside-Synchronizer "reverse direction", Alt+
+# Down/Up/Left/Right/Delete there); clipboard ops (Ctrl+Alt+C, Shift+Ins);
+# external-app integration and per-file backup useractions (Meta+A, Meta+F5);
+# the Meta+1..4 default sort useractions, which cannot be expressed — norte's
+# chord grammar has no Super/Meta modifier token (only ctrl/alt/shift/cmd/
+# mod), so `pane.sort-*` has no key at all in this preset; and the Plasma
+# global "bring window to top" (Meta+K).
+
+dialog_from = "orthodox"
+
+[global]
+keymap = [
+    { on = ["tab"], run = "pane.switch" },
+    { on = ["f1"], run = "app.help" },
+    { on = ["f9"], run = "app.terminal" },
+    { on = ["f10"], run = "app.quit" },
+    { on = ["ctrl+q"], run = "app.quit" },
+]
+
+[pane]
+keymap = [
+    { on = ["up"], run = "cursor.up" },
+    { on = ["down"], run = "cursor.down" },
+    { on = ["pgup"], run = "cursor.page-up" },
+    { on = ["pgdn"], run = "cursor.page-down" },
+    { on = ["home"], run = "cursor.top" },
+    { on = ["end"], run = "cursor.bottom" },
+    { on = ["enter"], run = "nav.enter" },
+    { on = ["backspace"], run = "nav.parent" },
+    { on = ["ctrl+pgup"], run = "nav.parent" },
+    { on = ["ctrl+="], run = "pane.pull" },
+    { on = ["f2"], run = "pane.rename" },
+    { on = ["f3"], run = "pane.view" },
+    { on = ["f4"], run = "pane.edit" },
+    { on = ["f5"], run = "pane.copy" },
+    { on = ["f6"], run = "pane.move" },
+    { on = ["f7"], run = "pane.mkdir" },
+    { on = ["f8"], run = "pane.delete" },
+    { on = ["delete"], run = "pane.delete" },
+    { on = ["ctrl+delete"], run = "pane.delete-permanent" },
+    { on = ["ctrl+r"], run = "pane.refresh" },
+    { on = ["ctrl+s"], run = "pane.search" },
+    { on = ["ctrl+f"], run = "pane.quick-search" },
+    { on = ["ctrl+h"], run = "pane.history" },
+    { on = ["ctrl+d"], run = "pane.hotlist" },
+    { on = ["ctrl+D"], run = "pane.disconnect" },
+    { on = ["ctrl+n"], run = "pane.connect" },
+    { on = ["ctrl+p"], run = "pane.split-file" },
+    { on = ["ctrl+u"], run = "pane.swap" },
+    { on = ["ctrl+w"], run = "pane.tab-close" },
+    { on = ["ctrl+alt+n"], run = "pane.tab-new" },
+    { on = ["shift+left"], run = "pane.tab-prev" },
+    { on = ["shift+right"], run = "pane.tab-next" },
+    { on = ["alt+."], run = "pane.toggle-hidden" },
+    { on = ["alt+enter"], run = "pane.properties" },
+    { on = ["alt+C"], run = "pane.compare-dirs" },
+    { on = ["alt+E"], run = "pane.test-archive" },
+    # Alt+Shift+O is "Sync panels aka “Equals Button (=)”" — the toolbar
+    # button that sends the OTHER panel to this one's path (mirror), a
+    # DIFFERENT feature from the Synchronizer tool bound at Ctrl+Y below
+    # ("Synchronize Folders"). Mapping both to pane.sync-dirs would say
+    # the Equals Button opens a folder-tree diff, which it does not.
+    { on = ["alt+O"], run = "pane.mirror" },
+    { on = ["ctrl+y"], run = "pane.sync-dirs" },
+    { on = ["alt+P"], run = "pane.pack" },
+    { on = ["alt+S"], run = "pane.dir-size" },
+    { on = ["alt+U"], run = "pane.unpack" },
+    { on = ["shift+f4"], run = "pane.edit-new" },
+    { on = ["ctrl+down"], run = "pane.command-line" },
+    { on = ["insert"], run = "mark.toggle" },
+    { on = ["space"], run = "mark.toggle" },
+    { on = ["ctrl+a"], run = "mark.all" },
+    { on = ["alt+plus"], run = "mark.all" },
+    { on = ["alt+-"], run = "mark.clear" },
+    { on = ["alt+*"], run = "mark.invert" },
+    { on = ["ctrl+plus"], run = "mark.pattern-add" },
+    { on = ["ctrl+-"], run = "mark.pattern-remove" },
+]
+
+[viewer]
+keymap = [
+    { on = ["esc"], run = "viewer.close" },
+    { on = ["f3"], run = "viewer.close" },
+    { on = ["up"], run = "viewer.up" },
+    { on = ["down"], run = "viewer.down" },
+    { on = ["pgup"], run = "viewer.page-up" },
+    { on = ["pgdn"], run = "viewer.page-down" },
+    { on = ["home"], run = "viewer.top" },
+    { on = ["end"], run = "viewer.bottom" },
+]

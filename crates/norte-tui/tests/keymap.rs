@@ -408,8 +408,10 @@ fn los_tres_presets_de_fabrica_cargan_y_cubren_lo_basico() {
         let eff = Effective::build(&preset, None, COMANDOS)
             .unwrap_or_else(|e| panic!("preset {nombre}: {e:?}"));
         let mut r = Resolver::new(eff.clone());
-        // Todo preset debe poder salir y cambiar de pane.
-        let quit_posible = ["q", "f10", "ctrl+q"].iter().any(|k| {
+        // Todo preset debe poder salir y cambiar de pane. `alt+f4` es el
+        // quit real de Total Commander (K2b): su F10 significa "activar/
+        // dejar el menú", no salir, así que NO lo comparte con q/f10/ctrl+q.
+        let quit_posible = ["q", "f10", "ctrl+q", "alt+f4"].iter().any(|k| {
             let res = r.push(parse_chord(k).unwrap());
             res == Resolution::Run {
                 command: "app.quit".into(),
@@ -438,7 +440,6 @@ fn los_presets_ligan_las_operaciones_de_archivo() {
             ("f5", "pane.copy"),
             ("f6", "pane.move"),
             ("f8", "pane.delete"),
-            ("ctrl+k", "task.cancel"),
         ] {
             assert_eq!(
                 r.push(parse_chord(tecla).unwrap()),
@@ -449,6 +450,26 @@ fn los_presets_ligan_las_operaciones_de_archivo() {
                 "preset {nombre}: {tecla}"
             );
         }
+    }
+    // `ctrl+k` → `task.cancel` es la convención PROPIA de norte (orthodox/
+    // vim/cua): ni Total Commander ni Krusader documentan una tecla de
+    // cancelar-tarea en sus fuentes (K2b rule 1), así que no se inventa una
+    // ahí — este segundo bucle se queda en los tres presets nativos.
+    for (nombre, preset) in norte_tui::keymap::presets()
+        .into_iter()
+        .filter(|(n, _)| matches!(*n, "orthodox" | "vim" | "cua"))
+    {
+        let eff = Effective::build(&preset, None, COMANDOS)
+            .unwrap_or_else(|e| panic!("preset {nombre}: {e:?}"));
+        let mut r = Resolver::new(eff);
+        assert_eq!(
+            r.push(parse_chord("ctrl+k").unwrap()),
+            Resolution::Run {
+                command: "task.cancel".into(),
+                count: Count::None
+            },
+            "preset {nombre}: ctrl+k"
+        );
     }
 }
 

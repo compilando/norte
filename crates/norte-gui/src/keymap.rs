@@ -104,9 +104,10 @@ pub const VIEWER_COMMANDS: &[&str] = &[
 /// presets::NAMES`, verificado contra `source()` por un test en
 /// `norte-frontend`; la GUI solo re-exporta, sin copiar el array). Fuente del
 /// mensaje "disponibles" del aviso de preset desconocido (revisión C2/G0
-/// IMPORTANT 2) y de [`is_known_preset`]. La TUI sigue con su propio mirror
-/// (fuera de alcance de esta revisión, ver el comentario original que
-/// citaba `presets()`).
+/// IMPORTANT 2) y de [`is_known_preset`]. K2b Task 2: `norte-tui/src/keymap.rs
+/// ::presets()` ahora también itera `NAMES`/`source()` en vez de mirror su
+/// propio array — un preset nuevo toca un solo sitio (aquí y en
+/// `presets::NAMES`), no cada frontend.
 pub const KNOWN_PRESETS: &[&str] = norte_frontend::keymap::presets::NAMES;
 
 /// ¿`name` es uno de los presets embebidos? (revisión C2/G0 IMPORTANT 2): el
@@ -248,6 +249,40 @@ prepend_keymap = [
     { on = ["alt+i"], run = "pane.ai-rename" },
     { on = ["alt+s"], run = "pane.semantic-search" },
     { on = ["alt+y"], run = "pane.copy-path" },
+    # K2b Task 2: `total-commander`/`krusader` do not bind these four — their
+    # sources have no key for them (rule 1: norte's own app-level overlays,
+    # not a Total Commander or Krusader concept, so nothing to transcribe),
+    # unlike orthodox/vim/cua where they are the preset's OWN chords
+    # (f9/f11/f12/ctrl+p, ctrl+k). Same fallback shape as `pane.ai-rename`
+    # above: free in all five bundled presets, so it only ADDS a second door
+    # for orthodox/vim/cua and is the ONLY door for the two imports.
+    { on = ["ctrl+k"], run = "task.cancel" },
+    { on = ["ctrl+,"], run = "app.settings" },
+    { on = ["ctrl+e"], run = "app.extensions" },
+    { on = ["ctrl+j"], run = "app.palette" },
+    # `alt+.` is already how orthodox/vim/cua/krusader bind this — TC's own
+    # KEYBOARD.TXT has no documented key for it at all (real TC toggles
+    # hidden files from a Configuration menu, not a hotkey this file lists),
+    # so this line is a no-op everywhere except total-commander.
+    { on = ["alt+."], run = "pane.toggle-hidden" },
+    # `alt+c` is already orthodox/vim/cua/total-commander's own chord for
+    # this (`shift+f1` in TC's own source); krusader has no columns-view
+    # concept documented at all, so this is its only door.
+    { on = ["alt+c"], run = "pane.columns" },
+]
+
+[viewer]
+# Same K2b fallback, for the viewer screen: neither total-commander nor
+# krusader documents its own internal viewer's key scheme (Lister/KrViewer
+# are both named-but-undetailed in their sources), so their `[viewer]`
+# sections only carry rule 7's mandatory close + six movers. `e`/`E`/`x` here
+# are the same chords orthodox/vim/cua already use for these three, so this
+# is a no-op for the three native presets and the only door for the two
+# imports.
+prepend_keymap = [
+    { on = ["e"], run = "viewer.encoding" },
+    { on = ["E"], run = "viewer.encoding-auto" },
+    { on = ["x"], run = "viewer.hex" },
 ]
 "#;
     parse_keymap(TOML).unwrap_or_else(|e| panic!("supplemento GUI embebido inválido: {e}"))
@@ -530,7 +565,7 @@ mod tests {
     /// (`Availability::NotHere`) en vez de tumbar la carga.
     #[test]
     fn los_tres_presets_compartidos_parsean_y_construyen_para_la_gui() {
-        for name in ["orthodox", "vim", "cua"] {
+        for &name in KNOWN_PRESETS {
             assert!(
                 build_effective_from(&preset(name), &[]).is_ok(),
                 "preset {name}: debe construir en modo subset para la GUI"
@@ -561,7 +596,7 @@ mod tests {
     /// runnable. Before this pin they did, and the keys were dead.
     #[test]
     fn el_visor_no_declara_ejecutable_lo_que_no_despacha() {
-        for preset_name in ["orthodox", "vim", "cua"] {
+        for &preset_name in KNOWN_PRESETS {
             let (_browse, viewer) = build_effectives_from(preset_name, None).expect("construye");
             for (seq, cmd) in viewer.bindings() {
                 assert!(
@@ -819,9 +854,9 @@ prepend_keymap = [{ on = ["5"], run = "cursor.down" }]
     /// `task.dismiss` faltaban, y los cuatro los repone el supplemento.
     #[test]
     fn todo_comando_gui_es_alcanzable_desde_el_preset_default() {
-        // Los TRES presets de fábrica (no solo orthodox): un chord retirado
-        // de vim/cua en el catálogo compartido también debe romper aquí.
-        for preset_name in ["orthodox", "vim", "cua"] {
+        // Los presets de fábrica (no solo orthodox): un chord retirado
+        // de cualquiera en el catálogo compartido también debe romper aquí.
+        for &preset_name in KNOWN_PRESETS {
             let (browse, viewer) = build_effectives_from(preset_name, None)
                 .expect("preset de fábrica + supplemento: construye");
             let browse_cmds: std::collections::HashSet<&str> =

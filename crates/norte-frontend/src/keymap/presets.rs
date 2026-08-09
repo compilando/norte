@@ -14,6 +14,10 @@ pub const ORTHODOX: &str = include_str!("../../presets/keymap/orthodox.toml");
 pub const VIM: &str = include_str!("../../presets/keymap/vim.toml");
 /// CUA preset.
 pub const CUA: &str = include_str!("../../presets/keymap/cua.toml");
+/// Total Commander-style preset (K2b).
+pub const TOTAL_COMMANDER: &str = include_str!("../../presets/keymap/total-commander.toml");
+/// Krusader-style preset (K2b).
+pub const KRUSADER: &str = include_str!("../../presets/keymap/krusader.toml");
 
 /// Names of every embedded preset (final review MINOR 4: this catalog
 /// used to be mirrored as a hardcoded `&[&str]` in each frontend that
@@ -21,7 +25,7 @@ pub const CUA: &str = include_str!("../../presets/keymap/cua.toml");
 /// — TUI, GUI — with no single source of truth. `source()` and `NAMES`
 /// are now tested against each other below, so a preset added to one and
 /// not the other fails CI instead of drifting silently.
-pub const NAMES: &[&str] = &["orthodox", "vim", "cua"];
+pub const NAMES: &[&str] = &["orthodox", "vim", "cua", "total-commander", "krusader"];
 
 /// Preset source by name; `None` if unknown (caller falls back +
 /// reports, same contract the TUI had).
@@ -31,6 +35,8 @@ pub fn source(name: &str) -> Option<&'static str> {
         "orthodox" => Some(ORTHODOX),
         "vim" => Some(VIM),
         "cua" => Some(CUA),
+        "total-commander" => Some(TOTAL_COMMANDER),
+        "krusader" => Some(KRUSADER),
         _ => None,
     }
 }
@@ -54,9 +60,11 @@ mod presets_catalog_tests {
 
     /// Ancla el tamaño del catálogo: un preset nuevo debe tocar este test a
     /// propósito (y con él, el resto de frontends que consumen `NAMES`).
+    /// Renombrado en K2b Task 2 (era `names_tiene_los_tres_presets_de_fabrica`):
+    /// ya no son tres, y el nombre viejo mentiría sobre el tamaño real.
     #[test]
-    fn names_tiene_los_tres_presets_de_fabrica() {
-        assert_eq!(NAMES.len(), 3);
+    fn names_tiene_los_presets_de_fabrica() {
+        assert_eq!(NAMES.len(), 5);
     }
 
     /// Un preset embebido que no parsea no es un fallo ruidoso: los

@@ -234,19 +234,17 @@ pub fn dialog_hint_id(command: &str) -> String {
 pub fn presets() -> Vec<(&'static str, KeymapFile)> {
     use norte_frontend::keymap::presets as shared;
 
-    [
-        ("orthodox", shared::ORTHODOX),
-        ("vim", shared::VIM),
-        ("cua", shared::CUA),
-    ]
-    .into_iter()
-    .map(|(name, src)| {
-        (
-            name,
-            parse_keymap(src).unwrap_or_else(|e| panic!("preset {name} embebido inválido: {e}")),
-        )
-    })
-    .collect()
+    shared::NAMES
+        .iter()
+        .map(|&name| {
+            let src = shared::source(name).expect("NAMES resuelve en source()");
+            (
+                name,
+                parse_keymap(src)
+                    .unwrap_or_else(|e| panic!("preset {name} embebido inválido: {e}")),
+            )
+        })
+        .collect()
 }
 
 /// El segmento «pendiente» de la barra de estado (`[… ]` en `draw_status`):
@@ -522,7 +520,14 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
             .copied()
             .chain(DIALOG_COMMANDS.iter().copied())
             .collect();
-        for (nombre, preset) in presets() {
+        // K2b: `presets()` ahora también trae `total-commander`/`krusader`,
+        // que NO comparten `alt+c` → `pane.columns` (no está en sus fuentes,
+        // y rule 1 prohíbe inventarlo) — este test pinea la convención
+        // PROPIA de norte, así que se queda en los tres presets nativos.
+        for (nombre, preset) in presets()
+            .into_iter()
+            .filter(|(n, _)| matches!(*n, "orthodox" | "vim" | "cua"))
+        {
             let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog)
                 .unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
             for ((mods, code), command) in &expected {
@@ -565,6 +570,12 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
     /// borrowed one in its own preset, so there it is `alt+s`. This test
     /// spells out both so a future edit that "unifies" them has to argue with
     /// the reason.
+    ///
+    /// K2b: scoped to the three NATIVE presets on purpose. `total-commander`
+    /// and `krusader` transcribe a foreign program (plan rule 1): TC has no
+    /// "mirror" key at all, and Krusader's own "adopt the other panel's
+    /// path" is `ctrl+=`, not `alt+u` — inventing `alt+i`/`alt+u` there to
+    /// pass this pin would be exactly the approximation rule 1 forbids.
     #[test]
     fn pane_gesture_chords_resolve_in_the_three_presets() {
         let comunes = [
@@ -573,7 +584,10 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
             ((CtMods::ALT, CtCode::Left), "nav.back"),
             ((CtMods::ALT, CtCode::Right), "nav.forward"),
         ];
-        for (name, preset) in presets() {
+        for (name, preset) in presets()
+            .into_iter()
+            .filter(|(n, _)| matches!(*n, "orthodox" | "vim" | "cua"))
+        {
             let eff = Effective::build_for(&preset, &[], COMMANDS, Screen::Browse)
                 .unwrap_or_else(|e| panic!("preset {name}: {e}"));
             let swap = if name == "vim" {
@@ -622,6 +636,12 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
     /// The six mark commands resolve in the three factory presets (#103). A
     /// preset that loses one leaves the selection unreachable by keyboard,
     /// which is the regression class the GUI already hit once.
+    ///
+    /// K2b: scoped to the three NATIVE presets. `total-commander` and
+    /// `krusader` bind the same SIX commands (rule 1 fidelity check, not
+    /// this pin's job), but on different chords — `ctrl+A`/`ctrl+shift+a`
+    /// for `mark.clear` is norte's own convention, not Krusader's (which is
+    /// `alt+-`) or TC's (`ctrl+-`, TC's own `CTRL+NUM-`).
     #[test]
     fn mark_commands_resolve_in_the_three_presets() {
         let expected = [
@@ -659,7 +679,10 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
                 "mark.pattern-remove",
             ),
         ];
-        for (name, preset) in presets() {
+        for (name, preset) in presets()
+            .into_iter()
+            .filter(|(n, _)| matches!(*n, "orthodox" | "vim" | "cua"))
+        {
             let eff = Effective::build_for(&preset, &[], COMMANDS, Screen::Browse)
                 .unwrap_or_else(|e| panic!("preset {name}: {e}"));
             for (chord, command) in &expected {
