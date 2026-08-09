@@ -680,6 +680,30 @@ keymap = [ { on = ["f5"], run = "pane.copyy" } ]
     assert!(matches!(e, KeymapError::UnknownCommand { .. }), "{e:?}");
 }
 
+/// An unavailable binding SHADOWS a lower-precedence available one. If a
+/// preset puts `alt+f1` in `[pane]`, the key must say "drives are not built"
+/// rather than quietly falling through to whatever `[global]` had — falling
+/// through is how a Total Commander user gets a surprise instead of an answer.
+#[test]
+fn un_binding_no_disponible_ensombrece_al_de_global() {
+    let preset = parse_keymap(
+        r#"
+[global]
+keymap = [ { on = ["alt+f1"], run = "pane.refresh" } ]
+
+[pane]
+keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
+"#,
+    )
+    .unwrap();
+    let eff = Effective::build_for(&preset, &[], &["pane.refresh"], Screen::Browse).unwrap();
+    let all = eff.bindings_all();
+    let hits: Vec<_> = all.iter().filter(|(seq, _, _)| seq == "alt+f1").collect();
+    assert_eq!(hits.len(), 1, "el dedup deja UNA por secuencia: {all:?}");
+    assert_eq!(hits[0].1, "pane.select-drive", "gana el contexto específico");
+    assert!(matches!(hits[0].2, Availability::NotBuilt { .. }));
+}
+
 /// Unavailable bindings take part in the prefix-free check: the shape of the
 /// map is a load-time property (ADR 0006), independent of what runs.
 #[test]
@@ -941,6 +965,28 @@ report and should read:
     // lenient filter: a binding this frontend cannot run survives as
     // `Availability::NotHere` and says so when pressed.
 ```
+
+- [ ] **Step 9b: Retire the two tests that pinned the silent filter**
+
+Task 1's implementer found two existing tests in
+`crates/norte-frontend/src/keymap/mod.rs` whose whole job was to pin the
+lenient filter's side effects. They now assert the opposite of the decided
+behaviour, and they must be **inverted, not deleted** — the behaviour they
+describe is still worth pinning, in its new direction:
+
+- `subset_prefijo_filtrado_no_bloquea_secuencia` — pinned that a filtered
+  binding does not block a longer sequence that has it as a prefix. Rename it
+  to `un_binding_no_disponible_si_bloquea_el_prefijo` and flip the assertion to
+  expect `KeymapError::AmbiguousPrefix`. (The new test in Step 1 covers the
+  same ground from the other side; keeping both is fine, but do not leave a
+  test asserting the old behaviour.)
+- `subset_dedup_desenmascara_binding_global` — pinned that filtering a `pane`
+  binding unmasks the `global` one it shadowed. Rename it to
+  `un_binding_no_disponible_sigue_ensombreciendo` and flip it: the specific
+  context still wins, and the surviving binding is the unavailable one.
+
+Both renames carry a comment saying what they used to pin and why the direction
+changed, so a future reader does not "fix" them back.
 
 - [ ] **Step 10: Run the TUI and the CLI**
 
