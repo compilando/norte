@@ -5,12 +5,14 @@
 //! crossterm/gpui): cada frontend convierte su evento nativo a [`Chord`] con
 //! [`Chord::new`].
 
+pub mod catalogue;
 mod chord;
 mod effective;
 mod layer;
 pub mod presets;
 mod resolve;
 
+pub use catalogue::{CATALOGUE, CommandDef, Status};
 pub use chord::{Chord, KeyCode, Mods, paint_chord, parse_chord};
 pub use effective::{Effective, valid_lua_name};
 pub use layer::{KeymapFile, Screen, parse_keymap};

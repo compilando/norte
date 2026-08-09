@@ -250,6 +250,23 @@ mod tests {
         assert!(Command::parse("plugin:x:y").is_none(), "plugin: va aparte");
     }
 
+    /// The TUI's `COMMANDS`/`DIALOG_COMMANDS` are now a SUBSET declaration, not a
+    /// vocabulary. A name the shared catalogue has never heard of means the two
+    /// have drifted — which is the whole class of bug this catalogue removes.
+    #[test]
+    fn todo_comando_del_tui_esta_en_el_catalogo_compartido() {
+        use norte_frontend::keymap::catalogue::{Status, lookup};
+        for name in COMMANDS.iter().chain(DIALOG_COMMANDS.iter()) {
+            let def = lookup(name)
+                .unwrap_or_else(|| panic!("{name} lo implementa el TUI y no está en CATALOGUE"));
+            assert_eq!(
+                def.status,
+                Status::Live,
+                "{name} lo implementa el TUI pero el catálogo lo declara Planned"
+            );
+        }
+    }
+
     #[test]
     fn chord_from_crossterm_traduce_teclas_conocidas() {
         assert_eq!(

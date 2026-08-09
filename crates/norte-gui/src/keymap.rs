@@ -449,6 +449,22 @@ mod tests {
         }
     }
 
+    /// Same pin as the TUI's: the GUI declares a SUBSET of the shared vocabulary,
+    /// never its own. `COMMANDS` and `VIEWER_COMMANDS` are that subset.
+    #[test]
+    fn todo_comando_de_la_gui_esta_en_el_catalogo_compartido() {
+        use norte_frontend::keymap::catalogue::{Status, lookup};
+        for name in COMMANDS.iter().chain(VIEWER_COMMANDS.iter()) {
+            let def = lookup(name)
+                .unwrap_or_else(|| panic!("{name} lo implementa la GUI y no está en CATALOGUE"));
+            assert_eq!(
+                def.status,
+                Status::Live,
+                "{name} lo implementa la GUI pero el catálogo lo declara Planned"
+            );
+        }
+    }
+
     fn build_effective_from(p: &KeymapFile, l: &[KeymapFile]) -> Result<Effective, KeymapError> {
         Effective::build_for_subset(p, l, COMMANDS, Screen::Browse)
     }
