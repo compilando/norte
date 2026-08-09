@@ -348,9 +348,12 @@ GUI. The scope and exit criteria did not change.
   operable virtual pane.
 - **Directory comparison and synchronization:** compare panes by metadata or
   hash and produce an approved one-way or two-way operation plan.
-- **Batch rename:** support counters, slices, regular expressions, case changes,
-  and character cleanup with collision preview and transactional undo. AI rename
-  feeds the same executor.
+- **Batch rename:** a transactional executor for a batch of renames inside one
+  directory — whole-plan collision preview, cycle-safe ordering so that a
+  permutation succeeds, and one undoable unit. Separately, the rule sets that
+  produce the pairs it runs: counters, slices, regular expressions, case
+  changes, and character cleanup. AI rename produces pairs for the same
+  executor.
 - **Volumes and mounts:** enumerate platform volumes, show free space, support
   removable media and safe ejection, and expose drive switching as commands.
 - **First-class selection:** preserve selections by entry identity across sorts

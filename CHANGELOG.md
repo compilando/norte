@@ -9,6 +9,48 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A batch of renames is one transaction, so a permutation finally works:** AI
+  rename used to apply its plan one `fs.move` at a time. Ask it to number a
+  season of episodes correctly and the very first move refuses, because the name
+  it wants is the name the next file still has — a permutation could never
+  succeed, and a permutation is the ordinary case. There was no preview of the
+  whole plan either, so the first collision was discovered halfway through, and
+  undoing what had already landed meant walking back a list of individual moves
+  by hand.
+  The core now decides the whole thing before anything moves. It reads the
+  directory, works out an order in which each name is free when it is needed,
+  inserts a temporary of its own where a cycle has to be opened, and reports
+  every collision it found against the plan as a whole — a name two rules both
+  want, a name already taken by a file nobody is moving, a source that is no
+  longer there. Then it runs the plan as ONE task and records it as ONE undoable
+  unit: undo is a single step, and a batch that fails partway renames back
+  everything it had already done. Cancelling one does the same, so the directory
+  is never left half-renamed.
+  Names are compared the way the destination directory compares them, asked of
+  that directory and never guessed from the operating system: two spellings of
+  the same accented name are the same name where the filesystem says so, and a
+  name that is not valid text is compared byte for byte and never normalised.
+  Both frontends now apply the AI plan through this path.
+  On the wire that is protocol **0.36.0**: `fs.rename_batch_plan` returns the
+  reviewable plan, `fs.rename_batch` executes the plan a human approved,
+  `fs.rename_batch_report` says what a failed batch managed to put back, and a
+  filename now crosses on its own as a percent-encoded segment rather than as a
+  string. New task kind `RenameBatch`, new errors `PlanStale` (the directory
+  changed between the preview and the confirmation — re-plan and look again) and
+  `PlanNotExecutable` (the plan had collisions, so nothing was attempted).
+  `policy.undo_report` gained `batch_stuck` and `compensations_lost` for an undo
+  that could not finish putting a batch back, and the approval prompt gained
+  `paths_total` so a request over many paths can say how many. See ADR 0042.
+
+- **The journal groups a batch under one id:** it gained a `batch_id` column, so
+  the entries of one batch are recognised as one unit by undo instead of as a
+  pile of unrelated renames — walking those back one at a time is exactly the
+  thing that cannot work. The migration runs on open and leaves an existing
+  journal's entries hashing precisely as they did, so the tamper-evident chain
+  still verifies across it. One caveat worth knowing: a journal that has been
+  migrated is read as `Broken` by a norte binary older than this release, which
+  is [#127](https://github.com/compilando/norte/issues/127).
+
 - **The graphical help answers where you ARE, from every screen:** `F1` opened
   the index no matter what was on screen. It now opens the page about the
   screen you are on — the viewer, the collision dialog, the rename prompt, the
@@ -445,6 +487,36 @@ independently through `PROTOCOL_VERSION`.
   manager listed it, and nothing would ever have run it.
 
 ### Fixed
+
+- **Lowering the case of a name can re-spell it, and batch rename was not
+  looking again.** When a directory does not distinguish upper from lower case,
+  the batch planner compares names by normalising them and then folding the
+  case. Those two steps do not commute. `J` followed by a combining caron has no
+  single-character capital, so normalising leaves it as two characters; lower
+  its case and the result *does* have one, `ǰ`. The planner therefore called
+  those two names different, and every case-insensitive volume — Apple's APFS
+  and HFS+, a case-folding Linux directory, a case-insensitive network share —
+  calls them the same file. A batch aiming at one while the other sat in the
+  directory saw no collision and asked for a rename onto a name that was taken.
+  The comparison now normalises again after folding, so the collision is
+  reported and the plan is refused before anything moves. Both spellings are in
+  the canonical hostile-name corpus, which is what the fix is tested against.
+  One relative of this is still open and now written down where the code makes
+  the decision: a filesystem folds case with case *folding*, this folds with a
+  lowercase *mapping*, and the two disagree on about twenty characters —
+  a word-final Greek sigma, the micro sign against Greek mu, the long s. See
+  [#129](https://github.com/compilando/norte/issues/129).
+
+- **Batch rename asked a directory about its case rules before looking at it.**
+  A provider is allowed to work out what a directory does with names lazily, on
+  its first real operation — the local provider probes exactly then, because the
+  question cannot be answered without touching the disk and answering it must
+  not block. The planner asked before it listed, so the very first plan on a
+  freshly opened directory got the operating system's *guess* instead: a volume
+  that folds case planned as though it distinguished it, which is a collision
+  not reported and a preview missing the one line that mattered. That is the
+  normal path for an agent bridge or a one-shot command, where planning is the
+  first thing that happens. It now lists first and asks afterwards.
 
 - **Eight invisible characters were walking straight past the mask (#125).**
   `is_terminal_hazard` claimed in its own documentation to cover "the invisible
