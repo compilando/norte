@@ -66,7 +66,10 @@ impl Resolver {
         }
         self.pending.push(chord);
         match self.eff.lookup(&self.pending) {
-            Lookup::Exact(run) => {
+            // K1 T3: la disponibilidad viaja en el `Lookup` pero AÚN no
+            // cambia el desenlace — la salida «no disponible» del resolver es
+            // la tarea 4. Hoy se ignora para preservar el comportamiento.
+            Lookup::Exact(run, _avail) => {
                 self.pending.clear();
                 Resolution::Run(run.to_owned())
             }

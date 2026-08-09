@@ -14,7 +14,7 @@ mod resolve;
 
 pub use catalogue::{CATALOGUE, CommandDef, Status};
 pub use chord::{Chord, KeyCode, Mods, paint_chord, parse_chord};
-pub use effective::{Effective, valid_lua_name};
+pub use effective::{Availability, Effective, valid_lua_name};
 pub use layer::{KeymapFile, Screen, parse_keymap};
 pub use resolve::{Resolution, Resolver};
 
@@ -881,53 +881,64 @@ keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
         ));
     }
 
-    /// `build_for_subset`: a PRESET binding to a command this frontend does
-    /// not implement is skipped (the GUI implements a subset of the TUI's
-    /// commands); a LAYER binding to an unknown command is still an error
-    /// (a user typo must never die silently — ADR 0006).
+    /// USED TO pin `build_for_subset`: a PRESET binding to a command this
+    /// frontend does not implement was skipped in silence, and a LAYER binding
+    /// to the same name was an error — provenance decided the verdict. Since
+    /// K1 the CATALOGUE decides: `app.help` is `Live`, so the binding SURVIVES
+    /// as `NotHere` from either source, and only a name the vocabulary has
+    /// never heard of is still fatal. The two halves of the old assertion are
+    /// still here, both inverted.
     #[test]
-    fn build_for_subset_filtra_preset_pero_capa_sigue_estricta() {
+    fn un_comando_ajeno_sobrevive_venga_del_preset_o_de_una_capa() {
         let preset = parse_keymap(
             "[pane]\nkeymap = [\n { on = [\"q\"], run = \"app.quit\" },\n { on = [\"f1\"], run = \"app.help\" },\n]\n",
         )
         .unwrap();
         let known = ["app.quit"];
-        let eff = Effective::build_for_subset(&preset, &[], &known, Screen::Browse)
+        let eff = Effective::build_for(&preset, &[], &known, Screen::Browse)
             .expect("preset con extras construye");
-        let mut r = Resolver::new(eff);
+        let all = eff.bindings_all();
         assert_eq!(
-            r.push(Chord::new(Mods::default(), KeyCode::Char('q'))),
-            Resolution::Run("app.quit".into())
+            all.iter()
+                .find(|(seq, _, _)| seq == "f1")
+                .map(|(_, run, avail)| (*run, *avail)),
+            Some(("app.help", Availability::NotHere)),
+            "el binding ya no se filtra: sobrevive marcado — {all:?}"
         );
-        // El binding filtrado no existe: F1 no tiene ningún binding —
-        // Miss, no Prefix ni Run.
-        assert_eq!(
-            r.push(Chord::new(Mods::default(), KeyCode::F(1))),
-            Resolution::Reset
+        // …y sigue sin EJECUTARSE: `bindings()` solo lista lo ejecutable.
+        assert!(
+            !eff.bindings().iter().any(|(seq, _)| seq == "f1"),
+            "{all:?}"
         );
+        // Una CAPA que bindea el mismo comando ajeno tampoco falla ya.
         let layer =
             parse_keymap("[pane]\nprepend_keymap = [{ on = [\"z\"], run = \"app.help\" }]\n")
                 .unwrap();
         assert!(
-            Effective::build_for_subset(&preset, &[layer], &known, Screen::Browse).is_err(),
-            "capa con comando desconocido: error, no filtrado"
+            Effective::build_for(&preset, &[layer], &known, Screen::Browse).is_ok(),
+            "un comando del catálogo no es un typo, venga de donde venga"
         );
+        // Lo que sí sigue muriendo: un nombre que el catálogo no conoce.
+        let typo =
+            parse_keymap("[pane]\nprepend_keymap = [{ on = [\"z\"], run = \"app.hlep\" }]\n")
+                .unwrap();
+        assert!(matches!(
+            Effective::build_for(&preset, &[typo], &known, Screen::Browse),
+            Err(KeymapError::UnknownCommand { .. })
+        ));
     }
 
-    /// El nombre `lua:` sigue validándose por CHARSET aunque el modo sea
-    /// Lenient — el filtrado de `build_for_subset` es solo por
-    /// `known_commands` ausente; un `lua:` con nombre inválido (fuera de
-    /// `[a-z0-9._-]{1,64}`) no tiene forma de colarse. El error sale como
-    /// `UnknownCommand` (mismo camino que en modo estricto: el check de
-    /// charset vive ANTES del filtrado lenient).
+    /// El nombre `lua:` se valida por CHARSET antes que nada: un `lua:` con
+    /// nombre inválido (fuera de `[a-z0-9._-]{1,64}`) no tiene forma de
+    /// colarse por la puerta del catálogo — un `lua:` jamás está en él.
     #[test]
-    fn subset_lua_invalido_sigue_siendo_error() {
+    fn lua_invalido_sigue_siendo_error() {
         let preset = parse_keymap(
             r#"[pane]
 keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
         )
         .unwrap();
-        match Effective::build_for_subset(&preset, &[], &[], Screen::Browse) {
+        match Effective::build_for(&preset, &[], &[], Screen::Browse) {
             Err(KeymapError::UnknownCommand { .. }) => {}
             other => panic!("esperaba UnknownCommand, fue {other:?}"),
         }
@@ -991,84 +1002,84 @@ keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
         assert!(diags.is_empty(), "{diags:?}");
     }
 
-    /// Un binding de PRESET filtrado (comando desconocido para este
-    /// frontend) no puede bloquear una secuencia más larga que lo tenía
-    /// como prefijo — pin de la afirmación "prefix-freeness corre sobre el
-    /// set YA filtrado". El binding largo viene de una CAPA (no del
-    /// preset): en modo estricto, "g" (preset) + "g g" (capa) sería
-    /// `AmbiguousPrefix`; en Lenient, "g" se filtra antes del check y "g g"
-    /// resuelve limpio.
+    /// INVERTED (K1 T3). It used to be `subset_prefijo_filtrado_no_bloquea_
+    /// secuencia`, and it pinned the opposite: a filtered PRESET binding
+    /// vanished before `check_prefix_free`, so `"g"` (preset, unimplemented)
+    /// left `"g g"` (layer) resolving cleanly. That is a load-time property
+    /// being decided by what this build happens to run, and the direction is
+    /// now the other one — the shape of the map is fixed at load (ADR 0006),
+    /// so an unavailable `"g"` still blocks `"g g"`. Do not "fix" it back:
+    /// a `"g"` that swallows the first key of `"g g"` in one frontend and not
+    /// in the other is exactly the drift K1 exists to kill.
     #[test]
-    fn subset_prefijo_filtrado_no_bloquea_secuencia() {
+    fn un_binding_no_disponible_si_bloquea_el_prefijo() {
         let preset = parse_keymap(
             r#"[pane]
-keymap = [{ on = ["g"], run = "gui.unknown" }]"#,
+keymap = [{ on = ["g"], run = "pane.select-drive" }]"#,
         )
         .unwrap();
         let layer = parse_keymap(
             r#"[pane]
-append_keymap = [{ on = ["g", "g"], run = "known.cmd" }]"#,
+append_keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
         )
         .unwrap();
-        let known = ["known.cmd"];
-        let eff = Effective::build_for_subset(&preset, &[layer], &known, Screen::Browse)
-            .expect("el prefijo filtrado no debe producir AmbiguousPrefix");
-        let mut r = Resolver::new(eff);
-        assert_eq!(
-            r.push(Chord::new(Mods::default(), KeyCode::Char('g'))),
-            Resolution::Pending(1),
-            "único binding activo en g: prefijo válido de g g"
-        );
-        assert_eq!(
-            r.push(Chord::new(Mods::default(), KeyCode::Char('g'))),
-            Resolution::Run("known.cmd".into())
-        );
+        let known = ["cursor.top"];
+        match Effective::build_for(&preset, &[layer], &known, Screen::Browse) {
+            Err(KeymapError::AmbiguousPrefix { .. }) => {}
+            other => panic!("esperaba AmbiguousPrefix, fue {other:?}"),
+        }
     }
 
-    /// Divergencia DELIBERADA entre Strict y Lenient, pineada a propósito:
-    /// el dedup por secuencia (`seen.insert`, "el primero gana") solo ve
-    /// los bindings que SOBREVIVEN al filtro. Con un binding de `pane` y
-    /// otro de `global` en el MISMO chord, un frontend que conoce ambos
-    /// comandos (Strict) ve ganar `pane` por especificidad de contexto —
-    /// pero un frontend que NO implementa el comando de `pane` (Lenient) lo
-    /// filtra ANTES del dedup, y el binding de `global` queda "desenmascarado"
-    /// (deja de estar sombreado) y pasa a ser el activo. Es el precio de
-    /// que cada frontend valide contra SU PROPIO catálogo: la tecla hace
-    /// algo distinto según qué frontend la interprete, por diseño (ADR
-    /// 0006 — el motor no conoce comandos concretos).
+    /// INVERTED (K1 T3). It used to be `subset_dedup_desenmascara_binding_
+    /// global`, and it pinned a divergence that was deliberate at the time:
+    /// the dedup (`seen.insert`, first-wins) only saw the bindings that
+    /// SURVIVED the filter, so a `pane` binding this frontend could not run
+    /// was dropped BEFORE the dedup and the `global` one underneath became
+    /// active — the same key doing two different things depending on which
+    /// frontend read the preset. Since K1 nothing is dropped: the specific
+    /// context still wins, and the key that survives is the unavailable one,
+    /// which will say so instead of quietly doing something else. Do not
+    /// "fix" it back: falling through is how a Total Commander user gets a
+    /// surprise instead of an answer.
     #[test]
-    fn subset_dedup_desenmascara_binding_global() {
+    fn un_binding_no_disponible_sigue_ensombreciendo() {
         let preset = parse_keymap(
             r#"[pane]
-keymap = [{ on = ["x"], run = "gui.unknown" }]
+keymap = [{ on = ["x"], run = "pane.select-drive" }]
 [global]
 keymap = [{ on = ["x"], run = "app.quit" }]"#,
         )
         .unwrap();
         let known = ["app.quit"];
-        let eff = Effective::build_for_subset(&preset, &[], &known, Screen::Browse)
-            .expect("pane.x filtrado, global.x conocido");
-        let mut r = Resolver::new(eff);
+        let eff = Effective::build_for(&preset, &[], &known, Screen::Browse)
+            .expect("pane.x no disponible, global.x conocido");
+        let all = eff.bindings_all();
+        let hits: Vec<_> = all.iter().filter(|(seq, _, _)| seq == "x").collect();
+        assert_eq!(hits.len(), 1, "el dedup deja UNA por secuencia: {all:?}");
         assert_eq!(
-            r.push(Chord::new(Mods::default(), KeyCode::Char('x'))),
-            Resolution::Run("app.quit".into()),
-            "con pane.x filtrado, global.x deja de estar sombreado"
+            hits[0].1, "pane.select-drive",
+            "gana el contexto específico"
+        );
+        assert!(matches!(hits[0].2, Availability::NotBuilt { .. }));
+        // El `app.quit` de `[global]` sigue SOMBREADO: no aflora.
+        assert!(
+            !eff.bindings().iter().any(|(seq, _)| seq == "x"),
+            "la tecla no ejecuta nada — dirá por qué: {all:?}"
         );
     }
 
-    /// Un chord ilegible (`"megatecla"`) en un binding de PRESET cuyo
-    /// comando TAMBIÉN es desconocido: el parseo de la secuencia corre
-    /// ANTES del filtrado lenient (`raw.on.iter().map(parse_chord)`), así
-    /// que `BadChord` gana incluso en modo Lenient — el filtro solo
-    /// silencia comandos desconocidos, jamás config estructuralmente rota.
+    /// Un chord ilegible (`"megatecla"`) en un binding cuyo comando TAMBIÉN
+    /// es desconocido: el parseo de la secuencia corre ANTES de consultar el
+    /// catálogo (`raw.on.iter().map(parse_chord)`), así que `BadChord` gana —
+    /// la config estructuralmente rota jamás se declara «no disponible».
     #[test]
-    fn subset_chord_malo_en_preset_sigue_fallando() {
+    fn chord_malo_gana_al_comando_desconocido() {
         let preset = parse_keymap(
             r#"[pane]
 keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
         )
         .unwrap();
-        match Effective::build_for_subset(&preset, &[], &[], Screen::Browse) {
+        match Effective::build_for(&preset, &[], &[], Screen::Browse) {
             Err(KeymapError::BadChord { .. }) => {}
             other => panic!("esperaba BadChord, fue {other:?}"),
         }
@@ -1210,6 +1221,131 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
                 "{raw:?} no se reconoce: pasa tal cual"
             );
         }
+    }
+
+    /// A preset that binds a Planned command LOADS, and the binding survives
+    /// carrying its reason. Without this a faithful Total Commander preset
+    /// cannot exist: a third of it names commands norte has not built.
+    #[test]
+    fn un_binding_a_comando_planned_sobrevive_marcado() {
+        let preset = parse_keymap(
+            r#"
+[pane]
+keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["pane.copy"], Screen::Browse).unwrap();
+        let all = eff.bindings_all();
+        let (_, run, avail) = all
+            .iter()
+            .find(|(_, run, _)| *run == "pane.select-drive")
+            .expect("el binding no puede desaparecer");
+        assert_eq!(*run, "pane.select-drive");
+        assert!(matches!(avail, Availability::NotBuilt { .. }), "{avail:?}");
+    }
+
+    /// A command the catalogue calls Live but THIS frontend does not implement
+    /// is kept as `NotHere` instead of being filtered away in silence — the
+    /// H3f bug.
+    #[test]
+    fn un_comando_live_que_este_frontend_no_implementa_es_not_here() {
+        let preset = parse_keymap(
+            r#"
+[global]
+keymap = [ { on = ["f1"], run = "app.help" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["pane.copy"], Screen::Browse).unwrap();
+        let all = eff.bindings_all();
+        let (_, _, avail) = all
+            .iter()
+            .find(|(_, run, _)| *run == "app.help")
+            .expect("no puede desaparecer");
+        assert_eq!(*avail, Availability::NotHere);
+    }
+
+    /// `bindings()` keeps its old meaning — only what actually runs — so the
+    /// help and the hints render exactly as before this change.
+    #[test]
+    fn bindings_solo_devuelve_lo_ejecutable() {
+        let preset = parse_keymap(
+            r#"
+[pane]
+keymap = [
+    { on = ["f5"], run = "pane.copy" },
+    { on = ["alt+f1"], run = "pane.select-drive" },
+]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["pane.copy"], Screen::Browse).unwrap();
+        let runs: Vec<&str> = eff.bindings().into_iter().map(|(_, run)| run).collect();
+        assert_eq!(runs, vec!["pane.copy"]);
+    }
+
+    /// A name absent from the CATALOGUE is a typo and still dies loudly, in a
+    /// preset and in a user layer alike. "Not built yet" and "you misspelled
+    /// it" stop being the same event; they must not become the same event
+    /// again.
+    #[test]
+    fn un_nombre_fuera_del_catalogo_sigue_siendo_error() {
+        let preset = parse_keymap(
+            r#"
+[pane]
+keymap = [ { on = ["f5"], run = "pane.copyy" } ]
+"#,
+        )
+        .unwrap();
+        let e = Effective::build_for(&preset, &[], &["pane.copy"], Screen::Browse).unwrap_err();
+        assert!(matches!(e, KeymapError::UnknownCommand { .. }), "{e:?}");
+    }
+
+    /// An unavailable binding SHADOWS a lower-precedence available one. If a
+    /// preset puts `alt+f1` in `[pane]`, the key must say "drives are not
+    /// built" rather than quietly falling through to whatever `[global]` had —
+    /// falling through is how a Total Commander user gets a surprise instead
+    /// of an answer.
+    #[test]
+    fn un_binding_no_disponible_ensombrece_al_de_global() {
+        let preset = parse_keymap(
+            r#"
+[global]
+keymap = [ { on = ["alt+f1"], run = "pane.refresh" } ]
+
+[pane]
+keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
+"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["pane.refresh"], Screen::Browse).unwrap();
+        let all = eff.bindings_all();
+        let hits: Vec<_> = all.iter().filter(|(seq, _, _)| seq == "alt+f1").collect();
+        assert_eq!(hits.len(), 1, "el dedup deja UNA por secuencia: {all:?}");
+        assert_eq!(
+            hits[0].1, "pane.select-drive",
+            "gana el contexto específico"
+        );
+        assert!(matches!(hits[0].2, Availability::NotBuilt { .. }));
+    }
+
+    /// Unavailable bindings take part in the prefix-free check: the shape of
+    /// the map is a load-time property (ADR 0006), independent of what runs.
+    #[test]
+    fn un_binding_no_disponible_sigue_contando_para_prefix_free() {
+        let preset = parse_keymap(
+            r#"
+[pane]
+keymap = [
+    { on = ["g"], run = "pane.select-drive" },
+    { on = ["g", "g"], run = "cursor.top" },
+]
+"#,
+        )
+        .unwrap();
+        let e = Effective::build_for(&preset, &[], &["cursor.top"], Screen::Browse).unwrap_err();
+        assert!(matches!(e, KeymapError::AmbiguousPrefix { .. }), "{e:?}");
     }
 
     /// Masking runs FIRST and the cosmetics cannot undo it (encoding audit

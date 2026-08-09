@@ -2,10 +2,11 @@
 //! each frontend uses for its "known preset" list.
 //!
 //! Bundled keymap presets (ADR 0006), shared by every frontend. Each
-//! frontend validates against ITS OWN command set — via
-//! [`Effective::build_for`](super::Effective::build_for) (strict) or
-//! [`Effective::build_for_subset`](super::Effective::build_for_subset)
-//! (preset bindings to commands the frontend lacks are skipped).
+//! frontend declares ITS OWN command set to
+//! [`Effective::build_for`](super::Effective::build_for); a preset binding to
+//! a command that frontend lacks is KEPT and tagged
+//! [`Availability::NotHere`](super::Availability), never dropped, so the key
+//! can say why it does nothing (K1).
 
 /// The default orthodox preset.
 pub const ORTHODOX: &str = include_str!("../../presets/keymap/orthodox.toml");

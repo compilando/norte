@@ -124,11 +124,12 @@ pub fn parse_keymap(s: &str) -> Result<KeymapFile, KeymapError> {
     toml::from_str(s).map_err(|e| KeymapError::Toml(toml_diag(s, &e)))
 }
 
-/// Where a merged binding comes from: the shared preset (eligible for the
-/// lenient filter in
-/// [`Effective::build_for_subset`](super::Effective::build_for_subset)) or a
-/// user/project layer (always strict — see
-/// [`Strictness`](super::effective::Strictness)).
+/// Where a merged binding comes from: the shared preset or a user/project
+/// layer. Since K1 the per-binding verdict no longer depends on it (a name
+/// absent from `known_commands` is looked up in the shared catalogue, the same
+/// way for both) — it survives because `merge_ctx` needs it to discard the
+/// `lua:` bindings of a project layer, and because a future rule that DOES
+/// depend on provenance would otherwise have to re-derive it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Origin {
     Preset,
@@ -140,8 +141,7 @@ pub(super) enum Origin {
 /// bindings `lua:` de una capa de PROYECTO se DESCARTAN aquí, contados en
 /// `discarded_lua` (seguridad: ver [`KeymapFile::mark_project`] — el
 /// keymap de un repo ajeno no puede dirigir la ejecución de comandos Lua).
-/// Cada binding se etiqueta con su [`Origin`] (preset vs. capa) para que
-/// `build_for_impl` sepa a cuáles aplica el filtrado lenient.
+/// Cada binding se etiqueta con su [`Origin`] (preset vs. capa).
 fn merge_ctx<'a>(
     preset: &'a KeymapFile,
     layers: &'a [KeymapFile],

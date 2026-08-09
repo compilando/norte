@@ -27,8 +27,10 @@ pub const COMMANDS: &[&str] = &[
     "app.palette",
     "app.extensions",
     // H3f: the three shared presets have bound `f1` → `app.help` since H3a,
-    // but this table did not list it — and `Effective::build_for_subset`
-    // filters by it, so the binding was dropped and F1 did nothing, silently.
+    // but this table did not list it — and the engine's lenient filter
+    // dropped the binding, so F1 did nothing, silently. Since K1 there is no
+    // lenient filter: a binding this frontend cannot run survives as
+    // `Availability::NotHere` and says so when pressed.
     // No supplement needed: the chord comes from the shared catalogue, like
     // `app.palette`/`app.extensions`.
     "app.help",
@@ -216,7 +218,7 @@ fn preset(name: &str) -> KeymapFile {
 /// `alt+i` estaba libre en los tres presets de fábrica CUANDO se eligió.
 /// **Ya no**: los gestos de panel bindean `alt+i` → `pane.mirror` en los
 /// tres presets, y `alt+s` → `pane.swap` en `vim`. No rompe nada hoy
-/// (`build_for_subset` filtra los comandos que la GUI no tiene, y este
+/// (un comando que la GUI no tiene no se ejecuta —queda `NotHere`— y este
 /// supplemento gana al preset), pero deja `Alt+i` significando cosas
 /// distintas en cada frontend —renombrado IA aquí, espejo de panel en la
 /// TUI—, que va contra la premisa del catálogo compartido. Se anota y no se
@@ -297,10 +299,11 @@ pub fn build_effectives_from(
 /// `norte_frontend::config::load_keymap_layer` (which also rejects a bare
 /// `keymap = [...]` in a layer — ADR 0006/0035 — a check the old hand-rolled
 /// GUI loader was missing) and merges them onto the shared preset via
-/// [`Effective::build_for_subset`] — the GUI implements a SUBSET of the
-/// commands the shared presets bind (e.g. `app.help`, `pane.hotlist`), so
-/// preset bindings to commands the GUI lacks are skipped instead of failing
-/// the whole load (design decision C2/G0: shared preset is canonical).
+/// [`Effective::build_for`] — the GUI implements a SUBSET of the commands the
+/// shared presets bind (e.g. `pane.hotlist`), so preset bindings to commands
+/// the GUI lacks are KEPT, tagged `Availability::NotHere`, instead of failing
+/// the whole load (design decision C2/G0: shared preset is canonical) or, as
+/// until K1, being dropped in silence.
 ///
 /// The GUI-only [`gui_supplement`] goes in FIRST (lowest precedence, see
 /// `merge_ctx`: the LAST layer wins) so a user/project `keymap.toml` can
@@ -330,8 +333,8 @@ fn build_effectives_layers(
         } // ausente: la capa no aporta; ilegible = error (banner + preset).
     }
     let cmds = all_commands();
-    let browse = Effective::build_for_subset(&preset, &kfs, &cmds, Screen::Browse)?;
-    let viewer = Effective::build_for_subset(&preset, &kfs, &cmds, Screen::Viewer)?;
+    let browse = Effective::build_for(&preset, &kfs, &cmds, Screen::Browse)?;
+    let viewer = Effective::build_for(&preset, &kfs, &cmds, Screen::Viewer)?;
     Ok((browse, viewer))
 }
 
@@ -362,10 +365,8 @@ pub fn build_effectives_with(preset_name: &str, layers: &[KeymapFile]) -> (Effec
     kfs.extend_from_slice(layers);
     let cmds = all_commands();
     (
-        Effective::build_for_subset(&preset, &kfs, &cmds, Screen::Browse)
-            .expect("preset browse válido"),
-        Effective::build_for_subset(&preset, &kfs, &cmds, Screen::Viewer)
-            .expect("preset viewer válido"),
+        Effective::build_for(&preset, &kfs, &cmds, Screen::Browse).expect("preset browse válido"),
+        Effective::build_for(&preset, &kfs, &cmds, Screen::Viewer).expect("preset viewer válido"),
     )
 }
 
@@ -436,9 +437,10 @@ pub fn gpui_chord(
 mod tests {
     use super::*;
 
-    /// Los TRES presets compartidos parsean y construyen (modo subset — la
-    /// GUI no implementa el catálogo entero de la TUI/CLI, ver
-    /// `build_for_subset`) para el contexto Browse de la GUI.
+    /// Los TRES presets compartidos parsean y construyen para el contexto
+    /// Browse de la GUI: la GUI no implementa el catálogo entero de la
+    /// TUI/CLI, y desde K1 lo que no implementa sobrevive marcado
+    /// (`Availability::NotHere`) en vez de tumbar la carga.
     #[test]
     fn los_tres_presets_compartidos_parsean_y_construyen_para_la_gui() {
         for name in ["orthodox", "vim", "cua"] {
@@ -466,7 +468,7 @@ mod tests {
     }
 
     fn build_effective_from(p: &KeymapFile, l: &[KeymapFile]) -> Result<Effective, KeymapError> {
-        Effective::build_for_subset(p, l, COMMANDS, Screen::Browse)
+        Effective::build_for(p, l, COMMANDS, Screen::Browse)
     }
 
     /// `build_effectives` (GUI-d T3): el preset orthodox construye AMBOS
@@ -504,7 +506,10 @@ mod tests {
     /// H3f: the bug this closes is one of OMISSION — the presets bound `f1`
     /// and the GUI filtered the binding out, so the key did nothing and
     /// nothing said so. Pinned in all three presets, because the drop
-    /// happened in `build_for_subset` and would happen again for any of them.
+    /// happened in the engine's lenient filter and would happen again for any
+    /// of them. Since K1 the filter is gone and the binding would survive as
+    /// `NotHere` — but `COMMANDS` listing it is still what makes F1 RUN, and
+    /// `bindings()` is still only what runs, so the pin stands unchanged.
     #[test]
     fn app_help_esta_en_commands_y_los_presets_lo_alcanzan() {
         assert!(

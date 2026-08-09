@@ -129,8 +129,7 @@ impl CliChords {
                 // would be a third list to keep in step with two frontends.
                 let known = norte_frontend::keymap::preset_commands(screen);
                 let known: Vec<&str> = known.iter().map(String::as_str).collect();
-                let Ok(eff) = Effective::build_for_subset(&preset_kf, layers, &known, screen)
-                else {
+                let Ok(eff) = Effective::build_for(&preset_kf, layers, &known, screen) else {
                     continue;
                 };
                 for (seq, cmd) in eff.bindings() {
