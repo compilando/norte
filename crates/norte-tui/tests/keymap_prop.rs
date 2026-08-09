@@ -76,7 +76,7 @@ proptest! {
                     prop_assert_eq!(res, Resolution::Pending(i + 1), "prefijo de {:?}", on);
                 } else {
                     prop_assert!(
-                        matches!(res, Resolution::Run(_)),
+                        matches!(res, Resolution::Run { .. }),
                         "fin de {:?}: {:?}", on, res
                     );
                 }

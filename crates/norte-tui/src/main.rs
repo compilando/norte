@@ -2904,7 +2904,7 @@ async fn run(
                         // medias viva.
                         if let Some(chord) = chord_from_crossterm(key.modifiers, key.code) {
                             match active.push(chord) {
-                                Resolution::Run(cmd) => {
+                                Resolution::Run { command: cmd, .. } => {
                                     app.pending.clear();
                                     // `lua:<nombre>` (M4): al despachador Lua —
                                     // jamás a `dispatch` (no es comando fijo).
@@ -2972,6 +2972,10 @@ async fn run(
                                         .collect::<Vec<_>>()
                                         .join(" ");
                                 }
+                                // K2a task 1 leaves this inert ON PURPOSE:
+                                // painting the count in the status bar (and
+                                // repeating the dispatch above) is task 3.
+                                Resolution::Counting(_) => {}
                                 // K1 T4: la tecla ESTÁ ligada y esta build no
                                 // puede correr lo que tiene ligado. Antes se
                                 // despachaba un nombre sin brazo; ahora la
@@ -3039,11 +3043,11 @@ async fn on_theme_picker_key(
         return; // tecla no modelada por el keymap: ignorar
     };
     let cmd = match resolver.push(chord) {
-        Resolution::Run(cmd) => cmd,
+        Resolution::Run { command: cmd, .. } => cmd,
         // Sin semántica de secuencia definida para overlays (T2), y lo mismo
         // para una tecla ligada a algo que esta build no corre (K1 T4):
         // ignorar y reiniciar el estado de resolución.
-        Resolution::Pending(_) | Resolution::Unavailable { .. } => {
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return;
         }
@@ -3120,11 +3124,11 @@ async fn on_columns_key(
         return false; // tecla no modelada por el keymap: ignorar
     };
     let cmd = match resolver.push(chord) {
-        Resolution::Run(cmd) => cmd,
+        Resolution::Run { command: cmd, .. } => cmd,
         // Sin semántica de secuencia definida para overlays (T2), y lo mismo
         // para una tecla ligada a algo que esta build no corre (K1 T4):
         // ignorar y reiniciar el estado de resolución.
-        Resolution::Pending(_) | Resolution::Unavailable { .. } => {
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return false;
         }
@@ -3300,11 +3304,11 @@ fn on_help_key(
     // Régimen 2: el keymap manda (contexto `dialog`, rebindeable).
     let chord = chord_from_crossterm(mods, code)?;
     let cmd = match resolver.push(chord) {
-        Resolution::Run(cmd) => cmd,
+        Resolution::Run { command: cmd, .. } => cmd,
         // Sin semántica de secuencia definida para overlays (T2), y lo mismo
         // para una tecla ligada a algo que esta build no corre (K1 T4):
         // ignorar y reiniciar el estado de resolución.
-        Resolution::Pending(_) | Resolution::Unavailable { .. } => {
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return None;
         }
@@ -3490,7 +3494,7 @@ mod help_key_tests {
             let mut resolver = Resolver::new(dialog.clone());
             let chord = chord_from_crossterm(mods, code).expect("chord modelado");
             assert!(
-                matches!(resolver.push(chord), Resolution::Run(cmd) if cmd == "app.help"),
+                matches!(resolver.push(chord), Resolution::Run { command: cmd, .. } if cmd == "app.help"),
                 "{code:?} es `app.help` en el contexto dialog"
             );
             let mut resolver = Resolver::new(dialog.clone());
@@ -3863,7 +3867,7 @@ mod help_key_tests {
         let chord =
             chord_from_crossterm(KeyModifiers::NONE, KeyCode::F(1)).expect("F1 es un chord");
         let cmd = match r.push(chord) {
-            Resolution::Run(cmd) => cmd,
+            Resolution::Run { command: cmd, .. } => cmd,
             otro => panic!("F1 resuelve a un comando en el contexto dialog: {otro:?}"),
         };
         assert_eq!(cmd, "app.help", "el preset orthodox ata F1 a `app.help`");
@@ -4852,10 +4856,10 @@ async fn on_extensions_key(
         return; // tecla no modelada por el keymap: ignorar
     };
     let cmd = match resolver.push(chord) {
-        Resolution::Run(cmd) => cmd,
+        Resolution::Run { command: cmd, .. } => cmd,
         // Secuencia en curso, o tecla ligada a algo que esta build no corre
         // (K1 T4): ignorar y reiniciar el estado de resolución.
-        Resolution::Pending(_) | Resolution::Unavailable { .. } => {
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return;
         }
@@ -5109,10 +5113,10 @@ async fn on_nav_popup_key(
         return Cd::Cancelled; // tecla no modelada por el keymap: ignorar
     };
     let cmd = match resolver.push(chord) {
-        Resolution::Run(cmd) => cmd,
+        Resolution::Run { command: cmd, .. } => cmd,
         // Secuencia en curso, o tecla ligada a algo que esta build no corre
         // (K1 T4): ignorar y reiniciar el estado de resolución.
-        Resolution::Pending(_) | Resolution::Unavailable { .. } => {
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return Cd::Cancelled;
         }
@@ -6023,11 +6027,11 @@ async fn on_dialog_key(
         return Cd::Cancelled; // tecla no modelada por el keymap: ignorar
     };
     let cmd = match resolver.push(chord) {
-        Resolution::Run(cmd) => cmd,
+        Resolution::Run { command: cmd, .. } => cmd,
         // Sin semántica de secuencia definida para overlays (T2), y lo mismo
         // para una tecla ligada a algo que esta build no corre (K1 T4):
         // ignorar y reiniciar el estado de resolución.
-        Resolution::Pending(_) | Resolution::Unavailable { .. } => {
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return Cd::Cancelled;
         }

@@ -11,8 +11,8 @@ use norte_core::TransferOptions;
 use norte_proto::{CollisionPolicy, VPath};
 use norte_tui::app::{DialogOutcome, Modal, Trail, TransferKind, dialog_action};
 use norte_tui::keymap::{
-    COMMANDS, Chord, DIALOG_COMMANDS, Effective, KeyCode, Mods, Resolution, Resolver, Screen,
-    parse_keymap,
+    COMMANDS, Chord, Count, DIALOG_COMMANDS, Effective, KeyCode, Mods, Resolution, Resolver,
+    Screen, parse_keymap,
 };
 use norte_tui::tasks::RetrySpec;
 
@@ -203,8 +203,14 @@ fn una_capa_de_usuario_rebindea_dialog_y_dialog_action_lo_obedece() {
         .expect("el efectivo construye con la capa rebindeada");
     let mut resolver = Resolver::new(eff);
     let res = resolver.push(Chord::new(Mods::default(), KeyCode::Char('y')));
-    assert_eq!(res, Resolution::Run("dialog.deny".to_owned()));
-    let Resolution::Run(cmd) = res else {
+    assert_eq!(
+        res,
+        Resolution::Run {
+            command: "dialog.deny".to_owned(),
+            count: Count::None
+        }
+    );
+    let Resolution::Run { command: cmd, .. } = res else {
         unreachable!()
     };
     // El comando RESUELTO (no la tecla) decide el desenlace: `y` ahora
@@ -240,8 +246,14 @@ fn rebind_explicito_de_enter_a_approve_es_consentimiento_informado() {
         .expect("el efectivo construye con la capa rebindeada");
     let mut resolver = Resolver::new(eff);
     let res = resolver.push(Chord::new(Mods::default(), KeyCode::Enter));
-    assert_eq!(res, Resolution::Run("dialog.approve".to_owned()));
-    let Resolution::Run(cmd) = res else {
+    assert_eq!(
+        res,
+        Resolution::Run {
+            command: "dialog.approve".to_owned(),
+            count: Count::None
+        }
+    );
+    let Resolution::Run { command: cmd, .. } = res else {
         unreachable!()
     };
     assert_eq!(

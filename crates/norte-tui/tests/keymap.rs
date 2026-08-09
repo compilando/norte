@@ -6,7 +6,7 @@
 
 use norte_tui::keymap::{COMMANDS as COMANDOS, KeyCode};
 use norte_tui::keymap::{
-    Chord, Effective, KeymapError, Mods, Resolution, Resolver, parse_chord, parse_keymap,
+    Chord, Count, Effective, KeymapError, Mods, Resolution, Resolver, parse_chord, parse_keymap,
 };
 
 fn eff(preset: &str, user: Option<&str>) -> Result<Effective, KeymapError> {
@@ -117,12 +117,18 @@ fn resuelve_secuencias_multi_tecla() {
     );
     assert_eq!(
         r.push(parse_chord("g").unwrap()),
-        Resolution::Run("cursor.top".into())
+        Resolution::Run {
+            command: "cursor.top".into(),
+            count: Count::None
+        }
     );
     // Tras ejecutar, el estado queda limpio.
     assert_eq!(
         r.push(parse_chord("G").unwrap()),
-        Resolution::Run("cursor.bottom".into())
+        Resolution::Run {
+            command: "cursor.bottom".into(),
+            count: Count::None
+        }
     );
     // Tecla sin binding: reset silencioso.
     assert_eq!(r.push(parse_chord("z").unwrap()), Resolution::Reset);
@@ -132,7 +138,10 @@ fn resuelve_secuencias_multi_tecla() {
     // q suelto (contexto global) sí corre.
     assert_eq!(
         r.push(parse_chord("q").unwrap()),
-        Resolution::Run("app.quit".into())
+        Resolution::Run {
+            command: "app.quit".into(),
+            count: Count::None
+        }
     );
 }
 
@@ -153,7 +162,10 @@ fn esc_cancela_la_secuencia_pendiente() {
     // Sin pendiente, Esc es una tecla más.
     assert_eq!(
         r.push(parse_chord("esc").unwrap()),
-        Resolution::Run("app.quit".into())
+        Resolution::Run {
+            command: "app.quit".into(),
+            count: Count::None
+        }
     );
 }
 
@@ -236,13 +248,19 @@ fn la_especificidad_de_contexto_prevalece_sobre_la_capa() {
     let mut r = Resolver::new(eff.clone());
     assert_eq!(
         r.push(parse_chord("q").unwrap()),
-        Resolution::Run("cursor.up".into()),
+        Resolution::Run {
+            command: "cursor.up".into(),
+            count: Count::None
+        },
         "pane.append gana a global.keymap (especificidad > capa)"
     );
     // …y un prepend de usuario en [global] NO pisa al keymap [pane].
     assert_eq!(
         r.push(parse_chord("j").unwrap()),
-        Resolution::Run("cursor.down".into()),
+        Resolution::Run {
+            command: "cursor.down".into(),
+            count: Count::None
+        },
         "global.prepend no pisa a pane.keymap"
     );
 }
@@ -287,7 +305,10 @@ fn lua_prefijado_pasa_la_validacion_de_comandos() {
     let mut r = Resolver::new(eff(preset, None).expect("lua: con nombre válido pasa"));
     assert_eq!(
         r.push(parse_chord("x").unwrap()),
-        Resolution::Run("lua:mi-comando.v2".into()),
+        Resolution::Run {
+            command: "lua:mi-comando.v2".into(),
+            count: Count::None
+        },
         "el binding resuelve al comando lua: completo"
     );
 
@@ -328,17 +349,26 @@ fn capas_yazi_prepend_pisa_y_append_solo_anade() {
     let mut r = Resolver::new(eff.clone());
     assert_eq!(
         r.push(parse_chord("j").unwrap()),
-        Resolution::Run("cursor.top".into()),
+        Resolution::Run {
+            command: "cursor.top".into(),
+            count: Count::None
+        },
         "prepend PISA al preset"
     );
     assert_eq!(
         r.push(parse_chord("k").unwrap()),
-        Resolution::Run("cursor.up".into()),
+        Resolution::Run {
+            command: "cursor.up".into(),
+            count: Count::None
+        },
         "append NO pisa una secuencia existente"
     );
     assert_eq!(
         r.push(parse_chord("x").unwrap()),
-        Resolution::Run("app.quit".into()),
+        Resolution::Run {
+            command: "app.quit".into(),
+            count: Count::None
+        },
         "append añade lo nuevo"
     );
 }
@@ -358,11 +388,17 @@ fn el_contexto_especifico_pisa_al_global_por_secuencia_exacta() {
     let mut r = Resolver::new(eff.clone());
     assert_eq!(
         r.push(parse_chord("q").unwrap()),
-        Resolution::Run("cursor.up".into())
+        Resolution::Run {
+            command: "cursor.up".into(),
+            count: Count::None
+        }
     );
     assert_eq!(
         r.push(parse_chord("tab").unwrap()),
-        Resolution::Run("pane.switch".into())
+        Resolution::Run {
+            command: "pane.switch".into(),
+            count: Count::None
+        }
     );
 }
 
@@ -375,12 +411,18 @@ fn los_tres_presets_de_fabrica_cargan_y_cubren_lo_basico() {
         // Todo preset debe poder salir y cambiar de pane.
         let quit_posible = ["q", "f10", "ctrl+q"].iter().any(|k| {
             let res = r.push(parse_chord(k).unwrap());
-            res == Resolution::Run("app.quit".into())
+            res == Resolution::Run {
+                command: "app.quit".into(),
+                count: Count::None,
+            }
         });
         assert!(quit_posible, "preset {nombre}: sin salida");
         assert_eq!(
             r.push(parse_chord("tab").unwrap()),
-            Resolution::Run("pane.switch".into()),
+            Resolution::Run {
+                command: "pane.switch".into(),
+                count: Count::None
+            },
             "preset {nombre}: Tab es sagrado (spec)"
         );
     }
@@ -400,7 +442,10 @@ fn los_presets_ligan_las_operaciones_de_archivo() {
         ] {
             assert_eq!(
                 r.push(parse_chord(tecla).unwrap()),
-                Resolution::Run(cmd.into()),
+                Resolution::Run {
+                    command: cmd.into(),
+                    count: Count::None
+                },
                 "preset {nombre}: {tecla}"
             );
         }
@@ -438,12 +483,18 @@ fn capas_multiples_se_pliegan_por_precedencia() {
     let mut r = Resolver::new(eff);
     assert_eq!(
         r.push(parse_chord("j").unwrap()),
-        Resolution::Run("cursor.top".into()),
+        Resolution::Run {
+            command: "cursor.top".into(),
+            count: Count::None
+        },
         "el prepend de la capa MÁS alta gana"
     );
     assert_eq!(
         r.push(parse_chord("x").unwrap()),
-        Resolution::Run("cursor.bottom".into()),
+        Resolution::Run {
+            command: "cursor.bottom".into(),
+            count: Count::None
+        },
         "entre appends también gana la capa más alta"
     );
 }
@@ -467,18 +518,27 @@ fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
     let mut r = Resolver::new(browse);
     assert_eq!(
         r.push(parse_chord("q").unwrap()),
-        Resolution::Run("app.quit".into())
+        Resolution::Run {
+            command: "app.quit".into(),
+            count: Count::None
+        }
     );
     assert_eq!(
         r.push(parse_chord("enter").unwrap()),
-        Resolution::Run("nav.enter".into())
+        Resolution::Run {
+            command: "nav.enter".into(),
+            count: Count::None
+        }
     );
     // En Viewer, su q específico PISA al global y enter NO existe.
     let viewer = Effective::build_for(&preset, &[], COMANDOS, Screen::Viewer).unwrap();
     let mut r = Resolver::new(viewer);
     assert_eq!(
         r.push(parse_chord("q").unwrap()),
-        Resolution::Run("cursor.top".into())
+        Resolution::Run {
+            command: "cursor.top".into(),
+            count: Count::None
+        }
     );
     assert_eq!(r.push(parse_chord("enter").unwrap()), Resolution::Reset);
 }
@@ -666,7 +726,10 @@ fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
     let mut r = Resolver::new(eff);
     assert_eq!(
         r.push(parse_chord("j").unwrap()),
-        Resolution::Run("cursor.down".into()),
+        Resolution::Run {
+            command: "cursor.down".into(),
+            count: Count::None
+        },
         "la tecla cae al builtin, jamás al lua: del proyecto"
     );
 
@@ -677,7 +740,10 @@ fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
     let mut r = Resolver::new(eff);
     assert_eq!(
         r.push(parse_chord("j").unwrap()),
-        Resolution::Run("lua:pwn".into()),
+        Resolution::Run {
+            command: "lua:pwn".into(),
+            count: Count::None
+        },
         "en capa de usuario el binding lua: es legítimo"
     );
 
@@ -696,6 +762,9 @@ fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
     let mut r = Resolver::new(eff);
     assert_eq!(
         r.push(parse_chord("x").unwrap()),
-        Resolution::Run("cursor.up".into())
+        Resolution::Run {
+            command: "cursor.up".into(),
+            count: Count::None
+        }
     );
 }

@@ -10,8 +10,8 @@
 /// nombrarla. Una API que acepta un ajuste que va a ignorar es peor que una
 /// que no lo ofrece.
 pub use norte_frontend::keymap::{
-    Availability, Chord, Effective, KeyCode, KeymapError, KeymapFile, Mods, Resolution, Resolver,
-    Screen, paint_chord, parse_chord, parse_keymap, unavailable_message,
+    Availability, Chord, Count, Effective, KeyCode, KeymapError, KeymapFile, Mods, Resolution,
+    Resolver, Screen, paint_chord, parse_chord, parse_keymap, unavailable_message,
 };
 
 use crossterm::event::{KeyCode as CtCode, KeyModifiers as CtMods};
@@ -349,11 +349,20 @@ mod tests {
             },
             KeyCode::Char('c'),
         );
-        assert_eq!(r.push(ctrl_c), Resolution::Run("app.quit".to_owned()));
+        assert_eq!(
+            r.push(ctrl_c),
+            Resolution::Run {
+                command: "app.quit".to_owned(),
+                count: Count::None
+            }
+        );
         // Copy vive en F5, no en un chord de Ctrl.
         assert_eq!(
             r.push(Chord::new(Mods::default(), KeyCode::F(5))),
-            Resolution::Run("pane.copy".to_owned())
+            Resolution::Run {
+                command: "pane.copy".to_owned(),
+                count: Count::None
+            }
         );
     }
 
@@ -375,7 +384,10 @@ mod tests {
             let mut r = Resolver::new(eff);
             assert_eq!(
                 r.push(Chord::new(Mods::default(), KeyCode::Char('y'))),
-                Resolution::Run("dialog.approve".to_owned()),
+                Resolution::Run {
+                    command: "dialog.approve".to_owned(),
+                    count: Count::None
+                },
                 "preset {nombre}"
             );
         }
@@ -436,7 +448,10 @@ mod tests {
                     .unwrap_or_else(|| panic!("preset {nombre}: chord no modelado {code:?}"));
                 assert_eq!(
                     r.push(chord),
-                    Resolution::Run((*command).to_owned()),
+                    Resolution::Run {
+                        command: (*command).to_owned(),
+                        count: Count::None
+                    },
                     "preset {nombre}: {command}"
                 );
             }
@@ -447,7 +462,10 @@ mod tests {
             let alt_c = chord_from_crossterm(CtMods::ALT, CtCode::Char('c')).expect("alt+c");
             assert_eq!(
                 r.push(alt_c),
-                Resolution::Run("pane.columns".to_owned()),
+                Resolution::Run {
+                    command: "pane.columns".to_owned(),
+                    count: Count::None
+                },
                 "preset {nombre}: pane.columns"
             );
         }
@@ -486,7 +504,10 @@ mod tests {
                     .unwrap_or_else(|| panic!("preset {name}: chord no modelado {code:?}"));
                 assert_eq!(
                     r.push(chord),
-                    Resolution::Run((*command).to_owned()),
+                    Resolution::Run {
+                        command: (*command).to_owned(),
+                        count: Count::None
+                    },
                     "preset {name}: {command}"
                 );
             }
@@ -506,7 +527,13 @@ mod tests {
         let eff = Effective::build_for(&vim, &[], COMMANDS, Screen::Browse).expect("vim efectivo");
         let mut r = Resolver::new(eff);
         let ctrl_u = chord_from_crossterm(CtMods::CONTROL, CtCode::Char('u')).expect("ctrl+u");
-        assert_eq!(r.push(ctrl_u), Resolution::Run("cursor.page-up".to_owned()));
+        assert_eq!(
+            r.push(ctrl_u),
+            Resolution::Run {
+                command: "cursor.page-up".to_owned(),
+                count: Count::None
+            }
+        );
     }
 
     /// The six mark commands resolve in the three factory presets (#103). A
@@ -556,7 +583,10 @@ mod tests {
                 let mut r = Resolver::new(eff.clone());
                 assert_eq!(
                     r.push(*chord),
-                    Resolution::Run((*command).to_owned()),
+                    Resolution::Run {
+                        command: (*command).to_owned(),
+                        count: Count::None
+                    },
                     "preset {name}: {command}"
                 );
             }
