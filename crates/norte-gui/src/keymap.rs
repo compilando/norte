@@ -238,7 +238,7 @@ fn preset(name: &str) -> KeymapFile {
 /// → `pane.copy-path` (plan de ratón, tarea 4) sigue el mismo criterio: ni
 /// los presets ni este supplemento lo usan, y el `ctrl+shift+c` de los
 /// escritorios no es expresable en esta gramática (`shift+<char>`).
-fn gui_supplement() -> KeymapFile {
+pub(crate) fn gui_supplement() -> KeymapFile {
     const TOML: &str = r#"
 [pane]
 prepend_keymap = [
@@ -342,7 +342,7 @@ prepend_keymap = [
 /// Cada pantalla se valida ahora contra el set que ELLA despacha, de modo que
 /// esos bindings de `[global]` salen `NotHere` y la rama `Unavailable` deja
 /// de ser inalcanzable por mentira.
-fn screen_commands(screen: Screen) -> &'static [&'static str] {
+pub(crate) fn screen_commands(screen: Screen) -> &'static [&'static str] {
     match screen {
         Screen::Viewer => VIEWER_COMMANDS,
         // La GUI no construye un efectivo de `Screen::Dialog` (no tiene

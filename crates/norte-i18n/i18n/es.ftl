@@ -408,7 +408,7 @@ settings-plugins-key-count = {$count} ajustes
 # --- Vista de ajustes de la GUI (S4) — swap a pantalla completa por ratón
 # sobre el mismo catálogo/máquina de estado que el overlay de arriba.
 settings-restart-badge = requiere reinicio
-settings-hint-gui = [↑/↓/pgup/pgdn/click] navegar · [enter/click] editar · [esc] cerrar
+settings-hint-gui = [↑/↓/pgup/pgdn/click] navegar · [enter/click] editar · [ctrl+k] atajos · [esc] cerrar
 # P1: prefijo de una fila aportada por un plugin (`palette::plugin_rows`) —
 # ninguna fila built-in lo lleva, así que un plugin no puede disfrazarse de
 # comando built-in copiando su texto exacto.
@@ -781,3 +781,20 @@ msg-shortcut-bound = { $chord } ahora ejecuta { $command }
 msg-shortcut-unbound = quitado de tu keymap.toml: { $chord } → { $command }
 msg-shortcut-nothing-to-unbind = no se quitó nada: nada de esa sección de tu keymap.toml casó con esa tecla
 msg-shortcut-not-bindable = esa tecla no se puede capturar aquí
+
+# La redacción propia de la GUI para la misma pantalla (K3c c4). Dos cosas
+# cambian respecto a la terminal y ninguna es cosmética. Tiene ratón, así que
+# la pista nombra el click. Y SÍ ve Cmd/Super — gpui reporta `platform`, y
+# crossterm no lo entrega jamás sin el protocolo de teclado Kitty que norte no
+# activa —, así que un chord capturado aquí puede ser uno que la terminal no
+# puede pulsar nunca. No es un rechazo (en esta ventana funciona), así que se
+# dice en la fila al capturar y otra vez al confirmar, en vez de descubrirse
+# meses después en la TUI.
+gui-shortcuts-hint = [↑/↓/repág/avpág/click] navegar · [enter] reasignar · [ctrl+u] desligar · [esc] cerrar
+gui-shortcuts-capture-note = esc cancela (así que no se puede ligar aquí) · ⌘ solo funciona en esta ventana
+gui-shortcuts-cmd-note = ⌘ no es alcanzable en la terminal
+# La escritura entró pero el keymap no: este frontend no vigila ficheros, así
+# que un rebind llega al teclado solo por la reconstrucción que sigue a la
+# escritura, y esa reconstrucción es todo-o-nada. Decir solo «guardado»
+# describiría una tecla que no cambió.
+gui-msg-shortcut-saved-not-applied = guardado, pero esta ventana conservó el keymap anterior

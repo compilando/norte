@@ -399,7 +399,7 @@ settings-plugins-key-count = {$count} settings
 # --- GUI settings view (S4) — mouse-driven full-view swap over the same
 # catalog/state machine as the overlay above.
 settings-restart-badge = restart required
-settings-hint-gui = [↑/↓/pgup/pgdn/click] navigate · [enter/click] edit · [esc] close
+settings-hint-gui = [↑/↓/pgup/pgdn/click] navigate · [enter/click] edit · [ctrl+k] shortcuts · [esc] close
 # P1: prefix on a plugin-contributed row (`palette::plugin_rows`) — no
 # built-in row ever carries it, so a plugin cannot spoof a built-in command
 # by copying its exact display text.
@@ -760,3 +760,20 @@ msg-shortcut-bound = { $chord } now runs { $command }
 msg-shortcut-unbound = removed from your keymap.toml: { $chord } → { $command }
 msg-shortcut-nothing-to-unbind = nothing removed: nothing in that section of your keymap.toml matched that key
 msg-shortcut-not-bindable = that key cannot be captured here
+
+# The GUI's own wording for the same screen (K3c c4). Two things differ from
+# the terminal's and neither is cosmetic. It has a mouse, so the hint names
+# click. And it CAN see Cmd/Super — gpui reports `platform`, crossterm never
+# delivers it without the Kitty keyboard protocol norte does not enable — so
+# a chord captured here may be one the terminal frontend can never press.
+# That is not a refusal (it works in this window), so it is said on the row
+# at capture time and again on the confirmation, rather than discovered
+# months later in the TUI.
+gui-shortcuts-hint = [↑/↓/pgup/pgdn/click] navigate · [enter] rebind · [ctrl+u] unbind · [esc] close
+gui-shortcuts-capture-note = esc cancels (so it cannot be bound here) · ⌘ works in this window only
+gui-shortcuts-cmd-note = ⌘ is not reachable in the terminal frontend
+# The write landed but the keymap did not: this frontend watches no files, so
+# a rebind reaches the keyboard only through the rebuild that follows the
+# write, and that rebuild is all-or-nothing. Saying "saved" alone would
+# describe a key that did not change.
+gui-msg-shortcut-saved-not-applied = saved, but this window kept the previous keymap

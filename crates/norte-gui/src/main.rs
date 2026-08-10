@@ -109,6 +109,7 @@ mod modal;
 mod palette_view;
 mod session;
 mod settings_view;
+mod shortcuts_view;
 mod theme_map;
 
 use context_menu::{ContextMenu, MenuOutcome};
@@ -385,6 +386,26 @@ struct NorteGui {
     /// ajustes está abierta, la vista de ajustes sigue ganando la pantalla
     /// hasta que el usuario la cierre).
     settings_view: Option<settings_view::SettingsView>,
+    /// The shortcut editor (K3c c4, `ctrl+k` from the settings view), or
+    /// `None` = closed.
+    ///
+    /// It sits IN FRONT of `settings_view`, which stays open behind it and
+    /// gets the screen back when this closes: the editor is a screen OF
+    /// settings, not a replacement for it. `on_key` and `render` therefore
+    /// both check it BEFORE `settings_view`.
+    ///
+    /// Unlike the TUI's twin this one has no file watcher behind it — this
+    /// frontend watches nothing — so the write path itself
+    /// (`apply_shortcut_write_result`) is what reloads the config, rebuilds
+    /// the effectives and refreshes these rows. If that rebuild fails the
+    /// OLD keymap stays and the editor says so; it never reports a key it
+    /// did not change.
+    shortcuts_view: Option<shortcuts_view::ShortcutsView>,
+    /// Which `keymap.toml` write of this window is the newest
+    /// (`NorteGui::next_shortcut_write`). Only that one's result may install
+    /// effectives or speak; see that method for why two can be in flight at
+    /// all when the TUI's equivalent cannot.
+    shortcut_write_gen: u64,
     /// The command palette overlay (G3c, `ctrl+p`): `Some` while open,
     /// painted ON TOP of the dual-pane/viewer (an overlay, not a
     /// full-view swap — mirrors the modal's z-order, see `render`), but
@@ -1128,6 +1149,8 @@ impl NorteGui {
                     quick_mode,
                     cfg_snapshot,
                     settings_view: None,
+                    shortcuts_view: None,
+                    shortcut_write_gen: 0,
                     palette: None,
                     columns_picker: None,
                     help: None,
@@ -1220,6 +1243,8 @@ impl NorteGui {
                     quick_mode,
                     cfg_snapshot,
                     settings_view: None,
+                    shortcuts_view: None,
+                    shortcut_write_gen: 0,
                     palette: None,
                     columns_picker: None,
                     help: None,
@@ -1771,7 +1796,7 @@ impl NorteGui {
                         }
                     };
                     if self.modal.is_none() {
-                        self.modal = Some(Modal::AiRenamePlan {
+                        self.open_modal(Modal::AiRenamePlan {
                             dir,
                             entries,
                             offset: 0,
@@ -1819,7 +1844,7 @@ impl NorteGui {
                         // respuesta.
                         self.errors[self.focus] = None;
                         if self.modal.is_none() {
-                            self.modal = Some(Modal::SemanticHits {
+                            self.open_modal(Modal::SemanticHits {
                                 hits,
                                 offset: 0,
                                 cursor: 0,
@@ -1856,7 +1881,7 @@ impl NorteGui {
     fn open_transfer_modal(&mut self, kind: TransferKind) {
         let f = self.focus;
         if let Some(modal) = transfer_modal(&self.panes, f, 1 - f, kind, None) {
-            self.modal = Some(modal);
+            self.open_modal(modal);
         }
     }
 
@@ -1875,7 +1900,7 @@ impl NorteGui {
             return;
         }
         if let Some(modal) = drop_modal(&self.panes, req) {
-            self.modal = Some(modal);
+            self.open_modal(modal);
         }
     }
 
@@ -1886,7 +1911,7 @@ impl NorteGui {
         if items.is_empty() {
             return;
         }
-        self.modal = Some(Modal::ConfirmDelete {
+        self.open_modal(Modal::ConfirmDelete {
             items,
             permanent: false,
         });
@@ -1897,7 +1922,7 @@ impl NorteGui {
         if self.modal.is_some() {
             self.conflict_backlog.push((pending, conflict));
         } else {
-            self.modal = Some(Modal::ConflictResolve { pending, conflict });
+            self.open_modal(Modal::ConflictResolve { pending, conflict });
         }
     }
 
@@ -1907,7 +1932,7 @@ impl NorteGui {
             return;
         }
         if let Some((pending, conflict)) = self.conflict_backlog.pop() {
-            self.modal = Some(Modal::ConflictResolve { pending, conflict });
+            self.open_modal(Modal::ConflictResolve { pending, conflict });
         }
     }
 
@@ -1919,7 +1944,7 @@ impl NorteGui {
             return;
         }
         if let Some((dir, entries, plan)) = self.pending_ai_plan.take() {
-            self.modal = Some(Modal::AiRenamePlan {
+            self.open_modal(Modal::AiRenamePlan {
                 dir,
                 entries,
                 offset: 0,
@@ -1937,7 +1962,7 @@ impl NorteGui {
             return;
         }
         if let Some(hits) = self.pending_semantic.take() {
-            self.modal = Some(Modal::SemanticHits {
+            self.open_modal(Modal::SemanticHits {
                 hits,
                 offset: 0,
                 cursor: 0,
@@ -1959,6 +1984,28 @@ impl NorteGui {
         self.open_pending_semantic();
     }
 
+    /// The ONE way a modal opens in this window (K3c c4).
+    ///
+    /// It exists so that "no modal opens while the shortcut editor is asking
+    /// for a blind keypress" is structural rather than a rule thirteen call
+    /// sites have to remember. Capture mode paints "press the new key" and
+    /// the reader is primed to press ANYTHING; a modal that arrives on its
+    /// own — a conflict at the end of a copy, an AI plan off the session bus
+    /// — takes the keyboard (`on_key` checks `self.modal` first) and is
+    /// painted on top, so that next key answers a question the reader did not
+    /// know was being asked. The key still reaches the modal; what norte must
+    /// not do is keep inviting it.
+    ///
+    /// The editor itself SURVIVES — the reader gets their list back after
+    /// answering — because the modal is not a reason to lose a filter and a
+    /// cursor. Only the capture goes.
+    fn open_modal(&mut self, modal: Modal) {
+        if let Some(view) = &mut self.shortcuts_view {
+            view.state.cancel_capture();
+        }
+        self.modal = Some(modal);
+    }
+
     /// Abre el renombrado in situ (`pane.rename`, shift+F6): el destino es el
     /// PADRE de la entrada bajo el cursor, no el dir del pane — renombrar no
     /// mueve de sitio. Siempre sobre el cursor (`selected`, que respeta el
@@ -1973,7 +2020,7 @@ impl NorteGui {
             return;
         };
         if let Some(modal) = rename_modal_for(&from) {
-            self.modal = Some(modal);
+            self.open_modal(modal);
         }
     }
 
@@ -1982,7 +2029,7 @@ impl NorteGui {
     /// (viaja dentro del modal y de la petición — un `cd` posterior no lo
     /// cambia de sitio).
     fn open_ai_rename(&mut self) {
-        self.modal = Some(Modal::AiRenamePrompt {
+        self.open_modal(Modal::AiRenamePrompt {
             dir: self.panes[self.focus].dir().clone(),
             query: Vec::new(),
         });
@@ -1992,7 +2039,7 @@ impl NorteGui {
     /// `pane.semantic-search`): sin dir — la búsqueda es global (root =
     /// None, paridad TUI `SEMANTIC_K`).
     fn open_semantic_search(&mut self) {
-        self.modal = Some(Modal::SemanticQuery { query: Vec::new() });
+        self.open_modal(Modal::SemanticQuery { query: Vec::new() });
     }
 
     /// Una task llegó a terminal: si falló por conflicto, encola/abre el modal
@@ -2181,7 +2228,7 @@ impl NorteGui {
         // visibles, ver `confirm_quit_task_count`).
         let pending = has_pending_work(tasks, marks) || !self.inflight.is_empty();
         if confirm_quit_should_open(self.confirm_quit, pending) {
-            self.modal = Some(Modal::ConfirmQuit { tasks, marks });
+            self.open_modal(Modal::ConfirmQuit { tasks, marks });
         } else {
             cx.quit();
         }
@@ -2317,7 +2364,22 @@ impl NorteGui {
     /// pantalla SÍ acepta tecleo libre). El resto delega en
     /// [`settings_view::on_key`] (puro) y actúa sobre el
     /// [`settings_view::SettingsOutcome`].
+    ///
+    /// K3c c4: `ctrl+k` opens the shortcut editor, and it is checked BEFORE
+    /// that gate — deliberately and as narrowly as possible. The gate drops
+    /// every ctrl-chord so that none is typed into the filter, which is
+    /// right for text and would otherwise mean this screen can never grow a
+    /// verb. One key, one modifier, no alt and no ⌘.
     fn on_settings_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+        if ks.modifiers.control
+            && !ks.modifiers.alt
+            && !ks.modifiers.platform
+            && !ks.modifiers.shift
+            && ks.key == "k"
+        {
+            self.open_shortcuts();
+            return;
+        }
         if ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform {
             return;
         }
@@ -2327,7 +2389,15 @@ impl NorteGui {
         let outcome = settings_view::on_key(view, &ks.key, ks.key_char.as_deref());
         match outcome {
             settings_view::SettingsOutcome::None => {}
-            settings_view::SettingsOutcome::Close => self.settings_view = None,
+            // The editor lives IN FRONT of this view (see the field's doc),
+            // so closing the view underneath it would strand it over nothing.
+            // Unreachable while the editor owns the keyboard — it is checked
+            // first in `on_key` — and cheap insurance against the next path
+            // that closes settings without going through a key.
+            settings_view::SettingsOutcome::Close => {
+                self.settings_view = None;
+                self.shortcuts_view = None;
+            }
             settings_view::SettingsOutcome::Write(w) => self.commit_settings_write(*w, cx),
             settings_view::SettingsOutcome::Invalid(e) => {
                 if let Some(view) = &mut self.settings_view {
@@ -2362,6 +2432,400 @@ impl NorteGui {
             | settings_view::SettingsOutcome::Invalid(_) => {}
         }
         cx.notify();
+    }
+
+    /// The LIVE maps a shortcut row and every verdict are read off — the ones
+    /// the resolvers are using RIGHT NOW, never a copy taken when the editor
+    /// opened. A write replaces them (`apply_keymap_live`), and a verdict
+    /// read from a replaced map is a verdict about somebody else's keyboard.
+    ///
+    /// Not a `&self` method on purpose: the callers need it alongside a
+    /// `&mut self.shortcuts_view`, and only a per-FIELD borrow is disjoint
+    /// from that.
+    fn shortcut_maps(&self) -> shortcuts_view::Maps<'_> {
+        shortcuts_view::Maps {
+            browse: self.resolver.effective(),
+            viewer: self.viewer_resolver.effective(),
+        }
+    }
+
+    /// Opens the shortcut editor (K3c c4, `ctrl+k` from the settings view),
+    /// which stays open behind it.
+    ///
+    /// Rows are built SYNCHRONOUSLY from the live effectives — no disk (rule
+    /// 2), the same criterion as `open_settings` building from
+    /// `cfg_snapshot`.
+    fn open_shortcuts(&mut self) {
+        let rows = shortcuts_view::rows(self.shortcut_maps(), norte_i18n::active());
+        self.shortcuts_view = Some(shortcuts_view::ShortcutsView::new(rows));
+    }
+
+    /// Rebuilds the editor's rows from the CURRENT effectives, keeping the
+    /// filter and re-anchoring the cursor on the row it was on
+    /// (`ShortcutsState::refresh`, whose doc explains why an index would be
+    /// the wrong thing to keep). No-op when the editor is closed.
+    ///
+    /// It also cancels any capture, which is the point after a write: the
+    /// verdict was read off the map that has just been replaced.
+    fn refresh_shortcuts(&mut self) {
+        if self.shortcuts_view.is_none() {
+            return;
+        }
+        let rows = shortcuts_view::rows(self.shortcut_maps(), norte_i18n::active());
+        if let Some(view) = &mut self.shortcuts_view {
+            view.state.refresh(rows);
+        }
+    }
+
+    /// The status line under the editor's list.
+    fn set_shortcuts_status(&mut self, message: String, error: bool) {
+        if let Some(view) = &mut self.shortcuts_view {
+            view.status = Some(shortcuts_view::ShortcutsStatus { message, error });
+        }
+    }
+
+    /// Handles ONE key with the shortcut editor open (`on_key`, dedicated
+    /// branch): the routing is pure ([`shortcuts_view::on_key`]) and this
+    /// acts on its outcome.
+    fn on_shortcuts_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+        // Built INLINE and not through `Self::shortcut_maps`: that borrows
+        // the whole of `self`, and this needs the two resolver fields next to
+        // a `&mut self.shortcuts_view`. Only a per-field borrow is disjoint.
+        let maps = shortcuts_view::Maps {
+            browse: self.resolver.effective(),
+            viewer: self.viewer_resolver.effective(),
+        };
+        let mods = keymap_mods(ks.modifiers);
+        let Some(view) = &mut self.shortcuts_view else {
+            return;
+        };
+        // A key that says something clears the last write's status: leaving
+        // "saved" under a list the reader is now filtering would keep
+        // claiming a thing about a row that is no longer on screen.
+        view.status = None;
+        let outcome = shortcuts_view::on_key(view, &ks.key, ks.key_char.as_deref(), mods, maps);
+        match outcome {
+            shortcuts_view::ShortcutsOutcome::None => {}
+            shortcuts_view::ShortcutsOutcome::Close => self.shortcuts_view = None,
+            shortcuts_view::ShortcutsOutcome::Confirm => self.confirm_shortcut(cx),
+            shortcuts_view::ShortcutsOutcome::Unbind => self.unbind_shortcut(cx),
+            shortcuts_view::ShortcutsOutcome::NotBindable => {
+                self.set_shortcuts_status(norte_i18n::t("msg-shortcut-not-bindable"), true);
+            }
+        }
+    }
+
+    /// Click on an editor row: SELECTS it (`idx` is a position within
+    /// `visible()`, the same contract as `ShortcutsState::set_cursor`).
+    ///
+    /// It does NOT start a capture, unlike the settings view's click, and the
+    /// asymmetry is deliberate: capture is a mode in which every key becomes
+    /// a binding, and dropping a reader into it from a stray click — with no
+    /// keystroke of their own to say they meant it — is how a mis-click
+    /// becomes a rebind. `enter` opens it, and the footer says so.
+    /// `set_cursor` is already a no-op while capturing.
+    fn on_shortcuts_row_click(&mut self, idx: usize, cx: &mut Context<Self>) {
+        // The modal scrim does not `.occlude()` yet (known GUI debt), so a
+        // click meant for a modal painted on top still reaches these rows.
+        // Moving the cursor from under a question the reader is answering
+        // would move what `ctrl+u` deletes.
+        if self.modal.is_some() {
+            return;
+        }
+        if let Some(view) = &mut self.shortcuts_view {
+            view.state.set_cursor(idx);
+        }
+        cx.notify();
+    }
+
+    /// THE DOOR, as this frontend calls it: the active preset's name, the
+    /// loaded layers and the command set this screen was VALIDATED with.
+    ///
+    /// The door itself is `norte_frontend::shortcuts::plan_rebind` — the
+    /// layer cut is not a frontend's to improvise, and its documentation
+    /// names the two ways of guessing it that fail in silence. What is left
+    /// here is what is genuinely the GUI's:
+    ///
+    /// **The supplement is a layer, and the door is given it**
+    /// ([`rebind_layers`]).
+    fn plan_rebind(
+        &self,
+        screen: norte_frontend::keymap::Screen,
+        seq: &[norte_frontend::keymap::Chord],
+        command: &str,
+    ) -> Result<norte_frontend::keymap::RebindWrite, norte_frontend::shortcuts::PlanError> {
+        let (kinds, layers) = rebind_layers(&self.cfg_snapshot);
+        norte_frontend::shortcuts::plan_rebind(
+            &self.cfg_snapshot.common.preset,
+            &kinds,
+            &layers,
+            keymap::screen_commands(screen),
+            screen,
+            seq,
+            command,
+        )
+    }
+
+    /// Confirms the capture: the door ([`Self::plan_rebind`]) and, only if it
+    /// passes, the writer — on the BACKGROUND executor (rule 2:
+    /// `persist_keymap_bind` takes a file lock and does synchronous I/O, and
+    /// this runs on the render thread), the same `cx.background_spawn` shape
+    /// `commit_settings_write` uses and for the same reasons its doc gives.
+    ///
+    /// What reaches the writer is what the door returned, VERBATIM: the
+    /// section, the list (`prepend_keymap` — an append would not outrank the
+    /// preset and would never fire) and the SPELLING of the chords.
+    /// Re-rendering the captured sequence here would reopen the very gap the
+    /// door closes.
+    ///
+    /// And then the reload, because this frontend has no file watcher: the
+    /// same background task re-reads the merged config and rebuilds the three
+    /// effectives, and `apply_shortcut_write_result` installs them. If that
+    /// rebuild fails, the old keymap stays and the message says so.
+    fn confirm_shortcut(&mut self, cx: &mut Context<Self>) {
+        let captured = self.shortcuts_view.as_ref().and_then(|v| {
+            v.state
+                .confirmable()
+                .map(|(screen, command, seq)| (screen, command.to_owned(), seq.to_vec()))
+        });
+        // `None` = a refusal verdict, or nothing captured yet: nothing is
+        // written and the capture stays alive so another key can be tried —
+        // but the `enter` just pressed cannot go silent, so the verdict is
+        // repeated, since it IS the reason nothing was saved.
+        let Some((screen, command, seq)) = captured else {
+            let echo = self
+                .shortcuts_view
+                .as_ref()
+                .and_then(|v| v.state.capture())
+                .and_then(norte_frontend::shortcuts::Capture::verdict)
+                .map(|v| norte_frontend::shortcuts::verdict_message(v, norte_i18n::active()));
+            if let Some(msg) = echo {
+                self.set_shortcuts_status(msg, true);
+            }
+            return;
+        };
+        let Some(dir) = norte_config::user_config_dir() else {
+            self.set_shortcuts_status(norte_i18n::t("msg-settings-no-config-dir"), true);
+            return;
+        };
+        let write = match self.plan_rebind(screen, &seq, &command) {
+            Ok(w) => w,
+            Err(e) => {
+                let msg = norte_frontend::shortcuts::plan_error_message(&e, norte_i18n::active());
+                self.set_shortcuts_status(msg, true);
+                if let Some(view) = &mut self.shortcuts_view {
+                    view.state.cancel_capture();
+                }
+                return;
+            }
+        };
+        let lang = norte_i18n::active();
+        let painted = norte_frontend::keymap::paint_chord(&write.chords.join(" "));
+        let label = norte_frontend::whichkey::command_label(&command, lang);
+        let mut ok = norte_i18n::ta(
+            "msg-shortcut-bound",
+            &[("chord", painted.as_str()), ("command", label.as_str())],
+        );
+        // The one thing this window can bind that the terminal can never
+        // press. Not a refusal — it works here — so it is said, once, next to
+        // the confirmation rather than discovered months later in the TUI.
+        if shortcuts_view::captures_cmd(&seq) {
+            ok = format!("{ok} — {}", norte_i18n::t("gui-shortcuts-cmd-note"));
+        }
+        // The decision is made; the capture goes NOW, not when the result
+        // lands. This frontend's write is detached (`cx.spawn`), unlike the
+        // TUI's, which `.await`s inline in the key loop — leaving the capture
+        // alive across the flight window let a held `enter` issue one full
+        // write-and-reload per auto-repeat.
+        let write_gen = self.next_shortcut_write();
+        if let Some(view) = &mut self.shortcuts_view {
+            view.state.cancel_capture();
+        }
+        cx.spawn(async move |this, cx| {
+            let (written, reloaded) = cx
+                .background_spawn(async move {
+                    let written = norte_config::persist_keymap_bind(
+                        &dir,
+                        write.section,
+                        write.list,
+                        &write.chords,
+                        &write.command,
+                    );
+                    let reloaded = written.is_ok().then(reload_after_keymap_write);
+                    (written, reloaded)
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view.apply_shortcut_write_result(write_gen, written, reloaded, ok, None, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Removes the binding of the row under the cursor from BOTH of the
+    /// user's lists — the reason c1 wrote `persist_keymap_unbind`: an editor
+    /// that can only add is an editor that cannot fix a mistake.
+    ///
+    /// No door, deliberately, for half the load: removing an entry cannot
+    /// introduce an illegal shape, so there is no load to simulate.
+    ///
+    /// What is NOT checked is the EFFECT, which is why both messages talk
+    /// about the FILE and not about the key — "removed from your
+    /// keymap.toml", never "this key no longer does X". Three cases this
+    /// path cannot tell apart, all tracked in #141: the binding lives in
+    /// `[global]`, which `Screen::section` never names; the file spells it
+    /// another legal way (`mod+p` for `ctrl+p`) and the writer matches byte
+    /// for byte; or another layer binds the same key and it keeps working.
+    /// Same wording as the TUI's, and for the same reason — promising more
+    /// here would make the GUI the surface that lies.
+    fn unbind_shortcut(&mut self, cx: &mut Context<Self>) {
+        let selected = self
+            .shortcuts_view
+            .as_ref()
+            .and_then(|v| v.state.selected())
+            .map(|r| {
+                (
+                    r.screen,
+                    r.seq.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    r.command.clone(),
+                    r.chord.clone(),
+                )
+            });
+        // Nothing selected (an empty filter result): the key must still say
+        // something. A `ctrl+u` that neither removes nor speaks reads as a
+        // dead key, and this one is destructive when it is not.
+        let Some((screen, chords, command, painted)) = selected else {
+            self.set_shortcuts_status(norte_i18n::t("msg-shortcut-nothing-to-unbind"), true);
+            return;
+        };
+        if chords.is_empty() {
+            self.set_shortcuts_status(norte_i18n::t("msg-shortcut-nothing-to-unbind"), true);
+            return;
+        }
+        let Some(dir) = norte_config::user_config_dir() else {
+            self.set_shortcuts_status(norte_i18n::t("msg-settings-no-config-dir"), true);
+            return;
+        };
+        let lang = norte_i18n::active();
+        let label = norte_frontend::whichkey::command_label(&command, lang);
+        let ok = norte_i18n::ta(
+            "msg-shortcut-unbound",
+            &[("chord", painted.as_str()), ("command", label.as_str())],
+        );
+        let nothing = norte_i18n::t("msg-shortcut-nothing-to-unbind");
+        let section = screen.section();
+        let write_gen = self.next_shortcut_write();
+        cx.spawn(async move |this, cx| {
+            let (written, reloaded) = cx
+                .background_spawn(async move {
+                    let written =
+                        norte_config::persist_keymap_unbind(&dir, section, &chords, &command);
+                    let reloaded = written.is_ok().then(reload_after_keymap_write);
+                    (written, reloaded)
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view.apply_shortcut_write_result(
+                    write_gen,
+                    written,
+                    reloaded,
+                    ok,
+                    Some(nothing),
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
+    /// Claims the next `keymap.toml` write of this window, and makes every
+    /// earlier one STALE.
+    ///
+    /// Both write paths are detached (`cx.spawn(...).detach()`), so two of
+    /// them really do overlap here — the TUI cannot get into this state, its
+    /// `spawn_blocking` is awaited inline in the key loop. Two overlapping
+    /// writes serialise correctly on the file lock, but their RESULTS come
+    /// back in whatever order, and each result installs a full set of
+    /// effectives plus a `cfg_snapshot`. The older one landing last would
+    /// install a keymap that predates the newer write: the window would then
+    /// resolve keys the file does not contain, after a status line that had
+    /// already said the newer binding was applied. A generation is the
+    /// cheapest thing that cannot be got wrong.
+    fn next_shortcut_write(&mut self) -> u64 {
+        self.shortcut_write_gen = self.shortcut_write_gen.wrapping_add(1);
+        self.shortcut_write_gen
+    }
+
+    /// Applies the result of a `keymap.toml` write (UI thread).
+    ///
+    /// The order matters and is the whole point of the method. A write that
+    /// SUCCEEDED still proves nothing about the keyboard: the rebuild is
+    /// all-or-nothing, so a file that will not load leaves the OLD map in
+    /// place, and an editor that reported "F5 now runs X" on the strength of
+    /// the write alone would be describing a key that did not change. So the
+    /// message is only the plain one when the rebuild landed; otherwise it
+    /// carries the honest qualifier ([`shortcut_write_message`]).
+    ///
+    /// `write_gen` is [`Self::next_shortcut_write`]'s stamp: a result that is not
+    /// the newest is DROPPED whole, message included, because the newer write
+    /// both supersedes its file state and will report its own.
+    ///
+    /// `unchanged` is the message for `KeymapWrite::changed == false`, and
+    /// only the unbind passes one: for a BIND, "already bound to that" and
+    /// "just bound" are the same statement about the key, while for an
+    /// UNBIND "nothing matched" and "removed" are opposite ones.
+    fn apply_shortcut_write_result(
+        &mut self,
+        write_gen: u64,
+        written: std::io::Result<norte_config::KeymapWrite>,
+        reloaded: Option<ReloadedKeymap>,
+        ok: String,
+        unchanged: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if write_gen != self.shortcut_write_gen {
+            return;
+        }
+        let changed = match written {
+            Ok(w) => w.changed,
+            Err(e) => {
+                self.announce_shortcut_write(
+                    norte_i18n::ta(
+                        "msg-settings-save-failed",
+                        &[("error", &io_error_category(&e))],
+                    ),
+                    true,
+                );
+                cx.notify();
+                return;
+            }
+        };
+        let mut applied = false;
+        if let Some((Ok(cfg), fresh_keymap)) = reloaded {
+            applied = self.apply_keymap_live(fresh_keymap);
+            self.cfg_snapshot = cfg;
+        }
+        let (message, error) = shortcut_write_message(changed, applied, ok, unchanged);
+        self.announce_shortcut_write(message, error);
+        cx.notify();
+    }
+
+    /// Says what a `keymap.toml` write did, WHEREVER the reader now is.
+    ///
+    /// The editor's own status line when it is open, and the settings view's
+    /// when it is not — because the write is detached and the reader can
+    /// close the editor while it is in flight. Dropping the message then is
+    /// what turns a failed write (a root-owned `keymap.toml`, a read-only
+    /// mount) into a silent one, and a mutation that fails silently is the
+    /// thing this repository refuses hardest. Settings is always still open
+    /// underneath (see `render_shortcuts`'s invariant), so there is always
+    /// somewhere for it to go.
+    fn announce_shortcut_write(&mut self, message: String, error: bool) {
+        if self.shortcuts_view.is_some() {
+            self.set_shortcuts_status(message, error);
+        } else {
+            self.set_settings_status(message, error);
+        }
     }
 
     /// Persiste un [`PendingWrite`] (S4) fuera del hilo de UI (regla 2,
@@ -2612,6 +3076,16 @@ impl NorteGui {
                 // resolvers start with nothing pending regardless.
                 self.which_key = None;
                 self.rebuild_help_chords();
+                // K3c c4: and the shortcut editor, if open, is looking at a
+                // list DERIVED from those three maps — the same obligation
+                // `rebuild_help_chords` documents, for the one screen whose
+                // rows ARE the keymap. Refreshing here rather than at each
+                // caller is what keeps a rebind (which lands via
+                // `apply_shortcut_write_result`) and a preset switch (via
+                // `apply_settings_write_result`) from needing to remember it
+                // separately. It also drops any capture, whose verdict was
+                // read off the map that has just been replaced.
+                self.refresh_shortcuts();
                 true
             }
             _ => false,
@@ -2818,6 +3292,29 @@ impl NorteGui {
     /// Las filas que caben con el viewport VIGENTE.
     fn help_rows(&self, viewport: gpui::Size<gpui::Pixels>) -> usize {
         self.help_rows_for(self.help_frame(viewport).1)
+    }
+
+    /// Rows of the shortcut editor that FIT (K3c c4) — derived, exactly like
+    /// [`Self::help_rows_for`] and for a sharper version of its reason.
+    ///
+    /// This screen is a full-view swap, so the frame is the viewport itself,
+    /// minus the header and the footer (one row each, both given a definite
+    /// height when painted) and minus whatever chrome `render` already put
+    /// above this tree — today the start-up banner, `banner_rows`, which is
+    /// the same correction `render_viewer` takes as `extra_chrome_rows`
+    /// (K3a MAJOR-1).
+    ///
+    /// A constant here was a real defect and not a rounding one: with
+    /// `[ui] font_size = 24` in a default 1000×640 window, twenty rows do not
+    /// fit, `sidebar_offset` would call a cursor visible that is under the
+    /// bottom edge, and `ctrl+u` deletes the binding under the cursor. Floor
+    /// of one, for the same reason the help has one.
+    fn shortcut_rows(&self, viewport: gpui::Size<gpui::Pixels>, banner_rows: usize) -> usize {
+        let row_h = f32::from(self.fonts.row_h);
+        #[allow(clippy::cast_precision_loss)] // a banner is single digits of rows
+        let taken = (2.0 + banner_rows as f32) * row_h;
+        let free = f32::from(viewport.height) - taken;
+        ((free / row_h).floor() as usize).max(1)
     }
 
     /// Líneas por muesca de rueda en la ayuda.
@@ -3688,6 +4185,16 @@ impl NorteGui {
         // delante, y activar una entrada cierra el menú antes de despachar).
         if self.context_menu.is_some() {
             self.on_context_menu_key(ks, cx);
+            cx.notify();
+            return;
+        }
+
+        // Editor de atajos abierto (K3c c4, `ctrl+k` desde ajustes): se pinta
+        // POR ENCIMA de la vista de ajustes (que sigue abierta detrás), así
+        // que también se queda las teclas ANTES que ella. En modo captura son
+        // TODAS suyas — eso es lo que significa capturar.
+        if self.shortcuts_view.is_some() {
+            self.on_shortcuts_key(ks, cx);
             cx.notify();
             return;
         }
@@ -5374,6 +5881,223 @@ impl NorteGui {
             MouseButton::Left,
             cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
                 this.on_settings_row_click(pos, cx);
+            }),
+        )
+        .into_any_element()
+    }
+
+    /// Paints the shortcut editor (K3c c4, `ctrl+k` from settings): a
+    /// full-screen swap with the same visual language as `render_settings`,
+    /// which it covers.
+    ///
+    /// Three things it says that the settings view does not have to:
+    ///
+    /// - the FILTER header, which is also the capture prompt: while a
+    ///   capture is in flight the header stops being a filter and says what
+    ///   was captured and what the map thinks of it, because that is the
+    ///   decision the reader is holding;
+    /// - the FOOTER, which changes with the mode — browsing, waiting for a
+    ///   key, holding a verdict — since the three have different ways out
+    ///   and a footer that named only one would leave a reader pressing
+    ///   `esc` at a screen that had already told them something else;
+    /// - a WINDOW over the rows. This list is hundreds of rows long (every
+    ///   bound key of two screens, plus every command with none), so unlike
+    ///   the fifteen-row settings catalogue it cannot be laid out whole
+    ///   every frame. `rows` is DERIVED from the viewport
+    ///   ([`Self::shortcut_rows`]), never a constant, for the reason
+    ///   [`Self::help_rows_for`] documents at length — and here it is worse
+    ///   than a lost cursor: `ctrl+u` deletes the binding under the cursor,
+    ///   so a cursor scrolled off the bottom of a short window would be a
+    ///   row the reader never saw being named confidently as removed.
+    ///
+    /// # Invariant
+    ///
+    /// `settings_view` is `Some` whenever this paints: the only opener is
+    /// `on_settings_key`. That is what lets the flash suppression, the
+    /// pending-sequence strip and `overlay_in_front` keep testing
+    /// `settings_view` alone and still be right about this screen.
+    fn render_shortcuts(
+        &self,
+        chrome: &ChromeColors,
+        rows: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        // INVARIANT: only called from `render` when `self.shortcuts_view` is
+        // `Some` (checked immediately before the call).
+        let view = self.shortcuts_view.as_ref().expect(
+            "render_shortcuts: self.shortcuts_view es Some (invariante del caller, ver `render`)",
+        );
+        let s = &view.state;
+        let lang = norte_i18n::active();
+        let capture = s.capture();
+
+        let header_text = match capture {
+            None => {
+                let (q, _) = norte_frontend::display_name(s.query_display().as_bytes());
+                format!("⌕ {q}")
+            }
+            Some(c) if c.is_waiting() => norte_i18n::t("shortcuts-capture-hint"),
+            Some(c) => {
+                // Every chord here is already painted (`paint_chord`) and
+                // every command is a catalogue name, so nothing needs masking
+                // again — `verdict_message`'s own doc says so.
+                let chord = norte_frontend::keymap::paint_chord(
+                    &c.seq()
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+                let verdict = c.verdict().map_or_else(String::new, |v| {
+                    norte_frontend::shortcuts::verdict_message(v, lang)
+                });
+                format!("{chord} — {verdict}")
+            }
+        };
+
+        // The window over the rows: same arithmetic the help sidebar uses,
+        // over a height that is measured rather than assumed.
+        let offset = Self::sidebar_offset(s.cursor(), s.visible().len(), rows);
+        let mut body = div()
+            .id("shortcuts-rows")
+            .role(gpui::Role::List)
+            .aria_label(norte_i18n::t("shortcuts-title"))
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .font(self.fonts.ui.clone());
+        if s.visible().is_empty() {
+            // Same as `render_settings`: an empty body is indistinguishable
+            // from a render that failed.
+            body = body.child(div().px(px(sp::S)).child(SharedString::from("—")));
+        }
+        for (n, &real) in s.visible().iter().enumerate().skip(offset).take(rows) {
+            body = body.child(self.render_shortcut_row(
+                n,
+                &s.rows()[real],
+                n == s.cursor(),
+                chrome,
+                cx,
+            ));
+        }
+
+        let footer = match capture {
+            None => norte_i18n::t("gui-shortcuts-hint"),
+            Some(c) if c.is_waiting() => norte_i18n::t("gui-shortcuts-capture-note"),
+            Some(_) => norte_i18n::t("shortcuts-confirm-hint"),
+        };
+        let status = view.status.as_ref();
+
+        div()
+            .id("shortcuts-view")
+            .role(gpui::Role::Document)
+            .aria_label(norte_i18n::t("shortcuts-title"))
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .border_2()
+            .border_color(chrome.border_focus)
+            .bg(chrome.pane_bg_focus)
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(sp::XS))
+                    .bg(chrome.header_bg)
+                    .text_color(chrome.header_fg)
+                    .truncate()
+                    .child(SharedString::from(format!(
+                        "{}  {header_text}",
+                        norte_i18n::t("shortcuts-title")
+                    ))),
+            )
+            .child(body)
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
+                    .bg(chrome.quick_bg)
+                    .text_color(if status.is_some_and(|st| st.error) {
+                        chrome.err_fg
+                    } else {
+                        chrome.quick_fg
+                    })
+                    .truncate()
+                    .child(SharedString::from(
+                        status.map_or(footer, |st| st.message.clone()),
+                    )),
+            )
+    }
+
+    /// One row of the shortcut editor: the painted chord in a fixed column
+    /// (or "(no key)" for a command nothing presses), the catalogue label,
+    /// and — when this build cannot run it — the short reason, with the whole
+    /// row dimmed.
+    ///
+    /// Every string here arrives ALREADY safe: `ShortcutRow::chord` is
+    /// `paint_chord`ed by the shared builder (a project `keymap.toml` can
+    /// bind any lone codepoint) and the label comes from the catalogue or,
+    /// for a `lua:` command, from a name that passed the charset. The dim
+    /// survives selection: an unavailable row that the cursor made look
+    /// ordinary would offer a key that does nothing.
+    fn render_shortcut_row(
+        &self,
+        pos: usize,
+        row: &norte_frontend::shortcuts::ShortcutRow,
+        selected: bool,
+        chrome: &ChromeColors,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let unavailable = row.avail != norte_frontend::keymap::Availability::Here;
+        let chord = if row.is_bound() {
+            row.chord.clone()
+        } else {
+            norte_i18n::t("shortcuts-no-key")
+        };
+        let label = if row.reason.is_empty() {
+            row.label.clone()
+        } else {
+            format!("{} — {}", row.label, row.reason)
+        };
+        let mut r = div()
+            .id(format!("shortcut-row-{pos}"))
+            .role(gpui::Role::ListItem)
+            .aria_label(format!("{chord} {label}"))
+            .aria_selected(selected)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(sp::S))
+            .px(px(sp::S))
+            .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
+            .rounded(px(sp::RADIUS_ROW))
+            .cursor_pointer()
+            .child(
+                div()
+                    .w(px(160.0))
+                    .truncate()
+                    .font(self.fonts.mono.clone())
+                    .child(SharedString::from(chord)),
+            )
+            .child(div().flex_1().truncate().child(SharedString::from(label)));
+        if selected {
+            r = r.bg(chrome.sel_bg);
+            if let Some(fg) = chrome.sel_fg
+                && !unavailable
+            {
+                r = r.text_color(fg);
+            }
+        } else {
+            r = r.hover(|st| st.bg(chrome.hover_bg));
+        }
+        if unavailable {
+            r = r.text_color(chrome.quick_fg);
+        }
+        r.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                this.on_shortcuts_row_click(pos, cx);
             }),
         )
         .into_any_element()
@@ -8253,6 +8977,134 @@ impl FontSet {
 /// `fallbacks` (es una cadena sobre las CARAS de la familia primaria) y
 /// caminaría su pila global en su lugar, que es exactamente el hallazgo
 /// CRÍTICO que este fix cierra.
+/// What a finished `keymap.toml` write says, and whether it says it as an
+/// error (K3c c4). Returns `(message, error)`.
+///
+/// PURE, and extracted for exactly the reason `flash_paints` and
+/// `confirm_quit_should_open` are: this three-way decision is the one thing
+/// c4 does that c3 did not have to, and a test that stops at the door — which
+/// is every other test of this path — cannot see it.
+///
+/// - `changed` is `KeymapWrite::changed`: `false` means the file's bytes were
+///   already what the write wanted.
+/// - `applied` is whether the rebuild landed. It is a SEPARATE claim from the
+///   write's success, because this frontend watches no files: the rebuild is
+///   all-or-nothing, so a `keymap.toml` that will not load leaves the old
+///   keyboard in place, and "saved" alone would then describe a key that did
+///   not change.
+/// - `unchanged` is passed by the UNBIND only. For a bind, "already bound to
+///   that" and "just bound" are the same statement about the key; for an
+///   unbind, "nothing matched" and "removed" are opposite ones — and only
+///   that case is an error, because there "nothing happened" IS the answer
+///   (#141: the entry may live in `[global]`, or be spelled another legal
+///   way, and this path cannot reach either).
+fn shortcut_write_message(
+    changed: bool,
+    applied: bool,
+    ok: String,
+    unchanged: Option<String>,
+) -> (String, bool) {
+    match unchanged {
+        Some(nothing) if !changed => (nothing, true),
+        _ if applied => (ok, false),
+        // Saved but not applied is a WARNING, not a failure: the file really
+        // did change, and the qualifier carries the rest.
+        _ => (
+            format!(
+                "{ok} — {}",
+                norte_i18n::t("gui-msg-shortcut-saved-not-applied")
+            ),
+            false,
+        ),
+    }
+}
+
+/// The layer stack the shortcut editor's door plans against, in ASCENDING
+/// precedence and parallel to its kinds (K3c c4).
+///
+/// It is the config's own stack with `keymap::gui_supplement()` inserted
+/// UNDERNEATH it, because that is what the loader really merges
+/// (`keymap::build_effectives_layers3`): the map the resolver is using
+/// carries bindings — `insert`, `ctrl+n`, `ctrl+b`, `ctrl+l`, `delete`, and
+/// the viewer's `e`/`E`/`x` — that no `keymap.toml` anywhere contains. It
+/// goes in as [`norte_config::Layer::System`], the lowest precedence
+/// `RebindSources::split_at` models.
+///
+/// It changes no verdict TODAY, and saying so is more useful than implying
+/// it does: the supplement sits below the write target, so it cannot shadow
+/// one, and every entry in it is a single chord, so it cannot collide with
+/// the prefix-free rule either. What it buys is that the door models the
+/// stack that exists rather than a subset of it — the day the supplement
+/// grows a two-chord sequence, or a layer order changes, the omission would
+/// have been silent, and this frontend is the one that cannot absorb a
+/// silent one: it watches no files, so a `keymap.toml` that fails to load
+/// leaves the reader with the old keyboard and a message about a key that
+/// changed.
+fn rebind_layers(
+    cfg: &norte_frontend::config::FrontendConfig,
+) -> (
+    Vec<norte_config::Layer>,
+    Vec<norte_frontend::keymap::KeymapFile>,
+) {
+    let mut kinds = Vec::with_capacity(1 + cfg.keymap_layer_kinds.len());
+    let mut layers = Vec::with_capacity(1 + cfg.keymap_layers.len());
+    kinds.push(norte_config::Layer::System);
+    layers.push(keymap::gui_supplement());
+    kinds.extend_from_slice(&cfg.keymap_layer_kinds);
+    layers.extend_from_slice(&cfg.keymap_layers);
+    (kinds, layers)
+}
+
+/// What [`reload_after_keymap_write`] brings back: the merged config, and
+/// the three effectives rebuilt from it (absent when the config itself did
+/// not reload — there is no preset name to build from then).
+type ReloadedKeymap = (
+    Result<norte_frontend::config::FrontendConfig, norte_config::ConfigError>,
+    Option<
+        Result<
+            (
+                norte_frontend::keymap::Effective,
+                norte_frontend::keymap::Effective,
+                norte_frontend::keymap::Effective,
+            ),
+            norte_frontend::keymap::KeymapError,
+        >,
+    >,
+);
+
+/// Re-reads the merged config and rebuilds the three effectives, the way a
+/// file watcher would if this frontend had one (K3c c4).
+///
+/// It does not: the GUI resolves its layers at start-up and after a settings
+/// write, so a `keymap.toml` the shortcut editor just wrote reaches the
+/// keyboard only because the write path calls this. BLOCKING (two rounds of
+/// config I/O) — callers run it on the background executor, rule 2.
+///
+/// Two seams worth knowing about, both shared with `commit_settings_write`
+/// and neither introduced here:
+///
+/// - it reads the config TWICE (here, and again inside `build_effectives3`),
+///   under no lock. Each read is atomic — every writer renames — so neither
+///   can tear, but another norte writing between them leaves `cfg_snapshot`
+///   (what the door plans from) describing a different file state than the
+///   effectives (what the verdicts are read off);
+/// - the layer set comes from `standard_layers()` while the write went to
+///   `user_config_dir()`. With no `HOME` at all the two can disagree, which
+///   in this frontend shows up as a write that "did not apply" rather than
+///   as an error.
+fn reload_after_keymap_write() -> ReloadedKeymap {
+    let cfg = norte_frontend::config::load(&norte_config::standard_layers());
+    // `build_effectives3` re-reads the layers itself, from the same
+    // `standard_layers()`; only the PRESET name comes from the config just
+    // loaded, which is why an unreadable config leaves this `None` rather
+    // than guessing `orthodox` and installing somebody else's keyboard.
+    let keymap = cfg
+        .as_ref()
+        .ok()
+        .map(|c| keymap::build_effectives3(&c.common.preset));
+    (cfg, keymap)
+}
+
 /// An empty [`norte_frontend::config::FrontendConfig`] (S4): the fallback
 /// for `NorteGui::cfg_snapshot` when startup's `loaded` was `Err`. Safe to
 /// `expect` — an EMPTY `Layers` never touches the filesystem, so
@@ -8595,7 +9447,16 @@ impl Render for NorteGui {
         // estado «abriendo…» mientras llega, o el dual-pane: pantallas
         // mutuamente excluyentes (ver `on_key`, que las enruta con la misma
         // prioridad: ajustes de config > extensiones > visor > dual-pane).
-        if self.settings_view.is_some() {
+        if self.shortcuts_view.is_some() {
+            // K3c c4: se pinta EN LUGAR de la vista de ajustes, que sigue
+            // abierta en el estado y recupera la pantalla al cerrarse este —
+            // el editor es una pantalla DE ajustes, no un reemplazo.
+            root = root.child(self.render_shortcuts(
+                &chrome,
+                self.shortcut_rows(window.viewport_size(), keymap_error_lines),
+                cx,
+            ));
+        } else if self.settings_view.is_some() {
             root = root.child(self.render_settings(&chrome, cx));
         } else if self.extensions.is_some() {
             root = root.child(self.render_extensions(&chrome));
@@ -8954,12 +9815,22 @@ fn banner_safe(s: &str) -> String {
 /// traducirlo: mezclarlo en un banner por lo demás localizado rompe la
 /// paridad de idioma (regla 1: nunca texto crudo del sistema).
 /// Serializa TODA escritura de `norte.toml` del GUI (review 7c MAJOR-1):
-/// los persist son read-modify-write SIN lock ni tmp+rename, y las tareas
-/// de `background_spawn` van detached en un pool multihilo — dos writers
-/// intercalados perderían la actualización del primero (o reescribirían
-/// desde una lectura parcial). Se bloquea DENTRO del background task, jamás
-/// en el hilo de render. El fix de fondo (persist_* atómico en norte-config)
-/// es follow-up con issue; esto cierra la carrera intra-proceso.
+/// las tareas de `background_spawn` van detached en un pool multihilo, y dos
+/// writers intercalados perderían la actualización del primero. Se bloquea
+/// DENTRO del background task, jamás en el hilo de render.
+///
+/// K3c c4 — corrección de este comentario, que decía «los persist son
+/// read-modify-write SIN lock ni tmp+rename». Desde #116 SÍ los tienen:
+/// `persist_set` toma `norte.toml.lock` y escribe por tmp+rename, así que
+/// este mutex es hoy un cinturón sobre un tirante, no la única barrera. Y la
+/// regla que se deduce de él NO es «todo persist necesita este mutex»: es
+/// **un fichero, un lock, nunca anidados**. `persist_keymap_bind` toma su
+/// PROPIO `keymap.toml.lock` (jamás el de `norte.toml`), que ya serializa
+/// dos escrituras del mismo proceso — `File::lock` es `flock` sobre la
+/// descripción de fichero abierta en Unix y `LockFileEx` sobre el handle en
+/// Windows, y `lock_config_file` abre uno nuevo cada vez —, así que el
+/// editor de atajos no lo toma y no debe. Tomar los dos desde caminos
+/// distintos es lo único que podría construir un ciclo.
 static CONFIG_WRITE_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn io_error_category(e: &std::io::Error) -> String {
@@ -9338,6 +10209,7 @@ mod tests {
         unknown_preset_banner, validated_family, viewer_header, viewer_status, which_key_for,
         which_key_paints,
     };
+    use super::{empty_frontend_config, rebind_layers, shortcut_write_message};
     // Menú contextual (tarea 4 del plan de ratón).
     use super::{
         ContextMenu, clipboard_text, context_menu, context_target, expire_stale_menu, keymap,
@@ -11128,6 +12000,112 @@ keymap = [
             which_key_for(&counting, norte_i18n::Lang::En).is_none(),
             "a bare count has no panel"
         );
+    }
+
+    /// K3c c4: the door plans against the stack the LOADER merges, and the
+    /// GUI's stack has one layer no `keymap.toml` contains
+    /// (`keymap::gui_supplement`). Parallel arrays, ascending precedence, and
+    /// the supplement at the bottom — anything else and
+    /// `RebindSources::split_at` cuts in the wrong place, which is the one
+    /// failure its own documentation says is silent.
+    #[test]
+    fn la_puerta_planifica_con_el_suplemento_de_la_gui_debajo() {
+        let cfg = empty_frontend_config();
+        let (kinds, layers) = rebind_layers(&cfg);
+        assert_eq!(kinds.len(), layers.len(), "paralelos, uno por capa");
+        assert_eq!(kinds[0], norte_config::Layer::System, "y el más bajo");
+        // `KeymapFile` keeps its fields `pub(super)` (there is no public
+        // accessor for the binding lists), so the comparison is the `Debug`
+        // shape — enough to say WHICH layer this is, which is the claim.
+        assert_eq!(
+            format!("{:?}", layers[0]),
+            format!("{:?}", keymap::gui_supplement()),
+            "la primera capa ES el suplemento"
+        );
+    }
+
+    /// K3c c4: the door, called exactly as `NorteGui::plan_rebind` calls it,
+    /// on the two screens this window resolves keys through.
+    ///
+    /// The viewer half is the one worth having: its map is validated against
+    /// `VIEWER_COMMANDS`, which does NOT contain the `app.*` verbs `[global]`
+    /// merges into it — those survive as `NotHere` (K1 decision 4) rather
+    /// than failing the load, and a door handed a different set would refuse
+    /// a binding the loader accepts.
+    #[test]
+    fn la_puerta_deja_pasar_en_las_dos_pantallas_y_rechaza_la_tecla_sagrada() {
+        use norte_frontend::keymap::{Screen, parse_chord};
+        use norte_frontend::shortcuts::{PlanError, plan_rebind};
+
+        let cfg = empty_frontend_config();
+        let (kinds, layers) = rebind_layers(&cfg);
+        let door = |screen: Screen, chord: &str, command: &str| {
+            plan_rebind(
+                norte_config::DEFAULT_PRESET,
+                &kinds,
+                &layers,
+                keymap::screen_commands(screen),
+                screen,
+                &[parse_chord(chord).expect("chord")],
+                command,
+            )
+        };
+
+        let w = door(Screen::Browse, "ctrl+alt+n", "pane.mkdir").expect("libre");
+        assert_eq!(w.section, "pane");
+        assert_eq!(
+            w.list,
+            norte_config::KeymapList::Prepend,
+            "un append no pisaría al preset"
+        );
+        assert_eq!(w.chords, ["ctrl+alt+n".to_owned()]);
+
+        let w = door(Screen::Viewer, "ctrl+alt+j", "viewer.close").expect("libre en el visor");
+        assert_eq!(w.section, "viewer");
+
+        // Sacred (spec §12): the verdict refuses it and so does the door —
+        // the verdict is the convenience, the door is the guarantee.
+        assert!(matches!(
+            door(Screen::Browse, "tab", "pane.mkdir"),
+            Err(PlanError::Door(_))
+        ));
+    }
+
+    /// K3c c4: the one decision this frontend has to make that the TUI does
+    /// not — "the file changed" and "your keyboard changed" are separate
+    /// claims here, because nothing watches files, and the rebuild that
+    /// bridges them is all-or-nothing.
+    ///
+    /// Four rows, and each is a different sentence to the reader.
+    #[test]
+    fn el_mensaje_de_una_escritura_distingue_guardado_de_aplicado() {
+        let ok = || "F5 → pane.mkdir".to_owned();
+        let nothing = || "nada casó".to_owned();
+        let qualifier = norte_i18n::t("gui-msg-shortcut-saved-not-applied");
+
+        // A bind that landed: the plain sentence, no qualifier.
+        let (m, err) = shortcut_write_message(true, true, ok(), None);
+        assert_eq!((m, err), (ok(), false));
+
+        // A bind whose file was already what it wanted still landed: for a
+        // BIND the two are the same statement about the key.
+        let (m, err) = shortcut_write_message(false, true, ok(), None);
+        assert_eq!((m, err), (ok(), false));
+
+        // Written, but the rebuild did not land: this window kept the old
+        // keymap and must NOT claim the key changed.
+        let (m, err) = shortcut_write_message(true, false, ok(), None);
+        assert!(m.starts_with(&ok()) && m.contains(&qualifier), "{m}");
+        assert!(!err, "guardado-sin-aplicar es un aviso, no un fallo");
+
+        // An unbind that matched nothing (#141) is the ONLY error: there
+        // "nothing happened" is the answer, not a qualifier on a success.
+        let (m, err) = shortcut_write_message(false, true, ok(), Some(nothing()));
+        assert_eq!((m, err), (nothing(), true));
+
+        // ...and an unbind that DID remove something behaves like a bind.
+        let (m, err) = shortcut_write_message(true, true, ok(), Some(nothing()));
+        assert_eq!((m, err), (ok(), false));
     }
 
     /// K3a paid the documented debt: the viewer used to be a THIRD exclusion
