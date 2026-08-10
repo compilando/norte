@@ -1,7 +1,8 @@
 # Post-alpha roadmap — ordered by the functionality worth building
 
 **Date:** 2026-08-07
-**Status:** proposal, not approved
+**Status:** accepted, 2026-08-10. Items 2 and 5 are built; work continues at
+item 4, then item 3.
 **Context:** every milestone M0–M5 is met and packaging now turns a tag into
 downloadable artefacts. What remains is not debt — it is the part of
 specification §17 that was never built. This orders it by what the software
@@ -127,6 +128,15 @@ visit. None of it exists.
 ---
 
 ## 5. The keyboard of the managers people already know
+
+**Built, 2026-08-10** — the whole item. A shared catalogue where every command
+declares itself live or planned-with-a-reason, the `mod+` alias, seven presets
+(Total Commander, Krusader, Norton Commander, Far, plus the three that already
+existed), numeric counts, a which-key overlay, a reference sheet generated from
+the active preset, and a shortcut editor in both frontends (ADRs 0043/0044/0045).
+Its side effect is the ranked list this roadmap now works through: the planned
+entries are issues #131–#140, and each one is a key a preset already shows a
+user. Remaining debt: #141.
 
 **§12** bundles orthodox, Vim and CUA presets. Three is not the sector: someone
 arriving from Total Commander, Krusader, Norton Commander or Far Manager has to
