@@ -289,20 +289,24 @@ async fn a_permutation_with_a_hostile_name_lands_and_undoes_byte_exact() {
 /// planner-owned temporary, so those bytes make the round trip name →
 /// temporary → name.
 ///
-/// **Backward, the undo is REFUSED — and that is what is pinned here.**
-/// `undo::feasible` asks whether the NFD name is free through the same folded
-/// key, and the surviving NFC twin owns it, so restoring `plain.txt` reads as a
-/// conflict against a file the rename would never have touched. The
-/// conservative direction of `name_key` is deliberate (refuse rather than
-/// clobber), the cost on this path is a legitimate undo that cannot run, and
-/// the whole batch — including the swap, which WOULD have reverted — is left
-/// exactly as it was. Half an undone permutation is worse than none.
+/// **Backward, the undo now RUNS WHOLE.** This used to be pinned as a
+/// refusal: `undo::feasible` asked whether the NFD name was free through the
+/// FOLDED key alone, and the surviving NFC twin appeared to own it, so
+/// restoring `plain.txt` read as a conflict against a file the rename never
+/// touched, and the whole batch — including the swap, which would have
+/// reverted cleanly — was left exactly as it was.
 ///
-/// Tracked in <https://github.com/compilando/norte/issues/128>. If that is
-/// fixed, this test flips: the undo succeeds and the directory returns to
-/// `before`.
+/// <https://github.com/compilando/norte/issues/128> changed that: `feasible`
+/// now tracks the directory's exact bytes SEPARATELY from its folded keys,
+/// the same two-tier shape `rename::plan::Listing` already used on the
+/// forward path. A step is blocked only by an occupant that owns the exact
+/// bytes of its destination; a fold-only twin does not block, because that is
+/// exactly what the executor's own no-clobber compares (`renameat2
+/// (RENAME_NOREPLACE)` on local, an exact-path `stat`/`exists` check on sftp
+/// and object — see `undo::feasible`'s rustdoc). This test used to pin the
+/// refusal; it now pins the restore.
 #[tokio::test]
-async fn a_twin_directory_moves_the_right_file_and_refuses_a_half_undo() {
+async fn a_twin_directory_moves_the_right_file_and_the_undo_runs_whole() {
     let nfd = corpus_name("nfd_e_acute");
     let nfc = corpus_name("nfc_e_acute");
     let ff = corpus_name("lossy_collapse_ff");
@@ -360,7 +364,124 @@ async fn a_twin_directory_moves_the_right_file_and_refuses_a_half_undo() {
         "the NFD twin moved, the NFC one did not, and the hostile pair swapped",
     );
 
-    // The undo of THIS batch is refused (#128), and refused whole.
+    // The undo of THIS batch now runs whole (#128): the surviving NFC twin
+    // shares the NFD spelling's folded key but not its bytes, and a fold-only
+    // twin no longer blocks.
+    let entries_before_undo = fx.journal.journal().entries().await.expect("entries");
+    let batch_len = u64::try_from(entries_before_undo.len()).expect("a batch has few entries");
+    undo_everything(&fx, batch_len).await;
+    assert_eq!(
+        on_disk(fx.dir.path()),
+        before,
+        "the NFD twin came back byte-exact under its own name, the NFC twin \
+         was never touched, and the hostile swap reverted too",
+    );
+    assert!(
+        fx.journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact(),
+    );
+    assert!(
+        fx.journal
+            .journal()
+            .revertible_for(&Actor::User)
+            .await
+            .expect("revertible")
+            .is_empty(),
+        "an undone batch leaves nothing for a second undo",
+    );
+}
+
+/// The narrow claim behind the test above, isolated: a fold-only twin (same
+/// [`name_key`](norte_core::rename::plan::name_key), different bytes) does
+/// not block the undo that would restore the other twin's own name.
+///
+/// A single rename, no swap, no hostile bytes — the smallest directory that
+/// still has an NFC/NFD pair, so a failure here points straight at
+/// `undo::feasible` rather than at plan-batch machinery this test does not
+/// exercise.
+#[tokio::test]
+async fn a_fold_only_twin_does_not_block_the_undo() {
+    let nfd = corpus_name("nfd_e_acute");
+    let nfc = corpus_name("nfc_e_acute");
+    assert_ne!(nfd, nfc, "two spellings, two files");
+
+    let seed = seeded(&[(&nfd, b"decomposed"), (&nfc, b"composed")]);
+    let before: BTreeMap<Vec<u8>, Vec<u8>> = seed.iter().cloned().collect();
+    let fx = fixture(&seed).await;
+    assert_eq!(
+        on_disk(fx.dir.path()).len(),
+        2,
+        "ext4 really does hold both spellings as separate files",
+    );
+
+    let pairs = vec![(nfd.clone(), b"plain.txt".to_vec())];
+    let plan = run_batch(&fx, &pairs).await;
+    assert_eq!(
+        plan.plan().steps.len(),
+        1,
+        "a free destination needs no detour: {:?}",
+        plan.plan().steps,
+    );
+
+    let after: BTreeMap<Vec<u8>, Vec<u8>> =
+        seeded(&[(b"plain.txt", b"decomposed"), (&nfc, b"composed")])
+            .into_iter()
+            .collect();
+    assert_eq!(
+        on_disk(fx.dir.path()),
+        after,
+        "the NFD twin moved, the NFC one did not",
+    );
+
+    undo_everything(&fx, 1).await;
+    assert_eq!(
+        on_disk(fx.dir.path()),
+        before,
+        "the NFD name came back byte-exact, next to its untouched NFC twin",
+    );
+}
+
+/// The other direction, unchanged: an occupant that owns the exact BYTES the
+/// undo wants still blocks, and still blocks the whole unit.
+///
+/// Not a twin at all — a plain name that something OTHER than this batch
+/// recreated between the batch landing and the undo running, which is the
+/// realistic way a byte-exact occupant appears at undo time (the batch itself
+/// cannot leave one behind: it plans against a listing and refuses a
+/// destination that is already taken).
+#[tokio::test]
+async fn an_exact_bytes_occupant_still_blocks_the_undo() {
+    let seed = seeded(&[(b"orig.txt", b"original content")]);
+    let fx = fixture(&seed).await;
+
+    let pairs = vec![(b"orig.txt".to_vec(), b"renamed.txt".to_vec())];
+    run_batch(&fx, &pairs).await;
+    assert_eq!(
+        on_disk(fx.dir.path()),
+        seeded(&[(b"renamed.txt", b"original content")])
+            .into_iter()
+            .collect::<BTreeMap<_, _>>(),
+    );
+
+    // Something else claims the vacated name, byte for byte, before the undo
+    // runs — the engine never sees this write.
+    std::fs::write(
+        fx.dir.path().join(OsStr::from_bytes(b"orig.txt")),
+        b"someone else's file",
+    )
+    .expect("plant an unrelated occupant");
+    let after_plant: BTreeMap<Vec<u8>, Vec<u8>> = seeded(&[
+        (b"renamed.txt", b"original content"),
+        (b"orig.txt", b"someone else's file"),
+    ])
+    .into_iter()
+    .collect();
+    assert_eq!(on_disk(fx.dir.path()), after_plant);
+
     let (handle, report) = fx
         .engine
         .undo_session(Actor::User)
@@ -368,43 +489,23 @@ async fn a_twin_directory_moves_the_right_file_and_refuses_a_half_undo() {
         .expect("the undo is accepted");
     assert_eq!(handle.join().await, TaskState::Completed);
     let report = report.lock().expect("report lock").clone();
-    let (seq, error) = report
+    let (_seq, error) = report
         .blocked
         .clone()
-        .expect("the surviving NFC twin blocks the restore of its NFD spelling");
+        .expect("the exact-bytes occupant blocks the restore");
     assert_eq!(
         error,
         Error::Conflict {
             conflict: ConflictKind::Exists
         },
     );
-    // WHICH step blocked, not merely that one did: any conflict anywhere in the
-    // inverse chain would satisfy the error assertion, and only this one is the
-    // twin. The blocked `seq` names the journal entry, whose `path` is where
-    // that rename PUT the file.
-    let entries = fx.journal.journal().entries().await.expect("entries");
-    let blocked = entries
-        .iter()
-        .find(|e| e.seq == seq)
-        .expect("the blocked seq is an entry of this journal");
-    assert_eq!(
-        blocked.path,
-        fx.root
-            .join(norte_proto::Segment::new(b"plain.txt".to_vec()).expect("segment"))
-            .to_wire()
-            .into_bytes(),
-        "the step that could not be undone is the one restoring the NFD twin",
-    );
     assert_eq!(report.undone, 0, "nothing of the batch was reverted");
     assert!(report.batch_stuck.is_none(), "{:?}", report.batch_stuck);
     assert_eq!(
         on_disk(fx.dir.path()),
-        after,
-        "a batch that cannot be undone whole is not undone at all — the swap \
-         that WOULD have reverted stays put too",
+        after_plant,
+        "the occupant was never clobbered, and nothing else moved either",
     );
-    // And the refusal cost nothing: all four entries are still pending, so the
-    // day #128 is fixed the same undo finds the same work waiting for it.
     assert_eq!(
         fx.journal
             .journal()
@@ -412,7 +513,7 @@ async fn a_twin_directory_moves_the_right_file_and_refuses_a_half_undo() {
             .await
             .expect("revertible")
             .len(),
-        4,
-        "a refused batch stays revertible WHOLE",
+        1,
+        "a blocked undo stays revertible",
     );
 }

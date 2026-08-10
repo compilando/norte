@@ -398,23 +398,87 @@ fn inverse_chain(unit: &[JournalEntry], dir: &VPath) -> Result<Vec<Inverse>, Rev
 /// ventana que ya tiene la IDA del lote, que también planifica sobre un
 /// listado y luego renombra a pelo. Cerrarla es tarea de las dos mitades a la
 /// vez, no de esta sola.
+///
+/// **Bloqueo en dos niveles, no uno solo (#128).** Un directorio que NO
+/// normaliza (ext4) puede tener `café` NFC y `café` NFD como dos ficheros
+/// distintos; ambos comparten [`name_key`] pero no comparten bytes. Un lote
+/// que movió el NFD y cuyo undo quiere restaurarlo se topaba con el gemelo
+/// NFC y se leía como "destino ocupado" — un fichero que el rename jamás
+/// tocaría bloqueando la reversión de otro, y con LIFO estricto eso se
+/// llevaba por delante el undo de todo lo anterior en la sesión también.
+///
+/// Por eso esta función rastrea DOS colecciones: `occupied_bytes` (los
+/// nombres EXACTOS presentes) decide el bloqueo, y `occupied_keys` (las
+/// claves [`name_key`] presentes, con su cuenta — dos ficheros pueden
+/// compartir clave) decide si el ORIGEN de un paso sigue estando ahí, el
+/// mismo criterio de antes. Un gemelo que solo comparte clave YA NO bloquea
+/// el destino; un ocupante que comparte los BYTES exactos sigue bloqueando
+/// igual que siempre.
+///
+/// Esto es seguro — y no meramente optimista — porque lo que de verdad
+/// impide pisar es el `rename` del provider, no esta simulación, y los tres
+/// providers comparan bytes exactos en ese punto: local con
+/// `renameat2(RENAME_NOREPLACE)` (atómico, compara la entrada de directorio
+/// tal cual), sftp con un `stat` previo sobre la ruta remota tal cual
+/// (`provider.rs`, `rename`: `if self.exists(&to_r)`), y object con
+/// `ensure_absent` sobre la key exacta (`provider.rs`, `rename`) — ninguno
+/// de los tres hace un `stat`/lookup consciente de folding NFC/NFD. Relajar
+/// el bloqueo a bytes exactos no abre, pues, una ventana que el `rename`
+/// real fuera a colar: si los bytes coinciden con algo real, el provider lo
+/// rechaza igual (atómico en local, con la misma ventana TOCTOU de siempre
+/// en sftp/object — esta función nunca prometió cerrarla, ver más arriba).
+///
+/// Un plegado por MAYÚSCULAS/minúsculas es distinto: en un directorio que de
+/// verdad no distingue caso, dos nombres que solo difieren en caso no pueden
+/// ser dos entradas separadas — son el mismo fichero, y el propio sistema de
+/// ficheros ya resuelve la búsqueda plegando caso antes de llegar al
+/// `rename`. Un listado real de un directorio así nunca puede traer dos
+/// bytes distintos bajo la misma clave por esa vía; el caso que sí ocurre de
+/// verdad, y el único que este cambio relaja, es NFC/NFD en un directorio
+/// que no normaliza.
 fn feasible(steps: &[Inverse], listing: &[Vec<u8>], caps: NameCaps) -> Result<(), (usize, Error)> {
-    let mut occupied: HashSet<Vec<u8>> = listing
-        .iter()
-        .map(|n| name_key(n, caps).into_owned())
-        .collect();
+    let mut occupied_bytes: HashSet<Vec<u8>> = listing.iter().cloned().collect();
+    let mut occupied_keys: HashMap<Vec<u8>, u32> = HashMap::new();
+    for n in listing {
+        *occupied_keys
+            .entry(name_key(n, caps).into_owned())
+            .or_insert(0) += 1;
+    }
     for (i, s) in steps.iter().enumerate() {
         let fk = name_key(&s.from, caps).into_owned();
-        let tk = name_key(&s.to, caps).into_owned();
-        if !occupied.contains(&fk) {
+        if !occupied_keys.contains_key(&fk) {
             return Err((i, Error::NotFound));
         }
-        if fk != tk {
-            if occupied.contains(&tk) {
+        if s.from != s.to {
+            // El bloqueo es por BYTES exactos, no por clave: un gemelo que
+            // solo comparte `name_key` no es el fichero que este paso
+            // tocaría (ver rustdoc de la función).
+            if occupied_bytes.contains(&s.to) {
                 return Err((i, OCCUPIED));
             }
-            occupied.remove(&fk);
-            occupied.insert(tk);
+            // El paso vacía Y ocupa en los DOS niveles: dejar uno desfasado
+            // haría que el paso SIGUIENTE de esta misma simulación viera un
+            // origen que ya no está, o un destino libre que en realidad
+            // sigue ocupado.
+            occupied_bytes.remove(&s.from);
+            occupied_bytes.insert(s.to.clone());
+            let tk = name_key(&s.to, caps).into_owned();
+            if fk != tk {
+                if let Some(count) = occupied_keys.get_mut(&fk) {
+                    // Ya se comprobó `occupied_keys.contains_key(&fk)` más
+                    // arriba en esta MISMA iteración, y nada entre medias lo
+                    // toca: la cuenta no puede ser 0 aquí. `saturating_sub`
+                    // solo evita que una futura rotura de ese invariante
+                    // vuelva esto un underflow silencioso; el `debug_assert`
+                    // es lo que la haría RUIDOSA en tests.
+                    debug_assert!(*count > 0, "clave {fk:?} contada en cero");
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        occupied_keys.remove(&fk);
+                    }
+                }
+                *occupied_keys.entry(tk).or_insert(0) += 1;
+            }
         }
     }
     Ok(())
