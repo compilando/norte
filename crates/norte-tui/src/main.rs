@@ -2,8 +2,10 @@
 //! EMBEBIDO o contra el DAEMON (fase 3 M2, por `[daemon] mode` o
 //! `--daemon`), con keymap engine (ADR 0006). Regla 7: solo cambia el
 //! transporte.
-//! `ratatui::init/restore` gestionan raw mode + pantalla alternativa con
-//! hook de pánico incluido: la terminal del usuario JAMÁS queda rota.
+//! `norte_tui::tty::init/restore` gestionan raw mode + pantalla alternativa
+//! con hook de pánico incluido: la terminal del usuario JAMÁS queda rota.
+//! Pintan sobre la terminal DE CONTROL (`tty.rs`), no sobre stdout: desde
+//! `--pick` stdout lleva datos, no secuencias de escape.
 #![forbid(unsafe_code)]
 
 use std::collections::VecDeque;
@@ -40,6 +42,7 @@ use norte_tui::lua::{
 use norte_tui::mouse;
 use norte_tui::nav;
 use norte_tui::tasks::RetrySpec;
+use norte_tui::tty;
 use norte_tui::ui;
 use norte_tui::viewer::Viewer;
 use norte_vfs_local::LocalProvider;
@@ -1236,8 +1239,9 @@ async fn main() -> Result<()> {
         ));
     }
 
-    let mut terminal = ratatui::init();
-    let mut capture = arm_mouse(&cfg, &mut app);
+    let (tty_out, mut mouse_out) = open_terminal_or_exit()?;
+    let mut terminal = tty::init(tty_out)?;
+    let mut capture = arm_mouse(&cfg, &mut app, &mut mouse_out);
     let res = run(
         &mut terminal,
         &mut capture,
@@ -1260,10 +1264,41 @@ async fn main() -> Result<()> {
         degraded,
     )
     .await;
-    let _ = capture.set(false, &mut std::io::stdout());
-    ratatui::restore();
+    let _ = capture.set(false, terminal.backend_mut());
+    restore_terminal(&mut terminal);
     drop(watch);
     res
+}
+
+/// Deshace [`tty::init`]. Lo mismo que hacía `ratatui::restore()`: no hay
+/// mucho que hacer si falla, así que se imprime y se sigue saliendo.
+fn restore_terminal(terminal: &mut tty::Tui) {
+    if let Err(e) = tty::restore(terminal) {
+        eprintln!("ntc: failed to restore terminal: {e}");
+    }
+}
+
+/// Abre la terminal DE CONTROL (`tty.rs`, no stdout — desde `--pick` stdout
+/// lleva datos) y un segundo descriptor duplicado para `arm_mouse`, que se
+/// llama antes de que `run` reciba la `Tui` y por tanto no puede tomar
+/// prestado el handle que se mueve a [`tty::init`] (dueño único del
+/// backend).
+///
+/// Sin controladora (cron, ambos extremos con pipe) es un error legible y
+/// código de salida 2 — jamás un pantallazo de escapes en el pipe de quien
+/// nos invocó.
+fn open_terminal_or_exit() -> Result<(tty::TtyOut, tty::TtyOut)> {
+    let out = match tty::open_controlling_terminal() {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("ntc: no controlling terminal: {e}");
+            std::process::exit(2);
+        }
+    };
+    let mouse_out = out
+        .try_clone()
+        .context("no se pudo duplicar el descriptor de la terminal")?;
+    Ok((out, mouse_out))
 }
 
 /// Pide la captura de ratón si `[ui] mouse` no la desactiva (default ON).
@@ -1276,21 +1311,25 @@ async fn main() -> Result<()> {
 /// Un emulador que no acepte la secuencia no es motivo para no arrancar: se
 /// sigue sin ratón y se dice por la barra, jamás en silencio (el usuario
 /// hará click y no pasará nada).
-fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App) -> mouse::Capture {
-    // El hook de pánico de `ratatui::init` sale de la pantalla alternativa y
-    // del raw mode, pero la captura de ratón es un DECSET de la terminal
-    // entera: no se va con la pantalla. Sin esto, un panic dejaría al
-    // usuario en su shell con el ratón todavía capturado, escupiendo
-    // secuencias que ya no lee nadie. Se envuelve el hook vigente (el de
-    // ratatui, ya instalado) en vez de sustituirlo: primero se suelta el
-    // ratón, después él restaura lo suyo e imprime el panic.
+fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App, out: &mut tty::TtyOut) -> mouse::Capture {
+    // El hook de pánico de `tty::init` ya suelta pantalla alternativa, raw
+    // mode Y ratón sobre un handle propio — pero la captura de ratón es un
+    // DECSET de la terminal ENTERA, no algo que se vaya con la pantalla, así
+    // que se envuelve otra vez aquí por si esta función algún día arma algo
+    // que `tty::init` no sepa deshacer. Mismo patrón: se toma el hook
+    // vigente y se sustituye por uno que primero suelta el ratón y LUEGO lo
+    // llama. El closure no puede tomar prestado `out` (el préstamo no
+    // sobrevive a esta función), así que abre un handle nuevo a la terminal
+    // de control en el momento del pánico — igual que hace `tty::init`.
     let previo = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+        if let Ok(mut tty_out) = tty::open_controlling_terminal() {
+            let _ = crossterm::execute!(tty_out, crossterm::event::DisableMouseCapture);
+        }
         previo(info);
     }));
     let mut capture = mouse::Capture::new();
-    if let Err(e) = capture.set(cfg.common.ui_mouse.unwrap_or(true), &mut std::io::stdout()) {
+    if let Err(e) = capture.set(cfg.common.ui_mouse.unwrap_or(true), out) {
         tracing::warn!(error = %e, "no se pudo activar la captura de ratón");
         app.message = Some(t("msg-mouse-capture-failed"));
     }
@@ -1520,7 +1559,7 @@ fn build_keymaps(
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // wiring del binario, no API
 async fn run(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut tty::Tui,
     // Captura de ratón: la crea `main` (dueño de la terminal) y la retira
     // al salir; aquí se ENCIENDE y se APAGA en caliente (`[ui] mouse`) y se
     // suelta alrededor de cada suspensión por opener externo.
@@ -1672,8 +1711,9 @@ async fn run(
             );
             app.refresh_help(ancho, alto);
         }
-        // Exención puntual de la regla 2: el draw escribe stdout síncrono
-        // (patrón async oficial de ratatui; acotado, runtime multi-thread).
+        // Exención puntual de la regla 2: el draw escribe la terminal de
+        // control síncronamente (patrón async oficial de ratatui; acotado,
+        // runtime multi-thread).
         let pintado = terminal.draw(|f| ui::draw(f, app))?;
         if app.quit {
             return Ok(());
@@ -2117,10 +2157,10 @@ async fn run(
                 // vigente) no manda nada a la terminal.
                 //
                 // Exención puntual de la regla 2, la MISMA que el draw de
-                // arriba: son unos pocos bytes de escape a stdout síncrono,
-                // acotados, y solo cuando la clave CAMBIA.
+                // arriba: son unos pocos bytes de escape a la terminal de
+                // control síncronos, acotados, y solo cuando la clave CAMBIA.
                 if let Err(e) =
-                    capture.set(cfg.common.ui_mouse.unwrap_or(true), &mut std::io::stdout())
+                    capture.set(cfg.common.ui_mouse.unwrap_or(true), terminal.backend_mut())
                 {
                     // Y se dice, como en el arranque: quien acaba de
                     // encender el ratón desde el overlay de ajustes y se
@@ -7767,7 +7807,7 @@ fn resolve_opener(app: &mut App) {
 /// suspende el TUI y lo lanza. Devuelve el mensaje de barra LOCALIZADO del
 /// resultado (binario ausente / lanzado / fallo de spawn).
 async fn launch_opener(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut tty::Tui,
     // Suspender la TUI cede la terminal ENTERA: la captura de ratón se
     // suelta antes y se restituye después ([`run_opener`]).
     capture: &mut mouse::Capture,
@@ -7838,7 +7878,7 @@ async fn spawn_detached(argv: Vec<std::ffi::OsString>) -> std::io::Result<()> {
 /// restaura SIEMPRE una vez que se dejó el modo TUI — falle el hijo, se rompa
 /// el join o falle una syscall intermedia — para no dejarla en raw-off. #28.
 async fn run_opener(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut tty::Tui,
     capture: &mut mouse::Capture,
     argv: Vec<std::ffi::OsString>,
 ) -> std::io::Result<std::process::ExitStatus> {
@@ -7853,14 +7893,15 @@ async fn run_opener(
     );
     // La captura de ratón se suelta ANTES de nada: el programa que viene
     // detrás no la pidió, y heredarla le mete cada movimiento del puntero
-    // por stdin como si fueran teclas. Escritura síncrona a stdout, misma
+    // por stdin como si fueran teclas. Escritura síncrona a la terminal de
+    // control (`terminal.backend_mut()`, nunca stdout — ver `tty.rs`), misma
     // exención puntual de la regla 2 que el resto de esta función (que ya
     // maneja la pantalla alternativa y el raw mode igual).
-    let raton = mouse::release_for_suspend(capture, &mut std::io::stdout())?;
+    let raton = mouse::release_for_suspend(capture, terminal.backend_mut())?;
     disable_raw_mode()?;
     // A partir de aquí la terminal está fuera del modo TUI: restaurar pase lo
     // que pase antes de devolver.
-    crossterm::execute!(std::io::stdout(), LeaveAlternateScreen)?;
+    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     let child = tokio::task::spawn_blocking(move || {
         std::process::Command::new(&argv[0])
             .args(&argv[1..])
@@ -7868,12 +7909,12 @@ async fn run_opener(
     })
     .await;
     let mut restore = || -> std::io::Result<()> {
-        crossterm::execute!(std::io::stdout(), EnterAlternateScreen)?;
+        crossterm::execute!(terminal.backend_mut(), EnterAlternateScreen)?;
         enable_raw_mode()?;
         // Y se restituye exactamente como estaba: si el usuario la tenía
         // apagada (`[ui] mouse = false`), volver del opener no se la
         // enciende.
-        mouse::restore_after_suspend(capture, raton, &mut std::io::stdout())?;
+        mouse::restore_after_suspend(capture, raton, terminal.backend_mut())?;
         terminal.clear()
     };
     let restored = restore();

@@ -17,6 +17,7 @@ pub mod palette;
 pub mod settings;
 pub mod tasks;
 pub mod theme;
+pub mod tty;
 pub mod ui;
 pub mod viewer;
 pub mod watch;
