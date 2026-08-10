@@ -368,7 +368,24 @@ use crate::{
 /// COSMÉTICA: si el peer no implementa el método, no hay página que pintar y no
 /// hay nada roto. No es que un daemon N-1 conteste eso — nunca recibe la
 /// llamada, porque el handshake ya lo rechazó.
-pub const PROTOCOL_VERSION: &str = "0.36.0";
+///
+/// 0.37.0 (#131, diseño `2026-08-10-volumes-design.md`): método nuevo
+/// [`HOST_VOLUMES`] ([`HostVolumesParams`] → [`HostVolumesResult`]), la
+/// enumeración de los volúmenes del HOST — no de un provider, y por eso vive
+/// fuera de la familia `fs.*` (diseño §A). [`Volume::mount`] es un [`VPath`],
+/// jamás un `String` (regla dura 1: un punto de montaje no-UTF-8 tiene que
+/// sobrevivir el wire byte a byte); [`VolumeKind`] gana `#[serde(other)]`
+/// sobre `Unknown`, la misma forma que [`EntryKind::Other`] y
+/// `TaskKind::Unknown`, así que un tipo de volumen añadido en N+1 degrada en
+/// vez de romper a un cliente viejo. El método responde SOLO a una conexión
+/// `User`: la tabla de montaje nombra los discos, servidores y medios
+/// extraíbles del humano, y un agente bajo scope no lo necesita para nada
+/// (diseño §C) — el gate vive en `norte-core::daemon` y responde
+/// `Error::PolicyDenied` con el vocabulario cerrado de
+/// `DenyReason::rule_id()`, jamás la regla concreta. Ventana N=0.37.x /
+/// N-1=0.36.x: un cliente 0.36 jamás llama al método nuevo — nada que gatear
+/// en emisión.
+pub const PROTOCOL_VERSION: &str = "0.37.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -401,6 +418,18 @@ pub const FS_READ: &str = "fs.read";
 /// `fs.capabilities` — capabilities del provider que sirve un path
 /// (0.5.0): el frontend decide p. ej. si F8 ofrece papelera (ADR 0009).
 pub const FS_CAPABILITIES: &str = "fs.capabilities";
+
+/// `host.volumes` — enumera los volúmenes del HOST (0.37.0, #131): mount
+/// point, tipo de filesystem, kind y espacio libre/total. No es un método
+/// `fs.*` a propósito (diseño §A de `2026-08-10-volumes-design.md`): un
+/// volumen es una propiedad de la MÁQUINA, no de un path, así que no hay
+/// provider al que preguntarle.
+///
+/// SOLO una conexión `User` recibe respuesta: la tabla de montaje nombra los
+/// discos, servidores y medios extraíbles del humano, y una conexión de
+/// agente (`agent_session` en `initialize`) la ve como `Error::PolicyDenied`
+/// — información que un scope de rutas no necesita para nada (diseño §C).
+pub const HOST_VOLUMES: &str = "host.volumes";
 
 /// Tope de bytes devueltos por UNA llamada a [`FS_READ`] (antes de
 /// base64). Pedir más no es error: se recorta y `eof` lo cuenta.
@@ -1943,6 +1972,86 @@ pub struct FsCapabilitiesResult {
         )
     )]
     pub attrs: crate::attrs::AttrCatalog,
+}
+
+/// What kind of volume a [`Volume`] is, over the wire (0.37.0, #131). Mirrors
+/// `norte_core::volumes::VolumeKind` field for field, but this crate cannot
+/// depend on `norte-core` (the dependency runs the other way), so the two
+/// stay in sync by convention plus the daemon-side mapping test, not by a
+/// shared type.
+///
+/// `#[serde(other)]` on `Unknown` is the same forward-compat shape
+/// [`EntryKind::Other`] and `TaskKind::Unknown` already use: a kind this
+/// client has never heard of degrades to `Unknown` on decode instead of
+/// failing the whole `host.volumes` response.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VolumeKind {
+    /// A local, non-removable disk.
+    Fixed,
+    /// A local disk the OS considers removable (USB, SD, …).
+    Removable,
+    /// A network filesystem (NFS, CIFS/SMB, sshfs, …).
+    Network,
+    /// A synthetic/virtual filesystem (`proc`, `tmpfs`, …), hidden from the
+    /// picker unless it asks for everything.
+    Pseudo,
+    /// The platform could not tell, or this decoder does not recognize a
+    /// kind a newer peer sent (`#[serde(other)]`).
+    #[serde(other)]
+    Unknown,
+}
+
+/// One volume the host has mounted, over the wire (0.37.0, #131).
+///
+/// # Non-UTF-8 mount points
+/// `mount` is a [`VPath`], never a `String`: rule 1 requires a mount point's
+/// bytes to survive the wire exactly, and a `String` cannot hold bytes that
+/// are not valid UTF-8 (`/proc/mounts` places no such restriction on what a
+/// filesystem may be mounted at).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Volume {
+    /// Mount point. A [`VPath`] — see the type's rustdoc for why this is
+    /// never a `String`.
+    pub mount: VPath,
+    /// What the OS or the filesystem calls it, when it says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// `ext4`, `apfs`, `ntfs`, `nfs4`… as the platform spells it.
+    pub fs_type: String,
+    /// What kind of volume this is, so far as the platform can tell.
+    pub kind: VolumeKind,
+    /// `None` when the filesystem did not answer its space query in time —
+    /// never a zero standing in for "unknown" (design §A: a `0` here would
+    /// read as "full").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+    /// `None` when the filesystem did not answer its space query in time —
+    /// see [`Volume::total_bytes`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free_bytes: Option<u64>,
+    /// Whether the mount is read-only.
+    pub read_only: bool,
+}
+
+/// Params de [`HOST_VOLUMES`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostVolumesParams {
+    /// The picker's "show everything" toggle: with this `false` (the
+    /// default), a [`Volume`] classified [`VolumeKind::Pseudo`] is left out.
+    #[serde(default)]
+    pub include_pseudo: bool,
+}
+
+/// Result de [`HOST_VOLUMES`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostVolumesResult {
+    /// The host's volumes, in no particular guaranteed order.
+    pub volumes: Vec<Volume>,
 }
 
 /// Params de [`TASK_CANCEL`].

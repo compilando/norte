@@ -707,6 +707,7 @@ fn golden_methods() {
     check_methods_index(&fixtures);
     check_methods_ai(&fixtures);
     check_methods_rename_batch(&fixtures);
+    check_methods_host(&fixtures);
     // 98 → 101 en 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
     // ADR 0031). 101 → 106 en 0.33.0: + index_embed_params,
     // index_search_semantic_params(/_no_root)/result y semantic_hit (M4-IA-2,
@@ -722,7 +723,10 @@ fn golden_methods() {
     // familia pinea varias formas de plan). 116 → 120: + fs_rename_batch_report_params y
     // fs_rename_batch_report_result(/_clean/_uncertain) — el informe del lote:
     // limpio, atascado, y con el paso de destino desconocido.
-    assert_eq!(fixtures.len(), 120, "[methods.json] fixtures sin caso Rust");
+    // 120 → 126 en 0.37.0 (#131): + host_volumes_params(/_pseudo),
+    // host_volumes_result y los tipos sueltos volume/volume_hostile_no_sizes/
+    // volume_future_kind (la forma "sin sizes" y el degrade `serde(other)`).
+    assert_eq!(fixtures.len(), 126, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `fs.rename_batch*` (0.36.0): las PETICIONES de plan y de ejecución.
@@ -2374,7 +2378,10 @@ fn method_names_frozen() {
     // aún más que un tercero lo conozca.
     assert_eq!(methods::FS_RENAME_BATCH_MAX_PAIRS, 4096);
     assert_eq!(methods::PLAN_HASH_LEN, 64);
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.36.0");
+    // 0.37.0 (#131): host.volumes — enumeración de los volúmenes del host,
+    // SOLO para una conexión User (diseño §C de `2026-08-10-volumes-design.md`).
+    assert_eq!(methods::HOST_VOLUMES, "host.volumes");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.37.0");
 }
 
 #[test]
@@ -2525,4 +2532,78 @@ fn attr_value_tag(v: &AttrValue) -> &'static str {
         AttrValue::Bool(_) => "bool",
         AttrValue::Unknown => "unknown",
     }
+}
+
+/// Familia `host.*` (0.37.0, #131): enumeración de volúmenes del host.
+/// `Volume::mount` es un [`VPath`] — `volume_hostile_no_sizes` usa un mount
+/// point NO-UTF8 para demostrar el round-trip byte a byte (regla dura 1), y
+/// la MISMA fixture pinea la forma de "sin sizes": `total_bytes`/`free_bytes`
+/// ausentes del wire, jamás un cero disfrazado de "desconocido" (diseño §A de
+/// `2026-08-10-volumes-design.md`).
+fn check_methods_host(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{HostVolumesParams, HostVolumesResult, Volume, VolumeKind};
+
+    check_one(
+        fixtures,
+        "host_volumes_params",
+        &HostVolumesParams {
+            include_pseudo: false,
+        },
+    );
+    check_one(
+        fixtures,
+        "host_volumes_params_pseudo",
+        &HostVolumesParams {
+            include_pseudo: true,
+        },
+    );
+
+    let removable = Volume {
+        mount: vpath("file:///media/USB-Nico"),
+        label: Some("USB Nico".into()),
+        fs_type: "vfat".into(),
+        kind: VolumeKind::Removable,
+        total_bytes: Some(64_000_000_000),
+        free_bytes: Some(12_000_000_000),
+        read_only: false,
+    };
+    check_one(fixtures, "volume", &removable);
+
+    // Non-UTF8 mount point + la forma "sin sizes" — ver el comentario de la
+    // función.
+    let hostile_no_sizes = Volume {
+        mount: vpath("file:///media/informe%FF%FE"),
+        label: None,
+        fs_type: "nfs4".into(),
+        kind: VolumeKind::Network,
+        total_bytes: None,
+        free_bytes: None,
+        read_only: true,
+    };
+    check_one(fixtures, "volume_hostile_no_sizes", &hostile_no_sizes);
+
+    check_one(
+        fixtures,
+        "host_volumes_result",
+        &HostVolumesResult {
+            volumes: vec![removable, hostile_no_sizes],
+        },
+    );
+
+    // Decode-only (asimétrico, como `plugin_help_result_absent`): un `kind`
+    // que este cliente no conoce degrada a `Unknown` por `#[serde(other)]`
+    // en vez de tirar toda la respuesta de `host.volumes` — el core JAMÁS
+    // emite este valor, así que no hay dirección de encode que pinear.
+    let future_kind: Volume = serde_json::from_value(
+        fixtures
+            .get("volume_future_kind")
+            .expect("[methods.json] falta la fixture volume_future_kind")
+            .clone(),
+    )
+    .expect("[methods/volume_future_kind] deserialize");
+    assert_eq!(
+        future_kind.kind,
+        VolumeKind::Unknown,
+        "un kind desconocido degrada a Unknown, no rompe la decodificación"
+    );
 }

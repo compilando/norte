@@ -233,7 +233,7 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect_err("0.1.0 no es N ni N-1 de 0.36.0");
+        .expect_err("0.1.0 no es N ni N-1 de 0.37.0");
     match err {
         ClientError::Rpc(rpc) => {
             // Código PROPIO: la señal de upgrade jamás se parsea de message.
@@ -244,14 +244,14 @@ async fn initialize_rechaza_version_incompatible() {
         }
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
-    // N-1 (0.35.x) SÍ entra.
+    // N-1 (0.36.x) SÍ entra.
     let c2 = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c2
         .call(
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.35.2".into(),
+                protocol_version: "0.36.2".into(),
                 encodings: vec![],
                 agent_session: None,
             },
@@ -815,6 +815,107 @@ async fn agente_sin_scope_ve_policy_denied_humano_copia() {
         .await
         .expect("humano copia sin gate");
     assert!(res.task_id.get() > 0);
+}
+
+/// V2 (#131, `host.volumes`): mismo criterio server-side que
+/// `agente_sin_scope_ve_policy_denied_humano_copia`, para una operación SIN
+/// concepto de scope — la tabla de montaje no es un path bajo el árbol de
+/// nadie, así que un agente la ve vedada CATEGÓRICAMENTE (nunca
+/// `out-of-scope`: no hay scope que pedir para esto, y pedirle uno no
+/// cambiaría la respuesta). `PolicyDenied` con la categoría gruesa
+/// `not-approved` del vocabulario cerrado — mismo criterio que
+/// `ai.rename_plan`/`index.embed`/`index.search_semantic` — jamás un fallo de
+/// transporte que distinga "vedado" de "no implementado". Un daemon SIN
+/// `ScopedPolicy` instalada (`spawn_daemon` liso) basta: el gate de
+/// `host.volumes` no pasa por el engine ni por `policy.toml`, es una
+/// comprobación de actor pura ANTES del parseo de params (security review
+/// V2, MAJOR aplicado: el gate corría después de `parse_params`, así que un
+/// agente con params inválidos veía `INVALID_PARAMS` en vez de
+/// `PolicyDenied` — un oráculo que el agente controla con la forma de su
+/// propia petición).
+#[tokio::test]
+async fn agente_ve_policy_denied_en_host_volumes_humano_lo_lista() {
+    let d = spawn_daemon(None).await;
+    let params = methods::HostVolumesParams {
+        include_pseudo: false,
+    };
+
+    // Agente (con `agent_session`, sin scope alguno): vedado.
+    let agent = connected_agent(&d, "s1").await;
+    let err = agent
+        .call::<_, methods::HostVolumesResult>(methods::HOST_VOLUMES, &params)
+        .await
+        .expect_err("agente: host.volumes vedado");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert!(
+                matches!(
+                    rpc.data,
+                    Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"
+                ),
+                "PolicyDenied not-approved, fue {:?}",
+                rpc.data
+            );
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+
+    // Agente con params MAL FORMADOS (`include_pseudo` no es un bool): SIGUE
+    // viendo `PolicyDenied`, no `INVALID_PARAMS` — el gate corre antes de
+    // que el parseo pueda fallar, así que la respuesta no depende de nada
+    // que el agente controle con la forma de su petición.
+    let err = agent
+        .call::<_, methods::HostVolumesResult>(
+            methods::HOST_VOLUMES,
+            &serde_json::json!({"include_pseudo": "no-es-un-bool"}),
+        )
+        .await
+        .expect_err("agente: params inválidos siguen vedados, no INVALID_PARAMS");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert!(
+                matches!(
+                    rpc.data,
+                    Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"
+                ),
+                "PolicyDenied not-approved incluso con params inválidos, fue {:?}",
+                rpc.data
+            );
+        }
+        other => panic!("esperaba Rpc con PolicyDenied, fue {other:?}"),
+    }
+
+    // Humano (sin `agent_session`): lista sin gate. La máquina de test corre
+    // Linux de verdad, así que la raíz `/` tiene que aparecer — mismo criterio
+    // que `enumerate_finds_the_real_root_filesystem` en `norte-core::volumes`.
+    let human = connected_client(&d).await;
+    let res: methods::HostVolumesResult = human
+        .call(methods::HOST_VOLUMES, &params)
+        .await
+        .expect("humano: host.volumes sin gate");
+    assert!(
+        res.volumes.iter().any(|v| v.mount.to_wire() == "file:///"),
+        "se esperaba encontrar la raíz entre {:?}",
+        res.volumes
+    );
+
+    // Humano con params AUSENTES (`null`): se aceptan como el default (ADR
+    // 0004), mismo patrón que `task.list`/`plugin.list` — un `bool` con
+    // default no es "sin params legales" cuando el cliente omite el objeto
+    // entero.
+    let res_null: methods::HostVolumesResult = human
+        .call(methods::HOST_VOLUMES, &serde_json::Value::Null)
+        .await
+        .expect("humano: host.volumes con params null (ADR 0004)");
+    assert!(
+        res_null
+            .volumes
+            .iter()
+            .any(|v| v.mount.to_wire() == "file:///"),
+        "params null debe comportarse como include_pseudo: false por default"
+    );
 }
 
 /// M4 (ADR 0034, review BLOCKER): `index.build` e `index.query` gatean la
@@ -1812,7 +1913,7 @@ async fn frames_hostiles_y_formas_canonicas_crudas() {
 
     // initialize + daemon.shutdown con params null (golden canónico, M1).
     s.write_all(
-        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.35.0\",\"encodings\":[\"json\"]}}\n",
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.36.0\",\"encodings\":[\"json\"]}}\n",
     )
     .await
     .expect("write");

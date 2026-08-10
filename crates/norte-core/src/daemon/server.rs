@@ -1809,6 +1809,30 @@ async fn dispatch(
             let p: methods::PolicyUndoReportParams = parse_params(req.params)?;
             handle_policy_undo_report(&conn.actor, &p, shared)
         }
+        // host.volumes (0.37.0, #131): enumeración de los volúmenes del HOST,
+        // SOLO para una conexión User (diseño §C de
+        // `2026-08-10-volumes-design.md`) — la tabla de montaje nombra los
+        // discos, servidores y medios extraíbles del humano, y un agente bajo
+        // scope no lo necesita para nada. El gate va ANTES del parseo (mismo
+        // criterio que `index.embed`/`index.search_semantic`/`ai.rename_plan`,
+        // MAJOR de la review V2): un agente ve `PolicyDenied` sea cual sea la
+        // validez de sus params, y jamás un `INVALID_PARAMS` que le dejara
+        // distinguir "vedado" de "params malos" fuzzeando el único campo.
+        // Sin params definidos más allá del bool con default: null/ausente se
+        // acepta (ADR 0004), mismo patrón que `task.list`/`plugin.list`.
+        methods::HOST_VOLUMES => {
+            if !matches!(conn.actor, Actor::User) {
+                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+                    rule: "not-approved".into(),
+                }));
+            }
+            let p: methods::HostVolumesParams = parse_params(
+                req.params
+                    .filter(|v| !v.is_null())
+                    .or_else(|| Some(serde_json::json!({}))),
+            )?;
+            handle_host_volumes(p).await
+        }
         // plugin.* (M4-P3): listar el catálogo (cualquier conexión) y aprobar/
         // activar (SOLO humanos — es consentir capabilities, acto de seguridad).
         methods::PLUGIN_LIST => handle_plugin_list(req.params, shared),
@@ -2127,6 +2151,25 @@ fn handle_policy_undo_report(
             .as_ref()
             .map(crate::rename::stuck_to_proto),
         compensations_lost: snapshot.compensations_lost,
+    })
+}
+
+/// `host.volumes` (0.37.0, #131): enumeración de los volúmenes del HOST. El
+/// gate de actor (SOLO `User` — diseño §C de `2026-08-10-volumes-design.md`)
+/// vive en el brazo de `dispatch` que llama a esta función, ANTES del
+/// parseo de params (ver el comentario de ese brazo): esta función solo
+/// corre para una conexión ya autorizada, así que no vuelve a comprobar el
+/// actor. No hay `Provider`/engine que consultar —
+/// [`crate::volumes::enumerate`] es una función libre del HOST (diseño §A).
+async fn handle_host_volumes(p: methods::HostVolumesParams) -> Result<serde_json::Value, RpcError> {
+    let volumes = crate::volumes::enumerate(p.include_pseudo)
+        .await
+        .map_err(|_| RpcError::from(norte_proto::Error::Io { retryable: false }))?;
+    to_value(&methods::HostVolumesResult {
+        volumes: volumes
+            .into_iter()
+            .map(crate::backend::volume_to_proto)
+            .collect(),
     })
 }
 

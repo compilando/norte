@@ -266,6 +266,31 @@
     "request_id": 3
   },
   "grant_scope_result": {},
+  "host_volumes_params": {
+    "include_pseudo": false
+  },
+  "host_volumes_params_pseudo": {
+    "include_pseudo": true
+  },
+  "host_volumes_result": {
+    "volumes": [
+      {
+        "mount": "file:///media/USB-Nico",
+        "label": "USB Nico",
+        "fs_type": "vfat",
+        "kind": "removable",
+        "total_bytes": 64000000000,
+        "free_bytes": 12000000000,
+        "read_only": false
+      },
+      {
+        "mount": "file:///media/informe%FF%FE",
+        "fs_type": "nfs4",
+        "kind": "network",
+        "read_only": true
+      }
+    ]
+  },
   "index_build_params": {
     "root": "file:///home/user"
   },
@@ -779,5 +804,26 @@
   },
   "task_list_result_vacio": {
     "tasks": []
+  },
+  "volume": {
+    "mount": "file:///media/USB-Nico",
+    "label": "USB Nico",
+    "fs_type": "vfat",
+    "kind": "removable",
+    "total_bytes": 64000000000,
+    "free_bytes": 12000000000,
+    "read_only": false
+  },
+  "volume_future_kind": {
+    "mount": "file:///mnt/exotic",
+    "fs_type": "zfs-cluster",
+    "kind": "quantum_bay",
+    "read_only": false
+  },
+  "volume_hostile_no_sizes": {
+    "mount": "file:///media/informe%FF%FE",
+    "fs_type": "nfs4",
+    "kind": "network",
+    "read_only": true
   }
 }

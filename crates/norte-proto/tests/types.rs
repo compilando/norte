@@ -993,12 +993,12 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.36.0 (batch rename): acepta 0.36.x (N) y 0.35.x (N-1), rechaza 0.34.x
-    // (N-2) — la ventana se desplaza con el bump, no se ensancha.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.36.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.35.0"), "N-1");
+    // 0.37.0 (#131, host.volumes): acepta 0.37.x (N) y 0.36.x (N-1), rechaza
+    // 0.35.x (N-2) — la ventana se desplaza con el bump, no se ensancha.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.37.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.36.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.34.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.35.9"),
         "N-2 fuera de la ventana"
     );
 }

@@ -1427,6 +1427,33 @@
       "description": "Result de [`POLICY_GRANT_SCOPE`].",
       "type": "object"
     },
+    "HostVolumesParams": {
+      "description": "Params de [`HOST_VOLUMES`].",
+      "properties": {
+        "include_pseudo": {
+          "default": false,
+          "description": "The picker's \"show everything\" toggle: with this `false` (the\ndefault), a [`Volume`] classified [`VolumeKind::Pseudo`] is left out.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "HostVolumesResult": {
+      "description": "Result de [`HOST_VOLUMES`].",
+      "properties": {
+        "volumes": {
+          "description": "The host's volumes, in no particular guaranteed order.",
+          "items": {
+            "$ref": "#/$defs/Volume"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "volumes"
+      ],
+      "type": "object"
+    },
     "IndexBuildParams": {
       "description": "Params de [`INDEX_BUILD`] (M4): raíz a indexar.",
       "properties": {
@@ -3208,6 +3235,89 @@
           "type": "string"
         }
       ]
+    },
+    "Volume": {
+      "description": "One volume the host has mounted, over the wire (0.37.0, #131).\n\n# Non-UTF-8 mount points\n`mount` is a [`VPath`], never a `String`: rule 1 requires a mount point's\nbytes to survive the wire exactly, and a `String` cannot hold bytes that\nare not valid UTF-8 (`/proc/mounts` places no such restriction on what a\nfilesystem may be mounted at).",
+      "properties": {
+        "free_bytes": {
+          "description": "`None` when the filesystem did not answer its space query in time —\nsee [`Volume::total_bytes`].",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fs_type": {
+          "description": "`ext4`, `apfs`, `ntfs`, `nfs4`… as the platform spells it.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/VolumeKind",
+          "description": "What kind of volume this is, so far as the platform can tell."
+        },
+        "label": {
+          "description": "What the OS or the filesystem calls it, when it says.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mount": {
+          "$ref": "#/$defs/VPath",
+          "description": "Mount point. A [`VPath`] — see the type's rustdoc for why this is\nnever a `String`."
+        },
+        "read_only": {
+          "description": "Whether the mount is read-only.",
+          "type": "boolean"
+        },
+        "total_bytes": {
+          "description": "`None` when the filesystem did not answer its space query in time —\nnever a zero standing in for \"unknown\" (design §A: a `0` here would\nread as \"full\").",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mount",
+        "fs_type",
+        "kind",
+        "read_only"
+      ],
+      "type": "object"
+    },
+    "VolumeKind": {
+      "description": "What kind of volume a [`Volume`] is, over the wire (0.37.0, #131). Mirrors\n`norte_core::volumes::VolumeKind` field for field, but this crate cannot\ndepend on `norte-core` (the dependency runs the other way), so the two\nstay in sync by convention plus the daemon-side mapping test, not by a\nshared type.\n\n`#[serde(other)]` on `Unknown` is the same forward-compat shape\n[`EntryKind::Other`] and `TaskKind::Unknown` already use: a kind this\nclient has never heard of degrades to `Unknown` on decode instead of\nfailing the whole `host.volumes` response.",
+      "oneOf": [
+        {
+          "const": "fixed",
+          "description": "A local, non-removable disk.",
+          "type": "string"
+        },
+        {
+          "const": "removable",
+          "description": "A local disk the OS considers removable (USB, SD, …).",
+          "type": "string"
+        },
+        {
+          "const": "network",
+          "description": "A network filesystem (NFS, CIFS/SMB, sshfs, …).",
+          "type": "string"
+        },
+        {
+          "const": "pseudo",
+          "description": "A synthetic/virtual filesystem (`proc`, `tmpfs`, …), hidden from the\npicker unless it asks for everything.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "The platform could not tell, or this decoder does not recognize a\nkind a newer peer sent (`#[serde(other)]`).",
+          "type": "string"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3344,6 +3454,12 @@
     },
     "grant_scope_result": {
       "$ref": "#/$defs/GrantScopeResult"
+    },
+    "host_volumes_params": {
+      "$ref": "#/$defs/HostVolumesParams"
+    },
+    "host_volumes_result": {
+      "$ref": "#/$defs/HostVolumesResult"
     },
     "index_build_params": {
       "$ref": "#/$defs/IndexBuildParams"
@@ -3560,6 +3676,12 @@
     },
     "verify_policy": {
       "$ref": "#/$defs/VerifyPolicy"
+    },
+    "volume": {
+      "$ref": "#/$defs/Volume"
+    },
+    "volume_kind": {
+      "$ref": "#/$defs/VolumeKind"
     }
   },
   "required": [
@@ -3607,6 +3729,8 @@
     "fs_task_result",
     "grant_scope_params",
     "grant_scope_result",
+    "host_volumes_params",
+    "host_volumes_result",
     "index_build_params",
     "index_build_result",
     "index_embed_params",
@@ -3678,7 +3802,9 @@
     "task_state",
     "undo_blocked",
     "v_path",
-    "verify_policy"
+    "verify_policy",
+    "volume",
+    "volume_kind"
   ],
   "title": "ProtocolSchema",
   "type": "object"

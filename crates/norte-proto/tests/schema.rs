@@ -59,6 +59,8 @@ struct ProtocolSchema {
     fs_task_result: FsTaskResult,
     grant_scope_params: GrantScopeParams,
     grant_scope_result: GrantScopeResult,
+    host_volumes_params: HostVolumesParams,
+    host_volumes_result: HostVolumesResult,
     index_build_params: IndexBuildParams,
     index_build_result: IndexBuildResult,
     index_embed_params: IndexEmbedParams,
@@ -131,6 +133,8 @@ struct ProtocolSchema {
     undo_blocked: UndoBlocked,
     v_path: VPath,
     verify_policy: VerifyPolicy,
+    volume: Volume,
+    volume_kind: VolumeKind,
 }
 
 #[test]

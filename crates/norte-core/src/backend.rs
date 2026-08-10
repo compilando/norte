@@ -32,6 +32,44 @@ fn index_hit_to_proto(h: norte_index::IndexHit) -> norte_proto::methods::IndexHi
     }
 }
 
+/// Proyecta un [`crate::volumes::VolumeKind`] al tipo del protocolo (0.37.0,
+/// #131). Los dos tipos NO comparten definición (`norte-proto` no puede
+/// depender de `norte-core`, la dependencia va al revés): un `match`
+/// exhaustivo aquí es lo que mantiene el mapeo honesto — un kind nuevo en el
+/// core rompe la compilación de esta función en vez de degradar en silencio.
+///
+/// `pub(crate)`: el handler de `host.volumes` en `daemon::server` reutiliza
+/// esta misma función (con [`volume_to_proto`]) en vez de duplicar el
+/// `match` — a diferencia de `index_hit_to_proto`, cuyo mapeo es tan trivial
+/// (cuatro campos sin ramas) que duplicarlo en el daemon no arriesga nada;
+/// aquí SÍ hay un `match` de variantes, y dos copias son dos sitios que
+/// olvidar al añadir una.
+pub(crate) fn volume_kind_to_proto(
+    k: crate::volumes::VolumeKind,
+) -> norte_proto::methods::VolumeKind {
+    match k {
+        crate::volumes::VolumeKind::Fixed => norte_proto::methods::VolumeKind::Fixed,
+        crate::volumes::VolumeKind::Removable => norte_proto::methods::VolumeKind::Removable,
+        crate::volumes::VolumeKind::Network => norte_proto::methods::VolumeKind::Network,
+        crate::volumes::VolumeKind::Pseudo => norte_proto::methods::VolumeKind::Pseudo,
+        crate::volumes::VolumeKind::Unknown => norte_proto::methods::VolumeKind::Unknown,
+    }
+}
+
+/// Proyecta un [`crate::volumes::Volume`] al tipo del protocolo (0.37.0,
+/// #131). `pub(crate)`: ver el rustdoc de [`volume_kind_to_proto`].
+pub(crate) fn volume_to_proto(v: crate::volumes::Volume) -> norte_proto::methods::Volume {
+    norte_proto::methods::Volume {
+        mount: v.mount,
+        label: v.label,
+        fs_type: v.fs_type,
+        kind: volume_kind_to_proto(v.kind),
+        total_bytes: v.total_bytes,
+        free_bytes: v.free_bytes,
+        read_only: v.read_only,
+    }
+}
+
 /// Timeout de llamadas de IA: el proveedor (modelo remoto) tarda
 /// legítimamente mucho más que un fs.*. Acota AMBOS brazos de
 /// [`Backend::ai_rename_plan`] (embebido y remoto — cancel-on-drop en el
@@ -720,6 +758,40 @@ impl Backend {
             Self::Embedded(engine) => engine.gc_partials(dir, older_than).await,
             #[cfg(unix)]
             Self::Remote(_) => Err(Error::Unsupported),
+        }
+    }
+
+    /// Volúmenes del host (`host.volumes`, 0.37.0, #131): mount point, tipo
+    /// de filesystem, kind y espacio libre/total. `include_pseudo` es el
+    /// toggle "mostrar todo" del picker (diseño §E de
+    /// `2026-08-10-volumes-design.md`).
+    ///
+    /// Embebido: llama a [`crate::volumes::enumerate`] directamente — un
+    /// volumen es del HOST, no de un provider, así que no hay engine que
+    /// consultar (diseño §A). SIN gate de actor: un core embebido no tiene
+    /// conexión ni daemon, así que quien lo llama YA es el humano sentado
+    /// delante — no hay superficie remota que sandboxear.
+    ///
+    /// Remoto: `host.volumes` contra el daemon, que SÍ gatea por actor de
+    /// conexión (diseño §C) — una conexión de agente ve
+    /// [`Error::PolicyDenied`].
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`.
+    pub async fn volumes(
+        &self,
+        include_pseudo: bool,
+    ) -> Result<Vec<norte_proto::methods::Volume>, Error> {
+        match self {
+            Self::Embedded(_) => {
+                let volumes = crate::volumes::enumerate(include_pseudo)
+                    .await
+                    .map_err(|_| Error::Io { retryable: false })?;
+                Ok(volumes.into_iter().map(volume_to_proto).collect())
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.volumes(include_pseudo).await,
         }
     }
 
@@ -2716,6 +2788,22 @@ pub mod remote {
         pub(super) async fn plugins_list(&self) -> Result<methods::PluginListResult, Error> {
             self.call_timed(methods::PLUGIN_LIST, &methods::PluginListParams {})
                 .await
+        }
+
+        /// `host.volumes` contra el daemon (0.37.0, #131). El gate por actor
+        /// vive server-side (diseño §C): una conexión de agente ve
+        /// [`Error::PolicyDenied`] aquí, no un fallo de transporte.
+        pub(super) async fn volumes(
+            &self,
+            include_pseudo: bool,
+        ) -> Result<Vec<methods::Volume>, Error> {
+            let result: methods::HostVolumesResult = self
+                .call_timed(
+                    methods::HOST_VOLUMES,
+                    &methods::HostVolumesParams { include_pseudo },
+                )
+                .await?;
+            Ok(result.volumes)
         }
 
         /// `plugin.set_approval` contra el daemon (M4-P3).
