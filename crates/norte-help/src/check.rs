@@ -865,6 +865,7 @@ pub fn check_contexts_in(lang: Lang, topics: &[Topic], known: &[&str]) -> Vec<Is
 ///     "dialog.mkdir",
 ///     "dialog.ai-rename",
 ///     "dialog.semantic-search",
+///     "dialog.command-line",
 /// ];
 /// assert_eq!(check_contexts(&claimed), Vec::new());
 /// // A vocabulary with a place the corpus does not explain reports it, one
