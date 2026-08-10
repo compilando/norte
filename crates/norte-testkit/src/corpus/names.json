@@ -188,5 +188,45 @@
     "id": "rename_temp_lookalike",
     "hex": "2e6e6f7274652d72656e616d652d30613162326333642d30",
     "why": ".norte-rename-0a1b2c3d-0: a file of the USER'S shaped exactly like batch-rename machinery — the dotted prefix, an eight-hex tag and a `-n`, which is the whole grammar of TEMP_PREFIX. It deliberately is NOT a name any given plan emits: the tag is a digest of that plan's pairs, so a static fixture can never equal the dispenser's output, and the test that proves the dispenser steps aside has to derive its squatter from a real plan. What this pins is everything DOWNSTREAM of the name. `temp` is a property of the STEP and never of the prefix, so a frontend that greys out, hides or rewrites rows by `starts_with(b\".norte-rename-\")` swallows a file its owner wrote. No sweep may collect by prefix either: crash debris is left for a human to read on purpose, the same promise `.norte-partial` already carries in the provider contract. And a batch that renames THIS file is an ordinary batch — journalled, undoable, reported. It is also the corpus's only dotfile, so it is what answers whether a hidden name survives the round trip at all"
+  },
+  {
+    "id": "greek_uppercase_final_sigma",
+    "hex": "ce9fce94ce9fcea3",
+    "why": "ΟΔΟΣ, all-caps and with no extension on purpose. `str::to_lowercase` implements the Final_Sigma context rule, so a word-final Σ lowercases to ς (final sigma) while every other Σ lowercases to the ordinary σ — this name lowercases to οδος, and nothing after the last letter is there to save it the way `.txt` would. Case FOLDING does not carry that context rule at all: ς and σ fold onto the same code point, so APFS, NTFS and an ext4 `+F` directory call this one file with `greek_medial_sigma_twin`, and a comparison key built from `to_lowercase` alone used to answer two (#129)"
+  },
+  {
+    "id": "greek_medial_sigma_twin",
+    "hex": "cebfceb4cebfcf83",
+    "why": "οδοσ, spelled with the ORDINARY (medial) sigma even in the word-final position — the spelling a script, an OCR pass, or a person who never learned Greek's positional rule produces for the same word `greek_uppercase_final_sigma` names in capitals. A collision cannot be written with one name: without this twin, the fold delta that #129 fixes has no pair to prove itself against, the same reason `nfd_uppercase_composed_only_lowercase` needed `precomposed_lowercase_j_caron`"
+  },
+  {
+    "id": "micro_sign_mu",
+    "hex": "c2b56d2e747874",
+    "why": "µm.txt with U+00B5 MICRO SIGN — what a CP1252 or Latin-1 origin produces for the SI prefix micro. Unicode already calls U+00B5 lowercase, so `str::to_lowercase` leaves it exactly where it is; simple case FOLDING maps it onto U+03BC GREEK SMALL LETTER MU regardless. Pairs with `greek_mu_twin`, which every case-insensitive volume calls the same file and which `to_lowercase` alone used to call a different one (#129)"
+  },
+  {
+    "id": "greek_mu_twin",
+    "hex": "cebc6d2e747874",
+    "why": "μm.txt with U+03BC GREEK SMALL LETTER MU — the twin of `micro_sign_mu` that a Greek keyboard produces for the same measurement a CP1252 machine spells with the micro sign. A real corpus hits this pair: a µm from one origin and a μm from another, meant to be one file, landing in the same case-insensitive directory"
+  },
+  {
+    "id": "ligature_long_st",
+    "hex": "efac852e747874",
+    "why": "ﬅ.txt with U+FB05 LATIN SMALL LIGATURE LONG S T — a typographic ligature `str::to_lowercase` leaves untouched (it is already lowercase). `CaseFolding.txt` carries two rows for it: a FULL fold to the two letters \"st\" (which `name_key` deliberately does not implement — see `fold_delta`'s rustdoc), and a SIMPLE fold, single codepoint, onto `ligature_st`'s U+FB06. `to_lowercase` alone answered two keys for a pair every simple-folding volume (APFS, NTFS, ext4 `+F`) calls one file (#129) — the one ligature pair the fold delta needed to cover, found by the encoding auditor re-checking #129's own fix against `CaseFolding.txt` directly rather than against the issue that first proposed it"
+  },
+  {
+    "id": "ligature_st",
+    "hex": "efac862e747874",
+    "why": "ﬆ.txt with U+FB06 LATIN SMALL LIGATURE ST — the twin of `ligature_long_st`. Unlike its partner, U+FB06 has no `C`/`S` row in `CaseFolding.txt` at all: it only ever folds (fully, to \"st\") and never simple-folds any further, so it is the STABLE end of the pair's fold and `ligature_long_st` is the one that moves"
+  },
+  {
+    "id": "ext4_full_fold_es_zett",
+    "hex": "73747261c39f652e747874",
+    "why": "straße.txt with U+00DF LATIN SMALL LETTER SHARP S — an ACCEPTED, currently open gap, not a silent one. `CaseFolding.txt` only gives ß a FULL fold, to the two letters \"ss\": ext4/f2fs's optional `+F` case-insensitivity casefolds with C+F (per the kernel's `mkutf8data` generator), so on that filesystem this name and `ext4_full_fold_ss` are ONE file. `name_key`'s `fold_delta` is deliberately `char -> char` and cannot expand a name into more bytes, so on APFS/NTFS/SMB (which fold simple, not full) they are correctly two files, and here they still answer two keys as well — a real miss on ext4 `+F` specifically, tracked in issue #145 rather than fixed inline, because fixing it changes what kind of function `name_key` is. This pair exists so the gap has a fixture pinning it as known, not an assumption nobody checks"
+  },
+  {
+    "id": "ext4_full_fold_ss",
+    "hex": "737472617373652e747874",
+    "why": "strasse.txt — the twin of `ext4_full_fold_es_zett`: the plain-ASCII spelling an ß gets expanded to under FULL case folding. Real users hit this pair when a German filename crosses from a full-folding filesystem (ext4 `+F`) to a simple-folding one (APFS, NTFS) or back — one volume calls it one file, the other calls it two, and #145 is what would make `name_key` agree with the full-folding side"
   }
 ]

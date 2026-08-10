@@ -152,6 +152,111 @@ impl RenamePlan {
     }
 }
 
+/// The delta between `str::to_lowercase` and simple case folding, applied
+/// to one `char`.
+///
+/// This is the DELTA, not case folding, and the set below was checked by
+/// EQUIVALENCE CLASS, not by comparing `to_lowercase(c)` to a fold table's
+/// literal target for each `c` in isolation — that cheaper check overcounts.
+/// It flags, for instance, every code point in Unicode 8.0's Cherokee
+/// lowercase block (`U+AB70..=U+ABBF`, 80 of them) and the six added
+/// alongside it (`U+13F8..=U+13FD`), because each one's `to_lowercase` output
+/// differs from `CaseFolding.txt`'s literal fold TARGET for it. But
+/// `to_lowercase` already merges each such pair correctly, just onto a
+/// DIFFERENT — and internally consistent — representative than case folding
+/// picks: `to_lowercase(U+13A0) == to_lowercase(U+AB70) == U+AB70`, so a
+/// collision key built from `to_lowercase` alone already treats them as one
+/// name, and none of the 86 code points in those two Cherokee ranges need an
+/// entry here. What actually needs checking is whether every member of a
+/// SIMPLE-case-folding group produces the SAME `to_lowercase` output as every
+/// other member; when it does not, THAT is the real, 22-code-point set below
+/// (verified by generating every such group from `CaseFolding.txt` and
+/// comparing `char::to_lowercase` across each group, not against memory or
+/// against the GitHub issue that first proposed this fix:
+/// <https://github.com/compilando/norte/issues/129>). Three more code points
+/// (`U+1FD3`, `U+1FE3`, `U+1FBE`) would also qualify by that same grouping,
+/// but each has a singleton canonical NFC decomposition (to `U+0390`,
+/// `U+03B0`, `U+03B9` respectively), so the earlier NFC pass in `name_key`
+/// has already rewritten it before `to_lowercase` ever runs — a codepoint
+/// with a canonical singleton decomposition can never survive NFC in ANY
+/// context, so none of the three need — or can even reach — an entry here.
+/// (An earlier version of this table kept `U+1FBE` in the match arm below
+/// alongside `U+0345` on the mistaken belief it was reachable; it never was,
+/// since NFC pre-empts it exactly like its two siblings here.)
+///
+/// It deliberately excludes anything that only has an EXPANDING full fold —
+/// `ß→ss`, `ﬁ→fi`, `ﬆ→st`, ligatures like `ﬃ`/`ﬄ`, all `CaseFolding.txt`
+/// status `F` with no `C`/`S` alternative — because `fold_delta: char -> char`
+/// cannot turn one name into a longer one. This is a real, currently-open gap
+/// on any filesystem whose OWN fold table is a FULL fold rather than a simple
+/// one: ext4/f2fs's optional case-insensitive `+F` feature casefolds with
+/// `C + F` (per the kernel's `mkutf8data` generator), so `straße.txt` and
+/// `strasse.txt` collide there and not here. APFS, HFS+, NTFS and SMB fold
+/// simple, so this delta is complete for them. Tracked as a follow-up rather
+/// than fixed here, since fixing it changes `name_key`'s return type from "a
+/// key the same length as the input" to "a key that can grow", which is a
+/// different, larger change: <https://github.com/compilando/norte/issues/145>.
+/// The gap is pinned as an ACCEPTED one, not a silent one, by the corpus pair
+/// `ext4_full_fold_es_zett`/`ext4_full_fold_ss` in `norte-testkit`.
+///
+/// A `match` over `char` rather than a `HashMap`: the set is closed and this
+/// runs on every name in every plan, so the compiler gets to turn it into a
+/// jump table.
+const fn fold_delta(c: char) -> char {
+    match c {
+        // GREEK SMALL LETTER FINAL SIGMA -> SIGMA. `to_lowercase` applies the
+        // Final_Sigma context rule and produces this in WORD-FINAL position;
+        // case folding does not distinguish position at all.
+        '\u{03C2}' => '\u{03C3}',
+        // MICRO SIGN -> GREEK SMALL LETTER MU. `to_lowercase` leaves U+00B5
+        // alone: Unicode already calls it lowercase.
+        '\u{00B5}' => '\u{03BC}',
+        // LATIN SMALL LETTER LONG S -> s.
+        '\u{017F}' => 's',
+        // LATIN SMALL LETTER LONG S WITH DOT ABOVE -> S WITH DOT ABOVE.
+        '\u{1E9B}' => '\u{1E61}',
+        // The Greek "symbol" variants, each onto its ordinary lowercase
+        // letter: beta, theta, kappa, pi, rho, lunate epsilon, phi.
+        '\u{03D0}' => '\u{03B2}',
+        '\u{03D1}' => '\u{03B8}',
+        '\u{03F0}' => '\u{03BA}',
+        '\u{03D6}' => '\u{03C0}',
+        '\u{03F1}' => '\u{03C1}',
+        '\u{03F5}' => '\u{03B5}',
+        '\u{03D5}' => '\u{03C6}',
+        // U+1C80..=U+1C88: historic Cyrillic letterforms (Unicode 9's
+        // "Cyrillic Extended-C" small letters), each onto the ordinary
+        // lowercase Cyrillic letter it is a stylistic variant of. Two of
+        // them (U+1C84 TALL TE and U+1C85 THREE-LEGGED TE) fold onto the
+        // SAME ordinary letter — that is not a bug, folding is many-to-one.
+        '\u{1C80}' => '\u{0432}',
+        '\u{1C81}' => '\u{0434}',
+        '\u{1C82}' => '\u{043E}',
+        '\u{1C83}' => '\u{0441}',
+        '\u{1C84}' | '\u{1C85}' => '\u{0442}',
+        '\u{1C86}' => '\u{044A}',
+        '\u{1C87}' => '\u{0463}',
+        '\u{1C88}' => '\u{A64B}',
+        // COMBINING GREEK YPOGEGRAMMENI -> GREEK SMALL LETTER IOTA. Its
+        // sibling GREEK PROSGEGRAMMENI (U+1FBE) is NOT here: it canonically
+        // decomposes to U+03B9 by itself, so NFC (which runs before this
+        // function, see `name_key`) already rewrites it — an entry for it
+        // would be unreachable dead code, the same reason U+1FD3/U+1FE3 are
+        // absent (see this function's rustdoc).
+        '\u{0345}' => '\u{03B9}',
+        // LATIN SMALL LIGATURE LONG S T -> LATIN SMALL LIGATURE ST. The only
+        // ligature with a single-codepoint SIMPLE fold at all — `CaseFolding
+        // .txt` carries BOTH `FB05; F; 0073 0074` (full fold, to "st") and
+        // `FB05; S; FB06` (simple fold, to U+FB06) as separate rows. `FB06`
+        // itself has only the `F` row, so it does not fold any further, and
+        // `to_lowercase(FB05) == FB05` while `to_lowercase(FB06) == FB06`:
+        // an actual equivalence-class mismatch, unlike the Cherokee ranges
+        // above.
+        '\u{FB05}' => '\u{FB06}',
+        other => other,
+    }
+}
+
 /// The key two names are compared by when deciding whether they COLLIDE.
 ///
 /// NFC when the name is valid UTF-8 — macOS hands out NFD and the same name
@@ -174,14 +279,25 @@ impl RenamePlan {
 /// towards a verdict is safe" is a claim about `plan_batch` and not about every
 /// caller of this function.
 ///
-/// **It also UNDER-reports, and the residue is named.** A filesystem folds case
-/// with case FOLDING; this folds with `str::to_lowercase`, a lowercase mapping.
-/// They agree on almost everything and diverge on about twenty code points —
-/// Greek final sigma, `U+00B5` MICRO SIGN against `U+03BC`, `U+017F` long s,
-/// the Greek symbol variants — where a case-insensitive volume says one file
-/// and this says two. Same shape as the bug the second NFC pass closes, still
-/// open, tracked in
-/// <https://github.com/compilando/norte/issues/129>.
+/// **It used to UNDER-report too.** A filesystem folds case with case
+/// FOLDING; `str::to_lowercase` is a lowercase MAPPING, and the two agree on
+/// almost everything and diverge — by actual equivalence class, not by a
+/// per-code-point table lookup that overcounts — on 22 code points: Greek
+/// final sigma, `U+00B5` MICRO SIGN against `U+03BC`, `U+017F` long s, the
+/// Greek symbol variants, a handful of historic Cyrillic letters, `U+0345`,
+/// and the ligature `ﬅ` — where a case-insensitive volume says one file and
+/// `to_lowercase` alone said two. `fold_delta` closes that
+/// gap with the enumerable remap between `to_lowercase` and the second NFC
+/// pass below, and its own rustdoc has the exact set and how it was checked.
+/// Same shape as the bug the second NFC pass closes, fixed in the same
+/// place, tracked in
+/// <https://github.com/compilando/norte/issues/129>. It deliberately does NOT
+/// reach for full case folding's *expansions* (`ß→ss`, `ﬁ→fi`, `ﬆ→st`): that
+/// is a real, currently-open gap on filesystems whose own fold table also
+/// expands (ext4/f2fs `+F`, tracked in
+/// <https://github.com/compilando/norte/issues/145>), not a boundary every
+/// filesystem shares — see `fold_delta`'s rustdoc for why it is out of scope
+/// HERE rather than simply absent.
 ///
 /// Whether a step is a no-op is decided on RAW BYTES instead
 /// ([`plan_batch`]), because there the failure mode is the opposite one:
@@ -222,10 +338,15 @@ pub fn name_key(name: &[u8], caps: NameCaps) -> Cow<'_, [u8]> {
         // `folding_case_can_recompose_so_the_key_normalises_again` against the
         // corpus pair.
         let lowered = nfc.to_lowercase();
-        return Cow::Owned(if is_nfc(&lowered) {
-            lowered.into_bytes()
+        // The enumerable delta between a lowercase MAPPING and case FOLDING
+        // (#129) — applied here, after `to_lowercase` and before the second
+        // NFC pass, so the recomposition check below sees the folded result
+        // and not the merely-lowercased one.
+        let folded: String = lowered.chars().map(fold_delta).collect();
+        return Cow::Owned(if is_nfc(&folded) {
+            folded.into_bytes()
         } else {
-            lowered.nfc().collect::<String>().into_bytes()
+            folded.nfc().collect::<String>().into_bytes()
         });
     }
     match nfc {
@@ -1283,6 +1404,177 @@ mod tests {
         assert_ne!(name_key(&upper, SENSITIVE), name_key(&lower, SENSITIVE));
     }
 
+    /// A filesystem folds case with case FOLDING. `to_lowercase` is a
+    /// lowercase MAPPING, and they disagree — by actual equivalence class —
+    /// on 22 code points. On each of those the planner used to answer two
+    /// keys where APFS, NTFS and an ext4 `+F` directory answer one file — a
+    /// missed collision, which is the one verdict the preview exists to
+    /// produce. This covers every arm of `fold_delta`: an encoding-auditor
+    /// pass on #129's own fix found 11 of the original arms (the historic
+    /// Cyrillic letters and the one genuinely-reachable iota mark) had no
+    /// test of their own, and one real gap (the `ﬅ`/`ﬆ` ligature pair) that
+    /// the fix's own `CaseFolding.txt`-vs-`str::to_lowercase()` cross-check
+    /// had missed. A SECOND audit pass then found that the cross-check had
+    /// also overcounted by one: `U+1FBE` looked like it needed an arm, but a
+    /// singleton NFC decomposition pre-empts it before `fold_delta` ever
+    /// runs, the same as its `U+1FD3`/`U+1FE3` siblings — so it is asserted
+    /// below as a `name_key`-level guarantee, not as `fold_delta` coverage,
+    /// and `fold_delta` itself does not carry an arm for it.
+    #[test]
+    fn folding_uses_case_folding_not_the_lowercase_mapping() {
+        // Final sigma: `to_lowercase` implements the Final_Sigma context rule,
+        // so a word-final Σ lowercases to ς while a medial σ stays σ. The name
+        // has no extension, which is the ordinary case — `ΟΔΟΣ.txt` is saved
+        // only by the `t` after the dot, and that must not be load-bearing.
+        assert_eq!(
+            name_key("ΟΔΟΣ".as_bytes(), INSENSITIVE),
+            name_key("οδοσ".as_bytes(), INSENSITIVE),
+        );
+        // MICRO SIGN vs GREEK SMALL LETTER MU: what a CP1252 origin produces
+        // against what a Greek keyboard produces. The pair a real corpus hits.
+        assert_eq!(
+            name_key("µm.txt".as_bytes(), INSENSITIVE),
+            name_key("μm.txt".as_bytes(), INSENSITIVE),
+        );
+        // LATIN SMALL LETTER LONG S.
+        assert_eq!(
+            name_key("ſ.txt".as_bytes(), INSENSITIVE),
+            name_key("s.txt".as_bytes(), INSENSITIVE),
+        );
+        // The Greek symbol variants, each folded onto its ordinary letter.
+        for (variant, ordinary) in [
+            ("ϐ", "β"),
+            ("ϑ", "θ"),
+            ("ϰ", "κ"),
+            ("ϖ", "π"),
+            ("ϱ", "ρ"),
+            ("ϵ", "ε"),
+            ("ϕ", "φ"),
+        ] {
+            assert_eq!(
+                name_key(variant.as_bytes(), INSENSITIVE),
+                name_key(ordinary.as_bytes(), INSENSITIVE),
+                "{variant} and {ordinary} are one file on a folding volume",
+            );
+        }
+        // ẛ (U+1E9B) folds onto ṡ (U+1E61).
+        assert_eq!(
+            name_key("\u{1E9B}".as_bytes(), INSENSITIVE),
+            name_key("\u{1E61}".as_bytes(), INSENSITIVE),
+        );
+        // The nine historic Cyrillic letterforms (U+1C80..=U+1C88), each onto
+        // the ordinary lowercase Cyrillic letter it is a stylistic variant
+        // of. Two of them (TALL TE and THREE-LEGGED TE) share a target —
+        // that is folding being many-to-one, not a typo.
+        for (variant, ordinary) in [
+            ("\u{1C80}", "в"),
+            ("\u{1C81}", "д"),
+            ("\u{1C82}", "о"),
+            ("\u{1C83}", "с"),
+            ("\u{1C84}", "т"),
+            ("\u{1C85}", "т"),
+            ("\u{1C86}", "ъ"),
+            ("\u{1C87}", "ѣ"),
+            ("\u{1C88}", "ꙋ"),
+        ] {
+            assert_eq!(
+                name_key(variant.as_bytes(), INSENSITIVE),
+                name_key(ordinary.as_bytes(), INSENSITIVE),
+                "{variant:?} and {ordinary:?} are one file on a folding volume",
+            );
+        }
+        // COMBINING GREEK YPOGEGRAMMENI (U+0345) onto GREEK SMALL LETTER
+        // IOTA — this one genuinely goes through `fold_delta`.
+        assert_eq!(
+            fold_delta('\u{0345}'),
+            'ι',
+            "the actual match arm, called directly so a future edit that \
+             drops it cannot hide behind name_key's NFC pass",
+        );
+        assert_eq!(
+            name_key("\u{0345}".as_bytes(), INSENSITIVE),
+            name_key("ι".as_bytes(), INSENSITIVE),
+        );
+        // GREEK PROSGEGRAMMENI (U+1FBE) reaches the same key by a DIFFERENT
+        // route: it canonically decomposes to U+03B9 by itself, so `name_key`
+        // 's first NFC pass rewrites it before `fold_delta` ever sees it —
+        // `fold_delta` carries no arm for it, and none is needed. This
+        // asserts the `name_key`-level guarantee, not `fold_delta` coverage.
+        assert_eq!(
+            fold_delta('\u{1FBE}'),
+            '\u{1FBE}',
+            "no arm for it, and there must never be one: it is unreachable \
+             from name_key, which rewrites it via NFC before fold_delta runs",
+        );
+        assert_eq!(
+            name_key("\u{1FBE}".as_bytes(), INSENSITIVE),
+            name_key("ι".as_bytes(), INSENSITIVE),
+        );
+        // ﬅ (U+FB05) folds onto ﬆ (U+FB06) — the only ligature with a
+        // single-codepoint SIMPLE fold at all; every other ligature
+        // (`ß`, `ﬁ`, `ﬆ` itself) only has an EXPANDING full fold, which
+        // `fold_delta` deliberately does not implement (see its rustdoc).
+        assert_eq!(
+            name_key("ﬅ.txt".as_bytes(), INSENSITIVE),
+            name_key("ﬆ.txt".as_bytes(), INSENSITIVE),
+        );
+    }
+
+    /// The Cherokee lowercase blocks (U+13F8..=U+13FD, U+AB70..=U+ABBF) are
+    /// deliberately NOT in `fold_delta`: `to_lowercase` already merges each
+    /// of those 86 code points with its uppercase twin, just onto a
+    /// DIFFERENT (but internally consistent) representative than
+    /// `CaseFolding.txt`'s literal fold target. A naive per-code-point diff
+    /// against that target flags all 86 as "missing" — this test is the
+    /// proof that they are not, for a sample spanning both blocks.
+    #[test]
+    fn cherokee_letters_already_collide_under_to_lowercase_alone() {
+        for (upper, lower) in [
+            ("\u{13A0}", "\u{AB70}"), // first of the AB70 block
+            ("\u{13EF}", "\u{ABBF}"), // last of the AB70 block
+            ("\u{13F0}", "\u{13F8}"), // first of the 13F8 block
+            ("\u{13F5}", "\u{13FD}"), // last of the 13F8 block
+        ] {
+            assert_eq!(
+                name_key(upper.as_bytes(), INSENSITIVE),
+                name_key(lower.as_bytes(), INSENSITIVE),
+                "{upper:?} and {lower:?} already collide without fold_delta",
+            );
+        }
+    }
+
+    /// A case-SENSITIVE directory is untouched by any of it: two names that a
+    /// folding volume calls one file are two files here, and saying otherwise
+    /// would refuse a rename that is perfectly legal on ext4.
+    #[test]
+    fn the_fold_delta_does_not_leak_into_a_case_sensitive_directory() {
+        assert_ne!(
+            name_key("ΟΔΟΣ".as_bytes(), SENSITIVE),
+            name_key("οδοσ".as_bytes(), SENSITIVE),
+        );
+        assert_eq!(
+            name_key("µm.txt".as_bytes(), SENSITIVE).as_ref(),
+            "µm.txt".as_bytes(),
+        );
+    }
+
+    /// An ACCEPTED gap, pinned so it stays visible rather than silent.
+    /// `straße.txt`/`strasse.txt` are one file on ext4/f2fs `+F` (which
+    /// casefolds FULLY, expanding `ß` to `ss`) but `fold_delta` is `char ->
+    /// char` and cannot expand a name, so they still answer two keys here —
+    /// correctly for APFS/NTFS/SMB, which fold simple like this function
+    /// does, and NOT yet for ext4 `+F`. Tracked in
+    /// <https://github.com/compilando/norte/issues/145>; if this assertion
+    /// ever starts failing, it means that gap got closed and this test
+    /// should flip to `assert_eq!` and lose its "gap" framing.
+    #[test]
+    fn the_ext4_full_fold_gap_is_accepted_and_pinned_not_silent() {
+        assert_ne!(
+            name_key("straße.txt".as_bytes(), INSENSITIVE),
+            name_key("strasse.txt".as_bytes(), INSENSITIVE),
+        );
+    }
+
     /// The consequence, end to end through the planner: on a case-insensitive
     /// directory holding the uppercase spelling, a batch aiming at the
     /// lowercase one is an EXTERNAL collision — not an executable plan whose
@@ -1663,8 +1955,8 @@ mod tests {
         ///
         /// Deliberately case-SENSITIVE only: these names are `f0`…`f11`, where
         /// `name_key` is the identity and the regime flag would change nothing
-        /// but the case count. The regimes are varied where it means something,
-        /// over `HOSTILE`.
+        /// but the case count. The regimes are varied where it means
+        /// something, over the canonical corpus ([`hostile_corpus`]).
         #[test]
         fn fresh_destinations_land_too(
             n in 1usize..6,
@@ -1734,38 +2026,25 @@ mod tests {
         }
     }
 
-    /// Six names that are all the SAME name under one rule or another and all
-    /// different under some other: NFC and NFD `café`, its uppercase spelling,
-    /// `A` and `a`, a capital that folds to two code points, and bytes that are
-    /// not UTF-8 at all and must therefore fold to nothing.
-    ///
-    /// The other properties never reach here. One only ever asks for names that
-    /// are already in the listing, another varies `caps` over `f0`…`f5` where
-    /// `name_key` is the identity and the flag changes nothing at all, and the
-    /// third draws random bytes that essentially never form valid non-NFC
-    /// UTF-8. Every bug this module has had lived in this alphabet.
-    ///
-    /// The last two are the corpus pair `nfd_uppercase_composed_only_lowercase`
-    /// and `precomposed_lowercase_j_caron`, and they are here because the bug
-    /// they pin (folding can COMPOSE, so the key has to normalise again) lived
-    /// in this module while this property test was green: an alphabet that does
-    /// not contain the adversary cannot generate it.
-    const HOSTILE: [&[u8]; 9] = [
-        "café".as_bytes(),
-        "cafe\u{301}".as_bytes(),
-        "CAFÉ".as_bytes(),
-        b"A",
-        b"a",
-        "\u{130}".as_bytes(),
-        b"\xff\xfe",
-        "J\u{30c}.txt".as_bytes(),
-        "\u{1f0}.txt".as_bytes(),
-    ];
+    /// The canonical corpus, not a private literal. `norte_testkit::corpus`
+    /// carries NFC/NFD `café`, an invalid-UTF-8 byte, a lone surrogate, the
+    /// `J`+caron / `ǰ` recomposition pair, and — since #129 — the sigma and
+    /// micro-sign fold twins. Every bug this module has had lived in an
+    /// alphabet like this one, and a PRIVATE alphabet only ever contains what
+    /// whoever wrote it thought to type: this one used to lack the fold
+    /// delta's own adversaries while that bug was live, which is why this
+    /// property was green throughout.
+    fn hostile_corpus() -> Vec<Vec<u8>> {
+        norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .map(|n| n.bytes)
+            .collect()
+    }
 
     proptest! {
-        /// Both the listing and the destinations come out of [`HOSTILE`], under
-        /// both case regimes, with sources that may or may not be spelled the
-        /// way the directory spells them.
+        /// Both the listing and the destinations come out of the canonical
+        /// corpus ([`hostile_corpus`]), under both case regimes, with sources
+        /// that may or may not be spelled the way the directory spells them.
         ///
         /// Two claims. LANDING: an executable plan applies cleanly — every
         /// `from` is present when its step runs, no step ever writes over an
@@ -1773,24 +2052,56 @@ mod tests {
         /// at the end. ACCOUNTING: no pair vanishes. Each one is renamed, or
         /// carries a verdict, or was a no-op, and a no-op needs its destination
         /// to have been in the directory already.
+        ///
+        /// **`simulate` stays byte-exact — deliberately, not by oversight —
+        /// and that means this property gives NO coverage for #129's bug
+        /// shape, with or without the corpus swap below.** Giving
+        /// `simulate`'s no-clobber check `caps` awareness would mean asking
+        /// [`name_key`] whether two entries collide, and `name_key` is the
+        /// function this whole property exists to put under suspicion: do
+        /// that and `plan_batch`'s own collision detection and a caps-aware
+        /// `simulate` both read their answer off the SAME function, so the
+        /// two can never disagree — including the one time it matters, where
+        /// `name_key` itself under-reports and a second call to it would
+        /// under-report identically. That would be a tautology, not a test.
+        /// But staying byte-exact has a cost, not just a saving: when
+        /// `name_key` under-reports, `plan_batch` comes back `executable`
+        /// (the collision was missed, so nothing stops it), which routes
+        /// past the `!plan.executable()` branch entirely and into `simulate`
+        /// — which never calls `name_key` and so cannot notice that a real
+        /// folding filesystem would have refused the rename. So the corpus
+        /// swap below is a real improvement for the OTHER invariants this
+        /// property checks (pair-order stability, one verdict per pair, no
+        /// panics, more adversarial bytes exercised) — it is not, and cannot
+        /// be, protection against an under-reported collision. ALL of that
+        /// protection lives in the explicit, independent unit tests above
+        /// (`folding_uses_case_folding_not_the_lowercase_mapping` and
+        /// neighbours) and the corpus twins that gave them their bytes
+        /// (`greek_uppercase_final_sigma`/`greek_medial_sigma_twin`,
+        /// `micro_sign_mu`/`greek_mu_twin`, `ligature_long_st`/`ligature_st`)
+        /// — a differential check against known pairs, which is what #129's
+        /// plan asks for in place of an oracle that would have reimplemented
+        /// the code under test.
         #[test]
         fn hostile_names_land_or_are_explained(
-            listing_idx in proptest::collection::vec(0usize..9, 1..5),
-            pair_idx in proptest::collection::vec((0usize..9, 0usize..9), 1..5),
+            listing_idx in proptest::collection::vec(0usize..hostile_corpus().len(), 1..5),
+            pair_idx in proptest::collection::vec(
+                (0usize..hostile_corpus().len(), 0usize..hostile_corpus().len()), 1..5),
             insensitive in any::<bool>(),
         ) {
+            let hostile = hostile_corpus();
             let caps = NameCaps { case_sensitive: !insensitive };
             // A directory cannot hold one byte string twice.
             let mut listing: Vec<Vec<u8>> = Vec::new();
             for i in listing_idx {
-                let n = HOSTILE[i].to_vec();
+                let n = hostile[i].clone();
                 if !listing.contains(&n) {
                     listing.push(n);
                 }
             }
             let ps: Vec<(Vec<u8>, Vec<u8>)> = pair_idx
                 .iter()
-                .map(|(a, b)| (HOSTILE[*a].to_vec(), HOSTILE[*b].to_vec()))
+                .map(|(a, b)| (hostile[*a].clone(), hostile[*b].clone()))
                 .collect();
 
             let plan = plan_batch(&ps, &listing, caps);
