@@ -2395,17 +2395,30 @@ mod attr_funnel_tests {
         );
     }
 
-    /// #117 encoding-audit M1, corpus completo: NINGÚN nombre hostil del
-    /// corpus canónico es un attr id legal del wire — configurado como
-    /// `attr:<hostil>` jamás llega a `attr_ids_for` (el pane no lo pide) y
-    /// siempre queda diagnosticado.
+    /// #117 encoding-audit M1, corpus completo: un nombre hostil del corpus
+    /// canónico configurado como `attr:<hostil>` jamás llega a `attr_ids_for`
+    /// (el pane no lo pide) y siempre queda diagnosticado.
+    ///
+    /// **La regla la pone `is_valid_attr_id`, no la lista de fixtures.** El
+    /// corpus dejó de ser hostil-en-todos-sus-bytes cuando #129 metió
+    /// GEMELAS de plegado: `strasse.txt` entra por lo que significa AL LADO de
+    /// `straße.txt`, y por sí solo es un nombre ASCII corriente y un id de attr
+    /// perfectamente legal. Aceptarlo es lo correcto, así que el bucle mide
+    /// contra el validador del wire en vez de suponer que ningún nombre del
+    /// corpus pasa — que era cierto por accidente y dejó de serlo.
     #[test]
     fn corpus_hostil_como_attr_id_jamas_llega_al_wire() {
+        let mut rechazados = 0;
         for fixture in norte_testkit::corpus::hostile_names() {
             // Solo los UTF-8: un id de columna es String de config.
             let Ok(name) = String::from_utf8(fixture.bytes.clone()) else {
                 continue;
             };
+            if norte_proto::attrs::is_valid_attr_id(&name) {
+                // Gemela benigna (#129): el funnel la acepta, y debe.
+                continue;
+            }
+            rechazados += 1;
             let id = format!("attr:{name}");
             let cfg = norte_config::ColumnsConfig {
                 default_columns: Some(vec!["name".into(), id.clone()]),
@@ -2423,6 +2436,12 @@ mod attr_funnel_tests {
                 fixture.id
             );
         }
+        // Y el bucle tiene que haber medido algo: un `continue` que se tragara
+        // el corpus entero dejaría el test verde sin probar nada.
+        assert!(
+            rechazados >= 20,
+            "solo {rechazados} nombres del corpus llegaron al funnel"
+        );
     }
 
     /// Pin del invariante de `attr_fingerprint` (#117 review tarea 3): la
