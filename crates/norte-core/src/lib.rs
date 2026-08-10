@@ -30,7 +30,10 @@ mod sessions;
 mod undo;
 
 pub use engine::{BATCH_REPORTS_MAX, Engine, RENAME_BATCH_MAX_LISTING, TransferOptions};
-pub use journal::{Actor, ChainStatus, Journal, JournalEntry, NewEntry, Reversal, SqliteJournal};
+pub use journal::{
+    Actor, ChainStatus, JOURNAL_FORMAT, Journal, JournalEntry, JournalFormat, NewEntry, Reversal,
+    SqliteJournal,
+};
 pub use norte_index::Index;
 /// ¿Es esto un id de plugin válido? Re-export de `norte-plugin-host` para que
 /// un frontend pueda DESCARTAR en su punto de entrada un id que llegó por el

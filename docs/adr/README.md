@@ -51,3 +51,4 @@ edits.
 | [0043](0043-keymap-availability-and-the-mod-alias.md) | Keymap availability is declared, and `mod+` is a process policy | accepted |
 | [0044](0044-numeric-counts-and-the-sacred-keys.md) | A count repeats the dispatch, and two keys are not for sale | accepted |
 | [0045](0045-dialog-context-inheritance.md) | norte's dialogs stay norte's: `dialog_from`, one level, presets only | accepted |
+| [0046](0046-journal-format-marker-in-chain.md) | The journal declares its format inside the hash chain | accepted |

@@ -10,6 +10,13 @@
 //! clave del keyring y re-anclar. Sigue SIN cubrir: atacante con acceso al
 //! keyring, mutaciones entre el último ancla y el ataque, destrucción del
 //! fichero de anclas (copia externa recomendada).
+//!
+//! **Formato (ADR 0046).** Un journal creado desde esta versión declara su
+//! formato en una entrada DENTRO de la cadena, en el `seq` 0 reservado: así un
+//! binario más viejo puede decir «no sé leer esto» en vez de acusar de
+//! manipulación a un fichero que nadie tocó (#127). El `seq` 0 es metadato, no
+//! historia: [`Journal::entries`], [`Journal::revertible_for`],
+//! [`Journal::count`] y [`Journal::head`] solo ven mutaciones (`seq >= 1`).
 
 use std::str::FromStr;
 
@@ -46,14 +53,50 @@ CREATE TABLE IF NOT EXISTS journal (
 /// no toca.
 const MIGRATE_BATCH_ID: &str = "ALTER TABLE journal ADD COLUMN batch_id INTEGER";
 
+/// The one INSERT of this module, shared by [`Journal::record_entry`] and by
+/// the format marker below: a row that the chain covers is written in exactly
+/// one place, so «what gets hashed» and «what gets stored» cannot drift.
+const INSERT_ENTRY: &str = "INSERT INTO journal (seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, batch_id, prev_hash, entry_hash) \
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+/// The journal format this binary writes, and the highest it knows how to
+/// verify (ADR 0046). Bump it only together with a change to what the chain
+/// hash covers, or to the meaning of a column.
+///
+/// **Bumping it is not, by itself, enough.** A journal's declared format is
+/// fixed when the file is created and can never be rewritten — re-declaring it
+/// changes its digest and breaks every link after it. So a build of format N
+/// that opens a journal declaring M < N must either keep hashing that file with
+/// M's rules, or append a marker at the point of change declaring "from here
+/// on, format N". Appending N-shaped entries onto an M-declaring journal
+/// produces exactly the false accusation of #127 — delivered by the fix — for
+/// anyone who later opens it with a build of format M. See ADR 0046 §5.
+pub const JOURNAL_FORMAT: u32 = 1;
+
+/// `seq` reserved for the format marker. Mutations start at 1
+/// ([`Journal::record_entry`] assigns `last_seq + 1` from an initial 0), so
+/// row 0 is journal METADATA and never a mutation: that is the discriminator,
+/// and it is the reason every mutation reader below filters `seq >= 1`.
+const FORMAT_SEQ: i64 = 0;
+/// `op` of the marker row. Named, so a raw `sqlite3` dump explains itself.
+const FORMAT_OP: &str = "journal_format";
+/// `actor_kind` of the marker row. Deliberately outside [`Actor::parts`]'s
+/// vocabulary (`user`/`agent`/`plugin`): no actor can claim it, and
+/// `revertible_for` cannot return it even if the `seq` filter were dropped.
+const FORMAT_ACTOR_KIND: &str = "system";
+
 /// Columnas de lectura, en dos variantes fijas. SIN `format!`: en el fichero
 /// que sostiene la evidencia de manipulación, «aquí no se construye SQL con
 /// strings» tiene que poder comprobarse de un vistazo. La variante `NULL` es
 /// para una DB pre-migración abierta en SOLO-LECTURA, que no se puede alterar.
 const SELECT_VERIFY: &str = "SELECT seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash, batch_id FROM journal ORDER BY seq ASC";
 const SELECT_VERIFY_NO_BATCH: &str = "SELECT seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash, NULL FROM journal ORDER BY seq ASC";
-const SELECT_ENTRIES: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, batch_id FROM journal ORDER BY seq ASC";
-const SELECT_ENTRIES_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, NULL FROM journal ORDER BY seq ASC";
+/// `seq >= 1` on every MUTATION reader: row 0 is the format marker
+/// ([`FORMAT_SEQ`]), which is part of the chain but not part of the history.
+/// Letting it out here would put a non-mutation row in the audit export, in
+/// the undo's LIFO stack and in `count()`.
+const SELECT_ENTRIES: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, batch_id FROM journal WHERE seq >= 1 ORDER BY seq ASC";
+const SELECT_ENTRIES_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, NULL FROM journal WHERE seq >= 1 ORDER BY seq ASC";
 /// Una entrada está DESHECHA si tiene una compensación VIVA: una entrada con
 /// su `seq` en `undoes_seq` que a su vez nadie haya compensado.
 ///
@@ -72,7 +115,7 @@ const SELECT_ENTRIES_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, actor_kind
 /// lote de undo. Un nivel de anidamiento cubre exactamente eso.
 const SELECT_REVERTIBLE: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, batch_id \
      FROM journal \
-     WHERE undoes_seq IS NULL AND actor_kind = ? AND actor_id IS ? \
+     WHERE seq >= 1 AND undoes_seq IS NULL AND actor_kind = ? AND actor_id IS ? \
        AND seq NOT IN ( \
          SELECT c.undoes_seq FROM journal c \
          WHERE c.undoes_seq IS NOT NULL \
@@ -81,7 +124,7 @@ const SELECT_REVERTIBLE: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, acto
      ORDER BY seq DESC";
 const SELECT_REVERTIBLE_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, NULL \
      FROM journal \
-     WHERE undoes_seq IS NULL AND actor_kind = ? AND actor_id IS ? \
+     WHERE seq >= 1 AND undoes_seq IS NULL AND actor_kind = ? AND actor_id IS ? \
        AND seq NOT IN ( \
          SELECT c.undoes_seq FROM journal c \
          WHERE c.undoes_seq IS NOT NULL \
@@ -211,21 +254,26 @@ pub struct JournalEntry {
 /// `seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to,
 /// reversal, reversal_ref, undoes_seq, batch_id` (compartido por `entries` y
 /// `revertible_for`).
-fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> JournalEntry {
-    JournalEntry {
-        seq: row.get(0),
-        ts_ms: row.get(1),
-        entry_hash: row.get(2),
-        actor_kind: row.get(3),
-        actor_id: row.get(4),
-        op: row.get(5),
-        path: row.get(6),
-        path_to: row.get(7),
-        reversal: row.get(8),
-        reversal_ref: row.get(9),
-        undoes_seq: row.get(10),
-        batch_id: row.get(11),
-    }
+///
+/// `try_get` en todas: el tipado de `SQLite` es DINÁMICO, así que un blob
+/// no-UTF-8 metido en una columna TEXT hace panicar a `get` — y un panic aquí
+/// es un `norte audit export` que no exporta nada en vez de un error que se
+/// pueda leer y contar.
+fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<JournalEntry, JournalError> {
+    Ok(JournalEntry {
+        seq: row.try_get(0)?,
+        ts_ms: row.try_get(1)?,
+        entry_hash: row.try_get(2)?,
+        actor_kind: row.try_get(3)?,
+        actor_id: row.try_get(4)?,
+        op: row.try_get(5)?,
+        path: row.try_get(6)?,
+        path_to: row.try_get(7)?,
+        reversal: row.try_get(8)?,
+        reversal_ref: row.try_get(9)?,
+        undoes_seq: row.try_get(10)?,
+        batch_id: row.try_get(11)?,
+    })
 }
 
 /// ¿Existe ya la columna `batch_id`? Se pregunta al catálogo en vez de asumir:
@@ -247,9 +295,54 @@ async fn has_batch_id_column(pool: &SqlitePool) -> Result<bool, JournalError> {
     Ok(false)
 }
 
+/// What format the journal on disk declares (ADR 0046).
+///
+/// The declaration is the row at the reserved `seq 0`, written when the
+/// journal is created and covered by the hash chain like any other row. Its
+/// ABSENCE is
+/// information, not a fault: every journal created before the marker existed
+/// is [`JournalFormat::Unmarked`] and verifies exactly as it always did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum JournalFormat {
+    /// No marker row: a journal created before the marker existed. It is not
+    /// stamped retroactively — inserting a row ahead of `seq 1` would change
+    /// what the second entry chains onto and break a chain nobody touched.
+    Unmarked,
+    /// The journal declares this format version.
+    Version(u32),
+    /// There IS a row at the reserved `seq`, and this binary cannot read its
+    /// version. Treated exactly like a version from the future: something
+    /// wrote metadata with rules this build does not know.
+    Unreadable,
+}
+
+impl JournalFormat {
+    /// `true` when this binary cannot claim to understand the journal: a
+    /// declared version outside `1..=`[`JOURNAL_FORMAT`], or a marker it cannot
+    /// read. Version 0 counts as unknown — no format was ever numbered 0, so a
+    /// journal claiming it was written by something this build cannot name.
+    /// [`JournalFormat::Unmarked`] is NOT unknown: an unmarked journal predates
+    /// the marker and is verified with today's rules.
+    #[must_use]
+    pub fn is_unknown(self) -> bool {
+        match self {
+            JournalFormat::Unmarked => false,
+            JournalFormat::Version(v) => !(1..=JOURNAL_FORMAT).contains(&v),
+            JournalFormat::Unreadable => true,
+        }
+    }
+}
+
 /// Veredicto de [`Journal::verify_chain`] (B2 de #63): si la cadena se
 /// rompió, DÓNDE — el audit lo cita en vez de un booleano mudo.
+///
+/// `#[non_exhaustive]`: a verdict enum grows (this variant is the proof), and
+/// a caller that stops compiling is cheaper than one that silently treats a
+/// new verdict as the old one. The wildcard arm a caller must write is the
+/// fail-closed answer — "did not certify" — for every verdict yet to exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChainStatus {
     /// Cadena íntegra.
     Intact {
@@ -260,6 +353,33 @@ pub enum ChainStatus {
     Broken {
         /// `seq` de la primera rotura.
         first_bad_seq: i64,
+    },
+    /// The journal declares a format this binary does not know (ADR 0046), so
+    /// this build **cannot verify it** — neither to clear it nor to accuse it.
+    ///
+    /// This is NOT a clean bill of health and NOT an accusation. It is the
+    /// verdict for the case where an accusation would be a lie: an older
+    /// binary meeting entries hashed over a field set that did not exist when
+    /// it was built recomputes different digests on an untouched file, and
+    /// `Broken` there teaches a user to ignore the one signal the journal
+    /// exists to give (#127).
+    ///
+    /// It does not exculpate anyone either, and it is NOT proof that a journal
+    /// is merely newer: a tampered journal whose marker was also re-declared
+    /// lands here instead of in [`ChainStatus::Broken`], and no anchor rules
+    /// that out (see [`Journal::verify_chain`] — such an edit leaves every
+    /// stored digest at `seq >= 1` untouched, so the anchors still verify).
+    /// What survives is the refusal: [`ChainStatus::is_intact`] is `false`, the
+    /// journal is not certified, and callers must fail closed.
+    UnknownFormat {
+        /// What the journal says it is.
+        declared: JournalFormat,
+        /// What this binary knows ([`JOURNAL_FORMAT`]).
+        known: u32,
+        /// First `seq` whose hash did not recompute under this binary's rules,
+        /// if any. `None` means everything recomputed and the refusal is about
+        /// the declaration alone.
+        first_unverifiable_seq: Option<i64>,
     },
 }
 
@@ -328,6 +448,140 @@ pub(crate) fn chain_hash(prev: &[u8; 32], r: &Record<'_>) -> [u8; 32] {
         feed(&mut h, &b.to_le_bytes());
     }
     h.finalize().into()
+}
+
+/// The marker row as a [`Record`], in ONE place: the writer and the verifier
+/// build the same preimage or the marker is not verifiable at all.
+///
+/// **This preimage is frozen forever, and that is what makes the whole scheme
+/// work.** Every field it feeds existed in format 1, and `batch_id: None`
+/// feeds nothing, so a binary that predates the marker — including one that
+/// predates `batch_id` — recomputes this row's hash byte for byte and reports
+/// it intact instead of accusing it. A future format that adds a hashed field
+/// must keep it out of THIS row's preimage; otherwise the binary that needs to
+/// read the version in order not to accuse would first have to know the format
+/// the version is there to announce.
+fn format_record(ts_ms: i64, version: &[u8]) -> Record<'_> {
+    Record {
+        seq: FORMAT_SEQ,
+        ts_ms,
+        actor_kind: FORMAT_ACTOR_KIND,
+        actor_id: None,
+        op: FORMAT_OP,
+        // The version travels in `path` as ASCII decimal. Reusing a column
+        // beats adding one: a new column would have to be migrated onto
+        // journals that already exist and fed to the chain for every row.
+        path: version,
+        path_to: None,
+        // There is no undoing a format declaration. The literal is deliberate:
+        // it must NOT be "tidied up" into `Reversal::Irreversible.as_str()`,
+        // because this preimage is frozen and that enum is not.
+        reversal: "irreversible",
+        reversal_ref: None,
+        undoes_seq: None,
+        batch_id: None,
+    }
+}
+
+/// Reads the declared version out of a marker row's `op` and `path`.
+///
+/// Anything it cannot read is [`JournalFormat::Unreadable`], never a default:
+/// guessing "probably 1" for a row written by something else is the exact
+/// failure this marker exists to prevent, with the blame reversed.
+///
+/// The decimal must be CANONICAL. `u32::from_str` would also accept `+1` and
+/// `0001`, which would give one version several byte strings and therefore
+/// several valid digests — a version has exactly one preimage or the frozen
+/// vector below means nothing.
+fn parse_format(op: &str, path: &[u8]) -> JournalFormat {
+    if op != FORMAT_OP {
+        return JournalFormat::Unreadable;
+    }
+    let Ok(s) = std::str::from_utf8(path) else {
+        return JournalFormat::Unreadable;
+    };
+    match s.parse::<u32>() {
+        Ok(v) if v.to_string() == s => JournalFormat::Version(v),
+        _ => JournalFormat::Unreadable,
+    }
+}
+
+/// The hashed CONTENT of a row, owned, as [`Journal::verify_chain`] decodes it.
+/// Owning it keeps the fallible decoding in one place: a column that does not
+/// decode makes the whole struct absent, and an absent struct is a row that
+/// cannot be recomputed — which is a verdict, not an error.
+struct VerifiedRow {
+    ts_ms: i64,
+    actor_kind: String,
+    actor_id: Option<String>,
+    op: String,
+    path: Vec<u8>,
+    path_to: Option<Vec<u8>>,
+    reversal: String,
+    reversal_ref: Option<Vec<u8>>,
+    undoes_seq: Option<i64>,
+    batch_id: Option<i64>,
+}
+
+impl VerifiedRow {
+    /// The [`Record`] this row hashes as, borrowing from `self`.
+    fn record(&self, seq: i64) -> Record<'_> {
+        Record {
+            seq,
+            ts_ms: self.ts_ms,
+            actor_kind: &self.actor_kind,
+            actor_id: self.actor_id.as_deref(),
+            op: &self.op,
+            path: &self.path,
+            path_to: self.path_to.as_deref(),
+            reversal: &self.reversal,
+            reversal_ref: self.reversal_ref.as_deref(),
+            undoes_seq: self.undoes_seq,
+            batch_id: self.batch_id,
+        }
+    }
+
+    /// Is this row shaped like the format marker in every field the marker does
+    /// not get to choose? Only the version (`path`) is the row's own.
+    ///
+    /// Comparing beats trusting: the digest alone cannot speak for a column the
+    /// verifier substitutes before hashing, and `op` is read afterwards to
+    /// decide whether the journal is readable at all.
+    fn is_canonical_marker(&self) -> bool {
+        let canonical = format_record(self.ts_ms, &self.path);
+        self.op == canonical.op
+            && self.actor_kind == canonical.actor_kind
+            && self.reversal == canonical.reversal
+            && self.actor_id.is_none()
+            && self.path_to.is_none()
+            && self.reversal_ref.is_none()
+            && self.undoes_seq.is_none()
+            && self.batch_id.is_none()
+    }
+}
+
+/// Decodes a row's content columns from `SELECT_VERIFY`'s column order.
+fn decode_verified_row(row: &sqlx::sqlite::SqliteRow) -> Result<VerifiedRow, sqlx::Error> {
+    Ok(VerifiedRow {
+        ts_ms: row.try_get(1)?,
+        actor_kind: row.try_get(2)?,
+        actor_id: row.try_get(3)?,
+        op: row.try_get(4)?,
+        path: row.try_get(5)?,
+        path_to: row.try_get(6)?,
+        reversal: row.try_get(7)?,
+        reversal_ref: row.try_get(8)?,
+        undoes_seq: row.try_get(9)?,
+        batch_id: row.try_get(12)?,
+    })
+}
+
+/// UTC milliseconds, saturating: a clock before the epoch or past `i64` gives
+/// a bad timestamp, never a panic in the code that writes the evidence.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// Estado de la cadena. `seq` y `last_hash` se avanzan JUNTOS bajo el `Mutex`
@@ -427,8 +681,10 @@ impl Journal {
         {
             use std::os::unix::fs::PermissionsExt;
             // Cinturón por si el fichero preexistía con otros permisos. Los
-            // sidecars -wal/-shm heredan del principal.
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            // sidecars -wal/-shm heredan del principal. Por `tokio::fs` (regla
+            // 2): es un `chmod` corto, pero un `std::fs` en un contexto async
+            // no deja de serlo por ser barato.
+            let _ = tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).await;
         }
         Ok(this)
     }
@@ -510,17 +766,9 @@ impl Journal {
         // «duplicate column name» no es contrato de nadie, y comerse un error
         // por su mensaje es comerse también el que no toca.
         //
-        // DEUDA CONOCIDA (sin marca de formato a propósito): un binario ANTERIOR
-        // a esta migración, frente a un journal que YA tiene lotes, hashea sin
-        // `batch_id`, no casa, y `verify_chain` acusa de «manipulado» a un
-        // fichero íntegro. Marcarlo con `PRAGMA user_version` se probó y se
-        // descartó: el pragma vive en la cabecera del fichero, FUERA de la
-        // cadena y FUERA de lo que firman las anclas HMAC (ADR 0025), así que un
-        // `PRAGMA user_version=999` de cuatro bytes —que ningún hash ve— dejaría
-        // al audit sin poder ni abrir el journal, y al operador con un mensaje
-        // que suena a «actualiza norte» en vez de a «te han tocado la cabecera».
-        // Un marcador de formato tiene que ir DENTRO de lo autenticado; eso es
-        // una decisión de formato, no un efecto colateral de esta tarea.
+        // El marcador de formato (#127, ADR 0046) es lo que le queda a un
+        // binario FUTURO para no confundir «no sé leer esto» con «te lo han
+        // manipulado». Se escribe abajo, sobre un journal sin filas.
         if !has_batch_id_column(&pool).await? {
             sqlx::query(MIGRATE_BATCH_ID).execute(&pool).await?;
             if !has_batch_id_column(&pool).await? {
@@ -529,13 +777,24 @@ impl Journal {
                 ));
             }
         }
+        Self::stamp_format_if_new(&pool).await?;
+        Self::warn_if_format_unknown(&pool).await?;
+        // SIN filtro de `seq` A PROPÓSITO (y no es un descuido que «unificar»
+        // con las lecturas de mutaciones): la primera mutación de un journal
+        // recién creado tiene que encadenar con el MARCADOR del `seq` 0. Si
+        // esta consulta lo saltara, nacería encadenada al hash cero y la cadena
+        // estaría rota desde la entrada 1.
         let (last_seq, last_hash) =
             sqlx::query("SELECT seq, entry_hash FROM journal ORDER BY seq DESC LIMIT 1")
                 .fetch_optional(&pool)
                 .await?
                 .map_or(Ok((0i64, [0u8; 32])), |row| {
-                    let seq: i64 = row.get(0);
-                    let v: Vec<u8> = row.get(1);
+                    // `try_get`: un blob hostil aquí haría panicar el ARRANQUE
+                    // del dueño del journal. Falla con error tipado, que es lo
+                    // que la regla 6 pide y lo que ADR 0046 §5 supone al
+                    // razonar sobre disponibilidad.
+                    let seq: i64 = row.try_get(0)?;
+                    let v: Vec<u8> = row.try_get(1)?;
                     if v.len() != 32 {
                         return Err(JournalError::Corrupt("entry_hash no mide 32 bytes"));
                     }
@@ -560,6 +819,108 @@ impl Journal {
             }),
             has_batch_id: true,
         })
+    }
+
+    /// Writes the format marker (ADR 0046) — but only on a journal that has no
+    /// rows at all.
+    ///
+    /// The condition is the whole design. A journal that already holds entries
+    /// cannot be stamped: the marker lives at `seq 0`, ahead of the first
+    /// mutation, and inserting it there would leave `seq 1` chained onto the
+    /// zero hash while a row now precedes it — `verify_chain` would report
+    /// `Broken` on a file nobody touched, which is precisely the accusation
+    /// this marker exists to avoid. So journals written before this change
+    /// stay [`JournalFormat::Unmarked`] for life, and only journals created
+    /// from here on declare anything. That is what "fixable only forward"
+    /// means in code.
+    async fn stamp_format_if_new(pool: &SqlitePool) -> Result<(), JournalError> {
+        let rows: i64 = sqlx::query("SELECT COUNT(*) FROM journal")
+            .fetch_one(pool)
+            .await?
+            .try_get(0)?;
+        if rows != 0 {
+            return Ok(());
+        }
+        let ts_ms = now_ms();
+        let version = JOURNAL_FORMAT.to_string();
+        let rec = format_record(ts_ms, version.as_bytes());
+        let prev = [0u8; 32];
+        let entry_hash = chain_hash(&prev, &rec);
+        sqlx::query(INSERT_ENTRY)
+            .bind(rec.seq)
+            .bind(rec.ts_ms)
+            .bind(rec.actor_kind)
+            .bind(rec.actor_id)
+            .bind(rec.op)
+            .bind(rec.path)
+            .bind(rec.path_to)
+            .bind(rec.reversal)
+            .bind(rec.reversal_ref)
+            .bind(rec.undoes_seq)
+            .bind(rec.batch_id)
+            .bind(&prev[..])
+            .bind(&entry_hash[..])
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Says so, loudly, when the journal declares a format this build does not
+    /// know — and then opens it anyway.
+    ///
+    /// Opening it is the lesser evil, and the choice is deliberate. Appending
+    /// this build's entries onto a journal written by a newer one is genuinely
+    /// bad: the newer build will later verify with rules these rows were not
+    /// written under and report a break on entries nobody touched. But
+    /// REFUSING to open would hand anyone who can write one column — the
+    /// declared version — the power to stop the daemon from starting, which
+    /// converts the marker into an availability weapon and is a worse trade
+    /// than a loud log. The real fix is that a format bump must not append to
+    /// a journal it cannot verify; see [`JOURNAL_FORMAT`] and ADR 0046 §5.
+    ///
+    /// It reads the marker WITHOUT verifying its hash — cheap, and enough for a
+    /// log line. That is also why it must never be promoted into a gate: an
+    /// unverified declaration is exactly what one column write can change.
+    async fn warn_if_format_unknown(pool: &SqlitePool) -> Result<(), JournalError> {
+        let row = sqlx::query("SELECT op, path FROM journal WHERE seq = 0")
+            .fetch_optional(pool)
+            .await?;
+        let Some(row) = row else { return Ok(()) };
+        let op: String = row.try_get(0)?;
+        let path: Vec<u8> = row.try_get(1)?;
+        let declared = parse_format(&op, &path);
+        if declared.is_unknown() {
+            tracing::warn!(
+                ?declared,
+                known = JOURNAL_FORMAT,
+                "el journal declara un formato que este binario no conoce: sus entradas \
+                 nuevas se escriben con las reglas de este formato y una versión más \
+                 nueva las verá como rotas (ADR 0046)"
+            );
+        }
+        Ok(())
+    }
+
+    /// What format this journal declares (ADR 0046). Reads the marker row;
+    /// [`JournalFormat::Unmarked`] when there is none.
+    ///
+    /// It reports the DECLARATION, not a verdict: the version is only worth
+    /// believing once the marker's own hash has been checked, which is what
+    /// [`Journal::verify_chain`] does.
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`].
+    pub async fn format(&self) -> Result<JournalFormat, JournalError> {
+        let row = sqlx::query("SELECT op, path FROM journal WHERE seq = 0")
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else {
+            return Ok(JournalFormat::Unmarked);
+        };
+        // `try_get`: this row comes from a file an operator points us at.
+        let op: String = row.try_get(0)?;
+        let path: Vec<u8> = row.try_get(1)?;
+        Ok(parse_format(&op, &path))
     }
 
     /// Registra una mutación NORMAL (no compensa ningún undo). El `seq` se
@@ -652,9 +1013,7 @@ impl Journal {
             batch_id,
         } = *e;
         let (actor_kind, actor_id) = actor.parts();
-        let ts_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        let ts_ms = now_ms();
 
         let mut chain = self.chain.lock().await;
         let seq = chain.last_seq + 1;
@@ -674,25 +1033,22 @@ impl Journal {
         };
         let entry_hash = chain_hash(&prev, &rec);
 
-        sqlx::query(
-            "INSERT INTO journal (seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, batch_id, prev_hash, entry_hash) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(seq)
-        .bind(ts_ms)
-        .bind(actor_kind)
-        .bind(actor_id)
-        .bind(op)
-        .bind(path)
-        .bind(path_to)
-        .bind(reversal.as_str())
-        .bind(reversal_ref)
-        .bind(undoes_seq)
-        .bind(batch_id)
-        .bind(&prev[..])
-        .bind(&entry_hash[..])
-        .execute(&self.pool)
-        .await?;
+        sqlx::query(INSERT_ENTRY)
+            .bind(seq)
+            .bind(ts_ms)
+            .bind(actor_kind)
+            .bind(actor_id)
+            .bind(op)
+            .bind(path)
+            .bind(path_to)
+            .bind(reversal.as_str())
+            .bind(reversal_ref)
+            .bind(undoes_seq)
+            .bind(batch_id)
+            .bind(&prev[..])
+            .bind(&entry_hash[..])
+            .execute(&self.pool)
+            .await?;
 
         // Solo tras el insert OK: sin huecos de seq ni cadena rota si falla.
         chain.last_seq = seq;
@@ -700,102 +1056,220 @@ impl Journal {
         Ok(seq)
     }
 
-    /// Número de entradas.
+    /// Número de MUTACIONES (el marcador de formato del `seq 0` no lo es).
     ///
     /// # Errors
     /// [`JournalError::Sqlx`].
     pub async fn count(&self) -> Result<i64, JournalError> {
-        let row = sqlx::query("SELECT COUNT(*) FROM journal")
+        let row = sqlx::query("SELECT COUNT(*) FROM journal WHERE seq >= 1")
             .fetch_one(&self.pool)
             .await?;
         Ok(row.get(0))
     }
 
-    /// Recorre la cadena recomputando cada hash. `Broken` señala la PRIMERA
-    /// entrada cuyo encadenado o hash no casa (B2 de #63: el audit la cita).
-    /// Keyless: NO detecta reescritura completa, truncación de cola ni
-    /// rollback — esa cobertura la dan las anclas HMAC (ADR 0025).
+    /// Walks the chain, recomputing every hash. `Broken` names the FIRST entry
+    /// whose link or digest does not hold (#63 B2: the audit cites it).
+    /// Keyless: it does NOT detect a full rewrite, a tail truncation or a
+    /// rollback — that cover comes from the HMAC anchors (ADR 0025).
+    ///
+    /// # The format marker, and why the order of these checks is the point
+    ///
+    /// Row `seq 0`, when present, declares the journal's format (ADR 0046).
+    /// The walk **verifies that row's own hash before it believes a word of
+    /// it**, and only then decides what a later mismatch means:
+    ///
+    /// - marker absent, or declaring a version this binary knows → today's
+    ///   behaviour exactly: [`ChainStatus::Intact`] or [`ChainStatus::Broken`];
+    /// - marker intact and declaring a version above [`JOURNAL_FORMAT`] (or one
+    ///   this binary cannot read) → [`ChainStatus::UnknownFormat`], because an
+    ///   older build cannot recompute hashes over a field set that did not
+    ///   exist when it was compiled, and calling that "tampering" is a false
+    ///   accusation (#127);
+    /// - marker itself altered → [`ChainStatus::Broken`] at `seq 0`. Its
+    ///   digest is recomputed from the CANONICAL marker record, not from the
+    ///   row's own columns, so a marker with a doctored `actor_kind` or
+    ///   `reversal` does not verify however carefully its hash was refreshed.
+    ///
+    /// # What the walk keeps checking when it cannot recompute
+    ///
+    /// A digest that does not recompute stops nothing: the walk carries the
+    /// STORED hash forward and keeps checking every link
+    /// (`prev_hash[i] == entry_hash[i-1]`). The link needs no preimage, so it
+    /// is the one property this binary can assert about a journal it cannot
+    /// read, and a link that does not hold is [`ChainStatus::Broken`] even
+    /// under an unknown format. That is what keeps an insertion, a deletion or
+    /// a reordering visible in a journal from the future.
+    ///
+    /// # What remains, stated rather than hidden
+    ///
+    /// This is keyless (ADR 0023): an attacker who can write the file can
+    /// recompute the whole chain, and can therefore produce a self-consistent
+    /// journal declaring any format at all — as they could already produce one
+    /// declaring format 1 with the history of their choice. What the marker
+    /// adds is cheaper: re-declaring it and relinking `seq 1` (three column
+    /// writes, no key) turns a [`ChainStatus::Broken`] verdict into
+    /// [`ChainStatus::UnknownFormat`], trading a located accusation for a
+    /// refusal. **The HMAC anchors do not close that one**: such an edit
+    /// changes no stored digest at `seq >= 1`, so every anchor still verifies.
+    /// The alarm survives — the audit exits with failure either way — but the
+    /// blame does not. Anchors close the consistent rewrite, which is the
+    /// strictly larger attack.
     ///
     /// # Errors
-    /// [`JournalError::Sqlx`].
+    /// [`JournalError::Sqlx`], including a column whose stored type this build
+    /// cannot decode — a verdict is never produced by panicking.
     pub async fn verify_chain(&self) -> Result<ChainStatus, JournalError> {
         let rows = sqlx::query(self.pick(SELECT_VERIFY, SELECT_VERIFY_NO_BATCH))
             .fetch_all(&self.pool)
             .await?;
+        // The digest the NEXT row must carry in `prev_hash`. It is the STORED
+        // hash of the row before it, never the recomputed one: they are equal
+        // whenever a row verifies, and when one does not, the stored value is
+        // what lets the link check survive the row it could not recompute.
         let mut prev = [0u8; 32];
         let mut verified: u64 = 0;
+        let mut declared = JournalFormat::Unmarked;
+        let mut first_bad: Option<i64> = None;
         for row in rows {
-            let seq: i64 = row.get(0);
-            let actor_kind: String = row.get(2);
-            let actor_id: Option<String> = row.get(3);
-            let op: String = row.get(4);
-            let path: Vec<u8> = row.get(5);
-            let path_to: Option<Vec<u8>> = row.get(6);
-            let reversal: String = row.get(7);
-            let reversal_ref: Option<Vec<u8>> = row.get(8);
-            let undoes_seq: Option<i64> = row.get(9);
-            let stored_prev: Vec<u8> = row.get(10);
-            let stored_hash: Vec<u8> = row.get(11);
-            let batch_id: Option<i64> = row.get(12);
-            if stored_prev != prev {
-                return Ok(ChainStatus::Broken { first_bad_seq: seq });
+            // The row's SKELETON — `seq` and the two digests — must decode:
+            // without them a row cannot be placed in the chain at all, and that
+            // is a failure of the database, not of an entry.
+            let seq: i64 = row.try_get(0)?;
+            let stored_prev: Vec<u8> = row.try_get(10)?;
+            let stored_hash: Vec<u8> = row.try_get(11)?;
+            // Its CONTENT is different: `SQLite`'s typing is dynamic, so a blob
+            // written into a TEXT column makes the decode fail (and `get`
+            // PANIC). A column that does not decode is EVIDENCE — the row
+            // cannot recompute — and it is treated as such below, because
+            // answering `Err` there would let one column write replace a
+            // located accusation with a shrug.
+            let content = decode_verified_row(&row);
+            // Two format-independent checks, and they run first. Below the
+            // reserved metadata `seq` nothing legitimate exists — a row there
+            // would be chained and certified while being invisible to every
+            // mutation reader — and a `prev_hash` that is not the previous
+            // `entry_hash` is a break in the chain itself, whatever any version
+            // puts in its preimage.
+            if seq < FORMAT_SEQ || stored_prev != prev {
+                // The first anomaly is the one worth citing — except under an
+                // unknown format, where a digest that did not recompute is
+                // expected and only the link is evidence.
+                let first_bad_seq = if declared.is_unknown() {
+                    seq
+                } else {
+                    first_bad.unwrap_or(seq)
+                };
+                return Ok(ChainStatus::Broken { first_bad_seq });
             }
-            let rec = Record {
-                seq,
-                ts_ms: row.get(1),
-                actor_kind: &actor_kind,
-                actor_id: actor_id.as_deref(),
-                op: &op,
-                path: &path,
-                path_to: path_to.as_deref(),
-                reversal: &reversal,
-                reversal_ref: reversal_ref.as_deref(),
-                undoes_seq,
-                batch_id,
+            let stored: [u8; 32] = match <[u8; 32]>::try_from(&stored_hash[..]) {
+                Ok(h) => h,
+                // A hash of the wrong length breaks this row and every link
+                // after it: there is nothing to carry forward.
+                Err(_) => {
+                    return Ok(ChainStatus::Broken {
+                        first_bad_seq: first_bad.unwrap_or(seq),
+                    });
+                }
             };
-            let computed = chain_hash(&prev, &rec);
-            if computed[..] != stored_hash[..] {
-                return Ok(ChainStatus::Broken { first_bad_seq: seq });
+            if seq == FORMAT_SEQ {
+                // The marker's shape is COMPARED against the canonical one and
+                // only then hashed. Hashing a substituted canonical record
+                // would leave the row's real `op` outside the digest while
+                // `parse_format` still read it — one column write, no rehash,
+                // and a pristine journal starts reporting an unreadable format.
+                let Ok(c) = &content else {
+                    return Ok(ChainStatus::Broken { first_bad_seq: seq });
+                };
+                if !c.is_canonical_marker() || chain_hash(&prev, &c.record(seq)) != stored {
+                    return Ok(ChainStatus::Broken { first_bad_seq: seq });
+                }
+                declared = parse_format(&c.op, &c.path);
+                prev = stored;
+                continue;
             }
-            prev = computed;
-            verified += 1;
+            match &content {
+                Ok(c) if chain_hash(&prev, &c.record(seq)) == stored => verified += 1,
+                // Both a digest that does not match and a row that does not
+                // decode mean the same thing here: this build cannot vouch for
+                // this entry.
+                _ => {
+                    if first_bad.is_none() {
+                        first_bad = Some(seq);
+                    }
+                }
+            }
+            prev = stored;
         }
-        Ok(ChainStatus::Intact { entries: verified })
+        Ok(match (first_bad, declared.is_unknown()) {
+            (None, false) => ChainStatus::Intact { entries: verified },
+            (Some(first_bad_seq), false) => ChainStatus::Broken { first_bad_seq },
+            // Everything recomputed, and the file still says it was written by
+            // rules this build does not know. "Intact" would be a claim about
+            // a format nobody here can read, so it is not made.
+            (first_unverifiable_seq, true) => ChainStatus::UnknownFormat {
+                declared,
+                known: JOURNAL_FORMAT,
+                first_unverifiable_seq,
+            },
+        })
     }
 
-    /// Head de la cadena: `(seq, entry_hash)` de la ÚLTIMA entrada (`None`
-    /// con el journal vacío). Es lo que un ancla HMAC firma (ADR 0025).
+    /// Head de la cadena: `(seq, entry_hash)` de la última MUTACIÓN (`None`
+    /// sin ninguna). Es lo que un ancla HMAC firma (ADR 0025).
+    ///
+    /// El marcador de formato (`seq 0`, ADR 0046) no se ancla por sí solo, y
+    /// anclarlo tendría un coste: el `seq` 0 no sale por [`Journal::entries`],
+    /// y el contraste de anclas del audit lo leería como «el seq anclado ya no
+    /// existe», que es una acusación falsa.
+    ///
+    /// La cobertura que sí tiene es TRANSITIVA y con una salvedad que hay que
+    /// decir: cada mutación encadena con el hash del marcador, así que
+    /// re-declarar el formato y RECOMPUTAR la cola cambia todos los hashes
+    /// almacenados y ningún ancla previa casa. Pero eso vale para quien pueda
+    /// recomputar la cadena, y un verificador que ya ha dicho
+    /// [`ChainStatus::UnknownFormat`] es justo el que no puede: para él el
+    /// ancla no cubre el marcador. Una re-declaración que NO recomputa la cola
+    /// (tres escrituras) no mueve ningún hash almacenado y las anclas siguen
+    /// casando — ver [`Journal::verify_chain`].
     ///
     /// # Errors
     /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] si el hash
     /// almacenado no mide 32 bytes.
     pub async fn head(&self) -> Result<Option<(i64, [u8; 32])>, JournalError> {
-        let row = sqlx::query("SELECT seq, entry_hash FROM journal ORDER BY seq DESC LIMIT 1")
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query(
+            "SELECT seq, entry_hash FROM journal WHERE seq >= 1 ORDER BY seq DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
         let Some(row) = row else { return Ok(None) };
-        let seq: i64 = row.get(0);
-        let blob: Vec<u8> = row.get(1);
+        let seq: i64 = row.try_get(0)?;
+        let blob: Vec<u8> = row.try_get(1)?;
         let hash: [u8; 32] = blob
             .try_into()
             .map_err(|_| JournalError::Corrupt("entry_hash del head no mide 32 bytes"))?;
         Ok(Some((seq, hash)))
     }
 
-    /// Hash de la entrada `seq` (`None` si no existe). El audit lo contrasta
+    /// Hash de la MUTACIÓN `seq` (`None` si no existe). El audit lo contrasta
     /// con cada ancla DESPUÉS de un [`Journal::verify_chain`] `Intact` (ADR
     /// 0025): con la cadena verificada, el hash almacenado ES el recomputado.
+    ///
+    /// El marcador de formato (`seq` 0) queda fuera, como en
+    /// [`Journal::head`] y [`Journal::entries`]: ningún ancla puede apuntarlo
+    /// —`head` no lo devuelve— y una respuesta aquí para un `seq` que el resto
+    /// del audit dice que no existe sería una incoherencia esperando a que
+    /// alguien la use.
     ///
     /// # Errors
     /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] si el blob no mide
     /// 32 bytes.
     pub async fn entry_hash_at(&self, seq: i64) -> Result<Option<[u8; 32]>, JournalError> {
-        let row = sqlx::query("SELECT entry_hash FROM journal WHERE seq = ?")
+        let row = sqlx::query("SELECT entry_hash FROM journal WHERE seq = ? AND seq >= 1")
             .bind(seq)
             .fetch_optional(&self.pool)
             .await?;
         let Some(row) = row else { return Ok(None) };
-        let blob: Vec<u8> = row.get(0);
+        let blob: Vec<u8> = row.try_get(0)?;
         let hash: [u8; 32] = blob
             .try_into()
             .map_err(|_| JournalError::Corrupt("entry_hash no mide 32 bytes"))?;
@@ -813,7 +1287,7 @@ impl Journal {
         let rows = sqlx::query(self.pick(SELECT_ENTRIES, SELECT_ENTRIES_NO_BATCH))
             .fetch_all(&self.pool)
             .await?;
-        Ok(rows.iter().map(row_to_entry).collect())
+        rows.iter().map(row_to_entry).collect()
     }
 
     /// Las entradas REVERTIBLES de la sesión `actor`, en orden LIFO (`seq`
@@ -835,7 +1309,7 @@ impl Journal {
             .bind(actor_id)
             .fetch_all(&self.pool)
             .await?;
-        Ok(rows.iter().map(row_to_entry).collect())
+        rows.iter().map(row_to_entry).collect()
     }
 
     /// SOLO TESTS: corrompe el `path` de una entrada sin recomputar su hash.
@@ -857,6 +1331,72 @@ impl Journal {
         sqlx::query("UPDATE journal SET batch_id = ? WHERE seq = ?")
             .bind(batch)
             .bind(seq)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// TESTS ONLY: rewrites the version the format marker declares.
+    ///
+    /// With `rehash` it also recomputes the marker's hash, which is what a
+    /// GENUINE writer of that format would have left behind; without it, the
+    /// row is simply altered, which is what an attacker leaves behind.
+    #[cfg(test)]
+    async fn redeclare_format_for_test(
+        &self,
+        version: &[u8],
+        rehash: bool,
+    ) -> Result<(), JournalError> {
+        let ts_ms: i64 = sqlx::query("SELECT ts_ms FROM journal WHERE seq = 0")
+            .fetch_one(&self.pool)
+            .await?
+            .try_get(0)?;
+        let hash = chain_hash(&[0u8; 32], &format_record(ts_ms, version));
+        if rehash {
+            sqlx::query("UPDATE journal SET path = ?, entry_hash = ? WHERE seq = 0")
+                .bind(version)
+                .bind(&hash[..])
+                .execute(&self.pool)
+                .await?;
+        } else {
+            sqlx::query("UPDATE journal SET path = ? WHERE seq = 0")
+                .bind(version)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// TESTS ONLY: forges a marker row with a non-canonical `actor_kind`, and
+    /// gives it a hash that is self-consistent OVER THE ROW'S OWN FIELDS — what
+    /// an attacker who read `chain_hash` would produce.
+    #[cfg(test)]
+    async fn forge_marker_shape_for_test(&self, actor_kind: &str) -> Result<(), JournalError> {
+        let ts_ms: i64 = sqlx::query("SELECT ts_ms FROM journal WHERE seq = 0")
+            .fetch_one(&self.pool)
+            .await?
+            .try_get(0)?;
+        let mut rec = format_record(ts_ms, b"1");
+        rec.actor_kind = actor_kind;
+        let hash = chain_hash(&[0u8; 32], &rec);
+        sqlx::query("UPDATE journal SET actor_kind = ?, entry_hash = ? WHERE seq = 0")
+            .bind(actor_kind)
+            .bind(&hash[..])
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// TESTS ONLY: relinks `seq 1` onto whatever the marker now hashes to, the
+    /// way a writer of the newer format would have chained it.
+    #[cfg(test)]
+    async fn relink_first_entry_for_test(&self) -> Result<(), JournalError> {
+        let head0: Vec<u8> = sqlx::query("SELECT entry_hash FROM journal WHERE seq = 0")
+            .fetch_one(&self.pool)
+            .await?
+            .try_get(0)?;
+        sqlx::query("UPDATE journal SET prev_hash = ? WHERE seq = 1")
+            .bind(head0)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -1942,6 +2482,513 @@ CREATE TABLE IF NOT EXISTS journal (
                 .expect("verify")
                 .is_intact()
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // The format marker (#127, ADR 0046).
+    // ---------------------------------------------------------------------
+
+    /// FROZEN VECTOR of the marker's preimage. Every claim in ADR 0046 rests
+    /// on this digest never moving: it is what a binary built before the
+    /// marker existed computes for that row, which is why writing the marker
+    /// does not turn a downgrade into an accusation, and it is what a binary
+    /// built after any future format bump must still compute in order to read
+    /// the version that tells it to stop accusing.
+    ///
+    /// If this goes red you have changed the marker's preimage. Do not update
+    /// the constant: every journal already on disk declares its format through
+    /// this exact byte string, and moving it makes them all unreadable at
+    /// exactly the moment they need to be readable.
+    #[test]
+    fn the_format_marker_preimage_is_frozen() {
+        let r = format_record(1_726_000_000_000, b"1");
+        assert_eq!(r.seq, 0, "the marker sits at the reserved seq");
+        assert_eq!(
+            r.batch_id, None,
+            "and feeds nothing a pre-batch build lacks"
+        );
+        assert_eq!(
+            crate::hashing::hex_lower(&chain_hash(&[0u8; 32], &r)),
+            "9901556ad24053ecc2fb19321100309093df214f3ef38404109504c2daec0ff8",
+        );
+    }
+
+    /// A journal created now says so, and says it inside the chain.
+    #[tokio::test]
+    async fn a_new_journal_declares_its_format() {
+        let j = Journal::open_in_memory().await.expect("open");
+        assert_eq!(j.format().await.expect("format"), JournalFormat::Version(1));
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Intact { entries: 0 },
+            "the marker is chained, but it is not history"
+        );
+    }
+
+    /// The marker is METADATA: it must not show up as a mutation anywhere, or
+    /// the audit export gains a row that never happened and the undo gains a
+    /// step it cannot take.
+    #[tokio::test]
+    async fn the_marker_is_not_a_mutation() {
+        let j = Journal::open_in_memory().await.expect("open");
+        assert_eq!(j.count().await.expect("count"), 0);
+        assert!(j.entries().await.expect("entries").is_empty());
+        assert!(
+            j.revertible_for(&Actor::User)
+                .await
+                .expect("revertible")
+                .is_empty()
+        );
+        assert_eq!(j.head().await.expect("head"), None, "nothing to anchor yet");
+
+        let seq = j
+            .record(
+                "created",
+                b"file:///a",
+                None,
+                Reversal::Delete,
+                None,
+                &Actor::User,
+            )
+            .await
+            .expect("record");
+        assert_eq!(seq, 1, "mutations still start at 1");
+        assert_eq!(j.count().await.expect("count"), 1);
+        assert_eq!(j.entries().await.expect("entries").len(), 1);
+        assert_eq!(
+            j.head().await.expect("head").map(|(s, _)| s),
+            Some(1),
+            "the head an anchor signs is the last MUTATION"
+        );
+    }
+
+    /// Reopening does not stamp a second marker, and the chain still verifies.
+    #[tokio::test]
+    async fn reopening_does_not_stamp_a_second_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("j.db");
+        {
+            let j = Journal::open(&path).await.expect("open");
+            j.record(
+                "created",
+                b"file:///a",
+                None,
+                Reversal::Delete,
+                None,
+                &Actor::User,
+            )
+            .await
+            .expect("record");
+        }
+        let j = Journal::open(&path).await.expect("reopen");
+        let markers: i64 = sqlx::query("SELECT COUNT(*) FROM journal WHERE seq = 0")
+            .fetch_one(&j.pool)
+            .await
+            .expect("count markers")
+            .get(0);
+        assert_eq!(markers, 1);
+        assert_eq!(j.format().await.expect("format"), JournalFormat::Version(1));
+        assert!(j.verify_chain().await.expect("verify").is_intact());
+    }
+
+    /// Walks the chain the way a binary built BEFORE the marker existed does:
+    /// every row is an ordinary entry, `seq 0` included, and nothing is known
+    /// about formats. This is the released code's algorithm, kept here as the
+    /// only way to test the claim it makes.
+    ///
+    /// It also covers a build older than `batch_id` — the marker's `batch_id`
+    /// is `None`, which feeds nothing, so both eras compute the same digest —
+    /// but only because `the_batch_id_framing_is_frozen` pins that. And it
+    /// reuses today's `chain_hash`, so if a future format changes it, this
+    /// helper changes with it and quietly stops simulating anything: what keeps
+    /// the claim honest then is `the_format_marker_preimage_is_frozen`.
+    async fn verifies_like_a_binary_without_the_marker(j: &Journal) -> bool {
+        let rows = sqlx::query(SELECT_VERIFY)
+            .fetch_all(&j.pool)
+            .await
+            .expect("rows");
+        let mut prev = [0u8; 32];
+        for row in rows {
+            let actor_kind: String = row.get(2);
+            let actor_id: Option<String> = row.get(3);
+            let op: String = row.get(4);
+            let path: Vec<u8> = row.get(5);
+            let path_to: Option<Vec<u8>> = row.get(6);
+            let reversal: String = row.get(7);
+            let reversal_ref: Option<Vec<u8>> = row.get(8);
+            let stored_prev: Vec<u8> = row.get(10);
+            let stored_hash: Vec<u8> = row.get(11);
+            let rec = Record {
+                seq: row.get(0),
+                ts_ms: row.get(1),
+                actor_kind: &actor_kind,
+                actor_id: actor_id.as_deref(),
+                op: &op,
+                path: &path,
+                path_to: path_to.as_deref(),
+                reversal: &reversal,
+                reversal_ref: reversal_ref.as_deref(),
+                undoes_seq: row.get(9),
+                batch_id: row.get(12),
+            };
+            let computed = chain_hash(&prev, &rec);
+            if stored_prev != prev || computed[..] != stored_hash[..] {
+                return false;
+            }
+            prev = computed;
+        }
+        true
+    }
+
+    /// Adding the marker must not create the very problem it is here to fix:
+    /// an older binary, which knows nothing about `seq 0`, hashes it as an
+    /// ordinary row and finds it intact.
+    #[tokio::test]
+    async fn an_older_binary_reads_the_marker_as_an_ordinary_intact_entry() {
+        let j = Journal::open_in_memory().await.expect("open");
+        j.record(
+            "created",
+            b"file:///a",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("record");
+        assert!(
+            verifies_like_a_binary_without_the_marker(&j).await,
+            "the marker is hashed with fields that existed before it did",
+        );
+    }
+
+    /// A journal written by a NEWER format must not read as tampering. The
+    /// difference matters more than it looks: `Broken` is an accusation, and
+    /// making it at a file nobody touched teaches a user to ignore the one
+    /// signal the journal exists to give.
+    ///
+    /// What is staged, precisely, because the difference matters to whoever
+    /// reads this next: a marker declaring version 2 and hashed with the frozen
+    /// preimage (the one thing every version shares), and `seq 1` relinked onto
+    /// it so the chain is well formed. That leaves `seq 1`'s stored digest
+    /// stale, which is the SAME observable a real format-2 preimage would
+    /// produce — a digest that does not recompute here — without this test
+    /// having to invent a format-2 hash function.
+    #[tokio::test]
+    async fn a_newer_format_is_reported_as_a_newer_format_not_as_tampering() {
+        let j = Journal::open_in_memory().await.expect("open");
+        j.record(
+            "created",
+            b"file:///a",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("record");
+        j.redeclare_format_for_test(b"2", true)
+            .await
+            .expect("declare 2");
+        j.relink_first_entry_for_test().await.expect("relink");
+
+        let status = j.verify_chain().await.expect("verify");
+        assert_eq!(
+            status,
+            ChainStatus::UnknownFormat {
+                declared: JournalFormat::Version(2),
+                known: JOURNAL_FORMAT,
+                first_unverifiable_seq: Some(1),
+            },
+            "not Broken: this build cannot recompute what format 2 hashes",
+        );
+        assert!(!status.is_intact(), "and it is not a clean bill of health");
+        // Unreadable is not unopenable: the entries are still there to export.
+        assert_eq!(j.entries().await.expect("entries").len(), 1);
+    }
+
+    /// Same refusal when the marker is present but its version is not a number
+    /// this build understands. Here everything recomputes, and the answer is
+    /// still not `Intact`: certifying a format nobody here can read would be a
+    /// claim about rules this binary does not have.
+    #[tokio::test]
+    async fn an_unreadable_marker_is_refused_rather_than_guessed() {
+        let j = Journal::open_in_memory().await.expect("open");
+        j.redeclare_format_for_test(b"2.0-beta", true)
+            .await
+            .expect("declare");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::UnknownFormat {
+                declared: JournalFormat::Unreadable,
+                known: JOURNAL_FORMAT,
+                first_unverifiable_seq: None,
+            },
+        );
+        assert_eq!(j.format().await.expect("format"), JournalFormat::Unreadable);
+    }
+
+    /// The format entry is INSIDE the chain, so altering it breaks the chain
+    /// like any other entry — which is the whole reason it is not a pragma.
+    #[tokio::test]
+    async fn tampering_with_the_format_entry_breaks_the_chain() {
+        let j = Journal::open_in_memory().await.expect("open");
+        j.record(
+            "created",
+            b"file:///a",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("record");
+        // Four bytes in the SQLite header would have been invisible. Four bytes
+        // here are not.
+        j.redeclare_format_for_test(b"999", false)
+            .await
+            .expect("tamper");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: 0 },
+            "the marker's own hash is checked before its version is believed",
+        );
+    }
+
+    /// And re-hashing the marker does not launder the tampering into a shrug:
+    /// the entry behind it no longer links, and a broken link is an accusation
+    /// this binary is entitled to make about any format.
+    #[tokio::test]
+    async fn redeclaring_the_format_does_not_launder_a_broken_link() {
+        let j = Journal::open_in_memory().await.expect("open");
+        j.record(
+            "created",
+            b"file:///a",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("record");
+        j.redeclare_format_for_test(b"999", true)
+            .await
+            .expect("tamper");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: 1 },
+            "the link is format-independent, so the break is still reported",
+        );
+    }
+
+    /// A journal declaring a format this build DOES know is verified exactly as
+    /// before — the marker buys nobody an exemption.
+    #[tokio::test]
+    async fn a_known_format_still_reports_tampering_as_tampering() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let seq = j
+            .record(
+                "created",
+                b"file:///a",
+                None,
+                Reversal::Delete,
+                None,
+                &Actor::User,
+            )
+            .await
+            .expect("record");
+        j.corrupt_path_for_test(seq, b"file:///HACKED")
+            .await
+            .expect("tamper");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: seq },
+        );
+    }
+
+    /// Under an unknown format the walk keeps checking the LINKS, which need no
+    /// preimage — so a deletion in a journal from the future is still named,
+    /// and named where it happened rather than at the first row this build
+    /// could not recompute.
+    #[tokio::test]
+    async fn a_deletion_is_still_reported_in_a_journal_from_the_future() {
+        let j = Journal::open_in_memory().await.expect("open");
+        for w in [&b"file:///a"[..], b"file:///b", b"file:///c"] {
+            j.record("created", w, None, Reversal::Delete, None, &Actor::User)
+                .await
+                .expect("record");
+        }
+        j.redeclare_format_for_test(b"2", true)
+            .await
+            .expect("declare 2");
+        j.relink_first_entry_for_test().await.expect("relink");
+        // The chain now reads as "written by format 2" from seq 1 on. An
+        // attacker removes the middle entry.
+        sqlx::query("DELETE FROM journal WHERE seq = 2")
+            .execute(&j.pool)
+            .await
+            .expect("delete");
+
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: 3 },
+            "seq 3 links to a digest no row carries, and that is format-independent",
+        );
+    }
+
+    /// The marker's SHAPE is verified, not just its version: only the version
+    /// is the row's to choose. A row at `seq 0` wearing a different
+    /// `actor_kind` — the one row the mutation readers never show — does not
+    /// pass just because its hash was refreshed over its own fields.
+    #[tokio::test]
+    async fn a_marker_with_a_forged_shape_does_not_verify() {
+        let j = Journal::open_in_memory().await.expect("open");
+        j.forge_marker_shape_for_test("user").await.expect("forge");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: 0 },
+        );
+    }
+
+    /// `seq 0` is the floor. Anything below it would be chained and certified
+    /// while being invisible to `entries`, `count` and the audit export.
+    #[tokio::test]
+    async fn a_row_below_the_reserved_seq_breaks_the_chain() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let rec = Record {
+            seq: -1,
+            ..format_record(1, b"1")
+        };
+        let hash = chain_hash(&[0u8; 32], &rec);
+        sqlx::query(INSERT_ENTRY)
+            .bind(rec.seq)
+            .bind(rec.ts_ms)
+            .bind(rec.actor_kind)
+            .bind(rec.actor_id)
+            .bind(rec.op)
+            .bind(rec.path)
+            .bind(rec.path_to)
+            .bind(rec.reversal)
+            .bind(rec.reversal_ref)
+            .bind(rec.undoes_seq)
+            .bind(rec.batch_id)
+            .bind(&[0u8; 32][..])
+            .bind(&hash[..])
+            .execute(&j.pool)
+            .await
+            .expect("insert");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: -1 },
+        );
+        assert!(j.entries().await.expect("entries").is_empty());
+    }
+
+    /// A version is one byte string or the frozen vector means nothing: `+1`
+    /// and `0001` are not version 1, they are markers this build will not read.
+    /// Nor is `0` a version anyone ever wrote.
+    #[test]
+    fn a_version_has_exactly_one_spelling() {
+        assert_eq!(parse_format(FORMAT_OP, b"1"), JournalFormat::Version(1));
+        for odd in [&b"+1"[..], b"0001", b" 1", b"1 ", b""] {
+            assert_eq!(
+                parse_format(FORMAT_OP, odd),
+                JournalFormat::Unreadable,
+                "{odd:?} is not a canonical version",
+            );
+        }
+        assert_eq!(
+            parse_format("created", b"1"),
+            JournalFormat::Unreadable,
+            "a row at seq 0 that is not a marker is not read as one",
+        );
+        assert!(
+            JournalFormat::Version(0).is_unknown(),
+            "no format was ever numbered 0",
+        );
+        assert!(!JournalFormat::Unmarked.is_unknown());
+    }
+
+    /// ONE column write, no rehash, no key: flip the marker's `op`. The digest
+    /// is untouched, so a verifier that hashed a substituted canonical record
+    /// would still call the marker good — and then read that same `op` and
+    /// declare the journal unreadable. A pristine journal would report
+    /// "upgrade norte". The shape is COMPARED, so it reports the truth.
+    #[tokio::test]
+    async fn flipping_the_markers_op_is_a_break_not_an_unknown_format() {
+        let j = Journal::open_in_memory().await.expect("open");
+        j.record(
+            "created",
+            b"file:///a",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("record");
+        sqlx::query("UPDATE journal SET op = 'created' WHERE seq = 0")
+            .execute(&j.pool)
+            .await
+            .expect("tamper");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: 0 },
+        );
+    }
+
+    /// A tampered column that does not even decode must still produce a
+    /// VERDICT: `SQLite` types are dynamic, and neither a panic nor a bare
+    /// error is the statement the audit exists to make. A row that cannot be
+    /// decoded is a row that cannot be recomputed, which is a break.
+    #[tokio::test]
+    async fn a_type_confused_column_does_not_panic_the_verdict() {
+        let j = Journal::open_in_memory().await.expect("open");
+        j.record(
+            "created",
+            b"file:///a",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("record");
+        // A non-UTF-8 BLOB in a TEXT column: TEXT affinity converts numbers,
+        // never blobs, so this is what actually reaches the decoder — and
+        // `row.get::<String>` would PANIC on it.
+        sqlx::query("UPDATE journal SET op = X'FFFE' WHERE seq = 1")
+            .execute(&j.pool)
+            .await
+            .expect("tamper");
+        assert_eq!(
+            j.verify_chain().await.expect("a verdict, not an error"),
+            ChainStatus::Broken { first_bad_seq: 1 },
+            "an undecodable row is evidence, and it is reported where it is",
+        );
+    }
+
+    /// A pre-migration journal has no marker and stays valid: its absence is
+    /// information, not a fault. It is never stamped either — a row inserted
+    /// ahead of `seq 1` would break the chain of a file nobody touched.
+    #[tokio::test]
+    async fn a_pre_migration_journal_is_unmarked_and_is_not_stamped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("viejo.db");
+        write_pre_migration_journal(&path).await;
+
+        let j = Journal::open(&path).await.expect("open");
+        assert_eq!(j.format().await.expect("format"), JournalFormat::Unmarked);
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Intact { entries: 1 },
+        );
+        let markers: i64 = sqlx::query("SELECT COUNT(*) FROM journal WHERE seq = 0")
+            .fetch_one(&j.pool)
+            .await
+            .expect("count")
+            .get(0);
+        assert_eq!(markers, 0, "history that exists is never re-stamped");
     }
 
     /// `open_read_only` (M3-5): lee lo mismo que el handle de escritura y

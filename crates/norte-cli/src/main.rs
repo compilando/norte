@@ -744,20 +744,16 @@ async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         AuditCmd::Anchor => {
-            // Jamás se ancla una cadena YA rota detectable: el ancla fijaría
-            // historia mala como «buena».
-            if let norte_core::ChainStatus::Broken { first_bad_seq } = journal
+            // Jamás se ancla una cadena que este binario no haya podido
+            // verificar: el ancla fijaría como «buena» una historia rota, o una
+            // que no sabe leer (ADR 0046).
+            let status = journal
                 .verify_chain()
                 .await
-                .map_err(|e| anyhow::anyhow!("{e}"))?
-            {
-                eprintln!(
-                    "{}",
-                    norte_i18n::ta(
-                        "cli-audit-chain-broken",
-                        &[("seq", &first_bad_seq.to_string())],
-                    )
-                );
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if !status.is_intact() {
+                let declared = journal.format().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+                report_chain_not_certified(&status, declared);
                 return Ok(ExitCode::FAILURE);
             }
             let Some((seq, head)) = journal.head().await.map_err(|e| anyhow::anyhow!("{e}"))?
@@ -789,6 +785,77 @@ async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
     }
 }
 
+/// Por qué la cadena NO quedó certificada, en la voz que corresponde: una
+/// rotura es una acusación y se cita dónde; un formato desconocido (ADR 0046)
+/// NO lo es —este binario no sabe recomputar lo que escribió uno más nuevo— y
+/// se dice sin acusar a nadie, pero también sin absolver: en los dos casos el
+/// audit sale con FALLO.
+///
+/// Va por STDOUT, igual que `cli-audit-chain-ok`: el veredicto es la SALIDA del
+/// audit, no un diagnóstico suelto, y un `norte audit verify > informe.txt` que
+/// guarde la cobertura y las anclas pero no el veredicto es justo el fichero
+/// que no hay que producir. El fallo lo lleva el código de salida.
+///
+/// `declared` viene del journal porque el veredicto `Broken` no lo lleva: una
+/// cadena rota EN un journal que además está escrito en un formato ilegible es
+/// una rotura que hay que leer con esa luz.
+fn report_chain_not_certified(
+    status: &norte_core::ChainStatus,
+    declared: norte_core::JournalFormat,
+) {
+    use norte_core::{ChainStatus, JournalFormat};
+    // `Unmarked` no llega por la rama de formato desconocido (un journal sin
+    // marcador se verifica con las reglas de hoy), y cualquier variante futura
+    // es, por definición, algo que este binario no sabe leer.
+    let name = |f: JournalFormat| match f {
+        JournalFormat::Version(v) => v.to_string(),
+        _ => norte_i18n::t("cli-audit-format-unreadable"),
+    };
+    let unknown_format = |declared: JournalFormat, known: u32| {
+        println!(
+            "{}",
+            norte_i18n::ta(
+                "cli-audit-chain-unknown-format",
+                &[("declared", &name(declared)), ("known", &known.to_string())],
+            )
+        );
+    };
+    match status {
+        ChainStatus::Broken { first_bad_seq } => {
+            if declared.is_unknown() {
+                unknown_format(declared, norte_core::JOURNAL_FORMAT);
+            }
+            println!(
+                "{}",
+                norte_i18n::ta(
+                    "cli-audit-chain-broken",
+                    &[("seq", &first_bad_seq.to_string())],
+                )
+            );
+        }
+        ChainStatus::UnknownFormat {
+            declared,
+            known,
+            first_unverifiable_seq,
+        } => {
+            unknown_format(*declared, *known);
+            if let Some(seq) = first_unverifiable_seq {
+                println!(
+                    "{}",
+                    norte_i18n::ta(
+                        "cli-audit-chain-unverifiable-from",
+                        &[("seq", &seq.to_string())],
+                    )
+                );
+            }
+        }
+        // Un veredicto que este binario no conoce se trata como NO certificado.
+        // `ChainStatus` es `#[non_exhaustive]` justamente para que un veredicto
+        // nuevo llegue aquí en vez de colarse por la rama de «íntegra».
+        _ => println!("{}", norte_i18n::t("cli-audit-chain-not-certified")),
+    }
+}
+
 /// `norte audit verify`: cadena (cita la primera rotura, B2) + anclas +
 /// COBERTURA (hasta qué seq llegan las anclas Ok — el recorte del fichero de
 /// anclas se manifiesta como cobertura que retrocede). Sin anclas = FALLO
@@ -800,40 +867,47 @@ async fn audit_verify(
     allow_no_anchors: bool,
 ) -> anyhow::Result<ExitCode> {
     use norte_core::{ChainStatus, audit};
-    let head_seq = match journal
+    let status = journal
         .verify_chain()
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?
-    {
-        ChainStatus::Broken { first_bad_seq } => {
-            eprintln!(
-                "{}",
-                norte_i18n::ta(
-                    "cli-audit-chain-broken",
-                    &[("seq", &first_bad_seq.to_string())],
-                )
-            );
-            return Ok(ExitCode::FAILURE);
-        }
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // Una cadena ROTA ya trae su culpable y su sitio: no hay segunda opinión
+    // que buscar. Una que este binario NO SABE LEER (ADR 0046) es al revés —
+    // las anclas son la única evidencia que discrimina «journal más nuevo» de
+    // «marcador re-declarado», no necesitan recomputar la cadena (contrastan
+    // hashes ALMACENADOS) y el operador ya las tiene en disco. Así que se sigue
+    // hasta el informe de anclas y se sale con FALLO igual.
+    let certified = match status {
         ChainStatus::Intact { entries } => {
             println!(
                 "{}",
                 norte_i18n::ta("cli-audit-chain-ok", &[("entries", &entries.to_string())])
             );
-            journal
-                .head()
-                .await
-                .map_err(|e| anyhow::anyhow!("{e}"))?
-                .map(|(seq, _)| seq)
+            true
+        }
+        ChainStatus::UnknownFormat { .. } => {
+            report_chain_not_certified(&status, declared_format(journal).await?);
+            false
+        }
+        _ => {
+            report_chain_not_certified(&status, declared_format(journal).await?);
+            return Ok(ExitCode::FAILURE);
         }
     };
+    let head_seq = journal
+        .head()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .map(|(seq, _)| seq);
     let lines = match tokio::fs::read_to_string(&anchors_path).await {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let msg = norte_i18n::t("cli-audit-no-anchors");
             if allow_no_anchors {
                 println!("{msg}");
-                return Ok(ExitCode::SUCCESS);
+                // `--allow-no-anchors` perdona la AUSENCIA de anclas, no una
+                // cadena sin certificar.
+                return Ok(exit_for(certified));
             }
             // Ausencia = fallo por defecto: un atacante sin clave puede
             // BORRAR el fichero; solo el humano decide que «no hay» es ok.
@@ -856,6 +930,35 @@ async fn audit_verify(
         .filter_map(|e| e.entry_hash.try_into().ok().map(|h: [u8; 32]| (e.seq, h)))
         .collect();
     let report = audit::verify_anchors(&key, &lines, &hash_by_seq);
+    report_anchors(&report, head_seq, certified);
+    if !report.bad.is_empty() {
+        return Ok(ExitCode::FAILURE);
+    }
+    if certified {
+        println!(
+            "{}",
+            norte_i18n::ta(
+                "cli-audit-anchors-ok",
+                &[("count", &report.checked.to_string())],
+            )
+        );
+    }
+    Ok(exit_for(certified))
+}
+
+/// El informe de anclas: las malas una por una, la salvedad cuando la cadena
+/// NO quedó certificada, y la cobertura.
+///
+/// El orden importa. «Ancladas contra la cadena» presupone una cadena
+/// verificada; si este binario no pudo verificarla, lo que las anclas dicen es
+/// OTRA frase —los hashes almacenados no se han movido desde que se ancló— y
+/// esa salvedad va ANTES de la cobertura, porque «hasta el seq 100 de 100»
+/// leída sin ella es la línea que el operador citará como visto bueno.
+fn report_anchors(
+    report: &norte_core::audit::AnchorsReport,
+    head_seq: Option<i64>,
+    certified: bool,
+) {
     for (line_no, verdict) in &report.bad {
         let Some(detail) = verdict_detail(verdict) else {
             continue;
@@ -865,6 +968,15 @@ async fn audit_verify(
             norte_i18n::ta(
                 "cli-audit-anchor-bad",
                 &[("line", &line_no.to_string()), ("detail", &detail)],
+            )
+        );
+    }
+    if !certified {
+        println!(
+            "{}",
+            norte_i18n::ta(
+                "cli-audit-anchors-ok-unverified-chain",
+                &[("count", &report.checked.to_string())],
             )
         );
     }
@@ -888,17 +1000,22 @@ async fn audit_verify(
             ],
         )
     );
-    if !report.bad.is_empty() {
-        return Ok(ExitCode::FAILURE);
+}
+
+/// El formato que DECLARA el journal, para poner el veredicto en contexto.
+async fn declared_format(
+    journal: &norte_core::Journal,
+) -> anyhow::Result<norte_core::JournalFormat> {
+    journal.format().await.map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Éxito solo si la cadena quedó certificada.
+fn exit_for(certified: bool) -> ExitCode {
+    if certified {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
-    println!(
-        "{}",
-        norte_i18n::ta(
-            "cli-audit-anchors-ok",
-            &[("count", &report.checked.to_string())],
-        )
-    );
-    Ok(ExitCode::SUCCESS)
 }
 
 /// Traduce un veredicto NO-Ok de ancla a su mensaje Fluent.
@@ -2086,6 +2203,59 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// ADR 0046: every verdict that is not `Intact` has something to say in
+    /// both locales, and the "unknown format" one says the version WITHOUT
+    /// accusing anyone. A missing Fluent key falls back to the key itself,
+    /// which in this path would be the whole message the operator gets.
+    #[test]
+    fn cada_veredicto_no_certificado_tiene_su_mensaje_en_los_dos_idiomas() {
+        use norte_core::{ChainStatus, JournalFormat};
+        for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+            let unknown = norte_i18n::ta_in(
+                lang,
+                "cli-audit-chain-unknown-format",
+                &[("declared", "999"), ("known", "1")],
+            );
+            assert!(unknown.contains("999"), "{lang:?}: {unknown}");
+            assert!(!unknown.starts_with("cli-audit"), "{lang:?}: sin traducir");
+            for key in [
+                "cli-audit-chain-unverifiable-from",
+                "cli-audit-chain-not-certified",
+                "cli-audit-format-unreadable",
+            ] {
+                let msg = norte_i18n::ta_in(lang, key, &[("seq", "7")]);
+                assert!(
+                    !msg.starts_with("cli-audit"),
+                    "{lang:?}/{key}: sin traducir"
+                );
+            }
+        }
+        // Y no panica con ninguna forma del veredicto (incluida la rama de
+        // cierre en falso, que es lo que verá un veredicto futuro).
+        for status in [
+            ChainStatus::Broken { first_bad_seq: 3 },
+            ChainStatus::UnknownFormat {
+                declared: JournalFormat::Version(999),
+                known: norte_core::JOURNAL_FORMAT,
+                first_unverifiable_seq: Some(1),
+            },
+            ChainStatus::UnknownFormat {
+                declared: JournalFormat::Unreadable,
+                known: norte_core::JOURNAL_FORMAT,
+                first_unverifiable_seq: None,
+            },
+        ] {
+            report_chain_not_certified(&status, JournalFormat::Version(999));
+        }
+        // Y una rotura en un journal cuyo formato tampoco se puede leer dice
+        // las DOS cosas: la rotura es verdad, y sin la salvedad no se puede
+        // interpretar.
+        report_chain_not_certified(
+            &ChainStatus::Broken { first_bad_seq: 3 },
+            JournalFormat::Unreadable,
+        );
     }
 
     /// H3e: every `plugin-help-*` code must have a renderer arm AND a Fluent
