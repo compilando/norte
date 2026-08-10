@@ -81,6 +81,13 @@ pub const COMMANDS: &[&str] = &[
     // demás (paleta + chord `alt+y` vía `gui_supplement`, libre en los tres
     // presets), y el menú lo despacha igual que lo despacha el teclado.
     "pane.copy-path",
+    // #135 (S4): el ÚNICO de los tres comandos de esa issue que la GUI
+    // implementa. No puede suspenderse —no hay terminal anfitriona que ceder—
+    // así que lanza el emulador del escritorio (`open_terminal`). Dejar
+    // `app.toggle-panels`/`pane.command-line` FUERA es lo que los resuelve a
+    // `Availability::NotHere`, que es la verdad. Chord `alt+t` vía
+    // `gui_supplement`: de los siete presets solo `krusader` lo bindea.
+    "app.terminal",
 ];
 
 /// Comandos del contexto Viewer (pantalla del visor F3).
@@ -249,6 +256,13 @@ prepend_keymap = [
     { on = ["alt+i"], run = "pane.ai-rename" },
     { on = ["alt+s"], run = "pane.semantic-search" },
     { on = ["alt+y"], run = "pane.copy-path" },
+    # S4 (#135): `app.terminal` solo lo bindea `krusader` (`f9`) de los siete
+    # presets, así que sin esto el pin de alcanzabilidad se cae en los otros
+    # seis. `alt+t` no lo usa ningún preset ni ninguna otra línea de este
+    # supplemento (comprobado contra los siete `.toml`), y `f9` está ocupado
+    # por `app.theme` en orthodox/vim/cua, así que no se puede copiar el chord
+    # de krusader como fallback general.
+    { on = ["alt+t"], run = "app.terminal" },
     # K2b Task 2: `total-commander`/`krusader` do not bind these four — their
     # sources have no key for them (rule 1: norte's own app-level overlays,
     # not a Total Commander or Krusader concept, so nothing to transcribe),

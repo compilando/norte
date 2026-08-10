@@ -702,6 +702,28 @@ pub struct PendingOpen {
     pub detached: bool,
 }
 
+/// Una SUSPENSIÓN que el despacho resolvió y el run loop ejecutará (#135).
+///
+/// Mismo reparto que [`PendingOpen`] y por la misma razón: quien es dueño de
+/// la terminal es el run loop, no el despacho. Lo que cambia es que aquí no
+/// hay «programa» que sondear en el PATH — el argv sale de `$SHELL` o de una
+/// línea que el usuario escribió, y un `$SHELL` roto se dice con el error del
+/// spawn, no con una sonda que adivinaría lo mismo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingShell {
+    /// argv completo, con el binario en `[0]`. VACÍO es legítimo y significa
+    /// «no lances nada»: es `app.toggle-panels`, que solo enseña la terminal
+    /// anfitriona.
+    pub argv: Vec<std::ffi::OsString>,
+    /// Directorio de trabajo del hijo. `None` = el de norte (que es lo que
+    /// hacen hoy los openers de #28).
+    pub cwd: Option<std::path::PathBuf>,
+    /// Esperar a una tecla ANTES de repintar los paneles. Es lo que hace
+    /// legible la salida de un comando: sin esto, el listado vuelve encima de
+    /// lo que acaba de escribirse.
+    pub wait_for_key: bool,
+}
+
 /// The key of the capability cache: a scheme AND the authority it is served
 /// by, which together are ONE backend. Owned because the map owns its keys and
 /// the lookups are per help open, not per frame.
@@ -897,6 +919,13 @@ pub struct App {
     /// `dispatch` lo fija tras validar; el run loop —dueño de la terminal—
     /// lo ejecuta.
     pub pending_open: Option<PendingOpen>,
+    /// Suspensión resuelta por el despacho y pendiente de ejecutar (#135):
+    /// `app.terminal`, `app.toggle-panels` y el Enter de
+    /// [`Modal::CommandLine`]. Mismo reparto que [`Self::pending_open`], y
+    /// drenado en UN solo sitio del run loop (arriba del todo de la vuelta,
+    /// antes del draw) para que ningún `continue` de los que responde teclas
+    /// pueda dejarla encallada.
+    pub pending_shell: Option<PendingShell>,
     /// Hints de pie de página de los overlays de diálogo (H1 T3, #24),
     /// PRECOMPUTADOS del efectivo `dialog` vigente — igual que `help_lines`
     /// en `main.rs`, se reconstruyen en el arranque y en cada hot-reload OK
@@ -1696,6 +1725,7 @@ impl App {
             search_dialog: None,
             openers: norte_frontend::openers::OpenersConfig::empty(),
             pending_open: None,
+            pending_shell: None,
             dialog_hints: crate::hints::DialogHints::default(),
             help_chords: default_help_chords(),
             palette: None,
@@ -2752,6 +2782,88 @@ impl App {
     pub fn mkdir_set_error(&mut self, msg: String) {
         if let Some(Modal::Mkdir { error, .. }) = &mut self.modal {
             *error = Some(msg);
+        }
+    }
+
+    /// Abre el prompt de `pane.command-line` (#135).
+    pub fn open_command_line(&mut self) {
+        self.modal = Some(Modal::CommandLine {
+            command: String::new(),
+            error: None,
+        });
+    }
+
+    /// Añade un carácter a la línea de comandos. No-op sin su modal. Mismo
+    /// tope en `chars` que el resto de los prompts de texto libre.
+    /// Alcanzar el tope DEJA DIAGNÓSTICO, a diferencia del resto de los
+    /// prompts de texto libre (review de S4, M4). Un nombre de directorio
+    /// truncado falla al crearse y se ve; una línea de comandos truncada
+    /// CORRE — `rm -rf /proyecto-viejo` recortado a `rm -rf /proyecto` es una
+    /// orden distinta, no journaleada y no deshacible. Callarse el recorte
+    /// aquí es dejar pulsar Enter a ciegas.
+    pub fn command_line_push(&mut self, c: char) {
+        if let Some(Modal::CommandLine { command, error }) = &mut self.modal {
+            if command.chars().count() >= MARK_PATTERN_MAX_CHARS {
+                *error = Some(ta(
+                    "modal-command-line-too-long",
+                    &[("max", &MARK_PATTERN_MAX_CHARS.to_string())],
+                ));
+                return;
+            }
+            command.push(c);
+            *error = None;
+        }
+    }
+
+    /// Borra el último carácter de la línea. No-op sin su modal.
+    pub fn command_line_pop(&mut self) {
+        if let Some(Modal::CommandLine { command, error }) = &mut self.modal {
+            command.pop();
+            *error = None;
+        }
+    }
+
+    /// Cancela `Modal::CommandLine` sin ejecutar nada (mismo contrato y guard
+    /// que [`Self::cancel_mkdir`]: un modal de DECISIÓN jamás se cierra por
+    /// aquí).
+    pub fn cancel_command_line(&mut self) {
+        if !matches!(self.modal, Some(Modal::CommandLine { .. })) {
+            debug_assert!(
+                false,
+                "solo los modales de texto libre se cierran sin decisión; \
+                 un modal de DECISIÓN debe denegar por on_dialog_key"
+            );
+            return;
+        }
+        self.modal = None;
+        self.open_next_pending();
+    }
+
+    /// Valida y devuelve la línea; NO cierra el modal — el caller cierra con
+    /// [`Self::command_line_submitted`] tras dejar la suspensión pendiente
+    /// (misma disciplina que [`Self::ai_rename_confirm`]).
+    ///
+    /// La línea se devuelve TAL CUAL, sin `trim`: solo se usa el recortado
+    /// para decidir si está vacía. Un comando que empieza por espacio es una
+    /// convención real de bash/zsh (`HISTCONTROL=ignorespace`), y recortarlo
+    /// cambiaría en silencio lo que el usuario escribió.
+    pub fn command_line_confirm(&mut self) -> Option<String> {
+        if let Some(Modal::CommandLine { command, error }) = &mut self.modal {
+            if command.trim().is_empty() {
+                *error = Some(t("modal-command-line-empty"));
+                return None;
+            }
+            return Some(command.clone());
+        }
+        None
+    }
+
+    /// Cierra el prompt tras dejar la suspensión encolada (misma disciplina
+    /// de cierre que [`Self::ai_rename_submitted`]).
+    pub fn command_line_submitted(&mut self) {
+        if matches!(self.modal, Some(Modal::CommandLine { .. })) {
+            self.modal = None;
+            self.open_next_pending();
         }
     }
 
@@ -3855,6 +3967,41 @@ pub enum Modal {
         /// pintado bajo el campo.
         error: Option<String>,
     },
+    /// `pane.command-line` (#135). Texto libre, molde [`Modal::Mkdir`]: la
+    /// línea CRUDA del usuario, enmascarada al pintarla.
+    ///
+    /// Lo que Enter hace con ella NO pasa por el core: se la lleva el shell
+    /// con la TUI suspendida, que es el usuario actuando con sus propios
+    /// permisos y no una mutación de norte (design §D — el journal no ve nada
+    /// de esto, y decirlo así es más honesto que meter entradas
+    /// irreversibles en la cadena).
+    ///
+    /// # Es el único sitio de norte donde lo pintado es código a aprobar
+    ///
+    /// Dos consecuencias que la review de S4 dejó decididas, no heredadas:
+    ///
+    /// - **El pegado multilínea confirma en el primer salto** (encoding H2).
+    ///   La TUI no tiene bracketed paste —un pegado llega como pulsaciones
+    ///   sueltas y crossterm mapea `\n` a `Enter`—, así que la primera línea
+    ///   se envía sola. El RESTO no se ejecuta: [`crate::app::PendingShell`]
+    ///   se drena con el type-ahead ya descartado, así que no llega ni al
+    ///   hijo ni al despacho de la TUI como comandos. Está dicho en los
+    ///   límites honestos del tema `shell`. El arreglo completo (activar
+    ///   bracketed paste y enrutar `Event::Paste` en las SEIS superficies de
+    ///   texto libre que hay) es trabajo de la TUI entera, no de este item, y
+    ///   hacerlo a medias rompería el pegado en las otras cinco.
+    /// - **ZWJ y NBSP pasan sin marcar.** `must_mask` los permite a sabiendas
+    ///   (fidelidad de emoji), lo cual es correcto para un NOMBRE de fichero.
+    ///   Aquí `git\u{200D}status` se lee igual que `git status` y el shell lo
+    ///   parte distinto. Se acepta el mismo trato que el resto de campos —una
+    ///   excepción por superficie sería peor de razonar— y se hace constar:
+    ///   lo peligroso de verdad (RLO y compañía) SÍ se enmascara.
+    CommandLine {
+        /// Lo tecleado hasta ahora.
+        command: String,
+        /// Diagnóstico del último intento inválido, bajo el campo.
+        error: Option<String>,
+    },
     /// Prompt de instrucción del rename IA (M4-IA). Texto libre, molde
     /// [`Modal::Mkdir`]: la instrucción CRUDA del usuario, enmascarada al
     /// pintarla (una instrucción llega por paste con bidi/invisibles tan
@@ -4173,6 +4320,7 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         Modal::TrustLuaInit { .. }
         | Modal::MarkPattern { .. }
         | Modal::Mkdir { .. }
+        | Modal::CommandLine { .. }
         | Modal::AiRenameInstruction { .. }
         | Modal::SemanticQuery { .. }
         | Modal::TransferName { .. } => None,

@@ -442,6 +442,10 @@ struct NorteGui {
     /// settings status only renders inside its own view). Cleared on the
     /// NEXT keypress: honest without new chrome.
     flash: Option<(String, bool)>,
+    /// `app.terminal` (#135) con un lanzamiento en vuelo. Sin esta guardia,
+    /// mantener el chord pulsado a la tasa de repetición del teclado le pide
+    /// al escritorio una ventana por evento (review de S4, MINOR-5).
+    terminal_launching: bool,
     /// Gesto de ratón armado (ctrl/shift+click y arrastre de marcado): la
     /// máquina COMPARTIDA con la TUI ([`norte_frontend::mouse`]). Vive en el
     /// modelo y no en el árbol de render porque un gesto sobrevive a los
@@ -1156,6 +1160,7 @@ impl NorteGui {
                     help: None,
                     help_chords: None,
                     flash: None,
+                    terminal_launching: false,
                     mouse: MouseState::default(),
                     context_menu: None,
                     extensions: None,
@@ -1250,6 +1255,7 @@ impl NorteGui {
                     help: None,
                     help_chords: None,
                     flash: None,
+                    terminal_launching: false,
                     mouse: MouseState::default(),
                     context_menu: None,
                     extensions: None,
@@ -2288,6 +2294,15 @@ impl NorteGui {
             "pane.delete" => self.open_delete_modal(),
             "pane.rename" => self.open_rename(),
             "pane.ai-rename" => self.open_ai_rename(),
+            // #135 (S4, design §E). SOLO `app.terminal`: esta GUI no puede
+            // suspenderse, así que lanza el emulador del escritorio. Los
+            // otros dos comandos de #135 (`app.toggle-panels`,
+            // `pane.command-line`) NO están en `COMMANDS` a propósito — sin
+            // terminal anfitriona que enseñar ni que ceder, no significan
+            // nada aquí, y dejarlos fuera es lo que los resuelve a
+            // `Availability::NotHere` («no en este frontend»), que es la
+            // verdad y ya se pinta en gris.
+            "app.terminal" => self.open_terminal(cx),
             // Plan de ratón (tarea 4): al portapapeles, no al daemon — es la
             // única op de esta lista que no toca ningún backend.
             "pane.copy-path" => self.copy_paths_to_clipboard(cx),
@@ -4743,6 +4758,93 @@ impl NorteGui {
             &mut self.context_menu,
             [self.panes[0].listing_epoch(), self.panes[1].listing_epoch()],
         );
+    }
+
+    /// `app.terminal` (#135, design §E): abre el emulador de terminal del
+    /// escritorio en el directorio del pane activo.
+    ///
+    /// La GUI no suspende nada —no tiene terminal anfitriona que ceder—, así
+    /// que aquí «abrir un shell» es lanzar un proceso DESACOPLADO, sin stdio
+    /// heredado y sin esperarlo.
+    ///
+    /// El orden de candidatos lo decide `norte_frontend::shell`
+    /// (`$TERMINAL`, `xdg-terminal-exec`, y una lista corta); lo que se hace
+    /// AQUÍ es sondearlos en el PATH, que es I/O de disco y va al executor de
+    /// fondo (regla 2, mismo criterio que el `spawn_blocking` de la TUI). Que
+    /// no haya ninguno NO es un no-op silencioso: se dice qué se intentó, con
+    /// la misma forma que `msg-open-missing-program`.
+    ///
+    /// Un pane que no es `file://` declina, como en la TUI: un emulador
+    /// abierto «ahí» aterrizaría en el home del usuario y parecería que norte
+    /// se inventó el directorio.
+    fn open_terminal(&mut self, cx: &mut Context<Self>) {
+        // Sin guardia, mantener `alt+t` pulsado a la tasa de repetición del
+        // teclado le pide sesenta ventanas al escritorio en dos segundos
+        // (review de S4, MINOR-5). Una en vuelo basta.
+        if self.terminal_launching {
+            return;
+        }
+        let vdir = self.panes[self.focus].dir().clone();
+        let native = match norte_vfs_local::vpath_to_native(&vdir)
+            .ok()
+            .and_then(|n| norte_frontend::shell::child_cwd(&n))
+        {
+            Some(n) => n,
+            None => {
+                // Dos negativas distintas: el pane no es local, o lo es y su
+                // forma nativa no se le puede dar a un hijo (Windows
+                // verbatim). Se distinguen porque mandan a mirar sitios
+                // distintos.
+                let id = if norte_vfs_local::vpath_to_native(&vdir).is_ok() {
+                    "msg-shell-cwd-unsupported"
+                } else {
+                    "msg-shell-remote"
+                };
+                let (texto, hostil) = norte_frontend::path_display(&vdir);
+                self.flash = Some((
+                    norte_i18n::ta(id, &[("path", &Self::badged(&texto, hostil))]),
+                    true,
+                ));
+                cx.notify();
+                return;
+            }
+        };
+        let candidatos = norte_frontend::shell::terminal_candidates(&native);
+        let configurado = std::env::var_os("TERMINAL").is_some();
+        self.terminal_launching = true;
+        cx.spawn(async move |this, cx| {
+            let resultado = cx
+                .background_spawn(async move { spawn_terminal(&candidatos, &native, configurado) })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view.terminal_launching = false;
+                // Un lanzamiento que salió no dice nada: la ventana del
+                // emulador apareciendo ES el acuse. Solo se habla al fallar.
+                if let Err(msg) = resultado {
+                    view.flash = Some((msg, true));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// La ruta ya saneada para un flash: badge (el de ESTA crate) fuera de la
+    /// traducción y elipsis media.
+    ///
+    /// Las dos mitades son findings de S4. El badge, porque esta función
+    /// hardcodeaba `"!"` —el de la TUI— mientras el resto del fichero usa
+    /// [`HOSTILE_BADGE`] (`⚠`), justo el segundo literal divergente que la
+    /// otra mitad del cambio subió a `pub` para evitar. El tope, porque el
+    /// flash trunca por la derecha SIN marca y la ruta va a mitad de frase:
+    /// sin acotarla, lo que desaparece es la explicación.
+    fn badged(texto: &str, hostil: bool) -> String {
+        let corto = norte_frontend::middle_ellipsis(texto, 48);
+        if hostil {
+            format!("{HOSTILE_BADGE} {corto}")
+        } else {
+            corto
+        }
     }
 
     /// `pane.copy-path`: copia al portapapeles la ruta de lo que la op
@@ -9785,6 +9887,129 @@ const BANNER_DETAIL_MAX_CHARS: usize = 160;
 fn parse_plugin_palette_key(cmd: &str) -> Option<(&str, &str)> {
     let (id, command) = cmd.strip_prefix("plugin:")?.split_once(':')?;
     (!id.is_empty()).then_some((id, command))
+}
+
+/// Tope en chars de la etiqueta de un candidato dentro de `msg-terminal-*`.
+const TERMINAL_LABEL_MAX: usize = 40;
+
+/// Sonda + lanzamiento del emulador de terminal (#135, §E). Corre en el
+/// executor de FONDO: `resolve_program` mira el disco (regla 2).
+///
+/// Devuelve el nombre del que arrancó, o el mensaje ya localizado del fallo.
+/// Un no-op mudo aquí sería indistinguible de una tecla rota.
+///
+/// # Lo que la review de S4 cambió
+///
+/// - Se lanza la ruta ABSOLUTA que devolvió la sonda, no el nombre a secas
+///   (MAJOR-2). En unix `current_dir` se aplica ANTES de resolver el
+///   programa, así que un `kitty` suelto lo resolvería `execvp` contra el
+///   directorio que el usuario está navegando: con un `.` en el `PATH`, un
+///   fichero llamado `kitty` dentro de un archivo recién extraído. Sonda y
+///   lanzamiento miraban directorios distintos por construcción.
+/// - Un candidato que falla al lanzarse NO aborta la lista (MINOR-4/L2):
+///   se anota y se sigue. Antes, un `xdg-terminal-exec` presente pero roto
+///   dejaba sin probar todo lo demás.
+/// - `$TERMINAL` se INTENTA siempre, aunque la sonda diga que no está (L2).
+///   La sonda tiene falsos negativos reales —una GUI lanzada sin `PATH` en
+///   su entorno, o un binario guardado en NFD frente a un `$TERMINAL` en NFC
+///   en APFS— y descartar en silencio la respuesta EXPLÍCITA del usuario es
+///   el peor sitio donde tenerlos.
+/// - El informe final no junta el `$TERMINAL` del usuario con la lista
+///   propia en un `", "` (encoding M3): un `TERMINAL='kitty, konsole'` se
+///   leería como dos entradas. Van en argumentos separados.
+///
+/// El hijo va DESACOPLADO —stdio a `null`, sin esperarlo— y se entierra con
+/// un hilo que solo hace `wait`: sin él quedaría zombi hasta que muriese la
+/// propia GUI. Ese hilo además REGISTRA una salida no-cero, que es la única
+/// pista de que el emulador arrancó y se rindió (un flag de cwd que su
+/// versión no acepta, un `xdg-terminal-exec` sin entrada de escritorio).
+fn spawn_terminal(
+    candidatos: &[Vec<std::ffi::OsString>],
+    cwd: &std::path::Path,
+    configurado: bool,
+) -> Result<String, String> {
+    let mut propios: Vec<String> = Vec::new();
+    let mut etiqueta_configurada = String::new();
+    for (i, argv) in candidatos.iter().enumerate() {
+        let Some(programa) = argv.first() else {
+            continue;
+        };
+        // `$TERMINAL`, cuando lo hay, es SIEMPRE el primer candidato
+        // (`terminal_candidates_from`). Es entrada del usuario, así que su
+        // etiqueta va saneada Y marcada, como cualquier otro texto ajeno de
+        // esta GUI (encoding M1: perder el flag deja `term\xFF` y `term\xFE`
+        // indistinguibles y sin aviso de que lo mostrado no es lo probado).
+        let del_usuario = configurado && i == 0;
+        let (masked, hostil) = norte_frontend::display_name(programa.as_encoded_bytes());
+        // Acotada además de enmascarada (encoding m10): `display_name` no
+        // topa, y un `$TERMINAL` kilométrico daría un flash kilométrico.
+        let etiqueta = norte_frontend::middle_ellipsis(&masked, TERMINAL_LABEL_MAX);
+        if del_usuario {
+            etiqueta_configurada = if hostil {
+                format!("{HOSTILE_BADGE} {etiqueta}")
+            } else {
+                etiqueta.clone()
+            };
+        } else {
+            propios.push(etiqueta.clone());
+        }
+        // La sonda necesita un `&str`; un nombre que no es UTF-8 no se puede
+        // sondear. Y la respuesta EXPLÍCITA del usuario se intenta pase lo
+        // que pase. En ambos casos se lanza el nombre tal cual y el error del
+        // spawn es la respuesta honesta.
+        let resuelto = programa
+            .to_str()
+            .and_then(norte_frontend::openers::resolve_program);
+        let ejecutable: &std::ffi::OsStr = match &resuelto {
+            Some(abs) => abs.as_os_str(),
+            None if del_usuario || programa.to_str().is_none() => programa.as_os_str(),
+            None => continue,
+        };
+        let hijo = std::process::Command::new(ejecutable)
+            .args(&argv[1..])
+            .current_dir(cwd)
+            .env(
+                norte_frontend::shell::LEVEL_VAR,
+                norte_frontend::shell::next_norte_level(),
+            )
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        match hijo {
+            Ok(mut c) => {
+                let nombre = etiqueta.clone();
+                std::thread::spawn(move || match c.wait() {
+                    Ok(st) if !st.success() => {
+                        tracing::warn!(
+                            program = %nombre,
+                            code = st.code().unwrap_or(-1),
+                            "terminal emulator exited non-zero; the window may never have opened"
+                        );
+                    }
+                    _ => {}
+                });
+                return Ok(etiqueta);
+            }
+            Err(e) => {
+                // Un candidato roto no puede llevarse por delante los que
+                // vienen detrás.
+                tracing::warn!(program = %etiqueta, error = %e, "terminal candidate failed to spawn");
+            }
+        }
+    }
+    let tried = propios.join(", ");
+    if configurado {
+        Err(norte_i18n::ta(
+            "msg-terminal-none",
+            &[("configured", &etiqueta_configurada), ("tried", &tried)],
+        ))
+    } else {
+        Err(norte_i18n::ta(
+            "msg-terminal-none-unset",
+            &[("tried", &tried)],
+        ))
+    }
 }
 
 /// Sanea un mensaje de error para el banner de arranque (revisión C2/G0

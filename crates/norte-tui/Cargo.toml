@@ -38,7 +38,15 @@ thiserror.workspace = true
 ratatui.workspace = true
 sha2.workspace = true
 toml.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# `signal` (S4, #135): al suspender la TUI se apaga el raw mode, lo que
+# devuelve `ISIG` a la terminal — y el hijo se queda en el grupo de procesos
+# de norte, que es el del primer plano. Sin un manejador registrado, el Ctrl+C
+# con el que cualquiera aborta un `make` mataría también a norte (paneles,
+# tablero de tasks y el write del `--cd-file` incluidos). Registrar el
+# manejador hace que norte sobreviva mientras el hijo, cuyas disposiciones
+# `exec` devolvió a `SIG_DFL`, sí muere: exactamente lo que el usuario espera.
+# No es una dependencia nueva, es una feature de una que ya estaba.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tokio-util.workspace = true
 # Revisión S I1: `tracing::error!` para el brazo de defensa en profundidad
 # de `persist_setting` (la tarea de fondo de una escritura de ajustes se

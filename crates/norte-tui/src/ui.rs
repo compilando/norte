@@ -24,7 +24,10 @@ use norte_i18n::{t, ta};
 /// badge in-band dentro del display del item (como los títulos de modal);
 /// un favorito llamado "! x" puede imitarlo — superficie de solo-lectura
 /// propia del usuario, riesgo aceptado.
-pub(crate) const HOSTILE_BADGE: &str = "!";
+/// `pub` desde S4 (#135): el binario (`main.rs`, otra crate) compone la línea
+/// `msg-shell-remote` con la ruta ya saneada, y un literal `"!"` copiado allí
+/// sería un segundo badge que puede desincronizarse de este.
+pub const HOSTILE_BADGE: &str = "!";
 
 /// Presupuesto en CHARS de una ruta dentro de un modal, antes de la elipsis
 /// media. El mismo que ya usaban el modal de aprobación y el de colisión:
@@ -1987,6 +1990,7 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         // Sin error caen al comodín `6` de abajo (match_same_arms).
         Modal::MarkPattern { error: Some(_), .. }
         | Modal::Mkdir { error: Some(_), .. }
+        | Modal::CommandLine { error: Some(_), .. }
         | Modal::AiRenameInstruction { error: Some(_), .. }
         | Modal::SemanticQuery { error: Some(_), .. } => 7,
         // M4-IA: la línea del dir (audit MAJOR-1) + el veredicto del LOTE
@@ -2046,6 +2050,14 @@ fn is_warning_modal(modal: &crate::app::Modal) -> bool {
 /// campo, ya resueltos del efectivo `dialog` vigente.
 /// Título+cuerpo del modal activo, extraído de `draw_modal` (clippy
 /// `too_many_lines` al crecer la familia de modales).
+///
+/// Y con S4 (#135) vuelve a pasarse del tope, esta vez sin sitio al que
+/// extraer: lo que queda es una TABLA modal→texto, un brazo por variante y
+/// exhaustiva a propósito (un modal nuevo no compila hasta que alguien decide
+/// cómo se pinta). Partirla en dos mitades solo movería la frontera a un
+/// punto arbitrario y haría más difícil ver que no falta ninguna. Mismo
+/// criterio, y misma excepción, que la tabla de despacho de `main.rs`.
+#[allow(clippy::too_many_lines)] // tabla modal→texto, no lógica
 fn modal_title_body(
     modal: &crate::app::Modal,
     reinterpret: Option<norte_encoding::NameEncoding>,
@@ -2141,12 +2153,25 @@ fn modal_title_body(
         } => mark_pattern_modal_text(*mark, pattern, error.as_deref()),
         // #104: mismo enmascarado que el patrón — nombre y error son de
         // usuario (paste con bidi/invisibles incluido).
-        Modal::Mkdir { name, error } => mkdir_modal_text(name, error.as_deref()),
+        Modal::Mkdir { name, error } => {
+            free_text_modal_text("modal-mkdir", "modal-mkdir-hint", name, error.as_deref())
+        }
         // M4-IA: mismo enmascarado que mkdir — instrucción y error son texto
         // de usuario (paste con bidi/invisibles incluido).
-        Modal::AiRenameInstruction { instruction, error } => {
-            ai_rename_modal_text(instruction, error.as_deref())
-        }
+        // #135: mismo enmascarado que la instrucción IA — la línea de
+        // comandos y su diagnóstico son texto de usuario.
+        Modal::CommandLine { command, error } => free_text_modal_text(
+            "modal-command-line",
+            "modal-command-line-hint",
+            command,
+            error.as_deref(),
+        ),
+        Modal::AiRenameInstruction { instruction, error } => free_text_modal_text(
+            "modal-ai-rename",
+            "modal-ai-rename-hint",
+            instruction,
+            error.as_deref(),
+        ),
         // M4-IA: dir objetivo + ventana de parejas from→to del plan
         // revisable (enmascarado defensivo, ver `ai_rename_plan_modal_text`).
         Modal::AiRenamePlan {
@@ -2157,7 +2182,12 @@ fn modal_title_body(
         } => ai_rename_plan_modal_text(dir, entries, *offset, hints, plan),
         // M4-IA-2: mismo enmascarado que la instrucción IA — consulta y
         // error son texto de usuario.
-        Modal::SemanticQuery { query, error } => semantic_query_modal_text(query, error.as_deref()),
+        Modal::SemanticQuery { query, error } => free_text_modal_text(
+            "modal-semantic",
+            "modal-semantic-hint",
+            query,
+            error.as_deref(),
+        ),
         // M4-IA-2: ventana de hits con cursor (enmascarado defensivo, ver
         // `semantic_hits_modal_text`).
         Modal::SemanticHits {
@@ -2341,47 +2371,64 @@ fn mark_pattern_modal_text(mark: bool, pattern: &str, error: Option<&str>) -> (S
     (title, lines.join("\n"))
 }
 
-/// Título+cuerpo de `Modal::Mkdir` (#104): mismo contrato de enmascarado
-/// que `mark_pattern_modal_text` — nombre y diagnóstico son texto de
-/// usuario (el error de `Segment::new`/del engine puede embeber el nombre).
-fn mkdir_modal_text(name: &str, error: Option<&str>) -> (String, String) {
-    let (masked, hostil) = display_name(name.as_bytes());
+/// Título+cuerpo de CUALQUIER prompt de texto libre de una sola línea:
+/// campo enmascarado + hint + la línea de teclas compartida + el diagnóstico
+/// si lo hay.
+///
+/// Los tres prompts que había (`Mkdir` #104, `AiRenameInstruction` M4-IA,
+/// `SemanticQuery` M4-IA-2) eran ya LA MISMA función con ids distintos, y S4
+/// (#135) traía un cuarto: cuatro copias son cuatro sitios donde olvidar el
+/// enmascarado, que es lo único que aquí importa (el campo y el diagnóstico
+/// son texto de USUARIO — un paste con bidi/invisibles llega tan fácil a una
+/// consulta como a un nombre, y el error del engine puede embeber el nombre).
+/// La línea de teclas es compartida a propósito (FIX-A de la review T4): así
+/// los cuatro cuadran con el brazo de altura conjunto (7 con error / 6 sin
+/// él) en vez de pintar uno una línea menos.
+fn free_text_modal_text(
+    title_id: &str,
+    hint_id: &str,
+    value: &str,
+    error: Option<&str>,
+) -> (String, String) {
+    let (masked, hostil) = display_name(value.as_bytes());
+    // Ventana anclada a la DERECHA (review de S4, M4): el cuerpo del modal es
+    // un `Paragraph` sin wrap y de ancho acotado, así que un valor largo
+    // pintaba solo su cabeza y dejaba el cursor `_` fuera de pantalla — con
+    // una línea de comandos eso es pulsar Enter sin ver lo que se ejecuta.
+    // Se recorta por delante, marcando el corte, que es lo que hace cualquier
+    // editor de una línea.
+    let visible = tail_window(&masked, FREE_TEXT_FIELD_MAX);
     let campo = if hostil {
-        format!("{HOSTILE_BADGE} {masked}_")
+        format!("{HOSTILE_BADGE} {visible}_")
     } else {
-        format!("{masked}_")
+        format!("{visible}_")
     };
-    let mut lines = vec![campo, t("modal-mkdir-hint"), t("modal-mark-pattern-keys")];
+    let mut lines = vec![campo, t(hint_id), t("modal-mark-pattern-keys")];
     if let Some(err) = error {
         let (masked_err, _) = display_name(err.as_bytes());
         lines.push(masked_err);
     }
-    (t("modal-mkdir"), lines.join("\n"))
+    (t(title_id), lines.join("\n"))
 }
 
-/// Título+cuerpo de `Modal::AiRenameInstruction` (M4-IA): mismo contrato de
-/// enmascarado que `mkdir_modal_text` — la instrucción y el diagnóstico son
-/// texto de usuario.
-fn ai_rename_modal_text(instruction: &str, error: Option<&str>) -> (String, String) {
-    let (masked, hostil) = display_name(instruction.as_bytes());
-    let campo = if hostil {
-        format!("{HOSTILE_BADGE} {masked}_")
-    } else {
-        format!("{masked}_")
-    };
-    // FIX-A (review T4): misma línea de teclas compartida que
-    // `mkdir_modal_text` — así este modal cuadra con el brazo de altura
-    // conjunto (7 con error / 6 sin él) en vez de pintar una línea menos.
-    let mut lines = vec![
-        campo,
-        t("modal-ai-rename-hint"),
-        t("modal-mark-pattern-keys"),
-    ];
-    if let Some(err) = error {
-        let (masked_err, _) = display_name(err.as_bytes());
-        lines.push(masked_err);
+/// Chars visibles del campo de un prompt de texto libre. Mismo presupuesto
+/// que [`MODAL_PATH_CHARS`] (la caja del modal mide 60 y los bordes se llevan
+/// cuatro columnas), con holgura para el badge y la marca de corte.
+const FREE_TEXT_FIELD_MAX: usize = 50;
+
+/// La COLA de `s`, con `…` delante cuando algo se quedó fuera.
+///
+/// Por chars y no por bytes: cortar por bytes parte un carácter multibyte, y
+/// lo que se pinta son chars ya enmascarados (`display_name` no deja
+/// controles ni bidi crudos, así que ninguno de los que quedan puede
+/// reconfigurar la terminal al aparecer a media secuencia).
+fn tail_window(s: &str, max: usize) -> String {
+    let total = s.chars().count();
+    if total <= max {
+        return s.to_owned();
     }
-    (t("modal-ai-rename"), lines.join("\n"))
+    let cola: String = s.chars().skip(total - max.saturating_sub(1)).collect();
+    format!("…{cola}")
 }
 
 /// Prefija el badge hostil FUERA de la traducción (audit MINOR-5: el
@@ -2504,29 +2551,6 @@ fn ai_rename_plan_modal_text(
         t("modal-rename-batch-plan-hint-blocked")
     });
     (t("modal-ai-rename-plan"), lines.join("\n"))
-}
-
-/// Título+cuerpo de `Modal::SemanticQuery` (M4-IA-2): mismo contrato de
-/// enmascarado que `ai_rename_modal_text` — la consulta y el diagnóstico son
-/// texto de usuario. Misma línea de teclas compartida (FIX-A): el modal
-/// cuadra con el brazo de altura conjunto (7 con error / 6 sin él).
-fn semantic_query_modal_text(query: &str, error: Option<&str>) -> (String, String) {
-    let (masked, hostil) = display_name(query.as_bytes());
-    let campo = if hostil {
-        format!("{HOSTILE_BADGE} {masked}_")
-    } else {
-        format!("{masked}_")
-    };
-    let mut lines = vec![
-        campo,
-        t("modal-semantic-hint"),
-        t("modal-mark-pattern-keys"),
-    ];
-    if let Some(err) = error {
-        let (masked_err, _) = display_name(err.as_bytes());
-        lines.push(masked_err);
-    }
-    (t("modal-semantic"), lines.join("\n"))
 }
 
 /// Título+cuerpo de `Modal::SemanticHits` (M4-IA-2, doctrina
@@ -2883,15 +2907,69 @@ mod transfer_name_modal_text_tests {
 }
 
 #[cfg(test)]
-mod mkdir_modal_text_tests {
-    use super::mkdir_modal_text;
+mod free_text_modal_text_tests {
+    use super::{free_text_modal_text, tail_window};
+
+    /// Cada prompt de texto libre usa SUS ids y los cuatro existen en ambos
+    /// locales (review de S4, m5). Sin esto, un id con typo se pintaría tal
+    /// cual en pantalla —Fluent cae al propio id— con el gate en verde.
+    #[test]
+    fn cada_prompt_resuelve_su_titulo_y_su_hint() {
+        let casos = [
+            ("modal-mkdir", "modal-mkdir-hint"),
+            ("modal-command-line", "modal-command-line-hint"),
+            ("modal-ai-rename", "modal-ai-rename-hint"),
+            ("modal-semantic", "modal-semantic-hint"),
+        ];
+        for (titulo, hint) in casos {
+            let (t, cuerpo) = free_text_modal_text(titulo, hint, "x", None);
+            assert_ne!(t, titulo, "{titulo} sin traducción: sale el id crudo");
+            let linea_hint = cuerpo.lines().nth(1).expect("hint");
+            assert_ne!(linea_hint, hint, "{hint} sin traducción: sale el id crudo");
+        }
+    }
+
+    /// El campo enseña la COLA, con la marca del corte, para que el cursor
+    /// esté siempre a la vista: un comando cuyo final no se ve es un comando
+    /// que se ejecuta a ciegas.
+    #[test]
+    fn un_valor_largo_ensena_su_cola_y_marca_el_corte() {
+        let largo = "a".repeat(300);
+        let (_, cuerpo) = free_text_modal_text(
+            "modal-command-line",
+            "modal-command-line-hint",
+            &largo,
+            None,
+        );
+        let campo = cuerpo.lines().next().expect("campo");
+        assert!(campo.starts_with('…'), "el corte se marca: {campo:?}");
+        assert!(campo.ends_with('_'), "y el cursor se ve: {campo:?}");
+        assert!(
+            campo.chars().count() <= 52,
+            "acotado: {}",
+            campo.chars().count()
+        );
+    }
+
+    /// `tail_window` cuenta CHARS, no bytes: cortar por bytes partiría un
+    /// carácter multibyte por la mitad.
+    #[test]
+    fn la_ventana_de_cola_cuenta_chars() {
+        assert_eq!(tail_window("abc", 10), "abc");
+        assert_eq!(tail_window("abcdef", 3), "…ef");
+        let cjk = "日本語のファイル";
+        let w = tail_window(cjk, 4);
+        assert_eq!(w.chars().count(), 4);
+        assert!(w.starts_with('…'));
+    }
 
     /// Mismo pin que el del patrón (#103 M4): fn PURA — un RLO crudo en el
     /// nombre Y en el error sale enmascarado en AMBAS líneas.
     #[test]
     fn masks_a_raw_rtl_override_in_name_and_error() {
         let hostile = "abc\u{202E}rid";
-        let (_, cuerpo) = mkdir_modal_text(hostile, Some(hostile));
+        let (_, cuerpo) =
+            free_text_modal_text("modal-mkdir", "modal-mkdir-hint", hostile, Some(hostile));
         assert!(!cuerpo.contains('\u{202E}'), "{cuerpo:?}");
         assert_eq!(cuerpo.matches('\u{FFFD}').count(), 2, "{cuerpo:?}");
     }

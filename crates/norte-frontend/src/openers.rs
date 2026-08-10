@@ -174,19 +174,50 @@ impl Opener {
 /// (stat), sin ejecutar nada — la base de la degradación limpia («instala X»).
 #[must_use]
 pub fn program_available(program: &str) -> bool {
+    resolve_program(program).is_some()
+}
+
+/// La ruta ABSOLUTA del binario que `program` nombra, o `None` si no se
+/// encuentra. Mismo sondeo que [`program_available`] —del que es ahora la
+/// implementación— pero devolviendo QUÉ se encontró.
+///
+/// La diferencia importa cuando el hijo se lanza con `Command::current_dir`
+/// puesto (S4, `app.terminal`): en unix, `current_dir` se aplica ANTES de
+/// resolver el programa, así que un nombre relativo lo resuelve `execvp`
+/// contra el directorio que el usuario está NAVEGANDO, no contra el de
+/// norte. Con un `.` (o un componente vacío) en el `PATH`, un fichero
+/// llamado `kitty` dentro de un archivo recién extraído se ejecutaría como
+/// el usuario — y la sonda no lo vería, porque ella corre con el cwd de
+/// norte: sonda y lanzamiento estarían mirando directorios distintos por
+/// construcción. Lanzar la ruta absoluta que devolvió la sonda es lo que
+/// hace que los dos coincidan.
+///
+/// Un `program` que YA es absoluto se devuelve tal cual si existe. Uno
+/// relativo con separador (`./tool`) se resuelve contra el cwd actual y se
+/// canonicaliza a absoluto, por el mismo motivo.
+#[must_use]
+pub fn resolve_program(program: &str) -> Option<std::path::PathBuf> {
     let p = Path::new(program);
     if p.is_absolute() {
-        return is_executable(p);
+        return is_executable(p).then(|| p.to_path_buf());
     }
     // Un nombre con separador pero relativo (`./tool`) se resuelve contra el
     // cwd; uno simple (`bat`) se busca en el PATH.
     if program.contains(std::path::MAIN_SEPARATOR) {
-        return is_executable(p);
+        if !is_executable(p) {
+            return None;
+        }
+        // Absoluto ANTES de que nadie cambie el cwd del hijo.
+        return std::env::current_dir().ok().map(|c| c.join(p));
     }
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| is_executable(&dir.join(program)))
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(program))
+        // Una entrada VACÍA del `PATH` significa «el directorio actual», que
+        // para un hijo con `current_dir` puesto es el directorio navegado:
+        // jamás se resuelve contra él, ni siquiera si existe.
+        .filter(|c| c.is_absolute())
+        .find(|c| is_executable(c))
 }
 
 /// `true` si `p` existe y (en unix) tiene algún bit de ejecución.

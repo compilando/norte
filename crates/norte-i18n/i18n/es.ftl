@@ -36,6 +36,13 @@ modal-mkdir-hint = nombre del directorio nuevo
 modal-transfer-name-copy = Copiar a
 modal-transfer-name-move = Mover a
 modal-transfer-name-hint = nombre en el destino (edítalo para renombrar)
+# `pane.command-line` (#135): el prompt de texto libre cuyo Enter corre
+# `$SHELL -c CMD` en el directorio del pane, con la TUI suspendida. Mismo
+# molde que los prompts de mkdir/renombrado IA.
+modal-command-line = Ejecutar un comando
+modal-command-line-hint = se ejecuta en el directorio del pane activo
+modal-command-line-empty = escribe un comando primero
+modal-command-line-too-long = la línea de comandos está llena ({ $max } caracteres); el resto no se escribió
 modal-ai-rename = Renombrado IA — instrucción
 modal-ai-rename-hint = Enter: pedir plan · Esc: cancelar
 modal-ai-rename-empty-instruction = escribe una instrucción primero
@@ -322,6 +329,33 @@ msg-open-missing-program = el opener necesita `{ $program }` — no instalado
 msg-open-remote = los openers solo funcionan con archivos locales
 msg-open-launched = abierto con { $program }
 msg-open-failed = no se pudo lanzar { $program }: { $error }
+# #135 (S4) — suspensión. Un pane que no es `file://` no tiene directorio
+# donde pueda sentarse un shell local, así que se declina en vez de abrirlo en
+# otro sitio. `$path` llega ya saneado (`path_display`): la línea aterriza en
+# la terminal del usuario, después de que norte la haya soltado.
+msg-shell-remote = el pane activo es { $path }; un shell ahí no estaría donde estás mirando
+msg-shell-failed = no se pudo ejecutar { $program }: { $error }
+# El pane SÍ es local, pero su forma nativa solo la expresa el espacio de
+# nombres verbatim `\\?\` (un nombre de dispositivo reservado, un punto o un
+# espacio final, o más de 260 caracteres) — y `CreateProcessW` no lo acepta.
+# Quitarlo abriría el hijo en otro sitio sin decirlo.
+msg-shell-cwd-unsupported = { $path } no puede ser el directorio de trabajo de un programa en este sistema
+# Se imprime en la terminal ANFITRIONA tras una suspensión que espera
+# (`Ctrl+O`, y después de una línea de comandos): los paneles ya no están y
+# esto es lo único que le dice al lector que norte sigue ahí.
+msg-shell-press-key = [norte] pulsa una tecla para volver
+# El `app.terminal` de la GUI (§E): nada respondió en este escritorio, así que
+# se dice qué se intentó en vez de no hacer nada.
+# `$configured` es el $TERMINAL del usuario y `$tried` la lista cerrada de
+# norte. Van SEPARADOS a propósito: juntar un valor ajeno en un informe
+# separado por `", "` deja que un ajuste se lea como dos entradas
+# (`TERMINAL='kitty, konsole'`), que es el spoof de la flecha con una coma.
+# Nada ajeno comparte jamás separador con nada.
+msg-terminal-none = $TERMINAL es { $configured } y no se encontró ningún emulador de terminal; norte probó además su propia lista ({ $tried })
+msg-terminal-none-unset = $TERMINAL no está definido y no se encontró ningún emulador de terminal; norte probó { $tried }
+help-cmd-app-terminal = abrir un shell en el directorio del pane activo
+help-cmd-app-toggle-panels = ocultar los paneles y enseñar la terminal
+help-cmd-pane-command-line = ejecutar un comando en el directorio del pane activo
 cli-ls-skipped = aviso: { $n } entradas del contenedor omitidas del índice (nombres hostiles/límites)
 
 # --- Ayuda (F1) — construida del keymap efectivo ---
@@ -722,7 +756,6 @@ keymap-reason-volume-enumeration = enumeración de volúmenes
 keymap-reason-archive-write = escritura de archivos comprimidos
 keymap-reason-editor = editor integrado
 keymap-reason-compare-sync = comparación y sincronización de directorios
-keymap-reason-shell = shell integrada
 keymap-reason-tree = panel de árbol de directorios
 keymap-reason-tabs = pestañas de panel
 keymap-reason-sort = comandos de ordenación

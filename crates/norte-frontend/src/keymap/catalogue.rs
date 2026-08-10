@@ -74,7 +74,16 @@ pub const CATALOGUE: &[CommandDef] = &[
     // `--pick` too, which is exactly what keeping it out of every preset
     // prevents.
     live("app.pick-accept", false),
+    // #135 (S4): the TUI builds these by SUSPENDING itself — it hands the
+    // whole terminal over and takes it back. `app.terminal` is also live in
+    // the GUI, which cannot suspend and launches the desktop's terminal
+    // emulator instead; the other two are TUI-only and resolve to
+    // `Availability::NotHere` there, which is the truth and is what the
+    // reference sheet greys out.
+    live("app.terminal", false),
+    live("app.toggle-panels", false),
     // --- pane ---
+    live("pane.command-line", false),
     live("pane.switch", false),
     live("pane.mirror", false),
     live("pane.pull", false),
@@ -171,9 +180,11 @@ pub const CATALOGUE: &[CommandDef] = &[
     // Far), and every one of them binds keys norte has not built. The choice
     // is between binding them HONESTLY — the key exists, says what it would
     // do and names the issue — and leaving them unbound, where the user
-    // presses F4 and gets silence. Twenty-eight entries in ten families
-    // (nine of them new: `pane.select-drive` was already here and its family
-    // just grows two siblings). Each family is one capability and one issue;
+    // presses F4 and gets silence. K2b left twenty-eight entries in ten
+    // families here (nine of them new: `pane.select-drive` was already here
+    // and its family just grew two siblings); S4 built the shell family and
+    // took its three away, so nine families remain. Each is one capability
+    // and one issue;
     // `planned()` forces `counts: false`, which is right for all of them —
     // none is a clamped in-memory mover (ADR 0044).
     planned("pane.select-drive", "keymap-reason-volume-enumeration", 131),
@@ -196,9 +207,9 @@ pub const CATALOGUE: &[CommandDef] = &[
     planned("pane.edit-new", "keymap-reason-editor", 133),
     planned("pane.compare-dirs", "keymap-reason-compare-sync", 134),
     planned("pane.sync-dirs", "keymap-reason-compare-sync", 134),
-    planned("app.terminal", "keymap-reason-shell", 135),
-    planned("app.toggle-panels", "keymap-reason-shell", 135),
-    planned("pane.command-line", "keymap-reason-shell", 135),
+    // The three of issue #135 left this block in S4 and are `live` above; the
+    // family's reason id (`keymap-reason-shell`) went with them, out of both
+    // locales, because nothing else claimed it.
     planned("pane.tree", "keymap-reason-tree", 136),
     planned("pane.tab-new", "keymap-reason-tabs", 137),
     planned("pane.tab-close", "keymap-reason-tabs", 137),

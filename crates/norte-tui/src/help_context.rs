@@ -37,6 +37,7 @@ pub const CONTEXTS: &[&str] = &[
     "dialog.mark-pattern",
     "dialog.transfer-name",
     "dialog.mkdir",
+    "dialog.command-line",
     "dialog.ai-rename",
     "dialog.semantic-search",
 ];
@@ -68,6 +69,7 @@ fn modal_context(modal: &Modal) -> &'static str {
         Modal::MarkPattern { .. } => "dialog.mark-pattern",
         Modal::TransferName { .. } => "dialog.transfer-name",
         Modal::Mkdir { .. } => "dialog.mkdir",
+        Modal::CommandLine { .. } => "dialog.command-line",
         Modal::AiRenameInstruction { .. } | Modal::AiRenamePlan { .. } => "dialog.ai-rename",
         Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => "dialog.semantic-search",
     }
@@ -79,10 +81,10 @@ fn modal_context(modal: &Modal) -> &'static str {
 /// is a decision about a security-relevant property, and a new modal variant
 /// must not be able to inherit an answer nobody chose.
 ///
-/// `false` for the SIX variants the run loop intercepts before the `dialog`
-/// keymap ever resolves — the five free-text editors (`Modal::Mkdir`,
-/// `Modal::MarkPattern`, `Modal::AiRenameInstruction`, `Modal::SemanticQuery`,
-/// `Modal::TransferName`) plus the project `init.lua` TOFU
+/// `false` for the SEVEN variants the run loop intercepts before the `dialog`
+/// keymap ever resolves — the six free-text editors (`Modal::Mkdir`,
+/// `Modal::MarkPattern`, `Modal::CommandLine`, `Modal::AiRenameInstruction`,
+/// `Modal::SemanticQuery`, `Modal::TransferName`) plus the project `init.lua` TOFU
 /// (`Modal::TrustLuaInit`). They were already excluded, but only as the residue
 /// of that interception 3000 lines away in `main`: moving one onto the `dialog`
 /// keymap — a plausible cleanup — would have opened a help page over a text
@@ -109,6 +111,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         Modal::TrustLuaInit { .. }
         | Modal::MarkPattern { .. }
         | Modal::Mkdir { .. }
+        | Modal::CommandLine { .. }
         | Modal::AiRenameInstruction { .. }
         | Modal::SemanticQuery { .. }
         | Modal::TransferName { .. } => false,
@@ -240,6 +243,10 @@ mod tests {
             },
             Modal::Mkdir {
                 name: "nuevo".into(),
+                error: None,
+            },
+            Modal::CommandLine {
+                command: "make test".into(),
                 error: None,
             },
             Modal::AiRenameInstruction {

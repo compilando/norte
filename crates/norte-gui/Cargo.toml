@@ -39,6 +39,12 @@ norte-config = { path = "../norte-config", version = "0.3.0-alpha.2" }
 # Strings de UI por Fluent (GUI-e T1): mismos bundles es/en que la TUI
 # (`crates/norte-i18n/i18n/*.ftl`), por path como el resto de los internos.
 norte-i18n = { path = "../norte-i18n" }
+# S4 (#135): un emulador de terminal que arranca y se rinde (un flag de cwd
+# que su versión no acepta, un `xdg-terminal-exec` sin entrada de escritorio)
+# es la única forma de que `app.terminal` acabe en un no-op mudo, y el hilo
+# que entierra al hijo es el único sitio donde se ve. No añade nada al árbol:
+# `tracing` ya entra por `norte-core`, esto solo la enlaza también aquí.
+tracing.workspace = true
 # Vocabulario de disponibilidad (`Availability`/`Reason`) del menú contextual
 # (plan de ratón, tarea 4). QUÉ aporta: el corpus de ayuda YA define cómo se
 # dice «esta operación no puede correr ahora, y por esto» — reusarlo evita un

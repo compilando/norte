@@ -3,10 +3,17 @@
 //!
 //! Nothing here touches a terminal or spawns anything, so all of it is
 //! unit-testable without a tty. This module carries `--pick` (§B): the
-//! picker's byte-exact output; and `cd_bytes`/`Shell` (§C): what goes in the
-//! `--cd-file` and the wrapper text `norte shell-init` prints.
-//! `login_shell`/`terminal_argv` (§D/§E) land in a later task of the same
-//! plan.
+//! picker's byte-exact output; `cd_bytes`/`Shell` (§C): what goes in the
+//! `--cd-file` and the wrapper text `norte shell-init` prints; and
+//! `login_shell`/`terminal_candidates`/`next_norte_level` (§D/§E): WHICH
+//! program a suspension or the GUI launches, and the marker its child
+//! inherits.
+//!
+//! The `*_from` functions take the environment as an ARGUMENT and the thin
+//! wrappers read `std::env` and call them. That split is not decoration: a
+//! test that set a process-wide env var would race every other test in the
+//! same binary, and `std::env::set_var` is `unsafe` since Rust 2024 anyway
+//! (rule 5 — this crate forbids `unsafe`).
 
 /// The picker's output: every path's bytes, each followed by a NUL.
 ///
@@ -156,6 +163,358 @@ impl Shell {
     }
 }
 
+/// The environment variable a norte-launched child inherits, one higher than
+/// the one norte itself was started with.
+///
+/// Same idea as `SHLVL`: a user who opens a shell from norte (`app.terminal`)
+/// and runs `ntc` inside it has two of them, and without a marker the second
+/// quit looks like the first one failing. norte never READS this back into
+/// behaviour — the consumer is the user's own prompt, which is exactly where
+/// the information is needed.
+pub const LEVEL_VAR: &str = "NORTE_LEVEL";
+
+/// The user's interactive shell: `$SHELL`, else `/bin/sh` (`%COMSPEC%`, else
+/// `cmd.exe`, on Windows).
+///
+/// Reads the environment; the decision itself is [`login_shell_from`].
+#[must_use]
+pub fn login_shell() -> std::path::PathBuf {
+    let var = if cfg!(windows) { "COMSPEC" } else { "SHELL" };
+    login_shell_from(std::env::var_os(var).as_deref())
+}
+
+/// Testable core of [`login_shell`].
+///
+/// An ABSENT variable and an EMPTY one are the same answer, deliberately:
+/// `SHELL=` is what a stripped `env -i` leaves behind, and
+/// `Command::new("")` is not an error here — it is a confusing spawn failure
+/// several stack frames later, with no hint that the environment was the
+/// problem. The fallback is a path POSIX requires to exist.
+///
+/// A RELATIVE `$SHELL` gets the same answer, and that one is a security
+/// decision rather than a convenience (S4 security review, MAJOR-2). The
+/// child is spawned with `Command::current_dir` pointing at the directory the
+/// user is BROWSING, and on unix `current_dir` is applied before the program
+/// is resolved — so `SHELL=bash` with a `.` (or an empty component) anywhere
+/// in `PATH` would execute a file called `bash` out of a directory whose
+/// contents nobody vouched for: extract a hostile archive, walk into it,
+/// press the key. `$SHELL` is conventionally an absolute path out of
+/// `/etc/passwd`; refusing anything else costs nothing real and closes that
+/// door for good.
+///
+/// The value is taken as bytes (`OsStr`), never through a lossy `String`: a
+/// shell can live under a non-UTF-8 path like anything else (rule 1).
+#[must_use]
+pub fn login_shell_from(env_shell: Option<&std::ffi::OsStr>) -> std::path::PathBuf {
+    let fallback = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
+    match env_shell {
+        Some(s) if !s.is_empty() && std::path::Path::new(s).is_absolute() => {
+            std::path::PathBuf::from(s)
+        }
+        _ => std::path::PathBuf::from(fallback),
+    }
+}
+
+/// The argv that runs ONE command line through `shell`, non-interactively.
+///
+/// The flag is a DECISION and belongs here, not in a frontend (rule 7): POSIX
+/// shells take `-c`, `cmd.exe` takes `/C` and PowerShell takes `-Command`. A
+/// TUI that hardcodes `-c` gives a Windows user a usage error from `cmd.exe`
+/// and a command that never ran (S4 rust review, MAJOR-1).
+///
+/// The line travels as ONE argument, never split: the shell owns that
+/// grammar — pipes, quoting, globs — and any splitting norte did here would
+/// be a second, different grammar that disagrees with the one about to parse
+/// it.
+#[must_use]
+pub fn shell_command_argv(shell: &std::path::Path, cmd: &str) -> Vec<std::ffi::OsString> {
+    vec![
+        shell.as_os_str().to_os_string(),
+        std::ffi::OsString::from(command_flag_for(shell)),
+        std::ffi::OsString::from(cmd),
+    ]
+}
+
+/// The "run this one line" flag of a shell, by file name.
+///
+/// Matching on the file name and not the whole path so `/usr/bin/pwsh` and a
+/// bare `pwsh` agree. Anything unrecognised gets the POSIX `-c`, which is the
+/// right default on unix and the right guess for a POSIX-ish shell installed
+/// on Windows (`bash.exe` from Git for Windows takes `-c`, not `/C`).
+///
+/// The last component is taken by splitting on BOTH separators rather than
+/// through `Path::file_name`, which only knows the host's: a unix build
+/// handed `C:\...\cmd.exe` would otherwise see the whole string as one name
+/// and answer `-c`. The decision should not depend on which OS is asking.
+fn command_flag_for(shell: &std::path::Path) -> &'static str {
+    let full = shell.to_string_lossy().to_ascii_lowercase();
+    let name = full.rsplit(['/', '\\']).next().unwrap_or(&full);
+    match name.trim_end_matches(".exe") {
+        "cmd" => "/C",
+        "powershell" | "pwsh" => "-Command",
+        _ => "-c",
+    }
+}
+
+/// The directory as a child process can receive it, or `None` when it cannot.
+///
+/// On unix this is the path unchanged. On Windows it is the point where two
+/// requirements of this repository collide (S4 encoding audit, M5):
+/// `norte_vfs_local::vpath_to_native` deliberately returns a VERBATIM
+/// (`\\?\`) path so that reserved names, trailing dots and spaces, and paths
+/// over 260 characters survive at all — and `CreateProcessW`'s
+/// `lpCurrentDirectory` does not accept that namespace, nor does `wt -d`.
+/// Handing one over either fails the spawn or, worse, opens the terminal
+/// somewhere else.
+///
+/// So the prefix is stripped when stripping is LOSSLESS, and the answer is
+/// `None` when it is not — a path that only exists because of the prefix
+/// cannot be a child's working directory, and saying so is better than
+/// opening a shell in a directory that is not the one on screen. The caller
+/// turns `None` into a message.
+#[must_use]
+pub fn child_cwd(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    #[cfg(not(windows))]
+    {
+        Some(dir.to_path_buf())
+    }
+    #[cfg(windows)]
+    {
+        let text = dir.to_str()?;
+        let Some(stripped) = text.strip_prefix(VERBATIM_PREFIX) else {
+            return Some(dir.to_path_buf());
+        };
+        // UNC in verbatim form (`\\?\UNC\server\share`) has no plain spelling
+        // that means the same thing to `CreateProcessW`.
+        if stripped.len() >= 260 || stripped.starts_with("UNC\\") {
+            return None;
+        }
+        // Without the prefix, Win32 path munging eats a trailing dot or space
+        // and reinterprets a reserved device name — the very things the
+        // prefix was there to protect.
+        for component in stripped.split('\\') {
+            if component.is_empty() {
+                continue;
+            }
+            if component.ends_with('.') || component.ends_with(' ') {
+                return None;
+            }
+            let stem = component
+                .split_once('.')
+                .map_or(component, |(s, _)| s)
+                .to_ascii_uppercase();
+            if WIN_RESERVED.contains(&stem.as_str()) {
+                return None;
+            }
+        }
+        Some(std::path::PathBuf::from(stripped))
+    }
+}
+
+/// The verbatim prefix `norte_vfs_local::vpath_to_native` puts on every
+/// Windows path.
+#[cfg(windows)]
+const VERBATIM_PREFIX: &str = r"\\?\";
+
+/// The device names Win32 still reinterprets in a non-verbatim path.
+#[cfg(windows)]
+const WIN_RESERVED: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// The terminal emulators probed, in order, when `$TERMINAL` says nothing.
+///
+/// Deliberately SHORT and unix-only. It is not a compatibility list to grow
+/// forever: `$TERMINAL` and `xdg-terminal-exec` are the answers a desktop is
+/// supposed to give, and this is the fallback for a desktop that gives
+/// neither.
+#[cfg(all(unix, not(target_os = "macos")))]
+const UNIX_TERMINALS: &[&str] = &[
+    "ghostty",
+    "kitty",
+    "alacritty",
+    "wezterm",
+    "konsole",
+    "gnome-terminal",
+    "xterm",
+];
+
+/// The cwd argument a known terminal emulator needs, if it needs one.
+///
+/// Every candidate is also spawned with `current_dir(dir)` set, which is what
+/// makes `xterm` and `$TERMINAL` land in the right place. These flags exist
+/// for the emulators that do NOT honour the launching process's cwd: a
+/// `gnome-terminal` or `konsole` served by an already-running instance takes
+/// the SERVER's cwd, so the child would open in the user's home and look like
+/// norte simply ignored the pane.
+///
+/// Only members of [`UNIX_TERMINALS`] appear here — a closed set whose flags
+/// we can state. `$TERMINAL` is an arbitrary program and gets no flag guessed
+/// at it: an unknown flag does not degrade, it stops the terminal opening at
+/// all.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn cwd_args(program: &str, dir: &std::path::Path) -> Vec<std::ffi::OsString> {
+    use std::ffi::OsString;
+    // Byte-exact concatenation: `OsString::push` never goes through `str`, so
+    // a directory whose name is not UTF-8 survives into the argv (rule 1).
+    let glued = |flag: &str| {
+        let mut s = OsString::from(flag);
+        s.push(dir.as_os_str());
+        vec![s]
+    };
+    let separate = |flag: &str| vec![OsString::from(flag), OsString::from(dir.as_os_str())];
+    match program {
+        "ghostty" | "gnome-terminal" => glued("--working-directory="),
+        "kitty" => glued("--directory="),
+        "alacritty" => separate("--working-directory"),
+        "wezterm" => vec![
+            OsString::from("start"),
+            OsString::from("--cwd"),
+            OsString::from(dir.as_os_str()),
+        ],
+        "konsole" => separate("--workdir"),
+        // `xterm` has no such flag and inherits the cwd, which is the case
+        // `current_dir` already covers.
+        _ => Vec::new(),
+    }
+}
+
+/// Every argv worth trying, in order, to open a terminal emulator sitting in
+/// `dir` — for a frontend that cannot suspend (the GUI, §E).
+///
+/// A LIST and not one answer because choosing needs a PATH probe, and this
+/// function does no I/O (rule 2: the caller probes with
+/// [`crate::openers::program_available`] off the UI thread). Empty means
+/// nothing plausible exists on this platform, which the caller reports rather
+/// than swallowing.
+///
+/// Reads the environment; the decision itself is
+/// [`terminal_candidates_from`].
+#[must_use]
+pub fn terminal_candidates(dir: &std::path::Path) -> Vec<Vec<std::ffi::OsString>> {
+    terminal_candidates_from(std::env::var_os("TERMINAL").as_deref(), dir)
+}
+
+/// Testable core of [`terminal_candidates`].
+///
+/// Order on unix: `$TERMINAL` (the user's explicit answer, which beats every
+/// probe), then `xdg-terminal-exec` (the desktop's own answer), then
+/// [`UNIX_TERMINALS`]. macOS is `open -a Terminal <dir>`, which is the
+/// desktop's answer and the only one. Windows is `wt` then `cmd`.
+#[must_use]
+pub fn terminal_candidates_from(
+    env_terminal: Option<&std::ffi::OsStr>,
+    dir: &std::path::Path,
+) -> Vec<Vec<std::ffi::OsString>> {
+    use std::ffi::OsString;
+    let mut out: Vec<Vec<OsString>> = Vec::new();
+    // `$TERMINAL` first on every platform: an explicit answer is never
+    // overruled by a probe. Empty is treated as unset, like `$SHELL`.
+    if let Some(t) = env_terminal.filter(|t| !t.is_empty()) {
+        let mut argv = vec![OsString::from(t)];
+        // `TERMINAL=gnome-terminal` is an ordinary setting, and it needs the
+        // same cwd flag the probe list would have given it (S4 rust review,
+        // m1): without it the user hits exactly the server-owned-cwd bug
+        // `cwd_args` exists to prevent, because their configuration took the
+        // one branch that skipped it. Matched on the FILE NAME, so
+        // `/usr/bin/konsole` counts; anything not on the closed list still
+        // gets nothing guessed at it.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            if let Some(known) = std::path::Path::new(t)
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .filter(|n| UNIX_TERMINALS.contains(n))
+            {
+                argv.extend(cwd_args(known, dir));
+            }
+        }
+        out.push(argv);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        out.push(vec![
+            OsString::from("open"),
+            OsString::from("-a"),
+            OsString::from("Terminal"),
+            OsString::from(dir.as_os_str()),
+        ]);
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        out.push(vec![OsString::from("xdg-terminal-exec")]);
+        for program in UNIX_TERMINALS {
+            let mut argv = vec![OsString::from(*program)];
+            argv.extend(cwd_args(program, dir));
+            out.push(argv);
+        }
+    }
+    #[cfg(windows)]
+    {
+        out.push(vec![
+            OsString::from("wt"),
+            OsString::from("-d"),
+            OsString::from(dir.as_os_str()),
+        ]);
+        out.push(vec![OsString::from("cmd")]);
+    }
+    // `dir` is genuinely unused on a platform with no branch above; naming it
+    // keeps the signature stable rather than cfg-ing the parameter itself.
+    let _ = dir;
+    out
+}
+
+/// The FIRST candidate of [`terminal_candidates`], with no PATH probe.
+///
+/// `None` when the platform offers none. This is the documented "what would
+/// we run, absent any probe" accessor and nothing in norte calls it: the GUI
+/// uses the full list, because reporting "nothing found" honestly means
+/// naming everything that was tried (S4 rust review, m2 — kept deliberately,
+/// as the named first-choice question, rather than left as an accident).
+#[must_use]
+pub fn terminal_argv(dir: &std::path::Path) -> Option<Vec<std::ffi::OsString>> {
+    terminal_candidates(dir).into_iter().next()
+}
+
+/// Testable core of [`terminal_argv`].
+#[must_use]
+pub fn terminal_argv_from(
+    env_terminal: Option<&std::ffi::OsStr>,
+    dir: &std::path::Path,
+) -> Option<Vec<std::ffi::OsString>> {
+    terminal_candidates_from(env_terminal, dir)
+        .into_iter()
+        .next()
+}
+
+/// The value of [`LEVEL_VAR`] a child should get.
+///
+/// Reads the environment; the decision itself is [`next_norte_level_from`].
+#[must_use]
+pub fn next_norte_level() -> String {
+    next_norte_level_from(std::env::var_os(LEVEL_VAR).as_deref())
+}
+
+/// Testable core of [`next_norte_level`].
+///
+/// Anything that is not a plain decimal `u32` counts as zero, so the child
+/// gets `"1"`. That is the only safe reading: the variable is inherited from
+/// whatever launched norte, so it is UNTRUSTED input — a negative number, a
+/// 4 GiB string, `1; rm -rf /`, or a non-UTF-8 byte sequence must all produce
+/// a plain small decimal rather than propagating. Saturating at
+/// [`u32::MAX`] rather than wrapping: a counter that goes back to zero after
+/// enough nesting is a counter that lies, and an overflow would panic in
+/// debug.
+#[must_use]
+pub fn next_norte_level_from(current: Option<&std::ffi::OsStr>) -> String {
+    let n: u32 = current
+        .and_then(std::ffi::OsStr::to_str)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    n.saturating_add(1).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +584,227 @@ mod tests {
             assert!(!w.contains("$(cat"), "{sh:?} uses $(cat …)");
             assert!(!w.contains("(cat "), "{sh:?} uses (cat …)");
         }
+    }
+
+    /// `$SHELL` wins; without it, something that certainly exists. Never an
+    /// empty argv — `Command::new("")` is a confusing spawn error much later.
+    #[test]
+    fn login_shell_falls_back_to_a_real_shell() {
+        assert_eq!(
+            login_shell_from(Some("/bin/zsh".as_ref())),
+            std::path::PathBuf::from("/bin/zsh")
+        );
+        assert!(!login_shell_from(None).as_os_str().is_empty());
+        assert!(
+            !login_shell_from(Some("".as_ref())).as_os_str().is_empty(),
+            "`SHELL=` is what `env -i` leaves behind, and it is not a shell"
+        );
+    }
+
+    /// A RELATIVE `$SHELL` is refused (S4 security review, MAJOR-2): the
+    /// child is spawned with the BROWSED directory as cwd, and on unix that
+    /// cwd is applied before the program is resolved — so `SHELL=bash` plus a
+    /// `.` in `PATH` runs a `bash` out of whatever the user just walked into.
+    #[test]
+    fn a_relative_login_shell_is_refused_not_resolved_against_the_browsed_dir() {
+        let fallback = login_shell_from(None);
+        for relativo in ["bash", "./bash", "../bin/bash", "bin/sh"] {
+            assert_eq!(
+                login_shell_from(Some(relativo.as_ref())),
+                fallback,
+                "{relativo:?} must not become a program looked up next to the user's files"
+            );
+        }
+        assert_ne!(
+            login_shell_from(Some("/bin/zsh".as_ref())),
+            fallback,
+            "an absolute one is still honoured"
+        );
+    }
+
+    /// The one-shot flag is a per-shell DECISION, and it lives here rather
+    /// than in a frontend: `cmd.exe -c` is a usage error and a command that
+    /// never ran.
+    #[test]
+    fn the_one_shot_flag_follows_the_shell() {
+        let flag = |p: &str| {
+            shell_command_argv(std::path::Path::new(p), "echo hi")[1]
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert_eq!(flag("/bin/sh"), "-c");
+        assert_eq!(flag("/usr/bin/zsh"), "-c");
+        assert_eq!(flag(r"C:\Windows\System32\cmd.exe"), "/C");
+        assert_eq!(flag("CMD.EXE"), "/C");
+        assert_eq!(flag("/usr/bin/pwsh"), "-Command");
+        assert_eq!(
+            flag("/usr/bin/bash.exe"),
+            "-c",
+            "a POSIX shell on Windows is still a POSIX shell"
+        );
+        // And the line is ONE argument, whatever it contains.
+        let a = shell_command_argv(std::path::Path::new("/bin/sh"), "ls | wc -l && echo 'a b'");
+        assert_eq!(a.len(), 3);
+        assert_eq!(a[2], std::ffi::OsString::from("ls | wc -l && echo 'a b'"));
+    }
+
+    /// On unix a directory is handed to a child unchanged; the interesting
+    /// half of [`child_cwd`] is Windows-only and tested there.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_unix_directory_reaches_the_child_unchanged() {
+        let d = std::path::Path::new("/tmp/x");
+        assert_eq!(child_cwd(d).as_deref(), Some(d));
+    }
+
+    /// Windows: the verbatim prefix is stripped when that is lossless, and
+    /// REFUSED when the path only exists because of it (S4 encoding audit,
+    /// M5) — `CreateProcessW` and `wt -d` do not speak that namespace, and a
+    /// silently munged path opens the terminal somewhere else.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_verbatim_path_is_stripped_or_refused_never_munged() {
+        use std::path::{Path, PathBuf};
+        assert_eq!(
+            child_cwd(Path::new(r"\\?\C:\proj")),
+            Some(PathBuf::from(r"C:\proj"))
+        );
+        // Trailing dot/space and reserved names: Win32 would rewrite them.
+        assert_eq!(child_cwd(Path::new(r"\\?\C:\proj\build.")), None);
+        assert_eq!(child_cwd(Path::new(r"\\?\C:\proj\build ")), None);
+        assert_eq!(child_cwd(Path::new(r"\\?\C:\CON")), None);
+        assert_eq!(child_cwd(Path::new(r"\\?\C:\con.txt")), None);
+        // Over MAX_PATH, and verbatim UNC.
+        let largo = format!(r"\\?\C:\{}", "x".repeat(300));
+        assert_eq!(child_cwd(Path::new(&largo)), None);
+        assert_eq!(child_cwd(Path::new(r"\\?\UNC\server\share")), None);
+    }
+
+    /// A shell path is BYTES like any other path (rule 1): a `$SHELL` that is
+    /// not UTF-8 must come out unchanged, not lossily decoded into a program
+    /// that does not exist.
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_keeps_non_utf8_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let raw = std::ffi::OsStr::from_bytes(b"/opt/sh\xFF/bash");
+        assert_eq!(
+            login_shell_from(Some(raw)).as_os_str().as_bytes(),
+            b"/opt/sh\xFF/bash"
+        );
+    }
+
+    /// The GUI has no host terminal to suspend, so it launches one.
+    /// `$TERMINAL` is the user's explicit answer and beats every probe.
+    #[test]
+    fn terminal_argv_prefers_the_configured_terminal() {
+        let dir = std::path::Path::new("/tmp/x");
+        let argv = terminal_argv_from(Some("kitty".as_ref()), dir).expect("configured");
+        assert_eq!(argv[0], std::ffi::OsString::from("kitty"));
+        // An arbitrary `$TERMINAL` gets no flag guessed at it — the cwd
+        // travels through `current_dir`. (One we KNOW does get its flag; see
+        // `a_configured_terminal_we_know_still_gets_its_cwd_flag`.)
+        let argv = terminal_argv_from(Some("myterm".as_ref()), dir).expect("configured");
+        assert_eq!(argv, vec![std::ffi::OsString::from("myterm")]);
+    }
+
+    /// A `$TERMINAL` that NAMES one of the emulators we know still gets its
+    /// cwd flag (S4 rust review, m1): otherwise the one branch a user's own
+    /// configuration takes is the branch that skips the fix.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn a_configured_terminal_we_know_still_gets_its_cwd_flag() {
+        let dir = std::path::Path::new("/tmp/x");
+        let argv = terminal_argv_from(Some("gnome-terminal".as_ref()), dir).expect("configured");
+        assert_eq!(
+            argv[1],
+            std::ffi::OsString::from("--working-directory=/tmp/x"),
+            "a gnome-terminal served by a running instance takes the SERVER's cwd"
+        );
+        // Full path, same answer.
+        let argv = terminal_argv_from(Some("/usr/bin/konsole".as_ref()), dir).expect("configured");
+        assert_eq!(argv[1], std::ffi::OsString::from("--workdir"));
+        // And something we do not know still gets nothing guessed at it.
+        let argv = terminal_argv_from(Some("myterm".as_ref()), dir).expect("configured");
+        assert_eq!(argv.len(), 1);
+    }
+
+    /// An empty `$TERMINAL` is an unset one (same rule as `$SHELL`), so the
+    /// probe list still gets its turn instead of the list starting with `""`.
+    #[test]
+    fn an_empty_terminal_variable_does_not_become_a_candidate() {
+        let dir = std::path::Path::new("/tmp/x");
+        for c in terminal_candidates_from(Some("".as_ref()), dir) {
+            assert!(!c[0].is_empty(), "an empty program name is not a candidate");
+        }
+    }
+
+    /// Every candidate is a non-empty argv whose `[0]` is the program to
+    /// probe on the PATH, and the list is ordered `$TERMINAL` first.
+    #[test]
+    fn the_candidate_list_is_ordered_and_never_carries_an_empty_argv() {
+        let dir = std::path::Path::new("/tmp/x");
+        let all = terminal_candidates_from(Some("myterm".as_ref()), dir);
+        assert_eq!(all[0], vec![std::ffi::OsString::from("myterm")]);
+        assert!(all.iter().all(|c| !c.is_empty()));
+        assert!(
+            all.len() > 1,
+            "an unset `$TERMINAL` must still leave something to try"
+        );
+    }
+
+    /// The emulators that ignore the launching process's cwd are handed the
+    /// directory explicitly, BYTE-EXACTLY: a name that is not UTF-8 reaches
+    /// the argv unchanged rather than through a lossy `String` (rule 1).
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn a_known_emulator_gets_the_directory_byte_for_byte() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let dir = std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/w\xFFird".to_vec()));
+        let all = terminal_candidates_from(None, &dir);
+        let konsole = all
+            .iter()
+            .find(|c| c[0] == "konsole")
+            .expect("konsole is on the probe list");
+        assert_eq!(konsole[1], std::ffi::OsString::from("--workdir"));
+        assert_eq!(konsole[2].as_bytes(), b"/tmp/w\xFFird");
+        let gnome = all
+            .iter()
+            .find(|c| c[0] == "gnome-terminal")
+            .expect("gnome-terminal is on the probe list");
+        assert_eq!(gnome[1].as_bytes(), b"--working-directory=/tmp/w\xFFird");
+    }
+
+    /// `NORTE_LEVEL` is INHERITED, so it is untrusted input. Nothing a parent
+    /// process can put in it may produce anything but a small decimal.
+    #[test]
+    fn the_level_marker_survives_a_hostile_value() {
+        assert_eq!(next_norte_level_from(None), "1");
+        assert_eq!(next_norte_level_from(Some("".as_ref())), "1");
+        assert_eq!(next_norte_level_from(Some("2".as_ref())), "3");
+        assert_eq!(next_norte_level_from(Some("-1".as_ref())), "1");
+        assert_eq!(next_norte_level_from(Some("1e9".as_ref())), "1");
+        assert_eq!(next_norte_level_from(Some(" 2 ".as_ref())), "1");
+        assert_eq!(next_norte_level_from(Some("1; rm -rf /".as_ref())), "1");
+        assert_eq!(
+            next_norte_level_from(Some("99999999999999999999".as_ref())),
+            "1",
+            "beyond u32 does not parse, so it is not a level"
+        );
+        assert_eq!(
+            next_norte_level_from(Some(u32::MAX.to_string().as_ref())),
+            u32::MAX.to_string(),
+            "saturates rather than wrapping to zero or panicking in debug"
+        );
+    }
+
+    /// Non-UTF-8 in the marker is not a level either — and must not panic.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_level_marker_restarts_the_count() {
+        use std::os::unix::ffi::OsStrExt;
+        let raw = std::ffi::OsStr::from_bytes(b"\xFF\xFE");
+        assert_eq!(next_norte_level_from(Some(raw)), "1");
     }
 
     /// `Shell::parse` accepts exactly the three names `shell-init`/`doctor`

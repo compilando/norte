@@ -27,7 +27,7 @@ const LANGS: [Lang; 2] = [Lang::En, Lang::Es];
 /// the corpus so that DELETING a topic file is a test failure too: a check
 /// that reads the corpus to decide what the corpus should contain cannot see
 /// an absence.
-const EXPECTED: [&str; 16] = [
+const EXPECTED: [&str; 17] = [
     "index",
     "panes",
     "selection",
@@ -40,6 +40,7 @@ const EXPECTED: [&str; 16] = [
     "columns",
     "viewer",
     "ai",
+    "shell",
     "remote",
     "archives",
     "agents",
@@ -475,14 +476,16 @@ fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 78] = [
+const DOCUMENTED: [&str; 81] = [
     "app.extensions",
     "app.help",
     "app.palette",
     "app.pick-accept",
     "app.quit",
     "app.settings",
+    "app.terminal",
     "app.theme",
+    "app.toggle-panels",
     "cursor.bottom",
     "cursor.down",
     "cursor.page-down",
@@ -523,6 +526,7 @@ const DOCUMENTED: [&str; 78] = [
     "nav.parent",
     "pane.ai-rename",
     "pane.columns",
+    "pane.command-line",
     "pane.copy",
     "pane.delete",
     "pane.delete-permanent",
@@ -566,7 +570,7 @@ const DOCUMENTED: [&str; 78] = [
 /// `tests/help_gate.rs`, which reads `help_context::CONTEXTS` directly; this
 /// is the pin that the corpus does not drift from it in the meantime, and a
 /// disagreement surfaces there as an `UnknownContext`.
-const CONTEXTS: [&str; 13] = [
+const CONTEXTS: [&str; 14] = [
     "browse",
     "viewer",
     "dialog.confirm",
@@ -578,6 +582,7 @@ const CONTEXTS: [&str; 13] = [
     "dialog.mark-pattern",
     "dialog.transfer-name",
     "dialog.mkdir",
+    "dialog.command-line",
     "dialog.ai-rename",
     "dialog.semantic-search",
 ];

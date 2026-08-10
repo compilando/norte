@@ -35,6 +35,13 @@ modal-mkdir-hint = name of the new directory
 modal-transfer-name-copy = Copy to
 modal-transfer-name-move = Move to
 modal-transfer-name-hint = destination name (edit to rename)
+# `pane.command-line` (#135): the free-text prompt whose Enter runs
+# `$SHELL -c CMD` in the pane's directory, with the TUI suspended. Same mould
+# as the mkdir/AI-rename prompts.
+modal-command-line = Run a command
+modal-command-line-hint = runs in the active pane's directory
+modal-command-line-empty = type a command first
+modal-command-line-too-long = the command line is full ({ $max } characters); the rest was not typed
 modal-ai-rename = AI rename — instruction
 modal-ai-rename-hint = Enter: request plan · Esc: cancel
 modal-ai-rename-empty-instruction = type an instruction first
@@ -318,6 +325,33 @@ msg-open-missing-program = opener needs `{ $program }` — not installed
 msg-open-remote = openers only work on local files
 msg-open-launched = opened with { $program }
 msg-open-failed = could not launch { $program }: { $error }
+# #135 (S4) — suspension. A pane that is not `file://` has no directory a
+# local shell could sit in, so the shell is declined rather than opened
+# somewhere else. `$path` arrives already sanitised (`path_display`): the line
+# lands in the user's own terminal, after norte has released it.
+msg-shell-remote = the active pane is { $path }; a shell there would not be where you are looking
+msg-shell-failed = could not run { $program }: { $error }
+# The pane IS local, but its native form is one only the `\\?\` verbatim
+# namespace can express (a reserved device name, a trailing dot or space, or
+# over 260 characters) — and `CreateProcessW` does not accept that namespace.
+# Stripping it would silently open the child somewhere else.
+msg-shell-cwd-unsupported = { $path } cannot be a program's working directory on this system
+# Printed on the HOST terminal after a suspension that waits (`Ctrl+O`, and
+# after a command line runs): the panels are gone and this is the only thing
+# telling the reader norte is still there.
+msg-shell-press-key = [norte] press any key to return
+# The GUI's `app.terminal` (§E): nothing on this desktop answered, so say what
+# was tried instead of doing nothing.
+# `$configured` is the user's own $TERMINAL and `$tried` is norte's own
+# closed list. They are SEPARATE arguments on purpose: joining an untrusted
+# value into a `", "`-separated report lets one setting read as two entries
+# (`TERMINAL='kitty, konsole'`), which is the arrow-join spoof wearing a
+# comma. Nothing untrusted ever shares a joiner with anything.
+msg-terminal-none = $TERMINAL is { $configured } and no terminal emulator was found; norte also tried its own list ({ $tried })
+msg-terminal-none-unset = $TERMINAL is not set and no terminal emulator was found; norte tried { $tried }
+help-cmd-app-terminal = open a shell in the active pane's directory
+help-cmd-app-toggle-panels = hide the panels and show the terminal
+help-cmd-pane-command-line = run a command in the active pane's directory
 cli-ls-skipped = warning: { $n } container entries omitted from the index (hostile names/limits)
 
 # --- Help (F1) — built from the effective keymap ---
@@ -704,7 +738,6 @@ keymap-reason-volume-enumeration = volume enumeration
 keymap-reason-archive-write = writing archives
 keymap-reason-editor = built-in editor
 keymap-reason-compare-sync = directory compare and sync
-keymap-reason-shell = embedded shell
 keymap-reason-tree = directory tree panel
 keymap-reason-tabs = panel tabs
 keymap-reason-sort = sort commands

@@ -1744,6 +1744,67 @@ async fn run(
         if dir_watch.take_degraded_notice() {
             app.message = Some(t("status-watch-degraded"));
         }
+        // #135: la suspensión se drena AQUÍ y en NINGÚN otro sitio. El opener
+        // de #28 se lanza en tres puntos (el despacho de teclas, el de la
+        // palette y el de la ayuda) porque cada uno tiene su propio
+        // `continue`; una suspensión también la deja pendiente el Enter de
+        // `Modal::CommandLine`, que vive en un cuarto brazo con su propio
+        // `continue` — así que el sitio que los cubre a todos, presentes y
+        // futuros, es la cabecera de la vuelta. Antes del draw: los paneles
+        // que se repinten ya son los del listado refrescado.
+        if let Some(pending) = app.pending_shell.take() {
+            let norte_tui::app::PendingShell {
+                argv,
+                cwd,
+                wait_for_key,
+            } = pending;
+            // Auditoría (review de S4): el journal NO ve nada de esto a
+            // propósito (design §D), así que el rastro de que aquí hubo un
+            // shell vive en el log. Sin la línea de comandos —es del usuario
+            // y no tiene por qué acabar en un fichero— y con el programa a
+            // secas.
+            let lanzado = argv.first().map(|a| a.to_string_lossy().into_owned());
+            tracing::info!(
+                program = lanzado.as_deref().unwrap_or("(none)"),
+                wait_for_key,
+                "TUI suspended for a user-started program (not journalled: no actor, no reversal)"
+            );
+            // Nada que ejecutar = `app.toggle-panels`: solo enseña la
+            // terminal anfitriona. Refrescar tras él costaría un re-listado
+            // completo (remoto incluido) por una tecla que no toca el disco.
+            let lanzo_algo = !argv.is_empty();
+            if let Err(e) = run_suspended(terminal, capture, argv, cwd, wait_for_key).await {
+                // `detail_for_bar`, jamás el `Display` crudo del OS (review
+                // de S4, L1/m4): el sistema lo localiza por su cuenta, no
+                // tiene tope y —si el error viene de un join roto— arrastra
+                // el payload de un panic. Y se NOMBRA el programa, como hace
+                // `msg-open-failed`: si no, un `$SHELL` borrado y una
+                // pantalla alternativa que no cerró dan el mismo texto.
+                app.message = Some(ta(
+                    "msg-shell-failed",
+                    &[
+                        ("program", lanzado.as_deref().unwrap_or("-")),
+                        ("error", &norte_tui::app::detail_for_bar(&e.to_string())),
+                    ],
+                ));
+            }
+            // Lo que el shell haya hecho en disco se ve al volver, por el
+            // MISMO camino que `pane.refresh` (#118): refresh cancelable +
+            // el ritual completo, jamás un `set_listing` a mano.
+            //
+            // GATEADO igual que el refresh del watcher (review de S4, M2):
+            // `refresh_panes` polea `events` y se come toda tecla que no sea
+            // Esc/Ctrl+C, y reinterpreta Esc como «abandona el refresh». Con
+            // un modal delante —una aprobación de agente puede haberse
+            // plantado al cerrarse el prompt— eso se traga la respuesta del
+            // usuario hasta que la aprobación caduca. Si no se puede
+            // refrescar ahora, el watcher (canal de capacidad 1) o el tick
+            // lo hacen al cerrarse el overlay.
+            if lanzo_algo && watch_refresh_allowed(app) {
+                let refreshed = refresh_panes(app, backend, &mut events).await;
+                after_panes_refresh(app, refreshed, &mut fill, &mut last_probed, &mut search_run);
+            }
+        }
         // Review MINOR-1: `over_modal` describe el modal que hay AHORA, no uno
         // que ya se contestó. Antes de plantar los modales retenidos de abajo,
         // que tienen que encontrar la bandera ya limpia.
@@ -2718,6 +2779,26 @@ async fn run(
                                     }
                                 }
                                 KeyCode::Esc if plain => app.cancel_mkdir(),
+                                _ => {}
+                            }
+                            continue;
+                        }
+                        // `Modal::CommandLine` (#135): mismo molde de texto
+                        // libre que Mkdir. Enter deja la SUSPENSIÓN pendiente
+                        // (la ejecuta la cabecera de la vuelta, que es donde
+                        // vive la terminal) y cierra el prompt.
+                        if matches!(app.modal, Some(Modal::CommandLine { .. })) {
+                            let plain = key.modifiers.is_empty()
+                                || key.modifiers == KeyModifiers::SHIFT;
+                            match key.code {
+                                KeyCode::Char(c) if plain => app.command_line_push(c),
+                                KeyCode::Backspace if plain => app.command_line_pop(),
+                                KeyCode::Enter if plain => {
+                                    if let Some(cmd) = app.command_line_confirm() {
+                                        submit_command_line(app, &cmd);
+                                    }
+                                }
+                                KeyCode::Esc if plain => app.cancel_command_line(),
                                 _ => {}
                             }
                             continue;
@@ -4213,6 +4294,10 @@ mod help_key_tests {
             },
             Modal::Mkdir {
                 name: "nuevo".into(),
+                error: None,
+            },
+            Modal::CommandLine {
+                command: "make test".into(),
                 error: None,
             },
             Modal::AiRenameInstruction {
@@ -7206,6 +7291,7 @@ async fn on_dialog_key(
                 | Modal::TrustLuaInit { .. }
                 | Modal::MarkPattern { .. }
                 | Modal::Mkdir { .. }
+                | Modal::CommandLine { .. }
                 | Modal::AiRenameInstruction { .. }
                 | Modal::SemanticQuery { .. }
                 | Modal::TransferName { .. } => {}
@@ -7763,9 +7849,10 @@ async fn on_search_enter(
 ///
 /// Qué modales lo admiten es una DECISIÓN, no la resaca del enrutado: lo dice
 /// [`norte_tui::help_context::help_over_modal_allowed`], exhaustivo sobre
-/// `Modal` y sin comodín (review MINOR-3). Los cinco editores de TEXTO LIBRE
-/// (`Mkdir`, `MarkPattern`, `AiRenameInstruction`, `SemanticQuery`,
-/// `TransferName`) y el TOFU de Lua responden `false`: hoy tampoco llegan aquí
+/// `Modal` y sin comodín (review MINOR-3). Los seis editores de TEXTO LIBRE
+/// (`Mkdir`, `MarkPattern`, `CommandLine`, `AiRenameInstruction`,
+/// `SemanticQuery`, `TransferName`) y el TOFU de Lua responden `false`: hoy
+/// tampoco llegan aquí
 /// —el run loop los intercepta antes para leer teclas CRUDAS (decisión 8 del
 /// plan H1: el keymap no puede reinterpretar lo que se está escribiendo)—, y
 /// preguntarlo AQUÍ es lo que impide que mover uno de ellos al keymap `dialog`
@@ -7951,7 +8038,18 @@ async fn launch_opener(
             ),
         };
     }
-    match run_opener(terminal, capture, argv).await {
+    // Invariante: `Opener::argv` siempre empuja el binario (`command[0]`), y
+    // `parse` rechaza `command` vacío — así `argv[0]` nunca panica, y un argv
+    // vacío aquí NO significa lo que significa en `run_suspended` (enseñar la
+    // terminal y no lanzar nada), que sería un F4 mudo.
+    debug_assert!(
+        !argv.is_empty(),
+        "el argv de un opener siempre trae el binario"
+    );
+    // `cwd = None`: el `%d` de un opener declarado ya viaja DENTRO del argv,
+    // así que el hijo hereda el directorio de norte, exactamente como antes
+    // de S4.
+    match run_suspended(terminal, capture, argv, None, false).await {
         Ok(_) => ta("msg-open-launched", &[("program", &program)]),
         Err(e) => ta(
             "msg-open-failed",
@@ -7988,56 +8086,393 @@ async fn spawn_detached(argv: Vec<std::ffi::OsString>) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Suspende el TUI (sale de la pantalla alternativa + raw mode), lanza el
-/// comando externo con stdio HEREDADO (el usuario interactúa con `bat`/editor
-/// directamente) y espera su fin en `spawn_blocking` (regla 2). La terminal se
-/// restaura SIEMPRE una vez que se dejó el modo TUI — falle el hijo, se rompa
-/// el join o falle una syscall intermedia — para no dejarla en raw-off. #28.
-async fn run_opener(
+/// Suspende el TUI (sale de la pantalla alternativa + raw mode), corre `argv`
+/// con la TERMINAL DE CONTROL como stdio en `cwd` y restaura en TODOS los
+/// caminos.
+///
+/// Nació como `run_opener` (#28) y S4 (#135) la generalizó. La estructura de
+/// restauración es la misma idea, con una diferencia que la review de S4
+/// señaló (MAJOR-3): la frontera «a partir de aquí hay que restaurar» estaba
+/// DESPUÉS de tres `?` que ya habían tocado la terminal, así que un
+/// `LeaveAlternateScreen` fallido devolvía `Err` con el raw mode apagado y la
+/// pantalla alternativa puesta — y el run loop seguía pintando una TUI cuyas
+/// teclas ya no respondían y cuyo texto se hacía eco en el scrollback. Ahora
+/// [`suspend_terminal`] y [`resume_terminal`] están emparejadas y NINGÚN
+/// camino sale entre medias.
+///
+/// - `argv` VACÍO no lanza nada y devuelve `Ok(None)`: eso es
+///   `app.toggle-panels`, que solo enseña la terminal anfitriona.
+/// - `cwd` `None` deja el directorio de norte, que es lo que hacen hoy los
+///   openers de #28 (su `%d` ya viaja DENTRO del argv, así que cambiárselo
+///   aquí sería un cambio de comportamiento con la excusa de una refactor).
+/// - `wait_for_key` retiene la terminal anfitriona a la vista hasta que el
+///   usuario pulse algo. Sin ello el listado vuelve encima de la salida del
+///   comando y no hay forma de leerla.
+///
+/// # El stdio del hijo es `/dev/tty`, no el heredado
+///
+/// Desde la tarea 1 la TUI pinta en la terminal de control PRECISAMENTE para
+/// que stdout pueda llevar datos, y desde la 2 los lleva (`--pick` escribe
+/// las rutas elegidas, terminadas en NUL). Un hijo con stdio heredado los
+/// mezclaría con los suyos: `ntc --pick | xargs -0 …` seguido de F9 mete la
+/// sesión entera del shell en la tubería, y el primer «path» que lee la
+/// herramienta de abajo es la salida del shell pegada a la primera ruta —
+/// abrir el fichero equivocado, no un defecto cosmético (review de S4, H1 y
+/// MAJOR-1). Heredar stdin es igual de malo al revés: `ntc < /dev/null` daba
+/// un F9 cuyo shell leía EOF y salía al instante, y parecía la tecla rota.
+///
+/// Si la terminal de control no se puede abrir se hereda, como antes: es
+/// degradación, no un motivo para no lanzar nada.
+///
+/// # Ctrl+C mata al hijo, no a norte
+///
+/// Salir del raw mode devuelve `ISIG`, y el hijo se queda en el grupo de
+/// procesos del primer plano junto con norte: sin manejador, el Ctrl+C con el
+/// que se aborta un `make` mataría al gestor de ficheros entero (review de
+/// S4, B1). Registrar SIGINT/SIGQUIT en tokio instala un manejador de proceso
+/// —permanente, y eso está bien: en modo TUI el raw mode ya impide que esas
+/// señales se generen— así que norte sobrevive y el hijo, cuyas disposiciones
+/// `exec` devolvió a `SIG_DFL`, muere. SIGTSTP (Ctrl+Z) NO se cubre: suspender
+/// norte con la terminal a medio ceder es un problema distinto, y está dicho
+/// en los límites honestos del tema de ayuda.
+///
+/// El hijo hereda [`norte_frontend::shell::LEVEL_VAR`] incrementado. norte no
+/// lo vuelve a leer nunca: el consumidor es el prompt del propio usuario, que
+/// es donde hace falta saber que este shell salió de un norte.
+async fn run_suspended(
     terminal: &mut tty::Tui,
     capture: &mut mouse::Capture,
     argv: Vec<std::ffi::OsString>,
-) -> std::io::Result<std::process::ExitStatus> {
-    use crossterm::terminal::{
-        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    cwd: Option<std::path::PathBuf>,
+    wait_for_key: bool,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+    // Registrado ANTES de ceder la terminal, y vivo hasta el final: ver «Ctrl+C
+    // mata al hijo» arriba. Un fallo al registrar no impide suspender —
+    // significa volver al comportamiento de antes, no quedarse sin la tecla.
+    #[cfg(unix)]
+    let _senales = {
+        use tokio::signal::unix::{SignalKind, signal};
+        (
+            signal(SignalKind::interrupt()).ok(),
+            signal(SignalKind::quit()).ok(),
+        )
     };
-    // Invariante: `Opener::argv` siempre empuja el binario (`command[0]`), y
-    // `parse` rechaza `command` vacío — así `argv[0]` nunca panica.
-    debug_assert!(
-        !argv.is_empty(),
-        "el argv de un opener siempre trae el binario"
-    );
-    // La captura de ratón se suelta ANTES de nada: el programa que viene
-    // detrás no la pidió, y heredarla le mete cada movimiento del puntero
-    // por stdin como si fueran teclas. Escritura síncrona a la terminal de
-    // control (`terminal.backend_mut()`, nunca stdout — ver `tty.rs`), misma
-    // exención puntual de la regla 2 que el resto de esta función (que ya
-    // maneja la pantalla alternativa y el raw mode igual).
-    let raton = mouse::release_for_suspend(capture, terminal.backend_mut())?;
+    // El estado de la captura se lee ANTES de tocar nada: si la propia
+    // liberación falla a mitad, la restauración tiene que saber a qué volver
+    // (review de S4, MINOR-6).
+    let raton = capture.active();
+    // ---- frontera: de aquí en adelante, todo camino pasa por `resume_terminal`.
+    let cedida = suspend_terminal(terminal, capture);
+    if let Err(e) = cedida {
+        let _ = resume_terminal(terminal, capture, raton);
+        return Err(e);
+    }
+    let child = if argv.is_empty() {
+        Ok(Ok(None))
+    } else {
+        let level = norte_frontend::shell::next_norte_level();
+        let stdio = || {
+            tty::open_controlling_terminal()
+                .and_then(|f| f.try_clone())
+                .map_or_else(
+                    |_| std::process::Stdio::inherit(),
+                    std::process::Stdio::from,
+                )
+        };
+        tokio::task::spawn_blocking(move || {
+            let mut cmd = std::process::Command::new(&argv[0]);
+            cmd.args(&argv[1..])
+                .env(norte_frontend::shell::LEVEL_VAR, level)
+                .stdin(stdio())
+                .stdout(stdio())
+                .stderr(stdio());
+            if let Some(dir) = cwd {
+                cmd.current_dir(dir);
+            }
+            cmd.status().map(Some)
+        })
+        .await
+    };
+    // La espera va DESPUÉS del hijo y ANTES de restaurar: es el hueco en el
+    // que la salida del comando sigue en pantalla. Su propio fallo no puede
+    // saltarse la restauración, así que se guarda y se propaga con el resto.
+    let waited = if wait_for_key {
+        wait_for_any_key(terminal.backend_mut()).await
+    } else {
+        Ok(())
+    };
+    // Lo que el usuario tecleó MIENTRAS corría el hijo sigue en el buffer de
+    // crossterm, y sin drenarlo el run loop lo despacharía acto seguido como
+    // comandos contra un listado que acaba de cambiar (review de S4,
+    // MINOR-2): el resto de un pegado multilínea es el caso que duele.
+    drain_type_ahead().await;
+    let restored = resume_terminal(terminal, capture, raton);
+    suspension_outcome(child, waited, restored)
+}
+
+/// Cede la terminal: suelta el ratón, sale del raw mode y de la pantalla
+/// alternativa, en ese orden.
+///
+/// La captura se suelta la PRIMERA: el programa que viene detrás no la pidió,
+/// y heredarla le mete cada movimiento del puntero por stdin como si fueran
+/// teclas. Escritura síncrona a la terminal de control (`terminal
+/// .backend_mut()`, nunca stdout — ver `tty.rs`), misma exención puntual de
+/// la regla 2 que el resto de la suspensión.
+fn suspend_terminal(terminal: &mut tty::Tui, capture: &mut mouse::Capture) -> std::io::Result<()> {
+    use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
+    mouse::release_for_suspend(capture, terminal.backend_mut())?;
     disable_raw_mode()?;
-    // A partir de aquí la terminal está fuera del modo TUI: restaurar pase lo
-    // que pase antes de devolver.
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    let child = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&argv[0])
-            .args(&argv[1..])
-            .status()
+    Ok(())
+}
+
+/// Recupera la terminal: pantalla alternativa, raw mode, la captura de ratón
+/// EXACTAMENTE como estaba (si el usuario la tenía apagada, `[ui] mouse =
+/// false`, volver de un shell no se la enciende) y un repintado limpio.
+fn resume_terminal(
+    terminal: &mut tty::Tui,
+    capture: &mut mouse::Capture,
+    raton: bool,
+) -> std::io::Result<()> {
+    use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
+    use ratatui::backend::Backend as _;
+    crossterm::execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    enable_raw_mode()?;
+    mouse::restore_after_suspend(capture, raton, terminal.backend_mut())?;
+    // NO `Terminal::clear()`, y esto no es una preferencia de estilo: en
+    // ratatui 0.30 esa función pregunta por la posición del cursor
+    // (`get_cursor_position` → `crossterm::cursor::position`), que emite el
+    // DSR `ESC [ 6 n` por **stdout** — el stdout del proceso, no el writer de
+    // nuestro backend. Bajo `--pick` stdout es la tubería de datos del
+    // llamante, así que volver de una suspensión le inyectaba `\x1b[6n`
+    // delante de la primera ruta del flujo terminado en NUL. Lo cazó la
+    // verificación de extremo a extremo de S4, no la suite: es exactamente el
+    // fallo que la tarea 1 existía para impedir, entrando por una puerta que
+    // la tarea 1 no controla.
+    //
+    // Limpiar por el BACKEND escribe en `/dev/tty` como todo lo demás, y dos
+    // `swap_buffers` dejan los DOS buffers en blanco, que es lo que fuerza un
+    // repintado completo en el siguiente draw (uno solo dejaría el anterior
+    // con el contenido de antes de suspender y el diff se comería casi todo).
+    terminal.backend_mut().clear()?;
+    terminal.swap_buffers();
+    terminal.swap_buffers();
+    Ok(())
+}
+
+/// Qué devuelve una suspensión cuando más de una cosa pudo fallar.
+///
+/// Extraído (review de S4, M6) porque es la ÚNICA parte de `run_suspended`
+/// que se puede probar sin una terminal, y es donde vive la regla: el
+/// resultado del hijo manda —es la respuesta a lo que el usuario pidió—, y
+/// los fallos de la espera y de la restauración se propagan detrás de él en
+/// ese orden. Un join roto se convierte en un error de I/O porque para el
+/// caller es indistinguible de que el hijo no llegara a correr.
+fn suspension_outcome(
+    child: Result<std::io::Result<Option<std::process::ExitStatus>>, tokio::task::JoinError>,
+    waited: std::io::Result<()>,
+    restored: std::io::Result<()>,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+    // El fallo del hijo se devuelve ANTES que los otros dos. `run_opener`
+    // decía esto mismo en su comentario y hacía lo contrario (`restored?`
+    // salía primero), lo cual nunca se notó porque restaurar no falla casi
+    // nunca; al escribir el test la contradicción salió sola. Gana el hijo
+    // porque es la respuesta a lo que el usuario pidió: «no existe ese
+    // shell» es accionable y «no se pudo volver a la pantalla alternativa»
+    // no dice nada sobre la tecla que se pulsó.
+    let status = child.map_err(std::io::Error::other)??;
+    waited?;
+    restored?;
+    Ok(status)
+}
+
+/// Se traga lo que el usuario tecleó mientras la terminal no era de norte.
+///
+/// No es cortesía: sin esto, el resto de un pegado multilínea (o cualquier
+/// type-ahead) llega al run loop como pulsaciones y se despacha como COMANDOS
+/// contra un listado que el hijo acaba de cambiar. Acotado a
+/// [`TYPE_AHEAD_MAX`] eventos para que una tormenta de resize no lo convierta
+/// en un bucle.
+async fn drain_type_ahead() {
+    let _ = tokio::task::spawn_blocking(|| {
+        for _ in 0..TYPE_AHEAD_MAX {
+            match crossterm::event::poll(std::time::Duration::ZERO) {
+                Ok(true) => {
+                    if crossterm::event::read().is_err() {
+                        return;
+                    }
+                }
+                _ => return,
+            }
+        }
     })
     .await;
-    let mut restore = || -> std::io::Result<()> {
-        crossterm::execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-        enable_raw_mode()?;
-        // Y se restituye exactamente como estaba: si el usuario la tenía
-        // apagada (`[ui] mouse = false`), volver del opener no se la
-        // enciende.
-        mouse::restore_after_suspend(capture, raton, terminal.backend_mut())?;
-        terminal.clear()
+}
+
+/// Tope de eventos que [`drain_type_ahead`] descarta de una vez.
+const TYPE_AHEAD_MAX: usize = 4096;
+
+/// Pinta el aviso y bloquea hasta la siguiente pulsación, con la terminal ya
+/// fuera del modo TUI.
+///
+/// Se lee por `crossterm::event::read`, no un byte crudo de la tty, porque un
+/// byte crudo parte las secuencias de escape: una flecha entrega `ESC [ A` y
+/// quedarse el `ESC` deja `[ A` en el buffer, que la TUI leerá acto seguido
+/// como dos teclas que el usuario no pulsó. `read` parsea el evento entero.
+/// Raw mode se enciende para que valga CUALQUIER tecla y no haga falta un
+/// Enter (en modo canónico el terminal no entrega nada hasta el salto).
+///
+/// # Por qué no compite con el `EventStream` del run loop
+///
+/// No porque compartan el mutex de la fuente interna de crossterm —eso solo
+/// serializa—, sino porque el hilo lector que `EventStream` levanta cuando lo
+/// polean NO está vivo aquí: termina antes de entregar un evento, y todo
+/// escritor de `pending_shell` es una tecla ya despachada, así que el run
+/// loop está parado en `recv()` mientras esto corre. Es un invariante
+/// INCIDENTAL, y conviene saberlo: el primer camino que deje una suspensión
+/// pendiente sin venir de una tecla (un temporizador, un despacho desde Lua,
+/// una acción de plugin) reintroduce la carrera y se comería teclas del
+/// usuario para replicarlas después. Por lo mismo, esta espera no debe
+/// envolverse jamás en un `select!` con timeout: el `spawn_blocking` no es
+/// cancelable y se quedaría con el lock del lector.
+///
+/// Un error de lectura (sin stdin, terminal muerta) sale sin más: la espera
+/// es cortesía y no puede convertirse en un cuelgue.
+async fn wait_for_any_key(out: &mut impl std::io::Write) -> std::io::Result<()> {
+    write_resume_prologue(out)?;
+    crossterm::terminal::enable_raw_mode()?;
+    let read = tokio::task::spawn_blocking(|| {
+        loop {
+            match crossterm::event::read() {
+                Ok(crossterm::event::Event::Key(k))
+                    if k.kind == crossterm::event::KeyEventKind::Press =>
+                {
+                    return;
+                }
+                // Resize/Mouse/Focus y las repeticiones no cuentan como «una
+                // tecla»: seguir esperando.
+                Ok(_) => {}
+                // Sin stdin no hay tecla que esperar; salir en vez de girar.
+                Err(_) => return,
+            }
+        }
+    })
+    .await;
+    // El raw mode se queda encendido a propósito: `resume_terminal` lo vuelve
+    // a pedir acto seguido y `enable_raw_mode` es idempotente.
+    read.map_err(std::io::Error::other)
+}
+
+/// Devuelve la terminal a un estado conocido y escribe el aviso de «pulsa una
+/// tecla».
+///
+/// El hijo acaba de tener la terminal entera y puede haberla dejado en
+/// cualquier estado suyo: SGR activo, el juego de caracteres G1 de dibujo de
+/// líneas seleccionado, el autowrap apagado (review de S4, L4). `clear()` y
+/// el repintado de ratatui restituyen los atributos POR CELDA, pero no la
+/// selección de juego de caracteres ni DECAWM — así que el aviso saldría en
+/// rojo invertido y con glifos de caja, y el propio listado detrás. Se
+/// emiten, en este orden: SGR reset, US-ASCII en G0, autowrap on.
+///
+/// El aviso lleva `\r\n` porque el raw mode que viene justo después ya no
+/// traduce `\n`, y sin el retorno de carro la línea siguiente sale escalonada.
+fn write_resume_prologue(out: &mut impl std::io::Write) -> std::io::Result<()> {
+    write!(
+        out,
+        "\x1b[0m\x1b(B\x1b[?7h\r\n{}\r\n",
+        t("msg-shell-press-key")
+    )?;
+    out.flush()
+}
+
+/// El Enter de [`Modal::CommandLine`] (#135): deja `$SHELL -c CMD` pendiente
+/// y cierra el prompt.
+///
+/// El guard de localidad se REPITE aquí, no basta con el del despacho que
+/// abrió el prompt: entre abrirlo y confirmarlo el pane puede haberse ido a
+/// un `sftp://`, y correr la línea en el directorio de norte no es lo que se
+/// pidió — sería ejecutarla en un sitio que el usuario no está mirando. El
+/// prompt se cierra en los dos casos: dejarlo abierto tras un rechazo
+/// invitaría a pulsar Enter otra vez contra el mismo rechazo.
+///
+/// La línea viaja como UN argumento: la parsea el shell (tuberías, comillas,
+/// globs), nunca norte. Trocearla aquí sería inventar una gramática que no
+/// coincide con la del shell que va a recibirla.
+fn submit_command_line(app: &mut App, cmd: &str) {
+    match shell_cwd(app) {
+        Ok(dir) => {
+            let shell = norte_frontend::shell::login_shell();
+            app.pending_shell = Some(norte_tui::app::PendingShell {
+                // El flag lo decide `norte-frontend` por shell (regla 7):
+                // `cmd.exe` no entiende `-c`.
+                argv: norte_frontend::shell::shell_command_argv(&shell, cmd),
+                cwd: Some(dir),
+                wait_for_key: true,
+            });
+        }
+        Err(msg) => app.message = Some(msg),
+    }
+    app.command_line_submitted();
+}
+
+/// El directorio de trabajo que le toca a un hijo lanzado desde el pane con
+/// foco, o el mensaje LOCALIZADO de por qué no hay ninguno.
+///
+/// Dos negativas distintas, y decirlas por separado importa: el pane no es
+/// local (`sftp://`, un bucket, dentro de un archivo — no hay directorio en
+/// esta máquina), o lo es pero su forma nativa no se le puede dar a un hijo
+/// (Windows: una ruta que solo existe con el prefijo `\\?\`, ver
+/// [`norte_frontend::shell::child_cwd`]). Un solo mensaje para las dos
+/// mandaría al usuario a buscar el problema en el sitio equivocado.
+///
+/// Nota de carrera (review de S4, MINOR-3): esto resuelve una RUTA, no un
+/// descriptor, así que entre la comprobación y el `chdir` del hijo alguien
+/// con permiso de escritura en el padre puede cambiar el directorio por un
+/// symlink. Cerrarlo de verdad pide `openat`/`fchdir` y no lo hace ninguna
+/// otra ruta de norte; está dicho en los límites honestos del tema de ayuda.
+fn shell_cwd(app: &App) -> Result<std::path::PathBuf, String> {
+    let Ok(native) = norte_vfs_local::vpath_to_native(app.focused().dir()) else {
+        return Err(shell_remote_message(app));
     };
-    let restored = restore();
-    // El resultado del hijo prima; si además falló la restauración, se propaga.
-    let status = child.map_err(std::io::Error::other)?;
-    restored?;
-    status
+    norte_frontend::shell::child_cwd(&native).ok_or_else(|| {
+        let (texto, hostil) = norte_frontend::path_display(app.focused().dir());
+        ta(
+            "msg-shell-cwd-unsupported",
+            &[("path", &badged(&texto, hostil))],
+        )
+    })
+}
+
+/// La ruta ya saneada, con el badge hostil FUERA de la traducción (para que
+/// ningún locale pueda perderlo) y ACOTADA con elipsis media.
+///
+/// El tope no es cosmético (review de S4, M4): estos mensajes interpolan la
+/// ruta A MITAD de la frase, y tanto la barra de estado (un `Paragraph` de
+/// una línea) como el flash de la GUI cortan por la derecha sin marca — así
+/// que una ruta larga se lleva por delante justo la parte que explica por qué
+/// la tecla no hizo nada, y la tecla parece rota.
+fn badged(texto: &str, hostil: bool) -> String {
+    let corto = norte_frontend::middle_ellipsis(texto, SHELL_MSG_PATH_MAX);
+    if hostil {
+        format!("{} {corto}", norte_tui::ui::HOSTILE_BADGE)
+    } else {
+        corto
+    }
+}
+
+/// Presupuesto en chars de la ruta dentro de un aviso de shell: deja sitio de
+/// sobra para la cláusula que viene detrás en un terminal de 80 columnas.
+const SHELL_MSG_PATH_MAX: usize = 48;
+
+/// El aviso de «aquí no cabe un shell» (#135), con la ubicación SANEADA.
+///
+/// El saneado no es opcional: el nombre de un directorio puede traer bidi,
+/// invisibles o controles, y esta línea se pinta en la barra de estado —
+/// donde `path_display` es exactamente la puerta por la que pasa todo lo
+/// demás que viene del disco.
+fn shell_remote_message(app: &App) -> String {
+    let (texto, hostil) = norte_frontend::path_display(app.focused().dir());
+    ta("msg-shell-remote", &[("path", &badged(&texto, hostil))])
 }
 
 /// Where a pane gesture wants to send a pane.
@@ -8646,6 +9081,41 @@ async fn dispatch(
             }
         }
         Command::PaneOpen => resolve_opener(app),
+        // #135 (S4, design §D): los tres se RESUELVEN aquí y los ejecuta el
+        // run loop, que es el dueño de la terminal — mismo reparto que
+        // `pane.open`. Nada de esto va al journal: un shell que abre el
+        // usuario es el usuario actuando con sus permisos, no una mutación de
+        // norte (no hay actor que atribuir ni reversa que grabar), y lo que
+        // cambie en disco lo recoge el watcher y el refresh de la vuelta.
+        Command::AppTerminal => match shell_cwd(app) {
+            Ok(dir) => {
+                app.pending_shell = Some(norte_tui::app::PendingShell {
+                    argv: vec![norte_frontend::shell::login_shell().into_os_string()],
+                    cwd: Some(dir),
+                    // El shell ya es interactivo: al salir de él, volver a
+                    // los paneles es exactamente lo que se quiere.
+                    wait_for_key: false,
+                });
+            }
+            Err(msg) => app.message = Some(msg),
+        },
+        // Funciona en un pane remoto: no lanza nada ni mira el directorio —
+        // solo enseña la terminal anfitriona hasta la siguiente tecla.
+        Command::AppTogglePanels => {
+            app.pending_shell = Some(norte_tui::app::PendingShell {
+                argv: Vec::new(),
+                cwd: None,
+                wait_for_key: true,
+            });
+        }
+        // Solo abre el prompt; el `$SHELL -c` lo deja pendiente su Enter, en
+        // el run loop (que es quien lee las teclas crudas de un modal de
+        // texto libre). El guard de localidad se repite ahí — el directorio
+        // puede haber cambiado entre abrir el prompt y confirmarlo.
+        Command::PaneCommandLine => match shell_cwd(app) {
+            Ok(_) => app.open_command_line(),
+            Err(msg) => app.message = Some(msg),
+        },
         Command::ViewerClose => app.viewer = None,
         Command::ViewerUp => viewer_do(app, |v| v.scroll_up(1)),
         Command::ViewerDown => viewer_do(app, |v| v.scroll_down(1)),
@@ -10016,6 +10486,255 @@ async fn cd_in(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod suspend_tests {
+    use super::{App, Modal, Pane, run_suspended, shell_remote_message, submit_command_line};
+    use norte_proto::VPath;
+
+    fn app_en(wire: &str) -> App {
+        let d = VPath::parse(wire).expect("wire de test");
+        App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
+    }
+
+    /// La terminal de control para los dos tests que suspenden de verdad, o
+    /// `None` con un aviso — jamás un salto mudo (estilo de los saltos de
+    /// wasm/MinIO).
+    ///
+    /// Tres condiciones, y las tres hacen falta:
+    ///
+    /// - `NORTE_TTY_TESTS`: sin el opt-in no se corre. Meter la terminal del
+    ///   desarrollador en la pantalla alternativa y en raw mode a mitad del
+    ///   gate es peor que no tener el test.
+    /// - una `/dev/tty` que abra: sin ella no hay nada que suspender.
+    /// - un **stdin** que sea terminal. Esto no es celo: `Terminal::clear`
+    ///   (ratatui 0.30) pregunta la posición del cursor con un DSR y ESPERA
+    ///   la respuesta POR STDIN. Bajo nextest stdin es `/dev/null` aunque el
+    ///   proceso corra dentro de tmux, así que la respuesta no llega nunca y
+    ///   la suspensión falla a los dos segundos por algo que no es un bug del
+    ///   producto. Comprobarlo aquí es lo que impide que ese artefacto se lea
+    ///   como un fallo.
+    fn tty_for_test() -> Option<norte_tui::tty::TtyOut> {
+        use std::io::IsTerminal as _;
+        if std::env::var_os("NORTE_TTY_TESTS").is_none() {
+            eprintln!("skip: NORTE_TTY_TESTS unset (this one drives a real terminal)");
+            return None;
+        }
+        if !std::io::stdin().is_terminal() {
+            eprintln!("skip: stdin is not a terminal (the DSR of `clear` would never be answered)");
+            return None;
+        }
+        match norte_tui::tty::open_controlling_terminal() {
+            Ok(out) => Some(out),
+            Err(e) => {
+                eprintln!("skip: no controlling terminal ({e})");
+                None
+            }
+        }
+    }
+
+    /// Un pane remoto NO abre shell: la negativa es que la conversión a ruta
+    /// nativa falle, y el mensaje NOMBRA el pane para que no parezca que la
+    /// tecla está rota.
+    #[test]
+    fn un_pane_remoto_no_tiene_donde_poner_un_shell() {
+        let app = app_en("sftp://host/x");
+        assert!(
+            norte_vfs_local::vpath_to_native(app.focused().dir()).is_err(),
+            "si esta conversión llegara a funcionar, el brazo abriría un \
+             shell en el sitio equivocado sin decir nada"
+        );
+        // `path_display` es quien decide la forma («⟨sftp host⟩/x»); lo que
+        // este test pincha es que el pane SE NOMBRA, no el formato.
+        let msg = shell_remote_message(&app);
+        assert!(msg.contains("sftp") && msg.contains("host"), "{msg}");
+    }
+
+    /// El nombre de un directorio puede traer bidi/invisibles, y esta línea
+    /// se pinta en la barra: sale SANEADA y con badge, jamás cruda.
+    #[test]
+    fn el_aviso_sanea_un_directorio_hostil() {
+        // RLO dentro del nombre: el clásico para invertir lo que se lee.
+        let app = app_en("sftp://host/a%E2%80%AEb");
+        let msg = shell_remote_message(&app);
+        assert!(
+            !msg.contains('\u{202E}'),
+            "el override bidi jamás llega a la barra: {msg:?}"
+        );
+        assert!(
+            msg.contains(norte_tui::ui::HOSTILE_BADGE),
+            "y va marcado como hostil: {msg:?}"
+        );
+    }
+
+    /// El prompt de `pane.command-line` devuelve la línea TAL CUAL (un
+    /// espacio inicial es la convención `HISTCONTROL=ignorespace`, no basura
+    /// que recortar) y una línea en blanco no lanza nada.
+    #[test]
+    fn la_linea_de_comandos_no_recorta_y_rechaza_lo_vacio() {
+        let mut app = app_en("file:///tmp");
+        app.open_command_line();
+        for c in " make test".chars() {
+            app.command_line_push(c);
+        }
+        assert_eq!(app.command_line_confirm().as_deref(), Some(" make test"));
+        let mut app = app_en("file:///tmp");
+        app.open_command_line();
+        for c in "   ".chars() {
+            app.command_line_push(c);
+        }
+        assert!(app.command_line_confirm().is_none());
+        assert!(
+            matches!(app.modal, Some(Modal::CommandLine { error: Some(_), .. })),
+            "y el diagnóstico se queda bajo el campo"
+        );
+    }
+
+    /// El Enter de la línea de comandos arma `$SHELL -c CMD` con la línea
+    /// ENTERA como un solo argumento y el dir del pane como cwd.
+    #[test]
+    fn el_enter_de_la_linea_arma_shell_menos_c() {
+        let mut app = app_en("file:///tmp");
+        submit_command_line(&mut app, "ls | wc -l");
+        let p = app.pending_shell.expect("deja la suspensión pendiente");
+        assert_eq!(p.argv.len(), 3, "binario, -c y la línea: {:?}", p.argv);
+        assert_eq!(p.argv[1], std::ffi::OsString::from("-c"));
+        assert_eq!(
+            p.argv[2],
+            std::ffi::OsString::from("ls | wc -l"),
+            "la línea no se trocea: la parsea el shell"
+        );
+        assert_eq!(p.cwd, Some(std::path::PathBuf::from("/tmp")));
+        assert!(p.wait_for_key, "la salida tiene que poder leerse");
+        assert!(app.modal.is_none(), "y el prompt se cierra");
+    }
+
+    /// El pane se fue a un remoto entre abrir el prompt y confirmarlo: no se
+    /// ejecuta NADA (correrlo en el dir de norte sería hacerlo donde el
+    /// usuario no está mirando), se avisa, y el prompt se cierra igual.
+    #[test]
+    fn una_linea_confirmada_sobre_un_pane_remoto_no_ejecuta_nada() {
+        let mut app = app_en("sftp://host/x");
+        submit_command_line(&mut app, "rm -rf .");
+        assert!(app.pending_shell.is_none(), "nada que ejecutar");
+        assert!(app.message.is_some(), "y se dice por qué");
+        assert!(app.modal.is_none());
+    }
+
+    /// La regla de qué error gana cuando fallan varias cosas, probada SIN
+    /// terminal (review de S4, M6). El efecto —quién toca la pantalla— pide
+    /// una tty; la POLÍTICA no, y es donde vive lo que puede equivocarse.
+    #[test]
+    fn el_resultado_del_hijo_manda_sobre_la_espera_y_la_restauracion() {
+        use std::io::{Error, ErrorKind};
+        let ok_status = || {
+            // Un `ExitStatus` real sin lanzar nada: el de un hijo trivial.
+            std::process::Command::new("true")
+                .status()
+                .expect("`true` existe en cualquier unix")
+        };
+        // Todo bien: sale el status del hijo.
+        let r = super::suspension_outcome(Ok(Ok(Some(ok_status()))), Ok(()), Ok(()));
+        assert!(r.expect("ok").is_some());
+
+        // Sin hijo (argv vacío) tampoco es un error.
+        assert!(
+            super::suspension_outcome(Ok(Ok(None)), Ok(()), Ok(()))
+                .expect("ok")
+                .is_none()
+        );
+
+        // El error del hijo GANA al de la espera y al de la restauración: es
+        // la respuesta a lo que el usuario pidió.
+        let e = super::suspension_outcome(
+            Ok(Err(Error::new(ErrorKind::NotFound, "no shell"))),
+            Err(Error::other("espera")),
+            Err(Error::other("restore")),
+        )
+        .expect_err("el hijo falló");
+        assert_eq!(e.kind(), ErrorKind::NotFound, "{e}");
+
+        // Sin fallo del hijo, la espera va delante de la restauración.
+        let e = super::suspension_outcome(
+            Ok(Ok(None)),
+            Err(Error::other("espera")),
+            Err(Error::other("restore")),
+        )
+        .expect_err("falló la espera");
+        assert!(e.to_string().contains("espera"), "{e}");
+
+        // Y un fallo SOLO de la restauración se propaga: dejar la terminal a
+        // medias jamás se traga.
+        let e = super::suspension_outcome(Ok(Ok(None)), Ok(()), Err(Error::other("restore")))
+            .expect_err("falló la restauración");
+        assert!(e.to_string().contains("restore"), "{e}");
+    }
+
+    /// El aviso que precede a «pulsa una tecla» DEVUELVE la terminal a un
+    /// estado conocido antes de escribir nada (review de S4, L4): el hijo
+    /// pudo dejar SGR activo, el juego G1 de dibujo de líneas seleccionado o
+    /// el autowrap apagado, y `clear()` restituye atributos por celda pero no
+    /// esas tres cosas. Comprobable sin tty porque el prólogo escribe en
+    /// cualquier `Write`.
+    #[test]
+    fn el_prologo_resetea_la_terminal_antes_del_aviso() {
+        let mut out: Vec<u8> = Vec::new();
+        super::write_resume_prologue(&mut out).expect("escribe en un Vec");
+        let s = String::from_utf8(out).expect("UTF-8");
+        assert!(s.starts_with("\x1b[0m"), "SGR reset primero: {s:?}");
+        assert!(s.contains("\x1b(B"), "US-ASCII en G0: {s:?}");
+        assert!(s.contains("\x1b[?7h"), "autowrap on: {s:?}");
+        assert!(
+            s.contains("\r\n"),
+            "con retorno de carro: el raw mode que viene ya no traduce \\n"
+        );
+    }
+
+    /// La suspensión restaura la terminal en TODOS los caminos, incluido el
+    /// que es fácil de olvidar: un hijo que FALLA. Que la función devuelva
+    /// —con el status del hijo dentro— es la prueba de que el fallo no
+    /// cortocircuitó la restauración.
+    ///
+    /// Necesita una terminal de control DE VERDAD, así que es opt-in
+    /// (`NORTE_TTY_TESTS=1`): correrla en el gate metería a la terminal del
+    /// desarrollador en la pantalla alternativa y en raw mode a mitad de la
+    /// suite. Salta con un aviso, en el estilo de los saltos de wasm/MinIO,
+    /// jamás en silencio.
+    #[tokio::test]
+    async fn un_hijo_que_falla_no_se_salta_la_restauracion() {
+        let Some(out) = tty_for_test() else { return };
+        let mut term = norte_tui::tty::init(out).expect("init");
+        let mut capture = crate::mouse::Capture::default();
+        let status = run_suspended(
+            &mut term,
+            &mut capture,
+            vec![std::ffi::OsString::from("false")],
+            None,
+            false,
+        )
+        .await
+        .expect("la suspensión devuelve");
+        let _ = norte_tui::tty::restore(&mut term);
+        let status = status.expect("un argv no vacío tiene status");
+        assert!(
+            !status.success(),
+            "`false` falla, y eso es lo que se propaga"
+        );
+    }
+
+    /// Un argv VACÍO no lanza nada y no es un error: es `app.toggle-panels`.
+    #[tokio::test]
+    async fn un_argv_vacio_no_lanza_nada() {
+        let Some(out) = tty_for_test() else { return };
+        let mut term = norte_tui::tty::init(out).expect("init");
+        let mut capture = crate::mouse::Capture::default();
+        let status = run_suspended(&mut term, &mut capture, Vec::new(), None, false)
+            .await
+            .expect("la suspensión devuelve");
+        let _ = norte_tui::tty::restore(&mut term);
+        assert!(status.is_none(), "no hubo hijo, así que no hay status");
     }
 }
 
