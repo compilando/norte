@@ -33,6 +33,7 @@ pub mod palette;
 mod pane;
 pub mod plugin_config;
 pub mod settings;
+pub mod shell;
 pub mod shortcuts;
 mod sort;
 pub mod theme;

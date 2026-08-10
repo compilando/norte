@@ -374,6 +374,7 @@ help-cmd-app-theme = elegir tema
 help-cmd-app-extensions = gestor de extensiones
 help-cmd-app-palette = paleta de comandos
 help-cmd-app-settings = ajustes
+help-cmd-app-pick-accept = aceptar la selección y salir (modo picker)
 # --- Paleta de comandos (H1 T4) — editor de filtro libre como el diálogo
 # de búsqueda (decisión 8): sus teclas son fijas, NO resuelven por el
 # contexto `dialog` — este hint es una cadena estática, como `search-hint`.

@@ -367,6 +367,7 @@ help-cmd-app-theme = choose theme
 help-cmd-app-extensions = extension manager
 help-cmd-app-palette = command palette
 help-cmd-app-settings = settings
+help-cmd-app-pick-accept = accept the selection and exit (picker mode)
 # --- Command palette (H1 T4) — a free-text filter editor like the search
 # dialog (decision 8): its keys are hardcoded, NOT resolved through the
 # `dialog` context, so this hint is a static string like `search-hint`.

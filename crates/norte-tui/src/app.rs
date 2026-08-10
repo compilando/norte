@@ -956,6 +956,21 @@ pub struct App {
     /// saturating would eventually stop changing, which is the one thing it
     /// must never do.
     swap_seq: u64,
+    /// `--pick` (S2): true for the lifetime of the process once the flag was
+    /// passed. Read by the run loop's Enter/Ctrl+Enter override (design §B)
+    /// and by `Command::AppPickAccept`'s dispatch arm, which is a no-op
+    /// without it — the command exists in the catalogue unconditionally
+    /// (help, palette, rebind checks), but only ever FIRES under `--pick`.
+    /// Set once in `main`, right after construction; never toggled at
+    /// runtime.
+    pub pick: bool,
+    /// The picker's answer, written by `Command::AppPickAccept` and read by
+    /// `main` after the run loop returns (`app.quit` is set alongside it, so
+    /// this is always read exactly once). `None` after a normal quit means
+    /// the pick was CANCELLED, not that nothing happened — `main` tells the
+    /// two apart with `Self::pick`, per the exit-code table in the design
+    /// (0 accepted, 1 cancelled, 2 error).
+    pub picked: Option<Vec<VPath>>,
 }
 
 /// Qué popup de navegación está abierto (spec 2026-07-18).
@@ -1689,6 +1704,8 @@ impl App {
             settings: None,
             shortcuts: None,
             swap_seq: 0,
+            pick: false,
+            picked: None,
         }
     }
 

@@ -10,6 +10,7 @@ commands = [
     "mark.clear",
     "mark.pattern-add",
     "mark.pattern-remove",
+    "app.pick-accept",
 ]
 context = ["dialog.mark-pattern"]
 +++
@@ -41,3 +42,17 @@ and the status bar says how many were dropped. A silent prune would quietly
 change what the next command acts on.
 
 > ⚠ Marks belong to **one** listing. Changing directory clears them, and an operation consumes them the moment the batch is sent — so a selection is never left half-spent, waiting on which task happened to finish.
+
+# Handing the selection to another program
+
+Started as `ntc --pick`, norte answers instead of acting: {{cmd:app.pick-accept}}
+writes the marked entries — or the entry under the cursor, same fallback as
+every other command here — to standard output, one path per line terminated
+by a NUL, and exits. A shell pipes that straight into another tool, for
+example `ntc --pick | xargs -0 vim`.
+
+Enter runs it whenever the cursor is not on something that would otherwise be
+entered, so browsing into a directory still works; Ctrl+Enter accepts no
+matter what is under the cursor. Quitting any other way exits with nothing
+written — a script tells "nothing chosen" apart from "norte failed" by the
+exit code, not by parsing output.

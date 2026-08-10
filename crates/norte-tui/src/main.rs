@@ -1112,6 +1112,7 @@ fn apply_fill_msg(app: &mut App, fill: &mut [Option<Fill>; 2], pane: usize, msg:
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)] // wiring del binario, no API — mismo criterio que `run`/`dispatch`
 async fn main() -> Result<()> {
     // Args: DIR posicional + `--preset`/`--daemon`/`--socket`. `--help` y
     // `--version` salen ANTES de tocar el terminal (antes se ignoraban como
@@ -1120,10 +1121,11 @@ async fn main() -> Result<()> {
     let Some(args) = args_or_exit(parsed)? else {
         return Ok(()); // `--help`/`--version`: ya impreso.
     };
-    let (cli_preset, cli_daemon, cli_socket) = (
+    let (cli_preset, cli_daemon, cli_socket, cli_pick) = (
         args.text("--preset"),
         args.has("--daemon"),
         args.path("--socket"),
+        args.has("--pick"),
     );
     let layers = config::standard_layers();
     let cfg = config::load_async(layers.clone())
@@ -1164,6 +1166,7 @@ async fn main() -> Result<()> {
     let left = initial_pane(&backend, &start, &start_attrs).await?;
     let right = initial_pane(&backend, &start, &start_attrs).await?;
     let mut app = App::new(left, right);
+    app.pick = cli_pick; // `--pick` (S2): see the field's rustdoc (`app.rs`).
     app.columns = columns;
     // #117: el catálogo del scheme de arranque — incondicional, como el cd
     // (una vez por scheme y sesión; el picker de la tarea 4 lo quiere
@@ -1267,7 +1270,36 @@ async fn main() -> Result<()> {
     let _ = capture.set(false, terminal.backend_mut());
     restore_terminal(&mut terminal);
     drop(watch);
-    res
+    res?; // A broken run loop is not a cancelled `--pick`.
+    finish_pick(&mut app);
+    Ok(())
+}
+
+/// `--pick` (S2): the picker's exit, decided AFTER the terminal is restored
+/// — never before, or the alternate screen swallows every byte (the whole
+/// point of Task 1). Exit codes per the design's table: 0 accepted
+/// (written), 1 cancelled (nothing written — `q`/`F10` under `--pick` never
+/// populate `app.picked`), 2 reserved for the no-tty error in
+/// [`open_terminal_or_exit`] and, here, a write failure the caller needs to
+/// tell apart from "user picked nothing".
+///
+/// Returns normally only when `--pick` was never passed: every other path
+/// exits the process directly, so `main` never reaches its own `Ok(())`
+/// with a pick outstanding.
+fn finish_pick(app: &mut App) {
+    if let Some(paths) = app.picked.take() {
+        use std::io::Write as _;
+        let bytes = norte_frontend::shell::pick_bytes(&paths);
+        let mut stdout = std::io::stdout();
+        if let Err(e) = stdout.write_all(&bytes).and_then(|()| stdout.flush()) {
+            eprintln!("ntc: failed to write the pick: {e}");
+            std::process::exit(2);
+        }
+        std::process::exit(0);
+    }
+    if app.pick {
+        std::process::exit(1);
+    }
 }
 
 /// Deshace [`tty::init`]. Lo mismo que hacía `ratatui::restore()`: no hay
@@ -1337,7 +1369,7 @@ fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App, out: &mut tty::TtyOut) -
 }
 
 /// Flags booleanos del TUI.
-const BOOL_FLAGS: &[&str] = &["--daemon"];
+const BOOL_FLAGS: &[&str] = &["--daemon", "--pick"];
 /// Flags con valor del TUI.
 const VALUE_FLAGS: &[&str] = &["--preset", "--socket"];
 
@@ -1355,6 +1387,7 @@ Options:
       --preset <NAME>  Keymap preset (orthodox|vim|cua); overrides norte.toml
       --daemon         Talk to the daemon instead of the embedded core
       --socket <PATH>  Daemon socket (default: $XDG_RUNTIME_DIR/norte/daemon.sock)
+      --pick           print the selection, NUL-terminated, and exit
   -h, --help           Print help
   -V, --version        Print version
 ";
@@ -2980,6 +3013,41 @@ async fn run(
                                     continue;
                                 }
                                 _ => {}
+                            }
+                        }
+                        // `--pick` (S2, design §B): Enter/Ctrl+Enter accept
+                        // the selection HERE, where the key turns into a
+                        // command — never in a preset, which must not have
+                        // to know `--pick` exists. Browse only (the viewer
+                        // has nothing to pick); quick search and the
+                        // live-search pane already resolved their own Enter
+                        // above and `continue`d past this point, so reaching
+                        // here means neither is active.
+                        if app.pick && app.viewer.is_none() {
+                            let ctrl_enter = key.code == KeyCode::Enter
+                                && key.modifiers == KeyModifiers::CONTROL;
+                            // Plain Enter keeps navigating whenever there is
+                            // somewhere to go (`nav_enter_target`) — taking
+                            // that away would make the picker unusable for
+                            // reaching anything below the start directory.
+                            let plain_enter = key.code == KeyCode::Enter
+                                && key.modifiers.is_empty()
+                                && nav_enter_target(app).is_none();
+                            if ctrl_enter || plain_enter {
+                                app.abandon_pending(resolver);
+                                let _ = dispatch(
+                                    app,
+                                    backend,
+                                    &mut events,
+                                    help_lines,
+                                    lang,
+                                    quick_mode,
+                                    confirm_quit,
+                                    &cfg,
+                                    Command::AppPickAccept,
+                                )
+                                .await;
+                                continue;
                             }
                         }
                         // Pantalla activa: el viewer tiene su contexto.
@@ -8253,6 +8321,27 @@ async fn walk_trail(
     outcome
 }
 
+/// Whether `nav.enter` on the cursor's current entry navigates anywhere, and
+/// to what. También symlinks: si apunta a un dir, el provider listará; si
+/// no, el cd falla y se absorbe — qué es "entrable" lo decide el core, no el
+/// TUI (regla 7). Un File .zip/.tar entra como directorio virtual (ADR
+/// 0018): el TUI solo COMPONE el path (azúcar de navegación); listar/validar
+/// sigue siendo del core.
+///
+/// Factored out of `Command::NavEnter` (S2, `--pick`) because the picker's
+/// Enter override needs the exact same answer to a different question: "is
+/// there anything here for Enter to DO", without wanting the `VPath` or
+/// running the `cd`. Two call sites computing this independently is two call
+/// sites that can quietly disagree about what a cursor "on a directory"
+/// means.
+fn nav_enter_target(app: &App) -> Option<VPath> {
+    app.focused()
+        .selected()
+        .filter(|e| matches!(e.kind, EntryKind::Dir | EntryKind::Symlink))
+        .map(|e| e.path.clone())
+        .or_else(|| app.focused().selected().and_then(nav::archive_root_for))
+}
+
 /// Ejecuta un comando nombrado (ADR 0006: los mismos nombres que verán la
 /// palette y el wire). Un error de listado en un cd NO tumba el TUI: el
 /// pane se queda donde estaba (aviso visible: barra de mensajes, issue #20).
@@ -8286,6 +8375,18 @@ async fn dispatch(
             if norte_tui::app::quit_needs_confirm(confirm_quit, app.board.has_active()) {
                 app.modal = Some(Modal::ConfirmQuit);
             } else {
+                app.quit = true;
+            }
+        }
+        // `--pick` (S2): the run loop is the only caller (the Enter/
+        // Ctrl+Enter override below), and only ever under `--pick` — but the
+        // guard stays here too, not just there, because `app.pick-accept` is
+        // also reachable through the palette (H1 T4 put every catalogue name
+        // there) and a preset a user hand-writes could bind it directly.
+        // Outside `--pick` this is a no-op: there is nothing to accept into.
+        Command::AppPickAccept => {
+            if app.pick {
+                app.picked = Some(app.focused().marked_paths());
                 app.quit = true;
             }
         }
@@ -8344,18 +8445,7 @@ async fn dispatch(
         Command::CursorTop => app.focused_mut().move_to_start(),
         Command::CursorBottom => app.focused_mut().move_to_end(),
         Command::NavEnter => {
-            // También symlinks: si apunta a un dir, el provider listará; si
-            // no, el cd falla y se absorbe — qué es "entrable" lo decide el
-            // core, no el TUI (regla 7). Un File .zip/.tar entra como
-            // directorio virtual (ADR 0018): el TUI solo COMPONE el path
-            // (azúcar de navegación); listar/validar sigue siendo del core.
-            let target = app
-                .focused()
-                .selected()
-                .filter(|e| matches!(e.kind, EntryKind::Dir | EntryKind::Symlink))
-                .map(|e| e.path.clone())
-                .or_else(|| app.focused().selected().and_then(nav::archive_root_for));
-            if let Some(dir) = target {
+            if let Some(dir) = nav_enter_target(app) {
                 cd_outcome = cd(app, backend, events, dir).await;
             }
         }

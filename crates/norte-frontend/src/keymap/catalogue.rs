@@ -65,6 +65,15 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("app.settings", false),
     live("app.extensions", false),
     live("app.palette", false),
+    // `--pick` (S2): being in this table only means the NAME is known to the
+    // vocabulary (help, palette, rebind checks). No preset binds it — the
+    // TUI's run loop decides, per keystroke, whether Enter/Ctrl+Enter means
+    // this or `nav.enter`, because that decision needs runtime state
+    // (`--pick` was passed, the cursor is on a directory) that a keymap file
+    // cannot express. A preset that bound it directly would fire outside
+    // `--pick` too, which is exactly what keeping it out of every preset
+    // prevents.
+    live("app.pick-accept", false),
     // --- pane ---
     live("pane.switch", false),
     live("pane.mirror", false),

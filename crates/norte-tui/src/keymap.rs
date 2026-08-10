@@ -129,6 +129,7 @@ commands! {
     "app.extensions" => AppExtensions,
     "app.palette" => AppPalette,
     "app.settings" => AppSettings,
+    "app.pick-accept" => AppPickAccept,
     "pane.ai-rename" => PaneAiRename,
     "pane.semantic-search" => PaneSemanticSearch,
     "pane.copy" => PaneCopy,

@@ -48,6 +48,15 @@ regex.workspace = true
 # (#79). Herramienta estándar (la usa la propia ratatui, misma versión ya en el
 # árbol vía norte-tui), MIT/Apache, mantenida — no entra nada nuevo al grafo.
 unicode-width = "0.2"
+# Shell integration (`shell.rs`, S2 `--pick`): `vpath_to_native` is the ONE
+# function that turns a `file://` VPath into the bytes a shell-side tool can
+# open, and it already lives here (rule 1: no frontend may re-derive native
+# path rules from the wire form). The alternative is duplicating the local
+# scheme's authority/segment rules a second time in this crate, which is
+# exactly the drift `norte-vfs-local` exists to prevent. Already in the
+# workspace graph (every provider that composes over local goes through it);
+# nothing new enters the dependency tree.
+norte-vfs-local.workspace = true
 
 [dev-dependencies]
 norte-testkit.workspace = true

@@ -10,6 +10,7 @@ commands = [
     "mark.clear",
     "mark.pattern-add",
     "mark.pattern-remove",
+    "app.pick-accept",
 ]
 context = ["dialog.mark-pattern"]
 +++
@@ -41,3 +42,17 @@ con ella y la barra de estado dice cuántas se han perdido. Podarlas en
 silencio cambiaría a hurtadillas sobre qué actúa el siguiente comando.
 
 > ⚠ Las marcas son de **un** listado. Cambiar de directorio las borra, y una operación las consume en cuanto se envía el lote: así una selección nunca queda a medio gastar, pendiente de qué tarea acabó antes.
+
+# Entregar la selección a otro programa
+
+Arrancado como `ntc --pick`, norte responde en vez de actuar:
+{{cmd:app.pick-accept}} escribe las entradas marcadas —o la que está bajo el
+cursor, la misma regla de siempre— en la salida estándar, una ruta por línea
+terminada en NUL, y sale. Un shell la canaliza directo a otra herramienta, por
+ejemplo `ntc --pick | xargs -0 vim`.
+
+Enter la ejecuta siempre que el cursor no esté sobre algo que de otro modo se
+entraría, así que navegar a un directorio sigue funcionando; Ctrl+Enter
+acepta pase lo que pase bajo el cursor. Salir de cualquier otra forma termina
+sin escribir nada — un script distingue "no se eligió nada" de "norte falló"
+por el código de salida, no analizando la salida.
