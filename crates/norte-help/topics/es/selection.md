@@ -47,8 +47,8 @@ silencio cambiaría a hurtadillas sobre qué actúa el siguiente comando.
 
 Arrancado como `ntc --pick`, norte responde en vez de actuar:
 {{cmd:app.pick-accept}} escribe las entradas marcadas —o la que está bajo el
-cursor, la misma regla de siempre— en la salida estándar, una ruta por línea
-terminada en NUL, y sale. Un shell la canaliza directo a otra herramienta, por
+cursor, la misma regla de siempre— en la salida estándar, cada ruta terminada
+en NUL en vez de en salto de línea, y sale. Un shell la canaliza directo a otra herramienta, por
 ejemplo `ntc --pick | xargs -0 vim`.
 
 Enter la ejecuta siempre que el cursor no esté sobre algo que de otro modo se

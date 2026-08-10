@@ -47,8 +47,8 @@ change what the next command acts on.
 
 Started as `ntc --pick`, norte answers instead of acting: {{cmd:app.pick-accept}}
 writes the marked entries — or the entry under the cursor, same fallback as
-every other command here — to standard output, one path per line terminated
-by a NUL, and exits. A shell pipes that straight into another tool, for
+every other command here — to standard output, each path terminated by a NUL
+rather than a newline, and exits. A shell pipes that straight into another tool, for
 example `ntc --pick | xargs -0 vim`.
 
 Enter runs it whenever the cursor is not on something that would otherwise be
