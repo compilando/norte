@@ -28,6 +28,7 @@ mod scheduler;
 pub mod search;
 mod sessions;
 mod undo;
+pub mod volumes;
 
 pub use engine::{BATCH_REPORTS_MAX, Engine, RENAME_BATCH_MAX_LISTING, TransferOptions};
 pub use journal::{

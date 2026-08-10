@@ -265,6 +265,16 @@ unic-langid = "0.9"
 # sin REPLACE_EXISTING (windows-sys, el binding oficial de Microsoft).
 libc = "0.2"
 windows-sys = "0.61"
+# norte-core::volumes (plan 2026-08-10, Linux `statvfs`): `libc::statvfs` would
+# need `unsafe` FFI, which regla 5 forbids outside norte-vfs-local. rustix
+# wraps the same syscall safely (`rustix::fs::statvfs` takes any `path::Arg`,
+# including a raw-bytes `&OsStr` via `OsStr::from_bytes` — no UTF-8 required,
+# no unsafe). It is already in the dependency graph at this exact version
+# (transitive of wasmtime-wasi via norte-plugin-host, and of crossterm via
+# norte-tui — see `cargo tree -i rustix`): this adds one direct edge and the
+# `fs` feature, not a new crate to compile. bytecodealliance-maintained,
+# Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT.
+rustix = { version = "1", features = ["fs"] }
 # testkit (simular APFS/HFS+) y vfs-local (etiquetar colisiones por
 # normalización, issue #8): NFC real, no un fold casero. unicode-rs,
 # MIT/Apache; transitivas: solo tinyvec.

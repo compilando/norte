@@ -37,6 +37,14 @@ norte-ai.workspace = true
 norte-index.workspace = true
 norte-vfs-object.workspace = true
 norte-vfs-sftp.workspace = true
+# volumes (plan 2026-08-10): `vpath_from_native` is the ONE function that
+# turns a native path into a `file://` VPath, and it already lives here (rule
+# 1: a host service does not get to re-derive the local scheme's
+# segment/authority rules a second time). Same precedent as norte-frontend's
+# `shell.rs`/`openers.rs` (the reverse direction, `vpath_to_native`). Already
+# in the workspace graph as norte-core's own dev-dependency until now;
+# promoted here because `volumes::linux` needs it outside tests too.
+norte-vfs-local.workspace = true
 # El daemon (ADR 0011) serializa el dispatch JSON-RPC; mismo encoding que proto.
 serde.workspace = true
 serde_json.workspace = true
@@ -61,6 +69,12 @@ tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# volumes::linux (plan 2026-08-10): `statvfs`. See the workspace Cargo.toml
+# for why rustix and not libc (rule 5 forbids `unsafe` outside
+# norte-vfs-local; rustix wraps the syscall safely).
+rustix.workspace = true
+
 [dev-dependencies]
 # FakeEmbed determinista para los tests de index.embed (M4-IA-2). La feature
 # `testutil` solo se activa en tests: el build normal no la ve.
@@ -81,8 +95,6 @@ toml.workspace = true
 unftp-sbe-fs.workspace = true
 bytes.workspace = true
 norte-testkit.workspace = true
-# Provider local real para el test de despacho de Engine::gc_partials (#11).
-norte-vfs-local.workspace = true
 # E2E del criterio de salida M2 (fase 10b): object-fs como remoto S3 stand-in.
 opendal = { workspace = true, features = ["services-fs"] }
 # Benchmarks del copy engine cross-provider (fase 10c).
