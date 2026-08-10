@@ -888,7 +888,9 @@ fn check_user_layer_shape(doc: &toml_edit::DocumentMut, path: &Path) -> std::io:
 /// check with `rebind_check` (K3c c2) BEFORE calling.
 ///
 /// Cross-process safe like the rest of the family, and with its OWN lock:
-/// `keymap.toml.lock`, never `norte.toml.lock` (see [`ConfigFileLock`]).
+/// `keymap.toml.lock`, never `norte.toml.lock` — the private `ConfigFileLock`
+/// carries its own target, so writing a file whose lock is not held is
+/// unrepresentable.
 /// BLOCKING: synchronous FS I/O — the caller MUST wrap it in
 /// `spawn_blocking` (rule 2), the same as `persist_hotlist_add`.
 ///
