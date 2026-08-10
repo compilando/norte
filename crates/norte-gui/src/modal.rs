@@ -212,7 +212,37 @@ pub enum Modal {
         /// Hit bajo el cursor (índice ABSOLUTO en `hits`).
         cursor: usize,
     },
+    /// El picker de volúmenes (2026-08-10-volumes.md task V4, design §D):
+    /// `pane.select-drive`/`-left`/`-right`. Molde `SemanticHits` — una
+    /// snapshot CONGELADA de `Backend::volumes` que `main.rs` pide async y
+    /// entrega ya construida (este módulo no conoce `Backend`).
+    Volumes {
+        /// El pane que `Enter` navega — el foco para `pane.select-drive`, un
+        /// LADO fijo para `-left`/`-right` independientemente de dónde esté
+        /// el foco AHORA (design §D, paridad TUI `NavPopup::target_pane`):
+        /// congelado al pedir la lista, no releído al confirmar.
+        pane: usize,
+        /// El modo con el que se pidió ESTA lista (el toggle "mostrar todo"
+        /// del design §E la vuelve a pedir invertido — literalmente una
+        /// reapertura, no un caso especial, paridad TUI
+        /// `open_volumes_popup`).
+        include_pseudo: bool,
+        /// Los volúmenes, en el orden que el daemon los mandó.
+        volumes: Vec<norte_proto::methods::Volume>,
+        /// Primer volumen visible de la ventana de scroll.
+        offset: usize,
+        /// Volumen bajo el cursor (índice ABSOLUTO en `volumes`).
+        cursor: usize,
+    },
 }
+
+/// Ventana de volúmenes visibles a la vez en [`Modal::Volumes`] — el mismo
+/// número que [`SEMANTIC_HIT_LIMIT`] (un modal de tamaño fijo, no una lista
+/// de terminal que crece con la ventana), como constante PROPIA en vez de
+/// reutilizar esa: el recuento de volúmenes de un host no tiene ninguna
+/// relación con el de hits semánticos, y acoplarlas haría que cambiar una
+/// cambiara la otra sin que nadie lo pidiera.
+pub const VOLUMES_LIMIT: usize = 10;
 
 /// La transferencia que originó un conflicto (para reemitir con otra política).
 #[derive(Debug, Clone, PartialEq)]
@@ -265,6 +295,31 @@ pub enum ModalOutcome {
     /// caller cierra el modal y navega el pane activo a la ubicación del
     /// hit (cd al padre + cursor sobre la entrada).
     NavigateTo(VPath),
+    /// `y`/Enter sobre un volumen de [`Modal::Volumes`] (2026-08-10-
+    /// volumes.md task V4): el caller cierra el modal y hace `cd` de `pane`
+    /// —el LADO congelado al abrir, NO necesariamente el foco actual, design
+    /// §D— a `target` (la raíz del volumen). Un `NavigateTo` normal no
+    /// alcanza aquí porque `-left`/`-right` deben navegar un lado fijo
+    /// incluso si el foco se movió mientras el picker estaba abierto.
+    NavigateToPane {
+        /// El pane objetivo — ver el campo `pane` de [`Modal::Volumes`].
+        pane: usize,
+        /// El mount point del volumen elegido.
+        target: VPath,
+    },
+    /// El toggle "mostrar todo" de [`Modal::Volumes`] (`tab`, design §E): el
+    /// caller cierra el modal y manda `SessionCmd::Volumes` con
+    /// `include_pseudo` invertido — la MISMA petición que abrir el picker la
+    /// primera vez, así que el caller la trata igual (banner "cargando…",
+    /// reapertura vía la cola de modales pendientes cuando la respuesta
+    /// llega).
+    RequestVolumes {
+        /// El pane a re-pedir para — ver el campo `pane` de
+        /// [`Modal::Volumes`].
+        pane: usize,
+        /// El modo INVERTIDO a pedir.
+        include_pseudo: bool,
+    },
 }
 
 /// Destino absoluto de un item copiado/movido a `to_dir`: `to_dir` + nombre del
@@ -585,6 +640,56 @@ pub fn on_key(modal: &mut Modal, key: &str, key_char: Option<&str>) -> ModalOutc
                 }
                 ModalOutcome::StayOpen
             }
+            _ => ModalOutcome::Ignored,
+        },
+        Modal::Volumes {
+            pane,
+            include_pseudo,
+            volumes,
+            offset,
+            cursor,
+        } => match key {
+            // Molde `SemanticHits`: superficie de navegación, no destructiva
+            // — `y`/`enter` abre (aquí: cambia el dir del pane congelado).
+            "y" | "enter" => match volumes.get(*cursor) {
+                Some(v) => ModalOutcome::NavigateToPane {
+                    pane: *pane,
+                    target: v.mount.clone(),
+                },
+                // Defensivo: sin volumen bajo el cursor (lista vacía — la
+                // ingestión no abre este modal vacío) no hay nada que abrir.
+                None => ModalOutcome::Dismiss,
+            },
+            "n" | "escape" => ModalOutcome::Dismiss,
+            "down" | "up" => {
+                // Cursor con ventana que lo sigue (molde TUI/`SemanticHits`);
+                // JAMÁS confirma ni cancela.
+                if volumes.is_empty() {
+                    return ModalOutcome::Ignored;
+                }
+                *cursor = if key == "down" {
+                    (*cursor + 1).min(volumes.len() - 1)
+                } else {
+                    cursor.saturating_sub(1)
+                };
+                if *cursor < *offset {
+                    *offset = *cursor;
+                }
+                if *cursor >= *offset + VOLUMES_LIMIT {
+                    *offset = *cursor + 1 - VOLUMES_LIMIT;
+                }
+                ModalOutcome::StayOpen
+            }
+            // El toggle "mostrar todo" (design §E): literalmente una
+            // reapertura con el modo invertido, paridad TUI
+            // `open_drive_popup`/`dialog.toggle-enabled` — el caller cierra
+            // este modal y vuelve a pedir la lista, no hay estado que
+            // voltear aquí (la lista congelada NO cambia sin una respuesta
+            // fresca del daemon).
+            "tab" => ModalOutcome::RequestVolumes {
+                pane: *pane,
+                include_pseudo: !*include_pseudo,
+            },
             _ => ModalOutcome::Ignored,
         },
     }
@@ -1083,6 +1188,133 @@ mod tests {
         };
         assert_eq!(*cursor, 0);
         assert_eq!(*offset, 0, "la ventana siguió al cursor por arriba");
+    }
+
+    fn volumes(n: usize) -> Vec<norte_proto::methods::Volume> {
+        (0..n)
+            .map(|i| norte_proto::methods::Volume {
+                mount: vp(&format!("file:///mnt/v{i}")),
+                label: None,
+                fs_type: "ext4".into(),
+                kind: norte_proto::methods::VolumeKind::Fixed,
+                total_bytes: Some(1_000),
+                free_bytes: Some(500),
+                read_only: false,
+            })
+            .collect()
+    }
+
+    /// 2026-08-10-volumes.md task V4, molde `semantic_hits_enter_navega...`:
+    /// `y`/Enter navegan al volumen bajo el cursor CON EL PANE congelado en
+    /// el modal (no necesariamente el foco actual — design §D), `n`/Esc
+    /// cierran, cualquier otra tecla se ignora.
+    #[test]
+    fn volumes_enter_navega_al_volumen_del_cursor_con_su_pane_y_esc_cierra() {
+        let mut m = Modal::Volumes {
+            pane: 1,
+            include_pseudo: false,
+            volumes: volumes(3),
+            offset: 0,
+            cursor: 1,
+        };
+        assert_eq!(
+            on_key(&mut m, "enter", None),
+            ModalOutcome::NavigateToPane {
+                pane: 1,
+                target: vp("file:///mnt/v1")
+            }
+        );
+        assert_eq!(
+            on_key(&mut m, "y", None),
+            ModalOutcome::NavigateToPane {
+                pane: 1,
+                target: vp("file:///mnt/v1")
+            }
+        );
+        assert_eq!(on_key(&mut m, "n", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "escape", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "x", None), ModalOutcome::Ignored);
+    }
+
+    /// Defensivo (molde `semantic_hits_cursor_fuera_de_rango_no_navega`): sin
+    /// volúmenes, o con un cursor que quedó fuera de rango, `y`/Enter cierra
+    /// en vez de indexar fuera de rango.
+    #[test]
+    fn volumes_cursor_fuera_de_rango_no_navega() {
+        let mut m = Modal::Volumes {
+            pane: 0,
+            include_pseudo: false,
+            volumes: Vec::new(),
+            offset: 0,
+            cursor: 0,
+        };
+        assert_eq!(on_key(&mut m, "enter", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "down", None), ModalOutcome::Ignored);
+        let mut m = Modal::Volumes {
+            pane: 0,
+            include_pseudo: false,
+            volumes: volumes(2),
+            offset: 0,
+            cursor: 9,
+        };
+        assert_eq!(on_key(&mut m, "y", None), ModalOutcome::Dismiss);
+    }
+
+    /// Molde `semantic_hits_cursor_clampa_y_la_ventana_lo_sigue`: `down`/`up`
+    /// mueven el cursor clampado a `[0, len-1]`, la ventana lo sigue por
+    /// ambos extremos, el scroll jamás confirma ni cancela.
+    #[test]
+    fn volumes_cursor_clampa_y_la_ventana_lo_sigue() {
+        let n = VOLUMES_LIMIT + 2;
+        let mut m = Modal::Volumes {
+            pane: 0,
+            include_pseudo: false,
+            volumes: volumes(n),
+            offset: 0,
+            cursor: 0,
+        };
+        for _ in 0..n {
+            assert_eq!(on_key(&mut m, "down", None), ModalOutcome::StayOpen);
+        }
+        let Modal::Volumes { offset, cursor, .. } = &m else {
+            unreachable!()
+        };
+        assert_eq!(*cursor, n - 1, "clamp en len - 1");
+        assert_eq!(
+            *offset,
+            n - VOLUMES_LIMIT,
+            "la ventana siguió al cursor por abajo"
+        );
+        for _ in 0..n {
+            assert_eq!(on_key(&mut m, "up", None), ModalOutcome::StayOpen);
+        }
+        let Modal::Volumes { offset, cursor, .. } = &m else {
+            unreachable!()
+        };
+        assert_eq!(*cursor, 0);
+        assert_eq!(*offset, 0, "la ventana siguió al cursor por arriba");
+    }
+
+    /// El toggle "mostrar todo" (`tab`, design §E): pide de nuevo con el
+    /// modo INVERTIDO y el MISMO pane — no voltea ningún campo local (la
+    /// lista congelada no cambia sin una respuesta fresca del daemon, ver
+    /// `ModalOutcome::RequestVolumes`'s rustdoc).
+    #[test]
+    fn volumes_tab_pide_el_modo_invertido_del_mismo_pane() {
+        let mut m = Modal::Volumes {
+            pane: 1,
+            include_pseudo: false,
+            volumes: volumes(1),
+            offset: 0,
+            cursor: 0,
+        };
+        assert_eq!(
+            on_key(&mut m, "tab", None),
+            ModalOutcome::RequestVolumes {
+                pane: 1,
+                include_pseudo: true,
+            }
+        );
     }
 
     // --- Renombrado in situ (`pane.rename`) -------------------------------

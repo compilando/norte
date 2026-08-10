@@ -16,6 +16,13 @@ norte-proto.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
+# `wtf8::encode_from_wide`'s corpus round-trip test (2026-08-10-volumes.md
+# task V4, encoding-auditor finding). `norte-testkit` depends on `norte-vfs`
+# normally, so this is a dev-deps cycle — the pattern
+# `norte-encoding`/`norte-testkit` already use, which cargo supports (dev
+# dependencies are not part of the graph cargo checks for cycles when THIS
+# crate is built as someone else's dependency, only when its own tests run).
+norte-testkit.workspace = true
 
 [lints]
 workspace = true

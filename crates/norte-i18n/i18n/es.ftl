@@ -87,6 +87,7 @@ modal-semantic-hits = Resultados semánticos
 modal-semantic-hit = { $n }. { $path } · { $score }
 modal-semantic-more = … { $shown }/{ $total } (desplazar: ↓/↑)
 modal-semantic-hits-hint = y/Enter: abrir ubicación · n/Esc: cerrar
+modal-volumes-more = … { $shown }/{ $total } (desplazar: ↓/↑)
 msg-transfer-name-fffd = el nombre aún contiene el carácter de sustitución — reescríbelo limpio
 msg-transfer-name-same = mismo nombre y sitio: nada que hacer
 msg-transfer-name-failed = no se pudo encolar — el nombre se conserva
@@ -314,6 +315,13 @@ msg-semantic-empty = Búsqueda semántica: sin resultados
 msg-semantic-failed = la búsqueda semántica falló: { $error }
 msg-semantic-invalid = búsqueda semántica: respuesta inválida del daemon — no se muestra nada
 msg-semantic-in-search = la búsqueda semántica no está disponible en un pane de búsqueda
+# Solo GUI (2026-08-10-volumes.md tarea V4): misma doctrina que el trío de
+# búsqueda semántica de arriba — "cargando" no puede prometer "Esc cancela"
+# (sin camino de aborto), una lista reemplazada lo dice en vez de perderla en
+# silencio, y "failed" envuelve el texto de error ya aplanado del daemon.
+gui-msg-volumes-running = Unidades: cargando…
+gui-msg-volumes-superseded = Unidades: lista anterior descartada (nuevo resultado)
+gui-msg-volumes-failed = no se pudieron listar las unidades: { $error }
 msg-hidden-hidden = entradas ocultas escondidas
 # H3b: Enter sobre una fila de la ayuda que documenta un verbo de OVERLAY
 # (`dialog.*`). No son despachables desde un pane, así que no corre nada — y
@@ -686,6 +694,7 @@ cli-ai-rename-done = renombrados { $n } archivo(s)
 gui-modal-quit-title = ¿Salir con { $tasks } tarea(s) en curso y { $marks } marca(s)?
 gui-modal-quit-title-empty = ¿Salir de norte?
 gui-modal-footer-quit = y confirmar   n/Esc cancelar
+gui-modal-footer-volumes = y/Enter abrir   n/Esc cancelar   ↓↑ mover   Tab alternar todo
 gui-banner-theme-io = tema { $spec }: { $error }
 gui-banner-theme-parse = tema { $spec }: { $detail }
 gui-banner-config-io = configuración { $path }: { $error }

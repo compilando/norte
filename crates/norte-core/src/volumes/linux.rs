@@ -7,7 +7,7 @@
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tokio::task::spawn_blocking;
@@ -276,62 +276,18 @@ fn statvfs_native(mount: &[u8]) -> std::io::Result<(u64, u64)> {
 /// answer in time OR if it errors — either way the volume still shows up in
 /// the picker, just without sizes (design §A).
 ///
-/// Deliberately a raw detached [`std::thread`], NOT [`spawn_blocking`]:
-/// tokio's blocking pool is bounded (512 threads by default) and SHARED with
-/// every other blocking operation in the process, including every
-/// `spawn_blocking` call `norte-vfs-local` makes for ordinary local
-/// filesystem work. `statvfs` on a dead NFS mount can hang indefinitely, and
-/// there is no way to cancel a syscall already in flight — if that hang
-/// happened on the shared pool, one dead mount would tie up one pool slot
-/// for as long as it stayed dead, and reopening the picker against the same
-/// mount (or several dead mounts) would eventually starve the pool the
-/// daemon depends on for every other local file operation. A plain
-/// `std::thread` costs one leaked OS thread per hung probe instead of one
-/// consumed slot of a shared resource — worse in isolation (a fresh stack,
-/// never reused), but it cannot blockade anything else, and a `oneshot`
-/// whose receiver `timeout` walks away from lets the runtime shut down
-/// without waiting for it. (`spawn_blocking`'s task, by contrast, is awaited
-/// by the runtime at shutdown even after its caller stopped waiting on it —
-/// this is what made the first version of this function hang for an hour
-/// under `#[tokio::test]` teardown despite `timeout` returning in
-/// milliseconds.)
+/// A thin wrapper over [`super::blocking_with_deadline`] (hoisted there in
+/// task V4 so `macos`/`windows` share the exact same detached-thread
+/// mechanism instead of each growing their own — see that function's
+/// rustdoc for the full "why not `spawn_blocking`" reasoning, unchanged from
+/// when it lived here).
 async fn space_with_deadline<F>(query: F, deadline: Duration) -> (Option<u64>, Option<u64>)
 where
     F: FnOnce() -> std::io::Result<(u64, u64)> + Send + 'static,
 {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        // The receiver may already be gone (deadline elapsed and `timeout`
-        // dropped it): `send` returning `Err` just means nobody is
-        // listening anymore, not a bug to report.
-        let _ = tx.send(query());
-    });
-    match tokio::time::timeout(deadline, rx).await {
-        Ok(Ok(Ok((total, free)))) => (Some(total), Some(free)),
+    match super::blocking_with_deadline(query, deadline).await {
+        Some(Ok((total, free))) => (Some(total), Some(free)),
         _ => (None, None),
-    }
-}
-
-/// Converts a mount point's raw bytes to a `file://` [`VPath`](norte_proto::VPath),
-/// via [`norte_vfs_local::vpath_from_native`] — the SAME conversion the local
-/// provider uses (rule 1: a host service does not get to re-derive the local
-/// scheme's segment rules a second time). `/proc/mounts` mount points are
-/// always absolute, so this never touches `$PWD`.
-///
-/// `None` for a mount point that cannot become a `VPath` (a component that is
-/// literally `.`/`..`, a NUL byte) — in practice unreachable for a real
-/// kernel-reported mount, since none of those are legal path components on
-/// Linux either. The mount is skipped rather than failing the whole
-/// enumeration, matching the truncated-line policy above: one bad entry
-/// should not take down the picker.
-fn mount_to_vpath(mount: &[u8]) -> Option<norte_proto::VPath> {
-    let path = Path::new(OsStr::from_bytes(mount));
-    match norte_vfs_local::vpath_from_native(path) {
-        Ok(vpath) => Some(vpath),
-        Err(err) => {
-            tracing::warn!(?err, "volumes: a mount point could not become a VPath");
-            None
-        }
     }
 }
 
@@ -355,7 +311,7 @@ pub(super) async fn enumerate(include_pseudo: bool) -> Result<Vec<Volume>, Error
         let for_query = p.mount.clone();
         let (total_bytes, free_bytes) =
             space_with_deadline(move || statvfs_native(&for_query), SPACE_QUERY_DEADLINE).await;
-        let Some(mount) = mount_to_vpath(&p.mount) else {
+        let Some(mount) = super::mount_to_vpath(&p.mount) else {
             continue;
         };
         volumes.push(Volume {

@@ -271,6 +271,14 @@ struct NorteGui {
     /// `SemanticSearch` lo limpia — unos hits viejos jamás aterrizan como si
     /// respondieran a la consulta nueva.
     pending_semantic: Option<Vec<norte_proto::methods::SemanticHit>>,
+    /// Volúmenes retenidos (2026-08-10-volumes.md task V4, molde
+    /// `pending_semantic`): llegaron con otro modal abierto y esperan su
+    /// turno — jamás lo pisan. Se abren al cerrarse el modal activo, tras
+    /// `conflict_backlog`/`pending_ai_plan`/`pending_semantic` (mismo orden
+    /// de llegada de sus drenadores). Carga `pane`/`include_pseudo` junto a
+    /// la lista: `Modal::Volumes` los necesita al abrir y una respuesta
+    /// vieja no debe aterrizar con los de una petición más nueva.
+    pending_volumes: Option<(usize, bool, Vec<norte_proto::methods::Volume>)>,
     /// Orden de llegada de las tasks (render estable; `task_progress` no ordena).
     task_order: Vec<norte_proto::TaskId>,
     /// Cursor de la franja de tasks (#91): índice dentro de `task_order` que
@@ -1132,6 +1140,7 @@ impl NorteGui {
                     conflict_backlog: Vec::new(),
                     pending_ai_plan: None,
                     pending_semantic: None,
+                    pending_volumes: None,
                     task_order: Vec::new(),
                     task_cursor: 0,
                     scrolls: [
@@ -1227,6 +1236,7 @@ impl NorteGui {
                     conflict_backlog: Vec::new(),
                     pending_ai_plan: None,
                     pending_semantic: None,
+                    pending_volumes: None,
                     task_order: Vec::new(),
                     task_cursor: 0,
                     scrolls: [
@@ -1875,6 +1885,50 @@ impl NorteGui {
                     ));
                 }
             },
+            // 2026-08-10-volumes.md task V4, molde `SemanticHits` above —
+            // minus the empty-result special case: an empty volume list is
+            // still a valid answer to show (paridad TUI `App::
+            // open_volumes_popup`, whose picker paints `volumes-empty`
+            // INSIDE itself rather than refusing to open), not a "nothing
+            // found" banner the way zero semantic hits is.
+            SessionEvent::VolumesReady {
+                pane,
+                include_pseudo,
+                result,
+            } => match result {
+                Ok(volumes) => {
+                    // Retira el "cargando…" del banner: los volúmenes SON la
+                    // respuesta (posiblemente vacía).
+                    self.errors[self.focus] = None;
+                    if self.modal.is_none() {
+                        self.open_modal(Modal::Volumes {
+                            pane,
+                            include_pseudo,
+                            volumes,
+                            offset: 0,
+                            cursor: 0,
+                        });
+                    } else {
+                        // Otro modal abierto: espera su turno, jamás lo
+                        // pisa. Si YA había una lista retenida, gana la
+                        // NUEVA y la pérdida se DICE (molde semantic hits).
+                        if self
+                            .pending_volumes
+                            .replace((pane, include_pseudo, volumes))
+                            .is_some()
+                        {
+                            self.errors[self.focus] =
+                                Some(norte_i18n::t("gui-msg-volumes-superseded"));
+                        }
+                    }
+                }
+                Err(msg) => {
+                    self.errors[self.focus] = Some(norte_i18n::ta(
+                        "gui-msg-volumes-failed",
+                        &[("error", banner_safe(&msg).as_str())],
+                    ));
+                }
+            },
         }
     }
 
@@ -1976,18 +2030,39 @@ impl NorteGui {
         }
     }
 
+    /// Al cerrar un modal, abre los volúmenes retenidos (2026-08-10-
+    /// volumes.md task V4, molde `open_pending_semantic`) si ningún otro
+    /// modal ganó el turno — se llama SIEMPRE último (conflictos, plan IA,
+    /// hits semánticos, luego esto).
+    fn open_pending_volumes(&mut self) {
+        if self.modal.is_some() {
+            return;
+        }
+        if let Some((pane, include_pseudo, volumes)) = self.pending_volumes.take() {
+            self.open_modal(Modal::Volumes {
+                pane,
+                include_pseudo,
+                volumes,
+                offset: 0,
+                cursor: 0,
+            });
+        }
+    }
+
     /// Drena lo retenido al cerrarse un modal, en el ORDEN de prioridad del
     /// contrato (única fuente — cada `ModalOutcome` que cierra el modal
     /// llama aquí, jamás a los `open_*` sueltos): (1) conflictos
     /// (`conflict_backlog`, bloquean transferencias vivas), (2) el plan IA
     /// retenido (`pending_ai_plan`, molde TUI), (3) los hits semánticos
-    /// retenidos (`pending_semantic`). Cada `open_*` es no-op si el anterior
+    /// retenidos (`pending_semantic`), (4) los volúmenes retenidos
+    /// (`pending_volumes`, task V4). Cada `open_*` es no-op si el anterior
     /// ya ocupó el turno — solo UNO abre por cierre, el resto sigue
     /// esperando.
     fn drain_pending_modals(&mut self) {
         self.open_next_conflict();
         self.open_pending_ai_plan();
         self.open_pending_semantic();
+        self.open_pending_volumes();
     }
 
     /// The ONE way a modal opens in this window (K3c c4).
@@ -2010,6 +2085,26 @@ impl NorteGui {
             view.state.cancel_capture();
         }
         self.modal = Some(modal);
+    }
+
+    /// Pide `Backend::volumes` para `pane` (2026-08-10-volumes.md task V4,
+    /// design §D): `pane.select-drive*` y el toggle "mostrar todo" DENTRO
+    /// del picker (`ModalOutcome::RequestVolumes`) son la MISMA operación —
+    /// una snapshot fresca para el modo pedido — así que ambos llaman aquí,
+    /// molde `SessionCmd::SemanticSearch`. La respuesta llega async
+    /// (`SessionEvent::VolumesReady`) y abre el modal, o se encola si otro
+    /// ya está abierto (`pending_volumes`).
+    fn request_volumes(&mut self, pane: usize, include_pseudo: bool) {
+        let _ = self.cmds.send(SessionCmd::Volumes {
+            pane,
+            include_pseudo,
+        });
+        // Clave gui-* propia (misma doctrina que `gui-msg-semantic-running`):
+        // la GUI no tiene camino para abortar la petición en vuelo — jamás
+        // una affordance falsa. En `self.focus`, no en `pane`: el banner es
+        // por-pane-VISIBLE, y lo que el lector tiene delante es el pane con
+        // foco, sea o no el que `-left`/`-right` van a navegar.
+        self.errors[self.focus] = Some(norte_i18n::t("gui-msg-volumes-running"));
     }
 
     /// Abre el renombrado in situ (`pane.rename`, shift+F6): el destino es el
@@ -2307,6 +2402,14 @@ impl NorteGui {
             // única op de esta lista que no toca ningún backend.
             "pane.copy-path" => self.copy_paths_to_clipboard(cx),
             "pane.semantic-search" => self.open_semantic_search(),
+            // 2026-08-10-volumes.md task V4 (design §D): `-left`/`-right`
+            // name a SIDE, not the focus — Total Commander's `Alt+F1`/
+            // `Alt+F2`, paridad TUI `Command::PaneSelectDrive{,Left,Right}`.
+            // The list starts filtered (`include_pseudo: false`); the modal's
+            // own `tab` toggle re-requests the other mode.
+            "pane.select-drive" => self.request_volumes(f, false),
+            "pane.select-drive-left" => self.request_volumes(0, false),
+            "pane.select-drive-right" => self.request_volumes(1, false),
             "task.cancel" => self.cancel_task_under_cursor(),
             "task.next" => {
                 if !self.task_order.is_empty() {
@@ -3398,6 +3501,19 @@ impl NorteGui {
                 Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => {
                     "dialog.semantic-search"
                 }
+                // The volumes picker (2026-08-10-volumes.md task V4) has no
+                // `Modal` counterpart in the TUI at all — there it is a
+                // separate `NavPopup` overlay, outside `help_context.rs`'s
+                // closed vocabulary entirely (history/hotlist share the same
+                // exemption). `panes.md`, the topic `pane.select-drive*`'s
+                // own Fluent help ids live under, declares `context =
+                // ["browse"]` rather than a dedicated dialog id — the picker
+                // is a quick, non-destructive overlay over ordinary
+                // browsing, not a question with its own page the way a
+                // delete confirmation is. Reusing `"browse"` here keeps `F1`
+                // landing on that same page instead of inventing a context
+                // id nothing else in the corpus would ever ask for.
+                Modal::Volumes { .. } => "browse",
             };
         }
         if self.viewer.is_some() {
@@ -4186,6 +4302,24 @@ impl NorteGui {
                         self.panes[f].set_pending_focus(path);
                         self.cd(f, parent, cx);
                     }
+                    self.drain_pending_modals();
+                }
+                ModalOutcome::NavigateToPane { pane, target } => {
+                    self.modal = None;
+                    // Unlike `NavigateTo`, `target` IS the destination
+                    // itself (a volume's mount point, not an entry inside
+                    // one) — a straight `cd`, no parent/pending-focus dance.
+                    // `pane` is the LADO the modal froze at open time (design
+                    // §D), not necessarily `self.focus` now.
+                    self.cd(pane, target, cx);
+                    self.drain_pending_modals();
+                }
+                ModalOutcome::RequestVolumes {
+                    pane,
+                    include_pseudo,
+                } => {
+                    self.modal = None;
+                    self.request_volumes(pane, include_pseudo);
                     self.drain_pending_modals();
                 }
             }
@@ -7550,6 +7684,11 @@ impl NorteGui {
             // `gui-msg-semantic-running`, que no puede prometer aborto.
             Modal::SemanticQuery { .. } => "modal-semantic-hint",
             Modal::SemanticHits { .. } => "modal-semantic-hits-hint",
+            // 2026-08-10-volumes.md task V4: the TUI's footer here is
+            // GENERATED from the live keymap (`hints.rs::nav_volumes`), not a
+            // fixed string, so there is no shared key to reuse — this one is
+            // GUI-only, molde `gui-modal-footer-*` above.
+            Modal::Volumes { .. } => "gui-modal-footer-volumes",
         });
         // Líneas que van en rojo: el modo de un borrado PERMANENTE (índice 1
         // en ConfirmDelete) y el diagnóstico del renombrado, que `modal_lines`
@@ -8457,6 +8596,85 @@ fn modal_lines(m: &Modal) -> Vec<String> {
                     hidden_hostil,
                     norte_i18n::ta(
                         "modal-semantic-more",
+                        &[("shown", shown.as_str()), ("total", total.as_str())],
+                    ),
+                ));
+            }
+            lines
+        }
+        // 2026-08-10-volumes.md task V4 (design §D), molde `SemanticHits`
+        // above. Every text field the platform hands us — label, mount AND
+        // `fs_type` — is masked (encoding-auditor V3 review, paridad TUI
+        // `volume_item_display`): `fs_type` is not the closed ASCII
+        // vocabulary it looks like (a FUSE mount's `fuse.<subtype>` is an
+        // unprivileged user's string), and `label` is `Option<Vec<u8>>`
+        // (V3.5) reaching here as raw wire bytes, no `String` upstream to
+        // have already thrown one away.
+        Modal::Volumes {
+            include_pseudo,
+            volumes,
+            offset,
+            cursor,
+            ..
+        } => {
+            let mode = norte_i18n::t(if *include_pseudo {
+                "volumes-mode-all"
+            } else {
+                "volumes-mode-filtered"
+            });
+            let mut lines = vec![format!("{} — {mode}", norte_i18n::t("volumes-title"))];
+            if volumes.is_empty() {
+                lines.push(norte_i18n::t("volumes-empty"));
+                return lines;
+            }
+            // Cinturón de render: el clamp vive en `modal::on_key`, pero un
+            // offset fuera de rango jamás debe pintar una ventana vacía.
+            let offset = (*offset).min(volumes.len().saturating_sub(modal::VOLUMES_LIMIT));
+            let last = (offset + modal::VOLUMES_LIMIT).min(volumes.len());
+            for (i, v) in volumes.iter().enumerate().take(last).skip(offset) {
+                let (path_txt, path_hostil) = norte_frontend::path_display(&v.mount);
+                let (label_prefix, label_hostil) = match v.label.as_deref() {
+                    Some(l) => {
+                        let (nt, nh) = norte_frontend::display_name(l);
+                        (format!("{nt} — "), nh)
+                    }
+                    None => (String::new(), false),
+                };
+                let (fs_type_txt, fs_type_hostil) =
+                    norte_frontend::display_name(v.fs_type.as_bytes());
+                let free = v.free_bytes.map_or_else(
+                    || norte_i18n::t("volumes-size-unknown"),
+                    norte_frontend::human_bytes,
+                );
+                let total = v.total_bytes.map_or_else(
+                    || norte_i18n::t("volumes-size-unknown"),
+                    norte_frontend::human_bytes,
+                );
+                let line = hostile_badged(
+                    path_hostil || label_hostil || fs_type_hostil,
+                    format!("{label_prefix}{path_txt}  {fs_type_txt}  {free} / {total}"),
+                );
+                lines.push(if i == *cursor {
+                    format!("> {line}")
+                } else {
+                    format!("  {line}")
+                });
+            }
+            if volumes.len() > modal::VOLUMES_LIMIT {
+                let hidden_hostil = volumes.iter().enumerate().any(|(i, v)| {
+                    (i < offset || i >= last)
+                        && (norte_frontend::path_display(&v.mount).1
+                            || v.label
+                                .as_deref()
+                                .is_some_and(|l| norte_frontend::display_name(l).1)
+                            || norte_frontend::display_name(v.fs_type.as_bytes()).1)
+                });
+                let shown = last.to_string();
+                let total = volumes.len().to_string();
+                lines.push(hostile_badged(
+                    hidden_hostil,
+                    norte_i18n::ta(
+                        "modal-volumes-more",
                         &[("shown", shown.as_str()), ("total", total.as_str())],
                     ),
                 ));
@@ -10737,6 +10955,26 @@ mod tests {
                     hits: vec![norte_proto::methods::SemanticHit {
                         path: item.clone(),
                         score: 0.87,
+                    }],
+                    offset: 0,
+                    cursor: 0,
+                },
+                // 2026-08-10-volumes.md task V4: hostil en el mount (path) Y
+                // en el label (bytes crudos del wire, V3.5) del MISMO
+                // volumen, bajo el cursor — encoding-auditor V3 review
+                // exigió que las tres columnas se enmascaren, no solo el
+                // path.
+                Modal::Volumes {
+                    pane: 0,
+                    include_pseudo: false,
+                    volumes: vec![norte_proto::methods::Volume {
+                        mount: item.clone(),
+                        label: Some(fixture.bytes.clone()),
+                        fs_type: hostile_name.clone(),
+                        kind: norte_proto::methods::VolumeKind::Fixed,
+                        total_bytes: Some(1_000_000),
+                        free_bytes: Some(500_000),
+                        read_only: false,
                     }],
                     offset: 0,
                     cursor: 0,

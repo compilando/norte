@@ -31,6 +31,12 @@ libc.workspace = true
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
+    # `DRIVE_FIXED`/`DRIVE_REMOVABLE`/… (2026-08-10-volumes.md task V4,
+    # `mounts_windows::drive_type`) live here, not in
+    # `Win32_Storage_FileSystem` alongside the functions that use them.
+    "Win32_System_WindowsProgramming",
+    # `FILE_READ_ONLY_VOLUME` (`mounts_windows::volume_info`), same story.
+    "Win32_System_SystemServices",
 ] }
 
 [dev-dependencies]

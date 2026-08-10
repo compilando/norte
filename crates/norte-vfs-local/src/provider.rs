@@ -554,7 +554,7 @@ fn node_id_native(
 }
 
 /// Identidad real del nodo en Windows: `FILE_ID_INFO` (serial de volumen
-/// u64 + FileId de 128 bits, cubre ReFS) vía `GetFileInformationByHandleEx`.
+/// u64 + `FileId` de 128 bits, cubre `ReFS`) vía `GetFileInformationByHandleEx`.
 /// Si el volumen no lo soporta (FAT32, SMB antiguo), degrada a `Ok(None)` —
 /// "no hay identidad estable aquí" es la respuesta honesta del contrato,
 /// jamás un id inventado.
@@ -670,7 +670,7 @@ fn make_symlink(
 }
 
 /// Windows distingue archivo/dir en la creación; exige privilegio
-/// (SeCreateSymbolicLinkPrivilege o Developer Mode) — por eso el provider
+/// (`SeCreateSymbolicLinkPrivilege` o Developer Mode) — por eso el provider
 /// no declara `SYMLINKS` en Windows y este camino responde vía
 /// `Unsupported` antes de llegar aquí salvo sondeos futuros.
 #[cfg(windows)]

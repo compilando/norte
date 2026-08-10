@@ -13,6 +13,7 @@ mod options;
 mod provider;
 mod sink;
 pub mod trash;
+pub mod wtf8;
 
 pub use norte_proto as proto;
 pub use norte_proto::{ByteRange, Capabilities, CapabilityFlags, Entry, EntryKind, Error, VPath};

@@ -85,6 +85,7 @@ modal-semantic-hits = Semantic hits
 modal-semantic-hit = { $n }. { $path } · { $score }
 modal-semantic-more = … { $shown }/{ $total } (scroll: ↓/↑)
 modal-semantic-hits-hint = y/Enter: open location · n/Esc: close
+modal-volumes-more = … { $shown }/{ $total } (scroll: ↓/↑)
 msg-transfer-name-fffd = the name still contains the replacement character — retype it cleanly
 msg-transfer-name-same = same name and place: nothing to do
 msg-transfer-name-failed = could not enqueue — the name is kept
@@ -311,6 +312,13 @@ msg-semantic-empty = Semantic search: no hits
 msg-semantic-failed = Semantic search failed: { $error }
 msg-semantic-invalid = Semantic search: invalid response from the daemon — nothing shown
 msg-semantic-in-search = Semantic search is not available in a search pane
+# GUI-only (2026-08-10-volumes.md task V4): same doctrine as the semantic
+# search trio above — "running" cannot promise "Esc cancels" (no abort path),
+# a superseded fetch says so instead of dropping it silently, and "failed"
+# wraps the daemon's already-flattened error text.
+gui-msg-volumes-running = Drives: loading…
+gui-msg-volumes-superseded = Drives: previous list discarded (new result)
+gui-msg-volumes-failed = Could not list drives: { $error }
 msg-hidden-hidden = hidden entries hidden
 # H3b: Enter on a help row that documents an OVERLAY verb (`dialog.*`). Those
 # are not dispatchable from a pane, so nothing runs — said out loud, because a
@@ -673,6 +681,7 @@ cli-ai-rename-done = renamed { $n } file(s)
 gui-modal-quit-title = Quit with { $tasks } task(s) running and { $marks } mark(s)?
 gui-modal-quit-title-empty = Quit norte?
 gui-modal-footer-quit = y confirm   n/Esc cancel
+gui-modal-footer-volumes = y/Enter open   n/Esc cancel   ↓↑ move   Tab toggle all
 gui-banner-theme-io = theme { $spec }: { $error }
 gui-banner-theme-parse = theme { $spec }: { $detail }
 gui-banner-config-io = configuration { $path }: { $error }

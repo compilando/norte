@@ -88,6 +88,16 @@ pub const COMMANDS: &[&str] = &[
     // `Availability::NotHere`, que es la verdad. Chord `alt+t` vía
     // `gui_supplement`: de los siete presets solo `krusader` lo bindea.
     "app.terminal",
+    // 2026-08-10-volumes.md task V4 (closes #131): the drive picker, same
+    // three commands the TUI's `NavPopupKind::Volumes` answers to.
+    // `pane.select-drive-left`/`-right` already have their own chord
+    // (`alt+f1`/`alt+f2`) in far/total-commander/norton; orthodox/vim/cua/
+    // krusader do not bind any of the three, so `gui_supplement` supplies
+    // `alt+f1`/`alt+f2`/`alt+f3` for all seven (free everywhere — checked
+    // against the same four `.toml` files the comment there enumerates).
+    "pane.select-drive",
+    "pane.select-drive-left",
+    "pane.select-drive-right",
 ];
 
 /// Comandos del contexto Viewer (pantalla del visor F3).
@@ -321,6 +331,18 @@ prepend_keymap = [
     # source binds it to "Open media list" (`krusader-keys.txt`). `alt+h` is
     # not mentioned by any of the four sources' own documentation.
     { on = ["alt+h"], run = "pane.rename" },
+    # 2026-08-10-volumes.md task V4: the drive picker. `alt+f1`/`alt+f2` are
+    # already far/total-commander/norton's OWN chords for
+    # `pane.select-drive-left`/`-right` (Total Commander's `Alt+F1`/`Alt+F2`),
+    # so this line is a no-op there and the only door for orthodox/vim/cua/
+    # krusader (checked free against all four: none binds `f1`/`f2` WITH
+    # `alt`, only bare `f1`→`app.help`, and krusader's own bare `f2`→
+    # `pane.rename` does not collide with the alt-chord either). `alt+f3` for
+    # the focused-pane variant is free in all seven for the same reason
+    # (`f3`→`pane.view`/`viewer.close` are bare, never alt-chorded).
+    { on = ["alt+f1"], run = "pane.select-drive-left" },
+    { on = ["alt+f2"], run = "pane.select-drive-right" },
+    { on = ["alt+f3"], run = "pane.select-drive" },
 ]
 
 [viewer]
@@ -1043,8 +1065,12 @@ prepend_keymap = [{ on = ["5"], run = "cursor.down" }]
     /// orthodox.toml`), la combinación preset compartido + supplemento
     /// cubre el catálogo COMPLETO — los 10 `VIEWER_COMMANDS` ya estaban
     /// enteros en el `[viewer]` del preset compartido (nada que suplir); de
-    /// `COMMANDS`, solo `mark.toggle`/`task.next`/`task.prev`/
-    /// `task.dismiss` faltaban, y los cuatro los repone el supplemento.
+    /// `COMMANDS`, `mark.toggle`/`task.next`/`task.prev`/`task.dismiss`
+    /// faltaban originalmente y los repuso el supplemento; task V4
+    /// (2026-08-10-volumes.md) añadió `pane.select-drive`/`-left`/`-right`
+    /// al catálogo y el supplemento les dio `alt+f1`/`alt+f2`/`alt+f3` por
+    /// la misma razón (far/total-commander/norton ya bindean los dos
+    /// primeros; orthodox/vim/cua/krusader, ninguno de los tres).
     #[test]
     fn todo_comando_gui_es_alcanzable_desde_el_preset_default() {
         // Los presets de fábrica (no solo orthodox): un chord retirado

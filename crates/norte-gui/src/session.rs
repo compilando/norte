@@ -222,6 +222,21 @@ pub enum SessionCmd {
         /// Consulta del usuario (ya recortada y no vacía).
         query: String,
     },
+    /// Pide el listado de volúmenes del host (`host.volumes`, 2026-08-10-
+    /// volumes.md task V4, design §D): `pane.select-drive`/`-left`/`-right`
+    /// y el toggle "mostrar todo" DENTRO del picker piden esto por igual —
+    /// una snapshot fresca para el `include_pseudo` pedido. No muta nada;
+    /// gateado a `User` en el daemon (design §C), transparente para esta GUI
+    /// porque solo habla como humano.
+    Volumes {
+        /// El pane que la respuesta debe navegar — el foco para
+        /// `pane.select-drive`, un LADO fijo para `-left`/`-right`. Viaja de
+        /// ida y vuelta (la respuesta lo repite) porque el foco pudo moverse
+        /// mientras la petición estaba en vuelo.
+        pane: usize,
+        /// El modo pedido — el filtro por defecto o "mostrar todo".
+        include_pseudo: bool,
+    },
 }
 
 /// Contenido del viewer que cruza a la GUI (GUI-d T3).
@@ -457,6 +472,18 @@ pub enum SessionEvent {
     SemanticHits {
         /// Hits path+score o error ya renderizable.
         result: Result<Vec<norte_proto::methods::SemanticHit>, String>,
+    },
+    /// Resultado de `Volumes` (2026-08-10-volumes.md task V4): los
+    /// volúmenes (posiblemente vacío) o el error aplanado a String (mismo
+    /// helper que los arms vecinos). `pane`/`include_pseudo` repiten lo que
+    /// pidió `SessionCmd::Volumes` — el modal los necesita al abrir.
+    VolumesReady {
+        /// El pane que pidió esta lista — ver `SessionCmd::Volumes::pane`.
+        pane: usize,
+        /// El modo pedido — ver `SessionCmd::Volumes::include_pseudo`.
+        include_pseudo: bool,
+        /// Volúmenes o error ya renderizable.
+        result: Result<Vec<norte_proto::methods::Volume>, String>,
     },
 }
 
@@ -747,6 +774,24 @@ pub fn spawn(
                                 .await
                                 .map_err(|e| format!("{e}"));
                             let _ = tx.send(SessionEvent::SemanticHits { result });
+                        });
+                    }
+                    SessionCmd::Volumes {
+                        pane,
+                        include_pseudo,
+                    } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            let result = backend
+                                .volumes(include_pseudo)
+                                .await
+                                .map_err(|e| format!("{e}"));
+                            let _ = tx.send(SessionEvent::VolumesReady {
+                                pane,
+                                include_pseudo,
+                                result,
+                            });
                         });
                     }
                     SessionCmd::PluginRunCommand { id, command, arg } => {
