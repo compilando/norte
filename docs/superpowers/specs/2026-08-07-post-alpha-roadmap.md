@@ -1,7 +1,8 @@
 # Post-alpha roadmap — ordered by the functionality worth building
 
 **Date:** 2026-08-07
-**Status:** accepted, 2026-08-10. Items 2, 4 and 5 are built; item 3 is next.
+**Status:** accepted, 2026-08-10. Items 2, 3, 4 and 5 are built; item 1
+(comparison and synchronisation) is next, and is the largest thing left.
 **Context:** every milestone M0–M5 is met and packaging now turns a tag into
 downloadable artefacts. What remains is not debt — it is the part of
 specification §17 that was never built. This orders it by what the software
@@ -82,6 +83,15 @@ files at once, which item 1 also wants.
 ---
 
 ## 3. Volumes, mounts and drive switching
+
+**Built, 2026-08-10** — enumeration, free space and drive switching; ejection is
+not built and is its own issue. `norte-core::volumes` answers as a HOST service
+rather than a `Provider` method, `host.volumes` carries it (proto 0.38.0, ADR
+0047), the daemon answers it only to a human, and both frontends have the
+picker. Closes #131. Linux is verified; macOS and Windows are written and
+type-checked against real targets but run on no machine here. New debt: #148
+(eject), #149 (the pre-copy free-space check), #150 (macOS volume labels need
+`getattrlist`).
 
 **§17.** Enumerate platform volumes, show free space, support removable media
 and safe ejection, expose drive switching as commands.
