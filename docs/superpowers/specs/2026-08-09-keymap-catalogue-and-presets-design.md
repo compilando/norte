@@ -4,7 +4,8 @@
 **Status:** approved. **K1 built** (2026-08-09, `9b750c0..9b37cb0`, ADR 0043,
 `just ci` and `just gui-ci` green). **K2a built** (2026-08-09, `5d770e2..27a565e`,
 ADR 0044). **K2b built** (2026-08-09, `562dbbc..e4528f5`, `just ci`/`just gui-ci`
-green — see its section below for the numbers). K3 still a sketch.
+green — see its section below for the numbers). **K3 built** (2026-08-09/10,
+`332e596..08c55c7`, plan `docs/superpowers/plans/2026-08-09-k3-keymap-surface.md`).
 **Related:** ADR 0006 (keymap resolution), specification §12, roadmap item 5
 
 ## The problem
@@ -278,18 +279,38 @@ it already lines up with the roadmap's items.
 The presets do **not** carry their own `[dialog]` section: they inherit
 `orthodox`'s, because norte's dialogs are norte's, not the imitated program's.
 
-## K3 — the surface (sketch)
+## K3 — the surface (**built**, `332e596..08c55c7`)
 
-- **Which-key overlay.** On a pending prefix, a panel of valid continuations.
-  The `pending` state already exists in the resolver; this is mostly painting.
-  It gains value with counts, because it shows the `5` that is still stuck.
-- **Reference sheet per preset**, generated from the *active* preset rather
-  than written by hand: every command, its key, and unavailable keys in grey
-  with their reason. Same text from `ntc keys` in the CLI — `norte-cli` already
-  depends on `norte-frontend` and `norte-help`, so no new crate.
-- **Shortcut editor in settings.** Capture a key, show what it collides with,
-  write the user's `append_keymap` layer. Today rebinding means hand-editing
-  TOML and discovering the conflict on reload.
+- **Which-key overlay.** On a pending prefix, a panel of valid continuations,
+  unavailable ones included and marked. `Effective::continuations` is the new
+  engine query; `norte_frontend::whichkey` builds the rows and both frontends
+  paint them. No timers, ever: it appears on `Resolution::Pending` at once,
+  because a delay would smuggle timing-dependent resolution back in against
+  ADR 0006. A bare count does **not** open it — the continuation of a count is
+  every key there is — but a count behind a prefix shows in the title.
+- **Reference sheet per preset**, generated from the active preset:
+  `norte_frontend::keysheet::sheet` replaced three duplicated cheatsheet
+  generators, so the CLI page, the TUI's F1 and the GUI's help view render the
+  same rows. Unavailable keys are interleaved in key order and dimmed with
+  their reason and issue, instead of being filtered out — with K2b's imports
+  that is about thirty rows a migrant would otherwise never see. The GUI's
+  sheet gained the `dialog` section it never had. `norte help --json` went to
+  version 2 (rows that never appeared now appear, each with availability).
+  **The sketch's `ntc keys` was a spec error**: `ntc` is the TUI binary; the
+  CLI surface is `norte help keys`.
+- **Shortcut editor in settings.** `Ctrl+K` from Settings in both frontends:
+  the sheet's rows plus every bindable command with no key, capture, the
+  verdict before confirming, and a write to the user's layer.
+  **The sketch said `append_keymap` and that was wrong**: ADR 0006 merges
+  layer prepends → preset → layer appends, first wins, so an append can never
+  override a preset key. A rebind writes `prepend_keymap`
+  (`KeymapList::Prepend`, decided by the engine, not by the frontends).
+  `rebind_dry_run` is the door — it re-runs the real `Effective::build_for`
+  over the merged map, so the verdict is the loader's own — because a layer
+  that fails to load makes hot reload revert the user's whole keymap in
+  silence. `norte-config` gained its first non-`norte.toml` writer, with its
+  own lock and tmp sibling. Debt: issue #141 (unbind cannot reach a `[global]`
+  binding, a twin spelling, or another layer still binding the key).
 
 ## Out of scope, on purpose
 
