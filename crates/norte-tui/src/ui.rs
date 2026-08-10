@@ -1907,8 +1907,12 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 norte_proto::TaskKind::Mkdir => "mkdir",
                 norte_proto::TaskKind::Embed => "embed",
                 norte_proto::TaskKind::RenameBatch => "rename",
-                // Clase de un daemon N+1: etiqueta genérica, no rompe la UI.
-                norte_proto::TaskKind::Unknown => "task",
+                // `Unknown` es la clase de un daemon N+1 que este proto YA
+                // conocía como desconocida (vía `serde(other)`); el `_` es
+                // `#[non_exhaustive]` (#126) — una variante de un norte-proto
+                // más nuevo que este BINARIO no reconoce en absoluto. Mismo
+                // caso de cara al usuario, misma etiqueta genérica.
+                norte_proto::TaskKind::Unknown | _ => "task",
             };
             let head = Span::raw(format!(" {kind} #{} ", p.task_id.get()));
             let tail = match role {

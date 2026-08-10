@@ -44,14 +44,19 @@ impl fmt::Display for TaskId {
 
 /// Clase de operación que ejecuta una Task (M0: las tres mutaciones del VFS).
 ///
-// TODO(#126): es el ÚNICO enum de wire sin `#[non_exhaustive]`, así que cada
-// variante nueva rompe la API de Rust para quien haga match exhaustivo (por eso
-// `Mkdir`, `Embed` y `RenameBatch` tocaron los dos frontends en su propio
-// commit). El wire está cubierto por el `serde(other)` de abajo; lo que falta es
-// decidir si ese match exhaustivo es un coste o una función — hoy es lo que
-// obliga a etiquetar un kind nuevo en vez de pintarlo como «task».
+/// `#[non_exhaustive]` (#126): antes de esto, cada variante nueva rompía la
+/// API de Rust para quien hiciera match exhaustivo fuera de este crate — por
+/// eso `Mkdir`, `Embed` y `RenameBatch` tocaron los dos frontends en su propio
+/// commit. Es una propiedad SOLO de la API de Rust: invisible en JSON, no
+/// mueve el wire, no toca `#[serde(other)]` ni pide bump de versión de
+/// protocolo. El coste es simétrico al beneficio: un `match` externo ahora
+/// necesita un brazo `_`, así que el compilador deja de señalar dónde un kind
+/// nuevo necesita etiqueta — cada `_` debe hacer lo mismo que ya hace el
+/// brazo de [`TaskKind::Unknown`] en ese mismo match, no inventar un
+/// comportamiento nuevo.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
     /// Copia (posiblemente recursiva, posiblemente cross-provider).

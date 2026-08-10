@@ -8127,7 +8127,12 @@ fn task_line(p: &norte_proto::TaskProgress) -> String {
         TaskKind::Index => "gui-task-kind-index",
         TaskKind::Embed => "gui-task-kind-embed",
         TaskKind::RenameBatch => "gui-task-kind-rename-batch",
-        TaskKind::Unknown => "gui-task-kind-unknown",
+        // `Unknown` es la clase de un daemon N+1 que este proto YA conocía
+        // como desconocida (vía `serde(other)`); el `_` es
+        // `#[non_exhaustive]` (#126) — una variante de un norte-proto más
+        // nuevo que este binario no reconoce en absoluto. Mismo caso de cara
+        // al usuario, misma etiqueta genérica.
+        TaskKind::Unknown | _ => "gui-task-kind-unknown",
     });
     let pct = match p.entries_total {
         Some(total) if total > 0 => {

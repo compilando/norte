@@ -2927,7 +2927,7 @@
       "type": "integer"
     },
     "TaskKind": {
-      "description": "Clase de operación que ejecuta una Task (M0: las tres mutaciones del VFS).",
+      "description": "Clase de operación que ejecuta una Task (M0: las tres mutaciones del VFS).\n\n`#[non_exhaustive]` (#126): antes de esto, cada variante nueva rompía la\nAPI de Rust para quien hiciera match exhaustivo fuera de este crate — por\neso `Mkdir`, `Embed` y `RenameBatch` tocaron los dos frontends en su propio\ncommit. Es una propiedad SOLO de la API de Rust: invisible en JSON, no\nmueve el wire, no toca `#[serde(other)]` ni pide bump de versión de\nprotocolo. El coste es simétrico al beneficio: un `match` externo ahora\nnecesita un brazo `_`, así que el compilador deja de señalar dónde un kind\nnuevo necesita etiqueta — cada `_` debe hacer lo mismo que ya hace el\nbrazo de [`TaskKind::Unknown`] en ese mismo match, no inventar un\ncomportamiento nuevo.",
       "oneOf": [
         {
           "const": "copy",
