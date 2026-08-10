@@ -2381,7 +2381,10 @@ fn method_names_frozen() {
     // 0.37.0 (#131): host.volumes — enumeración de los volúmenes del host,
     // SOLO para una conexión User (diseño §C de `2026-08-10-volumes-design.md`).
     assert_eq!(methods::HOST_VOLUMES, "host.volumes");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.37.0");
+    // 0.38.0 (task V3.5 del plan de volúmenes): `Volume::label` pasa a
+    // `Option<Vec<u8>>` — corrección de wire dentro de la misma rama sin
+    // publicar, ventana desplazada igual que cualquier bump.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.38.0");
 }
 
 #[test]
@@ -2534,12 +2537,18 @@ fn attr_value_tag(v: &AttrValue) -> &'static str {
     }
 }
 
-/// Familia `host.*` (0.37.0, #131): enumeración de volúmenes del host.
-/// `Volume::mount` es un [`VPath`] — `volume_hostile_no_sizes` usa un mount
-/// point NO-UTF8 para demostrar el round-trip byte a byte (regla dura 1), y
-/// la MISMA fixture pinea la forma de "sin sizes": `total_bytes`/`free_bytes`
-/// ausentes del wire, jamás un cero disfrazado de "desconocido" (diseño §A de
-/// `2026-08-10-volumes-design.md`).
+/// Familia `host.*` (0.37.0/0.38.0, #131): enumeración de volúmenes del
+/// host. `Volume::mount` es un [`VPath`] — `volume_hostile_no_sizes` usa un
+/// mount point NO-UTF8 para demostrar el round-trip byte a byte (regla dura
+/// 1), y la MISMA fixture pinea la forma de "sin sizes": `total_bytes`/
+/// `free_bytes` ausentes del wire, jamás un cero disfrazado de "desconocido"
+/// (diseño §A de `2026-08-10-volumes-design.md`).
+///
+/// V3.5 (0.38.0): `Volume::label` es `Option<Vec<u8>>`, base64 en el wire —
+/// `volume` pinea el caso normal (`"USB Nico"` codificado), y la MISMA
+/// fixture `volume_hostile_no_sizes` que ya llevaba el mount no-UTF8 gana
+/// TAMBIÉN un label no-UTF8 (`\xFF\xFE`), así que un solo fixture demuestra
+/// que ninguno de los dos campos-bytes del tipo pasa por un `String`.
 fn check_methods_host(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{HostVolumesParams, HostVolumesResult, Volume, VolumeKind};
 
@@ -2560,7 +2569,7 @@ fn check_methods_host(fixtures: &BTreeMap<String, Value>) {
 
     let removable = Volume {
         mount: vpath("file:///media/USB-Nico"),
-        label: Some("USB Nico".into()),
+        label: Some(b"USB Nico".to_vec()),
         fs_type: "vfat".into(),
         kind: VolumeKind::Removable,
         total_bytes: Some(64_000_000_000),
@@ -2569,11 +2578,11 @@ fn check_methods_host(fixtures: &BTreeMap<String, Value>) {
     };
     check_one(fixtures, "volume", &removable);
 
-    // Non-UTF8 mount point + la forma "sin sizes" — ver el comentario de la
-    // función.
+    // Non-UTF8 mount point Y label + la forma "sin sizes" — ver el
+    // comentario de la función.
     let hostile_no_sizes = Volume {
         mount: vpath("file:///media/informe%FF%FE"),
-        label: None,
+        label: Some(vec![0xFF, 0xFE]),
         fs_type: "nfs4".into(),
         kind: VolumeKind::Network,
         total_bytes: None,
@@ -2605,5 +2614,44 @@ fn check_methods_host(fixtures: &BTreeMap<String, Value>) {
         future_kind.kind,
         VolumeKind::Unknown,
         "un kind desconocido degrada a Unknown, no rompe la decodificación"
+    );
+
+    // Decode-only, sin fixture registrada (protocol-guardian MINOR, V3.5
+    // review): `label` con base64 ilegible degrada ESE CAMPO a `None`, no
+    // el `Volume` entero — el contrato que el rustdoc de `label_wire`
+    // promete. `mount`/`fs_type` siguen intactos, que es justo lo que
+    // demuestra que el resto de la entrada no se perdió con el campo malo.
+    let bad_label_json = serde_json::json!({
+        "mount": "file:///media/usb",
+        "label": "esto no es base64 !!",
+        "fs_type": "vfat",
+        "kind": "removable",
+        "read_only": false
+    });
+    let bad_label: Volume =
+        serde_json::from_value(bad_label_json).expect("[methods/label malo] deserialize");
+    assert_eq!(bad_label.label, None, "base64 ilegible degrada a None");
+    assert_eq!(bad_label.mount, vpath("file:///media/usb"));
+    assert_eq!(bad_label.fs_type, "vfat");
+
+    // Mismo contrato para un payload DECODIFICABLE pero sobre el tope
+    // (`ATTR_BYTES_MAX`, reutilizado — ver el rustdoc de `label_wire`).
+    let oversized = norte_proto::attrs::ATTR_BYTES_MAX + 1;
+    let oversized_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        vec![0u8; oversized],
+    );
+    let oversized_json = serde_json::json!({
+        "mount": "file:///media/usb",
+        "label": oversized_b64,
+        "fs_type": "vfat",
+        "kind": "removable",
+        "read_only": false
+    });
+    let oversized_label: Volume =
+        serde_json::from_value(oversized_json).expect("[methods/label gordo] deserialize");
+    assert_eq!(
+        oversized_label.label, None,
+        "un label decodificado por encima del tope también degrada a None"
     );
 }

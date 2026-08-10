@@ -385,7 +385,19 @@ use crate::{
 /// `DenyReason::rule_id()`, jamás la regla concreta. Ventana N=0.37.x /
 /// N-1=0.36.x: un cliente 0.36 jamás llama al método nuevo — nada que gatear
 /// en emisión.
-pub const PROTOCOL_VERSION: &str = "0.37.0";
+///
+/// 0.38.0 (task V3.5 del plan de volúmenes, hallazgo de encoding-auditor
+/// diferido por V3): [`Volume::label`] pasa de `Option<String>` a
+/// `Option<Vec<u8>>` (base64 en el wire, módulo `label_wire` — el mismo
+/// shape que [`crate::attrs::AttrValue::Bytes`], no una tercera invención).
+/// Un `String` mentía o se negaba ante una etiqueta ext4/vfat no-UTF8
+/// (regla dura 1); era LATENTE porque el Linux de hoy nunca puebla el
+/// campo, pero V4 (macOS/Windows) sí lo hará, y arreglarlo después habría
+/// roto el wire dos veces. CAMBIO INCOMPATIBLE de forma de campo dentro de
+/// un método que solo existió en esta rama sin publicar (0.37.0 nunca se
+/// etiquetó ni se soltó) — se trata igual que cualquier bump: ventana
+/// desplazada, no ensanchada. Ventana N=0.38.x / N-1=0.37.x.
+pub const PROTOCOL_VERSION: &str = "0.38.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2003,22 +2015,91 @@ pub enum VolumeKind {
     Unknown,
 }
 
-/// One volume the host has mounted, over the wire (0.37.0, #131).
+/// (De)serializes [`Volume::label`] as base64 text, or an absent key —
+/// mirroring [`crate::attrs::AttrValue::Bytes`]'s wire shape (§ its
+/// rustdoc) rather than inventing a third byte-carrying representation next
+/// to it and [`VPath`]. `VPath` does not fit here: it is a scheme +
+/// authority + segment structure for a PATH, and a label is a flat blob with
+/// none of that shape to preserve.
 ///
-/// # Non-UTF-8 mount points
+/// Unlike `AttrValue::Bytes`, malformed base64 does not need the "whole cell
+/// degrades to `Unknown`" ceremony ADR 0039 built for third-party plugin
+/// data: a `Volume` is produced by the host service, not a WASM guest, and a
+/// broken `label` is cheaply dropped to `None` — the rest of the `Volume`
+/// (`mount` above all) is still perfectly usable, so losing the WHOLE entry
+/// over one bad field would be a worse failure than the one it avoids.
+///
+/// A real ext4/vfat/NTFS label is at most a few dozen bytes, but nothing
+/// upstream enforces that on the wire — so a decoded payload OVER
+/// [`crate::attrs::ATTR_BYTES_MAX`] bytes degrades exactly like an
+/// undecodable one (encoding-auditor MINOR, V3.5 review): the same cap
+/// `AttrValue::Bytes` already publishes, reused rather than a second
+/// bespoke number for what is the same class of payload.
+mod label_wire {
+    use serde::{Deserialize as _, Deserializer, Serializer};
+
+    use crate::attrs::{ATTR_BYTES_MAX, decode_bytes_b64_lenient, encode_bytes_b64};
+
+    // `ref_option` (pedantic) wants `Option<&T>` here, but serde's `with =`
+    // codegen calls this with `&self.label` — the field's actual type,
+    // `&Option<Vec<u8>>` — not something this function gets to choose.
+    #[allow(clippy::ref_option)]
+    pub(super) fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(bytes) => s.serialize_str(&encode_bytes_b64(bytes)),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<Vec<u8>>, D::Error> {
+        let raw = Option::<String>::deserialize(d)?;
+        // Undecodable OR oversized base64 costs this ONE field, not the
+        // `Volume` it is on — see the module's rustdoc.
+        Ok(raw.and_then(|s| {
+            decode_bytes_b64_lenient(&s).filter(|bytes| bytes.len() <= ATTR_BYTES_MAX)
+        }))
+    }
+}
+
+/// One volume the host has mounted, over the wire (0.37.0, #131; `label`'s
+/// current byte shape is 0.38.0, see its own doc).
+///
+/// # Non-UTF-8 mount points and labels
 /// `mount` is a [`VPath`], never a `String`: rule 1 requires a mount point's
 /// bytes to survive the wire exactly, and a `String` cannot hold bytes that
 /// are not valid UTF-8 (`/proc/mounts` places no such restriction on what a
-/// filesystem may be mounted at).
+/// filesystem may be mounted at). [`Volume::label`] carries the same hazard
+/// for a different reason — see its own rustdoc for the per-platform
+/// breakdown, Windows above all.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Volume {
     /// Mount point. A [`VPath`] — see the type's rustdoc for why this is
     /// never a `String`.
     pub mount: VPath,
-    /// What the OS or the filesystem calls it, when it says.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
+    /// What the OS or the filesystem calls it, when it says — raw bytes,
+    /// base64 on the wire (`label_wire`, this module), never a `String`. No platform
+    /// this crate targets promises the label is UTF-8, and Windows'
+    /// `GetVolumeInformationW` returns UTF-16 rather than bytes at all — see
+    /// `norte_core::volumes::Volume::label`'s rustdoc for the full
+    /// per-platform breakdown (that crate cannot be linked from here, the
+    /// dependency runs the other way, hence the plain-text pointer). In
+    /// short: Linux is `None` today (`/proc/mounts` carries no label);
+    /// macOS and Windows are V4 and unverified, and Windows crosses as
+    /// WTF-8 — the same encoding CONVENTION `norte_vfs_local`'s (private)
+    /// `native_path`/`wtf8` modules already apply to Windows path segments,
+    /// not literally reusable code (this crate cannot depend on
+    /// `norte-vfs-local` either) — so an unpaired surrogate a FAT/NTFS
+    /// label can legally contain survives instead of being replaced with
+    /// `U+FFFD` before rule 1 gets a say.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "label_wire")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<String>", extend("contentEncoding" = "base64"))
+    )]
+    pub label: Option<Vec<u8>>,
     /// `ext4`, `apfs`, `ntfs`, `nfs4`… as the platform spells it.
     pub fs_type: String,
     /// What kind of volume this is, so far as the platform can tell.

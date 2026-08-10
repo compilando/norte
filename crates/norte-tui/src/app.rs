@@ -1168,6 +1168,13 @@ pub fn volume_items(
 /// number when the filesystem did not answer in time — design §A is explicit
 /// that a bare `0` here would read as "full", the opposite of what an absent
 /// size means.
+///
+/// `label` is `Option<Vec<u8>>` (V3.5, a second encoding-auditor finding on
+/// the same review pass that caught `fs_type` above): it reaches
+/// [`display_name`] as the raw bytes the wire carried, with NO `String`
+/// upstream to have already thrown away or lossily rewritten a non-UTF-8
+/// label before the masking ever saw it — otherwise the badge below would
+/// be protecting evidence that was already gone.
 fn volume_item_display(
     v: &norte_proto::methods::Volume,
     enc: Option<norte_encoding::NameEncoding>,
@@ -1177,7 +1184,7 @@ fn volume_item_display(
     let (path_text, path_hostil) = norte_frontend::path_display_with(&v.mount, enc);
     let (label_prefix, label_hostil) = match v.label.as_deref() {
         Some(l) => {
-            let (nt, nh) = display_name(l.as_bytes());
+            let (nt, nh) = display_name(l);
             (format!("{nt} — "), nh)
         }
         None => (String::new(), false),
@@ -5597,6 +5604,78 @@ mod tests {
         assert!(display.starts_with('!'), "badge prefijo: {display}");
     }
 
+    /// V3.5 (encoding-auditor MAJOR deferred from V3): `label` is
+    /// `Option<Vec<u8>>` end to end now, so a non-UTF-8 label reaches this
+    /// row as the ORIGINAL bytes — not a lossy `String` some earlier layer
+    /// already mangled — and goes through the exact same masking `fs_type`
+    /// gets above. Bytes `\xFF\xFE` are not valid UTF-8 in any position, so
+    /// `display_name` must fall back to lossy rendering AND mark it hostile.
+    #[test]
+    fn volume_row_sanea_label_no_utf8() {
+        let vol = norte_proto::methods::Volume {
+            mount: vp("mem:///media/usb"),
+            label: Some(vec![0xFF, 0xFE, b'X']),
+            fs_type: "vfat".to_owned(),
+            kind: norte_proto::methods::VolumeKind::Removable,
+            total_bytes: None,
+            free_bytes: None,
+            read_only: false,
+        };
+        let items = volume_items(std::slice::from_ref(&vol), None);
+        let display = items[0].display.clone();
+        assert!(display.starts_with('!'), "badge prefijo: {display}");
+        assert!(
+            display.contains('\u{FFFD}'),
+            "el label no-UTF8 se pinta lossy: {display}"
+        );
+        assert_eq!(
+            items[0].target,
+            Some(vp("mem:///media/usb")),
+            "el target sigue siendo el mount real, ajeno al label"
+        );
+    }
+
+    /// V3.5 (encoding-auditor MINOR: the hand-picked byte string above is
+    /// not the canonical corpus): every hostile name in
+    /// `norte_testkit::corpus::hostile_names()`, used as a LABEL, must reach
+    /// the row without panicking, badged EXACTLY when `display_name` alone
+    /// says that name comes out altered — the same function
+    /// `volume_item_display` calls, so this pins agreement rather than
+    /// reimplementing the masking rule a second time. `target` stays the
+    /// clean mount throughout: a hostile label must never leak into
+    /// Enter-to-navigate.
+    #[test]
+    fn volume_label_hostile_corpus_sweep() {
+        let mount = vp("mem:///media/usb");
+        for fixture in norte_testkit::corpus::hostile_names() {
+            let vol = norte_proto::methods::Volume {
+                mount: mount.clone(),
+                label: Some(fixture.bytes.clone()),
+                fs_type: "vfat".to_owned(),
+                kind: norte_proto::methods::VolumeKind::Removable,
+                total_bytes: None,
+                free_bytes: None,
+                read_only: false,
+            };
+            let items = volume_items(std::slice::from_ref(&vol), None);
+            let display = &items[0].display;
+            let (_, label_hostil) = display_name(&fixture.bytes);
+            assert_eq!(
+                display.starts_with('!'),
+                label_hostil,
+                "{}: badge debe coincidir con display_name({:?}): {display}",
+                fixture.id,
+                fixture.bytes
+            );
+            assert_eq!(
+                items[0].target,
+                Some(mount.clone()),
+                "{}: el target sigue siendo el mount, ajeno al label",
+                fixture.id
+            );
+        }
+    }
+
     /// The everyday case: an ordinary `fs_type` and absent sizes (the
     /// filesystem never answered `statvfs` in time, design §A) render with
     /// NO badge and say `volumes-size-unknown` rather than a bare zero — a
@@ -5605,7 +5684,7 @@ mod tests {
     fn volume_row_talla_ausente_no_es_cero() {
         let vol = norte_proto::methods::Volume {
             mount: vp("mem:///media/usb"),
-            label: Some("USB".to_owned()),
+            label: Some(b"USB".to_vec()),
             fs_type: "vfat".to_owned(),
             kind: norte_proto::methods::VolumeKind::Removable,
             total_bytes: None,

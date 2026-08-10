@@ -3483,5 +3483,25 @@ pub mod remote {
                 "un fallo real se propaga, no se confunde con METHOD_NOT_FOUND: {got:?}"
             );
         }
+
+        /// V3.5 (encoding-auditor finding deferred from V3): `Volume::label`
+        /// is `Option<Vec<u8>>` end to end now, so a non-UTF-8 label crosses
+        /// `volume_to_proto` byte-for-byte — no `String` sits between the
+        /// core type and the wire type to lose it lossily or refuse it.
+        #[test]
+        fn volume_to_proto_preserves_a_non_utf8_label() {
+            let hostile = vec![0xFF, 0xFE, b'a'];
+            let v = crate::volumes::Volume {
+                mount: VPath::parse("file:///media/usb").expect("vpath de test"),
+                label: Some(hostile.clone()),
+                fs_type: "vfat".into(),
+                kind: crate::volumes::VolumeKind::Removable,
+                total_bytes: None,
+                free_bytes: None,
+                read_only: false,
+            };
+            let proto = crate::backend::volume_to_proto(v);
+            assert_eq!(proto.label, Some(hostile), "los bytes cruzan sin cambiar");
+        }
     }
 }

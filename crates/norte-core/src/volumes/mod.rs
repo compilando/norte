@@ -9,11 +9,13 @@
 //! decline.
 //!
 //! Two hazards shape the type and the Linux implementation in
-//! [`linux`]: a mount point is bytes (`/proc/mounts` octal-escapes space,
+//! `linux`: a mount point is bytes (`/proc/mounts` octal-escapes space,
 //! tab, newline and the backslash itself, rule 1), and a space query can hang
 //! forever on a dead network mount, so it runs under a deadline instead of a
 //! wait (rule 2: it is blocking I/O either way, and belongs in
-//! `spawn_blocking`).
+//! `spawn_blocking`). [`Volume::label`] carries the same byte hazard as the
+//! mount point — see its rustdoc for the per-platform breakdown, which
+//! matters starting with V4 since Linux never populates it.
 
 use norte_proto::VPath;
 
@@ -26,10 +28,44 @@ pub struct Volume {
     /// Mount point. A [`VPath`], so the bytes survive (rule 1) — this is
     /// never a `String` anywhere on the way here.
     pub mount: VPath,
-    /// What the OS or the filesystem calls it, when it says. Linux's
-    /// `/proc/mounts` does not carry a label, so this is `None` there; a
-    /// future enhancement could read `/dev/disk/by-label`.
-    pub label: Option<String>,
+    /// What the OS or the filesystem calls it, when it says — raw bytes,
+    /// never a `String` (rule 1). Found by encoding-auditor while V3 was in
+    /// review and deferred to task V3.5 of the volumes plan: an ext4/vfat
+    /// label has exactly the same status as a mount point or a filename —
+    /// no platform promises it is UTF-8 — and a `String` field would either
+    /// lie (lossy) or refuse a legal label.
+    ///
+    /// # Per-platform encoding (read this before wiring V4)
+    ///
+    /// - **Linux.** `/proc/mounts` carries no label at all, so this stays
+    ///   `None` here; a future `/dev/disk/by-label` reader would read a
+    ///   symlink NAME — bytes with no more of an encoding contract than any
+    ///   other Linux filename, decided by whatever wrote the filesystem
+    ///   (`mkfs.vfat -n`, `e2label`, …).
+    /// - **macOS** (V4, unverified here). `getmntinfo`/the volume-name APIs
+    ///   hand back a NUL-terminated C string that HFS+/APFS usually
+    ///   populate as UTF-8, but nothing enforces that at the filesystem
+    ///   level — treat it the same as any other macOS path component: raw
+    ///   OS bytes, not guaranteed UTF-8.
+    /// - **Windows** (V4, unverified here). `GetVolumeInformationW` returns
+    ///   UTF-16 — code UNITS, not bytes-in-the-unix-sense, and not UTF-8
+    ///   either. V4's Windows implementation MUST encode it as WTF-8 before
+    ///   the result lands here — the SAME encoding CONVENTION
+    ///   `norte_vfs_local`'s (private) `native_path`/`wtf8` modules already
+    ///   apply to Windows path segments, replicated here rather than
+    ///   literally reused: `norte-proto` cannot depend on `norte-vfs-local`
+    ///   (the dependency runs the other way) and those helpers are
+    ///   `pub(crate)` to that crate today, so V4 either re-derives the
+    ///   handful of lines or — better, and worth doing AS PART OF V4 rather
+    ///   than assumed here — hoists them into `norte-vfs`, which both
+    ///   `norte-vfs-local` and `norte-core` already depend on. WTF-8 is what
+    ///   lets an arbitrary UTF-16 string — including an unpaired surrogate,
+    ///   which a FAT/NTFS label field can legally contain — survive
+    ///   losslessly as `Vec<u8>`. A naive `String::from_utf16_lossy` would
+    ///   silently replace such a surrogate with `U+FFFD` before rule 1 ever
+    ///   gets a say, which is exactly the bug a from-scratch reimplementation
+    ///   risks reintroducing if it drifts from the reference.
+    pub label: Option<Vec<u8>>,
     /// `ext4`, `apfs`, `ntfs`, `nfs4`… as the platform spells it.
     pub fs_type: String,
     /// What kind of volume this is, so far as the platform can tell.

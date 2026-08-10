@@ -61,7 +61,7 @@ pub struct Volume {
     /// Mount point. A VPath, so the bytes survive (rule 1).
     pub mount: VPath,
     /// What the OS or the filesystem calls it, when it says.
-    pub label: Option<String>,
+    pub label: Option<Vec<u8>>,
     /// `ext4`, `apfs`, `ntfs`, `nfs4`… as the platform spells it.
     pub fs_type: String,
     pub kind: VolumeKind,
@@ -74,6 +74,20 @@ pub struct Volume {
 
 pub enum VolumeKind { Fixed, Removable, Network, Pseudo, Unknown }
 ```
+
+> **Amendment (task V3.5, proto 0.38.0).** This sketch originally had
+> `label: Option<String>`. encoding-auditor caught it during V3's review: an
+> ext4/vfat label is bytes with no encoding contract, exactly like the mount
+> point above it, so a `String` either lies (lossy) or refuses a legal
+> label. It was latent because Linux never populates the field — V4 is what
+> starts to, on macOS and Windows — so the plan deferred the fix to a
+> standalone task rather than block V3 on it. `label` is `Option<Vec<u8>>`
+> now, base64 on the wire (the same shape `AttrValue::Bytes` already uses,
+> not a third invention). See ADR 0047 for the full decision record and
+> `Volume::label`'s rustdoc in both `norte-core::volumes` and
+> `norte-proto::methods` for the per-platform encoding breakdown — Windows'
+> `GetVolumeInformationW` returns UTF-16, not bytes, and V4's implementation
+> needs to know that going in.
 
 ### The two hazards that shape it
 

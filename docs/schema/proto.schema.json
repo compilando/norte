@@ -3237,7 +3237,7 @@
       ]
     },
     "Volume": {
-      "description": "One volume the host has mounted, over the wire (0.37.0, #131).\n\n# Non-UTF-8 mount points\n`mount` is a [`VPath`], never a `String`: rule 1 requires a mount point's\nbytes to survive the wire exactly, and a `String` cannot hold bytes that\nare not valid UTF-8 (`/proc/mounts` places no such restriction on what a\nfilesystem may be mounted at).",
+      "description": "One volume the host has mounted, over the wire (0.37.0, #131; `label`'s\ncurrent byte shape is 0.38.0, see its own doc).\n\n# Non-UTF-8 mount points and labels\n`mount` is a [`VPath`], never a `String`: rule 1 requires a mount point's\nbytes to survive the wire exactly, and a `String` cannot hold bytes that\nare not valid UTF-8 (`/proc/mounts` places no such restriction on what a\nfilesystem may be mounted at). [`Volume::label`] carries the same hazard\nfor a different reason — see its own rustdoc for the per-platform\nbreakdown, Windows above all.",
       "properties": {
         "free_bytes": {
           "description": "`None` when the filesystem did not answer its space query in time —\nsee [`Volume::total_bytes`].",
@@ -3257,7 +3257,8 @@
           "description": "What kind of volume this is, so far as the platform can tell."
         },
         "label": {
-          "description": "What the OS or the filesystem calls it, when it says.",
+          "contentEncoding": "base64",
+          "description": "What the OS or the filesystem calls it, when it says — raw bytes,\nbase64 on the wire (`label_wire`, this module), never a `String`. No platform\nthis crate targets promises the label is UTF-8, and Windows'\n`GetVolumeInformationW` returns UTF-16 rather than bytes at all — see\n`norte_core::volumes::Volume::label`'s rustdoc for the full\nper-platform breakdown (that crate cannot be linked from here, the\ndependency runs the other way, hence the plain-text pointer). In\nshort: Linux is `None` today (`/proc/mounts` carries no label);\nmacOS and Windows are V4 and unverified, and Windows crosses as\nWTF-8 — the same encoding CONVENTION `norte_vfs_local`'s (private)\n`native_path`/`wtf8` modules already apply to Windows path segments,\nnot literally reusable code (this crate cannot depend on\n`norte-vfs-local` either) — so an unpaired surrogate a FAT/NTFS\nlabel can legally contain survives instead of being replaced with\n`U+FFFD` before rule 1 gets a say.",
           "type": [
             "string",
             "null"

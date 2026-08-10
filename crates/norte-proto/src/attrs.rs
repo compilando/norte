@@ -612,6 +612,33 @@ where
 /// the buffer it asks for.
 const ATTR_BYTES_B64_MAX: usize = 4 * ATTR_BYTES_MAX.div_ceil(3);
 
+/// Base64-encodes `bytes` the way this crate EMITS: RFC 4648 §4, the
+/// standard alphabet (`+`, `/`) with padding required. Shared by
+/// [`AttrValue::Bytes`] and `crate::methods::Volume::label`'s wire form —
+/// both are "arbitrary platform bytes with no encoding contract, base64 on
+/// the wire" and there is no reason for a second copy of the encode call.
+pub(crate) fn encode_bytes_b64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// Decodes `s` trying, in order, the standard, unpadded-standard, URL-safe
+/// and unpadded-URL-safe dialects — `None` if none of them parse it. Widening
+/// what is ACCEPTED past what this crate emits is backward-compatible: a
+/// producer using Go's `RawStdEncoding`, for instance, would otherwise lose
+/// the payload silently. Shared by [`AttrValue::Bytes`] and
+/// `crate::methods::Volume::label`; see [`encode_bytes_b64`].
+pub(crate) fn decode_bytes_b64_lenient(s: &str) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+    let engines = [
+        &base64::engine::general_purpose::STANDARD,
+        &base64::engine::general_purpose::STANDARD_NO_PAD,
+        &base64::engine::general_purpose::URL_SAFE,
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+    ];
+    engines.iter().find_map(|engine| engine.decode(s).ok())
+}
+
 /// The value of one attribute for one entry (ADR 0039).
 ///
 /// Absence of a key in `Entry::attrs` means the provider does not know the
@@ -858,27 +885,15 @@ impl<'de> serde::de::Visitor<'de> for CellVisitor {
     }
 
     fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<AttrValue, E> {
-        use base64::Engine as _;
-
         Ok(match self.esperado {
             // El tope se comprueba ANTES de copiar: un texto gigante no se
             // duplica en memoria solo para descartarlo después.
             Some(AttrTag::Text) if v.len() <= ATTR_TEXT_MAX => AttrValue::Text(v.to_owned()),
             // Y aquí, antes de DECODIFICAR: un payload enorme nunca reserva el
             // buffer que pide.
-            Some(AttrTag::BytesB64) if v.len() <= ATTR_BYTES_B64_MAX => {
-                let engines = [
-                    &base64::engine::general_purpose::STANDARD,
-                    &base64::engine::general_purpose::STANDARD_NO_PAD,
-                    &base64::engine::general_purpose::URL_SAFE,
-                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-                ];
-                engines
-                    .iter()
-                    .find_map(|engine| engine.decode(v).ok())
-                    .filter(|bytes| bytes.len() <= ATTR_BYTES_MAX)
-                    .map_or(Self::UNKNOWN, AttrValue::Bytes)
-            }
+            Some(AttrTag::BytesB64) if v.len() <= ATTR_BYTES_B64_MAX => decode_bytes_b64_lenient(v)
+                .filter(|bytes| bytes.len() <= ATTR_BYTES_MAX)
+                .map_or(Self::UNKNOWN, AttrValue::Bytes),
             _ => Self::UNKNOWN,
         })
     }
@@ -974,7 +989,6 @@ impl CellVisitor {
 
 impl Serialize for AttrValue {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use base64::Engine as _;
         use serde::ser::SerializeMap as _;
 
         // La etiqueta sale de la MISMA tabla que lee el deserializador
@@ -985,10 +999,9 @@ impl Serialize for AttrValue {
             AttrValue::Uint(v) => map.serialize_entry(AttrTag::Uint.wire(), v)?,
             AttrValue::Int(v) => map.serialize_entry(AttrTag::Int.wire(), v)?,
             AttrValue::Text(v) => map.serialize_entry(AttrTag::Text.wire(), v)?,
-            AttrValue::Bytes(v) => map.serialize_entry(
-                AttrTag::BytesB64.wire(),
-                &base64::engine::general_purpose::STANDARD.encode(v),
-            )?,
+            AttrValue::Bytes(v) => {
+                map.serialize_entry(AttrTag::BytesB64.wire(), &encode_bytes_b64(v))?;
+            }
             AttrValue::TimeMs(v) => map.serialize_entry(AttrTag::TimeMs.wire(), v)?,
             AttrValue::Bool(v) => map.serialize_entry(AttrTag::Bool.wire(), v)?,
             AttrValue::Unknown => {

@@ -276,7 +276,7 @@
     "volumes": [
       {
         "mount": "file:///media/USB-Nico",
-        "label": "USB Nico",
+        "label": "VVNCIE5pY28=",
         "fs_type": "vfat",
         "kind": "removable",
         "total_bytes": 64000000000,
@@ -285,6 +285,7 @@
       },
       {
         "mount": "file:///media/informe%FF%FE",
+        "label": "//4=",
         "fs_type": "nfs4",
         "kind": "network",
         "read_only": true
@@ -807,7 +808,7 @@
   },
   "volume": {
     "mount": "file:///media/USB-Nico",
-    "label": "USB Nico",
+    "label": "VVNCIE5pY28=",
     "fs_type": "vfat",
     "kind": "removable",
     "total_bytes": 64000000000,
@@ -822,6 +823,7 @@
   },
   "volume_hostile_no_sizes": {
     "mount": "file:///media/informe%FF%FE",
+    "label": "//4=",
     "fs_type": "nfs4",
     "kind": "network",
     "read_only": true

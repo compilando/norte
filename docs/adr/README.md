@@ -52,3 +52,4 @@ edits.
 | [0044](0044-numeric-counts-and-the-sacred-keys.md) | A count repeats the dispatch, and two keys are not for sale | accepted |
 | [0045](0045-dialog-context-inheritance.md) | norte's dialogs stay norte's: `dialog_from`, one level, presets only | accepted |
 | [0046](0046-journal-format-marker-in-chain.md) | The journal declares its format inside the hash chain | accepted |
+| [0047](0047-volume-label-bytes-on-the-wire.md) | Volume label crosses the wire as bytes, not `String` | accepted |
