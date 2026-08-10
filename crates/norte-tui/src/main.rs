@@ -1121,11 +1121,12 @@ async fn main() -> Result<()> {
     let Some(args) = args_or_exit(parsed)? else {
         return Ok(()); // `--help`/`--version`: ya impreso.
     };
-    let (cli_preset, cli_daemon, cli_socket, cli_pick) = (
+    let (cli_preset, cli_daemon, cli_socket, cli_pick, cli_cd_file) = (
         args.text("--preset"),
         args.has("--daemon"),
         args.path("--socket"),
         args.has("--pick"),
+        args.path("--cd-file"),
     );
     let layers = config::standard_layers();
     let cfg = config::load_async(layers.clone())
@@ -1271,8 +1272,53 @@ async fn main() -> Result<()> {
     restore_terminal(&mut terminal);
     drop(watch);
     res?; // A broken run loop is not a cancelled `--pick`.
+    write_cd_file(&app, cli_cd_file.as_deref());
     finish_pick(&mut app);
     Ok(())
+}
+
+/// `--cd-file` (S3): writes the final directory for the `norte shell-init`
+/// wrapper to read, on a clean quit only. A no-op when the flag was never
+/// passed.
+///
+/// Placed after `res?`, not before: a run loop that returned an error bails
+/// out of `main` right there and never reaches this call, so a crash writes
+/// nothing to the cd-file — the design's own rule (§C: "the write happens at
+/// the end", so the shell stays where it was).
+///
+/// Placed after [`restore_terminal`] too, deliberately DIFFERENT from the
+/// design note's "before restoring the terminal": [`finish_pick`]
+/// establishes, for the exact same shutdown window, that nothing must be
+/// printed before the alternate screen is left or the terminal swallows it.
+/// The `msg-cd-not-local` line below is exactly such a print, so it follows
+/// `finish_pick`'s placement, not the design prose. Still runs BEFORE
+/// `finish_pick` itself, whose `std::process::exit` would otherwise skip
+/// this entirely when both `--pick` and `--cd-file` are given.
+///
+/// A write failure is printed and swallowed, the same shape as
+/// `restore_terminal`'s own failure: `--cd-file`'s exit codes are not
+/// contracted the way `--pick`'s are (design §B's 0/1/2 table is that flag's
+/// alone), and nothing downstream is waiting on this process's exit code the
+/// way a shell wrapper waits on `--pick`'s.
+fn write_cd_file(app: &App, cd_file: Option<&std::path::Path>) {
+    let Some(path) = cd_file else { return };
+    if let Some(bytes) = norte_frontend::shell::cd_bytes(app.focused().dir()) {
+        use std::io::Write as _;
+        let wrote = std::fs::File::create(path)
+            .and_then(|mut f| f.write_all(&bytes).and_then(|()| f.flush()));
+        if let Err(e) = wrote {
+            eprintln!("ntc: failed to write --cd-file: {e}");
+        }
+    } else {
+        // Same masking convention as the CLI's own plain-text output
+        // (`norte-cli/src/main.rs`'s semantic-search listing): `path_display`
+        // gives the badge as a bool because a raw stderr line has no
+        // styling to hang it on, so a hostile name is marked with a
+        // leading `!` instead of colour.
+        let (texto, hostil) = norte_frontend::path_display(app.focused().dir());
+        let marcado = if hostil { format!("!{texto}") } else { texto };
+        eprintln!("{}", ta("msg-cd-not-local", &[("path", &marcado)]));
+    }
 }
 
 /// `--pick` (S2): the picker's exit, decided AFTER the terminal is restored
@@ -1371,7 +1417,7 @@ fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App, out: &mut tty::TtyOut) -
 /// Flags booleanos del TUI.
 const BOOL_FLAGS: &[&str] = &["--daemon", "--pick"];
 /// Flags con valor del TUI.
-const VALUE_FLAGS: &[&str] = &["--preset", "--socket"];
+const VALUE_FLAGS: &[&str] = &["--preset", "--socket", "--cd-file"];
 
 /// Texto de `--help`. En INGLÉS y sin Fluent a propósito: se imprime ANTES
 /// de negociar el idioma (que sale de la config, que aún no se ha leído).
@@ -1384,12 +1430,14 @@ Arguments:
   [DIR]  Directory to start in (default: the current directory)
 
 Options:
-      --preset <NAME>  Keymap preset (orthodox|vim|cua); overrides norte.toml
-      --daemon         Talk to the daemon instead of the embedded core
-      --socket <PATH>  Daemon socket (default: $XDG_RUNTIME_DIR/norte/daemon.sock)
-      --pick           print the selection, NUL-terminated, and exit
-  -h, --help           Print help
-  -V, --version        Print version
+      --preset <NAME>    Keymap preset (orthodox|vim|cua); overrides norte.toml
+      --daemon           Talk to the daemon instead of the embedded core
+      --socket <PATH>    Daemon socket (default: $XDG_RUNTIME_DIR/norte/daemon.sock)
+      --pick             print the selection, NUL-terminated, and exit
+      --cd-file PATH     write the final directory here, NUL-terminated
+                         (used by the `norte shell-init` wrapper)
+  -h, --help             Print help
+  -V, --version          Print version
 ";
 
 /// Directorio de arranque como [`VPath`]: el `[DIR]` de la línea de

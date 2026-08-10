@@ -149,6 +149,12 @@ msg-lua-queue-full = Lua command discarded: queue full
 msg-lua-denied-changed = project init.lua previously denied; it has changed (not loaded)
 msg-lua-symlink = project init.lua is a symlink; not loaded
 msg-lua-keymap-project = project keymap.toml: { $n } lua: binding(s) ignored (not trusted)
+# `--cd-file` (S3, shell.rs `cd_bytes`): the active pane was not `file://`, so
+# nothing was written to the cd-file and the wrapper leaves the shell where it
+# is. `$path` is already run through `path_display`'s hostile-name masking,
+# with a leading `!` in place of the badge colour a plain stderr line cannot
+# carry.
+msg-cd-not-local = the active pane was { $path }; the shell stays put
 pane-loading = loading… ({ $n })
 quicksearch-partial = (partial)
 
@@ -171,6 +177,11 @@ cli-enqueue-copy = could not enqueue the copy
 cli-enqueue-move = could not enqueue the move
 cli-enqueue-delete = could not enqueue the delete
 cli-enqueue-mkdir = could not enqueue the mkdir
+# S3 (shell-integration): `Shell::parse`'s vocabulary is exactly these three
+# tokens — named here instead of echoed back the way `cli-help-unknown-topic`
+# does, because this one is a closed set, not a corpus the user could plausibly
+# have misspelled a new page against.
+cli-shell-init-unknown = unknown shell "{ $shell }" — supported: bash, zsh, fish
 cli-list-failed = list failed
 cli-entry-unreadable = unreadable entry
 cli-serialize-failed = could not serialize
@@ -649,6 +660,10 @@ cli-doctor-warn = WARN
 cli-doctor-error = ERROR
 cli-doctor-footer-keymap-approx = note: an "unknown command" warning is an approximation against the three bundled presets' own bindings for that screen — a frontend-specific command with no default binding anywhere is invisible to this check.
 cli-doctor-footer-connections-not-probed = note: keyring/age are not probed (side-effect-free diagnostics only) — only the presence of the env-var fallback is checked; use `norte connect` to test a connection for real.
+# S3 (shell-integration): whether the wrapper is EVAL'd in the caller's rc
+# file cannot be seen from a child process — same honesty limit as the two
+# footers above — so this names the instruction instead of a pass/fail.
+cli-doctor-footer-shell-init = cd-on-quit: run `eval "$(norte shell-init bash)"` (or zsh/fish) from your shell's rc file
 cli-doctor-detail-connections-parse = connections.toml does not parse (fix or remove it)
 cli-doctor-detail-connections-none = no connections.toml, or no connections configured
 cli-doctor-detail-plugin-digest-stale = { $id }: manifest capabilities changed since approval; re-approval required

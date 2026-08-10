@@ -269,6 +269,12 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Prints the cd-on-quit wrapper for a shell, to be `eval`ed (bash/zsh)
+    /// or `source`d (fish) from the shell's rc file (S3, shell-integration)
+    ShellInit {
+        /// bash, zsh or fish
+        shell: String,
+    },
 }
 
 /// Subcomandos de IA (M4-A2).
@@ -532,6 +538,11 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     {
         return Ok(help::run(topic.as_deref(), list, search.as_deref(), json));
     }
+    // `shell-init` just prints a constant string picked by name (S3): no
+    // engine, no daemon, no config — the same reasoning as `Help` above.
+    if let Cmd::ShellInit { ref shell } = cli.cmd {
+        return Ok(shell_init_cmd(shell));
+    }
 
     // Índice de búsqueda (M4, ADR 0034): el MISMO fichero que el daemon
     // (config_dir/index.db), así `norte index build` en embebido persiste y una
@@ -673,6 +684,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         | Cmd::Ai { .. }
         | Cmd::Doctor { .. }
         | Cmd::Help { .. }
+        | Cmd::ShellInit { .. }
         | Cmd::Tui { .. }
         | Cmd::Gui { .. } => unreachable!("manejado arriba"),
         #[cfg(unix)]
@@ -951,6 +963,27 @@ fn doctor_finding_line(f: &doctor::Finding) -> String {
     }
 }
 
+/// `norte shell-init <SHELL>` (S3, shell-integration): prints the wrapper's
+/// source for the caller's rc file to `eval` (bash/zsh) or `source` (fish).
+/// Pure lookup — [`norte_frontend::shell::Shell`] owns the actual text — so
+/// this is early-returned in `run()` like `doctor_cmd`/`help::run`, ahead of
+/// any engine/daemon wiring.
+fn shell_init_cmd(shell: &str) -> ExitCode {
+    if let Some(sh) = norte_frontend::shell::Shell::parse(shell) {
+        // No trailing newline of our own: the wrapper's own text already
+        // ends in one, and `eval "$(norte shell-init bash)"` runs command
+        // substitution either way (it strips trailing newlines itself).
+        print!("{}", sh.wrapper());
+        ExitCode::SUCCESS
+    } else {
+        eprintln!(
+            "{}",
+            norte_i18n::ta("cli-shell-init-unknown", &[("shell", shell)])
+        );
+        ExitCode::FAILURE
+    }
+}
+
 /// `norte doctor` (H2): read-only diagnostics over config layers, keymaps,
 /// plugins and connections. Never touches the daemon/engine — early-returned
 /// in `run()` like `audit_cmd`.
@@ -1036,6 +1069,12 @@ async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
             "{}",
             norte_i18n::t("cli-doctor-footer-connections-not-probed")
         );
+        // S3 (shell-integration): unconditional, like the two footers above
+        // — whether the wrapper is actually `eval`ed in the caller's rc file
+        // cannot be observed from this process, so the honest answer is the
+        // instruction, not a Finding with a severity that would claim more
+        // than can be known.
+        println!("{}", norte_i18n::t("cli-doctor-footer-shell-init"));
     }
     let has_error = findings
         .iter()

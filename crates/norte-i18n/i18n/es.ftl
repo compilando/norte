@@ -151,6 +151,12 @@ msg-lua-queue-full = comando Lua descartado: cola llena
 msg-lua-denied-changed = el init.lua del proyecto se denegó; ha cambiado (no se carga)
 msg-lua-symlink = el init.lua del proyecto es un symlink; no se carga
 msg-lua-keymap-project = keymap.toml del proyecto: { $n } binding(s) lua: ignorados (sin trust)
+# `--cd-file` (S3, shell.rs `cd_bytes`): el pane activo no era `file://`, así
+# que no se escribió nada en el cd-file y el wrapper deja el shell donde
+# estaba. `$path` ya pasó por el enmascarado de `path_display`, con un `!` al
+# principio en vez del color de la insignia que una línea de stderr no puede
+# llevar.
+msg-cd-not-local = el pane activo era { $path }; el shell se queda donde está
 pane-loading = cargando… ({ $n })
 quicksearch-partial = (parcial)
 
@@ -173,6 +179,11 @@ cli-enqueue-copy = no se pudo encolar la copia
 cli-enqueue-move = no se pudo encolar el move
 cli-enqueue-delete = no se pudo encolar el borrado
 cli-enqueue-mkdir = no se pudo encolar el mkdir
+# S3 (shell-integration): el vocabulario de `Shell::parse` son exactamente
+# estos tres — nombrados aquí en vez de repetir el nombre tecleado como hace
+# `cli-help-unknown-topic`, porque este es un conjunto cerrado, no un corpus
+# donde el usuario pudiera haberse equivocado de página nueva.
+cli-shell-init-unknown = shell desconocido «{ $shell }» — soportados: bash, zsh, fish
 cli-list-failed = list falló
 cli-entry-unreadable = entrada ilegible
 cli-serialize-failed = no se pudo serializar
@@ -666,6 +677,11 @@ cli-doctor-warn = AVISO
 cli-doctor-error = ERROR
 cli-doctor-footer-keymap-approx = nota: un aviso de «comando desconocido» es una aproximación contra los bindings propios de los tres presets empaquetados para esa pantalla — un comando específico de un frontend sin binding por defecto en ninguno es invisible para este chequeo.
 cli-doctor-footer-connections-not-probed = nota: el keyring/`age` no se prueban (diagnóstico sin efectos secundarios) — solo se comprueba la presencia de la variable de entorno de respaldo; usa `norte connect` para probar una conexión de verdad.
+# S3 (shell-integration): si el wrapper se evalúa en el rc del shell no se
+# puede ver desde un proceso hijo — misma limitación de honestidad que las
+# dos notas de arriba —, así que esto nombra la instrucción en vez de un
+# veredicto ok/mal.
+cli-doctor-footer-shell-init = cd-on-quit: añade `eval "$(norte shell-init bash)"` (o zsh/fish) al rc de tu shell
 cli-doctor-detail-connections-parse = connections.toml no parsea (corrígelo o bórralo)
 cli-doctor-detail-connections-none = no hay connections.toml, o no hay conexiones configuradas
 cli-doctor-detail-plugin-digest-stale = { $id }: las capabilities del manifiesto cambiaron desde la aprobación; requiere re-aprobación
