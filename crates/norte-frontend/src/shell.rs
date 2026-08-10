@@ -399,8 +399,10 @@ pub fn terminal_candidates(dir: &std::path::Path) -> Vec<Vec<std::ffi::OsString>
 /// Testable core of [`terminal_candidates`].
 ///
 /// Order on unix: `$TERMINAL` (the user's explicit answer, which beats every
-/// probe), then `xdg-terminal-exec` (the desktop's own answer), then
-/// [`UNIX_TERMINALS`]. macOS is `open -a Terminal <dir>`, which is the
+/// probe), then `xdg-terminal-exec` (the desktop's own answer), then the
+/// crate-private `UNIX_TERMINALS` probe list — a closed set, because the cwd
+/// flag differs per emulator and guessing one is how you launch a terminal in
+/// the wrong directory. macOS is `open -a Terminal <dir>`, which is the
 /// desktop's answer and the only one. Windows is `wt` then `cmd`.
 #[must_use]
 pub fn terminal_candidates_from(
