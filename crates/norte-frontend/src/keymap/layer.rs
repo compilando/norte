@@ -351,33 +351,58 @@ pub(super) enum Origin {
     Layer,
 }
 
+/// Which section of a `keymap.toml` a merged binding was read from: the
+/// screen's own context, or `[global]` — merged into EVERY screen
+/// (`merged_bindings`), so a screen alone cannot tell the two apart once the
+/// merge is done. This is the provenance a shortcut editor needs to mark a
+/// row non-editable (K3c #141): [`Screen::section`] never answers `"global"`,
+/// so a row whose binding came from here cannot be unbound or rebound through
+/// a section that names one screen — a write there would change all three.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Section {
+    /// The screen's own context (`[pane]`, `[viewer]`, `[dialog]`).
+    Specific,
+    /// `[global]`.
+    Global,
+}
+
 /// Fusión de un contexto (ADR 0006/0007): prepends de capa superior primero
 /// (ganan), luego el preset, luego los appends (superiores antes). Los
 /// bindings `lua:` de una capa de PROYECTO se DESCARTAN aquí, contados en
 /// `discarded_lua` (seguridad: ver [`KeymapFile::mark_project`] — el
 /// keymap de un repo ajeno no puede dirigir la ejecución de comandos Lua).
-/// Cada binding se etiqueta con su [`Origin`] (preset vs. capa).
+/// Cada binding se etiqueta con su [`Origin`] (preset vs. capa) y su
+/// [`Section`] (específico de pantalla vs. `[global]`) — la LLAMANTE fija
+/// `section` una vez por invocación, porque `get` ya decide qué lista se
+/// está leyendo.
 fn merge_ctx<'a>(
     preset: &'a KeymapFile,
     layers: &'a [KeymapFile],
     get: fn(&KeymapFile) -> &RawSection,
+    section: Section,
     discarded_lua: &mut usize,
-) -> Vec<(&'a RawBinding, Origin)> {
+) -> Vec<(&'a RawBinding, Origin, Section)> {
     let mut out = Vec::new();
-    let mut push =
-        |layer_project: bool, b: &'a RawBinding, out: &mut Vec<(&'a RawBinding, Origin)>| {
-            if layer_project && b.run.starts_with("lua:") {
-                *discarded_lua += 1;
-            } else {
-                out.push((b, Origin::Layer));
-            }
-        };
+    let mut push = |layer_project: bool,
+                    b: &'a RawBinding,
+                    out: &mut Vec<(&'a RawBinding, Origin, Section)>| {
+        if layer_project && b.run.starts_with("lua:") {
+            *discarded_lua += 1;
+        } else {
+            out.push((b, Origin::Layer, section));
+        }
+    };
     for l in layers.iter().rev() {
         for b in &get(l).prepend_keymap {
             push(l.project, b, &mut out);
         }
     }
-    out.extend(get(preset).keymap.iter().map(|b| (b, Origin::Preset)));
+    out.extend(
+        get(preset)
+            .keymap
+            .iter()
+            .map(|b| (b, Origin::Preset, section)),
+    );
     for l in layers.iter().rev() {
         for b in &get(l).append_keymap {
             push(l.project, b, &mut out);
@@ -458,16 +483,23 @@ pub(super) fn merged_bindings<'a>(
     layers: &'a [KeymapFile],
     screen: Screen,
     discarded_lua_bindings: &mut usize,
-) -> Vec<(&'a RawBinding, Origin)> {
-    merge_ctx(preset, layers, screen.specific(), discarded_lua_bindings)
-        .into_iter()
-        .chain(merge_ctx(
-            preset,
-            layers,
-            |f| &f.global,
-            discarded_lua_bindings,
-        ))
-        .collect()
+) -> Vec<(&'a RawBinding, Origin, Section)> {
+    merge_ctx(
+        preset,
+        layers,
+        screen.specific(),
+        Section::Specific,
+        discarded_lua_bindings,
+    )
+    .into_iter()
+    .chain(merge_ctx(
+        preset,
+        layers,
+        |f| &f.global,
+        Section::Global,
+        discarded_lua_bindings,
+    ))
+    .collect()
 }
 
 #[cfg(test)]

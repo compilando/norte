@@ -34,7 +34,7 @@ use norte_tui::help::TuiChords;
 use norte_tui::hints::DialogHints;
 use norte_tui::keymap::{
     COMMANDS, Command, Count, DIALOG_COMMANDS, Effective, RebindWrite, Resolution, Resolver,
-    Screen, chord_from_crossterm, count_ignored_message, presets, unavailable_message,
+    Screen, UnbindWrite, chord_from_crossterm, count_ignored_message, presets, unavailable_message,
 };
 use norte_tui::lua::{
     CommandRun, Layer, LuaHost, PaneCtx, RunOutcome, StatusInput, TrustDecision, TrustStore,
@@ -5675,6 +5675,27 @@ fn plan_rebind(
     )
 }
 
+/// The unbind's own door call — same cut, same preset lookup as
+/// [`plan_rebind`], for the removal instead of the write. See that
+/// function's doc for why the split is not this frontend's to redo.
+fn plan_unbind(
+    cfg: &config::LoadedConfig,
+    cli_preset: Option<&str>,
+    screen: Screen,
+    seq: &[norte_tui::keymap::Chord],
+) -> Result<UnbindWrite, norte_frontend::shortcuts::PlanError> {
+    let preset_name = cli_preset.unwrap_or(&cfg.common.preset);
+    let known = known_commands(screen);
+    norte_frontend::shortcuts::plan_unbind(
+        preset_name,
+        &cfg.keymap_layer_kinds,
+        &cfg.keymap_layers,
+        &known,
+        screen,
+        seq,
+    )
+}
+
 /// Teclas del editor de atajos (K3c, `app.shortcuts`): mismo criterio que el
 /// overlay de ajustes de arriba — teclas fijas, hardcodeadas aquí.
 ///
@@ -5711,8 +5732,9 @@ async fn on_shortcuts_key(
         ShortcutsKeyOutcome::None => {}
         ShortcutsKeyOutcome::Close => app.shortcuts = None,
         ShortcutsKeyOutcome::Confirm => confirm_shortcut(app, cfg, cli_preset).await,
-        ShortcutsKeyOutcome::Unbind => unbind_shortcut(app).await,
+        ShortcutsKeyOutcome::Unbind => unbind_shortcut(app, cfg, cli_preset).await,
         ShortcutsKeyOutcome::NotBindable => app.message = Some(t("msg-shortcut-not-bindable")),
+        ShortcutsKeyOutcome::RowIsGlobal => app.message = Some(t("shortcuts-row-global")),
     }
 }
 
@@ -5731,6 +5753,9 @@ enum ShortcutsKeyOutcome {
     /// La tecla capturada no la modela el keymap (Media, `CapsLock`…): no hay
     /// chord que capturar, y fingir uno sería ligar otra cosa.
     NotBindable,
+    /// La fila bajo el cursor es de `[global]` (#141): ni rebind ni unbind
+    /// pueden escribir ahí desde una fila que nombra una sola pantalla.
+    RowIsGlobal,
 }
 
 /// El estado del editor tras una tecla. Puro y sincrónico: es donde vive la
@@ -5792,6 +5817,12 @@ fn shortcuts_key(
         KeyCode::Down if plain => sc.down(),
         KeyCode::PageUp if plain => sc.page_up(PAGE),
         KeyCode::PageDown if plain => sc.page_down(PAGE),
+        // `is_editable` false means [`ShortcutsState::begin_capture`] would
+        // silently refuse anyway (#141) — checked here too so the reader
+        // gets told WHY instead of nothing happening.
+        KeyCode::Enter if plain && sc.selected().is_some_and(|r| !r.is_editable()) => {
+            return ShortcutsKeyOutcome::RowIsGlobal;
+        }
         KeyCode::Enter if plain => {
             sc.begin_capture();
         }
@@ -5893,35 +5924,20 @@ async fn confirm_shortcut(app: &mut App, cfg: &config::LoadedConfig, cli_preset:
     }
 }
 
-/// Quita el binding de la fila bajo el cursor de las DOS listas del usuario —
-/// la razón de que c1 escribiera `persist_keymap_unbind`: un editor que solo
-/// añade es un editor que no arregla un error.
+/// Quita el binding de la fila bajo el cursor — la razón de que c1 escribiera
+/// `persist_keymap_unbind`: un editor que solo añade es un editor que no
+/// arregla un error.
 ///
-/// Sin puerta, y a propósito para la mitad de la carga: quitar una entrada no
-/// puede introducir una forma ilegal (c1 documenta que por eso el unbind, a
-/// diferencia del bind, no rechaza un fichero con una clave de preset), así que
-/// no hay carga que simular.
-///
-/// Lo que NO se comprueba es el efecto, y por eso los dos mensajes hablan del
-/// FICHERO y no de la tecla: «quitado de tu keymap.toml», no «esta tecla ya no
-/// hace X». La diferencia es real en tres casos que este camino no distingue,
-/// todos anotados en #141:
-///
-/// - el binding vive en `[global]`, que [`Screen::section`] jamás nombra (por
-///   diseño: escribir ahí cambiaría las tres pantallas desde una fila que
-///   nombra una). No casa, y no hay forma de quitarlo desde aquí;
-/// - el fichero lo escribe con OTRA ortografía legal (`mod+p` por `ctrl+p`,
-///   `alt+ctrl+p` por `ctrl+alt+p`). `persist_keymap_unbind` casa BYTE a byte y
-///   esta fila trae la ortografía canónica, así que tampoco casa — el bind sí
-///   repara ese gemelo (`rebind_dry_run` devuelve la ortografía del fichero) y
-///   el unbind todavía no;
-/// - otra capa (un `./.norte` de proyecto) bindea la misma tecla: se quita la
-///   entrada del usuario y la tecla sigue haciendo lo mismo.
-///
-/// En los dos primeros `KeymapWrite::changed` es `false` y el mensaje lo dice
-/// sin culpar al preset; en el tercero se escribió de verdad, y «quitado de tu
-/// keymap.toml» sigue siendo cierto.
-async fn unbind_shortcut(app: &mut App) {
+/// Ahora pasa por la misma puerta que el bind ([`plan_unbind`] /
+/// `unbind_dry_run`, #141): casa por secuencia PARSEADA, no por bytes, así
+/// que un gemelo escrito a mano (`mod+p` por `ctrl+p`) se encuentra y se
+/// escribe con SU propia ortografía; y el mensaje sale del mapa
+/// RECONSTRUIDO — qué ejecuta la tecla AHORA — en vez de "quitado de tu
+/// keymap.toml", que era cierto e inútil en cuanto otra capa seguía
+/// ligándola. Una fila `[global]` ni siquiera llega a la puerta: se refleja
+/// en la fila misma (`ShortcutRow::is_editable`) y se rechaza antes, con su
+/// propio mensaje.
+async fn unbind_shortcut(app: &mut App, cfg: &config::LoadedConfig, cli_preset: Option<&str>) {
     let Some(row) = app
         .shortcuts
         .as_ref()
@@ -5929,29 +5945,57 @@ async fn unbind_shortcut(app: &mut App) {
     else {
         return;
     };
+    if !row.is_editable() {
+        app.message = Some(t("shortcuts-row-global"));
+        return;
+    }
     if !row.is_bound() {
         app.message = Some(t("msg-shortcut-nothing-to-unbind"));
         return;
     }
-    // La ortografía canónica de la fila. El escritor casa BYTE a byte, así que
-    // un gemelo escrito a mano no casa: ver la doc de arriba y #141.
-    let section = row.screen.section();
-    let chords: Vec<String> = row.seq.iter().map(ToString::to_string).collect();
-    let command = row.command.clone();
+    let screen = row.screen;
+    let seq: Vec<norte_tui::keymap::Chord> = row.seq.clone();
     let painted = row.chord.clone();
-    let label = norte_frontend::whichkey::command_label(&command, norte_i18n::active());
+    let write = match plan_unbind(cfg, cli_preset, screen, &seq) {
+        Ok(w) => w,
+        Err(e) => {
+            app.message = Some(norte_frontend::shortcuts::plan_error_message(
+                &e,
+                norte_i18n::active(),
+            ));
+            return;
+        }
+    };
+    if matches!(write.outcome, norte_tui::keymap::UnbindOutcome::NotBound) {
+        // Nada que escribir: el propio door ya vio que esta capa no tenía la
+        // secuencia (una fila de otra capa, o una lectura obsoleta).
+        app.message = Some(t("msg-shortcut-nothing-to-unbind"));
+        return;
+    }
     let Some(dir) = config::user_config_dir() else {
         app.message = Some(t("msg-settings-no-config-dir"));
         return;
     };
+    let section = write.section;
+    let chords = write.chords.clone();
+    let command = write.command.clone();
     let res = tokio::task::spawn_blocking(move || {
         config::persist_keymap_unbind(&dir, section, &chords, &command)
     })
     .await;
     app.message = Some(match res {
-        Ok(Ok(w)) if w.changed => ta(
-            "msg-shortcut-unbound",
-            &[("chord", &painted), ("command", &label)],
+        // `w.changed` es la verdad del ESCRITOR (releída bajo su lock) sobre
+        // si algo se quitó; `write.outcome` es la del DOOR, leída de la
+        // config en memoria antes del `spawn_blocking`. Si el fichero cambió
+        // justo en ese hueco (otro proceso, una edición a mano) `w.changed`
+        // sigue siendo cierto — no se inventa un cambio que no ocurrió — pero
+        // el TEXTO de `outcome` puede describir un mapa que ya no es el de
+        // disco: la misma ventana que `rebind_dry_run` ya documenta para el
+        // bind (el escritor toma el lock del fichero, esto no).
+        Ok(Ok(w)) if w.changed => norte_frontend::shortcuts::unbind_outcome_message(
+            &write.outcome,
+            &painted,
+            norte_i18n::active(),
         ),
         Ok(Ok(_)) => t("msg-shortcut-nothing-to-unbind"),
         Ok(Err(e)) => ta(
@@ -6435,8 +6479,10 @@ mod shortcuts_editor_tests {
                 "shortcuts-refused-preset",
                 "msg-shortcut-bound",
                 "msg-shortcut-unbound",
+                "msg-shortcut-unbound-cleared",
                 "msg-shortcut-nothing-to-unbind",
                 "msg-shortcut-not-bindable",
+                "shortcuts-row-global",
             ] {
                 assert_ne!(norte_i18n::t_in(lang, id), id, "falta {id} en {lang:?}");
             }

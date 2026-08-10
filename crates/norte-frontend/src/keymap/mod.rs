@@ -30,7 +30,8 @@ pub use effective::{Availability, Continuation, Effective, valid_lua_name};
 pub(crate) use effective::render_seq;
 pub use layer::{KeymapFile, Screen, parse_keymap, parse_keymap_layer};
 pub use rebind::{
-    Rebind, RebindError, RebindSources, RebindSplit, RebindWrite, rebind_check, rebind_dry_run,
+    Rebind, RebindError, RebindSources, RebindSplit, RebindWrite, UnbindOutcome, UnbindWrite,
+    rebind_check, rebind_dry_run, unbind_dry_run,
 };
 pub use resolve::{Count, Resolution, Resolver};
 

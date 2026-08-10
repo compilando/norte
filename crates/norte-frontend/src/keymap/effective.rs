@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use super::catalogue::{self, Status};
 use super::chord::{Chord, KeyCode, Mods, parse_chord};
-use super::layer::{KeymapFile, RawBinding, Screen, check_layer_keys, merged_bindings};
+use super::layer::{KeymapFile, RawBinding, Screen, Section, check_layer_keys, merged_bindings};
 use super::{KeymapDiagnostic, KeymapError};
 
 /// Why a bound key may not run anything here. Kept ON the binding instead of
@@ -47,6 +47,12 @@ pub(super) struct Binding {
     pub(super) seq: Vec<Chord>,
     pub(super) run: String,
     pub(super) avail: Availability,
+    /// Whether this binding was read out of `[global]` rather than the map's
+    /// own screen-specific section (`merged_bindings`'s [`Section`]) — the
+    /// provenance [`Effective::is_global`] answers from. `check_binding`
+    /// itself never sets this: it validates a binding without caring where it
+    /// came from, so the caller stamps it on afterwards.
+    pub(super) global: bool,
 }
 
 /// ONE key that may follow a pending prefix — a row of the which-key panel
@@ -176,6 +182,9 @@ fn check_binding(raw: &RawBinding, known_commands: &[&str]) -> Result<Binding, K
         seq,
         run: raw.run.clone(),
         avail,
+        // Stamped by the caller (`merged_bindings` knows the section; this
+        // function does not) — `false` here is overwritten, never read.
+        global: false,
     })
 }
 
@@ -342,15 +351,22 @@ impl Effective {
         let mut bindings: Vec<Binding> = Vec::new();
         // `merged_bindings` sigue etiquetando el origen (`merge_ctx` lo usa
         // para descartar los `lua:` de la capa de proyecto); la decisión por
-        // binding ya no depende de él.
-        for (raw, _origin) in ordered {
+        // binding ya no depende de él. La SECCIÓN sí importa: es la
+        // procedencia que el editor de atajos necesita para marcar una fila
+        // `[global]` como no editable (#141) — específico gana, así que la
+        // primera vez que `seen` acepta una secuencia es también la única vez
+        // que su sección cuenta.
+        for (raw, _origin, section) in ordered {
             let binding = check_binding(raw, known_commands)?;
             // El primero gana (el orden YA codifica la precedencia). Un
             // binding NO disponible participa igual: ensombrece al de menos
             // precedencia en vez de dejarlo aflorar — la tecla dice por qué
             // no hace nada en lugar de hacer otra cosa.
             if seen.insert(binding.seq.clone()) {
-                bindings.push(binding);
+                bindings.push(Binding {
+                    global: section == Section::Global,
+                    ..binding
+                });
             }
         }
         check_prefix_free(&bindings)?;
@@ -401,7 +417,9 @@ impl Effective {
         let ordered = merged_bindings(preset, layers, screen, &mut discarded);
         let mut seen: HashSet<Vec<Chord>> = HashSet::new();
         let mut bindings: Vec<Binding> = Vec::new();
-        for (raw, _origin) in ordered {
+        // Diagnostics never expose per-binding provenance, so the section is
+        // not stamped here the way `build_for_impl` stamps it.
+        for (raw, _origin, _section) in ordered {
             match check_binding(raw, known_commands) {
                 Ok(binding) => {
                     if seen.insert(binding.seq.clone()) {
@@ -495,6 +513,37 @@ impl Effective {
     /// put a second grammar between the two.
     pub(super) fn raw_bindings(&self) -> &[Binding] {
         &self.bindings
+    }
+
+    /// Whether `seq`, exactly, was read out of `[global]` rather than this
+    /// map's own screen-specific section — the provenance a shortcut editor
+    /// needs to mark a row non-editable (#141) instead of guessing from the
+    /// SCREEN a row is displayed under, which the merge has already erased:
+    /// every screen's map contains `[global]`'s bindings indistinguishably
+    /// from its own, and [`Screen::section`] never answers `"global"`, so a
+    /// write there from a row naming one screen would change all three.
+    ///
+    /// `false` for a sequence this map does not bind at all — nothing here
+    /// claims a global binding for a key nobody has.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::{Effective, Screen, parse_chord, parse_keymap};
+    ///
+    /// let preset = parse_keymap(
+    ///     "[global]\nkeymap = [{ on = [\"ctrl+p\"], run = \"app.palette\" }]\n\
+    ///      [pane]\nkeymap = [{ on = [\"f5\"], run = \"pane.copy\" }]\n",
+    /// )
+    /// .unwrap();
+    /// let eff = Effective::build_for(&preset, &[], &["app.palette", "pane.copy"], Screen::Browse)
+    ///     .unwrap();
+    /// assert!(eff.is_global(&[parse_chord("ctrl+p").unwrap()]));
+    /// assert!(!eff.is_global(&[parse_chord("f5").unwrap()]));
+    /// // A key nobody binds is not global either.
+    /// assert!(!eff.is_global(&[parse_chord("ctrl+z").unwrap()]));
+    /// ```
+    #[must_use]
+    pub fn is_global(&self, seq: &[Chord]) -> bool {
+        self.bindings.iter().any(|b| b.seq == seq && b.global)
     }
 
     /// Bindings `lua:` descartados por venir de la capa de PROYECTO (`./

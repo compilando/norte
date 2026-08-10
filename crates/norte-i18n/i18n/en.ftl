@@ -810,13 +810,21 @@ shortcuts-refused-shadowed-unavailable = not saved: { $command } keeps that key 
 # exceptions for unreachable.
 shortcuts-refused-preset = not saved: the active keymap preset is unknown
 msg-shortcut-bound = { $chord } now runs { $command }
-# Both unbind messages speak about the FILE, never about what the key does
-# now: the unbind matches byte-exactly on this section and this spelling, so a
-# `[global]` binding, a twin spelling (`mod+p` for `ctrl+p`) or another layer
-# still binding the key would each make "no longer runs" a lie (#141).
+# The GUI's own unbind still matches byte-exactly and speaks about the FILE,
+# never about what the key does now (#141: a `[global]` binding, a twin
+# spelling, or another layer still binding the key each make "removed" true
+# and useless). The TUI's unbind is worded from the rebuilt map instead —
+# `msg-shortcut-unbound-cleared` below, or `msg-shortcut-bound` reused when the
+# key now runs something else — and keeps this one only for its own no-op.
 msg-shortcut-unbound = removed from your keymap.toml: { $chord } → { $command }
+msg-shortcut-unbound-cleared = { $chord } does nothing now
 msg-shortcut-nothing-to-unbind = nothing removed: nothing in that section of your keymap.toml matched that key
 msg-shortcut-not-bindable = that key cannot be captured here
+# K3c #141: a binding read from `[global]` merges into every screen, so
+# `Screen::section` never names it and this editor must not write there from
+# a row that names one screen — that write would change all three. The row
+# says where it actually lives instead of silently doing nothing.
+shortcuts-row-global = bound in [global]; edit keymap.toml to change it
 
 # The GUI's own wording for the same screen (K3c c4). Two things differ from
 # the terminal's and neither is cosmetic. It has a mouse, so the hint names

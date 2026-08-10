@@ -39,8 +39,8 @@ use norte_i18n::Lang;
 
 use crate::keymap::{
     Availability, Chord, Effective, KeymapFile, Rebind, RebindError, RebindSources, RebindWrite,
-    Screen, Status, catalogue, parse_keymap, presets, rebind_check, rebind_dry_run,
-    short_unavailable_message,
+    Screen, Status, UnbindOutcome, UnbindWrite, catalogue, parse_keymap, presets, rebind_check,
+    rebind_dry_run, short_unavailable_message, unbind_dry_run,
 };
 use crate::keysheet::sheet_of;
 use crate::whichkey::command_label;
@@ -95,6 +95,15 @@ pub struct ShortcutRow {
     /// Why the key does nothing, already translated
     /// ([`short_unavailable_message`]) — empty when it does something.
     pub reason: String,
+    /// Whether this binding lives in `[global]` rather than [`Self::screen`]'s
+    /// own section ([`Effective::is_global`]). Always `false` for an unbound
+    /// row: it names no binding to have a section at all.
+    ///
+    /// The provenance comes from the LAYER the binding was read out of, not
+    /// from [`Self::screen`] — a screen's map merges `[global]` into itself,
+    /// so by the time a row exists the two are indistinguishable without this
+    /// field. [`Self::is_editable`] is what the editor should actually ask.
+    pub global: bool,
 }
 
 impl ShortcutRow {
@@ -103,6 +112,20 @@ impl ShortcutRow {
     #[must_use]
     pub fn is_bound(&self) -> bool {
         !self.seq.is_empty()
+    }
+
+    /// Whether this row may be rebound or unbound from here at all.
+    ///
+    /// A `[global]` row fails this — not because the binding cannot change,
+    /// but because [`Screen::section`] never answers `"global"`: a write
+    /// through a row that names ONE screen would land in a section that
+    /// changes all three, or (today) find nothing to write to at all and
+    /// silently do nothing (#141). The editor says where the binding lives
+    /// instead of guessing at a write it must not make; the file itself is
+    /// still the way to change it.
+    #[must_use]
+    pub fn is_editable(&self) -> bool {
+        !self.global
     }
 }
 
@@ -152,6 +175,7 @@ pub fn build_rows(screens: &[ScreenKeys<'_>], lang: Lang) -> Vec<ShortcutRow> {
                 command: row.command,
                 avail: row.avail,
                 reason: short_unavailable_message(row.avail, lang),
+                global: row.global,
             });
         }
         let bound: Vec<&str> = s.eff.bindings_all_seq().iter().map(|b| b.1).collect();
@@ -170,6 +194,8 @@ pub fn build_rows(screens: &[ScreenKeys<'_>], lang: Lang) -> Vec<ShortcutRow> {
                 label: command_label(def.name, lang),
                 avail: Availability::Here,
                 reason: String::new(),
+                // No binding, no section it could live in: never global.
+                global: false,
             });
         }
     }
@@ -452,8 +478,11 @@ impl ShortcutsState {
     }
 
     /// Starts capturing a new key for the row under the cursor. `false` when
-    /// nothing is selected (an empty filter result), and a no-op when a capture
-    /// is already in flight.
+    /// nothing is selected (an empty filter result), when the row is
+    /// [`ShortcutRow::is_editable`]'s `false` (a `[global]` row: writing here
+    /// would land in this screen's own section, not the one the row is
+    /// actually bound in — #141), and a no-op when a capture is already in
+    /// flight.
     pub fn begin_capture(&mut self) -> bool {
         if self.capture.is_some() {
             return false;
@@ -462,6 +491,9 @@ impl ShortcutsState {
             return false;
         };
         let row = &self.rows[real];
+        if !row.is_editable() {
+            return false;
+        }
         self.capture = Some(Capture {
             row: real,
             screen: row.screen,
@@ -683,6 +715,64 @@ pub fn write_error_message(e: &RebindError, lang: Lang) -> String {
                     &[("command", &label), ("reason", &reason)],
                 )
             }
+        }
+    }
+}
+
+/// The unbind's door, called the same way [`plan_rebind`] is: the active
+/// preset's name, the loaded layers and kinds, and the screen a row belongs
+/// to — [`RebindSources::split_at`] makes the same cut either way, so a
+/// second frontend has exactly as little reason to redo it for a removal as
+/// for a write.
+///
+/// A row this editor may not touch at all ([`ShortcutRow::is_editable`]'s
+/// `false`, a `[global]` binding) is the CALLER's to refuse before this is
+/// ever reached — [`ShortcutsState::begin_capture`] already refuses the
+/// symmetric case for a rebind, and the row itself carries what a refusal
+/// message needs (`shortcuts-row-global`). This function has no row to ask.
+///
+/// # Errors
+/// [`PlanError`] — an unknown preset, or a rebuilt map that fails to load
+/// (see [`unbind_dry_run`]'s own doc for why that is unreachable in practice
+/// and still typed).
+pub fn plan_unbind(
+    preset_name: &str,
+    kinds: &[norte_config::Layer],
+    layers: &[KeymapFile],
+    known_commands: &[&str],
+    screen: Screen,
+    seq: &[Chord],
+) -> Result<UnbindWrite, PlanError> {
+    let Some(preset) = presets::source(preset_name).and_then(|src| parse_keymap(src).ok()) else {
+        return Err(PlanError::UnknownPreset);
+    };
+    let split = RebindSources::split_at(&preset, kinds, layers, known_commands, screen);
+    unbind_dry_run(&split.sources(), seq).map_err(|e| PlanError::Door(RebindError::Load(e)))
+}
+
+/// What removing a binding did, in the reader's language — worded from
+/// [`UnbindOutcome`], never from "removed from your keymap.toml": that
+/// sentence is true and useless the moment anything else still binds the key
+/// (#141).
+///
+/// [`UnbindOutcome::NotBound`] is deliberately absent from this function: it
+/// is not a fact about the key, it is "nothing was written", which the caller
+/// already has its own wording for (`msg-shortcut-nothing-to-unbind`) shared
+/// with the byte-exact writer's own no-op.
+#[must_use]
+pub fn unbind_outcome_message(outcome: &UnbindOutcome, chord: &str, lang: Lang) -> String {
+    match outcome {
+        UnbindOutcome::NotBound => norte_i18n::t_in(lang, "msg-shortcut-nothing-to-unbind"),
+        UnbindOutcome::Cleared => {
+            norte_i18n::ta_in(lang, "msg-shortcut-unbound-cleared", &[("chord", chord)])
+        }
+        UnbindOutcome::Runs { command, .. } => {
+            let label = command_label(command, lang);
+            norte_i18n::ta_in(
+                lang,
+                "msg-shortcut-bound",
+                &[("chord", chord), ("command", &label)],
+            )
         }
     }
 }
@@ -1044,5 +1134,70 @@ keymap = [
         );
         // And the unpainted sequence is still there for the unbind to use.
         assert_eq!(row.seq, [c("\u{202e}")]);
+    }
+
+    /// K3c #141: a `[global]` binding merges into the screen's own map
+    /// indistinguishably from one written in `[pane]` — that is the whole
+    /// point of `[global]` — so the row's provenance can only come from the
+    /// LAYER the binding was read out of ([`Effective::is_global`]), never
+    /// from the screen it happens to be displayed under. A row built from it
+    /// says so and refuses to be edited; an ordinary `[pane]` row does not.
+    #[test]
+    fn a_global_binding_is_a_row_marked_global_and_not_editable() {
+        let src = "[global]\nkeymap = [{ on = [\"ctrl+p\"], run = \"pane.switch\" }]\n\
+                    [pane]\nkeymap = [{ on = [\"f5\"], run = \"pane.copy\" }]\n";
+        let preset = parse_keymap(src).expect("fixture parses");
+        let eff =
+            Effective::build_for(&preset, &[], BINDABLE, Screen::Browse).expect("fixture builds");
+        let rows = build_rows(
+            &[ScreenKeys {
+                screen: Screen::Browse,
+                eff: &eff,
+                bindable: BINDABLE,
+            }],
+            Lang::En,
+        );
+        let global_row = rows
+            .iter()
+            .find(|r| r.command == "pane.switch")
+            .expect("the global binding is a row");
+        assert!(global_row.global, "read from [global]");
+        assert!(!global_row.is_editable(), "the editor may not write here");
+
+        let pane_row = rows
+            .iter()
+            .find(|r| r.command == "pane.copy")
+            .expect("the ordinary binding is a row too");
+        assert!(!pane_row.global, "read from [pane], not [global]");
+        assert!(pane_row.is_editable());
+
+        // And an unbound row (no binding at all) is never global either.
+        let unbound = rows
+            .iter()
+            .find(|r| !r.is_bound())
+            .expect("BINDABLE names a command nothing here presses");
+        assert!(!unbound.global);
+        assert!(unbound.is_editable());
+    }
+
+    /// The state itself refuses to open a capture on a `[global]` row —
+    /// checked here rather than trusted to every caller, so a frontend that
+    /// forgets to ask [`ShortcutRow::is_editable`] first (the GUI's own
+    /// `enter` arm ignores `begin_capture`'s return value entirely) still
+    /// cannot write into a section that would change all three screens.
+    #[test]
+    fn begin_capture_refuses_a_global_row() {
+        let src = "[global]\nkeymap = [{ on = [\"ctrl+p\"], run = \"pane.switch\" }]\n";
+        let preset = parse_keymap(src).expect("fixture parses");
+        let eff =
+            Effective::build_for(&preset, &[], BINDABLE, Screen::Browse).expect("fixture builds");
+        let mut s = state(&eff);
+        assert!(
+            s.selected()
+                .is_some_and(|r| r.command == "pane.switch" && r.global),
+            "the cursor starts on the one bound row"
+        );
+        assert!(!s.begin_capture(), "a global row cannot be captured into");
+        assert!(!s.is_capturing());
     }
 }

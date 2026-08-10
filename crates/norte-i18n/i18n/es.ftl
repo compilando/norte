@@ -831,14 +831,22 @@ shortcuts-refused-shadowed-unavailable = sin guardar: { $command } se queda esa 
 # la regla 6 no hace excepciones con lo inalcanzable.
 shortcuts-refused-preset = sin guardar: el preset de keymap activo es desconocido
 msg-shortcut-bound = { $chord } ahora ejecuta { $command }
-# Los dos mensajes del desligado hablan del FICHERO, jamás de lo que la tecla
-# hace ahora: el escritor casa byte a byte sobre esta sección y esta
-# ortografía, así que un binding de `[global]`, un gemelo (`mod+p` por
-# `ctrl+p`) u otra capa que siga ligando la tecla convertirían «ya no ejecuta»
-# en una mentira (#141).
+# El desligado de la GUI sigue casando byte a byte y hablando del FICHERO,
+# jamás de lo que la tecla hace ahora (#141: un binding de `[global]`, un
+# gemelo o otra capa que siga ligando la tecla convertirían «quitado» en
+# verdad e inútil a la vez). El desligado de la TUI se redacta desde el mapa
+# reconstruido — `msg-shortcut-unbound-cleared` abajo, o `msg-shortcut-bound`
+# reutilizado si la tecla pasa a ejecutar otra cosa — y esta clave le queda
+# solo para su propio no-op.
 msg-shortcut-unbound = quitado de tu keymap.toml: { $chord } → { $command }
+msg-shortcut-unbound-cleared = { $chord } ya no hace nada
 msg-shortcut-nothing-to-unbind = no se quitó nada: nada de esa sección de tu keymap.toml casó con esa tecla
 msg-shortcut-not-bindable = esa tecla no se puede capturar aquí
+# K3c #141: un binding leído de `[global]` se fusiona en las tres pantallas,
+# así que `Screen::section` nunca lo nombra y este editor no debe escribir ahí
+# desde una fila que nombra una sola pantalla — cambiaría las tres. La fila
+# dice dónde vive de verdad en vez de no hacer nada en silencio.
+shortcuts-row-global = atado en [global]; edítalo en keymap.toml
 
 # La redacción propia de la GUI para la misma pantalla (K3c c4). Dos cosas
 # cambian respecto a la terminal y ninguna es cosmética. Tiene ratón, así que

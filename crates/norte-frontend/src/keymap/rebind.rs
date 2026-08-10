@@ -661,6 +661,211 @@ pub fn rebind_dry_run(
     })
 }
 
+/// Everything [`norte_config::persist_keymap_unbind`] needs, and what
+/// happened — [`RebindWrite`]'s shape, for the removal instead of the write.
+///
+/// Unlike a bind, a removal is never refused: there is no illegal shape an
+/// UNBIND can produce (`persist_keymap_unbind`'s own contract says so), so
+/// [`unbind_dry_run`] returns this unconditionally rather than a `Result` with
+/// a refusal variant nothing can construct.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnbindWrite {
+    /// The `[section]` to remove from — this screen's own context
+    /// ([`Screen::section`]), never `global`, for the same reason
+    /// [`RebindWrite::section`] never is.
+    pub section: &'static str,
+    /// The chords the target layer's own list spelled the removed entry with
+    /// — hand THESE to the writer, not a re-rendering of `seq` — or `seq`
+    /// rendered with `Display` when [`Self::outcome`] is
+    /// [`UnbindOutcome::NotBound`]: there is nothing in the file to spell
+    /// differently, and the caller should not be calling the writer with this
+    /// anyway (see that variant).
+    pub chords: Vec<String>,
+    /// The command the removed entry named, or empty for
+    /// [`UnbindOutcome::NotBound`] — nothing was found to name one.
+    pub command: String,
+    /// What `seq` does now, read off the map WITHOUT the removed entry.
+    pub outcome: UnbindOutcome,
+}
+
+/// What a sequence does after the removal [`unbind_dry_run`] modelled —
+/// [`Effective::lookup`]'s own answer, never asserted from the file the way
+/// the old "removed from your keymap.toml" message did: removing an entry is
+/// not the same as the key going quiet (#141).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnbindOutcome {
+    /// This screen's own layer had no entry — in `prepend_keymap` OR
+    /// `append_keymap` — matching `seq` by PARSED sequence. Three cases look
+    /// like this and this door cannot tell them apart, which is why the
+    /// wording (`shortcuts-row-global` / `msg-shortcut-nothing-to-unbind`)
+    /// is the CALLER's to pick from context, not this type's to guess:
+    ///
+    /// - the row is a `[global]` binding — [`Screen::section`] never answers
+    ///   `"global"`, so this layer's `[pane]`/`[viewer]`/`[dialog]` list was
+    ///   never going to have it;
+    /// - it lives in another layer entirely (a `./.norte` project layer);
+    /// - it really is not bound anywhere the caller should have shown as
+    ///   bound — a stale row, or a caller bug.
+    ///
+    /// Nothing is removed and nothing need be written: the caller should not
+    /// call the writer at all, the same way [`ShortcutsState::confirmable`]
+    /// gates the bind before it reaches one.
+    ///
+    /// [`ShortcutsState::confirmable`]: crate::shortcuts::ShortcutsState::confirmable
+    NotBound,
+    /// The entry was removed, and the sequence now runs nothing at all.
+    Cleared,
+    /// The entry was removed, and the sequence still runs `command` — the
+    /// preset's own binding resurfacing, a lower layer, or a `./.norte`
+    /// project layer this editor does not write. The three are worded the
+    /// same ("F5 now runs X"): what changed for the reader is identical in
+    /// each case, and this door has no way to tell a project layer apart from
+    /// an ordinary lower one without asking it twice (see
+    /// [`RebindError::Shadowed`] for the one case where the bind path CAN,
+    /// and why: writing always makes the target's own entry win unless
+    /// something above it does not).
+    Runs {
+        /// What runs instead.
+        command: String,
+        /// Whether this build can run it.
+        avail: Availability,
+    },
+}
+
+/// The unbind's door, symmetric with [`rebind_dry_run`] and built out of the
+/// same parts: same [`RebindSources`], same [`parses_to`] match, same
+/// rebuild-and-ask-the-map shape. Three things it fixes over a byte-exact
+/// removal (#141, found by the c3 reviewers building the TUI Shortcuts
+/// screen):
+///
+/// 1. **A twin spelling.** `parses_to`, not the writer's byte-exact match,
+///    finds a hand-written `mod+p` for a `ctrl+p` row, and
+///    [`UnbindWrite::chords`] carries ITS bytes — the same repair
+///    [`rebind_dry_run`] already makes for the bind.
+/// 2. **`[global]`.** Searched section is `src.screen`'s own
+///    ([`Screen::section`]), never `global` — a global binding is
+///    [`UnbindOutcome::NotBound`] here, on purpose: this door does not decide
+///    what that means, the caller does (see that variant).
+/// 3. **The outcome is worded from the REBUILT map**, not from what the file
+///    no longer says. "Removed from your keymap.toml" is true and useless
+///    when a project layer still binds the key; [`UnbindOutcome`] carries
+///    what [`Effective::lookup`] says instead.
+///
+/// Searches BOTH of the target's lists (`prepend_keymap` and
+/// `append_keymap`) — an unbind has no list of its own to write into the way
+/// a rebind always prepends, so either one a hand-written file used is fair
+/// game. The removal itself is BYTE-exact on `(chords, command)`, the same
+/// predicate [`norte_config::persist_keymap_unbind`]'s own `binding_is` uses
+/// — not `parses_to` a second time. A twin spelling under the SAME parsed
+/// sequence is a shape the loader shadows rather than rejects (`Effective`'s
+/// merge is first-wins, not a load error), so it is exactly the shape this
+/// removal must leave standing when the writer would: simulating it as gone
+/// because it merely PARSES the same as the removed entry would report a key
+/// as silent that the byte-exact writer leaves bound to the twin — the same
+/// "editor says one thing, file does another" defect #141 was filed over.
+///
+/// **The outcome is about the layers AS THEY WERE LOADED**, the same
+/// limitation [`rebind_dry_run`] documents for the bind: a hand edit or a
+/// second norte between this call and the write can still invalidate it —
+/// the writer takes the file lock, this does not — so the wording this
+/// returns can describe a map that no longer matches the file by the time
+/// the write lands. That window already exists for the bind path; this door
+/// inherits it rather than closing it, for the same reason: re-reading and
+/// re-building the map here would not make the answer any less stale by the
+/// time the write actually runs.
+///
+/// # Errors
+/// [`KeymapError`] if the map without the removed entry still fails to
+/// build. Unreachable in practice — removing a binding cannot introduce a
+/// prefix clash, a sacred-key violation or an unknown command that were not
+/// already there — but the type this door already returns covers it, so no
+/// separate error is invented for a wrinkle that cannot happen.
+///
+/// ```
+/// use norte_frontend::keymap::{
+///     KeymapFile, RebindSources, Screen, parse_chord, parse_keymap, parse_keymap_layer,
+///     unbind_dry_run,
+/// };
+///
+/// let preset = parse_keymap("[pane]\nkeymap = [{ on = [\"f5\"], run = \"pane.copy\" }]\n")
+///     .unwrap();
+/// // The user rebound F5 under a twin spelling of ctrl+j.
+/// let target =
+///     parse_keymap_layer("[pane]\nprepend_keymap = [{ on = [\"mod+j\"], run = \"pane.move\" }]\n")
+///         .unwrap();
+/// let src = RebindSources {
+///     preset: &preset,
+///     below: &[],
+///     target: &target,
+///     above: &[],
+///     known_commands: &["pane.copy", "pane.move"],
+///     screen: Screen::Browse,
+/// };
+/// let w = unbind_dry_run(&src, &[parse_chord("ctrl+j").unwrap()]).unwrap();
+/// // The file's OWN spelling comes back, not `Display`'s `ctrl+j`.
+/// assert_eq!(w.chords, vec!["mod+j".to_owned()]);
+/// assert_eq!(w.command, "pane.move");
+/// ```
+pub fn unbind_dry_run(src: &RebindSources<'_>, seq: &[Chord]) -> Result<UnbindWrite, KeymapError> {
+    // Same precondition `rebind_dry_run` states, for the same reason: a
+    // project layer here would model editing `./.norte`, which the editor
+    // never does.
+    debug_assert!(
+        !src.target.is_project(),
+        "the write target is never the project layer"
+    );
+    let mut target = src.target.clone();
+    let section = target.section_mut(src.screen);
+    let found = section
+        .prepend_keymap
+        .iter()
+        .find(|b| parses_to(&b.on, seq))
+        .or_else(|| section.append_keymap.iter().find(|b| parses_to(&b.on, seq)));
+    let Some(existing) = found else {
+        let rendered: Vec<String> = seq.iter().map(ToString::to_string).collect();
+        return Ok(UnbindWrite {
+            section: src.screen.section(),
+            chords: rendered,
+            command: String::new(),
+            outcome: UnbindOutcome::NotBound,
+        });
+    };
+    let chords = existing.on.clone();
+    let command = existing.run.clone();
+    // BYTE-exact, matching `norte_config`'s own `binding_is` — not
+    // `parses_to`. A second, differently-spelled entry that also parses to
+    // `seq` (a twin the LOADER shadows rather than rejects, `Effective`'s own
+    // dedup is first-wins) must survive this removal exactly as it survives
+    // the writer's: modelling it as gone here, when the writer's byte-exact
+    // match will leave it standing, is the twin of the bug #141 opened
+    // against — a removal the editor reports that the file does not agree
+    // with (rust-reviewer BLOCKER, F2).
+    section
+        .prepend_keymap
+        .retain(|b| !(b.on == chords && b.run == command));
+    section
+        .append_keymap
+        .retain(|b| !(b.on == chords && b.run == command));
+    let mut merged: Vec<KeymapFile> = Vec::with_capacity(src.below.len() + 1 + src.above.len());
+    merged.extend_from_slice(src.below);
+    merged.push(target);
+    merged.extend_from_slice(src.above);
+    let after = Effective::build_for(src.preset, &merged, src.known_commands, src.screen)?;
+    let outcome = match after.lookup(seq) {
+        Lookup::Exact(run, avail) => UnbindOutcome::Runs {
+            command: run.to_owned(),
+            avail,
+        },
+        Lookup::Prefix | Lookup::Miss => UnbindOutcome::Cleared,
+    };
+    Ok(UnbindWrite {
+        section: src.screen.section(),
+        chords,
+        command,
+        outcome,
+    })
+}
+
 /// Do these written chords parse to exactly `seq`? The question
 /// [`norte_config::persist_keymap_bind`] cannot ask (it is below the grammar
 /// and compares bytes), and the reason a hand-written `mod+p` does not become
@@ -684,7 +889,10 @@ fn round_trips(c: Chord) -> bool {
 mod tests {
     use norte_config::{Layer, Layers};
 
-    use super::{Rebind, RebindError, RebindSources, RebindWrite, rebind_check, rebind_dry_run};
+    use super::{
+        Rebind, RebindError, RebindSources, RebindWrite, UnbindOutcome, rebind_check,
+        rebind_dry_run, unbind_dry_run,
+    };
     use crate::keymap::{
         Availability, Chord, Effective, KeyCode, KeymapFile, Mods, Screen, parse_chord,
         parse_keymap,
@@ -1372,6 +1580,181 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
         assert!(
             rebind_dry_run(&src, &seq, "pane.move").is_err(),
             "tab bound elsewhere is a load error"
+        );
+    }
+
+    /// The bind path already repairs a twin spelling — `rebind_dry_run` hands
+    /// the writer the spelling that is IN the file. The unbind had no
+    /// equivalent, so a hand-written `mod+p` survived an unbind of `ctrl+p`
+    /// and the key kept firing (#141).
+    #[test]
+    fn an_unbind_finds_a_twin_spelling_and_returns_the_files_own() {
+        let preset = parse_keymap(BROWSE).expect("preset");
+        for spelling in ["alt+ctrl+p", "mod+p"] {
+            let target = crate::keymap::parse_keymap_layer(&format!(
+                "[pane]\nprepend_keymap = [{{ on = [\"{spelling}\"], run = \"pane.move\" }}]\n"
+            ))
+            .expect("the user's own layer");
+            let seq = [c(spelling)];
+            let src = only_user(&preset, &target, Screen::Browse);
+            let w = unbind_dry_run(&src, &seq).expect("removing a real entry always succeeds");
+            assert_eq!(
+                w.chords,
+                vec![spelling.to_owned()],
+                "the spelling ALREADY IN THE FILE, not `Display`'s"
+            );
+            assert_eq!(w.command, "pane.move");
+            assert_eq!(
+                w.outcome,
+                UnbindOutcome::Cleared,
+                "{spelling}: nothing else in BROWSE binds it"
+            );
+
+            // And end to end, against the real writer: the twin is gone and
+            // the byte-exact writer lands on the entry `Display` would have
+            // walked past.
+            let dir = tempfile::tempdir().expect("tmp");
+            std::fs::write(
+                dir.path().join("keymap.toml"),
+                format!(
+                    "[pane]\nprepend_keymap = [{{ on = [\"{spelling}\"], run = \"pane.move\" }}]\n"
+                ),
+            )
+            .expect("seed");
+            let removed =
+                norte_config::persist_keymap_unbind(dir.path(), w.section, &w.chords, &w.command)
+                    .expect("write");
+            assert!(removed.changed, "{spelling}: the twin was not found");
+            let cfg = crate::config::load(&Layers {
+                dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+            })
+            .expect("loads");
+            let after = Effective::build_for(&preset, &cfg.keymap_layers, KNOWN, Screen::Browse)
+                .expect("builds");
+            assert!(
+                !after
+                    .bindings_all_seq()
+                    .into_iter()
+                    .any(|(s, _, _)| s == seq.as_slice()),
+                "{spelling}: el gemelo debía desaparecer"
+            );
+        }
+    }
+
+    /// rust-reviewer BLOCKER (F2): a twin spelling the LOADER shadows rather
+    /// than rejects — TWO entries in the same list that parse to the same
+    /// chord, a legal and loadable shape (`Effective`'s dedup is first-wins,
+    /// it is not a load error) — must not both disappear from the
+    /// SIMULATION when only one disappears from the FILE. `persist_keymap_unbind`
+    /// removes byte-exact matches of `(chords, command)`, so simulating a
+    /// removal of every sequence-alike entry (the bug: matching by
+    /// `parses_to` instead of by the returned bytes) predicted `Cleared` for
+    /// a key the real writer leaves bound to the shadowed twin — the same
+    /// "the editor says one thing, the file does another" defect #141 was
+    /// filed over, reintroduced through the new door.
+    #[test]
+    fn an_unbind_leaves_a_differently_spelled_twin_of_the_removed_entry_standing() {
+        let preset = parse_keymap(BROWSE).expect("preset");
+        let target = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [\n\
+                { on = [\"ctrl+p\"], run = \"pane.move\" },\n\
+                { on = [\"mod+p\"], run = \"cursor.top\" },\n\
+             ]\n",
+        )
+        .expect("two entries, one parsed sequence — the loader shadows, it does not reject");
+        let seq = [c("ctrl+p")];
+        let src = only_user(&preset, &target, Screen::Browse);
+        let w = unbind_dry_run(&src, &seq).expect("removing the winning entry always succeeds");
+        // The WINNING entry (first in the list) is the one removed.
+        assert_eq!(w.chords, vec!["ctrl+p".to_owned()]);
+        assert_eq!(w.command, "pane.move");
+        // And the shadowed twin — a DIFFERENT spelling, a DIFFERENT command —
+        // must still be standing in the rebuilt map: the byte-exact writer
+        // never touches it, so the simulation may not claim it either.
+        assert_eq!(
+            w.outcome,
+            UnbindOutcome::Runs {
+                command: "cursor.top".to_owned(),
+                avail: Availability::Here,
+            },
+            "the twin the writer would leave behind must still be reported as running"
+        );
+
+        // End to end: the real writer agrees.
+        let dir = tempfile::tempdir().expect("tmp");
+        std::fs::write(
+            dir.path().join("keymap.toml"),
+            "[pane]\nprepend_keymap = [\n\
+                { on = [\"ctrl+p\"], run = \"pane.move\" },\n\
+                { on = [\"mod+p\"], run = \"cursor.top\" },\n\
+             ]\n",
+        )
+        .expect("seed");
+        norte_config::persist_keymap_unbind(dir.path(), w.section, &w.chords, &w.command)
+            .expect("write");
+        let cfg = crate::config::load(&Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        })
+        .expect("loads");
+        let after = Effective::build_for(&preset, &cfg.keymap_layers, KNOWN, Screen::Browse)
+            .expect("builds");
+        assert!(
+            after.single_chord_runs(c("mod+p"), "cursor.top"),
+            "the twin survives the real write, exactly as the simulation now predicts"
+        );
+    }
+
+    /// Removing the user's entry is not the same as the key going quiet: a
+    /// project layer can still bind it. The outcome is worded from the
+    /// REBUILT map, so the editor says what the key does now instead of what
+    /// the file no longer says.
+    #[test]
+    fn an_unbind_shadowed_by_a_project_layer_says_the_key_still_runs() {
+        let preset = parse_keymap(BROWSE).expect("preset");
+        let target = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [{ on = [\"ctrl+j\"], run = \"pane.move\" }]\n",
+        )
+        .expect("the user's own (already shadowed) entry");
+        let project = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [{ on = [\"ctrl+j\"], run = \"cursor.top\" }]\n",
+        )
+        .expect("project layer");
+        let src = RebindSources {
+            above: std::slice::from_ref(&project),
+            ..only_user(&preset, &target, Screen::Browse)
+        };
+        let seq = [c("ctrl+j")];
+        let w = unbind_dry_run(&src, &seq).expect("removing the user's own entry always succeeds");
+        // The REAL command the file named, not what the map currently
+        // resolves to (the project layer already shadows it) — the whole
+        // reason the old byte-exact match, keyed on the row's (shadowed)
+        // command, could never find this entry.
+        assert_eq!(w.command, "pane.move");
+        assert_eq!(
+            w.outcome,
+            UnbindOutcome::Runs {
+                command: "cursor.top".to_owned(),
+                avail: Availability::Here,
+            },
+            "the key keeps running the project's binding"
+        );
+    }
+
+    /// Nothing to remove is not an error and not a lie: the file did not have
+    /// it, and the answer says so.
+    #[test]
+    fn an_unbind_of_a_key_the_file_does_not_bind_removes_nothing() {
+        let preset = parse_keymap(BROWSE).expect("preset");
+        let none = KeymapFile::default();
+        let seq = [c("ctrl+j")];
+        let src = only_user(&preset, &none, Screen::Browse);
+        let w = unbind_dry_run(&src, &seq).expect("a no-op is not an error");
+        assert_eq!(w.outcome, UnbindOutcome::NotBound);
+        assert_eq!(w.command, "", "nothing was found to name a command");
+        assert_eq!(
+            w.chords,
+            vec!["ctrl+j".to_owned()],
+            "Display's own spelling: there is no file spelling to prefer"
         );
     }
 }

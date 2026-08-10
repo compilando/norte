@@ -11,8 +11,9 @@
 /// que no lo ofrece.
 pub use norte_frontend::keymap::{
     Availability, Chord, Count, Effective, KeyCode, KeymapError, KeymapFile, Mods, Rebind,
-    RebindError, RebindSources, RebindWrite, Resolution, Resolver, Screen, count_ignored_message,
-    paint_chord, parse_chord, parse_keymap, rebind_check, rebind_dry_run, unavailable_message,
+    RebindError, RebindSources, RebindWrite, Resolution, Resolver, Screen, UnbindOutcome,
+    UnbindWrite, count_ignored_message, paint_chord, parse_chord, parse_keymap, rebind_check,
+    rebind_dry_run, unavailable_message, unbind_dry_run,
 };
 
 use crossterm::event::{KeyCode as CtCode, KeyModifiers as CtMods};

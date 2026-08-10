@@ -136,7 +136,7 @@ git commit -am "fix(tui): a paste fills the field instead of submitting it (#143
 
 Read #141 in full (`gh issue view 141`). The three cases are: `[global]` is unreachable, a twin spelling (`mod+p` vs `ctrl+p`) is missed by the byte-exact writer, and another layer may still bind the key after a successful removal.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
     /// The bind path already repairs a twin spelling — `rebind_dry_run` hands
@@ -162,11 +162,11 @@ Read #141 in full (`gh issue view 141`). The three cases are: `[global]` is unre
     }
 ```
 
-- [ ] **Step 2: Run and watch them fail**
+- [x] **Step 2: Run and watch them fail**
 
 Run: `just t norte-frontend`
 
-- [ ] **Step 3: Write `unbind_dry_run`**
+- [x] **Step 3: Write `unbind_dry_run`**
 
 Symmetric with `rebind_dry_run` and reusing its parts:
 
@@ -174,7 +174,9 @@ Symmetric with `rebind_dry_run` and reusing its parts:
 - Rebuild the effective map without that entry and word the outcome from `after.lookup(seq)`: the key now runs another command, or it does nothing, or a layer this editor does not write still binds it.
 - Return a type in the shape of `RebindWrite` — the writer needs `section`, `list` and `chords`; the caller needs the outcome. Do not return a pre-rendered sentence: the crate has no locale (that is why `RebindError` carries data, not prose).
 
-- [ ] **Step 4: The `[global]` row**
+Landed as `UnbindWrite { section, chords, command, outcome }` and `UnbindOutcome { NotBound, Cleared, Runs { command, avail } }` — no `list`: `persist_keymap_unbind` searches both `prepend_keymap` and `append_keymap` itself and takes no list argument, so there was nothing for that field to carry. The match to find the entry is by `parses_to` (a twin spelling is found); the REMOVAL from the cloned target is BYTE-exact on `(chords, command)` — mirroring `norte_config`'s own `binding_is` — not a second `parses_to` pass. That distinction was the rust-reviewer BLOCKER in Step 6: see there.
+
+- [x] **Step 4: The `[global]` row**
 
 `Screen::section()` deliberately never answers `"global"`. So the editor marks such a row as global and refuses to edit it, saying where it lives. The row state belongs in `shortcuts.rs` beside the other row states; the wording is Fluent:
 
@@ -187,17 +189,19 @@ shortcuts-row-global = atado en [global]; edítalo en keymap.toml
 
 How the editor KNOWS a row is global is the part to get right: the effective map merges `[global]` into every screen, so the row's provenance has to come from the layer the binding was found in, not from the screen the row is displayed under. If that provenance is not available today, adding it is part of this task — an editor that guesses is the bug, not the fix.
 
-- [ ] **Step 5: Wire the TUI**
+That provenance did not exist: `merged_bindings`/`merge_ctx` tagged a binding's `Origin` (preset vs. layer) but not which SECTION it came from. Added a `Section { Specific, Global }` alongside `Origin`, stamped onto `Effective`'s internal `Binding` (`global: bool`) at dedup time — specific wins the merge first, so a sequence bound in both `[pane]` and `[global]` correctly reports `false`. Exposed as `Effective::is_global(seq)`, threaded into `SheetRow`/`ShortcutRow::global` and `ShortcutRow::is_editable()`. `ShortcutsState::begin_capture` itself refuses a non-editable row (not just the TUI's call site), so the GUI's existing blind `begin_capture()` call inherits the same refusal for free.
+
+- [x] **Step 5: Wire the TUI**
 
 `unbind_shortcut` (`main.rs:5367`) calls the dry run, hands the writer the returned spelling, and words the result from the outcome the dry run reported. Its rustdoc currently points at #141 as known residue — that paragraph goes.
 
-- [ ] **Step 6: Run and review**
+- [x] **Step 6: Run and review**
 
 Run: `just t norte-frontend`, `just t norte-tui`, `just c`
 
-`rust-reviewer` on the diff. The question worth asking: can `unbind_dry_run` and the writer now disagree about WHICH entry is being removed — and what happens if the file changed between the dry run and the write?
+`rust-reviewer` on the diff, asked exactly the question above. Found a **BLOCKER**: the first cut of `unbind_dry_run` simulated the removal with `retain(|b| !parses_to(&b.on, seq))` — the same PARSED-sequence match used to *find* the entry, reused to *remove* it. That deletes every entry sharing the parsed sequence, not only the byte-exact one the real writer removes, so a legal, loadable shape (two entries under one parsed chord, different spellings and commands — the loader shadows this, it does not reject it) made the door predict `Cleared` while the byte-exact writer left the shadowed twin bound and firing: the exact "editor says one thing, file does another" defect #141 was filed over, reintroduced through the new door. Fixed by matching the removal on `(chords, command)` byte-exactly (mirroring `norte_config`'s own `binding_is`), with a regression test (`an_unbind_leaves_a_differently_spelled_twin_of_the_removed_entry_standing`) covering both the simulation and the real writer. Also flagged **MAJOR**: `write.outcome`'s wording is computed from the layers as loaded before the write, same as `rebind_dry_run` already documents for the bind ("the writer takes the file lock, this does not") — a hand edit or a second norte in that window can make the shown text stale even though `KeymapWrite::changed` (the boolean gate) stays honest. Accepted as the same pre-existing, documented tradeoff rather than re-verifying post-write (which would need a second file read + rebuild for a window this narrow); documented explicitly in `unbind_dry_run`'s rustdoc and at the TUI call site instead of silently inherited. No other BLOCKER/MAJOR; two MINORs noted and skipped (GUI's own unbind path is untouched, out of scope per this task's file list; `is_global`'s per-row linear scan is O(n²) over binding count, negligible at real keymap sizes).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git commit -am "fix(tui,frontend): an unbind matches the sequence, not the spelling (#141)"

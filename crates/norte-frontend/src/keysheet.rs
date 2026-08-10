@@ -72,6 +72,12 @@ pub struct SheetRow {
     /// presets' vocabulary, must not report it as one (it prints only the
     /// `NotBuilt` half).
     pub avail: Availability,
+    /// Whether this binding lives in `[global]` rather than this screen's own
+    /// section ([`Effective::is_global`]). The reference sheet has no use for
+    /// it — every row is read-only there — but the shortcut editor (K3c #141)
+    /// builds its rows from the same walk and needs to know, per row, whether
+    /// writing to it would touch this screen alone or all three.
+    pub global: bool,
 }
 
 /// Every binding of every given screen, in one flat list.
@@ -129,6 +135,7 @@ pub fn sheet_of(screen: Screen, eff: &Effective) -> Vec<SheetRow> {
         .map(|(seq, command, avail)| SheetRow {
             screen,
             chord: paint_chord(&render_seq(seq)),
+            global: eff.is_global(seq),
             seq: seq.to_vec(),
             command: command.to_owned(),
             avail,
