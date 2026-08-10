@@ -19,6 +19,9 @@ commands = [
     "pane.swap",
     "nav.back",
     "nav.forward",
+    "pane.select-drive",
+    "pane.select-drive-left",
+    "pane.select-drive-right",
 ]
 context = ["browse"]
 +++
@@ -128,6 +131,26 @@ it is neither taken nor put back until you answer, because trusting the key
 resumes that very navigation. Trust it and the step finishes; deny it, or let
 the resumed step fail, and the step is rewound like any other that never
 arrived.
+
+# Picking a drive
+
+{{cmd:pane.select-drive}} opens a picker of the host's volumes for the
+**focused** pane; {{cmd:pane.select-drive-left}} and
+{{cmd:pane.select-drive-right}} open the same picker for a **side** of the
+screen instead — whichever pane is drawn there, regardless of which one has
+focus. Total Commander's `Alt+F1`/`Alt+F2` have worked that way since Norton
+Commander, and both presets that import them keep the same split. Enter sends
+that pane to the highlighted mount.
+
+Each row shows the label when the filesystem has one, the mount point, the
+filesystem type, and free space of total — a mount the host could not query in
+time shows as unknown rather than as zero, which would read as full instead of
+unanswered. The list is a snapshot taken when the picker opens: it does not
+grow, shrink or re-check free space while you are looking at it, the same
+contract {{cmd:pane.history}} and {{cmd:pane.hotlist}} already keep. A key
+inside the picker toggles between the everyday list and every mount the host
+has, system filesystems included, and the footer says which one you are
+looking at.
 
 > 💡 A directory you visit often is worth a favourite: the pane remembers where it has been, and favourites are shared by both panes.
 

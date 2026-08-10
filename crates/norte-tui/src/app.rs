@@ -1009,6 +1009,12 @@ pub enum NavPopupKind {
     History,
     /// Favoritos persistidos en el `norte.toml` del USUARIO.
     Hotlist,
+    /// Volúmenes del host (`pane.select-drive`/`-left`/`-right`, design
+    /// 2026-08-10-volumes-design.md §D): snapshot congelada al abrir vía
+    /// `Backend::volumes` — `main.rs` hace el fetch async (app.rs no conoce
+    /// `Backend`) y entrega los items ya construidos a
+    /// [`App::open_volumes_popup`].
+    Volumes,
 }
 
 /// Un item del popup de navegación, CONGELADO al construirse en
@@ -1036,7 +1042,8 @@ pub struct NavItem {
 /// el render no re-decide nada y Enter no re-parsea nada.
 #[derive(Debug, Clone)]
 pub struct NavPopup {
-    /// Historial u hotlist (decide título, footer y las teclas `a`/`d`).
+    /// Historial, hotlist o volúmenes (decide título, footer y qué teclas
+    /// extra acepta).
     pub kind: NavPopupKind,
     /// Items congelados al abrir.
     items: Vec<NavItem>,
@@ -1045,6 +1052,17 @@ pub struct NavPopup {
     /// Input de nombre abierto (`a` en hotlist): captura imprimibles antes
     /// que nada (main.rs); `None` = navegación normal del popup.
     pub name_input: Option<String>,
+    /// El pane que `Confirm` navega. El foco para historial, hotlist y
+    /// `pane.select-drive`; un LADO fijo para `-left`/`-right`
+    /// independientemente de dónde esté el foco (design §D — así se
+    /// comportan `Alt+F1`/`Alt+F2` de Total Commander). Congelado al abrir,
+    /// misma razón que el resto del item: nada aquí se re-resuelve contra un
+    /// foco que pudo moverse debajo del popup.
+    target_pane: usize,
+    /// Solo volúmenes: si la lista ACTUAL incluye pseudo-filesystems (el
+    /// toggle "mostrar todo" del design §E). Sin sentido en historial/
+    /// hotlist, donde queda `false`.
+    include_pseudo: bool,
 }
 
 impl NavPopup {
@@ -1077,6 +1095,19 @@ impl NavPopup {
     pub fn selected(&self) -> Option<&NavItem> {
         self.items.get(self.cursor)
     }
+
+    /// El pane que `Confirm` debe navegar — ver el campo.
+    #[must_use]
+    pub fn target_pane(&self) -> usize {
+        self.target_pane
+    }
+
+    /// Si la lista de volúmenes actual incluye pseudo-filesystems — ver el
+    /// campo. Sin significado fuera de `NavPopupKind::Volumes`.
+    #[must_use]
+    pub fn include_pseudo(&self) -> bool {
+        self.include_pseudo
+    }
 }
 
 /// Display de un item del popup de navegación: `[name — ]path` con el badge
@@ -1101,6 +1132,68 @@ fn nav_item_display(
         format!("{} {prefix}{texto}", crate::ui::HOSTILE_BADGE)
     } else {
         format!("{prefix}{texto}")
+    }
+}
+
+/// Rows for the volumes popup (design §D): `main.rs` calls this right after
+/// `Backend::volumes` answers and hands the result to
+/// [`App::open_volumes_popup`] — this function owns none of the I/O, only the
+/// presentation, same split as the rest of the popup family.
+#[must_use]
+pub fn volume_items(
+    volumes: &[norte_proto::methods::Volume],
+    enc: Option<norte_encoding::NameEncoding>,
+) -> Vec<NavItem> {
+    volumes
+        .iter()
+        .map(|v| NavItem {
+            display: volume_item_display(v, enc),
+            target: Some(v.mount.clone()),
+            hotlist_name: None,
+        })
+        .collect()
+}
+
+/// One volume row: `[label — ]mount  fs_type  free / total`. Every text
+/// field the platform hands us — label, mount AND `fs_type` — goes through
+/// the same masking [`nav_item_display`] uses (`display_name`/
+/// `path_display_with`, both backed by `norte_encoding::is_terminal_hazard`)
+/// before it reaches the screen. `fs_type` is not the closed, ASCII-only
+/// vocabulary it looks like: a FUSE mount's `fuse.<subtype>` component is the
+/// `-o subtype=` value an UNPRIVILEGED user picks (`sshfs`, `rclone mount`,
+/// `encfs`…), so it is exactly as untrusted as a filename — encoding-auditor
+/// review caught it reaching the row unmasked in an earlier draft of this
+/// function, the same class of bug `control_escape` in the canonical corpus
+/// exists to catch. `free`/`total` print `volumes-size-unknown` instead of a
+/// number when the filesystem did not answer in time — design §A is explicit
+/// that a bare `0` here would read as "full", the opposite of what an absent
+/// size means.
+fn volume_item_display(
+    v: &norte_proto::methods::Volume,
+    enc: Option<norte_encoding::NameEncoding>,
+) -> String {
+    // #98/F4 (same reasoning `nav_item_display` carries): a popup is a
+    // decision surface, so it follows the focused pane's reinterpretation.
+    let (path_text, path_hostil) = norte_frontend::path_display_with(&v.mount, enc);
+    let (label_prefix, label_hostil) = match v.label.as_deref() {
+        Some(l) => {
+            let (nt, nh) = display_name(l.as_bytes());
+            (format!("{nt} — "), nh)
+        }
+        None => (String::new(), false),
+    };
+    let (fs_type_text, fs_type_hostil) = display_name(v.fs_type.as_bytes());
+    let free = v
+        .free_bytes
+        .map_or_else(|| t("volumes-size-unknown"), norte_frontend::human_bytes);
+    let total = v
+        .total_bytes
+        .map_or_else(|| t("volumes-size-unknown"), norte_frontend::human_bytes);
+    let body = format!("{label_prefix}{path_text}  {fs_type_text}  {free} / {total}");
+    if path_hostil || label_hostil || fs_type_hostil {
+        format!("{} {body}", crate::ui::HOSTILE_BADGE)
+    } else {
+        body
     }
 }
 
@@ -3106,9 +3199,18 @@ impl App {
     /// con foco (más reciente primero) o la copia de hotlist. Los items se
     /// construyen YA saneados aquí (`nav_item_display`); una entrada de
     /// hotlist inválida se muestra con su aviso y destino `None`.
+    ///
+    /// # Panics
+    /// Con `NavPopupKind::Volumes`: esos items necesitan un fetch ASYNC
+    /// contra `Backend::volumes` que este método (síncrono, sin `Backend`)
+    /// no puede hacer — `main.rs` abre ese kind vía
+    /// [`Self::open_volumes_popup`], nunca aquí.
     pub fn open_nav_popup(&mut self, kind: NavPopupKind) {
         let enc = self.focused().name_encoding();
         let items: Vec<NavItem> = match kind {
+            NavPopupKind::Volumes => unreachable!(
+                "Volumes se abre vía `open_volumes_popup` (design §D), nunca `open_nav_popup`"
+            ),
             NavPopupKind::History => self.history[self.focus]
                 .entries()
                 .iter()
@@ -3150,6 +3252,31 @@ impl App {
             items,
             cursor: 0,
             name_input: None,
+            target_pane: self.focus,
+            include_pseudo: false,
+        });
+    }
+
+    /// Abre el popup de volúmenes (`pane.select-drive`/`-left`/`-right`,
+    /// design §D) con `items` YA construidos por [`volume_items`] — `main.rs`
+    /// hace el fetch async contra `Backend::volumes` y llama aquí, mismo
+    /// reparto que el resto de este popup: main.rs es I/O, app.rs es estado y
+    /// presentación.
+    ///
+    /// `pane` es el LADO que `Confirm` va a navegar: el foco para
+    /// `pane.select-drive`, un lado fijo para `-left`/`-right`
+    /// independientemente del foco actual. `include_pseudo` es el modo con el
+    /// que se pidió ESTA lista — el toggle de dentro del popup vuelve a
+    /// llamar aquí con el valor invertido, así que esto es literalmente una
+    /// re-apertura, no un caso especial.
+    pub fn open_volumes_popup(&mut self, pane: usize, include_pseudo: bool, items: Vec<NavItem>) {
+        self.nav_popup = Some(NavPopup {
+            kind: NavPopupKind::Volumes,
+            items,
+            cursor: 0,
+            name_input: None,
+            target_pane: pane,
+            include_pseudo,
         });
     }
 
@@ -4195,18 +4322,46 @@ pub const ALLOW_PLUGIN_CONFIG: &[&str] = &[
     "dialog.cancel",
 ];
 
-/// ALLOWLIST del popup de navegación en modo HOTLIST (`on_nav_popup_key`,
-/// main.rs): `add`/`remove` los filtra el caller a `kind == Hotlist` (el
-/// historial no tiene nada que nombrar ni borrar — mismo criterio que antes
-/// de H1); el hint (H1 T3) solo se pinta para `NavPopupKind::Hotlist`,
-/// igual que el footer estático que sustituye. Compartida por dispatch y
-/// el hint generado.
+/// ALLOWLIST de DESPACHO del popup de navegación (`on_nav_popup_key`,
+/// main.rs), unión de lo que History, Hotlist y Volumes aceptan: `add`/
+/// `remove` los filtra el caller a `kind == Hotlist` (nada que nombrar ni
+/// borrar en historial o volúmenes) y `toggle-enabled` a `kind == Volumes`
+/// (el toggle "mostrar todo" no significa nada en los otros dos) — mismo
+/// criterio que antes de H1.
+///
+/// El HINT impreso es más estrecho que esto por kind: [`ALLOW_NAV_HOTLIST`]
+/// y [`ALLOW_NAV_VOLUMES`] son los que de verdad pinta cada footer (design
+/// §D — el footer de volúmenes no debe ofrecer "añadir"/"borrar", que no
+/// significan nada sobre un volumen montado).
+pub const ALLOW_NAV_POPUP: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.confirm",
+    "dialog.add",
+    "dialog.remove",
+    "dialog.toggle-enabled",
+    "dialog.cancel",
+];
+
+/// HINT del popup en modo HOTLIST (H1 T3): historial y volúmenes pintan el
+/// suyo propio (o ninguno) — ver [`ALLOW_NAV_POPUP`] para el porqué de la
+/// separación.
 pub const ALLOW_NAV_HOTLIST: &[&str] = &[
     "dialog.up",
     "dialog.down",
     "dialog.confirm",
     "dialog.add",
     "dialog.remove",
+    "dialog.cancel",
+];
+
+/// HINT del popup en modo VOLUMES (design §D): navegación, confirmar,
+/// cancelar y el toggle "mostrar todo" — nada de `add`/`remove`.
+pub const ALLOW_NAV_VOLUMES: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.confirm",
+    "dialog.toggle-enabled",
     "dialog.cancel",
 ];
 
@@ -5417,6 +5572,51 @@ mod tests {
             .clone();
         assert!(!display.contains('\u{202E}'), "sin bidi crudo: {display:?}");
         assert!(display.starts_with('!'), "badge prefijo: {display}");
+    }
+
+    /// encoding-auditor MAJOR: `fs_type` looked like a closed, ASCII-only
+    /// vocabulary (`ext4`, `nfs4`…) but a FUSE mount's `fuse.<subtype>` is
+    /// the `-o subtype=` value an UNPRIVILEGED user picks (`sshfs`, `rclone
+    /// mount`…) — exactly as untrusted as a filename. An earlier draft of
+    /// `volume_item_display` spliced it in with `{}` and skipped
+    /// `display_name` entirely, so a hostile `fs_type` reached the row raw.
+    #[test]
+    fn volume_row_sanea_fs_type_hostil() {
+        let vol = norte_proto::methods::Volume {
+            mount: vp("mem:///media/usb"),
+            label: None,
+            fs_type: "fuse.evil\u{202E}type".to_owned(),
+            kind: norte_proto::methods::VolumeKind::Fixed,
+            total_bytes: None,
+            free_bytes: None,
+            read_only: false,
+        };
+        let items = volume_items(std::slice::from_ref(&vol), None);
+        let display = items[0].display.clone();
+        assert!(!display.contains('\u{202E}'), "sin bidi crudo: {display:?}");
+        assert!(display.starts_with('!'), "badge prefijo: {display}");
+    }
+
+    /// The everyday case: an ordinary `fs_type` and absent sizes (the
+    /// filesystem never answered `statvfs` in time, design §A) render with
+    /// NO badge and say `volumes-size-unknown` rather than a bare zero — a
+    /// zero here would read as "full", the opposite of "unknown".
+    #[test]
+    fn volume_row_talla_ausente_no_es_cero() {
+        let vol = norte_proto::methods::Volume {
+            mount: vp("mem:///media/usb"),
+            label: Some("USB".to_owned()),
+            fs_type: "vfat".to_owned(),
+            kind: norte_proto::methods::VolumeKind::Removable,
+            total_bytes: None,
+            free_bytes: None,
+            read_only: false,
+        };
+        let items = volume_items(std::slice::from_ref(&vol), None);
+        let display = items[0].display.clone();
+        assert!(!display.starts_with('!'), "nada hostil aquí: {display}");
+        assert!(!display.contains('0'), "ausente no es cero: {display}");
+        assert_eq!(items[0].target, Some(vp("mem:///media/usb")));
     }
 
     /// review MINOR T5: una entrada INVÁLIDA con name hostil también lleva

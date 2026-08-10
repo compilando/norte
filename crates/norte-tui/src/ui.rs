@@ -279,7 +279,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         }
     }
     if let Some(popup) = &app.nav_popup {
-        draw_nav_popup(frame, popup, &app.theme, &app.dialog_hints.nav_list);
+        draw_nav_popup(frame, popup, &app.theme, &app.dialog_hints);
     }
     if let Some(dialog) = &app.search_dialog {
         draw_search_dialog(
@@ -409,23 +409,27 @@ fn draw_search_dialog(
 }
 
 /// Popup de navegación (spec 2026-07-18): historial `Alt+↓` / hotlist
-/// `Ctrl+D`, calcando [`draw_theme_picker`]. Los items llegan YA saneados
-/// de [`crate::app::App::open_nav_popup`] — aquí solo se pintan. El footer
-/// de teclas solo aplica a hotlist (`a`/`d`); con el input de nombre activo
-/// lo sustituye la línea `nombre: …` (el input pasa por el MISMO mask que
-/// la query del quick search: un paste hostil no pinta bidi crudo). `hint`
-/// (H1 T3, #24) es el hint GENERADO (`app.dialog_hints.nav_list`) — el
+/// `Ctrl+D` / volúmenes `Alt+F1`/`Alt+F2` (design 2026-08-10 §D), calcando
+/// [`draw_theme_picker`]. Los items llegan YA saneados de
+/// [`crate::app::App::open_nav_popup`]/[`crate::app::App::open_volumes_popup`]
+/// — aquí solo se pintan. El footer de teclas solo aplica a hotlist (`a`/`d`)
+/// y volúmenes (el toggle "mostrar todo", más el modo actual); con el input
+/// de nombre activo lo sustituye la línea `nombre: …` (el input pasa por el
+/// MISMO mask que la query del quick search: un paste hostil no pinta bidi
+/// crudo). `hints` trae el hint GENERADO de cada kind
+/// (`app.dialog_hints.nav_list`/`.nav_volumes`, H1 T3/#24 y design §D) — el
 /// historial no pinta footer, igual que antes de H1.
 fn draw_nav_popup(
     frame: &mut Frame<'_>,
     popup: &crate::app::NavPopup,
     theme: &TuiTheme,
-    hint: &str,
+    hints: &crate::hints::DialogHints,
 ) {
     use crate::app::NavPopupKind;
     let title = match popup.kind {
         NavPopupKind::History => t("history-title"),
         NavPopupKind::Hotlist => t("hotlist-title"),
+        NavPopupKind::Volumes => t("volumes-title"),
     };
     // El footer se construye ANTES para dimensionar el popup con su ancho
     // REAL (celdas unicode vía `Line::width`, no bytes): 64 de mínimo — el
@@ -439,7 +443,17 @@ fn draw_nav_popup(
             t("hotlist-name-prompt")
         )))
     } else if popup.kind == NavPopupKind::Hotlist {
-        Some(Line::raw(format!(" {hint} ")))
+        Some(Line::raw(format!(" {} ", hints.nav_list)))
+    } else if popup.kind == NavPopupKind::Volumes {
+        // design §D: el footer dice en qué MODO está la lista, no solo qué
+        // teclas hay — un toggle sin indicador deja al lector adivinando si
+        // ya lo pulsó.
+        let mode = if popup.include_pseudo() {
+            t("volumes-mode-all")
+        } else {
+            t("volumes-mode-filtered")
+        };
+        Some(Line::raw(format!(" {mode} — {} ", hints.nav_volumes)))
     } else {
         None
     };
@@ -458,6 +472,7 @@ fn draw_nav_popup(
         let empty = match popup.kind {
             NavPopupKind::History => t("history-empty"),
             NavPopupKind::Hotlist => t("hotlist-empty"),
+            NavPopupKind::Volumes => t("volumes-empty"),
         };
         (vec![ListItem::new(Line::raw(format!(" {empty}")))], None)
     } else {

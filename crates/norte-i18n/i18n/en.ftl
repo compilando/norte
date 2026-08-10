@@ -472,6 +472,17 @@ hotlist-title = Favorites
 hotlist-empty = empty — add the current directory from the popup
 hotlist-name-prompt = name:
 hotlist-invalid = invalid path
+# 2026-08-10-volumes.md §D: the drive picker (`pane.select-drive*`), a third
+# `NavPopupKind` beside history and hotlist.
+volumes-title = Drives
+volumes-empty = no volumes found
+# The in-popup unfiltered toggle's two modes (design §E) — the footer says
+# which one is showing, so the toggle is never silent about what it did.
+volumes-mode-filtered = system filesystems hidden
+volumes-mode-all = showing everything
+# A size the filesystem did not answer in time (design §A): never a bare `0`,
+# which would read as "full" — the opposite of "unknown".
+volumes-size-unknown = unknown
 msg-theme-applied = theme applied: { $name }
 msg-theme-reverted = theme unchanged
 msg-theme-saved = theme saved: { $name } → { $path }
@@ -526,6 +537,11 @@ help-cmd-pane-open = open the selected file with an external program (openers.to
 help-cmd-pane-quick-search = quick search in pane (filter/jump)
 help-cmd-pane-history = directory history
 help-cmd-pane-hotlist = favorite directories
+# 2026-08-10-volumes.md (closes #131): the focused pane, and the two SIDES
+# Total Commander's Alt+F1/Alt+F2 name — not the focus, see the design doc §D.
+help-cmd-pane-select-drive = pick a drive for the focused pane
+help-cmd-pane-select-drive-left = pick a drive for the LEFT pane
+help-cmd-pane-select-drive-right = pick a drive for the RIGHT pane
 help-cmd-task-cancel = cancel the most recent task
 # G3c: GUI-only commands (no TUI equivalent — its multi-select/task strip
 # use different bindings) surfaced now that the GUI's command palette lists
@@ -742,7 +758,6 @@ setting-keymap-preset-desc = Base key-binding preset (orthodox, vim, or cua). Us
 keymap-unavailable-not-built = { $command }: not built yet ({ $reason }, issue #{ $issue })
 keymap-unavailable-not-here = { $command }: not available here
 keymap-count-ignored = { $command } does not take a count ({ $count } ignored)
-keymap-reason-volume-enumeration = volume enumeration
 keymap-reason-archive-write = writing archives
 keymap-reason-editor = built-in editor
 keymap-reason-compare-sync = directory compare and sync

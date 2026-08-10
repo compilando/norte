@@ -481,6 +481,17 @@ hotlist-title = Favoritos
 hotlist-empty = vacío — añade el directorio actual desde el popup
 hotlist-name-prompt = nombre:
 hotlist-invalid = ruta inválida
+# 2026-08-10-volumes.md §D: el picker de unidades (`pane.select-drive*`), un
+# tercer `NavPopupKind` junto a historial y hotlist.
+volumes-title = Unidades
+volumes-empty = no se encontraron volúmenes
+# Los dos modos del toggle "mostrar todo" dentro del popup (diseño §E) — el
+# footer dice en cuál está, para que el toggle nunca calle qué hizo.
+volumes-mode-filtered = sistemas de archivos de sistema ocultos
+volumes-mode-all = mostrando todo
+# Un tamaño que el filesystem no respondió a tiempo (diseño §A): nunca un `0`
+# pelado, que se leería como «lleno» — justo lo contrario de «desconocido».
+volumes-size-unknown = desconocido
 msg-theme-applied = tema aplicado: { $name }
 msg-theme-reverted = tema sin cambios
 msg-theme-saved = tema guardado: { $name } → { $path }
@@ -537,6 +548,11 @@ help-cmd-pane-open = abrir el archivo seleccionado con un programa externo (open
 help-cmd-pane-quick-search = quick search en el pane (filtro/salto)
 help-cmd-pane-history = historial de directorios
 help-cmd-pane-hotlist = directorios favoritos
+# 2026-08-10-volumes.md (cierra #131): el panel con foco, y los dos LADOS que
+# nombran Alt+F1/Alt+F2 de Total Commander — no el foco, ver el diseño §D.
+help-cmd-pane-select-drive = elegir unidad para el panel con foco
+help-cmd-pane-select-drive-left = elegir unidad para el panel IZQUIERDO
+help-cmd-pane-select-drive-right = elegir unidad para el panel DERECHO
 help-cmd-task-cancel = cancelar la task más reciente
 # G3c: comandos SOLO de la GUI (sin equivalente en la TUI, que usa otros
 # bindings para multi-selección/franja de tasks) — hacen falta ahora que la
@@ -760,7 +776,6 @@ setting-keymap-preset-desc = Preset base de atajos de teclado (orthodox, vim o c
 keymap-unavailable-not-built = { $command }: aún no está construido ({ $reason }, issue #{ $issue })
 keymap-unavailable-not-here = { $command }: no está disponible aquí
 keymap-count-ignored = { $command } no acepta un contador (se ignoró { $count })
-keymap-reason-volume-enumeration = enumeración de volúmenes
 keymap-reason-archive-write = escritura de archivos comprimidos
 keymap-reason-editor = editor integrado
 keymap-reason-compare-sync = comparación y sincronización de directorios

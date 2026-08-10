@@ -1,4 +1,4 @@
-//! Corpus canónico de fixtures hostiles (spec §6.1/§12): 46 nombres de
+//! Corpus canónico de fixtures hostiles (spec §6.1/§12): 47 nombres de
 //! archivo + 11 contenidos detectables + 3 solo-forzables. TODO crate que toque paths o
 //! texto testea contra ESTE corpus — las fixtures nuevas entran aquí (regla
 //! de CLAUDE.md: test-first en bugs de encoding).
@@ -23,11 +23,11 @@ struct RawName {
     why: String,
 }
 
-/// Los 46 nombres hostiles canónicos.
+/// Los 47 nombres hostiles canónicos.
 ///
 /// ```
 /// let names = norte_testkit::corpus::hostile_names();
-/// assert_eq!(names.len(), 46);
+/// assert_eq!(names.len(), 47);
 /// // Todos son segmentos VPath válidos (sin NUL ni `/`).
 /// for n in &names {
 ///     assert!(norte_proto::Segment::new(n.bytes.clone()).is_ok(), "{}", n.id);

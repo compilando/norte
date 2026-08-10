@@ -228,5 +228,10 @@
     "id": "ext4_full_fold_ss",
     "hex": "737472617373652e747874",
     "why": "strasse.txt — the twin of `ext4_full_fold_es_zett`: the plain-ASCII spelling an ß gets expanded to under FULL case folding. Real users hit this pair when a German filename crosses from a full-folding filesystem (ext4 `+F`) to a simple-folding one (APFS, NTFS) or back — one volume calls it one file, the other calls it two, and #145 is what would make `name_key` agree with the full-folding side"
+  },
+  {
+    "id": "proc_mounts_octal_escape",
+    "hex": "61206209630a645c65",
+    "why": "'a b<TAB>c<LF>d\\e' — space, tab, newline and a literal backslash, the exact four bytes `/proc/mounts` escapes in octal (\\040 \\011 \\012 \\134) and the volumes picker (#131, 2026-08-10-volumes.md) unescapes back to raw bytes. A mount name is never routed through `String` on the way to the row, the footer or a status message, so this fixture is what a hostile or merely unlucky mount point looks like once it lands on a display: newline and tab must not reach the terminal raw, and the lone backslash must not be re-escaped into something that unescapes again"
   }
 ]

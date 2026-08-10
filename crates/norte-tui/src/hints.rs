@@ -178,6 +178,11 @@ pub struct DialogHints {
     /// `NavPopupKind::Hotlist`) — el historial no pinta footer, igual que
     /// antes de H1.
     pub nav_list: String,
+    /// Popup de navegación en modo volúmenes (`App::nav_popup`,
+    /// `NavPopupKind::Volumes`, design §D) — su propio hint porque
+    /// `add`/`remove` de `nav_list` no significan nada aquí y el toggle
+    /// "mostrar todo" sí.
+    pub nav_volumes: String,
     /// Help overlay (`App::help`, H3b).
     pub help: String,
     /// `true` when a help page is covering a modal, so the modal's own keys
@@ -205,7 +210,8 @@ impl DialogHints {
     pub fn build(eff: &Effective) -> Self {
         use crate::app::{
             ALLOW_APPROVAL, ALLOW_COLLISION, ALLOW_COLUMNS, ALLOW_CONFIRM, ALLOW_EXTENSIONS,
-            ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST,
+            ALLOW_NAV_HOTLIST, ALLOW_NAV_VOLUMES, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG,
+            ALLOW_TRUST_HOST,
         };
         Self {
             confirm: dialog_hints(ALLOW_CONFIRM, eff),
@@ -232,6 +238,7 @@ impl DialogHints {
             extensions: dialog_hints(&without_navigation(ALLOW_EXTENSIONS), eff),
             plugin_config: dialog_hints(&without_navigation(ALLOW_PLUGIN_CONFIG), eff),
             nav_list: dialog_hints(&without_navigation(ALLOW_NAV_HOTLIST), eff),
+            nav_volumes: dialog_hints(&without_navigation(ALLOW_NAV_VOLUMES), eff),
             // H3b: offered WHOLE, in priority order — the width decides how
             // much of it is printed (`ui::fit_hint_groups`), not a fixed
             // exclusion. See [`HELP_HINT_PRIORITY`].

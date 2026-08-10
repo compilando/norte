@@ -19,6 +19,9 @@ commands = [
     "pane.swap",
     "nav.back",
     "nav.forward",
+    "pane.select-drive",
+    "pane.select-drive-left",
+    "pane.select-drive-right",
 ]
 context = ["browse"]
 +++
@@ -129,6 +132,26 @@ El paso que se para a preguntar por la clave desconocida de un host es el único
 que ESPERA: ni se da ni se deshace hasta que respondes, porque confiar en la
 clave reanuda esa misma navegación. Si confías, el paso se termina; si deniegas,
 o si el paso reanudado falla, se rebobina como cualquier otro que no llegó.
+
+# Elegir una unidad
+
+{{cmd:pane.select-drive}} abre un picker de los volúmenes del host para el
+panel **con foco**; {{cmd:pane.select-drive-left}} y
+{{cmd:pane.select-drive-right}} abren el mismo picker para un **lado** de la
+pantalla en su lugar — el panel que haya ahí dibujado, sin importar cuál tenga
+el foco. `Alt+F1`/`Alt+F2` de Total Commander funcionan así desde Norton
+Commander, y los dos presets que los importan mantienen el mismo reparto.
+Enter manda ese panel al punto de montaje resaltado.
+
+Cada fila muestra la etiqueta cuando el filesystem tiene una, el punto de
+montaje, el tipo de filesystem, y espacio libre de total — un montaje que el
+host no pudo consultar a tiempo aparece como desconocido en vez de como cero,
+que se leería como lleno en lugar de sin respuesta. La lista es una foto
+tomada al abrir el picker: no crece, no encoge ni vuelve a comprobar el
+espacio libre mientras la miras, el mismo contrato que ya cumplen
+{{cmd:pane.history}} y {{cmd:pane.hotlist}}. Una tecla dentro del picker
+alterna entre la lista de cada día y todos los montajes del host, sistemas de
+archivos de sistema incluidos, y el pie dice en cuál de los dos estás.
 
 > 💡 Un directorio al que vuelves a menudo merece un favorito: el panel recuerda por dónde ha pasado, y los favoritos son comunes a los dos paneles.
 

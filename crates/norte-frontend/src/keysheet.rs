@@ -11,7 +11,8 @@
 //!
 //! - **Unavailable rows are rows.** K2b ships four presets transcribed from
 //!   other programs, and about thirty of their bindings name a command norte
-//!   has not built (issues #131..#140). Built on
+//!   has not built (issues #131..#140 — #131, the drive family, is now built,
+//!   `2026-08-10-volumes.md`). Built on
 //!   [`Effective::bindings_all`] rather than
 //!   [`Effective::bindings`](crate::keymap::Effective::bindings), which drops
 //!   them: the sheet answers "what does this key do", and "nothing, and here

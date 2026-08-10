@@ -22,12 +22,12 @@ use norte_proto::DeleteMode;
 use norte_proto::methods::{FsSearchParams, SearchHits};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
-    ALLOW_COLUMNS, ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, App,
-    DialogOutcome, ExtensionManager, HelpOutcome, HelpView, KeymapsError, Modal, NavPopupKind,
-    Palette, Pane, PendingWrite, PickerAction, SearchDialog, SearchState, Settings,
+    ALLOW_COLUMNS, ALLOW_EXTENSIONS, ALLOW_NAV_POPUP, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, App,
+    DialogOutcome, ExtensionManager, HelpOutcome, HelpView, KeymapsError, Modal, NavPopup,
+    NavPopupKind, Palette, Pane, PendingWrite, PickerAction, SearchDialog, SearchState, Settings,
     SettingsEditError, Shortcuts, Trail, TrailStep, TransferKind, config_error_category,
     detail_for_bar, dialog_action, error_category, error_message, io_error_category,
-    keymaps_error_category, theme_error_category, trust_lua_key,
+    keymaps_error_category, theme_error_category, trust_lua_key, volume_items,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::help::TuiChords;
@@ -6874,18 +6874,41 @@ async fn commit_plugin_config_write(
     }
 }
 
-/// Teclas del popup de navegación (historial `Alt+↓` / hotlist `Ctrl+D`);
-/// `ctrl+c` conserva su salida global, hardcodeado ANTES de nada. Con
-/// `name_input` activo (el `a` de hotlist abre un campo para el nombre del
-/// favorito) los imprimibles/backspace se capturan como editor de texto RAW
-/// — H1 T2 decisión: NO es un comando `dialog.*`, es entrada libre, se
-/// queda hardcodeado. Fuera de `name_input`, la tecla resuelve contra el
-/// contexto `dialog` del keymap (H1 T2, issue #24); `add`/`remove` los
-/// filtra el ALLOWLIST de este overlay a `kind == Hotlist` (el historial no
-/// tiene nada que nombrar ni borrar — mismo criterio que antes de H1).
-/// Enter sobre un item válido NAVEGA por el flujo de cd normal; si el cd
-/// desde el HISTORIAL falla con `NotFound`, la entrada se retira (spec
-/// 2026-07-18) — la de hotlist NO (es config del usuario: se avisa y queda).
+/// Fetches `Backend::volumes` for `pane`'s side and opens/refreshes the
+/// volumes popup (design §D). Opening from `pane.select-drive*` and
+/// re-opening after the in-popup unfiltered toggle are the SAME operation —
+/// a fresh frozen snapshot for the requested mode — so both call this. A
+/// fetch error surfaces as the usual status message and leaves whatever
+/// popup was already open alone, same pattern as `Command::AppExtensions`
+/// on a failed `plugins_list`.
+async fn open_drive_popup(app: &mut App, backend: &Backend, pane: usize, include_pseudo: bool) {
+    match backend.volumes(include_pseudo).await {
+        Ok(volumes) => {
+            let enc = app.panes[pane].name_encoding();
+            let items = volume_items(&volumes, enc);
+            app.open_volumes_popup(pane, include_pseudo, items);
+        }
+        Err(e) => app.message = Some(error_message(&e)),
+    }
+}
+
+/// Teclas del popup de navegación (historial `Alt+↓` / hotlist `Ctrl+D` /
+/// volúmenes `Alt+F1`/`Alt+F2`, design §D); `ctrl+c` conserva su salida
+/// global, hardcodeado ANTES de nada. Con `name_input` activo (el `a` de
+/// hotlist abre un campo para el nombre del favorito) los
+/// imprimibles/backspace se capturan como editor de texto RAW — H1 T2
+/// decisión: NO es un comando `dialog.*`, es entrada libre, se queda
+/// hardcodeado. Fuera de `name_input`, la tecla resuelve contra el contexto
+/// `dialog` del keymap (H1 T2, issue #24); `add`/`remove` los filtra el
+/// ALLOWLIST de este overlay a `kind == Hotlist` (el historial no tiene nada
+/// que nombrar ni borrar — mismo criterio que antes de H1) y
+/// `toggle-enabled` a `kind == Volumes` (el toggle "mostrar todo" del design
+/// §D). Enter sobre un item válido NAVEGA por el flujo de cd normal, contra
+/// [`norte_tui::app::NavPopup::target_pane`] y no `app.focus()` — historial y
+/// hotlist congelan el foco ahí, pero `-left`/`-right` congelan un LADO fijo
+/// (design §D); si el cd desde el HISTORIAL falla con `NotFound`, la entrada
+/// se retira (spec 2026-07-18) — la de hotlist y volúmenes NO (hotlist es
+/// config del usuario y un volumen no se retira porque un cd puntual falle).
 async fn on_nav_popup_key(
     app: &mut App,
     backend: &Backend,
@@ -6941,11 +6964,13 @@ async fn on_nav_popup_key(
         }
         Resolution::Reset => return Cd::Cancelled,
     };
-    // H1 T3: el MISMO allowlist que consume el hint generado
-    // (`hints::DialogHints::build`, campo `nav_list`) — una sola fuente
-    // para dispatch y footer. Cubre AMBOS kinds (History es un subconjunto:
-    // `add`/`remove` los filtra el guard `kind == Hotlist` de más abajo).
-    if !ALLOW_NAV_HOTLIST.contains(&cmd.as_str()) {
+    // H1 T3: el MISMO allowlist que consume cada hint generado
+    // (`hints::DialogHints::build`, campos `nav_list`/`nav_volumes`) — una
+    // sola fuente para dispatch, aunque el hint IMPRESO es más estrecho por
+    // kind. Cubre los tres kinds (History es un subconjunto: `add`/`remove`
+    // los filtra el guard `kind == Hotlist` de más abajo, `toggle-enabled` el
+    // guard `kind == Volumes`).
+    if !ALLOW_NAV_POPUP.contains(&cmd.as_str()) {
         return Cd::Cancelled; // fuera del allowlist de este overlay: inerte
     }
     match cmd.as_str() {
@@ -6966,11 +6991,30 @@ async fn on_nav_popup_key(
                 hotlist_remove(app, &name).await;
             }
         }
+        // design §D: the in-popup unfiltered toggle. Same operation as
+        // opening the popup, just with the flag flipped and the SAME target
+        // pane — `open_drive_popup` re-fetches and replaces the snapshot.
+        "dialog.toggle-enabled" if kind == NavPopupKind::Volumes => {
+            let refresh = app
+                .nav_popup
+                .as_ref()
+                .map(|p| (p.target_pane(), !p.include_pseudo()));
+            if let Some((pane, want)) = refresh {
+                open_drive_popup(app, backend, pane, want).await;
+            }
+        }
         "dialog.confirm" => {
+            // The target pane is frozen on the popup, not `app.focus()`:
+            // history/hotlist froze it AT the focus (so this is the same
+            // value), but `-left`/`-right` froze a fixed SIDE (design §D).
+            // Read it BEFORE `nav_popup_input` may close the popup below.
+            let pane = app
+                .nav_popup
+                .as_ref()
+                .map_or_else(|| app.focus(), NavPopup::target_pane);
             // Confirm sobre un item inválido/vacío es no-op (el popup sigue).
             if let Some(path) = app.nav_popup_input(PickerAction::Confirm) {
-                let pane = app.focus();
-                let outcome = cd(app, backend, events, path.clone()).await;
+                let outcome = cd_in(app, backend, events, pane, path.clone(), Trail::Record).await;
                 if kind == NavPopupKind::History && matches!(&outcome, Cd::Failed(Error::NotFound))
                 {
                     // El dir ya no existe: fuera del historial. La barra ya
@@ -9571,6 +9615,19 @@ async fn dispatch(
         // brazos solo corren para ABRIRLO.
         Command::PaneHistory => app.open_nav_popup(NavPopupKind::History),
         Command::PaneHotlist => app.open_nav_popup(NavPopupKind::Hotlist),
+        // `pane.select-drive*` (design §D): `-left`/`-right` name a SIDE —
+        // `panes[0]`/`panes[1]` — not the focus, which is what Total
+        // Commander's `Alt+F1`/`Alt+F2` do; only the unsided variant reads
+        // `app.focus()`.
+        Command::PaneSelectDrive => {
+            open_drive_popup(app, backend, app.focus(), false).await;
+        }
+        Command::PaneSelectDriveLeft => {
+            open_drive_popup(app, backend, 0, false).await;
+        }
+        Command::PaneSelectDriveRight => {
+            open_drive_popup(app, backend, 1, false).await;
+        }
         // `Alt+F7` (liveSearch T6): abre el diálogo de búsqueda viva. Con él
         // abierto sus teclas se comen antes del resolver (patrón overlay) —
         // este brazo solo corre para ABRIRLO.

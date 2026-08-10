@@ -100,6 +100,12 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("pane.quick-search", false),
     live("pane.history", false),
     live("pane.hotlist", false),
+    // `pane.select-drive*` (2026-08-10-volumes.md, closes #131): the focused
+    // pane and the two sides Total Commander's `Alt+F1`/`Alt+F2` name. None
+    // is a clamped mover — a drive picker has no count to take.
+    live("pane.select-drive", false),
+    live("pane.select-drive-left", false),
+    live("pane.select-drive-right", false),
     live("pane.search", false),
     live("pane.names-encoding", false),
     live("pane.toggle-hidden", false),
@@ -183,21 +189,11 @@ pub const CATALOGUE: &[CommandDef] = &[
     // presses F4 and gets silence. K2b left twenty-eight entries in ten
     // families here (nine of them new: `pane.select-drive` was already here
     // and its family just grew two siblings); S4 built the shell family and
-    // took its three away, so nine families remain. Each is one capability
-    // and one issue;
+    // took its three away, and 2026-08-10-volumes.md built the drive family
+    // (moved to `live` above, closes #131), so eight families remain. Each
+    // is one capability and one issue;
     // `planned()` forces `counts: false`, which is right for all of them —
     // none is a clamped in-memory mover (ADR 0044).
-    planned("pane.select-drive", "keymap-reason-volume-enumeration", 131),
-    planned(
-        "pane.select-drive-left",
-        "keymap-reason-volume-enumeration",
-        131,
-    ),
-    planned(
-        "pane.select-drive-right",
-        "keymap-reason-volume-enumeration",
-        131,
-    ),
     planned("pane.pack", "keymap-reason-archive-write", 132),
     planned("pane.unpack", "keymap-reason-archive-write", 132),
     planned("pane.test-archive", "keymap-reason-archive-write", 132),
@@ -235,9 +231,10 @@ pub const CATALOGUE: &[CommandDef] = &[
 /// assert_eq!(lookup("cursor.down").map(|d| d.counts), Some(true));
 /// assert_eq!(lookup("app.quit").map(|d| d.counts), Some(false));
 /// assert!(matches!(
-///     lookup("pane.select-drive").map(|d| d.status),
-///     Some(Status::Planned { issue: 131, .. })
+///     lookup("pane.pack").map(|d| d.status),
+///     Some(Status::Planned { issue: 132, .. })
 /// ));
+/// assert_eq!(lookup("pane.select-drive").map(|d| d.status), Some(Status::Live));
 /// assert!(lookup("pane.no-existe-jamas").is_none());
 /// ```
 #[must_use]

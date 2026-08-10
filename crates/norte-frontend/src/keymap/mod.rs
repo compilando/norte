@@ -240,11 +240,11 @@ pub fn preset_commands(screen: Screen) -> Vec<String> {
 /// use norte_frontend::keymap::{Availability, unavailable_message};
 ///
 /// let m = unavailable_message(
-///     "pane.select-drive",
-///     Availability::NotBuilt { reason: "keymap-reason-volume-enumeration", issue: 131 },
+///     "pane.pack",
+///     Availability::NotBuilt { reason: "keymap-reason-archive-write", issue: 132 },
 /// );
-/// assert!(m.contains("pane.select-drive"), "{m}");
-/// assert!(m.contains("131"), "{m}");
+/// assert!(m.contains("pane.pack"), "{m}");
+/// assert!(m.contains("132"), "{m}");
 /// // The catalogue holds a Fluent ID: it must be TRANSLATED, not pasted.
 /// assert!(!m.contains("keymap-reason-"), "{m}");
 ///
@@ -1320,7 +1320,7 @@ keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
     fn un_binding_no_disponible_si_bloquea_el_prefijo() {
         let preset = parse_keymap(
             r#"[pane]
-keymap = [{ on = ["g"], run = "pane.select-drive" }]"#,
+keymap = [{ on = ["g"], run = "pane.pack" }]"#,
         )
         .unwrap();
         let layer = parse_keymap(
@@ -1350,7 +1350,7 @@ append_keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
     fn un_binding_no_disponible_sigue_ensombreciendo() {
         let preset = parse_keymap(
             r#"[pane]
-keymap = [{ on = ["x"], run = "pane.select-drive" }]
+keymap = [{ on = ["x"], run = "pane.pack" }]
 [global]
 keymap = [{ on = ["x"], run = "app.quit" }]"#,
         )
@@ -1361,10 +1361,7 @@ keymap = [{ on = ["x"], run = "app.quit" }]"#,
         let all = eff.bindings_all();
         let hits: Vec<_> = all.iter().filter(|(seq, _, _)| seq == "x").collect();
         assert_eq!(hits.len(), 1, "el dedup deja UNA por secuencia: {all:?}");
-        assert_eq!(
-            hits[0].1, "pane.select-drive",
-            "gana el contexto específico"
-        );
+        assert_eq!(hits[0].1, "pane.pack", "gana el contexto específico");
         assert!(matches!(hits[0].2, Availability::NotBuilt { .. }));
         // El `app.quit` de `[global]` sigue SOMBREADO: no aflora.
         assert!(
@@ -1540,7 +1537,7 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
         let preset = parse_keymap(
             r#"
 [pane]
-keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
+keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
 "#,
         )
         .unwrap();
@@ -1548,9 +1545,9 @@ keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
         let all = eff.bindings_all();
         let (_, run, avail) = all
             .iter()
-            .find(|(_, run, _)| *run == "pane.select-drive")
+            .find(|(_, run, _)| *run == "pane.pack")
             .expect("el binding no puede desaparecer");
-        assert_eq!(*run, "pane.select-drive");
+        assert_eq!(*run, "pane.pack");
         assert!(matches!(avail, Availability::NotBuilt { .. }), "{avail:?}");
     }
 
@@ -1584,7 +1581,7 @@ keymap = [ { on = ["f1"], run = "app.help" } ]
 [pane]
 keymap = [
     { on = ["f5"], run = "pane.copy" },
-    { on = ["alt+f1"], run = "pane.select-drive" },
+    { on = ["alt+f1"], run = "pane.pack" },
 ]
 "#,
         )
@@ -1612,8 +1609,8 @@ keymap = [ { on = ["f5"], run = "pane.copyy" } ]
     }
 
     /// An unavailable binding SHADOWS a lower-precedence available one. If a
-    /// preset puts `alt+f1` in `[pane]`, the key must say "drives are not
-    /// built" rather than quietly falling through to whatever `[global]` had —
+    /// preset puts `alt+f1` in `[pane]`, the key must say "not built yet"
+    /// rather than quietly falling through to whatever `[global]` had —
     /// falling through is how a Total Commander user gets a surprise instead
     /// of an answer.
     #[test]
@@ -1624,7 +1621,7 @@ keymap = [ { on = ["f5"], run = "pane.copyy" } ]
 keymap = [ { on = ["alt+f1"], run = "pane.refresh" } ]
 
 [pane]
-keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
+keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
 "#,
         )
         .unwrap();
@@ -1632,10 +1629,7 @@ keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
         let all = eff.bindings_all();
         let hits: Vec<_> = all.iter().filter(|(seq, _, _)| seq == "alt+f1").collect();
         assert_eq!(hits.len(), 1, "el dedup deja UNA por secuencia: {all:?}");
-        assert_eq!(
-            hits[0].1, "pane.select-drive",
-            "gana el contexto específico"
-        );
+        assert_eq!(hits[0].1, "pane.pack", "gana el contexto específico");
         assert!(matches!(hits[0].2, Availability::NotBuilt { .. }));
     }
 
@@ -1647,7 +1641,7 @@ keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
             r#"
 [pane]
 keymap = [
-    { on = ["g"], run = "pane.select-drive" },
+    { on = ["g"], run = "pane.pack" },
     { on = ["g", "g"], run = "cursor.top" },
 ]
 "#,
@@ -1665,7 +1659,7 @@ keymap = [
         let preset = parse_keymap(
             r#"
 [pane]
-keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
+keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
 "#,
         )
         .unwrap();
@@ -1674,7 +1668,7 @@ keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
         let chord = parse_chord("alt+f1").unwrap();
         match r.push(chord) {
             Resolution::Unavailable { command, why } => {
-                assert_eq!(command, "pane.select-drive");
+                assert_eq!(command, "pane.pack");
                 assert!(matches!(why, Availability::NotBuilt { .. }), "{why:?}");
             }
             other => panic!("esperaba Unavailable, salió {other:?}"),
@@ -1687,14 +1681,14 @@ keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
     #[test]
     fn el_mensaje_de_no_disponible_nombra_el_comando_y_el_motivo() {
         let m = unavailable_message(
-            "pane.select-drive",
+            "pane.pack",
             Availability::NotBuilt {
-                reason: "keymap-reason-volume-enumeration",
-                issue: 131,
+                reason: "keymap-reason-archive-write",
+                issue: 132,
             },
         );
-        assert!(m.contains("pane.select-drive"), "{m}");
-        assert!(m.contains("131"), "{m}");
+        assert!(m.contains("pane.pack"), "{m}");
+        assert!(m.contains("132"), "{m}");
         // The ID must have been TRANSLATED, not interpolated raw.
         assert!(!m.contains("keymap-reason-"), "{m}");
 
@@ -1715,14 +1709,14 @@ keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
                 lang,
                 "keymap-unavailable-not-built",
                 &[
-                    ("command", "pane.select-drive"),
+                    ("command", "pane.pack"),
                     ("reason", "MOTIVO"),
-                    ("issue", "131"),
+                    ("issue", "132"),
                 ],
             );
-            assert!(m.contains("pane.select-drive"), "{lang:?}: {m}");
+            assert!(m.contains("pane.pack"), "{lang:?}: {m}");
             assert!(m.contains("MOTIVO"), "{lang:?}: {m}");
-            assert!(m.contains("131"), "{lang:?}: {m}");
+            assert!(m.contains("132"), "{lang:?}: {m}");
 
             let m = norte_i18n::ta_in(
                 lang,
@@ -1846,8 +1840,8 @@ keymap = [ { on = ["alt+f1"], run = "pane.select-drive" } ]
             for why in [
                 Availability::NotHere,
                 Availability::NotBuilt {
-                    reason: "keymap-reason-volume-enumeration",
-                    issue: 131,
+                    reason: "keymap-reason-archive-write",
+                    issue: 132,
                 },
             ] {
                 let m = unavailable_message(d.name, why);

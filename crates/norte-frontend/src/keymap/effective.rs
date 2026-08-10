@@ -15,12 +15,12 @@ use super::{KeymapDiagnostic, KeymapError};
 /// use norte_frontend::keymap::{Availability, Effective, Screen, parse_keymap};
 ///
 /// let preset = parse_keymap(
-///     "[pane]\nkeymap = [{ on = [\"alt+f1\"], run = \"pane.select-drive\" }]\n",
+///     "[pane]\nkeymap = [{ on = [\"alt+f1\"], run = \"pane.pack\" }]\n",
 /// )
 /// .unwrap();
 /// let eff = Effective::build_for(&preset, &[], &["pane.copy"], Screen::Browse).unwrap();
 /// let all = eff.bindings_all();
-/// assert!(matches!(all[0].2, Availability::NotBuilt { issue: 131, .. }));
+/// assert!(matches!(all[0].2, Availability::NotBuilt { issue: 132, .. }));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Availability {
