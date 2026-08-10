@@ -99,8 +99,10 @@ error (no tty, write failure). A consumer distinguishes "user chose nothing"
 from "norte broke" without parsing a message.
 
 **Remote panes** are not special here: `sftp://host/x` is a real path and a
-tool that asked norte to pick something may well want it. What comes out is the
-VPath as displayed, in bytes.
+tool that asked norte to pick something may well want it. A local path comes
+out in native form (`/tmp/a`), because that is what the tool on the other side
+of the pipe will open; anything else comes out as its wire form, which is the
+only lossless thing to say about it.
 
 ## C. cd-on-quit
 
