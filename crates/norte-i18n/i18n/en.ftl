@@ -143,6 +143,9 @@ msg-nav-no-forward = nothing to go forward to
 # Un pane virtual de búsqueda no es una ubicación: una lista de hits no se
 # puede mandar al otro pane ni traer de él.
 msg-pane-not-a-location = search results are not a location: nothing to send
+# A pasted newline must never submit a field (#143): only the first line is
+# inserted, and this says how many more were dropped.
+msg-paste-truncated = pasted the first line; { $lines } more discarded
 msg-view-error = view: { $error }
 msg-config-reloaded = config reloaded
 msg-daemon-lost = daemon connection lost; reconnecting…

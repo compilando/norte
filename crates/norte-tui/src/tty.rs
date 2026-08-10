@@ -17,7 +17,7 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 
-use crossterm::event::DisableMouseCapture;
+use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -61,10 +61,17 @@ pub fn open_controlling_terminal() -> io::Result<TtyOut> {
         })
 }
 
-/// Raw mode + alternate screen on the given handle, plus a panic hook that
-/// undoes both (and mouse capture, in case one was ever armed) before
-/// deferring to whatever hook was already installed. Mirrors what
-/// `ratatui::init` did for stdout.
+/// Raw mode + alternate screen + bracketed paste on the given handle, plus a
+/// panic hook that undoes all three (and mouse capture, in case one was ever
+/// armed) before deferring to whatever hook was already installed. Mirrors
+/// what `ratatui::init` did for stdout.
+///
+/// Bracketed paste is terminal state exactly like raw mode (#143): every
+/// place that hands the terminal back — this pair, the panic hook below, and
+/// `run_suspended`'s `suspend_terminal`/`resume_terminal` in `main.rs` — has
+/// to enable and disable it in step, or a crash (or a suspended shell) leaves
+/// the user's OWN shell reading `\e[200~`/`\e[201~` markers around every
+/// paste. `mouse::Capture` is the precedent for this class of bug.
 ///
 /// The hook cannot borrow `out` — it moves into the returned [`Tui`], and the
 /// hook must outlive this call — so on panic it opens a FRESH handle to the
@@ -74,11 +81,12 @@ pub fn open_controlling_terminal() -> io::Result<TtyOut> {
 /// leaves the user with nothing printed at all.
 ///
 /// # Errors
-/// Any I/O error from entering raw mode or the alternate screen.
+/// Any I/O error from entering raw mode, the alternate screen, or bracketed
+/// paste.
 pub fn init(mut out: TtyOut) -> io::Result<Tui> {
     install_panic_hook();
     enable_raw_mode()?;
-    execute!(out, EnterAlternateScreen)?;
+    execute!(out, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(out);
     Terminal::new(backend)
 }
@@ -86,12 +94,17 @@ pub fn init(mut out: TtyOut) -> io::Result<Tui> {
 /// Undoes [`init`]. Called once, on the way out.
 ///
 /// # Errors
-/// Any I/O error from leaving raw mode or the alternate screen.
+/// Any I/O error from leaving raw mode, the alternate screen, or bracketed
+/// paste.
 pub fn restore(term: &mut Tui) -> io::Result<()> {
     // Disabling raw mode first, same order as `ratatui::try_restore`: it has
     // more side effects than leaving the alternate screen buffer.
     disable_raw_mode()?;
-    execute!(term.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        term.backend_mut(),
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )?;
     Ok(())
 }
 
@@ -99,13 +112,19 @@ pub fn restore(term: &mut Tui) -> io::Result<()> {
 /// terminal FIRST, so a panic's backtrace lands on a normal terminal instead
 /// of one still in raw mode with the alternate screen up (or the mouse still
 /// captured, swallowing the very clicks a developer might make to scroll
-/// back and read it).
+/// back and read it, or bracketed paste still armed, wrapping the next paste
+/// into that shell in `\e[200~`/`\e[201~` markers instead of plain text).
 fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
         if let Ok(mut out) = open_controlling_terminal() {
-            let _ = execute!(out, LeaveAlternateScreen, DisableMouseCapture);
+            let _ = execute!(
+                out,
+                DisableBracketedPaste,
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            );
         }
         previous(info);
     }));

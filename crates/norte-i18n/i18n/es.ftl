@@ -144,6 +144,9 @@ msg-nav-no-forward = no hay nada hacia delante
 # Un pane virtual de búsqueda no es una ubicación: una lista de hits no se
 # puede mandar al otro pane ni traer de él.
 msg-pane-not-a-location = los resultados de búsqueda no son una ubicación: no hay nada que mandar
+# Un pegado con salto de línea jamás debe enviar un campo (#143): solo se
+# inserta la primera línea, y esto dice cuántas más se descartaron.
+msg-paste-truncated = pegada la primera línea; { $lines } descartadas
 msg-refresh-error = refresh: { $error }
 msg-view-error = view: { $error }
 msg-config-reloaded = config recargada

@@ -52,7 +52,7 @@ through a range table and both fixtures it asked for are in the corpus.)
 
 The free-text sinks, all of them, from `rg -n 'KeyCode::Char\(c\) if plain' crates/norte-tui/src/main.rs`: quick search, mark pattern, mkdir, command line, AI rename instruction, semantic query, transfer name, the help filter, the shortcuts editor, the settings editor, and the generic dialog. Eleven, not six. Any one of them left out is a field where paste still submits, so the router covers them all or the task is not done.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 /// A pasted newline must never submit. Before bracketed paste, a terminal
@@ -83,17 +83,17 @@ fn a_paste_is_sanitised_exactly_like_a_keystroke() {
 }
 ```
 
-- [ ] **Step 2: Run and watch them fail**
+- [x] **Step 2: Run and watch them fail**
 
 Run: `just t norte-tui`
 
-- [ ] **Step 3: Turn bracketed paste on**
+- [x] **Step 3: Turn bracketed paste on**
 
 In `crates/norte-tui/src/tty.rs`, beside the alternate screen: `EnableBracketedPaste` on init, `DisableBracketedPaste` on restore AND in the panic hook. A terminal left in bracketed-paste mode after a crash pastes `\e[200~` markers into the user's shell.
 
 Suspension (`run_suspended`, `main.rs`) must release it the same way it releases the mouse capture: the child did not ask for it. Follow `mouse::release_for_suspend`'s shape exactly — that pattern exists because this class of bug already happened once.
 
-- [ ] **Step 4: One router**
+- [x] **Step 4: One router**
 
 `Event::Paste(String)` arrives at the event loop. Write ONE function that takes the app and the pasted text and dispatches to the active sink, mirroring the `KeyCode::Char(c) if plain` arms one for one. First line only: split at the first `\n`, and strip a trailing `\r` (a Windows clipboard sends CRLF). If anything was discarded, count the remaining lines and set the status message.
 
@@ -108,15 +108,17 @@ msg-paste-truncated = pasted the first line; { $lines } more discarded
 msg-paste-truncated = pegada la primera línea; { $lines } descartadas
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `just t norte-tui`, `just c`
 
-- [ ] **Step 6: Reviewers**
+- [x] **Step 6: Reviewers**
 
 `encoding-auditor`: is there any path by which a pasted character reaches a field or the dispatcher without the hazard filter a keystroke gets? `security-reviewer` is not needed here unless the auditor finds a bypass.
 
-- [ ] **Step 7: Commit**
+encoding-auditor ran: no BLOCKER. Two MEDIUM findings, both applied — (1) the line splitter only recognized `\n`, so a bare `\r`/NEL/LS/PS paste wasn't split and under-counted its discard (`first_pasted_line` now treats CRLF/`\r`/`\n`/NEL/LS/PS as boundaries, CRLF folded first so it counts as one); (2) a comment in `shortcuts_key` claimed norte never enables bracketed paste, which this task makes false — updated to describe `route_paste`'s rejection as the primary defense and `hostile_key` as the fallback for terminals that don't honor `\e[?2004h`.
+
+- [x] **Step 7: Commit**
 
 ```bash
 git commit -am "fix(tui): a paste fills the field instead of submitting it (#143)"
