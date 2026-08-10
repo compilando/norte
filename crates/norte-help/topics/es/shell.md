@@ -32,7 +32,7 @@ funciona también en un panel remoto.
 
 {{cmd:app.toggle-panels}} enseña el **scrollback** de la terminal, no un shell
 vivo. mc mantiene un subshell detrás de sus paneles y escribe en él; norte no.
-Lo que ves es lo que ya estaba ahí.
+Lo que ves es lo que ya estaba ahí. El de verdad se sigue en la issue #142.
 
 Suspender también entrega la terminal entera, y norte solo puede devolver lo
 que se llevó: la pantalla alternativa, el modo raw y la captura del ratón. Un

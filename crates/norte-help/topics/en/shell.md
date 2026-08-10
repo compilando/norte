@@ -32,7 +32,8 @@ works on a remote pane too.
 
 {{cmd:app.toggle-panels}} shows the terminal's **scrollback**, not a live
 shell. mc keeps a subshell alive behind its panels and types into it; norte
-does not. What you see is what was already there.
+does not. What you see is what was already there. Issue #142 tracks the real
+thing.
 
 Suspension also hands over the whole terminal, and norte can only put back
 what it took: the alternate screen, raw mode and the mouse capture. A program

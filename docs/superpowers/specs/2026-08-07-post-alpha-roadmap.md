@@ -1,8 +1,7 @@
 # Post-alpha roadmap — ordered by the functionality worth building
 
 **Date:** 2026-08-07
-**Status:** accepted, 2026-08-10. Items 2 and 5 are built; work continues at
-item 4, then item 3.
+**Status:** accepted, 2026-08-10. Items 2, 4 and 5 are built; item 3 is next.
 **Context:** every milestone M0–M5 is met and packaging now turns a tag into
 downloadable artefacts. What remains is not debt — it is the part of
 specification §17 that was never built. This orders it by what the software
@@ -104,6 +103,16 @@ and nothing of ours holds the mount, and saying so wrongly loses data.
 ---
 
 ## 4. Shell integration
+
+**Built, 2026-08-10** — all of it except an embedded pty, which was never the
+plan. `norte shell-init bash|zsh|fish` prints a cd-on-quit wrapper that reads a
+NUL-delimited file (a directory is bytes, and `$(...)` eats trailing
+newlines); `ntc --pick` writes the selection NUL-terminated to stdout, which
+required moving the whole interface onto the controlling terminal; and `F9`,
+`Ctrl+O` and the command line work by suspending the TUI, with the GUI
+launching the system terminal emulator instead. Closes #135. New debt: #142
+(no persistent subshell behind `Ctrl+O`), #143 (bracketed paste), #144 (an
+opener still runs without the pane's cwd).
 
 **§17.** cd-on-quit wrappers, file-picker mode, opening a terminal in the
 active pane.

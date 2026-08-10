@@ -9100,7 +9100,9 @@ async fn dispatch(
             Err(msg) => app.message = Some(msg),
         },
         // Funciona en un pane remoto: no lanza nada ni mira el directorio —
-        // solo enseña la terminal anfitriona hasta la siguiente tecla.
+        // solo enseña la terminal anfitriona hasta la siguiente tecla. Eso es
+        // el SCROLLBACK, no el subshell vivo de mc: sin proceso persistente
+        // detrás no hay nada en lo que escribir (issue #142).
         Command::AppTogglePanels => {
             app.pending_shell = Some(norte_tui::app::PendingShell {
                 argv: Vec::new(),
