@@ -987,6 +987,335 @@ mod tests {
         assert_eq!(recorder.n.load(Ordering::SeqCst), 2);
     }
 
+    // ---- issue #130: five documented claims with no test behind them ------
+
+    /// #130 claim 1: a cancelled batch whose rollback got stuck must NOT
+    /// answer `Cancelled`. The scheduler (`scheduler::run_job`) maps
+    /// `Ok(Err(Error::Cancelled))` to `TaskState::Cancelled` and any other
+    /// `Err` to `TaskState::Failed`, and `Cancelled` is read everywhere in
+    /// this repo as "the tree came back" — the same promise a cancelled copy
+    /// makes. A stuck rollback did not come back, so answering `Cancelled`
+    /// here would be the executor lying about its own promise; the line this
+    /// pins is `run`'s `blocked.unwrap_or(Error::Cancelled)`.
+    ///
+    /// Combines `CancelAfter` (cancel right after the first step lands) with
+    /// `fail_rename_at` on that step's DESTINATION — the name the rollback has
+    /// to rename FROM to put the file back. The forward rename is unaffected
+    /// (its source is the original name, not the destination), so step one
+    /// applies cleanly; only its own reversal is blocked.
+    #[tokio::test]
+    async fn a_cancelled_batch_whose_rollback_sticks_is_not_reported_cancelled() {
+        /// Cancels the token after recording the Nth step (copy of the one in
+        /// `a_cancelled_batch_unwinds_what_it_applied`: it is local to that
+        /// test and this one needs its own).
+        struct CancelAfter {
+            cancel: CancellationToken,
+            n: AtomicUsize,
+            after: usize,
+        }
+
+        #[async_trait]
+        impl StepJournal for CancelAfter {
+            async fn renamed(
+                &self,
+                _from: &VPath,
+                _to: &VPath,
+                _undoes: Option<i64>,
+            ) -> Result<Option<i64>, Error> {
+                let i = self.n.fetch_add(1, Ordering::SeqCst);
+                if i + 1 == self.after {
+                    self.cancel.cancel();
+                }
+                Ok(Some(i64::try_from(i).unwrap_or(i64::MAX) + 1))
+            }
+        }
+
+        let mem = MemProvider::new();
+        let dir = MemProvider::root();
+        write_file(&mem, &dir.join(seg(b"a")), b"a").await;
+        write_file(&mem, &dir.join(seg(b"b")), b"b").await;
+        let pairs = vec![
+            (b"a".to_vec(), b"x".to_vec()),
+            (b"b".to_vec(), b"y".to_vec()),
+        ];
+        let steps = steps_for(&mem, &dir, &pairs).await;
+        // La reversa del primer paso tiene que renombrar `x → a`; se bloquea
+        // justo eso, no la ida.
+        mem.faults().fail_rename_at(&dir.join(seg(b"x")));
+        let cancel = CancellationToken::new();
+        let recorder = CancelAfter {
+            cancel: cancel.clone(),
+            n: AtomicUsize::new(0),
+            after: 1,
+        };
+        let report = Mutex::new(BatchReport::default());
+        let err = run(&mem, &recorder, &steps, &cancel, &reporter(), &report)
+            .await
+            .expect_err("la reversa se atasca");
+
+        assert_ne!(
+            err,
+            Error::Cancelled,
+            "una reversa atascada no puede contestar Cancelled: el árbol NO volvió",
+        );
+        assert!(matches!(err, Error::Io { .. }), "{err:?}");
+
+        let r = report.lock().expect("report lock").clone();
+        let stuck = r.stuck.as_ref().expect("un paso atascado");
+        assert_eq!(stuck.from, dir.join(seg(b"a")));
+        assert_eq!(stuck.to, dir.join(seg(b"x")));
+        assert_eq!(stuck.still_applied, 1);
+        assert!(stuck.journalled, "el paso sí llegó a apuntarse");
+        assert_eq!(
+            r.rolled_back, 0,
+            "nada volvió: el único paso aplicado se atasca"
+        );
+
+        // El árbol queda a medio renombrar: `a` no volvió, `x` sigue ahí.
+        assert!(mem.stat(&dir.join(seg(b"a"))).await.is_err());
+        assert!(mem.stat(&dir.join(seg(b"x"))).await.is_ok());
+        // `b` nunca se tocó: la cancelación se observó ANTES del segundo paso.
+        assert!(mem.stat(&dir.join(seg(b"b"))).await.is_ok());
+    }
+
+    /// #130 claim 2: `Landed::Unknown` has to be able to reach
+    /// `BatchReport::uncertain`. Nothing in the workspace produces
+    /// `uncertain = Some` today — every existing assertion is `.is_none()`,
+    /// which stays green even if the `Unknown` arm of `landed` were deleted.
+    ///
+    /// Stages it literally as the module doc describes: the rename fails with
+    /// an error outside the closed list (`Io`, via `fail_rename_at`, which
+    /// keeps `may_have_applied` true), and then BOTH probe `stat`s the
+    /// executor sends to find out what really happened fail too —
+    /// `disconnect_after` takes the provider down right after the rename call
+    /// consumes its one good operation.
+    #[tokio::test]
+    async fn a_probe_that_cannot_answer_is_reported_uncertain() {
+        let mem = MemProvider::new();
+        let dir = MemProvider::root();
+        write_file(&mem, &dir.join(seg(b"a")), b"a").await;
+        let pairs = vec![(b"a".to_vec(), b"x".to_vec())];
+        let steps = steps_for(&mem, &dir, &pairs).await;
+        mem.faults().fail_rename_at(&dir.join(seg(b"a")));
+        // Una operación (el propio rename) todavía pasa; los dos `stat` que
+        // el probe necesita justo después ya no.
+        mem.faults().disconnect_after(1);
+        let recorder = FailAt {
+            n: AtomicUsize::new(0),
+            fail_on: usize::MAX,
+        };
+        let report = Mutex::new(BatchReport::default());
+        let err = run(
+            &mem,
+            &recorder,
+            &steps,
+            &CancellationToken::new(),
+            &reporter(),
+            &report,
+        )
+        .await
+        .expect_err("el lote falla");
+        assert!(matches!(err, Error::Io { .. }), "{err:?}");
+
+        let r = report.lock().expect("report lock").clone();
+        let uncertain = r.uncertain.as_ref().expect("el probe no pudo responder");
+        assert_eq!(uncertain.from, dir.join(seg(b"a")));
+        assert_eq!(uncertain.to, dir.join(seg(b"x")));
+        assert!(!uncertain.journalled, "nunca llegó a apuntarse");
+        assert_eq!(uncertain.still_applied, 1);
+        assert!(
+            matches!(uncertain.error, Error::Io { .. }),
+            "{:?}",
+            uncertain.error
+        );
+        // Nada se supuso en ninguna dirección: ni aplicado ni descartado.
+        assert!(r.stuck.is_none(), "{:?}", r.stuck);
+        assert_eq!(r.applied, 0);
+        assert_eq!(r.rolled_back, 0);
+    }
+
+    /// #130 claim 3: `compensations_lost` is documented as the ONLY warning
+    /// that a later `undo_session` will block on an entry whose forward move
+    /// already came back — every assertion in the suite today is `== 0`, so
+    /// nothing would notice if the counter stopped incrementing.
+    ///
+    /// Shape of `a_step_whose_journal_entry_fails_unwinds_the_batch`, widened
+    /// to three independent pairs so the third step can fail at the PROVIDER
+    /// (leaving the first two forward-journalled) instead of at the recorder:
+    /// `FailAt { fail_on: 3 }` then hits exactly the reversal of the second
+    /// step — the first compensation the rollback attempts.
+    #[tokio::test]
+    async fn a_compensation_that_fails_to_write_is_counted() {
+        let mem = MemProvider::new();
+        let dir = MemProvider::root();
+        write_file(&mem, &dir.join(seg(b"a")), b"a").await;
+        write_file(&mem, &dir.join(seg(b"b")), b"b").await;
+        write_file(&mem, &dir.join(seg(b"c")), b"c").await;
+        let pairs = vec![
+            (b"a".to_vec(), b"x".to_vec()),
+            (b"b".to_vec(), b"y".to_vec()),
+            (b"c".to_vec(), b"z".to_vec()),
+        ];
+        let steps = steps_for(&mem, &dir, &pairs).await;
+        assert_eq!(steps.len(), 3);
+        mem.faults().fail_rename_at(&dir.join(seg(b"c")));
+        let recorder = FailAt {
+            n: AtomicUsize::new(0),
+            fail_on: 3,
+        };
+        let report = Mutex::new(BatchReport::default());
+        let err = run(
+            &mem,
+            &recorder,
+            &steps,
+            &CancellationToken::new(),
+            &reporter(),
+            &report,
+        )
+        .await
+        .expect_err("el tercer paso falla en el provider");
+        assert!(matches!(err, Error::Io { .. }), "{err:?}");
+
+        let r = report.lock().expect("report lock").clone();
+        assert_eq!(r.applied, 2, "los dos primeros pasos sí se apuntaron");
+        assert_eq!(r.rolled_back, 2, "y los dos volvieron físicamente");
+        assert_eq!(
+            r.compensations_lost, 1,
+            "la reversa del segundo paso no pudo apuntarse",
+        );
+        assert!(r.stuck.is_none(), "{:?}", r.stuck);
+        assert!(r.uncertain.is_none());
+
+        // El árbol SÍ volvió: la pérdida es de contabilidad, no de ficheros.
+        assert!(mem.stat(&dir.join(seg(b"a"))).await.is_ok());
+        assert!(mem.stat(&dir.join(seg(b"b"))).await.is_ok());
+        assert!(mem.stat(&dir.join(seg(b"c"))).await.is_ok());
+        assert_eq!(recorder.n.load(Ordering::SeqCst), 4);
+    }
+
+    /// #130 claim 4: `may_have_applied`'s closed list treats `NotFound` as
+    /// "nothing happened" and skips the probe entirely. That arm is
+    /// documented as the one that matters most — a racing delete of the
+    /// source plus a stranger creating the destination would otherwise let a
+    /// probe read `Landed::Yes` and steer the rollback onto a file that is not
+    /// ours. Mutating the function to `true` unconditionally turns no other
+    /// test in this module red; this one is built to catch exactly that.
+    ///
+    /// The race is staged, not raced: the plan is resolved against a listing
+    /// where `a` still exists, then `a` is removed and a stranger's file is
+    /// written at the destination BEFORE the executor ever runs — the same
+    /// end state a concurrent delete-and-recreate would leave, with none of
+    /// the timing.
+    #[tokio::test]
+    async fn a_racing_delete_never_lets_the_rollback_touch_a_strangers_file() {
+        let mem = MemProvider::new();
+        let dir = MemProvider::root();
+        write_file(&mem, &dir.join(seg(b"a")), b"a").await;
+        let pairs = vec![(b"a".to_vec(), b"x".to_vec())];
+        let steps = steps_for(&mem, &dir, &pairs).await;
+        // La carrera: `a` desaparece y un desconocido ocupa `x` ANTES de que
+        // el ejecutor llegue a tocar nada.
+        mem.remove(&dir.join(seg(b"a")))
+            .await
+            .expect("simula el borrado ajeno");
+        write_file(&mem, &dir.join(seg(b"x")), b"stranger").await;
+        let recorder = FailAt {
+            n: AtomicUsize::new(0),
+            fail_on: usize::MAX,
+        };
+        let report = Mutex::new(BatchReport::default());
+        let err = run(
+            &mem,
+            &recorder,
+            &steps,
+            &CancellationToken::new(),
+            &reporter(),
+            &report,
+        )
+        .await
+        .expect_err("el origen ya no está");
+        assert!(matches!(err, Error::NotFound), "{err:?}");
+
+        let r = report.lock().expect("report lock").clone();
+        assert!(r.stuck.is_none(), "{:?}", r.stuck);
+        assert!(r.uncertain.is_none(), "{:?}", r.uncertain);
+        assert_eq!(r.applied, 0);
+        assert_eq!(r.rolled_back, 0, "nada que desandar: no se probó nada");
+
+        // LA propiedad: el fichero del desconocido sigue siendo suyo.
+        assert_eq!(
+            read_all(&mem, &dir.join(seg(b"x"))).await,
+            b"stranger".to_vec(),
+        );
+        assert!(
+            mem.stat(&dir.join(seg(b"a"))).await.is_err(),
+            "sigue sin volver"
+        );
+    }
+
+    /// #130 claim 5: no test anywhere unwinds a plan that went through a
+    /// planner-owned TEMPORARY cleanly. Every existing rollback test on
+    /// independent renames never touches a temp; every existing test that
+    /// DOES involve a temp arms `fail_rename_at` ON the temp itself to force
+    /// the failure, which necessarily also blocks the temp's own reversal
+    /// (its source, on the way back, IS the temp) — so those tests end STUCK
+    /// by construction and never exercise the success path the temporary
+    /// exists for.
+    ///
+    /// Failing the swap's LAST leg (`temp → b`) at the JOURNAL instead of the
+    /// provider sidesteps that: the rename physically lands, so nothing is
+    /// armed against the temp path, and its later reversal (`b → temp`, then
+    /// `temp → a`) runs unobstructed. Content, not just names, proves the
+    /// right bytes came home.
+    #[tokio::test]
+    async fn a_swap_through_a_temporary_unwinds_cleanly_with_the_right_bytes() {
+        let mem = MemProvider::new();
+        let dir = MemProvider::root();
+        write_file(&mem, &dir.join(seg(b"a")), b"a").await;
+        write_file(&mem, &dir.join(seg(b"b")), b"b").await;
+        let pairs = vec![
+            (b"a".to_vec(), b"b".to_vec()),
+            (b"b".to_vec(), b"a".to_vec()),
+        ];
+        let steps = steps_for(&mem, &dir, &pairs).await;
+        assert_eq!(steps.len(), 3, "dos renames y un rodeo");
+        let temp = steps[0].to.clone();
+        let third_pair = steps[2].pair_index;
+
+        // El tercer paso (`temp → b`) ATERRIZA en el provider; solo su
+        // apunte de journal falla, así que nada queda armado sobre `temp`.
+        let recorder = FailAt {
+            n: AtomicUsize::new(0),
+            fail_on: 3,
+        };
+        let report = Mutex::new(BatchReport::default());
+        let err = run(
+            &mem,
+            &recorder,
+            &steps,
+            &CancellationToken::new(),
+            &reporter(),
+            &report,
+        )
+        .await
+        .expect_err("el tercer apunte falla");
+        assert!(matches!(err, Error::Internal { .. }), "{err:?}");
+
+        let r = report.lock().expect("report lock").clone();
+        assert_eq!(r.applied, 2, "los dos primeros pasos se apuntaron");
+        assert_eq!(r.rolled_back, 3, "los tres, rodeo incluido, volvieron");
+        assert_eq!(r.compensations_lost, 0);
+        assert!(r.stuck.is_none(), "{:?}", r.stuck);
+        assert!(r.uncertain.is_none());
+        assert_eq!(r.failed_pair, Some(third_pair));
+
+        // LA propiedad: los bytes, no solo los nombres.
+        assert_eq!(read_all(&mem, &dir.join(seg(b"a"))).await, b"a".to_vec());
+        assert_eq!(read_all(&mem, &dir.join(seg(b"b"))).await, b"b".to_vec());
+        assert!(mem.stat(&temp).await.is_err(), "el temporal no sobrevive");
+        assert_eq!(recorder.n.load(Ordering::SeqCst), 5);
+    }
+
     /// The executor's OWN no-clobber guard, proved against a provider that
     /// really does overwrite.
     ///
