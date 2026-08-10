@@ -689,7 +689,7 @@ pub struct UnbindWrite {
 }
 
 /// What a sequence does after the removal [`unbind_dry_run`] modelled —
-/// [`Effective::lookup`]'s own answer, never asserted from the file the way
+/// `Effective::lookup`'s own answer, never asserted from the file the way
 /// the old "removed from your keymap.toml" message did: removing an entry is
 /// not the same as the key going quiet (#141).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -733,7 +733,7 @@ pub enum UnbindOutcome {
 }
 
 /// The unbind's door, symmetric with [`rebind_dry_run`] and built out of the
-/// same parts: same [`RebindSources`], same [`parses_to`] match, same
+/// same parts: same [`RebindSources`], same parsed-sequence match, same
 /// rebuild-and-ask-the-map shape. Three things it fixes over a byte-exact
 /// removal (#141, found by the c3 reviewers building the TUI Shortcuts
 /// screen):
@@ -749,7 +749,7 @@ pub enum UnbindOutcome {
 /// 3. **The outcome is worded from the REBUILT map**, not from what the file
 ///    no longer says. "Removed from your keymap.toml" is true and useless
 ///    when a project layer still binds the key; [`UnbindOutcome`] carries
-///    what [`Effective::lookup`] says instead.
+///    what `Effective::lookup` says instead.
 ///
 /// Searches BOTH of the target's lists (`prepend_keymap` and
 /// `append_keymap`) — an unbind has no list of its own to write into the way
