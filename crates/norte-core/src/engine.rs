@@ -662,6 +662,98 @@ impl Engine {
         Ok((handle, rx))
     }
 
+    /// Compara DOS árboles como Task cancelable (`fs.compare`, 0.39.0, ADR
+    /// 0048): [`TaskKind::Compare`] + canal `mpsc` de lotes de filas
+    /// ([`CompareRowsBatch`](norte_proto::methods::CompareRowsBatch)),
+    /// acotados por
+    /// [`COMPARE_ROWS_MAX_BATCH`](norte_proto::methods::COMPARE_ROWS_MAX_BATCH)
+    /// y coalescidos, igual que [`Self::search_as`].
+    ///
+    /// **No muta nada**: sin journal, sin undo, no se escribe un byte (regla
+    /// dura 4 no aplica; el porqué, largo, está en el módulo `compare`, que es
+    /// privado y por eso no se enlaza).
+    ///
+    /// **Gate de policy**: NINGUNO aquí, y por el mismo motivo que
+    /// [`Self::search_as`] — el gate de LECTURA vive en el daemon
+    /// (`read_gate` sobre AMBAS raíces, más `content_gate` cuando el rung de
+    /// hash está encendido), que es quien ata una conexión a un actor. Por la
+    /// API embebida no existe un `Actor::Agent` que no se haya escrito el
+    /// propio proceso.
+    ///
+    /// **Mapeo de progreso**: `entries_done` = FILAS emitidas (contrato de
+    /// C1: es como un cliente detecta un `compare.rows` perdido); `bytes_done`
+    /// se queda a cero — sin el rung de hash no se lee un solo byte.
+    ///
+    /// # Errors
+    /// [`Error::InvalidPath`] si las dos raíces son la MISMA (comparar algo
+    /// contra sí mismo no es una petición, es una errata, y sale más caro que
+    /// cualquier otro error de params: una hora de trabajo para contestar
+    /// «todo igual»). [`Error::Unsupported`] si `follow_symlinks` viene a
+    /// `true` —el motor acepta el campo y lo IGNORA, así que servir en
+    /// silencio un recorrido distinto del pedido sería mentir— o si el scheme
+    /// de alguna raíz no tiene provider registrado.
+    pub async fn compare_as(
+        &self,
+        params: norte_proto::methods::FsCompareParams,
+        actor: crate::journal::Actor,
+    ) -> Result<
+        (
+            TaskHandle,
+            tokio::sync::mpsc::Receiver<norte_proto::methods::CompareRowsBatch>,
+        ),
+        Error,
+    > {
+        // ANTES de resolver providers y de crear Task alguna: los dos rechazos
+        // son del REQUEST, no fallos de una Task ya lanzada (mismo criterio
+        // que la compilación de matchers de `search_as`).
+        if params.follow_symlinks {
+            tracing::debug!("fs.compare con follow_symlinks: no soportado");
+            return Err(Error::Unsupported);
+        }
+        // Igualdad ESTRUCTURAL de `VPath` (scheme + authority + segmentos, ya
+        // normalizados sin `.`/`..`). No detecta dos rutas que el sistema de
+        // ficheros resuelva al mismo sitio —una raíz symlinkeada, un archivo
+        // alcanzado por dos caminos, un mismo host SFTP bajo dos autoridades—:
+        // eso exigiría resolver identidad real por provider, que hoy no está
+        // en el trait. Comparar un árbol consigo mismo por esa vía no es
+        // peligroso (no se escribe nada), solo caro y con todo `Same`.
+        if params.left == params.right {
+            tracing::debug!("fs.compare de una raíz contra sí misma");
+            return Err(Error::InvalidPath);
+        }
+        let left = self.provider_for(&params.left).await?;
+        let right = self.provider_for(&params.right).await?;
+        let opts = norte_compare::CompareOptions {
+            criteria: params.criteria,
+            max_depth: params.max_depth,
+            mtime_tolerance_ms: params.mtime_tolerance_ms,
+            // Ya rechazado arriba; se pasa apagado explícitamente para que el
+            // motor no dependa de esa comprobación remota.
+            follow_symlinks: false,
+        };
+        let (left_root, right_root) = (params.left, params.right);
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        // La cola del scheduler es la de la raíz IZQUIERDA (la que lanzó la
+        // comparación): una comparación cross-provider tiene que encolarse en
+        // algún sitio, y elegir el otro lado no cambiaría nada.
+        let key = left_root.scheme().to_owned();
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::Compare,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    // El flujo se construye DENTRO: toma prestados los dos
+                    // providers, así que el préstamo tiene que nacer aquí.
+                    crate::compare::run_compare(left, left_root, right, right_root, opts, tx, &ctx)
+                        .await
+                })
+            }),
+        );
+        Ok((handle, rx))
+    }
+
     /// (Re)construye el índice de `root` como Task cancelable (M4, ADR 0034).
     /// Camina el provider (lectura; como `fs.search`, sin gate de mutación) y
     /// alimenta [`norte_index::Index::build`]. El `report` se rellena al

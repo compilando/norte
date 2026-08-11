@@ -4344,6 +4344,395 @@ async fn agente_scope_no_cubre_root() {
     }
 }
 
+// ---------- fs.compare (C6 del plan de comparación de directorios) ----------
+
+/// Params de `fs.compare` con los criterios por defecto (sin hash).
+fn compare_params(left: &str, right: &str) -> methods::FsCompareParams {
+    methods::FsCompareParams {
+        left: vp(left),
+        right: vp(right),
+        criteria: methods::CompareCriteria::default(),
+        max_depth: None,
+        mtime_tolerance_ms: 2000,
+        follow_symlinks: false,
+    }
+}
+
+/// Drena `compare.rows` + `task.progress` de una comparación hasta su
+/// terminal. Mismo criterio que [`drain_search`]: tras el terminal aún se
+/// vacía brevemente lo ya encolado (las dos bombas son tasks distintas).
+/// Devuelve los LOTES y el estado terminal.
+async fn drain_compare(
+    c: &mut Client,
+    task_id: u64,
+) -> (Vec<methods::CompareRowsBatch>, TaskState) {
+    let mut batches: Vec<methods::CompareRowsBatch> = Vec::new();
+    let mut terminal: Option<TaskState> = None;
+    loop {
+        let to = if terminal.is_some() {
+            Duration::from_millis(400)
+        } else {
+            Duration::from_secs(5)
+        };
+        let n = match tokio::time::timeout(to, c.notification()).await {
+            Ok(Some(n)) => n,
+            Ok(None) => break,
+            Err(_) => {
+                assert!(terminal.is_some(), "timeout esperando la comparación");
+                break;
+            }
+        };
+        if n.method == methods::COMPARE_ROWS {
+            let b: methods::CompareRowsBatch =
+                serde_json::from_value(n.params.expect("params")).expect("CompareRowsBatch");
+            if b.task_id.get() == task_id {
+                batches.push(b);
+            }
+        } else if n.method == methods::TASK_PROGRESS {
+            let p: TaskProgress =
+                serde_json::from_value(n.params.expect("params")).expect("TaskProgress");
+            if p.task_id.get() == task_id && p.state.is_terminal() {
+                terminal = Some(p.state);
+            }
+        }
+    }
+    (
+        batches,
+        terminal.expect("estado terminal de la comparación"),
+    )
+}
+
+/// Round-trip por el socket: las filas llegan en lotes ACOTADOS por
+/// `COMPARE_ROWS_MAX_BATCH`, coalescidos, y la Task acaba `Completed`.
+#[tokio::test]
+async fn fs_compare_round_trip_en_lotes_acotados() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///l")).await.expect("mkdir l");
+    d.mem.mkdir(&vp("mem:///r")).await.expect("mkdir r");
+    for i in 0..600 {
+        write_file(&d.mem, &format!("mem:///l/f{i}.txt"), b"x").await;
+        write_file(&d.mem, &format!("mem:///r/f{i}.txt"), b"x").await;
+    }
+    let mut c = connected_client(&d).await;
+
+    let task: FsTaskResult = c
+        .call(methods::FS_COMPARE, &compare_params("mem:///l", "mem:///r"))
+        .await
+        .expect("fs.compare");
+    let (batches, state) = drain_compare(&mut c, task.task_id.get()).await;
+    assert_eq!(state, TaskState::Completed);
+    assert!(
+        batches
+            .iter()
+            .all(|b| b.rows.len() <= methods::COMPARE_ROWS_MAX_BATCH),
+        "lote por encima del tope"
+    );
+    let rows: usize = batches.iter().map(|b| b.rows.len()).sum();
+    assert_eq!(rows, 600, "una fila por pareja");
+    assert!(batches.len() < 600, "una frame por fila no es coalescer");
+    assert!(
+        batches
+            .iter()
+            .flat_map(|b| &b.rows)
+            .all(|r| r.sides_are_consistent() && r.reason_is_consistent()),
+        "el daemon no puede emitir filas incoherentes"
+    );
+}
+
+/// Las filas son de quien lanzó la comparación: otra conexión NUNCA ve un
+/// `compare.rows` ajeno (mismo criterio direccional que `search.hits`).
+#[tokio::test]
+async fn fs_compare_filas_solo_al_dueno() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///l")).await.expect("mkdir l");
+    d.mem.mkdir(&vp("mem:///r")).await.expect("mkdir r");
+    write_file(&d.mem, "mem:///l/a.txt", b"x").await;
+    write_file(&d.mem, "mem:///r/a.txt", b"x").await;
+    let mut duena = connected_client(&d).await;
+    let mut ajena = connected_client(&d).await;
+
+    let task: FsTaskResult = duena
+        .call(methods::FS_COMPARE, &compare_params("mem:///l", "mem:///r"))
+        .await
+        .expect("fs.compare de la dueña");
+    let task_id = task.task_id.get();
+
+    // La otra conexión observa hasta el terminal y jamás ve un compare.rows.
+    loop {
+        let notif = tokio::time::timeout(Duration::from_secs(5), ajena.notification())
+            .await
+            .expect("timeout esperando el terminal en la conexión ajena")
+            .expect("canal vivo");
+        assert_ne!(
+            notif.method,
+            methods::COMPARE_ROWS,
+            "una conexión ajena recibió filas que no son suyas"
+        );
+        if notif.method == methods::TASK_PROGRESS {
+            let p: TaskProgress =
+                serde_json::from_value(notif.params.expect("params")).expect("TaskProgress");
+            if p.task_id.get() == task_id && p.state.is_terminal() {
+                break;
+            }
+        }
+    }
+    let (batches, state) = drain_compare(&mut duena, task_id).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(batches.iter().map(|b| b.rows.len()).sum::<usize>(), 1);
+}
+
+/// Cancelación por el wire (regla dura 3): `task.cancel` termina la Task como
+/// `Cancelled` —el único `Err` del motor ES la cancelación, no un fallo— y los
+/// lotes paran.
+#[tokio::test]
+async fn fs_compare_cancel_por_wire() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///l")).await.expect("mkdir l");
+    d.mem.mkdir(&vp("mem:///r")).await.expect("mkdir r");
+    for i in 0..200 {
+        write_file(&d.mem, &format!("mem:///l/f{i}.txt"), b"x").await;
+        write_file(&d.mem, &format!("mem:///r/f{i}.txt"), b"x").await;
+    }
+    d.mem
+        .faults()
+        .set_latency_per_op(Some(Duration::from_millis(20)));
+    let mut c = connected_client(&d).await;
+
+    let task: FsTaskResult = c
+        .call(methods::FS_COMPARE, &compare_params("mem:///l", "mem:///r"))
+        .await
+        .expect("fs.compare");
+    let _: TaskCancelResult = c
+        .call(
+            methods::TASK_CANCEL,
+            &TaskCancelParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect("task.cancel");
+    let (batches, state) = drain_compare(&mut c, task.task_id.get()).await;
+    assert_eq!(state, TaskState::Cancelled);
+    assert!(
+        batches.iter().map(|b| b.rows.len()).sum::<usize>() < 200,
+        "siguieron llegando filas tras el cancel"
+    );
+
+    // No queda como task VIVA (no fuga).
+    let list: methods::TaskListResult = c
+        .call(methods::TASK_LIST, &methods::TaskListParams::default())
+        .await
+        .expect("task.list");
+    assert!(
+        list.tasks
+            .iter()
+            .all(|t| t.task_id != task.task_id || t.state.is_terminal()),
+        "la task no sigue viva"
+    );
+}
+
+/// Dos raíces que resuelven al mismo sitio son `-32602` y NO crean Task:
+/// comparar algo contra sí mismo durante una hora no es una petición, es una
+/// errata de quien llama.
+#[tokio::test]
+async fn fs_compare_contra_si_misma_es_invalid_params_sin_task() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///data")).await.expect("mkdir");
+    let c = connected_client(&d).await;
+    let before: methods::TaskListResult = c
+        .call(methods::TASK_LIST, &methods::TaskListParams::default())
+        .await
+        .expect("task.list");
+
+    let err = c
+        .call::<_, FsTaskResult>(
+            methods::FS_COMPARE,
+            &compare_params("mem:///data", "mem:///data"),
+        )
+        .await
+        .expect_err("rechazada");
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        other => panic!("esperaba Rpc INVALID_PARAMS, fue {other:?}"),
+    }
+    let after: methods::TaskListResult = c
+        .call(methods::TASK_LIST, &methods::TaskListParams::default())
+        .await
+        .expect("task.list");
+    assert_eq!(
+        after.tasks.len(),
+        before.tasks.len(),
+        "no puede crearse Task alguna"
+    );
+}
+
+/// `follow_symlinks: true` es `-32602`: el motor acepta el campo y lo IGNORA,
+/// y servir en silencio un recorrido distinto del pedido es peor que no
+/// ofrecerlo.
+#[tokio::test]
+async fn fs_compare_follow_symlinks_es_invalid_params() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///l")).await.expect("mkdir l");
+    d.mem.mkdir(&vp("mem:///r")).await.expect("mkdir r");
+    let c = connected_client(&d).await;
+
+    let mut p = compare_params("mem:///l", "mem:///r");
+    p.follow_symlinks = true;
+    let err = c
+        .call::<_, FsTaskResult>(methods::FS_COMPARE, &p)
+        .await
+        .expect_err("rechazada");
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        other => panic!("esperaba Rpc INVALID_PARAMS, fue {other:?}"),
+    }
+}
+
+/// El gate: comparar LEE dos árboles, así que un agente necesita scope vivo
+/// sobre AMBAS raíces. Con una sola no basta, y la denegación dice únicamente
+/// la categoría gruesa.
+#[tokio::test]
+async fn fs_compare_agente_necesita_scope_en_ambas_raices() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    d.mem
+        .mkdir(&vp("mem:///proj/sub"))
+        .await
+        .expect("mkdir sub");
+    d.mem.mkdir(&vp("mem:///otro")).await.expect("mkdir otro");
+    let agent = connected_agent(&d, "s1").await;
+    let human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await; // scope sobre mem:///proj
+
+    // La raíz derecha cae fuera del scope → denegado.
+    let err = agent
+        .call::<_, FsTaskResult>(
+            methods::FS_COMPARE,
+            &compare_params("mem:///proj", "mem:///otro"),
+        )
+        .await
+        .expect_err("la derecha está fuera de scope");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+            "PolicyDenied out-of-scope, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+    // Y en el otro sentido tampoco: el gate mira las DOS, no la primera.
+    let err = agent
+        .call::<_, FsTaskResult>(
+            methods::FS_COMPARE,
+            &compare_params("mem:///otro", "mem:///proj"),
+        )
+        .await
+        .expect_err("la izquierda está fuera de scope");
+    assert!(matches!(err, ClientError::Rpc(_)), "fue {err:?}");
+
+    // Las dos bajo el scope → procede.
+    let _: FsTaskResult = agent
+        .call(
+            methods::FS_COMPARE,
+            &compare_params("mem:///proj", "mem:///proj/sub"),
+        )
+        .await
+        .expect("ambas bajo el scope");
+}
+
+/// El rung de hash LEE CONTENIDO, y un scope que solo concede `mkdir` cubre la
+/// lectura de estructura pero no el manejo de bytes: la comparación barata
+/// pasa y la hasheada no.
+#[tokio::test]
+async fn fs_compare_el_rung_de_hash_exige_scope_de_contenido() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///data")).await.expect("mkdir data");
+    d.mem.mkdir(&vp("mem:///data/l")).await.expect("mkdir l");
+    d.mem.mkdir(&vp("mem:///data/r")).await.expect("mkdir r");
+    write_file(&d.mem, "mem:///data/l/a.txt", b"x").await;
+    write_file(&d.mem, "mem:///data/r/a.txt", b"x").await;
+    let agent = connected_agent(&d, "s1").await;
+    let human = connected_client(&d).await;
+
+    // Scope de SOLO `mkdir` sobre mem:///data: lectura sí, contenido no.
+    let req: RequestScopeResult = agent
+        .call(
+            methods::POLICY_REQUEST_SCOPE,
+            &RequestScopeParams {
+                session: "s1".into(),
+                roots: vec![vp("mem:///data")],
+                ops: vec!["mkdir".into()],
+                ttl_ms: 60_000,
+            },
+        )
+        .await
+        .expect("request_scope");
+    let _: GrantScopeResult = human
+        .call(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams {
+                request_id: req.request_id,
+            },
+        )
+        .await
+        .expect("grant_scope");
+
+    // Barata: pasa (el gate de lectura es op-independiente).
+    let _: FsTaskResult = agent
+        .call(
+            methods::FS_COMPARE,
+            &compare_params("mem:///data/l", "mem:///data/r"),
+        )
+        .await
+        .expect("sin hash procede");
+
+    // Con hash: denegada — leer estructura no es leer bytes.
+    let mut p = compare_params("mem:///data/l", "mem:///data/r");
+    p.criteria.hash = true;
+    let err = agent
+        .call::<_, FsTaskResult>(methods::FS_COMPARE, &p)
+        .await
+        .expect_err("el hash exige scope de contenido");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+            "PolicyDenied out-of-scope, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// Y el lado que PERMITE, que es el que de verdad puede romperse en silencio:
+/// con un scope de `copy` sobre la raíz, las DOS puertas (lectura + contenido)
+/// se componen y la comparación hasheada procede hasta terminar. Sin este
+/// test, un `content_gate` que denegara siempre pasaría el de arriba.
+#[tokio::test]
+async fn fs_compare_con_scope_de_copy_el_hash_procede() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    d.mem.mkdir(&vp("mem:///proj/l")).await.expect("mkdir l");
+    d.mem.mkdir(&vp("mem:///proj/r")).await.expect("mkdir r");
+    write_file(&d.mem, "mem:///proj/l/a.txt", b"x").await;
+    write_file(&d.mem, "mem:///proj/r/a.txt", b"x").await;
+    let mut agent = connected_agent(&d, "s1").await;
+    let human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await; // scope `copy` sobre /proj
+
+    let mut p = compare_params("mem:///proj/l", "mem:///proj/r");
+    p.criteria.hash = true;
+    let task: FsTaskResult = agent
+        .call(methods::FS_COMPARE, &p)
+        .await
+        .expect("con scope de copy el hash procede");
+    let (batches, state) = drain_compare(&mut agent, task.task_id.get()).await;
+    assert_eq!(state, TaskState::Completed);
+    let rows: Vec<_> = batches.into_iter().flat_map(|b| b.rows).collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].verdict, methods::CompareVerdict::Same);
+    assert_eq!(rows[0].criterion, methods::CompareCriterion::Hash);
+}
+
 /// Asevera que una lectura da `PolicyDenied` out-of-scope (helper de #80).
 async fn assert_read_denied(agent: &Client, method: &str, params: &impl serde::Serialize) {
     let err = agent

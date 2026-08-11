@@ -6234,6 +6234,7 @@ dependencies = [
 name = "norte-compare"
 version = "0.3.0-alpha.2"
 dependencies = [
+ "async-trait",
  "bytes",
  "futures",
  "norte-proto",
@@ -6311,6 +6312,7 @@ dependencies = [
  "libunftp",
  "memchr",
  "norte-ai",
+ "norte-compare",
  "norte-config",
  "norte-connect",
  "norte-encoding",

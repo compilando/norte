@@ -7,6 +7,8 @@ pub mod approval;
 pub mod archive_config;
 pub mod audit;
 pub mod backend;
+/// La Task de `fs.compare`: lotes coalescidos sobre el motor `norte-compare`.
+mod compare;
 pub mod connect;
 #[cfg(unix)]
 pub mod daemon;

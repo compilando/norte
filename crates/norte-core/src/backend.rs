@@ -834,6 +834,75 @@ impl Backend {
         }
     }
 
+    /// Comparación de dos árboles (`fs.compare`, 0.39.0, ADR 0048): devuelve
+    /// la Task ([`TaskRef`], cancelable) y el STREAM de lotes de filas
+    /// ([`norte_proto::methods::CompareRowsBatch`]).
+    ///
+    /// Mismo ciclo de vida del canal que [`Self::search`]: embebido, el walk
+    /// cierra el `tx` al terminar; remoto, la bomba enruta cada `compare.rows`
+    /// por `task_id` y el route se retira tras el terminal (con la misma
+    /// gracia). El criterio de "comparación terminada" es el estado terminal
+    /// de la [`TaskRef`]; el cierre del `rx` es la señal cómoda.
+    ///
+    /// **No muta nada**: sin journal, sin undo (regla dura 4 no aplica).
+    ///
+    /// # Cuándo están TODAS las filas
+    /// El cierre del `rx` NO significa «llegaron todas»: una notificación se
+    /// puede perder (el daemon expulsa a un suscriptor que no drena, la bomba
+    /// del cliente descarta un lote si su buffer se llena, y una reconexión
+    /// suelta los routes cerrando el `rx` de forma indistinguible de un final
+    /// limpio). La señal es
+    /// [`TaskProgress::entries_done`](norte_proto::TaskProgress::entries_done),
+    /// que en una Task [`TaskKind::Compare`](norte_proto::TaskKind::Compare)
+    /// cuenta FILAS emitidas: se comparan las recibidas con ese número, y
+    /// **DESPUÉS de que el `rx` se cierre**, no al llegar el snapshot terminal
+    /// —la bomba de filas y la de progreso son tasks distintas, así que el
+    /// terminal puede adelantar al último lote—. Quien vaya a ESCRIBIR a
+    /// partir de estas filas (el plan de sincronización de la spec 2) tiene
+    /// que hacer esa comprobación.
+    ///
+    /// # Errors
+    /// Dos raíces iguales → [`Error::InvalidPath`]; `follow_symlinks: true` →
+    /// [`Error::Unsupported`]. Los dos se comprueban AQUÍ, antes de elegir
+    /// brazo, para que el embebido y el remoto contesten lo mismo: el daemon
+    /// los rechaza con `-32602` pelado (es su contrato publicado) y
+    /// `to_taxonomy` convertiría eso en `Internal`, o sea la misma respuesta
+    /// que da un provider que panica. El daemon los sigue comprobando por su
+    /// cuenta: aquello es la frontera, esto es la paridad de las dos vías
+    /// (mismo criterio que `check_pairs_cap`).
+    ///
+    /// Un daemon N-1 (0.38.x) sin el método responde `METHOD_NOT_FOUND`, que
+    /// se entrega como [`Error::Unsupported`] — «tu daemon es más viejo», no
+    /// un fallo real. Resto, taxonomía del protocolo; daemon caído =
+    /// `ProviderUnavailable`.
+    pub async fn compare(
+        &self,
+        params: norte_proto::methods::FsCompareParams,
+    ) -> Result<
+        (
+            TaskRef,
+            mpsc::Receiver<norte_proto::methods::CompareRowsBatch>,
+        ),
+        Error,
+    > {
+        if params.follow_symlinks {
+            return Err(Error::Unsupported);
+        }
+        if params.left == params.right {
+            return Err(Error::InvalidPath);
+        }
+        match self {
+            Self::Embedded(engine) => {
+                let (handle, rx) = engine
+                    .compare_as(params, crate::journal::Actor::User)
+                    .await?;
+                Ok((TaskRef::from_handle(&handle), rx))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.compare(params).await,
+        }
+    }
+
     /// Registra la host key de `host:port` tras la confirmación EXPLÍCITA
     /// del usuario (flujo TOFU: un `Error::HostKeyUnknown` trajo el
     /// fingerprint, el frontend lo mostró y el usuario aceptó — ADR 0015 D).
@@ -1632,11 +1701,12 @@ pub mod remote {
     use base64::Engine as _;
     use futures::StreamExt as _;
     use norte_proto::methods::{
-        self, ClientInfo, ConnectionDegraded, FsCapabilitiesParams, FsCapabilitiesResult,
-        FsCopyParams, FsDeleteParams, FsListParams, FsListResult, FsMoveParams, FsReadParams,
-        FsReadResult, FsSearchParams, FsStatParams, FsStatResult, FsTaskResult,
-        PolicyApprovalRequired, PolicyDecideParams, PolicyDecideResult, PolicyPendingResult,
-        SearchHits, TaskCancelParams, TaskCancelResult, TaskListParams, TaskListResult,
+        self, ClientInfo, CompareRowsBatch, ConnectionDegraded, FsCapabilitiesParams,
+        FsCapabilitiesResult, FsCopyParams, FsDeleteParams, FsListParams, FsListResult,
+        FsMoveParams, FsReadParams, FsReadResult, FsSearchParams, FsStatParams, FsStatResult,
+        FsTaskResult, PolicyApprovalRequired, PolicyDecideParams, PolicyDecideResult,
+        PolicyPendingResult, SearchHits, TaskCancelParams, TaskCancelResult, TaskListParams,
+        TaskListResult,
     };
     use norte_proto::{
         ByteRange, Capabilities, DeleteMode, Entry, Error, TaskId, TaskKind, TaskProgress,
@@ -1657,35 +1727,44 @@ pub mod remote {
     /// Entradas por página al listar un dir remoto (ADR 0017): acota el frame
     /// de respuesta y el tiempo de UNA llamada.
     const LIST_PAGE: u32 = 1000;
-    /// Buffer del canal de hits de una `fs.search` remota. Absorbe el burst de
-    /// lotes que ya coalesció el daemon (`SEARCH_HITS_MAX_BATCH` entries por
-    /// lote) mientras el frontend drena; holgado para que `try_send` no
-    /// descarte por backpressure en el caso normal.
-    const SEARCH_HITS_BUF: usize = 64;
-    /// Tope de lotes de `search.hits` retenidos SIN route (carrera de arranque:
-    /// un lote puede adelantar al registro del route). Acota la memoria ante un
-    /// daemon que emita hits de `task_id`s que este proceso jamás registró.
-    const SEARCH_PENDING_CAP: usize = 64;
-    /// Gracia tras el terminal de una búsqueda antes de retirar su route. En el
-    /// daemon la bomba de hits y la de progreso son tasks INDEPENDIENTES que
-    /// escriben al mismo sink: un `search.hits` puede llegar tras el
-    /// `task.progress` terminal. La gracia deja que esos lotes rezagados aún se
-    /// enruten; pasada, el sender se suelta y `rx` se cierra (parida con el
-    /// embebido). Retirar en seco al terminal perdería el lote rezagado.
-    const SEARCH_ROUTE_GRACE: Duration = Duration::from_millis(500);
+    /// Buffer del canal de lotes de un feed remoto (`search.hits` de una
+    /// `fs.search`, `compare.rows` de una `fs.compare`). Absorbe el burst de
+    /// lotes que ya coalesció el daemon (`SEARCH_HITS_MAX_BATCH` /
+    /// `COMPARE_ROWS_MAX_BATCH` por lote) mientras el frontend drena; holgado
+    /// para que `try_send` no descarte por backpressure en el caso normal.
+    const BATCH_BUF: usize = 64;
+    /// Tope de lotes retenidos SIN route (carrera de arranque: un lote puede
+    /// adelantar al registro del route). Acota la memoria ante un daemon que
+    /// emita lotes de `task_id`s que este proceso jamás registró.
+    ///
+    /// Es POR FEED, no global: cada `BatchRoutes` lleva su propio `pending`, y
+    /// hay dos, así que lo retenido en el peor caso es el doble de este número.
+    const BATCH_PENDING_CAP: usize = 64;
+    /// Gracia tras el terminal de un feed antes de retirar su route. En el
+    /// daemon la bomba de lotes y la de progreso son tasks INDEPENDIENTES que
+    /// escriben al mismo sink: un `search.hits`/`compare.rows` puede llegar
+    /// tras el `task.progress` terminal. La gracia deja que esos lotes
+    /// rezagados aún se enruten; pasada, el sender se suelta y `rx` se cierra
+    /// (parida con el embebido). Retirar en seco al terminal perdería el lote
+    /// rezagado.
+    const BATCH_ROUTE_GRACE: Duration = Duration::from_millis(500);
 
-    /// Enrutado de los lotes de `search.hits` de las búsquedas VIVAS de este
-    /// proceso, por `task_id`. Todo detrás de UN Mutex para que registrar el
-    /// route (drenar lo pendiente + insertar) sea ATÓMICO frente a la bomba —
-    /// sin ventana en la que un lote se pierda entre el drenaje y el insert.
-    #[derive(Default)]
-    struct SearchRoutes {
-        /// `task_id` → sender del `rx` que devolvió [`RemoteBackend::search`].
-        routes: HashMap<u64, mpsc::Sender<SearchHits>>,
+    /// Enrutado de los lotes de UN feed vivo (los `search.hits` de una
+    /// `fs.search`, las `compare.rows` de una `fs.compare`) por `task_id`.
+    /// Todo detrás de UN Mutex para que registrar el route (drenar lo
+    /// pendiente + insertar) sea ATÓMICO frente a la bomba — sin ventana en la
+    /// que un lote se pierda entre el drenaje y el insert.
+    ///
+    /// Genérico en el lote y no duplicado por feed: los dos tienen el mismo
+    /// ciclo de vida (route, carrera de arranque, gracia tras el terminal) y
+    /// dos copias del mismo razonamiento sutil se desincronizan.
+    struct BatchRoutes<T> {
+        /// `task_id` → sender del `rx` que devolvió el método que lo lanzó.
+        routes: HashMap<u64, mpsc::Sender<T>>,
         /// Lotes llegados ANTES de que su route se registrara (carrera de
         /// arranque): el registro los drena en orden. Acotado por
-        /// [`SEARCH_PENDING_CAP`] lotes en total.
-        pending: HashMap<u64, Vec<SearchHits>>,
+        /// [`BATCH_PENDING_CAP`] lotes en total.
+        pending: HashMap<u64, Vec<T>>,
         /// `task_id`s cuyo `task.progress` TERMINAL ya se vio. El terminal puede
         /// ADELANTAR al registro del route (el frame sale del daemon antes que
         /// la respuesta de `fs.search`, y en el cliente la bomba y `search`
@@ -1695,7 +1774,19 @@ pub mod remote {
         terminated: std::collections::HashSet<u64>,
     }
 
-    impl SearchRoutes {
+    // `derive(Default)` exigiría `T: Default`, que un lote no tiene por qué
+    // ser: el mapa vacío no depende del tipo del lote.
+    impl<T> Default for BatchRoutes<T> {
+        fn default() -> Self {
+            Self {
+                routes: HashMap::new(),
+                pending: HashMap::new(),
+                terminated: std::collections::HashSet::new(),
+            }
+        }
+    }
+
+    impl<T> BatchRoutes<T> {
         /// Lotes pendientes retenidos en total (todos los `task_id`).
         fn pending_len(&self) -> usize {
             self.pending.values().map(Vec::len).sum()
@@ -1705,14 +1796,22 @@ pub mod remote {
         /// si crece sin límite, jamás memoria ilimitada ante un daemon hostil).
         /// Devuelve `true` solo en la INSERCIÓN nueva: el caller agenda la
         /// retirada una única vez, sin duplicarla ante terminales repetidos
-        /// (bomba + resync de `task.list`). El set SOLO acumula terminales de
-        /// BÚSQUEDA (ver `route`), así que el tope 256 es realista (haría falta
-        /// 256 búsquedas concurrentes para que el `clear` borre una marca viva).
+        /// (bomba + resync de `task.list`). El set SOLO acumula terminales del
+        /// KIND de este feed (ver `route`), así que el tope 256 es realista
+        /// (harían falta 256 feeds concurrentes para que el `clear` borre una
+        /// marca viva).
         fn mark_terminated(&mut self, id: u64) -> bool {
             if self.terminated.len() >= 256 {
                 self.terminated.clear();
             }
             self.terminated.insert(id)
+        }
+
+        /// Suelta todo (reconexión): los `rx` en vuelo se cierran.
+        fn clear(&mut self) {
+            self.routes.clear();
+            self.pending.clear();
+            self.terminated.clear();
         }
     }
 
@@ -1839,7 +1938,12 @@ pub mod remote {
         /// Compartido por TODOS los clones vía `Inner`: es enrutado (no un
         /// canal one-shot `take_*`), así que una búsqueda lanzada por cualquier
         /// clon recibe sus hits por la bomba única.
-        search_routes: Mutex<SearchRoutes>,
+        search_routes: Mutex<BatchRoutes<SearchHits>>,
+        /// Lo mismo para las `compare.rows` de una `fs.compare` (0.39.0). Mapa
+        /// SEPARADO y no uno compartido: los `task_id` de dos feeds distintos
+        /// no colisionan, pero un mapa único obligaría a un lote-suma en el
+        /// canal y el frontend tendría que filtrar lo que no pidió.
+        compare_routes: Mutex<BatchRoutes<CompareRowsBatch>>,
     }
 
     impl Inner {
@@ -1933,7 +2037,8 @@ pub mod remote {
                     approvals_tx,
                     degraded_tx,
                     seen_approvals: Mutex::new(std::collections::HashSet::new()),
-                    search_routes: Mutex::new(SearchRoutes::default()),
+                    search_routes: Mutex::new(BatchRoutes::default()),
+                    compare_routes: Mutex::new(BatchRoutes::default()),
                 }),
                 foreign_rx: Mutex::new(Some(foreign_rx)),
                 events_rx: Mutex::new(Some(events_rx)),
@@ -2050,7 +2155,7 @@ pub mod remote {
         fn route(&self, snapshot: TaskProgress) {
             let id = snapshot.task_id;
             // Búsqueda terminal: programa la retirada de su route TRAS la gracia
-            // (deja pasar los `search.hits` rezagados; ver `SEARCH_ROUTE_GRACE`).
+            // (deja pasar los `search.hits` rezagados; ver `BATCH_ROUTE_GRACE`).
             // FILTRO POR KIND (obligatorio): solo se marca `terminated` para
             // terminales de BÚSQUEDA. Si se marcara todo, los terminales de
             // copy/move/delete/list ajenos llenarían el set y el `clear(256)`
@@ -2065,18 +2170,40 @@ pub mod remote {
             // es independiente del de `watches`; se toma y suelta aquí, sin
             // anidar. Mejora futura: un cierre ESTRUCTURAL (sentinela «search
             // done» tras drenar los hits) evitaría la gracia por tiempo.
-            if snapshot.state.is_terminal() && snapshot.kind == TaskKind::Search {
-                let schedule = {
-                    let mut sr = self
-                        .inner
-                        .search_routes
-                        .lock()
-                        .expect("search_routes lock sano");
-                    let newly = sr.mark_terminated(id.get());
-                    newly && sr.routes.contains_key(&id.get())
-                };
-                if schedule {
-                    schedule_search_route_removal(&self.inner, id.get());
+            //
+            // `fs.compare` (0.39.0) tiene su propio mapa y el mismo trato: su
+            // kind es `Compare` y sus lotes son `compare.rows`.
+            if snapshot.state.is_terminal() {
+                match snapshot.kind {
+                    TaskKind::Search => {
+                        let schedule = {
+                            let mut sr = self
+                                .inner
+                                .search_routes
+                                .lock()
+                                .expect("search_routes lock sano");
+                            let newly = sr.mark_terminated(id.get());
+                            newly && sr.routes.contains_key(&id.get())
+                        };
+                        if schedule {
+                            schedule_route_removal(&self.inner, id.get(), |i| &i.search_routes);
+                        }
+                    }
+                    TaskKind::Compare => {
+                        let schedule = {
+                            let mut cr = self
+                                .inner
+                                .compare_routes
+                                .lock()
+                                .expect("compare_routes lock sano");
+                            let newly = cr.mark_terminated(id.get());
+                            newly && cr.routes.contains_key(&id.get())
+                        };
+                        if schedule {
+                            schedule_route_removal(&self.inner, id.get(), |i| &i.compare_routes);
+                        }
+                    }
+                    _ => {}
                 }
             }
             let mut watches = self.inner.watches.lock().expect("watches lock sano");
@@ -2583,42 +2710,43 @@ pub mod remote {
         ) -> Result<(TaskRef, mpsc::Receiver<SearchHits>), Error> {
             let result: FsTaskResult = self.call_timed(methods::FS_SEARCH, &params).await?;
             let id = result.task_id;
-            let (tx, rx) = mpsc::channel::<SearchHits>(SEARCH_HITS_BUF);
-            let (already_terminal, discarded) = {
-                let mut sr = self
-                    .inner
-                    .search_routes
-                    .lock()
-                    .expect("search_routes lock sano");
-                // Drena los lotes que se adelantaron al registro (en orden). El
-                // buffer se dimensiona para absorber el arranque; si aun así se
-                // llenara, un lote de UI se pierde (honesto). El log va DESPUÉS
-                // de soltar el guard: este lock lo toma también la bomba (ruta
-                // caliente) y no debe esperar por un `tracing::warn!`.
-                let mut discarded = 0usize;
-                if let Some(early) = sr.pending.remove(&id.get()) {
-                    for hits in early {
-                        if tx.try_send(hits).is_err() {
-                            discarded += 1;
-                        }
-                    }
-                }
-                sr.routes.insert(id.get(), tx);
-                // ¿El terminal ADELANTÓ al registro? Entonces `route` no pudo
-                // programar la retirada (aún no había route): la programa `search`.
-                (sr.terminated.contains(&id.get()), discarded)
-            };
-            if discarded > 0 {
-                tracing::warn!(
-                    task_id = id.get(),
-                    discarded,
-                    "search.hits de arranque descartados (buffer del cliente lleno)"
-                );
-            }
-            if already_terminal {
-                schedule_search_route_removal(&self.inner, id.get());
-            }
+            let rx = register_route(&self.inner, id.get(), methods::SEARCH_HITS, |i| {
+                &i.search_routes
+            });
             Ok((self.own_task(id, TaskKind::Search), rx))
+        }
+
+        /// `fs.compare` (0.39.0, ADR 0048): lanza la Task y devuelve el `rx`
+        /// por el que la bomba enruta los lotes de `compare.rows` de ESTE
+        /// `task_id`. Mismo ciclo de vida que [`Self::search`], incluida la
+        /// carrera de arranque.
+        ///
+        /// Un daemon N-1 (0.38.x) NO tiene el método y contesta
+        /// `METHOD_NOT_FOUND`: se traduce a [`Error::Unsupported`] para que el
+        /// frontend distinga «tu daemon es más viejo» de un fallo real (mismo
+        /// criterio que `undo_report` y que el resync de `policy.pending`).
+        /// `version_compatible` acepta N-1, así que esta combinación no es
+        /// hipotética.
+        pub(super) async fn compare(
+            &self,
+            params: methods::FsCompareParams,
+        ) -> Result<(TaskRef, mpsc::Receiver<CompareRowsBatch>), Error> {
+            let client = self.client().await?;
+            let call = client.call::<_, FsTaskResult>(methods::FS_COMPARE, &params);
+            let result: FsTaskResult = match tokio::time::timeout(CALL_TIMEOUT, call).await {
+                Ok(Err(ClientError::Rpc(ref rpc)))
+                    if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+                {
+                    return Err(Error::Unsupported);
+                }
+                Ok(res) => res.map_err(to_taxonomy)?,
+                Err(_) => return Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let id = result.task_id;
+            let rx = register_route(&self.inner, id.get(), methods::COMPARE_ROWS, |i| {
+                &i.compare_routes
+            });
+            Ok((self.own_task(id, TaskKind::Compare), rx))
         }
 
         /// `policy.undo_session` (M3-4): un humano deshace la sesión de un
@@ -3084,19 +3212,20 @@ pub mod remote {
         }
     }
 
-    /// Enruta UN lote de `search.hits` a su búsqueda por `task_id` (live
-    /// search T5). Si el route existe, envía; `Closed` (el frontend soltó su
-    /// `rx`) retira el route; `Full` descarta el lote con aviso (backpressure:
-    /// el frontend va por detrás — los hits son un feed de UI, no dato
-    /// autoritativo). Sin route todavía (carrera de arranque), lo retiene en
-    /// `pending` acotado para que `RemoteBackend::search` lo drene al
-    /// registrar; `task_id` desconocido con `pending` lleno = descarte con
-    /// traza (un daemon no debería emitir hits de búsquedas que no lanzamos).
-    fn route_search_hits(inner: &Arc<Inner>, hits: SearchHits) {
-        let id = hits.task_id.get();
-        let mut sr = inner.search_routes.lock().expect("search_routes lock sano");
+    /// Enruta UN lote de un feed vivo (`search.hits`, `compare.rows`) a su
+    /// Task por `task_id`. Si el route existe, envía; `Closed` (el frontend
+    /// soltó su `rx`) retira el route; `Full` descarta el lote con aviso
+    /// (backpressure: el frontend va por detrás — estos lotes son un feed de
+    /// UI, no dato autoritativo). Sin route todavía (carrera de arranque), lo
+    /// retiene en `pending` acotado para que el método que lo lanzó lo drene
+    /// al registrar; `task_id` desconocido con `pending` lleno = descarte con
+    /// traza (un daemon no debería emitir lotes de Tasks que no lanzamos).
+    ///
+    /// `feed` es solo la etiqueta de las trazas.
+    fn route_batch<T>(routes: &Mutex<BatchRoutes<T>>, id: u64, batch: T, feed: &'static str) {
+        let mut sr = routes.lock().expect("batch routes lock sano");
         if let Some(tx) = sr.routes.get(&id) {
-            match tx.try_send(hits) {
+            match tx.try_send(batch) {
                 Ok(()) => {}
                 Err(mpsc::error::TrySendError::Closed(_)) => {
                     // El frontend soltó su Receiver: el route ya no sirve.
@@ -3105,30 +3234,92 @@ pub mod remote {
                 Err(mpsc::error::TrySendError::Full(_)) => {
                     tracing::warn!(
                         task_id = id,
-                        "search.hits: buffer del cliente lleno, lote descartado (backpressure)"
+                        feed,
+                        "buffer del cliente lleno, lote descartado (backpressure)"
                     );
                 }
             }
-        } else if sr.pending_len() < SEARCH_PENDING_CAP {
-            sr.pending.entry(id).or_default().push(hits);
+        } else if sr.pending_len() < BATCH_PENDING_CAP {
+            sr.pending.entry(id).or_default().push(batch);
         } else {
             tracing::debug!(
                 task_id = id,
-                "search.hits sin route y pending lleno: descartado"
+                feed,
+                "lote sin route y pending lleno: descartado"
             );
         }
     }
 
-    /// Programa la retirada del route de una búsqueda terminal tras
-    /// [`SEARCH_ROUTE_GRACE`]. Sostiene un [`Weak`] (no mantiene vivo a
+    /// Registra el route de un feed recién lanzado y devuelve su `rx`.
+    ///
+    /// Orden ANTI-CARRERA: el route se registra ANTES de que puedan llegar más
+    /// lotes. La bomba (otra task) puede haber enrutado ya lotes que
+    /// adelantaron a la respuesta del método —el frame puede salir del daemon
+    /// antes que la respuesta de `fs.search`/`fs.compare`, y en el cliente la
+    /// bomba y la llamada corren en paralelo—: esos lotes se quedaron en
+    /// `pending`. El registro (drenar `pending` + insertar el route) es
+    /// ATÓMICO bajo el lock, así que ni un lote se pierde entre ambos pasos.
+    /// Es el mismo patrón con el que `own_task` cierra la carrera del terminal
+    /// adelantado vía el anillo `finished`.
+    ///
+    /// Si el TERMINAL se adelantó al registro, `route` no pudo programar la
+    /// retirada (aún no había route): la programa aquí.
+    fn register_route<T: Send + 'static>(
+        inner: &Arc<Inner>,
+        id: u64,
+        feed: &'static str,
+        sel: fn(&Inner) -> &Mutex<BatchRoutes<T>>,
+    ) -> mpsc::Receiver<T> {
+        let (tx, rx) = mpsc::channel::<T>(BATCH_BUF);
+        let (already_terminal, discarded) = {
+            let mut sr = sel(inner).lock().expect("batch routes lock sano");
+            // Drena los lotes que se adelantaron al registro (en orden). El
+            // buffer se dimensiona para absorber el arranque; si aun así se
+            // llenara, un lote de UI se pierde (honesto). El log va DESPUÉS de
+            // soltar el guard: este lock lo toma también la bomba (ruta
+            // caliente) y no debe esperar por un `tracing::warn!`.
+            let mut discarded = 0usize;
+            if let Some(early) = sr.pending.remove(&id) {
+                for batch in early {
+                    if tx.try_send(batch).is_err() {
+                        discarded += 1;
+                    }
+                }
+            }
+            sr.routes.insert(id, tx);
+            (sr.terminated.contains(&id), discarded)
+        };
+        if discarded > 0 {
+            tracing::warn!(
+                task_id = id,
+                discarded,
+                feed,
+                "lotes de arranque descartados (buffer del cliente lleno)"
+            );
+        }
+        if already_terminal {
+            schedule_route_removal(inner, id, sel);
+        }
+        rx
+    }
+
+    /// Programa la retirada del route de un feed terminal tras
+    /// [`BATCH_ROUTE_GRACE`]. Sostiene un [`Weak`] (no mantiene vivo a
     /// `Inner`): si el backend ya murió, no hay nada que limpiar. Al retirar el
-    /// sender, el `rx` del frontend se cierra (fin del stream de hits).
-    fn schedule_search_route_removal(inner: &Arc<Inner>, id: u64) {
+    /// sender, el `rx` del frontend se cierra (fin del stream de lotes).
+    ///
+    /// `sel` elige el mapa del feed dentro de `Inner` — un puntero a función,
+    /// para que la task de gracia no capture nada más que el `Weak` y el id.
+    fn schedule_route_removal<T: Send + 'static>(
+        inner: &Arc<Inner>,
+        id: u64,
+        sel: fn(&Inner) -> &Mutex<BatchRoutes<T>>,
+    ) {
         let weak = Arc::downgrade(inner);
         tokio::spawn(async move {
-            tokio::time::sleep(SEARCH_ROUTE_GRACE).await;
+            tokio::time::sleep(BATCH_ROUTE_GRACE).await;
             if let Some(inner) = weak.upgrade() {
-                let mut sr = inner.search_routes.lock().expect("search_routes lock sano");
+                let mut sr = sel(&inner).lock().expect("batch routes lock sano");
                 sr.routes.remove(&id);
                 sr.pending.remove(&id);
                 sr.terminated.remove(&id);
@@ -3202,7 +3393,26 @@ pub mod remote {
                         }
                     };
                     let Some(inner) = weak.upgrade() else { return };
-                    route_search_hits(&inner, hits);
+                    let id = hits.task_id.get();
+                    route_batch(&inner.search_routes, id, hits, methods::SEARCH_HITS);
+                    continue;
+                }
+                // Lote de filas de una comparación viva (0.39.0): mismo trato.
+                if n.method == methods::COMPARE_ROWS {
+                    let Some(params) = n.params else {
+                        tracing::debug!("compare.rows sin params: descartada");
+                        continue;
+                    };
+                    let rows = match serde_json::from_value::<CompareRowsBatch>(params) {
+                        Ok(rows) => rows,
+                        Err(e) => {
+                            tracing::debug!(error = %e, "compare.rows malformada: descartada");
+                            continue;
+                        }
+                    };
+                    let Some(inner) = weak.upgrade() else { return };
+                    let id = rows.task_id.get();
+                    route_batch(&inner.compare_routes, id, rows, methods::COMPARE_ROWS);
                     continue;
                 }
                 if n.method != methods::TASK_PROGRESS {
@@ -3235,20 +3445,26 @@ pub mod remote {
                 degraded_rx: Mutex::new(None),
             };
             *backend.inner.client.write().await = None;
-            // El stream de hits de una búsqueda NO sobrevive a la reconexión:
-            // la bomba de hits del daemon apuntaba al `conn_id` viejo (muerto).
-            // Suelta todos los routes → los `rx` de las búsquedas en vuelo se
-            // cierran (el frontend infiere el fin por el terminal de la Task,
-            // reconciliado por el resync de `task.list`).
+            // Los feeds vivos (hits de una búsqueda, filas de una comparación)
+            // NO sobreviven a la reconexión: la bomba del daemon apuntaba al
+            // `conn_id` viejo (muerto). Suelta todos los routes → los `rx` en
+            // vuelo se cierran (el frontend infiere el fin por el terminal de
+            // la Task, reconciliado por el resync de `task.list`).
             {
                 let mut sr = backend
                     .inner
                     .search_routes
                     .lock()
                     .expect("search_routes lock sano");
-                sr.routes.clear();
-                sr.pending.clear();
-                sr.terminated.clear();
+                sr.clear();
+            }
+            {
+                let mut cr = backend
+                    .inner
+                    .compare_routes
+                    .lock()
+                    .expect("compare_routes lock sano");
+                cr.clear();
             }
             let _ = backend.inner.events_tx.send(ConnEvent::Lost);
             drop(backend);
@@ -3306,7 +3522,8 @@ pub mod remote {
                 approvals_tx,
                 degraded_tx,
                 seen_approvals: Mutex::new(std::collections::HashSet::new()),
-                search_routes: Mutex::new(SearchRoutes::default()),
+                search_routes: Mutex::new(BatchRoutes::default()),
+                compare_routes: Mutex::new(BatchRoutes::default()),
             })
         }
 
@@ -3373,7 +3590,7 @@ pub mod remote {
         /// resync— no vuelve a spawnear la task de gracia).
         #[test]
         fn mark_terminated_solo_true_en_insercion_nueva() {
-            let mut sr = SearchRoutes::default();
+            let mut sr = BatchRoutes::<SearchHits>::default();
             assert!(sr.mark_terminated(1), "primera vez: recién insertada");
             assert!(!sr.mark_terminated(1), "repetida: no reagenda");
             assert!(sr.mark_terminated(2), "otro id: recién insertado");
@@ -3403,7 +3620,8 @@ pub mod remote {
                 approvals_tx,
                 degraded_tx,
                 seen_approvals: Mutex::new(std::collections::HashSet::new()),
-                search_routes: Mutex::new(SearchRoutes::default()),
+                search_routes: Mutex::new(BatchRoutes::default()),
+                compare_routes: Mutex::new(BatchRoutes::default()),
             });
             let backend = RemoteBackend {
                 inner: Arc::clone(&inner),

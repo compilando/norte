@@ -723,7 +723,11 @@ pub const SEARCH_HITS_MAX_BATCH: usize = 256;
 /// significaría nada). Lo que sí hace es LEER dos árboles enteros, y con el
 /// rung de hash leer su CONTENIDO — más de lo que revela un listado —, así que
 /// va sujeto al gate de lectura sobre AMBAS raíces y el hash exige además
-/// scope de contenido. Dos raíces que resuelven al mismo provider y path son
+/// scope de contenido — que hoy significa un scope vivo sobre la raíz que
+/// conceda `copy` o `move`, las dos ops que no se ejecutan sin leer bytes. La
+/// denegación es la categoría gruesa de siempre (`out-of-scope`), la misma que
+/// para una raíz fuera de scope: si el remedio es pedir `copy`, lo dice esta
+/// línea, no el error. Dos raíces que resuelven al mismo provider y path son
 /// `-32602`: comparar algo contra sí mismo durante una hora no es una
 /// petición, es un error de quien llama.
 ///
@@ -749,6 +753,12 @@ pub const FS_COMPARE: &str = "fs.compare";
 /// terminal y totales finales, así que un cliente compara lo que recibió con
 /// ese número y sabe si le falta algo. Un plan de sincronización (spec 2) que
 /// vaya a ESCRIBIR a partir de estas filas tiene que hacer esa comprobación.
+///
+/// CUÁNDO hacerla: el snapshot terminal puede ADELANTAR al último lote de
+/// filas —la bomba de filas y la de progreso son tasks independientes que
+/// escriben al mismo sink—, así que comparar en el instante en que llega el
+/// terminal denuncia pérdidas que no hubo. Se compara cuando el flujo de
+/// filas se ha agotado.
 pub const COMPARE_ROWS: &str = "compare.rows";
 /// Tope de filas por notificación [`COMPARE_ROWS`] (coalescing server-side,
 /// el mismo número y el mismo motivo que [`SEARCH_HITS_MAX_BATCH`]: un millón

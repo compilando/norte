@@ -342,8 +342,14 @@ impl Shared {
     /// [`Self::broadcast_where`]: un dueño que no drena su outbox (llena) pierde
     /// la suscripción y morirá en su próximo response — el backlog nunca crece
     /// sin límite.
-    fn send_to_conn(&self, conn_id: u64, frame: &Arc<[u8]>) {
-        send_to_conn_impl(&self.subscribers, conn_id, frame);
+    ///
+    /// Devuelve `false` si el frame NO se entregó (conexión desaparecida o
+    /// recién expulsada). Sirve para que una bomba de feed dirigido deje de
+    /// producir: seguir comparando dos árboles durante una hora para un dueño
+    /// que ya no existe es trabajo tirado y un permiso del scheduler
+    /// retenido.
+    fn send_to_conn(&self, conn_id: u64, frame: &Arc<[u8]>) -> bool {
+        send_to_conn_impl(&self.subscribers, conn_id, frame)
     }
 
     fn broadcast_where(&self, frame: &Arc<[u8]>, wants: impl Fn(&Subscriber) -> bool) {
@@ -371,22 +377,29 @@ impl Shared {
 /// Núcleo testeable de [`Shared::send_to_conn`]: envía `frame` a la conexión
 /// `conn_id` de `subs` (si existe) y RETIRA la entrada si su receptor murió o
 /// no drena (outbox llena) — mismo criterio de expulsión que el broadcast.
-fn send_to_conn_impl(subs: &Mutex<HashMap<u64, Subscriber>>, conn_id: u64, frame: &Arc<[u8]>) {
+///
+/// `true` = entregado.
+fn send_to_conn_impl(
+    subs: &Mutex<HashMap<u64, Subscriber>>,
+    conn_id: u64,
+    frame: &Arc<[u8]>,
+) -> bool {
     let mut subs = subs.lock().expect("subscribers lock sano");
-    let remove = match subs.get(&conn_id) {
-        None => return,
+    let (delivered, remove) = match subs.get(&conn_id) {
+        None => return false,
         Some(s) => match s.tx.try_send(Arc::clone(frame)) {
-            Ok(()) => false,
+            Ok(()) => (true, false),
             Err(mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!(conn = conn_id, "dueño de búsqueda sin drenar: expulsado");
-                true
+                (false, true)
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => true,
+            Err(mpsc::error::TrySendError::Closed(_)) => (false, true),
         },
     };
     if remove {
         subs.remove(&conn_id);
     }
+    delivered
 }
 
 /// El daemon enlazado a su socket, listo para [`Daemon::run`].
@@ -2874,6 +2887,154 @@ fn read_gate(
     Ok(())
 }
 
+/// Gate de CONTENIDO para agentes (`fs.compare` con el rung de hash, C6):
+/// [`read_gate`] más la exigencia de que el scope conceda una op que maneje
+/// BYTES ([`ScopeRegistry::covers_content`](crate::policy::ScopeRegistry::covers_content)).
+///
+/// Se aplica ADEMÁS del gate de lectura, jamás en su lugar: la lectura decide
+/// si el actor puede mirar el subtree, esta decide si puede hacer que UNA
+/// llamada lea los dos árboles ENTEROS. Un `User` (humano) no se sandboxea y
+/// cualquier actor que no sea `User`/`Agent` se deniega, igual que allí.
+///
+/// El veredicto es el mismo `PolicyDenied` con la categoría gruesa: quien
+/// pide de más no se entera de qué puerta le faltaba, solo de que le falta
+/// scope (sin fuga en el error ni en la traza).
+fn content_gate(
+    actor: &Actor,
+    path: &norte_proto::VPath,
+    shared: &Arc<Shared>,
+) -> Result<(), RpcError> {
+    use crate::policy::{DenyReason, ScopeVerdict};
+    #[allow(clippy::match_wildcard_for_single_variants)]
+    let denied: Option<DenyReason> = match actor {
+        Actor::User => None,
+        Actor::Agent { session } => {
+            match shared.scopes.covers_content(session, path, Instant::now()) {
+                ScopeVerdict::Within => None,
+                ScopeVerdict::Expired => Some(DenyReason::ScopeExpired),
+                ScopeVerdict::OutOfScope => Some(DenyReason::OutOfScope),
+            }
+        }
+        _ => Some(DenyReason::OutOfScope),
+    };
+    if let Some(reason) = denied {
+        tracing::warn!(
+            rule = reason.rule_id(),
+            "lectura de CONTENIDO sin scope: denegada (default-deny)"
+        );
+        return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+            rule: reason.rule_id().to_owned(),
+        }));
+    }
+    Ok(())
+}
+
+/// `fs.compare` (0.39.0, ADR 0048): compara dos árboles como Task cancelable.
+/// Las FILAS llegan por `compare.rows` SOLO a la conexión `conn_id` que la
+/// lanzó (envío dirigido, jamás broadcast — mismo criterio que `search.hits`).
+///
+/// NO muta nada: sin journal, sin undo, no se escribe un byte. **Regla dura 4
+/// no aplica** — dicho aquí para que una revisión posterior no pida una
+/// entrada de journal que no significaría nada.
+///
+/// GATE. Comparar LEE dos árboles enteros, así que hay dos puertas:
+/// - [`read_gate`] sobre **AMBAS** raíces (#80). Una sola no basta: el árbol
+///   que no está bajo scope se listaría igual, y sus nombres viajarían en las
+///   filas.
+/// - [`content_gate`] sobre ambas **cuando `criteria.hash` está encendido**:
+///   ese rung pasa cada byte de cada fichero emparejado por un sha256, que es
+///   más de lo que revela un listado (ver la tensión anotada en
+///   `covers_content`).
+///
+/// `INVALID_PARAMS` SIN crear Task, con la misma forma que los criterios
+/// inválidos de `fs.search`:
+/// - Dos raíces IGUALES: comparar algo contra sí mismo durante una hora no es
+///   una petición, es una errata de quien llama.
+/// - `follow_symlinks: true`: el motor acepta el campo y lo IGNORA, y servir
+///   en silencio un recorrido distinto del pedido es peor que no ofrecerlo.
+///
+/// (Ambos son `-32602` pelado, así que un `Backend` remoto los entrega como
+/// `Internal` mientras el embebido dice `InvalidPath`/`Unsupported`. Es la
+/// misma asimetría que ya tienen los criterios de `fs.search`, y el contrato
+/// publicado en `methods::FS_COMPARE` es el código, no la taxonomía.)
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+async fn handle_fs_compare(
+    params: Option<serde_json::Value>,
+    conn_id: u64,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::FsCompareParams = parse_params(params)?;
+
+    // Gate ANTES de validar params: un actor sin derechos sobre las raíces no
+    // llega a saber si su petición era además incorrecta.
+    read_gate(actor, &p.left, shared)?;
+    read_gate(actor, &p.right, shared)?;
+    if p.criteria.hash {
+        content_gate(actor, &p.left, shared)?;
+        content_gate(actor, &p.right, shared)?;
+    }
+
+    if p.left == p.right {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "fs.compare: left and right resolve to the same root",
+        ));
+    }
+    if p.follow_symlinks {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "fs.compare: follow_symlinks is not supported (link targets are compared as bytes)",
+        ));
+    }
+
+    let (handle, mut rx) = shared
+        .engine
+        .compare_as(p, actor.clone())
+        .await
+        .map_err(RpcError::from)?;
+    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
+    // `compare_as`) y este register — la Task jamás corre FUERA de
+    // `shared.tasks` (con task.list/cancel y contando contra los topes). Quien
+    // añada un await aquí rompe esa garantía.
+    let task_id = register_task_id(shared, handle, actor.clone())?;
+
+    // Bomba de FILAS: drena el canal del walk y enruta cada lote como
+    // `compare.rows` SOLO al dueño. Muere sola cuando el walk cierra `tx`
+    // (terminal, cancel o receptor —el propio dueño— desaparecido).
+    //
+    // Y al revés: en cuanto un lote NO se entrega —el dueño se fue, o no
+    // drenaba su outbox y el daemon lo expulsó— la bomba PARA. Al soltar `rx`,
+    // el walk ve `ReceiverGone` y termina. Sin esto, una comparación de tres
+    // horas seguiría leyendo dos árboles (y hasheándolos) para nadie,
+    // reteniendo su permiso del scheduler frente al resto del trabajo de ese
+    // scheme. `fs.compare` es el caso que lo pide: a diferencia de
+    // `fs.search`, no tiene `max_hits` que lo acote.
+    //
+    // Lo que esto NO arregla (#155): al expulsado se le lleva por delante
+    // también el `task.progress` terminal, que es la única señal con la que
+    // podría saber que le faltan filas.
+    let shared_pump = Arc::clone(shared);
+    tokio::spawn(async move {
+        while let Some(rows) = rx.recv().await {
+            let notif = Notification {
+                jsonrpc: norte_proto::wire::JsonRpcVersion,
+                method: methods::COMPARE_ROWS.into(),
+                params: serde_json::to_value(&rows).ok(),
+            };
+            let Ok(frame) = encode_frame(&notif) else {
+                continue;
+            };
+            if !shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice())) {
+                tracing::debug!(conn = conn_id, "compare.rows sin dueño: se para el walk");
+                break;
+            }
+        }
+    });
+
+    to_value(&methods::FsTaskResult { task_id })
+}
+
 /// `fs.search` (0.18.0, live search): búsqueda recursiva de nombre/contenido
 /// bajo `root` como Task cancelable. Los HITS llegan por `search.hits` SOLO a
 /// la conexión `conn_id` que la lanzó (envío dirigido, jamás broadcast — son
@@ -2942,7 +3103,13 @@ async fn handle_fs_search(
                 params: serde_json::to_value(&hits).ok(),
             };
             if let Ok(frame) = encode_frame(&notif) {
-                shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice()));
+                // El desenlace se ignora A PROPÓSITO: la bomba de `fs.compare`
+                // sí para cuando el dueño desaparece, pero cambiar eso aquí
+                // cambiaría el comportamiento de una búsqueda viva, que no es
+                // lo que este cambio venía a tocar. `fs.search` además se
+                // acota con `max_hits`.
+                let _delivered =
+                    shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice()));
             }
         }
     });
@@ -3042,6 +3209,9 @@ async fn dispatch_fs_task(
         // fs.search (0.18.0): los HITS son del que la lanzó → necesita conn_id
         // para el envío dirigido (jamás broadcast).
         methods::FS_SEARCH => handle_fs_search(req.params, conn_id, &actor, shared).await,
+        // fs.compare (0.39.0): las FILAS son del que la lanzó → conn_id, igual
+        // que `fs.search` (envío dirigido, jamás broadcast).
+        methods::FS_COMPARE => handle_fs_compare(req.params, conn_id, &actor, shared).await,
         methods::FS_STAT => {
             let p: methods::FsStatParams = parse_params(req.params)?;
             read_gate(&actor, &p.path, shared)?; // #80

@@ -264,6 +264,72 @@ impl ScopeRegistry {
             ScopeVerdict::OutOfScope
         }
     }
+
+    /// Membresía de raíz para una lectura de CONTENIDO amplificada
+    /// (`fs.compare` con el rung de hash, C6): como [`Self::covers_read`],
+    /// pero exigiendo además que el scope conceda una op que maneje BYTES —
+    /// hoy `copy` o `move`, las dos que no pueden ejecutarse sin leer el
+    /// contenido del origen.
+    ///
+    /// Por qué existe una segunda puerta: el rung de hash es un **oráculo de
+    /// igualdad sobre contenido**. Contesta «¿son iguales estos dos ficheros?»
+    /// sin devolver un byte, y lo que lo hace peligroso no es leer, es poder
+    /// PONER el candidato: quien coloca su conjetura en un lado y pregunta,
+    /// lee el secreto del otro a fuerza de preguntar. Colocar un fichero
+    /// exige `copy` o `move` — exactamente lo que esta puerta pide, así que la
+    /// puerta cae justo sobre el abuso. Y el agente con el caso de uso
+    /// legítimo —«¿funcionó la copia que acabo de hacer?»— tiene `copy` por
+    /// construcción.
+    ///
+    /// NO es un argumento de amplificación, y conviene no escribirlo como si
+    /// lo fuera: `fs.search` con criterio de CONTENIDO lee hoy el mismo árbol
+    /// entero bajo [`Self::covers_read`] a secas, y encima devuelve
+    /// `MatchInfo::preview`, o sea texto de verdad. Comparado con eso, un bit
+    /// por pareja no es la amplificación mayor, sino la menor.
+    ///
+    /// LA INCONSISTENCIA, dicha en voz alta: `fs.read` y `fs.search` con
+    /// contenido pasan solo por [`Self::covers_read`], así que un agente con
+    /// scope de solo `mkdir` puede leer bytes por esas dos vías aunque no
+    /// pueda pedir esta comparación. La respuesta correcta NO es aflojar esta
+    /// puerta para igualarlas: es un `PolicyOp::Read`/de contenido que cierre
+    /// las tres a la vez, que es lo que #80 dejó fuera de alcance. Mientras
+    /// tanto se prefiere la puerta estrecha en lo NUEVO, porque aflojarla
+    /// después es aditivo y apretarla no.
+    ///
+    /// `Expired` con el mismo criterio que [`Self::covers_read`]: solo si un
+    /// scope que HABRÍA concedido contenido está vencido.
+    ///
+    /// # Panics
+    /// Solo si el lock interno queda envenenado.
+    #[must_use]
+    pub fn covers_content(&self, session: &str, path: &VPath, now: Instant) -> ScopeVerdict {
+        let map = self.inner.lock().expect("scope registry lock");
+        let Some(scopes) = map.get(session) else {
+            return ScopeVerdict::OutOfScope;
+        };
+        let mut saw_expired = false;
+        for s in scopes {
+            // Cubre la raíz Y concede una op que mueve bytes; lo demás no
+            // cuenta ni para `Expired` (un scope de `mkdir` vencido no es un
+            // permiso de contenido que caducó: nunca lo fue).
+            if !s.roots.iter().any(|r| is_under(r, path)) {
+                continue;
+            }
+            if !(s.ops.allows(PolicyOp::Copy) || s.ops.allows(PolicyOp::Move)) {
+                continue;
+            }
+            if s.is_expired(now) {
+                saw_expired = true;
+            } else {
+                return ScopeVerdict::Within;
+            }
+        }
+        if saw_expired {
+            ScopeVerdict::Expired
+        } else {
+            ScopeVerdict::OutOfScope
+        }
+    }
 }
 
 /// Veredicto del motor.
@@ -556,6 +622,77 @@ mod tests {
         assert_eq!(
             reg.covers_read("s1", &vp("mem:///proj/x"), Instant::now()),
             ScopeVerdict::Within,
+        );
+    }
+
+    #[test]
+    fn covers_content_exige_una_op_que_maneje_bytes() {
+        let reg = ScopeRegistry::new();
+        // `mkdir` toca la estructura, no los bytes: cubre lectura pero NO
+        // contenido. `copy` mueve bytes: cubre las dos.
+        reg.grant(
+            "solo-mkdir",
+            Scope::forever(vec![vp("mem:///d")], OpSet::of(&["mkdir"])),
+        );
+        reg.grant(
+            "con-copy",
+            Scope::forever(vec![vp("mem:///d")], OpSet::of(&["copy"])),
+        );
+        reg.grant(
+            "con-move",
+            Scope::forever(vec![vp("mem:///d")], OpSet::of(&["move"])),
+        );
+        let now = Instant::now();
+        assert_eq!(
+            reg.covers_read("solo-mkdir", &vp("mem:///d/x"), now),
+            ScopeVerdict::Within,
+            "la lectura sigue siendo op-independiente"
+        );
+        assert_eq!(
+            reg.covers_content("solo-mkdir", &vp("mem:///d/x"), now),
+            ScopeVerdict::OutOfScope,
+        );
+        assert_eq!(
+            reg.covers_content("con-copy", &vp("mem:///d/x"), now),
+            ScopeVerdict::Within,
+        );
+        assert_eq!(
+            reg.covers_content("con-move", &vp("mem:///d/x"), now),
+            ScopeVerdict::Within,
+        );
+        // La raíz también manda: `copy` sobre /d no da contenido en /otro.
+        assert_eq!(
+            reg.covers_content("con-copy", &vp("mem:///otro/x"), now),
+            ScopeVerdict::OutOfScope,
+        );
+    }
+
+    #[test]
+    fn covers_content_expirado_que_habria_cubierto_da_expired() {
+        let reg = ScopeRegistry::new();
+        let past = Instant::now()
+            .checked_sub(std::time::Duration::from_secs(1))
+            .expect("pasado");
+        // ORDEN deliberado: `grant` PODA los scopes ya expirados de la sesión
+        // al conceder, así que el vencido tiene que entrar el último para que
+        // los dos convivan. El vivo cubre la raíz pero no maneja bytes: ni
+        // convierte el veredicto en `Within` ni tapa el `Expired` del que sí
+        // la manejaba.
+        reg.grant(
+            "s1",
+            Scope::forever(vec![vp("mem:///d")], OpSet::of(&["mkdir"])),
+        );
+        reg.grant(
+            "s1",
+            Scope {
+                roots: vec![vp("mem:///d")],
+                ops: OpSet::of(&["copy"]),
+                expires_at: Some(past),
+            },
+        );
+        assert_eq!(
+            reg.covers_content("s1", &vp("mem:///d/x"), Instant::now()),
+            ScopeVerdict::Expired,
         );
     }
 }
