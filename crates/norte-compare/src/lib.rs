@@ -17,6 +17,10 @@
 //!   nombre del otro, y qué dos nombres de un mismo lado colapsan en uno. Los
 //!   bytes originales de cada nombre sobreviven intactos (regla dura 1): la
 //!   clave existe SOLO para emparejar.
+//! - [`cascade`] — la decisión: una pareja emparejada entra y sale un
+//!   veredicto, el rung que lo decidió y lo que ese rung vale. Pura y
+//!   síncrona: lo que exige I/O (destino de un symlink, sha256) entra ya
+//!   averiguado.
 //!
 //! El vocabulario de las filas —veredicto, criterio y confianza— vive en
 //! `norte-proto` y se reexporta aquí para que quien use el motor no tenga que
@@ -25,8 +29,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod cascade;
 pub mod key;
 
+pub use cascade::{Decision, HashOutcome, Prefetched, decide};
 pub use key::{PairKey, PairName, SideIndex, Sides, index_side, key_for};
 
 pub use norte_proto::methods::{
