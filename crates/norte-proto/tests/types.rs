@@ -993,13 +993,13 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.38.0 (task V3.5, #131: Volume::label pasa a bytes): acepta 0.38.x
-    // (N) y 0.37.x (N-1), rechaza 0.36.x (N-2) — la ventana se desplaza con
-    // el bump, no se ensancha.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.38.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.37.0"), "N-1");
+    // 0.39.0 (fs.compare, ADR 0048): acepta 0.39.x (N) y 0.38.x (N-1),
+    // rechaza 0.37.x (N-2) — la ventana se desplaza con el bump, no se
+    // ensancha, y que el bump sea ADITIVO no la ensancha tampoco.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.39.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.38.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.36.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.37.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -1511,4 +1511,176 @@ fn ids_de_ejemplo_bien_formados() {
     ] {
         assert!(!is_valid_attr_id(hostil), "{hostil:?} debe rechazarse");
     }
+}
+
+// ---------- fs.compare (0.39.0) ----------
+
+/// Un [`CompareRow`] mínimo sobre el que cada test cambia solo lo suyo.
+fn compare_row(
+    verdict: norte_proto::methods::CompareVerdict,
+    left: Option<Entry>,
+    right: Option<Entry>,
+) -> norte_proto::methods::CompareRow {
+    use norte_proto::methods::{CompareConfidence, CompareCriterion, CompareRow};
+    CompareRow {
+        id: 1,
+        left,
+        right,
+        verdict,
+        criterion: CompareCriterion::Presence,
+        confidence: CompareConfidence::Certain,
+        newer: None,
+        reason: None,
+        side: None,
+    }
+}
+
+fn compare_entry(wire: &str) -> Entry {
+    Entry {
+        path: vpath(wire),
+        kind: EntryKind::File,
+        size: Some(1),
+        mtime_ms: Some(0),
+        attrs: std::collections::BTreeMap::new(),
+    }
+}
+
+/// Un daemon N+1 que añade un criterio no puede romper a un frontend N-1: el
+/// token desconocido cae en la variante forward-compat, no da error.
+#[test]
+fn unknown_enum_tokens_degrade_and_do_not_error() {
+    use norte_proto::methods::{CompareCriterion, CompareReason, CompareVerdict};
+    let v: CompareVerdict = serde_json::from_str("\"teleported\"").expect("degrades");
+    assert_eq!(v, CompareVerdict::Unknown);
+    let c: CompareCriterion = serde_json::from_str("\"vibes\"").expect("degrades");
+    assert_eq!(c, CompareCriterion::Unknown);
+    let r: CompareReason = serde_json::from_str("\"gremlins\"").expect("degrades");
+    assert_eq!(r, CompareReason::Unknown);
+    let s: norte_proto::methods::Side = serde_json::from_str("\"middle\"").expect("degrades");
+    assert_eq!(s, norte_proto::methods::Side::Unknown);
+}
+
+/// `Unknown` en CONFIDENCE es un VALOR — «el provider no puede decirlo» —, así
+/// que el fallback forward-compat de ese enum tuvo que llamarse de otra manera.
+/// Perder la distinción convertiría una respuesta honesta en un desajuste de
+/// protocolo.
+#[test]
+fn confidence_unknown_is_a_value_not_the_fallback() {
+    use norte_proto::methods::CompareConfidence;
+    let known: CompareConfidence = serde_json::from_str("\"unknown\"").expect("a real value");
+    assert_eq!(known, CompareConfidence::Unknown);
+    let newer: CompareConfidence = serde_json::from_str("\"quantum\"").expect("degrades");
+    assert_eq!(newer, CompareConfidence::Unrecognised);
+    assert_ne!(known, newer);
+}
+
+/// La invariante que el wire no sabe expresar: el veredicto determina qué
+/// lados están presentes. Una fila que dice `OnlyLeft` llevando entrada
+/// derecha es un bug de quien la produjo, y aquí es donde se caza.
+#[test]
+fn verdict_determines_which_sides_are_present() {
+    use norte_proto::methods::CompareVerdict;
+    let a = || compare_entry("file:///a");
+    let b = || compare_entry("file:///b");
+    assert!(compare_row(CompareVerdict::OnlyLeft, Some(a()), None).sides_are_consistent());
+    assert!(!compare_row(CompareVerdict::OnlyLeft, Some(a()), Some(b())).sides_are_consistent());
+    assert!(compare_row(CompareVerdict::Same, Some(a()), Some(b())).sides_are_consistent());
+    assert!(!compare_row(CompareVerdict::Same, Some(a()), None).sides_are_consistent());
+    // El resto del vocabulario, por simetría con el de arriba.
+    assert!(compare_row(CompareVerdict::OnlyRight, None, Some(b())).sides_are_consistent());
+    assert!(!compare_row(CompareVerdict::OnlyRight, Some(a()), None).sides_are_consistent());
+    assert!(compare_row(CompareVerdict::Different, Some(a()), Some(b())).sides_are_consistent());
+    assert!(!compare_row(CompareVerdict::Different, None, None).sides_are_consistent());
+    assert!(compare_row(CompareVerdict::TypeMismatch, Some(a()), Some(b())).sides_are_consistent());
+    assert!(!compare_row(CompareVerdict::TypeMismatch, Some(a()), None).sides_are_consistent());
+}
+
+/// Los TRES veredictos sin regla de lados —los dos que describen un problema y
+/// el fallback— no pueden fabricar una: `Ambiguous` nombra una colisión de UN
+/// lado, un `Error` de listado puede no tener entrada que enseñar, y de un
+/// veredicto que este cliente no conoce no se sabe nada. Afirmar lo contrario
+/// haría que un cliente N-1 desconfiara de filas legítimas de un daemon N+1.
+#[test]
+fn problem_verdicts_have_no_side_rule_to_break() {
+    use norte_proto::methods::CompareVerdict;
+    let a = || compare_entry("file:///a");
+    for verdict in [
+        CompareVerdict::Ambiguous,
+        CompareVerdict::Error,
+        CompareVerdict::Unknown,
+    ] {
+        assert!(compare_row(verdict, None, None).sides_are_consistent());
+        assert!(compare_row(verdict, Some(a()), None).sides_are_consistent());
+        assert!(compare_row(verdict, Some(a()), Some(a())).sides_are_consistent());
+    }
+}
+
+/// `reason` responde «por qué» exactamente para los dos veredictos que tienen
+/// un porqué. En cualquier otro sitio es ruido que un cliente tendría que
+/// adivinar.
+#[test]
+fn reason_belongs_to_ambiguous_and_error_only() {
+    use norte_proto::methods::{CompareReason, CompareVerdict};
+    for (verdict, reason, ok) in [
+        (
+            CompareVerdict::Ambiguous,
+            Some(CompareReason::CaseFold),
+            true,
+        ),
+        (CompareVerdict::Error, Some(CompareReason::Unreadable), true),
+        (CompareVerdict::Ambiguous, None, false),
+        (CompareVerdict::Same, Some(CompareReason::CaseFold), false),
+        // El fallback queda EXENTO: un veredicto de N+1 puede traer motivo, y
+        // un cliente N-1 no puede saber si le corresponde.
+        (CompareVerdict::Unknown, Some(CompareReason::CaseFold), true),
+        (CompareVerdict::Unknown, None, true),
+    ] {
+        let mut row = compare_row(verdict, None, None);
+        row.reason = reason;
+        assert_eq!(row.reason_is_consistent(), ok, "{verdict:?} + {reason:?}");
+    }
+}
+
+/// Round-trip de la fila entera y de los params, con lo ausente AUSENTE del
+/// wire (no `null`): la fila viaja millones de veces por `compare.rows`.
+#[test]
+fn compare_row_roundtrip_y_omisiones() {
+    use norte_proto::methods::{CompareRow, CompareVerdict, Side};
+    let mut row = compare_row(
+        CompareVerdict::OnlyLeft,
+        Some(compare_entry("file:///a")),
+        None,
+    );
+    assert_eq!(roundtrip(&row), row);
+    let json = serde_json::to_string(&row).expect("json");
+    for ausente in ["right", "newer", "reason", "side"] {
+        assert!(!json.contains(ausente), "{ausente} no debe viajar: {json}");
+    }
+    row.newer = Some(Side::Right);
+    assert!(serde_json::to_string(&row).expect("json").contains("right"));
+    // Campos desconocidos de un peer N+1 no rompen la fila.
+    let futuro = r#"{"id":9,"verdict":"same","criterion":"size","confidence":"certain",
+                     "campo_del_futuro":true}"#;
+    let row: CompareRow = serde_json::from_str(futuro).expect("tolerante");
+    assert_eq!(row.id, 9);
+    assert!(row.left.is_none() && row.right.is_none());
+}
+
+/// Los criterios: `size` y `mtime` puestos, `hash` NO, y un objeto PARCIAL
+/// completa desde ese default en vez de fallar. Es lo que decide si una
+/// comparación lee contenido, así que el default importa tanto como el tipo.
+#[test]
+fn compare_criteria_default_y_parcial() {
+    use norte_proto::methods::{CompareCriteria, FsCompareParams};
+    let d = CompareCriteria::default();
+    assert!(d.size && d.mtime && !d.hash);
+    let parcial: CompareCriteria = serde_json::from_str(r#"{"hash":true}"#).expect("parcial");
+    assert!(parcial.size && parcial.mtime && parcial.hash);
+
+    let minimo = r#"{"left":"file:///a","right":"file:///b"}"#;
+    let p: FsCompareParams = serde_json::from_str(minimo).expect("params mínimos");
+    assert_eq!(p.criteria, CompareCriteria::default());
+    assert_eq!(p.mtime_tolerance_ms, 2000, "la regla FAT, por defecto");
+    assert!(p.max_depth.is_none() && !p.follow_symlinks);
+    assert_eq!(roundtrip(&p), p);
 }

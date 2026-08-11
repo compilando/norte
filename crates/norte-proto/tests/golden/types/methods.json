@@ -827,5 +827,49 @@
     "fs_type": "nfs4",
     "kind": "network",
     "read_only": true
+  },
+  "compare_rows_batch": {
+    "task_id": 7,
+    "rows": [
+      {
+        "id": 1,
+        "left": {
+          "path": "file:///home/user/origen/informe%FF%FE.dat",
+          "kind": "file",
+          "size": 1234,
+          "mtime_ms": 1720000000000
+        },
+        "verdict": "only_left",
+        "criterion": "presence",
+        "confidence": "certain"
+      }
+    ]
+  },
+  "compare_rows_batch_empty": {
+    "task_id": 7,
+    "rows": []
+  },
+  "fs_compare_params": {
+    "left": "file:///home/user/fotos-a%FF%FE",
+    "right": "sftp://nas/fotos-a%FF%FE",
+    "criteria": {
+      "size": true,
+      "mtime": true,
+      "hash": true
+    },
+    "max_depth": 3,
+    "mtime_tolerance_ms": 0,
+    "follow_symlinks": false
+  },
+  "fs_compare_params_minimo": {
+    "left": "file:///home/user/origen",
+    "right": "file:///home/user/copia",
+    "criteria": {
+      "size": true,
+      "mtime": true,
+      "hash": false
+    },
+    "mtime_tolerance_ms": 2000,
+    "follow_symlinks": false
   }
 }

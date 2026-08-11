@@ -1922,6 +1922,10 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 norte_proto::TaskKind::Mkdir => "mkdir",
                 norte_proto::TaskKind::Embed => "embed",
                 norte_proto::TaskKind::RenameBatch => "rename",
+                // Etiqueta mínima, como la de `Search` en su día: el pane de
+                // comparación llega en C7 de este mismo plan; esto solo evita
+                // que una Task de `fs.compare` se pinte como genérica.
+                norte_proto::TaskKind::Compare => "compare",
                 // `Unknown` es la clase de un daemon N+1 que este proto YA
                 // conocía como desconocida (vía `serde(other)`); el `_` es
                 // `#[non_exhaustive]` (#126) — una variante de un norte-proto

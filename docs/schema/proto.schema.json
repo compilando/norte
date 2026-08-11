@@ -299,6 +299,278 @@
         }
       ]
     },
+    "CompareConfidence": {
+      "description": "Cuánto vale el veredicto de una fila (0.39.0, ADR 0048).\n\nEl vocabulario central del ítem: una comparación DECLARA lo que su criterio\nse ha ganado. Un tamaño distinto PRUEBA bytes distintos (`Certain`); una\nfecha distinta solo lo SUGIERE (`Probable`); un provider que no puede\ncontestar deja `Unknown`, que es una respuesta honesta y no un fallo.\n\n# Por qué el fallback aquí se llama `Unrecognised`\nEn [`CompareVerdict`] y [`CompareCriterion`] el fallback de\n`#[serde(other)]` se llama `Unknown`, la convención de la casa. Aquí\n`Unknown` ya es un VALOR con significado — «el provider no puede decirlo» —\ny «un peer más nuevo dijo algo que no conozco» es un hecho DISTINTO.\nCompartir nombre convertiría una respuesta honesta en un desajuste de\nprotocolo, y al revés.\n\n```\nuse norte_proto::methods::CompareConfidence;\n// `unknown` es un valor REAL del vocabulario...\nlet honesto: CompareConfidence = serde_json::from_str(r#\"\"unknown\"\"#).expect(\"valor real\");\nassert_eq!(honesto, CompareConfidence::Unknown);\n// ...y el fallback forward-compat es OTRO.\nlet futuro: CompareConfidence = serde_json::from_str(r#\"\"quantum\"\"#).expect(\"degrada\");\nassert_eq!(futuro, CompareConfidence::Unrecognised);\nassert_ne!(honesto, futuro);\n```",
+      "oneOf": [
+        {
+          "const": "certain",
+          "description": "El criterio PRUEBA su veredicto (presencia, kind, tamaño distinto,\ndestino de symlink, hash).",
+          "type": "string"
+        },
+        {
+          "const": "probable",
+          "description": "El criterio SUGIERE su veredicto sin probarlo (mtime: dos ficheros con\nla misma fecha pueden tener bytes distintos, y al revés).",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "El provider no puede decirlo: no hay tamaño, no hay fecha fiable (un\narchivo comprimido, un object store cuyo `ETag` solo a veces es un\nhash).\nEs una RESPUESTA, no un error.",
+          "type": "string"
+        },
+        {
+          "const": "unrecognised",
+          "description": "Confianza que este decodificador no conoce (`#[serde(other)]`). NO es\n[`CompareConfidence::Unknown`] — ver el apartado de arriba.",
+          "type": "string"
+        }
+      ]
+    },
+    "CompareCriteria": {
+      "description": "Qué rungs de la cascada corren (0.39.0, ADR 0048).\n\nEl default es el que decide si comparar dos árboles LEE CONTENIDO: `size` y\n`mtime` puestos, `hash` NO. Un usuario que no pidió hashear un terabyte por\nSFTP no debe acabar haciéndolo, así que el rung caro es siempre explícito.\n\nUn objeto PARCIAL en el wire completa desde ese mismo default en vez de\nfallar: un peer que solo quiere encender el hash manda `{\"hash\": true}`.\n\n```\nuse norte_proto::methods::CompareCriteria;\nlet d = CompareCriteria::default();\nassert!(d.size && d.mtime && !d.hash, \"el rung caro es opt-in\");\nlet parcial: CompareCriteria = serde_json::from_str(r#\"{\"hash\":true}\"#).expect(\"parcial\");\nassert_eq!(parcial, CompareCriteria { size: true, mtime: true, hash: true });\n```",
+      "properties": {
+        "hash": {
+          "default": false,
+          "description": "Comparar sha256 del contenido de las parejas que los rungs baratos\ndieron por iguales. Default `false`: LEE los dos ficheros enteros, y en\nel daemon exige además scope de CONTENIDO.",
+          "type": "boolean"
+        },
+        "mtime": {
+          "default": true,
+          "description": "Comparar fechas de modificación bajo tolerancia. Default `true`.",
+          "type": "boolean"
+        },
+        "size": {
+          "default": true,
+          "description": "Comparar tamaños. Default `true`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "CompareCriterion": {
+      "description": "Qué RUNG de la cascada decidió una fila (0.39.0, ADR 0048).\n\nLa cascada va de barato a caro y para en el primer rung que decide, así que\neste campo es también «hasta dónde hubo que llegar». Sin él, `Different` no\ndice si se comparó un tamaño o 40 GB de bytes.\n\n```\nuse norte_proto::methods::CompareCriterion;\nassert_eq!(\n    serde_json::to_string(&CompareCriterion::LinkTarget).expect(\"json\"),\n    r#\"\"link_target\"\"#\n);\nlet futuro: CompareCriterion = serde_json::from_str(r#\"\"etag\"\"#).expect(\"degrada\");\nassert_eq!(futuro, CompareCriterion::Unknown);\n```",
+      "oneOf": [
+        {
+          "const": "presence",
+          "description": "Un lado no existe: no hay nada más que comparar.\n\nEs TAMBIÉN el criterio de las filas que no decidió rung alguno — un\nlistado ilegible, un directorio por encima de\n[`COMPARE_MAX_DIR_ENTRIES`], una colisión de emparejamiento —, por\nconvención y no porque sea cierto: el campo no es opcional (una clave\nnullable en cada fila de un camino que lleva millones no se paga por un\nvalor sobre el que nadie ramifica) y `Unknown` es el fallback de decode,\nque el core no emite jamás. En esas filas lo que informa es\n`verdict: error`/`ambiguous` más [`CompareRow::reason`]; el criterio no\nse lee. Ver ADR 0048, consecuencias negativas.",
+          "type": "string"
+        },
+        {
+          "const": "kind",
+          "description": "Los [`EntryKind`](crate::EntryKind) difieren.",
+          "type": "string"
+        },
+        {
+          "const": "link_target",
+          "description": "Destinos de symlink comparados COMO BYTES (jamás se siguen: sin\nseguimiento no hace falta detectar ciclos, y un enlace cuyo destino\ncambió es una diferencia real).",
+          "type": "string"
+        },
+        {
+          "const": "size",
+          "description": "Tamaños en bytes.",
+          "type": "string"
+        },
+        {
+          "const": "mtime",
+          "description": "Fechas de modificación, bajo la tolerancia de la petición\n([`FsCompareParams::mtime_tolerance_ms`]).",
+          "type": "string"
+        },
+        {
+          "const": "hash",
+          "description": "sha256 en streaming de los dos lados. Solo corre si el llamante lo pidió\ny solo alcanza a las parejas que los rungs baratos dieron por iguales.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Criterio que este decodificador no conoce (`#[serde(other)]`).",
+          "type": "string"
+        }
+      ]
+    },
+    "CompareReason": {
+      "description": "Por qué una fila es [`CompareVerdict::Ambiguous`] o\n[`CompareVerdict::Error`] (0.39.0, ADR 0048). Vocabulario CERRADO: el core\njamás inventa una clase.\n\n```\nuse norte_proto::methods::CompareReason;\nassert_eq!(\n    serde_json::to_string(&CompareReason::DirTooLarge).expect(\"json\"),\n    r#\"\"dir_too_large\"\"#\n);\nlet futuro: CompareReason = serde_json::from_str(r#\"\"solar_flare\"\"#).expect(\"degrada\");\nassert_eq!(futuro, CompareReason::Unknown);\n```",
+      "oneOf": [
+        {
+          "const": "case_fold",
+          "description": "Dos nombres de un mismo lado que solo difieren en mayúsculas colapsan\nporque el OTRO lado no distingue caja.",
+          "type": "string"
+        },
+        {
+          "const": "normalization",
+          "description": "Dos nombres de un mismo lado que colapsan al normalizar a NFC (el\nclásico NFD de macOS junto a su gemelo NFC).",
+          "type": "string"
+        },
+        {
+          "const": "unreadable",
+          "description": "El directorio no se pudo listar (permisos, E/S). Ver\n[`CompareRow::side`].",
+          "type": "string"
+        },
+        {
+          "const": "dir_too_large",
+          "description": "El directorio supera [`COMPARE_MAX_DIR_ENTRIES`] entradas.",
+          "type": "string"
+        },
+        {
+          "const": "read_failed",
+          "description": "Una lectura falló a mitad del rung de hash. Ver [`CompareRow::side`].",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Motivo que este decodificador no conoce (`#[serde(other)]`).",
+          "type": "string"
+        }
+      ]
+    },
+    "CompareRow": {
+      "description": "UNA fila de una comparación (0.39.0, ADR 0048): una pareja, su veredicto, y\ncuánto vale ese veredicto.\n\nLa fila se emite FINAL: ninguna se corrige después, así que el wire no\nnecesita actualizaciones de fila ni el panel reconciliación.\n\nLleva los dos [`Entry`] ENTEROS y no dos paths porque el panel pinta\ntamaño, fecha y los BYTES del nombre de cada lado, y el walk acaba de\nlistar ambos directorios: refetchear por fila convertiría un listado en N\n`fs.stat` sobre dos providers, con el árbol ya cambiando debajo.\n\n```\nuse norte_proto::methods::{\n    CompareConfidence, CompareCriterion, CompareRow, CompareVerdict,\n};\nuse norte_proto::{Entry, EntryKind, VPath};\nlet izquierda = Entry {\n    path: VPath::parse(\"file:///a/informe%FF%FE.dat\").expect(\"path\"),\n    kind: EntryKind::File,\n    size: Some(7),\n    mtime_ms: None,\n    attrs: Default::default(),\n};\nlet row = CompareRow {\n    id: 1,\n    left: Some(izquierda),\n    right: None,\n    verdict: CompareVerdict::OnlyLeft,\n    criterion: CompareCriterion::Presence,\n    confidence: CompareConfidence::Certain,\n    newer: None,\n    reason: None,\n    side: None,\n};\nassert!(row.sides_are_consistent() && row.reason_is_consistent());\n// Lo ausente NO viaja: ni `null` ni clave (comprobado sobre las CLAVES\n// del objeto, no por substring: un path puede contener \"right\").\nlet json = serde_json::to_string(&row).expect(\"json\");\nlet obj: serde_json::Value = serde_json::from_str(&json).expect(\"objeto\");\nfor ausente in [\"right\", \"newer\", \"reason\", \"side\"] {\n    assert!(obj.get(ausente).is_none(), \"{ausente} no debe viajar: {json}\");\n}\n// Y el nombre no-UTF8 vuelve byte a byte (regla dura 1).\nlet back: CompareRow = serde_json::from_str(&json).expect(\"json\");\nassert_eq!(back, row);\n```",
+      "properties": {
+        "confidence": {
+          "$ref": "#/$defs/CompareConfidence",
+          "description": "Cuánto vale ese veredicto."
+        },
+        "criterion": {
+          "$ref": "#/$defs/CompareCriterion",
+          "description": "Qué rung lo decidió."
+        },
+        "id": {
+          "description": "Identificador monótono dentro de UNA comparación. La selección del\npanel se ancla a él: un filtro esconde filas, jamás las renumera.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "left": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Entry"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "La entrada del lado izquierdo, si la hay."
+        },
+        "newer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Side"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Qué lado es más NUEVO, cuando la fecha decidió la fila. Nada de esta\nspec lo lee: la spec 2 (el plan de sincronización) lo necesita para\nproponer una dirección, y producirlo aquí no cuesta nada."
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompareReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "El porqué, para los DOS veredictos que tienen porqué\n([`CompareVerdict::Ambiguous`] y [`CompareVerdict::Error`]). `None`\npara cualquier otro — ver [`CompareRow::reason_is_consistent`]."
+        },
+        "right": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Entry"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "La entrada del lado derecho, si la hay."
+        },
+        "side": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Side"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "El lado al que aplica `reason`, cuando aplica a uno solo: una lectura\nque falló únicamente a la izquierda."
+        },
+        "verdict": {
+          "$ref": "#/$defs/CompareVerdict",
+          "description": "Qué concluyó la comparación."
+        }
+      },
+      "required": [
+        "id",
+        "verdict",
+        "criterion",
+        "confidence"
+      ],
+      "type": "object"
+    },
+    "CompareRowsBatch": {
+      "description": "Un LOTE de filas de [`COMPARE_ROWS`] (0.39.0, ADR 0048). Acotado por\n[`COMPARE_ROWS_MAX_BATCH`] y coalescido server-side, el mismo contrato que\n[`SearchHits`].\n\n```\nuse norte_proto::TaskId;\nuse norte_proto::methods::CompareRowsBatch;\nlet b = CompareRowsBatch { task_id: TaskId::new(7), rows: vec![] };\nassert_eq!(\n    serde_json::to_string(&b).expect(\"json\"),\n    r#\"{\"task_id\":7,\"rows\":[]}\"#\n);\n```",
+      "properties": {
+        "rows": {
+          "description": "Las filas de este lote, en el orden en que el walk las produjo. Nunca\nmás de [`COMPARE_ROWS_MAX_BATCH`].",
+          "items": {
+            "$ref": "#/$defs/CompareRow"
+          },
+          "type": "array"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "Task dueña (correlación con `fs.compare` → `task_id`)."
+        }
+      },
+      "required": [
+        "task_id",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "CompareVerdict": {
+      "description": "What a comparison concluded about ONE pair (0.39.0, ADR 0048).\n\nThe verdict says WHAT, [`CompareCriterion`] says WHICH RUNG decided it and\n[`CompareConfidence`] says WHAT THAT IS WORTH. The three travel together on\nevery [`CompareRow`] precisely because `Same` alone is not an answer: a\n`Same` earned by comparing bytes and a `Same` earned by two dates that are\ntwo seconds apart are different facts, and a client that cannot tell them\napart cannot tell the user either.\n\n`#[serde(other)]` on `Unknown` is the forward-compat shape\n[`EntryKind::Other`](crate::EntryKind::Other) and [`VolumeKind::Unknown`]\nalready use: a verdict an N+1 daemon adds degrades to `Unknown` on decode\ninstead of failing the whole batch of rows.\n\n```\nuse norte_proto::methods::CompareVerdict;\nassert_eq!(\n    serde_json::to_string(&CompareVerdict::OnlyLeft).expect(\"json\"),\n    r#\"\"only_left\"\"#\n);\n// Un veredicto de un daemon más nuevo degrada; NO tira el lote entero.\nlet futuro: CompareVerdict = serde_json::from_str(r#\"\"conflicted\"\"#).expect(\"degrada\");\nassert_eq!(futuro, CompareVerdict::Unknown);\n```",
+      "oneOf": [
+        {
+          "const": "same",
+          "description": "Los dos lados se tienen por iguales bajo el criterio que decidió.",
+          "type": "string"
+        },
+        {
+          "const": "different",
+          "description": "Los dos lados difieren bajo el criterio que decidió.",
+          "type": "string"
+        },
+        {
+          "const": "only_left",
+          "description": "Solo existe a la izquierda. `right` es `None` (ver\n[`CompareRow::sides_are_consistent`]).",
+          "type": "string"
+        },
+        {
+          "const": "only_right",
+          "description": "Solo existe a la derecha. `left` es `None`.",
+          "type": "string"
+        },
+        {
+          "const": "type_mismatch",
+          "description": "Mismo nombre, [`EntryKind`](crate::EntryKind) distinto: un fichero\ncontra un directorio no es una diferencia de contenido, es otra cosa.",
+          "type": "string"
+        },
+        {
+          "const": "ambiguous",
+          "description": "Dos entradas de UN MISMO lado colapsan a la misma clave de\nemparejamiento (`README`/`readme` contra APFS, NFC/NFD en ext4): no se\nemparejan, se REPORTAN — con [`CompareRow::reason`] poblado. Es justo\nla colisión que una sincronización posterior tiene que ver ANTES de\nescribir nada.\n\n# Forma de la fila (normativa)\nLa colisión es de UN lado, así que la fila también lo es: se emite **una\nfila por entrada implicada**, con esa entrada en el campo de SU lado, el\notro lado en `None`, y [`CompareRow::side`] nombrando dónde ocurrió. Dos\nnombres que colapsan son DOS filas, jamás una que los junte y jamás una\ndeduplicada — perder un nombre aquí es perder exactamente el fichero\nsobre el que un plan de sincronización iba a escribir.\n\nNada en el wire lo impide (`sides_are_consistent` exime a este\nveredicto: no hay regla de lados que un cliente pueda comprobar, y\nafirmar una haría desconfiar de filas legítimas de un daemon N+1), así\nque es contrato de quien produce las filas y está congelado en los\ngoldens `ambiguous_*` de `compare_row.json`. Si algún día hiciera falta\nenseñar las dos entradas colisionadas en UNA fila, el wire necesita un\ncampo nuevo: los dos que hay son LADOS, no miembros de una colisión\n(hallazgo MAJOR de protocol-guardian, revisión de C1).",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "El walk no pudo responder por esta entrada (listado ilegible,\ndirectorio por encima de [`COMPARE_MAX_DIR_ENTRIES`], lectura fallida a\nmitad de hash). Lleva [`CompareRow::reason`] y, cuando aplica a un lado,\n[`CompareRow::side`]. NO termina la Task.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Veredicto que este decodificador no conoce (`#[serde(other)]`): un\ndaemon N+1 lo emitió, este cliente lo pinta como «no sé qué dice».",
+          "type": "string"
+        }
+      ]
+    },
     "ConflictKind": {
       "description": "Subtipo de conflicto en el destino de una operación.\nTolerancia N/N-1 (patrón de ADR 0004; el fallback lo introduce ADR\n0005): un subtipo desconocido deserializa a [`ConflictKind::Unknown`] —\nel cliente viejo degrada a \"conflicto genérico\", no revienta.\n\n```\nuse norte_proto::ConflictKind;\nlet futuro: ConflictKind = serde_json::from_str(r#\"\"subtipo_del_futuro\"\"#).unwrap();\nassert_eq!(futuro, ConflictKind::Unknown);\n```",
       "oneOf": [
@@ -921,6 +1193,54 @@
       },
       "required": [
         "capabilities"
+      ],
+      "type": "object"
+    },
+    "FsCompareParams": {
+      "description": "Params de [`FS_COMPARE`] (0.39.0, ADR 0048).\n\n```\nuse norte_proto::methods::{CompareCriteria, FsCompareParams};\n// Lo MÍNIMO que hay que mandar: dos raíces. Todo lo demás tiene default.\nlet p: FsCompareParams =\n    serde_json::from_str(r#\"{\"left\":\"file:///a\",\"right\":\"file:///b\"}\"#).expect(\"params\");\nassert_eq!(p.criteria, CompareCriteria::default());\nassert_eq!(p.mtime_tolerance_ms, 2000);\nassert!(p.max_depth.is_none() && !p.follow_symlinks);\n```",
+      "properties": {
+        "criteria": {
+          "$ref": "#/$defs/CompareCriteria",
+          "default": {
+            "hash": false,
+            "mtime": true,
+            "size": true
+          },
+          "description": "Qué rungs corren. Ausente = [`CompareCriteria::default`]."
+        },
+        "follow_symlinks": {
+          "default": false,
+          "description": "Seguir symlinks. Default `false`, y hoy es lo único que el core\nimplementa: los destinos se comparan COMO BYTES\n([`CompareCriterion::LinkTarget`]), lo que hace innecesaria la detección\nde ciclos.",
+          "type": "boolean"
+        },
+        "left": {
+          "$ref": "#/$defs/VPath",
+          "description": "Raíz izquierda: el panel que lanzó la comparación."
+        },
+        "max_depth": {
+          "description": "Profundidad máxima del descenso, contando la raíz como 0. `None` = sin\nlímite.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mtime_tolerance_ms": {
+          "default": 2000,
+          "description": "Tolerancia del rung de mtime en milisegundos. Default 2000 (la regla\nFAT). Es parámetro de la PETICIÓN y no una capability del provider:\ntocar el wire de `Capabilities` por un único consumidor no lo valía.\n\n`u32` y no `i64` (hallazgo MAJOR de protocol-guardian, revisión de C1)\naunque [`Entry::mtime_ms`](crate::Entry::mtime_ms) sí sea `i64`: una\ntolerancia NEGATIVA hace que `|Δ| > tolerancia` sea cierto para toda\npareja, así que un signo de más en la petición de un cliente\nconvertiría dos árboles idénticos en un árbol entero de `Different`\n—una respuesta callada y equivocada en el camino caliente— en vez de un\nerror. Con `u32` lo rechaza el DESERIALIZADOR, que es más fuerte que\ncualquier chequeo que el handler pueda olvidar, y el techo (49 días)\nsobra para la granularidad de cualquier filesystem.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "right": {
+          "$ref": "#/$defs/VPath",
+          "description": "Raíz derecha. Si resuelve al mismo provider y path que `left`, la\npetición es `-32602` y no se crea Task alguna."
+        }
+      },
+      "required": [
+        "left",
+        "right"
       ],
       "type": "object"
     },
@@ -2875,6 +3195,26 @@
       ],
       "type": "object"
     },
+    "Side": {
+      "description": "Un lado de la comparación (0.39.0, ADR 0048): el panel izquierdo es el que\nlanzó la comparación.\n\n```\nuse norte_proto::methods::Side;\nassert_eq!(serde_json::to_string(&Side::Right).expect(\"json\"), r#\"\"right\"\"#);\nlet futuro: Side = serde_json::from_str(r#\"\"middle\"\"#).expect(\"degrada\");\nassert_eq!(futuro, Side::Unknown);\n```",
+      "oneOf": [
+        {
+          "const": "left",
+          "description": "El lado izquierdo: el panel desde el que se lanzó la comparación.",
+          "type": "string"
+        },
+        {
+          "const": "right",
+          "description": "El lado derecho.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Lado que este decodificador no conoce (`#[serde(other)]`).",
+          "type": "string"
+        }
+      ]
+    },
     "SpanWire": {
       "description": "Un span de texto con estilo opcional (elemento de una línea de\n[`PluginPreviewStyled::lines`], 0.27.0, G3, ADR 0037): el HOST pinta, el\nplugin solo describe. `text` es texto del plugin — NO CONFIABLE, un\nfrontend debe enmascararlo antes de renderizarlo (mismo trato que\n`PluginInfo::name`/`title`). `role` referencia un nombre de\n`norte_theme::Role` — el HOST lo valida contra el conjunto CERRADO al\nproducirlo (un nombre desconocido nunca sale al wire como texto libre,\ncolapsa a `None` antes de serializar); un cliente remoto que reciba de un\ndaemon en el que no confía plenamente un `role` que no reconoce debe\ntratarlo igual, como `None`. `fg` es un fallback de color RGB crudo para\nspans sin rol (p. ej. la paleta fija de un highlighter); cuando AMBOS\nestán presentes, `role` gana — el tema del usuario tiene precedencia\nsobre un color fijo del plugin.\n\n```\nuse norte_proto::methods::SpanWire;\nlet s: SpanWire = serde_json::from_str(r#\"{\"text\":\"fn\"}\"#).unwrap();\nassert_eq!(s.text, \"fn\");\nassert_eq!(s.role, None);\nassert_eq!(s.fg, None);\n```",
       "properties": {
@@ -2999,6 +3339,11 @@
         {
           "const": "rename_batch",
           "description": "Un lote de renames dentro de UN directorio ejecutado como UNA\ntransacción con UNA unidad deshacible del journal (`fs.rename_batch`,\n0.36.0). El progreso es `i/n` PASOS, no bytes. Un cliente N-1 (0.35.x)\nla degrada a [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual\nque `Search`/`Index`/`Embed`.",
+          "type": "string"
+        },
+        {
+          "const": "compare",
+          "description": "Comparación de DOS árboles de directorios\n(`fs.compare`/[`FS_COMPARE`](crate::methods::FS_COMPARE), 0.39.0, ADR\n0048). Lectura pura (regla 4 no aplica): sin journal, sin undo, no\nescribe un byte. El progreso cuenta PAREJAS emitidas, no bytes: con el\nrung de hash apagado la comparación no lee contenido alguno, así que una\nbarra de bytes pintaría cero para siempre — mismo caso que\n[`TaskKind::RenameBatch`].\n\nEntra CON el método, en su mismo bump, y no después: el `task_id` de un\nlote de [`COMPARE_ROWS`](crate::methods::COMPARE_ROWS) correlaciona con\nuna Task que el cliente tiene que poder clasificar en `task.list`. Un\ncliente N-1 (0.38.x) la degrada a [`TaskKind::Unknown`] por el\n`serde(other)` de abajo, igual que `Search`/`Index`/`Embed`/\n`RenameBatch`.",
           "type": "string"
         },
         {
@@ -3360,6 +3705,27 @@
     "collision_policy": {
       "$ref": "#/$defs/CollisionPolicy"
     },
+    "compare_confidence": {
+      "$ref": "#/$defs/CompareConfidence"
+    },
+    "compare_criteria": {
+      "$ref": "#/$defs/CompareCriteria"
+    },
+    "compare_criterion": {
+      "$ref": "#/$defs/CompareCriterion"
+    },
+    "compare_reason": {
+      "$ref": "#/$defs/CompareReason"
+    },
+    "compare_row": {
+      "$ref": "#/$defs/CompareRow"
+    },
+    "compare_rows_batch": {
+      "$ref": "#/$defs/CompareRowsBatch"
+    },
+    "compare_verdict": {
+      "$ref": "#/$defs/CompareVerdict"
+    },
     "conflict_kind": {
       "$ref": "#/$defs/ConflictKind"
     },
@@ -3398,6 +3764,9 @@
     },
     "fs_capabilities_result": {
       "$ref": "#/$defs/FsCapabilitiesResult"
+    },
+    "fs_compare_params": {
+      "$ref": "#/$defs/FsCompareParams"
     },
     "fs_copy_params": {
       "$ref": "#/$defs/FsCopyParams"
@@ -3639,6 +4008,9 @@
     "server_info": {
       "$ref": "#/$defs/ServerInfo"
     },
+    "side": {
+      "$ref": "#/$defs/Side"
+    },
     "span_wire": {
       "$ref": "#/$defs/SpanWire"
     },
@@ -3698,6 +4070,13 @@
     "capability_flags",
     "client_info",
     "collision_policy",
+    "compare_confidence",
+    "compare_criteria",
+    "compare_criterion",
+    "compare_reason",
+    "compare_row",
+    "compare_rows_batch",
+    "compare_verdict",
     "conflict_kind",
     "connection_degraded",
     "connection_trust_host_key_params",
@@ -3711,6 +4090,7 @@
     "error",
     "fs_capabilities_params",
     "fs_capabilities_result",
+    "fs_compare_params",
     "fs_copy_params",
     "fs_delete_params",
     "fs_list_params",
@@ -3791,6 +4171,7 @@
     "segment",
     "semantic_hit",
     "server_info",
+    "side",
     "span_wire",
     "symlink_policy",
     "task_cancel_params",

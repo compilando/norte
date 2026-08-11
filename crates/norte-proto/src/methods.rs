@@ -397,7 +397,36 @@ use crate::{
 /// un método que solo existió en esta rama sin publicar (0.37.0 nunca se
 /// etiquetó ni se soltó) — se trata igual que cualquier bump: ventana
 /// desplazada, no ensanchada. Ventana N=0.38.x / N-1=0.37.x.
-pub const PROTOCOL_VERSION: &str = "0.38.0";
+///
+/// 0.39.0 (comparación de directorios, diseño
+/// `2026-08-11-directory-comparison-design.md`, ADR 0048): método nuevo
+/// [`FS_COMPARE`] ([`FsCompareParams`] → el [`FsTaskResult`] EXISTENTE) y
+/// notificación nueva [`COMPARE_ROWS`] ([`CompareRowsBatch`]), más el
+/// vocabulario que las filas hablan: [`CompareRow`], [`CompareVerdict`],
+/// [`CompareCriterion`], [`CompareConfidence`], [`CompareReason`], [`Side`],
+/// [`CompareCriteria`] y los topes [`COMPARE_ROWS_MAX_BATCH`] y
+/// [`COMPARE_MAX_DIR_ENTRIES`]. Con el método viaja su clase de Task,
+/// [`TaskKind::Compare`](crate::TaskKind::Compare) — en ESTE bump y no en el
+/// siguiente, porque el `task_id` de un lote de filas correlaciona con una
+/// Task que el cliente tiene que poder clasificar; un cliente 0.38 la degrada
+/// a `TaskKind::Unknown` por su `serde(other)`. Bump ADITIVO PURO: ningún tipo existente
+/// cambia de forma —ni gana campos, como sí hizo `PolicyUndoReportResult` en
+/// 0.36.0—, así que el payload de cualquier método anterior sigue siendo byte
+/// a byte el de 0.38.0.
+///
+/// Lo NUEVO del vocabulario, y el motivo del ADR, es que una comparación
+/// DECLARA lo que su criterio se ha ganado: cada fila lleva el rung que la
+/// decidió y la confianza que ese rung merece, y
+/// [`CompareConfidence::Unknown`] —«el provider no puede decirlo»— es una
+/// RESPUESTA, no un error. Por eso, y solo ahí, el fallback de
+/// `#[serde(other)]` no se llama `Unknown` sino
+/// [`CompareConfidence::Unrecognised`]: compartir nombre convertiría una
+/// respuesta honesta en un desajuste de protocolo.
+///
+/// Ventana N=0.39.x / N-1=0.38.x: un cliente 0.38 no conoce el método nuevo y
+/// no lo llama, así que jamás recibe una fila — nada que gatear en emisión. La
+/// inversa la corta [`version_compatible`] en el handshake, como siempre.
+pub const PROTOCOL_VERSION: &str = "0.39.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -680,6 +709,62 @@ pub const SEARCH_HITS: &str = "search.hits";
 /// Tope de entries por notificación [`SEARCH_HITS`] (coalescing
 /// server-side, mismo espíritu que [`FS_LIST_MAX_PAGE`]).
 pub const SEARCH_HITS_MAX_BATCH: usize = 256;
+
+/// `fs.compare` — compara DOS árboles de directorios y emite una fila por
+/// pareja (0.39.0, ADR 0048). Devuelve una Task; las filas llegan por
+/// [`COMPARE_ROWS`] SOLO a la conexión que la lanzó, igual que
+/// [`FS_SEARCH`]/[`SEARCH_HITS`]. Cancelable con `task.cancel`.
+///
+/// Result = el [`FsTaskResult`] EXISTENTE (`{task_id}`), como
+/// `fs.copy`/`fs.move`/`fs.search` — cero struct nuevo para el result.
+///
+/// NO muta nada: no hay journal, no hay undo, no se escribe un byte (regla
+/// dura 4 no aplica, y decirlo aquí evita que alguien pida una entrada que no
+/// significaría nada). Lo que sí hace es LEER dos árboles enteros, y con el
+/// rung de hash leer su CONTENIDO — más de lo que revela un listado —, así que
+/// va sujeto al gate de lectura sobre AMBAS raíces y el hash exige además
+/// scope de contenido. Dos raíces que resuelven al mismo provider y path son
+/// `-32602`: comparar algo contra sí mismo durante una hora no es una
+/// petición, es un error de quien llama.
+///
+/// Los ERRORES son filas, no el final de la Task
+/// ([`CompareVerdict::Error`]): un subdirectorio ilegible, un directorio por
+/// encima de [`COMPARE_MAX_DIR_ENTRIES`] o una lectura que falla a mitad de
+/// hash cuestan SU fila y el walk sigue. Una comparación de tres horas no
+/// puede morirse en un `EACCES` de la hoja 40 000.
+pub const FS_COMPARE: &str = "fs.compare";
+/// `compare.rows` — notificación server→client con un LOTE de filas de
+/// [`FS_COMPARE`] ([`CompareRowsBatch`]). SOLO viaja a la conexión que lanzó
+/// la comparación (jamás broadcast, mismo criterio direccional que
+/// [`SEARCH_HITS`]).
+///
+/// # Cómo se sabe si llegaron TODAS
+/// Una notificación se puede perder: el daemon expulsa a un suscriptor que no
+/// vacía su cola, y a diferencia de `fs.search` aquí no hay un `max_hits`
+/// contra el que contar (hallazgo MINOR de protocol-guardian, revisión de C1).
+/// La señal es
+/// [`TaskProgress::entries_done`](crate::TaskProgress::entries_done), que en
+/// una Task [`TaskKind::Compare`](crate::TaskKind::Compare) cuenta FILAS
+/// emitidas: el último snapshot de `task.progress` lleva siempre estado
+/// terminal y totales finales, así que un cliente compara lo que recibió con
+/// ese número y sabe si le falta algo. Un plan de sincronización (spec 2) que
+/// vaya a ESCRIBIR a partir de estas filas tiene que hacer esa comprobación.
+pub const COMPARE_ROWS: &str = "compare.rows";
+/// Tope de filas por notificación [`COMPARE_ROWS`] (coalescing server-side,
+/// el mismo número y el mismo motivo que [`SEARCH_HITS_MAX_BATCH`]: un millón
+/// de filas no puede convertirse en un millón de frames).
+pub const COMPARE_ROWS_MAX_BATCH: usize = 256;
+/// Tope de entradas de UN directorio que [`FS_COMPARE`] empareja en memoria.
+///
+/// El emparejamiento es directorio contra directorio —`fs.list` no garantiza
+/// orden, así que no hay dos streams ordenados que fusionar—, y eso es O(n) en
+/// RAM sobre el directorio más ancho. Por encima de este techo la comparación
+/// emite una fila [`CompareVerdict::Error`] con
+/// [`CompareReason::DirTooLarge`] para ESE directorio y sigue: un directorio
+/// desmesurado cuesta el directorio, jamás un OOM que se lleve las otras tres
+/// horas de trabajo.
+pub const COMPARE_MAX_DIR_ENTRIES: usize = 200_000;
+
 /// `task.cancel` — petición de cancelación cooperativa. La respuesta solo
 /// confirma la recepción; el estado final (`cancelled`, o `completed` si la
 /// Task ganó la carrera) llega por [`TASK_PROGRESS`].
@@ -2133,6 +2218,509 @@ pub struct HostVolumesParams {
 pub struct HostVolumesResult {
     /// The host's volumes, in no particular guaranteed order.
     pub volumes: Vec<Volume>,
+}
+
+/// What a comparison concluded about ONE pair (0.39.0, ADR 0048).
+///
+/// The verdict says WHAT, [`CompareCriterion`] says WHICH RUNG decided it and
+/// [`CompareConfidence`] says WHAT THAT IS WORTH. The three travel together on
+/// every [`CompareRow`] precisely because `Same` alone is not an answer: a
+/// `Same` earned by comparing bytes and a `Same` earned by two dates that are
+/// two seconds apart are different facts, and a client that cannot tell them
+/// apart cannot tell the user either.
+///
+/// `#[serde(other)]` on `Unknown` is the forward-compat shape
+/// [`EntryKind::Other`](crate::EntryKind::Other) and [`VolumeKind::Unknown`]
+/// already use: a verdict an N+1 daemon adds degrades to `Unknown` on decode
+/// instead of failing the whole batch of rows.
+///
+/// ```
+/// use norte_proto::methods::CompareVerdict;
+/// assert_eq!(
+///     serde_json::to_string(&CompareVerdict::OnlyLeft).expect("json"),
+///     r#""only_left""#
+/// );
+/// // Un veredicto de un daemon más nuevo degrada; NO tira el lote entero.
+/// let futuro: CompareVerdict = serde_json::from_str(r#""conflicted""#).expect("degrada");
+/// assert_eq!(futuro, CompareVerdict::Unknown);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum CompareVerdict {
+    /// Los dos lados se tienen por iguales bajo el criterio que decidió.
+    Same,
+    /// Los dos lados difieren bajo el criterio que decidió.
+    Different,
+    /// Solo existe a la izquierda. `right` es `None` (ver
+    /// [`CompareRow::sides_are_consistent`]).
+    OnlyLeft,
+    /// Solo existe a la derecha. `left` es `None`.
+    OnlyRight,
+    /// Mismo nombre, [`EntryKind`](crate::EntryKind) distinto: un fichero
+    /// contra un directorio no es una diferencia de contenido, es otra cosa.
+    TypeMismatch,
+    /// Dos entradas de UN MISMO lado colapsan a la misma clave de
+    /// emparejamiento (`README`/`readme` contra APFS, NFC/NFD en ext4): no se
+    /// emparejan, se REPORTAN — con [`CompareRow::reason`] poblado. Es justo
+    /// la colisión que una sincronización posterior tiene que ver ANTES de
+    /// escribir nada.
+    ///
+    /// # Forma de la fila (normativa)
+    /// La colisión es de UN lado, así que la fila también lo es: se emite **una
+    /// fila por entrada implicada**, con esa entrada en el campo de SU lado, el
+    /// otro lado en `None`, y [`CompareRow::side`] nombrando dónde ocurrió. Dos
+    /// nombres que colapsan son DOS filas, jamás una que los junte y jamás una
+    /// deduplicada — perder un nombre aquí es perder exactamente el fichero
+    /// sobre el que un plan de sincronización iba a escribir.
+    ///
+    /// Nada en el wire lo impide (`sides_are_consistent` exime a este
+    /// veredicto: no hay regla de lados que un cliente pueda comprobar, y
+    /// afirmar una haría desconfiar de filas legítimas de un daemon N+1), así
+    /// que es contrato de quien produce las filas y está congelado en los
+    /// goldens `ambiguous_*` de `compare_row.json`. Si algún día hiciera falta
+    /// enseñar las dos entradas colisionadas en UNA fila, el wire necesita un
+    /// campo nuevo: los dos que hay son LADOS, no miembros de una colisión
+    /// (hallazgo MAJOR de protocol-guardian, revisión de C1).
+    Ambiguous,
+    /// El walk no pudo responder por esta entrada (listado ilegible,
+    /// directorio por encima de [`COMPARE_MAX_DIR_ENTRIES`], lectura fallida a
+    /// mitad de hash). Lleva [`CompareRow::reason`] y, cuando aplica a un lado,
+    /// [`CompareRow::side`]. NO termina la Task.
+    Error,
+    /// Veredicto que este decodificador no conoce (`#[serde(other)]`): un
+    /// daemon N+1 lo emitió, este cliente lo pinta como «no sé qué dice».
+    #[serde(other)]
+    Unknown,
+}
+
+/// Qué RUNG de la cascada decidió una fila (0.39.0, ADR 0048).
+///
+/// La cascada va de barato a caro y para en el primer rung que decide, así que
+/// este campo es también «hasta dónde hubo que llegar». Sin él, `Different` no
+/// dice si se comparó un tamaño o 40 GB de bytes.
+///
+/// ```
+/// use norte_proto::methods::CompareCriterion;
+/// assert_eq!(
+///     serde_json::to_string(&CompareCriterion::LinkTarget).expect("json"),
+///     r#""link_target""#
+/// );
+/// let futuro: CompareCriterion = serde_json::from_str(r#""etag""#).expect("degrada");
+/// assert_eq!(futuro, CompareCriterion::Unknown);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum CompareCriterion {
+    /// Un lado no existe: no hay nada más que comparar.
+    ///
+    /// Es TAMBIÉN el criterio de las filas que no decidió rung alguno — un
+    /// listado ilegible, un directorio por encima de
+    /// [`COMPARE_MAX_DIR_ENTRIES`], una colisión de emparejamiento —, por
+    /// convención y no porque sea cierto: el campo no es opcional (una clave
+    /// nullable en cada fila de un camino que lleva millones no se paga por un
+    /// valor sobre el que nadie ramifica) y `Unknown` es el fallback de decode,
+    /// que el core no emite jamás. En esas filas lo que informa es
+    /// `verdict: error`/`ambiguous` más [`CompareRow::reason`]; el criterio no
+    /// se lee. Ver ADR 0048, consecuencias negativas.
+    Presence,
+    /// Los [`EntryKind`](crate::EntryKind) difieren.
+    Kind,
+    /// Destinos de symlink comparados COMO BYTES (jamás se siguen: sin
+    /// seguimiento no hace falta detectar ciclos, y un enlace cuyo destino
+    /// cambió es una diferencia real).
+    LinkTarget,
+    /// Tamaños en bytes.
+    Size,
+    /// Fechas de modificación, bajo la tolerancia de la petición
+    /// ([`FsCompareParams::mtime_tolerance_ms`]).
+    Mtime,
+    /// sha256 en streaming de los dos lados. Solo corre si el llamante lo pidió
+    /// y solo alcanza a las parejas que los rungs baratos dieron por iguales.
+    Hash,
+    /// Criterio que este decodificador no conoce (`#[serde(other)]`).
+    #[serde(other)]
+    Unknown,
+}
+
+/// Cuánto vale el veredicto de una fila (0.39.0, ADR 0048).
+///
+/// El vocabulario central del ítem: una comparación DECLARA lo que su criterio
+/// se ha ganado. Un tamaño distinto PRUEBA bytes distintos (`Certain`); una
+/// fecha distinta solo lo SUGIERE (`Probable`); un provider que no puede
+/// contestar deja `Unknown`, que es una respuesta honesta y no un fallo.
+///
+/// # Por qué el fallback aquí se llama `Unrecognised`
+/// En [`CompareVerdict`] y [`CompareCriterion`] el fallback de
+/// `#[serde(other)]` se llama `Unknown`, la convención de la casa. Aquí
+/// `Unknown` ya es un VALOR con significado — «el provider no puede decirlo» —
+/// y «un peer más nuevo dijo algo que no conozco» es un hecho DISTINTO.
+/// Compartir nombre convertiría una respuesta honesta en un desajuste de
+/// protocolo, y al revés.
+///
+/// ```
+/// use norte_proto::methods::CompareConfidence;
+/// // `unknown` es un valor REAL del vocabulario...
+/// let honesto: CompareConfidence = serde_json::from_str(r#""unknown""#).expect("valor real");
+/// assert_eq!(honesto, CompareConfidence::Unknown);
+/// // ...y el fallback forward-compat es OTRO.
+/// let futuro: CompareConfidence = serde_json::from_str(r#""quantum""#).expect("degrada");
+/// assert_eq!(futuro, CompareConfidence::Unrecognised);
+/// assert_ne!(honesto, futuro);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum CompareConfidence {
+    /// El criterio PRUEBA su veredicto (presencia, kind, tamaño distinto,
+    /// destino de symlink, hash).
+    Certain,
+    /// El criterio SUGIERE su veredicto sin probarlo (mtime: dos ficheros con
+    /// la misma fecha pueden tener bytes distintos, y al revés).
+    Probable,
+    /// El provider no puede decirlo: no hay tamaño, no hay fecha fiable (un
+    /// archivo comprimido, un object store cuyo `ETag` solo a veces es un
+    /// hash).
+    /// Es una RESPUESTA, no un error.
+    Unknown,
+    /// Confianza que este decodificador no conoce (`#[serde(other)]`). NO es
+    /// [`CompareConfidence::Unknown`] — ver el apartado de arriba.
+    #[serde(other)]
+    Unrecognised,
+}
+
+/// Por qué una fila es [`CompareVerdict::Ambiguous`] o
+/// [`CompareVerdict::Error`] (0.39.0, ADR 0048). Vocabulario CERRADO: el core
+/// jamás inventa una clase.
+///
+/// ```
+/// use norte_proto::methods::CompareReason;
+/// assert_eq!(
+///     serde_json::to_string(&CompareReason::DirTooLarge).expect("json"),
+///     r#""dir_too_large""#
+/// );
+/// let futuro: CompareReason = serde_json::from_str(r#""solar_flare""#).expect("degrada");
+/// assert_eq!(futuro, CompareReason::Unknown);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum CompareReason {
+    /// Dos nombres de un mismo lado que solo difieren en mayúsculas colapsan
+    /// porque el OTRO lado no distingue caja.
+    CaseFold,
+    /// Dos nombres de un mismo lado que colapsan al normalizar a NFC (el
+    /// clásico NFD de macOS junto a su gemelo NFC).
+    Normalization,
+    /// El directorio no se pudo listar (permisos, E/S). Ver
+    /// [`CompareRow::side`].
+    Unreadable,
+    /// El directorio supera [`COMPARE_MAX_DIR_ENTRIES`] entradas.
+    DirTooLarge,
+    /// Una lectura falló a mitad del rung de hash. Ver [`CompareRow::side`].
+    ReadFailed,
+    /// Motivo que este decodificador no conoce (`#[serde(other)]`).
+    #[serde(other)]
+    Unknown,
+}
+
+/// Un lado de la comparación (0.39.0, ADR 0048): el panel izquierdo es el que
+/// lanzó la comparación.
+///
+/// ```
+/// use norte_proto::methods::Side;
+/// assert_eq!(serde_json::to_string(&Side::Right).expect("json"), r#""right""#);
+/// let futuro: Side = serde_json::from_str(r#""middle""#).expect("degrada");
+/// assert_eq!(futuro, Side::Unknown);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    /// El lado izquierdo: el panel desde el que se lanzó la comparación.
+    Left,
+    /// El lado derecho.
+    Right,
+    /// Lado que este decodificador no conoce (`#[serde(other)]`).
+    #[serde(other)]
+    Unknown,
+}
+
+/// Qué rungs de la cascada corren (0.39.0, ADR 0048).
+///
+/// El default es el que decide si comparar dos árboles LEE CONTENIDO: `size` y
+/// `mtime` puestos, `hash` NO. Un usuario que no pidió hashear un terabyte por
+/// SFTP no debe acabar haciéndolo, así que el rung caro es siempre explícito.
+///
+/// Un objeto PARCIAL en el wire completa desde ese mismo default en vez de
+/// fallar: un peer que solo quiere encender el hash manda `{"hash": true}`.
+///
+/// ```
+/// use norte_proto::methods::CompareCriteria;
+/// let d = CompareCriteria::default();
+/// assert!(d.size && d.mtime && !d.hash, "el rung caro es opt-in");
+/// let parcial: CompareCriteria = serde_json::from_str(r#"{"hash":true}"#).expect("parcial");
+/// assert_eq!(parcial, CompareCriteria { size: true, mtime: true, hash: true });
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CompareCriteria {
+    /// Comparar tamaños. Default `true`.
+    pub size: bool,
+    /// Comparar fechas de modificación bajo tolerancia. Default `true`.
+    pub mtime: bool,
+    /// Comparar sha256 del contenido de las parejas que los rungs baratos
+    /// dieron por iguales. Default `false`: LEE los dos ficheros enteros, y en
+    /// el daemon exige además scope de CONTENIDO.
+    pub hash: bool,
+}
+
+impl Default for CompareCriteria {
+    fn default() -> Self {
+        Self {
+            size: true,
+            mtime: true,
+            hash: false,
+        }
+    }
+}
+
+/// Tolerancia de mtime por defecto: 2000 ms, la regla FAT — la granularidad
+/// real más ancha que un filesystem de los que este árbol toca puede tener.
+fn default_mtime_tolerance_ms() -> u32 {
+    2000
+}
+
+/// UNA fila de una comparación (0.39.0, ADR 0048): una pareja, su veredicto, y
+/// cuánto vale ese veredicto.
+///
+/// La fila se emite FINAL: ninguna se corrige después, así que el wire no
+/// necesita actualizaciones de fila ni el panel reconciliación.
+///
+/// Lleva los dos [`Entry`] ENTEROS y no dos paths porque el panel pinta
+/// tamaño, fecha y los BYTES del nombre de cada lado, y el walk acaba de
+/// listar ambos directorios: refetchear por fila convertiría un listado en N
+/// `fs.stat` sobre dos providers, con el árbol ya cambiando debajo.
+///
+/// ```
+/// use norte_proto::methods::{
+///     CompareConfidence, CompareCriterion, CompareRow, CompareVerdict,
+/// };
+/// use norte_proto::{Entry, EntryKind, VPath};
+/// let izquierda = Entry {
+///     path: VPath::parse("file:///a/informe%FF%FE.dat").expect("path"),
+///     kind: EntryKind::File,
+///     size: Some(7),
+///     mtime_ms: None,
+///     attrs: Default::default(),
+/// };
+/// let row = CompareRow {
+///     id: 1,
+///     left: Some(izquierda),
+///     right: None,
+///     verdict: CompareVerdict::OnlyLeft,
+///     criterion: CompareCriterion::Presence,
+///     confidence: CompareConfidence::Certain,
+///     newer: None,
+///     reason: None,
+///     side: None,
+/// };
+/// assert!(row.sides_are_consistent() && row.reason_is_consistent());
+/// // Lo ausente NO viaja: ni `null` ni clave (comprobado sobre las CLAVES
+/// // del objeto, no por substring: un path puede contener "right").
+/// let json = serde_json::to_string(&row).expect("json");
+/// let obj: serde_json::Value = serde_json::from_str(&json).expect("objeto");
+/// for ausente in ["right", "newer", "reason", "side"] {
+///     assert!(obj.get(ausente).is_none(), "{ausente} no debe viajar: {json}");
+/// }
+/// // Y el nombre no-UTF8 vuelve byte a byte (regla dura 1).
+/// let back: CompareRow = serde_json::from_str(&json).expect("json");
+/// assert_eq!(back, row);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompareRow {
+    /// Identificador monótono dentro de UNA comparación. La selección del
+    /// panel se ancla a él: un filtro esconde filas, jamás las renumera.
+    pub id: u64,
+    /// La entrada del lado izquierdo, si la hay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<Entry>,
+    /// La entrada del lado derecho, si la hay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<Entry>,
+    /// Qué concluyó la comparación.
+    pub verdict: CompareVerdict,
+    /// Qué rung lo decidió.
+    pub criterion: CompareCriterion,
+    /// Cuánto vale ese veredicto.
+    pub confidence: CompareConfidence,
+    /// Qué lado es más NUEVO, cuando la fecha decidió la fila. Nada de esta
+    /// spec lo lee: la spec 2 (el plan de sincronización) lo necesita para
+    /// proponer una dirección, y producirlo aquí no cuesta nada.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub newer: Option<Side>,
+    /// El porqué, para los DOS veredictos que tienen porqué
+    /// ([`CompareVerdict::Ambiguous`] y [`CompareVerdict::Error`]). `None`
+    /// para cualquier otro — ver [`CompareRow::reason_is_consistent`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<CompareReason>,
+    /// El lado al que aplica `reason`, cuando aplica a uno solo: una lectura
+    /// que falló únicamente a la izquierda.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side: Option<Side>,
+}
+
+impl CompareRow {
+    /// ¿Concuerdan veredicto y lados presentes?
+    ///
+    /// La invariante que el wire no sabe expresar: [`CompareVerdict::OnlyLeft`]
+    /// implica `right: None`, y `Same`/`Different`/`TypeMismatch` implican los
+    /// dos lados. NO es un rechazo de `Deserialize` a propósito: una fila
+    /// malformada tiene que degradar como una celda de atributo mala, no matar
+    /// el lote entero. El daemon lo afirma en sus tests; un cliente lo usa para
+    /// decidir si se fía de la fila.
+    ///
+    /// [`CompareVerdict::Ambiguous`], [`CompareVerdict::Error`] y
+    /// [`CompareVerdict::Unknown`] no tienen regla que romper: el primero
+    /// nombra una colisión de UN lado, el segundo puede no tener entrada que
+    /// enseñar, y del tercero —un veredicto de un daemon N+1— este cliente no
+    /// sabe nada. Inventarles una regla haría que un cliente N-1 desconfiara de
+    /// filas legítimas.
+    ///
+    /// ```
+    /// # use norte_proto::methods::{CompareConfidence, CompareCriterion, CompareRow, CompareVerdict};
+    /// # use norte_proto::{Entry, EntryKind, VPath};
+    /// # fn entry() -> Entry {
+    /// #     Entry { path: VPath::parse("file:///a").expect("path"), kind: EntryKind::File,
+    /// #             size: None, mtime_ms: None, attrs: Default::default() }
+    /// # }
+    /// # fn row(verdict: CompareVerdict, left: Option<Entry>, right: Option<Entry>) -> CompareRow {
+    /// #     CompareRow { id: 1, left, right, verdict, criterion: CompareCriterion::Presence,
+    /// #                  confidence: CompareConfidence::Certain, newer: None, reason: None, side: None }
+    /// # }
+    /// assert!(row(CompareVerdict::OnlyLeft, Some(entry()), None).sides_are_consistent());
+    /// assert!(!row(CompareVerdict::OnlyLeft, Some(entry()), Some(entry())).sides_are_consistent());
+    /// assert!(!row(CompareVerdict::Same, Some(entry()), None).sides_are_consistent());
+    /// ```
+    #[must_use]
+    pub fn sides_are_consistent(&self) -> bool {
+        let (l, r) = (self.left.is_some(), self.right.is_some());
+        match self.verdict {
+            CompareVerdict::OnlyLeft => l && !r,
+            CompareVerdict::OnlyRight => r && !l,
+            CompareVerdict::Same | CompareVerdict::Different | CompareVerdict::TypeMismatch => {
+                l && r
+            }
+            CompareVerdict::Ambiguous | CompareVerdict::Error | CompareVerdict::Unknown => true,
+        }
+    }
+
+    /// ¿Concuerdan veredicto y motivo?
+    ///
+    /// `reason` es `Some` para EXACTAMENTE dos veredictos —
+    /// [`CompareVerdict::Ambiguous`] y [`CompareVerdict::Error`] — y `None`
+    /// para el resto: en cualquier otro sitio sería ruido que un cliente
+    /// tendría que adivinar. [`CompareVerdict::Unknown`] queda EXENTO por el
+    /// mismo motivo que en [`CompareRow::sides_are_consistent`]: un veredicto
+    /// que este cliente no conoce puede legítimamente traer motivo.
+    ///
+    /// ```
+    /// # use norte_proto::methods::{CompareConfidence, CompareCriterion, CompareReason, CompareRow, CompareVerdict};
+    /// # fn row(verdict: CompareVerdict, reason: Option<CompareReason>) -> CompareRow {
+    /// #     CompareRow { id: 1, left: None, right: None, verdict, criterion: CompareCriterion::Presence,
+    /// #                  confidence: CompareConfidence::Unknown, newer: None, reason, side: None }
+    /// # }
+    /// assert!(row(CompareVerdict::Ambiguous, Some(CompareReason::CaseFold)).reason_is_consistent());
+    /// assert!(!row(CompareVerdict::Ambiguous, None).reason_is_consistent());
+    /// assert!(!row(CompareVerdict::Same, Some(CompareReason::CaseFold)).reason_is_consistent());
+    /// ```
+    #[must_use]
+    pub fn reason_is_consistent(&self) -> bool {
+        match self.verdict {
+            CompareVerdict::Ambiguous | CompareVerdict::Error => self.reason.is_some(),
+            CompareVerdict::Unknown => true,
+            _ => self.reason.is_none(),
+        }
+    }
+}
+
+/// Params de [`FS_COMPARE`] (0.39.0, ADR 0048).
+///
+/// ```
+/// use norte_proto::methods::{CompareCriteria, FsCompareParams};
+/// // Lo MÍNIMO que hay que mandar: dos raíces. Todo lo demás tiene default.
+/// let p: FsCompareParams =
+///     serde_json::from_str(r#"{"left":"file:///a","right":"file:///b"}"#).expect("params");
+/// assert_eq!(p.criteria, CompareCriteria::default());
+/// assert_eq!(p.mtime_tolerance_ms, 2000);
+/// assert!(p.max_depth.is_none() && !p.follow_symlinks);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsCompareParams {
+    /// Raíz izquierda: el panel que lanzó la comparación.
+    pub left: VPath,
+    /// Raíz derecha. Si resuelve al mismo provider y path que `left`, la
+    /// petición es `-32602` y no se crea Task alguna.
+    pub right: VPath,
+    /// Qué rungs corren. Ausente = [`CompareCriteria::default`].
+    #[serde(default)]
+    pub criteria: CompareCriteria,
+    /// Profundidad máxima del descenso, contando la raíz como 0. `None` = sin
+    /// límite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_depth: Option<u32>,
+    /// Tolerancia del rung de mtime en milisegundos. Default 2000 (la regla
+    /// FAT). Es parámetro de la PETICIÓN y no una capability del provider:
+    /// tocar el wire de `Capabilities` por un único consumidor no lo valía.
+    ///
+    /// `u32` y no `i64` (hallazgo MAJOR de protocol-guardian, revisión de C1)
+    /// aunque [`Entry::mtime_ms`](crate::Entry::mtime_ms) sí sea `i64`: una
+    /// tolerancia NEGATIVA hace que `|Δ| > tolerancia` sea cierto para toda
+    /// pareja, así que un signo de más en la petición de un cliente
+    /// convertiría dos árboles idénticos en un árbol entero de `Different`
+    /// —una respuesta callada y equivocada en el camino caliente— en vez de un
+    /// error. Con `u32` lo rechaza el DESERIALIZADOR, que es más fuerte que
+    /// cualquier chequeo que el handler pueda olvidar, y el techo (49 días)
+    /// sobra para la granularidad de cualquier filesystem.
+    #[serde(default = "default_mtime_tolerance_ms")]
+    pub mtime_tolerance_ms: u32,
+    /// Seguir symlinks. Default `false`, y hoy es lo único que el core
+    /// implementa: los destinos se comparan COMO BYTES
+    /// ([`CompareCriterion::LinkTarget`]), lo que hace innecesaria la detección
+    /// de ciclos.
+    #[serde(default)]
+    pub follow_symlinks: bool,
+}
+
+/// Un LOTE de filas de [`COMPARE_ROWS`] (0.39.0, ADR 0048). Acotado por
+/// [`COMPARE_ROWS_MAX_BATCH`] y coalescido server-side, el mismo contrato que
+/// [`SearchHits`].
+///
+/// ```
+/// use norte_proto::TaskId;
+/// use norte_proto::methods::CompareRowsBatch;
+/// let b = CompareRowsBatch { task_id: TaskId::new(7), rows: vec![] };
+/// assert_eq!(
+///     serde_json::to_string(&b).expect("json"),
+///     r#"{"task_id":7,"rows":[]}"#
+/// );
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompareRowsBatch {
+    /// Task dueña (correlación con `fs.compare` → `task_id`).
+    pub task_id: TaskId,
+    /// Las filas de este lote, en el orden en que el walk las produjo. Nunca
+    /// más de [`COMPARE_ROWS_MAX_BATCH`].
+    pub rows: Vec<CompareRow>,
 }
 
 /// Params de [`TASK_CANCEL`].

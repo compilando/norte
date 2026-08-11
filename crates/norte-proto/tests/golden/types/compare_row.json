@@ -1,0 +1,243 @@
+{
+  "same_by_hash": {
+    "id": 1,
+    "left": {
+      "path": "file:///l/a.bin",
+      "kind": "file",
+      "size": 4096,
+      "mtime_ms": 1720000000000
+    },
+    "right": {
+      "path": "file:///r/a.bin",
+      "kind": "file",
+      "size": 4096,
+      "mtime_ms": 1720000000000
+    },
+    "verdict": "same",
+    "criterion": "hash",
+    "confidence": "certain"
+  },
+  "same_by_mtime": {
+    "id": 2,
+    "left": {
+      "path": "file:///l/doc.txt",
+      "kind": "file",
+      "size": 1234,
+      "mtime_ms": 1720000000000
+    },
+    "right": {
+      "path": "file:///r/doc.txt",
+      "kind": "file",
+      "size": 1234,
+      "mtime_ms": 1720000001500
+    },
+    "verdict": "same",
+    "criterion": "mtime",
+    "confidence": "probable"
+  },
+  "same_size_unknown": {
+    "id": 3,
+    "left": {
+      "path": "file:///l/leeme.txt",
+      "kind": "file",
+      "size": 7,
+      "mtime_ms": 1720000000000
+    },
+    "right": {
+      "path": "zip+file:///r/paquete.zip/!/leeme.txt",
+      "kind": "file",
+      "size": null,
+      "mtime_ms": null
+    },
+    "verdict": "same",
+    "criterion": "size",
+    "confidence": "unknown"
+  },
+  "different_by_size": {
+    "id": 4,
+    "left": {
+      "path": "file:///l/informe.dat",
+      "kind": "file",
+      "size": 10,
+      "mtime_ms": 1720000000000
+    },
+    "right": {
+      "path": "file:///r/informe.dat",
+      "kind": "file",
+      "size": 20,
+      "mtime_ms": 1720000000000
+    },
+    "verdict": "different",
+    "criterion": "size",
+    "confidence": "certain"
+  },
+  "different_by_mtime_newer_right": {
+    "id": 5,
+    "left": {
+      "path": "file:///l/notas.md",
+      "kind": "file",
+      "size": 1234,
+      "mtime_ms": 1720000000000
+    },
+    "right": {
+      "path": "file:///r/notas.md",
+      "kind": "file",
+      "size": 1234,
+      "mtime_ms": 1720000009000
+    },
+    "verdict": "different",
+    "criterion": "mtime",
+    "confidence": "probable",
+    "newer": "right"
+  },
+  "different_by_link_target": {
+    "id": 6,
+    "left": {
+      "path": "file:///l/enlace",
+      "kind": "symlink",
+      "size": null,
+      "mtime_ms": null
+    },
+    "right": {
+      "path": "file:///r/enlace",
+      "kind": "symlink",
+      "size": null,
+      "mtime_ms": null
+    },
+    "verdict": "different",
+    "criterion": "link_target",
+    "confidence": "certain"
+  },
+  "only_left_hostile": {
+    "id": 7,
+    "left": {
+      "path": "file:///l/informe%FF%FE.dat",
+      "kind": "file",
+      "size": 0,
+      "mtime_ms": null
+    },
+    "verdict": "only_left",
+    "criterion": "presence",
+    "confidence": "certain"
+  },
+  "only_right_dir": {
+    "id": 8,
+    "right": {
+      "path": "file:///r/fotos",
+      "kind": "dir",
+      "size": null,
+      "mtime_ms": null
+    },
+    "verdict": "only_right",
+    "criterion": "presence",
+    "confidence": "certain"
+  },
+  "type_mismatch": {
+    "id": 9,
+    "left": {
+      "path": "file:///l/data",
+      "kind": "file",
+      "size": 5,
+      "mtime_ms": 1720000000000
+    },
+    "right": {
+      "path": "file:///r/data",
+      "kind": "dir",
+      "size": null,
+      "mtime_ms": null
+    },
+    "verdict": "type_mismatch",
+    "criterion": "kind",
+    "confidence": "certain"
+  },
+  "ambiguous_case_fold_hostile": {
+    "id": 10,
+    "left": {
+      "path": "file:///l/LEEME%FF.txt",
+      "kind": "file",
+      "size": 12,
+      "mtime_ms": 1720000000000
+    },
+    "verdict": "ambiguous",
+    "criterion": "presence",
+    "confidence": "unknown",
+    "reason": "case_fold",
+    "side": "left"
+  },
+  "ambiguous_case_fold_hostile_twin": {
+    "id": 11,
+    "left": {
+      "path": "file:///l/leeme%FF.txt",
+      "kind": "file",
+      "size": 34,
+      "mtime_ms": 1720000000000
+    },
+    "verdict": "ambiguous",
+    "criterion": "presence",
+    "confidence": "unknown",
+    "reason": "case_fold",
+    "side": "left"
+  },
+  "ambiguous_normalization_right": {
+    "id": 12,
+    "right": {
+      "path": "file:///r/cafe\u0301.txt",
+      "kind": "file",
+      "size": 3,
+      "mtime_ms": 1720000000000
+    },
+    "verdict": "ambiguous",
+    "criterion": "presence",
+    "confidence": "unknown",
+    "reason": "normalization",
+    "side": "right"
+  },
+  "error_unreadable_left": {
+    "id": 13,
+    "left": {
+      "path": "file:///l/denegado",
+      "kind": "dir",
+      "size": null,
+      "mtime_ms": null
+    },
+    "right": {
+      "path": "file:///r/denegado",
+      "kind": "dir",
+      "size": null,
+      "mtime_ms": null
+    },
+    "verdict": "error",
+    "criterion": "presence",
+    "confidence": "unknown",
+    "reason": "unreadable",
+    "side": "left"
+  },
+  "error_dir_too_large_right": {
+    "id": 14,
+    "verdict": "error",
+    "criterion": "presence",
+    "confidence": "unknown",
+    "reason": "dir_too_large",
+    "side": "right"
+  },
+  "error_read_failed_left": {
+    "id": 15,
+    "left": {
+      "path": "file:///l/grande.bin",
+      "kind": "file",
+      "size": 4096,
+      "mtime_ms": 1720000000000
+    },
+    "right": {
+      "path": "file:///r/grande.bin",
+      "kind": "file",
+      "size": 4096,
+      "mtime_ms": 1720000000000
+    },
+    "verdict": "error",
+    "criterion": "hash",
+    "confidence": "unknown",
+    "reason": "read_failed",
+    "side": "left"
+  }
+}

@@ -103,6 +103,21 @@ pub enum TaskKind {
     /// la degrada a [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual
     /// que `Search`/`Index`/`Embed`.
     RenameBatch,
+    /// Comparación de DOS árboles de directorios
+    /// (`fs.compare`/[`FS_COMPARE`](crate::methods::FS_COMPARE), 0.39.0, ADR
+    /// 0048). Lectura pura (regla 4 no aplica): sin journal, sin undo, no
+    /// escribe un byte. El progreso cuenta PAREJAS emitidas, no bytes: con el
+    /// rung de hash apagado la comparación no lee contenido alguno, así que una
+    /// barra de bytes pintaría cero para siempre — mismo caso que
+    /// [`TaskKind::RenameBatch`].
+    ///
+    /// Entra CON el método, en su mismo bump, y no después: el `task_id` de un
+    /// lote de [`COMPARE_ROWS`](crate::methods::COMPARE_ROWS) correlaciona con
+    /// una Task que el cliente tiene que poder clasificar en `task.list`. Un
+    /// cliente N-1 (0.38.x) la degrada a [`TaskKind::Unknown`] por el
+    /// `serde(other)` de abajo, igual que `Search`/`Index`/`Embed`/
+    /// `RenameBatch`.
+    Compare,
     /// Clase desconocida: un daemon N+1 (0.11+) envió un kind que ESTE proto no
     /// conoce → se acepta como genérica en vez de fallar el parse (forward-compat
     /// desde 0.10, como [`TaskState::Unknown`]). No cubre el borde hacia atrás

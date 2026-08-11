@@ -1,4 +1,16 @@
 {
+  "running_compare": {
+    "task_id": 17,
+    "kind": "compare",
+    "state": {
+      "kind": "running"
+    },
+    "bytes_done": 0,
+    "bytes_total": null,
+    "entries_done": 120,
+    "entries_total": null,
+    "current": "file:///home/user/origen/fotos"
+  },
   "running_mid_copy": {
     "task_id": 7,
     "kind": "copy",

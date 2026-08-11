@@ -430,6 +430,25 @@ fn golden_task_progress() {
                 },
             ),
             (
+                // 0.39.0 (ADR 0048): TaskKind::Compare en el wire, y con él la
+                // SEMÁNTICA del progreso de una comparación — `entries_*`
+                // cuenta PAREJAS emitidas, y `bytes_*` es cero/`None` porque
+                // con el rung de hash apagado no se lee un solo byte. El total
+                // es `None` a propósito: el walk no sabe cuántas parejas hay
+                // hasta que termina de recorrer los dos árboles.
+                "running_compare",
+                TaskProgress {
+                    task_id: TaskId::new(17),
+                    kind: TaskKind::Compare,
+                    state: TaskState::Running,
+                    bytes_done: 0,
+                    bytes_total: None,
+                    entries_done: 120,
+                    entries_total: None,
+                    current: Some(vpath("file:///home/user/origen/fotos")),
+                },
+            ),
+            (
                 // 0.31.0 (#104): TaskKind::Mkdir en el wire.
                 "running_mkdir",
                 TaskProgress {
@@ -708,6 +727,7 @@ fn golden_methods() {
     check_methods_ai(&fixtures);
     check_methods_rename_batch(&fixtures);
     check_methods_host(&fixtures);
+    check_methods_compare(&fixtures);
     // 98 → 101 en 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
     // ADR 0031). 101 → 106 en 0.33.0: + index_embed_params,
     // index_search_semantic_params(/_no_root)/result y semantic_hit (M4-IA-2,
@@ -726,7 +746,12 @@ fn golden_methods() {
     // 120 → 126 en 0.37.0 (#131): + host_volumes_params(/_pseudo),
     // host_volumes_result y los tipos sueltos volume/volume_hostile_no_sizes/
     // volume_future_kind (la forma "sin sizes" y el degrade `serde(other)`).
-    assert_eq!(fixtures.len(), 126, "[methods.json] fixtures sin caso Rust");
+    // 126 → 130 en 0.39.0 (ADR 0048): + fs_compare_params(/_minimo) y
+    // compare_rows_batch(/_empty) — la petición con todo poblado y la MÍNIMA
+    // (que es la que congela los defaults), más el lote y su forma vacía. La
+    // FILA tiene fichero propio (`compare_row.json`): su familia pinea una
+    // forma por veredicto.
+    assert_eq!(fixtures.len(), 130, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `fs.rename_batch*` (0.36.0): las PETICIONES de plan y de ejecución.
@@ -1995,6 +2020,85 @@ fn check_methods_search(fixtures: &BTreeMap<String, Value>) {
     );
 }
 
+/// `fs.compare` + `compare.rows` (0.39.0, ADR 0048): la PETICIÓN y el LOTE.
+///
+/// `fs_compare_params_minimo` es el que importa: dos raíces y nada más, y aun
+/// así el wire lleva `criteria` ENTERO, `mtime_tolerance_ms` y
+/// `follow_symlinks`. Esos defaults deciden si comparar dos árboles lee
+/// contenido (`hash: false`) y qué cuenta como «la misma fecha» (2000 ms, la
+/// regla FAT), así que se congelan explícitos en vez de omitirse: un peer que
+/// los dedujera al revés leería un terabyte que nadie pidió.
+fn check_methods_compare(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        CompareConfidence, CompareCriteria, CompareCriterion, CompareRowsBatch, CompareVerdict,
+        FsCompareParams,
+    };
+    check_one(
+        fixtures,
+        "fs_compare_params_minimo",
+        &FsCompareParams {
+            left: vpath("file:///home/user/origen"),
+            right: vpath("file:///home/user/copia"),
+            criteria: CompareCriteria::default(),
+            max_depth: None,
+            mtime_tolerance_ms: 2000,
+            follow_symlinks: false,
+        },
+    );
+    // Todo poblado, y con raíces HOSTILES: `max_depth` presente (se omite
+    // cuando es `None`, y esta fixture es la que lo demuestra por contraste),
+    // el rung caro encendido y tolerancia CERO — un filesystem que promete
+    // nanosegundos a los dos lados.
+    check_one(
+        fixtures,
+        "fs_compare_params",
+        &FsCompareParams {
+            left: vpath("file:///home/user/fotos-a%FF%FE"),
+            right: vpath("sftp://nas/fotos-a%FF%FE"),
+            criteria: CompareCriteria {
+                size: true,
+                mtime: true,
+                hash: true,
+            },
+            max_depth: Some(3),
+            mtime_tolerance_ms: 0,
+            follow_symlinks: false,
+        },
+    );
+    // El lote: `task_id` para correlacionar y las filas en el orden en que el
+    // walk las produjo. Nunca más de `COMPARE_ROWS_MAX_BATCH`.
+    check_one(
+        fixtures,
+        "compare_rows_batch",
+        &CompareRowsBatch {
+            task_id: TaskId::new(7),
+            rows: vec![compare_row(
+                1,
+                Some(compare_entry(
+                    "file:///home/user/origen/informe%FF%FE.dat",
+                    EntryKind::File,
+                    Some(1234),
+                    Some(1_720_000_000_000),
+                )),
+                None,
+                CompareVerdict::OnlyLeft,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+            )],
+        },
+    );
+    // Un lote VACÍO es una lista vacía en el wire, jamás una clave ausente: el
+    // pump del core puede cerrar la comparación sin filas nuevas.
+    check_one(
+        fixtures,
+        "compare_rows_batch_empty",
+        &CompareRowsBatch {
+            task_id: TaskId::new(7),
+            rows: vec![],
+        },
+    );
+}
+
 /// fs.copy/fs.move (con resume/verify de 0.6.0, ADR 0012).
 fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
     check_one(
@@ -2384,7 +2488,367 @@ fn method_names_frozen() {
     // 0.38.0 (task V3.5 del plan de volúmenes): `Volume::label` pasa a
     // `Option<Vec<u8>>` — corrección de wire dentro de la misma rama sin
     // publicar, ventana desplazada igual que cualquier bump.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.38.0");
+    // 0.39.0 (ADR 0048): fs.compare — la comparación de dos árboles como Task,
+    // con sus filas por notificación.
+    assert_eq!(methods::FS_COMPARE, "fs.compare");
+    assert_eq!(methods::COMPARE_ROWS, "compare.rows");
+    // Los LITERALES, no los símbolos, por el mismo motivo que
+    // `FS_RENAME_BATCH_MAX_PAIRS` arriba: son contrato que un tercero
+    // dimensiona por su cuenta. El tope de lote es el mismo que el de
+    // `search.hits` A PROPÓSITO — un lote de filas no es más caro que uno de
+    // hits —, y el de entradas por directorio es el que convierte un
+    // directorio desmesurado en UNA fila de error en vez de un OOM.
+    assert_eq!(methods::COMPARE_ROWS_MAX_BATCH, 256);
+    assert_eq!(methods::COMPARE_MAX_DIR_ENTRIES, 200_000);
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.39.0");
+}
+
+/// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,
+/// sin atributos (se omiten vacíos).
+fn compare_entry(wire: &str, kind: EntryKind, size: Option<u64>, mtime_ms: Option<i64>) -> Entry {
+    Entry {
+        path: vpath(wire),
+        kind,
+        size,
+        mtime_ms,
+        attrs: BTreeMap::new(),
+    }
+}
+
+/// Una fila sin los tres campos opcionales; quien necesite alguno la completa
+/// con sintaxis de actualización de struct.
+fn compare_row(
+    id: u64,
+    left: Option<Entry>,
+    right: Option<Entry>,
+    verdict: norte_proto::methods::CompareVerdict,
+    criterion: norte_proto::methods::CompareCriterion,
+    confidence: norte_proto::methods::CompareConfidence,
+) -> norte_proto::methods::CompareRow {
+    norte_proto::methods::CompareRow {
+        id,
+        left,
+        right,
+        verdict,
+        criterion,
+        confidence,
+        newer: None,
+        reason: None,
+        side: None,
+    }
+}
+
+/// La FILA de `fs.compare` (0.39.0, ADR 0048), congelada: una fixture por
+/// veredicto y, entre todas, el vocabulario ENTERO que el core llega a emitir
+/// — los seis criterios, las tres confianzas, los cinco motivos y los dos
+/// lados. Los cuatro fallbacks de `#[serde(other)]` NO tienen fixture a
+/// propósito: el core jamás los emite, así que no hay dirección de encode que
+/// pinear, y su degradación en DECODE la cubre `types.rs`
+/// (`unknown_enum_tokens_degrade_and_do_not_error`).
+///
+/// Lo que estas fixtures pinean, campo a campo:
+///
+/// - `same_size_unknown` es la razón de ser de la confianza: el lado derecho
+///   está DENTRO de un zip (`zip+file://…/!/…`, ADR 0018), que no da tamaño ni
+///   fecha fiables. La respuesta es `Same`/`Unknown`, no un error y no un
+///   `Certain` inventado.
+/// - `only_left_hostile` (izquierda) y las dos `ambiguous_case_fold_hostile*`
+///   llevan nombres no-UTF8 (`%FF`, `%FE`): regla dura 1 en las dos
+///   direcciones, y en los DOS lados de la comparación
+///   (`ambiguous_normalization_right` es del lado derecho).
+/// - Las tres filas `ambiguous_*` congelan la FORMA que el rustdoc de
+///   `CompareVerdict::Ambiguous` declara normativa: una colisión es de UN
+///   lado, así que es UNA fila por entrada implicada, con el otro lado en
+///   `None`. Las dos del par `case_fold` son las dos entradas que colapsan,
+///   con TAMAÑOS DISTINTOS para que se vea que son dos entradas y no una
+///   contada dos veces.
+/// - `ambiguous_normalization_right` escribe el gemelo NFD con escapes para
+///   que ningún editor pueda normalizarlo por su cuenta — mismo cuidado que
+///   `rename_collision.json`.
+/// - `error_dir_too_large_right` NO lleva entrada de ningún lado: un
+///   directorio que se pasa del tope se reporta sin haber podido listar nada,
+///   y esa es justo la forma que exime [`CompareRow::sides_are_consistent`].
+/// - Los `criterion` de las filas de problema (`ambiguous`, `error`) son
+///   `presence` salvo cuando un rung concreto sí llegó a correr
+///   (`error_read_failed_left`, que muere DENTRO del hash). El tipo no tiene
+///   variante «ningún rung» y no se le inventa una aquí: `unknown` es el
+///   fallback de decode y el core no lo emite jamás.
+#[test]
+fn golden_compare_row() {
+    let mut cases = compare_row_cases_content();
+    cases.extend(compare_row_cases_presence());
+    cases.extend(compare_row_cases_problems());
+
+    // Toda fixture congelada tiene que ser una fila LEGAL: si un golden dijera
+    // `OnlyLeft` llevando lado derecho, congelaría el bug en vez del contrato,
+    // y el core de la task C6 se escribiría contra él.
+    for (name, row) in &cases {
+        assert!(row.sides_are_consistent(), "[compare_row/{name}] lados");
+        assert!(row.reason_is_consistent(), "[compare_row/{name}] motivo");
+    }
+
+    check_family("compare_row.json", &cases);
+}
+
+/// La fecha de referencia de las fixtures de comparación.
+const COMPARE_T: i64 = 1_720_000_000_000;
+
+fn cf(wire: &str, size: Option<u64>, mtime_ms: Option<i64>) -> Entry {
+    compare_entry(wire, EntryKind::File, size, mtime_ms)
+}
+
+fn cd(wire: &str) -> Entry {
+    compare_entry(wire, EntryKind::Dir, None, None)
+}
+
+fn cln(wire: &str) -> Entry {
+    compare_entry(wire, EntryKind::Symlink, None, None)
+}
+
+/// Las filas que decide un rung de CONTENIDO (hash, mtime, size,
+/// `link_target`): las tres confianzas del vocabulario salen de aquí, porque es
+/// aquí donde un criterio prueba, sugiere o no puede decir. Ver el rustdoc de
+/// [`golden_compare_row`].
+fn compare_row_cases_content() -> Vec<(&'static str, norte_proto::methods::CompareRow)> {
+    use norte_proto::methods::CompareConfidence as Conf;
+    use norte_proto::methods::CompareCriterion as Crit;
+    use norte_proto::methods::CompareVerdict as V;
+    use norte_proto::methods::{CompareRow, Side};
+    vec![
+        (
+            "same_by_hash",
+            compare_row(
+                1,
+                Some(cf("file:///l/a.bin", Some(4096), Some(COMPARE_T))),
+                Some(cf("file:///r/a.bin", Some(4096), Some(COMPARE_T))),
+                V::Same,
+                Crit::Hash,
+                Conf::Certain,
+            ),
+        ),
+        // Dentro de la tolerancia por defecto (2000 ms): `Same`, pero solo
+        // `Probable` — dos fechas parecidas no prueban dos ficheros iguales.
+        (
+            "same_by_mtime",
+            compare_row(
+                2,
+                Some(cf("file:///l/doc.txt", Some(1234), Some(COMPARE_T))),
+                Some(cf("file:///r/doc.txt", Some(1234), Some(COMPARE_T + 1_500))),
+                V::Same,
+                Crit::Mtime,
+                Conf::Probable,
+            ),
+        ),
+        (
+            "same_size_unknown",
+            compare_row(
+                3,
+                Some(cf("file:///l/leeme.txt", Some(7), Some(COMPARE_T))),
+                Some(cf("zip+file:///r/paquete.zip/!/leeme.txt", None, None)),
+                V::Same,
+                Crit::Size,
+                Conf::Unknown,
+            ),
+        ),
+        (
+            "different_by_size",
+            compare_row(
+                4,
+                Some(cf("file:///l/informe.dat", Some(10), Some(COMPARE_T))),
+                Some(cf("file:///r/informe.dat", Some(20), Some(COMPARE_T))),
+                V::Different,
+                Crit::Size,
+                Conf::Certain,
+            ),
+        ),
+        // El campo que esta spec NO lee y la 2 necesita: qué lado es más
+        // nuevo. Se produce aquí porque no cuesta nada.
+        (
+            "different_by_mtime_newer_right",
+            CompareRow {
+                newer: Some(Side::Right),
+                ..compare_row(
+                    5,
+                    Some(cf("file:///l/notas.md", Some(1234), Some(COMPARE_T))),
+                    Some(cf(
+                        "file:///r/notas.md",
+                        Some(1234),
+                        Some(COMPARE_T + 9_000),
+                    )),
+                    V::Different,
+                    Crit::Mtime,
+                    Conf::Probable,
+                )
+            },
+        ),
+        // Los symlinks se comparan, no se siguen: el destino es bytes.
+        (
+            "different_by_link_target",
+            compare_row(
+                6,
+                Some(cln("file:///l/enlace")),
+                Some(cln("file:///r/enlace")),
+                V::Different,
+                Crit::LinkTarget,
+                Conf::Certain,
+            ),
+        ),
+    ]
+}
+
+/// Las filas que decide la PRESENCIA o el tipo, antes de mirar contenido
+/// alguno: siempre `Certain`, porque un lado que no existe no admite matices.
+fn compare_row_cases_presence() -> Vec<(&'static str, norte_proto::methods::CompareRow)> {
+    use norte_proto::methods::CompareConfidence as Conf;
+    use norte_proto::methods::CompareCriterion as Crit;
+    use norte_proto::methods::CompareVerdict as V;
+    vec![
+        (
+            "only_left_hostile",
+            compare_row(
+                7,
+                Some(cf("file:///l/informe%FF%FE.dat", Some(0), None)),
+                None,
+                V::OnlyLeft,
+                Crit::Presence,
+                Conf::Certain,
+            ),
+        ),
+        // Un directorio huérfano es UNA fila y no se enumera: el plan de la
+        // spec 2 lo copiará con un `fs.copy` recursivo.
+        (
+            "only_right_dir",
+            compare_row(
+                8,
+                None,
+                Some(cd("file:///r/fotos")),
+                V::OnlyRight,
+                Crit::Presence,
+                Conf::Certain,
+            ),
+        ),
+        (
+            "type_mismatch",
+            compare_row(
+                9,
+                Some(cf("file:///l/data", Some(5), Some(COMPARE_T))),
+                Some(cd("file:///r/data")),
+                V::TypeMismatch,
+                Crit::Kind,
+                Conf::Certain,
+            ),
+        ),
+    ]
+}
+
+/// Las filas de PROBLEMA: las dos que llevan `reason` —`ambiguous` y
+/// `error`— y, con ellas, los cinco motivos del vocabulario cerrado.
+fn compare_row_cases_problems() -> Vec<(&'static str, norte_proto::methods::CompareRow)> {
+    use norte_proto::methods::CompareConfidence as Conf;
+    use norte_proto::methods::CompareCriterion as Crit;
+    use norte_proto::methods::CompareReason as Why;
+    use norte_proto::methods::CompareVerdict as V;
+    use norte_proto::methods::{CompareRow, Side};
+    vec![
+        // Una colisión es de UN lado, así que la fila también: UNA fila por
+        // entrada implicada, con esa entrada en el campo de SU lado y el otro
+        // en `None`. `LEEME%FF.txt` y `leeme%FF.txt` son DOS filas —con
+        // tamaños distintos, para que se vea que no son la misma entrada
+        // contada dos veces— porque un plan de sincronización tiene que ver
+        // los DOS nombres antes de escribir sobre cualquiera de ellos. La
+        // forma está congelada en el rustdoc de `CompareVerdict::Ambiguous`
+        // (hallazgo MAJOR de protocol-guardian: estas fixtures llevaban una
+        // pareja cruzada, que es justo lo que el diseño dice que NO es una
+        // ambigüedad).
+        (
+            "ambiguous_case_fold_hostile",
+            CompareRow {
+                reason: Some(Why::CaseFold),
+                side: Some(Side::Left),
+                ..compare_row(
+                    10,
+                    Some(cf("file:///l/LEEME%FF.txt", Some(12), Some(COMPARE_T))),
+                    None,
+                    V::Ambiguous,
+                    Crit::Presence,
+                    Conf::Unknown,
+                )
+            },
+        ),
+        (
+            "ambiguous_case_fold_hostile_twin",
+            CompareRow {
+                reason: Some(Why::CaseFold),
+                side: Some(Side::Left),
+                ..compare_row(
+                    11,
+                    Some(cf("file:///l/leeme%FF.txt", Some(34), Some(COMPARE_T))),
+                    None,
+                    V::Ambiguous,
+                    Crit::Presence,
+                    Conf::Unknown,
+                )
+            },
+        ),
+        // La colisión por normalización, y en el lado DERECHO: el gemelo NFD
+        // de un nombre que ese mismo directorio ya tiene en NFC. Va escrito
+        // con escapes para que ningún editor lo normalice por su cuenta —
+        // mismo cuidado que `rename_collision.json`—, y su gemelo NFC tiene su
+        // propia fila exactamente igual que la pareja de arriba.
+        (
+            "ambiguous_normalization_right",
+            CompareRow {
+                reason: Some(Why::Normalization),
+                side: Some(Side::Right),
+                ..compare_row(
+                    12,
+                    None,
+                    Some(cf("file:///r/cafe\u{301}.txt", Some(3), Some(COMPARE_T))),
+                    V::Ambiguous,
+                    Crit::Presence,
+                    Conf::Unknown,
+                )
+            },
+        ),
+        (
+            "error_unreadable_left",
+            CompareRow {
+                reason: Some(Why::Unreadable),
+                side: Some(Side::Left),
+                ..compare_row(
+                    13,
+                    Some(cd("file:///l/denegado")),
+                    Some(cd("file:///r/denegado")),
+                    V::Error,
+                    Crit::Presence,
+                    Conf::Unknown,
+                )
+            },
+        ),
+        (
+            "error_dir_too_large_right",
+            CompareRow {
+                reason: Some(Why::DirTooLarge),
+                side: Some(Side::Right),
+                ..compare_row(14, None, None, V::Error, Crit::Presence, Conf::Unknown)
+            },
+        ),
+        (
+            "error_read_failed_left",
+            CompareRow {
+                reason: Some(Why::ReadFailed),
+                side: Some(Side::Left),
+                ..compare_row(
+                    15,
+                    Some(cf("file:///l/grande.bin", Some(4096), Some(COMPARE_T))),
+                    Some(cf("file:///r/grande.bin", Some(4096), Some(COMPARE_T))),
+                    V::Error,
+                    Crit::Hash,
+                    Conf::Unknown,
+                )
+            },
+        ),
+    ]
 }
 
 #[test]
