@@ -1,0 +1,28 @@
+---
+source: crates/norte-tui/tests/snapshots_ui.rs
+expression: render_80x24(&app)
+---
+"┌ Comparar — ⟨file⟩/casa ↔ ⟨file⟩/otro ────────────────────────────────────────┐"
+"│izquierda                                derecha                              │"
+"│probado.bin                  1.0 KiB =! probado.bin                  2.0 KiB  │"
+"│supuesto.bin                 1.0 KiB =~ supuesto.bin                 2.0 KiB  │"
+"│en-archivo.txt               1.0 KiB =? en-archivo.txt               2.0 KiB  │"
+"│distinto.txt                 1.0 KiB #! distinto.txt                 2.0 KiB  │"
+"│! �.dat                      1.0 KiB <!                                       │"
+"│                                     >! solo-derecha                 2.0 KiB  │"
+"│clase-distinta               1.0 KiB T! clase-distinta               2.0 KiB  │"
+"│                                     E?                                       │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│1+iguales 3 · 2+distintas 1 · 3+solo izq. 1 · 4+solo der. 1 · 5+problemas 2   │"
+"│[tab] lado · [1-5] filtro · [enter] ir allí · [esc] cerrar                    │"
+"└ comparación: 8 filas · actuando sobre: izquierdo ────────────────────────────┘"
+" ⟨file⟩/casa  2/5                                                               "

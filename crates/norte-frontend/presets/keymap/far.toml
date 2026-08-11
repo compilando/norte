@@ -26,6 +26,13 @@
 # single-character key, not only letters, and `+`/`-`/`*` are single-character
 # keys — they join the omitted list below, not approximated onto `mark.all`.
 #
+# `pane.compare-dirs` is deliberately UNBOUND here. Far's own "Compare
+# folders" lives on the F9 pull-down (Commands menu) with no chord of its
+# own, and Shift+F2 — the default the other presets take from Total
+# Commander — is already Far's "Unpack files". Inventing a chord for a
+# preset whose whole point is fidelity would be worse than the reference
+# sheet listing it unbound, which is what happens instead.
+#
 # Omitted families (norte has no concept): the pull-down menu bar (F9) and
 # its "select last menu item" (Shift+F10); the user menu (F2); the plugin
 # commands menu (F11) and plugin configuration (Alt+Shift+F9); internal/

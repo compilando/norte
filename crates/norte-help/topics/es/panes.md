@@ -22,6 +22,7 @@ commands = [
     "pane.select-drive",
     "pane.select-drive-left",
     "pane.select-drive-right",
+    "pane.compare-dirs",
 ]
 context = ["browse"]
 +++
@@ -152,6 +153,52 @@ espacio libre mientras la miras, el mismo contrato que ya cumplen
 {{cmd:pane.history}} y {{cmd:pane.hotlist}}. Una tecla dentro del picker
 alterna entre la lista de cada día y todos los montajes del host, sistemas de
 archivos de sistema incluidos, y el pie dice en cuál de los dos estás.
+
+# Comparar los dos paneles
+
+{{cmd:pane.compare-dirs}} responde a la pregunta para la que existe un gestor
+de archivos ortodoxo: **¿son iguales estos dos árboles?** Recorre los dos
+paneles a la vez y abre un panel de diferencias donde cada fila es un nombre,
+visto desde los dos lados.
+
+No se escribe nada. Esta tecla produce una respuesta y solo una respuesta: ni
+copia, ni borra, ni propone un plan. Es también la forma honesta de comprobar
+una transferencia recién terminada, que es la pregunta que la gente hace de
+verdad después de cada copia.
+
+Cada fila lleva dos marcas, y la segunda es la que merece la pena aprender. La
+primera dice QUÉ se decidió: `=` igual, `#` distinto, `<` solo a la izquierda,
+`>` solo a la derecha, `T` dos clases distintas bajo un mismo nombre, `A` un
+emparejamiento ambiguo, `E` una fila que no se pudo leer. La segunda dice
+CUÁNTO vale ese veredicto: `!` lo prueba, `~` lo sugiere, `?` significa que la
+ubicación no pudo decirlo.
+
+Esa segunda marca no es adorno. Una fila con `= ~` se llamó *igual* porque las
+dos fechas coinciden, y dos ficheros con la misma fecha pueden tener bytes
+distintos; una con `= !` la probó un hash, o un tamaño que zanjó la cuestión.
+Un archivo comprimido no tiene una fecha de la que fiarse, y responde `?` en
+vez de que se le invente algo — que es una respuesta de verdad, no un fallo.
+
+La comparación no lee el contenido de los ficheros salvo que se lo pidas. Los
+nombres, las clases, los tamaños y las fechas bastan para casi cualquier
+pregunta, y hacer el hash de un terabyte por SFTP porque has pulsado una tecla
+no bastaría.
+
+`Tab` cambia el lado desde el que miras, y el pie dice cuál es. Nunca se
+infiere de la fila: una fila que solo existe a la izquierda, mirada desde la
+derecha, no tiene adónde ir y lo dice, en vez de llevarte en silencio al otro
+lado. Hoy el lado decide dónde aterriza el `Enter`; actuar sobre una fila sin
+salir del diff —verla, copiarla, borrarla— es trabajo de la spec siguiente, y
+hasta entonces la forma de hacer cualquiera de esas cosas es pulsar `Enter` y
+usar las teclas que ya conoces una vez allí. Los dígitos `1` a `5` esconden y
+enseñan
+categorías enteras — iguales, distintas, solo izquierda, solo derecha, y todo
+lo que salió mal — y esconder una categoría jamás mueve lo que está
+seleccionado. `Enter` deja el diff y te lleva a donde la fila seleccionada vive
+de verdad, que es como se abre un directorio que solo existe en un lado: el
+recorrido lo cuenta como UNA fila en vez de enumerar un subárbol cuya respuesta
+ya conoce. `Esc` cancela una comparación que sigue en marcha, y cierra el panel
+cuando ya no lo está.
 
 > 💡 Un directorio al que vuelves a menudo merece un favorito: el panel recuerda por dónde ha pasado, y los favoritos son comunes a los dos paneles.
 

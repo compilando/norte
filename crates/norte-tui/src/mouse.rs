@@ -344,6 +344,13 @@ fn overlay_open(app: &App) -> bool {
         || app.extensions.is_some()
         || app.nav_popup.is_some()
         || app.search_dialog.is_some()
+        // El panel de diferencias SUSTITUYE a los dos panes en pantalla, así
+        // que un click ahí caía sobre un listado que ya no se ve — y un doble
+        // click hacía un `cd` de verdad en un pane invisible, dejando el
+        // panel abierto sobre unas raíces que ya no describen a nadie
+        // (review MAJOR-1). `keyboard_owner` ya lo declara dueño del teclado;
+        // esto es la otra mitad de la misma pieza.
+        || app.compare.is_some()
 }
 
 /// Un evento de ratón de crossterm, con el reloj real.

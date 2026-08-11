@@ -47,6 +47,7 @@ keymap = [
     { on = ["/"], run = "pane.quick-search" },
     { on = ["alt+down"], run = "pane.history" },
     { on = ["alt+f7"], run = "pane.search" },
+    { on = ["shift+f2"], run = "pane.compare-dirs" },
     { on = ["alt+e"], run = "pane.names-encoding" },
     { on = ["ctrl+r"], run = "pane.refresh" },
     { on = ["ctrl+h"], run = "pane.toggle-hidden" },

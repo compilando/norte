@@ -584,6 +584,7 @@ help-cmd-pane-refresh = reload both panes (Ctrl+R)
 help-cmd-viewer-encoding-auto = back to auto-detection
 help-cmd-viewer-hex = toggle hex view
 help-cmd-pane-search = search by name/content (Alt+F7)
+help-cmd-pane-compare-dirs = compare the two panes and open the diff pane
 help-cmd-pane-copy-path = copy the path of the selection to the clipboard
 search-title = Search
 search-name = name (glob):
@@ -597,6 +598,67 @@ search-status-done = search: { $n } hits
 search-status-truncated = search: { $n } hits (truncated)
 search-status-cancelled = search: { $n } hits (cancelled)
 search-status-failed = search failed: { $error }
+
+# --- Directory comparison (2026-08-11-directory-comparison.md, `Shift+F2`) ---
+# The diff pane. Every row says WHAT was decided, WHICH criterion decided it
+# and HOW MUCH that criterion is worth, and each of the three is a word here
+# rather than a colour: spec §17 wants a textual cue, and `same/probable`
+# versus `same/certain` is precisely the pair a colour-blind reader must not
+# lose.
+compare-title = Compare
+compare-header-left = left
+compare-header-right = right
+compare-empty = no rows yet
+compare-hint = [tab] side · [1-5] filter · [enter] go there · [esc] close
+compare-active-side = acting on: { $side }
+compare-status-running = compare: { $n } rows (comparing…)
+compare-status-done = compare: { $n } rows
+# The row stream ended with FEWER rows than the task counted: a notification
+# batch was dropped between the daemon and here. Saying "done" would be a lie
+# about completeness, which on a comparison is the whole answer.
+compare-status-incomplete = compare: { $n } of { $total } rows (some were lost in transit)
+compare-status-cancelled = compare: { $n } rows (cancelled)
+compare-status-failed = compare failed: { $error }
+# Refused locally, before a round trip: the daemon answers `-32602` for it too,
+# but the reader deserves the sentence without the wait.
+compare-same-path = both panes are on the same directory — there is nothing to compare
+compare-no-target = that row has nothing on the { $side } side
+compare-side-left = left
+compare-side-right = right
+compare-side-unknown = an unknown side
+compare-verdict-same = same
+compare-verdict-different = different
+compare-verdict-only-left = only on the left
+compare-verdict-only-right = only on the right
+compare-verdict-type-mismatch = different kind
+compare-verdict-ambiguous = ambiguous
+compare-verdict-error = error
+compare-verdict-unknown = verdict this version does not know
+compare-confidence-certain = certain
+compare-confidence-probable = probable
+# NOT a failure: an archive with no trustworthy date, an object store whose
+# ETag is a hash only sometimes. An honest provider, and the reason the
+# confidence vocabulary exists.
+compare-confidence-unknown = cannot be sure
+compare-confidence-unrecognised = confidence this version does not know
+compare-criterion-presence = presence
+compare-criterion-kind = kind
+compare-criterion-link-target = link target
+compare-criterion-size = size
+compare-criterion-mtime = date
+compare-criterion-hash = content hash
+compare-criterion-unknown = criterion this version does not know
+compare-reason-case-fold = two names on one side differ only in case
+compare-reason-normalization = two names on one side differ only in Unicode normalization
+compare-reason-unreadable = the directory could not be listed
+compare-reason-dir-too-large = the directory is over the entry limit
+compare-reason-read-failed = a read failed while hashing
+compare-reason-unknown = reason this version does not know
+compare-filter-same = same
+compare-filter-different = different
+compare-filter-only-left = only left
+compare-filter-only-right = only right
+compare-filter-problems = problems
 on-yes = on
 on-no = off
 
@@ -769,7 +831,7 @@ keymap-unavailable-not-here = { $command }: not available here
 keymap-count-ignored = { $command } does not take a count ({ $count } ignored)
 keymap-reason-archive-write = writing archives
 keymap-reason-editor = built-in editor
-keymap-reason-compare-sync = directory compare and sync
+keymap-reason-sync = directory synchronisation
 keymap-reason-tree = directory tree panel
 keymap-reason-tabs = panel tabs
 keymap-reason-sort = sort commands

@@ -894,3 +894,50 @@ fn con_mouse_false_no_hay_captura_ni_manejo() {
     );
     assert_eq!(app.focus(), 0);
 }
+
+/// **Review MAJOR-1.** El panel de diferencias (`Shift+F2`) SUSTITUYE a los
+/// dos panes en pantalla. Sin declararlo overlay, la geometría de los panes
+/// seguía siendo válida y el ratón resolvía filas de un listado que el lector
+/// no puede ver: la rueda movía su cursor, un click marcaba entradas, y un
+/// DOBLE click pedía un `nav.enter` de verdad — un `cd` en un pane invisible,
+/// con el panel todavía abierto sobre unas raíces que ya no describen a nadie.
+///
+/// `keyboard_owner` ya lo declara dueño del teclado; esto es la otra mitad de
+/// la misma pieza, y el rustdoc de `overlay_open` es donde está escrita la
+/// regla: «el ratón hace lo mismo, de una pieza».
+#[test]
+fn el_panel_de_diferencias_se_come_el_raton_como_cualquier_overlay() {
+    let mut app = app_pintada(5);
+    let dir_antes = [app.panes[0].dir().clone(), app.panes[1].dir().clone()];
+    let cursor_antes = app.panes[0].cursor();
+
+    app.compare = Some(norte_tui::app::CompareView::new(
+        vp("file:///izq"),
+        vp("file:///der"),
+        0,
+        None,
+        None,
+    ));
+
+    let t0 = std::time::Instant::now();
+    // Un click cualquiera, y el doble click que sería un `cd`.
+    assert_eq!(
+        mouse::handle_at(&mut app, ev(ABAJO, 5, FILA0 + 1), t0),
+        After::Nothing
+    );
+    assert_eq!(
+        mouse::handle_at(
+            &mut app,
+            ev(ABAJO, 5, FILA0 + 1),
+            t0 + std::time::Duration::from_millis(120)
+        ),
+        After::Nothing,
+        "un doble click NO puede pedir un nav.enter en un pane que no se ve"
+    );
+    assert_eq!(app.panes[0].cursor(), cursor_antes, "ni mover su cursor");
+    assert_eq!(
+        [app.panes[0].dir().clone(), app.panes[1].dir().clone()],
+        dir_antes
+    );
+    assert!(app.compare.is_some(), "y el panel sigue donde estaba");
+}

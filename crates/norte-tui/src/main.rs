@@ -23,9 +23,9 @@ use norte_proto::methods::{FsSearchParams, SearchHits};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
     ALLOW_COLUMNS, ALLOW_EXTENSIONS, ALLOW_NAV_POPUP, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, App,
-    DialogOutcome, ExtensionManager, HelpOutcome, HelpView, KeymapsError, Modal, NavPopup,
-    NavPopupKind, Palette, Pane, PendingWrite, PickerAction, SearchDialog, SearchState, Settings,
-    SettingsEditError, Shortcuts, Trail, TrailStep, TransferKind, config_error_category,
+    CompareState, DialogOutcome, ExtensionManager, HelpOutcome, HelpView, KeymapsError, Modal,
+    NavPopup, NavPopupKind, Palette, Pane, PendingWrite, PickerAction, SearchDialog, SearchState,
+    Settings, SettingsEditError, Shortcuts, Trail, TrailStep, TransferKind, config_error_category,
     detail_for_bar, dialog_action, error_category, error_message, io_error_category,
     keymaps_error_category, theme_error_category, trust_lua_key, volume_items,
 };
@@ -95,6 +95,23 @@ struct SearchRun {
     /// Estado del run: `Running` mientras el walker emite; terminal tras
     /// cerrarse el canal (se lee del `TaskProgress`).
     state: SearchState,
+}
+
+/// Una comparación de directorios EN CURSO (`Shift+F2`,
+/// 2026-08-11-directory-comparison.md): la Task cancelable y el canal de lotes
+/// de filas. Mismo molde que [`SearchRun`] — vive en el run loop, se drena en
+/// el `select!` y se suelta al cerrarse el panel, cancelando la Task (regla 3).
+struct CompareRun {
+    /// Task de `fs.compare` (cancelable con `TaskRef::cancel`).
+    task: TaskRef,
+    /// Canal de lotes de filas (embebido: lo cierra el walk; remoto: la bomba
+    /// del `RemoteBackend` lo cierra al terminal).
+    rx: tokio::sync::mpsc::Receiver<norte_proto::methods::CompareRowsBatch>,
+    /// Filas RECIBIDAS. Contador propio y no `pane.len()` por lo mismo que en
+    /// la búsqueda: no depender de lo que el modelo haga con ellas.
+    rows: usize,
+    /// Estado del run; terminal tras cerrarse el canal.
+    state: CompareState,
 }
 
 /// Petición `ai.rename_plan` EN VUELO (M4-IA). Abortar el `JoinHandle`
@@ -2242,6 +2259,9 @@ async fn run(
     // Búsqueda viva en curso (liveSearch T6): a lo sumo una (el pane virtual
     // es uno). Molde `Fill`: se drena en el select y se suelta al salir.
     let mut search_run: Option<SearchRun> = None;
+    // Comparación de directorios en curso (`Shift+F2`): a lo sumo una — el
+    // panel de diferencias es uno. Mismo molde que `search_run`.
+    let mut compare_run: Option<CompareRun> = None;
     // Petición ai.rename_plan en vuelo (M4-IA): a lo sumo una — relanzar
     // aborta la anterior. Se cosecha en el select y Esc (BROWSE) la cancela.
     let mut ai_rename_run: Option<AiRenameRun> = None;
@@ -2296,6 +2316,14 @@ async fn run(
         // `continue` — así que el sitio que los cubre a todos, presentes y
         // futuros, es la cabecera de la vuelta. Antes del draw: los paneles
         // que se repinten ya son los del listado refrescado.
+        // `Shift+F2`: el despacho resolvió QUÉ comparar; el run loop es el
+        // dueño del canal y de la Task, así que lanza. Mismo reparto que
+        // `pending_shell`/`pending_open`, y en la misma cabecera de vuelta,
+        // por la misma razón: los brazos que responden teclas tienen sus
+        // propios `continue`.
+        if let Some(params) = app.pending_compare.take() {
+            launch_compare(app, backend, &mut compare_run, params).await;
+        }
         if let Some(pending) = app.pending_shell.take() {
             let norte_tui::app::PendingShell {
                 argv,
@@ -2587,6 +2615,16 @@ async fn run(
                 }
             } => {
                 drain_search(app, &mut search_run, hits);
+            }
+            batch = async {
+                // Igual que el brazo de hits: solo se drena con el run VIVO,
+                // porque un canal cerrado devolvería `None` en bucle (spin).
+                match &mut compare_run {
+                    Some(c) if c.state == CompareState::Running => c.rx.recv().await,
+                    _ => std::future::pending().await,
+                }
+            } => {
+                drain_compare(app, &mut compare_run, batch);
             }
             res = async {
                 // ai.rename_plan en vuelo (M4-IA): cosecha sin bloquear —
@@ -3009,6 +3047,27 @@ async fn run(
                             launch_search(app, backend, &mut fill, &mut search_run, params)
                                 .await;
                         }
+                    } else if app.compare.is_some() && !modal_wins(app) {
+                        // Panel de diferencias (`Shift+F2`): teclas FIJAS,
+                        // como el diálogo de búsqueda y la palette. No resuelve
+                        // por el contexto `dialog` porque no hay vocabulario
+                        // `dialog.*` para «cambia de lado» ni «esconde los
+                        // iguales», y no es una pantalla del keymap propia
+                        // porque eso serían siete presets tocados por una
+                        // tecla que todavía no tiene idioma establecido.
+                        on_compare_key(
+                            app,
+                            backend,
+                            &mut events,
+                            &mut fill,
+                            &mut decorate_fetch,
+                            &mut last_probed,
+                            &mut search_run,
+                            &mut compare_run,
+                            key.modifiers,
+                            key.code,
+                        )
+                        .await;
                     } else if app.palette.is_some() && !modal_wins(app) {
                         // Command palette (H1 T4): editor de filtro libre,
                         // como el diálogo de búsqueda de arriba — sus
@@ -8440,6 +8499,346 @@ fn drain_search(app: &mut App, search_run: &mut Option<SearchRun>, hits: Option<
     }
 }
 
+/// Lanza `fs.compare` sobre los dos panes y abre el panel de diferencias.
+///
+/// Los params ya vienen resueltos y validados por
+/// [`App::request_compare`](norte_tui::app::App::request_compare) — este lado
+/// solo es dueño del canal y de la Task. Un panel anterior se reemplaza y su
+/// Task se cancela (regla 3): dos comparaciones a la vez serían dos flujos
+/// alimentando un solo panel.
+async fn launch_compare(
+    app: &mut App,
+    backend: &Backend,
+    compare_run: &mut Option<CompareRun>,
+    params: norte_proto::methods::FsCompareParams,
+) {
+    let (left_root, right_root) = (params.left.clone(), params.right.clone());
+    match backend.compare(params).await {
+        Ok((task, rx)) => {
+            app.message = None;
+            // Las dos reinterpretaciones (#57) salen de los dos panes de
+            // los que salieron las raíces, en ese mismo orden.
+            let izq = app.focus();
+            let (left_encoding, right_encoding) = (
+                app.panes[izq].name_encoding(),
+                app.panes[izq ^ 1].name_encoding(),
+            );
+            app.compare = Some(norte_tui::app::CompareView::new(
+                left_root,
+                right_root,
+                izq,
+                left_encoding,
+                right_encoding,
+            ));
+            if let Some(old) = compare_run.replace(CompareRun {
+                task,
+                rx,
+                rows: 0,
+                state: CompareState::Running,
+            }) {
+                old.task.cancel();
+            }
+        }
+        // El panel NO se abre: un panel vacío que dice «fallo» es peor que la
+        // frase en la barra, porque además hay que cerrarlo. La categoría va
+        // saneada, jamás el error crudo del provider.
+        Err(e) => {
+            app.message = Some(ta(
+                "compare-status-failed",
+                &[("error", &detail_for_bar(&error_category(&e)))],
+            ));
+        }
+    }
+}
+
+/// Aplica un lote de filas (o el cierre del canal) al panel de diferencias.
+///
+/// `None` = fin del flujo. Y ahí está la diferencia con la búsqueda, que es lo
+/// que C6 descubrió y el plan no dice: **que el canal se cierre NO significa
+/// que hayan llegado todas las filas**. La bomba de filas y la del snapshot
+/// terminal son tasks independientes, así que el conteo se compara contra
+/// `TaskProgress::entries_done` DESPUÉS de cerrarse el flujo — y si falta
+/// algo, se dice ([`CompareState::Incomplete`]). En una comparación, lo
+/// completa que está la respuesta es parte de la respuesta.
+fn drain_compare(
+    app: &mut App,
+    compare_run: &mut Option<CompareRun>,
+    batch: Option<norte_proto::methods::CompareRowsBatch>,
+) {
+    let Some(c) = compare_run else {
+        return;
+    };
+    if let Some(b) = batch {
+        // El panel se cerró bajo el drenador: se suelta el run cancelando la
+        // Task, igual que hace la búsqueda al salir del modo virtual.
+        let Some(view) = app.compare.as_mut() else {
+            c.task.cancel();
+            *compare_run = None;
+            return;
+        };
+        c.rows += b.rows.len();
+        view.pane.extend(b.rows);
+    } else {
+        let (state, expected) = finalize_compare_state(c);
+        c.state = state;
+        if let Some(view) = app.compare.as_mut() {
+            view.state = state;
+            view.rows_expected = expected;
+            if state == CompareState::Failed {
+                let mut rx = c.task.progress();
+                if let norte_proto::TaskState::Failed { error } =
+                    rx.borrow_and_update().state.clone()
+                {
+                    view.error = Some(error_category(&error));
+                    app.message = Some(error_message(&error));
+                }
+            }
+        }
+    }
+}
+
+/// Lee el estado terminal de un [`CompareRun`] del `TaskProgress` (no
+/// bloqueante) y devuelve tambien cuantas filas contó la Task.
+///
+/// `Completed` con MENOS filas recibidas de las contadas = `Incomplete`. Un
+/// canal cerrado sin estado terminal publicado todavía (carrera: las dos
+/// bombas son independientes) se trata como `Done` con lo que hay — decir
+/// `Incomplete` ahí acusaría de pérdida a una carrera benigna.
+fn finalize_compare_state(c: &CompareRun) -> (CompareState, u64) {
+    let mut rx = c.task.progress();
+    let snapshot = rx.borrow_and_update().clone();
+    let expected = snapshot.entries_done;
+    let state = match snapshot.state {
+        norte_proto::TaskState::Cancelled => CompareState::Cancelled,
+        norte_proto::TaskState::Failed { .. } => CompareState::Failed,
+        norte_proto::TaskState::Completed if expected > c.rows as u64 => CompareState::Incomplete,
+        _ => CompareState::Done,
+    };
+    (state, expected)
+}
+
+/// Cuántas filas mueve una página en el panel de diferencias.
+///
+/// Una constante y no el alto del frame: el layout del panel lo decide
+/// `ui::draw` y todavía no devuelve su geometría al run loop como hace
+/// `pane_geometry` para los panes. Diez filas es lo que un `PageDown` recorre
+/// en un pane de altura media, así que el error es de RECORRIDO y no de
+/// corrección — el cursor nunca sale de la lista, porque `move_by` clampa.
+const COMPARE_PAGE_STEP: isize = 10;
+
+/// Lo que una tecla SIGNIFICA en el panel de diferencias.
+///
+/// Separado del despacho para poder afirmarlo sin un backend ni un terminal:
+/// lo que se puede equivocar aquí es la DECISIÓN —y una de ellas, la salida,
+/// es la diferencia entre un overlay y una trampa—, no el `cd` que viene
+/// después.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompareKey {
+    /// Nada que hacer con esta tecla.
+    Ignore,
+    /// Salir de norte (`Ctrl+C`, como en todos los demás overlays).
+    Quit,
+    /// Pedir la cancelación de la Task y quedarse: las filas ya llegadas se
+    /// conservan.
+    CancelTask,
+    /// Cerrar el panel, cancelando la Task si sigue viva.
+    Close,
+    /// Cambiar el lado activo.
+    SwapSide,
+    /// Mover el cursor.
+    Move(isize),
+    /// Al principio / al final de lo visible.
+    First,
+    Last,
+    /// Alternar el filtro de la categoría `n` de `CATEGORIES`.
+    Filter(usize),
+    /// Ir a donde vive la fila.
+    Open,
+}
+
+/// Traduce una tecla del panel de diferencias.
+///
+/// * `Ctrl+C` sale de norte. Este panel se queda el teclado ENTERO y `ISIG`
+///   está apagado en modo raw, así que sin esto era la única pantalla de
+///   norte de la que no se sale (review BLOCKER-1); los otros nueve overlays
+///   lo atienden igual.
+/// * El primer `Esc` sobre una comparación viva la cancela y conserva sus
+///   filas; **cualquier `Esc` posterior cierra**, sin mirar el estado de la
+///   Task. Condicionar el cierre a un estado terminal dejaba encerrado al
+///   lector cuando el canal de filas no llegaba a cerrarse nunca — un daemon
+///   caído, un provider colgado en una NFS muerta.
+/// * Cualquier otro modificador no pinta nada: sin ese filtro `Alt+1`
+///   togglea un filtro y `Alt+Tab` cambia de lado.
+fn compare_key(
+    mods: crossterm::event::KeyModifiers,
+    code: KeyCode,
+    running: bool,
+    cancel_requested: bool,
+) -> CompareKey {
+    use crossterm::event::KeyModifiers as M;
+    if mods.contains(M::CONTROL) {
+        return if code == KeyCode::Char('c') {
+            CompareKey::Quit
+        } else {
+            CompareKey::Ignore
+        };
+    }
+    if mods.contains(M::ALT) {
+        return CompareKey::Ignore;
+    }
+    match code {
+        KeyCode::Esc => {
+            if running && !cancel_requested {
+                CompareKey::CancelTask
+            } else {
+                CompareKey::Close
+            }
+        }
+        KeyCode::Tab => CompareKey::SwapSide,
+        KeyCode::Up => CompareKey::Move(-1),
+        KeyCode::Down => CompareKey::Move(1),
+        KeyCode::PageUp => CompareKey::Move(-COMPARE_PAGE_STEP),
+        KeyCode::PageDown => CompareKey::Move(COMPARE_PAGE_STEP),
+        KeyCode::Home => CompareKey::First,
+        KeyCode::End => CompareKey::Last,
+        // El rango del patrón es exactamente el de `CATEGORIES`, así que el
+        // índice no puede salirse.
+        KeyCode::Char(c @ '1'..='5') => CompareKey::Filter(c as usize - '1' as usize),
+        KeyCode::Enter => CompareKey::Open,
+        _ => CompareKey::Ignore,
+    }
+}
+
+/// Despacha una tecla del panel de diferencias (`Shift+F2`). Fijas, como las
+/// del diálogo de búsqueda: no hay vocabulario `dialog.*` para «cambia de
+/// lado» ni para «esconde los iguales». El significado lo decide
+/// [`compare_key`]; esto solo lo ejecuta.
+#[allow(clippy::too_many_arguments)]
+async fn on_compare_key(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    fill: &mut [Option<Fill>; 2],
+    decorate_fetch: &mut [Option<DecorateFetch>; 2],
+    last_probed: &mut Probed,
+    search_run: &mut Option<SearchRun>,
+    compare_run: &mut Option<CompareRun>,
+    mods: crossterm::event::KeyModifiers,
+    code: KeyCode,
+) {
+    use norte_frontend::compare::CATEGORIES;
+
+    let Some(cancel_requested) = app.compare.as_ref().map(|v| v.cancel_requested) else {
+        return;
+    };
+    let running = compare_run
+        .as_ref()
+        .is_some_and(|c| c.state == CompareState::Running);
+    match compare_key(mods, code, running, cancel_requested) {
+        CompareKey::Ignore => {}
+        CompareKey::Quit => {
+            if let Some(c) = compare_run.take() {
+                c.task.cancel();
+            }
+            app.quit = true;
+        }
+        CompareKey::CancelTask => {
+            if let Some(c) = compare_run.as_ref() {
+                c.task.cancel();
+            }
+            if let Some(view) = app.compare.as_mut() {
+                view.cancel_requested = true;
+            }
+        }
+        CompareKey::Close => {
+            // Soltar el `CompareRun` no cancela nada (`TaskRef` no tiene
+            // `Drop`): en remoto el daemon seguiría recorriendo los dos
+            // árboles enteros para un panel que ya no existe (review
+            // MAJOR-4). Se cancela SIEMPRE al salir.
+            if let Some(c) = compare_run.take() {
+                c.task.cancel();
+            }
+            app.close_compare();
+        }
+        CompareKey::Open => {
+            on_compare_enter(
+                app,
+                backend,
+                events,
+                fill,
+                decorate_fetch,
+                last_probed,
+                search_run,
+                compare_run,
+            )
+            .await;
+        }
+        otra => {
+            let Some(view) = app.compare.as_mut() else {
+                return;
+            };
+            match otra {
+                CompareKey::SwapSide => view.pane.swap_active_side(),
+                CompareKey::Move(delta) => view.pane.move_by(delta),
+                CompareKey::First => view.pane.select_first(),
+                CompareKey::Last => view.pane.select_last(),
+                CompareKey::Filter(i) => {
+                    if let Some(cat) = CATEGORIES.get(i) {
+                        view.pane.toggle_filter(*cat);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// `Enter` sobre una fila del panel de diferencias: navega al directorio REAL
+/// del lado ACTIVO y cierra el panel.
+///
+/// Un huérfano que el walk emitió como UNA fila sin enumerar su subárbol se
+/// expande así, que es el motivo por el que la fila lleva el `Entry` entero y
+/// no solo un nombre. Sin nada en el lado activo NO se cae al otro: se dice.
+#[allow(clippy::too_many_arguments)]
+async fn on_compare_enter(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    fill: &mut [Option<Fill>; 2],
+    decorate_fetch: &mut [Option<DecorateFetch>; 2],
+    last_probed: &mut Probed,
+    search_run: &mut Option<SearchRun>,
+    compare_run: &mut Option<CompareRun>,
+) {
+    let Some(view) = app.compare.as_ref() else {
+        return;
+    };
+    if view.pane.target_entry().is_none() {
+        let side = view.pane.active_side();
+        // La lengua ambiente, la misma que resuelven `t`/`ta` a dos líneas
+        // de aquí: pasar una distinta daría una frase medio traducida.
+        let side_word = norte_frontend::compare::side_label(side, norte_i18n::active());
+        app.message = Some(ta("compare-no-target", &[("side", &side_word)]));
+        return;
+    }
+    // El directorio al que ir lo decide el MODELO (regla 7): el propio path
+    // si la fila es un directorio, su padre si es un fichero — la misma regla
+    // que necesitará la GUI.
+    let Some(destino) = view.pane.navigation_target() else {
+        return;
+    };
+    // Al pane del lado ACTIVO, y el foco con él: mandar SIEMPRE al pane con
+    // foco le costaba al lector el otro directorio para ir a ver este.
+    let destino_pane = app.compare_active_pane().unwrap_or_else(|| app.focus());
+    if let Some(c) = compare_run.take() {
+        c.task.cancel();
+    }
+    app.close_compare();
+    app.set_focus(destino_pane);
+    let outcome = cd(app, backend, events, destino).await;
+    apply_cd(fill, decorate_fetch, last_probed, search_run, outcome);
+}
+
 /// Lee el estado terminal de un [`SearchRun`] del `TaskProgress` (no
 /// bloqueante) y lo mapea a [`SearchState`]. `Completed` con los hits al tope
 /// = `Truncated`; sin tope = `Done`. Un canal cerrado sin estado terminal aún
@@ -9423,6 +9822,10 @@ fn keyboard_owner(app: &App) -> u16 {
         app.extensions.is_some(),
         app.nav_popup.is_some(),
         app.search_dialog.is_some(),
+        // The diff pane (`Shift+F2`): a full keyboard owner while it is up,
+        // like the viewer and unlike the live-search pane. Its rows are not
+        // entries, so nothing behind it could act on what the cursor is on.
+        app.compare.is_some(),
         app.palette.is_some(),
         app.settings.is_some(),
         // K3c: el editor de atajos. Como los demás overlays, y no como el
@@ -9632,6 +10035,10 @@ async fn dispatch(
         // abierto sus teclas se comen antes del resolver (patrón overlay) —
         // este brazo solo corre para ABRIRLO.
         Command::PaneSearch => app.open_search_dialog(),
+        // `Shift+F2`: compara los dos panes. Solo RESUELVE los params y los
+        // deja en `pending_compare` — lanzar es del run loop, que es quien
+        // tiene el canal y la Task.
+        Command::PaneCompareDirs => app.request_compare(),
         Command::CursorUp => app.focused_mut().move_up(1),
         Command::CursorDown => app.focused_mut().move_down(1),
         // #124: una PÁGINA es una pantalla del pane (menos una fila de
@@ -11997,6 +12404,376 @@ mod apply_cd_tests {
         );
         assert!(f[0].is_some(), "sin pane re-listado, el fill sigue");
         assert!(!lp.is_empty(), "sin pane re-listado, la dedup sigue");
+    }
+}
+
+/// The diff pane's run-loop wiring (`Shift+F2`,
+/// 2026-08-11-directory-comparison.md). The MODEL is tested in
+/// `norte-frontend`, without a terminal; what is pinned here is the part only
+/// this binary can get wrong.
+#[cfg(test)]
+mod compare_tests {
+    use super::{App, CompareRun, CompareState, Pane, TaskRef, drain_compare, launch_compare};
+    use norte_proto::VPath;
+    use norte_proto::methods::{
+        CompareConfidence, CompareCriterion, CompareRow, CompareRowsBatch, CompareVerdict,
+    };
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire de test")
+    }
+
+    fn app_en(izq: &str, der: &str) -> App {
+        App::new(
+            Pane::new(vp(izq), Vec::new()),
+            Pane::new(vp(der), Vec::new()),
+        )
+    }
+
+    /// A synthetic run whose task reports `state` and `entries_done`, plus the
+    /// sender that stays alive so the channel is only closed on purpose.
+    fn run_con(
+        state: norte_proto::TaskState,
+        entries_done: u64,
+        recibidas: usize,
+    ) -> (
+        CompareRun,
+        tokio::sync::mpsc::Sender<CompareRowsBatch>,
+        tokio::sync::watch::Sender<norte_proto::TaskProgress>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::channel::<CompareRowsBatch>(4);
+        let id = norte_proto::TaskId::new(1);
+        let (progreso, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
+            task_id: id,
+            kind: norte_proto::TaskKind::Compare,
+            state,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done,
+            entries_total: None,
+            current: None,
+        });
+        (
+            CompareRun {
+                task: TaskRef::synthetic_for_tests(id, prx),
+                rx,
+                rows: recibidas,
+                state: CompareState::Running,
+            },
+            tx,
+            progreso,
+        )
+    }
+
+    fn fila(id: u64) -> CompareRow {
+        CompareRow {
+            id,
+            left: None,
+            right: None,
+            verdict: CompareVerdict::Error,
+            criterion: CompareCriterion::Presence,
+            confidence: CompareConfidence::Unknown,
+            newer: None,
+            reason: Some(norte_proto::methods::CompareReason::Unreadable),
+            side: None,
+        }
+    }
+
+    /// El panel que LANZA es el izquierdo, aunque sea el pane derecho de la
+    /// pantalla. La spec lo dice y no es cosmético: el lector que pulsa la
+    /// tecla desde la derecha espera que su directorio sea «el suyo», y todas
+    /// las marcas `<`/`>` del panel cuelgan de esa elección.
+    #[test]
+    fn el_pane_con_foco_es_el_lado_izquierdo() {
+        let mut app = app_en("file:///a", "file:///b");
+        app.switch_focus();
+        app.request_compare();
+        let params = app.pending_compare.expect("deja params pendientes");
+        assert_eq!(params.left, vp("file:///b"));
+        assert_eq!(params.right, vp("file:///a"));
+    }
+
+    /// C6, hallazgo 4: el daemon responde `InvalidPath` a dos raíces iguales,
+    /// y tiene razón — pero la frase no depende de una vuelta por la red, y
+    /// ninguna Task llega a existir.
+    #[test]
+    fn los_dos_panes_en_el_mismo_sitio_se_rechazan_aqui() {
+        let mut app = app_en("file:///a", "file:///a");
+        app.request_compare();
+        assert!(app.pending_compare.is_none(), "no puede pedirse la Task");
+        assert!(app.message.is_some(), "y el lector tiene que enterarse");
+    }
+
+    /// Una lista de hits no es un directorio: no hay raíz que mandar. Misma
+    /// negativa que ya dan mirror y pull sobre un pane virtual.
+    #[test]
+    fn un_pane_virtual_no_puede_compararse() {
+        let mut app = app_en("file:///a", "file:///b");
+        app.panes[1].begin_search(vp("file:///b"));
+        app.request_compare();
+        assert!(app.pending_compare.is_none());
+        assert_eq!(app.message, Some(norte_i18n::t("msg-pane-not-a-location")));
+    }
+
+    /// C6, hallazgo 3: no hay toggle de symlinks en la UI porque el engine
+    /// acepta el campo y lo ignora, así que `Backend::compare` responde
+    /// `Unsupported` a `true` antes de que exista Task. Pedir `true` desde
+    /// aquí sería pedir una promesa que nadie cumple.
+    #[test]
+    fn jamas_se_pide_seguir_symlinks() {
+        let mut app = app_en("file:///a", "file:///b");
+        app.request_compare();
+        assert!(!app.pending_compare.expect("params").follow_symlinks);
+    }
+
+    /// La copia local del default del wire no puede separarse del wire.
+    #[test]
+    fn la_tolerancia_por_defecto_sigue_al_wire() {
+        let del_wire: norte_proto::methods::FsCompareParams =
+            serde_json::from_str(r#"{"left":"file:///a","right":"file:///b"}"#)
+                .expect("params mínimos");
+        let mut app = app_en("file:///a", "file:///b");
+        app.request_compare();
+        assert_eq!(
+            app.pending_compare.expect("params").mtime_tolerance_ms,
+            del_wire.mtime_tolerance_ms
+        );
+    }
+
+    /// **C6, hallazgo 2 — el que el plan no dice.** Que se cierre el canal de
+    /// filas NO significa que hayan llegado todas: las dos bombas son tasks
+    /// independientes. Con la Task `Completed` contando MÁS filas de las
+    /// recibidas, el panel dice `Incomplete` — decir «hecho» sería mentir
+    /// sobre lo completa que está la respuesta, que en una comparación es la
+    /// respuesta entera.
+    #[tokio::test]
+    async fn un_lote_perdido_se_dice_en_vez_de_pasar_por_hecho() {
+        let mut app = app_en("file:///a", "file:///b");
+        app.compare = Some(norte_tui::app::CompareView::new(
+            vp("file:///a"),
+            vp("file:///b"),
+            0,
+            None,
+            None,
+        ));
+        // La task contó 9 filas; llegaron 7.
+        let (run, _tx, _p) = run_con(norte_proto::TaskState::Completed, 9, 7);
+        let mut run = Some(run);
+        drain_compare(&mut app, &mut run, None);
+        let view = app.compare.expect("el panel sigue abierto");
+        assert_eq!(view.state, CompareState::Incomplete);
+        assert_eq!(view.rows_expected, 9);
+    }
+
+    /// Y el caso contrario, que es el normal: todas las filas contadas
+    /// llegaron, así que `Done` — sin acusar de pérdida a nadie.
+    #[tokio::test]
+    async fn cuando_llegan_todas_es_hecho_y_no_incompleto() {
+        let mut app = app_en("file:///a", "file:///b");
+        app.compare = Some(norte_tui::app::CompareView::new(
+            vp("file:///a"),
+            vp("file:///b"),
+            0,
+            None,
+            None,
+        ));
+        let (run, _tx, _p) = run_con(norte_proto::TaskState::Completed, 7, 7);
+        let mut run = Some(run);
+        drain_compare(&mut app, &mut run, None);
+        assert_eq!(
+            app.compare.expect("el panel").state,
+            CompareState::Done,
+            "una carrera benigna no puede leerse como pérdida"
+        );
+    }
+
+    /// Cancelar conserva lo que llegó: la comparación no escribe nada, así
+    /// que las filas ya vistas siguen siendo ciertas.
+    #[tokio::test]
+    async fn cancelar_conserva_las_filas_que_llegaron() {
+        let mut app = app_en("file:///a", "file:///b");
+        app.compare = Some(norte_tui::app::CompareView::new(
+            vp("file:///a"),
+            vp("file:///b"),
+            0,
+            None,
+            None,
+        ));
+        let (run, _tx, _p) = run_con(norte_proto::TaskState::Cancelled, 2, 2);
+        let mut run = Some(run);
+        drain_compare(
+            &mut app,
+            &mut run,
+            Some(CompareRowsBatch {
+                task_id: norte_proto::TaskId::new(1),
+                rows: vec![fila(1), fila(2)],
+            }),
+        );
+        drain_compare(&mut app, &mut run, None);
+        let view = app.compare.expect("el panel");
+        assert_eq!(view.state, CompareState::Cancelled);
+        assert_eq!(view.pane.len(), 2);
+    }
+
+    /// Un lote que llega con el panel YA cerrado suelta el run y cancela la
+    /// Task (regla 3): sin esto, el drenador seguiría vivo alimentando un
+    /// panel que no existe.
+    #[tokio::test]
+    async fn un_lote_con_el_panel_cerrado_cosecha_el_run() {
+        let mut app = app_en("file:///a", "file:///b");
+        let (run, _tx, _p) = run_con(norte_proto::TaskState::Running, 0, 0);
+        let mut run = Some(run);
+        drain_compare(
+            &mut app,
+            &mut run,
+            Some(CompareRowsBatch {
+                task_id: norte_proto::TaskId::new(1),
+                rows: vec![fila(1)],
+            }),
+        );
+        assert!(run.is_none(), "el run tiene que soltarse");
+    }
+
+    /// **Lo que cazó el arnés de tmux y ninguna aserción del modelo podía
+    /// ver.** `Enter` sobre una fila navega al pane del lado ACTIVO, no al
+    /// pane con FOCO: mirando el lado derecho, el Enter mandaba el pane
+    /// izquierdo —el que tenía el foco— a ver el directorio de la derecha, y
+    /// el lector se quedaba con los dos panes en el mismo sitio y su
+    /// izquierda perdida.
+    ///
+    /// Se pinea sobre `compare_active_pane` y no sobre el `cd`, que necesita
+    /// un backend y un `EventStream`: lo que puede equivocarse es la ELECCIÓN
+    /// del pane, y es lo que esto fija.
+    #[test]
+    fn el_enter_va_al_pane_del_lado_activo_y_no_al_del_foco() {
+        let mut app = app_en("file:///a", "file:///b");
+        // Lanzada desde el pane DERECHO: el izquierdo del panel es panes[1].
+        app.switch_focus();
+        app.compare = Some(norte_tui::app::CompareView::new(
+            vp("file:///b"),
+            vp("file:///a"),
+            app.focus(),
+            None,
+            None,
+        ));
+        assert_eq!(
+            app.compare_active_pane(),
+            Some(1),
+            "lado izquierdo = panes[1]"
+        );
+        app.compare
+            .as_mut()
+            .expect("el panel")
+            .pane
+            .swap_active_side();
+        assert_eq!(
+            app.compare_active_pane(),
+            Some(0),
+            "el lado derecho del panel es el OTRO pane, sea cual sea el foco"
+        );
+        // Y con el panel cerrado no hay pane que elegir.
+        app.close_compare();
+        assert_eq!(app.compare_active_pane(), None);
+    }
+
+    /// **Review BLOCKER-1.** El panel se queda el teclado ENTERO y `ISIG`
+    /// está apagado en modo raw, así que si ninguna tecla cierra
+    /// incondicionalmente, el panel es una trampa: el estado solo pasa a
+    /// terminal cuando se cierra el canal de filas, y hay formas de que no se
+    /// cierre nunca —un daemon que se cae publica el fallo en el watch sin
+    /// tocar la ruta, un provider colgado en una NFS muerta no mira su token
+    /// hasta que vuelva el syscall—. Las DOS salidas, afirmadas:
+    #[test]
+    fn del_panel_de_diferencias_siempre_se_puede_salir() {
+        use crossterm::event::KeyModifiers as M;
+
+        // Ctrl+C sale de norte, con la Task viva o muerta, igual que en los
+        // otros nueve overlays.
+        for viva in [true, false] {
+            assert_eq!(
+                super::compare_key(
+                    M::CONTROL,
+                    crossterm::event::KeyCode::Char('c'),
+                    viva,
+                    false
+                ),
+                super::CompareKey::Quit,
+                "viva={viva}"
+            );
+        }
+        // Primer Esc con la Task viva: cancela y CONSERVA las filas.
+        assert_eq!(
+            super::compare_key(M::NONE, crossterm::event::KeyCode::Esc, true, false),
+            super::CompareKey::CancelTask
+        );
+        // El segundo cierra AUNQUE la Task siga diciendo que corre — que es
+        // justo el caso en el que el canal no se cierra nunca.
+        assert_eq!(
+            super::compare_key(M::NONE, crossterm::event::KeyCode::Esc, true, true),
+            super::CompareKey::Close
+        );
+        // Y con la Task ya terminal, el primer Esc cierra.
+        assert_eq!(
+            super::compare_key(M::NONE, crossterm::event::KeyCode::Esc, false, false),
+            super::CompareKey::Close
+        );
+    }
+
+    /// Un modificador que el panel no usa no puede COLARSE como la tecla
+    /// pelada: sin el filtro, `Alt+1` escondía una categoría y `Alt+Tab`
+    /// cambiaba de lado (review MINOR).
+    #[test]
+    fn una_tecla_con_alt_no_hace_nada_en_el_panel() {
+        use crossterm::event::{KeyCode as C, KeyModifiers as M};
+        for code in [C::Tab, C::Char('1'), C::Enter, C::Down] {
+            assert_eq!(
+                super::compare_key(M::ALT, code, false, false),
+                super::CompareKey::Ignore,
+                "{code:?}"
+            );
+            // Y sin modificador la MISMA tecla sí significa algo: el filtro
+            // no puede haberse comido el caso normal.
+            assert_ne!(
+                super::compare_key(M::NONE, code, false, false),
+                super::CompareKey::Ignore,
+                "{code:?}"
+            );
+        }
+        // Un Ctrl que no es Ctrl+C tampoco: se traga la tecla, no sale.
+        assert_eq!(
+            super::compare_key(M::CONTROL, C::Down, false, false),
+            super::CompareKey::Ignore
+        );
+    }
+
+    /// Un fallo al pedir la Task NO abre el panel: un panel vacío que dice
+    /// «fallo» es peor que la frase en la barra, porque además hay que
+    /// cerrarlo. Y el detalle va por categoría, jamás crudo.
+    #[tokio::test]
+    async fn un_lanzamiento_fallido_no_abre_el_panel() {
+        let engine = norte_core::Engine::new();
+        let backend = norte_core::backend::Backend::Embedded(std::sync::Arc::new(engine));
+        let mut app = app_en("file:///a", "file:///b");
+        let mut run: Option<CompareRun> = None;
+        // `follow_symlinks: true` es `Unsupported` antes de que exista Task
+        // alguna (C6, hallazgo 3): el fallo más barato de provocar aquí.
+        launch_compare(
+            &mut app,
+            &backend,
+            &mut run,
+            norte_proto::methods::FsCompareParams {
+                left: vp("file:///a"),
+                right: vp("file:///b"),
+                criteria: norte_proto::methods::CompareCriteria::default(),
+                max_depth: None,
+                mtime_tolerance_ms: 2000,
+                follow_symlinks: true,
+            },
+        )
+        .await;
+        assert!(app.compare.is_none(), "el panel no puede abrirse vacío");
+        assert!(run.is_none());
+        assert!(app.message.is_some());
     }
 }
 

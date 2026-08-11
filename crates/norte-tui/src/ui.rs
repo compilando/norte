@@ -132,7 +132,10 @@ fn list_offset(selected: Option<usize>, total: usize, height: u16) -> usize {
 /// es CROMO, y un click ahí resuelve a «este pane, ninguna fila».
 #[must_use]
 pub fn pane_geometry(app: &App, area: Rect) -> Option<[crate::mouse::PaneGeometry; 2]> {
-    if app.viewer.is_some() {
+    // Ni con el visor ni con el panel de diferencias: los dos sustituyen a
+    // los panes, y una geometría de algo que no está pintado es un click
+    // resuelto contra una fila que el lector no puede ver.
+    if app.viewer.is_some() || app.compare.is_some() {
         return None;
     }
     let rows = Layout::default()
@@ -245,19 +248,29 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                 .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
         });
 
-        for (i, pane) in app.panes.iter().enumerate() {
-            draw_pane(
-                frame,
-                cols[i],
-                pane,
-                app.focus() == i,
-                &app.theme,
-                now_ms,
-                &app.columns,
-                // #117 tarea 2: el catálogo cacheado del scheme del pane (hints
-                // y cabeceras); sin él se pinta con defaults, jamás se espera.
-                app.attr_catalog(pane.dir().scheme()),
-            );
+        // El panel de diferencias ocupa el sitio de los DOS panes: una fila
+        // tiene dos caras y un veredicto en medio, así que no cabe en media
+        // pantalla. La franja de tasks y la barra se quedan debajo, aunque la
+        // comparación no entre en el `TaskBoard` (igual que la búsqueda viva:
+        // su progreso lo pinta el pie del propio panel) — lo que se ve ahí
+        // debajo son las OTRAS tasks, que siguen corriendo.
+        if let Some(view) = &app.compare {
+            draw_compare(frame, rows[0], view, &app.theme);
+        } else {
+            for (i, pane) in app.panes.iter().enumerate() {
+                draw_pane(
+                    frame,
+                    cols[i],
+                    pane,
+                    app.focus() == i,
+                    &app.theme,
+                    now_ms,
+                    &app.columns,
+                    // #117 tarea 2: el catálogo cacheado del scheme del pane (hints
+                    // y cabeceras); sin él se pinta con defaults, jamás se espera.
+                    app.attr_catalog(pane.dir().scheme()),
+                );
+            }
         }
         draw_tasks(frame, rows[1], app);
         draw_status(frame, rows[2], app);
@@ -3136,6 +3149,293 @@ fn styled_columns(
             (id, w, s)
         })
         .collect()
+}
+
+/// Pinta el panel de diferencias (`Shift+F2`): cabecera con las dos raíces,
+/// una fila por pareja con las dos caras y las dos marcas entre ellas, y un
+/// pie con el lado activo, los filtros y el estado del run.
+///
+/// Nada de lo que decide QUÉ se ve está aquí (regla dura 7): las filas
+/// visibles, la selección y las marcas salen de
+/// [`norte_frontend::compare`], que se testea sin terminal. Este lado reparte
+/// anchos y elige colores.
+fn draw_compare(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    view: &crate::app::CompareView,
+    theme: &TuiTheme,
+) {
+    use norte_frontend::compare::cells_for;
+
+    let (left_txt, left_hostil) =
+        norte_frontend::path_display_with(&view.left_root, view.left_encoding);
+    let (right_txt, right_hostil) =
+        norte_frontend::path_display_with(&view.right_root, view.right_encoding);
+    let badge = |h: bool| if h { HOSTILE_BADGE } else { "" };
+    let title = format!(
+        " {} — {}{} ↔ {}{} ",
+        t("compare-title"),
+        badge(left_hostil),
+        left_txt,
+        badge(right_hostil),
+        right_txt
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.role(Role::BorderFocus))
+        .title(Span::styled(title, theme.role(Role::Title)))
+        .title_bottom(Span::styled(
+            compare_status_line(view),
+            theme.role(Role::Info),
+        ));
+    let outer = block.inner(area);
+    frame.render_widget(block, area);
+    if outer.width == 0 || outer.height == 0 {
+        return;
+    }
+    // Dos filas de pie DENTRO del marco: los filtros con sus cuentas, y las
+    // teclas. Iban las tres cosas en el título de abajo y a 80 columnas se
+    // cortaba a media palabra — el snapshot lo cazó, que es exactamente para
+    // lo que está. Con el marco tan corto que no caben, la lista se queda con
+    // todo: un panel sin filas no explica nada.
+    let (cabecera, inner, filtros_area, teclas_area) = compare_layout(outer);
+
+    // Anchos: las dos marcas y su separación en el centro, el resto a partes
+    // iguales entre las dos caras. `saturating_sub` porque un terminal
+    // estrecho es un terminal, no un panic.
+    let sides = inner.width.saturating_sub(COMPARE_MARKS_W);
+    let face_w = usize::from(sides / 2).max(1);
+
+    if let Some(a) = cabecera {
+        frame.render_widget(compare_header(face_w, theme), a);
+    }
+
+    // Solo se CONSTRUYE lo que cabe en pantalla (review BLOCKER-2). Antes se
+    // construía un `ListItem` —tres spans y dos `format!`— por cada fila
+    // VISIBLE, no por cada fila pintada: a cien mil filas eso es medio millón
+    // de asignaciones por frame, diez veces por segundo mientras el walk
+    // sigue alimentando. En remoto el propio pintor era entonces lo que
+    // llenaba el canal de filas, cuyos lotes `route_batch` DESCARTA — es
+    // decir, el cliente destruía la completitud de la respuesta y luego
+    // culpaba al transporte con «se perdieron algunas por el camino».
+    let visibles = view.pane.visible_len();
+    let alto = usize::from(inner.height);
+    let selected = view.pane.visible_index();
+    let offset = list_offset(selected, visibles, inner.height);
+    let rows: Vec<ListItem<'_>> = view
+        .pane
+        .visible()
+        .skip(offset)
+        .take(alto)
+        .map(|row| {
+            let cells = cells_for(row, view.left_encoding, view.right_encoding);
+            ListItem::new(Line::from(vec![
+                compare_face_span(cells.left.as_ref(), face_w, theme),
+                Span::styled(
+                    format!(" {}{} ", cells.glyphs.verdict, cells.glyphs.confidence),
+                    compare_mark_style(theme, row.verdict),
+                ),
+                compare_face_span(cells.right.as_ref(), face_w, theme),
+            ]))
+        })
+        .collect();
+    if visibles == 0 {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                t("compare-empty"),
+                theme.role(Role::Info),
+            ))),
+            inner,
+        );
+        return;
+    }
+    // La ventana ya está recortada, así que el índice del widget es relativo
+    // a ella. Una selección que un filtro esconde no resalta nada, que es la
+    // respuesta honesta.
+    let mut state = ListState::default();
+    state.select(
+        selected
+            .and_then(|i| i.checked_sub(offset))
+            .filter(|i| *i < alto),
+    );
+    frame.render_stateful_widget(
+        List::new(rows).highlight_style(theme.role(Role::Selection)),
+        inner,
+        &mut state,
+    );
+    if let Some(a) = filtros_area {
+        frame.render_widget(
+            Paragraph::new(Line::from(compare_filter_spans(view, theme))),
+            a,
+        );
+    }
+    if let Some(a) = teclas_area {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                t("compare-hint"),
+                theme.role(Role::Info),
+            ))),
+            a,
+        );
+    }
+}
+
+/// Ancho que se llevan las dos marcas del centro, con su separación.
+const COMPARE_MARKS_W: u16 = 5;
+
+/// Reparte el interior del marco: cabecera de columnas, lista, filtros y
+/// teclas.
+///
+/// Con el marco tan corto que no caben las tres filas de cromo, la LISTA se
+/// las queda todas: un panel sin filas no explica nada, y las teclas ya están
+/// en la ayuda.
+fn compare_layout(outer: Rect) -> (Option<Rect>, Rect, Option<Rect>, Option<Rect>) {
+    if outer.height < 5 {
+        return (None, outer, None, None);
+    }
+    let filas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(outer);
+    (Some(filas[0]), filas[1], Some(filas[2]), Some(filas[3]))
+}
+
+/// La cabecera de columnas del panel de diferencias.
+///
+/// Es CHROME, fuera de la lista: dentro de ella era la fila 0 y se iba con el
+/// scroll en cuanto se pasaba de la primera pantalla. Los panes normales la
+/// pintan así por lo mismo.
+fn compare_header(face_w: usize, theme: &TuiTheme) -> Paragraph<'static> {
+    Paragraph::new(Line::from(Span::styled(
+        format!(
+            "{:<face_w$} {:^3} {:<face_w$}",
+            norte_frontend::middle_ellipsis(&t("compare-header-left"), face_w),
+            "",
+            norte_frontend::middle_ellipsis(&t("compare-header-right"), face_w),
+        ),
+        theme
+            .role(Role::Regular)
+            .add_modifier(ratatui::style::Modifier::DIM),
+    )))
+}
+
+/// Una cara de una fila del panel de diferencias: el nombre YA enmascarado
+/// (badgeado si el saneado lo alteró) y su tamaño pegado a la derecha.
+///
+/// El lado vacío de un huérfano se pinta en BLANCO y no con un guion ni un
+/// «—»: la columna de al lado ya dice `<` o `>`, y un relleno inventado en la
+/// cara vacía es lo que hace que un huérfano se lea como una pareja.
+fn compare_face_span(
+    face: Option<&norte_frontend::compare::RowFace>,
+    face_w: usize,
+    theme: &TuiTheme,
+) -> Span<'static> {
+    let Some(f) = face else {
+        return Span::raw(" ".repeat(face_w));
+    };
+    let name = if f.hostile {
+        format!("{HOSTILE_BADGE} {}", f.name)
+    } else {
+        f.name.clone()
+    };
+    let size = f.size.map_or_else(String::new, norte_frontend::human_bytes);
+    // El nombre se recorta por el MEDIO (#79: por CELDAS y no por chars — un
+    // nombre CJK desbordaría el presupuesto y se comería la cola por la
+    // derecha).
+    let room = face_w.saturating_sub(size.chars().count() + 1).max(1);
+    let name = norte_frontend::middle_ellipsis(&name, room);
+    let pad = face_w.saturating_sub(UnicodeWidthStr::width(name.as_str()) + size.chars().count());
+    Span::styled(
+        format!("{name}{}{size}", " ".repeat(pad.max(1))),
+        // Del nombre CRUDO y no del enmascarado: el tema casa la extensión
+        // contra los bytes reales, y casarla contra la forma pintada daría a
+        // un nombre no-UTF8 un color en el listado y otro en la comparación
+        // de ese mismo listado.
+        theme.entry(&f.raw_name, f.kind),
+    )
+}
+
+/// El título de abajo: cómo va (o cómo acabó) la comparación, y sobre qué
+/// lado actúan los comandos de siempre.
+fn compare_status_line(view: &crate::app::CompareView) -> String {
+    let n = view.pane.len().to_string();
+    let estado = match view.state {
+        crate::app::CompareState::Running => ta("compare-status-running", &[("n", &n)]),
+        crate::app::CompareState::Done => ta("compare-status-done", &[("n", &n)]),
+        crate::app::CompareState::Incomplete => ta(
+            "compare-status-incomplete",
+            &[("n", &n), ("total", &view.rows_expected.to_string())],
+        ),
+        crate::app::CompareState::Cancelled => ta("compare-status-cancelled", &[("n", &n)]),
+        // La categoría del error se guarda en el view y se pinta de forma
+        // PERSISTENTE: un fallo no puede degradar a «hecho» en la tecla
+        // siguiente por haberse limpiado `App::message`.
+        crate::app::CompareState::Failed => ta(
+            "compare-status-failed",
+            &[("error", view.error.as_deref().unwrap_or(""))],
+        ),
+    };
+    let lado = ta(
+        "compare-active-side",
+        &[(
+            "side",
+            &norte_frontend::compare::side_label(view.pane.active_side(), norte_i18n::active()),
+        )],
+    );
+    format!(" {estado} · {lado} ")
+}
+
+/// La fila de filtros: la tecla, si está encendido o apagado, el nombre y la
+/// cuenta de filas que hay en esa categoría.
+///
+/// Un filtro APAGADO se marca con un glifo (`-` frente a `+`) y no solo con
+/// un color (spec §17), y la cuenta se sigue enseñando: esconder categorías
+/// es justo lo que haría mentir al panel si no lo dijera.
+fn compare_filter_spans(view: &crate::app::CompareView, theme: &TuiTheme) -> Vec<Span<'static>> {
+    use norte_frontend::compare::CATEGORIES;
+
+    let mut spans = Vec::new();
+    for (i, c) in CATEGORIES.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", theme.role(Role::Info)));
+        }
+        let apagado = view.pane.is_hidden(*c);
+        let marca = if apagado { '-' } else { '+' };
+        spans.push(Span::styled(
+            format!(
+                "{}{marca}{} {}",
+                i + 1,
+                c.label(norte_i18n::active()),
+                view.pane.count_of(*c)
+            ),
+            if apagado {
+                theme
+                    .role(Role::Info)
+                    .add_modifier(ratatui::style::Modifier::DIM)
+            } else {
+                theme.role(Role::Regular)
+            },
+        ));
+    }
+    spans
+}
+
+/// El color de las dos marcas de una fila. El GLIFO ya distingue el veredicto
+/// sin color ninguno (spec §17, `norte_frontend::compare::verdict_glyph`);
+/// esto solo lo refuerza para quien sí lo ve.
+fn compare_mark_style(theme: &TuiTheme, verdict: norte_proto::methods::CompareVerdict) -> Style {
+    use norte_proto::methods::CompareVerdict as V;
+    match verdict {
+        V::Same => theme.role(Role::Regular),
+        V::Different | V::OnlyLeft | V::OnlyRight => theme.role(Role::Warning),
+        V::TypeMismatch | V::Ambiguous | V::Error => theme.role(Role::Error),
+        _ => theme.role(Role::Info),
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // wiring del render, no API

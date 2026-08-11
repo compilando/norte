@@ -1818,3 +1818,139 @@ fn snapshot_settings_filtrada_y_editando_texto() {
     app.settings = Some(settings);
     insta::assert_snapshot!(render_80x24(&app));
 }
+
+/// El panel de diferencias (`Shift+F2`, 2026-08-11-directory-comparison.md).
+///
+/// La suite del modelo vive en `norte-frontend` y no pinta nada; lo que este
+/// snapshot congela es la COMPOSICIÓN, que es lo único que se rompe en
+/// silencio: que las dos caras quepan, que las dos marcas queden entre ellas,
+/// que un nombre no-UTF8 salga enmascarado y BADGEADO en las dos, y que el pie
+/// diga el estado, el lado activo y las cinco cuentas.
+///
+/// Hay una fila de cada categoría a propósito, incluida la pareja que solo
+/// difiere en la CONFIANZA (`= !` frente a `= ~`): esa distinción es el motivo
+/// de existir de todo el ítem, y un render que la perdiera seguiría siendo
+/// verde en todas las demás aserciones.
+/// Una fila de comparación de test: los dos lados salen de las dos raíces del
+/// snapshot, y `reason` se rellena solo donde el wire lo exige
+/// (`CompareRow::reason_is_consistent`).
+#[allow(clippy::fn_params_excessive_bools)]
+fn fila_compare(
+    id: u64,
+    nombre: &[u8],
+    verdict: norte_proto::methods::CompareVerdict,
+    criterion: norte_proto::methods::CompareCriterion,
+    confidence: norte_proto::methods::CompareConfidence,
+    izquierda: bool,
+    derecha: bool,
+) -> norte_proto::methods::CompareRow {
+    use norte_proto::methods::{CompareReason, CompareRow, CompareVerdict};
+    let izq = vp("file:///casa");
+    let der = vp("file:///otro");
+    CompareRow {
+        id,
+        left: izquierda.then(|| entry(&izq, nombre, EntryKind::File, Some(1024))),
+        right: derecha.then(|| entry(&der, nombre, EntryKind::File, Some(2048))),
+        verdict,
+        criterion,
+        confidence,
+        newer: None,
+        reason: matches!(verdict, CompareVerdict::Ambiguous | CompareVerdict::Error)
+            .then_some(CompareReason::Unreadable),
+        side: None,
+    }
+}
+
+#[test]
+fn snapshot_compare_pane() {
+    use norte_proto::methods::{CompareConfidence, CompareCriterion, CompareVerdict};
+
+    let izq = vp("file:///casa");
+    let der = vp("file:///otro");
+    let fila = fila_compare;
+
+    let mut view = norte_tui::app::CompareView::new(izq, der, 0, None, None);
+    view.pane.extend(vec![
+        // Probado por el hash, y solo sugerido por la fecha: DOS respuestas.
+        fila(
+            1,
+            b"probado.bin",
+            CompareVerdict::Same,
+            CompareCriterion::Hash,
+            CompareConfidence::Certain,
+            true,
+            true,
+        ),
+        fila(
+            2,
+            b"supuesto.bin",
+            CompareVerdict::Same,
+            CompareCriterion::Mtime,
+            CompareConfidence::Probable,
+            true,
+            true,
+        ),
+        // Un provider que no puede decirlo (un .zip): respuesta, no fallo.
+        fila(
+            3,
+            b"en-archivo.txt",
+            CompareVerdict::Same,
+            CompareCriterion::Mtime,
+            CompareConfidence::Unknown,
+            true,
+            true,
+        ),
+        fila(
+            4,
+            b"distinto.txt",
+            CompareVerdict::Different,
+            CompareCriterion::Size,
+            CompareConfidence::Certain,
+            true,
+            true,
+        ),
+        fila(
+            5,
+            &[0xE9, b'.', b'd', b'a', b't'],
+            CompareVerdict::OnlyLeft,
+            CompareCriterion::Presence,
+            CompareConfidence::Certain,
+            true,
+            false,
+        ),
+        fila(
+            6,
+            b"solo-derecha",
+            CompareVerdict::OnlyRight,
+            CompareCriterion::Presence,
+            CompareConfidence::Certain,
+            false,
+            true,
+        ),
+        fila(
+            7,
+            b"clase-distinta",
+            CompareVerdict::TypeMismatch,
+            CompareCriterion::Kind,
+            CompareConfidence::Certain,
+            true,
+            true,
+        ),
+        // C6, hallazgo 7: un `Error` puede no traer NINGÚN lado.
+        fila(
+            8,
+            b"ilegible",
+            CompareVerdict::Error,
+            CompareCriterion::Presence,
+            CompareConfidence::Unknown,
+            false,
+            false,
+        ),
+    ]);
+    view.state = norte_tui::app::CompareState::Done;
+    view.pane.select(4);
+
+    let mut app = app_base();
+    app.compare = Some(view);
+    insta::assert_snapshot!(render_80x24(&app));
+}

@@ -19,6 +19,11 @@
 # the other three presets' convention (NC's own quicksearch-by-typing is the
 # feature that makes it necessary here too).
 #
+# `pane.compare-dirs` is deliberately UNBOUND here, for this file's own
+# stated rule: NC's "Compare directories" was a Commands-menu entry and no
+# first-hand source survives to say whether it had a chord. Borrowing
+# Shift+F2 from Total Commander would be a guess dressed as a transcription.
+#
 # Omitted families (norte has no concept): the pull-down menu bar (F9) and
 # the user menu (F2); Ctrl+Q and Ctrl+L — no first-hand description survives
 # to say what either did in NC, so both are left unbound rather than guessed

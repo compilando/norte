@@ -159,6 +159,7 @@ commands! {
     "pane.select-drive" => PaneSelectDrive,
     "pane.select-drive-left" => PaneSelectDriveLeft,
     "pane.select-drive-right" => PaneSelectDriveRight,
+    "pane.compare-dirs" => PaneCompareDirs,
     "pane.search" => PaneSearch,
     "pane.names-encoding" => PaneNamesEncoding,
     "pane.toggle-hidden" => PaneToggleHidden,
@@ -366,6 +367,37 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
                 "{name} lo implementa el TUI pero el catálogo lo declara Planned"
             );
         }
+    }
+
+    /// El arnés de tmux no vio NADA al pulsar `Shift+F2` sobre el preset por
+    /// defecto (ni al pulsar `Shift+F6`, que lleva ligado a `pane.rename`
+    /// desde hace mucho), mientras el MISMO comando en un `f2` pelado
+    /// respondía al instante. Esto pinea las dos mitades que sí están de este
+    /// lado, para que la próxima vez que alguien lo mire no tenga que
+    /// descartarlas otra vez:
+    ///
+    /// 1. el adaptador CONSERVA el shift en una tecla de función (solo lo
+    ///    descarta en `Char`, donde el carácter ya lo codifica), y
+    /// 2. el chord que produce es byte a byte el que parsea `"shift+f2"`, que
+    ///    es lo que el preset liga.
+    ///
+    /// Lo que queda fuera —si el terminal manda la secuencia y si crossterm
+    /// la decodifica a `SHIFT + F(2))`— no se puede afirmar sin un terminal, y
+    /// es donde apunta la evidencia.
+    #[test]
+    fn una_tecla_de_funcion_con_shift_conserva_su_shift() {
+        let del_terminal = chord_from_crossterm(CtMods::SHIFT, CtCode::F(2));
+        assert_eq!(
+            del_terminal,
+            parse_chord("shift+f2").ok(),
+            "el adaptador y el parser del preset tienen que coincidir"
+        );
+        let (mods, code) = del_terminal.expect("chord").parts();
+        assert!(
+            mods.shift,
+            "el shift no puede perderse en una tecla de función"
+        );
+        assert_eq!(code, KeyCode::F(2));
     }
 
     #[test]

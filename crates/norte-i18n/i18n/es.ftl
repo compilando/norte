@@ -596,6 +596,7 @@ help-cmd-pane-refresh = recargar ambos panes (Ctrl+R)
 help-cmd-viewer-encoding-auto = volver a la detección automática
 help-cmd-viewer-hex = alternar vista hexadecimal
 help-cmd-pane-search = buscar por nombre/contenido (Alt+F7)
+help-cmd-pane-compare-dirs = compara los dos paneles y abre el panel de diferencias
 help-cmd-pane-copy-path = copia la ruta de la selección al portapapeles
 search-title = Búsqueda
 search-name = nombre (glob):
@@ -609,6 +610,66 @@ search-status-done = búsqueda: { $n } hits
 search-status-truncated = búsqueda: { $n } hits (truncada)
 search-status-cancelled = búsqueda: { $n } hits (cancelada)
 search-status-failed = búsqueda fallida: { $error }
+
+# --- Comparación de directorios (2026-08-11-directory-comparison.md, `Shift+F2`) ---
+# El panel de diferencias. Cada fila dice QUÉ se decidió, QUÉ criterio lo
+# decidió y CUÁNTO vale ese criterio, y los tres son una palabra y no un color:
+# la spec §17 pide una pista textual, y `igual/probable` frente a
+# `igual/seguro` es justo el par que un lector daltónico no puede perder.
+compare-title = Comparar
+compare-header-left = izquierda
+compare-header-right = derecha
+compare-empty = todavía no hay filas
+compare-hint = [tab] lado · [1-5] filtro · [enter] ir allí · [esc] cerrar
+compare-active-side = actuando sobre: { $side }
+compare-status-running = comparación: { $n } filas (comparando…)
+compare-status-done = comparación: { $n } filas
+# El flujo de filas terminó con MENOS filas de las que contó la task: se perdió
+# un lote de notificación entre el daemon y aquí. Decir «hecho» sería mentir
+# sobre lo completo que está, y en una comparación eso es toda la respuesta.
+compare-status-incomplete = comparación: { $n } de { $total } filas (se perdieron algunas por el camino)
+compare-status-cancelled = comparación: { $n } filas (cancelada)
+compare-status-failed = comparación fallida: { $error }
+# Se rechaza aquí, antes de ir y volver: el daemon también responde `-32602`,
+# pero el lector merece la frase sin la espera.
+compare-same-path = los dos paneles están en el mismo directorio — no hay nada que comparar
+compare-no-target = esa fila no tiene nada en el lado { $side }
+compare-side-left = izquierdo
+compare-side-right = derecho
+compare-side-unknown = un lado desconocido
+compare-verdict-same = igual
+compare-verdict-different = distinto
+compare-verdict-only-left = solo a la izquierda
+compare-verdict-only-right = solo a la derecha
+compare-verdict-type-mismatch = de otra clase
+compare-verdict-ambiguous = ambiguo
+compare-verdict-error = error
+compare-verdict-unknown = veredicto que esta versión no conoce
+compare-confidence-certain = seguro
+compare-confidence-probable = probable
+# NO es un fallo: un archivo comprimido sin fecha fiable, un object store cuyo
+# ETag solo a veces es un hash. Un provider honesto, y la razón de que exista
+# el vocabulario de confianza.
+compare-confidence-unknown = no puede saberse
+compare-confidence-unrecognised = confianza que esta versión no conoce
+compare-criterion-presence = presencia
+compare-criterion-kind = clase
+compare-criterion-link-target = destino del enlace
+compare-criterion-size = tamaño
+compare-criterion-mtime = fecha
+compare-criterion-hash = hash del contenido
+compare-criterion-unknown = criterio que esta versión no conoce
+compare-reason-case-fold = dos nombres de un lado difieren solo en mayúsculas
+compare-reason-normalization = dos nombres de un lado difieren solo en la normalización Unicode
+compare-reason-unreadable = el directorio no se pudo listar
+compare-reason-dir-too-large = el directorio supera el límite de entradas
+compare-reason-read-failed = falló una lectura durante el hash
+compare-reason-unknown = motivo que esta versión no conoce
+compare-filter-same = iguales
+compare-filter-different = distintas
+compare-filter-only-left = solo izq.
+compare-filter-only-right = solo der.
+compare-filter-problems = problemas
 on-yes = sí
 on-no = no
 
@@ -787,7 +848,7 @@ keymap-unavailable-not-here = { $command }: no está disponible aquí
 keymap-count-ignored = { $command } no acepta un contador (se ignoró { $count })
 keymap-reason-archive-write = escritura de archivos comprimidos
 keymap-reason-editor = editor integrado
-keymap-reason-compare-sync = comparación y sincronización de directorios
+keymap-reason-sync = sincronización de directorios
 keymap-reason-tree = panel de árbol de directorios
 keymap-reason-tabs = pestañas de panel
 keymap-reason-sort = comandos de ordenación

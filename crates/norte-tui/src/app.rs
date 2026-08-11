@@ -76,6 +76,123 @@ pub enum SearchState {
     Failed,
 }
 
+/// Tolerancia de fecha con la que la TUI pide una comparación: 2000 ms, la
+/// regla FAT y la granularidad real más ancha que existe.
+///
+/// Es una COPIA del default del wire (`FsCompareParams::mtime_tolerance_ms`),
+/// porque `norte-proto` guarda su función de default privada y hacerla pública
+/// sería tocar el crate del protocolo para leer un número. Que las dos no se
+/// separen lo pinea `la_tolerancia_por_defecto_sigue_al_wire`.
+const COMPARE_MTIME_TOLERANCE_MS: u32 = 2000;
+
+/// Estado de presentación de una comparación de directorios (`Shift+F2`,
+/// 2026-08-11-directory-comparison.md): el run loop lo refleja en
+/// [`CompareView::state`] para que la barra elija la variante
+/// `compare-status-*`.
+///
+/// Mismo molde que [`SearchState`], con UNA variante de más y la razón por la
+/// que existe: en `fs.compare` el cierre del canal de filas NO significa «ya
+/// llegaron todas». La bomba de filas y la del snapshot terminal son tasks
+/// independientes, así que al acabarse el flujo se compara lo recibido contra
+/// `TaskProgress::entries_done` — y si falta algo, [`CompareState::Incomplete`]
+/// lo DICE en vez de pintar «hecho» sobre una respuesta a medias. En una
+/// comparación, lo completa que está la respuesta *es* la respuesta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompareState {
+    /// El walk sigue emitiendo filas.
+    #[default]
+    Running,
+    /// Terminó y llegaron todas las filas que la task contó.
+    Done,
+    /// Terminó, pero llegaron MENOS filas de las que la task contó: se perdió
+    /// algún lote por el camino.
+    Incomplete,
+    /// El usuario canceló (las filas ya llegadas se conservan).
+    Cancelled,
+    /// La task falló (el error va por la barra).
+    Failed,
+}
+
+/// El panel de diferencias abierto (`Shift+F2`): el modelo puro que vive en
+/// `norte-frontend` más lo que la TUI necesita para pintarlo y para decir
+/// cómo acabó.
+///
+/// El modelo (filas, filtros, selección por id, lado activo) NO está aquí a
+/// propósito (regla dura 7): vive en [`norte_frontend::compare::ComparePane`],
+/// donde se testea sin terminal, y esta struct solo le añade el estado del run
+/// y las dos raíces que la cabecera pinta.
+#[derive(Debug)]
+pub struct CompareView {
+    /// Filas, filtros, selección y lado activo.
+    pub pane: norte_frontend::compare::ComparePane,
+    /// Cómo va (o cómo acabó) la comparación.
+    pub state: CompareState,
+    /// Categoría del error de una comparación que FALLÓ, ya localizada y
+    /// saneada. Se pinta de forma PERSISTENTE, igual que
+    /// [`Pane::search_error`]: un fallo no puede degradar a «hecho» en la
+    /// siguiente tecla.
+    pub error: Option<String>,
+    /// Cuántas filas contó la task (`TaskProgress::entries_done`) cuando se
+    /// cerró el flujo. Solo significativo con [`CompareState::Incomplete`],
+    /// que es el único caso en el que difiere de las filas que hay.
+    pub rows_expected: u64,
+    /// Raíz izquierda: el pane que lanzó la comparación.
+    pub left_root: VPath,
+    /// Raíz derecha.
+    pub right_root: VPath,
+    /// Índice del pane que ES el lado izquierdo — el que lanzó la
+    /// comparación, que no tiene por qué ser `panes[0]`.
+    ///
+    /// Se congela al abrir y decide a QUÉ pane navega el `Enter` de una fila:
+    /// al que le corresponde al lado ACTIVO. Sin esto el `Enter` mandaba
+    /// siempre al pane con foco, así que mirando el lado derecho el lector
+    /// perdía su directorio izquierdo para ir a ver el derecho — lo cazó el
+    /// arnés de tmux, y ninguna aserción del modelo podía verlo.
+    pub left_pane: usize,
+    /// Ya se pidió cancelar esta comparación (el primer `Esc`).
+    ///
+    /// El segundo `Esc` cierra el panel PASE LO QUE PASE con la Task. Sin
+    /// esto el cierre dependía de que el canal de filas llegara a cerrarse, y
+    /// hay formas de que no lo haga —un daemon caído, un provider colgado en
+    /// una NFS muerta—, con lo que el lector se quedaba encerrado en la única
+    /// pantalla de norte de la que no se sale (review BLOCKER-1).
+    pub cancel_requested: bool,
+    /// Reinterpretación de nombres (#57) de CADA lado, congelada al abrir.
+    ///
+    /// Dos y no una: los dos panes son dos ubicaciones y pueden llevar
+    /// overrides distintos. Sin esto, un lector que había pulsado `Alt+E`
+    /// para leer un share CP1251 recuperaba `????.txt` en cuanto lo comparaba
+    /// (review MAJOR-3).
+    pub left_encoding: Option<norte_encoding::NameEncoding>,
+    /// La del lado derecho.
+    pub right_encoding: Option<norte_encoding::NameEncoding>,
+}
+
+impl CompareView {
+    /// Un panel recién abierto sobre estas dos raíces, sin filas todavía.
+    #[must_use]
+    pub fn new(
+        left_root: VPath,
+        right_root: VPath,
+        left_pane: usize,
+        left_encoding: Option<norte_encoding::NameEncoding>,
+        right_encoding: Option<norte_encoding::NameEncoding>,
+    ) -> Self {
+        Self {
+            pane: norte_frontend::compare::ComparePane::new(),
+            state: CompareState::Running,
+            error: None,
+            rows_expected: 0,
+            left_root,
+            right_root,
+            left_pane,
+            cancel_requested: false,
+            left_encoding,
+            right_encoding,
+        }
+    }
+}
+
 impl Pane {
     /// Pane sobre `dir` con `entries`: #54, ya no hace falta ordenarlas antes
     /// — [`norte_frontend::PaneState::new`] normaliza internamente (dirs
@@ -912,6 +1029,20 @@ pub struct App {
     /// Diálogo de búsqueda viva abierto (`Alt+F7`, liveSearch T6): None =
     /// cerrado. Captura imprimibles como el `name_input` del popup de nav.
     pub search_dialog: Option<SearchDialog>,
+    /// Panel de diferencias abierto (`Shift+F2`,
+    /// 2026-08-11-directory-comparison.md): `None` = cerrado.
+    ///
+    /// Un overlay (`Option` en `App`) y NO un modo del pane, a diferencia de
+    /// la búsqueda viva: una fila de comparación tiene DOS caras y un
+    /// veredicto entre ellas, así que no cabe en la columna de un pane ni es
+    /// una `Entry` que `extend_listing` pueda tragar. Ocupa el sitio de los
+    /// dos panes mientras está abierto, que es lo que un diff es.
+    pub compare: Option<CompareView>,
+    /// Params de `fs.compare` que el despacho resolvió y el run loop aún no
+    /// ha lanzado (`Shift+F2`). Mismo reparto que [`Self::pending_open`] y
+    /// [`Self::pending_shell`]: `dispatch` decide QUÉ, el run loop —dueño del
+    /// canal y de la Task— lo hace.
+    pub pending_compare: Option<norte_proto::methods::FsCompareParams>,
     /// Openers declarativos fusionados (#28): clonados en arranque y en cada
     /// hot-reload OK. Fuente de `pane.open` (F4). Vacío = sin openers.
     pub openers: norte_frontend::openers::OpenersConfig,
@@ -1823,6 +1954,8 @@ impl App {
             hotlist: Vec::new(),
             nav_popup: None,
             search_dialog: None,
+            compare: None,
+            pending_compare: None,
             openers: norte_frontend::openers::OpenersConfig::empty(),
             pending_open: None,
             pending_shell: None,
@@ -1919,6 +2052,72 @@ impl App {
     /// raíz del walk se resuelve al lanzar (cwd del pane con foco).
     pub fn open_search_dialog(&mut self) {
         self.search_dialog = Some(SearchDialog::new());
+    }
+
+    /// `Shift+F2`: resuelve QUÉ comparar y lo deja pendiente para el run loop.
+    ///
+    /// El izquierdo es el pane con FOCO (spec: «el panel que lanzó la
+    /// comparación es el izquierdo»), el derecho el otro — no `panes[0]` y
+    /// `panes[1]`, porque el lector que pulsa la tecla desde el pane derecho
+    /// espera que su directorio sea el suyo.
+    ///
+    /// Dos negativas se dan AQUÍ, sin ir y volver al daemon:
+    ///
+    /// * **Los dos panes en el mismo sitio.** El daemon responde `-32602` a
+    ///   eso (C6) y tiene razón, pero la frase que el lector necesita no
+    ///   depende de una vuelta por la red.
+    /// * **Un pane virtual.** Una lista de hits no es un directorio, así que
+    ///   no hay raíz que mandar — la misma negativa que ya dan mirror y pull.
+    pub fn request_compare(&mut self) {
+        // El visor sustituye a los panes en la pantalla y `ui::draw` le da
+        // precedencia sobre este panel, así que abrirlo por detrás dejaría
+        // los píxeles diciendo una cosa y el teclado yendo a otra — el bug
+        // exacto contra el que está escrito el rustdoc de `modal_wins`.
+        if self.viewer.is_some() {
+            return;
+        }
+        if self.panes[0].virtual_search || self.panes[1].virtual_search {
+            self.message = Some(t("msg-pane-not-a-location"));
+            return;
+        }
+        let left = self.focused().dir().clone();
+        let right = self.panes[self.focus() ^ 1].dir().clone();
+        if left == right {
+            self.message = Some(t("compare-same-path"));
+            return;
+        }
+        self.pending_compare = Some(norte_proto::methods::FsCompareParams {
+            left,
+            right,
+            criteria: norte_proto::methods::CompareCriteria::default(),
+            max_depth: None,
+            mtime_tolerance_ms: COMPARE_MTIME_TOLERANCE_MS,
+            // Sin toggle en la UI, y a propósito: `Backend::compare` responde
+            // `Unsupported` a `true` antes de que exista Task alguna, porque
+            // el engine acepta el campo y lo ignora. Ofrecer la casilla sería
+            // ofrecer una promesa que nadie cumple.
+            follow_symlinks: false,
+        });
+    }
+
+    /// El pane al que pertenece el lado ACTIVO del panel de diferencias.
+    ///
+    /// `None` con el panel cerrado. Es lo que hace que el `Enter` de una fila
+    /// lleve al lector a donde esa fila vive DE VERDAD sin costarle el otro
+    /// directorio.
+    #[must_use]
+    pub fn compare_active_pane(&self) -> Option<usize> {
+        let view = self.compare.as_ref()?;
+        Some(match view.pane.active_side() {
+            norte_proto::methods::Side::Right => view.left_pane ^ 1,
+            _ => view.left_pane,
+        })
+    }
+
+    /// Cierra el panel de diferencias. La cancelación de la Task es del run
+    /// loop (es suya); esto solo suelta el estado de presentación.
+    pub fn close_compare(&mut self) {
+        self.compare = None;
     }
 
     /// Índice del pane con foco (0 = izquierda, 1 = derecha).
