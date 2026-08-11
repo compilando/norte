@@ -54,6 +54,7 @@ fn params(left: &str, right: &str) -> FsCompareParams {
         max_depth: None,
         mtime_tolerance_ms: 2000,
         follow_symlinks: false,
+        descend_orphans: None,
     }
 }
 

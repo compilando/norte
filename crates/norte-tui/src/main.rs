@@ -12768,6 +12768,7 @@ mod compare_tests {
                 max_depth: None,
                 mtime_tolerance_ms: 2000,
                 follow_symlinks: true,
+                descend_orphans: None,
             },
         )
         .await;

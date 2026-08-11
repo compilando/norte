@@ -41,6 +41,26 @@
 //! enlaza desde aquí a propósito: este doc de módulo es público y `hydrate` no,
 //! y `-D warnings` convierte ese enlace en un error del gate de docs.
 //!
+//! # Un huérfano se puede descender, y de UN solo lado
+//!
+//! Por defecto un directorio que solo existe en un lado es UNA fila y su
+//! subárbol no se mira: quien copie ese huérfano lo hará con un `fs.copy`
+//! recursivo, así que enumerarlo no compra nada y cuesta el recorrido entero.
+//!
+//! [`CompareOptions::descend_orphans`](crate::CompareOptions::descend_orphans)
+//! lo cambia para UN lado nombrado, y lo hace por la MISMA pila: el frame de un
+//! huérfano lleva un lado a `Some` y el otro a `None`, y el lado ausente aporta
+//! el listado VACÍO. De ahí sale, por el mismo merge-join de siempre, una fila
+//! huérfana por cada entrada del lado que sí está — con el mismo techo de
+//! [`COMPARE_MAX_DIR_ENTRIES`], la misma cancelación por directorio y por
+//! pareja, y el mismo `max_depth`. No hay un segundo camino que mantener.
+//!
+//! El motivo de que sea un lado y no los dos está en la spec 2
+//! (`2026-08-11-directory-sync-design.md`): en el destino de una
+//! sincronización, un huérfano es un borrado de árbol ENTERO —una papelera, una
+//! entrada de journal, una cosa que restaurar—, así que descenderlo compraría
+//! cuarenta mil listados que no cambian un solo paso del plan.
+//!
 //! # Los errores son filas
 //!
 //! Un listado ilegible, un directorio desmesurado, una colisión de
@@ -106,8 +126,12 @@ pub type CompareStream<'a> = BoxStream<'a, Result<CompareRow, CompareError>>;
 ///
 /// No muta nada y no lee contenido salvo que `opts.criteria.hash` lo pida.
 ///
-/// Es SIMÉTRICA: comparar al revés da las mismas filas con los lados y los
-/// veredictos cambiados de sitio, y nada más.
+/// Es SIMÉTRICA a igualdad de opciones: comparar al revés da las mismas filas
+/// con los lados y los veredictos cambiados de sitio, y nada más. `opts` puede
+/// NOMBRAR un lado ([`CompareOptions::descend_orphans`](crate::CompareOptions::descend_orphans)),
+/// y entonces intercambiar los dos árboles obliga a intercambiarlo también:
+/// descender la izquierda de `(a, b)` es el espejo de descender la derecha de
+/// `(b, a)`, no el de descender la izquierda.
 #[must_use]
 pub fn compare<'a>(
     left: &'a dyn Provider,
@@ -125,8 +149,8 @@ pub fn compare<'a>(
         sides: None,
         cancel,
         stack: vec![Frame {
-            left: synthetic_dir(left_root),
-            right: synthetic_dir(right_root),
+            left: Some(synthetic_dir(left_root)),
+            right: Some(synthetic_dir(right_root)),
             depth: 0,
         }],
         pending: VecDeque::new(),
@@ -346,10 +370,17 @@ async fn hydrate(
     Ok(())
 }
 
-/// Un par de directorios pendiente de emparejar, con su profundidad.
+/// Un directorio pendiente de emparejar, con su profundidad.
+///
+/// Los dos lados son `Option` porque un frame puede ser de UN SOLO lado: es lo
+/// que apila
+/// [`CompareOptions::descend_orphans`](crate::CompareOptions::descend_orphans)
+/// al bajar por un huérfano, donde el otro lado no existe y su listado es el
+/// vacío. Al menos uno de los dos es siempre `Some` — un frame sin lados no
+/// nombra directorio alguno.
 struct Frame {
-    left: Entry,
-    right: Entry,
+    left: Option<Entry>,
+    right: Option<Entry>,
     depth: u32,
 }
 
@@ -403,13 +434,25 @@ impl Walk<'_> {
 
     /// Empareja UN par de directorios: llena [`Walk::pending`] con sus filas y
     /// apila los subdirectorios comunes.
+    ///
+    /// También atiende el frame de UN SOLO lado —el descenso por un huérfano—:
+    /// el lado ausente aporta el listado vacío y todo lo demás es el mismo
+    /// camino, filas huérfanas incluidas.
     async fn visit(&mut self, frame: Frame) {
+        debug_assert!(
+            frame.left.is_some() || frame.right.is_some(),
+            "un frame sin ningún lado no nombra directorio alguno"
+        );
         // Los DOS lados se listan siempre, aunque el primero ya haya fallado:
         // dos directorios rotos son dos hechos, y volverse en el primero
         // dejaría el segundo sin descubrir para siempre.
+        //
+        // Un lado AUSENTE —el descenso por un huérfano— no se lista: su listado
+        // es el vacío, y de ahí sale una fila huérfana por cada entrada del
+        // lado que sí está, por el mismo camino que todo lo demás.
         let listed = (
-            list_all(self.left, &frame.left.path, &self.cancel).await,
-            list_all(self.right, &frame.right.path, &self.cancel).await,
+            list_side(self.left, frame.left.as_ref(), &self.cancel).await,
+            list_side(self.right, frame.right.as_ref(), &self.cancel).await,
         );
         if matches!(listed.0, Err(ListFailure::Cancelled))
             || matches!(listed.1, Err(ListFailure::Cancelled))
@@ -417,10 +460,10 @@ impl Walk<'_> {
             return;
         }
         if let Err(ListFailure::Reason(reason)) = listed.0 {
-            self.push_error(Some(frame.left.clone()), None, reason, Side::Left);
+            self.push_error(frame.left.clone(), None, reason, Side::Left);
         }
         if let Err(ListFailure::Reason(reason)) = listed.1 {
-            self.push_error(None, Some(frame.right.clone()), reason, Side::Right);
+            self.push_error(None, frame.right.clone(), reason, Side::Right);
         }
         // Un listado que falló no se sabe qué contenía, así que la otra parte
         // tampoco se puede emparejar: decir `OnlyRight` de sus entradas sería
@@ -444,7 +487,11 @@ impl Walk<'_> {
             self.push_ambiguous(None, Some(entry.clone()), reason, Side::Right);
         }
 
-        let mut descend: Vec<(Entry, Entry)> = Vec::new();
+        // Los frames que este directorio deja pendientes, en orden de CLAVE:
+        // parejas comunes y —si se pidió— huérfanos del lado nombrado, todos
+        // por la misma pila.
+        let mut descend: Vec<Frame> = Vec::new();
+        let depth = frame.depth.saturating_add(1);
         let mut lefts_iter = left_index.unique().peekable();
         let mut rights_iter = right_index.unique().peekable();
         loop {
@@ -473,21 +520,17 @@ impl Walk<'_> {
                     // mismo iterador y nadie lo ha tocado en medio, así que
                     // `next` no puede ser `None` (regla dura 6).
                     let (key, entry) = lefts_iter.next().expect("peek dijo que había");
-                    self.only_on_one_side(
-                        Some(entry.clone()),
-                        None,
-                        right_collided.get(key.as_bytes()).copied(),
-                        Side::Right,
-                    );
+                    let collided = right_collided.get(key.as_bytes()).copied();
+                    if self.only_on_one_side(Some(entry.clone()), None, collided, Side::Right) {
+                        descend.extend(self.orphan_frame(entry, Side::Left, frame.depth));
+                    }
                 }
                 Ordering::Greater => {
                     let (key, entry) = rights_iter.next().expect("peek dijo que había");
-                    self.only_on_one_side(
-                        None,
-                        Some(entry.clone()),
-                        left_collided.get(key.as_bytes()).copied(),
-                        Side::Left,
-                    );
+                    let collided = left_collided.get(key.as_bytes()).copied();
+                    if self.only_on_one_side(None, Some(entry.clone()), collided, Side::Left) {
+                        descend.extend(self.orphan_frame(entry, Side::Right, frame.depth));
+                    }
                 }
                 Ordering::Equal => {
                     let (_, left_entry) = lefts_iter.next().expect("peek dijo que había");
@@ -500,7 +543,11 @@ impl Walk<'_> {
                         return;
                     };
                     if is_dir_pair && self.descends_below(frame.depth) {
-                        descend.push((left_entry.clone(), right_entry.clone()));
+                        descend.push(Frame {
+                            left: Some(left_entry.clone()),
+                            right: Some(right_entry.clone()),
+                            depth,
+                        });
                     }
                 }
             }
@@ -510,9 +557,8 @@ impl Walk<'_> {
 
         // Al revés: la pila es LIFO, así que apilar en orden inverso de clave
         // es lo que hace que se saquen en orden de clave.
-        let depth = frame.depth.saturating_add(1);
-        for (left, right) in descend.into_iter().rev() {
-            self.stack.push(Frame { left, right, depth });
+        for pending in descend.into_iter().rev() {
+            self.stack.push(pending);
         }
     }
 
@@ -525,16 +571,22 @@ impl Walk<'_> {
     /// directorio que ya no sabe distinguir esos dos nombres crea un TERCER
     /// fichero que colisiona. `Ambiguous` hace que ese plan se niegue a actuar,
     /// que es la única respuesta segura mientras nadie deshaga la colisión.
+    ///
+    /// Devuelve `true` si la fila salió huérfana DE VERDAD, que es la condición
+    /// para poder descender por ella: un directorio ambiguo se lleva su
+    /// subárbol por delante, igual que uno ilegible, y enumerar lo que hay
+    /// dentro de algo que nadie va a copiar sería listar por listar.
+    #[must_use = "el valor dice si se puede descender por esta fila"]
     fn only_on_one_side(
         &mut self,
         left: Option<Entry>,
         right: Option<Entry>,
         collided_with: Option<CompareReason>,
         collision_side: Side,
-    ) {
+    ) -> bool {
         if let Some(reason) = collided_with {
             self.push_ambiguous(left, right, reason, collision_side);
-            return;
+            return false;
         }
         let decision = if left.is_some() {
             Decision::only_left()
@@ -543,6 +595,7 @@ impl Walk<'_> {
         };
         let id = self.next_id();
         self.pending.push_back(decision.into_row(id, left, right));
+        true
     }
 
     /// Apunta la fila de UNA pareja emparejada y dice si hay que bajar por
@@ -784,7 +837,9 @@ impl Walk<'_> {
     /// contra un exFAT montado en Linux (y perder sus colisiones) o plegarla
     /// contra un APFS sensible a caja (y declarar ambiguo lo que no lo es).
     /// Aquí ya ha corrido un `list` en los dos lados, así que lo que se lee es
-    /// lo sondeado.
+    /// lo sondeado. Sigue siendo cierto en un frame de UN solo lado: el primer
+    /// frame es siempre el de las dos raíces, y un frame de uno solo únicamente
+    /// nace de una fila huérfana, que ya exigió listar los dos.
     ///
     /// Sigue siendo UNA respuesta para toda la comparación, porque
     /// `Provider::capabilities` no toma path: dos mounts distintos servidos por
@@ -794,6 +849,50 @@ impl Walk<'_> {
         *self.sides.get_or_insert_with(|| {
             Sides::from_capabilities(self.left.capabilities(), self.right.capabilities())
         })
+    }
+
+    /// El frame que ENUMERA un huérfano, si hay que enumerarlo.
+    ///
+    /// `side` es el lado en el que la entrada está, y el frame que sale lleva
+    /// el contrario a `None`: no hay nada que listar ahí, y esa lista vacía es
+    /// justo lo que hace que el merge-join emita una fila huérfana por hijo.
+    fn orphan_frame(&self, entry: &Entry, side: Side, parent_depth: u32) -> Option<Frame> {
+        if !self.descends_into_orphan(entry, side, parent_depth) {
+            return None;
+        }
+        let entry = Some(entry.clone());
+        let depth = parent_depth.saturating_add(1);
+        match side {
+            Side::Left => Some(Frame {
+                left: entry,
+                right: None,
+                depth,
+            }),
+            Side::Right => Some(Frame {
+                left: None,
+                right: entry,
+                depth,
+            }),
+            // No llega —`descends_into_orphan` ya contestó que no—, y aun así
+            // no se atribuye a un lado: «ningún lado» no es la derecha, y un
+            // refactor que ablandase aquella guarda no debe encontrarse aquí
+            // un descenso escrito a mano en el lado equivocado.
+            Side::Unknown => None,
+        }
+    }
+
+    /// ¿Hay que bajar por el huérfano `entry`, que solo está en `side`?
+    ///
+    /// Tres condiciones, las tres necesarias: es un directorio, el llamante
+    /// pidió descender EN ESE lado, y `max_depth` lo permite —lo que se acota
+    /// es el número de listados, venga de una pareja o de un huérfano—.
+    ///
+    /// `Some(Side::Unknown)` no es ningún lado y por tanto no desciende nada:
+    /// ver [`CompareOptions::descend_orphans`](crate::CompareOptions::descend_orphans).
+    fn descends_into_orphan(&self, entry: &Entry, side: Side, depth: u32) -> bool {
+        entry.kind == EntryKind::Dir
+            && self.opts.descend_orphans == Some(side)
+            && self.descends_below(depth)
     }
 
     /// ¿Se puede bajar un nivel más desde `depth`?
@@ -889,6 +988,26 @@ enum ListFailure {
     Reason(CompareReason),
     /// Cancelado a mitad del drenaje: no hay fila, hay final de flujo.
     Cancelled,
+}
+
+/// El listado de UN lado de un [`Frame`]: el del directorio cuando ese lado
+/// está, y el VACÍO cuando no.
+///
+/// Un lado ausente no es «un directorio vacío» del provider —eso sería una
+/// afirmación sobre el filesystem— sino «de este lado no hay nada que
+/// emparejar». El merge-join de [`Walk::visit`] convierte esa lista vacía en
+/// una fila huérfana por cada entrada del lado que sí está, que es exactamente
+/// lo que hay que emitir al descender por un huérfano, y por el mismo camino:
+/// el mismo techo de [`COMPARE_MAX_DIR_ENTRIES`] y la misma cancelación.
+async fn list_side(
+    provider: &dyn Provider,
+    dir: Option<&Entry>,
+    cancel: &CancellationToken,
+) -> Result<Vec<Entry>, ListFailure> {
+    match dir {
+        Some(entry) => list_all(provider, &entry.path, cancel).await,
+        None => Ok(Vec::new()),
+    }
 }
 
 /// Drena el listado de un directorio ENTERO, con techo.
@@ -1196,6 +1315,334 @@ mod tests {
         assert_eq!(
             rows[0].left.as_ref().expect("el lado que sí está").kind,
             EntryKind::Dir
+        );
+    }
+
+    /// Un huérfano por lado: `a/` (con `a/1.txt` y `a/deep/2.txt`) solo a la
+    /// izquierda, `b/` (con `b/3.txt`) solo a la derecha. Uno por lado a
+    /// propósito: sin el de la derecha no se podría afirmar que descender la
+    /// izquierda no toca la otra.
+    async fn orphan_trees() -> (MemProvider, MemProvider) {
+        (
+            tree(&["a/1.txt", "a/deep/2.txt"]).await,
+            tree(&["b/3.txt"]).await,
+        )
+    }
+
+    /// Los SEGMENTOS crudos del path de la entrada que la fila trae, en bytes
+    /// (regla dura 1).
+    ///
+    /// El path entero y no el basename: lo que un descenso puede romper es
+    /// justamente BAJO QUÉ raíz sale un nombre, y `2.txt` a secas se cumple
+    /// igual si la fila salió de listar el directorio equivocado.
+    fn segments_of(row: &CompareRow) -> Vec<Vec<u8>> {
+        let entry = [row.left.as_ref(), row.right.as_ref()]
+            .into_iter()
+            .flatten()
+            .next()
+            .expect("toda fila de estas comparaciones trae un lado");
+        entry.path.segments().map(<[u8]>::to_vec).collect()
+    }
+
+    /// Los paths de las filas con ese veredicto, en el orden en que salieron.
+    fn paths_of(rows: &[CompareRow], verdict: CompareVerdict) -> Vec<Vec<Vec<u8>>> {
+        rows.iter()
+            .filter(|row| row.verdict == verdict)
+            .map(segments_of)
+            .collect()
+    }
+
+    /// `[["a", "deep", "2.txt"]]` escrito corto.
+    fn path(segments: &[&[u8]]) -> Vec<Vec<u8>> {
+        segments.iter().map(|s| s.to_vec()).collect()
+    }
+
+    fn descending(side: Side) -> CompareOptions {
+        CompareOptions {
+            descend_orphans: Some(side),
+            ..CompareOptions::cheap()
+        }
+    }
+
+    /// El default sigue siendo el de la spec 1, con huérfanos en LOS DOS lados:
+    /// uno y uno, y nada de lo que hay dentro.
+    #[tokio::test]
+    async fn an_orphan_directory_is_one_row_by_default() {
+        let (l, r) = orphan_trees().await;
+        let rows = collect(compare_default(&l, &r)).await;
+        assert_eq!(
+            paths_of(&rows, CompareVerdict::OnlyLeft),
+            vec![path(&[b"a"])]
+        );
+        assert_eq!(
+            paths_of(&rows, CompareVerdict::OnlyRight),
+            vec![path(&[b"b"])]
+        );
+    }
+
+    /// `descend_orphans` enumera el huérfano del lado que se le nombra —hasta
+    /// el fondo— y deja el del otro lado exactamente como estaba.
+    #[tokio::test]
+    async fn descend_orphans_left_enumerates_the_left_orphan_and_not_the_right_one() {
+        let (l, r) = orphan_trees().await;
+        let rows = collect(compare_with(&l, &r, descending(Side::Left))).await;
+
+        // Paths ENTEROS y en orden: el contenedor primero y cada hijo bajo él,
+        // que es lo que un basename suelto no puede afirmar.
+        assert_eq!(
+            paths_of(&rows, CompareVerdict::OnlyLeft),
+            vec![
+                path(&[b"a"]),
+                path(&[b"a", b"1.txt"]),
+                path(&[b"a", b"deep"]),
+                path(&[b"a", b"deep", b"2.txt"]),
+            ]
+        );
+        assert_eq!(
+            paths_of(&rows, CompareVerdict::OnlyRight),
+            vec![path(&[b"b"])],
+            "el otro lado no se toca"
+        );
+    }
+
+    /// El lado se nombra, y el contrario sigue siendo una fila y nada más.
+    #[tokio::test]
+    async fn descend_orphans_right_is_the_mirror_image() {
+        let (l, r) = orphan_trees().await;
+        let rows = collect(compare_with(&l, &r, descending(Side::Right))).await;
+        assert_eq!(
+            paths_of(&rows, CompareVerdict::OnlyLeft),
+            vec![path(&[b"a"])]
+        );
+        assert_eq!(
+            paths_of(&rows, CompareVerdict::OnlyRight),
+            vec![path(&[b"b"]), path(&[b"b", b"3.txt"])]
+        );
+    }
+
+    /// Y el espejo de verdad: descender la izquierda de `(l, r)` da exactamente
+    /// las mismas filas que descender la derecha de `(r, l)`, cambiadas de
+    /// lado. Es el mismo criterio que la simetría de la spec 1, aplicado al
+    /// único trozo del walk que despacha un lado a mano.
+    #[tokio::test]
+    async fn descending_one_side_is_the_mirror_of_descending_the_other() {
+        let (l, r) = orphan_trees().await;
+        let forward = collect(compare_with(&l, &r, descending(Side::Left))).await;
+        let backward = collect(compare_with(&r, &l, descending(Side::Right))).await;
+        assert!(!forward.is_empty());
+        assert_eq!(mirror(&forward), backward);
+    }
+
+    /// `Side::Unknown` no es ningún lado: es lo que un `"lft"` del wire produce
+    /// (`Side` degrada con `serde(other)`), y aquí no desciende NADA — el
+    /// mismo conjunto de filas que el default. Quien atiende `fs.compare` lo
+    /// rechaza antes justamente porque desde dentro es indistinguible de no
+    /// haberlo pedido.
+    #[tokio::test]
+    async fn an_unknown_side_descends_nothing() {
+        let (l, r) = orphan_trees().await;
+        let rows = collect(compare_with(&l, &r, descending(Side::Unknown))).await;
+        assert_eq!(rows, collect(compare_default(&l, &r)).await);
+    }
+
+    /// `max_depth` acota el descenso por un huérfano igual que el de una
+    /// pareja: lo que se acota es el número de listados.
+    #[tokio::test]
+    async fn descending_an_orphan_still_respects_max_depth() {
+        let (l, r) = orphan_trees().await;
+        let opts = CompareOptions {
+            max_depth: Some(1),
+            ..descending(Side::Left)
+        };
+        let rows = collect(compare_with(&l, &r, opts)).await;
+        assert_eq!(
+            paths_of(&rows, CompareVerdict::OnlyLeft),
+            vec![
+                path(&[b"a"]),
+                path(&[b"a", b"1.txt"]),
+                path(&[b"a", b"deep"]),
+            ],
+            "`a/deep` sale como fila, pero no se abre"
+        );
+    }
+
+    /// Regla dura 3 DENTRO del descenso: el flujo termina con `Cancelled` y no
+    /// entrega ni una fila más, tampoco las que ya tenía calculadas.
+    ///
+    /// El corte se da con el descenso ya EN MARCHA —se drena hasta ver una fila
+    /// de dentro del huérfano— y no antes: cancelando en la primera fila, lo
+    /// que se prueba es la guarda de la spec 1, y el test pasaría igual sin
+    /// `descend_orphans`.
+    #[tokio::test]
+    async fn descending_an_orphan_honours_cancellation() {
+        // `solo/` solo a la izquierda, con 2 000 hijos: 2 000 filas que el
+        // descenso tiene que ir produciendo mientras se le corta.
+        let left = MemProvider::new();
+        let solo = MemProvider::root().join(Segment::new(b"solo".to_vec()).expect("seg"));
+        left.mkdir(&solo).await.expect("mkdir");
+        for i in 0..2_000 {
+            let name = Segment::new(format!("e{i:07}").into_bytes()).expect("seg");
+            left.mkdir(&solo.join(name)).await.expect("mkdir");
+        }
+        let right = MemProvider::new();
+
+        let cancel = CancellationToken::new();
+        let mut stream = compare(
+            &left,
+            &MemProvider::root(),
+            &right,
+            &MemProvider::root(),
+            descending(Side::Left),
+            cancel.clone(),
+        );
+        let mut vistas = 0_usize;
+        loop {
+            let row = stream
+                .next()
+                .await
+                .expect("el flujo no se acaba antes del descenso")
+                .expect("sin cancelar todavía");
+            vistas += 1;
+            // Una fila de DENTRO del huérfano: el frame de un solo lado ya se
+            // visitó, que es lo que este test tiene que atrapar cortando.
+            if segments_of(&row).len() == 2 {
+                break;
+            }
+        }
+        assert!(vistas < 2_000, "hizo falta el árbol entero para empezar");
+        cancel.cancel();
+        let rest: Vec<Result<CompareRow, CompareError>> = stream.collect().await;
+        assert_eq!(rest, vec![Err(CompareError::Cancelled)]);
+    }
+
+    /// El corpus hostil ENTERO dentro de un huérfano descendido: cada nombre
+    /// sale con sus bytes intactos y bajo su directorio.
+    ///
+    /// Es la prueba de que la clave de emparejamiento —que pliega NFC, y por
+    /// eso hace colisionar a un par del corpus— NO toca un solo byte del path:
+    /// la clave empareja, el path nombra (regla dura 1). El directorio también
+    /// lleva un nombre hostil, porque descender significa LISTARLO, y listarlo
+    /// por su clave sería listar otra cosa.
+    #[tokio::test]
+    async fn descending_an_orphan_keeps_the_hostile_bytes_of_every_name() {
+        let corpus = norte_testkit::corpus::hostile_names();
+        let dir = corpus
+            .iter()
+            .find(|n| n.id == "shift_jis_tesuto")
+            .expect("el corpus trae shift_jis_tesuto")
+            .bytes
+            .clone();
+        let left = MemProvider::new();
+        let dir_path = MemProvider::root().join(Segment::new(dir.clone()).expect("seg"));
+        left.mkdir(&dir_path).await.expect("mkdir");
+        for name in &corpus {
+            let file = dir_path.join(Segment::new(name.bytes.clone()).expect("seg"));
+            let mut sink = left.write(&file).await.expect("write");
+            sink.write(Bytes::from_static(b"x")).await.expect("chunk");
+            sink.commit().await.expect("commit");
+        }
+        let right = MemProvider::new();
+
+        let rows = collect(compare_with(&left, &right, descending(Side::Left))).await;
+        assert_eq!(
+            segments_of(&rows[0]),
+            vec![dir.clone()],
+            "el contenedor sale por sus bytes, no por su clave"
+        );
+        // Cada nombre del corpus, UNA vez, bajo su directorio y byte a byte.
+        // El veredicto no se fija aquí: el par NFC/NFD del corpus colapsa en
+        // una clave y sale `Ambiguous`, que es otra decisión y tiene sus
+        // propios tests. Lo que se fija es que ningún nombre se pierde ni se
+        // reescribe.
+        let mut dentro: Vec<Vec<u8>> = rows[1..]
+            .iter()
+            .map(|row| {
+                let segs = segments_of(row);
+                assert_eq!(segs.len(), 2, "una fila fuera del huérfano: {segs:?}");
+                assert_eq!(segs[0], dir, "hijo colgado de otro directorio");
+                segs[1].clone()
+            })
+            .collect();
+        dentro.sort_unstable();
+        let mut esperados: Vec<Vec<u8>> = corpus.iter().map(|n| n.bytes.clone()).collect();
+        esperados.sort_unstable();
+        assert_eq!(dentro, esperados);
+    }
+
+    /// Un huérfano cuya clave COLISIONA con la del otro lado sale `Ambiguous`,
+    /// y entonces no se desciende: nadie va a copiar ese directorio mientras la
+    /// colisión siga, así que enumerarlo es listar por listar.
+    #[tokio::test]
+    async fn an_ambiguous_orphan_directory_is_not_descended() {
+        // Las dos grafías van en el lado que SÍ distingue caja (el otro las
+        // rechazaría al crearlas), y el huérfano en el que no: su clave `foo`
+        // está colisionada enfrente, así que `Foo` no es un huérfano limpio.
+        let left = tree(&["foo", "FOO"]).await;
+        let right = MemProvider::with_flags(norte_vfs::CapabilityFlags::CASE_PRESERVING);
+        seed(&right, "Foo/dentro.txt", b"dentro").await;
+
+        let rows = collect(compare_with(&left, &right, descending(Side::Right))).await;
+        assert!(
+            rows.iter()
+                .all(|row| row.verdict == CompareVerdict::Ambiguous),
+            "{rows:#?}"
+        );
+        assert!(
+            !rows.iter().any(|row| named(row, b"dentro.txt")),
+            "se descendió por un directorio ambiguo: {rows:#?}"
+        );
+    }
+
+    /// Y DENTRO del huérfano se sigue plegando con las capabilities de los dos
+    /// lados, aunque el otro lado no tenga nada ahí: dos nombres que el destino
+    /// no sabría distinguir salen `Ambiguous` y su subárbol no se abre.
+    ///
+    /// Es lo correcto para lo que la opción existe —son justo los dos ficheros
+    /// que no se podrían escribir juntos en el destino— y es lo bastante
+    /// sorprendente como para necesitar test: el otro lado decide sobre un
+    /// directorio en el que no está.
+    #[tokio::test]
+    async fn a_fold_collision_inside_an_orphan_is_ambiguous_and_stops_there() {
+        let left = tree(&["solo/README/x.txt", "solo/readme/y.txt"]).await;
+        let right = MemProvider::with_flags(norte_vfs::CapabilityFlags::CASE_PRESERVING);
+
+        let rows = collect(compare_with(&left, &right, descending(Side::Left))).await;
+        assert_eq!(
+            paths_of(&rows, CompareVerdict::OnlyLeft),
+            vec![path(&[b"solo"])],
+            "solo el huérfano de arriba es limpio"
+        );
+        let ambiguas = paths_of(&rows, CompareVerdict::Ambiguous);
+        assert_eq!(
+            ambiguas,
+            vec![path(&[b"solo", b"README"]), path(&[b"solo", b"readme"])],
+            "una fila por entrada implicada, con sus bytes"
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|row| named(row, b"x.txt") || named(row, b"y.txt")),
+            "el subárbol de una colisión no se abre: {rows:#?}"
+        );
+    }
+
+    /// Un huérfano ilegible cuesta SU fila y el descenso sigue con el
+    /// siguiente, igual que un directorio emparejado ilegible.
+    #[tokio::test]
+    async fn an_unreadable_orphan_is_a_row_and_the_descent_continues() {
+        let l = tree(&["solo/denegado/x.txt", "solo/despues/y.txt"]).await;
+        let r = tree(&[]).await;
+        deny_list(&l, "solo/denegado");
+        let rows = collect(compare_with(&l, &r, descending(Side::Left))).await;
+        let bad = rows
+            .iter()
+            .find(|row| row.verdict == CompareVerdict::Error)
+            .expect("fila de error");
+        assert_eq!(bad.reason, Some(CompareReason::Unreadable));
+        assert_eq!(bad.side, Some(Side::Left));
+        assert!(
+            rows.iter().any(|row| named(row, b"y.txt")),
+            "el descenso paró en el error: {rows:#?}"
         );
     }
 

@@ -42,6 +42,7 @@ struct ProtocolSchema {
     daemon_shutdown_result: DaemonShutdownResult,
     decoration_wire: DecorationWire,
     delete_mode: DeleteMode,
+    descend_side: DescendSide,
     entry: Entry,
     entry_kind: EntryKind,
     error: Error,

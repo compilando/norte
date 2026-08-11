@@ -1681,8 +1681,110 @@ fn compare_criteria_default_y_parcial() {
     let p: FsCompareParams = serde_json::from_str(minimo).expect("params mínimos");
     assert_eq!(p.criteria, CompareCriteria::default());
     assert_eq!(p.mtime_tolerance_ms, 2000, "la regla FAT, por defecto");
-    assert!(p.max_depth.is_none() && !p.follow_symlinks);
+    assert!(p.max_depth.is_none() && !p.follow_symlinks && p.descend_orphans.is_none());
     assert_eq!(roundtrip(&p), p);
+}
+
+/// `descend_orphans` acepta un lado, se OMITE cuando no se pidió —la petición
+/// de un cliente que no lo conoce sigue siendo byte a byte la de 0.39.0— y una
+/// ERRATA muere en el deserializador.
+///
+/// Eso último es el punto: si el campo fuera un [`Side`] (que degrada con
+/// `serde(other)`), un `"lft"` llegaría como `Some(Side::Unknown)` —ningún
+/// lado— y la comparación no descendería por ninguno, sirviendo en silencio un
+/// conjunto de filas distinto del pedido. Con [`DescendSide`] lo rechaza el
+/// deserializador de CUALQUIER peer, que es más fuerte que un chequeo que un
+/// handler pueda olvidar (y el brazo embebido, que no pasa por handler alguno,
+/// queda cubierto igual).
+#[test]
+fn descend_orphans_se_omite_cuando_no_se_pide_y_una_errata_no_degrada() {
+    use norte_proto::methods::{DescendSide, FsCompareParams};
+    let minimo = r#"{"left":"file:///a","right":"file:///b"}"#;
+    let p: FsCompareParams = serde_json::from_str(minimo).expect("params mínimos");
+    let json = serde_json::to_value(&p).expect("json");
+    assert!(
+        json.get("descend_orphans").is_none(),
+        "un campo ausente no puede aparecer en el wire: {json}"
+    );
+
+    let pedido = r#"{"left":"file:///a","right":"file:///b","descend_orphans":"right"}"#;
+    let p: FsCompareParams = serde_json::from_str(pedido).expect("params");
+    assert_eq!(p.descend_orphans, Some(DescendSide::Right));
+    assert_eq!(roundtrip(&p), p);
+
+    for malo in [r#""lft""#, r#""unknown""#, r#""both""#] {
+        let crudo =
+            format!(r#"{{"left":"file:///a","right":"file:///b","descend_orphans":{malo}}}"#);
+        assert!(
+            serde_json::from_str::<FsCompareParams>(&crudo).is_err(),
+            "{malo} no puede colar como «ningún lado»"
+        );
+    }
+}
+
+/// [`FsCompareParams`] y [`SyncCompareOptions`] son EL MISMO juego de opciones
+/// de comparación con dos envoltorios: el de un método y el que un plan embebe.
+/// Nada en el compilador los ata —son dos structs, y así se quedan (0.40.0 no
+/// puede cambiar la forma ya publicada de `FsCompareParams` con un `flatten`)—,
+/// así que un rung añadido a uno solo pasaría desapercibido hasta que un plan
+/// comparase distinto que `fs.compare` sobre los mismos dos árboles.
+///
+/// El test los ata: mismos NOMBRES de campo y mismos VALORES para la misma
+/// configuración, menos las dos raíces, que en un plan se llaman `source` y
+/// `dest` y viven en `SyncPlanParams`.
+#[test]
+fn las_dos_caras_de_las_opciones_de_comparacion_no_divergen() {
+    use norte_proto::methods::{CompareCriteria, DescendSide, FsCompareParams, SyncCompareOptions};
+    // Todo POBLADO: los `Option` se omiten al serializar, así que un campo a
+    // `None` aquí sería un campo que este test no mira.
+    let criteria = CompareCriteria {
+        size: true,
+        mtime: false,
+        hash: true,
+    };
+    let params = FsCompareParams {
+        left: vpath("file:///a"),
+        right: vpath("file:///b"),
+        criteria,
+        max_depth: Some(3),
+        mtime_tolerance_ms: 0,
+        follow_symlinks: true,
+        descend_orphans: Some(DescendSide::Left),
+    };
+    let embebidas = SyncCompareOptions {
+        criteria,
+        max_depth: Some(3),
+        mtime_tolerance_ms: 0,
+        follow_symlinks: true,
+        descend_orphans: Some(DescendSide::Left),
+    };
+
+    let mut del_metodo = serde_json::to_value(&params).expect("json");
+    let objeto = del_metodo
+        .as_object_mut()
+        .expect("los params son un objeto");
+    assert!(objeto.remove("left").is_some() && objeto.remove("right").is_some());
+    assert_eq!(
+        del_metodo,
+        serde_json::to_value(&embebidas).expect("json"),
+        "las opciones de comparación de un método y las de un plan han divergido"
+    );
+
+    // Y los DEFAULTS, que es por donde divergirían sin que los nombres se
+    // movieran: `FsCompareParams` los toma campo a campo (`serde(default …)`)
+    // y `SyncCompareOptions` de un `Default` escrito a mano. Si se separan, un
+    // plan con `"compare": {}` compararía distinto que un `fs.compare` sin
+    // opciones, con los dos tipos idénticos en forma.
+    let minimos: FsCompareParams =
+        serde_json::from_str(r#"{"left":"file:///a","right":"file:///b"}"#).expect("params");
+    let mut por_defecto = serde_json::to_value(&minimos).expect("json");
+    let objeto = por_defecto.as_object_mut().expect("objeto");
+    assert!(objeto.remove("left").is_some() && objeto.remove("right").is_some());
+    assert_eq!(
+        por_defecto,
+        serde_json::to_value(SyncCompareOptions::default()).expect("json"),
+        "los defaults de las dos caras han divergido"
+    );
 }
 
 // ---------- sync.plan (0.40.0) ----------

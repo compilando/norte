@@ -728,6 +728,21 @@
         }
       ]
     },
+    "DescendSide": {
+      "description": "El lado cuyos huérfanos se ENUMERAN (0.40.0, ADR 0049): el valor de\n[`FsCompareParams::descend_orphans`] y de\n[`SyncCompareOptions::descend_orphans`].\n\n# Por qué no es un [`Side`]\n\nPorque este campo viaja CLIENT→DAEMON y [`Side`] no: [`Side`] nombra el lado\nde una fila o de un blocker que el daemon EMITE, así que lleva\n`#[serde(other)]` y un `\"lft\"` se convierte en [`Side::Unknown`] en vez de\nmorir. Como parámetro de una petición eso sería un valor pisado en silencio\nde la peor clase: `Unknown` no es ningún lado, así que la comparación no\ndescendería por NINGUNO y el llamante recibiría —sin un solo error— un\nconjunto de filas distinto del que pidió, por una errata de tres letras.\n\nEs la misma regla que [`SyncMode`] y [`OnUnknown`] ya siguen, y la razón por\nla que el chequeo no vive en el handler: un `if` en `handle_fs_compare` no\nalcanza al brazo EMBEBIDO (`CoreBackend::Embedded` llama al engine sin pasar\npor el daemon), y lo que el tipo prohíbe no hay handler que lo pueda olvidar.\n\n`#[non_exhaustive]` por el motivo de #126, como los otros dos.\n\n```\nuse norte_proto::methods::{DescendSide, Side};\nassert_eq!(serde_json::to_string(&DescendSide::Left).expect(\"json\"), r#\"\"left\"\"#);\n// Una errata NO degrada: muere en el deserializador.\nassert!(serde_json::from_str::<DescendSide>(r#\"\"lft\"\"#).is_err());\n// Y \"unknown\", que `Side` sí acepta, tampoco es un lado que se pueda pedir.\nassert!(serde_json::from_str::<DescendSide>(r#\"\"unknown\"\"#).is_err());\nassert_eq!(Side::from(DescendSide::Right), Side::Right);\n```",
+      "oneOf": [
+        {
+          "const": "left",
+          "description": "El lado izquierdo (`left` de [`FsCompareParams`], `source` de\n[`SyncPlanParams`] cuando el origen es la izquierda).",
+          "type": "string"
+        },
+        {
+          "const": "right",
+          "description": "El lado derecho.",
+          "type": "string"
+        }
+      ]
+    },
     "Entry": {
       "description": "Metadatos de un nodo del VFS.\n\nCampos opcionales `None` = \"el provider no lo sabe\", nunca un 0 fingido.\n\n```\nuse norte_proto::attrs::AttrValue;\nuse norte_proto::{Entry, EntryKind, VPath};\nlet e = Entry {\n    path: VPath::parse(\"file:///a.txt\").unwrap(),\n    kind: EntryKind::File,\n    size: Some(42),\n    mtime_ms: None,\n    attrs: [(\"posix.mode\".to_owned(), AttrValue::Uint(0o100_644))].into(),\n};\nlet json = serde_json::to_string(&e).unwrap();\nassert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), e);\n\n// Sin attrs, el wire es EXACTAMENTE el de 0.29.\nlet plain = Entry { attrs: Default::default(), ..e };\nassert!(!serde_json::to_string(&plain).unwrap().contains(\"attrs\"));\n\n// Una clave de atributo mal formada NO llega al mapa: se descarta al\n// decodificar, sin error (ver [`Entry::attrs`]).\nlet wire = r#\"{\"path\":\"file:///a.txt\",\"kind\":\"file\",\"attrs\":{\"MODE\":{\"uint\":1}}}\"#;\nlet filtrada: Entry = serde_json::from_str(wire).unwrap();\nassert!(filtrada.attrs.is_empty());\n```\n\nOJO: `PartialEq`/`Eq`/`Hash` derivados son REPRESENTACIONALES, no de\nIDENTIDAD: dos `Entry` del MISMO nodo difieren si una se pidió con\natributos y la otra no, o si se pidieron ids distintos. Para \"¿es el mismo\nnodo?\" se compara [`Entry::path`]; estas derivaciones existen para\nfixtures, tests y deduplicado de listados idénticos, no para decidir\nidentidad.",
       "properties": {
@@ -1215,7 +1230,7 @@
       "type": "object"
     },
     "FsCompareParams": {
-      "description": "Params de [`FS_COMPARE`] (0.39.0, ADR 0048).\n\n```\nuse norte_proto::methods::{CompareCriteria, FsCompareParams};\n// Lo MÍNIMO que hay que mandar: dos raíces. Todo lo demás tiene default.\nlet p: FsCompareParams =\n    serde_json::from_str(r#\"{\"left\":\"file:///a\",\"right\":\"file:///b\"}\"#).expect(\"params\");\nassert_eq!(p.criteria, CompareCriteria::default());\nassert_eq!(p.mtime_tolerance_ms, 2000);\nassert!(p.max_depth.is_none() && !p.follow_symlinks);\n```",
+      "description": "Params de [`FS_COMPARE`] (0.39.0, ADR 0048).\n\n```\nuse norte_proto::methods::{CompareCriteria, FsCompareParams};\n// Lo MÍNIMO que hay que mandar: dos raíces. Todo lo demás tiene default.\nlet p: FsCompareParams =\n    serde_json::from_str(r#\"{\"left\":\"file:///a\",\"right\":\"file:///b\"}\"#).expect(\"params\");\nassert_eq!(p.criteria, CompareCriteria::default());\nassert_eq!(p.mtime_tolerance_ms, 2000);\nassert!(p.max_depth.is_none() && !p.follow_symlinks && p.descend_orphans.is_none());\n```",
       "properties": {
         "criteria": {
           "$ref": "#/$defs/CompareCriteria",
@@ -1225,6 +1240,17 @@
             "size": true
           },
           "description": "Qué rungs corren. Ausente = [`CompareCriteria::default`]."
+        },
+        "descend_orphans": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DescendSide"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Descender en los directorios que existen SOLO en este lado (0.40.0).\nAusente —el default, y todo lo que 0.39.0 sabía hacer— emite UNA fila\npor el huérfano y no lo recorre.\n\nUn lado, nunca los dos: el tipo lo impone, y el motivo está en\n[`SyncCompareOptions::descend_orphans`], que es el mismo campo visto\ndesde un plan. Aquí, en cambio, **sí es del llamante**: «enséñame todo\nlo que solo está a la izquierda, no solo la punta» es una petición\nlegítima de comparación.\n\nEs un [`DescendSide`] y no un [`Side`]: un lado mal escrito muere en el\nDESERIALIZADOR de cualquier peer (`-32602`) en vez de degradar a\n[`Side::Unknown`] —que no es ningún lado— y servir en silencio un\nconjunto de filas distinto del pedido. El motivo largo está en\n[`DescendSide`]."
         },
         "follow_symlinks": {
           "default": false,
@@ -3430,7 +3456,7 @@
       ]
     },
     "SyncCompareOptions": {
-      "description": "Las opciones de comparación que un plan de sincronización EMBEBE (0.40.0,\nADR 0049): los mismos rungs, tolerancia y profundidad que\n[`FsCompareParams`], sin las dos raíces —que en un plan se llaman `source` y\n`dest`—.\n\nEs un tipo APARTE y no un `flatten` de [`FsCompareParams`] a propósito:\naquel es la petición de un método y ya está publicado con su forma; este\nbump promete que ningún tipo existente cambia de forma. Los dos deben moverse\nJUNTOS cuando la cascada gane un rung.\n\nSe llama `Sync…` y no `CompareOptions` a secas porque `norte-compare` ya\ntiene un `CompareOptions` que NO es de wire (es la configuración del motor),\ny el handler de `sync.plan` va a tener los dos delante en el mismo fichero.\n\n**Dos de sus campos NO son del llamante en [`SYNC_PLAN`]**: ver\n`descend_orphans` y `follow_symlinks` aquí abajo. Están presentes —en vez de\nomitidos— justamente para poder RECHAZARLOS: serde ignora los campos que no\nconoce, así que un campo ausente convertiría «pídelo y te digo que no» en\n«pídelo y no pasa nada», que es el valor pisado en silencio que el diseño\nrehúsa.\n\n```\nuse norte_proto::methods::{CompareCriteria, SyncCompareOptions};\n// Todo tiene default: `{}` es una comparación barata de árbol entero.\nlet o: SyncCompareOptions = serde_json::from_str(\"{}\").expect(\"options\");\nassert_eq!(o.criteria, CompareCriteria::default());\nassert_eq!(o.mtime_tolerance_ms, 2000);\nassert!(o.max_depth.is_none() && !o.follow_symlinks && o.descend_orphans.is_none());\n```",
+      "description": "Las opciones de comparación que un plan de sincronización EMBEBE (0.40.0,\nADR 0049): los mismos rungs, tolerancia y profundidad que\n[`FsCompareParams`], sin las dos raíces —que en un plan se llaman `source` y\n`dest`—.\n\nEs un tipo APARTE y no un `flatten` de [`FsCompareParams`] a propósito:\naquel es la petición de un método y ya está publicado con su forma.\nReestructurarla con `#[serde(flatten)]` cambia la SEMÁNTICA de su\ndeserialización —mapa bufferizado, otro camino para los errores de tipo—\naunque el objeto JSON se vea igual, y eso es lo que este bump no hace.\nAñadirle un campo OPCIONAL, como hace `descend_orphans` en 0.40.0, no es lo\nmismo: la petición de un cliente 0.39 sigue siendo byte a byte la de 0.39.\nVer [`PROTOCOL_VERSION`]. Los dos tipos deben moverse JUNTOS cuando la\ncascada gane un rung — lo fija el test\n`las_dos_caras_de_las_opciones_de_comparacion_no_divergen`.\n\nSe llama `Sync…` y no `CompareOptions` a secas porque `norte-compare` ya\ntiene un `CompareOptions` que NO es de wire (es la configuración del motor),\ny el handler de `sync.plan` va a tener los dos delante en el mismo fichero.\n\n**Dos de sus campos NO son del llamante en [`SYNC_PLAN`]**: ver\n`descend_orphans` y `follow_symlinks` aquí abajo. Están presentes —en vez de\nomitidos— justamente para poder RECHAZARLOS: serde ignora los campos que no\nconoce, así que un campo ausente convertiría «pídelo y te digo que no» en\n«pídelo y no pasa nada», que es el valor pisado en silencio que el diseño\nrehúsa.\n\n```\nuse norte_proto::methods::{CompareCriteria, SyncCompareOptions};\n// Todo tiene default: `{}` es una comparación barata de árbol entero.\nlet o: SyncCompareOptions = serde_json::from_str(\"{}\").expect(\"options\");\nassert_eq!(o.criteria, CompareCriteria::default());\nassert_eq!(o.mtime_tolerance_ms, 2000);\nassert!(o.max_depth.is_none() && !o.follow_symlinks && o.descend_orphans.is_none());\n```",
       "properties": {
         "criteria": {
           "$ref": "#/$defs/CompareCriteria",
@@ -3444,13 +3470,13 @@
         "descend_orphans": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Side"
+              "$ref": "#/$defs/DescendSide"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Descender en los directorios que existen SOLO en este lado. `None` — el\ndefault— emite una fila por el huérfano y no lo recorre.\n\nEn [`SYNC_PLAN`] **tampoco es del llamante**: el planificador lo fija al\nlado del ORIGEN, porque quien aprueba un plan necesita cuántos ficheros\ny cuántos bytes, y el ejecutor un paso por fichero para journalizar y\npara aislar un fallo. En el DESTINO un huérfano es un\n[`SyncStepKind::DeleteTree`] entero, y descenderlo compraría cuarenta mil\nlistados que no cambian un solo paso. Pedirlo es `-32602`."
+          "description": "Descender en los directorios que existen SOLO en este lado. `None` — el\ndefault— emite una fila por el huérfano y no lo recorre.\n\nEn [`SYNC_PLAN`] **tampoco es del llamante**: el planificador lo fija al\nlado del ORIGEN, porque quien aprueba un plan necesita cuántos ficheros\ny cuántos bytes, y el ejecutor un paso por fichero para journalizar y\npara aislar un fallo. En el DESTINO un huérfano es un\n[`SyncStepKind::DeleteTree`] entero, y descenderlo compraría cuarenta mil\nlistados que no cambian un solo paso. Pedirlo es `-32602`.\n\n[`DescendSide`] y no [`Side`] por lo que ese tipo explica: es un campo\nde petición, y un lado mal escrito tiene que morir en el\ndeserializador."
         },
         "follow_symlinks": {
           "default": false,
@@ -4393,6 +4419,9 @@
     "delete_mode": {
       "$ref": "#/$defs/DeleteMode"
     },
+    "descend_side": {
+      "$ref": "#/$defs/DescendSide"
+    },
     "entry": {
       "$ref": "#/$defs/Entry"
     },
@@ -4788,6 +4817,7 @@
     "daemon_shutdown_result",
     "decoration_wire",
     "delete_mode",
+    "descend_side",
     "entry",
     "entry_kind",
     "error",

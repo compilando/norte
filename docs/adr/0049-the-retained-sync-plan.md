@@ -213,9 +213,14 @@ them through `#[serde(other)]`.
   deliberately not this one.
 - **`SyncCompareOptions` duplicates five fields of `FsCompareParams`.**
   Restructuring the published type with `#[serde(flatten)]` would have changed
-  its schema shape, which this bump promises not to do. The two must now be
-  moved together when the cascade gains a rung, and nothing mechanical enforces
-  that yet.
+  how it deserialises — a buffered map, a different path for type errors —
+  even though the JSON object looks the same, and that is the kind of change
+  this bump does not make. Adding an *optional* field is not that, and 0.40.0
+  does add one: `descend_orphans` on both types, absent by default, so a 0.39
+  request is still byte for byte a 0.39 request. What now enforces that the two
+  move together is a test,
+  `las_dos_caras_de_las_opciones_de_comparacion_no_divergen`, which pins their
+  field sets, their values and their defaults against each other.
 - **Two fields of that struct are present precisely so they can be refused.**
   `follow_symlinks` and `descend_orphans` are not the caller's to set in
   `sync.plan`, and a request that sets either is a params error. Removing them

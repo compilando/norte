@@ -437,15 +437,27 @@ use crate::{
 /// ([`SyncStep`], [`SyncStepKind`], [`StepReversal`], [`SyncReason`],
 /// [`SyncBlocker`], [`SyncBlockerKind`], [`SyncCounts`], [`SyncFailure`],
 /// [`SyncFailureCause`], [`SyncMode`], [`OnUnknown`], [`RelPath`],
-/// [`SyncCompareOptions`]) y los
+/// [`SyncCompareOptions`], [`DescendSide`]) y los
 /// topes [`SYNC_STEPS_MAX_BATCH`], [`SYNC_PLAN_TTL_MS`],
 /// [`SYNC_MAX_BLOCKERS_REPORTED`] y [`SYNC_MAX_INCLUDE`]. Con los métodos
 /// viajan sus dos clases de Task,
 /// [`TaskKind::SyncPlan`](crate::TaskKind::SyncPlan) y
 /// [`TaskKind::Sync`](crate::TaskKind::Sync), y una categoría de error nueva,
-/// [`Error::OverlappingRoots`](crate::Error::OverlappingRoots). Bump ADITIVO
-/// PURO: ningún tipo existente cambia de forma, así que el payload de cualquier
-/// método anterior sigue siendo byte a byte el de 0.39.0.
+/// [`Error::OverlappingRoots`](crate::Error::OverlappingRoots).
+///
+/// Bump ADITIVO. **Un tipo existente sí gana un campo**, y es el único:
+/// [`FsCompareParams`] gana [`FsCompareParams::descend_orphans`], opcional y
+/// omitido cuando está ausente. El motor de comparación es el mismo que un plan
+/// usa por debajo, y el planificador necesita descender el huérfano del origen;
+/// duplicar el método para no tocar sus params habría dejado dos comparaciones
+/// que divergen. Es compatible en las dos direcciones que importan: el payload
+/// de un cliente 0.39 no cambia ni un byte —el campo se omite cuando es
+/// `None`— y su ausencia significa exactamente el comportamiento de 0.39.0.
+/// Todo lo demás del bump es tipo nuevo, o variante nueva de un enum que ya
+/// degradaba (ver el párrafo siguiente), así que el payload de cualquier otro
+/// método sigue siendo byte a byte el de 0.39.0. Lo que este bump NO hace es
+/// reestructurar un tipo publicado —un `flatten`, un campo que cambia de tipo
+/// o de nombre—: añadir una clave opcional y omitida no es eso.
 ///
 /// Lo NUEVO del vocabulario es que un plan DECLARA lo que puede deshacer:
 /// [`StepReversal`] viaja por paso y ANTES de la aprobación, así que el humano
@@ -461,8 +473,13 @@ use crate::{
 /// haber llamado a nada, porque [`TASK_PROGRESS`] se difunde a toda conexión
 /// humana y `task.list` las devuelve en el resync. Su `serde(other)` las degrada
 /// a `TaskKind::Unknown` — es la única superficie N/N-1 real de este bump, y
-/// tiene golden en `task_progress.json`. La inversa la corta
-/// [`version_compatible`] en el handshake.
+/// tiene golden en `task_progress.json`. Un cliente 0.39 tampoco manda
+/// `descend_orphans` (no lo conoce) y su ausencia ES el comportamiento de
+/// 0.39.0, así que el campo nuevo de [`FsCompareParams`] no añade superficie
+/// alguna en esa dirección. La inversa —un cliente 0.40 mandando el campo a un
+/// daemon 0.39, que serde ignoraría en silencio— la corta
+/// [`version_compatible`] en el handshake: en 0.x un cliente con minor MAYOR
+/// que el servidor no negocia.
 pub const PROTOCOL_VERSION: &str = "0.40.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
@@ -2805,7 +2822,7 @@ impl CompareRow {
 ///     serde_json::from_str(r#"{"left":"file:///a","right":"file:///b"}"#).expect("params");
 /// assert_eq!(p.criteria, CompareCriteria::default());
 /// assert_eq!(p.mtime_tolerance_ms, 2000);
-/// assert!(p.max_depth.is_none() && !p.follow_symlinks);
+/// assert!(p.max_depth.is_none() && !p.follow_symlinks && p.descend_orphans.is_none());
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2843,6 +2860,23 @@ pub struct FsCompareParams {
     /// de ciclos.
     #[serde(default)]
     pub follow_symlinks: bool,
+    /// Descender en los directorios que existen SOLO en este lado (0.40.0).
+    /// Ausente —el default, y todo lo que 0.39.0 sabía hacer— emite UNA fila
+    /// por el huérfano y no lo recorre.
+    ///
+    /// Un lado, nunca los dos: el tipo lo impone, y el motivo está en
+    /// [`SyncCompareOptions::descend_orphans`], que es el mismo campo visto
+    /// desde un plan. Aquí, en cambio, **sí es del llamante**: «enséñame todo
+    /// lo que solo está a la izquierda, no solo la punta» es una petición
+    /// legítima de comparación.
+    ///
+    /// Es un [`DescendSide`] y no un [`Side`]: un lado mal escrito muere en el
+    /// DESERIALIZADOR de cualquier peer (`-32602`) en vez de degradar a
+    /// [`Side::Unknown`] —que no es ningún lado— y servir en silencio un
+    /// conjunto de filas distinto del pedido. El motivo largo está en
+    /// [`DescendSide`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub descend_orphans: Option<DescendSide>,
 }
 
 /// Un LOTE de filas de [`COMPARE_ROWS`] (0.39.0, ADR 0048). Acotado por
@@ -3048,6 +3082,60 @@ pub enum SyncMode {
     /// [`SyncMode::Update`] más borrar del destino lo que el origen no tiene.
     /// Es el único modo que emite [`SyncStepKind::DeleteTree`].
     Mirror,
+}
+
+/// El lado cuyos huérfanos se ENUMERAN (0.40.0, ADR 0049): el valor de
+/// [`FsCompareParams::descend_orphans`] y de
+/// [`SyncCompareOptions::descend_orphans`].
+///
+/// # Por qué no es un [`Side`]
+///
+/// Porque este campo viaja CLIENT→DAEMON y [`Side`] no: [`Side`] nombra el lado
+/// de una fila o de un blocker que el daemon EMITE, así que lleva
+/// `#[serde(other)]` y un `"lft"` se convierte en [`Side::Unknown`] en vez de
+/// morir. Como parámetro de una petición eso sería un valor pisado en silencio
+/// de la peor clase: `Unknown` no es ningún lado, así que la comparación no
+/// descendería por NINGUNO y el llamante recibiría —sin un solo error— un
+/// conjunto de filas distinto del que pidió, por una errata de tres letras.
+///
+/// Es la misma regla que [`SyncMode`] y [`OnUnknown`] ya siguen, y la razón por
+/// la que el chequeo no vive en el handler: un `if` en `handle_fs_compare` no
+/// alcanza al brazo EMBEBIDO (`CoreBackend::Embedded` llama al engine sin pasar
+/// por el daemon), y lo que el tipo prohíbe no hay handler que lo pueda olvidar.
+///
+/// `#[non_exhaustive]` por el motivo de #126, como los otros dos.
+///
+/// ```
+/// use norte_proto::methods::{DescendSide, Side};
+/// assert_eq!(serde_json::to_string(&DescendSide::Left).expect("json"), r#""left""#);
+/// // Una errata NO degrada: muere en el deserializador.
+/// assert!(serde_json::from_str::<DescendSide>(r#""lft""#).is_err());
+/// // Y "unknown", que `Side` sí acepta, tampoco es un lado que se pueda pedir.
+/// assert!(serde_json::from_str::<DescendSide>(r#""unknown""#).is_err());
+/// assert_eq!(Side::from(DescendSide::Right), Side::Right);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum DescendSide {
+    /// El lado izquierdo (`left` de [`FsCompareParams`], `source` de
+    /// [`SyncPlanParams`] cuando el origen es la izquierda).
+    Left,
+    /// El lado derecho.
+    Right,
+}
+
+impl From<DescendSide> for Side {
+    /// El lado pedido, ya como el [`Side`] con el que habla el motor. En esta
+    /// dirección la conversión es total; la contraria no existe a propósito,
+    /// porque [`Side::Unknown`] no tiene destino aquí.
+    fn from(side: DescendSide) -> Self {
+        match side {
+            DescendSide::Left => Self::Left,
+            DescendSide::Right => Self::Right,
+        }
+    }
 }
 
 /// Qué hacer con una fila cuya confianza es
@@ -3469,9 +3557,15 @@ pub struct SyncBlocker {
 /// `dest`—.
 ///
 /// Es un tipo APARTE y no un `flatten` de [`FsCompareParams`] a propósito:
-/// aquel es la petición de un método y ya está publicado con su forma; este
-/// bump promete que ningún tipo existente cambia de forma. Los dos deben moverse
-/// JUNTOS cuando la cascada gane un rung.
+/// aquel es la petición de un método y ya está publicado con su forma.
+/// Reestructurarla con `#[serde(flatten)]` cambia la SEMÁNTICA de su
+/// deserialización —mapa bufferizado, otro camino para los errores de tipo—
+/// aunque el objeto JSON se vea igual, y eso es lo que este bump no hace.
+/// Añadirle un campo OPCIONAL, como hace `descend_orphans` en 0.40.0, no es lo
+/// mismo: la petición de un cliente 0.39 sigue siendo byte a byte la de 0.39.
+/// Ver [`PROTOCOL_VERSION`]. Los dos tipos deben moverse JUNTOS cuando la
+/// cascada gane un rung — lo fija el test
+/// `las_dos_caras_de_las_opciones_de_comparacion_no_divergen`.
 ///
 /// Se llama `Sync…` y no `CompareOptions` a secas porque `norte-compare` ya
 /// tiene un `CompareOptions` que NO es de wire (es la configuración del motor),
@@ -3522,8 +3616,12 @@ pub struct SyncCompareOptions {
     /// para aislar un fallo. En el DESTINO un huérfano es un
     /// [`SyncStepKind::DeleteTree`] entero, y descenderlo compraría cuarenta mil
     /// listados que no cambian un solo paso. Pedirlo es `-32602`.
+    ///
+    /// [`DescendSide`] y no [`Side`] por lo que ese tipo explica: es un campo
+    /// de petición, y un lado mal escrito tiene que morir en el
+    /// deserializador.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub descend_orphans: Option<Side>,
+    pub descend_orphans: Option<DescendSide>,
 }
 
 impl Default for SyncCompareOptions {

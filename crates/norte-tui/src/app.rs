@@ -2097,6 +2097,10 @@ impl App {
             // el engine acepta el campo y lo ignora. Ofrecer la casilla sería
             // ofrecer una promesa que nadie cumple.
             follow_symlinks: false,
+            // Tampoco hay toggle: el pane de diferencias enseña un huérfano
+            // como UNA fila, y descenderlo es lo que un plan de
+            // sincronización pide por su cuenta (spec 2).
+            descend_orphans: None,
         });
     }
 

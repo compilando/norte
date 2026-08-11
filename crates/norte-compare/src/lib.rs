@@ -84,6 +84,7 @@ pub enum CompareError {
 /// assert_eq!(o.mtime_tolerance_ms, 2000, "la regla FAT");
 /// assert!(!o.criteria.hash, "el rung que LEE contenido es siempre explícito");
 /// assert!(!o.follow_symlinks);
+/// assert!(o.descend_orphans.is_none(), "un huérfano es UNA fila salvo que se pida lo contrario");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CompareOptions {
@@ -114,6 +115,51 @@ pub struct CompareOptions {
     /// `INVALID_PARAMS` en vez de aceptar en silencio una petición que no va a
     /// cumplir.
     pub follow_symlinks: bool,
+    /// Descender en los directorios que existen SOLO en este lado. `None` —el
+    /// default, y lo único que la spec 1 sabía hacer— emite UNA fila por el
+    /// huérfano y no lo recorre.
+    ///
+    /// Como opción de comparación se sostiene sola («enséñame todo lo que solo
+    /// está a la izquierda, no solo la punta»), pero quien la pidió es el plan
+    /// de sincronización: quien lo aprueba necesita saber CUÁNTOS ficheros hay
+    /// dentro del huérfano del ORIGEN, y el ejecutor un paso por fichero para
+    /// journalizar y para aislar un fallo a un solo fichero.
+    ///
+    /// Ficheros, no bytes: una fila huérfana no se hidrata —a ella no la mira
+    /// ningún rung—, así que sobre un provider perezoso (`file://` entre ellos)
+    /// su `size` viene vacío y sumar los bytes de un plan exige `stat`earlos
+    /// aparte (<https://github.com/compilando/norte/issues/157>).
+    ///
+    /// La fila del contenedor SIGUE saliendo, y sale antes que las de dentro.
+    /// No lleva marca de «este viene descendido» porque no hace falta: el
+    /// descenso es una opción de la PETICIÓN, así que quien lo pidió ya sabe
+    /// que detrás del directorio vienen sus hijos, y quien no lo pidió recibe
+    /// la fila de siempre.
+    ///
+    /// **UN lado, no los dos**, y el tipo lo impone. En el destino de una
+    /// sincronización un huérfano es un borrado de árbol entero: un movimiento
+    /// a la papelera, una entrada de journal y una cosa que restaurar. Partirlo
+    /// en cuarenta mil pasos empeora el undo y cuesta cuarenta mil listados
+    /// para no cambiar un solo paso del plan.
+    ///
+    /// Lo que el descenso NO cambia: `max_depth` sigue acotando (lo que se
+    /// acota es el número de listados, venga de una pareja o de un huérfano),
+    /// el techo de [`COMPARE_MAX_DIR_ENTRIES`] sigue siendo por directorio, un
+    /// listado ilegible sigue siendo su fila, y un huérfano AMBIGUO no se
+    /// desciende — igual que un directorio ilegible se lleva su subárbol.
+    ///
+    /// Y una que sorprende: dentro de un huérfano se sigue plegando con las
+    /// capabilities de LOS DOS lados ([`Sides::from_capabilities`]), aunque el
+    /// otro lado no tenga nada ahí. Dos nombres que el otro lado no sabría
+    /// distinguir salen `Ambiguous` dentro del huérfano, y es lo correcto para
+    /// lo que la opción existe: son exactamente los dos ficheros que no se
+    /// podrían escribir juntos en el destino.
+    ///
+    /// [`Side::Unknown`] no es ningún lado, así que no desciende nada. Es lo
+    /// que produce un `"lft"` en el wire (`Side` degrada con `serde(other)`),
+    /// y por eso quien atiende `fs.compare` lo rechaza con `INVALID_PARAMS` en
+    /// vez de servir en silencio un conjunto de filas distinto del pedido.
+    pub descend_orphans: Option<Side>,
 }
 
 impl Default for CompareOptions {
@@ -123,6 +169,7 @@ impl Default for CompareOptions {
             max_depth: None,
             mtime_tolerance_ms: 2000,
             follow_symlinks: false,
+            descend_orphans: None,
         }
     }
 }

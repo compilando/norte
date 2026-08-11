@@ -730,6 +730,12 @@ impl Engine {
             // Ya rechazado arriba; se pasa apagado explícitamente para que el
             // motor no dependa de esa comprobación remota.
             follow_symlinks: false,
+            // `DescendSide` solo puede ser uno de los dos lados: la errata que
+            // habría dado `Side::Unknown` —o sea, descender por NINGUNO sin
+            // decirlo— muere en el deserializador del wire, y no hay chequeo
+            // que este brazo (el embebido no pasa por el daemon) pueda
+            // olvidarse.
+            descend_orphans: params.descend_orphans.map(norte_proto::methods::Side::from),
         };
         let (left_root, right_root) = (params.left, params.right);
         let (tx, rx) = tokio::sync::mpsc::channel(8);

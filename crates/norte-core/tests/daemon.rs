@@ -218,6 +218,21 @@ async fn initialize_negocia_y_es_obligatorio() {
     let _c2 = connected_client(&d).await;
 }
 
+/// La versión N-1 del daemon, DERIVADA de `PROTOCOL_VERSION`.
+///
+/// Escrita a mano (era `"0.38.2"`), la ventana que este test dice comprobar
+/// pasaba a ser «una versión vieja cualquiera» al primer bump y un rojo al
+/// segundo, culpando al cambio que pasara por delante. En 0.x el minor es el
+/// major efectivo, así que N-1 es minor menos uno.
+fn n_minus_one() -> String {
+    let (major, rest) = methods::PROTOCOL_VERSION.split_once('.').expect("semver");
+    let (minor, _) = rest.split_once('.').expect("semver");
+    let minor: u64 = minor.parse().expect("minor numérico");
+    assert_eq!(major, "0", "fuera de 0.x la ventana N-1 la define el major");
+    assert!(minor > 0, "0.0.x no tiene N-1 que pedir");
+    format!("{major}.{}.2", minor - 1)
+}
+
 #[tokio::test]
 async fn initialize_rechaza_version_incompatible() {
     let d = spawn_daemon(None).await;
@@ -233,7 +248,7 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect_err("0.1.0 no es N ni N-1 de 0.39.0");
+        .expect_err("0.1.0 no es ni N ni N-1");
     match err {
         ClientError::Rpc(rpc) => {
             // Código PROPIO: la señal de upgrade jamás se parsea de message.
@@ -244,14 +259,14 @@ async fn initialize_rechaza_version_incompatible() {
         }
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
-    // N-1 (0.38.x) SÍ entra.
+    // N-1 SÍ entra.
     let c2 = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c2
         .call(
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.38.2".into(),
+                protocol_version: n_minus_one(),
                 encodings: vec![],
                 agent_session: None,
             },
@@ -1912,11 +1927,17 @@ async fn frames_hostiles_y_formas_canonicas_crudas() {
     assert_eq!(resp["error"]["code"], serde_json::json!(-32600));
 
     // initialize + daemon.shutdown con params null (golden canónico, M1).
-    s.write_all(
-        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.38.0\",\"encodings\":[\"json\"]}}\n",
-    )
-    .await
-    .expect("write");
+    //
+    // La versión se INTERPOLA desde `PROTOCOL_VERSION` y no se escribe a mano:
+    // clavada aquí (era `"0.38.0"`), el frame envejecía sin que nadie lo
+    // tocara y este test se ponía rojo dos bumps después, culpando al cambio
+    // que pasara por delante. Lo que prueba es el marco crudo, no la ventana
+    // N/N-1 —de eso se ocupa `version_compatible` en `norte-proto`—.
+    let hello = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"client_info\":{{\"name\":\"raw\",\"version\":\"0\"}},\"protocol_version\":\"{}\",\"encodings\":[\"json\"]}}}}\n",
+        methods::PROTOCOL_VERSION
+    );
+    s.write_all(hello.as_bytes()).await.expect("write");
     let resp = read_frame(&mut s).await;
     assert!(resp["result"]["protocol_version"].is_string(), "{resp}");
     s.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"daemon.shutdown\",\"params\":null}\n")
@@ -4355,6 +4376,7 @@ fn compare_params(left: &str, right: &str) -> methods::FsCompareParams {
         max_depth: None,
         mtime_tolerance_ms: 2000,
         follow_symlinks: false,
+        descend_orphans: None,
     }
 }
 
@@ -4586,6 +4608,88 @@ async fn fs_compare_follow_symlinks_es_invalid_params() {
         ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
         other => panic!("esperaba Rpc INVALID_PARAMS, fue {other:?}"),
     }
+}
+
+/// Un lado MAL ESCRITO es `-32602` por el socket, no «ningún lado».
+///
+/// Quien lo rechaza es el TIPO (`DescendSide` no tiene `serde(other)`), no un
+/// `if` del handler: `parse_params` no llega a construir la petición. El test
+/// vive aquí igualmente porque lo que hay que garantizar es la respuesta que ve
+/// el cliente, y porque si alguien ablandara el tipo a `Side` —que sí degrada—
+/// este test es el que se pone rojo. `"unknown"` va en la lista a propósito: es
+/// el valor que `Side` aceptaría y que significa «ningún lado».
+#[tokio::test]
+async fn fs_compare_un_lado_mal_escrito_es_invalid_params() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///l")).await.expect("mkdir l");
+    d.mem.mkdir(&vp("mem:///r")).await.expect("mkdir r");
+    let c = connected_client(&d).await;
+
+    for malo in ["lft", "unknown", "both"] {
+        let err = c
+            .call::<_, FsTaskResult>(
+                methods::FS_COMPARE,
+                &serde_json::json!({
+                    "left": "mem:///l",
+                    "right": "mem:///r",
+                    "descend_orphans": malo,
+                }),
+            )
+            .await
+            .expect_err("rechazada");
+        match err {
+            ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS, "{malo}"),
+            other => panic!("esperaba Rpc INVALID_PARAMS para {malo}, fue {other:?}"),
+        }
+    }
+}
+
+/// Y el lado BIEN escrito llega hasta el motor: el huérfano de la izquierda se
+/// enumera, y el de la derecha sigue siendo una fila. Es el cable entero —wire,
+/// engine, walk— y no solo la struct.
+#[tokio::test]
+async fn fs_compare_descend_orphans_llega_al_motor() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///l")).await.expect("mkdir l");
+    d.mem.mkdir(&vp("mem:///r")).await.expect("mkdir r");
+    d.mem.mkdir(&vp("mem:///l/solo")).await.expect("mkdir solo");
+    write_file(&d.mem, "mem:///l/solo/dentro.txt", b"x").await;
+    d.mem.mkdir(&vp("mem:///r/otro")).await.expect("mkdir otro");
+    // Con hijo: sin él, «el otro lado no se descendió» se cumpliría solo.
+    write_file(&d.mem, "mem:///r/otro/dentro-derecha.txt", b"y").await;
+    let mut c = connected_client(&d).await;
+
+    let mut p = compare_params("mem:///l", "mem:///r");
+    p.descend_orphans = Some(methods::DescendSide::Left);
+    let task: FsTaskResult = c
+        .call(methods::FS_COMPARE, &p)
+        .await
+        .expect("fs.compare aceptada");
+    let (batches, terminal) = drain_compare(&mut c, task.task_id.get()).await;
+    assert_eq!(terminal, TaskState::Completed);
+
+    let nombres: Vec<Vec<u8>> = batches
+        .iter()
+        .flat_map(|b| &b.rows)
+        .filter_map(|row| {
+            [row.left.as_ref(), row.right.as_ref()]
+                .into_iter()
+                .flatten()
+                .next()
+                .and_then(|e| e.path.file_name())
+                .map(|s| s.as_bytes().to_vec())
+        })
+        .collect();
+    assert!(nombres.contains(&b"solo".to_vec()), "{nombres:?}");
+    assert!(
+        nombres.contains(&b"dentro.txt".to_vec()),
+        "el huérfano del origen no se enumeró: {nombres:?}"
+    );
+    assert!(nombres.contains(&b"otro".to_vec()), "{nombres:?}");
+    assert!(
+        !nombres.contains(&b"dentro-derecha.txt".to_vec()),
+        "el huérfano del DESTINO no se descendió: {nombres:?}"
+    );
 }
 
 /// El gate: comparar LEE dos árboles, así que un agente necesita scope vivo

@@ -2987,6 +2987,11 @@ async fn handle_fs_compare(
             "fs.compare: follow_symlinks is not supported (link targets are compared as bytes)",
         ));
     }
+    // `descend_orphans` NO se valida aquí: es un `DescendSide`, que no tiene
+    // `serde(other)`, así que un `"lft"` muere en `parse_params` de arriba
+    // (`-32602`) y `Side::Unknown` ni siquiera es representable. Un `if` en
+    // este handler habría dejado fuera el brazo EMBEBIDO, que llama al engine
+    // sin pasar por aquí.
 
     let (handle, mut rx) = shared
         .engine

@@ -2112,7 +2112,7 @@ fn check_methods_search(fixtures: &BTreeMap<String, Value>) {
 fn check_methods_compare(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
         CompareConfidence, CompareCriteria, CompareCriterion, CompareRowsBatch, CompareVerdict,
-        FsCompareParams,
+        DescendSide, FsCompareParams,
     };
     check_one(
         fixtures,
@@ -2124,6 +2124,10 @@ fn check_methods_compare(fixtures: &BTreeMap<String, Value>) {
             max_depth: None,
             mtime_tolerance_ms: 2000,
             follow_symlinks: false,
+            // Ausente en la fixture, y esa ausencia ES el comportamiento de
+            // 0.39.0: un huérfano, una fila. La petición mínima de un cliente
+            // 0.39 no cambia ni un byte con el campo nuevo (0.40.0).
+            descend_orphans: None,
         },
     );
     // Todo poblado, y con raíces HOSTILES: `max_depth` presente (se omite
@@ -2144,6 +2148,7 @@ fn check_methods_compare(fixtures: &BTreeMap<String, Value>) {
             max_depth: Some(3),
             mtime_tolerance_ms: 0,
             follow_symlinks: false,
+            descend_orphans: Some(DescendSide::Left),
         },
     );
     // El lote: `task_id` para correlacionar y las filas en el orden en que el
