@@ -3444,10 +3444,15 @@ fn sync_step_cases_skipped() -> Vec<(&'static str, norte_proto::methods::SyncSte
     ]
 }
 
-/// El BLOQUEO (0.40.0, ADR 0049): las cuatro clases, y el `side` presente
+/// El BLOQUEO (0.40.0, ADR 0049): las cinco clases, y el `side` presente
 /// exactamente cuando el bloqueo es de un lado. `dest_read_only` es del árbol
 /// entero, así que su `rel` es la RAÍZ — la forma que un frontend tiene que
 /// saber pintar sin nombre que enseñar.
+///
+/// `type_mismatch_dir` va DOS veces porque su `side` es lo que lo hace legible:
+/// el mismo bloqueo con `left` y con `right` son dos frases distintas («no copio
+/// un árbol del origen sobre un fichero» / «no borro un árbol del destino para
+/// poner un fichero»), y congelar una sola dejaría la otra sin fixture.
 #[test]
 fn golden_sync_blocker() {
     use norte_proto::methods::{RelPath, Side, SyncBlocker, SyncBlockerKind as Kind};
@@ -3486,6 +3491,26 @@ fn golden_sync_blocker() {
                     rel: rel_path("sub"),
                     kind: Kind::OverlapDetected,
                     side: None,
+                },
+            ),
+            (
+                // Un directorio del ORIGEN contra un fichero del destino, con
+                // un nombre no-UTF8 para que el `rel` del bloqueo pase por el
+                // mismo códec que el de un paso.
+                "type_mismatch_dir_source",
+                SyncBlocker {
+                    rel: rel_path("informe%FF.d"),
+                    kind: Kind::TypeMismatchDir,
+                    side: Some(Side::Left),
+                },
+            ),
+            (
+                // Y al revés: el árbol que se borraría está en el DESTINO.
+                "type_mismatch_dir_dest",
+                SyncBlocker {
+                    rel: rel_path("build"),
+                    kind: Kind::TypeMismatchDir,
+                    side: Some(Side::Right),
                 },
             ),
         ],

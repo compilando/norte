@@ -1,21 +1,30 @@
 //! El transductor: filas de comparación entran, pasos de plan salen.
 //!
-//! Una fila produce CERO o UN elemento —de momento; el modo `Mirror` y los
-//! bloqueos de la tarea 5 no cambian esa forma, solo la tabla—. Dos árboles
-//! idénticos producen cero pasos, no un millón de `Skip`: lo NOTABLE se emite,
-//! lo aburrido no.
+//! Una fila produce CERO o UN elemento: un paso, o un bloqueo, o nada. Dos
+//! árboles idénticos producen cero pasos, no un millón de `Skip`: lo NOTABLE se
+//! emite, lo aburrido no.
 //!
 //! El orden es el del walk, que es pre-orden, así que un `CreateDir` precede
-//! siempre a lo que va dentro de él sin que aquí haya que ordenar nada.
+//! siempre a lo que va dentro de él sin que aquí haya que ordenar nada. Ese
+//! pre-orden no es solo una comodidad de presentación: los dos únicos estados
+//! que el transductor guarda —el prefijo podado por un solape y las ortografías
+//! de los directorios emparejados— se apoyan en que el padre llegue ANTES que
+//! sus hijos.
+//!
+//! Y en eso, y en NADA más: el walk emite las filas por DIRECTORIO —todas las de
+//! un nivel, y después las de cada subdirectorio— así que entre la fila de una
+//! carpeta y las de sus hijos se cuelan todas sus hermanas. Un estado que
+//! suponga «los hijos vienen justo detrás» se rompe con el primer hermano, en
+//! silencio y sobre el árbol de un usuario.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::pin::Pin;
 
 use futures::stream::{self, FusedStream, Stream, StreamExt};
 use norte_compare::CompareError;
 use norte_proto::methods::{
-    CompareConfidence, CompareRow, CompareVerdict, OnUnknown, RelPath, Side, StepReversal,
-    SyncBlocker, SyncMode, SyncReason, SyncStep, SyncStepKind,
+    CompareConfidence, CompareReason, CompareRow, CompareVerdict, OnUnknown, RelPath, Side,
+    StepReversal, SyncBlocker, SyncBlockerKind, SyncMode, SyncReason, SyncStep, SyncStepKind,
 };
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use tokio_util::sync::CancellationToken;
@@ -61,6 +70,25 @@ pub enum PlanItem {
 /// [`SyncError::RootIsNotAStep`], [`SyncError::ModeNotPlanned`]). Todo lo demás
 /// que sale mal en un árbol es un paso o un bloqueo.
 ///
+/// # El solape lo decide ESTE flujo, no solo el llamante
+/// Copiar `/a` sobre `/a/sub` copia un árbol dentro de sí mismo. La
+/// comprobación ESTRUCTURAL de las dos raíces es del llamante (`sync.plan` la
+/// hace con `Error::OverlappingRoots`) y aquí no se supone hecha: en cuanto una
+/// fila trae una ruta del origen que llega a la raíz del DESTINO —o al revés—
+/// sale un [`SyncBlockerKind::OverlapDetected`](norte_proto::methods::SyncBlockerKind::OverlapDetected)
+/// y ese subárbol entero se poda, sin un solo paso.
+///
+/// Lo que este flujo NO puede ver es que dos [`VPath`] distintos nombren un
+/// mismo árbol (un symlink, una raíz SFTP bajo dos authorities, un archivo
+/// abierto por dos caminos): eso pide canonicalizar, que cuesta un viaje por
+/// comparación y no todo provider lo ofrece (ADR 0048). Y al revés, dos raíces
+/// IGUALES no se toman por solape: el transductor no sabe de providers, así que
+/// dos providers distintos que deletreen igual su raíz —dos `mem:///` de un
+/// test, mismamente— llegarían aquí indistinguibles de un árbol contra sí mismo.
+/// Ese caso no escribe de más de todas formas: un árbol comparado consigo mismo
+/// da filas `Same`, o sea cero pasos. Lo peligroso es la CONTENCIÓN, que es lo
+/// que se poda.
+///
 /// # Un plan no es atómico mientras se produce
 /// Los pasos salen ANTES de que se sepa si el plan va a morir, así que quien
 /// los acumule verá pasos de un plan que termina en error. Es inocuo porque
@@ -82,17 +110,28 @@ pub enum PlanItem {
 /// El destino NO se renombra a la ortografía del origen: eso convertiría cada
 /// sincronización macOS↔Linux en un baile de renombrados.
 ///
-/// **Y solo vale para las filas EMPAREJADAS.** Lo que existe únicamente en el
-/// origen no trae entrada del destino, así que no hay segunda ortografía que
-/// leer: un fichero nuevo dentro de un directorio que los dos lados deletrean
-/// distinto sale con `dest_rel: None` y su `rel` cuelga del nombre del ORIGEN,
-/// que es el mismo fichero duplicado un nivel más arriba. Cerrarlo pide
-/// memoria —una pila de prefijos `(origen, destino)` de los directorios
-/// emparejados que difieren, alimentada por unas filas `Same` que hoy no
-/// producen paso alguno—, y esa pila es estado nuevo del transductor. Se fija
-/// con un test (`a_copy_under_a_folder_the_two_sides_spell_differently_…`)
-/// para que la tarea 9 no lo herede sin saberlo, y sigue anotado en el issue
-/// #152.
+/// **Y lo que solo está en el ORIGEN hereda la ortografía de su carpeta.** Un
+/// fichero nuevo dentro de un directorio que los dos lados deletrean distinto no
+/// trae entrada del destino, así que no hay segunda ortografía que LEER de la
+/// fila — pero sí hay una que RECORDAR: la fila del par de directorios, que es
+/// `Same` y no produce paso, es la que la sabe. El transductor anota
+/// `(origen → destino)` de cada par de directorios cuyas dos rutas difieren y
+/// resuelve cada fila por su ancestro más profundo, así que `café/nuevo.txt` sale
+/// con `dest_rel = café(NFD)/nuevo.txt` y el ejecutor escribe DENTRO del
+/// directorio que existe en vez de crear un segundo `café` al lado (la otra
+/// mitad del issue #152).
+///
+/// La comparación de ancestros es por SEGMENTOS y por bytes, nunca por prefijo
+/// de cadena: `café` no es prefijo de `cafétière`.
+///
+/// # El flujo tiene que venir COMPLETO
+/// De ahí salen las dos exigencias que la firma no puede imponer. `rows` debe
+/// traer, por cada fila, todas las de sus ANCESTROS — porque la ortografía de
+/// una carpeta viaja en la fila de la carpeta, que es `Same` y no produce paso—;
+/// y debe venir en el orden del walk, que es pre-orden. Un llamante que quiera
+/// planificar solo una selección (`include` de `sync.plan`) tiene que filtrar el
+/// flujo de SALIDA, nunca el de entrada: quitar la fila `Same` de `café` deja
+/// `café/nuevo.txt` sin `dest_rel` y reabre el #152 justo por donde se cerró.
 ///
 /// ```
 /// use futures::StreamExt;
@@ -149,13 +188,46 @@ pub fn plan<'a, S>(
 where
     S: Stream<Item = Result<CompareRow, CompareError>> + 'a,
 {
+    // Los dos fallos de CABLEADO se deciden aquí y no por fila: un plan cuyo
+    // modo este binario no sabe planificar, o cuyo origen no nombra ningún lado,
+    // no puede terminar vacío-y-aprobable solo porque la comparación no
+    // produjera filas.
+    let mirroring = matches!(opts.mode, SyncMode::Mirror);
+    let fatal = if !matches!(opts.mode, SyncMode::Update | SyncMode::Mirror) {
+        Some(SyncError::ModeNotPlanned(opts.mode))
+    } else if opts.source_side == Side::Unknown {
+        Some(SyncError::SourceSideUnknown)
+    } else {
+        None
+    };
+    // Un destino que no admite escritura bloquea el plan ENTERO, y se dice antes
+    // de pedir la primera fila: el bloqueo no depende de que el árbol tenga nada
+    // dentro, así que un origen vacío tiene que producirlo igual. Y ninguna fila
+    // se llega a mirar — no hay nada que un árbol pueda decir que cambie el
+    // resultado, y arrastrar el walk entero por él cuesta minutos de red.
+    let mut pending = VecDeque::new();
+    if !opts.dest_writable && fatal.is_none() {
+        pending.push_back(PlanItem::Blocker(SyncBlocker {
+            rel: RelPath::default(),
+            kind: SyncBlockerKind::DestReadOnly,
+            // No es de un sitio: es del árbol entero, y el árbol es el DESTINO
+            // (convenio de plan: origen `Left`, destino `Right`).
+            side: Some(Side::Right),
+        }));
+    }
+    let source_is_left = opts.source_side == Side::Left;
     let transducer = Transducer {
         rows: Box::pin(rows),
         opts,
         cancel,
-        pending: VecDeque::new(),
+        pending,
         next_id: 0,
         finished: false,
+        overlap: None,
+        spellings: BTreeMap::new(),
+        fatal,
+        source_is_left,
+        mirroring,
     };
     stream::unfold(transducer, |mut t| async move {
         let item = t.step().await?;
@@ -184,6 +256,65 @@ struct Transducer<S> {
     next_id: u64,
     /// Una vez `true` el flujo no vuelve a producir nada.
     finished: bool,
+    /// El subárbol que un solape podó, cuando lo hubo.
+    ///
+    /// UNO solo, y no un conjunto, porque lo que se guarda no es la ruta de la
+    /// fila que lo destapó sino la RAÍZ que se alcanzó, que es la que contiene
+    /// todo el subárbol solapado. El pre-orden hace lo demás: el padre llega
+    /// antes que sus hijos, así que la primera fila que entra en el subárbol lo
+    /// levanta y todas las demás caen dentro del mismo prefijo.
+    overlap: Option<Overlap>,
+    /// Cómo se deletrea en el DESTINO cada directorio emparejado cuyas dos
+    /// ortografías NO coinciden byte a byte.
+    ///
+    /// Un MAPA y no una pila, y esa es la única forma que funciona: el walk
+    /// emite las filas por DIRECTORIO —todas las de un nivel y después, una a
+    /// una, las de sus subdirectorios—, así que entre el par `café` y su hijo
+    /// `café/nuevo.txt` se cuelan todos los hermanos de `café`. Una pila que se
+    /// desapilase con el primer hermano perdería la traducción justo antes de
+    /// necesitarla (o peor, con dos niveles: se quedaría con la del abuelo y
+    /// nombraría un directorio que no existe en ninguno de los dos lados). Un
+    /// mapa solo necesita que el padre llegue ANTES que sus hijos, que es lo que
+    /// el pre-orden sí garantiza.
+    ///
+    /// La clave es la ruta del ORIGEN y el valor la del DESTINO, ENTERAS: la
+    /// entrada más profunda que sea ancestro de una fila ya lleva dentro la
+    /// traducción de todas sus ancestras, así que se resuelve con UNA búsqueda.
+    ///
+    /// Cuesta memoria proporcional al número de directorios emparejados que se
+    /// deletrean distinto —cero en un árbol homogéneo, uno por carpeta acentuada
+    /// en una sincronización macOS↔Linux—, y es de todas formas mucho menos que
+    /// el plan que este flujo produce y que quien lo consume retiene entero.
+    /// Sin él, lo que solo está en el origen sale nombrando una carpeta que en el
+    /// destino no existe (issue #152).
+    spellings: BTreeMap<RelPath, RelPath>,
+    /// El fallo de CABLEADO que termina el plan en cuanto se pida el primer
+    /// elemento, si lo hay.
+    ///
+    /// Se decide al construir y no al absorber la primera fila: un plan cuyo
+    /// modo o cuyo origen vienen mal no puede salir vacío-y-aprobable solo
+    /// porque los dos árboles estuvieran vacíos.
+    fatal: Option<SyncError>,
+    /// ¿Es el lado IZQUIERDO de las filas el origen? Resuelto una vez, aquí, en
+    /// vez de volver a interpretar [`SyncOptions::source_side`] por fila.
+    source_is_left: bool,
+    /// ¿Borra este plan lo que sobra en el destino ([`SyncMode::Mirror`])?
+    mirroring: bool,
+}
+
+/// El solape que el walk encontró: qué raíz se alcanzó y de qué lado venía la
+/// ruta que la alcanzó.
+///
+/// El lado importa. Si una ruta del ORIGEN llegó a `dest_root`, lo que hay que
+/// podar son las filas cuyo lado de ORIGEN cae ahí dentro; las del destino caen
+/// todas bajo `dest_root` por definición —de ahí cuelga el árbol entero— y
+/// podarlas también se llevaría por delante el plan entero en vez del subárbol.
+#[derive(Debug, Clone)]
+struct Overlap {
+    /// La raíz alcanzada: todo lo que esté en ella o por debajo se poda.
+    prefix: VPath,
+    /// `true` si se miran las rutas del ORIGEN, `false` si las del destino.
+    from_source: bool,
 }
 
 impl<S> Transducer<S>
@@ -198,16 +329,32 @@ where
             }
             // La comprobación va ANTES de vaciar lo pendiente, y lo pendiente se
             // tira: ningún paso sale después del corte, ni siquiera uno ya
-            // calculado. Es el mismo contrato que `norte_compare::walk`, y
-            // empieza a importar en cuanto una fila produzca más de un elemento
-            // (tarea 5: un `Skip` y un bloqueo de la misma fila).
+            // calculado. Es el mismo contrato que `norte_compare::walk`. Hoy una
+            // fila produce como mucho un elemento, así que lo pendiente es a lo
+            // sumo el bloqueo sembrado al construir — pero el contrato es sobre
+            // lo que SALE, no sobre cuántos quepan.
             if self.cancel.is_cancelled() {
                 self.finished = true;
                 self.pending.clear();
                 return Some(Err(SyncError::Cancelled));
             }
+            // El cableado se comprobó al construir: termina el flujo sin mirar
+            // una sola fila, y también cuando no hay ninguna.
+            if let Some(fatal) = self.fatal.take() {
+                self.finished = true;
+                self.pending.clear();
+                return Some(Err(fatal));
+            }
             if let Some(item) = self.pending.pop_front() {
                 return Some(Ok(item));
+            }
+            if !self.opts.dest_writable {
+                // El bloqueo ya salió (lo sembró `plan`) y no hay nada más que
+                // decir: ninguna fila puede cambiar que el destino no se deje
+                // escribir. No se pide ni una, y soltar el flujo para de paso el
+                // walk que lo alimenta.
+                self.finished = true;
+                return None;
             }
             match self.rows.next().await {
                 None => {
@@ -232,29 +379,56 @@ where
         }
     }
 
-    /// Traduce UNA fila a cero o más elementos en `pending`.
+    /// Traduce UNA fila a cero o un elemento en `pending`.
+    ///
+    /// El modo, el lado del origen y la escritura del destino ya se resolvieron
+    /// al construir el transductor: aquí no hay ninguna opción que interpretar,
+    /// solo la fila.
     fn absorb(&mut self, row: &CompareRow) -> Result<(), SyncError> {
-        // `SyncMode` es `#[non_exhaustive]`, así que el comodín es obligatorio;
-        // y es justo lo que hace falta, porque un modo que este planificador no
-        // sabe planificar NO puede degradar al que sí sabe.
-        if self.opts.mode != SyncMode::Update {
-            return Err(SyncError::ModeNotPlanned(self.opts.mode));
+        let (source_orphan, dest_orphan) = if self.source_is_left {
+            (CompareVerdict::OnlyLeft, CompareVerdict::OnlyRight)
+        } else {
+            (CompareVerdict::OnlyRight, CompareVerdict::OnlyLeft)
+        };
+        let (source, dest) = if self.source_is_left {
+            (row.left.as_ref(), row.right.as_ref())
+        } else {
+            (row.right.as_ref(), row.left.as_ref())
+        };
+        let mirroring = self.mirroring;
+
+        // El solape, antes que cualquier otra cosa: dentro del subárbol podado
+        // no se planifica nada, ni siquiera un `Skip`.
+        if self.overlap_prunes(source, dest) {
+            return Ok(());
         }
-        let (source_orphan, dest_orphan) = match self.opts.source_side {
-            Side::Left => (CompareVerdict::OnlyLeft, CompareVerdict::OnlyRight),
-            Side::Right => (CompareVerdict::OnlyRight, CompareVerdict::OnlyLeft),
-            Side::Unknown => return Err(SyncError::SourceSideUnknown),
+        if let Some(blocker) = self.overlap_reached(source, dest)? {
+            self.pending.push_back(PlanItem::Blocker(blocker));
+            return Ok(());
+        }
+
+        // El `rel` del origen se calcula UNA vez por fila, y antes de las
+        // salidas tempranas: la pila de ortografías se alimenta también de filas
+        // que no producen paso (el par de directorios es `Same`).
+        let source_rel = match source {
+            Some(entry) => Some(rel_under(&self.opts.source_root, &entry.path)?),
+            None => None,
         };
-        let (source, dest) = match self.opts.source_side {
-            Side::Left => (row.left.as_ref(), row.right.as_ref()),
-            _ => (row.right.as_ref(), row.left.as_ref()),
-        };
+        if let Some(rel) = source_rel.as_ref() {
+            self.remember_spelling(rel, source, dest)?;
+        }
 
         // Una fila de error no se traduce a nada que actúe: se traduce a un
-        // `Skip` que la NOMBRA. Va antes que el veredicto porque no tiene
-        // ninguno que valga (`Error` no es `Same` ni `Different`).
+        // `Skip` que la NOMBRA —o, si es un directorio del destino que no cabe,
+        // a un bloqueo—. Va antes que el veredicto porque no tiene ninguno que
+        // valga (`Error` no es `Same` ni `Different`).
         if row.verdict == CompareVerdict::Error {
-            return self.absorb_error(row, source, dest);
+            return self.absorb_error(row, source, dest, source_rel);
+        }
+        // Y una colisión de nombres tampoco tiene veredicto que mapear: es un
+        // `Skip` si colisionó el origen y un BLOQUEO si colisionó el destino.
+        if row.verdict == CompareVerdict::Ambiguous {
+            return self.absorb_ambiguous(row, source, dest, source_rel);
         }
 
         // El motivo del `Skip`, cuando el veredicto acaba en uno. Lo pone quien
@@ -288,27 +462,36 @@ where
                 SyncStepKind::Copy
             }
         } else if row.verdict == dest_orphan {
-            // Lo que sobra en el destino es asunto de `Mirror` (tarea 5). Bajo
-            // `Update` no se borra nada, y ese es el motivo de que el modo
-            // exista.
-            return Ok(());
+            // Lo que sobra en el destino: bajo `Update` no se borra nada —ese es
+            // el motivo de que el modo exista—, bajo `Mirror` es UN
+            // `DeleteTree`.
+            if !mirroring {
+                return Ok(());
+            }
+            return self.absorb_dest_orphan(row, dest);
         } else {
             match row.verdict {
-                // OJO, deuda conocida: un `TypeMismatch` cuyo ORIGEN es un
-                // directorio (un `build/` contra un `build` fichero) sale
-                // también como `Overwrite`, y `Overwrite` significa
-                // normativamente «a la papelera y COPIAR bytes». El paso no
-                // lleva `EntryKind`, así que el ejecutor no lo puede distinguir,
-                // y el walk no desciende un par no-directorio: el subárbol
-                // entero se queda fuera del plan. Decirlo bien pide vocabulario
-                // que el wire 0.40.0 no tiene (un paso «borra y crea
-                // directorio», o el `EntryKind` en el paso). Se pinta aquí y se
-                // fija con un test para que la tarea 9 no lo herede sin saberlo.
+                // Un desajuste de CLASE con un directorio de por medio no es un
+                // `Overwrite`: `Overwrite` significa normativamente «a la
+                // papelera y COPIAR bytes», el paso no lleva `EntryKind` con el
+                // que distinguirlo, y el subárbol implicado ni siquiera está en
+                // el plan —el walk no desciende un par que no es de dos
+                // directorios—. Cambiar un árbol por un fichero es un cambio
+                // estructural destructivo que esta spec no prometió: lo decide
+                // un humano, y por eso es un bloqueo.
                 //
+                // Un fichero contra un symlink sí se sobrescribe: eso es
+                // sustituir bytes, que es exactamente lo que el paso dice.
+                CompareVerdict::TypeMismatch => {
+                    if let Some(side) = directory_side(source, dest) {
+                        return self.absorb_type_mismatch_dir(side, source_rel, dest);
+                    }
+                    SyncStepKind::Overwrite
+                }
                 // Una diferencia es una diferencia con la confianza que sea:
                 // `on_unknown` no desempata aquí, desempata en `Same` — «parece
                 // igual pero nadie lo puede prometer»— y no en «es distinto».
-                CompareVerdict::Different | CompareVerdict::TypeMismatch => SyncStepKind::Overwrite,
+                CompareVerdict::Different => SyncStepKind::Overwrite,
                 // Dos lados que se tienen por iguales no producen NADA… salvo
                 // cuando esa igualdad no la respalda nadie
                 // ([`CompareConfidence::Unknown`]: un provider que no da tamaño
@@ -331,24 +514,19 @@ where
                         SyncStepKind::Skip
                     }
                 }
-                // `Ambiguous` y `Unknown` todavía no: son de la tarea 5. Que
-                // hoy no produzcan NADA no es inocuo y por eso se escribe: una
-                // colisión del origen —dos ortografías que el destino no puede
-                // distinguir— sale hoy del plan sin paso y sin bloqueo, o sea
-                // sin que nadie la vea. La tarea 5 la convierte en un `Skip`
-                // con `AmbiguousSource` (o en un bloqueo, si es del destino), y
-                // de eso depende que dos nombres del origen no acaben
-                // escribiéndose uno encima del otro.
+                // Un veredicto que este decodificador no conoce (un daemon una
+                // versión por delante) no produce nada: no hay tabla que
+                // aplicarle y adivinarla escribiría. `CompareVerdict::Ambiguous`
+                // NO cae aquí — lo atiende `absorb_ambiguous`, arriba.
                 _ => return Ok(()),
             }
         };
 
-        let Some(entry) = source else {
+        let (Some(entry), Some(rel)) = (source, source_rel) else {
             // `Different`/`TypeMismatch` sin lado de origen: la misma
             // contradicción que arriba.
             return Ok(());
         };
-        let rel = rel_under(&self.opts.source_root, &entry.path)?;
         if rel.is_root() && kind != SyncStepKind::Skip {
             // La fila NOMBRA la raíz, no algo bajo ella. Un paso así actúa sobre
             // el árbol entero del destino. Un `Skip` sí puede nombrarla: no
@@ -365,9 +543,9 @@ where
         //
         // La guarda mira la clase de la ENTRADA y no la del paso: un directorio
         // no mueve bytes lo llame el plan `CreateDir` o lo llame `Overwrite`
-        // (un `TypeMismatch` con directorio en el origen es lo segundo), y el
-        // `size` que un provider le ponga a un directorio no son bytes que se
-        // vayan a escribir.
+        // (un par de directorios que se tienen por iguales sin que nadie lo
+        // pueda asegurar es lo segundo), y el `size` que un provider le ponga a
+        // un directorio no son bytes que se vayan a escribir.
         //
         // Un `Skip` tampoco lo lleva, y por el mismo motivo: no escribe nada.
         let size = if entry.kind == EntryKind::Dir || kind == SyncStepKind::Skip {
@@ -386,9 +564,17 @@ where
     /// El motivo es SIEMPRE [`SyncReason::Unreadable`], y el vocabulario está
     /// cerrado a propósito: `Unreadable`, `ReadFailed` y `DirTooLarge` son tres
     /// maneras de que el walk no pudiera contestar por esa entrada, y ninguna
-    /// autoriza a escribir sobre ella. (La tarea 5 saca de aquí el caso que sí
-    /// es distinto: un `DirTooLarge` del DESTINO no es un paso saltado sino un
-    /// bloqueo del plan entero, porque no se sabe qué hay en ese directorio.)
+    /// autoriza a escribir sobre ella.
+    ///
+    /// # El único error que no es un `Skip`
+    /// Un directorio del DESTINO por encima de
+    /// [`COMPARE_MAX_DIR_ENTRIES`](norte_proto::methods::COMPARE_MAX_DIR_ENTRIES)
+    /// no es una entrada que se salta: es un trozo del destino cuyo contenido
+    /// NADIE ha visto, y planificar escrituras dentro de él es escribir a
+    /// ciegas. Sale como
+    /// [`SyncBlockerKind::DirTooLarge`](norte_proto::methods::SyncBlockerKind::DirTooLarge),
+    /// y el mismo tope del lado del ORIGEN sigue siendo un `Skip`: no saber qué
+    /// hay en un directorio del origen solo significa que de ahí no se copia.
     ///
     /// El `rel` sale del lado que la fila trae: el walk emite la entrada del
     /// lado que falló y `None` en el otro cuando fue un listado, y las dos
@@ -406,20 +592,30 @@ where
     /// presentación y hay que conocerla — un panel que ancle todo `rel` al lado
     /// del origen pintará ahí un nombre que en el origen no existe—, y está
     /// escrita también en el rustdoc de [`SyncStep::rel`], que es donde la
-    /// buscará quien consuma el plan. La tarea 5 hereda la misma convención con
-    /// el [`SyncStepKind::DeleteTree`] de `Mirror`.
+    /// buscará quien consuma el plan. El [`SyncStepKind::DeleteTree`] de
+    /// `Mirror` sigue la misma convención.
     fn absorb_error(
         &mut self,
         row: &CompareRow,
         source: Option<&Entry>,
         dest: Option<&Entry>,
+        source_rel: Option<RelPath>,
     ) -> Result<(), SyncError> {
-        let (entry, root) = match (source, dest) {
-            (Some(s), _) => (s, &self.opts.source_root),
-            (None, Some(d)) => (d, &self.opts.dest_root),
+        if row.reason == Some(CompareReason::DirTooLarge)
+            && self.speaks_for_the_destination(row, source, dest)
+        {
+            let rel = match dest {
+                Some(entry) => rel_under(&self.opts.dest_root, &entry.path)?,
+                None => source_rel.unwrap_or_default(),
+            };
+            self.push_blocker(rel, SyncBlockerKind::DirTooLarge, Some(Side::Right));
+            return Ok(());
+        }
+        let rel = match (source_rel, dest) {
+            (Some(rel), _) => rel,
+            (None, Some(entry)) => rel_under(&self.opts.dest_root, &entry.path)?,
             (None, None) => return Ok(()),
         };
-        let rel = rel_under(root, &entry.path)?;
         let dest_rel = self.dest_rel_of(&rel, dest)?;
         self.push(
             row,
@@ -430,6 +626,156 @@ where
             Some(SyncReason::Unreadable),
         );
         Ok(())
+    }
+
+    /// Un [`CompareVerdict::TypeMismatch`] con un DIRECTORIO de por medio:
+    /// bloqueo, no paso.
+    ///
+    /// `side` nombra el lado que tiene el directorio, y el `rel` se mide contra
+    /// la raíz de ESE lado —igual que hacen `AmbiguousDest` y `DirTooLarge`—:
+    /// si el árbol que no se va a tocar está en el destino, nombrarlo con la
+    /// ortografía del origen pintaría una ruta que allí no existe, que es el
+    /// mismo agujero que [`SyncStep::dest_rel`] tapa en los pasos.
+    ///
+    /// Un `TypeMismatch` trae SIEMPRE las dos entradas; los `None` de abajo son
+    /// por si una fila fabricada a mano no las trae, y entonces nombra lo que
+    /// haya. Un bloqueo sin sitio sigue bloqueando.
+    fn absorb_type_mismatch_dir(
+        &mut self,
+        side: Side,
+        source_rel: Option<RelPath>,
+        dest: Option<&Entry>,
+    ) -> Result<(), SyncError> {
+        let dest_rel = match dest {
+            Some(entry) => Some(rel_under(&self.opts.dest_root, &entry.path)?),
+            None => None,
+        };
+        let (first, second) = if side == Side::Right {
+            (dest_rel, source_rel)
+        } else {
+            (source_rel, dest_rel)
+        };
+        let rel = first.or(second).unwrap_or_default();
+        self.push_blocker(rel, SyncBlockerKind::TypeMismatchDir, Some(side));
+        Ok(())
+    }
+
+    /// Una fila [`CompareVerdict::Ambiguous`]: dos nombres de UN lado que
+    /// colapsan a la misma clave de emparejamiento.
+    ///
+    /// Los dos lados no son el mismo problema, y solo uno puede perder datos:
+    ///
+    /// - **En el ORIGEN** no se sabe cuál de los dos ficheros copiar, así que no
+    ///   se copia ninguno: un [`SyncStepKind::Skip`] con
+    ///   [`SyncReason::AmbiguousSource`], y el resto del plan sigue en pie.
+    /// - **En el DESTINO** escribir ahí es escribir sobre uno de dos ficheros
+    ///   sin saber cuál: bloqueo, y el plan entero deja de ser ejecutable.
+    ///
+    /// Esto es lo que impide que dos ortografías del origen que el destino
+    /// pliega a una se sobrescriban entre ellas: sin `Skip` ni bloqueo la
+    /// colisión sale del plan SIN QUE NADIE LA VEA, que es exactamente la
+    /// colisión que ADR 0048 dice que una sincronización tiene que ver antes de
+    /// escribir nada.
+    ///
+    /// Una fila que no nombra lado —o que nombra uno que este decodificador no
+    /// conoce— se decide por la entrada que trae, y el empate cae del lado del
+    /// DESTINO: fallar hacia el bloqueo cuesta un plan que hay que rehacer,
+    /// fallar hacia el `Skip` cuesta un fichero.
+    fn absorb_ambiguous(
+        &mut self,
+        row: &CompareRow,
+        source: Option<&Entry>,
+        dest: Option<&Entry>,
+        source_rel: Option<RelPath>,
+    ) -> Result<(), SyncError> {
+        if self.speaks_for_the_destination(row, source, dest) {
+            let rel = match dest {
+                Some(entry) => rel_under(&self.opts.dest_root, &entry.path)?,
+                None => source_rel.unwrap_or_default(),
+            };
+            self.push_blocker(rel, SyncBlockerKind::AmbiguousDest, Some(Side::Right));
+            return Ok(());
+        }
+        // Sin entrada del origen no hay nada que nombrar, y un `Skip` sin `rel`
+        // no informa de nada.
+        let Some(rel) = source_rel else { return Ok(()) };
+        // Una colisión es de UN lado, así que la fila no trae pareja: el
+        // `dest_rel`, si sale, sale de la carpeta que los envuelve.
+        let dest_rel = self.dest_rel_of(&rel, None)?;
+        self.push(
+            row,
+            SyncStepKind::Skip,
+            rel,
+            dest_rel,
+            None,
+            Some(SyncReason::AmbiguousSource),
+        );
+        Ok(())
+    }
+
+    /// Un huérfano del DESTINO bajo [`SyncMode::Mirror`]: UN
+    /// [`SyncStepKind::DeleteTree`], y no se desciende.
+    ///
+    /// Un movimiento a la papelera, una entrada de journal, una cosa que
+    /// restaurar. Partirlo en cuarenta mil pasos empeora el undo y cuesta
+    /// cuarenta mil listados para no aprender nada que el plan necesite (spec,
+    /// «Mirror»). El plan cuenta con que la comparación NO descendió los
+    /// huérfanos del destino —`sync.plan` fija `descend_orphans` al lado del
+    /// origen—: si alguien la pidiera con el destino descendido, cada hijo
+    /// traería su propio `DeleteTree` dentro de un árbol que su padre ya borra.
+    ///
+    /// El `rel` se mide contra `dest_root`, igual que el del `Skip` de un
+    /// listado del destino ilegible: es la única raíz de la que cuelga.
+    /// [`SyncStep::size`] va AUSENTE aunque el provider dé un tamaño — un
+    /// borrado no mueve bytes, y [`SyncCounts::bytes`](norte_proto::methods::SyncCounts::bytes)
+    /// es la suma de ese campo.
+    fn absorb_dest_orphan(
+        &mut self,
+        row: &CompareRow,
+        dest: Option<&Entry>,
+    ) -> Result<(), SyncError> {
+        let Some(entry) = dest else {
+            // La fila se contradice: dice «solo en el destino» y no trae la
+            // entrada del destino.
+            return Ok(());
+        };
+        let rel = rel_under(&self.opts.dest_root, &entry.path)?;
+        if rel.is_root() {
+            // Un `DeleteTree` con `rel` vacío borra el árbol ENTERO del destino.
+            return Err(SyncError::RootIsNotAStep {
+                root: Box::new(self.opts.dest_root.clone()),
+            });
+        }
+        self.push(row, SyncStepKind::DeleteTree, rel, None, None, None);
+        Ok(())
+    }
+
+    /// ¿Habla esta fila del lado del DESTINO?
+    ///
+    /// [`CompareRow::side`] manda, que es lo que el walk puebla en toda fila
+    /// `Ambiguous` y en toda fila `Error`. Cuando no nombra ningún lado —o
+    /// nombra un [`Side::Unknown`] que solo puede venir de un peer más nuevo—
+    /// decide qué entrada trae la fila, y el empate cae del lado del destino:
+    /// las dos formas que preguntan esto (`Ambiguous`, `DirTooLarge`) bloquean
+    /// el plan si son del destino y solo saltan una entrada si son del origen,
+    /// así que fallar hacia el destino falla hacia el lado que no escribe.
+    fn speaks_for_the_destination(
+        &self,
+        row: &CompareRow,
+        source: Option<&Entry>,
+        dest: Option<&Entry>,
+    ) -> bool {
+        // `source_side` ya no puede ser `Unknown` aquí: `absorb` termina el plan
+        // con `SourceSideUnknown` antes de llegar.
+        let dest_side = match self.opts.source_side {
+            Side::Left => Side::Right,
+            _ => Side::Left,
+        };
+        match row.side {
+            Some(side) if side == self.opts.source_side => false,
+            Some(side) if side == dest_side => true,
+            _ => dest.is_some() || source.is_none(),
+        }
     }
 
     /// Cómo se llama en el DESTINO lo que `rel` nombra en el origen, cuando no
@@ -445,14 +791,164 @@ where
     /// `café` NFD en el destino aunque `x.txt` se llame igual en los dos. Pegar
     /// `rel` sobre `dest_root` nombraría entonces un directorio que en ext4 no
     /// existe, exactamente igual que en el caso del nombre suelto.
+    ///
+    /// Sin entrada del destino la fila no dice nada… pero la PILA sí: lo que
+    /// solo está en el origen hereda la ortografía de la carpeta emparejada de
+    /// la que cuelga (issue #152). Es el mismo dato, recordado en vez de leído.
+    ///
+    /// La regla normativa del campo se aplica en un solo sitio, aquí: `Some`
+    /// únicamente cuando las dos rutas difieren, venga de donde venga la del
+    /// destino.
     fn dest_rel_of(
         &self,
         rel: &RelPath,
         dest: Option<&Entry>,
     ) -> Result<Option<RelPath>, SyncError> {
-        let Some(dest) = dest else { return Ok(None) };
-        let dest_rel = rel_under(&self.opts.dest_root, &dest.path)?;
+        let dest_rel = match dest {
+            Some(dest) => rel_under(&self.opts.dest_root, &dest.path)?,
+            None => match self.spelt_at_the_destination(rel) {
+                Some(dest_rel) => dest_rel,
+                None => return Ok(None),
+            },
+        };
         Ok((dest_rel != *rel).then_some(dest_rel))
+    }
+
+    /// Cómo se escribe `rel` en el destino según la carpeta emparejada más
+    /// PROFUNDA de la que cuelga, cuando esa carpeta se deletrea distinto.
+    ///
+    /// Se prueban los ancestros de dentro hacia fuera y se para en el primero
+    /// que esté en el mapa: su valor es la ruta del destino ENTERA, así que ya
+    /// lleva dentro la traducción de todas sus ancestras y no hay que componer
+    /// nada. La comparación la hace el `Eq`/`Ord` de [`RelPath`], que es el de
+    /// [`Segment`], que son BYTES (regla dura 1): `café` y `cafétière` son dos
+    /// claves distintas por mucho que una empiece por los bytes de la otra.
+    ///
+    /// El propio `rel` NO se prueba: la fila de un directorio emparejado trae su
+    /// pareja y no necesita que nadie se la recuerde.
+    ///
+    /// Cuando no hay ni una carpeta que difiera —el caso común, y el único en un
+    /// árbol homogéneo— esto es una comparación y nada más.
+    fn spelt_at_the_destination(&self, rel: &RelPath) -> Option<RelPath> {
+        if self.spellings.is_empty() {
+            return None;
+        }
+        let segments = rel.segments();
+        for split in (1..segments.len()).rev() {
+            let ancestor = RelPath::new(segments[..split].to_vec());
+            if let Some(dest_dir) = self.spellings.get(&ancestor) {
+                let mut translated = dest_dir.segments().to_vec();
+                translated.extend_from_slice(&segments[split..]);
+                return Some(RelPath::new(translated));
+            }
+        }
+        None
+    }
+
+    /// Anota la carpeta de esta fila si es un par de directorios que los dos
+    /// lados deletrean DISTINTO.
+    ///
+    /// Se llama en toda fila con lado de origen, incluidas las que no producen
+    /// paso: la fila de un par de directorios idénticos es `Same`, y es
+    /// justamente ella la que sabe las dos ortografías.
+    ///
+    /// Las dos claves de una anotación son siempre UTF-8 válido, y no por
+    /// casualidad: `norte-compare` no pliega un nombre que no lo sea (su clave
+    /// sale cruda), así que un nombre no-UTF8 solo empareja con otro
+    /// byte-idéntico —y entonces no hay nada que anotar—. Lo que SÍ puede ser
+    /// no-UTF8 es lo que cuelgue de la carpeta: el sufijo se copia byte a byte.
+    fn remember_spelling(
+        &mut self,
+        source_rel: &RelPath,
+        source: Option<&Entry>,
+        dest: Option<&Entry>,
+    ) -> Result<(), SyncError> {
+        let (Some(source), Some(dest)) = (source, dest) else {
+            return Ok(());
+        };
+        if source.kind != EntryKind::Dir || dest.kind != EntryKind::Dir {
+            return Ok(());
+        }
+        let dest_rel = rel_under(&self.opts.dest_root, &dest.path)?;
+        if dest_rel != *source_rel {
+            self.spellings.insert(source_rel.clone(), dest_rel);
+        }
+        Ok(())
+    }
+
+    /// ¿Cae esta fila dentro del subárbol que un solape ya podó?
+    ///
+    /// Se mira SOLO el lado que alcanzó la otra raíz. El otro cuelga de ella
+    /// entero —si el origen llegó a `dest_root`, todas las rutas del destino
+    /// están bajo `dest_root` por definición—, así que mirarlo también podaría
+    /// el plan entero en vez del subárbol.
+    fn overlap_prunes(&self, source: Option<&Entry>, dest: Option<&Entry>) -> bool {
+        let Some(overlap) = self.overlap.as_ref() else {
+            return false;
+        };
+        let side = if overlap.from_source { source } else { dest };
+        side.is_some_and(|entry| is_at_or_under(&overlap.prefix, &entry.path))
+    }
+
+    /// ¿Ha llegado el walk a la OTRA raíz?
+    ///
+    /// Una ruta del origen que está en `dest_root` o por debajo —o una del
+    /// destino que está en `source_root` o por debajo— significa que las dos
+    /// raíces nombran un mismo árbol y que copiar de una a otra copiaría un
+    /// subárbol dentro de sí mismo. Sale UN bloqueo y se poda: lo que se recuerda
+    /// no es la ruta de esta fila sino la RAÍZ alcanzada, que es la que contiene
+    /// el subárbol entero, así que un solo prefijo vale para todo lo que venga
+    /// detrás.
+    ///
+    /// Dos raíces IGUALES no cuentan: ver el rustdoc de [`plan`].
+    fn overlap_reached(
+        &mut self,
+        source: Option<&Entry>,
+        dest: Option<&Entry>,
+    ) -> Result<Option<SyncBlocker>, SyncError> {
+        if self.overlap.is_some() {
+            // UNA vez. Con las dos raíces anidadas la comprobación del otro lado
+            // es cierta para TODA fila —si el destino está dentro del origen,
+            // toda ruta del destino está bajo la raíz del origen—, así que
+            // volver a mirarla levantaría un bloqueo por fila y movería la poda
+            // a una raíz que se traga el plan entero. Con uno basta: el plan ya
+            // no es ejecutable.
+            return Ok(None);
+        }
+        if self.opts.source_root == self.opts.dest_root {
+            return Ok(None);
+        }
+        let reached = source
+            .filter(|entry| is_at_or_under(&self.opts.dest_root, &entry.path))
+            .map(|entry| (entry, &self.opts.source_root, &self.opts.dest_root, true))
+            .or_else(|| {
+                dest.filter(|entry| is_at_or_under(&self.opts.source_root, &entry.path))
+                    .map(|entry| (entry, &self.opts.dest_root, &self.opts.source_root, false))
+            });
+        let Some((entry, walked_root, other_root, from_source)) = reached else {
+            return Ok(None);
+        };
+        // El `rel` del bloqueo se mide contra la raíz por la que iba el walk,
+        // que es donde el panel lo va a pintar.
+        let rel = rel_under(walked_root, &entry.path)?;
+        self.overlap = Some(Overlap {
+            prefix: other_root.clone(),
+            from_source,
+        });
+        Ok(Some(SyncBlocker {
+            rel,
+            kind: SyncBlockerKind::OverlapDetected,
+            // El solape es de las DOS raíces a la vez: no hay un lado que
+            // nombrar, y se omite en vez de inventar uno.
+            side: None,
+        }))
+    }
+
+    /// Encola un bloqueo. No lleva `id`: un bloqueo no es un paso, y nada lo
+    /// ejecuta ni lo enumera.
+    fn push_blocker(&mut self, rel: RelPath, kind: SyncBlockerKind, side: Option<Side>) {
+        self.pending
+            .push_back(PlanItem::Blocker(SyncBlocker { rel, kind, side }));
     }
 
     /// Empaqueta el paso y le pone su `id`. La reversa es función de la clase y
@@ -519,6 +1015,41 @@ fn reversal_for(
         // crate nunca.
         _ => (None, None),
     }
+}
+
+/// Cuál de los dos lados de un [`CompareVerdict::TypeMismatch`] es el
+/// DIRECTORIO, en el convenio de lados de un PLAN: [`Side::Left`] el origen,
+/// [`Side::Right`] el destino (el mismo que usa
+/// [`SyncBlocker::side`](norte_proto::methods::SyncBlocker::side), y NO el lado
+/// de la comparación, que depende de en qué panel estuviera el usuario).
+///
+/// `None` cuando no hay ninguno: un fichero contra un symlink es una sustitución
+/// de bytes y se sobrescribe.
+///
+/// Los dos no pueden serlo a la vez —dos directorios no desajustan de clase—,
+/// así que el orden del `or` no esconde nada; si una fila fabricada a mano
+/// dijera lo contrario, gana el origen y sale bloqueo igual.
+fn directory_side(source: Option<&Entry>, dest: Option<&Entry>) -> Option<Side> {
+    if source.is_some_and(|entry| entry.kind == EntryKind::Dir) {
+        Some(Side::Left)
+    } else if dest.is_some_and(|entry| entry.kind == EntryKind::Dir) {
+        Some(Side::Right)
+    } else {
+        None
+    }
+}
+
+/// ¿Está `path` EN `root` o por debajo?
+///
+/// Compara scheme, authority y luego los segmentos uno a uno por sus bytes
+/// crudos, igual que [`rel_under`] y por el mismo motivo: por prefijo de cadena,
+/// `…/cafétière` colgaría de `…/café` (regla dura 1).
+fn is_at_or_under(root: &VPath, path: &VPath) -> bool {
+    if path.scheme() != root.scheme() || path.authority() != root.authority() {
+        return false;
+    }
+    let mut rest = path.segments();
+    root.segments().all(|segment| rest.next() == Some(segment))
 }
 
 /// La ruta de `path` RELATIVA a `root`, en bytes.
@@ -598,6 +1129,13 @@ mod tests {
         }
     }
 
+    fn opts_mirror() -> SyncOptions {
+        SyncOptions {
+            mode: SyncMode::Mirror,
+            ..opts_update()
+        }
+    }
+
     fn entry_at(root: &VPath, name: &[u8], kind: EntryKind, size: Option<u64>) -> Entry {
         Entry {
             path: root.join(Segment::new(name).expect("segment")),
@@ -622,6 +1160,22 @@ mod tests {
 
     fn dst_dir(name: &str) -> Entry {
         entry_at(&dest_root(), name.as_bytes(), EntryKind::Dir, None)
+    }
+
+    fn dst_link(name: &str) -> Entry {
+        entry_at(&dest_root(), name.as_bytes(), EntryKind::Symlink, None)
+    }
+
+    /// Una entrada en una ruta ARBITRARIA, para los tests de solape: ahí lo
+    /// interesante es justamente que la ruta no cuelgue de donde debería.
+    fn entry_wire(wire: &str, kind: EntryKind, size: Option<u64>) -> Entry {
+        Entry {
+            path: vpath(wire),
+            kind,
+            size,
+            mtime_ms: None,
+            attrs: std::collections::BTreeMap::default(),
+        }
     }
 
     fn row(
@@ -688,6 +1242,25 @@ mod tests {
         let steps = steps_of(items);
         assert_eq!(steps.len(), 1, "se esperaba UN paso: {items:?}");
         steps[0]
+    }
+
+    /// (`rel`, `dest_rel`) de un paso, en BYTES.
+    type Ortografias<'a> = (Vec<&'a [u8]>, Option<Vec<&'a [u8]>>);
+
+    fn blockers_of(items: &[PlanItem]) -> Vec<&SyncBlocker> {
+        items
+            .iter()
+            .filter_map(|i| match i {
+                PlanItem::Blocker(b) => Some(b),
+                PlanItem::Step(_) => None,
+            })
+            .collect()
+    }
+
+    fn one_blocker(items: &[PlanItem]) -> &SyncBlocker {
+        let blockers = blockers_of(items);
+        assert_eq!(blockers.len(), 1, "se esperaba UN bloqueo: {items:?}");
+        blockers[0]
     }
 
     #[tokio::test]
@@ -895,14 +1468,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_type_mismatch_overwrites_and_says_so() {
+    async fn a_type_mismatch_between_a_file_and_a_symlink_overwrites_and_says_so() {
+        // Sustituir un symlink por un fichero (o al revés) es sustituir bytes,
+        // que es exactamente lo que `Overwrite` significa. Con un DIRECTORIO de
+        // por medio no lo es, y eso es un bloqueo (más abajo).
         let items = run(
             vec![row(
                 CompareVerdict::TypeMismatch,
                 CompareCriterion::Kind,
                 CompareConfidence::Certain,
                 Some(src_file("x", 1)),
-                Some(dst_dir("x")),
+                Some(dst_link("x")),
             )],
             opts_update(),
         )
@@ -910,6 +1486,7 @@ mod tests {
         let s = one_step(&items);
         assert_eq!(s.kind, SyncStepKind::Overwrite);
         assert_eq!(s.criterion, CompareCriterion::Kind);
+        assert!(blockers_of(&items).is_empty());
     }
 
     #[tokio::test]
@@ -1079,6 +1656,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_wiring_error_ends_the_plan_even_with_no_rows_at_all() {
+        // Los dos fallos de cableado se deciden al construir, no al absorber la
+        // primera fila. Si se decidieran por fila, dos árboles vacíos —o una
+        // comparación que no produjo ninguna— darían un plan VACÍO y aprobable
+        // para un modo que este binario no sabe planificar: exactamente el fallo
+        // silencioso que las dos variantes existen para evitar.
+        let sin_lado = SyncOptions {
+            source_side: Side::Unknown,
+            ..opts_update()
+        };
+        assert_eq!(
+            run_raw(vec![], sin_lado, CancellationToken::new()).await,
+            vec![Err(SyncError::SourceSideUnknown)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_read_only_destination_does_not_hide_a_wiring_error() {
+        // Un destino inmutable no es excusa para tragarse un cableado mal hecho:
+        // el bloqueo del árbol no llega a salir, porque no hay plan que bloquear.
+        let opts = SyncOptions {
+            source_side: Side::Unknown,
+            dest_writable: false,
+            ..opts_update()
+        };
+        assert_eq!(
+            run_raw(vec![], opts, CancellationToken::new()).await,
+            vec![Err(SyncError::SourceSideUnknown)]
+        );
+    }
+
+    #[tokio::test]
     async fn a_source_side_that_names_no_side_ends_the_plan() {
         let opts = SyncOptions {
             source_side: Side::Unknown,
@@ -1176,29 +1785,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mirror_is_refused_and_never_degraded_to_update() {
-        // El plan de `Update` es un SUBCONJUNTO del de `Mirror`: servirlo sería
-        // dar por aprobado un espejo que no borra nada.
-        let opts = SyncOptions {
-            mode: SyncMode::Mirror,
-            ..opts_update()
-        };
-        let out = run_raw(
-            vec![row(
-                CompareVerdict::OnlyLeft,
-                CompareCriterion::Presence,
-                CompareConfidence::Certain,
-                Some(src_file("a.txt", 1)),
-                None,
-            )],
-            opts,
-            CancellationToken::new(),
-        )
-        .await;
-        assert_eq!(out, vec![Err(SyncError::ModeNotPlanned(SyncMode::Mirror))]);
-    }
-
-    #[tokio::test]
     async fn a_row_that_names_the_root_itself_is_not_a_step() {
         // Sale de un llamante cuyas raíces son más profundas que las de la
         // comparación. Un paso con `rel` vacío actúa sobre el árbol ENTERO.
@@ -1227,14 +1813,16 @@ mod tests {
         ));
     }
 
+    // ---------- un desajuste de clase con un directorio de por medio ----------
+
     #[tokio::test]
-    async fn a_type_mismatch_whose_source_is_a_directory_is_still_one_overwrite() {
-        // DEUDA, fijada aquí a propósito: `Overwrite` significa «copiar bytes»
-        // y el paso no lleva `EntryKind`, así que la tarea 9 no puede
-        // distinguirlo de sobrescribir un fichero — y el subárbol del
-        // directorio no está en el plan, porque el walk no desciende un par que
-        // no es de dos directorios. Cuando el wire gane vocabulario para
-        // decirlo, este test cambia.
+    async fn a_type_mismatch_whose_source_is_a_directory_blocks_instead_of_overwriting() {
+        // `Overwrite` significa «a la papelera y copiar BYTES» y el paso no
+        // lleva `EntryKind` con el que decir otra cosa, así que el ejecutor no
+        // podría distinguirlo de sobrescribir un fichero — y el subárbol del
+        // directorio ni siquiera está en el plan, porque el walk no desciende un
+        // par que no es de dos directorios. Cambiar un fichero por un árbol lo
+        // decide un humano.
         let items = run(
             vec![row(
                 CompareVerdict::TypeMismatch,
@@ -1246,12 +1834,94 @@ mod tests {
             opts_update(),
         )
         .await;
-        let s = one_step(&items);
-        assert_eq!(s.kind, SyncStepKind::Overwrite);
+        let b = one_blocker(&items);
+        assert_eq!(b.kind, SyncBlockerKind::TypeMismatchDir);
+        assert_eq!(b.rel, rel("build"));
         assert_eq!(
-            s.size, None,
-            "un directorio no mueve bytes, lo llame el plan como lo llame"
+            b.side,
+            Some(Side::Left),
+            "el árbol está en el ORIGEN (convenio de plan: origen=Left)"
         );
+        assert!(
+            steps_of(&items).is_empty(),
+            "y no sale además un paso que lo haga de todas formas"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_type_mismatch_whose_destination_is_a_directory_blocks_too() {
+        // El caso peor de los dos: aquí lo que se destruiría es un árbol del
+        // DESTINO, y `Overwrite` lo enterraría entero con una sola línea del
+        // plan.
+        let items = run(
+            vec![row(
+                CompareVerdict::TypeMismatch,
+                CompareCriterion::Kind,
+                CompareConfidence::Certain,
+                Some(src_file("build", 4)),
+                Some(dst_dir("build")),
+            )],
+            opts_update(),
+        )
+        .await;
+        let b = one_blocker(&items);
+        assert_eq!(b.kind, SyncBlockerKind::TypeMismatchDir);
+        assert_eq!(b.side, Some(Side::Right));
+        assert!(steps_of(&items).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_blocker_about_the_destination_names_the_destination_s_spelling() {
+        // El `rel` de un bloqueo se mide contra la raíz del lado del que HABLA,
+        // igual que en `AmbiguousDest` y `DirTooLarge`. Con una pareja plegada
+        // —un `café` NFC del origen contra el `café` NFD del destino— nombrarlo
+        // con la ortografía del origen pintaría una ruta que en el destino no
+        // existe: el mismo agujero que `dest_rel` tapa en los pasos.
+        let items = run(
+            vec![row(
+                CompareVerdict::TypeMismatch,
+                CompareCriterion::Kind,
+                CompareConfidence::Certain,
+                Some(entry_at(
+                    &source_root(),
+                    "café".as_bytes(),
+                    EntryKind::File,
+                    Some(1),
+                )),
+                Some(entry_at(
+                    &dest_root(),
+                    b"cafe\xcc\x81",
+                    EntryKind::Dir,
+                    None,
+                )),
+            )],
+            opts_update(),
+        )
+        .await;
+        let b = one_blocker(&items);
+        assert_eq!(b.side, Some(Side::Right));
+        assert_eq!(
+            b.rel.segments()[0].as_bytes(),
+            b"cafe\xcc\x81",
+            "el árbol que no se toca está en el destino, y se llama así ALLÍ"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_type_mismatch_with_a_directory_blocks_under_mirror_as_well() {
+        // El modo no cambia lo que un desajuste con directorio significa.
+        let items = run(
+            vec![row(
+                CompareVerdict::TypeMismatch,
+                CompareCriterion::Kind,
+                CompareConfidence::Certain,
+                Some(src_dir("build")),
+                Some(dst_file("build", 4)),
+            )],
+            opts_mirror(),
+        )
+        .await;
+        assert_eq!(one_blocker(&items).kind, SyncBlockerKind::TypeMismatchDir);
     }
 
     // ---------- las dos ortografías de una pareja (issue #152) ----------
@@ -1400,53 +2070,63 @@ mod tests {
         assert!(steps_of(&items).iter().all(|s| s.dest_rel.is_none()));
     }
 
-    #[tokio::test]
-    async fn a_copy_under_a_folder_the_two_sides_spell_differently_still_takes_the_source_spelling()
-    {
-        // DEUDA, fijada aquí a propósito (issue #152, la mitad que este cambio
-        // NO cierra). Los dos directorios `café` emparejan —la clave normaliza—
-        // y el walk baja por ellos, así que un fichero que solo está en el
-        // origen llega como huérfano: sin lado del destino no hay segunda
-        // ortografía que leer, y su `rel` cuelga del `café` del ORIGEN. Sobre
-        // ext4 eso crea un SEGUNDO directorio al lado del que ya estaba.
-        //
-        // La fila del par de directorios, que es la única que sabe las dos
-        // ortografías, es `Same` y no produce paso: cerrarlo pide una pila de
-        // prefijos, o sea estado nuevo. Cuando la haya, este test cambia.
-        let nuevo = Entry {
-            path: source_root()
-                .join(Segment::new("café".as_bytes().to_vec()).expect("segment"))
-                .join(Segment::new(b"nuevo.txt".to_vec()).expect("segment")),
-            kind: EntryKind::File,
-            size: Some(4),
+    /// Una entrada colgando de una carpeta, del lado que se le diga.
+    fn under(
+        root: &VPath,
+        dirs: &[&[u8]],
+        name: &[u8],
+        kind: EntryKind,
+        size: Option<u64>,
+    ) -> Entry {
+        let mut path = root.clone();
+        for dir in dirs {
+            path = path.join(Segment::new(dir.to_vec()).expect("segment"));
+        }
+        Entry {
+            path: path.join(Segment::new(name.to_vec()).expect("segment")),
+            kind,
+            size,
             mtime_ms: None,
             attrs: std::collections::BTreeMap::default(),
-        };
+        }
+    }
+
+    /// La fila del par de directorios que los dos lados deletrean distinto: es
+    /// `Same` y no produce paso, y es la ÚNICA que sabe las dos ortografías.
+    fn dir_pair(source: &[u8], dest: &[u8]) -> CompareRow {
+        row(
+            CompareVerdict::Same,
+            CompareCriterion::Kind,
+            CompareConfidence::Certain,
+            Some(entry_at(&source_root(), source, EntryKind::Dir, None)),
+            Some(entry_at(&dest_root(), dest, EntryKind::Dir, None)),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_copy_under_a_folder_the_two_sides_spell_differently_takes_the_destination_spelling()
+    {
+        // La otra mitad del issue #152. Los dos directorios `café` emparejan —la
+        // clave normaliza— y el walk baja por ellos, así que un fichero que solo
+        // está en el origen llega como huérfano: su fila no trae lado del
+        // destino y no hay segunda ortografía que LEER. Pero la fila del par de
+        // directorios, que llegó antes por ser el walk pre-orden, sí la sabía: se
+        // recuerda en una pila y se aplica aquí. Sin ella el ejecutor crearía un
+        // SEGUNDO `café` al lado del que ya estaba, sobre ext4.
         let items = run(
             vec![
-                // El par de directorios: empareja, y no produce nada.
-                row(
-                    CompareVerdict::Same,
-                    CompareCriterion::Kind,
-                    CompareConfidence::Certain,
-                    Some(entry_at(
-                        &source_root(),
-                        "café".as_bytes(),
-                        EntryKind::Dir,
-                        None,
-                    )),
-                    Some(entry_at(
-                        &dest_root(),
-                        b"cafe\xcc\x81",
-                        EntryKind::Dir,
-                        None,
-                    )),
-                ),
+                dir_pair("café".as_bytes(), b"cafe\xcc\x81"),
                 row(
                     CompareVerdict::OnlyLeft,
                     CompareCriterion::Presence,
                     CompareConfidence::Certain,
-                    Some(nuevo),
+                    Some(under(
+                        &source_root(),
+                        &["café".as_bytes()],
+                        b"nuevo.txt",
+                        EntryKind::File,
+                        Some(4),
+                    )),
                     None,
                 ),
             ],
@@ -1457,9 +2137,326 @@ mod tests {
         assert_eq!(s.kind, SyncStepKind::Copy);
         assert_eq!(bytes_of(&s.rel), vec!["café".as_bytes(), b"nuevo.txt"]);
         assert_eq!(
-            s.dest_rel, None,
-            "hoy el plan no lleva la ortografía del directorio del destino"
+            bytes_of(s.dest_rel.as_ref().expect("la ortografía de la carpeta")),
+            vec![b"cafe\xcc\x81".as_slice(), b"nuevo.txt"],
+            "se escribe DENTRO del directorio que existe"
         );
+        assert!(s.shape_is_consistent());
+    }
+
+    #[tokio::test]
+    async fn a_directory_created_under_a_differently_spelt_folder_inherits_it_too() {
+        // No solo las copias: un `CreateDir` que cuelgue de la carpeta también
+        // tiene que crearse DENTRO de la que existe, o el subárbol entero nace
+        // en el sitio equivocado.
+        let items = run(
+            vec![
+                dir_pair("café".as_bytes(), b"cafe\xcc\x81"),
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(under(
+                        &source_root(),
+                        &["café".as_bytes()],
+                        b"sub",
+                        EntryKind::Dir,
+                        None,
+                    )),
+                    None,
+                ),
+            ],
+            opts_update(),
+        )
+        .await;
+        let s = one_step(&items);
+        assert_eq!(s.kind, SyncStepKind::CreateDir);
+        assert_eq!(
+            bytes_of(s.dest_rel.as_ref().expect("la ortografía de la carpeta")),
+            vec![b"cafe\xcc\x81".as_slice(), b"sub"]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_deepest_folder_wins_and_carries_the_ones_above_it() {
+        // Dos niveles que difieren: la cima de la pila guarda la ruta del
+        // destino ENTERA, así que traducir con ella sola ya lleva dentro la
+        // traducción de sus ancestras.
+        let profundo = Entry {
+            path: source_root()
+                .join(Segment::new("café".as_bytes().to_vec()).expect("segment"))
+                .join(Segment::new("RESUMÉ".as_bytes().to_vec()).expect("segment"))
+                .join(Segment::new(b"nuevo.txt".to_vec()).expect("segment")),
+            kind: EntryKind::File,
+            size: Some(1),
+            mtime_ms: None,
+            attrs: std::collections::BTreeMap::default(),
+        };
+        let par_interior = row(
+            CompareVerdict::Same,
+            CompareCriterion::Kind,
+            CompareConfidence::Certain,
+            Some(under(
+                &source_root(),
+                &["café".as_bytes()],
+                "RESUMÉ".as_bytes(),
+                EntryKind::Dir,
+                None,
+            )),
+            Some(under(
+                &dest_root(),
+                &[b"cafe\xcc\x81"],
+                b"resume\xcc\x81",
+                EntryKind::Dir,
+                None,
+            )),
+        );
+        let items = run(
+            vec![
+                dir_pair("café".as_bytes(), b"cafe\xcc\x81"),
+                par_interior,
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(profundo),
+                    None,
+                ),
+            ],
+            opts_update(),
+        )
+        .await;
+        assert_eq!(
+            bytes_of(
+                one_step(&items)
+                    .dest_rel
+                    .as_ref()
+                    .expect("las dos carpetas")
+            ),
+            vec![b"cafe\xcc\x81".as_slice(), b"resume\xcc\x81", b"nuevo.txt"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sibling_of_the_folder_inherits_nothing_and_the_folder_survives_it() {
+        // El orden que el walk emite DE VERDAD: la fila de la carpeta, después
+        // TODAS sus hermanas, y solo entonces las de dentro. Una pila que se
+        // desapilara con la primera hermana perdería la ortografía justo antes
+        // de necesitarla — que es lo que hacía la primera versión de esto, con
+        // los tres tests hechos a mano en el único orden que el walk no produce.
+        //
+        // Y al revés: lo de FUERA de la carpeta no puede heredarla, o `otro.txt`
+        // acabaría dentro de `café` en el destino.
+        let items = run(
+            vec![
+                dir_pair("café".as_bytes(), b"cafe\xcc\x81"),
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(src_file("otro.txt", 1)),
+                    None,
+                ),
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(under(
+                        &source_root(),
+                        &["café".as_bytes()],
+                        b"nuevo.txt",
+                        EntryKind::File,
+                        Some(4),
+                    )),
+                    None,
+                ),
+            ],
+            opts_update(),
+        )
+        .await;
+        let steps = steps_of(&items);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(
+            steps[0].dest_rel, None,
+            "lo de fuera de la carpeta no hereda su ortografía"
+        );
+        assert_eq!(
+            bytes_of(steps[1].dest_rel.as_ref().expect("la ortografía sobrevive")),
+            vec![b"cafe\xcc\x81".as_slice(), b"nuevo.txt"],
+            "…y la carpeta sigue sabiendo la suya cuando por fin llegan sus hijos"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deeper_folder_is_remembered_even_when_a_sibling_comes_between() {
+        // El caso que la pila no solo perdía sino que MENTÍA: con `café` y
+        // `café/RESUMÉ` deletreados distinto los dos, la fila de `café/zz.txt`
+        // se cuela entre `RESUMÉ` y sus hijos. Desapilando, `RESUMÉ` se pierde y
+        // `café/RESUMÉ/nuevo.txt` sale traducido a `café(NFD)/RESUMÉ/nuevo.txt`
+        // — una ruta que no existe en ninguno de los dos lados.
+        let par_interior = row(
+            CompareVerdict::Same,
+            CompareCriterion::Kind,
+            CompareConfidence::Certain,
+            Some(under(
+                &source_root(),
+                &["café".as_bytes()],
+                "RESUMÉ".as_bytes(),
+                EntryKind::Dir,
+                None,
+            )),
+            Some(under(
+                &dest_root(),
+                &[b"cafe\xcc\x81"],
+                b"RESUME\xcc\x81",
+                EntryKind::Dir,
+                None,
+            )),
+        );
+        let items = run(
+            vec![
+                dir_pair("café".as_bytes(), b"cafe\xcc\x81"),
+                par_interior,
+                // La hermana que se cuela.
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(under(
+                        &source_root(),
+                        &["café".as_bytes()],
+                        b"zz.txt",
+                        EntryKind::File,
+                        Some(1),
+                    )),
+                    None,
+                ),
+                // Y solo ahora, lo que hay dentro de `RESUMÉ`.
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(under(
+                        &source_root(),
+                        &["café".as_bytes(), "RESUMÉ".as_bytes()],
+                        b"nuevo.txt",
+                        EntryKind::File,
+                        Some(1),
+                    )),
+                    None,
+                ),
+            ],
+            opts_update(),
+        )
+        .await;
+        let steps = steps_of(&items);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(
+            bytes_of(steps[0].dest_rel.as_ref().expect("la carpeta de fuera")),
+            vec![b"cafe\xcc\x81".as_slice(), b"zz.txt"]
+        );
+        assert_eq!(
+            bytes_of(steps[1].dest_rel.as_ref().expect("las dos carpetas")),
+            vec![b"cafe\xcc\x81".as_slice(), b"RESUME\xcc\x81", b"nuevo.txt"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_non_utf8_name_under_a_folded_folder_travels_byte_for_byte() {
+        // La mezcla: la carpeta empareja porque la clave normaliza a NFC —lo que
+        // solo puede pasar con nombres UTF-8—, y lo que cuelga de ella NO es
+        // UTF-8 y jamás se pliega. El sufijo se copia crudo (regla dura 1).
+        let items = run(
+            vec![
+                dir_pair("café".as_bytes(), b"cafe\xcc\x81"),
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(under(
+                        &source_root(),
+                        &["café".as_bytes()],
+                        b"informe\xff\xfe.dat",
+                        EntryKind::File,
+                        Some(1),
+                    )),
+                    None,
+                ),
+            ],
+            opts_update(),
+        )
+        .await;
+        assert_eq!(
+            bytes_of(
+                one_step(&items)
+                    .dest_rel
+                    .as_ref()
+                    .expect("la ortografía de la carpeta")
+            ),
+            vec![b"cafe\xcc\x81".as_slice(), b"informe\xff\xfe.dat"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sibling_whose_name_starts_with_the_same_bytes_inherits_nothing() {
+        // `café` son los primeros bytes de `cafétière`, así que un `starts_with`
+        // de cadena sobre la ruta daría por bueno el prefijo y mandaría
+        // `cafétière/x.txt` a `café(NFD)tière/x.txt` — un directorio que no
+        // existe en ninguno de los dos lados. Se compara por SEGMENTOS.
+        let items = run(
+            vec![
+                dir_pair("café".as_bytes(), b"cafe\xcc\x81"),
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(under(
+                        &source_root(),
+                        &["cafétière".as_bytes()],
+                        b"x.txt",
+                        EntryKind::File,
+                        Some(2),
+                    )),
+                    None,
+                ),
+            ],
+            opts_update(),
+        )
+        .await;
+        let s = one_step(&items);
+        assert_eq!(
+            bytes_of(&s.rel),
+            vec!["cafétière".as_bytes(), b"x.txt".as_slice()]
+        );
+        assert_eq!(s.dest_rel, None);
+    }
+
+    #[tokio::test]
+    async fn a_folder_pair_spelt_the_same_records_nothing() {
+        // El caso común: si la carpeta se llama igual en los dos lados, lo que
+        // cuelgue de ella tampoco tiene segunda ortografía. Nada que apilar y
+        // nada que traducir.
+        let items = run(
+            vec![
+                dir_pair(b"sub", b"sub"),
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(under(
+                        &source_root(),
+                        &[b"sub"],
+                        b"nuevo.txt",
+                        EntryKind::File,
+                        Some(4),
+                    )),
+                    None,
+                ),
+            ],
+            opts_update(),
+        )
+        .await;
+        assert_eq!(one_step(&items).dest_rel, None);
     }
 
     #[tokio::test]
@@ -1793,6 +2790,769 @@ mod tests {
         );
     }
 
+    // ---------- Mirror: lo que sobra en el destino ----------
+
+    #[tokio::test]
+    async fn mirror_turns_a_destination_orphan_into_one_delete_tree() {
+        let items = run(
+            vec![row(
+                CompareVerdict::OnlyRight,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                None,
+                Some(dst_dir("stale")),
+            )],
+            opts_mirror(),
+        )
+        .await;
+        let s = one_step(&items);
+        assert_eq!(s.kind, SyncStepKind::DeleteTree);
+        assert_eq!(s.rel, rel("stale"));
+        assert_eq!(s.reversal, Some(StepReversal::RestoreTrash));
+        assert_eq!(s.reason, None);
+        assert_eq!(
+            s.dest_rel, None,
+            "el `rel` de un borrado YA es el del destino"
+        );
+        assert!(s.shape_is_consistent());
+    }
+
+    #[tokio::test]
+    async fn a_deletion_is_one_step_for_the_whole_tree_and_moves_no_bytes() {
+        // UN movimiento a la papelera, UNA entrada de journal, UNA cosa que
+        // restaurar (spec). Y `size` ausente aunque el provider lo sepa:
+        // `counts.bytes` es la suma de ese campo, y un borrado no mueve ninguno.
+        let items = run(
+            vec![row(
+                CompareVerdict::OnlyRight,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                None,
+                Some(dst_file("gone.bin", 4096)),
+            )],
+            opts_mirror(),
+        )
+        .await;
+        let s = one_step(&items);
+        assert_eq!(s.kind, SyncStepKind::DeleteTree);
+        assert_eq!(s.size, None);
+    }
+
+    #[tokio::test]
+    async fn a_delete_without_a_trash_is_irreversible_and_says_why() {
+        let opts = SyncOptions {
+            dest_has_trash: false,
+            ..opts_mirror()
+        };
+        let items = run(
+            vec![row(
+                CompareVerdict::OnlyRight,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                None,
+                Some(dst_dir("stale")),
+            )],
+            opts,
+        )
+        .await;
+        let s = one_step(&items);
+        assert_eq!(s.reversal, Some(StepReversal::Irreversible));
+        assert_eq!(s.reason, Some(SyncReason::NoTrashOnTarget));
+        assert!(s.shape_is_consistent());
+    }
+
+    #[tokio::test]
+    async fn mirror_copies_exactly_what_update_copies() {
+        // `Mirror` AÑADE una regla; no cambia ninguna de las que ya había.
+        let filas = || {
+            vec![
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(src_file("a.txt", 10)),
+                    None,
+                ),
+                row(
+                    CompareVerdict::Different,
+                    CompareCriterion::Size,
+                    CompareConfidence::Certain,
+                    Some(src_file("b.txt", 10)),
+                    Some(dst_file("b.txt", 9)),
+                ),
+                row(
+                    CompareVerdict::Same,
+                    CompareCriterion::Hash,
+                    CompareConfidence::Certain,
+                    Some(src_file("c.txt", 1)),
+                    Some(dst_file("c.txt", 1)),
+                ),
+            ]
+        };
+        let como_update: Vec<_> = steps_of(&run(filas(), opts_update()).await)
+            .iter()
+            .map(|s| (s.kind, s.rel.to_wire()))
+            .collect();
+        let como_mirror: Vec<_> = steps_of(&run(filas(), opts_mirror()).await)
+            .iter()
+            .map(|s| (s.kind, s.rel.to_wire()))
+            .collect();
+        assert_eq!(como_update, como_mirror);
+    }
+
+    #[tokio::test]
+    async fn update_never_emits_a_delete_tree() {
+        // Todos los veredictos, una vez cada uno, bajo `Update`.
+        let rows = vec![
+            row(
+                CompareVerdict::OnlyLeft,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                Some(src_file("a.txt", 1)),
+                None,
+            ),
+            row(
+                CompareVerdict::OnlyRight,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                None,
+                Some(dst_file("b.txt", 1)),
+            ),
+            row(
+                CompareVerdict::Different,
+                CompareCriterion::Size,
+                CompareConfidence::Certain,
+                Some(src_file("c.txt", 2)),
+                Some(dst_file("c.txt", 1)),
+            ),
+            row(
+                CompareVerdict::Same,
+                CompareCriterion::Hash,
+                CompareConfidence::Certain,
+                Some(src_file("d.txt", 1)),
+                Some(dst_file("d.txt", 1)),
+            ),
+            row(
+                CompareVerdict::TypeMismatch,
+                CompareCriterion::Kind,
+                CompareConfidence::Certain,
+                Some(src_file("e", 1)),
+                Some(dst_link("e")),
+            ),
+            ambiguous_row(
+                Side::Left,
+                CompareReason::CaseFold,
+                Some(src_file("F", 1)),
+                None,
+            ),
+            error_row(
+                CompareReason::Unreadable,
+                Side::Left,
+                Some(src_dir("g")),
+                None,
+            ),
+            row(
+                CompareVerdict::Unknown,
+                CompareCriterion::Unknown,
+                CompareConfidence::Unrecognised,
+                Some(src_file("h.txt", 1)),
+                Some(dst_file("h.txt", 1)),
+            ),
+        ];
+        let items = run(rows, opts_update()).await;
+        assert!(
+            steps_of(&items)
+                .iter()
+                .all(|s| s.kind != SyncStepKind::DeleteTree),
+            "`Update` no borra NUNCA: {items:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mirror_will_not_delete_the_destination_root_itself() {
+        // Un `DeleteTree` con `rel` vacío borra el árbol ENTERO del destino. Sale
+        // de un llamante cuyas raíces son más profundas que las de la
+        // comparación, y mata el plan.
+        let raiz = Entry {
+            path: dest_root(),
+            kind: EntryKind::Dir,
+            size: None,
+            mtime_ms: None,
+            attrs: std::collections::BTreeMap::default(),
+        };
+        let out = run_raw(
+            vec![row(
+                CompareVerdict::OnlyRight,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                None,
+                Some(raiz),
+            )],
+            opts_mirror(),
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(
+            out.as_slice(),
+            [Err(SyncError::RootIsNotAStep { .. })]
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_destination_orphan_outside_the_destination_root_ends_the_plan() {
+        let out = run_raw(
+            vec![row(
+                CompareVerdict::OnlyRight,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                None,
+                Some(entry_wire("file:///otro/x.txt", EntryKind::File, Some(1))),
+            )],
+            opts_mirror(),
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(
+            out.as_slice(),
+            [Err(SyncError::OutsideRoot { .. })]
+        ));
+    }
+
+    // ---------- colisiones de nombre ----------
+
+    /// Una fila `Ambiguous` tal como la emite el walk (forma normativa de
+    /// `CompareVerdict::Ambiguous`): UNA fila por entrada implicada, con la
+    /// entrada en el campo de SU lado y el otro en `None`.
+    fn ambiguous_row(
+        side: Side,
+        reason: CompareReason,
+        left: Option<Entry>,
+        right: Option<Entry>,
+    ) -> CompareRow {
+        CompareRow {
+            reason: Some(reason),
+            side: Some(side),
+            ..row(
+                CompareVerdict::Ambiguous,
+                CompareCriterion::Presence,
+                CompareConfidence::Unknown,
+                left,
+                right,
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn an_ambiguous_source_is_skipped_and_the_rest_of_the_plan_stands() {
+        // No se sabe cuál de los dos ficheros copiar, así que no se copia
+        // ninguno — y se DICE. Sin este `Skip` la colisión saldría del plan sin
+        // paso y sin bloqueo, o sea sin que nadie la viera.
+        let items = run(
+            vec![
+                ambiguous_row(
+                    Side::Left,
+                    CompareReason::CaseFold,
+                    Some(src_file("README", 1)),
+                    None,
+                ),
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(src_file("a.txt", 10)),
+                    None,
+                ),
+            ],
+            opts_update(),
+        )
+        .await;
+        let steps = steps_of(&items);
+        assert_eq!(steps[0].kind, SyncStepKind::Skip);
+        assert_eq!(steps[0].reason, Some(SyncReason::AmbiguousSource));
+        assert_eq!(steps[0].rel, rel("README"));
+        assert_eq!(steps[0].reversal, None);
+        assert_eq!(steps[0].size, None);
+        assert!(steps[0].shape_is_consistent());
+        assert_eq!(
+            steps[1].kind,
+            SyncStepKind::Copy,
+            "una colisión no para el plan"
+        );
+        assert!(blockers_of(&items).is_empty());
+    }
+
+    #[tokio::test]
+    async fn two_source_spellings_the_destination_folds_together_never_overwrite_each_other() {
+        // Por qué el `Skip` de arriba es lo que hace SEGURO lo que antes solo
+        // era inofensivo: el destino no distingue caja, así que `README` y
+        // `readme` del origen apuntan al mismo fichero de allí. Si alguno saliera
+        // como `Copy`, el segundo escribiría encima del primero dentro del árbol
+        // aprobado.
+        let items = run(
+            vec![
+                ambiguous_row(
+                    Side::Left,
+                    CompareReason::CaseFold,
+                    Some(src_file("README", 1)),
+                    None,
+                ),
+                ambiguous_row(
+                    Side::Left,
+                    CompareReason::CaseFold,
+                    Some(src_file("readme", 2)),
+                    None,
+                ),
+            ],
+            opts_update(),
+        )
+        .await;
+        let steps = steps_of(&items);
+        assert_eq!(steps.len(), 2, "una fila por entrada, ninguna deduplicada");
+        assert!(steps.iter().all(|s| s.kind == SyncStepKind::Skip));
+        assert!(
+            steps
+                .iter()
+                .all(|s| s.reason == Some(SyncReason::AmbiguousSource))
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ambiguous_destination_blocks_the_plan() {
+        // Escribir ahí es escribir sobre uno de dos ficheros sin saber cuál.
+        let items = run(
+            vec![ambiguous_row(
+                Side::Right,
+                CompareReason::Normalization,
+                None,
+                Some(dst_file("README", 1)),
+            )],
+            opts_update(),
+        )
+        .await;
+        let b = one_blocker(&items);
+        assert_eq!(b.kind, SyncBlockerKind::AmbiguousDest);
+        assert_eq!(b.rel, rel("README"));
+        assert_eq!(b.side, Some(Side::Right));
+        assert!(steps_of(&items).is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_ambiguous_row_that_does_not_name_its_side_falls_towards_the_blocker() {
+        // El walk siempre nombra el lado. Una fila que no lo hiciera se decide
+        // por la entrada que trae, y el EMPATE cae del lado del destino: fallar
+        // hacia el bloqueo cuesta rehacer un plan, fallar hacia el `Skip` cuesta
+        // un fichero.
+        let sin_lado = CompareRow {
+            side: None,
+            ..ambiguous_row(
+                Side::Right,
+                CompareReason::CaseFold,
+                Some(src_file("README", 1)),
+                Some(dst_file("readme", 1)),
+            )
+        };
+        let items = run(vec![sin_lado], opts_update()).await;
+        assert_eq!(one_blocker(&items).kind, SyncBlockerKind::AmbiguousDest);
+
+        // Y con entrada SOLO del origen no hay colisión del destino posible: ahí
+        // la evidencia es concluyente y sale el `Skip`.
+        let solo_origen = CompareRow {
+            side: None,
+            ..ambiguous_row(
+                Side::Left,
+                CompareReason::CaseFold,
+                Some(src_file("README", 1)),
+                None,
+            )
+        };
+        let items = run(vec![solo_origen], opts_update()).await;
+        assert_eq!(one_step(&items).reason, Some(SyncReason::AmbiguousSource));
+    }
+
+    #[tokio::test]
+    async fn the_side_of_a_collision_is_the_row_s_and_not_the_panel_s() {
+        // Con el origen a la DERECHA, una colisión del lado izquierdo es del
+        // DESTINO y bloquea, aunque el bloqueo se reporte como `Right` (convenio
+        // de plan: origen `Left`, destino `Right`).
+        let opts = SyncOptions {
+            source_root: dest_root(),
+            dest_root: source_root(),
+            source_side: Side::Right,
+            ..opts_update()
+        };
+        let items = run(
+            vec![ambiguous_row(
+                Side::Left,
+                CompareReason::CaseFold,
+                Some(src_file("README", 1)),
+                None,
+            )],
+            opts,
+        )
+        .await;
+        let b = one_blocker(&items);
+        assert_eq!(b.kind, SyncBlockerKind::AmbiguousDest);
+        assert_eq!(b.side, Some(Side::Right));
+    }
+
+    // ---------- bloqueos del árbol entero ----------
+
+    #[tokio::test]
+    async fn a_read_only_destination_blocks_before_a_single_step() {
+        let opts = SyncOptions {
+            dest_writable: false,
+            ..opts_update()
+        };
+        let items = run(
+            vec![row(
+                CompareVerdict::OnlyLeft,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                Some(src_file("a.txt", 10)),
+                None,
+            )],
+            opts,
+        )
+        .await;
+        let b = one_blocker(&items);
+        assert_eq!(b.kind, SyncBlockerKind::DestReadOnly);
+        assert!(b.rel.is_root(), "no es de un sitio: es del árbol entero");
+        assert_eq!(b.side, Some(Side::Right));
+        assert!(
+            steps_of(&items).is_empty(),
+            "no se planifican escrituras contra un árbol que las rehúsa"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_read_only_destination_does_not_even_look_at_the_rows() {
+        // No hay nada que un árbol pueda decir que cambie el resultado, y
+        // arrastrar el walk entero por él cuesta minutos contra una red. La fila
+        // de este test mataría el plan con `OutsideRoot` si se llegara a mirar.
+        let opts = SyncOptions {
+            dest_writable: false,
+            ..opts_update()
+        };
+        let out = run_raw(
+            vec![row(
+                CompareVerdict::OnlyLeft,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                Some(entry_wire("file:///otro/x.txt", EntryKind::File, Some(1))),
+                None,
+            )],
+            opts,
+            CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(out.len(), 1, "solo el bloqueo: {out:?}");
+        assert!(out[0].is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_read_only_destination_blocks_even_when_the_comparison_is_empty() {
+        // El bloqueo no depende de que haya filas: sale antes de pedir la
+        // primera. Un origen vacío contra un destino de solo lectura es un plan
+        // que no se puede ejecutar, no un plan vacío que se aprueba solo.
+        let opts = SyncOptions {
+            dest_writable: false,
+            ..opts_update()
+        };
+        let items = run(vec![], opts).await;
+        assert_eq!(one_blocker(&items).kind, SyncBlockerKind::DestReadOnly);
+    }
+
+    #[tokio::test]
+    async fn a_destination_directory_over_the_entry_limit_blocks() {
+        // No se sabe qué hay en ese directorio, y el plan iba a escribir dentro.
+        let items = run(
+            vec![error_row(
+                CompareReason::DirTooLarge,
+                Side::Right,
+                None,
+                Some(dst_dir("fotos")),
+            )],
+            opts_update(),
+        )
+        .await;
+        let b = one_blocker(&items);
+        assert_eq!(b.kind, SyncBlockerKind::DirTooLarge);
+        assert_eq!(b.rel, rel("fotos"));
+        assert_eq!(b.side, Some(Side::Right));
+        assert!(steps_of(&items).is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_same_limit_on_the_source_is_still_only_a_skip() {
+        // No saber qué hay en un directorio del ORIGEN solo significa que de ahí
+        // no se copia nada. No hay nada que perder en el destino.
+        let items = run(
+            vec![error_row(
+                CompareReason::DirTooLarge,
+                Side::Left,
+                Some(src_dir("fotos")),
+                None,
+            )],
+            opts_update(),
+        )
+        .await;
+        let s = one_step(&items);
+        assert_eq!(s.kind, SyncStepKind::Skip);
+        assert_eq!(s.reason, Some(SyncReason::Unreadable));
+        assert!(blockers_of(&items).is_empty());
+    }
+
+    // ---------- el solape que encuentra el walk ----------
+
+    #[tokio::test]
+    async fn reaching_the_other_root_prunes_and_blocks() {
+        // `/a` contra `/a/sub`: dos `VPath` distintos nombrando un mismo árbol.
+        // Copiar el primero sobre el segundo copia un subárbol dentro de sí
+        // mismo. La comprobación estructural del daemon se puede derrotar con un
+        // symlink; esta no depende de ella.
+        let opts = SyncOptions {
+            source_root: vpath("file:///a"),
+            dest_root: vpath("file:///a/sub"),
+            ..opts_update()
+        };
+        let items = run(
+            vec![
+                // El walk llegó a la raíz del destino…
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(entry_wire("file:///a/sub", EntryKind::Dir, None)),
+                    None,
+                ),
+                // …y a todo lo que hay debajo.
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(entry_wire("file:///a/sub/x.txt", EntryKind::File, Some(1))),
+                    None,
+                ),
+            ],
+            opts,
+        )
+        .await;
+        let b = one_blocker(&items);
+        assert_eq!(b.kind, SyncBlockerKind::OverlapDetected);
+        assert_eq!(b.rel, rel("sub"), "medido contra la raíz por la que iba");
+        assert_eq!(b.side, None, "el solape es de las DOS raíces");
+        assert!(
+            steps_of(&items).is_empty(),
+            "el subárbol se poda, no se copia dentro de sí mismo"
+        );
+    }
+
+    #[tokio::test]
+    async fn what_is_outside_the_overlap_is_still_planned() {
+        // Se poda el SUBÁRBOL, no el plan: el resto del árbol sigue saliendo, y
+        // el bloqueo es lo que impide aprobarlo.
+        let opts = SyncOptions {
+            source_root: vpath("file:///a"),
+            dest_root: vpath("file:///a/sub"),
+            ..opts_update()
+        };
+        let items = run(
+            vec![
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(entry_wire("file:///a/sub/x.txt", EntryKind::File, Some(1))),
+                    None,
+                ),
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(entry_wire("file:///a/otro.txt", EntryKind::File, Some(1))),
+                    None,
+                ),
+                // Y una fila EMPAREJADA, que es la que destapa si la poda mira
+                // el lado que no debe: toda ruta del destino cuelga de
+                // `dest_root` por definición, así que podar por ella se llevaría
+                // el plan entero en vez del subárbol.
+                row(
+                    CompareVerdict::Different,
+                    CompareCriterion::Size,
+                    CompareConfidence::Certain,
+                    Some(entry_wire("file:///a/par.txt", EntryKind::File, Some(2))),
+                    Some(entry_wire(
+                        "file:///a/sub/par.txt",
+                        EntryKind::File,
+                        Some(1),
+                    )),
+                ),
+            ],
+            opts,
+        )
+        .await;
+        assert_eq!(one_blocker(&items).kind, SyncBlockerKind::OverlapDetected);
+        let steps: Vec<_> = steps_of(&items)
+            .iter()
+            .map(|s| (s.kind, s.rel.to_wire()))
+            .collect();
+        assert_eq!(
+            steps,
+            vec![
+                (SyncStepKind::Copy, "otro.txt".to_owned()),
+                (SyncStepKind::Overwrite, "par.txt".to_owned()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_overlap_is_reported_once_however_deep_the_subtree_is() {
+        // Se guarda la RAÍZ alcanzada y no la ruta de la fila que lo destapó, así
+        // que un solo prefijo se traga el subárbol entero: cien filas dentro no
+        // son cien bloqueos.
+        let opts = SyncOptions {
+            source_root: vpath("file:///a"),
+            dest_root: vpath("file:///a/sub"),
+            ..opts_update()
+        };
+        let mut rows = vec![row(
+            CompareVerdict::OnlyLeft,
+            CompareCriterion::Presence,
+            CompareConfidence::Certain,
+            Some(entry_wire("file:///a/sub", EntryKind::Dir, None)),
+            None,
+        )];
+        for i in 0..100 {
+            rows.push(row(
+                CompareVerdict::OnlyLeft,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                Some(entry_wire(
+                    &format!("file:///a/sub/d{i}/f{i}.txt"),
+                    EntryKind::File,
+                    Some(1),
+                )),
+                None,
+            ));
+        }
+        let items = run(rows, opts).await;
+        assert_eq!(blockers_of(&items).len(), 1);
+        assert!(steps_of(&items).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_destination_row_that_reaches_the_source_root_is_overlap_too() {
+        // El espejo: la raíz del ORIGEN está dentro de la del destino, así que
+        // quien llega a la otra raíz es una fila del lado del destino.
+        let opts = SyncOptions {
+            source_root: vpath("file:///a/sub"),
+            dest_root: vpath("file:///a"),
+            ..opts_update()
+        };
+        let items = run(
+            vec![row(
+                CompareVerdict::OnlyRight,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                None,
+                Some(entry_wire("file:///a/sub/x.txt", EntryKind::File, Some(1))),
+            )],
+            opts,
+        )
+        .await;
+        assert_eq!(one_blocker(&items).kind, SyncBlockerKind::OverlapDetected);
+        assert!(steps_of(&items).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_root_whose_bytes_prefix_the_other_is_not_an_overlap() {
+        // `file:///a/su` son un prefijo de CADENA de `file:///a/sub` y no lo son
+        // de segmentos. Por cadena, todo el árbol del origen «llegaría» a la raíz
+        // del destino y el plan entero se bloquearía por nada (regla dura 1).
+        let opts = SyncOptions {
+            source_root: vpath("file:///a"),
+            dest_root: vpath("file:///a/su"),
+            ..opts_update()
+        };
+        let items = run(
+            vec![row(
+                CompareVerdict::OnlyLeft,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                Some(entry_wire("file:///a/sub", EntryKind::Dir, None)),
+                None,
+            )],
+            opts,
+        )
+        .await;
+        assert!(blockers_of(&items).is_empty());
+        assert_eq!(one_step(&items).kind, SyncStepKind::CreateDir);
+    }
+
+    #[tokio::test]
+    async fn two_providers_that_spell_their_root_the_same_are_not_an_overlap() {
+        // El transductor no sabe de providers: dos `mem:///` de dos providers
+        // distintos llegan aquí indistinguibles de un árbol contra sí mismo. Se
+        // planifica, y no se pierde nada por ello — un árbol comparado consigo
+        // mismo da filas `Same`, o sea cero pasos. Lo peligroso es la CONTENCIÓN.
+        let raiz = vpath("mem:///");
+        let opts = SyncOptions {
+            source_root: raiz.clone(),
+            dest_root: raiz,
+            ..opts_update()
+        };
+        let items = run(
+            vec![row(
+                CompareVerdict::OnlyLeft,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                Some(entry_wire("mem:///a.txt", EntryKind::File, Some(1))),
+                None,
+            )],
+            opts,
+        )
+        .await;
+        assert!(blockers_of(&items).is_empty());
+        assert_eq!(one_step(&items).kind, SyncStepKind::Copy);
+    }
+
+    #[tokio::test]
+    async fn nothing_at_all_is_planned_under_a_pruned_subtree() {
+        // Ni un `Skip`, ni un bloqueo de otra clase: dentro del subárbol podado
+        // el plan no dice nada, porque nada de lo que hay ahí es del árbol que se
+        // quiso sincronizar.
+        let opts = SyncOptions {
+            source_root: vpath("file:///a"),
+            dest_root: vpath("file:///a/sub"),
+            ..opts_update()
+        };
+        let items = run(
+            vec![
+                row(
+                    CompareVerdict::OnlyLeft,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    Some(entry_wire("file:///a/sub", EntryKind::Dir, None)),
+                    None,
+                ),
+                CompareRow {
+                    reason: Some(CompareReason::Unreadable),
+                    side: Some(Side::Left),
+                    ..row(
+                        CompareVerdict::Error,
+                        CompareCriterion::Presence,
+                        CompareConfidence::Unknown,
+                        Some(entry_wire("file:///a/sub/secreto", EntryKind::Dir, None)),
+                        None,
+                    )
+                },
+            ],
+            opts,
+        )
+        .await;
+        assert_eq!(items.len(), 1, "solo el bloqueo del solape: {items:?}");
+    }
+
     // ---------- filas de verdad: compare → plan ----------
 
     /// Siembra un fichero en un `MemProvider`, creando los directorios del
@@ -1814,6 +3574,85 @@ mod tests {
             .await
             .expect("chunk");
         sink.commit().await.expect("commit");
+    }
+
+    #[tokio::test]
+    async fn real_compare_rows_carry_the_destination_spelling_down_the_tree() {
+        // El test que ninguna prueba de mesa puede dar: el orden de las filas lo
+        // pone el WALK, y el walk las emite por directorio —todas las de un
+        // nivel y después las de cada subdirectorio—, así que entre `café` y su
+        // hijo se cuelan sus hermanas y entre `café/RESUMÉ` y el suyo también.
+        // La primera versión de esto era una pila, pasaba los cinco tests hechos
+        // a mano y fallaba aquí: `nuevo.txt` salía sin `dest_rel` o, peor, con
+        // uno que nombraba una carpeta que no existe en ninguno de los dos lados.
+        use norte_compare::{CompareOptions, compare};
+        let origen = norte_testkit::MemProvider::new();
+        let destino = norte_testkit::MemProvider::new();
+        // Origen en NFC; destino en NFD, que es lo que devuelve un macOS. La
+        // clave de emparejamiento normaliza a NFC SIEMPRE, así que las dos
+        // carpetas emparejan aunque sus bytes difieran.
+        seed(
+            &origen,
+            &["café".as_bytes(), "RESUMÉ".as_bytes(), b"nuevo.txt"],
+            b"nuevo",
+        )
+        .await;
+        seed(&origen, &["café".as_bytes(), b"zz.txt"], b"hermana").await;
+        seed(
+            &destino,
+            &[b"cafe\xcc\x81", b"RESUME\xcc\x81", b"viejo.txt"],
+            b"viejo",
+        )
+        .await;
+
+        let raiz = norte_testkit::MemProvider::root();
+        let rows = compare(
+            &origen,
+            &raiz,
+            &destino,
+            &raiz,
+            CompareOptions::cheap(),
+            CancellationToken::new(),
+        );
+        let opts = SyncOptions {
+            source_root: raiz.clone(),
+            dest_root: raiz,
+            ..opts_update()
+        };
+        let items: Vec<PlanItem> = plan(rows, opts, CancellationToken::new())
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|r| r.expect("ninguna fila del walk se sale de su raíz"))
+            .collect();
+
+        let copias: Vec<Ortografias<'_>> = steps_of(&items)
+            .iter()
+            .filter(|s| s.kind == SyncStepKind::Copy)
+            .map(|s| (bytes_of(&s.rel), s.dest_rel.as_ref().map(bytes_of)))
+            .collect();
+        assert_eq!(
+            copias,
+            vec![
+                // El orden es el del walk: primero el nivel de `café` entero
+                // —la hermana incluida— y solo después lo que hay dentro de
+                // `RESUMÉ`. Que `zz.txt` se cuele en medio es justamente lo que
+                // rompía la primera versión de esto.
+                (
+                    vec!["café".as_bytes(), b"zz.txt"],
+                    Some(vec![b"cafe\xcc\x81".as_slice(), b"zz.txt"])
+                ),
+                (
+                    vec!["café".as_bytes(), "RESUMÉ".as_bytes(), b"nuevo.txt"],
+                    Some(vec![
+                        b"cafe\xcc\x81".as_slice(),
+                        b"RESUME\xcc\x81",
+                        b"nuevo.txt"
+                    ])
+                ),
+            ],
+            "cada copia entra en la carpeta que EXISTE en el destino"
+        );
     }
 
     #[tokio::test]

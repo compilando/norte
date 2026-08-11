@@ -3334,6 +3334,49 @@ pub enum SyncBlockerKind {
     /// una comparación eso cuesta una fila y el walk sigue; en un plan que va a
     /// escribir ahí, no: no se sabe qué hay en ese directorio.
     DirTooLarge,
+    /// Un [`CompareVerdict::TypeMismatch`] en el que uno de los dos lados es un
+    /// DIRECTORIO: cambiar un árbol por un fichero (o al revés) es un cambio
+    /// estructural destructivo, y esta spec no lo promete.
+    ///
+    /// El resto de los desajustes de clase sigue siendo un
+    /// [`SyncStepKind::Overwrite`]: sustituir un symlink por un fichero —o un
+    /// device, un socket o un `EntryKind::Other` cualquiera— es sustituir bytes,
+    /// y es exactamente lo que el paso significa. Un directorio no: un
+    /// `Overwrite` dice normativamente «a la papelera y copiar bytes», el paso no
+    /// lleva [`EntryKind`](crate::EntryKind) con el que distinguirlo, y el
+    /// subárbol implicado ni siquiera está en el plan —el walk no desciende un
+    /// par que no es de dos directorios—. Así que lo decide un humano.
+    ///
+    /// [`SyncBlocker::side`] nombra el lado que tiene el DIRECTORIO (convenio de
+    /// plan: [`Side::Left`] el origen, [`Side::Right`] el destino) y va SIEMPRE
+    /// presente en esta clase, porque es lo que distingue «borro un árbol del
+    /// destino para poner un fichero» de «no copio un árbol del origen encima de
+    /// un fichero» — ver [`SyncBlocker::shape_is_consistent`]. Solo uno de los
+    /// dos lados puede serlo: si los dos fueran directorios no habría desajuste.
+    ///
+    /// # Por qué el lado del ORIGEN también bloquea
+    /// Es la excepción a la regla que esta familia sigue dos veces —una colisión
+    /// del origen es un [`SyncReason::AmbiguousSource`] y una del destino un
+    /// [`SyncBlockerKind::AmbiguousDest`]; un directorio demasiado grande del
+    /// origen es un `Skip` y uno del destino un
+    /// [`SyncBlockerKind::DirTooLarge`]—, y la excepción es deliberada.
+    ///
+    /// Saltarse la entrada, que es lo que haría un `Skip`, no pierde nada
+    /// INMEDIATO: el árbol del origen sigue ahí y el fichero del destino
+    /// también. Lo que pierde es la promesa del modo. Quien pidió
+    /// [`SyncMode::Mirror`] pidió que el destino quedara como el origen, y con un
+    /// fichero donde debería haber un árbol no queda: el plan diría que sí y el
+    /// resultado diría que no, y esa divergencia es ESTRUCTURAL —un subárbol
+    /// entero que nunca llegará— y no una entrada suelta que el informe pueda
+    /// listar. Una colisión de nombres es distinta: ahí no se sabe QUÉ copiar, y
+    /// no copiar es la única respuesta segura.
+    ///
+    /// El precio está medido y aceptado: un solo desajuste de estos en un árbol
+    /// de cien mil ficheros deja el plan entero sin aprobar, y el remedio es
+    /// arreglar ese nombre o acotar el plan con `include`. Si algún día se
+    /// prefiere el `Skip`, hace falta un [`SyncReason`] nuevo — vocabulario
+    /// CERRADO daemon→client, o sea un bump y un argumento de compatibilidad.
+    TypeMismatchDir,
     /// Clase que este decodificador no conoce (`#[serde(other)]`). El core
     /// jamás la emite.
     #[doc(hidden)]
@@ -3615,12 +3658,67 @@ pub struct SyncBlocker {
     pub rel: RelPath,
     /// Qué clase de bloqueo.
     pub kind: SyncBlockerKind,
-    /// El lado en el que ocurrió, cuando ocurrió en uno solo. En un plan el
-    /// origen es [`Side::Left`] y el destino [`Side::Right`] — ver
-    /// [`Error::OverlappingRoots`](crate::Error::OverlappingRoots), que usa el
-    /// mismo convenio.
+    /// El lado en el que ocurrió, cuando ocurrió en uno solo.
+    ///
+    /// # El convenio, normativo
+    /// En un plan el ORIGEN es [`Side::Left`] y el DESTINO [`Side::Right`],
+    /// **siempre**, y no tiene nada que ver con qué panel lanzó la comparación:
+    /// una petición de sincronización nombra `source` y `dest`
+    /// ([`SyncPlanParams`]) y no lleva ningún [`Side`], así que dentro de esta
+    /// familia no hay un segundo sistema de coordenadas con el que confundirlo.
+    /// Un frontend que sincronizó de derecha a izquierda pinta un `right` en su
+    /// panel IZQUIERDO.
+    ///
+    /// Ausente cuando el bloqueo no es de un lado: un solape lo es de las dos
+    /// raíces a la vez.
+    ///
+    /// **Presente SIEMPRE para [`SyncBlockerKind::TypeMismatchDir`]**, que es el
+    /// único cuyo lado no se puede deducir de la clase — ver
+    /// [`SyncBlocker::shape_is_consistent`].
+    ///
+    /// (`Error::OverlappingRoots` NO usa este convenio y no hay que buscarlo
+    /// ahí: lleva un [`RootOverlap`](crate::RootOverlap) precisamente porque
+    /// «son el mismo árbol» es un tercer caso que dos lados no saben decir.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub side: Option<Side>,
+}
+
+impl SyncBlocker {
+    /// ¿Concuerdan `kind` y `side`?
+    ///
+    /// La invariante que el wire no sabe expresar, enunciada UNA vez, aquí:
+    /// [`SyncBlockerKind::TypeMismatchDir`] lleva `side` SIEMPRE. Es el único
+    /// bloqueo cuyo lado no se deduce de su clase —`AmbiguousDest`,
+    /// `DirTooLarge` y `DestReadOnly` son del destino por definición, y un
+    /// solape no es de ninguno— y a la vez el único en el que el lado ES la
+    /// frase: «no copio un árbol del origen encima de un fichero» y «no borro un
+    /// árbol del destino para poner un fichero» son dos cosas distintas, y sin
+    /// `side` no hay ninguna que pintar.
+    ///
+    /// NO es un rechazo de `Deserialize`, por el mismo motivo que
+    /// [`SyncStep::shape_is_consistent`]: un bloqueo malformado tiene que
+    /// degradar, no matar la lista entera. Y
+    /// [`SyncBlockerKind::Unknown`] queda EXENTO: un bloqueo de un daemon una
+    /// versión por delante no es algo que este cliente pueda juzgar.
+    ///
+    /// ```
+    /// use norte_proto::methods::{RelPath, Side, SyncBlocker, SyncBlockerKind};
+    /// let mut b = SyncBlocker {
+    ///     rel: RelPath::parse_wire("build").expect("rel"),
+    ///     kind: SyncBlockerKind::TypeMismatchDir,
+    ///     side: Some(Side::Right),
+    /// };
+    /// assert!(b.shape_is_consistent());
+    /// b.side = None;
+    /// assert!(!b.shape_is_consistent(), "sin lado no hay frase que pintar");
+    /// // Un solape no es de un lado, y eso es correcto.
+    /// b.kind = SyncBlockerKind::OverlapDetected;
+    /// assert!(b.shape_is_consistent());
+    /// ```
+    #[must_use]
+    pub fn shape_is_consistent(&self) -> bool {
+        self.kind != SyncBlockerKind::TypeMismatchDir || self.side.is_some()
+    }
 }
 
 /// Las opciones de comparación que un plan de sincronización EMBEBE (0.40.0,

@@ -17,5 +17,15 @@
   "overlap_detected": {
     "kind": "overlap_detected",
     "rel": "sub"
+  },
+  "type_mismatch_dir_dest": {
+    "kind": "type_mismatch_dir",
+    "rel": "build",
+    "side": "right"
+  },
+  "type_mismatch_dir_source": {
+    "kind": "type_mismatch_dir",
+    "rel": "informe%FF.d",
+    "side": "left"
   }
 }

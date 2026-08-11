@@ -76,8 +76,11 @@ pub struct SyncOptions {
     pub dest_root: VPath,
     /// Qué hace el plan con lo que sobra en el destino ([`SyncMode`]).
     ///
-    /// Hoy solo se planifica [`SyncMode::Update`]; cualquier otro es
-    /// [`SyncError::ModeNotPlanned`] hasta que la tarea 5 lo implemente.
+    /// [`SyncMode::Update`] no borra nada; [`SyncMode::Mirror`] convierte cada
+    /// huérfano del destino en UN [`SyncStepKind::DeleteTree`]. Un modo que este
+    /// planificador no conozca —solo lo puede añadir una versión futura de
+    /// `norte-proto`, porque el wire rechaza los que no nombra— es
+    /// [`SyncError::ModeNotPlanned`] y no degrada a ninguno de los dos.
     pub mode: SyncMode,
     /// Qué hace con una fila cuya confianza es
     /// [`CompareConfidence::Unknown`](norte_proto::methods::CompareConfidence::Unknown).
@@ -183,15 +186,24 @@ pub enum SyncError {
         /// La raíz sobre la que se iba a actuar.
         root: Box<VPath>,
     },
-    /// El modo pedido todavía no se planifica.
+    /// El modo pedido no lo sabe planificar este binario.
     ///
-    /// Hoy solo [`SyncMode::Update`] tiene tabla; [`SyncMode::Mirror`] la gana
-    /// en la tarea 5 y esta variante desaparece con ella. Mientras tanto se
-    /// rechaza en vez de servir el plan de `Update`, que es un SUBCONJUNTO del
-    /// de `Mirror`: quien pidió espejar y recibe una actualización aprueba un
-    /// plan que no borra nada y no tiene forma de notarlo — el mismo fallo
-    /// silencioso que [`SyncError::SourceSideUnknown`] evita.
-    #[error("este planificador todavía no sabe planificar el modo {0:?}")]
+    /// [`SyncMode::Update`] y [`SyncMode::Mirror`] tienen tabla; esta variante
+    /// es el comodín que [`SyncMode`] obliga a escribir por ser
+    /// `#[non_exhaustive]`, y lo que hace es NEGARSE. No es alcanzable desde el
+    /// wire —un modo que este peer no nombra muere en el deserializador, que por
+    /// eso no lleva `#[serde(other)]`—, así que solo la alcanza un
+    /// `norte-proto` futuro que añada un modo sin que este crate se entere.
+    ///
+    /// Que ese caso caiga en un error y no en `Update` es el motivo entero de la
+    /// variante: el plan de `Update` es un SUBCONJUNTO del de `Mirror`, así que
+    /// quien pidiera un modo nuevo y recibiera una actualización aprobaría un
+    /// plan que no hace lo que pidió sin forma de notarlo — el mismo fallo
+    /// silencioso que [`SyncError::SourceSideUnknown`] evita. El comodín cae del
+    /// lado de no planificar nada, igual que el de
+    /// [`OnUnknown`](norte_proto::methods::OnUnknown) cae del lado de no
+    /// escribir.
+    #[error("este planificador no sabe planificar el modo {0:?}")]
     ModeNotPlanned(SyncMode),
     /// El flujo de filas terminó con un fallo de la comparación que no es su
     /// cancelación. Hoy no existe ninguno

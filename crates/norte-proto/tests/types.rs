@@ -1905,6 +1905,48 @@ fn a_mode_this_daemon_does_not_know_is_refused_not_defaulted() {
     assert!(serde_json::from_value::<OnUnknown>(serde_json::json!("maybe")).is_err());
 }
 
+/// `type_mismatch_dir` es el único bloqueo cuyo lado no se deduce de su clase, y
+/// a la vez el único en el que el lado ES la frase que se pinta. Sin él no hay
+/// nada que enseñar, así que la invariante se enuncia (y NO se rechaza al
+/// deserializar: un bloqueo malformado degrada, no mata la lista).
+#[test]
+fn a_type_mismatch_dir_without_a_side_has_nothing_to_say() {
+    use norte_proto::methods::{RelPath, Side, SyncBlocker, SyncBlockerKind};
+    let mut b = SyncBlocker {
+        rel: RelPath::parse_wire("build").expect("rel"),
+        kind: SyncBlockerKind::TypeMismatchDir,
+        side: Some(Side::Left),
+    };
+    assert!(b.shape_is_consistent());
+    b.side = Some(Side::Right);
+    assert!(b.shape_is_consistent());
+    b.side = None;
+    assert!(!b.shape_is_consistent());
+    // El deserializador NO lo rechaza: llega, y quien lo lea decide.
+    let crudo = serde_json::json!({"rel": "build", "kind": "type_mismatch_dir"});
+    let venido: SyncBlocker = serde_json::from_value(crudo).expect("degrada, no muere");
+    assert!(!venido.shape_is_consistent());
+
+    // Los demás no deben un lado: el suyo se deduce de la clase, o no hay.
+    for kind in [
+        SyncBlockerKind::AmbiguousDest,
+        SyncBlockerKind::OverlapDetected,
+        SyncBlockerKind::DestReadOnly,
+        SyncBlockerKind::DirTooLarge,
+        SyncBlockerKind::Unknown,
+    ] {
+        assert!(
+            SyncBlocker {
+                rel: RelPath::default(),
+                kind,
+                side: None
+            }
+            .shape_is_consistent(),
+            "{kind:?}"
+        );
+    }
+}
+
 /// Daemon→client: el vocabulario de bloqueos round-trippea entero.
 #[test]
 fn every_blocker_kind_round_trips() {
@@ -1914,6 +1956,7 @@ fn every_blocker_kind_round_trips() {
         SyncBlockerKind::OverlapDetected,
         SyncBlockerKind::DestReadOnly,
         SyncBlockerKind::DirTooLarge,
+        SyncBlockerKind::TypeMismatchDir,
     ] {
         let j = serde_json::to_value(k).expect("json");
         assert_eq!(
