@@ -2230,7 +2230,7 @@ pub struct HostVolumesResult {
 /// apart cannot tell the user either.
 ///
 /// `#[serde(other)]` on `Unknown` is the forward-compat shape
-/// [`EntryKind::Other`](crate::EntryKind::Other) and [`VolumeKind::Unknown`]
+/// [`EntryKind::Other`] and [`VolumeKind::Unknown`]
 /// already use: a verdict an N+1 daemon adds degrades to `Unknown` on decode
 /// instead of failing the whole batch of rows.
 ///
@@ -2258,7 +2258,7 @@ pub enum CompareVerdict {
     OnlyLeft,
     /// Solo existe a la derecha. `left` es `None`.
     OnlyRight,
-    /// Mismo nombre, [`EntryKind`](crate::EntryKind) distinto: un fichero
+    /// Mismo nombre, [`EntryKind`] distinto: un fichero
     /// contra un directorio no es una diferencia de contenido, es otra cosa.
     TypeMismatch,
     /// Dos entradas de UN MISMO lado colapsan a la misma clave de
@@ -2327,7 +2327,7 @@ pub enum CompareCriterion {
     /// `verdict: error`/`ambiguous` más [`CompareRow::reason`]; el criterio no
     /// se lee. Ver ADR 0048, consecuencias negativas.
     Presence,
-    /// Los [`EntryKind`](crate::EntryKind) difieren.
+    /// Los [`EntryKind`] difieren.
     Kind,
     /// Destinos de symlink comparados COMO BYTES (jamás se siguen: sin
     /// seguimiento no hace falta detectar ciclos, y un enlace cuyo destino

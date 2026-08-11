@@ -355,7 +355,7 @@
         },
         {
           "const": "kind",
-          "description": "Los [`EntryKind`](crate::EntryKind) difieren.",
+          "description": "Los [`EntryKind`] difieren.",
           "type": "string"
         },
         {
@@ -527,7 +527,7 @@
       "type": "object"
     },
     "CompareVerdict": {
-      "description": "What a comparison concluded about ONE pair (0.39.0, ADR 0048).\n\nThe verdict says WHAT, [`CompareCriterion`] says WHICH RUNG decided it and\n[`CompareConfidence`] says WHAT THAT IS WORTH. The three travel together on\nevery [`CompareRow`] precisely because `Same` alone is not an answer: a\n`Same` earned by comparing bytes and a `Same` earned by two dates that are\ntwo seconds apart are different facts, and a client that cannot tell them\napart cannot tell the user either.\n\n`#[serde(other)]` on `Unknown` is the forward-compat shape\n[`EntryKind::Other`](crate::EntryKind::Other) and [`VolumeKind::Unknown`]\nalready use: a verdict an N+1 daemon adds degrades to `Unknown` on decode\ninstead of failing the whole batch of rows.\n\n```\nuse norte_proto::methods::CompareVerdict;\nassert_eq!(\n    serde_json::to_string(&CompareVerdict::OnlyLeft).expect(\"json\"),\n    r#\"\"only_left\"\"#\n);\n// Un veredicto de un daemon más nuevo degrada; NO tira el lote entero.\nlet futuro: CompareVerdict = serde_json::from_str(r#\"\"conflicted\"\"#).expect(\"degrada\");\nassert_eq!(futuro, CompareVerdict::Unknown);\n```",
+      "description": "What a comparison concluded about ONE pair (0.39.0, ADR 0048).\n\nThe verdict says WHAT, [`CompareCriterion`] says WHICH RUNG decided it and\n[`CompareConfidence`] says WHAT THAT IS WORTH. The three travel together on\nevery [`CompareRow`] precisely because `Same` alone is not an answer: a\n`Same` earned by comparing bytes and a `Same` earned by two dates that are\ntwo seconds apart are different facts, and a client that cannot tell them\napart cannot tell the user either.\n\n`#[serde(other)]` on `Unknown` is the forward-compat shape\n[`EntryKind::Other`] and [`VolumeKind::Unknown`]\nalready use: a verdict an N+1 daemon adds degrades to `Unknown` on decode\ninstead of failing the whole batch of rows.\n\n```\nuse norte_proto::methods::CompareVerdict;\nassert_eq!(\n    serde_json::to_string(&CompareVerdict::OnlyLeft).expect(\"json\"),\n    r#\"\"only_left\"\"#\n);\n// Un veredicto de un daemon más nuevo degrada; NO tira el lote entero.\nlet futuro: CompareVerdict = serde_json::from_str(r#\"\"conflicted\"\"#).expect(\"degrada\");\nassert_eq!(futuro, CompareVerdict::Unknown);\n```",
       "oneOf": [
         {
           "const": "same",
@@ -551,7 +551,7 @@
         },
         {
           "const": "type_mismatch",
-          "description": "Mismo nombre, [`EntryKind`](crate::EntryKind) distinto: un fichero\ncontra un directorio no es una diferencia de contenido, es otra cosa.",
+          "description": "Mismo nombre, [`EntryKind`] distinto: un fichero\ncontra un directorio no es una diferencia de contenido, es otra cosa.",
           "type": "string"
         },
         {
