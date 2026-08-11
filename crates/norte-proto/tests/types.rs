@@ -1800,6 +1800,7 @@ fn sync_step(
         id: 1,
         kind,
         rel: RelPath::parse_wire("sub/b.txt").expect("rel"),
+        dest_rel: None,
         size: Some(12),
         criterion: CompareCriterion::Size,
         confidence: CompareConfidence::Certain,
@@ -1952,6 +1953,75 @@ fn a_rel_that_would_escape_its_root_dies_in_the_wire() {
     assert_eq!(r.to_wire(), "sub/informe%FF%FE.dat");
 }
 
+/// `dest_rel` nombra la entrada del DESTINO cuando sus bytes no son los del
+/// origen, y viaja con el mismo códec que `rel`: dos nombres que un humano
+/// pinta igual —NFC contra NFD— son dos secuencias de bytes distintas, y el
+/// paso las distingue.
+///
+/// La mitad NFC/NFD del caso se pinea AQUÍ y no en `sync_step.json`, a
+/// propósito: las dos formas son UTF-8 válido, el códec de segmentos deja el
+/// UTF-8 válido literal, y una fixture con las dos cadenas se leería como dos
+/// cadenas IDÉNTICAS — un fallo invisible en la revisión, y a una
+/// normalización de cualquier editor de dejar de comprobar nada. Aquí los
+/// bytes van como escapes, que son ASCII y sobreviven a eso. La otra mitad —la
+/// caja, que sí se ve— es la que congela la golden.
+#[test]
+fn dest_rel_carries_the_other_spelling_byte_for_byte() {
+    use norte_proto::methods::{RelPath, StepReversal, SyncStep, SyncStepKind};
+    let mut s = sync_step(
+        SyncStepKind::Overwrite,
+        Some(StepReversal::RestoreTrash),
+        None,
+    );
+    s.rel = RelPath::parse_wire("caf\u{e9}").expect("nfc");
+    s.dest_rel = Some(RelPath::parse_wire("cafe\u{301}").expect("nfd"));
+    assert!(
+        s.shape_is_consistent(),
+        "dos ortografías distintas son exactamente el caso que el campo cubre"
+    );
+    assert_eq!(roundtrip(&s), s);
+    // Las dos formas son UTF-8 VÁLIDO, así que el códec las deja literales y
+    // las dos cadenas del JSON se pintan igual. Lo que las distingue son los
+    // bytes, que es también lo único que el ejecutor va a abrir (regla dura 1).
+    let json = serde_json::to_value(&s).expect("json");
+    assert_ne!(json["rel"], json["dest_rel"]);
+    let back: SyncStep = serde_json::from_value(json).expect("json");
+    assert_eq!(
+        back.rel.segments()[0].as_bytes(),
+        "caf\u{e9}".as_bytes(),
+        "5 bytes, uno de ellos de dos"
+    );
+    assert_eq!(
+        back.dest_rel.expect("dest_rel").segments()[0].as_bytes(),
+        "cafe\u{301}".as_bytes(),
+        "6 bytes: la e y su tilde combinante"
+    );
+}
+
+/// La regla normativa del campo, comprobable: `Some` SOLO cuando difiere. Un
+/// `dest_rel` igual a `rel` no es peligroso, es ruido — y un consumidor que lo
+/// vea sabe que quien lo produjo no aplicó la regla.
+#[test]
+fn a_dest_rel_that_repeats_rel_is_a_malformed_step() {
+    use norte_proto::methods::{RelPath, StepReversal, SyncStep, SyncStepKind};
+    let mut s = sync_step(
+        SyncStepKind::Overwrite,
+        Some(StepReversal::RestoreTrash),
+        None,
+    );
+    s.dest_rel = Some(s.rel.clone());
+    assert!(!s.shape_is_consistent());
+    // Y no muere al deserializar, como el resto de la forma: un paso malo
+    // degrada, jamás mata el lote de 256.
+    let json = serde_json::to_value(&s).expect("json");
+    let back: SyncStep = serde_json::from_value(json).expect("degrada, no muere");
+    assert_eq!(
+        back.dest_rel,
+        Some(RelPath::parse_wire("sub/b.txt").expect("rel"))
+    );
+    assert!(!back.shape_is_consistent());
+}
+
 /// Lo ausente se OMITE del wire (ni `null` ni clave): un plan de medio millón
 /// de pasos manda `sync.steps` miles de veces.
 #[test]
@@ -1961,7 +2031,7 @@ fn sync_step_roundtrip_y_omisiones() {
     s.size = None;
     assert_eq!(roundtrip(&s), s);
     let json = serde_json::to_value(&s).expect("json");
-    for ausente in ["size", "reason"] {
+    for ausente in ["size", "reason", "dest_rel"] {
         assert!(
             json.get(ausente).is_none(),
             "{ausente} no debe viajar: {json}"

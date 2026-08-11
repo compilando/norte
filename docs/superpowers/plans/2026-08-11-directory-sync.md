@@ -27,7 +27,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 1 — the wire vocabulary | done | `c279988` |
 | 2 — `descend_orphans` | done | `6cb6cd4` |
 | 3 — `norte-sync` + the Update transducer | done | `aa2242c` |
-| 3 — `norte-sync` and the Update transducer | done | `aa2242c` |
+| 4 — reversal, `on_unknown`, the `Skip` reasons, `dest_rel` | done | see below |
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
@@ -210,6 +210,75 @@ it. Racing it would mean a `tokio::select!` and a new runtime dependency
 names in the canonical corpus although it is the ADR 0018 archive marker and a
 legal Unix filename; adding it is its own change, because every
 `hostile_names().len() == 47` assertion in the workspace moves with it.
+
+### What Task 4 changed in this plan
+
+**Task 3's report was right: the reversal table arrived green.** All four rows
+of the `(kind, dest_has_trash)` table and the three step-1 tests that cover
+them were already passing when task 4 started. Task 4's real content was
+`on_unknown`, the `Skip` reasons, the `Error` rows and `dest_rel`.
+
+- **`SyncStep::dest_rel: Option<RelPath>` compares the WHOLE relative path, not
+  the last segment.** The task text said "`Some` only when the destination
+  entry's NAME bytes differ". That predicate has a hole: the pairing key folds
+  at EVERY level, so `café/x.txt` on the source can hang off an NFD `café` on
+  the destination while `x.txt` is spelt identically — and pasting `rel` over
+  `dest_root` then names a directory that does not exist on ext4. The
+  transducer computes `rel_under(dest_root, dest.path)` and populates the field
+  when it differs from `rel` byte for byte. `encoding-auditor` confirmed the
+  generalisation is required, not extra, and that with it the target is exact
+  by construction: `dest_root + dest_rel.unwrap_or(rel)` IS `dest.path`.
+- **The other half of #152 is still open, and is pinned rather than fixed.** A
+  file that exists only on the SOURCE, under a paired directory whose two
+  spellings differ, gets `dest_rel: None` — the row carries no destination
+  entry, and the directory pair itself is a `Same` row that produces no step,
+  so the destination's spelling is nowhere in the plan. On ext4 the executor
+  then grows a second `café/`. Closing it needs a prefix stack —
+  `Vec<(RelPath source, RelPath dest)>` recorded on paired-dir rows BEFORE the
+  three early returns, popped by prefix as the pre-order walk leaves a subtree
+  — which is new transducer state that lands next to Task 5's overlap guard.
+  **Task 5 decides whether to build it; Task 9 must not assume it is closed.**
+  Pinned by `a_copy_under_a_folder_the_two_sides_spell_differently_still_takes_the_source_spelling`.
+- **`rel` is not always relative to the source root, and now says so.** A
+  destination-only `Error` row (an unlistable destination directory) produces a
+  `Skip` whose `rel` is measured against `dest_root`; Task 5's `DeleteTree`
+  inherits the same convention. `SyncStep` carries no side field — adding one
+  for two shapes that do not write was not worth a wire field — so a pane that
+  anchors every `rel` to the source column will paint those two in the wrong
+  place. Stated normatively in `SyncStep::rel`'s rustdoc. **Task 12 has to
+  handle it, and Task 14 must fix ADR 0049 line 115, which still says a step's
+  path is relative to the two roots.**
+- **Every `Error` row is a `Skip` with `SyncReason::Unreadable`**, whatever
+  `CompareReason` it carried — `Unreadable`, `ReadFailed` and `DirTooLarge` are
+  three ways of "the walk could not answer for this entry", and none authorises
+  a write. Task 5 takes the one case that is genuinely different out of here:
+  a `DirTooLarge` on the DESTINATION is a blocker, not a skipped step.
+- **`on_unknown` breaks the tie only on `Same`.** A `Different`/`Unknown` is an
+  `Overwrite` either way, and an orphan with `Unknown` confidence is still a
+  `Copy`: not copying a file that is definitely absent because "nobody could
+  verify it" would be skipping a CERTAIN fact. `OnUnknown` is
+  `#[non_exhaustive]`, so the wildcard falls on the side of NOT writing.
+- **`Ambiguous` rows still produce nothing at all, and that is load-bearing
+  for Task 5.** The reason two source spellings that the destination folds
+  together cannot overwrite each other is that `norte-compare` reports them as
+  `Ambiguous`. Until Task 5 turns those into a `Skip` (source) or a blocker
+  (destination), they leave the plan without a step AND without a blocker —
+  invisible. Task 5 is what makes that safe; it is not optional.
+- **A golden cannot freeze an NFC/NFD pair.** Both forms are valid UTF-8 and
+  the segment codec leaves valid UTF-8 literal, so the two strings render
+  IDENTICALLY in a checked-in JSON file: the diff would be unadjudicable and
+  one editor normalisation would turn the test into a tautology. The golden
+  freezes a case-folded ANCESTOR (`NOTAS/informe%FF%FE.dat` against
+  `notas/…`); the NFC/NFD half is pinned in `types.rs` with `\u{e9}`/`\u{301}`
+  escapes. Note for anyone writing another one: a non-UTF-8 name is NEVER
+  folded (`key_for` returns it raw, so Shift-JIS tail bytes survive), so a pair
+  differing only in the case of a non-UTF-8 leaf cannot exist.
+- **Suggested and NOT done, for whoever wants it:** `norte-testkit` has no
+  `corpus::spelling_twins()`, so the NFC/NFD and case-fold twin pairs are
+  hardcoded in `norte-compare::key` and would be hardcoded a second time by any
+  exhaustive `dest_rel` test. A shared fixture is its own change (it moves
+  every `hostile_names().len() == 47` assertion's neighbourhood), so task 4
+  used the plain corpus instead.
 
 ---
 
@@ -1177,8 +1246,16 @@ fn irreversible_steps_are_counted_separately_because_the_dialog_leads_with_them(
 concatenated strings (`"a" + "bc"` and `"ab" + "c"` must not collide). It is
 seeded with the plan's intention — both roots as wire bytes, mode,
 `on_unknown`, and the `CompareOptions` — then each step's conclusions (kind,
-`rel` bytes, size, criterion, confidence, reversal, reason) and each blocker.
-`id` is excluded, with a comment saying why.
+`rel` bytes, **`dest_rel` bytes**, size, criterion, confidence, reversal,
+reason) and each blocker. `id` is excluded, with a comment saying why.
+
+**`dest_rel` is in that list and is not optional** (task 4). It is the only
+thing distinguishing "overwrite the file that is there" from "create a second
+one beside it", so two plans that differ only in it write to different paths —
+and `plan_hash` is the token that authorises execution. Feed a presence tag,
+not just the bytes: a `Skip` may legally carry a ROOT `rel`, which encodes to
+zero bytes, so "absent" and "present and empty" must not collide even though a
+well-formed step cannot produce the ambiguity.
 
 `SyncCounts` lives in `norte-proto` (it is on the wire) and gains an `add`
 helper here or there — put it where the type is.

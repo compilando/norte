@@ -3808,7 +3808,7 @@
       "type": "object"
     },
     "SyncStep": {
-      "description": "UN paso de un plan de sincronización (0.40.0, ADR 0049): qué se va a hacer,\nsobre qué, por qué, y cómo se vuelve atrás.\n\n`criterion` y `confidence` viajan POR PASO y no por plan: es la obligación\nque ADR 0048 dejó pendiente, saldada. Un informe puede decir «lo sobrescribí\nporque no se pudo leer la fecha» en vez de «lo sobrescribí», y quien revise\nuna sincronización que salió mal ve qué rung autorizó cada escritura.\n\n```\nuse norte_proto::methods::{\n    CompareConfidence, CompareCriterion, RelPath, StepReversal, SyncStep, SyncStepKind,\n};\nlet s = SyncStep {\n    id: 1,\n    kind: SyncStepKind::Copy,\n    rel: RelPath::parse_wire(\"sub/informe%FF%FE.dat\").expect(\"rel\"),\n    size: Some(1234),\n    criterion: CompareCriterion::Presence,\n    confidence: CompareConfidence::Certain,\n    reversal: Some(StepReversal::Delete),\n    reason: None,\n};\nassert!(s.shape_is_consistent());\n// Lo ausente NO viaja: ni `null` ni clave.\nlet json = serde_json::to_value(&s).expect(\"json\");\nassert!(json.get(\"reason\").is_none());\n// Y el nombre no-UTF8 vuelve byte a byte (regla dura 1).\nlet back: SyncStep = serde_json::from_value(json).expect(\"json\");\nassert_eq!(back, s);\n```",
+      "description": "UN paso de un plan de sincronización (0.40.0, ADR 0049): qué se va a hacer,\nsobre qué, por qué, y cómo se vuelve atrás.\n\n`criterion` y `confidence` viajan POR PASO y no por plan: es la obligación\nque ADR 0048 dejó pendiente, saldada. Un informe puede decir «lo sobrescribí\nporque no se pudo leer la fecha» en vez de «lo sobrescribí», y quien revise\nuna sincronización que salió mal ve qué rung autorizó cada escritura.\n\n```\nuse norte_proto::methods::{\n    CompareConfidence, CompareCriterion, RelPath, StepReversal, SyncStep, SyncStepKind,\n};\nlet s = SyncStep {\n    id: 1,\n    kind: SyncStepKind::Copy,\n    rel: RelPath::parse_wire(\"sub/informe%FF%FE.dat\").expect(\"rel\"),\n    dest_rel: None,\n    size: Some(1234),\n    criterion: CompareCriterion::Presence,\n    confidence: CompareConfidence::Certain,\n    reversal: Some(StepReversal::Delete),\n    reason: None,\n};\nassert!(s.shape_is_consistent());\n// Lo ausente NO viaja: ni `null` ni clave.\nlet json = serde_json::to_value(&s).expect(\"json\");\nassert!(json.get(\"reason\").is_none() && json.get(\"dest_rel\").is_none());\n// Y el nombre no-UTF8 vuelve byte a byte (regla dura 1).\nlet back: SyncStep = serde_json::from_value(json).expect(\"json\");\nassert_eq!(back, s);\n```",
       "properties": {
         "confidence": {
           "$ref": "#/$defs/CompareConfidence",
@@ -3817,6 +3817,17 @@
         "criterion": {
           "$ref": "#/$defs/CompareCriterion",
           "description": "Qué rung de la cascada decidió la fila de la que sale este paso."
+        },
+        "dest_rel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RelPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Cómo se llama la entrada EN EL DESTINO, relativa a la raíz de destino,\ncuando sus bytes NO son los de `rel`.\n\n# La regla, normativa\nLa ruta del DESTINO sobre la que este paso cae, presente si y SOLO si\nsus bytes difieren de los de `rel` (regla dura 1: se comparan bytes,\njamás cadenas, y jamás después de plegar). `None` —el caso común, y por\neso la clave viaja AUSENTE— significa «en el destino se llama\nexactamente `rel`».\n\nQuien ejecuta el paso lee `source_root + rel` y escribe\n`dest_root + dest_rel.unwrap_or(rel)`.\n\nPresente NO afirma que ahí exista algo, y quien lo lea no debe deducirlo:\nhoy el core solo lo puebla desde una entrada del destino que la fila\ntraía, pero la regla es sobre la RUTA, no sobre lo que hay en ella.\nTampoco afirma qué clase de cosa hay: una ruta byte-idéntica puede ser\nhoy un symlink que apunta fuera del árbol, y eso solo lo puede resolver\nel ejecutor cuando abre.\n\n# Por qué hace falta\nLa comparación empareja por una clave PLEGADA —NFC siempre, mayúsculas\ncuando alguno de los dos lados no distingue caja—, así que una pareja\nlegítima puede tener dos nombres de bytes distintos: un `café` NFC del\norigen contra el `café` NFD del destino, un `README` contra el `readme`\nde un APFS. Sin este campo un [`SyncStepKind::Overwrite`] se escribiría\nbajo el nombre del ORIGEN, que sobre ext4 crea un SEGUNDO fichero al\nlado del que se quería sobrescribir; y su\n[`StepReversal::RestoreTrash`] prometería sacar de la papelera algo que\nnadie enterró. Ver <https://github.com/compilando/norte/issues/152>.\n\n# Por qué el destino NO se renombra\nDeletrear el destino como lo deletrea el origen convertiría cada\nsincronización entre macOS y Linux en un baile de renombrados —NFD y NFC\nson EL MISMO nombre para quien lo lee— y ese churn es justo lo que este\nárbol existe para no producir. Se escribe donde está."
         },
         "id": {
           "description": "Identificador monótono dentro de UN plan. El cursor del panel se ancla a\nél: un filtro esconde pasos, jamás los renumera. NO entra en el\n`plan_hash` — es presentación, no conclusión.",
@@ -3841,7 +3852,7 @@
         },
         "rel": {
           "$ref": "#/$defs/RelPath",
-          "description": "La ruta, RELATIVA a las dos raíces del plan, en BYTES (regla dura 1).\nNi un `String` ni un [`VPath`]: el mismo `rel` nombra la entrada en el\norigen y en el destino, que pueden ser providers distintos, así que no\ntiene scheme que llevar — ver [`RelPath`]."
+          "description": "La ruta, RELATIVA a las raíces del plan, en BYTES (regla dura 1). Ni un\n`String` ni un [`VPath`]: las dos raíces pueden ser de providers\ndistintos, así que no tiene scheme que llevar — ver [`RelPath`].\n\n# Respecto a CUÁL de las dos raíces (normativo)\nLa del lado del que el paso habla, que casi siempre es el ORIGEN:\n`dest_root + rel` nombra la misma entrada, salvo cuando\n[`SyncStep::dest_rel`] dice otra cosa —y ese campo existe justamente\nporque «casi siempre» no es «siempre»—.\n\nLas excepciones son los pasos que solo hablan del DESTINO, donde `rel`\nes relativa a `dest_root` y no hay ruta de origen que nombrar: un\n[`SyncStepKind::DeleteTree`], y el [`SyncStepKind::Skip`] de un listado\ndel destino que no se dejó leer. El paso no lleva un campo que lo\ndistinga —añadir un lado por dos formas que no escriben no lo valía— así\nque un panel que ancle todo `rel` al panel del origen pintará esas dos\nen el sitio equivocado."
         },
         "reversal": {
           "anyOf": [

@@ -33,6 +33,16 @@
     "rel": "rancio",
     "reversal": "irreversible"
   },
+  "overwrite_dest_spelt_differently": {
+    "confidence": "certain",
+    "criterion": "size",
+    "dest_rel": "notas/informe%FF%FE.dat",
+    "id": 11,
+    "kind": "overwrite",
+    "rel": "NOTAS/informe%FF%FE.dat",
+    "reversal": "restore_trash",
+    "size": 31
+  },
   "overwrite_irreversible": {
     "confidence": "probable",
     "criterion": "mtime",

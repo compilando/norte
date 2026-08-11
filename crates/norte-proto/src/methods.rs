@@ -3357,6 +3357,7 @@ pub enum SyncBlockerKind {
 ///     id: 1,
 ///     kind: SyncStepKind::Copy,
 ///     rel: RelPath::parse_wire("sub/informe%FF%FE.dat").expect("rel"),
+///     dest_rel: None,
 ///     size: Some(1234),
 ///     criterion: CompareCriterion::Presence,
 ///     confidence: CompareConfidence::Certain,
@@ -3366,7 +3367,7 @@ pub enum SyncBlockerKind {
 /// assert!(s.shape_is_consistent());
 /// // Lo ausente NO viaja: ni `null` ni clave.
 /// let json = serde_json::to_value(&s).expect("json");
-/// assert!(json.get("reason").is_none());
+/// assert!(json.get("reason").is_none() && json.get("dest_rel").is_none());
 /// // Y el nombre no-UTF8 vuelve byte a byte (regla dura 1).
 /// let back: SyncStep = serde_json::from_value(json).expect("json");
 /// assert_eq!(back, s);
@@ -3380,11 +3381,62 @@ pub struct SyncStep {
     pub id: u64,
     /// Qué hace el paso.
     pub kind: SyncStepKind,
-    /// La ruta, RELATIVA a las dos raíces del plan, en BYTES (regla dura 1).
-    /// Ni un `String` ni un [`VPath`]: el mismo `rel` nombra la entrada en el
-    /// origen y en el destino, que pueden ser providers distintos, así que no
-    /// tiene scheme que llevar — ver [`RelPath`].
+    /// La ruta, RELATIVA a las raíces del plan, en BYTES (regla dura 1). Ni un
+    /// `String` ni un [`VPath`]: las dos raíces pueden ser de providers
+    /// distintos, así que no tiene scheme que llevar — ver [`RelPath`].
+    ///
+    /// # Respecto a CUÁL de las dos raíces (normativo)
+    /// La del lado del que el paso habla, que casi siempre es el ORIGEN:
+    /// `dest_root + rel` nombra la misma entrada, salvo cuando
+    /// [`SyncStep::dest_rel`] dice otra cosa —y ese campo existe justamente
+    /// porque «casi siempre» no es «siempre»—.
+    ///
+    /// Las excepciones son los pasos que solo hablan del DESTINO, donde `rel`
+    /// es relativa a `dest_root` y no hay ruta de origen que nombrar: un
+    /// [`SyncStepKind::DeleteTree`], y el [`SyncStepKind::Skip`] de un listado
+    /// del destino que no se dejó leer. El paso no lleva un campo que lo
+    /// distinga —añadir un lado por dos formas que no escriben no lo valía— así
+    /// que un panel que ancle todo `rel` al panel del origen pintará esas dos
+    /// en el sitio equivocado.
     pub rel: RelPath,
+    /// Cómo se llama la entrada EN EL DESTINO, relativa a la raíz de destino,
+    /// cuando sus bytes NO son los de `rel`.
+    ///
+    /// # La regla, normativa
+    /// La ruta del DESTINO sobre la que este paso cae, presente si y SOLO si
+    /// sus bytes difieren de los de `rel` (regla dura 1: se comparan bytes,
+    /// jamás cadenas, y jamás después de plegar). `None` —el caso común, y por
+    /// eso la clave viaja AUSENTE— significa «en el destino se llama
+    /// exactamente `rel`».
+    ///
+    /// Quien ejecuta el paso lee `source_root + rel` y escribe
+    /// `dest_root + dest_rel.unwrap_or(rel)`.
+    ///
+    /// Presente NO afirma que ahí exista algo, y quien lo lea no debe deducirlo:
+    /// hoy el core solo lo puebla desde una entrada del destino que la fila
+    /// traía, pero la regla es sobre la RUTA, no sobre lo que hay en ella.
+    /// Tampoco afirma qué clase de cosa hay: una ruta byte-idéntica puede ser
+    /// hoy un symlink que apunta fuera del árbol, y eso solo lo puede resolver
+    /// el ejecutor cuando abre.
+    ///
+    /// # Por qué hace falta
+    /// La comparación empareja por una clave PLEGADA —NFC siempre, mayúsculas
+    /// cuando alguno de los dos lados no distingue caja—, así que una pareja
+    /// legítima puede tener dos nombres de bytes distintos: un `café` NFC del
+    /// origen contra el `café` NFD del destino, un `README` contra el `readme`
+    /// de un APFS. Sin este campo un [`SyncStepKind::Overwrite`] se escribiría
+    /// bajo el nombre del ORIGEN, que sobre ext4 crea un SEGUNDO fichero al
+    /// lado del que se quería sobrescribir; y su
+    /// [`StepReversal::RestoreTrash`] prometería sacar de la papelera algo que
+    /// nadie enterró. Ver <https://github.com/compilando/norte/issues/152>.
+    ///
+    /// # Por qué el destino NO se renombra
+    /// Deletrear el destino como lo deletrea el origen convertiría cada
+    /// sincronización entre macOS y Linux en un baile de renombrados —NFD y NFC
+    /// son EL MISMO nombre para quien lo lee— y ese churn es justo lo que este
+    /// árbol existe para no producir. Se escribe donde está.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest_rel: Option<RelPath>,
     /// Bytes que MUEVE este paso, cuando se saben; un provider que no da tamaño
     /// deja `None`.
     ///
@@ -3410,12 +3462,15 @@ pub struct SyncStep {
 }
 
 impl SyncStep {
-    /// ¿Concuerdan `kind`, `reversal` y `reason`?
+    /// ¿Concuerdan entre sí `kind`, `reversal`, `reason` y `dest_rel`?
     ///
-    /// DOS de las invariantes que el wire no sabe expresar, enunciadas UNA vez,
-    /// aquí: `reversal` es `None` si y solo si `kind` es
-    /// [`SyncStepKind::Skip`], y `reason` es `Some` para EXACTAMENTE un `Skip`
-    /// y un paso cuya reversa es [`StepReversal::Irreversible`].
+    /// TRES de las invariantes que el wire no sabe expresar, enunciadas UNA
+    /// vez, aquí: `reversal` es `None` si y solo si `kind` es
+    /// [`SyncStepKind::Skip`], `reason` es `Some` para EXACTAMENTE un `Skip`
+    /// y un paso cuya reversa es [`StepReversal::Irreversible`], y
+    /// [`SyncStep::dest_rel`] —que existe para nombrar la OTRA ortografía— no
+    /// puede ser la misma `rel`: ahí la clave sobra, y un consumidor que la vea
+    /// repetida está leyendo un paso que su productor no calculó como manda.
     ///
     /// Las otras dos del diseño no caben en un paso suelto y no se comprueban
     /// aquí: «`DeleteTree` solo bajo `Mirror`» necesita el modo, que no viaja en
@@ -3433,7 +3488,11 @@ impl SyncStep {
     /// [`SyncStepKind::Unknown`] y [`StepReversal::Unknown`] quedan EXENTOS: un
     /// paso de un daemon una versión por delante no es algo que este cliente
     /// pueda juzgar, y afirmar lo contrario le haría desconfiar de pasos
-    /// legítimos.
+    /// legítimos. La regla de `dest_rel` alcanza igualmente a un paso cuya
+    /// REVERSA no se conozca —no depende de ella—, pero no a uno cuya CLASE no
+    /// se conozca: ahí la exención es total, y se puede permitir serlo porque un
+    /// `dest_rel` repetido es redundante y no peligroso (las dos ramas de
+    /// `dest_rel.unwrap_or(rel)` dan la misma ruta).
     ///
     /// ```
     /// # use norte_proto::methods::{
@@ -3441,8 +3500,8 @@ impl SyncStep {
     /// #     SyncStepKind,
     /// # };
     /// # fn step(kind: SyncStepKind, reversal: Option<StepReversal>, reason: Option<SyncReason>) -> SyncStep {
-    /// #     SyncStep { id: 1, kind, rel: RelPath::parse_wire("a").expect("rel"), size: None,
-    /// #                criterion: CompareCriterion::Presence,
+    /// #     SyncStep { id: 1, kind, rel: RelPath::parse_wire("a").expect("rel"), dest_rel: None,
+    /// #                size: None, criterion: CompareCriterion::Presence,
     /// #                confidence: CompareConfidence::Certain, reversal, reason }
     /// # }
     /// assert!(step(SyncStepKind::Copy, Some(StepReversal::Delete), None).shape_is_consistent());
@@ -3451,11 +3510,24 @@ impl SyncStep {
     ///     step(SyncStepKind::Skip, None, Some(SyncReason::Unreadable)).shape_is_consistent()
     /// );
     /// assert!(!step(SyncStepKind::Skip, None, None).shape_is_consistent());
+    /// // `dest_rel` nombra la OTRA ortografía, así que repetir `rel` es ruido.
+    /// let mut s = step(SyncStepKind::Overwrite, Some(StepReversal::Delete), None);
+    /// s.dest_rel = Some(s.rel.clone());
+    /// assert!(!s.shape_is_consistent());
+    /// s.dest_rel = Some(RelPath::parse_wire("A").expect("rel"));
+    /// assert!(s.shape_is_consistent());
     /// ```
     #[must_use]
     pub fn shape_is_consistent(&self) -> bool {
         if self.kind == SyncStepKind::Unknown {
             return true;
+        }
+        // Se compara por BYTES —lo hace el `Eq` de [`Segment`]—, que es la
+        // misma comparación con la que quien produce el paso decidió poblarla:
+        // plegar aquí daría por buena justamente la pareja que el campo existe
+        // para distinguir.
+        if self.dest_rel.as_ref() == Some(&self.rel) {
+            return false;
         }
         let reversal_ok = if self.kind == SyncStepKind::Skip {
             self.reversal.is_none()

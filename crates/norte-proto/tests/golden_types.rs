@@ -2262,6 +2262,7 @@ fn check_methods_sync_notifs(fixtures: &BTreeMap<String, Value>) {
                 id: 1,
                 kind: SyncStepKind::Copy,
                 rel: rel_path("informe%FF%FE.dat"),
+                dest_rel: None,
                 size: Some(1234),
                 criterion: CompareCriterion::Presence,
                 confidence: CompareConfidence::Certain,
@@ -3177,6 +3178,7 @@ fn sync_step(
         id,
         kind,
         rel: rel_path(rel),
+        dest_rel: None,
         size: None,
         criterion,
         confidence,
@@ -3203,6 +3205,12 @@ fn sync_step(
 /// - `copy_hostile` lleva un `rel` no-UTF8 (`%FF%FE`): regla dura 1 en las dos
 ///   direcciones. El `rel` es RELATIVO a las dos raíces, así que no lleva
 ///   ninguna de ellas.
+/// - `overwrite_dest_spelt_differently` es la pareja que la clave de
+///   emparejamiento junta y los bytes separan: el paso lleva los DOS caminos,
+///   porque se lee del que el origen deletrea y se escribe sobre el que el
+///   destino tiene. Congela dos cosas — que `dest_rel` viaja SOLO cuando
+///   difiere (en las otras diez fixtures la clave no aparece) y que lo que se
+///   compara es la ruta ENTERA, no el último segmento.
 /// - `overwrite_unknown_confidence` es el default `on_unknown: copy`: se
 ///   escribe, y el paso CONSERVA `confidence: unknown` para que el informe
 ///   pueda decir que copió porque nadie pudo asegurar nada.
@@ -3214,6 +3222,7 @@ fn sync_step(
 #[test]
 fn golden_sync_step() {
     let mut cases = sync_step_cases_acting();
+    cases.extend(sync_step_cases_deleting());
     cases.extend(sync_step_cases_skipped());
 
     // Toda fixture congelada tiene que ser un paso LEGAL: uno que prometiera
@@ -3226,7 +3235,7 @@ fn golden_sync_step() {
     check_family("sync_step.json", &cases);
 }
 
-/// Los pasos que ACTÚAN: las cuatro clases con reversa, y las tres reversas.
+/// Los pasos que ESCRIBEN: crear, copiar y sobrescribir, con sus reversas.
 fn sync_step_cases_acting() -> Vec<(&'static str, norte_proto::methods::SyncStep)> {
     use norte_proto::methods::{
         CompareConfidence as Conf, CompareCriterion as Crit, StepReversal as Rev,
@@ -3305,6 +3314,53 @@ fn sync_step_cases_acting() -> Vec<(&'static str, norte_proto::methods::SyncStep
                 )
             },
         ),
+        (
+            // La pareja que la clave de emparejamiento junta y el wire tenía
+            // que poder nombrar: el origen deletrea el directorio `NOTAS` y el
+            // destino —que no distingue caja— lo tiene como `notas`. El paso
+            // lleva LOS DOS caminos; sin `dest_rel` el ejecutor escribiría bajo
+            // el del origen y crearía un segundo directorio al lado.
+            //
+            // La diferencia va en un ANCESTRO y no en el último segmento, y es
+            // deliberado por dos motivos. Uno: congela la regla que este campo
+            // implementa de verdad —se compara la ruta ENTERA, porque la clave
+            // pliega en cada nivel—. Dos: la hoja lleva el byte 0xFF, y un
+            // nombre que no es UTF-8 NO se pliega (`key_for` lo devuelve crudo,
+            // para no estropear los bytes de cola de Shift-JIS), así que una
+            // pareja que solo difiriera en la caja de una hoja no-UTF8 no
+            // existe: ningún walk la produce.
+            //
+            // La otra mitad del caso —NFC contra NFD— no se congela AQUÍ y
+            // también es deliberado: las dos formas son UTF-8 válido, así que
+            // el códec las deja literales y esta fixture llevaría dos cadenas
+            // que se pintan IGUAL. El fallo de una fixture así sería invisible
+            // en la revisión. Va en `types.rs`, con los bytes como escapes.
+            "overwrite_dest_spelt_differently",
+            SyncStep {
+                dest_rel: Some(rel_path("notas/informe%FF%FE.dat")),
+                size: Some(31),
+                ..sync_step(
+                    11,
+                    Kind::Overwrite,
+                    "NOTAS/informe%FF%FE.dat",
+                    Crit::Size,
+                    Conf::Certain,
+                    Some(Rev::RestoreTrash),
+                )
+            },
+        ),
+    ]
+}
+
+/// Los pasos que BORRAN, que son de `Mirror` y llevan la misma pareja de
+/// reversas: con papelera se saca de ella, sin papelera no se saca de ningún
+/// sitio y el plan lo dice antes de que nadie apruebe.
+fn sync_step_cases_deleting() -> Vec<(&'static str, norte_proto::methods::SyncStep)> {
+    use norte_proto::methods::{
+        CompareConfidence as Conf, CompareCriterion as Crit, StepReversal as Rev,
+        SyncReason as Why, SyncStep, SyncStepKind as Kind,
+    };
+    vec![
         (
             "delete_tree",
             sync_step(
