@@ -334,8 +334,13 @@ Expected: FAIL — nothing exists yet.
 - [ ] **Step 3: Implement `key.rs`**
 
 `Sides` is built from the two `Capabilities` (`CASE_SENSITIVE` on each).
-`key_for` normalises to NFC only when the bytes are valid UTF-8, then folds case
-only when `Sides` says to. `index_side` builds the per-directory map from key to
+`key_for` **folds case first and normalises to NFC after**, and only when the
+bytes are valid UTF-8. That order is not interchangeable: `J`+U+030C has no
+precomposed uppercase, so NFC leaves it alone, and its lowercase `j`+U+030C
+composes to U+01F0 `ǰ` — normalising first answers two keys for two names every
+case-insensitive volume calls one file. The fold is **case folding**, not
+`str::to_lowercase`: `norte-core::rename::plan::fold_delta` is the 22-code-point
+delta between the two, and skipping it is issue #129 all over again. `index_side` builds the per-directory map from key to
 entries and marks any key holding more than one entry as ambiguous, with the
 reason being whichever transformation caused the collapse (fold if the raw bytes
 differ only in case, normalisation otherwise).
@@ -769,6 +774,12 @@ Expected: FAIL.
 gates both roots, refuses self-comparison with `INVALID_PARAMS`, and pumps
 batches to the owning connection. `Backend::compare` covers embedded and remote,
 as `Backend::search` does.
+
+It must also refuse **`follow_symlinks: true`** with `INVALID_PARAMS`: the
+engine accepts that field and ignores it (C5's review), and accepting a request
+the engine will not honour is worse than not offering it. And the stream's only
+`Err` is `CompareError::Cancelled`, emitted once at the end — it means the task
+is `Cancelled`, not failed. Every other failure is a row.
 
 - [ ] **Step 4: Run the tests**
 

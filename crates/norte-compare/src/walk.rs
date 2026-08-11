@@ -1,9 +1,18 @@
 //! El recorrido: dos raíces entran, un flujo de [`CompareRow`] sale.
 //!
 //! Es **profundidad primero con pila explícita**, no recursión async: sin un
-//! future boxeado por nivel y sin pila reventada en un árbol hondo. La memoria
-//! viva son los DOS directorios que se están emparejando más la profundidad de
-//! la pila, y nada más.
+//! future boxeado por nivel y sin pila reventada en un árbol hondo.
+//!
+//! # El techo de memoria, dicho con precisión
+//!
+//! Es O(un directorio), no O(un árbol) — que es lo que importa y lo que
+//! [`COMPARE_MAX_DIR_ENTRIES`] acota— pero la constante NO es 1: dentro de
+//! `visit` conviven los dos listados, sus dos índices (un `BTreeMap` con un
+//! `Vec` por clave), los subdirectorios comunes y las filas ya producidas, que
+//! además llevan `Entry` CLONADOS y sobreviven al `visit` hasta que el
+//! consumidor las drena. Cuatro o cinco veces un listado, no una. La pila, en
+//! cambio, sí es despreciable: crece con los hermanos de cada nivel, y todos
+//! ellos existen de verdad en el árbol.
 //!
 //! # Por qué directorio contra directorio
 //!
@@ -17,11 +26,17 @@
 //!
 //! # Los errores son filas
 //!
-//! Un listado ilegible, un directorio desmesurado o una colisión de
-//! emparejamiento producen su fila y el walk SIGUE. Lo único que termina el
+//! Un listado ilegible, un directorio desmesurado, una colisión de
+//! emparejamiento o una lectura que se rompe a mitad de hash producen su fila y
+//! el walk SIGUE. Lo único que termina el
 //! flujo antes de tiempo es la cancelación (regla dura 3), y lo dice con un
 //! [`CompareError::Cancelled`] final para que quien lo consuma no tenga que
 //! adivinar si el árbol se acabó o se cortó.
+//!
+//! Una fila de error o de ambigüedad SOBRE UN DIRECTORIO se lleva por delante
+//! todo su subárbol, que queda sin examinar y sin filas. Es la decisión
+//! correcta —no se puede emparejar lo que no se ha podido listar— pero la fila
+//! no lo dice, así que quien la pinte tiene que decirlo por ella.
 //!
 //! # Orden de las filas
 //!
@@ -46,7 +61,8 @@ use norte_proto::{Entry, EntryKind, VPath};
 use norte_vfs::Provider;
 use tokio_util::sync::CancellationToken;
 
-use crate::cascade::{Decision, Prefetched, decide};
+use crate::cascade::{Decision, HashOutcome, Prefetched, decide};
+use crate::hash::{HashFailure, sha256_of};
 use crate::key::{PairName, SideIndex, Sides, index_side, key_for};
 use crate::{
     COMPARE_MAX_DIR_ENTRIES, CompareConfidence, CompareCriterion, CompareError, CompareOptions,
@@ -87,7 +103,8 @@ pub fn compare<'a>(
         left,
         right,
         opts,
-        sides: Sides::from_capabilities(left.capabilities(), right.capabilities()),
+        // Se rellena tras el PRIMER listado, no aquí: ver `Walk::sides`.
+        sides: None,
         cancel,
         stack: vec![Frame {
             left: synthetic_dir(left_root),
@@ -118,6 +135,37 @@ fn synthetic_dir(path: &VPath) -> Entry {
     }
 }
 
+/// Qué salió de mirar UNA pareja emparejada.
+///
+/// Son tres cosas distintas y no dos: una decisión que se publica, una lectura
+/// rota que es SU fila y no termina nada, y una cancelación que no publica fila
+/// ninguna y termina el flujo.
+enum PairOutcome {
+    /// La cascada decidió, con o sin el rung caro.
+    Decided(Decision),
+    /// El rung caro no pudo leer un lado. Trae el lado que falló, que es la
+    /// mitad útil de la fila de error.
+    ReadFailed(Side),
+    /// El token se disparó mientras se hasheaba.
+    Cancelled,
+}
+
+/// Lo mismo que [`HashFailure`], ya sabiendo de qué lado vino.
+enum PairFailure {
+    Read(Side),
+    Cancelled,
+}
+
+impl PairFailure {
+    fn of(failure: HashFailure, side: Side) -> Self {
+        match failure {
+            HashFailure::Read => Self::Read(side),
+            // La cancelación no tiene lado: no es de un fichero, es de la Task.
+            HashFailure::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
 /// Un par de directorios pendiente de emparejar, con su profundidad.
 struct Frame {
     left: Entry,
@@ -130,7 +178,9 @@ struct Walk<'a> {
     left: &'a dyn Provider,
     right: &'a dyn Provider,
     opts: CompareOptions,
-    sides: Sides,
+    /// Cómo empareja la PAREJA de lados. `None` hasta el primer listado: ver
+    /// [`Walk::sides`].
+    sides: Option<Sides>,
     cancel: CancellationToken,
     /// Pila explícita: profundidad primero sin recursión async.
     stack: Vec<Frame>,
@@ -199,10 +249,11 @@ impl Walk<'_> {
             return;
         };
 
-        let left_index = index_side(&lefts, self.sides);
-        let right_index = index_side(&rights, self.sides);
-        let left_collided = collided_keys(&left_index, self.sides);
-        let right_collided = collided_keys(&right_index, self.sides);
+        let sides = self.sides();
+        let left_index = index_side(&lefts, sides);
+        let right_index = index_side(&rights, sides);
+        let left_collided = collided_keys(&left_index, sides);
+        let right_collided = collided_keys(&right_index, sides);
 
         // Las colisiones: UNA fila por entrada implicada, jamás una fusión y
         // jamás una deduplicada (contrato normativo de `CompareVerdict::Ambiguous`).
@@ -217,6 +268,19 @@ impl Walk<'_> {
         let mut lefts_iter = left_index.unique().peekable();
         let mut rights_iter = right_index.unique().peekable();
         loop {
+            // Por PAREJA, y no solo por directorio: dos listados al tope caben
+            // 400 000 parejas, y con el rung caro apagado no hay un solo
+            // `await` en todo el merge-join, así que sin esto la cancelación
+            // esperaría a que terminase el directorio entero (regla dura 3).
+            //
+            // Ningún test puede verlo desde fuera —`step` ya tira `pending`
+            // entero al cancelar, así que la SALIDA es la misma con o sin este
+            // chequeo—: lo que cambia es cuánto tarda en llegar, y 400 000
+            // parejas de trabajo tirado. No es un invariante sin test, es un
+            // invariante de latencia.
+            if self.cancel.is_cancelled() {
+                return;
+            }
             let order = match (lefts_iter.peek(), rights_iter.peek()) {
                 (None, None) => break,
                 (Some(_), None) => Ordering::Less,
@@ -225,6 +289,9 @@ impl Walk<'_> {
             };
             match order {
                 Ordering::Less => {
+                    // `expect`: `peek` acaba de devolver `Some` sobre este
+                    // mismo iterador y nadie lo ha tocado en medio, así que
+                    // `next` no puede ser `None` (regla dura 6).
                     let (key, entry) = lefts_iter.next().expect("peek dijo que había");
                     self.only_on_one_side(
                         Some(entry.clone()),
@@ -245,15 +312,14 @@ impl Walk<'_> {
                 Ordering::Equal => {
                     let (_, left_entry) = lefts_iter.next().expect("peek dijo que había");
                     let (_, right_entry) = rights_iter.next().expect("peek dijo que había");
-                    let decision = self.verdict_for_pair(left_entry, right_entry).await;
-                    let id = self.next_id();
-                    let row =
-                        decision.into_row(id, Some(left_entry.clone()), Some(right_entry.clone()));
-                    self.pending.push_back(row);
-                    if left_entry.kind == EntryKind::Dir
-                        && right_entry.kind == EntryKind::Dir
-                        && self.descends_below(frame.depth)
-                    {
+                    // Cancelado a mitad del rung caro: no hay fila que publicar
+                    // —sería un veredicto provisional— y el paso del flujo se
+                    // encarga de terminar. Lo que quedaba apilado se tira: nada
+                    // se ha escrito.
+                    let Some(is_dir_pair) = self.pair_row(left_entry, right_entry).await else {
+                        return;
+                    };
+                    if is_dir_pair && self.descends_below(frame.depth) {
                         descend.push((left_entry.clone(), right_entry.clone()));
                     }
                 }
@@ -299,8 +365,48 @@ impl Walk<'_> {
         self.pending.push_back(decision.into_row(id, left, right));
     }
 
+    /// Apunta la fila de UNA pareja emparejada y dice si hay que bajar por
+    /// ella.
+    ///
+    /// `None` significa cancelado: ni fila ni descenso, y quien llama suelta
+    /// el directorio entero.
+    async fn pair_row(&mut self, left: &Entry, right: &Entry) -> Option<bool> {
+        match self.verdict_for_pair(left, right).await {
+            PairOutcome::Cancelled => None,
+            PairOutcome::Decided(decision) => {
+                let id = self.next_id();
+                self.pending.push_back(decision.into_row(
+                    id,
+                    Some(left.clone()),
+                    Some(right.clone()),
+                ));
+                Some(left.kind == EntryKind::Dir && right.kind == EntryKind::Dir)
+            }
+            // Una lectura rota cuesta SU fila y el walk sigue, igual que un
+            // listado ilegible. La fila lleva los dos lados: la pareja sí se
+            // emparejó, lo que falló fue verificarla. Y no hay descenso que
+            // plantearse: solo los ficheros llegan al rung de hash.
+            PairOutcome::ReadFailed(side) => {
+                let id = self.next_id();
+                self.pending.push_back(flagged(
+                    id,
+                    Some(left.clone()),
+                    Some(right.clone()),
+                    CompareVerdict::Error,
+                    // `Hash` y no `Presence`: el rung CORRIÓ y se murió. La
+                    // convención de `Presence` es para las filas donde no
+                    // corrió ninguno.
+                    CompareCriterion::Hash,
+                    CompareReason::ReadFailed,
+                    side,
+                ));
+                Some(false)
+            }
+        }
+    }
+
     /// La decisión de UNA pareja emparejada, con lo que exige I/O ya averiguado.
-    async fn verdict_for_pair(&self, left: &Entry, right: &Entry) -> Decision {
+    async fn verdict_for_pair(&self, left: &Entry, right: &Entry) -> PairOutcome {
         // `read_link` SOLO cuando los dos lados son enlaces: si uno no lo es,
         // el rung de kind ya decidió y leer el destino del otro es una llamada
         // al provider a cambio de nada.
@@ -316,19 +422,68 @@ impl Walk<'_> {
         let facts = Prefetched::links(left_target.as_deref(), right_target.as_deref());
         let decision = decide(left, right, &self.opts, &facts);
 
-        // ---- costura de C5: el rung de hash ----
-        // `decision.needs_hash == true` significa exactamente esto: los rungs
-        // baratos dieron la pareja por IGUAL y el llamante pidió hash, así que
-        // la decisión NO es final. C5 lee los dos ficheros aquí (chequeando el
-        // token por chunk, no por fichero) y vuelve a llamar a `decide` con
-        // `facts.with_hash(...)`; una lectura que falle es su fila de
-        // `CompareVerdict::Error` con `CompareReason::ReadFailed` y el lado que
-        // falló. En C4 ninguna opción enciende el rung.
+        // `needs_hash == true` significa exactamente esto: los rungs baratos
+        // dieron la pareja por IGUAL y el llamante pidió hash, así que la
+        // decisión NO es final. Publicarla aquí sería un veredicto
+        // provisional, y en esta spec ninguna fila se corrige después.
+        if !decision.needs_hash {
+            return PairOutcome::Decided(decision);
+        }
+        let outcome = match self.hash_pair(left, right).await {
+            Ok(outcome) => outcome,
+            Err(PairFailure::Cancelled) => return PairOutcome::Cancelled,
+            Err(PairFailure::Read(side)) => return PairOutcome::ReadFailed(side),
+        };
+        let decided = decide(left, right, &self.opts, &facts.with_hash(outcome));
         debug_assert!(
-            !decision.needs_hash,
-            "el rung de hash está pedido y nadie lo ha enchufado todavía (C5)"
+            !decided.needs_hash,
+            "el rung de hash contestó y la cascada lo volvió a pedir"
         );
-        decision
+        PairOutcome::Decided(decided)
+    }
+
+    /// El rung caro sobre UNA pareja: los dos sha256, y qué dicen.
+    ///
+    /// Los lados van en orden y no en paralelo. Leer los dos a la vez dobla el
+    /// ancho de banda y la memoria viva para adelantar como mucho la mitad del
+    /// tiempo, y sobre todo hace que un fallo del primero llegue con el segundo
+    /// fichero ya medio leído. Si la izquierda no se puede leer, la derecha no
+    /// se abre: la fila ya es de error y leerla entera no cambiaría ni una
+    /// letra de ella.
+    async fn hash_pair(&self, left: &Entry, right: &Entry) -> Result<HashOutcome, PairFailure> {
+        let left_digest = sha256_of(self.left, &left.path, &self.cancel)
+            .await
+            .map_err(|failure| PairFailure::of(failure, Side::Left))?;
+        let right_digest = sha256_of(self.right, &right.path, &self.cancel)
+            .await
+            .map_err(|failure| PairFailure::of(failure, Side::Right))?;
+        Ok(if left_digest == right_digest {
+            HashOutcome::Equal
+        } else {
+            HashOutcome::Differ
+        })
+    }
+
+    /// Cómo empareja la pareja de lados, preguntado DESPUÉS del primer listado
+    /// y recordado.
+    ///
+    /// No se puede preguntar en [`compare`], que es síncrona: las
+    /// `Capabilities` de un provider local son EXACTAS solo tras su primera
+    /// operación async —el sondeo corre ahí—, y antes son el default del OS,
+    /// o sea un `cfg!(target_os)`. Emparejar con eso significa no plegar caja
+    /// contra un exFAT montado en Linux (y perder sus colisiones) o plegarla
+    /// contra un APFS sensible a caja (y declarar ambiguo lo que no lo es).
+    /// Aquí ya ha corrido un `list` en los dos lados, así que lo que se lee es
+    /// lo sondeado.
+    ///
+    /// Sigue siendo UNA respuesta para toda la comparación, porque
+    /// `Provider::capabilities` no toma path: dos mounts distintos servidos por
+    /// un mismo provider comparten veredicto
+    /// (<https://github.com/compilando/norte/issues/153>).
+    fn sides(&mut self) -> Sides {
+        *self.sides.get_or_insert_with(|| {
+            Sides::from_capabilities(self.left.capabilities(), self.right.capabilities())
+        })
     }
 
     /// ¿Se puede bajar un nivel más desde `depth`?
@@ -356,6 +511,7 @@ impl Walk<'_> {
             left,
             right,
             CompareVerdict::Ambiguous,
+            CompareCriterion::Presence,
             reason,
             side,
         ));
@@ -374,6 +530,7 @@ impl Walk<'_> {
             left,
             right,
             CompareVerdict::Error,
+            CompareCriterion::Presence,
             reason,
             side,
         ));
@@ -381,14 +538,19 @@ impl Walk<'_> {
 }
 
 /// Las dos filas que la cascada no produce: `Ambiguous` y `Error`. Las dos
-/// llevan motivo y lado obligatorios, y ningún rung las decidió — de ahí
-/// `Presence`/`Unknown`, que es la convención del wire para «aquí no informa el
-/// criterio».
+/// llevan motivo y lado obligatorios.
+///
+/// El `criterion` lo pone el llamante porque hay dos casos y no uno: la fila de
+/// una lectura rota a mitad de hash dice `Hash` —ese rung CORRIÓ y se murió—, y
+/// las demás dicen `Presence`, que es la convención del wire para «aquí no
+/// informa ningún criterio». La confianza es `Unknown` en las dos: nada quedó
+/// comparado.
 fn flagged(
     id: u64,
     left: Option<Entry>,
     right: Option<Entry>,
     verdict: CompareVerdict,
+    criterion: CompareCriterion,
     reason: CompareReason,
     side: Side,
 ) -> CompareRow {
@@ -397,7 +559,7 @@ fn flagged(
         left,
         right,
         verdict,
-        criterion: CompareCriterion::Presence,
+        criterion,
         confidence: CompareConfidence::Unknown,
         newer: None,
         reason: Some(reason),
@@ -552,13 +714,36 @@ mod tests {
         (left, right)
     }
 
+    /// El `VPath` de `path` dentro de un [`MemProvider`].
+    fn at(path: &str) -> VPath {
+        let mut out = MemProvider::root();
+        for seg in segments(path) {
+            out = out.join(seg);
+        }
+        out
+    }
+
     /// El `list` de `dir` falla con E/S; el resto del árbol se lista normal.
     fn deny_list(mem: &MemProvider, dir: &str) {
-        let mut at = MemProvider::root();
-        for seg in segments(dir) {
-            at = at.join(seg);
-        }
-        mem.faults().fail_list_at(&at);
+        mem.faults().fail_list_at(&at(dir));
+    }
+
+    /// Dos árboles de UN fichero con el mismo nombre y contenidos distintos.
+    ///
+    /// Sembrar los dos con la misma secuencia de mutaciones les da la MISMA
+    /// fecha (el mtime de `MemProvider` es un reloj lógico), así que con
+    /// contenidos del mismo tamaño los rungs baratos no pueden distinguirlos:
+    /// es exactamente la pareja que el rung de hash existe para cazar.
+    async fn pair_with_content(
+        name: &str,
+        left: &[u8],
+        right: &[u8],
+    ) -> (MemProvider, MemProvider) {
+        let l = MemProvider::new();
+        let r = MemProvider::new();
+        seed(&l, name, left).await;
+        seed(&r, name, right).await;
+        (l, r)
     }
 
     // ---------- utillería de filas ----------
@@ -777,6 +962,46 @@ mod tests {
         assert!(!rows.iter().any(|row| named(row, b"c.txt")), "{rows:#?}");
     }
 
+    /// `max_depth(0)` empareja SOLO la raíz: sus hijos directos salen como
+    /// filas y ningún directorio se abre.
+    ///
+    /// Es el extremo del contrato de `max_depth`, que la rustdoc podía leerse
+    /// de dos maneras y ahora dice de una.
+    #[tokio::test]
+    async fn max_depth_cero_empareja_solo_la_raiz() {
+        let (l, r) = twin_trees(&["a.txt", "one/b.txt"]).await;
+        let rows = collect(compare_with(&l, &r, CompareOptions::cheap().max_depth(0))).await;
+        assert!(rows.iter().any(|row| named(row, b"a.txt")), "{rows:#?}");
+        assert!(rows.iter().any(|row| named(row, b"one")), "{rows:#?}");
+        assert!(!rows.iter().any(|row| named(row, b"b.txt")), "{rows:#?}");
+    }
+
+    /// `follow_symlinks` se acepta y NO hace nada.
+    ///
+    /// Una opción que se acepta y se ignora es peor que una que no existe: el
+    /// llamante cree haber pedido algo. Mientras siga en la struct —y en el
+    /// wire—, esto fija que no cambia ni una fila, para que quien la implemente
+    /// algún día vea este test caerse.
+    #[tokio::test]
+    async fn follow_symlinks_se_acepta_y_no_hace_nada() {
+        let (l, r) = twin_trees(&["a.txt", "sub/b.txt"]).await;
+        l.symlink(&at("enlace"), b"../fuera", norte_vfs::SymlinkKind::File)
+            .await
+            .expect("symlink");
+
+        let sin = collect(compare_default(&l, &r)).await;
+        let con = collect(compare_with(
+            &l,
+            &r,
+            CompareOptions {
+                follow_symlinks: true,
+                ..CompareOptions::cheap()
+            },
+        ))
+        .await;
+        assert_eq!(sin, con);
+    }
+
     // ---------- lo que el plan no fija ----------
 
     /// El walk LEE los destinos de los enlaces y se los pasa a la cascada.
@@ -991,6 +1216,157 @@ mod tests {
             1,
             "{rows:#?}"
         );
+    }
+
+    // ---------- el rung de hash ----------
+
+    /// The point of the rung: same size, same mtime, different bytes. Every
+    /// cheap criterion says `Same`; only the hash tells the truth. This is the
+    /// case a user turns hashing on FOR.
+    #[tokio::test]
+    async fn same_size_same_mtime_different_bytes_is_caught_only_by_hash() {
+        let (l, r) = pair_with_content("x.bin", b"aaaa", b"bbbb").await;
+
+        let cheap = collect(compare_default(&l, &r)).await;
+        assert_eq!(cheap.len(), 1, "{cheap:#?}");
+        assert_eq!(cheap[0].verdict, CompareVerdict::Same);
+        assert_eq!(cheap[0].confidence, CompareConfidence::Probable);
+
+        let hashed = collect(compare_with(&l, &r, CompareOptions::cheap().with_hash())).await;
+        assert_eq!(hashed.len(), 1, "{hashed:#?}");
+        assert_eq!(hashed[0].verdict, CompareVerdict::Different);
+        assert_eq!(hashed[0].criterion, CompareCriterion::Hash);
+        assert_eq!(hashed[0].confidence, CompareConfidence::Certain);
+    }
+
+    /// With hash off, comparison reads no content at all. A user who did not
+    /// ask to hash a terabyte over SFTP must not be made to.
+    #[tokio::test]
+    async fn without_the_hash_rung_no_content_is_read() {
+        let (l, r) = twin_trees(&["a.txt", "b.txt"]).await;
+        let rows = collect(compare_default(&l, &r)).await;
+        assert_eq!(rows.len(), 2, "{rows:#?}");
+        assert_eq!(l.faults().read_calls(), 0);
+        assert_eq!(r.faults().read_calls(), 0);
+    }
+
+    /// The hash only reaches the pairs the cheap rungs called equal. Hashing a
+    /// pair already known to differ is pure waste.
+    #[tokio::test]
+    async fn the_hash_only_runs_on_pairs_the_cheap_rungs_called_equal() {
+        let l = MemProvider::new();
+        let r = MemProvider::new();
+        // Misma secuencia de mutaciones en los dos lados: mismas fechas.
+        seed(&l, "igual.bin", b"aaaa").await;
+        seed(&r, "igual.bin", b"aaaa").await;
+        seed(&l, "tamano.bin", b"aa").await;
+        seed(&r, "tamano.bin", b"aaaaaaaaaa").await;
+
+        let rows = collect(compare_with(&l, &r, CompareOptions::cheap().with_hash())).await;
+        assert_eq!(rows.len(), 2, "{rows:#?}");
+        assert_eq!(
+            l.faults().read_calls(),
+            1,
+            "only the equal-looking pair should be read: {rows:#?}"
+        );
+        assert_eq!(r.faults().read_calls(), 1, "{rows:#?}");
+    }
+
+    /// A read that fails mid-hash costs its row, not the walk — and says which
+    /// side failed.
+    ///
+    /// El criterio es `Hash` y no `Presence`: el rung CORRIÓ y se murió. La
+    /// convención de `Presence` es para las filas donde no corrió ninguno.
+    #[tokio::test]
+    async fn a_read_that_fails_mid_hash_is_an_error_row() {
+        let (l, r) = pair_with_content("x.bin", b"aaaa", b"aaaa").await;
+        l.faults().fail_read_at(&at("x.bin"), 2);
+        let rows = collect(compare_with(&l, &r, CompareOptions::cheap().with_hash())).await;
+        assert_eq!(rows.len(), 1, "{rows:#?}");
+        assert_eq!(rows[0].verdict, CompareVerdict::Error);
+        assert_eq!(rows[0].reason, Some(CompareReason::ReadFailed));
+        assert_eq!(rows[0].side, Some(Side::Left));
+        assert_eq!(rows[0].criterion, CompareCriterion::Hash);
+        assert!(
+            rows[0].left.is_some() && rows[0].right.is_some(),
+            "la pareja se emparejó: la fila lleva los dos lados"
+        );
+        assert!(rows[0].reason_is_consistent());
+    }
+
+    /// Un lado que no se puede leer no hace leer el otro: la fila ya es de
+    /// error, y leer el segundo fichero entero no cambiaría ni una letra de
+    /// ella. Sobre 40 GB eso es media hora regalada.
+    #[tokio::test]
+    async fn una_lectura_rota_no_arrastra_al_otro_lado() {
+        let (l, r) = pair_with_content("x.bin", b"aaaa", b"aaaa").await;
+        l.faults().fail_read_at(&at("x.bin"), 2);
+        collect(compare_with(&l, &r, CompareOptions::cheap().with_hash())).await;
+        assert_eq!(l.faults().read_calls(), 1);
+        assert_eq!(r.faults().read_calls(), 0);
+    }
+
+    /// El walk SIGUE tras una lectura rota, igual que sigue tras un listado
+    /// ilegible: una comparación de tres horas no se muere en la hoja 40 000.
+    #[tokio::test]
+    async fn el_walk_sigue_despues_de_una_lectura_rota() {
+        let l = MemProvider::new();
+        let r = MemProvider::new();
+        seed(&l, "a.bin", b"aaaa").await;
+        seed(&r, "a.bin", b"aaaa").await;
+        seed(&l, "zz.bin", b"zzzz").await;
+        seed(&r, "zz.bin", b"zzzz").await;
+        l.faults().fail_read_at(&at("a.bin"), 2);
+
+        let rows = collect(compare_with(&l, &r, CompareOptions::cheap().with_hash())).await;
+        assert_eq!(rows.len(), 2, "{rows:#?}");
+        assert_eq!(rows[0].verdict, CompareVerdict::Error, "{rows:#?}");
+        let zz = rows
+            .iter()
+            .find(|row| named(row, b"zz.bin"))
+            .expect("la hoja de después de la lectura rota");
+        assert_eq!(zz.verdict, CompareVerdict::Same);
+        assert_eq!(zz.criterion, CompareCriterion::Hash);
+        assert_eq!(zz.confidence, CompareConfidence::Certain);
+    }
+
+    /// Con el rung caro encendido la comparación sigue siendo SIMÉTRICA: el
+    /// lado que falla al leer cambia de sitio, y nada más.
+    #[tokio::test]
+    async fn el_rung_de_hash_tambien_es_simetrico() {
+        let (l, r) = pair_with_content("x.bin", b"aaaa", b"bbbb").await;
+        let opts = CompareOptions::cheap().with_hash();
+        let ida = collect(compare_with(&l, &r, opts)).await;
+        let vuelta = collect(compare_with(&r, &l, opts)).await;
+        assert_eq!(mirror(&ida), vuelta);
+
+        l.faults().fail_read_at(&at("x.bin"), 2);
+        let ida = collect(compare_with(&l, &r, opts)).await;
+        let vuelta = collect(compare_with(&r, &l, opts)).await;
+        assert_eq!(ida[0].side, Some(Side::Left));
+        assert_eq!(vuelta[0].side, Some(Side::Right));
+        assert_eq!(mirror(&ida), vuelta);
+    }
+
+    /// Cancelar mientras el rung caro lee no publica una fila provisional: el
+    /// flujo termina en [`CompareError::Cancelled`] y ya está.
+    #[tokio::test]
+    async fn cancelar_durante_el_hash_no_publica_la_pareja() {
+        let (l, r) = pair_with_content("x.bin", b"aaaa", b"aaaa").await;
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let items: Vec<Result<CompareRow, CompareError>> = compare(
+            &l,
+            &MemProvider::root(),
+            &r,
+            &MemProvider::root(),
+            CompareOptions::cheap().with_hash(),
+            cancel,
+        )
+        .collect()
+        .await;
+        assert_eq!(items, vec![Err(CompareError::Cancelled)]);
+        assert_eq!(l.faults().read_calls(), 0, "ni se abrió el fichero");
     }
 
     // ---------- el provider que de verdad no puede contestar ----------

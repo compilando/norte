@@ -14,6 +14,9 @@ authors.workspace = true
 futures.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
+# El rung caro: sha256 en streaming. YA en el workspace (norte-core, norte-index,
+# norte-plugin-host), así que la regla dura 8 no pide justificación.
+sha2.workspace = true
 # Errores tipados de librería (regla dura 6).
 thiserror.workspace = true
 # `CancellationToken`: el MISMO tipo que el scheduler de norte-core arma para

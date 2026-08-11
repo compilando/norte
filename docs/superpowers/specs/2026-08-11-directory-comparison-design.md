@@ -111,14 +111,23 @@ dying by OOM.
 
 ### Pairing
 
-The key is **the bytes of the name**, under two transformations:
+The key is **the bytes of the name**, under two transformations, **in this
+order**:
 
-1. **NFC**, when the bytes are valid UTF-8. macOS hands out NFD; comparing in
-   NFC while preserving the original bytes is the repo's standing rule.
-   Non-UTF-8 bytes pass through raw.
-2. **Case folding**, when *either* side does not declare `CASE_SENSITIVE`. A
+1. **Case folding**, when *either* side does not declare `CASE_SENSITIVE`. A
    case-insensitive side cannot hold both spellings, so folding is what
-   pairing against it means.
+   pairing against it means. Case FOLDING, not `str::to_lowercase` — the two
+   diverge on 22 code points (final sigma, `U+00B5`, `U+017F`, the Greek
+   symbol variants, the historic Cyrillic letterforms, `U+0345`, `U+FB05`),
+   which is issue #129 and `fold_delta`'s reason to exist.
+2. **NFC**, when the bytes are valid UTF-8. macOS hands out NFD; comparing in
+   NFC while preserving the original bytes is the repo's standing rule.
+   Non-UTF-8 bytes pass through raw — and are never folded either, because a
+   DBCS trail byte lands where `A`–`Z` live.
+
+The order is load-bearing: folding can COMPOSE what normalising left
+decomposed (`J`+U+030C lowercases to `j`+U+030C, whose NFC is `ǰ`), so NFC has
+to come second.
 
 Each side's original bytes travel in the row. The key is for pairing only —
 never for display, never for operating.

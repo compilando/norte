@@ -21,6 +21,9 @@
 //!   veredicto, el rung que lo decidió y lo que ese rung vale. Pura y
 //!   síncrona: lo que exige I/O (destino de un symlink, sha256) entra ya
 //!   averiguado.
+//! - `hash` (privado) — el rung caro: el sha256 en streaming de un fichero.
+//!   No se publica porque el motor no ofrece «hashea esto», ofrece
+//!   [`CompareOptions::with_hash`].
 //! - [`walk`] — el recorrido: dos raíces entran y sale el flujo de filas.
 //!   Profundidad primero con pila explícita, directorio contra directorio,
 //!   con los errores convertidos en filas y la cancelación como único final
@@ -34,6 +37,7 @@
 #![warn(missing_docs)]
 
 pub mod cascade;
+mod hash;
 pub mod key;
 pub mod walk;
 
@@ -85,8 +89,12 @@ pub enum CompareError {
 pub struct CompareOptions {
     /// Qué rungs corren. El caro (`hash`) es opt-in.
     pub criteria: CompareCriteria,
-    /// Profundidad máxima del descenso, contando la raíz como 0. `None` = sin
+    /// Profundidad máxima del DESCENSO, contando la raíz como 0. `None` = sin
     /// límite.
+    ///
+    /// Es la profundidad del directorio que se empareja, no la de las filas:
+    /// con `Some(0)` se empareja solo la raíz, lo que emite las filas de sus
+    /// hijos directos y no baja a ninguno.
     pub max_depth: Option<u32>,
     /// Tolerancia del rung de mtime, en milisegundos. Default 2000 (la regla
     /// FAT, la granularidad real más ancha que un filesystem de los que este
@@ -99,6 +107,12 @@ pub struct CompareOptions {
     pub mtime_tolerance_ms: u32,
     /// Seguir symlinks. Default `false`, y la spec lo deja fuera: los destinos
     /// se comparan COMO BYTES, con lo que no hace falta detectar ciclos.
+    ///
+    /// **Se acepta y se IGNORA**: ponerlo a `true` no cambia ni una fila, y no
+    /// hay nada en el motor que lo lea. Está aquí porque el campo existe en el
+    /// wire; quien atienda `fs.compare` debe rechazar `true` con
+    /// `INVALID_PARAMS` en vez de aceptar en silencio una petición que no va a
+    /// cumplir.
     pub follow_symlinks: bool,
 }
 
@@ -145,6 +159,28 @@ impl CompareOptions {
     pub fn max_depth(self, depth: u32) -> Self {
         Self {
             max_depth: Some(depth),
+            ..self
+        }
+    }
+
+    /// Enciende el rung caro: sha256 en streaming de las parejas que los rungs
+    /// baratos dieron por IGUALES.
+    ///
+    /// Es lo único de esta struct que LEE contenido, y por eso es explícito y
+    /// no un default: nadie hashea un terabyte por SFTP sin haberlo pedido.
+    ///
+    /// ```
+    /// use norte_compare::CompareOptions;
+    /// assert!(CompareOptions::cheap().with_hash().criteria.hash);
+    /// assert!(!CompareOptions::cheap().criteria.hash, "sigue siendo opt-in");
+    /// ```
+    #[must_use]
+    pub fn with_hash(self) -> Self {
+        Self {
+            criteria: CompareCriteria {
+                hash: true,
+                ..self.criteria
+            },
             ..self
         }
     }
