@@ -1,0 +1,44 @@
+[package]
+name = "norte-sync"
+description = "One-way synchronisation planner for norte: comparison rows in, plan steps out"
+license = "AGPL-3.0-only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# `Stream` + `StreamExt`: el planificador CONSUME el flujo de filas de
+# norte-compare y PRODUCE un flujo de pasos. Ya es dependencia de
+# norte-compare y de norte-vfs.
+futures.workspace = true
+# El flujo de entrada y su `CompareError`. Es la razón de ser de este crate.
+norte-compare.workspace = true
+# El vocabulario del plan (`SyncStep`, `RelPath`, `SyncBlocker`…) vive en el
+# wire: aquí NO se define ni un tipo de protocolo.
+norte-proto.workspace = true
+# Errores tipados de librería (regla dura 6).
+thiserror.workspace = true
+# `CancellationToken`: el MISMO tipo que el scheduler de norte-core arma para
+# cada Task (regla dura 3) y el que norte-compare ya usa.
+tokio-util.workspace = true
+
+[dev-dependencies]
+# Sembrar el `MemProvider` del test de extremo a extremo (compare → plan): el
+# contenido de un fichero viaja como `Bytes`. Ya es dependencia de doce crates.
+bytes.workspace = true
+# El corpus hostil canónico: los 47 nombres contra los que se comprueba que
+# derivar un `rel` no pierde un byte (regla dura 1). Y el `MemProvider` del
+# test que hace pasar filas de VERDAD por el transductor: las 17 pruebas de
+# mesa construyen sus filas a mano, y el contrato «toda ruta cuelga de su raíz»
+# cruza dos crates, así que ninguna de ellas lo toca.
+norte-testkit.workspace = true
+# El trait `Provider` (y su `ByteSink`), para poder sembrar ese árbol. En
+# tiempo de ejecución este crate NO habla con ningún provider — esa es su razón
+# de ser — así que es dev-dependency y no dependencia.
+norte-vfs.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

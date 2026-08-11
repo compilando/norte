@@ -6491,6 +6491,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "norte-sync"
+version = "0.3.0-alpha.2"
+dependencies = [
+ "bytes",
+ "futures",
+ "norte-compare",
+ "norte-proto",
+ "norte-testkit",
+ "norte-vfs",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "norte-testkit"
 version = "0.3.0-alpha.2"
 dependencies = [
