@@ -28,6 +28,9 @@ tokio-util.workspace = true
 unicode-normalization.workspace = true
 
 [dev-dependencies]
+# El provider MENTIROSO del test de frontera: implementa `Provider`, que es un
+# trait `#[async_trait]`. Solo en tests — el motor no lo necesita.
+async-trait.workspace = true
 bytes.workspace = true
 norte-testkit.workspace = true
 # El test que le exige `Unknown` a un provider que de VERDAD no puede

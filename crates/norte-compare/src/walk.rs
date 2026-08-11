@@ -609,12 +609,56 @@ async fn list_all(
         // listado emparejado produciría `OnlyLeft` de entradas que sí estaban:
         // vale como ilegible entero.
         let entry = item.map_err(|_| ListFailure::Reason(CompareReason::Unreadable))?;
+        // FRONTERA DURA (defensa en profundidad, security T4 — el mismo
+        // criterio que `norte-core::search::run_walk`): NO se confía en que
+        // `list` devuelva solo hijos DIRECTOS de `dir`. Un provider con un bug
+        // —o de un plugin de terceros— que liste un path de fuera haría que la
+        // comparación lo emparejara, lo nombrara en una fila y, con el rung de
+        // hash, LEYERA su contenido; y el gate del daemon solo comprueba las
+        // dos RAÍCES, así que un path colado se saltaría el scope entero.
+        //
+        // El listado entero vale como ilegible, no se salta la entrada: la
+        // misma razón que el error a mitad de listado de arriba — un listado
+        // al que le falta una entrada produce `OnlyLeft` del lado contrario,
+        // o sea una respuesta EQUIVOCADA en vez de una que se declara.
+        //
+        // Sin traza: este crate no depende de `tracing` (es una función pura
+        // de dos providers) y no va a hacerlo por un aviso. La señal es la
+        // fila de error, que sí llega al usuario.
+        if !is_direct_child(dir, &entry.path) {
+            return Err(ListFailure::Reason(CompareReason::Unreadable));
+        }
         if out.len() >= COMPARE_MAX_DIR_ENTRIES {
             return Err(ListFailure::Reason(CompareReason::DirTooLarge));
         }
         out.push(entry);
     }
     Ok(out)
+}
+
+/// `true` si `path` es hijo DIRECTO de `dir`: mismo scheme y misma authority,
+/// y sus segmentos son los de `dir` más exactamente uno.
+///
+/// Byte-exacto (regla dura 1): compara segmentos crudos, jamás la forma wire
+/// —que confundiría `a` con `ab`— ni un string.
+///
+/// Es más estricto que «cae bajo `dir`» a propósito: lo que un `list` puede
+/// devolver legítimamente son sus hijos, y un nieto en la lista ya es un
+/// provider que no está contestando a la pregunta que se le hizo.
+fn is_direct_child(dir: &VPath, path: &VPath) -> bool {
+    if dir.scheme() != path.scheme() || dir.authority() != path.authority() {
+        return false;
+    }
+    let mut d = dir.segments();
+    let mut p = path.segments();
+    loop {
+        match (d.next(), p.next()) {
+            // `dir` se agotó: queda exactamente un segmento por consumir.
+            (None, Some(_)) => return p.next().is_none(),
+            (Some(ds), Some(ps)) if ds == ps => {}
+            _ => return false,
+        }
+    }
 }
 
 /// Las claves COLISIONADAS de un lado, con el motivo de su colisión.
@@ -873,6 +917,120 @@ mod tests {
             rows.iter().any(|row| named(row, b"y.txt")),
             "the walk stopped at the error"
         );
+    }
+
+    /// Un provider que lista un path de FUERA del directorio no consigue que
+    /// la comparación lo empareje, lo nombre en una fila ni —con el rung de
+    /// hash— lo lea: el listado entero vale como ilegible.
+    ///
+    /// Ningún provider del árbol puede hacer esto hoy (todos construyen el
+    /// hijo con `dir.join(Segment)`, y `Segment` rechaza `/`, `.` y `..`), y
+    /// justo por eso hace falta el test: la frontera del gate de `fs.compare`
+    /// son las dos RAÍCES, así que un path colado por un provider de plugin se
+    /// saltaría el scope entero. Es defensa en profundidad, y sin test es una
+    /// intención.
+    #[tokio::test]
+    async fn una_entrada_fuera_del_directorio_invalida_el_listado() {
+        let honest = tree(&["dentro.txt"]).await;
+        let liar = LiarProvider {
+            inner: tree(&["dentro.txt"]).await,
+            at: MemProvider::root(),
+            escape: Entry {
+                // NIETO de la raíz, no hijo: `mem:///secreto` sería una
+                // entrada legítima de `mem:///` y no probaría nada.
+                path: at("fuera/secreto"),
+                kind: EntryKind::File,
+                size: Some(1),
+                mtime_ms: Some(0),
+                attrs: BTreeMap::new(),
+            },
+        };
+        let rows = collect(compare(
+            &liar,
+            &MemProvider::root(),
+            &honest,
+            &MemProvider::root(),
+            CompareOptions::cheap(),
+            CancellationToken::new(),
+        ))
+        .await;
+        assert!(
+            rows.iter().all(|row| row.verdict == CompareVerdict::Error
+                && row.reason == Some(CompareReason::Unreadable)),
+            "un listado que se sale de su directorio no se empareja: {rows:#?}"
+        );
+        assert!(
+            !rows.iter().any(|row| named(row, b"secreto")),
+            "el path colado no puede llegar a una fila: {rows:#?}"
+        );
+    }
+
+    /// La regla, aislada: hijo directo sí, nieto no, el propio directorio no,
+    /// otro scheme o authority no.
+    #[test]
+    fn is_direct_child_es_exacto() {
+        let vp = |wire: &str| VPath::parse(wire).expect("wire válido");
+        let dir = vp("mem:///a/b");
+        assert!(is_direct_child(&dir, &vp("mem:///a/b/c")));
+        assert!(!is_direct_child(&dir, &vp("mem:///a/b/c/d")), "nieto");
+        assert!(!is_direct_child(&dir, &vp("mem:///a/b")), "él mismo");
+        assert!(!is_direct_child(&dir, &vp("mem:///a")), "su padre");
+        assert!(!is_direct_child(&dir, &vp("mem:///a/bb/c")), "hermano");
+        assert!(!is_direct_child(&dir, &vp("file:///a/b/c")), "otro scheme");
+        assert!(
+            !is_direct_child(&vp("sftp://uno/x"), &vp("sftp://otro/x/y")),
+            "otra authority"
+        );
+    }
+
+    /// Un `MemProvider` con UN listado envenenado: para `at` devuelve `escape`
+    /// (un path que no es hijo suyo) y para todo lo demás delega.
+    struct LiarProvider {
+        inner: MemProvider,
+        at: VPath,
+        escape: Entry,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for LiarProvider {
+        fn scheme(&self) -> &str {
+            self.inner.scheme()
+        }
+        fn capabilities(&self) -> norte_proto::Capabilities {
+            self.inner.capabilities()
+        }
+        async fn stat(&self, p: &VPath) -> Result<Entry, norte_proto::Error> {
+            self.inner.stat(p).await
+        }
+        async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, norte_proto::Error> {
+            if p == &self.at {
+                let escape = self.escape.clone();
+                return Ok(stream::once(async move { Ok(escape) }).boxed());
+            }
+            self.inner.list(p).await
+        }
+        async fn read(
+            &self,
+            p: &VPath,
+            range: Option<norte_proto::ByteRange>,
+        ) -> Result<norte_vfs::ByteStream, norte_proto::Error> {
+            self.inner.read(p, range).await
+        }
+        async fn write(
+            &self,
+            p: &VPath,
+        ) -> Result<Box<dyn norte_vfs::ByteSink>, norte_proto::Error> {
+            self.inner.write(p).await
+        }
+        async fn mkdir(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.mkdir(p).await
+        }
+        async fn remove(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.remove(p).await
+        }
+        async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.rename(from, to).await
+        }
     }
 
     /// A directory over the declared cap costs that directory, not an OOM.

@@ -13,8 +13,8 @@
 //!    [`CapabilityFlags::CASE_SENSITIVE`]. Un lado que no distingue caja no
 //!    puede tener a la vez `README` y `readme`, así que emparejar CONTRA él es
 //!    plegar — aunque el otro lado sea ext4. Es plegado de caja DE VERDAD
-//!    (`to_lowercase` + [`fold_delta`]), no un `to_lowercase` a secas: ver la
-//!    nota de [`fold_delta`].
+//!    (`to_lowercase` + `fold_delta`), no un `to_lowercase` a secas: ver la
+//!    nota de `fold_delta` (privado, por eso sin enlace).
 //! 2. **NFC**, cuando los bytes son UTF-8 válido. macOS reparte NFD y Linux
 //!    NFC; el mismo fichero copiado entre los dos tiene que emparejar.
 //!
