@@ -27,6 +27,12 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 1 — the wire vocabulary | done | `c279988` |
 | 2 — `descend_orphans` | done | `6cb6cd4` |
 
+**A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
+`just t norte-proto` and left two `norte-core` tests red on the branch — both
+hardcode a protocol version. After any change to `PROTOCOL_VERSION`, run
+`just t norte-core` as well.
+| 2 — `descend_orphans` | done | `6cb6cd4` |
+
 ### What Task 1 changed in this plan
 
 `protocol-guardian` found three shapes wrong before they shipped. Later tasks
@@ -71,10 +77,20 @@ normatively **absent** on `Skip` and `DeleteTree`.
   passing through the daemon at all). Task 8 still has to refuse the field in
   `sync.plan`, but only because it is not the caller's there — not because a
   value could be malformed.
-- **`SyncCounts::bytes` cannot be summed from the rows.** An orphan row is
-  never hydrated (#157) and `norte-vfs-local` lists with `size: None`, so on
-  `file://` every descended row carries no size. Task 6 and Task 8 need their
-  own `stat` pass, or #156's bounded-concurrency hydration, or the number is 0.
+- **`SyncCounts::bytes` cannot be summed from the rows, and the fix is a
+  second counter, not a `stat` pass.** An orphan row is never hydrated (#157)
+  and `norte-vfs-local` lists with `size: None`, so on `file://` every
+  descended row carries no size. Hydrating costs 2N chained round trips over a
+  network mount (#156) and would put provider I/O inside a transducer whose
+  whole value is that it has none. So **`SyncCounts` gains
+  `bytes_unknown: u64`** — how many steps carry no size — and the approval
+  dialog reads "1.2 GB + 340 files of unknown size" rather than a confident
+  zero. This is the rule ADR 0048 already set for this feature: "the provider
+  cannot say" is an answer, not an error, and it never hides inside a number
+  that looks certain. Hydration stays available as a later optimisation under
+  #156, and it would only shrink `bytes_unknown`, never change the shape.
+  Proto 0.40.0 is unreleased on this branch, so the field costs nothing.
+  Task 6 counts it, Task 12 renders it.
 - **The container row of a descended orphan still comes out**, before its
   children, and carries no marker saying the subtree follows. That is
   deliberate: descending is a parameter of the REQUEST, so the caller already
@@ -1025,6 +1041,20 @@ fn counts_add_up_per_kind_and_bytes_only_count_what_moves() {
 }
 
 #[test]
+fn a_step_with_no_size_is_counted_apart_and_never_as_zero() {
+    // Orphan rows are not hydrated (#157) and local lists with `size: None`,
+    // so on file:// this is the common case, not the edge one. A confident
+    // zero in the approval dialog would be a lie.
+    let mut c = SyncCounts::default();
+    c.add(&copy_step("known", 10));
+    c.add(&copy_step_without_size("unknown-a"));
+    c.add(&copy_step_without_size("unknown-b"));
+    assert_eq!(c.bytes, 10);
+    assert_eq!(c.bytes_unknown, 2);
+    assert_eq!(c.copy, 3, "an unmeasured file is still a file to copy");
+}
+
+#[test]
 fn irreversible_steps_are_counted_separately_because_the_dialog_leads_with_them() {
     let mut c = SyncCounts::default();
     c.add(&irreversible_overwrite_step("a", 5));
@@ -1754,6 +1784,16 @@ fn the_summary_leads_with_the_irreversible_count_on_its_own_line() {
     let s = SyncState::ready(done_with(SyncCounts { copy: 3, overwrite: 2, irreversible: 2, ..d() }));
     let lines = s.summary_lines();
     assert!(lines.iter().any(|l| l.contains("irreversible") && l.contains('2')));
+}
+
+#[test]
+fn unmeasured_files_are_shown_and_never_folded_into_the_byte_total() {
+    let s = SyncState::ready(done_with(SyncCounts {
+        copy: 5, bytes: 1_200_000_000, bytes_unknown: 340, ..d()
+    }));
+    let lines = s.summary_lines();
+    assert!(lines.iter().any(|l| l.contains("340")),
+        "a confident byte total that hides 340 unmeasured files is a lie");
 }
 
 #[test]
