@@ -20,6 +20,43 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 **Spec:** `docs/superpowers/specs/2026-08-11-directory-sync-design.md`
 **Inherited context:** `docs/superpowers/specs/2026-08-11-directory-comparison-design.md`, ADR 0048.
 
+## Progress
+
+| task | state | commit |
+| --- | --- | --- |
+| 1 — the wire vocabulary | done | `c279988` |
+
+### What Task 1 changed in this plan
+
+`protocol-guardian` found three shapes wrong before they shipped. Later tasks
+must follow the corrected ones, not the snippets as originally written:
+
+- **`rel` is a `RelPath`, not a `VPath`.** `VPath` is always absolute and always
+  carries a scheme, so a relative path would have invented one — and
+  `plan_hash` covers `rel`, so a field that cannot be ignored cannot be
+  hand-waved either. API: `RelPath::parse_wire(&str)`, `new(Vec<Segment>)`,
+  `to_wire()`, `segments()`, `is_root()`, `Default` = root. Wire form is
+  `"sub/informe%FF%FE.dat"`; `..`, `.`, `/`, NUL and `%2E%2E` die in the
+  deserialiser on every peer. Snippets below that say `VPath` for a `rel`, or
+  call `to_wire_bytes()` / `VPath::join_rel`, need adapting.
+- **`Error::OverlappingRoots` carries `RootOverlap`, not `Side`** —
+  `{ Same, SourceInsideDest, DestInsideSource, Unknown }`. Two values could not
+  describe three cases and the `Display` lied. Task 8's assertions change
+  accordingly: `source=/a, dest=/a/sub` is `DestInsideSource`, the reverse is
+  `SourceInsideDest`, identical roots are `Same`.
+- **The compare options on the sync wire are `SyncCompareOptions`**, not
+  `CompareOptions` — the latter name already belongs to `norte_compare` and
+  Task 13 would have had both in one file.
+
+Also settled early: **ADR 0049 is already written** (Task 14 step 1 is done —
+review and extend it, do not recreate it), and these types exist because later
+tasks need them: `SyncStepsBatch { task_id, steps }`, `SyncPlanDone.task_id`
+(one connection can have two plans in flight, and the hash is unknown until
+this arrives), `SyncReportParams { task_id }`, `SYNC_MAX_FAILURES_REPORTED`.
+
+`SyncCounts::bytes` is a straight sum of `SyncStep::size`, which is now
+normatively **absent** on `Skip` and `DeleteTree`.
+
 ---
 
 ## Gate budget
@@ -51,7 +88,7 @@ worked — reproduce the single failure with `just t <crate>`.
 | --- | --- |
 | `crates/norte-proto/src/methods.rs` | sync vocabulary, constants, params/results, `PROTOCOL_VERSION` |
 | `crates/norte-proto/src/task.rs` | `TaskKind::SyncPlan`, `TaskKind::Sync` |
-| `crates/norte-proto/src/lib.rs` (`Error`) | `Error::OverlappingRoots` |
+| `crates/norte-proto/src/error.rs` | `Error::OverlappingRoots` (`lib.rs` only re-exports) |
 | `crates/norte-proto/tests/golden_types.rs` | goldens for every new type |
 | `crates/norte-compare/src/lib.rs` | `CompareOptions::descend_orphans` |
 | `crates/norte-compare/src/walk.rs` | honour it |
@@ -224,8 +261,8 @@ pub struct SyncCounts {
 /// Why a plan cannot run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncBlocker {
-    /// Relative to the roots. BYTES.
-    pub rel: VPath,
+    /// Relative to the roots. Segments of BYTES, never a String.
+    pub rel: RelPath,
     pub kind: SyncBlockerKind,
     /// The side it happened on, when it happened on one.
     pub side: Option<Side>,
@@ -248,7 +285,7 @@ pub struct SyncReportResult {
 /// One step that did not happen.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncFailure {
-    pub rel: VPath,
+    pub rel: RelPath,
     pub cause: SyncFailureCause,
 }
 
@@ -274,7 +311,7 @@ Non-negotiable details:
   `#[non_exhaustive]` **and** carry `#[serde(other)] Unknown` — daemon→client.
 - `SyncMode` and `OnUnknown` are `#[non_exhaustive]` and carry **no**
   `serde(other)` — client→daemon.
-- `SyncStep::rel` is a `VPath` and never a `String` (rule 1).
+- `SyncStep::rel` is a `RelPath` and never a `String` (rule 1).
 - `SyncPlanParams::include` gets
   `#[cfg_attr(feature = "schema", schemars(extend("maxItems" = SYNC_MAX_INCLUDE)))]`,
   the way `FsRenameBatchPlanParams::pairs` does.
@@ -355,6 +392,26 @@ git commit -m "feat(proto): the synchronisation plan on the wire (0.40.0)"
 - Modify: `crates/norte-proto/src/methods.rs` (`FsCompareParams`)
 - Modify: `crates/norte-core/src/daemon/server.rs` (`handle_fs_compare`)
 - Test: `crates/norte-compare/src/walk.rs` (its `mod tests`)
+
+**The trap Task 1 left you.** `Side` carries `#[serde(other)]`, so
+`"descend_orphans": "lft"` deserialises to `Some(Side::Unknown)` and would
+silently descend **neither** side — a different row set produced by a typo.
+The deserialiser cannot catch this; `handle_fs_compare` must reject
+`Some(Side::Unknown)` with `INVALID_PARAMS` explicitly, and a test must pin it:
+
+```rust
+#[tokio::test]
+async fn a_misspelt_side_is_refused_and_not_read_as_neither() {
+    let e = fs_compare_raw(serde_json::json!({
+        "left": "file:///a", "right": "file:///b", "descend_orphans": "lft"
+    })).await.expect_err("refused");
+    assert_invalid_params(&e);
+}
+```
+
+`SyncCompareOptions` already carries the field, so it and `FsCompareParams`
+are divergent until this task lands. `protocol-guardian` deferred a test
+pinning the two field sets against each other to this task — add it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1205,15 +1262,15 @@ async fn blockers_are_capped_but_the_total_is_not() {
 #[tokio::test]
 async fn overlapping_roots_are_refused_before_anything_walks() {
     let e = plan_call(vpath("file:///a"), vpath("file:///a/sub")).await.expect_err("refused");
-    assert_matches_overlapping_roots(&e, Side::Right);
+    assert_matches_overlapping_roots(&e, RootOverlap::DestInsideSource);
     let e = plan_call(vpath("file:///a/sub"), vpath("file:///a")).await.expect_err("refused");
-    assert_matches_overlapping_roots(&e, Side::Left);
+    assert_matches_overlapping_roots(&e, RootOverlap::SourceInsideDest);
 }
 
 #[tokio::test]
-async fn identical_roots_are_refused_too() {
+async fn identical_roots_say_so_rather_than_naming_a_side() {
     let e = plan_call(vpath("file:///a"), vpath("file:///a")).await.expect_err("refused");
-    assert_matches_overlapping_roots(&e, Side::Left);
+    assert_matches_overlapping_roots(&e, RootOverlap::Same);
 }
 
 #[tokio::test]
@@ -1788,7 +1845,23 @@ fn every_sync_string_exists_in_both_locales() {
         assert!(fluent_has("es", k), "es missing {k}");
     }
 }
+
+#[test]
+fn overlapping_roots_renders_as_itself_and_not_as_a_generic_error() {
+    // Task 1 added the variant; the error match arm lives here. Without it
+    // the refusal renders as "internal error", which is the exact outcome
+    // the variant exists to avoid.
+    for o in [RootOverlap::Same, RootOverlap::SourceInsideDest, RootOverlap::DestInsideSource] {
+        let s = render_error(&Error::OverlappingRoots { overlap: o });
+        assert!(!s.contains("error interno") && !s.contains("internal"), "{o:?} → {s}");
+    }
+}
 ```
+
+The match arm is at `crates/norte-tui/src/app.rs:4809` (the error rendering
+table) and needs `err-overlapping-roots` in `i18n/en` and `i18n/es`. It is in
+no other task of this plan; Task 1 flagged it precisely because it would
+otherwise fall through the cracks.
 
 - [ ] **Step 2: Run and watch them fail** — `just t norte-tui`
 
@@ -1825,9 +1898,17 @@ git commit -m "feat(tui): approve a synchronisation from the diff pane"
 - Modify: `ARCHITECTURE.md`, `CHANGELOG.md`,
   `docs/superpowers/specs/2026-08-07-post-alpha-roadmap.md`
 
-- [ ] **Step 1: Write ADR 0049 with the `/adr` command**
+- [ ] **Step 1: Review and extend ADR 0049 — it already exists**
 
-Not "we added sync". The decision is **the approved plan is retained
+Task 1 wrote `docs/adr/0049-the-retained-sync-plan.md`, because the schema it
+published cited the ADR ~30 times and ADR 0048 had shipped in the same commit
+as its own version bump. **Do not recreate it.** Read it against everything
+tasks 2–13 actually built and extend it where reality moved: any consequence
+that turned out differently, and the `RelPath` and `RootOverlap` decisions
+that came out of Task 1's own review.
+
+What it has to say, and must still say after you edit it — not "we added
+sync", but **the approved plan is retained
 server-side**: a spool file that authorises writes, keyed to the connection
 that produced it, with a TTL and four ways to die. Cover what was rejected and
 why — re-deriving the plan walks both trees twice and never converges on a
