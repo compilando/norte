@@ -27,7 +27,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 1 — the wire vocabulary | done | `c279988` |
 | 2 — `descend_orphans` | done | `6cb6cd4` |
 | 3 — `norte-sync` + the Update transducer | done | `aa2242c` |
-| 4 — reversal, `on_unknown`, the `Skip` reasons, `dest_rel` | done | see below |
+| 4 — reversal, `on_unknown`, the `Skip` reasons, `dest_rel` | done | `02f95cd` |
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
