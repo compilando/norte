@@ -1,0 +1,19 @@
+[package]
+name = "norte-compare"
+description = "Directory comparison engine for norte: pairing, the criterion cascade, and streamed rows"
+license = "AGPL-3.0-only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+norte-proto.workspace = true
+norte-vfs.workspace = true
+# YA en el workspace (norte-frontend, norte-core, norte-vfs-local, norte-testkit):
+# no es dependencia nueva, así que la regla dura 8 no pide justificación.
+unicode-normalization.workspace = true
+
+[lints]
+workspace = true

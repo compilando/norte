@@ -6231,6 +6231,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "norte-compare"
+version = "0.3.0-alpha.2"
+dependencies = [
+ "norte-proto",
+ "norte-vfs",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "norte-config"
 version = "0.3.0-alpha.2"
 dependencies = [

@@ -14,6 +14,7 @@ members = [
     "crates/norte-testkit",
     "crates/norte-core",
     "crates/norte-index",
+    "crates/norte-compare",
     "crates/norte-cli",
     "crates/norte-tui",
     "crates/norte-frontend",
@@ -46,6 +47,7 @@ default-members = [
     "crates/norte-testkit",
     "crates/norte-core",
     "crates/norte-index",
+    "crates/norte-compare",
     "crates/norte-cli",
     "crates/norte-tui",
     "crates/norte-frontend",
@@ -105,6 +107,7 @@ norte-connect = { path = "crates/norte-connect", version = "0.3.0-alpha.2" }
 norte-testkit = { path = "crates/norte-testkit", version = "0.3.0-alpha.2" }
 norte-core = { path = "crates/norte-core", version = "0.3.0-alpha.2" }
 norte-index = { path = "crates/norte-index", version = "0.3.0-alpha.2" }
+norte-compare = { path = "crates/norte-compare", version = "0.3.0-alpha.2" }
 norte-tui = { path = "crates/norte-tui", version = "0.3.0-alpha.2" }
 norte-config = { path = "crates/norte-config", version = "0.3.0-alpha.2" }
 norte-frontend = { path = "crates/norte-frontend", version = "0.3.0-alpha.2" }
