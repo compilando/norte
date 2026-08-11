@@ -24,6 +24,21 @@
 //! sale [`COMPARE_MAX_DIR_ENTRIES`]: un directorio por encima cuesta SU fila,
 //! jamás un OOM que se lleve las otras tres horas de trabajo.
 //!
+//! # Lo que el listado no trajo se pregunta, y solo cuando hace falta
+//!
+//! `Entry::size` y `Entry::mtime_ms` son `Option` porque un listado puede no
+//! traerlos, y el provider que la gente USA no los trae:
+//! `norte-vfs-local::list` los deja a `None` a propósito (#52 — el `readdir` de
+//! un directorio de 40 000 entradas no gasta 40 000 `stat` para pintar una
+//! lista). Alimentar la cascada con eso hace que el rung de tamaño conteste
+//! `Same`/`Unknown` a dos ficheros de 5 y 12 bytes, o sea que la comparación
+//! local entera —la única que casi todo el mundo hace— no distinga nada.
+//!
+//! Así que el walk **hidrata bajo demanda**: [`hydrate`] gasta un `stat` en el
+//! lado al que le falta el campo, y solo cuando la pareja va a LLEGAR al rung
+//! que lo usa. Ver ahí el coste, cuándo se paga y qué pasa cuando el `stat`
+//! falla.
+//!
 //! # Los errores son filas
 //!
 //! Un listado ilegible, un directorio desmesurado, una colisión de
@@ -52,6 +67,7 @@
 //! ilegibles emparejados—: las filas de la izquierda salen primero por
 //! convenio, y no hay convenio simétrico posible.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 
@@ -164,6 +180,168 @@ impl PairFailure {
             HashFailure::Cancelled => Self::Cancelled,
         }
     }
+}
+
+/// Por qué no se pudo completar la [`hydrate`] de una pareja.
+#[derive(Debug)]
+enum HydrationFailure {
+    /// El `stat` falló. Trae el lado que falló y el rung que lo pidió, que son
+    /// las dos mitades útiles de la fila de error.
+    Stat {
+        side: Side,
+        /// `Size` o `Mtime`: qué rung se quedó sin su dato.
+        rung: CompareCriterion,
+    },
+    /// El token se disparó antes de un `stat`.
+    Cancelled,
+}
+
+/// Cómo salió de hidratar UNA pareja.
+///
+/// El caso de fallo lleva las DOS entradas igual que el bueno: si la izquierda
+/// contestó y la derecha no, lo que la izquierda dijo es cierto y la fila de
+/// error debe llevarlo — el panel pinta esa celda, y vaciarla sería tirar una
+/// respuesta que sí se tuvo.
+enum Hydrated<'e> {
+    /// Los campos que la cascada va a mirar, ya rellenos.
+    Ready(Cow<'e, Entry>, Cow<'e, Entry>),
+    /// Un `stat` falló: las dos entradas tal y como quedaron, y de quién y de
+    /// qué rung fue el fallo.
+    Failed {
+        left: Cow<'e, Entry>,
+        right: Cow<'e, Entry>,
+        side: Side,
+        rung: CompareCriterion,
+    },
+    /// El token se disparó antes de un `stat`.
+    Cancelled,
+}
+
+/// Un lado de la pareja mientras se le pregunta lo que el listado no trajo.
+///
+/// El `Cow` es lo que hace que la hidratación no cueste nada cuando no hace
+/// falta: un provider que ya rellenó los campos —SFTP, object, archive,
+/// `MemProvider`— sale por [`Cow::Borrowed`] sin haber clonado ni preguntado.
+struct Fresh<'e> {
+    entry: Cow<'e, Entry>,
+    /// Ya se le gastó SU `stat`. Lo que siga faltando después de eso falta de
+    /// verdad, y preguntarlo otra vez es un segundo viaje para oír lo mismo.
+    asked: bool,
+}
+
+impl<'e> Fresh<'e> {
+    const fn of(entry: &'e Entry) -> Self {
+        Self {
+            entry: Cow::Borrowed(entry),
+            asked: false,
+        }
+    }
+}
+
+/// Gasta un `stat` en `fresh` para que el rung `rung` tenga su dato.
+///
+/// # Cuándo se paga
+///
+/// Solo cuando las TRES cosas se dan a la vez: la pareja es de ficheros (una
+/// ausencia la decide la presencia, un tipo distinto el kind, dos directorios
+/// el kind también, y un enlace su destino — ninguno mira tamaño ni fecha), el
+/// rung que necesita el campo va a correr de verdad, y ese lado no lo trae ya.
+/// Un provider que rellena su listado no recibe ni una llamada de más; el
+/// segundo rung reutiliza el `stat` del primero (`asked`), así que el techo es
+/// **un `stat` por lado y por pareja de ficheros**.
+///
+/// El precio de esa disciplina se ve en el panel: sobre un provider perezoso,
+/// una pareja de ficheros enseña su tamaño y un HUÉRFANO no, porque a él no lo
+/// mira ningún rung (<https://github.com/compilando/norte/issues/157>).
+///
+/// # Lo que cuesta, dicho sin adornos
+///
+/// Un `stat` es un viaje de ida y vuelta al provider, y **van en SERIE**: uno
+/// detrás de otro, un lado detrás del otro, una pareja detrás de la anterior,
+/// con profundidad de cola uno. Un árbol de N ficheros emparejados cuesta hasta
+/// 2N viajes encadenados. Es la misma forma que el motor de copia
+/// (`norte-core::ops::hydrate_plan`, que statea las hojas de su plan por el
+/// mismo #52), y para un disco local es scheduling, no latencia.
+///
+/// Dónde SÍ duele, que no es donde parece:
+///
+/// - `file://` **no significa disco local**. `LocalProvider` sirve lo que el OS
+///   tenga montado, y sobre SMB, NFS o sshfs cada `lstat` es un viaje por red.
+///   Comparar dos shares montados es lo más normal del mundo en un gestor de
+///   ficheros, y ahí 2N viajes en serie se notan.
+/// - Los providers remotos rellenan su listado **casi siempre, no siempre**:
+///   `norte-vfs-sftp` saca `size` de los atributos del `readdir` (siempre
+///   presente), pero `mtime_ms` solo si el servidor manda `ACMODTIME` —OpenSSH
+///   lo manda; un servidor mínimo o un aparato pueden no hacerlo—, y
+///   `norte-vfs-object` saca `mtime_ms` de `last_modified`, que también es
+///   opcional. Contra uno de esos, un árbol espejado —tamaños iguales, o sea
+///   todas las parejas llegando al rung de fecha— paga los 2N viajes.
+///
+/// La salida no es que el motor adivine: es hidratar las parejas de UN
+/// directorio con concurrencia acotada (los dos listados ya están enteros en
+/// memoria cuando se emparejan) o que el provider rellene su listado — la
+/// medida está en <https://github.com/compilando/norte/issues/156>, y hasta que
+/// se tome, esto es lo que cuesta.
+///
+/// # Un `stat` que falla NO es un `Unknown`
+///
+/// Es una fila [`CompareVerdict::Error`] con [`CompareReason::Unreadable`] y el
+/// lado que falló, igual que un listado ilegible o una lectura rota a mitad de
+/// hash. `Unknown` significa «el provider no puede contestar esta pregunta» —el
+/// enlace de un tar sin destino, un kind que no es fichero ni directorio—, y
+/// esa respuesta viaja junto a un veredicto `Same`. Degradar aquí a `Unknown`
+/// diría «iguales, no sé» de una pareja que nadie llegó a mirar, y taparía un
+/// `EACCES` que el usuario puede arreglar. La comparación no inventa
+/// respuestas, y «no pude preguntar» no es «pregunté y no se sabe».
+///
+/// **`NotFound` va por el mismo camino, y es una decisión**: un fichero que
+/// desaparece entre el `list` y el `stat` es una carrera real (`/tmp`, un
+/// directorio de build). El listado de un provider la resuelve al revés —
+/// `norte-vfs-local::list_with` omite la entrada que se esfumó, para no matar
+/// el listado de un directorio vivo—, y aquí no se puede: la pareja ya está
+/// emparejada, y callarla sería quitar del panel una fila que el otro lado sí
+/// tiene. La fila de error dice «esto no se pudo comparar», que es lo que pasó.
+/// El motivo del wire no distingue las causas (igual que `list_all` manda todo
+/// fallo de listado a `Unreadable`): el vocabulario tiene UNA palabra para «no
+/// se pudo leer», y afinarla es cambiar el wire.
+///
+/// # Lo que se copia del `stat`, y lo que no
+///
+/// SOLO `size` y `mtime_ms`. El `path` y el `kind` se quedan los del listado:
+/// el path ya pasó la frontera de [`is_direct_child`] y el kind ya decidió su
+/// rung, así que una entrada sustituida entre el `list` y el `stat` no puede
+/// colar aquí ni otro tipo ni otra ruta.
+///
+/// El residuo, que hay que saber: una `Entry` hidratada es un COMPUESTO de dos
+/// observaciones en dos instantes —`path`, `kind` y `attrs` del listado;
+/// `size` y `mtime_ms` del `stat`—. Si alguien sustituyó el fichero en medio,
+/// la fila describe dos objetos a la vez. Es inevitable en cualquier diseño
+/// perezoso y no lo arregla mirar más veces, pero la spec 2 va a LEER estas
+/// filas para decidir qué copiar, así que queda dicho aquí.
+async fn hydrate(
+    provider: &dyn Provider,
+    fresh: &mut Fresh<'_>,
+    side: Side,
+    rung: CompareCriterion,
+    cancel: &CancellationToken,
+) -> Result<(), HydrationFailure> {
+    if fresh.asked {
+        return Ok(());
+    }
+    // Regla dura 3: esto es I/O, y un directorio de 40 000 ficheros son 40 000
+    // viajes que la cancelación no tiene por qué esperar.
+    if cancel.is_cancelled() {
+        return Err(HydrationFailure::Cancelled);
+    }
+    fresh.asked = true;
+    let statted = provider
+        .stat(&fresh.entry.path)
+        .await
+        .map_err(|_| HydrationFailure::Stat { side, rung })?;
+    let entry = fresh.entry.to_mut();
+    entry.size = statted.size;
+    entry.mtime_ms = statted.mtime_ms;
+    Ok(())
 }
 
 /// Un par de directorios pendiente de emparejar, con su profundidad.
@@ -371,6 +549,40 @@ impl Walk<'_> {
     /// `None` significa cancelado: ni fila ni descenso, y quien llama suelta
     /// el directorio entero.
     async fn pair_row(&mut self, left: &Entry, right: &Entry) -> Option<bool> {
+        // Lo que el listado no trajo y la cascada va a necesitar, preguntado
+        // ANTES de decidir. Las filas llevan las entradas hidratadas: una fila
+        // que dice «distinto por tamaño» sobre dos tamaños vacíos no se puede
+        // leer.
+        let (left, right) = match self.hydrated_pair(left, right).await {
+            Hydrated::Ready(left, right) => (left, right),
+            Hydrated::Cancelled => return None,
+            Hydrated::Failed {
+                left,
+                right,
+                side,
+                rung,
+            } => {
+                let id = self.next_id();
+                self.pending.push_back(flagged(
+                    id,
+                    // Lo que se llegó a saber viaja: si la izquierda contestó y
+                    // la derecha no, su tamaño es cierto y la celda del panel lo
+                    // enseña.
+                    Some(left.into_owned()),
+                    Some(right.into_owned()),
+                    CompareVerdict::Error,
+                    // El rung que se quedó sin su dato, igual que una lectura
+                    // rota dice `Hash`: ese rung corrió y se murió.
+                    rung,
+                    CompareReason::Unreadable,
+                    side,
+                ));
+                // Solo las parejas de ficheros se hidratan, así que no hay
+                // descenso que plantearse.
+                return Some(false);
+            }
+        };
+        let (left, right) = (left.as_ref(), right.as_ref());
         match self.verdict_for_pair(left, right).await {
             PairOutcome::Cancelled => None,
             PairOutcome::Decided(decision) => {
@@ -403,6 +615,102 @@ impl Walk<'_> {
                 Some(false)
             }
         }
+    }
+
+    /// La pareja con los campos que la cascada va a mirar ya rellenos.
+    ///
+    /// Sigue el MISMO orden que `cascade::size_and_mtime`, y por la misma
+    /// razón por la que el rung de hash solo alcanza a lo que los baratos
+    /// dieron por igual: lo que ya está decidido no se paga. Dos ficheros con
+    /// tamaños distintos no gastan el `stat` del rung de fecha, y un rung
+    /// apagado no gasta nada.
+    ///
+    /// Que devuelva [`Cow`] es el camino barato: sin un campo que falte no se
+    /// clona ni una `Entry`.
+    async fn hydrated_pair<'e>(&self, left: &'e Entry, right: &'e Entry) -> Hydrated<'e> {
+        let mut l = Fresh::of(left);
+        let mut r = Fresh::of(right);
+        match self.hydrate_rungs(&mut l, &mut r).await {
+            Ok(()) => Hydrated::Ready(l.entry, r.entry),
+            Err(HydrationFailure::Cancelled) => Hydrated::Cancelled,
+            // Las dos entradas viajan igualmente: la que sí contestó lleva su
+            // dato, y la fila de error lo enseña.
+            Err(HydrationFailure::Stat { side, rung }) => Hydrated::Failed {
+                left: l.entry,
+                right: r.entry,
+                side,
+                rung,
+            },
+        }
+    }
+
+    /// Los dos rungs, en orden, sobre los dos lados. Separada de
+    /// [`Walk::hydrated_pair`] solo para poder usar `?` sin perder lo ya
+    /// hidratado cuando algo falla.
+    async fn hydrate_rungs(
+        &self,
+        l: &mut Fresh<'_>,
+        r: &mut Fresh<'_>,
+    ) -> Result<(), HydrationFailure> {
+        // Solo parejas de FICHEROS. Un huérfano lo decide la presencia y aquí
+        // ni llega; un kind distinto lo decide el kind; dos directorios también
+        // (C3: la fecha de un directorio se mueve con cualquier hijo, así que
+        // no se comparan ni por fecha ni por tamaño); y un enlace, su destino.
+        // Statear cualquiera de ellos es un viaje al provider a cambio de nada.
+        if l.entry.kind == EntryKind::File && r.entry.kind == EntryKind::File {
+            if self.opts.criteria.size {
+                if l.entry.size.is_none() {
+                    hydrate(
+                        self.left,
+                        l,
+                        Side::Left,
+                        CompareCriterion::Size,
+                        &self.cancel,
+                    )
+                    .await?;
+                }
+                if r.entry.size.is_none() {
+                    hydrate(
+                        self.right,
+                        r,
+                        Side::Right,
+                        CompareCriterion::Size,
+                        &self.cancel,
+                    )
+                    .await?;
+                }
+                // El rung de tamaño decide —distintos, o alguno todavía
+                // desconocido tras preguntar— y la cascada no baja al de fecha:
+                // hidratarla sería pagar por un rung que no va a correr.
+                match (l.entry.size, r.entry.size) {
+                    (Some(a), Some(b)) if a == b => {}
+                    _ => return Ok(()),
+                }
+            }
+            if self.opts.criteria.mtime {
+                if l.entry.mtime_ms.is_none() {
+                    hydrate(
+                        self.left,
+                        l,
+                        Side::Left,
+                        CompareCriterion::Mtime,
+                        &self.cancel,
+                    )
+                    .await?;
+                }
+                if r.entry.mtime_ms.is_none() {
+                    hydrate(
+                        self.right,
+                        r,
+                        Side::Right,
+                        CompareCriterion::Mtime,
+                        &self.cancel,
+                    )
+                    .await?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// La decisión de UNA pareja emparejada, con lo que exige I/O ya averiguado.
@@ -684,6 +992,7 @@ mod tests {
     use norte_proto::Segment;
     use norte_testkit::{MemProvider, TarSmith};
     use norte_vfs_archive::{ArchiveProvider, Format};
+    use norte_vfs_local::LocalProvider;
 
     use super::*;
 
@@ -1527,6 +1836,535 @@ mod tests {
         assert_eq!(l.faults().read_calls(), 0, "ni se abrió el fichero");
     }
 
+    // ---------- el provider que la gente USA ----------
+    //
+    // `norte-vfs-local::list` no rellena `size` ni `mtime_ms` (#52: stat lazy,
+    // `None` = «no lo sé», contrato de `Entry`). Toda la suite de arriba corre
+    // sobre `MemProvider`, que SÍ los rellena, así que ninguno de sus tests
+    // puede ver lo único que le pasa a un usuario: comparar dos directorios
+    // locales. Estos tres van contra directorios temporales de verdad.
+
+    /// Siembra un directorio temporal y lo sirve por `norte-vfs-local`.
+    ///
+    /// `sembrar` recibe la ruta NATIVA: los tests que fijan fechas escriben
+    /// ahí. El `TempDir` viaja dentro del provider (`with_guard`), así que vive
+    /// exactamente lo que él.
+    fn local_tree(sembrar: impl FnOnce(&std::path::Path)) -> LocalProvider {
+        let dir = tempfile::tempdir().expect("tempdir");
+        sembrar(dir.path());
+        let base = dir.path().to_path_buf();
+        LocalProvider::rooted(base).with_guard(Box::new(dir))
+    }
+
+    /// Fija la fecha de modificación de un fichero, en segundos desde epoch.
+    ///
+    /// El reloj de pared no sirve: dos ficheros escritos seguidos pueden caer
+    /// dentro de la tolerancia de 2 s, o no, según lo cargada que esté la
+    /// máquina. Un test que a veces pasa no prueba nada.
+    fn set_mtime(path: &std::path::Path, secs: u64) {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("abrir para fijar la fecha");
+        file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            .expect("fijar la fecha");
+    }
+
+    fn compare_local<'a>(
+        left: &'a LocalProvider,
+        right: &'a LocalProvider,
+        opts: CompareOptions,
+    ) -> CompareStream<'a> {
+        compare(
+            left,
+            &LocalProvider::root(),
+            right,
+            &LocalProvider::root(),
+            opts,
+            CancellationToken::new(),
+        )
+    }
+
+    /// Dos ficheros locales de 5 y 12 bytes son DIFERENTES, y con certeza.
+    ///
+    /// Es el test que faltaba: sin hidratar, `list` no trae el tamaño, el rung
+    /// de tamaño se corta en `Same`/`Unknown` y la comparación local —la única
+    /// que casi todo el mundo hace— no distingue dos ficheros que no se parecen
+    /// en nada.
+    #[tokio::test]
+    async fn dos_ficheros_locales_de_distinto_tamano_son_different() {
+        let l = local_tree(|d| {
+            std::fs::write(d.join("a.txt"), b"hola!").expect("sembrar");
+        });
+        let r = local_tree(|d| {
+            std::fs::write(d.join("a.txt"), b"hola mundo!!").expect("sembrar");
+        });
+
+        let rows = collect(compare_local(&l, &r, CompareOptions::cheap())).await;
+        assert_eq!(rows.len(), 1, "{rows:#?}");
+        assert_eq!(
+            (rows[0].verdict, rows[0].criterion, rows[0].confidence),
+            (
+                CompareVerdict::Different,
+                CompareCriterion::Size,
+                CompareConfidence::Certain
+            ),
+            "{rows:#?}"
+        );
+        // Y la fila LLEVA los tamaños que la decidieron: un panel que pinta
+        // «distinto por tamaño» sobre dos tamaños vacíos no se puede leer.
+        assert_eq!(rows[0].left.as_ref().expect("lado izquierdo").size, Some(5));
+        assert_eq!(rows[0].right.as_ref().expect("lado derecho").size, Some(12));
+    }
+
+    /// Lo mismo un rung más abajo: mismo tamaño, fechas separadas por un
+    /// minuto. Sin hidratar, el rung de fecha ni siquiera llega a correr.
+    #[tokio::test]
+    async fn dos_ficheros_locales_del_mismo_tamano_los_decide_la_fecha() {
+        let l = local_tree(|d| {
+            let p = d.join("a.txt");
+            std::fs::write(&p, b"aaaa").expect("sembrar");
+            set_mtime(&p, 1_700_000_000);
+        });
+        let r = local_tree(|d| {
+            let p = d.join("a.txt");
+            std::fs::write(&p, b"bbbb").expect("sembrar");
+            set_mtime(&p, 1_700_000_060);
+        });
+
+        let rows = collect(compare_local(&l, &r, CompareOptions::cheap())).await;
+        assert_eq!(rows.len(), 1, "{rows:#?}");
+        assert_eq!(
+            (rows[0].verdict, rows[0].criterion, rows[0].confidence),
+            (
+                CompareVerdict::Different,
+                CompareCriterion::Mtime,
+                CompareConfidence::Probable
+            ),
+            "{rows:#?}"
+        );
+        assert_eq!(rows[0].newer, Some(Side::Right));
+        assert_eq!(
+            rows[0].left.as_ref().expect("lado izquierdo").mtime_ms,
+            Some(1_700_000_000_000)
+        );
+    }
+
+    // ---------- a quién se le gasta un `stat`, y a quién no ----------
+
+    /// Un `MemProvider` que LISTA como el provider local de verdad: sin `size`
+    /// y sin `mtime_ms` (#52). Cuenta los `stat` y sabe fallarlos.
+    ///
+    /// El local no vale para esto: no se le pueden contar las llamadas ni
+    /// romperle un `stat` concreto. Lo que sí prueba el local —que la
+    /// comparación que hace todo el mundo funciona— son los dos tests de
+    /// arriba; esto prueba a QUIÉN se le pregunta.
+    struct LazyProvider {
+        inner: MemProvider,
+        stats: std::sync::atomic::AtomicUsize,
+        /// Qué campos borra del listado. `false` = ese campo viaja como lo puso
+        /// `MemProvider`.
+        blank_size: bool,
+        stat_fails: Option<norte_proto::Error>,
+    }
+
+    impl LazyProvider {
+        /// Perezoso como el local: sin `size` y sin `mtime_ms`.
+        fn new(inner: MemProvider) -> Self {
+            Self {
+                inner,
+                stats: std::sync::atomic::AtomicUsize::new(0),
+                blank_size: true,
+                stat_fails: None,
+            }
+        }
+
+        /// Perezoso SOLO en la fecha: la forma de un SFTP cuyo servidor no
+        /// manda `ACMODTIME` en los atributos del `readdir` (el `size` de
+        /// `russh_sftp` siempre viene; el `mtime` es opcional).
+        fn only_mtime_missing(inner: MemProvider) -> Self {
+            Self {
+                blank_size: false,
+                ..Self::new(inner)
+            }
+        }
+
+        fn failing(inner: MemProvider, error: norte_proto::Error) -> Self {
+            Self {
+                stat_fails: Some(error),
+                ..Self::new(inner)
+            }
+        }
+
+        fn stats(&self) -> usize {
+            self.stats.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for LazyProvider {
+        fn scheme(&self) -> &str {
+            self.inner.scheme()
+        }
+        fn capabilities(&self) -> norte_proto::Capabilities {
+            self.inner.capabilities()
+        }
+        async fn stat(&self, p: &VPath) -> Result<Entry, norte_proto::Error> {
+            self.stats
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Some(error) = self.stat_fails.clone() {
+                return Err(error);
+            }
+            self.inner.stat(p).await
+        }
+        async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, norte_proto::Error> {
+            let blank_size = self.blank_size;
+            Ok(self
+                .inner
+                .list(p)
+                .await?
+                .map(move |item| {
+                    item.map(|entry| Entry {
+                        size: if blank_size { None } else { entry.size },
+                        mtime_ms: None,
+                        ..entry
+                    })
+                })
+                .boxed())
+        }
+        async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, norte_proto::Error> {
+            self.inner.read_link(p).await
+        }
+        async fn symlink(
+            &self,
+            link: &VPath,
+            target: &[u8],
+            kind: norte_vfs::SymlinkKind,
+        ) -> Result<(), norte_proto::Error> {
+            self.inner.symlink(link, target, kind).await
+        }
+        async fn read(
+            &self,
+            p: &VPath,
+            range: Option<norte_proto::ByteRange>,
+        ) -> Result<norte_vfs::ByteStream, norte_proto::Error> {
+            self.inner.read(p, range).await
+        }
+        async fn write(
+            &self,
+            p: &VPath,
+        ) -> Result<Box<dyn norte_vfs::ByteSink>, norte_proto::Error> {
+            self.inner.write(p).await
+        }
+        async fn mkdir(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.mkdir(p).await
+        }
+        async fn remove(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.remove(p).await
+        }
+        async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.rename(from, to).await
+        }
+    }
+
+    fn compare_lazy<'a>(
+        left: &'a LazyProvider,
+        right: &'a LazyProvider,
+        opts: CompareOptions,
+    ) -> CompareStream<'a> {
+        compare(
+            left,
+            &MemProvider::root(),
+            right,
+            &MemProvider::root(),
+            opts,
+            CancellationToken::new(),
+        )
+    }
+
+    /// La hidratación es SOLO para las parejas que van a usar el dato.
+    ///
+    /// Un huérfano lo decide la presencia, un tipo distinto lo decide el kind y
+    /// dos directorios también (C3): a ninguno se le gasta un viaje al
+    /// provider. Sobre SFTP, statear lo que ya está decidido es la diferencia
+    /// entre una comparación y una espera.
+    #[tokio::test]
+    async fn lo_que_deciden_la_presencia_o_el_kind_no_gasta_un_stat() {
+        // Un huérfano: la presencia decide y nadie pregunta nada.
+        let l = LazyProvider::new(tree(&["solo.txt"]).await);
+        let r = LazyProvider::new(tree(&[]).await);
+        let rows = collect(compare_lazy(&l, &r, CompareOptions::cheap())).await;
+        assert_eq!(rows.len(), 1, "{rows:#?}");
+        assert_eq!(rows[0].verdict, CompareVerdict::OnlyLeft);
+        assert_eq!((l.stats(), r.stats()), (0, 0), "un huérfano no se statea");
+
+        // Tipos distintos: los decide el kind.
+        let l = LazyProvider::new(tree(&["x/dentro.txt"]).await);
+        let r = LazyProvider::new(tree(&["x"]).await);
+        let rows = collect(compare_lazy(&l, &r, CompareOptions::cheap())).await;
+        assert_eq!(rows.len(), 1, "{rows:#?}");
+        assert_eq!(rows[0].verdict, CompareVerdict::TypeMismatch);
+        assert_eq!(
+            (l.stats(), r.stats()),
+            (0, 0),
+            "un tipo distinto no se statea"
+        );
+
+        // Dos directorios: los decide el kind; sus HIJOS sí se hidratan, y con
+        // un solo `stat` por lado y por pareja.
+        let l = LazyProvider::new(tree(&["d/a.txt"]).await);
+        let r = LazyProvider::new(tree(&["d/a.txt"]).await);
+        let rows = collect(compare_lazy(&l, &r, CompareOptions::cheap())).await;
+        assert_eq!(rows.len(), 2, "{rows:#?}");
+        assert_eq!(
+            (l.stats(), r.stats()),
+            (1, 1),
+            "solo el fichero: el directorio lo decidió el kind"
+        );
+    }
+
+    /// Un provider que YA rellena su listado no recibe una llamada de más.
+    ///
+    /// `MemProvider` trae `size` y `mtime_ms` en cada entrada, así que la
+    /// comparación entera no gasta un solo `stat`. Sin esto, la hidratación
+    /// podría dispararse siempre y nadie se enteraría: el veredicto sería el
+    /// mismo y la factura, el doble.
+    #[tokio::test]
+    async fn un_listado_que_ya_trae_los_campos_no_se_vuelve_a_preguntar() {
+        struct Contado(MemProvider, std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl Provider for Contado {
+            fn scheme(&self) -> &str {
+                self.0.scheme()
+            }
+            fn capabilities(&self) -> norte_proto::Capabilities {
+                self.0.capabilities()
+            }
+            async fn stat(&self, p: &VPath) -> Result<Entry, norte_proto::Error> {
+                self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.0.stat(p).await
+            }
+            async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, norte_proto::Error> {
+                self.0.list(p).await
+            }
+            async fn read(
+                &self,
+                p: &VPath,
+                range: Option<norte_proto::ByteRange>,
+            ) -> Result<norte_vfs::ByteStream, norte_proto::Error> {
+                self.0.read(p, range).await
+            }
+            async fn write(
+                &self,
+                p: &VPath,
+            ) -> Result<Box<dyn norte_vfs::ByteSink>, norte_proto::Error> {
+                self.0.write(p).await
+            }
+            async fn mkdir(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+                self.0.mkdir(p).await
+            }
+            async fn remove(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+                self.0.remove(p).await
+            }
+            async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), norte_proto::Error> {
+                self.0.rename(from, to).await
+            }
+        }
+
+        let count = || std::sync::atomic::AtomicUsize::new(0);
+        let l = Contado(tree(&["a.txt", "sub/b.txt"]).await, count());
+        let r = Contado(tree(&["a.txt", "sub/b.txt"]).await, count());
+        let rows = collect(compare(
+            &l,
+            &MemProvider::root(),
+            &r,
+            &MemProvider::root(),
+            CompareOptions::cheap(),
+            CancellationToken::new(),
+        ))
+        .await;
+        assert!(!rows.is_empty());
+        assert_eq!(
+            (
+                l.1.load(std::sync::atomic::Ordering::Relaxed),
+                r.1.load(std::sync::atomic::Ordering::Relaxed)
+            ),
+            (0, 0),
+            "el listado ya traía los campos: {rows:#?}"
+        );
+    }
+
+    /// Un `stat` que falla es una fila de ERROR, no un `Unknown`.
+    ///
+    /// `Unknown` es «el provider no puede contestar esta pregunta», y viaja con
+    /// un veredicto `Same`. Un `stat` roto no es eso: es un `EACCES` que el
+    /// usuario puede arreglar, o un fichero que desapareció entre el `list` y
+    /// el `stat`. Contestar «iguales, no sé» a una pareja que nadie llegó a
+    /// mirar es justo lo que el vocabulario de confianza existe para no hacer.
+    #[tokio::test]
+    async fn un_stat_que_falla_es_una_fila_de_error() {
+        let l = LazyProvider::failing(
+            tree(&["a.txt", "zz.txt"]).await,
+            norte_proto::Error::Io { retryable: false },
+        );
+        let r = LazyProvider::new(tree(&["a.txt", "zz.txt"]).await);
+
+        let rows = collect(compare_lazy(&l, &r, CompareOptions::cheap())).await;
+        assert_eq!(rows.len(), 2, "{rows:#?}");
+        for row in &rows {
+            assert_eq!(row.verdict, CompareVerdict::Error, "{rows:#?}");
+            assert_eq!(row.reason, Some(CompareReason::Unreadable));
+            assert_eq!(row.side, Some(Side::Left));
+            // El rung que se quedó sin su dato, igual que una lectura rota dice
+            // `Hash`: ese rung corrió y se murió.
+            assert_eq!(row.criterion, CompareCriterion::Size);
+            assert!(
+                row.left.is_some() && row.right.is_some(),
+                "la pareja se emparejó: lo que falló fue describirla"
+            );
+            assert!(row.reason_is_consistent() && row.sides_are_consistent());
+        }
+        // El walk SIGUE tras el error —las dos filas están ahí— y el lado que
+        // no falló no paga el viaje: la fila ya es de error y statear la
+        // derecha no cambiaría ni una letra de ella.
+        assert_eq!(l.stats(), 2, "un `stat` por pareja, no más");
+        assert_eq!(r.stats(), 0, "un lado roto no arrastra al otro");
+    }
+
+    /// Un fichero que DESAPARECE entre el `list` y el `stat` sale como fila de
+    /// error, y es una decisión.
+    ///
+    /// Es una carrera real —`/tmp`, un directorio de build— y el listado de un
+    /// provider la resuelve al revés: `norte-vfs-local::list_with` omite la
+    /// entrada que se esfumó para no matar el listado de un directorio vivo.
+    /// Aquí no se puede omitir: la pareja ya está emparejada, y callarla
+    /// quitaría del panel una fila que el otro lado sí tiene. Este test fija
+    /// esa decisión para que cambiarla cueste discutirlo.
+    #[tokio::test]
+    async fn un_fichero_que_desaparece_entre_el_list_y_el_stat_sale_como_error() {
+        let l = LazyProvider::failing(tree(&["a.txt"]).await, norte_proto::Error::NotFound);
+        let r = LazyProvider::new(tree(&["a.txt"]).await);
+
+        let rows = collect(compare_lazy(&l, &r, CompareOptions::cheap())).await;
+        assert_eq!(rows.len(), 1, "{rows:#?}");
+        assert_eq!(rows[0].verdict, CompareVerdict::Error, "{rows:#?}");
+        assert_eq!(rows[0].reason, Some(CompareReason::Unreadable));
+        assert_eq!(rows[0].side, Some(Side::Left));
+    }
+
+    /// La fila de error lleva lo que el lado que SÍ contestó dijo.
+    ///
+    /// La derecha falla, la izquierda no: su tamaño se averiguó y es cierto, y
+    /// el panel pinta esa celda. Vaciarla sería tirar una respuesta que se
+    /// tuvo.
+    #[tokio::test]
+    async fn la_fila_de_un_stat_roto_conserva_el_lado_que_contesto() {
+        let l = LazyProvider::new(tree(&["a.txt"]).await);
+        let r = LazyProvider::failing(
+            tree(&["a.txt"]).await,
+            norte_proto::Error::Io { retryable: false },
+        );
+
+        let rows = collect(compare_lazy(&l, &r, CompareOptions::cheap())).await;
+        assert_eq!(rows.len(), 1, "{rows:#?}");
+        assert_eq!(rows[0].side, Some(Side::Right));
+        assert_eq!(
+            rows[0].left.as_ref().expect("el lado que contestó").size,
+            Some(b"a.txt".len() as u64),
+            "lo que se llegó a saber viaja en la fila"
+        );
+        assert!(
+            rows[0].right.as_ref().expect("el lado roto").size.is_none(),
+            "y del que no contestó no se inventa nada"
+        );
+    }
+
+    /// El corte entre rungs: con el tamaño ya sabido y distinto, la fecha no se
+    /// pregunta.
+    ///
+    /// Solo se puede ver con un provider que rellene `size` y no `mtime_ms` —la
+    /// forma de un SFTP cuyo servidor no manda `ACMODTIME`—: con uno perezoso
+    /// del todo, el `stat` del rung de tamaño ya trae la fecha y el corte no
+    /// ahorra nada medible.
+    #[tokio::test]
+    async fn un_tamano_que_ya_decide_no_paga_el_stat_de_la_fecha() {
+        let l = MemProvider::new();
+        let r = MemProvider::new();
+        seed(&l, "a.txt", b"aa").await;
+        seed(&r, "a.txt", b"aaaaaaaaaa").await;
+        let l = LazyProvider::only_mtime_missing(l);
+        let r = LazyProvider::only_mtime_missing(r);
+
+        let rows = collect(compare_lazy(&l, &r, CompareOptions::cheap())).await;
+        assert_eq!(rows.len(), 1, "{rows:#?}");
+        assert_eq!(
+            (rows[0].verdict, rows[0].criterion),
+            (CompareVerdict::Different, CompareCriterion::Size),
+            "{rows:#?}"
+        );
+        assert_eq!(
+            (l.stats(), r.stats()),
+            (0, 0),
+            "el tamaño venía en el listado y ya decidió: la fecha no se pregunta"
+        );
+
+        // Y cuando el tamaño NO decide, la fecha sí se pregunta: un `stat` por
+        // lado, no dos.
+        let l = MemProvider::new();
+        let r = MemProvider::new();
+        seed(&l, "a.txt", b"aa").await;
+        seed(&r, "a.txt", b"bb").await;
+        let l = LazyProvider::only_mtime_missing(l);
+        let r = LazyProvider::only_mtime_missing(r);
+        let rows = collect(compare_lazy(&l, &r, CompareOptions::cheap())).await;
+        assert_eq!(rows[0].criterion, CompareCriterion::Mtime, "{rows:#?}");
+        assert_eq!((l.stats(), r.stats()), (1, 1));
+    }
+
+    /// La hidratación mira el token ANTES de cada `stat` (regla dura 3).
+    ///
+    /// Se prueba sobre [`hydrate`] directamente, igual que el drenaje de un
+    /// directorio se prueba sobre `list_all`: por el flujo haría falta cancelar
+    /// a mitad de un `await`, que es una carrera.
+    #[tokio::test]
+    async fn la_hidratacion_mira_el_token_antes_de_preguntar() {
+        let mem = LazyProvider::new(tree(&["a.txt"]).await);
+        let entry = Entry {
+            path: at("a.txt"),
+            kind: EntryKind::File,
+            size: None,
+            mtime_ms: None,
+            attrs: BTreeMap::new(),
+        };
+
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let mut fresh = Fresh::of(&entry);
+        let outcome = hydrate(
+            &mem,
+            &mut fresh,
+            Side::Left,
+            CompareCriterion::Size,
+            &cancel,
+        )
+        .await;
+        assert!(matches!(outcome, Err(HydrationFailure::Cancelled)));
+        assert_eq!(mem.stats(), 0, "ni se preguntó");
+
+        // Y sin cancelar, el mismo lado se hidrata una sola vez: el segundo
+        // rung reutiliza el `stat` del primero.
+        let mut fresh = Fresh::of(&entry);
+        let vivo = CancellationToken::new();
+        for rung in [CompareCriterion::Size, CompareCriterion::Mtime] {
+            hydrate(&mem, &mut fresh, Side::Left, rung, &vivo)
+                .await
+                .expect("hidrata");
+        }
+        assert_eq!(mem.stats(), 1, "un `stat` por lado y por pareja");
+        assert_eq!(fresh.entry.size, Some(b"a.txt".len() as u64));
+        assert!(fresh.entry.mtime_ms.is_some());
+    }
+
     // ---------- el provider que de verdad no puede contestar ----------
 
     /// Un tar REAL, indexado por el provider archive.
@@ -1556,6 +2394,13 @@ mod tests {
     /// `Unknown`: inventarse una diferencia sería tan falso como inventarse una
     /// igualdad, y llamarlo error sería decir que la comparación falló cuando
     /// lo que pasa es que no se sabe.
+    ///
+    /// El OTRO lado lista PEREZOSO (como `norte-vfs-local`, #52) a propósito.
+    /// Con un lado que rellena los campos, este test pasaba también con el bug
+    /// de C7b encima: un `Unknown` producido porque nadie hidrató el tamaño se
+    /// ve igual que uno producido por un enlace sin destino. Con un lado
+    /// perezoso ya no: la pareja de ficheros tiene que salir `Certain`, así que
+    /// el `Unknown` del enlace solo puede venir de lo que de verdad no se sabe.
     #[tokio::test]
     async fn a_real_archive_produces_unknown_rather_than_a_guess() {
         let bytes = TarSmith::new()
@@ -1564,16 +2409,16 @@ mod tests {
             .build();
         let (zip, zip_root) = tar_provider(&bytes).await;
 
-        let local = MemProvider::new();
-        seed(&local, "a.txt", b"hola").await;
-        local
-            .symlink(
-                &MemProvider::root().join(Segment::new(b"link".to_vec()).expect("seg")),
-                b"../x",
-                norte_vfs::SymlinkKind::File,
-            )
-            .await
-            .expect("symlink");
+        let mem = MemProvider::new();
+        seed(&mem, "a.txt", b"hola mundo").await;
+        mem.symlink(
+            &MemProvider::root().join(Segment::new(b"link".to_vec()).expect("seg")),
+            b"../x",
+            norte_vfs::SymlinkKind::File,
+        )
+        .await
+        .expect("symlink");
+        let local = LazyProvider::new(mem);
 
         let stream = compare(
             &local,
@@ -1596,13 +2441,34 @@ mod tests {
             CompareVerdict::Error,
             "unknown is an answer, not a failure"
         );
+        assert!(
+            row.left
+                .as_ref()
+                .expect("el enlace de este lado")
+                .size
+                .is_none(),
+            "al enlace no se le gastó un `stat`: lo decide su destino"
+        );
 
-        // Y lo que el archivo SÍ sabe contestar se contesta.
+        // Y lo que el archivo SÍ sabe contestar se contesta CON CERTEZA: 10
+        // bytes contra 4, con el tamaño de la izquierda hidratado a mano.
         let fichero = rows
             .iter()
             .find(|row| named(row, b"a.txt"))
             .expect("la pareja normal");
-        assert_ne!(fichero.verdict, CompareVerdict::Error, "{rows:#?}");
-        assert_ne!(fichero.confidence, CompareConfidence::Unknown);
+        assert_eq!(
+            (fichero.verdict, fichero.criterion, fichero.confidence),
+            (
+                CompareVerdict::Different,
+                CompareCriterion::Size,
+                CompareConfidence::Certain
+            ),
+            "{rows:#?}"
+        );
+        assert_eq!(
+            fichero.left.as_ref().expect("el fichero de este lado").size,
+            Some(10)
+        );
+        assert_eq!(local.stats(), 1, "solo la pareja de ficheros se statea");
     }
 }

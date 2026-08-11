@@ -2427,8 +2427,14 @@ pub enum CompareReason {
     /// Dos nombres de un mismo lado que colapsan al normalizar a NFC (el
     /// clásico NFD de macOS junto a su gemelo NFC).
     Normalization,
-    /// El directorio no se pudo listar (permisos, E/S). Ver
-    /// [`CompareRow::side`].
+    /// No se pudo LEER lo que hacía falta para comparar (permisos, E/S): un
+    /// directorio que no se dejó listar, o una entrada que no se dejó `stat`ear
+    /// cuando el rung de tamaño o el de fecha necesitaba su dato. Ver
+    /// [`CompareRow::side`], que nombra el lado que falló.
+    ///
+    /// No es un `Unknown` de confianza: `Unknown` es «el provider no puede
+    /// contestar esta pregunta» y viaja con un veredicto `Same`; esto es «no se
+    /// pudo preguntar», y viaja con [`CompareVerdict::Error`].
     Unreadable,
     /// El directorio supera [`COMPARE_MAX_DIR_ENTRIES`] entradas.
     DirTooLarge,

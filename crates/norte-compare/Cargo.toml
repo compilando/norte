@@ -37,6 +37,15 @@ norte-testkit.workspace = true
 # contestar: un tar real indexado por el provider archive, no un mock al que se
 # le dice qué responder.
 norte-vfs-archive.workspace = true
+# EL provider que la gente usa, y el único de este árbol que NO rellena
+# `size`/`mtime_ms` en su listado (#52, stat lazy). Sin él en la suite, la
+# hidratación bajo demanda se prueba solo contra providers que ya traen los
+# campos — que es exactamente cómo el bug de C7b pasó C2–C5 en verde.
+norte-vfs-local.workspace = true
+# Los dos directorios de verdad contra los que compara ese test. Ya es
+# dev-dependency de doce crates del workspace (regla dura 8 no pide
+# justificación).
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 
 [lints]

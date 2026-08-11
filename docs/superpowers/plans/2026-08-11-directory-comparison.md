@@ -900,6 +900,100 @@ git commit -m "feat(tui,frontend): an operable diff pane with confidence on ever
 
 ---
 
+## Task C7b: the walk hydrates what the listing did not bring
+
+**Unplanned.** Found at the end of C7, by driving the real TUI under tmux —
+which is precisely what the harness is for, and what the green suite could not
+tell anybody.
+
+**Files:**
+- Modify: `crates/norte-compare/src/walk.rs`, `crates/norte-compare/Cargo.toml`
+- Modify: `crates/norte-proto/src/methods.rs` (rustdoc only), `crates/norte-i18n/i18n/{en,es}.ftl`
+- Regenerate: `docs/schema/proto.schema.json` (the golden embeds that rustdoc —
+  `NORTE_UPDATE_SCHEMA=1 just t norte-proto`; description text only, no shape
+  change)
+
+**The bug:** `norte-vfs-local::list` returns `size: None` and `mtime_ms: None`
+for every entry, on purpose (#52 — lazy stat: a `readdir` of 40 000 entries does
+not spend 40 000 `stat`s to paint a list). The walk fed that straight into the
+cascade, the size rung short-circuited at `Same`/`Size`/`Unknown`, and **two
+local files of 5 and 12 bytes came back "same, cannot say"**. Every local
+comparison — the only one most people ever run — was inert. C2–C5 were green
+because the engine's whole suite used `MemProvider`, which fills both fields;
+and the cross-provider archive test asserted `Unknown` for the archive symlink,
+so it **passed for the wrong reason** too.
+
+- [x] **Step 1: The failing test first**
+
+Two temporary directories through `norte-vfs-local`, two files differing in
+size. Before the fix it returned `(Same, Size, Unknown)` with both entries
+carrying `size: None`. That failure IS the bug report.
+
+- [x] **Step 2: Hydrate on demand, and only where it pays**
+
+`Walk::hydrated_pair` follows the same order as `cascade::size_and_mtime`: a
+`stat` is spent only on a FILE pair (an orphan is decided by presence, a type
+mismatch and two directories by kind, a link by its target), only for a rung
+that is going to run, only on the side whose field is missing, and at most once
+per side per pair (`Fresh::asked`). A provider that fills its listing — SFTP,
+object, archive — is never re-asked, so the round-trip cost lands on the local
+provider, where it is an `lstat` inside `spawn_blocking`. The rows carry the
+hydrated entries: "different by size" over two empty sizes is unreadable.
+
+**A failed `stat` is an `Error` row** (`reason: Unreadable`, `side`), not a
+degradation to `Unknown`. `Unknown` means "the provider cannot answer this
+question" and travels with a `Same` verdict; a broken `stat` is an `EACCES` the
+user can fix, or a file that vanished between the `list` and the `stat`. Saying
+"same, cannot say" about a pair nobody managed to look at is exactly what the
+confidence vocabulary exists to prevent. `CompareReason::Unreadable` covers it
+without a new wire variant — its rustdoc and both Fluent strings were widened to
+say so (doc-only: no wire change, no version bump).
+
+- [x] **Step 3: The tests that were missing**
+
+Local-vs-local for the size rung and for the mtime rung (real temp dirs, mtimes
+pinned — the wall clock races the 2 s tolerance); a lazily-listing counter
+provider proving that an orphan, a type mismatch and a directory pair spend no
+`stat`, that a filled listing spends none either, and that a failed `stat` is an
+error row that does not drag the other side; `hydrate` tested directly for
+cancellation, like `list_all`. The archive test now runs against a lazy side, so
+its `Unknown` can only come from the tar symlink with no target.
+
+No `norte-testkit` corpus fixture: this is a missing-metadata bug, not an
+encoding or path one — the hydration stats the listed path byte for byte and
+copies only `size` and `mtime_ms` back.
+
+- [x] **Step 4: Review and commit**
+
+`rust-reviewer` over the diff, asked whether on-demand hydration can become an
+N-round-trip stall on a remote provider. **It can, and not on the provider I
+expected**: `file://` is not a synonym for local disk (`LocalProvider` serves
+SMB/NFS/sshfs mounts, where an `lstat` is a network round trip), and the remote
+providers fill their listings *almost* always — `norte-vfs-sftp` gets `mtime`
+from the readdir attrs only when the server sends `ACMODTIME`, and
+`norte-vfs-object` from an optional `last_modified`. A mirrored tree against
+such a server reaches the mtime rung on every pair. The stats are strictly
+serialized, queue depth one.
+
+Applied: the cost docstring now says all of that instead of "local, barely
+noticeable"; **#156** carries the mitigation (hydrate a directory's pairs with
+bounded concurrency — `visit` already holds both listings, so the pair set is
+known up front — and what that would do to the "a broken side does not drag the
+other" test). Not implemented here: it is a performance change with its own
+ordering and failure semantics, and this task is a correctness fix inserted
+between two spent gate checkpoints.
+
+Also applied: the error row now carries the side that *did* answer (throwing its
+freshly-learned size away made the pane paint an empty cell for a side that
+answered perfectly well); `NotFound` is documented and tested as a deliberate
+`Error` row (a file that vanishes between the `list` and the `stat` is a real
+race, and unlike a listing, this pair is already paired — dropping it would
+remove a row the other side has); the composite-of-two-instants residue is
+written down for spec 2; the English string was not English. **#157** files the
+visible consequence: pairs show a size and orphans do not.
+
+---
+
 ## Task C8: closing the branch
 
 **Files:**

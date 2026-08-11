@@ -400,7 +400,7 @@
         },
         {
           "const": "unreadable",
-          "description": "El directorio no se pudo listar (permisos, E/S). Ver\n[`CompareRow::side`].",
+          "description": "No se pudo LEER lo que hacía falta para comparar (permisos, E/S): un\ndirectorio que no se dejó listar, o una entrada que no se dejó `stat`ear\ncuando el rung de tamaño o el de fecha necesitaba su dato. Ver\n[`CompareRow::side`], que nombra el lado que falló.\n\nNo es un `Unknown` de confianza: `Unknown` es «el provider no puede\ncontestar esta pregunta» y viaja con un veredicto `Same`; esto es «no se\npudo preguntar», y viaja con [`CompareVerdict::Error`].",
           "type": "string"
         },
         {
