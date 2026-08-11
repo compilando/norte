@@ -34,10 +34,12 @@
 //! `Same`/`Unknown` a dos ficheros de 5 y 12 bytes, o sea que la comparación
 //! local entera —la única que casi todo el mundo hace— no distinga nada.
 //!
-//! Así que el walk **hidrata bajo demanda**: [`hydrate`] gasta un `stat` en el
+//! Así que el walk **hidrata bajo demanda**: `hydrate` gasta un `stat` en el
 //! lado al que le falta el campo, y solo cuando la pareja va a LLEGAR al rung
-//! que lo usa. Ver ahí el coste, cuándo se paga y qué pasa cuando el `stat`
-//! falla.
+//! que lo usa. Su rustdoc —el de la función, privada, en este mismo fichero—
+//! lleva el coste, cuándo se paga y qué pasa cuando el `stat` falla. No se
+//! enlaza desde aquí a propósito: este doc de módulo es público y `hydrate` no,
+//! y `-D warnings` convierte ese enlace en un error del gate de docs.
 //!
 //! # Los errores son filas
 //!
