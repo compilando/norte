@@ -26,12 +26,12 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | --- | --- | --- |
 | 1 — the wire vocabulary | done | `c279988` |
 | 2 — `descend_orphans` | done | `6cb6cd4` |
+| 3 — `norte-sync` and the Update transducer | done | `aa2242c` |
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
 hardcode a protocol version. After any change to `PROTOCOL_VERSION`, run
 `just t norte-core` as well.
-| 2 — `descend_orphans` | done | `6cb6cd4` |
 
 ### What Task 1 changed in this plan
 
@@ -104,6 +104,88 @@ normatively **absent** on `Skip` and `DeleteTree`.
   (`initialize_rechaza_version_incompatible`,
   `frames_hostiles_y_formas_canonicas_crudas`): both hardcoded a protocol
   version string. Neither has anything to do with sync.
+
+### What Task 3 changed in this plan
+
+**`SyncError` has five variants, not one.** The plan's `Cancelled` is there;
+the other four all say the same thing in different words — *the caller wired
+this wrong, and a plan that looks approvable is worse than no plan*:
+
+- `SourceSideUnknown` — `source_side` is a `Side`, and `Side` carries
+  `#[serde(other)] Unknown`. Planning nothing, silently, is the trap Task 2
+  documented for `descend_orphans`, one layer down.
+- `OutsideRoot { root, path }` — a row whose path does not hang from the root
+  it was measured against. Both `VPath`s are `Box`ed (`result_large_err`).
+- `RootIsNotAStep { root }` — a row whose `rel` would be the ROOT. Reachable
+  from a caller whose `SyncOptions` roots are deeper than the compare roots,
+  and from the error row the walk emits when it cannot list the root itself.
+  An acting step there means "the whole destination tree". **Task 4 must let a
+  `Skip` carry a root `rel`** — the guard is in `absorb`, not in `rel_under`,
+  precisely so it can.
+- `ModeNotPlanned(SyncMode)` — `Mirror` is refused rather than served the
+  `Update` plan, which is a strict SUBSET of it. **Task 5 deletes this
+  variant** when it implements the mode.
+- `Compare(CompareError)` — so a future `CompareError` variant is not
+  mistranslated to "cancelled" by a wildcard arm.
+
+**Task 4's reversal table is already implemented and already green.** The full
+`(kind, dest_has_trash)` function landed in Task 3 because it had to:
+`SyncStep::shape_is_consistent()` forbids a non-`Skip` step with no reversal,
+so an `Overwrite` could not be emitted at all without deciding the trash
+branch, and hardcoding `RestoreTrash` puts a false promise on the wire before
+a human approves it. Task 4's step-1 tests for it will pass on arrival; its
+real work is `on_unknown`, the `Skip` reasons and the `Error` rows.
+
+**Two bugs the reviewers found that outlive this task.** Neither is fixable
+without a wire decision, both are pinned by a test that asserts today's
+behaviour, and both must be resolved before Task 9 executes anything:
+
+1. **A folded pair with different bytes gets the SOURCE's name** (#152's
+   reachable edge). `norte-compare` pairs by a key that NFC-normalises always
+   and case-folds when either side is case-insensitive, and the row carries no
+   marker. `rel` comes from the source entry, so an `Overwrite` of an NFC
+   `café` against an NFD `café` writes a SECOND file and its `RestoreTrash`
+   reversal is a lie — nothing was buried, so undo cannot repair it, and under
+   `Mirror` the original is not an orphan either. Fixing it needs a
+   destination-side name on the step or a new `SyncReason`; both are Task 1
+   territory. Test: `a_pair_whose_two_names_differ_in_bytes_takes_the_source_name`.
+2. **A `TypeMismatch` whose SOURCE is a directory becomes one `Overwrite`**,
+   and `Overwrite` means "trash and copy bytes". The step carries no
+   `EntryKind`, so the executor cannot tell it from a file overwrite, and the
+   walk does not descend a non-directory pair, so the subtree is not in the
+   plan at all. Test:
+   `a_type_mismatch_whose_source_is_a_directory_is_still_one_overwrite`.
+
+**A third gap, for whoever writes the blockers.** Nothing checks that a name
+legal under the source root is legal under the DESTINATION root: 86 NFC `é`
+(172 bytes) become 258 under NFD and blow `NAME_MAX`; `CON`, a trailing dot
+and `f:ads` are not names on Windows (the last one writes an alternate data
+stream and "succeeds"). Today that fails at EXECUTION, on a plan already
+approved. `SyncBlockerKind` and `SyncReason` have no vocabulary for it.
+
+**The manifest is not the plan's.** `norte-vfs` is a dev-dependency, not a
+dependency — the transducer never talks to a provider, which is its whole
+point — and `sha2`/`proptest` are not there at all: they arrive with `hash.rs`
+and `tests/props.rs` in Task 6. `bytes` and `norte-vfs` are dev-deps for the
+one test that drives REAL `norte-compare` rows through the transducer
+(`real_compare_rows_plan_without_a_single_outside_root`); the other 23 build
+their rows by hand, and none of them can touch a contract that spans two
+crates.
+
+**The stream is `FusedStream`, not `Stream`.** `futures`' raw `Unfold` panics
+if polled once past its end, which is what any `select!` with a flush tick
+does — and Task 8's notification pump is exactly that shape. `plan()` returns
+a fused stream and a test polls it twice past the end. The same unfused
+construction is in `norte_compare::walk`; worth an issue there.
+
+**Still open, deliberately.** The token is checked once per row rather than
+raced against `rows.next()`, so `plan()` requires the SAME token as the walk
+— stated in its rustdoc, and how `norte-core`'s `run_compare` already wires
+it. Racing it would mean a `tokio::select!` and a new runtime dependency
+(rule 8) for a case the caller controls. And `!` (0x21) is absent from all 47
+names in the canonical corpus although it is the ADR 0018 archive marker and a
+legal Unix filename; adding it is its own change, because every
+`hostile_names().len() == 47` assertion in the workspace moves with it.
 
 ---
 
