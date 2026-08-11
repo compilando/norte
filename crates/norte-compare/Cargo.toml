@@ -9,11 +9,29 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# `Stream` + `StreamExt`: el walk PRODUCE un flujo de filas y CONSUME los
+# `EntryStream` de los dos providers. Ya es dependencia de norte-vfs.
+futures.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
+# Errores tipados de librería (regla dura 6).
+thiserror.workspace = true
+# `CancellationToken`: el MISMO tipo que el scheduler de norte-core arma para
+# cada Task (regla dura 3). Traerlo aquí evita que el motor invente un segundo
+# mecanismo de cancelación que C6 tendría que puentear.
+tokio-util.workspace = true
 # YA en el workspace (norte-frontend, norte-core, norte-vfs-local, norte-testkit):
 # no es dependencia nueva, así que la regla dura 8 no pide justificación.
 unicode-normalization.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+norte-testkit.workspace = true
+# El test que le exige `Unknown` a un provider que de VERDAD no puede
+# contestar: un tar real indexado por el provider archive, no un mock al que se
+# le dice qué responder.
+norte-vfs-archive.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 
 [lints]
 workspace = true

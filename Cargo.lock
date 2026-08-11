@@ -6234,8 +6234,15 @@ dependencies = [
 name = "norte-compare"
 version = "0.3.0-alpha.2"
 dependencies = [
+ "bytes",
+ "futures",
  "norte-proto",
+ "norte-testkit",
  "norte-vfs",
+ "norte-vfs-archive",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
  "unicode-normalization",
 ]
 

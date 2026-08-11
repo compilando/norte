@@ -21,6 +21,10 @@
 //!   veredicto, el rung que lo decidió y lo que ese rung vale. Pura y
 //!   síncrona: lo que exige I/O (destino de un symlink, sha256) entra ya
 //!   averiguado.
+//! - [`walk`] — el recorrido: dos raíces entran y sale el flujo de filas.
+//!   Profundidad primero con pila explícita, directorio contra directorio,
+//!   con los errores convertidos en filas y la cancelación como único final
+//!   prematuro.
 //!
 //! El vocabulario de las filas —veredicto, criterio y confianza— vive en
 //! `norte-proto` y se reexporta aquí para que quien use el motor no tenga que
@@ -31,14 +35,39 @@
 
 pub mod cascade;
 pub mod key;
+pub mod walk;
 
 pub use cascade::{Decision, HashOutcome, Prefetched, decide};
 pub use key::{PairKey, PairName, SideIndex, Sides, index_side, key_for};
+pub use walk::{CompareStream, compare};
 
 pub use norte_proto::methods::{
     COMPARE_MAX_DIR_ENTRIES, COMPARE_ROWS_MAX_BATCH, CompareConfidence, CompareCriteria,
     CompareCriterion, CompareReason, CompareRow, CompareVerdict, Side,
 };
+
+/// Lo único que puede terminar una comparación antes de tiempo.
+///
+/// Los fallos de verdad —un subdirectorio ilegible, un directorio
+/// desmesurado, una lectura rota a mitad de hash— NO están aquí: son filas
+/// [`CompareVerdict::Error`], y el walk sigue. Una comparación de tres horas no
+/// puede morirse en el `EACCES` de la hoja 40 000.
+///
+/// ```
+/// use norte_compare::CompareError;
+/// assert_eq!(CompareError::Cancelled.to_string(), "comparación cancelada");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
+#[non_exhaustive]
+pub enum CompareError {
+    /// El token de la Task se disparó (regla dura 3). El flujo lo emite UNA
+    /// vez y termina; sirve para distinguir «el árbol se acabó» de «se cortó»
+    /// sin un segundo canal que decirlo.
+    ///
+    /// No hay nada que limpiar: la comparación no escribe un solo byte.
+    #[error("comparación cancelada")]
+    Cancelled,
+}
 
 /// Qué rungs de la cascada corren, y bajo qué tolerancia.
 ///
@@ -97,6 +126,26 @@ impl CompareOptions {
                 ..CompareCriteria::default()
             },
             ..Self::default()
+        }
+    }
+
+    /// Acota el descenso: la raíz es 0, así que `max_depth(1)` empareja la raíz
+    /// y sus hijos directos, y no baja más.
+    ///
+    /// Comparte nombre con el campo a propósito (son espacios de nombres
+    /// distintos): quien construye opciones escribe `.max_depth(1)` y quien las
+    /// lee escribe `opts.max_depth`.
+    ///
+    /// ```
+    /// use norte_compare::CompareOptions;
+    /// assert_eq!(CompareOptions::cheap().max_depth(1).max_depth, Some(1));
+    /// assert_eq!(CompareOptions::cheap().max_depth, None, "por defecto, sin tope");
+    /// ```
+    #[must_use]
+    pub fn max_depth(self, depth: u32) -> Self {
+        Self {
+            max_depth: Some(depth),
+            ..self
         }
     }
 }
