@@ -1,8 +1,10 @@
 # Post-alpha roadmap — ordered by the functionality worth building
 
 **Date:** 2026-08-07
-**Status:** accepted, 2026-08-10. Items 2, 3, 4 and 5 are built; item 1
-(comparison and synchronisation) is next, and is the largest thing left.
+**Status:** accepted, 2026-08-11. Items 2, 3, 4 and 5 are built. Item 1 is
+three specs and only the FIRST is built: comparison lands, synchronisation
+(spec 2) and the CLI/MCP/GUI surfaces (spec 3) do not — it is still the largest
+thing left.
 **Context:** every milestone M0–M5 is met and packaging now turns a tag into
 downloadable artefacts. What remains is not debt — it is the part of
 specification §17 that was never built. This orders it by what the software
@@ -15,6 +17,43 @@ next one cheaper or more obviously worth doing.
 ---
 
 ## 1. Directory comparison and synchronization
+
+**Spec 1 of three built, 2026-08-11** — the comparison, not the
+synchronisation. `fs.compare` walks two trees depth-first with bounded memory,
+as a cancellable task behind the read gate, and streams `compare.rows` to the
+connection that asked for them and to nobody else. Every row declares three
+things that travel together — the verdict, the criterion that decided it, and
+what that criterion is **worth** (proto 0.39.0, ADR 0048) — so "same" by mtime
+and "same" by hash are never the same answer, and "the provider cannot say" is
+an answer rather than an error. `norte-compare` is the engine: the pairing key
+that folds and normalises without losing bytes, the cheap-to-expensive cascade
+(presence → kind → link target → size → mtime → an opt-in streaming sha256),
+and errors as rows, so an `EACCES` at leaf 40 000 costs one row instead of the
+task. The TUI gets an operable diff pane: five category filters, a selection
+anchored to the row id, an explicit active side that nothing infers, and
+textual glyphs for verdict and confidence rather than colour alone.
+**Design:** `docs/superpowers/specs/2026-08-11-directory-comparison-design.md`.
+
+**What it deliberately is not.** It writes nothing. There is no plan, no
+journal entry and no undo, because nothing here mutates — that is **spec 2**,
+still open: the synchronisation plan as a first-class wire type, so an agent or
+the CLI can produce and approve one, journalled and undoable. Only the TUI has
+a surface: no CLI, no MCP, no GUI — that is **spec 3**, still open. Symlinks
+are never followed (`follow_symlinks` is refused outright rather than quietly
+ignored; targets are compared as bytes). Overlapping roots — `/a` against
+`/a/sub` — are allowed on purpose, and are the trap spec 2 has to disarm before
+it plans a single copy (ADR 0048). #134 keeps its issue: it shipped its compare
+half and still owes the sync one, so `pane.sync-dirs` stays greyed out with a
+reason. New debt: #151 (the collision key is implemented twice), #152 (two
+distinct files paired under an NFC singleton, with no marker on the wire), #153
+(case folding decided per provider rather than per mount), #154 (one invalid
+byte disables NFC and folding for a whole filename), #155 (a client that does
+not drain loses its subscription and with it the completeness signal), #156
+(on-demand hydration is serial: 2N chained round trips over a network mount),
+#157 (the pane shows a size for pairs and not for orphans), #158 (no GUI
+compare pane) and #159 (under tmux no modified function key arrives, so
+`Shift+F2` — the documented default — is dead there, along with rename and
+search).
 
 **§17.** Compare panes by metadata or hash, produce an approved one-way or
 two-way plan.

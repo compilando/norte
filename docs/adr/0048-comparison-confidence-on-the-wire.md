@@ -224,3 +224,41 @@ review of task C1):
   was judged not worth a nullable field on every row of the hot path, given
   that `verdict: error` plus a typed `reason` already say precisely what
   happened.
+
+### The warning spec 2 inherits: the dangerous shape is OVERLAP, not equality
+
+Recorded here rather than left for spec 2 to rediscover, because both reviewers
+of task C6 arrived at it independently and it is free to write down now and
+expensive to learn later.
+
+`fs.compare` refuses `left == right` with `INVALID_PARAMS`
+(`handle_fs_compare`, `crates/norte-core/src/daemon/server.rs`). That refusal
+exists because comparing a tree against itself is a screenful of `Same` and a
+waste of a walk. **It is not a safety property, and spec 2 must not read it as
+one.**
+
+Two roots that OVERLAP are the dangerous shape, and they are allowed on
+purpose. `/a` against `/a/sub` is a legitimate comparison here: `/a/sub` simply
+appears twice, once as a subtree of the left root and once as the right root in
+its entirety, and the answer — however odd — costs nothing but wasted work,
+because **this spec writes nothing**. That is the entire reason it is permitted.
+
+A synchronisation planner built on these rows has no such licence. "Copy
+left→right" over an overlapping pair copies a subtree into itself: the
+destination is inside the source, so every byte written creates more source to
+walk, and the plan either recurses without end or duplicates a tree into its own
+descendant. **Spec 2 must decide overlap itself, before it plans anything, and
+must not assume the equality check above gave it anything.** Rejecting an
+overlapping pair is not obviously the right answer either — comparing `/a`
+against `/a/sub` is a reasonable thing to ask for — so the decision belongs at
+the moment a plan is produced, not at the moment a comparison is.
+
+The equality check is also **defeatable**, which is the same argument once more.
+`p.left == p.right` is structural equality of two `VPath`s, not identity of two
+locations. A symlinked root (`/data` → `/srv/data` compared against `/srv/data`),
+one SFTP host reached under two authorities, an archive opened by two different
+paths — each yields two unequal `VPath`s naming exactly one tree. Canonicalising
+them is neither free nor always possible: a remote provider need not offer
+`realpath`, and asking for one costs a round trip per comparison. Accepted here
+for the reason overlap is accepted: the worst outcome is a wasted walk. Not
+acceptable in spec 2, where the worst outcome is a write.

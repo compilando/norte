@@ -9,6 +9,44 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Compare two directories, and be told how much the answer is worth:**
+  `Shift+F2` compares the two panes and opens a diff pane over both of them —
+  one row per pair, and each row says not only *what* was concluded but *which
+  criterion* concluded it and *how much that criterion proves*. This is the
+  point of the feature. Two different sizes prove two different files. Two
+  dates nine seconds apart suggest it and prove nothing: a restored backup, a
+  `touch` and a real edit look identical at that rung. An entry inside a zip
+  has no size and no date you should trust, and the honest answer there is
+  "the provider cannot say" — which norte shows as an answer, with its own
+  glyph, rather than as an error or as a comforting "same". So a comparison
+  against an archive or an object store completes normally instead of filling
+  the screen with failures that are not failures. Both columns are ASCII
+  glyphs, not colour, so "same, verified" and "same, probably" stay
+  distinguishable to a reader who cannot see colour.
+  The comparison is cheap first and expensive only if you ask: presence, kind,
+  symlink target, size, then date; a full sha256 of both sides runs **only**
+  when you request it, and an agent needs the content permission to ask for it
+  at all. It is a normal task, so it shows progress and `Ctrl+K` cancels it,
+  and it walks with bounded memory rather than holding two whole listings — a
+  directory that cannot be read becomes one row and the walk carries on
+  instead of dying at leaf 40 000.
+  In the pane you filter by category, jump into either side, and choose which
+  side an action means — the active side is one you pick, never one norte
+  infers from the row, because guessing on a destructive operation is not a
+  feature. If the answer came back incomplete, it says so instead of painting
+  "done" over a partial one.
+  On the wire that is protocol **0.39.0**: `fs.compare` returns a task and
+  `compare.rows` streams the rows, in batches, to the connection that asked and
+  to no other (ADR 0048).
+  **What this is not, on purpose:** it does not change anything. There is no
+  synchronisation plan, no journal entry and no undo, because nothing is
+  written — that is the next piece of work. Symlinks are never followed
+  (norte refuses the request rather than quietly ignoring it, and compares link
+  targets as bytes). And it is the terminal interface only: no command line, no
+  agent surface, and no graphical one yet (#158). One known limitation worth
+  saying out loud: inside tmux, `Shift+F2` does not reach norte at all — nor do
+  the long-standing `Shift+F6` and `Alt+F7` — while plain function keys work
+  (#159). Until that is fixed, reach it from the command palette.
 - **A number before a key repeats it, on the presets whose originals do that:**
   typing `5` then `j` under the `vim` preset moves down five rows, `12` then a
   page key turns twelve pages. The number is visible at the status bar while
