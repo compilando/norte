@@ -28,6 +28,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 2 — `descend_orphans` | done | `6cb6cd4` |
 | 3 — `norte-sync` + the Update transducer | done | `aa2242c` |
 | 4 — reversal, `on_unknown`, the `Skip` reasons, `dest_rel` | done | `02f95cd` |
+| 5 — `Mirror`, `Ambiguous`, blockers, the overlap guard | done | `fb7a37a` |
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
@@ -279,6 +280,95 @@ them were already passing when task 4 started. Task 4's real content was
   exhaustive `dest_rel` test. A shared fixture is its own change (it moves
   every `hostile_names().len() == 47` assertion's neighbourhood), so task 4
   used the plain corpus instead.
+
+### What Task 5 changed in this plan
+
+**Task 4's prescription for #152 was wrong, and the wrongness is instructive.**
+It said a prefix STACK of `(source RelPath, dest RelPath)` "popped by prefix as
+the pre-order walk leaves a subtree". `norte_compare::walk` does not emit rows
+that way: `visit` pushes ALL of a directory's rows into `pending` and only then
+pushes the subdirectory frames, so between a folder's row and its children's
+come **every one of its siblings**. A stack popped on the first row that does
+not hang from its top loses the spelling right before it is needed, and two
+levels down it does worse — it keeps the grandparent's entry and produces a
+`dest_rel` naming a directory that exists on NEITHER side. Five hand-written
+tests passed, in the one order the walk never produces. The shipped state is a
+`BTreeMap<RelPath, RelPath>` resolved by deepest ancestor, which needs only
+"parent before child"; the regression test drives real `compare()` rows.
+
+The rule this leaves behind, for any task that adds streaming state: **the only
+ordering the row stream guarantees is parent-before-child.** Not
+child-immediately-after-parent.
+
+- **`SyncError::ModeNotPlanned` is NOT deleted.** `SyncMode` is
+  `#[non_exhaustive]`, so `absorb`'s wildcard is mandatory, and refusing is its
+  only safe behaviour: degrading to `Update` would silently serve a plan that
+  does not do what a future mode asked for. Unreachable from the wire
+  (`SyncMode` has no `serde(other)`), therefore untestable, therefore kept
+  deliberately rather than by omission.
+- **Both wiring errors are now decided when the stream is BUILT**, not per row,
+  because per row they never fired for an empty comparison — two empty trees
+  under a bad mode produced an empty, approvable plan. `plan()` seeds them.
+- **A read-only destination ends the stream after its one blocker and never
+  pulls a row.** Task 8 must not assume the compare task it feeds runs to
+  completion; dropping the row stream is what stops the walk.
+- **Blocker `rel` is measured against the root of the side the blocker speaks
+  ABOUT** (`AmbiguousDest`, `DirTooLarge`, `TypeMismatchDir` with `side: Right`
+  → `dest_root`), and `SyncBlocker::side` uses the plan convention — source is
+  `Left`, destination `Right`, whatever `source_side` says. `SyncPlanParams`
+  carries no `Side` at all, so there is no second coordinate system inside the
+  sync family; a frontend that synced right→left paints a `right` in its LEFT
+  panel. Task 12 owns that.
+- **`SyncBlocker::shape_is_consistent()` is new**, the twin of
+  `SyncStep::shape_is_consistent()`: `TypeMismatchDir` carries `side` always,
+  because it is the only blocker whose side is not implied by its kind and the
+  only one where the side IS the sentence.
+- **`TypeMismatchDir` blocks on BOTH sides**, which is the exception to the
+  "source skips, destination blocks" rule this family follows twice. The
+  reasoning is in its rustdoc: skipping loses nothing immediate but breaks the
+  MODE's promise structurally (a file where a subtree should be), and the
+  alternative costs a new `SyncReason` — closed daemon→client vocabulary, so a
+  bump — after 0.40.0 ships. `protocol-guardian` asked for it recorded rather
+  than defaulted; it is recorded.
+- **`include` must filter the plan's OUTPUT, never its input.** A folder's two
+  spellings travel in the folder's own row, which is `Same` and produces no
+  step, so a caller that filters `CompareRow`s to a selection reopens #152 on
+  the code path that closed it. Stated in `plan()`'s rustdoc; **Task 8 has to
+  honour it.**
+- **The overlap guard is narrower than ADR 0049 and the spec claim.** It
+  catches structural containment only — `is_at_or_under` compares scheme,
+  authority and segments literally, so a symlinked root, one SFTP host under two
+  authorities and an archive opened by two paths all slip past it, and those are
+  exactly the three examples both documents cite. Equal roots are deliberately
+  not an overlap (a tree against itself yields `Same` rows and zero steps, and
+  the transducer cannot tell two providers that spell their root alike apart —
+  two `mem:///` in the tests). It fires ONCE and prunes only the side that
+  reached the other root. **Task 14 must correct ADR 0049's and the spec's claim
+  about what it catches**, along with the line-115 fix Task 4 flagged and the
+  fifth blocker kind (the spec still lists four).
+- **For Task 6.** One row produces at most one item, so nothing interleaves
+  inside a row. Order is: the `DestReadOnly` blocker (if any) before everything,
+  then walk order. Blockers are UNBOUNDED in number — `TypeMismatchDir` is the
+  first kind whose count scales with the tree — so `plan_hash` must fold all of
+  them, not the list truncated to `SYNC_MAX_BLOCKERS_REPORTED`, and must tag
+  step-vs-blocker so a `Skip` and a blocker at the same `rel` cannot collide.
+  Hash the serde NAME of an enum, never its discriminant: `TypeMismatchDir` was
+  inserted before `Unknown` and the next variant will be too. Every read-only
+  plan produces exactly one item regardless of the tree, so they all hash alike
+  — `sync.apply` must gate on `executable`, not on hash match alone.
+- **`Mirror` trusts the request not to have descended destination orphans.** A
+  compare run with `descend_orphans` on the destination side would yield a
+  `DeleteTree` for a directory and another for each descendant inside it.
+  Task 8 makes that a params error, which is the enforcement.
+- **MINORs skipped, with reasons.** An unrecognised `CompareVerdict` still
+  produces nothing at all (in-process the two crates ship together, so it cannot
+  arrive; a `Skip` for it would need a `SyncReason` that means "a newer daemon
+  said something"). The `norte-testkit` `corpus::spelling_twins()` accessor and
+  the six extra fixtures `encoding-auditor` proposed (a case-folded directory
+  pair, a length-changing fold, the lossy `\xFF`/`\xFE` twins, `U+0130`) are a
+  change of their own — every `hostile_names().len() == 47` assertion in the
+  workspace moves with it — and Task 4 deferred them for the same reason. The
+  non-UTF-8-leaf-under-a-folded-folder case IS covered, in `plan.rs`.
 
 ---
 
