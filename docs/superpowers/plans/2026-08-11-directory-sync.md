@@ -25,6 +25,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | task | state | commit |
 | --- | --- | --- |
 | 1 — the wire vocabulary | done | `c279988` |
+| 2 — `descend_orphans` | done | `6cb6cd4` |
 
 ### What Task 1 changed in this plan
 
@@ -56,6 +57,37 @@ this arrives), `SyncReportParams { task_id }`, `SYNC_MAX_FAILURES_REPORTED`.
 
 `SyncCounts::bytes` is a straight sum of `SyncStep::size`, which is now
 normatively **absent** on `Skip` and `DeleteTree`.
+
+### What Task 2 changed in this plan
+
+- **`descend_orphans` is a `DescendSide` on the wire, not an `Option<Side>`.**
+  New enum in `methods.rs`: `{ Left, Right }`, `#[non_exhaustive]`, **no**
+  `serde(other)`, plus `impl From<DescendSide> for Side`. Both
+  `FsCompareParams` and `SyncCompareOptions` carry `Option<DescendSide>`;
+  `norte_compare::CompareOptions` keeps `Option<Side>` and the engine converts.
+  The plan's INVALID_PARAMS check in `handle_fs_compare` **is gone** — the type
+  refuses `"lft"` and `"unknown"` in the deserialiser of every peer, which the
+  handler could not do for `CoreBackend::Embedded` (it calls the engine without
+  passing through the daemon at all). Task 8 still has to refuse the field in
+  `sync.plan`, but only because it is not the caller's there — not because a
+  value could be malformed.
+- **`SyncCounts::bytes` cannot be summed from the rows.** An orphan row is
+  never hydrated (#157) and `norte-vfs-local` lists with `size: None`, so on
+  `file://` every descended row carries no size. Task 6 and Task 8 need their
+  own `stat` pass, or #156's bounded-concurrency hydration, or the number is 0.
+- **The container row of a descended orphan still comes out**, before its
+  children, and carries no marker saying the subtree follows. That is
+  deliberate: descending is a parameter of the REQUEST, so the caller already
+  knows. Task 3's mapping is unaffected — a dir row is `CreateDir`, never a
+  recursive copy.
+- **Inside an orphan the pairing key still folds with BOTH sides'
+  capabilities.** Two names the destination could not tell apart come out
+  `Ambiguous` inside a source-side orphan, and their subtree is not descended.
+  That is what Task 5's `AmbiguousSource` → `Skip` rule will see.
+- Two tests that Task 1's bump had left red are fixed here
+  (`initialize_rechaza_version_incompatible`,
+  `frames_hostiles_y_formas_canonicas_crudas`): both hardcoded a protocol
+  version string. Neither has anything to do with sync.
 
 ---
 
