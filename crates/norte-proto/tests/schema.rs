@@ -80,6 +80,7 @@ struct ProtocolSchema {
     initialize_params: InitializeParams,
     initialize_result: InitializeResult,
     match_info: MatchInfo,
+    on_unknown: OnUnknown,
     pending_approval: PendingApproval,
     plan_hash: PlanHash,
     plugin_column_info: PluginColumnInfo,
@@ -122,7 +123,9 @@ struct ProtocolSchema {
     policy_undo_session_result: PolicyUndoSessionResult,
     request_scope_params: RequestScopeParams,
     request_scope_result: RequestScopeResult,
+    rel_path: RelPath,
     resume_policy: ResumePolicy,
+    root_overlap: RootOverlap,
     rpc_cancel_params: RpcCancelParams,
     search_hits: SearchHits,
     segment: Segment,
@@ -130,7 +133,24 @@ struct ProtocolSchema {
     server_info: ServerInfo,
     side: Side,
     span_wire: SpanWire,
+    step_reversal: StepReversal,
     symlink_policy: SymlinkPolicy,
+    sync_apply_params: SyncApplyParams,
+    sync_blocker: SyncBlocker,
+    sync_blocker_kind: SyncBlockerKind,
+    sync_compare_options: SyncCompareOptions,
+    sync_counts: SyncCounts,
+    sync_failure: SyncFailure,
+    sync_failure_cause: SyncFailureCause,
+    sync_mode: SyncMode,
+    sync_plan_done: SyncPlanDone,
+    sync_plan_params: SyncPlanParams,
+    sync_reason: SyncReason,
+    sync_report_params: SyncReportParams,
+    sync_report_result: SyncReportResult,
+    sync_step: SyncStep,
+    sync_step_kind: SyncStepKind,
+    sync_steps_batch: SyncStepsBatch,
     task_cancel_params: TaskCancelParams,
     task_cancel_result: TaskCancelResult,
     task_id: TaskId,
@@ -307,6 +327,74 @@ fn el_schema_de_rename_collision_kind_cubre_los_veredictos_de_la_golden() {
         "todo veredicto que el core puede emitir necesita fixture en \
          rename_collision.json (y al revés)"
     );
+}
+
+/// (0.40.0, ADR 0049) El mismo mecanismo que el test de
+/// [`RenameCollisionKind`], para el vocabulario de la sincronización: TODO
+/// token que el core puede emitir necesita fixture, y al revés.
+///
+/// Importa más aquí que en ninguna otra familia: estos enums crecen a lo largo
+/// de trece tareas más de este mismo plan, y `check_family` no caza la
+/// variante nueva sin fixture —compara las fixtures contra una lista de casos
+/// Rust escrita a mano, así que olvidar las dos deja los dos lados de acuerdo—.
+/// El artefacto, en cambio, se genera del tipo.
+///
+/// `unknown` queda fuera en todos los casos: es el fallback de `serde(other)`,
+/// el core JAMÁS lo emite y congelarlo sería congelar un valor que no existe en
+/// el wire.
+#[test]
+fn el_schema_del_vocabulario_de_sync_cubre_las_goldens() {
+    let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+    // (tipo, fichero, prefijo de fixture, clave). El PREFIJO acota el barrido:
+    // `methods.json` es heterogéneo y su clave `mode` también la usa
+    // `fs.delete`, que no tiene nada que ver con un modo de sincronización.
+    for (tipo, fixture, prefijo, campo) in [
+        ("SyncStepKind", "sync_step.json", "", "kind"),
+        ("StepReversal", "sync_step.json", "", "reversal"),
+        ("SyncReason", "sync_step.json", "", "reason"),
+        ("SyncBlockerKind", "sync_blocker.json", "", "kind"),
+        ("SyncFailureCause", "methods.json", "sync_", "cause"),
+        ("SyncMode", "methods.json", "sync_", "mode"),
+        ("OnUnknown", "methods.json", "sync_", "on_unknown"),
+        ("RootOverlap", "error.json", "overlapping_roots", "relation"),
+    ] {
+        let variantes = schema
+            .pointer(&format!("/$defs/{tipo}/oneOf"))
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or_else(|| panic!("{tipo} es un oneOf en el artefacto"));
+        let del_schema: std::collections::BTreeSet<&str> = variantes
+            .iter()
+            .filter_map(|v| v.get("const").and_then(serde_json::Value::as_str))
+            .filter(|v| *v != "unknown")
+            .collect();
+        assert!(
+            !del_schema.is_empty(),
+            "[{tipo}] ¿cambió la forma del enum en el artefacto?"
+        );
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/golden/types")
+            .join(fixture);
+        let raw = std::fs::read_to_string(&path).expect("leer la fixture");
+        let casos: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&raw).expect("fixture JSON válida");
+        // El campo puede ser opcional (`reversal`, `reason`) y puede vivir
+        // ANIDADO (`cause`, dentro de la lista de fallos del informe): lo que se
+        // cruza es el conjunto de valores que las fixtures llegan a enseñar,
+        // esté donde esté.
+        let mut de_la_golden = std::collections::BTreeSet::new();
+        for (nombre, caso) in &casos {
+            if nombre.starts_with(prefijo) {
+                recoge_valores(caso, campo, &mut de_la_golden);
+            }
+        }
+
+        assert_eq!(
+            del_schema, de_la_golden,
+            "[{tipo}] todo valor que el core puede emitir necesita fixture en \
+             {fixture} (y al revés)"
+        );
+    }
 }
 
 /// (rust-review MINOR 5) El artefacto es lo único que un implementador de
@@ -518,6 +606,35 @@ fn el_schema_del_batch_de_renames_lleva_los_topes_del_tipo() {
             Some("#/$defs/PlanHash"),
             "[{tipo}] plan_hash es el tipo con patrón, no un string cualquiera"
         );
+    }
+}
+
+/// Recoge, en profundidad, todo valor de tipo string que cuelgue de la clave
+/// `campo`. Las fixtures anidan (un informe lleva sus fallos en una lista), así
+/// que un cruce que solo mirase el primer nivel dejaría enums enteros sin
+/// vigilar.
+fn recoge_valores<'a>(
+    valor: &'a serde_json::Value,
+    campo: &str,
+    out: &mut std::collections::BTreeSet<&'a str>,
+) {
+    match valor {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                if k == campo
+                    && let Some(s) = v.as_str()
+                {
+                    out.insert(s);
+                }
+                recoge_valores(v, campo, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items {
+                recoge_valores(v, campo, out);
+            }
+        }
+        _ => {}
     }
 }
 

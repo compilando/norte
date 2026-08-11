@@ -80,6 +80,18 @@
   "permission_denied": {
     "kind": "permission_denied"
   },
+  "overlapping_roots_dest_inside_source": {
+    "kind": "overlapping_roots",
+    "relation": "dest_inside_source"
+  },
+  "overlapping_roots_same": {
+    "kind": "overlapping_roots",
+    "relation": "same"
+  },
+  "overlapping_roots_source_inside_dest": {
+    "kind": "overlapping_roots",
+    "relation": "source_inside_dest"
+  },
   "plan_not_executable": {
     "kind": "plan_not_executable"
   },

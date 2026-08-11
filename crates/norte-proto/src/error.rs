@@ -50,6 +50,61 @@ impl fmt::Display for ConflictKind {
     }
 }
 
+/// Cómo se solapan las dos raíces de un `sync.plan` (0.40.0, ADR 0049): la
+/// carga de [`Error::OverlappingRoots`].
+///
+/// Son TRES casos y no dos, y por eso no es un [`Side`](crate::methods::Side):
+/// «son el mismo árbol» no es «una está dentro de la otra», y es justo la
+/// frase que un frontend necesita pintar. Con dos valores habría que elegir uno
+/// por convenio y el mensaje mentiría en ese caso.
+///
+/// Nombra `source` y `dest`, no `left` y `right`: comparar es simétrico y
+/// sincronizar no (diseño §«Params name sides, not hands»).
+///
+/// Tolerancia N/N-1 (ADR 0004), como [`ConflictKind`]: viaja daemon→client, así
+/// que una relación desconocida degrada a [`RootOverlap::Unknown`] en vez de
+/// reventar el parse del error.
+///
+/// ```
+/// use norte_proto::RootOverlap;
+/// assert_eq!(
+///     serde_json::to_string(&RootOverlap::DestInsideSource).expect("json"),
+///     r#""dest_inside_source""#
+/// );
+/// let futuro: RootOverlap = serde_json::from_str(r#""braided""#).expect("degrada");
+/// assert_eq!(futuro, RootOverlap::Unknown);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RootOverlap {
+    /// Las dos raíces nombran el MISMO árbol. Ninguna está dentro de la otra:
+    /// son la misma.
+    Same,
+    /// El ORIGEN está dentro del destino.
+    SourceInsideDest,
+    /// El DESTINO está dentro del origen. Es el que convertiría una copia en un
+    /// bucle.
+    DestInsideSource,
+    /// Relación de un protocolo más nuevo (fallback de deserialización).
+    /// El core JAMÁS la emite.
+    #[doc(hidden)]
+    #[serde(other)]
+    Unknown,
+}
+
+impl fmt::Display for RootOverlap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Same => "source and destination are the same tree",
+            Self::SourceInsideDest => "the source is inside the destination",
+            Self::DestInsideSource => "the destination is inside the source",
+            Self::Unknown => "unknown overlap relation (newer protocol)",
+        })
+    }
+}
+
 /// Error del protocolo norte (spec §17.7).
 ///
 /// Wire: objeto tagged `{"kind": "...", …campos}`. La variante es la API:
@@ -220,6 +275,29 @@ pub enum Error {
     /// ve pero degradaría a `Unknown`.
     #[error("rename plan has collisions; nothing was attempted")]
     PlanNotExecutable,
+    /// Las dos raíces de un `sync.plan` son EL MISMO ÁRBOL: iguales, o una
+    /// dentro de la otra (0.40.0, ADR 0049). No se creó Task alguna.
+    /// Accionable: elegir otro par de raíces.
+    ///
+    /// Es un rechazo ESTRUCTURAL, previo al walk, y por eso es una categoría y
+    /// no un `-32602` con mensaje: los frontends hacen match por categoría y
+    /// jamás parsean strings de error, así que «estas dos carpetas son la
+    /// misma» solo se puede pintar —y traducir— si viaja como variante. La
+    /// comprobación gemela que corre DURANTE el walk, y que caza lo que un
+    /// symlink o una segunda authority esconden, no es un error sino un
+    /// [`SyncBlockerKind::OverlapDetected`](crate::methods::SyncBlockerKind::OverlapDetected):
+    /// para entonces ya hay un plan al que pertenecer.
+    ///
+    /// `fs.compare` NO la emite: comparar `/a` contra `/a/sub` cuesta un walk y
+    /// no escribe un byte. Un cliente N-1 (0.39.x) jamás la ve —no llama al
+    /// método— pero degradaría a `Unknown`.
+    #[error("sync roots overlap: {relation}")]
+    OverlappingRoots {
+        /// CÓMO se solapan: son la misma, o una contiene a la otra y cuál. Las
+        /// tres se pintan distinto y la primera no es un caso degenerado de las
+        /// otras dos.
+        relation: RootOverlap,
+    },
     /// Categoría de un protocolo más nuevo (fallback de deserialización).
     /// El core JAMÁS la emite; existe para que un cliente N degrade con
     /// elegancia ante categorías N+1.

@@ -1,0 +1,21 @@
+{
+  "ambiguous_dest": {
+    "kind": "ambiguous_dest",
+    "rel": "LEEME%FF.txt",
+    "side": "right"
+  },
+  "dest_read_only": {
+    "kind": "dest_read_only",
+    "rel": "",
+    "side": "right"
+  },
+  "dir_too_large": {
+    "kind": "dir_too_large",
+    "rel": "fotos",
+    "side": "right"
+  },
+  "overlap_detected": {
+    "kind": "overlap_detected",
+    "rel": "sub"
+  }
+}

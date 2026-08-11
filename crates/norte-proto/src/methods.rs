@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     CollisionPolicy, DeleteMode, Entry, EntryKind, ResumePolicy, Segment, SymlinkPolicy, TaskId,
-    VPath, VerifyPolicy,
+    VPath, VPathError, VerifyPolicy,
 };
 
 /// Versión del protocolo (semver). El core soporta N y N-1 (spec §11).
@@ -426,7 +426,44 @@ use crate::{
 /// Ventana N=0.39.x / N-1=0.38.x: un cliente 0.38 no conoce el método nuevo y
 /// no lo llama, así que jamás recibe una fila — nada que gatear en emisión. La
 /// inversa la corta [`version_compatible`] en el handshake, como siempre.
-pub const PROTOCOL_VERSION: &str = "0.39.0";
+///
+/// 0.40.0 (sincronización de directorios, diseño
+/// `2026-08-11-directory-sync-design.md`, ADR 0049): la spec 2 del mismo ítem
+/// de roadmap que 0.39.0. Métodos nuevos [`SYNC_PLAN`] ([`SyncPlanParams`] → el
+/// [`FsTaskResult`] EXISTENTE), [`SYNC_APPLY`] ([`SyncApplyParams`] → el mismo)
+/// y [`SYNC_REPORT`] ([`SyncReportParams`] → [`SyncReportResult`]);
+/// notificaciones nuevas [`SYNC_STEPS`] ([`SyncStepsBatch`]) y
+/// [`SYNC_PLAN_DONE`] ([`SyncPlanDone`]); el vocabulario que los pasos hablan
+/// ([`SyncStep`], [`SyncStepKind`], [`StepReversal`], [`SyncReason`],
+/// [`SyncBlocker`], [`SyncBlockerKind`], [`SyncCounts`], [`SyncFailure`],
+/// [`SyncFailureCause`], [`SyncMode`], [`OnUnknown`], [`RelPath`],
+/// [`SyncCompareOptions`]) y los
+/// topes [`SYNC_STEPS_MAX_BATCH`], [`SYNC_PLAN_TTL_MS`],
+/// [`SYNC_MAX_BLOCKERS_REPORTED`] y [`SYNC_MAX_INCLUDE`]. Con los métodos
+/// viajan sus dos clases de Task,
+/// [`TaskKind::SyncPlan`](crate::TaskKind::SyncPlan) y
+/// [`TaskKind::Sync`](crate::TaskKind::Sync), y una categoría de error nueva,
+/// [`Error::OverlappingRoots`](crate::Error::OverlappingRoots). Bump ADITIVO
+/// PURO: ningún tipo existente cambia de forma, así que el payload de cualquier
+/// método anterior sigue siendo byte a byte el de 0.39.0.
+///
+/// Lo NUEVO del vocabulario es que un plan DECLARA lo que puede deshacer:
+/// [`StepReversal`] viaja por paso y ANTES de la aprobación, así que el humano
+/// ve cuántos pasos son irreversibles cuando todavía puede decir que no, en vez
+/// de leerlo en el informe. Y la asimetría del `#[serde(other)]` es
+/// deliberada: el vocabulario que va daemon→client lo lleva, como el de ADR
+/// 0048; [`SyncMode`] y [`OnUnknown`], que van client→daemon, NO — aceptar un
+/// modo desconocido por defecto es aceptar borrar por defecto.
+///
+/// Ventana N=0.40.x / N-1=0.39.x: un cliente 0.39 no conoce los métodos nuevos
+/// y no los llama, así que jamás recibe un paso ni un `plan_done` — nada que
+/// gatear en emisión, salvo las dos clases de Task: esas SÍ le llegan sin
+/// haber llamado a nada, porque [`TASK_PROGRESS`] se difunde a toda conexión
+/// humana y `task.list` las devuelve en el resync. Su `serde(other)` las degrada
+/// a `TaskKind::Unknown` — es la única superficie N/N-1 real de este bump, y
+/// tiene golden en `task_progress.json`. La inversa la corta
+/// [`version_compatible`] en el handshake.
+pub const PROTOCOL_VERSION: &str = "0.40.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -774,6 +811,98 @@ pub const COMPARE_ROWS_MAX_BATCH: usize = 256;
 /// desmesurado cuesta el directorio, jamás un OOM que se lleve las otras tres
 /// horas de trabajo.
 pub const COMPARE_MAX_DIR_ENTRIES: usize = 200_000;
+
+/// `sync.plan` — planifica una sincronización de UN SOLO SENTIDO
+/// (`source` → `dest`) como Task cancelable (0.40.0, ADR 0049). Result = el
+/// [`FsTaskResult`] EXISTENTE (`{task_id}`), como [`FS_COMPARE`]; los pasos
+/// llegan por [`SYNC_STEPS`] SOLO a la conexión que lanzó el plan, y el plan se
+/// CIERRA con [`SYNC_PLAN_DONE`].
+///
+/// Planificar NO muta: por debajo es la comparación de [`FS_COMPARE`] con una
+/// decisión por fila, así que va sujeto al MISMO gate de lectura sobre AMBAS
+/// raíces, y el rung de hash exige además scope de contenido. Quien escribe es
+/// [`SYNC_APPLY`], y escribe el plan RETENIDO — no lo que el cliente vuelva a
+/// mandar.
+///
+/// Dos raíces que se SOLAPAN —iguales, o una dentro de la otra— son
+/// [`Error::OverlappingRoots`](crate::Error::OverlappingRoots) y no se crea Task
+/// alguna. [`FS_COMPARE`] sí permite ese par: comparar `/a` contra `/a/sub`
+/// cuesta un walk y no escribe un byte. Planificar escrituras dentro del propio
+/// origen no tiene esa licencia.
+pub const SYNC_PLAN: &str = "sync.plan";
+/// `sync.steps` — notificación server→client con un LOTE de pasos de
+/// [`SYNC_PLAN`] ([`SyncStepsBatch`]). SOLO viaja a la conexión que lanzó el
+/// plan (jamás broadcast, mismo criterio direccional que [`COMPARE_ROWS`]).
+///
+/// Cómo se sabe si llegaron TODOS: igual que en [`COMPARE_ROWS`], contando
+/// contra [`TaskProgress::entries_done`](crate::TaskProgress::entries_done) —
+/// que en una Task [`TaskKind::SyncPlan`](crate::TaskKind::SyncPlan) cuenta
+/// PASOS emitidos— cuando el flujo se ha agotado. Aquí importa más que allí: un
+/// cliente que apruebe un plan del que se perdió un lote está aprobando algo que
+/// no ha visto entero. La aprobación se hace contra
+/// [`SyncPlanDone::counts`], que es el total que el core sí conoce.
+pub const SYNC_STEPS: &str = "sync.steps";
+/// `sync.plan_done` — notificación que CIERRA un plan ([`SyncPlanDone`]): su
+/// [`PlanHash`], los contadores, los bloqueos y el veredicto `executable`.
+/// Llega una vez por Task de [`SYNC_PLAN`] que termine bien, y a la misma
+/// conexión que los lotes.
+pub const SYNC_PLAN_DONE: &str = "sync.plan_done";
+/// `sync.apply` — ejecuta un plan RETENIDO ([`SyncApplyParams`] → el
+/// [`FsTaskResult`] existente), como una Task
+/// [`TaskKind::Sync`](crate::TaskKind::Sync) y UNA unidad deshacible del
+/// journal.
+///
+/// **Lleva NADA MÁS que el hash**, y eso es lo que convierte «ejecuta lo que se
+/// aprobó» en un invariante en vez de una promesa: no hay un segundo parámetro
+/// por el que pueda colarse otra intención. El plan vive server-side, atado a la
+/// CONEXIÓN que lo produjo — nadie aplica un plan que no planificó—, así que un
+/// hash que no nombre un plan vivo (otra conexión, TTL vencido, daemon
+/// reiniciado) es [`Error::PlanStale`](crate::Error::PlanStale). Un hash
+/// MALFORMADO no: eso muere en la deserialización de [`PlanHash`] como error de
+/// params, porque «esto no es un hash» y «el mundo se movió» son hechos
+/// distintos.
+///
+/// Un plan con `executable == false` se rehúsa con
+/// [`Error::PlanNotExecutable`](crate::Error::PlanNotExecutable) AUNQUE el hash
+/// case.
+pub const SYNC_APPLY: &str = "sync.apply";
+/// `sync.report` — el informe de una Task de [`SYNC_APPLY`]
+/// ([`SyncReportParams`] → [`SyncReportResult`]): qué se hizo, qué falló y con
+/// qué `batch_id` deshacerlo. Gemelo de [`FS_RENAME_BATCH_REPORT`], con sus
+/// mismas reglas de retención y de visibilidad.
+pub const SYNC_REPORT: &str = "sync.report";
+
+/// Tope de pasos por notificación [`SYNC_STEPS`] (coalescing server-side): el
+/// mismo número y el mismo motivo que [`COMPARE_ROWS_MAX_BATCH`] — medio millón
+/// de pasos no puede convertirse en medio millón de frames.
+pub const SYNC_STEPS_MAX_BATCH: usize = 256;
+/// Cuánto vive un plan aprobable tras cerrarse (0.40.0): diez minutos.
+///
+/// Es el hueco entre el plan y su ejecución, y por tanto lo que el ejecutor
+/// tiene que revalidar: antes de cada paso DESTRUCTIVO se comprueba que el
+/// destino sigue como el plan lo anotó. Más TTL es más ventana para que el
+/// árbol cambie debajo; menos es un humano que se levanta a por café y pierde
+/// el plan. Vencido, el hash es
+/// [`Error::PlanStale`](crate::Error::PlanStale).
+pub const SYNC_PLAN_TTL_MS: u64 = 600_000;
+/// Tope de bloqueos LISTADOS en [`SyncPlanDone::blockers`]. A diferencia de
+/// [`SYNC_MAX_INCLUDE`] este SÍ recorta —es una respuesta, no una petición— y
+/// por eso [`SyncPlanDone::blockers_total`] viaja aparte y sin tope: un humano
+/// necesita saber que hay 40 000 aunque solo se le enseñen 256.
+pub const SYNC_MAX_BLOCKERS_REPORTED: usize = 256;
+/// Tope de fallos LISTADOS en [`SyncReportResult::failures`]. Hoy es el mismo
+/// número que [`SYNC_MAX_BLOCKERS_REPORTED`] y tiene nombre propio a propósito:
+/// un tercero que dimensione la lista de fallos no debería tener que leer una
+/// constante que se llama «bloqueos», y compartir el nombre les ata el futuro a
+/// los dos. Como aquel, RECORTA (es una respuesta), y por eso
+/// [`SyncReportResult::failed`] cuenta sin tope.
+pub const SYNC_MAX_FAILURES_REPORTED: usize = SYNC_MAX_BLOCKERS_REPORTED;
+/// Tope de rutas de [`SyncPlanParams::include`] (0.40.0). Como
+/// [`FS_RENAME_BATCH_MAX_PAIRS`] y por el mismo motivo, NO se recorta: pasarse
+/// es error de params (`-32602`). Una lista acortada en silencio planifica una
+/// sincronización que el usuario no pidió, y el usuario la aprobaría creyendo
+/// que la vio entera.
+pub const SYNC_MAX_INCLUDE: usize = 4096;
 
 /// `task.cancel` — petición de cancelación cooperativa. La respuesta solo
 /// confirma la recepción; el estado final (`cancelled`, o `completed` si la
@@ -2737,6 +2866,895 @@ pub struct CompareRowsBatch {
     /// Las filas de este lote, en el orden en que el walk las produjo. Nunca
     /// más de [`COMPARE_ROWS_MAX_BATCH`].
     pub rows: Vec<CompareRow>,
+}
+
+/// Una ruta RELATIVA a las dos raíces de un plan (0.40.0, ADR 0049): cero o
+/// más [`Segment`], en BYTES (regla dura 1). La secuencia vacía es la RAÍZ.
+///
+/// Wire: los segmentos percent-encodeados (ADR 0001, el mismo códec de
+/// [`VPath`]) unidos por `/`, así que la raíz es la cadena vacía. Un `rel` que
+/// nombra tres niveles cuesta una cadena, no un objeto — y por él pasan medio
+/// millón de pasos.
+///
+/// # Por qué no un [`VPath`]
+/// Un [`VPath`] es «siempre absoluto respecto a la raíz del provider» y lleva
+/// SIEMPRE scheme y authority. Meter una ruta relativa dentro obliga a
+/// inventarlos, y lo inventado es visible y dañino:
+///
+/// - Un plan de `file:///…` a `sftp://nas/…` mandaría `file:///sub` como ruta
+///   relativa contra un destino sftp. Un tercero que lea el schema mandará
+///   `sftp://nas/sub`, igual de «correcto», y las dos no comparan iguales.
+/// - El `plan_hash` cubre las conclusiones del plan, y `rel` es una de ellas:
+///   un scheme que el daemon tiene orden de IGNORAR no puede estar dentro del
+///   token con el que se aprueba. No se puede ignorar un campo y hashearlo.
+/// - «Un `rel` jamás se escapa de la raíz» pasa a ser propiedad del TIPO:
+///   [`Segment::new`] ya rechaza `/`, `.`, `..` y el NUL, y lo valida
+///   POST-decode, así que un `%2E%2E` no cuela un `..`. Lo comprueba el
+///   deserializador de cualquier peer, no un chequeo que se pueda olvidar.
+///
+/// ```
+/// use norte_proto::methods::RelPath;
+/// let r = RelPath::parse_wire("sub/informe%FF%FE.dat").expect("rel");
+/// assert_eq!(r.segments().len(), 2);
+/// assert_eq!(r.segments()[1].as_bytes(), b"informe\xff\xfe.dat");
+/// assert_eq!(r.to_wire(), "sub/informe%FF%FE.dat");
+/// // La cadena vacía es la RAÍZ, y viaja como tal.
+/// assert!(RelPath::default().is_root());
+/// assert_eq!(serde_json::to_string(&RelPath::default()).expect("json"), r#""""#);
+/// // Lo que se escaparía de la raíz no llega a existir.
+/// assert!(RelPath::parse_wire("../etc").is_err());
+/// assert!(RelPath::parse_wire("%2E%2E/etc").is_err());
+/// assert!(RelPath::parse_wire("/a").is_err());
+/// assert!(RelPath::parse_wire("a//b").is_err());
+/// // Ni por el wire, que es donde importa.
+/// assert!(serde_json::from_str::<RelPath>(r#""a/../b""#).is_err());
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(into = "String")]
+pub struct RelPath(Vec<Segment>);
+
+impl RelPath {
+    /// Construye desde segmentos ya validados.
+    #[must_use]
+    pub fn new(segments: Vec<Segment>) -> Self {
+        Self(segments)
+    }
+
+    /// Parsea la forma wire: segmentos percent-encodeados unidos por `/`. La
+    /// cadena VACÍA es la raíz.
+    ///
+    /// # Errors
+    /// Lo que devuelva [`Segment::parse_wire`] para cualquiera de los
+    /// segmentos: [`VPathError::EmptySegment`] (un `/` de más, al principio, al
+    /// final o doblado), [`VPathError::DotSegment`] (`.`/`..`, comprobado
+    /// después de decodificar), [`VPathError::NulByte`] o
+    /// [`VPathError::BadEscape`].
+    pub fn parse_wire(wire: &str) -> Result<Self, VPathError> {
+        if wire.is_empty() {
+            return Ok(Self::default());
+        }
+        wire.split('/')
+            .map(Segment::parse_wire)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Self)
+    }
+
+    /// La forma wire canónica.
+    #[must_use]
+    pub fn to_wire(&self) -> String {
+        let mut out = String::with_capacity(self.0.len() * 12);
+        for (i, seg) in self.0.iter().enumerate() {
+            if i > 0 {
+                out.push('/');
+            }
+            out.push_str(&seg.to_wire());
+        }
+        out
+    }
+
+    /// Los segmentos, en orden.
+    #[must_use]
+    pub fn segments(&self) -> &[Segment] {
+        &self.0
+    }
+
+    /// `true` si nombra la propia raíz (sin segmentos).
+    #[must_use]
+    pub fn is_root(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Display for RelPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_wire())
+    }
+}
+
+impl From<RelPath> for String {
+    fn from(value: RelPath) -> Self {
+        value.to_wire()
+    }
+}
+
+impl<'de> Deserialize<'de> for RelPath {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = String::deserialize(deserializer)?;
+        Self::parse_wire(&wire).map_err(serde::de::Error::custom)
+    }
+}
+
+// El serde es a mano (valida al deserializar), así que el schema también.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for RelPath {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "RelPath".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "A path RELATIVE to a sync plan's two roots: \
+                            percent-encoded segments joined by `/`, with the \
+                            empty string meaning the root itself. It carries no \
+                            scheme and no authority — the same `rel` names an \
+                            entry under both roots, which may be different \
+                            providers. `.`, `..`, an empty segment and a NUL are \
+                            rejected when decoding (after percent-decoding, so \
+                            `%2E%2E` smuggles nothing), which is what makes \
+                            \"a rel never escapes its root\" a property of the \
+                            wire rather than a check a server can forget.",
+        })
+    }
+}
+
+/// En qué sentido sincroniza un plan (0.40.0, ADR 0049).
+///
+/// # Por qué este enum NO tiene `#[serde(other)]`
+/// Viaja CLIENT→DAEMON. Un token que este daemon no conoce muere en el
+/// deserializador y la petición es `-32602`, al revés que todo el vocabulario
+/// de [`CompareRow`] —que viaja daemon→client y degrada—. Aceptar un modo
+/// desconocido «por defecto» es aceptar BORRAR por defecto, y el default
+/// tendría que ser uno de los dos: no hay valor neutro. Lo mismo vale para
+/// [`OnUnknown`].
+///
+/// Que [`OnUnknown`] sí tenga default y este no, no es incoherencia: son dos
+/// hechos distintos del wire. La CLAVE AUSENTE dice «no tengo opinión» y merece
+/// un default documentado; un TOKEN DESCONOCIDO dice «tengo una opinión que
+/// este daemon no sabe honrar» y muere igual en los dos enums. Y donde el
+/// default de `on_unknown` es asumible es aquí: `mode` decide si el plan LLEGA
+/// A TENER pasos de borrado, mientras que `on_unknown` solo reparte filas entre
+/// dos clases de paso que el modo ya autorizó — y el humano ve el resultado, con
+/// su `confidence` y su reversa, antes de aprobar. Un `on_unknown` equivocado se
+/// VE antes de actuar; un `mode` equivocado produciría otro plan.
+///
+/// `#[non_exhaustive]` sí, por el motivo de #126: un modo futuro no puede
+/// romper el `match` de nadie fuera de este crate.
+///
+/// ```
+/// use norte_proto::methods::SyncMode;
+/// assert_eq!(serde_json::to_string(&SyncMode::Mirror).expect("json"), r#""mirror""#);
+/// // Un modo del futuro NO degrada: se rechaza.
+/// assert!(serde_json::from_str::<SyncMode>(r#""obliterate""#).is_err());
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum SyncMode {
+    /// Copiar al destino lo que falta y lo que difiere. JAMÁS borra: lo que el
+    /// destino tiene de más se queda donde está.
+    Update,
+    /// [`SyncMode::Update`] más borrar del destino lo que el origen no tiene.
+    /// Es el único modo que emite [`SyncStepKind::DeleteTree`].
+    Mirror,
+}
+
+/// Qué hacer con una fila cuya confianza es
+/// [`CompareConfidence::Unknown`] (0.40.0, ADR 0049): el provider no pudo
+/// decir si los dos lados son iguales.
+///
+/// El default es [`OnUnknown::Copy`]: ante «no se puede saber», copiar cuesta
+/// ancho de banda y saltar cuesta datos rancios en silencio. Sea cual sea la
+/// elección, el paso conserva `confidence: unknown`, así que el informe puede
+/// explicar por qué escribió.
+///
+/// Client→daemon: SIN `#[serde(other)]`, por el motivo escrito en
+/// [`SyncMode`].
+///
+/// ```
+/// use norte_proto::methods::OnUnknown;
+/// assert_eq!(OnUnknown::default(), OnUnknown::Copy);
+/// assert!(serde_json::from_str::<OnUnknown>(r#""maybe""#).is_err());
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum OnUnknown {
+    /// Copiar igualmente (default).
+    #[default]
+    Copy,
+    /// No tocar, y decirlo: [`SyncStepKind::Skip`] con
+    /// [`SyncReason::UnknownConfidence`].
+    Skip,
+}
+
+/// Qué hace UN paso de un plan (0.40.0, ADR 0049).
+///
+/// Daemon→client: `#[serde(other)]`, como los cuatro enums de ADR 0048. Un
+/// daemon N+1 que añada una clase de paso no puede matarle a un cliente N-1 un
+/// lote de [`SYNC_STEPS_MAX_BATCH`] pasos.
+///
+/// ```
+/// use norte_proto::methods::SyncStepKind;
+/// assert_eq!(
+///     serde_json::to_string(&SyncStepKind::DeleteTree).expect("json"),
+///     r#""delete_tree""#
+/// );
+/// let futuro: SyncStepKind = serde_json::from_str(r#""teleport""#).expect("degrada");
+/// assert_eq!(futuro, SyncStepKind::Unknown);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum SyncStepKind {
+    /// Crear en el destino un directorio que solo existe en el origen.
+    CreateDir,
+    /// Copiar al destino una entrada que no está.
+    Copy,
+    /// Escribir encima de una entrada del destino que difiere. Con papelera en
+    /// el destino es «a la papelera y copiar»; sin ella es
+    /// [`StepReversal::Irreversible`].
+    Overwrite,
+    /// Borrar del destino un árbol que el origen no tiene. SOLO bajo
+    /// [`SyncMode::Mirror`], y es UN paso para el árbol entero: un movimiento a
+    /// la papelera, una entrada de journal, una cosa que restaurar.
+    DeleteTree,
+    /// No tocar nada, y decir por qué ([`SyncStep::reason`] poblado). Se emite
+    /// solo para lo NOTABLE —una colisión en el origen, una confianza que el
+    /// usuario pidió saltar, una entrada ilegible—: dos árboles idénticos
+    /// producen CERO pasos, no un millón de `Skip`.
+    Skip,
+    /// Clase que este decodificador no conoce (`#[serde(other)]`). El core
+    /// jamás la emite.
+    #[doc(hidden)]
+    #[serde(other)]
+    Unknown,
+}
+
+/// Cómo vuelve atrás un paso ya ejecutado (0.40.0, ADR 0049).
+///
+/// Es función de la clase del paso y de si el DESTINO tiene papelera, y viaja
+/// en el plan —antes de aprobar— justamente para que el humano vea cuántos
+/// pasos no se pueden deshacer ANTES de decir que sí, y no en el informe
+/// después.
+///
+/// Daemon→client: `#[serde(other)]`.
+///
+/// ```
+/// use norte_proto::methods::StepReversal;
+/// assert_eq!(
+///     serde_json::to_string(&StepReversal::RestoreTrash).expect("json"),
+///     r#""restore_trash""#
+/// );
+/// let futuro: StepReversal = serde_json::from_str(r#""time_travel""#).expect("degrada");
+/// assert_eq!(futuro, StepReversal::Unknown);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum StepReversal {
+    /// Deshacer = borrar lo que este paso creó. No se destruyó nada, así que
+    /// vale con o sin papelera en el destino.
+    Delete,
+    /// Deshacer = sacar de la papelera lo que este paso enterró (y, en un
+    /// `Overwrite`, borrar antes lo que escribió: el journal recorre `seq`
+    /// descendente, así que el orden sale solo).
+    RestoreTrash,
+    /// No se puede deshacer, y el plan lo dice ANTES (regla dura 4: o hay undo
+    /// o hay una clasificación explícita con su motivo, que va en
+    /// [`SyncStep::reason`]).
+    Irreversible,
+    /// Reversa que este decodificador no conoce (`#[serde(other)]`). El core
+    /// jamás la emite.
+    #[doc(hidden)]
+    #[serde(other)]
+    Unknown,
+}
+
+/// Por qué un paso es un [`SyncStepKind::Skip`] o es
+/// [`StepReversal::Irreversible`] (0.40.0, ADR 0049). Vocabulario CERRADO: el
+/// core jamás inventa un motivo.
+///
+/// Daemon→client: `#[serde(other)]`.
+///
+/// ```
+/// use norte_proto::methods::SyncReason;
+/// assert_eq!(
+///     serde_json::to_string(&SyncReason::NoTrashOnTarget).expect("json"),
+///     r#""no_trash_on_target""#
+/// );
+/// let futuro: SyncReason = serde_json::from_str(r#""solar_flare""#).expect("degrada");
+/// assert_eq!(futuro, SyncReason::Unknown);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum SyncReason {
+    /// Dos nombres del ORIGEN colapsan a una misma clave de emparejamiento
+    /// ([`CompareVerdict::Ambiguous`] de ese lado): no se sabe cuál de los dos
+    /// copiar, así que no se copia ninguno y el resto del plan sigue en pie. En
+    /// el DESTINO la misma colisión no es un motivo sino un bloqueo
+    /// ([`SyncBlockerKind::AmbiguousDest`]): solo uno de los dos lados puede
+    /// perder datos.
+    AmbiguousSource,
+    /// [`OnUnknown::Skip`] y el criterio se ganó
+    /// [`CompareConfidence::Unknown`].
+    UnknownConfidence,
+    /// No se pudo LEER lo que hacía falta, en el lado que importaba
+    /// ([`CompareVerdict::Error`]).
+    Unreadable,
+    /// El destino no tiene papelera, así que lo que este paso entierra no se
+    /// puede recuperar. Acompaña SIEMPRE a [`StepReversal::Irreversible`].
+    NoTrashOnTarget,
+    /// Motivo que este decodificador no conoce (`#[serde(other)]`). El core
+    /// jamás lo emite.
+    #[doc(hidden)]
+    #[serde(other)]
+    Unknown,
+}
+
+/// Por qué un plan NO se puede ejecutar (0.40.0, ADR 0049). Vocabulario
+/// CERRADO.
+///
+/// Un bloqueo no es un paso fallido: es una razón para que el plan ENTERO no se
+/// pueda aprobar ([`SyncPlanDone::executable`] a `false`). Daemon→client:
+/// `#[serde(other)]`.
+///
+/// ```
+/// use norte_proto::methods::SyncBlockerKind;
+/// assert_eq!(
+///     serde_json::to_string(&SyncBlockerKind::OverlapDetected).expect("json"),
+///     r#""overlap_detected""#
+/// );
+/// let futuro: SyncBlockerKind = serde_json::from_str(r#""cosmic_ray""#).expect("degrada");
+/// assert_eq!(futuro, SyncBlockerKind::Unknown);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum SyncBlockerKind {
+    /// Dos nombres del DESTINO colapsan a una misma clave de emparejamiento:
+    /// escribir ahí es escribir sobre uno de dos ficheros sin saber cuál.
+    AmbiguousDest,
+    /// El walk llegó a la OTRA raíz: las dos nombran el mismo árbol. La
+    /// comprobación estructural previa
+    /// ([`Error::OverlappingRoots`](crate::Error::OverlappingRoots)) se puede
+    /// derrotar con un symlink, una raíz SFTP bajo dos authorities o un archivo
+    /// abierto por dos caminos; esta no.
+    OverlapDetected,
+    /// El provider del destino no admite escritura (ver `Capabilities`). Se
+    /// levanta ANTES de planificar un solo paso: no se planifican escrituras
+    /// contra un árbol que las rehúsa.
+    DestReadOnly,
+    /// Un directorio del DESTINO por encima de [`COMPARE_MAX_DIR_ENTRIES`]. En
+    /// una comparación eso cuesta una fila y el walk sigue; en un plan que va a
+    /// escribir ahí, no: no se sabe qué hay en ese directorio.
+    DirTooLarge,
+    /// Clase que este decodificador no conoce (`#[serde(other)]`). El core
+    /// jamás la emite.
+    #[doc(hidden)]
+    #[serde(other)]
+    Unknown,
+}
+
+/// UN paso de un plan de sincronización (0.40.0, ADR 0049): qué se va a hacer,
+/// sobre qué, por qué, y cómo se vuelve atrás.
+///
+/// `criterion` y `confidence` viajan POR PASO y no por plan: es la obligación
+/// que ADR 0048 dejó pendiente, saldada. Un informe puede decir «lo sobrescribí
+/// porque no se pudo leer la fecha» en vez de «lo sobrescribí», y quien revise
+/// una sincronización que salió mal ve qué rung autorizó cada escritura.
+///
+/// ```
+/// use norte_proto::methods::{
+///     CompareConfidence, CompareCriterion, RelPath, StepReversal, SyncStep, SyncStepKind,
+/// };
+/// let s = SyncStep {
+///     id: 1,
+///     kind: SyncStepKind::Copy,
+///     rel: RelPath::parse_wire("sub/informe%FF%FE.dat").expect("rel"),
+///     size: Some(1234),
+///     criterion: CompareCriterion::Presence,
+///     confidence: CompareConfidence::Certain,
+///     reversal: Some(StepReversal::Delete),
+///     reason: None,
+/// };
+/// assert!(s.shape_is_consistent());
+/// // Lo ausente NO viaja: ni `null` ni clave.
+/// let json = serde_json::to_value(&s).expect("json");
+/// assert!(json.get("reason").is_none());
+/// // Y el nombre no-UTF8 vuelve byte a byte (regla dura 1).
+/// let back: SyncStep = serde_json::from_value(json).expect("json");
+/// assert_eq!(back, s);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncStep {
+    /// Identificador monótono dentro de UN plan. El cursor del panel se ancla a
+    /// él: un filtro esconde pasos, jamás los renumera. NO entra en el
+    /// `plan_hash` — es presentación, no conclusión.
+    pub id: u64,
+    /// Qué hace el paso.
+    pub kind: SyncStepKind,
+    /// La ruta, RELATIVA a las dos raíces del plan, en BYTES (regla dura 1).
+    /// Ni un `String` ni un [`VPath`]: el mismo `rel` nombra la entrada en el
+    /// origen y en el destino, que pueden ser providers distintos, así que no
+    /// tiene scheme que llevar — ver [`RelPath`].
+    pub rel: RelPath,
+    /// Bytes que MUEVE este paso, cuando se saben; un provider que no da tamaño
+    /// deja `None`.
+    ///
+    /// Un [`SyncStepKind::DeleteTree`] y un [`SyncStepKind::Skip`] no mueven
+    /// ninguno y la dejan AUSENTE. No es cosmético:
+    /// [`SyncCounts::bytes`] es la suma de este campo, así que un tamaño en un
+    /// paso que no escribe es un byte contado que nunca se movió, y el diálogo
+    /// de aprobación enseña ese número.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    /// Qué rung de la cascada decidió la fila de la que sale este paso.
+    pub criterion: CompareCriterion,
+    /// Cuánto vale esa decisión.
+    pub confidence: CompareConfidence,
+    /// Cómo se deshace. `None` si y SOLO si `kind` es [`SyncStepKind::Skip`]
+    /// — ver [`SyncStep::shape_is_consistent`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversal: Option<StepReversal>,
+    /// El porqué, para las dos formas que tienen porqué: un `Skip` y un paso
+    /// [`StepReversal::Irreversible`]. `None` en cualquier otra.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<SyncReason>,
+}
+
+impl SyncStep {
+    /// ¿Concuerdan `kind`, `reversal` y `reason`?
+    ///
+    /// DOS de las invariantes que el wire no sabe expresar, enunciadas UNA vez,
+    /// aquí: `reversal` es `None` si y solo si `kind` es
+    /// [`SyncStepKind::Skip`], y `reason` es `Some` para EXACTAMENTE un `Skip`
+    /// y un paso cuya reversa es [`StepReversal::Irreversible`].
+    ///
+    /// Las otras dos del diseño no caben en un paso suelto y no se comprueban
+    /// aquí: «`DeleteTree` solo bajo `Mirror`» necesita el modo, que no viaja en
+    /// el paso, y «`blockers` no vacío ⟹ `!executable`» es de
+    /// [`SyncPlanDone`]. `size` tampoco se mira: su regla —un `Skip` y un
+    /// `DeleteTree` la dejan ausente— es de los CONTADORES, y un paso que la
+    /// incumpliera sigue siendo un paso ejecutable.
+    ///
+    /// NO es un rechazo de `Deserialize`, a propósito y por el mismo motivo que
+    /// [`CompareRow::reason_is_consistent`]: un paso malformado tiene que
+    /// degradar como una celda de atributo mala, no matar un lote de
+    /// [`SYNC_STEPS_MAX_BATCH`]. El daemon lo afirma en sus tests; un cliente lo
+    /// usa para decidir si se fía del paso.
+    ///
+    /// [`SyncStepKind::Unknown`] y [`StepReversal::Unknown`] quedan EXENTOS: un
+    /// paso de un daemon una versión por delante no es algo que este cliente
+    /// pueda juzgar, y afirmar lo contrario le haría desconfiar de pasos
+    /// legítimos.
+    ///
+    /// ```
+    /// # use norte_proto::methods::{
+    /// #     CompareConfidence, CompareCriterion, RelPath, StepReversal, SyncReason, SyncStep,
+    /// #     SyncStepKind,
+    /// # };
+    /// # fn step(kind: SyncStepKind, reversal: Option<StepReversal>, reason: Option<SyncReason>) -> SyncStep {
+    /// #     SyncStep { id: 1, kind, rel: RelPath::parse_wire("a").expect("rel"), size: None,
+    /// #                criterion: CompareCriterion::Presence,
+    /// #                confidence: CompareConfidence::Certain, reversal, reason }
+    /// # }
+    /// assert!(step(SyncStepKind::Copy, Some(StepReversal::Delete), None).shape_is_consistent());
+    /// assert!(!step(SyncStepKind::Copy, None, None).shape_is_consistent());
+    /// assert!(
+    ///     step(SyncStepKind::Skip, None, Some(SyncReason::Unreadable)).shape_is_consistent()
+    /// );
+    /// assert!(!step(SyncStepKind::Skip, None, None).shape_is_consistent());
+    /// ```
+    #[must_use]
+    pub fn shape_is_consistent(&self) -> bool {
+        if self.kind == SyncStepKind::Unknown {
+            return true;
+        }
+        let reversal_ok = if self.kind == SyncStepKind::Skip {
+            self.reversal.is_none()
+        } else {
+            self.reversal.is_some()
+        };
+        if self.reversal == Some(StepReversal::Unknown) {
+            return reversal_ok;
+        }
+        let owes_reason =
+            self.kind == SyncStepKind::Skip || self.reversal == Some(StepReversal::Irreversible);
+        reversal_ok && self.reason.is_some() == owes_reason
+    }
+}
+
+/// Un LOTE de pasos de [`SYNC_STEPS`] (0.40.0, ADR 0049). Acotado por
+/// [`SYNC_STEPS_MAX_BATCH`] y coalescido server-side, el mismo contrato que
+/// [`CompareRowsBatch`].
+///
+/// ```
+/// use norte_proto::TaskId;
+/// use norte_proto::methods::SyncStepsBatch;
+/// let b = SyncStepsBatch { task_id: TaskId::new(7), steps: vec![] };
+/// assert_eq!(
+///     serde_json::to_string(&b).expect("json"),
+///     r#"{"task_id":7,"steps":[]}"#
+/// );
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncStepsBatch {
+    /// Task dueña (correlación con `sync.plan` → `task_id`).
+    pub task_id: TaskId,
+    /// Los pasos de este lote, en ORDEN de ejecución (el walk es pre-orden, así
+    /// que un `CreateDir` precede a toda copia dentro de él sin necesidad de
+    /// ordenar). Nunca más de [`SYNC_STEPS_MAX_BATCH`].
+    pub steps: Vec<SyncStep>,
+}
+
+/// A cuánto suma un plan (0.40.0, ADR 0049). El diálogo de aprobación abre por
+/// `irreversible`.
+///
+/// ```
+/// use norte_proto::methods::SyncCounts;
+/// let c = SyncCounts { copy: 2, bytes: 30, ..SyncCounts::default() };
+/// assert_eq!(serde_json::to_value(&c).expect("json")["delete_tree"], 0);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncCounts {
+    /// Directorios a crear.
+    pub create_dir: u64,
+    /// Entradas a copiar.
+    pub copy: u64,
+    /// Entradas a sobrescribir.
+    pub overwrite: u64,
+    /// Árboles a borrar del destino (solo bajo [`SyncMode::Mirror`]).
+    pub delete_tree: u64,
+    /// Pasos que no tocan nada y dicen por qué.
+    pub skip: u64,
+    /// Pasos cuya reversa es [`StepReversal::Irreversible`]. Se cuenta APARTE
+    /// porque es el único número que un humano no debe tener que derivar.
+    pub irreversible: u64,
+    /// Bytes que mueve el plan. Un borrado y un `Skip` no mueven ninguno.
+    pub bytes: u64,
+}
+
+/// Por qué un plan no se puede ejecutar, con su sitio (0.40.0, ADR 0049).
+///
+/// ```
+/// use norte_proto::methods::{RelPath, Side, SyncBlocker, SyncBlockerKind};
+/// let b = SyncBlocker {
+///     rel: RelPath::parse_wire("LEEME").expect("rel"),
+///     kind: SyncBlockerKind::AmbiguousDest,
+///     side: Some(Side::Right),
+/// };
+/// assert_eq!(serde_json::to_value(&b).expect("json")["kind"], "ambiguous_dest");
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncBlocker {
+    /// Dónde, RELATIVO a las dos raíces y en BYTES, igual que
+    /// [`SyncStep::rel`]. Un bloqueo que no es de un sitio concreto (un destino
+    /// de solo lectura) lo lleva vacío: la raíz ([`RelPath::is_root`]).
+    pub rel: RelPath,
+    /// Qué clase de bloqueo.
+    pub kind: SyncBlockerKind,
+    /// El lado en el que ocurrió, cuando ocurrió en uno solo. En un plan el
+    /// origen es [`Side::Left`] y el destino [`Side::Right`] — ver
+    /// [`Error::OverlappingRoots`](crate::Error::OverlappingRoots), que usa el
+    /// mismo convenio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side: Option<Side>,
+}
+
+/// Las opciones de comparación que un plan de sincronización EMBEBE (0.40.0,
+/// ADR 0049): los mismos rungs, tolerancia y profundidad que
+/// [`FsCompareParams`], sin las dos raíces —que en un plan se llaman `source` y
+/// `dest`—.
+///
+/// Es un tipo APARTE y no un `flatten` de [`FsCompareParams`] a propósito:
+/// aquel es la petición de un método y ya está publicado con su forma; este
+/// bump promete que ningún tipo existente cambia de forma. Los dos deben moverse
+/// JUNTOS cuando la cascada gane un rung.
+///
+/// Se llama `Sync…` y no `CompareOptions` a secas porque `norte-compare` ya
+/// tiene un `CompareOptions` que NO es de wire (es la configuración del motor),
+/// y el handler de `sync.plan` va a tener los dos delante en el mismo fichero.
+///
+/// **Dos de sus campos NO son del llamante en [`SYNC_PLAN`]**: ver
+/// `descend_orphans` y `follow_symlinks` aquí abajo. Están presentes —en vez de
+/// omitidos— justamente para poder RECHAZARLOS: serde ignora los campos que no
+/// conoce, así que un campo ausente convertiría «pídelo y te digo que no» en
+/// «pídelo y no pasa nada», que es el valor pisado en silencio que el diseño
+/// rehúsa.
+///
+/// ```
+/// use norte_proto::methods::{CompareCriteria, SyncCompareOptions};
+/// // Todo tiene default: `{}` es una comparación barata de árbol entero.
+/// let o: SyncCompareOptions = serde_json::from_str("{}").expect("options");
+/// assert_eq!(o.criteria, CompareCriteria::default());
+/// assert_eq!(o.mtime_tolerance_ms, 2000);
+/// assert!(o.max_depth.is_none() && !o.follow_symlinks && o.descend_orphans.is_none());
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyncCompareOptions {
+    /// Qué rungs corren. Ausente = [`CompareCriteria::default`]. Con `hash`
+    /// encendido, [`SYNC_PLAN`] exige además scope de CONTENIDO sobre las dos
+    /// raíces.
+    pub criteria: CompareCriteria,
+    /// Profundidad máxima del descenso, contando la raíz como 0. `None` = sin
+    /// límite.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_depth: Option<u32>,
+    /// Tolerancia del rung de mtime en milisegundos. Default 2000 (la regla
+    /// FAT). `u32` por el mismo motivo que en
+    /// [`FsCompareParams::mtime_tolerance_ms`].
+    pub mtime_tolerance_ms: u32,
+    /// Seguir symlinks. En [`SYNC_PLAN`] **no es del llamante**: mandarlo en
+    /// `true` es `-32602`, no un valor que el core sobrescriba en silencio. Los
+    /// destinos se comparan COMO BYTES, y planificar copias a través de un
+    /// enlace seguido es otra cosa que nadie ha diseñado.
+    pub follow_symlinks: bool,
+    /// Descender en los directorios que existen SOLO en este lado. `None` — el
+    /// default— emite una fila por el huérfano y no lo recorre.
+    ///
+    /// En [`SYNC_PLAN`] **tampoco es del llamante**: el planificador lo fija al
+    /// lado del ORIGEN, porque quien aprueba un plan necesita cuántos ficheros
+    /// y cuántos bytes, y el ejecutor un paso por fichero para journalizar y
+    /// para aislar un fallo. En el DESTINO un huérfano es un
+    /// [`SyncStepKind::DeleteTree`] entero, y descenderlo compraría cuarenta mil
+    /// listados que no cambian un solo paso. Pedirlo es `-32602`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub descend_orphans: Option<Side>,
+}
+
+impl Default for SyncCompareOptions {
+    fn default() -> Self {
+        Self {
+            criteria: CompareCriteria::default(),
+            max_depth: None,
+            mtime_tolerance_ms: default_mtime_tolerance_ms(),
+            follow_symlinks: false,
+            descend_orphans: None,
+        }
+    }
+}
+
+/// Params de [`SYNC_PLAN`] (0.40.0, ADR 0049).
+///
+/// Se llaman `source` y `dest`, jamás `left` y `right`: comparar es simétrico y
+/// sincronizar no, así que la dirección se traduce UNA vez, en el frontend que
+/// sabe en qué panel estaba el usuario. Aguas abajo ya es un hecho.
+///
+/// ```
+/// use norte_proto::methods::{OnUnknown, SyncMode, SyncPlanParams};
+/// // Lo MÍNIMO: dos raíces y el modo. `mode` no tiene default —no hay valor
+/// // neutro entre copiar y borrar—; todo lo demás sí.
+/// let p: SyncPlanParams = serde_json::from_str(
+///     r#"{"source":"file:///a","dest":"file:///b","mode":"update"}"#,
+/// )
+/// .expect("params");
+/// assert_eq!(p.mode, SyncMode::Update);
+/// assert_eq!(p.on_unknown, OnUnknown::Copy);
+/// assert!(p.include.is_none());
+/// assert!(serde_json::from_str::<SyncPlanParams>(r#"{"source":"file:///a","dest":"file:///b"}"#)
+///     .is_err());
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncPlanParams {
+    /// De dónde salen los bytes.
+    pub source: VPath,
+    /// A dónde van. Si se solapa con `source` —igual, o una dentro de la
+    /// otra— la petición es
+    /// [`Error::OverlappingRoots`](crate::Error::OverlappingRoots) y no se crea
+    /// Task alguna.
+    pub dest: VPath,
+    /// `Update` o `Mirror`. SIN default a propósito.
+    pub mode: SyncMode,
+    /// Las opciones de la comparación que hay debajo. Ausente = todo por
+    /// defecto. Dos de sus campos no son del llamante (ver
+    /// [`SyncCompareOptions`]).
+    #[serde(default)]
+    pub compare: SyncCompareOptions,
+    /// Qué hacer con lo que el provider no puede decidir. Ausente =
+    /// [`OnUnknown::Copy`].
+    #[serde(default)]
+    pub on_unknown: OnUnknown,
+    /// Rutas RELATIVAS a las que se restringe el plan; ausente = el árbol
+    /// entero. Es como la selección de primera clase del panel de diferencias
+    /// siembra un plan.
+    ///
+    /// Más de [`SYNC_MAX_INCLUDE`] es error de params (`-32602`), no un
+    /// recorte: la misma regla que [`FS_RENAME_BATCH_MAX_PAIRS`] y por el mismo
+    /// motivo — una lista acortada en silencio sincroniza algo que nadie pidió.
+    #[cfg_attr(feature = "schema", schemars(extend("maxItems" = SYNC_MAX_INCLUDE)))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<RelPath>>,
+}
+
+/// Payload de [`SYNC_PLAN_DONE`] (0.40.0, ADR 0049): lo que hay que saber para
+/// aprobar un plan, y el hash con el que se aprueba.
+///
+/// ```
+/// use norte_proto::TaskId;
+/// use norte_proto::methods::{PlanHash, SyncCounts, SyncPlanDone};
+/// let d = SyncPlanDone {
+///     task_id: TaskId::new(7),
+///     plan_hash: PlanHash::parse(&"0".repeat(64)).expect("hex"),
+///     counts: SyncCounts::default(),
+///     blockers: vec![],
+///     blockers_total: 0,
+///     executable: true,
+/// };
+/// let json = serde_json::to_value(&d).expect("json");
+/// // `blockers` vacío es una lista vacía, jamás una clave ausente.
+/// assert_eq!(json["blockers"], serde_json::json!([]));
+/// assert_eq!(json["plan_hash"], serde_json::json!("0".repeat(64)));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncPlanDone {
+    /// Task dueña (la misma que devolvió [`SYNC_PLAN`]). Va aquí porque una
+    /// conexión puede tener dos planes en vuelo, y hasta que llega esta
+    /// notificación el cliente no conoce el `plan_hash` con el que
+    /// distinguirlos.
+    pub task_id: TaskId,
+    /// El hash del plan, que es lo ÚNICO que [`SYNC_APPLY`] lleva. Reusa
+    /// [`PlanHash`] sin cambios: [`PLAN_HASH_LEN`] caracteres hex minúscula, y
+    /// una cadena de otra forma muere en la deserialización.
+    pub plan_hash: PlanHash,
+    /// A cuánto suma el plan, por clase de paso.
+    pub counts: SyncCounts,
+    /// Los bloqueos, recortados a [`SYNC_MAX_BLOCKERS_REPORTED`]. Es la
+    /// EXPLICACIÓN, no el veredicto: quien decide es `executable`.
+    pub blockers: Vec<SyncBlocker>,
+    /// Cuántos bloqueos hubo REALMENTE. Sin tope: 256 en la lista y 40 000 aquí
+    /// es una respuesta honesta.
+    pub blockers_total: u64,
+    /// `true` cuando el plan se puede ejecutar tal cual. Campo NORMATIVO, con la
+    /// misma dirección que [`FsRenameBatchPlanResult::executable`]: el frontend
+    /// deshabilita el confirmar con `!executable` y NO deduce nada de
+    /// `blockers`, porque un bloqueo futuro podría no tener nombre que listar.
+    ///
+    /// INVARIANTE (el core lo mantiene, un cliente puede asumirlo): `blockers`
+    /// no vacío ⟹ `executable == false`; y `executable == false` ⟹
+    /// [`SYNC_APPLY`] rehúsa con
+    /// [`Error::PlanNotExecutable`](crate::Error::PlanNotExecutable) aunque el
+    /// hash case.
+    pub executable: bool,
+}
+
+/// Params de [`SYNC_APPLY`] (0.40.0, ADR 0049): el hash, y NADA más.
+///
+/// ```
+/// use norte_proto::methods::{PlanHash, SyncApplyParams};
+/// let p = SyncApplyParams { plan_hash: PlanHash::parse(&"a".repeat(64)).expect("hex") };
+/// let json = serde_json::to_value(&p).expect("json");
+/// assert_eq!(json.as_object().expect("objeto").len(), 1, "no hay segundo parámetro");
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncApplyParams {
+    /// El plan aprobado. Nombra un plan RETENIDO server-side y atado a esta
+    /// conexión; si no nombra ninguno vivo es
+    /// [`Error::PlanStale`](crate::Error::PlanStale).
+    pub plan_hash: PlanHash,
+}
+
+/// Params de [`SYNC_REPORT`] (0.40.0, ADR 0049).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncReportParams {
+    /// Task de la aplicación cuyo informe se pide (la de
+    /// [`FsTaskResult::task_id`] que devolvió [`SYNC_APPLY`]).
+    pub task_id: TaskId,
+}
+
+/// Por qué un paso no llegó a ocurrir (0.40.0, ADR 0049). Daemon→client:
+/// `#[serde(other)]`.
+///
+/// ```
+/// use norte_proto::methods::SyncFailureCause;
+/// assert_eq!(
+///     serde_json::to_string(&SyncFailureCause::Conflict).expect("json"),
+///     r#""conflict""#
+/// );
+/// let futuro: SyncFailureCause = serde_json::from_str(r#""gremlins""#).expect("degrada");
+/// assert_eq!(futuro, SyncFailureCause::Unknown);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum SyncFailureCause {
+    /// El destino dejó de parecerse a lo que el plan anotó. Lo cazó el `stat`
+    /// de revalidación y NO se escribió nada — es el único seguro entre el TTL
+    /// del plan y un fichero perdido.
+    Conflict,
+    /// El provider rehusó la escritura.
+    Denied,
+    /// La lectura o la escritura se rompieron.
+    Io,
+    /// Causa que este decodificador no conoce (`#[serde(other)]`). El core
+    /// jamás la emite.
+    #[doc(hidden)]
+    #[serde(other)]
+    Unknown,
+}
+
+/// UN paso que no ocurrió (0.40.0, ADR 0049).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncFailure {
+    /// Dónde, RELATIVO a las dos raíces y en BYTES, igual que
+    /// [`SyncStep::rel`].
+    pub rel: RelPath,
+    /// Por qué.
+    pub cause: SyncFailureCause,
+}
+
+/// Result de [`SYNC_REPORT`] (0.40.0, ADR 0049): qué hizo la aplicación del
+/// plan.
+///
+/// Un fallo es una FILA del informe, no el final de la Task: un paso que muere
+/// en el fichero 40 000 de 500 000 se anota y la Task sigue, igual que la
+/// comparación convirtió sus errores en filas.
+///
+/// ```
+/// use norte_proto::methods::SyncReportResult;
+/// let r = SyncReportResult {
+///     done: 3, failed: 0, skipped: 1, bytes: 4096,
+///     failures: vec![], batch_id: Some(12),
+/// };
+/// let json = serde_json::to_value(&r).expect("json");
+/// assert_eq!(json["failures"], serde_json::json!([]));
+/// assert_eq!(json["batch_id"], serde_json::json!(12));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncReportResult {
+    /// Pasos ejecutados Y journalizados.
+    pub done: u64,
+    /// Pasos que fallaron. NO tiene tope: `failures` lista los primeros, este
+    /// número los cuenta todos.
+    pub failed: u64,
+    /// Pasos que el plan ya traía como [`SyncStepKind::Skip`], más los que la
+    /// cancelación dejó sin intentar.
+    pub skipped: u64,
+    /// Bytes efectivamente movidos.
+    pub bytes: u64,
+    /// Los fallos, recortados a [`SYNC_MAX_FAILURES_REPORTED`]; `failed` no se
+    /// recorta.
+    pub failures: Vec<SyncFailure>,
+    /// La unidad del journal bajo la que quedó todo lo aplicado. Referencia
+    /// OPACA para el cliente: sirve para CITARLA —en un log, en un aviso, en un
+    /// informe de soporte—, no para interpretarla, y ningún método la acepta
+    /// como parámetro (el undo se pide por sesión con
+    /// [`POLICY_UNDO_SESSION`], y agrupar por lote es asunto del core).
+    ///
+    /// `None` SOLO cuando la aplicación murió antes de poder abrir una — no
+    /// cuando no hizo nada.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<i64>,
 }
 
 /// Params de [`TASK_CANCEL`].

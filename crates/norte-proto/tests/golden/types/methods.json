@@ -871,5 +871,143 @@
     },
     "mtime_tolerance_ms": 2000,
     "follow_symlinks": false
+  },
+  "sync_plan_params_minimo": {
+    "source": "file:///home/user/origen",
+    "dest": "file:///home/user/copia",
+    "mode": "update",
+    "compare": {
+      "criteria": {
+        "size": true,
+        "mtime": true,
+        "hash": false
+      },
+      "mtime_tolerance_ms": 2000,
+      "follow_symlinks": false
+    },
+    "on_unknown": "copy"
+  },
+  "sync_plan_params": {
+    "source": "file:///home/user/fotos-a%FF%FE",
+    "dest": "sftp://nas/fotos-a%FF%FE",
+    "mode": "mirror",
+    "compare": {
+      "criteria": {
+        "size": true,
+        "mtime": true,
+        "hash": true
+      },
+      "max_depth": 3,
+      "mtime_tolerance_ms": 0,
+      "follow_symlinks": false
+    },
+    "on_unknown": "skip",
+    "include": [
+      "informe%FF%FE.dat",
+      "sub/fotos"
+    ]
+  },
+  "sync_steps_batch": {
+    "task_id": 7,
+    "steps": [
+      {
+        "id": 1,
+        "kind": "copy",
+        "rel": "informe%FF%FE.dat",
+        "size": 1234,
+        "criterion": "presence",
+        "confidence": "certain",
+        "reversal": "delete"
+      }
+    ]
+  },
+  "sync_steps_batch_empty": {
+    "task_id": 7,
+    "steps": []
+  },
+  "sync_plan_done": {
+    "task_id": 7,
+    "plan_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+    "counts": {
+      "create_dir": 2,
+      "copy": 40,
+      "overwrite": 3,
+      "delete_tree": 1,
+      "skip": 2,
+      "irreversible": 1,
+      "bytes": 4096
+    },
+    "blockers": [],
+    "blockers_total": 0,
+    "executable": true
+  },
+  "sync_plan_done_blocked": {
+    "task_id": 8,
+    "plan_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+    "counts": {
+      "create_dir": 0,
+      "copy": 1,
+      "overwrite": 0,
+      "delete_tree": 0,
+      "skip": 0,
+      "irreversible": 0,
+      "bytes": 10
+    },
+    "blockers": [
+      {
+        "rel": "LEEME%FF.txt",
+        "kind": "ambiguous_dest",
+        "side": "right"
+      }
+    ],
+    "blockers_total": 300,
+    "executable": false
+  },
+  "sync_apply_params": {
+    "plan_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "sync_report_params": {
+    "task_id": 9
+  },
+  "sync_report_result": {
+    "done": 40,
+    "failed": 3,
+    "skipped": 2,
+    "bytes": 4096,
+    "failures": [
+      {
+        "rel": "a.txt",
+        "cause": "conflict"
+      },
+      {
+        "rel": "b%FF.txt",
+        "cause": "denied"
+      },
+      {
+        "rel": "sub/c.txt",
+        "cause": "io"
+      }
+    ],
+    "batch_id": 12
+  },
+  "sync_report_result_clean": {
+    "done": 3,
+    "failed": 0,
+    "skipped": 0,
+    "bytes": 4096,
+    "failures": [],
+    "batch_id": 12
+  },
+  "sync_report_result_died": {
+    "done": 0,
+    "failed": 1,
+    "skipped": 0,
+    "bytes": 0,
+    "failures": [
+      {
+        "rel": "a.txt",
+        "cause": "denied"
+      }
+    ]
   }
 }

@@ -993,13 +993,13 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.39.0 (fs.compare, ADR 0048): acepta 0.39.x (N) y 0.38.x (N-1),
-    // rechaza 0.37.x (N-2) — la ventana se desplaza con el bump, no se
+    // 0.40.0 (sync.plan, ADR 0049): acepta 0.40.x (N) y 0.39.x (N-1),
+    // rechaza 0.38.x (N-2) — la ventana se desplaza con el bump, no se
     // ensancha, y que el bump sea ADITIVO no la ensancha tampoco.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.39.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.38.0"), "N-1");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.40.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.39.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.37.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.38.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -1683,4 +1683,192 @@ fn compare_criteria_default_y_parcial() {
     assert_eq!(p.mtime_tolerance_ms, 2000, "la regla FAT, por defecto");
     assert!(p.max_depth.is_none() && !p.follow_symlinks);
     assert_eq!(roundtrip(&p), p);
+}
+
+// ---------- sync.plan (0.40.0) ----------
+
+/// Un [`SyncStep`] mínimo sobre el que cada test cambia solo lo suyo.
+fn sync_step(
+    kind: norte_proto::methods::SyncStepKind,
+    reversal: Option<norte_proto::methods::StepReversal>,
+    reason: Option<norte_proto::methods::SyncReason>,
+) -> norte_proto::methods::SyncStep {
+    use norte_proto::methods::{CompareConfidence, CompareCriterion, RelPath, SyncStep};
+    SyncStep {
+        id: 1,
+        kind,
+        rel: RelPath::parse_wire("sub/b.txt").expect("rel"),
+        size: Some(12),
+        criterion: CompareCriterion::Size,
+        confidence: CompareConfidence::Certain,
+        reversal,
+        reason,
+    }
+}
+
+/// `reversal` es `None` si y SOLO si el paso es un `Skip`: un paso que no hace
+/// nada no tiene nada que revertir, y uno que actúa debe decir cómo vuelve.
+#[test]
+fn a_skip_has_no_reversal_and_every_other_kind_has_one() {
+    use norte_proto::methods::{StepReversal, SyncReason, SyncStepKind};
+    assert!(
+        sync_step(SyncStepKind::Skip, None, Some(SyncReason::AmbiguousSource))
+            .shape_is_consistent()
+    );
+    assert!(
+        !sync_step(
+            SyncStepKind::Skip,
+            Some(StepReversal::Delete),
+            Some(SyncReason::AmbiguousSource)
+        )
+        .shape_is_consistent(),
+        "a step that does nothing cannot claim a reversal"
+    );
+    assert!(sync_step(SyncStepKind::Copy, Some(StepReversal::Delete), None).shape_is_consistent());
+    assert!(
+        !sync_step(SyncStepKind::Copy, None, None).shape_is_consistent(),
+        "an acting step must say how it comes back"
+    );
+}
+
+/// `reason` viaja para EXACTAMENTE dos formas de paso: el `Skip` y el que
+/// declara que no se puede deshacer. En cualquier otra es ruido.
+#[test]
+fn reason_is_present_for_exactly_skip_and_irreversible() {
+    use norte_proto::methods::{StepReversal, SyncReason, SyncStepKind};
+    assert!(
+        sync_step(
+            SyncStepKind::Skip,
+            None,
+            Some(SyncReason::UnknownConfidence)
+        )
+        .shape_is_consistent()
+    );
+    assert!(!sync_step(SyncStepKind::Skip, None, None).shape_is_consistent());
+    assert!(
+        sync_step(
+            SyncStepKind::Overwrite,
+            Some(StepReversal::Irreversible),
+            Some(SyncReason::NoTrashOnTarget)
+        )
+        .shape_is_consistent()
+    );
+    assert!(
+        !sync_step(
+            SyncStepKind::Overwrite,
+            Some(StepReversal::Irreversible),
+            None
+        )
+        .shape_is_consistent(),
+        "an irreversible step owes a reason"
+    );
+    assert!(
+        !sync_step(
+            SyncStepKind::Copy,
+            Some(StepReversal::Delete),
+            Some(SyncReason::Unreadable)
+        )
+        .shape_is_consistent(),
+        "a reversible acting step has no reason to carry"
+    );
+}
+
+/// Un daemon N+1 que añade una clase de paso no puede matar un lote de 256 en
+/// un cliente N-1: el token desconocido degrada, como en la familia de
+/// `compare.rows` (ADR 0048).
+#[test]
+fn an_unknown_step_kind_degrades_instead_of_killing_the_batch() {
+    use norte_proto::methods::{SyncStep, SyncStepKind};
+    let v = serde_json::json!({
+        "id": 7, "kind": "teleport", "rel": "sub/a",
+        "size": null, "criterion": "size", "confidence": "certain",
+        "reversal": "delete", "reason": null
+    });
+    let s: SyncStep = serde_json::from_value(v).expect("degrades");
+    assert_eq!(s.kind, SyncStepKind::Unknown);
+    assert!(
+        s.shape_is_consistent(),
+        "un paso que este cliente no sabe juzgar no se declara inconsistente"
+    );
+}
+
+/// Client→daemon: aceptar un modo desconocido por defecto es aceptar borrar
+/// por defecto. Muere en el DESERIALIZADOR, que es más fuerte que cualquier
+/// chequeo que un handler pueda olvidar.
+#[test]
+fn a_mode_this_daemon_does_not_know_is_refused_not_defaulted() {
+    use norte_proto::methods::{OnUnknown, SyncMode};
+    assert!(serde_json::from_value::<SyncMode>(serde_json::json!("obliterate")).is_err());
+    assert!(serde_json::from_value::<OnUnknown>(serde_json::json!("maybe")).is_err());
+}
+
+/// Daemon→client: el vocabulario de bloqueos round-trippea entero.
+#[test]
+fn every_blocker_kind_round_trips() {
+    use norte_proto::methods::SyncBlockerKind;
+    for k in [
+        SyncBlockerKind::AmbiguousDest,
+        SyncBlockerKind::OverlapDetected,
+        SyncBlockerKind::DestReadOnly,
+        SyncBlockerKind::DirTooLarge,
+    ] {
+        let j = serde_json::to_value(k).expect("json");
+        assert_eq!(
+            serde_json::from_value::<SyncBlockerKind>(j).expect("back"),
+            k
+        );
+    }
+    // ...y el fallback de `#[serde(other)]` sigue ahí, como en compare.
+    let futuro: SyncBlockerKind = serde_json::from_str("\"cosmic_ray\"").expect("degrades");
+    assert_eq!(futuro, SyncBlockerKind::Unknown);
+}
+
+/// `rel` es RELATIVO y lo garantiza el TIPO: lo que se escaparía de la raíz no
+/// llega a existir, y muere en el deserializador de cualquier peer — no en un
+/// chequeo del daemon que se pueda olvidar. Un `VPath` no podía prometer esto
+/// sin inventarse un scheme (ver el rustdoc de `RelPath`).
+#[test]
+fn a_rel_that_would_escape_its_root_dies_in_the_wire() {
+    use norte_proto::methods::{RelPath, SyncStep};
+    for hostil in ["..", "a/../b", "%2E%2E/etc", "/a", "a/", "a//b", ""] {
+        let json = format!(
+            r#"{{"id":1,"kind":"copy","rel":"{hostil}","criterion":"presence",
+                 "confidence":"certain","reversal":"delete"}}"#
+        );
+        let paso = serde_json::from_str::<SyncStep>(&json);
+        // La cadena vacía es la RAÍZ: legal, y es el único caso de la lista.
+        assert_eq!(
+            paso.is_ok(),
+            hostil.is_empty(),
+            "{hostil:?} no debe cruzar el wire como ruta relativa"
+        );
+    }
+    assert!(RelPath::default().is_root());
+    // Y los bytes vuelven intactos (regla dura 1), segmento a segmento.
+    let r = RelPath::parse_wire("sub/informe%FF%FE.dat").expect("rel");
+    assert_eq!(r.segments()[1].as_bytes(), b"informe\xff\xfe.dat");
+    assert_eq!(r.to_wire(), "sub/informe%FF%FE.dat");
+}
+
+/// Lo ausente se OMITE del wire (ni `null` ni clave): un plan de medio millón
+/// de pasos manda `sync.steps` miles de veces.
+#[test]
+fn sync_step_roundtrip_y_omisiones() {
+    use norte_proto::methods::{StepReversal, SyncReason, SyncStep, SyncStepKind};
+    let mut s = sync_step(SyncStepKind::Copy, Some(StepReversal::Delete), None);
+    s.size = None;
+    assert_eq!(roundtrip(&s), s);
+    let json = serde_json::to_value(&s).expect("json");
+    for ausente in ["size", "reason"] {
+        assert!(
+            json.get(ausente).is_none(),
+            "{ausente} no debe viajar: {json}"
+        );
+    }
+    // Campos desconocidos de un peer N+1 no rompen el paso.
+    let futuro = r#"{"id":9,"kind":"skip","rel":"a","criterion":"presence",
+                     "confidence":"unknown","reason":"unreadable","campo_del_futuro":true}"#;
+    let s: SyncStep = serde_json::from_str(futuro).expect("tolerante");
+    assert_eq!(s.reason, Some(SyncReason::Unreadable));
+    assert!(s.reversal.is_none() && s.size.is_none());
 }

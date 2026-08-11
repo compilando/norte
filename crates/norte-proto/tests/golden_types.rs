@@ -38,6 +38,11 @@ fn plan_hash(hex: &str) -> norte_proto::methods::PlanHash {
 /// Un nombre BASE desde sus bytes crudos (0.36.0): las fixtures del batch de
 /// renames se escriben en bytes, no en la forma percent-encoded — que es
 /// justamente lo que el golden tiene que demostrar.
+/// Una ruta RELATIVA a las raíces de un plan (0.40.0) desde su forma wire.
+fn rel_path(wire: &str) -> norte_proto::methods::RelPath {
+    norte_proto::methods::RelPath::parse_wire(wire).expect("rel de fixture")
+}
+
 fn seg(b: &[u8]) -> norte_proto::Segment {
     norte_proto::Segment::new(b.to_vec()).expect("segment")
 }
@@ -255,6 +260,10 @@ fn golden_capabilities() {
     );
 }
 
+// La tabla CONGELADA de la taxonomía entera. Trocearla por longitud
+// escondería justo lo que `check_family` comprueba —cobertura 1:1 entre
+// fixture y variante—, así que aquí la longitud es la propiedad.
+#[allow(clippy::too_many_lines)]
 #[test]
 fn golden_error() {
     check_family(
@@ -347,6 +356,28 @@ fn golden_error() {
             // frontend (re-planificar).
             ("plan_stale", Error::PlanStale),
             ("plan_not_executable", Error::PlanNotExecutable),
+            // 0.40.0 (sincronización): las dos raíces son el mismo árbol. LAS
+            // TRES relaciones, porque `relation` es lo único que la variante
+            // dice y porque «son la misma» NO es un caso degenerado de «una
+            // está dentro de la otra»: es la frase que el frontend pinta.
+            (
+                "overlapping_roots_same",
+                Error::OverlappingRoots {
+                    relation: norte_proto::RootOverlap::Same,
+                },
+            ),
+            (
+                "overlapping_roots_source_inside_dest",
+                Error::OverlappingRoots {
+                    relation: norte_proto::RootOverlap::SourceInsideDest,
+                },
+            ),
+            (
+                "overlapping_roots_dest_inside_source",
+                Error::OverlappingRoots {
+                    relation: norte_proto::RootOverlap::DestInsideSource,
+                },
+            ),
         ],
     );
 }
@@ -379,6 +410,10 @@ fn golden_task_state() {
     );
 }
 
+// Una fixture por `TaskKind` que el core emite, con la SEMÁNTICA de progreso
+// de cada uno escrita al lado. Es una tabla: trocearla por longitud escondería
+// que la cobertura es una por clase.
+#[allow(clippy::too_many_lines)]
 #[test]
 fn golden_task_progress() {
     check_family(
@@ -446,6 +481,44 @@ fn golden_task_progress() {
                     entries_done: 120,
                     entries_total: None,
                     current: Some(vpath("file:///home/user/origen/fotos")),
+                },
+            ),
+            (
+                // 0.40.0 (ADR 0049): TaskKind::SyncPlan en el wire, y con él la
+                // SEMÁNTICA de su progreso — `entries_*` cuenta PASOS emitidos
+                // y `bytes_*` es cero/`None`, exactamente como en `Compare`:
+                // planificar no escribe un byte, y con el rung de hash apagado
+                // tampoco lee ninguno.
+                "running_sync_plan",
+                TaskProgress {
+                    task_id: TaskId::new(19),
+                    kind: TaskKind::SyncPlan,
+                    state: TaskState::Running,
+                    bytes_done: 0,
+                    bytes_total: None,
+                    entries_done: 120,
+                    entries_total: None,
+                    current: Some(vpath("file:///home/user/origen/fotos")),
+                },
+            ),
+            (
+                // 0.40.0 (ADR 0049): TaskKind::Sync, la OTRA mitad y la que sí
+                // mueve bytes. Es el contraste que hace legible al de arriba:
+                // misma familia, `bytes_*` poblado, porque aquí sí se copia.
+                // Los dos tokens llegan a un cliente 0.39 SIN que haya llamado
+                // a nada —`task.progress` se difunde a toda conexión humana—,
+                // así que congelar su ortografía es congelar la única
+                // superficie N/N-1 de este bump.
+                "running_sync",
+                TaskProgress {
+                    task_id: TaskId::new(20),
+                    kind: TaskKind::Sync,
+                    state: TaskState::Running,
+                    bytes_done: 4096,
+                    bytes_total: Some(65536),
+                    entries_done: 3,
+                    entries_total: Some(40),
+                    current: Some(vpath("file:///home/user/copia/informe%FF%FE.dat")),
                 },
             ),
             (
@@ -728,6 +801,9 @@ fn golden_methods() {
     check_methods_rename_batch(&fixtures);
     check_methods_host(&fixtures);
     check_methods_compare(&fixtures);
+    check_methods_sync(&fixtures);
+    check_methods_sync_notifs(&fixtures);
+    check_methods_sync_apply(&fixtures);
     // 98 → 101 en 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
     // ADR 0031). 101 → 106 en 0.33.0: + index_embed_params,
     // index_search_semantic_params(/_no_root)/result y semantic_hit (M4-IA-2,
@@ -751,7 +827,12 @@ fn golden_methods() {
     // (que es la que congela los defaults), más el lote y su forma vacía. La
     // FILA tiene fichero propio (`compare_row.json`): su familia pinea una
     // forma por veredicto.
-    assert_eq!(fixtures.len(), 130, "[methods.json] fixtures sin caso Rust");
+    // 130 → 141 en 0.40.0 (ADR 0049): + sync_plan_params(/_minimo),
+    // sync_steps_batch(/_empty), sync_plan_done(/_blocked), sync_apply_params,
+    // sync_report_params y sync_report_result(/_clean/_died). El PASO y el
+    // BLOQUEO tienen fichero propio (`sync_step.json`, `sync_blocker.json`):
+    // sus familias pinean una forma por clase.
+    assert_eq!(fixtures.len(), 141, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `fs.rename_batch*` (0.36.0): las PETICIONES de plan y de ejecución.
@@ -2099,6 +2180,216 @@ fn check_methods_compare(fixtures: &BTreeMap<String, Value>) {
     );
 }
 
+/// Familia `sync.*` (0.40.0, ADR 0049): la PETICIÓN del plan, sus dos
+/// notificaciones, la aplicación —que no lleva más que el hash— y el informe.
+///
+/// Lo que congela, más allá de los nombres de campo:
+///
+/// - `sync_plan_params_minimo` es lo mínimo que un cliente manda —dos raíces y
+///   el modo— con TODO lo demás en su default, que es lo que hace de esta
+///   fixture el ancla de esos defaults. El modo no tiene default y por eso no
+///   puede faltar: entre copiar y borrar no hay valor neutro.
+/// - `sync_plan_params` lleva las dos raíces HOSTILES y CRUZANDO PROVIDER
+///   (local → sftp), `include` poblado, el rung caro encendido y
+///   `on_unknown: skip`. Ni `descend_orphans` ni `follow_symlinks` aparecen: no
+///   son del llamante, y mandarlos es `-32602`.
+/// - `sync_plan_done_blocked` congela la forma —no el número— de la lista
+///   recortada: `blockers` es lo que cabe y `blockers_total` lo que hubo.
+///   Y `executable: false` viaja aunque se pudiera deducir de la lista, por el
+///   mismo motivo que en `FsRenameBatchPlanResult`.
+/// - `sync_apply_params` tiene UNA clave. Es el invariante entero del método.
+/// - `sync_report_result_died` es la única forma en la que `batch_id` falta: la
+///   aplicación murió antes de abrir la unidad del journal. Un informe sin
+///   `batch_id` es un informe sin undo, así que la clave ausente es una
+///   afirmación fuerte y tiene fixture propia.
+fn check_methods_sync(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        CompareCriteria, OnUnknown, SyncCompareOptions, SyncMode, SyncPlanParams,
+    };
+    check_one(
+        fixtures,
+        "sync_plan_params_minimo",
+        &SyncPlanParams {
+            source: vpath("file:///home/user/origen"),
+            dest: vpath("file:///home/user/copia"),
+            mode: SyncMode::Update,
+            compare: SyncCompareOptions::default(),
+            on_unknown: OnUnknown::Copy,
+            include: None,
+        },
+    );
+    check_one(
+        fixtures,
+        "sync_plan_params",
+        &SyncPlanParams {
+            source: vpath("file:///home/user/fotos-a%FF%FE"),
+            dest: vpath("sftp://nas/fotos-a%FF%FE"),
+            mode: SyncMode::Mirror,
+            compare: SyncCompareOptions {
+                criteria: CompareCriteria {
+                    size: true,
+                    mtime: true,
+                    hash: true,
+                },
+                max_depth: Some(3),
+                mtime_tolerance_ms: 0,
+                follow_symlinks: false,
+                descend_orphans: None,
+            },
+            on_unknown: OnUnknown::Skip,
+            include: Some(vec![rel_path("informe%FF%FE.dat"), rel_path("sub/fotos")]),
+        },
+    );
+}
+
+/// Las dos NOTIFICACIONES del plan: los lotes de pasos y el cierre.
+fn check_methods_sync_notifs(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        CompareConfidence, CompareCriterion, Side, StepReversal, SyncBlocker, SyncBlockerKind,
+        SyncCounts, SyncPlanDone, SyncStep, SyncStepKind, SyncStepsBatch,
+    };
+    check_one(
+        fixtures,
+        "sync_steps_batch",
+        &SyncStepsBatch {
+            task_id: TaskId::new(7),
+            steps: vec![SyncStep {
+                id: 1,
+                kind: SyncStepKind::Copy,
+                rel: rel_path("informe%FF%FE.dat"),
+                size: Some(1234),
+                criterion: CompareCriterion::Presence,
+                confidence: CompareConfidence::Certain,
+                reversal: Some(StepReversal::Delete),
+                reason: None,
+            }],
+        },
+    );
+    // Un lote VACÍO es una lista vacía, jamás una clave ausente: el pump puede
+    // cerrar un plan sin pasos nuevos que mandar.
+    check_one(
+        fixtures,
+        "sync_steps_batch_empty",
+        &SyncStepsBatch {
+            task_id: TaskId::new(7),
+            steps: vec![],
+        },
+    );
+    check_one(
+        fixtures,
+        "sync_plan_done",
+        &SyncPlanDone {
+            task_id: TaskId::new(7),
+            plan_hash: plan_hash(&"1".repeat(64)),
+            counts: SyncCounts {
+                create_dir: 2,
+                copy: 40,
+                overwrite: 3,
+                delete_tree: 1,
+                skip: 2,
+                irreversible: 1,
+                bytes: 4096,
+            },
+            blockers: vec![],
+            blockers_total: 0,
+            executable: true,
+        },
+    );
+    check_one(
+        fixtures,
+        "sync_plan_done_blocked",
+        &SyncPlanDone {
+            task_id: TaskId::new(8),
+            plan_hash: plan_hash(&"2".repeat(64)),
+            counts: SyncCounts {
+                copy: 1,
+                bytes: 10,
+                ..SyncCounts::default()
+            },
+            blockers: vec![SyncBlocker {
+                rel: rel_path("LEEME%FF.txt"),
+                kind: SyncBlockerKind::AmbiguousDest,
+                side: Some(Side::Right),
+            }],
+            blockers_total: 300,
+            executable: false,
+        },
+    );
+}
+
+/// La segunda mitad de la familia: aplicar un plan aprobado, y su informe.
+fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        SyncApplyParams, SyncFailure, SyncFailureCause, SyncReportParams, SyncReportResult,
+    };
+    check_one(
+        fixtures,
+        "sync_apply_params",
+        &SyncApplyParams {
+            plan_hash: plan_hash(&"1".repeat(64)),
+        },
+    );
+    check_one(
+        fixtures,
+        "sync_report_params",
+        &SyncReportParams {
+            task_id: TaskId::new(9),
+        },
+    );
+    check_one(
+        fixtures,
+        "sync_report_result",
+        &SyncReportResult {
+            done: 40,
+            failed: 3,
+            skipped: 2,
+            bytes: 4096,
+            failures: vec![
+                SyncFailure {
+                    rel: rel_path("a.txt"),
+                    cause: SyncFailureCause::Conflict,
+                },
+                SyncFailure {
+                    rel: rel_path("b%FF.txt"),
+                    cause: SyncFailureCause::Denied,
+                },
+                SyncFailure {
+                    rel: rel_path("sub/c.txt"),
+                    cause: SyncFailureCause::Io,
+                },
+            ],
+            batch_id: Some(12),
+        },
+    );
+    check_one(
+        fixtures,
+        "sync_report_result_clean",
+        &SyncReportResult {
+            done: 3,
+            failed: 0,
+            skipped: 0,
+            bytes: 4096,
+            failures: vec![],
+            batch_id: Some(12),
+        },
+    );
+    check_one(
+        fixtures,
+        "sync_report_result_died",
+        &SyncReportResult {
+            done: 0,
+            failed: 1,
+            skipped: 0,
+            bytes: 0,
+            failures: vec![SyncFailure {
+                rel: rel_path("a.txt"),
+                cause: SyncFailureCause::Denied,
+            }],
+            batch_id: None,
+        },
+    );
+}
+
 /// fs.copy/fs.move (con resume/verify de 0.6.0, ADR 0012).
 fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
     check_one(
@@ -2500,7 +2791,23 @@ fn method_names_frozen() {
     // directorio desmesurado en UNA fila de error en vez de un OOM.
     assert_eq!(methods::COMPARE_ROWS_MAX_BATCH, 256);
     assert_eq!(methods::COMPARE_MAX_DIR_ENTRIES, 200_000);
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.39.0");
+    // 0.40.0 (ADR 0049): sync.plan/apply/report — la sincronización de un
+    // sentido como plan aprobable, retenido y deshacible.
+    assert_eq!(methods::SYNC_PLAN, "sync.plan");
+    assert_eq!(methods::SYNC_STEPS, "sync.steps");
+    assert_eq!(methods::SYNC_PLAN_DONE, "sync.plan_done");
+    assert_eq!(methods::SYNC_APPLY, "sync.apply");
+    assert_eq!(methods::SYNC_REPORT, "sync.report");
+    // Los LITERALES otra vez. El TTL es el único de los cuatro que no acota una
+    // colección: es la ventana entre aprobar y ejecutar, y por tanto lo que el
+    // ejecutor tiene que revalidar — un tercero que la dimensione mal deja
+    // planes que caducan bajo el ratón. El tope de `include` RECHAZA (no
+    // recorta), como el de parejas de renames.
+    assert_eq!(methods::SYNC_STEPS_MAX_BATCH, 256);
+    assert_eq!(methods::SYNC_PLAN_TTL_MS, 600_000);
+    assert_eq!(methods::SYNC_MAX_BLOCKERS_REPORTED, 256);
+    assert_eq!(methods::SYNC_MAX_INCLUDE, 4096);
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.40.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,
@@ -2849,6 +3156,279 @@ fn compare_row_cases_problems() -> Vec<(&'static str, norte_proto::methods::Comp
             },
         ),
     ]
+}
+
+/// Un paso sin los tres campos opcionales; quien necesite alguno la completa
+/// con sintaxis de actualización de struct.
+fn sync_step(
+    id: u64,
+    kind: norte_proto::methods::SyncStepKind,
+    rel: &str,
+    criterion: norte_proto::methods::CompareCriterion,
+    confidence: norte_proto::methods::CompareConfidence,
+    reversal: Option<norte_proto::methods::StepReversal>,
+) -> norte_proto::methods::SyncStep {
+    norte_proto::methods::SyncStep {
+        id,
+        kind,
+        rel: rel_path(rel),
+        size: None,
+        criterion,
+        confidence,
+        reversal,
+        reason: None,
+    }
+}
+
+/// El PASO de `sync.plan` (0.40.0, ADR 0049), congelado: una fixture por clase
+/// de paso y, entre todas, el vocabulario ENTERO que el core llega a emitir —
+/// las cinco clases, las tres reversas, los cuatro motivos y las tres
+/// confianzas. Los fallbacks de `#[serde(other)]` NO tienen fixture a
+/// propósito, por el mismo motivo que en `compare_row.json`: el core jamás los
+/// emite, así que no hay dirección de encode que pinear, y su degradación en
+/// DECODE la cubre `types.rs`.
+///
+/// Lo que estas fixtures pinean, campo a campo:
+///
+/// - Las tres parejas `*_trash` / `*_irreversible` son la razón de ser de
+///   [`StepReversal`]: el MISMO paso vale `restore_trash` o `irreversible`
+///   según si el DESTINO tiene papelera, y en el segundo caso debe una razón.
+///   Un plan que no supiera distinguirlos le prometería a un humano un undo
+///   que no existe.
+/// - `copy_hostile` lleva un `rel` no-UTF8 (`%FF%FE`): regla dura 1 en las dos
+///   direcciones. El `rel` es RELATIVO a las dos raíces, así que no lleva
+///   ninguna de ellas.
+/// - `overwrite_unknown_confidence` es el default `on_unknown: copy`: se
+///   escribe, y el paso CONSERVA `confidence: unknown` para que el informe
+///   pueda decir que copió porque nadie pudo asegurar nada.
+///   `skip_unknown_confidence` es el mismo caso con la otra elección.
+/// - Ningún `skip` lleva `reversal`, y todos llevan `reason`: es la invariante
+///   que `shape_is_consistent` enuncia, y aquí está congelada como forma.
+/// - `delete_tree` no lleva `size`: un borrado no mueve bytes, y la clave
+///   ausente lo dice mejor que un cero.
+#[test]
+fn golden_sync_step() {
+    let mut cases = sync_step_cases_acting();
+    cases.extend(sync_step_cases_skipped());
+
+    // Toda fixture congelada tiene que ser un paso LEGAL: uno que prometiera
+    // una reversa imposible congelaría el bug en vez del contrato, y el
+    // transductor de `norte-sync` se escribiría contra él.
+    for (name, step) in &cases {
+        assert!(step.shape_is_consistent(), "[sync_step/{name}] forma");
+    }
+
+    check_family("sync_step.json", &cases);
+}
+
+/// Los pasos que ACTÚAN: las cuatro clases con reversa, y las tres reversas.
+fn sync_step_cases_acting() -> Vec<(&'static str, norte_proto::methods::SyncStep)> {
+    use norte_proto::methods::{
+        CompareConfidence as Conf, CompareCriterion as Crit, StepReversal as Rev,
+        SyncReason as Why, SyncStep, SyncStepKind as Kind,
+    };
+    vec![
+        (
+            "create_dir",
+            sync_step(
+                1,
+                Kind::CreateDir,
+                "sub",
+                Crit::Presence,
+                Conf::Certain,
+                Some(Rev::Delete),
+            ),
+        ),
+        (
+            "copy_hostile",
+            SyncStep {
+                size: Some(1234),
+                ..sync_step(
+                    2,
+                    Kind::Copy,
+                    "sub/informe%FF%FE.dat",
+                    Crit::Presence,
+                    Conf::Certain,
+                    Some(Rev::Delete),
+                )
+            },
+        ),
+        (
+            "overwrite_trash",
+            SyncStep {
+                size: Some(4096),
+                ..sync_step(
+                    3,
+                    Kind::Overwrite,
+                    "notas.md",
+                    Crit::Mtime,
+                    Conf::Probable,
+                    Some(Rev::RestoreTrash),
+                )
+            },
+        ),
+        (
+            // La MISMA fila que `overwrite_trash` —mismo rung, misma confianza,
+            // mismo tamaño— contra un destino SIN papelera. Que la pareja no
+            // varíe en nada más es lo que la convierte en una A/B de la
+            // capacidad en vez de en dos ejemplos sueltos.
+            "overwrite_irreversible",
+            SyncStep {
+                size: Some(4096),
+                reason: Some(Why::NoTrashOnTarget),
+                ..sync_step(
+                    4,
+                    Kind::Overwrite,
+                    "notas.md",
+                    Crit::Mtime,
+                    Conf::Probable,
+                    Some(Rev::Irreversible),
+                )
+            },
+        ),
+        (
+            "overwrite_unknown_confidence",
+            SyncStep {
+                size: Some(7),
+                ..sync_step(
+                    5,
+                    Kind::Overwrite,
+                    "empaquetado/dentro.txt",
+                    Crit::Mtime,
+                    Conf::Unknown,
+                    Some(Rev::RestoreTrash),
+                )
+            },
+        ),
+        (
+            "delete_tree",
+            sync_step(
+                6,
+                Kind::DeleteTree,
+                "rancio",
+                Crit::Presence,
+                Conf::Certain,
+                Some(Rev::RestoreTrash),
+            ),
+        ),
+        (
+            "delete_tree_irreversible",
+            SyncStep {
+                reason: Some(Why::NoTrashOnTarget),
+                ..sync_step(
+                    7,
+                    Kind::DeleteTree,
+                    "rancio",
+                    Crit::Presence,
+                    Conf::Certain,
+                    Some(Rev::Irreversible),
+                )
+            },
+        ),
+    ]
+}
+
+/// Los pasos que NO tocan nada: uno por motivo, y ninguno con reversa.
+fn sync_step_cases_skipped() -> Vec<(&'static str, norte_proto::methods::SyncStep)> {
+    use norte_proto::methods::{
+        CompareConfidence as Conf, CompareCriterion as Crit, SyncReason as Why, SyncStep,
+        SyncStepKind as Kind,
+    };
+    vec![
+        (
+            "skip_ambiguous_source",
+            SyncStep {
+                reason: Some(Why::AmbiguousSource),
+                ..sync_step(
+                    8,
+                    Kind::Skip,
+                    "LEEME%FF.txt",
+                    Crit::Presence,
+                    Conf::Certain,
+                    None,
+                )
+            },
+        ),
+        (
+            // Sin `size`: un `Skip` no mueve bytes, y `counts.bytes` es la suma
+            // de ese campo — un tamaño aquí sería un byte contado que nadie
+            // escribió, en el número con el que se aprueba el plan.
+            "skip_unknown_confidence",
+            SyncStep {
+                reason: Some(Why::UnknownConfidence),
+                ..sync_step(
+                    9,
+                    Kind::Skip,
+                    "empaquetado/dentro.txt",
+                    Crit::Mtime,
+                    Conf::Unknown,
+                    None,
+                )
+            },
+        ),
+        (
+            "skip_unreadable",
+            SyncStep {
+                reason: Some(Why::Unreadable),
+                ..sync_step(
+                    10,
+                    Kind::Skip,
+                    "secreto",
+                    Crit::Presence,
+                    Conf::Unknown,
+                    None,
+                )
+            },
+        ),
+    ]
+}
+
+/// El BLOQUEO (0.40.0, ADR 0049): las cuatro clases, y el `side` presente
+/// exactamente cuando el bloqueo es de un lado. `dest_read_only` es del árbol
+/// entero, así que su `rel` es la RAÍZ — la forma que un frontend tiene que
+/// saber pintar sin nombre que enseñar.
+#[test]
+fn golden_sync_blocker() {
+    use norte_proto::methods::{RelPath, Side, SyncBlocker, SyncBlockerKind as Kind};
+    check_family(
+        "sync_blocker.json",
+        &[
+            (
+                "ambiguous_dest",
+                SyncBlocker {
+                    rel: rel_path("LEEME%FF.txt"),
+                    kind: Kind::AmbiguousDest,
+                    side: Some(Side::Right),
+                },
+            ),
+            (
+                "dest_read_only",
+                SyncBlocker {
+                    rel: RelPath::default(),
+                    kind: Kind::DestReadOnly,
+                    side: Some(Side::Right),
+                },
+            ),
+            (
+                "dir_too_large",
+                SyncBlocker {
+                    rel: rel_path("fotos"),
+                    kind: Kind::DirTooLarge,
+                    side: Some(Side::Right),
+                },
+            ),
+            (
+                // El solape es de las DOS raíces a la vez: no hay un lado que
+                // nombrar, y `side` se omite en vez de inventar uno.
+                "overlap_detected",
+                SyncBlocker {
+                    rel: rel_path("sub"),
+                    kind: Kind::OverlapDetected,
+                    side: None,
+                },
+            ),
+        ],
+    );
 }
 
 #[test]

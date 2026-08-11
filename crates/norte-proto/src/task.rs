@@ -118,6 +118,28 @@ pub enum TaskKind {
     /// `serde(other)` de abajo, igual que `Search`/`Index`/`Embed`/
     /// `RenameBatch`.
     Compare,
+    /// Planificación de una sincronización de un sentido
+    /// (`sync.plan`/[`SYNC_PLAN`](crate::methods::SYNC_PLAN), 0.40.0, ADR
+    /// 0049). Lectura pura (regla 4 no aplica): planificar no escribe un byte
+    /// — lo que escribe es [`TaskKind::Sync`]. El progreso cuenta PASOS
+    /// emitidos, no bytes, por el mismo motivo que
+    /// [`TaskKind::Compare`]: es la comparación de debajo con una decisión por
+    /// fila, y con el rung de hash apagado no se lee contenido alguno.
+    ///
+    /// Entra CON el método, en su mismo bump, y por la misma razón que
+    /// `Compare`: el `task_id` de un lote de
+    /// [`SYNC_STEPS`](crate::methods::SYNC_STEPS) correlaciona con una Task que
+    /// el cliente tiene que poder clasificar en `task.list`. Un cliente N-1
+    /// (0.39.x) la degrada a [`TaskKind::Unknown`] por el `serde(other)` de
+    /// abajo.
+    SyncPlan,
+    /// Ejecución de un plan de sincronización APROBADO
+    /// (`sync.apply`/[`SYNC_APPLY`](crate::methods::SYNC_APPLY), 0.40.0, ADR
+    /// 0049): copias, sobrescrituras y borrados como UNA unidad deshacible del
+    /// journal (regla 4). A diferencia de [`TaskKind::SyncPlan`] su progreso sí
+    /// tiene bytes que contar. Un cliente N-1 (0.39.x) la degrada a
+    /// [`TaskKind::Unknown`].
+    Sync,
     /// Clase desconocida: un daemon N+1 (0.11+) envió un kind que ESTE proto no
     /// conoce → se acepta como genérica en vez de fallar el parse (forward-compat
     /// desde 0.10, como [`TaskState::Unknown`]). No cubre el borde hacia atrás

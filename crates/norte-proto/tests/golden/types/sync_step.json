@@ -1,0 +1,88 @@
+{
+  "copy_hostile": {
+    "confidence": "certain",
+    "criterion": "presence",
+    "id": 2,
+    "kind": "copy",
+    "rel": "sub/informe%FF%FE.dat",
+    "reversal": "delete",
+    "size": 1234
+  },
+  "create_dir": {
+    "confidence": "certain",
+    "criterion": "presence",
+    "id": 1,
+    "kind": "create_dir",
+    "rel": "sub",
+    "reversal": "delete"
+  },
+  "delete_tree": {
+    "confidence": "certain",
+    "criterion": "presence",
+    "id": 6,
+    "kind": "delete_tree",
+    "rel": "rancio",
+    "reversal": "restore_trash"
+  },
+  "delete_tree_irreversible": {
+    "confidence": "certain",
+    "criterion": "presence",
+    "id": 7,
+    "kind": "delete_tree",
+    "reason": "no_trash_on_target",
+    "rel": "rancio",
+    "reversal": "irreversible"
+  },
+  "overwrite_irreversible": {
+    "confidence": "probable",
+    "criterion": "mtime",
+    "id": 4,
+    "kind": "overwrite",
+    "reason": "no_trash_on_target",
+    "rel": "notas.md",
+    "reversal": "irreversible",
+    "size": 4096
+  },
+  "overwrite_trash": {
+    "confidence": "probable",
+    "criterion": "mtime",
+    "id": 3,
+    "kind": "overwrite",
+    "rel": "notas.md",
+    "reversal": "restore_trash",
+    "size": 4096
+  },
+  "overwrite_unknown_confidence": {
+    "confidence": "unknown",
+    "criterion": "mtime",
+    "id": 5,
+    "kind": "overwrite",
+    "rel": "empaquetado/dentro.txt",
+    "reversal": "restore_trash",
+    "size": 7
+  },
+  "skip_ambiguous_source": {
+    "confidence": "certain",
+    "criterion": "presence",
+    "id": 8,
+    "kind": "skip",
+    "reason": "ambiguous_source",
+    "rel": "LEEME%FF.txt"
+  },
+  "skip_unknown_confidence": {
+    "confidence": "unknown",
+    "criterion": "mtime",
+    "id": 9,
+    "kind": "skip",
+    "reason": "unknown_confidence",
+    "rel": "empaquetado/dentro.txt"
+  },
+  "skip_unreadable": {
+    "confidence": "unknown",
+    "criterion": "presence",
+    "id": 10,
+    "kind": "skip",
+    "reason": "unreadable",
+    "rel": "secreto"
+  }
+}

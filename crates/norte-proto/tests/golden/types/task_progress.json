@@ -33,6 +33,30 @@
     "entries_total": 10,
     "current": "file:///home/user/doc.txt"
   },
+  "running_sync_plan": {
+    "task_id": 19,
+    "kind": "sync_plan",
+    "state": {
+      "kind": "running"
+    },
+    "bytes_done": 0,
+    "bytes_total": null,
+    "entries_done": 120,
+    "entries_total": null,
+    "current": "file:///home/user/origen/fotos"
+  },
+  "running_sync": {
+    "task_id": 20,
+    "kind": "sync",
+    "state": {
+      "kind": "running"
+    },
+    "bytes_done": 4096,
+    "bytes_total": 65536,
+    "entries_done": 3,
+    "entries_total": 40,
+    "current": "file:///home/user/copia/informe%FF%FE.dat"
+  },
   "running_mkdir": {
     "task_id": 9,
     "kind": "mkdir",

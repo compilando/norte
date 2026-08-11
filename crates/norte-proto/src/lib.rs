@@ -23,7 +23,7 @@ pub use attrs::{
 };
 pub use caps::{Capabilities, CapabilityFlags};
 pub use entry::{Entry, EntryKind};
-pub use error::{ConflictKind, Error};
+pub use error::{ConflictKind, Error, RootOverlap};
 pub use methods::PROTOCOL_VERSION;
 pub use task::{TaskId, TaskKind, TaskProgress, TaskState};
 pub use transfer::{
