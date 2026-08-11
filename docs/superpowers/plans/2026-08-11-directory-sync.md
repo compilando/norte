@@ -26,6 +26,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | --- | --- | --- |
 | 1 — the wire vocabulary | done | `c279988` |
 | 2 — `descend_orphans` | done | `6cb6cd4` |
+| 3 — `norte-sync` + the Update transducer | done | `aa2242c` |
 | 3 — `norte-sync` and the Update transducer | done | `aa2242c` |
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
@@ -136,32 +137,55 @@ branch, and hardcoding `RestoreTrash` puts a false promise on the wire before
 a human approves it. Task 4's step-1 tests for it will pass on arrival; its
 real work is `on_unknown`, the `Skip` reasons and the `Error` rows.
 
-**Two bugs the reviewers found that outlive this task.** Neither is fixable
-without a wire decision, both are pinned by a test that asserts today's
-behaviour, and both must be resolved before Task 9 executes anything:
+**Two bugs the reviewers found, and how they are resolved.** Both are pinned
+by a test asserting today's behaviour, and neither may reach Task 9. Both
+resolutions are decided; the tests that pin the old behaviour get replaced.
 
-1. **A folded pair with different bytes gets the SOURCE's name** (#152's
-   reachable edge). `norte-compare` pairs by a key that NFC-normalises always
-   and case-folds when either side is case-insensitive, and the row carries no
-   marker. `rel` comes from the source entry, so an `Overwrite` of an NFC
-   `café` against an NFD `café` writes a SECOND file and its `RestoreTrash`
-   reversal is a lie — nothing was buried, so undo cannot repair it, and under
-   `Mirror` the original is not an orphan either. Fixing it needs a
-   destination-side name on the step or a new `SyncReason`; both are Task 1
-   territory. Test: `a_pair_whose_two_names_differ_in_bytes_takes_the_source_name`.
-2. **A `TypeMismatch` whose SOURCE is a directory becomes one `Overwrite`**,
-   and `Overwrite` means "trash and copy bytes". The step carries no
-   `EntryKind`, so the executor cannot tell it from a file overwrite, and the
-   walk does not descend a non-directory pair, so the subtree is not in the
-   plan at all. Test:
-   `a_type_mismatch_whose_source_is_a_directory_is_still_one_overwrite`.
+**Bug 1 — a folded pair with different bytes gets the SOURCE's name** (#152's
+reachable edge). `norte-compare` pairs by a key that NFC-normalises always and
+case-folds when either side is case-insensitive, and the row carries no
+marker. `rel` comes from the source entry, so an `Overwrite` of an NFC `café`
+against an NFD `café` writes a SECOND file on ext4. Its `RestoreTrash`
+reversal is a lie — nothing was buried — so undo cannot repair it, and under
+`Mirror` the original is not an orphan either, because it paired.
 
-**A third gap, for whoever writes the blockers.** Nothing checks that a name
-legal under the source root is legal under the DESTINATION root: 86 NFC `é`
-(172 bytes) become 258 under NFD and blow `NAME_MAX`; `CON`, a trailing dot
-and `f:ads` are not names on Windows (the last one writes an alternate data
-stream and "succeeds"). Today that fails at EXECUTION, on a plan already
-approved. `SyncBlockerKind` and `SyncReason` have no vocabulary for it.
+**Resolution — `SyncStep` gains `dest_rel: Option<RelPath>`, `Some` only when
+the destination's name bytes differ from the source's.** The row already
+carries both `Entry`s, so the transducer has both names and `norte-compare`
+needs no change. The executor reads `source_root + rel` and writes
+`dest_root + dest_rel.unwrap_or(rel)` — the file that exists, not the one the
+source spells. The trash reference and the reversal then describe something
+real. The destination is **not** renamed to the source's spelling: renaming on
+a normalisation difference is the macOS↔Linux churn this repo exists to avoid.
+Task 4 lands the field, the transducer's emission of it, and the tests; the
+pane shows both names when they differ.
+
+**Bug 2 — a `TypeMismatch` involving a directory becomes one `Overwrite`**,
+which normatively means "trash and copy bytes", with no `EntryKind` on the
+step and the subtree absent from the plan entirely.
+
+**Resolution — a directory on either side is a blocker; anything else keeps
+overwriting.** New `SyncBlockerKind::TypeMismatchDir`. Replacing a tree with a
+file, or a file with a tree, is a destructive structural change that deserves
+a human, and the spec never promised it. File-against-symlink stays an
+`Overwrite`, because that is plain byte replacement and is correct;
+symlink-against-symlink never reaches here at all — spec 1 decides it on the
+target bytes. Task 5 lands it with the other blockers.
+
+**A third gap: destination name legality — deliberately out of scope.**
+Nothing checks that a name legal under the source root is legal under the
+DESTINATION root: 86 NFC `é` (172 bytes) become 258 under NFD and blow
+`NAME_MAX`; `CON`, a trailing dot and `f:ads` are not names on Windows (the
+last writes an alternate data stream and "succeeds"). Validating this at
+planning time means modelling every destination filesystem's naming rules,
+which `Capabilities` does not carry and this spec did not budget.
+
+So it stays an **execution** failure, which the design already accommodates —
+a failed step is a report row and the task continues. What is missing is
+precision, and that is cheap: **Task 9 adds `SyncFailureCause::IllegalName`**
+so the report names the real cause instead of a generic `Io`, and **Task 14
+files an issue** for planning-time validation, cross-referencing this
+paragraph. Do not silently let it surface as `Io`.
 
 **The manifest is not the plan's.** `norte-vfs` is a dev-dependency, not a
 dependency — the transducer never talks to a provider, which is its whole
