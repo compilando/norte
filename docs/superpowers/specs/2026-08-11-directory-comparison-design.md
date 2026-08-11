@@ -181,16 +181,24 @@ pub struct CompareRow {
     pub verdict: CompareVerdict,
     pub criterion: CompareCriterion,
     pub confidence: CompareConfidence,
+    /// Which side is newer, when mtime decided the row.
     pub newer: Option<Side>,
+    /// Why, for the two verdicts that need a why: `Ambiguous` and `Error`.
+    /// `None` for every other verdict.
+    pub reason: Option<CompareReason>,
+    /// The side a `reason` applies to, when it applies to one — a read that
+    /// failed on the left only.
+    pub side: Option<Side>,
 }
 ```
 
 `CompareVerdict` is `Same`, `Different`, `OnlyLeft`, `OnlyRight`,
 `TypeMismatch`, `Ambiguous` and `Error`; `CompareCriterion` is `Presence`,
 `Kind`, `LinkTarget`, `Size`, `Mtime` and `Hash`; `CompareConfidence` is
-`Certain`, `Probable` and `Unknown`.
+`Certain`, `Probable` and `Unknown`; `CompareReason` is `CaseFold`,
+`Normalization`, `Unreadable`, `DirTooLarge` and `ReadFailed`.
 
-All three carry a `#[serde(other)]` fallback, as `TaskKind` and `VolumeKind`
+All four carry a `#[serde(other)]` fallback, as `TaskKind` and `VolumeKind`
 do: an N+1 daemon that adds a criterion does not break an N-1 frontend. On
 `CompareVerdict` and `CompareCriterion` that variant is named `Unknown`, the
 house convention. On `CompareConfidence` it is named `Unrecognised`, because
@@ -208,7 +216,8 @@ Two roots that resolve to the same provider and path are `-32602`.
 
 An invariant the wire cannot express and a test can: `OnlyLeft` implies
 `right: None`, `Same` and `Different` imply both sides present. Golden plus a
-validity test in `norte-proto`.
+validity test in `norte-proto`. Likewise `reason` is `Some` for exactly two
+verdicts, `Ambiguous` and `Error`, and `None` for every other.
 
 This needs a **minor protocol bump, new goldens and an ADR**. The ADR is not
 for breaking the format — nothing breaks — but because "confidence declared per
