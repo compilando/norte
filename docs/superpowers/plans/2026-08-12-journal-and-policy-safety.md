@@ -43,10 +43,10 @@ half; Task 2 adds the rustdoc pointer.
 
 | task | state | commit |
 | --- | --- | --- |
-| 1 — the policy that was never installed (#166) | pending | |
-| 2 — a trash that outlives its journal row (#160, sync) | pending | |
-| 3 — the same shape in `fs.delete` (#160, ops) | pending | |
-| 4 — the embedded engine gets a journal (#167) | pending | |
+| 1 — the policy that was never installed (#166) | done | f5ec90f |
+| 2 — a trash that outlives its journal row (#160, sync) | done | 9bd0630 |
+| 3 — the same shape in `fs.delete` (#160, ops) | done | df479a1 |
+| 4 — the embedded engine gets a journal (#167) | done | 2db842c |
 | 5 — close the branch | pending | |
 
 ---
@@ -784,6 +784,32 @@ git add crates/norte-core/src/embedded.rs crates/norte-core/src/lib.rs \
         docs/spec/norte-spec.md
 git commit -m "feat(core): the embedded backend journals its mutations"
 ```
+
+### What task 4 did differently (2db842c)
+
+- **The CLI opens the journal only for mutating subcommands** (`muta_el_arbol`:
+  Cp/Mv/Rm/Mkdir), plus `ai rename`, which never reaches `make_backend` and
+  builds its own engine. `norte ls` must not take an exclusive lock away from a
+  concurrent `norte mv` for an operation that writes no row.
+- **`es_lock_ocupado` was rewritten to match SQLite's CODE** (`SQLITE_BUSY` /
+  `SQLITE_LOCKED`), not its prose. The plan's text predicate worked — the
+  contended open really does come back "database is locked" — but the
+  classification would silently invert on an sqlx bump that reformats `Display`.
+- **A 250 ms busy timeout** (`Journal::open_with_busy_timeout`): with sqlx's
+  5 s default, a contended open cost five seconds before falling back. Measured:
+  5.012s → 0.271s.
+- **Two defects the plan did not foresee, both from the reviewers.** The pool
+  reaped the connection that HOLDS the lock after ten idle minutes (so two
+  processes could own the chain, and the loser's cached `ChainState` then
+  collided with the `seq` primary key forever); and `undoes_seq` had no
+  migration, which is why a `norte cp` on the dev box died with "internal
+  error" — and it cannot have one, because that column arrived with its byte
+  in the hash preimage, so migrating a journal WITH history would make
+  `verify_chain` accuse an untouched file. Empty legacy table: migrated. With
+  history: refused, with instructions.
+- **Deferred with issues:** #177 (open the journal lazily on the first
+  mutation, so a browsing TUI stops blocking `daemon run` and `norte audit`)
+  and #178 (`Unavailable` degrades to a warning where the daemon fails closed).
 
 ---
 
