@@ -72,6 +72,9 @@ async fn spawn_daemon_mem(
     let engine = Arc::new(Engine::new());
     let mem = Arc::new(mem);
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    // EL spool de `sync.plan`, uno por daemon y bajo su propio tempdir (ADR
+    // 0049). Sin él `sync.plan` responde `Unsupported`.
+    engine.set_spool(norte_core::sync::Spool::new(dir.path()));
     let daemon = Daemon::bind(
         engine,
         DaemonConfig {
@@ -114,6 +117,7 @@ async fn spawn_daemon_policy() -> TestDaemon {
     let engine = Arc::new(Engine::new().with_policy(Arc::new(policy), Arc::new(DenyAll)));
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    engine.set_spool(norte_core::sync::Spool::new(dir.path()));
     let daemon = Daemon::bind_with_scopes(
         engine,
         scopes,
@@ -2174,6 +2178,7 @@ async fn spawn_daemon_journal() -> TestDaemon {
         Arc::new(Engine::with_journal(journal).with_policy(Arc::new(policy), Arc::new(DenyAll)));
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    engine.set_spool(norte_core::sync::Spool::new(dir.path()));
     let daemon = Daemon::bind_with_scopes(
         engine,
         scopes,
@@ -4835,6 +4840,404 @@ async fn fs_compare_con_scope_de_copy_el_hash_procede() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].verdict, methods::CompareVerdict::Same);
     assert_eq!(rows[0].criterion, methods::CompareCriterion::Hash);
+}
+
+// ---------------------------------------------------------------- sync.plan
+
+fn sync_params(source: &str, dest: &str) -> methods::SyncPlanParams {
+    methods::SyncPlanParams {
+        source: vp(source),
+        dest: vp(dest),
+        mode: methods::SyncMode::Update,
+        compare: methods::SyncCompareOptions::default(),
+        on_unknown: methods::OnUnknown::Copy,
+        include: None,
+    }
+}
+
+/// Drena `sync.steps` + `sync.plan_done` + `task.progress` de un plan hasta su
+/// terminal. Devuelve los lotes EN ORDEN, el cierre (si lo hubo) y el estado.
+///
+/// El orden importa y por eso no se descarta: `sync.plan_done` CIERRA el plan, y
+/// un lote después de él sería un cliente aprobando un hash de un plan que
+/// todavía estaba llegando.
+async fn drain_sync(
+    c: &mut Client,
+    task_id: u64,
+) -> (
+    Vec<methods::SyncStepsBatch>,
+    Option<methods::SyncPlanDone>,
+    TaskState,
+) {
+    let mut batches = Vec::new();
+    let mut done: Option<methods::SyncPlanDone> = None;
+    let mut terminal = None;
+    let mut progreso = None;
+    loop {
+        let next = tokio::time::timeout(Duration::from_secs(10), c.notification()).await;
+        let n = match next {
+            Ok(Some(n)) => n,
+            Ok(None) => break,
+            Err(_) => {
+                assert!(terminal.is_some(), "timeout esperando el plan");
+                break;
+            }
+        };
+        if n.method == methods::SYNC_STEPS {
+            let b: methods::SyncStepsBatch =
+                serde_json::from_value(n.params.expect("params")).expect("SyncStepsBatch");
+            if b.task_id.get() == task_id {
+                assert!(
+                    done.is_none(),
+                    "un sync.steps DESPUÉS del sync.plan_done: el cierre tiene que ser el último"
+                );
+                batches.push(b);
+            }
+        } else if n.method == methods::SYNC_PLAN_DONE {
+            let d: methods::SyncPlanDone =
+                serde_json::from_value(n.params.expect("params")).expect("SyncPlanDone");
+            if d.task_id.get() == task_id {
+                assert!(done.is_none(), "dos cierres para un plan");
+                done = Some(d);
+            }
+        } else if n.method == methods::TASK_PROGRESS {
+            let p: TaskProgress =
+                serde_json::from_value(n.params.expect("params")).expect("TaskProgress");
+            if p.task_id.get() == task_id && p.state.is_terminal() {
+                // El contrato de progreso de una Task `SyncPlan`, tal y como lo
+                // publica su rustdoc: cuenta PASOS y no bytes, y `entries_done`
+                // es la ÚNICA señal con la que un cliente detecta un `sync.steps`
+                // perdido. Sin esto, las dos frases son solo prosa.
+                assert_eq!(p.kind, norte_proto::TaskKind::SyncPlan);
+                assert_eq!(p.bytes_done, 0, "planificar no escribe un byte");
+                assert!(p.current.is_none(), "ninguna ruta al broadcast");
+                progreso = Some(p.entries_done);
+                terminal = Some(p.state);
+                // El cierre puede ir DETRÁS del terminal: se sigue drenando
+                // hasta que el timeout corto de arriba dice que no queda nada.
+            }
+        }
+    }
+    if let (Some(entries), Some(TaskState::Completed)) = (progreso, terminal.as_ref()) {
+        let vistos: u64 = batches
+            .iter()
+            .map(|b| u64::try_from(b.steps.len()).expect("cabe"))
+            .sum();
+        assert_eq!(
+            entries, vistos,
+            "entries_done tiene que cuadrar con los pasos entregados"
+        );
+    }
+    (batches, done, terminal.expect("estado terminal del plan"))
+}
+
+/// Round-trip por el socket: los pasos llegan en lotes acotados y el
+/// `sync.plan_done` los CIERRA — nunca al revés.
+#[tokio::test]
+async fn sync_plan_round_trip_pasos_y_despues_el_cierre() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
+    d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
+    for i in 0..600 {
+        write_file(&d.mem, &format!("mem:///s/f{i}.txt"), b"x").await;
+    }
+    let mut c = connected_client(&d).await;
+
+    let task: FsTaskResult = c
+        .call(methods::SYNC_PLAN, &sync_params("mem:///s", "mem:///d"))
+        .await
+        .expect("sync.plan");
+    let (batches, done, state) = drain_sync(&mut c, task.task_id.get()).await;
+    assert_eq!(state, TaskState::Completed);
+    assert!(
+        batches
+            .iter()
+            .all(|b| b.steps.len() <= methods::SYNC_STEPS_MAX_BATCH),
+        "lote por encima del tope"
+    );
+    let steps: usize = batches.iter().map(|b| b.steps.len()).sum();
+    assert_eq!(steps, 600);
+    assert!(batches.len() < 600, "una frame por paso no es coalescer");
+    let done = done.expect("el plan cerró");
+    assert_eq!(done.counts.copy, 600);
+    assert!(done.executable);
+    assert_eq!(done.plan_hash.as_str().len(), methods::PLAN_HASH_LEN);
+}
+
+/// Los pasos son de quien lanzó el plan: otra conexión NUNCA ve un `sync.steps`
+/// ni un `sync.plan_done` ajeno (mismo criterio direccional que
+/// `compare.rows`). Y es más grave aquí: el `plan_hash` ES la autorización para
+/// escribir.
+#[tokio::test]
+async fn sync_plan_pasos_y_hash_solo_al_dueno() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
+    d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
+    write_file(&d.mem, "mem:///s/a.txt", b"x").await;
+    let mut duena = connected_client(&d).await;
+    let mut ajena = connected_client(&d).await;
+
+    let task: FsTaskResult = duena
+        .call(methods::SYNC_PLAN, &sync_params("mem:///s", "mem:///d"))
+        .await
+        .expect("sync.plan de la dueña");
+    let task_id = task.task_id.get();
+
+    loop {
+        let notif = tokio::time::timeout(Duration::from_secs(5), ajena.notification())
+            .await
+            .expect("timeout esperando el terminal en la conexión ajena")
+            .expect("canal vivo");
+        assert_ne!(notif.method, methods::SYNC_STEPS, "pasos que no son suyos");
+        assert_ne!(
+            notif.method,
+            methods::SYNC_PLAN_DONE,
+            "un plan_hash ajeno es una autorización de escritura ajena"
+        );
+        if notif.method == methods::TASK_PROGRESS {
+            let p: TaskProgress =
+                serde_json::from_value(notif.params.expect("params")).expect("TaskProgress");
+            if p.task_id.get() == task_id && p.state.is_terminal() {
+                break;
+            }
+        }
+    }
+    let (batches, done, state) = drain_sync(&mut duena, task_id).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(batches.iter().map(|b| b.steps.len()).sum::<usize>(), 1);
+    assert!(done.is_some());
+}
+
+/// Los dos campos de `compare` que no son del llamante, y el tope de `include`:
+/// `-32602` SIN crear Task.
+#[tokio::test]
+async fn sync_plan_params_que_no_son_del_llamante_son_invalid_params() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
+    d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
+    let c = connected_client(&d).await;
+
+    let mut p = sync_params("mem:///s", "mem:///d");
+    p.compare.follow_symlinks = true;
+    assert_invalid_params(c.call::<_, FsTaskResult>(methods::SYNC_PLAN, &p).await);
+
+    let mut p = sync_params("mem:///s", "mem:///d");
+    p.compare.descend_orphans = Some(methods::DescendSide::Right);
+    assert_invalid_params(c.call::<_, FsTaskResult>(methods::SYNC_PLAN, &p).await);
+
+    let mut p = sync_params("mem:///s", "mem:///d");
+    p.include = Some(vec![
+        methods::RelPath::parse_wire("x").expect("rel");
+        methods::SYNC_MAX_INCLUDE + 1
+    ]);
+    assert_invalid_params(c.call::<_, FsTaskResult>(methods::SYNC_PLAN, &p).await);
+}
+
+/// Raíces solapadas: categoría del wire (`OverlappingRoots`), no `-32602`, y con
+/// la relación dentro — un frontend pinta las tres distinto.
+#[tokio::test]
+async fn sync_plan_raices_solapadas_viajan_con_su_relacion() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
+    d.mem.mkdir(&vp("mem:///a/sub")).await.expect("mkdir sub");
+    let c = connected_client(&d).await;
+
+    let err = c
+        .call::<_, FsTaskResult>(methods::SYNC_PLAN, &sync_params("mem:///a", "mem:///a/sub"))
+        .await
+        .expect_err("solapadas");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(
+                rpc.data,
+                Some(Error::OverlappingRoots {
+                    relation: norte_proto::RootOverlap::DestInsideSource
+                })
+            ),
+            "fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// El gate: planificar LEE dos árboles, así que un agente necesita scope vivo
+/// sobre AMBAS raíces — y el gate va ANTES de validar params, así que unos
+/// params malos tampoco le dicen nada.
+#[tokio::test]
+async fn sync_plan_agente_necesita_scope_en_ambas_raices() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    d.mem
+        .mkdir(&vp("mem:///proj/sub"))
+        .await
+        .expect("mkdir sub");
+    d.mem.mkdir(&vp("mem:///proj/l")).await.expect("mkdir l");
+    d.mem.mkdir(&vp("mem:///proj/r")).await.expect("mkdir r");
+    d.mem.mkdir(&vp("mem:///otro")).await.expect("mkdir otro");
+    let agent = connected_agent(&d, "s1").await;
+    let human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await; // scope sobre mem:///proj
+
+    for p in [
+        sync_params("mem:///proj", "mem:///otro"),
+        sync_params("mem:///otro", "mem:///proj"),
+    ] {
+        let err = agent
+            .call::<_, FsTaskResult>(methods::SYNC_PLAN, &p)
+            .await
+            .expect_err("una de las dos está fuera de scope");
+        match err {
+            ClientError::Rpc(rpc) => assert!(
+                matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+                "PolicyDenied out-of-scope, fue {:?}",
+                rpc.data
+            ),
+            other => panic!("esperaba Rpc, fue {other:?}"),
+        }
+    }
+
+    // El gate va PRIMERO: unos params imposibles siguen contestando denegado, no
+    // «además tu petición estaba mal».
+    let mut p = sync_params("mem:///otro", "mem:///proj");
+    p.compare.follow_symlinks = true;
+    let err = agent
+        .call::<_, FsTaskResult>(methods::SYNC_PLAN, &p)
+        .await
+        .expect_err("fuera de scope");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PolicyDenied { .. })),
+            "el gate va antes que la validación de params, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+
+    // Con las dos bajo el scope, procede.
+    let _: FsTaskResult = agent
+        .call(
+            methods::SYNC_PLAN,
+            &sync_params("mem:///proj/l", "mem:///proj/r"),
+        )
+        .await
+        .expect("ambas bajo el scope");
+}
+
+/// El rung de hash LEE CONTENIDO también aquí: un scope que solo concede
+/// `mkdir` planifica barato y no hasheado.
+#[tokio::test]
+async fn sync_plan_el_rung_de_hash_exige_scope_de_contenido() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///data")).await.expect("mkdir data");
+    d.mem.mkdir(&vp("mem:///data/l")).await.expect("mkdir l");
+    d.mem.mkdir(&vp("mem:///data/r")).await.expect("mkdir r");
+    write_file(&d.mem, "mem:///data/l/a.txt", b"x").await;
+    write_file(&d.mem, "mem:///data/r/a.txt", b"x").await;
+    let agent = connected_agent(&d, "s1").await;
+    let human = connected_client(&d).await;
+
+    let req: RequestScopeResult = agent
+        .call(
+            methods::POLICY_REQUEST_SCOPE,
+            &RequestScopeParams {
+                session: "s1".into(),
+                roots: vec![vp("mem:///data")],
+                ops: vec!["mkdir".into()],
+                ttl_ms: 60_000,
+            },
+        )
+        .await
+        .expect("request_scope");
+    let _: GrantScopeResult = human
+        .call(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams {
+                request_id: req.request_id,
+            },
+        )
+        .await
+        .expect("grant_scope");
+
+    let _: FsTaskResult = agent
+        .call(
+            methods::SYNC_PLAN,
+            &sync_params("mem:///data/l", "mem:///data/r"),
+        )
+        .await
+        .expect("sin hash procede");
+
+    let mut p = sync_params("mem:///data/l", "mem:///data/r");
+    p.compare.criteria.hash = true;
+    let err = agent
+        .call::<_, FsTaskResult>(methods::SYNC_PLAN, &p)
+        .await
+        .expect_err("el hash exige scope de contenido");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+            "PolicyDenied out-of-scope, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// Tercera de las cuatro muertes del spool (ADR 0049): al cerrarse la conexión
+/// se van sus planes. Un plan sin dueño no lo puede aplicar nadie, y lo que
+/// quedaría en disco es un listado relativo de dos árboles.
+#[tokio::test]
+async fn sync_plan_al_cerrar_la_conexion_se_van_sus_planes() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
+    d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
+    write_file(&d.mem, "mem:///s/a.txt", b"x").await;
+    // El socket vive en el mismo tempdir que el estado del daemon.
+    let spool_dir = d
+        .socket
+        .parent()
+        .expect("el socket cuelga del tempdir")
+        .join(norte_core::sync::SPOOL_DIR_NAME);
+    let mut c = connected_client(&d).await;
+
+    let task: FsTaskResult = c
+        .call(methods::SYNC_PLAN, &sync_params("mem:///s", "mem:///d"))
+        .await
+        .expect("sync.plan");
+    let (_, done, state) = drain_sync(&mut c, task.task_id.get()).await;
+    assert_eq!(state, TaskState::Completed);
+    assert!(done.is_some());
+    assert_eq!(
+        std::fs::read_dir(&spool_dir)
+            .expect("dir de spools")
+            .count(),
+        1,
+        "el plan aprobado se retiene mientras vive su conexión"
+    );
+
+    drop(c);
+    // El desmontaje de la conexión es asíncrono. Se espera A LA CONDICIÓN con
+    // un presupuesto, jamás un plazo fijo: un `sleep` calibrado a ojo es lo que
+    // convierte un test en intermitente bajo carga.
+    let hasta = tokio::time::Instant::now() + Duration::from_secs(10);
+    let restantes = loop {
+        let n = std::fs::read_dir(&spool_dir)
+            .expect("dir de spools")
+            .count();
+        if n == 0 || tokio::time::Instant::now() >= hasta {
+            break n;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert_eq!(restantes, 0, "un plan sin dueño no lo aplica nadie");
+}
+
+/// Asevera un `-32602` (params que el server rehúsa sin crear Task).
+fn assert_invalid_params<T: std::fmt::Debug>(r: Result<T, ClientError>) {
+    match r {
+        Err(ClientError::Rpc(rpc)) => assert_eq!(rpc.code, codes::INVALID_PARAMS, "{rpc:?}"),
+        other => panic!("esperaba INVALID_PARAMS, fue {other:?}"),
+    }
 }
 
 /// Asevera que una lectura da `PolicyDenied` out-of-scope (helper de #80).

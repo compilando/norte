@@ -858,6 +858,15 @@ pub const SYNC_PLAN: &str = "sync.plan";
 /// cliente que apruebe un plan del que se perdió un lote está aprobando algo que
 /// no ha visto entero. La aprobación se hace contra
 /// [`SyncPlanDone::counts`], que es el total que el core sí conoce.
+///
+/// **Un lote puede llegar ANTES de la respuesta de [`SYNC_PLAN`]**, y con ella
+/// el `task_id` con el que se correlaciona: la Task arranca dentro del dispatch
+/// y sus notificaciones salen por la misma cola que la respuesta. Un cliente que
+/// tire los lotes cuyo `task_id` todavía no conoce pierde pasos en silencio y
+/// después recibe un [`SYNC_PLAN_DONE`] que parece completo, así que hay que
+/// BUFFEARLOS por `task_id` hasta tener la respuesta. Es la misma forma que
+/// [`COMPARE_ROWS`], y aquí importa más: allí se pinta un diff incompleto, aquí
+/// se aprueba una escritura.
 pub const SYNC_STEPS: &str = "sync.steps";
 /// `sync.plan_done` — notificación que CIERRA un plan ([`SyncPlanDone`]): su
 /// [`PlanHash`], los contadores, los bloqueos y el veredicto `executable`.
@@ -4045,6 +4054,35 @@ pub struct SyncPlanParams {
     /// Más de [`SYNC_MAX_INCLUDE`] es error de params (`-32602`), no un
     /// recorte: la misma regla que [`FS_RENAME_BATCH_MAX_PAIRS`] y por el mismo
     /// motivo — una lista acortada en silencio sincroniza algo que nadie pidió.
+    ///
+    /// # Qué significa exactamente «se restringe»
+    /// Cinco reglas, normativas, porque ninguna se deduce de la frase de arriba:
+    ///
+    /// 1. **Restringe los PASOS del plan, no las filas de la comparación.** El
+    ///    árbol se recorre entero de todos modos: la ortografía que el destino
+    ///    le da a una carpeta viaja en la fila de la carpeta, que suele ser
+    ///    `Same` y no produce paso alguno, así que un plan que solo mirase lo
+    ///    seleccionado compondría rutas de destino con la ortografía del ORIGEN.
+    /// 2. **Nombrar una carpeta arrastra su subárbol**, por prefijo de
+    ///    SEGMENTOS. `café` no arrastra a `cafétière`.
+    /// 3. **Y al revés lo justo:** un [`SyncStepKind::CreateDir`] cuya `rel` sea
+    ///    ancestro de algo seleccionado se queda, aunque no se nombrara — sin él
+    ///    la copia elegida iría a un directorio que no existe. Ninguna otra
+    ///    clase se arrastra hacia arriba: un [`SyncStepKind::DeleteTree`] en un
+    ///    ancestro borraría justo lo que se pidió sincronizar.
+    /// 4. **La comparación es por BYTES**, sobre esta misma forma wire. No
+    ///    normaliza y no pliega la caja, ni siquiera sobre un sistema de
+    ///    ficheros que sí lo haga: una ruta en NFC no casa con la misma en NFD, y
+    ///    `README` no casa con `readme`. Un cliente debe mandar los bytes que
+    ///    vio, no una versión reescrita de ellos. Cuidado además con los pasos
+    ///    cuya `rel` se mide contra el DESTINO ([`SyncStep::rel`]): un
+    ///    [`SyncStepKind::DeleteTree`] bajo una carpeta que los dos lados
+    ///    escriben distinto no lo cubre una selección tomada del lado del origen.
+    /// 5. **La lista VACÍA es una selección de nada**, no «todo»: un plan sin
+    ///    pasos, `executable`. `include: [""]` (la raíz) sí es todo. Quien no
+    ///    quiera filtrar OMITE el campo.
+    ///
+    /// Los BLOQUEOS no se filtran: ver [`SyncPlanDone::executable`].
     #[cfg_attr(feature = "schema", schemars(extend("maxItems" = SYNC_MAX_INCLUDE)))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<Vec<RelPath>>,
@@ -4105,6 +4143,15 @@ pub struct SyncPlanDone {
     /// [`SYNC_APPLY`] rehúsa con
     /// [`Error::PlanNotExecutable`](crate::Error::PlanNotExecutable) aunque el
     /// hash case.
+    ///
+    /// **[`SyncPlanParams::include`] NO recorta los bloqueos**, así que esto
+    /// habla siempre de la comparación ENTERA. Es deliberado: hay bloqueos cuyo
+    /// alcance es el árbol —[`SyncBlockerKind::DestReadOnly`] cuelga de la raíz,
+    /// que ninguna selección nombra— y recortarlos por la selección convertiría
+    /// un destino de solo lectura en un plan ejecutable. La consecuencia que un
+    /// frontend tiene que saber pintar: una selección de tres ficheros puede
+    /// volver con `executable: false` por algo que está a cuarenta mil filas de
+    /// distancia y que el usuario no tiene delante.
     pub executable: bool,
 }
 

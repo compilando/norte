@@ -70,11 +70,11 @@
 //!    que un plan no se puede ejecutar dos veces ni aunque el fichero siga ahí.
 //! 2. **TTL** — [`SYNC_PLAN_TTL_MS`] contra el mtime, comprobado en cada
 //!    [`Spool::open`], que además BORRA el caducado según lo encuentra.
-//! 3. **Conexión cerrada** — [`Spool::drop_connection`]. **Sin llamador
-//!    todavía: lo cablea la tarea 8** en el desmontaje de la conexión.
+//! 3. **Conexión cerrada** — [`Spool::drop_connection`], desde el desmontaje de
+//!    la conexión en el daemon (tarea 8).
 //! 4. **Arranque del daemon** — [`Spool::sweep`], porque un cierre violento
-//!    deja ficheros detrás y nadie más los va a recoger. Es el único cableado en
-//!    esta tarea, en `norte-cli`, junto al journal.
+//!    deja ficheros detrás y nadie más los va a recoger. Se cablea en
+//!    `norte-cli`, junto al journal.
 //!
 //! Y una quinta que no es una muerte sino un no-nacimiento: un plan que no
 //! llega a [`SpoolWriter::finish`] no existe. Se escribe con nombre `.part` y
@@ -98,7 +98,7 @@
 //! ventana en la que el plan es legible por todo el mundo, y esa ventana es el
 //! bug entero.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -280,9 +280,42 @@ enum Record {
 #[derive(Debug, Clone)]
 pub struct Spool {
     dir: PathBuf,
+    /// Todo lo que este PROCESO sabe de sus planes, bajo un solo lock: sin él,
+    /// «¿está viva la conexión?» y «¿se apunta el plan?» serían dos decisiones
+    /// con un hueco en medio, que es exactamente donde caben las carreras que
+    /// [`Registry`] existe para cerrar.
+    reg: Arc<Mutex<Registry>>,
+}
+
+/// Lo que este proceso sabe de sus propios planes. Todo junto y bajo un lock.
+#[derive(Debug, Default)]
+struct Registry {
     /// Los `(conn_id, plan_hash)` que ESTE proceso emitió y todavía nadie
     /// aplicó. Es a la vez la prueba de emisión y el derecho de un solo uso.
-    issued: Arc<Mutex<HashSet<(u64, PlanHash)>>>,
+    issued: HashSet<(u64, PlanHash)>,
+    /// Los que alguien está aplicando AHORA: [`Spool::open`] se llevó el
+    /// derecho y [`Spool::remove`] todavía no ha pasado.
+    ///
+    /// Existe porque replanificar el mismo árbol con las mismas opciones da el
+    /// MISMO hash, y sin esto [`SpoolWriter::finish`] volvería a acuñar un
+    /// derecho que un `open` acababa de consumir: dos ejecuciones del mismo plan
+    /// contra el mismo destino, con dos lotes del journal y un undo que ya no
+    /// describe ningún estado por el que se haya pasado.
+    applying: HashSet<(u64, PlanHash)>,
+    /// Cuántos planes tiene EN VUELO cada conexión (writers abiertos). Es lo que
+    /// acota `dead`: solo se recuerda a una conexión muerta mientras alguno de
+    /// sus planes siga escribiéndose.
+    planning: HashMap<u64, usize>,
+    /// Conexiones que se cerraron TENIENDO un plan a medias.
+    ///
+    /// Sin esto, un plan que termina después del desmontaje de su conexión
+    /// renombra su fichero y se apunta como emitido DESPUÉS de que la única
+    /// muerte que le tocaba —«conexión cerrada»— ya haya pasado: queda un plan
+    /// retenido que nadie puede aplicar y que nadie va a recoger. Y el caso no
+    /// necesita ninguna carrera para darse: un plan que no emite NI UN paso
+    /// (dos árboles idénticos) nunca toca el canal, así que jamás se entera de
+    /// que su dueño se fue.
+    dead: HashSet<u64>,
 }
 
 impl Spool {
@@ -295,33 +328,114 @@ impl Spool {
     pub fn new(state_dir: impl AsRef<Path>) -> Self {
         Self {
             dir: state_dir.as_ref().join(SPOOL_DIR_NAME),
-            issued: Arc::new(Mutex::new(HashSet::new())),
+            reg: Arc::new(Mutex::new(Registry::default())),
         }
     }
 
-    /// Apunta un plan como emitido. Lo llama [`SpoolWriter::finish`].
-    fn record_issued(&self, conn_id: u64, hash: &PlanHash) {
-        if let Ok(mut issued) = self.issued.lock() {
-            issued.insert((conn_id, hash.clone()));
-        }
+    /// El registro, o `None` si el lock está envenenado. Un lock roto se trata
+    /// como «no sé nada»: fail-closed en todos los usos de abajo.
+    fn reg(&self) -> Option<std::sync::MutexGuard<'_, Registry>> {
+        self.reg.lock().ok()
     }
 
-    /// Se LLEVA el derecho a aplicar `hash`. `false` si no lo había: o no lo
-    /// emitió este proceso, o alguien ya lo aplicó.
+    /// Apunta un plan como emitido, salvo que ya no proceda. Lo llama
+    /// [`SpoolWriter::finish`] DESPUÉS del rename y bajo el mismo lock que mira
+    /// las dos razones para no hacerlo, que es lo que lo hace atómico frente a
+    /// un cierre de conexión o un `open` simultáneos.
+    ///
+    /// `false` = no se apuntó, y el fichero recién renombrado hay que quitarlo.
+    fn record_issued(&self, conn_id: u64, hash: &PlanHash) -> bool {
+        let Some(mut reg) = self.reg() else {
+            return false;
+        };
+        if reg.dead.contains(&conn_id) || reg.applying.contains(&(conn_id, hash.clone())) {
+            return false;
+        }
+        reg.issued.insert((conn_id, hash.clone()));
+        true
+    }
+
+    /// Se LLEVA el derecho a aplicar `hash` y lo pasa a «aplicándose». `false`
+    /// si no lo había: o no lo emitió este proceso, o alguien ya lo aplicó.
     fn claim_issued(&self, conn_id: u64, hash: &PlanHash) -> bool {
-        self.issued
-            .lock()
-            .is_ok_and(|mut issued| issued.remove(&(conn_id, hash.clone())))
+        let Some(mut reg) = self.reg() else {
+            return false;
+        };
+        let key = (conn_id, hash.clone());
+        if !reg.issued.remove(&key) {
+            return false;
+        }
+        reg.applying.insert(key);
+        true
     }
 
     /// Olvida los planes de una conexión (o todos, con `None`).
+    ///
+    /// Con `Some`, marca además la conexión como MUERTA si todavía tenía algún
+    /// plan escribiéndose: ese plan no puede terminar en un plan aprobable.
     fn forget_issued(&self, conn_id: Option<u64>) {
-        if let Ok(mut issued) = self.issued.lock() {
-            match conn_id {
-                Some(id) => issued.retain(|(c, _)| *c != id),
-                None => issued.clear(),
+        let Some(mut reg) = self.reg() else {
+            return;
+        };
+        let Some(id) = conn_id else {
+            reg.issued.clear();
+            reg.applying.clear();
+            reg.dead.clear();
+            return;
+        };
+        reg.issued.retain(|(c, _)| *c != id);
+        reg.applying.retain(|(c, _)| *c != id);
+        if reg.planning.contains_key(&id) {
+            reg.dead.insert(id);
+        }
+    }
+
+    /// Suelta la marca de «aplicándose». Lo llama [`Spool::remove`], que es lo
+    /// que la Task de `sync.apply` invoca al terminar en cualquier estado.
+    fn release_applying(&self, conn_id: u64, hash: &PlanHash) {
+        if let Some(mut reg) = self.reg() {
+            reg.applying.remove(&(conn_id, hash.clone()));
+        }
+    }
+
+    /// ¿Se cerró la conexión de este plan mientras se escribía?
+    fn is_dead(&self, conn_id: u64) -> bool {
+        self.reg().is_some_and(|reg| reg.dead.contains(&conn_id))
+    }
+
+    /// Apunta un writer abierto para `conn_id`.
+    fn open_writer(&self, conn_id: u64) {
+        if let Some(mut reg) = self.reg() {
+            *reg.planning.entry(conn_id).or_insert(0) += 1;
+        }
+    }
+
+    /// Cierra un writer. Con el último de una conexión se olvida también su
+    /// lápida: `dead` no crece con el contador de conexiones, solo con las que
+    /// tienen un plan a medias justo cuando se caen.
+    fn close_writer(&self, conn_id: u64) {
+        let Some(mut reg) = self.reg() else {
+            return;
+        };
+        if let Some(n) = reg.planning.get_mut(&conn_id) {
+            *n -= 1;
+            if *n == 0 {
+                reg.planning.remove(&conn_id);
+                reg.dead.remove(&conn_id);
             }
         }
+    }
+
+    /// Cuántos planes RETENIDOS (emitidos y sin aplicar) tiene una conexión.
+    ///
+    /// Lo consulta el daemon antes de aceptar otro `sync.plan`: un plan retenido
+    /// es un fichero en disco con el listado de dos árboles, y nada más que el
+    /// cierre de la conexión lo recoge mientras siga viva.
+    #[must_use]
+    pub fn retained_for(&self, conn_id: u64) -> usize {
+        self.reg().map_or(0, |reg| {
+            reg.issued.iter().filter(|(c, _)| *c == conn_id).count()
+        })
     }
 
     /// El directorio, para quien lo quiera loguear.
@@ -336,6 +450,19 @@ impl Spool {
     /// de su nombre— todavía no existe: se calcula en streaming sobre los
     /// elementos del plan y no se sabe hasta que el flujo termina. Solo
     /// [`SpoolWriter::finish`] le pone el nombre bueno.
+    ///
+    /// # El TTL se cobra AQUÍ, y no hay ningún otro sitio donde se cobre
+    /// [`SYNC_PLAN_TTL_MS`] se comprueba en [`Spool::open`], pero un plan que
+    /// nadie abre no se abre nunca: sin esto, «el TTL» no sería una de las
+    /// cuatro muertes sino una comprobación que solo corre cuando ya no hace
+    /// falta. Así que cada plan nuevo barre primero los `.jsonl` vencidos, que
+    /// acota lo retenido a lo planificado en los últimos diez minutos sin
+    /// necesidad de un hilo con temporizador.
+    ///
+    /// Un `.part` NO se toca por antigüedad: un plan sobre un árbol de red
+    /// tarda horas legítimamente, y su fichero lleva su mtime original. De los
+    /// `.part` huérfanos se encargan el `Drop` del writer y el barrido de
+    /// arranque.
     ///
     /// # Errors
     /// [`SpoolError::Io`] si el directorio de estado no se puede crear o el
@@ -359,6 +486,7 @@ impl Spool {
         // Regla 2: `std::fs` es bloqueante y esto es un contexto async.
         let (file, part) = tokio::task::spawn_blocking(move || {
             ensure_dir(&dir)?;
+            reap_expired(&dir);
             let (mut file, part) = create_part(&dir, conn_id)?;
             file.write_all(&line)?;
             line.clear();
@@ -366,6 +494,7 @@ impl Spool {
         })
         .await
         .map_err(joined)??;
+        self.open_writer(conn_id);
         Ok(SpoolWriter {
             spool: self.clone(),
             part,
@@ -444,12 +573,19 @@ impl Spool {
     /// Borra el plan `hash` de `conn_id`, lo haya o no. Es lo que llama la Task
     /// de `sync.apply` al terminar, en cualquier estado (tarea 9).
     ///
+    /// **Hay que llamarlo**, y no solo por higiene de disco: mientras no se
+    /// llame, el plan sigue contando como «aplicándose» y replanificar ese mismo
+    /// árbol con las mismas opciones —que da el mismo digest— se rehúsa. Es el
+    /// lado seguro del intercambio (antes que acuñar dos veces el derecho a
+    /// escribir el mismo destino), pero es un fallo visible para el usuario.
+    ///
     /// # Errors
     /// [`SpoolError::Io`] solo si el borrado falla por algo que no sea «no
     /// estaba».
     #[tracing::instrument(skip_all, fields(conn_id, plan_hash = hash.as_str()))]
     pub async fn remove(&self, conn_id: u64, hash: &PlanHash) -> Result<(), SpoolError> {
         self.claim_issued(conn_id, hash);
+        self.release_applying(conn_id, hash);
         let path = self.dir.join(file_name(conn_id, hash));
         tokio::task::spawn_blocking(move || match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
@@ -461,8 +597,8 @@ impl Spool {
     }
 
     /// Borra TODOS los planes de una conexión, terminados o a medias. Se llama
-    /// cuando la conexión se cae: un plan sin dueño no lo puede aplicar nadie
-    /// (tarea 8).
+    /// cuando la conexión se cae: un plan sin dueño no lo puede aplicar nadie.
+    /// Lo llama el desmontaje de la conexión en el daemon.
     ///
     /// # Errors
     /// [`SpoolError::Io`] si el directorio no se puede listar. Un fichero que no
@@ -654,12 +790,31 @@ impl SpoolWriter {
     /// nunca supo. Nadie lo puede aplicar —no llegó a apuntarse como emitido— y
     /// se lo lleva el barrido.
     ///
+    /// # Otras dos formas de NO cerrar, además de `outcome`
+    /// Las dos devuelven [`SpoolError::Interrupted`], y las dos son cosas que
+    /// pasaron mientras el plan se escribía y que quien lo escribe no puede ver:
+    ///
+    /// - **Su conexión se cerró.** El desmontaje se llevó los planes de esa
+    ///   conexión, así que uno que se apuntase DESPUÉS quedaría retenido sin
+    ///   dueño y sin nadie que lo recoja. No hace falta ninguna carrera para
+    ///   llegar aquí: un plan sobre dos árboles idénticos no emite ni un paso, no
+    ///   toca el canal y por tanto jamás se entera de que su dueño se fue.
+    /// - **Un `open` se llevó el derecho de ESE hash.** Replanificar el mismo
+    ///   árbol con las mismas opciones da el mismo digest; volver a acuñar el
+    ///   derecho mientras alguien lo aplica es autorizar una segunda ejecución
+    ///   del mismo plan contra el mismo destino, con dos lotes del journal.
+    ///
+    /// La comprobación buena es la de DESPUÉS del rename, que se hace bajo el
+    /// mismo lock que la decisión de apuntar el plan como emitido; la de
+    /// antes solo ahorra el trabajo.
+    ///
     /// # Errors
-    /// [`SpoolError::Interrupted`] si `outcome` lo dice, y [`SpoolError::Io`] si
-    /// la escritura o el `rename` fallan.
+    /// [`SpoolError::Interrupted`] si `outcome` lo dice, si la conexión murió o
+    /// si el plan se está aplicando, y [`SpoolError::Io`] si la escritura o el
+    /// `rename` fallan.
     #[tracing::instrument(skip_all, fields(conn_id = self.conn_id, ?outcome))]
     pub async fn finish(mut self, outcome: PlanOutcome) -> Result<SpoolSummary, SpoolError> {
-        if outcome == PlanOutcome::Interrupted {
+        if outcome == PlanOutcome::Interrupted || self.spool.is_dead(self.conn_id) {
             self.abandon_inner().await;
             return Err(SpoolError::Interrupted);
         }
@@ -683,6 +838,7 @@ impl SpoolWriter {
             .spool
             .dir
             .join(file_name(self.conn_id, &summary.plan_hash));
+        let landed = target.clone();
         tokio::task::spawn_blocking(move || {
             // Cerrar ANTES del rename: en Windows un fichero abierto no se
             // renombra, y en unix no cuesta nada.
@@ -693,8 +849,17 @@ impl SpoolWriter {
         .map_err(joined)??;
         self.finished = true;
         // DESPUÉS del rename: apuntar un plan cuyo fichero no llegó a tener su
-        // nombre sería prometer un `open` que después no encuentra nada.
-        self.spool.record_issued(self.conn_id, &summary.plan_hash);
+        // nombre sería prometer un `open` que después no encuentra nada. Y bajo
+        // el lock, que es lo que decide si todavía procede — ver la nota de
+        // arriba sobre las otras dos formas de no cerrar.
+        if !self.spool.record_issued(self.conn_id, &summary.plan_hash) {
+            tokio::task::spawn_blocking(move || {
+                let _ = std::fs::remove_file(&landed);
+            })
+            .await
+            .map_err(joined)?;
+            return Err(SpoolError::Interrupted);
+        }
         Ok(summary)
     }
 
@@ -751,6 +916,9 @@ impl SpoolWriter {
 
 impl Drop for SpoolWriter {
     fn drop(&mut self) {
+        // SIEMPRE, cerrase como se cerrase: es el contador que acota la lápida
+        // de una conexión muerta a las que de verdad tienen un plan a medias.
+        self.spool.close_writer(self.conn_id);
         if self.finished {
             return;
         }
@@ -1259,6 +1427,35 @@ fn remove_matching(dir: &Path, pred: impl Fn(&[u8]) -> bool) -> Result<SweepRepo
         }
     }
     Ok(report)
+}
+
+/// Se lleva los planes CERRADOS que se pasaron de [`SYNC_PLAN_TTL_MS`].
+///
+/// Lo llama [`Spool::create`], y ese es el único reloj que el TTL tiene: la
+/// comprobación de [`Spool::open`] solo alcanza a los planes que alguien abre, y
+/// un plan que nadie abre es justamente el que sobra. Sin esto, un cliente que
+/// planifica en bucle variando `include` —cada selección da otro digest, o sea
+/// otro fichero— llena el directorio de estado, que es donde vive `journal.db`.
+///
+/// **Solo `.jsonl`.** Un `.part` es un plan EN CURSO y puede tardar horas
+/// legítimamente sobre un árbol de red; de los huérfanos se encargan el `Drop`
+/// del writer y el barrido de arranque.
+///
+/// No devuelve nada y no falla hacia arriba: es mantenimiento oportunista, y que
+/// un fichero se resista no es motivo para no dejar planificar. El registro en
+/// memoria sigue siendo lo que decide qué es aplicable.
+fn reap_expired(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !name_bytes(&entry.file_name()).ends_with(b".jsonl") {
+            continue;
+        }
+        if entry.metadata().is_ok_and(|m| expired(&m)) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Los bytes de un nombre de fichero. En unix son los de verdad; fuera, lo que
@@ -2244,5 +2441,136 @@ mod tests {
                 .any(|w| w == b"solo-aqui.txt"),
             "las rutas sí viajan: el buscador de arriba funciona"
         );
+    }
+
+    // ------------------------------------- lo que NO se deja cerrar (tarea 8)
+
+    #[tokio::test]
+    async fn un_plan_cuya_conexion_se_cerro_no_llega_a_ser_aprobable() {
+        // El caso NO necesita ninguna carrera: un plan sobre dos árboles
+        // idénticos no emite un solo paso, así que jamás toca su canal y jamás
+        // se entera de que su dueño se fue. Si `finish` lo cerrase igual,
+        // quedaría un plan retenido después de la única muerte que le tocaba.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spool = Spool::new(dir.path());
+        let w = spool
+            .create(7, &opts(), &compare_opts())
+            .await
+            .expect("create");
+
+        spool.drop_connection(7).await.expect("drop");
+
+        let e = w
+            .finish(PlanOutcome::Ended)
+            .await
+            .expect_err("su dueño ya no está");
+        assert!(matches!(e, SpoolError::Interrupted), "fue {e:?}");
+        assert!(
+            spool_files(&spool).is_empty(),
+            "no puede quedar nada, ni `.part` ni `.jsonl`"
+        );
+    }
+
+    #[tokio::test]
+    async fn la_lapida_de_una_conexion_muerta_no_sobrevive_a_sus_planes() {
+        // `dead` está acotado por los planes EN VUELO, no por el contador de
+        // conexiones: en cuanto el último writer de esa conexión se cierra, la
+        // marca se va y una conexión con ese id podría volver a planificar.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spool = Spool::new(dir.path());
+        let w = spool
+            .create(7, &opts(), &compare_opts())
+            .await
+            .expect("create");
+        spool.drop_connection(7).await.expect("drop");
+        assert!(spool.is_dead(7));
+        w.abandon().await;
+        assert!(
+            !spool.is_dead(7),
+            "sin planes en vuelo no hay nada que marcar"
+        );
+    }
+
+    #[tokio::test]
+    async fn replanificar_lo_que_se_esta_aplicando_no_vuelve_a_acunar_el_derecho() {
+        // Replanificar el mismo árbol con las mismas opciones da el MISMO hash.
+        // Sin esto, `finish` volvería a apuntar un derecho que un `open` acababa
+        // de consumir: dos ejecuciones del mismo plan contra el mismo destino,
+        // con dos lotes del journal y un undo que ya no describe ningún estado
+        // por el que se haya pasado.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spool = Spool::new(dir.path());
+        let hash = write_plan(&spool, 1, &steps_fixture()).await;
+        let _reader = spool.open(1, &hash).await.expect("se aplica");
+
+        let mut w = spool
+            .create(1, &opts(), &compare_opts())
+            .await
+            .expect("create");
+        for s in steps_fixture() {
+            w.push(&PlanItem::Step(s)).await.expect("push");
+        }
+        let e = w
+            .finish(PlanOutcome::Ended)
+            .await
+            .expect_err("ese plan se está aplicando");
+        assert!(matches!(e, SpoolError::Interrupted), "fue {e:?}");
+        assert!(!spool.claim_issued(1, &hash), "el derecho no volvió");
+
+        // Y en cuanto la aplicación termina y llama a `remove`, se puede volver
+        // a planificar con normalidad.
+        spool.remove(1, &hash).await.expect("remove");
+        let otra = write_plan(&spool, 1, &steps_fixture()).await;
+        assert_eq!(otra, hash);
+        assert!(spool.open(1, &otra).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn planificar_barre_los_planes_vencidos() {
+        // El TTL solo se comprobaba dentro de `open`, y un plan que nadie abre
+        // no se abre nunca: sin este barrido, «diez minutos» no era una de las
+        // cuatro muertes sino una comprobación que corría cuando ya no hacía
+        // falta.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spool = Spool::new(dir.path());
+        let viejo = write_plan(&spool, 1, &steps_fixture()).await;
+        let path = spool.dir().join(file_name(1, &viejo));
+        age(&path, SYNC_PLAN_TTL_MS + 60_000);
+
+        // Un plan NUEVO de otra conexión: barre al pasar.
+        let mut w = spool
+            .create(2, &opts(), &compare_opts())
+            .await
+            .expect("create");
+        assert!(!path.exists(), "el vencido se fue al planificar");
+        w.push(&PlanItem::Step(copy_step(1, "a.txt", 1)))
+            .await
+            .expect("push");
+        w.finish(PlanOutcome::Ended).await.expect("finish");
+    }
+
+    #[tokio::test]
+    async fn un_plan_en_curso_no_lo_barre_su_propia_antiguedad() {
+        // Un `.part` es un plan EN CURSO: sobre un árbol de red puede tardar
+        // horas legítimamente, y su mtime es el de cuando empezó.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spool = Spool::new(dir.path());
+        let mut w = spool
+            .create(1, &opts(), &compare_opts())
+            .await
+            .expect("create");
+        let part = spool_files(&spool).first().cloned().expect("hay .part");
+        age(&part, SYNC_PLAN_TTL_MS + 60_000);
+
+        let w2 = spool
+            .create(2, &opts(), &compare_opts())
+            .await
+            .expect("create");
+        assert!(part.exists(), "un plan en curso no es un plan vencido");
+        w2.abandon().await;
+        w.push(&PlanItem::Step(copy_step(1, "a.txt", 1)))
+            .await
+            .expect("push");
+        w.finish(PlanOutcome::Ended).await.expect("finish");
     }
 }

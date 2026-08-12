@@ -31,6 +31,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 5 — `Mirror`, `Ambiguous`, blockers, the overlap guard | done | `fb7a37a` |
 | 6 — the streaming `plan_hash` and the counters | done | `19b7408` |
 | 7 — the spool | done | `ca9f791` (rename) + `0969203` (spool) |
+| 8 — `sync.plan` as a task | done | pending |
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
@@ -686,6 +687,198 @@ So the filename is now accompanied by two things, and both are in Task 7:
 2. **`steps()` can fail mid-stream**, after N steps have already executed — a
    truncated or edited spool, not only a cancellation. The executor's journal
    batch has to be closed and undoable at that point too.
+
+### What Task 8 changed in this plan
+
+**The two notifications share ONE channel, and that is what makes their order a
+property.** `sync.plan_done` normatively CLOSES a plan, so it must arrive after
+the last `sync.steps`. With two channels that ordering would depend on how the
+runtime woke two receivers; with one `mpsc` of
+`norte_core::sync::SyncPlanEvent { Steps, Done }` it is the FIFO, and the
+daemon's pump is a `while let Some(event)` that forwards whatever it is handed.
+The pump is otherwise `handle_fs_compare`'s, including the "a batch that is not
+delivered stops the walk" rule.
+
+- **`Engine` gained `set_spool`/`spool()`, and a spool-less engine REFUSES to
+  plan** (`Error::Unsupported`, fail-closed like the index). A plan that cannot
+  be retained cannot be applied, so serving one would put an approval dialog in
+  front of something that stops existing the moment it is approved. `norte-cli`
+  installs the same handle it already used to sweep — **one `Spool::new` in the
+  process**, which is Task 7's non-negotiable. The daemon reads it back out of
+  the engine (`shared.engine.spool()`) rather than keeping a second copy in
+  `Shared`, so the two can never disagree.
+- **`include` filters the transducer's OUTPUT, and the rules it needed are new.**
+  Three decisions, none of which the wire types state:
+  1. **Membership is by segment PREFIX**, so a selected folder drags its
+     subtree — a descended orphan is a `CreateDir` plus one step per
+     descendant, and exact equality would have created the folder empty. The
+     comparison is over the canonical wire form (percent-encoded, `/`-separated,
+     so a `/` in it can only be a separator), which is byte-exact: `café` NFC
+     does not match NFD, `README` does not match `readme`, and `café` cannot
+     drag `cafétière`.
+  2. **Blockers are NEVER filtered.** A blocker is not a step, and some are
+     about the whole tree — `DestReadOnly` hangs off the root, which no
+     selection names. Recorting them by the selection would turn a read-only
+     destination into an executable plan. So `executable` always speaks about
+     the whole comparison. **Task 12 should decide whether the pane says so**;
+     a selection of three files can come back non-executable because of a
+     `TypeMismatchDir` forty thousand rows away.
+  3. **`Some([])` is a selection of nothing**, not "everything": an empty,
+     executable plan. `None` is the tree.
+  The filter runs BEFORE `SpoolWriter::push`, so the hash covers exactly what
+  the client saw (Task 6's note 1), and two selections over one tree cannot
+  share a digest.
+- **The `node_id` half of the overlap guard is in, with its residual stated
+  rather than papered over.** `Engine::sync_plan_as` does the structural check
+  first (`structural_overlap`, which returns the three-valued `RootOverlap` and
+  not a `Side`), then stats both roots with `Provider::node_id` and
+  `FollowLinks::Yes`. **`Yes` and not `No`, and that is the whole point**: with
+  the link's own identity, `/data` and `/srv/data` answer differently and the
+  check catches nothing — the case it exists for is exactly a symlinked root,
+  and listing a directory traverses the link anyway. Two more deliberate
+  narrowings: the ids are only compared when `Arc::ptr_eq` says it is the SAME
+  provider object (a `NodeId` from two backends is not comparable — a
+  `MemProvider` index and an ext4 inode can collide meaning nothing), and an
+  error or a `None` is **not** an overlap (`None` on SFTP/FTP is the known
+  residual; a `NotFound` means the root is absent, which the comparison below
+  reports as an error row exactly as `fs.compare` does today, instead of a
+  second taxonomy for the same fact).
+- **The engine refuses what the handler refuses, with its own taxonomy.**
+  `follow_symlinks`, a caller-set `descend_orphans` and an over-cap `include`
+  are `-32602` in `handle_sync_plan` and `Unsupported`/`InvalidPath` from
+  `sync_plan_as` — the same asymmetry `fs.compare` already has, and for the same
+  reason: the EMBEDDED arm calls the engine without passing through the daemon,
+  so a check that lives only in the handler is a check that arm does not have.
+  Overlapping roots are the exception and live in the engine ALONE: they are a
+  wire category (`Error::OverlappingRoots`), so `RpcError::from` carries them
+  intact and a second copy in the handler would be a second place to get the
+  three-way relation wrong.
+- **A cancelled plan and an abandoned one are the same thing, and neither
+  leaves anything approvable.** Only the `None` arm of the stream reaches
+  `finish(PlanOutcome::Ended)`; the error arm, a cancelled flush AND a flush
+  whose receiver went away all reach `finish(PlanOutcome::Interrupted)`, which
+  unlinks the `.part`. The last of those three is the one worth naming: an owner
+  that stopped receiving would otherwise leave a fully valid `plan_hash` for a
+  plan nobody ever saw whole.
+- **Two tests that look like they are about timing are not, and must not be
+  rewritten as if they were.** `cancelar_el_plan_no_deja_spool` and
+  `un_dueno_que_deja_de_recibir_no_deja_plan_aprobable` plan 3 000 files against
+  a channel of 8 batches × 256 steps, so the producer is BLOCKED in `send` when
+  the test cuts. The first version used 400 files and a per-op latency fault and
+  was a race the plan won every time — it finished in 48 ms and the assertion
+  found a complete spool. Fill the channel; do not add a `sleep`.
+- **For Task 9.** The spool a completed plan leaves is opened with the hash that
+  travelled in `sync.plan_done`, from the same `conn_id`
+  (`un_plan_completo_deja_un_spool_abrible_con_su_hash` pins it end to end,
+  including that another connection cannot). And Task 7's warning still stands
+  above everything else here: **the gate runs over the roots read FROM THE
+  SPOOL, at apply time** — nothing about the gate that `sync.plan` passed
+  carries over.
+
+#### What the two reviews changed, and it was the retention side every time
+
+Neither reviewer found a BLOCKER, and neither questioned the gate order, the
+`finish(Ended)` discipline or the `node_id` check — all three verified in the
+code rather than taken on the word of the prompt. Seven MAJORs between them, and
+**six were about what happens to a plan after it is written**, not about writing
+it. Task 7 built the spool; Task 8 is the first thing that can drive it from the
+wire, and that is where the design met its first adversary.
+
+- **The TTL was not a reaper, and nothing else was either.** `SYNC_PLAN_TTL_MS`
+  was only ever checked inside `Spool::open`, so a plan nobody opens was never
+  collected: the effective lifetime was "until the connection closes or the
+  daemon restarts". ADR 0049's "its lifetime is closed on all four sides" was
+  therefore false, and **Task 14 must correct it**. `Spool::create` now reaps
+  expired `.jsonl` before opening a new plan — the reaper runs where the growth
+  happens and needs no timer task. `.part` files are exempt: a plan over a
+  network tree takes hours legitimately.
+- **A retention cap, because time alone does not bound a burst.** A client
+  planning in a loop with different `include` lists mints a new digest, and
+  therefore a new file, every time. `MAX_RETAINED_SYNC_PLANS = 16` per
+  connection, refused with `OVERLOADED` (the request is fine, the moment is
+  not — the same code and the same reasoning as the live-task cap). The residual
+  is that 16 plans over half a million entries is still gigabytes; a byte budget
+  for the state directory is a change of its own.
+- **A plan could outlive its connection and be retained forever, and the case
+  needs no race at all.** `flush` returns `Continue(0)` *without touching the
+  channel* when the batch is empty, so a plan over two identical trees — zero
+  steps — never learns that its owner left, closes normally, and is reported
+  `Completed`. The daemon's teardown had already swept. The fix is in the spool,
+  because the channel cannot answer this: `drop_connection` now leaves a
+  tombstone when the connection still has a writer open, and `finish` refuses
+  `Ended` for a tombstoned connection. The tombstone is bounded by plans in
+  flight, not by the connection counter. Two more nets behind it: `tx.is_closed()`
+  before closing, and the pump sweeping the connection's plans when a delivery
+  fails (it is the only observer of delivery, and it runs *after* teardown).
+- **`finish` re-minted a claim that `open` had consumed.** Replanning the same
+  tree with the same options yields the same digest, so — once Task 9 exists —
+  planning again during an apply would hand out a second right to execute the
+  same plan against the same destination, two `batch_id`s, and an undo
+  describing no state the tree was ever in. `Spool` now tracks what is being
+  applied (`open` moves the claim there, `remove` releases it) and `finish`
+  refuses to land on it. **Task 9 must call `Spool::remove` at every terminal
+  state**: until it does, that hash cannot be re-planned. That is the safe side
+  of the trade, and it is a user-visible failure.
+- **`include` dropped the `CreateDir` a kept `Copy` depends on.** The drag was
+  one-directional. Selecting the file row of `nueva/a.txt` filtered out
+  `CreateDir nueva` and left an `executable` plan whose only copy goes into a
+  directory that does not exist — and broke the rule `SyncStepsBatch::steps`
+  publishes. A `CreateDir` whose `rel` is a strict ancestor of something selected
+  now survives; **only that kind**, because a `DeleteTree` on an ancestor would
+  delete the very subtree the user asked to sync.
+- **`include`'s semantics are wire semantics and lived in a private struct.**
+  Five rules now stated normatively on `SyncPlanParams::include` (output not
+  input, prefix drag, the `CreateDir` exception, byte-exact matching that folds
+  nothing even on a filesystem that does, and `[]` meaning nothing while `[""]`
+  means everything), plus the blockers-are-not-filtered consequence on
+  `SyncPlanDone::executable` and the "buffer batches by `task_id`, they can
+  precede the response" note on `SYNC_STEPS`. Doc-only and additive — no version
+  bump, but `docs/schema/proto.schema.json` embeds rustdoc as `description`, so
+  it regenerates with `NORTE_UPDATE_SCHEMA=1`.
+- **The 100 ms drip did not drip.** The time check hung off the arrival of a
+  step, and the transducer emits nothing for a `Same` row: three steps followed
+  by a 200 000-file identical subtree sat in the buffer for the whole walk.
+  `fs.compare` does not have this problem because every pair is a row. Now a
+  `tokio::select!` against a timer — which is the shape Task 3 made the stream
+  `FusedStream` for in the first place.
+- **Two MAJORs deliberately NOT fixed here, both recorded for Task 14.**
+  1. **The spool is a large new disclosure to an in-daemon actor.** `0700`/`0600`
+     protects against other OS users; nothing in the policy layer excludes the
+     state directory from a scope grant over `$HOME`, so an agent can `fs.read`
+     a spool and get a full recursive inventory of two trees it has no scope
+     over. Task 7 already scheduled the issue; the reviews sharpen it — the
+     class is pre-existing (`journal.db` is the same directory) but the *volume*
+     and the *trigger* are new, since anyone who can plan can now produce one on
+     demand. ADR 0049's "owner-only" line must say what that does and does not
+     cover.
+  2. **Case-insensitive containment is not caught by anything.** Both root
+     checks compare segment bytes, so on APFS or NTFS `source=/Data` against
+     `dest=/data/backup` passes the structural check (not byte-equal, not
+     byte-nested), passes `node_id` (genuinely different directories), and passes
+     the walk guard (which compares bytes too) — and the plan copies a tree into
+     a subdirectory of itself. Stated in `sync_plan_as`'s rustdoc as a residual;
+     closing it needs a containment check aware of the destination's folding
+     regime, which is more than a `stat`. **Task 14 lists this with the other
+     two corrections ADR 0049 owes.**
+- **MINORs skipped, with reasons.** A plan can be `Ended` and `executable` while
+  a subtree was never read (an unlistable source directory is a
+  `Skip{Unreadable}` step, not a blocker) — not a Task 8 regression, not
+  destructive (`Mirror` produces no phantom `DeleteTree`, because the walk
+  refuses to pair the other side after a failed listing), and the right place to
+  fix the *impression* is **Task 12's dialog**, which should lead with the
+  `Skip{Unreadable}` count the way it leads with the irreversible one. And the
+  `include` drag does not cross the two spellings of a folded directory pair, so
+  a `DeleteTree` whose `rel` is destination-relative can fall outside a
+  source-anchored selection — it fails in the safe direction (fewer deletions)
+  and is now documented on the wire rather than fixed, because fixing it means
+  the transducer publishing both spellings per step.
+- **Also for Task 9 and Task 12: `Backend` has no `sync_plan`.** No task in this
+  plan claims it, and the TUI goes through `Backend`. It needs the method, the
+  two notification routes (`SYNC_STEPS`, `SYNC_PLAN_DONE`) next to
+  `compare_routes`, and the same up-front refusals `Backend::compare` makes. Note
+  the embedded arm has no actor to gate on: today it is fail-closed only because
+  the CLI never calls `set_spool`, and whoever adds `Backend::sync_plan` must not
+  quietly change that.
 
 ---
 

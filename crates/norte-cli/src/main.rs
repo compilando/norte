@@ -1602,8 +1602,9 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
             // fichero que no se deja borrar es peor fallo que el que evita.
             //
             // El `Spool` se construye UNA vez y se clona: dos `Spool::new` son
-            // dos registros de emisión que no se ven. Aquí solo barre; la tarea
-            // 8 es la que lo mete en el estado del daemon.
+            // dos registros de emisión que no se ven. Este de aquí barre Y es el
+            // que se le instala al engine unas líneas más abajo, que es de donde
+            // lo saca `sync.plan` y el cierre de cada conexión.
             let spool = norte_core::sync::Spool::new(norte_core::connect::config_dir());
             match spool.sweep().await {
                 Ok(r) if r.removed == 0 && r.is_clean() => {}
@@ -1641,6 +1642,10 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
                     engine
                 }
             };
+            // EL spool, el mismo que acaba de barrer: sin él `sync.plan`
+            // responde `Unsupported` (un plan que no se puede retener tampoco se
+            // puede aplicar).
+            engine.set_spool(spool);
             engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
             apply_archive_limits(&engine).await?;
             engine.set_connector(std::sync::Arc::new(

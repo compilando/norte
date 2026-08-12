@@ -88,6 +88,17 @@ pub struct Engine {
     /// (`index.*` → `Unsupported`, fail-closed como la IA). Inyectado con
     /// [`Self::with_index`]; lo instala el daemon.
     index: Option<Arc<norte_index::Index>>,
+    /// EL spool de planes de sincronización retenidos (ADR 0049). `None` = sin
+    /// retención, y entonces `sync.plan` responde `Unsupported` (fail-closed,
+    /// como el índice): un plan que no se puede retener tampoco se puede
+    /// aplicar, y servirlo sería enseñar un diálogo de aprobación sobre algo que
+    /// después no existe.
+    ///
+    /// Lo instala el arranque con [`Self::set_spool`], **una sola vez y con un
+    /// solo `Spool::new`**: el registro de planes emitidos vive detrás de un
+    /// `Arc` dentro del handle, así que un segundo `Spool::new` sobre el mismo
+    /// directorio no es otro handle sino un spool que no reconoce ni un plan.
+    spool: RwLock<Option<crate::sync::Spool>>,
     /// Anillo ACOTADO de informes de lotes de renames, por `task_id`
     /// ([`Self::rename_batch_report`]).
     ///
@@ -124,6 +135,7 @@ impl Engine {
             ai_embed: RwLock::new(None),
             ai_config: RwLock::new(crate::ai::AiConfig::default()),
             index: None,
+            spool: RwLock::new(None),
             batch_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
@@ -162,6 +174,7 @@ impl Engine {
             ai_embed: RwLock::new(None),
             ai_config: RwLock::new(crate::ai::AiConfig::default()),
             index: None,
+            spool: RwLock::new(None),
             batch_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
@@ -185,6 +198,30 @@ impl Engine {
     pub fn with_index(mut self, index: Arc<norte_index::Index>) -> Self {
         self.index = Some(index);
         self
+    }
+
+    /// Instala EL spool de planes de sincronización (ADR 0049). Sin él,
+    /// [`Self::sync_plan_as`] responde [`Error::Unsupported`] (fail-closed).
+    ///
+    /// El handle se **clona**, jamás se vuelve a construir: el registro de lo
+    /// que este proceso emitió vive dentro y es lo que hace que un plan solo lo
+    /// pueda aplicar quien lo produjo. Quien llame a esto dos veces con dos
+    /// `Spool::new` distintos deja huérfanos los planes del primero.
+    ///
+    /// # Panics
+    /// Solo si el lock interno está envenenado (otro hilo hizo panic a mitad de
+    /// escritura) — irrecuperable, mismo criterio que el resto de locks.
+    pub fn set_spool(&self, spool: crate::sync::Spool) {
+        *self.spool.write().expect("spool lock sano") = Some(spool);
+    }
+
+    /// El spool instalado, clonado. `None` = sin retención.
+    ///
+    /// # Panics
+    /// Solo si el lock interno está envenenado.
+    #[must_use]
+    pub fn spool(&self) -> Option<crate::sync::Spool> {
+        self.spool.read().expect("spool lock sano").clone()
     }
 
     /// Evalúa la policy PRE-efecto; un `Ask` suspende hasta aprobación. `Err`
@@ -755,6 +792,168 @@ impl Engine {
                     crate::compare::run_compare(left, left_root, right, right_root, opts, tx, &ctx)
                         .await
                 })
+            }),
+        );
+        Ok((handle, rx))
+    }
+
+    /// Planifica una sincronización de UN sentido como Task cancelable
+    /// (`sync.plan`, 0.40.0, ADR 0049): [`TaskKind::SyncPlan`] + canal de
+    /// [`SyncPlanEvent`](crate::sync::SyncPlanEvent) — lotes de pasos acotados
+    /// por [`SYNC_STEPS_MAX_BATCH`](norte_proto::methods::SYNC_STEPS_MAX_BATCH)
+    /// y, al final, UN
+    /// [`SyncPlanDone`](norte_proto::methods::SyncPlanDone). Un solo canal para
+    /// las dos cosas: el orden «los pasos, y después el cierre» es contrato, y
+    /// una cola FIFO lo garantiza sin que nadie tenga que reordenar.
+    ///
+    /// **No muta nada**: planificar es la comparación de [`Self::compare_as`]
+    /// con una decisión por fila. Quien escribe es `sync.apply` (regla dura 4 no
+    /// aplica aquí; la explicación larga está en el módulo `sync`).
+    ///
+    /// **Retiene**, en cambio: el plan se escribe en el spool según se planifica
+    /// y queda atado a `conn_id`, que es lo que hace que `sync.apply` no lleve
+    /// más que un hash. Sin spool instalado ([`Self::set_spool`]) esto es
+    /// [`Error::Unsupported`].
+    ///
+    /// **Gate de policy**: NINGUNO aquí, y por el mismo motivo que
+    /// [`Self::compare_as`] — el gate de LECTURA vive en el daemon (`read_gate`
+    /// sobre AMBAS raíces, más `content_gate` cuando el rung de hash está
+    /// encendido), que es quien ata una conexión a un actor.
+    ///
+    /// # Las dos raíces no se pueden solapar, y se comprueba DOS veces
+    /// Copiar `/a` sobre `/a/sub` copia un árbol dentro de sí mismo.
+    /// [`FS_COMPARE`](norte_proto::methods::FS_COMPARE) sí admite ese par
+    /// —comparar cuesta un walk y no escribe un byte—; planificar escrituras
+    /// dentro del propio origen no tiene esa licencia.
+    ///
+    /// 1. **Estructural**: scheme, authority y segmentos, literales. Coge las
+    ///    dos raíces iguales y una dentro de la otra.
+    /// 2. **Identidad real**: [`Provider::node_id`] de las dos raíces,
+    ///    resolviendo enlaces. Dos rutas distintas que nombran el mismo
+    ///    directorio —`/data` que es un symlink a `/srv/data`— responden con el
+    ///    mismo id, y eso es [`RootOverlap::Same`](norte_proto::RootOverlap::Same). Es lo
+    ///    que la comprobación
+    ///    estructural no puede ver y lo que el guard del walk tampoco: las filas
+    ///    de un walk sobre `/data` cuelgan todas de `/data` y jamás «alcanzan»
+    ///    la otra raíz.
+    ///
+    /// Lo que sigue SIN cubrir, dicho aquí en vez de prometido de más:
+    ///
+    /// - **La CONTENCIÓN plegando mayúsculas o normalización.** Las dos
+    ///   comprobaciones son literales sobre los bytes de los segmentos, así que
+    ///   sobre APFS o NTFS `source=/Data` y `dest=/data/backup` pasan las dos:
+    ///   no son iguales byte a byte, no cuelga una de la otra byte a byte, y sus
+    ///   `node_id` son distintos porque son directorios distintos. El guard del
+    ///   walk tampoco lo ve, porque compara igual. Cerrarlo pide una contención
+    ///   consciente del régimen de plegado del DESTINO, que es más que un `stat`.
+    /// - **Un mismo host bajo dos autoridades**: `node_id` es `None` en SFTP y
+    ///   en FTP, así que ahí no hay identidad que comparar.
+    /// - **Dos providers distintos**: solo se comparan ids del MISMO objeto
+    ///   provider, porque el [`NodeId`](norte_vfs::NodeId) de dos backends no es
+    ///   comparable (el índice de un provider sintético y un inodo de ext4
+    ///   pueden coincidir sin tener nada que ver).
+    ///
+    /// Lo que queda lo acotan el guard del walk (`OverlapDetected` poda el
+    /// subárbol en cuanto una fila alcanza la otra raíz) y la revalidación por
+    /// paso del ejecutor.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si no hay spool instalado, si el scheme de alguna
+    /// raíz no tiene provider, o si el llamante mandó
+    /// `compare.follow_symlinks`/`compare.descend_orphans` — que en `sync.plan`
+    /// **no son suyos**: el planificador fija el segundo al lado del ORIGEN, y
+    /// servir en silencio un recorrido distinto del pedido es peor que no
+    /// ofrecerlo. [`Error::InvalidPath`] si `include` pasa de
+    /// [`SYNC_MAX_INCLUDE`](norte_proto::methods::SYNC_MAX_INCLUDE) (se rehúsa,
+    /// jamás se recorta: una lista acortada en silencio sincroniza algo que
+    /// nadie pidió). [`Error::OverlappingRoots`] si las raíces se solapan.
+    pub async fn sync_plan_as(
+        &self,
+        params: norte_proto::methods::SyncPlanParams,
+        conn_id: u64,
+        actor: crate::journal::Actor,
+    ) -> Result<
+        (
+            TaskHandle,
+            tokio::sync::mpsc::Receiver<crate::sync::SyncPlanEvent>,
+        ),
+        Error,
+    > {
+        use norte_proto::methods::{SYNC_MAX_INCLUDE, Side};
+
+        // Sin retención no hay plan que aprobar: fail-closed ANTES de tocar un
+        // provider.
+        let spool = self.spool().ok_or(Error::Unsupported)?;
+        // Rechazos del REQUEST, antes de resolver providers y de crear Task
+        // alguna (mismo criterio que `compare_as`). Van aquí y no solo en el
+        // daemon porque el brazo EMBEBIDO llama a este método sin pasar por él.
+        if params.compare.follow_symlinks {
+            tracing::debug!("sync.plan con follow_symlinks: no soportado");
+            return Err(Error::Unsupported);
+        }
+        if params.compare.descend_orphans.is_some() {
+            tracing::debug!("sync.plan con descend_orphans: no es del llamante");
+            return Err(Error::Unsupported);
+        }
+        if params
+            .include
+            .as_ref()
+            .is_some_and(|inc| inc.len() > SYNC_MAX_INCLUDE)
+        {
+            tracing::debug!("sync.plan: include por encima del tope");
+            return Err(Error::InvalidPath);
+        }
+        if let Some(relation) = structural_overlap(&params.source, &params.dest) {
+            tracing::debug!(?relation, "sync.plan con raíces solapadas");
+            return Err(Error::OverlappingRoots { relation });
+        }
+
+        let source = self.provider_for(&params.source).await?;
+        let dest = self.provider_for(&params.dest).await?;
+        if same_node(&source, &params.source, &dest, &params.dest).await {
+            tracing::debug!("sync.plan: las dos raíces son el mismo directorio");
+            return Err(Error::OverlappingRoots {
+                relation: norte_proto::RootOverlap::Same,
+            });
+        }
+        // DESPUÉS de una operación async sobre el provider: `capabilities` es
+        // síncrono (regla 2: no puede hacer I/O) y `norte-vfs-local` sondea de
+        // forma perezosa dentro de la primera operación async. Preguntar antes
+        // devuelve el default de `cfg!(target_os)`.
+        let caps = dest.capabilities();
+        let opts = norte_sync::SyncOptions {
+            source_root: params.source.clone(),
+            dest_root: params.dest,
+            mode: params.mode,
+            on_unknown: params.on_unknown,
+            // El frontend ya tradujo la dirección: aquí el origen es el lado
+            // IZQUIERDO de la comparación por construcción, y `SyncPlanParams`
+            // no lleva ningún `Side` con el que pudiera contradecirlo.
+            source_side: Side::Left,
+            dest_has_trash: caps.flags.contains(norte_proto::CapabilityFlags::TRASH),
+            dest_writable: !caps.flags.contains(norte_proto::CapabilityFlags::READ_ONLY),
+        };
+        let job = crate::sync::SyncPlanJob {
+            source,
+            dest,
+            opts,
+            compare: params.compare,
+            include: params.include,
+            spool,
+            conn_id,
+        };
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        // La cola del scheduler es la del ORIGEN, por lo mismo que en
+        // `compare_as`: hay que encolar en algún sitio y el otro lado no cambia
+        // nada.
+        let key = params.source.scheme().to_owned();
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::SyncPlan,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move { crate::sync::run_sync_plan(job, tx, &ctx).await })
             }),
         );
         Ok((handle, rx))
@@ -1768,6 +1967,74 @@ pub(crate) fn span_path(p: &VPath) -> String {
             format!("<{} ***>", p.scheme())
         }
         _ => p.display_lossy().clone(),
+    }
+}
+
+/// ¿Está `path` EN `root` o por debajo?
+///
+/// Scheme, authority y luego los segmentos uno a uno por sus BYTES crudos —
+/// nunca por prefijo de cadena, que haría colgar `…/cafétière` de `…/café`
+/// (regla dura 1). Gemela de la que `norte_sync::plan` usa para su guard de
+/// solape, que es privada de aquel crate.
+fn is_at_or_under(root: &VPath, path: &VPath) -> bool {
+    if path.scheme() != root.scheme() || path.authority() != root.authority() {
+        return false;
+    }
+    let mut rest = path.segments();
+    root.segments().all(|segment| rest.next() == Some(segment))
+}
+
+/// Cómo se solapan dos raíces MIRÁNDOLAS, sin tocar el disco.
+///
+/// Los tres casos son distintos y ninguno es un caso degenerado de otro: «son el
+/// mismo árbol» no es «una está dentro de la otra», y es justo la frase que un
+/// frontend pinta. `None` = no se solapan estructuralmente, que **no** es lo
+/// mismo que no solaparse (ver [`Engine::sync_plan_as`]).
+fn structural_overlap(source: &VPath, dest: &VPath) -> Option<norte_proto::RootOverlap> {
+    use norte_proto::RootOverlap;
+    if source == dest {
+        Some(RootOverlap::Same)
+    } else if is_at_or_under(dest, source) {
+        Some(RootOverlap::SourceInsideDest)
+    } else if is_at_or_under(source, dest) {
+        Some(RootOverlap::DestInsideSource)
+    } else {
+        None
+    }
+}
+
+/// ¿Son las dos raíces el MISMO directorio, se escriban como se escriban?
+///
+/// Un `stat` por raíz, una vez por plan. Tres cosas, todas deliberadas:
+///
+/// - **Solo si el provider es el MISMO objeto.** Un [`NodeId`](norte_vfs::NodeId)
+///   de dos backends distintos no es comparable —el índice de un provider
+///   sintético y un inodo de ext4 pueden coincidir sin tener nada que ver— y una
+///   coincidencia falsa aquí rechaza un plan legítimo.
+/// - **[`FollowLinks::Yes`](norte_vfs::FollowLinks::Yes)**, porque el caso que
+///   esto existe para coger es exactamente el de una raíz que es un symlink: con
+///   la identidad del propio enlace, `/data` y `/srv/data` responden distinto y
+///   la comprobación no sirve de nada. Listar un directorio atraviesa el enlace
+///   igual, así que es la identidad que el walk va a recorrer de verdad.
+/// - **Un error o un `None` NO son un solape.** `node_id` es `None` en SFTP y en
+///   FTP (residual conocido), y un `NotFound` significa que la raíz no está —
+///   cosa que la comparación de debajo dirá con una fila de error, como hace hoy
+///   `fs.compare`, en vez de matar la petición con una taxonomía distinta.
+async fn same_node(
+    source_provider: &Arc<dyn Provider>,
+    source: &VPath,
+    dest_provider: &Arc<dyn Provider>,
+    dest: &VPath,
+) -> bool {
+    use norte_vfs::FollowLinks;
+    if !Arc::ptr_eq(source_provider, dest_provider) {
+        return false;
+    }
+    let a = source_provider.node_id(source, FollowLinks::Yes).await;
+    let b = dest_provider.node_id(dest, FollowLinks::Yes).await;
+    match (a, b) {
+        (Ok(Some(a)), Ok(Some(b))) => a == b,
+        _ => false,
     }
 }
 

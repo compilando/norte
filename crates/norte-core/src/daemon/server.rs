@@ -48,6 +48,19 @@ const MAX_LIVE_TASKS: usize = 512;
 /// headroom (`MAX_LIVE_TASKS - MAX_LIVE_TASKS_AGENTS`). Por CLASE, no por
 /// sesión: aislar agente-de-agente es la deuda m4 (policy.rs).
 const MAX_LIVE_TASKS_AGENTS: usize = 384;
+/// Planes de sincronización RETENIDOS a la vez por UNA conexión (ADR 0049).
+///
+/// No es un tope de concurrencia —de eso ya se encarga [`MAX_LIVE_TASKS`]—, sino
+/// de acumulación: un plan aprobado sobrevive a su Task durante
+/// `SYNC_PLAN_TTL_MS`, y es un fichero con el listado relativo de dos árboles
+/// enteros. Sin tope, planificar en bucle variando `include` (cada selección da
+/// otro digest, o sea otro fichero) llena el directorio de estado, que es el
+/// mismo en el que vive `journal.db`; quedarse sin disco ahí no es una molestia,
+/// es la regla 4 dejando de ser satisfacible.
+///
+/// Generoso a propósito: un frontend tiene un plan por panel y a lo sumo una
+/// comparación previa que todavía mira.
+const MAX_RETAINED_SYNC_PLANS: usize = 16;
 /// Frames parseados EN COLA entre el reader y el dispatch de una conexión
 /// (#64). Pequeño a propósito: el dispatch es serial y los clientes son
 /// request/response — el valor del inbox es que el READER siga vivo durante
@@ -1433,6 +1446,7 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
             pending.remove(id);
         }
     }
+    drop_sync_plans(shared, conn_id).await;
     drop(tx);
     // Cerrar el inbox termina al reader si aún vive (su `send` falla).
     drop(inbox_rx);
@@ -1671,6 +1685,31 @@ async fn handle_value(
             );
             send(tx, &resp);
         }
+    }
+}
+
+/// Se lleva los PLANES de sincronización que dejó retenidos una conexión que se
+/// cierra (ADR 0049, tercera de las cuatro muertes del spool).
+///
+/// Un plan aprobable pertenece a la conexión que lo produjo, así que sin ella no
+/// lo puede aplicar nadie; y lo que quedaría en disco es un listado relativo de
+/// dos árboles enteros bajo el directorio de estado.
+///
+/// El DERECHO a aplicarlo se olvida en memoria aunque el borrado falle, así que
+/// un fallo aquí deja basura en disco y no un plan vivo: se registra y no rompe
+/// el cierre de la conexión.
+async fn drop_sync_plans(shared: &Arc<Shared>, conn_id: u64) {
+    let Some(spool) = shared.engine.spool() else {
+        return;
+    };
+    match spool.drop_connection(conn_id).await {
+        Ok(report) if report.is_clean() => {}
+        Ok(report) => tracing::warn!(
+            conn = conn_id,
+            failed = report.failed,
+            "planes de sync que no se dejaron borrar al cerrar la conexión"
+        ),
+        Err(e) => tracing::warn!(conn = conn_id, error = %e, "barrido de planes de sync"),
     }
 }
 
@@ -3040,6 +3079,165 @@ async fn handle_fs_compare(
     to_value(&methods::FsTaskResult { task_id })
 }
 
+/// `sync.plan` (0.40.0, ADR 0049): planifica una sincronización de UN sentido
+/// (`source` → `dest`) como Task cancelable. Los PASOS llegan por `sync.steps`
+/// SOLO a la conexión `conn_id` que la lanzó, y el plan lo CIERRA un
+/// `sync.plan_done` por el mismo camino.
+///
+/// NO muta: por debajo es `fs.compare` con una decisión por fila. Lo que sí hace
+/// es RETENER el plan en un spool atado a esta conexión, que es lo que permite
+/// que `sync.apply` no lleve más que un hash.
+///
+/// GATE. Planificar LEE dos árboles enteros, así que son las mismas dos puertas
+/// que [`handle_fs_compare`], y por los mismos motivos:
+/// - [`read_gate`] sobre **AMBAS** raíces (#80).
+/// - [`content_gate`] sobre ambas **cuando `compare.criteria.hash` está
+///   encendido**.
+///
+/// Y van **antes** de validar los params: un actor sin derechos sobre las raíces
+/// no llega a saber si su petición era además incorrecta.
+///
+/// `INVALID_PARAMS` SIN crear Task, con la misma forma que en `fs.compare`, para
+/// los dos campos de `compare` que en `sync.plan` **no son del llamante**
+/// (`follow_symlinks` y `descend_orphans` — el planificador fija el segundo al
+/// lado del ORIGEN) y para un `include` por encima de
+/// [`methods::SYNC_MAX_INCLUDE`], que se rehúsa en vez de recortarse. El engine
+/// los rechaza también, con su propia taxonomía, porque el brazo EMBEBIDO no
+/// pasa por aquí.
+///
+/// Las raíces solapadas NO se comprueban aquí: son
+/// [`Error::OverlappingRoots`](norte_proto::Error::OverlappingRoots), una
+/// categoría del wire, y el engine la produce en un solo sitio para los dos
+/// caminos.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+async fn handle_sync_plan(
+    params: Option<serde_json::Value>,
+    conn_id: u64,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::SyncPlanParams = parse_params(params)?;
+
+    // Gate ANTES de validar params (ver la nota del doc).
+    read_gate(actor, &p.source, shared)?;
+    read_gate(actor, &p.dest, shared)?;
+    if p.compare.criteria.hash {
+        content_gate(actor, &p.source, shared)?;
+        content_gate(actor, &p.dest, shared)?;
+    }
+
+    if p.compare.follow_symlinks {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "sync.plan: compare.follow_symlinks is not supported (link targets are compared as bytes)",
+        ));
+    }
+    if p.compare.descend_orphans.is_some() {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "sync.plan: compare.descend_orphans is set by the planner, not by the caller",
+        ));
+    }
+    // La constante es el contrato: el tope se nombra, jamás se escribe.
+    let max_include = methods::SYNC_MAX_INCLUDE;
+    if p.include
+        .as_ref()
+        .is_some_and(|inc| inc.len() > max_include)
+    {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            format!("sync.plan: include has more than {max_include} paths"),
+        ));
+    }
+
+    // Tope de planes RETENIDOS por conexión. Un plan aprobado es un fichero con
+    // el listado relativo de dos árboles, y mientras su conexión viva la única
+    // cosa que lo recoge es el TTL. Sin este tope, un cliente que planifique en
+    // bucle variando `include` —cada selección da otro digest, o sea otro
+    // fichero— llena el directorio de estado, que es donde vive `journal.db`.
+    // `OVERLOADED` y no `-32602`: la petición es válida, el momento no (mismo
+    // criterio y mismo código que el tope de Tasks vivas).
+    if let Some(spool) = shared.engine.spool()
+        && spool.retained_for(conn_id) >= MAX_RETAINED_SYNC_PLANS
+    {
+        return Err(RpcError::protocol(
+            codes::OVERLOADED,
+            format!(
+                "too many retained sync plans on this connection \
+                 (max {MAX_RETAINED_SYNC_PLANS}); apply or drop one first"
+            ),
+        ));
+    }
+
+    let (handle, mut rx) = shared
+        .engine
+        .sync_plan_as(p, conn_id, actor.clone())
+        .await
+        .map_err(RpcError::from)?;
+    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
+    // `sync_plan_as`) y este register — la Task jamás corre FUERA de
+    // `shared.tasks`. Quien añada un await aquí rompe esa garantía.
+    let task_id = register_task_id(shared, handle, actor.clone())?;
+
+    // Bomba de PASOS: drena el canal del plan y enruta cada evento SOLO al
+    // dueño. Un único canal trae los lotes y el cierre, así que el orden
+    // «`sync.steps`* y después un `sync.plan_done`» no depende de esta bomba:
+    // es la cola.
+    //
+    // En cuanto un evento NO se entrega —el dueño se fue, o no drenaba su
+    // outbox y el daemon lo expulsó— la bomba PARA. Al soltar `rx`, la Task ve
+    // que su receptor desapareció, cierra el spool como INTERRUMPIDO (no deja
+    // plan aprobable) y termina. Sin esto, un plan de tres horas seguiría
+    // recorriendo dos árboles para nadie, reteniendo su permiso del scheduler.
+    //
+    // Lo que esto NO arregla (#155): al expulsado se le lleva por delante
+    // también el `task.progress` terminal, así que no tiene forma de saber si le
+    // faltan pasos. Un cliente al que le falte el `sync.plan_done` no tiene
+    // `plan_hash`, y sin él no puede aplicar nada: el fallo es visible y seguro.
+    let shared_pump = Arc::clone(shared);
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let (method, params) = match event {
+                crate::sync::SyncPlanEvent::Steps(batch) => {
+                    (methods::SYNC_STEPS, serde_json::to_value(&batch))
+                }
+                crate::sync::SyncPlanEvent::Done(done) => {
+                    (methods::SYNC_PLAN_DONE, serde_json::to_value(&done))
+                }
+            };
+            // A diferencia de la bomba de `fs.compare`, un fallo de
+            // serialización NO manda la notificación con `params: null`: aquí un
+            // lote perdido alimenta una aprobación, y un frame que ningún
+            // cliente puede parsear es peor que ninguno. Es inalcanzable con
+            // estos tipos (structs planos), y por eso mismo sale barato.
+            let Ok(params) = params else {
+                tracing::error!(method, "no se pudo serializar un evento de sync.plan");
+                break;
+            };
+            let notif = Notification {
+                jsonrpc: norte_proto::wire::JsonRpcVersion,
+                method: method.into(),
+                params: Some(params),
+            };
+            let Ok(frame) = encode_frame(&notif) else {
+                break;
+            };
+            if !shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice())) {
+                tracing::debug!(conn = conn_id, method, "sync sin dueño: se para el plan");
+                // Y se van sus planes retenidos. Este es el único observador de
+                // la entrega, y llega DESPUÉS del desmontaje de la conexión: un
+                // plan que cerró entre el barrido del desmontaje y este punto
+                // quedaría retenido para siempre — el `sync.plan_done` cabe en
+                // el buffer del canal, así que la Task lo da por entregado.
+                drop_sync_plans(&shared_pump, conn_id).await;
+                break;
+            }
+        }
+    });
+
+    to_value(&methods::FsTaskResult { task_id })
+}
+
 /// `fs.search` (0.18.0, live search): búsqueda recursiva de nombre/contenido
 /// bajo `root` como Task cancelable. Los HITS llegan por `search.hits` SOLO a
 /// la conexión `conn_id` que la lanzó (envío dirigido, jamás broadcast — son
@@ -3217,6 +3415,9 @@ async fn dispatch_fs_task(
         // fs.compare (0.39.0): las FILAS son del que la lanzó → conn_id, igual
         // que `fs.search` (envío dirigido, jamás broadcast).
         methods::FS_COMPARE => handle_fs_compare(req.params, conn_id, &actor, shared).await,
+        // sync.plan (0.40.0): los PASOS son del que lo lanzó, y el plan queda
+        // RETENIDO a nombre de esta conexión → conn_id por partida doble.
+        methods::SYNC_PLAN => handle_sync_plan(req.params, conn_id, &actor, shared).await,
         methods::FS_STAT => {
             let p: methods::FsStatParams = parse_params(req.params)?;
             read_gate(&actor, &p.path, shared)?; // #80
