@@ -266,10 +266,12 @@ impl Backend {
     /// ¿Registra este backend sus mutaciones en un journal, y por tanto se
     /// pueden deshacer?
     ///
-    /// Hoy es exactamente «va contra el daemon». El brazo embebido lo
-    /// construyen `norte-tui` y `norte-cli` con `Engine::new()`, sin journal y
-    /// sin spool, así que [`Self::sync_apply`] se niega en cerrado — regla
-    /// dura 4, sincronizar entierra y tiene que haber vuelta atrás.
+    /// Hoy es exactamente «va contra el daemon», y sigue siéndolo DESPUÉS de
+    /// #167 a propósito: el brazo embebido ya abre el journal del directorio de
+    /// estado (`norte_core::embedded`), pero no instala spool, y sin spool
+    /// [`Self::sync_plan`] se niega en cerrado. Lo que esta pregunta atenúa es
+    /// sincronizar, que necesita LOS DOS; decir `true` porque hay journal
+    /// enseñaría una tecla que sigue sin poder ejecutar nada.
     ///
     /// Es una pregunta sobre el TRANSPORTE y no sobre el engine porque desde
     /// fuera no hay forma de preguntárselo al engine: `Engine` no publica si
@@ -1244,7 +1246,10 @@ impl Backend {
     /// M3-4). Solo tiene sentido contra el daemon (dueño del journal).
     ///
     /// # Errors
-    /// Taxonomía del protocolo; `Unsupported` en embebido (sin journal).
+    /// Taxonomía del protocolo; `Unsupported` en embebido. Desde #167 el
+    /// embebido sí puede tener journal, pero deshacer LA SESIÓN DE UN AGENTE es
+    /// del daemon: los agentes se gobiernan ahí y es ahí donde existen sus
+    /// sesiones.
     pub async fn undo_session(&self, session: &str) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(_) => Err(Error::Unsupported),
@@ -1258,8 +1263,9 @@ impl Backend {
     /// definitivo cuando la Task es terminal.
     ///
     /// # Errors
-    /// Taxonomía del protocolo; `Unsupported` en embebido (sin journal, como
-    /// [`Backend::undo_session`]).
+    /// Taxonomía del protocolo; `Unsupported` en embebido, por la misma razón
+    /// que [`Backend::undo_session`]: la sesión que se deshace es de un agente,
+    /// y los agentes viven en el daemon.
     pub async fn undo_report(
         &self,
         task_id: TaskId,

@@ -103,7 +103,10 @@ pub struct Facts {
     /// be undone.
     ///
     /// `false` for the TUI's in-process engine — the one `norte-tui` builds
-    /// without `--daemon`, which has neither journal nor sync spool. It is an
+    /// without `--daemon`. Since #167 that engine DOES open the state
+    /// directory's journal, but it still installs no sync spool, and `sync.plan`
+    /// refuses without one; this field gates synchronising, which needs both, so
+    /// it stays `false` and the name undersells what it answers. It is an
     /// impediment of BACKEND and not of state, which is why it belongs here
     /// and not in the paragraph this module's docs write against: it does not
     /// change with the next keystroke, the reader has to start norte

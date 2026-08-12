@@ -3,8 +3,36 @@
 
 use assert_cmd::Command;
 
+/// El directorio de estado de ESTE proceso de test, y nunca el del que corre la
+/// suite.
+///
+/// Desde #167 un `norte cp`/`mv`/`rm`/`mkdir` embebido abre
+/// `<estado>/journal.db` y se queda su lock EXCLUSIVO mientras vive. Sin este
+/// override eso sería el journal de verdad del desarrollador: la suite le
+/// escribiría filas en su cadena de hashes y le disputaría el lock a su TUI o a
+/// su daemon. El mismo criterio que las tres pruebas de shell (7b0655c) — el
+/// sujeto es el binario, jamás la configuración de quien lo ejecuta.
+///
+/// Uno por proceso: nextest da un proceso por test, así que cada test acaba con
+/// el suyo. Bajo `cargo test` (varios tests por proceso) lo comparten, y el
+/// segundo en llegar no espera: se lleva `Busy` a los 250 ms y sigue sin
+/// registrar, que es lo que este cambio tolera por diseño.
+///
+/// Vive bajo `CARGO_TARGET_TMPDIR` y no bajo `/tmp`: un `static` no ejecuta
+/// `Drop`, así que el directorio sobrevive al proceso — ahí lo barren
+/// `cargo clean` y `just prune`, en `/tmp` no lo barre nadie.
+fn config_dir_del_test() -> &'static std::path::Path {
+    static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        tempfile::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir de estado")
+    })
+    .path()
+}
+
 fn norte() -> Command {
-    Command::cargo_bin("norte").expect("binario norte compilado")
+    let mut c = Command::cargo_bin("norte").expect("binario norte compilado");
+    c.env("NORTE_CONFIG_DIR", config_dir_del_test());
+    c
 }
 
 #[test]
@@ -171,6 +199,11 @@ fn cp_sigint_cancels_cleanly() {
 
     let bin = assert_cmd::cargo::cargo_bin("norte");
     let mut child = std::process::Command::new(bin)
+        // Este test NO pasa por `norte()` (necesita `spawn`, no `assert`), así
+        // que el override del directorio de estado se repite AQUÍ. Sin él el
+        // `cp` abriría el journal de verdad de quien corre la suite — ver
+        // `config_dir_del_test`.
+        .env("NORTE_CONFIG_DIR", config_dir_del_test())
         .arg("cp")
         .arg(&src)
         .arg(&dst)

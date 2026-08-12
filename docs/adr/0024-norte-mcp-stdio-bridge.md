@@ -55,6 +55,16 @@ Embedded clients currently run without that journal. Missing `policy.toml`
 means no matching rules and therefore fail-closed; the example policy begins
 with explicit `ask` rules.
 
+*(Amended 2026-08-12, issue #167: embedded clients no longer run without that
+journal. A `norte-tui` or `norte-cli` process without a daemon opens the SAME
+journal in the state directory, so its mutations are recorded and undoable.
+"Only long-lived writer" survives as a MECHANISM rather than as a convention:
+the exclusive file lock below still decides, and whoever loses it — a daemon
+started while a TUI holds it, or the other way round — is refused. An embedded
+process that loses the lock keeps running unjournalled, with a warning; only
+the daemon refuses to start. Policy and approvals are unchanged and remain the
+daemon's.)*
+
 `policy.undo_session` is available only to human connections and undoes an
 agent session in strict LIFO order. The engine distinguishes the session whose
 entries are targeted from the human actor executing and signing compensations,

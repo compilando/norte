@@ -12,6 +12,7 @@ mod compare;
 pub mod connect;
 #[cfg(unix)]
 pub mod daemon;
+pub mod embedded;
 mod engine;
 pub mod ftp_plugin;
 mod hashing;

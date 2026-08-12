@@ -224,8 +224,9 @@ enum Cmd {
         older_than_hours: u64,
     },
     /// Auditoría del journal (M3-5, ADR 0025): cadena + anclas + export.
-    /// Requiere el daemon PARADO (la DB se abre en solo-lectura pero el
-    /// daemon la mantiene bloqueada en exclusiva)
+    /// Requiere que NADIE tenga el journal abierto: ni el daemon, ni un
+    /// frontend embebido (`ntc` sin --daemon). La DB se abre en solo-lectura,
+    /// pero quien la tiene la bloquea en exclusiva
     Audit {
         #[command(subcommand)]
         cmd: AuditCmd,
@@ -488,6 +489,50 @@ fn main() -> ExitCode {
     }
 }
 
+/// ¿Este subcomando puede MUTAR el árbol del usuario?
+///
+/// Decide si el proceso embebido abre el journal (#167). No es una
+/// optimización cosmética: abrir el journal toma el lock EXCLUSIVO de `SQLite`
+/// sobre `journal.db`, así que un `norte ls` que lo abriera le quitaría el
+/// registro a un `norte mv` concurrente —y avisaría de ello— por una operación
+/// que jamás escribe una fila.
+///
+/// La lista es la de los subcomandos que llegan al `Backend` embebido y emiten
+/// `Mutation` (ver `norte_core::observer`): copiar, mover, borrar y crear
+/// directorio. `Gc` barre EL staging de norte (`.norte-partial`), no ficheros
+/// del usuario, y no pasa por el observer; `Index`, `Ls`, `Connect` y `Plugin`
+/// no escriben en el árbol. `Undo`, `Policy`, `Mcp` y `Audit` ni siquiera
+/// llegan aquí: hablan con el daemon, que es el dueño del journal.
+///
+/// **`Ai` MUTA y tampoco llega aquí**, y esa es la trampa de esta lista: sale
+/// antes por su propio brazo (`ai_cmd`), que arma su engine y abre el journal
+/// por su cuenta. Meterlo en el `matches!` de abajo NO lo journaliza — abriría
+/// dos veces en el mismo proceso. Que la lista haya que mantenerla a mano es
+/// justo lo que #177 propone quitar de en medio abriendo el journal en la
+/// primera mutación.
+fn muta_el_arbol(cmd: &Cmd) -> bool {
+    matches!(
+        cmd,
+        Cmd::Cp { .. } | Cmd::Mv { .. } | Cmd::Rm { .. } | Cmd::Mkdir { .. }
+    )
+}
+
+/// El engine embebido con el journal del directorio de estado, y su aviso ya
+/// dicho (#167).
+///
+/// El aviso lo emite QUIEN LLAMA —`EmbeddedJournal::into_engine` no loguea— y
+/// aquí va por `eprintln!`, como los demás avisos de arranque de este binario
+/// (el índice, la config de IA): es para el humano que acaba de teclear el
+/// comando, y llega aunque `RUST_LOG` diga otra cosa.
+async fn abrir_journal_embebido() -> Engine {
+    let journal =
+        norte_core::embedded::EmbeddedJournal::open_in(&norte_core::connect::config_dir()).await;
+    if let Some(aviso) = journal.warning() {
+        eprintln!("aviso: {aviso}");
+    }
+    journal.into_engine()
+}
+
 #[allow(clippy::too_many_lines)]
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // Tracing con el cap de seguridad `suppaftp=info` (issue #43, regla 10):
@@ -552,12 +597,22 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let engine = if cli.daemon {
         Engine::new()
     } else {
+        // #167: regla dura 4 — lo que MUTA el árbol se registra. El journal es
+        // el MISMO fichero que abriría el daemon (`config_dir()/journal.db`),
+        // y esa igualdad es el punto: `norte undo` contra el daemon tiene que
+        // ver lo que hizo un `norte mv` embebido. Si otro proceso tiene el
+        // lock, se sigue sin registro y con aviso — ver `norte_core::embedded`.
+        let base = if muta_el_arbol(&cli.cmd) {
+            abrir_journal_embebido().await
+        } else {
+            Engine::new()
+        };
         let index_path = norte_core::connect::config_dir().join("index.db");
         match norte_core::Index::open(&index_path).await {
-            Ok(idx) => Engine::new().with_index(Arc::new(idx)),
+            Ok(idx) => base.with_index(Arc::new(idx)),
             Err(e) => {
                 eprintln!("aviso: índice no disponible ({e}); index.* dará Unsupported");
-                Engine::new()
+                base
             }
         }
     };
@@ -720,6 +775,11 @@ fn report_degradations(
 /// `norte audit <verify|export|anchor>` (M3-5, ADR 0025): opera sobre la DB
 /// del journal en SOLO-LECTURA. Con el daemon corriendo, `SQLite` devuelve
 /// `database is locked` (su lock es exclusivo): el mensaje lo dice claro.
+///
+/// Desde #167 el daemon no es el único que puede tenerlo: un frontend embebido
+/// —un `ntc` sin `--daemon`— se queda el mismo lock mientras vive, así que
+/// «para el daemon» pasó a ser «para el daemon y cierra los frontends
+/// embebidos» (#177).
 async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
     use norte_core::{Journal, audit};
     let dir = norte_core::connect::config_dir();
@@ -1582,9 +1642,16 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
             // quien instala policy + approvals: los agentes MCP se gobiernan
             // aquí, jamás en el puente.
             let journal_path = norte_core::connect::config_dir().join("journal.db");
+            // El aviso NOMBRA la causa probable: desde #167 un frontend embebido
+            // (un `ntc` sin `--daemon`) se queda el lock exclusivo mientras vive,
+            // y sin esta frase el operador recibe un texto de sqlx y ninguna
+            // pista de qué cerrar (#177).
             let journal = norte_core::SqliteJournal::open(&journal_path)
                 .await
-                .context("no se pudo abrir el journal")?;
+                .context(
+                    "no se pudo abrir el journal (si dice «database is locked», otro \
+                     proceso norte lo tiene: ¿un `ntc` embebido, u otro daemon?)",
+                )?;
             // Barrido de spools de sincronización (ADR 0049), junto al journal
             // y por lo mismo: un cierre violento deja detrás ficheros que
             // AUTORIZAN escrituras, y nadie más los va a recoger. Se llevan
@@ -1814,7 +1881,21 @@ async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
     } = cmd;
     let dir = vpath(&dir)?;
 
-    let engine = Engine::new();
+    // #167: este subcomando NO pasa por `make_backend` —arma su propio engine—
+    // y renombra un directorio entero con los nombres que propuso un MODELO.
+    // Es, de todos los caminos embebidos, el que más falta le hace quedar
+    // registrado, así que abre el journal como los demás.
+    let journal =
+        norte_core::embedded::EmbeddedJournal::open_in(&norte_core::connect::config_dir()).await;
+    // Se guarda para repetirlo EN LA CONFIRMACIÓN: el aviso sale ahora, antes
+    // incluso de que haya un plan que enseñar, y el único momento en que esto le
+    // importa a alguien es cuando está decidiendo si deja que un modelo le
+    // renombre un directorio entero.
+    let sin_journal = journal.warning();
+    if let Some(aviso) = &sin_journal {
+        eprintln!("aviso: {aviso}");
+    }
+    let engine = journal.into_engine();
     engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
     engine.set_connector(Arc::new(norte_core::connect::ConnectionManager::new(
         norte_core::connect::config_dir(),
@@ -1865,6 +1946,9 @@ async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
 
     if !yes {
         use std::io::Write as _;
+        if let Some(aviso) = &sin_journal {
+            eprintln!("norte: {aviso}");
+        }
         eprint!("{} ", norte_i18n::t("cli-ai-rename-confirm"));
         std::io::stderr().flush().ok();
         let mut line = String::new();
@@ -1876,7 +1960,10 @@ async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
         }
     }
 
-    // Aplica cada entrada como un move_ gobernado (journal + undo + policy).
+    // Aplica cada entrada como un `move_` del engine, que desde #167 lleva
+    // journal (y por tanto undo) salvo que otro proceso tenga el lock. La
+    // policy NO: este engine embebido no instala ninguna y gatea con `AllowAll`
+    // — quien decide aquí es el humano que acaba de decir que sí al plan.
     let mut ok = 0usize;
     for e in &plan.entries {
         let to = dir.join(e.to.clone());
@@ -2228,6 +2315,63 @@ fn render(p: &norte_proto::TaskProgress, show_bytes: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Qué subcomando MUTA, escrito con un `match` EXHAUSTIVO, que es lo único
+    /// que hace mantenible la lista de [`muta_el_arbol`] (#167).
+    ///
+    /// El `matches!` de producción no obliga a nada: añadir una variante compila
+    /// y el journal se queda fuera en silencio. Este `match` no compila sin
+    /// clasificarla, así que quien añada un subcomando tiene que decir aquí si
+    /// muta — y si dice que sí, el test de abajo le exige que `muta_el_arbol` lo
+    /// diga también.
+    fn muta_segun_este_test(cmd: &Cmd) -> bool {
+        match cmd {
+            Cmd::Cp { .. } | Cmd::Mv { .. } | Cmd::Rm { .. } | Cmd::Mkdir { .. } => true,
+            // `Ai` MUTA, pero no llega a `muta_el_arbol`: sale antes por
+            // `ai_cmd`, que abre su propio journal. Ver el rustdoc de
+            // `muta_el_arbol`.
+            Cmd::Ai { .. } => false,
+            Cmd::Ls { .. }
+            | Cmd::Connect { .. }
+            | Cmd::Gc { .. }
+            | Cmd::Plugin { .. }
+            | Cmd::Index { .. }
+            | Cmd::Audit { .. }
+            | Cmd::Tui { .. }
+            | Cmd::Gui { .. }
+            | Cmd::Doctor { .. }
+            | Cmd::Help { .. }
+            | Cmd::ShellInit { .. } => false,
+            #[cfg(unix)]
+            Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => false,
+        }
+    }
+
+    /// Un `ls` no abre el journal y un `cp` sí: el lock exclusivo no se le quita
+    /// a nadie por listar un directorio (#167).
+    #[test]
+    fn solo_los_subcomandos_que_mutan_abren_el_journal() {
+        let ls = Cmd::Ls {
+            path: std::path::PathBuf::from("."),
+            json: false,
+            attrs: Vec::new(),
+        };
+        let cp = Cmd::Cp {
+            src: std::path::PathBuf::from("a"),
+            dst: std::path::PathBuf::from("b"),
+            symlinks: SymlinksArg::Preserve,
+            resume: false,
+        };
+        for cmd in [&ls, &cp] {
+            assert_eq!(
+                muta_el_arbol(cmd),
+                muta_segun_este_test(cmd),
+                "la lista de producción y la de este test discrepan"
+            );
+        }
+        assert!(!muta_el_arbol(&ls), "listar no toma el lock del journal");
+        assert!(muta_el_arbol(&cp), "copiar sí queda registrado");
+    }
 
     /// Reserva normativa de ADR 0018: ningún scheme remoto de la allowlist
     /// puede empezar por `<formato>+` — el registro de formatos manda.

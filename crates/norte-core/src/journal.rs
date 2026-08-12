@@ -53,6 +53,26 @@ CREATE TABLE IF NOT EXISTS journal (
 /// no toca.
 const MIGRATE_BATCH_ID: &str = "ALTER TABLE journal ADD COLUMN batch_id INTEGER";
 
+/// Migración de la columna que apunta a la entrada que un undo COMPENSA
+/// (M3-2). Esta columna se añadió al `SCHEMA` SIN su migración: un journal de
+/// antes se abría bien y reventaba en CADA escritura con «table journal has no
+/// column named `undoes_seq`». Se vio en vivo al journalizar el motor embebido
+/// (#167), donde ese fallo dejaba un `norte cp` en «internal error» sin copiar
+/// nada.
+///
+/// A diferencia de [`MIGRATE_BATCH_ID`], esto SOLO se aplica a una tabla VACÍA:
+/// la columna llegó junto con su byte de presencia en el preimagen del hash, así
+/// que las filas de antes no verifican bajo el `chain_hash` de hoy. Ver el sitio
+/// donde se ejecuta.
+const MIGRATE_UNDOES_SEQ: &str = "ALTER TABLE journal ADD COLUMN undoes_seq INTEGER";
+
+/// Lo que `SQLite` espera a un lock ajeno antes de rendirse, salvo que quien
+/// abre diga otra cosa ([`Journal::open_with_busy_timeout`]).
+///
+/// Es el de `sqlx` por omisión, escrito aquí para que sea un hecho con nombre y
+/// no una propiedad implícita de una dependencia.
+pub const DEFAULT_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// The one INSERT of this module, shared by [`Journal::record_entry`] and by
 /// the format marker below: a row that the chain covers is written in exactly
 /// one place, so «what gets hashed» and «what gets stored» cannot drift.
@@ -281,18 +301,31 @@ fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<JournalEntry, JournalEr
 /// tiene que leerla. Una tabla ausente responde CERO filas → `false`, y la
 /// primera query real fallará con su error propio, sin enmascarar nada.
 async fn has_batch_id_column(pool: &SqlitePool) -> Result<bool, JournalError> {
+    has_column(pool, "batch_id").await
+}
+
+/// Si la tabla `journal` tiene la columna `nombre`, preguntándoselo al catálogo.
+///
+/// Ver [`has_batch_id_column`] para por qué se pregunta en vez de tragarse el
+/// error del `ALTER`.
+async fn has_column(pool: &SqlitePool, nombre: &str) -> Result<bool, JournalError> {
+    Ok(columnas(pool).await?.iter().any(|c| c == nombre))
+}
+
+/// Las columnas de la tabla `journal`, según el catálogo. VACÍO si la tabla no
+/// existe —lo que aquí no es un error: el audit abre el fichero que le señalen y
+/// la primera query real fallará con su error propio, sin enmascarar nada.
+async fn columnas(pool: &SqlitePool) -> Result<Vec<String>, JournalError> {
     let rows = sqlx::query("PRAGMA table_info(journal)")
         .fetch_all(pool)
         .await?;
+    let mut out = Vec::with_capacity(rows.len());
     for r in &rows {
         // `try_get`: la fila la produce un fichero que el operador señala (el
         // audit abre lo que le den), así que su forma no se da por hecha.
-        let name: String = r.try_get(1)?;
-        if name == "batch_id" {
-            return Ok(true);
-        }
+        out.push(r.try_get::<String, _>(1)?);
     }
-    Ok(false)
+    Ok(out)
 }
 
 /// What format the journal on disk declares (ADR 0046).
@@ -648,6 +681,34 @@ impl Journal {
     /// si OTRO proceso ya lo tiene abierto; [`JournalError::Corrupt`] si el
     /// último `entry_hash` no mide 32 bytes; I/O al pre-crear fichero/dir.
     pub async fn open(path: &std::path::Path) -> Result<Self, JournalError> {
+        Self::open_with_busy_timeout(path, DEFAULT_BUSY_TIMEOUT).await
+    }
+
+    /// Como [`Journal::open`], pero con un plazo propio para el caso «el lock lo
+    /// tiene otro».
+    ///
+    /// `busy_timeout` es lo que `SQLite` espera antes de rendirse con `database
+    /// is locked`. El de [`DEFAULT_BUSY_TIMEOUT`] es el que quiere el daemon:
+    /// arranca una vez y prefiere aguantar un checkpoint ajeno a morir.
+    ///
+    /// Un proceso EMBEBIDO quiere lo contrario y por eso existe esta puerta
+    /// (#167): quien tiene el lock lo tiene para toda su vida —otro TUI, o el
+    /// daemon—, así que esperar cinco segundos no lo consigue, solo convierte
+    /// cada `norte cp` en cinco segundos de nada antes de seguir sin registro.
+    ///
+    /// OJO: el plazo es de la CONEXIÓN, no del `open`. Rige también cada
+    /// sentencia posterior sobre ese handle — hoy da igual (una sola conexión,
+    /// dueña exclusiva, sin nadie con quien competir), y dejaría de darlo si
+    /// alguna vez se permitiera reconectar bajo un lock ajeno.
+    ///
+    /// # Errors
+    /// Las mismas que [`Journal::open`] — y con un plazo corto, `database is
+    /// locked` deja de ser el caso raro: es LA respuesta esperada cuando el
+    /// journal ya tiene dueño.
+    pub async fn open_with_busy_timeout(
+        path: &std::path::Path,
+        busy_timeout: std::time::Duration,
+    ) -> Result<Self, JournalError> {
         // Pre-creación con permisos correctos DESDE el primer byte (MINOR-1):
         // SQLite crearía el fichero con el umask (típicamente 0644) y el
         // chmod posterior dejaba una ventana legible. Con el fichero ya
@@ -676,6 +737,7 @@ impl Journal {
             // fichero se toma con el primer write — el CREATE TABLE del
             // schema en `from_options` lo fuerza YA en el open.
             .locking_mode(sqlx::sqlite::SqliteLockingMode::Exclusive);
+        let opts = opts.busy_timeout(busy_timeout);
         let this = Self::from_options(opts).await?;
         #[cfg(unix)]
         {
@@ -719,6 +781,20 @@ impl Journal {
             .await?;
         // Sin CREATE TABLE (readonly): si el fichero no es un journal, la
         // primera query fallará con su error real — no se enmascara.
+        //
+        // Lo que sí se ataja es el journal anterior a `undoes_seq`: TODAS las
+        // consultas de aquí nombran esa columna y este handle no puede `ALTER`
+        // (es solo-lectura por diseño), así que saldría un «no such column»
+        // crudo envuelto en `cli-audit-open-failed`. La tabla AUSENTE no entra
+        // por aquí —eso es «no es un journal», y lo cuenta la query real—.
+        let cols = columnas(&pool).await?;
+        if !cols.is_empty() && !cols.iter().any(|c| c == "undoes_seq") {
+            return Err(JournalError::Corrupt(
+                "journal anterior a undoes_seq: este binario no sabe leerlo (sus filas \
+                 se hashearon sobre un preimagen sin esa columna). Léelo con un \
+                 binario de su época",
+            ));
+        }
         let has_batch_id = has_batch_id_column(&pool).await?;
         // El contador arranca del máximo escrito igual que en escritura: este
         // handle no puede insertar nada (SQLite lo rechaza), pero un
@@ -753,8 +829,23 @@ impl Journal {
     async fn from_options(opts: SqliteConnectOptions) -> Result<Self, JournalError> {
         // Pool de 1 conexión: un solo escritor (in-memory exige max=1 para no
         // perder la DB entre conexiones).
+        //
+        // Y esa conexión NO se recicla, que es lo que sostiene todo lo demás.
+        // El lock exclusivo del fichero es una propiedad de LA CONEXIÓN VIVA, no
+        // del proceso: los defaults de `sqlx` (`min_connections=0`,
+        // `idle_timeout=10min`, `max_lifetime=30min`) levantan un barrendero que
+        // la cierra estando ociosa, y cerrarla SUELTA el lock. Con eso, un
+        // proceso que se cree dueño (un TUI que lleva once minutos navegando)
+        // deja entrar a otro, y su `ChainState` en memoria —`last_seq`,
+        // `last_hash`— se queda viejo: la siguiente mutación choca contra la PK
+        // de `seq` y falla, y como `last_seq` solo avanza al acertar, falla
+        // TODAS las siguientes. Un efecto ya aplicado sin su fila, en bucle.
+        // (Y en `sqlite::memory:`, cerrar la única conexión BORRA la DB.)
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            .min_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(opts)
             .await?;
         sqlx::query(SCHEMA).execute(&pool).await?;
@@ -774,6 +865,44 @@ impl Journal {
             if !has_batch_id_column(&pool).await? {
                 return Err(JournalError::Corrupt(
                     "la columna batch_id sigue ausente tras migrar",
+                ));
+            }
+        }
+        // Y la de `undoes_seq`, que es MÁS vieja. Va antes del marcador de
+        // formato de abajo porque ese marcador es una fila, o sea un INSERT que
+        // nombra la columna.
+        //
+        // Pero SOLO si la tabla está vacía, y esta es la diferencia con
+        // `batch_id`: aquella columna se añadió sin tocar el preimagen del hash
+        // (`None` no alimenta nada, ver `chain_hash`), y esta llegó JUNTO con su
+        // byte de presencia. Una fila escrita antes se hasheó sobre un preimagen
+        // que terminaba en `reversal_ref`; recalcularla hoy da otro digest. Es
+        // decir: migrar una DB CON historia la deja escribible y `verify_chain`
+        // la declara rota en su primera fila —una acusación FALSA de
+        // manipulación sobre un fichero que nadie tocó, que es exactamente lo
+        // que el marcador de formato (ADR 0046) existe para no producir— y sin
+        // arreglo posible, porque esas filas ya no se pueden rehashear.
+        //
+        // Así que se rehúsa, y se dice qué hacer. El embebido lo verá como
+        // `EmbeddedJournal::Unavailable` y seguirá sin registro (#167); el
+        // daemon no arrancará, que para un journal ilegible es lo correcto.
+        if !has_column(&pool, "undoes_seq").await? {
+            let filas: i64 = sqlx::query("SELECT COUNT(*) FROM journal")
+                .fetch_one(&pool)
+                .await?
+                .try_get(0)?;
+            if filas != 0 {
+                return Err(JournalError::Corrupt(
+                    "journal anterior a undoes_seq y CON historia: migrarlo haría que \
+                     verify_chain lo declarase roto en su primera fila (esas filas se \
+                     hashearon sobre un preimagen sin esa columna). Expórtalo con un \
+                     binario de su época, archívalo y deja que se cree uno nuevo",
+                ));
+            }
+            sqlx::query(MIGRATE_UNDOES_SEQ).execute(&pool).await?;
+            if !has_column(&pool, "undoes_seq").await? {
+                return Err(JournalError::Corrupt(
+                    "la columna undoes_seq sigue ausente tras migrar",
                 ));
             }
         }
@@ -1440,22 +1569,41 @@ impl SqliteJournal {
     /// para [`crate::Engine::with_observer`]. Crea el directorio contenedor si
     /// falta.
     ///
-    /// UN SOLO ESCRITOR (spec §4): el hash-chain asume un único proceso dueño
-    /// (el daemon). Varios procesos efímeros escribiendo el MISMO fichero
-    /// forkean la cadena y colisionan en `seq` — el journal on-disk NO debe
-    /// compartirse entre binarios embebidos concurrentes. El wiring del dueño
-    /// único llega con el daemon agéntico (M3-4).
+    /// UN SOLO ESCRITOR (spec §4): el hash-chain asume un único proceso dueño.
+    /// Varios procesos escribiendo el MISMO fichero forkearían la cadena y
+    /// colisionarían en `seq`, y por eso no es una convención: [`Journal::open`]
+    /// toma el lock EXCLUSIVO de `SQLite`, así que el segundo en llegar falla al
+    /// abrir en vez de compartir.
+    ///
+    /// Quién es ese dueño ya no es siempre el daemon: desde #167 un proceso
+    /// embebido (TUI, o un `norte cp` sin daemon) abre este mismo fichero y se
+    /// lo queda mientras vive — ver [`crate::embedded::EmbeddedJournal`], que es
+    /// quien decide qué hacer cuando el lock ya lo tiene otro.
     ///
     /// # Errors
     /// [`JournalError::Io`] si no puede crear el directorio contenedor;
     /// [`JournalError`] al abrir/crear la DB (ver [`Journal::open`]).
     pub async fn open(path: &std::path::Path) -> Result<Self, JournalError> {
+        Self::open_with_busy_timeout(path, DEFAULT_BUSY_TIMEOUT).await
+    }
+
+    /// Como [`SqliteJournal::open`], con el plazo de espera del lock de
+    /// [`Journal::open_with_busy_timeout`].
+    ///
+    /// # Errors
+    /// Las mismas que [`SqliteJournal::open`].
+    pub async fn open_with_busy_timeout(
+        path: &std::path::Path,
+        busy_timeout: std::time::Duration,
+    ) -> Result<Self, JournalError> {
         // El dir de config puede no existir en el primer arranque; SQLite crea
         // el FICHERO (create_if_missing) pero no su directorio padre.
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        Ok(Self::new(Journal::open(path).await?))
+        Ok(Self::new(
+            Journal::open_with_busy_timeout(path, busy_timeout).await?,
+        ))
     }
 }
 
@@ -2207,6 +2355,166 @@ CREATE TABLE IF NOT EXISTS journal (
             j.alloc_batch().await.expect("alloc"),
             1,
             "sin lotes previos, el contador arranca en 1"
+        );
+    }
+
+    /// El schema de ANTES de que existiera `undoes_seq` (la columna que apunta a
+    /// la entrada que un undo compensa, M3-2). Es más viejo que
+    /// [`SCHEMA_BEFORE_BATCH_ID`], y hay ficheros así en disco.
+    const SCHEMA_BEFORE_UNDOES_SEQ: &str = "\
+CREATE TABLE IF NOT EXISTS journal (
+    seq          INTEGER PRIMARY KEY,
+    ts_ms        INTEGER NOT NULL,
+    actor_kind   TEXT    NOT NULL,
+    actor_id     TEXT,
+    op           TEXT    NOT NULL,
+    path         BLOB    NOT NULL,
+    path_to      BLOB,
+    reversal     TEXT    NOT NULL,
+    reversal_ref BLOB,
+    prev_hash    BLOB    NOT NULL,
+    entry_hash   BLOB    NOT NULL
+);";
+
+    /// Un journal anterior a `undoes_seq` se MIGRA al abrir, como el de
+    /// `batch_id`.
+    ///
+    /// Sin esto, `open` tiene éxito —`CREATE TABLE IF NOT EXISTS` no altera una
+    /// tabla que ya existe— y es cada ESCRITURA la que revienta con «table
+    /// journal has no column named `undoes_seq`». Encontrado en vivo (#167): un
+    /// `norte cp` embebido contra un journal de esa era abortaba con «internal
+    /// error» y no copiaba nada. `batch_id` ya tenía su migración; esta columna
+    /// se añadió sin la suya.
+    #[tokio::test]
+    async fn un_journal_anterior_a_undoes_seq_se_migra_y_acepta_escrituras() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("prehistorico.db");
+        {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(
+                    SqliteConnectOptions::new()
+                        .filename(&path)
+                        .create_if_missing(true)
+                        .journal_mode(SqliteJournalMode::Wal),
+                )
+                .await
+                .expect("pool viejo");
+            sqlx::query(SCHEMA_BEFORE_UNDOES_SEQ)
+                .execute(&pool)
+                .await
+                .expect("schema prehistórico");
+            pool.close().await;
+        }
+
+        let j = Journal::open(&path).await.expect("open migra la DB");
+        j.record(
+            "created",
+            b"file:///nuevo",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("escribir en una DB migrada");
+        assert!(
+            j.verify_chain().await.expect("verify").is_intact(),
+            "migrar no rompe la cadena"
+        );
+    }
+
+    /// El lock exclusivo es de LA CONEXIÓN, así que el pool no puede reciclarla.
+    ///
+    /// Los defaults de `sqlx` —`min_connections=0`, `idle_timeout=10min`,
+    /// `max_lifetime=30min`— levantan un barrendero que cierra la conexión
+    /// ociosa, y con ella se va el lock: el proceso se sigue creyendo dueño, otro
+    /// entra, y el `ChainState` en memoria de éste choca contra la PK de `seq`
+    /// en su siguiente mutación… y en todas las demás. Se pinea por las opciones
+    /// y no por el reloj: esperar diez minutos en la suite no es un test.
+    #[tokio::test]
+    async fn el_pool_no_recicla_la_conexion_que_sostiene_el_lock() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let j = Journal::open(&dir.path().join("j.db")).await.expect("open");
+        let opts = j.pool.options();
+        assert_eq!(opts.get_max_connections(), 1, "un solo escritor");
+        assert_eq!(
+            opts.get_min_connections(),
+            1,
+            "a cero, el barrendero puede dejar el pool vacío y soltar el lock"
+        );
+        assert_eq!(opts.get_idle_timeout(), None, "ocioso sigue siendo dueño");
+        assert_eq!(
+            opts.get_max_lifetime(),
+            None,
+            "reciclar la conexión es reciclar el lock"
+        );
+    }
+
+    /// Un journal anterior a `undoes_seq` CON historia NO se migra: se rehúsa.
+    ///
+    /// Migrarlo lo dejaría escribible y `verify_chain` lo declararía roto en su
+    /// primera fila, porque esas filas se hashearon sobre un preimagen que no
+    /// llevaba la columna (`01e3cf8` añadió las dos cosas a la vez). Una
+    /// acusación FALSA de manipulación sobre un fichero que nadie tocó, y sin
+    /// arreglo: esas filas ya no se pueden rehashear.
+    #[tokio::test]
+    async fn un_journal_anterior_a_undoes_seq_con_filas_se_rehusa() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("con-historia.db");
+        {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(
+                    SqliteConnectOptions::new()
+                        .filename(&path)
+                        .create_if_missing(true)
+                        .journal_mode(SqliteJournalMode::Wal),
+                )
+                .await
+                .expect("pool viejo");
+            sqlx::query(SCHEMA_BEFORE_UNDOES_SEQ)
+                .execute(&pool)
+                .await
+                .expect("schema prehistórico");
+            sqlx::query(
+                "INSERT INTO journal (seq, ts_ms, actor_kind, actor_id, op, path, path_to, \
+                 reversal, reversal_ref, prev_hash, entry_hash) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(1i64)
+            .bind(1_700_000_000_000i64)
+            .bind("user")
+            .bind(Option::<String>::None)
+            .bind("created")
+            .bind(&b"file:///viejo"[..])
+            .bind(Option::<Vec<u8>>::None)
+            .bind("delete")
+            .bind(Option::<Vec<u8>>::None)
+            .bind(&[0u8; 32][..])
+            .bind(&[7u8; 32][..])
+            .execute(&pool)
+            .await
+            .expect("fila de la era pre-undoes_seq");
+            pool.close().await;
+        }
+
+        let Err(err) = Journal::open(&path).await else {
+            panic!("una DB pre-undoes_seq CON filas no se puede migrar")
+        };
+        assert!(
+            matches!(err, JournalError::Corrupt(m) if m.contains("undoes_seq")),
+            "y se dice por qué: {err}"
+        );
+
+        // Y el audit tampoco lo lee a ciegas: dice qué es, en vez de soltar un
+        // «no such column» crudo.
+        let Err(ro) = Journal::open_read_only(&path).await else {
+            panic!("el audit tampoco puede leerla")
+        };
+        assert!(
+            matches!(ro, JournalError::Corrupt(m) if m.contains("undoes_seq")),
+            "{ro}"
         );
     }
 

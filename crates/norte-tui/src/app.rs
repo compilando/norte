@@ -2362,8 +2362,10 @@ impl App {
     ///
     /// Las negativas que se dan AQUÍ, sin ir y volver al daemon:
     ///
-    /// * **Sin journal.** El engine embebido de la TUI no lo tiene, y
-    ///   `sync.apply` se niega en cerrado (regla dura 4): planificar contra él
+    /// * **Sin journal.** Lo dice [`norte_core::backend::Backend::is_journalled`],
+    ///   que es `false` en embebido: desde #167 ese engine sí abre el journal
+    ///   del directorio de estado, pero no instala spool, y sin spool
+    ///   `sync.plan` se niega en cerrado (regla dura 4). Planificar contra él
     ///   sería enseñar un plan que nadie puede aprobar. La misma verdad que
     ///   [`norte_frontend::availability::Facts::journalled`] ya atenúa en la
     ///   hoja de referencia; esto es lo que pasa si el lector llega igual.

@@ -14,9 +14,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
 use futures::StreamExt;
+use norte_core::TransferOptions;
 use norte_core::backend::EntryStream;
 use norte_core::backend::{Backend, ConnEvent, TaskRef};
-use norte_core::{Engine, TransferOptions};
 use norte_i18n::{t, ta};
 use norte_proto::DeleteMode;
 use norte_proto::methods::{FsSearchParams, SearchHits};
@@ -1752,7 +1752,7 @@ async fn main() -> Result<()> {
         .max(viewer_eff.discarded_lua_bindings())
         .max(dialog_eff.discarded_lua_bindings());
 
-    let mut backend = make_backend(&cfg, cli_daemon, cli_socket).await?;
+    let (mut backend, aviso_journal) = make_backend(&cfg, cli_daemon, cli_socket).await?;
 
     // El DIR posicional manda sobre el `cwd`; se valida aquí para dar un
     // error claro en vez de un listado fallido dentro del TUI ya arrancado.
@@ -1769,12 +1769,20 @@ async fn main() -> Result<()> {
     let mut app = App::new(left, right);
     app.pick = cli_pick; // `--pick` (S2): see the field's rustdoc (`app.rs`).
     app.columns = columns;
-    // Sincronizar necesita journal (regla dura 4: `sync.apply` abre un lote
-    // deshacible y se niega sin él), y el brazo embebido es `Engine::new()` —
-    // sin journal y sin spool. Se decide UNA vez, aquí, porque el `Backend` no
-    // cambia de brazo en vida del proceso; conectarle un journal al engine
-    // embebido cambiaría TODAS las mutaciones y es una rama propia.
+    // Sincronizar necesita journal Y spool (regla dura 4: `sync.apply` abre un
+    // lote deshacible y se niega sin él; `sync.plan` se niega sin spool). Desde
+    // #167 el brazo embebido SÍ abre el journal del directorio de estado, pero
+    // sigue sin spool, así que `is_journalled()` sigue diciendo que no — y dice
+    // la verdad sobre lo único que atenúa, que es sincronizar. Se decide UNA
+    // vez, aquí, porque el `Backend` no cambia de brazo en vida del proceso.
     app.backend_journalled = backend.is_journalled();
+    // #167: si esta sesión NO queda registrada, se dice EN la sesión. El
+    // `eprintln!` de `make_backend` lo tapa la pantalla alternativa un segundo
+    // después, y esto dura horas. (Un indicador permanente en la barra sería
+    // mejor que un mensaje que el siguiente borra: #177.)
+    if let Some(aviso) = aviso_journal {
+        app.message = Some(aviso);
+    }
     // #117: el catálogo del scheme de arranque — incondicional, como el cd
     // (una vez por scheme y sesión; el picker de la tarea 4 lo quiere
     // aunque no haya columnas attr configuradas); un fallo NO tumba el
@@ -2092,14 +2100,53 @@ fn args_or_exit(args: norte_frontend::cli::Cli) -> Result<Option<norte_frontend:
 /// Elige el transporte (regla 7): `--daemon` o `[daemon] mode = daemon`
 /// conecta al socket (arrancando `norte daemon run` si hace falta);
 /// cualquier otra cosa = embebido (arranque instantáneo, el default).
+/// La frase TRADUCIDA que hay que pintarle al usuario si esta sesión no queda
+/// registrada, o `None` si sí queda (#167).
+///
+/// El texto de `EmbeddedJournal::warning()` es para el log del operador y va en
+/// crudo; esto es interfaz, y la interfaz de este binario pasa por Fluent.
+fn journal_warning_i18n(j: &norte_core::embedded::EmbeddedJournal) -> Option<String> {
+    use norte_core::embedded::EmbeddedJournal as E;
+    match j {
+        E::Owned(_) => None,
+        E::Busy => Some(t("msg-journal-busy")),
+        E::Unavailable(motivo) => Some(ta(
+            "msg-journal-unavailable",
+            &[("motivo", &motivo.to_string())],
+        )),
+        // `#[non_exhaustive]`: un estado nuevo no puede quedarse mudo — si
+        // alguna vez lo hay, que al menos salga el texto del core.
+        otro => otro.warning(),
+    }
+}
+
+/// El backend elegido y, si es embebido y no se llevó el journal, la frase que
+/// hay que enseñar por ello (#167).
 async fn make_backend(
     cfg: &config::LoadedConfig,
     cli_daemon: bool,
     cli_socket: Option<std::path::PathBuf>,
-) -> Result<Backend> {
+) -> Result<(Backend, Option<String>)> {
     let want_daemon = cli_daemon || cfg.common.daemon_mode == Some(config::DaemonMode::Daemon);
     if !want_daemon {
-        let engine = Engine::new();
+        // #167: el transporte embebido registra sus mutaciones (regla dura 4) en
+        // EL journal del directorio de estado, el mismo que abre el daemon. Si
+        // otro proceso tiene el lock exclusivo se sigue sin él, avisando — ver
+        // `norte_core::embedded`.
+        //
+        // El aviso sale por DOS sitios y ninguno sobra. Aquí, pre-ratatui, va a
+        // stderr para quien lea el arranque o un log; y el llamante se lleva la
+        // frase traducida para PINTARLA en la sesión, porque este stderr lo tapa
+        // la pantalla alternativa un segundo después y una sesión entera sin
+        // registro no puede depender de que alguien mirase ese segundo.
+        let journal =
+            norte_core::embedded::EmbeddedJournal::open_in(&norte_core::connect::config_dir())
+                .await;
+        let aviso_journal = journal_warning_i18n(&journal);
+        if let Some(aviso) = journal.warning() {
+            eprintln!("aviso: {aviso}");
+        }
+        let engine = journal.into_engine();
         // #95.2: límites anti-bomba de archives desde `[archive]` (capas de
         // usuario, jamás la de proyecto). Antes de cualquier navegación: los
         // providers compuestos se cachean con los límites de su primer uso.
@@ -2153,7 +2200,7 @@ async fn make_backend(
             Ok(Err(e)) => eprintln!("aviso: [ai] inválido ({e})"),
             Err(e) => eprintln!("aviso: carga de [ai] falló ({e})"),
         }
-        return Ok(Backend::Embedded(Arc::new(engine)));
+        return Ok((Backend::Embedded(Arc::new(engine)), aviso_journal));
     }
     #[cfg(not(unix))]
     {
@@ -2191,7 +2238,7 @@ async fn make_backend(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("no se pudo hablar con el daemon")?;
-        Ok(Backend::Remote(remote))
+        Ok((Backend::Remote(remote), None))
     }
 }
 

@@ -315,9 +315,11 @@ pub struct SpoolStep {
 /// para planificar, sus planes serán los únicos que pueda aplicar.
 ///
 /// El efecto secundario es bueno: dos procesos que compartan el directorio de
-/// estado (el motor embebido de la CLI, que no abre journal y por tanto no toma
-/// su lock exclusivo) no se pueden aplicar los planes el uno al otro, ni
-/// siquiera con el mismo `conn_id`.
+/// estado no se pueden aplicar los planes el uno al otro, ni siquiera con el
+/// mismo `conn_id`. Eso importa ahora más que antes: desde #167 el motor
+/// embebido SÍ abre el journal cuando el lock está libre, así que «un solo
+/// proceso sobre este directorio de estado» dejó de ser lo único que separa a
+/// dos spools.
 #[derive(Debug, Clone)]
 pub struct Spool {
     dir: PathBuf,
