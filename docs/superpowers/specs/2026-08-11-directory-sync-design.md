@@ -374,10 +374,27 @@ The executor streams the spool in plan order. The walk is pre-order, so
 
 **Revalidation before every destructive step.** Up to ten minutes separate the
 plan from its application. Before an `Overwrite` or a `DeleteTree`, one `stat`:
-does the destination still look the way the plan recorded it — same size, same
-mtime? If not, the step is not executed and appears in the report as
-`Conflict`. One `stat` per destructive step is the only thing standing between
-the TTL and a lost file.
+does the destination still look the way it looked when the plan was made? If
+not, the step is not executed and appears in the report as `Conflict`. One
+`stat` per destructive step is the only thing standing between the TTL and a
+lost file.
+
+**It has to be compared against something, and that something is not
+`SyncStep::size`.** As first written this paragraph said "what the step
+recorded", which does not exist: `size` on a step is normatively *the bytes
+the step moves*, which is the **source's** size. Nothing on the step describes
+the destination's prior state, so the check had nothing to compare and was
+decorative. What the destination looked like travels instead as a
+`DestWitness { kind, size, mtime_ms }`, recorded for `Overwrite` and
+`DeleteTree` only, **in the spool and not on the wire** — it is not something
+a client approves, and it is deliberately outside `plan_hash` so that a
+re-plan of an unchanged tree still yields the same digest.
+
+Its limits are stated rather than promised. A provider that lists without size
+or mtime degrades the check to "still exists, still the same kind", and a
+`DeleteTree` witnesses the directory, not its contents: a file changed three
+levels down does not stop the delete. Both are honest degradations of a check
+that is otherwise exact, and neither is a reason to skip it.
 
 **Copying goes through the existing engine** in `norte-core::ops` —
 `.norte-partial`, progress, the cancellation semantics already tested. Nothing

@@ -34,6 +34,12 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 8 — `sync.plan` as a task | done | `8174c6d` |
 | 9 — the executor | done | `d749166` (containment) + `26f26d3` (executor) |
 
+**Task 11 is not optional and it must land before this branch merges.**
+`revert_batch` demands every entry of a batch be `rename_back` and answers
+`Blocked` otherwise, and `undo_session` is strict LIFO. So as of Task 9,
+after any `sync.apply`, session undo is dead for that user. Nothing in Tasks
+10, 12 or 13 repairs it.
+
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
 hardcode a protocol version. After any change to `PROTOCOL_VERSION`, run
