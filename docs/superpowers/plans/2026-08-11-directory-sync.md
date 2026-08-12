@@ -29,7 +29,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 3 — `norte-sync` + the Update transducer | done | `aa2242c` |
 | 4 — reversal, `on_unknown`, the `Skip` reasons, `dest_rel` | done | `02f95cd` |
 | 5 — `Mirror`, `Ambiguous`, blockers, the overlap guard | done | `fb7a37a` |
-| 6 — the streaming `plan_hash` and the counters | done | `PENDING` |
+| 6 — the streaming `plan_hash` and the counters | done | `19b7408` |
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
