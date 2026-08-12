@@ -29,6 +29,7 @@ pub mod rename;
 mod scheduler;
 pub mod search;
 mod sessions;
+pub mod sync;
 mod undo;
 pub mod volumes;
 

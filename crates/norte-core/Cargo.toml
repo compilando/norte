@@ -23,6 +23,12 @@ futures.workspace = true
 # sin daemon ni scheduler. El core le pone la Task, el gate y el lote — la
 # comparación en sí no conoce ninguna de las tres cosas.
 norte-compare.workspace = true
+# El PLANIFICADOR de sincronización (plan 2026-08-11, ADR 0049): transductor
+# puro de filas de comparación a pasos de plan, sin daemon ni provider. El core
+# le pone la Task, el spool que retiene el plan aprobado y el ejecutor — el
+# plan en sí no conoce ninguna de las tres cosas. Mismo reparto que
+# norte-compare.
+norte-sync.workspace = true
 norte-config.workspace = true
 norte-connect.workspace = true
 # Modelo de plugins (M4-P3): catálogo + manifiesto que el PluginRegistry expone.

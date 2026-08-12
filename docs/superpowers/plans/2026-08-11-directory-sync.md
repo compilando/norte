@@ -30,6 +30,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 4 — reversal, `on_unknown`, the `Skip` reasons, `dest_rel` | done | `02f95cd` |
 | 5 — `Mirror`, `Ambiguous`, blockers, the overlap guard | done | `fb7a37a` |
 | 6 — the streaming `plan_hash` and the counters | done | `19b7408` |
+| 7 — the spool | done | `ca9f791` (rename) + spool commit |
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
@@ -513,6 +514,178 @@ child-immediately-after-parent.
   two plans that WRITE differently can share a digest — the loss is a reading
   distinction, and closing it would cost the wire field the design already
   refused.
+
+### What Task 7 changed in this plan
+
+**The task's own test snippets could not compile, and the reason matters.**
+They read `Spool::create(dir, conn(1), hash("aa"))` — the plan_hash as an
+argument to `create`. The hash does not exist at that moment: it is a STREAMING
+digest over the plan's items and is not known until the stream ends. So the
+shape is:
+
+- `Spool::new(state_dir)` anchors the directory once; `create`, `open`,
+  `remove`, `drop_connection` and `sweep` are methods on it rather than free
+  functions each re-deriving the path.
+- `spool.create(conn_id, &SyncOptions, &SyncCompareOptions)` opens the file
+  under a `<conn_id>-<pid>-<seq>.part` name.
+- `writer.finish()` returns a `SpoolSummary` and only THEN renames the file to
+  `<conn_id>-<plan_hash>.jsonl`.
+
+That rename is what makes "a crash mid-plan leaves nothing approvable" a
+property rather than a check: an unfinished plan never has the name `open`
+looks for. **The terminator record is still there and is not redundant** — the
+rename is atomic with respect to the directory but promises nothing about the
+data reaching the platter, so a truncated file with the right name is caught by
+its last line not being the terminator.
+
+- **The writer owns the `PlanHasher`, and that is the point.** Task 6's note 1
+  says the hasher must be fed the post-`include` items, and that no type
+  catches it if it is not. Now one does, structurally: `SpoolWriter::push`
+  takes a `PlanItem` and hashes, counts and writes it in the same call, so
+  there is no way to hash one sequence and retain another. `finish()` returns
+  the hash, the counts, the capped blockers, `blockers_total` and
+  `executable` — **Task 8 must build `SyncPlanDone` from this summary and not
+  recompute any of it**, and must push exactly the items it sends to the client.
+- **`executable` is `blockers_total == 0`, computed in one place.** Task 8 does
+  not get to weaken it, and `open` now *enforces* the equivalence: a spool whose
+  `executable` disagrees with its blocker count is malformed.
+
+#### The name is not a capability, and both reviewers said so
+
+The task text — and my first implementation — treated "the connection id is in
+the filename" as the whole binding. It is not, and the gap is the one thing on
+this branch I would not have shipped:
+
+- a **filename is not a secret** (anything that can list the directory reads it),
+- a **`plan_hash` is not a secret either** (`PlanHasher` is unkeyed, so anyone
+  who can write a plan can compute its digest and name a file after it), and
+- **`open` was comparing the requested hash against a field the file states
+  about itself**, so an edited step still opened.
+
+So the filename is now accompanied by two things, and both are in Task 7:
+
+1. **An in-memory registry of what this process issued.** `finish()` records the
+   `(conn_id, plan_hash)` on the `Spool`; `open` requires it *before touching
+   the disk*. A file this daemon did not write does not open however it is
+   named. This also closes the `conn_id` reuse hole structurally (the registry
+   is empty at start-up, so a spool from a previous run is unopenable) and stops
+   two processes sharing a state directory — the CLI's embedded engine takes no
+   journal lock — from applying each other's plans.
+2. **The digest is recomputed at `open`**, over the steps, from the header's
+   seed, and compared with the name. One extra sequential read, which is noise
+   next to executing the plan. This is what makes ADR 0049's headline claim true
+   at the last hop rather than only on the wire.
+- **The registry also makes a plan single-use: `open` takes the claim.** Two
+  concurrent `sync.apply` of one hash would otherwise both succeed, both pass
+  the per-step revalidation, and write the same destinations twice under two
+  `batch_id`s — leaving an undo that describes no state the tree was ever in.
+  The second caller gets `PlanStale`, which is true.
+- **Therefore: the daemon constructs ONE `Spool` and clones it.** A second
+  `Spool::new` on the same directory is not another handle, it is a spool that
+  recognises no plan. Task 8 puts it in the daemon's shared state; nothing else
+  may call `Spool::new`.
+- **`finish` takes a `PlanOutcome`.** `rust-reviewer`'s sharpest finding: Task 6
+  note 2 ("`finish()` only on a stream that ended `None`") was enforced by a
+  comment, and the loop that breaks it is the one that writes itself —
+  `while let Some(Ok(item))` routes `Some(Err(Cancelled))` out the same door as
+  `None` and then closes a perfectly valid-looking plan over a third of a tree.
+  The human approves 412 files, 412 copy, 400k silently never do. `finish` now
+  requires `PlanOutcome::{Ended, Interrupted}`; `Interrupted` deletes the spool
+  and returns an error. **Only the `None` arm may pass `Ended`.**
+- **On-disk step records are validated, not degraded.** `SyncStepKind::Unknown`
+  and `!shape_is_consistent()` are `Malformed` when read from a spool. The wire's
+  `#[serde(other)]` tolerance exists so one bad token cannot kill a batch of 256;
+  in a file this binary wrote minutes ago there is no compatibility to defend,
+  and the tolerant path was about to hand the executor a step it could not name.
+- **The spool has a HEADER, which the task text did not mention and the
+  executor cannot work without.** `sync.apply` carries only the hash, so the
+  two roots have to live somewhere; that somewhere is line 1, together with the
+  `SyncCompareOptions` (Task 6's note 1) and the `conn_id`. `SyncOptions` gained
+  `Serialize`/`Deserialize` in `norte-sync` for this — with a rustdoc paragraph
+  saying it is still not a wire type — because the alternative is a parallel
+  struct in `norte-core` that silently drops any field added later.
+- **`sweep` deletes EVERY spool at start-up, not only the expired ones**, and
+  the plan's test asserting `swept == 1` is replaced. At daemon start there is
+  no live connection, so every spool that exists belongs to a dead one; and
+  `conn_id` is a counter that restarts at zero, so keeping a fresh spool means
+  keeping a file that authorises writes under an id the daemon is about to hand
+  out again. It is safe because one daemon per state directory is already
+  enforced upstream by the journal's exclusive lock.
+- **Three deletions are wired and two are not.** `sweep` is wired in
+  `norte-cli`'s `daemon run`, next to `SqliteJournal::open`. `Spool::remove`
+  (applied) and `Spool::drop_connection` (connection closed) exist, are tested,
+  and **have no caller yet: Task 8 wires `drop_connection` into the connection
+  teardown in `daemon/server.rs`, and Task 9 calls `remove` when the apply task
+  reaches any terminal state.** Until then the TTL and the start-up sweep are
+  the only collectors.
+- **`SpoolError::is_stale()` is the answer to Task 6's note 3.** `NotFound`,
+  `Expired` and `Malformed` all mean "there is no live plan with that hash" and
+  all map to `Error::PlanStale`; only `Io` is a daemon fault. A spool written by
+  a binary that did not know `unmeasured_steps` fails to deserialise — the
+  counters deliberately have no serde default — and comes out as a stale plan,
+  not a dead task. Pinned by
+  `a_spool_from_a_binary_that_did_not_know_a_counter_is_stale_not_fatal`, which
+  mutilates a real spool file rather than describing the intent.
+- **The "no content" test is not a tautology.** It drives a real
+  `norte_compare::compare` over two `MemProvider`s whose files hold a secret,
+  through `norte_sync::plan` and into the spool, then asserts the secret is
+  absent from the file's bytes AND that a path that should be there IS — the
+  second half is what proves the first half's search would have found the
+  secret had it leaked.
+- **`sweep` reports what it could not delete.** It returns a `SweepReport
+  { removed, failed }`, because a bare count of deletions cannot distinguish
+  "nothing was there" from "nothing could be removed", and the CLI printed
+  reassurance either way. It stays non-fatal at start-up: with the in-memory
+  registry, an undeletable spool is disk litter and a disclosure-at-rest
+  problem, not an applicable plan, and a daemon that refuses to start over one
+  is a worse failure than the one it prevents.
+- **Smaller review fixes, all applied:** the TTL unlink compares `dev`/`ino`
+  before removing (re-planning an identical tree yields the same hash, so a late
+  `open` was able to delete the freshly approved spool by name); `encode` now
+  enforces `SPOOL_MAX_RECORD` on the *write* side, so an over-large terminator
+  fails where an operator can see it instead of producing a plan that answers
+  "stale" forever; `read_last_line`'s ceiling is `SPOOL_MAX_RECORD + 2`, since
+  finding an N-byte line needs to see two newlines; `UnexpectedEof` maps to
+  `Malformed` (stale) rather than `Io` (daemon fault); `steps()` and `open` both
+  refuse anything after the terminator, so a second terminator cannot make the
+  approved summary and the executed plan two different things; `Drop` unlinks
+  synchronously, because `Handle::spawn_blocking` panics during runtime shutdown
+  and a panic in `Drop` while unwinding aborts; the state directory is created
+  `0o700` with a `DirBuilder` rather than `create_dir_all`'s umask, matching
+  `Journal::open`; `remove_matching` matches on the name's BYTES; and the module
+  is instrumented, with a `warn!` whenever a spool we wrote comes back
+  unreadable — which is the signal that someone is editing them.
+- **MINORs skipped, with reasons.** `O_NOFOLLOW` on the spool open would need
+  `libc` as a new `norte-core` dependency (rule 8) to close a hole that is
+  already harmless: a symlinked spool yields `NotFound` or `Malformed`, both of
+  which answer `PlanStale`, so there is not even a file-existence oracle. And
+  the hostile non-UTF-8 name in `steps_fixture` is inlined rather than added to
+  the `norte-testkit` corpus, for the reason Tasks 4 and 5 already recorded:
+  every `hostile_names().len() == 47` assertion in the workspace moves with it.
+- **For Task 14: ADR 0049 needs three corrections.** It says the spool is "keyed
+  by `(connection, plan_hash)`" without saying the key is the FILENAME *and* that
+  a filename alone is not a capability — the in-memory issuance registry and the
+  recomputed digest are what make the binding hold, and the ADR should say so.
+  Its start-up sweep bullet should say "every spool", with the conn-id reuse
+  argument. And its negative-consequences list should add that a spool discloses
+  a full relative listing of both trees, with sizes and verdicts, to anything
+  that can read the state directory.
+- **Also for Task 14, an issue to file that is bigger than this feature.** The
+  daemon's state directory is `0o700`, but nothing in the policy/VFS layer
+  excludes it from a scope grant over `$HOME` — so an agent with read scope there
+  can read `journal.db` (the whole mutation history) and now the spools too. It
+  is pre-existing and the spool only adds to the pile, but it wants an issue.
+
+#### Two things Task 8 and Task 9 must not discover the hard way
+
+1. **Task 9's gate runs over the roots read FROM THE SPOOL, at apply time.**
+   `sync.apply` carries no paths, so the roots come out of a file; the gate that
+   `sync.plan` passed ten minutes earlier does not carry over, because scope
+   TTLs expire and policy rules change inside the window. Rule 9 with a file in
+   the middle of it.
+2. **`steps()` can fail mid-stream**, after N steps have already executed — a
+   truncated or edited spool, not only a cancellation. The executor's journal
+   batch has to be closed and undoable at that point too.
 
 ---
 

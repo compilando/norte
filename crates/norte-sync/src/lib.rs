@@ -65,7 +65,20 @@ use norte_proto::VPath;
 /// };
 /// assert_eq!(o.mode, SyncMode::Update);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// # Serializable, y aun así NO es un tipo de wire
+/// Lleva `Serialize`/`Deserialize` por UNA razón: el spool de
+/// `norte_core::sync` retiene el plan aprobado en un fichero, y el ejecutor
+/// necesita las dos raíces —`sync.apply` no lleva más que el hash, a propósito
+/// (ADR 0049)—. Ese fichero lo escribe y lo lee el MISMO binario dentro de la
+/// ventana de `SYNC_PLAN_TTL_MS`: no viaja por ningún socket, no está en el
+/// JSON Schema publicado y ningún peer lo parsea, así que añadir un campo aquí
+/// no es un cambio de protocolo.
+///
+/// `deny_unknown_fields` porque un spool que no se entiende ENTERO no se
+/// entiende: un plan a medio interpretar autoriza escrituras que nadie aprobó.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyncOptions {
     /// De dónde salen los bytes.
     pub source_root: VPath,

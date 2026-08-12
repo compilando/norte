@@ -18,6 +18,14 @@ norte-compare.workspace = true
 # El vocabulario del plan (`SyncStep`, `RelPath`, `SyncBlocker`…) vive en el
 # wire: aquí NO se define ni un tipo de protocolo.
 norte-proto.workspace = true
+# `SyncOptions` se serializa para el SPOOL de norte-core (ADR 0049): el plan
+# aprobado se retiene en un fichero y el ejecutor necesita las dos raíces,
+# porque `sync.apply` no lleva más que el hash. No es un tipo de wire —lo
+# escribe y lo lee el mismo binario— pero el derive tiene que estar donde está
+# el struct, no en una copia paralela en norte-core que se desincronizaría en
+# cuanto alguien añadiese un campo. Ya es dependencia de casi todo el
+# workspace vía norte-proto.
+serde.workspace = true
 # El `plan_hash`: sha256 sobre las conclusiones del plan, el MISMO algoritmo y
 # el mismo framing con longitud que el `plan_hash` del lote de renames y que la
 # cadena del journal (ADR 0023). Ya es dependencia de cuatro crates.

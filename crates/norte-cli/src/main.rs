@@ -1585,6 +1585,39 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
             let journal = norte_core::SqliteJournal::open(&journal_path)
                 .await
                 .context("no se pudo abrir el journal")?;
+            // Barrido de spools de sincronización (ADR 0049), junto al journal
+            // y por lo mismo: un cierre violento deja detrás ficheros que
+            // AUTORIZAN escrituras, y nadie más los va a recoger. Se llevan
+            // todos, no solo los caducados — aquí no hay ninguna conexión viva
+            // todavía, así que todo spool que exista es de una conexión muerta.
+            //
+            // Va DESPUÉS del journal a propósito: su lock exclusivo es lo que
+            // garantiza que no hay otro daemon sobre este directorio de estado
+            // al que le estemos barriendo un plan vivo.
+            //
+            // Un barrido que falla NO impide arrancar. Lo que impide aplicar un
+            // plan de un arranque anterior no es esto, es que el registro de
+            // planes emitidos vive en memoria y nace vacío; lo que queda en
+            // disco es basura, y un daemon que se niega a arrancar por un
+            // fichero que no se deja borrar es peor fallo que el que evita.
+            //
+            // El `Spool` se construye UNA vez y se clona: dos `Spool::new` son
+            // dos registros de emisión que no se ven. Aquí solo barre; la tarea
+            // 8 es la que lo mete en el estado del daemon.
+            let spool = norte_core::sync::Spool::new(norte_core::connect::config_dir());
+            match spool.sweep().await {
+                Ok(r) if r.removed == 0 && r.is_clean() => {}
+                Ok(r) if r.is_clean() => {
+                    eprintln!("barridos {} planes de sync huérfanos", r.removed);
+                }
+                Ok(r) => eprintln!(
+                    "aviso: barridos {} planes de sync huérfanos y {} no se dejaron borrar en {}",
+                    r.removed,
+                    r.failed,
+                    spool.dir().display()
+                ),
+                Err(e) => eprintln!("aviso: no se pudo barrer {}: {e}", spool.dir().display()),
+            }
             // policy.toml: ausente = sin reglas = un agente DENTRO de scope
             // aún deniega (fail-closed, `no-rule`). docs/policy-example.toml
             // trae el punto de partida (`action = "ask"`).
