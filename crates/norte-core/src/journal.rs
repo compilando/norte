@@ -884,8 +884,8 @@ impl Journal {
         // arreglo posible, porque esas filas ya no se pueden rehashear.
         //
         // Así que se rehúsa, y se dice qué hacer. El embebido lo verá como
-        // `EmbeddedJournal::Unavailable` y seguirá sin registro (#167); el
-        // daemon no arrancará, que para un journal ilegible es lo correcto.
+        // `NoJournal::Failed` y seguirá sin registro (#167); el daemon no
+        // arrancará, que para un journal ilegible es lo correcto.
         if !has_column(&pool, "undoes_seq").await? {
             let filas: i64 = sqlx::query("SELECT COUNT(*) FROM journal")
                 .fetch_one(&pool)
@@ -1577,8 +1577,10 @@ impl SqliteJournal {
     ///
     /// Quién es ese dueño ya no es siempre el daemon: desde #167 un proceso
     /// embebido (TUI, o un `norte cp` sin daemon) abre este mismo fichero y se
-    /// lo queda mientras vive — ver [`crate::embedded::EmbeddedJournal`], que es
-    /// quien decide qué hacer cuando el lock ya lo tiene otro.
+    /// lo queda mientras vive — ver [`crate::embedded::LazyJournal`], que es
+    /// quien decide qué hacer cuando el lock ya lo tiene otro, y que desde #177
+    /// no lo abre hasta la primera mutación (así, una sesión que solo navega no
+    /// se lo quita a nadie).
     ///
     /// # Errors
     /// [`JournalError::Io`] si no puede crear el directorio contenedor;

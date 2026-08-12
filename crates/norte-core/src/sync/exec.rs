@@ -33,9 +33,10 @@
 //! y cada paso del plan lleva prometida una [`StepReversal`] que solo el journal
 //! puede cumplir.
 //!
-//! Desde #167 el transporte embebido SÍ abre el journal del directorio de
-//! estado, así que este `Unsupported` dejó de ser el caso corriente: queda para
-//! el engine que de verdad no tiene journal (otro proceso con el lock, o un
+//! Desde #167 el transporte embebido SÍ tiene el journal del directorio de
+//! estado —y desde #177 lo abre aquí mismo, cuando `sync.apply` se lo pide—,
+//! así que este `Unsupported` dejó de ser el caso corriente: queda para el
+//! engine que de verdad no puede tenerlo (otro proceso con el lock, o un
 //! embebedor que construyó `Engine::new()` a mano).
 //!
 //! # Cómo se journaliza cada clase (tabla normativa de la spec)

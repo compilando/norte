@@ -7,7 +7,8 @@ use assert_cmd::Command;
 /// suite.
 ///
 /// Desde #167 un `norte cp`/`mv`/`rm`/`mkdir` embebido abre
-/// `<estado>/journal.db` y se queda su lock EXCLUSIVO mientras vive. Sin este
+/// `<estado>/journal.db` al mutar (#177: no antes) y se queda su lock EXCLUSIVO
+/// mientras vive. Sin este
 /// override eso sería el journal de verdad del desarrollador: la suite le
 /// escribiría filas en su cadena de hashes y le disputaría el lock a su TUI o a
 /// su daemon. El mismo criterio que las tres pruebas de shell (7b0655c) — el
@@ -33,6 +34,59 @@ fn norte() -> Command {
     let mut c = Command::cargo_bin("norte").expect("binario norte compilado");
     c.env("NORTE_CONFIG_DIR", config_dir_del_test());
     c
+}
+
+/// #177: navegar NO abre —ni siquiera crea— el journal, y mutar SÍ.
+///
+/// Es la prueba a nivel de proceso de lo que #177 arregla: mientras un frontend
+/// embebido se limitaba a mirar, `journal.db` seguía suyo y ni `norte daemon
+/// run` podía arrancar ni `norte audit` leer. Los dos comandos van en el mismo
+/// test a propósito: «no lo abre» solo significa algo si se enseña al lado del
+/// que sí lo abre.
+///
+/// Con directorio de estado PROPIO, y no el compartido de
+/// `config_dir_del_test`: lo que se afirma es que un fichero NO existe, y bajo
+/// `cargo test` —un proceso para toda la suite— el `cp` de otro test ya lo
+/// habría creado.
+#[test]
+fn ls_no_abre_el_journal_y_mkdir_si() {
+    let estado = tempfile::tempdir().unwrap();
+    let arbol = tempfile::tempdir().unwrap();
+    let journal = estado.path().join("journal.db");
+
+    let out = Command::cargo_bin("norte")
+        .expect("binario norte compilado")
+        .env("NORTE_CONFIG_DIR", estado.path())
+        .arg("ls")
+        .arg(arbol.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !journal.exists(),
+        "listar un directorio no puede quedarse el journal (#177)"
+    );
+
+    let out = Command::cargo_bin("norte")
+        .expect("binario norte compilado")
+        .env("NORTE_CONFIG_DIR", estado.path())
+        .arg("mkdir")
+        .arg(arbol.path().join("nuevo"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        journal.exists(),
+        "crear un directorio sí queda registrado (regla dura 4, #167)"
+    );
 }
 
 #[test]

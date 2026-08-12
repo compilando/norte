@@ -1188,6 +1188,32 @@ pub struct App {
     /// Private: read through [`Self::degraded_for`] /
     /// [`Self::connection_banner`], written through [`Self::note_degraded`].
     degraded: std::collections::VecDeque<norte_proto::methods::ConnectionDegraded>,
+    /// #177: esta sesión NO está registrando sus mutaciones en el journal.
+    ///
+    /// El brazo embebido abre el journal del directorio de estado en su primera
+    /// mutación, y si lo tiene otro proceso (un daemon vivo, otra sesión que ya
+    /// mutó) esta sigue adelante SIN registro: nada de lo que se copie, mueva o
+    /// borre a partir de ahí se podrá deshacer ni auditar.
+    ///
+    /// Persistente, y por el mismo motivo que `degraded`: llega UNA vez, en
+    /// mitad de una operación que el usuario acaba de lanzar con el teclado, y
+    /// `app.message` lo borra la siguiente tecla — hay 136 sitios que escriben
+    /// ese campo. Un aviso que dura hasta el siguiente `↓` no es un indicador
+    /// de seguridad.
+    ///
+    /// No se limpia nunca: la decisión de esta sesión se toma una vez y no se
+    /// revisa (ver `norte_core::embedded`), así que mientras la sesión viva la
+    /// frase sigue siendo cierta. Si algún día se reintenta la apertura, esto
+    /// necesita el evento de recuperación ANTES que el reintento.
+    ///
+    /// Se retiene el valor ESTRUCTURADO y no un `bool`, por el mismo criterio
+    /// que `degraded` (H3d): la frase se compone al pintarla, y el motivo sigue
+    /// disponible para quien lo necesite (una página de ayuda, un futuro
+    /// detalle en la barra).
+    ///
+    /// Privado: se lee por [`Self::journal_banner`] y se escribe por
+    /// [`Self::note_no_journal`].
+    no_journal: Option<norte_core::embedded::NoJournal>,
     /// Historial de directorios por pane (spec 2026-07-18, `Alt+↓`): mismo
     /// índice que `panes`. Vive en `App` y no en `Pane` (el historial no es
     /// estado de render): cada cd EXITOSO empuja el dir anterior (main.rs).
@@ -2151,6 +2177,7 @@ impl App {
             lua_pending_trust: None,
             lua_status: None,
             degraded: std::collections::VecDeque::new(),
+            no_journal: None,
             history: [
                 crate::nav::History::default(),
                 crate::nav::History::default(),
@@ -2363,7 +2390,7 @@ impl App {
     /// Las negativas que se dan AQUÍ, sin ir y volver al daemon:
     ///
     /// * **Sin journal.** Lo dice [`norte_core::backend::Backend::is_journalled`],
-    ///   que es `false` en embebido: desde #167 ese engine sí abre el journal
+    ///   que es `false` en embebido: desde #167 ese engine sí lleva el journal
     ///   del directorio de estado, pero no instala spool, y sin spool
     ///   `sync.plan` se niega en cerrado (regla dura 4). Planificar contra él
     ///   sería enseñar un plan que nadie puede aprobar. La misma verdad que
@@ -2763,6 +2790,39 @@ impl App {
                 ("n", &otras.to_string()),
             ],
         ))
+    }
+
+    /// Anota que esta sesión no está registrando sus mutaciones (#177).
+    ///
+    /// Idempotente: el core avisa una sola vez por sesión, y si alguna vez
+    /// avisara dos, la segunda solo reescribe el mismo hecho.
+    pub fn note_no_journal(&mut self, why: norte_core::embedded::NoJournal) {
+        self.no_journal = Some(why);
+    }
+
+    /// El aviso PERSISTENTE de sesión sin journal, o `None` si sí se registra.
+    ///
+    /// Frase fija y sin el motivo: el motivo salió por `message` cuando ocurrió
+    /// (con el error del core saneado), y la barra de estado tiene que caber.
+    #[must_use]
+    pub fn journal_banner(&self) -> Option<String> {
+        self.no_journal.as_ref().map(|_| t("status-no-journal"))
+    }
+
+    /// Los dos indicadores persistentes de la barra, JUNTOS.
+    ///
+    /// Juntos y no en ramas distintas del `if` de la barra: son dos hechos
+    /// simultáneos y de la misma clase —seguridad, hasta el final de la
+    /// sesión—, así que elegir uno escondería el otro para siempre. El del
+    /// journal va primero: «nada de esto se puede deshacer» pesa más que «esta
+    /// conexión va en claro», y es el único que habla de TODA la sesión.
+    #[must_use]
+    pub fn persistent_banner(&self) -> Option<String> {
+        match (self.journal_banner(), self.connection_banner()) {
+            (Some(j), Some(c)) => Some(format!("{j}  {c}")),
+            (Some(uno), None) | (None, Some(uno)) => Some(uno),
+            (None, None) => None,
+        }
     }
 
     /// El pane con foco.
@@ -5857,6 +5917,44 @@ mod tests {
             "la más reciente se nombra: {banner}"
         );
         assert!(banner.contains('1'), "y cuántas más hay: {banner}");
+    }
+
+    /// #177: «esta sesión no queda registrada» tiene que sobrevivir a la
+    /// siguiente tecla. Llega UNA vez, en mitad de una operación que el usuario
+    /// acaba de lanzar, y `app.message` lo borra la pulsación siguiente — que
+    /// es como decir que no se avisó.
+    #[test]
+    fn la_sesion_sin_journal_tiene_indicador_persistente() {
+        let mut app = app_dos_panes();
+        assert!(app.journal_banner().is_none(), "por defecto sí se registra");
+
+        app.message = Some("algo".to_owned());
+        app.note_no_journal(norte_core::embedded::NoJournal::Busy);
+        // Lo que borra el `message` en el run loop, tecla a tecla.
+        app.message = None;
+        assert!(
+            app.journal_banner().is_some(),
+            "el indicador no se va con el mensaje"
+        );
+    }
+
+    /// Y no compite con el de #44: los dos son persistentes, de la misma clase
+    /// y simultáneos, así que elegir uno escondería el otro para el resto de la
+    /// sesión.
+    #[test]
+    fn los_dos_indicadores_persistentes_caben_juntos() {
+        let mut app = app_dos_panes();
+        app.note_no_journal(norte_core::embedded::NoJournal::Busy);
+        app.note_degraded(degradacion_de_test("sftp", "a.org"));
+        let banner = app.persistent_banner().expect("hay aviso");
+        assert!(
+            banner.contains("a.org"),
+            "la conexión sigue nombrada: {banner}"
+        );
+        assert!(
+            banner.starts_with(&app.journal_banner().expect("hay journal_banner")),
+            "y el del journal va primero: {banner}"
+        );
     }
 
     /// MINOR-5: el `Option<String>` de #44 estaba acotado por construcción;

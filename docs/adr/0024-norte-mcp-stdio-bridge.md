@@ -65,6 +65,13 @@ process that loses the lock keeps running unjournalled, with a warning; only
 the daemon refuses to start. Policy and approvals are unchanged and remain the
 daemon's.)*
 
+*(Amended again 2026-08-12, issue #177: the embedded process takes the lock on
+its FIRST MUTATION, not at start-up. The first amendment made a browsing `ntc`
+the owner of the file for its whole life, which stopped `norte daemon run` —
+and therefore `norte mcp serve`, i.e. the governed agent path — from starting
+at all, and stopped `norte audit` from reading. Single-writer is unchanged:
+whoever gets there first still wins, and now "gets there" means "writes".)*
+
 `policy.undo_session` is available only to human connections and undoes an
 agent session in strict LIFO order. The engine distinguishes the session whose
 entries are targeted from the human actor executing and signing compensations,

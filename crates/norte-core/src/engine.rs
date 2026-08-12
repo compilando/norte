@@ -38,6 +38,24 @@ pub struct TransferOptions {
     pub verify: VerifyPolicy,
 }
 
+/// De dónde sale el journal de un [`Engine`], que desde #177 ya no es siempre
+/// «lo tiene o no lo tiene».
+///
+/// Las tres variantes son los tres arranques que existen: un engine sin journal
+/// (tests, embebedores), el del daemon —que lo abre él y se niega a arrancar si
+/// no puede— y el de un frontend embebido, que no lo abre hasta que hace falta.
+enum JournalSource {
+    /// Sin journal: `undo_session` y `sync.apply` responden `Unsupported`, y el
+    /// observer no registra nada.
+    None,
+    /// Ya abierto por quien construyó el engine (el daemon). Este proceso es el
+    /// dueño de la cadena desde antes de existir el engine.
+    Open(Arc<crate::journal::SqliteJournal>),
+    /// El del directorio de estado, que se abrirá en la primera mutación —o en
+    /// la primera pregunta que necesite la cadena— y quizá no se pueda abrir.
+    Lazy(Arc<crate::embedded::LazyJournal>),
+}
+
 /// Núcleo embebido: registro de providers por scheme + operaciones.
 /// Lecturas (`stat`/`list`) son directas; mutaciones (`copy`/`move_`/
 /// `delete`) son Tasks con progreso y cancelación.
@@ -55,10 +73,14 @@ pub struct Engine {
     connection_observer: RwLock<Option<Arc<dyn crate::connect::ConnectionObserver>>>,
     sched: Scheduler,
     observer: Arc<dyn MutationObserver>,
-    /// Fuente de LECTURA del journal para el undo (M3-2). `None` = sin journal
-    /// (el undo devuelve `Unsupported`). Es el MISMO objeto que `observer`
-    /// cuando se construye con [`Self::with_journal`].
-    journal: Option<Arc<crate::journal::SqliteJournal>>,
+    /// De dónde sale el journal de este engine: fuente de LECTURA para el undo
+    /// (M3-2) y para el gate de `sync.apply`. Es el MISMO objeto que `observer`
+    /// en las dos variantes que tienen uno.
+    ///
+    /// No es un `Option<Arc<..>>` desde #177 porque el brazo embebido no sabe
+    /// todavía si LO TIENE: lo abre en la primera mutación. Preguntárselo es
+    /// [`Self::journal`], que es `async` justo por eso.
+    journal: JournalSource,
     /// Gate de policy consultado PRE-efecto en cada mutación (M3-3). Default
     /// [`AllowAll`](crate::policy::AllowAll): el engine embebido/humano no se
     /// sandboxea salvo que se instale una policy con [`Self::with_policy`].
@@ -138,13 +160,21 @@ impl Engine {
     /// fuente de undo (`undo_session` → `Unsupported`).
     #[must_use]
     pub fn with_observer(observer: Arc<dyn MutationObserver>) -> Self {
+        Self::build(observer, JournalSource::None)
+    }
+
+    /// El constructor de verdad: los tres públicos solo eligen QUÉ observer y
+    /// qué fuente de journal, y el resto del engine es idéntico en los tres.
+    /// Uno solo, y no tres copias de veinte campos, porque un campo nuevo que
+    /// se olvide en una copia es un engine con la mitad de sus piezas.
+    fn build(observer: Arc<dyn MutationObserver>, journal: JournalSource) -> Self {
         Self {
             sessions: SessionPool::new(),
             connector: RwLock::new(None),
             connection_observer: RwLock::new(None),
             sched: Scheduler::new(4),
             observer,
-            journal: None,
+            journal,
             policy: Arc::new(crate::policy::AllowAll),
             policy_explicit: false,
             approvals: Arc::new(crate::approval::DenyAll),
@@ -179,25 +209,89 @@ impl Engine {
     /// El journal es single-writer (spec §4): un solo Engine por fichero.
     #[must_use]
     pub fn with_journal(journal: Arc<crate::journal::SqliteJournal>) -> Self {
-        Self {
-            sessions: SessionPool::new(),
-            connector: RwLock::new(None),
-            connection_observer: RwLock::new(None),
-            sched: Scheduler::new(4),
-            observer: Arc::clone(&journal) as Arc<dyn MutationObserver>,
-            journal: Some(journal),
-            policy: Arc::new(crate::policy::AllowAll),
-            policy_explicit: false,
-            approvals: Arc::new(crate::approval::DenyAll),
-            archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
-            ai_provider: RwLock::new(None),
-            ai_embed: RwLock::new(None),
-            ai_config: RwLock::new(crate::ai::AiConfig::default()),
-            index: None,
-            spool: RwLock::new(None),
-            batch_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
-            sync_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
+        Self::build(
+            Arc::clone(&journal) as Arc<dyn MutationObserver>,
+            JournalSource::Open(journal),
+        )
+    }
+
+    /// Engine EMBEBIDO: su journal es el del directorio de estado, y se abre en
+    /// la primera mutación (#177) — o en el primer `undo`/`sync.apply`, que es
+    /// lo mismo por otro camino: son las tres cosas que necesitan la cadena.
+    ///
+    /// Igual que [`Self::with_journal`], el observer y la fuente de undo son EL
+    /// MISMO objeto; la diferencia es que aquí ese objeto todavía no tiene un
+    /// fichero abierto detrás, y quizá no llegue a tenerlo (otro proceso puede
+    /// tener el lock). Construirlo no toca el disco ni le quita el journal a
+    /// nadie: ese es todo el punto.
+    ///
+    /// Lo usan `norte-tui` y `norte-cli` sin daemon, vía
+    /// [`crate::embedded::engine_in`].
+    #[must_use]
+    pub fn with_lazy_journal(journal: Arc<crate::embedded::LazyJournal>) -> Self {
+        Self::build(
+            Arc::clone(&journal) as Arc<dyn MutationObserver>,
+            JournalSource::Lazy(journal),
+        )
+    }
+
+    /// A dónde van los avisos de «esta sesión no queda registrada» (#177).
+    ///
+    /// No-op si este engine no lleva journal perezoso (el del daemon no puede
+    /// quedarse sin journal: se niega a arrancar). Instalarlo es del arranque
+    /// del frontend, y llega a tiempo aunque una mutación se le adelante — ver
+    /// [`crate::embedded::LazyJournal::set_warning_sink`].
+    /// Devuelve si el sink quedó INSTALADO: `false` cuando este engine no puede
+    /// quedarse sin journal a mitad (el del daemon) ni puede tener uno (un
+    /// `Engine::new()`). Lo mira el `Backend` para no entregarle a un frontend
+    /// un canal que no va a sonar nunca y que le haría creerse cubierto.
+    pub fn set_journal_warning_sink(
+        &self,
+        sink: Arc<dyn crate::embedded::JournalWarningSink>,
+    ) -> bool {
+        if let JournalSource::Lazy(l) = &self.journal {
+            l.set_warning_sink(sink);
+            return true;
         }
+        false
+    }
+
+    /// El journal de este engine, ABRIÉNDOLO si es perezoso y es la primera vez
+    /// que se pide.
+    ///
+    /// `async` a propósito, y es el nudo de #177: las tres preguntas que se le
+    /// hacen a este campo —¿journalizo esta mutación?, ¿puedo deshacer?, ¿puedo
+    /// aplicar un plan de sincronización?— llegan en momentos distintos, y dos
+    /// de ellas ANTES de que el proceso haya mutado nada. Con la pereza metida
+    /// solo en el observer, esas dos contestarían «no hay journal» sobre un
+    /// engine que lo abriría sin problema. Aquí no: preguntar es abrir.
+    ///
+    /// Que la apertura sea única la garantiza la celda del
+    /// [`LazyJournal`](crate::embedded::LazyJournal) —una sola, compartida con
+    /// el observer—, así que no hay forma de acabar con dos handles del mismo
+    /// fichero ni con dos dueños de la cadena.
+    async fn journal(&self) -> Option<Arc<crate::journal::SqliteJournal>> {
+        match &self.journal {
+            JournalSource::None => None,
+            JournalSource::Open(j) => Some(Arc::clone(j)),
+            JournalSource::Lazy(l) => l.get().await,
+        }
+    }
+
+    /// Abre ya el journal perezoso y dice si esta sesión queda registrada.
+    ///
+    /// Para el llamante que va a mutar y necesita DECÍRSELO al humano antes
+    /// (hoy: `norte ai rename`, que pide confirmación para renombrar un
+    /// directorio entero con los nombres que propuso un modelo). Sin esto, la
+    /// respuesta llegaría después del sí.
+    ///
+    /// Toma el lock exclusivo AQUÍ, no en la primera mutación, **y este proceso
+    /// lo conserva hasta que muere**: si lo que viene después es una pregunta
+    /// al humano, `norte daemon run` no puede arrancar mientras él se lo
+    /// piensa. Solo tiene sentido a un paso de mutar, y es el precio de que la
+    /// respuesta llegue antes del sí y no después.
+    pub async fn ensure_journal(&self) -> bool {
+        self.journal().await.is_some()
     }
 
     /// Instala el gate de policy y el resolver de aprobaciones (M3-3): a partir
@@ -1089,7 +1183,7 @@ impl Engine {
         Error,
     > {
         let spool = self.spool().ok_or(Error::Unsupported)?;
-        let journal = self.journal.clone().ok_or_else(|| {
+        let journal = self.journal().await.ok_or_else(|| {
             tracing::warn!("sync.apply sin journal: no hay lote que deshacer, no se aplica");
             Error::Unsupported
         })?;
@@ -1920,11 +2014,11 @@ impl Engine {
             .await?;
         drop(gate_paths);
 
-        let recorder: Arc<dyn crate::rename::exec::StepJournal> = match &self.journal {
+        let recorder: Arc<dyn crate::rename::exec::StepJournal> = match self.journal().await {
             Some(j) => {
                 let batch_id = j.journal().alloc_batch().await.map_err(Error::from)?;
                 Arc::new(crate::rename::exec::BatchJournal {
-                    journal: Arc::clone(j),
+                    journal: Arc::clone(&j),
                     actor: actor.clone(),
                     batch_id,
                 })
@@ -2201,7 +2295,7 @@ impl Engine {
         target: &crate::journal::Actor,
         executor: crate::journal::Actor,
     ) -> Result<(TaskHandle, Arc<std::sync::Mutex<crate::UndoReport>>), Error> {
-        let journal = self.journal.clone().ok_or(Error::Unsupported)?;
+        let journal = self.journal().await.ok_or(Error::Unsupported)?;
         let entries = journal
             .journal()
             .revertible_for(target)

@@ -103,7 +103,7 @@ pub struct Facts {
     /// be undone.
     ///
     /// `false` for the TUI's in-process engine — the one `norte-tui` builds
-    /// without `--daemon`. Since #167 that engine DOES open the state
+    /// without `--daemon`. Since #167 that engine DOES carry the state
     /// directory's journal, but it still installs no sync spool, and `sync.plan`
     /// refuses without one; this field gates synchronising, which needs both, so
     /// it stays `false` and the name undersells what it answers. It is an

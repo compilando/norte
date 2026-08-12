@@ -1752,7 +1752,7 @@ async fn main() -> Result<()> {
         .max(viewer_eff.discarded_lua_bindings())
         .max(dialog_eff.discarded_lua_bindings());
 
-    let (mut backend, aviso_journal) = make_backend(&cfg, cli_daemon, cli_socket).await?;
+    let mut backend = make_backend(&cfg, cli_daemon, cli_socket).await?;
 
     // El DIR posicional manda sobre el `cwd`; se valida aquí para dar un
     // error claro en vez de un listado fallido dentro del TUI ya arrancado.
@@ -1771,18 +1771,12 @@ async fn main() -> Result<()> {
     app.columns = columns;
     // Sincronizar necesita journal Y spool (regla dura 4: `sync.apply` abre un
     // lote deshacible y se niega sin él; `sync.plan` se niega sin spool). Desde
-    // #167 el brazo embebido SÍ abre el journal del directorio de estado, pero
-    // sigue sin spool, así que `is_journalled()` sigue diciendo que no — y dice
-    // la verdad sobre lo único que atenúa, que es sincronizar. Se decide UNA
-    // vez, aquí, porque el `Backend` no cambia de brazo en vida del proceso.
+    // #167 el brazo embebido SÍ lleva el journal del directorio de estado (que
+    // desde #177 abre en su primera mutación), pero sigue sin spool, así que
+    // `is_journalled()` sigue diciendo que no — y dice la verdad sobre lo único
+    // que atenúa, que es sincronizar. Se decide UNA vez, aquí, porque el
+    // `Backend` no cambia de brazo en vida del proceso.
     app.backend_journalled = backend.is_journalled();
-    // #167: si esta sesión NO queda registrada, se dice EN la sesión. El
-    // `eprintln!` de `make_backend` lo tapa la pantalla alternativa un segundo
-    // después, y esto dura horas. (Un indicador permanente en la barra sería
-    // mejor que un mensaje que el siguiente borra: #177.)
-    if let Some(aviso) = aviso_journal {
-        app.message = Some(aviso);
-    }
     // #117: el catálogo del scheme de arranque — incondicional, como el cd
     // (una vez por scheme y sesión; el picker de la tarea 4 lo quiere
     // aunque no haya columnas attr configuradas); un fallo NO tumba el
@@ -1821,6 +1815,13 @@ async fn main() -> Result<()> {
     let approvals = backend.take_approvals();
     // #44: avisos `connection.degraded` del daemon → indicador persistente.
     let degraded = backend.take_degraded();
+    // #167/#177: el brazo embebido abre el journal en su primera mutación, y si
+    // resulta que lo tiene otro proceso, esta sesión muta SIN registro. Eso se
+    // dice EN la sesión y en el instante en que ocurre: un `eprintln!` de
+    // arranque lo taparía la pantalla alternativa un segundo después, y aquí ni
+    // siquiera se sabe al arrancar. (Un indicador permanente en la barra sería
+    // mejor que un mensaje que el siguiente borra; sigue pendiente.)
+    let journal_warnings = backend.take_journal_warnings();
     let mut help_lines = norte_tui::help::build(&browse_eff, &viewer_eff, &dialog_eff);
     // H3b: the chord resolver the help corpus is rendered through. Built from
     // the SAME three effectives as `help_lines` and BEFORE they move into the
@@ -1880,6 +1881,7 @@ async fn main() -> Result<()> {
         conn_events,
         approvals,
         degraded,
+        journal_warnings,
     )
     .await;
     let _ = capture.set(false, terminal.backend_mut());
@@ -2097,36 +2099,36 @@ fn args_or_exit(args: norte_frontend::cli::Cli) -> Result<Option<norte_frontend:
     Ok(Some(args))
 }
 
-/// Elige el transporte (regla 7): `--daemon` o `[daemon] mode = daemon`
-/// conecta al socket (arrancando `norte daemon run` si hace falta);
-/// cualquier otra cosa = embebido (arranque instantáneo, el default).
-/// La frase TRADUCIDA que hay que pintarle al usuario si esta sesión no queda
-/// registrada, o `None` si sí queda (#167).
+/// La frase TRADUCIDA de «esta sesión no queda registrada» (#167/#177).
 ///
-/// El texto de `EmbeddedJournal::warning()` es para el log del operador y va en
-/// crudo; esto es interfaz, y la interfaz de este binario pasa por Fluent.
-fn journal_warning_i18n(j: &norte_core::embedded::EmbeddedJournal) -> Option<String> {
-    use norte_core::embedded::EmbeddedJournal as E;
-    match j {
-        E::Owned(_) => None,
-        E::Busy => Some(t("msg-journal-busy")),
-        E::Unavailable(motivo) => Some(ta(
+/// El texto de `NoJournal::text()` es para el log del operador y va en crudo;
+/// esto es interfaz, y la interfaz de este binario pasa por Fluent.
+fn journal_warning_i18n(why: &norte_core::embedded::NoJournal) -> String {
+    use norte_core::embedded::NoJournal as N;
+    match why {
+        N::Busy => t("msg-journal-busy"),
+        // `detail_for_bar` y no el `Display` crudo: el motivo es el error de
+        // `sqlx`/`JournalError`, que trae párrafos enteros (los `Corrupt`) y
+        // texto derivado de rutas del entorno. La barra de estado tiene un
+        // saneador para exactamente esto y todo lo demás pasa por él.
+        N::Failed(motivo) => ta(
             "msg-journal-unavailable",
-            &[("motivo", &motivo.to_string())],
-        )),
-        // `#[non_exhaustive]`: un estado nuevo no puede quedarse mudo — si
+            &[("motivo", &norte_tui::app::detail_for_bar(motivo))],
+        ),
+        // `#[non_exhaustive]`: un motivo nuevo no puede quedarse mudo — si
         // alguna vez lo hay, que al menos salga el texto del core.
-        otro => otro.warning(),
+        otro => otro.text(),
     }
 }
 
-/// El backend elegido y, si es embebido y no se llevó el journal, la frase que
-/// hay que enseñar por ello (#167).
+/// Elige el transporte (regla 7): `--daemon` o `[daemon] mode = daemon`
+/// conecta al socket (arrancando `norte daemon run` si hace falta);
+/// cualquier otra cosa = embebido (arranque instantáneo, el default).
 async fn make_backend(
     cfg: &config::LoadedConfig,
     cli_daemon: bool,
     cli_socket: Option<std::path::PathBuf>,
-) -> Result<(Backend, Option<String>)> {
+) -> Result<Backend> {
     let want_daemon = cli_daemon || cfg.common.daemon_mode == Some(config::DaemonMode::Daemon);
     if !want_daemon {
         // #167: el transporte embebido registra sus mutaciones (regla dura 4) en
@@ -2134,19 +2136,11 @@ async fn make_backend(
         // otro proceso tiene el lock exclusivo se sigue sin él, avisando — ver
         // `norte_core::embedded`.
         //
-        // El aviso sale por DOS sitios y ninguno sobra. Aquí, pre-ratatui, va a
-        // stderr para quien lea el arranque o un log; y el llamante se lleva la
-        // frase traducida para PINTARLA en la sesión, porque este stderr lo tapa
-        // la pantalla alternativa un segundo después y una sesión entera sin
-        // registro no puede depender de que alguien mirase ese segundo.
-        let journal =
-            norte_core::embedded::EmbeddedJournal::open_in(&norte_core::connect::config_dir())
-                .await;
-        let aviso_journal = journal_warning_i18n(&journal);
-        if let Some(aviso) = journal.warning() {
-            eprintln!("aviso: {aviso}");
-        }
-        let engine = journal.into_engine();
+        // Construirlo NO abre el fichero (#177): un `ntc` que solo navega no le
+        // quita el journal al daemon ni a un `norte audit`. El lock se toma en
+        // la primera mutación, y el aviso —si lo hay— llega por el canal de
+        // `take_journal_warnings`, ya dentro de la sesión.
+        let engine = norte_core::embedded::engine_in(&norte_core::connect::config_dir());
         // #95.2: límites anti-bomba de archives desde `[archive]` (capas de
         // usuario, jamás la de proyecto). Antes de cualquier navegación: los
         // providers compuestos se cachean con los límites de su primer uso.
@@ -2200,7 +2194,7 @@ async fn make_backend(
             Ok(Err(e)) => eprintln!("aviso: [ai] inválido ({e})"),
             Err(e) => eprintln!("aviso: carga de [ai] falló ({e})"),
         }
-        return Ok((Backend::Embedded(Arc::new(engine)), aviso_journal));
+        return Ok(Backend::Embedded(Arc::new(engine)));
     }
     #[cfg(not(unix))]
     {
@@ -2238,7 +2232,7 @@ async fn make_backend(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("no se pudo hablar con el daemon")?;
-        Ok((Backend::Remote(remote), None))
+        Ok(Backend::Remote(remote))
     }
 }
 
@@ -2335,6 +2329,9 @@ async fn run(
     >,
     mut degraded: Option<
         tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>,
+    >,
+    mut journal_warnings: Option<
+        tokio::sync::mpsc::UnboundedReceiver<norte_core::embedded::NoJournal>,
     >,
 ) -> Result<()> {
     let mut events = EventStream::new();
@@ -2645,6 +2642,21 @@ async fn run(
                 // la compone (`App::connection_banner`) y la ayuda puede
                 // preguntar por scheme cuál se degradó.
                 app.note_degraded(d);
+            }
+            Some(why) = async {
+                match &mut journal_warnings {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                // #167/#177: esta sesión acaba de mutar sin quedar registrada.
+                // Uno por sesión (el core decide una vez), así que pisar
+                // `message` aquí no puede convertirse en un goteo. Y como
+                // `message` lo borra la siguiente tecla, el hecho se anota
+                // además en el indicador PERSISTENTE de la barra: esto no es un
+                // aviso que se pueda perder por pulsar una flecha.
+                app.message = Some(journal_warning_i18n(&why));
+                app.note_no_journal(why);
             }
             res = async {
                 match &mut stat_probe {

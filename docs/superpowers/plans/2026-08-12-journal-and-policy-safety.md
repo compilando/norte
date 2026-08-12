@@ -47,6 +47,7 @@ half; Task 2 adds the rustdoc pointer.
 | 2 — a trash that outlives its journal row (#160, sync) | done | 9bd0630 |
 | 3 — the same shape in `fs.delete` (#160, ops) | done | df479a1 |
 | 4 — the embedded engine gets a journal (#167) | done | 2db842c |
+| 4b — and opens it lazily, on the first mutation (#177) | done | SHA-4B |
 | 5 — close the branch | pending | |
 
 ---
@@ -810,6 +811,93 @@ git commit -m "feat(core): the embedded backend journals its mutations"
 - **Deferred with issues:** #177 (open the journal lazily on the first
   mutation, so a browsing TUI stops blocking `daemon run` and `norte audit`)
   and #178 (`Unavailable` degrades to a warning where the daemon fails closed).
+
+---
+
+## Task 4b: And opens it lazily, on the first mutation (#177)
+
+Task 4 opened the journal at START-UP, and SQLite's exclusive lock is held for
+the life of the process. A browsing `ntc` therefore owned `journal.db` from
+login, so `norte daemon run` could not start (nor `norte mcp serve`, which
+autostarts it — the whole governed-agent path), and read-only `norte audit`
+could not read. Both worked before this branch; #177 was filed instead of fixed,
+and this task pays it before the branch ships.
+
+The fix the issue names: open inside the first `MutationObserver::on_mutation`,
+cached in a `OnceCell`. What the issue does not say, and what turned out to be
+the crux: `Engine`'s journal field is not only the observer. `undo_session` and
+the `sync.apply` gate read it to decide whether the engine is journalled AT ALL,
+and both ask before any mutation — a cell living only inside the observer leaves
+them answering "no journal" on an engine that would open one happily.
+
+**How that resolved:** the cell belongs to a `LazyJournal` that is BOTH the
+engine's observer and its journal source (one `Arc`, one cell, so there is no
+way to end up with two handles on one file), and `Engine`'s field became a
+private `enum JournalSource { None, Open(..), Lazy(..) }` read through a new
+`async fn Engine::journal()`. Asking IS opening: the three questions that need
+the chain — journal this mutation, undo this session, apply this sync plan — all
+resolve the same cell on demand, and the two that arrive before any mutation now
+answer the truth instead of a stale "no". `Backend::is_journalled` stays
+synchronous and stays `false` for the embedded arm: it gates SYNCING, which also
+needs a spool that arm never installs, so it never needed the journal's answer.
+
+**What else came out of it:**
+
+- The CLI's `muta_el_arbol` whitelist is gone, and with it the hand-maintained
+  enumeration of "subcommands that mutate" that `norte ai rename` already
+  sidestepped. The definition became the true one: emits a `Mutation`.
+- `ai_cmd` no longer opens a second journal; it calls `Engine::ensure_journal()`
+  right before the confirmation prompt, because "these renames cannot be undone"
+  belongs IN the question, not after the yes.
+- The warning moved from start-up `eprintln!` (painted over by the alternate
+  screen) to a `JournalWarningSink`, delivered to the TUI through
+  `Backend::take_journal_warnings` exactly like `take_degraded`, plus a
+  `tracing::warn!` for the CLI, which is the only one of the two with a
+  subscriber. The sink slot retains a warning raised before a sink exists, so a
+  mutation racing start-up cannot leave the session silently unrecorded — the
+  failure mode #177 calls "worse than today".
+- The pool pinning from task 4 (`min_connections(1)`, no idle timeout, no max
+  lifetime) is untouched and still load-bearing; nothing here reopens a journal,
+  so no `ChainState` can go stale.
+
+**What the reviewers found, and what it changed.** Both cleared the two
+questions the task was dispatched with — a mutation cannot be applied with no
+row *and* no warning (the warning is emitted inside the `OnceCell` initialiser,
+before `on_mutation` returns `Ok`), and two processes cannot both believe they
+own the chain (one cell shared by the observer and the accessor, a decision that
+never flips, and no reopen path). Four MAJORs landed anyway:
+
+- **The CLI's notice was suppressible by `RUST_LOG`** (both reviewers, and the
+  best finding of the round). Moving the warning into `tracing::warn!` quietly
+  handed an operator's `RUST_LOG=error` the power to make `norte mv` mutate a
+  tree, journal nothing, and say nothing. The CLI now installs its own sink that
+  writes to stderr unconditionally, and the core's `warn!` became the branch for
+  processes that install none — so it is still never silent, and never doubled.
+- **In the TUI the notice landed in `app.message`, which the next keypress
+  erases** — 136 sites write that field. It now also sets a PERSISTENT
+  status-bar indicator, alongside #44's degraded-connection banner rather than
+  competing with it (both are session-long security facts; picking one would
+  hide the other for good).
+- **`el_resultado_se_cachea` was a wall-clock flake** — a 200 ms bound over work
+  that includes a scheduler round trip, guarding against a 250 ms wait. Replaced
+  with a deterministic assertion: the journal file is still openable by someone
+  else.
+- **The regression was pinned by a single `stat()`.** The browsing test now
+  covers the read surface a session actually hits before mutating — including
+  `sync_apply` without a spool, where the `spool()`-before-`journal()` ordering
+  is the one line standing between a browsing TUI and #177 coming back — and a
+  new `norte-cli` smoke test proves it at PROCESS level: `norte ls` does not
+  even create `journal.db`, `norte mkdir` does.
+
+Deferred with an issue: **#179**, the retry-after-busy and release-when-idle
+halves of the same problem. The rustdoc that justified never retrying was partly
+wrong and now says so — the `ChainState` hazard applies to reopening a journal
+this process once owned, not to an open that failed — but retrying needs a
+brake, serialised attempts, and a RECOVERY event for the new indicator, which is
+more than a follow-up line. **#178** got a comment instead of a fix: laziness
+raises its severity (a squatter now needs one shot rather than a race per
+victim, and "unrecorded session" became the expected outcome of the very
+configuration #177 enables).
 
 ---
 

@@ -214,6 +214,23 @@ impl crate::connect::ConnectionObserver for ChannelConnectionObserver {
     }
 }
 
+/// Sink de avisos del journal perezoso (#177) que los reenvía por un canal: la
+/// vía para que una TUI embebida pinte EN LA SESIÓN que sus mutaciones no están
+/// quedando registradas.
+///
+/// Gemelo de [`ChannelConnectionObserver`] y por el mismo motivo: el aviso nace
+/// dentro del core, en mitad de una mutación, y el frontend no tiene forma de
+/// preguntárselo a nadie después.
+struct ChannelJournalSink {
+    tx: mpsc::UnboundedSender<crate::embedded::NoJournal>,
+}
+
+impl crate::embedded::JournalWarningSink for ChannelJournalSink {
+    fn on_no_journal(&self, why: &crate::embedded::NoJournal) {
+        let _ = self.tx.send(why.clone());
+    }
+}
+
 /// La «conexión» del brazo EMBEBIDO, para lo que la lleva por llave: hoy solo
 /// el spool de planes de sincronización, que ata cada plan aprobado a la
 /// conexión que lo produjo (ADR 0049).
@@ -251,7 +268,8 @@ pub enum Backend {
 impl Clone for Backend {
     /// Clon BARATO: comparte engine/conexión (Arc interno en ambas variantes).
     /// OJO: los canales one-shot (`take_foreign_tasks`, `take_conn_events`,
-    /// `take_approvals`, `take_degraded`) son del PRIMER dueño — un clon
+    /// `take_approvals`, `take_degraded`, `take_journal_warnings`) son del
+    /// PRIMER dueño — un clon
     /// (p. ej. para scripting Lua, tasks 4-5) no debe llamarlos.
     fn clone(&self) -> Self {
         match self {
@@ -267,8 +285,8 @@ impl Backend {
     /// pueden deshacer?
     ///
     /// Hoy es exactamente «va contra el daemon», y sigue siéndolo DESPUÉS de
-    /// #167 a propósito: el brazo embebido ya abre el journal del directorio de
-    /// estado (`norte_core::embedded`), pero no instala spool, y sin spool
+    /// #167 a propósito: el brazo embebido ya lleva el journal del directorio
+    /// de estado (`norte_core::embedded`), pero no instala spool, y sin spool
     /// [`Self::sync_plan`] se niega en cerrado. Lo que esta pregunta atenúa es
     /// sincronizar, que necesita LOS DOS; decir `true` porque hay journal
     /// enseñaría una tecla que sigue sin poder ejecutar nada.
@@ -1226,6 +1244,38 @@ impl Backend {
             }
             #[cfg(unix)]
             Self::Remote(r) => r.take_degraded(),
+        }
+    }
+
+    /// Receptor del aviso «esta sesión NO queda registrada en el journal»
+    /// (#167/#177). Solo `Embedded` puede quedarse sin journal —el daemon se
+    /// niega a arrancar sin él—, así que en `Remote` es `None`.
+    ///
+    /// Como [`Backend::take_degraded`], en `Embedded` INSTALA el sink en el
+    /// engine en vez de tomar un canal ya hecho. Llamarlo en el arranque, antes
+    /// de la primera mutación; y si una mutación se adelanta igual, el aviso no
+    /// se pierde (el `LazyJournal` lo retiene hasta que hay sink). Como mucho
+    /// llega UN mensaje por sesión.
+    ///
+    /// `None` también si el engine embebido no lleva journal perezoso —uno
+    /// construido con `Engine::new()`, que no journaliza NADA y nunca va a
+    /// avisar de ello—: devolver un canal ahí sería decirle al frontend que
+    /// está cubierto por un aviso que no puede llegar.
+    ///
+    /// UNA sola vez, como sus hermanos: un segundo sink deja mudo al primer
+    /// receptor (ver [`crate::embedded::LazyJournal::set_warning_sink`]).
+    pub fn take_journal_warnings(
+        &mut self,
+    ) -> Option<mpsc::UnboundedReceiver<crate::embedded::NoJournal>> {
+        match self {
+            Self::Embedded(engine) => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                engine
+                    .set_journal_warning_sink(Arc::new(ChannelJournalSink { tx }))
+                    .then_some(rx)
+            }
+            #[cfg(unix)]
+            Self::Remote(_) => None,
         }
     }
 
