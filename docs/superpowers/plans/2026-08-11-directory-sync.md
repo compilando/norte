@@ -34,6 +34,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 8 — `sync.plan` as a task | done | `8174c6d` |
 | 9 — the executor | done | `d749166` (containment) + `26f26d3` (executor) |
 | 10 — `sync.apply`, `sync.report`, the `Backend` | done | `15a36f3` (cross-provider tests) + `40f87d5` |
+| 11 — `revert_sync_batch` | done | `9c3853d` |
 
 **The embedded TUI does not synchronise, and Task 13 says so out loud.**
 `make_backend` builds `Engine::new()` — no journal, no spool — and Task 9 made
@@ -47,11 +48,9 @@ journalled and undoable. Task 14 files the larger question (an embedded
 backend performs mutations no journal records) as its own issue; it predates
 this branch and changes every mutation, not just this one.
 
-**Task 11 is not optional and it must land before this branch merges.**
-`revert_batch` demands every entry of a batch be `rename_back` and answers
-`Blocked` otherwise, and `undo_session` is strict LIFO. So as of Task 9,
-after any `sync.apply`, session undo is dead for that user. Nothing in Tasks
-10, 12 or 13 repairs it.
+**Task 11 landed and session undo works again** (`9c3853d`). What it can and
+cannot give back is below, and Task 12 must read it before writing a word of
+the approval dialog.
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
@@ -1250,6 +1249,112 @@ moves.
      the spool and the journal invites the reader to assume the third leg is
      fail-closed too. Now stated in `sync_apply_as`'s rustdoc; a start-up
      `warn!` would be cheap.
+
+### What Task 11 changed in this plan
+
+**The undo exists, and it says NO more often than the plan's `reversal` column
+does. Task 12's dialog must not promise what it cannot deliver.** Three
+answers, all pinned by end-to-end tests over the REAL executor's entries
+(`engine_sync_apply.rs`, tests 13–19):
+
+1. **A destination with no trash gives back NOTHING — not even the copies.**
+   An `Overwrite` there is `Irreversible` and the plan already says so, but a
+   `Copy`/`CreateDir` carries `StepReversal::Delete` and its undo routes
+   through the trash (#65: without one, deleting "whatever lives at that path
+   today" can destroy work the human did after the sync). So it is skipped and
+   counted in `skipped_created_no_trash`. Task 9's open question 5 is decided
+   this way rather than by making the transducer call a `Copy` irreversible:
+   the step IS reversible where a trash exists, and the plan must not lie in
+   the other direction either. **The dialog says "reversible where the
+   destination has a trash", and the plan carries no `dest_has_trash` on the
+   wire** — `SyncPlanDone` has counts, blockers and `executable`, nothing
+   else. Adding one is free until 0.40.0 ships and is Task 12's call.
+2. **A destination with a NATIVE trash cannot undo an `Overwrite` either**, and
+   this one was a review BLOCKER, not a design choice. `norte-vfs-local`'s
+   `trash()` returns `Ok(None)` — no recoverable destination — so the journal's
+   `trashed` entry has no `reversal_ref` and the undo restores by ORIGINAL
+   PATH, picking the most recent match. By then the most recent match is the
+   file the undo itself just buried when it reverted the `created` half of the
+   pair: it would restore the new file over itself, leave the user's original
+   in the trash, and report success. The pair is now left **intact on both
+   sides** (`ambiguous_restores`), named in the report, and the session blocks
+   there. Empty is worse than unchanged. The real fix is upstream — `trash()`
+   returning the item id — which `norte-vfs-local` already lists as debt;
+   **Task 14 files it**, and it is the one thing that would make "undo a sync"
+   true on plain `file://`.
+3. **What the undo DOES give back, on a logical trash:** the whole batch, in
+   reverse `seq`, including the overwrite pair and the created directories.
+
+**`UndoReport` gained `unreverted_paths` (capped, `UNDO_MAX_UNREVERTED_PATHS =
+64`, wire bytes) and REUSES `skipped_irreversible`** rather than adding the
+`irreversible_skipped` this plan asked for: the field already existed with
+exactly that meaning, and two near-identical names in one report is a bug
+waiting to be written. Both reviewers agreed. **The new list does not reach any
+client**: `PolicyUndoReportResult` carries the counters and not the paths. That
+is deliberate for this task (a proto change with goldens), and whoever puts it
+on the wire must redact the authority first (`span_path`, rule 10).
+
+**Three more defects the reviews found, all fixed here, none of them about the
+step→entry mapping:**
+
+- **A created DIRECTORY was trashed with whatever was inside it.** Reverse
+  `seq` empties it first *when everything goes well*; a file the human dropped
+  in afterwards, or a child whose revert blocked, went to the trash with it and
+  the report named neither. The `delete` reversal now checks the directory has
+  no children (one `list`, first item only) and blocks if it does. This touches
+  the LONE-entry path too — undoing an `fs.copy` of a tree — and is right there
+  for the same reason.
+- **The policy gate merged a unit into its most restrictive op.** A sync unit
+  is a `Move` (restore) and a `Delete` (bury) at once, and `delete`/`move` are
+  independent permissions in `OpSet` and in `policy.toml` — so `delete: allow,
+  move: deny` executed a denied move, and `move: allow, delete: deny` refused
+  the whole unit. `undo_gate_targets` now returns one slice per op class, all
+  evaluated before anything is touched. It also **skips `irreversible`
+  entries**: they never act, and gating them let one `deny` on an overwritten
+  path kill the unit and, by strict LIFO, the rest of the session.
+- **Nothing checked that a unit lives in ONE provider.** `revert_batch` got it
+  free (`inverse_chain` requires a common parent, and a `VPath` parent carries
+  scheme and authority); the new path had only a `debug_assert`. A tampered
+  `batch_id` could hand an `sftp://host-b` path to host-a's provider — the
+  policy evaluating one machine and the effect landing on another. Now a real
+  check over every `path` and `reversal_ref`, which also makes an `Err` from
+  `revert_entry` mean *only* "the compensation did not persist".
+
+**`is_sync_unit` is a POSITIVE shape test** (`op ∈ {created, trashed, removed}`
+and `reversal ∈ {delete, restore_trash, irreversible}`), not "not a rename
+batch". With the negative form, rewriting one column (`reversal`) on a rename
+batch moved it from the path that REFUSES it to one that would trash the
+destination of every rename. A shape this core does not know now falls to
+`revert_batch`, which blocks it.
+
+**Smaller, and worth knowing:** `revert_entry` takes the Task's cancellation
+token now (it was building a fresh one, so a cancelled undo still burned the
+whole retry ladder), and `Cancelled` from the trash is propagated instead of
+being reported as a block — a cancelled Task must not end `Completed` with a
+reason. The fresh `batch_id` on the compensations is an audit GROUPING label
+and nothing more: `revertible_for` filters `undoes_seq IS NULL`, so a
+compensation is never itself revertible, and the earlier claim that this is
+"what lets you undo the undo" was wrong.
+
+**MINORs skipped, with reasons.** (1) No `blocked_entries` counter: only the
+first drifted entry lands in `UndoReport::blocked`, so the path list is not
+partitionable by the counters — the rustdoc now says exactly that instead of
+claiming otherwise, and a fourth counter for a rare case is report surface
+Task 12 would have to render. (2) The gate still parses `unit.len() * 2`
+`VPath`s on the caller's thread before the Task is spawned; for a
+half-million-step sync batch that is real work in `policy.undo_session`, but
+it predates this task and shrinking it means streaming the gate — **Task 14
+should file it**. (3) `trash_retrying` can still return `Err` after its effect
+landed (a transient failure between attempts), leaving a trashed node with no
+entry; pre-existing, and the loop now continues past such a block, so the
+exposure widens slightly — the `error!` log names the buried path and its
+destination, which is what it can do without a journal it does not have.
+
+**For Task 14, an issue to file beyond the ones above:** the undo evaluates
+policy once at planning time, while the forward executor re-consults it per
+step. A scope that expires mid-Task is not noticed by the undo. Harmless today
+(the daemon's only undo entry point executes as `Actor::User`), and it is the
+same shape as the gate-parsing note.
 
 ---
 
