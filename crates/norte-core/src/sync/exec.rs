@@ -271,6 +271,7 @@ enum Applied {
 }
 
 /// Por qué se paró un paso, y si eso para también la Task.
+#[derive(Debug)]
 enum StepError {
     /// El paso no ocurrió. Fila del informe; la Task sigue.
     Failed(Error),
@@ -624,6 +625,31 @@ async fn destroy_tree(
 }
 
 /// Entierra `to` en la papelera y lo journaliza.
+///
+/// # La fila que no llega
+/// Si el journal falla DESPUÉS del entierro, el efecto ocurrió y su registro no
+/// (regla dura 4 rota en vivo — #160). Se compensa: `restore_from` devuelve lo
+/// enterrado a su ruta y el paso muere con el destino intacto. Dos límites, y
+/// los dos van al log:
+///
+/// - `restore_from` puede fallar a su vez, y entonces la línea de log es todo
+///   lo que queda;
+/// - con una papelera que no NOMBRA lo que se lleva (`DestTrash::Opaque`:
+///   macOS, Windows) no hay adónde apuntar y no hay compensación posible.
+///
+/// `restore_from` hereda el contrato no-replace de [`Provider::rename`]: un
+/// provider que lo cumpla al pie de la letra falla con `Conflict` en vez de
+/// pisar algo que haya llegado a `to` en la ventana entre el entierro y la
+/// compensación. `norte-vfs-sftp` documenta esa ventana como TOCTOU (su
+/// `rename` comprueba y renombra, no es atómico) — el mismo riesgo que ya
+/// corre [`crate::undo`] al restaurar un `Trashed` con `reversal_ref`, del
+/// que esto no es más que otro llamador.
+///
+/// **Lo que sigue sin compensarse** es la otra mitad del par de un `Overwrite`:
+/// un `created` que falla DESPUÉS de un `trashed` que sí quedó deja un lote
+/// cuyo undo BLOQUEA. Devolverlo pediría borrar la copia recién puesta Y
+/// desenterrar, o sea dos mutaciones más por el camino en el que el journal ya
+/// no funciona. #160 sigue abierta por esa mitad.
 async fn bury(
     targets: &SyncTargets,
     recorder: &dyn StepJournal,
@@ -636,14 +662,29 @@ async fn bury(
             .await
             .map_err(StepError::from_provider)?;
     if let Err(e) = recorder.trashed(to, buried.as_ref()).await {
+        // Regla dura 4 al revés: el efecto ocurrió y su fila no. Lo único que
+        // deja el árbol como estaba es DESHACERLO aquí, y desde task 11b se
+        // puede: `trash()` devuelve la ruta exacta de lo enterrado y
+        // `restore_from` la devuelve a su sitio.
+        //
+        // Solo cuando la papelera NOMBRA lo que se llevó. Con `DestTrash::Opaque`
+        // (macOS, Windows) no hay a qué apuntar y la línea de log sigue siendo
+        // toda la respuesta.
+        let devuelto = match buried.as_ref() {
+            Some(en) => targets.dest.restore_from(en, to).await,
+            None => Err(Error::Unsupported),
+        };
         // El `reversal_ref` es la ÚNICA pista de dónde fue a parar el fichero, y
         // acaba de no quedar en el journal. Se escribe en el log del operador
         // antes de morir: sin esto, «¿dónde está mi fichero?» no lo contesta
-        // nadie.
+        // nadie. Se dice ADEMÁS si la compensación llegó — un `restore_from` que
+        // también falla deja el fichero enterrado, y eso el operador lo necesita
+        // saber en la misma línea.
         tracing::error!(
             error = %e,
             enterrado = %crate::engine::span_path(to),
             en = buried.as_ref().map(crate::engine::span_path),
+            devuelto = devuelto.is_ok(),
             "sync.apply: se enterró el destino y su entrada de journal NO llegó",
         );
         return Err(StepError::Fatal(e));
@@ -1060,6 +1101,24 @@ mod tests {
         }
     }
 
+    /// Un recorder que falla EXACTAMENTE en `trashed`, que es el arma del #160:
+    /// la papelera se llevó el fichero y la fila no llegó.
+    #[derive(Default)]
+    struct TrashedFalla;
+
+    #[async_trait]
+    impl StepJournal for TrashedFalla {
+        async fn created(&self, _path: &VPath, _reversal: Reversal) -> Result<(), Error> {
+            Ok(())
+        }
+        async fn trashed(&self, _path: &VPath, _dest: Option<&VPath>) -> Result<(), Error> {
+            Err(Error::Io { retryable: false })
+        }
+        async fn removed(&self, _path: &VPath) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
     fn step(kind: SyncStepKind, rel_wire: &str, reversal: Option<StepReversal>) -> SyncStep {
         SyncStep {
             id: 1,
@@ -1351,5 +1410,73 @@ mod tests {
         assert_eq!(failed, 0, "no hay paso al que atribuirlo");
         assert_eq!(read(&mem, "mem:///d/a.txt").await, b"x");
         assert_eq!(recorder.entries.lock().expect("lock").len(), 1);
+    }
+
+    /// #160: si la fila de journal NO llega DESPUÉS de haber enterrado el
+    /// destino, el fichero está movido y sin registrar — regla dura 4 rota en
+    /// vivo. La compensación es sacarlo de la papelera: el paso falla, la Task
+    /// para, y el destino se queda con sus bytes originales.
+    #[tokio::test]
+    async fn un_journal_que_falla_tras_enterrar_devuelve_el_fichero_a_su_sitio() {
+        let mem = Arc::new(MemProvider::new().with_logical_trash());
+        mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        write(&mem, "mem:///d/a.txt", b"viejo").await;
+        let t = targets(&mem);
+
+        let err = super::bury(
+            &t,
+            &TrashedFalla,
+            &vp("mem:///d/a.txt"),
+            1,
+            &ctx(CancellationToken::new()),
+        )
+        .await
+        .expect_err("el journal falló");
+        assert!(
+            matches!(err, StepError::Fatal(Error::Io { .. })),
+            "el fallo de journal para la Task: {err:?}"
+        );
+
+        assert_eq!(
+            read(&mem, "mem:///d/a.txt").await,
+            b"viejo",
+            "el destino volvió de la papelera con sus bytes"
+        );
+    }
+
+    /// #160, el otro brazo: una papelera "vanish" (macOS/Windows, `Opaque`) no
+    /// nombra lo que se llevó — `buried` llega `None` y no hay adónde apuntar
+    /// `restore_from`. La compensación no es posible; lo único que le queda al
+    /// operador es la línea de log, y el fallo de journal se sigue propagando
+    /// para que la Task pare (no se pretende éxito).
+    #[tokio::test]
+    async fn una_papelera_opaca_no_compensa_pero_sigue_fallando_alto() {
+        let mem = Arc::new(MemProvider::new());
+        mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        write(&mem, "mem:///d/a.txt", b"viejo").await;
+        let t = targets(&mem);
+
+        let err = super::bury(
+            &t,
+            &TrashedFalla,
+            &vp("mem:///d/a.txt"),
+            1,
+            &ctx(CancellationToken::new()),
+        )
+        .await
+        .expect_err("el journal falló");
+        assert!(
+            matches!(err, StepError::Fatal(Error::Io { .. })),
+            "el fallo de journal para la Task, igual que con papelera nombrada: {err:?}"
+        );
+
+        assert!(
+            mem.stat(&vp("mem:///d/a.txt")).await.is_err(),
+            "sin `reversal_ref` no hay compensación posible: el fichero sigue \
+             fuera de su sitio, y eso lo dice el log, no un `stat` que vuelva a \
+             encontrarlo"
+        );
     }
 }
