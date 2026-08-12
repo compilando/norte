@@ -75,8 +75,8 @@ pub enum PlanItem {
 /// comprobación ESTRUCTURAL de las dos raíces es del llamante (`sync.plan` la
 /// hace con `Error::OverlappingRoots`) y aquí no se supone hecha: en cuanto una
 /// fila trae una ruta del origen que llega a la raíz del DESTINO —o al revés—
-/// sale un [`SyncBlockerKind::OverlapDetected`](norte_proto::methods::SyncBlockerKind::OverlapDetected)
-/// y ese subárbol entero se poda, sin un solo paso.
+/// sale un [`SyncBlockerKind::OverlapDetected`] y ese subárbol entero se poda,
+/// sin un solo paso.
 ///
 /// Lo que este flujo NO puede ver es que dos [`VPath`] distintos nombren un
 /// mismo árbol (un symlink, una raíz SFTP bajo dos authorities, un archivo

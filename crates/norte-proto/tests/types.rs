@@ -2087,3 +2087,165 @@ fn sync_step_roundtrip_y_omisiones() {
     assert_eq!(s.reason, Some(SyncReason::Unreadable));
     assert!(s.reversal.is_none() && s.size.is_none());
 }
+
+// ---------- SyncCounts::add (0.40.0) ----------
+
+/// Un paso con la clase, el tamaño y la reversa que pida el test.
+fn counted_step(
+    kind: norte_proto::methods::SyncStepKind,
+    size: Option<u64>,
+) -> norte_proto::methods::SyncStep {
+    use norte_proto::methods::{StepReversal, SyncReason, SyncStepKind};
+    let (reversal, reason) = match kind {
+        SyncStepKind::Skip => (None, Some(SyncReason::Unreadable)),
+        _ => (Some(StepReversal::Delete), None),
+    };
+    let mut s = sync_step(kind, reversal, reason);
+    s.size = size;
+    s
+}
+
+#[test]
+fn counts_add_up_per_kind_and_bytes_only_count_what_moves() {
+    use norte_proto::methods::{SyncCounts, SyncStepKind};
+    let mut c = SyncCounts::default();
+    c.add(&counted_step(SyncStepKind::Copy, Some(10)));
+    c.add(&counted_step(SyncStepKind::Overwrite, Some(20)));
+    c.add(&counted_step(SyncStepKind::CreateDir, None));
+    c.add(&counted_step(SyncStepKind::DeleteTree, None));
+    c.add(&counted_step(SyncStepKind::Skip, None));
+    assert_eq!(c.copy, 1);
+    assert_eq!(c.overwrite, 1);
+    assert_eq!(c.create_dir, 1);
+    assert_eq!(c.delete_tree, 1);
+    assert_eq!(c.skip, 1);
+    assert_eq!(c.bytes, 30, "a delete and a skip move no bytes");
+    assert_eq!(
+        c.bytes_unknown, 0,
+        "no las mueve, así que tampoco son bytes que no se sepan"
+    );
+}
+
+/// Un paso que no debería llevar tamaño y lo lleva no contamina el total: el
+/// diálogo enseña bytes que se van a ESCRIBIR, y un borrado no escribe.
+#[test]
+fn a_size_on_a_step_that_moves_nothing_is_ignored_not_added() {
+    use norte_proto::methods::{SyncCounts, SyncStepKind};
+    let mut c = SyncCounts::default();
+    c.add(&counted_step(SyncStepKind::DeleteTree, Some(4096)));
+    c.add(&counted_step(SyncStepKind::Skip, Some(4096)));
+    c.add(&counted_step(SyncStepKind::CreateDir, Some(4096)));
+    assert_eq!((c.bytes, c.bytes_unknown), (0, 0));
+}
+
+#[test]
+fn a_step_with_no_size_is_counted_apart_and_never_as_zero() {
+    // Un huérfano no se hidrata (#157) y `file://` lista sin tamaño, así que
+    // esto es el caso NORMAL y no el raro. Un cero confiado en el diálogo de
+    // aprobación sería mentira.
+    use norte_proto::methods::{SyncCounts, SyncStepKind};
+    let mut c = SyncCounts::default();
+    c.add(&counted_step(SyncStepKind::Copy, Some(10)));
+    c.add(&counted_step(SyncStepKind::Copy, None));
+    c.add(&counted_step(SyncStepKind::Copy, None));
+    assert_eq!(c.bytes, 10);
+    assert_eq!(c.bytes_unknown, 2);
+    assert_eq!(c.copy, 3, "an unmeasured file is still a file to copy");
+}
+
+#[test]
+fn irreversible_steps_are_counted_separately_because_the_dialog_leads_with_them() {
+    use norte_proto::methods::{StepReversal, SyncCounts, SyncReason, SyncStepKind};
+    let mut irreversible = sync_step(
+        SyncStepKind::Overwrite,
+        Some(StepReversal::Irreversible),
+        Some(SyncReason::NoTrashOnTarget),
+    );
+    irreversible.size = Some(5);
+    let mut c = SyncCounts::default();
+    c.add(&irreversible);
+    c.add(&counted_step(SyncStepKind::Copy, Some(5)));
+    assert_eq!(c.irreversible, 1);
+    assert_eq!(c.overwrite, 1);
+    assert_eq!(c.bytes, 10);
+}
+
+/// Un paso de un daemon N+1 no entra en el contador de ninguna clase CONOCIDA
+/// —eso mentiría sobre lo que el plan hace— pero se cuenta igual, porque no
+/// contarlo mentiría sobre cuánto plan hay.
+#[test]
+fn an_unknown_kind_is_counted_as_unknown_and_not_dropped() {
+    use norte_proto::methods::{StepReversal, SyncCounts, SyncReason, SyncStep, SyncStepKind};
+    let s: SyncStep = serde_json::from_value(serde_json::json!({
+        "id": 3, "kind": "teleport", "rel": "a", "size": 99,
+        "criterion": "size", "confidence": "certain",
+        "reversal": "irreversible", "reason": "no_trash_on_target",
+    }))
+    .expect("degrada");
+    assert_eq!(s.kind, SyncStepKind::Unknown);
+    assert_eq!(s.reversal, Some(StepReversal::Irreversible));
+    assert_eq!(s.reason, Some(SyncReason::NoTrashOnTarget));
+    let mut c = SyncCounts::default();
+    c.add(&s);
+    assert_eq!(c.unknown_kind, 1);
+    assert_eq!(c.irreversible, 1, "no saber qué hace no lo hace reversible");
+    assert_eq!(
+        (c.copy, c.overwrite, c.create_dir, c.delete_tree, c.skip),
+        (0, 0, 0, 0, 0)
+    );
+    assert_eq!(
+        (c.bytes, c.bytes_unknown),
+        (0, 0),
+        "no se sabe qué escribe, así que no se le atribuyen bytes"
+    );
+}
+
+/// `exact_bytes` es el `Option<u64>` que `bytes` no es: el total, o nada.
+#[test]
+fn exact_bytes_is_the_total_or_nothing_at_all() {
+    use norte_proto::methods::{SyncCounts, SyncStepKind};
+    let mut c = SyncCounts::default();
+    c.add(&counted_step(SyncStepKind::Copy, Some(10)));
+    assert_eq!(c.exact_bytes(), Some(10));
+    c.add(&counted_step(SyncStepKind::Copy, None));
+    assert_eq!(
+        c.exact_bytes(),
+        None,
+        "con un paso sin medir no hay total exacto que dar"
+    );
+    assert_eq!(c.bytes, 10, "y la cota inferior sigue ahí");
+    assert_eq!(SyncCounts::default().exact_bytes(), Some(0));
+}
+
+/// La invariante que un consumidor puede comprobar antes de fiarse de unos
+/// contadores que no calculó él: solo copiar y sobrescribir mueven bytes.
+#[test]
+fn only_the_two_kinds_that_move_bytes_can_raise_bytes_unknown() {
+    use norte_proto::methods::{SyncCounts, SyncStepKind};
+    let mut c = SyncCounts::default();
+    for kind in [
+        SyncStepKind::CreateDir,
+        SyncStepKind::Copy,
+        SyncStepKind::Overwrite,
+        SyncStepKind::DeleteTree,
+        SyncStepKind::Skip,
+    ] {
+        c.add(&counted_step(kind, None));
+    }
+    assert_eq!(c.bytes_unknown, 2);
+    assert!(c.bytes_unknown <= c.copy + c.overwrite);
+}
+
+/// Sumar no puede matar la Task que está planificando: satura.
+#[test]
+fn the_counters_saturate_instead_of_panicking() {
+    use norte_proto::methods::{SyncCounts, SyncStepKind};
+    let mut c = SyncCounts {
+        bytes: u64::MAX - 1,
+        copy: u64::MAX,
+        ..SyncCounts::default()
+    };
+    c.add(&counted_step(SyncStepKind::Copy, Some(10)));
+    assert_eq!(c.bytes, u64::MAX);
+    assert_eq!(c.copy, u64::MAX);
+}

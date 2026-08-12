@@ -18,6 +18,10 @@ norte-compare.workspace = true
 # El vocabulario del plan (`SyncStep`, `RelPath`, `SyncBlocker`…) vive en el
 # wire: aquí NO se define ni un tipo de protocolo.
 norte-proto.workspace = true
+# El `plan_hash`: sha256 sobre las conclusiones del plan, el MISMO algoritmo y
+# el mismo framing con longitud que el `plan_hash` del lote de renames y que la
+# cadena del journal (ADR 0023). Ya es dependencia de cuatro crates.
+sha2.workspace = true
 # Errores tipados de librería (regla dura 6).
 thiserror.workspace = true
 # `CancellationToken`: el MISMO tipo que el scheduler de norte-core arma para
@@ -34,6 +38,10 @@ bytes.workspace = true
 # mesa construyen sus filas a mano, y el contrato «toda ruta cuelga de su raíz»
 # cruza dos crates, así que ninguna de ellas lo toca.
 norte-testkit.workspace = true
+# Las propiedades del transductor —un árbol idéntico no planifica nada,
+# `Update` no borra jamás, ningún `rel` se escapa de la raíz— sobre árboles
+# que nadie escribió a mano. Ya es dev-dependency de norte-core.
+proptest.workspace = true
 # El trait `Provider` (y su `ByteSink`), para poder sembrar ese árbol. En
 # tiempo de ejecución este crate NO habla con ningún provider — esa es su razón
 # de ser — así que es dev-dependency y no dependencia.

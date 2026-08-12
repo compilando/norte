@@ -2293,8 +2293,13 @@ fn check_methods_sync_notifs(fixtures: &BTreeMap<String, Value>) {
                 overwrite: 3,
                 delete_tree: 1,
                 skip: 2,
+                // No nulo A PROPÓSITO: un cliente N-1 sumando los lotes de un
+                // daemon N+1 es el único que lo llena, y el golden tiene que
+                // enseñar que la clave viaja.
+                unknown_kind: 2,
                 irreversible: 1,
                 bytes: 4096,
+                bytes_unknown: 7,
             },
             blockers: vec![],
             blockers_total: 0,

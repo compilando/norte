@@ -23,17 +23,24 @@
 //! El vocabulario del plan vive en `norte-proto` porque viaja por el wire, y
 //! se reexporta aquí para que quien use el planificador no tenga que depender
 //! del protocolo a mano.
+//!
+//! Junto al transductor va el [`PlanHasher`]: el `plan_hash` que resume lo que
+//! un humano aprueba, calculado en STREAMING sobre el mismo flujo (memoria
+//! O(1), sin juntar el plan). Los CONTADORES viven en `norte-proto`, con el
+//! tipo que viaja: [`SyncCounts::add`].
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod hash;
 pub mod plan;
 
+pub use hash::PlanHasher;
 pub use plan::{PlanItem, plan};
 
 pub use norte_proto::methods::{
-    OnUnknown, RelPath, Side, StepReversal, SyncBlocker, SyncBlockerKind, SyncCounts, SyncMode,
-    SyncReason, SyncStep, SyncStepKind,
+    OnUnknown, PlanHash, RelPath, Side, StepReversal, SyncBlocker, SyncBlockerKind,
+    SyncCompareOptions, SyncCounts, SyncMode, SyncReason, SyncStep, SyncStepKind,
 };
 
 use norte_proto::VPath;
@@ -200,9 +207,8 @@ pub enum SyncError {
     /// quien pidiera un modo nuevo y recibiera una actualización aprobaría un
     /// plan que no hace lo que pidió sin forma de notarlo — el mismo fallo
     /// silencioso que [`SyncError::SourceSideUnknown`] evita. El comodín cae del
-    /// lado de no planificar nada, igual que el de
-    /// [`OnUnknown`](norte_proto::methods::OnUnknown) cae del lado de no
-    /// escribir.
+    /// lado de no planificar nada, igual que el de [`OnUnknown`] cae del lado
+    /// de no escribir.
     #[error("este planificador no sabe planificar el modo {0:?}")]
     ModeNotPlanned(SyncMode),
     /// El flujo de filas terminó con un fallo de la comparación que no es su

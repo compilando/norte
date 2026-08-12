@@ -935,8 +935,10 @@
       "overwrite": 3,
       "delete_tree": 1,
       "skip": 2,
+      "unknown_kind": 2,
       "irreversible": 1,
-      "bytes": 4096
+      "bytes": 4096,
+      "bytes_unknown": 7
     },
     "blockers": [],
     "blockers_total": 0,
@@ -951,8 +953,10 @@
       "overwrite": 0,
       "delete_tree": 0,
       "skip": 0,
+      "unknown_kind": 0,
       "irreversible": 0,
-      "bytes": 10
+      "bytes": 10,
+      "bytes_unknown": 0
     },
     "blockers": [
       {

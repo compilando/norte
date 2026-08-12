@@ -1543,6 +1543,34 @@ impl PlanHash {
         Ok(Self(hex.to_owned()))
     }
 
+    /// Desde el digest CRUDO de un sha256: la forma hex minúscula, sin poder
+    /// equivocarse.
+    ///
+    /// Es el camino de quien PRODUCE un hash, y existe para que no haya un
+    /// codificador hex por crate: cada copia es una ocasión de escribir
+    /// mayúsculas —el detalle que hace que dos escrituras del mismo hash
+    /// comparen distinto— y obliga además a un `expect` sobre
+    /// [`PlanHash::parse`] que aquí no hace falta, porque 32 bytes no pueden
+    /// dar otra cosa que 64 caracteres de `0`-`9` y `a`-`f`.
+    /// [`PlanHash::parse`] sigue siendo el camino de quien lo RECIBE.
+    ///
+    /// ```
+    /// use norte_proto::methods::PlanHash;
+    /// let h = PlanHash::from_digest(&[0xab; 32]);
+    /// assert_eq!(h.as_str(), "ab".repeat(32));
+    /// assert_eq!(h, PlanHash::parse(&"ab".repeat(32)).expect("hex"));
+    /// ```
+    #[must_use]
+    pub fn from_digest(digest: &[u8; 32]) -> Self {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut hex = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            hex.push(char::from(HEX[usize::from(byte >> 4)]));
+            hex.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        Self(hex)
+    }
+
     /// La forma hex, tal cual viaja.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -3343,9 +3371,9 @@ pub enum SyncBlockerKind {
     /// device, un socket o un `EntryKind::Other` cualquiera— es sustituir bytes,
     /// y es exactamente lo que el paso significa. Un directorio no: un
     /// `Overwrite` dice normativamente «a la papelera y copiar bytes», el paso no
-    /// lleva [`EntryKind`](crate::EntryKind) con el que distinguirlo, y el
-    /// subárbol implicado ni siquiera está en el plan —el walk no desciende un
-    /// par que no es de dos directorios—. Así que lo decide un humano.
+    /// lleva [`EntryKind`] con el que distinguirlo, y el subárbol implicado ni
+    /// siquiera está en el plan —el walk no desciende un par que no es de dos
+    /// directorios—. Así que lo decide un humano.
     ///
     /// [`SyncBlocker::side`] nombra el lado que tiene el DIRECTORIO (convenio de
     /// plan: [`Side::Left`] el origen, [`Side::Right`] el destino) y va SIEMPRE
@@ -3483,11 +3511,16 @@ pub struct SyncStep {
     /// Bytes que MUEVE este paso, cuando se saben; un provider que no da tamaño
     /// deja `None`.
     ///
-    /// Un [`SyncStepKind::DeleteTree`] y un [`SyncStepKind::Skip`] no mueven
-    /// ninguno y la dejan AUSENTE. No es cosmético:
-    /// [`SyncCounts::bytes`] es la suma de este campo, así que un tamaño en un
-    /// paso que no escribe es un byte contado que nunca se movió, y el diálogo
-    /// de aprobación enseña ese número.
+    /// Un [`SyncStepKind::DeleteTree`], un [`SyncStepKind::CreateDir`] y un
+    /// [`SyncStepKind::Skip`] no mueven ninguno y la dejan AUSENTE.
+    ///
+    /// La regla es NORMATIVA aunque casi nada la haga cumplir:
+    /// [`SyncCounts::add`] IGNORA el tamaño de un paso que no mueve bytes —así
+    /// que un tamaño de más no corrompe el número que el humano aprueba— y
+    /// [`SyncStep::shape_is_consistent`] tampoco lo mira. Lo que sí lo nota es
+    /// el `plan_hash`, que alimenta el campo pase lo que pase: dos planes que
+    /// solo difieran en un tamaño puesto donde no toca son dos planes
+    /// distintos, y hacen falta dos aprobaciones.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
     /// Qué rung de la cascada decidió la fila de la que sale este paso.
@@ -3613,10 +3646,15 @@ pub struct SyncStepsBatch {
 /// A cuánto suma un plan (0.40.0, ADR 0049). El diálogo de aprobación abre por
 /// `irreversible`.
 ///
+/// Se llena paso a paso con [`SyncCounts::add`], que es donde están escritas
+/// —una vez— las reglas de qué cuenta dónde.
+///
 /// ```
 /// use norte_proto::methods::SyncCounts;
 /// let c = SyncCounts { copy: 2, bytes: 30, ..SyncCounts::default() };
 /// assert_eq!(serde_json::to_value(&c).expect("json")["delete_tree"], 0);
+/// // El total de bytes viene SIEMPRE acompañado de cuántos pasos no lo saben.
+/// assert_eq!(serde_json::to_value(&c).expect("json")["bytes_unknown"], 0);
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -3631,11 +3669,162 @@ pub struct SyncCounts {
     pub delete_tree: u64,
     /// Pasos que no tocan nada y dicen por qué.
     pub skip: u64,
+    /// Pasos de una clase que este decodificador NO conoce
+    /// ([`SyncStepKind::Unknown`]): un daemon una versión por delante emitió
+    /// algo que este cliente no sabe clasificar.
+    ///
+    /// El core lo deja SIEMPRE en cero — jamás emite un paso que no sepa
+    /// nombrar—, así que solo se llena en un cliente N-1 que sume por su cuenta
+    /// los lotes de [`SYNC_STEPS`]. Existe por lo mismo que `bytes_unknown`: sin
+    /// él, esos pasos no aparecerían en NINGÚN contador y la suma de las cinco
+    /// clases diría que el plan es más pequeño de lo que es, que es aprobar a
+    /// ciegas un trozo del plan.
+    pub unknown_kind: u64,
     /// Pasos cuya reversa es [`StepReversal::Irreversible`]. Se cuenta APARTE
     /// porque es el único número que un humano no debe tener que derivar.
+    ///
+    /// Es TRANSVERSAL a las clases —un `Overwrite`, un `DeleteTree` y un paso
+    /// de clase desconocida que se declare irreversible suman aquí—, así que no
+    /// se suma con los contadores de clase: se lee al lado de ellos.
     pub irreversible: u64,
-    /// Bytes que mueve el plan. Un borrado y un `Skip` no mueven ninguno.
+    /// Bytes que mueve el plan, de los pasos que MUEVEN bytes y traen tamaño.
+    /// Un borrado y un `Skip` no mueven ninguno.
+    ///
+    /// Se lee SIEMPRE junto a `bytes_unknown`: por sí solo es una cota
+    /// inferior, no un total — [`SyncCounts::exact_bytes`] es el total o nada.
+    /// La suma satura en `u64::MAX`, así que un valor exactamente igual a
+    /// `u64::MAX` puede ser un tope y no una medida.
+    ///
+    /// NO es lo mismo que [`SyncReportResult::bytes`], que son los bytes
+    /// EFECTIVAMENTE movidos al ejecutar: sobre `file://` los dos números
+    /// difieren de serie, así que este no sirve de denominador de una barra de
+    /// progreso.
     pub bytes: u64,
+    /// Cuántos pasos mueven bytes SIN que se sepa cuántos
+    /// ([`SyncStep::size`] ausente).
+    ///
+    /// No es un caso raro: un huérfano no se hidrata
+    /// (<https://github.com/compilando/norte/issues/157>) y `norte-vfs-local`
+    /// lista con `size: None`, así que sobre `file://` es el caso NORMAL. Sin
+    /// este campo, `bytes` valdría cero y el diálogo de aprobación diría con
+    /// toda confianza que un plan de 40 GB no mueve nada.
+    ///
+    /// Contarlos aparte es la regla que ADR 0048 ya fijó para esta familia: «el
+    /// provider no lo puede decir» es una respuesta, no un error, y no se
+    /// esconde dentro de un número que parece cierto. El diálogo lee «1,2 GB +
+    /// 340 ficheros de tamaño desconocido». Hidratar los tamaños es una
+    /// optimización posterior (issue #156) que solo puede ENCOGER este número,
+    /// nunca cambiar la forma.
+    ///
+    /// Son PASOS, no bytes, pese al prefijo: solo [`SyncStepKind::Copy`] y
+    /// [`SyncStepKind::Overwrite`] lo incrementan, así que
+    /// `bytes_unknown <= copy + overwrite` siempre, y un consumidor puede
+    /// comprobarlo antes de fiarse de unos contadores que no calculó él.
+    pub bytes_unknown: u64,
+}
+
+impl SyncCounts {
+    /// Suma UN paso. Las reglas de qué cuenta dónde, escritas una vez.
+    ///
+    /// - Cada clase suma en su contador, [`SyncStepKind::Unknown`] incluida
+    ///   (`unknown_kind`): meterla en el contador de otra mentiría sobre lo que
+    ///   el plan hace, pero no contarla en ninguno mentiría sobre CUÁNTO plan
+    ///   hay. El `match` es EXHAUSTIVO a propósito —dentro del crate que define
+    ///   el enum, `#[non_exhaustive]` no aplica— para que una clase nueva rompa
+    ///   la compilación aquí en vez de dejar de contarse en silencio.
+    /// - `irreversible` suma para CUALQUIER clase cuya reversa sea
+    ///   [`StepReversal::Irreversible`], la desconocida incluida: es el número
+    ///   que un humano no debe tener que derivar, y no saber qué clase de paso
+    ///   es no lo hace menos irreversible.
+    /// - Solo [`SyncStepKind::Copy`] y [`SyncStepKind::Overwrite`] mueven
+    ///   bytes. Un `CreateDir` no escribe contenido, y un `DeleteTree` y un
+    ///   `Skip` no escriben nada — un tamaño en cualquiera de ellos se IGNORA
+    ///   en vez de sumarse, porque un byte contado que nunca se mueve es el
+    ///   diálogo de aprobación mintiendo.
+    /// - De los que sí mueven, el que trae tamaño suma en `bytes` y el que no
+    ///   suma UNO en `bytes_unknown`. Jamás un cero fingido.
+    ///
+    /// Las sumas son saturantes: un contador desbordado es un número raro, pero
+    /// un pánico en el camino de un plan de medio millón de pasos es una Task
+    /// muerta.
+    ///
+    /// ```
+    /// use norte_proto::methods::{
+    ///     CompareConfidence, CompareCriterion, RelPath, StepReversal, SyncCounts, SyncStep,
+    ///     SyncStepKind,
+    /// };
+    /// let paso = |kind, size| SyncStep {
+    ///     id: 1,
+    ///     kind,
+    ///     rel: RelPath::parse_wire("a").expect("rel"),
+    ///     dest_rel: None,
+    ///     size,
+    ///     criterion: CompareCriterion::Presence,
+    ///     confidence: CompareConfidence::Certain,
+    ///     reversal: Some(StepReversal::Delete),
+    ///     reason: None,
+    /// };
+    /// let mut c = SyncCounts::default();
+    /// c.add(&paso(SyncStepKind::Copy, Some(10)));
+    /// c.add(&paso(SyncStepKind::Copy, None));
+    /// assert_eq!((c.copy, c.bytes, c.bytes_unknown), (2, 10, 1));
+    /// // Y con un paso sin medir, el total EXACTO no existe.
+    /// assert_eq!(c.exact_bytes(), None);
+    /// ```
+    pub fn add(&mut self, step: &SyncStep) {
+        // EXHAUSTIVO, sin comodín: `#[non_exhaustive]` no aplica dentro del
+        // crate que define el enum, así que una clase nueva rompe aquí la
+        // compilación en vez de dejar de contarse sin que nadie se entere. Los
+        // bytes se deciden en el MISMO `match` por lo mismo: quien añada una
+        // clase que escribe contenido tiene que decir a la vez si suma bytes.
+        match step.kind {
+            SyncStepKind::CreateDir => self.create_dir = self.create_dir.saturating_add(1),
+            SyncStepKind::Copy => {
+                self.copy = self.copy.saturating_add(1);
+                self.add_bytes(step.size);
+            }
+            SyncStepKind::Overwrite => {
+                self.overwrite = self.overwrite.saturating_add(1);
+                self.add_bytes(step.size);
+            }
+            SyncStepKind::DeleteTree => self.delete_tree = self.delete_tree.saturating_add(1),
+            SyncStepKind::Skip => self.skip = self.skip.saturating_add(1),
+            SyncStepKind::Unknown => self.unknown_kind = self.unknown_kind.saturating_add(1),
+        }
+        if step.reversal == Some(StepReversal::Irreversible) {
+            self.irreversible = self.irreversible.saturating_add(1);
+        }
+    }
+
+    /// Los bytes de un paso que SÍ mueve bytes: sumados si se saben, contados
+    /// aparte si no.
+    fn add_bytes(&mut self, size: Option<u64>) {
+        match size {
+            Some(bytes) => self.bytes = self.bytes.saturating_add(bytes),
+            None => self.bytes_unknown = self.bytes_unknown.saturating_add(1),
+        }
+    }
+
+    /// El total EXACTO de bytes, o `None` si algún paso no se pudo medir.
+    ///
+    /// Es el `Option<u64>` que `bytes` deliberadamente NO es. Los dos campos
+    /// viajan por el wire porque una cota inferior más el tamaño de la
+    /// ignorancia («1,2 GB + 340 ficheros sin medir») es una frase que se puede
+    /// enseñar, y un `None` no lo es — sobre `file://` sería además el caso
+    /// normal, así que el diálogo no tendría nunca nada que decir. Quien de
+    /// verdad necesite el total o nada, lo pide aquí y no vuelve a derivarlo.
+    ///
+    /// ```
+    /// use norte_proto::methods::SyncCounts;
+    /// let exacto = SyncCounts { copy: 1, bytes: 10, ..SyncCounts::default() };
+    /// assert_eq!(exacto.exact_bytes(), Some(10));
+    /// let a_medias = SyncCounts { bytes_unknown: 1, ..exacto };
+    /// assert_eq!(a_medias.exact_bytes(), None, "un paso sin medir no es cero");
+    /// ```
+    #[must_use]
+    pub fn exact_bytes(&self) -> Option<u64> {
+        (self.bytes_unknown == 0).then_some(self.bytes)
+    }
 }
 
 /// Por qué un plan no se puede ejecutar, con su sitio (0.40.0, ADR 0049).
@@ -3891,6 +4080,12 @@ pub struct SyncPlanDone {
     /// una cadena de otra forma muere en la deserialización.
     pub plan_hash: PlanHash,
     /// A cuánto suma el plan, por clase de paso.
+    ///
+    /// `counts.bytes` es una COTA INFERIOR, no un total: los pasos cuyo tamaño
+    /// el provider no dio se cuentan en `counts.bytes_unknown` en vez de sumar
+    /// cero (ver [`SyncCounts`], y [`SyncCounts::exact_bytes`] para el total o
+    /// nada). Un diálogo que enseñe `bytes` a secas miente sobre casi cualquier
+    /// plan de `file://`.
     pub counts: SyncCounts,
     /// Los bloqueos, recortados a [`SYNC_MAX_BLOCKERS_REPORTED`]. Es la
     /// EXPLICACIÓN, no el veredicto: quien decide es `executable`.
@@ -4009,6 +4204,11 @@ pub struct SyncReportResult {
     /// cancelación dejó sin intentar.
     pub skipped: u64,
     /// Bytes efectivamente movidos.
+    ///
+    /// Este sí es exacto: son bytes escritos, contados al escribirlos. No tiene
+    /// por qué cuadrar con [`SyncCounts::bytes`] del plan, que es una cota
+    /// inferior porque el listado no siempre da tamaños — sobre `file://` no los
+    /// da casi nunca.
     pub bytes: u64,
     /// Los fallos, recortados a [`SYNC_MAX_FAILURES_REPORTED`]; `failed` no se
     /// recorta.

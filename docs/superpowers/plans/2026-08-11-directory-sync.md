@@ -29,6 +29,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 3 — `norte-sync` + the Update transducer | done | `aa2242c` |
 | 4 — reversal, `on_unknown`, the `Skip` reasons, `dest_rel` | done | `02f95cd` |
 | 5 — `Mirror`, `Ambiguous`, blockers, the overlap guard | done | `fb7a37a` |
+| 6 — the streaming `plan_hash` and the counters | done | `PENDING` |
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
@@ -397,6 +398,121 @@ child-immediately-after-parent.
   change of their own — every `hostile_names().len() == 47` assertion in the
   workspace moves with it — and Task 4 deferred them for the same reason. The
   non-UTF-8-leaf-under-a-folded-folder case IS covered, in `plan.rs`.
+
+### What Task 6 changed in this plan
+
+- **`PlanHasher::new` takes TWO arguments, not one.** The task's own constraint
+  says the seed carries "the compare options", and those are NOT in
+  `SyncOptions` — the transducer does not compare, so it never needed them. The
+  signature is `PlanHasher::new(&SyncOptions, &SyncCompareOptions)`; every test
+  snippet in step 1 that reads `PlanHasher::new(&opts_update())` gains the
+  second argument. **Task 7 and Task 8 must therefore retain the
+  `SyncCompareOptions` alongside the plan**, or hash while planning and store
+  only the digest: a plan run with `hash` on is not the same plan as one run on
+  sizes alone, even when the steps come out identical.
+- **The counters live in `norte-proto` and so do their tests.** `SyncCounts` is
+  on the wire, so `add` went next to the type (`methods.rs`) and its five tests
+  next to the other sync invariants (`norte-proto/tests/types.rs`), not in
+  `hash.rs` as the plan's step 1 grouped them.
+- **`SyncCounts::add`'s rules, decided here.** Only `Copy` and `Overwrite` move
+  bytes: a `size` on a `DeleteTree`, a `Skip` or a `CreateDir` is IGNORED rather
+  than summed, because the dialog's number is bytes that will be WRITTEN.
+  `SyncStepKind::Unknown` counts in no per-kind counter (there is none that is
+  its) but DOES count as `irreversible` when it says it is — not knowing what a
+  step does makes it less countable, not less final. All the arithmetic
+  saturates: a weird number beats a dead Task.
+- **Enum tokens are hashed by their serde name, with a fallback that is still a
+  NAME.** A variant this binary does not know falls to `format!("?{value:?}")`
+  — the Debug name behind a `?`, which no snake_case serde name can start with —
+  so two future variants cannot collapse onto each other or onto a known one.
+- **`PlanHasher` destructures everything it hashes** (`SyncOptions`,
+  `SyncCompareOptions`, `CompareCriteria`, `SyncStep`, `SyncBlocker`). A field
+  added to any of them stops the build here instead of quietly leaving the
+  digest. If one of those types ever becomes `#[non_exhaustive]`, this is the
+  file that breaks, and the fix is to feed the new field, not to loosen the
+  pattern.
+- **The framing helpers are DUPLICATED from `norte_core::hashing`** (`feed`,
+  `feed_opt`, `hex_lower`), which is `pub(crate)` and lives in a crate that
+  depends on this one, not the other way round. ~20 lines, deliberate. Task 14
+  should decide whether they move to a shared crate; until then the two copies
+  must stay byte-identical in behaviour — `norte-core`'s copy is also the
+  journal's tamper-evident chain and cannot change at all.
+- **Not a persisted format.** The digest identifies a plan retained in the spool
+  for `SYNC_PLAN_TTL_MS`, produced and consumed by the same binary inside that
+  window, so there is no frozen-vector test like the journal's: changing the
+  framing invalidates in-flight plans and nothing on disk. Task 7 should not add
+  a compatibility promise the TTL does not need.
+- **`just c` does not cover rustdoc.** Task 5 left three
+  `rustdoc::redundant_explicit_links` errors on the branch — two in `norte-sync`,
+  one in `norte-proto` — that clippy is blind to and that would have turned this
+  task's single `ci-fast` run red for reasons unrelated to it. Fixed here. Any
+  task that writes rustdoc between two `ci-fast` runs should spend the ~10s of
+  `RUSTDOCFLAGS="-D warnings" cargo doc -p <crate> --no-deps` rather than
+  discover it four minutes into the gate.
+- **`SyncCounts` gained a SECOND new counter, `unknown_kind`.** `protocol-guardian`
+  found the hole: a step of a kind this decoder does not know counted in no
+  counter at all, so a client at version N summing a daemon N+1's batches would
+  under-report the size of the plan it is approving — the same lie
+  `bytes_unknown` exists to prevent, one field over. The core never emits it
+  (its own `match` is exhaustive), so it is zero in every plan this binary
+  produces. Free now, a compatibility argument after 0.40.0 ships.
+  `SyncCounts::exact_bytes()` also landed: the `Option<u64>` that `bytes`
+  deliberately is not, for a caller that wants the total or nothing.
+- **`PlanHash::from_digest(&[u8; 32])` is new in `norte-proto`**, and the hex
+  encoder plus the `expect` it forced are gone from `norte-sync`. A second hex
+  encoder is a second chance to write uppercase, which is the detail that makes
+  two spellings of one hash compare differently. **`norte-core` still has its
+  own** (`hashing::hex_lower`, shared with the journal and the audit export);
+  moving it is Task 14's call, not a silent edit of ADR 0023's neighbourhood.
+- **The name `bytes_unknown` was challenged by BOTH reviewers and kept.** On the
+  wire it reads as "7 bytes we do not know" rather than "7 steps we could not
+  measure" (`unmeasured_steps` was the proposal). Kept because the plan records
+  the name under "What Task 2 changed", Task 12's dialog text is written around
+  it, and the unit is stated in the field doc, in the schema description and now
+  in the invariant `bytes_unknown <= copy + overwrite`. **The window is still
+  open** — 0.40.0 does not ship until this branch merges — so it is a one-line
+  rename plus goldens if the controller prefers the clearer name. This is the
+  one MAJOR of the two reviews that was not applied.
+- **`rel_never_escapes` is stronger than the plan wrote it.** `VPath` has no
+  `join_rel` and no `starts_with`, and the property as drafted was a tautology
+  anyway (joining a `RelPath` onto a root cannot leave it — `Segment` forbids
+  `..` at the type level). What the proptest asserts instead is that **the plan
+  never invents a path**: pasted onto one of the two roots, every step's `rel` is
+  a path that some input row actually carried, and no acting step names a root.
+  `dest_rel` is deliberately exempt — when it is composed from a remembered
+  folder spelling (#152) it names a destination path that no row carried, which
+  is precisely its job.
+- **The proptest corpus now twins spellings WITHIN a row, not just between
+  rows.** `rust-reviewer`'s sharpest finding: the first version built both sides
+  of every row from the same segments, so `dest_rel` was always `None` and the
+  entire #152 machinery — `dest_rel_of`, `remember_spelling`,
+  `spelt_at_the_destination` — had zero property coverage. There is now a twin
+  table (`café` NFC↔NFD, `README`↔`readme`) and two properties over it: a paired
+  step's target is byte-for-byte the destination entry that EXISTS, and a child
+  of a folded folder lands inside it. The scenario strategy also varies
+  `on_unknown`, `source_side`, the trash and the writability, which the first
+  version pinned.
+- **Three things Task 7/8 should know, from the reviews.**
+  1. `PlanHasher` must be fed the item sequence that becomes `SyncPlanDone` —
+     i.e. AFTER `include` filtering. Hashing the unfiltered stream and showing
+     the filtered plan mints a token for a plan nobody approved, and no type
+     catches it. Stated normatively in `hash.rs`'s module doc.
+  2. `finish()` is called only on a stream that ended `None`. A cancelled plan's
+     partial digest is indistinguishable from a shorter complete one; the
+     protection is that `SyncPlanDone` is never emitted, so the spool never
+     stores it.
+  3. The spool's stored `SyncCounts` has **no serde default** for the two new
+     counters, deliberately: a spool file written by an older binary fails to
+     deserialise instead of silently reading zero. That failure must surface as
+     a stale-plan answer, not a dead task.
+- **A known, harmless hash collision, documented rather than fixed.** A `Skip`
+  from an unreadable listing on the SOURCE and one on the DESTINATION, at the
+  same name, are byte-identical steps (`rel` is measured against the root of the
+  side the step speaks about, and `SyncStep` carries no side). Same for an
+  overlap blocker reached from either side. Neither shape writes anything, so no
+  two plans that WRITE differently can share a digest — the loss is a reading
+  distinction, and closing it would cost the wire field the design already
+  refused.
 
 ---
 
