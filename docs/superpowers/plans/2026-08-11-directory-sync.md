@@ -32,6 +32,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 6 — the streaming `plan_hash` and the counters | done | `19b7408` |
 | 7 — the spool | done | `ca9f791` (rename) + `0969203` (spool) |
 | 8 — `sync.plan` as a task | done | `8174c6d` |
+| 9 — the executor | done | `d749166` (containment) + `26f26d3` (executor) |
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
@@ -903,6 +904,229 @@ wire, and that is where the design met its first adversary.
   the embedded arm has no actor to gate on: today it is fail-closed only because
   the CLI never calls `set_spool`, and whoever adds `Backend::sync_plan` must not
   quietly change that.
+
+### What Task 9 changed in this plan
+
+**The spec's revalidation was not implementable, and that is the finding of this
+task.** «Before an `Overwrite` or a `DeleteTree`, one `stat`: does the
+destination still look the way the plan recorded it — same size, same mtime?»
+The plan records nothing of the sort. `SyncStep` carries `id`, `kind`, `rel`,
+`dest_rel`, `size`, `criterion`, `confidence`, `reversal` and `reason`, and
+`size` is normatively **the bytes the step MOVES**, i.e. the SOURCE's — Task 3
+put it there and Task 6's `SyncCounts::add` depends on it. There is no field
+that describes the destination's prior state, so a `stat` at apply time has
+nothing to compare against and the whole «the only thing standing between the
+TTL and a lost file» sentence was decorative.
+
+The fix is a **witness that travels in the spool and not on the wire**:
+
+- `norte_sync::DestWitness { kind, size, mtime_ms }`, taken from the
+  destination `Entry` the row already carried.
+- `PlanItem::Step` becomes a struct variant, `{ step, dest }`. The transducer
+  populates `dest` for **`Overwrite` and `DeleteTree` only** — the two kinds
+  that destroy; a witness per step in a half-million-step plan is spool nobody
+  reads.
+- `PlanHasher` explicitly does **not** feed it (destructured with `dest: _` and
+  a comment). It is where the conclusion came FROM, not the conclusion; feeding
+  it would make two plans over an untouched tree differ because a mtime moved,
+  and would have moved the golden for nothing.
+- The spool record is `SpoolStep { step, dest }`, `SPOOL_FORMAT` goes to 2.
+  Nothing on the wire changed, nothing is persisted across binaries, and an old
+  spool fails to deserialise → `Malformed` → `PlanStale`, which is Task 7's
+  rule already.
+
+**What the witness can and cannot do, stated rather than promised.** A provider
+that lists without size or mtime — `file://` is one — leaves both `None`, and
+the revalidation degrades to «still exists, still the same kind». Only fields
+present on BOTH sides are compared, because declaring a conflict on a `None`
+would refuse every plan on the most common filesystem. The `Overwrite` case is
+covered in practice: a PAIRED row is hydrated (the cascade needs size and mtime
+to decide). A one-second mtime resolution leaves a one-second window in which a
+same-size change goes unseen.
+
+**Two more deviations from the task text, both deliberate.**
+
+1. **`ResumePolicy::Off`, so a cancelled copy leaves the destination CLEAN**
+   rather than a `.norte-partial`. The task's test
+   (`cancelling_mid_copy_leaves_a_marked_partial_never_a_bare_one`) asserts the
+   partial exists; the domain rule in `CLAUDE.md` allows either («a clean
+   destination or a `.norte-partial`, never an unmarked partial»). A partial
+   left in the destination tree is an orphan to the NEXT comparison, and under
+   `Mirror` that orphan is a `DeleteTree` — the feature would litter its own
+   input. Resuming a large sync is a later addition; littering is not.
+2. **A non-executable plan is `Error::PlanNotExecutable`, not
+   `Error::InvalidParams`.** The category already exists, `rename_batch` already
+   uses it for exactly this, and `InvalidParams` would have said the request was
+   malformed when it was the plan that was blocked.
+
+**`sync.apply` REQUIRES a journal** (`Error::Unsupported` without one),
+fail-closed like the spool. The rename batch tolerates a journal-less engine
+because a rename is reversible by inspection; this writes, buries and destroys,
+and every step of the plan carries a `StepReversal` that only the journal can
+honour. There is therefore no `ObserverJournal` arm here.
+
+**The `Overwrite` without a trash journals ONE entry, `created`/`Irreversible`,
+and the removal gets none of its own.** The spec's table says so and the reason
+is worth keeping: with two entries (`removed`/irreversible + `created`/delete) a
+batch undo would delete the new file and be unable to restore the old one,
+leaving the path EMPTY where the user had something — worse than the state it
+came to fix. The trashless `DeleteTree` follows the same shape: one `removed`
+entry for the whole tree, mirroring the trash case's one `trashed`.
+
+- **The gate runs over the roots read from the spool, and gates the ROOTS.**
+  `PolicyOp::Copy` over both, plus `Mkdir` and `Delete{mode}` over the
+  destination when the plan's counters say the plan does those things — the mode
+  being the one that will really be used. Per-STEP gating was considered and
+  refused: it is the same coverage `Engine::copy_with_as` gives a recursive copy
+  today, and a per-step gate would put an `ask` per step in front of a
+  half-million-step plan. The residual is a `policy.toml` deny rule on a path
+  INSIDE the tree, which this does not see — pre-existing and shared with
+  `fs.copy`.
+- **`Spool::remove` runs at every terminal state**, inside the task body, plus
+  on every early refusal after `open` took the claim (the refusal path is split
+  into `sync_apply_opened` precisely so no `?` can forget it). A test pins that
+  a refused plan can be re-planned with the same digest.
+- **`steps()` failing mid-stream is NOT a step failure.** No row is written to
+  the report — there is no step to attribute it to, and what came after is
+  unknown — the task fails, and what was applied stays journalled under the
+  closed batch. Pinned by
+  `un_plan_que_deja_de_leerse_a_mitad_para_la_task_sin_anotar_fila`.
+- **A `CreateDir` whose destination already exists is a `Conflict`, not a
+  silent success.** Adopting a directory somebody else made would put a
+  `created` entry on it, and undo routes `Created` through the trash — so the
+  undo would bury a stranger's directory with its contents. Failing the step
+  costs a report row and the copies into that directory still work.
+- **`SyncFailureCause::IllegalName` is in.** `Error::InvalidPath` from the write
+  path maps to it. Goldens and `docs/schema/proto.schema.json` regenerated; no
+  version bump (0.40.0 is unreleased on this branch and the enum is
+  daemon→client with `#[serde(other)]`).
+- **For Task 10.** `Engine::sync_apply_as(&PlanHash, conn_id, actor)` returns
+  `(TaskHandle, Arc<Mutex<SyncReportResult>>)` — the report is the WIRE type, not
+  a core-private twin, so `sync.report` returns a clone of it and translates
+  nothing. `handle_sync_apply` must own the `task_id → report` map the way
+  `fs.rename_batch_report` does, and mirror its ownership check. The refusals it
+  has to repeat up front are the ones `sync_apply_as` already makes
+  (`Unsupported`, `PlanStale`, `PlanNotExecutable`, `PolicyDenied`) — the engine
+  makes them itself because the EMBEDDED arm never passes through the daemon.
+- **For Task 11.** Every entry of a sync batch is `created` (reversal `delete` or
+  `irreversible`), `trashed` (`restore_trash`, with `reversal_ref` when the
+  trash is logical) or `removed` (`irreversible`). No `renamed`. `undo_units`
+  groups by `batch_id` unchanged, and reverse-`seq` gives the overwrite pair its
+  correct order for free.
+
+#### What the three reviews changed, and two of the three blockers were about the plan's own retention
+
+Three BLOCKERs, ten MAJORs. None of them was in the step→effect mapping; they
+were in what happens when a step fails, and in what the spool is trusted for.
+
+- **`remove_tree` listed a leaf, so a trashless `DeleteTree` of a FILE always
+  failed.** `ops::walk` opens with a `list`, and a `list` on a file is
+  `Conflict{TypeMismatch}` — reported as `Conflict`, i.e. as destination drift
+  that never happened. `Mirror` against a bucket or an SFTP could not delete a
+  single file. `ops::delete_task`, which this claimed to copy, guards with a
+  `stat` first; now so does this.
+- **`Spool::open` took the single-use claim BEFORE it could fail**, and the
+  engine's `remove` was after the `?`. A plan opened eleven minutes late got
+  `PlanStale`, and re-planning the same tree — same digest by construction —
+  then hit `finish` refusing to re-mint a claim that was stuck in `applying`,
+  deleted the plan it had just written, and answered `Internal`. Neither apply
+  nor re-plan, for the life of the connection, diagnosed as "internal error".
+  `open` now releases on every failure after the claim, into NEITHER set: a
+  malformed plan must not become applicable again, only re-plannable.
+- **One `TrashId` per Task, reused for every victim.** Copied from
+  `ops::delete_task`, where one task buries one thing. A logical trash names its
+  directory `<ms>-<counter>`, so two burials in the same millisecond collided
+  and the second came back `Conflict{Exists}`. The id is now per STEP
+  (`SyncStep::id`, monotone within one plan). Invisible until the integration
+  harness moved to `with_logical_trash()`, which a review also asked for.
+- **`SpoolSummary.counts` was not covered by the digest and decided which policy
+  gates ran.** Zero the terminator's `overwrite`/`delete_tree`/`create_dir`,
+  leave the steps intact, and the digest still verified while the `Delete` and
+  `Mkdir` gates silently did not run. `verify_digest` now recomputes the counters
+  with `SyncCounts::add` in the same pass it already makes and refuses a
+  mismatch. The state directory matters here: `policy.toml` is read once at
+  start-up, but a spool takes effect on the next `sync.apply`.
+- **The root-only gate was weaker than `fs.delete`, not equal to `fs.copy`.**
+  `policy.toml` rules match by containment of the path presented to the gate, so
+  gating `dest_root` alone means a `deny` on an inner path is not seen — and
+  `Engine::delete_with_as` gates the real target. A `Mirror` with an empty
+  source would have deleted a subtree `fs.delete` refuses. The executor now asks
+  the policy per ACTING step, on the real path, with the op the step performs
+  (`Mkdir`, `Copy`, `Delete{mode}` — an `Overwrite` asks both). `Deny` and `Ask`
+  are both a report row (`Denied`): a modal per step in a half-million-step plan
+  is not an interface, and the root gate already asked once for the batch.
+- **A destructive step with no witness now REFUSES.** The witness is
+  deliberately outside the `plan_hash`, which makes deleting it exactly the edit
+  the digest cannot see — and with the old code a missing witness degraded the
+  revalidation to "something exists here". The transducer always populates it for
+  the two destructive kinds, so absence means the file is not what this binary
+  wrote.
+- **A panic in the task body leaked the claim**, because the scheduler's own
+  `catch_unwind` swallows it past the `remove`. The body now catches it itself,
+  spends the plan, and then answers what the scheduler would have.
+- **The source is stat'd BEFORE the destination is destroyed.** Found while
+  restructuring for a clippy line limit, and confirmed by a review: with the
+  stat after, a source that vanished between approval and application left the
+  destination path EMPTY — buried, with nothing to put back.
+- **A trashless `Overwrite` whose copy then fails now journals the destruction.**
+  On the success path it is still ONE `created`/`Irreversible` entry (the spec's
+  table, for the reason recorded above). On the failure path there was no entry
+  at all: permanently destroyed bytes outside the journal, which rule 4 has no
+  exception for. Same for a `DeleteTree` whose recursive remove dies mid-tree.
+- **`SyncFailure` gains `dest_rel`.** `IllegalName`'s headline case is a name
+  that blows `NAME_MAX` once recomposed in NFD — which is the DESTINATION's
+  spelling. Reporting `rel` alone points at the source's spelling, which is the
+  short, legal one: "this name is illegal", pointing at a legal name. Free now
+  (0.40.0 unreleased), a bump later.
+- **`IllegalName` is best-effort and the rustdoc now says so.** `file://`
+  classifies it; SFTP v3 answers a generic `Failure` and object storage does not
+  distinguish an over-long key from any other rejection, so on those two an
+  illegal name arrives as `Io`. Its absence proves nothing; its presence proves
+  one name was bad.
+- **The golden said `failed: 3` over four rows.** `failures.len() <= failed` is
+  the type's own contract and the core maintains it unconditionally; the fixture
+  a client author reads taught the opposite.
+
+**MAJORs deliberately NOT fixed, with reasons.**
+
+1. **A sync batch blocks `undo_session` until Task 11 lands.** `revert_batch`
+   demands every entry of a batch be `rename_back` and answers `Blocked` — and
+   `undo_session` is strict LIFO, so it stops there. This is real and it is
+   exactly what Task 11 exists to fix; inventing interim undo semantics here
+   would be writing code Task 11 replaces. **It must not merge without Task 11.**
+2. **A symlink at an INTERMEDIATE component can redirect a `Copy` or a
+   `CreateDir` outside `dest_root`.** No provider in this tree opens with
+   `O_NOFOLLOW`/`RESOLVE_BENEATH`; closing it is a `norte-vfs-local` change, not
+   an executor one. The destructive kinds dodge it by accident (`stat` is an
+   `lstat`, so the witness's `Dir` meets a `Symlink` and conflicts; `walk` does
+   not descend links). Stated in `SyncTargets::dest_root`'s rustdoc rather than
+   promised away — **Task 14 files the issue.**
+3. **A `DeleteTree` revalidates the DIRECTORY, not its contents.** A directory's
+   mtime moves only for direct children, so a subtree that gained a hundred files
+   two levels down revalidates clean and is destroyed whole. It is the step with
+   the largest blast radius and the weakest check; closing it costs a listing per
+   destructive step. Stated in `revalidate`'s rustdoc.
+4. **A failed `created` insert after a successful trash leaves a batch whose undo
+   BLOCKS** (the `RestoreTrash` finds the path occupied by the unrecorded new
+   file). Compensating that one step means another unjournalled mutation on the
+   journal-is-broken path. What is fixed is the diagnosis: both fatal arms now
+   log the buried path and its trash destination at `error!`, so "where did my
+   file go" has an answer.
+5. **The approval dialog counts `Copy`/`CreateDir` as reversible on a trashless
+   destination**, but undo of a `created` routes through the trash and is skipped
+   without one. Task 11/12 decide whether the plan counts them irreversible or the
+   dialog says "reversible only where the destination has a trash".
+6. **The report cannot tell "nothing was touched" from "the destination was
+   buried and the copy failed"** — both are one `Conflict` row, and the user's
+   next action differs. Distinguishing them costs a closed daemon→client cause;
+   documented on `run` instead.
+7. **The plan's three cross-provider tests are not here.** Two of them
+   (`planning_into_an_archive_blocks_...`,
+   `comparing_against_an_archive_source_...`) test the PLANNER, not the executor,
+   and belong with Task 8's surface; the third
+   (`a_destination_without_a_trash_takes_the_irreversible_path_for_real`) is
+   covered by `una_sobrescritura_sin_papelera_se_declara_irreversible`, which
+   drives a real `MemProvider` with no `TRASH` flag end to end.
 
 ---
 
