@@ -232,7 +232,9 @@ to it one-to-one and fools nobody.
 
 What the report does **not** carry is any trash information, so a client that
 lost `sync.plan_done` cannot tell after the fact whether a batch is recoverable.
-That is a known gap, not an oversight: the applying client holds the `done`.
+That is a known gap, not an oversight — the applying client holds the `done` —
+and it is filed as #170 so that it stays a decision rather than becoming a
+surprise.
 
 The journal does not change shape. Overwriting *is* `trashed` + `created` under
 one `batch_id`, and undo walking `seq` descending gets the order right without
@@ -401,9 +403,9 @@ them through `#[serde(other)]`.
   obtain a recursive inventory of two trees it has no scope over — and, in the
   same directory, `journal.db`, the whole mutation history. The *class* of
   problem predates this ADR; what is new is the volume and the trigger, since
-  anyone who can plan can now produce one on demand. Filed as debt rather than
-  fixed here, because the fix is a policy-layer exclusion that touches every
-  method, not a spool change.
+  anyone who can plan can now produce one on demand. Filed as #165 rather than fixed
+  here, because the fix is a policy-layer exclusion that touches every method,
+  not a spool change.
 - **The ten-minute TTL is a window in which the world can move.** A `DestWitness`
   and one `stat` per destructive step are what close it, at the cost of a round
   trip per overwrite and per delete on a remote provider — and they close it only
@@ -414,7 +416,7 @@ them through `#[serde(other)]`.
   since M3, and no shipped binary does it — but sync is the first method whose
   blast radius under that hole is an entire tree, and the fail-closed treatment
   of the spool and of the journal invites a reader to assume the third leg is
-  fail-closed too. It is not. Stated on `sync_apply_as` and filed as debt.
+  fail-closed too. It is not. Stated on `sync_apply_as`, and filed as #166.
 - **Every future step kind owes a `StepReversal` and, where it cannot give one,
   a `SyncReason`.** `SyncStep::shape_is_consistent()` makes that structural for
   this binary, but a kind added by an N+1 daemon reaches an N−1 client as

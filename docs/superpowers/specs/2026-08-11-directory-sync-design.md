@@ -109,6 +109,12 @@ pub struct CompareOptions {
     /// Descend into directories that exist on this side only. `None` — the
     /// default and spec 1's behaviour — emits one row for the orphan and does
     /// not walk it.
+    ///
+    /// On the WIRE this is an `Option<DescendSide>`, a new two-valued enum with
+    /// NO `serde(other)`: `Side` carries an `Unknown` fallback, and a request
+    /// that descended "neither side, silently" is the trap this field exists to
+    /// avoid. `norte_compare::CompareOptions` keeps `Option<Side>` and the
+    /// engine converts.
     pub descend_orphans: Option<Side>,
 }
 ```
@@ -134,9 +140,30 @@ pub struct SyncStep {
     /// Monotonic, plan-local. The pane's cursor anchors to it.
     pub id: u64,
     pub kind: SyncStepKind,
-    /// Relative to the two roots. BYTES — rule 1.
-    pub rel: VPath,
-    /// Bytes this step moves, when known.
+    /// Relative to ONE of the two roots, and not always the source's: a `Skip`
+    /// from an unreadable DESTINATION listing, and a `DeleteTree`, are measured
+    /// against `dest_root`. `SyncStep` carries no side field — it was not worth
+    /// a wire field for two shapes that write nothing — so a pane that anchors
+    /// every `rel` to the source column paints those in a tree they may not be
+    /// in. BYTES — rule 1.
+    ///
+    /// Shipped as `RelPath`, not `VPath`: a `VPath` is always absolute and
+    /// always carries a scheme and an authority, so a relative path would have
+    /// had to invent both — and `plan_hash` covers `rel`, so a field the daemon
+    /// is told to ignore cannot also be inside the token that authorises
+    /// execution.
+    pub rel: RelPath,
+    /// The destination's own spelling, when its path bytes differ from the
+    /// source's — which the pairing key makes common, since it folds NFC and
+    /// case at EVERY level. The executor writes to
+    /// `dest_root + dest_rel.unwrap_or(rel)`: the entry that exists, not the
+    /// one the source spells. Without it an `Overwrite` of an NFC `café`
+    /// against an NFD `café` grows a SECOND file on ext4, and its
+    /// `RestoreTrash` reversal is a lie, because nothing was buried. (#152.)
+    pub dest_rel: Option<RelPath>,
+    /// Bytes this step moves, when known — the SOURCE's size. Nothing on a step
+    /// describes the destination's prior state; that is the `DestWitness`, and
+    /// it travels in the spool.
     pub size: Option<u64>,
     /// Why this step exists…
     pub criterion: CompareCriterion,
