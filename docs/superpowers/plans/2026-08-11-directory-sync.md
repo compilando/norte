@@ -31,7 +31,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 5 — `Mirror`, `Ambiguous`, blockers, the overlap guard | done | `fb7a37a` |
 | 6 — the streaming `plan_hash` and the counters | done | `19b7408` |
 | 7 — the spool | done | `ca9f791` (rename) + `0969203` (spool) |
-| 8 — `sync.plan` as a task | done | pending |
+| 8 — `sync.plan` as a task | done | `8174c6d` |
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
