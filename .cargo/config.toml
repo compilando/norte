@@ -4,3 +4,11 @@
 # recibir este flag. `ld.lld` viene con el toolchain LLVM del sistema.
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# Sin caché incremental. Ocupaba 54 G de los 288 G del árbol y no compra nada
+# aquí: el bucle real es `just t <crate>` y el gate, ambos corridas completas
+# donde incremental sólo añade escritura a disco y peor codegen. `just lint` ya
+# lo apagaba a mano (CARGO_INCREMENTAL=0); esto lo hace para todas las recetas.
+# No invalida artefactos existentes: no entra en el hash de metadatos.
+[build]
+incremental = false

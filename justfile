@@ -178,13 +178,28 @@ disk:
 # de artefactos ahí para siempre, y cada universo del workspace pesa ~30 G.
 # Si esto no basta, `just prune-all` tira el target completo (la siguiente
 # compilación es desde cero, varios minutos).
-prune:
+prune days="2":
     #!/usr/bin/env bash
     set -euo pipefail
     antes=$(du -sk target 2>/dev/null | cut -f1 || echo 0)
     cargo llvm-cov clean --workspace 2>/dev/null || true
     rm -rf target/debug/incremental target/release/incremental target/tmp
+    # El target de cargo-semver-checks (`just release-check`): 17 G medidos, y
+    # se regenera solo. No lo tocaba nadie.
+    rm -rf target/semver-checks
+    # Los ejecutables de test muertos. ESTE es el grueso: 184 GiB de los 288 G
+    # medidos eran 2075 exes en debug/deps, de los que 1262 (122 GiB) llevaban
+    # más de un día sin tocarse. Cargo no borra NINGUNO: cada relink deja el
+    # anterior ahí para siempre.
+    #
+    # Se barren SÓLO los ejecutables (fichero sin extensión y con +x), nunca
+    # .rlib/.rmeta. Es deliberado: si el barrido se lleva uno que aún estaba
+    # vivo, cargo lo vuelve a ENLAZAR (segundos con lld), no a compilar. Un
+    # .rlib borrado por error sí costaría una compilación entera.
+    barridos=$(find target/debug/deps target/release/deps -maxdepth 1 -type f -executable \
+        ! -name '*.*' -mtime +{{days}} -print -delete 2>/dev/null | wc -l)
     despues=$(du -sk target 2>/dev/null | cut -f1 || echo 0)
+    echo "exes de test barridos (>{{days}} días): $barridos"
     echo "target: $((antes / 1024 / 1024)) GiB → $((despues / 1024 / 1024)) GiB"
     df -h . | tail -1
 
@@ -196,12 +211,44 @@ prune-all:
 # ---------- desarrollo: ejecutar y probar a mano ----------
 
 # El TUI (release: arranque frío <50 ms es presupuesto de la spec §12).
+#
+# `{{features}}` NO es decorativo aquí: cargo unifica features por invocación y
+# keya los artefactos por el conjunto resultante. Sin ellas, este `cargo run`
+# compilaba un universo COMPLETO y separado de norte-tui y de todo lo que
+# cuelga (~30 G) que ninguna otra receta reusaba jamás.
 run:
-    cargo run --release -p norte-tui
+    cargo run --release -p norte-tui {{features}}
 
-# El TUI en debug (compila más rápido; para iterar).
+# El TUI en debug (compila más rápido; para iterar). Mismas features que el
+# gate → reusa lo que ya compiló `just test`, coste normalmente cero.
 dev:
-    cargo run -p norte-tui
+    cargo run -p norte-tui {{features}}
+
+# Pone `ntc` en el PATH apuntando al binario de ESTE árbol. `~/.local/bin` va
+# antes que el bin de cargo en el PATH, así que gana al `cargo install`.
+#
+# Por qué un symlink y no `just install`: `cargo install --path` compila en un
+# target temporal PROPIO, o sea un build en frío entero (~4-5 min y otro
+# universo de disco) cada vez que quieras probar un cambio. El symlink apunta
+# al binario que el gate ya construyó: coste cero y nunca rancio mientras
+# corras los tests. `just install` sigue ahí para instalar de verdad.
+#
+# `dir` (por defecto debug) elige el perfil: `just link release` para medir
+# arranque, que es lo único que debug no puede decirte.
+link dir="debug":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{dir}}" = "release" ]; then
+        cargo build --release -p norte-tui -p norte-cli {{features}}
+    else
+        cargo build -p norte-tui -p norte-cli {{features}}
+    fi
+    mkdir -p ~/.local/bin
+    for b in ntc norte; do
+        ln -sfn "$PWD/target/{{dir}}/$b" ~/.local/bin/$b
+        printf '%-6s → %s\n' "$b" "$(readlink ~/.local/bin/$b)"
+    done
+    echo "recuerda: el symlink apunta a ESTE árbol; un 'just prune-all' lo deja colgando"
 
 # La GUI (GPUI). EXCLUIDA del workspace (spike M5, regla 7) → --manifest-path,
 # NUNCA entra en `just ci`. Es siempre por daemon: arranca antes `norte daemon
@@ -221,10 +268,10 @@ gui-demo *args:
     sock="$sockdir/daemon.sock"
     mkdir -p "$sockdir"; chmod 700 "$sockdir"; rm -f "$sock"
     echo "[gui-demo] compilando daemon + GUI…"
-    cargo build -q -p norte-cli
+    cargo build -q -p norte-cli {{features}}
     cargo build -q --manifest-path crates/norte-gui/Cargo.toml
     echo "[gui-demo] arrancando daemon efímero en $sock"
-    cargo run -q -p norte-cli -- daemon run --socket "$sock" --idle-timeout 0 &
+    cargo run -q -p norte-cli {{features}} -- daemon run --socket "$sock" --idle-timeout 0 &
     dpid=$!
     trap 'kill "$dpid" 2>/dev/null || true' EXIT INT TERM
     for _ in $(seq 1 100); do [ -S "$sock" ] && break; sleep 0.1; done
@@ -233,8 +280,10 @@ gui-demo *args:
     NORTE_SOCKET="$sock" cargo run --manifest-path crates/norte-gui/Cargo.toml {{args}}
 
 # El CLI de humo (paths NATIVOS): `just cli ls /tmp`, `just cli cp a b`…
+# Con `{{features}}` como todo lo que compila el core: sin ellas se fabricaba
+# su propio universo de artefactos que ninguna otra receta reusaba.
 cli *args:
-    cargo run -p norte-cli -- {{args}}
+    cargo run -p norte-cli {{features}} -- {{args}}
 
 # Tests de un crate concreto: `just t norte-vfs`, `just t norte-tui`.
 #
@@ -262,8 +311,10 @@ c:
     CARGO_INCREMENTAL=0 cargo clippy {{core_pkgs}} --all-targets {{features}} -- -D warnings
 
 # Loop de desarrollo: tests del workspace en cada guardado (exige cargo-watch).
+# Mismas features que el gate: `cargo watch` sin ellas recompilaba el
+# workspace entero en un universo propio a cada guardado de fichero.
 watch:
-    cargo watch -x "nextest run {{core_pkgs}}"
+    cargo watch -x "nextest run {{core_pkgs}} {{features}}"
 
 # Tests de integración NIGHTLY contra servidores REALES por Docker (ADR 0013/
 # 0016): sftp contra OpenSSH real (atmoz/sftp) y S3 real. EXIGEN Docker; fuera

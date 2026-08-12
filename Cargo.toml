@@ -67,11 +67,30 @@ exclude = ["crates/norte-plugin-host/examples-wasm"]
 
 # Dev/test: debuginfo SOLO de tablas de líneas (backtraces + nº de línea, que es
 # lo que este proyecto depura vía `tracing`; no gdb con inspección de variables).
-# Recorta el debuginfo ~5-10× → target de cientos de G a decenas, y codegen más
-# rápido. `profile.test` hereda de `dev`. Deps incluidas (el árbol wasmtime es el
-# grueso). Si alguna vez hace falta depurar con gdb, subir `debug` puntualmente.
+# El perfil de desarrollo se afina por DISCO, no por velocidad de ejecución: el
+# `target/` de este árbol llegó a 288 G en seis días, y 184 GiB de eso eran 2075
+# ejecutables de test de ~265 MB cada uno. En un binario medido, `.debug_*` sumaba
+# 114 MB de los 266 — es decir, la MISMA debuginfo de las dependencias copiada
+# dentro de cada uno de los 2075. `line-tables-only` no bastaba: `.debug_line`
+# (42 MB) y `.debug_str` (37 MB) SON el grueso.
+#
+# `profile.test` hereda de aquí, así que esto gobierna los binarios de nextest.
 [profile.dev]
+# Nuestras crates conservan tablas de líneas: sin ellas, el backtrace de un test
+# en rojo no dice en qué línea. Es lo único que necesitamos depurar a diario.
 debug = "line-tables-only"
+# ...pero FUERA del ejecutable, en ficheros objeto aparte que los 2075 binarios
+# COMPARTEN en vez de duplicar. El backtrace sigue resolviendo (el debugger los
+# encuentra por ruta). Este es el cambio que rompe la multiplicación.
+split-debuginfo = "unpacked"
+
+# Las dependencias no llevan debuginfo NINGUNA. Son el 90% del código enlazado
+# (el árbol de wasmtime y el de opendal son el grueso) y nadie depura dentro de
+# ellas; los nombres de función siguen en la tabla de símbolos, sólo se pierde
+# el número de línea de frames que no son nuestros. Además acelera su codegen.
+# Para depurar dentro de una dep concreta: sube `debug` para ESA dep aquí.
+[profile.dev.package."*"]
+debug = 0
 
 [profile.release]
 # Binario de distribución: LTO fino + una unidad de codegen (mejor optimización)
