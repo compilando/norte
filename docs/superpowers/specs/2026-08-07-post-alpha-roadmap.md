@@ -1,10 +1,10 @@
 # Post-alpha roadmap — ordered by the functionality worth building
 
 **Date:** 2026-08-07
-**Status:** accepted, 2026-08-11. Items 2, 3, 4 and 5 are built. Item 1 is
-three specs and only the FIRST is built: comparison lands, synchronisation
-(spec 2) and the CLI/MCP/GUI surfaces (spec 3) do not — it is still the largest
-thing left.
+**Status:** accepted, updated 2026-08-12. Items 2, 3, 4 and 5 are built. Item 1
+is three specs and **two are built**: comparison (spec 1) and one-way
+synchronisation (spec 2). What remains of it is spec 3 — the CLI, MCP and GUI
+surfaces — so the largest thing left is now item 6 onwards.
 **Context:** every milestone M0–M5 is met and packaging now turns a tag into
 downloadable artefacts. What remains is not debt — it is the part of
 specification §17 that was never built. This orders it by what the software
@@ -18,8 +18,11 @@ next one cheaper or more obviously worth doing.
 
 ## 1. Directory comparison and synchronization
 
-**Spec 1 of three built, 2026-08-11** — the comparison, not the
-synchronisation. `fs.compare` walks two trees depth-first with bounded memory,
+**Specs 1 and 2 of three built. Spec 3 is open.**
+
+### Spec 1 — comparison, 2026-08-11
+
+`fs.compare` walks two trees depth-first with bounded memory,
 as a cancellable task behind the read gate, and streams `compare.rows` to the
 connection that asked for them and to nobody else. Every row declares three
 things that travel together — the verdict, the criterion that decided it, and
@@ -34,42 +37,123 @@ anchored to the row id, an explicit active side that nothing infers, and
 textual glyphs for verdict and confidence rather than colour alone.
 **Design:** `docs/superpowers/specs/2026-08-11-directory-comparison-design.md`.
 
-**What it deliberately is not.** It writes nothing. There is no plan, no
-journal entry and no undo, because nothing here mutates — that is **spec 2**,
-still open: the synchronisation plan as a first-class wire type, so an agent or
-the CLI can produce and approve one, journalled and undoable. Only the TUI has
-a surface: no CLI, no MCP, no GUI — that is **spec 3**, still open. Symlinks
-are never followed (`follow_symlinks` is refused outright rather than quietly
-ignored; targets are compared as bytes). Overlapping roots — `/a` against
-`/a/sub` — are allowed on purpose, and are the trap spec 2 has to disarm before
-it plans a single copy (ADR 0048). #134 keeps its issue: it shipped its compare
-half and still owes the sync one, so `pane.sync-dirs` stays greyed out with a
-reason. New debt: #151 (the collision key is implemented twice), #152 (two
-distinct files paired under an NFC singleton, with no marker on the wire), #153
-(case folding decided per provider rather than per mount), #154 (one invalid
-byte disables NFC and folding for a whole filename), #155 (a client that does
-not drain loses its subscription and with it the completeness signal), #156
-(on-demand hydration is serial: 2N chained round trips over a network mount),
-#157 (the pane shows a size for pairs and not for orphans), #158 (no GUI
-compare pane) and #159 (under tmux no modified function key arrives, so
-`Shift+F2` — the documented default — is dead there, along with rename and
-search).
+**What spec 1 deliberately is not.** It writes nothing. There is no plan, no
+journal entry and no undo, because nothing here mutates — that is spec 2, below.
+Symlinks are never followed (`follow_symlinks` is refused outright rather than
+quietly ignored; targets are compared as bytes). Overlapping roots — `/a`
+against `/a/sub` — are allowed on purpose, and are the trap spec 2 had to
+disarm before it planned a single copy (ADR 0048). Debt it left: #151 (the
+collision key is implemented twice), #152 (two distinct files paired under an
+NFC singleton, with no marker on the wire), #153 (case folding decided per
+provider rather than per mount), #154 (one invalid byte disables NFC and folding
+for a whole filename), #155 (a client that does not drain loses its subscription
+and with it the completeness signal), #156 (on-demand hydration is serial: 2N
+chained round trips over a network mount), #157 (the pane shows a size for pairs
+and not for orphans), #158 (no GUI compare pane) and #159 (under tmux no
+modified function key arrives — **not reproduced** on the second attempt, see
+the issue).
+
+### Spec 2 — one-way synchronisation, 2026-08-12
+
+`sync.plan` turns those rows into an **approved, journalled, undoable** one-way
+synchronisation, `source` → `dest`, in two modes: `Update` (copy what is
+missing, overwrite what differs) and `Mirror` (that, plus delete what the source
+does not have). Proto **0.40.0**, **ADR 0049**.
+**Design:** `docs/superpowers/specs/2026-08-11-directory-sync-design.md`.
+
+The shape that carries the safety argument: **the approved plan is retained
+server-side and `sync.apply` carries nothing but its hash.** A plan streams to
+the owner connection as `sync.steps` and is written to a spool file at the same
+time, so a plan of any size is approvable at O(1) memory on both sides; there is
+no second parameter through which a different intention could arrive, so "what
+executes is what was approved" is a property of the wire's shape rather than a
+check someone can forget. The spool is keyed to the connection that produced it,
+recomputes its own digest when opened, is single-use, and dies five ways
+(applied, TTL, connection closed, a sweep at daemon start-up, a retention cap).
+
+`norte-sync` is the engine, and it is a **pure transducer** — a row stream plus
+both sides' capabilities plus the options, in; a step stream, out; no provider
+I/O at all — which is what makes the whole matrix of step kinds × modes × trash
+availability × confidences testable without a daemon.
+
+Every step declares **before approval** what it can give back, and the branch's
+hardest-won lesson is that `reversal` alone is not enough to say so: a copy-only
+plan against a destination with no trash is byte-for-byte identical on the wire
+to the same plan against a restorable one, and reverts nothing. So
+`sync.plan_done` carries `dest_trash` — `Restorable`, `Opaque` (buried where the
+undo cannot name it: macOS, Windows) or `Absent` — and that is what the approval
+dialog leads with. On the way, `norte-vfs-local` grew an in-tree freedesktop
+trash that **says where it put things**, so `file://` on Linux can now undo a
+synchronisation at all (ADR 0009, amended).
+
+The TUI drives it from the diff pane: `Ctrl+y` plans, `s` and `m` choose the
+mode, marked rows seed the selection, and the plan is approved behind a
+confirmation whose wording follows what the undo can actually deliver.
+
+**What spec 2 deliberately is not:**
+
+- **No two-way synchronisation.** One direction, `source` → `dest`, chosen
+  explicitly by the caller. Two-way needs conflict resolution — a rule for "both
+  sides changed" — and there is nothing here that could answer it.
+- **No resume.** A cancelled apply leaves a closed, undoable journal batch and a
+  **clean** destination (`ResumePolicy::Off`, deliberately: a `.norte-partial`
+  left in the destination tree is an orphan to the next comparison, and under
+  `Mirror` that orphan is a `DeleteTree` — the feature would litter its own
+  input). Re-planning is how you continue.
+- **No conflict rules beyond `on_unknown`.** The single knob is what to do when
+  the criterion earned `Unknown` confidence — copy, or skip — and it breaks the
+  tie only on `Same`. Everything else is either decided by the cascade or
+  refused as a blocker. There are no filters, no rules engine, no per-pattern
+  policies.
+- **No GUI, no CLI, no MCP** — that is spec 3, below.
+- **Not available in the embedded TUI.** `sync.apply` requires a journal and
+  refuses without one, fail-closed; the embedded engine has none, so
+  `pane.sync-dirs` is `Live` in the catalogue and dimmed at runtime with a
+  reason the reader can act on. The larger question — an embedded backend
+  performing mutations no journal records — is #167.
+
+Debt spec 2 left: #160 (a journal write that fails after a successful trash
+leaves the file moved and unrecorded — rule 4 broken in the wild, and now
+fixable), #163 (destination name legality is not validated at planning time),
+#164 (a symlink at an intermediate component can redirect a `Copy`; wants
+`RESOLVE_BENEATH`), #165 (nothing excludes the state directory from a policy
+scope over `$HOME`), #166 (a `Daemon` over a policy-less `Engine` gates
+nothing), #167 (the embedded backend mutates unjournalled), #168 (SFTP and
+object never run the provider contract with their logical trash on), #169 (two
+hostile fixtures blocked by `hostile_names().len() == 47` in five crates), #170
+(`SyncReportResult` carries no trash information), #171 (the undo gate parses
+`unit.len() * 2` `VPath`s on the caller's thread), #172 (three surviving
+`is_at_or_under` copies) and #173 (an applying sync is invisible to the task
+board).
+
+### Spec 3 — the surfaces, open
+
+Only the TUI can compare or synchronise. **No CLI, no MCP, no GUI** — #162 and
+#161 (the twin of #158). The MCP half is the one that needs a decision rather
+than wiring: an agent that can *plan* is useful and safe; one that can *apply*
+rewrites a subtree, and the embedded connection runs as `Actor::User` with no
+policy gate.
+
+#134 is closed by spec 2: `pane.sync-dirs` is built and bound.
 
 **§17.** Compare panes by metadata or hash, produce an approved one-way or
-two-way plan.
+two-way plan. *The one-way half is met; §17's "two-way" is not, and spec 2
+deliberately did not attempt it.*
 
-The largest missing capability, and the one an orthodox file manager is judged
-on. It is also the one whose machinery is most nearly complete: two panes with
+Written when this was the largest missing capability, and the one an orthodox
+file manager is judged on. It was also the one whose machinery was most nearly
+complete: two panes with
 independent listings, first-class selection that survives sorts and refreshes,
 a task scheduler with progress and cancellation, a journal with undo, a policy
 gate, and `sha2` already in `norte-core`'s dependency tree — comparison by hash
 costs no new dependency.
 
-What has to be built is the middle: a comparison that streams over two
-providers without holding both listings in memory, a plan as a first-class wire
-type (so the CLI and an agent can produce and approve one, not just the TUI),
-and a result the user can operate rather than read — the diff belongs in a
-virtual pane, the way search results already do.
+What had to be built was the middle, and specs 1 and 2 built it: a comparison
+that streams over two providers without holding both listings in memory, a plan
+as a first-class wire type, and a result the user can operate rather than read
+— the diff lives in a virtual pane, the way search results already do. What is
+left of the original framing is the parenthesis: the plan is a wire type *so
+that* the CLI and an agent can produce and approve one, and neither can yet.
 
 The interesting design question is what "same" means across providers that
 disagree about what they can tell you: mtime resolution differs, S3 has an

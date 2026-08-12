@@ -9,6 +9,69 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Synchronise two directories, one way, and be told what you cannot take
+  back before you say yes:** from the diff pane, `Ctrl+y` plans a
+  synchronisation — `s` for *update* (copy what is missing, overwrite what
+  differs) or `m` for *mirror* (that, and delete what the source does not
+  have) — and shows you every step it intends to take before anything moves.
+  Mark rows first and the plan covers only those, subtree included.
+  What makes this different from a scripted copy is that **the plan you
+  approved is the plan that runs.** norte keeps it, and approving sends back
+  nothing but a fingerprint of it, so there is no path by which a different
+  intention arrives between the screen and the disk — not from a bug, not from
+  an agent, not from a client that decided to be clever. The plan is retained
+  for ten minutes, can only be applied once, and is discarded when it is
+  applied, when it expires, when you disconnect, when the daemon restarts, or
+  when too many pile up. Since the world can move inside those ten minutes,
+  norte re-checks each file it is about to overwrite or delete against what it
+  looked like when you approved, and reports a conflict instead of destroying
+  something that changed underneath you.
+  **The headline is what the destination's trash can give back, not a count of
+  irreversible steps**, and that distinction is the whole reason this took the
+  shape it did. A plan of nothing but copies onto a disk with no trash looks
+  identical, step for step, to the same plan onto one with a trash — and one of
+  them undoes completely while the other undoes nothing at all. So norte says
+  which of the three cases you are in: everything comes back, or what was
+  replaced is in the system trash where you can fish it out by hand (macOS and
+  Windows), or it is gone. The confirmation question changes with the answer
+  rather than reading the same over all three.
+  It is journalled, so `undo` reverses the whole batch — copies, overwrites and
+  deletions together, in the right order — and where it cannot, it says which
+  files it left alone rather than reporting success over a half-undo. On Linux
+  and BSD this now works at all, which it previously did not: norte implements
+  the freedesktop trash itself instead of delegating, so it knows exactly where
+  it put each file and can put it back. Previously an undo could restore the
+  *new* file over itself and leave your original in the trash, and call that
+  success.
+  Every step carries the criterion that decided it and how much that criterion
+  proves, so a mirror that deleted something can tell you it did so because two
+  dates differed and not because anyone verified the contents. Sizes are an
+  honest lower bound: a plan reads "1.2 GB, plus 340 files whose size the
+  provider would not give", never a confident total built out of zeroes. It is
+  a normal task — progress, and `Ctrl+K` cancels — and cancelling leaves a
+  clean destination and a closed, undoable batch, never a half-written file.
+  Overlapping folders are refused before a single byte moves: the same folder
+  twice, one inside the other, the same folder under two spellings on a
+  case-insensitive disk, and a symlink pointing at the other side.
+  On the wire that is protocol **0.40.0**: `sync.plan` and `sync.apply` as
+  cancellable tasks, `sync.steps` and `sync.plan_done` streaming to the
+  connection that asked and to no other, `sync.report` for what happened
+  (ADR 0049).
+  **What this is not, on purpose.** It is **one-way**. There is no two-way
+  synchronisation, because "both sides changed" needs a rule for choosing and
+  there is nothing here honest enough to make that choice for you. There is
+  **no resume**: a cancelled synchronisation is undoable and re-plannable, not
+  continuable. There are **no conflict rules** beyond the one switch — what to
+  do when the comparison could not verify its own answer. And it is the
+  terminal interface only, over a daemon: no command line, no agent surface, no
+  graphical one (#161, #162), and **not in the standalone TUI**, which has no
+  journal — the key is shown greyed with that reason rather than hidden,
+  because synchronising without an undo is not a convenience worth having
+  (#167). Two limits worth saying out loud: a name that is legal at the source
+  and not at the destination is reported when it fails rather than when you
+  approve (#163), and the re-check before deleting a folder looks at the folder
+  and not at every file inside it, so something added deep within it after you
+  approved goes with it.
 - **Compare two directories, and be told how much the answer is worth:**
   `Shift+F2` compares the two panes and opens a diff pane over both of them —
   one row per pair, and each row says not only *what* was concluded but *which

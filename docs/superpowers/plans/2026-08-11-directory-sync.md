@@ -37,7 +37,51 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 11 — `revert_sync_batch` | done | `9c3853d` |
 | 11b — una papelera que dice dónde puso las cosas | done | `9f88a2c` |
 | 12 — the frontend model | done | `286ca2c` |
-| 13 — the TUI surface, the keymap and the strings | done | (este commit) |
+| 13 — the TUI surface, the keymap and the strings | done | `8fa1497` |
+| 14 — ADR, docs, debt, and the gate | done | (este commit) |
+
+### What Task 14 changed in this plan
+
+**Five of ADR 0049's claims had moved, and it was written before anything was
+built** — task 1 wrote it because the schema published in that same commit cites
+it thirty times. Corrected in place, each marked as an amendment rather than
+appended where nobody would read it: the payload of `sync.plan_done` (it carries
+`dest_trash` and `task_id`); what the approval dialog leads with (`dest_trash`,
+not a count of irreversible steps); what closes a spool's lifetime (five things,
+and the TTL was not one of them until task 8); what the three overlap checks do
+and do not catch, with the SFTP/FTP residual stated instead of the old
+three-example overclaim; and what the revalidation compares against (a
+`DestWitness` in the spool, outside `plan_hash`, not `SyncStep::size`). Added:
+report visibility (`batch_id` is the first journal-internal id a non-`User`
+actor receives), the spool as a disclosure to an in-daemon actor, the
+policy-less `Daemon`, and the rule that every future step kind owes a
+`StepReversal`. Fixed line 115 (task 4's finding): a step's `rel` is relative to
+**one** of the two roots, and which one is not always the source's.
+
+**ADR 0009 gained a 2026-08-12 amendment.** Task 11b's in-tree freedesktop trash
+always lands on the victim's own device, so the "cross-device degrades to an
+uncancellable copy+delete" consequence no longer holds on Linux/BSD. The
+macOS/Windows statement is kept verbatim; #26 is commented rather than closed,
+since its title carries no platform qualifier.
+
+**The design spec's overlap section had the same overclaim** and still wrote
+`Error::OverlappingRoots { inner: Side }`, `include: Option<Vec<VPath>>`,
+`compare: CompareOptions` and a four-variant `SyncBlockerKind`. All corrected,
+and `SyncPlanDone` in it now carries `task_id` and `dest_trash`.
+
+**#151 is NOT closable.** Task 9 honoured the instruction not to write a third
+copy (`norte-core/src/engine.rs:2399` calls `norte_compare::key_for`), but
+`fold_delta` still exists twice — `norte-compare/src/key.rs:160` and
+`norte-core/src/rename/plan.rs:205` — and the NFC-pass divergence the issue
+lists is confirmed still present. Commented, left open.
+
+**#159 is NOT closable either, and the update matters more than a close would.**
+Task 13 drove the TUI under tmux and `Shift+F2` and `Ctrl+y` both arrived. The
+one certain difference from the original report is the binary: that report says
+outright it could not drive the 2026-08-07 binary in `target/debug`. Recorded,
+narrowed to the one suspect nobody has tested — what the **outer** emulator
+sends for a real keypress, as opposed to what `send-keys` re-encodes — and noted
+that `Shift+F6` and `Alt+F7` were not retested at all.
 
 **The embedded TUI does not synchronise, and Task 13 says so out loud.**
 `make_backend` builds `Engine::new()` — no journal, no spool — and Task 9 made

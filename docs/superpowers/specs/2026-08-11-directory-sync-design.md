@@ -171,6 +171,14 @@ pub enum SyncBlockerKind {
     DestReadOnly,
     /// A directory over `COMPARE_MAX_DIR_ENTRIES` on the destination side.
     DirTooLarge,
+    /// A directory on one side against a non-directory on the other.
+    /// (Added while building: replacing a tree with a file, or a file with a
+    /// tree, is a destructive structural change that deserves a human, and
+    /// `Overwrite` normatively means "trash and copy bytes". It carries a
+    /// `side` — the only blocker whose side is not implied by its kind — and
+    /// it blocks on BOTH sides, which is the exception to the
+    /// "source skips, destination blocks" rule this family otherwise follows.)
+    TypeMismatchDir,
 }
 ```
 
@@ -207,19 +215,40 @@ Only one of the two can lose data, and the plan treats them accordingly.
 
 ### Overlap
 
-ADR 0048's inherited warning, discharged here. Two checks, because the cheap
-one is defeatable:
+ADR 0048's inherited warning, discharged as far as it can be. **Corrected
+2026-08-12**: as first written this section had two checks and credited the
+second with catching three named cases it does not catch. The shipped shape is
+three checks, and the residual is stated.
 
-1. **Structural, before planning.** If one root contains the other,
-   `Error::OverlappingRoots { inner: Side }`. `fs.compare` still permits the
-   pair — comparing `/a` against `/a/sub` costs nothing but a walk. Planning a
-   write into it does not have that licence.
-2. **During the walk.** Structural equality of two `VPath`s is not identity of
-   two locations: a symlinked root, one SFTP host under two authorities, an
-   archive opened by two paths. So if any row's absolute path on either side
-   reaches the other root, that subtree is pruned and an `OverlapDetected`
-   blocker is raised. This is the check that catches what canonicalisation
-   would have cost a round trip to catch.
+1. **Structural, before planning.** If one root contains the other, or they are
+   equal, `Error::OverlappingRoots { relation: RootOverlap }` — three values
+   (`same`, `source_inside_dest`, `dest_inside_source`), not a two-valued
+   `Side`, because "these two folders are the same" is not a degenerate case of
+   "one is inside the other" and is the sentence a frontend paints. `fs.compare`
+   still permits the pair — comparing `/a` against `/a/sub` costs nothing but a
+   walk. Planning a write into it does not have that licence. When **either**
+   root's provider lacks `CASE_SENSITIVE`, containment case-**folds** before
+   comparing (`fold_delta`, #129): on APFS and NTFS `/Data` against
+   `/data/backup` is byte-distinct and byte-unnested, and would otherwise copy a
+   tree into itself.
+2. **By identity, before planning.** `Provider::node_id` on both roots with
+   `FollowLinks::Yes`, compared only when the provider object is the same
+   (`Arc::ptr_eq`); equal and `Some` is `RootOverlap::Same`. An error or a `None`
+   is not an overlap. This is the check that closes a symlinked root and an
+   archive opened by two paths — one `stat` per root, once per plan.
+3. **During the walk.** If any row's absolute path on either side reaches the
+   other root, that subtree is pruned and an `OverlapDetected` blocker is raised.
+   **This is not the check that catches aliasing**, and the earlier claim that it
+   was is wrong in all three of the cases it cited: walking `/data` — a symlink
+   to `/srv/data` — against `/srv/data` produces rows that all hang from
+   `/data`, so no row ever reaches the other root. What this layer really is, and
+   is worth keeping as, is defence in depth against a provider that returns paths
+   outside the root it was asked to list.
+
+**Residual.** One SFTP or FTP host reached under two authorities is caught by
+none of the three, because `node_id` is `None` on both providers. It is bounded
+by the per-step revalidation and by two roots that really are one tree yielding
+`Same` rows and no steps — a bound, not a refusal.
 
 ## Wire
 
@@ -242,27 +271,43 @@ pub struct SyncPlanParams {
     pub dest: VPath,
     pub mode: SyncMode,
     /// Reused from spec 1: criteria, mtime tolerance, depth. Two of its
-    /// fields are NOT the caller's to set — see below.
-    pub compare: CompareOptions,
+    /// fields are NOT the caller's to set — see below. Named
+    /// `SyncCompareOptions` as shipped: `CompareOptions` already belongs to
+    /// `norte_compare`, and the TUI would have had both in one file.
+    pub compare: SyncCompareOptions,
     pub on_unknown: OnUnknown,
     /// Relative paths the plan is restricted to; `None` means the whole tree.
     /// This is how the diff pane's first-class selection seeds a plan. More
     /// than `SYNC_MAX_INCLUDE` is a params error (`-32602`), not a truncation
     /// — the same rule `FS_RENAME_BATCH_MAX_PAIRS` follows, for the same
     /// reason: a silently shortened list plans a sync the user did not ask
-    /// for.
-    pub include: Option<Vec<VPath>>,
+    /// for. Shipped as `RelPath`, not `VPath`: it names entries relative to
+    /// the roots, and it filters the plan's OUTPUT rather than its input.
+    pub include: Option<Vec<RelPath>>,
 }
 
 pub struct SyncPlanDone {
+    /// One connection can have two plans in flight, and the hash is unknown
+    /// until this notification arrives — so the plan is identified by its task
+    /// until then.
+    pub task_id: TaskId,
     /// Reuses `PlanHash` from `fs.rename_batch_plan` unchanged.
     pub plan_hash: PlanHash,
-    /// One count per `SyncStepKind`, plus the total bytes the plan moves —
-    /// the number the approval dialog leads with.
+    /// One count per `SyncStepKind`, plus the bytes the plan moves — which is
+    /// a LOWER BOUND, not a total: steps whose size the provider did not give
+    /// are counted in `unmeasured_steps` rather than summed as zero.
     pub counts: SyncCounts,
     pub blockers: Vec<SyncBlocker>,  // capped at SYNC_MAX_BLOCKERS_REPORTED
     pub blockers_total: u64,
     pub executable: bool,
+    /// What the destination's trash can give back: `Restorable`, `Opaque`
+    /// (buried, but not by a name the undo can use — macOS, Windows) or
+    /// `Absent`. **This is what the approval dialog leads with**, not the
+    /// count of irreversible steps: a copy-only plan against a trash-less
+    /// destination has `irreversible == 0` and gives back nothing, and it is
+    /// byte-identical on the wire to the same plan against a restorable trash.
+    /// Added mid-branch; see ADR 0049.
+    pub dest_trash: DestTrash,
 }
 
 pub struct SyncApplyParams { pub plan_hash: PlanHash }
@@ -277,9 +322,11 @@ quietly overwritten. Spec 1 already refuses `follow_symlinks` outright, and
 letting a caller ask for orphan descent on the destination side would buy
 40 000 listings that change no step.
 
-**`Error::OverlappingRoots { inner: Side }` is a new variant** on the protocol
-error enum — additive, with its own golden. `Error::PlanStale` already exists
-and is reused unchanged.
+**`Error::OverlappingRoots { relation: RootOverlap }` is a new variant** on the
+protocol error enum — additive, with its own golden. The payload is the
+three-valued `RootOverlap` and not a `Side`; the `inner: Side` this spec first
+wrote could not describe three cases and would have made `Display` lie.
+`Error::PlanStale` already exists and is reused unchanged.
 
 **`sync.apply` carries nothing but the hash**, which is what makes "it executes
 what was approved" an invariant rather than a promise: there is no second
