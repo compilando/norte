@@ -10,11 +10,12 @@ independently through `PROTOCOL_VERSION`.
 ### Added
 
 - **Synchronise two directories, one way, and be told what you cannot take
-  back before you say yes:** from the diff pane, `Ctrl+y` plans a
-  synchronisation — `s` for *update* (copy what is missing, overwrite what
-  differs) or `m` for *mirror* (that, and delete what the source does not
-  have) — and shows you every step it intends to take before anything moves.
-  Mark rows first and the plan covers only those, subtree included.
+  back before you say yes:** `Ctrl+y` over the two panes plans a
+  synchronisation, and inside the diff pane `s` chooses *update* (copy what is
+  missing, overwrite what differs) and `m` chooses *mirror* (that, and delete
+  what the source does not have). Either way you are shown every step it intends
+  to take before anything moves. Mark rows in the diff pane first (`Ins`) and the
+  plan covers only those, subtrees included.
   What makes this different from a scripted copy is that **the plan you
   approved is the plan that runs.** norte keeps it, and approving sends back
   nothing but a fingerprint of it, so there is no path by which a different

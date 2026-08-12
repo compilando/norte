@@ -86,9 +86,14 @@ dialog leads with. On the way, `norte-vfs-local` grew an in-tree freedesktop
 trash that **says where it put things**, so `file://` on Linux can now undo a
 synchronisation at all (ADR 0009, amended).
 
-The TUI drives it from the diff pane: `Ctrl+y` plans, `s` and `m` choose the
-mode, marked rows seed the selection, and the plan is approved behind a
-confirmation whose wording follows what the undo can actually deliver.
+The TUI drives it with `Ctrl+y` over the two panes, on five of the seven
+presets: `far` and `norton` are deliberately exempt, each for a fidelity rule
+its own preset file states, and the test that enforces this asserts the
+exemption list BOTH ways so a preset that later binds it fails loudly rather
+than drifting. Inside the diff pane the mode is `s` (update) or `m` (mirror),
+plain letters because that pane owns the keyboard; marked rows seed the
+selection; and the plan is approved behind a confirmation whose wording follows
+what the undo can actually deliver.
 
 **What spec 2 deliberately is not:**
 
