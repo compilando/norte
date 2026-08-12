@@ -89,7 +89,25 @@ split-debuginfo = "unpacked"
 # ellas; los nombres de función siguen en la tabla de símbolos, sólo se pierde
 # el número de línea de frames que no son nuestros. Además acelera su codegen.
 # Para depurar dentro de una dep concreta: sube `debug` para ESA dep aquí.
+#
+# Y van OPTIMIZADAS, que es lo que decide el reloj de la suite. Medido: el 69 %
+# del tiempo de test del gate entero eran 50 tests de `ftp_provider_contract` a
+# 59 s cada uno, y esos 59 s son Cranelift traduciendo el mismo `.wasm` de
+# 1,5 MB a nativo una vez por test — con el propio Cranelift compilado a
+# opt-level 0. Las deps se compilan una vez y se ejecutan millones de veces;
+# dejarlas sin optimizar sale carísimo en cualquier test que las use de verdad
+# (wasmtime, compresión, hashes, cripto de sftp). Nuestras crates siguen en
+# opt-level 0: ahí sí manda el tiempo de compilación.
 [profile.dev.package."*"]
+debug = 0
+opt-level = 2
+
+# Scripts de build y MACROS PROCEDIMENTALES optimizados. Un proc-macro se
+# ejecuta en CADA compilación de cada crate que lo usa (serde, thiserror,
+# tracing), así que su velocidad es tiempo de compilación nuestro, todos los
+# días. Compilarlos optimizados cuesta una vez.
+[profile.dev.build-override]
+opt-level = 3
 debug = 0
 
 [profile.release]
