@@ -597,6 +597,7 @@ help-cmd-viewer-encoding-auto = volver a la detección automática
 help-cmd-viewer-hex = alternar vista hexadecimal
 help-cmd-pane-search = buscar por nombre/contenido (Alt+F7)
 help-cmd-pane-compare-dirs = compara los dos paneles y abre el panel de diferencias
+help-cmd-pane-sync-dirs = planifica una sincronización de un sentido de este panel al otro
 help-cmd-pane-copy-path = copia la ruta de la selección al portapapeles
 search-title = Búsqueda
 search-name = nombre (glob):
@@ -620,7 +621,7 @@ compare-title = Comparar
 compare-header-left = izquierda
 compare-header-right = derecha
 compare-empty = todavía no hay filas
-compare-hint = [tab] lado · [1-5] filtro · [enter] ir allí · [esc] cerrar
+compare-hint = tab lado · 1-5 filtro · ins marcar · s sinc · m espejo · enter ir · esc cerrar
 compare-active-side = actuando sobre: { $side }
 compare-status-running = comparación: { $n } filas (comparando…)
 compare-status-done = comparación: { $n } filas
@@ -747,6 +748,47 @@ sync-confirm-delete-unclear = se van a borrar { $n } árboles del destino, y est
 sync-confirm-no-way-back = { $n } pasos van a cambiar el destino y ninguno se va a poder deshacer. ¿Seguir?
 sync-confirm-partial = { $n } pasos de este plan no se van a poder deshacer. ¿Seguir?
 sync-confirm-unclear = esta versión no puede decir si estos { $n } cambios se van a poder deshacer. ¿Seguir?
+# El PANEL de sincronización (Ctrl+Y, o `s`/`m` dentro del de diferencias).
+# Sus teclas son fijas, como las del de diferencias, así que la línea de
+# teclas es el único sitio donde están escritas.
+sync-title = sincronizar
+sync-mode-update = actualizar
+sync-mode-mirror = espejo
+sync-header-step = paso
+sync-header-path = ruta
+sync-header-size = tamaño
+sync-planning = planificando… { $n } pasos hasta ahora
+sync-empty = este plan no tiene pasos: los dos árboles ya coinciden
+sync-status-cancelled = cancelado — habían llegado { $n } pasos, y no hay plan que aprobar
+sync-status-failed = el plan falló: { $error }
+sync-status-ready = { $n } pasos · pulsa a para aprobar
+sync-status-not-approvable = { $n } pasos · este plan no se puede aprobar
+sync-status-applying = aplicando…
+sync-status-applied = { $done } pasos aplicados, { $failed } fallaron
+sync-status-applied-undoable = { $done } pasos aplicados, { $failed } fallaron · deshazlo con el comando de deshacer
+sync-status-applied-not-undoable = { $done } pasos aplicados, { $failed } fallaron · no quedó nada en el journal, así que no hay nada que deshacer
+sync-hint = ↑↓ mover · a aprobar · Esc cerrar
+sync-hint-done = ↑↓ mover · Esc cerrar
+sync-hint-confirm = y confirmar · cualquier otra tecla cancela
+# El destino escribe esta entrada distinto que el origen (#152): la escritura
+# cae sobre la ortografía del DESTINO, y se enseñan las dos para que nadie lea
+# una diferencia de normalización como un segundo fichero.
+sync-dest-spelling = destino: { $path }
+# La ruta del paso cuelga de la raíz del destino, no de la del origen.
+sync-anchor-dest = (destino)
+sync-anchor-either = (no consta de qué lado)
+compare-marked = { $n } marcadas
+msg-sync-needs-daemon = sincronizar necesita el daemon (--daemon): tiene que quedar en el journal
+msg-sync-too-many-marks = { $n } marcas pasan de las { $max } que admite esta petición: marca menos, o marca un directorio que las contenga
+msg-sync-cannot-approve = este plan no se puede aprobar tal como está
+msg-sync-mark-outside-roots = una fila marcada no está en ninguno de los dos directorios: repite la comparación
+msg-sync-mark-is-the-root = una fila marcada es uno de los dos directorios, lo que significaría el árbol entero: marca lo que hay dentro
+err-overlapping-roots = los dos directorios se solapan
+err-overlapping-roots-same = el origen y el destino son el mismo directorio
+err-overlapping-roots-source-inside = el origen está dentro del destino
+err-overlapping-roots-dest-inside = el destino está dentro del origen
+reason-needs-daemon = necesita el daemon (--daemon)
+
 on-yes = sí
 on-no = no
 
@@ -925,7 +967,6 @@ keymap-unavailable-not-here = { $command }: no está disponible aquí
 keymap-count-ignored = { $command } no acepta un contador (se ignoró { $count })
 keymap-reason-archive-write = escritura de archivos comprimidos
 keymap-reason-editor = editor integrado
-keymap-reason-sync = sincronización de directorios
 keymap-reason-tree = panel de árbol de directorios
 keymap-reason-tabs = pestañas de panel
 keymap-reason-sort = comandos de ordenación

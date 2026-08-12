@@ -2039,6 +2039,52 @@ fn a_rel_that_would_escape_its_root_dies_in_the_wire() {
     assert_eq!(r.to_wire(), "sub/informe%FF%FE.dat");
 }
 
+/// `RelPath::under` es la ÚNICA forma de medir una ruta contra una raíz, así
+/// que sus negativas se pinean aquí, en el crate que la publica.
+///
+/// Las tres que importan son negativas, y por el mismo motivo: fallar cerrado.
+/// Un `Some` de más sería una ruta relativa inventada — y de ahí sale un
+/// `include` que selecciona lo que el lector no marcó, o un paso que escribe
+/// donde nadie miró.
+#[test]
+fn under_mide_por_segmentos_y_falla_cerrado() {
+    use norte_proto::VPath;
+    use norte_proto::methods::RelPath;
+
+    let root = VPath::parse("file:///origen").expect("root");
+    assert_eq!(
+        RelPath::under(&root, &VPath::parse("file:///origen/sub/a.txt").expect("p"))
+            .expect("cuelga")
+            .to_wire(),
+        "sub/a.txt"
+    );
+    // Por SEGMENTOS, no por prefijo de cadena: un hermano cuyo nombre EMPIEZA
+    // por el de la raíz no cuelga de ella.
+    assert!(RelPath::under(&root, &VPath::parse("file:///origen2/a.txt").expect("p")).is_none());
+    // Más corta que la raíz.
+    assert!(RelPath::under(&root, &VPath::parse("file:///").expect("p")).is_none());
+    // Otro scheme, y otra authority — byte a byte, sin plegar: para `mem://` y
+    // para un id de conexión de object storage la authority es un testigo
+    // opaco, y plegarla juntaría dos conexiones distintas.
+    assert!(RelPath::under(&root, &VPath::parse("mem:///origen/a.txt").expect("p")).is_none());
+    let nas = VPath::parse("sftp://nas/d").expect("nas");
+    assert!(RelPath::under(&nas, &VPath::parse("sftp://NAS/d/a.txt").expect("p")).is_none());
+    // Y la raíz misma sale como la RAÍZ: es el valor CORRECTO de un
+    // `SyncBlocker` que habla del árbol entero y el más destructivo de un paso,
+    // así que decidir cuál de las dos cosas es le toca a quien llama.
+    assert!(
+        RelPath::under(&root, &root)
+            .expect("la raíz cuelga de sí misma")
+            .is_root()
+    );
+    // Los bytes no se tocan por el camino (regla dura 1).
+    let hostil = VPath::parse("file:///origen/informe%FF%FE.dat").expect("p");
+    assert_eq!(
+        RelPath::under(&root, &hostil).expect("cuelga").segments()[0].as_bytes(),
+        b"informe\xff\xfe.dat"
+    );
+}
+
 /// `dest_rel` nombra la entrada del DESTINO cuando sus bytes no son los del
 /// origen, y viaja con el mismo códec que `rel`: dos nombres que un humano
 /// pinta igual —NFC contra NFD— son dos secuencias de bytes distintas, y el

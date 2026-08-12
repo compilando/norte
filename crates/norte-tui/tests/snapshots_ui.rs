@@ -1954,3 +1954,201 @@ fn snapshot_compare_pane() {
     app.compare = Some(view);
     insta::assert_snapshot!(render_80x24(&app));
 }
+
+/// Un paso de plan de test.
+fn paso_sync(
+    id: u64,
+    kind: norte_proto::methods::SyncStepKind,
+    rel: &str,
+    size: Option<u64>,
+    reversal: norte_proto::methods::StepReversal,
+) -> norte_proto::methods::SyncStep {
+    use norte_proto::methods::{
+        CompareConfidence, CompareCriterion, RelPath, StepReversal, SyncReason, SyncStep,
+    };
+    let paso = SyncStep {
+        id,
+        kind,
+        rel: RelPath::parse_wire(rel).expect("rel"),
+        dest_rel: None,
+        size,
+        criterion: CompareCriterion::Size,
+        confidence: CompareConfidence::Certain,
+        reversal: Some(reversal),
+        // `shape_is_consistent`: un paso IRREVERSIBLE debe decir por qué, y
+        // aquí el porqué es siempre el mismo — el destino no puede devolverlo.
+        reason: (reversal == StepReversal::Irreversible).then_some(SyncReason::NoTrashOnTarget),
+    };
+    assert!(
+        paso.shape_is_consistent(),
+        "paso de test mal formado: {paso:?}"
+    );
+    paso
+}
+
+fn cierre_sync(
+    counts: norte_proto::methods::SyncCounts,
+    dest_trash: norte_proto::methods::DestTrash,
+) -> norte_proto::methods::SyncPlanDone {
+    norte_proto::methods::SyncPlanDone {
+        task_id: norte_proto::TaskId::new(1),
+        plan_hash: norte_proto::methods::PlanHash::from_digest(&[7u8; 32]),
+        counts,
+        blockers: Vec::new(),
+        blockers_total: 0,
+        executable: true,
+        dest_trash,
+    }
+}
+
+/// El panel de sincronización de un `Update` contra un destino cuya papelera
+/// SÍ dice dónde entierra las cosas: el caso normal en Linux, y el único que
+/// una máquina de desarrollo puede producir de verdad (`os_root` declara
+/// `trash_restorable` siempre).
+///
+/// Lo que este snapshot congela es la COMPOSICIÓN a 80 columnas: que el título
+/// quepa con las dos raíces y la flecha del SENTIDO, que el resumen no se coma
+/// la lista, que las tres marcas de cada paso queden separadas y que la línea
+/// de teclas no se corte a media palabra — que es exactamente el fallo que la
+/// línea del panel de diferencias tenía al añadirle estas teclas.
+#[test]
+fn snapshot_sync_pane_update_con_papelera() {
+    use norte_proto::methods::{DestTrash, StepReversal, SyncCounts, SyncMode, SyncStepKind};
+
+    let mut view = norte_tui::app::SyncView::new(
+        norte_proto::TaskId::new(1),
+        SyncMode::Update,
+        vp("file:///casa"),
+        vp("file:///otro"),
+        None,
+        None,
+    );
+    let pasos = vec![
+        paso_sync(
+            1,
+            SyncStepKind::CreateDir,
+            "sub",
+            None,
+            StepReversal::Delete,
+        ),
+        paso_sync(
+            2,
+            SyncStepKind::Copy,
+            "sub/c.txt",
+            Some(2048),
+            StepReversal::Delete,
+        ),
+        paso_sync(
+            3,
+            SyncStepKind::Overwrite,
+            "a.txt",
+            Some(4096),
+            StepReversal::RestoreTrash,
+        ),
+        paso_sync(
+            4,
+            SyncStepKind::Copy,
+            "nuevo.txt",
+            None,
+            StepReversal::Delete,
+        ),
+    ];
+    let counts = SyncCounts {
+        create_dir: 1,
+        copy: 2,
+        overwrite: 1,
+        delete_tree: 0,
+        skip: 0,
+        irreversible: 0,
+        bytes: 6144,
+        unmeasured_steps: 1,
+        unknown_kind: 0,
+    };
+    view.state =
+        norte_frontend::sync::SyncState::ready(pasos, cierre_sync(counts, DestTrash::Restorable));
+    view.run = norte_tui::app::SyncRunState::Done;
+
+    let mut app = app_base();
+    app.sync = Some(view);
+    insta::assert_snapshot!(render_80x24(&app));
+}
+
+/// Y el caso que esta máquina NO puede producir: un `Mirror` que borra un árbol
+/// contra un destino SIN papelera, con la segunda pregunta abierta.
+///
+/// `norte-vfs-local` declara `TRASH` siempre y, con la raíz en `/`, contesta
+/// `trash_restorable` siempre — así que `Opaque` y `Absent` son alcanzables en
+/// macOS y en Windows, y aquí solo por construcción. Este snapshot es lo que
+/// hace que la frase se lea, y lo que impide que un cambio en el resumen deje
+/// «no se puede deshacer nada» fuera de pantalla en el único caso donde no
+/// leerlo cuesta datos.
+#[test]
+fn snapshot_sync_pane_mirror_sin_papelera() {
+    use norte_proto::methods::{DestTrash, StepReversal, SyncCounts, SyncMode, SyncStepKind};
+
+    let mut view = norte_tui::app::SyncView::new(
+        norte_proto::TaskId::new(1),
+        SyncMode::Mirror,
+        vp("file:///casa"),
+        vp("file:///otro"),
+        None,
+        None,
+    );
+    let pasos = vec![
+        paso_sync(
+            1,
+            SyncStepKind::Copy,
+            "nuevo.txt",
+            Some(64),
+            StepReversal::Delete,
+        ),
+        paso_sync(
+            2,
+            SyncStepKind::Overwrite,
+            "a.txt",
+            Some(4096),
+            StepReversal::Irreversible,
+        ),
+        paso_sync(
+            3,
+            SyncStepKind::DeleteTree,
+            "arbol-sobrante",
+            None,
+            StepReversal::Irreversible,
+        ),
+        paso_sync(
+            4,
+            SyncStepKind::DeleteTree,
+            "sobra.txt",
+            None,
+            StepReversal::Irreversible,
+        ),
+    ];
+    let counts = SyncCounts {
+        create_dir: 0,
+        copy: 1,
+        overwrite: 1,
+        delete_tree: 2,
+        skip: 0,
+        irreversible: 3,
+        bytes: 4160,
+        unmeasured_steps: 0,
+        unknown_kind: 0,
+    };
+    view.state =
+        norte_frontend::sync::SyncState::ready(pasos, cierre_sync(counts, DestTrash::Absent));
+    view.run = norte_tui::app::SyncRunState::Done;
+    view.confirming = view
+        .state
+        .plan()
+        .expect("plan")
+        .confirmation(norte_i18n::active());
+    assert!(
+        view.confirming.is_some(),
+        "un mirror que borra dos árboles sin papelera TIENE que preguntar dos veces"
+    );
+
+    let mut app = app_base();
+    app.sync = Some(view);
+    insta::assert_snapshot!(render_80x24(&app));
+}

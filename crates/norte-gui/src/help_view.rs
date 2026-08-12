@@ -31,6 +31,7 @@ pub const NO_IMPEDIMENT: Facts = Facts {
     source_read_only: false,
     dest_read_only: false,
     degraded: false,
+    journalled: true,
 };
 
 /// Cap, in CHARS, on a string a plugin chose before it is painted — the GUI

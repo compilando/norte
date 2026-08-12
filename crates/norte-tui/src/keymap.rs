@@ -160,6 +160,7 @@ commands! {
     "pane.select-drive-left" => PaneSelectDriveLeft,
     "pane.select-drive-right" => PaneSelectDriveRight,
     "pane.compare-dirs" => PaneCompareDirs,
+    "pane.sync-dirs" => PaneSyncDirs,
     "pane.search" => PaneSearch,
     "pane.names-encoding" => PaneNamesEncoding,
     "pane.toggle-hidden" => PaneToggleHidden,

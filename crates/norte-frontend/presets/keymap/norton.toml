@@ -23,6 +23,9 @@
 # stated rule: NC's "Compare directories" was a Commands-menu entry and no
 # first-hand source survives to say whether it had a chord. Borrowing
 # Shift+F2 from Total Commander would be a guess dressed as a transcription.
+# `pane.sync-dirs` is unbound for the same rule, with nothing to weigh: NC
+# had no directory synchroniser, so there is not even a menu entry to hang a
+# guess on.
 #
 # Omitted families (norte has no concept): the pull-down menu bar (F9) and
 # the user menu (F2); Ctrl+Q and Ctrl+L — no first-hand description survives

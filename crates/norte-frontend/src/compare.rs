@@ -501,6 +501,19 @@ pub struct ComparePane {
     /// The selected row's `id` — never an index. A filter changes which rows
     /// are on screen and must not change which one is selected.
     selected: Option<u64>,
+    /// The rows the reader MARKED, by `id`, for the same reason `selected` is
+    /// an id: a filter must not change what was picked.
+    ///
+    /// Distinct from `selected`, which is the cursor. This is the set that
+    /// seeds `SyncPlanParams::include`, so an empty set means "the whole
+    /// tree" — the wire's own convention, where the field is absent rather
+    /// than an empty list (`Some(vec![])` is a plan of nothing).
+    ///
+    /// A `BTreeSet` and not a `Vec`: `include` is capped at
+    /// `SYNC_MAX_INCLUDE`, so the set is small, and ordered ids make the
+    /// request byte-stable for the same picks — which is what keeps two
+    /// identical selections producing one `plan_hash`.
+    marked: std::collections::BTreeSet<u64>,
     /// The side the ordinary file operations act on. Left is the pane that
     /// launched the comparison.
     active: Side,
@@ -527,6 +540,7 @@ impl ComparePane {
             hidden: Vec::new(),
             counts: [0; CATEGORIES.len()],
             selected: None,
+            marked: std::collections::BTreeSet::new(),
             active: Side::Left,
         }
     }
@@ -638,6 +652,54 @@ impl ComparePane {
         let id = self.selected?;
         self.rows.iter().find(|r| r.id == id)
     }
+
+    /// Marks or unmarks a row, by id. A row that never arrived is ignored,
+    /// exactly as [`ComparePane::select`] ignores it, and for the same reason:
+    /// a mark on a row that does not exist would name nothing when the
+    /// selection becomes a `SyncPlanParams::include` list.
+    ///
+    /// ```
+    /// use norte_frontend::compare::ComparePane;
+    /// let mut pane = ComparePane::new();
+    /// pane.toggle_mark(7);
+    /// assert!(!pane.is_marked(7), "no such row arrived");
+    /// ```
+    pub fn toggle_mark(&mut self, id: u64) {
+        if !self.rows.iter().any(|r| r.id == id) {
+            return;
+        }
+        if !self.marked.remove(&id) {
+            self.marked.insert(id);
+        }
+    }
+
+    /// Is this row marked?
+    #[must_use]
+    pub fn is_marked(&self, id: u64) -> bool {
+        self.marked.contains(&id)
+    }
+
+    /// How many rows are marked. Includes rows a filter is hiding — hiding a
+    /// category does not unpick what was picked, and a count that shrank when
+    /// the reader pressed `2` would be lying about what is about to be
+    /// synchronised.
+    #[must_use]
+    pub fn marked_len(&self) -> usize {
+        self.marked.len()
+    }
+
+    /// The marked rows, in id order (which is stream order).
+    ///
+    /// Borrowed from `rows` rather than cloned: the caller only ever reads a
+    /// path out of them.
+    #[must_use]
+    pub fn marked_rows(&self) -> Vec<&CompareRow> {
+        self.rows
+            .iter()
+            .filter(|r| self.marked.contains(&r.id))
+            .collect()
+    }
+
 
     /// Where the selected row sits among the VISIBLE ones — the index a list
     /// widget highlights. `None` when a filter is hiding it, which is the

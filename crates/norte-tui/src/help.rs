@@ -54,6 +54,7 @@ const NO_IMPEDIMENT: Facts = Facts {
     source_read_only: false,
     dest_read_only: false,
     degraded: false,
+    journalled: true,
 };
 
 /// Padding that takes `seq` up to `col` CELLS, or nothing when it is already
@@ -906,6 +907,7 @@ mod tests {
             source_read_only: false,
             dest_read_only: false,
             degraded: false,
+            journalled: true,
         }
     }
 

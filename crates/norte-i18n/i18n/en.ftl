@@ -585,6 +585,7 @@ help-cmd-viewer-encoding-auto = back to auto-detection
 help-cmd-viewer-hex = toggle hex view
 help-cmd-pane-search = search by name/content (Alt+F7)
 help-cmd-pane-compare-dirs = compare the two panes and open the diff pane
+help-cmd-pane-sync-dirs = plan a one-way synchronisation from this pane to the other
 help-cmd-pane-copy-path = copy the path of the selection to the clipboard
 search-title = Search
 search-name = name (glob):
@@ -609,7 +610,7 @@ compare-title = Compare
 compare-header-left = left
 compare-header-right = right
 compare-empty = no rows yet
-compare-hint = [tab] side · [1-5] filter · [enter] go there · [esc] close
+compare-hint = tab side · 1-5 filter · ins mark · s sync · m mirror · enter go · esc close
 compare-active-side = acting on: { $side }
 compare-status-running = compare: { $n } rows (comparing…)
 compare-status-done = compare: { $n } rows
@@ -735,6 +736,46 @@ sync-confirm-delete-unclear = { $n } trees will be deleted from the destination,
 sync-confirm-no-way-back = { $n } steps will change the destination and none of them can be undone afterwards. Continue?
 sync-confirm-partial = { $n } steps of this plan cannot be undone afterwards. Continue?
 sync-confirm-unclear = this version cannot tell whether these { $n } changes can be undone afterwards. Continue?
+# The sync PANE (Ctrl+Y, or `s`/`m` inside the diff pane). Its keys are fixed,
+# like the diff pane's, so the hint line is the only place they are written.
+sync-title = synchronise
+sync-mode-update = update
+sync-mode-mirror = mirror
+sync-header-step = step
+sync-header-path = path
+sync-header-size = size
+sync-planning = planning… { $n } steps so far
+sync-empty = this plan has no steps: the two trees already agree
+sync-status-cancelled = cancelled — { $n } steps had arrived, and there is no plan to approve
+sync-status-failed = the plan failed: { $error }
+sync-status-ready = { $n } steps · press a to approve
+sync-status-not-approvable = { $n } steps · this plan cannot be approved
+sync-status-applying = applying…
+sync-status-applied = { $done } steps applied, { $failed } failed
+sync-status-applied-undoable = { $done } steps applied, { $failed } failed · undo it with the undo command
+sync-status-applied-not-undoable = { $done } steps applied, { $failed } failed · nothing was journalled, so there is nothing to undo
+sync-hint = ↑↓ move · a approve · Esc close
+sync-hint-done = ↑↓ move · Esc close
+sync-hint-confirm = y confirm · any other key cancels
+# The destination spells this entry differently from the source (#152): the
+# write lands on the destination's spelling, and both are shown so nobody
+# reads a normalisation difference as a second file.
+sync-dest-spelling = destination: { $path }
+# A step's path hangs off the destination root, not the source one.
+sync-anchor-dest = (destination)
+sync-anchor-either = (which side is not recorded)
+compare-marked = { $n } marked
+msg-sync-needs-daemon = synchronising needs the daemon (--daemon): it has to be journalled
+msg-sync-too-many-marks = { $n } marks is over the { $max } this request takes: mark fewer, or mark a directory that holds them
+msg-sync-cannot-approve = this plan cannot be approved as it stands
+msg-sync-mark-outside-roots = a marked row is in neither of the two directories: re-run the comparison
+msg-sync-mark-is-the-root = a marked row is one of the two directories itself, which would mean the whole tree: mark what is inside it
+err-overlapping-roots = the two directories overlap
+err-overlapping-roots-same = source and destination are the same directory
+err-overlapping-roots-source-inside = the source is inside the destination
+err-overlapping-roots-dest-inside = the destination is inside the source
+reason-needs-daemon = needs the daemon (--daemon)
+
 on-yes = on
 on-no = off
 
@@ -907,7 +948,6 @@ keymap-unavailable-not-here = { $command }: not available here
 keymap-count-ignored = { $command } does not take a count ({ $count } ignored)
 keymap-reason-archive-write = writing archives
 keymap-reason-editor = built-in editor
-keymap-reason-sync = directory synchronisation
 keymap-reason-tree = directory tree panel
 keymap-reason-tabs = panel tabs
 keymap-reason-sort = sort commands

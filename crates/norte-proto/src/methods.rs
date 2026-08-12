@@ -3045,6 +3045,75 @@ impl RelPath {
     pub fn is_root(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// La ruta de `path` RELATIVA a `root`, o `None` si no cuelga de ella.
+    ///
+    /// Vive aquí porque aquí viven los tres tipos que toca —[`VPath`],
+    /// [`Segment`] y este— y porque la respuesta tiene que ser UNA: el
+    /// transductor que produce los pasos y el frontend que arma la petición
+    /// DERIVAN sus `rel` por aquí, que es lo que hace que la comparación de
+    /// cadenas wire que el filtro `include` del core hace después signifique
+    /// algo. Dos implementaciones que difirieran mandarían un `include` que no
+    /// selecciona lo que el lector marcó.
+    ///
+    /// # Cómo compara, y por qué así
+    /// Scheme, authority y luego los segmentos UNO A UNO por sus bytes crudos:
+    /// sin `to_str`, sin lossy, sin normalizar y sin plegar mayúsculas (regla
+    /// dura 1). Que sea por SEGMENTOS y no por prefijo de cadena es lo que
+    /// impide que `…/ab` cuelgue de `…/a`.
+    ///
+    /// La authority también se compara BYTE A BYTE, y es deliberado aunque un
+    /// hostname DNS no distinga mayúsculas: para `mem://` y para un id de
+    /// conexión de object storage la authority es un testigo opaco, y plegarla
+    /// juntaría dos conexiones distintas. Falla CERRADO — un `None`, nunca una
+    /// escritura de más.
+    ///
+    /// # Lo que el llamante tiene que decidir
+    /// El resultado no se puede escapar de la raíz (un [`Segment`] no puede ser
+    /// `..`), pero SÍ puede ser la raíz misma (`path == root`), que en un plan
+    /// de sincronización es el blanco más destructivo que existe y en un
+    /// [`SyncBlocker`] es el valor CORRECTO —un destino de solo lectura cuelga
+    /// de la raíz—. Quién sabe cuál de las dos cosas es lo sabe el llamante, así
+    /// que se devuelve y se decide allí.
+    ///
+    /// Y lo mismo con el `None`: **falla cerrado siempre que el llamante lo
+    /// convierta en una NEGATIVA**. Los dos de hoy lo hacen (el plan muere, la
+    /// selección se rechaza). Un llamante que lo leyera como «sáltate esta
+    /// fila» convertiría una comparación estricta en un filtro silencioso, que
+    /// es la única forma que tiene esto de ser peligroso.
+    ///
+    /// ```
+    /// use norte_proto::VPath;
+    /// use norte_proto::methods::RelPath;
+    /// let root = VPath::parse("file:///origen").expect("root");
+    /// let path = VPath::parse("file:///origen/sub/a.txt").expect("path");
+    /// assert_eq!(
+    ///     RelPath::under(&root, &path).expect("cuelga").to_wire(),
+    ///     "sub/a.txt"
+    /// );
+    /// // Por SEGMENTOS, no por prefijo de cadena.
+    /// let otro = VPath::parse("file:///origenes/a.txt").expect("path");
+    /// assert!(RelPath::under(&root, &otro).is_none());
+    /// // La raíz misma sale como la RAÍZ, y decidir qué hacer con eso es del
+    /// // llamante.
+    /// assert!(RelPath::under(&root, &root).expect("es la raíz").is_root());
+    /// ```
+    #[must_use]
+    pub fn under(root: &VPath, path: &VPath) -> Option<Self> {
+        if path.scheme() != root.scheme() || path.authority() != root.authority() {
+            return None;
+        }
+        let mut rest = path.segments();
+        for root_segment in root.segments() {
+            if rest.next() != Some(root_segment) {
+                return None;
+            }
+        }
+        // Inalcanzable: cada uno de estos bytes salió de un `Segment` que un
+        // `VPath` ya validó. Se mapea a `None` en vez de `expect` (regla 6).
+        let rest = rest.map(Segment::new).collect::<Result<Vec<_>, _>>().ok()?;
+        Some(Self::new(rest))
+    }
 }
 
 impl fmt::Display for RelPath {

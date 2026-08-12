@@ -263,6 +263,37 @@ impl Clone for Backend {
 }
 
 impl Backend {
+    /// ¿Registra este backend sus mutaciones en un journal, y por tanto se
+    /// pueden deshacer?
+    ///
+    /// Hoy es exactamente «va contra el daemon». El brazo embebido lo
+    /// construyen `norte-tui` y `norte-cli` con `Engine::new()`, sin journal y
+    /// sin spool, así que [`Self::sync_apply`] se niega en cerrado — regla
+    /// dura 4, sincronizar entierra y tiene que haber vuelta atrás.
+    ///
+    /// Es una pregunta sobre el TRANSPORTE y no sobre el engine porque desde
+    /// fuera no hay forma de preguntárselo al engine: `Engine` no publica si
+    /// tiene journal, y un frontend que lo dedujera del primer `Unsupported`
+    /// se habría enterado después de enseñar un plan.
+    ///
+    /// Un frontend la usa para ATENUAR antes de que el lector pulse la tecla
+    /// (`norte_frontend::availability::Facts::journalled`), no para saltarse
+    /// ninguna comprobación: quien decide sigue siendo el core.
+    ///
+    /// ```
+    /// use norte_core::{Engine, backend::Backend};
+    /// use std::sync::Arc;
+    /// assert!(!Backend::Embedded(Arc::new(Engine::new())).is_journalled());
+    /// ```
+    #[must_use]
+    pub fn is_journalled(&self) -> bool {
+        match self {
+            Self::Embedded(_) => false,
+            #[cfg(unix)]
+            Self::Remote(_) => true,
+        }
+    }
+
     /// Listado de un directorio como STREAM perezoso (ADR 0017). Embebido =
     /// el stream del engine tal cual; remoto = primera página EAGER (paridad
     /// de errores: `NotFound`/`TypeMismatch` en el `Result`, no como primer

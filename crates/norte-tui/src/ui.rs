@@ -254,7 +254,12 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         // comparación no entre en el `TaskBoard` (igual que la búsqueda viva:
         // su progreso lo pinta el pie del propio panel) — lo que se ve ahí
         // debajo son las OTRAS tasks, que siguen corriendo.
-        if let Some(view) = &app.compare {
+        if let Some(view) = &app.sync {
+            // Encima del de diferencias, que sigue vivo detrás con sus marcas:
+            // el plan es lo que hay que mirar mientras se decide, y volver a
+            // las filas es cerrar el plan.
+            draw_sync(frame, rows[0], view, &app.theme);
+        } else if let Some(view) = &app.compare {
             draw_compare(frame, rows[0], view, &app.theme);
         } else {
             for (i, pane) in app.panes.iter().enumerate() {
@@ -3203,7 +3208,7 @@ fn draw_compare(
     // Anchos: las dos marcas y su separación en el centro, el resto a partes
     // iguales entre las dos caras. `saturating_sub` porque un terminal
     // estrecho es un terminal, no un panic.
-    let sides = inner.width.saturating_sub(COMPARE_MARKS_W);
+    let sides = inner.width.saturating_sub(COMPARE_MARKS_W + 1);
     let face_w = usize::from(sides / 2).max(1);
 
     if let Some(a) = cabecera {
@@ -3229,7 +3234,16 @@ fn draw_compare(
         .take(alto)
         .map(|row| {
             let cells = cells_for(row, view.left_encoding, view.right_encoding);
+            // La marca de selección va a la IZQUIERDA del todo, fuera de las
+            // dos caras: es una decisión del lector sobre la fila entera, no
+            // sobre uno de los dos lados.
+            let marca = if view.pane.is_marked(row.id) {
+                '*'
+            } else {
+                ' '
+            };
             ListItem::new(Line::from(vec![
+                Span::styled(marca.to_string(), theme.role(Role::Selection)),
                 compare_face_span(cells.left.as_ref(), face_w, theme),
                 Span::styled(
                     format!(" {}{} ", cells.glyphs.verdict, cells.glyphs.confidence),
@@ -3270,6 +3284,12 @@ fn draw_compare(
         );
     }
     if let Some(a) = teclas_area {
+        // Las teclas de sincronizar caben en la MISMA línea, y esa es la razón
+        // de que la línea entera perdiera los corchetes: a 80 columnas el
+        // marco tiene 78 y la versión con corchetes se cortaba a media
+        // palabra. El recuento de marcas no está aquí sino en el pie del
+        // marco, que sí tiene sitio — el snapshot es lo que lo destapó, que es
+        // exactamente para lo que está.
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 t("compare-hint"),
@@ -3313,7 +3333,7 @@ fn compare_layout(outer: Rect) -> (Option<Rect>, Rect, Option<Rect>, Option<Rect
 fn compare_header(face_w: usize, theme: &TuiTheme) -> Paragraph<'static> {
     Paragraph::new(Line::from(Span::styled(
         format!(
-            "{:<face_w$} {:^3} {:<face_w$}",
+            " {:<face_w$} {:^3} {:<face_w$}",
             norte_frontend::middle_ellipsis(&t("compare-header-left"), face_w),
             "",
             norte_frontend::middle_ellipsis(&t("compare-header-right"), face_w),
@@ -3387,6 +3407,17 @@ fn compare_status_line(view: &crate::app::CompareView) -> String {
             &norte_frontend::compare::side_label(view.pane.active_side(), norte_i18n::active()),
         )],
     );
+    // El recuento de marcas va aquí y no en la línea de teclas: es estado, no
+    // vocabulario, y a 80 columnas la línea de teclas ya va llena. Solo cuando
+    // hay alguna — un « 0 marcadas » permanente sería ruido en el caso normal.
+    let marcadas = view.pane.marked_len();
+    if marcadas > 0 {
+        let n = marcadas.to_string();
+        return format!(
+            " {estado} · {lado} · {} ",
+            ta("compare-marked", &[("n", &n)])
+        );
+    }
     format!(" {estado} · {lado} ")
 }
 
@@ -3436,6 +3467,325 @@ fn compare_mark_style(theme: &TuiTheme, verdict: norte_proto::methods::CompareVe
         V::TypeMismatch | V::Ambiguous | V::Error => theme.role(Role::Error),
         _ => theme.role(Role::Info),
     }
+}
+
+/// Pinta el panel de sincronización: el resumen del plan, sus pasos y la
+/// pregunta que falte.
+///
+/// Todo lo que dice sale de [`norte_frontend::sync`] (regla dura 7): el
+/// resumen, las tres marcas de cada paso, qué devuelve el undo y la segunda
+/// pregunta. Aquí solo se reparte el sitio y se elige el color, y el color
+/// nunca es lo único que distingue nada (§17) — las marcas son glifos ASCII.
+fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, theme: &TuiTheme) {
+    let (source_txt, source_hostil) =
+        norte_frontend::path_display_with(&view.source_root, view.source_encoding);
+    // Con la reinterpretación del DESTINO, no la del origen: un share CP1251
+    // en el otro pane se pintaba `????` en el título aunque el lector hubiera
+    // pulsado `Alt+E` sobre él.
+    let (dest_txt, dest_hostil) =
+        norte_frontend::path_display_with(&view.dest_root, view.dest_encoding);
+    let badge = |h: bool| if h { HOSTILE_BADGE } else { "" };
+    let modo = match view.mode {
+        norte_proto::methods::SyncMode::Mirror => t("sync-mode-mirror"),
+        _ => t("sync-mode-update"),
+    };
+    // La FLECHA es el sentido, y es la mitad de lo que se aprueba: origen a la
+    // izquierda del `→`, destino a la derecha, siempre, sin depender de qué
+    // pane sea cuál.
+    let title = format!(
+        " {} ({modo}) — {}{} → {}{} ",
+        t("sync-title"),
+        badge(source_hostil),
+        source_txt,
+        badge(dest_hostil),
+        dest_txt
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.role(if view.confirming.is_some() {
+            Role::Warning
+        } else {
+            Role::BorderFocus
+        }))
+        .title(Span::styled(title, theme.role(Role::Title)))
+        .title_bottom(Span::styled(sync_status_line(view), theme.role(Role::Info)));
+    let outer = block.inner(area);
+    frame.render_widget(block, area);
+    if outer.width == 0 || outer.height == 0 {
+        return;
+    }
+    let (resumen_area, inner, teclas_area) = sync_layout(outer, view);
+    if let Some(a) = resumen_area {
+        frame.render_widget(sync_summary(view, theme), a);
+    }
+    // Los pasos se pintan LLEGANDO, no solo cerrados: mientras el plan viaja
+    // `SyncState::plan()` contesta `None` y el pie ya está contando «6 pasos»
+    // — un hueco vacío debajo era la pantalla contradiciéndose.
+    let steps = view.steps();
+    if steps.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                t("sync-empty"),
+                theme.role(Role::Info),
+            ))),
+            inner,
+        );
+    } else {
+        let alto = usize::from(inner.height);
+        let selected = view
+            .state
+            .plan()
+            .and_then(norte_frontend::sync::SyncPlan::selected_id)
+            .and_then(|id| steps.iter().position(|s| s.id == id));
+        let offset = list_offset(selected, steps.len(), inner.height);
+        // Solo se construye lo que cabe, por lo mismo que en el panel de
+        // diferencias: un plan puede tener cientos de miles de pasos y esto se
+        // repinta diez veces por segundo mientras siguen llegando.
+        let rows: Vec<ListItem<'_>> = steps
+            .iter()
+            .skip(offset)
+            .take(alto)
+            .map(|step| sync_step_item(step, view, usize::from(inner.width), theme))
+            .collect();
+        let mut state = ListState::default();
+        state.select(
+            selected
+                .and_then(|i| i.checked_sub(offset))
+                .filter(|i| *i < alto),
+        );
+        frame.render_stateful_widget(
+            List::new(rows).highlight_style(theme.role(Role::Selection)),
+            inner,
+            &mut state,
+        );
+    }
+    if let Some(a) = teclas_area {
+        // La pregunta y CÓMO se contesta van en dos líneas, no en una: a 80
+        // columnas la pregunta sola ya llena la fila, y la versión unida se
+        // cortaba justo por donde decía qué tecla la contesta — que es la
+        // mitad que hace falta. Lo cazó el snapshot.
+        let lineas = match &view.confirming {
+            Some(c) => vec![
+                Line::from(Span::styled(c.text.clone(), theme.role(Role::Warning))),
+                Line::from(Span::styled(
+                    t("sync-hint-confirm"),
+                    theme.role(Role::Warning),
+                )),
+            ],
+            // Sin `a aprobar` una vez mandado: aplicarlo GASTA el plan, y un
+            // segundo `sync.apply` del mismo hash contesta `PlanStale`.
+            None if view.awaiting_approval() => vec![Line::from(Span::styled(
+                t("sync-hint"),
+                theme.role(Role::Info),
+            ))],
+            None => vec![Line::from(Span::styled(
+                t("sync-hint-done"),
+                theme.role(Role::Info),
+            ))],
+        };
+        frame.render_widget(Paragraph::new(lineas), a);
+    }
+}
+
+/// Cuántas filas ocupa `texto` envuelto a `ancho` columnas.
+///
+/// Cuenta CELDAS, no bytes ni `char`s: medir en bytes reservaría de más y en
+/// `char`s de menos — y de menos es lo que corta la frase que dice que esto no
+/// se puede deshacer.
+fn wrapped_rows(texto: &str, ancho: u16) -> u16 {
+    if ancho == 0 {
+        return 1;
+    }
+    let celdas = u16::try_from(texto.width()).unwrap_or(u16::MAX);
+    let exactas = celdas.div_ceil(ancho).max(1);
+    // Una fila de holgura en cuanto la frase envuelve: `Wrap` parte por
+    // PALABRAS, así que `ceil(celdas / ancho)` es una cota INFERIOR y quedarse
+    // en ella recorta la última línea — que es la que dice que esto no se puede
+    // deshacer. El tope de `sync_layout` acota lo que la holgura puede costar.
+    if celdas > ancho {
+        exactas.saturating_add(1)
+    } else {
+        exactas
+    }
+}
+
+/// Reparte el interior del marco del panel de sincronización: resumen, lista y
+/// teclas.
+///
+/// El resumen se lleva lo que sus líneas pidan, hasta un tercio del alto: son
+/// las frases que deciden la aprobación, y recortarlas a una sola línea es
+/// esconder justamente el «esto no se puede deshacer». Con el marco tan corto
+/// que no cabe nada, la LISTA se lo queda todo.
+fn sync_layout(outer: Rect, view: &crate::app::SyncView) -> (Option<Rect>, Rect, Option<Rect>) {
+    if outer.height < 5 {
+        return (None, outer, None);
+    }
+    // Las líneas se ENVUELVEN, así que el alto no es su número: a 80 columnas
+    // «el destino no tiene papelera: …» son dos filas, y reservar una la
+    // cortaba por la mitad. El snapshot es lo que lo destapó.
+    let alto_resumen: u16 = view
+        .state
+        .plan()
+        .map(|p| p.summary_lines(norte_i18n::active()))
+        .unwrap_or_default()
+        .iter()
+        .map(|l| wrapped_rows(l, outer.width))
+        .sum();
+    // Hasta la MITAD del marco: son las frases que deciden la aprobación, y
+    // recortarlas para que quepan más pasos esconde justamente el «esto no se
+    // puede deshacer». Los pasos tienen barra; el resumen no.
+    let resumen = alto_resumen.min((outer.height / 2).max(1));
+    // La segunda pregunta se lleva dos filas: la pregunta y la tecla que la
+    // contesta.
+    let teclas = if view.confirming.is_some() { 2 } else { 1 };
+    let filas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(resumen),
+            Constraint::Min(1),
+            Constraint::Length(teclas),
+        ])
+        .split(outer);
+    ((resumen > 0).then(|| filas[0]), filas[1], Some(filas[2]))
+}
+
+/// El resumen del plan: lo que [`norte_frontend::sync::SyncPlan::summary_lines`]
+/// dijo, envuelto.
+fn sync_summary(view: &crate::app::SyncView, theme: &TuiTheme) -> Paragraph<'static> {
+    let lineas: Vec<Line<'static>> = view
+        .state
+        .plan()
+        .map(|p| p.summary_lines(norte_i18n::active()))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|l| Line::from(Span::styled(l, theme.role(Role::Regular))))
+        .collect();
+    // Envuelto y NO recortado a lo ancho: la primera línea es lo que el
+    // deshacer devuelve y la segunda de qué papelera se habla. Cortarlas deja
+    // al lector aprobando con media frase.
+    Paragraph::new(lineas).wrap(ratatui::widgets::Wrap { trim: false })
+}
+
+/// Una fila del panel: las tres marcas, la ruta y el tamaño.
+///
+/// Las tres marcas son de columnas DISTINTAS y se separan, porque el alfabeto
+/// no es único entre ellas a propósito (`!` es `Certain` en una e
+/// `Irreversible` en otra): juntas se leerían como una palabra.
+fn sync_step_item(
+    step: &norte_proto::methods::SyncStep,
+    view: &crate::app::SyncView,
+    ancho: usize,
+    theme: &TuiTheme,
+) -> ListItem<'static> {
+    let cells = norte_frontend::sync::render_step(step, view.dest_trash(), view.source_encoding);
+    // `dest_rel` es la ortografía del DESTINO (#152) — la escritura cae sobre
+    // ELLA—, así que se decodifica con la reinterpretación del destino y no con
+    // la del origen, que es la que `render_step` aplica a las dos.
+    let dest_rel = step
+        .dest_rel
+        .as_ref()
+        .map(|r| norte_frontend::sync::rel_display(r, view.dest_encoding));
+    // Las marcas, el ancla y el tamaño; lo que sobra es para la ruta.
+    let ancla = match cells.anchor {
+        norte_frontend::sync::RelAnchor::Dest => t("sync-anchor-dest"),
+        norte_frontend::sync::RelAnchor::Either => t("sync-anchor-either"),
+        norte_frontend::sync::RelAnchor::Source => String::new(),
+    };
+    let tam = cells
+        .size
+        .map(norte_frontend::human_bytes)
+        .unwrap_or_default();
+    let marcas = format!(
+        "{} {} {} ",
+        cells.glyphs.kind, cells.glyphs.confidence, cells.glyphs.undo
+    );
+    // Por CELDAS y no por `char`s: un ancla o un tamaño con caracteres anchos
+    // presupuestaría de menos y la fila desbordaría el marco (#79).
+    let ruta_w = ancho
+        .saturating_sub(marcas.width() + ancla.width() + tam.width() + 2)
+        .max(1);
+    // La ortografía del DESTINO cuando difiere (#152): la escritura cae sobre
+    // ELLA, así que enseñar solo la del origen sería nombrar un fichero que no
+    // es el que se va a tocar.
+    let ruta = match &dest_rel {
+        Some(d) if d.text != cells.rel.text => {
+            format!("{} → {}", cells.rel.text, d.text)
+        }
+        _ => cells.rel.text.clone(),
+    };
+    let badge = if cells.rel.hostile { HOSTILE_BADGE } else { "" };
+    let mut spans = vec![
+        Span::styled(marcas, sync_undo_style(theme, cells.undo)),
+        Span::styled(
+            format!("{badge}{}", norte_frontend::middle_ellipsis(&ruta, ruta_w)),
+            theme.entry(&cells.rel.raw, norte_proto::EntryKind::File),
+        ),
+    ];
+    if !ancla.is_empty() {
+        spans.push(Span::styled(format!(" {ancla}"), theme.role(Role::Info)));
+    }
+    if !tam.is_empty() {
+        spans.push(Span::styled(format!(" {tam}"), theme.role(Role::Info)));
+    }
+    ListItem::new(Line::from(spans))
+}
+
+/// El color de las marcas de un paso. El GLIFO ya lo distingue sin color
+/// ninguno (§17); esto solo lo refuerza para quien sí lo ve.
+fn sync_undo_style(theme: &TuiTheme, undo: norte_frontend::sync::StepUndo) -> Style {
+    use norte_frontend::sync::StepUndo as U;
+    match undo {
+        U::Reverts | U::Nothing => theme.role(Role::Regular),
+        U::LeftBehind => theme.role(Role::Warning),
+        U::Irreversible | U::Unclear => theme.role(Role::Error),
+    }
+}
+
+/// El pie del panel de sincronización: en qué punto está el diálogo.
+fn sync_status_line(view: &crate::app::SyncView) -> String {
+    use crate::app::SyncRunState as R;
+    let plan = view.state.plan();
+    let n = plan.map_or_else(
+        || match &view.state {
+            norte_frontend::sync::SyncState::Planning(p) => p.len(),
+            _ => 0,
+        },
+        |p| p.steps().len(),
+    );
+    let n = n.to_string();
+    let cuerpo = match (&view.state, view.run) {
+        (_, R::Failed) => ta(
+            "sync-status-failed",
+            &[("error", view.error.as_deref().unwrap_or_default())],
+        ),
+        (_, R::Cancelled) => ta("sync-status-cancelled", &[("n", &n)]),
+        (norte_frontend::sync::SyncState::Planning(_), _) => ta("sync-planning", &[("n", &n)]),
+        (norte_frontend::sync::SyncState::Ready(p), _) => {
+            let id = if p.can_approve() {
+                "sync-status-ready"
+            } else {
+                "sync-status-not-approvable"
+            };
+            ta(id, &[("n", &n)])
+        }
+        (norte_frontend::sync::SyncState::Applying(_), _) => t("sync-status-applying"),
+        (norte_frontend::sync::SyncState::Applied(a), _) => {
+            let done = a.report().done.to_string();
+            let failed = a.report().failed.to_string();
+            // `is_undoable` y no el pronóstico del plan: un informe sin
+            // `batch_id` significa que no se journalizó nada, prometiera lo que
+            // prometiera el plan antes de correr.
+            let id = if a.is_undoable() {
+                "sync-status-applied-undoable"
+            } else {
+                "sync-status-applied-not-undoable"
+            };
+            ta(id, &[("done", &done), ("failed", &failed)])
+        }
+    };
+    // Con sus espacios, como el pie del panel de diferencias: pegado al `└` se
+    // lee como parte del marco.
+    format!(" {cuerpo} ")
 }
 
 #[allow(clippy::too_many_arguments)] // wiring del render, no API

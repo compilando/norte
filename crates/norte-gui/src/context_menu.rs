@@ -165,6 +165,7 @@ pub fn facts_for(kind: EntryKind, count: usize, read_only: ReadOnly) -> Facts {
         // por scheme). Además hoy no veta nada en la tabla: «degradada»
         // significa sesión sin cifrar, no sesión inservible.
         degraded: false,
+        journalled: true,
     }
 }
 

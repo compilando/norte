@@ -56,7 +56,7 @@ use norte_help::{Availability, Reason};
 /// second instance of exactly that, so the pattern is the rule here and not an
 /// exception made once.
 ///
-/// (`clippy::struct_excessive_bools`: allowed on purpose. These are six
+/// (`clippy::struct_excessive_bools`: allowed on purpose. These are seven
 /// INDEPENDENT observations about one moment, not the states of a machine —
 /// any combination of them is a real context, so there is no enum to collapse
 /// them into. Wrapping each in a two-variant enum would make every call site
@@ -99,6 +99,23 @@ pub struct Facts {
     /// unreachable or reconnecting session) belongs in this slot without
     /// changing the shape of the struct.
     pub degraded: bool,
+    /// Mutations through this backend are recorded in a journal, so they can
+    /// be undone.
+    ///
+    /// `false` for the TUI's in-process engine — the one `norte-tui` builds
+    /// without `--daemon`, which has neither journal nor sync spool. It is an
+    /// impediment of BACKEND and not of state, which is why it belongs here
+    /// and not in the paragraph this module's docs write against: it does not
+    /// change with the next keystroke, the reader has to start norte
+    /// differently.
+    ///
+    /// Only `pane.sync-dirs` reads it today. Copying, moving and deleting
+    /// stay lit without a journal because they have always worked that way
+    /// and dimming them would be a new claim about a pre-existing gap;
+    /// synchronising is the first mutation the core itself refuses without one
+    /// (`sync.apply` needs the journal to open a batch), so this is the field
+    /// that says so before the reader presses the key.
+    pub journalled: bool,
 }
 
 /// Fluent id for a reason, WITHOUT a frontend prefix: both frontends read
@@ -119,6 +136,7 @@ pub fn reason_key(reason: Reason) -> &'static str {
         Reason::PolicyDenied => "reason-policy-denied",
         Reason::ConnectionDegraded => "reason-connection-degraded",
         Reason::WrongTarget => "reason-wrong-target",
+        Reason::NeedsDaemon => "reason-needs-daemon",
         _ => "reason-unavailable",
     }
 }
@@ -201,6 +219,7 @@ fn first_failure(checks: &[(bool, Reason)]) -> Availability {
 ///     source_read_only: true,
 ///     dest_read_only: false,
 ///     degraded: false,
+///     journalled: true,
 /// };
 /// // Se lee DESDE el zip: copiar vale.
 /// assert!(verdict("pane.copy", &en_un_zip).is_available());
@@ -260,6 +279,18 @@ pub fn verdict(command: &str, facts: &Facts) -> Availability {
         "pane.ai-rename" | "pane.delete" | "pane.delete-permanent" | "pane.mkdir" => {
             gated(!facts.source_read_only, Reason::ReadOnlyBackend)
         }
+        // Sincronizar (spec 2 del ítem 1): escribe en el DESTINO —como copiar—
+        // y además borra y sobrescribe allí, así que el core exige journal
+        // (`sync.apply` abre un lote deshacible; regla dura 4) y se niega sin
+        // él. El orden es la decisión, igual que en `pane.rename`: sin daemon
+        // no hay nada que el lector pueda arreglar quedándose donde está, y
+        // «este destino no escribe» es un consejo para una sesión que sí podría
+        // sincronizar. Sin este brazo caía en el fail-OPEN y la hoja de
+        // referencia ofrecía la tecla que el engine embebido rechaza.
+        "pane.sync-dirs" => first_failure(&[
+            (!facts.journalled, Reason::NeedsDaemon),
+            (facts.dest_read_only, Reason::ReadOnlyBackend),
+        ]),
         // Aquí caen dos cosas distintas, y conviene no confundirlas al leer:
         // los comandos que NO tienen impedimento posible (`pane.copy-path` no
         // toca el backend — vale hasta dentro de un zip; `app.quit` tampoco) y
@@ -350,6 +381,7 @@ pub fn plugin_of_command(command: &str) -> Option<&str> {
 ///     source_read_only: false,
 ///     dest_read_only: false,
 ///     degraded: false,
+///     journalled: true,
 /// };
 /// let activos: BTreeSet<String> = ["acme.ftp".to_owned()].into_iter().collect();
 ///
@@ -387,6 +419,7 @@ mod tests {
             source_read_only: false,
             dest_read_only: false,
             degraded: false,
+            journalled: true,
         }
     }
 
@@ -489,6 +522,7 @@ mod tests {
             Reason::PolicyDenied,
             Reason::ConnectionDegraded,
             Reason::WrongTarget,
+            Reason::NeedsDaemon,
         ] {
             let k = reason_key(r);
             assert!(!k.is_empty(), "{r:?} sin clave");
@@ -509,6 +543,7 @@ mod tests {
             "reason-policy-denied",
             "reason-connection-degraded",
             "reason-wrong-target",
+            "reason-needs-daemon",
             "reason-unavailable",
         ] {
             for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
@@ -577,6 +612,57 @@ mod tests {
                 "{cmd} atenuado por un impedimento de ESTADO"
             );
         }
+    }
+
+    /// Sincronizar sin journal se APAGA, y con un motivo sobre el que se puede
+    /// actuar: arranca norte contra el daemon. No es un impedimento de estado
+    /// —no cambia con la siguiente tecla— sino de backend, que es la clase que
+    /// esta tabla sí modela. El engine embebido de la TUI no tiene journal ni
+    /// spool y `sync.apply` se niega en cerrado (regla dura 4), así que sin
+    /// este brazo la hoja de referencia ofrecía una tecla muerta — que es
+    /// exactamente lo que #159 acaba de costar una vez.
+    #[test]
+    fn sincronizar_sin_journal_manda_al_daemon() {
+        let embebida = Facts {
+            journalled: false,
+            ..one_file()
+        };
+        assert_eq!(
+            verdict("pane.sync-dirs", &embebida).reason(),
+            Some(Reason::NeedsDaemon)
+        );
+        assert!(
+            verdict("pane.sync-dirs", &one_file()).is_available(),
+            "con journal se ofrece"
+        );
+        // Y comparar NO se apaga por lo mismo: leer los dos árboles no muta
+        // nada, así que no necesita journal. Dos comandos vecinos que dicen
+        // cosas distintas porque son cosas distintas.
+        assert!(verdict("pane.compare-dirs", &embebida).is_available());
+    }
+
+    /// Con daemon pero contra un destino que no escribe, el motivo es el del
+    /// destino. El ORDEN importa: sin daemon no hay nada que el lector arregle
+    /// quedándose donde está, así que ese gana aunque los dos se cumplan.
+    #[test]
+    fn sincronizar_reporta_el_primer_fallo_no_el_ultimo() {
+        let hacia_un_zip = Facts {
+            dest_read_only: true,
+            ..one_file()
+        };
+        assert_eq!(
+            verdict("pane.sync-dirs", &hacia_un_zip).reason(),
+            Some(Reason::ReadOnlyBackend)
+        );
+        let ninguna_de_las_dos = Facts {
+            dest_read_only: true,
+            journalled: false,
+            ..one_file()
+        };
+        assert_eq!(
+            verdict("pane.sync-dirs", &ninguna_de_las_dos).reason(),
+            Some(Reason::NeedsDaemon)
+        );
     }
 
     fn activos(ids: &[&str]) -> std::collections::BTreeSet<String> {

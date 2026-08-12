@@ -88,6 +88,7 @@ keymap = [
     { on = ["ctrl+shift+tab"], run = "pane.tab-prev" },
     { on = ["shift+f1"], run = "pane.columns" },
     { on = ["shift+f2"], run = "pane.compare-dirs" },
+    { on = ["ctrl+y"], run = "pane.sync-dirs" },
     { on = ["shift+f4"], run = "pane.edit-new" },
     { on = ["alt+down"], run = "pane.history" },
     { on = ["ctrl+f3"], run = "pane.sort-name" },

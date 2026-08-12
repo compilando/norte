@@ -193,6 +193,179 @@ impl CompareView {
     }
 }
 
+/// La frase para una negativa de
+/// [`norte_frontend::sync::include_from_rows`].
+///
+/// Las tres se NIEGAN en vez de recortar: una selección que se encoge sola deja
+/// al lector aprobando otra cosa —o el árbol entero, en el caso de la raíz—.
+fn sync_include_message(e: &norte_frontend::sync::IncludeError) -> String {
+    use norte_frontend::sync::IncludeError;
+    match e {
+        IncludeError::TooMany { marked, max } => ta(
+            "msg-sync-too-many-marks",
+            &[("n", &marked.to_string()), ("max", &max.to_string())],
+        ),
+        IncludeError::Unrooted => t("msg-sync-mark-outside-roots"),
+        IncludeError::RootSelected => t("msg-sync-mark-is-the-root"),
+    }
+}
+
+/// Las dos raíces de una sincronización y cómo se leen sus nombres.
+///
+/// Una struct y no una tupla de cuatro: `(VPath, VPath, Option<_>, Option<_>)`
+/// invita a cruzar la reinterpretación del origen con la raíz del destino, que
+/// es exactamente el fallo que tener dos existe para evitar.
+struct SyncRoots {
+    source: VPath,
+    dest: VPath,
+    source_encoding: Option<norte_encoding::NameEncoding>,
+    dest_encoding: Option<norte_encoding::NameEncoding>,
+}
+
+/// Cómo va la Task de un panel de sincronización, para la barra de estado.
+///
+/// Deliberadamente MÁS CORTO que [`CompareState`]: aquí el «llegaron todas las
+/// filas» no se deduce de un conteo, lo DICE el `sync.plan_done` — sin él no
+/// hay `plan_hash` y no hay nada que aprobar, así que un plan incompleto no es
+/// un estado que pintar sino un plan que no existe (`SyncPlanEvent`, ADR 0049).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SyncRunState {
+    /// Una Task viva: se está planificando, o se está aplicando.
+    #[default]
+    Running,
+    /// La Task terminó bien.
+    Done,
+    /// El usuario canceló.
+    Cancelled,
+    /// La Task falló (el error va por la barra).
+    Failed,
+}
+
+/// El panel de sincronización abierto: el modelo puro de
+/// [`norte_frontend::sync::SyncState`] más lo que la TUI necesita para
+/// pintarlo y para hablar con el backend.
+///
+/// El reparto es el mismo que el de [`CompareView`] (regla dura 7): el estado
+/// del diálogo —qué pasos llegaron, si cuadran con lo que el daemon cerró, qué
+/// devuelve el undo y cuál es la segunda pregunta— vive en `norte-frontend`,
+/// donde se prueba sin terminal. Aquí solo están las dos raíces que la cabecera
+/// pinta, el estado del run y la pregunta de confirmación EN CURSO.
+#[derive(Debug)]
+pub struct SyncView {
+    /// El modelo del diálogo (Task 12).
+    pub state: norte_frontend::sync::SyncState,
+    /// Cómo va la Task que está corriendo ahora mismo (la del plan primero, la
+    /// de la aplicación después).
+    pub run: SyncRunState,
+    /// Modo pedido, que la cabecera pinta: un `Mirror` borra y un `Update` no,
+    /// y el lector tiene que verlo antes de aprobar.
+    pub mode: norte_proto::methods::SyncMode,
+    /// Raíz ORIGEN. De ella cuelgan las `rel` de casi todos los pasos.
+    pub source_root: VPath,
+    /// Raíz DESTINO. De ella cuelgan las de un `DeleteTree` y las de un `Skip`
+    /// ilegible ([`norte_frontend::sync::anchor_of`]).
+    pub dest_root: VPath,
+    /// Reinterpretación de nombres (#57) del pane ORIGEN, congelada al abrir.
+    pub source_encoding: Option<norte_encoding::NameEncoding>,
+    /// La del pane DESTINO, que puede ser otra.
+    ///
+    /// Dos y no una, por lo mismo que el panel de diferencias lleva dos: los
+    /// dos panes son dos ubicaciones y pueden llevar overrides distintos. Aquí
+    /// además importa más, porque `SyncStep::dest_rel` existe precisamente
+    /// para enseñar la ortografía del DESTINO (#152) — decodificarla con el
+    /// codepage del ORIGEN nombraría con otros bytes el fichero sobre el que
+    /// va a caer la escritura.
+    pub dest_encoding: Option<norte_encoding::NameEncoding>,
+    /// La segunda pregunta, ya formulada y esperando un `y`.
+    ///
+    /// `None` = todavía no se ha pulsado aprobar, o el plan no la necesitaba.
+    /// Vive aquí y no en el modelo porque es estado de INTERACCIÓN —a medio
+    /// contestar— y el modelo de Task 12 no retrocede: preguntar es de la
+    /// pantalla, decidir es suyo.
+    pub confirming: Option<norte_frontend::sync::Confirmation>,
+    /// Ya se pidió cancelar (el primer `Esc`), igual que en el panel de
+    /// diferencias y por el mismo motivo: el segundo `Esc` cierra pase lo que
+    /// pase con la Task.
+    pub cancel_requested: bool,
+    /// Categoría del error de una Task que FALLÓ, ya localizada y saneada.
+    pub error: Option<String>,
+}
+
+impl SyncView {
+    /// Un panel recién abierto sobre estas dos raíces, sin pasos todavía.
+    #[must_use]
+    pub fn new(
+        task_id: norte_proto::TaskId,
+        mode: norte_proto::methods::SyncMode,
+        source_root: VPath,
+        dest_root: VPath,
+        source_encoding: Option<norte_encoding::NameEncoding>,
+        dest_encoding: Option<norte_encoding::NameEncoding>,
+    ) -> Self {
+        Self {
+            // Con el `task_id` desde el principio: es lo que hace que un lote
+            // de OTRO plan —el lector replanifica con menos marcas— se caiga
+            // en vez de mezclarse con éste (Task 12, nota 3).
+            state: norte_frontend::sync::SyncState::Planning(norte_frontend::sync::Planning::new(
+                task_id,
+            )),
+            run: SyncRunState::Running,
+            mode,
+            source_root,
+            dest_root,
+            source_encoding,
+            dest_encoding,
+            confirming: None,
+            cancel_requested: false,
+            error: None,
+        }
+    }
+
+    /// Qué papelera tiene el DESTINO, según el plan.
+    ///
+    /// [`norte_proto::methods::DestTrash::Unknown`] mientras el plan no ha
+    /// cerrado, que es la respuesta honesta: sin `sync.plan_done` no se sabe, y
+    /// el modelo pinta cada paso como «esta versión no puede decirlo» en vez de
+    /// prometer que vuelve. Nunca se lee
+    /// [`norte_proto::methods::SyncStep::reversal`] a pelo — esa es la mitad de
+    /// la respuesta y la que miente cuando el destino no tiene papelera.
+    #[must_use]
+    pub fn dest_trash(&self) -> norte_proto::methods::DestTrash {
+        self.state.plan().map_or(
+            norte_proto::methods::DestTrash::Unknown,
+            norte_frontend::sync::SyncPlan::dest_trash,
+        )
+    }
+
+    /// Los pasos que hay AHORA MISMO, esté cerrado el plan o no.
+    ///
+    /// Mientras el plan llega, [`norte_frontend::sync::SyncState::plan`]
+    /// contesta `None` —no hay plan hasta el `sync.plan_done`, que es lo que le
+    /// da su `plan_hash`— y aun así los pasos ya recibidos existen y se pintan.
+    /// Sin esto el panel enseñaba un hueco vacío mientras el pie contaba
+    /// «planificando… 6 pasos», que es la pantalla diciéndose la contraria a sí
+    /// misma. La columna del undo de esos pasos sale «esta versión no puede
+    /// decirlo», que es la verdad hasta que se sepa la papelera del destino.
+    #[must_use]
+    pub fn steps(&self) -> &[norte_proto::methods::SyncStep] {
+        match &self.state {
+            norte_frontend::sync::SyncState::Planning(p) => p.steps(),
+            _ => self.state.plan().map_or(&[], |p| p.steps()),
+        }
+    }
+
+    /// ¿Sigue habiendo algo que aprobar?
+    ///
+    /// `false` en cuanto el plan se manda: la línea de teclas no puede seguir
+    /// ofreciendo `a aprobar` sobre un plan que ya se gastó —aplicarlo lo
+    /// consume, y un segundo `sync.apply` del mismo hash es `PlanStale`—.
+    #[must_use]
+    pub fn awaiting_approval(&self) -> bool {
+        matches!(self.state, norte_frontend::sync::SyncState::Ready(_))
+    }
+
+}
+
 impl Pane {
     /// Pane sobre `dir` con `entries`: #54, ya no hace falta ordenarlas antes
     /// — [`norte_frontend::PaneState::new`] normaliza internamente (dirs
@@ -1043,6 +1216,38 @@ pub struct App {
     /// [`Self::pending_shell`]: `dispatch` decide QUÉ, el run loop —dueño del
     /// canal y de la Task— lo hace.
     pub pending_compare: Option<norte_proto::methods::FsCompareParams>,
+    /// Panel de sincronización abierto (`Ctrl+Y`, o `s`/`m` dentro del panel
+    /// de diferencias): `None` = cerrado. Se pinta POR ENCIMA del de
+    /// diferencias, que sigue vivo detrás con sus marcas.
+    pub sync: Option<SyncView>,
+    /// Params de `sync.plan` resueltos y aún sin lanzar. Mismo reparto que
+    /// [`Self::pending_compare`].
+    pub pending_sync: Option<norte_proto::methods::SyncPlanParams>,
+    /// `plan_hash` que el lector aprobó y el run loop aún no ha aplicado.
+    ///
+    /// Es lo ÚNICO que viaja: `sync.apply` no lleva rutas ni modo, así que no
+    /// hay forma de que se ejecute algo distinto de lo que se enseñó (ADR
+    /// 0049). Un `Box` porque es el mayor de los `pending_*` con diferencia y
+    /// clippy mide el `App` entero.
+    pub pending_sync_apply: Option<Box<norte_proto::methods::PlanHash>>,
+    /// Reinterpretación de nombres (#57) del lado ORIGEN, congelada junto con
+    /// [`Self::pending_sync`] y no cuando el run loop abre el panel: entre una
+    /// cosa y la otra el lector puede haber pulsado `Alt+E`, y un plan que se
+    /// pintase con otra reinterpretación de la que se pidió enseñaría
+    /// `????.txt` donde el origen tenía un nombre CP1251.
+    pub pending_sync_encoding: (
+        Option<norte_encoding::NameEncoding>,
+        Option<norte_encoding::NameEncoding>,
+    ),
+    /// Este backend registra sus mutaciones en un journal y por tanto puede
+    /// sincronizar (`--daemon`).
+    ///
+    /// Lo fija el arranque, una vez, porque el `Backend` no cambia de brazo en
+    /// vida del proceso. Es lo que alimenta
+    /// [`norte_frontend::availability::Facts::journalled`]: sin él la hoja de
+    /// referencia ofrecería `Ctrl+Y` y el core lo rechazaría en cerrado —una
+    /// tecla muerta documentada, que es lo que #159 acaba de costar una vez.
+    pub backend_journalled: bool,
     /// Openers declarativos fusionados (#28): clonados en arranque y en cada
     /// hot-reload OK. Fuente de `pane.open` (F4). Vacío = sin openers.
     pub openers: norte_frontend::openers::OpenersConfig,
@@ -1956,6 +2161,14 @@ impl App {
             search_dialog: None,
             compare: None,
             pending_compare: None,
+            sync: None,
+            pending_sync: None,
+            pending_sync_apply: None,
+            pending_sync_encoding: (None, None),
+            // Fail-CLOSED: el `App` de un test no tiene backend, y ofrecer
+            // sincronizar por defecto convertiría cada test en un permiso.
+            // `main` lo enciende cuando el backend es remoto.
+            backend_journalled: false,
             openers: norte_frontend::openers::OpenersConfig::empty(),
             pending_open: None,
             pending_shell: None,
@@ -2104,6 +2317,147 @@ impl App {
         });
     }
 
+    /// Las dos raíces de una sincronización, en el orden `(origen, destino)`.
+    ///
+    /// Con el panel de diferencias abierto las decide su lado ACTIVO, que es
+    /// lo que `Tab` cambia: nada se infiere del foco ni del orden de los
+    /// panes, porque el sentido de una sincronización es la mitad de lo que
+    /// hay que aprobar. Sin panel abierto son el pane con foco y el otro, el
+    /// mismo reparto que [`Self::request_compare`].
+    #[must_use]
+    fn sync_roots(&self) -> SyncRoots {
+        match &self.sync_source_view() {
+            Some(view) => match view.pane.active_side() {
+                norte_proto::methods::Side::Right => SyncRoots {
+                    source: view.right_root.clone(),
+                    dest: view.left_root.clone(),
+                    source_encoding: view.right_encoding,
+                    dest_encoding: view.left_encoding,
+                },
+                _ => SyncRoots {
+                    source: view.left_root.clone(),
+                    dest: view.right_root.clone(),
+                    source_encoding: view.left_encoding,
+                    dest_encoding: view.right_encoding,
+                },
+            },
+            None => SyncRoots {
+                source: self.focused().dir().clone(),
+                dest: self.panes[self.focus() ^ 1].dir().clone(),
+                source_encoding: self.focused().name_encoding(),
+                dest_encoding: self.panes[self.focus() ^ 1].name_encoding(),
+            },
+        }
+    }
+
+    /// El panel de diferencias del que sale la selección, si lo hay.
+    fn sync_source_view(&self) -> Option<&CompareView> {
+        self.compare.as_ref()
+    }
+
+    /// `sync.plan`: resuelve QUÉ sincronizar y lo deja pendiente para el run
+    /// loop, o dice por qué no.
+    ///
+    /// Devuelve los params que dejó pendientes, para que un test lea la
+    /// decisión sin run loop.
+    ///
+    /// Las negativas que se dan AQUÍ, sin ir y volver al daemon:
+    ///
+    /// * **Sin journal.** El engine embebido de la TUI no lo tiene, y
+    ///   `sync.apply` se niega en cerrado (regla dura 4): planificar contra él
+    ///   sería enseñar un plan que nadie puede aprobar. La misma verdad que
+    ///   [`norte_frontend::availability::Facts::journalled`] ya atenúa en la
+    ///   hoja de referencia; esto es lo que pasa si el lector llega igual.
+    /// * **Un pane virtual**, y **las dos raíces en el mismo sitio**: idénticas
+    ///   a las de comparar, por las mismas razones.
+    /// * **Más marcas que [`SYNC_MAX_INCLUDE`]**. `Backend::sync_plan` lo
+    ///   rechaza con `InvalidPath`, que no dice cuántas sobran.
+    ///
+    /// [`SYNC_MAX_INCLUDE`]: norte_proto::methods::SYNC_MAX_INCLUDE
+    pub fn request_sync(
+        &mut self,
+        mode: norte_proto::methods::SyncMode,
+    ) -> Option<&norte_proto::methods::SyncPlanParams> {
+        if self.viewer.is_some() {
+            return None;
+        }
+        if !self.backend_journalled {
+            self.message = Some(t("msg-sync-needs-daemon"));
+            return None;
+        }
+        if self.compare.is_none() && (self.panes[0].virtual_search || self.panes[1].virtual_search)
+        {
+            self.message = Some(t("msg-pane-not-a-location"));
+            return None;
+        }
+        let SyncRoots {
+            source,
+            dest,
+            source_encoding,
+            dest_encoding,
+        } = self.sync_roots();
+        if source == dest {
+            self.message = Some(t("compare-same-path"));
+            return None;
+        }
+        let include = match self.sync_include(&source, &dest) {
+            Ok(include) => include,
+            Err(e) => {
+                self.message = Some(sync_include_message(&e));
+                return None;
+            }
+        };
+        self.pending_sync = Some(norte_proto::methods::SyncPlanParams {
+            source,
+            dest,
+            mode,
+            // Los criterios son los de comparar y el default del wire ya los
+            // trae. `follow_symlinks` y `descend_orphans` se quedan en su
+            // default a propósito: `Backend::sync_plan` responde `Unsupported`
+            // a los dos, porque el segundo no es del llamante —lo fija el
+            // planificador al lado del origen— y el primero no lo cumple nadie.
+            compare: norte_proto::methods::SyncCompareOptions::default(),
+            on_unknown: norte_proto::methods::OnUnknown::default(),
+            include,
+        });
+        // La reinterpretación del ORIGEN se congela aquí, con las raíces, y
+        // viaja al panel: un lector que había pulsado `Alt+E` para leer un
+        // share CP1251 no puede recuperar `????.txt` al sincronizarlo (#57,
+        // el mismo fallo que el panel de diferencias arregló en su review).
+        self.pending_sync_encoding = (source_encoding, dest_encoding);
+        self.pending_sync.as_ref()
+    }
+
+    /// La lista `include` que sale de las marcas del panel de diferencias, o
+    /// el motivo por el que no hay una.
+    ///
+    /// QUÉ cuenta como negativa —y contra qué raíz se mide cada marca— lo
+    /// decide [`norte_frontend::sync::include_from_rows`], que vive junto a
+    /// `anchor_of` porque contesta la misma pregunta del otro lado del viaje.
+    ///
+    /// # Errors
+    /// Lo que devuelva aquella; [`Self::request_sync`] lo traduce a una frase.
+    fn sync_include(
+        &self,
+        source: &VPath,
+        dest: &VPath,
+    ) -> Result<Option<Vec<norte_proto::methods::RelPath>>, norte_frontend::sync::IncludeError>
+    {
+        let marcadas = self
+            .compare
+            .as_ref()
+            .map(|v| v.pane.marked_rows())
+            .unwrap_or_default();
+        norte_frontend::sync::include_from_rows(source, dest, &marcadas)
+    }
+
+    /// Cierra el panel de sincronización. La cancelación de la Task es del run
+    /// loop (es suya); esto solo suelta el estado de presentación.
+    pub fn close_sync(&mut self) {
+        self.sync = None;
+        self.pending_sync_apply = None;
+    }
+
     /// El pane al que pertenece el lado ACTIVO del panel de diferencias.
     ///
     /// `None` con el panel cerrado. Es lo que hace que el `Enter` de una fila
@@ -2245,6 +2599,7 @@ impl App {
             source_read_only: self.pane_read_only(self.focus),
             dest_read_only: self.pane_read_only(self.focus ^ 1),
             degraded: self.degraded_for(pane.dir().scheme()).is_some(),
+            journalled: self.backend_journalled,
         }
     }
 
@@ -4778,7 +5133,7 @@ pub fn trust_lua_key(code: crossterm::event::KeyCode) -> DialogOutcome {
 /// (`Unknown`, cliente N-1) cae a `err-unknown`.
 #[must_use]
 pub fn error_key(e: &Error) -> &'static str {
-    use norte_proto::ConflictKind;
+    use norte_proto::{ConflictKind, RootOverlap};
     match e {
         Error::NotFound => "err-not-found",
         Error::PermissionDenied => "err-permission-denied",
@@ -4810,6 +5165,19 @@ pub fn error_key(e: &Error) -> &'static str {
         // `err-unknown` sería lo contrario de lo que su rustdoc promete.
         Error::PlanStale => "err-plan-stale",
         Error::PlanNotExecutable => "err-plan-not-executable",
+        // 0.40.0 (sincronización): las TRES relaciones se pintan distinto y la
+        // primera no es un caso degenerado de las otras dos, así que el
+        // sub-vocabulario sí viaja —igual que el de `Conflict`—. Lo accionable
+        // es distinto en cada una: con `Same` hay que elegir otro directorio,
+        // con las otras dos hay que salir del árbol que contiene al otro. Sin
+        // este brazo la negativa caía en `err-unknown`, que es exactamente lo
+        // que la variante existe para no ser.
+        Error::OverlappingRoots { relation } => match relation {
+            RootOverlap::Same => "err-overlapping-roots-same",
+            RootOverlap::SourceInsideDest => "err-overlapping-roots-source-inside",
+            RootOverlap::DestInsideSource => "err-overlapping-roots-dest-inside",
+            _ => "err-overlapping-roots",
+        },
         _ => "err-unknown",
     }
 }
@@ -6870,6 +7238,63 @@ mod error_message_tests {
         assert_eq!(
             error_category(&Error::NotFound),
             norte_i18n::t("err-not-found")
+        );
+    }
+
+    /// 0.40.0: las tres relaciones de solape se pintan DISTINTO, y ninguna
+    /// cae en «error desconocido».
+    ///
+    /// Vive sobre el mismo `_ => "err-unknown"` que los dos de arriba, así que
+    /// borrar el brazo compila y deja al lector con «error desconocido» ante la
+    /// única negativa de esta familia que se arregla moviéndose de sitio — que
+    /// es exactamente lo que la variante existe para no ser. Y las tres claves
+    /// tienen que ser tres: la frase accionable de `Same` («elige otro
+    /// directorio») no es la de las otras dos («sal del árbol que contiene al
+    /// otro»).
+    #[test]
+    fn cada_relacion_de_solape_tiene_su_propia_frase() {
+        use super::{error_category, error_key};
+        use norte_proto::RootOverlap;
+        let mut vistas = std::collections::BTreeSet::new();
+        for relation in [
+            RootOverlap::Same,
+            RootOverlap::SourceInsideDest,
+            RootOverlap::DestInsideSource,
+        ] {
+            let clave = error_key(&Error::OverlappingRoots { relation });
+            assert!(
+                clave.starts_with("err-overlapping-roots"),
+                "{relation:?} → {clave}"
+            );
+            assert!(vistas.insert(clave), "dos relaciones comparten {clave}");
+            for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+                let texto = norte_i18n::t_in(lang, clave);
+                assert_ne!(texto, clave, "{clave} sin traducir en {lang:?}");
+                assert_ne!(
+                    texto,
+                    norte_i18n::t_in(lang, "err-unknown"),
+                    "{clave} dice lo mismo que «error desconocido»"
+                );
+                assert_ne!(
+                    texto,
+                    norte_i18n::t_in(lang, "err-internal"),
+                    "{clave} dice lo mismo que «error interno»"
+                );
+            }
+        }
+        // Y una relación de un protocolo más nuevo cae en la clave GENÉRICA de
+        // la familia, no en `err-unknown`: sigue siendo un solape.
+        assert_eq!(
+            error_key(&Error::OverlappingRoots {
+                relation: RootOverlap::Unknown
+            }),
+            "err-overlapping-roots"
+        );
+        assert_eq!(
+            error_category(&Error::OverlappingRoots {
+                relation: RootOverlap::Same
+            }),
+            norte_i18n::t("err-overlapping-roots-same")
         );
     }
 

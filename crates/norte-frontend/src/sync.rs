@@ -46,11 +46,109 @@
 //!   paint them in a column they do not belong to.
 
 use norte_i18n::{Lang, t_in, ta_in};
-use norte_proto::TaskId;
 use norte_proto::methods::{
-    DestTrash, RelPath, StepReversal, SyncBlockerKind, SyncCounts, SyncPlanDone, SyncReason,
-    SyncReportResult, SyncStep, SyncStepKind, SyncStepsBatch,
+    CompareRow, DestTrash, RelPath, SYNC_MAX_INCLUDE, StepReversal, SyncBlockerKind, SyncCounts,
+    SyncPlanDone, SyncReason, SyncReportResult, SyncStep, SyncStepKind, SyncStepsBatch,
 };
+use norte_proto::{TaskId, VPath};
+
+/// Why a selection of diff-pane rows cannot become a `SyncPlanParams::include`.
+///
+/// Both variants are refusals and neither is a truncation: a plan built from a
+/// list the caller silently shortened is a plan the reader did not approve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncludeError {
+    /// More rows than [`SYNC_MAX_INCLUDE`], which the daemon refuses outright.
+    TooMany {
+        /// How many were marked.
+        marked: usize,
+        /// The cap.
+        max: usize,
+    },
+    /// A marked row hangs from NEITHER root.
+    ///
+    /// Unreachable from a comparison of the two roots being synchronised, and
+    /// refused rather than dropped precisely because of that: silently
+    /// narrowing the list turns "these three rows" into an empty selection,
+    /// which the pane then paints as "the two trees already agree". A lie on
+    /// the screen that authorises writes is worse than a refusal.
+    Unrooted,
+    /// A marked row IS one of the roots.
+    ///
+    /// The root in an `include` list means "everything" ([`SYNC_MAX_INCLUDE`]'s
+    /// filter treats it as the whole tree), so one such entry turns a narrow
+    /// selection into a whole-tree plan — under `Mirror`, into "delete
+    /// everything the source does not have" for a reader who marked one row.
+    /// `RelPath::under` documents that its caller owns this decision; this is
+    /// the caller, and it refuses.
+    RootSelected,
+}
+
+/// The `include` list for `SyncPlanParams`, from the rows a reader marked.
+///
+/// `Ok(None)` means NO selection — the plan covers both trees, which on the
+/// wire is the ABSENCE of the field. It is never `Ok(Some(vec![]))`: an empty
+/// list is a selection of zero paths and produces a plan of zero steps, and the
+/// two must not be confused.
+///
+/// # Which root each row is measured against
+/// The SOURCE first, because the `rel` of every step that WRITES is measured
+/// against it. Only a row with nothing on the source side falls back to the
+/// destination — that is the orphan that only exists there, whose step is a
+/// [`SyncStepKind::DeleteTree`], and whose `rel` the core measures against the
+/// destination root. This is the request-side twin of [`anchor_of`], which
+/// answers the same question for a step that came back; they are next to each
+/// other so the two answers cannot drift.
+///
+/// # Errors
+/// [`IncludeError`] — see its variants. Every one of them refuses rather than
+/// narrowing.
+///
+/// ```
+/// use norte_frontend::sync::include_from_rows;
+/// use norte_proto::VPath;
+/// let src = VPath::parse("file:///a").expect("src");
+/// let dst = VPath::parse("file:///b").expect("dst");
+/// // Nothing marked: the whole tree, and the field is absent.
+/// assert_eq!(include_from_rows(&src, &dst, &[]), Ok(None));
+/// ```
+pub fn include_from_rows(
+    source: &VPath,
+    dest: &VPath,
+    marked: &[&CompareRow],
+) -> Result<Option<Vec<RelPath>>, IncludeError> {
+    if marked.is_empty() {
+        return Ok(None);
+    }
+    if marked.len() > SYNC_MAX_INCLUDE {
+        return Err(IncludeError::TooMany {
+            marked: marked.len(),
+            max: SYNC_MAX_INCLUDE,
+        });
+    }
+    let mut out = Vec::with_capacity(marked.len());
+    for row in marked {
+        let rel = [source, dest]
+            .into_iter()
+            .find_map(|root| {
+                [row.left.as_ref(), row.right.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .find_map(|entry| RelPath::under(root, &entry.path))
+            })
+            .ok_or(IncludeError::Unrooted)?;
+        if rel.is_root() {
+            return Err(IncludeError::RootSelected);
+        }
+        out.push(rel);
+    }
+    // Ordenada y sin repetidos: dos filas pueden nombrar la misma ruta (las dos
+    // caras de una pareja), y un `include` estable es lo que hace que dos
+    // selecciones idénticas produzcan un `plan_hash`.
+    out.sort();
+    out.dedup();
+    Ok(Some(out))
+}
 
 /// What the undo would actually do with ONE step, once the destination's trash
 /// is taken into account.
@@ -1269,6 +1367,21 @@ impl SyncState {
             Self::Ready(p) => Some(p),
             Self::Applying(a) => Some(&a.plan),
             Self::Applied(a) => Some(&a.plan),
+        }
+    }
+
+    /// The closed plan, mutably — for the cursor, and only for the cursor.
+    ///
+    /// [`SyncPlan::select`] and [`SyncPlan::move_by`] are the whole reason this
+    /// exists: a pane moves a cursor, and everything else on [`SyncPlan`] is a
+    /// question. It is deliberately not a door back into the state machine —
+    /// there is nothing mutable on [`SyncPlan`] that could rewind it.
+    pub fn plan_mut(&mut self) -> Option<&mut SyncPlan> {
+        match self {
+            Self::Planning(_) => None,
+            Self::Ready(p) => Some(p),
+            Self::Applying(a) => Some(&mut a.plan),
+            Self::Applied(a) => Some(&mut a.plan),
         }
     }
 

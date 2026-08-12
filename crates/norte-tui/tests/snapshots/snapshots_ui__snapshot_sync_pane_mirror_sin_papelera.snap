@@ -1,0 +1,28 @@
+---
+source: crates/norte-tui/tests/snapshots_ui.rs
+expression: render_80x24(&app)
+---
+"┌ sincronizar (espejo) — ⟨file⟩/casa → ⟨file⟩/otro ────────────────────────────┐"
+"│nada de esto lo puede deshacer norte                                          │"
+"│el destino no tiene papelera: lo que esto sustituya o borre no se guarda en   │"
+"│ningún sitio                                                                  │"
+"│3 pasos son irreversibles: no los devuelve nada                               │"
+"│1 a copiar · 1 a sobrescribir · 0 directorios a crear · 2 a borrar · 0 sin    │"
+"│tocar                                                                         │"
+"│4.1 KiB a escribir                                                            │"
+"│                                                                              │"
+"│                                                                              │"
+"│+ ! * nuevo.txt 64 B                                                          │"
+"│# ! ! a.txt 4.0 KiB                                                           │"
+"│- ! ! arbol-sobrante (destino)                                                │"
+"│- ! ! sobra.txt (destino)                                                     │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│se van a borrar 2 árboles del destino y NO se van a poder restaurar. ¿Seguir? │"
+"│y confirmar · cualquier otra tecla cancela                                    │"
+"└ 4 pasos · pulsa a para aprobar ──────────────────────────────────────────────┘"
+" ⟨file⟩/casa  2/5                                                               "

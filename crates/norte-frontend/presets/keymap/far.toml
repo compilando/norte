@@ -32,6 +32,9 @@
 # Commander — is already Far's "Unpack files". Inventing a chord for a
 # preset whose whole point is fidelity would be worse than the reference
 # sheet listing it unbound, which is what happens instead.
+# `pane.sync-dirs` is unbound for the same reason and a stronger one: Far
+# has no folder synchroniser in the shipped product at all (Advanced Compare
+# is a plugin), so there is no key to transcribe.
 #
 # Omitted families (norte has no concept): the pull-down menu bar (F9) and
 # its "select last menu item" (Shift+F10); the user menu (F2); the plugin

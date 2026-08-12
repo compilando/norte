@@ -23,6 +23,7 @@ commands = [
     "pane.select-drive-left",
     "pane.select-drive-right",
     "pane.compare-dirs",
+    "pane.sync-dirs",
 ]
 context = ["browse"]
 +++
@@ -192,6 +193,43 @@ diff and takes you to where the selected row really lives, which is how you
 open a directory that exists on one side only: the walk reports it as one row
 rather than enumerating a subtree it already knows the answer for. `Esc`
 cancels a comparison that is still running, and closes the pane once it is not.
+
+# Synchronising the two panes
+
+{{cmd:pane.sync-dirs}} is the half that writes. It plans a one-way
+synchronisation — this pane onto the other one — shows you every step it would
+take, and does nothing at all until you approve it. Inside the diff pane the
+same thing is `s`, and `m` plans a **mirror**, which also deletes from the
+destination anything the source does not have. There the direction is the diff
+pane's own active side, the one `Tab` flips and the footer names — not the
+focused pane. Either way the plan's title spells it out with an arrow before
+you approve anything. Plain letters on purpose: a
+function key with a modifier does not survive a `tmux` session, and a
+documented shortcut that never arrives is worse than none.
+
+Nothing is planned twice and nothing is executed from the screen. What you
+approve is a plan the daemon is holding, named by its own digest, so the thing
+that runs is byte for byte the thing you read.
+
+The plan leads with what the undo could give back, and that is a fact about the
+DESTINATION and not about the steps. The same list of copies reverts entirely
+against a destination whose trash records where it buried things, and reverts
+nothing against one with no trash at all — so the summary says which of those
+you are looking at before it says anything else. A `mirror` that deletes trees,
+or any plan the undo does not cover, asks a second question with the number in
+it.
+
+Each step carries three marks: what it does, how sure the comparison behind it
+was, and whether the undo brings it back. The third is the one that needed the
+daemon to say something new, and it is never read off the step alone.
+
+Mark rows with `Ins` in the diff pane to synchronise only those; a marked
+directory takes its whole subtree with it. With nothing marked the plan covers
+both trees.
+
+This needs norte running against the daemon. Synchronising deletes and
+overwrites, so it has to be journalled and undoable, and the in-process engine
+has no journal — the key says so rather than failing halfway.
 
 > 💡 A directory you visit often is worth a favourite: the pane remembers where it has been, and favourites are shared by both panes.
 

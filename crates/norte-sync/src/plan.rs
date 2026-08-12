@@ -26,7 +26,7 @@ use norte_proto::methods::{
     CompareConfidence, CompareReason, CompareRow, CompareVerdict, OnUnknown, RelPath, Side,
     StepReversal, SyncBlocker, SyncBlockerKind, SyncMode, SyncReason, SyncStep, SyncStepKind,
 };
-use norte_proto::{Entry, EntryKind, Segment, VPath};
+use norte_proto::{Entry, EntryKind, VPath};
 use tokio_util::sync::CancellationToken;
 
 use crate::{SyncError, SyncOptions};
@@ -1187,55 +1187,47 @@ fn is_at_or_under(root: &VPath, path: &VPath) -> bool {
     root.segments().all(|segment| rest.next() == Some(segment))
 }
 
-/// La ruta de `path` RELATIVA a `root`, en bytes.
+/// La ruta de `path` RELATIVA a `root`, o el error que dice que no cuelga.
 ///
-/// Compara scheme, authority y luego los segmentos UNO A UNO por sus bytes
-/// crudos: sin `to_str`, sin lossy, sin normalizar y sin plegar mayúsculas
-/// (regla dura 1). Que la comparación sea por SEGMENTOS y no por prefijo de
-/// cadena es lo que impide que `…/ab` cuelgue de `…/a`.
+/// La comparación —scheme, authority y segmentos por sus bytes crudos— vive en
+/// [`RelPath::under`], que es de `norte-proto` porque allí viven los tres tipos
+/// que toca y porque la respuesta tiene que ser UNA: el filtro `include` del
+/// core y el frontend que arma la petición preguntan lo mismo, y dos
+/// implementaciones que difieran mandan un `include` que no selecciona lo que
+/// el lector marcó. Esto solo le pone el error de este crate.
 ///
-/// La authority también se compara BYTE A BYTE, y es deliberado aunque un
-/// hostname DNS no distinga mayúsculas: para `mem://` y para un id de conexión
-/// de object storage la authority es un testigo opaco, y plegarla juntaría dos
-/// conexiones distintas. `sftp://NAS/…` contra `sftp://nas/…` falla, y falla
-/// CERRADO —un plan menos, nunca una escritura de más—.
+/// Lo que SÍ puede devolver es la raíz misma (`path == root`), que no es un
+/// escape hacia arriba pero sí el blanco más destructivo del plan: lo rechaza
+/// quien lo llama, que es el único que sabe si un `rel` vacío tiene sentido (un
+/// `Skip` sí, un `Overwrite` no).
 ///
-/// El resultado no se puede escapar de la raíz porque el tipo no lo permite:
-/// [`Segment`] rechaza `/`, `.`, `..` y el NUL, y los bytes que aquí entran
-/// salieron ya validados de un [`VPath`], así que ni se pierde ni se gana
-/// ninguno. Lo que SÍ puede devolver es la raíz misma (`path == root`), que no
-/// es un escape hacia arriba pero sí el blanco más destructivo del plan: lo
-/// rechaza quien lo llama, que es el único que sabe si un `rel` vacío tiene
-/// sentido (un `Skip` sí, un `Overwrite` no).
+/// # Errors
+/// [`SyncError::OutsideRoot`] cuando `path` no cuelga de `root` —otro scheme,
+/// otra authority, u otra rama—.
 ///
-/// Los bytes no se copian de más: se recorren los dos iteradores en paralelo,
-/// sin materializar ningún `Vec` de segmentos por fila.
-fn rel_under(root: &VPath, path: &VPath) -> Result<RelPath, SyncError> {
-    let outside = || SyncError::OutsideRoot {
+/// ```
+/// use norte_proto::VPath;
+/// use norte_sync::rel_under;
+/// let root = VPath::parse("file:///origen").expect("root");
+/// let path = VPath::parse("file:///origen/sub/a.txt").expect("path");
+/// assert_eq!(rel_under(&root, &path).expect("rel").to_wire(), "sub/a.txt");
+/// // Por SEGMENTOS, no por prefijo de cadena: `…/ab` no cuelga de `…/a`.
+/// let otro = VPath::parse("file:///origenes/a.txt").expect("path");
+/// assert!(rel_under(&root, &otro).is_err());
+/// ```
+pub fn rel_under(root: &VPath, path: &VPath) -> Result<RelPath, SyncError> {
+    RelPath::under(root, path).ok_or_else(|| SyncError::OutsideRoot {
         root: Box::new(root.clone()),
         path: Box::new(path.clone()),
-    };
-    if path.scheme() != root.scheme() || path.authority() != root.authority() {
-        return Err(outside());
-    }
-    let mut rest = path.segments();
-    for root_segment in root.segments() {
-        if rest.next() != Some(root_segment) {
-            return Err(outside());
-        }
-    }
-    let rest = rest
-        .map(Segment::new)
-        .collect::<Result<Vec<_>, _>>()
-        // Inalcanzable: cada uno de estos bytes salió de un `Segment` que un
-        // `VPath` ya validó. Se mapea en vez de `expect` (regla dura 6).
-        .map_err(|_| outside())?;
-    Ok(RelPath::new(rest))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use futures::StreamExt;
+    // `Segment` ya no lo usa el módulo: `rel_under` delega la comparación en
+    // `RelPath::under`. Los tests sí, para construir rutas.
+    use norte_proto::Segment;
     use norte_proto::methods::{CompareCriterion, CompareReason};
 
     use super::*;

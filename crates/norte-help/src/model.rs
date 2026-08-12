@@ -205,6 +205,16 @@ pub enum Reason {
     /// an entry it dims for the shape of what was clicked rather than for
     /// what the provider can do.
     WrongTarget,
+    /// The command mutates through a journal, and this session has none — so
+    /// it needs norte running against the daemon.
+    ///
+    /// It is an impediment of BACKEND, like [`Reason::ReadOnlyBackend`], and
+    /// not one of state: it does not change with the next keystroke, the
+    /// reader has to start norte differently. The one command that answers it
+    /// today is `pane.sync-dirs` — synchronising deletes and overwrites, so
+    /// hard rule 4 requires a journal entry and an undo path, and the
+    /// in-process engine the TUI builds without `--daemon` has neither.
+    NeedsDaemon,
 }
 
 /// Availability of a command row in the CURRENT context.

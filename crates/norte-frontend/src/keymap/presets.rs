@@ -247,6 +247,63 @@ mod k2b_gate_tests {
             .collect()
     }
 
+    /// `pane.sync-dirs` está ligado en TODO preset que ligue su gemelo
+    /// `pane.compare-dirs`, y a `ctrl+y` en los cinco que lo ligan — cuatro
+    /// tomándolo del chord de Krusader, que es el único gestor de referencia
+    /// que le da uno.
+    ///
+    /// La lista de los que NO lo ligan se escribe A MANO, y ésa es la
+    /// decisión: `far` y `norton` dejan los dos sin ligar por la regla de
+    /// fidelidad que sus propios ficheros enuncian —Far tiene el
+    /// sincronizador en un plugin y NC no lo tenía— y un test que exigiera
+    /// «todos los presets» desharía esos dos comentarios sin discutirlos.
+    /// Escrita aquí, quitar una fidelidad cuesta editar este test.
+    #[test]
+    fn sincronizar_esta_ligado_dondequiera_que_lo_este_comparar() {
+        const SIN_LIGAR: [&str; 2] = ["far", "norton"];
+        for name in NAMES {
+            let src = source(name).expect("NAMES resuelve");
+            let kf =
+                crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {name}: {e}"));
+            let runs = preset_runs(&kf);
+            let compara = runs.contains(&"pane.compare-dirs");
+            let sincroniza = runs.contains(&"pane.sync-dirs");
+            if SIN_LIGAR.contains(name) {
+                assert!(
+                    !compara && !sincroniza,
+                    "preset {name}: ya no es de los que no ligan la familia — quita el nombre de SIN_LIGAR"
+                );
+                continue;
+            }
+            assert!(compara, "preset {name}: sin pane.compare-dirs");
+            assert!(
+                sincroniza,
+                "preset {name}: liga comparar y NO sincronizar — la mitad que escribe se quedó sin tecla"
+            );
+        }
+    }
+
+    /// La tecla por defecto de `pane.sync-dirs` no es una de función con
+    /// modificador.
+    ///
+    /// #159: bajo tmux NINGUNA llega — ni `Shift+F2` ni `Alt+F7` —, así que
+    /// una tecla así sería un atajo documentado y muerto, y este repo ya envió
+    /// uno. Se afirma sobre el chord CONCRETO en vez de sobre una propiedad
+    /// del `Chord`, porque lo que hay que impedir es que alguien lo mueva a
+    /// una tecla de función «porque queda simétrico con Shift+F2».
+    #[test]
+    fn la_tecla_de_sincronizar_no_es_de_funcion_con_modificador() {
+        let known = live_commands();
+        let ctrl_y = parse_chord("ctrl+y").expect("ctrl+y parsea");
+        for name in ["orthodox", "cua", "vim", "total-commander", "krusader"] {
+            let eff = build(name, Screen::Browse, &known);
+            assert!(
+                eff.single_chord_runs(ctrl_y, "pane.sync-dirs"),
+                "preset {name}: ctrl+y no resuelve a pane.sync-dirs"
+            );
+        }
+    }
+
     /// Check 5: every `run` name a preset binds is in the shared catalogue
     /// (Live or Planned) — the same rule [`Effective::build_for`]'s
     /// `UnknownCommand` already enforces, asserted directly against the raw

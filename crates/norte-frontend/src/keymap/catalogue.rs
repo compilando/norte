@@ -107,11 +107,16 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("pane.select-drive-left", false),
     live("pane.select-drive-right", false),
     // `pane.compare-dirs` (2026-08-11-directory-comparison.md, roadmap item 1
-    // spec 1): compares the two panes and opens the diff pane. Its sibling
-    // `pane.sync-dirs` stays Planned below — spec 2 is the one that mutates,
-    // and this spec deliberately writes nothing. No count: a comparison of two
-    // whole trees is a task, not a clamped mover (ADR 0044).
+    // spec 1): compares the two panes and opens the diff pane. `pane.sync-dirs`
+    // (2026-08-11-directory-sync.md, spec 2) is the half that WRITES, and it
+    // joined it here rather than staying Planned: it is built, and what it
+    // needs that comparing does not — a journal, therefore the daemon — is a
+    // fact about the SESSION, not about norte. That is `Facts::journalled` in
+    // `crate::availability`, which dims it with a reason the reader can act on
+    // instead of an issue number nobody can close. Neither takes a count: two
+    // whole trees are a task, not a clamped mover (ADR 0044).
     live("pane.compare-dirs", false),
+    live("pane.sync-dirs", false),
     live("pane.search", false),
     live("pane.names-encoding", false),
     live("pane.toggle-hidden", false),
@@ -195,11 +200,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     // presses F4 and gets silence. K2b left twenty-eight entries in ten
     // families here (nine of them new: `pane.select-drive` was already here
     // and its family just grew two siblings); S4 built the shell family and
-    // took its three away, and 2026-08-10-volumes.md built the drive family
-    // (moved to `live` above, closes #131), so eight families remain — one of
-    // them now HALF built: #134 shipped the compare and still owes the sync,
-    // so it kept its issue and lost the `compare-` half of its reason id. Each
-    // is one capability and one issue;
+    // took its three away, 2026-08-10-volumes.md built the drive family (moved
+    // to `live` above, closes #131), and 2026-08-11-directory-sync.md built the
+    // second half of the compare/sync one (also `live` above, closes #134), so
+    // seven families remain. Each is one capability and one issue;
     // `planned()` forces `counts: false`, which is right for all of them —
     // none is a clamped in-memory mover (ADR 0044).
     planned("pane.pack", "keymap-reason-archive-write", 132),
@@ -209,12 +213,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     planned("pane.combine-files", "keymap-reason-archive-write", 132),
     planned("pane.edit", "keymap-reason-editor", 133),
     planned("pane.edit-new", "keymap-reason-editor", 133),
-    // The compare half of this family was built (moved to `live` above), so
-    // its reason id was renamed with it: `keymap-reason-compare-sync` claimed
-    // BOTH capabilities, and leaving it here would have told a Krusader user
-    // pressing Ctrl+Y that "directory compare and sync" is unbuilt on the same
-    // day Shift+F2 started comparing. What is unbuilt is the SYNC.
-    planned("pane.sync-dirs", "keymap-reason-sync", 134),
+    // #134's second half (`pane.sync-dirs`) left this block and is `live`
+    // above; `keymap-reason-sync` went with it, out of both locales, because
+    // nothing else claimed it — same disposal as `keymap-reason-shell` when
+    // S4 shipped, recorded below.
     // The three of issue #135 left this block in S4 and are `live` above; the
     // family's reason id (`keymap-reason-shell`) went with them, out of both
     // locales, because nothing else claimed it.
@@ -248,6 +250,7 @@ pub const CATALOGUE: &[CommandDef] = &[
 /// ));
 /// assert_eq!(lookup("pane.select-drive").map(|d| d.status), Some(Status::Live));
 /// assert_eq!(lookup("pane.compare-dirs").map(|d| d.status), Some(Status::Live));
+/// assert_eq!(lookup("pane.sync-dirs").map(|d| d.status), Some(Status::Live));
 /// assert!(lookup("pane.no-existe-jamas").is_none());
 /// ```
 #[must_use]
