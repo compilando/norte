@@ -956,6 +956,13 @@ impl Engine {
             // no lleva ningún `Side` con el que pudiera contradecirlo.
             source_side: Side::Left,
             dest_has_trash: caps.flags.contains(norte_proto::CapabilityFlags::TRASH),
+            // Lo que el provider PROMETE sobre su papelera, no lo que se
+            // supone de ella: una que no nombra su destino deja al undo sin
+            // `reversal_ref`, y el plan tiene que marcarlo IRREVERSIBLE antes
+            // de que nadie apruebe nada (regla dura 4). Sale del mismo objeto
+            // provider del que salen las capabilities, después de la operación
+            // async que forzó el sondeo perezoso.
+            dest_trash_restorable: dest.trash_restorable(),
             dest_writable: !caps.flags.contains(norte_proto::CapabilityFlags::READ_ONLY),
         };
         let job = crate::sync::SyncPlanJob {

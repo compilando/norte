@@ -35,6 +35,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 9 — the executor | done | `d749166` (containment) + `26f26d3` (executor) |
 | 10 — `sync.apply`, `sync.report`, the `Backend` | done | `15a36f3` (cross-provider tests) + `40f87d5` |
 | 11 — `revert_sync_batch` | done | `9c3853d` |
+| 11b — una papelera que dice dónde puso las cosas | done | (este commit) |
 
 **The embedded TUI does not synchronise, and Task 13 says so out loud.**
 `make_backend` builds `Engine::new()` — no journal, no spool — and Task 9 made
@@ -50,7 +51,8 @@ this branch and changes every mutation, not just this one.
 
 **Task 11 landed and session undo works again** (`9c3853d`). What it can and
 cannot give back is below, and Task 12 must read it before writing a word of
-the approval dialog.
+the approval dialog — **but read Task 11b's section first: it changes the
+answer for `file://` on Linux, which is the common case.**
 
 **A proto bump breaks tests outside `norte-proto`.** Task 1 ran only
 `just t norte-proto` and left two `norte-core` tests red on the branch — both
@@ -1355,6 +1357,104 @@ policy once at planning time, while the forward executor re-consults it per
 step. A scope that expires mid-Task is not noticed by the undo. Harmless today
 (the daemon's only undo entry point executes as `Actor::User`), and it is the
 same shape as the gate-parsing note.
+
+### What Task 11b changed in this plan
+
+**`file://` on Linux can now undo a synchronisation, and the wire no longer
+lies where it cannot.** Two halves, and Task 12's dialog depends on both.
+
+**1. The trash names its destination (Linux/BSD only).** `norte-vfs-local` no
+longer delegates to the `trash` crate on freedesktop: it implements the spec in
+`trash_fdo.rs` (home trash `$XDG_DATA_HOME/Trash`, or the victim's mount
+`.Trash-$uid` / `$top/.Trash/$uid`; sidecar with `O_EXCL` first, then the
+rename) and returns the exact `files/<name>` path. So `trash()` answers `Some`,
+the journal gets its `reversal_ref`, and the `trashed`+`created` pair of an
+overwrite reverts properly instead of being left intact as `ambiguous_restores`.
+`fs.move` to the trash gets the same fix for free. **macOS and Windows are
+unchanged and still answer `None`** — neither exposes a stable destination, and
+`ambiguous_restores` still covers them.
+
+Two side effects worth knowing. Restoring now goes through the new
+`Provider::restore_from` (default = `rename`, which is what the logical trash
+wants) so the freedesktop sidecar leaves with its file instead of becoming an
+orphan. And a freedesktop trash is always on the victim's own device, so ADR
+0009's "cross-device degrades to an uncancellable copy+delete" exception no
+longer applies on Linux — **Task 14 should correct ADR 0009**, which still
+states it.
+
+**2. `SyncOptions::dest_trash_restorable`, and what it does to the table.** New
+`Provider::trash_restorable()` (a promise about the implementation, no I/O)
+feeds it from the destination provider. When the destination HAS a trash but
+that trash does not name what it buries, **every acting step is `Irreversible`
+with `NoTrashOnTarget`** — not only `Overwrite`, because undoing a `created`
+also routes through the trash (#65). It is fed into the `plan_hash`, so the
+frozen framing vector in `norte-sync::hash` moved; that is deliberate and the
+test says so.
+
+**What did NOT change, deliberately:** a destination with NO trash at all still
+shows `Copy`/`CreateDir` as `StepReversal::Delete`. That is Task 11's explicit
+decision (the step IS reversible where a trash exists, and the undo skips it
+into `skipped_created_no_trash`), and 11b did not reopen it. So the dialog still
+cannot read `reversal` alone as "this will come back".
+
+**`Irreversible` does not mean "delete permanently".** The executor's
+`Irreversible` branch used to call `remove_retrying`; with a mute trash that
+would have destroyed what the trash could have held. `destroy_leaf` /
+`destroy_tree` now branch on `delete_mode` — the same value the policy gate
+authorised — so the file still goes to the trash and the human can fish it out
+by hand. The journal entry stays a single `created` with `Irreversible`: the
+undo makes no promise it cannot keep.
+
+**What the two reviews changed, because some of it is load-bearing for later
+tasks.** The `security-reviewer` found a BLOCKER: the topdir trash
+(`$top/.Trash-$uid`) was created with `create_dir_all`, which follows symlinks
+and never checks ownership — so a pre-planted `/tmp/.Trash-1000` owned by
+another user captured everything this user trashed under `/tmp`, and the
+`reversal_ref` in the journal then pointed into a tree that user controlled at
+undo time. The topdir trash now demands `lstat` + our own `st_uid` and falls
+back `$top/.Trash/$uid` → `$top/.Trash-$uid` → `Unsupported`, which ADR 0009
+already routes to "offer permanent delete". The HOME trash keeps following
+symlinks on purpose (it hangs off `$HOME`; glib does the same).
+
+Three more that Tasks 12–14 should know about:
+
+- **`Provider::trash_restorable()` is measured per instance, not per platform.**
+  A `LocalProvider` whose trash falls outside its root answers `false`, so the
+  plan marks the steps `Irreversible` instead of promising a `reversal_ref` that
+  would never arrive. `os_root()` — the daemon's — is rooted at `/` and always
+  answers `true` on Linux/BSD.
+- **`norte-vfs-object` returned `Some` from `trash()` without overriding
+  `trash_restorable()`**, so an S3 destination with the logical trash would have
+  been planned entirely `Irreversible` and its `reversal_ref` thrown away. Fixed,
+  and `norte-testkit` now runs the whole provider contract a fifth time with the
+  logical trash on, which is the only configuration where the contract's
+  "the destination exists and restores" branch runs at all. **`norte-vfs-sftp`
+  and `norte-vfs-object` still do not run the contract with their logical trash
+  enabled — Task 14 should file that**; their overrides are correct but untested.
+- **Two MINORs left undone, and why.** (1) The auditor asked for two new
+  fixtures in the canonical `norte-testkit` corpus (a 255-byte non-UTF-8 name, a
+  filename shaped like a whole `key=value` record). Adding to that corpus changes
+  the input of the hostile round-trip test in five crates at once, which needs a
+  full `just ci` to validate — Task 14 owns that run, so it should land there.
+  (2) For a topdir trash the spec permits `Path=` relative to the topdir, and
+  gio writes it that way so a removable volume survives being mounted elsewhere;
+  we always write absolute, which is spec-legal and is what the existing
+  `restore_trashed` matching needs. Changing it is a separate decision.
+
+**What Task 12's approval dialog may claim, per platform:**
+
+| destination | what is true |
+| --- | --- |
+| `file://` on Linux/BSD | everything reverts: overwrites, deletions and copies |
+| `file://` on macOS/Windows | nothing reverts — every step is `Irreversible` and the plan says so |
+| `sftp://` with the logical trash | everything reverts |
+| a destination with no trash | overwrites/deletions are `Irreversible`; copies SAY `Delete` but the undo skips them (`skipped_created_no_trash`) |
+
+The plan still carries no `dest_has_trash` on the wire, so a dialog that wants
+to say more than the per-step `reversal` column needs Task 12 to add it (free
+until 0.40.0 ships). Nothing in 11b touched `norte-proto` beyond rustdoc.
+
+---
 
 ---
 
@@ -3063,7 +3163,7 @@ with a reason — not only `Overwrite`: Task 11 established that undoing a
 `created` routes through the trash (#65), so a plain `Copy` does not come back
 either. The plan's reversal table gains that row; the dialog reads from it.
 
-- [ ] **Step 1: Write the failing provider tests**
+- [x] **Step 1: Write the failing provider tests**
 
 ```rust
 #[tokio::test]
@@ -3126,9 +3226,9 @@ async fn restoring_from_the_recorded_destination_needs_no_guessing() {
 }
 ```
 
-- [ ] **Step 2: Run them and watch them fail** — `just t norte-vfs-local`
+- [x] **Step 2: Run them and watch them fail** — `just t norte-vfs-local`
 
-- [ ] **Step 3: Implement the freedesktop trash**
+- [x] **Step 3: Implement the freedesktop trash**
 
 New `trash_fdo.rs` in `norte-vfs-local`. Everything runs under `blocking()`
 (rule 2). The `trash` crate stays for macOS and Windows, behind `cfg`.
@@ -3138,16 +3238,16 @@ Order matters and the spec says so: write `info/<name>.trashinfo` with
 another process — then move the victim to `files/<name>`. If the move fails,
 unlink the sidecar.
 
-- [ ] **Step 4: Run** — `just t norte-vfs-local`, expected PASS.
+- [x] **Step 4: Run** — `just t norte-vfs-local`, expected PASS.
 
-- [ ] **Step 5: Add it to the conformance suite**
+- [x] **Step 5: Add it to the conformance suite**
 
 The provider contract gains: a trash that returns `Some` must return a path
 that exists and restores exactly; one that returns `None` must not claim
 `TRASH` restorability. Every provider runs it — that is what stops the next
 trash implementation from repeating this.
 
-- [ ] **Step 6: The honesty half**
+- [x] **Step 6: The honesty half**
 
 ```rust
 #[tokio::test]
@@ -3174,7 +3274,7 @@ async fn a_restorable_trash_keeps_the_promises_the_table_makes() {
 }
 ```
 
-- [ ] **Step 7: Reviewers, then commit**
+- [x] **Step 7: Reviewers, then commit**
 
 `encoding-auditor` is mandatory — this writes filenames into a sidecar format
 that percent-encodes, next to a file that must keep its bytes. `security-reviewer`

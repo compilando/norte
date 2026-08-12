@@ -577,6 +577,17 @@ impl Provider for SessionProvider {
     ) -> Result<Option<norte_proto::VPath>, Error> {
         self.observe(self.inner.trash(p, id).await)
     }
+    fn trash_restorable(&self) -> bool {
+        // Propiedad del provider envuelto, sin I/O que observar.
+        self.inner.trash_restorable()
+    }
+    async fn restore_from(
+        &self,
+        dest: &norte_proto::VPath,
+        original: &norte_proto::VPath,
+    ) -> Result<(), Error> {
+        self.observe(self.inner.restore_from(dest, original).await)
+    }
     async fn gc_partials(
         &self,
         dir: &norte_proto::VPath,
@@ -673,6 +684,11 @@ mod tests {
                     }]
                 });
             &UNO
+        }
+        // `true` para que el default del trait (`false`) NO pueda hacer pasar
+        // la aserción de delegación.
+        fn trash_restorable(&self) -> bool {
+            true
         }
         async fn stat(&self, _p: &VPath) -> Result<norte_proto::Entry, Error> {
             Err(pu())
@@ -863,10 +879,15 @@ mod tests {
         evicta!(w.mkdir(&p).await);
         evicta!(w.remove(&p).await);
         evicta!(w.rename(&p, &p).await);
+        evicta!(w.restore_from(&p, &p).await);
         evicta!(w.copy_native(&p, &p).await);
 
         // Métodos sin `Result` (no evictan): pass-through pineado — el hueco
         // que este test tenía con `capabilities` no se repite con `attrs`.
         assert_eq!(w.attrs().len(), 1, "attrs() delega en el interior");
+        assert!(
+            w.trash_restorable(),
+            "trash_restorable() delega en el interior"
+        );
     }
 }

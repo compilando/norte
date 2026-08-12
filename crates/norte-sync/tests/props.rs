@@ -49,6 +49,9 @@ struct Wiring {
     on_unknown: OnUnknown,
     source_side: Side,
     trash: bool,
+    /// ¿Y esa papelera nombra lo que entierra? Una que no lo hace vuelve
+    /// IRREVERSIBLE todo el plan, no solo lo destructivo.
+    trash_restorable: bool,
     writable: bool,
 }
 
@@ -68,6 +71,7 @@ fn opts_of(w: Wiring) -> SyncOptions {
         on_unknown: w.on_unknown,
         source_side: w.source_side,
         dest_has_trash: w.trash,
+        dest_trash_restorable: w.trash_restorable,
         dest_writable: w.writable,
     }
 }
@@ -78,6 +82,7 @@ fn opts_update() -> SyncOptions {
         on_unknown: OnUnknown::Copy,
         source_side: Side::Left,
         trash: true,
+        trash_restorable: true,
         writable: true,
     })
 }
@@ -98,14 +103,18 @@ fn wiring() -> impl Strategy<Value = Wiring> {
         prop_oneof![Just(Side::Left), Just(Side::Right)],
         any::<bool>(),
         any::<bool>(),
+        any::<bool>(),
     )
-        .prop_map(|(mode, on_unknown, source_side, trash, writable)| Wiring {
-            mode,
-            on_unknown,
-            source_side,
-            trash,
-            writable,
-        })
+        .prop_map(
+            |(mode, on_unknown, source_side, trash, trash_restorable, writable)| Wiring {
+                mode,
+                on_unknown,
+                source_side,
+                trash,
+                trash_restorable,
+                writable,
+            },
+        )
 }
 
 /// Una ruta bajo `root`, segmento a segmento y por sus BYTES.
@@ -628,17 +637,28 @@ proptest! {
         }
     }
 
-    /// `Irreversible` aparece si y solo si el paso destruye algo y el destino
-    /// no tiene papelera — y va SIEMPRE con su motivo (regla dura 4).
+    /// `Irreversible` aparece si y solo si el paso no puede volver, en las dos
+    /// formas que eso tiene: destruir algo sin papelera donde ponerlo, o
+    /// cualquier paso contra una papelera que no NOMBRA lo que entierra (sin
+    /// `reversal_ref` el undo no acierta ni desenterrando ni borrando, #65). Y
+    /// va SIEMPRE con su motivo (regla dura 4).
     #[test]
-    fn irreversible_iff_no_trash((w, rows) in scenario()) {
+    fn irreversible_iff_the_step_cannot_come_back((w, rows) in scenario()) {
         let opts = opts_of(w);
         let trash = opts.dest_has_trash;
+        let muda = trash && !opts.dest_trash_restorable;
         for step in steps(&run(rows, opts)) {
             let destructive =
                 matches!(step.kind, SyncStepKind::Overwrite | SyncStepKind::DeleteTree);
+            let actua = destructive
+                || matches!(step.kind, SyncStepKind::CreateDir | SyncStepKind::Copy);
             let irreversible = step.reversal == Some(StepReversal::Irreversible);
-            prop_assert_eq!(irreversible, destructive && !trash, "{:?}", step);
+            prop_assert_eq!(
+                irreversible,
+                (destructive && !trash) || (actua && muda),
+                "{:?}",
+                step
+            );
             prop_assert!(!irreversible || step.reason.is_some(),
                 "un paso irreversible debe su motivo");
         }

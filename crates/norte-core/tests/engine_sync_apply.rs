@@ -733,16 +733,20 @@ async fn un_paso_que_no_vuelve_no_secuestra_al_resto() {
 }
 
 // 17 ──────────────────────────────────────────────────────────────────────
-/// **Sobre una papelera que no dice dónde dejó lo que enterró —la nativa del
-/// sistema— la pareja de una sobrescritura NO se deshace, y no se toca.**
-/// Enterrar el fichero nuevo y pedir después «restaura lo que había en esta
-/// ruta» devolvería el que este mismo undo acaba de enterrar (la papelera casa
-/// por ruta original y elige el más reciente): el usuario vería un éxito y su
-/// fichero original seguiría enterrado. Así que ninguno de los dos lados se
-/// toca: lo sincronizado se queda, el original sigue en la papelera, y el
-/// informe da la ruta.
+/// **Una papelera que no dice dónde dejó lo que enterró lo dice ANTES, no
+/// después.** Esto era el BLOCKER de la tarea 11: el plan prometía
+/// `RestoreTrash`, el journal se quedaba sin `reversal_ref` y el undo casaba
+/// por ruta original —eligiendo el más reciente, que para entonces era el
+/// fichero que él mismo acababa de enterrar—; el usuario veía un éxito y su
+/// original seguía en la papelera. Ahora el destino declara que su papelera no
+/// nombra nada (`trash_restorable` en `false`) y el plan sale entero
+/// `Irreversible` con su motivo, que es lo que la regla dura 4 pide: o hay
+/// undo, o hay una clasificación explícita ANTES de aprobar.
+///
+/// Y lo que NO cambia: el borrado sigue yendo a la papelera. Perder el undo no
+/// es razón para borrar permanente lo que se podía enterrar.
 #[tokio::test]
-async fn sobre_papelera_nativa_una_sobrescritura_no_se_deshace_a_ciegas() {
+async fn una_papelera_que_no_nombra_su_destino_lo_dice_en_el_plan() {
     let h = harness_with(with_trash(), false).await;
     h.mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
     h.mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
@@ -750,29 +754,64 @@ async fn sobre_papelera_nativa_una_sobrescritura_no_se_deshace_a_ciegas() {
     write_file(&h.mem, "mem:///d/comun.txt", b"destino").await;
 
     let done = plan(&h, SyncMode::Update).await;
+    assert_eq!(
+        done.counts.irreversible, 1,
+        "el plan lo dice antes de que nadie apruebe: {:?}",
+        done.counts
+    );
     let (state, report) = apply(&h, &done.plan_hash).await;
     assert_eq!(state, TaskState::Completed);
     assert_eq!(report.failed, 0, "{:?}", report.failures);
     let es = entries(&h).await;
-    assert_eq!(es.len(), 2, "trashed + created: {es:?}");
-    assert!(
-        es[0].reversal_ref.is_none(),
-        "la papelera nativa no da destino recuperable"
-    );
+    assert_eq!(es.len(), 1, "UNA entrada, irreversible: {es:?}");
+    assert_eq!(es[0].op, "created");
+    assert_eq!(es[0].reversal.as_str(), "irreversible");
+    assert!(es[0].reversal_ref.is_none());
 
     let (state, undone) = undo(&h).await;
-    assert_eq!(state, TaskState::Completed);
-    assert_eq!(undone.undone, 0, "ni un lado ni el otro");
+    assert_eq!(state, TaskState::Completed, "no rehúsa: informa");
+    assert_eq!(undone.undone, 0, "no hay nada que devolver…");
+    assert_eq!(undone.skipped_irreversible, 1, "…y se cuenta");
     assert_eq!(
         undone.unreverted_paths,
         vec![b"mem:///d/comun.txt".to_vec()],
         "nombrada UNA vez, la del fichero que el usuario quiere de vuelta",
     );
-    assert!(undone.blocked.is_some(), "y la sesión para, diciéndolo");
     assert_eq!(
         read_file(&h.mem, "mem:///d/comun.txt").await,
         b"origen-mas-largo",
         "la ruta NO se queda vacía: lo sincronizado sigue ahí",
+    );
+}
+
+/// Y la contraparte que arregla el BLOCKER de verdad: una papelera que SÍ
+/// nombra su destino deshace la pareja entera, sin adivinar.
+#[tokio::test]
+async fn una_papelera_que_nombra_su_destino_deshace_la_sobrescritura() {
+    let h = harness_with(with_trash(), true).await;
+    h.mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+    h.mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+    write_file(&h.mem, "mem:///s/comun.txt", b"origen-mas-largo").await;
+    write_file(&h.mem, "mem:///d/comun.txt", b"destino").await;
+
+    let done = plan(&h, SyncMode::Update).await;
+    assert_eq!(done.counts.irreversible, 0, "{:?}", done.counts);
+    let (state, _report) = apply(&h, &done.plan_hash).await;
+    assert_eq!(state, TaskState::Completed);
+    let es = entries(&h).await;
+    assert_eq!(es.len(), 2, "trashed + created: {es:?}");
+    assert!(
+        es[0].reversal_ref.is_some(),
+        "el destino recuperable llegó al journal"
+    );
+
+    let (state, undone) = undo(&h).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(undone.undone, 2, "las dos mitades");
+    assert_eq!(
+        read_file(&h.mem, "mem:///d/comun.txt").await,
+        b"destino",
+        "el fichero del USUARIO, no el que el undo acababa de enterrar",
     );
 }
 

@@ -226,6 +226,7 @@ impl DestWitness {
 ///     on_unknown: OnUnknown::Copy,
 ///     source_side: Side::Left,
 ///     dest_has_trash: true,
+///     dest_trash_restorable: true,
 ///     dest_writable: true,
 /// };
 /// let fila = CompareRow {
@@ -1060,7 +1061,11 @@ where
     ) {
         let (reversal, reason) = match skip_reason {
             Some(why) => (None, Some(why)),
-            None => reversal_for(kind, self.opts.dest_has_trash),
+            None => reversal_for(
+                kind,
+                self.opts.dest_has_trash,
+                self.opts.dest_trash_restorable,
+            ),
         };
         let step = SyncStep {
             id: self.next_id,
@@ -1086,18 +1091,48 @@ where
     }
 }
 
-/// Cómo vuelve atrás un paso, en función de su clase y de si el DESTINO tiene
-/// papelera.
+/// Cómo vuelve atrás un paso, en función de su clase y de la papelera del
+/// DESTINO.
 ///
 /// Un `CreateDir` y un `Copy` no destruyen nada, así que se deshacen borrando
 /// lo que crearon, con papelera o sin ella. Un `Overwrite` y un `DeleteTree`
 /// entierran algo: con papelera se saca de ella, sin papelera no se saca de
 /// ningún sitio y el plan tiene que decirlo ANTES de que nadie lo apruebe
 /// (regla dura 4).
+///
+/// # Y una papelera que no dice dónde puso las cosas no sirve para NADA
+/// Cuando el destino tiene papelera pero no la nombra
+/// ([`SyncOptions::dest_trash_restorable`](crate::SyncOptions::dest_trash_restorable)
+/// en `false`), el undo se queda sin `reversal_ref` y no puede acertar: ni
+/// desentierra lo que se sobrescribió —casaría por ruta original y sacaría el
+/// fichero que él mismo acaba de enterrar— ni deshace una creación, porque
+/// deshacerla es enterrarla y eso pasa por la misma papelera (#65). Así que
+/// **todos** los pasos salen `Irreversible`, no solo los destructivos.
+///
+/// Lo que este caso NO cambia es el de un destino SIN papelera, donde una
+/// `Copy` sigue anunciándose reversible: ahí el undo se salta la entrada por
+/// una razón distinta (borrar «lo que hoy viva en esa ruta» sin papelera puede
+/// destruir trabajo posterior del humano) y lo cuenta en
+/// `skipped_created_no_trash`. Esa asimetría es una decisión de la tarea 11 del
+/// plan, no un descuido de esta.
 fn reversal_for(
     kind: SyncStepKind,
     dest_has_trash: bool,
+    dest_trash_restorable: bool,
 ) -> (Option<StepReversal>, Option<SyncReason>) {
+    let actua = matches!(
+        kind,
+        SyncStepKind::CreateDir
+            | SyncStepKind::Copy
+            | SyncStepKind::Overwrite
+            | SyncStepKind::DeleteTree
+    );
+    if actua && dest_has_trash && !dest_trash_restorable {
+        return (
+            Some(StepReversal::Irreversible),
+            Some(SyncReason::NoTrashOnTarget),
+        );
+    }
     match kind {
         SyncStepKind::CreateDir | SyncStepKind::Copy => (Some(StepReversal::Delete), None),
         SyncStepKind::Overwrite | SyncStepKind::DeleteTree => {
@@ -1225,6 +1260,7 @@ mod tests {
             on_unknown: OnUnknown::Copy,
             source_side: Side::Left,
             dest_has_trash: true,
+            dest_trash_restorable: true,
             dest_writable: true,
         }
     }
@@ -1509,6 +1545,99 @@ mod tests {
         assert_eq!(s.reversal, Some(StepReversal::Irreversible));
         assert_eq!(s.reason, Some(SyncReason::NoTrashOnTarget));
         assert!(s.shape_is_consistent());
+    }
+
+    /// Cuatro filas que producen las cuatro clases de paso que ACTÚAN. Es la
+    /// entrada de los tests de reversa: la matriz completa en una llamada.
+    fn una_fila_de_cada_clase() -> Vec<CompareRow> {
+        vec![
+            // Copy: solo en el origen.
+            row(
+                CompareVerdict::OnlyLeft,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                Some(src_file("nuevo.txt", 10)),
+                None,
+            ),
+            // CreateDir: un directorio solo en el origen.
+            row(
+                CompareVerdict::OnlyLeft,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                Some(src_dir("nueva")),
+                None,
+            ),
+            // Overwrite: distinto a los dos lados.
+            row(
+                CompareVerdict::Different,
+                CompareCriterion::Size,
+                CompareConfidence::Certain,
+                Some(src_file("a.txt", 10)),
+                Some(dst_file("a.txt", 9)),
+            ),
+            // DeleteTree (solo en Mirror): huérfano del destino.
+            row(
+                CompareVerdict::OnlyRight,
+                CompareCriterion::Presence,
+                CompareConfidence::Certain,
+                None,
+                Some(dst_file("sobra.txt", 1)),
+            ),
+        ]
+    }
+
+    /// **Una papelera que no dice dónde puso las cosas no deshace NADA.** Ni la
+    /// sobrescritura (el undo sacaría el fichero que él mismo enterró) ni la
+    /// copia (deshacerla es enterrarla, y eso pasa por la misma papelera, #65).
+    /// Es lo que le pasaba a `file://` en Linux antes de que la papelera
+    /// freedesktop nombrara su destino.
+    #[tokio::test]
+    async fn nothing_is_reversible_when_the_destination_cannot_restore() {
+        let opts = SyncOptions {
+            dest_has_trash: true,
+            dest_trash_restorable: false,
+            ..opts_mirror()
+        };
+        let items = run(una_fila_de_cada_clase(), opts).await;
+        let steps = steps_of(&items);
+        assert!(steps.len() >= 4, "las cuatro clases: {items:?}");
+        for s in steps {
+            if s.kind == SyncStepKind::Skip {
+                continue;
+            }
+            assert_eq!(s.reversal, Some(StepReversal::Irreversible), "{s:?}");
+            assert_eq!(s.reason, Some(SyncReason::NoTrashOnTarget), "{s:?}");
+            assert!(s.shape_is_consistent(), "{s:?}");
+        }
+    }
+
+    /// Y con una papelera que SÍ nombra su destino, la tabla de reversas es la
+    /// de siempre: no se marca irreversible de más.
+    #[tokio::test]
+    async fn a_restorable_trash_keeps_the_promises_the_table_makes() {
+        let opts = SyncOptions {
+            dest_has_trash: true,
+            dest_trash_restorable: true,
+            ..opts_mirror()
+        };
+        let items = run(una_fila_de_cada_clase(), opts).await;
+        let steps = steps_of(&items);
+        assert!(
+            steps
+                .iter()
+                .any(|s| s.reversal == Some(StepReversal::RestoreTrash))
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|s| s.reversal == Some(StepReversal::Delete))
+        );
+        assert!(
+            !steps
+                .iter()
+                .any(|s| s.reversal == Some(StepReversal::Irreversible)),
+            "{items:?}"
+        );
     }
 
     #[tokio::test]

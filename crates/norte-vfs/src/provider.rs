@@ -191,10 +191,20 @@ pub trait Provider: Send + Sync {
     /// [`Error::Unsupported`] (default) — el engine JAMÁS degrada a
     /// borrado permanente por su cuenta.
     ///
-    /// Devuelve `Some(dest)` con el destino recuperable cuando la papelera es
-    /// LÓGICA (`.norte-trash/<id>/payload`) — el core lo persiste como
-    /// `reversal_ref` para el undo. `None` si es la papelera NATIVA del OS (sin
-    /// ruta estable expuesta) o una papelera "vanish" de test.
+    /// Devuelve `Some(dest)` con el destino recuperable siempre que el provider
+    /// ELIJA ese destino y lo sepa nombrar — el core lo persiste como
+    /// `reversal_ref` para el undo. Lo hacen la papelera LÓGICA
+    /// (`.norte-trash/<id>/payload`) y la papelera freedesktop de
+    /// `norte-vfs-local` (`<Trash>/files/<nombre>`). `None` si la papelera es
+    /// del OS y no expone ruta estable (macOS, Windows) o es una papelera
+    /// "vanish" de test.
+    ///
+    /// **`None` no es un detalle cosmético**: sin `reversal_ref` el undo de una
+    /// sobrescritura tiene que casar por ruta ORIGINAL, y para cuando llega
+    /// ahí el candidato más reciente es el fichero que él mismo acaba de
+    /// enterrar. Por eso [`Provider::trash_restorable`] existe: el plan de una
+    /// sincronización marca IRREVERSIBLE todo lo que pase por una papelera que
+    /// no nombra su destino, antes de que nadie apruebe nada (regla dura 4).
     ///
     /// `id` lo genera el engine UNA vez por operación (#99): la papelera lógica
     /// construye su entrada determinista `.norte-trash/<id>/` con él, de modo
@@ -210,6 +220,47 @@ pub trait Provider: Send + Sync {
     async fn trash(&self, p: &VPath, id: &crate::trash::TrashId) -> Result<Option<VPath>, Error> {
         let _ = (p, id);
         Err(Error::Unsupported)
+    }
+
+    /// ¿La papelera de este provider NOMBRA el destino de lo que entierra?
+    ///
+    /// Es una propiedad de la IMPLEMENTACIÓN, no de una víctima concreta, y por
+    /// eso no hace I/O: `true` significa "cuando `trash` va bien, contesta
+    /// `Some`". Quien planifica una mutación la usa para clasificar la reversa
+    /// ANTES de pedir aprobación (regla dura 4): sobre una papelera que
+    /// contesta `None` no hay undo posible, ni siquiera el de una copia, porque
+    /// deshacer una creación también pasa por la papelera (#65).
+    ///
+    /// Un provider que conteste `true` puede aun así devolver `None` en un caso
+    /// concreto —el destino existe pero cae fuera de lo que ese provider sabe
+    /// nombrar—; el journal se queda entonces sin `reversal_ref` y el undo lo
+    /// BLOQUEA nombrando la ruta, que es lo honesto. Lo que no es legal es lo
+    /// contrario: prometer `false` y devolver `Some`, ni prometer `true` sin
+    /// tener nunca destino. La suite contractual lo comprueba.
+    ///
+    /// Default `false`: quien no lo implemente no promete nada.
+    fn trash_restorable(&self) -> bool {
+        false
+    }
+
+    /// Devuelve a `original` lo que [`Provider::trash`] enterró en `dest`, con
+    /// los metadatos que la papelera hubiera dejado al lado.
+    ///
+    /// El default es el movimiento a secas, que es lo que hace la papelera
+    /// LÓGICA. Lo sobrescribe quien deje metadatos fuera del payload — la
+    /// papelera freedesktop de `norte-vfs-local` tiene que llevarse también el
+    /// `info/<nombre>.trashinfo`, o la papelera del usuario queda con una
+    /// entrada que apunta a un fichero que ya no está.
+    ///
+    /// El destino tiene que estar LIBRE: hereda el contrato no-replace de
+    /// [`Provider::rename`], porque restaurar pisando es perder lo que hubiera
+    /// llegado a esa ruta después.
+    ///
+    /// # Errors
+    /// Los de [`Provider::rename`]: [`Error::NotFound`] si `dest` ya no está,
+    /// [`Error::Conflict`] si `original` está ocupado.
+    async fn restore_from(&self, dest: &VPath, original: &VPath) -> Result<(), Error> {
+        self.rename(dest, original).await
     }
 
     /// GC de staging `.norte-partial` huérfano (ADR 0012, #11) en el directorio
@@ -237,6 +288,14 @@ pub trait Provider: Send + Sync {
     /// Default `Unsupported`. Solo el provider local lo implementa: casa por
     /// ruta original el ítem MÁS RECIENTE y lo restaura. Falla limpio si la
     /// plataforma no lista la papelera, no hay match, o el destino está ocupado.
+    ///
+    /// **Es el camino de ADIVINAR, y por eso ya casi no se usa**: elegir "el más
+    /// reciente con esta ruta original" es exactamente lo que restauraba el
+    /// fichero equivocado al deshacer una sobrescritura. Desde que la papelera
+    /// freedesktop nombra su destino, un `trashed` de `file://` en Linux lleva
+    /// `reversal_ref` y el undo usa [`Provider::restore_from`]. Aquí quedan las
+    /// entradas viejas del journal y las plataformas cuya papelera no nombra
+    /// nada.
     ///
     /// # Errors
     /// [`Error::Unsupported`] (default y plataformas sin listado de papelera);

@@ -15,7 +15,14 @@ norte_vfs::provider_contract! {
     factory: {
         let dir = tempfile::tempdir().expect("tempdir");
         let base = dir.path().to_path_buf();
-        LocalProvider::rooted(base).with_guard(Box::new(dir))
+        // La papelera, DENTRO de la raíz del provider: así el contrato puede
+        // exigir que el destino recuperable sea una ruta que este provider
+        // resuelve, y de paso ningún test acaba en la papelera de verdad del
+        // desarrollador. Se crea sola la primera vez que se entierra algo, así
+        // que los demás tests del contrato no ven ninguna entrada de más.
+        LocalProvider::rooted(base.clone())
+            .with_trash_home(base.join(".xdg"))
+            .with_guard(Box::new(dir))
     },
     root: LocalProvider::root(),
     hostile_names: hostile(),

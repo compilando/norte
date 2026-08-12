@@ -53,6 +53,21 @@ norte_vfs::provider_contract! {
     hostile_names: hostile(),
 }
 
+// Papelera LÓGICA: es la única configuración del testkit en la que `trash()`
+// devuelve `Some(dest)`, así que sin ella la rama del contrato que comprueba
+// «el destino recuperable existe y restaura» no la ejercita NADIE (MAJOR-4 del
+// encoding-auditor: el provider de object storage devolvía `Some` sin prometer
+// `trash_restorable`, y ningún contrato lo veía).
+norte_vfs::provider_contract! {
+    mod mem_logical_trash,
+    factory: MemProvider::with_flags(
+        CapabilityFlags::CASE_SENSITIVE | CapabilityFlags::TRASH,
+    )
+    .with_logical_trash(),
+    root: MemProvider::root(),
+    hostile_names: hostile(),
+}
+
 // Attrs sintéticos hostiles (#108 bloque 2): el contrato de attrs deja de
 // auto-skipearse y ejercita valores reales (Bytes no-UTF-8, RTL, ZWJ).
 norte_vfs::provider_contract! {

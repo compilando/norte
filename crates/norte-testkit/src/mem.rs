@@ -1028,6 +1028,12 @@ impl Provider for MemProvider {
         Ok(None)
     }
 
+    /// Solo la papelera LÓGICA del testkit nombra su destino; la "vanish"
+    /// imita a la nativa de macOS/Windows y no promete nada.
+    fn trash_restorable(&self) -> bool {
+        self.logical_trash
+    }
+
     async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {
         self.faults.op_gate().await?;
         let key = seg_path(p);

@@ -103,11 +103,12 @@ pub(crate) async fn remove_retrying(
 }
 
 /// `trash` con reintentos y desambiguación (#99). Tras un fallo transitorio el
-/// efecto pudo aplicarse. La papelera LÓGICA, con el MISMO id determinista,
-/// recupera el payload en el reintento (`Some`, conserva el `reversal_ref` del
-/// undo). La NATIVA no expone destino recuperable: un `NotFound` en el
-/// reintento significa "ya no está" (lo trasheó nuestra primera aplicación) →
-/// `Ok(None)`, el undo degrada como siempre en trash nativa. Un `NotFound` SIN
+/// efecto pudo aplicarse. Una papelera que NOMBRA su destino —la lógica, y la
+/// freedesktop de `norte-vfs-local` desde la tarea 11b— recupera el payload en
+/// el reintento con el MISMO id determinista (`Some`, conserva el
+/// `reversal_ref` del undo). Una que no lo nombra (macOS, Windows) no puede: un
+/// `NotFound` en el reintento significa "ya no está" (lo trasheó nuestra
+/// primera aplicación) → `Ok(None)`, y el undo degrada. Un `NotFound` SIN
 /// transitorio previo es la víctima que nunca existió: se propaga.
 pub(crate) async fn trash_retrying(
     provider: &dyn Provider,

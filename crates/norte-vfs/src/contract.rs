@@ -466,13 +466,33 @@ macro_rules! provider_contract {
                     let _ = sink.commit().await;
                 }
                 if p.capabilities().flags.contains(CapabilityFlags::TRASH) {
-                    p.trash(&dir, &$crate::trash::TrashId::new(0, 0))
+                    let dest = p.trash(&dir, &$crate::trash::TrashId::new(0, 0))
                         .await
                         .expect("trash");
                     assert_eq!(
                         p.stat(&dir).await.expect_err("se fue"),
                         Error::NotFound
                     );
+                    // El destino recuperable y lo que el provider PROMETE
+                    // sobre él no pueden discrepar: sin esta pareja, un
+                    // provider que contesta `None` deja al undo casando por
+                    // ruta original, que sobre una pareja `trashed`+`created`
+                    // desentierra el fichero equivocado y lo canta como éxito.
+                    assert_eq!(
+                        dest.is_some(),
+                        p.trash_restorable(),
+                        "una papelera promete nombrar su destino y lo nombra, o ni lo promete"
+                    );
+                    if let Some(dest) = dest {
+                        p.stat(&dest).await.expect("el destino recuperable EXISTE");
+                        // Y restaura EXACTAMENTE: de vuelta a su ruta, sin
+                        // adivinar cuál de los ítems de la papelera era.
+                        p.restore_from(&dest, &dir).await.expect("restore_from");
+                        assert!(
+                            p.stat(&dir).await.is_ok(),
+                            "restaurado desde el destino que el propio provider dio"
+                        );
+                    }
                 } else {
                     assert!(matches!(
                         p.trash(&dir, &$crate::trash::TrashId::new(0, 0)).await,

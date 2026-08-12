@@ -118,6 +118,7 @@ const _: () = assert!(TAG_STEP != TAG_BLOCKER);
 ///     on_unknown: OnUnknown::Copy,
 ///     source_side: Side::Left,
 ///     dest_has_trash: true,
+///     dest_trash_restorable: true,
 ///     dest_writable: true,
 /// };
 /// let compare = SyncCompareOptions::default();
@@ -167,6 +168,7 @@ impl PlanHasher {
             on_unknown,
             source_side,
             dest_has_trash,
+            dest_trash_restorable,
             dest_writable,
         } = opts;
         let SyncCompareOptions {
@@ -193,6 +195,7 @@ impl PlanHasher {
         feed_name(&mut digest, &on_unknown_name(*on_unknown));
         feed_name(&mut digest, &side_name(*source_side));
         feed_flag(&mut digest, *dest_has_trash);
+        feed_flag(&mut digest, *dest_trash_restorable);
         feed_flag(&mut digest, *dest_writable);
         feed_flag(&mut digest, *size);
         feed_flag(&mut digest, *mtime);
@@ -547,6 +550,7 @@ mod tests {
             on_unknown: OnUnknown::Copy,
             source_side: Side::Left,
             dest_has_trash: true,
+            dest_trash_restorable: true,
             dest_writable: true,
         }
     }
@@ -892,6 +896,10 @@ mod tests {
                 ..base.clone()
             },
             SyncOptions {
+                dest_trash_restorable: false,
+                ..base.clone()
+            },
+            SyncOptions {
                 dest_writable: false,
                 ..base.clone()
             },
@@ -1130,7 +1138,9 @@ mod tests {
         h.blocker(&blocker(SyncBlockerKind::AmbiguousDest, "sub/x"));
         assert_eq!(
             h.finish().as_str(),
-            "65f57f89c71e99d6f0effc8972e7ae100d80781a4934553c517492e8ae2878f5",
+            // Cambió al sembrar `dest_trash_restorable` (tarea 11b del plan de
+            // sincronización): un campo NUEVO en la intención, a propósito.
+            "78f235a59de1d47760539a7b4f79bb35c3cda5e88e6ff230cc89afda9f52e289",
         );
     }
 

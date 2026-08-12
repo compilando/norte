@@ -862,6 +862,17 @@ impl Provider for ObjectProvider {
         Ok(Some(paths.payload))
     }
 
+    /// La papelera lógica elige su destino (`.norte-trash/<id>/payload`), así
+    /// que lo nombra siempre; sin ella no hay papelera que prometer.
+    ///
+    /// Sin esto, un destino S3 con papelera lógica devolvía `Some(dest)` a la
+    /// vez que el default del trait decía que no sabía nombrarlo: el plan
+    /// marcaba IRREVERSIBLE hasta la última copia y el ejecutor TIRABA un
+    /// `reversal_ref` que existía (MAJOR-4 del encoding-auditor).
+    fn trash_restorable(&self) -> bool {
+        self.logical_trash
+    }
+
     async fn copy_native(&self, from: &VPath, to: &VPath) -> Option<Result<(), Error>> {
         // Object storage SÍ tiene copia server-side (CopyObject) — el engine
         // la prefiere a leer+reescribir. Aplica solo a UN objeto (fichero);

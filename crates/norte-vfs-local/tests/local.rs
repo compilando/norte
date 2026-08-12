@@ -492,9 +492,15 @@ async fn dropping_byte_stream_mid_read_releases_handle() {
 }
 
 /// Purga de la papelera REAL tras la suite (hallazgo M3 de fase 8): el
-/// contrato trashea `norte-contract-trash-<pid>` en cada run — sin esto,
-/// la papelera del desarrollador crece para siempre. macOS no tiene
+/// contrato trasheaba `norte-contract-trash-<pid>` en cada run — sin esto,
+/// la papelera del desarrollador crecía para siempre. macOS no tiene
 /// `os_limited`: aceptado y documentado en ADR 0009.
+///
+/// Desde la tarea 11b el contrato local se lleva su papelera dentro del
+/// tempdir (`with_trash_home`), así que ya no ensucia nada; esto queda para
+/// barrer lo que dejaron las runs anteriores, y porque los tests de
+/// `restore_trashed` de aquí abajo SÍ usan la papelera de verdad (es lo que
+/// prueban: que el crate `trash` sabe leer lo que escribimos).
 #[cfg(any(target_os = "linux", windows))]
 #[test]
 fn purga_los_restos_del_contrato_en_la_papelera() {
@@ -824,4 +830,355 @@ async fn attrs_posix_en_stat_y_list() {
     let mut s = p.list_with(&root, &ajeno).await.expect("list_with");
     let le = s.next().await.expect("una entrada").expect("ok");
     assert!(le.attrs.is_empty() && le.size.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Papelera freedesktop (`trash_fdo`): la que SABE dónde dejó el fichero.
+//
+// Todos estos tests inyectan su propia raíz XDG bajo el tempdir: ni tocan la
+// papelera de verdad del desarrollador ni dependen de en qué dispositivo vive.
+// ---------------------------------------------------------------------------
+
+#[cfg(all(
+    unix,
+    not(target_os = "macos"),
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+mod papelera_freedesktop {
+    use super::{LocalProvider, Provider, Segment, VPath, child};
+    use std::os::unix::ffi::OsStrExt;
+
+    /// Provider enraizado en un tempdir con su papelera DENTRO: así el destino
+    /// recuperable es una ruta que este mismo provider sabe resolver.
+    fn provider() -> (tempfile::TempDir, LocalProvider) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = LocalProvider::rooted(dir.path()).with_trash_home(dir.path().join(".xdg"));
+        (dir, p)
+    }
+
+    /// Un id de engine distinto por operación. El instante manda —es lo que
+    /// viaja al sidecar, con resolución de SEGUNDO—, así que los ids de test
+    /// se separan por segundos enteros.
+    fn id(n: u64) -> norte_vfs::trash::TrashId {
+        norte_vfs::trash::TrashId::new(1_726_000_000_000 + n * 1000, n)
+    }
+
+    /// Raíz de la papelera en el disco real del test.
+    fn trash_root(dir: &tempfile::TempDir) -> std::path::PathBuf {
+        dir.path().join(".xdg").join("Trash")
+    }
+
+    /// Siembra un fichero con BYTES de nombre arbitrarios (regla 1: jamás pasa
+    /// por `str`).
+    fn seed(dir: &tempfile::TempDir, name: &[u8], body: &[u8]) -> VPath {
+        let native = dir.path().join(std::ffi::OsStr::from_bytes(name));
+        std::fs::write(&native, body).expect("seed");
+        child(&LocalProvider::root(), name)
+    }
+
+    fn native_of(dir: &tempfile::TempDir, p: &VPath) -> std::path::PathBuf {
+        let mut out = dir.path().to_path_buf();
+        for seg in p.segments() {
+            out.push(std::ffi::OsStr::from_bytes(seg));
+        }
+        out
+    }
+
+    /// El sidecar que le toca a un destino `…/files/<n>`.
+    fn sidecar_of(dir: &tempfile::TempDir, dest: &VPath) -> std::path::PathBuf {
+        let native = native_of(dir, dest);
+        let name = native.file_name().expect("nombre");
+        let mut file = name.as_bytes().to_vec();
+        file.extend_from_slice(b".trashinfo");
+        trash_root(dir)
+            .join("info")
+            .join(std::ffi::OsStr::from_bytes(&file))
+    }
+
+    #[tokio::test]
+    async fn trashing_returns_the_path_it_actually_used() {
+        let (dir, p) = provider();
+        let victim = seed(&dir, b"a.txt", b"datos");
+        let dest = p
+            .trash(&victim, &id(1))
+            .await
+            .expect("trash")
+            .expect("freedesktop nombra su destino");
+        assert!(
+            dest.to_wire().contains("/Trash/files/"),
+            "{}",
+            dest.to_wire()
+        );
+        p.stat(&dest).await.expect("el fichero ESTÁ ahí");
+        assert_eq!(
+            std::fs::read(native_of(&dir, &dest)).expect("bytes"),
+            b"datos"
+        );
+        assert!(p.trash_restorable(), "y el provider lo promete");
+    }
+
+    /// El bug en un test: sin destinos distintos, el undo de una pareja
+    /// `trashed`+`created` desentierra su propio entierro.
+    #[tokio::test]
+    async fn two_victims_with_one_name_get_two_destinations() {
+        let (dir, p) = provider();
+        let victim = seed(&dir, b"a.txt", b"first");
+        let first = p
+            .trash(&victim, &id(1))
+            .await
+            .expect("trash")
+            .expect("dest");
+        let victim = seed(&dir, b"a.txt", b"second");
+        let second = p
+            .trash(&victim, &id(2))
+            .await
+            .expect("trash")
+            .expect("dest");
+
+        assert_ne!(first.to_wire(), second.to_wire());
+        assert_eq!(std::fs::read(native_of(&dir, &first)).expect("1"), b"first");
+        assert_eq!(
+            std::fs::read(native_of(&dir, &second)).expect("2"),
+            b"second"
+        );
+        // La deduplicación que la spec describe.
+        assert!(
+            second.to_wire().ends_with("a.txt.2"),
+            "{}",
+            second.to_wire()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_trashinfo_sidecar_is_written_and_names_the_original() {
+        let (dir, p) = provider();
+        let victim = seed(&dir, b"a.txt", b"x");
+        let dest = p
+            .trash(&victim, &id(1))
+            .await
+            .expect("trash")
+            .expect("dest");
+
+        let bytes = std::fs::read(sidecar_of(&dir, &dest)).expect("sidecar");
+        let text = String::from_utf8(bytes).expect("el trashinfo es UTF-8 por spec");
+        assert!(text.starts_with("[Trash Info]\n"), "{text}");
+        let esperada = dir.path().canonicalize().expect("canon").join("a.txt");
+        assert!(
+            text.contains(&format!("Path={}\n", esperada.display())),
+            "{text}"
+        );
+        assert!(text.contains("DeletionDate="), "{text}");
+    }
+
+    /// Regla 1. El sidecar percent-codifica; el FICHERO conserva sus bytes. Lo
+    /// que este test comprueba de verdad —y lo que la primera versión NO
+    /// comprobaba (MINOR-1 del encoding-auditor)— es que la ruta del sidecar,
+    /// DECODIFICADA, es byte a byte la ruta original: `restore_from` no lee el
+    /// sidecar, así que sin esta aserción un fallo sistemático de escapado
+    /// pasaría verde y solo lo notaría una papelera gráfica.
+    #[tokio::test]
+    async fn a_hostile_name_survives_the_round_trip() {
+        let (dir, p) = provider();
+        let raiz = dir.path().canonicalize().expect("canon");
+        let mut probados = 0usize;
+        for (n, name) in norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .enumerate()
+        {
+            let native = dir.path().join(std::ffi::OsStr::from_bytes(&name.bytes));
+            // Un nombre que este FS no acepta simplemente no está (APFS/NTFS).
+            // El payload es DISTINTO por fixture: con uno común, devolver el
+            // destino de otra entrada pasaría desapercibido.
+            if std::fs::write(&native, name.id.as_bytes()).is_err() {
+                continue;
+            }
+            let Ok(victim) = Segment::new(name.bytes.clone()).map(|s| LocalProvider::root().join(s))
+            else {
+                continue;
+            };
+            probados += 1;
+            let dest = p
+                .trash(&victim, &id(1000 + n as u64))
+                .await
+                .expect("trash")
+                .expect("dest");
+
+            // El sidecar es ASCII puro aunque el nombre no sea ni UTF-8, y son
+            // tres líneas exactas: un `\n` en un nombre no puede inyectar una
+            // cuarta ni un segundo `Path=`.
+            let text = std::fs::read_to_string(sidecar_of(&dir, &dest)).expect("sidecar");
+            assert!(text.is_ascii(), "{}: {text}", name.id);
+            assert_eq!(text.lines().count(), 3, "{}: {text}", name.id);
+            assert_eq!(text.lines().next(), Some("[Trash Info]"), "{}", name.id);
+            assert_eq!(
+                text.lines().filter(|l| l.starts_with("Path=")).count(),
+                1,
+                "{}: {text}",
+                name.id
+            );
+
+            // Y la ruta que guarda es, decodificada, la original BYTE A BYTE.
+            let codificada = text
+                .lines()
+                .find_map(|l| l.strip_prefix("Path="))
+                .expect("Path=");
+            assert_eq!(
+                percent_decode(codificada),
+                raiz.join(std::ffi::OsStr::from_bytes(&name.bytes))
+                    .as_os_str()
+                    .as_bytes(),
+                "{}",
+                name.id
+            );
+
+            // Y vuelve a SU ruta, con SUS bytes.
+            p.restore_from(&dest, &victim).await.expect("restore_from");
+            assert_eq!(
+                std::fs::read(&native).expect("de vuelta"),
+                name.id.as_bytes(),
+                "{}",
+                name.id
+            );
+            std::fs::remove_file(&native).expect("limpia");
+        }
+        assert!(probados >= 40, "el corpus se saltó casi entero: {probados}");
+    }
+
+    /// Decodifica el `Path=` de un `.trashinfo` a BYTES (jamás a `String`: la
+    /// ruta original puede no ser UTF-8).
+    fn percent_decode(s: &str) -> Vec<u8> {
+        let raw = s.as_bytes();
+        let mut out = Vec::with_capacity(raw.len());
+        let mut i = 0;
+        while i < raw.len() {
+            if raw[i] == b'%' && i + 2 < raw.len() {
+                let hex = std::str::from_utf8(&raw[i + 1..i + 3]).expect("ascii");
+                out.push(u8::from_str_radix(hex, 16).expect("hex válido"));
+                i += 3;
+            } else {
+                out.push(raw[i]);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn restoring_from_the_recorded_destination_needs_no_guessing() {
+        let (dir, p) = provider();
+        let victim = seed(&dir, b"a.txt", b"x");
+        let dest = p
+            .trash(&victim, &id(1))
+            .await
+            .expect("trash")
+            .expect("dest");
+        let sidecar = sidecar_of(&dir, &dest);
+        assert!(sidecar.exists(), "el sidecar estaba");
+
+        p.restore_from(&dest, &victim).await.expect("restore");
+        assert_eq!(
+            std::fs::read(dir.path().join("a.txt")).expect("vuelto"),
+            b"x"
+        );
+        assert!(!sidecar.exists(), "el sidecar se va con él");
+        assert!(p.stat(&dest).await.is_err(), "y el payload ya no está");
+    }
+
+    /// #99: el `id` lo genera el engine y un reintento tras un fallo
+    /// transitorio tiene que CONVERGER en la misma entrada, no crear una
+    /// segunda ni perder el `reversal_ref`.
+    #[tokio::test]
+    async fn a_retry_with_the_same_id_converges_on_the_same_entry() {
+        let (dir, p) = provider();
+        let victim = seed(&dir, b"a.txt", b"x");
+        let first = p
+            .trash(&victim, &id(7))
+            .await
+            .expect("trash")
+            .expect("dest");
+        // La víctima ya no está: el reintento reconoce su propia entrada.
+        let again = p
+            .trash(&victim, &id(7))
+            .await
+            .expect("el reintento converge")
+            .expect("y conserva el destino");
+        assert_eq!(first.to_wire(), again.to_wire());
+        // Y no ha creado una segunda entrada.
+        let n = std::fs::read_dir(trash_root(&dir).join("files"))
+            .expect("files")
+            .count();
+        assert_eq!(n, 1, "una sola entrada");
+    }
+
+    /// Sin entrada previa nuestra, una víctima ausente es `NotFound` — no se
+    /// reclama la entrada de OTRA operación sobre la misma ruta.
+    #[tokio::test]
+    async fn a_missing_victim_without_our_entry_is_not_found() {
+        let (dir, p) = provider();
+        let fantasma = child(&LocalProvider::root(), b"jamas.txt");
+        assert_eq!(
+            p.trash(&fantasma, &id(1)).await,
+            Err(norte_proto::Error::NotFound)
+        );
+        // Y una entrada AJENA con el mismo nombre tampoco se reclama.
+        let victim = seed(&dir, b"a.txt", b"del vecino");
+        p.trash(&victim, &id(1))
+            .await
+            .expect("trash")
+            .expect("dest");
+        assert_eq!(
+            p.trash(&victim, &id(2)).await,
+            Err(norte_proto::Error::NotFound),
+            "otra operación no hereda la entrada de nadie"
+        );
+    }
+
+    /// Un sidecar SEMBRADO en `info/` no se pisa ni se reclama: la víctima se
+    /// va al siguiente nombre libre.
+    #[tokio::test]
+    async fn a_planted_sidecar_is_never_overwritten() {
+        let (dir, p) = provider();
+        let info = trash_root(&dir).join("info");
+        std::fs::create_dir_all(&info).expect("info");
+        std::fs::write(info.join("a.txt.trashinfo"), b"[Trash Info]\nPath=/otro\n").expect("plant");
+
+        let victim = seed(&dir, b"a.txt", b"mio");
+        let dest = p
+            .trash(&victim, &id(1))
+            .await
+            .expect("trash")
+            .expect("dest");
+        assert!(dest.to_wire().ends_with("a.txt.2"), "{}", dest.to_wire());
+        assert_eq!(
+            std::fs::read(info.join("a.txt.trashinfo")).expect("intacto"),
+            b"[Trash Info]\nPath=/otro\n"
+        );
+    }
+
+    /// Un `files/<n>` SEMBRADO (aquí un symlink a algo valioso) tampoco se
+    /// pisa: el movimiento es no-replace y la víctima se va al siguiente
+    /// nombre.
+    #[tokio::test]
+    async fn a_planted_payload_is_never_clobbered() {
+        let (dir, p) = provider();
+        let files = trash_root(&dir).join("files");
+        std::fs::create_dir_all(&files).expect("files");
+        let valioso = dir.path().join("valioso.txt");
+        std::fs::write(&valioso, b"no me toques").expect("seed");
+        std::os::unix::fs::symlink(&valioso, files.join("a.txt")).expect("plant");
+
+        let victim = seed(&dir, b"a.txt", b"mio");
+        let dest = p
+            .trash(&victim, &id(1))
+            .await
+            .expect("trash")
+            .expect("dest");
+        assert!(dest.to_wire().ends_with("a.txt.2"), "{}", dest.to_wire());
+        assert_eq!(
+            std::fs::read(&valioso).expect("intacto"),
+            b"no me toques",
+            "el symlink sembrado no se siguió ni se pisó"
+        );
+    }
 }

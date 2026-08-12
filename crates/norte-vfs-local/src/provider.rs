@@ -35,6 +35,9 @@ const READ_CHUNK: usize = 256 * 1024;
 pub struct LocalProvider {
     base: PathBuf,
     caps: std::sync::Arc<std::sync::OnceLock<Capabilities>>,
+    /// Sustituto de `$XDG_DATA_HOME` para la papelera freedesktop; `None` =
+    /// resolver del entorno, que es lo que hace producción.
+    trash_home: Option<PathBuf>,
     /// Mantiene vivo un recurso externo (p. ej. el `TempDir` de un test).
     _guard: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
@@ -53,6 +56,7 @@ impl LocalProvider {
         Self {
             base,
             caps: std::sync::Arc::new(std::sync::OnceLock::new()),
+            trash_home: None,
             _guard: None,
         }
     }
@@ -83,6 +87,57 @@ impl LocalProvider {
         self
     }
 
+    /// Sustituye `$XDG_DATA_HOME` para la papelera freedesktop: la papelera
+    /// "home" pasa a ser `<dir>/Trash`.
+    ///
+    /// Es una COSTURA DE TEST, y existe porque un test no puede tocar la
+    /// papelera de verdad del desarrollador ni averiguar en qué dispositivo
+    /// vive: `std::env::set_var` es `unsafe` en la edición 2024 (prohibido
+    /// fuera de los usos justificados de la regla 5) y además es global al
+    /// proceso. Producción no la llama y resuelve del entorno.
+    ///
+    /// `dir` debe ser ABSOLUTO —una raíz de papelera relativa al cwd no es una
+    /// raíz— y, para que [`Provider::trash`] pueda NOMBRAR su destino, debe
+    /// caer bajo la raíz de este provider.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_trash_home(mut self, dir: impl Into<PathBuf>) -> Self {
+        let dir = dir.into();
+        // Una raíz relativa se ignoraría silenciosamente aguas abajo y la
+        // papelera acabaría siendo la del montaje de la víctima, que es un
+        // fallo desconcertante en un test (MINOR-3 del encoding-auditor).
+        debug_assert!(dir.is_absolute(), "la raíz de la papelera es absoluta");
+        self.trash_home = Some(dir);
+        self
+    }
+
+    /// El `VPath` de un path NATIVO bajo la raíz de este provider — la inversa
+    /// de [`Self::native`].
+    ///
+    /// `None` si el path no cuelga de la raíz: entonces este provider NO puede
+    /// nombrarlo, y quien pregunte se tiene que quedar sin ruta en vez de
+    /// recibir una que no resuelve. Pasa con un provider enraizado (los tests)
+    /// cuya papelera cae fuera; con `os_root`, que es lo que registra el
+    /// daemon, la raíz es `/` y no pasa nunca.
+    #[cfg(all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
+    fn vpath_of(&self, native: &Path) -> Option<VPath> {
+        use std::path::Component;
+        let rel = native.strip_prefix(&self.base).ok()?;
+        let mut out = Self::root();
+        for comp in rel.components() {
+            let Component::Normal(os) = comp else {
+                return None;
+            };
+            out = out.join(Segment::new(os_to_bytes(os)).ok()?);
+        }
+        Some(out)
+    }
+
     /// Provider que sirve TODO el filesystem del OS: unix se enraíza en `/`;
     /// Windows usa base vacía (el primer segmento del `VPath` es la unidad,
     /// p. ej. `C:`) y capabilities por defecto del OS sin sondeo (la raíz no
@@ -93,6 +148,7 @@ impl LocalProvider {
             let s = Self {
                 base: PathBuf::new(),
                 caps: std::sync::Arc::new(std::sync::OnceLock::new()),
+                trash_home: None,
                 _guard: None,
             };
             let _ = s.caps.set(Capabilities {
@@ -139,8 +195,13 @@ fn trash_delete(p: &Path) -> Result<(), trash::Error> {
     ctx.delete(p)
 }
 
-/// Papelera nativa (freedesktop / Recycle Bin).
-#[cfg(not(target_os = "macos"))]
+/// Papelera nativa delegada al crate `trash` (Recycle Bin, y las unix que no
+/// son freedesktop). En freedesktop NO existe: la papelera la implementa
+/// [`crate::trash_fdo`], que además sabe decir dónde dejó el fichero.
+#[cfg(not(any(
+    target_os = "macos",
+    all(unix, not(target_os = "ios"), not(target_os = "android")),
+)))]
 fn trash_delete(p: &Path) -> Result<(), trash::Error> {
     trash::delete(p)
 }
@@ -214,7 +275,7 @@ fn is_norte_partial(name: &[u8]) -> bool {
 
 /// Mapea un error de OS a la taxonomía del protocolo (spec §17.7): los
 /// frontends renderizan por categoría, jamás parsean strings de OS.
-fn map_io(e: &std::io::Error) -> Error {
+pub(crate) fn map_io(e: &std::io::Error) -> Error {
     use std::io::ErrorKind as K;
     // EILSEQ: el FS rechaza los BYTES del nombre (APFS exige UTF-8 válido).
     // std lo deja en `Uncategorized`, así que se mira el errno crudo. Con el
@@ -1005,6 +1066,56 @@ impl Provider for LocalProvider {
         blocking(move || node_id_native(&native, follow)).await
     }
 
+    /// Freedesktop (Linux/BSD): la papelera la implementa este crate (módulo
+    /// interno `trash_fdo`, la spec de freedesktop.org), y NOMBRA su destino.
+    ///
+    /// Es la diferencia entre poder deshacer una sobrescritura y no poder: con
+    /// `Ok(None)` el journal se queda sin `reversal_ref` y el undo tiene que
+    /// adivinar por ruta original, que sobre una pareja `trashed`+`created`
+    /// desentierra el fichero equivocado. Aquí el destino sale de una decisión
+    /// nuestra, así que se sabe.
+    ///
+    /// `Ok(None)` sigue siendo posible en un caso: que la papelera que toca
+    /// caiga FUERA de la raíz de este provider (un provider enraizado, cosa de
+    /// tests — `os_root`, que es el que registra el daemon, no puede). El
+    /// efecto ya ocurrió; lo que falta es una ruta que este provider sepa
+    /// resolver, y devolver una que no resuelve sería peor.
+    #[cfg(all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
+    async fn trash(
+        &self,
+        p: &VPath,
+        id: &norte_vfs::trash::TrashId,
+    ) -> Result<Option<VPath>, Error> {
+        self.ensure_caps().await;
+        if !self.capabilities().flags.contains(CapabilityFlags::TRASH) {
+            return Err(Error::Unsupported);
+        }
+        let native = self.native(p)?;
+        let home = self.trash_home.clone();
+        let id = *id;
+        let dest = blocking(move || crate::trash_fdo::trash(&native, home.as_deref(), &id)).await?;
+        Ok(self.vpath_of(&dest))
+    }
+
+    /// macOS y Windows: sigue delegando en el crate `trash`, que no expone
+    /// dónde puso el fichero — de ahí el `Ok(None)`, y de ahí que
+    /// [`Provider::trash_restorable`] diga que no.
+    ///
+    /// Reimplementar la papelera de esas dos plataformas no es lo mismo que
+    /// implementar una spec de tres ficheros: `NSFileManager` y la Recycle Bin
+    /// son APIs con su propio índice, y falsear uno sería peor que decir la
+    /// verdad (issues #25/#26).
+    #[cfg(not(all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )))]
     async fn trash(
         &self,
         p: &VPath,
@@ -1040,6 +1151,76 @@ impl Provider for LocalProvider {
         // Papelera NATIVA del OS: no exponemos una ruta estable de destino; el
         // handle de restauración se resuelve en el undo (M3-2, ADR 0009).
         Ok(None)
+    }
+
+    /// Freedesktop sí, **si además este provider sabe NOMBRAR su papelera**.
+    ///
+    /// No es una constante de plataforma: `trash()` devuelve la ruta traducida
+    /// a `VPath`, y eso no puede nombrar lo que cae fuera de la raíz del
+    /// provider. Un provider enraizado en un directorio cuya papelera queda
+    /// fuera contestaría `Ok(None)` tras haber prometido que sí — y el journal
+    /// se quedaría sin `reversal_ref` justo donde el plan dijo `RestoreTrash`,
+    /// que es el bug entero de esta tarea con otro disfraz (MAJOR-3 del
+    /// encoding-auditor, MINOR del security-reviewer). Así que la promesa se
+    /// mide, y quien no puede cumplirla contesta `false`: el plan marca los
+    /// pasos IRREVERSIBLES antes de que nadie apruebe (regla dura 4).
+    ///
+    /// `os_root`, que es lo que registra el daemon, tiene la raíz en `/` y
+    /// nombra cualquier ruta.
+    #[cfg(all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
+    fn trash_restorable(&self) -> bool {
+        self.base == Path::new("/")
+            || crate::trash_fdo::home_trash(self.trash_home.as_deref())
+                .is_some_and(|t| t.starts_with(&self.base))
+    }
+
+    /// macOS y Windows no: ahí la papelera la pone el crate `trash`, que no
+    /// dice dónde deja las cosas (issues #25/#26, ADR 0009).
+    #[cfg(not(all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )))]
+    fn trash_restorable(&self) -> bool {
+        false
+    }
+
+    /// Saca de la papelera freedesktop el fichero que
+    /// [`Provider::trash`] enterró, y se lleva su sidecar con él.
+    ///
+    /// El movimiento primero y el sidecar después, nunca al revés: un
+    /// `files/x` sin su `info/x.trashinfo` no lo enseña ninguna papelera
+    /// gráfica, así que borrar los metadatos y fallar luego el movimiento
+    /// escondería el fichero en vez de devolverlo. Al revés lo peor que queda
+    /// es un sidecar huérfano, que es cosmético.
+    ///
+    /// El borrado del sidecar es best-effort a propósito: el contrato de este
+    /// método es "el fichero está de vuelta en `original`", y eso ya se
+    /// cumplió cuando el `rename` volvió `Ok`. Devolver `Err` por no haber
+    /// podido limpiar metadatos haría que el undo contase como bloqueada una
+    /// entrada que sí se revirtió.
+    #[cfg(all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
+    async fn restore_from(&self, dest: &VPath, original: &VPath) -> Result<(), Error> {
+        self.ensure_caps().await;
+        let from = self.native(dest)?;
+        let to = self.native(original)?;
+        blocking(move || {
+            do_rename(&from, &to)?;
+            crate::trash_fdo::forget_sidecar(&from);
+            Ok(())
+        })
+        .await
     }
 
     /// Restaura desde la papelera nativa del OS el ítem cuya ruta ORIGINAL es
@@ -1357,7 +1538,7 @@ impl Provider for LocalProvider {
 /// Rename con contrato no-replace: la colisión la detecta el PROPIO rename
 /// (atómico, sin ventana check→rename). Un destino existente solo se tolera
 /// si es el origen con otra caja (case-rename en FS insensitive).
-fn do_rename(nf: &Path, nt: &Path) -> Result<(), Error> {
+pub(crate) fn do_rename(nf: &Path, nt: &Path) -> Result<(), Error> {
     match rename_noreplace(nf, nt) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {

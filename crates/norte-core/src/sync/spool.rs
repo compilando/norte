@@ -1624,6 +1624,7 @@ mod tests {
             on_unknown: OnUnknown::Copy,
             source_side: Side::Left,
             dest_has_trash: true,
+            dest_trash_restorable: true,
             dest_writable: true,
         }
     }

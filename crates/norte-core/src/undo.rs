@@ -421,10 +421,15 @@ pub(crate) async fn revert_entry(
                 Err(e) => return Ok(Reverted::blocked(entry.seq, e)),
             }
             let res = match entry.reversal_ref.as_deref() {
-                // Papelera lógica: mover el payload de vuelta al original.
+                // Papelera que NOMBRÓ su destino (lógica, o la freedesktop de
+                // `norte-vfs-local`): se restaura desde esa ruta exacta, sin
+                // adivinar. `restore_from` y no `rename` porque una papelera
+                // puede tener metadatos al lado del payload que se van con él
+                // (el `.trashinfo` de freedesktop); el default del trait ES el
+                // rename, así que la lógica no cambia de comportamiento.
                 Some(dest_bytes) => {
                     let dest = wire(dest_bytes)?;
-                    provider.rename(&dest, &path).await
+                    provider.restore_from(&dest, &path).await
                 }
                 // Papelera nativa: restore por ruta original.
                 None => provider.restore_trashed(&path).await,

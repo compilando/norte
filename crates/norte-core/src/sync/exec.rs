@@ -44,6 +44,14 @@
 //! | `DeleteTree` sin papelera | `removed` (UNA, por el árbol entero) | `Irreversible` |
 //! | `Skip` | ninguna | — |
 //!
+//! **«Sin papelera» aquí es «sin reversa», y son dos cosas distintas.** Un
+//! destino con papelera que no NOMBRA lo que entierra
+//! (`Provider::trash_restorable` en `false`) produce un plan cuyos pasos son
+//! todos `Irreversible`, así que cae en las filas de «sin papelera» de la tabla
+//! — pero el borrado SIGUE yendo a la papelera (`destroy_leaf`/`destroy_tree`
+//! miran `delete_mode`, que sale de si el destino tiene papelera). Lo que se
+//! pierde es el undo, no la papelera del usuario.
+//!
 //! El undo recorre `seq` descendente, así que dentro de la pareja de un
 //! `Overwrite` borra lo creado ANTES de restaurar lo enterrado. El orden correcto
 //! sale del mecanismo que ya había, no de cuidado puesto aquí.
@@ -571,6 +579,48 @@ fn trash_id(step_id: u64) -> norte_vfs::trash::TrashId {
     norte_vfs::trash::TrashId::new(now_ms, step_id)
 }
 
+/// Destruye una HOJA de la forma que el destino permita: a la papelera si la
+/// tiene, para siempre si no.
+///
+/// **Que el UNDO no pueda deshacer el paso no es razón para negarle al humano su
+/// papelera.** Un destino cuya papelera no NOMBRA lo que entierra deja al plan
+/// sin reversa —el journal se queda sin `reversal_ref` y adivinar restauraría el
+/// fichero equivocado— pero la papelera sigue estando ahí, y lo enterrado se
+/// saca a mano desde ella. Borrar permanente lo que se podía enterrar sería
+/// destruir de más por un problema de contabilidad.
+///
+/// No journaliza: quien llama escribe la entrada que le toca (una sola,
+/// `Irreversible`).
+async fn destroy_leaf(
+    targets: &SyncTargets,
+    to: &VPath,
+    step_id: u64,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    if targets.delete_mode == norte_proto::DeleteMode::Trash {
+        crate::ops::trash_retrying(targets.dest.as_ref(), to, &trash_id(step_id), &ctx.cancel)
+            .await?;
+        return Ok(());
+    }
+    crate::ops::remove_retrying(targets.dest.as_ref(), to, &ctx.cancel).await
+}
+
+/// Lo mismo para un ÁRBOL: la papelera se lo lleva de una pieza (por eso ni
+/// siquiera hace falta el walk), y sin papelera se recorre en post-orden.
+async fn destroy_tree(
+    targets: &SyncTargets,
+    to: &VPath,
+    step_id: u64,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    if targets.delete_mode == norte_proto::DeleteMode::Trash {
+        crate::ops::trash_retrying(targets.dest.as_ref(), to, &trash_id(step_id), &ctx.cancel)
+            .await?;
+        return Ok(());
+    }
+    remove_tree(targets.dest.as_ref(), to, ctx).await
+}
+
 /// Entierra `to` en la papelera y lo journaliza.
 async fn bury(
     targets: &SyncTargets,
@@ -667,7 +717,7 @@ async fn overwrite(
             place(targets, &from, &entry, recorder, to, Reversal::Delete, ctx).await
         }
         Some(StepReversal::Irreversible) => {
-            crate::ops::remove_retrying(targets.dest.as_ref(), to, &ctx.cancel)
+            destroy_leaf(targets, to, record.step.id, ctx)
                 .await
                 .map_err(StepError::from_provider)?;
             // UNA entrada, irreversible: ver la nota del módulo sobre por qué el
@@ -715,7 +765,7 @@ async fn delete_tree(
             Ok(Applied::Wrote(0))
         }
         Some(StepReversal::Irreversible) => {
-            let removed = remove_tree(targets.dest.as_ref(), to, ctx).await;
+            let removed = destroy_tree(targets, to, record.step.id, ctx).await;
             // La entrada se escribe aunque el borrado se haya quedado a medias:
             // «este árbol ya no está entero» es una mutación irreversible tanto
             // si el `remove` llegó al final como si murió en el fichero 40 000, y
@@ -1178,7 +1228,12 @@ mod tests {
         write(&mem, "mem:///d/a.txt", b"viejo").await;
         let entry = mem.stat(&vp("mem:///d/a.txt")).await.expect("stat");
 
-        let t = targets(&mem);
+        // Sin papelera en el destino, el borrado es PERMANENTE: es lo que
+        // `engine` deriva de las capabilities y lo que el gate autorizó.
+        let t = SyncTargets {
+            delete_mode: norte_proto::DeleteMode::Permanent,
+            ..targets(&mem)
+        };
         let recorder = Recorder::default();
         let record = SpoolStep {
             step: step(
@@ -1205,6 +1260,56 @@ mod tests {
         assert_eq!(entries[0].op, "created");
         assert_eq!(entries[0].reversal, Reversal::Irreversible);
         assert_eq!(report.lock().expect("lock").done, 1);
+    }
+
+    /// **Irreversible NO quiere decir «borra permanente».** Un destino cuya
+    /// papelera no NOMBRA lo que entierra produce pasos irreversibles —el undo
+    /// no puede acertar— pero la papelera sigue existiendo, y lo sobrescrito
+    /// tiene que acabar dentro de ella: el humano lo saca a mano. Borrarlo
+    /// para siempre sería destruir de más por un problema de contabilidad.
+    #[tokio::test]
+    async fn un_paso_irreversible_con_papelera_entierra_en_vez_de_borrar() {
+        let mem = Arc::new(
+            MemProvider::with_flags(CapabilityFlags::CASE_SENSITIVE | CapabilityFlags::TRASH)
+                .with_logical_trash(),
+        );
+        mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        write(&mem, "mem:///s/a.txt", b"nuevo").await;
+        write(&mem, "mem:///d/a.txt", b"viejo").await;
+        let entry = mem.stat(&vp("mem:///d/a.txt")).await.expect("stat");
+
+        let t = targets(&mem);
+        let recorder = Recorder::default();
+        let record = SpoolStep {
+            step: step(
+                SyncStepKind::Overwrite,
+                "a.txt",
+                Some(StepReversal::Irreversible),
+            ),
+            dest: Some(DestWitness::of(&entry)),
+        };
+        let report = Mutex::new(new_report(7));
+        run(
+            &t,
+            &recorder,
+            futures::stream::iter(vec![Ok(record)]),
+            &ctx(CancellationToken::new()),
+            &report,
+        )
+        .await
+        .expect("la aplicación termina");
+
+        assert_eq!(read(&mem, "mem:///d/a.txt").await, b"nuevo");
+        // Sigue habiendo UNA entrada irreversible (el journal no promete undo)…
+        let entries = recorder.entries.lock().expect("lock").clone();
+        assert_eq!(entries.len(), 1, "una sola entrada: {entries:?}");
+        assert_eq!(entries[0].reversal, Reversal::Irreversible);
+        // …y sin embargo lo viejo está en la papelera, no aniquilado.
+        assert!(
+            mem.stat(&vp("mem:///.norte-trash")).await.is_ok(),
+            "lo sobrescrito se enterró en vez de borrarse para siempre"
+        );
     }
 
     /// Un flujo que se rompe A MITAD no es un paso que falla: lo ya ejecutado se

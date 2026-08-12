@@ -720,6 +720,12 @@ impl Provider for SftpProvider {
         Ok(Some(paths.payload))
     }
 
+    /// La papelera lógica elige su destino (`.norte-trash/<id>/payload`), así
+    /// que lo nombra siempre; sin ella no hay papelera que prometer.
+    fn trash_restorable(&self) -> bool {
+        self.logical_trash
+    }
+
     async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {
         let remote = self.remote(p)?;
         // Un no-symlink da TypeMismatch honesto (v3 devuelve Failure

@@ -10,11 +10,12 @@
 //! ```
 //!
 //! No abre un fichero, no lista un directorio y no toca un provider: lo único
-//! que sabe de ellos son los dos booleanos que [`SyncOptions`] trae ya
-//! resueltos —¿tiene papelera el destino?, ¿se puede escribir en él?— leídos
-//! UNA vez de sus `Capabilities` antes de empezar. Eso es lo que hace que la
-//! matriz entera —cinco clases de paso × dos modos × papelera/sin papelera ×
-//! tres confianzas— se pueda probar exhaustivamente sin levantar un daemon.
+//! que sabe de ellos son los tres booleanos que [`SyncOptions`] trae ya
+//! resueltos —¿tiene papelera el destino?, ¿nombra esa papelera lo que
+//! entierra?, ¿se puede escribir en él?— leídos UNA vez del provider antes de
+//! empezar. Eso es lo que hace que la matriz entera —cinco clases de paso ×
+//! dos modos × papelera/sin papelera/papelera muda × tres confianzas— se pueda
+//! probar exhaustivamente sin levantar un daemon.
 //!
 //! No muta nada: planificar no escribe un byte. Quien ejecuta el plan
 //! —`norte_core::sync`— es quien pasa por el journal y por el motor de policy
@@ -61,6 +62,7 @@ use norte_proto::VPath;
 ///     on_unknown: OnUnknown::Copy,
 ///     source_side: Side::Left,
 ///     dest_has_trash: true,
+///     dest_trash_restorable: true,
 ///     dest_writable: true,
 /// };
 /// assert_eq!(o.mode, SyncMode::Update);
@@ -123,6 +125,23 @@ pub struct SyncOptions {
     /// cuántos pasos el humano verá marcados como irreversibles ANTES de
     /// aprobar (regla dura 4).
     pub dest_has_trash: bool,
+    /// Y esa papelera, ¿NOMBRA lo que entierra? (`Provider::trash_restorable`
+    /// de `norte-vfs`, que este crate no puede enlazar: no depende de él.)
+    ///
+    /// Tener papelera y poder deshacer no son lo mismo. Una papelera que
+    /// contesta `None` no da destino recuperable, el journal se queda sin
+    /// `reversal_ref` y el undo tiene que casar por ruta ORIGINAL: sobre la
+    /// pareja `trashed`+`created` de una sobrescritura eso desentierra el
+    /// fichero que el propio undo acaba de enterrar. Así que cuando el destino
+    /// TIENE papelera pero no la nombra, **todos** los pasos salen
+    /// [`StepReversal::Irreversible`] — no solo los que destruyen: deshacer una
+    /// creación también pasa por la papelera (#65), o sea que ni una `Copy`
+    /// vuelve.
+    ///
+    /// Es una promesa del provider, no una medición por víctima: ver el
+    /// contrato de `trash_restorable`. Con `dest_has_trash` en `false` este
+    /// campo no decide nada (no hay papelera de la que hablar).
+    pub dest_trash_restorable: bool,
     /// ¿Se puede escribir en el destino? Un destino de solo lectura no produce
     /// pasos, produce un bloqueo.
     pub dest_writable: bool,

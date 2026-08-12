@@ -3323,8 +3323,23 @@ pub enum SyncReason {
     /// No se pudo LEER lo que hacía falta, en el lado que importaba
     /// ([`CompareVerdict::Error`]).
     Unreadable,
-    /// El destino no tiene papelera, así que lo que este paso entierra no se
-    /// puede recuperar. Acompaña SIEMPRE a [`StepReversal::Irreversible`].
+    /// **El destino no tiene una papelera de la que VOLVER**, así que este paso
+    /// no se puede deshacer. Acompaña SIEMPRE a [`StepReversal::Irreversible`].
+    ///
+    /// Cubre los dos casos, y quien lo pinte no debe prometer que son el mismo:
+    ///
+    /// - el destino no tiene papelera, y lo que este paso entierra no está en
+    ///   ningún sitio;
+    /// - el destino SÍ tiene papelera pero no dice dónde deja las cosas
+    ///   (`Provider::trash_restorable` en `false`: macOS y Windows). Lo
+    ///   enterrado se saca a mano desde la papelera del sistema, pero el undo
+    ///   de norte no puede acertar cuál era — y entonces NINGÚN paso del plan
+    ///   es reversible, ni siquiera una copia, porque deshacer una creación
+    ///   también pasa por la papelera (#65).
+    ///
+    /// El token del wire no distingue los dos a propósito: son la misma
+    /// consecuencia para quien aprueba, y separarlos sería una variante nueva
+    /// (bump de protocolo) para una frase.
     NoTrashOnTarget,
     /// Motivo que este decodificador no conoce (`#[serde(other)]`). El core
     /// jamás lo emite.
