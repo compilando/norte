@@ -47,7 +47,7 @@ half; Task 2 adds the rustdoc pointer.
 | 2 — a trash that outlives its journal row (#160, sync) | done | 9bd0630 |
 | 3 — the same shape in `fs.delete` (#160, ops) | done | df479a1 |
 | 4 — the embedded engine gets a journal (#167) | done | 2db842c |
-| 4b — and opens it lazily, on the first mutation (#177) | done | SHA-4B |
+| 4b — and opens it lazily, on the first mutation (#177) | done | 2858b08 |
 | 5 — close the branch | pending | |
 
 ---
