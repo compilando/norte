@@ -9,6 +9,18 @@
 //! CI/dev box this suite runs on; zsh and fish print a skip line and return
 //! early when absent, in the style of the repo's existing wasm/MinIO skips —
 //! never silently.
+//!
+//! # Every shell is launched WITHOUT its config, and that is load-bearing
+//! Each test builds a `PATH` with its stub first. A shell that reads the
+//! developer's config can UNDO that: fish prepends `fish_user_paths` at
+//! startup, so on a machine whose `fish_user_paths` holds `~/.local/bin` the
+//! stub drops below it and a REAL `ntc` there gets run instead. That is not
+//! hypothetical — it is how `just link` sets up a dev box, and it turned this
+//! test red with `ntc: no controlling terminal (/dev/tty)`: the actual TUI,
+//! launched by the wrapper, with no terminal to draw on.
+//!
+//! So: `--no-config` for fish, `-f` for zsh, `--noprofile --norc` for bash.
+//! The subject here is the wrapper text, never the config of whoever runs it.
 
 use std::io::Write;
 use std::process::Command;
@@ -50,6 +62,8 @@ fn bash_wrapper_lands_in_a_directory_whose_name_is_hostile() {
     stub_env(tmp.path(), target.to_str().unwrap());
     let script = format!("{}\nntc\npwd", norte_frontend::shell::Shell::Bash.wrapper());
     let out = Command::new("bash")
+        .arg("--noprofile")
+        .arg("--norc")
         .arg("-c")
         .arg(&script)
         .env(
@@ -81,6 +95,7 @@ fn zsh_wrapper_lands_in_a_directory_whose_name_is_hostile() {
     stub_env(tmp.path(), target.to_str().unwrap());
     let script = format!("{}\nntc\npwd", norte_frontend::shell::Shell::Zsh.wrapper());
     let out = Command::new("zsh")
+        .arg("-f")
         .arg("-c")
         .arg(&script)
         .env(
@@ -112,6 +127,7 @@ fn fish_wrapper_lands_in_a_directory_whose_name_is_hostile() {
     stub_env(tmp.path(), target.to_str().unwrap());
     let script = format!("{}\nntc\npwd", norte_frontend::shell::Shell::Fish.wrapper());
     let out = Command::new("fish")
+        .arg("--no-config")
         .arg("-c")
         .arg(&script)
         .env(
