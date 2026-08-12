@@ -6729,3 +6729,350 @@ async fn rename_batch_por_encima_del_tope_de_parejas_es_invalid_params() {
         .expect("el tope exacto se planifica");
     assert!(!plan.executable, "ninguno de esos ficheros existe");
 }
+
+// -------------------------------------------------- sync.apply / sync.report
+
+/// El plan de `sync.plan` sobre un árbol de tres ficheros, ya cerrado, por la
+/// conexión que lo pidió. Devuelve el cierre —el `plan_hash` está ahí y en
+/// ningún otro sitio— para poder aplicarlo.
+async fn plan_sobre(d: &TestDaemon, c: &mut Client) -> methods::SyncPlanDone {
+    d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
+    d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
+    write_file(&d.mem, "mem:///s/a.txt", b"aaa").await;
+    write_file(&d.mem, "mem:///s/b.txt", b"bbbb").await;
+    // Y uno que YA existe en el destino con otro TAMAÑO: una sobrescritura por
+    // el rung de tamaño (`Certain`), para que el informe cuente algo más que
+    // copias. Con los dos del mismo tamaño la cascada bajaría a la fecha, y el
+    // reloj lógico del `MemProvider` avanza de uno en uno: dos ficheros escritos
+    // seguidos caen dentro de la tolerancia y salen `Same`, o sea sin paso.
+    write_file(&d.mem, "mem:///s/c.txt", b"nuevo, y mas largo").await;
+    write_file(&d.mem, "mem:///d/c.txt", b"viejo").await;
+
+    let task: FsTaskResult = c
+        .call(methods::SYNC_PLAN, &sync_params("mem:///s", "mem:///d"))
+        .await
+        .expect("sync.plan");
+    let (_batches, done, state) = drain_sync(c, task.task_id.get()).await;
+    assert_eq!(state, TaskState::Completed);
+    done.expect("el plan cerró con su hash")
+}
+
+/// Aplicar el plan aprobado lo EJECUTA, y el informe cuenta lo que pasó: tantos
+/// pasos hechos como copias y sobrescrituras traía el plan, y un lote del
+/// journal bajo el que buscarlos — sin él no hay undo que pedir.
+#[tokio::test]
+async fn sync_apply_ejecuta_el_plan_que_se_aprobo() {
+    let d = spawn_daemon_journal().await;
+    let mut c = connected_client(&d).await;
+    let done = plan_sobre(&d, &mut c).await;
+    assert!(done.executable);
+
+    let task: FsTaskResult = c
+        .call(
+            methods::SYNC_APPLY,
+            &methods::SyncApplyParams {
+                plan_hash: done.plan_hash.clone(),
+            },
+        )
+        .await
+        .expect("sync.apply aceptado");
+    assert_eq!(
+        wait_terminal(&c, task.task_id).await,
+        TaskState::Completed,
+        "el plan se aplicó entero"
+    );
+
+    let report: methods::SyncReportResult = c
+        .call(
+            methods::SYNC_REPORT,
+            &methods::SyncReportParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect("sync.report");
+    assert_eq!(report.done, done.counts.copy + done.counts.overwrite);
+    assert_eq!(report.failed, 0, "{:?}", report.failures);
+    assert!(report.batch_id.is_some(), "el undo lo necesita");
+    // Y el árbol de verdad: el destino tiene los bytes del origen.
+    let mut stream = d
+        .mem
+        .read(&vp("mem:///d/c.txt"), None)
+        .await
+        .expect("read del destino");
+    let mut bytes = Vec::new();
+    while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+        bytes.extend_from_slice(&chunk.expect("chunk"));
+    }
+    assert_eq!(bytes, b"nuevo, y mas largo", "la sobrescritura ocurrió");
+    assert_eq!(done.counts.overwrite, 1, "el plan traía una sobrescritura");
+}
+
+/// Un hash que este daemon no emitió jamás es `PlanStale`: no existe plan vivo
+/// con ese nombre, y esa es la única cosa que la respuesta dice.
+#[tokio::test]
+async fn sync_apply_de_un_hash_que_nadie_emitio_es_plan_stale() {
+    let d = spawn_daemon_journal().await;
+    let c = connected_client(&d).await;
+
+    let inventado =
+        methods::PlanHash::parse(&"0".repeat(methods::PLAN_HASH_LEN)).expect("hex válido");
+    let err = c
+        .call::<_, FsTaskResult>(
+            methods::SYNC_APPLY,
+            &methods::SyncApplyParams {
+                plan_hash: inventado,
+            },
+        )
+        .await
+        .expect_err("nadie emitió ese plan");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PlanStale)),
+            "PlanStale, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// Un hash MALFORMADO muere en el deserializador (`-32602`) y no se disfraza de
+/// `PlanStale`: «esto no es un hash» y «el mundo se movió» son hechos distintos,
+/// y contestar el segundo a quien mandó el primero le miente sobre el estado del
+/// mundo.
+#[tokio::test]
+async fn sync_apply_con_hash_malformado_es_invalid_params_y_no_plan_stale() {
+    let d = spawn_daemon_journal().await;
+    let c = connected_client(&d).await;
+
+    // Ni hexadecimal, ni de la longitud correcta, ni en minúsculas: las tres
+    // formas de no ser un `PlanHash`.
+    for basura in [
+        serde_json::json!({"plan_hash": "nope"}),
+        serde_json::json!({"plan_hash": "0".repeat(methods::PLAN_HASH_LEN - 1)}),
+        serde_json::json!({"plan_hash": "A".repeat(methods::PLAN_HASH_LEN)}),
+        serde_json::json!({}),
+    ] {
+        assert_invalid_params(
+            c.call::<_, FsTaskResult>(methods::SYNC_APPLY, &basura)
+                .await,
+        );
+    }
+}
+
+/// El plan de OTRA conexión es `PlanStale`, no una categoría propia: el plan
+/// está atado a la conexión que lo produjo, y contestar algo distinto de «no hay
+/// plan vivo con ese hash» construiría un oráculo de existencia sobre los planes
+/// ajenos — que son autorizaciones de escritura.
+#[tokio::test]
+async fn sync_apply_de_un_plan_de_otra_conexion_es_plan_stale() {
+    let d = spawn_daemon_journal().await;
+    let mut duena = connected_client(&d).await;
+    let done = plan_sobre(&d, &mut duena).await;
+    let ajena = connected_client(&d).await;
+
+    let err = ajena
+        .call::<_, FsTaskResult>(
+            methods::SYNC_APPLY,
+            &methods::SyncApplyParams {
+                plan_hash: done.plan_hash.clone(),
+            },
+        )
+        .await
+        .expect_err("el plan no es suyo");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PlanStale)),
+            "PlanStale, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+    // Y la dueña sí puede: el rechazo era de la conexión, no del plan.
+    let _: FsTaskResult = duena
+        .call(
+            methods::SYNC_APPLY,
+            &methods::SyncApplyParams {
+                plan_hash: done.plan_hash,
+            },
+        )
+        .await
+        .expect("su propio plan sí");
+}
+
+/// Un plan se aprueba UNA vez: al terminar la aplicación —en cualquier estado—
+/// el plan retenido se ha ido, así que el mismo hash ya no ejecuta nada. Sin
+/// esto, un hash filtrado sería una autorización de escritura reutilizable.
+#[tokio::test]
+async fn el_spool_se_gasta_en_cuanto_la_aplicacion_termina() {
+    let d = spawn_daemon_journal().await;
+    let mut c = connected_client(&d).await;
+    let done = plan_sobre(&d, &mut c).await;
+
+    let task: FsTaskResult = c
+        .call(
+            methods::SYNC_APPLY,
+            &methods::SyncApplyParams {
+                plan_hash: done.plan_hash.clone(),
+            },
+        )
+        .await
+        .expect("sync.apply aceptado");
+    assert_eq!(wait_terminal(&c, task.task_id).await, TaskState::Completed);
+
+    let err = c
+        .call::<_, FsTaskResult>(
+            methods::SYNC_APPLY,
+            &methods::SyncApplyParams {
+                plan_hash: done.plan_hash,
+            },
+        )
+        .await
+        .expect_err("un plan se aprueba una vez");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PlanStale)),
+            "PlanStale, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// Un agente puede LEER los dos árboles (su scope los cubre: `covers_read` es
+/// membresía de raíz, sin mirar la op) y por tanto puede PLANIFICAR — pero
+/// aplicar escribe, y su scope no trae `copy`. El gate corre sobre las raíces
+/// que salen del plan, al aplicar, y deniega.
+///
+/// Que planifique y no pueda aplicar es exactamente el reparto que se busca: el
+/// plan no muta nada, la aplicación sí.
+#[tokio::test]
+async fn aplicar_sin_permiso_de_escritura_sobre_el_destino_se_deniega() {
+    let d = spawn_daemon_journal().await;
+    d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
+    d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
+    write_file(&d.mem, "mem:///s/a.txt", b"aaa").await;
+
+    let human = connected_client(&d).await;
+    let mut agent = connected_agent(&d, "s-sync").await;
+    // Scope sobre la raíz de los dos árboles, pero SOLO para `mkdir`: leer entra
+    // (la lectura es membresía de raíz), copiar no.
+    let req: RequestScopeResult = agent
+        .call(
+            methods::POLICY_REQUEST_SCOPE,
+            &RequestScopeParams {
+                session: "s-sync".into(),
+                roots: vec![vp("mem:///")],
+                ops: vec!["mkdir".into()],
+                ttl_ms: 60_000,
+            },
+        )
+        .await
+        .expect("request_scope");
+    let _: GrantScopeResult = human
+        .call(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams {
+                request_id: req.request_id,
+            },
+        )
+        .await
+        .expect("grant_scope");
+
+    let task: FsTaskResult = agent
+        .call(methods::SYNC_PLAN, &sync_params("mem:///s", "mem:///d"))
+        .await
+        .expect("planificar es leer, y leer sí puede");
+    let (_batches, done, state) = drain_sync(&mut agent, task.task_id.get()).await;
+    assert_eq!(state, TaskState::Completed);
+    let done = done.expect("el plan cerró");
+
+    let err = agent
+        .call::<_, FsTaskResult>(
+            methods::SYNC_APPLY,
+            &methods::SyncApplyParams {
+                plan_hash: done.plan_hash,
+            },
+        )
+        .await
+        .expect_err("escribir no está en su scope");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+            "PolicyDenied out-of-scope, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+    // Y el destino sigue vacío: el gate corre ANTES de tocar un byte.
+    assert!(
+        d.mem.stat(&vp("mem:///d/a.txt")).await.is_err(),
+        "un plan denegado no escribe"
+    );
+}
+
+/// El informe lo ve quien podría ver la Task: su dueño o cualquier conexión
+/// HUMANA. Un agente que pregunta por el informe de otro recibe la MISMA
+/// respuesta que ante un id inventado — el informe lleva rutas relativas de dos
+/// árboles ajenos, y distinguir «no es tuya» de «no existe» ya sería filtrar que
+/// existió.
+#[tokio::test]
+async fn sync_report_ajeno_contesta_lo_mismo_que_un_id_inventado() {
+    let d = spawn_daemon_journal().await;
+    let mut duena = connected_client(&d).await;
+    let done = plan_sobre(&d, &mut duena).await;
+    let task: FsTaskResult = duena
+        .call(
+            methods::SYNC_APPLY,
+            &methods::SyncApplyParams {
+                plan_hash: done.plan_hash,
+            },
+        )
+        .await
+        .expect("sync.apply");
+    assert_eq!(
+        wait_terminal(&duena, task.task_id).await,
+        TaskState::Completed
+    );
+
+    let fisgon = connected_agent(&d, "s-fisgona").await;
+    let ajeno = fisgon
+        .call::<_, methods::SyncReportResult>(
+            methods::SYNC_REPORT,
+            &methods::SyncReportParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect_err("no es suya");
+    let inventado = fisgon
+        .call::<_, methods::SyncReportResult>(
+            methods::SYNC_REPORT,
+            &methods::SyncReportParams {
+                task_id: norte_proto::TaskId::new(99_999),
+            },
+        )
+        .await
+        .expect_err("nunca existió");
+    for err in [ajeno, inventado] {
+        match err {
+            ClientError::Rpc(rpc) => assert!(
+                matches!(rpc.data, Some(Error::NotFound)),
+                "NotFound, fue {:?}",
+                rpc.data
+            ),
+            other => panic!("esperaba Rpc, fue {other:?}"),
+        }
+    }
+    // Otra conexión HUMANA sí lo ve: la simetría de `may_observe`.
+    let otro_humano = connected_client(&d).await;
+    let _: methods::SyncReportResult = otro_humano
+        .call(
+            methods::SYNC_REPORT,
+            &methods::SyncReportParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect("un humano ve los informes del daemon que gobierna");
+}

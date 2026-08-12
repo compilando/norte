@@ -981,3 +981,136 @@ async fn submit_abandonado_envia_rpc_cancel_y_mata_el_dispatch() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
+
+// ---------- sync.plan / sync.apply remotos (0.40.0, ADR 0049) ----------
+
+/// Daemon con journal y spool: lo que hace falta para planificar y aplicar.
+async fn spawn_daemon_sync() -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let journal = Arc::new(norte_core::SqliteJournal::new(
+        norte_core::Journal::open_in_memory()
+            .await
+            .expect("journal"),
+    ));
+    let engine = Arc::new(Engine::with_journal(journal));
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    engine.set_spool(norte_core::sync::Spool::new(dir.path()));
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        _run: run,
+        _dir: dir,
+        mem,
+    }
+}
+
+/// El ciclo entero por el brazo REMOTO, que es donde vive el enrutado: los dos
+/// eventos del plan —`sync.steps` y `sync.plan_done`— viajan por el MISMO `rx`,
+/// el cierre va el último, y el hash que trae ejecuta.
+///
+/// Que compartan canal no es un detalle de implementación: con dos mapas, el
+/// orden entre un lote y el cierre dependería de cómo el runtime despierta dos
+/// receptores, y un cliente podría aprobar el hash de un plan que todavía
+/// estaba llegando.
+#[tokio::test]
+async fn remote_sync_plan_y_apply_como_el_embebido() {
+    let d = spawn_daemon_sync().await;
+    d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
+    d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
+    for i in 0..300 {
+        write_file(&d.mem, &format!("mem:///s/f{i}.txt"), b"x").await;
+    }
+    let backend = Backend::Remote(remote(&d).await);
+
+    let (task, mut rx) = backend
+        .sync_plan(norte_proto::methods::SyncPlanParams {
+            source: vp("mem:///s"),
+            dest: vp("mem:///d"),
+            mode: norte_proto::methods::SyncMode::Update,
+            compare: norte_proto::methods::SyncCompareOptions::default(),
+            on_unknown: norte_proto::methods::OnUnknown::Copy,
+            include: None,
+        })
+        .await
+        .expect("sync.plan remoto");
+
+    let mut pasos = 0usize;
+    let mut done = None;
+    while let Some(event) = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("un evento o el cierre del canal antes del timeout")
+    {
+        match event {
+            norte_core::sync::SyncPlanEvent::Steps(b) => {
+                assert!(
+                    done.is_none(),
+                    "un lote DESPUÉS del cierre: el orden es la cola de UN canal"
+                );
+                pasos += b.steps.len();
+            }
+            norte_core::sync::SyncPlanEvent::Done(d) => {
+                assert!(done.is_none(), "dos cierres para un plan");
+                done = Some(d);
+            }
+        }
+    }
+    assert_eq!(join_ref(task).await, TaskState::Completed);
+    let done = done.expect("el plan cerró con su hash");
+    assert_eq!(pasos, 300);
+    assert_eq!(done.counts.copy, 300);
+
+    let applying = backend
+        .sync_apply(&done.plan_hash)
+        .await
+        .expect("sync.apply");
+    let id = applying.id();
+    assert_eq!(join_ref(applying).await, TaskState::Completed);
+    let report = backend.sync_report(id).await.expect("sync.report");
+    assert_eq!(report.done, 300);
+    assert_eq!(report.failed, 0, "{:?}", report.failures);
+    assert!(report.batch_id.is_some());
+
+    // Y el plan se gastó: el mismo hash no vuelve a ejecutar.
+    assert!(matches!(
+        backend.sync_apply(&done.plan_hash).await,
+        Err(norte_proto::Error::PlanStale)
+    ));
+}
+
+/// Un daemon SIN spool contesta `Unsupported` por el wire y el brazo remoto lo
+/// entrega tal cual: fail-closed también a través del socket, y distinguible de
+/// un fallo real.
+#[tokio::test]
+async fn remote_sync_plan_sin_spool_es_unsupported() {
+    let d = spawn_daemon().await;
+    d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
+    d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
+    let backend = Backend::Remote(remote(&d).await);
+
+    assert!(matches!(
+        backend
+            .sync_plan(norte_proto::methods::SyncPlanParams {
+                source: vp("mem:///s"),
+                dest: vp("mem:///d"),
+                mode: norte_proto::methods::SyncMode::Update,
+                compare: norte_proto::methods::SyncCompareOptions::default(),
+                on_unknown: norte_proto::methods::OnUnknown::Copy,
+                include: None,
+            })
+            .await,
+        Err(norte_proto::Error::Unsupported)
+    ));
+}

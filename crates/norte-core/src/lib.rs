@@ -33,7 +33,9 @@ pub mod sync;
 mod undo;
 pub mod volumes;
 
-pub use engine::{BATCH_REPORTS_MAX, Engine, RENAME_BATCH_MAX_LISTING, TransferOptions};
+pub use engine::{
+    BATCH_REPORTS_MAX, Engine, RENAME_BATCH_MAX_LISTING, SYNC_REPORTS_MAX, TransferOptions,
+};
 pub use journal::{
     Actor, ChainStatus, JOURNAL_FORMAT, Journal, JournalEntry, JournalFormat, NewEntry, Reversal,
     SqliteJournal,

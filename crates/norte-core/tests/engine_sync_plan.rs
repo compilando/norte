@@ -16,7 +16,7 @@ use bytes::Bytes;
 use norte_core::sync::{Spool, SyncPlanEvent};
 use norte_core::{Actor, Engine};
 use norte_proto::methods::{
-    RelPath, SYNC_MAX_BLOCKERS_REPORTED, SYNC_MAX_INCLUDE, SYNC_STEPS_MAX_BATCH,
+    RelPath, SYNC_MAX_BLOCKERS_REPORTED, SYNC_MAX_INCLUDE, SYNC_STEPS_MAX_BATCH, SyncBlockerKind,
     SyncCompareOptions, SyncMode, SyncPlanDone, SyncPlanParams, SyncStep, SyncStepKind,
 };
 use norte_proto::{Error as ProtoError, RootOverlap, TaskState, VPath};
@@ -670,4 +670,153 @@ async fn sin_spool_instalado_no_se_planifica() {
         panic!("sin retención no hay plan");
     };
     assert!(matches!(err, ProtoError::Unsupported), "fue {err:?}");
+}
+
+// 15 ──────────────────────────────────────────────────────────────────────
+// Los tres cruces de provider que la spec pide POR NOMBRE
+// (`planning_into_an_archive_blocks_instead_of_attempting_and_failing`,
+// `comparing_against_an_archive_source_copies_on_unknown_and_says_so`,
+// `a_destination_without_a_trash_takes_the_irreversible_path_for_real`).
+//
+// Son el único sitio donde la confianza `Unknown` y la reversa `Irreversible`
+// se encuentran con providers DE VERDAD —un zip que es de solo lectura y que no
+// tiene fecha en la que confiar, un destino que no declara papelera— en vez de
+// con `Capabilities` fabricadas a mano. El transductor ya tiene sus tablas
+// probadas contra filas sintéticas; lo que aquí se comprueba es que lo que un
+// provider real DICE llega hasta el paso.
+
+/// Un zip en memoria con `files` (nombre crudo, bytes) y SIN fechas: el par DOS
+/// sale a cero, que es inválido, así que el índice deja `mtime_ms: None` —
+/// exactamente lo que hace un zip real cuyo escritor no rellenó el campo. De
+/// ahí sale el `Unknown` del segundo test.
+fn zip_bytes(files: &[(&[u8], &[u8])]) -> Vec<u8> {
+    let mut smith = norte_testkit::ZipSmith::new().undated();
+    for (name, body) in files {
+        smith = smith.file(name, body);
+    }
+    smith.build()
+}
+
+/// Engine con el `MemProvider` de siempre y un contenedor `a.zip` dentro de él,
+/// alcanzable como `zip+mem:///a.zip/!` (ADR 0018: scheme compuesto, sin
+/// registro previo del provider de archivo).
+async fn setup_with_zip(files: &[(&[u8], &[u8])]) -> (Engine, Arc<MemProvider>, tempfile::TempDir) {
+    let (engine, mem, dir) = setup();
+    let bytes = zip_bytes(files);
+    let mut sink = mem.write(&vp("mem:///a.zip")).await.expect("write abre");
+    sink.write(Bytes::from(bytes)).await.expect("chunk");
+    sink.commit().await.expect("commit");
+    (engine, mem, dir)
+}
+
+/// Planificar HACIA un archivo bloquea: `norte-vfs-archive` es de solo lectura,
+/// y eso tiene que salir del PLAN —un bloqueo, antes de que nadie apruebe
+/// nada— y no de medio lote de escrituras fallidas.
+///
+/// Y el bloqueo CIERRA el plan: no se emite un solo paso, porque la lista de
+/// pasos de un plan que no se puede ejecutar solo sirve para que alguien la
+/// mire y crea que sí.
+#[tokio::test]
+async fn planificar_hacia_un_archivo_bloquea_en_vez_de_intentarlo() {
+    let (engine, mem, _dir) = setup_with_zip(&[(b"dentro.txt", b"x")]).await;
+    mkdir(&mem, "mem:///s").await;
+    write_file(&mem, "mem:///s/a.txt", b"aaa").await;
+
+    let planned = plan(&engine, params("mem:///s", "zip+mem:///a.zip/!")).await;
+    assert_eq!(planned.state, TaskState::Completed);
+    let done = planned.done();
+    assert!(
+        !done.executable,
+        "un destino de solo lectura no es ejecutable"
+    );
+    assert_eq!(done.blockers.len(), 1);
+    assert_eq!(done.blockers[0].kind, SyncBlockerKind::DestReadOnly);
+    assert!(
+        done.blockers[0].rel.is_root(),
+        "un destino de solo lectura no es de un sitio concreto"
+    );
+    assert!(
+        planned.steps().is_empty(),
+        "ni un paso: el bloqueo termina el stream antes de tirar de la primera fila"
+    );
+}
+
+/// Un ORIGEN que es un archivo: sus fechas no merecen confianza (el par DOS de
+/// este zip es inválido, así que el índice no inventa ninguna). La cascada
+/// contesta `Same`/`Unknown`, y `on_unknown: Copy` —el default— ESCRIBE.
+///
+/// Que escriba no es lo interesante: lo interesante es que el paso se lleva la
+/// confianza con la que se decidió, que es lo que ADR 0048 promete y lo que
+/// permite que el diálogo diga «esto se copia porque nadie pudo verificarlo».
+#[tokio::test]
+async fn un_origen_archivo_copia_lo_incierto_y_dice_por_que() {
+    let (engine, mem, _dir) = setup_with_zip(&[(b"same-bytes.txt", b"12345")]).await;
+    mkdir(&mem, "mem:///d").await;
+    // MISMO tamaño en los dos lados: el rung de tamaño no decide y la cascada
+    // pasa al de fecha, que es el que se queda sin respuesta.
+    write_file(&mem, "mem:///d/same-bytes.txt", b"54321").await;
+
+    let planned = plan(&engine, params("zip+mem:///a.zip/!", "mem:///d")).await;
+    assert_eq!(planned.state, TaskState::Completed);
+    let steps = planned.steps();
+    let s = steps
+        .iter()
+        .find(|s| s.rel == rel("same-bytes.txt"))
+        .expect("el fichero emparejado tiene paso");
+    assert_eq!(s.kind, SyncStepKind::Overwrite);
+    assert_eq!(
+        s.confidence,
+        norte_proto::methods::CompareConfidence::Unknown,
+        "una fecha que no existe no se convierte en `Probable`"
+    );
+    assert_eq!(s.criterion, norte_proto::methods::CompareCriterion::Mtime);
+    assert!(planned.done().executable);
+}
+
+/// Un destino que NO declara papelera: la sobrescritura es `Irreversible` y el
+/// plan lo dice con su motivo, antes de que nadie apruebe. Nada simulado —
+/// `MemProvider::with_flags` sin `TRASH` es lo que declara un bucket o un SFTP,
+/// y el origen es el provider local de verdad.
+#[tokio::test]
+async fn un_destino_sin_papelera_toma_el_camino_irreversible_de_verdad() {
+    let spool_dir = tempfile::tempdir().expect("tempdir");
+    let local_dir = tempfile::tempdir().expect("tempdir local");
+    std::fs::create_dir(local_dir.path().join("s")).expect("mkdir s");
+    std::fs::write(local_dir.path().join("s/a.txt"), b"origen nuevo").expect("write a.txt");
+
+    let engine = Engine::new();
+    engine.register_provider(
+        Arc::new(norte_vfs_local::LocalProvider::rooted(local_dir.path())) as Arc<dyn Provider>,
+    );
+    let mem = Arc::new(MemProvider::with_flags(
+        norte_proto::CapabilityFlags::CASE_SENSITIVE
+            | norte_proto::CapabilityFlags::CASE_PRESERVING,
+    ));
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    engine.set_spool(Spool::new(spool_dir.path()));
+    mkdir(&mem, "mem:///d").await;
+    write_file(&mem, "mem:///d/a.txt", b"viejo").await;
+
+    let planned = plan(&engine, params("file:///s", "mem:///d")).await;
+    assert_eq!(planned.state, TaskState::Completed);
+    let done = planned.done();
+    assert!(
+        done.counts.irreversible > 0,
+        "sin papelera, sobrescribir no se deshace: {:?}",
+        done.counts
+    );
+    let steps = planned.steps();
+    let s = steps
+        .iter()
+        .find(|s| s.rel == rel("a.txt"))
+        .expect("el fichero emparejado tiene paso");
+    assert_eq!(s.kind, SyncStepKind::Overwrite);
+    assert_eq!(
+        s.reversal,
+        Some(norte_proto::methods::StepReversal::Irreversible)
+    );
+    assert_eq!(
+        s.reason,
+        Some(norte_proto::methods::SyncReason::NoTrashOnTarget)
+    );
 }

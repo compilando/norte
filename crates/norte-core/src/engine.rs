@@ -108,6 +108,15 @@ pub struct Engine {
     /// contradicen a la primera. El actor guardado es el DUEÑO de la task: el
     /// daemon lo necesita para decidir quién puede leerlo.
     batch_reports: std::sync::Mutex<std::collections::VecDeque<BatchReportEntry>>,
+    /// Anillo ACOTADO de informes de `sync.apply`, por `task_id`
+    /// ([`Self::sync_report`]).
+    ///
+    /// Gemelo exacto de `batch_reports` y por el mismo motivo: hay dos
+    /// consumidores —el socket (`sync.report`) y el `Backend` embebido— y dos
+    /// anillos serían dos políticas de retención que se contradicen a la
+    /// primera. El actor guardado es el DUEÑO de la Task; el daemon lo necesita
+    /// para decidir quién puede leerlo.
+    sync_reports: std::sync::Mutex<std::collections::VecDeque<SyncReportEntry>>,
 }
 
 impl Engine {
@@ -137,6 +146,7 @@ impl Engine {
             index: None,
             spool: RwLock::new(None),
             batch_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            sync_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -176,6 +186,7 @@ impl Engine {
             index: None,
             spool: RwLock::new(None),
             batch_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            sync_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -1151,6 +1162,9 @@ impl Engine {
             .saturating_add(counts.delete_tree)
             .saturating_add(counts.skip);
         let key = targets.dest_root.scheme().to_owned();
+        // El DUEÑO, para el anillo de abajo: el daemon decide con él quién puede
+        // leer este informe, y `submit` se lleva el `actor` por valor.
+        let owner = actor.clone();
         let handle = self.sched.submit(
             &key,
             TaskKind::Sync,
@@ -1201,7 +1215,56 @@ impl Engine {
                 })
             }),
         );
+        // Retiene el informe para quien solo tiene el `task_id`: el socket
+        // (`sync.report`) y el `Backend` embebido. El llamante directo ya se
+        // lleva el `Arc` VIVO en la mano; esto es para los otros dos, que solo
+        // pueden pedirlo después. Anillo acotado, igual que el de renames.
+        {
+            let mut ring = self.sync_reports.lock().expect("sync_reports lock sano");
+            ring.push_back((handle.id(), owner, Arc::clone(&report)));
+            evict_sync_reports(&mut ring);
+        }
         Ok((handle, report))
+    }
+
+    /// Informe de una aplicación de plan ya lanzada, por `task_id`, más el ACTOR
+    /// que la pidió (`sync.report`, ADR 0049). `None` si ese id nunca fue una
+    /// aplicación de esta instancia o si el anillo ya lo desalojó
+    /// ([`SYNC_REPORTS_MAX`]).
+    ///
+    /// Es un SNAPSHOT: definitivo cuando la Task es terminal, parcial antes — y
+    /// se sirve igual antes del terminal, porque un plan de medio millón de
+    /// pasos tarda y el informe parcial es lo único que dice por dónde va.
+    ///
+    /// El actor sale con él por lo mismo que en
+    /// [`Self::rename_batch_report`]: quien sirve esto por el wire tiene que
+    /// decidir si el que pregunta podía ver esa Task, y decidirlo aquí obligaría
+    /// al engine a conocer las reglas de visibilidad del daemon.
+    ///
+    /// Como su gemelo, este camino NO panica ante un lock envenenado: es de
+    /// LECTURA y lo atraviesa cada `sync.report`.
+    #[must_use]
+    pub fn sync_report(
+        &self,
+        task_id: TaskId,
+    ) -> Option<(
+        crate::journal::Actor,
+        norte_proto::methods::SyncReportResult,
+    )> {
+        let ring = self
+            .sync_reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ring.iter()
+            .find(|(id, _, _)| *id == task_id)
+            .map(|(_, owner, r)| {
+                (
+                    owner.clone(),
+                    r.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone(),
+                )
+            })
     }
 
     /// (Re)construye el índice de `root` como Task cancelable (M4, ADR 0034).
@@ -2423,14 +2486,16 @@ const APPROVAL_PATHS_SHOWN: usize = 32;
 /// de sobra aquí; por encima, `LimitExceeded` es honesto y barato.
 pub const RENAME_BATCH_MAX_LISTING: usize = 100_000;
 
-/// Una entrada del anillo de informes: la Task, el ACTOR que la pidió (para
+/// Una entrada de un anillo de informes: la Task, el ACTOR que la pidió (para
 /// que quien sirva el informe por el wire pueda decidir si el que pregunta
 /// podía ver esa task) y el informe VIVO, que la Task sigue rellenando.
-type BatchReportEntry = (
-    TaskId,
-    crate::journal::Actor,
-    Arc<std::sync::Mutex<crate::rename::BatchReport>>,
-);
+type ReportEntry<T> = (TaskId, crate::journal::Actor, Arc<std::sync::Mutex<T>>);
+
+/// El anillo de informes de lotes de renames ([`Engine::rename_batch_report`]).
+type BatchReportEntry = ReportEntry<crate::rename::BatchReport>;
+
+/// El anillo de informes de aplicaciones de plan ([`Engine::sync_report`]).
+type SyncReportEntry = ReportEntry<norte_proto::methods::SyncReportResult>;
 
 /// Poda el anillo de informes de lote hasta sus topes, sacrificando SIEMPRE lo
 /// que menos hace falta.
@@ -2451,20 +2516,69 @@ type BatchReportEntry = (
 /// retenido es ruidoso se tira lo más viejo igualmente: la memoria de un daemon
 /// de meses no puede crecer con cada lote, ni siquiera con los malos.
 fn evict_batch_reports(ring: &mut std::collections::VecDeque<BatchReportEntry>) {
-    // ¿Este informe tiene algo que solo él sabe? Se evalúa AHORA y no al
-    // insertarlo: al insertarlo todo informe está vacío — es al desalojar
-    // cuando los viejos ya terminaron y se sabe cuáles duelen.
-    fn loud(e: &BatchReportEntry) -> bool {
-        let r = e.2.lock().expect("batch report lock");
-        r.stuck.is_some() || r.uncertain.is_some() || r.compensations_lost > 0
-    }
-    fn drop_one(ring: &mut std::collections::VecDeque<BatchReportEntry>, agents_only: bool) {
+    evict_reports(
+        ring,
+        BATCH_REPORTS_MAX,
+        BATCH_REPORTS_AGENTS_MAX,
+        // ¿Este informe tiene algo que solo él sabe? Se evalúa AHORA y no al
+        // insertarlo: al insertarlo todo informe está vacío — es al desalojar
+        // cuando los viejos ya terminaron y se sabe cuáles duelen.
+        |r: &crate::rename::BatchReport| {
+            r.stuck.is_some() || r.uncertain.is_some() || r.compensations_lost > 0
+        },
+    );
+}
+
+/// Poda el anillo de informes de `sync.apply` con las mismas dos reglas.
+///
+/// Aquí «ruidoso» es un informe con FALLOS: un plan que se aplicó entero deja
+/// el árbol como el diálogo prometió y su informe es reconstruible mirándolo,
+/// mientras que uno con pasos caídos nombra ficheros que no se copiaron y un
+/// lote del journal donde buscarlos. `failures` está recortado y `failed` no,
+/// así que el contador es el que decide.
+fn evict_sync_reports(ring: &mut std::collections::VecDeque<SyncReportEntry>) {
+    evict_reports(
+        ring,
+        SYNC_REPORTS_MAX,
+        SYNC_REPORTS_AGENTS_MAX,
+        |r: &norte_proto::methods::SyncReportResult| r.failed > 0,
+    );
+}
+
+/// El desalojo COMPARTIDO de los dos anillos de informes, con las dos reglas
+/// que ambos necesitan porque los dos son el ÚNICO canal por el que alguien se
+/// entera de que su árbol quedó a medias:
+///
+/// 1. **Sub-tope por clase** (mismo patrón que el de scopes de M3-3b): los
+///    informes de agentes no agotan el anillo. Sin él, un agente con scope y 33
+///    operaciones triviales desaloja el informe que el humano no ha leído
+///    todavía — incluido el de la operación que ese mismo agente dejó a medias.
+/// 2. **Se desaloja primero lo que no cuenta nada**: entre dos informes, se tira
+///    el que dice que todo fue bien antes que el que nombra algo roto. Un
+///    informe limpio es reconstruible mirando el árbol; uno roto no.
+///
+/// La ANTIGÜEDAD sigue siendo el criterio dentro de cada categoría, y si todo lo
+/// retenido es ruidoso se tira lo más viejo igualmente: la memoria de un daemon
+/// de meses no puede crecer con cada operación, ni siquiera con las malas.
+fn evict_reports<T>(
+    ring: &mut std::collections::VecDeque<ReportEntry<T>>,
+    max: usize,
+    agents_max: usize,
+    loud: fn(&T) -> bool,
+) {
+    fn drop_one<T>(
+        ring: &mut std::collections::VecDeque<ReportEntry<T>>,
+        agents_only: bool,
+        loud: fn(&T) -> bool,
+    ) {
         let candidates = || {
             ring.iter()
                 .enumerate()
                 .filter(|(_, e)| !agents_only || !matches!(e.1, crate::journal::Actor::User))
         };
-        let quiet = candidates().find(|(_, e)| !loud(e)).map(|(i, _)| i);
+        let quiet = candidates()
+            .find(|(_, e)| !loud(&e.2.lock().expect("report lock")))
+            .map(|(i, _)| i);
         let victim = quiet.or_else(|| candidates().map(|(i, _)| i).next());
         if let Some(i) = victim {
             ring.remove(i);
@@ -2474,12 +2588,12 @@ fn evict_batch_reports(ring: &mut std::collections::VecDeque<BatchReportEntry>) 
         .iter()
         .filter(|e| !matches!(e.1, crate::journal::Actor::User))
         .count()
-        > BATCH_REPORTS_AGENTS_MAX
+        > agents_max
     {
-        drop_one(ring, true);
+        drop_one(ring, true, loud);
     }
-    while ring.len() > BATCH_REPORTS_MAX {
-        drop_one(ring, false);
+    while ring.len() > max {
+        drop_one(ring, false, loud);
     }
 }
 
@@ -2496,6 +2610,17 @@ pub const BATCH_REPORTS_MAX: usize = 32;
 /// humano conserva su margen pase lo que pase al otro lado. Ver
 /// [`evict_batch_reports`].
 pub const BATCH_REPORTS_AGENTS_MAX: usize = 16;
+
+/// Cuántos informes de aplicación retiene [`Engine::sync_report`]. Mismo
+/// criterio y mismo orden de magnitud que [`BATCH_REPORTS_MAX`]: se pide una
+/// vez, justo después del terminal de su Task, y el que nadie recoja tiene que
+/// caducar solo.
+pub const SYNC_REPORTS_MAX: usize = 32;
+
+/// El sub-tope por clase del anillo de `sync.apply`, gemelo de
+/// [`BATCH_REPORTS_AGENTS_MAX`]. No se reexporta en la raíz del crate por lo
+/// mismo que su gemelo: el tope que un cliente necesita conocer es el total.
+pub(crate) const SYNC_REPORTS_AGENTS_MAX: usize = 16;
 
 /// Todos los nombres base de `dir`, en bytes crudos (regla 1).
 ///

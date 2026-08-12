@@ -88,6 +88,9 @@ pub struct ZipSmith {
     /// #100.2: la ÚLTIMA entrada del CD declara este `comment_len` sin
     /// escribir sus bytes — un CD truncado a mitad del comentario por-entrada.
     cd_comment_len_lie: Option<u16>,
+    /// Fecha DOS de TODAS las entradas. [`ZipSmith::undated`] la pone a cero,
+    /// que es un par INVÁLIDO (mes 0, día 0) y no una fecha de 1980.
+    dos_date: Option<u16>,
 }
 
 impl ZipSmith {
@@ -95,6 +98,25 @@ impl ZipSmith {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Zip cuyas entradas NO llevan fecha utilizable: el par DOS sale a cero,
+    /// que es inválido (mes 0, día 0) y que un lector honrado tiene que
+    /// reportar como «no hay fecha», jamás como 1980-00-00.
+    ///
+    /// Es el caso de un zip escrito por una herramienta que deja el campo en
+    /// blanco, y el único con el que una comparación contra un archivo puede
+    /// llegar a `CompareConfidence::Unknown` por la vía de la fecha.
+    ///
+    /// ```
+    /// let bytes = norte_testkit::ZipSmith::new().undated().file(b"a", b"x").build();
+    /// // Offset 10 del local header: dos_time (u16) y después dos_date (u16).
+    /// assert_eq!(&bytes[10..14], &[0, 0, 0, 0]);
+    /// ```
+    #[must_use]
+    pub fn undated(mut self) -> Self {
+        self.dos_date = Some(0);
+        self
     }
 
     /// Archivo `stored` con el bit 11 APAGADO (nombre en bytes crudos:
@@ -227,6 +249,7 @@ impl ZipSmith {
         let mut central = Vec::new();
         let real_count = self.entries.len() as u16;
         let last_idx = self.entries.len().wrapping_sub(1);
+        let dos_date = self.dos_date.unwrap_or(DOS_DATE);
         for (idx, entry) in self.entries.iter().enumerate() {
             let ZipWire {
                 name,
@@ -245,7 +268,7 @@ impl ZipSmith {
             out.extend_from_slice(&flags.to_le_bytes());
             out.extend_from_slice(&method.to_le_bytes());
             out.extend_from_slice(&DOS_TIME.to_le_bytes());
-            out.extend_from_slice(&DOS_DATE.to_le_bytes());
+            out.extend_from_slice(&dos_date.to_le_bytes());
             out.extend_from_slice(&crc.to_le_bytes());
             out.extend_from_slice(&comp_len.to_le_bytes()); // comprimido
             out.extend_from_slice(&uncomp_len.to_le_bytes()); // sin comprimir
@@ -260,7 +283,7 @@ impl ZipSmith {
             central.extend_from_slice(&flags.to_le_bytes());
             central.extend_from_slice(&method.to_le_bytes());
             central.extend_from_slice(&DOS_TIME.to_le_bytes());
-            central.extend_from_slice(&DOS_DATE.to_le_bytes());
+            central.extend_from_slice(&dos_date.to_le_bytes());
             central.extend_from_slice(&crc.to_le_bytes());
             central.extend_from_slice(&comp_len.to_le_bytes());
             central.extend_from_slice(&uncomp_len.to_le_bytes());

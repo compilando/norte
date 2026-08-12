@@ -214,6 +214,21 @@ impl crate::connect::ConnectionObserver for ChannelConnectionObserver {
     }
 }
 
+/// La «conexión» del brazo EMBEBIDO, para lo que la lleva por llave: hoy solo
+/// el spool de planes de sincronización, que ata cada plan aprobado a la
+/// conexión que lo produjo (ADR 0049).
+///
+/// In-process hay exactamente UNA, y por eso es una constante y no un contador:
+/// planificar y aplicar tienen que casar, y dos ids distintos harían que un
+/// `sync_apply` de este mismo `Backend` contestara `PlanStale` a su propio plan.
+///
+/// `u64::MAX` y no `0` deliberadamente: los `conn_id` del daemon salen de un
+/// contador que arranca en cero, así que este valor no puede coincidir con
+/// ninguno en un proceso que tenga las dos cosas a la vez — el spool no llegaría
+/// a confundir el plan de un cliente del socket con el de un `Backend`
+/// embebido.
+const EMBEDDED_CONN_ID: u64 = u64::MAX;
+
 /// El core detrás de una única superficie (regla 7).
 pub enum Backend {
     /// Core in-process: arranque instantáneo, sin daemon.
@@ -900,6 +915,147 @@ impl Backend {
             }
             #[cfg(unix)]
             Self::Remote(r) => r.compare(params).await,
+        }
+    }
+
+    /// Planifica una sincronización de un sentido (`sync.plan`, 0.40.0, ADR
+    /// 0049): devuelve la Task ([`TaskRef`], cancelable) y el STREAM de eventos
+    /// del plan — lotes de pasos acotados y, al final, el
+    /// [`SyncPlanDone`](norte_proto::methods::SyncPlanDone) que lo CIERRA y trae
+    /// el `plan_hash`.
+    ///
+    /// **No muta nada**: por debajo es una comparación con una decisión por
+    /// fila. Quien escribe es [`Self::sync_apply`], y solo con el hash que llega
+    /// aquí.
+    ///
+    /// # El orden de los eventos es el del canal
+    /// `sync.plan_done` llega SIEMPRE después del último lote de pasos, en los
+    /// dos brazos: el core mete ambos en un `mpsc` y la bomba del cliente los
+    /// enruta al mismo `rx`. Un cierre que llegara antes que un lote sería un
+    /// cliente aprobando el hash de un plan que todavía estaba llegando.
+    ///
+    /// # Cuándo están TODOS los pasos
+    /// El `sync.plan_done` es la señal, y su ausencia es la protección: sin él
+    /// no hay `plan_hash`, y sin `plan_hash` no se puede aplicar nada. Un lote
+    /// perdido (el daemon expulsa a quien no drena, una reconexión suelta los
+    /// routes) deja al cliente sin cierre y por tanto sin poder escribir — el
+    /// fallo es visible y seguro. `TaskProgress::entries_done` cuenta PASOS
+    /// emitidos, para el que quiera cuadrarlo.
+    ///
+    /// # El plan queda RETENIDO
+    /// Aprobar cuesta un fichero en el directorio de estado del daemon, vivo
+    /// durante [`SYNC_PLAN_TTL_MS`](norte_proto::methods::SYNC_PLAN_TTL_MS) y
+    /// atado a esta conexión. Hay un tope por conexión: pasado, la respuesta es
+    /// `OVERLOADED` (`Error::Busy`) — la petición es válida, el momento no.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si `compare.follow_symlinks` o
+    /// `compare.descend_orphans` vienen puestos (ninguno de los dos es del
+    /// llamante: el planificador fija el segundo al lado del origen);
+    /// [`Error::InvalidPath`] si `include` pasa de
+    /// [`SYNC_MAX_INCLUDE`](norte_proto::methods::SYNC_MAX_INCLUDE). Los tres se
+    /// comprueban AQUÍ, antes de elegir brazo, por lo mismo que en
+    /// [`Self::compare`]: el daemon los rechaza con `-32602` pelado y
+    /// `to_taxonomy` convertiría eso en `Internal`, o sea la misma respuesta que
+    /// da un provider que panica. El engine los sigue comprobando por su cuenta.
+    ///
+    /// Además: [`Error::OverlappingRoots`] si las dos raíces se solapan (esa sí
+    /// es categoría del wire y viene del engine, sin copia aquí),
+    /// [`Error::Unsupported`] si el daemon no tiene spool instalado o es un
+    /// daemon N-1 sin el método; resto, taxonomía del protocolo.
+    pub async fn sync_plan(
+        &self,
+        params: norte_proto::methods::SyncPlanParams,
+    ) -> Result<(TaskRef, mpsc::Receiver<crate::sync::SyncPlanEvent>), Error> {
+        if params.compare.follow_symlinks || params.compare.descend_orphans.is_some() {
+            return Err(Error::Unsupported);
+        }
+        if params
+            .include
+            .as_ref()
+            .is_some_and(|inc| inc.len() > norte_proto::methods::SYNC_MAX_INCLUDE)
+        {
+            return Err(Error::InvalidPath);
+        }
+        match self {
+            Self::Embedded(engine) => {
+                let (handle, rx) = engine
+                    .sync_plan_as(params, EMBEDDED_CONN_ID, crate::journal::Actor::User)
+                    .await?;
+                Ok((TaskRef::from_handle(&handle), rx))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.sync_plan(params).await,
+        }
+    }
+
+    /// Ejecuta el plan APROBADO que `plan_hash` nombra (`sync.apply`, 0.40.0,
+    /// ADR 0049) como UNA Task y UN lote deshacible del journal.
+    ///
+    /// **El hash es el único parámetro**, y esa es la garantía: no hay forma de
+    /// pedir que se ejecute algo distinto de lo que [`Self::sync_plan`] enseñó.
+    /// Las dos raíces, el modo y los criterios salen del plan retenido.
+    ///
+    /// **El plan se gasta**: aplicarlo lo consume, pase lo que pase. Un segundo
+    /// `sync_apply` del mismo hash es [`Error::PlanStale`], que es verdad.
+    ///
+    /// Qué pasó de verdad se pide con [`Self::sync_report`]: un paso que falla
+    /// es una FILA del informe y no el final de la Task, así que el estado
+    /// terminal no cuenta ni la mitad.
+    ///
+    /// # Errors
+    /// [`Error::PlanStale`] si el hash no nombra un plan vivo de este proceso
+    /// (no existe, caducó, está manipulado o ya se aplicó);
+    /// [`Error::PlanNotExecutable`] si el plan traía bloqueos;
+    /// [`Error::PolicyDenied`] del gate, que corre sobre las raíces leídas del
+    /// plan y AHORA, no cuando se planificó; [`Error::Unsupported`] sin spool o
+    /// sin journal (aplicar sin journal sería enterrar sin dejar vuelta atrás,
+    /// regla dura 4), o contra un daemon N-1; resto, taxonomía del protocolo.
+    pub async fn sync_apply(
+        &self,
+        plan_hash: &norte_proto::methods::PlanHash,
+    ) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let (handle, _report) = engine
+                    .sync_apply_as(plan_hash, EMBEDDED_CONN_ID, crate::journal::Actor::User)
+                    .await?;
+                // El informe queda en el anillo del engine, que es de donde lo
+                // lee `sync_report`: los dos brazos se piden igual.
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.sync_apply(plan_hash).await,
+        }
+    }
+
+    /// El informe de una aplicación ya lanzada (`sync.report`, 0.40.0): cuántos
+    /// pasos se ejecutaron, cuántos fallaron y por qué —con la ruta de cada
+    /// uno— y bajo qué lote del journal quedó lo que sí se aplicó.
+    ///
+    /// Es un SNAPSHOT: definitivo cuando la Task es terminal, parcial antes.
+    /// Míralo también cuando diga `cancelled`: lo aplicado hasta el corte se
+    /// queda, journalizado — media sincronización es un estado real.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si ese `task_id` nunca fue una aplicación de este
+    /// proceso o si el anillo ya lo desalojó — y el brazo remoto contesta lo
+    /// MISMO, incluida la aplicación de otra conexión: distinguirla confirmaría
+    /// que existió. [`Error::Unsupported`] contra un daemon N-1; resto,
+    /// taxonomía del protocolo.
+    pub async fn sync_report(
+        &self,
+        task_id: TaskId,
+    ) -> Result<norte_proto::methods::SyncReportResult, Error> {
+        match self {
+            Self::Embedded(engine) => engine
+                .sync_report(task_id)
+                .map(|(_owner, r)| r)
+                // Embebido no hay actor que comprobar: este `Backend` ES el
+                // humano en proceso (mismo criterio que `rename_batch_report`).
+                .ok_or(Error::NotFound),
+            #[cfg(unix)]
+            Self::Remote(r) => r.sync_report(task_id).await,
         }
     }
 
@@ -1944,6 +2100,12 @@ pub mod remote {
         /// no colisionan, pero un mapa único obligaría a un lote-suma en el
         /// canal y el frontend tendría que filtrar lo que no pidió.
         compare_routes: Mutex<BatchRoutes<CompareRowsBatch>>,
+        /// Y lo mismo para `sync.plan` (0.40.0), con una diferencia: los DOS
+        /// eventos del plan —`sync.steps` y el `sync.plan_done` que lo cierra—
+        /// viajan por UN canal, igual que en el daemon, porque el orden entre
+        /// ellos es normativo. Con dos mapas ese orden dependería de cómo el
+        /// runtime despierta dos receptores; con uno es la cola.
+        sync_routes: Mutex<BatchRoutes<crate::sync::SyncPlanEvent>>,
     }
 
     impl Inner {
@@ -2039,6 +2201,7 @@ pub mod remote {
                     seen_approvals: Mutex::new(std::collections::HashSet::new()),
                     search_routes: Mutex::new(BatchRoutes::default()),
                     compare_routes: Mutex::new(BatchRoutes::default()),
+                    sync_routes: Mutex::new(BatchRoutes::default()),
                 }),
                 foreign_rx: Mutex::new(Some(foreign_rx)),
                 events_rx: Mutex::new(Some(events_rx)),
@@ -2201,6 +2364,20 @@ pub mod remote {
                         };
                         if schedule {
                             schedule_route_removal(&self.inner, id.get(), |i| &i.compare_routes);
+                        }
+                    }
+                    TaskKind::SyncPlan => {
+                        let schedule = {
+                            let mut sr = self
+                                .inner
+                                .sync_routes
+                                .lock()
+                                .expect("sync_routes lock sano");
+                            let newly = sr.mark_terminated(id.get());
+                            newly && sr.routes.contains_key(&id.get())
+                        };
+                        if schedule {
+                            schedule_route_removal(&self.inner, id.get(), |i| &i.sync_routes);
                         }
                     }
                     _ => {}
@@ -2747,6 +2924,76 @@ pub mod remote {
                 &i.compare_routes
             });
             Ok((self.own_task(id, TaskKind::Compare), rx))
+        }
+
+        /// `sync.plan` (0.40.0, ADR 0049): lanza la Task y devuelve el `rx` por
+        /// el que la bomba enruta los DOS eventos del plan (`sync.steps` y el
+        /// `sync.plan_done` que lo cierra) de ESTE `task_id`. Mismo ciclo de
+        /// vida que [`Self::compare`], incluida la carrera de arranque.
+        ///
+        /// Un daemon N-1 sin el método contesta `METHOD_NOT_FOUND` →
+        /// [`Error::Unsupported`], para que el frontend distinga «tu daemon es
+        /// más viejo» de un fallo real.
+        pub(super) async fn sync_plan(
+            &self,
+            params: methods::SyncPlanParams,
+        ) -> Result<(TaskRef, mpsc::Receiver<crate::sync::SyncPlanEvent>), Error> {
+            let result: FsTaskResult = self.call_maybe_unknown(methods::SYNC_PLAN, &params).await?;
+            let id = result.task_id;
+            let rx = register_route(&self.inner, id.get(), methods::SYNC_STEPS, |i| {
+                &i.sync_routes
+            });
+            Ok((self.own_task(id, TaskKind::SyncPlan), rx))
+        }
+
+        /// `sync.apply` (0.40.0, ADR 0049): ejecuta el plan que `plan_hash`
+        /// nombra. No lleva rutas — las dos raíces salen del plan retenido
+        /// server-side, atado a ESTA conexión.
+        pub(super) async fn sync_apply(
+            &self,
+            plan_hash: &methods::PlanHash,
+        ) -> Result<TaskRef, Error> {
+            let params = methods::SyncApplyParams {
+                plan_hash: plan_hash.clone(),
+            };
+            let result: FsTaskResult = self
+                .call_maybe_unknown(methods::SYNC_APPLY, &params)
+                .await?;
+            Ok(self.own_task(result.task_id, TaskKind::Sync))
+        }
+
+        /// `sync.report` (0.40.0, ADR 0049): el informe de una aplicación ya
+        /// lanzada. `NotFound` si ese id no es una aplicación que este daemon
+        /// retenga — y esa es también la respuesta a un id de OTRA conexión, a
+        /// propósito.
+        pub(super) async fn sync_report(
+            &self,
+            task_id: TaskId,
+        ) -> Result<methods::SyncReportResult, Error> {
+            let params = methods::SyncReportParams { task_id };
+            self.call_maybe_unknown(methods::SYNC_REPORT, &params).await
+        }
+
+        /// Una llamada cuyo `METHOD_NOT_FOUND` significa «tu daemon es más
+        /// viejo» y se entrega como [`Error::Unsupported`], no como el
+        /// `Internal` en el que `to_taxonomy` convertiría un `-32601`. Es el
+        /// patrón que `compare` y `undo_report` ya escribían a mano.
+        async fn call_maybe_unknown<P: serde::Serialize, R: serde::de::DeserializeOwned>(
+            &self,
+            method: &'static str,
+            params: &P,
+        ) -> Result<R, Error> {
+            let client = self.client().await?;
+            let call = client.call::<_, R>(method, params);
+            match tokio::time::timeout(CALL_TIMEOUT, call).await {
+                Ok(Err(ClientError::Rpc(ref rpc)))
+                    if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+                {
+                    Err(Error::Unsupported)
+                }
+                Ok(res) => res.map_err(to_taxonomy),
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            }
         }
 
         /// `policy.undo_session` (M3-4): un humano deshace la sesión de un
@@ -3415,6 +3662,44 @@ pub mod remote {
                     route_batch(&inner.compare_routes, id, rows, methods::COMPARE_ROWS);
                     continue;
                 }
+                // Los dos eventos de un plan vivo (0.40.0) van al MISMO `rx`,
+                // envueltos en el mismo enum que devuelve el brazo embebido:
+                // el orden «pasos* y después el cierre» es la cola de ese
+                // canal, no una carrera entre dos mapas. Un evento malformado
+                // se descarta con traza, como los otros dos feeds.
+                if n.method == methods::SYNC_STEPS || n.method == methods::SYNC_PLAN_DONE {
+                    let done = n.method == methods::SYNC_PLAN_DONE;
+                    let Some(params) = n.params else {
+                        tracing::debug!(method = %n.method, "evento de sync sin params: descartado");
+                        continue;
+                    };
+                    let event = if done {
+                        serde_json::from_value::<methods::SyncPlanDone>(params)
+                            .map(crate::sync::SyncPlanEvent::Done)
+                    } else {
+                        serde_json::from_value::<methods::SyncStepsBatch>(params)
+                            .map(crate::sync::SyncPlanEvent::Steps)
+                    };
+                    let event = match event {
+                        Ok(e) => e,
+                        Err(e) => {
+                            tracing::debug!(error = %e, "evento de sync malformado: descartado");
+                            continue;
+                        }
+                    };
+                    let id = match &event {
+                        crate::sync::SyncPlanEvent::Steps(b) => b.task_id.get(),
+                        crate::sync::SyncPlanEvent::Done(d) => d.task_id.get(),
+                    };
+                    let Some(inner) = weak.upgrade() else { return };
+                    let feed = if done {
+                        methods::SYNC_PLAN_DONE
+                    } else {
+                        methods::SYNC_STEPS
+                    };
+                    route_batch(&inner.sync_routes, id, event, feed);
+                    continue;
+                }
                 if n.method != methods::TASK_PROGRESS {
                     continue;
                 }
@@ -3465,6 +3750,14 @@ pub mod remote {
                     .lock()
                     .expect("compare_routes lock sano");
                 cr.clear();
+            }
+            {
+                let mut sr = backend
+                    .inner
+                    .sync_routes
+                    .lock()
+                    .expect("sync_routes lock sano");
+                sr.clear();
             }
             let _ = backend.inner.events_tx.send(ConnEvent::Lost);
             drop(backend);
@@ -3524,6 +3817,7 @@ pub mod remote {
                 seen_approvals: Mutex::new(std::collections::HashSet::new()),
                 search_routes: Mutex::new(BatchRoutes::default()),
                 compare_routes: Mutex::new(BatchRoutes::default()),
+                sync_routes: Mutex::new(BatchRoutes::default()),
             })
         }
 
@@ -3622,6 +3916,7 @@ pub mod remote {
                 seen_approvals: Mutex::new(std::collections::HashSet::new()),
                 search_routes: Mutex::new(BatchRoutes::default()),
                 compare_routes: Mutex::new(BatchRoutes::default()),
+                sync_routes: Mutex::new(BatchRoutes::default()),
             });
             let backend = RemoteBackend {
                 inner: Arc::clone(&inner),

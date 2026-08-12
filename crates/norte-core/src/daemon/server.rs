@@ -3238,6 +3238,92 @@ async fn handle_sync_plan(
     to_value(&methods::FsTaskResult { task_id })
 }
 
+/// `sync.apply` (0.40.0, ADR 0049): ejecuta un plan RETENIDO como Task
+/// cancelable. El único parámetro es el `plan_hash`, así que por la FORMA de la
+/// petición no se puede ejecutar nada que no sea lo que un humano aprobó.
+///
+/// # Por qué aquí NO hay gate
+/// No porque no haga falta, sino porque este handler no sabe sobre qué pedirlo:
+/// las dos raíces viven en el SPOOL y `sync.apply` no las lleva. El gate corre
+/// dentro de [`Engine::sync_apply_as`], sobre las rutas leídas del fichero y en
+/// el momento de aplicar — que es además lo correcto, porque entre planificar y
+/// aplicar pasan hasta `SYNC_PLAN_TTL_MS` y un scope caduca dentro de esa
+/// ventana. Un `read_gate` aquí sobre algo que no son las raíces sería teatro.
+///
+/// # Los rechazos son del engine, y esto no los duplica
+/// `Unsupported` (sin spool o sin journal), `PlanStale` (el hash no nombra un
+/// plan vivo de ESTA conexión — no existe, caducó, está manipulado, es de otra
+/// conexión o ya se está aplicando), `PlanNotExecutable` (el plan traía
+/// bloqueos) y `PolicyDenied` salen todos de `sync_apply_as`, porque el brazo
+/// EMBEBIDO del `Backend` llama al engine sin pasar por aquí. Este handler los
+/// entrega con su taxonomía intacta.
+///
+/// Un `plan_hash` MALFORMADO no llega hasta el engine: `PlanHash` lo rechaza al
+/// deserializar, o sea `-32602`. Y eso importa — «esto no es un hash» y «el
+/// mundo se movió» son hechos distintos, y contestar el segundo a quien mandó el
+/// primero le miente sobre el estado del mundo.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+async fn handle_sync_apply(
+    params: Option<serde_json::Value>,
+    conn_id: u64,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::SyncApplyParams = parse_params(params)?;
+    let (handle, _report) = shared
+        .engine
+        .sync_apply_as(&p.plan_hash, conn_id, actor.clone())
+        .await
+        .map_err(RpcError::from)?;
+    // El informe NO se retiene aquí: vive en el anillo del engine
+    // (`Engine::sync_report`), que es de donde lo sirve `sync.report` — un solo
+    // anillo para el socket y para el `Backend` embebido, igual que el de
+    // `fs.rename_batch_report`.
+    //
+    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
+    // `sync_apply_as`) y este register — la Task jamás corre FUERA de
+    // `shared.tasks`.
+    let task_id = register_task_id(shared, handle, actor.clone())?;
+    to_value(&methods::FsTaskResult { task_id })
+}
+
+/// `sync.report` (0.40.0, ADR 0049): qué hizo la aplicación de un plan —
+/// cuántos pasos se ejecutaron, cuántos fallaron y con qué causa, y bajo qué
+/// lote del journal quedó todo.
+///
+/// Gemelo de [`handle_rename_batch_report`], incluida su comprobación de
+/// dueño: lo ve quien podría ver la Task ([`may_observe`]) — su dueño, o
+/// cualquier conexión humana. Para el resto la respuesta es la MISMA que la de
+/// un id desconocido, porque el informe lleva rutas relativas de dos árboles
+/// ajenos y distinguir «no es tuya» de «no existe» ya sería filtrar que
+/// existió.
+///
+/// Un id DESALOJADO del anillo ([`SYNC_REPORTS_MAX`](crate::SYNC_REPORTS_MAX))
+/// contesta lo mismo que uno que nunca fue una aplicación, con la misma
+/// renuncia que su gemelo documenta.
+fn handle_sync_report(
+    actor: &Actor,
+    p: &methods::SyncReportParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    // `NotFound` de la taxonomía, una sola respuesta para las TRES situaciones
+    // —desalojado del anillo, nunca fue una aplicación, es de otro actor— y la
+    // tercera es la razón: separarla confirmaría que la task de otro existió.
+    let unknown = || RpcError::from(norte_proto::Error::NotFound);
+    let (owner, report) = shared.engine.sync_report(p.task_id).ok_or_else(unknown)?;
+    if !may_observe(actor, &owner) {
+        // Material de auditoría (M3-5), igual que la rama denegada de
+        // `task.cancel`: el que pregunta por informes ajenos deja rastro aunque
+        // su respuesta no le diga nada. Ni el id ni el dueño.
+        tracing::warn!(
+            actor = ?actor,
+            "informe de sync de otro actor: denegado (respuesta = id desconocido)"
+        );
+        return Err(unknown());
+    }
+    to_value(&report)
+}
+
 /// `fs.search` (0.18.0, live search): búsqueda recursiva de nombre/contenido
 /// bajo `root` como Task cancelable. Los HITS llegan por `search.hits` SOLO a
 /// la conexión `conn_id` que la lanzó (envío dirigido, jamás broadcast — son
@@ -3418,6 +3504,15 @@ async fn dispatch_fs_task(
         // sync.plan (0.40.0): los PASOS son del que lo lanzó, y el plan queda
         // RETENIDO a nombre de esta conexión → conn_id por partida doble.
         methods::SYNC_PLAN => handle_sync_plan(req.params, conn_id, &actor, shared).await,
+        // sync.apply (0.40.0): el plan RETENIDO se abre por `(conn_id, hash)`,
+        // así que el conn_id no es para enrutar nada — es la mitad de la llave.
+        methods::SYNC_APPLY => handle_sync_apply(req.params, conn_id, &actor, shared).await,
+        // sync.report (0.40.0): lo que un `Failed` no puede contar — qué pasos
+        // se quedaron sin aplicar y bajo qué lote está lo que sí.
+        methods::SYNC_REPORT => {
+            let p: methods::SyncReportParams = parse_params(req.params)?;
+            handle_sync_report(&actor, &p, shared)
+        }
         methods::FS_STAT => {
             let p: methods::FsStatParams = parse_params(req.params)?;
             read_gate(&actor, &p.path, shared)?; // #80

@@ -269,3 +269,172 @@ async fn embedded_capabilities_y_attrs_en_una_llamada() {
         "y el catálogo también: esto no es un camino con otro saneo"
     );
 }
+
+// ------------------------------------------------- sync.plan / sync.apply
+
+/// Backend embebido con journal y spool: lo que hace falta para sincronizar de
+/// verdad. Sin cualquiera de los dos, el engine rehúsa (y hay un test debajo).
+async fn embedded_sync() -> (Backend, Arc<MemProvider>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let journal = Arc::new(norte_core::SqliteJournal::new(
+        norte_core::Journal::open_in_memory()
+            .await
+            .expect("journal"),
+    ));
+    let engine = Engine::with_journal(journal);
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    engine.set_spool(norte_core::sync::Spool::new(dir.path()));
+    (Backend::Embedded(Arc::new(engine)), mem, dir)
+}
+
+fn sync_params(source: &str, dest: &str) -> norte_proto::methods::SyncPlanParams {
+    norte_proto::methods::SyncPlanParams {
+        source: vp(source),
+        dest: vp(dest),
+        mode: norte_proto::methods::SyncMode::Update,
+        compare: norte_proto::methods::SyncCompareOptions::default(),
+        on_unknown: norte_proto::methods::OnUnknown::Copy,
+        include: None,
+    }
+}
+
+/// El ciclo entero por el `Backend` embebido: planificar, cerrar con el hash,
+/// aplicar ese hash y leer el informe. Es lo que la TUI hará, y hasta esta tarea
+/// no había método al que llamar.
+///
+/// La conexión embebida es UNA: si planificar y aplicar no usaran el mismo
+/// `conn_id`, el `sync_apply` de este mismo `Backend` contestaría `PlanStale` a
+/// su propio plan. Este test es lo que lo pinea.
+#[tokio::test]
+async fn embedded_sync_plan_y_apply_cierran_el_ciclo() {
+    let (backend, mem, _dir) = embedded_sync().await;
+    mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
+    mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
+    write_file(&mem, "mem:///s/a.txt", b"aaa").await;
+
+    let (task, mut rx) = backend
+        .sync_plan(sync_params("mem:///s", "mem:///d"))
+        .await
+        .expect("sync.plan");
+    let mut done = None;
+    let mut pasos = 0usize;
+    while let Some(event) = rx.recv().await {
+        match event {
+            norte_core::sync::SyncPlanEvent::Steps(b) => {
+                assert!(done.is_none(), "el cierre tiene que ser el último");
+                pasos += b.steps.len();
+            }
+            norte_core::sync::SyncPlanEvent::Done(d) => done = Some(d),
+        }
+    }
+    assert_eq!(task.join().await, TaskState::Completed);
+    let done = done.expect("el plan cerró con su hash");
+    assert_eq!(pasos, 1);
+    assert!(done.executable);
+
+    let applying = backend
+        .sync_apply(&done.plan_hash)
+        .await
+        .expect("su propio plan se aplica");
+    let id = applying.id();
+    assert_eq!(applying.join().await, TaskState::Completed);
+    let report = backend.sync_report(id).await.expect("informe");
+    assert_eq!(report.done, 1);
+    assert_eq!(report.failed, 0);
+    assert!(report.batch_id.is_some());
+    assert!(
+        mem.stat(&vp("mem:///d/a.txt")).await.is_ok(),
+        "la copia ocurrió"
+    );
+
+    // El plan se gastó: el mismo hash ya no ejecuta nada.
+    assert!(matches!(
+        backend.sync_apply(&done.plan_hash).await,
+        Err(Error::PlanStale)
+    ));
+}
+
+/// Fail-closed, y no por accidente de cableado: un engine SIN spool no
+/// planifica y uno sin journal no aplica. Que el CLI no llame hoy a `set_spool`
+/// no es el que protege; el que protege es el engine, y esto lo pinea.
+#[tokio::test]
+async fn embedded_sin_spool_no_planifica_y_sin_journal_no_aplica() {
+    // 1) Sin spool: no hay retención, así que no hay plan que aprobar.
+    let (backend, mem) = embedded();
+    mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
+    mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
+    assert!(matches!(
+        backend.sync_plan(sync_params("mem:///s", "mem:///d")).await,
+        Err(Error::Unsupported)
+    ));
+
+    // 2) Con spool pero SIN journal: se planifica, y aplicar se rehúsa — un plan
+    //    promete una reversa por paso y solo el journal puede cumplirla.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    engine.set_spool(norte_core::sync::Spool::new(dir.path()));
+    let backend = Backend::Embedded(Arc::new(engine));
+    mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
+    mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
+    write_file(&mem, "mem:///s/a.txt", b"aaa").await;
+
+    let (task, mut rx) = backend
+        .sync_plan(sync_params("mem:///s", "mem:///d"))
+        .await
+        .expect("planificar no escribe");
+    let mut done = None;
+    while let Some(event) = rx.recv().await {
+        if let norte_core::sync::SyncPlanEvent::Done(d) = event {
+            done = Some(d);
+        }
+    }
+    assert_eq!(task.join().await, TaskState::Completed);
+    let done = done.expect("el plan cerró");
+    assert!(matches!(
+        backend.sync_apply(&done.plan_hash).await,
+        Err(Error::Unsupported)
+    ));
+    assert!(
+        mem.stat(&vp("mem:///d/a.txt")).await.is_err(),
+        "sin journal no se escribe un byte"
+    );
+}
+
+/// Los tres campos que no son del llamante se rechazan ANTES de elegir brazo,
+/// con la misma taxonomía que daría el embebido — el daemon los contesta con un
+/// `-32602` pelado, que `to_taxonomy` convertiría en `Internal`. Misma paridad
+/// que `Backend::compare`.
+#[tokio::test]
+async fn embedded_sync_plan_rechaza_lo_que_no_es_del_llamante() {
+    let (backend, mem, _dir) = embedded_sync().await;
+    mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
+    mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
+
+    let mut p = sync_params("mem:///s", "mem:///d");
+    p.compare.follow_symlinks = true;
+    assert!(matches!(
+        backend.sync_plan(p).await,
+        Err(Error::Unsupported)
+    ));
+
+    let mut p = sync_params("mem:///s", "mem:///d");
+    p.compare.descend_orphans = Some(norte_proto::methods::DescendSide::Right);
+    assert!(matches!(
+        backend.sync_plan(p).await,
+        Err(Error::Unsupported)
+    ));
+
+    let mut p = sync_params("mem:///s", "mem:///d");
+    p.include = Some(vec![
+        norte_proto::methods::RelPath::parse_wire("x")
+            .expect("rel");
+        norte_proto::methods::SYNC_MAX_INCLUDE + 1
+    ]);
+    assert!(matches!(
+        backend.sync_plan(p).await,
+        Err(Error::InvalidPath)
+    ));
+}
