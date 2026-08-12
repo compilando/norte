@@ -743,6 +743,31 @@
         }
       ]
     },
+    "DestTrash": {
+      "description": "Qué papelera tiene el DESTINO de un plan, y por tanto qué puede devolver el\nundo (0.40.0, ADR 0049). Daemon→client: `#[serde(other)]`.\n\n# Por qué viaja, si cada paso ya lleva su [`StepReversal`]\n\nPorque `reversal` NO alcanza para decidir la frase que un humano necesita\nleer antes de aprobar. Un [`SyncStepKind::Copy`] contra un destino SIN\npapelera sale con [`StepReversal::Delete`] —el paso es reversible allí donde\nhay papelera, y marcarlo irreversible mentiría en la otra dirección—, pero el\nundo de ese `created` pasa también por la papelera (#65) y, no habiéndola, lo\nSALTA: la copia se queda. Un plan de solo copias contra un destino sin\npapelera y otro contra un destino con papelera restaurable son, paso a paso,\nbyte a byte, el MISMO plan; y uno se deshace entero y el otro no se deshace\nnada. Sin este campo no hay forma de distinguirlos, y un diálogo que lea\n`reversal` a secas promete lo que el undo no va a dar.\n\n# Las tres respuestas, y la diferencia entre las dos malas\n\n- [`DestTrash::Restorable`] — hay papelera y NOMBRA lo que entierra\n  (`Provider::trash_restorable`): el journal se queda con su `reversal_ref` y\n  el undo PUEDE devolver el lote, copias incluidas. `file://` en Linux/BSD, y\n  `sftp://`/objeto con la papelera lógica.\n- [`DestTrash::Opaque`] — hay papelera pero no dice dónde deja las cosas\n  (`file://` en macOS y Windows). Todos los pasos que ACTÚAN salen\n  [`StepReversal::Irreversible`] con [`SyncReason::NoTrashOnTarget`] (un\n  [`SyncStepKind::Skip`] no actúa y sigue sin reversa); lo enterrado sigue\n  existiendo y se puede rescatar A MANO desde la papelera del sistema, pero\n  el undo de norte no puede acertar cuál era.\n- [`DestTrash::Absent`] — no hay papelera. Lo que se sobrescribe o se borra no\n  está en ningún sitio, y lo que se copia tampoco vuelve (el undo lo salta).\n\n# Es una promesa sobre el PLAN, no una garantía por entrada\n\n[`DestTrash::Restorable`] dice que el destino sabe nombrar lo que entierra,\nno que cada entrada vaya a volver. `Provider::trash_restorable` es una\npromesa de la IMPLEMENTACIÓN y su propio contrato admite que un caso\nconcreto conteste `None`; y una ruta que cambió entre el `sync.apply` y el\nundo se BLOQUEA en vez de tocarse. Las dos cosas terminan igual: la entrada\nno vuelve y el informe del undo la NOMBRA. Un diálogo puede decir «esto se\npuede deshacer»; no puede decir «esto va a volver entero pase lo que pase».\n\nEl resultado NETO de las dos últimas es el mismo —el undo no devuelve nada—,\ny aun así son dos avisos distintos: en una el fichero existe y en la otra no.\nPor eso son dos valores y no un booleano.\n\n```\nuse norte_proto::methods::DestTrash;\nassert_eq!(serde_json::to_string(&DestTrash::Opaque).expect(\"json\"), r#\"\"opaque\"\"#);\n// Solo una de las tres devuelve algo.\nassert!(DestTrash::Restorable.restores());\nassert!(!DestTrash::Opaque.restores() && !DestTrash::Absent.restores());\n// Y un valor de un daemon del futuro NO se toma por ninguna de las tres.\nlet futuro: DestTrash = serde_json::from_str(r#\"\"quantum\"\"#).expect(\"degrada\");\nassert_eq!(futuro, DestTrash::Unknown);\nassert!(!futuro.restores(), \"lo que no se conoce no se promete\");\n```",
+      "oneOf": [
+        {
+          "const": "restorable",
+          "description": "Papelera que nombra lo que entierra: el undo PUEDE devolver el lote\nentero, copias incluidas. Sin garantía por entrada — ver la nota del\ntipo.",
+          "type": "string"
+        },
+        {
+          "const": "opaque",
+          "description": "Papelera que NO nombra lo que entierra: nada del plan se deshace, y lo\nenterrado se rescata a mano desde la papelera del sistema.",
+          "type": "string"
+        },
+        {
+          "const": "absent",
+          "description": "Sin papelera: nada del plan se deshace, y lo destruido no está en ningún\nsitio.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Respuesta que este decodificador no conoce (`#[serde(other)]`). El core\njamás la emite. **No promete nada**: [`DestTrash::restores`] es `false`.",
+          "type": "string"
+        }
+      ]
+    },
     "Entry": {
       "description": "Metadatos de un nodo del VFS.\n\nCampos opcionales `None` = \"el provider no lo sabe\", nunca un 0 fingido.\n\n```\nuse norte_proto::attrs::AttrValue;\nuse norte_proto::{Entry, EntryKind, VPath};\nlet e = Entry {\n    path: VPath::parse(\"file:///a.txt\").unwrap(),\n    kind: EntryKind::File,\n    size: Some(42),\n    mtime_ms: None,\n    attrs: [(\"posix.mode\".to_owned(), AttrValue::Uint(0o100_644))].into(),\n};\nlet json = serde_json::to_string(&e).unwrap();\nassert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), e);\n\n// Sin attrs, el wire es EXACTAMENTE el de 0.29.\nlet plain = Entry { attrs: Default::default(), ..e };\nassert!(!serde_json::to_string(&plain).unwrap().contains(\"attrs\"));\n\n// Una clave de atributo mal formada NO llega al mapa: se descarta al\n// decodificar, sin error (ver [`Entry::attrs`]).\nlet wire = r#\"{\"path\":\"file:///a.txt\",\"kind\":\"file\",\"attrs\":{\"MODE\":{\"uint\":1}}}\"#;\nlet filtrada: Entry = serde_json::from_str(wire).unwrap();\nassert!(filtrada.attrs.is_empty());\n```\n\nOJO: `PartialEq`/`Eq`/`Hash` derivados son REPRESENTACIONALES, no de\nIDENTIDAD: dos `Entry` del MISMO nodo difieren si una se pidió con\natributos y la otra no, o si se pidieron ids distintos. Para \"¿es el mismo\nnodo?\" se compara [`Entry::path`]; estas derivaciones existen para\nfixtures, tests y deduplicado de listados idénticos, no para decidir\nidentidad.",
       "properties": {
@@ -3339,11 +3364,11 @@
       "type": "object"
     },
     "StepReversal": {
-      "description": "Cómo vuelve atrás un paso ya ejecutado (0.40.0, ADR 0049).\n\nEs función de la clase del paso y de si el DESTINO tiene papelera, y viaja\nen el plan —antes de aprobar— justamente para que el humano vea cuántos\npasos no se pueden deshacer ANTES de decir que sí, y no en el informe\ndespués.\n\nDaemon→client: `#[serde(other)]`.\n\n```\nuse norte_proto::methods::StepReversal;\nassert_eq!(\n    serde_json::to_string(&StepReversal::RestoreTrash).expect(\"json\"),\n    r#\"\"restore_trash\"\"#\n);\nlet futuro: StepReversal = serde_json::from_str(r#\"\"time_travel\"\"#).expect(\"degrada\");\nassert_eq!(futuro, StepReversal::Unknown);\n```",
+      "description": "Cómo vuelve atrás un paso ya ejecutado (0.40.0, ADR 0049).\n\nEs función de la clase del paso y de si el DESTINO tiene papelera, y viaja\nen el plan —antes de aprobar— justamente para que el humano vea cuántos\npasos no se pueden deshacer ANTES de decir que sí, y no en el informe\ndespués.\n\n# Esta columna SOLA no dice si un paso vuelve, y quien pinte un diálogo\ntiene que leerla junto a [`SyncPlanDone::dest_trash`]\n\nDice cómo volvería el paso *donde el destino pueda devolverlo*, que no es la\nmisma pregunta. Un [`StepReversal::Delete`] contra un destino sin papelera\nse emite igual y el undo lo SALTA (ver esa variante), así que un plan de\ncopias pintado desde esta columna promete un undo que no va a ocurrir. La\nrespuesta completa es el par `(reversal, dest_trash)`, y está escrita en\n[`DestTrash`].\n\nDaemon→client: `#[serde(other)]`.\n\n```\nuse norte_proto::methods::StepReversal;\nassert_eq!(\n    serde_json::to_string(&StepReversal::RestoreTrash).expect(\"json\"),\n    r#\"\"restore_trash\"\"#\n);\nlet futuro: StepReversal = serde_json::from_str(r#\"\"time_travel\"\"#).expect(\"degrada\");\nassert_eq!(futuro, StepReversal::Unknown);\n```",
       "oneOf": [
         {
           "const": "delete",
-          "description": "Deshacer = borrar lo que este paso creó. No se destruyó nada, así que\nvale con o sin papelera en el destino.",
+          "description": "Deshacer = borrar lo que este paso creó. No se destruyó nada, así que\nel paso ES reversible allí donde el destino tenga papelera.\n\n**Con [`DestTrash::Absent`] el undo NO lo ejecuta**, y esta variante\nviaja igual. No es un descuido: borrar «lo que hoy haya en esa ruta»\nsin papelera de la que volver puede destruir trabajo que el humano hizo\nDESPUÉS de sincronizar (#65), así que el undo lo salta y lo cuenta en\n`skipped_created_no_trash`. Marcar el paso `Irreversible` mentiría en la\notra dirección —sobre un destino con papelera vuelve entero—, de modo\nque la verdad no cabe en esta columna: hay que leerla junto a\n[`SyncPlanDone::dest_trash`].",
           "type": "string"
         },
         {
@@ -3653,7 +3678,7 @@
       ]
     },
     "SyncPlanDone": {
-      "description": "Payload de [`SYNC_PLAN_DONE`] (0.40.0, ADR 0049): lo que hay que saber para\naprobar un plan, y el hash con el que se aprueba.\n\n```\nuse norte_proto::TaskId;\nuse norte_proto::methods::{PlanHash, SyncCounts, SyncPlanDone};\nlet d = SyncPlanDone {\n    task_id: TaskId::new(7),\n    plan_hash: PlanHash::parse(&\"0\".repeat(64)).expect(\"hex\"),\n    counts: SyncCounts::default(),\n    blockers: vec![],\n    blockers_total: 0,\n    executable: true,\n};\nlet json = serde_json::to_value(&d).expect(\"json\");\n// `blockers` vacío es una lista vacía, jamás una clave ausente.\nassert_eq!(json[\"blockers\"], serde_json::json!([]));\nassert_eq!(json[\"plan_hash\"], serde_json::json!(\"0\".repeat(64)));\n```",
+      "description": "Payload de [`SYNC_PLAN_DONE`] (0.40.0, ADR 0049): lo que hay que saber para\naprobar un plan, y el hash con el que se aprueba.\n\n```\nuse norte_proto::TaskId;\nuse norte_proto::methods::{DestTrash, PlanHash, SyncCounts, SyncPlanDone};\nlet d = SyncPlanDone {\n    task_id: TaskId::new(7),\n    plan_hash: PlanHash::parse(&\"0\".repeat(64)).expect(\"hex\"),\n    counts: SyncCounts::default(),\n    blockers: vec![],\n    blockers_total: 0,\n    executable: true,\n    dest_trash: DestTrash::Restorable,\n};\nlet json = serde_json::to_value(&d).expect(\"json\");\n// `blockers` vacío es una lista vacía, jamás una clave ausente.\nassert_eq!(json[\"blockers\"], serde_json::json!([]));\nassert_eq!(json[\"plan_hash\"], serde_json::json!(\"0\".repeat(64)));\nassert_eq!(json[\"dest_trash\"], serde_json::json!(\"restorable\"));\n```",
       "properties": {
         "blockers": {
           "description": "Los bloqueos, recortados a [`SYNC_MAX_BLOCKERS_REPORTED`]. Es la\nEXPLICACIÓN, no el veredicto: quien decide es `executable`.",
@@ -3671,6 +3696,10 @@
         "counts": {
           "$ref": "#/$defs/SyncCounts",
           "description": "A cuánto suma el plan, por clase de paso.\n\n`counts.bytes` es una COTA INFERIOR, no un total: los pasos cuyo tamaño\nel provider no dio se cuentan en `counts.unmeasured_steps` en vez de sumar\ncero (ver [`SyncCounts`], y [`SyncCounts::exact_bytes`] para el total o\nnada). Un diálogo que enseñe `bytes` a secas miente sobre casi cualquier\nplan de `file://`."
+        },
+        "dest_trash": {
+          "$ref": "#/$defs/DestTrash",
+          "description": "Qué papelera tiene el DESTINO, o sea qué puede devolver el undo de este\nplan si se aplica ([`DestTrash`]).\n\n**Sin este campo no se puede pintar el diálogo de aprobación sin\nmentir**, y el motivo está entero en el rustdoc de [`DestTrash`]: el\n[`StepReversal`] de cada paso no distingue un plan de copias que se\ndeshace entero de uno idéntico que no se deshace nada. Habla del plan\nCOMPLETO —es una propiedad del provider del destino, no de un paso—, así\nque [`SyncPlanParams::include`] no lo afecta.\n\nSin `serde(default)` a propósito, por lo mismo que los contadores nuevos\nde [`SyncCounts`]: un default sería una respuesta inventada sobre si algo\nse puede deshacer, y no hay ninguna versión publicada que lo omita (0.40.0\nes el bump que estrena la familia entera). [`DestTrash`] tampoco deriva\n`Default`, así que ponerle un `serde(default)` más adelante no compila en\nsilencio: hay que elegir a mano qué se inventa, que es justo la decisión\nque no debe pasar desapercibida.\n\nNo entra en el `plan_hash` y no hace falta que entre: sale de\n`dest_has_trash` y `dest_trash_restorable`, que el hasher ya siembra, así\nque dos planes con papeleras distintas ya tienen digests distintos. O\nsea que este campo no puede contradecir al plan que autoriza ejecutar.\n\n**DESPUÉS de aplicar, quien manda es el informe.**\n[`SyncReportResult`] no lleva esta información —quien aplica tiene el\n`sync.plan_done` delante— y su `batch_id` ausente significa que no llegó\na abrirse lote alguno, o sea que no hay nada que deshacer por mucho que\nel plan dijera. Lo que el undo acabó salvando lo cuenta\n`PolicyUndoReportResult`, con `skipped_created_no_trash` como la cara\n*a posteriori* de [`DestTrash::Absent`]."
         },
         "executable": {
           "description": "`true` cuando el plan se puede ejecutar tal cual. Campo NORMATIVO, con la\nmisma dirección que [`FsRenameBatchPlanResult::executable`]: el frontend\ndeshabilita el confirmar con `!executable` y NO deduce nada de\n`blockers`, porque un bloqueo futuro podría no tener nombre que listar.\n\nINVARIANTE (el core lo mantiene, un cliente puede asumirlo): `blockers`\nno vacío ⟹ `executable == false`; y `executable == false` ⟹\n[`SYNC_APPLY`] rehúsa con\n[`Error::PlanNotExecutable`](crate::Error::PlanNotExecutable) aunque el\nhash case.\n\n**[`SyncPlanParams::include`] NO recorta los bloqueos**, así que esto\nhabla siempre de la comparación ENTERA. Es deliberado: hay bloqueos cuyo\nalcance es el árbol —[`SyncBlockerKind::DestReadOnly`] cuelga de la raíz,\nque ninguna selección nombra— y recortarlos por la selección convertiría\nun destino de solo lectura en un plan ejecutable. La consecuencia que un\nfrontend tiene que saber pintar: una selección de tres ficheros puede\nvolver con `executable: false` por algo que está a cuarenta mil filas de\ndistancia y que el usuario no tiene delante.",
@@ -3691,7 +3720,8 @@
         "counts",
         "blockers",
         "blockers_total",
-        "executable"
+        "executable",
+        "dest_trash"
       ],
       "type": "object"
     },
@@ -3767,7 +3797,7 @@
         },
         {
           "const": "no_trash_on_target",
-          "description": "El destino no tiene papelera, así que lo que este paso entierra no se\npuede recuperar. Acompaña SIEMPRE a [`StepReversal::Irreversible`].",
+          "description": "**El destino no tiene una papelera de la que VOLVER**, así que este paso\nno se puede deshacer. Acompaña SIEMPRE a [`StepReversal::Irreversible`].\n\nCubre los dos casos, y quien lo pinte no debe prometer que son el mismo:\n\n- el destino no tiene papelera, y lo que este paso entierra no está en\n  ningún sitio;\n- el destino SÍ tiene papelera pero no dice dónde deja las cosas\n  (`Provider::trash_restorable` en `false`: macOS y Windows). Lo\n  enterrado se saca a mano desde la papelera del sistema, pero el undo\n  de norte no puede acertar cuál era — y entonces NINGÚN paso del plan\n  es reversible, ni siquiera una copia, porque deshacer una creación\n  también pasa por la papelera (#65).\n\nEl token del wire no distingue los dos a propósito: son la misma\nconsecuencia para quien aprueba, y separarlos sería una variante nueva\n(bump de protocolo) para una frase.\n\nLa distinción sí viaja, pero del PLAN y no del paso:\n[`SyncPlanDone::dest_trash`] separa «no hay papelera»\n([`DestTrash::Absent`]) de «la hay y no dice dónde deja las cosas»\n([`DestTrash::Opaque`]), que es donde tiene sentido —es una propiedad\ndel destino, igual para todos los pasos— y donde un diálogo la puede\nleer una vez.",
           "type": "string"
         },
         {
@@ -4468,6 +4498,9 @@
     "descend_side": {
       "$ref": "#/$defs/DescendSide"
     },
+    "dest_trash": {
+      "$ref": "#/$defs/DestTrash"
+    },
     "entry": {
       "$ref": "#/$defs/Entry"
     },
@@ -4864,6 +4897,7 @@
     "decoration_wire",
     "delete_mode",
     "descend_side",
+    "dest_trash",
     "entry",
     "entry_kind",
     "error",

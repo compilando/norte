@@ -993,7 +993,8 @@ mod papelera_freedesktop {
             if std::fs::write(&native, name.id.as_bytes()).is_err() {
                 continue;
             }
-            let Ok(victim) = Segment::new(name.bytes.clone()).map(|s| LocalProvider::root().join(s))
+            let Ok(victim) =
+                Segment::new(name.bytes.clone()).map(|s| LocalProvider::root().join(s))
             else {
                 continue;
             };

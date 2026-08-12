@@ -942,7 +942,8 @@
     },
     "blockers": [],
     "blockers_total": 0,
-    "executable": true
+    "executable": true,
+    "dest_trash": "restorable"
   },
   "sync_plan_done_blocked": {
     "task_id": 8,
@@ -966,7 +967,27 @@
       }
     ],
     "blockers_total": 300,
-    "executable": false
+    "executable": false,
+    "dest_trash": "absent"
+  },
+  "sync_plan_done_opaque": {
+    "task_id": 9,
+    "plan_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+    "counts": {
+      "create_dir": 0,
+      "copy": 1,
+      "overwrite": 1,
+      "delete_tree": 0,
+      "skip": 0,
+      "unknown_kind": 0,
+      "irreversible": 2,
+      "bytes": 20,
+      "unmeasured_steps": 0
+    },
+    "blockers": [],
+    "blockers_total": 0,
+    "executable": true,
+    "dest_trash": "opaque"
   },
   "sync_apply_params": {
     "plan_hash": "1111111111111111111111111111111111111111111111111111111111111111"

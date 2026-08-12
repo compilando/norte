@@ -31,8 +31,8 @@ use std::time::Duration;
 
 use futures::StreamExt as _;
 use norte_proto::methods::{
-    RelPath, SYNC_STEPS_MAX_BATCH, SyncCompareOptions, SyncPlanDone, SyncStep, SyncStepKind,
-    SyncStepsBatch,
+    DestTrash, RelPath, SYNC_STEPS_MAX_BATCH, SyncCompareOptions, SyncPlanDone, SyncStep,
+    SyncStepKind, SyncStepsBatch,
 };
 use norte_proto::{Error, TaskId};
 use norte_sync::{PlanItem, SyncError, SyncOptions};
@@ -311,6 +311,11 @@ pub(crate) async fn run_sync_plan(
     } = job;
     let task_id = ctx.progress.snapshot().task_id;
     let include = include.as_deref().map(IncludeFilter::new);
+    // De la MISMA pareja de booleanos con la que el transductor decide el
+    // `reversal` de cada paso, traducida por el tipo del wire: si el resumen la
+    // derivara por su cuenta, el plan y su diálogo podrían decir cosas distintas
+    // del mismo destino.
+    let dest_trash = DestTrash::of(opts.dest_has_trash, opts.dest_trash_restorable);
 
     let mut writer = spool
         .create(conn_id, &opts, &compare)
@@ -421,7 +426,26 @@ pub(crate) async fn run_sync_plan(
         let _ = writer.finish(PlanOutcome::Interrupted).await;
         return Err(e);
     }
-    close_plan(writer, &spool, conn_id, task_id, &mut batch, &tx, ctx).await
+    let closing = Closing {
+        conn_id,
+        task_id,
+        dest_trash,
+    };
+    close_plan(writer, &spool, closing, &mut batch, &tx, ctx).await
+}
+
+/// Lo que identifica al plan que se cierra, y lo único de él que
+/// [`close_plan`] no puede leer del resumen del spool.
+#[derive(Debug, Clone, Copy)]
+struct Closing {
+    /// La conexión dueña (media llave del plan retenido).
+    conn_id: u64,
+    /// La Task que lo produjo.
+    task_id: TaskId,
+    /// Qué papelera tiene el destino, o sea qué podría devolver el undo si este
+    /// plan se llega a aplicar. Sale de las opciones y no del resumen porque el
+    /// spool no lo cuenta: no es un contador, es una propiedad del destino.
+    dest_trash: DestTrash,
 }
 
 /// Cierra un plan que llegó al final de su flujo: último lote, terminador del
@@ -445,12 +469,16 @@ pub(crate) async fn run_sync_plan(
 async fn close_plan(
     writer: SpoolWriter,
     spool: &Spool,
-    conn_id: u64,
-    task_id: TaskId,
+    closing: Closing,
     batch: &mut Batch,
     tx: &mpsc::Sender<SyncPlanEvent>,
     ctx: &crate::scheduler::TaskCtx,
 ) -> Result<(), Error> {
+    let Closing {
+        conn_id,
+        task_id,
+        dest_trash,
+    } = closing;
     match flush(tx, batch, &ctx.cancel).await {
         FlushOutcome::Continue(steps) => ctx.progress.update(|p| p.entries_done += steps),
         FlushOutcome::ReceiverGone | FlushOutcome::Cancelled => {
@@ -478,6 +506,7 @@ async fn close_plan(
         blockers: summary.blockers,
         blockers_total: summary.blockers_total,
         executable: summary.executable,
+        dest_trash,
     };
     // El dueño podría recalcular el digest por su cuenta —`PlanHasher` no lleva
     // clave y recibió todos los lotes—, así que «nadie sabe el hash» no es la

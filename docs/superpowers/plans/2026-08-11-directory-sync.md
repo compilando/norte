@@ -35,7 +35,8 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 9 — the executor | done | `d749166` (containment) + `26f26d3` (executor) |
 | 10 — `sync.apply`, `sync.report`, the `Backend` | done | `15a36f3` (cross-provider tests) + `40f87d5` |
 | 11 — `revert_sync_batch` | done | `9c3853d` |
-| 11b — una papelera que dice dónde puso las cosas | done | (este commit) |
+| 11b — una papelera que dice dónde puso las cosas | done | `9f88a2c` |
+| 12 — the frontend model | done | (este commit) |
 
 **The embedded TUI does not synchronise, and Task 13 says so out loud.**
 `make_backend` builds `Engine::new()` — no journal, no spool — and Task 9 made
@@ -1453,6 +1454,141 @@ Three more that Tasks 12–14 should know about:
 The plan still carries no `dest_has_trash` on the wire, so a dialog that wants
 to say more than the per-step `reversal` column needs Task 12 to add it (free
 until 0.40.0 ships). Nothing in 11b touched `norte-proto` beyond rustdoc.
+
+### What Task 12 changed in this plan
+
+**The wire gained the field, because the dialog could not be honest without
+it.** `SyncPlanDone::dest_trash: DestTrash` — `{ Restorable, Opaque, Absent,
+#[serde(other)] Unknown }`, required, no `serde(default)`. The argument, in
+one sentence: a plan of nothing but copies against a restorable trash and the
+same plan against a destination with NO trash are byte-for-byte identical on
+the wire — same `Copy` steps, same `StepReversal::Delete` — and one reverts
+entirely while the other reverts nothing (the undo skips the `created` entries,
+#65). No amount of reading `reversal` separates them. `DestTrash::of(has_trash,
+restorable)` lives next to the type so the wire's mapping and `norte-sync`'s
+reversal table cannot drift; `norte-core`'s `close_plan` fills it from the same
+`SyncOptions` pair the transducer used. It does NOT enter the `plan_hash` and
+must not: both booleans already seed it (Task 6/11b), so two destinations with
+different trashes already produce different digests.
+
+Three values and not a boolean, because **the two bad answers are not the same
+news**: with `Opaque` (macOS, Windows) what was replaced is sitting in the
+system trash and can be fished out by hand; with `Absent` it is gone. Same
+`UndoOutlook`, two sentences, and the model prints both.
+
+- **Goldens 141 → 142**: `sync_plan_done` (restorable), `sync_plan_done_blocked`
+  (absent) and a NEW `sync_plan_done_opaque`, which is also what makes the
+  schema's sync-vocabulary cross-check pass — it demands every non-`unknown`
+  token appear in a fixture. Schema regenerated. The regeneration also swept up
+  a `SyncReason::NoTrashOnTarget` description that 11b changed without
+  regenerating, so `docs/schema` was red at HEAD.
+- **`crates/norte-frontend/src/sync.rs`** is the deliverable: `SyncState`
+  (`Planning → Ready → Applying → Applied`), `SyncPlan`, `StepUndo`,
+  `UndoOutlook`, `PlanIntegrity`, `RelAnchor`, `render_step`, `summary_lines`,
+  `confirmation`, and the labels. 39 tests, all pure.
+
+**Six things Task 13 inherits, and one it must not undo.**
+
+1. **`step_undo(step, dest_trash)`, never `step.reversal`.** `StepUndo::Reverts`
+   is structurally unreachable unless the trash is `Restorable`; the copy that
+   says `delete` against `Absent` comes out `LeftBehind` ("the undo leaves it
+   there"). Painting the reversal column raw reopens the exact hole this task
+   closed.
+2. **`SyncPlan::outlook()`, not `UndoOutlook::of()`.** The second reads the
+   counters only; the first also reads the steps and downgrades to `Unclear` the
+   moment one of them carries a reversal this build cannot name. A promise over
+   an admitted unknown is still a promise.
+3. **`on_steps` takes the whole `SyncStepsBatch` and checks `task_id`.** One
+   connection can have two plans in flight; without the check a user who
+   re-plans with a narrower selection keeps looking at plan A while approving
+   plan A's hash, with plan B's rows mixed in. Both transitions return `bool`
+   so a frontend can log what it dropped — a batch after the close is a protocol
+   violation and silence is how that hides.
+4. **`can_approve()` is `executable && integrity.is_complete() && acting > 0`.**
+   Integrity compares the received steps against `SyncPlanDone::counts` field by
+   field (`Mismatch` on the classes, `Contradictory` on `irreversible`/`bytes`/
+   `unmeasured_steps`, `Unnameable` on a class neither side can name,
+   `Malformed` on a step whose own `shape_is_consistent()` is false).
+5. **`anchor_of` answers `Either` for anything that might be destination-relative**
+   — a `DeleteTree` is `Dest`, an unreadable `Skip` and any unknown class are
+   `Either`. A pane that anchors every `rel` to the source column paints those in
+   a tree they may not be in (the Task 4 note, discharged).
+6. **The Fluent strings are already there** (`sync-*` in both locales, ~45 ids):
+   step/undo/reason/blocker labels, `sync-outlook-*`, `sync-trash-*`, the summary
+   lines and seven confirmations. `sync-reason-no-trash-on-target` deliberately
+   does not say "the destination has no trash" — the token covers both cases.
+   Task 13 adds pane/keys strings on top; it should not reword these without
+   re-reading why they say what they say.
+
+**What the two reviews changed, and it was the promises every time.**
+
+- **`StepReversal::Delete`'s rustdoc said the opposite of this task's premise**
+  ("vale con o sin papelera en el destino"). A third-party client implementing
+  the dialog from that sentence renders "40 copies, all reversible" against a
+  trash-less destination. Fixed, with the pointer to `dest_trash`; the
+  type-level doc and the `PROTOCOL_VERSION` paragraph now carry it too.
+- **`Restorable` overclaimed.** `Provider::trash_restorable` is a promise about
+  the implementation and its own contract admits a per-victim `None`; a path
+  that drifted between apply and undo is blocked and named. So the wire doc,
+  `UndoOutlook::Full` and the Fluent string all say "you can undo this,
+  except what changes in the meantime" rather than "this comes back".
+- **`irreversible` was the one counter the integrity check did not check** —
+  and it is the number the headline is built on. A daemon closing
+  `irreversible: 0` over steps that each say `Irreversible` would have been
+  headlined "you can undo all of this". Now every field is compared
+  (`PlanIntegrity::Contradictory`).
+- **The confirmation contradicted the summary** for `Partial` and `Unclear`
+  (both fell into "none of this can be undone"). There is now one question per
+  outlook: `sync-confirm-{delete,delete-final,delete-partial,delete-unclear,
+  no-way-back,partial,unclear}`.
+- **The `Opaque`/`Absent` distinction never reached the reader**: both collapse
+  to `UndoOutlook::Nothing`, and the summary printed only the outlook. Hence
+  `trash_label` and the `sync-trash-*` line under the headline. The wire has
+  carried that distinction since this task; it would have been carried for
+  nothing.
+- **Smaller, all applied**: `Skip`-only plans no longer claim "0 B to write";
+  `sync-undo-reverts` is neutral ("the undo reverses it" — on a copy the undo
+  REMOVES, and "puts it back" reads wrong); the unreadable line says the subtree
+  is uncovered too; `Applied::is_undoable()` exists because a report with no
+  `batch_id` means nothing was journalled whatever the plan promised;
+  `DestTrash` has degrade and required-field tests in `norte-proto/tests/types.rs`;
+  and `engine_sync_plan.rs` pins all three trashes end to end — including
+  `Absent`, where the copies still say `delete`.
+- **MINORs skipped, with reasons.** (1) No `SyncPlanDone` invariant method tying
+  `Opaque` to `irreversible == acting`: the model is already safe against a
+  daemon that violates it (`Delete` + `Opaque` is `Unclear`, and the outlook is
+  `Nothing` regardless), and the golden plus the core test pin the shape. (2) No
+  doctests for `PlanIntegrity`/`SyncState`: `norte-frontend` is not one of the
+  crates the rustdoc convention obliges, and both have unit tests that read
+  better. (3) No terminal `Failed` state — a failed or cancelled Task is painted
+  from `task.progress` and the dialog is dropped; adding a state no notification
+  produces is speculation. Documented rather than built.
+
+**`just t <crate>` does not run doctests** — the recipe is `cargo nextest`, and
+nextest cannot. Only the full `test` recipe does (`cargo test --doc`), inside
+`ci-fast`. Any task adding a doctest should spend the ~2 s of
+`cargo test -p <crate> --doc` rather than discover it four minutes into the
+gate. This is the twin of Task 6's note about `just c` being blind to rustdoc.
+
+**For Task 14, three corrections and one issue, on top of what earlier tasks
+already queued.** ADR 0049 line ~75 enumerates `sync.plan_done` as "the
+`plan_hash`, the counters, the blockers and `executable`" — it now also carries
+`dest_trash` — and line ~101 still says the approval dialog "leads with a count
+of irreversible steps", which this task proved insufficient: a copy-only plan
+against a trash-less destination has `irreversible == 0` and gives nothing back.
+The ADR should say the dialog leads with `dest_trash`. Also worth an issue:
+`SyncReportResult` carries no trash information, so a client that lost
+`sync.plan_done` cannot tell after the fact whether a batch is recoverable
+(`PolicyUndoReportResult::skipped_created_no_trash` only answers once the undo
+has run). Not worth a field today — the applying client holds the `done` — and
+the two rustdocs now cross-reference so the gap is a decision.
+
+**Two binaries at 0.40.0 from different commits of this branch are not
+interchangeable**: `SyncPlanDone` gained a required field mid-branch, and
+`version_compatible` cannot see a change that does not move the number. A new
+client against an old daemon fails to decode the close and waits forever for a
+plan that never closes. Recorded in the `PROTOCOL_VERSION` doc so nobody
+diagnoses it as a hang.
 
 ---
 

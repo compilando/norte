@@ -659,6 +659,82 @@ compare-filter-different = different
 compare-filter-only-left = only left
 compare-filter-only-right = only right
 compare-filter-problems = problems
+
+# --- Directory synchronisation (2026-08-11-directory-sync.md) ---
+# The approval dialog's vocabulary. The rule every string here obeys: a step's
+# `reversal` column says how it WOULD come back, and only the destination's
+# trash says whether it will. A copy onto a destination with no trash is sent
+# as `delete` and the undo skips it — so nothing here promises a step comes
+# back without saying which destination that is true of.
+sync-step-create-dir = create directory
+sync-step-copy = copy
+sync-step-overwrite = overwrite
+sync-step-delete-tree = delete
+sync-step-skip = leave alone
+sync-step-unknown = step this version does not know
+# Neutral on PURPOSE: on an overwrite the undo brings the old file back, on a
+# copy it removes the new one. "Puts it back" reads as the first in both.
+sync-undo-reverts = the undo reverses it
+sync-undo-left-behind = undo leaves it there
+sync-undo-irreversible = cannot be undone
+sync-undo-nothing = nothing to undo
+sync-undo-unclear = this version cannot say
+sync-reason-ambiguous-source = two names on the source collapse into one — neither is copied
+sync-reason-unknown-confidence = the provider could not tell the two sides apart
+sync-reason-unreadable = it could not be read, so the plan leaves it alone
+# Covers BOTH "there is no trash" and "there is one that cannot say where it
+# put things" (macOS, Windows): the wire token does not separate them, so this
+# sentence must not claim either.
+sync-reason-no-trash-on-target = the destination cannot give this back: it has no trash, or one that does not say where it puts things
+sync-reason-unknown = reason this version does not know
+sync-blocker-ambiguous-dest = two names on the destination collapse into one — writing there could hit the wrong file
+sync-blocker-overlap-detected = the two roots are the same tree
+sync-blocker-dest-read-only = the destination does not take writes
+sync-blocker-dir-too-large = a directory on the destination is over the entry limit
+sync-blocker-type-mismatch-dir = a directory on one side is a file on the other
+sync-blocker-unknown = blocker this version does not know
+# The headline: what the undo would give back if this plan ran. "Can be
+# undone" is a statement about the PLAN, never a guarantee per entry — an
+# entry the trash cannot name, or a path that changed in the meantime, is
+# named in the undo report instead of being touched.
+sync-outlook-full = you can undo all of this afterwards, except anything that changes in the meantime
+sync-outlook-partial = some of this can be undone afterwards, and some cannot
+sync-outlook-nothing = nothing here can be undone by norte
+sync-outlook-unclear = this version cannot tell whether any of this can be undone
+# Which destination this is. Same outlook, very different news: in the first
+# the file is sitting in the system trash, in the second it is gone.
+sync-trash-restorable = the destination's trash names what it buries, so the undo can find it again
+sync-trash-opaque = the destination's trash does not say where it puts things: what this replaces is recoverable by hand from the system trash, but not by norte
+sync-trash-absent = the destination has no trash: what this replaces or deletes is not kept anywhere
+sync-trash-unknown = this version does not know what kind of trash the destination has
+sync-summary-irreversible = { $n } steps are irreversible: nothing brings them back
+sync-summary-actions = { $copy } to copy · { $overwrite } to overwrite · { $createdir } directories to create · { $deletetree } to delete · { $skip } left alone
+sync-summary-bytes = { $bytes } to write
+# `bytes` is a LOWER BOUND, never a total: a listing on file:// gives no sizes
+# at all, so a confident number is the normal way to lie here.
+sync-summary-bytes-partial = { $bytes } to write, plus { $n } files whose size the provider did not give
+# A directory that would not list is ONE entry here, and everything inside it
+# is unseen — hence "and whatever is inside them".
+sync-summary-unreadable = { $n } entries could not be read: neither they nor anything inside them is covered by this plan
+# The steps that arrived do not add up to what the plan closed with.
+sync-summary-mismatch = { $received } steps arrived and the plan says { $n }: this plan cannot be approved
+sync-summary-unnameable = { $n } steps are of a kind this version cannot show: this plan cannot be approved
+sync-summary-malformed = { $n } steps contradict themselves: this plan cannot be approved
+# The classes add up and a number the dialog leads with does not.
+sync-summary-contradictory = the plan's own totals do not match the steps it sent: this plan cannot be approved
+# Blockers are never filtered by the selection, so this is about the whole
+# comparison and not about what is on screen.
+sync-summary-blocked = { $n } blockers stop this plan — anywhere in the two trees, not only in what you selected
+# One question per outlook, saying exactly what the summary said: a headline
+# that reads "some of this can be undone" over a confirmation that reads "none
+# of it can" teaches the reader to skip both.
+sync-confirm-delete = { $n } trees will be deleted from the destination. They go to the trash and can be restored. Continue?
+sync-confirm-delete-final = { $n } trees will be deleted from the destination and CANNOT be restored afterwards. Continue?
+sync-confirm-delete-partial = { $n } trees will be deleted from the destination, and { $steps } steps of this plan cannot be undone afterwards. Continue?
+sync-confirm-delete-unclear = { $n } trees will be deleted from the destination, and this version cannot tell whether they could be restored. Continue?
+sync-confirm-no-way-back = { $n } steps will change the destination and none of them can be undone afterwards. Continue?
+sync-confirm-partial = { $n } steps of this plan cannot be undone afterwards. Continue?
+sync-confirm-unclear = this version cannot tell whether these { $n } changes can be undone afterwards. Continue?
 on-yes = on
 on-no = off
 

@@ -16,8 +16,9 @@ use bytes::Bytes;
 use norte_core::sync::{Spool, SyncPlanEvent};
 use norte_core::{Actor, Engine};
 use norte_proto::methods::{
-    RelPath, SYNC_MAX_BLOCKERS_REPORTED, SYNC_MAX_INCLUDE, SYNC_STEPS_MAX_BATCH, SyncBlockerKind,
-    SyncCompareOptions, SyncMode, SyncPlanDone, SyncPlanParams, SyncStep, SyncStepKind,
+    DestTrash, RelPath, SYNC_MAX_BLOCKERS_REPORTED, SYNC_MAX_INCLUDE, SYNC_STEPS_MAX_BATCH,
+    StepReversal, SyncBlockerKind, SyncCompareOptions, SyncMode, SyncPlanDone, SyncPlanParams,
+    SyncStep, SyncStepKind,
 };
 use norte_proto::{Error as ProtoError, RootOverlap, TaskState, VPath};
 use norte_testkit::MemProvider;
@@ -48,9 +49,16 @@ async fn mkdir(mem: &MemProvider, wire: &str) {
 /// El `TempDir` se devuelve para que viva lo que dure el test: al soltarlo se
 /// borra el directorio de spools con él.
 fn setup() -> (Engine, Arc<MemProvider>, tempfile::TempDir) {
+    setup_with(MemProvider::new())
+}
+
+/// El mismo montaje sobre un provider ya configurado: lo que cambia entre las
+/// variantes es la PAPELERA del destino, que es lo único que decide si un plan
+/// se puede deshacer.
+fn setup_with(mem: MemProvider) -> (Engine, Arc<MemProvider>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let engine = Engine::new();
-    let mem = Arc::new(MemProvider::new());
+    let mem = Arc::new(mem);
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
     engine.set_spool(Spool::new(dir.path()));
     (engine, mem, dir)
@@ -193,6 +201,58 @@ async fn el_plan_cierra_con_hash_contadores_y_executable() {
         out.steps()
             .iter()
             .all(|s| s.kind == SyncStepKind::Copy && s.reversal.is_some())
+    );
+}
+
+/// El cierre dice qué PAPELERA tiene el destino, que es lo único que
+/// distingue un plan que se puede deshacer de otro idéntico que no.
+///
+/// Los dos planes de este test tienen los mismos pasos sobre los mismos
+/// ficheros; lo que cambia es si el undo va a devolver algo. Sin este campo el
+/// diálogo de aprobación no lo podría decir (spec 2, tarea 12).
+#[tokio::test]
+async fn el_cierre_dice_que_papelera_tiene_el_destino() {
+    // `MemProvider` declara papelera y no promete restaurar: es la papelera
+    // MUDA de macOS y Windows, donde no vuelve ni una copia.
+    let (engine, mem, _dir) = setup();
+    simple(&mem).await;
+    let out = plan(&engine, params("mem:///s", "mem:///d")).await;
+    assert_eq!(out.done().dest_trash, DestTrash::Opaque);
+    assert!(
+        out.steps()
+            .iter()
+            .all(|s| s.reversal == Some(StepReversal::Irreversible)),
+        "con una papelera muda no vuelve ni una copia: {:#?}",
+        out.steps()
+    );
+
+    // Y con la papelera lógica, la MISMA comparación se deshace entera.
+    let (engine, mem, _dir2) = setup_with(MemProvider::new().with_logical_trash());
+    simple(&mem).await;
+    let out = plan(&engine, params("mem:///s", "mem:///d")).await;
+    assert_eq!(out.done().dest_trash, DestTrash::Restorable);
+    assert!(
+        out.steps()
+            .iter()
+            .all(|s| s.reversal == Some(StepReversal::Delete))
+    );
+
+    // Y sin papelera NINGUNA —un bucket, un SFTP—, que es el caso por el que
+    // el campo existe: la copia sigue anunciando `delete` en el wire y el undo
+    // se la va a saltar, así que el cierre es lo ÚNICO que distingue este plan
+    // del de arriba. Los dos llevan los mismos pasos con la misma reversa.
+    let sin_papelera = norte_proto::CapabilityFlags::CASE_SENSITIVE
+        | norte_proto::CapabilityFlags::CASE_PRESERVING;
+    let (engine, mem, _dir3) = setup_with(MemProvider::with_flags(sin_papelera));
+    simple(&mem).await;
+    let out = plan(&engine, params("mem:///s", "mem:///d")).await;
+    assert_eq!(out.done().dest_trash, DestTrash::Absent);
+    assert!(
+        out.steps()
+            .iter()
+            .all(|s| s.reversal == Some(StepReversal::Delete)),
+        "la copia anuncia `delete` sin papelera de la que volver: {:#?}",
+        out.steps()
     );
 }
 

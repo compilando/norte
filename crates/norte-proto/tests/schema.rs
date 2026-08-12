@@ -43,6 +43,7 @@ struct ProtocolSchema {
     decoration_wire: DecorationWire,
     delete_mode: DeleteMode,
     descend_side: DescendSide,
+    dest_trash: DestTrash,
     entry: Entry,
     entry_kind: EntryKind,
     error: Error,
@@ -356,6 +357,7 @@ fn el_schema_del_vocabulario_de_sync_cubre_las_goldens() {
         ("SyncBlockerKind", "sync_blocker.json", "", "kind"),
         ("SyncFailureCause", "methods.json", "sync_", "cause"),
         ("SyncMode", "methods.json", "sync_", "mode"),
+        ("DestTrash", "methods.json", "sync_plan_done", "dest_trash"),
         ("OnUnknown", "methods.json", "sync_", "on_unknown"),
         ("RootOverlap", "error.json", "overlapping_roots", "relation"),
     ] {

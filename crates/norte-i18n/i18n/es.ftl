@@ -670,6 +670,83 @@ compare-filter-different = distintas
 compare-filter-only-left = solo izq.
 compare-filter-only-right = solo der.
 compare-filter-problems = problemas
+
+# --- Sincronización de directorios (2026-08-11-directory-sync.md) ---
+# El vocabulario del diálogo de aprobación. La regla que cumple cada cadena de
+# aquí: la columna `reversal` de un paso dice cómo VOLVERÍA, y solo la papelera
+# del destino dice si va a volver. Una copia sobre un destino sin papelera
+# viaja como `delete` y el undo se la salta — así que aquí nada promete que un
+# paso vuelve sin decir sobre qué destino eso es verdad.
+sync-step-create-dir = crear directorio
+sync-step-copy = copiar
+sync-step-overwrite = sobrescribir
+sync-step-delete-tree = borrar
+sync-step-skip = dejar como está
+sync-step-unknown = paso que esta versión no conoce
+# Neutral A PROPÓSITO: en una sobrescritura el undo trae de vuelta el fichero
+# viejo, y en una copia BORRA el nuevo. «Lo devuelve» se lee como lo primero en
+# los dos casos.
+sync-undo-reverts = el undo lo revierte
+sync-undo-left-behind = el undo lo deja donde está
+sync-undo-irreversible = no se puede deshacer
+sync-undo-nothing = no hay nada que deshacer
+sync-undo-unclear = esta versión no lo puede decir
+sync-reason-ambiguous-source = dos nombres del origen colapsan en uno — no se copia ninguno
+sync-reason-unknown-confidence = el provider no pudo distinguir los dos lados
+sync-reason-unreadable = no se pudo leer, así que el plan lo deja como está
+# Cubre LOS DOS casos —no hay papelera, o la hay y no dice dónde deja las cosas
+# (macOS, Windows)—: el token del wire no los separa, así que esta frase no
+# puede afirmar ninguno de los dos.
+sync-reason-no-trash-on-target = el destino no puede devolver esto: no tiene papelera, o tiene una que no dice dónde deja las cosas
+sync-reason-unknown = motivo que esta versión no conoce
+sync-blocker-ambiguous-dest = dos nombres del destino colapsan en uno — escribir ahí podría dar al fichero equivocado
+sync-blocker-overlap-detected = las dos raíces son el mismo árbol
+sync-blocker-dest-read-only = el destino no admite escrituras
+sync-blocker-dir-too-large = un directorio del destino pasa del límite de entradas
+sync-blocker-type-mismatch-dir = un directorio de un lado es un fichero en el otro
+sync-blocker-unknown = bloqueo que esta versión no conoce
+# El titular: qué devolvería el undo si este plan se aplica. «Se puede
+# deshacer» habla del PLAN, jamás es una garantía por entrada — una entrada que
+# la papelera no sepa nombrar, o una ruta que haya cambiado entretanto, se
+# NOMBRA en el informe del undo en vez de tocarla.
+sync-outlook-full = todo esto se puede deshacer después, salvo lo que cambie entretanto
+sync-outlook-partial = parte de esto se puede deshacer después y parte no
+sync-outlook-nothing = nada de esto lo puede deshacer norte
+# De qué destino se trata. El mismo pronóstico y dos noticias muy distintas: en
+# la primera el fichero está en la papelera del sistema, en la segunda no está.
+sync-trash-restorable = la papelera del destino nombra lo que entierra, así que el undo lo sabe encontrar
+sync-trash-opaque = la papelera del destino no dice dónde deja las cosas: lo que esto sustituya se puede rescatar A MANO desde la papelera del sistema, pero norte no
+sync-trash-absent = el destino no tiene papelera: lo que esto sustituya o borre no se guarda en ningún sitio
+sync-trash-unknown = esta versión no sabe qué clase de papelera tiene el destino
+sync-outlook-unclear = esta versión no puede decir si algo de esto se podrá deshacer
+sync-summary-irreversible = { $n } pasos son irreversibles: no los devuelve nada
+sync-summary-actions = { $copy } a copiar · { $overwrite } a sobrescribir · { $createdir } directorios a crear · { $deletetree } a borrar · { $skip } sin tocar
+sync-summary-bytes = { $bytes } a escribir
+# `bytes` es una COTA INFERIOR, jamás un total: un listado sobre file:// no da
+# tamaños, así que un número con aplomo es la forma normal de mentir aquí.
+sync-summary-bytes-partial = { $bytes } a escribir, más { $n } ficheros cuyo tamaño el provider no dio
+# Un directorio que no se dejó listar es UNA entrada aquí, y todo lo que hay
+# dentro se queda sin ver — de ahí «ni lo que hay dentro».
+sync-summary-unreadable = { $n } entradas no se pudieron leer: este plan no las cubre ni a ellas ni a lo que haya dentro
+# Los pasos que llegaron no cuadran con lo que el plan cerró.
+sync-summary-mismatch = llegaron { $received } pasos y el plan dice { $n }: este plan no se puede aprobar
+sync-summary-unnameable = { $n } pasos son de una clase que esta versión no sabe enseñar: este plan no se puede aprobar
+sync-summary-malformed = { $n } pasos se contradicen a sí mismos: este plan no se puede aprobar
+# Las clases cuadran y un número de los que el diálogo enseña primero, no.
+sync-summary-contradictory = las cuentas del propio plan no cuadran con los pasos que mandó: este plan no se puede aprobar
+# La selección no recorta los bloqueos, así que esto habla de la comparación
+# entera y no de lo que hay en pantalla.
+sync-summary-blocked = { $n } bloqueos impiden este plan — en cualquier punto de los dos árboles, no solo en lo que seleccionaste
+# Una pregunta por pronóstico, diciendo lo MISMO que dijo el resumen: un
+# titular que dice «parte se puede deshacer» encima de una confirmación que
+# dice «no se puede deshacer nada» enseña a saltarse las dos.
+sync-confirm-delete = se van a borrar { $n } árboles del destino. Van a la papelera y se pueden restaurar. ¿Seguir?
+sync-confirm-delete-final = se van a borrar { $n } árboles del destino y NO se van a poder restaurar. ¿Seguir?
+sync-confirm-delete-partial = se van a borrar { $n } árboles del destino, y { $steps } pasos de este plan no se van a poder deshacer. ¿Seguir?
+sync-confirm-delete-unclear = se van a borrar { $n } árboles del destino, y esta versión no puede decir si se podrían restaurar. ¿Seguir?
+sync-confirm-no-way-back = { $n } pasos van a cambiar el destino y ninguno se va a poder deshacer. ¿Seguir?
+sync-confirm-partial = { $n } pasos de este plan no se van a poder deshacer. ¿Seguir?
+sync-confirm-unclear = esta versión no puede decir si estos { $n } cambios se van a poder deshacer. ¿Seguir?
 on-yes = sí
 on-no = no
 

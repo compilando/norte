@@ -827,12 +827,14 @@ fn golden_methods() {
     // (que es la que congela los defaults), más el lote y su forma vacía. La
     // FILA tiene fichero propio (`compare_row.json`): su familia pinea una
     // forma por veredicto.
-    // 130 → 141 en 0.40.0 (ADR 0049): + sync_plan_params(/_minimo),
-    // sync_steps_batch(/_empty), sync_plan_done(/_blocked), sync_apply_params,
-    // sync_report_params y sync_report_result(/_clean/_died). El PASO y el
-    // BLOQUEO tienen fichero propio (`sync_step.json`, `sync_blocker.json`):
-    // sus familias pinean una forma por clase.
-    assert_eq!(fixtures.len(), 141, "[methods.json] fixtures sin caso Rust");
+    // 130 → 142 en 0.40.0 (ADR 0049): + sync_plan_params(/_minimo),
+    // sync_steps_batch(/_empty), sync_plan_done(/_blocked/_opaque),
+    // sync_apply_params, sync_report_params y
+    // sync_report_result(/_clean/_died). El PASO y el BLOQUEO tienen fichero
+    // propio (`sync_step.json`, `sync_blocker.json`): sus familias pinean una
+    // forma por clase. Los TRES cierres de plan son las tres papeleras
+    // ([`DestTrash`]), que es lo que decide si el plan se puede deshacer.
+    assert_eq!(fixtures.len(), 142, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `fs.rename_batch*` (0.36.0): las PETICIONES de plan y de ejecución.
@@ -2250,8 +2252,8 @@ fn check_methods_sync(fixtures: &BTreeMap<String, Value>) {
 /// Las dos NOTIFICACIONES del plan: los lotes de pasos y el cierre.
 fn check_methods_sync_notifs(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
-        CompareConfidence, CompareCriterion, Side, StepReversal, SyncBlocker, SyncBlockerKind,
-        SyncCounts, SyncPlanDone, SyncStep, SyncStepKind, SyncStepsBatch,
+        CompareConfidence, CompareCriterion, DestTrash, Side, StepReversal, SyncBlocker,
+        SyncBlockerKind, SyncCounts, SyncPlanDone, SyncStep, SyncStepKind, SyncStepsBatch,
     };
     check_one(
         fixtures,
@@ -2297,6 +2299,11 @@ fn check_methods_sync_notifs(fixtures: &BTreeMap<String, Value>) {
                 // daemon N+1 es el único que lo llena, y el golden tiene que
                 // enseñar que la clave viaja.
                 unknown_kind: 2,
+                // Igual que `unknown_kind`: un `irreversible` junto a una
+                // papelera restaurable NO lo produce este core —`reversal_for`
+                // no marca irreversible lo que la papelera puede devolver—, así
+                // que esta fixture es la forma de un daemon N+1, congelada a
+                // propósito para que un cliente sepa leerla.
                 irreversible: 1,
                 bytes: 4096,
                 unmeasured_steps: 7,
@@ -2304,6 +2311,9 @@ fn check_methods_sync_notifs(fixtures: &BTreeMap<String, Value>) {
             blockers: vec![],
             blockers_total: 0,
             executable: true,
+            // La papelera que SÍ devuelve las cosas: es lo que hace verdad el
+            // `delete`/`restore_trash` de los pasos de este mismo plan.
+            dest_trash: DestTrash::Restorable,
         },
     );
     check_one(
@@ -2324,6 +2334,32 @@ fn check_methods_sync_notifs(fixtures: &BTreeMap<String, Value>) {
             }],
             blockers_total: 300,
             executable: false,
+            // Y la que no existe: el `copy` de arriba dice `delete` y aun así
+            // no volvería (el undo lo salta). El golden congela la pareja
+            // porque es la que un diálogo no puede distinguir sin este campo.
+            dest_trash: DestTrash::Absent,
+        },
+    );
+    // La tercera papelera: la de macOS y Windows, que entierra sin decir dónde.
+    // Ahí NINGÚN paso es reversible —ni una copia— y por eso `irreversible`
+    // iguala a la suma de las clases que actúan.
+    check_one(
+        fixtures,
+        "sync_plan_done_opaque",
+        &SyncPlanDone {
+            task_id: TaskId::new(9),
+            plan_hash: plan_hash(&"3".repeat(64)),
+            counts: SyncCounts {
+                copy: 1,
+                overwrite: 1,
+                irreversible: 2,
+                bytes: 20,
+                ..SyncCounts::default()
+            },
+            blockers: vec![],
+            blockers_total: 0,
+            executable: true,
+            dest_trash: DestTrash::Opaque,
         },
     );
 }

@@ -1895,6 +1895,49 @@ fn an_unknown_step_kind_degrades_instead_of_killing_the_batch() {
     );
 }
 
+/// La papelera del destino va daemon→client, así que degrada — y lo que
+/// degrada no promete nada: `restores()` es `false` para el valor desconocido,
+/// que es la dirección segura (un diálogo que no sabe si algo vuelve no puede
+/// decir que vuelve).
+#[test]
+fn an_unknown_dest_trash_degrades_and_promises_nothing() {
+    use norte_proto::methods::DestTrash;
+    let t: DestTrash = serde_json::from_value(serde_json::json!("quantum")).expect("degrada");
+    assert_eq!(t, DestTrash::Unknown);
+    assert!(!t.restores());
+    // Y las tres respuestas de verdad, con la única que devuelve algo aparte.
+    assert!(DestTrash::Restorable.restores());
+    assert!(!DestTrash::Opaque.restores());
+    assert!(!DestTrash::Absent.restores());
+}
+
+/// El cierre de un plan SIN `dest_trash` no se decodifica, y eso es
+/// deliberado: un default sería inventar si algo se puede deshacer. La misma
+/// decisión que los contadores nuevos de `SyncCounts` en el spool, pinada aquí
+/// para que quitarla cueste borrar un test.
+#[test]
+fn a_plan_that_does_not_say_which_trash_the_destination_has_is_refused() {
+    use norte_proto::methods::SyncPlanDone;
+    let mut v = serde_json::json!({
+        "task_id": 7,
+        "plan_hash": "1".repeat(64),
+        "counts": {
+            "create_dir": 0, "copy": 1, "overwrite": 0, "delete_tree": 0,
+            "skip": 0, "unknown_kind": 0, "irreversible": 0, "bytes": 10,
+            "unmeasured_steps": 0
+        },
+        "blockers": [],
+        "blockers_total": 0,
+        "executable": true
+    });
+    assert!(
+        serde_json::from_value::<SyncPlanDone>(v.clone()).is_err(),
+        "sin papelera declarada no hay plan que aprobar"
+    );
+    v["dest_trash"] = serde_json::json!("absent");
+    serde_json::from_value::<SyncPlanDone>(v).expect("con ella, sí");
+}
+
 /// Client→daemon: aceptar un modo desconocido por defecto es aceptar borrar
 /// por defecto. Muere en el DESERIALIZADOR, que es más fuerte que cualquier
 /// chequeo que un handler pueda olvidar.
