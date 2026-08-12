@@ -86,12 +86,12 @@ normatively **absent** on `Skip` and `DeleteTree`.
   descended row carries no size. Hydrating costs 2N chained round trips over a
   network mount (#156) and would put provider I/O inside a transducer whose
   whole value is that it has none. So **`SyncCounts` gains
-  `bytes_unknown: u64`** — how many steps carry no size — and the approval
+  `unmeasured_steps: u64`** — how many steps carry no size — and the approval
   dialog reads "1.2 GB + 340 files of unknown size" rather than a confident
   zero. This is the rule ADR 0048 already set for this feature: "the provider
   cannot say" is an answer, not an error, and it never hides inside a number
   that looks certain. Hydration stays available as a later optimisation under
-  #156, and it would only shrink `bytes_unknown`, never change the shape.
+  #156, and it would only shrink `unmeasured_steps`, never change the shape.
   Proto 0.40.0 is unreleased on this branch, so the field costs nothing.
   Task 6 counts it, Task 12 renders it.
 - **The container row of a descended orphan still comes out**, before its
@@ -453,7 +453,7 @@ child-immediately-after-parent.
   found the hole: a step of a kind this decoder does not know counted in no
   counter at all, so a client at version N summing a daemon N+1's batches would
   under-report the size of the plan it is approving — the same lie
-  `bytes_unknown` exists to prevent, one field over. The core never emits it
+  `unmeasured_steps` exists to prevent, one field over. The core never emits it
   (its own `match` is exhaustive), so it is zero in every plan this binary
   produces. Free now, a compatibility argument after 0.40.0 ships.
   `SyncCounts::exact_bytes()` also landed: the `Option<u64>` that `bytes`
@@ -464,15 +464,15 @@ child-immediately-after-parent.
   two spellings of one hash compare differently. **`norte-core` still has its
   own** (`hashing::hex_lower`, shared with the journal and the audit export);
   moving it is Task 14's call, not a silent edit of ADR 0023's neighbourhood.
-- **The name `bytes_unknown` was challenged by BOTH reviewers and kept.** On the
-  wire it reads as "7 bytes we do not know" rather than "7 steps we could not
-  measure" (`unmeasured_steps` was the proposal). Kept because the plan records
-  the name under "What Task 2 changed", Task 12's dialog text is written around
-  it, and the unit is stated in the field doc, in the schema description and now
-  in the invariant `bytes_unknown <= copy + overwrite`. **The window is still
-  open** — 0.40.0 does not ship until this branch merges — so it is a one-line
-  rename plus goldens if the controller prefers the clearer name. This is the
-  one MAJOR of the two reviews that was not applied.
+- **`bytes_unknown` is renamed to `unmeasured_steps` — Task 7 lands it.** Both
+  reviewers challenged the name independently and both are right: on the wire,
+  next to `bytes`, it reads as "7 bytes we do not know" rather than "7 steps we
+  could not measure". Task 6 kept it only because this plan had pinned it, which
+  is not a reason. The name came from the controller, and the controller is
+  changing it: 0.40.0 does not ship until this branch merges, so it is a
+  one-line rename plus goldens now and a permanent wart later. Task 12's dialog
+  text follows the field. The invariant becomes
+  `unmeasured_steps <= copy + overwrite`.
 - **`rel_never_escapes` is stronger than the plan wrote it.** `VPath` has no
   `join_rel` and no `starts_with`, and the property as drafted was a tautology
   anyway (joining a `RelPath` onto a root cannot leave it — `Segment` forbids
@@ -522,6 +522,17 @@ Follow `CLAUDE.md`. Per-task loop: `just t <crate>` (plus `just c` when you
 touched lint surface). `just ci-fast` **once** after tasks 6, 9 and 12.
 `just ci` **once**, at task 14. Never re-run the gate to check whether a fix
 worked — reproduce the single failure with `just t <crate>`.
+
+**`just c` cannot see a rustdoc error.** Task 5 left three
+`rustdoc::redundant_explicit_links` on the branch that clippy is blind to and
+that would have turned any later task's `ci-fast` red for reasons that task
+did not cause. Before committing, run
+
+```sh
+RUSTDOCFLAGS="-D warnings" cargo doc -p <crate> --no-deps
+```
+
+It costs about ten seconds and it is the cheapest insurance on this branch.
 
 ## File structure
 
@@ -1459,7 +1470,7 @@ fn a_step_with_no_size_is_counted_apart_and_never_as_zero() {
     c.add(&copy_step_without_size("unknown-a"));
     c.add(&copy_step_without_size("unknown-b"));
     assert_eq!(c.bytes, 10);
-    assert_eq!(c.bytes_unknown, 2);
+    assert_eq!(c.unmeasured_steps, 2);
     assert_eq!(c.copy, 3, "an unmeasured file is still a file to copy");
 }
 
@@ -2206,7 +2217,7 @@ fn the_summary_leads_with_the_irreversible_count_on_its_own_line() {
 #[test]
 fn unmeasured_files_are_shown_and_never_folded_into_the_byte_total() {
     let s = SyncState::ready(done_with(SyncCounts {
-        copy: 5, bytes: 1_200_000_000, bytes_unknown: 340, ..d()
+        copy: 5, bytes: 1_200_000_000, unmeasured_steps: 340, ..d()
     }));
     let lines = s.summary_lines();
     assert!(lines.iter().any(|l| l.contains("340")),
