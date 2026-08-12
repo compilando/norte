@@ -36,7 +36,8 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 10 — `sync.apply`, `sync.report`, the `Backend` | done | `15a36f3` (cross-provider tests) + `40f87d5` |
 | 11 — `revert_sync_batch` | done | `9c3853d` |
 | 11b — una papelera que dice dónde puso las cosas | done | `9f88a2c` |
-| 12 — the frontend model | done | (este commit) |
+| 12 — the frontend model | done | `286ca2c` |
+| 13 — the TUI surface, the keymap and the strings | done | (este commit) |
 
 **The embedded TUI does not synchronise, and Task 13 says so out loud.**
 `make_backend` builds `Engine::new()` — no journal, no spool — and Task 9 made
@@ -1589,6 +1590,146 @@ interchangeable**: `SyncPlanDone` gained a required field mid-branch, and
 client against an old daemon fails to decode the close and waits forever for a
 plan that never closes. Recorded in the `PROTOCOL_VERSION` doc so nobody
 diagnoses it as a hang.
+
+### What Task 13 changed in this plan
+
+**Three of the task's own step-1 tests could not be written as drafted, and two
+of the three are the plan being wrong rather than the code.**
+
+- **`Error::OverlappingRoots`'s field is `relation`, not `overlap`** — the
+  snippet does not compile. And one Fluent id is not enough: `Same` is fixed by
+  choosing another directory, the other two by leaving the tree that contains
+  the other, so there are FOUR ids (`err-overlapping-roots{,-same,-source-inside,-dest-inside}`),
+  the bare one being the fallback for a relation a newer daemon invents. It
+  rendered as `err-unknown` before, not `err-internal`; the test asserts against
+  both.
+- **`every_preset_maps_pane_sync_dirs` is refused, deliberately.** `far` and
+  `norton` bind `pane.compare-dirs` to nothing, each for a fidelity rule its own
+  file states — Far's synchroniser is a plugin, NC had none — and a test
+  demanding "every preset" would undo those two comments without discussing
+  them. The shipped test is
+  `sincronizar_esta_ligado_dondequiera_que_lo_este_comparar`, whose exemption
+  list is hand-written and asserted BOTH ways, so a preset that later binds
+  either fails loudly. **Task 14 should record the narrowing rather than let it
+  be inferred.**
+- **`ComparePane` had no multi-selection.** "First-class selection anchored to
+  the row id" is the CURSOR (`selected: Option<u64>`); seeding `include` needs a
+  mark SET, which is new (`marked: BTreeSet<u64>`, `Ins` in the pane, `*` in the
+  gutter, the count in the frame's foot). It went next to `selected` in
+  `norte-frontend`, and its count includes rows a filter is hiding — hiding a
+  category must not silently unpick what is about to be synchronised.
+
+**`RelPath::under` now lives in `norte-proto`, and that is the shape the
+duplication should converge on.** `norte_sync::plan::rel_under` was private, and
+`include_from_rows` needs the same measurement — a fourth hand-written copy of
+"is this path under that root, by segments" was the alternative (there are
+already three of the boolean twin: `norte-core/src/engine.rs`,
+`norte-core/src/policy.rs`, `norte-sync/src/plan.rs`). `norte-proto` is where
+`VPath`, `RelPath` and `Segment` all live. **Not a wire change** —
+protocol-guardian confirmed: no field, no variant, no serde attribute, no
+`PROTOCOL_VERSION` bump, no golden, no schema regeneration; `RelPath`'s
+`JsonSchema` impl is hand-written and cannot see a method. **Task 14 should file
+the issue for collapsing the three boolean copies onto
+`RelPath::under(..).is_some()`** — the reviewer's finding is three quarters
+open, not closed.
+
+**Where the `include` decision ended up, and why it moved.** It started in
+`norte-tui::app` on the `request_compare` precedent and the reviewer was right
+to reject that: `request_compare` clones two `VPath`s, while this decides which
+root each row is measured against — the request-side twin of
+`norte_frontend::sync::anchor_of`. It is now
+`norte_frontend::sync::include_from_rows`, next to `anchor_of` so the two
+answers cannot drift, and it **refuses** three ways rather than narrowing
+(`IncludeError::{TooMany, Unrooted, RootSelected}`). The root one matters:
+`RelPath::under`'s rustdoc delegates that check to its caller, and a root entry
+in `include` makes `IncludeFilter::everything` true — one such mark would turn
+"these two rows" into a whole-tree `Mirror`. The empty-list case is the same
+trap wearing a hat: silently dropping unrooted marks yields `Some(vec![])`,
+which is a plan of zero steps, which the pane paints as "the two trees already
+agree". A lie on the screen that authorises writes.
+
+**`pane.sync-dirs` is `Live` in the catalogue and dimmed at RUNTIME.** Not
+`Planned`: it is built. The fact that stops it is about the SESSION, so it is
+`Facts::journalled` + `Reason::NeedsDaemon` in
+`norte_frontend::availability` — an impediment of BACKEND, which is the class
+that table models, and not one of state (it does not change with the next
+keystroke; the reader has to start norte differently). `keymap-reason-sync` was
+deleted from both locales, since nothing claims it now — the same disposal
+`keymap-reason-shell` got. The reference sheet shows `Ctrl+y` with its label AND
+the reason, verified under tmux.
+
+**The default binding is `ctrl+y`, in the four presets that take `shift+f2` for
+comparing**, joining Krusader which already had it — the only reference manager
+that gives the feature a chord at all. Not a modified function key (#159).
+Inside the diff pane it is `s` (Update) and `m` (Mirror), plain letters, because
+that pane owns the whole keyboard.
+
+**What the reviews changed, and the blocker was the state machine.**
+
+- **`a` on an already-approved plan re-sent the same hash.**
+  `SyncPlan::can_approve()` keeps answering yes after the plan is spent — none
+  of its three factors changes — and `SyncState::plan()` returns the same plan
+  in `Applying` and `Applied`. The spool answered `PlanStale` (so no double
+  execution, which is Task 7's registry earning its keep), but the error arm
+  painted "the plan failed" over a synchronisation that was still WRITING, and
+  because that leaves `run != Running` the next `Esc` cancelled it half-done
+  believing it was closing a failure. Both gates now read
+  `SyncState::can_approve`. **The lesson for any frontend: `SyncPlan` answers
+  about the PLAN, `SyncState` about the moment.**
+- **The second question outlived a `Ctrl+r`.** The modifier filters ran before
+  the `confirming` check, so a habitual `Ctrl+r` or `Alt+e` fell into `Ignore`
+  and left "2 trees will be deleted… Continue?" armed, waiting for a `y` that no
+  longer knew what it answered. The question is now resolved before the filters,
+  with `Ctrl+C` and `Esc` as the two documented exceptions, and `CancelTask`
+  drops it too.
+- **A dead watch sender was treated as a tick**, which would have spun the
+  `select!` arm on a future that is immediately ready. It is now a terminal
+  outcome, and one with no known desenlace is `Failed` rather than `Done`:
+  saying "done" over half a synchronisation is the worse of the two lies.
+- **`dest_rel` was reinterpreted with the SOURCE's codepage.** It exists to name
+  the destination's own spelling (#152) — the write lands on it — so the pane now
+  carries both encodings, and so does the title.
+- **MINORs skipped, with reasons.** (1) A confirmation opened in a frame under
+  five rows is armed but unpainted; the border still turns `Warning`, `y` is
+  still required, and a frame that short hides the plan itself, which is the
+  bigger and pre-existing problem. (2) `wrapped_rows` is a lower bound on what
+  word wrapping produces, so it now adds one row of slack whenever a line wraps
+  at all rather than simulating the wrap. (3) `norte-gui` still hardcodes
+  `journalled: true`; it is remote-only today, so the literal is correct, and
+  giving it `Backend::is_journalled()` is GUI work — see the debt below.
+
+**The apply Task is not on the task board**, because `TaskRef` is not `Clone`
+and the board would take it, leaving the pane — the only place a reader can stop
+an approved plan — with nothing to cancel. Worth an issue: an applying sync is
+invisible unless the pane stays open.
+
+**Two things the tmux harness caught that the green suite did not**, which is
+the third time this repo records that sentence. The summary lines were being cut
+mid-sentence at 80 columns (the destination-trash line, the one whose whole job
+is to say what will not come back); the confirmation replaced the hint line and
+so hid the key that answers it; the pane painted a placeholder string while
+steps were arriving, under a foot already counting them; and the hint went on
+offering "a approve" over a plan already applied. Two snapshots
+(`snapshot_sync_pane_{update_con_papelera,mirror_sin_papelera}`) now pin the
+composition — including the `Absent` trash wording, which a Linux box **cannot**
+produce: `norte-vfs-local` declares `TRASH` always and, rooted at `/`, answers
+`trash_restorable` always. `Opaque` and `Absent` are reachable on macOS and
+Windows and here only by construction.
+
+**A pre-existing hazard this branch should know about, found while driving it.**
+Against a state directory whose `journal.db` predates a migration, `sync.apply`
+TRASHED the destination file and then failed to write its journal row —
+`sync.apply: se enterró el destino y su entrada de journal NO llegó`. It logs
+loudly and the executor stops, which is the right behaviour available to it, but
+the file has already moved with nothing recording it. Not Task 13's code and not
+new; **worth an issue in Task 14**, because "journalled and undoable" is the
+whole argument for requiring the daemon.
+
+**For Task 14, on top of what earlier tasks queued:** the narrowed preset test;
+the issue collapsing the three `is_at_or_under` copies onto `RelPath::under`; no
+GUI synchronisation surface (the twin of #158, and now with a `Live` catalogue
+entry the GUI's own sheet must show as `NotHere`); an applying sync being
+invisible to the task board; and the journal-write failure above.
 
 ---
 
@@ -3535,7 +3676,7 @@ git commit -m "feat(frontend): the sync approval model, irreversible steps on th
 - Modify: `i18n/en/*.ftl`, `i18n/es/*.ftl`
 - Test: `crates/norte-tui/` unit tests
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[test]
@@ -3611,9 +3752,9 @@ table) and needs `err-overlapping-roots` in `i18n/en` and `i18n/es`. It is in
 no other task of this plan; Task 1 flagged it precisely because it would
 otherwise fall through the cracks.
 
-- [ ] **Step 2: Run and watch them fail** — `just t norte-tui`
+- [x] **Step 2: Run and watch them fail** — `just t norte-tui`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 State in `norte-tui::app`, painting delegating to `norte-frontend`. Every
 user-facing string through Fluent (`t!("sync.plan.confirm")` and friends) —
@@ -3621,16 +3762,16 @@ no literals. Add the catalogue entry with `availability` and which-key text,
 map it in every preset, and add it to the reference sheet the day it lands,
 not greyed out.
 
-- [ ] **Step 4: Run** — expected PASS.
+- [x] **Step 4: Run** — expected PASS.
 
-- [ ] **Step 5: Drive it under tmux**
+- [x] **Step 5: Drive it under tmux**
 
 The suite being green says nothing about composition. Use the tmux harness:
 run a comparison, open the plan, approve an `Update`, then an `Mirror`, and
 watch the second confirmation appear. Check the irreversible line renders when
 the destination has no trash.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/norte-tui i18n
