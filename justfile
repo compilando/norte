@@ -67,12 +67,14 @@ test:
 
 # Gate de cobertura (mismo umbral que CI): solo crates de lógica (spec §12).
 #
-# `clean` ANTES por dos razones que van juntas: los `.profraw` de una corrida
-# anterior dan porcentajes FALSOS (se han visto 58 % y 76 % espurios donde el
-# real era 88 %), y el target instrumentado es un universo entero aparte
-# —proto/vfs/core y su árbol, otra vez— que si no se tira crece sin fin.
+# `clean --profraw-only` ANTES: los `.profraw` de una corrida anterior dan
+# porcentajes FALSOS (se han visto 58 % y 76 % espurios donde el real era
+# 88 %). Sólo eso — `--workspace` borraría además el target instrumentado, que
+# es un universo aparte (proto/vfs/core y su árbol) y recompilarlo entero es la
+# mayor parte del coste de `just ci`. Ese universo lo tira `just prune`, que sí
+# corre `clean --workspace`: se paga cuando hace falta disco, no en cada gate.
 cov:
-    cargo llvm-cov clean --workspace
+    cargo llvm-cov clean --profraw-only
     CARGO_INCREMENTAL=0 cargo llvm-cov nextest -p norte-proto -p norte-vfs -p norte-core --fail-under-lines 85
 
 docs:
