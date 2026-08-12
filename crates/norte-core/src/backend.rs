@@ -226,7 +226,17 @@ impl crate::connect::ConnectionObserver for ChannelConnectionObserver {
 /// contador que arranca en cero, así que este valor no puede coincidir con
 /// ninguno en un proceso que tenga las dos cosas a la vez — el spool no llegaría
 /// a confundir el plan de un cliente del socket con el de un `Backend`
-/// embebido.
+/// embebido. (Y el barrido por conexión compara el prefijo `"<id>-"` del nombre
+/// del fichero, que tampoco colisiona.)
+///
+/// **Corolario, para quien exponga estos métodos:** el `plan_hash` NO es un
+/// secreto —es un digest determinista de las raíces, las opciones y los pasos,
+/// calculable por cualquiera que pueda leer los dos árboles—, así que la única
+/// cosa que ata un plan a quien lo pidió es este `conn_id`, y aquí es una
+/// constante. Todo lo que alcance este brazo comparte la misma conexión y actúa
+/// como `Actor::User`, o sea sin gate de policy. `sync_plan`/`sync_apply` no
+/// deben cablearse a un entorno de scripting ni al host de plugins sin un actor
+/// propio: sería una escritura de árbol entero sin puerta.
 const EMBEDDED_CONN_ID: u64 = u64::MAX;
 
 /// El core detrás de una única superficie (regla 7).
@@ -936,17 +946,36 @@ impl Backend {
     ///
     /// # Cuándo están TODOS los pasos
     /// El `sync.plan_done` es la señal, y su ausencia es la protección: sin él
-    /// no hay `plan_hash`, y sin `plan_hash` no se puede aplicar nada. Un lote
-    /// perdido (el daemon expulsa a quien no drena, una reconexión suelta los
-    /// routes) deja al cliente sin cierre y por tanto sin poder escribir — el
-    /// fallo es visible y seguro. `TaskProgress::entries_done` cuenta PASOS
-    /// emitidos, para el que quiera cuadrarlo.
+    /// no hay `plan_hash`, y sin `plan_hash` no se puede aplicar nada. Las TRES
+    /// formas de perder un lote fallan por ese lado:
+    ///
+    /// 1. el daemon expulsa a quien no drena su outbox → su bomba para y sus
+    ///    planes retenidos se barren;
+    /// 2. una reconexión suelta los routes → el `rx` se cierra;
+    /// 3. **el buffer de este proceso se llena** porque quien consume el `rx` va
+    ///    más lento que el daemon. Este es el único que un cliente se hace a sí
+    ///    mismo, y por eso el enrutado CIERRA el feed en vez de descartar el
+    ///    lote (`OnFull::CloseFeed`): descartarlo y entregar el cierre detrás
+    ///    —que es lo que hacen `search.hits` y `compare.rows`, donde un lote es
+    ///    pintura— dejaría a un humano aprobando un hash que cubre pasos que
+    ///    nunca vio.
+    ///
+    /// Aun así, quien pinte estos pasos debería cuadrarlos:
+    /// `SyncPlanDone::counts` suma el plan ENTERO (`create_dir + copy +
+    /// overwrite + delete_tree + skip`), así que comparar esa suma con los pasos
+    /// recibidos detecta cualquier pérdida futura sin depender de que el
+    /// transporte la señale. `TaskProgress::entries_done` cuenta lo mismo desde
+    /// el otro lado.
     ///
     /// # El plan queda RETENIDO
     /// Aprobar cuesta un fichero en el directorio de estado del daemon, vivo
     /// durante [`SYNC_PLAN_TTL_MS`](norte_proto::methods::SYNC_PLAN_TTL_MS) y
-    /// atado a esta conexión. Hay un tope por conexión: pasado, la respuesta es
-    /// `OVERLOADED` (`Error::Busy`) — la petición es válida, el momento no.
+    /// atado a esta conexión. Hay un tope de planes retenidos por conexión:
+    /// pasado, el daemon contesta `OVERLOADED` sin taxonomía —la petición es
+    /// válida, el momento no— y este brazo lo entrega como
+    /// [`Error::Internal`], igual que el resto de los `-32602`/`-32603` pelados
+    /// del daemon. No se puede adelantar aquí porque solo el daemon sabe cuántos
+    /// planes retiene esta conexión.
     ///
     /// # Errors
     /// [`Error::Unsupported`] si `compare.follow_symlinks` o
@@ -958,6 +987,14 @@ impl Backend {
     /// [`Self::compare`]: el daemon los rechaza con `-32602` pelado y
     /// `to_taxonomy` convertiría eso en `Internal`, o sea la misma respuesta que
     /// da un provider que panica. El engine los sigue comprobando por su cuenta.
+    ///
+    /// Adelantarlos cambia el ORDEN de dos rechazos, y conviene saberlo: contra
+    /// un engine sin spool, esto contesta por el parámetro (`InvalidPath`)
+    /// donde el engine habría contestado por la retención (`Unsupported`); y
+    /// contra un daemon, un agente sin scope recibe la queja del parámetro desde
+    /// su propio proceso en vez del `PolicyDenied` del daemon, que gatea antes
+    /// de validar. Ninguno filtra nada —estas tres comprobaciones no miran las
+    /// rutas— y es la misma asimetría que [`Self::compare`] ya tiene.
     ///
     /// Además: [`Error::OverlappingRoots`] si las dos raíces se solapan (esa sí
     /// es categoría del wire y viene del engine, sin copia aquí),
@@ -1037,12 +1074,25 @@ impl Backend {
     /// Míralo también cuando diga `cancelled`: lo aplicado hasta el corte se
     /// queda, journalizado — media sincronización es un estado real.
     ///
+    /// # Quién ve qué
+    /// El daemon sirve el informe a quien podría ver la Task: su dueño, o
+    /// cualquier conexión HUMANA. Un `Backend::Remote` siempre es humano (nunca
+    /// declara `agent_session`), así que por este método se ven también los
+    /// informes de las aplicaciones de los AGENTES — deliberado, y la simetría
+    /// del undo: un humano que gobierna el daemon puede leer lo que un agente
+    /// hizo. Lo que no se distingue es lo que un agente pregunta por lo ajeno:
+    /// para él, «no es tuya» y «no existe» son la misma respuesta.
+    ///
+    /// Nótese la asimetría, que no es un descuido: la AUTORIZACIÓN (el plan) va
+    /// por conexión, y su informe por ACTOR. Dos conexiones humanas son el mismo
+    /// `Actor::User`, así que una lee el informe de la otra aunque no pudiera
+    /// aplicar su plan.
+    ///
     /// # Errors
     /// [`Error::NotFound`] si ese `task_id` nunca fue una aplicación de este
-    /// proceso o si el anillo ya lo desalojó — y el brazo remoto contesta lo
-    /// MISMO, incluida la aplicación de otra conexión: distinguirla confirmaría
-    /// que existió. [`Error::Unsupported`] contra un daemon N-1; resto,
-    /// taxonomía del protocolo.
+    /// proceso, si el anillo ya lo desalojó, o si el que pregunta no podía verla.
+    /// [`Error::Unsupported`] contra un daemon N-1; resto, taxonomía del
+    /// protocolo.
     pub async fn sync_report(
         &self,
         task_id: TaskId,
@@ -2956,8 +3006,19 @@ pub mod remote {
             let params = methods::SyncApplyParams {
                 plan_hash: plan_hash.clone(),
             };
+            // CANCEL-ON-DROP (#74), y aquí no es una precaución de más: el gate
+            // de `sync.apply` puede quedarse suspendido en un `ask` de policy
+            // más de lo que dura [`CALL_TIMEOUT`], y sin el guard el despacho
+            // seguiría vivo server-side — el humano aprobaría un minuto después
+            // y el árbol se reescribiría para un cliente que ya había desistido
+            // y había recibido «el daemon no contesta». Con él, abandonar manda
+            // el `rpc.cancel` que retira el gate PRE-efecto.
+            //
+            // Se pierde a cambio la traducción de `METHOD_NOT_FOUND`, y no
+            // importa: para llegar aquí hace falta un `plan_hash`, que solo
+            // puede haber salido de un `sync.plan` del MISMO daemon.
             let result: FsTaskResult = self
-                .call_maybe_unknown(methods::SYNC_APPLY, &params)
+                .call_timed_guarded(methods::SYNC_APPLY, &params)
                 .await?;
             Ok(self.own_task(result.task_id, TaskKind::Sync))
         }
@@ -3463,13 +3524,44 @@ pub mod remote {
     /// Task por `task_id`. Si el route existe, envía; `Closed` (el frontend
     /// soltó su `rx`) retira el route; `Full` descarta el lote con aviso
     /// (backpressure: el frontend va por detrás — estos lotes son un feed de
+    /// Qué hacer con un lote que no cabe en el buffer del consumidor.
+    ///
+    /// La diferencia no es de estilo: depende de para qué sirven los lotes.
+    #[derive(Clone, Copy)]
+    enum OnFull {
+        /// Descartar el lote y seguir. Los hits de una búsqueda y las filas de
+        /// una comparación son PINTURA: perder un lote empobrece una lista que
+        /// nadie va a usar para escribir, y cerrar el feed entero castigaría
+        /// más de lo que protege.
+        DropBatch,
+        /// Cerrar el feed. Los pasos de un plan de sincronización NO son
+        /// pintura: son las operaciones que el `plan_hash` va a ejecutar, y
+        /// entre ellas hay `DeleteTree` y `Overwrite`. Un lote descartado en
+        /// silencio con el cierre entregado detrás dejaría a un humano
+        /// aprobando un hash que cubre pasos que nunca vio — que es exactamente
+        /// lo que este diseño existe para impedir. Cerrar el feed hace que el
+        /// `sync.plan_done` no llegue, y sin él no hay hash con el que aprobar
+        /// nada: se falla del lado seguro.
+        ///
+        /// (El brazo EMBEBIDO no tiene este problema: usa `send().await`, o sea
+        /// contrapresión de verdad, y no pierde un paso.)
+        CloseFeed,
+    }
+
     /// UI, no dato autoritativo). Sin route todavía (carrera de arranque), lo
     /// retiene en `pending` acotado para que el método que lo lanzó lo drene
     /// al registrar; `task_id` desconocido con `pending` lleno = descarte con
     /// traza (un daemon no debería emitir lotes de Tasks que no lanzamos).
     ///
-    /// `feed` es solo la etiqueta de las trazas.
-    fn route_batch<T>(routes: &Mutex<BatchRoutes<T>>, id: u64, batch: T, feed: &'static str) {
+    /// `feed` es solo la etiqueta de las trazas. `on_full` decide qué pasa
+    /// cuando el consumidor no drena, que es donde los feeds DEJAN de parecerse.
+    fn route_batch<T>(
+        routes: &Mutex<BatchRoutes<T>>,
+        id: u64,
+        batch: T,
+        feed: &'static str,
+        on_full: OnFull,
+    ) {
         let mut sr = routes.lock().expect("batch routes lock sano");
         if let Some(tx) = sr.routes.get(&id) {
             match tx.try_send(batch) {
@@ -3478,13 +3570,27 @@ pub mod remote {
                     // El frontend soltó su Receiver: el route ya no sirve.
                     sr.routes.remove(&id);
                 }
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    tracing::warn!(
+                Err(mpsc::error::TrySendError::Full(_)) => match on_full {
+                    OnFull::DropBatch => tracing::warn!(
                         task_id = id,
                         feed,
                         "buffer del cliente lleno, lote descartado (backpressure)"
-                    );
-                }
+                    ),
+                    OnFull::CloseFeed => {
+                        tracing::warn!(
+                            task_id = id,
+                            feed,
+                            "buffer del cliente lleno: se CIERRA el feed en vez de \
+                             descartar el lote"
+                        );
+                        // Soltar el sender cierra el `rx` del frontend. Lo que
+                        // venga detrás —incluido el `sync.plan_done`— ya no se
+                        // entrega, así que el cliente se queda sin `plan_hash` y
+                        // no puede aprobar un plan que vio incompleto.
+                        sr.routes.remove(&id);
+                        sr.pending.remove(&id);
+                    }
+                },
             }
         } else if sr.pending_len() < BATCH_PENDING_CAP {
             sr.pending.entry(id).or_default().push(batch);
@@ -3641,7 +3747,13 @@ pub mod remote {
                     };
                     let Some(inner) = weak.upgrade() else { return };
                     let id = hits.task_id.get();
-                    route_batch(&inner.search_routes, id, hits, methods::SEARCH_HITS);
+                    route_batch(
+                        &inner.search_routes,
+                        id,
+                        hits,
+                        methods::SEARCH_HITS,
+                        OnFull::DropBatch,
+                    );
                     continue;
                 }
                 // Lote de filas de una comparación viva (0.39.0): mismo trato.
@@ -3659,7 +3771,13 @@ pub mod remote {
                     };
                     let Some(inner) = weak.upgrade() else { return };
                     let id = rows.task_id.get();
-                    route_batch(&inner.compare_routes, id, rows, methods::COMPARE_ROWS);
+                    route_batch(
+                        &inner.compare_routes,
+                        id,
+                        rows,
+                        methods::COMPARE_ROWS,
+                        OnFull::DropBatch,
+                    );
                     continue;
                 }
                 // Los dos eventos de un plan vivo (0.40.0) van al MISMO `rx`,
@@ -3697,7 +3815,7 @@ pub mod remote {
                     } else {
                         methods::SYNC_STEPS
                     };
-                    route_batch(&inner.sync_routes, id, event, feed);
+                    route_batch(&inner.sync_routes, id, event, feed, OnFull::CloseFeed);
                     continue;
                 }
                 if n.method != methods::TASK_PROGRESS {
@@ -3819,6 +3937,49 @@ pub mod remote {
                 compare_routes: Mutex::new(BatchRoutes::default()),
                 sync_routes: Mutex::new(BatchRoutes::default()),
             })
+        }
+
+        /// El feed de `sync.plan` se CIERRA cuando el consumidor no drena, en
+        /// vez de descartar el lote como hacen los otros dos.
+        ///
+        /// Es la diferencia que hace segura la aprobación: un lote de pasos
+        /// descartado en silencio, con el `sync.plan_done` entregado detrás,
+        /// dejaría a un humano aprobando un `plan_hash` que cubre `DeleteTree` y
+        /// `Overwrite` que nunca vio en pantalla. Cerrando el feed no llega
+        /// cierre, y sin cierre no hay hash con el que aprobar nada.
+        #[test]
+        fn el_feed_de_sync_se_cierra_en_vez_de_perder_un_lote() {
+            let routes: Mutex<BatchRoutes<u32>> = Mutex::new(BatchRoutes::default());
+            let (tx, mut rx) = mpsc::channel::<u32>(1);
+            routes.lock().expect("lock").routes.insert(7, tx);
+
+            route_batch(&routes, 7, 1, "sync.steps", OnFull::CloseFeed);
+            route_batch(&routes, 7, 2, "sync.steps", OnFull::CloseFeed); // no cabe
+            // El route se retiró: el `rx` ve lo que sí entró y después el fin.
+            assert!(
+                !routes.lock().expect("lock").routes.contains_key(&7),
+                "el feed tenía que cerrarse"
+            );
+            assert_eq!(rx.try_recv(), Ok(1));
+            assert_eq!(rx.try_recv(), Err(mpsc::error::TryRecvError::Disconnected));
+        }
+
+        /// Y el de una búsqueda o una comparación NO: ahí un lote es pintura, y
+        /// cerrar el feed entero castigaría más de lo que protege.
+        #[test]
+        fn el_feed_de_una_busqueda_descarta_el_lote_y_sigue() {
+            let routes: Mutex<BatchRoutes<u32>> = Mutex::new(BatchRoutes::default());
+            let (tx, mut rx) = mpsc::channel::<u32>(1);
+            routes.lock().expect("lock").routes.insert(7, tx);
+
+            route_batch(&routes, 7, 1, "search.hits", OnFull::DropBatch);
+            route_batch(&routes, 7, 2, "search.hits", OnFull::DropBatch); // se pierde
+            assert!(
+                routes.lock().expect("lock").routes.contains_key(&7),
+                "el feed sigue vivo"
+            );
+            assert_eq!(rx.try_recv(), Ok(1));
+            assert_eq!(rx.try_recv(), Err(mpsc::error::TryRecvError::Empty));
         }
 
         fn progress(id: u64, kind: TaskKind, state: TaskState) -> TaskProgress {

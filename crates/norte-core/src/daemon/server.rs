@@ -1621,6 +1621,15 @@ async fn handle_value(
                     // cliente deja de esperar; la CPU ya gastada no vuelve.
                     | methods::FS_RENAME_BATCH
                     | methods::FS_RENAME_BATCH_PLAN
+                    // 0.40.0: `sync.apply` gatea las DOS raíces del plan antes
+                    // de escribir un byte, así que se suspende en un `ask`
+                    // igual que un fs.copy — y su espera es la más cara de
+                    // todas, porque el cliente no tiene nada que hacer mientras
+                    // tanto. Retirarlo es seguro: el gate muere PRE-efecto, y el
+                    // derecho a aplicar el plan —que `Spool::open` ya se
+                    // cobró— lo devuelve el `Drop` de `ApplyClaim` en el
+                    // engine, que existe exactamente para este camino.
+                    | methods::SYNC_APPLY
             );
             let response = if cancelable {
                 let cancel = CancellationToken::new();
@@ -3270,6 +3279,22 @@ async fn handle_sync_apply(
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::SyncApplyParams = parse_params(params)?;
+    // El tope de Tasks vivas se mira ANTES de abrir el plan, y no solo en
+    // `register_task_id`. Abrirlo se lleva el DERECHO a aplicarlo (es de un solo
+    // uso) y el cuerpo de la Task lo GASTA en cualquier estado terminal, así que
+    // un `OVERLOADED` de después destruye el plan aprobado: el cliente se queda
+    // sin `task_id`, cada reintento de ese hash contesta `PlanStale` y la única
+    // salida es volver a recorrer los dos árboles enteros. Ningún otro método
+    // tiene un parámetro tan caro de reconstruir.
+    //
+    // Es TOCTOU —dos `sync.apply` simultáneos pueden pasar los dos y el segundo
+    // morir en `register_task_id`— y aun así vale: mueve el caso normal de
+    // «plan destruido» a «plan intacto, vuelve a intentarlo», que es lo que el
+    // mensaje del error dice. Mismo criterio que el pre-chequeo del tope de
+    // planes retenidos de `handle_sync_plan`.
+    if let Some(err) = tasks_at_capacity(shared, actor) {
+        return Err(err);
+    }
     let (handle, _report) = shared
         .engine
         .sync_apply_as(&p.plan_hash, conn_id, actor.clone())
@@ -3935,6 +3960,36 @@ fn register_task(
 /// sale como `task.progress` a los humanos y al dueño (#66); el estado
 /// terminal jamás se pierde por el rate-limit (se difunde con el mismo
 /// enrutado por dueño) y desregistra la task. Devuelve el `TaskId` (los
+/// El mismo tope que aplica [`register_task_id`], consultado ANTES de crear la
+/// Task. `Some(err)` = no cabe.
+///
+/// Existe para el único método cuyo rechazo TARDÍO no es recuperable
+/// (`sync.apply`: rechazar después de abrir el plan lo destruye). Es una
+/// aproximación —entre esto y el registro puede colarse otra Task— y por eso NO
+/// sustituye al tope de `register_task_id`, que sigue siendo la autoridad.
+fn tasks_at_capacity(shared: &Arc<Shared>, owner: &Actor) -> Option<RpcError> {
+    let tasks = shared.tasks.lock().expect("tasks lock sano");
+    if tasks.len() >= MAX_LIVE_TASKS {
+        return Some(RpcError::protocol(
+            codes::OVERLOADED,
+            format!("too many live tasks (max {MAX_LIVE_TASKS}); retry later"),
+        ));
+    }
+    if !matches!(owner, Actor::User)
+        && tasks
+            .values()
+            .filter(|t| !matches!(t.owner, Actor::User))
+            .count()
+            >= MAX_LIVE_TASKS_AGENTS
+    {
+        return Some(RpcError::protocol(
+            codes::OVERLOADED,
+            format!("too many live agent tasks (max {MAX_LIVE_TASKS_AGENTS}); retry later"),
+        ));
+    }
+    None
+}
+
 /// métodos con result propio lo envuelven ellos, M3-4).
 fn register_task_id(
     shared: &Arc<Shared>,

@@ -431,6 +431,25 @@ impl Spool {
         }
     }
 
+    /// Suelta la marca de «aplicándose» SIN tocar el disco y sin `await`:
+    /// abandona el plan `hash` de `conn_id`.
+    ///
+    /// Es la salida de emergencia de un `sync.apply` cuyo despacho se DROPEA
+    /// antes de llegar a crear la Task — hoy, un `rpc.cancel` mientras el gate
+    /// de policy está suspendido en un `ask`. Ese camino no puede llamar a
+    /// [`Spool::remove`] (es `async`, y un `Drop` no puede esperar), y si no
+    /// soltara la marca el hash se quedaría «aplicándose» para el resto de la
+    /// vida de la conexión: ni aplicable ni replanificable.
+    ///
+    /// Igual que las salidas de error de [`Spool::open`], suelta de `applying` y
+    /// **no** devuelve a `issued`: el plan no vuelve a ser aplicable —nadie sabe
+    /// si el gate llegó a aprobar— pero el mismo árbol vuelve a ser
+    /// replanificable, que es lo que el usuario necesita. El fichero se queda
+    /// para el TTL, para el barrido de arranque o para el cierre de la conexión.
+    pub(crate) fn abandon(&self, conn_id: u64, hash: &PlanHash) {
+        self.release_applying(conn_id, hash);
+    }
+
     /// Suelta la marca de «aplicándose». Lo llama [`Spool::remove`], que es lo
     /// que la Task de `sync.apply` invoca al terminar en cualquier estado.
     fn release_applying(&self, conn_id: u64, hash: &PlanHash) {

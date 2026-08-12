@@ -1021,6 +1021,13 @@ impl Engine {
     /// journal la puede cumplir; aplicarlo sin él sería sobrescribir y enterrar
     /// sin dejar rastro ni vuelta atrás.
     ///
+    /// La tercera pata NO es fail-closed y conviene no suponerlo: el gate por
+    /// defecto de un `Engine` es [`AllowAll`](crate::policy::AllowAll), así que
+    /// un daemon montado sobre un engine SIN `with_policy` deja que cualquier
+    /// actor reescriba un árbol entero con una sola llamada. Es la misma puerta
+    /// abierta que `fs.copy` y `fs.delete` tienen desde M3 —y ningún binario de
+    /// este árbol la deja así— pero aquí el radio es otro.
+    ///
     /// # El plan se gasta, pase lo que pase
     /// Al terminar la Task —completada, fallida o cancelada— el spool se borra.
     /// Mientras no se borre, ese hash cuenta como «aplicándose» y replanificar el
@@ -1063,9 +1070,24 @@ impl Engine {
             .open(conn_id, plan_hash)
             .await
             .map_err(|e| spool_open_error(&e))?;
+        // Y si este future se DROPEA antes de volver, el derecho se suelta
+        // igual. Pasa de verdad: el gate de abajo puede quedarse suspendido en
+        // un `ask` de policy durante un minuto, y el daemon retira ese despacho
+        // con un `rpc.cancel`. Sin esto, dropear ahí dejaría el hash
+        // «aplicándose» para siempre — ni aplicable ni replanificable, y
+        // diagnosticado como error interno.
+        let mut claim = ApplyClaim {
+            spool: &spool,
+            conn_id,
+            plan_hash,
+            armed: true,
+        };
         let outcome = self
             .sync_apply_opened(reader, plan_hash, conn_id, actor, &spool, &journal)
             .await;
+        // Se volvió: a partir de aquí mandan los caminos de siempre — el cuerpo
+        // de la Task gasta el plan al terminar, y un error lo gasta aquí.
+        claim.armed = false;
         if outcome.is_err() {
             let _ = spool.remove(conn_id, plan_hash).await;
         }
@@ -2486,6 +2508,32 @@ const APPROVAL_PATHS_SHOWN: usize = 32;
 /// de sobra aquí; por encima, `LimitExceeded` es honesto y barato.
 pub const RENAME_BATCH_MAX_LISTING: usize = 100_000;
 
+/// Devuelve el derecho a aplicar un plan si el `sync.apply` que lo cobró se
+/// abandona a mitad (ver el comentario de [`Engine::sync_apply_as`]).
+///
+/// Solo suelta la marca en memoria: es un `Drop`, así que no puede esperar a un
+/// borrado de fichero, y el fichero lo recogen el TTL, el barrido de arranque o
+/// el cierre de la conexión.
+struct ApplyClaim<'a> {
+    spool: &'a crate::sync::Spool,
+    conn_id: u64,
+    plan_hash: &'a PlanHash,
+    armed: bool,
+}
+
+impl Drop for ApplyClaim<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            tracing::debug!(
+                conn_id = self.conn_id,
+                plan_hash = self.plan_hash.as_str(),
+                "sync.apply abandonado antes de crear la Task: se devuelve el plan"
+            );
+            self.spool.abandon(self.conn_id, self.plan_hash);
+        }
+    }
+}
+
 /// Una entrada de un anillo de informes: la Task, el ACTOR que la pidió (para
 /// que quien sirva el informe por el wire pueda decidir si el que pregunta
 /// podía ver esa task) y el informe VIVO, que la Task sigue rellenando.
@@ -2550,9 +2598,14 @@ fn evict_sync_reports(ring: &mut std::collections::VecDeque<SyncReportEntry>) {
 /// entera de que su árbol quedó a medias:
 ///
 /// 1. **Sub-tope por clase** (mismo patrón que el de scopes de M3-3b): los
-///    informes de agentes no agotan el anillo. Sin él, un agente con scope y 33
-///    operaciones triviales desaloja el informe que el humano no ha leído
-///    todavía — incluido el de la operación que ese mismo agente dejó a medias.
+///    informes de agentes ocupan como mucho `agents_max` del anillo, así que
+///    siempre quedan `max - agents_max` sitios que un agente no puede llenar.
+///    Sin él, un agente con scope y 33 operaciones triviales desaloja el informe
+///    que el humano no ha leído todavía — incluido el de la operación que ese
+///    mismo agente dejó a medias. Lo que el sub-tope da es un SUELO, no
+///    inmunidad: por encima de él la segunda pasada desaloja por antigüedad sin
+///    mirar el dueño, así que un agente sí puede empujar fuera informes humanos
+///    viejos y limpios. Los ruidosos sobreviven, que es lo que importa.
 /// 2. **Se desaloja primero lo que no cuenta nada**: entre dos informes, se tira
 ///    el que dice que todo fue bien antes que el que nombra algo roto. Un
 ///    informe limpio es reconstruible mirando el árbol; uno roto no.
