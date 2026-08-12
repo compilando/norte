@@ -63,6 +63,14 @@ pub struct Engine {
     /// [`AllowAll`](crate::policy::AllowAll): el engine embebido/humano no se
     /// sandboxea salvo que se instale una policy con [`Self::with_policy`].
     policy: Arc<dyn crate::policy::PolicyGate>,
+    /// Si la `policy` de arriba la instaló ALGUIEN ([`Self::with_policy`]) o es
+    /// la de por omisión.
+    ///
+    /// No cambia ninguna decisión: `AllowAll` gatea igual de permisivo en los
+    /// dos casos. Existe porque el daemon tiene que poder AVISAR de la segunda
+    /// (#166) — «policy permisiva a propósito» y «policy que nadie instaló» son
+    /// la misma cosa para el gate y cosas distintas para el operador.
+    policy_explicit: bool,
     /// Resuelve un `Ask` de policy. Default [`DenyAll`](crate::approval::DenyAll)
     /// (headless fail-closed).
     approvals: Arc<dyn crate::approval::ApprovalResolver>,
@@ -138,6 +146,7 @@ impl Engine {
             observer,
             journal: None,
             policy: Arc::new(crate::policy::AllowAll),
+            policy_explicit: false,
             approvals: Arc::new(crate::approval::DenyAll),
             archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
             ai_provider: RwLock::new(None),
@@ -178,6 +187,7 @@ impl Engine {
             observer: Arc::clone(&journal) as Arc<dyn MutationObserver>,
             journal: Some(journal),
             policy: Arc::new(crate::policy::AllowAll),
+            policy_explicit: false,
             approvals: Arc::new(crate::approval::DenyAll),
             archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
             ai_provider: RwLock::new(None),
@@ -200,7 +210,20 @@ impl Engine {
     ) -> Self {
         self.policy = policy;
         self.approvals = approvals;
+        self.policy_explicit = true;
         self
+    }
+
+    /// Si alguien llamó a [`Self::with_policy`] sobre este engine.
+    ///
+    /// Lo consulta el daemon en el arranque: montarse sobre un engine sin
+    /// policy explícita deja pasar a CUALQUIER actor, agentes incluidos, y
+    /// `sync.apply` bajo ese hueco es una llamada que reescribe un subárbol
+    /// (#166). No es un gate — es lo que hace falta para que el hueco salga en
+    /// el log en vez de en la sorpresa.
+    #[must_use]
+    pub fn has_explicit_policy(&self) -> bool {
+        self.policy_explicit
     }
 
     /// Instala el índice de búsqueda (M4, ADR 0034). Sin él, `index.*` responde
@@ -2903,5 +2926,31 @@ mod batch_report_ring_tests {
         evict_batch_reports(&mut ring);
         assert_eq!(ring.len(), BATCH_REPORTS_MAX);
         assert!(!ids(&ring).contains(&0), "se fue el más viejo");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #166: un `Engine` sin `with_policy` gatea con `AllowAll`, y eso no se
+    /// distingue de una policy permisiva a propósito. El daemon avisa en el
+    /// arranque, y para avisar necesita poder PREGUNTARLO.
+    #[test]
+    fn una_policy_por_omision_se_distingue_de_una_instalada() {
+        let sin = Engine::new();
+        assert!(
+            !sin.has_explicit_policy(),
+            "un Engine recién hecho no tiene policy instalada"
+        );
+
+        let con = Engine::new().with_policy(
+            Arc::new(crate::policy::AllowAll),
+            Arc::new(crate::approval::DenyAll),
+        );
+        assert!(
+            con.has_explicit_policy(),
+            "AllowAll instalada A PROPÓSITO sí cuenta como policy"
+        );
     }
 }

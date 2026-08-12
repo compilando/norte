@@ -482,6 +482,13 @@ impl Daemon {
     /// # Errors
     /// [`DaemonError`]: dir inseguro, root, socket ocupado por un daemon vivo,
     /// o I/O.
+    ///
+    /// # Policy
+    /// Un engine sobre el que nadie llamó a
+    /// [`Engine::with_policy`](crate::Engine::with_policy) gatea con `AllowAll`:
+    /// este bind lo AVISA por `warn!` y sigue (#166). No se rechaza porque
+    /// «permisivo a propósito» es una configuración legítima; lo que no puede
+    /// ser es indistinguible de un olvido.
     #[tracing::instrument(skip(engine, scopes, approvals, cfg))]
     pub async fn bind_with_policy(
         engine: Arc<Engine>,
@@ -489,6 +496,19 @@ impl Daemon {
         approvals: Arc<DaemonApprovalResolver>,
         cfg: DaemonConfig,
     ) -> Result<Self, DaemonError> {
+        // #166: el gate del engine es `AllowAll` mientras nadie instale una
+        // policy, y un daemon sobre ese engine no gatea NADA — ni siquiera a un
+        // agente. Ningún binario nuestro llega aquí así (`daemon run` instala
+        // `ScopedPolicy`), pero un embebedor o un harness sí puede, y el hueco
+        // no tiene hoy ni una línea de log. `sync.apply` es lo que cambia las
+        // consecuencias: una llamada, un hash, y un `Mirror` reescribe y borra.
+        if !engine.has_explicit_policy() {
+            tracing::warn!(
+                "daemon montado sobre un engine SIN policy: toda operación de \
+                 todo actor pasa (AllowAll por omisión). Instala una policy con \
+                 Engine::with_policy antes de bind (#166)."
+            );
+        }
         // La resolución del path por defecto puede tocar el FS (sonda de uid
         // del fallback /tmp) y el descubrimiento del catálogo de plugins lee el
         // dir de config: TODO I/O síncrono dentro del spawn_blocking (regla 2).
