@@ -1483,6 +1483,13 @@ async fn move_by_copy(
 /// `Permanent` = recursivo post-order (los hijos caen antes que su padre;
 /// cancelar a mitad deja el resto del árbol intacto, la raíz cae la
 /// última). ADR 0009.
+///
+/// # La fila que no llega
+/// Un observer que falla DESPUÉS de un entierro exitoso deja el fichero movido
+/// y sin registrar (#160). Se compensa con `restore_from` cuando la papelera
+/// nombra lo que se llevó, y se dice en el log llegue o no. Mismo criterio,
+/// mismos límites y mismo TOCTOU de `restore_from` que
+/// [`crate::sync::exec::bury`]: el efecto no se queda huérfano de su registro.
 #[tracing::instrument(skip_all, fields(path = %path.display_lossy(), ?mode))]
 pub(crate) async fn delete_task(
     provider: Arc<dyn Provider>,
@@ -1507,7 +1514,7 @@ pub(crate) async fn delete_task(
         let trash_id =
             norte_vfs::trash::TrashId::new(now_ms, ctx.progress.snapshot().task_id.get());
         let dest = trash_retrying(&*provider, &path, &trash_id, &ctx.cancel).await?;
-        observer
+        if let Err(e) = observer
             .on_mutation(
                 &Mutation::Trashed {
                     path: &path,
@@ -1515,7 +1522,27 @@ pub(crate) async fn delete_task(
                 },
                 &ctx.actor,
             )
-            .await?;
+            .await
+        {
+            // #160: el fichero ya está enterrado y su registro no llegó — regla
+            // dura 4 rota por el camino de un F8 corriente. Se devuelve a su
+            // ruta y el borrado falla con el árbol como estaba. Igual que en
+            // `sync::exec::bury`, solo se puede cuando la papelera NOMBRA lo que
+            // se lleva: con `DestTrash::Opaque` (macOS, Windows) queda la línea
+            // de log.
+            let devuelto = match dest.as_ref() {
+                Some(en) => provider.restore_from(en, &path).await,
+                None => Err(Error::Unsupported),
+            };
+            tracing::error!(
+                error = %e,
+                enterrado = %crate::engine::span_path(&path),
+                en = dest.as_ref().map(crate::engine::span_path),
+                devuelto = devuelto.is_ok(),
+                "fs.delete: se enterró el fichero y su entrada de journal NO llegó",
+            );
+            return Err(e);
+        }
         ctx.progress.update(|p| p.entries_done = 1);
         return Ok(());
     }
@@ -1962,6 +1989,127 @@ mod tests {
                 .await
                 .is_err(),
             "nada creado bajo cancelación"
+        );
+    }
+
+    /// Observer que dice que no a TODO: lo que se prueba en las dos siguientes
+    /// es el camino en el que la mutación ya ocurrió y su registro no llega —
+    /// exactamente el arma del #160 en `delete_task`.
+    #[derive(Debug)]
+    struct ObserverFalla;
+
+    #[async_trait::async_trait]
+    impl crate::MutationObserver for ObserverFalla {
+        async fn on_mutation(
+            &self,
+            _mutation: &crate::Mutation<'_>,
+            _actor: &crate::journal::Actor,
+        ) -> Result<(), norte_proto::Error> {
+            Err(norte_proto::Error::Io { retryable: false })
+        }
+    }
+
+    /// #160, la misma forma que en `sync::exec::bury` y por el camino que anda
+    /// un F8: la papelera se llevó el fichero y el observer del journal falló
+    /// después. Se devuelve, y el borrado falla con el árbol como estaba.
+    #[tokio::test]
+    async fn un_observer_que_falla_tras_enterrar_devuelve_el_fichero() {
+        use crate::journal::Actor;
+        use crate::progress::ProgressReporter;
+        use crate::scheduler::TaskCtx;
+        use norte_proto::{DeleteMode, Error, TaskId, TaskKind, VPath};
+        use norte_testkit::MemProvider;
+        use norte_vfs::Provider as _;
+        use std::sync::Arc;
+        use tokio_util::sync::CancellationToken;
+
+        let mem = Arc::new(MemProvider::new().with_logical_trash());
+        let path = VPath::parse("mem:///a.txt").expect("wire");
+        {
+            let mut sink = mem.write(&path).await.expect("write");
+            sink.write(bytes::Bytes::from_static(b"vivo"))
+                .await
+                .expect("chunk");
+            sink.commit().await.expect("commit");
+        }
+
+        // El mismo `TaskCtx` a mano que arman los tests vecinos de este módulo
+        // (no hay helper compartido; no se añade uno para un solo test más).
+        let (reporter, _rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Delete);
+        let ctx = TaskCtx {
+            cancel: CancellationToken::new(),
+            progress: Arc::new(reporter),
+            actor: Actor::User,
+        };
+
+        let err = super::delete_task(
+            Arc::clone(&mem) as Arc<dyn norte_vfs::Provider>,
+            path.clone(),
+            DeleteMode::Trash,
+            Arc::new(ObserverFalla),
+            &ctx,
+        )
+        .await
+        .expect_err("el observer falló");
+        assert!(matches!(err, Error::Io { .. }), "{err:?}");
+
+        assert!(
+            mem.stat(&path).await.is_ok(),
+            "el fichero volvió de la papelera a su ruta"
+        );
+    }
+
+    /// #160, el otro brazo: una papelera "vanish" (macOS/Windows, `Opaque`) no
+    /// nombra lo que se llevó — `dest` llega `None` y no hay adónde apuntar
+    /// `restore_from`. La compensación no es posible; lo único que le queda al
+    /// operador es la línea de log, y el fallo del observer se sigue
+    /// propagando para que el borrado falle alto (no se pretende éxito).
+    #[tokio::test]
+    async fn un_observer_que_falla_con_papelera_opaca_no_compensa_pero_sigue_fallando_alto() {
+        use crate::journal::Actor;
+        use crate::progress::ProgressReporter;
+        use crate::scheduler::TaskCtx;
+        use norte_proto::{DeleteMode, Error, TaskId, TaskKind, VPath};
+        use norte_testkit::MemProvider;
+        use norte_vfs::Provider as _;
+        use std::sync::Arc;
+        use tokio_util::sync::CancellationToken;
+
+        // Sin `.with_logical_trash()`: la papelera del testkit es "vanish"
+        // (como la nativa de macOS/Windows) y `trash()` devuelve `Ok(None)`.
+        let mem = Arc::new(MemProvider::new());
+        let path = VPath::parse("mem:///a.txt").expect("wire");
+        {
+            let mut sink = mem.write(&path).await.expect("write");
+            sink.write(bytes::Bytes::from_static(b"vivo"))
+                .await
+                .expect("chunk");
+            sink.commit().await.expect("commit");
+        }
+
+        let (reporter, _rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Delete);
+        let ctx = TaskCtx {
+            cancel: CancellationToken::new(),
+            progress: Arc::new(reporter),
+            actor: Actor::User,
+        };
+
+        let err = super::delete_task(
+            Arc::clone(&mem) as Arc<dyn norte_vfs::Provider>,
+            path.clone(),
+            DeleteMode::Trash,
+            Arc::new(ObserverFalla),
+            &ctx,
+        )
+        .await
+        .expect_err("el observer falló, igual que con papelera nombrada");
+        assert!(matches!(err, Error::Io { .. }), "{err:?}");
+
+        assert!(
+            mem.stat(&path).await.is_err(),
+            "sin `dest` no hay compensación posible: el fichero sigue fuera de \
+             su sitio, y eso lo dice el log, no un `stat` que vuelva a \
+             encontrarlo"
         );
     }
 
