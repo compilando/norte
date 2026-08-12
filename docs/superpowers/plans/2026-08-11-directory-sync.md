@@ -3022,6 +3022,174 @@ git commit -m "feat(core): undo a sync batch, reverting what it can and naming w
 
 ---
 
+### Task 11b: A trash that says where it put things
+
+**Files:**
+- Modify: `crates/norte-vfs-local/src/provider.rs` (+ a new `trash_fdo.rs`)
+- Modify: `crates/norte-vfs/src/provider.rs` (rustdoc only — the signature already fits)
+- Modify: `crates/norte-sync/src/lib.rs`, `plan.rs` (`dest_trash_restorable`)
+- Modify: `crates/norte-core/src/sync/mod.rs` (populate it from the provider)
+- Test: the provider conformance suite, `crates/norte-vfs-local`, `crates/norte-sync`
+
+**Why this task exists.** Task 11's `security-reviewer` found that an
+`Overwrite` on a native trash restores the **wrong file** and reports success:
+`norte-vfs-local::trash()` answers `Ok(None)`, so the undo matches by original
+path and takes the most recent item — which by then is the file that same undo
+just buried undoing the `created` half. Until this is fixed, `file://` on Linux
+(the common case) cannot undo a synchronisation, and the wire says it can. The
+same bug is live today for `fs.move` to the trash; this task fixes both.
+
+**The shape of the fix.** `Provider::trash` already returns
+`Result<Option<VPath>, Error>` — the recoverable destination — and the
+**logical** trash (`.norte-trash/<id>/payload`) already returns it correctly.
+The one that answers `None` is local, because it delegates to the `trash`
+crate, which does not expose where it put the file. So local stops delegating
+on freedesktop platforms and implements the spec directly: **if we choose the
+destination, we know it.** That is the same shape as the logical trash this
+repo already ships.
+
+- **Linux/BSD (freedesktop):** home trash at `$XDG_DATA_HOME/Trash` (default
+  `~/.local/share/Trash`), `files/<name>` plus the `info/<name>.trashinfo`
+  sidecar, with the `name`, `name.2`, `name.3` de-duplication the spec
+  defines. A victim on another mount uses that mount's `.Trash-$uid` topdir
+  rather than copying across devices. Return the exact `files/<name>` path.
+- **macOS and Windows:** keep the `trash` crate, keep `Ok(None)`. Neither
+  exposes a stable destination and neither is worth reimplementing.
+
+**And the honesty half, which is needed either way.** `SyncOptions` gains
+`dest_trash_restorable: bool`, set by `norte-core` from what the destination
+provider actually offers. Where it is false, **every** step is `Irreversible`
+with a reason — not only `Overwrite`: Task 11 established that undoing a
+`created` routes through the trash (#65), so a plain `Copy` does not come back
+either. The plan's reversal table gains that row; the dialog reads from it.
+
+- [ ] **Step 1: Write the failing provider tests**
+
+```rust
+#[tokio::test]
+async fn trashing_returns_the_path_it_actually_used() {
+    let p = local_provider();
+    let dest = p.trash(&vpath("file:///tmp/x/a.txt"), &TrashId::new(1, 0))
+        .await.expect("trash").expect("freedesktop names its destination");
+    assert!(p.stat(&dest, FollowLinks::No).await.is_ok(), "the file is THERE");
+    assert!(dest.to_wire().contains("/Trash/files/"));
+}
+
+#[tokio::test]
+async fn two_victims_with_one_name_get_two_destinations() {
+    // The bug in one test: without this, restore picks the most recent and
+    // the undo of an overwrite pair digs up its own burial.
+    let p = local_provider();
+    let first = trash_a_file_named("a.txt", b"first", &p).await;
+    let second = trash_a_file_named("a.txt", b"second", &p).await;
+    assert_ne!(first, second);
+    assert_eq!(read(&p, &first).await, b"first");
+    assert_eq!(read(&p, &second).await, b"second");
+}
+
+#[tokio::test]
+async fn the_trashinfo_sidecar_is_written_and_names_the_original() {
+    let p = local_provider();
+    let dest = trash_a_file_named("a.txt", b"x", &p).await;
+    let info = read(&p, &sidecar_of(&dest)).await;
+    let text = String::from_utf8(info).expect("trashinfo is utf-8 by spec");
+    assert!(text.starts_with("[Trash Info]\n"));
+    assert!(text.contains("Path=/tmp/x/a.txt"), "{text}");
+    assert!(text.contains("DeletionDate="));
+}
+
+#[tokio::test]
+async fn a_hostile_name_survives_the_round_trip() {
+    // Rule 1. The sidecar is percent-encoded per the spec; the FILE keeps
+    // its bytes.
+    for name in norte_testkit::corpus::hostile_names() {
+        let dest = trash_a_file_named_raw(&name, b"x", &local_provider()).await;
+        assert_eq!(last_segment_bytes(&dest), expected_bytes(&name));
+    }
+}
+
+#[tokio::test]
+async fn a_victim_on_another_mount_uses_that_mounts_topdir() {
+    // Not a cross-device copy: freedesktop says .Trash-$uid on the mount.
+    let dest = trash_on_other_mount().await;
+    assert!(dest.to_wire().contains(&format!(".Trash-{}", uid())));
+}
+
+#[tokio::test]
+async fn restoring_from_the_recorded_destination_needs_no_guessing() {
+    let p = local_provider();
+    let dest = trash_a_file_named("a.txt", b"x", &p).await;
+    p.restore_from(&dest, &vpath("file:///tmp/x/a.txt")).await.expect("restore");
+    assert_eq!(read(&p, &vpath("file:///tmp/x/a.txt")).await, b"x");
+    assert!(p.stat(&sidecar_of(&dest), FollowLinks::No).await.is_err(),
+        "the sidecar goes with it");
+}
+```
+
+- [ ] **Step 2: Run them and watch them fail** — `just t norte-vfs-local`
+
+- [ ] **Step 3: Implement the freedesktop trash**
+
+New `trash_fdo.rs` in `norte-vfs-local`. Everything runs under `blocking()`
+(rule 2). The `trash` crate stays for macOS and Windows, behind `cfg`.
+
+Order matters and the spec says so: write `info/<name>.trashinfo` with
+`O_EXCL` **first** — that is what makes the name reservation atomic against
+another process — then move the victim to `files/<name>`. If the move fails,
+unlink the sidecar.
+
+- [ ] **Step 4: Run** — `just t norte-vfs-local`, expected PASS.
+
+- [ ] **Step 5: Add it to the conformance suite**
+
+The provider contract gains: a trash that returns `Some` must return a path
+that exists and restores exactly; one that returns `None` must not claim
+`TRASH` restorability. Every provider runs it — that is what stops the next
+trash implementation from repeating this.
+
+- [ ] **Step 6: The honesty half**
+
+```rust
+#[tokio::test]
+async fn nothing_is_reversible_when_the_destination_cannot_restore() {
+    let opts = SyncOptions { dest_has_trash: true, dest_trash_restorable: false,
+                             ..opts_mirror() };
+    for i in run(every_verdict_once(), opts).await {
+        if let PlanItem::Step(s) = i {
+            if s.kind != SyncStepKind::Skip {
+                assert_eq!(s.reversal, Some(StepReversal::Irreversible), "{s:?}");
+                assert!(s.reason.is_some());
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_restorable_trash_keeps_the_promises_the_table_makes() {
+    let opts = SyncOptions { dest_has_trash: true, dest_trash_restorable: true,
+                             ..opts_mirror() };
+    let steps = steps_of(&run(every_verdict_once(), opts).await);
+    assert!(steps.iter().any(|s| s.reversal == Some(StepReversal::RestoreTrash)));
+    assert!(steps.iter().any(|s| s.reversal == Some(StepReversal::Delete)));
+}
+```
+
+- [ ] **Step 7: Reviewers, then commit**
+
+`encoding-auditor` is mandatory — this writes filenames into a sidecar format
+that percent-encodes, next to a file that must keep its bytes. `security-reviewer`
+too: a trash directory is attacker-adjacent (symlinked `~/.local/share/Trash`,
+a pre-planted `info/` entry, an `O_EXCL` race). Ask the auditor whether the
+sidecar's encoding can ever disagree with the file's bytes, and the security
+reviewer what a pre-planted sidecar or a symlinked trash root can do.
+
+```bash
+git add crates/norte-vfs-local crates/norte-vfs crates/norte-sync crates/norte-core
+git commit -m "fix(vfs-local): a trash that says where it put things"
+```
+
+---
+
 ### Task 12: The frontend model
 
 **Files:**
