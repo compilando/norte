@@ -938,7 +938,7 @@
       "unknown_kind": 2,
       "irreversible": 1,
       "bytes": 4096,
-      "bytes_unknown": 7
+      "unmeasured_steps": 7
     },
     "blockers": [],
     "blockers_total": 0,
@@ -956,7 +956,7 @@
       "unknown_kind": 0,
       "irreversible": 0,
       "bytes": 10,
-      "bytes_unknown": 0
+      "unmeasured_steps": 0
     },
     "blockers": [
       {

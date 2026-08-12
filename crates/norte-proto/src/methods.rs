@@ -3654,7 +3654,7 @@ pub struct SyncStepsBatch {
 /// let c = SyncCounts { copy: 2, bytes: 30, ..SyncCounts::default() };
 /// assert_eq!(serde_json::to_value(&c).expect("json")["delete_tree"], 0);
 /// // El total de bytes viene SIEMPRE acompañado de cuántos pasos no lo saben.
-/// assert_eq!(serde_json::to_value(&c).expect("json")["bytes_unknown"], 0);
+/// assert_eq!(serde_json::to_value(&c).expect("json")["unmeasured_steps"], 0);
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -3675,8 +3675,8 @@ pub struct SyncCounts {
     ///
     /// El core lo deja SIEMPRE en cero — jamás emite un paso que no sepa
     /// nombrar—, así que solo se llena en un cliente N-1 que sume por su cuenta
-    /// los lotes de [`SYNC_STEPS`]. Existe por lo mismo que `bytes_unknown`: sin
-    /// él, esos pasos no aparecerían en NINGÚN contador y la suma de las cinco
+    /// los lotes de [`SYNC_STEPS`]. Existe por lo mismo que `unmeasured_steps`:
+    /// sin él, esos pasos no aparecerían en NINGÚN contador y la suma de las cinco
     /// clases diría que el plan es más pequeño de lo que es, que es aprobar a
     /// ciegas un trozo del plan.
     pub unknown_kind: u64,
@@ -3690,7 +3690,7 @@ pub struct SyncCounts {
     /// Bytes que mueve el plan, de los pasos que MUEVEN bytes y traen tamaño.
     /// Un borrado y un `Skip` no mueven ninguno.
     ///
-    /// Se lee SIEMPRE junto a `bytes_unknown`: por sí solo es una cota
+    /// Se lee SIEMPRE junto a `unmeasured_steps`: por sí solo es una cota
     /// inferior, no un total — [`SyncCounts::exact_bytes`] es el total o nada.
     /// La suma satura en `u64::MAX`, así que un valor exactamente igual a
     /// `u64::MAX` puede ser un tope y no una medida.
@@ -3716,11 +3716,13 @@ pub struct SyncCounts {
     /// optimización posterior (issue #156) que solo puede ENCOGER este número,
     /// nunca cambiar la forma.
     ///
-    /// Son PASOS, no bytes, pese al prefijo: solo [`SyncStepKind::Copy`] y
+    /// Son PASOS, no bytes —el nombre lo dice, y por eso lo dice: al lado de
+    /// `bytes`, un `bytes_unknown` se leía como «7 bytes que no sabemos» en vez
+    /// de «7 pasos que no pudimos medir». Solo [`SyncStepKind::Copy`] y
     /// [`SyncStepKind::Overwrite`] lo incrementan, así que
-    /// `bytes_unknown <= copy + overwrite` siempre, y un consumidor puede
+    /// `unmeasured_steps <= copy + overwrite` siempre, y un consumidor puede
     /// comprobarlo antes de fiarse de unos contadores que no calculó él.
-    pub bytes_unknown: u64,
+    pub unmeasured_steps: u64,
 }
 
 impl SyncCounts {
@@ -3742,7 +3744,7 @@ impl SyncCounts {
     ///   en vez de sumarse, porque un byte contado que nunca se mueve es el
     ///   diálogo de aprobación mintiendo.
     /// - De los que sí mueven, el que trae tamaño suma en `bytes` y el que no
-    ///   suma UNO en `bytes_unknown`. Jamás un cero fingido.
+    ///   suma UNO en `unmeasured_steps`. Jamás un cero fingido.
     ///
     /// Las sumas son saturantes: un contador desbordado es un número raro, pero
     /// un pánico en el camino de un plan de medio millón de pasos es una Task
@@ -3767,7 +3769,7 @@ impl SyncCounts {
     /// let mut c = SyncCounts::default();
     /// c.add(&paso(SyncStepKind::Copy, Some(10)));
     /// c.add(&paso(SyncStepKind::Copy, None));
-    /// assert_eq!((c.copy, c.bytes, c.bytes_unknown), (2, 10, 1));
+    /// assert_eq!((c.copy, c.bytes, c.unmeasured_steps), (2, 10, 1));
     /// // Y con un paso sin medir, el total EXACTO no existe.
     /// assert_eq!(c.exact_bytes(), None);
     /// ```
@@ -3801,7 +3803,7 @@ impl SyncCounts {
     fn add_bytes(&mut self, size: Option<u64>) {
         match size {
             Some(bytes) => self.bytes = self.bytes.saturating_add(bytes),
-            None => self.bytes_unknown = self.bytes_unknown.saturating_add(1),
+            None => self.unmeasured_steps = self.unmeasured_steps.saturating_add(1),
         }
     }
 
@@ -3818,12 +3820,12 @@ impl SyncCounts {
     /// use norte_proto::methods::SyncCounts;
     /// let exacto = SyncCounts { copy: 1, bytes: 10, ..SyncCounts::default() };
     /// assert_eq!(exacto.exact_bytes(), Some(10));
-    /// let a_medias = SyncCounts { bytes_unknown: 1, ..exacto };
+    /// let a_medias = SyncCounts { unmeasured_steps: 1, ..exacto };
     /// assert_eq!(a_medias.exact_bytes(), None, "un paso sin medir no es cero");
     /// ```
     #[must_use]
     pub fn exact_bytes(&self) -> Option<u64> {
-        (self.bytes_unknown == 0).then_some(self.bytes)
+        (self.unmeasured_steps == 0).then_some(self.bytes)
     }
 }
 
@@ -4082,7 +4084,7 @@ pub struct SyncPlanDone {
     /// A cuánto suma el plan, por clase de paso.
     ///
     /// `counts.bytes` es una COTA INFERIOR, no un total: los pasos cuyo tamaño
-    /// el provider no dio se cuentan en `counts.bytes_unknown` en vez de sumar
+    /// el provider no dio se cuentan en `counts.unmeasured_steps` en vez de sumar
     /// cero (ver [`SyncCounts`], y [`SyncCounts::exact_bytes`] para el total o
     /// nada). Un diálogo que enseñe `bytes` a secas miente sobre casi cualquier
     /// plan de `file://`.

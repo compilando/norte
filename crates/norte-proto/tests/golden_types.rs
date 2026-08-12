@@ -2299,7 +2299,7 @@ fn check_methods_sync_notifs(fixtures: &BTreeMap<String, Value>) {
                 unknown_kind: 2,
                 irreversible: 1,
                 bytes: 4096,
-                bytes_unknown: 7,
+                unmeasured_steps: 7,
             },
             blockers: vec![],
             blockers_total: 0,

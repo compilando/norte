@@ -3508,16 +3508,10 @@
       "type": "object"
     },
     "SyncCounts": {
-      "description": "A cuánto suma un plan (0.40.0, ADR 0049). El diálogo de aprobación abre por\n`irreversible`.\n\nSe llena paso a paso con [`SyncCounts::add`], que es donde están escritas\n—una vez— las reglas de qué cuenta dónde.\n\n```\nuse norte_proto::methods::SyncCounts;\nlet c = SyncCounts { copy: 2, bytes: 30, ..SyncCounts::default() };\nassert_eq!(serde_json::to_value(&c).expect(\"json\")[\"delete_tree\"], 0);\n// El total de bytes viene SIEMPRE acompañado de cuántos pasos no lo saben.\nassert_eq!(serde_json::to_value(&c).expect(\"json\")[\"bytes_unknown\"], 0);\n```",
+      "description": "A cuánto suma un plan (0.40.0, ADR 0049). El diálogo de aprobación abre por\n`irreversible`.\n\nSe llena paso a paso con [`SyncCounts::add`], que es donde están escritas\n—una vez— las reglas de qué cuenta dónde.\n\n```\nuse norte_proto::methods::SyncCounts;\nlet c = SyncCounts { copy: 2, bytes: 30, ..SyncCounts::default() };\nassert_eq!(serde_json::to_value(&c).expect(\"json\")[\"delete_tree\"], 0);\n// El total de bytes viene SIEMPRE acompañado de cuántos pasos no lo saben.\nassert_eq!(serde_json::to_value(&c).expect(\"json\")[\"unmeasured_steps\"], 0);\n```",
       "properties": {
         "bytes": {
-          "description": "Bytes que mueve el plan, de los pasos que MUEVEN bytes y traen tamaño.\nUn borrado y un `Skip` no mueven ninguno.\n\nSe lee SIEMPRE junto a `bytes_unknown`: por sí solo es una cota\ninferior, no un total — [`SyncCounts::exact_bytes`] es el total o nada.\nLa suma satura en `u64::MAX`, así que un valor exactamente igual a\n`u64::MAX` puede ser un tope y no una medida.\n\nNO es lo mismo que [`SyncReportResult::bytes`], que son los bytes\nEFECTIVAMENTE movidos al ejecutar: sobre `file://` los dos números\ndifieren de serie, así que este no sirve de denominador de una barra de\nprogreso.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "bytes_unknown": {
-          "description": "Cuántos pasos mueven bytes SIN que se sepa cuántos\n([`SyncStep::size`] ausente).\n\nNo es un caso raro: un huérfano no se hidrata\n(<https://github.com/compilando/norte/issues/157>) y `norte-vfs-local`\nlista con `size: None`, así que sobre `file://` es el caso NORMAL. Sin\neste campo, `bytes` valdría cero y el diálogo de aprobación diría con\ntoda confianza que un plan de 40 GB no mueve nada.\n\nContarlos aparte es la regla que ADR 0048 ya fijó para esta familia: «el\nprovider no lo puede decir» es una respuesta, no un error, y no se\nesconde dentro de un número que parece cierto. El diálogo lee «1,2 GB +\n340 ficheros de tamaño desconocido». Hidratar los tamaños es una\noptimización posterior (issue #156) que solo puede ENCOGER este número,\nnunca cambiar la forma.\n\nSon PASOS, no bytes, pese al prefijo: solo [`SyncStepKind::Copy`] y\n[`SyncStepKind::Overwrite`] lo incrementan, así que\n`bytes_unknown <= copy + overwrite` siempre, y un consumidor puede\ncomprobarlo antes de fiarse de unos contadores que no calculó él.",
+          "description": "Bytes que mueve el plan, de los pasos que MUEVEN bytes y traen tamaño.\nUn borrado y un `Skip` no mueven ninguno.\n\nSe lee SIEMPRE junto a `unmeasured_steps`: por sí solo es una cota\ninferior, no un total — [`SyncCounts::exact_bytes`] es el total o nada.\nLa suma satura en `u64::MAX`, así que un valor exactamente igual a\n`u64::MAX` puede ser un tope y no una medida.\n\nNO es lo mismo que [`SyncReportResult::bytes`], que son los bytes\nEFECTIVAMENTE movidos al ejecutar: sobre `file://` los dos números\ndifieren de serie, así que este no sirve de denominador de una barra de\nprogreso.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -3559,7 +3553,13 @@
           "type": "integer"
         },
         "unknown_kind": {
-          "description": "Pasos de una clase que este decodificador NO conoce\n([`SyncStepKind::Unknown`]): un daemon una versión por delante emitió\nalgo que este cliente no sabe clasificar.\n\nEl core lo deja SIEMPRE en cero — jamás emite un paso que no sepa\nnombrar—, así que solo se llena en un cliente N-1 que sume por su cuenta\nlos lotes de [`SYNC_STEPS`]. Existe por lo mismo que `bytes_unknown`: sin\nél, esos pasos no aparecerían en NINGÚN contador y la suma de las cinco\nclases diría que el plan es más pequeño de lo que es, que es aprobar a\nciegas un trozo del plan.",
+          "description": "Pasos de una clase que este decodificador NO conoce\n([`SyncStepKind::Unknown`]): un daemon una versión por delante emitió\nalgo que este cliente no sabe clasificar.\n\nEl core lo deja SIEMPRE en cero — jamás emite un paso que no sepa\nnombrar—, así que solo se llena en un cliente N-1 que sume por su cuenta\nlos lotes de [`SYNC_STEPS`]. Existe por lo mismo que `unmeasured_steps`:\nsin él, esos pasos no aparecerían en NINGÚN contador y la suma de las cinco\nclases diría que el plan es más pequeño de lo que es, que es aprobar a\nciegas un trozo del plan.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unmeasured_steps": {
+          "description": "Cuántos pasos mueven bytes SIN que se sepa cuántos\n([`SyncStep::size`] ausente).\n\nNo es un caso raro: un huérfano no se hidrata\n(<https://github.com/compilando/norte/issues/157>) y `norte-vfs-local`\nlista con `size: None`, así que sobre `file://` es el caso NORMAL. Sin\neste campo, `bytes` valdría cero y el diálogo de aprobación diría con\ntoda confianza que un plan de 40 GB no mueve nada.\n\nContarlos aparte es la regla que ADR 0048 ya fijó para esta familia: «el\nprovider no lo puede decir» es una respuesta, no un error, y no se\nesconde dentro de un número que parece cierto. El diálogo lee «1,2 GB +\n340 ficheros de tamaño desconocido». Hidratar los tamaños es una\noptimización posterior (issue #156) que solo puede ENCOGER este número,\nnunca cambiar la forma.\n\nSon PASOS, no bytes —el nombre lo dice, y por eso lo dice: al lado de\n`bytes`, un `bytes_unknown` se leía como «7 bytes que no sabemos» en vez\nde «7 pasos que no pudimos medir». Solo [`SyncStepKind::Copy`] y\n[`SyncStepKind::Overwrite`] lo incrementan, así que\n`unmeasured_steps <= copy + overwrite` siempre, y un consumidor puede\ncomprobarlo antes de fiarse de unos contadores que no calculó él.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -3574,7 +3574,7 @@
         "unknown_kind",
         "irreversible",
         "bytes",
-        "bytes_unknown"
+        "unmeasured_steps"
       ],
       "type": "object"
     },
@@ -3654,7 +3654,7 @@
         },
         "counts": {
           "$ref": "#/$defs/SyncCounts",
-          "description": "A cuánto suma el plan, por clase de paso.\n\n`counts.bytes` es una COTA INFERIOR, no un total: los pasos cuyo tamaño\nel provider no dio se cuentan en `counts.bytes_unknown` en vez de sumar\ncero (ver [`SyncCounts`], y [`SyncCounts::exact_bytes`] para el total o\nnada). Un diálogo que enseñe `bytes` a secas miente sobre casi cualquier\nplan de `file://`."
+          "description": "A cuánto suma el plan, por clase de paso.\n\n`counts.bytes` es una COTA INFERIOR, no un total: los pasos cuyo tamaño\nel provider no dio se cuentan en `counts.unmeasured_steps` en vez de sumar\ncero (ver [`SyncCounts`], y [`SyncCounts::exact_bytes`] para el total o\nnada). Un diálogo que enseñe `bytes` a secas miente sobre casi cualquier\nplan de `file://`."
         },
         "executable": {
           "description": "`true` cuando el plan se puede ejecutar tal cual. Campo NORMATIVO, con la\nmisma dirección que [`FsRenameBatchPlanResult::executable`]: el frontend\ndeshabilita el confirmar con `!executable` y NO deduce nada de\n`blockers`, porque un bloqueo futuro podría no tener nombre que listar.\n\nINVARIANTE (el core lo mantiene, un cliente puede asumirlo): `blockers`\nno vacío ⟹ `executable == false`; y `executable == false` ⟹\n[`SYNC_APPLY`] rehúsa con\n[`Error::PlanNotExecutable`](crate::Error::PlanNotExecutable) aunque el\nhash case.",

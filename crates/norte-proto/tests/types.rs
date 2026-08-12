@@ -2121,7 +2121,7 @@ fn counts_add_up_per_kind_and_bytes_only_count_what_moves() {
     assert_eq!(c.skip, 1);
     assert_eq!(c.bytes, 30, "a delete and a skip move no bytes");
     assert_eq!(
-        c.bytes_unknown, 0,
+        c.unmeasured_steps, 0,
         "no las mueve, así que tampoco son bytes que no se sepan"
     );
 }
@@ -2135,7 +2135,7 @@ fn a_size_on_a_step_that_moves_nothing_is_ignored_not_added() {
     c.add(&counted_step(SyncStepKind::DeleteTree, Some(4096)));
     c.add(&counted_step(SyncStepKind::Skip, Some(4096)));
     c.add(&counted_step(SyncStepKind::CreateDir, Some(4096)));
-    assert_eq!((c.bytes, c.bytes_unknown), (0, 0));
+    assert_eq!((c.bytes, c.unmeasured_steps), (0, 0));
 }
 
 #[test]
@@ -2149,7 +2149,7 @@ fn a_step_with_no_size_is_counted_apart_and_never_as_zero() {
     c.add(&counted_step(SyncStepKind::Copy, None));
     c.add(&counted_step(SyncStepKind::Copy, None));
     assert_eq!(c.bytes, 10);
-    assert_eq!(c.bytes_unknown, 2);
+    assert_eq!(c.unmeasured_steps, 2);
     assert_eq!(c.copy, 3, "an unmeasured file is still a file to copy");
 }
 
@@ -2194,7 +2194,7 @@ fn an_unknown_kind_is_counted_as_unknown_and_not_dropped() {
         (0, 0, 0, 0, 0)
     );
     assert_eq!(
-        (c.bytes, c.bytes_unknown),
+        (c.bytes, c.unmeasured_steps),
         (0, 0),
         "no se sabe qué escribe, así que no se le atribuyen bytes"
     );
@@ -2220,7 +2220,7 @@ fn exact_bytes_is_the_total_or_nothing_at_all() {
 /// La invariante que un consumidor puede comprobar antes de fiarse de unos
 /// contadores que no calculó él: solo copiar y sobrescribir mueven bytes.
 #[test]
-fn only_the_two_kinds_that_move_bytes_can_raise_bytes_unknown() {
+fn only_the_two_kinds_that_move_bytes_can_raise_unmeasured_steps() {
     use norte_proto::methods::{SyncCounts, SyncStepKind};
     let mut c = SyncCounts::default();
     for kind in [
@@ -2232,8 +2232,8 @@ fn only_the_two_kinds_that_move_bytes_can_raise_bytes_unknown() {
     ] {
         c.add(&counted_step(kind, None));
     }
-    assert_eq!(c.bytes_unknown, 2);
-    assert!(c.bytes_unknown <= c.copy + c.overwrite);
+    assert_eq!(c.unmeasured_steps, 2);
+    assert!(c.unmeasured_steps <= c.copy + c.overwrite);
 }
 
 /// Sumar no puede matar la Task que está planificando: satura.
