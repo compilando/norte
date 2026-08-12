@@ -370,6 +370,8 @@ async fn stat(
 /// revalida limpio y se borra entero. Es el paso con más radio de acción de toda
 /// la función y su comprobación es la más floja; cerrarlo pediría un re-listado
 /// o un recuento en el testigo, que es un listado por paso destructivo.
+/// Archivado como **#176**: un riesgo conocido que solo vive en un comentario
+/// no lo ve nadie que tenga que decidir sobre él.
 ///
 /// Y con un testigo sin tamaño ni fecha esto se queda en «sigue
 /// existiendo y sigue siendo de la misma clase». Es menos de lo que la spec
