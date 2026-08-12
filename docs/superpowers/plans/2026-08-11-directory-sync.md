@@ -312,6 +312,30 @@ have to be identical for the plan to be a no-op — but it is residual, and
 Task 14 must correct ADR 0049 and the spec to say exactly this instead of
 claiming the walk guard handles it.
 
+### Two gaps Task 8's reviews found, reassigned rather than deferred
+
+**Case-insensitive containment is caught by nothing — Task 9 fixes it before
+it executes anything.** `/Data` against `/data/backup` passes the structural
+check, the `node_id` check and the walk-time guard on APFS and NTFS, and then
+copies a tree into itself. That is precisely the outcome the whole overlap
+apparatus exists to prevent, so it is not a note for Task 14.
+
+The fix is the rule this repository already owns: when **either** root's
+provider does not declare `CASE_SENSITIVE`, the structural containment check
+folds before comparing, exactly as `norte-compare::key` folds a pairing key —
+case FOLDING, not `to_lowercase`, for the 22 code points where they diverge
+(#129). It is the same duplicated fold key #151 already tracks; do not write a
+third copy, and if reuse means moving the helper, say so rather than copying.
+Refusal is the existing one: `Error::OverlappingRoots`.
+
+**`Backend` has no `sync_plan`, and no task claimed it — Task 10 does.** The
+TUI reaches the core through `Backend`, so Tasks 12 and 13 have nothing to
+call. Task 10 adds `sync_plan` and `sync_apply` to both arms, routes
+`sync.steps` and `sync.plan_done`, and repeats the up-front refusals
+`Backend::compare` already makes. The embedded arm is fail-closed today only
+because the CLI never calls `set_spool`; that is an accident of wiring, not a
+design, and Task 10 must not leave it as the only protection.
+
 ### What Task 5 changed in this plan
 
 **Task 4's prescription for #152 was wrong, and the wrongness is instructive.**
