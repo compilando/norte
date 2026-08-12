@@ -35,6 +35,18 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 9 — the executor | done | `d749166` (containment) + `26f26d3` (executor) |
 | 10 — `sync.apply`, `sync.report`, the `Backend` | done | `15a36f3` (cross-provider tests) + `40f87d5` |
 
+**The embedded TUI does not synchronise, and Task 13 says so out loud.**
+`make_backend` builds `Engine::new()` — no journal, no spool — and Task 9 made
+`sync.apply` require a journal, fail-closed. That is the right answer rather
+than an accident: synchronising is strictly more dangerous than copying, and
+hard rule 4 has no exception for the convenient transport. So Task 13 does
+**not** wire a journal into the embedded engine; it renders `pane.sync-dirs`
+through the keymap catalogue's existing `availability` machinery with a reason
+the user can act on — synchronisation needs the daemon, because it has to be
+journalled and undoable. Task 14 files the larger question (an embedded
+backend performs mutations no journal records) as its own issue; it predates
+this branch and changes every mutation, not just this one.
+
 **Task 11 is not optional and it must land before this branch merges.**
 `revert_batch` demands every entry of a batch be `rename_back` and answers
 `Blocked` otherwise, and `undo_session` is strict LIFO. So as of Task 9,
