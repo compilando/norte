@@ -1,0 +1,1248 @@
+//! El ejecutor: un plan aprobado se convierte en escrituras, en UNA unidad
+//! deshacible del journal, y en un informe que dice qué pasó con cada paso.
+//!
+//! `crates/norte-core/src/rename/exec.rs` es el pariente y conviene leerlo
+//! antes: una Task para muchos pasos, un `StepJournal` con un lote que comparte
+//! `batch_id`, un informe tras un `Mutex` y la cancelación mirada ENTRE pasos.
+//! Lo que aquí es distinto —y es lo único importante— es que **no hay
+//! rollback**.
+//!
+//! # Media sincronización es un estado real; media permutación no
+//! El lote de renames se desanda entero ante el primer fallo porque un
+//! directorio a medio renombrar no es ni el de antes ni el de después. Un árbol
+//! a medio sincronizar sí es algo: es el árbol de antes con cuarenta mil
+//! ficheros ya actualizados. Desandarlo automáticamente le quitaría al usuario
+//! un trabajo que salió bien para dejarlo donde estaba, y encima cada paso
+//! desandado es otra escritura que puede fallar. Así que **un paso que falla es
+//! una fila del informe y la Task sigue**, y lo aplicado se queda —journalizado
+//! bajo su lote, o sea deshacible a mano por quien quiera deshacerlo—.
+//!
+//! # La revalidación es lo único entre el TTL y un fichero perdido
+//! Entre que un humano aprueba un plan y que se aplica pasan hasta
+//! [`SYNC_PLAN_TTL_MS`](norte_proto::methods::SYNC_PLAN_TTL_MS) milisegundos.
+//! Antes de CADA paso destructivo —un `Overwrite`, un `DeleteTree`— se hace un
+//! `stat` y se compara con lo que la comparación vio en su día
+//! ([`DestWitness`]); si no cuadra, el paso NO se ejecuta y sale en el informe
+//! como [`SyncFailureCause::Conflict`]. Sin eso, aprobar un plan sería firmar un
+//! cheque al portador sobre el árbol de destino durante diez minutos.
+//!
+//! # Regla dura 4: un plan sin journal no se aplica
+//! `sync.apply` EXIGE journal ([`Engine::sync_apply_as`](crate::Engine::sync_apply_as)
+//! contesta `Unsupported` sin él). El lote de renames tolera no tenerlo porque
+//! un rename se deshace mirando el directorio; aquí se sobrescribe y se entierra,
+//! y cada paso del plan lleva prometida una [`StepReversal`] que solo el journal
+//! puede cumplir.
+//!
+//! # Cómo se journaliza cada clase (tabla normativa de la spec)
+//!
+//! | paso | entradas | reversa |
+//! | --- | --- | --- |
+//! | `CreateDir`, `Copy` | `created` | `Delete` |
+//! | `Overwrite` con papelera | `trashed` + `created` | `RestoreTrash` + `Delete` |
+//! | `Overwrite` sin papelera | `created` | `Irreversible` |
+//! | `DeleteTree` con papelera | `trashed` (UNA, por el árbol entero) | `RestoreTrash` |
+//! | `DeleteTree` sin papelera | `removed` (UNA, por el árbol entero) | `Irreversible` |
+//! | `Skip` | ninguna | — |
+//!
+//! El undo recorre `seq` descendente, así que dentro de la pareja de un
+//! `Overwrite` borra lo creado ANTES de restaurar lo enterrado. El orden correcto
+//! sale del mecanismo que ya había, no de cuidado puesto aquí.
+//!
+//! **El `Overwrite` sin papelera no lleva una entrada propia por el borrado**, y
+//! es deliberado: la única entrada dice `created` con reversa `Irreversible`,
+//! que es la verdad entera —«esta ruta tiene contenido nuevo y lo anterior no se
+//! puede recuperar»—. Con dos entradas (`removed` irreversible + `created`
+//! deshacible) el undo del lote borraría el fichero nuevo sin poder restaurar el
+//! viejo, y dejaría la ruta VACÍA donde el usuario tenía algo: peor que el
+//! estado que venía a arreglar.
+
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use futures::{Stream, StreamExt as _};
+use norte_proto::methods::RelPath;
+use norte_proto::methods::{
+    SYNC_MAX_FAILURES_REPORTED, StepReversal, SyncFailure, SyncFailureCause, SyncReportResult,
+    SyncStep, SyncStepKind,
+};
+use norte_proto::{ConflictKind, Entry, EntryKind, Error, VPath};
+use norte_sync::DestWitness;
+use norte_vfs::{Provider, SymlinkKind};
+
+use crate::journal::{Actor, NewEntry, Reversal, SqliteJournal};
+use crate::observer::NoopObserver;
+use crate::scheduler::TaskCtx;
+use crate::sync::spool::SpoolStep;
+
+/// Las dos raíces y sus providers, resueltos una vez.
+///
+/// Las raíces salen del ENCABEZADO DEL SPOOL, que es el único sitio donde
+/// están: `sync.apply` lleva un hash y nada más.
+pub(crate) struct SyncTargets {
+    /// Provider de la raíz de origen.
+    pub source: Arc<dyn Provider>,
+    /// Provider de la raíz de destino. Puede ser el mismo objeto.
+    pub dest: Arc<dyn Provider>,
+    /// De dónde se lee.
+    pub source_root: VPath,
+    /// Dónde se escribe.
+    ///
+    /// **Ninguna RUTA sale de aquí**: cada una se compone pegándole a esta raíz
+    /// una [`RelPath`], cuyos segmentos no pueden ser `..` ni `.` ni contener
+    /// `/` ni NUL — lo impide [`norte_proto::Segment`] al construirse, y la
+    /// deserialización lo vuelve a impedir después de decodificar, así que un
+    /// `%2E%2E` tampoco cuela.
+    ///
+    /// **Lo que eso no promete es que los BYTES se queden dentro.** La
+    /// resolución la hace el sistema de ficheros, y ningún provider de este
+    /// árbol abre con `O_NOFOLLOW`/`RESOLVE_BENEATH`: un symlink puesto en un
+    /// componente INTERMEDIO entre aprobar y aplicar redirige la escritura fuera
+    /// del árbol, con las credenciales del daemon. Los pasos destructivos lo
+    /// esquivan de rebote —`stat` es un `lstat`, así que la revalidación ve un
+    /// `Symlink` donde el testigo decía `Dir` y contesta conflicto; y `walk` no
+    /// desciende symlinks— pero un `Copy` y un `CreateDir` no tienen defensa
+    /// aquí. Cerrarlo pide resolución acotada en el provider, que es un cambio de
+    /// `norte-vfs-local` y no de este fichero.
+    pub dest_root: VPath,
+    /// El gate de policy, consultado paso a paso sobre la ruta REAL.
+    ///
+    /// El gate de la raíz que `sync.apply` pide antes de empezar resuelve la
+    /// frontera de scope de un agente (es por raíz, y `is_under` es transitivo),
+    /// pero **no** una regla `deny` de `policy.toml` sobre una ruta de DENTRO
+    /// del árbol: esas reglas casan por contención de la ruta consultada, así que
+    /// consultando solo la raíz no se ven. Sin esto, un plan `Mirror` con un
+    /// origen vacío borraría un subárbol que `fs.delete` rehúsa — o sea, una
+    /// autorización de borrado más floja que la que ya existe.
+    pub policy: Arc<dyn crate::policy::PolicyGate>,
+    /// Qué clase de borrado va a ocurrir de verdad, para preguntarlo por lo que
+    /// es. Sale de `dest_has_trash` del plan, que es lo mismo de lo que sale la
+    /// reversa de cada paso.
+    pub delete_mode: norte_proto::DeleteMode,
+}
+
+impl SyncTargets {
+    /// ¿Autoriza la policy ESTE paso sobre ESTA ruta?
+    ///
+    /// Un `Deny` es una fila del informe ([`SyncFailureCause::Denied`]), no el
+    /// final de la Task: es exactamente lo que un paso que falla significa.
+    ///
+    /// Un `Ask` también se rehúsa, y no se pregunta. Un modal por paso en un plan
+    /// de medio millón no es una interfaz, y el gate de la raíz ya preguntó una
+    /// vez por el lote entero; rehusar es el lado seguro del intercambio.
+    fn allows(
+        &self,
+        op: crate::policy::PolicyOp,
+        path: &VPath,
+        actor: &Actor,
+    ) -> Result<(), Error> {
+        use crate::policy::{Decision, DenyReason};
+        match self.policy.evaluate(actor, op, &[path]) {
+            Decision::Allow => Ok(()),
+            Decision::Deny(reason) => Err(Error::PolicyDenied {
+                rule: reason.rule_id().to_owned(),
+            }),
+            Decision::Ask => Err(Error::PolicyDenied {
+                rule: DenyReason::NotApproved.rule_id().to_owned(),
+            }),
+        }
+    }
+}
+
+/// Cómo se registra UN efecto de este lote.
+///
+/// Dos métodos y no un `Mutation`: [`crate::observer::Mutation`] no lleva
+/// `batch_id` más que en el rename, y lo que hace de estas escrituras UNA unidad
+/// deshacible es justamente que todas compartan el suyo.
+#[async_trait]
+pub(crate) trait StepJournal: Send + Sync {
+    /// Un nodo que este lote CREÓ. `reversal` es
+    /// [`Reversal::Delete`] salvo en la sobrescritura sin papelera, que es
+    /// [`Reversal::Irreversible`] (ver la tabla del módulo).
+    ///
+    /// # Errors
+    /// El error del journal. Regla dura 4: un efecto cuya entrada no queda
+    /// durable deja el árbol fuera del journal, así que el llamante para la Task
+    /// en vez de seguir produciendo más.
+    async fn created(&self, path: &VPath, reversal: Reversal) -> Result<(), Error>;
+
+    /// Un nodo que este lote ENTERRÓ en la papelera. `dest` es la ruta
+    /// recuperable de una papelera lógica, y es lo que el undo necesita para
+    /// saber DE DÓNDE sacarlo.
+    ///
+    /// # Errors
+    /// El error del journal, como en [`StepJournal::created`].
+    async fn trashed(&self, path: &VPath, dest: Option<&VPath>) -> Result<(), Error>;
+
+    /// Un nodo que este lote borró PERMANENTEMENTE (un `DeleteTree` sobre un
+    /// destino sin papelera). Siempre [`Reversal::Irreversible`].
+    ///
+    /// # Errors
+    /// El error del journal, como en [`StepJournal::created`].
+    async fn removed(&self, path: &VPath) -> Result<(), Error>;
+}
+
+/// Registra en el journal bajo UN `batch_id`.
+pub(crate) struct BatchJournal {
+    /// El journal, que es también el observer del engine.
+    pub journal: Arc<SqliteJournal>,
+    /// Quién lo causó.
+    pub actor: Actor,
+    /// El id que comparten todas las entradas de esta aplicación: lo que las
+    /// hace UNA unidad deshacible ([`crate::journal::Journal::alloc_batch`]).
+    pub batch_id: i64,
+}
+
+impl BatchJournal {
+    /// El insert, con el lote puesto.
+    async fn record(
+        &self,
+        op: &str,
+        path: &VPath,
+        reversal: Reversal,
+        reversal_ref: Option<&VPath>,
+    ) -> Result<(), Error> {
+        let path = path.to_wire().into_bytes();
+        let reference = reversal_ref.map(|p| p.to_wire().into_bytes());
+        self.journal
+            .journal()
+            .record_entry(&NewEntry {
+                op,
+                path: &path,
+                path_to: None,
+                reversal,
+                reversal_ref: reference.as_deref(),
+                actor: &self.actor,
+                undoes_seq: None,
+                batch_id: Some(self.batch_id),
+            })
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, op, "sync.apply: fallo al escribir el journal");
+                Error::from(e)
+            })?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl StepJournal for BatchJournal {
+    async fn created(&self, path: &VPath, reversal: Reversal) -> Result<(), Error> {
+        self.record("created", path, reversal, None).await
+    }
+
+    async fn trashed(&self, path: &VPath, dest: Option<&VPath>) -> Result<(), Error> {
+        self.record("trashed", path, Reversal::RestoreTrash, dest)
+            .await
+    }
+
+    async fn removed(&self, path: &VPath) -> Result<(), Error> {
+        self.record("removed", path, Reversal::Irreversible, None)
+            .await
+    }
+}
+
+/// Un informe recién abierto, con su lote ya puesto.
+#[must_use]
+pub(crate) fn new_report(batch_id: i64) -> SyncReportResult {
+    SyncReportResult {
+        done: 0,
+        failed: 0,
+        skipped: 0,
+        bytes: 0,
+        failures: Vec::new(),
+        batch_id: Some(batch_id),
+    }
+}
+
+/// Qué le pasó a UN paso.
+enum Applied {
+    /// Se ejecutó, moviendo estos bytes.
+    Wrote(u64),
+    /// No tocó nada: el plan ya lo traía como [`SyncStepKind::Skip`].
+    Skipped,
+}
+
+/// Por qué se paró un paso, y si eso para también la Task.
+enum StepError {
+    /// El paso no ocurrió. Fila del informe; la Task sigue.
+    Failed(Error),
+    /// Nada puede seguir: una cancelación, o el journal.
+    Fatal(Error),
+}
+
+impl StepError {
+    /// El error de un PROVIDER: fila del informe, salvo que sea la cancelación
+    /// —que no es un fallo del paso, es el final de la Task—.
+    fn from_provider(e: Error) -> Self {
+        if matches!(e, Error::Cancelled) {
+            StepError::Fatal(e)
+        } else {
+            StepError::Failed(e)
+        }
+    }
+}
+
+/// La causa que va al informe.
+///
+/// [`SyncFailureCause::IllegalName`] merece la suya: la legalidad de un nombre
+/// bajo la raíz de DESTINO no se valida al planificar (ver el rustdoc de la
+/// variante), así que es la familia de fallos que aflora aquí de serie, la que
+/// el usuario puede arreglar él solo, y la que se repetirá idéntica en cada
+/// intento hasta que la arregle. Un `Io` genérico no le diría nada de eso.
+fn cause_of(e: &Error) -> SyncFailureCause {
+    match e {
+        Error::PermissionDenied | Error::PolicyDenied { .. } => SyncFailureCause::Denied,
+        Error::InvalidPath => SyncFailureCause::IllegalName,
+        // «Ya no está como el plan lo vio»: el destino cambió, el origen
+        // desapareció, o algo ocupa el sitio.
+        Error::NotFound | Error::Conflict { .. } => SyncFailureCause::Conflict,
+        _ => SyncFailureCause::Io,
+    }
+}
+
+/// La ruta absoluta de `rel` bajo `root`.
+///
+/// No puede salirse de `root`: un [`norte_proto::Segment`] no puede ser `..` ni
+/// `.` ni llevar `/` ni NUL, y [`RelPath`] los valida al construirse y al
+/// deserializar. Es la propiedad en la que se apoya que ningún paso escriba
+/// fuera de la raíz de destino, y por eso se compone así y jamás concatenando
+/// cadenas.
+fn under(root: &VPath, rel: &RelPath) -> VPath {
+    let mut path = root.clone();
+    for segment in rel.segments() {
+        path = path.join(segment.clone());
+    }
+    path
+}
+
+/// Dónde cae este paso EN EL DESTINO.
+///
+/// `dest_root + dest_rel.unwrap_or(rel)`, que es la regla normativa de
+/// [`SyncStep::dest_rel`](norte_proto::methods::SyncStep::dest_rel): se escribe
+/// sobre el fichero que EXISTE, no sobre el que el origen deletrea. Un `café`
+/// NFC del origen contra un `café` NFD del destino son la misma pareja, y pegar
+/// la ortografía del origen sobre ext4 crearía un SEGUNDO fichero al lado del
+/// que se quería sobrescribir — con una promesa de `RestoreTrash` sobre algo que
+/// nadie enterró.
+fn dest_path(targets: &SyncTargets, record: &SpoolStep) -> VPath {
+    let rel = record.step.dest_rel.as_ref().unwrap_or(&record.step.rel);
+    under(&targets.dest_root, rel)
+}
+
+/// `stat` con reintentos, distinguiendo «no está» de «no se pudo mirar».
+async fn stat(
+    provider: &dyn Provider,
+    path: &VPath,
+    ctx: &TaskCtx,
+) -> Result<Option<Entry>, Error> {
+    use futures::FutureExt as _;
+    match crate::ops::with_retry(&ctx.cancel, || provider.stat(path).boxed()).await {
+        Ok(entry) => Ok(Some(entry)),
+        Err(Error::NotFound) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// ¿Sigue el destino como el plan lo vio?
+///
+/// El `stat` de la spec, y lo único que hay entre el TTL del plan y un fichero
+/// perdido. Se compara contra el [`DestWitness`] que la comparación anotó:
+///
+/// - **No está** → conflicto. El paso se aprobó sobre algo que ya no existe.
+/// - **Cambió de clase** → conflicto, siempre.
+/// - **Cambió de tamaño o de fecha** → conflicto. Solo se compara lo que las DOS
+///   fotos traen: un provider que lista sin tamaño (`file://` es uno) deja el
+///   testigo a medias, y declarar un conflicto por eso rechazaría el plan entero
+///   en el sistema de ficheros más común.
+///
+/// # El residual, dicho en voz alta
+/// **Un `DeleteTree` revalida el DIRECTORIO, no su contenido.** El `stat` de un
+/// directorio solo se mueve cuando cambian sus hijos DIRECTOS, así que un
+/// subárbol que ganó cien ficheros dos niveles más abajo entre aprobar y aplicar
+/// revalida limpio y se borra entero. Es el paso con más radio de acción de toda
+/// la función y su comprobación es la más floja; cerrarlo pediría un re-listado
+/// o un recuento en el testigo, que es un listado por paso destructivo.
+///
+/// Y con un testigo sin tamaño ni fecha esto se queda en «sigue
+/// existiendo y sigue siendo de la misma clase». Es menos de lo que la spec
+/// promete y es lo que el plan puede saber: la pareja de un `Overwrite` sí viene
+/// hidratada (la cascada necesita tamaño y fecha para decidir), así que el caso
+/// que de verdad importa está cubierto. Y una fecha con resolución de segundo
+/// deja una ventana de un segundo en la que un cambio del mismo tamaño pasa
+/// desapercibido.
+async fn revalidate(
+    provider: &dyn Provider,
+    path: &VPath,
+    witness: Option<DestWitness>,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    // Sin foto no se destruye. El transductor la pone SIEMPRE en las dos clases
+    // que llaman aquí, así que una que falte no es un provider parco: es un
+    // fichero de spool que este binario no escribió como lo escribe. Y como el
+    // testigo NO entra en el `plan_hash` —es de dónde salió la conclusión, no la
+    // conclusión—, borrarlo es justo la edición que el digest no ve; exigirlo es
+    // lo que la vuelve inútil.
+    let Some(before) = witness else {
+        tracing::error!("sync.apply: un paso destructivo sin testigo del destino");
+        return Err(Error::Conflict {
+            conflict: ConflictKind::Unknown,
+        });
+    };
+    let Some(now) = stat(provider, path, ctx).await? else {
+        return Err(Error::NotFound);
+    };
+    if now.kind != before.kind {
+        return Err(Error::Conflict {
+            conflict: ConflictKind::TypeMismatch,
+        });
+    }
+    let size_moved = matches!((before.size, now.size), (Some(a), Some(b)) if a != b);
+    let mtime_moved = matches!((before.mtime_ms, now.mtime_ms), (Some(a), Some(b)) if a != b);
+    if size_moved || mtime_moved {
+        return Err(Error::Conflict {
+            conflict: ConflictKind::Exists,
+        });
+    }
+    Ok(())
+}
+
+/// Copia UNA hoja del origen al destino y devuelve los bytes que movió.
+///
+/// El destino tiene que estar LIBRE: el `write` de un provider es create-new, así
+/// que un destino ocupado sale como `Conflict` en vez de pisar nada por
+/// sorpresa. Quien sobrescribe ya lo ha vaciado antes, a conciencia y con su
+/// entrada de journal.
+///
+/// **La entrada de journal NO la pone `ops`**, y por eso se le da un observer
+/// que no hace nada: `Mutation::Created` no lleva `batch_id`, así que la copia
+/// quedaría fuera del lote y el undo no la vería. La pone el llamante, con el
+/// lote y con la reversa que a esa clase de paso le toca.
+async fn copy_leaf(
+    targets: &SyncTargets,
+    from: &VPath,
+    to: &VPath,
+    entry: &Entry,
+    ctx: &TaskCtx,
+) -> Result<u64, Error> {
+    use norte_proto::{CollisionPolicy, ResumePolicy, SymlinkPolicy, VerifyPolicy};
+
+    if entry.kind == EntryKind::Symlink {
+        let target = crate::ops::with_retry(&ctx.cancel, || {
+            use futures::FutureExt as _;
+            targets.source.read_link(from).boxed()
+        })
+        .await?;
+        // `Unknown`: el kind lo resuelve el provider destino contra su propio
+        // árbol, igual que en la copia normal (issue #18).
+        crate::ops::symlink_retrying(
+            targets.dest.as_ref(),
+            to,
+            &target,
+            SymlinkKind::Unknown,
+            &ctx.cancel,
+        )
+        .await?;
+        return Ok(0);
+    }
+    let opts = crate::TransferOptions {
+        // Nunca se lee por este camino —`copy_file_retrying` solo mira `resume` y
+        // `verify`—, y va explícito para que quede dicho: quien resuelve las
+        // colisiones es el ejecutor, revalidando antes de destruir. Lo que hace
+        // que un destino ocupado salga como conflicto es que el `write` de un
+        // provider es create-new.
+        on_collision: CollisionPolicy::Fail,
+        symlinks: SymlinkPolicy::Preserve,
+        // Cancelar deja el destino LIMPIO, que es el contrato de M1 y lo que
+        // esta rama elige: un `.norte-partial` por fichero interrumpido queda en
+        // el árbol de destino, y la siguiente comparación lo vería como huérfano
+        // —que bajo `Mirror` es un `DeleteTree`—. Reanudar una sincronización
+        // grande es una mejora que se puede añadir después; dejar basura que el
+        // propio modo se lleva por delante, no.
+        resume: ResumePolicy::Off,
+        verify: VerifyPolicy::default(),
+    };
+    let before = ctx.progress.snapshot().bytes_done;
+    let observer: Arc<dyn crate::observer::MutationObserver> = Arc::new(NoopObserver);
+    crate::ops::copy_file_retrying(
+        targets.source.as_ref(),
+        targets.dest.as_ref(),
+        from,
+        to,
+        entry.size,
+        opts,
+        &observer,
+        ctx,
+    )
+    .await?;
+    Ok(ctx.progress.snapshot().bytes_done.saturating_sub(before))
+}
+
+/// El origen de un paso que copia, mirado ANTES de tocar el destino.
+///
+/// **El orden es la mitad de la seguridad de un `Overwrite`.** Mirando el origen
+/// DESPUÉS de enterrar el destino, un origen que desapareció entre aprobar y
+/// aplicar —o que cambió a directorio— deja la ruta de destino VACÍA: enterrado
+/// lo que había y sin nada con que sustituirlo, y con un informe que dice
+/// «conflicto» sobre una destrucción que ya ocurrió. Mirándolo primero, el paso
+/// falla sin haber tocado nada.
+async fn source_leaf(
+    targets: &SyncTargets,
+    record: &SpoolStep,
+    ctx: &TaskCtx,
+) -> Result<(VPath, Entry), StepError> {
+    let from = under(&targets.source_root, &record.step.rel);
+    let entry = stat(targets.source.as_ref(), &from, ctx)
+        .await
+        .map_err(StepError::from_provider)?
+        .ok_or(StepError::Failed(Error::NotFound))?;
+    if entry.kind == EntryKind::Dir {
+        // El plan nombró una HOJA. Un directorio aquí significa que el origen
+        // cambió de forma, y copiarlo en recursivo metería en el lote un
+        // subárbol entero que nadie aprobó.
+        return Err(StepError::Failed(Error::Conflict {
+            conflict: ConflictKind::TypeMismatch,
+        }));
+    }
+    Ok((from, entry))
+}
+
+/// Copia una hoja ya mirada sobre un destino LIBRE, y la journaliza con
+/// `reversal`.
+async fn place(
+    targets: &SyncTargets,
+    from: &VPath,
+    entry: &Entry,
+    recorder: &dyn StepJournal,
+    to: &VPath,
+    reversal: Reversal,
+    ctx: &TaskCtx,
+) -> Result<Applied, StepError> {
+    let bytes = copy_leaf(targets, from, to, entry, ctx)
+        .await
+        .map_err(StepError::from_provider)?;
+    recorder
+        .created(to, reversal)
+        .await
+        .map_err(StepError::Fatal)?;
+    Ok(Applied::Wrote(bytes))
+}
+
+/// Borra `path` y todo lo que cuelgue de él, PERMANENTEMENTE.
+///
+/// Las entradas de dentro NO se journalizan una a una: el paso es UNO —«este
+/// árbol ya no está»— y su entrada también, igual que la papelera entierra el
+/// árbol de una pieza.
+async fn remove_tree(provider: &dyn Provider, path: &VPath, ctx: &TaskCtx) -> Result<(), Error> {
+    // El `stat` no es de adorno y es el mismo que hace `ops::delete_task`: el
+    // walk empieza por un `list`, y un `list` sobre un fichero es
+    // `Conflict{TypeMismatch}`. Un `DeleteTree` nombra la entrada huérfana, que
+    // la mayoría de las veces es un FICHERO — sin esto, `Mirror` contra un
+    // destino sin papelera (un bucket, un SFTP) contestaría «conflicto» por cada
+    // fichero que sobra y no borraría ninguno.
+    let entry = stat(provider, path, ctx).await?.ok_or(Error::NotFound)?;
+    if entry.kind == EntryKind::Dir {
+        // El walk emite cada padre antes que sus hijos, así que recorrerlo al
+        // revés ES el post-orden y todo directorio llega vacío a su `remove`.
+        let entries = crate::ops::walk(provider, path, &ctx.cancel).await?;
+        for entry in entries.iter().rev() {
+            if ctx.cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            crate::ops::remove_retrying(provider, &entry.path, &ctx.cancel).await?;
+        }
+    }
+    crate::ops::remove_retrying(provider, path, &ctx.cancel).await
+}
+
+/// Un id de papelera determinista para UN paso, estable en todo reintento (#99).
+///
+/// **Por VÍCTIMA y no por Task**, que es donde esto se separa de
+/// `ops::delete_task`: allí una Task entierra exactamente una cosa y le basta el
+/// `task_id` como contador. Aquí una Task entierra cientos, y una papelera
+/// LÓGICA nombra su carpeta con el id (`.norte-trash/<ms>-<contador>/`) — con el
+/// contador fijo, dos pasos enterrados en el mismo milisegundo chocan, y el
+/// segundo sale como `Conflict{Exists}`, o sea como una deriva del destino que
+/// nunca ocurrió. `SyncStep::id` es monótono dentro de UN plan, que es
+/// exactamente el ámbito que hace falta.
+fn trash_id(step_id: u64) -> norte_vfs::trash::TrashId {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+    norte_vfs::trash::TrashId::new(now_ms, step_id)
+}
+
+/// Entierra `to` en la papelera y lo journaliza.
+async fn bury(
+    targets: &SyncTargets,
+    recorder: &dyn StepJournal,
+    to: &VPath,
+    step_id: u64,
+    ctx: &TaskCtx,
+) -> Result<(), StepError> {
+    let buried =
+        crate::ops::trash_retrying(targets.dest.as_ref(), to, &trash_id(step_id), &ctx.cancel)
+            .await
+            .map_err(StepError::from_provider)?;
+    if let Err(e) = recorder.trashed(to, buried.as_ref()).await {
+        // El `reversal_ref` es la ÚNICA pista de dónde fue a parar el fichero, y
+        // acaba de no quedar en el journal. Se escribe en el log del operador
+        // antes de morir: sin esto, «¿dónde está mi fichero?» no lo contesta
+        // nadie.
+        tracing::error!(
+            error = %e,
+            enterrado = %crate::engine::span_path(to),
+            en = buried.as_ref().map(crate::engine::span_path),
+            "sync.apply: se enterró el destino y su entrada de journal NO llegó",
+        );
+        return Err(StepError::Fatal(e));
+    }
+    Ok(())
+}
+
+/// Una reversa que este core no emite para esta clase de paso.
+///
+/// Inalcanzable: el transductor deriva la reversa de la clase y de la papelera, y
+/// el spool rehúsa al leer un paso cuya forma no se sostiene. Si llegara, NO
+/// destruir es la única respuesta.
+fn unexpected_reversal(kind: SyncStepKind, reversal: Option<StepReversal>) -> StepError {
+    tracing::error!(
+        ?kind,
+        ?reversal,
+        "sync.apply: un paso con una reversa que este core no emite"
+    );
+    StepError::Failed(Error::Conflict {
+        conflict: ConflictKind::Unknown,
+    })
+}
+
+/// `CreateDir`: crea el directorio, o falla si algo ya ocupa el sitio.
+async fn create_dir(
+    targets: &SyncTargets,
+    recorder: &dyn StepJournal,
+    to: &VPath,
+    ctx: &TaskCtx,
+) -> Result<Applied, StepError> {
+    // Pre-stat: es el contrato de `mkdir_retrying` (sin él no puede distinguir su
+    // propio directorio fantasma de uno ajeno tras un fallo transitorio), y de
+    // paso es la revalidación que a esta clase le toca. Algo ya puesto ahí NO se
+    // adopta: reclamar como nuestro un directorio ajeno haría que el undo lo
+    // mandara a la papelera con su contenido.
+    let pre = stat(targets.dest.as_ref(), to, ctx)
+        .await
+        .map_err(StepError::from_provider)?;
+    if pre.is_some() {
+        return Err(StepError::Failed(Error::Conflict {
+            conflict: ConflictKind::Exists,
+        }));
+    }
+    crate::ops::mkdir_retrying(targets.dest.as_ref(), to, &ctx.cancel)
+        .await
+        .map_err(StepError::from_provider)?;
+    recorder
+        .created(to, Reversal::Delete)
+        .await
+        .map_err(StepError::Fatal)?;
+    Ok(Applied::Wrote(0))
+}
+
+/// `Overwrite`: revalidar, mirar el origen, vaciar el destino y copiar.
+///
+/// Ese orden, y no otro: revalidar antes de destruir es lo que protege del TTL, y
+/// mirar el origen antes de destruir es lo que impide dejar la ruta vacía cuando
+/// el origen ya no está (ver [`source_leaf`]).
+async fn overwrite(
+    targets: &SyncTargets,
+    record: &SpoolStep,
+    recorder: &dyn StepJournal,
+    to: &VPath,
+    ctx: &TaskCtx,
+) -> Result<Applied, StepError> {
+    revalidate(targets.dest.as_ref(), to, record.dest, ctx)
+        .await
+        .map_err(StepError::from_provider)?;
+    let (from, entry) = source_leaf(targets, record, ctx).await?;
+    match record.step.reversal {
+        Some(StepReversal::RestoreTrash) => {
+            bury(targets, recorder, to, record.step.id, ctx).await?;
+            place(targets, &from, &entry, recorder, to, Reversal::Delete, ctx).await
+        }
+        Some(StepReversal::Irreversible) => {
+            crate::ops::remove_retrying(targets.dest.as_ref(), to, &ctx.cancel)
+                .await
+                .map_err(StepError::from_provider)?;
+            // UNA entrada, irreversible: ver la nota del módulo sobre por qué el
+            // borrado no lleva la suya CUANDO LA COPIA LLEGA.
+            let placed = place(
+                targets,
+                &from,
+                &entry,
+                recorder,
+                to,
+                Reversal::Irreversible,
+                ctx,
+            )
+            .await;
+            if placed.is_err() {
+                // Y por qué SÍ la lleva cuando no llega: lo de antes ya no está,
+                // lo nuevo no se escribió, y sin esta entrada la destrucción se
+                // habría quedado fuera del journal entero (regla dura 4 pide una
+                // entrada o una clasificación `Irreversible` explícita; esta es
+                // las dos cosas). El informe la nombra, pero el informe es de la
+                // Task y se va con ella.
+                recorder.removed(to).await.map_err(StepError::Fatal)?;
+            }
+            placed
+        }
+        other => Err(unexpected_reversal(record.step.kind, other)),
+    }
+}
+
+/// `DeleteTree`: revalidar y quitar el árbol de una pieza, a la papelera o para
+/// siempre.
+async fn delete_tree(
+    targets: &SyncTargets,
+    record: &SpoolStep,
+    recorder: &dyn StepJournal,
+    to: &VPath,
+    ctx: &TaskCtx,
+) -> Result<Applied, StepError> {
+    revalidate(targets.dest.as_ref(), to, record.dest, ctx)
+        .await
+        .map_err(StepError::from_provider)?;
+    match record.step.reversal {
+        Some(StepReversal::RestoreTrash) => {
+            bury(targets, recorder, to, record.step.id, ctx).await?;
+            Ok(Applied::Wrote(0))
+        }
+        Some(StepReversal::Irreversible) => {
+            let removed = remove_tree(targets.dest.as_ref(), to, ctx).await;
+            // La entrada se escribe aunque el borrado se haya quedado a medias:
+            // «este árbol ya no está entero» es una mutación irreversible tanto
+            // si el `remove` llegó al final como si murió en el fichero 40 000, y
+            // sin ella la parte destruida se queda fuera del journal (regla dura
+            // 4). Lo único que NO la merece es un fallo antes del primer borrado,
+            // y ese es exactamente `NotFound`/`Conflict` de la revalidación, que
+            // ya salió por arriba.
+            if !matches!(removed, Err(Error::Cancelled)) {
+                recorder.removed(to).await.map_err(StepError::Fatal)?;
+            }
+            removed.map_err(StepError::from_provider)?;
+            Ok(Applied::Wrote(0))
+        }
+        other => Err(unexpected_reversal(record.step.kind, other)),
+    }
+}
+
+/// La policy, preguntada por la ruta REAL de un paso que va a actuar.
+///
+/// Se pregunta por lo que el paso HACE: crear un directorio es `mkdir`, copiar es
+/// `copy`, y una sobrescritura es las dos —destruye lo que había y escribe encima—
+/// así que pasa por las dos puertas.
+fn gate_step(
+    targets: &SyncTargets,
+    kind: SyncStepKind,
+    to: &VPath,
+    actor: &Actor,
+) -> Result<(), StepError> {
+    use crate::policy::PolicyOp;
+    let del = PolicyOp::Delete {
+        mode: targets.delete_mode,
+    };
+    let ops: &[PolicyOp] = match kind {
+        SyncStepKind::CreateDir => &[PolicyOp::Mkdir],
+        SyncStepKind::Copy => &[PolicyOp::Copy],
+        SyncStepKind::Overwrite => &[del, PolicyOp::Copy],
+        SyncStepKind::DeleteTree => &[del],
+        // Un `Skip` no actúa y una clase desconocida no llega a actuar.
+        _ => &[],
+    };
+    for op in ops {
+        targets.allows(*op, to, actor).map_err(StepError::Failed)?;
+    }
+    Ok(())
+}
+
+/// Ejecuta UN paso.
+async fn execute(
+    targets: &SyncTargets,
+    record: &SpoolStep,
+    recorder: &dyn StepJournal,
+    ctx: &TaskCtx,
+) -> Result<Applied, StepError> {
+    let to = dest_path(targets, record);
+    if record.step.kind != SyncStepKind::Skip {
+        // La raíz de destino NO es un paso. El transductor ya lo impide
+        // (`SyncError::RootIsNotAStep`) y la `rel` entra en el `plan_hash`, así
+        // que hoy no se alcanza; la invariante se comprueba AQUÍ porque aquí es
+        // donde un fallo significa «se borró el árbol de destino entero» y el
+        // guard vive en otro crate.
+        if to == targets.dest_root {
+            tracing::error!("sync.apply: un paso que actúa nombra la raíz de destino");
+            return Err(StepError::Failed(Error::InvalidPath));
+        }
+        gate_step(targets, record.step.kind, &to, &ctx.actor)?;
+    }
+    match record.step.kind {
+        SyncStepKind::Skip => Ok(Applied::Skipped),
+        SyncStepKind::CreateDir => create_dir(targets, recorder, &to, ctx).await,
+        SyncStepKind::Copy => {
+            let (from, entry) = source_leaf(targets, record, ctx).await?;
+            place(targets, &from, &entry, recorder, &to, Reversal::Delete, ctx).await
+        }
+        SyncStepKind::Overwrite => overwrite(targets, record, recorder, &to, ctx).await,
+        SyncStepKind::DeleteTree => delete_tree(targets, record, recorder, &to, ctx).await,
+        // El spool rechaza al leer un paso de clase desconocida, así que esto no
+        // se alcanza desde un fichero que escribiéramos nosotros. `SyncStepKind`
+        // es `#[non_exhaustive]`, así que el comodín es obligatorio, y que caiga
+        // del lado de NO tocar nada es lo único seguro: una clase que este
+        // binario no sabe nombrar tampoco sabe deshacer.
+        _ => Err(StepError::Failed(Error::Unsupported)),
+    }
+}
+
+/// Anota un paso fallido. La LISTA tiene tope; el CONTADOR no.
+fn record_failure(report: &Mutex<SyncReportResult>, step: &SyncStep, cause: SyncFailureCause) {
+    // INVARIANTE: el `Mutex` solo se envenena si otro hilo entró en pánico
+    // sosteniéndolo, que es irrecuperable — el mismo criterio que el resto de los
+    // locks del core.
+    let mut report = report.lock().expect("sync report lock");
+    report.failed = report.failed.saturating_add(1);
+    if report.failures.len() < SYNC_MAX_FAILURES_REPORTED {
+        report.failures.push(SyncFailure {
+            rel: step.rel.clone(),
+            // La ortografía del DESTINO viaja con el fallo: sin ella, el caso
+            // estrella de `IllegalName` —un nombre que revienta `NAME_MAX` al
+            // recomponerse en NFD— se enseñaría con la grafía del origen, que es
+            // la corta y la legal.
+            dest_rel: step.dest_rel.clone(),
+            cause,
+        });
+    }
+}
+
+/// Ejecuta el plan: un paso detrás de otro, EN EL ORDEN EN QUE VIENE.
+///
+/// El walk es pre-orden, así que un `CreateDir` precede siempre a toda copia
+/// dentro de él: **no se ordena nada**.
+///
+/// La cancelación se mira ENTRE pasos (regla dura 3), y también la ven los
+/// `ops` de dentro de un paso —una copia de un GiB no espera a terminar—. Lo que
+/// se aplicó se queda journalizado bajo su lote; NO se desanda (ver la nota del
+/// módulo).
+///
+/// **Lo que el informe NO distingue.** Una fila `Conflict` puede ser «no se tocó
+/// nada» (la revalidación lo cazó a tiempo) o «se enterró el destino y la copia
+/// no llegó», y la acción que le toca al usuario no es la misma: mirar la
+/// papelera, o replanificar. Distinguirlas cuesta una causa de wire más, que es
+/// vocabulario cerrado daemon→cliente; hoy lo dice el log del daemon.
+///
+/// `steps` puede fallar A MITAD, con pasos ya ejecutados: un spool truncado o
+/// editado. No es lo mismo que un paso que falla —no se sabe qué venía después,
+/// así que no hay nada que anotar como fila— y se responde parando la Task. El
+/// lote queda cerrado y deshacible en ese punto, que es lo que importa.
+///
+/// # Errors
+/// [`Error::Cancelled`], el error del journal, o el que trajera el flujo de
+/// pasos. Un paso que falla NO sale por aquí: sale en `report`.
+///
+/// # Panics
+/// Solo si el `Mutex` del informe está envenenado (otro hilo entró en pánico
+/// sosteniéndolo), que es lo mismo que hace el resto del core con sus locks.
+#[tracing::instrument(
+    skip_all,
+    fields(
+        task_id = ctx.progress.snapshot().task_id.get(),
+        dest = %crate::engine::span_path(&targets.dest_root),
+    )
+)]
+pub(crate) async fn run<S>(
+    targets: &SyncTargets,
+    recorder: &dyn StepJournal,
+    steps: S,
+    ctx: &TaskCtx,
+    report: &Mutex<SyncReportResult>,
+) -> Result<(), Error>
+where
+    S: Stream<Item = Result<SpoolStep, Error>>,
+{
+    let mut steps = std::pin::pin!(steps);
+    loop {
+        if ctx.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let Some(next) = steps.next().await else {
+            return Ok(());
+        };
+        let record = match next {
+            Ok(record) => record,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "sync.apply: el plan dejó de poder leerse a mitad de la ejecución"
+                );
+                return Err(e);
+            }
+        };
+        match execute(targets, &record, recorder, ctx).await {
+            Ok(Applied::Wrote(bytes)) => {
+                let mut report = report.lock().expect("sync report lock");
+                report.done = report.done.saturating_add(1);
+                report.bytes = report.bytes.saturating_add(bytes);
+            }
+            Ok(Applied::Skipped) => {
+                let mut report = report.lock().expect("sync report lock");
+                report.skipped = report.skipped.saturating_add(1);
+            }
+            Err(StepError::Failed(e)) => {
+                let cause = cause_of(&e);
+                tracing::debug!(?cause, "sync.apply: un paso no ocurrió");
+                record_failure(report, &record.step, cause);
+            }
+            // La cancelación y el journal paran la Task. El journal, porque
+            // seguir produciría más efectos fuera de él (regla dura 4); la
+            // cancelación, porque es lo que se pidió.
+            Err(StepError::Fatal(e)) => return Err(e),
+        }
+        ctx.progress.update(|p| p.entries_done += 1);
+    }
+}
+
+/// La ruta que un paso lee del ORIGEN, para el gate y para los tests.
+#[cfg(test)]
+fn source_path(targets: &SyncTargets, record: &SpoolStep) -> VPath {
+    under(&targets.source_root, &record.step.rel)
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use norte_proto::methods::{
+        CompareConfidence, CompareCriterion, StepReversal, SyncStep, SyncStepKind,
+    };
+    use norte_proto::{CapabilityFlags, TaskKind};
+    use norte_testkit::MemProvider;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+    use crate::progress::ProgressReporter;
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire")
+    }
+
+    fn rel(wire: &str) -> RelPath {
+        RelPath::parse_wire(wire).expect("rel")
+    }
+
+    fn ctx(cancel: CancellationToken) -> TaskCtx {
+        TaskCtx {
+            cancel,
+            progress: Arc::new(
+                ProgressReporter::new(norte_proto::TaskId::new(1), TaskKind::Sync).0,
+            ),
+            actor: Actor::User,
+        }
+    }
+
+    async fn write(mem: &MemProvider, wire: &str, content: &[u8]) {
+        let mut sink = mem.write(&vp(wire)).await.expect("write");
+        sink.write(Bytes::copy_from_slice(content))
+            .await
+            .expect("chunk");
+        sink.commit().await.expect("commit");
+    }
+
+    async fn read(mem: &MemProvider, wire: &str) -> Vec<u8> {
+        let mut stream = mem.read(&vp(wire), None).await.expect("read");
+        let mut out = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            out.extend_from_slice(&chunk.expect("chunk"));
+        }
+        out
+    }
+
+    /// Un recorder que solo apunta lo que le pidieron: los tests de journal de
+    /// verdad viven en el fichero de integración, con `SQLite` detrás.
+    /// Una entrada apuntada: op, ruta, reversa y referencia de papelera.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct Anotada {
+        op: &'static str,
+        path: String,
+        reversal: Reversal,
+        reversal_ref: Option<String>,
+    }
+
+    #[derive(Default)]
+    struct Recorder {
+        entries: Mutex<Vec<Anotada>>,
+    }
+
+    #[async_trait]
+    impl StepJournal for Recorder {
+        async fn created(&self, path: &VPath, reversal: Reversal) -> Result<(), Error> {
+            self.entries.lock().expect("lock").push(Anotada {
+                op: "created",
+                path: path.to_wire(),
+                reversal,
+                reversal_ref: None,
+            });
+            Ok(())
+        }
+        async fn trashed(&self, path: &VPath, dest: Option<&VPath>) -> Result<(), Error> {
+            self.entries.lock().expect("lock").push(Anotada {
+                op: "trashed",
+                path: path.to_wire(),
+                reversal: Reversal::RestoreTrash,
+                reversal_ref: dest.map(VPath::to_wire),
+            });
+            Ok(())
+        }
+        async fn removed(&self, path: &VPath) -> Result<(), Error> {
+            self.entries.lock().expect("lock").push(Anotada {
+                op: "removed",
+                path: path.to_wire(),
+                reversal: Reversal::Irreversible,
+                reversal_ref: None,
+            });
+            Ok(())
+        }
+    }
+
+    fn step(kind: SyncStepKind, rel_wire: &str, reversal: Option<StepReversal>) -> SyncStep {
+        SyncStep {
+            id: 1,
+            kind,
+            rel: rel(rel_wire),
+            dest_rel: None,
+            size: None,
+            criterion: CompareCriterion::Presence,
+            confidence: CompareConfidence::Certain,
+            reversal,
+            reason: reversal
+                .filter(|r| *r == StepReversal::Irreversible)
+                .map(|_| norte_proto::methods::SyncReason::NoTrashOnTarget),
+        }
+    }
+
+    fn targets(mem: &Arc<MemProvider>) -> SyncTargets {
+        SyncTargets {
+            source: Arc::clone(mem) as Arc<dyn Provider>,
+            dest: Arc::clone(mem) as Arc<dyn Provider>,
+            source_root: vp("mem:///s"),
+            dest_root: vp("mem:///d"),
+            policy: Arc::new(crate::policy::AllowAll),
+            delete_mode: norte_proto::DeleteMode::Trash,
+        }
+    }
+
+    /// `dest_rel` manda sobre `rel`: se escribe sobre el fichero que EXISTE, no
+    /// sobre el que el origen deletrea. Es la mitad de #152 que sí está cerrada,
+    /// y sin ella un `Overwrite` de un `café` NFC contra un `café` NFD crearía
+    /// sobre ext4 un SEGUNDO fichero al lado del que se quería sobrescribir.
+    #[tokio::test]
+    async fn el_destino_lo_nombra_dest_rel_cuando_lo_hay() {
+        let mem = Arc::new(MemProvider::new());
+        let t = targets(&mem);
+        let mut s = step(
+            SyncStepKind::Copy,
+            "caf%C3%A9.txt",
+            Some(StepReversal::Delete),
+        );
+        s.dest_rel = Some(rel("cafe%CC%81.txt"));
+        let record = SpoolStep {
+            step: s,
+            dest: None,
+        };
+        assert_eq!(dest_path(&t, &record).to_wire(), "mem:///d/cafe\u{301}.txt");
+        assert_eq!(source_path(&t, &record).to_wire(), "mem:///s/caf\u{e9}.txt");
+    }
+
+    /// La revalidación mira lo que las DOS fotos traen. Un tamaño que se movió
+    /// es un conflicto; un testigo sin tamaño no puede serlo (`file://` lista
+    /// así de serie y rechazaría el plan entero).
+    #[tokio::test]
+    async fn la_revalidacion_solo_compara_lo_que_las_dos_fotos_traen() {
+        let mem = Arc::new(MemProvider::new());
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        write(&mem, "mem:///d/a.txt", b"12345").await;
+        let c = ctx(CancellationToken::new());
+        let entry = mem.stat(&vp("mem:///d/a.txt")).await.expect("stat");
+
+        let igual = DestWitness::of(&entry);
+        revalidate(mem.as_ref(), &vp("mem:///d/a.txt"), Some(igual), &c)
+            .await
+            .expect("no ha cambiado");
+
+        let otro_tamano = DestWitness {
+            size: Some(99),
+            ..igual
+        };
+        let err = revalidate(mem.as_ref(), &vp("mem:///d/a.txt"), Some(otro_tamano), &c)
+            .await
+            .expect_err("cambió de tamaño");
+        assert_eq!(cause_of(&err), SyncFailureCause::Conflict);
+
+        let sin_medidas = DestWitness {
+            kind: entry.kind,
+            size: None,
+            mtime_ms: None,
+        };
+        revalidate(mem.as_ref(), &vp("mem:///d/a.txt"), Some(sin_medidas), &c)
+            .await
+            .expect("un provider que no mide no produce conflictos");
+
+        let otra_clase = DestWitness {
+            kind: EntryKind::Dir,
+            ..igual
+        };
+        let err = revalidate(mem.as_ref(), &vp("mem:///d/a.txt"), Some(otra_clase), &c)
+            .await
+            .expect_err("cambió de clase");
+        assert_eq!(cause_of(&err), SyncFailureCause::Conflict);
+    }
+
+    /// La taxonomía del informe, y en particular la causa que existe porque la
+    /// legalidad de un nombre bajo el destino NO se valida al planificar.
+    #[test]
+    fn cada_error_cae_en_la_causa_que_le_toca() {
+        assert_eq!(
+            cause_of(&Error::InvalidPath),
+            SyncFailureCause::IllegalName,
+            "un nombre que el destino no admite tiene nombre propio"
+        );
+        assert_eq!(cause_of(&Error::PermissionDenied), SyncFailureCause::Denied);
+        assert_eq!(
+            cause_of(&Error::PolicyDenied {
+                rule: "out-of-scope".to_owned()
+            }),
+            SyncFailureCause::Denied,
+            "«no puedes» y «así no se puede llamar» llevan a acciones distintas"
+        );
+        assert_eq!(cause_of(&Error::NotFound), SyncFailureCause::Conflict);
+        assert_eq!(
+            cause_of(&Error::Io { retryable: true }),
+            SyncFailureCause::Io
+        );
+    }
+
+    /// Un paso destructivo SIN testigo se rehúsa. El testigo no entra en el
+    /// `plan_hash`, así que borrarlo del spool es justo la edición que el digest
+    /// no ve; exigirlo es lo que la deja sin efecto.
+    #[tokio::test]
+    async fn un_paso_destructivo_sin_testigo_no_destruye_nada() {
+        let mem = Arc::new(MemProvider::new());
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        write(&mem, "mem:///d/a.txt", b"12345").await;
+        let c = ctx(CancellationToken::new());
+        let err = revalidate(mem.as_ref(), &vp("mem:///d/a.txt"), None, &c)
+            .await
+            .expect_err("sin foto no se destruye");
+        assert_eq!(cause_of(&err), SyncFailureCause::Conflict);
+    }
+
+    /// Y el destino que ya no está también es conflicto, no un error a secas: es
+    /// lo que hace que un `DeleteTree` cuyo árbol alguien borró antes no cuente
+    /// como avería.
+    #[tokio::test]
+    async fn un_destino_que_desaparecio_es_conflicto() {
+        let mem = Arc::new(MemProvider::new());
+        let c = ctx(CancellationToken::new());
+        let entry = Entry {
+            path: vp("mem:///d/no-esta"),
+            kind: EntryKind::File,
+            size: None,
+            mtime_ms: None,
+            attrs: std::collections::BTreeMap::default(),
+        };
+        let err = revalidate(
+            mem.as_ref(),
+            &vp("mem:///d/no-esta"),
+            Some(DestWitness::of(&entry)),
+            &c,
+        )
+        .await
+        .expect_err("no está");
+        assert_eq!(cause_of(&err), SyncFailureCause::Conflict);
+    }
+
+    /// Un `Overwrite` sin papelera deja UNA entrada `created` irreversible, y no
+    /// una pareja `removed`+`created`: con la pareja, el undo del lote borraría
+    /// el fichero nuevo sin poder restaurar el viejo y dejaría la ruta vacía.
+    #[tokio::test]
+    async fn una_sobrescritura_sin_papelera_es_una_entrada_irreversible() {
+        // `MemProvider` sin `TRASH`, que es lo que declara de serie.
+        let mem = Arc::new(MemProvider::with_flags(CapabilityFlags::CASE_SENSITIVE));
+        mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        write(&mem, "mem:///s/a.txt", b"nuevo").await;
+        write(&mem, "mem:///d/a.txt", b"viejo").await;
+        let entry = mem.stat(&vp("mem:///d/a.txt")).await.expect("stat");
+
+        let t = targets(&mem);
+        let recorder = Recorder::default();
+        let record = SpoolStep {
+            step: step(
+                SyncStepKind::Overwrite,
+                "a.txt",
+                Some(StepReversal::Irreversible),
+            ),
+            dest: Some(DestWitness::of(&entry)),
+        };
+        let report = Mutex::new(new_report(7));
+        run(
+            &t,
+            &recorder,
+            futures::stream::iter(vec![Ok(record)]),
+            &ctx(CancellationToken::new()),
+            &report,
+        )
+        .await
+        .expect("la aplicación termina");
+
+        assert_eq!(read(&mem, "mem:///d/a.txt").await, b"nuevo");
+        let entries = recorder.entries.lock().expect("lock").clone();
+        assert_eq!(entries.len(), 1, "una sola entrada: {entries:?}");
+        assert_eq!(entries[0].op, "created");
+        assert_eq!(entries[0].reversal, Reversal::Irreversible);
+        assert_eq!(report.lock().expect("lock").done, 1);
+    }
+
+    /// Un flujo que se rompe A MITAD no es un paso que falla: lo ya ejecutado se
+    /// queda (y journalizado), lo que venía después no se sabe, y la Task para.
+    #[tokio::test]
+    async fn un_plan_que_deja_de_leerse_a_mitad_para_la_task_sin_anotar_fila() {
+        let mem = Arc::new(MemProvider::new());
+        mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        write(&mem, "mem:///s/a.txt", b"x").await;
+        let t = targets(&mem);
+        let recorder = Recorder::default();
+        let report = Mutex::new(new_report(7));
+        let flujo = futures::stream::iter(vec![
+            Ok(SpoolStep {
+                step: step(SyncStepKind::Copy, "a.txt", Some(StepReversal::Delete)),
+                dest: None,
+            }),
+            Err(Error::Io { retryable: false }),
+        ]);
+        let err = run(
+            &t,
+            &recorder,
+            flujo,
+            &ctx(CancellationToken::new()),
+            &report,
+        )
+        .await
+        .expect_err("el plan dejó de leerse");
+        assert!(matches!(err, Error::Io { .. }), "{err:?}");
+
+        let (done, failed) = {
+            let report = report.lock().expect("lock");
+            (report.done, report.failed)
+        };
+        assert_eq!(done, 1, "lo aplicado se queda");
+        assert_eq!(failed, 0, "no hay paso al que atribuirlo");
+        assert_eq!(read(&mem, "mem:///d/a.txt").await, b"x");
+        assert_eq!(recorder.entries.lock().expect("lock").len(), 1);
+    }
+}

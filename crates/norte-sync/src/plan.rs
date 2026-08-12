@@ -40,9 +40,85 @@ use crate::{SyncError, SyncOptions};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanItem {
     /// Un paso del plan.
-    Step(SyncStep),
+    Step {
+        /// Lo que viaja por el wire y lo que entra en el `plan_hash`.
+        step: SyncStep,
+        /// Lo que la comparación vio en el destino, para los pasos que lo van a
+        /// destruir. Ver [`DestWitness`].
+        dest: Option<DestWitness>,
+    },
     /// Una razón para que el plan no sea ejecutable.
     Blocker(SyncBlocker),
+}
+
+/// Lo que la comparación vio en la entrada del DESTINO sobre la que un paso
+/// destructivo va a caer.
+///
+/// # Por qué existe, y por qué no está en el wire
+/// El ejecutor tiene que revalidar antes de destruir: entre que un humano
+/// aprueba un plan y que se aplica pasan hasta diez minutos, y un `stat` que
+/// compare el destino con **lo que el plan anotó de él** es lo único que hay
+/// entre ese TTL y un fichero perdido. Nada en [`SyncStep`] sirve de referencia:
+/// [`SyncStep::size`] son los bytes que el paso MUEVE, o sea los del ORIGEN, y
+/// no hay campo alguno que describa el estado previo del destino.
+///
+/// No viaja por el wire porque nadie del otro lado lo necesita —el panel pinta
+/// el paso, no la foto del destino— y porque ponerlo ahí sería publicar una
+/// segunda descripción del árbol de destino con sus tamaños y sus fechas. Viaja
+/// en el spool, que es de este proceso, y no entra en el `plan_hash`: es de
+/// dónde SALIÓ la conclusión, no la conclusión.
+///
+/// # Lo que puede y lo que no
+/// Un provider que lista sin tamaño ni fecha —`file://` es uno— deja los dos
+/// campos en `None`, y entonces la revalidación se queda en «sigue existiendo y
+/// sigue siendo de la misma clase». Es menos, y es honesto: fingir un cero sería
+/// declarar un conflicto en cada paso. Una entrada de una pareja SÍ viene
+/// hidratada (la cascada necesita tamaño y fecha para decidir), así que el caso
+/// que importa —el [`SyncStepKind::Overwrite`]— la trae poblada.
+///
+/// ```
+/// use norte_proto::{Entry, EntryKind, VPath};
+/// use norte_sync::DestWitness;
+///
+/// let entry = Entry {
+///     path: VPath::parse("file:///destino/a.txt").expect("path"),
+///     kind: EntryKind::File,
+///     size: Some(1234),
+///     mtime_ms: Some(1_726_000_000_000),
+///     attrs: Default::default(),
+/// };
+/// let foto = DestWitness::of(&entry);
+/// assert_eq!(foto.kind, EntryKind::File);
+/// assert_eq!(foto.size, Some(1234));
+///
+/// // Un provider que no mide deja las dos en `None`, jamás un cero fingido: la
+/// // revalidación se queda entonces en «existe y es de la misma clase».
+/// let parco = Entry { size: None, mtime_ms: None, ..entry };
+/// assert_eq!(DestWitness::of(&parco).size, None);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DestWitness {
+    /// La clase que tenía. Un cambio de clase es siempre un conflicto: el paso
+    /// se aprobó sobre un fichero y ahora hay un directorio, o al revés.
+    pub kind: EntryKind,
+    /// El tamaño que tenía; `None` = el provider no lo dijo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    /// La fecha que tenía, en ms; `None` = el provider no la dijo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime_ms: Option<i64>,
+}
+
+impl DestWitness {
+    /// La foto de `entry`.
+    #[must_use]
+    pub fn of(entry: &Entry) -> Self {
+        Self {
+            kind: entry.kind,
+            size: entry.size,
+            mtime_ms: entry.mtime_ms,
+        }
+    }
 }
 
 /// Planifica: transduce el flujo de filas en un flujo de pasos.
@@ -173,7 +249,7 @@ pub enum PlanItem {
 /// let items: Vec<_> = futures::executor::block_on(
 ///     plan(futures::stream::iter(vec![Ok(fila)]), opts, CancellationToken::new()).collect(),
 /// );
-/// let PlanItem::Step(paso) = items[0].as_ref().expect("sin error") else {
+/// let PlanItem::Step { step: paso, .. } = items[0].as_ref().expect("sin error") else {
 ///     panic!("un paso");
 /// };
 /// assert_eq!(paso.kind, SyncStepKind::Copy);
@@ -554,7 +630,7 @@ where
             entry.size
         };
         let dest_rel = self.dest_rel_of(&rel, paired_dest)?;
-        self.push(row, kind, rel, dest_rel, size, skip_reason);
+        self.push(row, kind, rel, dest_rel, size, skip_reason, paired_dest);
         Ok(())
     }
 
@@ -624,6 +700,7 @@ where
             dest_rel,
             None,
             Some(SyncReason::Unreadable),
+            dest,
         );
         Ok(())
     }
@@ -709,6 +786,7 @@ where
             dest_rel,
             None,
             Some(SyncReason::AmbiguousSource),
+            None,
         );
         Ok(())
     }
@@ -746,7 +824,15 @@ where
                 root: Box::new(self.opts.dest_root.clone()),
             });
         }
-        self.push(row, SyncStepKind::DeleteTree, rel, None, None, None);
+        self.push(
+            row,
+            SyncStepKind::DeleteTree,
+            rel,
+            None,
+            None,
+            None,
+            Some(entry),
+        );
         Ok(())
     }
 
@@ -953,6 +1039,15 @@ where
 
     /// Empaqueta el paso y le pone su `id`. La reversa es función de la clase y
     /// de la papelera, salvo en un `Skip`, que no tiene y debe un motivo.
+    ///
+    /// `dest` es la entrada del DESTINO que la fila traía, cuando la traía. De
+    /// ella sale el [`DestWitness`], y solo para las dos clases que van a
+    /// destruirla: quien no destruye no tiene nada que revalidar, y un testigo
+    /// por paso en un plan de medio millón es fichero de spool que nadie lee.
+    // Ocho argumentos porque un paso tiene ocho cosas que decir. Agruparlos en
+    // una struct intermedia solo movería el sitio donde equivocarse de campo, y
+    // esto es privado del módulo: no es API que nadie más vaya a llamar.
+    #[allow(clippy::too_many_arguments)]
     fn push(
         &mut self,
         row: &CompareRow,
@@ -961,6 +1056,7 @@ where
         dest_rel: Option<RelPath>,
         size: Option<u64>,
         skip_reason: Option<SyncReason>,
+        dest: Option<&Entry>,
     ) {
         let (reversal, reason) = match skip_reason {
             Some(why) => (None, Some(why)),
@@ -981,7 +1077,11 @@ where
             step.shape_is_consistent(),
             "paso con forma imposible: {step:?}"
         );
-        self.pending.push_back(PlanItem::Step(step));
+        let dest = match kind {
+            SyncStepKind::Overwrite | SyncStepKind::DeleteTree => dest.map(DestWitness::of),
+            _ => None,
+        };
+        self.pending.push_back(PlanItem::Step { step, dest });
         self.next_id += 1;
     }
 }
@@ -1232,7 +1332,7 @@ mod tests {
         items
             .iter()
             .filter_map(|i| match i {
-                PlanItem::Step(s) => Some(s),
+                PlanItem::Step { step, .. } => Some(step),
                 PlanItem::Blocker(_) => None,
             })
             .collect()
@@ -1252,7 +1352,7 @@ mod tests {
             .iter()
             .filter_map(|i| match i {
                 PlanItem::Blocker(b) => Some(b),
-                PlanItem::Step(_) => None,
+                PlanItem::Step { .. } => None,
             })
             .collect()
     }

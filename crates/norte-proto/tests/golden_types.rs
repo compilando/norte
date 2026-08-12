@@ -2350,23 +2350,49 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
     check_one(
         fixtures,
         "sync_report_result",
+        // `failed` cuenta TODOS los fallos y `failures` es la lista recortada,
+        // así que `failures.len() <= failed` siempre. Con cuatro filas y un
+        // `failed: 3` la golden enseñaría lo contrario a quien la lea para
+        // escribir un cliente.
         &SyncReportResult {
             done: 40,
-            failed: 3,
+            failed: 4,
             skipped: 2,
             bytes: 4096,
             failures: vec![
                 SyncFailure {
                     rel: rel_path("a.txt"),
+                    dest_rel: None,
                     cause: SyncFailureCause::Conflict,
                 },
                 SyncFailure {
                     rel: rel_path("b%FF.txt"),
+                    dest_rel: None,
                     cause: SyncFailureCause::Denied,
                 },
                 SyncFailure {
                     rel: rel_path("sub/c.txt"),
+                    dest_rel: None,
                     cause: SyncFailureCause::Io,
+                },
+                // La legalidad del nombre bajo la raíz de DESTINO no se valida al
+                // planificar, así que aflora aquí y con nombre propio. Y con la
+                // grafía del DESTINO, que es la que falló: el caso estrella es
+                // un nombre que revienta `NAME_MAX` al recomponerse en NFD, y
+                // enseñar `rel` a secas señalaría la grafía corta y legal del
+                // origen.
+                //
+                // La pareja que se CONGELA aquí es la plegada por caja y no la
+                // NFC/NFD, por lo que ya avisó la golden de `dest_rel` en
+                // `SyncStep`: las dos formas Unicode son UTF-8 válido y el códec
+                // de segmento las deja literales, así que en un fichero JSON
+                // renderizan IGUAL — el diff sería inadjudicable y una
+                // normalización del editor convertiría el test en una
+                // tautología.
+                SyncFailure {
+                    rel: rel_path("NOTAS/informe.txt"),
+                    dest_rel: Some(rel_path("notas/informe.txt")),
+                    cause: SyncFailureCause::IllegalName,
                 },
             ],
             batch_id: Some(12),
@@ -2394,6 +2420,7 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
             bytes: 0,
             failures: vec![SyncFailure {
                 rel: rel_path("a.txt"),
+                dest_rel: None,
                 cause: SyncFailureCause::Denied,
             }],
             batch_id: None,

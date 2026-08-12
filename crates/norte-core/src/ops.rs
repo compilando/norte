@@ -57,7 +57,7 @@ async fn backoff_or_cancel(cancel: &CancellationToken, attempt: u32) -> Result<(
 /// (exige pre-stat, +1 stat/dir — solo deja un dir vacío de más, jamás
 /// pérdida) y el retry de `trash` (op del OS; el `dest` del journal se
 /// perdería en el reintento).
-async fn with_retry<'a, T: 'a>(
+pub(crate) async fn with_retry<'a, T: 'a>(
     cancel: &CancellationToken,
     mut op: impl FnMut() -> futures::future::BoxFuture<'a, Result<T, Error>>,
 ) -> Result<T, Error> {
@@ -78,7 +78,7 @@ async fn with_retry<'a, T: 'a>(
 /// significa "ya no está", que ES el estado que el remove perseguía (lo
 /// borrase nuestra primera aplicación o no, el journal registra un único
 /// `Removed` verdadero).
-async fn remove_retrying(
+pub(crate) async fn remove_retrying(
     p: &dyn Provider,
     path: &VPath,
     cancel: &CancellationToken,
@@ -148,7 +148,7 @@ pub(crate) async fn trash_retrying(
 /// node-id); su undo trashea un dir VACÍO ajeno — recuperable y acotado.
 /// Un `Conflict` SIN transitorio previo sí es colisión real (carrera
 /// externa): se propaga sin listar y la política del caller decide.
-async fn mkdir_retrying(
+pub(crate) async fn mkdir_retrying(
     p: &dyn Provider,
     path: &VPath,
     cancel: &CancellationToken,
@@ -191,7 +191,7 @@ async fn mkdir_retrying(
 /// (b) el kind no se verifica — un link preexistente con el MISMO target
 /// y otro kind pasaría por nuestro (requiere transitorio + preexistencia
 /// exacta; el target manda, jamás hay pérdida).
-async fn symlink_retrying(
+pub(crate) async fn symlink_retrying(
     dst: &dyn Provider,
     link: &VPath,
     target: &[u8],
@@ -857,7 +857,7 @@ async fn copy_tree(
 /// (`open_resumable`) — el `before` que se restaura es la base del archivo,
 /// no cero, y `copy_file` recompone `base + already` en cada intento.
 #[allow(clippy::too_many_arguments)] // función interna del módulo, no API
-async fn copy_file_retrying(
+pub(crate) async fn copy_file_retrying(
     src: &dyn Provider,
     dst: &dyn Provider,
     from: &VPath,
@@ -1590,7 +1590,7 @@ pub(crate) async fn mkdir_task(
 
 /// Recorre el árbol bajo `root` (sin incluirlo). Garantía de orden: todo
 /// directorio aparece ANTES que cualquiera de sus descendientes.
-async fn walk(
+pub(crate) async fn walk(
     provider: &dyn Provider,
     root: &VPath,
     cancel: &CancellationToken,

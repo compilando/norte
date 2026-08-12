@@ -4203,7 +4203,37 @@ pub enum SyncFailureCause {
     /// del plan y un fichero perdido.
     Conflict,
     /// El provider rehusó la escritura.
+    ///
+    /// Es una respuesta sobre el PERMISO, y por eso está separada de
+    /// [`SyncFailureCause::IllegalName`]: «no puedes» y «así no se puede llamar»
+    /// llevan a acciones distintas —pedir acceso, o arreglar el nombre— y un
+    /// informe que las mezclara no serviría para ninguna de las dos.
     Denied,
+    /// El nombre no es legal bajo la raíz de DESTINO.
+    ///
+    /// # Por qué es un fallo de ejecución y no un bloqueo del plan
+    /// Nada comprueba, al planificar, que un nombre legal bajo el origen lo sea
+    /// bajo el destino, y comprobarlo exigiría modelar las reglas de nombres de
+    /// cada filesystem —cuáles, y con qué límites, no está en
+    /// [`Capabilities`](crate::Capabilities)—. Los casos son reales: 86 `é` en
+    /// NFC ocupan 172 bytes y 258 en NFD, que revienta `NAME_MAX`; `CON`, un
+    /// punto final y un espacio final no son nombres en Windows; y `f:ads`
+    /// escribe un flujo de datos alternativo y «funciona».
+    ///
+    /// Así que sale por aquí, con nombre propio. Un [`SyncFailureCause::Io`]
+    /// genérico habría dicho «algo se rompió» de la única familia de fallos que
+    /// el usuario puede arreglar él solo, y de la única que se repetirá idéntica
+    /// en cada intento hasta que la arregle.
+    ///
+    /// # Es BEST-EFFORT, y conviene no leerlo como una garantía
+    /// Depende de que el provider sepa distinguir «ese nombre no vale» de «algo
+    /// falló», y no todos pueden: `file://` sí (`InvalidFilename`, `EILSEQ`),
+    /// pero SFTP v3 contesta un `Failure` genérico a casi todo y el
+    /// almacenamiento de objetos no distingue una clave demasiado larga de
+    /// cualquier otro rechazo — en esos dos, un nombre ilegal llega como
+    /// [`SyncFailureCause::Io`]. La ausencia de esta causa NO prueba que los
+    /// nombres estuvieran bien; su presencia sí prueba que uno no lo estaba.
+    IllegalName,
     /// La lectura o la escritura se rompieron.
     Io,
     /// Causa que este decodificador no conoce (`#[serde(other)]`). El core
@@ -4220,6 +4250,17 @@ pub struct SyncFailure {
     /// Dónde, RELATIVO a las dos raíces y en BYTES, igual que
     /// [`SyncStep::rel`].
     pub rel: RelPath,
+    /// La ruta del DESTINO sobre la que el paso caía, cuando no se deletrea como
+    /// `rel` — el mismo campo y la misma regla que [`SyncStep::dest_rel`],
+    /// repetidos aquí porque el informe se lee sin el plan delante.
+    ///
+    /// Sin él, el caso de [`SyncFailureCause::IllegalName`] se cuenta al revés:
+    /// un `café/x.txt` NFC del origen cuya carpeta el destino deletrea en NFD
+    /// falla por longitud del nombre —NFD ocupa más— y el informe enseñaría la
+    /// grafía NFC, que es la corta y la legal. «Este nombre no vale» señalando un
+    /// nombre que sí vale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest_rel: Option<RelPath>,
     /// Por qué.
     pub cause: SyncFailureCause,
 }

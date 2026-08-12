@@ -36,7 +36,7 @@ pub mod hash;
 pub mod plan;
 
 pub use hash::PlanHasher;
-pub use plan::{PlanItem, plan};
+pub use plan::{DestWitness, PlanItem, plan};
 
 pub use norte_proto::methods::{
     OnUnknown, PlanHash, RelPath, Side, StepReversal, SyncBlocker, SyncBlockerKind,

@@ -976,7 +976,7 @@
   },
   "sync_report_result": {
     "done": 40,
-    "failed": 3,
+    "failed": 4,
     "skipped": 2,
     "bytes": 4096,
     "failures": [
@@ -991,6 +991,11 @@
       {
         "rel": "sub/c.txt",
         "cause": "io"
+      },
+      {
+        "rel": "NOTAS/informe.txt",
+        "dest_rel": "notas/informe.txt",
+        "cause": "illegal_name"
       }
     ],
     "batch_id": 12

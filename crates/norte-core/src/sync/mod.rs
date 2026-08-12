@@ -13,13 +13,16 @@
 //!   `norte_compare::compare` por el transductor, TEE cada elemento al spool y
 //!   al lote que viaja al cliente, y cierra con un [`SyncPlanDone`].
 //!
-//! El ejecutor y el lote del journal llegan en la tarea 9 del plan.
+//! - `exec` (privado) — el EJECUTOR: revalida antes de destruir, escribe, y
+//!   registra cada efecto en UNA unidad deshacible del journal. Es lo que
+//!   convierte un plan aprobado en cambios en el árbol de destino.
 //!
 //! **Regla dura 4 NO aplica a `sync.plan`**: planificar no escribe un byte en
 //! ninguno de los dos árboles y no tiene undo posible. Lo que escribe es
 //! `sync.apply`, que sí es un lote del journal. Está dicho aquí para que una
 //! revisión posterior no pida una entrada que no significaría nada.
 
+pub(crate) mod exec;
 pub mod spool;
 
 use std::collections::HashSet;
@@ -40,7 +43,7 @@ use tokio_util::sync::CancellationToken;
 
 pub use spool::{
     PlanOutcome, SPOOL_DIR_NAME, SPOOL_FORMAT, Spool, SpoolError, SpoolHeader, SpoolReader,
-    SpoolSummary, SpoolWriter, SweepReport,
+    SpoolStep, SpoolSummary, SpoolWriter, SweepReport,
 };
 
 /// Flush por tiempo del lote de pasos: el mismo intervalo (y el mismo motivo)
@@ -384,7 +387,7 @@ pub(crate) async fn run_sync_plan(
                 break Err(Error::Internal { panic: false });
             }
         };
-        if let (PlanItem::Step(step), Some(filter)) = (&item, include.as_ref())
+        if let (PlanItem::Step { step, .. }, Some(filter)) = (&item, include.as_ref())
             && !filter.keeps(step)
         {
             continue;
@@ -395,7 +398,7 @@ pub(crate) async fn run_sync_plan(
             tracing::error!(error = %e, "sync.plan: el spool no admitió un elemento");
             break Err(spool_error(&e));
         }
-        if let PlanItem::Step(step) = item {
+        if let PlanItem::Step { step, .. } = item {
             batch.steps.push(step);
             if batch.len() >= SYNC_STEPS_MAX_BATCH {
                 match flush(&tx, &mut batch, &ctx.cancel).await {

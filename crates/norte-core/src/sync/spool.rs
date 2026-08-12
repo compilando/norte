@@ -111,7 +111,7 @@ use norte_proto::methods::{
     PlanHash, SYNC_MAX_BLOCKERS_REPORTED, SYNC_PLAN_TTL_MS, SyncBlocker, SyncCompareOptions,
     SyncCounts, SyncStep,
 };
-use norte_sync::{PlanHasher, PlanItem, SyncOptions};
+use norte_sync::{DestWitness, PlanHasher, PlanItem, SyncOptions};
 use serde::{Deserialize, Serialize};
 
 /// El subdirectorio del estado del daemon donde viven los spools. Hermano de
@@ -122,7 +122,13 @@ pub const SPOOL_DIR_NAME: &str = "sync-spools";
 /// spool lo escribe y lo lee el mismo binario dentro de la ventana del TTL, así
 /// que un número distinto significa «este fichero es de otro norte» y el plan
 /// se declara rancio ([`SpoolError::Malformed`]), no se migra.
-pub const SPOOL_FORMAT: u32 = 1;
+///
+/// Va por 2 desde que el registro de un paso es un [`SpoolStep`] y no un
+/// [`SyncStep`] pelado (el testigo del destino que el ejecutor revalida). Un
+/// fichero de la forma anterior ya fallaría al deserializar —`deny_unknown_fields`
+/// y un campo obligatorio nuevo—, así que el número no es lo que protege: es lo
+/// que hace que el fallo diga la verdad en el log.
+pub const SPOOL_FORMAT: u32 = 2;
 
 /// Tope de UN registro. El terminador es el grande: hasta
 /// [`SYNC_MAX_BLOCKERS_REPORTED`] bloqueos con su `rel`. Existe para que un
@@ -252,9 +258,44 @@ enum Record {
     #[serde(rename = "head")]
     Head(SpoolHeader),
     #[serde(rename = "step")]
-    Step(SyncStep),
+    Step(SpoolStep),
     #[serde(rename = "end")]
     End(SpoolSummary),
+}
+
+/// UN paso retenido: lo que viaja por el wire, más lo que solo el ejecutor
+/// necesita.
+///
+/// El segundo campo es la razón de que este tipo exista en vez de guardar el
+/// [`SyncStep`] pelado. El ejecutor tiene que revalidar el destino ANTES de
+/// destruirlo —hasta diez minutos separan la aprobación de la aplicación— y en
+/// `SyncStep` no hay con qué: su `size` son los bytes que el paso MUEVE, o sea
+/// los del origen, y ningún campo describe el estado previo del destino. Sin
+/// esto, el `stat` de revalidación no tendría contra qué comparar y sería
+/// decorativo.
+///
+/// Va en el spool y no en el wire porque nadie del otro lado lo necesita, y
+/// porque publicarlo sería mandarle al cliente una segunda descripción del árbol
+/// de destino con sus tamaños y sus fechas.
+///
+/// # El `plan_hash` NO cubre este campo
+/// El digest resume el PLAN —lo que un humano aprobó— y el testigo es de dónde
+/// salió esa conclusión, no la conclusión; meterlo dentro haría que dos planes
+/// idénticos sobre un árbol que nadie tocó difirieran porque una fecha se movió.
+/// La consecuencia hay que conocerla: [`Spool::open`] recalcula el digest sobre
+/// los pasos y comprueba los contadores, así que autentica el PASO y no el
+/// registro entero. Lo que cierra el hueco no es el digest sino el ejecutor:
+/// rehúsa todo paso destructivo que llegue sin testigo, así que borrarlo no
+/// desactiva la revalidación, la convierte en un conflicto.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpoolStep {
+    /// El paso aprobado.
+    pub step: SyncStep,
+    /// Lo que la comparación vio en el destino, para las dos clases que lo van a
+    /// destruir. Ausente en las demás.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest: Option<DestWitness>,
 }
 
 /// El directorio de spools de un daemon, y el registro de lo que emitió.
@@ -467,7 +508,7 @@ impl Spool {
     /// # Errors
     /// [`SpoolError::Io`] si el directorio de estado no se puede crear o el
     /// fichero no se puede abrir.
-    #[tracing::instrument(skip_all, fields(conn_id))]
+    #[tracing::instrument(skip_all, fields(conn_id = conn_id))]
     pub async fn create(
         &self,
         conn_id: u64,
@@ -544,25 +585,44 @@ impl Spool {
     /// # Errors
     /// Ver [`SpoolError`]. Las tres primeras variantes significan lo mismo de
     /// cara al cliente ([`SpoolError::is_stale`]).
-    #[tracing::instrument(skip_all, fields(conn_id, plan_hash = hash.as_str()))]
+    #[tracing::instrument(skip_all, fields(conn_id = conn_id, plan_hash = hash.as_str()))]
     pub async fn open(&self, conn_id: u64, hash: &PlanHash) -> Result<SpoolReader, SpoolError> {
         if !self.claim_issued(conn_id, hash) {
             return Err(SpoolError::NotFound);
         }
         let path = self.dir.join(file_name(conn_id, hash));
         let want = hash.clone();
-        let (file, header, summary) =
-            tokio::task::spawn_blocking(move || open_blocking(&path, conn_id, &want))
-                .await
-                .map_err(joined)?
-                .inspect_err(|e| {
-                    if let SpoolError::Malformed(why) = e {
-                        // Un fichero que escribimos nosotros hace minutos y que
-                        // ya no se deja leer es la señal de que alguien lo ha
-                        // tocado. El cliente solo verá `PlanStale`.
-                        tracing::warn!(conn = conn_id, why, "spool ilegible");
-                    }
-                })?;
+        let opened = tokio::task::spawn_blocking(move || open_blocking(&path, conn_id, &want))
+            .await
+            .map_err(joined);
+        // El derecho se COBRÓ arriba, y a partir de aquí hay cuatro formas de
+        // fallar (caducado, ya no está, manipulado, I/O). Si no se devuelve, ese
+        // hash se queda «aplicándose» para siempre: replanificar el mismo árbol
+        // con las mismas opciones da el MISMO digest, `finish` se lo encuentra
+        // ocupado y borra el plan que acaba de escribir — el usuario no puede ni
+        // aplicar ni replanificar, y lo único que ve es un error interno.
+        //
+        // Se suelta de `applying` y NO se devuelve a `issued`: un plan caducado o
+        // manipulado no vuelve a ser aplicable, solo vuelve a ser
+        // replanificable.
+        let opened = match opened {
+            Ok(Ok(opened)) => opened,
+            Ok(Err(e)) => {
+                self.release_applying(conn_id, hash);
+                if let SpoolError::Malformed(why) = &e {
+                    // Un fichero que escribimos nosotros hace minutos y que ya
+                    // no se deja leer es la señal de que alguien lo ha tocado.
+                    // El cliente solo verá `PlanStale`.
+                    tracing::warn!(conn = conn_id, why, "spool ilegible");
+                }
+                return Err(e);
+            }
+            Err(e) => {
+                self.release_applying(conn_id, hash);
+                return Err(e);
+            }
+        };
+        let (file, header, summary) = opened;
         Ok(SpoolReader {
             file,
             header,
@@ -582,7 +642,7 @@ impl Spool {
     /// # Errors
     /// [`SpoolError::Io`] solo si el borrado falla por algo que no sea «no
     /// estaba».
-    #[tracing::instrument(skip_all, fields(conn_id, plan_hash = hash.as_str()))]
+    #[tracing::instrument(skip_all, fields(conn_id = conn_id, plan_hash = hash.as_str()))]
     pub async fn remove(&self, conn_id: u64, hash: &PlanHash) -> Result<(), SpoolError> {
         self.claim_issued(conn_id, hash);
         self.release_applying(conn_id, hash);
@@ -606,7 +666,7 @@ impl Spool {
     /// [`SweepReport::failed`]: el derecho a aplicarlo ya se ha olvidado en
     /// memoria de todos modos, así que lo que queda es basura en disco y no un
     /// plan vivo.
-    #[tracing::instrument(skip_all, fields(conn_id))]
+    #[tracing::instrument(skip_all, fields(conn_id = conn_id))]
     pub async fn drop_connection(&self, conn_id: u64) -> Result<SweepReport, SpoolError> {
         self.forget_issued(Some(conn_id));
         let dir = self.dir.clone();
@@ -755,9 +815,12 @@ impl SpoolWriter {
         };
         hasher.item(item);
         match item {
-            PlanItem::Step(step) => {
+            PlanItem::Step { step, dest } => {
                 self.counts.add(step);
-                let line = encode(&Record::Step(step.clone()))?;
+                let line = encode(&Record::Step(SpoolStep {
+                    step: step.clone(),
+                    dest: *dest,
+                }))?;
                 self.buf.extend_from_slice(&line);
                 if self.buf.len() >= WRITE_BUFFER_BYTES {
                     self.flush().await?;
@@ -982,10 +1045,10 @@ impl SpoolReader {
     /// necesita su lote del journal cerrado y deshacible en ese punto, no solo
     /// en el de cancelación.
     #[must_use]
-    pub fn steps(self) -> impl FusedStream<Item = Result<SyncStep, SpoolError>> {
+    pub fn steps(self) -> impl FusedStream<Item = Result<SpoolStep, SpoolError>> {
         struct State {
             reader: Option<BufReader<std::fs::File>>,
-            queue: VecDeque<SyncStep>,
+            queue: VecDeque<SpoolStep>,
         }
         let state = State {
             reader: Some(BufReader::new(self.file)),
@@ -1062,18 +1125,18 @@ impl SpoolReader {
 /// `shape_is_consistent` es gratis aquí y es la regla 4 comprobada donde se
 /// puede: un `Overwrite` que dice deshacerse borrando haría que el journal
 /// apuntase una reversa falsa.
-fn validated_step(step: SyncStep) -> Result<SyncStep, SpoolError> {
-    if step.kind == norte_proto::methods::SyncStepKind::Unknown {
+fn validated_step(record: SpoolStep) -> Result<SpoolStep, SpoolError> {
+    if record.step.kind == norte_proto::methods::SyncStepKind::Unknown {
         return Err(SpoolError::Malformed(
             "un paso de clase desconocida en un spool que escribimos nosotros".to_owned(),
         ));
     }
-    if !step.shape_is_consistent() {
+    if !record.step.shape_is_consistent() {
         return Err(SpoolError::Malformed(
             "un paso cuya clase, reversa y motivo no concuerdan".to_owned(),
         ));
     }
-    Ok(step)
+    Ok(record)
 }
 
 /// Crea el directorio con permisos de dueño y nada más.
@@ -1232,13 +1295,14 @@ fn open_blocking(
 
     let mut file = reader.into_inner();
     if summary.executable {
-        verify_digest(&mut file, head_len, &header, &summary.plan_hash)?;
+        verify_digest(&mut file, head_len, &header, &summary.plan_hash, &summary)?;
     }
     file.seek(SeekFrom::Start(head_len as u64))?;
     Ok((file, header, summary))
 }
 
-/// Recalcula el `plan_hash` sobre los pasos del fichero y lo compara.
+/// Recalcula el `plan_hash` y los CONTADORES sobre los pasos del fichero, y los
+/// compara con lo que el fichero dice de sí mismo.
 ///
 /// El resumen guardado dice un hash, pero eso es el fichero hablando de sí
 /// mismo: [`PlanHasher`] no lleva clave, así que quien pueda escribir en el
@@ -1258,10 +1322,12 @@ fn verify_digest(
     head_len: usize,
     header: &SpoolHeader,
     want: &PlanHash,
+    summary: &SpoolSummary,
 ) -> Result<(), SpoolError> {
     file.seek(SeekFrom::Start(head_len as u64))?;
     let mut reader = BufReader::new(file);
     let mut hasher = PlanHasher::new(&header.options, &header.compare);
+    let mut counts = SyncCounts::default();
     let mut line = Vec::new();
     loop {
         if read_capped_line(&mut reader, &mut line)? == 0 {
@@ -1270,7 +1336,18 @@ fn verify_digest(
             ));
         }
         match decode(&line)? {
-            Record::Step(step) => hasher.step(&validated_step(step)?),
+            Record::Step(record) => {
+                let record = validated_step(record)?;
+                // Los contadores se REHACEN, no se creen. Son lo que el ejecutor
+                // mira para decidir qué puertas de policy pide (`Mkdir` si el
+                // plan crea directorios, `Delete` si sobrescribe o borra), y
+                // viven en el terminador, que el digest NO cubre: sin esto, un
+                // fichero con los pasos intactos y `overwrite: 0` pasaría la
+                // verificación y se ejecutaría sin que nadie preguntara por el
+                // borrado.
+                counts.add(&record.step);
+                hasher.step(&record.step);
+            }
             Record::End(_) => {
                 // Nada después del terminador, y se comprueba AQUÍ y no solo en
                 // `steps()`: con dos terminadores IGUALES el digest cuadra —
@@ -1294,6 +1371,11 @@ fn verify_digest(
     if &hasher.finish() != want {
         return Err(SpoolError::Malformed(
             "el digest recalculado no es el del nombre: el spool se ha tocado".to_owned(),
+        ));
+    }
+    if counts != summary.counts {
+        return Err(SpoolError::Malformed(
+            "los contadores del terminador no son los de los pasos".to_owned(),
         ));
     }
     Ok(())
@@ -1598,7 +1680,12 @@ mod tests {
             .await
             .expect("create");
         for s in steps {
-            w.push(&PlanItem::Step(s.clone())).await.expect("push");
+            w.push(&PlanItem::Step {
+                step: s.clone(),
+                dest: None,
+            })
+            .await
+            .expect("push");
         }
         w.finish(PlanOutcome::Ended)
             .await
@@ -1645,7 +1732,12 @@ mod tests {
         assert_eq!(reader.summary().counts.irreversible, 1);
         assert!(reader.summary().executable);
 
-        let read: Vec<SyncStep> = reader.steps().try_collect().await.expect("steps");
+        let read: Vec<SyncStep> = reader
+            .steps()
+            .map_ok(|record| record.step)
+            .try_collect()
+            .await
+            .expect("steps");
         assert_eq!(
             read,
             steps_fixture(),
@@ -1836,7 +1928,12 @@ mod tests {
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
         let path = spool.dir().join(file_name(1, &hash));
         let text = std::fs::read_to_string(&path).expect("leer");
-        std::fs::write(&path, text.replacen("\"format\":1", "\"format\":2", 1)).expect("escribir");
+        // Se retoca contra `SPOOL_FORMAT` y no contra un número literal: el
+        // formato sube cada vez que el registro de un paso cambia de forma, y
+        // este test es sobre CUALQUIER otra versión, no sobre la siguiente.
+        let mio = format!("\"format\":{SPOOL_FORMAT}");
+        let ajeno = format!("\"format\":{}", SPOOL_FORMAT + 1);
+        std::fs::write(&path, text.replacen(&mio, &ajeno, 1)).expect("escribir");
         let e = spool.open(1, &hash).await.expect_err("rehusado");
         assert!(matches!(e, SpoolError::Malformed(_)), "{e:?}");
         assert!(e.is_stale(), "otra versión del formato es un plan rancio");
@@ -1871,7 +1968,12 @@ mod tests {
             .await
             .expect("create");
         for s in steps_fixture() {
-            w.push(&PlanItem::Step(s)).await.expect("push");
+            w.push(&PlanItem::Step {
+                step: s,
+                dest: None,
+            })
+            .await
+            .expect("push");
         }
         assert!(matches!(
             w.finish(PlanOutcome::Interrupted).await,
@@ -1889,9 +1991,12 @@ mod tests {
                 .create(1, &opts(), &compare_opts())
                 .await
                 .expect("create");
-            w.push(&PlanItem::Step(copy_step(1, "a.txt", 1)))
-                .await
-                .expect("push");
+            w.push(&PlanItem::Step {
+                step: copy_step(1, "a.txt", 1),
+                dest: None,
+            })
+            .await
+            .expect("push");
         }
         assert!(spool_files(&spool).is_empty(), "el Drop se lo lleva");
     }
@@ -2035,7 +2140,12 @@ mod tests {
             .await
             .expect("create");
         let step = copy_step(1, "a.txt", 1);
-        w.push(&PlanItem::Step(step.clone())).await.expect("push");
+        w.push(&PlanItem::Step {
+            step: step.clone(),
+            dest: None,
+        })
+        .await
+        .expect("push");
         std::mem::forget(w); // como un `kill -9`: ni `finish` ni `Drop`.
 
         // El hash que ese plan HABRÍA tenido: ni con él se abre.
@@ -2056,9 +2166,12 @@ mod tests {
             .create(1, &opts(), &compare_opts())
             .await
             .expect("create");
-        w.push(&PlanItem::Step(copy_step(1, "a.txt", 1)))
-            .await
-            .expect("push");
+        w.push(&PlanItem::Step {
+            step: copy_step(1, "a.txt", 1),
+            dest: None,
+        })
+        .await
+        .expect("push");
         w.abandon().await;
         assert!(spool_files(&spool).is_empty(), "ni siquiera el .part");
     }
@@ -2183,7 +2296,12 @@ mod tests {
         let hash = write_plan(&spool, 1, &steps).await;
         let reader = spool.open(1, &hash).await.expect("open");
         assert_eq!(reader.summary().counts.copy, 4_000);
-        let read: Vec<SyncStep> = reader.steps().try_collect().await.expect("steps");
+        let read: Vec<SyncStep> = reader
+            .steps()
+            .map_ok(|record| record.step)
+            .try_collect()
+            .await
+            .expect("steps");
         assert_eq!(read, steps);
     }
 
@@ -2244,7 +2362,10 @@ mod tests {
         // otra. Aquí se comprueba contra el hasher desnudo.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
-        let items: Vec<PlanItem> = steps_fixture().into_iter().map(PlanItem::Step).collect();
+        let items: Vec<PlanItem> = steps_fixture()
+            .into_iter()
+            .map(|step| PlanItem::Step { step, dest: None })
+            .collect();
 
         let mut w = spool
             .create(1, &opts(), &compare_opts())
@@ -2275,7 +2396,12 @@ mod tests {
         otras.mtime_tolerance_ms = 5_000;
         let mut w = spool.create(1, &opts(), &otras).await.expect("create");
         for s in steps_fixture() {
-            w.push(&PlanItem::Step(s)).await.expect("push");
+            w.push(&PlanItem::Step {
+                step: s,
+                dest: None,
+            })
+            .await
+            .expect("push");
         }
         let b = w
             .finish(PlanOutcome::Ended)
@@ -2508,7 +2634,12 @@ mod tests {
             .await
             .expect("create");
         for s in steps_fixture() {
-            w.push(&PlanItem::Step(s)).await.expect("push");
+            w.push(&PlanItem::Step {
+                step: s,
+                dest: None,
+            })
+            .await
+            .expect("push");
         }
         let e = w
             .finish(PlanOutcome::Ended)
@@ -2543,9 +2674,12 @@ mod tests {
             .await
             .expect("create");
         assert!(!path.exists(), "el vencido se fue al planificar");
-        w.push(&PlanItem::Step(copy_step(1, "a.txt", 1)))
-            .await
-            .expect("push");
+        w.push(&PlanItem::Step {
+            step: copy_step(1, "a.txt", 1),
+            dest: None,
+        })
+        .await
+        .expect("push");
         w.finish(PlanOutcome::Ended).await.expect("finish");
     }
 
@@ -2568,9 +2702,12 @@ mod tests {
             .expect("create");
         assert!(part.exists(), "un plan en curso no es un plan vencido");
         w2.abandon().await;
-        w.push(&PlanItem::Step(copy_step(1, "a.txt", 1)))
-            .await
-            .expect("push");
+        w.push(&PlanItem::Step {
+            step: copy_step(1, "a.txt", 1),
+            dest: None,
+        })
+        .await
+        .expect("push");
         w.finish(PlanOutcome::Ended).await.expect("finish");
     }
 }

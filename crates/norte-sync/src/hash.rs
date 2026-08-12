@@ -208,7 +208,13 @@ impl PlanHasher {
     /// acumula el plan: el flujo produce [`PlanItem`], no dos secuencias.
     pub fn item(&mut self, item: &PlanItem) {
         match item {
-            PlanItem::Step(step) => self.step(step),
+            // El testigo del destino se queda FUERA del digest, y a propósito:
+            // es de dónde salió la conclusión, no la conclusión. Dos planes con
+            // los mismos pasos sobre un destino cuya fecha se movió sin que
+            // ningún veredicto cambiara son el mismo plan y merecen la misma
+            // aprobación; lo que revalida el testigo lo revalida el ejecutor,
+            // paso a paso, y no una huella del plan entero.
+            PlanItem::Step { step, dest: _ } => self.step(step),
             PlanItem::Blocker(blocker) => self.blocker(blocker),
         }
     }
@@ -992,12 +998,55 @@ mod tests {
 
     /// `item` es lo que consume quien acumula el flujo, y tiene que dar
     /// exactamente lo mismo que llamar a mano.
+    /// El testigo del destino NO entra en el digest, y hay que fijarlo: si
+    /// alguien lo alimenta algún día, el writer hashearía una cosa y
+    /// `Spool::open` —que rehace el digest desde los PASOS y no ve el testigo—
+    /// otra, y todo plan con una sobrescritura fallaría su propia verificación y
+    /// saldría como `PlanStale`. En silencio, y solo en producción.
+    #[test]
+    fn the_destination_witness_is_not_part_of_the_digest() {
+        use norte_proto::EntryKind;
+
+        use crate::DestWitness;
+
+        let step = copy_step("a", 1);
+        let mut sin = hasher(&opts_update());
+        sin.item(&PlanItem::Step {
+            step: step.clone(),
+            dest: None,
+        });
+        let mut con = hasher(&opts_update());
+        con.item(&PlanItem::Step {
+            step: step.clone(),
+            dest: Some(DestWitness {
+                kind: EntryKind::File,
+                size: Some(99),
+                mtime_ms: Some(7),
+            }),
+        });
+        let mut otro = hasher(&opts_update());
+        otro.item(&PlanItem::Step {
+            step,
+            dest: Some(DestWitness {
+                kind: EntryKind::Dir,
+                size: None,
+                mtime_ms: None,
+            }),
+        });
+        let (sin, con, otro) = (sin.finish(), con.finish(), otro.finish());
+        assert_eq!(sin, con, "poner un testigo no cambia el plan");
+        assert_eq!(con, otro, "ni cambiarlo por otro");
+    }
+
     #[test]
     fn feeding_items_and_feeding_halves_agree() {
         let step = copy_step("a", 1);
         let block = blocker(SyncBlockerKind::OverlapDetected, "sub");
         let mut a = hasher(&opts_update());
-        a.item(&PlanItem::Step(step.clone()));
+        a.item(&PlanItem::Step {
+            step: step.clone(),
+            dest: None,
+        });
         a.item(&PlanItem::Blocker(block.clone()));
         let mut b = hasher(&opts_update());
         b.step(&step);

@@ -425,7 +425,7 @@ fn steps(items: &[PlanItem]) -> Vec<SyncStep> {
     items
         .iter()
         .filter_map(|item| match item {
-            PlanItem::Step(step) => Some(step.clone()),
+            PlanItem::Step { step, .. } => Some(step.clone()),
             PlanItem::Blocker(_) => None,
         })
         .collect()
@@ -436,7 +436,7 @@ fn blockers(items: &[PlanItem]) -> Vec<SyncBlocker> {
         .iter()
         .filter_map(|item| match item {
             PlanItem::Blocker(blocker) => Some(blocker.clone()),
-            PlanItem::Step(_) => None,
+            PlanItem::Step { .. } => None,
         })
         .collect()
 }
@@ -484,10 +484,13 @@ fn without_ids(items: &[PlanItem]) -> Vec<PlanItem> {
     items
         .iter()
         .map(|item| match item {
-            PlanItem::Step(step) => PlanItem::Step(SyncStep {
-                id: 0,
-                ..step.clone()
-            }),
+            PlanItem::Step { step, dest } => PlanItem::Step {
+                step: SyncStep {
+                    id: 0,
+                    ..step.clone()
+                },
+                dest: *dest,
+            },
             PlanItem::Blocker(blocker) => PlanItem::Blocker(blocker.clone()),
         })
         .collect()
@@ -502,8 +505,8 @@ fn candidate_item() -> impl Strategy<Value = PlanItem> {
             SyncStepKind::Skip => (None, Some(SyncReason::Unreadable)),
             _ => (Some(StepReversal::Delete), None),
         };
-        move |id: u64| {
-            PlanItem::Step(SyncStep {
+        move |id: u64| PlanItem::Step {
+            step: SyncStep {
                 id,
                 kind,
                 rel: rel(rel_wire),
@@ -513,7 +516,8 @@ fn candidate_item() -> impl Strategy<Value = PlanItem> {
                 confidence: CompareConfidence::Certain,
                 reversal,
                 reason,
-            })
+            },
+            dest: None,
         }
     };
     let shapes: Vec<Box<dyn Fn(u64) -> PlanItem>> = vec![
@@ -525,8 +529,8 @@ fn candidate_item() -> impl Strategy<Value = PlanItem> {
         Box::new(step(SyncStepKind::Copy, "ab", None, None)),
         Box::new(step(SyncStepKind::Overwrite, "ab", None, Some(1))),
         Box::new(step(SyncStepKind::Skip, "sub/x", None, None)),
-        Box::new(|id| {
-            PlanItem::Step(SyncStep {
+        Box::new(|id| PlanItem::Step {
+            step: SyncStep {
                 id,
                 kind: SyncStepKind::Skip,
                 rel: RelPath::default(),
@@ -536,10 +540,11 @@ fn candidate_item() -> impl Strategy<Value = PlanItem> {
                 confidence: CompareConfidence::Certain,
                 reversal: None,
                 reason: Some(SyncReason::Unreadable),
-            })
+            },
+            dest: None,
         }),
-        Box::new(|id| {
-            PlanItem::Step(SyncStep {
+        Box::new(|id| PlanItem::Step {
+            step: SyncStep {
                 id,
                 kind: SyncStepKind::Skip,
                 rel: RelPath::default(),
@@ -549,7 +554,8 @@ fn candidate_item() -> impl Strategy<Value = PlanItem> {
                 confidence: CompareConfidence::Certain,
                 reversal: None,
                 reason: Some(SyncReason::Unreadable),
-            })
+            },
+            dest: None,
         }),
         Box::new(|_| {
             PlanItem::Blocker(SyncBlocker {

@@ -3585,6 +3585,17 @@
           "$ref": "#/$defs/SyncFailureCause",
           "description": "Por qué."
         },
+        "dest_rel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RelPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "La ruta del DESTINO sobre la que el paso caía, cuando no se deletrea como\n`rel` — el mismo campo y la misma regla que [`SyncStep::dest_rel`],\nrepetidos aquí porque el informe se lee sin el plan delante.\n\nSin él, el caso de [`SyncFailureCause::IllegalName`] se cuenta al revés:\nun `café/x.txt` NFC del origen cuya carpeta el destino deletrea en NFD\nfalla por longitud del nombre —NFD ocupa más— y el informe enseñaría la\ngrafía NFC, que es la corta y la legal. «Este nombre no vale» señalando un\nnombre que sí vale."
+        },
         "rel": {
           "$ref": "#/$defs/RelPath",
           "description": "Dónde, RELATIVO a las dos raíces y en BYTES, igual que\n[`SyncStep::rel`]."
@@ -3606,7 +3617,12 @@
         },
         {
           "const": "denied",
-          "description": "El provider rehusó la escritura.",
+          "description": "El provider rehusó la escritura.\n\nEs una respuesta sobre el PERMISO, y por eso está separada de\n[`SyncFailureCause::IllegalName`]: «no puedes» y «así no se puede llamar»\nllevan a acciones distintas —pedir acceso, o arreglar el nombre— y un\ninforme que las mezclara no serviría para ninguna de las dos.",
+          "type": "string"
+        },
+        {
+          "const": "illegal_name",
+          "description": "El nombre no es legal bajo la raíz de DESTINO.\n\n# Por qué es un fallo de ejecución y no un bloqueo del plan\nNada comprueba, al planificar, que un nombre legal bajo el origen lo sea\nbajo el destino, y comprobarlo exigiría modelar las reglas de nombres de\ncada filesystem —cuáles, y con qué límites, no está en\n[`Capabilities`](crate::Capabilities)—. Los casos son reales: 86 `é` en\nNFC ocupan 172 bytes y 258 en NFD, que revienta `NAME_MAX`; `CON`, un\npunto final y un espacio final no son nombres en Windows; y `f:ads`\nescribe un flujo de datos alternativo y «funciona».\n\nAsí que sale por aquí, con nombre propio. Un [`SyncFailureCause::Io`]\ngenérico habría dicho «algo se rompió» de la única familia de fallos que\nel usuario puede arreglar él solo, y de la única que se repetirá idéntica\nen cada intento hasta que la arregle.\n\n# Es BEST-EFFORT, y conviene no leerlo como una garantía\nDepende de que el provider sepa distinguir «ese nombre no vale» de «algo\nfalló», y no todos pueden: `file://` sí (`InvalidFilename`, `EILSEQ`),\npero SFTP v3 contesta un `Failure` genérico a casi todo y el\nalmacenamiento de objetos no distingue una clave demasiado larga de\ncualquier otro rechazo — en esos dos, un nombre ilegal llega como\n[`SyncFailureCause::Io`]. La ausencia de esta causa NO prueba que los\nnombres estuvieran bien; su presencia sí prueba que uno no lo estaba.",
           "type": "string"
         },
         {

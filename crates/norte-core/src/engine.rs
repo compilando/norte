@@ -973,6 +973,237 @@ impl Engine {
         Ok((handle, rx))
     }
 
+    /// Ejecuta un plan APROBADO (`sync.apply`, 0.40.0, ADR 0049) como Task
+    /// cancelable: [`TaskKind::Sync`] más el informe que se llena según avanza.
+    ///
+    /// **El único parámetro es el hash**, y de ahí sale todo lo demás. Las dos
+    /// raíces, el modo y los criterios se leen del SPOOL, que es donde el plan
+    /// aprobado quedó retenido y atado a `conn_id`: por la FORMA de la petición,
+    /// no se puede ejecutar nada que no sea lo que un humano vio.
+    ///
+    /// # El gate corre sobre las raíces que salen del SPOOL, aquí y ahora
+    /// El de `sync.plan` NO vale: entre planificar y aplicar pasan hasta
+    /// [`SYNC_PLAN_TTL_MS`](norte_proto::methods::SYNC_PLAN_TTL_MS) milisegundos,
+    /// y dentro de esa ventana un scope caduca y una regla de `policy.toml`
+    /// cambia. Así que se piden aquí, con las rutas leídas del fichero:
+    ///
+    /// - [`PolicyOp::Copy`](crate::policy::PolicyOp::Copy) sobre las DOS raíces
+    ///   —copiar es leer el origen y escribir el destino, y es exactamente lo que
+    ///   [`Self::copy_with_as`] pide para copiar un árbol—,
+    /// - [`PolicyOp::Mkdir`](crate::policy::PolicyOp::Mkdir) sobre el destino si
+    ///   el plan crea algún directorio,
+    /// - [`PolicyOp::Delete`](crate::policy::PolicyOp::Delete) sobre el destino
+    ///   si el plan sobrescribe o borra, con el modo que de verdad se va a usar
+    ///   (papelera o permanente, según lo que el destino declare).
+    ///
+    /// **Se gatea sobre las RAÍCES, no sobre cada paso**, igual que una copia
+    /// recursiva de `fs.copy`: la frontera de scope de un agente es por raíz, así
+    /// que un paso no puede escapar de un scope que cubra `dest_root`. Lo que sí
+    /// queda fuera es una regla `deny` de `policy.toml` sobre una ruta CONCRETA
+    /// de dentro del árbol — un gate por paso metería un `ask` por paso en un
+    /// plan de medio millón, que no es una interfaz. Es la misma cobertura que
+    /// `fs.copy` de un árbol tiene hoy.
+    ///
+    /// # Regla dura 4: sin journal no se aplica
+    /// [`Error::Unsupported`], fail-closed como el spool. El plan promete una
+    /// [`StepReversal`](norte_proto::methods::StepReversal) por paso y solo el
+    /// journal la puede cumplir; aplicarlo sin él sería sobrescribir y enterrar
+    /// sin dejar rastro ni vuelta atrás.
+    ///
+    /// # El plan se gasta, pase lo que pase
+    /// Al terminar la Task —completada, fallida o cancelada— el spool se borra.
+    /// Mientras no se borre, ese hash cuenta como «aplicándose» y replanificar el
+    /// mismo árbol con las mismas opciones (que da el mismo digest) se rehúsa.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] sin spool o sin journal, o si el scheme de alguna
+    /// raíz no tiene provider; [`Error::PlanStale`] si el hash no nombra un plan
+    /// vivo de ESTA conexión (no existe, caducó, está manipulado, o ya se está
+    /// aplicando); [`Error::PlanNotExecutable`] si el plan traía bloqueos;
+    /// [`Error::PolicyDenied`] si el gate deniega; [`Error::Io`] si el spool no
+    /// se deja leer por un fallo del daemon.
+    ///
+    /// # Panics
+    /// Solo por envenenamiento del `Mutex` del informe (otro hilo entró en
+    /// pánico sosteniéndolo) — irrecuperable, mismo criterio que el resto del
+    /// core.
+    #[tracing::instrument(skip(self, actor), fields(conn_id = conn_id, plan_hash = plan_hash.as_str()))]
+    pub async fn sync_apply_as(
+        &self,
+        plan_hash: &PlanHash,
+        conn_id: u64,
+        actor: crate::journal::Actor,
+    ) -> Result<
+        (
+            TaskHandle,
+            Arc<std::sync::Mutex<norte_proto::methods::SyncReportResult>>,
+        ),
+        Error,
+    > {
+        let spool = self.spool().ok_or(Error::Unsupported)?;
+        let journal = self.journal.clone().ok_or_else(|| {
+            tracing::warn!("sync.apply sin journal: no hay lote que deshacer, no se aplica");
+            Error::Unsupported
+        })?;
+        // `open` se lleva el DERECHO a aplicar este plan (es de un solo uso), así
+        // que a partir de aquí toda salida tiene que devolverlo con `remove`: si
+        // no, ese hash se queda «aplicándose» y no se puede replanificar.
+        let reader = spool
+            .open(conn_id, plan_hash)
+            .await
+            .map_err(|e| spool_open_error(&e))?;
+        let outcome = self
+            .sync_apply_opened(reader, plan_hash, conn_id, actor, &spool, &journal)
+            .await;
+        if outcome.is_err() {
+            let _ = spool.remove(conn_id, plan_hash).await;
+        }
+        outcome
+    }
+
+    /// La parte de [`Self::sync_apply_as`] que corre con el plan ya abierto.
+    ///
+    /// Está separada para que TODA salida de error devuelva el derecho a aplicar
+    /// (el `remove` del llamante): con un solo cuerpo habría que acordarse en
+    /// cada `?`, que es exactamente la clase de cosa que se olvida.
+    async fn sync_apply_opened(
+        &self,
+        reader: crate::sync::SpoolReader,
+        plan_hash: &PlanHash,
+        conn_id: u64,
+        actor: crate::journal::Actor,
+        spool: &crate::sync::Spool,
+        journal: &Arc<crate::journal::SqliteJournal>,
+    ) -> Result<
+        (
+            TaskHandle,
+            Arc<std::sync::Mutex<norte_proto::methods::SyncReportResult>>,
+        ),
+        Error,
+    > {
+        use crate::policy::PolicyOp;
+        use norte_proto::DeleteMode;
+
+        // Un plan con bloqueos no se ejecuta aunque su hash case: el hash dice
+        // «este es el plan que se te enseñó», jamás «este plan se puede
+        // ejecutar» (ver la nota del módulo `hash` de `norte-sync`).
+        if !reader.summary().executable {
+            return Err(Error::PlanNotExecutable);
+        }
+        let counts = reader.summary().counts;
+        let source_root = reader.header().options.source_root.clone();
+        let dest_root = reader.header().options.dest_root.clone();
+        let dest_has_trash = reader.header().options.dest_has_trash;
+
+        self.gate(&actor, PolicyOp::Copy, &[&source_root, &dest_root])
+            .await?;
+        if counts.create_dir > 0 {
+            self.gate(&actor, PolicyOp::Mkdir, &[&dest_root]).await?;
+        }
+        // La clase de borrado que de verdad va a ocurrir: la misma de la que sale
+        // la reversa de cada paso, así que el gate pregunta por lo que pasa.
+        let mode = if dest_has_trash {
+            DeleteMode::Trash
+        } else {
+            DeleteMode::Permanent
+        };
+        if counts.overwrite > 0 || counts.delete_tree > 0 {
+            self.gate(&actor, PolicyOp::Delete { mode }, &[&dest_root])
+                .await?;
+        }
+
+        let source = self.provider_for(&source_root).await?;
+        let dest = self.provider_for(&dest_root).await?;
+        // El lote se reserva DESPUÉS del gate: un plan denegado no consume id.
+        let batch_id = journal.journal().alloc_batch().await.map_err(Error::from)?;
+        let recorder = crate::sync::exec::BatchJournal {
+            journal: Arc::clone(journal),
+            actor: actor.clone(),
+            batch_id,
+        };
+        let targets = crate::sync::exec::SyncTargets {
+            source,
+            dest,
+            source_root,
+            dest_root,
+            // La MISMA policy que acaba de gatear las raíces, para volver a
+            // preguntarle paso a paso: el gate de la raíz resuelve la frontera de
+            // scope, pero una regla `deny` de `policy.toml` sobre una ruta de
+            // dentro del árbol solo se ve preguntando por esa ruta.
+            policy: Arc::clone(&self.policy),
+            delete_mode: mode,
+        };
+        let report = Arc::new(std::sync::Mutex::new(crate::sync::exec::new_report(
+            batch_id,
+        )));
+        let report_task = Arc::clone(&report);
+        let spool_task = spool.clone();
+        let hash_task = plan_hash.clone();
+        // Los pasos del plan, más lo que el diálogo ya sabía: el total de pasos
+        // y de bytes, para que la barra tenga denominador desde el primer
+        // instante. `current` NO se toca, por lo mismo que en `sync.plan`:
+        // llevaría un `VPath` a un broadcast que ven todas las conexiones
+        // humanas, y el gate de esta Task es por RAÍZ.
+        let total = counts
+            .create_dir
+            .saturating_add(counts.copy)
+            .saturating_add(counts.overwrite)
+            .saturating_add(counts.delete_tree)
+            .saturating_add(counts.skip);
+        let key = targets.dest_root.scheme().to_owned();
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::Sync,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    // El denominador se puede SUPERAR, y hay que saberlo: los
+                    // bytes del plan son una cota inferior (un provider que
+                    // lista sin tamaño no aporta ninguno — sobre `file://` es el
+                    // caso normal) mientras que los del informe se cuentan al
+                    // escribirlos. `TaskProgress::bytes_total` es «estimado» por
+                    // contrato, así que esto está dentro de lo prometido, pero
+                    // una barra que divida sin acotar pasará del 100%.
+                    ctx.progress.update(|p| {
+                        p.entries_total = Some(total);
+                        p.bytes_total = Some(counts.bytes);
+                    });
+                    let steps = futures::StreamExt::map(reader.steps(), |item| {
+                        item.map_err(|e| spool_read_error(&e))
+                    });
+                    // El `catch_unwind` no es paranoia: el scheduler ya envuelve
+                    // el cuerpo entero en uno, así que un pánico de un provider
+                    // se llevaría por delante el `remove` de abajo y dejaría ese
+                    // hash marcado «aplicándose» PARA SIEMPRE — replanificar el
+                    // mismo árbol da el mismo digest y se rehusaría durante toda
+                    // la vida de la conexión. Aquí el pánico se recoge, el plan
+                    // se gasta, y después se contesta lo que el scheduler habría
+                    // contestado.
+                    let out = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(crate::sync::exec::run(
+                        &targets,
+                        &recorder,
+                        steps,
+                        &ctx,
+                        &report_task,
+                    )))
+                    .await;
+                    // El plan se gasta en CUALQUIER estado terminal. Mientras no
+                    // se borre, su hash cuenta como «aplicándose» y el mismo
+                    // árbol no se puede replanificar.
+                    if let Err(e) = spool_task.remove(conn_id, &hash_task).await {
+                        tracing::warn!(error = %e, "sync.apply: el plan aplicado no se pudo borrar");
+                    }
+                    out.unwrap_or_else(|_| {
+                        tracing::error!("sync.apply: pánico en el ejecutor");
+                        Err(Error::Internal { panic: true })
+                    })
+                })
+            }),
+        );
+        Ok((handle, report))
+    }
+
     /// (Re)construye el índice de `root` como Task cancelable (M4, ADR 0034).
     /// Camina el provider (lectura; como `fs.search`, sin gate de mutación) y
     /// alimenta [`norte_index::Index::build`]. El `report` se rellena al
@@ -1981,6 +2212,38 @@ pub(crate) fn span_path(p: &VPath) -> String {
             format!("<{} ***>", p.scheme())
         }
         _ => p.display_lossy().clone(),
+    }
+}
+
+/// Traduce un fallo de [`Spool::open`](crate::sync::Spool::open) a la taxonomía
+/// del wire.
+///
+/// Las tres formas de «no hay plan vivo con ese hash» —no está, caducó, está
+/// manipulado— son la MISMA respuesta para el cliente, y es una respuesta útil:
+/// que vuelva a planificar. Solo un fallo de I/O de verdad es culpa del daemon.
+fn spool_open_error(e: &crate::sync::SpoolError) -> Error {
+    if e.is_stale() {
+        Error::PlanStale
+    } else {
+        Error::Io { retryable: false }
+    }
+}
+
+/// Lo mismo, pero A MITAD de la ejecución: el fichero se truncó o se editó
+/// después de abrirlo.
+///
+/// Aquí ya no se puede contestar `PlanStale` —la Task existe y ha escrito— así
+/// que sale como un fallo de la Task. Lo aplicado hasta ese punto se queda
+/// journalizado bajo su lote y es deshacible.
+fn spool_read_error(e: &crate::sync::SpoolError) -> Error {
+    match e {
+        // Un fichero que este binario escribió hace minutos y que deja de
+        // parsearse a mitad no es un fallo del daemon: es un fichero truncado o
+        // tocado. `Io` lo dice y `Internal` lo enterraría como avería nuestra.
+        crate::sync::SpoolError::Io(_) | crate::sync::SpoolError::Malformed(_) => {
+            Error::Io { retryable: false }
+        }
+        _ => Error::Internal { panic: false },
     }
 }
 
