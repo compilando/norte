@@ -53,7 +53,7 @@
 //!   de otro, la sesión sigue sin registro aunque el otro suelte el lock un
 //!   segundo después, y eso incluye al que lo tenía solo de paso (otro `norte
 //!   cp` de un script, un `norte audit`, un daemon reiniciándose). Las razones
-//!   son que reintentar en cada mutación pagaría [`ESPERA_POR_EL_LOCK`] por
+//!   son que reintentar en cada mutación pagaría `ESPERA_POR_EL_LOCK` por
 //!   cada una, y que «esta sesión no queda registrada» ya se le dijo al
 //!   usuario y hay un indicador permanente enseñándolo: cambiarlo por detrás
 //!   convierte ese indicador en mentira. Lo que **no** es la razón —y así lo
@@ -334,7 +334,7 @@ impl crate::observer::MutationObserver for LazyJournal {
     /// Sin journal devuelve `Ok(())`: la mutación YA OCURRIÓ (el observer se
     /// llama después del efecto), así que fallar aquí no la desharía, solo
     /// diría que falló algo que funcionó. Lo que NO es aceptable es que además
-    /// sea muda, y por eso el aviso está en [`LazyJournal::resolve`], que corre
+    /// sea muda, y por eso el aviso está en `LazyJournal::resolve`, que corre
     /// exactamente una vez y avisa antes de que este `Ok(())` vuelva.
     async fn on_mutation(
         &self,
