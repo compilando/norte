@@ -337,6 +337,93 @@ async fn una_raiz_symlinkeada_contra_su_destino_es_el_mismo_arbol() {
     );
 }
 
+// 7 bis ───────────────────────────────────────────────────────────────────
+/// Y la OTRA mitad que ninguna de las dos ve: la contención que solo existe si
+/// se pliega la caja. `mem:///Data` contra `mem:///data/backup` no son iguales
+/// byte a byte, no cuelga una de la otra byte a byte, y sus `node_id` son
+/// distintos porque son directorios distintos — pero en un volumen que pliega
+/// son el MISMO directorio nombrado dos veces, o sea que el plan copiaría un
+/// árbol dentro de sí mismo. Es el resultado que todo el aparato de solape
+/// existe para impedir.
+#[tokio::test]
+async fn la_contencion_que_solo_se_ve_plegando_la_caja_tambien_se_rechaza() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = Engine::new();
+    // Sin `CASE_SENSITIVE`: APFS, NTFS, un ext4 `+F`.
+    let mem = Arc::new(MemProvider::with_flags(
+        norte_proto::CapabilityFlags::CASE_PRESERVING | norte_proto::CapabilityFlags::RENAME_ATOMIC,
+    ));
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    engine.set_spool(Spool::new(dir.path()));
+    mkdir(&mem, "mem:///data").await;
+    mkdir(&mem, "mem:///data/backup").await;
+
+    let Err(err) = engine
+        .sync_plan_as(params("mem:///Data", "mem:///data/backup"), 1, Actor::User)
+        .await
+    else {
+        panic!("el destino cuelga del origen en cuanto se pliega la caja");
+    };
+    assert!(
+        matches!(
+            err,
+            ProtoError::OverlappingRoots {
+                relation: RootOverlap::DestInsideSource
+            }
+        ),
+        "fue {err:?}"
+    );
+
+    // Y al revés, y las dos grafías de la MISMA raíz.
+    let Err(err) = engine
+        .sync_plan_as(params("mem:///data/backup", "mem:///DATA"), 1, Actor::User)
+        .await
+    else {
+        panic!("el origen cuelga del destino");
+    };
+    assert!(
+        matches!(
+            err,
+            ProtoError::OverlappingRoots {
+                relation: RootOverlap::SourceInsideDest
+            }
+        ),
+        "fue {err:?}"
+    );
+    let Err(err) = engine
+        .sync_plan_as(params("mem:///Data", "mem:///dAtA"), 1, Actor::User)
+        .await
+    else {
+        panic!("son la misma raíz escrita dos veces");
+    };
+    assert!(
+        matches!(
+            err,
+            ProtoError::OverlappingRoots {
+                relation: RootOverlap::Same
+            }
+        ),
+        "fue {err:?}"
+    );
+}
+
+// 7 ter ───────────────────────────────────────────────────────────────────
+/// Y el plegado NO se aplica donde no toca: con los dos lados distinguiendo
+/// caja, `mem:///Data` y `mem:///data/backup` son de verdad dos árboles
+/// distintos y el plan se sirve. Rechazarlo negaría una sincronización legítima
+/// sobre ext4, que es la mitad de la decisión que la prueba de arriba no puede
+/// enseñar.
+#[tokio::test]
+async fn con_los_dos_lados_sensibles_a_la_caja_no_hay_solape_que_plegar() {
+    let (engine, mem, _dir) = setup();
+    mkdir(&mem, "mem:///Data").await;
+    mkdir(&mem, "mem:///data").await;
+    mkdir(&mem, "mem:///data/backup").await;
+
+    let planned = plan(&engine, params("mem:///Data", "mem:///data/backup")).await;
+    assert_eq!(planned.state, TaskState::Completed);
+}
+
 // 8 ───────────────────────────────────────────────────────────────────────
 /// Dos campos de `compare` no son del llamante en `sync.plan`. Mandarlos es un
 /// rechazo, jamás un valor que el core pise en silencio: servir un recorrido

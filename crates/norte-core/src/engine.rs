@@ -836,16 +836,18 @@ impl Engine {
     ///    estructural no puede ver y lo que el guard del walk tampoco: las filas
     ///    de un walk sobre `/data` cuelgan todas de `/data` y jamás «alcanzan»
     ///    la otra raíz.
+    /// 3. **Contención PLEGADA**, cuando alguno de los dos providers no declara
+    ///    `CASE_SENSITIVE`: los mismos segmentos, comparados por la clave con la
+    ///    que `norte-compare` empareja nombres. Es lo que caza `source=/Data`
+    ///    contra `dest=/data/backup` sobre APFS o NTFS — tres directorios
+    ///    distintos para los bytes y uno dentro de otro para el volumen.
     ///
     /// Lo que sigue SIN cubrir, dicho aquí en vez de prometido de más:
     ///
-    /// - **La CONTENCIÓN plegando mayúsculas o normalización.** Las dos
-    ///   comprobaciones son literales sobre los bytes de los segmentos, así que
-    ///   sobre APFS o NTFS `source=/Data` y `dest=/data/backup` pasan las dos:
-    ///   no son iguales byte a byte, no cuelga una de la otra byte a byte, y sus
-    ///   `node_id` son distintos porque son directorios distintos. El guard del
-    ///   walk tampoco lo ve, porque compara igual. Cerrarlo pide una contención
-    ///   consciente del régimen de plegado del DESTINO, que es más que un `stat`.
+    /// - **La contención plegada en un volumen que distingue caja pero pliega
+    ///   otra cosa.** ext4 con `+F` pliega y ext4 sin él no, y `Capabilities` no
+    ///   lo distingue por directorio; y el plegado de #145 (`ß`→`ss`) expande, o
+    ///   sea que no lo cubre ninguna de las dos tablas.
     /// - **Un mismo host bajo dos autoridades**: `node_id` es `None` en SFTP y
     ///   en FTP, así que ahí no hay identidad que comparar.
     /// - **Dos providers distintos**: solo se comparan ids del MISMO objeto
@@ -921,6 +923,18 @@ impl Engine {
         // forma perezosa dentro de la primera operación async. Preguntar antes
         // devuelve el default de `cfg!(target_os)`.
         let caps = dest.capabilities();
+        // 3ª puerta: la contención que ve un volumen que PLIEGA. Solo puede
+        // disparar cuando scheme y authority coinciden, y entonces las dos
+        // raíces salen del mismo objeto provider (el pool cachea por
+        // `scheme://authority`), así que el `node_id` de arriba ya forzó el
+        // sondeo perezoso de capacidades y estas son las de verdad.
+        let sides = norte_compare::Sides::from_capabilities(source.capabilities(), caps);
+        if sides.folds_case()
+            && let Some(relation) = folded_overlap(&params.source, &params.dest, sides)
+        {
+            tracing::debug!(?relation, "sync.plan con raíces solapadas al plegar");
+            return Err(Error::OverlappingRoots { relation });
+        }
         let opts = norte_sync::SyncOptions {
             source_root: params.source.clone(),
             dest_root: params.dest,
@@ -2000,6 +2014,64 @@ fn structural_overlap(source: &VPath, dest: &VPath) -> Option<norte_proto::RootO
         Some(RootOverlap::DestInsideSource)
     } else {
         None
+    }
+}
+
+/// [`is_at_or_under`] con la clave que EMPAREJA los nombres, en vez de con sus
+/// bytes.
+///
+/// Misma forma —scheme, authority y después segmento a segmento— y una sola
+/// diferencia: cada segmento se compara por su
+/// [`key_for`](norte_compare::key_for), que es exactamente la clave con la que
+/// `norte-compare` decide que dos nombres son el MISMO nombre. Reutilizada y no
+/// reescrita: una tercera copia de la tabla de plegado sería una tercera
+/// respuesta a «¿colisionan estos dos nombres?» (#151, #129).
+fn folded_is_at_or_under(root: &VPath, path: &VPath, sides: norte_compare::Sides) -> bool {
+    if path.scheme() != root.scheme() || path.authority() != root.authority() {
+        return false;
+    }
+    let mut rest = path.segments();
+    root.segments().all(|segment| {
+        rest.next().is_some_and(|other| {
+            norte_compare::key_for(other, sides) == norte_compare::key_for(segment, sides)
+        })
+    })
+}
+
+/// [`structural_overlap`] sobre un par de raíces que NO distingue caja.
+///
+/// Existe porque la comprobación literal no caza la contención que un volumen
+/// que pliega sí ve: sobre APFS o NTFS, `source=/Data` y `dest=/data/backup` no
+/// son iguales byte a byte, no cuelga una de la otra byte a byte, y sus
+/// [`NodeId`](norte_vfs::NodeId) son distintos porque son directorios
+/// distintos — pasan las tres puertas, y después el plan copia un árbol dentro
+/// de sí mismo. El guard del walk compara igual y tampoco lo ve.
+///
+/// Se aplica cuando ALGUNO de los dos providers no declara
+/// [`CapabilityFlags::CASE_SENSITIVE`](norte_proto::CapabilityFlags::CASE_SENSITIVE),
+/// que es el mismo criterio con el que
+/// [`Sides`](norte_compare::Sides) decide plegar una clave de emparejamiento: un
+/// lado que no distingue caja no puede sostener las dos grafías, así que
+/// comparar CONTRA él es plegar aunque el otro sea ext4. Y es plegado de caja de
+/// verdad, no un `to_lowercase` (los 22 code points de #129).
+///
+/// Con el plegado viene la normalización a NFC, porque es la misma clave: sobre
+/// un volumen que pliega caja, `/Café` NFC y `/cafe\u{301}` NFD nombran el mismo
+/// directorio para cualquier propósito que le importe a esta comprobación.
+fn folded_overlap(
+    source: &VPath,
+    dest: &VPath,
+    sides: norte_compare::Sides,
+) -> Option<norte_proto::RootOverlap> {
+    use norte_proto::RootOverlap;
+    let source_in_dest = folded_is_at_or_under(dest, source, sides);
+    let dest_in_source = folded_is_at_or_under(source, dest, sides);
+    match (source_in_dest, dest_in_source) {
+        // Cada una dentro de la otra solo puede ser la misma ruta plegada.
+        (true, true) => Some(RootOverlap::Same),
+        (true, false) => Some(RootOverlap::SourceInsideDest),
+        (false, true) => Some(RootOverlap::DestInsideSource),
+        (false, false) => None,
     }
 }
 
