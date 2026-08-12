@@ -58,4 +58,4 @@ pub use policy::{
 };
 pub use progress::ProgressReporter;
 pub use scheduler::{Priority, Scheduler, TaskBody, TaskCtx, TaskHandle};
-pub use undo::UndoReport;
+pub use undo::{UNDO_MAX_UNREVERTED_PATHS, UndoReport};

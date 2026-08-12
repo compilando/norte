@@ -2191,16 +2191,25 @@ impl Engine {
         let mut plan: Vec<(Vec<crate::journal::JournalEntry>, Arc<dyn Provider>)> =
             Vec::with_capacity(units.len());
         for unit in units {
-            let Some((undo_op, paths)) = undo_gate_targets(&unit)? else {
+            let Some(targets) = undo_gate_targets(&unit)? else {
                 continue; // imposible: `undo_units` no produce unidades vacías.
             };
             let Some(first) = unit.first() else { continue };
-            let gate_paths: Vec<&VPath> = paths.iter().collect();
-            if let Err(err) = self.gate(&executor, undo_op, &gate_paths).await {
+            // TODAS las puertas antes de tocar nada: una unidad denegada por
+            // cualquiera de sus clases no se aplica ni a medias.
+            let mut denied = None;
+            for (undo_op, paths) in &targets.gates {
+                let gate_paths: Vec<&VPath> = paths.iter().collect();
+                if let Err(err) = self.gate(&executor, *undo_op, &gate_paths).await {
+                    denied = Some(err);
+                    break;
+                }
+            }
+            if let Some(err) = denied {
                 report.lock().expect("undo report lock").blocked = Some((first.seq, err));
                 break; // estricto: para al primer bloqueo de policy (LIFO).
             }
-            let provider = self.provider_for(&paths[0]).await?;
+            let provider = self.provider_for(&targets.anchor).await?;
             plan.push((unit, provider));
         }
 
@@ -2225,30 +2234,29 @@ impl Engine {
                         // `undone` sí cuenta ENTRADAS: es lo que la unidad
                         // deshizo del journal, y un lote deshace las suyas.
                         let members = unit.len() as u64;
-                        let outcome = match unit.split_first() {
-                            // Unidad de una: el camino de siempre, intacto.
-                            Some((entry, [])) => {
-                                crate::undo::revert_entry(&*provider, &journal, entry, &ctx.actor)
-                                    .await?
-                            }
-                            // Unidad de varias: un lote, entero o nada.
-                            _ => {
-                                crate::undo::revert_batch(
-                                    &*provider,
-                                    &journal,
-                                    &unit,
-                                    &ctx.actor,
-                                    &ctx.cancel,
-                                    task_id,
-                                    &report_task,
-                                )
-                                .await?
-                            }
-                        };
+                        // Qué undo le toca a la unidad lo decide `revert_unit`,
+                        // por la FORMA de sus entradas: una suelta, un lote de
+                        // renombrados (entero o nada) o uno de sincronización
+                        // (lo que se pueda, nombrando lo que no).
+                        let outcome = crate::undo::revert_unit(
+                            &*provider,
+                            &journal,
+                            &unit,
+                            &ctx.actor,
+                            &ctx.cancel,
+                            task_id,
+                            &report_task,
+                        )
+                        .await?;
                         match outcome {
                             crate::undo::Reverted::Done => {
                                 report_task.lock().expect("undo report lock").undone += members;
                             }
+                            // La unidad ya repartió sus entradas entre los
+                            // contadores (un lote de sync revierte parte y
+                            // salta parte): sumar `members` aquí contaría como
+                            // deshecho lo que no volvió.
+                            crate::undo::Reverted::Accounted => {}
                             crate::undo::Reverted::SkippedIrreversible => {
                                 report_task
                                     .lock()
@@ -2706,8 +2714,7 @@ pub(crate) async fn list_base_names(
     Ok(names)
 }
 
-/// Qué evaluar en la policy para deshacer UNA unidad de undo: la operación y
-/// TODAS las rutas que tocará.
+/// Qué evaluar en la policy para deshacer UNA unidad de undo.
 ///
 /// Reversa de un `Created` BORRA → `Delete` (una ruta), y desde #65 va SIEMPRE
 /// a papelera (o se salta): se gatea como `Trash`, no como `Permanent` — un
@@ -2717,50 +2724,89 @@ pub(crate) async fn list_base_names(
 /// igual que un Move normal (security M2). El segundo endpoint es `path_to`
 /// (rename) o `reversal_ref` (trash).
 ///
-/// De un LOTE se recogen los endpoints de TODOS sus miembros para gatear UNA
-/// vez: la policy resuelve el slice a lo más restrictivo, así que un lote que
-/// roza un nombre denegado se deniega entero y jamás a medias — la misma regla
-/// que [`Engine::rename_batch_as`] aplica en la ida.
+/// De un LOTE se recogen los endpoints de TODOS sus miembros y se pregunta UNA
+/// vez POR CLASE de operación: la policy resuelve cada slice a lo más
+/// restrictivo, así que un lote que roza un nombre denegado se deniega entero
+/// y jamás a medias — la misma regla que [`Engine::rename_batch_as`] aplica en
+/// la ida.
+///
+/// **Por clase, y no una sola pregunta con la clase más restrictiva.** Un lote
+/// de renames trae la misma reversa en todas sus entradas, pero uno de
+/// SINCRONIZACIÓN mezcla: restaurar lo enterrado es un `Move` y borrar lo
+/// creado es un `Delete`. Fundirlos en `Delete` no era conservador —`delete` y
+/// `move` son permisos INDEPENDIENTES en `OpSet` y en `policy.toml`, no uno
+/// dentro del otro—, así que dejaba pasar bajo permiso de `delete` un `move`
+/// que la policy deniega; y al revés, denegaba el lote entero por un miembro
+/// cuya reversa nadie había prohibido.
 ///
 /// `None` solo para una unidad vacía, que [`crate::undo::undo_units`] no
 /// produce.
-fn undo_gate_targets(
-    unit: &[crate::journal::JournalEntry],
-) -> Result<Option<(crate::policy::PolicyOp, Vec<VPath>)>, Error> {
-    let mut paths: Vec<VPath> = Vec::with_capacity(unit.len() * 2);
-    let mut op: Option<crate::policy::PolicyOp> = None;
+fn undo_gate_targets(unit: &[crate::journal::JournalEntry]) -> Result<Option<UndoGates>, Error> {
+    let mut anchor: Option<VPath> = None;
+    let mut moves: Vec<VPath> = Vec::new();
+    let mut deletes: Vec<VPath> = Vec::new();
     for e in unit {
-        let (undo_op, second) = match e.reversal.as_str() {
-            "rename_back" => (
-                crate::policy::PolicyOp::Move,
-                e.path_to.as_deref().map(wire_engine).transpose()?,
-            ),
-            "restore_trash" => (
-                crate::policy::PolicyOp::Move,
-                e.reversal_ref.as_deref().map(wire_engine).transpose()?,
-            ),
-            _ => (
-                crate::policy::PolicyOp::Delete {
-                    mode: DeleteMode::Trash,
-                },
-                None,
-            ),
-        };
-        paths.push(wire_engine(&e.path)?);
-        if let Some(s) = second {
-            paths.push(s);
+        let path = wire_engine(&e.path)?;
+        if anchor.is_none() {
+            anchor = Some(path.clone());
         }
-        // Una unidad de varias es un lote de renames: mismo op para todos, así
-        // que este merge no se ejerce hoy. Si un journal corrupto los mezclara,
-        // gana `Delete` sobre `Move` porque quita un nodo de en medio y `Move`
-        // solo lo reubica: ante la duda, la que un usuario querría que le
-        // preguntaran. `revert_batch` bloquea la unidad de todas formas.
-        op = Some(match (op, undo_op) {
-            (Some(prev @ crate::policy::PolicyOp::Delete { .. }), _) => prev,
-            _ => undo_op,
-        });
+        match e.reversal.as_str() {
+            // Una entrada `irreversible` no tiene reversa que ejecutar
+            // (`revert_entry` la salta sin tocar nada), así que no hay puerta
+            // que abrir. Gatearla dejaba que un `deny` sobre una ruta que este
+            // undo NO va a tocar bloqueara la unidad entera y, con el LIFO
+            // estricto, la sesión entera detrás: el secuestro que
+            // `revert_sync_batch` existe para impedir, una capa más arriba.
+            "irreversible" => {}
+            "rename_back" => {
+                moves.push(path);
+                if let Some(to) = e.path_to.as_deref() {
+                    moves.push(wire_engine(to)?);
+                }
+            }
+            "restore_trash" => {
+                moves.push(path);
+                if let Some(from) = e.reversal_ref.as_deref() {
+                    moves.push(wire_engine(from)?);
+                }
+            }
+            // `delete`, y cualquier etiqueta que este core no conozca: la
+            // desconocida no llega a actuar (`revert_entry` la bloquea), pero
+            // se pregunta igual por la clase que MÁS quita.
+            _ => deletes.push(path),
+        }
     }
-    Ok(op.map(|o| (o, paths)))
+    let Some(anchor) = anchor else {
+        return Ok(None);
+    };
+    let mut gates: Vec<(crate::policy::PolicyOp, Vec<VPath>)> = Vec::with_capacity(2);
+    if !deletes.is_empty() {
+        gates.push((
+            crate::policy::PolicyOp::Delete {
+                mode: DeleteMode::Trash,
+            },
+            deletes,
+        ));
+    }
+    if !moves.is_empty() {
+        gates.push((crate::policy::PolicyOp::Move, moves));
+    }
+    Ok(Some(UndoGates { anchor, gates }))
+}
+
+/// Lo que la policy tiene que aprobar antes de deshacer una unidad, y dónde
+/// vive esa unidad.
+struct UndoGates {
+    /// Una ruta cualquiera de la unidad, para resolver el provider. Todas las
+    /// de una unidad viven en el mismo: lo comprueban `inverse_chain` para un
+    /// lote de renombrados y `one_provider` para uno de sincronización.
+    ///
+    /// Es la PRIMERA entrada, y no una de las que se gatean, precisamente
+    /// porque una unidad enteramente `irreversible` no gatea ninguna y aun así
+    /// necesita un provider con el que llegar a contarse como saltada.
+    anchor: VPath,
+    /// Las puertas, por clase de operación. Vacío = la unidad no actúa.
+    gates: Vec<(crate::policy::PolicyOp, Vec<VPath>)>,
 }
 
 /// Reconstruye un `VPath` desde los bytes `to_wire` del journal (undo M3-2).

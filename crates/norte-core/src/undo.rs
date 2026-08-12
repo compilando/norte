@@ -10,6 +10,16 @@
 //! lo que hoy vive en ese path puede ser un fichero que el usuario editó tras
 //! la creación. Deuda: identidad (`node_id`/hash) en el `Created` para un undo
 //! con verificación real.
+//!
+//! **Tres unidades, tres contratos.** [`undo_units`] agrupa por `batch_id` para
+//! los tres, y [`revert_unit`] reparte:
+//!
+//! - una mutación SUELTA → [`revert_entry`];
+//! - un lote de `fs.rename_batch` → [`revert_batch`], entero o nada (media
+//!   permutación deshecha no es ningún estado);
+//! - un lote de `sync.apply` → [`revert_sync_batch`], lo que se pueda y con
+//!   nombres para lo que no (media sincronización deshecha SÍ es un estado: el
+//!   árbol de antes con parte de los ficheros ya devueltos).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -18,7 +28,7 @@ use norte_proto::{CapabilityFlags, ConflictKind, Error, TaskId, TaskKind, VPath}
 use norte_vfs::Provider;
 use tokio_util::sync::CancellationToken;
 
-use crate::journal::{Actor, JournalEntry, Reversal, SqliteJournal};
+use crate::journal::{Actor, JournalEntry, NewEntry, Reversal, SqliteJournal};
 use crate::progress::ProgressReporter;
 use crate::rename::exec::{BatchJournal, BatchReport, PlannedStep};
 use crate::rename::plan::{NameCaps, name_key};
@@ -27,10 +37,10 @@ use crate::rename::plan::{NameCaps, name_key};
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UndoReport {
     /// Entradas revertidas con éxito (compensación appendeada). Cuenta
-    /// ENTRADAS, no unidades: un lote (`fs.rename_batch`) aporta todas las
-    /// suyas de golpe, porque se revierte entero o nada. El progreso de la
-    /// Task, en cambio, avanza por unidades — para el humano un lote es UN
-    /// paso del undo.
+    /// ENTRADAS, no unidades: un lote de `fs.rename_batch` aporta todas las
+    /// suyas de golpe, porque se revierte entero o nada, y uno de `sync.apply`
+    /// aporta las que de verdad volvieron. El progreso de la Task, en cambio,
+    /// avanza por unidades — para el humano un lote es UN paso del undo.
     pub undone: u64,
     /// Entradas `Irreversible` encontradas y saltadas (no hay nada que pisar).
     pub skipped_irreversible: u64,
@@ -56,7 +66,46 @@ pub struct UndoReport {
     /// pendiente aunque su efecto ya volvió: un undo posterior la encontrará y
     /// se bloqueará ahí. Es la única señal de eso.
     pub compensations_lost: u64,
+    /// **Lo que NO volvió**, por ruta y en bytes de wire (regla 1), recortado a
+    /// [`UNDO_MAX_UNREVERTED_PATHS`].
+    ///
+    /// Lo llena el undo de un lote de SINCRONIZACIÓN (`sync.apply`), que
+    /// revierte lo que puede en vez de rehusar
+    /// entero: sin esta lista, un `skipped_irreversible: 3` sobre un lote de
+    /// diez mil pasos es un número sin sitio donde mirar. Una ruta entra aquí
+    /// por una de tres razones, y los contadores son los que las distinguen:
+    /// la entrada era `irreversible` ([`Self::skipped_irreversible`]), era un
+    /// `created` en un destino sin papelera
+    /// ([`Self::skipped_created_no_trash`], #65), o su reversa se topó con
+    /// drift ([`Self::blocked`], que nombra la primera).
+    ///
+    /// **Los contadores NO la parten en tres.** `skipped_irreversible` y
+    /// `skipped_created_no_trash` son exactos, pero de las entradas con drift
+    /// solo la primera queda en `blocked` y no hay contador para las demás:
+    /// una lista de cinco con `skipped_irreversible: 1` significa «una
+    /// irreversible y CUATRO que no volvieron por otra cosa», no cuatro
+    /// bloqueos identificables. Y está recortada, así que sumar tampoco vale
+    /// a partir de [`UNDO_MAX_UNREVERTED_PATHS`].
+    ///
+    /// El camino de renombrado no la usa — ese lote vuelve entero o no se
+    /// toca, así que no hay «lo que no volvió».
+    ///
+    /// **Hoy no sale del proceso**: `PolicyUndoReportResult` no lleva este
+    /// campo, así que un cliente remoto ve los contadores y no las rutas.
+    /// Ponerlo en el wire es un cambio de `norte-proto` con sus goldens, y
+    /// pide antes redactar la authority como hace
+    /// [`crate::engine::span_path`](crate::Engine) — un `VPath` de wire puede
+    /// llevar userinfo (regla 10).
+    pub unreverted_paths: Vec<Vec<u8>>,
 }
+
+/// Cuántas rutas caben en [`UndoReport::unreverted_paths`].
+///
+/// El mismo criterio que las listas del wire (`SYNC_MAX_FAILURES_REPORTED` y
+/// compañía): una muestra que quepa en una pantalla, con el contador al lado
+/// diciendo la verdad entera. Un lote de sincronización puede tener medio
+/// millón de pasos y este reporte vive en memoria del daemon.
+pub const UNDO_MAX_UNREVERTED_PATHS: usize = 64;
 
 /// Reconstruye un `VPath` desde los bytes `to_wire` guardados en el journal.
 fn wire(bytes: &[u8]) -> Result<VPath, Error> {
@@ -81,6 +130,23 @@ const OCCUPIED: Error = Error::Conflict {
     conflict: ConflictKind::Exists,
 };
 
+/// ¿Tiene `dir` algún hijo?
+///
+/// Mira SOLO el primer ítem del listado: la pregunta es «¿está vacío?», y un
+/// directorio con cien mil entradas la contesta con la primera. Nunca
+/// materializa el listado, así que no tiene tope que reventar.
+async fn has_children(provider: &dyn Provider, dir: &VPath) -> Result<bool, Error> {
+    use futures::StreamExt as _;
+    let mut listing = provider.list(dir).await?;
+    match listing.next().await {
+        Some(item) => {
+            item?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
 /// Resultado de intentar revertir UNA unidad de undo (una entrada suelta o un
 /// lote entero).
 pub(crate) enum Reverted {
@@ -101,6 +167,15 @@ pub(crate) enum Reverted {
         /// Por qué.
         error: Error,
     },
+    /// La unidad YA se contó ella misma en el [`UndoReport`] y la sesión
+    /// sigue.
+    ///
+    /// Es lo que devuelve [`revert_sync_batch`], que revierte parte de un lote
+    /// y salta el resto: `Done` haría que el llamante sumara TODAS las
+    /// entradas de la unidad a `undone`, y `SkippedIrreversible` sumaría una
+    /// por un lote que quizá revirtió nueve mil. Quien reparte entre los
+    /// contadores es quien sabe qué le pasó a cada entrada.
+    Accounted,
     /// El undo de un LOTE se aplicó a medias y tampoco pudo desandarse: el
     /// árbol NO volvió. A diferencia de `Blocked`, esto FALLA la Task — decir
     /// `Completed` sobre un directorio a medio revertir es la única mentira
@@ -124,9 +199,12 @@ impl Reverted {
 /// Parte las entradas LIFO en UNIDADES de undo: una entrada suelta, o TODAS
 /// las que comparten un `batch_id`.
 ///
-/// **Un lote es UNA unidad, se revierte entero o no se toca.** Media
-/// permutación deshecha es el estado que toda esta funcionalidad existe para
-/// impedir, así que el lote tiene que llegar a la task como un solo ítem.
+/// **Un lote es UNA unidad**, y tiene que llegar a la task como un solo ítem.
+/// Qué se hace con esa unidad depende de quién la escribió: un lote de
+/// renombrado se revierte entero o no se toca (media permutación deshecha es
+/// el estado que toda esta funcionalidad existe para impedir), y uno de
+/// sincronización revierte lo que puede ([`revert_sync_batch`]). El agrupado
+/// es el mismo para los dos, y por eso vive aquí y no en ninguno de ellos.
 ///
 /// El agrupado es GLOBAL, no por entradas contiguas. El scheduler corre hasta
 /// cuatro tasks por provider y el undo se encola con una clave propia, así que
@@ -172,8 +250,17 @@ pub(crate) fn undo_units(entries: Vec<JournalEntry>) -> Vec<Vec<JournalEntry>> {
 /// Ejecuta la reversa de `entry` sobre `provider` (verificada, estricta) y, si
 /// tiene éxito, appendea la compensación con `actor` y `undoes_seq = entry.seq`.
 ///
+/// `batch` es el lote de la COMPENSACIÓN, no el de la entrada deshecha:
+/// `Some(id)` cuando esta reversa forma parte del undo de un lote —el de
+/// sincronización, [`revert_sync_batch`]— y `None` para una mutación suelta.
+/// Es una etiqueta de AGRUPACIÓN, para que el audit y cualquier lectura del
+/// journal vean el undo de un lote como un lote; no lo vuelve deshacible
+/// (`revertible_for` filtra `undoes_seq IS NULL`, así que una compensación no
+/// se revierte nunca).
+///
 /// # Errors
-/// Solo por fallo al PERSISTIR la compensación en el journal (regla 4). Un
+/// Solo por fallo al PERSISTIR la compensación en el journal (regla 4) — y
+/// entonces el EFECTO ya ocurrió: el nodo se movió y el journal no lo sabe. Un
 /// conflicto/drift del FS NO es error: se devuelve `Reverted::Blocked`.
 // Dispatch lineal por `Reversal` (4 ramas): más claro junto que fragmentado.
 #[allow(clippy::too_many_lines)]
@@ -182,6 +269,8 @@ pub(crate) async fn revert_entry(
     journal: &SqliteJournal,
     entry: &JournalEntry,
     actor: &Actor,
+    batch: Option<i64>,
+    cancel: &CancellationToken,
 ) -> Result<Reverted, Error> {
     let path = wire(&entry.path)?;
     match entry.reversal.as_str() {
@@ -203,10 +292,30 @@ pub(crate) async fn revert_entry(
             // El stat va PRIMERO: un drift (el nodo ya no está) bloquea
             // SIEMPRE — clasificarlo como skip-por-no-trash tragaría la
             // señal de divergencia que el modo estricto valora.
-            match provider.stat(&path).await {
-                Ok(_) => {}
+            let node = match provider.stat(&path).await {
+                Ok(node) => node,
                 // Ya no está: estado inesperado → bloquea (no finge éxito).
                 Err(e) => return Ok(Reverted::blocked(entry.seq, e)),
+            };
+            // Un DIRECTORIO creado solo se deshace VACÍO. La papelera se lleva
+            // el subárbol entero, así que un directorio con contenido que el
+            // journal no explica —un fichero que el usuario metió dentro
+            // después, o un hijo del mismo lote cuya reversa no pudo volver—
+            // desaparecería de la vista sin que nada lo nombrara. El orden
+            // `seq` descendente lo deja vacío por construcción cuando todo va
+            // bien; esto convierte esa suposición en una comprobación.
+            if node.kind == norte_proto::EntryKind::Dir {
+                match has_children(provider, &path).await {
+                    Ok(true) => {
+                        tracing::info!(
+                            seq = entry.seq,
+                            "el directorio creado tiene contenido que este undo no puso: se deja",
+                        );
+                        return Ok(Reverted::blocked(entry.seq, OCCUPIED));
+                    }
+                    Ok(false) => {}
+                    Err(e) => return Ok(Reverted::blocked(entry.seq, e)),
+                }
             }
             if !provider
                 .capabilities()
@@ -226,31 +335,44 @@ pub(crate) async fn revert_entry(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
             let comp_trash_id = norte_vfs::trash::TrashId::new(now_ms, entry.seq.unsigned_abs());
-            let (comp_op, comp_reversal, comp_ref) = match crate::ops::trash_retrying(
-                provider,
-                &path,
-                &comp_trash_id,
-                &tokio_util::sync::CancellationToken::new(),
-            )
-            .await
-            {
-                Ok(dest) => ("trashed", Reversal::RestoreTrash, dest),
-                Err(e) => return Ok(Reverted::blocked(entry.seq, e)),
-            };
-            let comp_ref_bytes = comp_ref.map(|d| d.to_wire().into_bytes());
-            journal
+            let (comp_op, comp_reversal, comp_ref) =
+                match crate::ops::trash_retrying(provider, &path, &comp_trash_id, cancel).await {
+                    Ok(dest) => ("trashed", Reversal::RestoreTrash, dest),
+                    // La cancelación NO es un bloqueo: la Task tiene que
+                    // terminar `Cancelled` (regla 3), no `Completed` con un
+                    // motivo. El token es el de la Task, así que la escalera
+                    // de reintentos no sigue corriendo tras un corte.
+                    Err(Error::Cancelled) => return Err(Error::Cancelled),
+                    Err(e) => return Ok(Reverted::blocked(entry.seq, e)),
+                };
+            let comp_ref_bytes = comp_ref.as_ref().map(|d| d.to_wire().into_bytes());
+            if let Err(e) = journal
                 .journal()
-                .record_undoing(
-                    comp_op,
-                    &entry.path,
-                    None,
-                    comp_reversal,
-                    comp_ref_bytes.as_deref(),
+                .record_entry(&NewEntry {
+                    op: comp_op,
+                    path: &entry.path,
+                    path_to: None,
+                    reversal: comp_reversal,
+                    reversal_ref: comp_ref_bytes.as_deref(),
                     actor,
-                    Some(entry.seq),
-                )
+                    undoes_seq: Some(entry.seq),
+                    batch_id: batch,
+                })
                 .await
-                .map_err(Error::from)?;
+            {
+                // El nodo YA está en la papelera y el journal no lo sabe: el
+                // log es lo único que queda para contestar «¿dónde ha ido mi
+                // fichero?». Va con las dos rutas, redactadas (regla 10), como
+                // hace `sync::exec` al enterrar.
+                tracing::error!(
+                    seq = entry.seq,
+                    error = %e,
+                    enterrado = %crate::engine::span_path(&path),
+                    destino = comp_ref.as_ref().map(crate::engine::span_path).unwrap_or_default(),
+                    "reversa aplicada sin compensar: el nodo está en la papelera y el journal no lo registra",
+                );
+                return Err(Error::from(e));
+            }
             Ok(Reverted::Done)
         }
 
@@ -276,15 +398,16 @@ pub(crate) async fn revert_entry(
             // Compensación: renamed inverso (destino=origen, origen=destino).
             journal
                 .journal()
-                .record_undoing(
-                    "renamed",
-                    from_bytes,
-                    Some(&entry.path),
-                    Reversal::RenameBack,
-                    None,
+                .record_entry(&NewEntry {
+                    op: "renamed",
+                    path: from_bytes,
+                    path_to: Some(&entry.path),
+                    reversal: Reversal::RenameBack,
+                    reversal_ref: None,
                     actor,
-                    Some(entry.seq),
-                )
+                    undoes_seq: Some(entry.seq),
+                    batch_id: batch,
+                })
                 .await
                 .map_err(Error::from)?;
             Ok(Reverted::Done)
@@ -312,15 +435,16 @@ pub(crate) async fn revert_entry(
             // Compensación: el nodo reapareció en `path` (una creación).
             journal
                 .journal()
-                .record_undoing(
-                    "created",
-                    &entry.path,
-                    None,
-                    Reversal::Delete,
-                    None,
+                .record_entry(&NewEntry {
+                    op: "created",
+                    path: &entry.path,
+                    path_to: None,
+                    reversal: Reversal::Delete,
+                    reversal_ref: None,
                     actor,
-                    Some(entry.seq),
-                )
+                    undoes_seq: Some(entry.seq),
+                    batch_id: batch,
+                })
                 .await
                 .map_err(Error::from)?;
             Ok(Reverted::Done)
@@ -685,6 +809,354 @@ fn interpret(
     }
 }
 
+/// ¿Es esta unidad un lote de SINCRONIZACIÓN (`sync.apply`) y no uno de
+/// renombrado (`fs.rename_batch`)?
+///
+/// El journal no lleva columna que diga qué método escribió un lote —y esta
+/// tarea no cambia su esquema—, así que la distinción sale de la FORMA de las
+/// entradas, que es lo que de verdad decide qué undo se puede aplicar:
+///
+/// - un lote de renombrado es TODO `renamed`/`rename_back` (así lo escribe
+///   [`crate::rename::exec::run`], y su undo devuelve la permutación entera o
+///   ninguna parte de ella);
+/// - un lote de sincronización son las TRES formas de la tabla de
+///   `crate::sync::exec`, y solo esas: `created` (reversa `delete` o
+///   `irreversible`), `trashed` (`restore_trash`) y `removed`
+///   (`irreversible`).
+///
+/// **La comprobación es POSITIVA, y ahí está su valor de seguridad.** «No es
+/// un lote de renombrados» no es «es uno de sincronización»: con el criterio
+/// negativo, reescribir la columna `reversal` de un lote de renombrados a
+/// `delete` lo pasaba del camino que lo REHÚSA ([`revert_batch`] bloquea todo
+/// lo que no sea `rename_back`) a uno que manda a la papelera el `path` de
+/// cada entrada —que en un renombrado es el DESTINO—. Exigiendo también el
+/// `op` hace falta reescribir dos columnas, y una forma futura que este core
+/// no conozca cae del lado que rehúsa en vez del que actúa.
+///
+/// Una unidad MIXTA tampoco es de sincronización, por lo mismo: cae en
+/// [`revert_batch`], que la bloquea sin adivinar.
+fn is_sync_unit(unit: &[JournalEntry]) -> bool {
+    !unit.is_empty()
+        && unit.iter().all(|e| {
+            e.batch_id.is_some()
+                && matches!(e.op.as_str(), "created" | "trashed" | "removed")
+                && matches!(
+                    e.reversal.as_str(),
+                    "delete" | "restore_trash" | "irreversible"
+                )
+        })
+}
+
+/// Revierte UNA unidad de undo, sea de la clase que sea.
+///
+/// El único sitio donde se decide qué undo le toca a una unidad, y vive aquí
+/// —junto a las tres funciones a las que reparte— y no en
+/// [`crate::Engine::undo_session_for`], que solo tiene que saber qué contar.
+/// Lo decide la FORMA de las entradas ([`is_sync_unit`]), no el tamaño de la
+/// unidad: un lote de sincronización de un paso también necesita el camino que
+/// sabe saltarse lo irreversible.
+///
+/// # Errors
+/// Las de [`revert_entry`], [`revert_batch`] y [`revert_sync_batch`]: la
+/// cancelación (regla 3) y el fallo al persistir una compensación (regla 4).
+pub(crate) async fn revert_unit(
+    provider: &dyn Provider,
+    journal: &Arc<SqliteJournal>,
+    unit: &[JournalEntry],
+    actor: &Actor,
+    cancel: &CancellationToken,
+    task_id: TaskId,
+    report: &Mutex<UndoReport>,
+) -> Result<Reverted, Error> {
+    if is_sync_unit(unit) {
+        return revert_sync_batch(provider, journal, unit, actor, cancel, task_id, report).await;
+    }
+    match unit.split_first() {
+        // Unidad de una: el camino de siempre, intacto.
+        Some((entry, [])) => revert_entry(provider, journal, entry, actor, None, cancel).await,
+        // Unidad de varias: un lote de renombrados, entero o nada.
+        _ => revert_batch(provider, journal, unit, actor, cancel, task_id, report).await,
+    }
+}
+
+/// Todas las entradas de la unidad viven en el MISMO provider (scheme y
+/// authority), o la unidad no se toca.
+///
+/// `Err` es siempre un [`Reverted::Blocked`] con el `seq` culpable, nunca un
+/// error que mate la sesión: mismo criterio que [`inverse_chain`].
+fn one_provider(unit: &[JournalEntry], first: &JournalEntry) -> Result<(), Reverted> {
+    let origin = wire(&first.path).map_err(|e| Reverted::blocked(first.seq, e))?;
+    for e in unit {
+        let refs = [Some(e.path.as_slice()), e.reversal_ref.as_deref()];
+        for bytes in refs.into_iter().flatten() {
+            let path = wire(bytes).map_err(|err| Reverted::blocked(e.seq, err))?;
+            if path.scheme() != origin.scheme() || path.authority() != origin.authority() {
+                tracing::error!(
+                    seq = e.seq,
+                    "entrada de un lote que apunta a otro provider que el resto del lote",
+                );
+                return Err(Reverted::blocked(e.seq, Error::InvalidPath));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Las rutas cuya restauración este undo NO puede acertar, y que por eso no se
+/// tocan ni por un lado ni por el otro.
+///
+/// Una sobrescritura con papelera deja `trashed(P)` + `created(P)`. Con una
+/// papelera LÓGICA el `trashed` guarda en `reversal_ref` el payload exacto y
+/// restaurarlo es un rename sin ambigüedad. Con la papelera NATIVA del sistema
+/// no hay handle: `restore_trashed(P)` elige entre los ítems cuya ruta
+/// ORIGINAL es `P` el más reciente (`norte-vfs-local`, `restore_trashed`) — y
+/// para cuando el undo llega ahí, el más reciente es el que él mismo acaba de
+/// enterrar al deshacer el `created`. Restauraría el fichero NUEVO y dejaría
+/// el original del usuario dentro de la papelera, contándolo como éxito.
+///
+/// Deshacer eso de verdad pide que `trash()` devuelva el identificador del
+/// ítem, que es deuda de `norte-vfs` (anotada en `norte-vfs-local`). Hasta
+/// entonces la pareja se deja INTACTA —el fichero sincronizado se queda donde
+/// está y el original sigue en la papelera, de donde el usuario lo saca a
+/// mano— y el informe da la ruta. Enterrar lo nuevo y no restaurar lo viejo
+/// dejaría la ruta VACÍA, que es peor que no tocar nada.
+fn ambiguous_restores(unit: &[JournalEntry]) -> HashSet<&[u8]> {
+    let buried: HashSet<&[u8]> = unit
+        .iter()
+        .filter(|e| {
+            e.reversal.as_str() == Reversal::RestoreTrash.as_str() && e.reversal_ref.is_none()
+        })
+        .map(|e| e.path.as_slice())
+        .collect();
+    unit.iter()
+        .filter(|e| {
+            e.reversal.as_str() == Reversal::Delete.as_str() && buried.contains(e.path.as_slice())
+        })
+        .map(|e| e.path.as_slice())
+        .collect()
+}
+
+/// Anota una ruta que NO volvió, con tope.
+///
+/// El contador que le corresponda ya lo llevó quien llama: esto es la muestra
+/// con nombres, no la cuenta.
+///
+/// # Panics
+/// INVARIANTE: el `Mutex` del reporte solo se envenena si otro hilo entró en
+/// pánico sosteniéndolo, que es irrecuperable — mismo criterio que el resto de
+/// los locks del core.
+fn note_unreverted(report: &Mutex<UndoReport>, path: &[u8]) {
+    let mut report = report.lock().expect("undo report lock");
+    if report.unreverted_paths.len() < UNDO_MAX_UNREVERTED_PATHS {
+        report.unreverted_paths.push(path.to_vec());
+    }
+}
+
+/// Revierte un lote de SINCRONIZACIÓN (`sync.apply`): lo que se pueda, en
+/// orden de `seq` DESCENDENTE, nombrando lo que no.
+///
+/// **No es [`revert_batch`], y la diferencia es el contrato entero.** Media
+/// permutación deshecha no es ningún estado, así que un lote de renombrado
+/// vuelve entero o no se toca. Media sincronización deshecha SÍ es un estado:
+/// es el árbol de antes con parte de los ficheros ya devueltos. Así que aquí
+/// una entrada irreversible no rehúsa el lote —lo diría todo-o-nada, y
+/// dejaría 9 999 pasos reversibles secuestrados por uno que no lo es—, sino
+/// que se salta, se cuenta y se nombra en
+/// [`UndoReport::unreverted_paths`].
+///
+/// # Por qué el orden es `seq` descendente
+/// Es el que devuelve
+/// [`revertible_for`](crate::journal::Journal::revertible_for), y aquí se
+/// vuelve a imponer para que la propiedad viva en la función que depende de
+/// ella. Lo que ese orden resuelve, con las formas que
+/// [`crate::sync::exec`] emite:
+///
+/// - **La pareja de un `Overwrite` con papelera LÓGICA** (`trashed` y luego
+///   `created`): borra lo creado ANTES de restaurar lo enterrado, que es la
+///   única secuencia en la que el `restore_trash` encuentra su ruta libre.
+///   Sobre una papelera NATIVA la ruta libre no basta y la pareja no se toca:
+///   ver [`ambiguous_restores`].
+/// - **Un `CreateDir` y las copias de dentro**: el walk es pre-orden, así que
+///   el directorio se journaliza ANTES que sus hijos y al revés se vacía antes
+///   de mandarlo a la papelera. Que quede vacío no se SUPONE: la reversa de un
+///   `created` que es un directorio comprueba que no tenga hijos y se bloquea
+///   si los tiene, porque la papelera se llevaría también lo que hubiera
+///   dentro.
+///
+/// El resto de las formas (`Copy`, `DeleteTree`, las irreversibles) tocan una
+/// ruta cada una y no se ordenan entre sí.
+///
+/// # Lo que este undo NO puede
+/// - Una entrada `irreversible` no tiene reversa que ejecutar: es un
+///   `Overwrite` o un `DeleteTree` sobre un destino sin papelera, y lo que
+///   había ya no está en ningún sitio. Se cuenta en
+///   [`UndoReport::skipped_irreversible`].
+/// - Un `created` en un provider SIN papelera se salta también (#65): su
+///   reversa es un borrado, el journal no guarda identidad del nodo, y borrar
+///   permanente «lo que hoy viva en esa ruta» puede destruir trabajo posterior
+///   del humano. O sea: **en un destino sin papelera, una `Copy` tampoco se
+///   deshace**, aunque el plan la enseñe con reversa `Delete`. Se cuenta en
+///   [`UndoReport::skipped_created_no_trash`].
+/// - Una sobrescritura cuya papelera no da destino recuperable: la pareja se
+///   queda intacta, con su ruta nombrada ([`ambiguous_restores`]).
+/// - Un drift (la ruta cambió bajo el undo) bloquea ESA entrada, se anota la
+///   primera en [`UndoReport::blocked`] y la sesión para ahí — pero las demás
+///   entradas del lote se intentan igual, que es la regla de arriba. Seguir es
+///   seguro porque cada reversa comprueba lo suyo antes de actuar, y donde esa
+///   comprobación no bastaba se ha añadido: un directorio creado no se
+///   entierra si tiene hijos, y una sobrescritura ambigua no se toca. Lo que
+///   NO promete es independencia entre las dos mitades de una sobrescritura:
+///   si la primera entierra lo creado y la segunda no logra restaurar lo
+///   enterrado, la ruta se queda VACÍA —todo recuperable de la papelera, todo
+///   nombrado en el informe, pero vacía—.
+///
+/// # Errors
+/// SOLO [`Error::Cancelled`] (regla 3, el token se mira entre entradas) y el
+/// error del JOURNAL cuando una compensación no se pudo persistir después de
+/// que su efecto ya ocurriera (regla 4). Lo segundo suma
+/// [`UndoReport::compensations_lost`] y para la Task: con el journal fallando,
+/// seguir tocando el árbol es escribir mutaciones que nadie registra.
+///
+/// # Panics
+/// Solo por envenenamiento del `Mutex` del reporte, mismo criterio que el
+/// resto del core.
+#[tracing::instrument(
+    skip_all,
+    fields(task_id = %task_id, batch = unit.len(), seq = unit.first().map_or(0, |e| e.seq))
+)]
+pub(crate) async fn revert_sync_batch(
+    provider: &dyn Provider,
+    journal: &Arc<SqliteJournal>,
+    unit: &[JournalEntry],
+    actor: &Actor,
+    cancel: &CancellationToken,
+    task_id: TaskId,
+    report: &Mutex<UndoReport>,
+) -> Result<Reverted, Error> {
+    let Some(first) = unit.first() else {
+        // Imposible: `undo_units` jamás produce una unidad vacía.
+        return Ok(Reverted::Accounted);
+    };
+    // La unidad viene de `revertible_for` (filtra por actor) y de `undo_units`
+    // (agrupa por `batch_id`). Se afirma donde se consume, como en
+    // `revert_batch`.
+    debug_assert!(
+        unit.iter().all(|e| e.batch_id == first.batch_id
+            && e.actor_kind == first.actor_kind
+            && e.actor_id == first.actor_id),
+        "una unidad de undo es UN lote de UN actor",
+    );
+    // Todas las entradas tienen que vivir en UN provider, y se comprueba de
+    // verdad. El llamante resuelve UNO (por la primera ruta) y lo usa para
+    // todas; `revert_batch` lo tenía gratis —`inverse_chain` exige que todas
+    // cuelguen del mismo directorio, y el padre de un `VPath` lleva scheme y
+    // authority—, pero aquí no hay directorio común. Sin esto, un `batch_id`
+    // manipulado ejecuta la ruta de un host contra el provider de otro: la
+    // policy evaluó una máquina y el efecto cae en otra. De paso, esta pasada
+    // es la que hace que un `Err` de `revert_entry` signifique SOLO «la
+    // compensación no se pudo persistir»: los `wire()` que allí devuelven
+    // `Err(InvalidPath)` ya no pueden fallar.
+    if let Err(refused) = one_provider(unit, first) {
+        return Ok(refused);
+    }
+    // El orden que la corrección necesita se impone AQUÍ (ver el rustdoc), no
+    // se hereda del `ORDER BY` de quien listó las entradas.
+    let mut ordered: Vec<&JournalEntry> = unit.iter().collect();
+    ordered.sort_by_key(|e| std::cmp::Reverse(e.seq));
+    let ambiguous = ambiguous_restores(unit);
+
+    // Deshacer un lote se LEE como un lote: un `batch_id` FRESCO para todas las
+    // compensaciones, cada una con su `undoes_seq`. Un id pedido y no usado
+    // (lote entero irreversible) se pierde sin más — son etiquetas de
+    // agrupación, no un contador auditable.
+    let batch_id = match journal.journal().alloc_batch().await {
+        Ok(id) => id,
+        Err(e) => return Ok(Reverted::blocked(first.seq, Error::from(e))),
+    };
+
+    let mut blocked: Option<(i64, Error)> = None;
+    for entry in ordered {
+        // Regla 3: entre entradas. Lo compensado se queda compensado y el
+        // resto del lote sigue siendo deshacible en el siguiente undo.
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        // La pareja que una papelera NATIVA no sabe deshacer: ni se toca.
+        if ambiguous.contains(entry.path.as_slice()) {
+            if entry.reversal.as_str() == Reversal::RestoreTrash.as_str() {
+                tracing::error!(
+                    seq = entry.seq,
+                    "sobrescritura sobre papelera sin destino recuperable: el undo no puede \
+                     distinguir el fichero enterrado del que él mismo enterraría, así que no \
+                     toca ninguno de los dos — el original sigue en la papelera",
+                );
+                // Se nombra UNA vez por pareja: la entrada `trashed` es la del
+                // fichero que el usuario quiere de vuelta.
+                note_unreverted(report, &entry.path);
+            }
+            if blocked.is_none() {
+                blocked = Some((entry.seq, Error::Unsupported));
+            }
+            continue;
+        }
+        match revert_entry(provider, journal, entry, actor, Some(batch_id), cancel).await {
+            Ok(Reverted::Done) => {
+                report.lock().expect("undo report lock").undone += 1;
+            }
+            Ok(Reverted::SkippedIrreversible) => {
+                report
+                    .lock()
+                    .expect("undo report lock")
+                    .skipped_irreversible += 1;
+                note_unreverted(report, &entry.path);
+            }
+            Ok(Reverted::SkippedNoTrash) => {
+                report
+                    .lock()
+                    .expect("undo report lock")
+                    .skipped_created_no_trash += 1;
+                note_unreverted(report, &entry.path);
+            }
+            // Drift en UNA entrada. Se nombra la primera (la de `seq` mayor, o
+            // sea la mutación más reciente) y se sigue: las demás no dependen
+            // de ella, y cada reversa comprueba lo suyo antes de actuar.
+            Ok(Reverted::Blocked { seq, error }) => {
+                tracing::info!(seq, error = %error, "una entrada del lote de sync no volvió");
+                note_unreverted(report, &entry.path);
+                if blocked.is_none() {
+                    blocked = Some((seq, error));
+                }
+            }
+            // `revert_entry` no lo produce (es del ejecutor de renombrados).
+            // Si algún día lo hiciera, un árbol a medio devolver NO se trata
+            // como un salto: se propaga tal cual y la Task falla.
+            Ok(stuck @ Reverted::Stuck { .. }) => return Ok(stuck),
+            Ok(Reverted::Accounted) => {
+                debug_assert!(false, "`revert_entry` no contabiliza por su cuenta");
+            }
+            // Regla 4: el efecto ocurrió y su compensación NO quedó durable.
+            // La entrada sigue pareciendo pendiente y un undo posterior se
+            // bloqueará ahí; es la única señal.
+            Err(e) => {
+                tracing::error!(
+                    seq = entry.seq,
+                    error = %e,
+                    "reversa aplicada sin compensar en un lote de sync: el journal no la tiene",
+                );
+                report.lock().expect("undo report lock").compensations_lost += 1;
+                return Err(e);
+            }
+        }
+    }
+
+    match blocked {
+        // Estricto en la SESIÓN: el lote hizo lo que pudo y el LIFO para aquí,
+        // porque lo anterior a un drift ya no se puede prometer.
+        Some((seq, error)) => Ok(Reverted::blocked(seq, error)),
+        None => Ok(Reverted::Accounted),
+    }
+}
+
 /// Un nombre base como `Segment`, o [`Error::InvalidPath`].
 ///
 /// Los nombres salen de un `VPath` del journal, así que ya eran segmentos
@@ -760,6 +1232,180 @@ mod tests {
             entry(1, Some(9)),
         ]);
         assert_eq!(shape(&units), vec![vec![4, 2], vec![3, 1]]);
+    }
+
+    /// Una entrada con la forma que escribe `sync.apply`: sin `path_to`, con
+    /// lote, y con una de sus tres reversas.
+    fn sync_entry(seq: i64, batch: Option<i64>, op: &str, reversal: &str) -> JournalEntry {
+        JournalEntry {
+            op: op.to_owned(),
+            path: format!("mem:///d/{seq}").into_bytes(),
+            reversal: reversal.to_owned(),
+            ..entry(seq, batch)
+        }
+    }
+
+    /// Un lote de renombrados NO va por el camino de sincronización: su undo es
+    /// todo-o-nada y esa propiedad no se puede perder por un dispatch.
+    #[test]
+    fn a_rename_batch_is_not_a_sync_unit() {
+        let unit = vec![entry(2, Some(7)), entry(1, Some(7))];
+        assert!(!is_sync_unit(&unit));
+    }
+
+    /// Un lote de sincronización de UNA entrada sigue siendo un lote: el
+    /// dispatch mira la forma, no el tamaño.
+    #[test]
+    fn a_sync_batch_of_one_is_still_a_sync_unit() {
+        let unit = vec![sync_entry(1, Some(7), "created", "delete")];
+        assert!(is_sync_unit(&unit));
+    }
+
+    /// Las tres formas que el ejecutor de sync emite, juntas.
+    #[test]
+    fn the_three_shapes_of_a_sync_batch_are_a_sync_unit() {
+        let unit = vec![
+            sync_entry(3, Some(7), "removed", "irreversible"),
+            sync_entry(2, Some(7), "created", "delete"),
+            sync_entry(1, Some(7), "trashed", "restore_trash"),
+        ];
+        assert!(is_sync_unit(&unit));
+    }
+
+    /// Una unidad MIXTA no es de sincronización: quien colara un `created` en
+    /// un lote de renombrados elegiría, si no, el undo permisivo para una
+    /// permutación — y media permutación deshecha es justo lo que no puede
+    /// pasar. Cae en `revert_batch`, que la bloquea.
+    #[test]
+    fn a_mixed_unit_is_not_a_sync_unit() {
+        let unit = vec![
+            sync_entry(2, Some(7), "created", "delete"),
+            entry(1, Some(7)),
+        ];
+        assert!(!is_sync_unit(&unit));
+    }
+
+    /// Una mutación suelta (un `fs.copy`) no lleva lote y sigue por el camino
+    /// de siempre, con su compensación sin `batch_id`.
+    #[test]
+    fn a_lone_entry_without_a_batch_is_not_a_sync_unit() {
+        let unit = vec![sync_entry(1, None, "created", "delete")];
+        assert!(!is_sync_unit(&unit));
+    }
+
+    /// Reescribir SOLO la columna `reversal` de un lote de renombrados no basta
+    /// para comprarle el undo permisivo: el `op` sigue diciendo `renamed`, y
+    /// con el criterio negativo («no hay ningún `rename_back`») esa unidad
+    /// habría ido a mandar a la papelera el DESTINO de cada renombrado.
+    #[test]
+    fn a_rename_batch_with_a_rewritten_reversal_is_still_not_a_sync_unit() {
+        let unit = vec![
+            sync_entry(2, Some(7), "renamed", "delete"),
+            sync_entry(1, Some(7), "renamed", "delete"),
+        ];
+        assert!(!is_sync_unit(&unit));
+    }
+
+    /// La pareja de una sobrescritura sobre papelera NATIVA (sin
+    /// `reversal_ref`) no se toca por ninguno de sus dos lados.
+    #[test]
+    fn an_overwrite_pair_without_a_trash_reference_is_ambiguous() {
+        let unit = vec![
+            JournalEntry {
+                path: b"mem:///d/a.txt".to_vec(),
+                ..sync_entry(2, Some(7), "created", "delete")
+            },
+            JournalEntry {
+                path: b"mem:///d/a.txt".to_vec(),
+                ..sync_entry(1, Some(7), "trashed", "restore_trash")
+            },
+        ];
+        let ambiguous = ambiguous_restores(&unit);
+        assert_eq!(ambiguous.len(), 1);
+        assert!(ambiguous.contains(b"mem:///d/a.txt".as_slice()));
+    }
+
+    /// Con papelera LÓGICA el `trashed` sabe de dónde sacar el fichero, así que
+    /// no hay ambigüedad y la pareja se deshace entera.
+    #[test]
+    fn an_overwrite_pair_with_a_trash_reference_is_not_ambiguous() {
+        let unit = vec![
+            JournalEntry {
+                path: b"mem:///d/a.txt".to_vec(),
+                ..sync_entry(2, Some(7), "created", "delete")
+            },
+            JournalEntry {
+                path: b"mem:///d/a.txt".to_vec(),
+                reversal_ref: Some(b"mem:///d/.norte-trash/1/a.txt".to_vec()),
+                ..sync_entry(1, Some(7), "trashed", "restore_trash")
+            },
+        ];
+        assert!(ambiguous_restores(&unit).is_empty());
+    }
+
+    /// Un `trashed` sin `reversal_ref` que NADIE vuelve a crear (un
+    /// `DeleteTree`) se restaura sin ambigüedad: el undo no entierra nada en
+    /// esa ruta, así que el ítem más reciente de la papelera sigue siendo el
+    /// suyo.
+    #[test]
+    fn a_lone_native_trash_entry_is_not_ambiguous() {
+        let unit = vec![sync_entry(1, Some(7), "trashed", "restore_trash")];
+        assert!(ambiguous_restores(&unit).is_empty());
+    }
+
+    /// Una entrada que apunta a OTRO provider bloquea la unidad antes de tocar
+    /// nada: el llamante resuelve un solo provider para todas.
+    #[test]
+    fn a_unit_that_spans_two_providers_is_refused() {
+        let first = JournalEntry {
+            path: b"sftp://a/x".to_vec(),
+            ..sync_entry(2, Some(7), "created", "delete")
+        };
+        let other = JournalEntry {
+            path: b"sftp://b/x".to_vec(),
+            ..sync_entry(1, Some(7), "created", "delete")
+        };
+        let unit = vec![first.clone(), other];
+        let refused = one_provider(&unit, &first).expect_err("bloqueada");
+        assert!(matches!(
+            refused,
+            Reverted::Blocked {
+                seq: 1,
+                error: Error::InvalidPath
+            }
+        ));
+    }
+
+    /// Y el `reversal_ref` cuenta igual: es la ruta que el `restore_trash`
+    /// EJECUTA sobre el provider de la unidad.
+    #[test]
+    fn a_trash_reference_on_another_provider_is_refused() {
+        let first = JournalEntry {
+            path: b"mem:///d/a".to_vec(),
+            reversal_ref: Some(b"sftp://b/trash/a".to_vec()),
+            ..sync_entry(1, Some(7), "trashed", "restore_trash")
+        };
+        let unit = vec![first.clone()];
+        assert!(one_provider(&unit, &first).is_err());
+    }
+
+    /// Ni una unidad vacía, que además `undo_units` no produce.
+    #[test]
+    fn an_empty_unit_is_not_a_sync_unit() {
+        assert!(!is_sync_unit(&[]));
+    }
+
+    /// La lista de rutas tiene tope; el CONTADOR no. Un lote de medio millón de
+    /// pasos irreversibles no puede llevarse la memoria del daemon por delante.
+    #[test]
+    fn the_unreverted_path_list_is_capped() {
+        let report = Mutex::new(UndoReport::default());
+        for i in 0..(UNDO_MAX_UNREVERTED_PATHS * 3) {
+            note_unreverted(&report, format!("mem:///d/{i}").as_bytes());
+        }
+        let r = report.lock().expect("lock");
+        assert_eq!(r.unreverted_paths.len(), UNDO_MAX_UNREVERTED_PATHS);
+        assert_eq!(r.unreverted_paths[0], b"mem:///d/0", "recorta por la COLA");
     }
 
     const SENSITIVE: NameCaps = NameCaps {

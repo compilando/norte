@@ -7,6 +7,10 @@
 //! tests unitarios de `sync::exec`. Aquí se prueba el CABLEADO: que las raíces
 //! salen del spool y no de la petición, que el gate corre sobre ellas AL
 //! APLICAR, que el lote existe y agrupa, y que el plan se gasta pase lo que pase.
+//!
+//! Del 13 en adelante, lo que ese lote vale: `Engine::undo_session` sobre las
+//! entradas que el ejecutor REAL escribió (tarea 11). Un lote que agrupa pero no
+//! se deshace no es una unidad deshacible, es una etiqueta.
 
 use std::sync::Arc;
 
@@ -14,7 +18,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use norte_core::journal::{Journal, JournalEntry, SqliteJournal};
 use norte_core::sync::{Spool, SyncPlanEvent};
-use norte_core::{Actor, Engine};
+use norte_core::{Actor, Engine, UndoReport};
 use norte_proto::methods::{
     OnUnknown, PlanHash, SyncCompareOptions, SyncMode, SyncPlanDone, SyncPlanParams,
     SyncReportResult,
@@ -60,6 +64,14 @@ struct Harness {
 /// papelera hay que pedirlo a mano — igual que en la vida real, donde `file://`
 /// la tiene y un bucket no.
 async fn harness(flags: CapabilityFlags) -> Harness {
+    harness_with(flags, true).await
+}
+
+/// Igual, eligiendo la clase de papelera. `logical` = el provider dice DÓNDE
+/// dejó lo que enterró (`reversal_ref`); sin ella se comporta como la papelera
+/// nativa del sistema, que no da handle de restauración — y ese es el caso que
+/// el undo de una sobrescritura no puede acertar.
+async fn harness_with(flags: CapabilityFlags, logical: bool) -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("journal"),
@@ -69,7 +81,11 @@ async fn harness(flags: CapabilityFlags) -> Harness {
     // sin destino recuperable (como la nativa del OS), y entonces no hay
     // `reversal_ref` que comprobar. Lo que se quiere probar aquí es que el undo
     // recibe DÓNDE se enterró cuando el provider lo sabe decir.
-    let mem = Arc::new(MemProvider::with_flags(flags).with_logical_trash());
+    let mem = Arc::new(if logical {
+        MemProvider::with_flags(flags).with_logical_trash()
+    } else {
+        MemProvider::with_flags(flags)
+    });
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
     engine.set_spool(Spool::new(dir.path()));
     Harness {
@@ -132,6 +148,18 @@ async fn apply(h: &Harness, hash: &PlanHash) -> (TaskState, SyncReportResult) {
 
 async fn entries(h: &Harness) -> Vec<JournalEntry> {
     h.journal.journal().entries().await.expect("entries")
+}
+
+/// Deshace la sesión del humano y espera al final.
+async fn undo(h: &Harness) -> (TaskState, UndoReport) {
+    let (handle, report) = h
+        .engine
+        .undo_session(Actor::User)
+        .await
+        .expect("undo aceptado");
+    let state = handle.join().await;
+    let report = report.lock().expect("undo report lock").clone();
+    (state, report)
 }
 
 /// El árbol base: un huérfano del origen, una pareja que difiere y un huérfano
@@ -549,4 +577,291 @@ async fn un_skip_no_toca_nada_ni_deja_entrada() {
         report.done,
         "solo lo hecho deja entrada"
     );
+}
+
+// 13 ──────────────────────────────────────────────────────────────────────
+/// **El lote es deshacible de verdad** (tarea 11). Se aplica el plan entero y
+/// se deshace la sesión: el árbol vuelve exactamente a como estaba, incluida la
+/// pareja del `Overwrite` —que solo sale bien si el undo borra lo CREADO antes
+/// de restaurar lo ENTERRADO— y el directorio, que se vacía antes de irse.
+#[tokio::test]
+async fn deshacer_una_sincronizacion_devuelve_el_arbol() {
+    let h = harness(with_trash()).await;
+    seed(&h).await;
+    let done = plan(&h, SyncMode::Update).await;
+    let (state, report) = apply(&h, &done.plan_hash).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(report.failed, 0, "{:?}", report.failures);
+
+    let (state, undone) = undo(&h).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(undone.blocked, None, "nada bloqueó");
+    assert_eq!(undone.undone, 4, "trashed + created + createdir + copy");
+    assert_eq!(undone.skipped_irreversible, 0);
+    assert!(undone.unreverted_paths.is_empty(), "todo volvió");
+
+    assert_eq!(
+        read_file(&h.mem, "mem:///d/comun.txt").await,
+        b"destino",
+        "lo enterrado volvió a su sitio",
+    );
+    assert!(
+        !exists(&h.mem, "mem:///d/nueva/a.txt").await,
+        "la copia se fue"
+    );
+    assert!(
+        !exists(&h.mem, "mem:///d/nueva").await,
+        "y el directorio detrás de ella"
+    );
+    assert!(
+        exists(&h.mem, "mem:///d/sobra.txt").await,
+        "lo que la sincronización no tocó, el undo tampoco"
+    );
+
+    // Segundo undo: todo compensado, nada que hacer.
+    let (state, again) = undo(&h).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(again.undone, 0);
+}
+
+// 14 ──────────────────────────────────────────────────────────────────────
+/// El undo de una sincronización es a su vez UN LOTE: todas las compensaciones
+/// comparten un `batch_id` FRESCO y cada una dice a qué `seq` compensa. Sin lo
+/// primero, deshacer el undo se partiría en cuatro unidades; sin lo segundo,
+/// las compensaciones parecerían mutaciones nuevas y deshacibles.
+#[tokio::test]
+async fn el_undo_de_una_sincronizacion_es_a_su_vez_un_lote() {
+    let h = harness(with_trash()).await;
+    seed(&h).await;
+    let done = plan(&h, SyncMode::Update).await;
+    let (_state, report) = apply(&h, &done.plan_hash).await;
+    let aplicado = report.batch_id.expect("el lote de la ida");
+
+    let (state, _undone) = undo(&h).await;
+    assert_eq!(state, TaskState::Completed);
+
+    let comp: Vec<JournalEntry> = entries(&h)
+        .await
+        .into_iter()
+        .filter(|e| e.undoes_seq.is_some())
+        .collect();
+    assert_eq!(comp.len(), 4, "una compensación por entrada: {comp:?}");
+    let lote = comp[0].batch_id.expect("las compensaciones van en lote");
+    assert!(
+        comp.iter().all(|e| e.batch_id == Some(lote)),
+        "todas bajo el MISMO lote: {comp:?}",
+    );
+    assert_ne!(lote, aplicado, "y un lote FRESCO, no el de la ida");
+}
+
+// 15 ──────────────────────────────────────────────────────────────────────
+/// **Sin papelera en el destino, el undo no devuelve NADA — ni siquiera las
+/// copias.** Una entrada `irreversible` no tiene qué restaurar, y un `created`
+/// sin papelera no se borra permanente (#65: bajo esa ruta puede vivir ya
+/// trabajo del humano). Lo que la sincronización promete como reversa `Delete`
+/// se queda en promesa, así que el undo lo cuenta y lo NOMBRA en vez de fingir.
+#[tokio::test]
+async fn sin_papelera_el_undo_nombra_lo_que_no_puede_devolver() {
+    let h = harness(without_trash()).await;
+    h.mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+    h.mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+    write_file(&h.mem, "mem:///s/a.txt", b"nuevo").await;
+    write_file(&h.mem, "mem:///s/comun.txt", b"origen-mas-largo").await;
+    write_file(&h.mem, "mem:///d/comun.txt", b"destino").await;
+
+    let done = plan(&h, SyncMode::Update).await;
+    assert_eq!(done.counts.irreversible, 1, "la sobrescritura, y solo ella");
+    let (state, report) = apply(&h, &done.plan_hash).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(report.failed, 0, "{:?}", report.failures);
+
+    let (state, undone) = undo(&h).await;
+    assert_eq!(state, TaskState::Completed, "no rehúsa: informa");
+    assert_eq!(undone.undone, 0, "nada volvió");
+    assert_eq!(undone.skipped_irreversible, 1, "la sobrescritura");
+    assert_eq!(
+        undone.skipped_created_no_trash, 1,
+        "y la COPIA, que el plan enseñaba como reversible"
+    );
+    assert_eq!(
+        undone.unreverted_paths,
+        vec![b"mem:///d/comun.txt".to_vec(), b"mem:///d/a.txt".to_vec()],
+        "las dos, en el orden en que se intentaron (seq descendente)",
+    );
+    assert_eq!(
+        read_file(&h.mem, "mem:///d/comun.txt").await,
+        b"origen-mas-largo"
+    );
+    assert!(exists(&h.mem, "mem:///d/a.txt").await, "nada se borró");
+}
+
+// 16 ──────────────────────────────────────────────────────────────────────
+/// **Un paso que no vuelve no secuestra a los demás.** Es la diferencia entera
+/// con el undo de un lote de renombrados: media permutación deshecha no es
+/// ningún estado, media sincronización deshecha sí. Aquí alguien borra a mano
+/// un fichero copiado entre aplicar y deshacer: esa entrada bloquea, y las
+/// otras tres vuelven igual.
+#[tokio::test]
+async fn un_paso_que_no_vuelve_no_secuestra_al_resto() {
+    let h = harness(with_trash()).await;
+    seed(&h).await;
+    let done = plan(&h, SyncMode::Update).await;
+    let (state, _report) = apply(&h, &done.plan_hash).await;
+    assert_eq!(state, TaskState::Completed);
+
+    // Drift: el humano borra la copia por su cuenta.
+    h.mem
+        .remove(&vp("mem:///d/nueva/a.txt"))
+        .await
+        .expect("remove");
+
+    let (state, undone) = undo(&h).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(undone.undone, 3, "las otras tres entradas SÍ volvieron");
+    let (seq, error) = undone.blocked.expect("la que no volvió, nombrada");
+    assert!(matches!(error, ProtoError::NotFound), "{error:?}");
+    assert_eq!(
+        undone.unreverted_paths,
+        vec![b"mem:///d/nueva/a.txt".to_vec()],
+        "y con nombre, no solo con un seq ({seq})",
+    );
+    assert_eq!(
+        read_file(&h.mem, "mem:///d/comun.txt").await,
+        b"destino",
+        "la sobrescritura se deshizo aunque otra entrada bloqueara",
+    );
+}
+
+// 17 ──────────────────────────────────────────────────────────────────────
+/// **Sobre una papelera que no dice dónde dejó lo que enterró —la nativa del
+/// sistema— la pareja de una sobrescritura NO se deshace, y no se toca.**
+/// Enterrar el fichero nuevo y pedir después «restaura lo que había en esta
+/// ruta» devolvería el que este mismo undo acaba de enterrar (la papelera casa
+/// por ruta original y elige el más reciente): el usuario vería un éxito y su
+/// fichero original seguiría enterrado. Así que ninguno de los dos lados se
+/// toca: lo sincronizado se queda, el original sigue en la papelera, y el
+/// informe da la ruta.
+#[tokio::test]
+async fn sobre_papelera_nativa_una_sobrescritura_no_se_deshace_a_ciegas() {
+    let h = harness_with(with_trash(), false).await;
+    h.mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+    h.mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+    write_file(&h.mem, "mem:///s/comun.txt", b"origen-mas-largo").await;
+    write_file(&h.mem, "mem:///d/comun.txt", b"destino").await;
+
+    let done = plan(&h, SyncMode::Update).await;
+    let (state, report) = apply(&h, &done.plan_hash).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(report.failed, 0, "{:?}", report.failures);
+    let es = entries(&h).await;
+    assert_eq!(es.len(), 2, "trashed + created: {es:?}");
+    assert!(
+        es[0].reversal_ref.is_none(),
+        "la papelera nativa no da destino recuperable"
+    );
+
+    let (state, undone) = undo(&h).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(undone.undone, 0, "ni un lado ni el otro");
+    assert_eq!(
+        undone.unreverted_paths,
+        vec![b"mem:///d/comun.txt".to_vec()],
+        "nombrada UNA vez, la del fichero que el usuario quiere de vuelta",
+    );
+    assert!(undone.blocked.is_some(), "y la sesión para, diciéndolo");
+    assert_eq!(
+        read_file(&h.mem, "mem:///d/comun.txt").await,
+        b"origen-mas-largo",
+        "la ruta NO se queda vacía: lo sincronizado sigue ahí",
+    );
+}
+
+// 18 ──────────────────────────────────────────────────────────────────────
+/// **Un directorio creado no se manda a la papelera con contenido ajeno
+/// dentro.** El orden inverso lo deja vacío cuando todo va bien; cuando no
+/// —aquí el usuario metió un fichero suyo entre aplicar y deshacer— la
+/// papelera se llevaría también eso, y el informe no lo nombraría. Se bloquea
+/// esa entrada y las demás siguen.
+#[tokio::test]
+async fn un_directorio_creado_con_contenido_ajeno_no_se_entierra() {
+    let h = harness(with_trash()).await;
+    seed(&h).await;
+    let done = plan(&h, SyncMode::Update).await;
+    let (state, _report) = apply(&h, &done.plan_hash).await;
+    assert_eq!(state, TaskState::Completed);
+
+    // El humano deja algo suyo dentro del directorio que la sincronización creó.
+    write_file(&h.mem, "mem:///d/nueva/notas.txt", b"mias").await;
+
+    let (state, undone) = undo(&h).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(undone.undone, 3, "todo menos el directorio");
+    assert_eq!(
+        undone.unreverted_paths,
+        vec![b"mem:///d/nueva".to_vec()],
+        "y el que no volvió, con nombre",
+    );
+    assert!(
+        exists(&h.mem, "mem:///d/nueva/notas.txt").await,
+        "el fichero del humano sigue donde lo dejó",
+    );
+    assert!(
+        !exists(&h.mem, "mem:///d/nueva/a.txt").await,
+        "la copia se fue"
+    );
+}
+
+// 19 ──────────────────────────────────────────────────────────────────────
+/// Cancelar a mitad de un lote (regla 3): corte ENTRE entradas, lo compensado
+/// se queda compensado, la cadena sigue íntegra y lo que faltaba sigue siendo
+/// deshacible — un segundo undo lo termina. Cuánto entró en cada mitad depende
+/// del reloj; que la suma sea el lote entero, no.
+#[tokio::test]
+async fn cancelar_el_undo_de_un_lote_lo_deja_terminable() {
+    let h = harness(with_trash()).await;
+    seed(&h).await;
+    let done = plan(&h, SyncMode::Update).await;
+    assert_eq!(apply(&h, &done.plan_hash).await.0, TaskState::Completed);
+    let total = entries(&h).await.len() as u64;
+
+    // Latencia por op → ventana determinista para cancelar antes de terminar.
+    h.mem
+        .faults()
+        .set_latency_per_op(Some(std::time::Duration::from_millis(40)));
+    let (handle, report) = h
+        .engine
+        .undo_session(Actor::User)
+        .await
+        .expect("undo aceptado");
+    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    handle.cancel();
+    let state = handle.join().await;
+    let first = report.lock().expect("undo report lock").clone();
+    h.mem.faults().set_latency_per_op(None);
+
+    assert_eq!(state, TaskState::Cancelled, "corte cooperativo limpio");
+    assert!(first.blocked.is_none(), "cancelar no es bloquear");
+    assert!(
+        h.journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact(),
+        "la cadena del journal aguanta el corte",
+    );
+
+    let (state, second) = undo(&h).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(
+        first.undone + second.undone,
+        total,
+        "entre las dos mitades, el lote entero",
+    );
+    assert_eq!(
+        read_file(&h.mem, "mem:///d/comun.txt").await,
+        b"destino",
+        "y el árbol acaba donde estaba",
+    );
+    assert!(!exists(&h.mem, "mem:///d/nueva").await);
 }
