@@ -13336,8 +13336,8 @@ mod sync_tests {
     use crossterm::event::{KeyCode, KeyModifiers as M};
     use norte_proto::VPath;
     use norte_proto::methods::{
-        CompareConfidence, CompareCriterion, CompareRow, CompareVerdict, PlanHash, Side, SyncCounts,
-        SyncMode, SyncPlanDone,
+        CompareConfidence, CompareCriterion, CompareRow, CompareVerdict, PlanHash, Side,
+        SyncCounts, SyncMode, SyncPlanDone,
     };
 
     fn vp(wire: &str) -> VPath {
@@ -13933,7 +13933,10 @@ mod sync_tests {
             view.pane.toggle_mark(99);
         }
         assert!(app.request_sync(SyncMode::Mirror).is_none());
-        assert_eq!(app.message, Some(norte_i18n::t("msg-sync-mark-is-the-root")));
+        assert_eq!(
+            app.message,
+            Some(norte_i18n::t("msg-sync-mark-is-the-root"))
+        );
     }
 
     /// Y una que no cuelga de ninguna de las dos se niega también, en vez de

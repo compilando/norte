@@ -363,7 +363,6 @@ impl SyncView {
     pub fn awaiting_approval(&self) -> bool {
         matches!(self.state, norte_frontend::sync::SyncState::Ready(_))
     }
-
 }
 
 impl Pane {

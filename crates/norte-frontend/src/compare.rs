@@ -700,7 +700,6 @@ impl ComparePane {
             .collect()
     }
 
-
     /// Where the selected row sits among the VISIBLE ones — the index a list
     /// widget highlights. `None` when a filter is hiding it, which is the
     /// honest answer: there is no cell to highlight.
