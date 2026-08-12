@@ -33,6 +33,7 @@ schema), `serde`/`schemars` (wire), `nextest`, `proptest`.
 | 7 — the spool | done | `ca9f791` (rename) + `0969203` (spool) |
 | 8 — `sync.plan` as a task | done | `8174c6d` |
 | 9 — the executor | done | `d749166` (containment) + `26f26d3` (executor) |
+| 10 — `sync.apply`, `sync.report`, the `Backend` | done | `15a36f3` (cross-provider tests) + `40f87d5` |
 
 **Task 11 is not optional and it must land before this branch merges.**
 `revert_batch` demands every entry of a batch be `rename_back` and answers
@@ -1133,6 +1134,112 @@ were in what happens when a step fails, and in what the spool is trusted for.
    (`a_destination_without_a_trash_takes_the_irreversible_path_for_real`) is
    covered by `una_sobrescritura_sin_papelera_se_declara_irreversible`, which
    drives a real `MemProvider` with no `TRASH` flag end to end.
+
+### What Task 10 changed in this plan
+
+**The three cross-provider tests the spec names are IN, and Task 9's note that
+two of them were already covered was wrong about one of them.** They live in
+`engine_sync_plan.rs` (they test the planner) and all three pass. The archive
+one needed a fixture that did not exist: `ZipSmith` hardcoded a valid DOS date
+(2020-01-01) for every entry, so a zip could never reach `CompareConfidence::
+Unknown` by way of the mtime — the size rung matched, the mtime rung answered
+`Different`/`Probable`, and "an archive whose mtime deserves no trust" was
+untestable. `ZipSmith::undated()` writes the zero DOS pair, which is *invalid*
+(month 0, day 0) and is what a writer that leaves the field blank produces; the
+index then honestly reports `mtime_ms: None`. Additive, no corpus assertion
+moves.
+
+- **`Backend` gained `sync_plan`, `sync_apply` AND `sync_report`.** The plan
+  named the first two; the third is not optional in practice — a failed step is
+  a report row and not a task failure, so without it a frontend that applies a
+  plan cannot find out what happened. It is the twin of
+  `Backend::rename_batch_report`, and it reads the same ring the socket reads
+  (`Engine::sync_report`), because two rings would be two retention policies
+  that contradict each other on the first eviction.
+- **The embedded connection is `EMBEDDED_CONN_ID = u64::MAX`, a constant.**
+  Planning and applying have to agree on the spool key or a `Backend` answers
+  `PlanStale` to its own plan. `u64::MAX` rather than `0` because the daemon's
+  `conn_id` counter starts at zero, so the two can never collide in a process
+  that has both. **The corollary is now on the constant and matters for Tasks
+  12–13: a `plan_hash` is not a secret** (it is a deterministic digest anyone
+  who can read both trees can compute), so the *only* thing binding a plan to
+  its requester is that `conn_id` — and here it is a constant, with
+  `Actor::User` and therefore no policy gate. These two methods must not be
+  wired to the Lua sandbox or the plugin host without an actor of their own.
+- **The embedded arm's fail-closedness is now the engine's, and it is pinned.**
+  `embedded_sin_spool_no_planifica_y_sin_journal_no_aplica` drives both halves
+  and asserts the destination is untouched. The CLI still never calls
+  `set_spool` on its embedded engine and the TUI's embedded engine has neither
+  journal nor spool — **so embedded sync is unavailable until Task 13 wires it**,
+  which is a wiring decision, not a protection.
+- **The step feed FAILS CLOSED when the client is the one that cannot keep up,
+  and the other two feeds still do not.** `route_batch` grew an `OnFull`
+  parameter. `search.hits` and `compare.rows` keep dropping the batch: a lost
+  row is paint. `sync.steps` closes the feed instead, because a dropped batch
+  with the `sync.plan_done` delivered behind it leaves a human approving a hash
+  that covers `DeleteTree` and `Overwrite` rows that never reached the screen —
+  the one thing this design exists to prevent. No close means no hash means
+  nothing applicable. Both reviewers found this independently and it was the
+  only real defect in the task. **Task 12 should still cross-check** the steps
+  it received against `SyncPlanDone::counts` (`create_dir + copy + overwrite +
+  delete_tree + skip`), which is now stated on `Backend::sync_plan`.
+- **The live-task cap is checked BEFORE the plan is opened.** `Spool::open`
+  takes the single-use right and the task body spends it at every terminal
+  state, so an `OVERLOADED` from `register_task_id` destroyed an approved plan
+  and answered "retry later" to a hash that could never work again — the only
+  way forward being to re-walk both trees. `tasks_at_capacity` is a TOCTOU
+  approximation and `register_task_id` remains the authority; it moves the
+  common case from "plan destroyed" to "plan intact".
+- **`sync.apply` is cancelable, and that needed a claim guard.** Its gate can
+  suspend in a policy `ask` for up to the approval TTL, which is longer than the
+  client's 30 s RPC timeout: without withdrawal the human approves a minute
+  later and the tree is rewritten for a client that already gave up and was told
+  the daemon was unreachable. Adding it to the daemon's `cancelable` set alone
+  would have been a NEW bug — dropping the dispatch skips
+  `sync_apply_as`'s release, stranding the hash as "applying" for the life of
+  the connection, neither applicable nor re-plannable. So `ApplyClaim` (a `Drop`
+  guard) plus `Spool::abandon`, which releases the in-memory claim
+  synchronously and, like every other failure path, does **not** return the plan
+  to `issued`: not applicable again, but the same tree is re-plannable. The
+  remote arm uses `call_timed_guarded` so an abandoned call actually sends the
+  `rpc.cancel`; it loses the `METHOD_NOT_FOUND` translation, which is
+  unreachable for this method (a `plan_hash` can only have come from the same
+  daemon).
+- **`evict_batch_reports` is now a thin wrapper over a generic `evict_reports`**
+  shared with the sync ring. Behaviour on the rename path is unchanged
+  (verified by both reviewers, line by line). What the docstring no longer
+  oversells: the agent sub-cap is a FLOOR — above it the second pass evicts by
+  age without looking at the owner, so an agent can still push out an old, quiet
+  human report. The loud ones survive, which is the point.
+- **MINORs skipped, with reasons.** (1) `handle_sync_report` clones the report
+  before the ownership check, so the denied branch does more work than the
+  unknown branch — a weak timing signal, inherited verbatim from
+  `fs.rename_batch_report`, and fixing one twin and not the other is worse than
+  fixing neither; it wants one change touching both. (2) The poisoned-lock
+  asymmetry (the read path tolerates poison, the eviction path panics while
+  holding the ring lock) is likewise inherited and unreachable — `exec::run`
+  never holds a report guard across an `.await`. (3) The remote arm's
+  `METHOD_NOT_FOUND` → `Unsupported` branch is unreachable over the socket at
+  all, since `version_compatible` accepts only older-client-on-newer-daemon; it
+  is kept because `compare` has it and consistency is worth more than deleting
+  four lines.
+- **Two things for Task 14 to file or record**, neither new to this task:
+  1. **`SyncReportResult::batch_id` is the first journal-internal identifier a
+     non-`User` actor receives.** It is opaque as a capability — no method takes
+     one, undo is by session — but it is a dense global counter, i.e. a coarse
+     measure of the daemon's cumulative journal batches, and the rename twin
+     carries nothing like it. ADR 0049 does not discuss report visibility at
+     all; it should.
+  2. **A `Daemon` bound over an `Engine` with no `with_policy` gates nothing**
+     (`AllowAll` is the default), so one `sync.apply` from any actor rewrites a
+     whole tree. Pre-existing and shared with `fs.copy`/`fs.delete` since M3, no
+     shipped binary does it — but sync is the first method where the blast
+     radius of that hole is an entire subtree, and the fail-closed treatment of
+     the spool and the journal invites the reader to assume the third leg is
+     fail-closed too. Now stated in `sync_apply_as`'s rustdoc; a start-up
+     `warn!` would be cheap.
+
+---
 
 ---
 
