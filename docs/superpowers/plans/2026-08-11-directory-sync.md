@@ -281,6 +281,34 @@ them were already passing when task 4 started. Task 4's real content was
   every `hostile_names().len() == 47` assertion's neighbourhood), so task 4
   used the plain corpus instead.
 
+### The overlap guard is overclaimed, and Task 8 gets the missing half
+
+`rust-reviewer` caught this on Task 5 and it is correct: **none** of the three
+examples ADR 0048 and the sync spec cite for the walk-time overlap guard is
+actually caught by it. Walking `/data` (a symlink to `/srv/data`) against
+`/srv/data` produces rows whose paths all hang from `/data`, so no row ever
+"reaches the other root". The same goes for one SFTP host under two
+authorities and one archive opened by two paths.
+
+What the walk-time guard really is: **defence in depth against a provider that
+returns paths outside the root it was asked to list.** That is worth having
+and it is not what was advertised.
+
+The missing half is cheap and Task 8 lands it: **compare `Provider::node_id`
+of the two roots.** Spec 1 already put it on the trait — `(dev, ino)` on
+local, `FILE_ID_INFO` on Windows — so two roots that are the same directory
+under different spellings answer with the same id no matter how they were
+written. One `stat` per root, once per plan. Equal and `Some` →
+`Error::OverlappingRoots { overlap: RootOverlap::Same }`.
+
+It does **not** close everything, and the plan says so rather than repeating
+the overclaim: `node_id` is `None` on SFTP and FTP, so one host under two
+authorities stays undetected. The residual is bounded by the executor's
+per-step revalidation and by the fact that the two roots' *contents* would
+have to be identical for the plan to be a no-op — but it is residual, and
+Task 14 must correct ADR 0049 and the spec to say exactly this instead of
+claiming the walk guard handles it.
+
 ### What Task 5 changed in this plan
 
 **Task 4's prescription for #152 was wrong, and the wrongness is instructive.**
