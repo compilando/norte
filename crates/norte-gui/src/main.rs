@@ -98,6 +98,7 @@ use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_theme::{FileKind, Role, Theme};
 
 mod columns_view;
+mod compare_view;
 mod context_menu;
 mod effects;
 mod extensions_view;
@@ -433,6 +434,19 @@ struct NorteGui {
     /// with `settings_view`/`viewer`/dual-pane, same swap pattern as
     /// `settings_view`.
     extensions: Option<extensions_view::ExtensionsView>,
+    /// Generación de la ÚLTIMA comparación pedida (guard anti-stale, mismo
+    /// papel que `generation`/`viewer_gen`): cada `Compare` es un RPC en su
+    /// propia task de tokio, así que dos peticiones seguidas pueden contestar
+    /// en orden inverso y solo la vigente puede abrir panel.
+    compare_gen: u64,
+    /// El panel de diferencias abierto (#158, `pane.compare-dirs`), o `None`
+    /// = cerrado.
+    ///
+    /// NO es un `PaneState`: es otro modelo pintado en el mismo sitio, igual
+    /// que en la TUI. Lo abre `SessionEvent::CompareStarted` —no la tecla—
+    /// porque hasta que hay Task no hay `task_id` con el que decidir de quién
+    /// son las filas que lleguen.
+    compare: Option<compare_view::CompareView>,
     /// The column picker overlay (#108 7c, `alt+c`): `Some` while open,
     /// same z-order and key-capture slot as the palette (modal wins).
     /// Esc discards; Enter applies in-session and persists (TUI parity).
@@ -1182,6 +1196,8 @@ impl NorteGui {
                     mouse: MouseState::default(),
                     context_menu: None,
                     extensions: None,
+                    compare: None,
+                    compare_gen: 0,
                     plugin_config_summaries: Vec::new(),
                 };
                 gui.column_settings = columns_settings;
@@ -1279,6 +1295,8 @@ impl NorteGui {
                     mouse: MouseState::default(),
                     context_menu: None,
                     extensions: None,
+                    compare: None,
+                    compare_gen: 0,
                     plugin_config_summaries: Vec::new(),
                 }
             }
@@ -1949,6 +1967,85 @@ impl NorteGui {
                     ));
                 }
             },
+            // #158, spec 3 fase C1. El panel se abre AQUÍ, con la Task ya
+            // creada: es el `task_id` lo que después distingue sus lotes de
+            // los de una comparación anterior que el lector cancelara.
+            SessionEvent::CompareStarted {
+                task_id,
+                left_pane,
+                generation,
+                left_root,
+                right_root,
+            } => {
+                // GUARD de generación, el mismo que `List`/`OpenViewer`: cada
+                // `Compare` es un RPC propio en su `tokio::spawn`, así que dos
+                // teclas seguidas pueden contestar en orden INVERSO. Sin esto
+                // el arranque VIEJO llegaba el último, cancelaba el panel
+                // nuevo y dejaba abierto el de las raíces anteriores — o sea,
+                // la petición más reciente del lector es la que moría
+                // (revisión MAJOR-2).
+                if !generation_is_current(self.compare_gen, generation) {
+                    let _ = self.cmds.send(SessionCmd::Cancel(task_id));
+                    return;
+                }
+                // El índice cruza un canal: acotarlo es más barato que el
+                // panic que evita (revisión MINOR-2).
+                let left_pane = left_pane & 1;
+                // Retira el «comparando…» que puso `start_compare`: el panel
+                // ES la respuesta a partir de aquí. En el pane que LANZÓ, que
+                // es donde se puso — el foco pudo moverse mientras el RPC iba
+                // y venía, y un aviso que se queda pegado para siempre es
+                // peor que no haberlo puesto.
+                self.errors[left_pane] = None;
+                // Regla 3: la comparación a la que sustituye se cancela — dos
+                // flujos alimentando un panel serían dos comparaciones a la
+                // vez (mismo criterio que `launch_compare` en la TUI).
+                if let Some(superseded) = compare_view::open(
+                    &mut self.compare,
+                    compare_view::Started {
+                        task_id,
+                        left_root,
+                        right_root,
+                        left_pane,
+                        left_encoding: self.panes[left_pane].name_encoding(),
+                        right_encoding: self.panes[left_pane ^ 1].name_encoding(),
+                    },
+                ) {
+                    let _ = self.cmds.send(SessionCmd::Cancel(superseded));
+                }
+            }
+            SessionEvent::CompareRows { task_id, rows } => {
+                if let Some(huerfana) = compare_view::route_rows(&mut self.compare, task_id, rows) {
+                    let _ = self.cmds.send(SessionCmd::Cancel(huerfana));
+                }
+            }
+            SessionEvent::CompareDone {
+                task_id,
+                state,
+                entries_done,
+            } => {
+                if let Some(view) = self.compare.as_mut()
+                    && view.on_done(task_id, &state, entries_done)
+                    && let Some(error) = view.run.error.clone()
+                {
+                    // El fallo se DICE una vez en el banner del pane que
+                    // lanzó, además de quedarse pintado de forma persistente
+                    // en el panel (tarea 3).
+                    let pane = view.run.left_pane & 1;
+                    self.errors[pane] = Some(norte_i18n::ta(
+                        "compare-status-failed",
+                        &[("error", &error)],
+                    ));
+                }
+            }
+            // Rechazada antes de existir Task: la frase, y NINGÚN panel (uno
+            // vacío que dice «fallo» es peor, porque además hay que cerrarlo).
+            SessionEvent::CompareFailed { left_pane, error } => {
+                self.errors[left_pane & 1] = Some(norte_i18n::ta(
+                    "compare-status-failed",
+                    &[("error", &norte_frontend::error::error_category(&error))],
+                ));
+            }
         }
     }
 
@@ -2105,6 +2202,53 @@ impl NorteGui {
             view.state.cancel_capture();
         }
         self.modal = Some(modal);
+    }
+
+    /// Pide una comparación de los dos panes (#158, `pane.compare-dirs`,
+    /// spec 3 fase C1): paridad con `App::request_compare` de la TUI, hasta
+    /// la frase de la negativa.
+    ///
+    /// El pane con FOCO es el lado izquierdo, y viaja en el comando: el panel
+    /// congela ese lado al abrirse, y el foco puede haberse movido mientras
+    /// la petición estaba en vuelo. Dos raíces iguales se niegan AQUÍ, sin
+    /// vuelta por la red: el daemon contesta lo mismo (`-32602`), pero la
+    /// frase no depende de que haya daemon y ninguna Task llega a existir.
+    /// El resto de params son los mismos que pide la TUI, por el mismo
+    /// motivo (ver `norte_frontend::compare::MTIME_TOLERANCE_MS` y los dos
+    /// toggles que no existen).
+    fn start_compare(&mut self) {
+        let left = self.panes[self.focus].dir().clone();
+        let right = self.panes[self.focus ^ 1].dir().clone();
+        if left == right {
+            self.errors[self.focus] = Some(norte_i18n::t("compare-same-path"));
+            return;
+        }
+        self.compare_gen = self.compare_gen.wrapping_add(1);
+        // Decirlo mientras el RPC va y viene, molde `request_volumes`: sin
+        // esto la tecla no contesta nada hasta que hay Task. Con la clave
+        // COMPARTIDA y `n = 0` —que es la verdad, todavía no ha llegado
+        // ninguna fila—, no con una `gui-*` propia: la frase existe.
+        self.errors[self.focus] = Some(norte_i18n::ta("compare-status-running", &[("n", "0")]));
+        let _ = self.cmds.send(SessionCmd::Compare {
+            left_pane: self.focus,
+            generation: self.compare_gen,
+            params: Box::new(norte_proto::methods::FsCompareParams {
+                left,
+                right,
+                criteria: norte_proto::methods::CompareCriteria::default(),
+                max_depth: None,
+                mtime_tolerance_ms: norte_frontend::compare::MTIME_TOLERANCE_MS,
+                // Sin toggle, y a propósito: `Backend::compare` responde
+                // `Unsupported` a `true` antes de que exista Task alguna,
+                // porque el engine acepta el campo y lo ignora. Ofrecerlo
+                // sería ofrecer una promesa que nadie cumple.
+                follow_symlinks: false,
+                // Tampoco: el panel enseña un huérfano como UNA fila, y
+                // descenderlo es lo que un plan de sincronización pide por su
+                // cuenta (spec 2).
+                descend_orphans: None,
+            }),
+        });
     }
 
     /// Pide `Backend::volumes` para `pane` (2026-08-10-volumes.md task V4,
@@ -2422,6 +2566,17 @@ impl NorteGui {
             // única op de esta lista que no toca ningún backend.
             "pane.copy-path" => self.copy_paths_to_clipboard(cx),
             "pane.semantic-search" => self.open_semantic_search(),
+            // #158, spec 3 fase C1. El id todavía NO está en
+            // `keymap::COMMANDS` —entra en la tarea 4 del plan—, así que ni
+            // el teclado ni la paleta llegan aquí. La AYUDA sí: sus filas se
+            // resuelven contra `norte_frontend::availability`, la tabla
+            // compartida entre frontends, que da este comando por disponible
+            // (revisión MAJOR-1). Ese Enter caía antes en el brazo `other`,
+            // cuyo `debug_assert` tumbaba una GUI de debug; ahora arranca la
+            // comparación de verdad. Hasta que la tarea 3 pinte el panel el
+            // resultado no se ve, y por eso las tres tareas cierran la misma
+            // rama: esto no se mergea solo.
+            "pane.compare-dirs" => self.start_compare(),
             // 2026-08-10-volumes.md task V4 (design §D): `-left`/`-right`
             // name a SIDE, not the focus — Total Commander's `Alt+F1`/
             // `Alt+F2`, paridad TUI `Command::PaneSelectDrive{,Left,Right}`.

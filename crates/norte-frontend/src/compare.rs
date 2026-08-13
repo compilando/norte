@@ -29,6 +29,25 @@ use norte_proto::methods::{
     CompareConfidence, CompareCriterion, CompareReason, CompareRow, CompareVerdict, Side,
 };
 
+/// Tolerancia de fecha con la que un frontend pide una comparación: 2000 ms,
+/// la regla FAT y la granularidad real más ancha que existe.
+///
+/// Es una COPIA del default del wire (`FsCompareParams::mtime_tolerance_ms`),
+/// porque `norte-proto` guarda su función de default privada y hacerla
+/// pública sería tocar el crate del protocolo para leer un número. Que las
+/// dos no se separen lo pinea `la_tolerancia_por_defecto_sigue_al_wire`, en
+/// `norte-tui`: deserializa unos params mínimos del wire y compara. Se queda
+/// allí, y no aquí, porque este crate no tiene `serde_json` ni en dev-deps y
+/// añadírselo para leer un número sería el mismo precio que se rechazó al no
+/// tocar `norte-proto`.
+///
+/// Vive junto al modelo, y no en cada frontend, por lo mismo que
+/// [`CompareView`] (#158): es un parámetro de la PREGUNTA, así que dos copias
+/// que se separaran harían que la TUI y la GUI recibieran veredictos
+/// distintos para los mismos dos directorios — y ninguna de las dos podría
+/// verlo.
+pub const MTIME_TOLERANCE_MS: u32 = 2000;
+
 /// The five buckets the filter keys toggle.
 ///
 /// A partition of [`CompareVerdict`], not a selection of it: every verdict

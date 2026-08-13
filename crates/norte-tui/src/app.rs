@@ -76,15 +76,6 @@ pub enum SearchState {
     Failed,
 }
 
-/// Tolerancia de fecha con la que la TUI pide una comparación: 2000 ms, la
-/// regla FAT y la granularidad real más ancha que existe.
-///
-/// Es una COPIA del default del wire (`FsCompareParams::mtime_tolerance_ms`),
-/// porque `norte-proto` guarda su función de default privada y hacerla pública
-/// sería tocar el crate del protocolo para leer un número. Que las dos no se
-/// separen lo pinea `la_tolerancia_por_defecto_sigue_al_wire`.
-const COMPARE_MTIME_TOLERANCE_MS: u32 = 2000;
-
 /// El estado del run (`CompareState`) y el panel abierto (`CompareView`)
 /// viven en [`norte_frontend::compare`] (#158): la GUI necesita exactamente
 /// esta máquina y no una reimplementada, que es como el CLI (fase A) y la
@@ -2231,7 +2222,10 @@ impl App {
             right,
             criteria: norte_proto::methods::CompareCriteria::default(),
             max_depth: None,
-            mtime_tolerance_ms: COMPARE_MTIME_TOLERANCE_MS,
+            // Vive con el modelo (#158), no aquí: la GUI pide la MISMA
+            // comparación, y dos copias que se separaran darían veredictos
+            // distintos para los mismos dos directorios.
+            mtime_tolerance_ms: norte_frontend::compare::MTIME_TOLERANCE_MS,
             // Sin toggle en la UI, y a propósito: `Backend::compare` responde
             // `Unsupported` a `true` antes de que exista Task alguna, porque
             // el engine acepta el campo y lo ignora. Ofrecer la casilla sería
@@ -5084,73 +5078,12 @@ pub fn trust_lua_key(code: crossterm::event::KeyCode) -> DialogOutcome {
     }
 }
 
-/// Clave Fluent ESTABLE de la CATEGORÍA de un [`Error`] del protocolo (spec
-/// §17.7, #20). Es la base de [`error_category`] y también el vocabulario que
-/// ven los scripts Lua (`nil, clave` — M4 Lua): el script compara contra
-/// claves estables, jamás contra texto localizado. Los campos con detalle
-/// (host, `rule`, retryable…) se DESCARTAN por patrón: `PolicyDenied` no
-/// expone la regla concreta (vocabulario cerrado); `HostKeyUnknown`/
-/// `Mismatch` no filtran el host (además un `Display` con host arbitrario
-/// sería un vector bidi/control en la barra). Una categoría futura
-/// (`Unknown`, cliente N-1) cae a `err-unknown`.
-#[must_use]
-pub fn error_key(e: &Error) -> &'static str {
-    use norte_proto::{ConflictKind, RootOverlap};
-    match e {
-        Error::NotFound => "err-not-found",
-        Error::PermissionDenied => "err-permission-denied",
-        Error::Conflict { conflict } => match conflict {
-            ConflictKind::Exists => "err-conflict-exists",
-            ConflictKind::CaseCollision => "err-conflict-case",
-            ConflictKind::Normalization => "err-conflict-normalization",
-            ConflictKind::TypeMismatch => "err-conflict-type",
-            _ => "err-conflict",
-        },
-        Error::ProviderUnavailable { .. } => "err-provider-unavailable",
-        Error::NoSpace => "err-no-space",
-        Error::Io { .. } => "err-io",
-        Error::Cancelled => "err-cancelled",
-        Error::PolicyDenied { .. } => "err-policy-denied",
-        Error::EncodingLoss => "err-encoding-loss",
-        Error::Unsupported => "err-unsupported",
-        Error::InvalidPath => "err-invalid-path",
-        Error::Internal { .. } => "err-internal",
-        Error::Loop => "err-loop",
-        Error::Corrupt => "err-corrupt",
-        // #95.3: límite local ≠ corrupción. El sub-vocabulario (`entries`/
-        // `decompressed-bytes`) es diagnóstico, no UX: una sola clave.
-        Error::LimitExceeded { .. } => "err-limit-exceeded",
-        Error::HostKeyUnknown { .. } => "err-host-key-unknown",
-        Error::HostKeyMismatch { .. } => "err-host-key-mismatch",
-        Error::CursorExpired => "err-cursor-expired",
-        // 0.36.0 (batch rename): las dos son ACCIONABLES — caer en
-        // `err-unknown` sería lo contrario de lo que su rustdoc promete.
-        Error::PlanStale => "err-plan-stale",
-        Error::PlanNotExecutable => "err-plan-not-executable",
-        // 0.40.0 (sincronización): las TRES relaciones se pintan distinto y la
-        // primera no es un caso degenerado de las otras dos, así que el
-        // sub-vocabulario sí viaja —igual que el de `Conflict`—. Lo accionable
-        // es distinto en cada una: con `Same` hay que elegir otro directorio,
-        // con las otras dos hay que salir del árbol que contiene al otro. Sin
-        // este brazo la negativa caía en `err-unknown`, que es exactamente lo
-        // que la variante existe para no ser.
-        Error::OverlappingRoots { relation } => match relation {
-            RootOverlap::Same => "err-overlapping-roots-same",
-            RootOverlap::SourceInsideDest => "err-overlapping-roots-source-inside",
-            RootOverlap::DestInsideSource => "err-overlapping-roots-dest-inside",
-            _ => "err-overlapping-roots",
-        },
-        _ => "err-unknown",
-    }
-}
-
-/// Texto LOCALIZADO de la categoría de un [`Error`] del protocolo: la clave
-/// estable de [`error_key`] pasada por Fluent — jamás el `Display` inglés
-/// hardcodeado ni un string del OS.
-#[must_use]
-pub fn error_category(e: &Error) -> String {
-    t(error_key(e))
-}
+/// El vocabulario de CATEGORÍAS de error vive en [`norte_frontend::error`]
+/// (#158, revisión de la fase C1): la GUI dice los mismos errores y no podía
+/// alcanzarlo aquí, así que interpolaba el `Display` inglés en frases por lo
+/// demás localizadas. Se re-exporta con el nombre de siempre porque es API
+/// pública de este crate (los scripts Lua comparan contra estas claves).
+pub use norte_frontend::error::{error_category, error_key};
 
 /// Mensaje de barra `error: <categoría>` (envuelve [`error_category`]).
 #[must_use]

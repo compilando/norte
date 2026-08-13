@@ -21,6 +21,7 @@ pub mod compare;
 pub mod config;
 mod decoration;
 mod display;
+pub mod error;
 mod format;
 pub mod help;
 pub mod help_badge;

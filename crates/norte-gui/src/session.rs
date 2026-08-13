@@ -237,6 +237,28 @@ pub enum SessionCmd {
         /// El modo pedido — el filtro por defecto o "mostrar todo".
         include_pseudo: bool,
     },
+    /// Compara dos directorios (`fs.compare`, 0.39.0, ADR 0048 — #158, spec 3
+    /// fase C1): arranca la Task y BOMBEA sus lotes de filas hasta que el
+    /// canal se cierre ([`SessionEvent::CompareRows`]), y entonces manda UN
+    /// [`SessionEvent::CompareDone`] con el snapshot de progreso. No muta
+    /// nada; la Task queda registrada en el mapa de cancellers, así que
+    /// [`SessionCmd::Cancel`] la cancela como a cualquier otra.
+    Compare {
+        /// El pane que la lanzó, o sea el lado IZQUIERDO del panel (que no
+        /// tiene por qué ser `panes[0]`). Viaja de ida y vuelta, como
+        /// [`SessionCmd::Volumes::pane`], porque el foco pudo moverse
+        /// mientras la petición estaba en vuelo y el lado izquierdo se
+        /// congela al abrir el panel.
+        left_pane: usize,
+        /// Generación de ESTA petición (guard anti-stale, como `List`): dos
+        /// comparaciones seguidas son dos RPC concurrentes, y la respuesta
+        /// de la primera puede llegar después de la segunda. La GUI descarta
+        /// —y cancela— cualquier arranque que no sea el de la generación
+        /// vigente.
+        generation: u64,
+        /// Params ya resueltos y validados por la GUI (`NorteGui::start_compare`).
+        params: Box<norte_proto::methods::FsCompareParams>,
+    },
 }
 
 /// Contenido del viewer que cruza a la GUI (GUI-d T3).
@@ -495,6 +517,60 @@ pub enum SessionEvent {
         include_pseudo: bool,
         /// Volúmenes o error ya renderizable.
         result: Result<Vec<norte_proto::methods::Volume>, String>,
+    },
+    /// La comparación ARRANCÓ (#158): hay Task, y con ella el `task_id` que
+    /// marca de quién son los lotes que vengan detrás. La GUI abre el panel
+    /// AQUÍ y no al pulsar la tecla, igual que la TUI: un panel abierto antes
+    /// de que exista Task tendría que inventarse a qué comparación pertenece
+    /// lo que le llegue.
+    CompareStarted {
+        /// La Task de esta comparación.
+        task_id: TaskId,
+        /// El pane que la lanzó — el eco de `SessionCmd::Compare::left_pane`.
+        left_pane: usize,
+        /// El eco de `SessionCmd::Compare::generation` (guard anti-stale).
+        generation: u64,
+        /// Raíz izquierda (la del pane que lanzó), para la cabecera.
+        left_root: VPath,
+        /// Raíz derecha.
+        right_root: VPath,
+    },
+    /// UN lote de filas de comparación, etiquetado con su Task.
+    CompareRows {
+        /// La Task de la que salen: la vista DESCARTA lo que no sea suyo.
+        task_id: TaskId,
+        /// Las filas del lote, en el orden en que el walk las produjo.
+        rows: Vec<norte_proto::methods::CompareRow>,
+    },
+    /// El canal de filas se cerró, con el snapshot de progreso que había en
+    /// ese instante.
+    ///
+    /// **`state` puede NO ser terminal**, y eso no es un fallo: la bomba de
+    /// filas y la de progreso son tasks distintas, así que el canal puede
+    /// cerrarse antes de que el estado terminal se publique. Se manda tal
+    /// cual —sin esperar al terminal, exactamente como hace la TUI— y quien
+    /// decide qué significa es
+    /// [`crate::compare_view::CompareView::on_done`], en un solo sitio.
+    CompareDone {
+        /// La Task que termina.
+        task_id: TaskId,
+        /// El estado leído al cerrarse el canal (puede no ser terminal).
+        state: TaskState,
+        /// Cuántas filas dice la Task haber emitido (`TaskProgress::entries_done`):
+        /// la mitad de la cuenta que distingue «hecho» de «se perdieron lotes».
+        entries_done: u64,
+    },
+    /// `fs.compare` fue RECHAZADA antes de existir Task alguna (dos raíces
+    /// iguales, `follow_symlinks`, un daemon N-1 sin el método): NO se abre
+    /// panel — uno vacío que dice «fallo» es peor que la frase en el banner,
+    /// porque además hay que cerrarlo (mismo criterio que la TUI).
+    CompareFailed {
+        /// El pane que la pidió — el eco de `SessionCmd::Compare::left_pane`:
+        /// la negativa se pinta donde se puso el «comparando…» que sustituye,
+        /// aunque el foco se haya movido mientras tanto.
+        left_pane: usize,
+        /// El error tipado; la GUI lo convierte en frase.
+        error: Error,
     },
 }
 
@@ -811,6 +887,28 @@ pub fn spawn(
                             });
                         });
                     }
+                    SessionCmd::Compare {
+                        left_pane,
+                        generation,
+                        params,
+                    } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        let cancellers = Arc::clone(&cancellers);
+                        tokio::spawn(async move {
+                            compare(
+                                &backend,
+                                Request {
+                                    left_pane,
+                                    generation,
+                                },
+                                *params,
+                                &tx,
+                                &cancellers,
+                            )
+                            .await;
+                        });
+                    }
                     SessionCmd::PluginRunCommand { id, command, arg } => {
                         let backend = Backend::Remote(remote.clone());
                         let tx = event_tx.clone();
@@ -1119,6 +1217,95 @@ async fn forward_progress(
     cancellers.lock().unwrap().remove(&id);
 }
 
+/// Quién pidió una comparación: el eco que la GUI necesita de vuelta para
+/// abrir el panel sobre el pane correcto y descartar los arranques vencidos.
+/// Un struct y no dos `usize`/`u64` sueltos, que es como se cruzan dos
+/// argumentos del mismo tipo.
+struct Request {
+    /// El pane que la lanzó (el lado izquierdo del panel).
+    left_pane: usize,
+    /// La generación de la petición (guard anti-stale).
+    generation: u64,
+}
+
+/// Arranca `fs.compare` y BOMBEA sus filas (#158, spec 3 fase C1).
+///
+/// Un rechazo de entrada (dos raíces iguales, `follow_symlinks`, un daemon
+/// N-1 sin el método) sale por [`SessionEvent::CompareFailed`] y no abre
+/// panel; con Task, se registra su canceller —así `task.cancel` de la GUI
+/// llega por el mismo camino que el de una copia— y se anuncia el `task_id`
+/// ANTES de la primera fila, que es lo que le permite a la vista descartar
+/// los lotes de una comparación anterior.
+async fn compare(
+    backend: &Backend,
+    who: Request,
+    params: norte_proto::methods::FsCompareParams,
+    tx: &mpsc::UnboundedSender<SessionEvent>,
+    cancellers: &Arc<Mutex<HashMap<TaskId, TaskCanceller>>>,
+) {
+    let (left_root, right_root) = (params.left.clone(), params.right.clone());
+    let (task, rx) = match backend.compare(params).await {
+        Ok(pair) => pair,
+        Err(error) => {
+            let _ = tx.send(SessionEvent::CompareFailed {
+                left_pane: who.left_pane,
+                error,
+            });
+            return;
+        }
+    };
+    let task_id = task.id();
+    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+    cancellers.lock().unwrap().insert(task_id, task.canceller());
+    let _ = tx.send(SessionEvent::CompareStarted {
+        task_id,
+        left_pane: who.left_pane,
+        generation: who.generation,
+        left_root,
+        right_root,
+    });
+    pump_compare(task, rx, tx).await;
+    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+    cancellers.lock().unwrap().remove(&task_id);
+}
+
+/// Reenvía cada lote de `rx` como [`SessionEvent::CompareRows`] y, al
+/// CERRARSE el canal, UN [`SessionEvent::CompareDone`] con el snapshot de
+/// progreso de ese instante.
+///
+/// **No espera al estado terminal**, y es deliberado: la bomba de filas y la
+/// de progreso son tasks independientes, así que el canal puede cerrarse
+/// antes de que el terminal se publique —y también puede no publicarse nunca
+/// (un daemon caído, un provider colgado en una NFS muerta)—. Esperarlo aquí
+/// dejaría el panel diciendo «comparando…» para siempre. La TUI lee el
+/// snapshot igual, en `drain_compare`, y quien interpreta un estado no
+/// terminal es [`crate::compare_view::CompareView::on_done`]: una sola regla
+/// para los dos frontends.
+///
+/// El `task_id` que etiqueta los lotes es el de la Task, no el que trae cada
+/// `CompareRowsBatch`: este bombeo es dueño de SU stream, así que sabe de
+/// quién son sus filas sin creerle el campo a nadie.
+async fn pump_compare(
+    task: TaskRef,
+    mut rx: mpsc::Receiver<norte_proto::methods::CompareRowsBatch>,
+    tx: &mpsc::UnboundedSender<SessionEvent>,
+) {
+    let task_id = task.id();
+    while let Some(batch) = rx.recv().await {
+        let _ = tx.send(SessionEvent::CompareRows {
+            task_id,
+            rows: batch.rows,
+        });
+    }
+    let mut progress = task.progress();
+    let snapshot = progress.borrow_and_update().clone();
+    let _ = tx.send(SessionEvent::CompareDone {
+        task_id,
+        state: snapshot.state,
+        entries_done: snapshot.entries_done,
+    });
+}
+
 /// Presupuesto de píxeles del preview de imagen (#92, movido del hilo de UI):
 /// `into_rgba8` alloca ancho×alto×4 y puede coexistir con el buffer del
 /// decoder — pico real ≈ 32 MP × 4 × 2 ≈ 256 MiB (una sola imagen a la vez).
@@ -1253,6 +1440,109 @@ mod tests {
             cancellers.lock().unwrap().is_empty(),
             "el canceller se de-registra también en el camino de muerte"
         );
+    }
+
+    /// Una fila cualquiera: lo que se prueba aquí es el bombeo, no el
+    /// veredicto.
+    fn fila(id: u64) -> norte_proto::methods::CompareRow {
+        use norte_proto::methods::{CompareConfidence, CompareCriterion, CompareVerdict};
+        norte_proto::methods::CompareRow {
+            id,
+            left: None,
+            right: None,
+            verdict: CompareVerdict::Error,
+            criterion: CompareCriterion::Presence,
+            confidence: CompareConfidence::Unknown,
+            newer: None,
+            reason: Some(norte_proto::methods::CompareReason::Unreadable),
+            side: None,
+        }
+    }
+
+    /// Un progreso de comparación con `entries_done` puesto.
+    fn snap_filas(id: TaskId, state: TaskState, entries_done: u64) -> TaskProgress {
+        let mut p = snap(id, state);
+        p.kind = TaskKind::Compare;
+        p.entries_done = entries_done;
+        p
+    }
+
+    /// #158: cada lote sale etiquetado con la Task del bombeo, y al cerrarse
+    /// el canal sale UN `CompareDone` con el snapshot de ese instante.
+    #[tokio::test]
+    async fn pump_compare_reenvia_los_lotes_y_cierra_con_el_snapshot() {
+        let tid = id(11);
+        let (watch_tx, watch_rx) =
+            tokio::sync::watch::channel(snap_filas(tid, TaskState::Running, 0));
+        let task = TaskRef::synthetic_for_tests(tid, watch_rx);
+        let (rows_tx, rows_rx) = mpsc::channel(4);
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+
+        rows_tx
+            .send(norte_proto::methods::CompareRowsBatch {
+                task_id: tid,
+                rows: vec![fila(1), fila(2)],
+            })
+            .await
+            .expect("lote");
+        watch_tx
+            .send(snap_filas(tid, TaskState::Completed, 2))
+            .expect("terminal");
+        drop(rows_tx); // el walk terminó: se cierra el canal de filas.
+        pump_compare(task, rows_rx, &ev_tx).await;
+
+        let SessionEvent::CompareRows { task_id, rows } = ev_rx.try_recv().expect("el lote") else {
+            panic!("esperaba CompareRows");
+        };
+        assert_eq!(task_id, tid, "el lote lleva la Task del bombeo");
+        assert_eq!(rows.len(), 2);
+        let SessionEvent::CompareDone {
+            task_id,
+            state,
+            entries_done,
+        } = ev_rx.try_recv().expect("el final")
+        else {
+            panic!("esperaba CompareDone");
+        };
+        assert_eq!(task_id, tid);
+        assert_eq!(state, TaskState::Completed);
+        assert_eq!(entries_done, 2);
+        assert!(ev_rx.try_recv().is_err(), "UN final, no dos");
+    }
+
+    /// **La carrera benigna, vista desde el hilo de sesión.** El canal de
+    /// filas se cierra ANTES de que el estado terminal se publique, y el
+    /// bombeo NO espera: manda el estado que hay —no terminal— tal cual, en
+    /// vez de quedarse colgado (hay finales que no llegan nunca: un daemon
+    /// caído, un provider colgado en una NFS muerta) o de inventarse un
+    /// `Completed` que convertiría la carrera en una acusación de pérdida.
+    /// Quien la interpreta es `compare_view::CompareView::on_done`.
+    #[tokio::test]
+    async fn pump_compare_no_espera_al_terminal_y_manda_lo_que_hay() {
+        let tid = id(12);
+        let (_watch_tx, watch_rx) =
+            tokio::sync::watch::channel(snap_filas(tid, TaskState::Running, 9));
+        let task = TaskRef::synthetic_for_tests(tid, watch_rx);
+        let (rows_tx, rows_rx) = mpsc::channel(4);
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+
+        drop(rows_tx);
+        pump_compare(task, rows_rx, &ev_tx).await;
+
+        let SessionEvent::CompareDone {
+            state,
+            entries_done,
+            ..
+        } = ev_rx.try_recv().expect("el final")
+        else {
+            panic!("esperaba CompareDone");
+        };
+        assert_eq!(
+            state,
+            TaskState::Running,
+            "el estado viaja tal cual: interpretarlo no es de esta capa"
+        );
+        assert_eq!(entries_done, 9);
     }
 
     /// #85: un terminal REAL publicado por el watch llega como evento y
