@@ -297,7 +297,9 @@ enum Cmd {
         mtime_tolerance_ms: Option<u32>,
     },
     /// Sincroniza un árbol sobre otro en UN sentido. Planifica, enseña el
-    /// plan, y pregunta antes de aplicar
+    /// plan, y pregunta antes de aplicar. Contesta en el CÓDIGO DE SALIDA
+    /// (0 no había nada que hacer, 1 se aplicó —o con `--dry-run` se enseñó—,
+    /// 2 no ocurrió: ni se planificó, ni se aprobó, ni se pudo aplicar)
     Sync {
         /// De dónde se lee
         source: PathBuf,
@@ -736,7 +738,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             max_depth,
             mtime_tolerance_ms,
         } => {
-            compare_cmd(
+            // Un `Err` de estos dos comandos NO puede salir por el
+            // `ExitCode::FAILURE` de `main`: ver `codigo_de_no_se_pudo`.
+            Ok(compare_cmd(
                 &backend,
                 &a,
                 &b,
@@ -746,6 +750,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 mtime_tolerance_ms,
             )
             .await
+            .unwrap_or_else(|e| codigo_de_no_se_pudo(&e)))
         }
         Cmd::Sync {
             source,
@@ -756,7 +761,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             criteria,
             mtime_tolerance_ms,
         } => {
-            sync_cmd(
+            // Mismo motivo que en `Cmd::Compare`: aquí el 1 significa «se
+            // aplicó», así que ningún error puede compartirlo.
+            Ok(sync_cmd(
                 &backend,
                 &source,
                 &dest,
@@ -769,6 +776,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 },
             )
             .await
+            .unwrap_or_else(|e| codigo_de_no_se_pudo(&e)))
         }
         Cmd::Connect { target } => connect_cmd(&backend, &target, cli.daemon).await,
         Cmd::Cp {
@@ -2043,7 +2051,7 @@ async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
     // UTF-8 válido puede traer RLO y spoofear el prompt de confirmación.
     let masked = |bytes: &[u8]| {
         let (texto, hostil) = norte_frontend::display_name(bytes);
-        format!("{}{texto}", if hostil { "!" } else { "" })
+        marcado(&texto, hostil)
     };
     for e in &plan.entries {
         println!(
@@ -2264,6 +2272,64 @@ async fn connect_cmd(backend: &Backend, target: &str, daemon: bool) -> anyhow::R
     Ok(ExitCode::SUCCESS)
 }
 
+/// El texto ya enmascarado, MARCADO con `!` si hubo que enmascararlo.
+///
+/// Una función y no las tres copias que había (`ai_cmd`, `compare_cmd`,
+/// `sync_cmd`). El `!` es un marcador de SEGURIDAD: dice que lo que se lee no
+/// es literalmente lo que hay en el disco, que es exactamente lo que un nombre
+/// con una RLO dentro usaría para spoofear una confirmación. Tres copias de un
+/// marcador de seguridad en un binario es como una de ellas deja de aplicarse
+/// sin que nadie se entere.
+///
+/// Aquí y no en `norte-frontend` a propósito: el `lib.rs` de esa crate dice
+/// que el enmascarado es suyo y el BADGE de la capa de pintado de cada
+/// frontend — la TUI lo pinta con color y una tubería no tiene color que dar.
+fn marcado(texto: &str, hostil: bool) -> String {
+    format!("{}{texto}", if hostil { "!" } else { "" })
+}
+
+/// El `rel` de un paso (o de un fallo) de sincronización, listo para una
+/// terminal. `render_step`/`rel_display` ya enmascararon (regla 1); esto solo
+/// pone el [`marcado`] sobre el `hostile` que esa llamada ya calculó.
+fn rel_marcado(d: &norte_frontend::sync::RelDisplay) -> String {
+    marcado(&d.text, d.hostile)
+}
+
+/// stdout se cerró o falló mientras se imprimía: código 2, jamás un panic.
+///
+/// `println!` hace **panic** con `EPIPE`, y `norte compare a b | head -20` —la
+/// forma obvia de asomarse a un diff que streamea— es exactamente eso: el
+/// lector se va en cuanto tiene sus veinte líneas. Un 101 de pánico no está en
+/// la tabla que estos dos comandos documentan, y además ensucia stderr en el
+/// uso NORMAL de una tubería. El 2 sí está, y encima es verdad: lo que no se
+/// pudo terminar de escribir tampoco se pudo contestar entero. `ls --json` ya
+/// esquiva lo mismo con `serde_json::to_writer` + `?`.
+fn codigo_por_escritura(e: &std::io::Error) -> ExitCode {
+    // `EPIPE` es el lector que se fue: callar es lo correcto, no hay nada roto.
+    // Cualquier otro fallo de escritura (un `> fichero` que llenó el disco) SÍ
+    // se dice, o el 2 no tendría explicación en ninguna parte.
+    if e.kind() != std::io::ErrorKind::BrokenPipe {
+        eprintln!("norte: {e}");
+    }
+    ExitCode::from(2)
+}
+
+/// Un `Err` de `norte compare`/`norte sync` es un **2**, nunca el 1 de
+/// `ExitCode::FAILURE`.
+///
+/// Estos dos comandos contestan en el código de salida, así que el 1 ya
+/// significa algo: «difieren» en uno y «se aplicó» en el otro. El `match` de
+/// `main` convierte cualquier `anyhow::Error` en `FAILURE`, o sea en ese mismo
+/// 1 — de modo que un `--criteria` mal escrito, una ruta ilegible o un
+/// `sync.apply` que se negó saldrían por la misma puerta que un éxito. Se
+/// traducen aquí, en el despacho, para que **ningún** camino de error pueda
+/// llegar al `match` de `main`: sólo un recorrido que TERMINÓ puede contestar
+/// 0 o 1.
+fn codigo_de_no_se_pudo(e: &anyhow::Error) -> ExitCode {
+    eprintln!("norte: {e:#}");
+    ExitCode::from(2)
+}
+
 /// Traduce `--criteria` a un [`norte_proto::methods::CompareCriteria`].
 ///
 /// Vacío = el default del wire (tamaño y fecha, sin hash — ver el doctest de
@@ -2297,6 +2363,61 @@ fn parse_compare_criteria(
     Ok(criteria)
 }
 
+/// Lo que una comparación puede contestar, **en orden de precedencia**: el de
+/// más abajo gana al de más arriba.
+///
+/// Tres y no dos, y con `Ord` derivado en vez de un `bool` acumulado, porque
+/// la respuesta importante es la del medio: «no se pudo saber» tiene que ganar
+/// a las otras dos, y un `bool` no tiene sitio donde guardarla. Es la misma
+/// razón por la que el comando tiene tres códigos de salida.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Veredicto {
+    /// Todas las filas dijeron «iguales», y todas con confianza.
+    Coinciden,
+    /// Alguna fila difiere, y ninguna se quedó sin contestar.
+    Difieren,
+    /// Alguna fila no se pudo contestar, o se contestó sin poder respaldarlo.
+    NoSeSabe,
+}
+
+impl Veredicto {
+    /// Lo que UNA fila aporta al veredicto de la comparación entera.
+    ///
+    /// La confianza va primero y no de adorno. `CompareVerdict::Same` con
+    /// `CompareConfidence::Unknown` es lo que `cascade.rs` contesta cuando no
+    /// pudo comparar nada —dos symlinks cuyos destinos no se leyeron, un lado
+    /// sin tamaño, un socket— y es una respuesta honesta SOLO mientras quien
+    /// la lee vea el glifo de confianza, como en la TUI. Colapsada a un código
+    /// de salida sin ese matiz se convertiría en «los árboles coinciden», que
+    /// es justamente lo que nadie comprobó.
+    fn de_fila(row: &norte_proto::methods::CompareRow) -> Self {
+        use norte_proto::methods::{CompareConfidence as Conf, CompareVerdict as V};
+        match (row.verdict, row.confidence) {
+            // Antes que el veredicto: una conclusión que el criterio no
+            // respalda no se puede resumir, diga lo que diga.
+            // `Unrecognised` es la confianza de un core N+1, y tampoco.
+            (_, Conf::Unknown | Conf::Unrecognised) => Self::NoSeSabe,
+            (V::Same, _) => Self::Coinciden,
+            (V::Different | V::OnlyLeft | V::OnlyRight | V::TypeMismatch, _) => Self::Difieren,
+            // `Error` (listado ilegible, directorio por encima del tope),
+            // `Ambiguous` (una colisión de caja o de NFC — justo lo que una
+            // sincronización posterior tiene que ver ANTES de escribir), y el
+            // veredicto de un core N+1 que este binario no sabe leer. Ninguno
+            // de los tres es «difieren»: es que no se sabe.
+            _ => Self::NoSeSabe,
+        }
+    }
+
+    /// El código de salida, que es toda la respuesta que un script lee.
+    fn codigo(self) -> ExitCode {
+        ExitCode::from(match self {
+            Self::Coinciden => 0,
+            Self::Difieren => 1,
+            Self::NoSeSabe => 2,
+        })
+    }
+}
+
 /// `norte compare`: `fs.compare` y su veredicto en el código de salida.
 ///
 /// # Por qué el veredicto va en el código
@@ -2305,7 +2426,7 @@ fn parse_compare_criteria(
 /// convención: 0 iguales, 1 difieren, y un tercer código para «no se pudo
 /// saber» que es el que de verdad importa aquí — una comparación INCOMPLETA
 /// que contestara 0 sería exactamente el fallo que este comando existe para
-/// no cometer.
+/// no cometer. La precedencia entre los tres está en [`Veredicto`].
 async fn compare_cmd(
     backend: &Backend,
     a: &std::path::Path,
@@ -2315,6 +2436,8 @@ async fn compare_cmd(
     max_depth: Option<u32>,
     mtime_tolerance_ms: Option<u32>,
 ) -> anyhow::Result<ExitCode> {
+    use std::io::Write as _;
+
     let left = vpath(a)?;
     let right = vpath(b)?;
     let params = norte_proto::methods::FsCompareParams {
@@ -2343,40 +2466,57 @@ async fn compare_cmd(
     // Nombres del árbol del OTRO lado, que este proceso no controla: MARCAR
     // el enmascarado, igual que `ai_cmd` — un nombre remoto puede traer RLO y
     // spoofear la salida. `cells_for` ya enmascaró `RowFace::name` con
-    // `display_name_with` (rule 1); esto solo añade el `!` de `ai_cmd` sobre
+    // `display_name_with` (rule 1); esto solo añade el `!` de [`marcado`] sobre
     // el `hostile` que esa llamada ya calculó — no un segundo enmascarado por
     // separado, que divergiría el día que este comando gane una
     // reinterpretación (#57) y alguien olvide threadearla también aquí.
-    let mark = |face: &norte_frontend::compare::RowFace| {
-        format!("{}{}", if face.hostile { "!" } else { "" }, face.name)
-    };
+    let cara = |face: &norte_frontend::compare::RowFace| marcado(&face.name, face.hostile);
+
+    // Una tubería que se cierra no puede hacer `panic!`: ver
+    // [`codigo_por_escritura`]. Bufferizado además porque una fila por
+    // `write` syscall sobre un árbol grande es un peaje que no hace falta.
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
 
     // Se decide fila a fila mientras se drena — jamás se coleccionan (la
     // rustdoc de `ComparePane` explica lo que cuesta retener un millón de
     // filas, y este comando no tiene motivo para retener ninguna).
-    let mut any_different = false;
+    let mut veredicto = Veredicto::Coinciden;
     while let Some(batch) = rx.recv().await {
         for row in &batch.rows {
-            if row.verdict != norte_proto::methods::CompareVerdict::Same {
-                any_different = true;
-            }
-            if json {
+            veredicto = veredicto.max(Veredicto::de_fila(row));
+            let escrito = if json {
                 // Forma wire (lossless); --json no traduce ni enmascara —
                 // un consumidor de script decodifica con el mismo códec que
                 // `norte ls --json`.
-                println!("{}", serde_json::to_string(row)?);
+                writeln!(out, "{}", serde_json::to_string(row)?)
             } else {
                 let cells = norte_frontend::compare::cells_for(row, None, None);
-                let glyph = norte_frontend::compare::verdict_glyph(row.verdict);
-                let left_name = cells.left.as_ref().map_or_else(String::new, mark);
-                let right_name = cells.right.as_ref().map_or_else(String::new, mark);
-                println!("{glyph} {left_name}\t{right_name}");
+                let left_name = cells.left.as_ref().map_or_else(String::new, cara);
+                let right_name = cells.right.as_ref().map_or_else(String::new, cara);
+                // LOS DOS glifos, como la TUI. `Same` no es una respuesta por
+                // sí solo (ver la rustdoc de `compare::Glyphs`): `Same`/`!`
+                // salió de un hash o de un tamaño distinto y `Same`/`?` de un
+                // provider que no pudo contestar, y enseñar uno sin el otro es
+                // la deriva que este comando existe para no tener.
+                writeln!(
+                    out,
+                    "{}{} {left_name}\t{right_name}",
+                    cells.glyphs.verdict, cells.glyphs.confidence
+                )
+            };
+            if let Err(e) = escrito {
+                return Ok(codigo_por_escritura(&e));
             }
         }
     }
+    if let Err(e) = out.flush() {
+        return Ok(codigo_por_escritura(&e));
+    }
+    // El lock de stdout se suelta AQUÍ: lo que quede por decir va a stderr.
+    drop(out);
 
     match task.join().await {
-        TaskState::Completed => Ok(ExitCode::from(u8::from(any_different))),
+        TaskState::Completed => Ok(veredicto.codigo()),
         other => {
             eprintln!(
                 "norte: {}",
@@ -2405,7 +2545,35 @@ async fn compare_cmd(
 /// `--yes`) y aplica. `--dry-run` es esta misma función cortada justo antes de
 /// esa resolución: ningún camino que pase por `--dry-run` llega a
 /// `Backend::sync_apply`.
+///
+/// # El spool se desmonta al salir, pase lo que pase
+/// Ésta es sólo la envolvente que lo garantiza. `sync.plan` deja en el
+/// directorio de estado un fichero con el listado relativo de los DOS árboles
+/// (ADR 0049), y el daemon lo recoge en dos sitios que este proceso no tiene:
+/// un barrido al arrancar y un `drop_connection` al cerrar cada conexión. Sin
+/// esto, un `--dry-run` —que por definición no aplica nada— dejaría el fichero
+/// ahí para siempre, y lo mismo cada pregunta contestada que no.
+///
+/// Va en una función aparte y no al final del cuerpo porque el cuerpo tiene
+/// `?`: media docena de caminos de salida, y la limpieza tiene que estar en
+/// todos.
 async fn sync_cmd(
+    backend: &Backend,
+    source: &std::path::Path,
+    dest: &std::path::Path,
+    opts: SyncCliOpts<'_>,
+) -> anyhow::Result<ExitCode> {
+    let salida = sync_plan_show_apply(backend, source, dest, opts).await;
+    // Lo único que esto NO puede tapar es un Ctrl+C durante la planificación:
+    // mata el proceso con un `.part` a medio escribir, y el TTL sólo reapa
+    // planes CERRADOS, así que ese fichero no lo recoge nadie (#180).
+    backend.drop_retained_plans().await;
+    salida
+}
+
+/// El cuerpo de [`sync_cmd`], con sus salidas tempranas. Ver allí por qué está
+/// partido en dos.
+async fn sync_plan_show_apply(
     backend: &Backend,
     source: &std::path::Path,
     dest: &std::path::Path,
@@ -2480,41 +2648,142 @@ async fn sync_cmd(
         }
     };
 
+    // Un plan BLOQUEADO va PRIMERO, antes que la comprobación de vacío: el
+    // wire garantiza que `!executable` ⟹ `steps` vacío, así que leerlo por la
+    // lista de pasos diría «nada que sincronizar» y contestaría 0 sobre un
+    // plan que se paró por una colisión de nombres o un destino de solo
+    // lectura. Es el mismo fallo que el tercer código existe para no cometer,
+    // y del lado que escribe.
+    if !plan.done().executable {
+        return Ok(report_blockers(plan.done()));
+    }
+
     if plan.steps().is_empty() {
+        // Ejecutable, íntegro y sin un solo paso: los dos árboles ya coinciden.
         println!("{}", norte_i18n::t("cli-sync-empty"));
         return Ok(ExitCode::SUCCESS);
     }
 
-    println!("{}", norte_i18n::t("cli-sync-plan"));
-    // Nombres que este proceso no controla del todo (el destino puede
-    // deletrear una entrada distinto del origen, #152): MARCAR el
-    // enmascarado, igual que `ai_cmd` y `compare_cmd`. `render_step` ya
-    // enmascaró `RelDisplay::text` (`display_name`, regla 1); esto solo añade
-    // el `!` sobre el `hostile` que esa llamada ya calculó — no un segundo
-    // enmascarado por separado.
-    let mark = |d: &norte_frontend::sync::RelDisplay| {
-        format!("{}{}", if d.hostile { "!" } else { "" }, d.text)
-    };
-    for step in plan.steps() {
-        let cells = norte_frontend::sync::render_step(step, plan.dest_trash(), None);
-        let rel = mark(&cells.rel);
-        let dest_suffix = cells
-            .dest_rel
-            .as_ref()
-            .map_or_else(String::new, |d| format!(" → {}", mark(d)));
-        println!(
-            "{}{} {rel}{dest_suffix}",
-            cells.glyphs.kind, cells.glyphs.undo
-        );
+    if let Err(e) = print_plan(&plan) {
+        return Ok(codigo_por_escritura(&e));
     }
-    for line in plan.summary_lines(norte_i18n::active()) {
-        println!("{line}");
+
+    // Los pasos que se acaban de enseñar no cuadran con lo que el plan dice
+    // ser. Se enseñan igual —son la explicación— pero no se aplica: el plan
+    // que `sync.apply` ejecutaría es el RETENIDO, entero, y aprobar una lista
+    // que no es esa es aprobar a ciegas. Vale también para `--dry-run`: un
+    // plan que no se puede enseñar entero tampoco se ha «enseñado».
+    if !plan.integrity().is_complete() {
+        eprintln!(
+            "norte: {}",
+            norte_i18n::ta(
+                "cli-sync-integrity",
+                &[("detail", &format!("{:?}", plan.integrity()))],
+            )
+        );
+        return Ok(ExitCode::from(2));
     }
 
     if opts.dry_run {
         return Ok(ExitCode::from(1));
     }
-    sync_apply_and_report(backend, &plan, opts.yes, mark).await
+    sync_apply_and_report(backend, &plan, opts.yes).await
+}
+
+/// Enseña por qué un plan no se puede ejecutar, y devuelve el código con el
+/// que se sale de ahí (siempre 2: no ocurrió nada).
+///
+/// A stderr porque no es el plan —el plan no existe: `!executable` ⟹ `steps`
+/// vacío— sino la explicación de que no lo haya.
+fn report_blockers(done: &norte_proto::methods::SyncPlanDone) -> ExitCode {
+    eprintln!("norte: {}", norte_i18n::t("cli-sync-blocked"));
+    for blocker in &done.blockers {
+        eprintln!(
+            "  {}",
+            norte_i18n::ta(
+                "cli-sync-blocker",
+                &[
+                    (
+                        "rel",
+                        &rel_marcado(&norte_frontend::sync::rel_display(&blocker.rel, None)),
+                    ),
+                    (
+                        "why",
+                        &norte_frontend::sync::blocker_label(blocker.kind, norte_i18n::active()),
+                    ),
+                ],
+            )
+        );
+    }
+    // La lista viene CAPADA (`SYNC_MAX_BLOCKERS_REPORTED`) y el total no:
+    // callar la diferencia haría creer que se han visto todos.
+    let mostrados = u64::try_from(done.blockers.len()).unwrap_or(u64::MAX);
+    if done.blockers_total > mostrados {
+        eprintln!(
+            "  {}",
+            norte_i18n::ta(
+                "cli-sync-blockers-more",
+                &[(
+                    "n",
+                    &done.blockers_total.saturating_sub(mostrados).to_string(),
+                )],
+            )
+        );
+    }
+    ExitCode::from(2)
+}
+
+/// Escribe el plan ENTERO —cabecera, un paso por línea, y el resumen— a
+/// stdout.
+///
+/// Nombres que este proceso no controla del todo (el destino puede deletrear
+/// una entrada distinto del origen, #152): MARCAR el enmascarado, igual que
+/// `ai_cmd` y `compare_cmd` — ver [`rel_marcado`].
+///
+/// Por un `BufWriter` que se suelta al volver: bufferizado para no pagar una
+/// syscall por paso, y devolviendo el error de escritura en vez de hacer
+/// `panic!` como haría `println!` (`| head` sobre un plan de diez mil pasos es
+/// la forma normal de asomarse a él). Que el lock se suelte AQUÍ importa: lo
+/// que se imprima después —la pregunta, el informe— no puede adelantarse al
+/// plan.
+///
+/// # Errors
+/// Lo que diga la escritura a stdout; el llamante lo traduce con
+/// [`codigo_por_escritura`].
+fn print_plan(plan: &norte_frontend::sync::SyncPlan) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+    writeln!(out, "{}", norte_i18n::t("cli-sync-plan"))?;
+    for step in plan.steps() {
+        let cells = norte_frontend::sync::render_step(step, plan.dest_trash(), None);
+        let rel = rel_marcado(&cells.rel);
+        let dest_suffix = cells
+            .dest_rel
+            .as_ref()
+            .map_or_else(String::new, |d| format!(" → {}", rel_marcado(d)));
+        // El porqué de una omisión, o de un undo que no devolvería el fichero.
+        let porque = cells.reason.map_or_else(String::new, |r| {
+            format!(
+                "  ({})",
+                norte_frontend::sync::reason_label(r, norte_i18n::active())
+            )
+        });
+        // LOS TRES glifos, los mismos que la TUI. El del medio es la CONFIANZA
+        // de la comparación que produjo el paso —o sea «esta sobrescritura se
+        // decide sólo por la fecha»— y ésta es la pantalla en la que un humano
+        // dice que sí a borrar un subárbol. Enseñar dos de tres es exactamente
+        // la deriva que esta rama existe para no tener.
+        writeln!(
+            out,
+            "{}{}{} {rel}{dest_suffix}{porque}",
+            cells.glyphs.kind, cells.glyphs.confidence, cells.glyphs.undo
+        )?;
+    }
+    for line in plan.summary_lines(norte_i18n::active()) {
+        writeln!(out, "{line}")?;
+    }
+    out.flush()
 }
 
 /// La segunda mitad de `norte sync` (tarea 3): resolver el journal, preguntar
@@ -2526,36 +2795,76 @@ async fn sync_apply_and_report(
     backend: &Backend,
     plan: &norte_frontend::sync::SyncPlan,
     yes: bool,
-    mark: impl Fn(&norte_frontend::sync::RelDisplay) -> String,
 ) -> anyhow::Result<ExitCode> {
+    // Ni un paso que escriba: todo lo que el plan trae son omisiones. No hay
+    // nada que aprobar (`SyncPlan::can_approve` lo dice también así) y aplicar
+    // no cambiaría un byte, pero tampoco se ha resuelto la diferencia que las
+    // provocó — así que no es un 0.
+    if plan.acting() == 0 {
+        eprintln!("norte: {}", norte_i18n::t("cli-sync-nothing-to-apply"));
+        return Ok(ExitCode::from(2));
+    }
+
     // El journal se resuelve AQUÍ, antes de preguntar y antes de escribir, y no
     // en la primera mutación: lo que se está decidiendo es si se reescribe un
     // subárbol, y «esto no se va a poder deshacer» es parte de la pregunta, no
     // una nota a pie después del sí. FUERA del `if !yes` porque con `--yes` no
     // hay pregunta que completar pero sigue habiendo un log que alguien lee, y
     // ese es justamente el camino donde nadie mira la pantalla.
+    //
+    // Y se PARA, no se avisa: `Engine::sync_apply_as` se niega igual unas
+    // líneas más abajo (`Unsupported`), así que seguir sólo cambia dónde
+    // aparece el «no» y quién lo entiende. No es un caso raro: el journal
+    // embebido es el MISMO `journal.db` que el daemon abre en exclusiva, de
+    // modo que cualquiera con un `ntc` o un daemon vivo cae aquí, y el remedio
+    // —hablar con ese daemon en vez de pelearle el fichero— es `--daemon`, que
+    // es lo que el mensaje dice. (`ai_cmd` avisa y sigue, y puede: allí el
+    // aviso es honesto porque de verdad sigue.)
     if !backend.ensure_journal().await {
         eprintln!("norte: {}", norte_i18n::t("cli-sync-unjournalled"));
+        return Ok(ExitCode::from(2));
     }
 
     if !yes {
-        use std::io::Write as _;
+        use std::io::{IsTerminal as _, Write as _};
+        // Sin terminal no hay a quién preguntar, y una pregunta que nadie va a
+        // contestar no se hace: se rehúsa ANTES, como el prompt TOFU de este
+        // mismo fichero. Leer el EOF de un `< /dev/null` como una negativa
+        // sería igual de correcto en cuanto a lo que se escribe (nada) y mucho
+        // peor de explicar, porque el humano que montó el cron no está aquí
+        // para leerlo; que salga nombrando `--yes` sí lo lee mañana en el log.
+        if !std::io::stdin().is_terminal() {
+            eprintln!("norte: {}", norte_i18n::t("cli-sync-noninteractive"));
+            return Ok(ExitCode::from(2));
+        }
         // La SEGUNDA pregunta, cuando el plan la merece (borra árboles del
         // destino o el undo no lo devuelve todo): `SyncPlan::confirmation` ya
         // la redacta a partir de `dest_trash` y los contadores — no hay una
         // segunda frase sobre borrado que escribir aquí sin arriesgarse a que
-        // diga algo distinto de lo que el resumen ya dijo.
+        // diga algo distinto de lo que el resumen ya dijo. Que aparezca
+        // depende de `can_approve`, y sus tres condiciones están comprobadas
+        // antes de llegar aquí: si no lo estuvieran, el plan MENOS fiable sería
+        // justo el que preguntara con un `[s/N]` pelado.
         if let Some(confirmation) = plan.confirmation(norte_i18n::active()) {
             eprintln!("{}", confirmation.text);
         }
         eprint!("{} ", norte_i18n::t("cli-sync-confirm"));
         std::io::stderr().flush().ok();
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line).ok();
+        // stdin es bloqueante: fuera del reactor (regla 2).
+        let line = tokio::task::spawn_blocking(|| {
+            let mut s = String::new();
+            std::io::stdin().read_line(&mut s).map(|_| s)
+        })
+        .await
+        .context(norte_i18n::t("cli-confirm-read"))??;
         let ans = line.trim().to_ascii_lowercase();
         if ans != "y" && ans != "s" {
+            // Un «no» NO es «los árboles están sincronizados». Sale por el
+            // mismo código que todo lo demás que no llegó a escribir, que es
+            // lo que un `norte sync src dst && echo ok` necesita para no
+            // mentir.
             println!("{}", norte_i18n::t("cli-sync-abort"));
-            return Ok(ExitCode::SUCCESS);
+            return Ok(ExitCode::from(2));
         }
     }
 
@@ -2595,9 +2904,12 @@ async fn sync_apply_and_report(
         )
     );
     for failure in &report.failures {
-        let rel = mark(&norte_frontend::sync::rel_display(&failure.rel, None));
+        let rel = rel_marcado(&norte_frontend::sync::rel_display(&failure.rel, None));
         let dest_suffix = failure.dest_rel.as_ref().map_or_else(String::new, |d| {
-            format!(" → {}", mark(&norte_frontend::sync::rel_display(d, None)))
+            format!(
+                " → {}",
+                rel_marcado(&norte_frontend::sync::rel_display(d, None))
+            )
         });
         eprintln!(
             "{}",
@@ -2614,6 +2926,9 @@ async fn sync_apply_and_report(
         );
     }
 
+    // El ÚNICO 1 de este comando: un apply que TERMINÓ y no dejó ningún fallo
+    // detrás. Todo lo demás —lo que no se pudo planificar, lo que no se
+    // aprobó, lo que no se pudo aplicar y lo que se aplicó a medias— es 2.
     Ok(ExitCode::from(if report.failed > 0 { 2 } else { 1 }))
 }
 

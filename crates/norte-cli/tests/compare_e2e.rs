@@ -156,8 +156,11 @@ fn nombres_hostiles_salen_enmascarados_y_marcados() {
         "la RTL override no debe llegar cruda a la terminal: {texto:?}"
     );
     for linea in texto.lines() {
+        // `<` veredicto (solo a la izquierda) + `!` confianza (`Certain`: la
+        // presencia se prueba) + espacio + el `!` del enmascarado, que es el
+        // que este test vigila.
         assert!(
-            linea.starts_with("< !"),
+            linea.starts_with("<! !"),
             "un nombre hostil sale MARCADO con '!', como en `ai_cmd`: {linea:?}"
         );
     }
@@ -208,4 +211,81 @@ fn json_conserva_el_nombre_no_utf8_sin_perdida() {
         path_wire.contains("%E9"),
         "el byte no-UTF8 debe sobrevivir percent-encodeado en el wire: {path_wire}"
     );
+}
+
+/// M1: un subdirectorio ILEGIBLE es «no se pudo saber», y esa respuesta gana a
+/// la fila de al lado que sí difiere. Una comparación incompleta que
+/// contestara 1 («difieren») mentiría por omisión igual que si contestara 0:
+/// lo que no se leyó pudo ser cualquier cosa.
+#[cfg(unix)]
+#[test]
+fn un_subdirectorio_ilegible_sale_con_dos() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+    std::fs::create_dir_all(a.join("sub")).expect("mkdir a/sub");
+    std::fs::create_dir_all(b.join("sub")).expect("mkdir b/sub");
+    std::fs::write(a.join("sub/dentro.txt"), b"x").expect("write");
+    // Una diferencia de verdad AL LADO del agujero: sin ella el test no
+    // distinguiría «gana no-se-sabe» de «no hubo más filas».
+    std::fs::write(a.join("solo-aqui.txt"), b"x").expect("write");
+
+    let cerrado = a.join("sub");
+    std::fs::set_permissions(&cerrado, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    if std::fs::read_dir(&cerrado).is_ok() {
+        // root ignora el modo: aquí no hay nada que comprobar.
+        std::fs::set_permissions(&cerrado, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        return;
+    }
+
+    let salida = Command::cargo_bin("norte")
+        .expect("bin")
+        .env("NORTE_CONFIG_DIR", config_dir_del_test())
+        .args([
+            "compare",
+            a.to_str().expect("utf8"),
+            b.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("run");
+    // ANTES del assert: un `TempDir` no puede borrar un directorio sin
+    // permisos, y un panic aquí dejaría basura en /tmp para siempre.
+    std::fs::set_permissions(&cerrado, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    assert_eq!(
+        salida.status.code(),
+        Some(2),
+        "un listado ilegible no se puede resumir en «iguales» ni en «difieren»"
+    );
+}
+
+/// M1: la CONFIANZA también decide. Dos sockets del mismo nombre son del mismo
+/// kind y ahí se acaba lo que se sabe (`Same`/`Unknown`, `cascade.rs`): su
+/// contenido no se comparó, así que contestar 0 —«los árboles coinciden»—
+/// sería afirmar lo que nadie miró.
+#[cfg(unix)]
+#[test]
+fn un_par_de_sockets_sale_con_dos() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+    std::fs::create_dir_all(&a).expect("mkdir a");
+    std::fs::create_dir_all(&b).expect("mkdir b");
+    // `bind` crea el fichero de socket; el listener se suelta al acabar el
+    // test y el nodo se queda, que es justo lo que hace falta.
+    let _izq = std::os::unix::net::UnixListener::bind(a.join("s")).expect("socket a");
+    let _der = std::os::unix::net::UnixListener::bind(b.join("s")).expect("socket b");
+
+    Command::cargo_bin("norte")
+        .expect("bin")
+        .env("NORTE_CONFIG_DIR", config_dir_del_test())
+        .args([
+            "compare",
+            a.to_str().expect("utf8"),
+            b.to_str().expect("utf8"),
+        ])
+        .assert()
+        .code(2);
 }
