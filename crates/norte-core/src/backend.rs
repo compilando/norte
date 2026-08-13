@@ -284,12 +284,22 @@ impl Backend {
     /// ¿Registra este backend sus mutaciones en un journal, y por tanto se
     /// pueden deshacer?
     ///
-    /// Hoy es exactamente «va contra el daemon», y sigue siéndolo DESPUÉS de
-    /// #167 a propósito: el brazo embebido ya lleva el journal del directorio
-    /// de estado (`norte_core::embedded`), pero no instala spool, y sin spool
-    /// [`Self::sync_plan`] se niega en cerrado. Lo que esta pregunta atenúa es
-    /// sincronizar, que necesita LOS DOS; decir `true` porque hay journal
-    /// enseñaría una tecla que sigue sin poder ejecutar nada.
+    /// Hoy es exactamente «va contra el daemon», y contesta por lo que este
+    /// tipo puede PROMETER, no por lo que un proceso concreto haya montado.
+    /// El brazo embebido lleva el journal del directorio de estado desde #167
+    /// (`norte_core::embedded`) pero lo abre PEREZOSO y sobre un lock
+    /// exclusivo que otro proceso puede tener; y el spool que
+    /// [`Self::sync_plan`] necesita no lo instala este tipo sino quien
+    /// construye el engine —`norte-cli` lo hace, y solo para `norte sync`—,
+    /// así que ni el journal ni el spool son ciertos por construcción. Un
+    /// `true` aquí sería una promesa que este valor no puede sostener.
+    ///
+    /// De modo que lo que dice es: **«hay un daemon detrás»**, que es la única
+    /// configuración en la que las dos cosas están garantizadas de antemano.
+    /// La pregunta VIVA —«¿queda registrada ESTA sesión?», la que hay que
+    /// contestarle a un humano antes de que diga que sí— es
+    /// [`Self::ensure_journal`], que abre el journal para responder; ésta no
+    /// abre nada.
     ///
     /// Es una pregunta sobre el TRANSPORTE y no sobre el engine porque desde
     /// fuera no hay forma de preguntárselo al engine: `Engine` no publica si
@@ -332,11 +342,74 @@ impl Backend {
     /// `false` a propósito, ver su rustdoc), esto SÍ abre el journal cuando
     /// puede: es la llamada de quien está a punto de mutar, no la de quien
     /// solo quiere atenuar una tecla.
+    ///
+    /// Un engine recién construido no tiene de dónde sacarlo, y entonces la
+    /// respuesta honesta es `false` — no un error:
+    ///
+    /// ```
+    /// use norte_core::{Engine, backend::Backend};
+    /// use std::sync::Arc;
+    /// let rt = tokio::runtime::Runtime::new().expect("runtime");
+    /// let backend = Backend::Embedded(Arc::new(Engine::new()));
+    /// assert!(!rt.block_on(backend.ensure_journal()));
+    /// ```
     pub async fn ensure_journal(&self) -> bool {
         match self {
             Self::Embedded(engine) => engine.ensure_journal().await,
             #[cfg(unix)]
             Self::Remote(_) => true,
+        }
+    }
+
+    /// Suelta los planes de sincronización que ESTE backend retiene, como hace
+    /// el daemon cuando se le cae una conexión.
+    ///
+    /// El derecho a aplicar un plan vive en un registro EN MEMORIA que muere
+    /// con el proceso, así que lo que esto se lleva no es un plan aplicable
+    /// sino su fichero: un listado con las rutas relativas de los dos árboles,
+    /// legible por quien pueda leer el directorio de estado. El daemon lo
+    /// suelta en dos sitios —barrido al arrancar y `Spool::drop_connection` al
+    /// cerrar cada conexión— y un proceso embebido no tiene ninguno de los
+    /// dos: **es el llamante quien tiene que llamar a esto al salir**, por
+    /// todos los caminos, incluido el que no aplicó nada.
+    ///
+    /// No barre el directorio entero, y no es un descuido: un proceso embebido
+    /// comparte el directorio de estado con un daemon que puede estar vivo, y
+    /// no tiene el lock del journal con el que demostrar que no lo está. Se
+    /// lleva lo suyo y nada más.
+    ///
+    /// Sin spool instalado (todo el que no sea `norte sync`) y contra el
+    /// daemon es un no-op: allí el dueño del spool es el daemon, y el
+    /// desmontaje de la conexión ya lo hace él.
+    ///
+    /// No devuelve nada ni falla: un fichero que no se deja borrar queda en el
+    /// `tracing::warn!` y en el código de salida del comando, que es de la
+    /// sincronización y no de la limpieza (mismo criterio que el barrido de
+    /// arranque del daemon, ver [`crate::sync::Spool::sweep`]).
+    ///
+    /// ```
+    /// use norte_core::{Engine, backend::Backend};
+    /// use std::sync::Arc;
+    /// let rt = tokio::runtime::Runtime::new().expect("runtime");
+    /// // Sin spool instalado no hay nada que soltar, y decirlo no cuesta.
+    /// let backend = Backend::Embedded(Arc::new(Engine::new()));
+    /// rt.block_on(backend.drop_retained_plans());
+    /// ```
+    pub async fn drop_retained_plans(&self) {
+        match self {
+            Self::Embedded(engine) => {
+                let Some(spool) = engine.spool() else { return };
+                match spool.drop_connection(EMBEDDED_CONN_ID).await {
+                    Ok(report) if report.is_clean() => {}
+                    Ok(report) => tracing::warn!(
+                        failed = report.failed,
+                        "quedaron spools de sincronización sin borrar"
+                    ),
+                    Err(e) => tracing::warn!(error = %e, "no se pudo soltar el spool"),
+                }
+            }
+            #[cfg(unix)]
+            Self::Remote(_) => {}
         }
     }
 
