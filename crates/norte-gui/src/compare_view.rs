@@ -151,6 +151,39 @@ pub fn open(slot: &mut Option<CompareView>, started: Started) -> Option<TaskId> 
     superseded
 }
 
+/// La frase de un `fs.compare` RECHAZADO antes de existir Task alguna, o
+/// `None` si esa petición ya está SUPERADA.
+///
+/// El `None` no es «no hay nada que decir»: es lo que el llamante escribe en
+/// `errors[pane]`, y escribir `None` retira el «comparando…» que esa misma
+/// petición dejó puesto. Nadie más lo va a retirar — la petición que la superó
+/// limpia el SUYO, en el pane que ella lanzó, que no tiene por qué ser este.
+///
+/// El guard existe porque cada `Compare` es su propio `tokio::spawn` y dos
+/// teclas seguidas pueden contestar en orden INVERSO: sin él, la negativa de
+/// una petición vieja pintaba «la comparación falló» describiendo algo que el
+/// lector ya había reemplazado (revisión de rama, MINOR-3). Es el mismo
+/// `generation_is_current` que filtra `CompareStarted`, no una segunda regla.
+///
+/// La categoría va por `banner_safe`, como todo lo que entra en un banner.
+#[must_use]
+pub fn failed_banner(
+    current_gen: u64,
+    generation: u64,
+    error: &norte_proto::Error,
+) -> Option<String> {
+    if !crate::generation_is_current(current_gen, generation) {
+        return None;
+    }
+    Some(norte_i18n::ta(
+        "compare-status-failed",
+        &[(
+            "error",
+            crate::banner_safe(&norte_frontend::error::error_category(error)).as_str(),
+        )],
+    ))
+}
+
 /// Lo que hace falta para abrir un panel: el evento `CompareStarted` con las
 /// dos reinterpretaciones ya resueltas. Un struct y no seis argumentos
 /// sueltos, que es como se cruzan dos raíces del mismo tipo por error.
@@ -1361,6 +1394,30 @@ mod tests {
         let mut slot = None;
         route_rows(&mut slot, TaskId::new(7), vec![fila(1)]);
         assert!(slot.is_none(), "sigue sin haber panel");
+    }
+
+    /// **La negativa de una petición SUPERADA no se pinta** (revisión de
+    /// rama, MINOR-3): `CompareFailed` era el único evento de comparación sin
+    /// `generation`, y su banner se escribía siempre — así que un rechazo
+    /// viejo describía una petición que el lector ya había reemplazado. El
+    /// `None` es además lo que retira su propio «comparando…».
+    #[test]
+    fn una_negativa_superada_no_dice_nada_y_retira_su_aviso() {
+        use norte_proto::Error;
+        assert_eq!(
+            super::failed_banner(5, 4, &Error::PermissionDenied),
+            None,
+            "la generación 4 ya la superó la 5"
+        );
+        let frase = super::failed_banner(5, 5, &Error::PermissionDenied).expect("la vigente");
+        // La CATEGORÍA localizada, jamás el `Display` inglés del error.
+        assert!(
+            frase.contains(&norte_frontend::error::error_category(
+                &Error::PermissionDenied
+            )),
+            "«{frase}»"
+        );
+        assert!(!frase.contains("PermissionDenied"), "«{frase}»");
     }
 
     /// Un lote de la comparación ABIERTA entra.

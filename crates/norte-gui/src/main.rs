@@ -2089,22 +2089,13 @@ impl NorteGui {
                 generation,
                 error,
             } => {
-                // El MISMO guard que `CompareStarted`: la negativa de una
-                // petición ya superada describe algo que el lector reemplazó,
-                // así que solo retira su propio «comparando…» y se calla
-                // (revisión de rama, MINOR-3).
-                let pane = left_pane & 1;
-                if !generation_is_current(self.compare_gen, generation) {
-                    self.errors[pane] = None;
-                    return;
-                }
-                self.errors[pane] = Some(norte_i18n::ta(
-                    "compare-status-failed",
-                    &[(
-                        "error",
-                        banner_safe(&norte_frontend::error::error_category(&error)).as_str(),
-                    )],
-                ));
+                // El MISMO guard que `CompareStarted`, y el `None` no es
+                // «nada que decir»: retira el «comparando…» que esta misma
+                // petición puso, que si no se queda para siempre. Todo eso lo
+                // decide `compare_view::failed_banner`, que es puro y se
+                // testea sin ventana (revisión de rama, MINOR-3).
+                self.errors[left_pane & 1] =
+                    compare_view::failed_banner(self.compare_gen, generation, &error);
             }
         }
     }
