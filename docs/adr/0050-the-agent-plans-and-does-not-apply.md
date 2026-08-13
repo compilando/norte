@@ -131,24 +131,58 @@ agent that only lists and reads never opens it.
 
 The two connections have different `conn_id`s. That makes the retained plan
 unreachable from the tools connection as well — consistent with the decision
-above rather than in tension with it.
+above rather than in tension with it. They are the same *actor*, though, and the
+daemon's visibility rule is actor equality, so the tools connection can observe
+and cancel a task the streams arm started: that is why both tools now return
+`task_id`.
+
+**A tool that is abandoned cancels its walk.** `TaskRef` has no `Drop`, and
+dropping the local receiver only removes the client-side route — the daemon's
+pump keeps sending to a live connection and never sees a gone receiver. So
+`notifications/cancelled`, or a dead transport, used to leave a full-tree read
+(and, with `criteria: ["hash"]`, a full-tree hash) running for nobody, bounded
+only by `MAX_LIVE_TASKS_AGENTS`. Repeating it is a read-only resource attack
+inside a legitimate scope, with no journal trace because nothing mutates. Both
+tools now hold a drop guard that cancels unless it is disarmed on the normal
+return — the same rule the truncation path already followed, applied to the
+other reason we stop reading.
 
 ### Negative: an incomplete answer must not read as a clean one
 
-Both tools cap their output (5000 rows or steps) and cancel the task at the cap.
-A truncated result that a model read as complete would report two trees as
-matching when they do not — the same failure the CLI's exit code 2 exists to
-prevent, and the reason both payloads carry `truncated` and `complete`. When a
-plan does not close, the fields derived from `sync.plan_done` are **absent**
-rather than zeroed: a `counts` of zero reads as "nothing to do".
+Both tools cap their output — 500 rows or steps by default, 5000 as the ceiling
+on an explicit `limit` — and cancel the task at the cap. A truncated result that
+a model read as complete would report two trees as matching when they do not —
+the same failure the CLI's exit code 2 exists to prevent, and the reason both
+payloads carry `truncated` and `complete`. When a plan does not close, the
+fields derived from `sync.plan_done` are **absent** rather than zeroed: a
+`counts` of zero reads as "nothing to do".
+
+The reviews of this branch found that `complete` was weaker than its name.
+Neither the terminal state nor a clean end of stream proves the rows arrived:
+`compare.rows` is routed with `OnFull::DropBatch`, so a dropped batch logs a
+warning and the task still ends `Completed`. `complete` therefore also requires
+that what arrived match what the daemon says it emitted — `rows_total` for
+`compare`, the sum of `counts` for `sync_plan` — and both payloads publish that
+number so a model sees the gap instead of inferring it. Both tools are also
+capped by the same `TASK_WAIT` deadline as every other blocking tool, report
+`timed_out` and the task's terminal `state`, and return their `task_id`: the two
+connections are the same agent actor, so the tools connection can poll and
+cancel what the streams arm started.
 
 ### Negative: repeated planning can exhaust the agent's own retention
 
 The daemon retains at most 16 plans per connection with a 10-minute TTL, and
-there is no discard tool. An agent that re-plans in a loop will start losing its
-own earlier plans. The cap and the TTL are documented in the tool description so
-that an agent does not retry blindly; a discard method would be a wire change
-and is not this.
+there is no discard tool. It does **not** evict the oldest to make room: it
+REFUSES the 17th with `OVERLOADED`. So an agent that re-plans in a loop does not
+lose its earlier plans, it stops being able to make new ones until the TTL
+expires them — and, worse, that refusal reached the agent as `internal error
+(panic: false)`, because `RpcError::protocol` carries no `data` and
+`to_taxonomy` collapses that into `Error::Internal` (issue #182). "Internal
+error" is precisely the string that makes a model retry, which is what fills the
+cap. The bridge names the cause in the error text until #182 carries the
+daemon's own message through; the cap and the TTL are also in the tool
+description so an agent does not retry blindly. A discard method would be a wire
+change and is not this.
 
 ### Negative: ADR 0024's tool count is now wrong
 

@@ -215,15 +215,29 @@ records it.
 Two tools added to the eight in `tool_defs()` (`crates/norte-mcp/src/bridge.rs`),
 dispatched in `call_tool` next to the existing arms:
 
-**`compare`** — `{a, b, criteria?, max_depth?, mtime_tolerance_ms?}` → the rows,
-capped like `list_dir` is capped, with the same `next_cursor` shape if the
-result is long. Read-only; it is `fs.compare`, which already sits behind the
-read gate.
+**`compare`** — `{left, right, criteria?, max_depth?, mtime_tolerance_ms?,
+limit?}` → the rows, capped like `list_dir` is capped. Read-only; it is
+`fs.compare`, which already sits behind the read gate. (This section said
+`{a, b}`; the arguments are `left`/`right` because the rows *answer* in
+`left`/`right`. And there is no `next_cursor`: `fs.compare` has no cursor to
+resume from, so the cap truncates and cancels, and says so.)
 
-**`sync_plan`** — `{source, dest, mode, criteria?, on_unknown?}` → the steps and
-the counts, plus `dest_trash` and the plan's confidence vocabulary. **The
-description states that the hash is not usable by anyone else and that applying
-is a human action in their own client** (§2.2).
+**`sync_plan`** — `{source, dest, mode, criteria?, on_unknown?, limit?}` → the
+steps and the counts, plus `dest_trash` and the plan's confidence vocabulary.
+**The description states that the hash is not usable by anyone else and that
+applying is a human action in their own client** (§2.2).
+
+**Both** also return `task_id`, `state`, `truncated`, `timed_out`, `complete`
+and the count the daemon says it emitted (`rows_total` / `steps_total`). The
+whole-branch reviews are what added the last three: a terminal task is not proof
+that every batch arrived, and an unbounded wait on a hash-rung comparison holds
+one of eight tool slots for hours without ever answering. ADR 0050 records it.
+
+**Neither takes an empty `criteria` list.** It would turn off all three rungs,
+which makes `compare` call two trees equal without comparing them and makes
+`sync_plan` — under its default `on_unknown: copy` — plan an `Overwrite` per
+file. The CLI's `--criteria` treats empty as absent because clap cannot tell
+them apart; JSON can, so the tools reject it.
 
 The ADR records §2.1 — why there is no `sync_apply` tool, what it would take to
 add one, and the three facts that make "just wire it" wrong. Use `/adr`.

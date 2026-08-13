@@ -39,8 +39,39 @@ no approval routing, no proto change. If the work reaches `EMBEDDED_CONN_ID`,
 | 1 — the bridge can consume a stream | done | `b8de8c5` |
 | 2 — the `compare` tool | done | `7bd8097` |
 | 3 — the `sync_plan` tool | done | `866ef0c` |
-| 4 — the ADR, and the spec correction | pending | |
-| 5 — close the branch | pending | |
+| 4 — the ADR, and the spec correction | done | `a18de30` |
+| 5 — close the branch | in progress | reviews applied in `HEAD` |
+
+### What the reviews changed, so the plan is not read as the truth
+
+A security review and a coherence review ran over the whole branch. Their
+findings were applied in one pass; the ones that contradict the task text above
+are:
+
+- **`compare`'s arguments are `left`/`right`, not `a`/`b`** (task 2, step 3).
+  The rows answer in `left`/`right`.
+- **An empty `criteria` list is an error, not "the wire default".** With no
+  rung, `compare` calls every pair `same/presence/unknown` — two trees reported
+  identical without comparing anything — and `sync_plan`, under its default
+  `on_unknown: copy`, turns each of those into an `Overwrite`. The CLI's
+  `--criteria` maps empty to the default only because clap cannot tell absent
+  from empty.
+- **`complete` needs more than the terminal state** (task 2, step 3, point 5).
+  `compare.rows` routes with `OnFull::DropBatch`, so a lost batch still ends the
+  task `Completed`; `complete` now also requires that the rows received match
+  `TaskProgress::entries_done`, which the payload publishes as `rows_total`.
+  `sync_plan` reconciles its steps against the sum of `counts` (`steps_total`).
+- **Both tools have a `TASK_WAIT` deadline and return `task_id`.** Unbounded
+  waits held one of eight tool slots forever; and the two connections are the
+  same actor, so the tools connection really can poll and cancel the streams
+  arm's task.
+- **Abandoning a tool cancels its walk.** The plan only asked for cancellation
+  on truncation (step 3, point 3); dropping the future for any other reason left
+  a full-tree read+hash running for nobody.
+- **`limit: 0`, a third-party cancellation and the daemon-side `Cancelled` of a
+  truncation** all have tests now. The truncation tests, written over five flat
+  files, could not have observed a cancellation at all: the walk finished first.
+  They seed a slow tree.
 
 ## What the implementer needs to know before task 1
 
@@ -376,7 +407,7 @@ git commit -m "feat(mcp): an agent can plan a synchronisation it cannot apply"
 
 ## Task 4: The ADR, and the spec correction
 
-- [ ] **Step 1: Write the ADR**
+- [x] **Step 1: Write the ADR**
 
 Use the `/adr` project command. It records the decision of spec 3 §2.1 and the
 two things this phase discovered:
@@ -398,14 +429,14 @@ two things this phase discovered:
   "surface = what the wire already offers"); streaming broke that assumption,
   and duplicating `BatchRoutes` was the alternative.
 
-- [ ] **Step 2: Correct the spec**
+- [x] **Step 2: Correct the spec**
 
 `docs/superpowers/specs/2026-08-13-compare-sync-surfaces-design.md` §4 says
 phase B is two tool definitions next to the existing arms, and §8 lists it as
 mechanical work for a cheap model. Both are wrong: no existing tool consumes a
 stream. Fix both sentences and say what it actually took.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```sh
 git add docs/adr/ docs/superpowers/specs/2026-08-13-compare-sync-surfaces-design.md
@@ -416,7 +447,7 @@ git commit -m "docs(adr): the agent plans and does not apply"
 
 ## Task 5: Close the branch
 
-- [ ] **Step 1: Dispatch the reviewers**
+- [x] **Step 1: Dispatch the reviewers**
 
 - `security-reviewer` — mandatory, whole branch. This adds an agent-facing
   surface and a second authenticated connection. Ask specifically: can the
@@ -429,7 +460,7 @@ the phase left the spec.
 
 Apply BLOCKER and MAJOR findings in ONE pass. Say which MINORs were skipped.
 
-- [ ] **Step 2: A whole-branch coherence review**
+- [x] **Step 2: A whole-branch coherence review**
 
 Phase A's four blockers were only visible across commits — each task was correct
 against its own spec. Do the same pass here, and give it the questions the
