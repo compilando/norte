@@ -36,7 +36,7 @@ the apply path gets a `security-reviewer` as well as a `rust-reviewer`.
 | 3 — the GUI renders the plan | done | `a61076e` |
 | 4 — approve and apply | done | `9fefd2c` |
 | 5 — the command, the key and the reference sheet | done | `002d152` |
-| 6 — close the branch | reviews applied, gate pending | `f559c82`, `d984f83` |
+| 6 — close the branch | done | `f559c82`, `d984f83`, `6c6e770` |
 
 ## What the implementer needs to know before task 1
 

@@ -16,8 +16,9 @@ independently through `PROTOCOL_VERSION`.
   chooses *mirror* (that, and delete what the source does not have). Either way
   you are shown every step it intends to take before anything moves. Mark rows
   in that pane first (`Ins`) and the plan covers only those, subtrees included.
-  There is now a second diff pane, in the graphical interface (below), and
-  none of these three keys does anything there yet (#161).
+  There is now a second diff pane, in the graphical interface (below), where
+  `Ctrl+y` plans an *update* and applies it — the two keys that choose the mode
+  from inside that pane are still terminal-only (#188).
   What makes this different from a scripted copy is that **the plan you
   approved is the plan that runs.** norte keeps it, and approving sends back
   nothing but a fingerprint of it, so there is no path by which a different
@@ -114,6 +115,20 @@ independently through `PROTOCOL_VERSION`.
   saying out loud: inside tmux, `Shift+F2` does not reach norte at all — nor do
   the long-standing `Shift+F6` and `Alt+F7` — while plain function keys work
   (#159). Until that is fixed, reach it from the command palette.
+- **Synchronising from the graphical interface:** `Ctrl+y` over the two panes
+  plans the same one-way synchronisation the terminal does, shows every step
+  with the same three glyphs — what it is, how sure the comparison was, and
+  what undoing it would give you back — and asks before it writes. The question
+  it asks is the shared one, so it counts the deletions and says whether they
+  go to a trash you can restore from; a plan it will not let you approve gets
+  an explanation instead of a shorter prompt. Pressing `Esc` after you approve
+  and before the daemon answers now cancels rather than closing, and a report
+  that arrives with the panel already gone is still shown — because it is the
+  only record of what was written and of the undo that exists (#161).
+
+  This lands *update* only: choosing *mirror*, the mode that deletes, still
+  needs the gesture in the diff pane, and that is #188 rather than a key away.
+
 - **The diff pane, in the graphical interface too:** `Shift+F2` — `Alt+D`
   under the `far` and `norton` presets, which never had a comparison key to
   transcribe — now compares the two panes in the GUI and opens the same diff
