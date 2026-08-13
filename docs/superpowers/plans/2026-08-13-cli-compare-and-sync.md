@@ -16,6 +16,29 @@ and dies with it. Every row and every step is rendered through
 `norte-frontend`, so the CLI shows the vocabulary the TUI shows and no second
 rendering can drift.
 
+**Both commands answer in the exit code, and one rule governs both: only a run
+that FINISHED may answer 0 or 1.**
+
+| code | `norte compare` | `norte sync` |
+| --- | --- | --- |
+| 0 | the trees agree, and every row was answered with confidence | nothing to do (empty plan) |
+| 1 | they differ | they differed and it was resolved — or, with `--dry-run`, shown |
+| 2 | could not tell | it did not happen |
+
+For `compare` the three accumulate by PRECEDENCE — could-not-tell beats differ
+beats agree — and both the verdict AND the confidence feed it: a `Same` the
+provider could not back up (`CompareConfidence::Unknown`, which `cascade.rs`
+answers for a socket, a missing size, or two symlink targets it could not read)
+is a 2, because collapsed into an exit code without the glyph beside it that
+"same" would be read as "the trees agree".
+
+For `sync`, 2 is everything that did not write: a plan that never closed, a
+plan with blockers, a plan whose steps do not add up to what it claims to be,
+no journal, no terminal to ask, a declined prompt, a refused apply, and an
+apply that reported failures. **Nothing that returns `Err` may reach `main`'s
+`ExitCode::FAILURE`**, which is 1 and therefore already spoken for — the
+dispatch maps every error of these two commands to 2.
+
 **Tech Stack:** Rust, `clap`, tokio, `norte-frontend::{compare,sync}`,
 `norte_i18n` (Fluent, both locales), `assert_cmd` for the integration tests,
 `nextest`.
@@ -30,11 +53,16 @@ sheet that currently lies.
 
 | task | state | commit |
 | --- | --- | --- |
-| 1 — `norte compare` | pending | |
-| 2 — `norte sync`: plan, print, `--dry-run` | pending | |
-| 3 — `norte sync`: confirm, apply, report | pending | |
-| 4 — the GUI reference sheet stops lying (#161, half) | pending | |
-| 5 — close the branch | pending | |
+| 1 — `norte compare` | done | `410ef29` |
+| 2 — `norte sync`: plan, print, `--dry-run` | done | `68b9f6b` |
+| 3 — `norte sync`: confirm, apply, report | done | `a88853c` |
+| 4 — the GUI reference sheet stops lying (#161, half) | done | `c953eae` |
+| 5 — close the branch | in progress | |
+
+**The review of the whole branch is applied.** Its two BLOCKERs against THIS
+document — a decline exiting `ExitCode::SUCCESS`, and "exit 1 if everything
+applied" without saying what the other paths do — are corrected in place, in
+the architecture section and in task 3, so phase B does not inherit the table.
 
 ## What the implementer needs to know before task 1
 
@@ -446,11 +474,28 @@ Body, this task's half:
    `SyncPlanEvent::Steps`, `on_plan_done(done)` for `Done`. **Do not assemble a
    `SyncPlan` by hand** — `SyncState` is the one place the steps are checked
    against the counts.
-4. If the closed plan `is_empty()`: print the "nothing to do" line, exit 0.
-5. Print every step through `sync::render_step(step, plan.dest_trash(), None)`,
+4. If the plan is **not** `executable`: print the blockers and exit 2. BEFORE
+   the empty check, not after: the wire guarantees `!executable` ⟹ `steps`
+   empty, so a plan stopped by a name collision or a read-only destination
+   reaches step 5 looking exactly like two trees that already agree, and would
+   answer 0.
+5. If the closed plan `is_empty()`: print the "nothing to do" line, exit 0.
+6. Print every step through `sync::render_step(step, plan.dest_trash(), None)`,
    with the same masking closure as `ai_cmd` (`display_name`, `!` marker) on
-   the `rel` and `dest_rel`. Then `plan.summary_lines(norte_i18n::active())`.
-6. If `dry_run`: exit 1 (there are steps). Task 3 takes it from here.
+   the `rel` and `dest_rel`. Print **all three** glyphs (`kind`, `confidence`,
+   `undo`) and the `reason` when there is one — the confidence glyph is "this
+   overwrite is decided by an mtime alone", on the screen where a human agrees
+   to delete a subtree, and rendering two of three IS the drift this phase
+   exists to prevent. Then `plan.summary_lines(norte_i18n::active())`.
+7. If `integrity()` is not `Complete`: say so and exit 2. What was just printed
+   is not all of the plan `sync.apply` would run. True under `--dry-run` too: a
+   plan that cannot be shown in full has not been "shown".
+8. If `dry_run`: exit 1 (there are steps). Task 3 takes it from here.
+
+The plan goes to stdout through ONE locked `BufWriter` whose write errors are
+CHECKED. `println!` panics on `EPIPE` with exit 101, which is not in the table
+this command documents, and `norte sync … | head` is the ordinary way to look
+at a plan of ten thousand steps.
 
 Exit code 2 for a plan that never closed — no `sync.plan_done` means no
 `plan_hash` and nothing to approve, and that is a "could not tell", not a "no
@@ -524,10 +569,16 @@ fn con_yes_aplica_y_el_destino_recibe_el_fichero() {
     );
 }
 
-/// Sin `--yes` y sin un «sí» en la entrada, NO se aplica: una respuesta vacía
-/// es una negativa, jamás un consentimiento por omisión.
+/// Sin terminal NO hay pregunta que hacer, así que no se hace: se rehúsa
+/// ANTES, con el código de «no ocurrió» (2) y señalando `--yes`.
+///
+/// Los dos códigos que importan son los que NO puede devolver. `0` diría «los
+/// árboles ya están sincronizados» —que es lo que un `norte sync src dst &&
+/// echo ok` en un cron leería— habiendo escrito nada; y `1` diría «se
+/// resolvió». Una respuesta vacía, un EOF y un stdin cerrado son el mismo
+/// hecho: nadie consintió.
 #[test]
-fn sin_confirmacion_no_aplica() {
+fn sin_terminal_no_pregunta_y_no_aplica() {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("src");
     let dst = dir.path().join("dst");
@@ -547,13 +598,28 @@ fn sin_confirmacion_no_aplica() {
         ])
         .write_stdin("\n")
         .assert()
-        .code(0);
+        .code(2);
 
     assert!(
         !dst.join("nuevo.txt").exists(),
-        "una respuesta vacía no aplica nada"
+        "sin consentimiento no se aplica nada"
     );
 }
+```
+
+Two more, for the gates step 4 adds:
+
+```rust
+/// Un plan BLOQUEADO no es «nada que hacer»: `src/x` es un DIRECTORIO y
+/// `dst/x` un FICHERO, el transductor bloquea (`TypeMismatchDir`), y el wire
+/// garantiza que un plan bloqueado viene SIN pasos. Leer esa lista vacía como
+/// «los árboles ya coinciden» y contestar 0 es el fallo que el tercer código
+/// existe para no cometer. → `--yes`, `code(2)`, y `dst/x` intacto.
+///
+/// El CLI DESMONTA su spool al salir: tras un `--dry-run` —que no aplica
+/// nada— `<estado>/sync-spools/` tiene que quedar vacío. Directorio de estado
+/// PROPIO en ese test: aquí se mira el spool, y el compartido lo puede estar
+/// usando otro test.
 ```
 
 - [ ] **Step 2: Run them and watch them fail**
@@ -579,8 +645,19 @@ Immediately after printing the plan and before any prompt, and **outside** the
     // ese es justamente el camino donde nadie mira la pantalla.
     if !backend.ensure_journal().await {
         eprintln!("norte: {}", norte_i18n::t("cli-sync-unjournalled"));
+        return Ok(ExitCode::from(2));
     }
 ```
+
+**It STOPS; it does not warn and carry on.** `Engine::sync_apply_as` refuses
+anyway a few lines further down (`Unsupported`), so continuing only moves where
+the "no" appears and makes it harder to read — and the string already says
+norte refuses. Nor is it a corner case: the embedded journal is the SAME
+`journal.db` a daemon opens exclusively, so this is the DEFAULT outcome for
+every user with a live `ntc` or daemon. The message must name `--daemon`,
+because going through that daemon rather than fighting it for the file is the
+actual remedy. (`ai_cmd` warns and proceeds, and may: its string is an honest
+warning and it genuinely does proceed. Do not copy its shape here.)
 
 **Verified for you:** `Engine::ensure_journal()` is `async` and lives on
 `Engine`; `Backend::is_journalled()` is synchronous and lives on `Backend`.
@@ -593,35 +670,105 @@ public method on `norte-core`, so it needs rustdoc saying what each arm means.
 
 - [ ] **Step 4: Ask, and apply**
 
+First the last gate, which comes BEFORE any question is printed:
+
+```rust
+    // Ni un paso que escriba: todo son omisiones. No hay nada que aprobar, y
+    // aplicar no cambiaría un byte — pero la diferencia que las provocó
+    // tampoco se ha resuelto, así que no es un 0.
+    if plan.acting() == 0 {
+        eprintln!("norte: {}", norte_i18n::t("cli-sync-nothing-to-apply"));
+        return Ok(ExitCode::from(2));
+    }
+```
+
+With step 3's `executable` and `integrity` gates this establishes every
+condition of `SyncPlan::can_approve()`, and that matters twice. `sync.apply`
+runs the **retained** plan, whole, so asking about a list that is not that plan
+is asking a human to approve blind. And `SyncPlan::confirmation()` returns
+`None` when `!can_approve()`, so without these gates the LEAST trustworthy
+plans would be the ones asking with a bare `[y/N]` and no "this deletes N
+trees" sentence.
+
 ```rust
     if !yes {
-        use std::io::Write as _;
+        use std::io::{IsTerminal as _, Write as _};
+        // Sin terminal no hay a quién preguntar: se rehúsa ANTES, igual que el
+        // prompt TOFU de este mismo fichero.
+        if !std::io::stdin().is_terminal() {
+            eprintln!("norte: {}", norte_i18n::t("cli-sync-noninteractive"));
+            return Ok(ExitCode::from(2));
+        }
+        if let Some(confirmation) = plan.confirmation(norte_i18n::active()) {
+            eprintln!("{}", confirmation.text);
+        }
         eprint!("{} ", norte_i18n::t("cli-sync-confirm"));
         std::io::stderr().flush().ok();
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line).ok();
+        // stdin es bloqueante: fuera del reactor (regla 2).
+        let line = tokio::task::spawn_blocking(|| {
+            let mut s = String::new();
+            std::io::stdin().read_line(&mut s).map(|_| s)
+        })
+        .await
+        .context(norte_i18n::t("cli-confirm-read"))??;
         let ans = line.trim().to_ascii_lowercase();
         if ans != "y" && ans != "s" {
             println!("{}", norte_i18n::t("cli-sync-abort"));
-            return Ok(ExitCode::SUCCESS);
+            return Ok(ExitCode::from(2));
         }
     }
 ```
+
+Three things in there are not decoration:
+
+- **A decline is a 2, never a 0.** Nothing was written, and 0 in this command
+  means "there was nothing to do" — which is what `norte sync src dst && echo
+  in-sync` prints, from a cron, having copied nothing. It also contradicts the
+  other half of the same command: `--dry-run` on those two trees answers 1.
+- **Refuse before prompting when stdin is not a terminal**, naming `--yes`. The
+  precedent is the TOFU host-key prompt in this same file (`if
+  !std::io::stdin().is_terminal() { bail!(…) }`). Treating the EOF of a `<
+  /dev/null` as a "no" writes exactly as little, but nobody is there to read
+  why; a message naming the remedy is read tomorrow, in the log.
+- **`read_line` runs in `spawn_blocking` and its error PROPAGATES** — blocking
+  stdin inside the reactor is hard rule 2 (the correct pattern is a few hundred
+  lines up, with the comment that says so), and a swallowed `.ok()` makes an
+  EOF, a read error and a deliberate "no" indistinguishable.
 
 The prompt goes to **stderr** and the plan to **stdout**, as `ai_cmd` does, so
 `norte sync … | less` still shows a question.
 
 Then: `backend.sync_apply(plan.done().plan_hash).await?`, `task.join().await`,
 and `backend.sync_report(task_id).await?`. Print the counts, then one line per
-`SyncFailure`. Exit 1 if everything applied, 2 if `report.failed > 0`.
+`SyncFailure`. **Exit 1 only for an apply that finished with no failures at
+all**; `report.failed > 0` is 2, and so is every error out of `sync_apply` or
+`sync_report`: a stale plan (`SYNC_PLAN_TTL_MS` is ten minutes against the
+spool file's mtime, and the prompt above blocks on a human with no timeout —
+eleven minutes spent thinking about a `mirror` is exactly the case that second
+confirmation is FOR), a missing journal, a plan that is not executable. A bare
+`?` on either call routes them through `main`'s `ExitCode::FAILURE`, which is
+the 1 that means "applied cleanly".
 
 **The confirmation text must say what `mirror` deletes.**
 `SyncPlan::confirmation(lang)` already computes it from `dest_trash` and the
 counts — use it; do not write a second sentence about deletion.
 
+**Take the spool down on the way out.** `sync.plan` retains the plan in a file
+under the state directory that names BOTH trees. The daemon sweeps at startup
+and calls `Spool::drop_connection` whenever a connection closes; the CLI has
+neither, so `--dry-run` and every declined prompt would leave one behind. Call
+`Backend::drop_retained_plans()` on **every** exit path of `sync_cmd` — a thin
+wrapper around the body, so the `?`s are covered too. Do NOT add a startup
+sweep: this process shares the state directory with a possibly-live daemon and
+holds no journal lock with which to prove otherwise. What the wrapper cannot
+cover is a Ctrl+C during planning, which orphans a `.part` that no TTL reaps
+(the TTL only looks at closed plans): that is #180.
+
 - [ ] **Step 5: Add the Fluent ids**
 
 `cli-sync-confirm`, `cli-sync-abort`, `cli-sync-unjournalled`,
+`cli-sync-noninteractive`, `cli-sync-blocked`, `cli-sync-blocker`,
+`cli-sync-blockers-more`, `cli-sync-integrity`, `cli-sync-nothing-to-apply`,
 `cli-sync-done`, `cli-sync-failed`. Both locales.
 
 - [ ] **Step 6: Run the tests and watch them pass**
