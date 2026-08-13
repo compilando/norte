@@ -36,6 +36,8 @@ same operation, both halves of "what does a `DeleteTree` actually promise".
 | #163 | norte-sync | destination name legality is not validated at planning time, only discovered at execution |
 | #168 | norte-vfs-sftp, norte-vfs-object | the provider contract never runs with the logical trash enabled |
 | #26 | norte-vfs-local | cross-device trash on freedesktop is an uncancellable copy+delete (hard rule 3) |
+| #190 | norte-gui, norte-core | `compare`/`sync_plan`/`sync_apply` register a canceller with NO clean-cancellation test (hard rule 3) |
+| #196 | norte-frontend | a plan's steps are held unbounded in client memory |
 
 ## The wire — ONE bump for both
 
@@ -43,9 +45,10 @@ same operation, both halves of "what does a `DeleteTree` actually promise".
 | --- | --- |
 | #170 | `SyncReportResult` carries no trash information, so a client that lost `sync.plan_done` cannot tell whether a batch is recoverable |
 | #152 | `fs.compare`: two distinct files paired under an NFC singleton, with no marker on the wire |
+| #195 | `SyncFailure` carries no `kind`, so a report row's anchor rests on an invariant the wire never states |
 
-**One protocol version bump, one set of golden tests, one `protocol-guardian`
-pass.** Bumping twice for two fields is the mistake this grouping exists to
+**THREE fields, ONE protocol version bump, one set of golden tests, one
+`protocol-guardian` pass.** Bumping twice for two fields is the mistake this grouping exists to
 prevent. An ADR if the pairing semantics change, not just the schema.
 
 **Close:** `just ci` once. This branch also wants the second, external review

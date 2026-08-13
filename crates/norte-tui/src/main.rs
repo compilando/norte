@@ -13640,6 +13640,17 @@ mod sync_tests {
             "sync-status-applying",
             "sync-status-applied-undoable",
             "sync-status-applied-not-undoable",
+            // Las cinco que este panel pinta DESDE que `sync_status_line`
+            // delega en el `status_line` compartido y `mode_label` en el
+            // compartido: la lista dejó de cubrir lo que la pantalla dice
+            // (revisión de rama de C2, rust MINOR-5). Las cuatro de «cortada»
+            // son justo las que esta rama añadió para que un run cortado no
+            // se leyera como uno limpio.
+            "sync-status-applied-cut-undoable",
+            "sync-status-applied-cut-not-undoable",
+            "sync-status-applied-failed-undoable",
+            "sync-status-applied-failed-not-undoable",
+            "sync-mode-unknown",
             "sync-hint",
             "sync-hint-done",
             "sync-hint-confirm",

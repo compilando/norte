@@ -22,6 +22,9 @@ the close, not one per task.** No security reviewer: nothing here mutates.
 | #187 | norte-cli | a cancelled `norte sync` prints "destination clean" and never reaches its report |
 | #144 | norte-tui, norte-gui | an opener runs without the pane's directory as cwd |
 | #159 | norte-tui | under tmux no MODIFIED function key arrives: `Shift+F2`, `Shift+F6`, `Alt+F7` dead while `F5` works |
+| #191 | norte-gui | `on_apply_started` reassigns `task_id`, orphaning the plan task's cancel handle |
+| #194 | norte-gui | step element ids come from a daemon-supplied `SyncStep::id` with no uniqueness check |
+| #197 | norte-gui | the anchor qualifier and the hostile prefix are appended in band in the aural surface |
 
 **#159 is an investigation, not a fix.** Cause unidentified; suspects are on the
 issue. Timebox it and reproduce with the tmux harness
@@ -37,5 +40,10 @@ twice: a fix applied to the GUI copy while the TUI kept the defect.
 leaves behind — and want one design: the spool file and the report are two
 halves of the same abandoned run. Filed an hour apart by two different passes
 over the same code, which is why they read as separate issues.
+
+**#188 is NOT in this wave and is not debt.** It is the remainder of #161 —
+`Mirror` and the diff-pane sync gesture — and it needs its own
+`security-reviewer` pass, because wiring `Mirror` is what makes #186 reachable
+from the GUI. Roadmap, not debt wave.
 
 **Close:** `just gui-ci` and `just ci-fast`, then `just ci` once.

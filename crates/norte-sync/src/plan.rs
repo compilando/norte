@@ -3038,6 +3038,57 @@ mod tests {
         assert!(s.shape_is_consistent());
     }
 
+    /// **La invariante de la que depende un painter, pinneada donde se
+    /// produce.** `norte_frontend::sync::render_failure` decide el ancla de
+    /// una fila de fallo con la ÚNICA prueba que queda en el wire: si el
+    /// informe manda `dest_rel`, `rel` es la mitad del ORIGEN. Un
+    /// `SyncFailure` no lleva clase, así que esa regla solo es correcta
+    /// mientras un `DeleteTree` —cuyo `rel` cuelga del DESTINO— no traiga
+    /// nunca `dest_rel`. Hoy no lo trae, y `anchor_of` lo sabe porque para un
+    /// PASO sí tiene la clase y la mira primero.
+    ///
+    /// Sin este test, añadir `dest_rel` a un `DeleteTree` —algo razonable el
+    /// día que se quiera enseñar la ortografía del destino— cambiaría en
+    /// silencio el ancla de la fila hostil más común de un `Mirror`: un
+    /// borrado denegado por permisos, que pasaría a decir «del origen» y
+    /// mandaría al operador a arreglar el árbol equivocado (revisión de rama
+    /// de C2, rust MINOR-1).
+    #[tokio::test]
+    async fn un_delete_tree_jamas_lleva_dest_rel() {
+        let items = run(
+            vec![
+                row(
+                    CompareVerdict::OnlyRight,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    None,
+                    Some(dst_dir("subarbol")),
+                ),
+                row(
+                    CompareVerdict::OnlyRight,
+                    CompareCriterion::Presence,
+                    CompareConfidence::Certain,
+                    None,
+                    Some(dst_file("suelto.bin", 10)),
+                ),
+            ],
+            opts_mirror(),
+        )
+        .await;
+        let borrados: Vec<_> = steps_of(&items)
+            .into_iter()
+            .filter(|s| s.kind == SyncStepKind::DeleteTree)
+            .collect();
+        assert_eq!(borrados.len(), 2, "los dos huérfanos del destino");
+        for s in borrados {
+            assert_eq!(
+                s.dest_rel, None,
+                "un DeleteTree no lleva dest_rel: render_failure lee esa \
+                 ausencia como «esta ruta no es del origen»"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_deletion_is_one_step_for_the_whole_tree_and_moves_no_bytes() {
         // UN movimiento a la papelera, UNA entrada de journal, UNA cosa que
