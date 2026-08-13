@@ -191,7 +191,9 @@ impl Client {
 
     /// Handshake obligatorio (ADR 0011). Conexión HUMANA: sin
     /// `agent_session`, el daemon la liga a `Actor::User` (sin gate de
-    /// agente). Para una conexión de agente, `Self::initialize_as_agent`.
+    /// agente). Para una conexión de agente,
+    /// [`Self::initialize_as_agent`] — ya enlazable: dejó de ser `pub(crate)`
+    /// cuando el puente MCP pasó a negociar por ella.
     ///
     /// # Errors
     /// [`ClientError::Rpc`] si el core rechaza versión o encoding.
@@ -206,15 +208,17 @@ impl Client {
     /// `Actor::Agent { session }` y todo lo que pase por ella queda bajo el
     /// gate de agente (scopes por sesión, journal con ese actor).
     ///
-    /// `pub(crate)`: quien la necesita es
-    /// `backend::remote::RemoteBackend::connect_as_agent`. El puente MCP
-    /// construye su `InitializeParams` a mano porque además guarda el
-    /// `InitializeResult`.
+    /// `pub` porque la usan los DOS lados de una misma sesión de agente:
+    /// `backend::remote::RemoteBackend::connect_as_agent` (el brazo que drena
+    /// notificaciones) y el puente MCP (`norte_mcp::bridge::Bridge::connect`,
+    /// su conexión de tools). Que negocien por aquí y no cada uno con su
+    /// literal es el punto: un `encodings` ampliado o una capability nueva
+    /// tiene que llegarles a los dos o a ninguno.
     ///
     /// # Errors
     /// Las de [`Self::initialize`], más sesión rechazada por el daemon
     /// (charset `[A-Za-z0-9._-]`, 1..=64).
-    pub(crate) async fn initialize_as_agent(
+    pub async fn initialize_as_agent(
         &mut self,
         client_info: methods::ClientInfo,
         agent_session: String,

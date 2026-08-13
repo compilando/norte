@@ -1226,12 +1226,14 @@ impl Backend {
     ///
     /// # Quién ve qué
     /// El daemon sirve el informe a quien podría ver la Task: su dueño, o
-    /// cualquier conexión HUMANA. Un `Backend::Remote` siempre es humano (nunca
-    /// declara `agent_session`), así que por este método se ven también los
-    /// informes de las aplicaciones de los AGENTES — deliberado, y la simetría
-    /// del undo: un humano que gobierna el daemon puede leer lo que un agente
-    /// hizo. Lo que no se distingue es lo que un agente pregunta por lo ajeno:
-    /// para él, «no es tuya» y «no existe» son la misma respuesta.
+    /// cualquier conexión HUMANA. Un `Backend::Remote` abierto con
+    /// [`remote::RemoteBackend::connect`] es humano, y por él se ven también
+    /// los informes de las aplicaciones de los AGENTES — deliberado, y la
+    /// simetría del undo: un humano que gobierna el daemon puede leer lo que un
+    /// agente hizo. Uno abierto con
+    /// [`remote::RemoteBackend::connect_as_agent`] NO lo es (lo estrenó el
+    /// puente MCP): ve lo suyo y nada más, y para él «no es tuya» y «no existe»
+    /// son la misma respuesta.
     ///
     /// Nótese la asimetría, que no es un descuido: la AUTORIZACIÓN (el plan) va
     /// por conexión, y su informe por ACTOR. Dos conexiones humanas son el mismo
