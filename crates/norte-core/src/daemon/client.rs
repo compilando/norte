@@ -191,7 +191,7 @@ impl Client {
 
     /// Handshake obligatorio (ADR 0011). Conexión HUMANA: sin
     /// `agent_session`, el daemon la liga a `Actor::User` (sin gate de
-    /// agente). Para una conexión de agente, [`Self::initialize_as_agent`].
+    /// agente). Para una conexión de agente, `Self::initialize_as_agent`.
     ///
     /// # Errors
     /// [`ClientError::Rpc`] si el core rechaza versión o encoding.
