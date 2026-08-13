@@ -36,7 +36,7 @@ no approval routing, no proto change. If the work reaches `EMBEDDED_CONN_ID`,
 
 | task | state | commit |
 | --- | --- | --- |
-| 1 — the bridge can consume a stream | done | |
+| 1 — the bridge can consume a stream | done | `b8de8c5` |
 | 2 — the `compare` tool | pending | |
 | 3 — the `sync_plan` tool | pending | |
 | 4 — the ADR, and the spec correction | pending | |
