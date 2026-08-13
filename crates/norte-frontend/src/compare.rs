@@ -29,23 +29,23 @@ use norte_proto::methods::{
     CompareConfidence, CompareCriterion, CompareReason, CompareRow, CompareVerdict, Side,
 };
 
-/// Tolerancia de fecha con la que un frontend pide una comparación: 2000 ms,
-/// la regla FAT y la granularidad real más ancha que existe.
+/// The mtime tolerance a frontend asks a comparison for: 2000 ms, the FAT
+/// rule and the widest granularity that really exists.
 ///
-/// Es una COPIA del default del wire (`FsCompareParams::mtime_tolerance_ms`),
-/// porque `norte-proto` guarda su función de default privada y hacerla
-/// pública sería tocar el crate del protocolo para leer un número. Que las
-/// dos no se separen lo pinea `la_tolerancia_por_defecto_sigue_al_wire`, en
-/// `norte-tui`: deserializa unos params mínimos del wire y compara. Se queda
-/// allí, y no aquí, porque este crate no tiene `serde_json` ni en dev-deps y
-/// añadírselo para leer un número sería el mismo precio que se rechazó al no
-/// tocar `norte-proto`.
+/// It is a COPY of the wire's default (`FsCompareParams::mtime_tolerance_ms`),
+/// because `norte-proto` keeps its default function private and making it
+/// public would mean touching the protocol crate to read one number. That the
+/// two never drift apart is pinned by `la_tolerancia_por_defecto_sigue_al_wire`,
+/// in `norte-tui`: it deserialises a minimal params off the wire and compares.
+/// It stays there and not here because this crate has no `serde_json`, not
+/// even in dev-dependencies, and adding it to read one number would be the
+/// same price that was refused by not touching `norte-proto`.
 ///
-/// Vive junto al modelo, y no en cada frontend, por lo mismo que
-/// [`CompareView`] (#158): es un parámetro de la PREGUNTA, así que dos copias
-/// que se separaran harían que la TUI y la GUI recibieran veredictos
-/// distintos para los mismos dos directorios — y ninguna de las dos podría
-/// verlo.
+/// It lives next to the model, and not in each frontend, for the same reason
+/// [`CompareView`] does (#158): it is a parameter of the QUESTION, so two
+/// copies that drifted would have the TUI and the GUI receiving different
+/// verdicts for the same two directories — and neither of them could see
+/// it.
 pub const MTIME_TOLERANCE_MS: u32 = 2000;
 
 /// The five buckets the filter keys toggle.
@@ -639,8 +639,8 @@ impl ComparePane {
     /// asks for it every frame too.
     #[must_use]
     pub fn visible_len(&self) -> usize {
-        let ocultas: usize = self.hidden.iter().map(|c| self.count_of(*c)).sum();
-        self.rows.len().saturating_sub(ocultas)
+        let hidden_rows: usize = self.hidden.iter().map(|c| self.count_of(*c)).sum();
+        self.rows.len().saturating_sub(hidden_rows)
     }
 
     /// Whether `category` is currently filtered out.
@@ -879,7 +879,7 @@ impl ComparePane {
 #[must_use]
 pub fn status_line(view: &CompareView, marked: usize, lang: Lang) -> String {
     let n = view.pane.len().to_string();
-    let estado = match view.state {
+    let how = match view.state {
         CompareState::Running => ta_in(lang, "compare-status-running", &[("n", &n)]),
         CompareState::Done => ta_in(lang, "compare-status-done", &[("n", &n)]),
         CompareState::Incomplete => ta_in(
@@ -897,7 +897,7 @@ pub fn status_line(view: &CompareView, marked: usize, lang: Lang) -> String {
             &[("error", view.error.as_deref().unwrap_or(""))],
         ),
     };
-    let lado = ta_in(
+    let side = ta_in(
         lang,
         "compare-active-side",
         &[("side", &side_label(view.pane.active_side(), lang))],
@@ -908,99 +908,99 @@ pub fn status_line(view: &CompareView, marked: usize, lang: Lang) -> String {
     if marked > 0 {
         let m = marked.to_string();
         return format!(
-            "{estado} · {lado} · {}",
+            "{how} · {side} · {}",
             ta_in(lang, "compare-marked", &[("n", &m)])
         );
     }
-    format!("{estado} · {lado}")
+    format!("{how} · {side}")
 }
 
-/// Estado de presentación de una comparación de directorios (`Shift+F2`,
-/// 2026-08-11-directory-comparison.md): el run loop lo refleja en
-/// [`CompareView::state`] para que la barra elija la variante
-/// `compare-status-*`.
+/// How a directory comparison is going, as the pane presents it (`Shift+F2`,
+/// 2026-08-11-directory-comparison.md): the run loop reflects it into
+/// [`CompareView::state`] so the status bar can pick its `compare-status-*`
+/// variant.
 ///
-/// Mismo molde que el `SearchState` de una búsqueda viva, con UNA variante de
-/// más y la razón por la que existe: en `fs.compare` el cierre del canal de
-/// filas NO significa «ya llegaron todas». La bomba de filas y la del
-/// snapshot terminal son tasks
-/// independientes, así que al acabarse el flujo se compara lo recibido contra
-/// `TaskProgress::entries_done` — y si falta algo, [`CompareState::Incomplete`]
-/// lo DICE en vez de pintar «hecho» sobre una respuesta a medias. En una
-/// comparación, lo completa que está la respuesta *es* la respuesta.
+/// The same shape as a live search's `SearchState`, with ONE extra variant
+/// and the reason it exists: in `fs.compare` the row channel closing does
+/// **not** mean every row arrived. The rows pump and the terminal-snapshot
+/// pump are independent tasks, so when the stream ends what was received is
+/// compared against `TaskProgress::entries_done` — and if something is
+/// missing, [`CompareState::Incomplete`] SAYS SO instead of painting "done"
+/// over a half answer. In a comparison, how complete the answer is *is* the
+/// answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CompareState {
-    /// El walk sigue emitiendo filas.
+    /// The walk is still emitting rows.
     #[default]
     Running,
-    /// Terminó y llegaron todas las filas que la task contó.
+    /// It ended, and every row the task counted arrived.
     Done,
-    /// Terminó, pero llegaron MENOS filas de las que la task contó: se perdió
-    /// algún lote por el camino.
+    /// It ended, but FEWER rows arrived than the task counted: a batch was
+    /// lost on the way.
     Incomplete,
-    /// El usuario canceló (las filas ya llegadas se conservan).
+    /// The user cancelled (the rows that did arrive are kept).
     Cancelled,
-    /// La task falló (el error va por la barra).
+    /// The task failed (the error goes to the status bar).
     Failed,
 }
 
-/// El panel de diferencias abierto (`Shift+F2`): el modelo puro que vive en
-/// `norte-frontend` más lo que la TUI necesita para pintarlo y para decir
-/// cómo acabó.
+/// The open diff pane (`Shift+F2`): the pure model, plus what a frontend
+/// needs to paint it and to say how it ended.
 ///
-/// El modelo (filas, filtros, selección por id, lado activo) NO está aquí a
-/// propósito (regla dura 7): vive en [`ComparePane`], donde se testea sin
-/// terminal, y esta struct solo le añade el estado del run y las dos raíces
-/// que la cabecera pinta.
+/// The model (rows, filters, selection by id, active side) is deliberately
+/// NOT here (hard rule 7): it lives in [`ComparePane`], where it is tested
+/// without a terminal, and this struct only adds the run's state and the two
+/// roots the header paints.
 #[derive(Debug)]
 pub struct CompareView {
-    /// Filas, filtros, selección y lado activo.
+    /// Rows, filters, selection and active side.
     pub pane: ComparePane,
-    /// Cómo va (o cómo acabó) la comparación.
+    /// How the comparison is going (or how it ended).
     pub state: CompareState,
-    /// Categoría del error de una comparación que FALLÓ, ya localizada y
-    /// saneada. Se pinta de forma PERSISTENTE, igual que el `search_error`
-    /// de una búsqueda viva: un fallo no puede degradar a «hecho» en la
-    /// siguiente tecla.
+    /// The error CATEGORY of a comparison that FAILED, already localised and
+    /// sanitised. It is painted PERSISTENTLY, like a live search's
+    /// `search_error`: a failure must not decay into "done" on the next
+    /// keystroke.
     pub error: Option<String>,
-    /// Cuántas filas contó la task (`TaskProgress::entries_done`) cuando se
-    /// cerró el flujo. Solo significativo con [`CompareState::Incomplete`],
-    /// que es el único caso en el que difiere de las filas que hay.
+    /// How many rows the task counted (`TaskProgress::entries_done`) when the
+    /// stream closed. Only meaningful with [`CompareState::Incomplete`],
+    /// which is the only case where it differs from the rows that are here.
     pub rows_expected: u64,
-    /// Raíz izquierda: el pane que lanzó la comparación.
+    /// The left root: the pane that launched the comparison.
     pub left_root: VPath,
-    /// Raíz derecha.
+    /// The right root.
     pub right_root: VPath,
-    /// Índice del pane que ES el lado izquierdo — el que lanzó la
-    /// comparación, que no tiene por qué ser `panes[0]`.
+    /// Index of the pane that IS the left side — the one that launched the
+    /// comparison, which need not be `panes[0]`.
     ///
-    /// Se congela al abrir y decide a QUÉ pane navega el `Enter` de una fila:
-    /// al que le corresponde al lado ACTIVO. Sin esto el `Enter` mandaba
-    /// siempre al pane con foco, así que mirando el lado derecho el lector
-    /// perdía su directorio izquierdo para ir a ver el derecho — lo cazó el
-    /// arnés de tmux, y ninguna aserción del modelo podía verlo.
+    /// Frozen when the pane opens, and it decides WHICH pane a row's `Enter`
+    /// navigates: the one belonging to the ACTIVE side. Without it `Enter`
+    /// always went to the focused pane, so a reader looking at the right side
+    /// lost their left directory to go and see the right one — caught by the
+    /// tmux harness, and no model assertion could have seen it.
     pub left_pane: usize,
-    /// Ya se pidió cancelar esta comparación (el primer `Esc`).
+    /// Cancellation has already been requested for this comparison (the first
+    /// `Esc`).
     ///
-    /// El segundo `Esc` cierra el panel PASE LO QUE PASE con la Task. Sin
-    /// esto el cierre dependía de que el canal de filas llegara a cerrarse, y
-    /// hay formas de que no lo haga —un daemon caído, un provider colgado en
-    /// una NFS muerta—, con lo que el lector se quedaba encerrado en la única
-    /// pantalla de norte de la que no se sale (review BLOCKER-1).
+    /// The second `Esc` closes the pane WHATEVER happens to the Task. Without
+    /// this, closing depended on the row channel actually closing, and there
+    /// are ways for it not to — a dead daemon, a provider hung on a dead NFS
+    /// — which left the reader trapped in the one norte screen with no exit
+    /// (review BLOCKER-1).
     pub cancel_requested: bool,
-    /// Reinterpretación de nombres (#57) de CADA lado, congelada al abrir.
+    /// Name reinterpretation (#57) for EACH side, frozen when the pane opens.
     ///
-    /// Dos y no una: los dos panes son dos ubicaciones y pueden llevar
-    /// overrides distintos. Sin esto, un lector que había pulsado `Alt+E`
-    /// para leer un share CP1251 recuperaba `????.txt` en cuanto lo comparaba
+    /// Two and not one: the two panes are two locations and may carry
+    /// different overrides. Without this, a reader who had pressed `Alt+E` to
+    /// read a CP1251 share got `????.txt` back the moment they compared it
     /// (review MAJOR-3).
     pub left_encoding: Option<norte_encoding::NameEncoding>,
-    /// La del lado derecho.
+    /// The right side's.
     pub right_encoding: Option<norte_encoding::NameEncoding>,
 }
 
 impl CompareView {
-    /// Un panel recién abierto sobre estas dos raíces, sin filas todavía.
+    /// A freshly opened pane over these two roots, with no rows yet.
     #[must_use]
     pub fn new(
         left_root: VPath,
@@ -1023,22 +1023,21 @@ impl CompareView {
         }
     }
 
-    /// Se cerró el canal de filas: decide el estado terminal a partir de lo
-    /// que la task CONTÓ (`entries_done`, de `TaskProgress`) contra lo que
-    /// realmente LLEGÓ (`rows_received`).
+    /// The row channel closed: decides the terminal state from what the task
+    /// COUNTED (`entries_done`, off `TaskProgress`) against what actually
+    /// ARRIVED (`rows_received`).
     ///
-    /// Esto y no el cierre del canal es lo que dice si la comparación
-    /// terminó de verdad: la bomba de filas y la del snapshot terminal son
-    /// tasks independientes (ver [`CompareState::Incomplete`]), así que un
-    /// canal cerrado con menos filas de las contadas es un lote perdido, no
-    /// una respuesta completa. El CLI (fase A) y la tool MCP (fase B)
-    /// reimplementaron esta cuenta cada uno por su lado y los dos se
-    /// equivocaron exactamente aquí — de ahí que viva en el modelo y no en
-    /// cada frontend.
+    /// This, and not the channel closing, is what says whether the comparison
+    /// really finished: the rows pump and the terminal-snapshot pump are
+    /// independent tasks (see [`CompareState::Incomplete`]), so a closed
+    /// channel with fewer rows than were counted is a lost batch, not a
+    /// complete answer. The CLI (phase A) and the MCP tool (phase B)
+    /// reimplemented this count on their own and both got it wrong in exactly
+    /// this spot — hence it lives with the model and not in each frontend.
     ///
-    /// No decide `Cancelled` ni `Failed`: esos salen directamente del
-    /// `TaskState` del run, no de un conteo de filas, y quien los conoce se
-    /// los asigna a [`CompareView::state`] sin pasar por aquí.
+    /// It decides neither `Cancelled` nor `Failed`: those come straight off
+    /// the run's `TaskState` and never off a row count. Prefer
+    /// [`CompareView::finish_from_task`], which owns that whole mapping.
     pub fn finish(&mut self, entries_done: u64, rows_received: u64) {
         self.rows_expected = entries_done;
         self.state = if rows_received < entries_done {
@@ -1046,6 +1045,88 @@ impl CompareView {
         } else {
             CompareState::Done
         };
+    }
+
+    /// The row channel closed: maps the `TaskState` the run carried at that
+    /// instant onto the pane's state, and returns the typed error if there
+    /// was one — so the caller can ALSO put up its transient notice (a status
+    /// bar, a banner), which is the only part that differs between frontends.
+    ///
+    /// **The four arms, and one copy of them.** They were transcribed by hand
+    /// into `norte-tui` and into `norte-gui`, with a FOURTH copy of the
+    /// arithmetic in the TUI's already-closed-pane branch. Only the
+    /// `Completed` arm had reached [`CompareView::finish`], which is half the
+    /// job: the day the rule changes — #183 — the fix has to land in one
+    /// place, or the two frontends will disagree about whether a FAILED
+    /// comparison is complete, which is the bug the CLI (phase A) and the MCP
+    /// tool (phase B) each shipped on their own.
+    ///
+    /// * `Cancelled` and `Failed` come off the `TaskState`, **never** off
+    ///   counting rows: a cancelled comparison lost nothing, it simply did
+    ///   not continue, and its rows are still true.
+    /// * `Completed` is the ONLY arm that goes through
+    ///   [`CompareView::finish`]'s count, which is the only situation where
+    ///   missing rows mean rows were LOST.
+    /// * a **non-terminal** state is the benign race: the channel closed
+    ///   before the terminal snapshot was published (the two pumps are
+    ///   independent tasks), so `entries_done` is not final yet and `Done` is
+    ///   painted with what is here. Accusing that race of losing rows is the
+    ///   same mistake in reverse.
+    ///
+    /// The failure's category is stored already localised in the language
+    /// ASKED FOR (see
+    /// [`error_category_in`](crate::error::error_category_in)): the same one
+    /// [`status_line`] composes with, which is what paints it.
+    ///
+    /// ```
+    /// use norte_frontend::compare::{CompareState, CompareView};
+    /// use norte_i18n::Lang;
+    /// use norte_proto::{TaskState, VPath};
+    ///
+    /// let mut v = CompareView::new(
+    ///     VPath::parse("file:///a").expect("path"),
+    ///     VPath::parse("file:///b").expect("path"),
+    ///     0,
+    ///     None,
+    ///     None,
+    /// );
+    /// // Cancelling with 2 of 9 rows is NOT a loss.
+    /// assert!(v.finish_from_task(&TaskState::Cancelled, 9, 2, Lang::En).is_none());
+    /// assert_eq!(v.state, CompareState::Cancelled);
+    /// ```
+    pub fn finish_from_task<'a>(
+        &mut self,
+        state: &'a norte_proto::TaskState,
+        entries_done: u64,
+        rows_received: u64,
+        lang: Lang,
+    ) -> Option<&'a norte_proto::Error> {
+        use norte_proto::TaskState;
+        match state {
+            TaskState::Completed => {
+                self.finish(entries_done, rows_received);
+                None
+            }
+            TaskState::Cancelled => {
+                self.state = CompareState::Cancelled;
+                self.rows_expected = entries_done;
+                None
+            }
+            TaskState::Failed { error } => {
+                self.state = CompareState::Failed;
+                self.rows_expected = entries_done;
+                // The localised CATEGORY, never the English `Display`: this
+                // is painted PERSISTENTLY in the footer, and several error
+                // variants interpolate data from the peer.
+                self.error = Some(crate::error::error_category_in(lang, error));
+                Some(error)
+            }
+            _ => {
+                self.state = CompareState::Done;
+                self.rows_expected = entries_done;
+                None
+            }
+        }
     }
 }
 
@@ -1057,7 +1138,7 @@ mod tests {
     use norte_proto::methods::{
         CompareConfidence, CompareCriterion, CompareReason, CompareRow, CompareVerdict, Side,
     };
-    use norte_proto::{Entry, EntryKind, VPath};
+    use norte_proto::{Entry, EntryKind, TaskState, VPath};
 
     fn left_path() -> VPath {
         VPath::parse("file:///left/x").expect("path")
@@ -1452,13 +1533,216 @@ mod tests {
         assert_eq!(pane.count_of(Category::Different), 0);
     }
 
-    /// #158: el estado del run vivía en `norte-tui`, así que la GUI habría
-    /// tenido que reimplementarlo — y las dos superficies que ya lo
-    /// reimplementaron (el CLI en la fase A, la tool MCP en la fase B) se
-    /// equivocaron en lo mismo: dieron por completa una respuesta a la que le
-    /// faltaban lotes. Aquí, y una sola vez.
+    /// **Branch review, MAJOR-1.** The `TaskState` → pane-state mapping lives
+    /// HERE, once. It was transcribed by hand into both frontends (plus a
+    /// FOURTH copy of the arithmetic in the TUI's already-closed-pane
+    /// branch), which is exactly what task 1 existed to prevent: when #183 is
+    /// fixed, the fix has to land in one place, not three.
     #[test]
-    fn el_estado_del_run_vive_con_el_modelo() {
+    fn the_task_state_decides_the_verdict_in_one_place() {
+        let view = || {
+            CompareView::new(
+                VPath::parse("file:///a").expect("wire"),
+                VPath::parse("file:///b").expect("wire"),
+                0,
+                None,
+                None,
+            )
+        };
+
+        // `Completed` is the ONLY arm that goes through the count.
+        let mut v = view();
+        assert!(
+            v.finish_from_task(&TaskState::Completed, 9, 7, Lang::En)
+                .is_none()
+        );
+        assert_eq!(v.state, CompareState::Incomplete, "9 counted, 7 arrived");
+        assert_eq!(v.rows_expected, 9);
+
+        let mut v = view();
+        v.finish_from_task(&TaskState::Completed, 7, 7, Lang::En);
+        assert_eq!(v.state, CompareState::Done);
+
+        // Cancelling is NOT losing: it comes off the `TaskState`, never off
+        // counting rows.
+        let mut v = view();
+        v.finish_from_task(&TaskState::Cancelled, 9, 2, Lang::En);
+        assert_eq!(v.state, CompareState::Cancelled);
+        assert_eq!(v.rows_expected, 9);
+        assert!(v.error.is_none());
+
+        // Nor is failing, and the CATEGORY is stored already localised — the
+        // typed error comes back so the caller can add its own banner.
+        let mut v = view();
+        let failure = TaskState::Failed {
+            error: norte_proto::Error::PermissionDenied,
+        };
+        let returned = v.finish_from_task(&failure, 9, 2, Lang::Es);
+        assert!(matches!(
+            returned,
+            Some(norte_proto::Error::PermissionDenied)
+        ));
+        assert_eq!(v.state, CompareState::Failed);
+        assert_eq!(
+            v.error.as_deref(),
+            Some(
+                crate::error::error_category_in(Lang::Es, &norte_proto::Error::PermissionDenied)
+                    .as_str()
+            ),
+            "in the language ASKED FOR, not the ambient one"
+        );
+
+        // The benign race: the channel closed before the terminal state was
+        // published, so `entries_done` is not final and accusing it of loss
+        // would be the CLI's and the MCP tool's mistake in reverse.
+        for non_terminal in [
+            TaskState::Pending,
+            TaskState::Running,
+            TaskState::Paused,
+            TaskState::Unknown,
+        ] {
+            let mut v = view();
+            v.finish_from_task(&non_terminal, 9, 2, Lang::En);
+            assert_eq!(
+                v.state,
+                CompareState::Done,
+                "{non_terminal:?}: the benign race is painted with what is here"
+            );
+        }
+    }
+
+    /// **Branch review, MAJOR-2.** `visible_len` stopped walking and became
+    /// arithmetic over the cached counts, but `move_by` still resolves with
+    /// `visible().nth()` and the GUI's virtualised list is SIZED by the count
+    /// while it is FILLED by the walk. If the two ever disagree the failure is
+    /// SILENT: the rows past the miscount become unreachable and `End` stops
+    /// moving — a short list in a pane whose whole subject is whether the
+    /// answer is complete.
+    ///
+    /// All 32 subsets of the five categories, over rows from every one.
+    #[test]
+    fn the_visible_count_matches_the_visible_walk() {
+        let rows: Vec<CompareRow> = [
+            Same,
+            Same,
+            Different,
+            OnlyLeft,
+            CompareVerdict::OnlyRight,
+            Error,
+            CompareVerdict::TypeMismatch,
+            CompareVerdict::Ambiguous,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| row_id(i as u64 + 1, v))
+        .collect();
+
+        for mask in 0u32..(1 << CATEGORIES.len()) {
+            let mut pane = pane_with(rows.clone());
+            for (i, category) in CATEGORIES.into_iter().enumerate() {
+                if mask & (1 << i) != 0 {
+                    pane.toggle_filter(category);
+                }
+            }
+            let walked = pane.visible().count();
+            assert_eq!(
+                pane.visible_len(),
+                walked,
+                "mask {mask:#07b}: the cached count drifted from the walk"
+            );
+            // And what the arithmetic says is there is REACHABLE: the list's
+            // `End` resolves by `nth`, not by the count.
+            pane.select_last();
+            if walked > 0 {
+                assert_eq!(
+                    pane.visible_index(),
+                    Some(walked - 1),
+                    "mask {mask:#07b}: the last visible row is unreachable"
+                );
+            }
+        }
+    }
+
+    /// **Branch review, MAJOR-3.** `status_line` moved here with five states ×
+    /// two `marked` arms, and the only witness that came with it was a TUI
+    /// snapshot in `Done` with nothing marked: one of the ten branches. The
+    /// other nine crossed crates with nothing holding them.
+    #[test]
+    fn the_footer_says_every_state_and_the_marks_in_both_locales() {
+        let states = [
+            CompareState::Running,
+            CompareState::Done,
+            CompareState::Incomplete,
+            CompareState::Cancelled,
+            CompareState::Failed,
+        ];
+        for lang in [Lang::En, Lang::Es] {
+            for state in states {
+                for marked in [0usize, 3] {
+                    let mut v = CompareView::new(
+                        VPath::parse("file:///a").expect("wire"),
+                        VPath::parse("file:///b").expect("wire"),
+                        0,
+                        None,
+                        None,
+                    );
+                    v.pane.extend(vec![row_id(1, Same), row_id(2, OnlyLeft)]);
+                    v.state = state;
+                    v.rows_expected = 7;
+                    v.error = Some(crate::error::error_category_in(
+                        lang,
+                        &norte_proto::Error::PermissionDenied,
+                    ));
+                    let s = status_line(&v, marked, lang);
+
+                    // No branch leaves a Fluent id unresolved: a raw
+                    // `compare-status-*` in the footer is exactly the symptom
+                    // of a missing translation.
+                    assert!(
+                        !s.contains("compare-status-") && !s.contains("compare-active-side"),
+                        "{state:?}/{marked}/{lang:?}: unresolved id in «{s}»"
+                    );
+                    // The active side is ALWAYS there, whatever the run did.
+                    assert!(
+                        s.contains(&side_label(v.pane.active_side(), lang)),
+                        "{state:?}/{marked}/{lang:?}: no active side in «{s}»"
+                    );
+                    // The counts: the rows that are here and, in `Incomplete`,
+                    // ALSO the ones that were counted — saying "done" over
+                    // half an answer is the bug this footer exists to avoid.
+                    if state == CompareState::Failed {
+                        assert!(
+                            s.contains(&crate::error::error_category_in(
+                                lang,
+                                &norte_proto::Error::PermissionDenied
+                            )),
+                            "{lang:?}: the failure does not say its category in «{s}»"
+                        );
+                    } else {
+                        assert!(s.contains('2'), "{state:?}/{lang:?}: no row count in «{s}»");
+                    }
+                    if state == CompareState::Incomplete {
+                        assert!(s.contains('7'), "{lang:?}: no total in «{s}»");
+                    }
+                    // And the marks clause is there if and only if there are
+                    // marks.
+                    assert_eq!(
+                        s.contains('3'),
+                        marked > 0,
+                        "{state:?}/{marked}/{lang:?}: the marks clause does not add up in «{s}»"
+                    );
+                }
+            }
+        }
+    }
+
+    /// #158: the run's state used to live in `norte-tui`, so the GUI would
+    /// have had to reimplement it — and the two surfaces that already did
+    /// (the CLI in phase A, the MCP tool in phase B) got the same thing
+    /// wrong: they called an answer complete when batches were missing. Here,
+    /// and once.
+    #[test]
+    fn the_runs_state_lives_with_the_model() {
         let mut v = CompareView::new(
             VPath::parse("file:///a").expect("wire"),
             VPath::parse("file:///b").expect("wire"),
@@ -1466,15 +1750,15 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(v.state, CompareState::Running, "nace corriendo");
+        assert_eq!(v.state, CompareState::Running, "it is born running");
         assert!(v.pane.is_empty());
 
-        // Menos filas de las que la task contó NO es «hecho».
+        // Fewer rows than the task counted is NOT "done".
         v.finish(7, 3);
         assert_eq!(
             v.state,
             CompareState::Incomplete,
-            "3 filas recibidas contra 7 contadas: la respuesta está a medias y lo dice"
+            "3 rows received against 7 counted: the answer is partial and says so"
         );
     }
 }

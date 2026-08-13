@@ -17,7 +17,7 @@
 //!   una barra es un vector bidi/control. La clave estable los descarta por
 //!   patrón, así que no hay nada que sanear.
 
-use norte_i18n::t;
+use norte_i18n::{Lang, t_in};
 use norte_proto::Error;
 
 /// Clave Fluent ESTABLE de la CATEGORÍA de un [`Error`] del protocolo (spec
@@ -87,10 +87,31 @@ pub fn error_key(e: &Error) -> &'static str {
     }
 }
 
-/// Texto LOCALIZADO de la categoría de un [`Error`] del protocolo: la clave
-/// estable de [`error_key`] pasada por Fluent — jamás el `Display` inglés
-/// hardcodeado ni un string del OS.
+/// Texto LOCALIZADO de la categoría de un [`Error`] del protocolo en la
+/// lengua que se PIDE: la clave estable de [`error_key`] pasada por Fluent —
+/// jamás el `Display` inglés hardcodeado ni un string del OS.
+///
+/// Existe por lo mismo que `t_in` frente a `t`: quien compone una frase con
+/// un `lang` explícito —[`compare::status_line`](crate::compare::status_line)
+/// lo recibe— no puede rellenar una de sus piezas con la lengua AMBIENTE, o
+/// devuelve media frase traducida (revisión de la fase C1, MINOR-6).
+///
+/// ```
+/// use norte_frontend::error::error_category_in;
+/// use norte_i18n::Lang;
+/// let es = error_category_in(Lang::Es, &norte_proto::Error::NotFound);
+/// let en = error_category_in(Lang::En, &norte_proto::Error::NotFound);
+/// // La MISMA clave, dicha en dos idiomas: ninguno de los dos es la clave.
+/// assert!(!es.starts_with("err-") && !en.starts_with("err-"));
+/// ```
+#[must_use]
+pub fn error_category_in(lang: Lang, e: &Error) -> String {
+    t_in(lang, error_key(e))
+}
+
+/// [`error_category_in`] en la lengua AMBIENTE. Envoltorio, para quien no
+/// tiene un `lang` que pasar.
 #[must_use]
 pub fn error_category(e: &Error) -> String {
-    t(error_key(e))
+    error_category_in(norte_i18n::active(), e)
 }
