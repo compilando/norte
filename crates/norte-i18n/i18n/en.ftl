@@ -212,12 +212,14 @@ cli-sync-nothing-to-apply = every step is a skip: there is nothing to apply
 cli-sync-confirm = Apply this plan? [y/N]
 cli-sync-abort = aborted; nothing was applied
 cli-sync-done = applied: { $done } done, { $failed } failed, { $skipped } skipped
-cli-sync-failure = { $rel }: { $cause }
-cli-sync-cause-conflict = the destination changed since the plan was made
-cli-sync-cause-denied = permission denied
-cli-sync-cause-illegal-name = the name is not legal on the destination
-cli-sync-cause-io = read or write failed
-cli-sync-cause-unknown = unrecognised failure
+# One failure is THREE fields on THREE lines, never one joined by `: ` and
+# ` → `: both joiners are ordinary printable characters that the name masker
+# leaves alone, so a filename can forge a whole fabricated row in band (corpus
+# `cause_join_spoof`). A newline is Cc, so it is masked — a name cannot forge
+# a line break, which makes it the pipe's structural separator.
+cli-sync-failure = { $rel }
+cli-sync-failure-dest = on the destination: { $dest }
+cli-sync-failure-cause = failed: { $cause }
 cli-cancelling = cancelling…
 cli-cancelled-clean = cancelled (destination clean)
 cli-final-error = error: { $error }
@@ -768,6 +770,22 @@ sync-confirm-delete-unclear = { $n } trees will be deleted from the destination,
 sync-confirm-no-way-back = { $n } steps will change the destination and none of them can be undone afterwards. Continue?
 sync-confirm-partial = { $n } steps of this plan cannot be undone afterwards. Continue?
 sync-confirm-unclear = this version cannot tell whether these { $n } changes can be undone afterwards. Continue?
+# Heading of the list of failures, and the SAME string names that list to a
+# screen reader: one sentence, both surfaces. Its own name and never the step
+# list's — the two sit one above the other, and a reader who lands in the
+# wrong one reads "applied" where it says "failed".
+sync-failures-title = steps that failed
+# `sync.report` lists at most 256 failures and counts them all, so a run with
+# more says so rather than letting the list read as the total.
+sync-failures-more = … and { $n } more
+# Why ONE step of an applied plan did not happen (`sync.report`). Shared by
+# every frontend: the CLI prints them after the run, the GUI lists them under
+# the plan.
+sync-cause-conflict = the destination changed since the plan was made
+sync-cause-denied = permission denied
+sync-cause-illegal-name = the name is not legal on the destination
+sync-cause-io = read or write failed
+sync-cause-unknown = unrecognised failure
 # The sync PANE (Ctrl+Y, or `s`/`m` inside the diff pane). Its keys are fixed,
 # like the diff pane's, so the hint line is the only place they are written.
 sync-title = synchronise
@@ -790,6 +808,15 @@ sync-status-applying = applying…
 sync-status-applied = { $done } steps applied, { $failed } failed
 sync-status-applied-undoable = { $done } steps applied, { $failed } failed · undo it with the undo command
 sync-status-applied-not-undoable = { $done } steps applied, { $failed } failed · nothing was journalled, so there is nothing to undo
+# The same report, when the run did NOT finish on its own. The counts alone
+# would read as a completed sync, and the word that says otherwise must not be
+# left to colour.
+sync-status-applied-cut-undoable = cancelled after applying { $done } steps ({ $failed } failed); the rest was not applied · undo it with the undo command
+sync-status-applied-cut-not-undoable = cancelled after applying { $done } steps ({ $failed } failed); the rest was not applied · nothing was journalled, so there is nothing to undo
+# And when it died: the error AND the counts, because a mirror that deleted
+# forty trees and then failed is the last place to hide how much it wrote.
+sync-status-applied-failed-undoable = it failed after applying { $done } steps ({ $failed } failed): { $error } · undo it with the undo command
+sync-status-applied-failed-not-undoable = it failed after applying { $done } steps ({ $failed } failed): { $error } · nothing was journalled, so there is nothing to undo
 sync-hint = ↑↓ move · a approve · Esc close
 sync-hint-done = ↑↓ move · Esc close
 sync-hint-confirm = y confirm · any other key cancels
@@ -841,6 +868,10 @@ gui-a11y-compare-rows = comparison rows
 # "synchronise", and giving the list the same words says nothing about which
 # of the two the reader is inside.
 gui-a11y-sync-steps = plan steps
+# Name of the sync pane's second question, the one that is answered before
+# anything is written. It names the question so a reader who lands on it knows
+# what the `y` answers.
+gui-a11y-sync-confirm = confirm the plan
 # Spoken prefix for a name the sanitiser had to alter (spec §6). A WORD and
 # not the `⚠` badge: at the default symbol verbosity of NVDA and Orca a lone
 # U+26A0 is not spoken at all, and under an active name reinterpretation (#57)

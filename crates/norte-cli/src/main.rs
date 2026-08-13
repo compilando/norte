@@ -2909,25 +2909,51 @@ async fn sync_apply_and_report(
             ],
         )
     );
+    // Una fila de fallo son TRES campos y va en TRES líneas, no en una unida
+    // por `: ` y ` → ` (auditoría de encoding MAJOR-4). Los dos joiners son
+    // imprimibles corrientes que `display_name_with` no enmascara, así que
+    // llegan SIN el `!` de `marcado`: `informe :→ copia.txt: permission
+    // denied` es un nombre legal en ext4 y APFS —está en la corpus, como
+    // `cause_join_spoof`— y en banda imprimía una fila entera fabricada,
+    // después de un `Mirror` destructivo.
+    //
+    // El salto de línea SÍ es un separador que un nombre no puede falsificar:
+    // `\n` es Cc, `is_terminal_hazard` lo enmascara a `U+FFFD` y el nombre
+    // llega badgeado. Es lo que la GUI consigue con elementos hermanos y una
+    // tubería no tiene.
+    //
+    // Lo que este bucle todavía NO arregla: una aplicación CANCELADA no llega
+    // hasta aquí —`run_task` imprime «destino limpio» y el comando vuelve—,
+    // así que el CLI es el único frontend que no puede decir qué escribió un
+    // `Mirror` cortado a medias. Issue #187.
     for failure in &report.failures {
-        let rel = rel_marcado(&norte_frontend::sync::rel_display(&failure.rel, None));
-        let dest_suffix = failure.dest_rel.as_ref().map_or_else(String::new, |d| {
-            format!(
-                " → {}",
-                rel_marcado(&norte_frontend::sync::rel_display(d, None))
-            )
-        });
+        // Por `render_failure` y no por dos `rel_display` sueltos: el plegado
+        // de la ortografía del destino cuando los BYTES coinciden es la misma
+        // regla que la de un paso, y vive una sola vez para los tres frontends
+        // (#161). Repetir la misma ruta con una flecha en medio sugiere un
+        // renombrado que no hay.
+        let cells = norte_frontend::sync::render_failure(
+            failure,
+            norte_frontend::sync::SyncEncodings::default(),
+        );
         eprintln!(
             "{}",
+            norte_i18n::ta("cli-sync-failure", &[("rel", &rel_marcado(&cells.rel))])
+        );
+        if let Some(d) = &cells.dest_rel {
+            eprintln!(
+                "  {}",
+                norte_i18n::ta("cli-sync-failure-dest", &[("dest", &rel_marcado(d))])
+            );
+        }
+        eprintln!(
+            "  {}",
             norte_i18n::ta(
-                "cli-sync-failure",
-                &[
-                    ("rel", &format!("{rel}{dest_suffix}")),
-                    (
-                        "cause",
-                        &norte_i18n::t(sync_failure_cause_label(failure.cause)),
-                    ),
-                ],
+                "cli-sync-failure-cause",
+                &[(
+                    "cause",
+                    &norte_frontend::sync::failure_cause_label(failure.cause, norte_i18n::active(),),
+                )],
             )
         );
     }
@@ -2936,26 +2962,6 @@ async fn sync_apply_and_report(
     // detrás. Todo lo demás —lo que no se pudo planificar, lo que no se
     // aprobó, lo que no se pudo aplicar y lo que se aplicó a medias— es 2.
     Ok(ExitCode::from(if report.failed > 0 { 2 } else { 1 }))
-}
-
-/// Traduce una [`norte_proto::methods::SyncFailureCause`] — a diferencia de
-/// `{state:?}` en `cli-sync-incomplete`/`cli-unexpected-state` (reservado a
-/// estados EXCEPCIONALES), un fallo por archivo es rutinario y se enseña en
-/// el idioma del usuario, no como un identificador de Rust suelto en medio de
-/// una frase en español.
-fn sync_failure_cause_label(cause: norte_proto::methods::SyncFailureCause) -> &'static str {
-    use norte_proto::methods::SyncFailureCause as C;
-    match cause {
-        C::Conflict => "cli-sync-cause-conflict",
-        C::Denied => "cli-sync-cause-denied",
-        C::IllegalName => "cli-sync-cause-illegal-name",
-        C::Io => "cli-sync-cause-io",
-        // `Unknown` es la variante `#[serde(other)]` del decodificador ("el
-        // core jamás la emite") y el resto es el `#[non_exhaustive]` del
-        // enum: un wire futuro con una causa nueva cae aquí en vez de no
-        // compilar.
-        _ => "cli-sync-cause-unknown",
-    }
 }
 
 async fn ls(

@@ -1,11 +1,11 @@
-//! Sanidad del corpus canónico: 61 fixtures (47 nombres + 11+3 contenidos),
+//! Sanidad del corpus canónico: 62 fixtures (48 nombres + 11+3 contenidos),
 //! nombres válidos como segmentos `VPath`, contenidos con la forma declarada.
 
 use norte_testkit::corpus::{content_fixtures, hostile_chords, hostile_names};
 
 #[test]
 fn corpus_counts() {
-    assert_eq!(hostile_names().len(), 47, "nombres hostiles");
+    assert_eq!(hostile_names().len(), 48, "nombres hostiles");
     assert_eq!(content_fixtures().len(), 11, "contenidos detectables");
     assert_eq!(
         norte_testkit::corpus::content_fixtures_forced().len(),

@@ -214,12 +214,14 @@ cli-sync-nothing-to-apply = todos los pasos son omisiones: no hay nada que aplic
 cli-sync-confirm = ¿Aplicar este plan? [s/N]
 cli-sync-abort = cancelado; no se aplicó nada
 cli-sync-done = aplicado: { $done } hechos, { $failed } fallidos, { $skipped } omitidos
-cli-sync-failure = { $rel }: { $cause }
-cli-sync-cause-conflict = el destino cambió desde que se hizo el plan
-cli-sync-cause-denied = permiso denegado
-cli-sync-cause-illegal-name = el nombre no es legal en el destino
-cli-sync-cause-io = falló la lectura o la escritura
-cli-sync-cause-unknown = fallo no reconocido
+# Un fallo son TRES campos en TRES líneas, jamás uno unido por `: ` y ` → `:
+# los dos joiners son imprimibles corrientes que el enmascarado de nombres deja
+# pasar, así que un nombre puede fabricar una fila entera en banda (corpus
+# `cause_join_spoof`). Un salto de línea es Cc y sí se enmascara — un nombre no
+# lo puede falsificar, y por eso es el separador estructural de una tubería.
+cli-sync-failure = { $rel }
+cli-sync-failure-dest = en el destino: { $dest }
+cli-sync-failure-cause = falló: { $cause }
 cli-cancelling = cancelando…
 cli-cancelled-clean = cancelado (destino limpio)
 cli-final-error = error: { $error }
@@ -781,6 +783,22 @@ sync-confirm-delete-unclear = se van a borrar { $n } árboles del destino, y est
 sync-confirm-no-way-back = { $n } pasos van a cambiar el destino y ninguno se va a poder deshacer. ¿Seguir?
 sync-confirm-partial = { $n } pasos de este plan no se van a poder deshacer. ¿Seguir?
 sync-confirm-unclear = esta versión no puede decir si estos { $n } cambios se van a poder deshacer. ¿Seguir?
+# Título de la lista de fallos, y la MISMA cadena la nombra ante un lector de
+# pantalla: una frase, las dos superficies. Nombre propio y jamás el de la
+# lista de pasos — van una encima de la otra, y quien aterrice en la
+# equivocada lee «aplicado» donde pone «falló».
+sync-failures-title = pasos que fallaron
+# `sync.report` lista como mucho 256 fallos y los cuenta todos, así que una
+# ejecución con más lo dice en vez de dejar que la lista pase por el total.
+sync-failures-more = … y { $n } más
+# Por qué UN paso de un plan aplicado no ocurrió (`sync.report`). Compartidas
+# por todos los frontends: el CLI las imprime tras la ejecución, la GUI las
+# lista bajo el plan.
+sync-cause-conflict = el destino cambió desde que se hizo el plan
+sync-cause-denied = permiso denegado
+sync-cause-illegal-name = el nombre no es legal en el destino
+sync-cause-io = falló la lectura o la escritura
+sync-cause-unknown = fallo no reconocido
 # El PANEL de sincronización (Ctrl+Y, o `s`/`m` dentro del de diferencias).
 # Sus teclas son fijas, como las del de diferencias, así que la línea de
 # teclas es el único sitio donde están escritas.
@@ -804,6 +822,15 @@ sync-status-applying = aplicando…
 sync-status-applied = { $done } pasos aplicados, { $failed } fallaron
 sync-status-applied-undoable = { $done } pasos aplicados, { $failed } fallaron · deshazlo con el comando de deshacer
 sync-status-applied-not-undoable = { $done } pasos aplicados, { $failed } fallaron · no quedó nada en el journal, así que no hay nada que deshacer
+# El mismo informe, cuando la ejecución NO terminó sola. Las cuentas a secas se
+# leen como una sincronización completa, y la palabra que dice lo contrario no
+# puede quedarse en el color.
+sync-status-applied-cut-undoable = cancelado tras aplicar { $done } pasos ({ $failed } fallaron); el resto no se aplicó · deshazlo con el comando de deshacer
+sync-status-applied-cut-not-undoable = cancelado tras aplicar { $done } pasos ({ $failed } fallaron); el resto no se aplicó · no quedó nada en el journal, así que no hay nada que deshacer
+# Y cuando murió: el error Y las cuentas, porque un mirror que borró cuarenta
+# árboles y luego falló es el último sitio donde esconder cuánto escribió.
+sync-status-applied-failed-undoable = falló tras aplicar { $done } pasos ({ $failed } fallaron): { $error } · deshazlo con el comando de deshacer
+sync-status-applied-failed-not-undoable = falló tras aplicar { $done } pasos ({ $failed } fallaron): { $error } · no quedó nada en el journal, así que no hay nada que deshacer
 sync-hint = ↑↓ mover · a aprobar · Esc cerrar
 sync-hint-done = ↑↓ mover · Esc cerrar
 sync-hint-confirm = y confirmar · cualquier otra tecla cancela
@@ -855,6 +882,10 @@ gui-a11y-compare-rows = filas de la comparación
 # se anuncia como «sincronizar», y darle a la lista las mismas palabras no
 # dice en cuál de los dos está el lector.
 gui-a11y-sync-steps = pasos del plan
+# Nombre de la segunda pregunta del panel, la que se contesta antes de que se
+# escriba nada. Nombra la pregunta para que quien aterrice en ella sepa a qué
+# contesta la `y`.
+gui-a11y-sync-confirm = confirmar el plan
 # Prefijo hablado de un nombre que el saneado tuvo que alterar (spec §6). Una
 # PALABRA y no el badge `⚠`: con la verbosidad de símbolos por defecto de NVDA
 # y de Orca un U+26A0 suelto no se pronuncia, y bajo una reinterpretación de

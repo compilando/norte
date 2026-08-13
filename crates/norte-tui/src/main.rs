@@ -8942,33 +8942,26 @@ async fn harvest_sync_apply(
         return;
     }
     let task_id = run.task.id();
-    // El estado terminal pasa por `SyncRunState::from_task_state` (#161), el
-    // mismo mapeo que usa el drenador del plan. Lo que sigue siendo de AQUÍ
-    // es el guard de arriba: un desenlace NO terminal solo llega a este punto
-    // con los emisores caídos (`!vivo`), y ahí «hecho» sería la mentira
-    // mayor de las dos — la conexión murió sin decir qué pasó, y una
-    // sincronización a medias no es un éxito.
-    let estado = if snapshot.state.is_terminal() {
-        norte_tui::app::SyncRunState::from_task_state(&snapshot.state)
-    } else {
-        norte_tui::app::SyncRunState::Failed
-    };
     *sync_run = None;
     let informe = backend.sync_report(task_id).await;
     let Some(view) = app.sync.as_mut() else {
         return;
     };
-    view.run = estado;
-    match informe {
-        Ok(report) => view.state.on_report(report),
-        // Sin informe no se puede decir qué pasó, así que no se dice: el
-        // estado terminal ya está pintado y la barra explica por qué falta.
-        Err(e) => {
-            app.message = Some(ta(
-                "sync-status-failed",
-                &[("error", &detail_for_bar(&error_category(&e)))],
-            ));
-        }
+    // Las TRES reglas de este instante —el error de la Task manda sobre el del
+    // informe, un informe que no llega es un fallo, y un estado no terminal
+    // también— son de `norte_frontend::sync::SyncView::on_apply_ended`, la
+    // COMPARTIDA con la GUI (#161). Estaban aquí, escritas a mano, y con la
+    // segunda SIN aplicar: un `sync.report` que fallaba dejaba el modelo en
+    // `Applying` y el pie diciendo «aplicando…» para siempre, con la única
+    // explicación en una barra transitoria. Lo que se queda de este lado es la
+    // única mitad que de verdad difiere entre frontends: cómo se sanea la
+    // categoría y dónde se pinta.
+    let categoria = view
+        .on_apply_ended(&snapshot.state, informe)
+        .map(|c| detail_for_bar(&c));
+    view.error.clone_from(&categoria);
+    if let Some(c) = categoria {
+        app.message = Some(ta("sync-status-failed", &[("error", &c)]));
     }
 }
 

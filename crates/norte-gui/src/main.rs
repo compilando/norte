@@ -2259,6 +2259,51 @@ impl NorteGui {
                 self.errors[source_pane & 1] =
                     sync_view::failed_banner(self.sync_gen, generation, &error);
             }
+            // La mitad DESTRUCTIVA (#161 fase C2 tarea 4): a partir de aquí la
+            // Task que este panel alimenta es la que ESCRIBE y BORRA.
+            SessionEvent::SyncApplyStarted {
+                task_id,
+                generation,
+            } => {
+                // La decisión entera —guard de generación, y si el modelo la
+                // acepta— es de `sync_view::on_apply_start`, que es pura. Una
+                // aplicación que ningún panel adopta se CANCELA: es lo que la
+                // regla 3 pide, y aquí no es formalismo — dejarla suelta es un
+                // `Mirror` borrando sin nadie que lo vea ni lo pueda parar.
+                if let sync_view::ApplyStart::Orphan(t) =
+                    sync_view::on_apply_start(&mut self.sync, self.sync_gen, generation, task_id)
+                {
+                    let _ = self.cmds.send(SessionCmd::Cancel(t));
+                }
+            }
+            // Terminó, y con el informe: el estado dice CÓMO acabó y el
+            // informe QUÉ hizo. Correlacionado por `task_id` contra el del
+            // panel (reasignado al adoptar la aplicación), igual que el final
+            // del plan — y es ese contraste el que impide que el final del
+            // canal del PLAN, todavía en vuelo, apague este `Running`.
+            SessionEvent::SyncApplyEnded {
+                task_id,
+                state,
+                report,
+            } => {
+                let fallo = self.sync.as_mut().and_then(|view| {
+                    view.on_apply_ended(task_id, &state, *report)
+                        .map(|error| (view.source_pane, sync_view::failure_banner(&error)))
+                });
+                if let Some((pane, frase)) = fallo {
+                    self.errors[pane] = Some(frase);
+                }
+            }
+            // Rechazado antes de existir Task: el plan caducó en el spool, o
+            // ya se gastó. El panel SIGUE abierto, así que la negativa se
+            // escribe también en él (`can_approve()` pasa a decir que no).
+            SessionEvent::SyncApplyFailed { generation, error } => {
+                if let Some((pane, frase)) =
+                    sync_view::on_apply_failed(&mut self.sync, self.sync_gen, generation, &error)
+                {
+                    self.errors[pane] = Some(frase);
+                }
+            }
         }
     }
 
@@ -2650,10 +2695,15 @@ impl NorteGui {
     /// Lo que una tecla SIGNIFICA lo decide [`sync_view::key_meaning`], que es
     /// puro y se testea sin ventana; esto solo lo ejecuta.
     ///
-    /// Aprobar no está aquí: es la tarea 4, la mitad destructiva.
+    /// **Aprobar SÍ está aquí** (#161 fase C2 tarea 4), y es la mitad
+    /// destructiva: `a` abre la segunda pregunta o manda el plan, y `y` la
+    /// contesta. Quién puede aprobar lo decide `sync_view::approve`, que
+    /// pregunta a la ÚNICA función que contesta eso en toda la GUI
+    /// (`norte_frontend::sync::SyncView::can_approve`) y que gatea ANTES de
+    /// preguntar nada.
+    ///
     /// Sin `cx`: nada de lo que estas teclas hacen necesita el contexto —el
     /// `cx.notify()` es del llamante, igual que para el panel de diferencias—.
-    /// La tarea 4 lo traerá si su camino de aplicación lo pide.
     fn on_sync_key(&mut self, ks: &gpui::Keystroke) {
         let m = ks.modifiers;
         let Some(view) = self.sync.as_ref() else {
@@ -2664,6 +2714,7 @@ impl NorteGui {
             m.control || m.alt || m.platform,
             sync_view::is_running(&view.run),
             view.run.cancel_requested,
+            view.run.confirming.is_some(),
         );
         match meaning {
             sync_view::Key::Ignore => {}
@@ -2677,9 +2728,7 @@ impl NorteGui {
                     view.run.cancel_requested = true;
                     // La segunda pregunta se cae con la Task que la motivó:
                     // dejarla puesta es cómo un `y` posterior aprueba otra
-                    // cosa (misma regla que la TUI). Hoy nadie la pone —la
-                    // tarea 4 es quien lo hará—, y por eso se escribe ahora:
-                    // el sitio donde hay que caerla es éste.
+                    // cosa (misma regla que la TUI).
                     view.run.confirming = None;
                 }
             }
@@ -2696,6 +2745,41 @@ impl NorteGui {
                     self.sync_scroll.scroll_to_item(i, ScrollStrategy::Nearest);
                 }
             }
+            sync_view::Key::Approve => {
+                let outcome = self.sync.as_mut().map(sync_view::approve);
+                self.apply_sync_outcome(outcome);
+            }
+            sync_view::Key::ConfirmYes => {
+                let outcome = self.sync.as_mut().map(sync_view::confirm_yes);
+                self.apply_sync_outcome(outcome);
+            }
+            sync_view::Key::ConfirmNo => {
+                if let Some(view) = self.sync.as_mut() {
+                    sync_view::confirm_no(view);
+                }
+            }
+        }
+    }
+
+    /// Ejecuta lo que [`sync_view::approve`] (o [`sync_view::confirm_yes`])
+    /// decidió: manda el `sync.apply`, o dice por qué no.
+    ///
+    /// La negativa va al FLASH y no a `errors[…]`: el panel tapa los dos
+    /// panes, y un banner debajo de él no lo lee nadie (mismo motivo que
+    /// [`Self::compare_enter`]). El PORQUÉ ya está en pantalla —el resumen y
+    /// el pie del panel lo dicen—; esto solo contesta a la tecla.
+    ///
+    /// Un `Asked` no manda nada: la pregunta queda armada y `render` la pinta.
+    fn apply_sync_outcome(&mut self, outcome: Option<sync_view::Approve>) {
+        match outcome {
+            Some(sync_view::Approve::Submit(plan_hash)) => {
+                let _ = self.cmds.send(SessionCmd::SyncApply {
+                    generation: self.sync_gen,
+                    plan_hash,
+                });
+            }
+            Some(sync_view::Approve::Refused(msg)) => self.flash = Some((msg, true)),
+            Some(sync_view::Approve::Asked) | None => {}
         }
     }
 
@@ -2708,6 +2792,11 @@ impl NorteGui {
     /// `sync_view::on_start`), y por eso cancela aquí: la regla la enuncia
     /// `sync_view::route_steps`. Lo llaman el `Esc` del panel
     /// ([`Self::on_sync_key`]) y la apertura del visor, que lo excluye.
+    ///
+    /// **A media APLICACIÓN esto la cancela**, y es deliberado: desde el
+    /// `SyncApplyStarted` la Task del panel es la que escribe y borra, así que
+    /// cerrar la para. Ver `sync_view::close`, que enuncia la regla y lo que
+    /// hoy NO cubre.
     fn close_sync(&mut self) {
         if let Some(task_id) = sync_view::close(&mut self.sync) {
             let _ = self.cmds.send(SessionCmd::Cancel(task_id));
@@ -3123,9 +3212,9 @@ impl NorteGui {
             // diferencia de que allí ese Enter caía en el brazo `other` y su
             // `debug_assert` tumbaba una GUI de debug.
             //
-            // O sea: esto se puede lanzar HOY, y por eso `Esc` ya lo cancela
-            // (ver `on_key`) aunque la tarea 3 sea la que lo pinte. Lo que no
-            // se puede es aplicarlo: eso es `sync.apply`, y no existe todavía.
+            // O sea: esto se puede lanzar HOY, se pinta (tarea 3) y desde la
+            // tarea 4 se puede APLICAR con `a` — la mitad destructiva ya está
+            // cableada; lo que falta es la tecla que abre el panel.
             // `Update`, no `Mirror`: el modo que BORRA se elige, no se hereda
             // de una tecla.
             "pane.sync-dirs" => self.start_sync(norte_proto::methods::SyncMode::Update),
@@ -5257,8 +5346,25 @@ impl NorteGui {
         // teclado. Con el orden inverso, `Esc` cerraba el panel que el lector
         // no estaba viendo — el defecto que el bloque de arriba documenta
         // para el visor.
-        if self.sync.is_some() {
+        // `!self.viewer_loading` por lo mismo que el guard del visor de arriba,
+        // y aquí importa más: `render` pinta «abriendo visor…» EN LUGAR del
+        // panel, así que sin esto la `a` que aprueba un plan destructivo
+        // llegaría a un panel que el lector no está viendo. Hoy el par
+        // `sync.is_some() && viewer_loading` es inalcanzable —`open_viewer`
+        // llama a `close_sync()` una línea antes de poner la bandera, y el
+        // brazo `Opened` llama a `close_viewer()`—, pero es un invariante
+        // sostenido en dos sitios lejanos y sin aserción, y su modo de fallo
+        // es exactamente el que esta tarea existe para no tener (revisión de
+        // seguridad MINOR-4).
+        if self.sync.is_some() && !self.viewer_loading {
             if self.means_help(ks) {
+                // La segunda pregunta se cae al irse el teclado: dejarla
+                // armada bajo la ayuda es cómo un `y` posterior contesta a una
+                // pregunta hecha antes del overlay (revisión de seguridad
+                // MINOR-2, misma regla que `Key::ConfirmNo`).
+                if let Some(view) = self.sync.as_mut() {
+                    sync_view::confirm_no(view);
+                }
                 self.open_help();
                 cx.notify();
                 return;

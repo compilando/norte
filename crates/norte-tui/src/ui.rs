@@ -3569,24 +3569,22 @@ fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, the
         // columnas la pregunta sola ya llena la fila, y la versión unida se
         // cortaba justo por donde decía qué tecla la contesta — que es la
         // mitad que hace falta. Lo cazó el snapshot.
+        //
+        // Qué línea toca lo decide `norte_frontend::sync::hint_id`, la
+        // COMPARTIDA (#161): este `match` tenía el brazo de `sync-hint`
+        // condicionado solo a `awaiting_approval()`, así que un plan cerrado
+        // pero NO aprobable —bloqueado por el daemon, o con la Task
+        // cancelada— seguía ofreciendo «a aprobar» encima de un pie que ya
+        // decía «este plan no se puede aprobar». Es el mismo desacuerdo que
+        // la revisión MAJOR-1 arregló entre el pie y la tecla; ahora hay UNA
+        // respuesta y la comparten los dos frontends.
+        let id = norte_frontend::sync::hint_id(view);
         let lineas = match &view.confirming {
             Some(c) => vec![
                 Line::from(Span::styled(c.text.clone(), theme.role(Role::Warning))),
-                Line::from(Span::styled(
-                    t("sync-hint-confirm"),
-                    theme.role(Role::Warning),
-                )),
+                Line::from(Span::styled(t(id), theme.role(Role::Warning))),
             ],
-            // Sin `a aprobar` una vez mandado: aplicarlo GASTA el plan, y un
-            // segundo `sync.apply` del mismo hash contesta `PlanStale`.
-            None if view.awaiting_approval() => vec![Line::from(Span::styled(
-                t("sync-hint"),
-                theme.role(Role::Info),
-            ))],
-            None => vec![Line::from(Span::styled(
-                t("sync-hint-done"),
-                theme.role(Role::Info),
-            ))],
+            None => vec![Line::from(Span::styled(t(id), theme.role(Role::Info)))],
         };
         frame.render_widget(Paragraph::new(lineas), a);
     }

@@ -51,11 +51,20 @@
 //! bien nombrado puede hacerse pasar por una fila entera ante un lector de
 //! pantalla.
 //!
-//! La APROBACIÓN no está aquí: es la tarea 4 del plan, deliberadamente en
-//! otro commit porque es la mitad DESTRUCTIVA.
+//! # Y la APROBACIÓN, que es la mitad destructiva
+//! [`approve`], [`confirm_yes`] y [`on_apply_start`] (tarea 4). Aquí tampoco
+//! se decide nada nuevo: «¿esto se puede aprobar?» la contesta
+//! [`norte_frontend::sync::SyncView::can_approve`] y la frase de la segunda
+//! pregunta la redacta
+//! [`norte_frontend::sync::SyncPlan::confirmation`]. Lo que este módulo añade
+//! es el ORDEN —el gate antes que el prompt, que es justo lo que el CLI de la
+//! fase A hizo al revés— y a quién hay que cancelar cuando la Task que este
+//! panel alimenta pasa a ser la que ESCRIBE.
 
-use norte_frontend::sync::{SyncRunState, SyncView as SyncRun};
-use norte_proto::methods::{SyncMode, SyncPlanDone, SyncStepsBatch};
+use norte_frontend::sync::{SyncRunState, SyncState, SyncView as SyncRun};
+use norte_proto::methods::{
+    PlanHash, SyncFailure, SyncMode, SyncPlanDone, SyncReportResult, SyncStepsBatch,
+};
 use norte_proto::{TaskId, TaskState, VPath};
 
 use crate::sp;
@@ -76,11 +85,12 @@ pub struct SyncView {
     /// lance `sync.apply`, el final del canal del PLAN seguirá en vuelo, y
     /// sin este contraste pintaría «hecho» sobre una aplicación en curso.
     ///
-    /// **La tarea 4 tiene que REASIGNARLO** al arrancar `sync.apply`, y no es
-    /// cosmético: [`close`] y el `Esc` cancelan lo que este campo diga, así
-    /// que un `task_id` que se quedara en el del plan cancelaría una Task ya
-    /// terminada (no-op) y dejaría corriendo la que está BORRANDO, para un
-    /// panel que ya no existe (revisión rust MINOR-3).
+    /// **Se REASIGNA al arrancar `sync.apply`**
+    /// ([`SyncView::on_apply_started`]), y no es cosmético: [`close`] y el
+    /// `Esc` cancelan lo que este campo diga, así que un `task_id` que se
+    /// quedara en el del plan cancelaría una Task ya terminada (no-op) y
+    /// dejaría corriendo la que está BORRANDO, para un panel que ya no existe
+    /// (revisión rust MINOR-3).
     pub task_id: TaskId,
     /// El pane que pidió el plan, o sea el lado ORIGEN. Viaja congelado
     /// desde la petición (mismo motivo que
@@ -91,6 +101,28 @@ pub struct SyncView {
     /// reinterpretaciones, la segunda pregunta y el desenlace. Es
     /// [`norte_frontend::sync::SyncView`], el mismo tipo que la TUI.
     pub run: SyncRun,
+    /// **Ya se mandó un `sync.apply` y todavía no ha contestado.**
+    ///
+    /// El modelo compartido no puede saberlo, y ahí está el problema que este
+    /// campo cierra: `SyncState` solo sale de `Ready` cuando llega el EVENTO
+    /// `SyncApplyStarted`, o sea una vuelta completa al daemon después de que
+    /// la tecla mandara el comando. Entre las dos cosas `can_approve()` sigue
+    /// diciendo que sí y el pie sigue ofreciendo `a`, así que dos pulsaciones
+    /// —o la repetición del teclado— mandan DOS `sync.apply` del mismo hash.
+    ///
+    /// El spool consume el derecho una sola vez, así que el segundo vuelve
+    /// como `PlanStale`… y esa negativa pintaba «el plan falló» encima de una
+    /// aplicación que seguía BORRANDO, apagaba [`is_running`] y convertía el
+    /// siguiente `Esc` en un cierre —que cancela— en vez de en una
+    /// cancelación explícita. Es literalmente el defecto que la TUI documenta
+    /// como ya pagado (`approve_sync`, `norte-tui/src/main.rs`), y la TUI se
+    /// libra solo porque lanza el `sync.apply` esperándolo dentro del run
+    /// loop, sin leer ninguna tecla en esa ventana. El salto de canal de esta
+    /// GUI la reabrió (revisiones rust BLOCKER-1 y de seguridad BLOCKER-1).
+    ///
+    /// Se pone al producir un [`Approve::Submit`] y se quita al resolverse la
+    /// petición ([`on_apply_start`] o [`on_apply_failed`]).
+    pub submitted: bool,
 }
 
 impl SyncView {
@@ -108,6 +140,7 @@ impl SyncView {
                 started.encodings.source,
                 started.encodings.dest,
             ),
+            submitted: false,
         }
     }
 
@@ -168,12 +201,95 @@ impl SyncView {
             return None;
         }
         self.run.run = SyncRunState::from_task_state(state);
+        // La segunda pregunta se cae con la petición que la motivó: dejarla
+        // puesta bajo un pie que ya dice «falló» —con el marco en color de
+        // aviso— es cómo un `y` posterior contesta a otra cosa (revisión de
+        // seguridad MINOR-3, misma regla que `Key::CancelTask`).
+        self.run.confirming = None;
         let TaskState::Failed { error } = state else {
             return None;
         };
         let categoria = norte_frontend::error::error_category(error);
         self.run.error = Some(categoria.clone());
         Some(categoria)
+    }
+
+    /// `sync.apply` contestó con una Task: el panel la ADOPTA — el modelo
+    /// avanza a `Applying` y este panel pasa a cancelar la aplicación en vez
+    /// del plan.
+    ///
+    /// Devuelve `false` **sin tocar nada** si este panel no está en
+    /// condiciones de adoptarla, y entonces la Task es huérfana: nadie la mira
+    /// y hay que cancelarla (ver [`on_apply_start`]).
+    ///
+    /// Dos negativas, y las dos se resuelven ANTES de mutar:
+    ///
+    /// * **Ya se pidió cancelar.** El `Esc` que cabe entre la tecla que aprobó
+    ///   y esta respuesta cancela la Task del PLAN y deja `cancel_requested`
+    ///   puesto; el `on_apply_started` compartido lo BORRA, así que sin este
+    ///   guard la aplicación arrancaba igual y quien pulsó `Esc` necesitaba
+    ///   otros dos para pararla. Se resuelve del lado conservador, que es lo
+    ///   que [`norte_frontend::sync::SyncView::can_approve`] ya enuncia: quien
+    ///   pulsó `Esc` pidió parar, y esta pantalla escribe en el disco de
+    ///   alguien (revisión rust MAJOR-1).
+    /// * **El panel no es aprobable**, que es exactamente la condición que el
+    ///   modelo exige para pasar a `Applying` —y por la parte del run,
+    ///   más estricta—. Se pregunta a la ÚNICA función que contesta eso en
+    ///   toda la GUI, no a una segunda comprobación escrita aquí.
+    ///
+    /// # La reasignación de `task_id` es la mitad importante
+    /// [`close`] y el `Esc` cancelan lo que ese campo diga. Sin reasignarlo,
+    /// cerrar el panel cancelaría la Task del PLAN —ya terminada, o sea un
+    /// no-op— y dejaría corriendo la que está ESCRIBIENDO y BORRANDO, para un
+    /// panel que ya no existe. Y se reasigna solo si el modelo ACEPTÓ de
+    /// verdad: la última palabra sobre si esto se está aplicando la tiene él.
+    pub fn on_apply_started(&mut self, task_id: TaskId) -> bool {
+        if self.run.cancel_requested || !self.run.can_approve() {
+            return false;
+        }
+        self.run.on_apply_started(task_id);
+        self.submitted = false;
+        // Se pregunta por el ESTADO resultante y no se presupone: el modelo
+        // es quien tiene la última palabra sobre si esto se está aplicando.
+        let adoptada = matches!(&self.run.state, SyncState::Applying(a) if a.task_id() == task_id);
+        if adoptada {
+            self.task_id = task_id;
+        }
+        adoptada
+    }
+
+    /// Terminó la Task de `sync.apply`: fija el desenlace y mete el informe.
+    /// Devuelve la CATEGORÍA localizada del error si hubo, para el banner.
+    ///
+    /// Devuelve `None` sin tocar nada si el final es de OTRA Task — el mismo
+    /// contraste que [`SyncView::on_plan_ended`], y aquí protege el caso
+    /// simétrico: el final del canal del PLAN sigue en vuelo mientras la
+    /// aplicación corre.
+    ///
+    /// # Qué se hace con el informe NO se decide aquí
+    /// Es [`norte_frontend::sync::SyncView::on_apply_ended`], la compartida:
+    /// el error de la Task manda sobre el del informe, un informe que no llega
+    /// es un FALLO (aunque la Task dijera `Completed`, porque sin él no se
+    /// sabe cuánto se escribió) y un estado no terminal también. Vivía aquí,
+    /// y la TUI tenía sus propios brazos en `harvest_sync_apply` — con el
+    /// segundo de los tres SIN arreglar, así que su pie decía «aplicando…»
+    /// para siempre. Arreglarlo en una copia y dejarlo en la otra es
+    /// exactamente lo que C1 shipeó (revisión rust MAJOR-3).
+    ///
+    /// De este lado se queda lo que de verdad es de esta GUI: el contraste del
+    /// `task_id` y dónde guardar la categoría.
+    pub fn on_apply_ended(
+        &mut self,
+        task_id: TaskId,
+        state: &TaskState,
+        report: Result<SyncReportResult, norte_proto::Error>,
+    ) -> Option<String> {
+        if task_id != self.task_id {
+            return None;
+        }
+        let categoria = self.run.on_apply_ended(state, report);
+        self.run.error.clone_from(&categoria);
+        categoria
     }
 }
 
@@ -275,6 +391,30 @@ pub fn open(slot: &mut Option<SyncView>, started: Started) -> Option<TaskId> {
 /// sobre una Task terminada es un no-op en el daemon, y mirar antes sería una
 /// condición que un día se evalúa mal sobre algo que recorre —o BORRA— dos
 /// árboles para un panel que ya no existe (regla dura 3).
+///
+/// # Qué significa cerrar A MEDIA APLICACIÓN
+/// **Cancelar la aplicación**, y es una decisión, no un accidente: desde el
+/// [`SyncView::on_apply_started`] la Task que este campo nombra es la que
+/// ESCRIBE y BORRA, así que soltar el panel la para. La alternativa —dejarla
+/// corriendo— es exactamente lo que la regla 3 prohíbe: algo que reescribe un
+/// árbol sin nadie que lo vea ni lo pueda parar. Es también lo que hace la TUI.
+///
+/// Llegar aquí a media aplicación pide DOS `Esc` (el primero pide la
+/// cancelación y deja el panel abierto para leer el informe), así que el
+/// camino corto no cierra nada por descuido.
+///
+/// # Lo que cancelar NO devuelve, hoy
+/// La regla es que lo aplicado hasta el corte se queda journalizado (ADR
+/// 0049), o sea media sincronización pero deshacible. **Tiene una excepción, y
+/// es del core**: `sync::exec` no escribe la entrada del journal de un
+/// `DeleteTree` que se corta a MEDIO borrar (`Err(Cancelled)`), y ese borrado
+/// va entrada por entrada. Contra un destino sin papelera —un bucket, un
+/// SFTP, un FAT— eso deja un subárbol parcialmente borrado, sin fila en el
+/// journal, sin deshacer y sin fila en el informe. Es anterior a esta fase
+/// (issue #186); se anota aquí porque éste es el sitio que la dispara y
+/// porque el comentario que decía «no se pierde nada irrecuperable» era falso
+/// para justo el plan que se lleva el aviso más largo (revisión de seguridad
+/// MAJOR-2).
 #[must_use]
 pub fn close(slot: &mut Option<SyncView>) -> Option<TaskId> {
     slot.take().map(|view| view.task_id)
@@ -369,6 +509,218 @@ pub fn failure_banner(category: &str) -> String {
         "sync-status-failed",
         &[("error", crate::banner_safe(category).as_str())],
     )
+}
+
+// ---------------------------------------------------------------------------
+// Aprobar y aplicar (la mitad DESTRUCTIVA, tarea 4)
+// ---------------------------------------------------------------------------
+
+/// Qué hacer con la Task que `sync.apply` acaba de crear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub enum ApplyStart {
+    /// **Nadie la mira: cancélala.** O la petición está vencida, o el panel
+    /// que la pidió ya no está, o el modelo no la aceptó. Una Task de
+    /// aplicación corriendo sin panel es exactamente lo que la regla 3
+    /// prohíbe, y ésta ESCRIBE y BORRA: dejarla suelta es dejar corriendo un
+    /// `Mirror` que nadie puede ni ver ni parar.
+    Orphan(TaskId),
+    /// El panel la adoptó: a partir de aquí es lo que su `Esc` y su cierre
+    /// cancelan.
+    Adopted,
+}
+
+/// Decide qué hacer con el `SyncApplyStarted` y lo aplica sobre el hueco.
+///
+/// El guard de generación va aquí porque esto juzga una PETICIÓN —la misma
+/// regla que [`on_start`] y [`failed_banner`]— y porque una aplicación
+/// superada es el peor de los casos: `sync_gen` avanza cuando el lector pide
+/// otro plan, y ese plan ABRE otro panel; sin este guard la Task que está
+/// borrando se quedaría corriendo detrás de él, sin nadie que la pinte ni la
+/// pueda cancelar.
+///
+/// Lo que sigue correlacionándose por `task_id` es el FINAL
+/// ([`SyncView::on_apply_ended`]), igual que el del plan.
+pub fn on_apply_start(
+    slot: &mut Option<SyncView>,
+    current_gen: u64,
+    generation: u64,
+    task_id: TaskId,
+) -> ApplyStart {
+    if !crate::generation_is_current(current_gen, generation) {
+        return ApplyStart::Orphan(task_id);
+    }
+    match slot.as_mut() {
+        Some(view) => {
+            if view.on_apply_started(task_id) {
+                ApplyStart::Adopted
+            } else {
+                // La petición se resolvió aunque el panel no la adopte: el
+                // pestillo se suelta para no dejar la `a` muerta para siempre.
+                view.submitted = false;
+                ApplyStart::Orphan(task_id)
+            }
+        }
+        None => ApplyStart::Orphan(task_id),
+    }
+}
+
+/// `sync.apply` fue RECHAZADO antes de existir Task alguna (un plan caducado
+/// en el spool, un `PlanStale`, un daemon que se cayó entre el plan y la
+/// aprobación): marca el panel como fallido y devuelve `(pane, frase)` para
+/// el banner, o `None` si la petición ya está SUPERADA.
+///
+/// El mismo guard que [`failed_banner`], y la MISMA frase: son el mismo hecho
+/// —«esto no se va a aplicar»— y dos redacciones para él es lo que la revisión
+/// de la tarea 2 ya corrigió una vez (MINOR-1).
+///
+/// A diferencia de un `sync.plan` rechazado, aquí SÍ hay panel: el lector está
+/// mirando el plan que acaba de aprobar, y un banner que aparece mientras el
+/// pie sigue diciendo «pulsa `a` para aprobar» es la pantalla contradiciéndose.
+/// Por eso el desenlace se escribe en el run — y `can_approve()` pasa a decir
+/// que no, que es la verdad: no se sabe si el plan sigue en el spool.
+///
+/// # Una negativa NO puede describir una aplicación que ya arrancó
+/// El segundo guard —el estado— es la mitad de la corrección del BLOCKER que
+/// las dos revisiones encontraron. Con dos `sync.apply` del mismo hash en
+/// vuelo, el spool consume el derecho una vez y el perdedor vuelve como
+/// `PlanStale`, con la MISMA generación que el ganador: sin este guard esa
+/// negativa marcaba `Failed` un panel que estaba BORRANDO, apagaba
+/// [`is_running`] y convertía el siguiente `Esc` en un cierre —que cancela la
+/// aplicación viva— mientras la pantalla decía que ya había fallado. El
+/// pestillo [`SyncView::submitted`] impide que se llegue a mandar el segundo;
+/// esto lo impide igual si llegara por otro camino, porque las dos mitades
+/// pueden aterrizar en cualquier orden.
+pub fn on_apply_failed(
+    slot: &mut Option<SyncView>,
+    current_gen: u64,
+    generation: u64,
+    error: &norte_proto::Error,
+) -> Option<(usize, String)> {
+    if !crate::generation_is_current(current_gen, generation) {
+        return None;
+    }
+    let view = slot.as_mut()?;
+    if !matches!(view.run.state, SyncState::Ready(_)) {
+        tracing::warn!("sync.apply rechazado descartado: este panel ya no espera respuesta");
+        return None;
+    }
+    // La petición se resolvió: el pestillo se suelta.
+    view.submitted = false;
+    let categoria = norte_frontend::error::error_category(error);
+    view.run.run = SyncRunState::Failed;
+    view.run.error = Some(categoria.clone());
+    // La pregunta a medio contestar se cae con la petición que la motivó:
+    // dejarla puesta es cómo un `y` posterior contesta a otra cosa.
+    view.run.confirming = None;
+    Some((view.source_pane, failure_banner(&categoria)))
+}
+
+/// Lo que la tecla de aprobar (o la `y` que contesta la segunda pregunta)
+/// consigue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use]
+pub enum Approve {
+    /// **No se puede aprobar, y se EXPLICA** — jamás se pregunta.
+    ///
+    /// Este brazo es la corrección del peor defecto de esta spec: el CLI de
+    /// la fase A no llegó a preguntar «¿se puede?» y cayó directo al
+    /// `confirmation()`, que devuelve `None` cuando `!can_approve()` — así
+    /// que los planes MENOS fiables recibían el aviso MÁS CORTO (un `mirror`
+    /// bloqueado salía con un sí/no pelado, sin la frase de «esto borra N
+    /// árboles») y luego se aplicaban enteros desde el spool.
+    ///
+    /// La frase es corta a propósito: el PORQUÉ ya está en pantalla, en el
+    /// resumen ([`summary_lines`], que dice si el plan está bloqueado, si no
+    /// cuadra con sus cuentas o si trae pasos que esta build no sabe nombrar)
+    /// y en el pie ([`status_line`]). Esto solo contesta a la tecla.
+    Refused(String),
+    /// El plan merece la SEGUNDA pregunta, que queda armada en
+    /// `run.confirming`. Nada se ha mandado.
+    Asked,
+    /// No la merece (o ya se contestó): manda este `plan_hash`.
+    ///
+    /// El hash es lo ÚNICO que viaja (ADR 0049): no hay forma de pedir que se
+    /// ejecute algo distinto de lo que el panel enseñó.
+    Submit(Box<PlanHash>),
+}
+
+/// La tecla de aprobar sobre el panel.
+///
+/// Tres reglas, y cada una es un defecto que una fase anterior shipeó:
+///
+/// 1. **Se pregunta a [`norte_frontend::sync::SyncView::can_approve`]**, que
+///    envuelve `SyncState::can_approve` y NUNCA `SyncPlan::can_approve` — el
+///    segundo sigue siendo alcanzable por `SyncState::plan()` y contesta que
+///    sí sobre un plan ya aprobado, porque ninguno de sus tres factores cambia
+///    al gastarse. En toda esta GUI hay UNA función que contesta esta
+///    pregunta, y es la misma que contesta en la TUI.
+/// 2. **El gate va PRIMERO**: un plan que no se puede aprobar no llega al
+///    prompt, se explica ([`Approve::Refused`]).
+/// 3. **La frase de la segunda pregunta es
+///    [`norte_frontend::sync::SyncPlan::confirmation`]**, que la calcula de
+///    `dest_trash` y de las cuentas. Aquí no se redacta una segunda frase
+///    sobre el borrado: una cabecera que diga «algo de esto se puede deshacer»
+///    sobre una confirmación que diga «nada» enseña a saltarse las dos.
+pub fn approve(view: &mut SyncView) -> Approve {
+    if view.submitted || !view.run.can_approve() {
+        return Approve::Refused(norte_i18n::t("msg-sync-cannot-approve"));
+    }
+    // `can_approve()` ya implica `Ready` con plan, así que este `else` no
+    // ocurre; se contesta igual que la negativa en vez de con un `unwrap`
+    // (regla dura 6).
+    let Some(plan) = view.run.state.plan() else {
+        return Approve::Refused(norte_i18n::t("msg-sync-cannot-approve"));
+    };
+    let pregunta = plan.confirmation(norte_i18n::active());
+    let hash = plan.done().plan_hash.clone();
+    match pregunta {
+        Some(c) => {
+            view.run.confirming = Some(c);
+            Approve::Asked
+        }
+        None => {
+            view.submitted = true;
+            Approve::Submit(Box::new(hash))
+        }
+    }
+}
+
+/// La `y` que contesta la segunda pregunta: la retira y manda el hash.
+///
+/// **Vuelve a preguntar por `can_approve`**, y no es redundante: entre la
+/// primera respuesta y la segunda el modelo no retrocede, pero un
+/// `SyncApplyStarted` o un `SyncApplyFailed` sí pueden haber aterrizado en
+/// medio (esta GUI recibe eventos entre teclas), y el hash sale de aquí hacia
+/// una escritura sin ninguna puerta después.
+///
+/// Y por [`SyncView::submitted`] antes que por nada: lo que hace imposible
+/// aplicar dos veces NO es que el estado sea `Applying` —no lo es hasta que el
+/// daemon contesta, una vuelta entera después de que la tecla mandara el
+/// comando—, sino ese pestillo. La versión anterior de este comentario
+/// afirmaba lo primero, que es cierto en la TUI (lanza el `sync.apply`
+/// esperándolo, sin leer teclas) y era falso aquí.
+pub fn confirm_yes(view: &mut SyncView) -> Approve {
+    view.run.confirming = None;
+    if view.submitted || !view.run.can_approve() {
+        return Approve::Refused(norte_i18n::t("msg-sync-cannot-approve"));
+    }
+    let Some(plan) = view.run.state.plan() else {
+        return Approve::Refused(norte_i18n::t("msg-sync-cannot-approve"));
+    };
+    let hash = plan.done().plan_hash.clone();
+    view.submitted = true;
+    Approve::Submit(Box::new(hash))
+}
+
+/// Cualquier otra tecla con la segunda pregunta puesta: la retira y no manda
+/// nada.
+///
+/// Cualquiera y no solo una «n»: una pregunta a medio contestar tiene que
+/// resolverse, porque dejarla puesta mientras el cursor se mueve por debajo es
+/// cómo un `y` posterior aprueba otra cosa.
+pub fn confirm_no(view: &mut SyncView) {
+    view.run.confirming = None;
 }
 
 // ---------------------------------------------------------------------------
@@ -639,6 +991,142 @@ pub fn summary_lines(run: &SyncRun) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// El informe de `sync.report`, si ya llegó. `None` en todo lo demás — y en
+/// particular mientras la aplicación CORRE, que es cuando todavía no se sabe
+/// qué se escribió.
+#[must_use]
+pub fn report(run: &SyncRun) -> Option<&SyncReportResult> {
+    match &run.state {
+        SyncState::Applied(a) => Some(a.report()),
+        _ => None,
+    }
+}
+
+/// UN paso que NO ocurrió, ya pintable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailureText {
+    /// La ruta del fallo, badgeada y enmascarada.
+    pub rel: PathText,
+    /// La ortografía del DESTINO cuando el informe la manda y difiere en
+    /// bytes (#152) — en su PROPIO campo, por lo mismo que
+    /// [`StepText::dest`]: `→` es un carácter imprimible corriente que el
+    /// saneado no enmascara, así que unidas en banda un nombre fingiría la
+    /// pareja.
+    pub dest: Option<PathText>,
+    /// Por qué no ocurrió, en palabras y en el idioma del lector.
+    ///
+    /// En su propio campo y en su propio elemento, jamás pegado a la ruta con
+    /// un `:` dentro de la misma cadena: un fichero llamado
+    /// `informe: permiso denegado.txt` es legal en ext4, APFS y NTFS y llega
+    /// SIN badge, así que en banda fingiría el veredicto de la fila. Es la
+    /// misma regla —y el mismo separador ESTRUCTURAL— que las tres marcas de
+    /// un paso.
+    pub cause: String,
+    /// De qué raíz cuelga [`FailureText::rel`], en palabras, cuando no consta.
+    /// Vacío cuando el informe lo prueba (manda `dest_rel`, así que `rel` es
+    /// la mitad del origen).
+    ///
+    /// **Se pinta, y no se calla**: en este panel una ruta sin calificar
+    /// significa «del origen» —así lo escribe [`StepText::anchor`] veinte
+    /// líneas más arriba, y las dos listas van una encima de la otra—, así que
+    /// el silencio sería la afirmación. Un `DeleteTree` que falla por permisos
+    /// es la fila hostil más común de un `Mirror` y su ruta cuelga del
+    /// DESTINO; el informe no trae la clase que lo diría, y decir «no consta»
+    /// es lo único honesto (auditoría de encoding MAJOR-2).
+    pub anchor: String,
+    /// Nombre accesible de la FILA: la causa, con palabras, y **nada más**.
+    ///
+    /// Las rutas NO están aquí, por lo mismo que en [`StepText::a11y`]: si lo
+    /// estuvieran, un fichero llamado como el veredicto podría hacerse pasar
+    /// por una fila entera ante un lector de pantalla. Cada ruta lleva su
+    /// propio nodo y su propio nombre.
+    ///
+    /// Es un CAMPO y no una cadena compuesta en el árbol de render para que se
+    /// pueda afirmar sin ventana — que es lo que hace útil al test gemelo de
+    /// los pasos (auditoría de encoding MINOR-5).
+    pub a11y: String,
+}
+
+/// Un fallo del informe, ya pintable.
+///
+/// Las dos rutas y el plegado los resuelve
+/// [`norte_frontend::sync::render_failure`], igual que un paso pasa por
+/// `render_step`: el plegado es por BYTES y la ortografía del destino se lee
+/// con la del destino. La causa la nombra
+/// [`norte_frontend::sync::failure_cause_label`], la MISMA tabla que imprime
+/// el CLI — un `_` que sobrevive a un daemon más nuevo no puede tener dos
+/// copias, o una nombra lo que la otra llama «no reconocido».
+#[must_use]
+pub fn failure_text(
+    failure: &SyncFailure,
+    enc: norte_frontend::sync::SyncEncodings,
+) -> FailureText {
+    use norte_frontend::sync::RelAnchor;
+
+    let cells = norte_frontend::sync::render_failure(failure, enc);
+    let cause = norte_frontend::sync::failure_cause_label(failure.cause, norte_i18n::active());
+    FailureText {
+        rel: path_text(&cells.rel),
+        dest: cells.dest_rel.as_ref().map(path_text),
+        anchor: match cells.anchor {
+            // `Dest` no lo produce `render_failure` hoy —haría falta la clase
+            // en el wire—, pero se nombra igual: el día que llegue, el brazo
+            // `_` lo habría pintado como «del origen» sin decir nada.
+            RelAnchor::Dest => norte_i18n::t("sync-anchor-dest"),
+            RelAnchor::Either => norte_i18n::t("sync-anchor-either"),
+            RelAnchor::Source => String::new(),
+        },
+        a11y: cause.clone(),
+        cause,
+    }
+}
+
+/// Cuántos fallos PINTA el panel como filas.
+///
+/// Un tope de PANTALLA, encima del tope del protocolo
+/// ([`norte_proto::methods::SYNC_MAX_FAILURES_REPORTED`], 256): la lista no
+/// está virtualizada —vive dentro de un `flex_col` con `overflow_hidden`, así
+/// que 256 filas empujarían el pie y la línea de estado fuera de la ventana—
+/// y lo que no cabe se pierde SIN decirlo, que es lo único que no se puede
+/// hacer (spec §6). Con el tope, lo que no se pinta se CUENTA
+/// ([`failures_hidden`]) — mismo trato que el CLI le da a los bloqueos de un
+/// plan.
+///
+/// Ocho, que con el título y la línea del resto son diez filas: suficiente
+/// para ver la FORMA del fallo (todo permisos, todo nombres ilegales) sin
+/// comerse el panel. El informe completo se lee por el CLI o por el journal.
+pub const FAILURES_SHOWN: usize = 8;
+
+/// Los fallos del informe que se PINTAN, uno por línea y en el orden en que
+/// llegaron: los primeros [`FAILURES_SHOWN`]. Vacío mientras no haya informe.
+#[must_use]
+pub fn failures(run: &SyncRun) -> Vec<FailureText> {
+    let enc = run.encodings();
+    report(run).map_or_else(Vec::new, |r| {
+        r.failures
+            .iter()
+            .take(FAILURES_SHOWN)
+            .map(|f| failure_text(f, enc))
+            .collect()
+    })
+}
+
+/// Cuántos fallos hay que el panel NO enseña.
+///
+/// Dos topes se acumulan y esta cifra los cuenta LOS DOS: `sync.report`
+/// recorta la lista a [`norte_proto::methods::SYNC_MAX_FAILURES_REPORTED`]
+/// mientras `failed` cuenta sin tope, y el panel pinta [`FAILURES_SHOWN`] de
+/// los que llegaron. Sin esta cifra, ocho filas pasarían por el total de
+/// cuarenta mil — la misma clase de mentira que un total de bytes que esconde
+/// los ficheros que no se pudieron medir.
+#[must_use]
+pub fn failures_hidden(run: &SyncRun) -> u64 {
+    report(run).map_or(0, |r| {
+        let pintados = u64::try_from(r.failures.len().min(FAILURES_SHOWN)).unwrap_or(u64::MAX);
+        r.failed.saturating_sub(pintados)
+    })
+}
+
 /// El pie: en qué punto está el diálogo.
 ///
 /// La frase la compone [`norte_frontend::sync::status_line`], la MISMA que
@@ -672,12 +1160,10 @@ const PAGE_STEP: isize = 10;
 /// Lo que una tecla SIGNIFICA dentro del panel de sincronización.
 ///
 /// Separado del despacho por lo mismo que [`crate::compare_view::Key`]: lo
-/// que se puede equivocar aquí es la DECISIÓN, y una de ellas —el `Esc`— es
-/// la única salida de una pantalla que se queda el teclado entero.
-///
-/// **Aprobar no está aquí**, y no es un olvido: es la tarea 4 del plan, la
-/// mitad DESTRUCTIVA, deliberadamente en otro commit. Esta pantalla todavía
-/// solo mira.
+/// que se puede equivocar aquí es la DECISIÓN, y dos de ellas —el `Esc`, que
+/// es la única salida de una pantalla que se queda el teclado entero, y la
+/// `y` que contesta a «esto borra N árboles»— no admiten un despacho que se
+/// equivoque.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
     /// Ni la toca.
@@ -688,6 +1174,12 @@ pub enum Key {
     Close,
     /// Mover el cursor por los pasos.
     Move(isize),
+    /// Aprobar: o abre la segunda pregunta, o manda el plan ([`approve`]).
+    Approve,
+    /// La `y` que contesta que sí a la segunda pregunta ([`confirm_yes`]).
+    ConfirmYes,
+    /// Cualquier otra cosa con la pregunta puesta: la retira ([`confirm_no`]).
+    ConfirmNo,
 }
 
 /// Traduce una tecla de GPUI (`"escape"`, `"pagedown"`…) a lo que significa
@@ -698,34 +1190,59 @@ pub enum Key {
 ///   Condicionar el cierre a un estado terminal deja encerrado al lector
 ///   cuando el canal no llega a cerrarse nunca —un daemon caído, un provider
 ///   colgado en una NFS muerta—, que es el BLOCKER-1 que la TUI ya pagó y que
-///   el panel de diferencias de esta GUI heredó resuelto.
+///   el panel de diferencias de esta GUI heredó resuelto. Y con la aplicación
+///   corriendo es TAMBIÉN la salida: `Esc` cancela lo que este panel esté
+///   alimentando, que después de aprobar es la Task que escribe.
+/// * **Con la segunda pregunta puesta el teclado se reduce a `y` y «no»**, y
+///   eso se resuelve por ENCIMA del filtro de modificadores. Con el filtro
+///   delante, un `Ctrl+r` o un `Alt+e` de costumbre caían en `Ignore` y
+///   dejaban «se van a borrar 2 árboles… ¿Seguir?» armada en pantalla,
+///   esperando un `y` que ya no sabe a qué contesta (la corrección que la TUI
+///   documenta). El `Esc` es la única excepción: cerrar no es una respuesta a
+///   la pregunta.
+/// * **`Enter` NO aprueba.** Sincronizar borra y sobrescribe, así que se pide
+///   una tecla que nadie pulsa por inercia — el mismo criterio que los
+///   diálogos TOFU y la aprobación de una op de agente, y la misma tecla que
+///   la TUI.
 /// * Con `ctrl`/`alt`/`cmd` no significa nada.
 /// * **No hay tecla de salir de norte**, y ahí diverge de la TUI: en modo raw
 ///   `ISIG` está apagado y su panel tuvo que añadir `Ctrl+C`; una ventana
 ///   tiene el botón de cerrar del gestor de ventanas, que no es algo que este
 ///   panel pueda comerse.
 #[must_use]
-pub fn key_meaning(key: &str, modified: bool, running: bool, cancel_requested: bool) -> Key {
-    // Tarea 4: la segunda pregunta se resuelve AQUÍ, por encima del filtro de
-    // modificadores. Es el orden que la TUI documenta como corrección: con el
-    // filtro delante, un `Ctrl+r` o un `Alt+e` de costumbre caen en `Ignore` y
-    // dejan «se van a borrar 2 árboles… ¿Seguir?» armada en pantalla,
-    // esperando un `y` que ya no sabe a qué contesta (revisión rust MINOR-2).
+pub fn key_meaning(
+    key: &str,
+    modified: bool,
+    running: bool,
+    cancel_requested: bool,
+    confirming: bool,
+) -> Key {
+    // El `Esc` va primero, y sigue valiendo con la pregunta puesta: salir no
+    // es una respuesta a «¿seguro?». Solo sin modificadores, como el resto de
+    // este panel.
+    if key == "escape" && !modified {
+        return if running && !cancel_requested {
+            Key::CancelTask
+        } else {
+            Key::Close
+        };
+    }
+    if confirming {
+        return if !modified && key == "y" {
+            Key::ConfirmYes
+        } else {
+            Key::ConfirmNo
+        };
+    }
     if modified {
         return Key::Ignore;
     }
     match key {
-        "escape" => {
-            if running && !cancel_requested {
-                Key::CancelTask
-            } else {
-                Key::Close
-            }
-        }
         "up" => Key::Move(-1),
         "down" => Key::Move(1),
         "pageup" => Key::Move(-PAGE_STEP),
         "pagedown" => Key::Move(PAGE_STEP),
+        "a" => Key::Approve,
         _ => Key::Ignore,
     }
 }
@@ -803,13 +1320,18 @@ impl Palette {
 /// que un plan de un millón de pasos no construye un millón de elementos por
 /// frame.
 ///
-/// # El pie nombra una tecla que todavía no existe
-/// [`status_line`] es la frase COMPARTIDA, y su brazo `Ready` dice «pulsa `a`
-/// para aprobar». En esta GUI `a` llega con la tarea 4 —la mitad
-/// destructiva, deliberadamente en otro commit—, que es la que la hace
-/// verdad. Escribir aquí una segunda redacción para evitarlo sería la segunda
-/// respuesta a «¿esto se puede aprobar?», que es exactamente lo que este
-/// módulo existe para no tener.
+/// # La segunda pregunta se pinta DENTRO, y con el marco cambiado
+/// Cuando [`approve`] la arma, el marco pasa a color de aviso y la pregunta
+/// —la de [`norte_frontend::sync::SyncPlan::confirmation`], nunca una segunda
+/// redacción— ocupa el pie con la tecla que la contesta EN OTRA LÍNEA: a un
+/// ancho estrecho la pregunta sola llena la fila, y la versión unida se cortaba
+/// justo por donde decía qué tecla la contesta (lo cazó el snapshot de la TUI).
+/// El color no es la única señal: el texto de la pregunta lo es.
+///
+/// # Y los fallos del informe, uno por línea
+/// En cuanto `sync.report` llega, debajo de los pasos y con su propio título:
+/// son los pasos que NO ocurrieron, y la lista de arriba sigue enseñando lo
+/// que se planificó.
 pub fn render(
     view: &SyncView,
     chrome: &crate::ChromeColors,
@@ -912,6 +1434,54 @@ pub fn render(
 
     let estado_malo = matches!(run.run, SyncRunState::Failed | SyncRunState::Cancelled);
 
+    // Los fallos del informe, uno por elemento y con su título — que es
+    // también el nombre de la lista para un lector de pantalla. Van DEBAJO de
+    // los pasos y no encima de ellos: la lista de arriba sigue diciendo lo que
+    // se planificó, y ésta lo que no ocurrió.
+    let fallos = failures(run);
+    let ocultos = failures_hidden(run);
+    let informe = (!fallos.is_empty()).then(|| {
+        // La lista lleva su NOMBRE accesible; el título va FUERA de ella, como
+        // hermano. Dentro, un lector de pantalla anunciaba el nombre de la
+        // lista y acto seguido las mismas palabras como primer elemento — y
+        // además era un hijo que no es `ListItem` colgando de un `List`.
+        let mut lista = gpui::div()
+            .id("sync-failures-list")
+            .role(gpui::Role::List)
+            .aria_label(norte_i18n::t("sync-failures-title"))
+            .flex()
+            .flex_col();
+        for (i, f) in fallos.iter().enumerate() {
+            lista = lista.child(render_failure_row(f, i, &palette));
+        }
+        let mut bloque = gpui::div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .px(px(sp::S))
+            .py(px(sp::XS))
+            .child(
+                gpui::div()
+                    .text_color(palette.dim)
+                    .child(gpui::SharedString::from(norte_i18n::t(
+                        "sync-failures-title",
+                    ))),
+            )
+            .child(lista);
+        if ocultos > 0 {
+            // Los dos topes dichos en voz alta: sin esto, ocho filas pasarían
+            // por el total de cuarenta mil.
+            bloque = bloque.child(gpui::div().text_color(palette.dim).child(
+                gpui::SharedString::from(norte_i18n::ta(
+                    "sync-failures-more",
+                    &[("n", &ocultos.to_string())],
+                )),
+            ));
+        }
+        bloque
+    });
+
     gpui::div()
         .id("sync-view")
         .role(gpui::Role::Document)
@@ -921,7 +1491,14 @@ pub fn render(
         .flex_col()
         .overflow_hidden()
         .border_2()
-        .border_color(chrome.border_focus)
+        // El marco AVISA mientras la segunda pregunta está puesta, igual que
+        // en la TUI. Refuerzo y no señal: quien no vea el color sigue leyendo
+        // la pregunta, que está escrita.
+        .border_color(if run.confirming.is_some() {
+            palette.warn
+        } else {
+            chrome.border_focus
+        })
         .bg(chrome.pane_bg_focus)
         .child(
             gpui::div()
@@ -971,6 +1548,7 @@ pub fn render(
         )
         .child(resumen)
         .child(body)
+        .children(informe)
         .child(
             gpui::div()
                 .px(px(sp::S))
@@ -979,18 +1557,117 @@ pub fn render(
                 .text_color(if estado_malo { palette.bad } else { palette.fg })
                 .child(gpui::SharedString::from(status_line(run))),
         )
-        .child(
+        .child(render_footer(run, &palette))
+}
+
+/// El pie de teclas, o la SEGUNDA PREGUNTA cuando la hay.
+///
+/// Tres estados y no dos, y el del medio es el que la TUI tuvo que separar en
+/// dos líneas: la pregunta y la tecla que la contesta no caben juntas en una
+/// fila estrecha, y lo que se cortaba era la mitad que dice cómo contestar.
+///
+/// Cuál de las tres líneas toca NO se decide aquí: es
+/// [`norte_frontend::sync::hint_id`], la misma que consulta la TUI (#161). Un
+/// pie que ofrece una tecla muerta —`a aprobar` sobre un plan bloqueado, o
+/// sobre uno ya gastado— se lee como una pantalla rota, y ésa es exactamente
+/// la clase de desacuerdo que se arregla en un frontend y se olvida en el
+/// otro.
+fn render_footer(run: &SyncRun, palette: &Palette) -> gpui::AnyElement {
+    use gpui::{ParentElement, Styled, prelude::*, px};
+
+    let pie = gpui::div().px(px(sp::S)).py(px(1.0)); // sub-XS: acento fino
+    if let Some(c) = &run.confirming {
+        return pie
+            .id("sync-confirm")
+            .role(gpui::Role::Dialog)
+            .aria_label(norte_i18n::t("gui-a11y-sync-confirm"))
+            // Nombre = título, DESCRIPCIÓN = la pregunta, que es la convención
+            // de `Role::Dialog` en esta crate: un lector anuncia diálogo →
+            // título → cuerpo. Sin ella, lo único que se anunciaba antes de
+            // borrar subárboles era «confirmar el plan», y la frase que
+            // distingue «van a la papelera» de «NO se van a poder restaurar»
+            // quedaba en un hijo de texto que nada enfoca (auditoría de
+            // encoding MAJOR-3).
+            .aria_description(gpui::SharedString::from(c.text.clone()))
+            .flex()
+            .flex_col()
+            .text_color(palette.warn)
+            // La pregunta NO se trunca: es la frase que dice cuántos árboles
+            // se borran y si vuelven, y recortarla es esconder exactamente
+            // eso. Las dos líneas son dos elementos, no una cadena unida.
+            .child(gpui::div().child(gpui::SharedString::from(c.text.clone())))
+            .child(gpui::div().child(gpui::SharedString::from(norte_i18n::t(
+                norte_frontend::sync::hint_id(run),
+            ))))
+            .into_any_element();
+    }
+    pie.truncate()
+        .text_color(palette.dim)
+        .child(gpui::SharedString::from(norte_i18n::t(
+            norte_frontend::sync::hint_id(run),
+        )))
+        .into_any_element()
+}
+
+/// Una fila del informe: la ruta, la ortografía del destino si difiere, y la
+/// causa.
+///
+/// Cada pieza en su PROPIO elemento accesible, por lo mismo que en una fila de
+/// paso: un fichero llamado `informe: permiso denegado.txt` es legal y llega
+/// sin badge, así que unido en banda fingiría el veredicto de la fila. El
+/// nombre accesible de la FILA es la causa —lo único que no es un nombre de
+/// fichero—, y cada ruta lleva el suyo, con el ancla PEGADA a la que califica.
+fn render_failure_row(f: &FailureText, index: usize, palette: &Palette) -> gpui::AnyElement {
+    use gpui::{ParentElement, Styled, prelude::*, px};
+
+    // El id sale de la POSICIÓN en la lista y no de la ruta: un
+    // `SyncFailure` no trae id, y dos fallos pueden nombrar el mismo fichero
+    // (dos ortografías que se pintan igual) — un id derivado del nombre les
+    // daría identidad de elemento compartida.
+    // El `qualifier` va PEGADO a la ruta que califica, igual que en una fila de
+    // paso: es lo que dice de qué árbol se habla, y a la escucha eso solo se
+    // asocia por posición si no se dice aquí.
+    let ruta = |p: &PathText, cual: &str, qualifier: &str| {
+        gpui::div()
+            .id(gpui::SharedString::from(format!(
+                "sync-failure-{index}-{cual}"
+            )))
+            .aria_label(gpui::SharedString::from(path_a11y(p, qualifier)))
+            .flex_1()
+            .truncate()
+            .child(gpui::SharedString::from(p.label.clone()))
+    };
+    let mut r = gpui::div()
+        .id(gpui::SharedString::from(format!("sync-failure-{index}")))
+        .role(gpui::Role::ListItem)
+        .aria_label(gpui::SharedString::from(f.a11y.clone()))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(sp::S))
+        .child(ruta(&f.rel, "rel", &f.anchor));
+    if let Some(d) = &f.dest {
+        r = r
+            .child(gpui::div().flex_none().text_color(palette.dim).child("→"))
+            .child(ruta(d, "dest", ""));
+    }
+    if !f.anchor.is_empty() {
+        r = r.child(
             gpui::div()
-                .px(px(sp::S))
-                .py(px(1.0)) // sub-XS: acento fino de una línea
-                .truncate()
+                .flex_none()
                 .text_color(palette.dim)
-                // `sync-hint-done` («↑↓ mover · Esc cerrar») y no `sync-hint`,
-                // que además nombra la tecla de aprobar: esta pantalla
-                // todavía no la tiene (tarea 4). Un pie que anuncia una tecla
-                // muerta se lee como una pantalla rota.
-                .child(gpui::SharedString::from(norte_i18n::t("sync-hint-done"))),
-        )
+                .child(gpui::SharedString::from(f.anchor.clone())),
+        );
+    }
+    // La causa en color de error y en `flex_none`: es el veredicto de la fila
+    // y una ruta larga no puede expulsarlo.
+    r.child(
+        gpui::div()
+            .flex_none()
+            .text_color(palette.bad)
+            .child(gpui::SharedString::from(f.cause.clone())),
+    )
+    .into_any_element()
 }
 
 /// Una fila: las tres marcas, la ruta, la ortografía del destino si difiere,
@@ -1096,7 +1773,7 @@ mod tests {
     use super::*;
     use norte_proto::methods::{
         CompareConfidence, CompareCriterion, DestTrash, PlanHash, RelPath, StepReversal,
-        SyncCounts, SyncStep, SyncStepKind,
+        SyncCounts, SyncFailureCause, SyncStep, SyncStepKind,
     };
 
     fn task() -> TaskId {
@@ -1173,6 +1850,27 @@ mod tests {
         SyncView::new(arranque(task(), 0))
     }
 
+    /// Un informe con `done`/`failed` y nada más.
+    fn informe(done: u64, failed: u64) -> SyncReportResult {
+        SyncReportResult {
+            done,
+            failed,
+            skipped: 0,
+            bytes: 0,
+            failures: vec![],
+            batch_id: Some(11),
+        }
+    }
+
+    /// UN fallo del informe.
+    fn fallo(rel: &str, dest: Option<&str>, cause: SyncFailureCause) -> SyncFailure {
+        SyncFailure {
+            rel: RelPath::parse_wire(rel).expect("rel"),
+            dest_rel: dest.map(|d| RelPath::parse_wire(d).expect("rel")),
+            cause,
+        }
+    }
+
     /// Los bytes de un fixture de la corpus canónica, por id.
     fn fixture(id: &str) -> Vec<u8> {
         norte_testkit::corpus::hostile_names()
@@ -1190,6 +1888,59 @@ mod tests {
         assert!(v.on_steps(lote(task(), steps.clone())));
         assert!(v.on_plan_done(cierre(task(), &steps)));
         v
+    }
+
+    /// Un `DeleteTree` contra un destino SIN papelera: lo que hace que el plan
+    /// se gane la SEGUNDA pregunta, y con la frase larga.
+    fn borrado() -> SyncStep {
+        SyncStep {
+            id: 3,
+            kind: SyncStepKind::DeleteTree,
+            rel: RelPath::parse_wire("viejo").expect("rel"),
+            dest_rel: None,
+            size: None,
+            criterion: CompareCriterion::Presence,
+            confidence: CompareConfidence::Certain,
+            reversal: Some(StepReversal::Irreversible),
+            reason: Some(norte_proto::methods::SyncReason::NoTrashOnTarget),
+        }
+    }
+
+    /// Un cierre a medida: mismas cuentas que sus pasos, y con `executable` y
+    /// `dest_trash` a elección — que son los dos campos que deciden si esto se
+    /// aprueba y con qué frase.
+    fn cierre_con(
+        task_id: TaskId,
+        steps: &[SyncStep],
+        executable: bool,
+        dest_trash: DestTrash,
+    ) -> SyncPlanDone {
+        let mut done = cierre(task_id, steps);
+        done.executable = executable;
+        done.dest_trash = dest_trash;
+        if !executable {
+            done.blockers_total = 3;
+        }
+        done
+    }
+
+    fn vista_con(steps: Vec<SyncStep>, executable: bool, dest_trash: DestTrash) -> SyncView {
+        let mut v = vista_de_prueba();
+        assert!(v.on_steps(lote(task(), steps.clone())));
+        assert!(v.on_plan_done(cierre_con(task(), &steps, executable, dest_trash)));
+        v
+    }
+
+    /// Un plan que el daemon marcó NO ejecutable: hay bloqueos, así que no se
+    /// aprueba pase lo que pase.
+    fn vista_bloqueada() -> SyncView {
+        vista_con(pasos(&[1, 2]), false, DestTrash::Restorable)
+    }
+
+    /// Un plan que BORRA subárboles contra un destino sin papelera: aprobable,
+    /// y con la segunda pregunta más larga que este modelo sabe redactar.
+    fn vista_que_borra() -> SyncView {
+        vista_con(vec![borrado()], true, DestTrash::Absent)
     }
 
     /// Los lotes de pasos se acumulan y el plan NO se cierra hasta que llega
@@ -1622,22 +2373,77 @@ mod tests {
 
     /// El primer `Esc` sobre una Task viva la cancela y conserva los pasos;
     /// cualquiera posterior cierra pase lo que pase con la Task — un canal
-    /// que no llega a cerrarse nunca no puede dejar encerrado al lector.
+    /// que no llega a cerrarse nunca no puede dejar encerrado al lector. Y
+    /// sigue valiendo con la segunda pregunta puesta: cerrar no es una
+    /// respuesta a «¿seguro?».
     #[test]
     fn el_primer_esc_cancela_y_el_segundo_cierra_pase_lo_que_pase() {
-        assert_eq!(key_meaning("escape", false, true, false), Key::CancelTask);
-        assert_eq!(key_meaning("escape", false, true, true), Key::Close);
-        assert_eq!(key_meaning("escape", false, false, false), Key::Close);
+        assert_eq!(
+            key_meaning("escape", false, true, false, false),
+            Key::CancelTask
+        );
+        assert_eq!(key_meaning("escape", false, true, true, false), Key::Close);
+        assert_eq!(
+            key_meaning("escape", false, false, false, false),
+            Key::Close
+        );
+        assert_eq!(
+            key_meaning("escape", false, false, false, true),
+            Key::Close,
+            "con la pregunta puesta también se sale"
+        );
     }
 
-    /// Un modificador no significa nada aquí, y aprobar todavía tampoco: `a`
-    /// es de la tarea 4, la mitad destructiva.
+    /// Un modificador no significa nada aquí — salvo con la pregunta puesta,
+    /// que es justo el orden que la TUI documenta como corrección: con el
+    /// filtro delante, un `Ctrl+r` de costumbre caía en `Ignore` y dejaba «se
+    /// van a borrar 2 árboles… ¿Seguir?» armada, esperando un `y` que ya no
+    /// sabe a qué contesta.
     #[test]
-    fn un_modificador_no_significa_nada_y_la_a_todavia_no() {
-        assert_eq!(key_meaning("down", true, true, false), Key::Ignore);
-        assert_eq!(key_meaning("a", false, false, false), Key::Ignore);
-        assert_eq!(key_meaning("down", false, false, false), Key::Move(1));
-        assert_eq!(key_meaning("pageup", false, false, false), Key::Move(-10));
+    fn un_modificador_no_significa_nada_salvo_con_la_pregunta_puesta() {
+        assert_eq!(key_meaning("down", true, true, false, false), Key::Ignore);
+        assert_eq!(
+            key_meaning("down", false, false, false, false),
+            Key::Move(1)
+        );
+        assert_eq!(
+            key_meaning("pageup", false, false, false, false),
+            Key::Move(-10)
+        );
+        assert_eq!(
+            key_meaning("r", true, false, false, true),
+            Key::ConfirmNo,
+            "una tecla modificada RESUELVE la pregunta en vez de ignorarse"
+        );
+    }
+
+    /// `a` aprueba y `y` confirma, y NADA más: `Enter` no aprueba, porque
+    /// sincronizar borra y sobrescribe y se pide una tecla que nadie pulsa por
+    /// inercia (mismo criterio que los diálogos TOFU).
+    #[test]
+    fn la_a_aprueba_la_y_confirma_y_enter_no() {
+        assert_eq!(key_meaning("a", false, false, false, false), Key::Approve);
+        assert_eq!(
+            key_meaning("enter", false, false, false, false),
+            Key::Ignore,
+            "`Enter` no aprueba un borrado"
+        );
+        assert_eq!(key_meaning("y", false, false, false, true), Key::ConfirmYes);
+        assert_eq!(
+            key_meaning("enter", false, false, false, true),
+            Key::ConfirmNo,
+            "y tampoco lo confirma: cualquier otra tecla retira la pregunta"
+        );
+        assert_eq!(
+            key_meaning("y", true, false, false, true),
+            Key::ConfirmNo,
+            "la `y` con modificador no es la respuesta"
+        );
+        assert_eq!(
+            key_meaning("a", false, false, false, true),
+            Key::ConfirmNo,
+            "y con la pregunta puesta ni siquiera `a` significa aprobar"
+        );
     }
 
     /// Soltar el panel devuelve SIEMPRE su Task, sin mirar si sigue viva: un
@@ -1664,6 +2470,689 @@ mod tests {
         assert!(v.on_plan_ended(task(), &TaskState::Completed).is_none());
         let mut hueco = Some(v);
         assert_eq!(close(&mut hueco), Some(task()));
+    }
+
+    // -----------------------------------------------------------------
+    // Aprobar y aplicar (tarea 4)
+    // -----------------------------------------------------------------
+
+    /// **Un plan que NO se puede aprobar no llega a preguntar.** La fase A
+    /// shipeó lo contrario: `confirmation()` devuelve `None` cuando
+    /// `!can_approve()`, así que los planes MENOS fiables recibían el aviso
+    /// MÁS CORTO —un `mirror` bloqueado salía con un sí/no pelado y sin la
+    /// frase de «esto borra N árboles»— y luego se aplicaban enteros desde el
+    /// spool. Aquí el gate va primero y lo que sale es una EXPLICACIÓN.
+    #[test]
+    fn un_plan_no_aprobable_no_pregunta_y_se_explica() {
+        let mut v = vista_bloqueada();
+        assert!(!v.run.can_approve());
+        assert_eq!(
+            approve(&mut v),
+            Approve::Refused(norte_i18n::t("msg-sync-cannot-approve"))
+        );
+        assert!(
+            v.run.confirming.is_none(),
+            "no queda ninguna pregunta armada"
+        );
+
+        // Y el PORQUÉ está en pantalla, que es la otra mitad de «se explica»:
+        // el resumen dice cuántos bloqueos lo paran, y el pie que no se puede
+        // aprobar.
+        let resumen = summary_lines(&v.run);
+        assert!(
+            resumen.iter().any(|l| l.contains('3')),
+            "el resumen nombra los bloqueos: {resumen:?}"
+        );
+        assert_eq!(
+            status_line(&v.run),
+            norte_i18n::ta("sync-status-not-approvable", &[("n", "2")])
+        );
+    }
+
+    /// Un plan aprobable que BORRA pregunta con la frase COMPARTIDA, la que
+    /// cuenta los borrados y dice si van a la papelera. Aquí no se redacta una
+    /// segunda frase sobre el borrado.
+    #[test]
+    fn un_plan_que_borra_pregunta_con_la_frase_compartida() {
+        let mut v = vista_que_borra();
+        assert!(v.run.can_approve());
+        let esperada = v
+            .run
+            .state
+            .plan()
+            .expect("cerrado")
+            .confirmation(norte_i18n::active())
+            .expect("un plan que borra sin papelera merece la segunda pregunta");
+
+        assert_eq!(approve(&mut v), Approve::Asked, "pregunta, no manda");
+        assert_eq!(v.run.confirming.as_ref(), Some(&esperada));
+        assert!(
+            esperada.text.contains('1'),
+            "y la frase cuenta los árboles: {}",
+            esperada.text
+        );
+    }
+
+    /// Un `Update` que se deshace del todo NO pregunta dos veces: preguntar
+    /// por lo rutinario enseña a saltarse las dos preguntas. Va directo al
+    /// hash, y el hash es el del plan que se enseñó.
+    #[test]
+    fn un_plan_rutinario_no_pregunta_dos_veces() {
+        let mut v = vista_cerrada();
+        let hash = v
+            .run
+            .state
+            .plan()
+            .expect("cerrado")
+            .done()
+            .plan_hash
+            .clone();
+        assert_eq!(approve(&mut v), Approve::Submit(Box::new(hash)));
+        assert!(v.run.confirming.is_none());
+    }
+
+    /// **Aplicar dos veces el mismo plan no puede pasar**, y lo sabe el estado
+    /// compartido aunque el `SyncPlan` de dentro siga contestando que sí
+    /// —`SyncState::plan()` lo sigue entregando en `Applying`, y ninguno de sus
+    /// tres factores cambia al gastarse—.
+    #[test]
+    fn no_se_aplica_dos_veces() {
+        let mut v = vista_cerrada();
+        let Approve::Submit(hash) = approve(&mut v) else {
+            panic!("la primera da el hash");
+        };
+        assert!(
+            v.run
+                .state
+                .plan()
+                .expect("sigue habiendo plan")
+                .can_approve(),
+            "el plan de dentro seguiría diciendo que sí: por eso no se le pregunta a él"
+        );
+
+        assert!(v.on_apply_started(otra_task()), "el modelo la adopta");
+        assert_eq!(v.task_id, otra_task(), "y el panel pasa a cancelar ÉSA");
+        assert!(!v.run.can_approve());
+        assert_eq!(
+            approve(&mut v),
+            Approve::Refused(norte_i18n::t("msg-sync-cannot-approve")),
+            "la segunda, nada"
+        );
+        // Y por la otra puerta tampoco: la `y` vuelve a preguntar.
+        v.run.confirming = Some(norte_frontend::sync::Confirmation {
+            id: "sync-confirm-delete",
+            text: "¿seguro?".to_owned(),
+        });
+        assert_eq!(
+            confirm_yes(&mut v),
+            Approve::Refused(norte_i18n::t("msg-sync-cannot-approve"))
+        );
+        assert!(v.run.confirming.is_none(), "y la pregunta se retira igual");
+        drop(hash);
+    }
+
+    /// **El BLOCKER que las dos revisiones encontraron**: `SyncState` no sale
+    /// de `Ready` hasta que llega el EVENTO `SyncApplyStarted`, o sea una
+    /// vuelta entera al daemon después de que la tecla mandara el comando.
+    /// Entre las dos cosas el pie sigue ofreciendo `a` y `can_approve()` sigue
+    /// diciendo que sí, así que dos pulsaciones mandaban DOS `sync.apply` del
+    /// mismo hash — el segundo vuelve `PlanStale` y su negativa marcaba
+    /// «falló» un panel que estaba BORRANDO.
+    #[test]
+    fn una_segunda_a_antes_de_la_respuesta_no_manda_nada() {
+        let mut v = vista_cerrada();
+        assert!(matches!(approve(&mut v), Approve::Submit(_)));
+        assert!(v.submitted, "queda el pestillo");
+        assert!(
+            v.run.can_approve(),
+            "y el modelo SIGUE en Ready: el daemon no ha contestado"
+        );
+        assert_eq!(
+            approve(&mut v),
+            Approve::Refused(norte_i18n::t("msg-sync-cannot-approve")),
+            "la segunda `a` no manda un segundo sync.apply"
+        );
+
+        // Y por la puerta de la segunda pregunta, igual.
+        let mut v = vista_que_borra();
+        assert_eq!(approve(&mut v), Approve::Asked);
+        assert!(matches!(confirm_yes(&mut v), Approve::Submit(_)));
+        v.run.confirming = Some(norte_frontend::sync::Confirmation {
+            id: "sync-confirm-delete",
+            text: "¿seguro?".to_owned(),
+        });
+        assert_eq!(
+            confirm_yes(&mut v),
+            Approve::Refused(norte_i18n::t("msg-sync-cannot-approve"))
+        );
+    }
+
+    /// Y la otra mitad de la corrección: una negativa NO puede describir una
+    /// aplicación que ya arrancó. Si lo hiciera, apagaría [`is_running`] y el
+    /// siguiente `Esc` sería un CIERRE —que cancela la aplicación viva— en vez
+    /// de una cancelación pedida.
+    #[test]
+    fn una_negativa_no_describe_una_aplicacion_ya_arrancada() {
+        let mut v = vista_cerrada();
+        assert!(matches!(approve(&mut v), Approve::Submit(_)));
+        assert!(v.on_apply_started(otra_task()));
+        let mut hueco = Some(v);
+        assert!(
+            on_apply_failed(&mut hueco, 1, 1, &norte_proto::Error::PlanStale).is_none(),
+            "el PlanStale del duplicado no toca la aplicación viva"
+        );
+        let v = hueco.expect("abierto");
+        assert_eq!(v.run.run, SyncRunState::Running, "sigue aplicándose");
+        assert!(is_running(&v.run), "y el Esc sigue significando CANCELAR");
+    }
+
+    /// Un `Esc` entre la tecla que aprueba y la respuesta del daemon PARA la
+    /// aplicación: quien pulsó `Esc` pidió parar, y esta pantalla escribe en el
+    /// disco de alguien. El `on_apply_started` compartido borra
+    /// `cancel_requested`, así que sin el guard la aplicación arrancaba igual.
+    #[test]
+    fn un_esc_entre_aprobar_y_la_respuesta_cancela_la_aplicacion() {
+        let mut v = vista_cerrada();
+        assert!(matches!(approve(&mut v), Approve::Submit(_)));
+        v.run.cancel_requested = true; // lo que hace `Key::CancelTask`
+        let mut hueco = Some(v);
+        assert_eq!(
+            on_apply_start(&mut hueco, 1, 1, otra_task()),
+            ApplyStart::Orphan(otra_task()),
+            "la Task se cancela en vez de adoptarse"
+        );
+        let v = hueco.expect("abierto");
+        assert_eq!(v.task_id, task(), "y el panel no se queda la que borra");
+        assert!(
+            !v.submitted,
+            "el pestillo se suelta: la petición se resolvió"
+        );
+    }
+
+    /// La `y` manda el MISMO hash que se aprobó, y retira la pregunta. Una
+    /// cualquiera la retira sin mandar nada: dejarla puesta mientras el cursor
+    /// se mueve por debajo es cómo un `y` posterior aprueba otra cosa.
+    #[test]
+    fn la_y_manda_el_hash_aprobado_y_cualquier_otra_lo_cancela() {
+        let mut v = vista_que_borra();
+        let hash = v
+            .run
+            .state
+            .plan()
+            .expect("cerrado")
+            .done()
+            .plan_hash
+            .clone();
+        assert_eq!(approve(&mut v), Approve::Asked);
+        assert_eq!(confirm_yes(&mut v), Approve::Submit(Box::new(hash)));
+        assert!(v.run.confirming.is_none());
+
+        let mut v = vista_que_borra();
+        assert_eq!(approve(&mut v), Approve::Asked);
+        confirm_no(&mut v);
+        assert!(v.run.confirming.is_none(), "y no se mandó nada");
+    }
+
+    /// Una Task de aplicación que NINGÚN panel adopta se cancela: es la regla
+    /// 3, y aquí no es formalismo — una aplicación suelta es un `Mirror`
+    /// borrando sin nadie que lo vea ni lo pueda parar.
+    ///
+    /// Tres formas de llegar: la petición vencida, el hueco vacío, y el modelo
+    /// que la rechaza (el plan ya se gastó, o este panel es de otro plan).
+    #[test]
+    fn una_aplicacion_que_nadie_adopta_se_cancela() {
+        let mut hueco = Some(vista_cerrada());
+        assert_eq!(
+            on_apply_start(&mut hueco, 2, 1, otra_task()),
+            ApplyStart::Orphan(otra_task()),
+            "la generación 1 ya está superada: el lector pidió otro plan"
+        );
+        assert_eq!(
+            hueco.as_ref().expect("intacto").task_id,
+            task(),
+            "y el panel vencido no se queda la Task de la aplicación"
+        );
+
+        let mut vacio: Option<SyncView> = None;
+        assert_eq!(
+            on_apply_start(&mut vacio, 1, 1, otra_task()),
+            ApplyStart::Orphan(otra_task())
+        );
+
+        // Un panel que TODAVÍA planifica: el modelo no está en `Ready`, así
+        // que no la acepta.
+        let mut planificando = Some(vista_de_prueba());
+        assert_eq!(
+            on_apply_start(&mut planificando, 1, 1, otra_task()),
+            ApplyStart::Orphan(otra_task())
+        );
+        assert_eq!(
+            planificando.expect("abierto").task_id,
+            task(),
+            "y no se le reasigna el `task_id` a un panel que no la adoptó"
+        );
+
+        // Y el caso feliz: adoptada, y el panel pasa a cancelar ESA.
+        let mut hueco = Some(vista_cerrada());
+        assert_eq!(
+            on_apply_start(&mut hueco, 1, 1, otra_task()),
+            ApplyStart::Adopted
+        );
+        assert_eq!(hueco.expect("abierto").task_id, otra_task());
+    }
+
+    /// Cerrar a media aplicación CANCELA la aplicación, y eso es lo que hace
+    /// que no pueda quedarse corriendo invisible. El `task_id` reasignado es
+    /// lo único que lo consigue: sin él se cancelaría la Task del plan —ya
+    /// terminada, o sea un no-op— y seguiría borrando la otra.
+    #[test]
+    fn cerrar_a_media_aplicacion_cancela_la_aplicacion() {
+        let mut v = vista_cerrada();
+        assert!(v.on_plan_ended(task(), &TaskState::Completed).is_none());
+        assert!(v.on_apply_started(otra_task()));
+        let mut hueco = Some(v);
+        assert_eq!(
+            close(&mut hueco),
+            Some(otra_task()),
+            "lo que se cancela es la Task que ESCRIBE, no la del plan"
+        );
+
+        // Y el `Esc` no cierra a la primera: pide la cancelación y deja el
+        // panel abierto, así que el camino corto no cierra nada por descuido.
+        assert_eq!(
+            key_meaning("escape", false, true, false, false),
+            Key::CancelTask
+        );
+    }
+
+    /// El final de la aplicación trae el informe, y el panel lo pinta. Con la
+    /// Task cancelada TAMBIÉN: lo aplicado hasta el corte se queda
+    /// journalizado, y media sincronización es un estado real.
+    #[test]
+    fn el_final_de_la_aplicacion_mete_el_informe() {
+        let mut v = vista_cerrada();
+        assert!(v.on_apply_started(otra_task()));
+        assert!(
+            v.on_apply_ended(otra_task(), &TaskState::Cancelled, Ok(informe(4, 1)))
+                .is_none(),
+            "una cancelación no es un error que pintar en el banner"
+        );
+        assert_eq!(v.run.run, SyncRunState::Cancelled);
+        let r = report(&v.run).expect("el informe entró");
+        assert_eq!((r.done, r.failed), (4, 1));
+    }
+
+    /// Un final de OTRA Task no toca la aplicación — y el que llega es el del
+    /// canal del PLAN, todavía en vuelo: sin este contraste apagaría el
+    /// `Running` de la aplicación con un «hecho» que habla de otra cosa.
+    #[test]
+    fn el_final_del_plan_no_apaga_la_aplicacion() {
+        let mut v = vista_cerrada();
+        assert!(v.on_apply_started(otra_task()));
+        assert_eq!(v.run.run, SyncRunState::Running);
+        assert!(
+            v.on_plan_ended(task(), &TaskState::Completed).is_none(),
+            "el final del PLAN ya no es de este panel"
+        );
+        assert_eq!(v.run.run, SyncRunState::Running, "sigue aplicándose");
+        assert!(
+            v.on_apply_ended(task(), &TaskState::Completed, Ok(informe(1, 0)))
+                .is_none()
+        );
+        assert!(
+            report(&v.run).is_none(),
+            "y un informe de otra Task tampoco entra"
+        );
+    }
+
+    /// **Sin informe no se dice que terminó bien.** `sync.report` es lo único
+    /// que dice cuánto se llegó a escribir; si no se pudo pedir, el desenlace
+    /// es fallo con la categoría de ESE error, aunque la Task dijera
+    /// `Completed`. La TUI se quedaba aquí en «aplicando…» para siempre.
+    #[test]
+    fn sin_informe_no_se_dice_que_termino_bien() {
+        let mut v = vista_cerrada();
+        assert!(v.on_apply_started(otra_task()));
+        let categoria = v
+            .on_apply_ended(
+                otra_task(),
+                &TaskState::Completed,
+                Err(norte_proto::Error::NotFound),
+            )
+            .expect("un informe que no llega es un fallo que decir");
+        assert_eq!(v.run.run, SyncRunState::Failed);
+        assert_eq!(v.run.error.as_deref(), Some(categoria.as_str()));
+        assert!(report(&v.run).is_none());
+        assert!(
+            status_line(&v.run).contains(&categoria),
+            "y el pie lo dice: {}",
+            status_line(&v.run)
+        );
+    }
+
+    /// El error de la TASK manda sobre el del informe: es el que dice por qué
+    /// se paró.
+    #[test]
+    fn el_error_de_la_task_manda_sobre_el_del_informe() {
+        let mut v = vista_cerrada();
+        assert!(v.on_apply_started(otra_task()));
+        let categoria = v
+            .on_apply_ended(
+                otra_task(),
+                &TaskState::Failed {
+                    error: norte_proto::Error::PermissionDenied,
+                },
+                Ok(informe(0, 0)),
+            )
+            .expect("un fallo trae su categoría");
+        assert_eq!(
+            categoria,
+            norte_frontend::error::error_category(&norte_proto::Error::PermissionDenied)
+        );
+        assert_eq!(v.run.run, SyncRunState::Failed);
+    }
+
+    /// Un `sync.apply` RECHAZADO deja el panel abierto y lo marca: un banner
+    /// mientras el pie sigue ofreciendo aprobar es la pantalla
+    /// contradiciéndose. Y la negativa SUPERADA no toca nada, mismo guard que
+    /// la del plan.
+    #[test]
+    fn una_aplicacion_rechazada_marca_el_panel_y_la_superada_no() {
+        let e = norte_proto::Error::Unsupported;
+        let mut hueco = Some(vista_cerrada());
+        assert!(
+            on_apply_failed(&mut hueco, 5, 4, &e).is_none(),
+            "la superada no describe una petición que el lector ya reemplazó"
+        );
+        assert!(
+            hueco.as_ref().expect("abierto").run.can_approve(),
+            "y no le quita la aprobación a un panel que sigue vigente"
+        );
+
+        let (pane, frase) = on_apply_failed(&mut hueco, 4, 4, &e).expect("la vigente sí");
+        assert_eq!(pane, 0);
+        assert_eq!(
+            frase,
+            failure_banner(&norte_frontend::error::error_category(&e)),
+            "la MISMA frase que la negativa del plan, no una segunda redacción"
+        );
+        let v = hueco.expect("el panel sigue abierto");
+        assert_eq!(v.run.run, SyncRunState::Failed);
+        assert!(
+            !v.run.can_approve(),
+            "no se sabe si el plan sigue en el spool: no se vuelve a ofrecer"
+        );
+    }
+
+    /// Los fallos del informe se enseñan UNO POR LÍNEA, con su causa en
+    /// palabras y en el idioma del lector — la MISMA tabla que imprime el CLI.
+    #[test]
+    fn los_fallos_del_informe_van_uno_por_linea() {
+        let mut v = vista_cerrada();
+        assert!(v.on_apply_started(otra_task()));
+        let mut r = informe(1, 2);
+        r.failures = vec![
+            fallo("a.txt", None, SyncFailureCause::Denied),
+            fallo("b.txt", Some("otro/b.txt"), SyncFailureCause::IllegalName),
+        ];
+        assert!(
+            v.on_apply_ended(otra_task(), &TaskState::Completed, Ok(r))
+                .is_none()
+        );
+
+        let filas = failures(&v.run);
+        assert_eq!(filas.len(), 2, "una por fallo");
+        assert_eq!(filas[0].rel.label, "a.txt");
+        assert!(filas[0].dest.is_none());
+        assert_eq!(
+            filas[0].cause,
+            norte_frontend::sync::failure_cause_label(
+                SyncFailureCause::Denied,
+                norte_i18n::active()
+            )
+        );
+        assert_eq!(
+            filas[1].dest.as_ref().expect("la otra ortografía").label,
+            "otro/b.txt"
+        );
+        assert_ne!(filas[0].cause, filas[1].cause, "cada causa es la suya");
+        assert_eq!(failures_hidden(&v.run), 0);
+    }
+
+    /// El panel pinta como mucho [`FAILURES_SHOWN`] filas —la lista no está
+    /// virtualizada y vive en un `flex_col` recortado—, y lo que no pinta lo
+    /// CUENTA: perder filas en silencio es lo único que no se puede hacer.
+    #[test]
+    fn los_fallos_que_no_caben_se_cuentan() {
+        let mut v = vista_cerrada();
+        assert!(v.on_apply_started(otra_task()));
+        let n = FAILURES_SHOWN + 5;
+        let mut r = informe(0, u64::try_from(n).expect("cabe"));
+        r.failures = (0..n)
+            .map(|i| fallo(&format!("f{i}.txt"), None, SyncFailureCause::Io))
+            .collect();
+        assert!(
+            v.on_apply_ended(otra_task(), &TaskState::Completed, Ok(r))
+                .is_none()
+        );
+        assert_eq!(failures(&v.run).len(), FAILURES_SHOWN);
+        assert_eq!(failures_hidden(&v.run), 5);
+    }
+
+    /// `sync.report` recorta la lista a 256 y cuenta `failed` sin tope, así
+    /// que lo que no se lista se DICE: si no, 256 filas pasarían por el total.
+    #[test]
+    fn los_fallos_que_no_se_listan_se_cuentan() {
+        let mut v = vista_cerrada();
+        assert!(v.on_apply_started(otra_task()));
+        let mut r = informe(0, 40_000);
+        r.failures = vec![fallo("a.txt", None, SyncFailureCause::Io)];
+        assert!(
+            v.on_apply_ended(otra_task(), &TaskState::Completed, Ok(r))
+                .is_none()
+        );
+        assert_eq!(failures_hidden(&v.run), 39_999);
+    }
+
+    /// Un nombre hostil en un FALLO llega marcado a las dos superficies,
+    /// exactamente igual que en un paso: el informe se lee sin el plan
+    /// delante, así que es la única vez que ese nombre se ve.
+    ///
+    /// La corpus ENTERA, como en el test gemelo de los pasos: un fixture
+    /// escrito a mano prueba el que se te ocurrió.
+    #[test]
+    fn un_fallo_con_nombre_hostil_llega_marcado() {
+        let mut probados = 0_usize;
+        for fx in norte_testkit::corpus::hostile_names() {
+            let Ok(seg) = norte_proto::Segment::new(fx.bytes.clone()) else {
+                continue;
+            };
+            if !norte_frontend::display_name(&fx.bytes).1 {
+                continue;
+            }
+            probados += 1;
+            let f = SyncFailure {
+                rel: RelPath::new(vec![seg.clone()]),
+                dest_rel: Some(RelPath::new(vec![
+                    norte_proto::Segment::new(b"otro".to_vec()).expect("seg"),
+                    seg,
+                ])),
+                cause: SyncFailureCause::Conflict,
+            };
+            let t = failure_text(&f, SyncEncodings::default());
+            for (cual, ruta) in [("rel", &t.rel), ("dest", t.dest.as_ref().expect("dest"))] {
+                assert!(
+                    ruta.label.starts_with(crate::HOSTILE_BADGE),
+                    "{}/{cual}: llegó sin badge → {:?}",
+                    fx.id,
+                    ruta.label
+                );
+                let aural = path_a11y(ruta, "");
+                assert!(
+                    aural.starts_with(&norte_i18n::t("gui-a11y-hostile-name")),
+                    "{}/{cual}: la superficie aural no lo dice con palabras → {aural}",
+                    fx.id
+                );
+            }
+        }
+        assert!(probados > 0, "la corpus tiene que traer nombres hostiles");
+    }
+
+    /// Y la CAUSA no se pega a la ruta, ni ante la vista ni al oído: el
+    /// fixture `cause_join_spoof` (`informe :→ copia.txt: permission denied`)
+    /// lleva LOS DOS joiners de una fila de fallo, es imprimible corriente —
+    /// así que llega SIN badge— y en banda imprimiría una fila entera
+    /// fabricada después de un `Mirror` destructivo. El separador es
+    /// ESTRUCTURAL, como en las filas de paso.
+    #[test]
+    fn la_causa_de_un_fallo_no_se_pega_a_la_ruta() {
+        let nombre = fixture("cause_join_spoof");
+        let pintado = String::from_utf8_lossy(&nombre).into_owned();
+        let f = SyncFailure {
+            rel: RelPath::new(vec![norte_proto::Segment::new(nombre).expect("seg")]),
+            dest_rel: None,
+            cause: SyncFailureCause::Denied,
+        };
+        let t = failure_text(&f, SyncEncodings::default());
+        assert!(!t.rel.hostile, "es imprimible corriente: llega sin badge");
+        assert_eq!(t.rel.label, pintado, "y se pinta tal cual, con sus joiners");
+        // El nombre accesible de la FILA es la causa y NADA más: con la ruta
+        // dentro, este fichero se leería como una fila completa cuyo veredicto
+        // lo elige quien lo nombró.
+        assert_eq!(t.a11y, t.cause);
+        assert!(!t.a11y.contains(&pintado), "{}", t.a11y);
+        // Y la ruta tiene su propio nombre, con el ancla y NADA más pegado:
+        // la igualdad exacta es lo que lo prueba, porque el `contains` no
+        // sirve — el nombre del fichero LLEVA DENTRO las palabras de la causa,
+        // que es justo lo que lo hace peligroso.
+        assert_eq!(
+            path_a11y(&t.rel, &t.anchor),
+            format!("{pintado} {}", t.anchor),
+            "a la ruta no se le pega nada que el lector pueda tomar por veredicto"
+        );
+    }
+
+    /// El ancla de un fallo SE PINTA. En este panel una ruta sin calificar
+    /// significa «del origen» —así lo dicen las filas de paso, veinte líneas
+    /// más arriba y en la misma pantalla—, así que callar un ancla que no
+    /// consta es afirmar el origen. Y el informe SÍ trae una prueba cuando
+    /// manda `dest_rel`: entonces `rel` es la mitad del origen y no hay nada
+    /// que calificar (auditoría de encoding MAJOR-2 y MINOR-1).
+    #[test]
+    fn el_ancla_de_un_fallo_se_dice_cuando_no_consta() {
+        let sin_prueba = failure_text(
+            &fallo("viejo", None, SyncFailureCause::Denied),
+            SyncEncodings::default(),
+        );
+        assert_eq!(
+            sin_prueba.anchor,
+            norte_i18n::t("sync-anchor-either"),
+            "un DeleteTree que falla por permisos habla del DESTINO y el informe no lo dice"
+        );
+        let aural = path_a11y(&sin_prueba.rel, &sin_prueba.anchor);
+        assert!(aural.contains(&sin_prueba.anchor), "{aural}");
+
+        let con_prueba = failure_text(
+            &fallo("a.txt", Some("otro/a.txt"), SyncFailureCause::Io),
+            SyncEncodings::default(),
+        );
+        assert!(
+            con_prueba.anchor.is_empty(),
+            "con `dest_rel`, `rel` es la mitad del origen y no hay nada que calificar"
+        );
+    }
+
+    /// Cada ruta de un fallo se lee con la reinterpretación del lado que le
+    /// toca (#152): la del DESTINO con la del destino, que es sobre la que
+    /// cayó la escritura. Los dos campos son `Option<NameEncoding>`, así que
+    /// trasponerlos COMPILA — el compilador no ayuda aquí y este test es lo
+    /// único que lo guarda (auditoría de encoding MINOR-4).
+    #[test]
+    fn cada_ruta_de_un_fallo_se_lee_con_su_reinterpretacion() {
+        let origen = norte_encoding::NameEncoding::Cp437;
+        let destino = norte_encoding::name_reinterpret_cycle()
+            .iter()
+            .copied()
+            .find(|e| e.label() != origen.label())
+            .expect("el ciclo trae más de una");
+        let bytes = fixture("cp866_papka");
+        let seg = norte_proto::Segment::new(bytes.clone()).expect("seg");
+        let f = SyncFailure {
+            rel: RelPath::new(vec![seg.clone()]),
+            dest_rel: Some(RelPath::new(vec![
+                norte_proto::Segment::new(b"otro".to_vec()).expect("seg"),
+                seg,
+            ])),
+            cause: SyncFailureCause::IllegalName,
+        };
+        let t = failure_text(
+            &f,
+            SyncEncodings {
+                source: Some(origen),
+                dest: Some(destino),
+            },
+        );
+        let esperado_origen = norte_frontend::display_name_with(&bytes, Some(origen)).0;
+        let esperado_destino = norte_frontend::display_name_with(&bytes, Some(destino)).0;
+        assert_ne!(
+            esperado_origen, esperado_destino,
+            "el fixture tiene que distinguir los dos codepages"
+        );
+        assert!(t.rel.label.ends_with(&esperado_origen), "{:?}", t.rel);
+        assert!(
+            t.dest
+                .expect("la otra ortografía")
+                .label
+                .ends_with(&esperado_destino),
+            "la del DESTINO se lee con la del destino, que es donde cayó la escritura"
+        );
+    }
+
+    /// Las causas se resuelven de verdad contra el catálogo: `norte_i18n::t`
+    /// cae al id crudo sin panic, así que un id mal escrito se enviaría como
+    /// la literal `sync-cause-denied` en pantalla, y el test de paridad entre
+    /// locales solo prueba que en y es coinciden — no que la clave exista
+    /// (auditoría de encoding MINOR-7).
+    #[test]
+    fn las_causas_estan_traducidas_de_verdad() {
+        for c in [
+            SyncFailureCause::Conflict,
+            SyncFailureCause::Denied,
+            SyncFailureCause::IllegalName,
+            SyncFailureCause::Io,
+            SyncFailureCause::Unknown,
+        ] {
+            let label = norte_frontend::sync::failure_cause_label(c, norte_i18n::active());
+            assert!(!label.starts_with("sync-cause-"), "sin traducir: {label}");
+            assert!(!label.is_empty());
+        }
+    }
+    /// Y la ortografía del destino de un fallo se pliega por BYTES cuando
+    /// coincide, igual que la de un paso: repetir la misma ruta con una flecha
+    /// en medio sugiere un renombrado que no hay.
+    #[test]
+    fn una_ortografia_identica_de_un_fallo_no_se_repite() {
+        let f = fallo("sub/a.txt", Some("sub/a.txt"), SyncFailureCause::Io);
+        assert!(failure_text(&f, SyncEncodings::default()).dest.is_none());
+    }
+
+    /// Y el pliegue es por BYTES y no por el texto PINTADO:
+    /// `lossy_collapse_ff`/`lossy_collapse_fe` son dos ficheros distintos que
+    /// se pintan igual, y comparando textos la ortografía del destino
+    /// desaparecía de la fila sin dejar marca — justo cuando los nombres son
+    /// adversarios. Con bytes idénticos, ese fallo no se distingue del pliegue
+    /// correcto (auditoría de encoding MINOR-3).
+    #[test]
+    fn dos_ortografias_de_un_fallo_que_se_pintan_igual_siguen_siendo_dos() {
+        let seg = |id: &str| norte_proto::Segment::new(fixture(id)).expect("seg");
+        let f = SyncFailure {
+            rel: RelPath::new(vec![seg("lossy_collapse_ff")]),
+            dest_rel: Some(RelPath::new(vec![seg("lossy_collapse_fe")])),
+            cause: SyncFailureCause::Conflict,
+        };
+        let t = failure_text(&f, SyncEncodings::default());
+        let dest = t.dest.expect("dos ficheros distintos son dos ortografías");
+        assert_eq!(dest.label, t.rel.label, "y se pintan igual");
     }
 
     /// Una negativa SUPERADA no pinta banner —y su `None` retira el

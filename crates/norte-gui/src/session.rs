@@ -283,6 +283,29 @@ pub enum SessionCmd {
         /// Params ya resueltos y validados por la GUI (`NorteGui::start_sync`).
         params: Box<norte_proto::methods::SyncPlanParams>,
     },
+    /// **Aplica el plan que un humano APROBÓ** (`sync.apply`, 0.40.0, ADR
+    /// 0049 — #161, spec 3 fase C2 tarea 4): la mitad DESTRUCTIVA de esta
+    /// pantalla — reescribe y, en `Mirror`, borra subárboles del destino.
+    ///
+    /// Arranca la Task, la registra en el mapa de cancellers (regla 3: es lo
+    /// que hace que el `Esc` del panel y su cierre la puedan parar), espera su
+    /// desenlace y pide `sync.report` — SIEMPRE, cancelación incluida: lo
+    /// aplicado hasta el corte se queda journalizado y media sincronización es
+    /// un estado real que el lector tiene que poder ver (con la excepción que
+    /// `sync_view::close` documenta: un `DeleteTree` cortado a medio borrar no
+    /// deja fila, y eso es del core — issue #186).
+    SyncApply {
+        /// La generación del panel que aprobó, ecoada en
+        /// [`SessionEvent::SyncApplyStarted`] y en
+        /// [`SessionEvent::SyncApplyFailed`]: si el lector pidió OTRO plan
+        /// mientras tanto, esa Task no tiene panel que la mire y hay que
+        /// cancelarla en vez de dejarla borrando a ciegas.
+        generation: u64,
+        /// El hash del plan aprobado. Es lo ÚNICO que viaja (ADR 0049): no hay
+        /// forma de pedir que se ejecute algo distinto de lo que el panel
+        /// enseñó.
+        plan_hash: Box<norte_proto::methods::PlanHash>,
+    },
 }
 
 /// Contenido del viewer que cruza a la GUI (GUI-d T3).
@@ -686,6 +709,58 @@ pub enum SessionEvent {
         /// El error tipado; la GUI lo convierte en frase.
         error: Error,
     },
+    /// `sync.apply` ARRANCÓ: hay Task, y es la que a partir de ahora ESCRIBE.
+    ///
+    /// El panel la adopta —pasa a ser lo que su `Esc` y su cierre cancelan— y
+    /// el modelo avanza a `Applying`, que es lo que hace imposible aprobar dos
+    /// veces el mismo plan.
+    SyncApplyStarted {
+        /// La Task de la aplicación.
+        task_id: TaskId,
+        /// El eco de `SessionCmd::SyncApply::generation` (guard anti-stale).
+        ///
+        /// **Aquí el guard no es cosmético**, al revés que en un lote de
+        /// pasos: si la petición está vencida es porque el lector pidió otro
+        /// plan, y ese plan ya abrió otro panel — dejar corriendo esta Task
+        /// sería un `Mirror` borrando sin nadie que lo vea ni lo pueda parar.
+        generation: u64,
+    },
+    /// La Task de `sync.apply` TERMINÓ, con lo que `sync.report` contestó.
+    ///
+    /// Los dos viajan juntos a propósito: el estado dice CÓMO acabó y el
+    /// informe QUÉ hizo, y son las dos mitades de una sola frase. El informe se
+    /// pide también cuando la Task se canceló.
+    ///
+    /// Sin `generation`, igual que [`SessionEvent::SyncPlanEnded`]: lo que
+    /// correlaciona un final es su `task_id`, que la vista contrasta con el
+    /// suyo (reasignado al adoptar la aplicación).
+    SyncApplyEnded {
+        /// La Task que termina — la de la APLICACIÓN.
+        task_id: TaskId,
+        /// El estado terminal. Si los emisores del progreso mueren sin
+        /// desenlace se sintetiza un `Failed`, igual que en
+        /// [`forward_progress`]: una sincronización a medias sobre una
+        /// conexión muerta no es un éxito.
+        state: TaskState,
+        /// Lo que `sync.report` contestó, o por qué no se pudo pedir. Sin
+        /// informe no se sabe qué se escribió, y el panel lo pinta como fallo
+        /// en vez de decir «hecho».
+        report: Box<Result<norte_proto::methods::SyncReportResult, Error>>,
+    },
+    /// `sync.apply` fue RECHAZADO antes de existir Task alguna: el plan
+    /// caducó en el spool, otro lo gastó (`PlanStale`), o el daemon se cayó
+    /// entre el plan y la aprobación. **El panel sigue abierto** —a diferencia
+    /// de un `sync.plan` rechazado—, así que la negativa se pinta también en
+    /// él: un banner mientras el pie sigue ofreciendo aprobar es la pantalla
+    /// contradiciéndose.
+    SyncApplyFailed {
+        /// El eco de `SessionCmd::SyncApply::generation` (guard anti-stale),
+        /// por lo mismo que en `SyncPlanFailed`: dos peticiones seguidas
+        /// pueden contestar en orden inverso.
+        generation: u64,
+        /// El error tipado; la GUI lo convierte en frase.
+        error: Error,
+    },
 }
 
 /// Arranca el hilo de sesión: conecta al `socket` UNA vez y sirve `cmd_rx`,
@@ -1043,6 +1118,17 @@ pub fn spawn(
                                 &cancellers,
                             )
                             .await;
+                        });
+                    }
+                    SessionCmd::SyncApply {
+                        generation,
+                        plan_hash,
+                    } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        let cancellers = Arc::clone(&cancellers);
+                        tokio::spawn(async move {
+                            sync_apply(&backend, generation, &plan_hash, &tx, &cancellers).await;
                         });
                     }
                     SessionCmd::PluginRunCommand { id, command, arg } => {
@@ -1547,6 +1633,85 @@ async fn pump_sync_plan(
     });
 }
 
+/// Aplica el plan APROBADO (`sync.apply`) y cosecha su informe (#161, fase C2
+/// tarea 4).
+///
+/// **Es la única función de este fichero que escribe en el disco de alguien.**
+/// Lo que viaja es el `plan_hash` y nada más (ADR 0049): el daemon ejecuta
+/// exactamente el plan que retuvo en el spool, así que no hay forma de que
+/// esto pida algo distinto de lo que el panel enseñó y el humano aprobó.
+///
+/// Un rechazo de entrada (`PlanStale`, el plan caducado, un daemon caído) sale
+/// por [`SessionEvent::SyncApplyFailed`] y no crea Task. Con Task:
+///
+/// 1. se registra su canceller ANTES de anunciarla, para que no exista un
+///    instante en el que la GUI sepa de una Task que escribe y no la pueda
+///    parar (regla 3);
+/// 2. se espera su desenlace por el watch de progreso — y si los emisores
+///    mueren sin publicar uno terminal se sintetiza un `Failed`, igual que
+///    [`forward_progress`] y por lo mismo: una sincronización a medias sobre
+///    una conexión muerta no es un éxito;
+/// 3. se pide `sync.report` **pase lo que pase**, cancelación incluida: lo
+///    aplicado hasta el corte se queda journalizado, y media sincronización es
+///    un estado real que el lector tiene que poder ver.
+///
+/// La aplicación NO entra en la franja de tasks de la ventana, igual que el
+/// plan: su progreso lo pinta el pie del propio panel, y el panel es también el
+/// único sitio desde el que se cancela.
+async fn sync_apply(
+    backend: &Backend,
+    generation: u64,
+    plan_hash: &norte_proto::methods::PlanHash,
+    tx: &mpsc::UnboundedSender<SessionEvent>,
+    cancellers: &Arc<Mutex<HashMap<TaskId, TaskCanceller>>>,
+) {
+    let task = match backend.sync_apply(plan_hash).await {
+        Ok(task) => task,
+        Err(error) => {
+            let _ = tx.send(SessionEvent::SyncApplyFailed { generation, error });
+            return;
+        }
+    };
+    let task_id = task.id();
+    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+    cancellers.lock().unwrap().insert(task_id, task.canceller());
+    let _ = tx.send(SessionEvent::SyncApplyStarted {
+        task_id,
+        generation,
+    });
+    let state = wait_terminal(&task).await;
+    let report = backend.sync_report(task_id).await;
+    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+    cancellers.lock().unwrap().remove(&task_id);
+    let _ = tx.send(SessionEvent::SyncApplyEnded {
+        task_id,
+        state,
+        report: Box::new(report),
+    });
+}
+
+/// Espera a que `task` publique un estado TERMINAL y lo devuelve.
+///
+/// Si los emisores del watch mueren sin publicarlo —la conexión se cayó—
+/// devuelve `Failed { ProviderUnavailable }` en vez del último no terminal:
+/// no se sabe qué pasó, y el desenlace honesto de una escritura interrumpida
+/// por una conexión muerta no es «hecho». Mismo criterio y mismo error
+/// sintético que [`forward_progress`].
+async fn wait_terminal(task: &TaskRef) -> TaskState {
+    let mut rx = task.progress();
+    loop {
+        let snap = rx.borrow_and_update().clone();
+        if snap.state.is_terminal() {
+            return snap.state;
+        }
+        if rx.changed().await.is_err() {
+            return TaskState::Failed {
+                error: Error::ProviderUnavailable { retryable: true },
+            };
+        }
+    }
+}
+
 /// Presupuesto de píxeles del preview de imagen (#92, movido del hilo de UI):
 /// `into_rgba8` alloca ancho×alto×4 y puede coexistir con el buffer del
 /// decoder — pico real ≈ 32 MP × 4 × 2 ≈ 256 MiB (una sola imagen a la vez).
@@ -1633,6 +1798,37 @@ mod tests {
 
     fn id(n: u64) -> TaskId {
         TaskId::new(n)
+    }
+
+    /// [`wait_terminal`] espera al desenlace, y con los emisores muertos
+    /// sintetiza un `Failed` en vez de devolver el último NO terminal: la
+    /// conexión se fue sin decir qué pasó, y una sincronización a medias no es
+    /// un éxito (regla 3 / revisiones rust m3 y de seguridad MINOR-5).
+    #[tokio::test]
+    async fn wait_terminal_sintetiza_un_fallo_si_la_conexion_muere() {
+        let tid = id(21);
+        let (watch_tx, watch_rx) = tokio::sync::watch::channel(snap(tid, TaskState::Running));
+        let task = TaskRef::synthetic_for_tests(tid, watch_rx);
+        let fut = tokio::spawn(async move { wait_terminal(&task).await });
+        drop(watch_tx);
+        assert!(
+            matches!(
+                fut.await.expect("join"),
+                TaskState::Failed {
+                    error: norte_proto::Error::ProviderUnavailable { retryable: true }
+                }
+            ),
+            "sin desenlace publicado, «hecho» sería la mentira mayor"
+        );
+
+        // Y con desenlace publicado, ése: una cancelación se dice cancelada.
+        let tid = id(22);
+        let (watch_tx, watch_rx) = tokio::sync::watch::channel(snap(tid, TaskState::Running));
+        let task = TaskRef::synthetic_for_tests(tid, watch_rx);
+        let fut = tokio::spawn(async move { wait_terminal(&task).await });
+        watch_tx.send_modify(|p| p.state = TaskState::Cancelled);
+        assert_eq!(fut.await.expect("join"), TaskState::Cancelled);
+        drop(watch_tx);
     }
 
     /// #85: la conexión muere SIN desenlace (el watch se cierra) —
