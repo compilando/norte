@@ -3254,9 +3254,17 @@ fn draw_compare(
         })
         .collect();
     if visibles == 0 {
+        // «Todavía no hay filas» y «están todas ocultas» no son lo mismo: la
+        // segunda la desmienten las propias cuentas de la línea de filtros, y
+        // lo que toca hacer después es distinto (revisión rust MINOR-2 de la
+        // GUI; la TUI tenía el mismo hueco).
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                t("compare-empty"),
+                t(if view.pane.is_empty() {
+                    "compare-empty"
+                } else {
+                    "compare-all-filtered"
+                }),
                 theme.role(Role::Info),
             ))),
             inner,
@@ -3382,43 +3390,18 @@ fn compare_face_span(
 
 /// El título de abajo: cómo va (o cómo acabó) la comparación, y sobre qué
 /// lado actúan los comandos de siempre.
+///
+/// La frase la compone [`norte_frontend::compare::status_line`], COMPARTIDA
+/// con la GUI: es la que dice si la respuesta está completa, y en una
+/// comparación eso es toda la respuesta — dos superficies componiéndola por
+/// su cuenta es exactamente lo que hizo que el CLI (fase A) y la tool MCP
+/// (fase B) dieran por completa una respuesta a la que le faltaban lotes.
+/// Aquí solo quedan los espacios del título del marco.
 fn compare_status_line(view: &crate::app::CompareView) -> String {
-    let n = view.pane.len().to_string();
-    let estado = match view.state {
-        crate::app::CompareState::Running => ta("compare-status-running", &[("n", &n)]),
-        crate::app::CompareState::Done => ta("compare-status-done", &[("n", &n)]),
-        crate::app::CompareState::Incomplete => ta(
-            "compare-status-incomplete",
-            &[("n", &n), ("total", &view.rows_expected.to_string())],
-        ),
-        crate::app::CompareState::Cancelled => ta("compare-status-cancelled", &[("n", &n)]),
-        // La categoría del error se guarda en el view y se pinta de forma
-        // PERSISTENTE: un fallo no puede degradar a «hecho» en la tecla
-        // siguiente por haberse limpiado `App::message`.
-        crate::app::CompareState::Failed => ta(
-            "compare-status-failed",
-            &[("error", view.error.as_deref().unwrap_or(""))],
-        ),
-    };
-    let lado = ta(
-        "compare-active-side",
-        &[(
-            "side",
-            &norte_frontend::compare::side_label(view.pane.active_side(), norte_i18n::active()),
-        )],
-    );
-    // El recuento de marcas va aquí y no en la línea de teclas: es estado, no
-    // vocabulario, y a 80 columnas la línea de teclas ya va llena. Solo cuando
-    // hay alguna — un « 0 marcadas » permanente sería ruido en el caso normal.
-    let marcadas = view.pane.marked_len();
-    if marcadas > 0 {
-        let n = marcadas.to_string();
-        return format!(
-            " {estado} · {lado} · {} ",
-            ta("compare-marked", &[("n", &n)])
-        );
-    }
-    format!(" {estado} · {lado} ")
+    format!(
+        " {} ",
+        norte_frontend::compare::status_line(view, view.pane.marked_len(), norte_i18n::active())
+    )
 }
 
 /// La fila de filtros: la tecla, si está encendido o apagado, el nombre y la

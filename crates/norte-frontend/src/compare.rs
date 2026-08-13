@@ -23,7 +23,7 @@
 //! through the same [`display_name_with`](crate::display_name_with) every
 //! listing uses (rule 1): lossy, and MARKED as such.
 
-use norte_i18n::{Lang, t_in};
+use norte_i18n::{Lang, t_in, ta_in};
 use norte_proto::VPath;
 use norte_proto::methods::{
     CompareConfidence, CompareCriterion, CompareReason, CompareRow, CompareVerdict, Side,
@@ -629,9 +629,18 @@ impl ComparePane {
     }
 
     /// How many rows are on screen.
+    ///
+    /// Arithmetic on the cached `counts`, **not** a scan: every row falls in
+    /// exactly one [`Category`] (`Category::of` is total), so the hidden
+    /// buckets subtract exactly. This is O(5) and the scan was O(rows) — and
+    /// a virtualised painter asks for it EVERY FRAME to size its list, on a
+    /// collection that is deliberately unbounded and still growing while the
+    /// walk feeds it. The GUI's diff pane is what made it matter; the TUI
+    /// asks for it every frame too.
     #[must_use]
     pub fn visible_len(&self) -> usize {
-        self.visible().count()
+        let ocultas: usize = self.hidden.iter().map(|c| self.count_of(*c)).sum();
+        self.rows.len().saturating_sub(ocultas)
     }
 
     /// Whether `category` is currently filtered out.
@@ -835,6 +844,77 @@ impl ComparePane {
     }
 }
 
+/// The diff pane's status line: how the comparison is going (or how it
+/// ended), which side the row commands act on, and how many rows are marked.
+///
+/// **Shared, and that is the whole point.** The five `compare-status-*`
+/// variants are how a frontend says whether the answer is COMPLETE, and in a
+/// comparison how complete the answer is *is* the answer. Two frontends
+/// composing that sentence from their own copies is precisely how the CLI
+/// (phase A) and the MCP tool (phase B) each ended up reporting a complete
+/// answer for a run that had lost batches. One composition, both surfaces.
+///
+/// `marked` is data, not logic: the TUI prints its marked count here and the
+/// GUI has no marking yet (its sync surface is #161), so it passes `0` and
+/// gets the same sentence minus that clause.
+///
+/// ```
+/// use norte_frontend::compare::{CompareState, CompareView, status_line};
+/// use norte_i18n::Lang;
+/// use norte_proto::VPath;
+///
+/// let mut v = CompareView::new(
+///     VPath::parse("file:///a").expect("path"),
+///     VPath::parse("file:///b").expect("path"),
+///     0,
+///     None,
+///     None,
+/// );
+/// v.finish(7, 3);
+/// assert_eq!(v.state, CompareState::Incomplete);
+/// // Says BOTH counts: "done" over a half-answer is the bug this prevents.
+/// let s = status_line(&v, 0, Lang::En);
+/// assert!(s.contains('7') && s.contains('0'));
+/// ```
+#[must_use]
+pub fn status_line(view: &CompareView, marked: usize, lang: Lang) -> String {
+    let n = view.pane.len().to_string();
+    let estado = match view.state {
+        CompareState::Running => ta_in(lang, "compare-status-running", &[("n", &n)]),
+        CompareState::Done => ta_in(lang, "compare-status-done", &[("n", &n)]),
+        CompareState::Incomplete => ta_in(
+            lang,
+            "compare-status-incomplete",
+            &[("n", &n), ("total", &view.rows_expected.to_string())],
+        ),
+        CompareState::Cancelled => ta_in(lang, "compare-status-cancelled", &[("n", &n)]),
+        // The error CATEGORY the view stored, painted PERSISTENTLY: a failure
+        // must not decay into "done" because a frontend's transient banner
+        // was cleared by the next keystroke.
+        CompareState::Failed => ta_in(
+            lang,
+            "compare-status-failed",
+            &[("error", view.error.as_deref().unwrap_or(""))],
+        ),
+    };
+    let lado = ta_in(
+        lang,
+        "compare-active-side",
+        &[("side", &side_label(view.pane.active_side(), lang))],
+    );
+    // The marked count goes here and not on a key line: it is state, not
+    // vocabulary. Only when there is one — a permanent "0 marked" would be
+    // noise in the normal case.
+    if marked > 0 {
+        let m = marked.to_string();
+        return format!(
+            "{estado} · {lado} · {}",
+            ta_in(lang, "compare-marked", &[("n", &m)])
+        );
+    }
+    format!("{estado} · {lado}")
+}
+
 /// Estado de presentación de una comparación de directorios (`Shift+F2`,
 /// 2026-08-11-directory-comparison.md): el run loop lo refleja en
 /// [`CompareView::state`] para que la barra elija la variante
@@ -869,9 +949,9 @@ pub enum CompareState {
 /// cómo acabó.
 ///
 /// El modelo (filas, filtros, selección por id, lado activo) NO está aquí a
-/// propósito (regla dura 7): vive en [`norte_frontend::compare::ComparePane`],
-/// donde se testea sin terminal, y esta struct solo le añade el estado del run
-/// y las dos raíces que la cabecera pinta.
+/// propósito (regla dura 7): vive en [`ComparePane`], donde se testea sin
+/// terminal, y esta struct solo le añade el estado del run y las dos raíces
+/// que la cabecera pinta.
 #[derive(Debug)]
 pub struct CompareView {
     /// Filas, filtros, selección y lado activo.

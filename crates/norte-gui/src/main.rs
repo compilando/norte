@@ -447,6 +447,13 @@ struct NorteGui {
     /// porque hasta que hay Task no hay `task_id` con el que decidir de quién
     /// son las filas que lleguen.
     compare: Option<compare_view::CompareView>,
+    /// Handle de scroll de la lista VIRTUALIZADA del panel de diferencias,
+    /// gemelo de [`Self::scrolls`] y por la misma razón: tiene que persistir
+    /// entre frames para que `scroll_to_item` (llamado tras mover el cursor)
+    /// tenga efecto. Propio y no uno de los dos de los panes — el panel
+    /// sustituye a los DOS, y compartir el handle dejaría el listado
+    /// desplazado a donde estaba la comparación al cerrarla.
+    compare_scroll: UniformListScrollHandle,
     /// The column picker overlay (#108 7c, `alt+c`): `Some` while open,
     /// same z-order and key-capture slot as the palette (modal wins).
     /// Esc discards; Enter applies in-session and persists (TUI parity).
@@ -1198,6 +1205,7 @@ impl NorteGui {
                     extensions: None,
                     compare: None,
                     compare_gen: 0,
+                    compare_scroll: UniformListScrollHandle::new(),
                     plugin_config_summaries: Vec::new(),
                 };
                 gui.column_settings = columns_settings;
@@ -1297,6 +1305,7 @@ impl NorteGui {
                     extensions: None,
                     compare: None,
                     compare_gen: 0,
+                    compare_scroll: UniformListScrollHandle::new(),
                     plugin_config_summaries: Vec::new(),
                 }
             }
@@ -1997,6 +2006,27 @@ impl NorteGui {
                 // y venía, y un aviso que se queda pegado para siempre es
                 // peor que no haberlo puesto.
                 self.errors[left_pane] = None;
+                // El visor no puede quedarse vivo detrás (revisión rust
+                // BLOCKER-1): las dos pantallas sustituyen a los panes
+                // enteros, así que con ambas abiertas una se pinta y la otra
+                // se queda el teclado. La otra mitad de la exclusión está en
+                // `open_viewer`.
+                self.close_viewer();
+                // El teclado acaba de cambiar de dueño SIN que se pulsara
+                // ninguna tecla, así que un prefijo (o un contador) a medio
+                // teclear en el resolver de Browse se queda huérfano: ni este
+                // panel lo puede continuar ni cerrarlo lo cancela, y la
+                // siguiente tecla de vuelta al dual-pane lo REANUDARÍA
+                // (revisión rust MAJOR-4). Mismo caso que la K3a documenta
+                // para el modal y la ayuda.
+                self.resolver.reset();
+                self.which_key = None;
+                // Y la lista arranca arriba: el handle sobrevive al panel
+                // anterior, y heredar su desplazamiento deja la comparación
+                // nueva mirando a una altura que nadie pidió, con el cursor
+                // en la fila 0 (revisión rust MINOR-3).
+                self.compare_scroll
+                    .scroll_to_item(0, ScrollStrategy::Nearest);
                 // Regla 3: la comparación a la que sustituye se cancela — dos
                 // flujos alimentando un panel serían dos comparaciones a la
                 // vez (mismo criterio que `launch_compare` en la TUI).
@@ -2249,6 +2279,157 @@ impl NorteGui {
                 descend_orphans: None,
             }),
         });
+    }
+
+    /// Despacha una tecla del panel de diferencias (#158, fase C1 tarea 3).
+    ///
+    /// Teclas FIJAS, igual que el mismo panel en la TUI: no hay vocabulario
+    /// `dialog.*` para «cambia de lado» ni para «esconde los iguales», y
+    /// dentro del panel el teclado es entero suyo, así que no hay nada con lo
+    /// que chocar. Lo que una tecla SIGNIFICA lo decide
+    /// [`compare_view::key_meaning`], que es puro y se testea sin ventana;
+    /// esto solo lo ejecuta.
+    fn on_compare_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+        use norte_frontend::compare::CATEGORIES;
+
+        let m = ks.modifiers;
+        let Some(view) = self.compare.as_ref() else {
+            return;
+        };
+        let meaning = compare_view::key_meaning(
+            &ks.key,
+            m.control || m.alt || m.platform,
+            compare_view::is_running(&view.run),
+            view.run.cancel_requested,
+        );
+        match meaning {
+            compare_view::Key::Ignore => {}
+            // El primer `Esc`: cancela la Task y CONSERVA las filas (una
+            // comparación cancelada no ha perdido nada, simplemente no
+            // siguió). El panel se queda, y el pie pasa a decir «cancelada».
+            compare_view::Key::CancelTask => {
+                let task_id = view.task_id;
+                let _ = self.cmds.send(SessionCmd::Cancel(task_id));
+                if let Some(v) = self.compare.as_mut() {
+                    v.run.cancel_requested = true;
+                }
+            }
+            compare_view::Key::Close => self.close_compare(),
+            compare_view::Key::Open => self.compare_enter(cx),
+            otra => {
+                let Some(v) = self.compare.as_mut() else {
+                    return;
+                };
+                match otra {
+                    compare_view::Key::SwapSide => v.run.pane.swap_active_side(),
+                    compare_view::Key::Move(delta) => v.run.pane.move_by(delta),
+                    compare_view::Key::First => v.run.pane.select_first(),
+                    compare_view::Key::Last => v.run.pane.select_last(),
+                    compare_view::Key::Filter(i) => {
+                        if let Some(cat) = CATEGORIES.get(i) {
+                            v.run.pane.toggle_filter(*cat);
+                        }
+                    }
+                    _ => {}
+                }
+                // La lista está virtualizada: un cursor fuera de la ventana
+                // no se ve, así que moverlo tiene que traerlo (mismo gesto
+                // que `reveal_cursor` en los panes). Una selección que un
+                // filtro esconde deja `visible_index` en `None` y no se
+                // desplaza nada, que es la respuesta honesta.
+                if let Some(i) = self
+                    .compare
+                    .as_ref()
+                    .and_then(|v| v.run.pane.visible_index())
+                {
+                    self.compare_scroll
+                        .scroll_to_item(i, ScrollStrategy::Nearest);
+                }
+            }
+        }
+    }
+
+    /// Cierra el panel de diferencias y **cancela siempre** la Task que lo
+    /// alimentaba.
+    ///
+    /// Soltar el estado no cancela nada por su cuenta: en remoto el daemon
+    /// seguiría recorriendo los dos árboles enteros para un panel que ya no
+    /// existe (el MAJOR-4 que la TUI pagó). Un `task.cancel` sobre una Task ya
+    /// terminada es un no-op en el daemon, así que no hace falta mirar el
+    /// estado antes.
+    fn close_compare(&mut self) {
+        if let Some(view) = self.compare.take() {
+            let _ = self.cmds.send(SessionCmd::Cancel(view.task_id));
+        }
+    }
+
+    /// Suelta el visor y **invalida cualquier apertura en vuelo**: un
+    /// `ViewerOpened` que llegue después no puede reabrirlo por sorpresa,
+    /// porque su generación ya quedó vieja (mismo gesto que `viewer.close`).
+    ///
+    /// Lo llama el panel de diferencias al abrirse: las dos pantallas son
+    /// excluyentes (ver [`Self::open_viewer`]).
+    fn close_viewer(&mut self) {
+        self.viewer = None;
+        self.viewer_image = None;
+        self.viewer_gen = self.viewer_gen.wrapping_add(1);
+        self.viewer_loading = false;
+    }
+
+    /// `Enter` sobre una fila: navega al directorio REAL del lado ACTIVO y
+    /// cierra el panel (paridad con `on_compare_enter` de la TUI).
+    ///
+    /// Un huérfano que el walk emitió como UNA fila sin enumerar su subárbol
+    /// se expande así, que es el motivo por el que la fila lleva el `Entry`
+    /// entero y no solo un nombre. Sin nada en el lado activo NO se cae al
+    /// otro: se dice. El aviso va al flash y no a `errors[…]`, porque el
+    /// panel tapa los dos panes y un banner debajo de él no lo lee nadie.
+    fn compare_enter(&mut self, cx: &mut Context<Self>) {
+        let Some(view) = self.compare.as_ref() else {
+            return;
+        };
+        let pane = &view.run.pane;
+        if pane.target_entry().is_none() {
+            let side =
+                norte_frontend::compare::side_label(pane.active_side(), norte_i18n::active());
+            self.flash = Some((
+                norte_i18n::ta("compare-no-target", &[("side", &side)]),
+                true,
+            ));
+            return;
+        }
+        // El directorio al que ir lo decide el MODELO (regla 7): el propio
+        // path si la fila es un directorio, su padre si es un fichero.
+        let Some(destino) = pane.navigation_target() else {
+            // Hay entrada pero no hay a dónde ir: un fichero colgado de la
+            // raíz de su scheme no tiene padre. Se DICE, igual que el caso de
+            // arriba — un `Enter` que no hace nada y no explica por qué se lee
+            // como que la tecla está rota (revisión rust MINOR-1).
+            let side =
+                norte_frontend::compare::side_label(pane.active_side(), norte_i18n::active());
+            self.flash = Some((
+                norte_i18n::ta("compare-no-target", &[("side", &side)]),
+                true,
+            ));
+            return;
+        };
+        // Y el cursor cae sobre la entrada de la que se salió, byte-exacto
+        // (lo consume el listado al aterrizar; si ya no existe, cae al
+        // default).
+        let foco = pane.target_path().cloned();
+        // Al pane del lado ACTIVO, y el foco con él: mandar SIEMPRE al pane
+        // con foco le costaría al lector el otro directorio para ir a ver
+        // este.
+        let destino_pane = match pane.active_side() {
+            norte_proto::methods::Side::Right => view.run.left_pane ^ 1,
+            _ => view.run.left_pane,
+        } & 1;
+        self.close_compare();
+        self.focus = destino_pane;
+        if let Some(p) = foco {
+            self.panes[destino_pane].set_pending_focus(p);
+        }
+        self.cd(destino_pane, destino, cx);
     }
 
     /// Pide `Backend::volumes` para `pane` (2026-08-10-volumes.md task V4,
@@ -4216,16 +4397,29 @@ impl NorteGui {
     /// estado «abriendo visor…» del render mientras llega la respuesta.
     fn open_viewer(&mut self, _cx: &mut Context<Self>) {
         let f = self.focus;
-        if let Some(e) = self.panes[f].selected()
-            && e.kind == EntryKind::File
-        {
-            self.viewer_gen = self.viewer_gen.wrapping_add(1);
-            self.viewer_loading = true;
-            let _ = self.cmds.send(SessionCmd::OpenViewer {
-                path: e.path.clone(),
-                generation: self.viewer_gen,
-            });
-        }
+        // El path se saca del pane ANTES de tocar nada: `close_compare` de
+        // abajo necesita `&mut self` y la entrada seguía prestada.
+        let Some(path) = self.panes[f]
+            .selected()
+            .filter(|e| e.kind == EntryKind::File)
+            .map(|e| e.path.clone())
+        else {
+            return;
+        };
+        // El visor y el panel de diferencias son EXCLUYENTES, y por eso se
+        // cierra el que hubiera (revisión rust BLOCKER-1). Los dos sustituyen
+        // a la pantalla entera, así que con ambos vivos uno se pinta y el
+        // otro se queda el teclado —la GUI llegó a tener exactamente eso, y
+        // un `Enter` invisible hacía un `cd` que se lleva por delante las
+        // marcas del pane destino—. La exclusión se hace en los DOS sitios
+        // que pueden abrir: aquí y en `SessionEvent::CompareStarted`.
+        self.close_compare();
+        self.viewer_gen = self.viewer_gen.wrapping_add(1);
+        self.viewer_loading = true;
+        let _ = self.cmds.send(SessionCmd::OpenViewer {
+            path,
+            generation: self.viewer_gen,
+        });
     }
 
     /// Ejecuta un comando del contexto Viewer sobre `self.viewer`: delega el
@@ -4669,6 +4863,29 @@ impl NorteGui {
             return;
         }
 
+        // Panel de diferencias abierto (#158): captura fija, igual que el
+        // visor — sustituye a los dos panes, así que las teclas del listado
+        // no tienen nada debajo a lo que ir. La ayuda SÍ lo alcanza, por lo
+        // mismo que alcanza al visor: la pantalla con su propio juego de
+        // teclas es justo desde la que hay que poder preguntar.
+        //
+        // DESPUÉS del visor, y ese orden es el de `render`: las dos pantallas
+        // pueden coexistir (un `fs.view` pedido antes de arrancar la
+        // comparación aterriza cuando el panel ya está abierto, y la ayuda
+        // despacha comandos desde encima de cualquiera de las dos), y quien
+        // se queda las teclas tiene que ser quien SE PINTA. Con el orden
+        // inverso, `Esc` cerraba un panel que el lector no estaba viendo.
+        if self.compare.is_some() {
+            if self.means_help(ks) {
+                self.open_help();
+                cx.notify();
+                return;
+            }
+            self.on_compare_key(ks, cx);
+            cx.notify();
+            return;
+        }
+
         let f = self.focus;
         let quick_active = self.panes[f].quick_visible().is_some();
         let mods = ks.modifiers;
@@ -5015,10 +5232,14 @@ impl NorteGui {
     }
 
     /// ¿Hay algo delante del dual-pane? (modal, visor, ajustes, extensiones,
-    /// paleta, picker de columnas). Fuente única del criterio que comparten
-    /// el guard de apertura del menú contextual y la vigencia de los gestos
-    /// de ratón — dos listas separadas se desincronizarían al añadir la
-    /// séptima pantalla.
+    /// paleta, picker de columnas, panel de diferencias). Fuente única del
+    /// criterio que comparten el guard de apertura del menú contextual y la
+    /// vigencia de los gestos de ratón — dos listas separadas se
+    /// desincronizarían al añadir la octava pantalla.
+    ///
+    /// El panel de diferencias (#158) cuenta por lo mismo que el visor:
+    /// sustituye a los DOS panes, así que un arrastre armado sobre una fila
+    /// del listado deja de tener sobre qué soltarse en cuanto se abre.
     fn overlay_in_front(&self) -> bool {
         self.modal.is_some()
             || self.viewer.is_some()
@@ -5027,6 +5248,7 @@ impl NorteGui {
             || self.extensions.is_some()
             || self.palette.is_some()
             || self.columns_picker.is_some()
+            || self.compare.is_some()
     }
 
     /// Activa la entrada `i` del menú: despacha su comando por el MISMO
@@ -9316,6 +9538,14 @@ const BORDER_FOCUS: u32 = 0x3b82f6;
 const BORDER_UNFOCUS: u32 = 0x3a3a3a;
 const SEL_BG: u32 = 0x264f78;
 const ERR_FG: u32 = 0xf87171;
+/// Fallback de `Role::Warning`: ámbar de «mira esto», distinto del `err_fg`
+/// rojo y del `fg` normal. Sin un canal propio, el panel de diferencias
+/// pintaba «difiere» con el MISMO color que su texto atenuado — el ranking
+/// de énfasis al revés (revisión rust MAJOR-1).
+const WARN_FG: u32 = 0xfbbf24;
+/// Fallback de `Role::Info`: gris de atenuación, para lo que acompaña sin
+/// competir (cabeceras de columna, cuentas, líneas de teclas).
+const INFO_FG: u32 = 0x9ca3af;
 const QUICK_FG: u32 = 0xfbbf24;
 /// Fondo de una fila MARCADA (distinto de `SEL_BG`, que es la selección bajo
 /// cursor — marca y selección son ortogonales, ver `render_row`).
@@ -9687,6 +9917,15 @@ struct ChromeColors {
     sel_bg: gpui::Rgba,
     sel_fg: Option<gpui::Rgba>,
     err_fg: gpui::Rgba,
+    /// `Role::Warning`: «hay algo que mirar aquí», sin llegar a error.
+    /// PARA TEXTO SOBRE `bg`/`pane_bg`, como `err_fg` — no sobre
+    /// `header_bg`, que trae su propio par.
+    warn_fg: gpui::Rgba,
+    /// `Role::Info`: atenuación. Un rol de tema de verdad, y no `quick_fg`
+    /// prestado — ese es la MITAD de un par (`Match.fg` + `Match.bg`) y
+    /// usarlo suelto sobre otro fondo es la pareja de contraste sin auditar
+    /// que este repo ya envió una vez (ver el banner de `keymap_error`).
+    info_fg: gpui::Rgba,
     quick_fg: gpui::Rgba,
     quick_bg: gpui::Rgba,
     mark_bg: gpui::Rgba,
@@ -9713,6 +9952,8 @@ impl ChromeColors {
             // (comportamiento de siempre; nunca hubo un fg de selección).
             sel_fg: theme.style(Role::Selection).fg.map(theme_map::to_gpui_rgba),
             err_fg: chrome(theme, Role::Error, true, ERR_FG),
+            warn_fg: chrome(theme, Role::Warning, true, WARN_FG),
+            info_fg: chrome(theme, Role::Info, true, INFO_FG),
             // Par quick-search: ambos canales de `Match` (ver doc del struct).
             // El fallback de `quick_bg` es `HEADER_BG`: el combo histórico
             // (3 de los 4 usos) ya pintaba el resaltado sobre ese fondo.
@@ -9738,6 +9979,8 @@ impl ChromeColors {
         self.border_unfocus = glowed(self.border_unfocus, g);
         self.sel_fg = self.sel_fg.map(|c| glowed(c, g));
         self.err_fg = glowed(self.err_fg, g);
+        self.warn_fg = glowed(self.warn_fg, g);
+        self.info_fg = glowed(self.info_fg, g);
         self.quick_fg = glowed(self.quick_fg, g);
         self
     }
@@ -9979,6 +10222,26 @@ impl Render for NorteGui {
                     .justify_center()
                     .child(SharedString::from(norte_i18n::t("gui-viewer-opening"))),
             );
+        } else if let Some(view) = &self.compare {
+            // #158 fase C1 tarea 3. Ocupa el sitio de los DOS panes: una fila
+            // tiene dos caras y un veredicto en medio, así que no cabe en
+            // media pantalla (mismo reparto que la TUI). La franja de tasks se
+            // queda debajo — la comparación no entra en ella (su progreso lo
+            // pinta el pie del propio panel), pero las OTRAS tasks siguen
+            // corriendo y el lector tiene que poder verlas.
+            //
+            // El árbol se construye en `compare_view::render`, no aquí: este
+            // fichero ya reparte diez pantallas y ninguna de ellas cabe dos
+            // veces.
+            root = root
+                .child(compare_view::render(
+                    view,
+                    &chrome,
+                    &self.fonts,
+                    &self.compare_scroll,
+                    cx,
+                ))
+                .child(self.render_task_strip(&chrome));
         } else {
             let panes_row = div()
                 .flex_1()
@@ -10013,6 +10276,14 @@ impl Render for NorteGui {
             || self.palette.is_some()
             || self.columns_picker.is_some()
             || self.context_menu.is_some()
+            // El panel de diferencias también (revisión rust MAJOR-4): se
+            // queda el teclado entero y no pasa NADA por el resolver de
+            // Browse, así que un prefijo pendiente pintado sobre él describe
+            // teclas que ahí no significan lo que dice — y con un contador a
+            // medio teclear es peor, porque `5` dentro del panel enciende un
+            // filtro mientras el indicador anuncia un 5 que era otra cosa.
+            // `CompareStarted` además lo resetea, así que esto es el cinturón.
+            || self.compare.is_some()
         {
             (None, &[][..])
         } else {

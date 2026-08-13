@@ -643,7 +643,18 @@ compare-title = Comparar
 compare-header-left = izquierda
 compare-header-right = derecha
 compare-empty = todavía no hay filas
+# Sí llegaron filas, y están todas las categorías apagadas. Decir «todavía no
+# hay filas» ahí es una mentira que las propias cuentas de la línea de filtros
+# desmienten — y lo que toca hacer (esperar, o pulsar 1-5) depende de cuál de
+# las dos cosas sea.
+compare-all-filtered = están todas las categorías ocultas — 1-5 las devuelve
 compare-hint = tab lado · 1-5 filtro · ins marcar · s sinc · m espejo · enter ir · esc cerrar
+# La línea de teclas PROPIA de la GUI, y la única clave de comparación que no
+# se comparte. Es más corta porque su panel hace menos: marcar filas existe
+# para sembrar un plan de sincronización, y esa superficie (#161) todavía no
+# está construida aquí. Prometer `s sinc` en un frontend que no sincroniza
+# sería un atajo documentado y muerto — este repo ya envió uno.
+gui-compare-hint = tab lado · 1-5 filtro · enter ir · esc cerrar
 compare-active-side = actuando sobre: { $side }
 compare-status-running = comparación: { $n } filas (comparando…)
 compare-status-done = comparación: { $n } filas
@@ -831,6 +842,13 @@ gui-viewer-image-unreadable = imagen ilegible
 gui-a11y-pane-left = panel izquierdo
 gui-a11y-pane-right = panel derecho
 gui-a11y-tasks = tareas en curso
+# Prefijo hablado de un nombre que el saneado tuvo que alterar (spec §6). Una
+# PALABRA y no el badge `⚠`: con la verbosidad de símbolos por defecto de NVDA
+# y de Orca un U+26A0 suelto no se pronuncia, y bajo una reinterpretación de
+# nombres activa (#57) la forma enmascarada tampoco lleva ningún U+FFFD — es
+# texto limpio y legible que difiere de los bytes del disco, así que el badge
+# es su única marca.
+gui-a11y-hostile-name = nombre alterado
 gui-menu-acts-on = actúa sobre { $target }
 gui-menu-target-marks = { $n } elementos marcados
 gui-menu-entry-disabled = { $label } — { $reason }

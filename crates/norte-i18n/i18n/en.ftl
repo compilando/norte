@@ -632,7 +632,17 @@ compare-title = Compare
 compare-header-left = left
 compare-header-right = right
 compare-empty = no rows yet
+# Rows DID arrive, every category is switched off. Saying "no rows yet" there
+# is a lie the filter line's own counts contradict — and the reader's next
+# move (wait, or press 1-5) depends on which of the two it is.
+compare-all-filtered = every category is hidden — 1-5 brings them back
 compare-hint = tab side · 1-5 filter · ins mark · s sync · m mirror · enter go · esc close
+# The GUI's OWN key line, and the only compare id that is not shared. It is
+# shorter because the GUI's diff pane is smaller: marking rows exists to seed a
+# synchronisation plan, and that surface (#161) is not built here yet. A key
+# line that promised `s sync` in a frontend that cannot sync would be a
+# documented dead shortcut — this repository has shipped one already.
+gui-compare-hint = tab side · 1-5 filter · enter go · esc close
 compare-active-side = acting on: { $side }
 compare-status-running = compare: { $n } rows (comparing…)
 compare-status-done = compare: { $n } rows
@@ -818,6 +828,12 @@ gui-viewer-image-unreadable = unreadable image
 gui-a11y-pane-left = left pane
 gui-a11y-pane-right = right pane
 gui-a11y-tasks = tasks in progress
+# Spoken prefix for a name the sanitiser had to alter (spec §6). A WORD and
+# not the `⚠` badge: at the default symbol verbosity of NVDA and Orca a lone
+# U+26A0 is not spoken at all, and under an active name reinterpretation (#57)
+# the masked form carries no U+FFFD either — it is clean, legible text that
+# differs from the bytes on disk, so the badge is its only marker.
+gui-a11y-hostile-name = altered name
 gui-menu-acts-on = acts on { $target }
 gui-menu-target-marks = { $n } marked items
 gui-menu-entry-disabled = { $label } — { $reason }
