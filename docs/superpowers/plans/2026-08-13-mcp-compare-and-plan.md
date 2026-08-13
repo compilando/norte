@@ -37,7 +37,7 @@ no approval routing, no proto change. If the work reaches `EMBEDDED_CONN_ID`,
 | task | state | commit |
 | --- | --- | --- |
 | 1 — the bridge can consume a stream | done | `b8de8c5` |
-| 2 — the `compare` tool | pending | |
+| 2 — the `compare` tool | done | `7bd8097` |
 | 3 — the `sync_plan` tool | pending | |
 | 4 — the ADR, and the spec correction | pending | |
 | 5 — close the branch | pending | |
@@ -206,7 +206,7 @@ git commit -m "feat(mcp): the bridge can open an arm that drains notifications"
 - Modify: `crates/norte-mcp/src/bridge.rs` (`call_tool`, `tool_defs`, a new `tool_compare`)
 - Test: `crates/norte-mcp/tests/e2e_m3.rs`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 /// El agente ve QUÉ difiere, con el vocabulario del wire y no con etiquetas
@@ -237,7 +237,7 @@ async fn compare_devuelve_las_filas_con_valores_de_wire() {
 (`norte_proto::methods::CompareVerdict`'s serde representation) and assert on
 that, not on this plan's guess.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```sh
 just t norte-mcp
@@ -245,7 +245,7 @@ just t norte-mcp
 
 Expected: FAIL — `unknown tool: compare`.
 
-- [ ] **Step 3: Implement the tool**
+- [x] **Step 3: Implement the tool**
 
 Arm in `call_tool`, definition in `tool_defs`, and:
 
@@ -271,13 +271,13 @@ Requirements:
    failure the CLI's exit code 2 exists to prevent; the agent needs the same
    distinction.
 
-- [ ] **Step 4: Run the test and watch it pass**
+- [x] **Step 4: Run the test and watch it pass**
 
 ```sh
 just t norte-mcp
 ```
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```sh
 just c
