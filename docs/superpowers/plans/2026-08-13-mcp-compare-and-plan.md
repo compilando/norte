@@ -38,7 +38,7 @@ no approval routing, no proto change. If the work reaches `EMBEDDED_CONN_ID`,
 | --- | --- | --- |
 | 1 — the bridge can consume a stream | done | `b8de8c5` |
 | 2 — the `compare` tool | done | `7bd8097` |
-| 3 — the `sync_plan` tool | pending | |
+| 3 — the `sync_plan` tool | done | `866ef0c` |
 | 4 — the ADR, and the spec correction | pending | |
 | 5 — close the branch | pending | |
 
@@ -293,7 +293,7 @@ git commit -m "feat(mcp): an agent can compare two trees"
 - Modify: `crates/norte-mcp/src/bridge.rs`
 - Test: `crates/norte-mcp/tests/e2e_m3.rs`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 /// El agente ve QUÉ haría una sincronización, y la descripción de la tool le
@@ -328,13 +328,13 @@ async fn no_existe_una_tool_de_aplicar() {
 }
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```sh
 just t norte-mcp
 ```
 
-- [ ] **Step 3: Implement the tool**
+- [x] **Step 3: Implement the tool**
 
 1. Args `{source, dest, mode, criteria?, on_unknown?}`. `mode` is
    `"update"|"mirror"`; a `mode` present but malformed is an **error**, never a
@@ -358,13 +358,13 @@ just t norte-mcp
    Do not emit `plan_hash` in the payload at all. A value that cannot be used is
    an invitation to try.
 
-- [ ] **Step 4: Run the tests and watch them pass**
+- [x] **Step 4: Run the tests and watch them pass**
 
 ```sh
 just t norte-mcp
 ```
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```sh
 just c
