@@ -244,3 +244,35 @@ async fn criterio_de_salida_m3_agente_bajo_ask_con_undo() {
         "denegación accionable: {out}"
     );
 }
+
+/// #155 en miniatura: el puente puede ABRIR el brazo que drena
+/// notificaciones, y lo abre UNA vez. Sin esto, `compare` y `sync_plan` no
+/// tienen por dónde recibir sus filas.
+///
+/// Y el brazo es del AGENTE, no de un usuario: se comprueba con el gate de
+/// lectura, que para `Actor::Agent` exige un scope vivo y para `Actor::User`
+/// no exige nada. Si el brazo se abriera con el `connect` pelado, la lista de
+/// abajo saldría bien — y el puente habría blanqueado el actor.
+#[tokio::test]
+async fn el_puente_abre_su_brazo_de_streams_una_sola_vez() {
+    let (_dir, socket, _mem) = spawn_ask_daemon().await;
+    let agent = Bridge::connect(&socket, "claude")
+        .await
+        .expect("connect agente");
+
+    let primero = agent.streams().await.expect("primer brazo");
+    let segundo = agent.streams().await.expect("segundo brazo");
+    assert!(
+        std::ptr::eq(primero, segundo),
+        "el brazo se abre perezosamente pero UNA vez: dos conexiones por sesión \
+         serían dos conn_id y ningún beneficio"
+    );
+
+    // El brazo declara `agent_session`: sin scope concedido, el gate de
+    // lectura del daemon lo veda. Un `connect` pelado (actor User) listaría.
+    let denegado = primero.list(&vp("mem:///proj")).await;
+    assert!(
+        matches!(denegado, Err(norte_proto::Error::PolicyDenied { .. })),
+        "el brazo tiene que ser una conexión de AGENTE (sin scope, vedada), fue {denegado:?}"
+    );
+}

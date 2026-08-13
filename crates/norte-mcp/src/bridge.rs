@@ -9,6 +9,8 @@
 use std::sync::Arc;
 
 use base64::Engine as _;
+use norte_core::backend::Backend;
+use norte_core::backend::remote::RemoteBackend;
 use norte_core::daemon::{Client, ClientError};
 use norte_proto::methods;
 use norte_proto::{ByteRange, DeleteMode, VPath};
@@ -30,7 +32,11 @@ type DaemonIdCell = Arc<std::sync::OnceLock<u64>>;
 /// Errores del ciclo de vida del puente (conexión/transporte). Los errores
 /// de una TOOL no llegan aquí: viajan como `isError: true` en el result MCP
 /// (el agente puede leerlos y reaccionar).
+///
+/// `non_exhaustive`: la lista crece con cada superficie nueva del puente
+/// (`Streams` la estrenó) y ninguna de esas adiciones debe ser un break.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum BridgeError {
     /// I/O de stdio.
     #[error("stdio: {0}")]
@@ -38,12 +44,27 @@ pub enum BridgeError {
     /// Fallo hablando con el daemon (conexión/handshake).
     #[error("daemon: {0}")]
     Daemon(#[from] ClientError),
+    /// Fallo abriendo el brazo de streams ([`Bridge::streams`]). Separado de
+    /// [`Self::Daemon`] porque llega en taxonomía del protocolo, no como
+    /// `ClientError`, y porque distingue «el puente no arrancó» de «una tool
+    /// no pudo abrir su segunda conexión».
+    #[error("brazo de streams: {0}")]
+    Streams(#[source] norte_proto::Error),
 }
 
 /// El puente conectado al daemon como SESIÓN DE AGENTE.
 pub struct Bridge {
     client: Client,
     session: String,
+    /// El socket, guardado para poder abrir [`Bridge::streams`] al vuelo.
+    socket: std::path::PathBuf,
+    /// La conexión que drena notificaciones, abierta en la PRIMERA tool que
+    /// la necesita.
+    ///
+    /// Perezosa a propósito: un agente que solo lista y lee jamás la abre, y
+    /// una segunda conexión al daemon no es gratis. Una sola, cacheada: dos
+    /// serían dos `conn_id` sin ninguna ventaja.
+    streams: tokio::sync::OnceCell<Backend>,
 }
 
 impl Bridge {
@@ -73,7 +94,70 @@ impl Bridge {
         Ok(Self {
             client,
             session: session.to_owned(),
+            socket: socket.to_path_buf(),
+            streams: tokio::sync::OnceCell::new(),
         })
+    }
+
+    /// El brazo que drena notificaciones, abriéndolo si es la primera vez.
+    ///
+    /// `fs.compare` y `sync.plan` no contestan con su resultado: lo entregan
+    /// por notificaciones (`compare.rows`, `sync.steps`), y el [`Client`] de
+    /// este puente no las enruta — su canal se toma con `&mut self` y, con
+    /// ocho tools en vuelo, habría que demultiplexarlas por `task_id`. Ese
+    /// demultiplexor ya existe en [`Backend::Remote`], así que el puente abre
+    /// una SEGUNDA conexión al daemon y la usa para esos dos métodos.
+    ///
+    /// Es el MISMO actor: se abre con `connect_as_agent(self.session)`, y los
+    /// scopes de policy están indexados por SESIÓN
+    /// (`ScopeRegistry::grant(session, …)`), no por conexión — lo concedido al
+    /// agente vale igual aquí. Lo que NO se comparte es el `conn_id`: un plan
+    /// retenido en el spool para esta conexión no es redimible desde la de
+    /// tools, lo que es exactamente por qué el puente no ofrece `sync_apply`.
+    ///
+    /// Perezosa y cacheada: se abre una vez y, en el camino normal, muere con
+    /// el puente (el `Backend` es un campo, no un `spawn`; al soltarlo, su
+    /// bomba de notificaciones ve caer el último `Arc` y sale sola). «Normal»
+    /// es literal: `Backend` es `Clone` y todo `TaskRef` que salga de aquí
+    /// lleva dentro un clon, así que un clon retenido —o una task viva— la
+    /// mantiene abierta más allá del puente. No la retengas.
+    ///
+    /// **Ninguna operación lógica puede repartirse entre las dos conexiones**
+    /// (comprobar por una y actuar por la otra). Entre las dos llamadas puede
+    /// cambiar el estado de scopes e incluso el daemon: este brazo
+    /// RECONECTA solo y la conexión de tools no, de modo que tras un reinicio
+    /// el brazo puede estar hablando con un daemon nuevo —`ScopeRegistry`
+    /// vacío— mientras la otra está muerta. Los dos lados fallan cerrados,
+    /// pero la carrera existe: cada tool decide por UNA conexión.
+    ///
+    /// # Errors
+    /// [`BridgeError::Streams`] si el daemon no acepta la segunda conexión
+    /// (socket caído, sesión rechazada).
+    pub async fn streams(&self) -> Result<&Backend, BridgeError> {
+        self.streams
+            .get_or_try_init(|| async {
+                let remote = RemoteBackend::connect_as_agent(
+                    self.socket.clone(),
+                    methods::ClientInfo {
+                        name: "norte-mcp".into(),
+                        version: env!("CARGO_PKG_VERSION").into(),
+                    },
+                    self.session.clone(),
+                )
+                .await
+                .map_err(BridgeError::Streams)?;
+                let mut backend = Backend::Remote(remote);
+                // El daemon difunde a esta conexión el progreso de las tasks
+                // de su MISMA sesión —o sea, las de la conexión de tools—, y
+                // el backend las encola como «foráneas» en un canal sin tope.
+                // El puente no las mira (cada tool sigue su propia task por
+                // `task.list`), así que se suelta el receptor: sin él, el
+                // `send` es un no-op y la cola no crece durante toda la vida
+                // del proceso.
+                let _ = backend.take_foreign_tasks();
+                Ok(backend)
+            })
+            .await
     }
 
     /// Procesa UNA línea del transporte MCP y devuelve la respuesta ya

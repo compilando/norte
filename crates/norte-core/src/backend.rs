@@ -2306,6 +2306,12 @@ pub mod remote {
         /// Comando de autoarranque (`argv[0]` + args); `None` = solo connect.
         spawn_cmd: Option<Vec<std::ffi::OsString>>,
         client_info: ClientInfo,
+        /// Sesión de agente declarada en el handshake, o `None` para una
+        /// conexión humana. Vive AQUÍ y no solo en el `connect` porque
+        /// `establish` corre también en cada RECONEXIÓN: un backend de agente
+        /// que reconectara sin ella volvería como `Actor::User` — el actor se
+        /// blanquearía solo, en silencio, al primer corte del daemon.
+        agent_session: Option<String>,
         client: tokio::sync::RwLock<Option<Arc<Client>>>,
         watches: Mutex<HashMap<u64, watch::Sender<TaskProgress>>>,
         /// Desenlaces vistos SIN watch receptor (el broadcast terminal
@@ -2418,6 +2424,44 @@ pub mod remote {
             spawn_cmd: Option<Vec<std::ffi::OsString>>,
             client_info: ClientInfo,
         ) -> Result<Self, Error> {
+            Self::connect_inner(socket, spawn_cmd, client_info, None).await
+        }
+
+        /// Como [`Self::connect`], pero declarando `agent_session`: la
+        /// conexión queda ligada al actor de agente que el daemon gobierna
+        /// (`Actor::Agent { session }`), y por tanto al gate de agente —
+        /// lecturas y mutaciones exigen un scope vivo de esa sesión.
+        ///
+        /// Existe para el puente MCP, que necesita un brazo capaz de drenar
+        /// notificaciones (`fs.compare` y `sync.plan` entregan por ahí) sin
+        /// dejar de ser el mismo actor que su conexión de tools. Los scopes de
+        /// policy se guardan por SESIÓN (`ScopeRegistry::grant(session, …)`),
+        /// no por conexión, así que los permisos concedidos valen igual en las
+        /// dos. Lo que NO se comparte es el `conn_id`: un plan retenido para
+        /// esta conexión no es redimible desde la otra.
+        ///
+        /// Sin `spawn_cmd` a propósito: un agente no arranca daemons. Si no
+        /// hay uno escuchando, esto falla.
+        ///
+        /// # Errors
+        /// Los de [`Self::connect`], más sesión rechazada por el daemon
+        /// (charset `[A-Za-z0-9._-]`, 1..=64).
+        pub async fn connect_as_agent(
+            socket: PathBuf,
+            client_info: ClientInfo,
+            agent_session: String,
+        ) -> Result<Self, Error> {
+            Self::connect_inner(socket, None, client_info, Some(agent_session)).await
+        }
+
+        /// El cuerpo compartido de [`Self::connect`] y
+        /// [`Self::connect_as_agent`]: un solo handshake, una sola bomba.
+        async fn connect_inner(
+            socket: PathBuf,
+            spawn_cmd: Option<Vec<std::ffi::OsString>>,
+            client_info: ClientInfo,
+            agent_session: Option<String>,
+        ) -> Result<Self, Error> {
             let (foreign_tx, foreign_rx) = mpsc::unbounded_channel();
             let (events_tx, events_rx) = mpsc::unbounded_channel();
             let (approvals_tx, approvals_rx) = mpsc::unbounded_channel();
@@ -2427,6 +2471,7 @@ pub mod remote {
                     socket,
                     spawn_cmd,
                     client_info,
+                    agent_session,
                     client: tokio::sync::RwLock::new(None),
                     watches: Mutex::new(HashMap::new()),
                     finished: Mutex::new(std::collections::VecDeque::new()),
@@ -2475,7 +2520,18 @@ pub mod remote {
                 }
                 _ => Client::connect(&self.inner.socket).await?,
             };
-            client.initialize(self.inner.client_info.clone()).await?;
+            // El actor se re-declara en CADA conexión: el daemon lo fija en
+            // el handshake y no lo recuerda de la anterior.
+            match self.inner.agent_session.clone() {
+                Some(session) => {
+                    client
+                        .initialize_as_agent(self.inner.client_info.clone(), session)
+                        .await?;
+                }
+                None => {
+                    client.initialize(self.inner.client_info.clone()).await?;
+                }
+            }
             let notifications = client.take_notifications();
             let client = Arc::new(client);
             *self.inner.client.write().await = Some(Arc::clone(&client));
@@ -2496,6 +2552,16 @@ pub mod remote {
             // difundido ANTES de esta conexión no se pierde. Best-effort: un
             // daemon N-1 (sin `policy.pending`) responde METHOD_NOT_FOUND y
             // no pasa nada; el TTL de una pendiente sin ver la deniega solo.
+            //
+            // Una conexión de AGENTE no lo pide: `policy.pending` es
+            // human-only y el daemon le contesta INVALID_REQUEST, que no es
+            // METHOD_NOT_FOUND y caería en el `warn!` de abajo — un aviso por
+            // conexión Y POR RECONEXIÓN, para siempre, en el canal donde hay
+            // que poder leer los avisos de verdad. Además no tendría sentido:
+            // quien aprueba es el humano, jamás el agente.
+            if self.inner.agent_session.is_some() {
+                return Ok(notifications);
+            }
             match client
                 .call::<_, PolicyPendingResult>(methods::POLICY_PENDING, &serde_json::json!({}))
                 .await
@@ -4111,6 +4177,7 @@ pub mod remote {
                     name: "test".into(),
                     version: "0".into(),
                 },
+                agent_session: None,
                 client: tokio::sync::RwLock::new(None),
                 watches: Mutex::new(HashMap::new()),
                 finished: Mutex::new(std::collections::VecDeque::new()),
@@ -4253,6 +4320,7 @@ pub mod remote {
                     name: "test".into(),
                     version: "0".into(),
                 },
+                agent_session: None,
                 client: tokio::sync::RwLock::new(None),
                 watches: Mutex::new(HashMap::new()),
                 finished: Mutex::new(std::collections::VecDeque::new()),

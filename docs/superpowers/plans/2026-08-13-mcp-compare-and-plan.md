@@ -36,7 +36,7 @@ no approval routing, no proto change. If the work reaches `EMBEDDED_CONN_ID`,
 
 | task | state | commit |
 | --- | --- | --- |
-| 1 — the bridge can consume a stream | pending | |
+| 1 — the bridge can consume a stream | done | |
 | 2 — the `compare` tool | pending | |
 | 3 — the `sync_plan` tool | pending | |
 | 4 — the ADR, and the spec correction | pending | |
@@ -94,7 +94,7 @@ No tool yet. Just the connection and one test that a stream arrives.
 - Modify: `crates/norte-mcp/src/bridge.rs` (the `Bridge` struct and `connect`)
 - Test: `crates/norte-mcp/tests/e2e_m3.rs` (it already stands a daemon up — read it first and follow its harness)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `crates/norte-mcp/tests/e2e_m3.rs`, following whatever harness it already
 uses to start a daemon and connect a bridge:
@@ -121,7 +121,7 @@ async fn el_puente_abre_su_brazo_de_streams_una_sola_vez() {
 `OnceCell` in a `&self` method can hand out, and adjust the assertion to match.
 What the test must pin is *lazily, and once*.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```sh
 just t norte-mcp
@@ -129,7 +129,7 @@ just t norte-mcp
 
 Expected: FAIL — no method `streams`.
 
-- [ ] **Step 3: Add the agent-session constructor to `RemoteBackend`**
+- [x] **Step 3: Add the agent-session constructor to `RemoteBackend`**
 
 `RemoteBackend::connect` builds `InitializeParams` with `agent_session: None`.
 Add a sibling that sets it, rather than changing `connect`'s signature — it has
@@ -160,7 +160,7 @@ this.
 Factor the body so `connect` and `connect_as_agent` share it with
 `agent_session: Option<String>` — two copies of a handshake is how they diverge.
 
-- [ ] **Step 4: Give the bridge its lazy arm**
+- [x] **Step 4: Give the bridge its lazy arm**
 
 ```rust
 pub struct Bridge {
@@ -181,7 +181,7 @@ pub struct Bridge {
 `Bridge::streams(&self)` resolves the cell with `connect_as_agent(self.socket,
 …, self.session.clone())`.
 
-- [ ] **Step 5: Run the test and watch it pass**
+- [x] **Step 5: Run the test and watch it pass**
 
 ```sh
 just t norte-mcp
@@ -189,7 +189,7 @@ just t norte-mcp
 
 Expected: PASS.
 
-- [ ] **Step 6: Lint and commit**
+- [x] **Step 6: Lint and commit**
 
 ```sh
 just c

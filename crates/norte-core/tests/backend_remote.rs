@@ -389,6 +389,77 @@ async fn reconexion_avisa_y_recupera() {
     assert_eq!(entries.len(), 1);
 }
 
+/// El brazo de AGENTE sigue siendo agente después de reconectar.
+///
+/// `establish` corre también en cada reconexión, y el daemon fija el actor en
+/// el handshake sin recordar el de la conexión anterior: si la sesión no
+/// viajase ahí, el backend volvería como `Actor::User` —allow-all— y nada se
+/// pondría rojo, porque el síntoma del fallo es que las lecturas EMPIEZAN a
+/// funcionar. De ahí que la aserción de después de `Restored` sea la que
+/// importa: un `Ok` ahí es el actor blanqueándose solo.
+#[tokio::test]
+async fn el_brazo_de_agente_sigue_siendo_agente_tras_reconectar() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let mem = Arc::new(MemProvider::new());
+    write_file(&mem, "mem:///f", b"x").await;
+    let (shutdown1, run1) = bind_at(Arc::clone(&mem), socket.clone()).await;
+
+    let mut agente = Backend::Remote(
+        RemoteBackend::connect_as_agent(
+            socket.clone(),
+            ClientInfo {
+                name: "backend-test".into(),
+                version: "0.0.0".into(),
+            },
+            "sesion.agente".into(),
+        )
+        .await
+        .expect("connect_as_agent"),
+    );
+    let mut events = agente.take_conn_events().expect("canal de eventos");
+    // Sin scope concedido, el gate de lectura de agente lo veda. Un `User`
+    // sobre este mismo daemon lista sin problema — lo comprueba
+    // `reconexion_avisa_y_recupera`, que es el control de este test.
+    assert!(
+        matches!(
+            agente.list(&vp("mem:///")).await,
+            Err(norte_proto::Error::PolicyDenied { .. })
+        ),
+        "de entrada la conexión ya tiene que ser de agente"
+    );
+
+    // Muere el daemon…
+    shutdown1.cancel();
+    tokio::time::timeout(Duration::from_secs(5), run1)
+        .await
+        .expect("apagado")
+        .expect("join")
+        .expect("run ok");
+    let ev = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("Lost antes del timeout")
+        .expect("canal vivo");
+    assert_eq!(ev, ConnEvent::Lost);
+
+    // …y vuelve otro en el MISMO socket: el brazo reconecta solo.
+    let (_shutdown2, _run2) = bind_at(Arc::clone(&mem), socket.clone()).await;
+    let ev = tokio::time::timeout(Duration::from_secs(15), events.recv())
+        .await
+        .expect("Restored antes del timeout (backoff ≤5 s)")
+        .expect("canal vivo");
+    assert_eq!(ev, ConnEvent::Restored);
+    let tras_reconectar = agente.list(&vp("mem:///")).await;
+    assert!(
+        matches!(
+            tras_reconectar,
+            Err(norte_proto::Error::PolicyDenied { .. })
+        ),
+        "tras reconectar SIGUE siendo agente; un Ok aquí es el actor \
+         blanqueado a User, y fue {tras_reconectar:?}"
+    );
+}
+
 /// Los errores del daemon llegan como TAXONOMÍA (el contrato de los
 /// frontends), no como error de transporte.
 #[tokio::test]

@@ -189,7 +189,9 @@ impl Client {
         }
     }
 
-    /// Handshake obligatorio (ADR 0011).
+    /// Handshake obligatorio (ADR 0011). Conexión HUMANA: sin
+    /// `agent_session`, el daemon la liga a `Actor::User` (sin gate de
+    /// agente). Para una conexión de agente, [`Self::initialize_as_agent`].
     ///
     /// # Errors
     /// [`ClientError::Rpc`] si el core rechaza versión o encoding.
@@ -197,13 +199,43 @@ impl Client {
         &mut self,
         client_info: methods::ClientInfo,
     ) -> Result<methods::InitializeResult, ClientError> {
+        self.handshake(client_info, None).await
+    }
+
+    /// Handshake declarando `agent_session`: el daemon liga la conexión a
+    /// `Actor::Agent { session }` y todo lo que pase por ella queda bajo el
+    /// gate de agente (scopes por sesión, journal con ese actor).
+    ///
+    /// `pub(crate)`: quien la necesita es
+    /// `backend::remote::RemoteBackend::connect_as_agent`. El puente MCP
+    /// construye su `InitializeParams` a mano porque además guarda el
+    /// `InitializeResult`.
+    ///
+    /// # Errors
+    /// Las de [`Self::initialize`], más sesión rechazada por el daemon
+    /// (charset `[A-Za-z0-9._-]`, 1..=64).
+    pub(crate) async fn initialize_as_agent(
+        &mut self,
+        client_info: methods::ClientInfo,
+        agent_session: String,
+    ) -> Result<methods::InitializeResult, ClientError> {
+        self.handshake(client_info, Some(agent_session)).await
+    }
+
+    /// El handshake, UNA sola vez: dos copias de estos params es como
+    /// divergen (una gana un campo nuevo y la otra no).
+    async fn handshake(
+        &mut self,
+        client_info: methods::ClientInfo,
+        agent_session: Option<String>,
+    ) -> Result<methods::InitializeResult, ClientError> {
         self.call(
             methods::INITIALIZE,
             &methods::InitializeParams {
                 client_info,
                 protocol_version: methods::PROTOCOL_VERSION.into(),
                 encodings: vec!["json".into()],
-                agent_session: None,
+                agent_session,
             },
         )
         .await
