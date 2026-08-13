@@ -11,11 +11,13 @@ independently through `PROTOCOL_VERSION`.
 
 - **Synchronise two directories, one way, and be told what you cannot take
   back before you say yes:** `Ctrl+y` over the two panes plans a
-  synchronisation, and inside the diff pane `s` chooses *update* (copy what is
-  missing, overwrite what differs) and `m` chooses *mirror* (that, and delete
-  what the source does not have). Either way you are shown every step it intends
-  to take before anything moves. Mark rows in the diff pane first (`Ins`) and the
-  plan covers only those, subtrees included.
+  synchronisation, and inside the **terminal interface's** diff pane `s`
+  chooses *update* (copy what is missing, overwrite what differs) and `m`
+  chooses *mirror* (that, and delete what the source does not have). Either way
+  you are shown every step it intends to take before anything moves. Mark rows
+  in that pane first (`Ins`) and the plan covers only those, subtrees included.
+  There is now a second diff pane, in the graphical interface (below), and
+  none of these three keys does anything there yet (#161).
   What makes this different from a scripted copy is that **the plan you
   approved is the plan that runs.** norte keeps it, and approving sends back
   nothing but a fingerprint of it, so there is no path by which a different
@@ -106,11 +108,33 @@ independently through `PROTOCOL_VERSION`.
   synchronisation plan, no journal entry and no undo, because nothing is
   written — that is the next piece of work. Symlinks are never followed
   (norte refuses the request rather than quietly ignoring it, and compares link
-  targets as bytes). And it is the terminal interface only: no command line, no
-  agent surface, and no graphical one yet (#158). One known limitation worth
+  targets as bytes). And it is the terminal interface only: no command line and
+  no agent surface. (The graphical one arrived after this note was written —
+  see below, #158.) One known limitation worth
   saying out loud: inside tmux, `Shift+F2` does not reach norte at all — nor do
   the long-standing `Shift+F6` and `Alt+F7` — while plain function keys work
   (#159). Until that is fixed, reach it from the command palette.
+- **The diff pane, in the graphical interface too:** `Shift+F2` — `Alt+D`
+  under the `far` and `norton` presets, which never had a comparison key to
+  transcribe — now compares the two panes in the GUI and opens the same diff
+  pane the terminal interface has had: the same rows, the same two ASCII
+  glyphs for verdict and confidence, the same five category filters with their
+  counts, the same choice of which side an action means, and the same footer
+  that says whether the answer is complete rather than painting "done" over a
+  partial one. Both interfaces now take that last decision from one shared
+  rule instead of each deciding for itself — the command line and the agent
+  surface each re-derived it and each got it wrong, reporting a complete
+  answer for a run that had lost batches, and this was the last surface left
+  that could have made the same mistake a third time.
+  Roots and filenames are shown the way the file list shows them: sanitised,
+  and marked when sanitising changed them. The pane's header keeps each root
+  in its own element with the `↔` in a third, so a directory named with an
+  embedded `↔` cannot read as a different pair of roots and a long left root
+  cannot push the right one off the screen unmarked. The terminal's header is
+  still built as one string and does not have that protection (#185).
+  Synchronising from this pane is the next piece (#161): `s`, `m` and `Ins` do
+  nothing here yet, and neither does the mouse — selecting and navigating are
+  keyboard-only in this pane for now. Closes #158.
 - **A number before a key repeats it, on the presets whose originals do that:**
   typing `5` then `j` under the `vim` preset moves down five rows, `12` then a
   page key turns twelve pages. The number is visible at the status bar while
