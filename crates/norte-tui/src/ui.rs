@@ -3177,6 +3177,16 @@ fn draw_compare(
     let (right_txt, right_hostil) =
         norte_frontend::path_display_with(&view.right_root, view.right_encoding);
     let badge = |h: bool| if h { HOSTILE_BADGE } else { "" };
+    // #185: las dos raíces van UNIDAS en una sola cadena, y eso se puede
+    // falsificar. `↔` es imprimible corriente —`display_name_with` no lo
+    // enmascara y no sale badge—, así que un directorio llamado
+    // `docs ↔ ⟨file⟩/home/victima/backup` se lee como OTRO par de raíces; y
+    // una raíz izquierda larga expulsa a la derecha entera por el truncado
+    // del bloque, sin `…`. La GUI lo cerró estructuralmente (cada raíz en su
+    // elemento, `compare_view::title_text`), pero un título de `Block` de
+    // ratatui NO se puede partir así: se maqueta como una sola línea que el
+    // bloque recorta entera. Hace falta una decisión de diseño —#185 lista
+    // las opciones—, no una transcripción del arreglo de la GUI.
     let title = format!(
         " {} — {}{} ↔ {}{} ",
         t("compare-title"),

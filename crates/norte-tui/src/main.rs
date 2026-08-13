@@ -8710,15 +8710,11 @@ async fn launch_compare(
 /// que C6 descubrió y el plan no dice: **que el canal se cierre NO significa
 /// que hayan llegado todas las filas**. La bomba de filas y la del snapshot
 /// terminal son tasks independientes — pero la CUENTA que decide `Done` contra
-/// [`CompareState::Incomplete`] ya no vive aquí (#158):
-/// [`norte_frontend::compare::CompareView::finish`] la hace, porque es
-/// exactamente la cuenta que la GUI también necesita y que el CLI y la tool
-/// MCP reimplementaron cada uno por su lado — y los dos se equivocaron. Solo
-/// se llama con `TaskState::Completed`: un canal cerrado ANTES de que el
-/// estado terminal se publique (la misma carrera benigna) se sigue pintando
-/// `Done` sin pasar por la cuenta, porque `entries_done` todavía no es
-/// definitivo ahí — acusar de pérdida a esa carrera sería el mismo error al
-/// revés (review MAJOR, este task).
+/// [`CompareState::Incomplete`] ya no vive aquí (#158), y desde la revisión
+/// de rama (MAJOR-1) tampoco vive aquí el MAPEO entero: los cuatro brazos son
+/// [`norte_frontend::compare::CompareView::finish_from_task`], que es lo que
+/// también llama la GUI. Lo que queda de este lado es el aviso PASAJERO de la
+/// barra, que la GUI no tiene.
 fn drain_compare(
     app: &mut App,
     compare_run: &mut Option<CompareRun>,
@@ -8742,43 +8738,29 @@ fn drain_compare(
         let snapshot = rx.borrow_and_update().clone();
         let expected = snapshot.entries_done;
         if let Some(view) = app.compare.as_mut() {
-            match snapshot.state {
-                norte_proto::TaskState::Cancelled => {
-                    view.state = CompareState::Cancelled;
-                    view.rows_expected = expected;
-                }
-                norte_proto::TaskState::Failed { error } => {
-                    view.state = CompareState::Failed;
-                    view.rows_expected = expected;
-                    view.error = Some(error_category(&error));
-                    app.message = Some(error_message(&error));
-                }
-                norte_proto::TaskState::Completed => view.finish(expected, c.rows as u64),
-                // El canal se cerró antes de que el estado terminal se
-                // publicara todavía (carrera benigna entre las dos bombas
-                // independientes): tratarlo como `Incomplete` acusaría de
-                // pérdida a una carrera que no lo es, así que se pinta
-                // `Done` con lo que hay — sin pasar por `finish`, que
-                // asumiría que `entries_done` ya es definitivo.
-                _ => {
-                    view.state = CompareState::Done;
-                    view.rows_expected = expected;
-                }
-            }
+            // El mapeo entero —los cuatro brazos— es del modelo. Aquí solo
+            // queda el aviso PASAJERO de la barra, que es lo único que esta
+            // superficie tiene y la GUI no.
+            let aviso = view
+                .finish_from_task(
+                    &snapshot.state,
+                    expected,
+                    c.rows as u64,
+                    norte_i18n::active(),
+                )
+                .map(error_message);
             c.state = view.state;
+            if let Some(m) = aviso {
+                app.message = Some(m);
+            }
         } else {
             // El panel ya se cerró: no hay nada que pintar, y el único uso
             // de `c.state` es una comprobación de `== Running` (aquí abajo
             // en `on_compare_key`, y en el `select!` del run loop) —
-            // cualquier variante terminal le sirve.
-            c.state = match snapshot.state {
-                norte_proto::TaskState::Cancelled => CompareState::Cancelled,
-                norte_proto::TaskState::Failed { .. } => CompareState::Failed,
-                norte_proto::TaskState::Completed if expected > c.rows as u64 => {
-                    CompareState::Incomplete
-                }
-                _ => CompareState::Done,
-            };
+            // cualquier variante terminal le sirve, así que no se vuelve a
+            // decidir cuál (era una CUARTA copia de la cuenta `Completed` vs
+            // `Incomplete`, y la única que nadie podía ver equivocarse).
+            c.state = CompareState::Done;
         }
     }
 }
@@ -9433,8 +9415,21 @@ async fn on_compare_enter(
     // si la fila es un directorio, su padre si es un fichero — la misma regla
     // que necesitará la GUI.
     let Some(destino) = view.pane.navigation_target() else {
+        // Hay entrada pero no hay a dónde ir: un fichero colgado de la raíz
+        // de su scheme no tiene padre. Se DICE, igual que el caso de arriba —
+        // un `Enter` que no hace nada y no explica por qué se lee como que la
+        // tecla está rota. Lo arregló la GUI y aquí faltaba (revisión de
+        // rama, MAJOR-4).
+        let side_word =
+            norte_frontend::compare::side_label(view.pane.active_side(), norte_i18n::active());
+        app.message = Some(ta("compare-no-target", &[("side", &side_word)]));
         return;
     };
+    // Y el cursor cae sobre la entrada de la que se salió, byte-exacto (lo
+    // consume el listado al aterrizar; si ya no existe, cae al default). La
+    // GUI lo hacía y esta rama no, mientras su comentario reclamaba paridad
+    // (revisión de rama, MINOR-8).
+    let foco = view.pane.target_path().cloned();
     // Al pane del lado ACTIVO, y el foco con él: mandar SIEMPRE al pane con
     // foco le costaba al lector el otro directorio para ir a ver este.
     let destino_pane = app.compare_active_pane().unwrap_or_else(|| app.focus());
@@ -9443,6 +9438,9 @@ async fn on_compare_enter(
     }
     app.close_compare();
     app.set_focus(destino_pane);
+    if let Some(p) = foco {
+        app.panes[destino_pane].set_pending_focus(p);
+    }
     let outcome = cd(app, backend, events, destino).await;
     apply_cd(fill, decorate_fetch, last_probed, search_run, outcome);
 }
