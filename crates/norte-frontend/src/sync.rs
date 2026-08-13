@@ -48,9 +48,9 @@
 use norte_i18n::{Lang, t_in, ta_in};
 use norte_proto::methods::{
     CompareRow, DestTrash, RelPath, SYNC_MAX_INCLUDE, StepReversal, SyncBlockerKind, SyncCounts,
-    SyncPlanDone, SyncReason, SyncReportResult, SyncStep, SyncStepKind, SyncStepsBatch,
+    SyncMode, SyncPlanDone, SyncReason, SyncReportResult, SyncStep, SyncStepKind, SyncStepsBatch,
 };
-use norte_proto::{TaskId, VPath};
+use norte_proto::{TaskId, TaskState, VPath};
 
 /// Why a selection of diff-pane rows cannot become a `SyncPlanParams::include`.
 ///
@@ -1434,6 +1434,211 @@ fn integrity_of(local: &SyncCounts, remote: &SyncCounts, malformed: u64) -> Plan
     }
 }
 
+/// Cómo va la Task de un panel de sincronización, para la barra de estado.
+///
+/// Deliberadamente MÁS CORTO que [`crate::compare::CompareState`]: aquí el
+/// «llegaron todas las filas» no se deduce de un conteo, lo DICE el
+/// `sync.plan_done` — sin él no hay `plan_hash` y no hay nada que aprobar, así
+/// que un plan incompleto no es un estado que pintar sino un plan que no
+/// existe (`SyncPlanEvent`, ADR 0049).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SyncRunState {
+    /// Una Task viva: se está planificando, o se está aplicando.
+    #[default]
+    Running,
+    /// La Task terminó bien.
+    Done,
+    /// El usuario canceló.
+    Cancelled,
+    /// La Task falló (el error va por la barra).
+    Failed,
+}
+
+impl SyncRunState {
+    /// El desenlace de la Task que corre detrás del panel —la del plan
+    /// primero, la de la aplicación después— leído de su [`TaskState`]
+    /// terminal.
+    ///
+    /// Deliberadamente NO toca el error localizado que cada frontend pinta
+    /// (una barra truncada en la TUI, algo distinto en la GUI): eso es la
+    /// única mitad que legítimamente difiere entre las dos, y mezclarla aquí
+    /// ataría este mapeo puro a un [`Lang`] sin necesidad. Lo que SÍ era una
+    /// sola decisión repetida a mano —`Cancelled`/`Failed`/lo demás→`Done`—
+    /// es lo que vive aquí, para que un `_ => Done` no se transcriba dos
+    /// veces y un día se le olvide un brazo a una de las dos copias.
+    ///
+    /// ```
+    /// use norte_frontend::sync::SyncRunState;
+    /// use norte_proto::TaskState;
+    ///
+    /// assert_eq!(
+    ///     SyncRunState::from_task_state(&TaskState::Cancelled),
+    ///     SyncRunState::Cancelled
+    /// );
+    /// ```
+    #[must_use]
+    pub fn from_task_state(state: &TaskState) -> Self {
+        match state {
+            TaskState::Cancelled => Self::Cancelled,
+            TaskState::Failed { .. } => Self::Failed,
+            _ => Self::Done,
+        }
+    }
+}
+
+/// El panel de sincronización abierto: el modelo puro de [`SyncState`] más lo
+/// que un frontend necesita para pintarlo y para hablar con el backend.
+///
+/// El reparto es el mismo que el de [`crate::compare::CompareView`] (regla
+/// dura 7): el estado del diálogo —qué pasos llegaron, si cuadran con lo que
+/// el daemon cerró, qué devuelve el undo y cuál es la segunda pregunta— vive
+/// aquí, donde se prueba sin terminal. Lo que cada frontend añade son las dos
+/// raíces que la cabecera pinta, el estado del run y la pregunta de
+/// confirmación EN CURSO — y esas también viven aquí (#161): la TUI y la GUI
+/// necesitan el MISMO envoltorio, no dos reimplementados por separado.
+#[derive(Debug)]
+pub struct SyncView {
+    /// El modelo del diálogo (Task 12).
+    pub state: SyncState,
+    /// Cómo va la Task que está corriendo ahora mismo (la del plan primero, la
+    /// de la aplicación después).
+    pub run: SyncRunState,
+    /// Modo pedido, que la cabecera pinta: un `Mirror` borra y un `Update` no,
+    /// y el lector tiene que verlo antes de aprobar.
+    pub mode: SyncMode,
+    /// Raíz ORIGEN. De ella cuelgan las `rel` de casi todos los pasos.
+    pub source_root: VPath,
+    /// Raíz DESTINO. De ella cuelgan las de un `DeleteTree` y las de un `Skip`
+    /// ilegible ([`anchor_of`]).
+    pub dest_root: VPath,
+    /// Reinterpretación de nombres (#57) del pane ORIGEN, congelada al abrir.
+    pub source_encoding: Option<norte_encoding::NameEncoding>,
+    /// La del pane DESTINO, que puede ser otra.
+    ///
+    /// Dos y no una, por lo mismo que el panel de diferencias lleva dos: los
+    /// dos panes son dos ubicaciones y pueden llevar overrides distintos. Aquí
+    /// además importa más, porque `SyncStep::dest_rel` existe precisamente
+    /// para enseñar la ortografía del DESTINO (#152) — decodificarla con el
+    /// codepage del ORIGEN nombraría con otros bytes el fichero sobre el que
+    /// va a caer la escritura.
+    pub dest_encoding: Option<norte_encoding::NameEncoding>,
+    /// La segunda pregunta, ya formulada y esperando un `y`.
+    ///
+    /// `None` = todavía no se ha pulsado aprobar, o el plan no la necesitaba.
+    /// Vive aquí y no en el modelo porque es estado de INTERACCIÓN —a medio
+    /// contestar— y el modelo de Task 12 no retrocede: preguntar es de la
+    /// pantalla, decidir es suyo.
+    pub confirming: Option<Confirmation>,
+    /// Ya se pidió cancelar (el primer `Esc`), igual que en el panel de
+    /// diferencias y por el mismo motivo: el segundo `Esc` cierra pase lo que
+    /// pase con la Task.
+    pub cancel_requested: bool,
+    /// Categoría del error de una Task que FALLÓ, ya localizada y saneada.
+    pub error: Option<String>,
+}
+
+impl SyncView {
+    /// Un panel recién abierto sobre estas dos raíces, sin pasos todavía.
+    #[must_use]
+    pub fn new(
+        task_id: TaskId,
+        mode: SyncMode,
+        source_root: VPath,
+        dest_root: VPath,
+        source_encoding: Option<norte_encoding::NameEncoding>,
+        dest_encoding: Option<norte_encoding::NameEncoding>,
+    ) -> Self {
+        Self {
+            // Con el `task_id` desde el principio: es lo que hace que un lote
+            // de OTRO plan —el lector replanifica con menos marcas— se caiga
+            // en vez de mezclarse con éste (Task 12, nota 3).
+            state: SyncState::Planning(Planning::new(task_id)),
+            run: SyncRunState::Running,
+            mode,
+            source_root,
+            dest_root,
+            source_encoding,
+            dest_encoding,
+            confirming: None,
+            cancel_requested: false,
+            error: None,
+        }
+    }
+
+    /// Qué papelera tiene el DESTINO, según el plan.
+    ///
+    /// [`DestTrash::Unknown`] mientras el plan no ha cerrado, que es la
+    /// respuesta honesta: sin `sync.plan_done` no se sabe, y el modelo pinta
+    /// cada paso como «esta versión no puede decirlo» en vez de prometer que
+    /// vuelve. Nunca se lee [`SyncStep::reversal`] a pelo — esa es la mitad de
+    /// la respuesta y la que miente cuando el destino no tiene papelera.
+    #[must_use]
+    pub fn dest_trash(&self) -> DestTrash {
+        self.state
+            .plan()
+            .map_or(DestTrash::Unknown, SyncPlan::dest_trash)
+    }
+
+    /// Los pasos que hay AHORA MISMO, esté cerrado el plan o no.
+    ///
+    /// Mientras el plan llega, [`SyncState::plan`] contesta `None` —no hay
+    /// plan hasta el `sync.plan_done`, que es lo que le da su `plan_hash`— y
+    /// aun así los pasos ya recibidos existen y se pintan. Sin esto el panel
+    /// enseñaba un hueco vacío mientras el pie contaba «planificando… 6
+    /// pasos», que es la pantalla diciéndose la contraria a sí misma. La
+    /// columna del undo de esos pasos sale «esta versión no puede decirlo»,
+    /// que es la verdad hasta que se sepa la papelera del destino.
+    #[must_use]
+    pub fn steps(&self) -> &[SyncStep] {
+        match &self.state {
+            SyncState::Planning(p) => p.steps(),
+            _ => self.state.plan().map_or(&[], |p| p.steps()),
+        }
+    }
+
+    /// ¿Sigue habiendo algo que aprobar?
+    ///
+    /// `false` en cuanto el plan se manda: la línea de teclas no puede seguir
+    /// ofreciendo `a aprobar` sobre un plan que ya se gastó —aplicarlo lo
+    /// consume, y un segundo `sync.apply` del mismo hash es `PlanStale`—.
+    #[must_use]
+    pub fn awaiting_approval(&self) -> bool {
+        matches!(self.state, SyncState::Ready(_))
+    }
+
+    /// ¿Se puede aprobar este panel AHORA MISMO?
+    ///
+    /// Envuelve [`SyncState::can_approve`] y NUNCA
+    /// [`SyncPlan::can_approve`] — el segundo, alcanzable por
+    /// [`SyncState::plan`], sigue contestando que sí sobre un plan que ya se
+    /// aprobó, porque sus tres factores no cambian al gastarse. Este método
+    /// es la forma de que un llamante no tenga ocasión de coger el atajo
+    /// equivocado (#161, la trampa que la fase A del CLI no vio: no preguntó
+    /// nada, y un plan `Malformed` se aplicó entero desde el spool).
+    #[must_use]
+    pub fn can_approve(&self) -> bool {
+        self.state.can_approve()
+    }
+
+    /// Se lanzó `sync.apply` y el daemon contestó con una Task: junta las
+    /// CUATRO actualizaciones que ese instante exige — el modelo avanza a
+    /// `Applying` ([`SyncState::on_apply_started`]), el run vuelve a
+    /// `Running`, la segunda pregunta se cae (ya se contestó) y la
+    /// cancelación pedida por un run anterior deja de aplicar al nuevo.
+    ///
+    /// Antes de que esto viviera aquí, `norte-tui` hacía las cuatro a mano en
+    /// el sitio que lanza la Task; la GUI habría necesitado exactamente las
+    /// mismas cuatro, y una reimplementación por su cuenta es justo la
+    /// oportunidad de olvidar una — la trampa que este movimiento existe para
+    /// no repetir (#161, revisión de C1).
+    pub fn on_apply_started(&mut self, task_id: TaskId) {
+        self.state.on_apply_started(task_id);
+        self.run = SyncRunState::Running;
+        self.confirming = None;
+        self.cancel_requested = false;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1451,6 +1656,14 @@ mod tests {
 
     fn task() -> TaskId {
         TaskId::new(7)
+    }
+
+    fn origen() -> VPath {
+        VPath::parse("file:///origen").expect("vpath")
+    }
+
+    fn destino() -> VPath {
+        VPath::parse("file:///destino").expect("vpath")
     }
 
     /// A step of `kind`, with the reversal the transducer would give it
@@ -2017,6 +2230,52 @@ mod tests {
         assert!(
             !s.can_approve(),
             "un plan ya aplicado no se vuelve a aprobar"
+        );
+    }
+
+    /// #161: el envoltorio del run vivía en `norte-tui`, así que la GUI
+    /// habría tenido que reimplementarlo. C1 aprendió que mover MEDIA
+    /// decisión es peor que no moverla: el comentario decía «una sola regla»
+    /// y había tres copias. Aquí se mueve entera.
+    #[test]
+    fn el_envoltorio_del_run_vive_con_el_modelo() {
+        let v = SyncView::new(
+            task(),
+            norte_proto::methods::SyncMode::Update,
+            origen(),
+            destino(),
+            None,
+            None,
+        );
+        assert!(v.confirming.is_none(), "nace sin pregunta pendiente");
+        assert!(
+            !v.can_approve(),
+            "un plan que todavía no cerró NO se puede aprobar"
+        );
+    }
+
+    /// La trampa que la TUI documenta y que el CLI de la fase A no vio:
+    /// `SyncState::can_approve` sabe que un plan YA aprobado no se vuelve a
+    /// aprobar; `SyncPlan::can_approve`, que sigue accesible por
+    /// `SyncState::plan()`, contesta que sí.
+    #[test]
+    fn un_plan_ya_aprobado_no_se_aprueba_dos_veces() {
+        let mut v = SyncView::new(
+            task(),
+            norte_proto::methods::SyncMode::Update,
+            origen(),
+            destino(),
+            None,
+            None,
+        );
+        let steps = vec![step(1, SyncStepKind::Copy, DestTrash::Restorable)];
+        v.state = SyncState::Ready(ready(steps, DestTrash::Restorable));
+        assert!(v.can_approve(), "cerrado y sano: se puede");
+
+        v.on_apply_started(TaskId::new(9));
+        assert!(
+            !v.can_approve(),
+            "ya aplicándose: la respuesta es NO, aunque el plan de dentro diga que sí"
         );
     }
 

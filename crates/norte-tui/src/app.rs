@@ -114,148 +114,16 @@ struct SyncRoots {
     dest_encoding: Option<norte_encoding::NameEncoding>,
 }
 
-/// Cómo va la Task de un panel de sincronización, para la barra de estado.
-///
-/// Deliberadamente MÁS CORTO que [`CompareState`]: aquí el «llegaron todas las
-/// filas» no se deduce de un conteo, lo DICE el `sync.plan_done` — sin él no
-/// hay `plan_hash` y no hay nada que aprobar, así que un plan incompleto no es
-/// un estado que pintar sino un plan que no existe (`SyncPlanEvent`, ADR 0049).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SyncRunState {
-    /// Una Task viva: se está planificando, o se está aplicando.
-    #[default]
-    Running,
-    /// La Task terminó bien.
-    Done,
-    /// El usuario canceló.
-    Cancelled,
-    /// La Task falló (el error va por la barra).
-    Failed,
-}
-
-/// El panel de sincronización abierto: el modelo puro de
-/// [`norte_frontend::sync::SyncState`] más lo que la TUI necesita para
-/// pintarlo y para hablar con el backend.
-///
-/// El reparto es el mismo que el de [`CompareView`] (regla dura 7): el estado
-/// del diálogo —qué pasos llegaron, si cuadran con lo que el daemon cerró, qué
-/// devuelve el undo y cuál es la segunda pregunta— vive en `norte-frontend`,
-/// donde se prueba sin terminal. Aquí solo están las dos raíces que la cabecera
-/// pinta, el estado del run y la pregunta de confirmación EN CURSO.
-#[derive(Debug)]
-pub struct SyncView {
-    /// El modelo del diálogo (Task 12).
-    pub state: norte_frontend::sync::SyncState,
-    /// Cómo va la Task que está corriendo ahora mismo (la del plan primero, la
-    /// de la aplicación después).
-    pub run: SyncRunState,
-    /// Modo pedido, que la cabecera pinta: un `Mirror` borra y un `Update` no,
-    /// y el lector tiene que verlo antes de aprobar.
-    pub mode: norte_proto::methods::SyncMode,
-    /// Raíz ORIGEN. De ella cuelgan las `rel` de casi todos los pasos.
-    pub source_root: VPath,
-    /// Raíz DESTINO. De ella cuelgan las de un `DeleteTree` y las de un `Skip`
-    /// ilegible ([`norte_frontend::sync::anchor_of`]).
-    pub dest_root: VPath,
-    /// Reinterpretación de nombres (#57) del pane ORIGEN, congelada al abrir.
-    pub source_encoding: Option<norte_encoding::NameEncoding>,
-    /// La del pane DESTINO, que puede ser otra.
-    ///
-    /// Dos y no una, por lo mismo que el panel de diferencias lleva dos: los
-    /// dos panes son dos ubicaciones y pueden llevar overrides distintos. Aquí
-    /// además importa más, porque `SyncStep::dest_rel` existe precisamente
-    /// para enseñar la ortografía del DESTINO (#152) — decodificarla con el
-    /// codepage del ORIGEN nombraría con otros bytes el fichero sobre el que
-    /// va a caer la escritura.
-    pub dest_encoding: Option<norte_encoding::NameEncoding>,
-    /// La segunda pregunta, ya formulada y esperando un `y`.
-    ///
-    /// `None` = todavía no se ha pulsado aprobar, o el plan no la necesitaba.
-    /// Vive aquí y no en el modelo porque es estado de INTERACCIÓN —a medio
-    /// contestar— y el modelo de Task 12 no retrocede: preguntar es de la
-    /// pantalla, decidir es suyo.
-    pub confirming: Option<norte_frontend::sync::Confirmation>,
-    /// Ya se pidió cancelar (el primer `Esc`), igual que en el panel de
-    /// diferencias y por el mismo motivo: el segundo `Esc` cierra pase lo que
-    /// pase con la Task.
-    pub cancel_requested: bool,
-    /// Categoría del error de una Task que FALLÓ, ya localizada y saneada.
-    pub error: Option<String>,
-}
-
-impl SyncView {
-    /// Un panel recién abierto sobre estas dos raíces, sin pasos todavía.
-    #[must_use]
-    pub fn new(
-        task_id: norte_proto::TaskId,
-        mode: norte_proto::methods::SyncMode,
-        source_root: VPath,
-        dest_root: VPath,
-        source_encoding: Option<norte_encoding::NameEncoding>,
-        dest_encoding: Option<norte_encoding::NameEncoding>,
-    ) -> Self {
-        Self {
-            // Con el `task_id` desde el principio: es lo que hace que un lote
-            // de OTRO plan —el lector replanifica con menos marcas— se caiga
-            // en vez de mezclarse con éste (Task 12, nota 3).
-            state: norte_frontend::sync::SyncState::Planning(norte_frontend::sync::Planning::new(
-                task_id,
-            )),
-            run: SyncRunState::Running,
-            mode,
-            source_root,
-            dest_root,
-            source_encoding,
-            dest_encoding,
-            confirming: None,
-            cancel_requested: false,
-            error: None,
-        }
-    }
-
-    /// Qué papelera tiene el DESTINO, según el plan.
-    ///
-    /// [`norte_proto::methods::DestTrash::Unknown`] mientras el plan no ha
-    /// cerrado, que es la respuesta honesta: sin `sync.plan_done` no se sabe, y
-    /// el modelo pinta cada paso como «esta versión no puede decirlo» en vez de
-    /// prometer que vuelve. Nunca se lee
-    /// [`norte_proto::methods::SyncStep::reversal`] a pelo — esa es la mitad de
-    /// la respuesta y la que miente cuando el destino no tiene papelera.
-    #[must_use]
-    pub fn dest_trash(&self) -> norte_proto::methods::DestTrash {
-        self.state.plan().map_or(
-            norte_proto::methods::DestTrash::Unknown,
-            norte_frontend::sync::SyncPlan::dest_trash,
-        )
-    }
-
-    /// Los pasos que hay AHORA MISMO, esté cerrado el plan o no.
-    ///
-    /// Mientras el plan llega, [`norte_frontend::sync::SyncState::plan`]
-    /// contesta `None` —no hay plan hasta el `sync.plan_done`, que es lo que le
-    /// da su `plan_hash`— y aun así los pasos ya recibidos existen y se pintan.
-    /// Sin esto el panel enseñaba un hueco vacío mientras el pie contaba
-    /// «planificando… 6 pasos», que es la pantalla diciéndose la contraria a sí
-    /// misma. La columna del undo de esos pasos sale «esta versión no puede
-    /// decirlo», que es la verdad hasta que se sepa la papelera del destino.
-    #[must_use]
-    pub fn steps(&self) -> &[norte_proto::methods::SyncStep] {
-        match &self.state {
-            norte_frontend::sync::SyncState::Planning(p) => p.steps(),
-            _ => self.state.plan().map_or(&[], |p| p.steps()),
-        }
-    }
-
-    /// ¿Sigue habiendo algo que aprobar?
-    ///
-    /// `false` en cuanto el plan se manda: la línea de teclas no puede seguir
-    /// ofreciendo `a aprobar` sobre un plan que ya se gastó —aplicarlo lo
-    /// consume, y un segundo `sync.apply` del mismo hash es `PlanStale`—.
-    #[must_use]
-    pub fn awaiting_approval(&self) -> bool {
-        matches!(self.state, norte_frontend::sync::SyncState::Ready(_))
-    }
-}
+/// El estado del run (`SyncRunState`) y el panel abierto (`SyncView`) viven en
+/// [`norte_frontend::sync`] (#161, el mismo argumento que ya llevó
+/// [`CompareView`] allí): la GUI necesita exactamente este envoltorio del run
+/// y no uno reimplementado. C1 aprendió, a costa de una revisión de rama, que
+/// mover el TIPO y dejar sus decisiones a mano en cada frontend es peor que no
+/// moverlo — así que lo que viaja con él es el mapeo `TaskState` →
+/// [`SyncRunState`] ([`SyncRunState::from_task_state`]) y el paquete de
+/// actualizaciones de «se aprobó y arrancó `sync.apply`»
+/// ([`SyncView::on_apply_started`]), no solo la struct.
+pub use norte_frontend::sync::{SyncRunState, SyncView};
 
 impl Pane {
     /// Pane sobre `dir` con `entries`: #54, ya no hace falta ordenarlas antes

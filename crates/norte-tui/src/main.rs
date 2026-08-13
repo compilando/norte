@@ -8828,10 +8828,7 @@ async fn launch_sync_apply(
         Ok(task) => {
             let progress = task.progress();
             if let Some(view) = app.sync.as_mut() {
-                view.state.on_apply_started(task.id());
-                view.run = norte_tui::app::SyncRunState::Running;
-                view.confirming = None;
-                view.cancel_requested = false;
+                view.on_apply_started(task.id());
             }
             // Sin tablero, a propósito: `TaskRef` no es clonable, y el
             // tablero se la QUEDARÍA — dejando al panel sin nada que cancelar
@@ -8904,11 +8901,11 @@ fn drain_sync_plan(
         }
         None => {
             let snapshot = run.progress.borrow_and_update().clone();
-            view.run = match snapshot.state {
-                norte_proto::TaskState::Cancelled => norte_tui::app::SyncRunState::Cancelled,
-                norte_proto::TaskState::Failed { .. } => norte_tui::app::SyncRunState::Failed,
-                _ => norte_tui::app::SyncRunState::Done,
-            };
+            // El mapeo `TaskState` → `SyncRunState` es de
+            // `norte_tui::app::SyncRunState::from_task_state` (#161): la
+            // localización del error que sigue es la única mitad que de
+            // verdad difiere entre frontends, y por eso se queda aquí.
+            view.run = norte_tui::app::SyncRunState::from_task_state(&snapshot.state);
             if let norte_proto::TaskState::Failed { error } = snapshot.state {
                 let categoria = detail_for_bar(&error_category(&error));
                 view.error = Some(categoria.clone());
@@ -8945,14 +8942,16 @@ async fn harvest_sync_apply(
         return;
     }
     let task_id = run.task.id();
-    let estado = match snapshot.state {
-        norte_proto::TaskState::Cancelled => norte_tui::app::SyncRunState::Cancelled,
-        norte_proto::TaskState::Failed { .. } => norte_tui::app::SyncRunState::Failed,
-        // Un desenlace desconocido con los emisores caídos no es «hecho»: la
-        // conexión murió sin decir qué pasó, y decir «hecho» sobre una
-        // sincronización a medias es la peor de las dos mentiras posibles.
-        ref otro if !otro.is_terminal() => norte_tui::app::SyncRunState::Failed,
-        _ => norte_tui::app::SyncRunState::Done,
+    // El estado terminal pasa por `SyncRunState::from_task_state` (#161), el
+    // mismo mapeo que usa el drenador del plan. Lo que sigue siendo de AQUÍ
+    // es el guard de arriba: un desenlace NO terminal solo llega a este punto
+    // con los emisores caídos (`!vivo`), y ahí «hecho» sería la mentira
+    // mayor de las dos — la conexión murió sin decir qué pasó, y una
+    // sincronización a medias no es un éxito.
+    let estado = if snapshot.state.is_terminal() {
+        norte_tui::app::SyncRunState::from_task_state(&snapshot.state)
+    } else {
+        norte_tui::app::SyncRunState::Failed
     };
     *sync_run = None;
     let informe = backend.sync_report(task_id).await;
@@ -9338,15 +9337,16 @@ fn approve_sync(app: &mut App) {
     let Some(view) = app.sync.as_mut() else {
         return;
     };
-    // `SyncState::can_approve`, NO `SyncPlan::can_approve`: el segundo sigue
-    // contestando que sí sobre un plan que ya se aprobó —`SyncState::plan()`
-    // devuelve el mismo plan en `Applying` y en `Applied`, y ninguno de sus
-    // tres factores cambia al gastarse—. Con el del plan a secas, un `a` de
-    // más durante una aplicación larga lanzaba un segundo `sync.apply` que el
-    // spool contesta `PlanStale`, y el brazo de error pintaba «el plan falló»
-    // encima de una sincronización que seguía ESCRIBIENDO; el `Esc` siguiente
-    // la cancelaba a medias creyendo cerrar un fallo.
-    if !view.state.can_approve() {
+    // `SyncView::can_approve` — que envuelve `SyncState::can_approve` y NUNCA
+    // `SyncPlan::can_approve` — porque el segundo sigue contestando que sí
+    // sobre un plan que ya se aprobó: `SyncState::plan()` devuelve el mismo
+    // plan en `Applying` y en `Applied`, y ninguno de sus tres factores
+    // cambia al gastarse. Con el del plan a secas, un `a` de más durante una
+    // aplicación larga lanzaba un segundo `sync.apply` que el spool contesta
+    // `PlanStale`, y el brazo de error pintaba «el plan falló» encima de una
+    // sincronización que seguía ESCRIBIENDO; el `Esc` siguiente la cancelaba
+    // a medias creyendo cerrar un fallo.
+    if !view.can_approve() {
         app.message = Some(t("msg-sync-cannot-approve"));
         return;
     }
@@ -9369,11 +9369,11 @@ fn submit_sync(app: &mut App) {
     let Some(view) = app.sync.as_ref() else {
         return;
     };
-    // Otra vez por el ESTADO, y no es redundante: entre la primera respuesta y
-    // la segunda no llega nada que pueda cambiarla —el modelo no retrocede—,
-    // pero el hash sale de aquí hacia una escritura y no hay una segunda
-    // puerta después de ésta.
-    if !view.state.can_approve() {
+    // Otra vez por `SyncView::can_approve`, y no es redundante: entre la
+    // primera respuesta y la segunda no llega nada que pueda cambiarla —el
+    // modelo no retrocede—, pero el hash sale de aquí hacia una escritura y
+    // no hay una segunda puerta después de ésta.
+    if !view.can_approve() {
         app.message = Some(t("msg-sync-cannot-approve"));
         return;
     }
