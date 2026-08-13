@@ -111,6 +111,7 @@ mod palette_view;
 mod session;
 mod settings_view;
 mod shortcuts_view;
+mod sync_view;
 mod theme_map;
 
 use context_menu::{ContextMenu, MenuOutcome};
@@ -454,6 +455,32 @@ struct NorteGui {
     /// sustituye a los DOS, y compartir el handle dejaría el listado
     /// desplazado a donde estaba la comparación al cerrarla.
     compare_scroll: UniformListScrollHandle,
+    /// Generación del ÚLTIMO plan de sincronización pedido (guard anti-stale,
+    /// mismo papel que [`Self::compare_gen`], y propio y no compartido con él
+    /// porque son dos peticiones distintas que pueden estar en vuelo a la vez).
+    sync_gen: u64,
+    /// El panel de sincronización abierto (#161, `pane.sync-dirs`), o `None`
+    /// = cerrado.
+    ///
+    /// Lo abre `SessionEvent::SyncPlanStarted` —no la tecla—, igual que el de
+    /// diferencias: hasta que hay Task no hay `task_id` con el que decidir de
+    /// quién son los pasos que lleguen. Lo que se PINTA y lo que se aprueba
+    /// son las tareas 3 y 4 de este plan; aquí solo se planifica.
+    sync: Option<sync_view::SyncView>,
+    /// Las dos reinterpretaciones de nombres (#57) CONGELADAS al pedir el
+    /// plan, gemelo de `App::pending_sync_encoding` en la TUI.
+    ///
+    /// Se congelan en la petición y no se leen de los panes al llegar la
+    /// respuesta porque las raíces también viajan congeladas: leerlas después
+    /// podría emparejar la raíz de entonces con el codepage de ahora, que es
+    /// justo la pareja que nombra otros bytes (#152). Un segundo plan
+    /// sobreescribe esto, y es correcto: el que sobrevive al guard de
+    /// generación es siempre el último pedido.
+    ///
+    /// Con los dos lados NOMBRADOS y no en una tupla: son del mismo tipo, así
+    /// que cruzarlos compila y el resultado es el #152 (revisión rust
+    /// MINOR-2).
+    pending_sync_encoding: sync_view::SyncEncodings,
     /// The column picker overlay (#108 7c, `alt+c`): `Some` while open,
     /// same z-order and key-capture slot as the palette (modal wins).
     /// Esc discards; Enter applies in-session and persists (TUI parity).
@@ -1206,6 +1233,9 @@ impl NorteGui {
                     compare: None,
                     compare_gen: 0,
                     compare_scroll: UniformListScrollHandle::new(),
+                    sync: None,
+                    sync_gen: 0,
+                    pending_sync_encoding: sync_view::SyncEncodings::default(),
                     plugin_config_summaries: Vec::new(),
                 };
                 gui.column_settings = columns_settings;
@@ -1306,6 +1336,9 @@ impl NorteGui {
                     compare: None,
                     compare_gen: 0,
                     compare_scroll: UniformListScrollHandle::new(),
+                    sync: None,
+                    sync_gen: 0,
+                    pending_sync_encoding: sync_view::SyncEncodings::default(),
                     plugin_config_summaries: Vec::new(),
                 }
             }
@@ -2097,6 +2130,105 @@ impl NorteGui {
                 self.errors[left_pane & 1] =
                     compare_view::failed_banner(self.compare_gen, generation, &error);
             }
+            // #161, spec 3 fase C2. Mismo molde que `CompareStarted`, y por
+            // los mismos motivos: el panel se abre con la Task ya creada,
+            // porque es su `task_id` lo que después distingue sus pasos de los
+            // de un plan anterior.
+            SessionEvent::SyncPlanStarted {
+                task_id,
+                source_pane,
+                generation,
+                mode,
+                source_root,
+                dest_root,
+            } => {
+                // El índice cruza un canal: acotarlo es más barato que el
+                // panic que evita.
+                let pane = source_pane & 1;
+                let encodings = self.pending_sync_encoding;
+                // La decisión entera —guard de generación incluido, y a quién
+                // hay que cancelar— es de `sync_view::on_start`, que es pura y
+                // se testea sin ventana (revisión rust MAJOR-3). Aquí solo se
+                // ejecuta.
+                let start = sync_view::on_start(
+                    &mut self.sync,
+                    self.sync_gen,
+                    generation,
+                    sync_view::Started {
+                        task_id,
+                        source_pane: pane,
+                        mode,
+                        source_root,
+                        dest_root,
+                        encodings,
+                    },
+                );
+                // En los dos casos se retira el «planificando…» que ESTA
+                // petición dejó puesto: el panel ES la respuesta a partir de
+                // aquí, y una petición vencida no deja su aviso colgado para
+                // siempre (nadie más lo va a quitar: la que la superó limpia
+                // el suyo, en el pane que ella lanzó). Con las dos teclas en
+                // el mismo pane esto se adelanta un instante al aviso de la
+                // nueva, que llega con su propio `SyncPlanStarted` — un banner
+                // que parpadea es mejor que uno que se queda (mismo criterio,
+                // y misma nota, que `CompareStarted`).
+                self.errors[pane] = None;
+                // Regla 3: planificar recorre los dos árboles enteros, así que
+                // lo que se suelta se cancela — el arranque vencido, que ni
+                // llega a abrir, y el plan al que sustituye.
+                let cancel = match start {
+                    sync_view::Start::Superseded(t) => Some(t),
+                    sync_view::Start::Opened(previo) => previo,
+                };
+                if let Some(t) = cancel {
+                    let _ = self.cmds.send(SessionCmd::Cancel(t));
+                }
+            }
+            // Sin guard de generación, y es la corrección de la revisión rust
+            // (BLOCKER-1): `sync_gen` cuenta PETICIONES, y una posterior que
+            // el daemon RECHACE la adelanta sin abrir panel — con el guard
+            // aquí, el panel que seguía vivo dejaba de recibir pasos, no podía
+            // cerrar su plan y se quedaba con una Task que nadie cancelaba.
+            // Quien correlaciona un lote es su `task_id`, que el modelo
+            // compartido compara (igual que `CompareRows`). Y no se cancela
+            // nada desde aquí — ver `sync_view::route_steps`.
+            SessionEvent::SyncSteps { batch } => {
+                sync_view::route_steps(&mut self.sync, batch);
+            }
+            // Lo que CIERRA el plan: sin esto no hay `plan_hash` y no hay nada
+            // que aprobar, por muchos pasos que hayan llegado.
+            SessionEvent::SyncPlanDone { done } => {
+                sync_view::route_plan_done(&mut self.sync, done);
+            }
+            // El canal se acabó: cómo terminó la Task del plan, que NO es lo
+            // mismo que si el plan quedó completo. Lo filtra el `task_id`
+            // contra el del panel, por lo mismo que los dos de arriba.
+            SessionEvent::SyncPlanEnded { task_id, state } => {
+                let fallo = self.sync.as_mut().and_then(|view| {
+                    view.on_plan_ended(task_id, &state)
+                        .map(|error| (view.source_pane, sync_view::failure_banner(&error)))
+                });
+                // El fallo se DICE una vez en el banner del pane que lanzó,
+                // además de quedarse en el panel (que lo pintará la tarea 3).
+                // La frase la compone `sync_view`, la misma que usa la
+                // negativa sin Task (revisión rust MINOR-1).
+                if let Some((pane, frase)) = fallo {
+                    self.errors[pane] = Some(frase);
+                }
+            }
+            // Rechazado antes de existir Task: la frase, y NINGÚN panel.
+            SessionEvent::SyncPlanFailed {
+                source_pane,
+                generation,
+                error,
+            } => {
+                // El MISMO guard que `SyncPlanStarted`, y el `None` retira el
+                // «planificando…» que esta misma petición puso: es el defecto
+                // que C1 shipeó en `CompareFailed` (una negativa superada
+                // describiendo algo ya reemplazado) y que aquí no se repite.
+                self.errors[source_pane & 1] =
+                    sync_view::failed_banner(self.sync_gen, generation, &error);
+            }
         }
     }
 
@@ -2370,6 +2502,86 @@ impl NorteGui {
         }
     }
 
+    /// Pide un plan de sincronización entre los dos panes (#161,
+    /// `pane.sync-dirs`, spec 3 fase C2): paridad con `App::request_sync` de
+    /// la TUI en las negativas que se dan AQUÍ, sin ir y volver al daemon.
+    ///
+    /// El pane con FOCO es el ORIGEN y el otro el DESTINO —el mismo reparto
+    /// que [`Self::start_compare`]—, y viaja en el comando: el panel congela
+    /// ese sentido al abrirse, y el foco puede haberse movido mientras la
+    /// petición estaba en vuelo. El sentido es la mitad de lo que se aprueba,
+    /// así que no se vuelve a deducir del foco al llegar la respuesta.
+    ///
+    /// Las dos negativas locales:
+    ///
+    /// * **Sin journal.** `Backend::is_journalled()` (que esta GUI recibe en
+    ///   `SessionEvent::Connected`) es lo que dice si hay spool detrás; sin
+    ///   él `sync.plan` se niega en cerrado, porque aplicar sin journal sería
+    ///   enterrar sin vuelta atrás (regla dura 4). Como la GUI solo habla con
+    ///   un daemon, aquí es cierto — pero se comprueba igual, y no se asume.
+    /// * **Las dos raíces en el mismo sitio**, con la misma frase compartida
+    ///   que la comparación.
+    ///
+    /// `include` va ausente = el árbol entero: la selección de primera clase
+    /// del panel de diferencias es lo que la siembra
+    /// ([`norte_frontend::sync::include_from_rows`]), y en esta GUI el panel
+    /// de diferencias se queda con el teclado mientras está abierto, así que
+    /// todavía no hay camino desde él hasta aquí. Cuando lo haya, es esa
+    /// función compartida la que lo resuelve, no una segunda lectura de las
+    /// marcas escrita en este fichero.
+    ///
+    /// # El sentido, y dónde tiene que acabar viviendo
+    /// «El pane con foco es el ORIGEN» es hoy la MISMA regla que el brazo
+    /// `None` de `App::sync_roots` en `norte-tui`, escrita dos veces —igual
+    /// que [`Self::start_compare`] repite el reparto izquierda/derecha de
+    /// `App::request_compare`—. Se queda así a sabiendas (revisión rust
+    /// MAJOR-2): el brazo que de verdad decide, el que lee el lado ACTIVO del
+    /// panel de diferencias, NO está copiado aquí, y es el que llega con la
+    /// tarea 3. **Cuando llegue, el par se mueve a `norte_frontend::sync` y
+    /// las dos superficies lo llaman**, en vez de que la GUI escriba su
+    /// segunda copia de la regla que decide qué árbol se sobrescribe.
+    fn start_sync(&mut self, mode: norte_proto::methods::SyncMode) {
+        let f = self.focus;
+        if !self.journalled {
+            self.errors[f] = Some(norte_i18n::t("msg-sync-needs-daemon"));
+            return;
+        }
+        let source = self.panes[f].dir().clone();
+        let dest = self.panes[f ^ 1].dir().clone();
+        if source == dest {
+            self.errors[f] = Some(norte_i18n::t("compare-same-path"));
+            return;
+        }
+        self.sync_gen = self.sync_gen.wrapping_add(1);
+        // La reinterpretación de cada lado se congela CON las raíces (#57):
+        // un lector que pulsó `Alt+E` para leer un share CP1251 no puede
+        // recuperar `????.txt` al sincronizarlo.
+        self.pending_sync_encoding = sync_view::SyncEncodings {
+            source: self.panes[f].name_encoding(),
+            dest: self.panes[f ^ 1].name_encoding(),
+        };
+        // Decirlo mientras el RPC va y viene, molde `start_compare`: con la
+        // clave COMPARTIDA y `n = 0`, que es la verdad —todavía no ha llegado
+        // ningún paso—.
+        self.errors[f] = Some(norte_i18n::ta("sync-planning", &[("n", "0")]));
+        let _ = self.cmds.send(SessionCmd::SyncPlan {
+            source_pane: f,
+            generation: self.sync_gen,
+            params: Box::new(norte_proto::methods::SyncPlanParams {
+                source,
+                dest,
+                mode,
+                // Los criterios de la comparación de debajo por defecto, como
+                // la TUI: `follow_symlinks` y `descend_orphans` no son del
+                // llamante (`Backend::sync_plan` contesta `Unsupported` a los
+                // dos antes de que exista Task alguna).
+                compare: norte_proto::methods::SyncCompareOptions::default(),
+                on_unknown: norte_proto::methods::OnUnknown::default(),
+                include: None,
+            }),
+        });
+    }
+
     /// Cierra el panel de diferencias y **cancela siempre** la Task que lo
     /// alimentaba.
     ///
@@ -2380,6 +2592,22 @@ impl NorteGui {
     /// estado antes.
     fn close_compare(&mut self) {
         if let Some(view) = self.compare.take() {
+            let _ = self.cmds.send(SessionCmd::Cancel(view.task_id));
+        }
+    }
+
+    /// Cierra el panel de sincronización y **cancela siempre** la Task que lo
+    /// alimentaba, por lo mismo que [`Self::close_compare`]: en remoto el
+    /// daemon seguiría recorriendo los dos árboles para un panel que ya no
+    /// existe, y un `task.cancel` sobre una Task terminada es un no-op.
+    ///
+    /// Es el TERCER camino que suelta el panel (los otros dos están en
+    /// `sync_view::on_start`), y por eso cancela aquí: la regla la enuncia
+    /// `sync_view::route_steps`. La tarea 3 le dará su manejador de teclas
+    /// entero; hasta entonces esto es lo que hace que un plan lanzado desde la
+    /// ayuda se pueda parar (regla dura 3).
+    fn close_sync(&mut self) {
+        if let Some(view) = self.sync.take() {
             let _ = self.cmds.send(SessionCmd::Cancel(view.task_id));
         }
     }
@@ -2782,6 +3010,23 @@ impl NorteGui {
             // tumbaba una GUI de debug; ahora arranca la comparación de
             // verdad por cualquiera de las tres puertas.
             "pane.compare-dirs" => self.start_compare(),
+            // #161, spec 3 fase C2. El id todavía NO está en `keymap::COMMANDS`
+            // —eso es la tarea 5, la que se gana el derecho a quitarle el
+            // `NotHere` que la fase A le fijó—, así que ni el teclado ni la
+            // paleta llegan aquí. **La AYUDA sí** (revisión rust MAJOR-1):
+            // sus filas se resuelven contra `norte_frontend::availability`, la
+            // tabla COMPARTIDA, que da este comando por disponible en cuanto
+            // hay journal — y en esta GUI lo hay. Es exactamente lo que le
+            // pasaba a `pane.compare-dirs` antes de la tarea 4 de C1, con la
+            // diferencia de que allí ese Enter caía en el brazo `other` y su
+            // `debug_assert` tumbaba una GUI de debug.
+            //
+            // O sea: esto se puede lanzar HOY, y por eso `Esc` ya lo cancela
+            // (ver `on_key`) aunque la tarea 3 sea la que lo pinte. Lo que no
+            // se puede es aplicarlo: eso es `sync.apply`, y no existe todavía.
+            // `Update`, no `Mirror`: el modo que BORRA se elige, no se hereda
+            // de una tecla.
+            "pane.sync-dirs" => self.start_sync(norte_proto::methods::SyncMode::Update),
             // 2026-08-10-volumes.md task V4 (design §D): `-left`/`-right`
             // name a SIDE, not the focus — Total Commander's `Alt+F1`/
             // `Alt+F2`, paridad TUI `Command::PaneSelectDrive{,Left,Right}`.
@@ -4906,6 +5151,19 @@ impl NorteGui {
                 return;
             }
             self.on_compare_key(ks, cx);
+            cx.notify();
+            return;
+        }
+
+        // #161 fase C2, tarea 2: el panel de sincronización todavía no PINTA
+        // nada (eso es la tarea 3), así que no se queda el teclado — quien se
+        // queda las teclas es quien se pinta, que es la regla del bloque de
+        // arriba. Pero abrirse SÍ se puede abrir (la ayuda alcanza
+        // `pane.sync-dirs`, ver `run_command`), y una Task que recorre dos
+        // árboles y no se puede parar es la regla dura 3 rota. Hasta que la
+        // tarea 3 le dé su manejador entero, `Esc` la para.
+        if self.sync.is_some() && ks.key == "escape" {
+            self.close_sync();
             cx.notify();
             return;
         }
