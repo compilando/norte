@@ -332,7 +332,7 @@ async fn compare_devuelve_las_filas_con_valores_de_wire() {
     let (out, err) = call_tool(
         &agent,
         "compare",
-        serde_json::json!({"a": "mem:///a", "b": "mem:///b"}),
+        serde_json::json!({"left": "mem:///a", "right": "mem:///b"}),
     )
     .await;
     assert!(!err, "{out}");
@@ -356,11 +356,12 @@ async fn compare_devuelve_las_filas_con_valores_de_wire() {
 #[tokio::test]
 async fn compare_con_limit_bajo_trunca_y_cancela() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
-    mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
-    mem.mkdir(&vp("mem:///b")).await.expect("mkdir b");
-    for i in 0..5 {
-        write_file(&mem, &format!("mem:///a/f{i}.txt"), b"x").await;
-    }
+    // Árbol LENTO a propósito: sobre cinco ficheros planos el walk termina
+    // antes de que la cancelación llegue y la task sale `Completed`, con lo
+    // que el test no demostraba nada sobre la cancelación (lo destapó él
+    // mismo al empezar a mirar el estado del daemon). Con un `list` por
+    // subdirectorio quedan ~20 operaciones por delante del corte.
+    seed_slow_pair(&mem, 12, Duration::from_millis(50)).await;
 
     let mut human = Client::connect(&socket).await.expect("connect humano");
     human
@@ -378,7 +379,7 @@ async fn compare_con_limit_bajo_trunca_y_cancela() {
     let (out, err) = call_tool(
         &agent,
         "compare",
-        serde_json::json!({"a": "mem:///a", "b": "mem:///b", "limit": 2}),
+        serde_json::json!({"left": "mem:///a", "right": "mem:///b", "limit": 2}),
     )
     .await;
     assert!(!err, "{out}");
@@ -392,6 +393,14 @@ async fn compare_con_limit_bajo_trunca_y_cancela() {
     assert_eq!(
         payload["complete"], false,
         "truncado nunca es completo: {payload}"
+    );
+    // Y la task del DAEMON quedó cancelada de verdad (regla dura 3): sin esto
+    // el test solo demostraba que el payload lo dice.
+    let task_id = norte_proto::TaskId::new(payload["task_id"].as_u64().expect("task_id"));
+    assert_eq!(
+        wait_task_state(&human, task_id).await,
+        norte_proto::TaskState::Cancelled,
+        "truncar CANCELA el walk, no solo deja de leerlo: {payload}"
     );
 }
 
@@ -432,7 +441,7 @@ async fn compare_nombre_hostil_viaja_como_wire_fiel() {
     let (out, err) = call_tool(
         &agent,
         "compare",
-        serde_json::json!({"a": "mem:///a", "b": "mem:///b", "limit": 1000}),
+        serde_json::json!({"left": "mem:///a", "right": "mem:///b", "limit": 1000}),
     )
     .await;
     assert!(!err, "{out}");
@@ -521,8 +530,22 @@ async fn sync_plan_devuelve_los_pasos_y_no_aplica_nada() {
     assert!(payload["blockers"].is_array(), "{payload}");
     // El hash NO viaja: no le sirve a nadie fuera de la conexión de streams.
     assert!(payload.get("plan_hash").is_none(), "{payload}");
-    // `task_id` tampoco: sin el hash no sirve para correlacionar nada aquí.
-    assert!(payload.get("task_id").is_none(), "{payload}");
+    // El `task_id` SÍ: las dos conexiones del puente son el mismo actor de
+    // agente, así que la de tools puede observar y cancelar la task que abrió
+    // el brazo de streams (`task_status`).
+    let task_id = payload["task_id"].as_u64().expect("task_id");
+    assert!(task_id > 0, "{payload}");
+    let (estado, err) = call_tool(
+        &agent,
+        "task_status",
+        serde_json::json!({"task_id": task_id}),
+    )
+    .await;
+    assert!(!err, "{estado}");
+    let estado: serde_json::Value = serde_json::from_str(&estado).expect("json");
+    assert_eq!(estado["state"], "completed", "{estado}");
+    // Y los pasos cuadran con lo que los contadores del plan dicen que hay.
+    assert_eq!(payload["steps_total"], 1, "{payload}");
 
     // Y el destino sigue vacío: planear no escribe.
     assert!(
@@ -615,11 +638,13 @@ async fn sync_plan_mode_malformado_o_ausente_es_error_no_default() {
 #[tokio::test]
 async fn sync_plan_con_limit_bajo_trunca_y_no_trae_lo_que_no_supo() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
-    mem.mkdir(&vp("mem:///src")).await.expect("mkdir src");
+    // Origen LENTO por el mismo motivo que en `compare_con_limit_bajo_trunca_y_cancela`:
+    // sobre cinco ficheros planos el plan acaba antes de que la cancelación
+    // llegue. El planificador SÍ desciende los huérfanos del lado del origen,
+    // así que un destino vacío no le ahorra el recorrido.
+    seed_tree(&mem, "mem:///src", 12).await;
     mem.mkdir(&vp("mem:///dst")).await.expect("mkdir dst");
-    for i in 0..5 {
-        write_file(&mem, &format!("mem:///src/f{i}.txt"), b"x").await;
-    }
+    slow_down(&mem, Duration::from_millis(50));
 
     let mut human = Client::connect(&socket).await.expect("connect humano");
     human
@@ -665,14 +690,364 @@ async fn sync_plan_con_limit_bajo_trunca_y_no_trae_lo_que_no_supo() {
         );
     }
     assert!(payload.get("plan_hash").is_none(), "{payload}");
+    // Y la task del DAEMON quedó cancelada de verdad (regla dura 3).
+    let task_id = norte_proto::TaskId::new(payload["task_id"].as_u64().expect("task_id"));
+    assert_eq!(
+        wait_task_state(&human, task_id).await,
+        norte_proto::TaskState::Cancelled,
+        "truncar CANCELA el plan, no solo deja de leerlo: {payload}"
+    );
 
     // Y el destino sigue vacío: truncado tampoco aplica nada.
-    for i in 0..5 {
+    for i in 0..12 {
         assert!(
-            mem.stat(&vp(&format!("mem:///dst/f{i}.txt")))
-                .await
-                .is_err(),
+            mem.stat(&vp(&format!("mem:///dst/d{i}"))).await.is_err(),
             "sync_plan no aplica nada, ni truncado"
         );
     }
+}
+
+/// BLOCKER: `criteria: []` NO es "el default del wire". Apaga los tres rungs,
+/// y entonces `compare` da por iguales dos árboles que no ha comparado y
+/// `sync_plan` —con su `on_unknown: copy` por defecto— planifica un
+/// `Overwrite` por fichero. Se rechaza en las DOS tools, con el mismo criterio
+/// que `mode`: un argumento vacío no puede ser la forma corta de pedir que se
+/// reescriba el destino entero.
+#[tokio::test]
+async fn criteria_vacia_es_error_en_las_dos_tools() {
+    let (_dir, socket, mem) = spawn_ask_daemon().await;
+    mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
+    mem.mkdir(&vp("mem:///b")).await.expect("mkdir b");
+    write_file(&mem, "mem:///a/x.txt", b"hola").await;
+    write_file(&mem, "mem:///b/x.txt", b"adios").await;
+
+    let mut human = Client::connect(&socket).await.expect("connect humano");
+    human
+        .initialize(norte_proto::methods::ClientInfo {
+            name: "tui".into(),
+            version: "0".into(),
+        })
+        .await
+        .expect("initialize humano");
+    let agent = Bridge::connect(&socket, "claude")
+        .await
+        .expect("connect agente");
+    grant_read_scope(&agent, &human, &["mem:///a", "mem:///b"]).await;
+
+    let (out, err) = call_tool(
+        &agent,
+        "compare",
+        serde_json::json!({"left": "mem:///a", "right": "mem:///b", "criteria": []}),
+    )
+    .await;
+    assert!(err, "una lista vacía de criteria no puede pasar: {out}");
+    assert!(out.contains("criteria"), "{out}");
+
+    let (out, err) = call_tool(
+        &agent,
+        "sync_plan",
+        serde_json::json!({
+            "source": "mem:///a", "dest": "mem:///b",
+            "mode": "update", "criteria": []
+        }),
+    )
+    .await;
+    assert!(err, "y en sync_plan menos todavía: {out}");
+    assert!(out.contains("criteria"), "{out}");
+
+    // Y sin `criteria` sí compara: la diferencia de x.txt aparece.
+    let (out, err) = call_tool(
+        &agent,
+        "compare",
+        serde_json::json!({"left": "mem:///a", "right": "mem:///b"}),
+    )
+    .await;
+    assert!(!err, "{out}");
+    let payload: serde_json::Value = serde_json::from_str(&out).expect("json");
+    assert!(
+        payload["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .any(|f| f["verdict"] == "different"),
+        "el default del wire SÍ compara: {payload}"
+    );
+}
+
+/// `limit: 0` es un argumento sin sentido, no "cero filas a propósito": sin el
+/// rechazo saldría `truncated: true` con la lista vacía, indistinguible de un
+/// árbol de verdad truncado.
+#[tokio::test]
+async fn limit_cero_es_error_en_las_dos_tools() {
+    let (_dir, socket, mem) = spawn_ask_daemon().await;
+    mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
+    mem.mkdir(&vp("mem:///b")).await.expect("mkdir b");
+
+    let mut human = Client::connect(&socket).await.expect("connect humano");
+    human
+        .initialize(norte_proto::methods::ClientInfo {
+            name: "tui".into(),
+            version: "0".into(),
+        })
+        .await
+        .expect("initialize humano");
+    let agent = Bridge::connect(&socket, "claude")
+        .await
+        .expect("connect agente");
+    grant_read_scope(&agent, &human, &["mem:///a", "mem:///b"]).await;
+
+    for (name, args) in [
+        (
+            "compare",
+            serde_json::json!({"left": "mem:///a", "right": "mem:///b", "limit": 0}),
+        ),
+        (
+            "sync_plan",
+            serde_json::json!({
+                "source": "mem:///a", "dest": "mem:///b", "mode": "update", "limit": 0
+            }),
+        ),
+    ] {
+        let (out, err) = call_tool(&agent, name, args).await;
+        assert!(err, "{name}: {out}");
+        assert!(out.contains("limit"), "{name}: {out}");
+    }
+}
+
+/// Siembra un árbol de `dirs` subdirectorios hermanos con un fichero en cada
+/// uno. Con latencia por operación (ver [`slow_down`]) cada subdirectorio
+/// cuesta un `list`, así que el walk del daemon dura lo bastante como para
+/// observarlo vivo y actuar sobre él SIN adivinar tiempos: `Faults` es
+/// determinista, no probabilístico.
+async fn seed_tree(mem: &MemProvider, root: &str, dirs: usize) {
+    mem.mkdir(&vp(root)).await.expect("mkdir raíz");
+    for i in 0..dirs {
+        mem.mkdir(&vp(&format!("{root}/d{i}")))
+            .await
+            .expect("mkdir hijo");
+        write_file(mem, &format!("{root}/d{i}/f.txt"), b"x").await;
+    }
+}
+
+/// Latencia fija por operación del provider, DESPUÉS de sembrar (sembrar con
+/// ella puesta solo alarga el test).
+fn slow_down(mem: &MemProvider, latencia: Duration) {
+    mem.faults().set_latency_per_op(Some(latencia));
+}
+
+/// Dos árboles IDÉNTICOS y lentos: el walk tiene que recorrer los dos lados.
+async fn seed_slow_pair(mem: &MemProvider, dirs: usize, latencia: Duration) {
+    seed_tree(mem, "mem:///a", dirs).await;
+    seed_tree(mem, "mem:///b", dirs).await;
+    slow_down(mem, latencia);
+}
+
+/// Espera a que exista una Task VIVA de la clase `kind` y devuelve su id. El
+/// humano las ve todas (criterio de visibilidad del daemon).
+async fn wait_live_task(human: &Client, kind: norte_proto::TaskKind) -> norte_proto::TaskId {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let listed: norte_proto::methods::TaskListResult = human
+            .call(
+                norte_proto::methods::TASK_LIST,
+                &norte_proto::methods::TaskListParams {},
+            )
+            .await
+            .expect("task.list");
+        if let Some(t) = listed
+            .tasks
+            .iter()
+            .find(|t| t.kind == kind && !t.state.is_terminal())
+        {
+            return t.task_id;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "ninguna task {kind:?} viva"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// Espera el terminal de `task_id` y devuelve su estado.
+async fn wait_task_state(human: &Client, task_id: norte_proto::TaskId) -> norte_proto::TaskState {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let listed: norte_proto::methods::TaskListResult = human
+            .call(
+                norte_proto::methods::TASK_LIST,
+                &norte_proto::methods::TaskListParams {},
+            )
+            .await
+            .expect("task.list");
+        if let Some(t) = listed.tasks.iter().find(|t| t.task_id == task_id)
+            && t.state.is_terminal()
+        {
+            return t.state.clone();
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "la task {task_id:?} no terminó"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// MAJOR: un agente que ABANDONA la tool (`notifications/cancelled`, o su
+/// transporte muerto) dejaba el walk corriendo. `TaskRef` no tiene `Drop`, y
+/// soltar el `rx` local solo quita el route del cliente: la bomba del daemon
+/// sigue mandando lotes por una conexión viva y no ve jamás un `ReceiverGone`.
+/// Con `criteria: ["hash"]` eso es leer los dos árboles ENTEROS para nadie, y
+/// repetirlo llena `MAX_LIVE_TASKS_AGENTS` sin dejar rastro en el journal
+/// (nada muta). El puente ya cancelaba al truncar: es el mismo hecho.
+#[tokio::test]
+async fn una_tool_abandonada_cancela_el_walk_del_daemon() {
+    let (_dir, socket, mem) = spawn_ask_daemon().await;
+    seed_slow_pair(&mem, 12, Duration::from_millis(50)).await;
+
+    let mut human = Client::connect(&socket).await.expect("connect humano");
+    human
+        .initialize(norte_proto::methods::ClientInfo {
+            name: "tui".into(),
+            version: "0".into(),
+        })
+        .await
+        .expect("initialize humano");
+    let agent = Arc::new(Bridge::connect(&socket, "claude").await.expect("agente"));
+    grant_read_scope(&agent, &human, &["mem:///a", "mem:///b"]).await;
+
+    let tool = {
+        let agent = Arc::clone(&agent);
+        tokio::spawn(async move {
+            call_tool(
+                &agent,
+                "compare",
+                serde_json::json!({"left": "mem:///a", "right": "mem:///b"}),
+            )
+            .await
+        })
+    };
+    // Se abandona con la task YA viva: nada de adivinar tiempos.
+    let task_id = wait_live_task(&human, norte_proto::TaskKind::Compare).await;
+    tool.abort();
+
+    assert_eq!(
+        wait_task_state(&human, task_id).await,
+        norte_proto::TaskState::Cancelled,
+        "soltar el future de la tool tiene que cancelar el walk"
+    );
+}
+
+/// Un tercero (el humano que gobierna el daemon) cancela la comparación a
+/// mitad. La tool contesta con lo drenado, y lo DICE: `complete: false` y
+/// `state: "cancelled"`. Sin el estado, un modelo que mirase `rows` leería
+/// "no hay diferencias" en una lista que solo está a medias.
+#[tokio::test]
+async fn una_comparacion_cancelada_por_un_tercero_no_finge_estar_completa() {
+    let (_dir, socket, mem) = spawn_ask_daemon().await;
+    seed_slow_pair(&mem, 12, Duration::from_millis(50)).await;
+
+    let mut human = Client::connect(&socket).await.expect("connect humano");
+    human
+        .initialize(norte_proto::methods::ClientInfo {
+            name: "tui".into(),
+            version: "0".into(),
+        })
+        .await
+        .expect("initialize humano");
+    let agent = Arc::new(Bridge::connect(&socket, "claude").await.expect("agente"));
+    grant_read_scope(&agent, &human, &["mem:///a", "mem:///b"]).await;
+
+    let tool = {
+        let agent = Arc::clone(&agent);
+        tokio::spawn(async move {
+            call_tool(
+                &agent,
+                "compare",
+                serde_json::json!({"left": "mem:///a", "right": "mem:///b"}),
+            )
+            .await
+        })
+    };
+    let task_id = wait_live_task(&human, norte_proto::TaskKind::Compare).await;
+    let _: norte_proto::methods::TaskCancelResult = human
+        .call(
+            norte_proto::methods::TASK_CANCEL,
+            &norte_proto::methods::TaskCancelParams { task_id },
+        )
+        .await
+        .expect("task.cancel");
+
+    let (out, err) = tool.await.expect("la tool contesta");
+    assert!(!err, "{out}");
+    let payload: serde_json::Value = serde_json::from_str(&out).expect("json");
+    assert_eq!(
+        payload["truncated"], false,
+        "no la truncó el tope: {payload}"
+    );
+    assert_eq!(payload["timed_out"], false, "{payload}");
+    assert_eq!(payload["state"], "cancelled", "{payload}");
+    assert_eq!(
+        payload["complete"], false,
+        "una comparación cortada no es completa: {payload}"
+    );
+}
+
+/// MAJOR: el 17.º plan retenido de una conexión sale del daemon como
+/// `OVERLOADED` con un mensaje claro, y llegaba al agente como "internal error
+/// (panic: false)" — que es exactamente el texto que hace que reintente. El
+/// puente tiene UNA conexión de streams para todo el proceso, no puede aplicar
+/// y no hay método para descartar, así que el tope se alcanza en uso normal.
+#[tokio::test]
+async fn el_tope_de_planes_retenidos_no_sale_como_error_interno() {
+    let (_dir, socket, mem) = spawn_ask_daemon().await;
+    mem.mkdir(&vp("mem:///dst")).await.expect("mkdir dst");
+    // 17 orígenes DISTINTOS: cada plan tiene que tener su propio digest, o el
+    // spool no retendría diecisiete.
+    let mut roots: Vec<String> = vec!["mem:///dst".to_owned()];
+    for i in 0..17 {
+        let root = format!("mem:///src{i}");
+        mem.mkdir(&vp(&root)).await.expect("mkdir src");
+        write_file(&mem, &format!("{root}/f{i}.txt"), b"x").await;
+        roots.push(root);
+    }
+
+    let mut human = Client::connect(&socket).await.expect("connect humano");
+    human
+        .initialize(norte_proto::methods::ClientInfo {
+            name: "tui".into(),
+            version: "0".into(),
+        })
+        .await
+        .expect("initialize humano");
+    let agent = Bridge::connect(&socket, "claude")
+        .await
+        .expect("connect agente");
+    let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
+    grant_read_scope(&agent, &human, &refs).await;
+
+    let mut ultimo = String::new();
+    let mut fallo = None;
+    for i in 0..17 {
+        let (out, err) = call_tool(
+            &agent,
+            "sync_plan",
+            serde_json::json!({
+                "source": format!("mem:///src{i}"), "dest": "mem:///dst", "mode": "update"
+            }),
+        )
+        .await;
+        ultimo = out;
+        if err {
+            fallo = Some(i);
+            break;
+        }
+    }
+    let i = fallo.unwrap_or_else(|| panic!("el tope de 16 planes tenía que saltar: {ultimo}"));
+    assert_eq!(i, 16, "salta en el 17.º, no antes: {ultimo}");
+    assert!(
+        !ultimo.contains("internal error"),
+        "\"internal error\" es lo que hace reintentar a un agente: {ultimo}"
+    );
+    assert!(ultimo.contains("retained plans"), "{ultimo}");
 }

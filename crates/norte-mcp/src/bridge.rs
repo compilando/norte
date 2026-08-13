@@ -99,20 +99,16 @@ impl Bridge {
     /// [`BridgeError::Daemon`]: socket inalcanzable, versión incompatible o
     /// sesión rechazada (charset `[A-Za-z0-9._-]`, 1..=64).
     pub async fn connect(socket: &std::path::Path, session: &str) -> Result<Self, BridgeError> {
-        let client = Client::connect(socket).await?;
+        let mut client = Client::connect(socket).await?;
+        // El MISMO handshake que usa el brazo de streams
+        // (`RemoteBackend::connect_as_agent` llama aquí también). Aquí hubo un
+        // `InitializeParams` literal, con un comentario que lo justificaba
+        // diciendo que el puente guarda el `InitializeResult`: no lo guardaba
+        // —lo tiraba a `_init`—, y el motivo real era que el método estaba
+        // `pub(crate)`. Dos literales para las dos mitades de UNA sesión de
+        // agente es como un `encodings` ampliado llega a una y no a la otra.
         let _init: methods::InitializeResult = client
-            .call(
-                methods::INITIALIZE,
-                &methods::InitializeParams {
-                    client_info: methods::ClientInfo {
-                        name: "norte-mcp".into(),
-                        version: env!("CARGO_PKG_VERSION").into(),
-                    },
-                    protocol_version: methods::PROTOCOL_VERSION.into(),
-                    encodings: vec!["json".into()],
-                    agent_session: Some(session.to_owned()),
-                },
-            )
+            .initialize_as_agent(client_info(), session.to_owned())
             .await?;
         Ok(Self {
             client,
@@ -153,18 +149,25 @@ impl Bridge {
     /// vacío— mientras la otra está muerta. Los dos lados fallan cerrados,
     /// pero la carrera existe: cada tool decide por UNA conexión.
     ///
+    /// # Solo para tests
+    /// `pub` únicamente porque el E2E de `norte-mcp` necesita comprobar que el
+    /// brazo se abre UNA vez; no es API estable (`doc(hidden)`, puede cambiar
+    /// sin bump), y el precedente en el árbol es
+    /// `norte_core::backend::TaskRef::synthetic_for_tests`. Un llamante que la
+    /// use tiene el [`Backend`] ENTERO de la conexión autenticada del agente —
+    /// `sync_apply` incluido, cuya ausencia es justo lo que decide ADR 0050.
+    /// Las tools pasan por aquí; nadie más debería.
+    ///
     /// # Errors
     /// [`BridgeError::Streams`] si el daemon no acepta la segunda conexión
     /// (socket caído, sesión rechazada).
+    #[doc(hidden)]
     pub async fn streams(&self) -> Result<&Backend, BridgeError> {
         self.streams
             .get_or_try_init(|| async {
                 let remote = RemoteBackend::connect_as_agent(
                     self.socket.clone(),
-                    methods::ClientInfo {
-                        name: "norte-mcp".into(),
-                        version: env!("CARGO_PKG_VERSION").into(),
-                    },
+                    client_info(),
                     self.session.clone(),
                 )
                 .await
@@ -487,29 +490,38 @@ impl Bridge {
     /// `fs.search`: sin un tope, comparar dos árboles grandes metería un
     /// millón de filas en un solo resultado de tool. Al llegar a `limit`
     /// ([`COMPARE_ROWS_DEFAULT`], techo [`COMPARE_ROWS_MAX`]) se deja de
-    /// drenar, se CANCELA la task (igual que `norte compare` no necesita
-    /// hacer: él drena hasta el final salvo que el lector se vaya) y el
-    /// payload dice `truncated: true`. Una truncación silenciosa sería peor
-    /// que el tope: un modelo que la lea como completa reportaría dos árboles
-    /// como iguales cuando no se sabe.
+    /// drenar, se CANCELA la task y el payload dice `truncated: true`. Una
+    /// truncación silenciosa sería peor que el tope: un modelo que la lea como
+    /// completa reportaría dos árboles como iguales cuando no se sabe.
     ///
-    /// # `complete`
+    /// # El deadline
+    /// Mismo tope que el resto de tools que esperan una task
+    /// ([`TASK_WAIT`]): con el rung de `hash` encendido una comparación puede
+    /// durar horas —lo dice la propia rustdoc de `fs.compare`— y ocuparía uno
+    /// de los [`MAX_INFLIGHT_TOOLS`] huecos sin contestar jamás. Pasado el
+    /// deadline se devuelve lo drenado con `timed_out: true` y `complete:
+    /// false`, y la task del daemon se cancela al soltar el guard.
+    ///
+    /// # `complete`, y por qué no basta el estado terminal
     /// La misma distinción que el código de salida 2 de `norte compare` (el
-    /// comando del CLI, `compare_cmd`): sólo `true` cuando la task llegó a
-    /// `Completed` SIN truncar. Cualquier otra
-    /// cosa —truncada, cancelada, fallida, o un daemon que se cayó a mitad—
-    /// es `false`, para que el agente no confunda "until here it looked
-    /// clean" con "esto es todo lo que hay".
+    /// comando del CLI, `compare_cmd`), MÁS la cuenta de filas. El feed de
+    /// `compare.rows` se enruta con `OnFull::DropBatch`: un lote descartado
+    /// —buffer del cliente lleno, carrera de teardown del route, evicción del
+    /// outbox— solo deja un `warn!`, el canal se cierra LIMPIO y la task acaba
+    /// `Completed`. O sea que «terminal y sin truncar» no demuestra que las
+    /// filas estén todas. `TaskProgress::entries_done` cuenta las filas
+    /// ENVIADAS y es —por contrato de `norte_core::compare`— la única señal
+    /// con la que un cliente detecta que se le perdió una notificación, así
+    /// que `complete` exige además que cuadre con las filas recibidas, y
+    /// `rows_total` la publica para que el modelo VEA el hueco en vez de
+    /// tener que deducirlo.
     ///
-    /// No se cruza `TaskProgress::entries_done` contra las filas recibidas
-    /// (la rustdoc de `Backend::compare` documenta que el cierre del canal
-    /// tampoco lo garantiza): esa comprobación es para quien vaya a ESCRIBIR
-    /// a partir de las filas (el plan de sincronización), y esta tool sólo
-    /// lee — la misma paridad que ya tiene `norte compare` en el CLI, que
-    /// tampoco la hace.
+    /// Esto se apartó una vez por paridad con el CLI. La paridad no aplica: un
+    /// humano lee un pane de diferencias, y un booleano llamado `complete` en
+    /// un esquema le dice a un modelo que la comparación llegó al final.
     async fn tool_compare(&self, args: &Value) -> Result<Value, String> {
-        let left = vpath_arg(args, "a")?;
-        let right = vpath_arg(args, "b")?;
+        let left = vpath_arg(args, "left")?;
+        let right = vpath_arg(args, "right")?;
         let criteria = compare_criteria_arg(args)?;
         let max_depth = opt_u64_arg(args, "max_depth")?
             .map(|d| u32::try_from(d).map_err(|_| format!("arg max_depth too large: {d}")))
@@ -517,21 +529,8 @@ impl Bridge {
         let mtime_tolerance_ms = opt_u64_arg(args, "mtime_tolerance_ms")?
             .map(|t| u32::try_from(t).map_err(|_| format!("arg mtime_tolerance_ms too large: {t}")))
             .transpose()?
-            .unwrap_or(2000);
-        let limit = opt_u64_arg(args, "limit")?
-            .map(|l| usize::try_from(l).map_err(|_| format!("arg limit too large: {l}")))
-            .transpose()?
-            .unwrap_or(COMPARE_ROWS_DEFAULT)
-            .min(COMPARE_ROWS_MAX);
-        // `limit: 0` no es "cero filas por decisión del caller", es un
-        // argumento sin sentido (encoding-auditor, revisión de la tarea 2):
-        // sin este chequeo saldría `truncated: true` con `rows: []` en la
-        // PRIMERA fila, indistinguible de un árbol de verdad truncado. El
-        // esquema JSON ya dice `"minimum": 1`, pero eso es asesor — un MCP
-        // client real puede mandarlo igual.
-        if limit == 0 {
-            return Err("arg limit must be >= 1".to_owned());
-        }
+            .unwrap_or_else(default_mtime_tolerance_ms);
+        let limit = stream_limit_arg(args, COMPARE_ROWS_DEFAULT, COMPARE_ROWS_MAX)?;
 
         let params = methods::FsCompareParams {
             left,
@@ -553,6 +552,13 @@ impl Bridge {
             .compare(params)
             .await
             .map_err(map_backend_err)?;
+        let task_id = task.id();
+        let progress = task.progress();
+        // Armado ANTES del primer await sobre el stream: si el agente manda
+        // `notifications/cancelled` (o el transporte muere), el future de esta
+        // tool se SUELTA y el walk del daemon seguiría leyendo —y hasheando—
+        // los dos árboles enteros. Ver la rustdoc del guard.
+        let mut guard = CancelOnAbandon::new(task.canceller());
 
         // Filas fieles al wire: `CompareRow` serializa `verdict`/`criterion`/
         // `confidence` como los valores snake_case del protocolo (nunca una
@@ -563,29 +569,47 @@ impl Bridge {
         // resto del tope no debe arrastrar una fila de más.
         let mut rows: Vec<methods::CompareRow> = Vec::new();
         let mut truncated = false;
-        'drain: while let Some(batch) = rx.recv().await {
-            for row in batch.rows {
-                if rows.len() >= limit {
-                    truncated = true;
-                    break 'drain;
+        let drained = tokio::time::timeout(TASK_WAIT, async {
+            'drain: while let Some(batch) = rx.recv().await {
+                for row in batch.rows {
+                    if rows.len() >= limit {
+                        truncated = true;
+                        break 'drain;
+                    }
+                    rows.push(row);
                 }
-                rows.push(row);
             }
-        }
-        if truncated {
-            // Cooperativa (regla dura 3): sin esto, una comparación de
-            // millones de filas seguiría leyendo (y hasheando) los dos
-            // árboles enteros para un `rx` que ya nadie drena.
-            task.cancel();
-        }
-        let state = task.join().await;
-        let complete = !truncated && matches!(state, norte_proto::TaskState::Completed);
+            if truncated {
+                // Cooperativa (regla dura 3): sin esto, una comparación de
+                // millones de filas seguiría leyendo (y hasheando) los dos
+                // árboles enteros para un `rx` que ya nadie drena.
+                task.cancel();
+            }
+            task.join().await
+        })
+        .await;
+        // Solo el camino que VIO el terminal desarma: el del deadline deja que
+        // el guard cancele al volver.
+        let state = match drained {
+            Ok(state) => {
+                guard.disarm();
+                Some(state)
+            }
+            Err(_) => None,
+        };
+        let emitted = progress.borrow().entries_done;
+        let complete = stream_is_complete(truncated, state.as_ref(), rows.len(), emitted);
 
-        let rows = serde_json::to_value(&rows)
+        let encoded = serde_json::to_value(&rows)
             .map_err(|e| format!("tool compare: could not encode rows: {e}"))?;
         Ok(json!({
-            "rows": rows,
+            "task_id": task_id.get(),
+            "rows": encoded,
+            "rows_total": emitted,
             "truncated": truncated,
+            "timed_out": state.is_none(),
+            "state": state_label(state.as_ref()),
+            "error": state_error(state.as_ref()),
             "complete": complete,
         }))
     }
@@ -607,80 +631,39 @@ impl Bridge {
     /// omite del payload a propósito: un valor que no sirve para nada es una
     /// invitación a intentarlo de todos modos.
     ///
-    /// # El tope de pasos
+    /// El `task_id` sí viaja, y no por el hash: las dos conexiones del puente
+    /// son el MISMO `Actor::Agent { session }`, y el criterio de visibilidad
+    /// del daemon es igualdad de actor, así que la conexión de tools puede
+    /// observar (`task_status`) y cancelar la task que abrió el brazo de
+    /// streams. Quitarlo dejaba a un agente sin nada que hacer con un plan que
+    /// tardaba.
+    ///
+    /// # El tope de pasos, y el deadline
     /// Mismo contrato que [`Self::tool_compare`] (mismos nombres de campo, a
     /// propósito): al llegar a `limit` ([`SYNC_STEPS_DEFAULT`], techo
     /// [`SYNC_STEPS_MAX`]) se deja de drenar, se CANCELA la task y el payload
-    /// dice `truncated: true`. Cancelada la task, `sync.plan_done` JAMÁS llega
+    /// dice `truncated: true`; pasado [`TASK_WAIT`] se devuelve lo drenado con
+    /// `timed_out: true`. Cancelada la task, `sync.plan_done` JAMÁS llega
     /// (`run_sync_plan` no lo emite en el camino de error: ver
     /// `norte_core::sync::run_sync_plan`), así que `counts`/`dest_trash`/
     /// `blockers`/`blockers_total`/`executable` quedan AUSENTES del payload —
     /// nunca puestos a cero ni inventados — y es exactamente lo que
     /// `complete: false` avisa.
     ///
-    /// # `dest_trash` y `blockers`: la mitad honesta
-    /// Sin `dest_trash` un agente no puede saber si lo que el plan sobrescribe
-    /// o borra es recuperable, y sin `blockers`/`executable` reportaría un plan
-    /// como limpio cuando el core ya sabe que no se puede ejecutar. Los dos
-    /// viajan SIEMPRE que `complete` sea `true` — nunca como un extra opcional.
+    /// # `complete` cuadra los pasos contra `counts`
+    /// El `Done` es un detector de pérdida más fuerte que el de
+    /// [`Self::tool_compare`] —el feed de `sync.steps` se enruta con
+    /// `OnFull::CloseFeed`, así que un lote perdido cierra el canal y el
+    /// `Done` no llega— pero no lo cubre todo: un lote que llega ANTES de que
+    /// el route esté registrado y encuentra el `pending` lleno se descarta con
+    /// una traza y sin cerrar nada, de modo que el `Done` puede aparecer con
+    /// una lista de pasos que no es la que `counts` cuenta. `counts` se rehace
+    /// paso a paso en el spool (es lo que el ejecutor mira para pedir sus
+    /// puertas de policy), así que la suma de sus clases ES el total de pasos
+    /// del plan: si no cuadra con los recibidos, esto no está completo. Va
+    /// también en el payload como `steps_total`.
     async fn tool_sync_plan(&self, args: &Value) -> Result<Value, String> {
-        let source = vpath_arg(args, "source")?;
-        let dest = vpath_arg(args, "dest")?;
-        // `mode` no tiene valor neutro entre copiar y borrar (igual que en el
-        // wire, `SyncPlanParams::mode` no lleva `#[serde(default)]`): AUSENTE
-        // es tan error como MALFORMADO — jamás una degradación silenciosa
-        // (mismo criterio que `tool_delete::mode`, con el matiz de que aquí no
-        // hay default que ofrecer).
-        let mode = match args.get("mode") {
-            Some(Value::String(s)) if s == "update" => methods::SyncMode::Update,
-            Some(Value::String(s)) if s == "mirror" => methods::SyncMode::Mirror,
-            None | Some(Value::Null) => {
-                return Err("missing arg mode: use \"update\"|\"mirror\" (no default)".to_owned());
-            }
-            Some(other) => {
-                return Err(format!("invalid mode {other}: use \"update\"|\"mirror\""));
-            }
-        };
-        let criteria = compare_criteria_arg(args)?;
-        let on_unknown = match args.get("on_unknown") {
-            None | Some(Value::Null) => methods::OnUnknown::Copy,
-            Some(Value::String(s)) if s == "copy" => methods::OnUnknown::Copy,
-            Some(Value::String(s)) if s == "skip" => methods::OnUnknown::Skip,
-            Some(other) => {
-                return Err(format!("invalid on_unknown {other}: use \"copy\"|\"skip\""));
-            }
-        };
-        let limit = opt_u64_arg(args, "limit")?
-            .map(|l| usize::try_from(l).map_err(|_| format!("arg limit too large: {l}")))
-            .transpose()?
-            .unwrap_or(SYNC_STEPS_DEFAULT)
-            .min(SYNC_STEPS_MAX);
-        // Mismo motivo que en `tool_compare`: `limit: 0` no es "cero pasos a
-        // propósito", es un argumento sin sentido que produciría
-        // `truncated: true` con `steps: []` en el PRIMER lote, indistinguible
-        // de un plan de verdad truncado.
-        if limit == 0 {
-            return Err("arg limit must be >= 1".to_owned());
-        }
-
-        let params = methods::SyncPlanParams {
-            source,
-            dest,
-            mode,
-            compare: methods::SyncCompareOptions {
-                criteria,
-                // `max_depth`/`mtime_tolerance_ms` no son argumentos de esta
-                // tool (spec 3 §4): el default del wire alcanza para un plan
-                // agéntico, y `follow_symlinks`/`descend_orphans` NO son del
-                // llamante en `sync.plan` — pedirlos es `-32602` server-side.
-                ..methods::SyncCompareOptions::default()
-            },
-            on_unknown,
-            // El puente no ofrece seleccionar un subárbol del plan: es una
-            // superficie del panel de diferencias (spec 3 §4), no de un
-            // agente que aún no ha visto las filas.
-            include: None,
-        };
+        let (params, limit) = sync_plan_args(args)?;
 
         let (task, mut rx) = self
             .streams()
@@ -688,7 +671,9 @@ impl Bridge {
             .map_err(|e| e.to_string())?
             .sync_plan(params)
             .await
-            .map_err(map_backend_err)?;
+            .map_err(map_plan_err)?;
+        let task_id = task.id();
+        let mut guard = CancelOnAbandon::new(task.canceller());
 
         // Pasos fieles al wire: `SyncStep` serializa `kind`/`criterion`/
         // `confidence`/`reversal`/`reason` como los valores snake_case del
@@ -697,55 +682,64 @@ impl Bridge {
         let mut steps: Vec<methods::SyncStep> = Vec::new();
         let mut truncated = false;
         let mut done: Option<methods::SyncPlanDone> = None;
-        'drain: while let Some(event) = rx.recv().await {
-            match event {
-                norte_core::sync::SyncPlanEvent::Steps(batch) => {
-                    for step in batch.steps {
-                        if steps.len() >= limit {
-                            truncated = true;
-                            break 'drain;
+        let drained = tokio::time::timeout(TASK_WAIT, async {
+            'drain: while let Some(event) = rx.recv().await {
+                match event {
+                    norte_core::sync::SyncPlanEvent::Steps(batch) => {
+                        for step in batch.steps {
+                            if steps.len() >= limit {
+                                truncated = true;
+                                break 'drain;
+                            }
+                            steps.push(step);
                         }
-                        steps.push(step);
+                    }
+                    norte_core::sync::SyncPlanEvent::Done(d) => {
+                        // Como mucho UNO por Task, y siempre el último — nada que
+                        // seguir drenando después.
+                        done = Some(d);
+                        break;
                     }
                 }
-                norte_core::sync::SyncPlanEvent::Done(d) => {
-                    // Como mucho UNO por Task, y siempre el último — nada que
-                    // seguir drenando después.
-                    done = Some(d);
-                    break;
-                }
             }
-        }
-        if truncated {
-            // Cooperativa (regla dura 3): igual que en `tool_compare`, sin
-            // esto el planificador seguiría recorriendo (y comparando) los dos
-            // árboles enteros para un `rx` que ya nadie drena.
-            task.cancel();
-        }
-        let state = task.join().await;
-        let complete =
-            !truncated && done.is_some() && matches!(state, norte_proto::TaskState::Completed);
+            if truncated {
+                // Cooperativa (regla dura 3): igual que en `tool_compare`, sin
+                // esto el planificador seguiría recorriendo (y comparando) los dos
+                // árboles enteros para un `rx` que ya nadie drena.
+                task.cancel();
+            }
+            task.join().await
+        })
+        .await;
+        let state = match drained {
+            Ok(state) => {
+                guard.disarm();
+                Some(state)
+            }
+            Err(_) => None,
+        };
+        let steps_total = done.as_ref().map(|d| plan_steps_total(&d.counts));
+        let complete = done.is_some()
+            && stream_is_complete(
+                truncated,
+                state.as_ref(),
+                steps.len(),
+                steps_total.unwrap_or_default(),
+            );
 
-        let steps = serde_json::to_value(&steps)
+        let encoded = serde_json::to_value(&steps)
             .map_err(|e| format!("tool sync_plan: could not encode steps: {e}"))?;
         let mut payload = json!({
-            "steps": steps,
+            "task_id": task_id.get(),
+            "steps": encoded,
             "truncated": truncated,
+            "timed_out": state.is_none(),
+            "state": state_label(state.as_ref()),
+            "error": state_error(state.as_ref()),
             "complete": complete,
         });
-        if let Some(d) = done {
-            // Serializado del wire y NO reconstruido campo a campo: así la
-            // ortografía de `counts`/`dest_trash`/`blockers`/`executable` es
-            // EXACTAMENTE la del protocolo sin copiarla a mano dos veces. Solo
-            // `plan_hash` (y el `task_id` de correlación, que sin el hash no
-            // sirve para nada aquí) se quitan del objeto antes de fusionarlo.
-            let done_json = serde_json::to_value(&d)
-                .map_err(|e| format!("tool sync_plan: could not encode plan_done: {e}"))?;
-            if let (Value::Object(mut obj), Some(target)) = (done_json, payload.as_object_mut()) {
-                obj.remove("plan_hash");
-                obj.remove("task_id");
-                target.extend(obj);
-            }
+        if let (Some(d), Some(total)) = (done, steps_total) {
+            merge_plan_done(&mut payload, &d, total)?;
         }
         Ok(payload)
     }
@@ -863,11 +857,160 @@ fn map_backend_err(e: norte_proto::Error) -> String {
     }
 }
 
-/// Traduce el arg opcional `criteria` (array de strings) de `compare` a
-/// [`methods::CompareCriteria`], con el MISMO contrato que `--criteria` del
-/// CLI (`parse_compare_criteria`): ausente = el default del wire (tamaño +
-/// fecha, sin hash); presente = EXACTAMENTE la lista pedida, nunca sumada al
-/// default (`["hash"]` a secas enciende solo `hash`).
+/// Los args de `sync_plan` → `(params, limit)`. Aparte de la tool solo por el
+/// lint de longitud, y el reparto es el natural: aquí no se toca el daemon.
+fn sync_plan_args(args: &Value) -> Result<(methods::SyncPlanParams, usize), String> {
+    let source = vpath_arg(args, "source")?;
+    let dest = vpath_arg(args, "dest")?;
+    // `mode` no tiene valor neutro entre copiar y borrar (igual que en el
+    // wire, `SyncPlanParams::mode` no lleva `#[serde(default)]`): AUSENTE es
+    // tan error como MALFORMADO — jamás una degradación silenciosa (mismo
+    // criterio que `tool_delete::mode`, con el matiz de que aquí no hay
+    // default que ofrecer).
+    let mode = match args.get("mode") {
+        Some(Value::String(s)) if s == "update" => methods::SyncMode::Update,
+        Some(Value::String(s)) if s == "mirror" => methods::SyncMode::Mirror,
+        None | Some(Value::Null) => {
+            return Err("missing arg mode: use \"update\"|\"mirror\" (no default)".to_owned());
+        }
+        Some(other) => return Err(format!("invalid mode {other}: use \"update\"|\"mirror\"")),
+    };
+    let criteria = compare_criteria_arg(args)?;
+    let on_unknown = match args.get("on_unknown") {
+        None | Some(Value::Null) => methods::OnUnknown::Copy,
+        Some(Value::String(s)) if s == "copy" => methods::OnUnknown::Copy,
+        Some(Value::String(s)) if s == "skip" => methods::OnUnknown::Skip,
+        Some(other) => return Err(format!("invalid on_unknown {other}: use \"copy\"|\"skip\"")),
+    };
+    let limit = stream_limit_arg(args, SYNC_STEPS_DEFAULT, SYNC_STEPS_MAX)?;
+    let params = methods::SyncPlanParams {
+        source,
+        dest,
+        mode,
+        compare: methods::SyncCompareOptions {
+            criteria,
+            // `max_depth`/`mtime_tolerance_ms` no son argumentos de esta tool
+            // (spec 3 §4): el default del wire alcanza para un plan agéntico,
+            // y `follow_symlinks`/`descend_orphans` NO son del llamante en
+            // `sync.plan` — pedirlos es `-32602` server-side. La descripción
+            // de la tool lo DICE, porque un agente que acaba de comparar con
+            // `max_depth: 2` recibiría si no un plan sobre el árbol entero sin
+            // ninguna señal.
+            ..methods::SyncCompareOptions::default()
+        },
+        on_unknown,
+        // El puente no ofrece seleccionar un subárbol del plan: es una
+        // superficie del panel de diferencias (spec 3 §4), no de un agente que
+        // aún no ha visto las filas.
+        include: None,
+    };
+    Ok((params, limit))
+}
+
+/// Funde el `sync.plan_done` en el payload de la tool.
+///
+/// Serializado del wire y NO reconstruido campo a campo: así la ortografía de
+/// `counts`/`dest_trash`/`blockers`/`executable` es EXACTAMENTE la del
+/// protocolo sin copiarla a mano dos veces. Se quitan antes `plan_hash` (no le
+/// sirve a nadie fuera de la conexión de streams) y el `task_id` del wire, que
+/// es EL MISMO que el puente ya puso.
+///
+/// **La fusión no PISA.** `serde_json::Map::extend` sobrescribe, y extender el
+/// payload CON el `Done` significa que un campo futuro del wire llamado
+/// `complete` —o `truncated`, o `state`— reemplazaría en silencio la bandera
+/// de honestidad que este puente calcula. Latente hoy; una clave nueva del
+/// wire no debería poder romperlo.
+///
+/// # Errors
+/// Si el `SyncPlanDone` no serializa (no puede: struct plano).
+fn merge_plan_done(
+    payload: &mut Value,
+    done: &methods::SyncPlanDone,
+    steps_total: u64,
+) -> Result<(), String> {
+    let done_json = serde_json::to_value(done)
+        .map_err(|e| format!("tool sync_plan: could not encode plan_done: {e}"))?;
+    let (Value::Object(mut obj), Some(target)) = (done_json, payload.as_object_mut()) else {
+        return Ok(());
+    };
+    obj.remove("plan_hash");
+    obj.remove("task_id");
+    for (k, v) in obj {
+        match target.entry(k) {
+            serde_json::map::Entry::Vacant(e) => {
+                e.insert(v);
+            }
+            serde_json::map::Entry::Occupied(e) => tracing::warn!(
+                key = %e.key(),
+                "sync.plan_done trae una clave que el puente ya fija: se conserva la del puente"
+            ),
+        }
+    }
+    target.insert("steps_total".to_owned(), json!(steps_total));
+    Ok(())
+}
+
+/// Como [`map_backend_err`], pero para `sync.plan`, cuyo error más probable en
+/// uso normal llega como «internal error».
+///
+/// El daemon retiene como mucho 16 planes POR CONEXIÓN (10 min de TTL) y
+/// rehúsa el 17.º con `OVERLOADED` y un mensaje que dice exactamente qué pasa.
+/// Ese mensaje se pierde: `RpcError::protocol` no lleva `data`, y
+/// `RemoteBackend::to_taxonomy` colapsa un `Rpc` sin `data` en
+/// `Error::Internal { panic: false }`, que se imprime «internal error (panic:
+/// false)». El puente tiene UNA conexión de streams para todo el proceso, no
+/// puede aplicar y no hay método para descartar, así que el tope es alcanzable
+/// sin hacer nada raro — y «internal error» es justo el texto que hace que un
+/// agente reintente en bucle, que es lo que llenó el tope.
+///
+/// Se nombra la causa probable sin afirmarla: el mensaje del daemon no ha
+/// llegado hasta aquí y decir que fue el tope cuando fue otra cosa sería la
+/// misma clase de mentira. Que el texto del RPC viaje entero es
+/// <https://github.com/compilando/norte/issues/182>.
+fn map_plan_err(e: norte_proto::Error) -> String {
+    match e {
+        norte_proto::Error::Internal { panic: false } => format!(
+            "sync.plan was refused and the daemon's reason did not survive the trip \
+             (issue #182). The cause reachable in normal use is the cap of \
+             {MAX_RETAINED_SYNC_PLANS_HINT} retained plans per connection, which expire on \
+             their own after ~{SYNC_PLAN_TTL_MIN_HINT} minutes. Do NOT retry in a loop: \
+             report the plans you already have and let the older ones expire."
+        ),
+        other => map_backend_err(other),
+    }
+}
+
+/// Los dos números que [`map_plan_err`] nombra, y que el daemon no exporta:
+/// `MAX_RETAINED_SYNC_PLANS` es privado de `norte_core::daemon::server`. Si
+/// alguno cambia allí, este texto miente — por eso están aquí arriba y con
+/// nombre, y no incrustados en un `format!`.
+const MAX_RETAINED_SYNC_PLANS_HINT: usize = 16;
+/// El TTL del plan retenido, en minutos ([`methods::SYNC_PLAN_TTL_MS`]).
+const SYNC_PLAN_TTL_MIN_HINT: u64 = methods::SYNC_PLAN_TTL_MS / 60_000;
+
+/// Traduce el arg opcional `criteria` (array de strings) de `compare` y de
+/// `sync_plan` a [`methods::CompareCriteria`]: ausente o `null` = el default
+/// del wire (tamaño + fecha, sin hash); presente = EXACTAMENTE la lista
+/// pedida, nunca sumada al default (`["hash"]` a secas enciende solo `hash`).
+///
+/// Una lista VACÍA es un ERROR, y es aquí donde este contrato **no** es el del
+/// `--criteria` del CLI. `parse_compare_criteria` trata la lista vacía como
+/// ausente porque clap no distingue «no lo dijo» de «lo dijo vacío»; JSON sí
+/// los distingue, y tratarlos igual costaría lo siguiente:
+///
+/// - en `compare`, ningún rung decide, así que `norte_compare` da
+///   `same`/`presence`/`unknown` a TODA pareja presente en los dos lados. Con
+///   `complete: true`. El agente reporta dos árboles idénticos sin haber
+///   comparado nada.
+/// - en `sync_plan`, peor: `Same` + `Unknown` con el `on_unknown: copy` que es
+///   el default de esta tool produce un `Overwrite` POR FICHERO. `criteria:
+///   []` convertiría «planifica una actualización» en «reescribe el destino
+///   entero», con `executable: true`.
+///
+/// Un argumento vacío no puede ser la forma más corta de pedir eso. Se rechaza
+/// con el mismo criterio que `mode`, que tampoco tiene valor neutro, y los dos
+/// esquemas llevan además `"minItems": 1` — que es asesor, así que el chequeo
+/// vive aquí.
 fn compare_criteria_arg(args: &Value) -> Result<methods::CompareCriteria, String> {
     let names = match args.get("criteria") {
         None | Some(Value::Null) => return Ok(methods::CompareCriteria::default()),
@@ -888,22 +1031,169 @@ fn compare_criteria_arg(args: &Value) -> Result<methods::CompareCriteria, String
             _ => return Err(format!("arg criteria: unknown criterion {name}")),
         }
     }
+    if !(criteria.size || criteria.mtime || criteria.hash) {
+        return Err(
+            "arg criteria: name at least one of \"size\", \"mtime\", \"hash\" \
+                    (an empty list runs no comparison at all and would report the two \
+                    trees as equal); omit criteria for the wire default (size+mtime)"
+                .to_owned(),
+        );
+    }
     Ok(criteria)
+}
+
+/// Tolerancia de mtime por defecto, LEÍDA del wire en vez de copiada: el
+/// literal vive en `norte_proto`'s `default_mtime_tolerance_ms` (privado) y
+/// [`methods::SyncCompareOptions::default`] es su única salida pública. Copiar
+/// el `2000` aquí es como el día que el wire lo cambie el puente se quede con
+/// el viejo.
+fn default_mtime_tolerance_ms() -> u32 {
+    methods::SyncCompareOptions::default().mtime_tolerance_ms
+}
+
+/// El `limit` de una tool de stream (`compare`, `sync_plan`): ausente = su
+/// default, recortado al techo duro, y `0` es ERROR.
+///
+/// `limit: 0` no es «cero filas por decisión del caller», es un argumento sin
+/// sentido (encoding-auditor, revisión de la tarea 2): sin este chequeo saldría
+/// `truncated: true` con la lista vacía en el PRIMER elemento, indistinguible
+/// de un árbol de verdad truncado. El esquema JSON ya dice `"minimum": 1`, pero
+/// eso es asesor — un MCP client real puede mandarlo igual.
+fn stream_limit_arg(args: &Value, default: usize, max: usize) -> Result<usize, String> {
+    let limit = opt_u64_arg(args, "limit")?
+        .map(|l| usize::try_from(l).map_err(|_| format!("arg limit too large: {l}")))
+        .transpose()?
+        .unwrap_or(default)
+        .min(max);
+    if limit == 0 {
+        return Err("arg limit must be >= 1".to_owned());
+    }
+    Ok(limit)
+}
+
+/// El total de PASOS de un plan según sus contadores: la suma de las clases
+/// (`unknown_kind` incluida, que existe justo para que no falte ninguna).
+///
+/// Es lo que [`Bridge::tool_sync_plan`] cuadra contra los pasos recibidos.
+/// Saturante, como las sumas de [`methods::SyncCounts::add`]: un contador
+/// desbordado es un número raro, un pánico en el camino de un plan de medio
+/// millón de pasos es una tool muerta. `irreversible` NO se suma — es
+/// transversal a las clases, lo dice su rustdoc — ni `unmeasured_steps`, que
+/// es un subconjunto de `copy`+`overwrite`.
+fn plan_steps_total(counts: &methods::SyncCounts) -> u64 {
+    counts
+        .create_dir
+        .saturating_add(counts.copy)
+        .saturating_add(counts.overwrite)
+        .saturating_add(counts.delete_tree)
+        .saturating_add(counts.skip)
+        .saturating_add(counts.unknown_kind)
+}
+
+/// ¿Se puede afirmar que este resultado de stream es TODO lo que había?
+///
+/// Cuatro condiciones, y ninguna sobra:
+///
+/// 1. no se truncó (el caller puso el tope);
+/// 2. se vio el estado terminal (`None` = venció [`TASK_WAIT`]);
+/// 3. ese estado es `Completed` — `Cancelled` y `Failed` no son un final
+///    limpio, y devolver una lista vacía sin decirlo se lee como «no hay
+///    diferencias»;
+/// 4. lo recibido cuadra con lo que el daemon dice haber emitido. Es la
+///    condición que faltaba: los lotes se pueden perder DEJANDO la task en
+///    `Completed` (ver la rustdoc de [`Bridge::tool_compare`]).
+fn stream_is_complete(
+    truncated: bool,
+    state: Option<&norte_proto::TaskState>,
+    got: usize,
+    emitted: u64,
+) -> bool {
+    !truncated
+        && matches!(state, Some(norte_proto::TaskState::Completed))
+        && u64::try_from(got).is_ok_and(|got| got == emitted)
+}
+
+/// Nombre del estado terminal para el payload de una tool de stream. `None`
+/// (venció el deadline sin verlo) es `"running"`: la task del daemon seguía
+/// viva cuando esta tool dejó de mirarla.
+fn state_label(state: Option<&norte_proto::TaskState>) -> &'static str {
+    match state {
+        Some(norte_proto::TaskState::Completed) => "completed",
+        Some(norte_proto::TaskState::Cancelled) => "cancelled",
+        Some(norte_proto::TaskState::Failed { .. }) => "failed",
+        _ => "running",
+    }
+}
+
+/// El porqué de un `"failed"`, o `null`. Va al lado de [`state_label`]: sin él,
+/// una comparación que reventó y una que no encontró diferencias son la misma
+/// lista vacía.
+fn state_error(state: Option<&norte_proto::TaskState>) -> Value {
+    match state {
+        Some(norte_proto::TaskState::Failed { error }) => json!(error.to_string()),
+        _ => Value::Null,
+    }
+}
+
+/// `ClientInfo` del puente, uno solo para las DOS conexiones de la sesión.
+fn client_info() -> methods::ClientInfo {
+    methods::ClientInfo {
+        name: "norte-mcp".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+    }
+}
+
+/// Cancela la Task de una tool de stream al SOLTARSE, salvo que se haya
+/// desarmado.
+///
+/// El puente ya cancelaba al truncar. Faltaba el otro motivo, que es el mismo
+/// hecho: `notifications/cancelled` (y la muerte del transporte) sueltan el
+/// future de la tool, y `TaskRef` no tiene `Drop` — soltar el `rx` local solo
+/// quita el route del cliente, mientras la bomba del daemon sigue mandando
+/// lotes por una conexión viva, cobra `true` y no ve jamás un `ReceiverGone`.
+/// El walk (y con `criteria: ["hash"]`, la lectura ENTERA de los dos árboles)
+/// seguía hasta el final para nadie. Cancelar porque dejamos de leer pero no
+/// porque el agente dejó de querer no es una regla coherente; y el hueco era
+/// explotable dentro de un scope legítimo: abrir comparaciones con hash y
+/// cancelarlas al momento devuelve el hueco de [`MAX_INFLIGHT_TOOLS`] al
+/// instante y deja el walk corriendo, hasta `MAX_LIVE_TASKS_AGENTS`.
+///
+/// Mismo patrón que `CancelOnAbandon` de `norte_core::backend::remote`
+/// (drop-guard armado que se desarma en el camino normal).
+struct CancelOnAbandon {
+    /// `None` = desarmado (se vio el terminal: no hay nada que cancelar).
+    canceller: Option<norte_core::backend::TaskCanceller>,
+}
+
+impl CancelOnAbandon {
+    fn new(canceller: norte_core::backend::TaskCanceller) -> Self {
+        Self {
+            canceller: Some(canceller),
+        }
+    }
+
+    /// El camino normal: la Task ya es terminal.
+    fn disarm(&mut self) {
+        self.canceller = None;
+    }
+}
+
+impl Drop for CancelOnAbandon {
+    fn drop(&mut self) {
+        if let Some(canceller) = self.canceller.take() {
+            canceller.cancel();
+        }
+    }
 }
 
 /// Snapshot de una task como JSON de tool (estado + error por categoría).
 fn task_json(t: &norte_proto::TaskProgress) -> Value {
-    use norte_proto::TaskState;
-    let (state, error) = match &t.state {
-        TaskState::Completed => ("completed", None),
-        TaskState::Cancelled => ("cancelled", None),
-        TaskState::Failed { error } => ("failed", Some(error.to_string())),
-        _ => ("running", None),
-    };
     json!({
         "task_id": t.task_id.get(),
-        "state": state,
-        "error": error,
+        // Mismo vocabulario que las tools de stream: un modelo que lea
+        // `task_status` y `compare` no aprende dos nombres para un estado.
+        "state": state_label(Some(&t.state)),
+        "error": state_error(Some(&t.state)),
         "bytes_done": t.bytes_done,
         "bytes_total": t.bytes_total,
     })
@@ -950,162 +1240,181 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> String {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).to_string()
 }
 
-/// Las 8 tools v1 (ADR 0024, superficie = lo que el wire ya ofrece) más
-/// `compare` (spec 3 fase B, tarea 2): la primera que consume el brazo de
-/// streams en vez de responder directo.
+/// Descripción del argumento `path` de toda tool que toma uno. Una sola vez:
+/// estaba copiada en tres sitios, y tres copias de una descripción de esquema
+/// divergen igual que dos copias de un handshake.
+const PATH_DESC: &str =
+    "VPath URL: file:///…, sftp://host/…, s3://bucket/…, or composed zip:file:///a.zip!/inside";
+
+/// Las diez tools del puente: las ocho v1 (ADR 0024, superficie = lo que el
+/// wire ya ofrece) más `compare` y `sync_plan` (spec 3 fase B), las primeras
+/// que consumen el brazo de streams en vez de responder directo.
+///
+/// **Una función por tool, y esta lista es solo el orden.** Antes eran ocho
+/// dentro de un `json!([…])` y dos aparte, sin nada que dijera cuál de las dos
+/// convenciones estrena la undécima; y ese `json!([…])` obligaba a un
+/// `unreachable!` para desempaquetar el `Value::Array`, o sea un camino de
+/// pánico en código que no es de test.
 fn tool_defs() -> Value {
-    let mut defs = fixed_tool_defs();
-    defs.push(compare_tool_def());
-    defs.push(sync_plan_tool_def());
-    Value::Array(defs)
+    Value::Array(vec![
+        list_dir_tool_def(),
+        stat_tool_def(),
+        read_file_tool_def(),
+        transfer_tool_def("copy"),
+        transfer_tool_def("move"),
+        delete_tool_def(),
+        task_status_tool_def(),
+        request_scope_tool_def(),
+        compare_tool_def(),
+        sync_plan_tool_def(),
+    ])
 }
 
-/// Las 8 tools v1 (ADR 0024): superficie = lo que el wire ya ofrece. Separada
-/// de [`tool_defs`] y de [`compare_tool_def`] solo por el lint de longitud
-/// (`too_many_lines`): las tres juntas eran una función, esta división no
-/// cambia el JSON que sale.
-fn fixed_tool_defs() -> Vec<Value> {
-    let path_desc =
-        "VPath URL: file:///…, sftp://host/…, s3://bucket/…, or composed zip:file:///a.zip!/inside";
-    let Value::Array(defs) = json!([
-        {
-            "name": "list_dir",
-            "description": "List a directory managed by norte. Returns entries (path/kind/size/mtime_ms) and next_cursor when paginated. size/mtime_ms may be null (lazy listing); use stat for a specific path.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": path_desc},
-                    "limit": {"type": "integer", "minimum": 1, "description": "page size"},
-                    "cursor": {"type": "string", "description": "next_cursor from the previous page"}
-                },
-                "required": ["path"]
-            }
-        },
-        {
-            "name": "stat",
-            "description": "Metadata of one node (kind/size/mtime_ms).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"path": {"type": "string", "description": path_desc}},
-                "required": ["path"]
-            }
-        },
-        {
-            "name": "read_file",
-            "description": "Read a byte range of a file. Returns text (UTF-8; lossy if not) plus base64 of the exact bytes when the content is not valid UTF-8, and eof. If the byte range splits a multibyte character, text will contain U+FFFD at the edges and base64 carries the exact bytes: reassemble multi-chunk reads from base64, never by concatenating text.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": path_desc},
-                    "offset": {"type": "integer", "minimum": 0},
-                    "len": {"type": "integer", "minimum": 1, "description": "max bytes (capped server-side)"}
-                },
-                "required": ["path"]
-            }
-        },
-        {
-            "name": "copy",
-            "description": "Copy a file or directory (recursive). Runs as a cancellable task and this call waits for its outcome. Requires a granted scope; an `ask` policy suspends until a human approves.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "from": {"type": "string", "description": path_desc},
-                    "to": {"type": "string", "description": "exact destination path (existing destination = conflict)"}
-                },
-                "required": ["from", "to"]
-            }
-        },
-        {
-            "name": "move",
-            "description": "Move/rename a file or directory. Same governance as copy (scope + policy).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "from": {"type": "string", "description": path_desc},
-                    "to": {"type": "string", "description": "exact destination path"}
-                },
-                "required": ["from", "to"]
-            }
-        },
-        {
-            "name": "delete",
-            "description": "Delete a file or directory (recursive). Default mode is trash (recoverable); permanent requires explicit mode and policy approval.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": path_desc},
-                    "mode": {"type": "string", "enum": ["trash", "permanent"], "description": "default trash"}
-                },
-                "required": ["path"]
-            }
-        },
-        {
-            "name": "task_status",
-            "description": "Current state of a norte task by id (running/completed/failed/cancelled).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"task_id": {"type": "integer", "minimum": 1}},
-                "required": ["task_id"]
-            }
-        },
-        {
-            "name": "request_scope",
-            "description": "Request access to path subtrees with specific operations (copy/move/delete/mkdir) for a TTL. The request stays PENDING until a human grants it (`norte policy grant <request_id>` or from the TUI); retry your operation after the grant.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "roots": {"type": "array", "items": {"type": "string"}, "description": "subtree roots (VPath URLs)"},
-                    "ops": {"type": "array", "items": {"type": "string", "enum": ["copy", "move", "delete", "mkdir"]}},
-                    "ttl_ms": {"type": "integer", "minimum": 1, "description": "time-to-live in milliseconds (capped server-side at 24h)"}
-                },
-                "required": ["roots", "ops", "ttl_ms"]
-            }
-        }
-    ]) else {
-        unreachable!("json!([…]) siempre produce Value::Array")
-    };
-    defs
-}
-
-/// La definición de `compare` (spec 3 fase B, tarea 2), separada de
-/// [`fixed_tool_defs`] solo por el lint de longitud — ver la rustdoc de
-/// [`tool_defs`].
-fn compare_tool_def() -> Value {
-    let path_desc =
-        "VPath URL: file:///…, sftp://host/…, s3://bucket/…, or composed zip:file:///a.zip!/inside";
+fn list_dir_tool_def() -> Value {
     json!({
-        "name": "compare",
-        "description": "Compare two trees (files and directories) and report what differs between them. Read-only: this mutates nothing. Each row carries WIRE values (verdict/criterion/confidence as the protocol spells them, e.g. \"only_left\", never a translated label) and both paths as their wire form. If more rows exist than `limit`, the comparison is CANCELLED partway and `truncated` is true — treat a truncated result as unknown, never as \"these trees match\". `complete` is true only when the run reached its end untruncated; false covers truncated, cancelled, and failed alike, so a false always means \"do not trust this as the whole picture\".",
+        "name": "list_dir",
+        "description": "List a directory managed by norte. Returns entries (path/kind/size/mtime_ms) and next_cursor when paginated. size/mtime_ms may be null (lazy listing); use stat for a specific path.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "a": {"type": "string", "description": path_desc},
-                "b": {"type": "string", "description": path_desc},
-                "criteria": {"type": "array", "items": {"type": "string", "enum": ["size", "mtime", "hash"]}, "description": "which rungs to run; absent = size+mtime (the wire default). hash reads full file contents on both sides and requires content scope."},
-                "max_depth": {"type": "integer", "minimum": 0, "description": "root counts as depth 0; absent = unlimited"},
-                "mtime_tolerance_ms": {"type": "integer", "minimum": 0, "description": "default 2000 (FAT-safe)"},
-                "limit": {"type": "integer", "minimum": 1, "description": "max rows before the comparison is cancelled and truncated:true; default 500"}
+                "path": {"type": "string", "description": PATH_DESC},
+                "limit": {"type": "integer", "minimum": 1, "description": "page size"},
+                "cursor": {"type": "string", "description": "next_cursor from the previous page"}
             },
-            "required": ["a", "b"]
+            "required": ["path"]
         }
     })
 }
 
-/// La definición de `sync_plan` (spec 3 fase B, tarea 3), separada por el
-/// mismo motivo que [`compare_tool_def`].
-fn sync_plan_tool_def() -> Value {
-    let path_desc =
-        "VPath URL: file:///…, sftp://host/…, s3://bucket/…, or composed zip:file:///a.zip!/inside";
+fn stat_tool_def() -> Value {
     json!({
-        "name": "sync_plan",
-        "description": "Returns what a one-way synchronisation would do. It does NOT apply anything, and there is no tool that does: applying is a human action in their own client. The plan's hash is retained for THIS connection only, so it cannot be handed to a user or another tool — report what would change and let the human plan it again in their client. `complete` is false whenever the run did not reach a clean end for ANY reason (the `limit` was hit and the plan was cancelled and `truncated` is true; a human cancelled the underlying task; or planning failed) — `truncated` only names one of those causes, so check `complete`, not `truncated`, before trusting anything. Whenever `complete` is false, `counts`/`dest_trash`/`blockers`/`blockers_total`/`executable` are ABSENT from the result (never zero, never invented) — treat their absence exactly like a truncated `compare`: unknown, not clean. `mode: \"mirror\"` deletes from the destination what the source does not have; `dest_trash` says whether that (and any overwrite) is recoverable at all — \"restorable\" (undo can bring it back), \"opaque\" (a trash exists but norte cannot name what it buried) or \"absent\" (nothing comes back). `executable` is the only field that says whether a human could actually run this plan as-is; a non-empty `blockers` (or `blockers_total` bigger than the list) means they could not, whatever the steps look like. Approved plans are retained server-side per connection with a cap and a TTL of several minutes; a run that fails outright (not `truncated`) rather than returning a `complete: false` result may mean that cap was hit — wait for older plans to expire rather than retrying sync_plan in a tight loop.",
+        "name": "stat",
+        "description": "Metadata of one node (kind/size/mtime_ms).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": PATH_DESC}},
+            "required": ["path"]
+        }
+    })
+}
+
+fn read_file_tool_def() -> Value {
+    json!({
+        "name": "read_file",
+        "description": "Read a byte range of a file. Returns text (UTF-8; lossy if not) plus base64 of the exact bytes when the content is not valid UTF-8, and eof. If the byte range splits a multibyte character, text will contain U+FFFD at the edges and base64 carries the exact bytes: reassemble multi-chunk reads from base64, never by concatenating text.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "source": {"type": "string", "description": format!("Where the bytes come from. {path_desc}")},
-                "dest": {"type": "string", "description": format!("Where they would go. {path_desc}")},
+                "path": {"type": "string", "description": PATH_DESC},
+                "offset": {"type": "integer", "minimum": 0},
+                "len": {"type": "integer", "minimum": 1, "description": "max bytes (capped server-side)"}
+            },
+            "required": ["path"]
+        }
+    })
+}
+
+/// `copy` y `move`: MISMO esquema y misma gobernanza, así que una función con
+/// el nombre por parámetro en vez de dos copias que se separen.
+fn transfer_tool_def(name: &str) -> Value {
+    let description = if name == "copy" {
+        "Copy a file or directory (recursive). Runs as a cancellable task and this call waits for its outcome. Requires a granted scope; an `ask` policy suspends until a human approves."
+    } else {
+        "Move/rename a file or directory. Same governance as copy (scope + policy)."
+    };
+    json!({
+        "name": name,
+        "description": description,
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "from": {"type": "string", "description": PATH_DESC},
+                "to": {"type": "string", "description": "exact destination path (existing destination = conflict)"}
+            },
+            "required": ["from", "to"]
+        }
+    })
+}
+
+fn delete_tool_def() -> Value {
+    json!({
+        "name": "delete",
+        "description": "Delete a file or directory (recursive). Default mode is trash (recoverable); permanent requires explicit mode and policy approval.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": PATH_DESC},
+                "mode": {"type": "string", "enum": ["trash", "permanent"], "description": "default trash"}
+            },
+            "required": ["path"]
+        }
+    })
+}
+
+fn task_status_tool_def() -> Value {
+    json!({
+        "name": "task_status",
+        "description": "Current state of a norte task by id (running/completed/failed/cancelled). Works for the task_id returned by compare and sync_plan too: both connections of this bridge are the same agent actor.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "integer", "minimum": 1}},
+            "required": ["task_id"]
+        }
+    })
+}
+
+fn request_scope_tool_def() -> Value {
+    json!({
+        "name": "request_scope",
+        "description": "Request access to path subtrees with specific operations (copy/move/delete/mkdir) for a TTL. The request stays PENDING until a human grants it (`norte policy grant <request_id>` or from the TUI); retry your operation after the grant.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "roots": {"type": "array", "items": {"type": "string"}, "description": "subtree roots (VPath URLs)"},
+                "ops": {"type": "array", "items": {"type": "string", "enum": ["copy", "move", "delete", "mkdir"]}},
+                "ttl_ms": {"type": "integer", "minimum": 1, "description": "time-to-live in milliseconds (capped server-side at 24h)"}
+            },
+            "required": ["roots", "ops", "ttl_ms"]
+        }
+    })
+}
+
+/// La definición de `compare` (spec 3 fase B, tarea 2).
+///
+/// Los argumentos se llaman `left`/`right` y no `a`/`b` porque las filas
+/// contestan en `left`/`right`: un modelo no debería tener que deducir cuál de
+/// los dos era `a`.
+fn compare_tool_def() -> Value {
+    json!({
+        "name": "compare",
+        "description": "Compare two trees (files and directories) and report what differs between them. Read-only: this mutates nothing. Each row carries WIRE values (verdict/criterion/confidence as the protocol spells them, e.g. \"only_left\", never a translated label) and both paths as their wire form. `complete` is the ONLY field to trust before saying anything about the two trees: it is true just when the run reached its end, was not truncated, and the rows received match the count the daemon says it emitted (`rows_total`). It is false when the run was truncated at `limit` (and then the comparison was CANCELLED), when the deadline expired (`timed_out`), when the task ended `cancelled` or `failed` (`state` says which, `error` says why), and when rows went missing in transit. A false `complete` means UNKNOWN — never \"these trees match\".",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "left": {"type": "string", "description": PATH_DESC},
+                "right": {"type": "string", "description": PATH_DESC},
+                "criteria": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": ["size", "mtime", "hash"]}, "description": "which rungs to run; absent = size+mtime (the wire default). An EMPTY list is rejected: it would run no rung at all and call every pair equal. hash reads full file contents on both sides and requires content scope."},
+                "max_depth": {"type": "integer", "minimum": 0, "description": "root counts as depth 0; absent = unlimited"},
+                "mtime_tolerance_ms": {"type": "integer", "minimum": 0, "description": "absent = the wire default (2000 ms, FAT-safe)"},
+                "limit": {"type": "integer", "minimum": 1, "description": "max rows before the comparison is cancelled and truncated:true; default 500"}
+            },
+            "required": ["left", "right"]
+        }
+    })
+}
+
+/// La definición de `sync_plan` (spec 3 fase B, tarea 3).
+fn sync_plan_tool_def() -> Value {
+    json!({
+        "name": "sync_plan",
+        "description": "Returns what a one-way synchronisation would do. It does NOT apply anything, and there is no tool that does: applying is a human action in their own client. The plan's hash is retained for THIS connection only, so it cannot be handed to a user or another tool — report what would change and let the human plan it again in their client. `task_id` IS usable: poll it with task_status. `complete` is false whenever the run did not reach a clean end for ANY reason (the `limit` was hit and the plan was cancelled and `truncated` is true; the deadline expired and `timed_out` is true; a human cancelled the underlying task; planning failed; or steps went missing in transit, which is what `steps_total` lets you see) — `truncated` only names one of those causes, so check `complete`, not `truncated`, before trusting anything. Whenever the plan did not close, `counts`/`dest_trash`/`blockers`/`blockers_total`/`executable`/`steps_total` are ABSENT from the result (never zero, never invented) — treat their absence exactly like a truncated `compare`: unknown, not clean. `mode: \"mirror\"` deletes from the destination what the source does not have; `dest_trash` says whether that (and any overwrite) is recoverable at all — \"restorable\" (undo can bring it back), \"opaque\" (a trash exists but norte cannot name what it buried) or \"absent\" (nothing comes back). `executable` is the only field that says whether a human could actually run this plan as-is; a non-empty `blockers` (or `blockers_total` bigger than the list) means they could not, whatever the steps look like. This tool takes NEITHER max_depth NOR mtime_tolerance_ms: it always plans over the whole tree with the wire's default tolerance, so a plan does not inherit the narrowing of a compare you ran first. Approved plans are retained server-side per connection with a cap and a TTL of several minutes; a run that fails outright (not `truncated`) rather than returning a `complete: false` result may mean that cap was hit — wait for older plans to expire rather than retrying sync_plan in a tight loop.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": "Where the bytes come from. VPath URL: file:///…, sftp://host/…, s3://bucket/…, or composed zip:file:///a.zip!/inside"},
+                "dest": {"type": "string", "description": "Where they would go. VPath URL: file:///…, sftp://host/…, s3://bucket/…, or composed zip:file:///a.zip!/inside"},
                 "mode": {"type": "string", "enum": ["update", "mirror"], "description": "REQUIRED, no default: \"update\" only copies/overwrites what differs; \"mirror\" does that plus deletes from dest what source does not have."},
-                "criteria": {"type": "array", "items": {"type": "string", "enum": ["size", "mtime", "hash"]}, "description": "which rungs to run; absent = size+mtime (the wire default). hash reads full file contents on both sides and requires content scope."},
+                "criteria": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": ["size", "mtime", "hash"]}, "description": "which rungs to run; absent = size+mtime (the wire default). An EMPTY list is rejected: with no rung the planner would call every pair equal-but-unknown and, under the default on_unknown:copy, plan an Overwrite for every single file. hash reads full file contents on both sides and requires content scope."},
                 "on_unknown": {"type": "string", "enum": ["copy", "skip"], "description": "what to do with a row the provider could not compare with certainty; default copy."},
                 "limit": {"type": "integer", "minimum": 1, "description": "max steps before the plan is cancelled and truncated:true; default 500"}
             },
@@ -1390,5 +1699,223 @@ async fn dispatch_line(
     // jamás bloquea (no toca el daemon).
     if let Some(out) = bridge.handle_line(text).await {
         let _ = out_tx.send(out).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// BLOCKER: `criteria: []` no es "el default", es apagar los TRES rungs.
+    /// En `compare` deja `same/presence/unknown` en toda pareja presente en los
+    /// dos lados —dos árboles "idénticos" sin comparar nada— y en `sync_plan`,
+    /// con el `on_unknown: copy` que es su default, un `Overwrite` por fichero.
+    #[test]
+    fn criteria_vacia_es_error_y_no_el_default_del_wire() {
+        let err = compare_criteria_arg(&json!({"criteria": []})).expect_err("lista vacía");
+        assert!(err.contains("criteria"), "{err}");
+        // Ausente sí es el default del wire (tamaño + fecha, sin hash).
+        let d = compare_criteria_arg(&json!({})).expect("ausente");
+        assert_eq!(d, methods::CompareCriteria::default());
+        assert!(d.size && d.mtime && !d.hash, "{d:?}");
+        // Y `null` también: es "no lo dijo", no "lo dijo vacío".
+        assert_eq!(
+            compare_criteria_arg(&json!({"criteria": Value::Null})).expect("null"),
+            methods::CompareCriteria::default()
+        );
+        // Presente = exactamente lo pedido, jamás sumado al default.
+        let solo_hash = compare_criteria_arg(&json!({"criteria": ["hash"]})).expect("hash");
+        assert!(!solo_hash.size && !solo_hash.mtime && solo_hash.hash);
+    }
+
+    /// Los dos esquemas lo dicen además en el contrato que el modelo lee.
+    #[test]
+    fn los_esquemas_prohiben_la_lista_vacia_de_criteria() {
+        for def in [compare_tool_def(), sync_plan_tool_def()] {
+            assert_eq!(
+                def["inputSchema"]["properties"]["criteria"]["minItems"],
+                json!(1),
+                "{def}"
+            );
+        }
+    }
+
+    /// BLOCKER: el estado terminal NO demuestra que estén todas las filas. El
+    /// feed de `compare.rows` se enruta con `OnFull::DropBatch`, así que un
+    /// lote perdido deja la Task en `Completed` y el canal cerrado limpio.
+    #[test]
+    fn completo_exige_que_las_filas_cuadren_con_las_emitidas() {
+        let completed = norte_proto::TaskState::Completed;
+        assert!(stream_is_complete(false, Some(&completed), 7, 7));
+        assert!(
+            !stream_is_complete(false, Some(&completed), 6, 7),
+            "una fila perdida en vuelo con la task en Completed NO es completo"
+        );
+        assert!(
+            !stream_is_complete(true, Some(&completed), 7, 7),
+            "truncado"
+        );
+        assert!(!stream_is_complete(false, None, 7, 7), "sin terminal visto");
+        assert!(
+            !stream_is_complete(false, Some(&norte_proto::TaskState::Cancelled), 7, 7),
+            "cancelada"
+        );
+        assert!(
+            !stream_is_complete(
+                false,
+                Some(&norte_proto::TaskState::Failed {
+                    error: norte_proto::Error::Internal { panic: false }
+                }),
+                7,
+                7
+            ),
+            "fallida"
+        );
+    }
+
+    /// El total de pasos de un plan es la suma de las CLASES; `irreversible`
+    /// es transversal y `unmeasured_steps` un subconjunto, así que ninguno
+    /// suma.
+    #[test]
+    fn el_total_de_pasos_suma_las_clases_y_solo_las_clases() {
+        let counts = methods::SyncCounts {
+            create_dir: 1,
+            copy: 2,
+            overwrite: 3,
+            delete_tree: 4,
+            skip: 5,
+            unknown_kind: 6,
+            irreversible: 99,
+            bytes: 12345,
+            unmeasured_steps: 2,
+        };
+        assert_eq!(plan_steps_total(&counts), 21);
+        assert_eq!(plan_steps_total(&methods::SyncCounts::default()), 0);
+    }
+
+    /// El deadline y el estado terminal se cuentan aparte en el payload: `None`
+    /// es "seguía viva cuando dejamos de mirar", no "acabó".
+    #[test]
+    fn el_estado_viaja_con_nombre_y_el_fallo_con_su_causa() {
+        assert_eq!(state_label(None), "running");
+        assert_eq!(
+            state_label(Some(&norte_proto::TaskState::Completed)),
+            "completed"
+        );
+        assert_eq!(
+            state_label(Some(&norte_proto::TaskState::Cancelled)),
+            "cancelled"
+        );
+        let failed = norte_proto::TaskState::Failed {
+            error: norte_proto::Error::PermissionDenied,
+        };
+        assert_eq!(state_label(Some(&failed)), "failed");
+        assert!(state_error(Some(&failed)).is_string(), "el porqué viaja");
+        assert!(state_error(Some(&norte_proto::TaskState::Completed)).is_null());
+    }
+
+    /// `limit: 0` no es "cero filas a propósito": sin el rechazo saldría
+    /// `truncated: true` con la lista vacía, indistinguible de un árbol de
+    /// verdad truncado.
+    #[test]
+    fn el_limit_cero_es_error_y_el_ausente_es_el_default() {
+        assert!(stream_limit_arg(&json!({"limit": 0}), 500, 5000).is_err());
+        assert_eq!(
+            stream_limit_arg(&json!({}), 500, 5000).expect("ausente"),
+            500
+        );
+        assert_eq!(
+            stream_limit_arg(&json!({"limit": 9_000_000}), 500, 5000).expect("techo"),
+            5000,
+            "el techo duro manda sobre lo que pida el caller"
+        );
+    }
+
+    /// El default de tolerancia se LEE del wire, no se copia.
+    #[test]
+    fn la_tolerancia_por_defecto_es_la_del_wire() {
+        assert_eq!(
+            default_mtime_tolerance_ms(),
+            methods::SyncCompareOptions::default().mtime_tolerance_ms
+        );
+    }
+
+    /// El guard cancela al soltarse, y NO cancela si se desarmó (camino
+    /// normal: se vio el terminal).
+    #[test]
+    fn el_guard_cancela_al_abandonar_y_calla_si_se_desarma() {
+        let token = CancellationToken::new();
+        drop(CancelOnAbandon::new(
+            norte_core::backend::TaskCanceller::Embedded(token.clone()),
+        ));
+        assert!(token.is_cancelled(), "soltar el future cancela el walk");
+
+        let token = CancellationToken::new();
+        let mut guard =
+            CancelOnAbandon::new(norte_core::backend::TaskCanceller::Embedded(token.clone()));
+        guard.disarm();
+        drop(guard);
+        assert!(!token.is_cancelled(), "el camino normal no cancela nada");
+    }
+
+    /// MAJOR: el 17.º plan de una conexión llega como `Internal`, y "internal
+    /// error" es justo el texto que hace reintentar a un agente.
+    #[test]
+    fn el_error_de_plan_nombra_el_tope_en_vez_de_decir_internal() {
+        let texto = map_plan_err(norte_proto::Error::Internal { panic: false });
+        assert!(texto.contains("retained plans"), "{texto}");
+        assert!(texto.contains("#182"), "el issue del arreglo real: {texto}");
+        assert!(
+            !texto.contains("internal error"),
+            "ni siquiera nombrándolo: es LA cadena que hace reintentar: {texto}"
+        );
+        // Lo demás sigue saliendo con el texto accionable de siempre.
+        let denegado = map_plan_err(norte_proto::Error::PolicyDenied {
+            rule: "r".to_owned(),
+        });
+        assert!(denegado.contains("request_scope"), "{denegado}");
+    }
+
+    /// Las diez tools, cada una con su función, y ninguna se llama `sync_apply`.
+    #[test]
+    fn el_catalogo_de_tools_no_tiene_dos_convenciones() {
+        let Value::Array(defs) = tool_defs() else {
+            panic!("tool_defs devuelve un array")
+        };
+        let nombres: Vec<&str> = defs
+            .iter()
+            .map(|d| d["name"].as_str().expect("nombre"))
+            .collect();
+        assert_eq!(
+            nombres,
+            [
+                "list_dir",
+                "stat",
+                "read_file",
+                "copy",
+                "move",
+                "delete",
+                "task_status",
+                "request_scope",
+                "compare",
+                "sync_plan"
+            ]
+        );
+        // `path_desc` estaba copiado tres veces; ahora es una constante.
+        for def in &defs {
+            for prop in ["path", "from", "left", "right"] {
+                let d = &def["inputSchema"]["properties"][prop]["description"];
+                if let Some(text) = d.as_str() {
+                    assert_eq!(text, PATH_DESC, "{def}");
+                }
+            }
+        }
+    }
+
+    /// `compare` pregunta por los mismos nombres con los que contesta.
+    #[test]
+    fn compare_pregunta_en_left_y_right_como_contesta() {
+        let def = compare_tool_def();
+        assert_eq!(def["inputSchema"]["required"], json!(["left", "right"]));
     }
 }
