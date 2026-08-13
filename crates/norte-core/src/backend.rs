@@ -314,6 +314,32 @@ impl Backend {
         }
     }
 
+    /// Abre ya el journal (si hace falta) y dice si ESTA sesión queda
+    /// registrada — la pregunta que un frontend hace justo antes de mutar y
+    /// necesita CONTESTAR al humano antes del sí, no después (`norte ai
+    /// rename`, y desde esta tarea `norte sync`).
+    ///
+    /// - Embebido: delega en [`Engine::ensure_journal`], que toma el lock
+    ///   perezoso AQUÍ (no en la primera mutación) y lo conserva mientras el
+    ///   proceso viva.
+    /// - Remoto: siempre `true`. El daemon es DUEÑO del journal y se niega a
+    ///   arrancar sin uno (ver el arranque de `norte daemon run`); no hay un
+    ///   viaje de ida y vuelta que hacer para saberlo, y una conexión remota
+    ///   sin journal no es un estado que este proceso pueda observar ni
+    ///   remediar — solo el operador del daemon puede.
+    ///
+    /// A diferencia de [`Self::is_journalled`] (que en el brazo embebido dice
+    /// `false` a propósito, ver su rustdoc), esto SÍ abre el journal cuando
+    /// puede: es la llamada de quien está a punto de mutar, no la de quien
+    /// solo quiere atenuar una tecla.
+    pub async fn ensure_journal(&self) -> bool {
+        match self {
+            Self::Embedded(engine) => engine.ensure_journal().await,
+            #[cfg(unix)]
+            Self::Remote(_) => true,
+        }
+    }
+
     /// Listado de un directorio como STREAM perezoso (ADR 0017). Embebido =
     /// el stream del engine tal cual; remoto = primera página EAGER (paridad
     /// de errores: `NotFound`/`TypeMismatch` en el `Result`, no como primer

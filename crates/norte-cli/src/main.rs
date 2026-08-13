@@ -343,6 +343,17 @@ impl From<SyncModeArg> for norte_proto::methods::SyncMode {
     }
 }
 
+/// Las opciones de `norte sync` tal como llegan de `clap`, agrupadas para no
+/// pasarle a `sync_cmd` sus ocho campos sueltos (`clippy::too_many_arguments`
+/// corta en 7, y `source`/`dest`/`backend` ya ocupan los otros tres).
+struct SyncCliOpts<'a> {
+    mode: SyncModeArg,
+    dry_run: bool,
+    yes: bool,
+    criteria: &'a [String],
+    mtime_tolerance_ms: Option<u32>,
+}
+
 /// Subcomandos de IA (M4-A2).
 #[derive(Subcommand)]
 enum AiCmd {
@@ -741,9 +752,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             dest,
             mode,
             dry_run,
-            // `--yes` no tiene nada que gobernar todavía: la pregunta y el
-            // apply son la tarea 3, en su propio commit revisable.
-            yes: _yes,
+            yes,
             criteria,
             mtime_tolerance_ms,
         } => {
@@ -751,10 +760,13 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 &backend,
                 &source,
                 &dest,
-                mode,
-                dry_run,
-                &criteria,
-                mtime_tolerance_ms,
+                SyncCliOpts {
+                    mode,
+                    dry_run,
+                    yes,
+                    criteria: &criteria,
+                    mtime_tolerance_ms,
+                },
             )
             .await
         }
@@ -2387,21 +2399,17 @@ async fn compare_cmd(
 /// el registro del segundo no conoce ese hash. Así que la pregunta se hace con
 /// la conexión viva, y `--dry-run` es esta misma función sin la segunda mitad.
 ///
-/// # Esta mitad (tarea 2)
 /// Planifica, drena el stream por [`norte_frontend::sync::SyncState`] —el
 /// ÚNICO sitio donde los pasos se cuadran contra los contadores del cierre—,
-/// enseña el plan entero, y para. La tarea 3 añade, ANTES del `return` final,
-/// la resolución del journal, la pregunta y el apply: hasta que esa aterrice,
-/// ningún camino de esta función llama a `Backend::sync_apply`, así que ni
-/// `--dry-run` ni su ausencia pueden mutar nada.
+/// enseña el plan entero, y solo ENTONCES resuelve el journal, pregunta (salvo
+/// `--yes`) y aplica. `--dry-run` es esta misma función cortada justo antes de
+/// esa resolución: ningún camino que pase por `--dry-run` llega a
+/// `Backend::sync_apply`.
 async fn sync_cmd(
     backend: &Backend,
     source: &std::path::Path,
     dest: &std::path::Path,
-    mode: SyncModeArg,
-    dry_run: bool,
-    criteria: &[String],
-    mtime_tolerance_ms: Option<u32>,
+    opts: SyncCliOpts<'_>,
 ) -> anyhow::Result<ExitCode> {
     let source = vpath(source)?;
     let dest = vpath(dest)?;
@@ -2410,17 +2418,17 @@ async fn sync_cmd(
     // `FsCompareParams` en `compare_cmd`), así que no hay un 2000 mágico que
     // repetir aquí.
     let mut compare = norte_proto::methods::SyncCompareOptions {
-        criteria: parse_compare_criteria(criteria)?,
+        criteria: parse_compare_criteria(opts.criteria)?,
         ..norte_proto::methods::SyncCompareOptions::default()
     };
-    if let Some(ms) = mtime_tolerance_ms {
+    if let Some(ms) = opts.mtime_tolerance_ms {
         compare.mtime_tolerance_ms = ms;
     }
 
     let params = norte_proto::methods::SyncPlanParams {
         source,
         dest,
-        mode: mode.into(),
+        mode: opts.mode.into(),
         compare,
         // "ausente = del llamante no es" — se deja en su default (Copy), como
         // pide la tarea.
@@ -2503,18 +2511,130 @@ async fn sync_cmd(
         println!("{line}");
     }
 
-    if dry_run {
+    if opts.dry_run {
         return Ok(ExitCode::from(1));
     }
-    // La tarea 3 inserta AQUÍ, antes de este `return`: resolver el journal,
-    // preguntar, aplicar e informar. Hasta que aterrice, `norte sync` sin
-    // `--dry-run` para exactamente donde para `--dry-run` — imprimir el plan
-    // es TODO lo que hace esta función, y no hay ninguna llamada a
-    // `Backend::sync_apply` en este archivo. El aviso es a stderr para que un
-    // script que solo mire el código de salida (1, igual que `--dry-run`) no
-    // se quede creyendo que aplicó algo.
-    eprintln!("norte: {}", norte_i18n::t("cli-sync-not-yet-applied"));
-    Ok(ExitCode::from(1))
+    sync_apply_and_report(backend, &plan, opts.yes, mark).await
+}
+
+/// La segunda mitad de `norte sync` (tarea 3): resolver el journal, preguntar
+/// salvo `--yes`, aplicar y contar. Separada de [`sync_cmd`] por longitud, no
+/// por independencia — solo se llama desde ahí, con el plan que ACABA de
+/// imprimirse, así que no hay camino que la alcance sin que el plan entero ya
+/// estuviera en pantalla.
+async fn sync_apply_and_report(
+    backend: &Backend,
+    plan: &norte_frontend::sync::SyncPlan,
+    yes: bool,
+    mark: impl Fn(&norte_frontend::sync::RelDisplay) -> String,
+) -> anyhow::Result<ExitCode> {
+    // El journal se resuelve AQUÍ, antes de preguntar y antes de escribir, y no
+    // en la primera mutación: lo que se está decidiendo es si se reescribe un
+    // subárbol, y «esto no se va a poder deshacer» es parte de la pregunta, no
+    // una nota a pie después del sí. FUERA del `if !yes` porque con `--yes` no
+    // hay pregunta que completar pero sigue habiendo un log que alguien lee, y
+    // ese es justamente el camino donde nadie mira la pantalla.
+    if !backend.ensure_journal().await {
+        eprintln!("norte: {}", norte_i18n::t("cli-sync-unjournalled"));
+    }
+
+    if !yes {
+        use std::io::Write as _;
+        // La SEGUNDA pregunta, cuando el plan la merece (borra árboles del
+        // destino o el undo no lo devuelve todo): `SyncPlan::confirmation` ya
+        // la redacta a partir de `dest_trash` y los contadores — no hay una
+        // segunda frase sobre borrado que escribir aquí sin arriesgarse a que
+        // diga algo distinto de lo que el resumen ya dijo.
+        if let Some(confirmation) = plan.confirmation(norte_i18n::active()) {
+            eprintln!("{}", confirmation.text);
+        }
+        eprint!("{} ", norte_i18n::t("cli-sync-confirm"));
+        std::io::stderr().flush().ok();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).ok();
+        let ans = line.trim().to_ascii_lowercase();
+        if ans != "y" && ans != "s" {
+            println!("{}", norte_i18n::t("cli-sync-abort"));
+            return Ok(ExitCode::SUCCESS);
+        }
+    }
+
+    let apply_task = backend
+        .sync_apply(&plan.done().plan_hash)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context(norte_i18n::t("cli-sync-failed"))?;
+    let task_id = apply_task.id();
+    // Mismo cableado que `cp`/`mv`/`rm`/`undo` (`run_task`, no un `join` a
+    // pelo): Ctrl+C tiene que cancelar LIMPIO por el `CancellationToken` de la
+    // Task (regla dura 3), no matar el proceso a medio escribir un árbol — la
+    // trampa que la propia CLAUDE.md nombra («cancelar una copia debe dejar un
+    // destino limpio o un `.norte-partial`, nunca un parcial sin marcar»).
+    // `run_task` ya imprime y codifica `Cancelled`/`Failed` por su cuenta; un
+    // resultado que no sea `Completed` no tiene informe que enseñar (mismo
+    // criterio que `undo_cmd`), así que se devuelve tal cual.
+    let outcome = run_task(apply_task, true).await;
+    if outcome != ExitCode::SUCCESS {
+        return Ok(outcome);
+    }
+    let report = backend
+        .sync_report(task_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context(norte_i18n::t("cli-sync-failed"))?;
+
+    println!(
+        "{}",
+        norte_i18n::ta(
+            "cli-sync-done",
+            &[
+                ("done", &report.done.to_string()),
+                ("failed", &report.failed.to_string()),
+                ("skipped", &report.skipped.to_string()),
+            ],
+        )
+    );
+    for failure in &report.failures {
+        let rel = mark(&norte_frontend::sync::rel_display(&failure.rel, None));
+        let dest_suffix = failure.dest_rel.as_ref().map_or_else(String::new, |d| {
+            format!(" → {}", mark(&norte_frontend::sync::rel_display(d, None)))
+        });
+        eprintln!(
+            "{}",
+            norte_i18n::ta(
+                "cli-sync-failure",
+                &[
+                    ("rel", &format!("{rel}{dest_suffix}")),
+                    (
+                        "cause",
+                        &norte_i18n::t(sync_failure_cause_label(failure.cause)),
+                    ),
+                ],
+            )
+        );
+    }
+
+    Ok(ExitCode::from(if report.failed > 0 { 2 } else { 1 }))
+}
+
+/// Traduce una [`norte_proto::methods::SyncFailureCause`] — a diferencia de
+/// `{state:?}` en `cli-sync-incomplete`/`cli-unexpected-state` (reservado a
+/// estados EXCEPCIONALES), un fallo por archivo es rutinario y se enseña en
+/// el idioma del usuario, no como un identificador de Rust suelto en medio de
+/// una frase en español.
+fn sync_failure_cause_label(cause: norte_proto::methods::SyncFailureCause) -> &'static str {
+    use norte_proto::methods::SyncFailureCause as C;
+    match cause {
+        C::Conflict => "cli-sync-cause-conflict",
+        C::Denied => "cli-sync-cause-denied",
+        C::IllegalName => "cli-sync-cause-illegal-name",
+        C::Io => "cli-sync-cause-io",
+        // `Unknown` es la variante `#[serde(other)]` del decodificador ("el
+        // core jamás la emite") y el resto es el `#[non_exhaustive]` del
+        // enum: un wire futuro con una causa nueva cae aquí en vez de no
+        // compilar.
+        _ => "cli-sync-cause-unknown",
+    }
 }
 
 async fn ls(

@@ -74,3 +74,64 @@ fn sin_diferencias_sale_con_cero() {
         .assert()
         .code(0);
 }
+
+/// `--yes` aplica, y el destino queda con lo que el plan prometía.
+#[test]
+fn con_yes_aplica_y_el_destino_recibe_el_fichero() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("src");
+    let dst = dir.path().join("dst");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::create_dir_all(&dst).expect("mkdir dst");
+    std::fs::write(src.join("nuevo.txt"), b"contenido").expect("write");
+
+    Command::cargo_bin("norte")
+        .expect("bin")
+        .env("NORTE_CONFIG_DIR", config_dir_del_test())
+        .args([
+            "sync",
+            "--mode",
+            "update",
+            "--yes",
+            src.to_str().expect("utf8"),
+            dst.to_str().expect("utf8"),
+        ])
+        .assert()
+        .code(1);
+
+    assert_eq!(
+        std::fs::read(dst.join("nuevo.txt")).expect("el destino recibió el fichero"),
+        b"contenido"
+    );
+}
+
+/// Sin `--yes` y sin un «sí» en la entrada, NO se aplica: una respuesta vacía
+/// es una negativa, jamás un consentimiento por omisión.
+#[test]
+fn sin_confirmacion_no_aplica() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("src");
+    let dst = dir.path().join("dst");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::create_dir_all(&dst).expect("mkdir dst");
+    std::fs::write(src.join("nuevo.txt"), b"contenido").expect("write");
+
+    Command::cargo_bin("norte")
+        .expect("bin")
+        .env("NORTE_CONFIG_DIR", config_dir_del_test())
+        .args([
+            "sync",
+            "--mode",
+            "update",
+            src.to_str().expect("utf8"),
+            dst.to_str().expect("utf8"),
+        ])
+        .write_stdin("\n")
+        .assert()
+        .code(0);
+
+    assert!(
+        !dst.join("nuevo.txt").exists(),
+        "una respuesta vacía no aplica nada"
+    );
+}
