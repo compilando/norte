@@ -99,48 +99,30 @@ impl CompareView {
 
     /// Se cerró el canal de filas: fija el estado terminal a partir del
     /// snapshot de progreso que el hilo de sesión leyó al cerrarse
-    /// (`state`/`entries_done`). Devuelve `false` si el final es de otra
-    /// comparación.
+    /// (`state`/`entries_done`). Devuelve `false` —y no toca nada— si el
+    /// final es de OTRA comparación.
     ///
-    /// Espejo EXACTO de `norte_tui::drain_compare`, incluidos sus dos casos
-    /// que no son el normal:
+    /// El mapeo `TaskState` → estado del panel no está aquí: es
+    /// [`norte_frontend::compare::CompareView::finish_from_task`], el MISMO
+    /// que llama la TUI. Aquí había una transcripción a mano de sus cuatro
+    /// brazos (revisión de rama, MAJOR-1), y solo uno de los cuatro
+    /// —`Completed`— llegaba al crate compartido: los otros tres eran copias
+    /// que el día del #183 habría que arreglar dos veces, y una de ellas
+    /// decide si una comparación FALLIDA cuenta como completa.
     ///
-    /// * `Cancelled` y `Failed` salen del [`TaskState`], **jamás** de contar
-    ///   filas: una comparación cancelada no ha perdido nada, simplemente no
-    ///   siguió, y sus filas siguen siendo ciertas.
-    /// * un estado **no terminal** es la carrera benigna: el canal de filas
-    ///   se cerró antes de que el snapshot terminal se publicara (las dos
-    ///   bombas son tasks independientes), así que `entries_done` todavía no
-    ///   es definitivo. Se pinta `Done` con lo que hay, SIN pasar por
-    ///   [`norte_frontend::compare::CompareView::finish`] — acusar de pérdida
-    ///   a esa carrera es el mismo error del CLI y la tool MCP, al revés.
-    ///
-    /// Solo `Completed` pasa por la cuenta, que es la ÚNICA situación en la
-    /// que faltar filas significa que se perdieron.
+    /// La categoría del fallo queda en `run.error`, ya localizada: es lo que
+    /// el pie pinta de forma PERSISTENTE y lo que el llamante convierte en
+    /// banner.
     pub fn on_done(&mut self, task_id: TaskId, state: &TaskState, entries_done: u64) -> bool {
         if task_id != self.task_id {
             return false;
         }
-        match state {
-            TaskState::Cancelled => {
-                self.run.state = CompareState::Cancelled;
-                self.run.rows_expected = entries_done;
-            }
-            TaskState::Failed { error } => {
-                self.run.state = CompareState::Failed;
-                self.run.rows_expected = entries_done;
-                // La CATEGORÍA localizada, jamás el `Display` inglés: el
-                // campo se pinta de forma persistente (fase C1 tarea 3) y
-                // varias variantes interpolan datos del peer. El mismo
-                // vocabulario que usa la TUI (revisión MAJOR-3).
-                self.run.error = Some(norte_frontend::error::error_category(error));
-            }
-            TaskState::Completed => self.run.finish(entries_done, self.rows_received),
-            _ => {
-                self.run.state = CompareState::Done;
-                self.run.rows_expected = entries_done;
-            }
-        }
+        self.run.finish_from_task(
+            state,
+            entries_done,
+            self.rows_received,
+            norte_i18n::active(),
+        );
         true
     }
 }
@@ -187,33 +169,27 @@ pub struct Started {
     pub right_encoding: Option<norte_encoding::NameEncoding>,
 }
 
-/// Encamina un lote de filas y devuelve la Task a cancelar, si alguna.
+/// Encamina un lote de filas: entra si es del panel abierto, y se descarta
+/// si no.
 ///
-/// Tres casos, y solo uno cancela:
+/// **Nunca cancela nada**, y esa es UNA regla para los tres casos. La tenía
+/// invertida entre dos ramas vecinas frente al mismo riesgo (revisión de
+/// rama, MINOR-9): descartaba sin cancelar el lote de una comparación
+/// anterior —porque los `TaskId` son únicos por PROCESO del daemon, así que
+/// tras un reinicio ese id puede pertenecer ya a otra task, y cancelarla
+/// dejaría un `.norte-partial` que nadie pidió (revisión MINOR-3)— pero
+/// cancelaba ese mismo id cuando el panel estaba cerrado, donde el riesgo es
+/// idéntico.
 ///
-/// * es del panel abierto → entra;
-/// * **no hay panel** (se cerró bajo el bombeo) → nadie va a leer lo que esa
-///   Task siga produciendo, así que se cancela (regla 3, igual que la TUI
-///   suelta su run al encontrarse el panel cerrado);
-/// * hay panel pero el lote es de una comparación ANTERIOR → se DESCARTA sin
-///   cancelar nada. Esa Task ya recibió su `task.cancel` cuando [`open`] la
-///   superó, y un segundo cancel sobre un id que puede haber muerto ya no
-///   añade nada: los `TaskId` son únicos por PROCESO del daemon, así que si
-///   el daemon reinició mientras el lote viajaba, ese id puede pertenecer ya
-///   a otra task —una copia en curso— y cancelarla dejaría un
-///   `.norte-partial` que nadie pidió (revisión MINOR-3).
-#[must_use]
-pub fn route_rows(
-    slot: &mut Option<CompareView>,
-    task_id: TaskId,
-    rows: Vec<CompareRow>,
-) -> Option<TaskId> {
-    match slot.as_mut() {
-        Some(view) => {
-            view.on_rows(task_id, rows);
-            None
-        }
-        None => Some(task_id),
+/// Y no hace falta: cancelar es de quien SUELTA el panel, y los dos únicos
+/// caminos que lo sueltan ya lo hacen — [`open`] cancela a la que sustituye y
+/// `NorteGui::close_compare` cancela la suya, siempre. Así que un lote que
+/// llega sin panel viene de una Task que ya recibió su `task.cancel`, y
+/// repetirlo solo añade el riesgo del id reciclado. **Quien añada un tercer
+/// camino que ponga `compare` a `None` tiene que cancelar allí**, no aquí.
+pub fn route_rows(slot: &mut Option<CompareView>, task_id: TaskId, rows: Vec<CompareRow>) {
+    if let Some(view) = slot.as_mut() {
+        view.on_rows(task_id, rows);
     }
 }
 
@@ -653,38 +629,56 @@ pub fn render(
             )))
             .into_any_element()
     } else {
-        gpui::uniform_list(
-            gpui::SharedString::from("compare-rows"),
-            visible,
-            cx.processor(move |this, range: std::ops::Range<usize>, _window, _cx| {
-                let Some(view) = this.compare.as_ref() else {
-                    return Vec::new();
-                };
-                let run = &view.run;
-                let selected = run.pane.selected_id();
-                // `skip`/`take` sobre el iterador de visibles, igual que la
-                // TUI: solo se CONSTRUYE lo que se pinta.
-                run.pane
-                    .visible()
-                    .skip(range.start)
-                    .take(range.len())
-                    .map(|row| {
-                        render_row(
-                            row,
-                            selected == Some(row.id),
-                            run.left_encoding,
-                            run.right_encoding,
-                            &palette,
-                            row_h,
-                        )
-                    })
-                    .collect()
-            }),
-        )
-        .track_scroll(scroll)
-        .flex_1()
-        .font(mono)
-        .into_any_element()
+        // El `Role::List` va en un ENVOLTORIO y no en el propio
+        // `uniform_list`: su id ("compare-rows") alimenta el scroll y la
+        // medida virtualizados, y pisarlo con `.id()` para colgarle el rol
+        // sería arriesgar esa identidad — exactamente el motivo por el que el
+        // listado de panes lo hace así (`main.rs`, `pane-list-{i}`). Sin él,
+        // las filas quedaban de `Role::ListItem` HUÉRFANAS: un lector de
+        // pantalla no sabe de qué lista son ni cuántas hay (revisión de rama,
+        // MINOR-4), que es la misma superficie auditiva a la que la tarea 3
+        // le dedicó un MAJOR de encoding.
+        gpui::div()
+            .id("compare-rows-list")
+            .role(gpui::Role::List)
+            .aria_label(norte_i18n::t("gui-a11y-compare-rows"))
+            .flex_1()
+            .flex()
+            .flex_col()
+            .child(
+                gpui::uniform_list(
+                    gpui::SharedString::from("compare-rows"),
+                    visible,
+                    cx.processor(move |this, range: std::ops::Range<usize>, _window, _cx| {
+                        let Some(view) = this.compare.as_ref() else {
+                            return Vec::new();
+                        };
+                        let run = &view.run;
+                        let selected = run.pane.selected_id();
+                        // `skip`/`take` sobre el iterador de visibles, igual que la
+                        // TUI: solo se CONSTRUYE lo que se pinta.
+                        run.pane
+                            .visible()
+                            .skip(range.start)
+                            .take(range.len())
+                            .map(|row| {
+                                render_row(
+                                    row,
+                                    selected == Some(row.id),
+                                    run.left_encoding,
+                                    run.right_encoding,
+                                    &palette,
+                                    row_h,
+                                )
+                            })
+                            .collect()
+                    }),
+                )
+                .track_scroll(scroll)
+                .flex_1()
+                .font(mono),
+            )
+            .into_any_element()
     };
 
     // La fila de filtros: la tecla, si está encendido o apagado, el nombre y
@@ -1355,41 +1349,35 @@ mod tests {
         assert_eq!(slot.expect("el panel nuevo").task_id, TaskId::new(2));
     }
 
-    /// **Regla 3, la otra mitad.** Un lote que llega con el panel YA cerrado
-    /// cancela su Task: sin esto el bombeo seguiría vivo alimentando un panel
-    /// que no existe (paridad con `un_lote_con_el_panel_cerrado_cosecha_el_run`
-    /// de la TUI).
+    /// **Una sola regla frente al id reciclado** (revisión de rama, MINOR-9):
+    /// un lote que no tiene panel donde entrar se DESCARTA, y no manda
+    /// cancelar. Esa Task ya recibió su `task.cancel` de quien soltó el panel
+    /// —`close_compare` siempre cancela— y los `TaskId` son únicos por
+    /// proceso del daemon, así que un segundo cancel tras un reinicio podría
+    /// aterrizar sobre una copia en curso (revisión MINOR-3), que es el mismo
+    /// riesgo por el que la rama vecina ya no cancelaba.
     #[test]
-    fn un_lote_sin_panel_cancela_su_task() {
+    fn un_lote_sin_panel_se_descarta_sin_cancelar_nada() {
         let mut slot = None;
-        assert_eq!(
-            route_rows(&mut slot, TaskId::new(7), vec![fila(1)]),
-            Some(TaskId::new(7))
-        );
+        route_rows(&mut slot, TaskId::new(7), vec![fila(1)]);
+        assert!(slot.is_none(), "sigue sin haber panel");
     }
 
-    /// Un lote de la comparación ABIERTA entra y no cancela nada.
+    /// Un lote de la comparación ABIERTA entra.
     #[test]
     fn un_lote_del_panel_abierto_entra() {
         let mut slot = None;
         assert_eq!(open(&mut slot, arranque(1)), None);
-        assert_eq!(route_rows(&mut slot, TaskId::new(1), vec![fila(1)]), None);
+        route_rows(&mut slot, TaskId::new(1), vec![fila(1)]);
         assert_eq!(slot.expect("el panel").run.pane.len(), 1);
     }
 
-    /// Un lote de una comparación ANTERIOR se descarta SIN cancelar: esa Task
-    /// ya se canceló al superarla, y los `TaskId` son únicos por proceso del
-    /// daemon — si reinició mientras el lote viajaba, un segundo cancel
-    /// podría aterrizar sobre una copia en curso (revisión MINOR-3).
+    /// Un lote de una comparación ANTERIOR se descarta, por lo mismo.
     #[test]
     fn un_lote_viejo_se_descarta_sin_cancelar_nada() {
         let mut slot = None;
         assert_eq!(open(&mut slot, arranque(2)), None);
-        assert_eq!(
-            route_rows(&mut slot, TaskId::new(1), vec![fila(1)]),
-            None,
-            "ni entra ni manda cancelar a nadie"
-        );
+        route_rows(&mut slot, TaskId::new(1), vec![fila(1)]);
         assert!(slot.expect("el panel").run.pane.is_empty());
     }
 

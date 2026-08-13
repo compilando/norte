@@ -842,6 +842,10 @@ gui-viewer-image-unreadable = imagen ilegible
 gui-a11y-pane-left = panel izquierdo
 gui-a11y-pane-right = panel derecho
 gui-a11y-tasks = tareas en curso
+# Nombre de la lista de filas del panel de diferencias (#158). Va en un
+# ENVOLTORIO de la lista virtualizada, jamás en la lista misma: su id alimenta
+# el scroll y la medida.
+gui-a11y-compare-rows = filas de la comparación
 # Prefijo hablado de un nombre que el saneado tuvo que alterar (spec §6). Una
 # PALABRA y no el badge `⚠`: con la verbosidad de símbolos por defecto de NVDA
 # y de Orca un U+26A0 suelto no se pronuncia, y bajo una reinterpretación de

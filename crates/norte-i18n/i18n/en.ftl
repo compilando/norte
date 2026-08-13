@@ -828,6 +828,10 @@ gui-viewer-image-unreadable = unreadable image
 gui-a11y-pane-left = left pane
 gui-a11y-pane-right = right pane
 gui-a11y-tasks = tasks in progress
+# Name of the diff pane's row list (#158). It goes on a WRAPPER around the
+# virtualised list, never on the list itself: its id feeds scrolling and
+# measurement.
+gui-a11y-compare-rows = comparison rows
 # Spoken prefix for a name the sanitiser had to alter (spec §6). A WORD and
 # not the `⚠` badge: at the default symbol verbosity of NVDA and Orca a lone
 # U+26A0 is not spoken at all, and under an active name reinterpretation (#57)

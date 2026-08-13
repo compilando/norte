@@ -1995,6 +1995,15 @@ impl NorteGui {
                 // (revisión MAJOR-2).
                 if !generation_is_current(self.compare_gen, generation) {
                     let _ = self.cmds.send(SessionCmd::Cancel(task_id));
+                    // Y se retira el «comparando…» que ESTA petición dejó
+                    // puesto: nadie más lo va a quitar, porque la petición que
+                    // la superó limpia el SUYO, en el pane que ella lanzó — y
+                    // si el foco cambió entre las dos teclas, ese no es este
+                    // (revisión de rama, MINOR-3). Con las dos en el mismo
+                    // pane esto se adelanta un instante al aviso de la nueva,
+                    // que llega con su propio `CompareStarted`; un banner que
+                    // parpadea es mejor que uno que se queda para siempre.
+                    self.errors[left_pane & 1] = None;
                     return;
                 }
                 // El índice cruza un canal: acotarlo es más barato que el
@@ -2045,9 +2054,10 @@ impl NorteGui {
                 }
             }
             SessionEvent::CompareRows { task_id, rows } => {
-                if let Some(huerfana) = compare_view::route_rows(&mut self.compare, task_id, rows) {
-                    let _ = self.cmds.send(SessionCmd::Cancel(huerfana));
-                }
+                // No cancela nada: cancelar es de quien SUELTA el panel, y
+                // los dos caminos que lo sueltan ya lo hacen (ver
+                // `compare_view::route_rows`).
+                compare_view::route_rows(&mut self.compare, task_id, rows);
             }
             SessionEvent::CompareDone {
                 task_id,
@@ -2060,20 +2070,40 @@ impl NorteGui {
                 {
                     // El fallo se DICE una vez en el banner del pane que
                     // lanzó, además de quedarse pintado de forma persistente
-                    // en el panel (tarea 3).
+                    // en el panel (tarea 3). Por `banner_safe`, como todo lo
+                    // que entra en un banner y como hace la TUI con
+                    // `detail_for_bar` (revisión de rama, MINOR-6): la
+                    // categoría no lleva datos del peer, pero el enmascarado
+                    // y el tope son del BANNER, no de su contenido.
                     let pane = view.run.left_pane & 1;
                     self.errors[pane] = Some(norte_i18n::ta(
                         "compare-status-failed",
-                        &[("error", &error)],
+                        &[("error", banner_safe(&error).as_str())],
                     ));
                 }
             }
             // Rechazada antes de existir Task: la frase, y NINGÚN panel (uno
             // vacío que dice «fallo» es peor, porque además hay que cerrarlo).
-            SessionEvent::CompareFailed { left_pane, error } => {
-                self.errors[left_pane & 1] = Some(norte_i18n::ta(
+            SessionEvent::CompareFailed {
+                left_pane,
+                generation,
+                error,
+            } => {
+                // El MISMO guard que `CompareStarted`: la negativa de una
+                // petición ya superada describe algo que el lector reemplazó,
+                // así que solo retira su propio «comparando…» y se calla
+                // (revisión de rama, MINOR-3).
+                let pane = left_pane & 1;
+                if !generation_is_current(self.compare_gen, generation) {
+                    self.errors[pane] = None;
+                    return;
+                }
+                self.errors[pane] = Some(norte_i18n::ta(
                     "compare-status-failed",
-                    &[("error", &norte_frontend::error::error_category(&error))],
+                    &[(
+                        "error",
+                        banner_safe(&norte_frontend::error::error_category(&error)).as_str(),
+                    )],
                 ));
             }
         }
@@ -2377,7 +2407,9 @@ impl NorteGui {
     }
 
     /// `Enter` sobre una fila: navega al directorio REAL del lado ACTIVO y
-    /// cierra el panel (paridad con `on_compare_enter` de la TUI).
+    /// cierra el panel (paridad con `on_compare_enter` de la TUI —incluidos
+    /// el foco sembrado y el aviso sin destino, que se back-portaron allí en
+    /// la revisión de rama, MINOR-8 y MAJOR-4).
     ///
     /// Un huérfano que el walk emitió como UNA fila sin enumerar su subárbol
     /// se expande así, que es el motivo por el que la fila lleva el `Entry`
@@ -4435,10 +4467,10 @@ impl NorteGui {
             return;
         };
         if !apply_viewer_command(v, cmd) {
-            self.viewer = None;
-            self.viewer_image = None;
-            self.viewer_gen = self.viewer_gen.wrapping_add(1);
-            self.viewer_loading = false;
+            // Las mismas cuatro líneas por las que existe `close_viewer`
+            // (revisión de rama, MINOR-5): una sola definición de «soltar el
+            // visor», o el día que sea cinco líneas lo será en un sitio.
+            self.close_viewer();
         }
     }
 

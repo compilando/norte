@@ -550,7 +550,8 @@ pub enum SessionEvent {
     /// cerrarse antes de que el estado terminal se publique. Se manda tal
     /// cual —sin esperar al terminal, exactamente como hace la TUI— y quien
     /// decide qué significa es
-    /// [`crate::compare_view::CompareView::on_done`], en un solo sitio.
+    /// `norte_frontend::compare::CompareView::finish_from_task`, el mismo
+    /// que llama la TUI.
     CompareDone {
         /// La Task que termina.
         task_id: TaskId,
@@ -569,6 +570,15 @@ pub enum SessionEvent {
         /// la negativa se pinta donde se puso el «comparando…» que sustituye,
         /// aunque el foco se haya movido mientras tanto.
         left_pane: usize,
+        /// El eco de `SessionCmd::Compare::generation` (guard anti-stale),
+        /// igual que [`SessionEvent::CompareStarted`].
+        ///
+        /// Sin él, la negativa de una petición ya SUPERADA dejaba pintado
+        /// «la comparación falló» describiendo algo que el lector ya
+        /// reemplazó — y como cada `Compare` es su propio `tokio::spawn`, dos
+        /// teclas seguidas pueden contestar en orden inverso (revisión de
+        /// rama, MINOR-3).
+        generation: u64,
         /// El error tipado; la GUI lo convierte en frase.
         error: Error,
     },
@@ -1249,6 +1259,7 @@ async fn compare(
         Err(error) => {
             let _ = tx.send(SessionEvent::CompareFailed {
                 left_pane: who.left_pane,
+                generation: who.generation,
                 error,
             });
             return;
@@ -1279,8 +1290,11 @@ async fn compare(
 /// (un daemon caído, un provider colgado en una NFS muerta)—. Esperarlo aquí
 /// dejaría el panel diciendo «comparando…» para siempre. La TUI lee el
 /// snapshot igual, en `drain_compare`, y quien interpreta un estado no
-/// terminal es [`crate::compare_view::CompareView::on_done`]: una sola regla
-/// para los dos frontends.
+/// terminal es `norte_frontend::compare::CompareView::finish_from_task` — el
+/// crate COMPARTIDO, al que llegan tanto `on_done` como `drain_compare`: una
+/// sola regla para los dos frontends, de verdad desde la revisión de rama
+/// (MAJOR-1), que encontró tres de sus cuatro brazos transcritos a mano en
+/// cada superficie.
 ///
 /// El `task_id` que etiqueta los lotes es el de la Task, no el que trae cada
 /// `CompareRowsBatch`: este bombeo es dueño de SU stream, así que sabe de

@@ -99,13 +99,15 @@ pub const COMMANDS: &[&str] = &[
     "pane.select-drive-left",
     "pane.select-drive-right",
     // #158, spec 3 fase C1: el panel de diferencias. El chord viene del
-    // catálogo COMPARTIDO (`shift+f2` en orthodox/vim/cua/total-commander/
-    // krusader — ver `presets/keymap/orthodox.toml`), así que no hace falta
-    // supplemento para esos cinco. `far`/`norton` lo dejan deliberadamente
-    // SIN ligar (su propio comentario en `far.toml`/`norton.toml`: Far lo
-    // resuelve con un plugin, NC nunca tuvo comparador) — mismo hueco que
-    // `pane.rename` con esos dos presets, y se resuelve igual: `alt+d` en
-    // `gui_supplement` (ver su comentario) les da la única puerta.
+    // catálogo COMPARTIDO, que lo liga en CINCO presets pero no con el mismo
+    // chord: `shift+f2` en orthodox/vim/cua/total-commander y `alt+C` en
+    // krusader (ver `presets/keymap/krusader.toml`, que transcribe el suyo).
+    // A ninguno de los cinco le hace falta supplemento. `far`/`norton` lo
+    // dejan deliberadamente SIN ligar (su propio comentario en
+    // `far.toml`/`norton.toml`: Far lo resuelve con un plugin, NC nunca tuvo
+    // comparador) — mismo hueco que `pane.rename` con esos dos presets, y se
+    // resuelve igual: `alt+d` en `gui_supplement` (ver su comentario) les da
+    // la única puerta.
     "pane.compare-dirs",
 ];
 
@@ -357,13 +359,16 @@ prepend_keymap = [
     # Far resuelve comparar carpetas con un plugin externo y Norton
     # Commander nunca tuvo comparador, así que no hay chord nativo que
     # transcribir, igual que `pane.rename` arriba. `shift+f2` no sirve de
-    # fallback: Far ya lo usa para `pane.unpack`, y el supplemento pierde
-    # frente al preset (`build_effectives_layers`), así que ahí seguiría
-    # siendo `pane.unpack`. `alt+d` está libre en los dos `.toml` (ninguno
-    # liga ninguna combinación `alt+<letra>`, solo `alt+f1`/`alt+f2` en
-    # ambos y `alt+delete`/`alt+f7`/`alt+f12`/`alt+shift+insert` en far) y
-    # en este supplemento, así que es la única puerta para esos dos y un
-    # no-op en los otros cinco, que ya lo alcanzan por su propio chord.
+    # fallback, y por lo CONTRARIO de lo que este comentario decía (revisión
+    # de rama, MINOR-1): un `prepend_keymap` GANA al preset —`merge_ctx` lo
+    # emite ANTES y `Effective::build_for` se queda con el primero, la regla
+    # que este fichero ya enuncia bien 110 líneas más arriba—, así que
+    # ligarlo aquí le ROBARÍA a Far su `shift+f2` → `pane.unpack` en
+    # silencio. `alt+d` está libre en los dos `.toml` (ninguno liga ninguna
+    # combinación `alt+<letra>`, solo `alt+f1`/`alt+f2` en ambos y
+    # `alt+delete`/`alt+f7`/`alt+f12`/`alt+shift+insert` en far) y en este
+    # supplemento, así que es la única puerta para esos dos y un no-op en los
+    # otros cinco, que ya lo alcanzan por su propio chord.
     { on = ["alt+d"], run = "pane.compare-dirs" },
 ]
 
