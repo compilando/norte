@@ -2286,12 +2286,26 @@ impl NorteGui {
                 state,
                 report,
             } => {
-                let fallo = self.sync.as_mut().and_then(|view| {
-                    view.on_apply_ended(task_id, &state, *report)
-                        .map(|error| (view.source_pane, sync_view::failure_banner(&error)))
-                });
-                if let Some((pane, frase)) = fallo {
-                    self.errors[pane] = Some(frase);
+                // Sin panel, el informe NO se tira: es el único registro de lo
+                // que una tarea que ESCRIBE llegó a hacer, y de que existe un
+                // lote de journal que deshacerlo (revisión de seguridad
+                // MAJOR-1). Llega aquí cuando el panel se cerró bajo un apply
+                // en vuelo — hoy ya solo por un `Esc` doble, porque el primero
+                // pasó a ser `CancelTask`, pero un panel cerrado por cualquier
+                // otra vía dejaba al lector creyendo que no pasó nada sobre un
+                // destino reescrito a medias.
+                match self.sync.as_mut() {
+                    Some(view) => {
+                        let fallo = view
+                            .on_apply_ended(task_id, &state, *report)
+                            .map(|error| (view.source_pane, sync_view::failure_banner(&error)));
+                        if let Some((pane, frase)) = fallo {
+                            self.errors[pane] = Some(frase);
+                        }
+                    }
+                    None => {
+                        self.flash = Some((sync_view::orphan_report_banner(&report), true));
+                    }
                 }
             }
             // Rechazado antes de existir Task: el plan caducó en el spool, o
@@ -2715,6 +2729,7 @@ impl NorteGui {
             sync_view::is_running(&view.run),
             view.run.cancel_requested,
             view.run.confirming.is_some(),
+            view.run.is_submitted(),
         );
         match meaning {
             sync_view::Key::Ignore => {}

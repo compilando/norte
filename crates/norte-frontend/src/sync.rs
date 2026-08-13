@@ -47,9 +47,9 @@
 
 use norte_i18n::{Lang, t_in, ta_in};
 use norte_proto::methods::{
-    CompareRow, DestTrash, RelPath, SYNC_MAX_INCLUDE, StepReversal, SyncBlockerKind, SyncCounts,
-    SyncFailureCause, SyncMode, SyncPlanDone, SyncReason, SyncReportResult, SyncStep, SyncStepKind,
-    SyncStepsBatch,
+    CompareRow, DestTrash, PlanHash, RelPath, SYNC_MAX_INCLUDE, StepReversal, SyncBlockerKind,
+    SyncCounts, SyncFailureCause, SyncMode, SyncPlanDone, SyncReason, SyncReportResult, SyncStep,
+    SyncStepKind, SyncStepsBatch,
 };
 use norte_proto::{TaskId, TaskState, VPath};
 
@@ -1886,6 +1886,24 @@ pub struct SyncView {
     pub cancel_requested: bool,
     /// Categoría del error de una Task que FALLÓ, ya localizada y saneada.
     pub error: Option<String>,
+    /// El `sync.apply` ya SALIÓ y el daemon todavía no ha contestado.
+    ///
+    /// Privado a propósito: la única forma de echarlo es [`SyncView::submit`]
+    /// y la única de leerlo, [`SyncView::is_submitted`]. Lo que lo hace
+    /// necesario es que `Applying` NO llega con la tecla sino una vuelta
+    /// entera después, cuando el daemon devuelve la Task — en una GUI que lee
+    /// eventos entre teclas esa ventana admite un segundo `a`, y también un
+    /// `Esc` (revisión de seguridad MAJOR-1).
+    ///
+    /// Vivió en `norte-gui` hasta la revisión de rama de C2, y ahí estaba mal:
+    /// `can_approve`, [`hint_id`] y [`status_line`] viven en ESTE crate y no
+    /// podían verlo, así que el pie seguía ofreciendo `a aprobar` sobre un
+    /// plan que `approve` ya rechazaba — justo la pantalla rota que `hint_id`
+    /// existe para no pintar. Lo limpian las TRANSICIONES DE ESTADO
+    /// ([`SyncView::on_apply_started`], [`SyncView::on_apply_ended`]), nunca
+    /// la generación de la petición: atarlo a la generación lo dejaba echado
+    /// para siempre cuando un evento superado se descartaba.
+    submitted: bool,
 }
 
 impl SyncView {
@@ -1913,6 +1931,7 @@ impl SyncView {
             confirming: None,
             cancel_requested: false,
             error: None,
+            submitted: false,
         }
     }
 
@@ -1989,10 +2008,52 @@ impl SyncView {
     /// parar, y esta pantalla escribe en el disco de alguien.
     #[must_use]
     pub fn can_approve(&self) -> bool {
-        if matches!(self.run, SyncRunState::Cancelled | SyncRunState::Failed) {
+        if self.submitted || matches!(self.run, SyncRunState::Cancelled | SyncRunState::Failed) {
             return false;
         }
         self.state.can_approve()
+    }
+
+    /// ¿Hay un `sync.apply` en vuelo sin contestar?
+    ///
+    /// Lo pregunta quien pinta la línea de teclas y quien interpreta un `Esc`:
+    /// en esta ventana el daemon YA está escribiendo, así que un `Esc` tiene
+    /// que pedir cancelación y no cerrar el panel. Cerrarlo pierde el informe
+    /// —y con él el recuento, los fallos y el asa del undo— sobre un destino
+    /// que se reescribió a medias (revisión de seguridad MAJOR-1).
+    #[must_use]
+    pub fn is_submitted(&self) -> bool {
+        self.submitted
+    }
+
+    /// La petición se resolvió SIN Task: el daemon la rechazó, o llegó una
+    /// Task que este panel no adopta.
+    ///
+    /// Suelta el pestillo, porque si no la `a` queda muerta para siempre y el
+    /// pie sigue ofreciéndola. Se llama también en los caminos donde el evento
+    /// se descarta por generación superada: atar la suelta a la generación es
+    /// justo lo que dejaba el panel encallado cuando el segundo plan se
+    /// rechazaba y ningún panel nuevo sustituía al primero (revisión de rama
+    /// de C2, MINOR de las dos revisiones).
+    pub fn on_apply_abandoned(&mut self) {
+        self.submitted = false;
+    }
+
+    /// Echa el pestillo y devuelve el hash que se manda, o `None` si este
+    /// panel no se puede aprobar.
+    ///
+    /// Una sola puerta para los dos frontends: quien quiera aplicar pasa por
+    /// aquí, y lo que impide el segundo `sync.apply` es esta función, no que
+    /// el estado sea `Applying` —no lo es todavía—. La TUI lo espera en línea
+    /// y no puede leer una tecla en medio, así que para ella es un no-op; la
+    /// GUI sí puede, y es la que lo necesita.
+    pub fn submit(&mut self) -> Option<PlanHash> {
+        if !self.can_approve() {
+            return None;
+        }
+        let hash = self.state.plan()?.done().plan_hash.clone();
+        self.submitted = true;
+        Some(hash)
     }
 
     /// Se lanzó `sync.apply` y el daemon contestó con una Task: junta las
@@ -2006,11 +2067,32 @@ impl SyncView {
     /// mismas cuatro, y una reimplementación por su cuenta es justo la
     /// oportunidad de olvidar una — la trampa que este movimiento existe para
     /// no repetir (#161, revisión de C1).
-    pub fn on_apply_started(&mut self, task_id: TaskId) {
+    /// # Y puede NEGARSE
+    /// Devuelve `false` sin tocar nada si ya se pidió cancelar. El `Esc` que
+    /// pidió parar llegó ANTES que la Task, así que adoptarla aquí resucitaría
+    /// un run que el lector dio por cortado y, peor, borraría la petición de
+    /// cancelación con el `cancel_requested = false` de abajo — que existe
+    /// para que una cancelación vieja no manche el run nuevo, no para
+    /// descartar la que acaba de pedirse.
+    ///
+    /// El guard estaba en el envoltorio de la GUI y no aquí, así que la TUI se
+    /// quedaba con el agujero: hoy no lo alcanza porque espera el `sync.apply`
+    /// en línea, o sea por casualidad del flujo de control y no por diseño
+    /// (revisión de rama de C2, rust MAJOR-2). Quien lo niegue tiene que
+    /// cancelar la Task que le devolvieron: nadie más la conoce.
+    pub fn on_apply_started(&mut self, task_id: TaskId) -> bool {
+        if self.cancel_requested {
+            return false;
+        }
         self.state.on_apply_started(task_id);
         self.run = SyncRunState::Running;
         self.confirming = None;
         self.cancel_requested = false;
+        // El daemon contestó: la ventana que el pestillo cubre se acabó, y a
+        // partir de aquí quien impide el segundo `sync.apply` es el estado
+        // `Applying`.
+        self.submitted = false;
+        true
     }
 
     /// Terminó la Task de `sync.apply`, con lo que `sync.report` contestó:
@@ -2069,6 +2151,11 @@ impl SyncView {
             SyncRunState::from_task_state(state)
         };
         self.confirming = None;
+        // Terminó: el pestillo se suelta pase lo que pase, incluso si esto
+        // llega sin que `on_apply_started` haya pasado nunca (una Task que
+        // falla antes de adoptarse). Si no, el panel se queda sin poder
+        // aprobar y con el pie ofreciéndolo.
+        self.submitted = false;
         categoria
     }
 }
@@ -3217,6 +3304,24 @@ mod tests {
         );
     }
 
+    /// Un panel con el plan ya cerrado, sano y con un paso que escribe: el
+    /// estado de partida de todo lo que se aprueba.
+    fn vista_lista() -> SyncView {
+        let mut v = SyncView::new(
+            task(),
+            norte_proto::methods::SyncMode::Update,
+            origen(),
+            destino(),
+            None,
+            None,
+        );
+        v.state = SyncState::Ready(ready(
+            vec![step(1, SyncStepKind::Copy, DestTrash::Restorable)],
+            DestTrash::Restorable,
+        ));
+        v
+    }
+
     /// #161: el envoltorio del run vivía en `norte-tui`, así que la GUI
     /// habría tenido que reimplementarlo. C1 aprendió que mover MEDIA
     /// decisión es peor que no moverla: el comentario decía «una sola regla»
@@ -3256,10 +3361,81 @@ mod tests {
         v.state = SyncState::Ready(ready(steps, DestTrash::Restorable));
         assert!(v.can_approve(), "cerrado y sano: se puede");
 
-        v.on_apply_started(TaskId::new(9));
+        assert!(
+            v.on_apply_started(TaskId::new(9)),
+            "sin cancelación: adopta"
+        );
         assert!(
             !v.can_approve(),
             "ya aplicándose: la respuesta es NO, aunque el plan de dentro diga que sí"
+        );
+    }
+
+    /// Revisión de rama de C2 (rust MAJOR-1 + seguridad MAJOR-1): la ventana
+    /// entre la tecla y la respuesta del daemon. `Applying` NO llega con la
+    /// tecla, así que sin pestillo el panel se queda diciendo «aprobable»
+    /// mientras hay un `sync.apply` volando — y el pie ofrece una tecla que
+    /// `approve` ya rechaza. El pestillo vive AQUÍ, con `can_approve`,
+    /// `hint_id` y `status_line`, que es lo que la versión de `norte-gui` no
+    /// podía conseguir.
+    #[test]
+    fn el_pestillo_del_apply_en_vuelo_lo_ven_las_tres_funciones() {
+        let mut v = vista_lista();
+        assert!(v.can_approve(), "cerrado y sano");
+        assert_eq!(hint_id(&v), "sync-hint", "ofrece aprobar");
+
+        let hash = v.submit().expect("aprobable: da el hash");
+        assert!(v.is_submitted(), "el apply está en vuelo");
+        assert!(
+            !v.can_approve(),
+            "y en esa ventana NO se puede aprobar otra vez"
+        );
+        assert_ne!(
+            hint_id(&v),
+            "sync-hint",
+            "el pie no puede seguir ofreciendo una tecla que approve rechaza"
+        );
+        assert!(v.submit().is_none(), "el segundo submit no da hash");
+
+        // Y lo suelta la TRANSICIÓN, no la generación de la petición.
+        assert!(v.on_apply_started(TaskId::new(9)));
+        assert!(!v.is_submitted(), "adoptada la Task, el pestillo se suelta");
+        let _ = hash;
+    }
+
+    /// El pestillo se suelta también cuando la Task muere ANTES de adoptarse:
+    /// si no, el panel queda sin poder aprobar para siempre y con el pie
+    /// ofreciéndolo (revisión de rama, MINOR de las dos revisiones).
+    #[test]
+    fn una_task_que_muere_sin_adoptarse_suelta_el_pestillo() {
+        let mut v = vista_lista();
+        v.submit().expect("aprobable");
+        assert!(v.is_submitted());
+        v.on_apply_ended(
+            &TaskState::Failed {
+                error: norte_proto::Error::PermissionDenied,
+            },
+            Err(norte_proto::Error::PermissionDenied),
+        );
+        assert!(!v.is_submitted(), "terminó: el pestillo se suelta");
+    }
+
+    /// Revisión de rama de C2, rust MAJOR-2: el guard estaba en el envoltorio
+    /// de la GUI, así que la TUI se quedaba con el agujero. Un `Esc` que llega
+    /// antes que la Task pidió PARAR; adoptarla resucita el run y, de paso,
+    /// borra la petición de cancelación.
+    #[test]
+    fn una_task_que_llega_tras_el_esc_no_se_adopta() {
+        let mut v = vista_lista();
+        v.submit().expect("aprobable");
+        v.cancel_requested = true;
+        assert!(
+            !v.on_apply_started(TaskId::new(9)),
+            "ya se pidió cancelar: no se adopta"
+        );
+        assert!(
+            v.cancel_requested,
+            "y la petición de cancelación SIGUE puesta"
         );
     }
 

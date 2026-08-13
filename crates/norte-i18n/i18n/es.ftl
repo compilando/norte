@@ -825,6 +825,7 @@ sync-status-applied-not-undoable = { $done } pasos aplicados, { $failed } fallar
 # El mismo informe, cuando la ejecución NO terminó sola. Las cuentas a secas se
 # leen como una sincronización completa, y la palabra que dice lo contrario no
 # puede quedarse en el color.
+sync-orphan-report = la sincronización terminó sin panel abierto: { $done } pasos aplicados, { $failed } fallidos · desházla con el comando de deshacer
 sync-status-applied-cut-undoable = cancelado tras aplicar { $done } pasos ({ $failed } fallaron); el resto no se aplicó · deshazlo con el comando de deshacer
 sync-status-applied-cut-not-undoable = cancelado tras aplicar { $done } pasos ({ $failed } fallaron); el resto no se aplicó · no quedó nada en el journal, así que no hay nada que deshacer
 # Y cuando murió: el error Y las cuentas, porque un mirror que borró cuarenta

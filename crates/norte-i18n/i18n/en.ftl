@@ -811,6 +811,7 @@ sync-status-applied-not-undoable = { $done } steps applied, { $failed } failed �
 # The same report, when the run did NOT finish on its own. The counts alone
 # would read as a completed sync, and the word that says otherwise must not be
 # left to colour.
+sync-orphan-report = the synchronisation finished with no panel open: { $done } steps applied, { $failed } failed · undo it with the undo command
 sync-status-applied-cut-undoable = cancelled after applying { $done } steps ({ $failed } failed); the rest was not applied · undo it with the undo command
 sync-status-applied-cut-not-undoable = cancelled after applying { $done } steps ({ $failed } failed); the rest was not applied · nothing was journalled, so there is nothing to undo
 # And when it died: the error AND the counts, because a mirror that deleted

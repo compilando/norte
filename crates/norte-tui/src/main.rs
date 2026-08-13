@@ -8827,8 +8827,20 @@ async fn launch_sync_apply(
     match backend.sync_apply(plan_hash).await {
         Ok(task) => {
             let progress = task.progress();
-            if let Some(view) = app.sync.as_mut() {
-                view.on_apply_started(task.id());
+            // Y puede NEGARSE: `on_apply_started` refuse una Task que llega
+            // después de que ya se pidiera cancelar. La TUI no puede leer una
+            // tecla entre el `sync_apply` y esta línea —lo espera en línea—,
+            // así que hoy no se alcanza; el guard vive en `norte-frontend`
+            // porque estaba en el envoltorio de la GUI y esta rama lo dejaba
+            // dependiendo del flujo de control (revisión de rama, rust
+            // MAJOR-2). Quien la niega la cancela: nadie más la conoce.
+            let adoptada = app
+                .sync
+                .as_mut()
+                .is_some_and(|view| view.on_apply_started(task.id()));
+            if !adoptada {
+                task.cancel();
+                return;
             }
             // Sin tablero, a propósito: `TaskRef` no es clonable, y el
             // tablero se la QUEDARÍA — dejando al panel sin nada que cancelar
@@ -9359,21 +9371,17 @@ fn approve_sync(app: &mut App) {
 /// pero el hash sale de aquí hacia una escritura y no hay una segunda puerta
 /// después de ésta.
 fn submit_sync(app: &mut App) {
-    let Some(view) = app.sync.as_ref() else {
+    // Por `SyncView::submit`, la ÚNICA puerta: mira `can_approve` y echa el
+    // pestillo del apply en vuelo en el mismo gesto. Separarlos es lo que
+    // dejaba la ventana que la GUI sí alcanzaba (revisión de rama de C2).
+    let Some(view) = app.sync.as_mut() else {
         return;
     };
-    // Otra vez por `SyncView::can_approve`, y no es redundante: entre la
-    // primera respuesta y la segunda no llega nada que pueda cambiarla —el
-    // modelo no retrocede—, pero el hash sale de aquí hacia una escritura y
-    // no hay una segunda puerta después de ésta.
-    if !view.can_approve() {
+    let Some(hash) = view.submit() else {
         app.message = Some(t("msg-sync-cannot-approve"));
         return;
-    }
-    let Some(plan) = view.state.plan() else {
-        return;
     };
-    app.pending_sync_apply = Some(Box::new(plan.done().plan_hash.clone()));
+    app.pending_sync_apply = Some(Box::new(hash));
 }
 
 /// `Enter` sobre una fila del panel de diferencias: navega al directorio REAL

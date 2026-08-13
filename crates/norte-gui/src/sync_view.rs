@@ -101,28 +101,6 @@ pub struct SyncView {
     /// reinterpretaciones, la segunda pregunta y el desenlace. Es
     /// [`norte_frontend::sync::SyncView`], el mismo tipo que la TUI.
     pub run: SyncRun,
-    /// **Ya se mandó un `sync.apply` y todavía no ha contestado.**
-    ///
-    /// El modelo compartido no puede saberlo, y ahí está el problema que este
-    /// campo cierra: `SyncState` solo sale de `Ready` cuando llega el EVENTO
-    /// `SyncApplyStarted`, o sea una vuelta completa al daemon después de que
-    /// la tecla mandara el comando. Entre las dos cosas `can_approve()` sigue
-    /// diciendo que sí y el pie sigue ofreciendo `a`, así que dos pulsaciones
-    /// —o la repetición del teclado— mandan DOS `sync.apply` del mismo hash.
-    ///
-    /// El spool consume el derecho una sola vez, así que el segundo vuelve
-    /// como `PlanStale`… y esa negativa pintaba «el plan falló» encima de una
-    /// aplicación que seguía BORRANDO, apagaba [`is_running`] y convertía el
-    /// siguiente `Esc` en un cierre —que cancela— en vez de en una
-    /// cancelación explícita. Es literalmente el defecto que la TUI documenta
-    /// como ya pagado (`approve_sync`, `norte-tui/src/main.rs`), y la TUI se
-    /// libra solo porque lanza el `sync.apply` esperándolo dentro del run
-    /// loop, sin leer ninguna tecla en esa ventana. El salto de canal de esta
-    /// GUI la reabrió (revisiones rust BLOCKER-1 y de seguridad BLOCKER-1).
-    ///
-    /// Se pone al producir un [`Approve::Submit`] y se quita al resolverse la
-    /// petición ([`on_apply_start`] o [`on_apply_failed`]).
-    pub submitted: bool,
 }
 
 impl SyncView {
@@ -140,7 +118,6 @@ impl SyncView {
                 started.encodings.source,
                 started.encodings.dest,
             ),
-            submitted: false,
         }
     }
 
@@ -244,11 +221,12 @@ impl SyncView {
     /// panel que ya no existe. Y se reasigna solo si el modelo ACEPTÓ de
     /// verdad: la última palabra sobre si esto se está aplicando la tiene él.
     pub fn on_apply_started(&mut self, task_id: TaskId) -> bool {
-        if self.run.cancel_requested || !self.run.can_approve() {
+        // El guard (`cancel_requested`) y el pestillo viven en
+        // `norte_frontend::sync::SyncView` desde la revisión de rama de C2:
+        // estaban aquí, y por eso la TUI se quedaba sin ellos.
+        if !self.run.on_apply_started(task_id) {
             return false;
         }
-        self.run.on_apply_started(task_id);
-        self.submitted = false;
         // Se pregunta por el ESTADO resultante y no se presupone: el modelo
         // es quien tiene la última palabra sobre si esto se está aplicando.
         let adoptada = matches!(&self.run.state, SyncState::Applying(a) if a.task_id() == task_id);
@@ -511,6 +489,32 @@ pub fn failure_banner(category: &str) -> String {
     )
 }
 
+/// Qué decir cuando el informe de un `sync.apply` llega y YA NO HAY PANEL.
+///
+/// Existe porque tirarlo era el desenlace: la tarea escribió, abrió un lote de
+/// journal y el lector se quedaba sin el recuento, sin los fallos y sin saber
+/// que hay algo que deshacer (revisión de seguridad MAJOR-1). Un banner corto
+/// es poco, pero es la diferencia entre «no pasó nada» y «pasó esto».
+///
+/// El desenlace de la Task no entra: con informe, lo que importa es cuánto se
+/// escribió, y eso lo dicen sus dos cuentas tanto si la Task terminó como si
+/// la cortaron.
+#[must_use]
+pub fn orphan_report_banner(
+    report: &Result<norte_proto::methods::SyncReportResult, norte_proto::Error>,
+) -> String {
+    match report {
+        Ok(r) => norte_i18n::ta(
+            "sync-orphan-report",
+            &[
+                ("done", &r.done.to_string()),
+                ("failed", &r.failed.to_string()),
+            ],
+        ),
+        Err(e) => failure_banner(&norte_frontend::error::error_category(e)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Aprobar y aplicar (la mitad DESTRUCTIVA, tarea 4)
 // ---------------------------------------------------------------------------
@@ -548,6 +552,11 @@ pub fn on_apply_start(
     task_id: TaskId,
 ) -> ApplyStart {
     if !crate::generation_is_current(current_gen, generation) {
+        // La petición se resolvió aunque este evento se descarte: el panel que
+        // sigue en pantalla no puede quedarse con el pestillo echado.
+        if let Some(view) = slot.as_mut() {
+            view.run.on_apply_abandoned();
+        }
         return ApplyStart::Orphan(task_id);
     }
     match slot.as_mut() {
@@ -557,7 +566,7 @@ pub fn on_apply_start(
             } else {
                 // La petición se resolvió aunque el panel no la adopte: el
                 // pestillo se suelta para no dejar la `a` muerta para siempre.
-                view.submitted = false;
+                view.run.on_apply_abandoned();
                 ApplyStart::Orphan(task_id)
             }
         }
@@ -588,7 +597,7 @@ pub fn on_apply_start(
 /// negativa marcaba `Failed` un panel que estaba BORRANDO, apagaba
 /// [`is_running`] y convertía el siguiente `Esc` en un cierre —que cancela la
 /// aplicación viva— mientras la pantalla decía que ya había fallado. El
-/// pestillo [`SyncView::submitted`] impide que se llegue a mandar el segundo;
+/// pestillo `norte_frontend::sync::SyncView::submit` impide que se llegue a mandar el segundo;
 /// esto lo impide igual si llegara por otro camino, porque las dos mitades
 /// pueden aterrizar en cualquier orden.
 pub fn on_apply_failed(
@@ -598,6 +607,11 @@ pub fn on_apply_failed(
     error: &norte_proto::Error,
 ) -> Option<(usize, String)> {
     if !crate::generation_is_current(current_gen, generation) {
+        // Mismo motivo que en `on_apply_start`: el descarte es del EVENTO, no
+        // del hecho de que la petición ya se resolvió.
+        if let Some(view) = slot.as_mut() {
+            view.run.on_apply_abandoned();
+        }
         return None;
     }
     let view = slot.as_mut()?;
@@ -606,7 +620,7 @@ pub fn on_apply_failed(
         return None;
     }
     // La petición se resolvió: el pestillo se suelta.
-    view.submitted = false;
+    view.run.on_apply_abandoned();
     let categoria = norte_frontend::error::error_category(error);
     view.run.run = SyncRunState::Failed;
     view.run.error = Some(categoria.clone());
@@ -663,7 +677,7 @@ pub enum Approve {
 ///    sobre el borrado: una cabecera que diga «algo de esto se puede deshacer»
 ///    sobre una confirmación que diga «nada» enseña a saltarse las dos.
 pub fn approve(view: &mut SyncView) -> Approve {
-    if view.submitted || !view.run.can_approve() {
+    if !view.run.can_approve() {
         return Approve::Refused(norte_i18n::t("msg-sync-cannot-approve"));
     }
     // `can_approve()` ya implica `Ready` con plan, así que este `else` no
@@ -673,16 +687,17 @@ pub fn approve(view: &mut SyncView) -> Approve {
         return Approve::Refused(norte_i18n::t("msg-sync-cannot-approve"));
     };
     let pregunta = plan.confirmation(norte_i18n::active());
-    let hash = plan.done().plan_hash.clone();
     match pregunta {
         Some(c) => {
             view.run.confirming = Some(c);
             Approve::Asked
         }
-        None => {
-            view.submitted = true;
-            Approve::Submit(Box::new(hash))
-        }
+        // Por `submit`, que mira y echa el pestillo en un solo gesto y vive
+        // con `can_approve`, `hint_id` y `status_line` (revisión de rama).
+        None => match view.run.submit() {
+            Some(hash) => Approve::Submit(Box::new(hash)),
+            None => Approve::Refused(norte_i18n::t("msg-sync-cannot-approve")),
+        },
     }
 }
 
@@ -694,7 +709,7 @@ pub fn approve(view: &mut SyncView) -> Approve {
 /// medio (esta GUI recibe eventos entre teclas), y el hash sale de aquí hacia
 /// una escritura sin ninguna puerta después.
 ///
-/// Y por [`SyncView::submitted`] antes que por nada: lo que hace imposible
+/// Y por el pestillo de `norte_frontend::sync::SyncView` antes que por nada: lo que hace imposible
 /// aplicar dos veces NO es que el estado sea `Applying` —no lo es hasta que el
 /// daemon contesta, una vuelta entera después de que la tecla mandara el
 /// comando—, sino ese pestillo. La versión anterior de este comentario
@@ -702,15 +717,10 @@ pub fn approve(view: &mut SyncView) -> Approve {
 /// esperándolo, sin leer teclas) y era falso aquí.
 pub fn confirm_yes(view: &mut SyncView) -> Approve {
     view.run.confirming = None;
-    if view.submitted || !view.run.can_approve() {
-        return Approve::Refused(norte_i18n::t("msg-sync-cannot-approve"));
+    match view.run.submit() {
+        Some(hash) => Approve::Submit(Box::new(hash)),
+        None => Approve::Refused(norte_i18n::t("msg-sync-cannot-approve")),
     }
-    let Some(plan) = view.run.state.plan() else {
-        return Approve::Refused(norte_i18n::t("msg-sync-cannot-approve"));
-    };
-    let hash = plan.done().plan_hash.clone();
-    view.submitted = true;
-    Approve::Submit(Box::new(hash))
 }
 
 /// Cualquier otra tecla con la segunda pregunta puesta: la retira y no manda
@@ -1216,12 +1226,20 @@ pub fn key_meaning(
     running: bool,
     cancel_requested: bool,
     confirming: bool,
+    submitted: bool,
 ) -> Key {
     // El `Esc` va primero, y sigue valiendo con la pregunta puesta: salir no
     // es una respuesta a «¿seguro?». Solo sin modificadores, como el resto de
     // este panel.
     if key == "escape" && !modified {
-        return if running && !cancel_requested {
+        // `submitted` cuenta como corriendo, y ésa es la mitad que faltaba
+        // (revisión de seguridad MAJOR-1). Entre la tecla y la respuesta del
+        // daemon, `run` todavía es `Done`, así que este `Esc` resolvía a
+        // `Close` — y para entonces `sync.apply` YA arrancó el ejecutor: el
+        // destino se reescribía a medias, se abría un lote de journal, y el
+        // informe llegaba a un hueco vacío y se tiraba. El lector cerró
+        // creyendo que no había empezado nada.
+        return if (running || submitted) && !cancel_requested {
             Key::CancelTask
         } else {
             Key::Close
@@ -2379,16 +2397,19 @@ mod tests {
     #[test]
     fn el_primer_esc_cancela_y_el_segundo_cierra_pase_lo_que_pase() {
         assert_eq!(
-            key_meaning("escape", false, true, false, false),
+            key_meaning("escape", false, true, false, false, false),
             Key::CancelTask
         );
-        assert_eq!(key_meaning("escape", false, true, true, false), Key::Close);
         assert_eq!(
-            key_meaning("escape", false, false, false, false),
+            key_meaning("escape", false, true, true, false, false),
             Key::Close
         );
         assert_eq!(
-            key_meaning("escape", false, false, false, true),
+            key_meaning("escape", false, false, false, false, false),
+            Key::Close
+        );
+        assert_eq!(
+            key_meaning("escape", false, false, false, true, false),
             Key::Close,
             "con la pregunta puesta también se sale"
         );
@@ -2401,17 +2422,20 @@ mod tests {
     /// sabe a qué contesta.
     #[test]
     fn un_modificador_no_significa_nada_salvo_con_la_pregunta_puesta() {
-        assert_eq!(key_meaning("down", true, true, false, false), Key::Ignore);
         assert_eq!(
-            key_meaning("down", false, false, false, false),
+            key_meaning("down", true, true, false, false, false),
+            Key::Ignore
+        );
+        assert_eq!(
+            key_meaning("down", false, false, false, false, false),
             Key::Move(1)
         );
         assert_eq!(
-            key_meaning("pageup", false, false, false, false),
+            key_meaning("pageup", false, false, false, false, false),
             Key::Move(-10)
         );
         assert_eq!(
-            key_meaning("r", true, false, false, true),
+            key_meaning("r", true, false, false, true, false),
             Key::ConfirmNo,
             "una tecla modificada RESUELVE la pregunta en vez de ignorarse"
         );
@@ -2422,25 +2446,31 @@ mod tests {
     /// inercia (mismo criterio que los diálogos TOFU).
     #[test]
     fn la_a_aprueba_la_y_confirma_y_enter_no() {
-        assert_eq!(key_meaning("a", false, false, false, false), Key::Approve);
         assert_eq!(
-            key_meaning("enter", false, false, false, false),
+            key_meaning("a", false, false, false, false, false),
+            Key::Approve
+        );
+        assert_eq!(
+            key_meaning("enter", false, false, false, false, false),
             Key::Ignore,
             "`Enter` no aprueba un borrado"
         );
-        assert_eq!(key_meaning("y", false, false, false, true), Key::ConfirmYes);
         assert_eq!(
-            key_meaning("enter", false, false, false, true),
+            key_meaning("y", false, false, false, true, false),
+            Key::ConfirmYes
+        );
+        assert_eq!(
+            key_meaning("enter", false, false, false, true, false),
             Key::ConfirmNo,
             "y tampoco lo confirma: cualquier otra tecla retira la pregunta"
         );
         assert_eq!(
-            key_meaning("y", true, false, false, true),
+            key_meaning("y", true, false, false, true, false),
             Key::ConfirmNo,
             "la `y` con modificador no es la respuesta"
         );
         assert_eq!(
-            key_meaning("a", false, false, false, true),
+            key_meaning("a", false, false, false, true, false),
             Key::ConfirmNo,
             "y con la pregunta puesta ni siquiera `a` significa aprobar"
         );
@@ -2602,10 +2632,19 @@ mod tests {
     fn una_segunda_a_antes_de_la_respuesta_no_manda_nada() {
         let mut v = vista_cerrada();
         assert!(matches!(approve(&mut v), Approve::Submit(_)));
-        assert!(v.submitted, "queda el pestillo");
+        assert!(v.run.is_submitted(), "queda el pestillo");
         assert!(
-            v.run.can_approve(),
+            matches!(v.run.state, norte_frontend::sync::SyncState::Ready(_)),
             "y el modelo SIGUE en Ready: el daemon no ha contestado"
+        );
+        // Antes de la revisión de rama de C2 este test asertaba aquí
+        // `can_approve()`, porque el pestillo vivía en `norte-gui` y el modelo
+        // compartido no podía verlo. Que ahora conteste que NO es el arreglo:
+        // `hint_id` y `status_line` viven en ese crate y pintaban «a aprobar»
+        // sobre un plan que `approve` ya rechazaba.
+        assert!(
+            !v.run.can_approve(),
+            "y con el pestillo echado la respuesta compartida ya es NO"
         );
         assert_eq!(
             approve(&mut v),
@@ -2625,6 +2664,40 @@ mod tests {
             confirm_yes(&mut v),
             Approve::Refused(norte_i18n::t("msg-sync-cannot-approve"))
         );
+    }
+
+    /// Revisión de seguridad MAJOR-1: el `Esc` entre la tecla y la respuesta
+    /// del daemon. En esa ventana `run` todavía es `Done` —`Applying` no llega
+    /// hasta que el daemon devuelve la Task—, así que `Esc` resolvía a `Close`:
+    /// el panel se cerraba, el informe llegaba a un hueco vacío y se tiraba, y
+    /// el lector se quedaba creyendo que no había empezado nada sobre un
+    /// destino que ya se estaba reescribiendo.
+    #[test]
+    fn el_esc_con_un_apply_en_vuelo_cancela_en_vez_de_cerrar() {
+        assert_eq!(
+            key_meaning("escape", false, false, false, false, true),
+            Key::CancelTask,
+            "hay un sync.apply volando: Esc PIDE PARAR, no cierra"
+        );
+        assert_eq!(
+            key_meaning("escape", false, false, true, false, true),
+            Key::Close,
+            "el segundo Esc cierra igual, como en el resto del panel"
+        );
+        assert_eq!(
+            key_meaning("escape", false, false, false, false, false),
+            Key::Close,
+            "sin nada en vuelo se cierra, que es lo que siempre hizo"
+        );
+    }
+
+    /// Y el informe de un apply que se quedó sin panel se DICE. Tirarlo era
+    /// perder el único registro de lo que una tarea que escribe llegó a hacer,
+    /// y de que hay un lote de journal que deshacerlo.
+    #[test]
+    fn un_informe_sin_panel_no_se_tira() {
+        let frase = orphan_report_banner(&Ok(informe(7, 2)));
+        assert!(frase.contains('7') && frase.contains('2'), "{frase}");
     }
 
     /// Y la otra mitad de la corrección: una negativa NO puede describir una
@@ -2664,7 +2737,7 @@ mod tests {
         let v = hueco.expect("abierto");
         assert_eq!(v.task_id, task(), "y el panel no se queda la que borra");
         assert!(
-            !v.submitted,
+            !v.run.is_submitted(),
             "el pestillo se suelta: la petición se resolvió"
         );
     }
@@ -2760,7 +2833,7 @@ mod tests {
         // Y el `Esc` no cierra a la primera: pide la cancelación y deja el
         // panel abierto, así que el camino corto no cierra nada por descuido.
         assert_eq!(
-            key_meaning("escape", false, true, false, false),
+            key_meaning("escape", false, true, false, false, false),
             Key::CancelTask
         );
     }
