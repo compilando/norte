@@ -33,9 +33,9 @@ the apply path gets a `security-reviewer` as well as a `rust-reviewer`.
 | --- | --- | --- |
 | 1 — the sync run state moves to `norte-frontend` | done | `3ef7102` |
 | 2 — the GUI plans a synchronisation | done | `aa79289` |
-| 3 — the GUI renders the plan | done | |
-| 4 — approve and apply | pending | |
-| 5 — the command, the key and the reference sheet | pending | |
+| 3 — the GUI renders the plan | done | `a61076e` |
+| 4 — approve and apply | done | `9fefd2c` |
+| 5 — the command, the key and the reference sheet | done | |
 | 6 — close the branch | pending | |
 
 ## What the implementer needs to know before task 1

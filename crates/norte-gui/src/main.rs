@@ -3201,20 +3201,17 @@ impl NorteGui {
             // tumbaba una GUI de debug; ahora arranca la comparación de
             // verdad por cualquiera de las tres puertas.
             "pane.compare-dirs" => self.start_compare(),
-            // #161, spec 3 fase C2. El id todavía NO está en `keymap::COMMANDS`
-            // —eso es la tarea 5, la que se gana el derecho a quitarle el
-            // `NotHere` que la fase A le fijó—, así que ni el teclado ni la
-            // paleta llegan aquí. **La AYUDA sí** (revisión rust MAJOR-1):
-            // sus filas se resuelven contra `norte_frontend::availability`, la
-            // tabla COMPARTIDA, que da este comando por disponible en cuanto
-            // hay journal — y en esta GUI lo hay. Es exactamente lo que le
-            // pasaba a `pane.compare-dirs` antes de la tarea 4 de C1, con la
-            // diferencia de que allí ese Enter caía en el brazo `other` y su
-            // `debug_assert` tumbaba una GUI de debug.
+            // #161, spec 3 fase C2. Desde la tarea 5 el id está en
+            // `keymap::COMMANDS`, así que las TRES puertas llegan aquí:
+            // teclado (`ctrl+y` en los siete presets — cinco por su propio
+            // chord, `far`/`norton` por `gui_supplement`), paleta y ayuda.
+            // Hasta esa tarea solo llegaba la ayuda, porque sus filas se
+            // resuelven contra `norte_frontend::availability` —la tabla
+            // COMPARTIDA, que da el comando por disponible en cuanto hay
+            // journal, y en esta GUI remota lo hay— y no contra `COMMANDS`:
+            // el mismo desfase que tuvo `pane.compare-dirs` antes de la
+            // tarea 4 de C1.
             //
-            // O sea: esto se puede lanzar HOY, se pinta (tarea 3) y desde la
-            // tarea 4 se puede APLICAR con `a` — la mitad destructiva ya está
-            // cableada; lo que falta es la tecla que abre el panel.
             // `Update`, no `Mirror`: el modo que BORRA se elige, no se hereda
             // de una tecla.
             "pane.sync-dirs" => self.start_sync(norte_proto::methods::SyncMode::Update),
