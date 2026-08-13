@@ -296,6 +296,51 @@ enum Cmd {
         #[arg(long)]
         mtime_tolerance_ms: Option<u32>,
     },
+    /// Sincroniza un árbol sobre otro en UN sentido. Planifica, enseña el
+    /// plan, y pregunta antes de aplicar
+    Sync {
+        /// De dónde se lee
+        source: PathBuf,
+        /// Dónde se escribe
+        dest: PathBuf,
+        /// `update` copia lo que falta o cambió; `mirror` además BORRA lo que
+        /// sobra en el destino
+        #[arg(long, value_enum)]
+        mode: SyncModeArg,
+        /// Enseña el plan y para: no aplica nada
+        #[arg(long)]
+        dry_run: bool,
+        /// Aplica sin preguntar (el plan se imprime igual)
+        #[arg(long)]
+        yes: bool,
+        /// Criterios de comparación
+        #[arg(long, value_delimiter = ',')]
+        criteria: Vec<String>,
+        /// Tolerancia de mtime en milisegundos
+        #[arg(long)]
+        mtime_tolerance_ms: Option<u32>,
+    },
+}
+
+/// La ortografía de un modo de sincronización que ve el CLI. Distinta del
+/// `SyncMode` del wire a propósito (regla dura 8 implícita en la spec del
+/// plan): la del CLI es presentación, la del wire es un contrato, y no hace
+/// falta que ambas cambien juntas.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum SyncModeArg {
+    /// Copia lo que falta o cambió; nunca borra.
+    Update,
+    /// `Update` más borrar del destino lo que el origen no tiene.
+    Mirror,
+}
+
+impl From<SyncModeArg> for norte_proto::methods::SyncMode {
+    fn from(mode: SyncModeArg) -> Self {
+        match mode {
+            SyncModeArg::Update => Self::Update,
+            SyncModeArg::Mirror => Self::Mirror,
+        }
+    }
 }
 
 /// Subcomandos de IA (M4-A2).
@@ -650,6 +695,18 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // acto. No-op sobre el engine de `--daemon` (ese no puede quedarse sin
     // journal: el dueño es el daemon, al otro lado del socket).
     engine.set_journal_warning_sink(Arc::new(AvisoDeJournalPorStderr));
+    // `sync.plan`/`sync.apply` retienen el plan aprobado en un spool en disco
+    // (ADR 0049); sin instalarlo el brazo embebido contesta `Unsupported` —
+    // ver la rustdoc de `Backend::is_journalled`. Solo se instala para `norte
+    // sync`, con el mismo criterio LAZY que `[ai]` arriba: los demás
+    // subcomandos no lo necesitan, y ningún barrido hace falta aquí (a
+    // diferencia del arranque del daemon) porque el TTL de cada plan se
+    // reapa solo, en `Spool::open`/`Spool::create`.
+    if !cli.daemon && matches!(cli.cmd, Cmd::Sync { .. }) {
+        engine.set_spool(norte_core::sync::Spool::new(
+            norte_core::connect::config_dir(),
+        ));
+    }
     let mut backend = make_backend(engine, cli.daemon, cli.socket).await?;
     // #44: toma el canal de avisos de degradación ANTES de correr el comando
     // (en embebido esto INSTALA el observer, que dispara síncrono dentro del
@@ -675,6 +732,28 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 json,
                 &criteria,
                 max_depth,
+                mtime_tolerance_ms,
+            )
+            .await
+        }
+        Cmd::Sync {
+            source,
+            dest,
+            mode,
+            dry_run,
+            // `--yes` no tiene nada que gobernar todavía: la pregunta y el
+            // apply son la tarea 3, en su propio commit revisable.
+            yes: _yes,
+            criteria,
+            mtime_tolerance_ms,
+        } => {
+            sync_cmd(
+                &backend,
+                &source,
+                &dest,
+                mode,
+                dry_run,
+                &criteria,
                 mtime_tolerance_ms,
             )
             .await
@@ -2297,6 +2376,145 @@ async fn compare_cmd(
             Ok(ExitCode::from(2))
         }
     }
+}
+
+/// `norte sync`: planifica, enseña, pregunta, aplica — TODO en una conexión.
+///
+/// # Por qué una sola invocación
+/// Un plan aprobado se retiene POR CONEXIÓN, en un registro en memoria que
+/// nace vacío, y `sync.apply` no lleva nada más que el `plan_hash`. Un CLI que
+/// planease en un proceso y aplicara en otro no podría funcionar ni queriendo:
+/// el registro del segundo no conoce ese hash. Así que la pregunta se hace con
+/// la conexión viva, y `--dry-run` es esta misma función sin la segunda mitad.
+///
+/// # Esta mitad (tarea 2)
+/// Planifica, drena el stream por [`norte_frontend::sync::SyncState`] —el
+/// ÚNICO sitio donde los pasos se cuadran contra los contadores del cierre—,
+/// enseña el plan entero, y para. La tarea 3 añade, ANTES del `return` final,
+/// la resolución del journal, la pregunta y el apply: hasta que esa aterrice,
+/// ningún camino de esta función llama a `Backend::sync_apply`, así que ni
+/// `--dry-run` ni su ausencia pueden mutar nada.
+async fn sync_cmd(
+    backend: &Backend,
+    source: &std::path::Path,
+    dest: &std::path::Path,
+    mode: SyncModeArg,
+    dry_run: bool,
+    criteria: &[String],
+    mtime_tolerance_ms: Option<u32>,
+) -> anyhow::Result<ExitCode> {
+    let source = vpath(source)?;
+    let dest = vpath(dest)?;
+
+    // `SyncCompareOptions` sí deriva un `Default` de verdad (a diferencia de
+    // `FsCompareParams` en `compare_cmd`), así que no hay un 2000 mágico que
+    // repetir aquí.
+    let mut compare = norte_proto::methods::SyncCompareOptions {
+        criteria: parse_compare_criteria(criteria)?,
+        ..norte_proto::methods::SyncCompareOptions::default()
+    };
+    if let Some(ms) = mtime_tolerance_ms {
+        compare.mtime_tolerance_ms = ms;
+    }
+
+    let params = norte_proto::methods::SyncPlanParams {
+        source,
+        dest,
+        mode: mode.into(),
+        compare,
+        // "ausente = del llamante no es" — se deja en su default (Copy), como
+        // pide la tarea.
+        on_unknown: norte_proto::methods::OnUnknown::default(),
+        include: None,
+    };
+
+    let (task, mut rx) = backend
+        .sync_plan(params)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context(norte_i18n::t("cli-sync-failed"))?;
+
+    // El ÚNICO sitio donde los pasos se cuadran contra `SyncPlanDone::counts`
+    // es `SyncState`; montar un `SyncPlan` a mano sería una segunda ocasión de
+    // olvidar esa comprobación (la razón de ser de esta tarea).
+    let mut state = norte_frontend::sync::SyncState::default();
+    while let Some(event) = rx.recv().await {
+        match event {
+            norte_core::sync::SyncPlanEvent::Steps(batch) => {
+                state.on_steps(batch);
+            }
+            norte_core::sync::SyncPlanEvent::Done(done) => {
+                state.on_plan_done(done);
+            }
+        }
+    }
+
+    // El canal se cierra cuando la Task termina, así que este `join` no
+    // espera de más. Se exige AMBAS cosas: que el estado haya cerrado
+    // (`sync.plan_done` llegó) Y que la Task terminara `Completed`. Un canal
+    // que se cierra con el diálogo aún en `Planning` — la Task murió,
+    // canceló, o el buffer de este proceso se llenó y el enrutado cerró el
+    // feed (ver la rustdoc de `Backend::sync_plan`) — es exactamente el "no
+    // se pudo saber" que no puede confundirse con "sin diferencias": sin
+    // `sync.plan_done` no hay `plan_hash` y no hay nada que aprobar.
+    let task_state = task.join().await;
+    let plan = match state {
+        norte_frontend::sync::SyncState::Ready(plan) if task_state == TaskState::Completed => plan,
+        _ => {
+            eprintln!(
+                "norte: {}",
+                norte_i18n::ta(
+                    "cli-sync-incomplete",
+                    &[("state", &format!("{task_state:?}"))],
+                )
+            );
+            return Ok(ExitCode::from(2));
+        }
+    };
+
+    if plan.steps().is_empty() {
+        println!("{}", norte_i18n::t("cli-sync-empty"));
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    println!("{}", norte_i18n::t("cli-sync-plan"));
+    // Nombres que este proceso no controla del todo (el destino puede
+    // deletrear una entrada distinto del origen, #152): MARCAR el
+    // enmascarado, igual que `ai_cmd` y `compare_cmd`. `render_step` ya
+    // enmascaró `RelDisplay::text` (`display_name`, regla 1); esto solo añade
+    // el `!` sobre el `hostile` que esa llamada ya calculó — no un segundo
+    // enmascarado por separado.
+    let mark = |d: &norte_frontend::sync::RelDisplay| {
+        format!("{}{}", if d.hostile { "!" } else { "" }, d.text)
+    };
+    for step in plan.steps() {
+        let cells = norte_frontend::sync::render_step(step, plan.dest_trash(), None);
+        let rel = mark(&cells.rel);
+        let dest_suffix = cells
+            .dest_rel
+            .as_ref()
+            .map_or_else(String::new, |d| format!(" → {}", mark(d)));
+        println!(
+            "{}{} {rel}{dest_suffix}",
+            cells.glyphs.kind, cells.glyphs.undo
+        );
+    }
+    for line in plan.summary_lines(norte_i18n::active()) {
+        println!("{line}");
+    }
+
+    if dry_run {
+        return Ok(ExitCode::from(1));
+    }
+    // La tarea 3 inserta AQUÍ, antes de este `return`: resolver el journal,
+    // preguntar, aplicar e informar. Hasta que aterrice, `norte sync` sin
+    // `--dry-run` para exactamente donde para `--dry-run` — imprimir el plan
+    // es TODO lo que hace esta función, y no hay ninguna llamada a
+    // `Backend::sync_apply` en este archivo. El aviso es a stderr para que un
+    // script que solo mire el código de salida (1, igual que `--dry-run`) no
+    // se quede creyendo que aplicó algo.
+    eprintln!("norte: {}", norte_i18n::t("cli-sync-not-yet-applied"));
+    Ok(ExitCode::from(1))
 }
 
 async fn ls(
