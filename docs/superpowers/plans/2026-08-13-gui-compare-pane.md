@@ -37,7 +37,7 @@ until the pane exists.
 | 2 — the GUI runs a comparison and keeps its rows | done | 47cabdc |
 | 3 — the GUI renders the diff pane | done | `af44595` |
 | 4 — the command, the key and the reference sheet | done | `b402260` |
-| 5 — close the branch | pending | |
+| 5 — close the branch | done | `a7b4167`…`b74d2e4` |
 
 ## What the implementer needs to know before task 1
 
@@ -423,3 +423,31 @@ Both, because task 1 touched `norte-frontend` and `norte-tui`, which
 
 #161 stays open — the sync surface is C2. Follow
 `superpowers:finishing-a-development-branch`.
+
+## What the reviews changed
+
+Both gates were green at `736ea9b` and the branch still was not done. The
+whole-branch coherence pass found four MAJORs that no per-task review could
+have seen, and one of them was this plan's own task 1 not finishing its job:
+
+- **Task 1 moved half a decision.** It set out to stop the GUI becoming the
+  third surface to re-derive "how did the comparison end" — and moved only the
+  `Completed` arm. `Cancelled`, `Failed` and the benign race were transcribed by
+  hand into both frontends, with a fourth copy of the count arithmetic in the
+  TUI, under comments claiming "a single rule for both frontends". A comment
+  promising exactness is not a mechanism. `finish_from_task` now owns all four.
+- **`visible_len`'s O(5) rewrite had no test.** Its failure mode is a silently
+  short list in a pane whose entire argument is that how complete the answer is
+  *is* the answer.
+- **`status_line` moved crates with one of its ten branches covered**, and the
+  "byte-identical snapshots" claim was true and nearly vacuous.
+- **Task 3's fixes landed on the GUI only.** The TUI still builds its title with
+  both roots joined in-band, which is the spoof the GUI fixed structurally —
+  now #185, because a ratatui block title cannot be split the same way and the
+  fix needs a design call.
+
+The lesson is the same one phases A and B taught, and it is worth writing down
+once more because three phases in a row produced it: **each task can be correct
+against its own specification and the branch still be wrong.** The per-task
+reviewers caught real defects every time; they cannot catch the ones that live
+between tasks.
