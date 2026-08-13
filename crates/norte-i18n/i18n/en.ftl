@@ -773,6 +773,10 @@ sync-confirm-unclear = this version cannot tell whether these { $n } changes can
 sync-title = synchronise
 sync-mode-update = update
 sync-mode-mirror = mirror
+# A mode this build cannot name. It must NOT fall back to "update": saying "this
+# does not delete" about a mode we cannot name asserts the SAFE half of what a
+# human is approving.
+sync-mode-unknown = mode this version does not know
 sync-header-step = step
 sync-header-path = path
 sync-header-size = size
@@ -832,6 +836,11 @@ gui-a11y-tasks = tasks in progress
 # virtualised list, never on the list itself: its id feeds scrolling and
 # measurement.
 gui-a11y-compare-rows = comparison rows
+# Name of the sync pane's step list (#161). Same wrapper rule as the diff
+# pane's, and a name of its own: the pane's frame is already announced as
+# "synchronise", and giving the list the same words says nothing about which
+# of the two the reader is inside.
+gui-a11y-sync-steps = plan steps
 # Spoken prefix for a name the sanitiser had to alter (spec §6). A WORD and
 # not the `⚠` badge: at the default symbol verbosity of NVDA and Orca a lone
 # U+26A0 is not spoken at all, and under an active name reinterpretation (#57)

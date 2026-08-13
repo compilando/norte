@@ -464,9 +464,16 @@ struct NorteGui {
     ///
     /// Lo abre `SessionEvent::SyncPlanStarted` —no la tecla—, igual que el de
     /// diferencias: hasta que hay Task no hay `task_id` con el que decidir de
-    /// quién son los pasos que lleguen. Lo que se PINTA y lo que se aprueba
-    /// son las tareas 3 y 4 de este plan; aquí solo se planifica.
+    /// quién son los pasos que lleguen. Se pinta ENCIMA del de diferencias, si
+    /// lo hay (mismo orden que la TUI): el plan es lo que hay que mirar
+    /// mientras se decide. Aprobarlo es la tarea 4.
     sync: Option<sync_view::SyncView>,
+    /// Handle de scroll de la lista VIRTUALIZADA de pasos, gemelo de
+    /// [`Self::compare_scroll`] y por la misma razón: tiene que persistir
+    /// entre frames para que `scroll_to_item` (tras mover el cursor) tenga
+    /// efecto. Propio y no el del panel de diferencias — los dos pueden estar
+    /// abiertos a la vez, con el de sincronización delante.
+    sync_scroll: UniformListScrollHandle,
     /// Las dos reinterpretaciones de nombres (#57) CONGELADAS al pedir el
     /// plan, gemelo de `App::pending_sync_encoding` en la TUI.
     ///
@@ -1235,6 +1242,7 @@ impl NorteGui {
                     compare_scroll: UniformListScrollHandle::new(),
                     sync: None,
                     sync_gen: 0,
+                    sync_scroll: UniformListScrollHandle::new(),
                     pending_sync_encoding: sync_view::SyncEncodings::default(),
                     plugin_config_summaries: Vec::new(),
                 };
@@ -1338,6 +1346,7 @@ impl NorteGui {
                     compare_scroll: UniformListScrollHandle::new(),
                     sync: None,
                     sync_gen: 0,
+                    sync_scroll: UniformListScrollHandle::new(),
                     pending_sync_encoding: sync_view::SyncEncodings::default(),
                     plugin_config_summaries: Vec::new(),
                 }
@@ -2173,6 +2182,27 @@ impl NorteGui {
                 // que parpadea es mejor que uno que se queda (mismo criterio,
                 // y misma nota, que `CompareStarted`).
                 self.errors[pane] = None;
+                if matches!(start, sync_view::Start::Opened(_)) {
+                    // El visor no puede quedarse vivo detrás, misma exclusión
+                    // (y mismo BLOCKER) que `CompareStarted`: las dos
+                    // pantallas sustituyen a los panes enteros, así que con
+                    // ambas abiertas una se pinta y la otra se queda el
+                    // teclado — y aquí la que se quedaría muda es la que tiene
+                    // una Task recorriendo dos árboles.
+                    self.close_viewer();
+                    // El teclado acaba de cambiar de dueño SIN que se pulsara
+                    // ninguna tecla (el plan puede lanzarse desde la ayuda),
+                    // así que un prefijo o un contador a medio teclear en el
+                    // resolver de Browse se queda huérfano — mismo caso, y
+                    // misma corrección, que `CompareStarted`.
+                    self.resolver.reset();
+                    self.which_key = None;
+                    // Y la lista arranca arriba: el handle sobrevive al panel
+                    // anterior, y heredar su desplazamiento deja el plan nuevo
+                    // mirando a una altura que nadie pidió con el cursor en el
+                    // primer paso.
+                    self.sync_scroll.scroll_to_item(0, ScrollStrategy::Nearest);
+                }
                 // Regla 3: planificar recorre los dos árboles enteros, así que
                 // lo que se suelta se cancela — el arranque vencido, que ni
                 // llega a abrir, y el plan al que sustituye.
@@ -2524,41 +2554,57 @@ impl NorteGui {
     ///
     /// `include` va ausente = el árbol entero: la selección de primera clase
     /// del panel de diferencias es lo que la siembra
-    /// ([`norte_frontend::sync::include_from_rows`]), y en esta GUI el panel
-    /// de diferencias se queda con el teclado mientras está abierto, así que
-    /// todavía no hay camino desde él hasta aquí. Cuando lo haya, es esa
-    /// función compartida la que lo resuelve, no una segunda lectura de las
-    /// marcas escrita en este fichero.
+    /// ([`norte_frontend::sync::include_from_rows`]), y el panel de
+    /// diferencias de esta GUI todavía no MARCA filas — su pie
+    /// (`gui-compare-hint`) no ofrece la tecla, que en la TUI es `Ins`—. Con
+    /// el panel abierto sí se llega hasta aquí (la ayuda alcanza
+    /// `pane.sync-dirs`, y de ahí sale el sentido de la sincronización), pero
+    /// no hay marcas que traducir. Cuando las haya, es esa función compartida
+    /// la que lo resuelve, no una segunda lectura de las marcas escrita en
+    /// este fichero.
     ///
-    /// # El sentido, y dónde tiene que acabar viviendo
-    /// «El pane con foco es el ORIGEN» es hoy la MISMA regla que el brazo
-    /// `None` de `App::sync_roots` en `norte-tui`, escrita dos veces —igual
-    /// que [`Self::start_compare`] repite el reparto izquierda/derecha de
-    /// `App::request_compare`—. Se queda así a sabiendas (revisión rust
-    /// MAJOR-2): el brazo que de verdad decide, el que lee el lado ACTIVO del
-    /// panel de diferencias, NO está copiado aquí, y es el que llega con la
-    /// tarea 3. **Cuando llegue, el par se mueve a `norte_frontend::sync` y
-    /// las dos superficies lo llaman**, en vez de que la GUI escriba su
-    /// segunda copia de la regla que decide qué árbol se sobrescribe.
+    /// # El sentido lo decide UNA función, y no está en este fichero
+    /// [`norte_frontend::sync::sync_roots`] (#161): con el panel de
+    /// diferencias abierto manda su lado ACTIVO —el que `Tab` mueve—, y sin él
+    /// el pane con foco es el ORIGEN. Vivía en `App::sync_roots` de
+    /// `norte-tui`, y aquí estaba copiado el segundo brazo mientras el
+    /// primero, el que de verdad decide, todavía no existía en esta GUI. Ya
+    /// existe —la ayuda alcanza `pane.sync-dirs` con el panel abierto, y el
+    /// panel se pinta encima—, así que las dos superficies llaman a la misma:
+    /// dos copias de «qué árbol se sobrescribe» producen, cuando divergen, un
+    /// plan perfectamente plausible sobre el árbol equivocado.
     fn start_sync(&mut self, mode: norte_proto::methods::SyncMode) {
         let f = self.focus;
         if !self.journalled {
             self.errors[f] = Some(norte_i18n::t("msg-sync-needs-daemon"));
             return;
         }
-        let source = self.panes[f].dir().clone();
-        let dest = self.panes[f ^ 1].dir().clone();
+        // Las reinterpretaciones vuelven CON las raíces y de la misma llamada
+        // (#57/#152): un lector que pulsó `Alt+E` para leer un share CP1251 no
+        // puede recuperar `????.txt` al sincronizarlo, y emparejar la raíz de
+        // un lado con el codepage del otro es justo lo que nombra otros bytes.
+        let norte_frontend::sync::SyncRoots {
+            source,
+            dest,
+            source_encoding,
+            dest_encoding,
+        } = norte_frontend::sync::sync_roots(
+            self.compare.as_ref().map(|v| &v.run),
+            &norte_frontend::sync::Panes {
+                focused_root: self.panes[f].dir(),
+                focused_encoding: self.panes[f].name_encoding(),
+                other_root: self.panes[f ^ 1].dir(),
+                other_encoding: self.panes[f ^ 1].name_encoding(),
+            },
+        );
         if source == dest {
             self.errors[f] = Some(norte_i18n::t("compare-same-path"));
             return;
         }
         self.sync_gen = self.sync_gen.wrapping_add(1);
-        // La reinterpretación de cada lado se congela CON las raíces (#57):
-        // un lector que pulsó `Alt+E` para leer un share CP1251 no puede
-        // recuperar `????.txt` al sincronizarlo.
         self.pending_sync_encoding = sync_view::SyncEncodings {
-            source: self.panes[f].name_encoding(),
-            dest: self.panes[f ^ 1].name_encoding(),
+            source: source_encoding,
+            dest: dest_encoding,
         };
         // Decirlo mientras el RPC va y viene, molde `start_compare`: con la
         // clave COMPARTIDA y `n = 0`, que es la verdad —todavía no ha llegado
@@ -2596,6 +2642,63 @@ impl NorteGui {
         }
     }
 
+    /// Despacha una tecla del panel de sincronización (#161, fase C2 tarea 3).
+    ///
+    /// Teclas FIJAS, igual que el mismo panel en la TUI y por lo mismo que las
+    /// del panel de diferencias: no hay vocabulario `dialog.*` para «mueve el
+    /// cursor por los pasos», y dentro del panel el teclado es entero suyo.
+    /// Lo que una tecla SIGNIFICA lo decide [`sync_view::key_meaning`], que es
+    /// puro y se testea sin ventana; esto solo lo ejecuta.
+    ///
+    /// Aprobar no está aquí: es la tarea 4, la mitad destructiva.
+    /// Sin `cx`: nada de lo que estas teclas hacen necesita el contexto —el
+    /// `cx.notify()` es del llamante, igual que para el panel de diferencias—.
+    /// La tarea 4 lo traerá si su camino de aplicación lo pide.
+    fn on_sync_key(&mut self, ks: &gpui::Keystroke) {
+        let m = ks.modifiers;
+        let Some(view) = self.sync.as_ref() else {
+            return;
+        };
+        let meaning = sync_view::key_meaning(
+            &ks.key,
+            m.control || m.alt || m.platform,
+            sync_view::is_running(&view.run),
+            view.run.cancel_requested,
+        );
+        match meaning {
+            sync_view::Key::Ignore => {}
+            // El primer `Esc`: cancela la Task y CONSERVA los pasos que
+            // llegaron —un plan cancelado no se puede aprobar (no tiene
+            // `plan_hash`), pero lo que se recorrió sigue siendo lo que se
+            // recorrió—. El panel se queda abierto para poder leerlo.
+            sync_view::Key::CancelTask => {
+                if let Some(view) = self.sync.as_mut() {
+                    let _ = self.cmds.send(SessionCmd::Cancel(view.task_id));
+                    view.run.cancel_requested = true;
+                    // La segunda pregunta se cae con la Task que la motivó:
+                    // dejarla puesta es cómo un `y` posterior aprueba otra
+                    // cosa (misma regla que la TUI). Hoy nadie la pone —la
+                    // tarea 4 es quien lo hará—, y por eso se escribe ahora:
+                    // el sitio donde hay que caerla es éste.
+                    view.run.confirming = None;
+                }
+            }
+            sync_view::Key::Close => self.close_sync(),
+            sync_view::Key::Move(delta) => {
+                if let Some(plan) = self.sync.as_mut().and_then(|v| v.run.state.plan_mut()) {
+                    plan.move_by(delta);
+                }
+                // La lista está virtualizada: un cursor fuera de la ventana no
+                // se ve, así que moverlo tiene que traerlo (mismo gesto que
+                // `reveal_cursor` y que el panel de diferencias). El índice se
+                // busca sobre los pasos que HAY, que es sobre lo que se pinta.
+                if let Some(i) = self.sync.as_ref().and_then(sync_view::cursor_index) {
+                    self.sync_scroll.scroll_to_item(i, ScrollStrategy::Nearest);
+                }
+            }
+        }
+    }
+
     /// Cierra el panel de sincronización y **cancela siempre** la Task que lo
     /// alimentaba, por lo mismo que [`Self::close_compare`]: en remoto el
     /// daemon seguiría recorriendo los dos árboles para un panel que ya no
@@ -2603,12 +2706,11 @@ impl NorteGui {
     ///
     /// Es el TERCER camino que suelta el panel (los otros dos están en
     /// `sync_view::on_start`), y por eso cancela aquí: la regla la enuncia
-    /// `sync_view::route_steps`. La tarea 3 le dará su manejador de teclas
-    /// entero; hasta entonces esto es lo que hace que un plan lanzado desde la
-    /// ayuda se pueda parar (regla dura 3).
+    /// `sync_view::route_steps`. Lo llaman el `Esc` del panel
+    /// ([`Self::on_sync_key`]) y la apertura del visor, que lo excluye.
     fn close_sync(&mut self) {
-        if let Some(view) = self.sync.take() {
-            let _ = self.cmds.send(SessionCmd::Cancel(view.task_id));
+        if let Some(task_id) = sync_view::close(&mut self.sync) {
+            let _ = self.cmds.send(SessionCmd::Cancel(task_id));
         }
     }
 
@@ -4683,6 +4785,11 @@ impl NorteGui {
         // marcas del pane destino—. La exclusión se hace en los DOS sitios
         // que pueden abrir: aquí y en `SessionEvent::CompareStarted`.
         self.close_compare();
+        // Y el de sincronización, por lo mismo y por la regla 3: dejarlo vivo
+        // detrás del visor lo deja invisible Y sin teclado, o sea con una Task
+        // recorriendo dos árboles que nadie puede parar. La otra mitad está en
+        // `SessionEvent::SyncPlanStarted`.
+        self.close_sync();
         self.viewer_gen = self.viewer_gen.wrapping_add(1);
         self.viewer_loading = true;
         let _ = self.cmds.send(SessionCmd::OpenViewer {
@@ -5144,6 +5251,23 @@ impl NorteGui {
         // despacha comandos desde encima de cualquiera de las dos), y quien
         // se queda las teclas tiene que ser quien SE PINTA. Con el orden
         // inverso, `Esc` cerraba un panel que el lector no estaba viendo.
+        // El panel de sincronización va ANTES que el de diferencias, por la
+        // misma regla y en el mismo orden que `render`: los dos pueden estar
+        // abiertos a la vez y el plan se pinta encima, así que es suyo el
+        // teclado. Con el orden inverso, `Esc` cerraba el panel que el lector
+        // no estaba viendo — el defecto que el bloque de arriba documenta
+        // para el visor.
+        if self.sync.is_some() {
+            if self.means_help(ks) {
+                self.open_help();
+                cx.notify();
+                return;
+            }
+            self.on_sync_key(ks);
+            cx.notify();
+            return;
+        }
+
         if self.compare.is_some() {
             if self.means_help(ks) {
                 self.open_help();
@@ -5151,19 +5275,6 @@ impl NorteGui {
                 return;
             }
             self.on_compare_key(ks, cx);
-            cx.notify();
-            return;
-        }
-
-        // #161 fase C2, tarea 2: el panel de sincronización todavía no PINTA
-        // nada (eso es la tarea 3), así que no se queda el teclado — quien se
-        // queda las teclas es quien se pinta, que es la regla del bloque de
-        // arriba. Pero abrirse SÍ se puede abrir (la ayuda alcanza
-        // `pane.sync-dirs`, ver `run_command`), y una Task que recorre dos
-        // árboles y no se puede parar es la regla dura 3 rota. Hasta que la
-        // tarea 3 le dé su manejador entero, `Esc` la para.
-        if self.sync.is_some() && ks.key == "escape" {
-            self.close_sync();
             cx.notify();
             return;
         }
@@ -5531,6 +5642,9 @@ impl NorteGui {
             || self.palette.is_some()
             || self.columns_picker.is_some()
             || self.compare.is_some()
+            // El de sincronización, por lo mismo y con más razón: se pinta
+            // encima incluso del de diferencias.
+            || self.sync.is_some()
     }
 
     /// Activa la entrada `i` del menú: despacha su comando por el MISMO
@@ -10504,6 +10618,22 @@ impl Render for NorteGui {
                     .justify_center()
                     .child(SharedString::from(norte_i18n::t("gui-viewer-opening"))),
             );
+        } else if let Some(view) = &self.sync {
+            // #161 fase C2 tarea 3, y ANTES que el panel de diferencias: el
+            // plan se pinta encima de las filas que lo motivaron (mismo orden
+            // que la TUI). El de diferencias sigue vivo detrás con sus marcas
+            // —volver a él es cerrar el plan—, y quien se pinta es quien se
+            // queda las teclas, que es la regla que `on_key` sigue en el mismo
+            // orden.
+            root = root
+                .child(sync_view::render(
+                    view,
+                    &chrome,
+                    &self.fonts,
+                    &self.sync_scroll,
+                    cx,
+                ))
+                .child(self.render_task_strip(&chrome));
         } else if let Some(view) = &self.compare {
             // #158 fase C1 tarea 3. Ocupa el sitio de los DOS panes: una fila
             // tiene dos caras y un veredicto en medio, así que no cabe en
@@ -10566,6 +10696,9 @@ impl Render for NorteGui {
             // filtro mientras el indicador anuncia un 5 que era otra cosa.
             // `CompareStarted` además lo resetea, así que esto es el cinturón.
             || self.compare.is_some()
+            // Y el de sincronización igual: también se queda el teclado
+            // entero, y `SyncPlanStarted` también resetea el resolver.
+            || self.sync.is_some()
         {
             (None, &[][..])
         } else {

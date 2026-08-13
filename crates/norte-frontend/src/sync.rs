@@ -150,6 +150,113 @@ pub fn include_from_rows(
     Ok(Some(out))
 }
 
+/// The two roots of a synchronisation, in `(source, dest)` order, each with
+/// the name reinterpretation (#57) of ITS OWN side.
+///
+/// Four named fields and not two pairs: `source` and `dest` are the same type
+/// and so are the two encodings, so every transposition compiles — and
+/// transposing THESE inverts which tree gets overwritten, which is the half of
+/// a plan a human is being asked to approve. Same argument the GUI's
+/// `Started`/`SyncEncodings` make one layer up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncRoots {
+    /// Where the entries are READ from.
+    pub source: VPath,
+    /// Where they are WRITTEN — the tree a `Mirror` deletes from.
+    pub dest: VPath,
+    /// The source pane's reinterpretation, frozen with the root.
+    pub source_encoding: Option<norte_encoding::NameEncoding>,
+    /// The destination pane's, which may be another one: two panes are two
+    /// locations and can carry different overrides.
+    pub dest_encoding: Option<norte_encoding::NameEncoding>,
+}
+
+/// The two panes a frontend has, told apart by FOCUS — the fallback
+/// [`sync_roots`] uses when no diff pane is open.
+///
+/// The fields are named after the focus and not after a screen position on
+/// purpose: "the pane on the left" is not what decides, and a frontend whose
+/// focused pane is the right-hand one must not have to invert anything here.
+#[derive(Debug, Clone, Copy)]
+pub struct Panes<'a> {
+    /// The pane with the focus. It is the SOURCE.
+    pub focused_root: &'a VPath,
+    /// Its reinterpretation (#57).
+    pub focused_encoding: Option<norte_encoding::NameEncoding>,
+    /// The other pane. It is the DESTINATION.
+    pub other_root: &'a VPath,
+    /// Its reinterpretation, which may differ.
+    pub other_encoding: Option<norte_encoding::NameEncoding>,
+}
+
+/// Which two roots a synchronisation runs between, and in which direction.
+///
+/// **One rule, one place, both frontends** (#161). With a diff pane open its
+/// ACTIVE side — the one `Tab` moves — is the source, and NOTHING is inferred
+/// from the focus or from the order of the panes: the reader has a pane in
+/// front of them whose active side is marked, and the plan has to agree with
+/// what they are looking at. With no diff pane, the focused pane is the source
+/// and the other is the destination, the same split
+/// `request_compare`/`start_compare` use for left and right.
+///
+/// This lived in `norte-tui` until the GUI grew the branch that genuinely
+/// decides. Two copies of it would be two answers to "which tree gets
+/// overwritten", and the frontend that drifted would be overwriting the wrong
+/// one — the cheapest possible bug to write and the most expensive to find,
+/// since both copies produce a perfectly plausible plan.
+///
+/// The encodings travel WITH the roots and are never re-read from the panes
+/// afterwards: a reader who pressed `Alt+E` to read a CP1251 share cannot get
+/// `????.txt` back when they synchronise it (#57).
+///
+/// ```
+/// use norte_frontend::sync::{Panes, sync_roots};
+/// use norte_proto::VPath;
+/// let izq = VPath::parse("file:///izq").expect("vpath");
+/// let der = VPath::parse("file:///der").expect("vpath");
+/// // Sin panel de diferencias: el pane con FOCO es el origen.
+/// let r = sync_roots(
+///     None,
+///     &Panes {
+///         focused_root: &der,
+///         focused_encoding: None,
+///         other_root: &izq,
+///         other_encoding: None,
+///     },
+/// );
+/// assert_eq!(r.source, der);
+/// assert_eq!(r.dest, izq);
+/// ```
+#[must_use]
+pub fn sync_roots(compare: Option<&crate::compare::CompareView>, panes: &Panes<'_>) -> SyncRoots {
+    let Some(view) = compare else {
+        return SyncRoots {
+            source: panes.focused_root.clone(),
+            dest: panes.other_root.clone(),
+            source_encoding: panes.focused_encoding,
+            dest_encoding: panes.other_encoding,
+        };
+    };
+    // `Side::Right` y no un `_` que se lo trague todo: un lado que ESTA build
+    // no sepa nombrar cae en el brazo de la izquierda, que es el default del
+    // propio pane (`active_side` nace en `Left`), y no invierte el sentido de
+    // una sincronización por una palabra nueva del wire.
+    match view.pane.active_side() {
+        norte_proto::methods::Side::Right => SyncRoots {
+            source: view.right_root.clone(),
+            dest: view.left_root.clone(),
+            source_encoding: view.right_encoding,
+            dest_encoding: view.left_encoding,
+        },
+        _ => SyncRoots {
+            source: view.left_root.clone(),
+            dest: view.right_root.clone(),
+            source_encoding: view.left_encoding,
+            dest_encoding: view.right_encoding,
+        },
+    }
+}
+
 /// What the undo would actually do with ONE step, once the destination's trash
 /// is taken into account.
 ///
@@ -547,6 +654,80 @@ pub fn rel_display(rel: &RelPath, reinterpret: Option<norte_encoding::NameEncodi
     RelDisplay { text, raw, hostile }
 }
 
+/// Las reinterpretaciones de nombres (#57) de los dos lados de una
+/// sincronización.
+///
+/// Una struct con dos campos NOMBRADOS y no una tupla `(Option<_>,
+/// Option<_>)`: los dos valores son del mismo tipo, así que trasponerlos
+/// compila — y trasponerlos ES el #152, un `dest_rel` decodificado con el
+/// codepage del ORIGEN, o sea nombrando otros bytes que el fichero sobre el
+/// que cae la escritura. Aquí el compilador no ayuda; el nombre sí.
+///
+/// El default —ninguna de las dos— es lo correcto para un frontend que no
+/// tiene overrides por ubicación, como el CLI: los nombres se leen como
+/// vienen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SyncEncodings {
+    /// La del lado ORIGEN.
+    pub source: Option<norte_encoding::NameEncoding>,
+    /// La del lado DESTINO, que puede ser otra: los dos panes son dos
+    /// ubicaciones y pueden llevar overrides distintos.
+    pub dest: Option<norte_encoding::NameEncoding>,
+}
+
+impl SyncEncodings {
+    /// Con cuál de las dos se lee una ruta anclada en `anchor`.
+    ///
+    /// Es la mitad del #152 que no estaba escrita en ninguna parte: la
+    /// ortografía del destino se leía con la del destino (eso ya lo hacía cada
+    /// frontend a mano), pero el `rel` de un [`SyncStepKind::DeleteTree`]
+    /// —que cuelga del DESTINO, ver [`anchor_of`]— se leía con la del ORIGEN.
+    /// Con dos panes con overrides distintos, eso nombra el subárbol que se va
+    /// a borrar con el codepage del árbol que NO se toca, en la pantalla donde
+    /// se aprueba borrarlo.
+    ///
+    /// [`RelAnchor::Either`] se lee con la del origen, que es de donde cuelga
+    /// «casi siempre» un `rel` (normativo en el wire): no se sabe, y elegir la
+    /// otra no sería más cierto — lo que un pane no debe hacer con un `Either`
+    /// es afirmar la COLUMNA, y eso lo dice [`StepCells::anchor`].
+    ///
+    /// Dos cosas hacen ese brazo menos peligroso de lo que parece, y las dos
+    /// se pierden si no se escriben:
+    ///
+    /// * la elección solo CAMBIA algo para bytes que no son UTF-8 válido
+    ///   (`display_name_with` no reinterpreta el UTF-8 válido), y en ese caso
+    ///   el resultado es SIEMPRE `hostile = true` — o sea que un `Either`
+    ///   leído con el codepage del otro lado llega marcado como «este texto no
+    ///   son los bytes» a las dos superficies;
+    /// * el único camino DESTRUCTIVO hasta `Either` es un
+    ///   [`SyncStepKind::Unknown`] ([`anchor_of`]), y un solo paso así deja el
+    ///   plan en [`PlanIntegrity::Unnameable`], que no se puede aprobar. Lo
+    ///   que queda bajo `Either` es un `Skip`, que no escribe nada.
+    ///
+    /// ```
+    /// use norte_frontend::sync::{RelAnchor, SyncEncodings};
+    /// use norte_encoding::NameEncoding;
+    /// let enc = SyncEncodings {
+    ///     source: Some(NameEncoding::Cp437),
+    ///     dest: None,
+    /// };
+    /// // Un `DeleteTree` habla del DESTINO, aunque se pinte en la primera
+    /// // columna.
+    /// assert_eq!(enc.for_anchor(RelAnchor::Dest), None);
+    /// assert_eq!(enc.for_anchor(RelAnchor::Source), Some(NameEncoding::Cp437));
+    /// // Y lo que no consta se lee como el origen, que es de donde cuelga
+    /// // «casi siempre» un `rel`.
+    /// assert_eq!(enc.for_anchor(RelAnchor::Either), Some(NameEncoding::Cp437));
+    /// ```
+    #[must_use]
+    pub fn for_anchor(self, anchor: RelAnchor) -> Option<norte_encoding::NameEncoding> {
+        match anchor {
+            RelAnchor::Dest => self.dest,
+            RelAnchor::Source | RelAnchor::Either => self.source,
+        }
+    }
+}
+
 /// The three glyphs a step paints: what it does, how sure the comparison was,
 /// and whether it comes back.
 ///
@@ -593,8 +774,14 @@ pub struct StepCells {
 /// cannot be computed, and a renderer that reads [`SyncStep::reversal`] on its
 /// own is exactly the bug this module exists to prevent.
 ///
+/// Each path is masked with the reinterpretation of the side it hangs from
+/// ([`SyncEncodings::for_anchor`]), which is a decision no caller has to make
+/// again: `dest_rel` is ALWAYS the destination's spelling (#152), and a
+/// `DeleteTree`'s `rel` is a destination path too even though it sits in the
+/// first column.
+///
 /// ```
-/// use norte_frontend::sync::{StepUndo, render_step};
+/// use norte_frontend::sync::{StepUndo, SyncEncodings, render_step};
 /// use norte_proto::methods::{DestTrash, SyncStepKind};
 /// # use norte_proto::methods::{CompareConfidence, CompareCriterion, RelPath, StepReversal,
 /// #     SyncStep};
@@ -609,16 +796,13 @@ pub struct StepCells {
 ///     reversal: Some(StepReversal::Delete),
 ///     reason: None,
 /// };
-/// let cells = render_step(&step, DestTrash::Absent, None);
+/// let cells = render_step(&step, DestTrash::Absent, SyncEncodings::default());
 /// assert_eq!(cells.undo, StepUndo::LeftBehind);
 /// ```
 #[must_use]
-pub fn render_step(
-    step: &SyncStep,
-    dest_trash: DestTrash,
-    reinterpret: Option<norte_encoding::NameEncoding>,
-) -> StepCells {
+pub fn render_step(step: &SyncStep, dest_trash: DestTrash, enc: SyncEncodings) -> StepCells {
     let undo = step_undo(step, dest_trash);
+    let anchor = anchor_of(step);
     StepCells {
         id: step.id,
         glyphs: StepGlyphs {
@@ -626,9 +810,25 @@ pub fn render_step(
             confidence: crate::compare::confidence_glyph(step.confidence),
             undo: undo_glyph(undo),
         },
-        anchor: anchor_of(step),
-        rel: rel_display(&step.rel, reinterpret),
-        dest_rel: step.dest_rel.as_ref().map(|r| rel_display(r, reinterpret)),
+        anchor,
+        rel: rel_display(&step.rel, enc.for_anchor(anchor)),
+        // Siempre con la del DESTINO, sea cual sea el ancla: `dest_rel` existe
+        // precisamente para enseñar la ortografía de allí, que es sobre la que
+        // cae la escritura.
+        //
+        // Y se pliega AQUÍ cuando los BYTES coinciden, no en cada pintor y no
+        // por el texto pintado: `RelDisplay::text` es lossy, así que
+        // `caf\xe9.txt` y `caf\x82.txt` —dos ficheros distintos— son el mismo
+        // `caf\u{FFFD}.txt`, y un pintor que compare textos esconde justo el
+        // campo que existe para decir sobre qué nombre cae la escritura
+        // (#152). El wire ya compara por bytes
+        // (`SyncStep::shape_is_consistent`); esto es la misma regla, una sola
+        // vez, para los tres frontends.
+        dest_rel: step
+            .dest_rel
+            .as_ref()
+            .filter(|d| **d != step.rel)
+            .map(|r| rel_display(r, enc.dest)),
         size: step.size,
         undo,
         reason: step.reason,
@@ -1579,6 +1779,16 @@ impl SyncView {
             .map_or(DestTrash::Unknown, SyncPlan::dest_trash)
     }
 
+    /// Las dos reinterpretaciones, juntas y nombradas, para pasárselas a
+    /// [`render_step`] de una pieza — que es lo que evita cruzarlas (#152).
+    #[must_use]
+    pub fn encodings(&self) -> SyncEncodings {
+        SyncEncodings {
+            source: self.source_encoding,
+            dest: self.dest_encoding,
+        }
+    }
+
     /// Los pasos que hay AHORA MISMO, esté cerrado el plan o no.
     ///
     /// Mientras el plan llega, [`SyncState::plan`] contesta `None` —no hay
@@ -1615,8 +1825,22 @@ impl SyncView {
     /// es la forma de que un llamante no tenga ocasión de coger el atajo
     /// equivocado (#161, la trampa que la fase A del CLI no vio: no preguntó
     /// nada, y un plan `Malformed` se aplicó entero desde el spool).
+    ///
+    /// # Y el desenlace de la Task cuenta
+    /// Un run `Cancelled` o `Failed` no se aprueba, aunque el plan HAYA
+    /// cerrado. Los dos hechos son compatibles —`sync.plan_done` llega antes
+    /// de que el canal se cierre, así que un `Esc` (o una caída del daemon)
+    /// en esa ventana deja `Ready` + `Cancelled`—, y sin esta cláusula la
+    /// pantalla decía las dos cosas a la vez: el pie pintaba «cancelado — no
+    /// hay plan que aprobar» ([`status_line`]) mientras la línea de teclas
+    /// seguía ofreciendo aprobar, y la tecla FUNCIONABA (revisión rust
+    /// MAJOR-1). Se resuelve del lado conservador: quien pulsó `Esc` pidió
+    /// parar, y esta pantalla escribe en el disco de alguien.
     #[must_use]
     pub fn can_approve(&self) -> bool {
+        if matches!(self.run, SyncRunState::Cancelled | SyncRunState::Failed) {
+            return false;
+        }
         self.state.can_approve()
     }
 
@@ -1636,6 +1860,91 @@ impl SyncView {
         self.run = SyncRunState::Running;
         self.confirming = None;
         self.cancel_requested = false;
+    }
+}
+
+/// Where the synchronisation dialog IS: planning, waiting for a human, running
+/// or finished — one sentence, for whatever a frontend uses as a footer.
+///
+/// Shared by both frontends (#161) for the same reason
+/// [`crate::compare::status_line`] is, and this one carries more weight: its
+/// `Ready` arm is where "this plan can be approved" reaches a human as words,
+/// and a second copy of that decision is a second answer to the only question
+/// on this screen that writes to a disk. It lived in `norte-tui`'s renderer
+/// until the GUI needed the same footer.
+///
+/// Three things it deliberately does NOT re-derive:
+///
+/// * approvability is [`SyncPlan::can_approve`] over the plan the state still
+///   holds — and the state is what chose this arm, so a plan that has already
+///   been spent is `Applying`/`Applied` here and never `Ready`;
+/// * whether the applied plan can be undone is [`Applied::is_undoable`], which
+///   reads the report's `batch_id`, and NEVER the plan's outlook: a report with
+///   no batch means nothing was journalled, whatever the plan promised before
+///   it ran;
+/// * the localised error of a failed task is [`SyncView::error`], which each
+///   frontend fills the way it sanitises text.
+///
+/// The frontend adds its own padding; this returns the sentence alone.
+///
+/// ```
+/// use norte_frontend::sync::{SyncView, status_line};
+/// use norte_i18n::Lang;
+/// use norte_proto::{TaskId, VPath};
+/// use norte_proto::methods::SyncMode;
+/// let v = SyncView::new(
+///     TaskId::new(1),
+///     SyncMode::Update,
+///     VPath::parse("file:///a").expect("vpath"),
+///     VPath::parse("file:///b").expect("vpath"),
+///     None,
+///     None,
+/// );
+/// // Recién abierto: planificando, con cero pasos.
+/// assert!(!status_line(&v, Lang::En).is_empty());
+/// ```
+#[must_use]
+pub fn status_line(view: &SyncView, lang: Lang) -> String {
+    let plan = view.state.plan();
+    let n = plan.map_or_else(
+        || match &view.state {
+            SyncState::Planning(p) => p.len(),
+            _ => 0,
+        },
+        |p| p.steps().len(),
+    );
+    let n = n.to_string();
+    match (&view.state, view.run) {
+        (_, SyncRunState::Failed) => ta_in(
+            lang,
+            "sync-status-failed",
+            &[("error", view.error.as_deref().unwrap_or_default())],
+        ),
+        (_, SyncRunState::Cancelled) => ta_in(lang, "sync-status-cancelled", &[("n", &n)]),
+        (SyncState::Planning(_), _) => ta_in(lang, "sync-planning", &[("n", &n)]),
+        // `view.can_approve()` y no `p.can_approve()`: UNA sola función
+        // contesta esa pregunta, y es la misma que la línea de teclas
+        // consulta. Con la del plan a secas, este brazo y aquella podían
+        // discrepar en cuanto el desenlace de la Task entraba en juego.
+        (SyncState::Ready(_), _) => {
+            let id = if view.can_approve() {
+                "sync-status-ready"
+            } else {
+                "sync-status-not-approvable"
+            };
+            ta_in(lang, id, &[("n", &n)])
+        }
+        (SyncState::Applying(_), _) => t_in(lang, "sync-status-applying"),
+        (SyncState::Applied(a), _) => {
+            let done = a.report().done.to_string();
+            let failed = a.report().failed.to_string();
+            let id = if a.is_undoable() {
+                "sync-status-applied-undoable"
+            } else {
+                "sync-status-applied-not-undoable"
+            };
+            ta_in(lang, id, &[("done", &done), ("failed", &failed)])
+        }
     }
 }
 
@@ -2044,8 +2353,8 @@ mod tests {
             confidence: CompareConfidence::Probable,
             ..certain.clone()
         };
-        let a = render_step(&certain, DestTrash::Restorable, None);
-        let b = render_step(&probable, DestTrash::Restorable, None);
+        let a = render_step(&certain, DestTrash::Restorable, SyncEncodings::default());
+        let b = render_step(&probable, DestTrash::Restorable, SyncEncodings::default());
         assert_ne!(a.glyphs, b.glyphs);
 
         let mut seen: Vec<char> = [
@@ -2095,7 +2404,7 @@ mod tests {
             reason: None,
             ..step(1, SyncStepKind::Copy, DestTrash::Restorable)
         };
-        let cells = render_step(&unknown, DestTrash::Restorable, None);
+        let cells = render_step(&unknown, DestTrash::Restorable, SyncEncodings::default());
         assert_eq!(cells.undo, StepUndo::Unclear);
         assert_eq!(cells.glyphs.kind, '?');
     }
@@ -2184,11 +2493,204 @@ mod tests {
             dest_rel: Some(rel("sub/A.TXT")),
             ..step(1, SyncStepKind::Overwrite, DestTrash::Restorable)
         };
-        let cells = render_step(&s, DestTrash::Restorable, None);
+        let cells = render_step(&s, DestTrash::Restorable, SyncEncodings::default());
         assert_eq!(cells.rel.text, "sub/a.txt");
         assert_eq!(
             cells.dest_rel.expect("la otra ortografía").text,
             "sub/A.TXT"
+        );
+    }
+
+    /// El sentido de una sincronización lo decide el lado ACTIVO del panel de
+    /// diferencias cuando lo hay, y `Tab` intercambia las DOS raíces enteras
+    /// con sus dos reinterpretaciones. Los panes no se miran siquiera: el
+    /// lector tiene delante un panel con un lado marcado, y el plan tiene que
+    /// hablar de lo que está mirando.
+    #[test]
+    fn el_lado_activo_del_panel_decide_el_sentido_y_los_panes_no_se_miran() {
+        let a = VPath::parse("file:///a").expect("vpath");
+        let b = VPath::parse("file:///b").expect("vpath");
+        // Un par DISTINTO en los panes: si saliera cualquiera de estos dos,
+        // es que el panel no decidió.
+        let p0 = VPath::parse("file:///pane0").expect("vpath");
+        let p1 = VPath::parse("file:///pane1").expect("vpath");
+        let panes = Panes {
+            focused_root: &p0,
+            focused_encoding: None,
+            other_root: &p1,
+            other_encoding: None,
+        };
+        let enc_izq = Some(norte_encoding::NameEncoding::Cp437);
+        let mut v = crate::compare::CompareView::new(a.clone(), b.clone(), 0, enc_izq, None);
+
+        let r = sync_roots(Some(&v), &panes);
+        assert_eq!(r.source, a, "el lado activo nace a la izquierda");
+        assert_eq!(r.dest, b);
+        assert_eq!(
+            r.source_encoding, enc_izq,
+            "y su reinterpretación viaja con él"
+        );
+
+        v.pane.swap_active_side();
+        let r = sync_roots(Some(&v), &panes);
+        assert_eq!(r.source, b, "Tab invierte el SENTIDO");
+        assert_eq!(r.dest, a);
+        assert_eq!(
+            r.dest_encoding, enc_izq,
+            "y la reinterpretación se va con SU raíz, no se queda en su lado"
+        );
+
+        // Sin panel, y solo entonces, mandan los panes.
+        let r = sync_roots(None, &panes);
+        assert_eq!(r.source, p0);
+        assert_eq!(r.dest, p1);
+    }
+
+    /// **La regresión que la auditoría de encoding destapó**: la ortografía
+    /// del destino se plegaba comparando el TEXTO pintado, que es lossy. La
+    /// pareja `lossy_collapse_ff`/`lossy_collapse_fe` de la corpus existe
+    /// justo para esto —bytes distintos, mismo pliegue a `U+FFFD`—, y con la
+    /// comparación por texto el campo que dice sobre qué nombre cae la
+    /// escritura DESAPARECÍA de la pantalla, sin flecha y sin marca, en cuanto
+    /// los dos nombres llevaban un byte inválido cada uno (#152).
+    #[test]
+    fn dos_ortografias_que_colapsan_al_pintarse_siguen_siendo_dos() {
+        let fixtures = norte_testkit::corpus::hostile_names();
+        let uno = fixtures
+            .iter()
+            .find(|f| f.id == "lossy_collapse_ff")
+            .expect("corpus");
+        let otro = fixtures
+            .iter()
+            .find(|f| f.id == "lossy_collapse_fe")
+            .expect("corpus");
+        let rel_de = |bytes: &[u8]| {
+            RelPath::new(vec![
+                norte_proto::Segment::new(bytes.to_vec()).expect("seg"),
+            ])
+        };
+        let paso = SyncStep {
+            rel: rel_de(&uno.bytes),
+            dest_rel: Some(rel_de(&otro.bytes)),
+            ..step(1, SyncStepKind::Overwrite, DestTrash::Restorable)
+        };
+        let cells = render_step(&paso, DestTrash::Restorable, SyncEncodings::default());
+        let dest = cells
+            .dest_rel
+            .expect("dos ficheros distintos son dos ortografías");
+        assert_eq!(
+            dest.text, cells.rel.text,
+            "y colapsan al pintarse, que es justo lo que hacía el pliegue por texto"
+        );
+        assert_ne!(dest.raw, cells.rel.raw, "pero los BYTES no colapsan");
+
+        // Y byte-idénticas SÍ se pliegan: enseñar la misma ruta dos veces con
+        // una flecha en medio sugiere un renombrado que no hay.
+        let mismo = SyncStep {
+            dest_rel: Some(rel_de(&uno.bytes)),
+            ..paso
+        };
+        assert!(
+            render_step(&mismo, DestTrash::Restorable, SyncEncodings::default())
+                .dest_rel
+                .is_none()
+        );
+    }
+
+    /// Un plan CERRADO cuya Task acabó cancelada (o fallando) no se aprueba, y
+    /// el pie y la línea de teclas no pueden discrepar sobre eso: los dos
+    /// hechos son compatibles —`sync.plan_done` llega antes de que el canal se
+    /// cierre— y la pantalla llegó a decir «cancelado, no hay plan que
+    /// aprobar» mientras la tecla de aprobar seguía funcionando (revisión rust
+    /// MAJOR-1).
+    #[test]
+    fn el_pie_y_la_aprobacion_no_pueden_discrepar() {
+        let steps = vec![step(1, SyncStepKind::Copy, DestTrash::Restorable)];
+        let done = done_for(&steps, DestTrash::Restorable);
+        let mut v = SyncView::new(task(), SyncMode::Update, origen(), destino(), None, None);
+        assert!(v.state.on_steps(batch(task(), steps)));
+        assert!(v.state.on_plan_done(done));
+        let listo = status_line(&v, Lang::Es);
+        assert!(v.can_approve(), "cerrado, íntegro y con la Task viva");
+
+        for desenlace in [SyncRunState::Cancelled, SyncRunState::Failed] {
+            v.run = desenlace;
+            assert!(
+                !v.can_approve(),
+                "{desenlace:?}: el lector pidió parar (o el daemon se cayó)"
+            );
+            assert_ne!(
+                status_line(&v, Lang::Es),
+                listo,
+                "{desenlace:?}: y el pie no puede seguir diciendo que se apruebe"
+            );
+        }
+    }
+
+    /// #152, la mitad que faltaba: cada ruta se lee con la reinterpretación
+    /// del lado del que CUELGA. El `rel` de un `DeleteTree` es una ruta del
+    /// DESTINO ([`anchor_of`]) aunque se pinte en la primera columna, así que
+    /// leerla con el codepage del ORIGEN nombra el subárbol que se va a
+    /// borrar con los bytes de otro árbol — en la pantalla donde se aprueba
+    /// borrarlo.
+    #[test]
+    fn cada_ruta_se_lee_con_la_reinterpretacion_del_lado_del_que_cuelga() {
+        // Del ciclo de reinterpretación, no de `encoding_rs` a pelo: ese
+        // crate se consume por la API de `norte-encoding` y no directo.
+        let origen = norte_encoding::NameEncoding::Cp437;
+        let destino = norte_encoding::name_reinterpret_cycle()
+            .iter()
+            .copied()
+            .find(|e| e.label() != origen.label())
+            .expect("el ciclo trae más de una");
+        let enc = SyncEncodings {
+            source: Some(origen),
+            dest: Some(destino),
+        };
+        // Los bytes salen del corpus canónico (`cp866_papka`, cuyo `why`
+        // nombra el #57) y no de un literal escrito aquí: una regresión de
+        // codificación se pinea con la corpus, que es donde el repo las junta.
+        let bytes = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|f| f.id == "cp866_papka")
+            .expect("la corpus trae cp866_papka")
+            .bytes;
+        let rel_hostil = RelPath::new(vec![norte_proto::Segment::new(bytes.clone()).expect("seg")]);
+        let cp437 = norte_encoding::decode_name(&bytes, origen);
+        let ibm866 = norte_encoding::decode_name(&bytes, destino);
+        assert_ne!(cp437, ibm866, "el fixture distingue las dos lecturas");
+
+        let borrado = SyncStep {
+            rel: rel_hostil.clone(),
+            ..step(1, SyncStepKind::DeleteTree, DestTrash::Restorable)
+        };
+        let cells = render_step(&borrado, DestTrash::Restorable, enc);
+        assert_eq!(cells.anchor, RelAnchor::Dest);
+        assert_eq!(
+            cells.rel.text, ibm866,
+            "un DeleteTree habla del DESTINO: con la del destino"
+        );
+
+        // Y una copia cuelga del origen, con `dest_rel` del destino. Los
+        // mismos bytes más un sufijo ASCII: byte-DISTINTOS (si no, el modelo
+        // los pliega, que es lo correcto — ver
+        // `dos_ortografias_que_colapsan_al_pintarse_siguen_siendo_dos`) y aun
+        // así distinguibles por el codepage con que se leen.
+        let mut otros = bytes.clone();
+        otros.push(b'2');
+        let copia = SyncStep {
+            rel: rel_hostil,
+            dest_rel: Some(RelPath::new(vec![
+                norte_proto::Segment::new(otros).expect("seg"),
+            ])),
+            ..step(2, SyncStepKind::Copy, DestTrash::Restorable)
+        };
+        let cells = render_step(&copia, DestTrash::Restorable, enc);
+        assert_eq!(cells.rel.text, cp437, "el rel de una copia es del origen");
+        assert_eq!(
+            cells.dest_rel.expect("hay ortografía de destino").text,
+            format!("{ibm866}2"),
+            "y la ortografía sobre la que cae la escritura, del destino"
         );
     }
 

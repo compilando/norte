@@ -2756,7 +2756,13 @@ fn print_plan(plan: &norte_frontend::sync::SyncPlan) -> std::io::Result<()> {
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     writeln!(out, "{}", norte_i18n::t("cli-sync-plan"))?;
     for step in plan.steps() {
-        let cells = norte_frontend::sync::render_step(step, plan.dest_trash(), None);
+        // Sin reinterpretación por lado: el CLI no tiene panes, así que los
+        // nombres se leen como vienen (`SyncEncodings::default()`).
+        let cells = norte_frontend::sync::render_step(
+            step,
+            plan.dest_trash(),
+            norte_frontend::sync::SyncEncodings::default(),
+        );
         let rel = rel_marcado(&cells.rel);
         let dest_suffix = cells
             .dest_rel

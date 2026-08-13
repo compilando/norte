@@ -104,15 +104,12 @@ fn sync_include_message(e: &norte_frontend::sync::IncludeError) -> String {
 
 /// Las dos raíces de una sincronización y cómo se leen sus nombres.
 ///
-/// Una struct y no una tupla de cuatro: `(VPath, VPath, Option<_>, Option<_>)`
-/// invita a cruzar la reinterpretación del origen con la raíz del destino, que
-/// es exactamente el fallo que tener dos existe para evitar.
-struct SyncRoots {
-    source: VPath,
-    dest: VPath,
-    source_encoding: Option<norte_encoding::NameEncoding>,
-    dest_encoding: Option<norte_encoding::NameEncoding>,
-}
+/// Vive en [`norte_frontend::sync`] desde #161, con la función que las decide:
+/// la GUI llegó a tener la MISMA regla escrita a mano (su brazo «el pane con
+/// foco es el origen»), y dos copias de «qué árbol se sobrescribe» es la clase
+/// de divergencia que produce un plan perfectamente plausible sobre el árbol
+/// equivocado.
+use norte_frontend::sync::SyncRoots;
 
 /// El estado del run (`SyncRunState`) y el panel abierto (`SyncView`) viven en
 /// [`norte_frontend::sync`] (#161, el mismo argumento que ya llevó
@@ -2113,30 +2110,23 @@ impl App {
     /// panes, porque el sentido de una sincronización es la mitad de lo que
     /// hay que aprobar. Sin panel abierto son el pane con foco y el otro, el
     /// mismo reparto que [`Self::request_compare`].
+    ///
+    /// La decisión ENTERA es [`norte_frontend::sync::sync_roots`] (#161), no
+    /// una copia local de sus dos brazos: la GUI necesita exactamente la misma
+    /// —incluido el brazo del lado activo, que es el que llega con su panel—
+    /// y aquí solo se le da lo que esta TUI sabe.
     #[must_use]
     fn sync_roots(&self) -> SyncRoots {
-        match &self.sync_source_view() {
-            Some(view) => match view.pane.active_side() {
-                norte_proto::methods::Side::Right => SyncRoots {
-                    source: view.right_root.clone(),
-                    dest: view.left_root.clone(),
-                    source_encoding: view.right_encoding,
-                    dest_encoding: view.left_encoding,
-                },
-                _ => SyncRoots {
-                    source: view.left_root.clone(),
-                    dest: view.right_root.clone(),
-                    source_encoding: view.left_encoding,
-                    dest_encoding: view.right_encoding,
-                },
+        let otro = &self.panes[self.focus() ^ 1];
+        norte_frontend::sync::sync_roots(
+            self.sync_source_view(),
+            &norte_frontend::sync::Panes {
+                focused_root: self.focused().dir(),
+                focused_encoding: self.focused().name_encoding(),
+                other_root: otro.dir(),
+                other_encoding: otro.name_encoding(),
             },
-            None => SyncRoots {
-                source: self.focused().dir().clone(),
-                dest: self.panes[self.focus() ^ 1].dir().clone(),
-                source_encoding: self.focused().name_encoding(),
-                dest_encoding: self.panes[self.focus() ^ 1].name_encoding(),
-            },
-        }
+        )
     }
 
     /// El panel de diferencias del que sale la selección, si lo hay.

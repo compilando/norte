@@ -787,6 +787,10 @@ sync-confirm-unclear = esta versión no puede decir si estos { $n } cambios se v
 sync-title = sincronizar
 sync-mode-update = actualizar
 sync-mode-mirror = espejo
+# Un modo que esta build no sabe nombrar. NO puede caer en «actualizar»: decir
+# «esto no borra» de un modo desconocido afirma la mitad SEGURA de lo que se
+# está aprobando.
+sync-mode-unknown = modo que esta versión no conoce
 sync-header-step = paso
 sync-header-path = ruta
 sync-header-size = tamaño
@@ -846,6 +850,11 @@ gui-a11y-tasks = tareas en curso
 # ENVOLTORIO de la lista virtualizada, jamás en la lista misma: su id alimenta
 # el scroll y la medida.
 gui-a11y-compare-rows = filas de la comparación
+# Nombre de la lista de pasos del panel de sincronización (#161). Misma regla
+# del envoltorio que la del panel de diferencias, y nombre PROPIO: el marco ya
+# se anuncia como «sincronizar», y darle a la lista las mismas palabras no
+# dice en cuál de los dos está el lector.
+gui-a11y-sync-steps = pasos del plan
 # Prefijo hablado de un nombre que el saneado tuvo que alterar (spec §6). Una
 # PALABRA y no el badge `⚠`: con la verbosidad de símbolos por defecto de NVDA
 # y de Orca un U+26A0 suelto no se pronuncia, y bajo una reinterpretación de

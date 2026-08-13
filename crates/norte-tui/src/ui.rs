@@ -3478,13 +3478,25 @@ fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, the
     let (dest_txt, dest_hostil) =
         norte_frontend::path_display_with(&view.dest_root, view.dest_encoding);
     let badge = |h: bool| if h { HOSTILE_BADGE } else { "" };
+    // El brazo `_` NO cae en «actualizar»: `SyncMode` es `#[non_exhaustive]`,
+    // y decir «esto no borra» de un modo que esta build no sabe nombrar es
+    // afirmar la mitad SEGURA de lo que hay que aprobar. Misma regla que
+    // `RelAnchor::Either` y `StepUndo::Unclear` en el mismo modelo.
     let modo = match view.mode {
         norte_proto::methods::SyncMode::Mirror => t("sync-mode-mirror"),
-        _ => t("sync-mode-update"),
+        norte_proto::methods::SyncMode::Update => t("sync-mode-update"),
+        _ => t("sync-mode-unknown"),
     };
     // La FLECHA es el sentido, y es la mitad de lo que se aprueba: origen a la
     // izquierda del `→`, destino a la derecha, siempre, sin depender de qué
     // pane sea cuál.
+    //
+    // #185 cubre TAMBIÉN este título, y aquí es la línea que dice qué árbol se
+    // sobrescribe: las dos raíces van unidas en una sola cadena, así que un
+    // `→` dentro de un nombre finge la pareja, y una raíz de origen larga
+    // expulsa la de destino entera —sin `…`— porque el recorte del título del
+    // bloque es de ratatui. El panel de diferencias tiene la misma nota sobre
+    // su `↔`; la GUI cierra los dos con separadores estructurales.
     let title = format!(
         " {} ({modo}) — {}{} → {}{} ",
         t("sync-title"),
@@ -3670,14 +3682,13 @@ fn sync_step_item(
     ancho: usize,
     theme: &TuiTheme,
 ) -> ListItem<'static> {
-    let cells = norte_frontend::sync::render_step(step, view.dest_trash(), view.source_encoding);
-    // `dest_rel` es la ortografía del DESTINO (#152) — la escritura cae sobre
-    // ELLA—, así que se decodifica con la reinterpretación del destino y no con
-    // la del origen, que es la que `render_step` aplica a las dos.
-    let dest_rel = step
-        .dest_rel
-        .as_ref()
-        .map(|r| norte_frontend::sync::rel_display(r, view.dest_encoding));
+    // Las DOS reinterpretaciones, de una pieza: `render_step` lee cada ruta
+    // con la del lado del que cuelga (#152). Aquí se le pasaba solo la del
+    // ORIGEN y se recomponía `dest_rel` a mano — lo que dejaba el `rel` de un
+    // `DeleteTree`, que es una ruta del DESTINO, leído con el codepage del
+    // árbol que no se toca.
+    let cells = norte_frontend::sync::render_step(step, view.dest_trash(), view.encodings());
+    let dest_rel = cells.dest_rel.clone();
     // Las marcas, el ancla y el tamaño; lo que sobra es para la ruta.
     let ancla = match cells.anchor {
         norte_frontend::sync::RelAnchor::Dest => t("sync-anchor-dest"),
@@ -3697,20 +3708,38 @@ fn sync_step_item(
     let ruta_w = ancho
         .saturating_sub(marcas.width() + ancla.width() + tam.width() + 2)
         .max(1);
-    // La ortografía del DESTINO cuando difiere (#152): la escritura cae sobre
+    // La ortografía del DESTINO cuando la hay (#152): la escritura cae sobre
     // ELLA, así que enseñar solo la del origen sería nombrar un fichero que no
-    // es el que se va a tocar.
-    let ruta = match &dest_rel {
-        Some(d) if d.text != cells.rel.text => {
-            format!("{} → {}", cells.rel.text, d.text)
-        }
-        _ => cells.rel.text.clone(),
+    // es el que se va a tocar. Quién decide que «la hay» es `render_step`, por
+    // BYTES y una sola vez para los tres frontends: aquí se comparaba el texto
+    // PINTADO, que es lossy, así que dos ficheros distintos con un byte
+    // inválido cada uno plegaban a uno solo y el campo desaparecía de la
+    // pantalla (auditoría de encoding MAJOR-1).
+    //
+    // El badge va POR MITAD y no solo en la del origen: una ruta de origen
+    // limpia con una ortografía de destino hostil —el caso normal cuando solo
+    // el pane destino lleva override, porque reinterpretar siempre marca— se
+    // pintaba sin marca ninguna (auditoría de encoding MAJOR-3). El CLI ya lo
+    // hacía por mitades y la GUI también; esta era la única de las tres que no.
+    let marcada = |d: &norte_frontend::sync::RelDisplay| {
+        format!("{}{}", if d.hostile { HOSTILE_BADGE } else { "" }, d.text)
     };
-    let badge = if cells.rel.hostile { HOSTILE_BADGE } else { "" };
+    // #185, y aquí pesa más que en el panel de diferencias: las dos
+    // ortografías van UNIDAS por un `→` en la misma cadena, y `→` es un
+    // imprimible corriente que `display_name_with` no enmascara — o sea que un
+    // fichero llamado `a → b.txt` (corpus `arrow_join_spoof`) llega SIN badge
+    // y finge la pareja. La GUI lo cierra con un separador estructural (cada
+    // ortografía en su elemento); una `Line` de ratatui no tiene esa
+    // posibilidad, así que la decisión de diseño es la misma que #185 lista
+    // para el título del panel de diferencias.
+    let ruta = match &dest_rel {
+        Some(d) => format!("{} → {}", marcada(&cells.rel), marcada(d)),
+        None => marcada(&cells.rel),
+    };
     let mut spans = vec![
         Span::styled(marcas, sync_undo_style(theme, cells.undo)),
         Span::styled(
-            format!("{badge}{}", norte_frontend::middle_ellipsis(&ruta, ruta_w)),
+            norte_frontend::middle_ellipsis(&ruta, ruta_w),
             theme.entry(&cells.rel.raw, norte_proto::EntryKind::File),
         ),
     ];
@@ -3735,50 +3764,17 @@ fn sync_undo_style(theme: &TuiTheme, undo: norte_frontend::sync::StepUndo) -> St
 }
 
 /// El pie del panel de sincronización: en qué punto está el diálogo.
+///
+/// La frase entera la compone [`norte_frontend::sync::status_line`],
+/// COMPARTIDA con la GUI desde #161 — aquí estaban sus ocho brazos, y uno de
+/// ellos es dónde «este plan se puede aprobar» llega a un humano como palabras.
+/// Aquí solo quedan los espacios: pegado al `└` se lee como parte del marco,
+/// igual que el pie del panel de diferencias.
 fn sync_status_line(view: &crate::app::SyncView) -> String {
-    use crate::app::SyncRunState as R;
-    let plan = view.state.plan();
-    let n = plan.map_or_else(
-        || match &view.state {
-            norte_frontend::sync::SyncState::Planning(p) => p.len(),
-            _ => 0,
-        },
-        |p| p.steps().len(),
-    );
-    let n = n.to_string();
-    let cuerpo = match (&view.state, view.run) {
-        (_, R::Failed) => ta(
-            "sync-status-failed",
-            &[("error", view.error.as_deref().unwrap_or_default())],
-        ),
-        (_, R::Cancelled) => ta("sync-status-cancelled", &[("n", &n)]),
-        (norte_frontend::sync::SyncState::Planning(_), _) => ta("sync-planning", &[("n", &n)]),
-        (norte_frontend::sync::SyncState::Ready(p), _) => {
-            let id = if p.can_approve() {
-                "sync-status-ready"
-            } else {
-                "sync-status-not-approvable"
-            };
-            ta(id, &[("n", &n)])
-        }
-        (norte_frontend::sync::SyncState::Applying(_), _) => t("sync-status-applying"),
-        (norte_frontend::sync::SyncState::Applied(a), _) => {
-            let done = a.report().done.to_string();
-            let failed = a.report().failed.to_string();
-            // `is_undoable` y no el pronóstico del plan: un informe sin
-            // `batch_id` significa que no se journalizó nada, prometiera lo que
-            // prometiera el plan antes de correr.
-            let id = if a.is_undoable() {
-                "sync-status-applied-undoable"
-            } else {
-                "sync-status-applied-not-undoable"
-            };
-            ta(id, &[("done", &done), ("failed", &failed)])
-        }
-    };
-    // Con sus espacios, como el pie del panel de diferencias: pegado al `└` se
-    // lee como parte del marco.
-    format!(" {cuerpo} ")
+    format!(
+        " {} ",
+        norte_frontend::sync::status_line(view, norte_i18n::active())
+    )
 }
 
 #[allow(clippy::too_many_arguments)] // wiring del render, no API
