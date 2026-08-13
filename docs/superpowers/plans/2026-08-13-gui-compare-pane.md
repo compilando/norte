@@ -36,7 +36,7 @@ until the pane exists.
 | 1 — the run state moves to `norte-frontend` | done | 7f0b133 |
 | 2 — the GUI runs a comparison and keeps its rows | done | 47cabdc |
 | 3 — the GUI renders the diff pane | done | `af44595` |
-| 4 — the command, the key and the reference sheet | pending | |
+| 4 — the command, the key and the reference sheet | done | `b402260` |
 | 5 — close the branch | pending | |
 
 ## What the implementer needs to know before task 1
