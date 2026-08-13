@@ -816,6 +816,140 @@ impl ComparePane {
     }
 }
 
+/// Estado de presentación de una comparación de directorios (`Shift+F2`,
+/// 2026-08-11-directory-comparison.md): el run loop lo refleja en
+/// [`CompareView::state`] para que la barra elija la variante
+/// `compare-status-*`.
+///
+/// Mismo molde que el `SearchState` de una búsqueda viva, con UNA variante de
+/// más y la razón por la que existe: en `fs.compare` el cierre del canal de
+/// filas NO significa «ya llegaron todas». La bomba de filas y la del
+/// snapshot terminal son tasks
+/// independientes, así que al acabarse el flujo se compara lo recibido contra
+/// `TaskProgress::entries_done` — y si falta algo, [`CompareState::Incomplete`]
+/// lo DICE en vez de pintar «hecho» sobre una respuesta a medias. En una
+/// comparación, lo completa que está la respuesta *es* la respuesta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompareState {
+    /// El walk sigue emitiendo filas.
+    #[default]
+    Running,
+    /// Terminó y llegaron todas las filas que la task contó.
+    Done,
+    /// Terminó, pero llegaron MENOS filas de las que la task contó: se perdió
+    /// algún lote por el camino.
+    Incomplete,
+    /// El usuario canceló (las filas ya llegadas se conservan).
+    Cancelled,
+    /// La task falló (el error va por la barra).
+    Failed,
+}
+
+/// El panel de diferencias abierto (`Shift+F2`): el modelo puro que vive en
+/// `norte-frontend` más lo que la TUI necesita para pintarlo y para decir
+/// cómo acabó.
+///
+/// El modelo (filas, filtros, selección por id, lado activo) NO está aquí a
+/// propósito (regla dura 7): vive en [`norte_frontend::compare::ComparePane`],
+/// donde se testea sin terminal, y esta struct solo le añade el estado del run
+/// y las dos raíces que la cabecera pinta.
+#[derive(Debug)]
+pub struct CompareView {
+    /// Filas, filtros, selección y lado activo.
+    pub pane: ComparePane,
+    /// Cómo va (o cómo acabó) la comparación.
+    pub state: CompareState,
+    /// Categoría del error de una comparación que FALLÓ, ya localizada y
+    /// saneada. Se pinta de forma PERSISTENTE, igual que el `search_error`
+    /// de una búsqueda viva: un fallo no puede degradar a «hecho» en la
+    /// siguiente tecla.
+    pub error: Option<String>,
+    /// Cuántas filas contó la task (`TaskProgress::entries_done`) cuando se
+    /// cerró el flujo. Solo significativo con [`CompareState::Incomplete`],
+    /// que es el único caso en el que difiere de las filas que hay.
+    pub rows_expected: u64,
+    /// Raíz izquierda: el pane que lanzó la comparación.
+    pub left_root: VPath,
+    /// Raíz derecha.
+    pub right_root: VPath,
+    /// Índice del pane que ES el lado izquierdo — el que lanzó la
+    /// comparación, que no tiene por qué ser `panes[0]`.
+    ///
+    /// Se congela al abrir y decide a QUÉ pane navega el `Enter` de una fila:
+    /// al que le corresponde al lado ACTIVO. Sin esto el `Enter` mandaba
+    /// siempre al pane con foco, así que mirando el lado derecho el lector
+    /// perdía su directorio izquierdo para ir a ver el derecho — lo cazó el
+    /// arnés de tmux, y ninguna aserción del modelo podía verlo.
+    pub left_pane: usize,
+    /// Ya se pidió cancelar esta comparación (el primer `Esc`).
+    ///
+    /// El segundo `Esc` cierra el panel PASE LO QUE PASE con la Task. Sin
+    /// esto el cierre dependía de que el canal de filas llegara a cerrarse, y
+    /// hay formas de que no lo haga —un daemon caído, un provider colgado en
+    /// una NFS muerta—, con lo que el lector se quedaba encerrado en la única
+    /// pantalla de norte de la que no se sale (review BLOCKER-1).
+    pub cancel_requested: bool,
+    /// Reinterpretación de nombres (#57) de CADA lado, congelada al abrir.
+    ///
+    /// Dos y no una: los dos panes son dos ubicaciones y pueden llevar
+    /// overrides distintos. Sin esto, un lector que había pulsado `Alt+E`
+    /// para leer un share CP1251 recuperaba `????.txt` en cuanto lo comparaba
+    /// (review MAJOR-3).
+    pub left_encoding: Option<norte_encoding::NameEncoding>,
+    /// La del lado derecho.
+    pub right_encoding: Option<norte_encoding::NameEncoding>,
+}
+
+impl CompareView {
+    /// Un panel recién abierto sobre estas dos raíces, sin filas todavía.
+    #[must_use]
+    pub fn new(
+        left_root: VPath,
+        right_root: VPath,
+        left_pane: usize,
+        left_encoding: Option<norte_encoding::NameEncoding>,
+        right_encoding: Option<norte_encoding::NameEncoding>,
+    ) -> Self {
+        Self {
+            pane: ComparePane::new(),
+            state: CompareState::Running,
+            error: None,
+            rows_expected: 0,
+            left_root,
+            right_root,
+            left_pane,
+            cancel_requested: false,
+            left_encoding,
+            right_encoding,
+        }
+    }
+
+    /// Se cerró el canal de filas: decide el estado terminal a partir de lo
+    /// que la task CONTÓ (`entries_done`, de `TaskProgress`) contra lo que
+    /// realmente LLEGÓ (`rows_received`).
+    ///
+    /// Esto y no el cierre del canal es lo que dice si la comparación
+    /// terminó de verdad: la bomba de filas y la del snapshot terminal son
+    /// tasks independientes (ver [`CompareState::Incomplete`]), así que un
+    /// canal cerrado con menos filas de las contadas es un lote perdido, no
+    /// una respuesta completa. El CLI (fase A) y la tool MCP (fase B)
+    /// reimplementaron esta cuenta cada uno por su lado y los dos se
+    /// equivocaron exactamente aquí — de ahí que viva en el modelo y no en
+    /// cada frontend.
+    ///
+    /// No decide `Cancelled` ni `Failed`: esos salen directamente del
+    /// `TaskState` del run, no de un conteo de filas, y quien los conoce se
+    /// los asigna a [`CompareView::state`] sin pasar por aquí.
+    pub fn finish(&mut self, entries_done: u64, rows_received: u64) {
+        self.rows_expected = entries_done;
+        self.state = if rows_received < entries_done {
+            CompareState::Incomplete
+        } else {
+            CompareState::Done
+        };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1217,5 +1351,31 @@ mod tests {
         assert_eq!(pane.count_of(Category::OnlyLeft), 1);
         assert_eq!(pane.count_of(Category::Problems), 1);
         assert_eq!(pane.count_of(Category::Different), 0);
+    }
+
+    /// #158: el estado del run vivía en `norte-tui`, así que la GUI habría
+    /// tenido que reimplementarlo — y las dos superficies que ya lo
+    /// reimplementaron (el CLI en la fase A, la tool MCP en la fase B) se
+    /// equivocaron en lo mismo: dieron por completa una respuesta a la que le
+    /// faltaban lotes. Aquí, y una sola vez.
+    #[test]
+    fn el_estado_del_run_vive_con_el_modelo() {
+        let mut v = CompareView::new(
+            VPath::parse("file:///a").expect("wire"),
+            VPath::parse("file:///b").expect("wire"),
+            0,
+            None,
+            None,
+        );
+        assert_eq!(v.state, CompareState::Running, "nace corriendo");
+        assert!(v.pane.is_empty());
+
+        // Menos filas de las que la task contó NO es «hecho».
+        v.finish(7, 3);
+        assert_eq!(
+            v.state,
+            CompareState::Incomplete,
+            "3 filas recibidas contra 7 contadas: la respuesta está a medias y lo dice"
+        );
     }
 }

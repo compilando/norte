@@ -8709,10 +8709,16 @@ async fn launch_compare(
 /// `None` = fin del flujo. Y ahí está la diferencia con la búsqueda, que es lo
 /// que C6 descubrió y el plan no dice: **que el canal se cierre NO significa
 /// que hayan llegado todas las filas**. La bomba de filas y la del snapshot
-/// terminal son tasks independientes, así que el conteo se compara contra
-/// `TaskProgress::entries_done` DESPUÉS de cerrarse el flujo — y si falta
-/// algo, se dice ([`CompareState::Incomplete`]). En una comparación, lo
-/// completa que está la respuesta es parte de la respuesta.
+/// terminal son tasks independientes — pero la CUENTA que decide `Done` contra
+/// [`CompareState::Incomplete`] ya no vive aquí (#158):
+/// [`norte_frontend::compare::CompareView::finish`] la hace, porque es
+/// exactamente la cuenta que la GUI también necesita y que el CLI y la tool
+/// MCP reimplementaron cada uno por su lado — y los dos se equivocaron. Solo
+/// se llama con `TaskState::Completed`: un canal cerrado ANTES de que el
+/// estado terminal se publique (la misma carrera benigna) se sigue pintando
+/// `Done` sin pasar por la cuenta, porque `entries_done` todavía no es
+/// definitivo ahí — acusar de pérdida a esa carrera sería el mismo error al
+/// revés (review MAJOR, este task).
 fn drain_compare(
     app: &mut App,
     compare_run: &mut Option<CompareRun>,
@@ -8732,42 +8738,49 @@ fn drain_compare(
         c.rows += b.rows.len();
         view.pane.extend(b.rows);
     } else {
-        let (state, expected) = finalize_compare_state(c);
-        c.state = state;
+        let mut rx = c.task.progress();
+        let snapshot = rx.borrow_and_update().clone();
+        let expected = snapshot.entries_done;
         if let Some(view) = app.compare.as_mut() {
-            view.state = state;
-            view.rows_expected = expected;
-            if state == CompareState::Failed {
-                let mut rx = c.task.progress();
-                if let norte_proto::TaskState::Failed { error } =
-                    rx.borrow_and_update().state.clone()
-                {
+            match snapshot.state {
+                norte_proto::TaskState::Cancelled => {
+                    view.state = CompareState::Cancelled;
+                    view.rows_expected = expected;
+                }
+                norte_proto::TaskState::Failed { error } => {
+                    view.state = CompareState::Failed;
+                    view.rows_expected = expected;
                     view.error = Some(error_category(&error));
                     app.message = Some(error_message(&error));
                 }
+                norte_proto::TaskState::Completed => view.finish(expected, c.rows as u64),
+                // El canal se cerró antes de que el estado terminal se
+                // publicara todavía (carrera benigna entre las dos bombas
+                // independientes): tratarlo como `Incomplete` acusaría de
+                // pérdida a una carrera que no lo es, así que se pinta
+                // `Done` con lo que hay — sin pasar por `finish`, que
+                // asumiría que `entries_done` ya es definitivo.
+                _ => {
+                    view.state = CompareState::Done;
+                    view.rows_expected = expected;
+                }
             }
+            c.state = view.state;
+        } else {
+            // El panel ya se cerró: no hay nada que pintar, y el único uso
+            // de `c.state` es una comprobación de `== Running` (aquí abajo
+            // en `on_compare_key`, y en el `select!` del run loop) —
+            // cualquier variante terminal le sirve.
+            c.state = match snapshot.state {
+                norte_proto::TaskState::Cancelled => CompareState::Cancelled,
+                norte_proto::TaskState::Failed { .. } => CompareState::Failed,
+                norte_proto::TaskState::Completed if expected > c.rows as u64 => {
+                    CompareState::Incomplete
+                }
+                _ => CompareState::Done,
+            };
         }
     }
-}
-
-/// Lee el estado terminal de un [`CompareRun`] del `TaskProgress` (no
-/// bloqueante) y devuelve tambien cuantas filas contó la Task.
-///
-/// `Completed` con MENOS filas recibidas de las contadas = `Incomplete`. Un
-/// canal cerrado sin estado terminal publicado todavía (carrera: las dos
-/// bombas son independientes) se trata como `Done` con lo que hay — decir
-/// `Incomplete` ahí acusaría de pérdida a una carrera benigna.
-fn finalize_compare_state(c: &CompareRun) -> (CompareState, u64) {
-    let mut rx = c.task.progress();
-    let snapshot = rx.borrow_and_update().clone();
-    let expected = snapshot.entries_done;
-    let state = match snapshot.state {
-        norte_proto::TaskState::Cancelled => CompareState::Cancelled,
-        norte_proto::TaskState::Failed { .. } => CompareState::Failed,
-        norte_proto::TaskState::Completed if expected > c.rows as u64 => CompareState::Incomplete,
-        _ => CompareState::Done,
-    };
-    (state, expected)
 }
 
 /// Lanza `sync.plan` y abre el panel de sincronización.
