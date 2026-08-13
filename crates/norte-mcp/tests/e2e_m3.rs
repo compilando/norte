@@ -61,6 +61,10 @@ async fn spawn_ask_daemon() -> (tempfile::TempDir, std::path::PathBuf, Arc<MemPr
     let engine = Arc::new(
         Engine::with_journal(journal).with_policy(Arc::new(policy), Arc::clone(&approvals) as _),
     );
+    // El spool de `sync.plan`, bajo el mismo tempdir del socket (ADR 0049):
+    // sin él, `sync.plan` responde `Unsupported` (ver `daemon.rs` de
+    // norte-core, que documenta el mismo requisito).
+    engine.set_spool(norte_core::sync::Spool::new(dir.path()));
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
     mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
@@ -468,6 +472,207 @@ async fn compare_nombre_hostil_viaja_como_wire_fiel() {
             !wire.contains('\u{FFFD}'),
             "{}: lossy en el wire: {wire}",
             n.id
+        );
+    }
+}
+
+/// El agente ve QUÉ haría una sincronización, y la descripción de la tool le
+/// dice que el hash NO le sirve a nadie más.
+#[tokio::test]
+async fn sync_plan_devuelve_los_pasos_y_no_aplica_nada() {
+    let (_dir, socket, mem) = spawn_ask_daemon().await;
+    mem.mkdir(&vp("mem:///src")).await.expect("mkdir src");
+    mem.mkdir(&vp("mem:///dst")).await.expect("mkdir dst");
+    write_file(&mem, "mem:///src/nuevo.txt", b"hola").await;
+
+    let mut human = Client::connect(&socket).await.expect("connect humano");
+    human
+        .initialize(norte_proto::methods::ClientInfo {
+            name: "tui".into(),
+            version: "0".into(),
+        })
+        .await
+        .expect("initialize humano");
+    let agent = Bridge::connect(&socket, "claude")
+        .await
+        .expect("connect agente");
+    grant_read_scope(&agent, &human, &["mem:///src", "mem:///dst"]).await;
+
+    let (out, err) = call_tool(
+        &agent,
+        "sync_plan",
+        serde_json::json!({"source": "mem:///src", "dest": "mem:///dst", "mode": "update"}),
+    )
+    .await;
+    assert!(!err, "{out}");
+    let payload: serde_json::Value = serde_json::from_str(&out).expect("json");
+    assert_eq!(
+        payload["steps"].as_array().expect("steps").len(),
+        1,
+        "{payload}"
+    );
+    assert_eq!(payload["truncated"], false, "{payload}");
+    assert_eq!(payload["complete"], true, "{payload}");
+    assert!(
+        payload["counts"].is_object(),
+        "los totales que el core sí conoce"
+    );
+    assert!(payload.get("dest_trash").is_some(), "{payload}");
+    assert!(payload["blockers"].is_array(), "{payload}");
+    // El hash NO viaja: no le sirve a nadie fuera de la conexión de streams.
+    assert!(payload.get("plan_hash").is_none(), "{payload}");
+    // `task_id` tampoco: sin el hash no sirve para correlacionar nada aquí.
+    assert!(payload.get("task_id").is_none(), "{payload}");
+
+    // Y el destino sigue vacío: planear no escribe.
+    assert!(
+        mem.stat(&vp("mem:///dst/nuevo.txt")).await.is_err(),
+        "sync_plan no aplica nada"
+    );
+}
+
+/// No hay tool de aplicar, y eso es la decisión, no un olvido.
+#[tokio::test]
+async fn no_existe_una_tool_de_aplicar() {
+    let (_dir, socket, _mem) = spawn_ask_daemon().await;
+    let agent = Bridge::connect(&socket, "claude")
+        .await
+        .expect("connect agente");
+    let out = agent
+        .handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+        .await
+        .expect("respuesta");
+    let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+    let defs = v["result"]["tools"].as_array().expect("tools");
+    assert!(
+        defs.iter().any(|t| t["name"] == "sync_plan"),
+        "sync_plan tiene que estar: {v}"
+    );
+    assert!(
+        !defs.iter().any(|t| t["name"] == "sync_apply"),
+        "aplicar es acción de un humano en su propio cliente (spec 3 §2.1): {v}"
+    );
+}
+
+/// `mode` ausente o de tipo/valor ilegal es error, NUNCA un default silencioso
+/// — el mismo precedente que `tool_delete::mode` (spec 3, tarea 3): el wire
+/// tampoco tiene un valor neutro entre `update` y `mirror`.
+#[tokio::test]
+async fn sync_plan_mode_malformado_o_ausente_es_error_no_default() {
+    let (_dir, socket, mem) = spawn_ask_daemon().await;
+    mem.mkdir(&vp("mem:///src")).await.expect("mkdir src");
+    mem.mkdir(&vp("mem:///dst")).await.expect("mkdir dst");
+
+    let mut human = Client::connect(&socket).await.expect("connect humano");
+    human
+        .initialize(norte_proto::methods::ClientInfo {
+            name: "tui".into(),
+            version: "0".into(),
+        })
+        .await
+        .expect("initialize humano");
+    let agent = Bridge::connect(&socket, "claude")
+        .await
+        .expect("connect agente");
+    grant_read_scope(&agent, &human, &["mem:///src", "mem:///dst"]).await;
+
+    // Ausente: NO cae a `update` en silencio.
+    let (out, err) = call_tool(
+        &agent,
+        "sync_plan",
+        serde_json::json!({"source": "mem:///src", "dest": "mem:///dst"}),
+    )
+    .await;
+    assert!(err, "{out}");
+    assert!(out.contains("mode"), "{out}");
+
+    // Tipo ilegal.
+    let (out, err) = call_tool(
+        &agent,
+        "sync_plan",
+        serde_json::json!({"source": "mem:///src", "dest": "mem:///dst", "mode": 7}),
+    )
+    .await;
+    assert!(err, "{out}");
+    assert!(out.contains("invalid mode"), "{out}");
+
+    // Valor de string ilegal (ninguno de los dos del wire).
+    let (out, err) = call_tool(
+        &agent,
+        "sync_plan",
+        serde_json::json!({"source": "mem:///src", "dest": "mem:///dst", "mode": "obliterate"}),
+    )
+    .await;
+    assert!(err, "{out}");
+    assert!(out.contains("invalid mode"), "{out}");
+}
+
+/// El tope de pasos corta el plan, lo CANCELA, y el payload lo dice sin
+/// inventar nada: `sync.plan_done` no llega tras cancelar (`run_sync_plan` no
+/// lo emite en el camino de error), así que `counts`/`dest_trash`/`blockers`
+/// tienen que quedar AUSENTES — nunca en cero, que un modelo leería como "sin
+/// bloqueos" cuando en realidad no se sabe.
+#[tokio::test]
+async fn sync_plan_con_limit_bajo_trunca_y_no_trae_lo_que_no_supo() {
+    let (_dir, socket, mem) = spawn_ask_daemon().await;
+    mem.mkdir(&vp("mem:///src")).await.expect("mkdir src");
+    mem.mkdir(&vp("mem:///dst")).await.expect("mkdir dst");
+    for i in 0..5 {
+        write_file(&mem, &format!("mem:///src/f{i}.txt"), b"x").await;
+    }
+
+    let mut human = Client::connect(&socket).await.expect("connect humano");
+    human
+        .initialize(norte_proto::methods::ClientInfo {
+            name: "tui".into(),
+            version: "0".into(),
+        })
+        .await
+        .expect("initialize humano");
+    let agent = Bridge::connect(&socket, "claude")
+        .await
+        .expect("connect agente");
+    grant_read_scope(&agent, &human, &["mem:///src", "mem:///dst"]).await;
+
+    let (out, err) = call_tool(
+        &agent,
+        "sync_plan",
+        serde_json::json!({"source": "mem:///src", "dest": "mem:///dst", "mode": "update", "limit": 2}),
+    )
+    .await;
+    assert!(!err, "{out}");
+    let payload: serde_json::Value = serde_json::from_str(&out).expect("json");
+    assert_eq!(
+        payload["steps"].as_array().expect("steps").len(),
+        2,
+        "{payload}"
+    );
+    assert_eq!(payload["truncated"], true, "{payload}");
+    assert_eq!(
+        payload["complete"], false,
+        "truncado nunca es completo: {payload}"
+    );
+    for ausente in [
+        "counts",
+        "dest_trash",
+        "blockers",
+        "blockers_total",
+        "executable",
+    ] {
+        assert!(
+            payload.get(ausente).is_none(),
+            "{ausente} no puede inventarse tras truncar: {payload}"
+        );
+    }
+    assert!(payload.get("plan_hash").is_none(), "{payload}");
+
+    // Y el destino sigue vacío: truncado tampoco aplica nada.
+    for i in 0..5 {
+        assert!(
+            mem.stat(&vp(&format!("mem:///dst/f{i}.txt")))
+                .await
+                .is_err(),
+            "sync_plan no aplica nada, ni truncado"
         );
     }
 }

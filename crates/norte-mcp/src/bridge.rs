@@ -37,6 +37,18 @@ const COMPARE_ROWS_DEFAULT: usize = 500;
 /// sería el mismo problema que no tener tope, con un paso extra.
 const COMPARE_ROWS_MAX: usize = 5000;
 
+/// Pasos de `sync_plan` por llamada si el caller no pide `limit`. MISMO valor
+/// que [`COMPARE_ROWS_DEFAULT`] y el mismo motivo: `sync.plan` tampoco pagina
+/// (no hay `cursor`), y un plan sobre dos árboles grandes metería cientos de
+/// miles de pasos en un solo resultado de tool. El nombre y el vocabulario del
+/// payload (`limit`/`truncated`/`complete`) son deliberadamente los mismos que
+/// en `compare`: un modelo que lea las dos tools no debe aprender dos
+/// vocabularios para la misma idea.
+const SYNC_STEPS_DEFAULT: usize = 500;
+/// Tope DURO de `limit` de `sync_plan`, por el mismo motivo que
+/// [`COMPARE_ROWS_MAX`].
+const SYNC_STEPS_MAX: usize = 5000;
+
 /// Celda del id JSON-RPC de la `fs.*` mutante en vuelo de un tool (#72).
 type DaemonIdCell = Arc<std::sync::OnceLock<u64>>;
 
@@ -242,6 +254,7 @@ impl Bridge {
             "task_status" => self.tool_task_status(args).await,
             "request_scope" => self.tool_request_scope(args).await,
             "compare" => self.tool_compare(args).await,
+            "sync_plan" => self.tool_sync_plan(args).await,
             other => Err(format!("unknown tool: {other}")),
         }
     }
@@ -577,6 +590,166 @@ impl Bridge {
         }))
     }
 
+    /// `sync_plan`: qué HARÍA una sincronización de un lado al otro. NO aplica
+    /// nada — no hay tool `sync_apply` (spec 3 §2.1): aplicar es una acción de
+    /// un HUMANO en su propio cliente, y el puente no la ofrece.
+    ///
+    /// Va por [`Self::streams`], igual que [`Self::tool_compare`]: `sync.plan`
+    /// entrega sus pasos por notificación (`sync.steps`* y un
+    /// `sync.plan_done`) y esta conexión de tools no las enruta (ver la
+    /// rustdoc de [`Self::streams`]).
+    ///
+    /// # El hash NO viaja
+    /// [`methods::SyncPlanDone::plan_hash`] queda retenido SOLO para la
+    /// conexión de [`Self::streams`] — un plan aprobado por esta llamada no es
+    /// redimible desde la conexión de tools (no hay tool que lo intente), así
+    /// que el hash es un valor que NADIE fuera de esta llamada puede usar. Se
+    /// omite del payload a propósito: un valor que no sirve para nada es una
+    /// invitación a intentarlo de todos modos.
+    ///
+    /// # El tope de pasos
+    /// Mismo contrato que [`Self::tool_compare`] (mismos nombres de campo, a
+    /// propósito): al llegar a `limit` ([`SYNC_STEPS_DEFAULT`], techo
+    /// [`SYNC_STEPS_MAX`]) se deja de drenar, se CANCELA la task y el payload
+    /// dice `truncated: true`. Cancelada la task, `sync.plan_done` JAMÁS llega
+    /// (`run_sync_plan` no lo emite en el camino de error: ver
+    /// `norte_core::sync::run_sync_plan`), así que `counts`/`dest_trash`/
+    /// `blockers`/`blockers_total`/`executable` quedan AUSENTES del payload —
+    /// nunca puestos a cero ni inventados — y es exactamente lo que
+    /// `complete: false` avisa.
+    ///
+    /// # `dest_trash` y `blockers`: la mitad honesta
+    /// Sin `dest_trash` un agente no puede saber si lo que el plan sobrescribe
+    /// o borra es recuperable, y sin `blockers`/`executable` reportaría un plan
+    /// como limpio cuando el core ya sabe que no se puede ejecutar. Los dos
+    /// viajan SIEMPRE que `complete` sea `true` — nunca como un extra opcional.
+    async fn tool_sync_plan(&self, args: &Value) -> Result<Value, String> {
+        let source = vpath_arg(args, "source")?;
+        let dest = vpath_arg(args, "dest")?;
+        // `mode` no tiene valor neutro entre copiar y borrar (igual que en el
+        // wire, `SyncPlanParams::mode` no lleva `#[serde(default)]`): AUSENTE
+        // es tan error como MALFORMADO — jamás una degradación silenciosa
+        // (mismo criterio que `tool_delete::mode`, con el matiz de que aquí no
+        // hay default que ofrecer).
+        let mode = match args.get("mode") {
+            Some(Value::String(s)) if s == "update" => methods::SyncMode::Update,
+            Some(Value::String(s)) if s == "mirror" => methods::SyncMode::Mirror,
+            None | Some(Value::Null) => {
+                return Err("missing arg mode: use \"update\"|\"mirror\" (no default)".to_owned());
+            }
+            Some(other) => {
+                return Err(format!("invalid mode {other}: use \"update\"|\"mirror\""));
+            }
+        };
+        let criteria = compare_criteria_arg(args)?;
+        let on_unknown = match args.get("on_unknown") {
+            None | Some(Value::Null) => methods::OnUnknown::Copy,
+            Some(Value::String(s)) if s == "copy" => methods::OnUnknown::Copy,
+            Some(Value::String(s)) if s == "skip" => methods::OnUnknown::Skip,
+            Some(other) => {
+                return Err(format!("invalid on_unknown {other}: use \"copy\"|\"skip\""));
+            }
+        };
+        let limit = opt_u64_arg(args, "limit")?
+            .map(|l| usize::try_from(l).map_err(|_| format!("arg limit too large: {l}")))
+            .transpose()?
+            .unwrap_or(SYNC_STEPS_DEFAULT)
+            .min(SYNC_STEPS_MAX);
+        // Mismo motivo que en `tool_compare`: `limit: 0` no es "cero pasos a
+        // propósito", es un argumento sin sentido que produciría
+        // `truncated: true` con `steps: []` en el PRIMER lote, indistinguible
+        // de un plan de verdad truncado.
+        if limit == 0 {
+            return Err("arg limit must be >= 1".to_owned());
+        }
+
+        let params = methods::SyncPlanParams {
+            source,
+            dest,
+            mode,
+            compare: methods::SyncCompareOptions {
+                criteria,
+                // `max_depth`/`mtime_tolerance_ms` no son argumentos de esta
+                // tool (spec 3 §4): el default del wire alcanza para un plan
+                // agéntico, y `follow_symlinks`/`descend_orphans` NO son del
+                // llamante en `sync.plan` — pedirlos es `-32602` server-side.
+                ..methods::SyncCompareOptions::default()
+            },
+            on_unknown,
+            // El puente no ofrece seleccionar un subárbol del plan: es una
+            // superficie del panel de diferencias (spec 3 §4), no de un
+            // agente que aún no ha visto las filas.
+            include: None,
+        };
+
+        let (task, mut rx) = self
+            .streams()
+            .await
+            .map_err(|e| e.to_string())?
+            .sync_plan(params)
+            .await
+            .map_err(map_backend_err)?;
+
+        // Pasos fieles al wire: `SyncStep` serializa `kind`/`criterion`/
+        // `confidence`/`reversal`/`reason` como los valores snake_case del
+        // protocolo (regla 1; jamás una etiqueta traducida) y `rel`/`dest_rel`
+        // como sus bytes de wire.
+        let mut steps: Vec<methods::SyncStep> = Vec::new();
+        let mut truncated = false;
+        let mut done: Option<methods::SyncPlanDone> = None;
+        'drain: while let Some(event) = rx.recv().await {
+            match event {
+                norte_core::sync::SyncPlanEvent::Steps(batch) => {
+                    for step in batch.steps {
+                        if steps.len() >= limit {
+                            truncated = true;
+                            break 'drain;
+                        }
+                        steps.push(step);
+                    }
+                }
+                norte_core::sync::SyncPlanEvent::Done(d) => {
+                    // Como mucho UNO por Task, y siempre el último — nada que
+                    // seguir drenando después.
+                    done = Some(d);
+                    break;
+                }
+            }
+        }
+        if truncated {
+            // Cooperativa (regla dura 3): igual que en `tool_compare`, sin
+            // esto el planificador seguiría recorriendo (y comparando) los dos
+            // árboles enteros para un `rx` que ya nadie drena.
+            task.cancel();
+        }
+        let state = task.join().await;
+        let complete =
+            !truncated && done.is_some() && matches!(state, norte_proto::TaskState::Completed);
+
+        let steps = serde_json::to_value(&steps)
+            .map_err(|e| format!("tool sync_plan: could not encode steps: {e}"))?;
+        let mut payload = json!({
+            "steps": steps,
+            "truncated": truncated,
+            "complete": complete,
+        });
+        if let Some(d) = done {
+            // Serializado del wire y NO reconstruido campo a campo: así la
+            // ortografía de `counts`/`dest_trash`/`blockers`/`executable` es
+            // EXACTAMENTE la del protocolo sin copiarla a mano dos veces. Solo
+            // `plan_hash` (y el `task_id` de correlación, que sin el hash no
+            // sirve para nada aquí) se quitan del objeto antes de fusionarlo.
+            let done_json = serde_json::to_value(&d)
+                .map_err(|e| format!("tool sync_plan: could not encode plan_done: {e}"))?;
+            if let (Value::Object(mut obj), Some(target)) = (done_json, payload.as_object_mut()) {
+                obj.remove("plan_hash");
+                obj.remove("task_id");
+                target.extend(obj);
+            }
+        }
+        Ok(payload)
+    }
+
     /// `call` del wire con los errores RPC convertidos a texto de tool. La
     /// taxonomía viaja en `data`: un `PolicyDenied` sale ACCIONABLE.
     async fn call<P, R>(&self, method: &str, params: &P) -> Result<R, String>
@@ -783,6 +956,7 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> String {
 fn tool_defs() -> Value {
     let mut defs = fixed_tool_defs();
     defs.push(compare_tool_def());
+    defs.push(sync_plan_tool_def());
     Value::Array(defs)
 }
 
@@ -913,6 +1087,29 @@ fn compare_tool_def() -> Value {
                 "limit": {"type": "integer", "minimum": 1, "description": "max rows before the comparison is cancelled and truncated:true; default 500"}
             },
             "required": ["a", "b"]
+        }
+    })
+}
+
+/// La definición de `sync_plan` (spec 3 fase B, tarea 3), separada por el
+/// mismo motivo que [`compare_tool_def`].
+fn sync_plan_tool_def() -> Value {
+    let path_desc =
+        "VPath URL: file:///…, sftp://host/…, s3://bucket/…, or composed zip:file:///a.zip!/inside";
+    json!({
+        "name": "sync_plan",
+        "description": "Returns what a one-way synchronisation would do. It does NOT apply anything, and there is no tool that does: applying is a human action in their own client. The plan's hash is retained for THIS connection only, so it cannot be handed to a user or another tool — report what would change and let the human plan it again in their client. `complete` is false whenever the run did not reach a clean end for ANY reason (the `limit` was hit and the plan was cancelled and `truncated` is true; a human cancelled the underlying task; or planning failed) — `truncated` only names one of those causes, so check `complete`, not `truncated`, before trusting anything. Whenever `complete` is false, `counts`/`dest_trash`/`blockers`/`blockers_total`/`executable` are ABSENT from the result (never zero, never invented) — treat their absence exactly like a truncated `compare`: unknown, not clean. `mode: \"mirror\"` deletes from the destination what the source does not have; `dest_trash` says whether that (and any overwrite) is recoverable at all — \"restorable\" (undo can bring it back), \"opaque\" (a trash exists but norte cannot name what it buried) or \"absent\" (nothing comes back). `executable` is the only field that says whether a human could actually run this plan as-is; a non-empty `blockers` (or `blockers_total` bigger than the list) means they could not, whatever the steps look like. Approved plans are retained server-side per connection with a cap and a TTL of several minutes; a run that fails outright (not `truncated`) rather than returning a `complete: false` result may mean that cap was hit — wait for older plans to expire rather than retrying sync_plan in a tight loop.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": format!("Where the bytes come from. {path_desc}")},
+                "dest": {"type": "string", "description": format!("Where they would go. {path_desc}")},
+                "mode": {"type": "string", "enum": ["update", "mirror"], "description": "REQUIRED, no default: \"update\" only copies/overwrites what differs; \"mirror\" does that plus deletes from dest what source does not have."},
+                "criteria": {"type": "array", "items": {"type": "string", "enum": ["size", "mtime", "hash"]}, "description": "which rungs to run; absent = size+mtime (the wire default). hash reads full file contents on both sides and requires content scope."},
+                "on_unknown": {"type": "string", "enum": ["copy", "skip"], "description": "what to do with a row the provider could not compare with certainty; default copy."},
+                "limit": {"type": "integer", "minimum": 1, "description": "max steps before the plan is cancelled and truncated:true; default 500"}
+            },
+            "required": ["source", "dest", "mode"]
         }
     })
 }
