@@ -864,7 +864,7 @@ pub fn step_text(
     dest_trash: norte_proto::methods::DestTrash,
     enc: norte_frontend::sync::SyncEncodings,
 ) -> StepText {
-    use norte_frontend::sync::{RelAnchor, render_step, step_label, undo_label};
+    use norte_frontend::sync::{render_step, step_label, undo_label};
 
     let cells = render_step(step, dest_trash, enc);
     let lang = norte_i18n::active();
@@ -883,11 +883,8 @@ pub fn step_text(
         // desaparecía de la fila —sin flecha, sin marca y sin nada— justo
         // cuando los nombres eran adversarios (auditoría de encoding MAJOR-1).
         dest: cells.dest_rel.as_ref().map(path_text),
-        anchor: match cells.anchor {
-            RelAnchor::Dest => norte_i18n::t("sync-anchor-dest"),
-            RelAnchor::Either => norte_i18n::t("sync-anchor-either"),
-            RelAnchor::Source => String::new(),
-        },
+        anchor: norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active())
+            .unwrap_or_default(),
         size: cells
             .size
             .map_or_else(String::new, norte_frontend::human_bytes),
@@ -975,11 +972,7 @@ pub fn title_text(run: &SyncRun) -> TitleText {
         // build no sabe nombrar es afirmar la mitad SEGURA de lo que hay que
         // aprobar — al revés que `RelAnchor::Either` y `StepUndo::Unclear`,
         // que en el mismo modelo admiten que no lo saben.
-        mode: norte_i18n::t(match run.mode {
-            SyncMode::Mirror => "sync-mode-mirror",
-            SyncMode::Update => "sync-mode-update",
-            _ => "sync-mode-unknown",
-        }),
+        mode: norte_frontend::sync::mode_label(run.mode, norte_i18n::active()),
         source: one(&run.source_root, run.source_encoding),
         dest: one(&run.dest_root, run.dest_encoding),
     }
@@ -1071,21 +1064,16 @@ pub fn failure_text(
     failure: &SyncFailure,
     enc: norte_frontend::sync::SyncEncodings,
 ) -> FailureText {
-    use norte_frontend::sync::RelAnchor;
-
     let cells = norte_frontend::sync::render_failure(failure, enc);
     let cause = norte_frontend::sync::failure_cause_label(failure.cause, norte_i18n::active());
     FailureText {
         rel: path_text(&cells.rel),
         dest: cells.dest_rel.as_ref().map(path_text),
-        anchor: match cells.anchor {
-            // `Dest` no lo produce `render_failure` hoy —haría falta la clase
-            // en el wire—, pero se nombra igual: el día que llegue, el brazo
-            // `_` lo habría pintado como «del origen» sin decir nada.
-            RelAnchor::Dest => norte_i18n::t("sync-anchor-dest"),
-            RelAnchor::Either => norte_i18n::t("sync-anchor-either"),
-            RelAnchor::Source => String::new(),
-        },
+        // `Dest` no lo produce `render_failure` hoy —haría falta la clase en
+        // el wire—, pero el compartido lo nombra igual: el día que llegue, un
+        // `_` lo habría pintado como «del origen» sin decir nada.
+        anchor: norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active())
+            .unwrap_or_default(),
         a11y: cause.clone(),
         cause,
     }

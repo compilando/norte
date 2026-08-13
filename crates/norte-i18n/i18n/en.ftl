@@ -217,6 +217,8 @@ cli-sync-done = applied: { $done } done, { $failed } failed, { $skipped } skippe
 # leaves alone, so a filename can forge a whole fabricated row in band (corpus
 # `cause_join_spoof`). A newline is Cc, so it is masked — a name cannot forge
 # a line break, which makes it the pipe's structural separator.
+cli-sync-step-dest = to the destination: { $dest }
+cli-sync-step-reason = why: { $reason }
 cli-sync-failure = { $rel }
 cli-sync-failure-dest = on the destination: { $dest }
 cli-sync-failure-cause = failed: { $cause }

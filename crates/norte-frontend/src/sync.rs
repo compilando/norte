@@ -514,6 +514,61 @@ pub fn blocker_label(kind: SyncBlockerKind, lang: Lang) -> String {
     t_in(lang, &format!("sync-blocker-{id}"))
 }
 
+/// El calificador de un [`RelAnchor`], o `None` cuando la ruta cuelga del
+/// ORIGEN y no hace falta decir nada.
+///
+/// Vive aquí y no en cada painter por lo mismo que [`failure_cause_label`]:
+/// la revisión de rama de C2 lo encontró transcrito a mano en tres sitios
+/// —`norte-tui/src/ui.rs` y dos veces en `norte-gui/src/sync_view.rs`— y a la
+/// CLI se le había olvidado, que es la forma en que esta clase de duplicado
+/// se nota tarde (rust MAJOR-3, encoding MAJOR-1).
+///
+/// `None` para [`RelAnchor::Source`] a propósito: un calificador vacío
+/// pintado igualmente mete un espacio en banda, y esta pantalla ya tiene un
+/// problema con los separadores que un nombre puede llevar dentro.
+///
+/// ```
+/// use norte_frontend::sync::{RelAnchor, anchor_label};
+/// use norte_i18n::Lang;
+/// assert!(anchor_label(RelAnchor::Source, Lang::En).is_none());
+/// assert_ne!(
+///     anchor_label(RelAnchor::Dest, Lang::En),
+///     anchor_label(RelAnchor::Either, Lang::En),
+/// );
+/// ```
+#[must_use]
+pub fn anchor_label(anchor: RelAnchor, lang: Lang) -> Option<String> {
+    match anchor {
+        RelAnchor::Source => None,
+        RelAnchor::Dest => Some(t_in(lang, "sync-anchor-dest")),
+        RelAnchor::Either => Some(t_in(lang, "sync-anchor-either")),
+    }
+}
+
+/// El nombre de un [`SyncMode`], que la cabecera pinta.
+///
+/// El `_` NO cae a «update»: un modo que este build no sabe nombrar tiene que
+/// decirlo, porque la diferencia entre los dos que sí conoce es si BORRA.
+/// Estaba escrito dos veces en esta rama, una por frontend (rust MAJOR-3).
+///
+/// ```
+/// use norte_frontend::sync::mode_label;
+/// use norte_i18n::Lang;
+/// use norte_proto::methods::SyncMode;
+/// assert_ne!(
+///     mode_label(SyncMode::Update, Lang::En),
+///     mode_label(SyncMode::Mirror, Lang::En),
+/// );
+/// ```
+#[must_use]
+pub fn mode_label(mode: SyncMode, lang: Lang) -> String {
+    match mode {
+        SyncMode::Update => t_in(lang, "sync-mode-update"),
+        SyncMode::Mirror => t_in(lang, "sync-mode-mirror"),
+        _ => t_in(lang, "sync-mode-unknown"),
+    }
+}
+
 /// The reader's word for why ONE step of an applied plan did not happen
 /// ([`norte_proto::methods::SyncFailure::cause`]).
 ///

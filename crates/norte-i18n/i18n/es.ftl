@@ -219,6 +219,8 @@ cli-sync-done = aplicado: { $done } hechos, { $failed } fallidos, { $skipped } o
 # pasar, así que un nombre puede fabricar una fila entera en banda (corpus
 # `cause_join_spoof`). Un salto de línea es Cc y sí se enmascara — un nombre no
 # lo puede falsificar, y por eso es el separador estructural de una tubería.
+cli-sync-step-dest = al destino: { $dest }
+cli-sync-step-reason = porque: { $reason }
 cli-sync-failure = { $rel }
 cli-sync-failure-dest = en el destino: { $dest }
 cli-sync-failure-cause = falló: { $cause }

@@ -3482,11 +3482,10 @@ fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, the
     // y decir «esto no borra» de un modo que esta build no sabe nombrar es
     // afirmar la mitad SEGURA de lo que hay que aprobar. Misma regla que
     // `RelAnchor::Either` y `StepUndo::Unclear` en el mismo modelo.
-    let modo = match view.mode {
-        norte_proto::methods::SyncMode::Mirror => t("sync-mode-mirror"),
-        norte_proto::methods::SyncMode::Update => t("sync-mode-update"),
-        _ => t("sync-mode-unknown"),
-    };
+    // Por el compartido: esta decisión estaba escrita también en la GUI, con
+    // su misma regla de que el `_` NO cae a «update» (revisión de rama de C2,
+    // rust MAJOR-3).
+    let modo = norte_frontend::sync::mode_label(view.mode, norte_i18n::active());
     // La FLECHA es el sentido, y es la mitad de lo que se aprueba: origen a la
     // izquierda del `→`, destino a la derecha, siempre, sin depender de qué
     // pane sea cuál.
@@ -3688,11 +3687,9 @@ fn sync_step_item(
     let cells = norte_frontend::sync::render_step(step, view.dest_trash(), view.encodings());
     let dest_rel = cells.dest_rel.clone();
     // Las marcas, el ancla y el tamaño; lo que sobra es para la ruta.
-    let ancla = match cells.anchor {
-        norte_frontend::sync::RelAnchor::Dest => t("sync-anchor-dest"),
-        norte_frontend::sync::RelAnchor::Either => t("sync-anchor-either"),
-        norte_frontend::sync::RelAnchor::Source => String::new(),
-    };
+    // Ídem: tres copias de este match en esta rama, y la CLI sin ninguna.
+    let ancla =
+        norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active()).unwrap_or_default();
     let tam = cells
         .size
         .map(norte_frontend::human_bytes)
@@ -3719,9 +3716,6 @@ fn sync_step_item(
     // el pane destino lleva override, porque reinterpretar siempre marca— se
     // pintaba sin marca ninguna (auditoría de encoding MAJOR-3). El CLI ya lo
     // hacía por mitades y la GUI también; esta era la única de las tres que no.
-    let marcada = |d: &norte_frontend::sync::RelDisplay| {
-        format!("{}{}", if d.hostile { HOSTILE_BADGE } else { "" }, d.text)
-    };
     // #185, y aquí pesa más que en el panel de diferencias: las dos
     // ortografías van UNIDAS por un `→` en la misma cadena, y `→` es un
     // imprimible corriente que `display_name_with` no enmascara — o sea que un
@@ -3730,17 +3724,59 @@ fn sync_step_item(
     // ortografía en su elemento); una `Line` de ratatui no tiene esa
     // posibilidad, así que la decisión de diseño es la misma que #185 lista
     // para el título del panel de diferencias.
-    let ruta = match &dest_rel {
-        Some(d) => format!("{} → {}", marcada(&cells.rel), marcada(d)),
-        None => marcada(&cells.rel),
+    //
+    // Y los badges y el `→` van en SPANS PROPIOS, fuera de lo que se trunca
+    // (auditoría de encoding de la revisión de rama, MAJOR-4). Construirlos
+    // dentro de una sola cadena y pasarla por `middle_ellipsis` los ponía en
+    // el MEDIO, que es exactamente lo que esa función tira: a pane estrecho,
+    // `⚠ caf<FFFD>.txt → ⚠ caf<FFFD>2.txt` quedaba `⚠ caf…2.txt` y se leía
+    // como UN nombre truncado. El `…` dice «se cortó algo», no «la pareja se
+    // colapsó», y el campo que desaparecía es justo el que nombra el fichero
+    // sobre el que cae la escritura. Se trunca el TEXTO de cada mitad, nunca
+    // su marca ni el separador.
+    let estilo_ruta = theme.entry(&cells.rel.raw, norte_proto::EntryKind::File);
+    let badge_de = |d: &norte_frontend::sync::RelDisplay| {
+        if d.hostile { HOSTILE_BADGE } else { "" }
     };
-    let mut spans = vec![
-        Span::styled(marcas, sync_undo_style(theme, cells.undo)),
-        Span::styled(
-            norte_frontend::middle_ellipsis(&ruta, ruta_w),
-            theme.entry(&cells.rel.raw, norte_proto::EntryKind::File),
-        ),
-    ];
+    let mut spans = vec![Span::styled(marcas, sync_undo_style(theme, cells.undo))];
+    if let Some(d) = &dest_rel {
+        const SEP: &str = " → ";
+        let fijo = badge_de(&cells.rel).width() + SEP.width() + badge_de(d).width();
+        let texto_w = ruta_w.saturating_sub(fijo).max(2);
+        // Se reparte a la mitad: las dos ortografías valen lo mismo, y la
+        // del destino es la que dice dónde cae la escritura.
+        let mitad = (texto_w / 2).max(1);
+        spans.push(Span::styled(
+            badge_de(&cells.rel),
+            theme.role(Role::Warning),
+        ));
+        spans.push(Span::styled(
+            norte_frontend::middle_ellipsis(&cells.rel.text, mitad),
+            estilo_ruta,
+        ));
+        // El separador con su propio rol: un `→` DENTRO de un nombre
+        // (corpus `arrow_join_spoof`) es texto de fichero y se pinta como
+        // tal, así que el de la pareja se distingue por estilo aunque los
+        // dos glifos sean el mismo. Es lo más que da una `Line` de
+        // ratatui; el separador estructural de verdad es lo que #185
+        // lista para esta misma clase de fila.
+        spans.push(Span::styled(SEP, theme.role(Role::Info)));
+        spans.push(Span::styled(badge_de(d), theme.role(Role::Warning)));
+        spans.push(Span::styled(
+            norte_frontend::middle_ellipsis(&d.text, texto_w - mitad),
+            estilo_ruta,
+        ));
+    } else {
+        let fijo = badge_de(&cells.rel).width();
+        spans.push(Span::styled(
+            badge_de(&cells.rel),
+            theme.role(Role::Warning),
+        ));
+        spans.push(Span::styled(
+            norte_frontend::middle_ellipsis(&cells.rel.text, ruta_w.saturating_sub(fijo).max(1)),
+            estilo_ruta,
+        ));
+    }
     if !ancla.is_empty() {
         spans.push(Span::styled(format!(" {ancla}"), theme.role(Role::Info)));
     }
@@ -3748,6 +3784,93 @@ fn sync_step_item(
         spans.push(Span::styled(format!(" {tam}"), theme.role(Role::Info)));
     }
     ListItem::new(Line::from(spans))
+}
+
+#[cfg(test)]
+mod sync_step_item_tests {
+    use super::{HOSTILE_BADGE, TuiTheme, sync_step_item};
+    use ratatui::widgets::ListItem;
+
+    /// El texto de CADA span, sin renderizar a buffer: aquí importa la
+    /// estructura de spans (qué es marca, qué es separador y qué es nombre),
+    /// que es justo lo que un buffer plano borra.
+    fn spans(item: &ListItem<'_>) -> Vec<String> {
+        // `ListItem` no expone sus líneas; se reconstruye el mismo item.
+        // Se compara sobre el render, que es lo que el lector ve.
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::{List, Widget as _};
+        let area = Rect::new(0, 0, 28, 1);
+        let mut buf = Buffer::empty(area);
+        List::new(vec![item.clone()]).render(area, &mut buf);
+        vec![
+            (0..area.width)
+                .map(|x| buf[(x, 0)].symbol().to_string())
+                .collect::<String>(),
+        ]
+    }
+
+    fn vista() -> crate::app::SyncView {
+        crate::app::SyncView::new(
+            norte_proto::TaskId::new(1),
+            norte_proto::methods::SyncMode::Update,
+            norte_proto::VPath::parse("file:///origen").expect("vpath"),
+            norte_proto::VPath::parse("file:///destino").expect("vpath"),
+            None,
+            None,
+        )
+    }
+
+    /// Un paso cuyas DOS ortografías son hostiles y largas.
+    fn paso_hostil() -> norte_proto::methods::SyncStep {
+        // Bytes inválidos: `render_step` los decodifica lossy y marca las dos
+        // mitades como hostiles, que es el caso normal cuando el pane destino
+        // lleva un override #57 y el origen no.
+        let seg = |b: &[u8]| {
+            norte_proto::methods::RelPath::new(vec![
+                norte_proto::Segment::new(b.to_vec()).expect("segmento"),
+            ])
+        };
+        let rel = seg(b"caf\xff_origen_largo.txt");
+        let dest = seg(b"caf\xfe_destino_largo.txt");
+        norte_proto::methods::SyncStep {
+            id: 1,
+            kind: norte_proto::methods::SyncStepKind::Overwrite,
+            rel,
+            dest_rel: Some(dest),
+            size: None,
+            criterion: norte_proto::methods::CompareCriterion::Size,
+            confidence: norte_proto::methods::CompareConfidence::Certain,
+            reversal: Some(norte_proto::methods::StepReversal::Delete),
+            reason: None,
+        }
+    }
+
+    /// Auditoría de encoding de la revisión de rama, MAJOR-4. El badge y el
+    /// `→` estaban DENTRO de la cadena que se trunca, y `middle_ellipsis` tira
+    /// el medio: a pane estrecho la fila quedaba `⚠ caf…largo.txt`, o sea un
+    /// nombre truncado. Desaparecían el separador de la pareja y la marca de
+    /// la ortografía del DESTINO — la que dice sobre qué fichero cae la
+    /// escritura— sin que nada dijera que la pareja se había colapsado.
+    #[test]
+    fn a_pane_estrecho_sobreviven_los_dos_badges_y_la_flecha() {
+        let theme = TuiTheme::default();
+        let v = vista();
+        let item = sync_step_item(&paso_hostil(), &v, 28, &theme);
+        let pintado = spans(&item).join("");
+        assert!(
+            pintado.contains('\u{2192}'),
+            "el separador de la pareja sobrevive al truncado: {pintado:?}"
+        );
+        // El badge PEGADO a cada mitad, y no el recuento a secas: el glifo de
+        // confianza de la columna de marcas es el mismo carácter, así que
+        // contarlo suelto cuenta tres y no dice nada de dónde están.
+        assert_eq!(
+            pintado.matches(&format!("{HOSTILE_BADGE}caf")).count(),
+            2,
+            "las DOS mitades siguen marcadas, cada una en su sitio: {pintado:?}"
+        );
+    }
 }
 
 /// El color de las marcas de un paso. El GLIFO ya lo distingue sin color
