@@ -237,6 +237,14 @@ struct NorteGui {
     /// Canal hacia el hilo de sesión (conexión persistente al daemon, ver
     /// `session.rs`): cada `cd` manda un `SessionCmd::List`, jamás reconecta.
     cmds: tokio::sync::mpsc::UnboundedSender<SessionCmd>,
+    /// `Backend::is_journalled()` del backend conectado (#161): nace en
+    /// `true` — el valor que la conexión real siempre confirma, porque esta
+    /// GUI solo construye `Backend::Remote` — y `apply_event` lo REEMPLAZA
+    /// (no lo combina) en cuanto llega `SessionEvent::Connected`, la única
+    /// vez que llega, porque este canal jamás reconecta (ver `cmds` arriba).
+    /// Alimenta `context_menu::facts_for`, que antes llevaba el mismo `true`
+    /// como literal.
+    journalled: bool,
     /// Handle de foco del root: sin él los `KeyDownEvent` no llegan.
     focus_handle: FocusHandle,
     /// Modal activo (confirmación/conflicto), o `None`.
@@ -1133,6 +1141,7 @@ impl NorteGui {
                     theme,
                     effects,
                     cmds: cmd_tx,
+                    journalled: true,
                     focus_handle,
                     modal: None,
                     inflight: std::collections::HashMap::new(),
@@ -1229,6 +1238,7 @@ impl NorteGui {
                     theme,
                     effects,
                     cmds: cmd_tx,
+                    journalled: true,
                     focus_handle,
                     modal: None,
                     inflight: std::collections::HashMap::new(),
@@ -1628,6 +1638,16 @@ impl NorteGui {
                     self.panes[pane].hydrate(&path, size, mtime_ms);
                 }
                 cx.notify();
+            }
+            SessionEvent::Connected { journalled } => {
+                // Sin `cx.notify()` a propósito: hoy `journalled` nace en
+                // `true` y esto SIEMPRE llega con `true` (la GUI solo
+                // construye `Backend::Remote`, ver doc del campo), así que
+                // esta escritura nunca cambia lo que ya se pintó. Si algún
+                // día esta GUI alcanza `Backend::Embedded`, ESTE arm
+                // necesitará repintar lo que ya esté en pantalla
+                // (menú/ayuda abiertos) para no dejarlo desfasado.
+                self.journalled = journalled;
             }
             SessionEvent::ConnectFailed(msg) => {
                 // Sin esto `loading` queda clavado en `true` (nunca llega un
@@ -3463,6 +3483,7 @@ impl NorteGui {
                 source: scheme_is_read_only(self.panes[f].dir().scheme()),
                 dest: scheme_is_read_only(self.panes[1 - f].dir().scheme()),
             },
+            self.journalled,
         )
     }
 
@@ -4826,6 +4847,7 @@ impl NorteGui {
                 source: scheme_is_read_only(self.panes[pane].dir().scheme()),
                 dest: scheme_is_read_only(self.panes[1 - pane].dir().scheme()),
             },
+            self.journalled,
         );
         self.context_menu = Some(ContextMenu::open(
             pane,
@@ -14240,6 +14262,7 @@ keymap = [
                 source: false,
                 dest: false,
             },
+            true,
         );
         let abierto = || {
             Some(ContextMenu::open(
@@ -14394,6 +14417,7 @@ keymap = [
                 source: false,
                 dest: false,
             },
+            true,
         );
         let (browse, _) = keymap::build_effectives_preset_only("orthodox");
         let con_chord: std::collections::HashSet<&str> =

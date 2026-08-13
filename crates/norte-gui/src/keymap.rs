@@ -1007,6 +1007,23 @@ prepend_keymap = [{ on = ["5"], run = "cursor.down" }]
             !means_command(&ortho, "pane.hotlist", "d", ctrl(), Some("d")),
             "un binding no disponible no casa"
         );
+
+        // `pane.sync-dirs` es el mismo caso: `orthodox` lo liga a `ctrl+y`
+        // (es `Status::Live` en el catálogo compartido — #161/#162), y la
+        // GUI no tiene comando de sincronización, solo comparación (spec 3
+        // fase C, sin construir). Debe sobrevivir marcado NotHere, igual que
+        // `pane.hotlist` arriba, no desaparecer ni casar.
+        assert!(
+            ortho
+                .bindings_all()
+                .iter()
+                .any(|(seq, cmd, _)| *cmd == "pane.sync-dirs" && seq == "ctrl+y"),
+            "el binding debe SEGUIR ahí, marcado — si no, este test no prueba nada"
+        );
+        assert!(
+            !means_command(&ortho, "pane.sync-dirs", "y", ctrl(), Some("y")),
+            "un binding no disponible no casa"
+        );
     }
 
     /// H3f: the bug this closes is one of OMISSION — the presets bound `f1`

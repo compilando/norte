@@ -296,6 +296,17 @@ pub enum SessionEvent {
     },
     /// La conexión inicial con el daemon falló (mensaje ya renderizable).
     ConnectFailed(String),
+    /// La conexión inicial tuvo éxito: `journalled` es
+    /// `Backend::Remote(remote).is_journalled()`, preguntado UNA VEZ aquí
+    /// (síncrono, sobre el `RemoteBackend` recién conectado) porque esta GUI
+    /// no guarda un `Backend` en el hilo de UI (#161). No cambia durante la
+    /// sesión: la GUI no reconecta, y hoy solo construye `Backend::Remote`
+    /// —jamás `Embedded`— así que la respuesta es estable mientras dure esta
+    /// conexión.
+    Connected {
+        /// Si este backend registra sus mutaciones en un journal.
+        journalled: bool,
+    },
     /// La op fue aceptada; su task corre con este id (para mapear progreso →
     /// operación en la GUI).
     Submitted {
@@ -514,6 +525,12 @@ pub fn spawn(
                     return;
                 }
             };
+            // Síncrono a propósito (ver doc de `SessionEvent::Connected`):
+            // `is_journalled` no hace I/O, así que preguntarlo aquí, una vez,
+            // sobre el `Backend::Remote` recién construido no cuesta un
+            // viaje de red extra.
+            let journalled = Backend::Remote(remote.clone()).is_journalled();
+            let _ = event_tx.send(SessionEvent::Connected { journalled });
             let cancellers: Arc<Mutex<HashMap<TaskId, TaskCanceller>>> =
                 Arc::new(Mutex::new(HashMap::new()));
             while let Some(cmd) = cmd_rx.recv().await {

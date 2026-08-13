@@ -143,8 +143,17 @@ pub struct ReadOnly {
 /// Nada de esto se recalcula mientras el menú está abierto: un menú que cambia
 /// bajo el puntero es peor que uno desfasado, que además caduca solo (ver
 /// [`ContextMenu::is_stale`]).
+///
+/// `journalled` es del LLAMADOR y no un literal de aquí (#161): esta función
+/// no tiene forma de preguntarle a un `Backend` — la GUI habla con el daemon
+/// por un canal async y no guarda ninguno en el hilo de UI —, así que quien sí
+/// lo sabe (`NorteGui::journalled`, poblado una vez al conectar por
+/// `SessionEvent::Connected`, ver `session.rs`) lo pasa. Ningún comando que
+/// esta GUI implemente lo lee todavía (`pane.sync-dirs` es el único, y no
+/// está en `COMMANDS`), así que hoy es un hecho inerte — pero uno correcto,
+/// no un `true` inventado.
 #[must_use]
-pub fn facts_for(kind: EntryKind, count: usize, read_only: ReadOnly) -> Facts {
+pub fn facts_for(kind: EntryKind, count: usize, read_only: ReadOnly, journalled: bool) -> Facts {
     let single = count == 1;
     let ReadOnly {
         source: source_read_only,
@@ -165,7 +174,7 @@ pub fn facts_for(kind: EntryKind, count: usize, read_only: ReadOnly) -> Facts {
         // por scheme). Además hoy no veta nada en la tabla: «degradada»
         // significa sesión sin cifrar, no sesión inservible.
         degraded: false,
-        journalled: true,
+        journalled,
     }
 }
 
@@ -314,6 +323,7 @@ mod tests {
                 source: false,
                 dest: false,
             },
+            true,
         )
     }
 
@@ -359,6 +369,7 @@ mod tests {
                     source: ro_src,
                     dest: ro_dst,
                 },
+                true,
             );
             let got: Vec<&str> = items(&f).iter().map(|i| i.command).collect();
             assert_eq!(got, esperados, "la lista cambió con {kind:?}");
@@ -377,6 +388,7 @@ mod tests {
                 source: true,
                 dest: true,
             },
+            true,
         );
         let mut m = menu(&f, Target::Entry("x".into()));
         let borrar = m
@@ -412,6 +424,7 @@ mod tests {
                 source: false,
                 dest: true,
             },
+            true,
         );
         let m = menu(&f, Target::Entry("d".into()));
         let mover = m.items.iter().find(|i| i.command == "pane.move").unwrap();
@@ -440,6 +453,7 @@ mod tests {
                 source: false,
                 dest: false,
             },
+            true,
         );
         let abrir = |f: &Facts| {
             items(f)
@@ -467,6 +481,7 @@ mod tests {
                 source: false,
                 dest: false,
             },
+            true,
         );
         assert_eq!(
             abrir(&varios),
@@ -500,6 +515,7 @@ mod tests {
                 source: false,
                 dest: false,
             },
+            true,
         );
         assert_eq!(avail(&marcas, "pane.rename"), no(Reason::WrongTarget));
         assert_eq!(
@@ -515,6 +531,7 @@ mod tests {
                 source: true,
                 dest: false,
             },
+            true,
         );
         assert_eq!(
             avail(&zip, "pane.rename"),
