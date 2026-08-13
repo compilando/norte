@@ -276,6 +276,26 @@ enum Cmd {
         /// bash, zsh or fish
         shell: String,
     },
+    /// Compara dos árboles y contesta en el CÓDIGO DE SALIDA (0 iguales,
+    /// 1 difieren, 2 no se pudo saber)
+    Compare {
+        /// Árbol izquierdo
+        a: PathBuf,
+        /// Árbol derecho
+        b: PathBuf,
+        /// Una fila por línea, en JSON, sin traducir
+        #[arg(long)]
+        json: bool,
+        /// Criterios de comparación (por defecto los del wire)
+        #[arg(long, value_delimiter = ',')]
+        criteria: Vec<String>,
+        /// Profundidad máxima del recorrido
+        #[arg(long)]
+        max_depth: Option<u32>,
+        /// Tolerancia de mtime en milisegundos
+        #[arg(long)]
+        mtime_tolerance_ms: Option<u32>,
+    },
 }
 
 /// Subcomandos de IA (M4-A2).
@@ -640,6 +660,25 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let mut degraded = backend.take_degraded();
     let result = match cli.cmd {
         Cmd::Ls { path, json, attrs } => ls(&backend, &path, json, &attrs).await,
+        Cmd::Compare {
+            a,
+            b,
+            json,
+            criteria,
+            max_depth,
+            mtime_tolerance_ms,
+        } => {
+            compare_cmd(
+                &backend,
+                &a,
+                &b,
+                json,
+                &criteria,
+                max_depth,
+                mtime_tolerance_ms,
+            )
+            .await
+        }
         Cmd::Connect { target } => connect_cmd(&backend, &target, cli.daemon).await,
         Cmd::Cp {
             src,
@@ -2132,6 +2171,132 @@ async fn connect_cmd(backend: &Backend, target: &str, daemon: bool) -> anyhow::R
         norte_i18n::ta("cli-connect-ok", &[("target", target)])
     );
     Ok(ExitCode::SUCCESS)
+}
+
+/// Traduce `--criteria` a un [`norte_proto::methods::CompareCriteria`].
+///
+/// Vacío = el default del wire (tamaño y fecha, sin hash — ver el doctest de
+/// `FsCompareParams`). No vacío = EXACTAMENTE la lista pedida: `--criteria
+/// hash` a secas enciende solo `hash` y apaga `size`/`mtime`, para que "quiero
+/// nada más que el hash" tenga el efecto obvio en la petición aunque el core
+/// (ADR 0048) solo lo corra sobre las parejas que los rungs baratos ya dieron
+/// por iguales.
+fn parse_compare_criteria(
+    names: &[String],
+) -> anyhow::Result<norte_proto::methods::CompareCriteria> {
+    if names.is_empty() {
+        return Ok(norte_proto::methods::CompareCriteria::default());
+    }
+    let mut criteria = norte_proto::methods::CompareCriteria {
+        size: false,
+        mtime: false,
+        hash: false,
+    };
+    for name in names {
+        match name.as_str() {
+            "size" => criteria.size = true,
+            "mtime" => criteria.mtime = true,
+            "hash" => criteria.hash = true,
+            other => anyhow::bail!(
+                "--criteria: criterio desconocido \"{}\"",
+                other.escape_debug()
+            ),
+        }
+    }
+    Ok(criteria)
+}
+
+/// `norte compare`: `fs.compare` y su veredicto en el código de salida.
+///
+/// # Por qué el veredicto va en el código
+/// Es la pregunta «¿funcionó la copia?», y quien la hace suele ser un script.
+/// `diff` contesta así desde siempre y no hay nada que mejorar en esa
+/// convención: 0 iguales, 1 difieren, y un tercer código para «no se pudo
+/// saber» que es el que de verdad importa aquí — una comparación INCOMPLETA
+/// que contestara 0 sería exactamente el fallo que este comando existe para
+/// no cometer.
+async fn compare_cmd(
+    backend: &Backend,
+    a: &std::path::Path,
+    b: &std::path::Path,
+    json: bool,
+    criteria: &[String],
+    max_depth: Option<u32>,
+    mtime_tolerance_ms: Option<u32>,
+) -> anyhow::Result<ExitCode> {
+    let left = vpath(a)?;
+    let right = vpath(b)?;
+    let params = norte_proto::methods::FsCompareParams {
+        left,
+        right,
+        criteria: parse_compare_criteria(criteria)?,
+        max_depth,
+        // 2000 ms es el default declarado por `FsCompareParams` (la regla
+        // FAT, ADR 0048; ver su doctest: `mtime_tolerance_ms == 2000`). Se
+        // repite el número aquí porque el tipo no deriva `Default` y la
+        // constante que lo fija en el proto es privada — no hay un
+        // `FsCompareParams::default()` que reutilizar.
+        mtime_tolerance_ms: mtime_tolerance_ms.unwrap_or(2000),
+        // `Backend::compare` rechaza `follow_symlinks: true`, y este comando
+        // no tiene motivo para diferir de `sync_plan`, que rechaza los dos.
+        follow_symlinks: false,
+        descend_orphans: None,
+    };
+
+    let (task, mut rx) = backend
+        .compare(params)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context(norte_i18n::t("cli-compare-failed"))?;
+
+    // Nombres del árbol del OTRO lado, que este proceso no controla: MARCAR
+    // el enmascarado, igual que `ai_cmd` — un nombre remoto puede traer RLO y
+    // spoofear la salida. `cells_for` ya enmascaró `RowFace::name` con
+    // `display_name_with` (rule 1); esto solo añade el `!` de `ai_cmd` sobre
+    // el `hostile` que esa llamada ya calculó — no un segundo enmascarado por
+    // separado, que divergiría el día que este comando gane una
+    // reinterpretación (#57) y alguien olvide threadearla también aquí.
+    let mark = |face: &norte_frontend::compare::RowFace| {
+        format!("{}{}", if face.hostile { "!" } else { "" }, face.name)
+    };
+
+    // Se decide fila a fila mientras se drena — jamás se coleccionan (la
+    // rustdoc de `ComparePane` explica lo que cuesta retener un millón de
+    // filas, y este comando no tiene motivo para retener ninguna).
+    let mut any_different = false;
+    while let Some(batch) = rx.recv().await {
+        for row in &batch.rows {
+            if row.verdict != norte_proto::methods::CompareVerdict::Same {
+                any_different = true;
+            }
+            if json {
+                // Forma wire (lossless); --json no traduce ni enmascara —
+                // un consumidor de script decodifica con el mismo códec que
+                // `norte ls --json`.
+                println!("{}", serde_json::to_string(row)?);
+            } else {
+                let cells = norte_frontend::compare::cells_for(row, None, None);
+                let glyph = norte_frontend::compare::verdict_glyph(row.verdict);
+                let left_name = cells.left.as_ref().map_or_else(String::new, mark);
+                let right_name = cells.right.as_ref().map_or_else(String::new, mark);
+                println!("{glyph} {left_name}\t{right_name}");
+            }
+        }
+    }
+
+    match task.join().await {
+        TaskState::Completed => Ok(ExitCode::from(u8::from(any_different))),
+        other => {
+            eprintln!(
+                "norte: {}",
+                norte_i18n::ta(
+                    "cli-compare-incomplete",
+                    &[("state", &format!("{other:?}"))],
+                )
+            );
+            Ok(ExitCode::from(2))
+        }
+    }
 }
 
 async fn ls(
