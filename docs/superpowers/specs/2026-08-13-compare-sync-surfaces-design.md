@@ -154,9 +154,28 @@ in this CLI and should be read before writing this one
   `--yes`, where nobody is watching the screen and the log is all there is;
 - `--yes` skips the question, never the printing.
 
-`--dry-run` prints the plan and exits. Exit codes: 0 nothing to do, 1 there are
-steps (dry-run) or all steps applied (real run), 2 the plan or the apply failed.
-Failures come from `sync.report`'s `failures`, printed one per line.
+`--dry-run` prints the plan and exits.
+
+**Exit codes, corrected 2026-08-13 after phase A's review.** This section first
+said "0 nothing to do, 1 there are steps or all steps applied, 2 the plan or the
+apply failed", and that was two defects, both of which reached the merged code
+before a whole-branch review caught them: a clean apply and an error both
+answered 1, and declining the prompt answered 0 — the same code as "the trees
+are in sync", so `norte sync src dst && echo in-sync` under cron printed
+`in-sync` having written nothing. The rule that fixes it:
+
+**Only a run that finished may answer 0 or 1. Everything else is 2.**
+
+| code | meaning |
+| --- | --- |
+| 0 | nothing to do |
+| 1 | they differed, and it was resolved — or, with `--dry-run`, shown |
+| 2 | it did not happen: plan never closed, plan not approvable, no journal, plan expired, declined, no tty and no `--yes`, or any step failed |
+
+Failures come from `sync.report`'s `failures`, printed one per line. The lesson
+is worth keeping: **a return value prescribed by a plan is part of the design
+and has to be reviewed as such** — three agents implemented that table
+faithfully, and each task was correct against its own specification.
 
 `--mode mirror` deletes. The confirmation line must say how many deletions and
 whether they go to a trash, which `norte_frontend::sync::confirmation` already
@@ -180,6 +199,18 @@ same place every other CLI task's does.
 
 **Ships on its own**, needs phase A only for the ADR's wording about what a
 human does with the result.
+
+**Corrected 2026-08-13, when phase B was built.** This section said "two tools
+dispatched next to the existing arms", and that was wrong about the hard part.
+The eight existing tools are request/response, or start a task and poll
+`task.list` for a terminal state. **Neither shape works here**: the rows of
+`fs.compare` and the steps of `sync.plan` arrive as *notifications*, and nothing
+in the bridge drained them. What it actually took was for the bridge to lazily
+open a `RemoteBackend` — which already owns that routing pump — through a new
+`RemoteBackend::connect_as_agent`, so the arm carries the same `agent_session`
+and therefore the same policy scopes (they are keyed by session, not by
+connection). Only then are the two tools "next to the existing arms". ADR 0050
+records it.
 
 Two tools added to the eight in `tool_defs()` (`crates/norte-mcp/src/bridge.rs`),
 dispatched in `call_tool` next to the existing arms:
@@ -287,9 +318,13 @@ then the gate — so the levers are:
 - **Three phases, three branches, three gate runs.** Not one twelve-task plan.
   Phase A is useful merged on its own, and merging it is what stops phase B from
   inheriting its review debt.
-- **Cheap model by default.** Phases A and B are mechanical against precedents
-  that exist in-tree (`ai_cmd` for the CLI, the eight existing tool arms for
-  MCP). They do not need the largest model. Phase C's pane does.
+- **Cheap model by default.** Phase A is mechanical against a precedent that
+  exists in-tree (`ai_cmd`). Phase C's pane is not. **Phase B was not either,
+  and this bullet was wrong about it**: it named "the eight existing tool arms"
+  as the precedent, and none of those eight consumes a stream — the first task
+  of that phase was plumbing the bridge had never had. The lesson generalises:
+  a precedent is only a precedent for the part of the problem it actually
+  solved.
 - **One reviewer per task, not two**, except where the surface earns it:
   `security-reviewer` on phase B (agent surface), `encoding-auditor` where names
   are printed. Reviewers never compile.

@@ -55,3 +55,4 @@ edits.
 | [0047](0047-volume-label-bytes-on-the-wire.md) | Volume label crosses the wire as bytes, not `String` | accepted |
 | [0048](0048-comparison-confidence-on-the-wire.md) | A comparison declares what its criterion is worth | accepted |
 | [0049](0049-the-retained-sync-plan.md) | The approved synchronisation plan is retained, and `sync.apply` carries nothing but its hash | accepted |
+| [0050](0050-the-agent-plans-and-does-not-apply.md) | The agent plans and does not apply | accepted |
