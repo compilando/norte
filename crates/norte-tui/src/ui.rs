@@ -3478,13 +3478,24 @@ fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, the
     let (dest_txt, dest_hostil) =
         norte_frontend::path_display_with(&view.dest_root, view.dest_encoding);
     let badge = |h: bool| if h { HOSTILE_BADGE } else { "" };
-    let modo = match view.mode {
-        norte_proto::methods::SyncMode::Mirror => t("sync-mode-mirror"),
-        _ => t("sync-mode-update"),
-    };
+    // El brazo `_` NO cae en «actualizar»: `SyncMode` es `#[non_exhaustive]`,
+    // y decir «esto no borra» de un modo que esta build no sabe nombrar es
+    // afirmar la mitad SEGURA de lo que hay que aprobar. Misma regla que
+    // `RelAnchor::Either` y `StepUndo::Unclear` en el mismo modelo.
+    // Por el compartido: esta decisión estaba escrita también en la GUI, con
+    // su misma regla de que el `_` NO cae a «update» (revisión de rama de C2,
+    // rust MAJOR-3).
+    let modo = norte_frontend::sync::mode_label(view.mode, norte_i18n::active());
     // La FLECHA es el sentido, y es la mitad de lo que se aprueba: origen a la
     // izquierda del `→`, destino a la derecha, siempre, sin depender de qué
     // pane sea cuál.
+    //
+    // #185 cubre TAMBIÉN este título, y aquí es la línea que dice qué árbol se
+    // sobrescribe: las dos raíces van unidas en una sola cadena, así que un
+    // `→` dentro de un nombre finge la pareja, y una raíz de origen larga
+    // expulsa la de destino entera —sin `…`— porque el recorte del título del
+    // bloque es de ratatui. El panel de diferencias tiene la misma nota sobre
+    // su `↔`; la GUI cierra los dos con separadores estructurales.
     let title = format!(
         " {} ({modo}) — {}{} → {}{} ",
         t("sync-title"),
@@ -3557,24 +3568,22 @@ fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, the
         // columnas la pregunta sola ya llena la fila, y la versión unida se
         // cortaba justo por donde decía qué tecla la contesta — que es la
         // mitad que hace falta. Lo cazó el snapshot.
+        //
+        // Qué línea toca lo decide `norte_frontend::sync::hint_id`, la
+        // COMPARTIDA (#161): este `match` tenía el brazo de `sync-hint`
+        // condicionado solo a `awaiting_approval()`, así que un plan cerrado
+        // pero NO aprobable —bloqueado por el daemon, o con la Task
+        // cancelada— seguía ofreciendo «a aprobar» encima de un pie que ya
+        // decía «este plan no se puede aprobar». Es el mismo desacuerdo que
+        // la revisión MAJOR-1 arregló entre el pie y la tecla; ahora hay UNA
+        // respuesta y la comparten los dos frontends.
+        let id = norte_frontend::sync::hint_id(view);
         let lineas = match &view.confirming {
             Some(c) => vec![
                 Line::from(Span::styled(c.text.clone(), theme.role(Role::Warning))),
-                Line::from(Span::styled(
-                    t("sync-hint-confirm"),
-                    theme.role(Role::Warning),
-                )),
+                Line::from(Span::styled(t(id), theme.role(Role::Warning))),
             ],
-            // Sin `a aprobar` una vez mandado: aplicarlo GASTA el plan, y un
-            // segundo `sync.apply` del mismo hash contesta `PlanStale`.
-            None if view.awaiting_approval() => vec![Line::from(Span::styled(
-                t("sync-hint"),
-                theme.role(Role::Info),
-            ))],
-            None => vec![Line::from(Span::styled(
-                t("sync-hint-done"),
-                theme.role(Role::Info),
-            ))],
+            None => vec![Line::from(Span::styled(t(id), theme.role(Role::Info)))],
         };
         frame.render_widget(Paragraph::new(lineas), a);
     }
@@ -3670,20 +3679,17 @@ fn sync_step_item(
     ancho: usize,
     theme: &TuiTheme,
 ) -> ListItem<'static> {
-    let cells = norte_frontend::sync::render_step(step, view.dest_trash(), view.source_encoding);
-    // `dest_rel` es la ortografía del DESTINO (#152) — la escritura cae sobre
-    // ELLA—, así que se decodifica con la reinterpretación del destino y no con
-    // la del origen, que es la que `render_step` aplica a las dos.
-    let dest_rel = step
-        .dest_rel
-        .as_ref()
-        .map(|r| norte_frontend::sync::rel_display(r, view.dest_encoding));
+    // Las DOS reinterpretaciones, de una pieza: `render_step` lee cada ruta
+    // con la del lado del que cuelga (#152). Aquí se le pasaba solo la del
+    // ORIGEN y se recomponía `dest_rel` a mano — lo que dejaba el `rel` de un
+    // `DeleteTree`, que es una ruta del DESTINO, leído con el codepage del
+    // árbol que no se toca.
+    let cells = norte_frontend::sync::render_step(step, view.dest_trash(), view.encodings());
+    let dest_rel = cells.dest_rel.clone();
     // Las marcas, el ancla y el tamaño; lo que sobra es para la ruta.
-    let ancla = match cells.anchor {
-        norte_frontend::sync::RelAnchor::Dest => t("sync-anchor-dest"),
-        norte_frontend::sync::RelAnchor::Either => t("sync-anchor-either"),
-        norte_frontend::sync::RelAnchor::Source => String::new(),
-    };
+    // Ídem: tres copias de este match en esta rama, y la CLI sin ninguna.
+    let ancla =
+        norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active()).unwrap_or_default();
     let tam = cells
         .size
         .map(norte_frontend::human_bytes)
@@ -3697,23 +3703,80 @@ fn sync_step_item(
     let ruta_w = ancho
         .saturating_sub(marcas.width() + ancla.width() + tam.width() + 2)
         .max(1);
-    // La ortografía del DESTINO cuando difiere (#152): la escritura cae sobre
+    // La ortografía del DESTINO cuando la hay (#152): la escritura cae sobre
     // ELLA, así que enseñar solo la del origen sería nombrar un fichero que no
-    // es el que se va a tocar.
-    let ruta = match &dest_rel {
-        Some(d) if d.text != cells.rel.text => {
-            format!("{} → {}", cells.rel.text, d.text)
-        }
-        _ => cells.rel.text.clone(),
+    // es el que se va a tocar. Quién decide que «la hay» es `render_step`, por
+    // BYTES y una sola vez para los tres frontends: aquí se comparaba el texto
+    // PINTADO, que es lossy, así que dos ficheros distintos con un byte
+    // inválido cada uno plegaban a uno solo y el campo desaparecía de la
+    // pantalla (auditoría de encoding MAJOR-1).
+    //
+    // El badge va POR MITAD y no solo en la del origen: una ruta de origen
+    // limpia con una ortografía de destino hostil —el caso normal cuando solo
+    // el pane destino lleva override, porque reinterpretar siempre marca— se
+    // pintaba sin marca ninguna (auditoría de encoding MAJOR-3). El CLI ya lo
+    // hacía por mitades y la GUI también; esta era la única de las tres que no.
+    // #185, y aquí pesa más que en el panel de diferencias: las dos
+    // ortografías van UNIDAS por un `→` en la misma cadena, y `→` es un
+    // imprimible corriente que `display_name_with` no enmascara — o sea que un
+    // fichero llamado `a → b.txt` (corpus `arrow_join_spoof`) llega SIN badge
+    // y finge la pareja. La GUI lo cierra con un separador estructural (cada
+    // ortografía en su elemento); una `Line` de ratatui no tiene esa
+    // posibilidad, así que la decisión de diseño es la misma que #185 lista
+    // para el título del panel de diferencias.
+    //
+    // Y los badges y el `→` van en SPANS PROPIOS, fuera de lo que se trunca
+    // (auditoría de encoding de la revisión de rama, MAJOR-4). Construirlos
+    // dentro de una sola cadena y pasarla por `middle_ellipsis` los ponía en
+    // el MEDIO, que es exactamente lo que esa función tira: a pane estrecho,
+    // `⚠ caf<FFFD>.txt → ⚠ caf<FFFD>2.txt` quedaba `⚠ caf…2.txt` y se leía
+    // como UN nombre truncado. El `…` dice «se cortó algo», no «la pareja se
+    // colapsó», y el campo que desaparecía es justo el que nombra el fichero
+    // sobre el que cae la escritura. Se trunca el TEXTO de cada mitad, nunca
+    // su marca ni el separador.
+    let estilo_ruta = theme.entry(&cells.rel.raw, norte_proto::EntryKind::File);
+    let badge_de = |d: &norte_frontend::sync::RelDisplay| {
+        if d.hostile { HOSTILE_BADGE } else { "" }
     };
-    let badge = if cells.rel.hostile { HOSTILE_BADGE } else { "" };
-    let mut spans = vec![
-        Span::styled(marcas, sync_undo_style(theme, cells.undo)),
-        Span::styled(
-            format!("{badge}{}", norte_frontend::middle_ellipsis(&ruta, ruta_w)),
-            theme.entry(&cells.rel.raw, norte_proto::EntryKind::File),
-        ),
-    ];
+    let mut spans = vec![Span::styled(marcas, sync_undo_style(theme, cells.undo))];
+    if let Some(d) = &dest_rel {
+        const SEP: &str = " → ";
+        let fijo = badge_de(&cells.rel).width() + SEP.width() + badge_de(d).width();
+        let texto_w = ruta_w.saturating_sub(fijo).max(2);
+        // Se reparte a la mitad: las dos ortografías valen lo mismo, y la
+        // del destino es la que dice dónde cae la escritura.
+        let mitad = (texto_w / 2).max(1);
+        spans.push(Span::styled(
+            badge_de(&cells.rel),
+            theme.role(Role::Warning),
+        ));
+        spans.push(Span::styled(
+            norte_frontend::middle_ellipsis(&cells.rel.text, mitad),
+            estilo_ruta,
+        ));
+        // El separador con su propio rol: un `→` DENTRO de un nombre
+        // (corpus `arrow_join_spoof`) es texto de fichero y se pinta como
+        // tal, así que el de la pareja se distingue por estilo aunque los
+        // dos glifos sean el mismo. Es lo más que da una `Line` de
+        // ratatui; el separador estructural de verdad es lo que #185
+        // lista para esta misma clase de fila.
+        spans.push(Span::styled(SEP, theme.role(Role::Info)));
+        spans.push(Span::styled(badge_de(d), theme.role(Role::Warning)));
+        spans.push(Span::styled(
+            norte_frontend::middle_ellipsis(&d.text, texto_w - mitad),
+            estilo_ruta,
+        ));
+    } else {
+        let fijo = badge_de(&cells.rel).width();
+        spans.push(Span::styled(
+            badge_de(&cells.rel),
+            theme.role(Role::Warning),
+        ));
+        spans.push(Span::styled(
+            norte_frontend::middle_ellipsis(&cells.rel.text, ruta_w.saturating_sub(fijo).max(1)),
+            estilo_ruta,
+        ));
+    }
     if !ancla.is_empty() {
         spans.push(Span::styled(format!(" {ancla}"), theme.role(Role::Info)));
     }
@@ -3721,6 +3784,93 @@ fn sync_step_item(
         spans.push(Span::styled(format!(" {tam}"), theme.role(Role::Info)));
     }
     ListItem::new(Line::from(spans))
+}
+
+#[cfg(test)]
+mod sync_step_item_tests {
+    use super::{HOSTILE_BADGE, TuiTheme, sync_step_item};
+    use ratatui::widgets::ListItem;
+
+    /// El texto de CADA span, sin renderizar a buffer: aquí importa la
+    /// estructura de spans (qué es marca, qué es separador y qué es nombre),
+    /// que es justo lo que un buffer plano borra.
+    fn spans(item: &ListItem<'_>) -> Vec<String> {
+        // `ListItem` no expone sus líneas; se reconstruye el mismo item.
+        // Se compara sobre el render, que es lo que el lector ve.
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::{List, Widget as _};
+        let area = Rect::new(0, 0, 28, 1);
+        let mut buf = Buffer::empty(area);
+        List::new(vec![item.clone()]).render(area, &mut buf);
+        vec![
+            (0..area.width)
+                .map(|x| buf[(x, 0)].symbol().to_string())
+                .collect::<String>(),
+        ]
+    }
+
+    fn vista() -> crate::app::SyncView {
+        crate::app::SyncView::new(
+            norte_proto::TaskId::new(1),
+            norte_proto::methods::SyncMode::Update,
+            norte_proto::VPath::parse("file:///origen").expect("vpath"),
+            norte_proto::VPath::parse("file:///destino").expect("vpath"),
+            None,
+            None,
+        )
+    }
+
+    /// Un paso cuyas DOS ortografías son hostiles y largas.
+    fn paso_hostil() -> norte_proto::methods::SyncStep {
+        // Bytes inválidos: `render_step` los decodifica lossy y marca las dos
+        // mitades como hostiles, que es el caso normal cuando el pane destino
+        // lleva un override #57 y el origen no.
+        let seg = |b: &[u8]| {
+            norte_proto::methods::RelPath::new(vec![
+                norte_proto::Segment::new(b.to_vec()).expect("segmento"),
+            ])
+        };
+        let rel = seg(b"caf\xff_origen_largo.txt");
+        let dest = seg(b"caf\xfe_destino_largo.txt");
+        norte_proto::methods::SyncStep {
+            id: 1,
+            kind: norte_proto::methods::SyncStepKind::Overwrite,
+            rel,
+            dest_rel: Some(dest),
+            size: None,
+            criterion: norte_proto::methods::CompareCriterion::Size,
+            confidence: norte_proto::methods::CompareConfidence::Certain,
+            reversal: Some(norte_proto::methods::StepReversal::Delete),
+            reason: None,
+        }
+    }
+
+    /// Auditoría de encoding de la revisión de rama, MAJOR-4. El badge y el
+    /// `→` estaban DENTRO de la cadena que se trunca, y `middle_ellipsis` tira
+    /// el medio: a pane estrecho la fila quedaba `⚠ caf…largo.txt`, o sea un
+    /// nombre truncado. Desaparecían el separador de la pareja y la marca de
+    /// la ortografía del DESTINO — la que dice sobre qué fichero cae la
+    /// escritura— sin que nada dijera que la pareja se había colapsado.
+    #[test]
+    fn a_pane_estrecho_sobreviven_los_dos_badges_y_la_flecha() {
+        let theme = TuiTheme::default();
+        let v = vista();
+        let item = sync_step_item(&paso_hostil(), &v, 28, &theme);
+        let pintado = spans(&item).join("");
+        assert!(
+            pintado.contains('\u{2192}'),
+            "el separador de la pareja sobrevive al truncado: {pintado:?}"
+        );
+        // El badge PEGADO a cada mitad, y no el recuento a secas: el glifo de
+        // confianza de la columna de marcas es el mismo carácter, así que
+        // contarlo suelto cuenta tres y no dice nada de dónde están.
+        assert_eq!(
+            pintado.matches(&format!("{HOSTILE_BADGE}caf")).count(),
+            2,
+            "las DOS mitades siguen marcadas, cada una en su sitio: {pintado:?}"
+        );
+    }
 }
 
 /// El color de las marcas de un paso. El GLIFO ya lo distingue sin color
@@ -3735,50 +3885,17 @@ fn sync_undo_style(theme: &TuiTheme, undo: norte_frontend::sync::StepUndo) -> St
 }
 
 /// El pie del panel de sincronización: en qué punto está el diálogo.
+///
+/// La frase entera la compone [`norte_frontend::sync::status_line`],
+/// COMPARTIDA con la GUI desde #161 — aquí estaban sus ocho brazos, y uno de
+/// ellos es dónde «este plan se puede aprobar» llega a un humano como palabras.
+/// Aquí solo quedan los espacios: pegado al `└` se lee como parte del marco,
+/// igual que el pie del panel de diferencias.
 fn sync_status_line(view: &crate::app::SyncView) -> String {
-    use crate::app::SyncRunState as R;
-    let plan = view.state.plan();
-    let n = plan.map_or_else(
-        || match &view.state {
-            norte_frontend::sync::SyncState::Planning(p) => p.len(),
-            _ => 0,
-        },
-        |p| p.steps().len(),
-    );
-    let n = n.to_string();
-    let cuerpo = match (&view.state, view.run) {
-        (_, R::Failed) => ta(
-            "sync-status-failed",
-            &[("error", view.error.as_deref().unwrap_or_default())],
-        ),
-        (_, R::Cancelled) => ta("sync-status-cancelled", &[("n", &n)]),
-        (norte_frontend::sync::SyncState::Planning(_), _) => ta("sync-planning", &[("n", &n)]),
-        (norte_frontend::sync::SyncState::Ready(p), _) => {
-            let id = if p.can_approve() {
-                "sync-status-ready"
-            } else {
-                "sync-status-not-approvable"
-            };
-            ta(id, &[("n", &n)])
-        }
-        (norte_frontend::sync::SyncState::Applying(_), _) => t("sync-status-applying"),
-        (norte_frontend::sync::SyncState::Applied(a), _) => {
-            let done = a.report().done.to_string();
-            let failed = a.report().failed.to_string();
-            // `is_undoable` y no el pronóstico del plan: un informe sin
-            // `batch_id` significa que no se journalizó nada, prometiera lo que
-            // prometiera el plan antes de correr.
-            let id = if a.is_undoable() {
-                "sync-status-applied-undoable"
-            } else {
-                "sync-status-applied-not-undoable"
-            };
-            ta(id, &[("done", &done), ("failed", &failed)])
-        }
-    };
-    // Con sus espacios, como el pie del panel de diferencias: pegado al `└` se
-    // lee como parte del marco.
-    format!(" {cuerpo} ")
+    format!(
+        " {} ",
+        norte_frontend::sync::status_line(view, norte_i18n::active())
+    )
 }
 
 #[allow(clippy::too_many_arguments)] // wiring del render, no API

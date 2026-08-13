@@ -229,3 +229,64 @@ fn dry_run_no_deja_spool_detras() {
         "el spool tiene que quedar vacío al salir: {quedan:?}"
     );
 }
+
+/// Auditoría de encoding de la revisión de rama de C2, MAJOR-2: la fila del
+/// plan unía los campos EN BANDA, en la pantalla donde se teclea `y`.
+///
+/// `→` y `  (…)` son imprimibles corrientes que `display_name_with` no
+/// enmascara, así que un nombre que los lleve dentro llega SIN el `!` de
+/// `rel_marcado` y finge una fila entera: `a → mem_b.txt` (corpus
+/// `arrow_join_spoof`) simula una pareja origen→destino que no existe. Aquí
+/// se comprueba lo que lo cierra — un campo por LÍNEA —, porque el salto de
+/// línea sí es un separador que un nombre no puede falsificar: `\n` es Cc y
+/// `is_terminal_hazard` lo enmascara a `U+FFFD`.
+///
+/// Este fichero no tenía NINGÚN test de nombre hostil, y esa ausencia es por
+/// lo que la CLI se quedó atrás cuando la GUI y la TUI se arreglaron.
+#[test]
+fn un_nombre_con_flecha_no_finge_una_pareja_en_el_plan() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("src");
+    let dst = dir.path().join("dst");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::create_dir_all(&dst).expect("mkdir dst");
+    // El nombre del corpus, tal cual: legal en ext4 y APFS.
+    let hostil = "a \u{2192} mem_b.txt";
+    std::fs::write(src.join(hostil), b"contenido").expect("write");
+
+    let assert = Command::cargo_bin("norte")
+        .expect("bin")
+        .env("NORTE_CONFIG_DIR", config_dir_del_test())
+        .args([
+            "sync",
+            "--mode",
+            "update",
+            "--dry-run",
+            src.to_str().expect("utf8"),
+            dst.to_str().expect("utf8"),
+        ])
+        .assert()
+        .code(1);
+
+    let salida = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
+    let fila = salida
+        .lines()
+        .find(|l| l.contains("mem_b.txt"))
+        .unwrap_or_else(|| panic!("el plan nombra el fichero: {salida}"));
+
+    // El nombre entero está en UNA línea, con su flecha dentro: eso es el
+    // nombre, no una pareja. Lo que no puede haber es una SEGUNDA ortografía
+    // en esa misma línea, que es lo que el ` → ` en banda fabricaba.
+    assert!(fila.contains(hostil), "el nombre va entero: {fila:?}");
+    assert_eq!(
+        fila.matches('\u{2192}').count(),
+        1,
+        "una sola flecha, la del NOMBRE: {fila:?}"
+    );
+    // Y la ortografía del destino, cuando la hay, va en su propia línea con
+    // su etiqueta — nunca pegada al nombre.
+    assert!(
+        !fila.contains("  ("),
+        "el porqué tampoco se une en banda: {fila:?}"
+    );
+}

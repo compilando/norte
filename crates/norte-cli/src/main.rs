@@ -2750,35 +2750,77 @@ fn report_blockers(done: &norte_proto::methods::SyncPlanDone) -> ExitCode {
 /// # Errors
 /// Lo que diga la escritura a stdout; el llamante lo traduce con
 /// [`codigo_por_escritura`].
+/// Las LÍNEAS de un paso del plan: una por campo, nunca una unida.
+///
+/// Pura y separada de [`print_plan`] para poder pinearla — el e2e solo alcanza
+/// pasos sin `dest_rel`, que es justo la rama que no falla.
+///
+/// **Un campo por línea** (auditoría de encoding de la revisión de rama de C2,
+/// MAJOR-2). ` → ` y `  (…)` son imprimibles corrientes que
+/// `display_name_with` no enmascara, así que llegan SIN el `!` de
+/// [`rel_marcado`]: un fichero llamado `a → mem_b.txt` —corpus
+/// `arrow_join_spoof`— fingía la pareja entera, y uno llamado
+/// `backup  (unreadable)` fingía el VEREDICTO, en la lista que el humano
+/// repasa buscando qué se borra. Y aquí pesa más que en el informe: el informe
+/// es posterior, esto es la pantalla ANTES del `y`. El salto de línea sí es un
+/// separador que un nombre no puede falsificar — `\n` es Cc y
+/// `is_terminal_hazard` lo enmascara a `U+FFFD`.
+///
+/// LOS TRES glifos van en la primera, los mismos que la TUI: el del medio es
+/// la CONFIANZA de la comparación que produjo el paso —o sea «esta
+/// sobrescritura se decide sólo por la fecha»— y ésta es la pantalla en la que
+/// un humano dice que sí a borrar un subárbol.
+fn plan_step_lines(cells: &norte_frontend::sync::StepCells) -> Vec<String> {
+    let lang = norte_i18n::active();
+    let mut lineas = vec![format!(
+        "{}{}{} {}",
+        cells.glyphs.kind,
+        cells.glyphs.confidence,
+        cells.glyphs.undo,
+        rel_marcado(&cells.rel)
+    )];
+    // El ancla, cuando la ruta NO cuelga del origen. En una lista donde una
+    // ruta sin calificar significa «del origen», callarlo lo AFIRMA — y el
+    // `rel` de un `DeleteTree` cuelga del destino (MAJOR-1: la CLI era el
+    // único de los tres painters que tiraba este campo).
+    if let Some(q) = norte_frontend::sync::anchor_label(cells.anchor, lang) {
+        lineas.push(format!("  {q}"));
+    }
+    if let Some(d) = &cells.dest_rel {
+        lineas.push(format!(
+            "  {}",
+            norte_i18n::ta("cli-sync-step-dest", &[("dest", &rel_marcado(d))])
+        ));
+    }
+    // El porqué de una omisión, o de un undo que no devolvería el fichero.
+    if let Some(r) = cells.reason {
+        lineas.push(format!(
+            "  {}",
+            norte_i18n::ta(
+                "cli-sync-step-reason",
+                &[("reason", &norte_frontend::sync::reason_label(r, lang))]
+            )
+        ));
+    }
+    lineas
+}
+
 fn print_plan(plan: &norte_frontend::sync::SyncPlan) -> std::io::Result<()> {
     use std::io::Write as _;
 
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     writeln!(out, "{}", norte_i18n::t("cli-sync-plan"))?;
     for step in plan.steps() {
-        let cells = norte_frontend::sync::render_step(step, plan.dest_trash(), None);
-        let rel = rel_marcado(&cells.rel);
-        let dest_suffix = cells
-            .dest_rel
-            .as_ref()
-            .map_or_else(String::new, |d| format!(" → {}", rel_marcado(d)));
-        // El porqué de una omisión, o de un undo que no devolvería el fichero.
-        let porque = cells.reason.map_or_else(String::new, |r| {
-            format!(
-                "  ({})",
-                norte_frontend::sync::reason_label(r, norte_i18n::active())
-            )
-        });
-        // LOS TRES glifos, los mismos que la TUI. El del medio es la CONFIANZA
-        // de la comparación que produjo el paso —o sea «esta sobrescritura se
-        // decide sólo por la fecha»— y ésta es la pantalla en la que un humano
-        // dice que sí a borrar un subárbol. Enseñar dos de tres es exactamente
-        // la deriva que esta rama existe para no tener.
-        writeln!(
-            out,
-            "{}{}{} {rel}{dest_suffix}{porque}",
-            cells.glyphs.kind, cells.glyphs.confidence, cells.glyphs.undo
-        )?;
+        // Sin reinterpretación por lado: el CLI no tiene panes, así que los
+        // nombres se leen como vienen (`SyncEncodings::default()`).
+        let cells = norte_frontend::sync::render_step(
+            step,
+            plan.dest_trash(),
+            norte_frontend::sync::SyncEncodings::default(),
+        );
+        for linea in plan_step_lines(&cells) {
+            writeln!(out, "{linea}")?;
+        }
     }
     for line in plan.summary_lines(norte_i18n::active()) {
         writeln!(out, "{line}")?;
@@ -2903,25 +2945,60 @@ async fn sync_apply_and_report(
             ],
         )
     );
+    // Una fila de fallo son TRES campos y va en TRES líneas, no en una unida
+    // por `: ` y ` → ` (auditoría de encoding MAJOR-4). Los dos joiners son
+    // imprimibles corrientes que `display_name_with` no enmascara, así que
+    // llegan SIN el `!` de `marcado`: `informe :→ copia.txt: permission
+    // denied` es un nombre legal en ext4 y APFS —está en la corpus, como
+    // `cause_join_spoof`— y en banda imprimía una fila entera fabricada,
+    // después de un `Mirror` destructivo.
+    //
+    // El salto de línea SÍ es un separador que un nombre no puede falsificar:
+    // `\n` es Cc, `is_terminal_hazard` lo enmascara a `U+FFFD` y el nombre
+    // llega badgeado. Es lo que la GUI consigue con elementos hermanos y una
+    // tubería no tiene.
+    //
+    // Lo que este bucle todavía NO arregla: una aplicación CANCELADA no llega
+    // hasta aquí —`run_task` imprime «destino limpio» y el comando vuelve—,
+    // así que el CLI es el único frontend que no puede decir qué escribió un
+    // `Mirror` cortado a medias. Issue #187.
     for failure in &report.failures {
-        let rel = rel_marcado(&norte_frontend::sync::rel_display(&failure.rel, None));
-        let dest_suffix = failure.dest_rel.as_ref().map_or_else(String::new, |d| {
-            format!(
-                " → {}",
-                rel_marcado(&norte_frontend::sync::rel_display(d, None))
-            )
-        });
+        // Por `render_failure` y no por dos `rel_display` sueltos: el plegado
+        // de la ortografía del destino cuando los BYTES coinciden es la misma
+        // regla que la de un paso, y vive una sola vez para los tres frontends
+        // (#161). Repetir la misma ruta con una flecha en medio sugiere un
+        // renombrado que no hay.
+        let cells = norte_frontend::sync::render_failure(
+            failure,
+            norte_frontend::sync::SyncEncodings::default(),
+        );
         eprintln!(
             "{}",
+            norte_i18n::ta("cli-sync-failure", &[("rel", &rel_marcado(&cells.rel))])
+        );
+        // El ancla, por la misma razón que en el plan: `render_failure` la
+        // calcula y esta llamada existe para ella, pero la CLI la tiraba
+        // (auditoría de encoding, MAJOR-1). Un `DeleteTree` denegado bajo
+        // `Mirror` es la fila hostil más común de un `Mirror`, y su `rel`
+        // cuelga del DESTINO: sin calificar, el operador va a arreglar el
+        // árbol equivocado.
+        if let Some(q) = norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active()) {
+            eprintln!("  {q}");
+        }
+        if let Some(d) = &cells.dest_rel {
+            eprintln!(
+                "  {}",
+                norte_i18n::ta("cli-sync-failure-dest", &[("dest", &rel_marcado(d))])
+            );
+        }
+        eprintln!(
+            "  {}",
             norte_i18n::ta(
-                "cli-sync-failure",
-                &[
-                    ("rel", &format!("{rel}{dest_suffix}")),
-                    (
-                        "cause",
-                        &norte_i18n::t(sync_failure_cause_label(failure.cause)),
-                    ),
-                ],
+                "cli-sync-failure-cause",
+                &[(
+                    "cause",
+                    &norte_frontend::sync::failure_cause_label(failure.cause, norte_i18n::active(),),
+                )],
             )
         );
     }
@@ -2930,26 +3007,6 @@ async fn sync_apply_and_report(
     // detrás. Todo lo demás —lo que no se pudo planificar, lo que no se
     // aprobó, lo que no se pudo aplicar y lo que se aplicó a medias— es 2.
     Ok(ExitCode::from(if report.failed > 0 { 2 } else { 1 }))
-}
-
-/// Traduce una [`norte_proto::methods::SyncFailureCause`] — a diferencia de
-/// `{state:?}` en `cli-sync-incomplete`/`cli-unexpected-state` (reservado a
-/// estados EXCEPCIONALES), un fallo por archivo es rutinario y se enseña en
-/// el idioma del usuario, no como un identificador de Rust suelto en medio de
-/// una frase en español.
-fn sync_failure_cause_label(cause: norte_proto::methods::SyncFailureCause) -> &'static str {
-    use norte_proto::methods::SyncFailureCause as C;
-    match cause {
-        C::Conflict => "cli-sync-cause-conflict",
-        C::Denied => "cli-sync-cause-denied",
-        C::IllegalName => "cli-sync-cause-illegal-name",
-        C::Io => "cli-sync-cause-io",
-        // `Unknown` es la variante `#[serde(other)]` del decodificador ("el
-        // core jamás la emite") y el resto es el `#[non_exhaustive]` del
-        // enum: un wire futuro con una causa nueva cae aquí en vez de no
-        // compilar.
-        _ => "cli-sync-cause-unknown",
-    }
 }
 
 async fn ls(
@@ -3347,6 +3404,90 @@ mod frontend_tests {
         assert_eq!(
             frontend_program(None, "norte-gui"),
             std::path::PathBuf::from("norte-gui")
+        );
+    }
+}
+
+#[cfg(test)]
+mod plan_step_lines_tests {
+    use super::plan_step_lines;
+
+    fn seg(b: &[u8]) -> norte_proto::methods::RelPath {
+        norte_proto::methods::RelPath::new(vec![
+            norte_proto::Segment::new(b.to_vec()).expect("segmento"),
+        ])
+    }
+
+    /// La fila del plan con las DOS ortografías: cada campo en su línea.
+    ///
+    /// Antes iban unidas por ` → ` en la misma línea, y ese carácter es un
+    /// imprimible corriente que `display_name_with` no enmascara — o sea que
+    /// un nombre que lo lleve dentro (corpus `arrow_join_spoof`) fingía la
+    /// pareja SIN que saltara el `!` de `rel_marcado`. Esto es la pantalla
+    /// donde se teclea `y` para borrar.
+    #[test]
+    fn las_dos_ortografias_no_comparten_linea() {
+        let paso = norte_proto::methods::SyncStep {
+            id: 1,
+            kind: norte_proto::methods::SyncStepKind::Overwrite,
+            rel: seg(b"a \xe2\x86\x92 mem_b.txt"),
+            dest_rel: Some(seg(b"otro.txt")),
+            size: Some(10),
+            criterion: norte_proto::methods::CompareCriterion::Size,
+            confidence: norte_proto::methods::CompareConfidence::Certain,
+            reversal: Some(norte_proto::methods::StepReversal::Delete),
+            reason: None,
+        };
+        let cells = norte_frontend::sync::render_step(
+            &paso,
+            norte_proto::methods::DestTrash::Restorable,
+            norte_frontend::sync::SyncEncodings::default(),
+        );
+        let lineas = plan_step_lines(&cells);
+        let primera = &lineas[0];
+        assert!(
+            primera.contains("mem_b.txt"),
+            "el nombre del origen va entero: {primera:?}"
+        );
+        assert!(
+            !primera.contains("otro.txt"),
+            "la ortografía del DESTINO no comparte línea con el nombre: {primera:?}"
+        );
+        assert!(
+            lineas.iter().skip(1).any(|l| l.contains("otro.txt")),
+            "pero sí se dice, en su propia línea: {lineas:?}"
+        );
+    }
+
+    /// Y el ancla se PINTA. `render_failure`/`render_step` la calculan y la
+    /// CLI era el único painter de los tres que la tiraba: en una lista donde
+    /// una ruta sin calificar significa «del origen», callar un `Dest` lo
+    /// afirma — y el `rel` de un `DeleteTree` cuelga del destino.
+    #[test]
+    fn un_delete_tree_dice_que_su_ruta_es_del_destino() {
+        let paso = norte_proto::methods::SyncStep {
+            id: 2,
+            kind: norte_proto::methods::SyncStepKind::DeleteTree,
+            rel: seg(b"viejo"),
+            dest_rel: None,
+            size: None,
+            criterion: norte_proto::methods::CompareCriterion::Presence,
+            confidence: norte_proto::methods::CompareConfidence::Certain,
+            reversal: Some(norte_proto::methods::StepReversal::RestoreTrash),
+            reason: None,
+        };
+        let cells = norte_frontend::sync::render_step(
+            &paso,
+            norte_proto::methods::DestTrash::Restorable,
+            norte_frontend::sync::SyncEncodings::default(),
+        );
+        assert_eq!(cells.anchor, norte_frontend::sync::RelAnchor::Dest);
+        let lineas = plan_step_lines(&cells);
+        let esperado = norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active())
+            .expect("Dest tiene calificador");
+        assert!(
+            lineas.iter().skip(1).any(|l| l.contains(&esperado)),
+            "el calificador del ancla se pinta: {lineas:?}"
         );
     }
 }

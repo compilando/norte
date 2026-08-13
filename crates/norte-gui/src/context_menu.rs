@@ -148,10 +148,11 @@ pub struct ReadOnly {
 /// no tiene forma de preguntarle a un `Backend` — la GUI habla con el daemon
 /// por un canal async y no guarda ninguno en el hilo de UI —, así que quien sí
 /// lo sabe (`NorteGui::journalled`, poblado una vez al conectar por
-/// `SessionEvent::Connected`, ver `session.rs`) lo pasa. Ningún comando que
-/// esta GUI implemente lo lee todavía (`pane.sync-dirs` es el único, y no
-/// está en `COMMANDS`), así que hoy es un hecho inerte — pero uno correcto,
-/// no un `true` inventado.
+/// `SessionEvent::Connected`, ver `session.rs`) lo pasa. Desde la tarea 5 de
+/// C2 el hecho ya NO es inerte: `pane.sync-dirs` —el único comando que lo
+/// lee— está en `COMMANDS`, así que este `journalled` es lo que decide si la
+/// sincronización sale disponible o con su razón. Que fuera correcto mientras
+/// no lo leía nadie es justo por lo que hoy no hubo que arreglarlo.
 #[must_use]
 pub fn facts_for(kind: EntryKind, count: usize, read_only: ReadOnly, journalled: bool) -> Facts {
     let single = count == 1;

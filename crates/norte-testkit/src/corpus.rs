@@ -1,4 +1,4 @@
-//! Corpus canónico de fixtures hostiles (spec §6.1/§12): 47 nombres de
+//! Corpus canónico de fixtures hostiles (spec §6.1/§12): 48 nombres de
 //! archivo + 11 contenidos detectables + 3 solo-forzables. TODO crate que toque paths o
 //! texto testea contra ESTE corpus — las fixtures nuevas entran aquí (regla
 //! de CLAUDE.md: test-first en bugs de encoding).
@@ -23,11 +23,17 @@ struct RawName {
     why: String,
 }
 
-/// Los 47 nombres hostiles canónicos.
+/// Los 48 nombres hostiles canónicos.
+///
+/// La cuenta exacta se aserta AQUÍ y en `tests/corpus.rs`, y esas dos copias
+/// son la fricción que #169 describe: `nextest` no corre doctests, así que
+/// añadir una fixture deja ESTE en rojo y el gate no lo dice hasta `just ci`
+/// —le pasó a `cause_join_spoof` (#161, fase C2)—. Mientras #169 no lo
+/// rediseñe, quien añada un nombre cambia los dos.
 ///
 /// ```
 /// let names = norte_testkit::corpus::hostile_names();
-/// assert_eq!(names.len(), 47);
+/// assert_eq!(names.len(), 48);
 /// // Todos son segmentos VPath válidos (sin NUL ni `/`).
 /// for n in &names {
 ///     assert!(norte_proto::Segment::new(n.bytes.clone()).is_ok(), "{}", n.id);

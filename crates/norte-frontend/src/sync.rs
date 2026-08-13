@@ -47,10 +47,11 @@
 
 use norte_i18n::{Lang, t_in, ta_in};
 use norte_proto::methods::{
-    CompareRow, DestTrash, RelPath, SYNC_MAX_INCLUDE, StepReversal, SyncBlockerKind, SyncCounts,
-    SyncPlanDone, SyncReason, SyncReportResult, SyncStep, SyncStepKind, SyncStepsBatch,
+    CompareRow, DestTrash, PlanHash, RelPath, SYNC_MAX_INCLUDE, StepReversal, SyncBlockerKind,
+    SyncCounts, SyncFailureCause, SyncMode, SyncPlanDone, SyncReason, SyncReportResult, SyncStep,
+    SyncStepKind, SyncStepsBatch,
 };
-use norte_proto::{TaskId, VPath};
+use norte_proto::{TaskId, TaskState, VPath};
 
 /// Why a selection of diff-pane rows cannot become a `SyncPlanParams::include`.
 ///
@@ -148,6 +149,113 @@ pub fn include_from_rows(
     out.sort();
     out.dedup();
     Ok(Some(out))
+}
+
+/// The two roots of a synchronisation, in `(source, dest)` order, each with
+/// the name reinterpretation (#57) of ITS OWN side.
+///
+/// Four named fields and not two pairs: `source` and `dest` are the same type
+/// and so are the two encodings, so every transposition compiles — and
+/// transposing THESE inverts which tree gets overwritten, which is the half of
+/// a plan a human is being asked to approve. Same argument the GUI's
+/// `Started`/`SyncEncodings` make one layer up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncRoots {
+    /// Where the entries are READ from.
+    pub source: VPath,
+    /// Where they are WRITTEN — the tree a `Mirror` deletes from.
+    pub dest: VPath,
+    /// The source pane's reinterpretation, frozen with the root.
+    pub source_encoding: Option<norte_encoding::NameEncoding>,
+    /// The destination pane's, which may be another one: two panes are two
+    /// locations and can carry different overrides.
+    pub dest_encoding: Option<norte_encoding::NameEncoding>,
+}
+
+/// The two panes a frontend has, told apart by FOCUS — the fallback
+/// [`sync_roots`] uses when no diff pane is open.
+///
+/// The fields are named after the focus and not after a screen position on
+/// purpose: "the pane on the left" is not what decides, and a frontend whose
+/// focused pane is the right-hand one must not have to invert anything here.
+#[derive(Debug, Clone, Copy)]
+pub struct Panes<'a> {
+    /// The pane with the focus. It is the SOURCE.
+    pub focused_root: &'a VPath,
+    /// Its reinterpretation (#57).
+    pub focused_encoding: Option<norte_encoding::NameEncoding>,
+    /// The other pane. It is the DESTINATION.
+    pub other_root: &'a VPath,
+    /// Its reinterpretation, which may differ.
+    pub other_encoding: Option<norte_encoding::NameEncoding>,
+}
+
+/// Which two roots a synchronisation runs between, and in which direction.
+///
+/// **One rule, one place, both frontends** (#161). With a diff pane open its
+/// ACTIVE side — the one `Tab` moves — is the source, and NOTHING is inferred
+/// from the focus or from the order of the panes: the reader has a pane in
+/// front of them whose active side is marked, and the plan has to agree with
+/// what they are looking at. With no diff pane, the focused pane is the source
+/// and the other is the destination, the same split
+/// `request_compare`/`start_compare` use for left and right.
+///
+/// This lived in `norte-tui` until the GUI grew the branch that genuinely
+/// decides. Two copies of it would be two answers to "which tree gets
+/// overwritten", and the frontend that drifted would be overwriting the wrong
+/// one — the cheapest possible bug to write and the most expensive to find,
+/// since both copies produce a perfectly plausible plan.
+///
+/// The encodings travel WITH the roots and are never re-read from the panes
+/// afterwards: a reader who pressed `Alt+E` to read a CP1251 share cannot get
+/// `????.txt` back when they synchronise it (#57).
+///
+/// ```
+/// use norte_frontend::sync::{Panes, sync_roots};
+/// use norte_proto::VPath;
+/// let izq = VPath::parse("file:///izq").expect("vpath");
+/// let der = VPath::parse("file:///der").expect("vpath");
+/// // Sin panel de diferencias: el pane con FOCO es el origen.
+/// let r = sync_roots(
+///     None,
+///     &Panes {
+///         focused_root: &der,
+///         focused_encoding: None,
+///         other_root: &izq,
+///         other_encoding: None,
+///     },
+/// );
+/// assert_eq!(r.source, der);
+/// assert_eq!(r.dest, izq);
+/// ```
+#[must_use]
+pub fn sync_roots(compare: Option<&crate::compare::CompareView>, panes: &Panes<'_>) -> SyncRoots {
+    let Some(view) = compare else {
+        return SyncRoots {
+            source: panes.focused_root.clone(),
+            dest: panes.other_root.clone(),
+            source_encoding: panes.focused_encoding,
+            dest_encoding: panes.other_encoding,
+        };
+    };
+    // `Side::Right` y no un `_` que se lo trague todo: un lado que ESTA build
+    // no sepa nombrar cae en el brazo de la izquierda, que es el default del
+    // propio pane (`active_side` nace en `Left`), y no invierte el sentido de
+    // una sincronización por una palabra nueva del wire.
+    match view.pane.active_side() {
+        norte_proto::methods::Side::Right => SyncRoots {
+            source: view.right_root.clone(),
+            dest: view.left_root.clone(),
+            source_encoding: view.right_encoding,
+            dest_encoding: view.left_encoding,
+        },
+        _ => SyncRoots {
+            source: view.left_root.clone(),
+            dest: view.right_root.clone(),
+            source_encoding: view.left_encoding,
+            dest_encoding: view.right_encoding,
+        },
+    }
 }
 
 /// What the undo would actually do with ONE step, once the destination's trash
@@ -406,6 +514,95 @@ pub fn blocker_label(kind: SyncBlockerKind, lang: Lang) -> String {
     t_in(lang, &format!("sync-blocker-{id}"))
 }
 
+/// El calificador de un [`RelAnchor`], o `None` cuando la ruta cuelga del
+/// ORIGEN y no hace falta decir nada.
+///
+/// Vive aquí y no en cada painter por lo mismo que [`failure_cause_label`]:
+/// la revisión de rama de C2 lo encontró transcrito a mano en tres sitios
+/// —`norte-tui/src/ui.rs` y dos veces en `norte-gui/src/sync_view.rs`— y a la
+/// CLI se le había olvidado, que es la forma en que esta clase de duplicado
+/// se nota tarde (rust MAJOR-3, encoding MAJOR-1).
+///
+/// `None` para [`RelAnchor::Source`] a propósito: un calificador vacío
+/// pintado igualmente mete un espacio en banda, y esta pantalla ya tiene un
+/// problema con los separadores que un nombre puede llevar dentro.
+///
+/// ```
+/// use norte_frontend::sync::{RelAnchor, anchor_label};
+/// use norte_i18n::Lang;
+/// assert!(anchor_label(RelAnchor::Source, Lang::En).is_none());
+/// assert_ne!(
+///     anchor_label(RelAnchor::Dest, Lang::En),
+///     anchor_label(RelAnchor::Either, Lang::En),
+/// );
+/// ```
+#[must_use]
+pub fn anchor_label(anchor: RelAnchor, lang: Lang) -> Option<String> {
+    match anchor {
+        RelAnchor::Source => None,
+        RelAnchor::Dest => Some(t_in(lang, "sync-anchor-dest")),
+        RelAnchor::Either => Some(t_in(lang, "sync-anchor-either")),
+    }
+}
+
+/// El nombre de un [`SyncMode`], que la cabecera pinta.
+///
+/// El `_` NO cae a «update»: un modo que este build no sabe nombrar tiene que
+/// decirlo, porque la diferencia entre los dos que sí conoce es si BORRA.
+/// Estaba escrito dos veces en esta rama, una por frontend (rust MAJOR-3).
+///
+/// ```
+/// use norte_frontend::sync::mode_label;
+/// use norte_i18n::Lang;
+/// use norte_proto::methods::SyncMode;
+/// assert_ne!(
+///     mode_label(SyncMode::Update, Lang::En),
+///     mode_label(SyncMode::Mirror, Lang::En),
+/// );
+/// ```
+#[must_use]
+pub fn mode_label(mode: SyncMode, lang: Lang) -> String {
+    match mode {
+        SyncMode::Update => t_in(lang, "sync-mode-update"),
+        SyncMode::Mirror => t_in(lang, "sync-mode-mirror"),
+        _ => t_in(lang, "sync-mode-unknown"),
+    }
+}
+
+/// The reader's word for why ONE step of an applied plan did not happen
+/// ([`norte_proto::methods::SyncFailure::cause`]).
+///
+/// Shared, and not a `match` per frontend, for the reason the rest of this
+/// module is shared: the CLI wrote this table first (phase A) and the GUI
+/// needed the same five sentences (phase C2). Two copies of a table whose
+/// `_` arm exists precisely to survive a NEWER daemon is two chances for one
+/// of them to name a cause the other calls "unrecognised".
+///
+/// The `_` arm covers both `Unknown` (the decoder's `#[serde(other)]`, which
+/// the core never emits) and the enum's `#[non_exhaustive]`: a wire that
+/// grows a sixth cause lands there instead of failing to compile.
+///
+/// ```
+/// use norte_frontend::sync::failure_cause_label;
+/// use norte_i18n::Lang;
+/// use norte_proto::methods::SyncFailureCause;
+/// assert_ne!(
+///     failure_cause_label(SyncFailureCause::Denied, Lang::En),
+///     failure_cause_label(SyncFailureCause::Io, Lang::En),
+/// );
+/// ```
+#[must_use]
+pub fn failure_cause_label(cause: SyncFailureCause, lang: Lang) -> String {
+    let id = match cause {
+        SyncFailureCause::Conflict => "conflict",
+        SyncFailureCause::Denied => "denied",
+        SyncFailureCause::IllegalName => "illegal-name",
+        SyncFailureCause::Io => "io",
+        _ => "unknown",
+    };
+    t_in(lang, &format!("sync-cause-{id}"))
+}
+
 /// What the destination's trash means for the human, in words.
 ///
 /// [`UndoOutlook`] answers "does the undo give it back", and for both bad
@@ -547,6 +744,88 @@ pub fn rel_display(rel: &RelPath, reinterpret: Option<norte_encoding::NameEncodi
     RelDisplay { text, raw, hostile }
 }
 
+/// Las reinterpretaciones de nombres (#57) de los dos lados de una
+/// sincronización.
+///
+/// Una struct con dos campos NOMBRADOS y no una tupla `(Option<_>,
+/// Option<_>)`: los dos valores son del mismo tipo, así que trasponerlos
+/// compila — y trasponerlos ES el #152, un `dest_rel` decodificado con el
+/// codepage del ORIGEN, o sea nombrando otros bytes que el fichero sobre el
+/// que cae la escritura. Aquí el compilador no ayuda; el nombre sí.
+///
+/// El default —ninguna de las dos— es lo correcto para un frontend que no
+/// tiene overrides por ubicación, como el CLI: los nombres se leen como
+/// vienen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SyncEncodings {
+    /// La del lado ORIGEN.
+    pub source: Option<norte_encoding::NameEncoding>,
+    /// La del lado DESTINO, que puede ser otra: los dos panes son dos
+    /// ubicaciones y pueden llevar overrides distintos.
+    pub dest: Option<norte_encoding::NameEncoding>,
+}
+
+impl SyncEncodings {
+    /// Con cuál de las dos se lee una ruta anclada en `anchor`.
+    ///
+    /// Es la mitad del #152 que no estaba escrita en ninguna parte: la
+    /// ortografía del destino se leía con la del destino (eso ya lo hacía cada
+    /// frontend a mano), pero el `rel` de un [`SyncStepKind::DeleteTree`]
+    /// —que cuelga del DESTINO, ver [`anchor_of`]— se leía con la del ORIGEN.
+    /// Con dos panes con overrides distintos, eso nombra el subárbol que se va
+    /// a borrar con el codepage del árbol que NO se toca, en la pantalla donde
+    /// se aprueba borrarlo.
+    ///
+    /// [`RelAnchor::Either`] se lee con la del origen, que es de donde cuelga
+    /// «casi siempre» un `rel` (normativo en el wire): no se sabe, y elegir la
+    /// otra no sería más cierto — lo que un pane no debe hacer con un `Either`
+    /// es afirmar la COLUMNA, y eso lo dice [`StepCells::anchor`].
+    ///
+    /// Dos cosas hacen ese brazo menos peligroso de lo que parece, y las dos
+    /// se pierden si no se escriben:
+    ///
+    /// * la elección solo CAMBIA algo para bytes que no son UTF-8 válido
+    ///   (`display_name_with` no reinterpreta el UTF-8 válido), y en ese caso
+    ///   el resultado es SIEMPRE `hostile = true` — o sea que un `Either`
+    ///   leído con el codepage del otro lado llega marcado como «este texto no
+    ///   son los bytes» a las dos superficies;
+    /// * **para un PASO**, el único camino destructivo hasta `Either` es un
+    ///   [`SyncStepKind::Unknown`] ([`anchor_of`]), y un solo paso así deja el
+    ///   plan en [`PlanIntegrity::Unnameable`], que no se puede aprobar. Lo
+    ///   que queda bajo `Either` es un `Skip`, que no escribe nada.
+    ///
+    /// **Ese segundo punto NO vale para un FALLO del informe**
+    /// ([`render_failure`]), y decirlo importa: un `DeleteTree` que falla por
+    /// permisos contra un destino de solo lectura es la fila más corriente de
+    /// un `Mirror`, su `rel` cuelga del DESTINO, y el informe no trae la clase
+    /// que lo diría. Ahí este brazo sí puede nombrar un subárbol del destino
+    /// con el codepage del árbol que no se toca. Lo que lo acota es que el
+    /// resultado llega `hostile = true` y que el ancla se PINTA.
+    ///
+    /// ```
+    /// use norte_frontend::sync::{RelAnchor, SyncEncodings};
+    /// use norte_encoding::NameEncoding;
+    /// let enc = SyncEncodings {
+    ///     source: Some(NameEncoding::Cp437),
+    ///     dest: None,
+    /// };
+    /// // Un `DeleteTree` habla del DESTINO, aunque se pinte en la primera
+    /// // columna.
+    /// assert_eq!(enc.for_anchor(RelAnchor::Dest), None);
+    /// assert_eq!(enc.for_anchor(RelAnchor::Source), Some(NameEncoding::Cp437));
+    /// // Y lo que no consta se lee como el origen, que es de donde cuelga
+    /// // «casi siempre» un `rel`.
+    /// assert_eq!(enc.for_anchor(RelAnchor::Either), Some(NameEncoding::Cp437));
+    /// ```
+    #[must_use]
+    pub fn for_anchor(self, anchor: RelAnchor) -> Option<norte_encoding::NameEncoding> {
+        match anchor {
+            RelAnchor::Dest => self.dest,
+            RelAnchor::Source | RelAnchor::Either => self.source,
+        }
+    }
+}
+
 /// The three glyphs a step paints: what it does, how sure the comparison was,
 /// and whether it comes back.
 ///
@@ -593,8 +872,14 @@ pub struct StepCells {
 /// cannot be computed, and a renderer that reads [`SyncStep::reversal`] on its
 /// own is exactly the bug this module exists to prevent.
 ///
+/// Each path is masked with the reinterpretation of the side it hangs from
+/// ([`SyncEncodings::for_anchor`]), which is a decision no caller has to make
+/// again: `dest_rel` is ALWAYS the destination's spelling (#152), and a
+/// `DeleteTree`'s `rel` is a destination path too even though it sits in the
+/// first column.
+///
 /// ```
-/// use norte_frontend::sync::{StepUndo, render_step};
+/// use norte_frontend::sync::{StepUndo, SyncEncodings, render_step};
 /// use norte_proto::methods::{DestTrash, SyncStepKind};
 /// # use norte_proto::methods::{CompareConfidence, CompareCriterion, RelPath, StepReversal,
 /// #     SyncStep};
@@ -609,16 +894,13 @@ pub struct StepCells {
 ///     reversal: Some(StepReversal::Delete),
 ///     reason: None,
 /// };
-/// let cells = render_step(&step, DestTrash::Absent, None);
+/// let cells = render_step(&step, DestTrash::Absent, SyncEncodings::default());
 /// assert_eq!(cells.undo, StepUndo::LeftBehind);
 /// ```
 #[must_use]
-pub fn render_step(
-    step: &SyncStep,
-    dest_trash: DestTrash,
-    reinterpret: Option<norte_encoding::NameEncoding>,
-) -> StepCells {
+pub fn render_step(step: &SyncStep, dest_trash: DestTrash, enc: SyncEncodings) -> StepCells {
     let undo = step_undo(step, dest_trash);
+    let anchor = anchor_of(step);
     StepCells {
         id: step.id,
         glyphs: StepGlyphs {
@@ -626,12 +908,136 @@ pub fn render_step(
             confidence: crate::compare::confidence_glyph(step.confidence),
             undo: undo_glyph(undo),
         },
-        anchor: anchor_of(step),
-        rel: rel_display(&step.rel, reinterpret),
-        dest_rel: step.dest_rel.as_ref().map(|r| rel_display(r, reinterpret)),
+        anchor,
+        rel: rel_display(&step.rel, enc.for_anchor(anchor)),
+        // Siempre con la del DESTINO, sea cual sea el ancla: `dest_rel` existe
+        // precisamente para enseñar la ortografía de allí, que es sobre la que
+        // cae la escritura.
+        //
+        // Y se pliega AQUÍ cuando los BYTES coinciden, no en cada pintor y no
+        // por el texto pintado: `RelDisplay::text` es lossy, así que
+        // `caf\xe9.txt` y `caf\x82.txt` —dos ficheros distintos— son el mismo
+        // `caf\u{FFFD}.txt`, y un pintor que compare textos esconde justo el
+        // campo que existe para decir sobre qué nombre cae la escritura
+        // (#152). El wire ya compara por bytes
+        // (`SyncStep::shape_is_consistent`); esto es la misma regla, una sola
+        // vez, para los tres frontends.
+        dest_rel: step
+            .dest_rel
+            .as_ref()
+            .filter(|d| **d != step.rel)
+            .map(|r| rel_display(r, enc.dest)),
         size: step.size,
         undo,
         reason: step.reason,
+    }
+}
+
+/// Una fila del informe (`sync.report`), ya resuelta: las dos rutas leídas con
+/// la reinterpretación que le toca a cada una, y la del destino PLEGADA cuando
+/// los bytes coinciden.
+///
+/// Gemela de [`StepCells`], y separada de ella porque un
+/// [`norte_proto::methods::SyncFailure`] no es un paso: no lleva clase, así que
+/// no hay glifos que pintar ni undo que juzgar. Lo que sí comparte es lo que se
+/// puede equivocar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailureCells {
+    /// La ruta del fallo, enmascarada y badgeada.
+    pub rel: RelDisplay,
+    /// La ortografía del DESTINO, si el informe la manda y DIFIERE en bytes.
+    pub dest_rel: Option<RelDisplay>,
+    /// De qué raíz cuelga [`FailureCells::rel`]: [`RelAnchor::Source`] cuando
+    /// el informe manda `dest_rel`, y [`RelAnchor::Either`] cuando no — ver
+    /// [`render_failure`]. **Un pintor tiene que pintarlo**: en un panel donde
+    /// una ruta sin calificar significa «del origen», callar un `Either` es
+    /// afirmar el origen.
+    pub anchor: RelAnchor,
+}
+
+/// Resuelve UNA fila del informe, con las mismas dos reglas que
+/// [`render_step`] y por los mismos dos motivos.
+///
+/// * **El plegado es por BYTES**, no por el texto pintado: `RelDisplay::text`
+///   es lossy, así que dos ficheros distintos con un byte inválido cada uno se
+///   pintan igual — y comparando textos, el campo que dice sobre qué nombre
+///   cayó la escritura desaparece justo cuando los nombres son adversarios.
+/// * **La ortografía del destino se lee con la del destino**, sea cual sea el
+///   ancla (#152): existe precisamente para nombrar el fichero de allí.
+///
+/// # El ancla de un fallo casi nunca consta, y entonces es `Either`
+/// [`SyncStep::rel`] es «casi siempre» del origen y [`anchor_of`] usa la CLASE
+/// del paso para saber cuándo no lo es —un `DeleteTree` habla del destino—.
+/// Un [`norte_proto::methods::SyncFailure`] no lleva clase: el informe se lee
+/// sin el plan delante. Queda UNA prueba, y es la misma que usa
+/// [`anchor_of`]: si el informe manda `dest_rel`, entonces `rel` es la mitad
+/// del ORIGEN de la pareja (misma regla y mismo campo, ver
+/// [`norte_proto::methods::SyncFailure::dest_rel`]). Sin `dest_rel` no se
+/// sabe, y decir «origen» sería justo lo que [`RelAnchor::Either`] existe
+/// para no hacer — **un `DeleteTree` que falla por permisos es la fila hostil
+/// MÁS común de un `Mirror`**, y su `rel` cuelga del destino.
+///
+/// Lo que un pintor NO puede hacer con un `Either` es callarse: en un panel
+/// donde una ruta sin calificar significa «del origen» (así lo escribe
+/// [`StepCells::anchor`]), el silencio es la afirmación. El ancla viaja en
+/// [`FailureCells::anchor`] para que se pinte, y la auditoría de encoding de
+/// esta fase (MAJOR-2) es exactamente eso.
+///
+/// La DECODIFICACIÓN de un `Either` sigue siendo la del origen
+/// ([`SyncEncodings::for_anchor`]) porque no hay nada mejor que elegir; con
+/// dos overrides #57 distintos eso puede nombrar un subárbol del destino con
+/// el codepage del árbol que no se tocó, y llega marcado como hostil pero no
+/// como «del otro lado». Cerrarlo del todo pide una clase en el wire
+/// (`SyncFailure::kind`, issue abierta): el core la tiene en la mano cuando
+/// construye el fallo y la tira.
+///
+/// ```
+/// use norte_frontend::sync::{RelAnchor, SyncEncodings, render_failure};
+/// use norte_proto::methods::{RelPath, SyncFailure, SyncFailureCause};
+/// let f = SyncFailure {
+///     rel: RelPath::parse_wire("sub/a.txt").expect("rel"),
+///     dest_rel: Some(RelPath::parse_wire("sub/a.txt").expect("rel")),
+///     cause: SyncFailureCause::Denied,
+/// };
+/// let cells = render_failure(&f, SyncEncodings::default());
+/// assert_eq!(cells.rel.text, "sub/a.txt");
+/// assert!(cells.dest_rel.is_none(), "la misma ortografía no se repite");
+/// // Con `dest_rel` en el wire, `rel` es la mitad del ORIGEN de la pareja —
+/// // aunque las dos ortografías coincidan y no haya nada que pintar aparte.
+/// assert_eq!(cells.anchor, RelAnchor::Source);
+///
+/// // Sin `dest_rel` no hay prueba, y eso NO es «del origen»: el `rel` de un
+/// // `DeleteTree` que falló cuelga del destino.
+/// let solo = SyncFailure {
+///     rel: RelPath::parse_wire("viejo").expect("rel"),
+///     dest_rel: None,
+///     cause: SyncFailureCause::Io,
+/// };
+/// assert_eq!(
+///     render_failure(&solo, SyncEncodings::default()).anchor,
+///     RelAnchor::Either
+/// );
+/// ```
+#[must_use]
+pub fn render_failure(
+    failure: &norte_proto::methods::SyncFailure,
+    enc: SyncEncodings,
+) -> FailureCells {
+    // La única prueba que queda en el wire, y es la MISMA que usa `anchor_of`
+    // para un paso: con `dest_rel` presente, `rel` es la mitad del origen.
+    let anchor = if failure.dest_rel.is_some() {
+        RelAnchor::Source
+    } else {
+        RelAnchor::Either
+    };
+    FailureCells {
+        rel: rel_display(&failure.rel, enc.for_anchor(anchor)),
+        dest_rel: failure
+            .dest_rel
+            .as_ref()
+            .filter(|d| **d != failure.rel)
+            .map(|r| rel_display(r, enc.dest)),
+        anchor,
     }
 }
 
@@ -1434,6 +1840,552 @@ fn integrity_of(local: &SyncCounts, remote: &SyncCounts, malformed: u64) -> Plan
     }
 }
 
+/// Cómo va la Task de un panel de sincronización, para la barra de estado.
+///
+/// Deliberadamente MÁS CORTO que [`crate::compare::CompareState`]: aquí el
+/// «llegaron todas las filas» no se deduce de un conteo, lo DICE el
+/// `sync.plan_done` — sin él no hay `plan_hash` y no hay nada que aprobar, así
+/// que un plan incompleto no es un estado que pintar sino un plan que no
+/// existe (`SyncPlanEvent`, ADR 0049).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SyncRunState {
+    /// Una Task viva: se está planificando, o se está aplicando.
+    #[default]
+    Running,
+    /// La Task terminó bien.
+    Done,
+    /// El usuario canceló.
+    Cancelled,
+    /// La Task falló (el error va por la barra).
+    Failed,
+}
+
+impl SyncRunState {
+    /// El desenlace de la Task que corre detrás del panel —la del plan
+    /// primero, la de la aplicación después— leído de su [`TaskState`]
+    /// terminal.
+    ///
+    /// Deliberadamente NO toca el error localizado que cada frontend pinta
+    /// (una barra truncada en la TUI, algo distinto en la GUI): eso es la
+    /// única mitad que legítimamente difiere entre las dos, y mezclarla aquí
+    /// ataría este mapeo puro a un [`Lang`] sin necesidad. Lo que SÍ era una
+    /// sola decisión repetida a mano —`Cancelled`/`Failed`/lo demás→`Done`—
+    /// es lo que vive aquí, para que un `_ => Done` no se transcriba dos
+    /// veces y un día se le olvide un brazo a una de las dos copias.
+    ///
+    /// ```
+    /// use norte_frontend::sync::SyncRunState;
+    /// use norte_proto::TaskState;
+    ///
+    /// assert_eq!(
+    ///     SyncRunState::from_task_state(&TaskState::Cancelled),
+    ///     SyncRunState::Cancelled
+    /// );
+    /// ```
+    #[must_use]
+    pub fn from_task_state(state: &TaskState) -> Self {
+        match state {
+            TaskState::Cancelled => Self::Cancelled,
+            TaskState::Failed { .. } => Self::Failed,
+            _ => Self::Done,
+        }
+    }
+}
+
+/// El panel de sincronización abierto: el modelo puro de [`SyncState`] más lo
+/// que un frontend necesita para pintarlo y para hablar con el backend.
+///
+/// El reparto es el mismo que el de [`crate::compare::CompareView`] (regla
+/// dura 7): el estado del diálogo —qué pasos llegaron, si cuadran con lo que
+/// el daemon cerró, qué devuelve el undo y cuál es la segunda pregunta— vive
+/// aquí, donde se prueba sin terminal. Lo que cada frontend añade son las dos
+/// raíces que la cabecera pinta, el estado del run y la pregunta de
+/// confirmación EN CURSO — y esas también viven aquí (#161): la TUI y la GUI
+/// necesitan el MISMO envoltorio, no dos reimplementados por separado.
+#[derive(Debug)]
+pub struct SyncView {
+    /// El modelo del diálogo (Task 12).
+    pub state: SyncState,
+    /// Cómo va la Task que está corriendo ahora mismo (la del plan primero, la
+    /// de la aplicación después).
+    pub run: SyncRunState,
+    /// Modo pedido, que la cabecera pinta: un `Mirror` borra y un `Update` no,
+    /// y el lector tiene que verlo antes de aprobar.
+    pub mode: SyncMode,
+    /// Raíz ORIGEN. De ella cuelgan las `rel` de casi todos los pasos.
+    pub source_root: VPath,
+    /// Raíz DESTINO. De ella cuelgan las de un `DeleteTree` y las de un `Skip`
+    /// ilegible ([`anchor_of`]).
+    pub dest_root: VPath,
+    /// Reinterpretación de nombres (#57) del pane ORIGEN, congelada al abrir.
+    pub source_encoding: Option<norte_encoding::NameEncoding>,
+    /// La del pane DESTINO, que puede ser otra.
+    ///
+    /// Dos y no una, por lo mismo que el panel de diferencias lleva dos: los
+    /// dos panes son dos ubicaciones y pueden llevar overrides distintos. Aquí
+    /// además importa más, porque `SyncStep::dest_rel` existe precisamente
+    /// para enseñar la ortografía del DESTINO (#152) — decodificarla con el
+    /// codepage del ORIGEN nombraría con otros bytes el fichero sobre el que
+    /// va a caer la escritura.
+    pub dest_encoding: Option<norte_encoding::NameEncoding>,
+    /// La segunda pregunta, ya formulada y esperando un `y`.
+    ///
+    /// `None` = todavía no se ha pulsado aprobar, o el plan no la necesitaba.
+    /// Vive aquí y no en el modelo porque es estado de INTERACCIÓN —a medio
+    /// contestar— y el modelo de Task 12 no retrocede: preguntar es de la
+    /// pantalla, decidir es suyo.
+    pub confirming: Option<Confirmation>,
+    /// Ya se pidió cancelar (el primer `Esc`), igual que en el panel de
+    /// diferencias y por el mismo motivo: el segundo `Esc` cierra pase lo que
+    /// pase con la Task.
+    pub cancel_requested: bool,
+    /// Categoría del error de una Task que FALLÓ, ya localizada y saneada.
+    pub error: Option<String>,
+    /// El `sync.apply` ya SALIÓ y el daemon todavía no ha contestado.
+    ///
+    /// Privado a propósito: la única forma de echarlo es [`SyncView::submit`]
+    /// y la única de leerlo, [`SyncView::is_submitted`]. Lo que lo hace
+    /// necesario es que `Applying` NO llega con la tecla sino una vuelta
+    /// entera después, cuando el daemon devuelve la Task — en una GUI que lee
+    /// eventos entre teclas esa ventana admite un segundo `a`, y también un
+    /// `Esc` (revisión de seguridad MAJOR-1).
+    ///
+    /// Vivió en `norte-gui` hasta la revisión de rama de C2, y ahí estaba mal:
+    /// `can_approve`, [`hint_id`] y [`status_line`] viven en ESTE crate y no
+    /// podían verlo, así que el pie seguía ofreciendo `a aprobar` sobre un
+    /// plan que `approve` ya rechazaba — justo la pantalla rota que `hint_id`
+    /// existe para no pintar. Lo limpian las TRANSICIONES DE ESTADO
+    /// ([`SyncView::on_apply_started`], [`SyncView::on_apply_ended`]), nunca
+    /// la generación de la petición: atarlo a la generación lo dejaba echado
+    /// para siempre cuando un evento superado se descartaba.
+    submitted: bool,
+}
+
+impl SyncView {
+    /// Un panel recién abierto sobre estas dos raíces, sin pasos todavía.
+    #[must_use]
+    pub fn new(
+        task_id: TaskId,
+        mode: SyncMode,
+        source_root: VPath,
+        dest_root: VPath,
+        source_encoding: Option<norte_encoding::NameEncoding>,
+        dest_encoding: Option<norte_encoding::NameEncoding>,
+    ) -> Self {
+        Self {
+            // Con el `task_id` desde el principio: es lo que hace que un lote
+            // de OTRO plan —el lector replanifica con menos marcas— se caiga
+            // en vez de mezclarse con éste (Task 12, nota 3).
+            state: SyncState::Planning(Planning::new(task_id)),
+            run: SyncRunState::Running,
+            mode,
+            source_root,
+            dest_root,
+            source_encoding,
+            dest_encoding,
+            confirming: None,
+            cancel_requested: false,
+            error: None,
+            submitted: false,
+        }
+    }
+
+    /// Qué papelera tiene el DESTINO, según el plan.
+    ///
+    /// [`DestTrash::Unknown`] mientras el plan no ha cerrado, que es la
+    /// respuesta honesta: sin `sync.plan_done` no se sabe, y el modelo pinta
+    /// cada paso como «esta versión no puede decirlo» en vez de prometer que
+    /// vuelve. Nunca se lee [`SyncStep::reversal`] a pelo — esa es la mitad de
+    /// la respuesta y la que miente cuando el destino no tiene papelera.
+    #[must_use]
+    pub fn dest_trash(&self) -> DestTrash {
+        self.state
+            .plan()
+            .map_or(DestTrash::Unknown, SyncPlan::dest_trash)
+    }
+
+    /// Las dos reinterpretaciones, juntas y nombradas, para pasárselas a
+    /// [`render_step`] de una pieza — que es lo que evita cruzarlas (#152).
+    #[must_use]
+    pub fn encodings(&self) -> SyncEncodings {
+        SyncEncodings {
+            source: self.source_encoding,
+            dest: self.dest_encoding,
+        }
+    }
+
+    /// Los pasos que hay AHORA MISMO, esté cerrado el plan o no.
+    ///
+    /// Mientras el plan llega, [`SyncState::plan`] contesta `None` —no hay
+    /// plan hasta el `sync.plan_done`, que es lo que le da su `plan_hash`— y
+    /// aun así los pasos ya recibidos existen y se pintan. Sin esto el panel
+    /// enseñaba un hueco vacío mientras el pie contaba «planificando… 6
+    /// pasos», que es la pantalla diciéndose la contraria a sí misma. La
+    /// columna del undo de esos pasos sale «esta versión no puede decirlo»,
+    /// que es la verdad hasta que se sepa la papelera del destino.
+    #[must_use]
+    pub fn steps(&self) -> &[SyncStep] {
+        match &self.state {
+            SyncState::Planning(p) => p.steps(),
+            _ => self.state.plan().map_or(&[], |p| p.steps()),
+        }
+    }
+
+    /// ¿Sigue habiendo algo que aprobar?
+    ///
+    /// `false` en cuanto el plan se manda: la línea de teclas no puede seguir
+    /// ofreciendo `a aprobar` sobre un plan que ya se gastó —aplicarlo lo
+    /// consume, y un segundo `sync.apply` del mismo hash es `PlanStale`—.
+    #[must_use]
+    pub fn awaiting_approval(&self) -> bool {
+        matches!(self.state, SyncState::Ready(_))
+    }
+
+    /// ¿Se puede aprobar este panel AHORA MISMO?
+    ///
+    /// Envuelve [`SyncState::can_approve`] y NUNCA
+    /// [`SyncPlan::can_approve`] — el segundo, alcanzable por
+    /// [`SyncState::plan`], sigue contestando que sí sobre un plan que ya se
+    /// aprobó, porque sus tres factores no cambian al gastarse. Este método
+    /// es la forma de que un llamante no tenga ocasión de coger el atajo
+    /// equivocado (#161, la trampa que la fase A del CLI no vio: no preguntó
+    /// nada, y un plan `Malformed` se aplicó entero desde el spool).
+    ///
+    /// # Y el desenlace de la Task cuenta
+    /// Un run `Cancelled` o `Failed` no se aprueba, aunque el plan HAYA
+    /// cerrado. Los dos hechos son compatibles —`sync.plan_done` llega antes
+    /// de que el canal se cierre, así que un `Esc` (o una caída del daemon)
+    /// en esa ventana deja `Ready` + `Cancelled`—, y sin esta cláusula la
+    /// pantalla decía las dos cosas a la vez: el pie pintaba «cancelado — no
+    /// hay plan que aprobar» ([`status_line`]) mientras la línea de teclas
+    /// seguía ofreciendo aprobar, y la tecla FUNCIONABA (revisión rust
+    /// MAJOR-1). Se resuelve del lado conservador: quien pulsó `Esc` pidió
+    /// parar, y esta pantalla escribe en el disco de alguien.
+    #[must_use]
+    pub fn can_approve(&self) -> bool {
+        if self.submitted || matches!(self.run, SyncRunState::Cancelled | SyncRunState::Failed) {
+            return false;
+        }
+        self.state.can_approve()
+    }
+
+    /// ¿Hay un `sync.apply` en vuelo sin contestar?
+    ///
+    /// Lo pregunta quien pinta la línea de teclas y quien interpreta un `Esc`:
+    /// en esta ventana el daemon YA está escribiendo, así que un `Esc` tiene
+    /// que pedir cancelación y no cerrar el panel. Cerrarlo pierde el informe
+    /// —y con él el recuento, los fallos y el asa del undo— sobre un destino
+    /// que se reescribió a medias (revisión de seguridad MAJOR-1).
+    #[must_use]
+    pub fn is_submitted(&self) -> bool {
+        self.submitted
+    }
+
+    /// La petición se resolvió SIN Task: el daemon la rechazó, o llegó una
+    /// Task que este panel no adopta.
+    ///
+    /// Suelta el pestillo, porque si no la `a` queda muerta para siempre y el
+    /// pie sigue ofreciéndola. Se llama también en los caminos donde el evento
+    /// se descarta por generación superada: atar la suelta a la generación es
+    /// justo lo que dejaba el panel encallado cuando el segundo plan se
+    /// rechazaba y ningún panel nuevo sustituía al primero (revisión de rama
+    /// de C2, MINOR de las dos revisiones).
+    pub fn on_apply_abandoned(&mut self) {
+        self.submitted = false;
+    }
+
+    /// Echa el pestillo y devuelve el hash que se manda, o `None` si este
+    /// panel no se puede aprobar.
+    ///
+    /// Una sola puerta para los dos frontends: quien quiera aplicar pasa por
+    /// aquí, y lo que impide el segundo `sync.apply` es esta función, no que
+    /// el estado sea `Applying` —no lo es todavía—. La TUI lo espera en línea
+    /// y no puede leer una tecla en medio, así que para ella es un no-op; la
+    /// GUI sí puede, y es la que lo necesita.
+    pub fn submit(&mut self) -> Option<PlanHash> {
+        if !self.can_approve() {
+            return None;
+        }
+        let hash = self.state.plan()?.done().plan_hash.clone();
+        self.submitted = true;
+        Some(hash)
+    }
+
+    /// Se lanzó `sync.apply` y el daemon contestó con una Task: junta las
+    /// CUATRO actualizaciones que ese instante exige — el modelo avanza a
+    /// `Applying` ([`SyncState::on_apply_started`]), el run vuelve a
+    /// `Running`, la segunda pregunta se cae (ya se contestó) y la
+    /// cancelación pedida por un run anterior deja de aplicar al nuevo.
+    ///
+    /// Antes de que esto viviera aquí, `norte-tui` hacía las cuatro a mano en
+    /// el sitio que lanza la Task; la GUI habría necesitado exactamente las
+    /// mismas cuatro, y una reimplementación por su cuenta es justo la
+    /// oportunidad de olvidar una — la trampa que este movimiento existe para
+    /// no repetir (#161, revisión de C1).
+    /// # Y puede NEGARSE
+    /// Devuelve `false` sin tocar nada si ya se pidió cancelar. El `Esc` que
+    /// pidió parar llegó ANTES que la Task, así que adoptarla aquí resucitaría
+    /// un run que el lector dio por cortado y, peor, borraría la petición de
+    /// cancelación con el `cancel_requested = false` de abajo — que existe
+    /// para que una cancelación vieja no manche el run nuevo, no para
+    /// descartar la que acaba de pedirse.
+    ///
+    /// El guard estaba en el envoltorio de la GUI y no aquí, así que la TUI se
+    /// quedaba con el agujero: hoy no lo alcanza porque espera el `sync.apply`
+    /// en línea, o sea por casualidad del flujo de control y no por diseño
+    /// (revisión de rama de C2, rust MAJOR-2). Quien lo niegue tiene que
+    /// cancelar la Task que le devolvieron: nadie más la conoce.
+    pub fn on_apply_started(&mut self, task_id: TaskId) -> bool {
+        if self.cancel_requested {
+            return false;
+        }
+        self.state.on_apply_started(task_id);
+        self.run = SyncRunState::Running;
+        self.confirming = None;
+        self.cancel_requested = false;
+        // El daemon contestó: la ventana que el pestillo cubre se acabó, y a
+        // partir de aquí quien impide el segundo `sync.apply` es el estado
+        // `Applying`.
+        self.submitted = false;
+        true
+    }
+
+    /// Terminó la Task de `sync.apply`, con lo que `sync.report` contestó:
+    /// mete el informe y fija el desenlace. Devuelve la categoría del error que
+    /// hay que decir, SIN sanear — cada frontend la mete donde y como pinta.
+    ///
+    /// Compartida (#161) porque las tres reglas de aquí son de las que un
+    /// frontend arregla y el otro se queda:
+    ///
+    /// 1. **El error de la TASK manda sobre el del informe**: es el que dice
+    ///    por qué se paró.
+    /// 2. **Sin informe no se dice que terminó bien.** `sync.report` es lo
+    ///    ÚNICO que dice cuánto se llegó a escribir; si no se pudo pedir, el
+    ///    desenlace es `Failed` con la categoría de ESE error aunque la Task
+    ///    dijera `Completed`. `norte-tui` se quedaba aquí en `Applying` con una
+    ///    barra transitoria, y el pie decía «aplicando…» para siempre.
+    /// 3. **Un estado NO terminal también es fallo.** Solo se llega a él con
+    ///    los emisores del progreso caídos: la conexión murió sin decir qué
+    ///    pasó, y una sincronización a medias no es un éxito.
+    ///
+    /// Con UNA excepción a las dos últimas: una Task **cancelada** se dice
+    /// cancelada aunque el informe falte. El lector pidió parar y eso ya lo
+    /// sabe; convertirlo en «falló» le quita el único dato firme que tiene, y
+    /// que el informe no llegara lo cuenta la categoría que esto devuelve.
+    ///
+    /// La segunda pregunta se cae con la petición que la motivó: dejarla puesta
+    /// bajo un pie que ya dice «falló» es cómo un `y` posterior contesta a otra
+    /// cosa.
+    ///
+    /// El informe se mete TAMBIÉN cuando la Task se canceló: lo aplicado hasta
+    /// el corte se queda journalizado, y media sincronización es un estado real
+    /// que el lector tiene que poder ver.
+    pub fn on_apply_ended(
+        &mut self,
+        state: &TaskState,
+        report: Result<SyncReportResult, norte_proto::Error>,
+    ) -> Option<String> {
+        let categoria = match (state, &report) {
+            (TaskState::Failed { error }, _) => Some(crate::error::error_category(error)),
+            (_, Err(e)) => Some(crate::error::error_category(e)),
+            _ => None,
+        };
+        if let Ok(informe) = report {
+            self.state.on_report(informe);
+        }
+        self.run = if matches!(state, TaskState::Cancelled) {
+            // Una cancelación se dice CANCELADA aunque el informe no llegue:
+            // el lector pidió parar y eso ya lo sabe, así que llamarlo «falló»
+            // le quita el único dato firme que tiene. Que no se pueda decir
+            // cuánto se escribió lo dice el banner, con la categoría que esto
+            // devuelve.
+            SyncRunState::Cancelled
+        } else if categoria.is_some() || !state.is_terminal() {
+            SyncRunState::Failed
+        } else {
+            SyncRunState::from_task_state(state)
+        };
+        self.confirming = None;
+        // Terminó: el pestillo se suelta pase lo que pase, incluso si esto
+        // llega sin que `on_apply_started` haya pasado nunca (una Task que
+        // falla antes de adoptarse). Si no, el panel se queda sin poder
+        // aprobar y con el pie ofreciéndolo.
+        self.submitted = false;
+        categoria
+    }
+}
+
+/// Qué línea de TECLAS toca ahora mismo, como id de Fluent.
+///
+/// Tres, y la diferencia entre las dos últimas es la única tecla de esta
+/// pantalla que escribe en el disco de alguien:
+///
+/// * `sync-hint-confirm` con la segunda pregunta puesta — el teclado se ha
+///   reducido a `y` y «cualquier otra», y decir «↑↓ mover» ahí es ofrecer algo
+///   que ya no funciona;
+/// * `sync-hint`, que NOMBRA la tecla de aprobar, solo cuando aprobar hace
+///   algo;
+/// * `sync-hint-done` en todo lo demás.
+///
+/// # Por qué es compartida
+/// El segundo brazo pregunta por [`SyncView::can_approve`] y no solo por
+/// [`SyncView::awaiting_approval`], y ésa es la corrección: un plan que cerró
+/// pero que el daemon marcó no ejecutable —o cuya Task se canceló— está en
+/// `Ready` y NO se puede aprobar, y la línea de teclas seguía ofreciendo `a
+/// aprobar` encima de un pie que ya decía «este plan no se puede aprobar»
+/// ([`status_line`]). Es el mismo desacuerdo que la revisión rust MAJOR-1
+/// arregló entre el pie y la tecla, una capa más arriba; vive aquí para que
+/// haya UNA respuesta para los dos frontends y no una arreglada y otra no
+/// —que es exactamente lo que C1 shipeó (#161)—.
+///
+/// Aplicar GASTA el plan, así que en `Applying`/`Applied` la `a` desaparece:
+/// un segundo `sync.apply` del mismo hash contesta `PlanStale`.
+///
+/// ```
+/// use norte_frontend::sync::{SyncView, hint_id};
+/// use norte_proto::{TaskId, VPath};
+/// use norte_proto::methods::SyncMode;
+/// let v = SyncView::new(
+///     TaskId::new(1),
+///     SyncMode::Update,
+///     VPath::parse("file:///a").expect("vpath"),
+///     VPath::parse("file:///b").expect("vpath"),
+///     None,
+///     None,
+/// );
+/// // Todavía planificando: no hay nada que aprobar, así que no se ofrece.
+/// assert_eq!(hint_id(&v), "sync-hint-done");
+/// ```
+#[must_use]
+pub fn hint_id(view: &SyncView) -> &'static str {
+    if view.confirming.is_some() {
+        "sync-hint-confirm"
+    } else if view.awaiting_approval() && view.can_approve() {
+        "sync-hint"
+    } else {
+        "sync-hint-done"
+    }
+}
+
+/// Where the synchronisation dialog IS: planning, waiting for a human, running
+/// or finished — one sentence, for whatever a frontend uses as a footer.
+///
+/// Shared by both frontends (#161) for the same reason
+/// [`crate::compare::status_line`] is, and this one carries more weight: its
+/// `Ready` arm is where "this plan can be approved" reaches a human as words,
+/// and a second copy of that decision is a second answer to the only question
+/// on this screen that writes to a disk. It lived in `norte-tui`'s renderer
+/// until the GUI needed the same footer.
+///
+/// Three things it deliberately does NOT re-derive:
+///
+/// * approvability is [`SyncPlan::can_approve`] over the plan the state still
+///   holds — and the state is what chose this arm, so a plan that has already
+///   been spent is `Applying`/`Applied` here and never `Ready`;
+/// * whether the applied plan can be undone is [`Applied::is_undoable`], which
+///   reads the report's `batch_id`, and NEVER the plan's outlook: a report with
+///   no batch means nothing was journalled, whatever the plan promised before
+///   it ran;
+/// * the localised error of a failed task is [`SyncView::error`], which each
+///   frontend fills the way it sanitises text.
+///
+/// The frontend adds its own padding; this returns the sentence alone.
+///
+/// ```
+/// use norte_frontend::sync::{SyncView, status_line};
+/// use norte_i18n::Lang;
+/// use norte_proto::{TaskId, VPath};
+/// use norte_proto::methods::SyncMode;
+/// let v = SyncView::new(
+///     TaskId::new(1),
+///     SyncMode::Update,
+///     VPath::parse("file:///a").expect("vpath"),
+///     VPath::parse("file:///b").expect("vpath"),
+///     None,
+///     None,
+/// );
+/// // Recién abierto: planificando, con cero pasos.
+/// assert!(!status_line(&v, Lang::En).is_empty());
+/// ```
+#[must_use]
+pub fn status_line(view: &SyncView, lang: Lang) -> String {
+    let plan = view.state.plan();
+    let n = plan.map_or_else(
+        || match &view.state {
+            SyncState::Planning(p) => p.len(),
+            _ => 0,
+        },
+        |p| p.steps().len(),
+    );
+    let n = n.to_string();
+    match (&view.state, view.run) {
+        // **El informe manda, y va PRIMERO** — pero SIN perder cómo acabó.
+        //
+        // Una aplicación cortada a medias TIENE informe (lo aplicado hasta el
+        // corte se queda, journalizado) y es justo el estado en el que el
+        // lector más necesita saber cuánto llegó a escribirse. Con este brazo
+        // detrás del de `Cancelled`, la pantalla decía «cancelado — habían
+        // llegado N pasos, y no hay plan que aprobar» —una frase sobre el PLAN,
+        // que ya se aprobó— encima de la lista de fallos de la APLICACIÓN.
+        //
+        // Y el desenlace elige la FRASE en vez de perderse: «cancelado tras
+        // aplicar N» y «falló tras aplicar N» dicen las dos mitades. Poner el
+        // brazo de `Failed` delante escondía las cuentas de un `Mirror` que
+        // borró cuarenta árboles y luego murió, que es el sitio donde menos se
+        // pueden esconder; ponerlo detrás sin frases propias borraba la palabra
+        // «cancelado», y el color habría sido la única señal — en la rama cuyo
+        // commit anterior se titula «legible sin color» (#161, fase C2 tarea 4;
+        // revisiones rust MAJOR-2 y de seguridad MAJOR-4).
+        (SyncState::Applied(a), run) => {
+            let done = a.report().done.to_string();
+            let failed = a.report().failed.to_string();
+            let undo = if a.is_undoable() {
+                "undoable"
+            } else {
+                "not-undoable"
+            };
+            let id = match run {
+                SyncRunState::Cancelled => format!("sync-status-applied-cut-{undo}"),
+                SyncRunState::Failed => format!("sync-status-applied-failed-{undo}"),
+                SyncRunState::Running | SyncRunState::Done => {
+                    format!("sync-status-applied-{undo}")
+                }
+            };
+            ta_in(
+                lang,
+                &id,
+                &[
+                    ("done", &done),
+                    ("failed", &failed),
+                    ("error", view.error.as_deref().unwrap_or_default()),
+                ],
+            )
+        }
+        // Sin informe, el fallo manda: un error tiene que llegar entero, y no
+        // hay recuento que lo pueda sustituir.
+        (_, SyncRunState::Failed) => ta_in(
+            lang,
+            "sync-status-failed",
+            &[("error", view.error.as_deref().unwrap_or_default())],
+        ),
+        (_, SyncRunState::Cancelled) => ta_in(lang, "sync-status-cancelled", &[("n", &n)]),
+        (SyncState::Planning(_), _) => ta_in(lang, "sync-planning", &[("n", &n)]),
+        // `view.can_approve()` y no `p.can_approve()`: UNA sola función
+        // contesta esa pregunta, y es la misma que la línea de teclas
+        // consulta. Con la del plan a secas, este brazo y aquella podían
+        // discrepar en cuanto el desenlace de la Task entraba en juego.
+        (SyncState::Ready(_), _) => {
+            let id = if view.can_approve() {
+                "sync-status-ready"
+            } else {
+                "sync-status-not-approvable"
+            };
+            ta_in(lang, id, &[("n", &n)])
+        }
+        (SyncState::Applying(_), _) => t_in(lang, "sync-status-applying"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1451,6 +2403,14 @@ mod tests {
 
     fn task() -> TaskId {
         TaskId::new(7)
+    }
+
+    fn origen() -> VPath {
+        VPath::parse("file:///origen").expect("vpath")
+    }
+
+    fn destino() -> VPath {
+        VPath::parse("file:///destino").expect("vpath")
     }
 
     /// A step of `kind`, with the reversal the transducer would give it
@@ -1831,8 +2791,8 @@ mod tests {
             confidence: CompareConfidence::Probable,
             ..certain.clone()
         };
-        let a = render_step(&certain, DestTrash::Restorable, None);
-        let b = render_step(&probable, DestTrash::Restorable, None);
+        let a = render_step(&certain, DestTrash::Restorable, SyncEncodings::default());
+        let b = render_step(&probable, DestTrash::Restorable, SyncEncodings::default());
         assert_ne!(a.glyphs, b.glyphs);
 
         let mut seen: Vec<char> = [
@@ -1882,7 +2842,7 @@ mod tests {
             reason: None,
             ..step(1, SyncStepKind::Copy, DestTrash::Restorable)
         };
-        let cells = render_step(&unknown, DestTrash::Restorable, None);
+        let cells = render_step(&unknown, DestTrash::Restorable, SyncEncodings::default());
         assert_eq!(cells.undo, StepUndo::Unclear);
         assert_eq!(cells.glyphs.kind, '?');
     }
@@ -1971,11 +2931,390 @@ mod tests {
             dest_rel: Some(rel("sub/A.TXT")),
             ..step(1, SyncStepKind::Overwrite, DestTrash::Restorable)
         };
-        let cells = render_step(&s, DestTrash::Restorable, None);
+        let cells = render_step(&s, DestTrash::Restorable, SyncEncodings::default());
         assert_eq!(cells.rel.text, "sub/a.txt");
         assert_eq!(
             cells.dest_rel.expect("la otra ortografía").text,
             "sub/A.TXT"
+        );
+    }
+
+    /// El sentido de una sincronización lo decide el lado ACTIVO del panel de
+    /// diferencias cuando lo hay, y `Tab` intercambia las DOS raíces enteras
+    /// con sus dos reinterpretaciones. Los panes no se miran siquiera: el
+    /// lector tiene delante un panel con un lado marcado, y el plan tiene que
+    /// hablar de lo que está mirando.
+    #[test]
+    fn el_lado_activo_del_panel_decide_el_sentido_y_los_panes_no_se_miran() {
+        let a = VPath::parse("file:///a").expect("vpath");
+        let b = VPath::parse("file:///b").expect("vpath");
+        // Un par DISTINTO en los panes: si saliera cualquiera de estos dos,
+        // es que el panel no decidió.
+        let p0 = VPath::parse("file:///pane0").expect("vpath");
+        let p1 = VPath::parse("file:///pane1").expect("vpath");
+        let panes = Panes {
+            focused_root: &p0,
+            focused_encoding: None,
+            other_root: &p1,
+            other_encoding: None,
+        };
+        let enc_izq = Some(norte_encoding::NameEncoding::Cp437);
+        let mut v = crate::compare::CompareView::new(a.clone(), b.clone(), 0, enc_izq, None);
+
+        let r = sync_roots(Some(&v), &panes);
+        assert_eq!(r.source, a, "el lado activo nace a la izquierda");
+        assert_eq!(r.dest, b);
+        assert_eq!(
+            r.source_encoding, enc_izq,
+            "y su reinterpretación viaja con él"
+        );
+
+        v.pane.swap_active_side();
+        let r = sync_roots(Some(&v), &panes);
+        assert_eq!(r.source, b, "Tab invierte el SENTIDO");
+        assert_eq!(r.dest, a);
+        assert_eq!(
+            r.dest_encoding, enc_izq,
+            "y la reinterpretación se va con SU raíz, no se queda en su lado"
+        );
+
+        // Sin panel, y solo entonces, mandan los panes.
+        let r = sync_roots(None, &panes);
+        assert_eq!(r.source, p0);
+        assert_eq!(r.dest, p1);
+    }
+
+    /// **La regresión que la auditoría de encoding destapó**: la ortografía
+    /// del destino se plegaba comparando el TEXTO pintado, que es lossy. La
+    /// pareja `lossy_collapse_ff`/`lossy_collapse_fe` de la corpus existe
+    /// justo para esto —bytes distintos, mismo pliegue a `U+FFFD`—, y con la
+    /// comparación por texto el campo que dice sobre qué nombre cae la
+    /// escritura DESAPARECÍA de la pantalla, sin flecha y sin marca, en cuanto
+    /// los dos nombres llevaban un byte inválido cada uno (#152).
+    #[test]
+    fn dos_ortografias_que_colapsan_al_pintarse_siguen_siendo_dos() {
+        let fixtures = norte_testkit::corpus::hostile_names();
+        let uno = fixtures
+            .iter()
+            .find(|f| f.id == "lossy_collapse_ff")
+            .expect("corpus");
+        let otro = fixtures
+            .iter()
+            .find(|f| f.id == "lossy_collapse_fe")
+            .expect("corpus");
+        let rel_de = |bytes: &[u8]| {
+            RelPath::new(vec![
+                norte_proto::Segment::new(bytes.to_vec()).expect("seg"),
+            ])
+        };
+        let paso = SyncStep {
+            rel: rel_de(&uno.bytes),
+            dest_rel: Some(rel_de(&otro.bytes)),
+            ..step(1, SyncStepKind::Overwrite, DestTrash::Restorable)
+        };
+        let cells = render_step(&paso, DestTrash::Restorable, SyncEncodings::default());
+        let dest = cells
+            .dest_rel
+            .expect("dos ficheros distintos son dos ortografías");
+        assert_eq!(
+            dest.text, cells.rel.text,
+            "y colapsan al pintarse, que es justo lo que hacía el pliegue por texto"
+        );
+        assert_ne!(dest.raw, cells.rel.raw, "pero los BYTES no colapsan");
+
+        // Y byte-idénticas SÍ se pliegan: enseñar la misma ruta dos veces con
+        // una flecha en medio sugiere un renombrado que no hay.
+        let mismo = SyncStep {
+            dest_rel: Some(rel_de(&uno.bytes)),
+            ..paso
+        };
+        assert!(
+            render_step(&mismo, DestTrash::Restorable, SyncEncodings::default())
+                .dest_rel
+                .is_none()
+        );
+    }
+
+    /// Un plan CERRADO cuya Task acabó cancelada (o fallando) no se aprueba, y
+    /// el pie y la línea de teclas no pueden discrepar sobre eso: los dos
+    /// hechos son compatibles —`sync.plan_done` llega antes de que el canal se
+    /// cierre— y la pantalla llegó a decir «cancelado, no hay plan que
+    /// aprobar» mientras la tecla de aprobar seguía funcionando (revisión rust
+    /// MAJOR-1).
+    #[test]
+    fn el_pie_y_la_aprobacion_no_pueden_discrepar() {
+        let steps = vec![step(1, SyncStepKind::Copy, DestTrash::Restorable)];
+        let done = done_for(&steps, DestTrash::Restorable);
+        let mut v = SyncView::new(task(), SyncMode::Update, origen(), destino(), None, None);
+        assert!(v.state.on_steps(batch(task(), steps)));
+        assert!(v.state.on_plan_done(done));
+        let listo = status_line(&v, Lang::Es);
+        assert!(v.can_approve(), "cerrado, íntegro y con la Task viva");
+
+        for desenlace in [SyncRunState::Cancelled, SyncRunState::Failed] {
+            v.run = desenlace;
+            assert!(
+                !v.can_approve(),
+                "{desenlace:?}: el lector pidió parar (o el daemon se cayó)"
+            );
+            assert_ne!(
+                status_line(&v, Lang::Es),
+                listo,
+                "{desenlace:?}: y el pie no puede seguir diciendo que se apruebe"
+            );
+        }
+    }
+
+    /// La línea de TECLAS no puede ofrecer `a aprobar` sobre un plan que no se
+    /// puede aprobar: es el mismo desacuerdo que
+    /// [`el_pie_y_la_aprobacion_no_pueden_discrepar`] una capa más arriba, y
+    /// la razón de que [`hint_id`] sea compartida en vez de estar escrita en
+    /// cada frontend (la TUI la tenía sin la mitad del `can_approve`).
+    #[test]
+    fn la_linea_de_teclas_no_ofrece_aprobar_lo_que_no_se_aprueba() {
+        let steps = vec![step(1, SyncStepKind::Copy, DestTrash::Restorable)];
+        let mut done = done_for(&steps, DestTrash::Restorable);
+        let mut v = SyncView::new(task(), SyncMode::Update, origen(), destino(), None, None);
+        assert!(v.state.on_steps(batch(task(), steps.clone())));
+        assert!(v.state.on_plan_done(done.clone()));
+        assert_eq!(hint_id(&v), "sync-hint", "cerrado y sano: se nombra la `a`");
+
+        // La segunda pregunta se queda el teclado entero.
+        v.confirming = Some(Confirmation {
+            id: "sync-confirm-delete",
+            text: "¿seguro?".to_owned(),
+        });
+        assert_eq!(hint_id(&v), "sync-hint-confirm");
+        v.confirming = None;
+
+        // Un plan BLOQUEADO está en `Ready` y no se aprueba: la `a` no se
+        // nombra, y el pie ya dice por qué.
+        done.executable = false;
+        let mut bloqueado =
+            SyncView::new(task(), SyncMode::Update, origen(), destino(), None, None);
+        assert!(bloqueado.state.on_steps(batch(task(), steps)));
+        assert!(bloqueado.state.on_plan_done(done));
+        assert!(bloqueado.awaiting_approval(), "cerró: está en `Ready`");
+        assert_eq!(hint_id(&bloqueado), "sync-hint-done");
+
+        // Y una Task cancelada tras cerrar el plan, igual.
+        v.run = SyncRunState::Cancelled;
+        assert_eq!(hint_id(&v), "sync-hint-done");
+
+        // Gastado: aplicar lo consume.
+        v.run = SyncRunState::Running;
+        v.on_apply_started(TaskId::new(9));
+        assert_eq!(hint_id(&v), "sync-hint-done");
+    }
+
+    /// Las tres reglas del final de una aplicación, COMPARTIDAS (#161): el
+    /// error de la Task manda sobre el del informe, un informe que no llega es
+    /// un fallo aunque la Task dijera `Completed`, y un estado no terminal
+    /// también. `norte-tui` las tenía escritas a mano con la segunda SIN
+    /// aplicar: un `sync.report` que fallaba dejaba el diálogo en `Applying` y
+    /// el pie diciendo «aplicando…» para siempre.
+    #[test]
+    fn el_final_de_una_aplicacion_obedece_una_sola_regla() {
+        let armar = || {
+            let steps = vec![step(1, SyncStepKind::Copy, DestTrash::Restorable)];
+            let done = done_for(&steps, DestTrash::Restorable);
+            let mut v = SyncView::new(task(), SyncMode::Update, origen(), destino(), None, None);
+            assert!(v.state.on_steps(batch(task(), steps)));
+            assert!(v.state.on_plan_done(done));
+            v.on_apply_started(TaskId::new(9));
+            v
+        };
+        let informe = || SyncReportResult {
+            done: 3,
+            failed: 1,
+            skipped: 0,
+            bytes: 30,
+            failures: vec![],
+            batch_id: Some(7),
+        };
+
+        // Terminó bien y con informe: `Done`, sin nada que decir.
+        let mut v = armar();
+        assert!(
+            v.on_apply_ended(&TaskState::Completed, Ok(informe()))
+                .is_none()
+        );
+        assert_eq!(v.run, SyncRunState::Done);
+        assert!(matches!(v.state, SyncState::Applied(_)));
+
+        // Sin informe NO se dice que terminó bien, aunque la Task dijera que
+        // sí: sin él no se sabe cuánto se escribió.
+        let mut v = armar();
+        let c = v
+            .on_apply_ended(&TaskState::Completed, Err(norte_proto::Error::NotFound))
+            .expect("un informe que no llega es un fallo que decir");
+        assert_eq!(v.run, SyncRunState::Failed);
+        assert_eq!(
+            c,
+            crate::error::error_category(&norte_proto::Error::NotFound)
+        );
+
+        // El error de la TASK manda sobre el del informe.
+        let mut v = armar();
+        let c = v
+            .on_apply_ended(
+                &TaskState::Failed {
+                    error: norte_proto::Error::PermissionDenied,
+                },
+                Ok(informe()),
+            )
+            .expect("un fallo trae su categoría");
+        assert_eq!(
+            c,
+            crate::error::error_category(&norte_proto::Error::PermissionDenied)
+        );
+
+        // Un estado NO terminal también es fallo: solo se llega a él con los
+        // emisores del progreso caídos.
+        let mut v = armar();
+        assert!(
+            v.on_apply_ended(&TaskState::Running, Ok(informe()))
+                .is_none()
+        );
+        assert_eq!(v.run, SyncRunState::Failed);
+
+        // Pero una CANCELACIÓN se dice cancelada aunque el informe falte: el
+        // lector pidió parar y eso ya lo sabe.
+        let mut v = armar();
+        assert!(
+            v.on_apply_ended(&TaskState::Cancelled, Err(norte_proto::Error::NotFound))
+                .is_some(),
+            "y aun así se dice que no se pudo pedir el informe"
+        );
+        assert_eq!(v.run, SyncRunState::Cancelled);
+
+        // Y la segunda pregunta se cae en todos los casos.
+        let mut v = armar();
+        v.confirming = Some(Confirmation {
+            id: "sync-confirm-delete",
+            text: "¿seguro?".to_owned(),
+        });
+        assert!(
+            v.on_apply_ended(&TaskState::Cancelled, Ok(informe()))
+                .is_none()
+        );
+        assert!(v.confirming.is_none());
+        assert_eq!(v.run, SyncRunState::Cancelled);
+    }
+
+    /// Una aplicación CORTADA a medias tiene informe, y el pie cuenta lo que
+    /// se escribió — no «cancelado, y no hay plan que aprobar», que es una
+    /// frase sobre el plan (ya aprobado) y que la pantalla llegó a pintar
+    /// encima de la lista de fallos de la aplicación (#161 fase C2 tarea 4).
+    ///
+    /// El fallo, en cambio, sigue mandando: un error tiene que llegar entero.
+    #[test]
+    fn una_aplicacion_cortada_cuenta_lo_que_escribio() {
+        let steps = vec![step(1, SyncStepKind::Copy, DestTrash::Restorable)];
+        let done = done_for(&steps, DestTrash::Restorable);
+        let mut v = SyncView::new(task(), SyncMode::Update, origen(), destino(), None, None);
+        assert!(v.state.on_steps(batch(task(), steps)));
+        assert!(v.state.on_plan_done(done));
+        v.on_apply_started(TaskId::new(9));
+        v.state.on_report(SyncReportResult {
+            done: 3,
+            failed: 1,
+            skipped: 0,
+            bytes: 30,
+            failures: vec![],
+            batch_id: Some(7),
+        });
+
+        v.run = SyncRunState::Done;
+        let entera = status_line(&v, Lang::Es);
+
+        v.run = SyncRunState::Cancelled;
+        let cortada = status_line(&v, Lang::Es);
+        assert!(cortada.contains('3') && cortada.contains('1'), "{cortada}");
+        assert_ne!(
+            cortada,
+            ta_in(Lang::Es, "sync-status-cancelled", &[("n", "1")]),
+            "el informe manda sobre el «cancelado» del plan"
+        );
+        assert_ne!(
+            cortada, entera,
+            "y no se lee igual que una que terminó sola: el color no puede ser la única señal"
+        );
+
+        v.run = SyncRunState::Failed;
+        v.error = Some("boom".to_owned());
+        let fallida = status_line(&v, Lang::Es);
+        assert!(fallida.contains("boom"), "un fallo sigue llegando entero");
+        assert!(
+            fallida.contains('3'),
+            "y ya no esconde cuánto llegó a escribirse: {fallida}"
+        );
+    }
+
+    /// #152, la mitad que faltaba: cada ruta se lee con la reinterpretación
+    /// del lado del que CUELGA. El `rel` de un `DeleteTree` es una ruta del
+    /// DESTINO ([`anchor_of`]) aunque se pinte en la primera columna, así que
+    /// leerla con el codepage del ORIGEN nombra el subárbol que se va a
+    /// borrar con los bytes de otro árbol — en la pantalla donde se aprueba
+    /// borrarlo.
+    #[test]
+    fn cada_ruta_se_lee_con_la_reinterpretacion_del_lado_del_que_cuelga() {
+        // Del ciclo de reinterpretación, no de `encoding_rs` a pelo: ese
+        // crate se consume por la API de `norte-encoding` y no directo.
+        let origen = norte_encoding::NameEncoding::Cp437;
+        let destino = norte_encoding::name_reinterpret_cycle()
+            .iter()
+            .copied()
+            .find(|e| e.label() != origen.label())
+            .expect("el ciclo trae más de una");
+        let enc = SyncEncodings {
+            source: Some(origen),
+            dest: Some(destino),
+        };
+        // Los bytes salen del corpus canónico (`cp866_papka`, cuyo `why`
+        // nombra el #57) y no de un literal escrito aquí: una regresión de
+        // codificación se pinea con la corpus, que es donde el repo las junta.
+        let bytes = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|f| f.id == "cp866_papka")
+            .expect("la corpus trae cp866_papka")
+            .bytes;
+        let rel_hostil = RelPath::new(vec![norte_proto::Segment::new(bytes.clone()).expect("seg")]);
+        let cp437 = norte_encoding::decode_name(&bytes, origen);
+        let ibm866 = norte_encoding::decode_name(&bytes, destino);
+        assert_ne!(cp437, ibm866, "el fixture distingue las dos lecturas");
+
+        let borrado = SyncStep {
+            rel: rel_hostil.clone(),
+            ..step(1, SyncStepKind::DeleteTree, DestTrash::Restorable)
+        };
+        let cells = render_step(&borrado, DestTrash::Restorable, enc);
+        assert_eq!(cells.anchor, RelAnchor::Dest);
+        assert_eq!(
+            cells.rel.text, ibm866,
+            "un DeleteTree habla del DESTINO: con la del destino"
+        );
+
+        // Y una copia cuelga del origen, con `dest_rel` del destino. Los
+        // mismos bytes más un sufijo ASCII: byte-DISTINTOS (si no, el modelo
+        // los pliega, que es lo correcto — ver
+        // `dos_ortografias_que_colapsan_al_pintarse_siguen_siendo_dos`) y aun
+        // así distinguibles por el codepage con que se leen.
+        let mut otros = bytes.clone();
+        otros.push(b'2');
+        let copia = SyncStep {
+            rel: rel_hostil,
+            dest_rel: Some(RelPath::new(vec![
+                norte_proto::Segment::new(otros).expect("seg"),
+            ])),
+            ..step(2, SyncStepKind::Copy, DestTrash::Restorable)
+        };
+        let cells = render_step(&copia, DestTrash::Restorable, enc);
+        assert_eq!(cells.rel.text, cp437, "el rel de una copia es del origen");
+        assert_eq!(
+            cells.dest_rel.expect("hay ortografía de destino").text,
+            format!("{ibm866}2"),
+            "y la ortografía sobre la que cae la escritura, del destino"
         );
     }
 
@@ -2017,6 +3356,141 @@ mod tests {
         assert!(
             !s.can_approve(),
             "un plan ya aplicado no se vuelve a aprobar"
+        );
+    }
+
+    /// Un panel con el plan ya cerrado, sano y con un paso que escribe: el
+    /// estado de partida de todo lo que se aprueba.
+    fn vista_lista() -> SyncView {
+        let mut v = SyncView::new(
+            task(),
+            norte_proto::methods::SyncMode::Update,
+            origen(),
+            destino(),
+            None,
+            None,
+        );
+        v.state = SyncState::Ready(ready(
+            vec![step(1, SyncStepKind::Copy, DestTrash::Restorable)],
+            DestTrash::Restorable,
+        ));
+        v
+    }
+
+    /// #161: el envoltorio del run vivía en `norte-tui`, así que la GUI
+    /// habría tenido que reimplementarlo. C1 aprendió que mover MEDIA
+    /// decisión es peor que no moverla: el comentario decía «una sola regla»
+    /// y había tres copias. Aquí se mueve entera.
+    #[test]
+    fn el_envoltorio_del_run_vive_con_el_modelo() {
+        let v = SyncView::new(
+            task(),
+            norte_proto::methods::SyncMode::Update,
+            origen(),
+            destino(),
+            None,
+            None,
+        );
+        assert!(v.confirming.is_none(), "nace sin pregunta pendiente");
+        assert!(
+            !v.can_approve(),
+            "un plan que todavía no cerró NO se puede aprobar"
+        );
+    }
+
+    /// La trampa que la TUI documenta y que el CLI de la fase A no vio:
+    /// `SyncState::can_approve` sabe que un plan YA aprobado no se vuelve a
+    /// aprobar; `SyncPlan::can_approve`, que sigue accesible por
+    /// `SyncState::plan()`, contesta que sí.
+    #[test]
+    fn un_plan_ya_aprobado_no_se_aprueba_dos_veces() {
+        let mut v = SyncView::new(
+            task(),
+            norte_proto::methods::SyncMode::Update,
+            origen(),
+            destino(),
+            None,
+            None,
+        );
+        let steps = vec![step(1, SyncStepKind::Copy, DestTrash::Restorable)];
+        v.state = SyncState::Ready(ready(steps, DestTrash::Restorable));
+        assert!(v.can_approve(), "cerrado y sano: se puede");
+
+        assert!(
+            v.on_apply_started(TaskId::new(9)),
+            "sin cancelación: adopta"
+        );
+        assert!(
+            !v.can_approve(),
+            "ya aplicándose: la respuesta es NO, aunque el plan de dentro diga que sí"
+        );
+    }
+
+    /// Revisión de rama de C2 (rust MAJOR-1 + seguridad MAJOR-1): la ventana
+    /// entre la tecla y la respuesta del daemon. `Applying` NO llega con la
+    /// tecla, así que sin pestillo el panel se queda diciendo «aprobable»
+    /// mientras hay un `sync.apply` volando — y el pie ofrece una tecla que
+    /// `approve` ya rechaza. El pestillo vive AQUÍ, con `can_approve`,
+    /// `hint_id` y `status_line`, que es lo que la versión de `norte-gui` no
+    /// podía conseguir.
+    #[test]
+    fn el_pestillo_del_apply_en_vuelo_lo_ven_las_tres_funciones() {
+        let mut v = vista_lista();
+        assert!(v.can_approve(), "cerrado y sano");
+        assert_eq!(hint_id(&v), "sync-hint", "ofrece aprobar");
+
+        let hash = v.submit().expect("aprobable: da el hash");
+        assert!(v.is_submitted(), "el apply está en vuelo");
+        assert!(
+            !v.can_approve(),
+            "y en esa ventana NO se puede aprobar otra vez"
+        );
+        assert_ne!(
+            hint_id(&v),
+            "sync-hint",
+            "el pie no puede seguir ofreciendo una tecla que approve rechaza"
+        );
+        assert!(v.submit().is_none(), "el segundo submit no da hash");
+
+        // Y lo suelta la TRANSICIÓN, no la generación de la petición.
+        assert!(v.on_apply_started(TaskId::new(9)));
+        assert!(!v.is_submitted(), "adoptada la Task, el pestillo se suelta");
+        let _ = hash;
+    }
+
+    /// El pestillo se suelta también cuando la Task muere ANTES de adoptarse:
+    /// si no, el panel queda sin poder aprobar para siempre y con el pie
+    /// ofreciéndolo (revisión de rama, MINOR de las dos revisiones).
+    #[test]
+    fn una_task_que_muere_sin_adoptarse_suelta_el_pestillo() {
+        let mut v = vista_lista();
+        v.submit().expect("aprobable");
+        assert!(v.is_submitted());
+        v.on_apply_ended(
+            &TaskState::Failed {
+                error: norte_proto::Error::PermissionDenied,
+            },
+            Err(norte_proto::Error::PermissionDenied),
+        );
+        assert!(!v.is_submitted(), "terminó: el pestillo se suelta");
+    }
+
+    /// Revisión de rama de C2, rust MAJOR-2: el guard estaba en el envoltorio
+    /// de la GUI, así que la TUI se quedaba con el agujero. Un `Esc` que llega
+    /// antes que la Task pidió PARAR; adoptarla resucita el run y, de paso,
+    /// borra la petición de cancelación.
+    #[test]
+    fn una_task_que_llega_tras_el_esc_no_se_adopta() {
+        let mut v = vista_lista();
+        v.submit().expect("aprobable");
+        v.cancel_requested = true;
+        assert!(
+            !v.on_apply_started(TaskId::new(9)),
+            "ya se pidió cancelar: no se adopta"
+        );
+        assert!(
+            v.cancel_requested,
+            "y la petición de cancelación SIGUE puesta"
         );
     }
 

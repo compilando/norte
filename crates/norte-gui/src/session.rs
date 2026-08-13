@@ -259,6 +259,53 @@ pub enum SessionCmd {
         /// Params ya resueltos y validados por la GUI (`NorteGui::start_compare`).
         params: Box<norte_proto::methods::FsCompareParams>,
     },
+    /// Planifica una sincronización (`sync.plan`, 0.40.0, ADR 0049 — #161,
+    /// spec 3 fase C2): arranca la Task y BOMBEA sus eventos
+    /// ([`SessionEvent::SyncSteps`] y, si el plan llega a cerrarse, UN
+    /// [`SessionEvent::SyncPlanDone`]); cuando el canal se cierra manda UN
+    /// [`SessionEvent::SyncPlanEnded`] con el estado de la Task.
+    ///
+    /// **Planificar no muta nada**: lee los dos árboles y retiene el plan en
+    /// el spool del daemon. Lo que muta es `sync.apply`, que es otro comando
+    /// y otra tarea de este plan (la 4). La Task queda registrada en el mapa
+    /// de cancellers, así que [`SessionCmd::Cancel`] la para como a cualquier
+    /// otra (regla 3).
+    SyncPlan {
+        /// El pane que lo pidió, o sea el lado ORIGEN. Viaja de ida y vuelta
+        /// como el `left_pane` de [`SessionCmd::Compare`], y por lo mismo: el
+        /// «planificando…» se retira donde se puso, aunque el foco se haya
+        /// movido mientras el RPC iba y venía.
+        source_pane: usize,
+        /// Generación de ESTA petición (guard anti-stale, como `Compare`):
+        /// dos planes seguidos son dos RPC concurrentes y pueden contestar en
+        /// orden inverso.
+        generation: u64,
+        /// Params ya resueltos y validados por la GUI (`NorteGui::start_sync`).
+        params: Box<norte_proto::methods::SyncPlanParams>,
+    },
+    /// **Aplica el plan que un humano APROBÓ** (`sync.apply`, 0.40.0, ADR
+    /// 0049 — #161, spec 3 fase C2 tarea 4): la mitad DESTRUCTIVA de esta
+    /// pantalla — reescribe y, en `Mirror`, borra subárboles del destino.
+    ///
+    /// Arranca la Task, la registra en el mapa de cancellers (regla 3: es lo
+    /// que hace que el `Esc` del panel y su cierre la puedan parar), espera su
+    /// desenlace y pide `sync.report` — SIEMPRE, cancelación incluida: lo
+    /// aplicado hasta el corte se queda journalizado y media sincronización es
+    /// un estado real que el lector tiene que poder ver (con la excepción que
+    /// `sync_view::close` documenta: un `DeleteTree` cortado a medio borrar no
+    /// deja fila, y eso es del core — issue #186).
+    SyncApply {
+        /// La generación del panel que aprobó, ecoada en
+        /// [`SessionEvent::SyncApplyStarted`] y en
+        /// [`SessionEvent::SyncApplyFailed`]: si el lector pidió OTRO plan
+        /// mientras tanto, esa Task no tiene panel que la mire y hay que
+        /// cancelarla en vez de dejarla borrando a ciegas.
+        generation: u64,
+        /// El hash del plan aprobado. Es lo ÚNICO que viaja (ADR 0049): no hay
+        /// forma de pedir que se ejecute algo distinto de lo que el panel
+        /// enseñó.
+        plan_hash: Box<norte_proto::methods::PlanHash>,
+    },
 }
 
 /// Contenido del viewer que cruza a la GUI (GUI-d T3).
@@ -578,6 +625,138 @@ pub enum SessionEvent {
         /// reemplazó — y como cada `Compare` es su propio `tokio::spawn`, dos
         /// teclas seguidas pueden contestar en orden inverso (revisión de
         /// rama, MINOR-3).
+        generation: u64,
+        /// El error tipado; la GUI lo convierte en frase.
+        error: Error,
+    },
+    /// El plan de sincronización ARRANCÓ (#161): hay Task, y con ella el
+    /// `task_id` que marca de quién son los lotes que vengan detrás. La GUI
+    /// abre el panel AQUÍ y no al pulsar la tecla, igual que con la
+    /// comparación y por el mismo motivo.
+    SyncPlanStarted {
+        /// La Task de este plan.
+        task_id: TaskId,
+        /// El pane que lo pidió — el eco de `SessionCmd::SyncPlan::source_pane`.
+        source_pane: usize,
+        /// El eco de `SessionCmd::SyncPlan::generation` (guard anti-stale).
+        generation: u64,
+        /// El modo pedido: la cabecera tiene que decir si esto BORRA antes de
+        /// que nadie apruebe nada.
+        mode: norte_proto::methods::SyncMode,
+        /// Raíz ORIGEN, congelada en la petición.
+        source_root: VPath,
+        /// Raíz DESTINO.
+        dest_root: VPath,
+    },
+    /// UN lote de pasos del plan.
+    ///
+    /// **Sin `generation`, y es deliberado** (revisión rust BLOCKER-1): lo
+    /// que dice de quién es un lote es el `task_id` que trae del wire, y lo
+    /// compara el modelo compartido (`SyncState::on_steps`) — la misma regla
+    /// que obedece la TUI, y la misma que `CompareRows` sigue en esta GUI.
+    /// La generación cuenta PETICIONES, no Tasks: una petición posterior que
+    /// el daemon RECHAZA (raíces solapadas, sin spool) la adelanta sin abrir
+    /// panel, y un guard de generación aquí dejaría al panel vivo sin recibir
+    /// ni un paso más, sin poder cerrar su plan y sin nadie que cancelara su
+    /// Task.
+    SyncSteps {
+        /// El lote, tal cual llegó (con su `task_id`).
+        batch: norte_proto::methods::SyncStepsBatch,
+    },
+    /// El `sync.plan_done` que CIERRA el plan: es lo que le da su `plan_hash`,
+    /// y sin él no hay nada aprobable. **No es el final del canal**, que es
+    /// [`SessionEvent::SyncPlanEnded`] y significa otra cosa.
+    ///
+    /// Sin `generation`, por lo mismo que [`SessionEvent::SyncSteps`]: el
+    /// cierre trae su `task_id`, y ésa es la correlación.
+    SyncPlanDone {
+        /// El cierre, tal cual llegó (con su `task_id` y su `plan_hash`).
+        done: norte_proto::methods::SyncPlanDone,
+    },
+    /// El canal de eventos del plan se cerró, con el estado que la Task tenía
+    /// en ese instante.
+    ///
+    /// Existe porque «la Task acabó» y «el plan está completo» son dos hechos
+    /// distintos, y confundirlos es el defecto que las fases A y B shipearon:
+    /// un plan cancelado o fallido cierra su canal SIN `sync.plan_done`, y
+    /// entonces no hay plan — solo un desenlace que pintar. Como en
+    /// `CompareDone`, `state` puede NO ser terminal (la bomba de eventos y la
+    /// de progreso son tasks distintas) y se manda igual: quien lo interpreta
+    /// es `norte_frontend::sync::SyncRunState::from_task_state`, el mismo
+    /// mapeo que usa la TUI.
+    SyncPlanEnded {
+        /// La Task que termina — la del PLAN, y la correlación de este
+        /// evento: la vista la contrasta con la suya (la tarea 4 le pondrá
+        /// encima la de `sync.apply`). Sin `generation`, igual que sus dos
+        /// hermanos y por el mismo motivo.
+        task_id: TaskId,
+        /// El estado leído al cerrarse el canal (puede no ser terminal).
+        state: TaskState,
+    },
+    /// `sync.plan` fue RECHAZADO antes de existir Task alguna (raíces
+    /// solapadas, un daemon sin spool o N-1, más marcas de las que caben): NO
+    /// se abre panel, por lo mismo que `CompareFailed`.
+    SyncPlanFailed {
+        /// El pane que lo pidió — el eco de `SessionCmd::SyncPlan::source_pane`.
+        source_pane: usize,
+        /// El eco de `SessionCmd::SyncPlan::generation` (guard anti-stale).
+        ///
+        /// **La negativa lo lleva también**, y no es adorno: C1 shipeó
+        /// `CompareFailed` sin él y la negativa de una petición ya superada
+        /// dejaba pintado un banner describiendo algo que el lector había
+        /// reemplazado.
+        generation: u64,
+        /// El error tipado; la GUI lo convierte en frase.
+        error: Error,
+    },
+    /// `sync.apply` ARRANCÓ: hay Task, y es la que a partir de ahora ESCRIBE.
+    ///
+    /// El panel la adopta —pasa a ser lo que su `Esc` y su cierre cancelan— y
+    /// el modelo avanza a `Applying`, que es lo que hace imposible aprobar dos
+    /// veces el mismo plan.
+    SyncApplyStarted {
+        /// La Task de la aplicación.
+        task_id: TaskId,
+        /// El eco de `SessionCmd::SyncApply::generation` (guard anti-stale).
+        ///
+        /// **Aquí el guard no es cosmético**, al revés que en un lote de
+        /// pasos: si la petición está vencida es porque el lector pidió otro
+        /// plan, y ese plan ya abrió otro panel — dejar corriendo esta Task
+        /// sería un `Mirror` borrando sin nadie que lo vea ni lo pueda parar.
+        generation: u64,
+    },
+    /// La Task de `sync.apply` TERMINÓ, con lo que `sync.report` contestó.
+    ///
+    /// Los dos viajan juntos a propósito: el estado dice CÓMO acabó y el
+    /// informe QUÉ hizo, y son las dos mitades de una sola frase. El informe se
+    /// pide también cuando la Task se canceló.
+    ///
+    /// Sin `generation`, igual que [`SessionEvent::SyncPlanEnded`]: lo que
+    /// correlaciona un final es su `task_id`, que la vista contrasta con el
+    /// suyo (reasignado al adoptar la aplicación).
+    SyncApplyEnded {
+        /// La Task que termina — la de la APLICACIÓN.
+        task_id: TaskId,
+        /// El estado terminal. Si los emisores del progreso mueren sin
+        /// desenlace se sintetiza un `Failed`, igual que en
+        /// [`forward_progress`]: una sincronización a medias sobre una
+        /// conexión muerta no es un éxito.
+        state: TaskState,
+        /// Lo que `sync.report` contestó, o por qué no se pudo pedir. Sin
+        /// informe no se sabe qué se escribió, y el panel lo pinta como fallo
+        /// en vez de decir «hecho».
+        report: Box<Result<norte_proto::methods::SyncReportResult, Error>>,
+    },
+    /// `sync.apply` fue RECHAZADO antes de existir Task alguna: el plan
+    /// caducó en el spool, otro lo gastó (`PlanStale`), o el daemon se cayó
+    /// entre el plan y la aprobación. **El panel sigue abierto** —a diferencia
+    /// de un `sync.plan` rechazado—, así que la negativa se pinta también en
+    /// él: un banner mientras el pie sigue ofreciendo aprobar es la pantalla
+    /// contradiciéndose.
+    SyncApplyFailed {
+        /// El eco de `SessionCmd::SyncApply::generation` (guard anti-stale),
+        /// por lo mismo que en `SyncPlanFailed`: dos peticiones seguidas
+        /// pueden contestar en orden inverso.
         generation: u64,
         /// El error tipado; la GUI lo convierte en frase.
         error: Error,
@@ -917,6 +1096,39 @@ pub fn spawn(
                                 &cancellers,
                             )
                             .await;
+                        });
+                    }
+                    SessionCmd::SyncPlan {
+                        source_pane,
+                        generation,
+                        params,
+                    } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        let cancellers = Arc::clone(&cancellers);
+                        tokio::spawn(async move {
+                            sync_plan(
+                                &backend,
+                                SyncRequest {
+                                    source_pane,
+                                    generation,
+                                },
+                                *params,
+                                &tx,
+                                &cancellers,
+                            )
+                            .await;
+                        });
+                    }
+                    SessionCmd::SyncApply {
+                        generation,
+                        plan_hash,
+                    } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        let cancellers = Arc::clone(&cancellers);
+                        tokio::spawn(async move {
+                            sync_apply(&backend, generation, &plan_hash, &tx, &cancellers).await;
                         });
                     }
                     SessionCmd::PluginRunCommand { id, command, arg } => {
@@ -1320,6 +1532,186 @@ async fn pump_compare(
     });
 }
 
+/// Quién pidió un plan de sincronización: el eco que la GUI necesita de vuelta
+/// para abrir el panel y para retirar el aviso del pane correcto. Gemelo de
+/// [`Request`], y separado de él a propósito: su `usize` significa el lado
+/// ORIGEN, no el lado izquierdo, y en una sincronización ese sentido es la
+/// mitad de lo que se aprueba.
+struct SyncRequest {
+    /// El pane que lo pidió (el lado ORIGEN).
+    source_pane: usize,
+    /// La generación de la petición (guard anti-stale).
+    generation: u64,
+}
+
+/// Arranca `sync.plan` y BOMBEA sus eventos (#161, spec 3 fase C2).
+///
+/// Un rechazo de entrada (raíces solapadas, sin spool, un daemon N-1, más
+/// marcas de las que caben) sale por [`SessionEvent::SyncPlanFailed`] y no abre
+/// panel; con Task, se registra su canceller —así el `task.cancel` de la GUI
+/// llega por el mismo camino que el de una copia, regla 3— y se anuncia el
+/// `task_id` ANTES del primer lote, que es lo que le permite a la vista
+/// descartar los pasos de un plan anterior.
+///
+/// **Planificar no muta nada.** El plan queda RETENIDO en el spool del daemon y
+/// caduca solo; ejecutarlo es `sync.apply`, que no pasa por aquí.
+async fn sync_plan(
+    backend: &Backend,
+    who: SyncRequest,
+    params: norte_proto::methods::SyncPlanParams,
+    tx: &mpsc::UnboundedSender<SessionEvent>,
+    cancellers: &Arc<Mutex<HashMap<TaskId, TaskCanceller>>>,
+) {
+    let (source_root, dest_root, mode) = (params.source.clone(), params.dest.clone(), params.mode);
+    let (task, rx) = match backend.sync_plan(params).await {
+        Ok(pair) => pair,
+        Err(error) => {
+            let _ = tx.send(SessionEvent::SyncPlanFailed {
+                source_pane: who.source_pane,
+                generation: who.generation,
+                error,
+            });
+            return;
+        }
+    };
+    let task_id = task.id();
+    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+    cancellers.lock().unwrap().insert(task_id, task.canceller());
+    let _ = tx.send(SessionEvent::SyncPlanStarted {
+        task_id,
+        source_pane: who.source_pane,
+        generation: who.generation,
+        mode,
+        source_root,
+        dest_root,
+    });
+    pump_sync_plan(task, rx, tx).await;
+    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+    cancellers.lock().unwrap().remove(&task_id);
+}
+
+/// Reenvía cada evento de `rx` y, al CERRARSE el canal, UN
+/// [`SessionEvent::SyncPlanEnded`] con el snapshot de progreso de ese instante.
+///
+/// **El cierre del canal no es el cierre del plan.** El plan cierra con su
+/// `sync.plan_done`, que viaja como un evento propio: un plan cancelado a
+/// medias cierra el canal sin haberlo mandado nunca, y eso significa que no
+/// hay `plan_hash` y no hay nada que aprobar. Los dos se mandan por separado
+/// justo para que la GUI no pueda confundirlos (la confusión que las fases A y
+/// B pagaron).
+///
+/// **No espera al estado terminal**, igual que [`pump_compare`] y por lo mismo:
+/// la bomba de eventos y la de progreso son tasks independientes, y esperarlo
+/// aquí dejaría el panel diciendo «planificando…» para siempre contra un daemon
+/// caído.
+///
+/// Los lotes se reenvían TAL CUAL, con el `task_id` que traen del wire: quien
+/// decide si son de este plan es el modelo compartido, que es el que también lo
+/// decide en la TUI. Este bombeo no les añade `generation` a propósito —ver
+/// [`SessionEvent::SyncSteps`]—: lo que correlaciona una Task es su id.
+async fn pump_sync_plan(
+    task: TaskRef,
+    mut rx: mpsc::Receiver<norte_core::sync::SyncPlanEvent>,
+    tx: &mpsc::UnboundedSender<SessionEvent>,
+) {
+    let task_id = task.id();
+    while let Some(event) = rx.recv().await {
+        let _ = match event {
+            norte_core::sync::SyncPlanEvent::Steps(batch) => {
+                tx.send(SessionEvent::SyncSteps { batch })
+            }
+            norte_core::sync::SyncPlanEvent::Done(done) => {
+                tx.send(SessionEvent::SyncPlanDone { done })
+            }
+        };
+    }
+    let mut progress = task.progress();
+    let snapshot = progress.borrow_and_update().clone();
+    let _ = tx.send(SessionEvent::SyncPlanEnded {
+        task_id,
+        state: snapshot.state,
+    });
+}
+
+/// Aplica el plan APROBADO (`sync.apply`) y cosecha su informe (#161, fase C2
+/// tarea 4).
+///
+/// **Es la única función de este fichero que escribe en el disco de alguien.**
+/// Lo que viaja es el `plan_hash` y nada más (ADR 0049): el daemon ejecuta
+/// exactamente el plan que retuvo en el spool, así que no hay forma de que
+/// esto pida algo distinto de lo que el panel enseñó y el humano aprobó.
+///
+/// Un rechazo de entrada (`PlanStale`, el plan caducado, un daemon caído) sale
+/// por [`SessionEvent::SyncApplyFailed`] y no crea Task. Con Task:
+///
+/// 1. se registra su canceller ANTES de anunciarla, para que no exista un
+///    instante en el que la GUI sepa de una Task que escribe y no la pueda
+///    parar (regla 3);
+/// 2. se espera su desenlace por el watch de progreso — y si los emisores
+///    mueren sin publicar uno terminal se sintetiza un `Failed`, igual que
+///    [`forward_progress`] y por lo mismo: una sincronización a medias sobre
+///    una conexión muerta no es un éxito;
+/// 3. se pide `sync.report` **pase lo que pase**, cancelación incluida: lo
+///    aplicado hasta el corte se queda journalizado, y media sincronización es
+///    un estado real que el lector tiene que poder ver.
+///
+/// La aplicación NO entra en la franja de tasks de la ventana, igual que el
+/// plan: su progreso lo pinta el pie del propio panel, y el panel es también el
+/// único sitio desde el que se cancela.
+async fn sync_apply(
+    backend: &Backend,
+    generation: u64,
+    plan_hash: &norte_proto::methods::PlanHash,
+    tx: &mpsc::UnboundedSender<SessionEvent>,
+    cancellers: &Arc<Mutex<HashMap<TaskId, TaskCanceller>>>,
+) {
+    let task = match backend.sync_apply(plan_hash).await {
+        Ok(task) => task,
+        Err(error) => {
+            let _ = tx.send(SessionEvent::SyncApplyFailed { generation, error });
+            return;
+        }
+    };
+    let task_id = task.id();
+    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+    cancellers.lock().unwrap().insert(task_id, task.canceller());
+    let _ = tx.send(SessionEvent::SyncApplyStarted {
+        task_id,
+        generation,
+    });
+    let state = wait_terminal(&task).await;
+    let report = backend.sync_report(task_id).await;
+    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+    cancellers.lock().unwrap().remove(&task_id);
+    let _ = tx.send(SessionEvent::SyncApplyEnded {
+        task_id,
+        state,
+        report: Box::new(report),
+    });
+}
+
+/// Espera a que `task` publique un estado TERMINAL y lo devuelve.
+///
+/// Si los emisores del watch mueren sin publicarlo —la conexión se cayó—
+/// devuelve `Failed { ProviderUnavailable }` en vez del último no terminal:
+/// no se sabe qué pasó, y el desenlace honesto de una escritura interrumpida
+/// por una conexión muerta no es «hecho». Mismo criterio y mismo error
+/// sintético que [`forward_progress`].
+async fn wait_terminal(task: &TaskRef) -> TaskState {
+    let mut rx = task.progress();
+    loop {
+        let snap = rx.borrow_and_update().clone();
+        if snap.state.is_terminal() {
+            return snap.state;
+        }
+        if rx.changed().await.is_err() {
+            return TaskState::Failed {
+                error: Error::ProviderUnavailable { retryable: true },
+            };
+        }
+    }
+}
+
 /// Presupuesto de píxeles del preview de imagen (#92, movido del hilo de UI):
 /// `into_rgba8` alloca ancho×alto×4 y puede coexistir con el buffer del
 /// decoder — pico real ≈ 32 MP × 4 × 2 ≈ 256 MiB (una sola imagen a la vez).
@@ -1406,6 +1798,37 @@ mod tests {
 
     fn id(n: u64) -> TaskId {
         TaskId::new(n)
+    }
+
+    /// [`wait_terminal`] espera al desenlace, y con los emisores muertos
+    /// sintetiza un `Failed` en vez de devolver el último NO terminal: la
+    /// conexión se fue sin decir qué pasó, y una sincronización a medias no es
+    /// un éxito (regla 3 / revisiones rust m3 y de seguridad MINOR-5).
+    #[tokio::test]
+    async fn wait_terminal_sintetiza_un_fallo_si_la_conexion_muere() {
+        let tid = id(21);
+        let (watch_tx, watch_rx) = tokio::sync::watch::channel(snap(tid, TaskState::Running));
+        let task = TaskRef::synthetic_for_tests(tid, watch_rx);
+        let fut = tokio::spawn(async move { wait_terminal(&task).await });
+        drop(watch_tx);
+        assert!(
+            matches!(
+                fut.await.expect("join"),
+                TaskState::Failed {
+                    error: norte_proto::Error::ProviderUnavailable { retryable: true }
+                }
+            ),
+            "sin desenlace publicado, «hecho» sería la mentira mayor"
+        );
+
+        // Y con desenlace publicado, ése: una cancelación se dice cancelada.
+        let tid = id(22);
+        let (watch_tx, watch_rx) = tokio::sync::watch::channel(snap(tid, TaskState::Running));
+        let task = TaskRef::synthetic_for_tests(tid, watch_rx);
+        let fut = tokio::spawn(async move { wait_terminal(&task).await });
+        watch_tx.send_modify(|p| p.state = TaskState::Cancelled);
+        assert_eq!(fut.await.expect("join"), TaskState::Cancelled);
+        drop(watch_tx);
     }
 
     /// #85: la conexión muere SIN desenlace (el watch se cierra) —
@@ -1594,5 +2017,50 @@ mod tests {
             "sin terminal sintetizado de más: {states:?}"
         );
         assert!(cancellers.lock().unwrap().is_empty());
+    }
+
+    /// #161: un plan CANCELADO cierra su canal sin haber mandado nunca
+    /// `sync.plan_done`, y el bombeo lo cuenta tal cual — un
+    /// `SyncPlanEnded` con el desenlace, y NINGÚN `SyncPlanDone`. Es la
+    /// distinción entera de esta fase: sin la notificación no hay
+    /// `plan_hash`, así que no hay plan que aprobar por mucho que el canal
+    /// se haya acabado.
+    #[tokio::test]
+    async fn pump_sync_plan_cierra_el_canal_sin_cerrar_el_plan() {
+        let tid = id(21);
+        let (watch_tx, watch_rx) = tokio::sync::watch::channel(snap(tid, TaskState::Running));
+        let task = TaskRef::synthetic_for_tests(tid, watch_rx);
+        let (ev_in_tx, ev_in_rx) = mpsc::channel(4);
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+
+        ev_in_tx
+            .send(norte_core::sync::SyncPlanEvent::Steps(
+                norte_proto::methods::SyncStepsBatch {
+                    task_id: tid,
+                    steps: vec![],
+                },
+            ))
+            .await
+            .expect("lote");
+        watch_tx
+            .send(snap(tid, TaskState::Cancelled))
+            .expect("terminal");
+        drop(ev_in_tx); // el planificador se paró: se cierra el canal.
+        pump_sync_plan(task, ev_in_rx, &ev_tx).await;
+
+        let SessionEvent::SyncSteps { batch } = ev_rx.try_recv().expect("el lote") else {
+            panic!("esperaba SyncSteps");
+        };
+        assert_eq!(batch.task_id, tid, "el lote llega tal cual, con su task_id");
+        let SessionEvent::SyncPlanEnded { task_id, state } = ev_rx.try_recv().expect("el final")
+        else {
+            panic!("esperaba SyncPlanEnded");
+        };
+        assert_eq!(task_id, tid);
+        assert_eq!(state, TaskState::Cancelled);
+        assert!(
+            ev_rx.try_recv().is_err(),
+            "UN final, y ningún SyncPlanDone que nadie mandó"
+        );
     }
 }

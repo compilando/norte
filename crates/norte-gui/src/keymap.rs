@@ -109,6 +109,17 @@ pub const COMMANDS: &[&str] = &[
     // resuelve igual: `alt+d` en `gui_supplement` (ver su comentario) les da
     // la única puerta.
     "pane.compare-dirs",
+    // #161, spec 3 fase C2: la sincronización, la mitad DESTRUCTIVA del par.
+    // El chord también viene del catálogo compartido, que lo liga a `ctrl+y`
+    // en CINCO presets —orthodox/vim/cua/total-commander/krusader, todos con
+    // el MISMO chord, a diferencia de `compare-dirs`— y lo deja sin ligar en
+    // `far`/`norton` por su propia razón documentada (Far lo resuelve con un
+    // plugin, NC nunca tuvo sincronizador). El supplemento repone `ctrl+y`
+    // para esos dos: está libre en ambos `.toml`, así que a los otros cinco
+    // les repite su propio par (chord, comando) y no les roba nada — al
+    // contrario que `shift+f2`, que en `far` ya significa `pane.unpack` y por
+    // eso `compare-dirs` bajó a `alt+d`.
+    "pane.sync-dirs",
 ];
 
 /// Comandos del contexto Viewer (pantalla del visor F3).
@@ -370,6 +381,22 @@ prepend_keymap = [
     # supplemento, así que es la única puerta para esos dos y un no-op en los
     # otros cinco, que ya lo alcanzan por su propio chord.
     { on = ["alt+d"], run = "pane.compare-dirs" },
+    # #161, spec 3 fase C2: la otra mitad del par, y el hueco es el mismo —
+    # `far`/`norton` dejan `pane.sync-dirs` sin ligar por su propia razón
+    # documentada en cada `.toml` (Far lo delega en un plugin, Norton
+    # Commander nunca tuvo sincronizador), así que no hay chord nativo que
+    # transcribir. Aquí SÍ sirve el chord del catálogo, al revés que en
+    # `compare-dirs` de la línea de arriba: los cinco presets que ligan este
+    # comando lo ligan TODOS a `ctrl+y`, y `ctrl+y` está libre en `far.toml`
+    # y en `norton.toml` (ninguno liga NADA con `ctrl+y`) y en este
+    # supplemento. Como un `prepend_keymap` GANA al preset, repetir aquí el
+    # par (chord, comando) que los otros cinco ya tienen es un no-op para
+    # ellos —se lo roba a su propio dueño, que es él mismo— y la única
+    # puerta para esos dos. Si algún día un preset moviera `ctrl+y` a otro
+    # comando, esta línea se lo comería en silencio: lo pinea
+    # `los_dos_gestos_del_par_estan_construidos`, que exige el chord en los
+    # SIETE.
+    { on = ["ctrl+y"], run = "pane.sync-dirs" },
 ]
 
 [viewer]
@@ -1035,33 +1062,30 @@ prepend_keymap = [{ on = ["5"], run = "cursor.down" }]
             "un binding no disponible no casa"
         );
 
-        // `pane.sync-dirs` es el mismo caso: `orthodox` lo liga a `ctrl+y`
-        // (es `Status::Live` en el catálogo compartido — #161/#162), y la
-        // GUI no tiene comando de sincronización, solo comparación (spec 3
-        // fase C, sin construir). Debe sobrevivir marcado NotHere, igual que
-        // `pane.hotlist` arriba, no desaparecer ni casar.
-        assert!(
-            ortho
-                .bindings_all()
-                .iter()
-                .any(|(seq, cmd, _)| *cmd == "pane.sync-dirs" && seq == "ctrl+y"),
-            "el binding debe SEGUIR ahí, marcado — si no, este test no prueba nada"
-        );
-        assert!(
-            !means_command(&ortho, "pane.sync-dirs", "y", ctrl(), Some("y")),
-            "un binding no disponible no casa"
-        );
+        // `pane.sync-dirs` ERA el segundo ejemplo de esta clase y dejó de
+        // serlo en la tarea 5 de C2: ya está en `COMMANDS`, así que ahora
+        // CASA. Su veredicto vive entero en
+        // `los_dos_gestos_del_par_estan_construidos`, y aquí no se sustituye
+        // por otro comando a propósito: `pane.hotlist` arriba ya prueba la
+        // clase «sobrevive marcado, no casa», y duplicarla no la prueba dos
+        // veces.
     }
 
-    /// #158: `pane.compare-dirs` deja de ser `NotHere` en la GUI — está
-    /// construido (spec 3 fase C1). `pane.sync-dirs` sigue sin estarlo (es
-    /// C2, sin construir): el molde es el mismo que
-    /// `means_command_ignora_secuencias_y_no_disponibles`, pero aquí el
-    /// veredicto de comparar se invierte y el de sincronizar se repite tal
-    /// cual, para que un cambio que arreglara los dos a la vez —cuando solo
-    /// uno está construido— rompa aquí.
+    /// #158 + #161: los DOS gestos del par están construidos en la GUI, y
+    /// este test es el que se ganó el derecho a decirlo. Nació como
+    /// `la_comparacion_ya_esta_y_la_sincronizacion_todavia_no`, con el
+    /// veredicto de comparar invertido y el de sincronizar todavía en
+    /// `NotHere`; la tarea 5 de C2 invierte el segundo.
+    ///
+    /// Sigue habiendo una asimetría que este test PINEA y que no es un
+    /// descuido: los dos chords no salen del mismo sitio. `compare-dirs`
+    /// llega por `shift+f2` del preset, y `sync-dirs` por `ctrl+y` — que en
+    /// `far`/`norton` no lo liga el preset sino [`gui_supplement`]. Por eso
+    /// se comprueba sobre los SIETE presets de fábrica y no solo sobre
+    /// `orthodox`: un supplemento retirado dejaría a esos dos sin puerta y
+    /// solo aquí se vería.
     #[test]
-    fn la_comparacion_ya_esta_y_la_sincronizacion_todavia_no() {
+    fn los_dos_gestos_del_par_estan_construidos() {
         let (ortho, _) = build_effectives_with("orthodox", &[]).expect("orthodox construye");
 
         // `orthodox` liga `pane.compare-dirs` a `shift+f2` (ver
@@ -1079,23 +1103,18 @@ prepend_keymap = [{ on = ["5"], run = "cursor.down" }]
             "pane.compare-dirs ya está construido en la GUI: debe casar"
         );
 
-        // `pane.sync-dirs` es el gemelo que NO se toca en esta tarea: sigue
-        // ligado en el preset y sigue sin comando en la GUI, así que sigue
-        // `NotHere`. Repite la aserción de
-        // `means_command_ignora_secuencias_y_no_disponibles` a propósito:
-        // si alguien la moviera aquí y la borrara de allí, ese test dejaría
-        // de proteger la mitad que le toca.
-        assert!(
-            ortho
-                .bindings_all()
-                .iter()
-                .any(|(seq, cmd, _)| *cmd == "pane.sync-dirs" && seq == "ctrl+y"),
-            "el binding debe seguir ahí, marcado — si no, este test no prueba nada"
-        );
-        assert!(
-            !means_command(&ortho, "pane.sync-dirs", "y", ctrl(), Some("y")),
-            "pane.sync-dirs sigue sin comando en la GUI: NotHere"
-        );
+        // El gemelo destructivo, ahora también construido. `ctrl+y` en los
+        // siete: los cinco presets que lo ligan lo hacen todos con ESE mismo
+        // chord, y a `far`/`norton` se lo repone el supplemento. Si alguien
+        // quitara el comando de `COMMANDS`, o el supplemento, esto se cae.
+        for &preset_name in KNOWN_PRESETS {
+            let (browse, _) =
+                build_effectives_from(preset_name, None).expect("preset de fábrica construye");
+            assert!(
+                means_command(&browse, "pane.sync-dirs", "y", ctrl(), Some("y")),
+                "pane.sync-dirs ya está construido en la GUI: debe casar en {preset_name}"
+            );
+        }
     }
 
     /// H3f: the bug this closes is one of OMISSION — the presets bound `f1`

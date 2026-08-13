@@ -8827,11 +8827,20 @@ async fn launch_sync_apply(
     match backend.sync_apply(plan_hash).await {
         Ok(task) => {
             let progress = task.progress();
-            if let Some(view) = app.sync.as_mut() {
-                view.state.on_apply_started(task.id());
-                view.run = norte_tui::app::SyncRunState::Running;
-                view.confirming = None;
-                view.cancel_requested = false;
+            // Y puede NEGARSE: `on_apply_started` refuse una Task que llega
+            // después de que ya se pidiera cancelar. La TUI no puede leer una
+            // tecla entre el `sync_apply` y esta línea —lo espera en línea—,
+            // así que hoy no se alcanza; el guard vive en `norte-frontend`
+            // porque estaba en el envoltorio de la GUI y esta rama lo dejaba
+            // dependiendo del flujo de control (revisión de rama, rust
+            // MAJOR-2). Quien la niega la cancela: nadie más la conoce.
+            let adoptada = app
+                .sync
+                .as_mut()
+                .is_some_and(|view| view.on_apply_started(task.id()));
+            if !adoptada {
+                task.cancel();
+                return;
             }
             // Sin tablero, a propósito: `TaskRef` no es clonable, y el
             // tablero se la QUEDARÍA — dejando al panel sin nada que cancelar
@@ -8904,11 +8913,11 @@ fn drain_sync_plan(
         }
         None => {
             let snapshot = run.progress.borrow_and_update().clone();
-            view.run = match snapshot.state {
-                norte_proto::TaskState::Cancelled => norte_tui::app::SyncRunState::Cancelled,
-                norte_proto::TaskState::Failed { .. } => norte_tui::app::SyncRunState::Failed,
-                _ => norte_tui::app::SyncRunState::Done,
-            };
+            // El mapeo `TaskState` → `SyncRunState` es de
+            // `norte_tui::app::SyncRunState::from_task_state` (#161): la
+            // localización del error que sigue es la única mitad que de
+            // verdad difiere entre frontends, y por eso se queda aquí.
+            view.run = norte_tui::app::SyncRunState::from_task_state(&snapshot.state);
             if let norte_proto::TaskState::Failed { error } = snapshot.state {
                 let categoria = detail_for_bar(&error_category(&error));
                 view.error = Some(categoria.clone());
@@ -8945,31 +8954,26 @@ async fn harvest_sync_apply(
         return;
     }
     let task_id = run.task.id();
-    let estado = match snapshot.state {
-        norte_proto::TaskState::Cancelled => norte_tui::app::SyncRunState::Cancelled,
-        norte_proto::TaskState::Failed { .. } => norte_tui::app::SyncRunState::Failed,
-        // Un desenlace desconocido con los emisores caídos no es «hecho»: la
-        // conexión murió sin decir qué pasó, y decir «hecho» sobre una
-        // sincronización a medias es la peor de las dos mentiras posibles.
-        ref otro if !otro.is_terminal() => norte_tui::app::SyncRunState::Failed,
-        _ => norte_tui::app::SyncRunState::Done,
-    };
     *sync_run = None;
     let informe = backend.sync_report(task_id).await;
     let Some(view) = app.sync.as_mut() else {
         return;
     };
-    view.run = estado;
-    match informe {
-        Ok(report) => view.state.on_report(report),
-        // Sin informe no se puede decir qué pasó, así que no se dice: el
-        // estado terminal ya está pintado y la barra explica por qué falta.
-        Err(e) => {
-            app.message = Some(ta(
-                "sync-status-failed",
-                &[("error", &detail_for_bar(&error_category(&e)))],
-            ));
-        }
+    // Las TRES reglas de este instante —el error de la Task manda sobre el del
+    // informe, un informe que no llega es un fallo, y un estado no terminal
+    // también— son de `norte_frontend::sync::SyncView::on_apply_ended`, la
+    // COMPARTIDA con la GUI (#161). Estaban aquí, escritas a mano, y con la
+    // segunda SIN aplicar: un `sync.report` que fallaba dejaba el modelo en
+    // `Applying` y el pie diciendo «aplicando…» para siempre, con la única
+    // explicación en una barra transitoria. Lo que se queda de este lado es la
+    // única mitad que de verdad difiere entre frontends: cómo se sanea la
+    // categoría y dónde se pinta.
+    let categoria = view
+        .on_apply_ended(&snapshot.state, informe)
+        .map(|c| detail_for_bar(&c));
+    view.error.clone_from(&categoria);
+    if let Some(c) = categoria {
+        app.message = Some(ta("sync-status-failed", &[("error", &c)]));
     }
 }
 
@@ -9338,15 +9342,16 @@ fn approve_sync(app: &mut App) {
     let Some(view) = app.sync.as_mut() else {
         return;
     };
-    // `SyncState::can_approve`, NO `SyncPlan::can_approve`: el segundo sigue
-    // contestando que sí sobre un plan que ya se aprobó —`SyncState::plan()`
-    // devuelve el mismo plan en `Applying` y en `Applied`, y ninguno de sus
-    // tres factores cambia al gastarse—. Con el del plan a secas, un `a` de
-    // más durante una aplicación larga lanzaba un segundo `sync.apply` que el
-    // spool contesta `PlanStale`, y el brazo de error pintaba «el plan falló»
-    // encima de una sincronización que seguía ESCRIBIENDO; el `Esc` siguiente
-    // la cancelaba a medias creyendo cerrar un fallo.
-    if !view.state.can_approve() {
+    // `SyncView::can_approve` — que envuelve `SyncState::can_approve` y NUNCA
+    // `SyncPlan::can_approve` — porque el segundo sigue contestando que sí
+    // sobre un plan que ya se aprobó: `SyncState::plan()` devuelve el mismo
+    // plan en `Applying` y en `Applied`, y ninguno de sus tres factores
+    // cambia al gastarse. Con el del plan a secas, un `a` de más durante una
+    // aplicación larga lanzaba un segundo `sync.apply` que el spool contesta
+    // `PlanStale`, y el brazo de error pintaba «el plan falló» encima de una
+    // sincronización que seguía ESCRIBIENDO; el `Esc` siguiente la cancelaba
+    // a medias creyendo cerrar un fallo.
+    if !view.can_approve() {
         app.message = Some(t("msg-sync-cannot-approve"));
         return;
     }
@@ -9366,21 +9371,17 @@ fn approve_sync(app: &mut App) {
 /// pero el hash sale de aquí hacia una escritura y no hay una segunda puerta
 /// después de ésta.
 fn submit_sync(app: &mut App) {
-    let Some(view) = app.sync.as_ref() else {
+    // Por `SyncView::submit`, la ÚNICA puerta: mira `can_approve` y echa el
+    // pestillo del apply en vuelo en el mismo gesto. Separarlos es lo que
+    // dejaba la ventana que la GUI sí alcanzaba (revisión de rama de C2).
+    let Some(view) = app.sync.as_mut() else {
         return;
     };
-    // Otra vez por el ESTADO, y no es redundante: entre la primera respuesta y
-    // la segunda no llega nada que pueda cambiarla —el modelo no retrocede—,
-    // pero el hash sale de aquí hacia una escritura y no hay una segunda
-    // puerta después de ésta.
-    if !view.state.can_approve() {
+    let Some(hash) = view.submit() else {
         app.message = Some(t("msg-sync-cannot-approve"));
         return;
-    }
-    let Some(plan) = view.state.plan() else {
-        return;
     };
-    app.pending_sync_apply = Some(Box::new(plan.done().plan_hash.clone()));
+    app.pending_sync_apply = Some(Box::new(hash));
 }
 
 /// `Enter` sobre una fila del panel de diferencias: navega al directorio REAL
@@ -13639,6 +13640,17 @@ mod sync_tests {
             "sync-status-applying",
             "sync-status-applied-undoable",
             "sync-status-applied-not-undoable",
+            // Las cinco que este panel pinta DESDE que `sync_status_line`
+            // delega en el `status_line` compartido y `mode_label` en el
+            // compartido: la lista dejó de cubrir lo que la pantalla dice
+            // (revisión de rama de C2, rust MINOR-5). Las cuatro de «cortada»
+            // son justo las que esta rama añadió para que un run cortado no
+            // se leyera como uno limpio.
+            "sync-status-applied-cut-undoable",
+            "sync-status-applied-cut-not-undoable",
+            "sync-status-applied-failed-undoable",
+            "sync-status-applied-failed-not-undoable",
+            "sync-mode-unknown",
             "sync-hint",
             "sync-hint-done",
             "sync-hint-confirm",

@@ -100,6 +100,11 @@
     "why": "'a → mem_b.txt': contiene el joiner visual '→' (U+2192, legítimo, no enmascarable) — un nombre simula DOS rutas en cualquier UI que concatene con separador in-band; etiquetar fuera de banda (posición/estilo), jamás por joiner"
   },
   {
+    "id": "cause_join_spoof",
+    "hex": "696e666f726d65203ae2869220636f7069612e7478743a207065726d697373696f6e2064656e696564",
+    "why": "'informe :\u2192 copia.txt: permission denied': UN nombre que lleva LOS DOS joiners in-band de una fila de fallo de sincronizacion (sync.report) — el ' \u2192 ' que separa las dos ortografias y el ': ' que separa la causa (cli-sync-failure). Todo es imprimible corriente, asi que display_name_with no enmascara nada y el marcador '!' del CLI no salta: un solo fichero imprime una fila de fallo COMPLETA y fabricada despues de un Mirror destructivo. Legal en ext4 y APFS; el ':' no lo es en NTFS, y por eso es el lado ORIGEN el que tiene que poder producirlo. Pinea que la causa y la ortografia del destino se separen FUERA de banda (GUI: elementos hermanos; CLI: un marcador que un nombre no puede falsificar)"
+  },
+  {
     "id": "zwsp_twin",
     "hex": "61e2808b622e747874",
     "why": "a<ZWSP>b.txt: invisible Cf — visualmente idéntico a ab.txt; dos entradas que un humano no distingue en un diálogo de aprobación"
