@@ -2747,16 +2747,17 @@ impl NorteGui {
             // única op de esta lista que no toca ningún backend.
             "pane.copy-path" => self.copy_paths_to_clipboard(cx),
             "pane.semantic-search" => self.open_semantic_search(),
-            // #158, spec 3 fase C1. El id todavía NO está en
-            // `keymap::COMMANDS` —entra en la tarea 4 del plan—, así que ni
-            // el teclado ni la paleta llegan aquí. La AYUDA sí: sus filas se
-            // resuelven contra `norte_frontend::availability`, la tabla
-            // compartida entre frontends, que da este comando por disponible
-            // (revisión MAJOR-1). Ese Enter caía antes en el brazo `other`,
-            // cuyo `debug_assert` tumbaba una GUI de debug; ahora arranca la
-            // comparación de verdad. Hasta que la tarea 3 pinte el panel el
-            // resultado no se ve, y por eso las tres tareas cierran la misma
-            // rama: esto no se mergea solo.
+            // #158, spec 3 fase C1. Tarea 4 metió el id en `keymap::COMMANDS`
+            // (chord compartido `shift+f2` en cinco presets, `alt+d` de
+            // `gui_supplement` en los dos que lo dejan sin ligar), así que
+            // ahora el teclado y la paleta llegan aquí igual que la AYUDA:
+            // antes de la tarea 4 SOLO la ayuda llegaba, porque sus filas se
+            // resuelven contra `norte_frontend::availability` —la tabla
+            // compartida entre frontends, que ya daba este comando por
+            // disponible (revisión MAJOR-1)— y no contra `COMMANDS`. Ese
+            // Enter caía antes en el brazo `other`, cuyo `debug_assert`
+            // tumbaba una GUI de debug; ahora arranca la comparación de
+            // verdad por cualquiera de las tres puertas.
             "pane.compare-dirs" => self.start_compare(),
             // 2026-08-10-volumes.md task V4 (design §D): `-left`/`-right`
             // name a SIDE, not the focus — Total Commander's `Alt+F1`/

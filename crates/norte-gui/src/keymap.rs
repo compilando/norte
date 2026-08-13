@@ -98,6 +98,15 @@ pub const COMMANDS: &[&str] = &[
     "pane.select-drive",
     "pane.select-drive-left",
     "pane.select-drive-right",
+    // #158, spec 3 fase C1: el panel de diferencias. El chord viene del
+    // catálogo COMPARTIDO (`shift+f2` en orthodox/vim/cua/total-commander/
+    // krusader — ver `presets/keymap/orthodox.toml`), así que no hace falta
+    // supplemento para esos cinco. `far`/`norton` lo dejan deliberadamente
+    // SIN ligar (su propio comentario en `far.toml`/`norton.toml`: Far lo
+    // resuelve con un plugin, NC nunca tuvo comparador) — mismo hueco que
+    // `pane.rename` con esos dos presets, y se resuelve igual: `alt+d` en
+    // `gui_supplement` (ver su comentario) les da la única puerta.
+    "pane.compare-dirs",
 ];
 
 /// Comandos del contexto Viewer (pantalla del visor F3).
@@ -343,6 +352,19 @@ prepend_keymap = [
     { on = ["alt+f1"], run = "pane.select-drive-left" },
     { on = ["alt+f2"], run = "pane.select-drive-right" },
     { on = ["alt+f3"], run = "pane.select-drive" },
+    # #158, spec 3 fase C1: `far`/`norton` dejan `pane.compare-dirs`
+    # deliberadamente SIN ligar (ver el comentario propio de cada fichero) —
+    # Far resuelve comparar carpetas con un plugin externo y Norton
+    # Commander nunca tuvo comparador, así que no hay chord nativo que
+    # transcribir, igual que `pane.rename` arriba. `shift+f2` no sirve de
+    # fallback: Far ya lo usa para `pane.unpack`, y el supplemento pierde
+    # frente al preset (`build_effectives_layers`), así que ahí seguiría
+    # siendo `pane.unpack`. `alt+d` está libre en los dos `.toml` (ninguno
+    # liga ninguna combinación `alt+<letra>`, solo `alt+f1`/`alt+f2` en
+    # ambos y `alt+delete`/`alt+f7`/`alt+f12`/`alt+shift+insert` en far) y
+    # en este supplemento, así que es la única puerta para esos dos y un
+    # no-op en los otros cinco, que ya lo alcanzan por su propio chord.
+    { on = ["alt+d"], run = "pane.compare-dirs" },
 ]
 
 [viewer]
@@ -1026,6 +1048,51 @@ prepend_keymap = [{ on = ["5"], run = "cursor.down" }]
         );
     }
 
+    /// #158: `pane.compare-dirs` deja de ser `NotHere` en la GUI — está
+    /// construido (spec 3 fase C1). `pane.sync-dirs` sigue sin estarlo (es
+    /// C2, sin construir): el molde es el mismo que
+    /// `means_command_ignora_secuencias_y_no_disponibles`, pero aquí el
+    /// veredicto de comparar se invierte y el de sincronizar se repite tal
+    /// cual, para que un cambio que arreglara los dos a la vez —cuando solo
+    /// uno está construido— rompa aquí.
+    #[test]
+    fn la_comparacion_ya_esta_y_la_sincronizacion_todavia_no() {
+        let (ortho, _) = build_effectives_with("orthodox", &[]).expect("orthodox construye");
+
+        // `orthodox` liga `pane.compare-dirs` a `shift+f2` (ver
+        // `presets/keymap/orthodox.toml`) y la GUI ya lo implementa: debe
+        // CASAR, no sobrevivir marcado.
+        assert!(
+            ortho
+                .bindings_all()
+                .iter()
+                .any(|(seq, cmd, _)| *cmd == "pane.compare-dirs" && seq == "shift+f2"),
+            "el binding debe seguir ahí — si no, este test no prueba nada"
+        );
+        assert!(
+            means_command(&ortho, "pane.compare-dirs", "f2", shift(), None),
+            "pane.compare-dirs ya está construido en la GUI: debe casar"
+        );
+
+        // `pane.sync-dirs` es el gemelo que NO se toca en esta tarea: sigue
+        // ligado en el preset y sigue sin comando en la GUI, así que sigue
+        // `NotHere`. Repite la aserción de
+        // `means_command_ignora_secuencias_y_no_disponibles` a propósito:
+        // si alguien la moviera aquí y la borrara de allí, ese test dejaría
+        // de proteger la mitad que le toca.
+        assert!(
+            ortho
+                .bindings_all()
+                .iter()
+                .any(|(seq, cmd, _)| *cmd == "pane.sync-dirs" && seq == "ctrl+y"),
+            "el binding debe seguir ahí, marcado — si no, este test no prueba nada"
+        );
+        assert!(
+            !means_command(&ortho, "pane.sync-dirs", "y", ctrl(), Some("y")),
+            "pane.sync-dirs sigue sin comando en la GUI: NotHere"
+        );
+    }
+
     /// H3f: the bug this closes is one of OMISSION — the presets bound `f1`
     /// and the GUI filtered the binding out, so the key did nothing and
     /// nothing said so. Pinned in all three presets, because the drop
@@ -1221,6 +1288,15 @@ prepend_keymap = [{ on = ["insert"], run = "cursor.up" }]
     fn ctrl() -> Mods {
         Mods {
             ctrl: true,
+            ..Mods::default()
+        }
+    }
+
+    /// `Mods` con solo `shift`, para el chord de `pane.compare-dirs`
+    /// (`Shift+F2`).
+    fn shift() -> Mods {
+        Mods {
+            shift: true,
             ..Mods::default()
         }
     }
