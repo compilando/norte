@@ -276,3 +276,198 @@ async fn el_puente_abre_su_brazo_de_streams_una_sola_vez() {
         "el brazo tiene que ser una conexión de AGENTE (sin scope, vedada), fue {denegado:?}"
     );
 }
+
+/// Pide y concede scope de LECTURA para `roots` (helper de test): `compare`
+/// pasa por el mismo `read_gate` que `list`/`stat` (ver
+/// `el_puente_abre_su_brazo_de_streams_una_sola_vez`), así que una tool que
+/// solo lee necesita scope concedido igual que una que muta — la op elegida
+/// (`copy`) es irrelevante para `covers_read`, que solo mira la raíz.
+async fn grant_read_scope(agent: &Bridge, human: &Client, roots: &[&str]) {
+    let (out, err) = call_tool(
+        agent,
+        "request_scope",
+        serde_json::json!({"roots": roots, "ops": ["copy"], "ttl_ms": 60000}),
+    )
+    .await;
+    assert!(!err, "{out}");
+    let req_id = serde_json::from_str::<serde_json::Value>(&out).expect("json")["request_id"]
+        .as_u64()
+        .expect("request_id");
+    let _: norte_proto::methods::GrantScopeResult = human
+        .call(
+            norte_proto::methods::POLICY_GRANT_SCOPE,
+            &norte_proto::methods::GrantScopeParams { request_id: req_id },
+        )
+        .await
+        .expect("grant");
+}
+
+/// El agente ve QUÉ difiere, con el vocabulario del wire y no con etiquetas
+/// traducidas: un resultado de tool que cambia con el idioma del operador no
+/// es un contrato.
+#[tokio::test]
+async fn compare_devuelve_las_filas_con_valores_de_wire() {
+    let (_dir, socket, mem) = spawn_ask_daemon().await;
+    mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
+    mem.mkdir(&vp("mem:///b")).await.expect("mkdir b");
+    write_file(&mem, "mem:///a/x.txt", b"hola").await;
+
+    let mut human = Client::connect(&socket).await.expect("connect humano");
+    human
+        .initialize(norte_proto::methods::ClientInfo {
+            name: "tui".into(),
+            version: "0".into(),
+        })
+        .await
+        .expect("initialize humano");
+    let agent = Bridge::connect(&socket, "claude")
+        .await
+        .expect("connect agente");
+    grant_read_scope(&agent, &human, &["mem:///a", "mem:///b"]).await;
+
+    let (out, err) = call_tool(
+        &agent,
+        "compare",
+        serde_json::json!({"a": "mem:///a", "b": "mem:///b"}),
+    )
+    .await;
+    assert!(!err, "{out}");
+    let payload: serde_json::Value = serde_json::from_str(&out).expect("json");
+    let filas = payload["rows"].as_array().expect("rows");
+    assert!(!filas.is_empty(), "x.txt solo está en un lado");
+    // El veredicto viaja como valor de WIRE (`only_left`, verificado contra
+    // el serde de `CompareVerdict`), no como `left_only` — el plan lo
+    // adivinaba mal.
+    assert!(
+        filas.iter().any(|f| f["verdict"] == "only_left"),
+        "el veredicto viaja como valor de wire: {payload}"
+    );
+    assert_eq!(payload["truncated"], false, "{payload}");
+    assert_eq!(payload["complete"], true, "{payload}");
+}
+
+/// El tope de filas corta la comparación, la CANCELA, y lo DICE: una
+/// truncación silenciosa sería peor que el tope — un modelo que la lea como
+/// completa reportaría dos árboles como iguales sin haberlos visto enteros.
+#[tokio::test]
+async fn compare_con_limit_bajo_trunca_y_cancela() {
+    let (_dir, socket, mem) = spawn_ask_daemon().await;
+    mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
+    mem.mkdir(&vp("mem:///b")).await.expect("mkdir b");
+    for i in 0..5 {
+        write_file(&mem, &format!("mem:///a/f{i}.txt"), b"x").await;
+    }
+
+    let mut human = Client::connect(&socket).await.expect("connect humano");
+    human
+        .initialize(norte_proto::methods::ClientInfo {
+            name: "tui".into(),
+            version: "0".into(),
+        })
+        .await
+        .expect("initialize humano");
+    let agent = Bridge::connect(&socket, "claude")
+        .await
+        .expect("connect agente");
+    grant_read_scope(&agent, &human, &["mem:///a", "mem:///b"]).await;
+
+    let (out, err) = call_tool(
+        &agent,
+        "compare",
+        serde_json::json!({"a": "mem:///a", "b": "mem:///b", "limit": 2}),
+    )
+    .await;
+    assert!(!err, "{out}");
+    let payload: serde_json::Value = serde_json::from_str(&out).expect("json");
+    assert_eq!(
+        payload["rows"].as_array().expect("rows").len(),
+        2,
+        "{payload}"
+    );
+    assert_eq!(payload["truncated"], true, "{payload}");
+    assert_eq!(
+        payload["complete"], false,
+        "truncado nunca es completo: {payload}"
+    );
+}
+
+/// Regla 1 en `compare` (encoding-auditor, revisión de la tarea 2): un nombre
+/// hostil que nace como BYTES en el provider viaja hasta la fila de tool como
+/// `to_wire()` fiel, jamás lossy — corpus completo de norte-testkit, igual
+/// que `nombre_hostil_round_trip_byte_fiel_por_el_puente` cubre `list_dir`.
+#[tokio::test]
+async fn compare_nombre_hostil_viaja_como_wire_fiel() {
+    let (_dir, socket, mem) = spawn_ask_daemon().await;
+    mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
+    mem.mkdir(&vp("mem:///b")).await.expect("mkdir b");
+
+    let corpus = norte_testkit::corpus::hostile_names();
+    for n in &corpus {
+        let seg = norte_proto::Segment::new(n.bytes.clone()).expect("segmento del corpus");
+        let src = vp("mem:///a").join(seg);
+        let mut sink = mem.write(&src).await.expect("write");
+        sink.write(Bytes::from_static(b"x")).await.expect("chunk");
+        sink.commit().await.expect("commit");
+    }
+
+    let mut human = Client::connect(&socket).await.expect("connect humano");
+    human
+        .initialize(norte_proto::methods::ClientInfo {
+            name: "tui".into(),
+            version: "0".into(),
+        })
+        .await
+        .expect("initialize humano");
+    let agent = Bridge::connect(&socket, "claude")
+        .await
+        .expect("connect agente");
+    grant_read_scope(&agent, &human, &["mem:///a", "mem:///b"]).await;
+
+    // Tope holgado: el corpus no se acerca al default (500), y esto prueba
+    // el camino SIN truncar (el truncado ya tiene su propio test).
+    let (out, err) = call_tool(
+        &agent,
+        "compare",
+        serde_json::json!({"a": "mem:///a", "b": "mem:///b", "limit": 1000}),
+    )
+    .await;
+    assert!(!err, "{out}");
+    let payload: serde_json::Value = serde_json::from_str(&out).expect("json");
+    assert_eq!(payload["truncated"], false, "{payload}");
+    let filas = payload["rows"].as_array().expect("rows");
+    assert_eq!(filas.len(), corpus.len(), "una fila por nombre: {payload}");
+
+    for n in &corpus {
+        let seg = norte_proto::Segment::new(n.bytes.clone()).expect("segmento del corpus");
+        let src = vp("mem:///a").join(seg);
+        let fila = filas
+            .iter()
+            .find(|f| {
+                f["left"]["path"]
+                    .as_str()
+                    .is_some_and(|w| VPath::parse(w).is_ok_and(|p| p == src))
+            })
+            .unwrap_or_else(|| panic!("{}: compare no trae la fila fiel: {payload}", n.id));
+        // Solo existe a la izquierda: el veredicto de wire lo dice (`only_left`,
+        // no `left_only` — el plan lo adivinaba mal). SALVO que dos entradas
+        // del corpus colapsen a la misma clave de emparejamiento en ESTE lado
+        // (p. ej. NFC/NFD, `nfd_e_acute` contra su forma compuesta): ahí el
+        // veredicto es `ambiguous` con `side: left` — sigue siendo UNA fila
+        // fiel por nombre, que es lo que este test comprueba.
+        let verdict = fila["verdict"].as_str().expect("verdict");
+        assert!(
+            verdict == "only_left" || verdict == "ambiguous",
+            "{}: veredicto inesperado: {fila}",
+            n.id
+        );
+        if verdict == "ambiguous" {
+            assert_eq!(fila["side"], "left", "{}: {fila}", n.id);
+        }
+        let wire = fila["left"]["path"].as_str().expect("path");
+        assert!(
+            !wire.contains('\u{FFFD}'),
+            "{}: lossy en el wire: {wire}",
+            n.id
+        );
+    }
+}

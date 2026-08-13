@@ -26,6 +26,17 @@ const TASK_WAIT: std::time::Duration = std::time::Duration::from_mins(10);
 /// Intervalo del poll de `task.list` esperando el terminal.
 const TASK_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// Filas de `compare` por llamada si el caller no pide `limit` (~2 lotes de
+/// [`norte_proto::methods::COMPARE_ROWS_MAX_BATCH`]). `fs.compare` no pagina
+/// como `fs.list` (no hay `cursor`, y el walk no tiene `max_hits` como
+/// `fs.search`): sin este tope, comparar dos árboles grandes metería un
+/// millón de filas en un solo resultado de tool y reventaría el contexto del
+/// modelo.
+const COMPARE_ROWS_DEFAULT: usize = 500;
+/// Tope DURO de `limit`, aunque el caller pida más: una `limit` sin techo
+/// sería el mismo problema que no tener tope, con un paso extra.
+const COMPARE_ROWS_MAX: usize = 5000;
+
 /// Celda del id JSON-RPC de la `fs.*` mutante en vuelo de un tool (#72).
 type DaemonIdCell = Arc<std::sync::OnceLock<u64>>;
 
@@ -230,6 +241,7 @@ impl Bridge {
             "delete" => self.tool_delete(args, daemon_id).await,
             "task_status" => self.tool_task_status(args).await,
             "request_scope" => self.tool_request_scope(args).await,
+            "compare" => self.tool_compare(args).await,
             other => Err(format!("unknown tool: {other}")),
         }
     }
@@ -447,6 +459,124 @@ impl Bridge {
         }))
     }
 
+    /// `compare`: dos árboles, y qué difiere entre ellos. NO muta nada (sin
+    /// journal, sin undo — regla dura 4 no aplica: `Backend::compare` no
+    /// escribe).
+    ///
+    /// Va por [`Self::streams`], no por [`Self::call`]: `fs.compare` entrega
+    /// sus filas por notificación (`compare.rows`), y esta conexión de tools
+    /// no las enruta (ver la rustdoc de `streams`). `Backend::compare` valida
+    /// raíces iguales y `follow_symlinks` ANTES de elegir brazo, así que esa
+    /// comprobación llega gratis aquí.
+    ///
+    /// # El tope de filas
+    /// `fs.compare` no pagina (no hay `cursor`) ni tiene `max_hits` como
+    /// `fs.search`: sin un tope, comparar dos árboles grandes metería un
+    /// millón de filas en un solo resultado de tool. Al llegar a `limit`
+    /// ([`COMPARE_ROWS_DEFAULT`], techo [`COMPARE_ROWS_MAX`]) se deja de
+    /// drenar, se CANCELA la task (igual que `norte compare` no necesita
+    /// hacer: él drena hasta el final salvo que el lector se vaya) y el
+    /// payload dice `truncated: true`. Una truncación silenciosa sería peor
+    /// que el tope: un modelo que la lea como completa reportaría dos árboles
+    /// como iguales cuando no se sabe.
+    ///
+    /// # `complete`
+    /// La misma distinción que el código de salida 2 de `norte compare` (el
+    /// comando del CLI, `compare_cmd`): sólo `true` cuando la task llegó a
+    /// `Completed` SIN truncar. Cualquier otra
+    /// cosa —truncada, cancelada, fallida, o un daemon que se cayó a mitad—
+    /// es `false`, para que el agente no confunda "until here it looked
+    /// clean" con "esto es todo lo que hay".
+    ///
+    /// No se cruza `TaskProgress::entries_done` contra las filas recibidas
+    /// (la rustdoc de `Backend::compare` documenta que el cierre del canal
+    /// tampoco lo garantiza): esa comprobación es para quien vaya a ESCRIBIR
+    /// a partir de las filas (el plan de sincronización), y esta tool sólo
+    /// lee — la misma paridad que ya tiene `norte compare` en el CLI, que
+    /// tampoco la hace.
+    async fn tool_compare(&self, args: &Value) -> Result<Value, String> {
+        let left = vpath_arg(args, "a")?;
+        let right = vpath_arg(args, "b")?;
+        let criteria = compare_criteria_arg(args)?;
+        let max_depth = opt_u64_arg(args, "max_depth")?
+            .map(|d| u32::try_from(d).map_err(|_| format!("arg max_depth too large: {d}")))
+            .transpose()?;
+        let mtime_tolerance_ms = opt_u64_arg(args, "mtime_tolerance_ms")?
+            .map(|t| u32::try_from(t).map_err(|_| format!("arg mtime_tolerance_ms too large: {t}")))
+            .transpose()?
+            .unwrap_or(2000);
+        let limit = opt_u64_arg(args, "limit")?
+            .map(|l| usize::try_from(l).map_err(|_| format!("arg limit too large: {l}")))
+            .transpose()?
+            .unwrap_or(COMPARE_ROWS_DEFAULT)
+            .min(COMPARE_ROWS_MAX);
+        // `limit: 0` no es "cero filas por decisión del caller", es un
+        // argumento sin sentido (encoding-auditor, revisión de la tarea 2):
+        // sin este chequeo saldría `truncated: true` con `rows: []` en la
+        // PRIMERA fila, indistinguible de un árbol de verdad truncado. El
+        // esquema JSON ya dice `"minimum": 1`, pero eso es asesor — un MCP
+        // client real puede mandarlo igual.
+        if limit == 0 {
+            return Err("arg limit must be >= 1".to_owned());
+        }
+
+        let params = methods::FsCompareParams {
+            left,
+            right,
+            criteria,
+            max_depth,
+            mtime_tolerance_ms,
+            // El puente no ofrece seguir symlinks (`Backend::compare` lo
+            // rechaza de todos modos): ver la rustdoc de `tool_transfer`
+            // para el motivo de no exponer opciones que el core no soporta.
+            follow_symlinks: false,
+            descend_orphans: None,
+        };
+
+        let (task, mut rx) = self
+            .streams()
+            .await
+            .map_err(|e| e.to_string())?
+            .compare(params)
+            .await
+            .map_err(map_backend_err)?;
+
+        // Filas fieles al wire: `CompareRow` serializa `verdict`/`criterion`/
+        // `confidence` como los valores snake_case del protocolo (nunca una
+        // etiqueta traducida) y las rutas de sus `Entry` como `to_wire()` —
+        // es la MISMA forma que `norte compare --json` ya expone (regla 1;
+        // jamás una cadena lossy). Se decide fila a fila si truncar en vez de
+        // colectar el lote entero primero: un lote agotando exactamente el
+        // resto del tope no debe arrastrar una fila de más.
+        let mut rows: Vec<methods::CompareRow> = Vec::new();
+        let mut truncated = false;
+        'drain: while let Some(batch) = rx.recv().await {
+            for row in batch.rows {
+                if rows.len() >= limit {
+                    truncated = true;
+                    break 'drain;
+                }
+                rows.push(row);
+            }
+        }
+        if truncated {
+            // Cooperativa (regla dura 3): sin esto, una comparación de
+            // millones de filas seguiría leyendo (y hasheando) los dos
+            // árboles enteros para un `rx` que ya nadie drena.
+            task.cancel();
+        }
+        let state = task.join().await;
+        let complete = !truncated && matches!(state, norte_proto::TaskState::Completed);
+
+        let rows = serde_json::to_value(&rows)
+            .map_err(|e| format!("tool compare: could not encode rows: {e}"))?;
+        Ok(json!({
+            "rows": rows,
+            "truncated": truncated,
+            "complete": complete,
+        }))
+    }
+
     /// `call` del wire con los errores RPC convertidos a texto de tool. La
     /// taxonomía viaja en `data`: un `PolicyDenied` sale ACCIONABLE.
     async fn call<P, R>(&self, method: &str, params: &P) -> Result<R, String>
@@ -547,6 +677,47 @@ fn map_client_err(e: ClientError) -> String {
     }
 }
 
+/// Traduce un [`norte_proto::Error`] de [`Bridge::tool_compare`] (que habla
+/// con [`Bridge::streams`], NO con [`Client`], así que no hay `ClientError`
+/// que envolver) al mismo texto ACCIONABLE que [`map_client_err`]: un
+/// `PolicyDenied` tiene que decir "pide scope" salga por el brazo que salga.
+fn map_backend_err(e: norte_proto::Error) -> String {
+    match e {
+        norte_proto::Error::PolicyDenied { ref rule } => format!(
+            "denied by policy ({rule}). If out-of-scope, call request_scope and ask the human to grant it."
+        ),
+        other => format!("{other}"),
+    }
+}
+
+/// Traduce el arg opcional `criteria` (array de strings) de `compare` a
+/// [`methods::CompareCriteria`], con el MISMO contrato que `--criteria` del
+/// CLI (`parse_compare_criteria`): ausente = el default del wire (tamaño +
+/// fecha, sin hash); presente = EXACTAMENTE la lista pedida, nunca sumada al
+/// default (`["hash"]` a secas enciende solo `hash`).
+fn compare_criteria_arg(args: &Value) -> Result<methods::CompareCriteria, String> {
+    let names = match args.get("criteria") {
+        None | Some(Value::Null) => return Ok(methods::CompareCriteria::default()),
+        Some(v) => v
+            .as_array()
+            .ok_or("arg criteria must be an array of strings")?,
+    };
+    let mut criteria = methods::CompareCriteria {
+        size: false,
+        mtime: false,
+        hash: false,
+    };
+    for name in names {
+        match name.as_str() {
+            Some("size") => criteria.size = true,
+            Some("mtime") => criteria.mtime = true,
+            Some("hash") => criteria.hash = true,
+            _ => return Err(format!("arg criteria: unknown criterion {name}")),
+        }
+    }
+    Ok(criteria)
+}
+
 /// Snapshot de una task como JSON de tool (estado + error por categoría).
 fn task_json(t: &norte_proto::TaskProgress) -> Value {
     use norte_proto::TaskState;
@@ -606,11 +777,23 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> String {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).to_string()
 }
 
-/// Las 8 tools v1 (ADR 0024): superficie = lo que el wire ya ofrece.
+/// Las 8 tools v1 (ADR 0024, superficie = lo que el wire ya ofrece) más
+/// `compare` (spec 3 fase B, tarea 2): la primera que consume el brazo de
+/// streams en vez de responder directo.
 fn tool_defs() -> Value {
+    let mut defs = fixed_tool_defs();
+    defs.push(compare_tool_def());
+    Value::Array(defs)
+}
+
+/// Las 8 tools v1 (ADR 0024): superficie = lo que el wire ya ofrece. Separada
+/// de [`tool_defs`] y de [`compare_tool_def`] solo por el lint de longitud
+/// (`too_many_lines`): las tres juntas eran una función, esta división no
+/// cambia el JSON que sale.
+fn fixed_tool_defs() -> Vec<Value> {
     let path_desc =
         "VPath URL: file:///…, sftp://host/…, s3://bucket/…, or composed zip:file:///a.zip!/inside";
-    json!([
+    let Value::Array(defs) = json!([
         {
             "name": "list_dir",
             "description": "List a directory managed by norte. Returns entries (path/kind/size/mtime_ms) and next_cursor when paginated. size/mtime_ms may be null (lazy listing); use stat for a specific path.",
@@ -704,7 +887,34 @@ fn tool_defs() -> Value {
                 "required": ["roots", "ops", "ttl_ms"]
             }
         }
-    ])
+    ]) else {
+        unreachable!("json!([…]) siempre produce Value::Array")
+    };
+    defs
+}
+
+/// La definición de `compare` (spec 3 fase B, tarea 2), separada de
+/// [`fixed_tool_defs`] solo por el lint de longitud — ver la rustdoc de
+/// [`tool_defs`].
+fn compare_tool_def() -> Value {
+    let path_desc =
+        "VPath URL: file:///…, sftp://host/…, s3://bucket/…, or composed zip:file:///a.zip!/inside";
+    json!({
+        "name": "compare",
+        "description": "Compare two trees (files and directories) and report what differs between them. Read-only: this mutates nothing. Each row carries WIRE values (verdict/criterion/confidence as the protocol spells them, e.g. \"only_left\", never a translated label) and both paths as their wire form. If more rows exist than `limit`, the comparison is CANCELLED partway and `truncated` is true — treat a truncated result as unknown, never as \"these trees match\". `complete` is true only when the run reached its end untruncated; false covers truncated, cancelled, and failed alike, so a false always means \"do not trust this as the whole picture\".",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "a": {"type": "string", "description": path_desc},
+                "b": {"type": "string", "description": path_desc},
+                "criteria": {"type": "array", "items": {"type": "string", "enum": ["size", "mtime", "hash"]}, "description": "which rungs to run; absent = size+mtime (the wire default). hash reads full file contents on both sides and requires content scope."},
+                "max_depth": {"type": "integer", "minimum": 0, "description": "root counts as depth 0; absent = unlimited"},
+                "mtime_tolerance_ms": {"type": "integer", "minimum": 0, "description": "default 2000 (FAT-safe)"},
+                "limit": {"type": "integer", "minimum": 1, "description": "max rows before the comparison is cancelled and truncated:true; default 500"}
+            },
+            "required": ["a", "b"]
+        }
+    })
 }
 
 /// Tope de una línea del transporte (16 MiB, como `MAX_FRAME_BYTES` del
