@@ -771,6 +771,7 @@ sync-summary-unreadable = { $n } entradas no se pudieron leer: este plan no las 
 sync-summary-mismatch = llegaron { $received } pasos y el plan dice { $n }: este plan no se puede aprobar
 sync-summary-unnameable = { $n } pasos son de una clase que esta versión no sabe enseñar: este plan no se puede aprobar
 sync-summary-malformed = { $n } pasos se contradicen a sí mismos: este plan no se puede aprobar
+sync-summary-duplicate-ids = { $n } pasos repiten un id que ya usó uno anterior: este plan no se puede aprobar
 # Las clases cuadran y un número de los que el diálogo enseña primero, no.
 sync-summary-contradictory = las cuentas del propio plan no cuadran con los pasos que mandó: este plan no se puede aprobar
 # La selección no recorta los bloqueos, así que esto habla de la comparación
