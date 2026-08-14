@@ -24,6 +24,23 @@
   but "the existing suites pass unedited" is not proof for that file the way it
   is for a UI helper. Look at the diff before deciding there is no reviewer.
 
+- **Two agents in one tree share `.git/index`, and that is the sharp edge.**
+  Banning `cargo fmt --all` and `git add -A` is not enough: a plain
+  `git commit -m "..."` commits **whatever is in the index at that instant**,
+  including the other agent's staged files. W2 caught exactly that — a
+  four-file commit that scooped a concurrent agent's `norte-cli` work, undone
+  with `git reset --soft` and re-split. So the rule is:
+
+  ```sh
+  git add crates/mine/src/thing.rs
+  git diff --cached --stat          # LOOK at it
+  git commit -m "..." -- crates/mine/src/thing.rs   # pathspec, always
+  ```
+
+  The pathspec form is safe by construction; the naked form is a race. When one
+  file carries hunks belonging to two issues, split with `git apply --cached` on
+  an extracted patch rather than staging the whole file.
+
 - **A change to a SHARED fixture is not scoped by the crate that owns it.**
   `just t norte-testkit` is green while five consumers that loop over the corpus
   are red. Whoever touches `norte-testkit/src/corpus` runs the consumers too —
