@@ -343,7 +343,7 @@ pub struct ClosedTasks {
 }
 
 impl ClosedTasks {
-    fn of(view: &SyncView) -> Self {
+    pub(crate) fn of(view: &SyncView) -> Self {
         Self {
             plan: view.plan_task,
             apply: view.apply_task,

@@ -663,10 +663,10 @@ gui-compare-hint = tab lado · 1-5 filtro · enter ir · esc cerrar
 compare-active-side = actuando sobre: { $side }
 compare-status-running = comparación: { $n } filas (comparando…)
 compare-status-done = comparación: { $n } filas
+compare-status-unknown = comparación: llegaron { $n } filas, y nada dijo si eran todas
 # El flujo de filas terminó con MENOS filas de las que contó la task: se perdió
 # un lote de notificación entre el daemon y aquí. Decir «hecho» sería mentir
 # sobre lo completo que está, y en una comparación eso es toda la respuesta.
-compare-status-unknown = comparación: llegaron { $n } filas, y nada dijo si eran todas
 compare-status-incomplete = comparación: { $n } de { $total } filas (se perdieron algunas por el camino)
 compare-status-cancelled = comparación: { $n } filas (cancelada)
 compare-status-failed = comparación fallida: { $error }
@@ -920,6 +920,7 @@ gui-menu-copied = { $n } ruta(s) copiada(s) al portapapeles
 # después de este catálogo (el enum es `#[non_exhaustive]`).
 reason-read-only = backend de solo lectura
 reason-wrong-target = no aplica a esta selección
+reason-answered-by-overlay = lo contesta el propio overlay abierto
 reason-unsupported = el backend no lo soporta
 reason-plugin-inactive = la extensión está desactivada o sin aprobar
 reason-policy-denied = la policy lo deniega

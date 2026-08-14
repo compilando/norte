@@ -651,10 +651,10 @@ gui-compare-hint = tab side · 1-5 filter · enter go · esc close
 compare-active-side = acting on: { $side }
 compare-status-running = compare: { $n } rows (comparing…)
 compare-status-done = compare: { $n } rows
+compare-status-unknown = compare: { $n } rows arrived, and nothing said whether that was all of them
 # The row stream ended with FEWER rows than the task counted: a notification
 # batch was dropped between the daemon and here. Saying "done" would be a lie
 # about completeness, which on a comparison is the whole answer.
-compare-status-unknown = compare: { $n } rows arrived, and nothing said whether that was all of them
 compare-status-incomplete = compare: { $n } of { $total } rows (some were lost in transit)
 compare-status-cancelled = compare: { $n } rows (cancelled)
 compare-status-failed = compare failed: { $error }
@@ -904,6 +904,7 @@ gui-menu-copied = { $n } path(s) copied to the clipboard
 # added after this catalogue (the enum is `#[non_exhaustive]`).
 reason-read-only = read-only backend
 reason-wrong-target = does not apply to this selection
+reason-answered-by-overlay = the open overlay answers this key itself
 reason-unsupported = the backend does not support it
 reason-plugin-inactive = the plugin is disabled or unapproved
 reason-policy-denied = the policy denies it

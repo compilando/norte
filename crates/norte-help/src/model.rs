@@ -196,6 +196,22 @@ pub enum Reason {
     PolicyDenied,
     /// The connection is degraded.
     ConnectionDegraded,
+    /// The key is answered by whatever overlay is open, not by the command
+    /// table — so there is no "command" to be available or not.
+    ///
+    /// The dialog verbs are the case: every overlay in norte answers the same
+    /// six, and it answers them with fixed keys rather than by dispatching an
+    /// id. A frontend that checks membership in its own command table before
+    /// dispatching (which it must, or a help row reaches a catch-all that
+    /// `debug_assert`s) would otherwise have to explain the refusal with a
+    /// reason about the BACKEND, on a page whose whole subject is that those
+    /// keys work — and the reader is looking at an overlay answering them
+    /// while it says they are unsupported.
+    ///
+    /// It is not an impediment at all, which is what separates it from every
+    /// other variant here: nothing is unavailable, the question was simply
+    /// asked of the wrong table.
+    AnsweredByTheOverlay,
     /// The command does not apply to what is selected right now: a directory
     /// has nothing to show in the viewer, and "open" means nothing over
     /// eleven marked entries at once.

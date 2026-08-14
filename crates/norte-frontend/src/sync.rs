@@ -3914,6 +3914,12 @@ mod tests {
             ("sync-summary-unnameable", &[("n", "1")]),
             ("sync-summary-malformed", &[("n", "1")]),
             ("sync-summary-contradictory", &[]),
+            // #194. La prueba de que esta lista es load-bearing está en el
+            // historial de su propia rama: `1dacd58` embarcó
+            // `PlanIntegrity::DuplicateIds` y su `ta_in` SIN cadena en ningún
+            // `.ftl`, `ta_in` devuelve el id cuando falta el mensaje, y la
+            // suite no se puso roja. Las cadenas llegaron en `5ed8899`.
+            ("sync-summary-duplicate-ids", &[("n", "1")]),
             ("sync-summary-blocked", &[("n", "300")]),
             ("sync-confirm-delete", &[("n", "4")]),
             ("sync-confirm-delete-final", &[("n", "4")]),

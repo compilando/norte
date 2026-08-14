@@ -304,7 +304,21 @@ impl ChordResolver for GuiChords {
     fn availability(&self, command: &str) -> Availability {
         if !dispatchable(command) {
             return Availability::Unavailable {
-                reason: Reason::Unsupported,
+                // El `dialog.*` NO es «el backend no lo soporta» (revisión de
+                // rama de W2, MAJOR-1). Esas seis teclas las contesta el
+                // overlay abierto con teclas fijas, sin despachar ningún id,
+                // así que no están fuera de `COMMANDS` por falta de soporte
+                // sino porque la pregunta va a la tabla equivocada. Con
+                // `Unsupported`, la página «Responder un diálogo» —cuyo cuerpo
+                // dice que todo overlay, ESTA AYUDA INCLUIDA, habla los mismos
+                // seis verbos— pintaba sus seis filas apagadas con una frase
+                // sobre el backend, mientras el overlay que el lector tenía
+                // delante las estaba contestando.
+                reason: if command.starts_with("dialog.") {
+                    Reason::AnsweredByTheOverlay
+                } else {
+                    Reason::Unsupported
+                },
             };
         }
         norte_frontend::availability::verdict_with_plugins(

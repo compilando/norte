@@ -140,6 +140,7 @@ pub fn reason_key(reason: Reason) -> &'static str {
         Reason::ConnectionDegraded => "reason-connection-degraded",
         Reason::WrongTarget => "reason-wrong-target",
         Reason::NeedsDaemon => "reason-needs-daemon",
+        Reason::AnsweredByTheOverlay => "reason-answered-by-overlay",
         _ => "reason-unavailable",
     }
 }

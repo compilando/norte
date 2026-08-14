@@ -2743,12 +2743,18 @@ impl NorteGui {
             // recorrió—. El panel se queda abierto para poder leerlo.
             sync_view::Key::CancelTask => {
                 if let Some(view) = self.sync.as_mut() {
-                    // La Task que este `Esc` para es la que está VIVA ahora:
-                    // la de aplicación una vez adoptada, y si no la del plan
-                    // — el mismo par que antes vivía reasignado en un único
-                    // campo (#191).
-                    let live = view.apply_task.unwrap_or(view.plan_task);
-                    let _ = self.cmds.send(SessionCmd::Cancel(live));
+                    // LAS DOS, con el mismo iterador que usa `close_sync`
+                    // (revisión de rama de W2, MAJOR-3). Antes se paraba solo
+                    // la viva —la de aplicación si ya se adoptó, la del plan
+                    // si no— y eso contradecía la regla que el propio #191
+                    // escribió: la Task del plan sigue siendo una Task real,
+                    // su canal puede seguir en vuelo, y dejarla recorriendo
+                    // dos árboles con la cancelación YA pedida es lo que la
+                    // regla 3 prohíbe. Cancelar una Task terminal es un no-op
+                    // documentado, así que no hay motivo para elegir.
+                    for t in sync_view::ClosedTasks::of(view).ids() {
+                        let _ = self.cmds.send(SessionCmd::Cancel(t));
+                    }
                     view.run.cancel_requested = true;
                     // La segunda pregunta se cae con la Task que la motivó:
                     // dejarla puesta es cómo un `y` posterior aprueba otra
