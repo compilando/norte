@@ -338,71 +338,95 @@ fn sigint_durante_planificacion_no_deja_part_detras() {
     }
 
     let bin = assert_cmd::cargo::cargo_bin("norte");
-    let mut child = std::process::Command::new(bin)
-        .env("NORTE_CONFIG_DIR", &estado)
-        .env("NORTE_LANG", "en")
-        .arg("sync")
-        .arg("--mode")
-        .arg("update")
-        .arg("--yes")
-        .arg(&src)
-        .arg(&dst)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn norte sync");
-
     let spool_dir = estado.join("sync-spools");
-    // Espera a que el `.part` exista (la planificación ARRANCÓ y el spool se
-    // creó) antes de señalar. Eso solo no basta: `.part` lo escribe la Task
-    // de `sync.plan`, en un WORKER aparte del que instala `watch_ctrl_c` en
-    // el proceso hijo, así que verlo no prueba que ESE manejador ya recibió
-    // su primer `poll` — bajo carga (varios procesos por núcleo) el
-    // scheduler puede adelantar el worker de la Task y dejar el del
-    // manejador sin turno todavía. Sin este suelo, SIGINT podía llegar
-    // mientras el SIGINT por defecto del SO seguía vigente, matando el
-    // proceso por señal cruda y saltándose el `Drop` que borra el `.part`
-    // (encontrado corriendo esta suite bajo carga de CI; nunca en una
-    // corrida aislada). Es la misma condición de carrera que ya resolvió el
-    // comentario de `cp_sigint_cancels_cleanly`, aquí sin un `dst.exists()`
-    // causal en el que apoyarse porque la creación del `.part` es server-side
-    // y no depende de que el manejador ya esté armado.
-    let arranque = std::time::Instant::now();
-    let suelo = std::time::Duration::from_millis(50);
-    let deadline = arranque + std::time::Duration::from_secs(15);
-    let mut started = false;
-    loop {
-        if child.try_wait().expect("try_wait").is_some() {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            break;
-        }
-        let tiene_part = std::fs::read_dir(&spool_dir).is_ok_and(|it| {
-            it.flatten()
-                .any(|e| e.file_name().to_string_lossy().ends_with(".part"))
-        });
-        if tiene_part && arranque.elapsed() >= suelo {
-            started = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-    if started {
-        unsafe_free_kill(child.id());
-    }
-    let _status = child.wait().expect("wait");
 
-    let quedan: Vec<String> = std::fs::read_dir(&spool_dir)
-        .map(|it| {
-            it.flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .collect()
-        })
-        .unwrap_or_default();
-    assert!(
-        quedan.is_empty(),
-        "un Ctrl+C durante la planificación no puede dejar nada en el spool: {quedan:?}"
+    // El manejador cooperativo se ARMA en un worker del hijo, y verlo escribir
+    // el `.part` no prueba que ese worker ya haya tenido turno: bajo carga
+    // —esta suite corre con un proceso por núcleo— el SIGINT puede llegar
+    // mientras sigue vigente el por defecto del SO, que mata el proceso en
+    // crudo y se salta el `Drop` que borra el `.part`.
+    //
+    // El suelo de 50 ms que había aquí era una CONJETURA DE RELOJ, y bajo
+    // `just ci-fast` la pierde: rojo en la suite entera, verde en aislado.
+    // Esto lo hace causal — la muerte del proceso DICE cuál de los dos casos
+    // fue (código de salida = cooperativa, señal cruda = el manejador no
+    // estaba) — y solo reintenta el caso que no probaba nada. Tres intentos
+    // sin una sola muerte cooperativa no son ruido: son un manejador que no se
+    // arma, y entonces el test falla diciendo eso.
+    let mut crudas = 0;
+    for intento in 1..=3 {
+        let mut child = std::process::Command::new(&bin)
+            .env("NORTE_CONFIG_DIR", &estado)
+            .env("NORTE_LANG", "en")
+            .arg("sync")
+            .arg("--mode")
+            .arg("update")
+            .arg("--yes")
+            .arg(&src)
+            .arg(&dst)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn norte sync");
+
+        // Espera a que el `.part` exista: la planificación arrancó y el spool
+        // se creó, que es lo que esta prueba necesita que haya que limpiar.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut started = false;
+        loop {
+            if child.try_wait().expect("try_wait").is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            let tiene_part = std::fs::read_dir(&spool_dir).is_ok_and(|it| {
+                it.flatten()
+                    .any(|e| e.file_name().to_string_lossy().ends_with(".part"))
+            });
+            if tiene_part {
+                started = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            started,
+            "la planificación no llegó a escribir un `.part` en 15 s (intento {intento}): no había nada que cancelar"
+        );
+        unsafe_free_kill(child.id());
+        let status = child.wait().expect("wait");
+
+        // Muerte CRUDA: el SIGINT por defecto del SO se adelantó al manejador.
+        // El `Drop` no corrió porque no podía correr — no es lo que este test
+        // afirma, así que se limpia y se vuelve a intentar.
+        if status.code().is_none() {
+            crudas += 1;
+            for e in std::fs::read_dir(&spool_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let _ = std::fs::remove_file(e.path());
+            }
+            continue;
+        }
+
+        let quedan: Vec<String> = std::fs::read_dir(&spool_dir)
+            .map(|it| {
+                it.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            quedan.is_empty(),
+            "un Ctrl+C durante la planificación no puede dejar nada en el spool: {quedan:?}"
+        );
+        return;
+    }
+    panic!(
+        "tres intentos y las tres veces murió por señal CRUDA ({crudas}): el manejador cooperativo no se arma"
     );
 }
 
