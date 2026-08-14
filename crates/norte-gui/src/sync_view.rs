@@ -1180,10 +1180,10 @@ pub fn failure_text(
         dest: cells.dest_rel.as_ref().map(path_text),
         dest_twin: norte_frontend::sync::dest_twin_label(cells.dest_rel_twin, norte_i18n::active())
             .unwrap_or_default(),
-        // `Dest` no lo produce `render_failure` hoy, aunque desde 0.42.0 la
-        // clase YA está en el wire (`SyncFailure::kind`, #195) y leerla es
-        // #208. El compartido lo nombra igual desde antes: un `_` lo habría
-        // pintado como «del origen» sin decir nada.
+        // `Dest` SÍ lo produce `render_failure` desde #208: lee la clase que
+        // 0.42.0 puso en el wire (`SyncFailure::kind`, #195) con la misma
+        // regla que un paso. El compartido lo nombraba ya desde antes — un
+        // `_` lo habría pintado como «del origen» sin decir nada.
         anchor: norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active())
             .unwrap_or_default(),
         a11y: cause.clone(),
@@ -2004,11 +2004,22 @@ mod tests {
 
     /// UN fallo del informe.
     fn fallo(rel: &str, dest: Option<&str>, cause: SyncFailureCause) -> SyncFailure {
+        fallo_de(rel, dest, cause, SyncStepKind::Copy)
+    }
+
+    /// Como [`fallo`], nombrando la CLASE — que desde 0.42.0 es lo que decide
+    /// de qué árbol habla el `rel` (#208).
+    fn fallo_de(
+        rel: &str,
+        dest: Option<&str>,
+        cause: SyncFailureCause,
+        kind: SyncStepKind,
+    ) -> SyncFailure {
         SyncFailure {
             rel: RelPath::parse_wire(rel).expect("rel"),
             dest_rel: dest.map(|d| RelPath::parse_wire(d).expect("rel")),
             cause,
-            kind: SyncStepKind::Copy,
+            kind,
         }
     }
 
@@ -3277,9 +3288,16 @@ mod tests {
         // la igualdad exacta es lo que lo prueba, porque el `contains` no
         // sirve — el nombre del fichero LLEVA DENTRO las palabras de la causa,
         // que es justo lo que lo hace peligroso.
+        // Con ancla o sin ella (una copia habla del origen y no la lleva), lo
+        // que se le pega a la ruta es EXACTAMENTE eso y nada más.
+        let esperado = if t.anchor.is_empty() {
+            pintado.clone()
+        } else {
+            format!("{pintado} {}", t.anchor)
+        };
         assert_eq!(
             path_a11y(&t.rel, &t.anchor),
-            format!("{pintado} {}", t.anchor),
+            esperado,
             "a la ruta no se le pega nada que el lector pueda tomar por veredicto"
         );
     }
@@ -3292,17 +3310,37 @@ mod tests {
     /// que calificar (auditoría de encoding MAJOR-2 y MINOR-1).
     #[test]
     fn el_ancla_de_un_fallo_se_dice_cuando_no_consta() {
-        let sin_prueba = failure_text(
-            &fallo("viejo", None, SyncFailureCause::Denied),
+        // #208: la clase VIAJA desde 0.42.0, así que la fila hostil más común
+        // de un espejo —un borrado rechazado por permisos, sin `dest_rel`—
+        // ya no dice «podría ser cualquiera de los dos»: dice el destino, que
+        // es de donde cuelga su `rel`.
+        let borrado = failure_text(
+            &fallo_de(
+                "viejo",
+                None,
+                SyncFailureCause::Denied,
+                SyncStepKind::DeleteTree,
+            ),
             SyncEncodings::default(),
         );
         assert_eq!(
-            sin_prueba.anchor,
-            norte_i18n::t("sync-anchor-either"),
-            "un DeleteTree que falla por permisos habla del DESTINO y el informe no lo dice"
+            borrado.anchor,
+            norte_i18n::t("sync-anchor-dest"),
+            "un DeleteTree que falla por permisos habla del DESTINO, y el wire ya lo dice"
         );
-        let aural = path_a11y(&sin_prueba.rel, &sin_prueba.anchor);
-        assert!(aural.contains(&sin_prueba.anchor), "{aural}");
+        let aural = path_a11y(&borrado.rel, &borrado.anchor);
+        assert!(aural.contains(&borrado.anchor), "{aural}");
+
+        // Y una clase que SÍ habla del origen no lleva calificador: en este
+        // panel una ruta sin calificar significa «del origen».
+        let copia = failure_text(
+            &fallo("a.txt", None, SyncFailureCause::Denied),
+            SyncEncodings::default(),
+        );
+        assert!(
+            copia.anchor.is_empty(),
+            "una copia habla del origen y no hay nada que calificar"
+        );
 
         let con_prueba = failure_text(
             &fallo("a.txt", Some("otro/a.txt"), SyncFailureCause::Io),

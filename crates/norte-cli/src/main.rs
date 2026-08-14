@@ -3259,6 +3259,19 @@ fn print_sync_report(report: &norte_proto::methods::SyncReportResult) {
             ],
         )
     );
+    // Y si esto se puede devolver o no (#208). La CLI es el lector que NUNCA
+    // tuvo el `sync.plan_done` delante —imprime un informe y termina—, así que
+    // hasta 0.42.0 esta línea no se podía escribir: cinco copias contra un
+    // destino sin papelera y cinco contra uno con papelera restaurable eran
+    // byte a byte el mismo informe. Solo cuando algo se aplicó: decirle «nada
+    // se puede deshacer» a quien no hizo nada es ruido.
+    if report.done > 0 {
+        let outlook = norte_frontend::sync::UndoOutlook::of_report(report);
+        println!(
+            "{}",
+            norte_i18n::t(&format!("sync-outlook-{}", outlook.id()))
+        );
+    }
     // Una fila de fallo son TRES campos y va en TRES líneas, no en una unida
     // por `: ` y ` → ` (auditoría de encoding MAJOR-4). Los dos joiners son
     // imprimibles corrientes que `display_name_with` no enmascara, así que
