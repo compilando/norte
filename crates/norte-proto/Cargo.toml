@@ -16,6 +16,13 @@ bitflags.workspace = true
 # (`norte-core` uses it for `fs.read`); MIT OR Apache-2.0, no transitive deps.
 base64.workspace = true
 serde.workspace = true
+# El framing de los digests del protocolo (ADR 0051, #174): `hashing::feed` es
+# la primitiva que `norte-sync` usa para el `plan_hash` y contra la que
+# `norte-core` fija su propia copia —congelada por el formato del journal— con
+# un test de igualdad. Vivía duplicada en dos crates; el sitio que los dos ven
+# es éste. RustCrypto, MIT OR Apache-2.0, sin dependencias transitivas fuera de
+# su familia, y ya estaba en el árbol (norte-core, norte-sync, norte-index).
+sha2.workspace = true
 # El encoding JSON del protocolo (envelope ADR 0011): Value en params/result
 # y el framing NDJSON. Ya estaba en el árbol como dev-dep de todo el workspace.
 serde_json.workspace = true

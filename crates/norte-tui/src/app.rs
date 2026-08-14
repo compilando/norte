@@ -1028,6 +1028,12 @@ pub struct App {
     /// filas de una comparación en curso no cambian bajo los pies (ver la
     /// nota de [`Self::compare_size_hints`]).
     pub compare_size_probed: std::collections::HashSet<VPath>,
+    /// Qué comparación es la de esas dos ([`Self::begin_compare_generation`],
+    /// #198). La sonda vive en el run loop y `launch_compare` no la recibe,
+    /// así que un resultado en vuelo cuando empieza otra comparación llegaría
+    /// a las tablas recién vaciadas de la SIGUIENTE. Lo que impide eso es que
+    /// el resultado traiga la generación con la que se pidió.
+    compare_generation: u64,
     /// Params de `fs.compare` que el despacho resolvió y el run loop aún no
     /// ha lanzado (`Shift+F2`). Mismo reparto que [`Self::pending_open`] y
     /// [`Self::pending_shell`]: `dispatch` decide QUÉ, el run loop —dueño del
@@ -1980,6 +1986,7 @@ impl App {
             compare: None,
             compare_size_hints: std::collections::HashMap::new(),
             compare_size_probed: std::collections::HashSet::new(),
+            compare_generation: 0,
             pending_compare: None,
             sync: None,
             pending_sync: None,
@@ -2715,11 +2722,32 @@ impl App {
     /// ([`Self::compare_size_probed`]) pase lo que pase — un `stat` que
     /// falló tampoco se reintenta hasta la próxima comparación, mismo
     /// criterio que el pane normal con `last_probed`.
-    pub fn hydrate_compare_size(&mut self, path: VPath, size: Option<u64>) {
+    pub fn hydrate_compare_size(&mut self, generation: u64, path: VPath, size: Option<u64>) {
+        // #198: de OTRA comparación. Ni el tamaño ni la marca de sondeado —
+        // marcarlo dejaría a la comparación viva sin pedirlo nunca, que es la
+        // mitad silenciosa del mismo fallo.
+        if generation != self.compare_generation {
+            return;
+        }
         self.compare_size_probed.insert(path.clone());
         if let Some(size) = size {
             self.compare_size_hints.insert(path, size);
         }
+    }
+
+    /// La comparación que empieza. Vacía la caché de tamaños y su dedup, y
+    /// AVANZA la generación: lo uno sin lo otro es el fallo de #198.
+    pub fn begin_compare_generation(&mut self) {
+        self.compare_size_hints.clear();
+        self.compare_size_probed.clear();
+        self.compare_generation = self.compare_generation.wrapping_add(1);
+    }
+
+    /// La comparación a la que pertenecen las tablas de tamaños ahora mismo.
+    /// El run loop la guarda al lanzar la sonda y la devuelve al hidratar.
+    #[must_use]
+    pub fn compare_generation(&self) -> u64 {
+        self.compare_generation
     }
 
     /// El pane con foco, mutable.
@@ -5382,12 +5410,53 @@ mod tests {
         );
 
         // Sondeado con ÉXITO: ya no es candidato, y el hint queda puesto.
-        app.hydrate_compare_size(path.clone(), Some(42));
+        app.hydrate_compare_size(app.compare_generation(), path.clone(), Some(42));
         assert!(
             app.compare_size_probe_targets().is_empty(),
             "ya hidratado, no se repite"
         );
         assert_eq!(app.compare_size_hints.get(&path), Some(&42));
+    }
+
+    /// #198: una sonda lanzada para la comparación A no puede aterrizar en
+    /// la B. La sonda vive en el run loop y `launch_compare` no la ve, así
+    /// que la única defensa es que el resultado traiga la generación bajo la
+    /// que se pidió — sin eso, la caché que el rustdoc llama «de ESTA
+    /// comparación» tiene dentro un tamaño de la anterior, en el panel cuyo
+    /// asunto entero es si lo que estás mirando es exacto.
+    #[test]
+    fn una_sonda_de_la_comparacion_anterior_no_aterriza_en_la_nueva() {
+        let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
+        let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
+        let fila = fila_huerfana(1, EntryKind::File, None);
+        let path = fila.left.as_ref().expect("izquierda").path.clone();
+        view.pane.extend(vec![fila.clone()]);
+        app.compare = Some(view);
+        let vieja = app.compare_generation();
+
+        // Otra comparación empieza: la caché se vacía y la generación avanza.
+        app.begin_compare_generation();
+        let mut view = CompareView::new(vp("mem:///c"), vp("mem:///d"), 0, None, None);
+        view.pane.extend(vec![fila]);
+        app.compare = Some(view);
+        assert_ne!(app.compare_generation(), vieja);
+
+        // Llega la sonda de la comparación VIEJA.
+        app.hydrate_compare_size(vieja, path.clone(), Some(42));
+        assert!(
+            app.compare_size_hints.is_empty(),
+            "ni el tamaño de la anterior"
+        );
+        assert_eq!(
+            app.compare_size_probe_targets(),
+            vec![path.clone()],
+            "ni marcado sondeado: la nueva todavía tiene que pedirlo"
+        );
+
+        // Y la de la nueva sí.
+        let ahora = app.compare_generation();
+        app.hydrate_compare_size(ahora, path.clone(), Some(7));
+        assert_eq!(app.compare_size_hints.get(&path), Some(&7));
     }
 
     /// Un `stat` que falla (`None`) también se marca sondeado: no se
@@ -5402,7 +5471,7 @@ mod tests {
         view.pane.extend(vec![fila]);
         app.compare = Some(view);
 
-        app.hydrate_compare_size(path, None);
+        app.hydrate_compare_size(app.compare_generation(), path, None);
         assert!(
             app.compare_size_probe_targets().is_empty(),
             "un fallo también se marca sondeado"

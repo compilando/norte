@@ -416,6 +416,54 @@ fn face(entry: &norte_proto::Entry, reinterpret: Option<norte_encoding::NameEnco
     }
 }
 
+/// Por qué una fila enseña DOS ortografías, en una frase, o `None` cuando no
+/// hay nada que explicar (#208, 0.42.0 `CompareRow::paired_under`).
+///
+/// Los dos paneles de diferencias pintan dos nombres que una fuente puede
+/// rendir idénticos —el par NFC/NFD— o que son visiblemente caracteres
+/// distintos —el KELVIN SIGN contra la `K` ASCII—, y hasta ahora no decían
+/// nada de por qué están en la misma fila. Esto es lo que falta: una frase
+/// fija y localizada, JAMÁS un badge pegado al nombre (misma regla que
+/// `sync::dest_twin_label`, #192 — lo que se pega a un nombre lo puede
+/// falsificar un nombre).
+///
+/// Tres respuestas y no cuatro, y la diferencia importa:
+///
+/// * `None` cuando no hubo transformación: la pareja es byte a byte.
+/// * La frase SUAVE para [`PairTransform::CaseFold`](norte_proto::methods::PairTransform::CaseFold) y
+///   [`PairTransform::Normalization`](norte_proto::methods::PairTransform::Normalization): son las parejas para las que la clave
+///   existe, y refusarlas rompería el caso macOS↔Linux que sirve.
+/// * La frase FUERTE para [`PairTransform::NormalizationSingleton`](norte_proto::methods::PairTransform::NormalizationSingleton) y para
+///   cualquier transformación que este build no conozca — o sea, exactamente
+///   cuando [`PairTransform::names_one_text`](norte_proto::methods::PairTransform::names_one_text) contesta `false`. Un singleton
+///   puede estar juntando DOS FICHEROS DISTINTOS, y una transformación que un
+///   daemon más nuevo nombró no se puede leer como inocua.
+///
+/// ```
+/// use norte_frontend::compare::paired_under_label;
+/// use norte_i18n::Lang;
+/// use norte_proto::methods::PairTransform;
+///
+/// assert!(paired_under_label(None, Lang::En).is_none(), "sin transformación, sin frase");
+/// let suave = paired_under_label(Some(PairTransform::Normalization), Lang::En)
+///     .expect("una pareja NFC/NFD se explica");
+/// let fuerte = paired_under_label(Some(PairTransform::NormalizationSingleton), Lang::En)
+///     .expect("y un singleton, más fuerte");
+/// assert_ne!(suave, fuerte, "la peligrosa no se dice igual que la corriente");
+/// ```
+#[must_use]
+pub fn paired_under_label(
+    paired_under: Option<norte_proto::methods::PairTransform>,
+    lang: norte_i18n::Lang,
+) -> Option<String> {
+    let transform = paired_under?;
+    Some(if transform.names_one_text() {
+        t_in(lang, "compare-paired-under")
+    } else {
+        t_in(lang, "compare-paired-under-singleton")
+    })
+}
+
 /// Everything a painter needs for one row, with both names already masked.
 ///
 /// One name-encoding override PER SIDE (#57), passed through unchanged so a
@@ -908,14 +956,25 @@ pub fn status_line(view: &CompareView, marked: usize, lang: Lang) -> String {
     // The marked count goes here and not on a key line: it is state, not
     // vocabulary. Only when there is one — a permanent "0 marked" would be
     // noise in the normal case.
+    // #208: por qué la fila SELECCIONADA enseña dos ortografías, cuando las
+    // enseña. Va aquí y no pegado al nombre por la misma razón que
+    // `sync::dest_twin_label`: lo que se pega a un nombre lo puede falsificar
+    // un nombre, y esta frase es justamente la que no debe poder falsificarse.
+    // Aquí lo ven los DOS paneles —los dos pintan esta línea— con una sola
+    // implementación y una sola traducción.
+    let pareja = view
+        .pane
+        .selected_row()
+        .and_then(|row| paired_under_label(row.paired_under, lang));
+    let mut out = format!("{how} · {side}");
     if marked > 0 {
         let m = marked.to_string();
-        return format!(
-            "{how} · {side} · {}",
-            ta_in(lang, "compare-marked", &[("n", &m)])
-        );
+        out = format!("{out} · {}", ta_in(lang, "compare-marked", &[("n", &m)]));
     }
-    format!("{how} · {side}")
+    if let Some(pareja) = pareja {
+        out = format!("{out} · {pareja}");
+    }
+    out
 }
 
 /// How a directory comparison is going, as the pane presents it (`Shift+F2`,
@@ -1699,6 +1758,50 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// #208: la fila SELECCIONADA explica por qué enseña dos ortografías, y la
+    /// peligrosa no se dice igual que la corriente. Va en la línea de estado
+    /// —que pintan los DOS paneles, con una sola traducción— y jamás pegada al
+    /// nombre: lo que se pega a un nombre lo puede falsificar un nombre.
+    #[test]
+    fn la_linea_de_estado_explica_la_pareja_seleccionada() {
+        use norte_proto::methods::PairTransform;
+
+        let armar = |paired: Option<PairTransform>| {
+            let mut v = CompareView::new(
+                VPath::parse("file:///a").expect("wire"),
+                VPath::parse("file:///b").expect("wire"),
+                0,
+                None,
+                None,
+            );
+            let mut fila = row_id(1, Different);
+            fila.paired_under = paired;
+            v.pane.extend(vec![fila]);
+            status_line(&v, 0, Lang::En)
+        };
+
+        let singleton = paired_under_label(Some(PairTransform::NormalizationSingleton), Lang::En)
+            .expect("la peligrosa tiene frase");
+        let corriente =
+            paired_under_label(Some(PairTransform::Normalization), Lang::En).expect("y la NFC/NFD");
+        assert_ne!(singleton, corriente, "no se dicen igual");
+
+        assert!(
+            armar(Some(PairTransform::NormalizationSingleton)).contains(&singleton),
+            "un singleton se avisa"
+        );
+        assert!(
+            armar(Some(PairTransform::Normalization)).contains(&corriente),
+            "y una pareja NFC/NFD se explica"
+        );
+        // Byte a byte: no hay nada que explicar y no se dice nada.
+        let limpia = armar(None);
+        assert!(
+            !limpia.contains(&corriente) && !limpia.contains(&singleton),
+            "{limpia}"
+        );
     }
 
     /// **Branch review, MAJOR-3.** `status_line` moved here with five states ×

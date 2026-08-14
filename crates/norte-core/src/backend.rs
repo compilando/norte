@@ -2644,6 +2644,30 @@ pub mod remote {
             let client = Arc::new(client);
             *self.inner.client.write().await = Some(Arc::clone(&client));
 
+            // A partir de AQUÍ, un fallo tiene que dejar el hueco vacío
+            // (#181). Publicar el cliente antes del resync es correcto —el
+            // resync se hace CON él—, pero si el resync falla y el cliente se
+            // queda puesto, el llamante habla por una conexión cuyo receptor
+            // de notificaciones acaba de morir con este marco: nada se
+            // enruta, `task.progress` incluido, y un `TaskRef::join()` —que
+            // no tiene plazo— espera para siempre un terminal que ya no puede
+            // llegar. Con el hueco a `None`, el siguiente intento empieza
+            // limpio y el llamante recibe un error en vez de un silencio.
+            let resync = self.resync(&client).await;
+            if let Err(e) = resync {
+                *self.inner.client.write().await = None;
+                return Err(e);
+            }
+            Ok(notifications)
+        }
+
+        /// El resync de una conexión recién hecha: las tasks que ya corrían,
+        /// la reconciliación de huérfanas y las aprobaciones pendientes.
+        ///
+        /// Separado de [`Self::establish`] para que su fallo tenga UN camino
+        /// de salida y no varios `?` repartidos, cada uno con su ocasión de
+        /// olvidar que hay estado publicado que limpiar (#181).
+        async fn resync(&self, client: &Arc<Client>) -> Result<(), ClientError> {
             // Resync: el estado de las tasks que ya corrían (o terminaron
             // mientras no estábamos — el server retiene desenlaces recientes).
             let list: TaskListResult = client.call(methods::TASK_LIST, &TaskListParams {}).await?;
@@ -2668,7 +2692,7 @@ pub mod remote {
             // que poder leer los avisos de verdad. Además no tendría sentido:
             // quien aprueba es el humano, jamás el agente.
             if self.inner.agent_session.is_some() {
-                return Ok(notifications);
+                return Ok(());
             }
             match client
                 .call::<_, PolicyPendingResult>(methods::POLICY_PENDING, &serde_json::json!({}))
@@ -2699,7 +2723,7 @@ pub mod remote {
                     tracing::warn!(error = %e, "resync de policy.pending falló");
                 }
             }
-            Ok(notifications)
+            Ok(())
         }
 
         /// Marca `Failed{ProviderUnavailable}` toda task con watch vivo que
@@ -4274,12 +4298,16 @@ pub mod remote {
         use super::*;
 
         fn test_inner() -> Arc<Inner> {
+            test_inner_en(PathBuf::from("/nonexistent/test.sock"))
+        }
+
+        fn test_inner_en(socket: PathBuf) -> Arc<Inner> {
             let (foreign_tx, _fr) = mpsc::unbounded_channel();
             let (events_tx, _er) = mpsc::unbounded_channel();
             let (approvals_tx, _ar) = mpsc::unbounded_channel();
             let (degraded_tx, _dr) = mpsc::unbounded_channel();
             Arc::new(Inner {
-                socket: PathBuf::from("/nonexistent/test.sock"),
+                socket,
                 spawn_cmd: None,
                 client_info: ClientInfo {
                     name: "test".into(),
@@ -4298,6 +4326,101 @@ pub mod remote {
                 compare_routes: Mutex::new(BatchRoutes::default()),
                 sync_routes: Mutex::new(BatchRoutes::default()),
             })
+        }
+
+        /// Un daemon de mentira que acepta el handshake y RECHAZA
+        /// `task.list` — el estado exacto de #181, que ningún daemon de
+        /// verdad sabe montar.
+        ///
+        /// Devuelve al soltar el listener; el test lo mantiene vivo por su
+        /// `JoinHandle`.
+        fn stub_que_rechaza_task_list(socket: &std::path::Path) -> tokio::task::JoinHandle<()> {
+            let listener = tokio::net::UnixListener::bind(socket).expect("bind del stub");
+            tokio::spawn(async move {
+                let Ok((mut conn, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut decoder = norte_proto::wire::FrameDecoder::new();
+                let mut buf = vec![0u8; 8192];
+                loop {
+                    let n = match tokio::io::AsyncReadExt::read(&mut conn, &mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => n,
+                    };
+                    if decoder.push(&buf[..n]).is_err() {
+                        return;
+                    }
+                    while let Some(frame) = decoder.next_frame() {
+                        let Ok(req) = serde_json::from_slice::<norte_proto::wire::Request>(&frame)
+                        else {
+                            continue;
+                        };
+                        let resp = if req.method == norte_proto::methods::INITIALIZE {
+                            norte_proto::wire::Response::ok(
+                                req.id.clone(),
+                                serde_json::to_value(norte_proto::methods::InitializeResult {
+                                    server_info: norte_proto::methods::ServerInfo {
+                                        name: "stub".into(),
+                                        version: "0".into(),
+                                    },
+                                    protocol_version: norte_proto::methods::PROTOCOL_VERSION.into(),
+                                    encodings: vec!["json".into()],
+                                })
+                                .expect("json"),
+                            )
+                        } else {
+                            // `task.list` (y cualquier otra cosa) se rechaza:
+                            // es lo que #181 necesita que pase DESPUÉS de que
+                            // `establish` haya publicado el cliente.
+                            norte_proto::wire::Response::err(
+                                Some(req.id.clone()),
+                                norte_proto::wire::RpcError::protocol(
+                                    norte_proto::wire::codes::INTERNAL_ERROR,
+                                    "el stub rechaza esto a propósito",
+                                ),
+                            )
+                        };
+                        let Ok(bytes) = norte_proto::wire::encode_frame(&resp) else {
+                            return;
+                        };
+                        if tokio::io::AsyncWriteExt::write_all(&mut conn, &bytes)
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            })
+        }
+
+        /// #181: un resync que falla NO puede dejar publicado el cliente.
+        ///
+        /// Si se queda, el llamante habla por una conexión cuyo receptor de
+        /// notificaciones murió con el marco de `establish`: no se enruta
+        /// nada, `task.progress` incluido, y `TaskRef::join()` —que no tiene
+        /// plazo— espera un terminal que ya no puede llegar. Para siempre.
+        #[tokio::test]
+        async fn un_resync_fallido_no_deja_el_cliente_publicado() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let socket = dir.path().join("stub.sock");
+            let _stub = stub_que_rechaza_task_list(&socket);
+
+            let inner = test_inner_en(socket);
+            let backend = RemoteBackend {
+                inner: Arc::clone(&inner),
+                foreign_rx: Mutex::new(None),
+                events_rx: Mutex::new(None),
+                approvals_rx: Mutex::new(None),
+                degraded_rx: Mutex::new(None),
+            };
+
+            let r = backend.establish(false).await;
+            assert!(r.is_err(), "el resync lo rechaza el stub");
+            assert!(
+                inner.client.read().await.is_none(),
+                "y el hueco queda VACÍO: con un cliente ahí, nadie enruta y un join() cuelga para siempre"
+            );
         }
 
         /// El feed de `sync.plan` se CIERRA cuando el consumidor no drena, en

@@ -700,18 +700,36 @@ pub enum RelAnchor {
 /// ```
 #[must_use]
 pub fn anchor_of(step: &SyncStep) -> RelAnchor {
-    match step.kind {
+    anchor_for(step.kind, step.dest_rel.is_some(), step.reason)
+}
+
+/// The rule itself, stated ONCE (#208): [`anchor_of`] answers it for a step and
+/// [`render_failure`] for a failure row, and since 0.42.0 both have the same
+/// input — the class.
+///
+/// Before that bump a failure row carried no class, so `render_failure` had to
+/// guess from the only evidence left (`dest_rel` present ⟹ `rel` is the
+/// source's half) and answered `Either` for everything else. Two rules that
+/// start out agreeing do not stay agreeing, which is the whole reason this is
+/// one function.
+///
+/// `reason` is `None` for a failure row: the wire does not carry one, and the
+/// `Skip` arm falls through to `Either`, which is what "we cannot tell" means.
+fn anchor_for(kind: SyncStepKind, has_dest_rel: bool, reason: Option<SyncReason>) -> RelAnchor {
+    match kind {
+        // FIRST, before the `dest_rel` test: a `DeleteTree` only ever speaks
+        // about the destination, whatever else it carries.
         SyncStepKind::DeleteTree => RelAnchor::Dest,
         // The step names a destination path explicitly, so whatever the class
         // is, `rel` is the source's half of the pair.
-        _ if step.dest_rel.is_some() => RelAnchor::Source,
+        _ if has_dest_rel => RelAnchor::Source,
         SyncStepKind::CreateDir | SyncStepKind::Copy | SyncStepKind::Overwrite => RelAnchor::Source,
         // A collision or a confidence the caller asked to skip is a fact about
         // the SOURCE. Everything else a `Skip` can say — an unreadable listing
         // (emitted for either side, with nothing to tell them apart), a reason
         // this build cannot name, no reason at all — could be the
         // destination's.
-        SyncStepKind::Skip => match step.reason {
+        SyncStepKind::Skip => match reason {
             Some(SyncReason::AmbiguousSource | SyncReason::UnknownConfidence) => RelAnchor::Source,
             _ => RelAnchor::Either,
         },
@@ -1173,11 +1191,11 @@ pub struct FailureCells {
 ///     cause: SyncFailureCause::Io,
 ///     kind: SyncStepKind::DeleteTree,
 /// };
-/// // …y desde 0.42.0 el wire SÍ lo dice (`kind`), pero esta función todavía
-/// // no lo lee: cambiar lo que pinta es la ola siguiente, no el bump.
+/// // …y desde 0.42.0 el wire lo dice (`kind`), así que esta función lo LEE
+/// // (#208): un `DeleteTree` habla del destino, con `dest_rel` o sin él.
 /// assert_eq!(
 ///     render_failure(&solo, SyncEncodings::default()).anchor,
-///     RelAnchor::Either
+///     RelAnchor::Dest
 /// );
 /// ```
 #[must_use]
@@ -1185,13 +1203,13 @@ pub fn render_failure(
     failure: &norte_proto::methods::SyncFailure,
     enc: SyncEncodings,
 ) -> FailureCells {
-    // La única prueba que queda en el wire, y es la MISMA que usa `anchor_of`
-    // para un paso: con `dest_rel` presente, `rel` es la mitad del origen.
-    let anchor = if failure.dest_rel.is_some() {
-        RelAnchor::Source
-    } else {
-        RelAnchor::Either
-    };
+    // #208: la MISMA regla que un paso (`anchor_of`), ahora que 0.42.0 pone la
+    // clase en el wire. La fila hostil más común de un espejo —un borrado
+    // rechazado por permisos, sin `dest_rel`, con `rel` medido contra el
+    // destino— deja de ser `Either`, que es lo que hacía que
+    // `SyncEncodings::for_anchor` la decodificara con la reinterpretación del
+    // ÁRBOL QUE NO SE TOCÓ (hallazgo del encoding-auditor).
+    let anchor = anchor_for(failure.kind, failure.dest_rel.is_some(), None);
     let rel = rel_display(&failure.rel, enc.for_anchor(anchor));
     let dest_rel = failure
         .dest_rel
@@ -1269,6 +1287,59 @@ impl UndoOutlook {
             DestTrash::Opaque | DestTrash::Absent => Self::Nothing,
             _ => Self::Unclear,
         }
+    }
+
+    /// The outlook for an APPLIED batch, read from its report alone (#208,
+    /// 0.42.0's `dest_trash` on `SyncReportResult`).
+    ///
+    /// It exists for the readers that never saw a `sync.plan_done`: `norte
+    /// sync --json`, `print_sync_report`, an agent reading a report through
+    /// MCP, a second frontend attached to a session it did not start. Before
+    /// the field existed they had to say nothing at all, because a report of
+    /// five copies against a destination with no trash and one against a
+    /// restorable trash are byte for byte the same report — and one comes back
+    /// whole and the other not at all.
+    ///
+    /// `batch_id` is read FIRST and it overrules the trash: with no batch
+    /// there is no journal unit to undo, so nothing comes back whatever the
+    /// destination could have offered. That is not the same statement as "the
+    /// destination has no trash", and the two are distinguished on purpose —
+    /// this one means the apply died before it could open a unit.
+    ///
+    /// The counts a plan has are not here (a report counts steps done, not
+    /// steps irreversible), so this answers `Full` where
+    /// [`Self::of`] could have said `Partial`. A caller holding the plan
+    /// should keep using [`SyncPlan::outlook`], which sees the steps.
+    ///
+    /// ```
+    /// use norte_frontend::sync::UndoOutlook;
+    /// use norte_proto::methods::{DestTrash, SyncReportResult};
+    ///
+    /// let base = SyncReportResult {
+    ///     done: 5,
+    ///     failed: 0,
+    ///     skipped: 0,
+    ///     bytes: 100,
+    ///     failures: Vec::new(),
+    ///     batch_id: Some(7),
+    ///     dest_trash: DestTrash::Restorable,
+    /// };
+    /// assert_eq!(UndoOutlook::of_report(&base), UndoOutlook::Full);
+    ///
+    /// // Sin unidad de journal no hay nada que deshacer, diga lo que diga la
+    /// // papelera del destino.
+    /// let sin_lote = SyncReportResult { batch_id: None, ..base.clone() };
+    /// assert_eq!(UndoOutlook::of_report(&sin_lote), UndoOutlook::Nothing);
+    ///
+    /// let sin_papelera = SyncReportResult { dest_trash: DestTrash::Absent, ..base };
+    /// assert_eq!(UndoOutlook::of_report(&sin_papelera), UndoOutlook::Nothing);
+    /// ```
+    #[must_use]
+    pub fn of_report(report: &norte_proto::methods::SyncReportResult) -> Self {
+        if report.batch_id.is_none() {
+            return Self::Nothing;
+        }
+        Self::of(report.dest_trash, &SyncCounts::default())
     }
 
     /// The stable id a Fluent message and a config name it by.

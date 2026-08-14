@@ -12,20 +12,22 @@
 //! `verify_chain` en todos los journals ya escritos. Salieron de `journal.rs`
 //! sin tocar una línea y así tienen que seguir.
 //!
-//! # #174: `norte_sync::hash` tiene su PROPIA copia, a propósito
-//! `feed`/`feed_opt`/`hex_lower` están copiados —no compartidos— en
-//! `norte-sync/src/hash.rs`, byte a byte idénticos en comportamiento. No es
-//! descuido: `norte-sync` NO puede depender de este módulo porque es
-//! `pub(crate)` y además la dependencia va al revés (`norte-core` depende de
-//! `norte-sync`, no lo contrario), así que «extraer hacia arriba» no es un
-//! movimiento de código, y el sitio compartido natural (`norte-vfs`,
-//! `norte-encoding`) relicenciaría esto: este crate es AGPL-3.0-only, esos son
-//! MIT OR Apache-2.0. Es la misma frontera de licencia que #151 y quiere la
-//! misma ADR — hasta entonces, **esta copia es la que NO se mueve ni se
-//! reescribe**: es la cadena tamper-evident del journal (ADR 0023) y el ancla
-//! de la exportación de auditoría (ADR 0025), así que su framing no puede
-//! cambiar ni un byte sin invalidar todo `journal.db` ya escrito. La copia de
-//! `norte-sync` es libre de moverse el día que la ADR elija casa; esta no.
+//! # #174: esta copia se queda, y ya no puede derivar en silencio
+//! El framing vive también en [`norte_proto::hashing`], que es donde ADR 0051
+//! decidió ponerlo: `norte-sync` lo usa desde allí y ya no tiene copia
+//! propia. **Ésta no se mueve.** Es la cadena tamper-evident del journal
+//! (ADR 0023) y el ancla de la exportación de auditoría (ADR 0025), así que su
+//! framing no puede cambiar ni un byte sin invalidar todo `journal.db` ya
+//! escrito — eso es una migración, no un refactor. Y relicenciarla tampoco es
+//! gratis: este crate es AGPL-3.0-only y `norte-proto` es MIT OR Apache-2.0.
+//!
+//! Lo que la duplicación tenía de peligroso —que las dos derivaran sin que
+//! nadie lo notara, que es exactamente lo que le pasó a la clave de plegado de
+//! #151— lo cierra `tests::el_framing_de_proto_es_byte_a_byte_este`: alimenta
+//! las dos implementaciones con las mismas entradas, incluido el corpus
+//! hostil, y compara los digests. Dos copias que no pueden discrepar en
+//! silencio son un coste de mantenimiento; dos que sí pueden son un bug
+//! esperando.
 
 use sha2::{Digest, Sha256};
 
@@ -68,6 +70,55 @@ mod tests {
         let mut h = Sha256::new();
         f(&mut h);
         h.finalize().into()
+    }
+
+    /// #174 / ADR 0051: las dos implementaciones del framing producen los
+    /// MISMOS bytes. Es lo que sustituye a «extraer y borrar la copia», que
+    /// aquí no se puede hacer sin tocar el formato del journal.
+    ///
+    /// El corpus hostil entra a propósito: si alguna de las dos tratara los
+    /// bytes como texto —lossy, normalización, lo que sea— sería justo ahí
+    /// donde se vería, y no con `b"ab"`.
+    #[test]
+    fn el_framing_de_proto_es_byte_a_byte_este() {
+        fn proto(f: impl FnOnce(&mut Sha256)) -> [u8; 32] {
+            let mut h = Sha256::new();
+            f(&mut h);
+            h.finalize().into()
+        }
+
+        assert_eq!(
+            digest(|h| feed(h, b"ab")),
+            proto(|h| norte_proto::hashing::feed(h, b"ab")),
+        );
+        assert_eq!(
+            digest(|h| feed_opt(h, None)),
+            proto(|h| norte_proto::hashing::feed_opt(h, None)),
+        );
+        assert_eq!(
+            digest(|h| feed_opt(h, Some(b""))),
+            proto(|h| norte_proto::hashing::feed_opt(h, Some(b""))),
+        );
+        for name in norte_testkit::corpus::hostile_names() {
+            assert_eq!(
+                digest(|h| {
+                    feed(h, &name.bytes);
+                    feed_opt(h, Some(&name.bytes));
+                }),
+                proto(|h| {
+                    norte_proto::hashing::feed(h, &name.bytes);
+                    norte_proto::hashing::feed_opt(h, Some(&name.bytes));
+                }),
+                "el framing difiere sobre {}: {}",
+                name.id,
+                name.why
+            );
+        }
+        // Y el hex, que es la otra mitad que no puede tener dos formas.
+        assert_eq!(
+            hex_lower(&[0xab, 0x0f]),
+            norte_proto::hashing::hex_lower(&[0xab, 0x0f])
+        );
     }
 
     /// El prefijo de longitud es lo único que separa dos campos pegados.

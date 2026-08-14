@@ -1685,13 +1685,7 @@ impl PlanHash {
     /// ```
     #[must_use]
     pub fn from_digest(digest: &[u8; 32]) -> Self {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut hex = String::with_capacity(digest.len() * 2);
-        for byte in digest {
-            hex.push(char::from(HEX[usize::from(byte >> 4)]));
-            hex.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-        Self(hex)
+        Self(crate::hashing::hex_lower(digest))
     }
 
     /// La forma hex, tal cual viaja.

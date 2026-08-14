@@ -338,71 +338,95 @@ fn sigint_durante_planificacion_no_deja_part_detras() {
     }
 
     let bin = assert_cmd::cargo::cargo_bin("norte");
-    let mut child = std::process::Command::new(bin)
-        .env("NORTE_CONFIG_DIR", &estado)
-        .env("NORTE_LANG", "en")
-        .arg("sync")
-        .arg("--mode")
-        .arg("update")
-        .arg("--yes")
-        .arg(&src)
-        .arg(&dst)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn norte sync");
-
     let spool_dir = estado.join("sync-spools");
-    // Espera a que el `.part` exista (la planificación ARRANCÓ y el spool se
-    // creó) antes de señalar. Eso solo no basta: `.part` lo escribe la Task
-    // de `sync.plan`, en un WORKER aparte del que instala `watch_ctrl_c` en
-    // el proceso hijo, así que verlo no prueba que ESE manejador ya recibió
-    // su primer `poll` — bajo carga (varios procesos por núcleo) el
-    // scheduler puede adelantar el worker de la Task y dejar el del
-    // manejador sin turno todavía. Sin este suelo, SIGINT podía llegar
-    // mientras el SIGINT por defecto del SO seguía vigente, matando el
-    // proceso por señal cruda y saltándose el `Drop` que borra el `.part`
-    // (encontrado corriendo esta suite bajo carga de CI; nunca en una
-    // corrida aislada). Es la misma condición de carrera que ya resolvió el
-    // comentario de `cp_sigint_cancels_cleanly`, aquí sin un `dst.exists()`
-    // causal en el que apoyarse porque la creación del `.part` es server-side
-    // y no depende de que el manejador ya esté armado.
-    let arranque = std::time::Instant::now();
-    let suelo = std::time::Duration::from_millis(50);
-    let deadline = arranque + std::time::Duration::from_secs(15);
-    let mut started = false;
-    loop {
-        if child.try_wait().expect("try_wait").is_some() {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            break;
-        }
-        let tiene_part = std::fs::read_dir(&spool_dir).is_ok_and(|it| {
-            it.flatten()
-                .any(|e| e.file_name().to_string_lossy().ends_with(".part"))
-        });
-        if tiene_part && arranque.elapsed() >= suelo {
-            started = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-    if started {
-        unsafe_free_kill(child.id());
-    }
-    let _status = child.wait().expect("wait");
 
-    let quedan: Vec<String> = std::fs::read_dir(&spool_dir)
-        .map(|it| {
-            it.flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .collect()
-        })
-        .unwrap_or_default();
-    assert!(
-        quedan.is_empty(),
-        "un Ctrl+C durante la planificación no puede dejar nada en el spool: {quedan:?}"
+    // El manejador cooperativo se ARMA en un worker del hijo, y verlo escribir
+    // el `.part` no prueba que ese worker ya haya tenido turno: bajo carga
+    // —esta suite corre con un proceso por núcleo— el SIGINT puede llegar
+    // mientras sigue vigente el por defecto del SO, que mata el proceso en
+    // crudo y se salta el `Drop` que borra el `.part`.
+    //
+    // El suelo de 50 ms que había aquí era una CONJETURA DE RELOJ, y bajo
+    // `just ci-fast` la pierde: rojo en la suite entera, verde en aislado.
+    // Esto lo hace causal — la muerte del proceso DICE cuál de los dos casos
+    // fue (código de salida = cooperativa, señal cruda = el manejador no
+    // estaba) — y solo reintenta el caso que no probaba nada. Tres intentos
+    // sin una sola muerte cooperativa no son ruido: son un manejador que no se
+    // arma, y entonces el test falla diciendo eso.
+    let mut crudas = 0;
+    for intento in 1..=3 {
+        let mut child = std::process::Command::new(&bin)
+            .env("NORTE_CONFIG_DIR", &estado)
+            .env("NORTE_LANG", "en")
+            .arg("sync")
+            .arg("--mode")
+            .arg("update")
+            .arg("--yes")
+            .arg(&src)
+            .arg(&dst)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn norte sync");
+
+        // Espera a que el `.part` exista: la planificación arrancó y el spool
+        // se creó, que es lo que esta prueba necesita que haya que limpiar.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut started = false;
+        loop {
+            if child.try_wait().expect("try_wait").is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            let tiene_part = std::fs::read_dir(&spool_dir).is_ok_and(|it| {
+                it.flatten()
+                    .any(|e| e.file_name().to_string_lossy().ends_with(".part"))
+            });
+            if tiene_part {
+                started = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            started,
+            "la planificación no llegó a escribir un `.part` en 15 s (intento {intento}): no había nada que cancelar"
+        );
+        unsafe_free_kill(child.id());
+        let status = child.wait().expect("wait");
+
+        // Muerte CRUDA: el SIGINT por defecto del SO se adelantó al manejador.
+        // El `Drop` no corrió porque no podía correr — no es lo que este test
+        // afirma, así que se limpia y se vuelve a intentar.
+        if status.code().is_none() {
+            crudas += 1;
+            for e in std::fs::read_dir(&spool_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let _ = std::fs::remove_file(e.path());
+            }
+            continue;
+        }
+
+        let quedan: Vec<String> = std::fs::read_dir(&spool_dir)
+            .map(|it| {
+                it.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            quedan.is_empty(),
+            "un Ctrl+C durante la planificación no puede dejar nada en el spool: {quedan:?}"
+        );
+        return;
+    }
+    panic!(
+        "tres intentos y las tres veces murió por señal CRUDA ({crudas}): el manejador cooperativo no se arma"
     );
 }
 
@@ -448,6 +472,29 @@ fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
         .spawn()
         .expect("spawn norte sync");
 
+    // #201: los dos pipes se DRENAN en hilos, desde ya. Sin esto el test se
+    // podía autoanular en silencio: un plan que no cabe en el buffer del pipe
+    // (64 KiB en Linux) bloquea al hijo ANTES de aplicar, `dst` no se llena
+    // nunca, no se manda ninguna señal y la corrida entera sale por el brazo
+    // de la carrera sin haber probado nada. La fixture de hoy cabe; subirla
+    // cruzaba ese umbral sin decir una palabra.
+    //
+    // Su gemelo `sigint_tras_planificar_termina_el_proceso` depende justo de
+    // ese bloqueo para alcanzar SU ventana. El mismo mecanismo: aquí estorba,
+    // allí es el sujeto. Quien toque uno lea los dos.
+    let mut salida_hijo = child.stdout.take().expect("stdout piped");
+    let mut error_hijo = child.stderr.take().expect("stderr piped");
+    let drenador_out = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut salida_hijo, &mut buf);
+        buf
+    });
+    let drenador_err = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut error_hijo, &mut buf);
+        buf
+    });
+
     // El apply ARRANCÓ en cuanto el destino recibe su primera entrada: la
     // planificación no escribe nada ahí. El suelo es la misma cautela que
     // `sigint_durante_planificacion_no_deja_part_detras`: ver ficheros en
@@ -472,15 +519,23 @@ fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    if started {
-        unsafe_free_kill(child.id());
-    }
-    let output = child.wait_with_output().expect("wait_with_output");
+    // #201: que la señal se MANDÓ es la premisa del test, no una casualidad
+    // afortunada. Sin esto, cualquier corrida en la que el apply no arrancara
+    // pasaba sin ejercitar el arreglo.
+    assert!(
+        started,
+        "el apply no llegó a escribir en {} en 15 s: la señal jamás se mandó y este test no probó nada",
+        dst.display()
+    );
+    unsafe_free_kill(child.id());
+    let status = child.wait().expect("wait");
+    let stdout = drenador_out.join().expect("drenador de stdout");
+    let stderr = drenador_err.join().expect("drenador de stderr");
 
-    match output.status.code() {
+    match status.code() {
         Some(2) => {
-            let out = String::from_utf8_lossy(&output.stdout);
-            let err = String::from_utf8_lossy(&output.stderr);
+            let out = String::from_utf8_lossy(&stdout);
+            let err = String::from_utf8_lossy(&stderr);
             assert!(
                 out.contains("applied:"),
                 "una aplicación cancelada TIENE informe: stdout={out}"
@@ -490,9 +545,23 @@ fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
                 "lo aplicado hasta el corte NO es un destino limpio: stderr={err}"
             );
         }
-        Some(1 | 0) => {
-            // Carrera legítima: el apply terminó (o no había nada que
-            // aplicar) antes de que la señal llegara.
+        // Carrera legítima QUE TAMBIÉN SE COMPRUEBA: el apply terminó antes de
+        // que la señal llegara. Entonces terminó DEL TODO — un `0` con la
+        // mitad de los ficheros sería una aplicación que mintió sobre su
+        // desenlace, y este brazo era el sitio donde eso pasaba inadvertido.
+        Some(0) => {
+            let copiados = std::fs::read_dir(&dst).expect("leer dst").count();
+            assert_eq!(
+                copiados, 400,
+                "salió 0 (completo) con {copiados} de 400 ficheros en el destino"
+            );
+        }
+        Some(1) => {
+            let err = String::from_utf8_lossy(&stderr);
+            assert!(
+                !err.contains("destination clean"),
+                "un fallo tampoco deja «destino limpio»: stderr={err}"
+            );
         }
         other => panic!("código de salida inesperado tras SIGINT: {other:?}"),
     }
