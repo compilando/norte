@@ -1367,6 +1367,24 @@ fn total_steps(counts: &SyncCounts) -> u64 {
         .saturating_add(counts.unknown_kind)
 }
 
+/// How many step BODIES a frontend keeps while a plan streams in (#196).
+///
+/// The wire caps a batch
+/// ([`SYNC_STEPS_MAX_BATCH`](norte_proto::methods::SYNC_STEPS_MAX_BATCH)) and
+/// the `include` of a
+/// report, but NOT the number of steps a plan streams: a `Mirror` over a
+/// hostile —or merely enormous— remote tree is as many steps as it has
+/// entries, and each one carries two relative paths. Held whole, that is
+/// unbounded client memory, and in the GUI it is also a render tree.
+///
+/// What the cap does NOT touch is any number the human decides on: the
+/// counters, the integrity verdict and the confirmation are all incremental
+/// over EVERY step that arrives, capped or not. What is lost is the tail of
+/// the LIST, which is a display concern — nobody reads step 200 000 — and the
+/// plan itself never left the daemon's spool anyway: `sync.apply` sends a
+/// hash, not steps.
+pub const PLAN_STEPS_RETAINED_MAX: usize = 20_000;
+
 /// A plan being received: the steps so far, and what they add up to.
 ///
 /// The counters are summed with [`SyncCounts::add`] — the same function the
@@ -1380,11 +1398,17 @@ pub struct Planning {
     counts: SyncCounts,
     unreadable: u64,
     malformed: u64,
-    /// Ids seen so far, to catch a repeat as it arrives rather than
-    /// re-scanning the whole plan at close (#194).
-    seen_ids: std::collections::HashSet<u64>,
-    /// How many steps arrived with an id [`Self::seen_ids`] already had.
+    /// The highest id seen so far. The wire says a step's id is MONOTONIC
+    /// within one plan, so the maximum is all it takes to catch a repeat as it
+    /// arrives (#194) — and it takes eight bytes instead of a set that grows
+    /// with the plan, which is the other half of #196.
+    max_id: Option<u64>,
+    /// How many steps arrived with an id that did not advance past
+    /// [`Self::max_id`]: a repeat, or an order the wire forbids.
     duplicate_ids: u64,
+    /// Steps counted but NOT retained, because
+    /// [`PLAN_STEPS_RETAINED_MAX`] was already reached.
+    dropped: u64,
 }
 
 impl Planning {
@@ -1427,11 +1451,23 @@ impl Planning {
             }
             // #194: the daemon is not trusted to hand out unique ids any more
             // than it is trusted to hand out consistent shapes above — a
-            // repeat is counted the same incremental way, across batches.
-            if !self.seen_ids.insert(step.id) {
+            // repeat is counted the same incremental way, across batches. The
+            // maximum is enough because the id is monotonic BY CONTRACT: an id
+            // that repeats an earlier one cannot be above the maximum, so
+            // every repeat is caught, and a non-monotonic id that repeats
+            // nothing is a broken contract counted under the same heading.
+            if self.max_id.is_some_and(|max| step.id <= max) {
                 self.duplicate_ids = self.duplicate_ids.saturating_add(1);
+            } else {
+                self.max_id = Some(step.id);
             }
-            self.steps.push(step);
+            // #196: past the cap the step is COUNTED and dropped. Everything
+            // the human decides on was already folded in above.
+            if self.steps.len() < PLAN_STEPS_RETAINED_MAX {
+                self.steps.push(step);
+            } else {
+                self.dropped = self.dropped.saturating_add(1);
+            }
         }
     }
 
@@ -1441,16 +1477,26 @@ impl Planning {
         &self.steps
     }
 
-    /// How many steps arrived.
+    /// How many steps arrived — retained or dropped by
+    /// [`PLAN_STEPS_RETAINED_MAX`]. It is what the human is told is arriving,
+    /// so it counts what arrived, not what is still in the `Vec`.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.steps.len()
+        self.steps
+            .len()
+            .saturating_add(usize::try_from(self.dropped).unwrap_or(usize::MAX))
+    }
+
+    /// How many steps were counted but not retained.
+    #[must_use]
+    pub fn dropped(&self) -> u64 {
+        self.dropped
     }
 
     /// Whether nothing has arrived yet.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.steps.is_empty()
+        self.steps.is_empty() && self.dropped == 0
     }
 }
 
@@ -1462,6 +1508,8 @@ pub struct SyncPlan {
     integrity: PlanIntegrity,
     unreadable: u64,
     selected: Option<u64>,
+    /// Steps counted but not retained ([`PLAN_STEPS_RETAINED_MAX`], #196).
+    dropped: u64,
 }
 
 impl SyncPlan {
@@ -1475,6 +1523,15 @@ impl SyncPlan {
     #[must_use]
     pub fn counts(&self) -> &SyncCounts {
         &self.done.counts
+    }
+
+    /// How many steps were counted but NOT retained
+    /// ([`PLAN_STEPS_RETAINED_MAX`], #196), so a pane can say that the list it
+    /// is painting stops before the plan does. The counters, the integrity
+    /// verdict and the confirmation cover every step; only the list is cut.
+    #[must_use]
+    pub fn dropped(&self) -> u64 {
+        self.dropped
     }
 
     /// Which trash the destination has — the fact every claim here is a
@@ -1698,6 +1755,19 @@ impl SyncPlan {
                 &[("n", &steps.to_string())],
             )),
             PlanIntegrity::Contradictory => lines.push(t_in(lang, "sync-summary-contradictory")),
+        }
+        // #196: the list stops before the plan does. Said out loud, because a
+        // list that ends without saying so reads as the whole plan — and the
+        // steps it hides are as approvable as the ones it shows.
+        if self.dropped > 0 {
+            lines.push(ta_in(
+                lang,
+                "sync-summary-list-truncated",
+                &[
+                    ("shown", &self.steps.len().to_string()),
+                    ("hidden", &self.dropped.to_string()),
+                ],
+            ));
         }
         if !self.done.executable {
             lines.push(ta_in(
@@ -1943,6 +2013,7 @@ impl SyncState {
             integrity,
             unreadable: planning.unreadable,
             selected,
+            dropped: planning.dropped,
         });
         true
     }
@@ -2538,7 +2609,11 @@ pub fn status_line(view: &SyncView, lang: Lang) -> String {
             SyncState::Planning(p) => p.len(),
             _ => 0,
         },
-        |p| p.steps().len(),
+        |p| {
+            p.steps()
+                .len()
+                .saturating_add(usize::try_from(p.dropped()).unwrap_or(usize::MAX))
+        },
     );
     let n = n.to_string();
     match (&view.state, view.run) {
@@ -3923,6 +3998,70 @@ mod tests {
         let plan = ready(vec![broken], DestTrash::Restorable);
         assert_eq!(plan.integrity(), PlanIntegrity::Malformed { steps: 1 });
         assert!(!plan.can_approve());
+    }
+
+    /// #196: a plan bigger than the retention cap is COUNTED whole and
+    /// RETAINED in part. Everything the human decides on — the counters, the
+    /// integrity verdict, the confirmation — comes from the counting half, so
+    /// the plan still closes `Complete`; what stops is the list.
+    #[test]
+    fn un_plan_por_encima_del_tope_se_cuenta_entero_y_se_retiene_en_parte() {
+        let de_mas = 5usize;
+        let steps: Vec<SyncStep> = (0..PLAN_STEPS_RETAINED_MAX + de_mas)
+            .map(|i| step(i as u64, SyncStepKind::Copy, DestTrash::Restorable))
+            .collect();
+        let plan = ready(steps, DestTrash::Restorable);
+        assert_eq!(
+            plan.steps().len(),
+            PLAN_STEPS_RETAINED_MAX,
+            "no se retiene más de lo pactado"
+        );
+        assert_eq!(plan.dropped(), de_mas as u64);
+        assert_eq!(
+            plan.counts().copy,
+            (PLAN_STEPS_RETAINED_MAX + de_mas) as u64,
+            "los contadores los ve TODOS"
+        );
+        assert_eq!(
+            plan.integrity(),
+            PlanIntegrity::Complete,
+            "el recorte no es un desacuerdo con el daemon"
+        );
+        assert!(plan.can_approve());
+        // Y se dice: una lista que acaba sin avisar se lee como el plan entero.
+        let resumen = plan.summary_lines(Lang::En).join("\n");
+        assert!(
+            resumen.contains(&de_mas.to_string()),
+            "el resumen nombra lo que no lista: {resumen}"
+        );
+    }
+
+    /// El otro medio de #196: el rastro de ids es de tamaño CONSTANTE (el
+    /// máximo visto), no un conjunto que crece con el plan — y sigue cazando
+    /// la repetición que motivó #194, incluso lejos del original.
+    #[test]
+    fn un_id_repetido_lejos_del_original_sigue_cazandose() {
+        let mut steps: Vec<SyncStep> = (0..50)
+            .map(|i| step(i, SyncStepKind::Copy, DestTrash::Restorable))
+            .collect();
+        steps.push(step(0, SyncStepKind::Copy, DestTrash::Restorable));
+        let plan = ready(steps, DestTrash::Restorable);
+        assert_eq!(plan.integrity(), PlanIntegrity::DuplicateIds { steps: 1 });
+        assert!(!plan.can_approve());
+    }
+
+    /// Y un id que no repite nada pero TAMPOCO avanza —el wire dice que el id
+    /// es monótono dentro de un plan— cae bajo el mismo veredicto: es la misma
+    /// promesa rota, y el panel ancla su cursor a ese id.
+    #[test]
+    fn un_id_que_no_avanza_cuenta_igual_aunque_no_repita() {
+        let steps = vec![
+            step(0, SyncStepKind::Copy, DestTrash::Restorable),
+            step(9, SyncStepKind::Copy, DestTrash::Restorable),
+            step(4, SyncStepKind::Copy, DestTrash::Restorable),
+        ];
+        let plan = ready(steps, DestTrash::Restorable);
+        assert_eq!(plan.integrity(), PlanIntegrity::DuplicateIds { steps: 1 });
     }
 
     /// #194: two steps sharing an id refuse the plan, the same way a

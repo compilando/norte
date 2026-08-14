@@ -769,7 +769,8 @@ sync-summary-unreadable = { $n } entries could not be read: neither they nor any
 sync-summary-mismatch = { $received } steps arrived and the plan says { $n }: this plan cannot be approved
 sync-summary-unnameable = { $n } steps are of a kind this version cannot show: this plan cannot be approved
 sync-summary-malformed = { $n } steps contradict themselves: this plan cannot be approved
-sync-summary-duplicate-ids = { $n } steps repeat an id already used by an earlier one: this plan cannot be approved
+sync-summary-duplicate-ids = { $n } steps carry an id that does not advance past an earlier one: this plan cannot be approved
+sync-summary-list-truncated = the list shows the first { $shown } steps; { $hidden } more are counted but not listed
 # The classes add up and a number the dialog leads with does not.
 sync-summary-contradictory = the plan's own totals do not match the steps it sent: this plan cannot be approved
 # Blockers are never filtered by the selection, so this is about the whole
