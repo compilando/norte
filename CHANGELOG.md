@@ -654,6 +654,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **One invalid byte in a name disabled its whole collision key.** The
+  filename comparison shared by `fs.compare` and batch rename ran
+  `str::from_utf8` over the ENTIRE name and gave up on normalising or folding
+  it the moment a single byte was not valid UTF-8 — so a name that is
+  99% ordinary text with one stray byte (a truncated encoding, a copy from a
+  mixed-locale volume) skipped both NFC and case folding entirely. `CAFÉ`
+  (NFC) plus a trailing invalid byte and its NFD twin plus the same trailing
+  byte therefore answered two different keys instead of one: `fs.compare`
+  would have reported them as two unrelated files, and batch rename would
+  have missed the collision between them. The text ahead of an invalid byte
+  now folds and normalises on its own; only the bytes that are not text pass
+  through untouched (#154).
+
 - **A name containing `↔` could spoof the pair in the terminal's comparison
   pane.** The block title joined both roots into one string —
   `left ↔ right` — and `↔` is an ordinary printable character: it is not a

@@ -7,32 +7,22 @@
 //! conversión con pérdida — un nombre que no es UTF-8 no es texto, y se
 //! empareja por sus bytes.
 //!
-//! Dos transformaciones, en este orden:
-//!
-//! 1. **Plegado de caja**, cuando *alguno* de los dos lados no declara
-//!    [`CapabilityFlags::CASE_SENSITIVE`]. Un lado que no distingue caja no
-//!    puede tener a la vez `README` y `readme`, así que emparejar CONTRA él es
-//!    plegar — aunque el otro lado sea ext4. Es plegado de caja DE VERDAD
-//!    (`to_lowercase` + `fold_delta`), no un `to_lowercase` a secas: ver la
-//!    nota de `fold_delta` (privado, por eso sin enlace).
-//! 2. **NFC**, cuando los bytes son UTF-8 válido. macOS reparte NFD y Linux
-//!    NFC; el mismo fichero copiado entre los dos tiene que emparejar.
-//!
-//! **El orden no es negociable, y no es el que dice el plan.** Plegar y
-//! DESPUÉS normalizar es el único orden que funciona: `J`+`◌̌` no tiene
-//! mayúscula precompuesta —NFC lo deja decompuesto— y su minúscula `j`+`◌̌` sí
-//! compone a `ǰ` (U+01F0). Normalizar primero y plegar después contesta DOS
-//! claves para dos nombres que todo volumen sin distinción de caja llama UNO.
-//! Lo fija la pareja del corpus `nfd_uppercase_composed_only_lowercase` /
-//! `precomposed_lowercase_j_caron`.
-
+//! El propio plegado — el delta de `fold_delta`, el orden plegar-y-DESPUÉS-
+//! normalizar, y qué pasa con un nombre que no es UTF-8 — vive en
+//! [`norte_encoding::name_key`] (ADR 0051, #151): este módulo era una segunda
+//! copia de esa función, y la copia llegó a divertir una vez (`key_for` envió
+//! la clave pre-#129 durante todo un ciclo de release, sin nada que lo
+//! comparase). Lo que este módulo aporta por encima es lo que es DE la
+//! comparación y no del texto: [`Sides`] decide si la pareja pliega a partir
+//! de las [`Capabilities`] de los dos lados, y [`SideIndex`] indexa un
+//! listado por su clave y separa lo que empareja de lo que colisiona.
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
+use norte_encoding::FoldMode;
 use norte_proto::Segment;
 use norte_proto::methods::CompareReason;
 use norte_vfs::{Capabilities, CapabilityFlags, Entry};
-use unicode_normalization::{UnicodeNormalization, is_nfc};
 
 /// Cómo empareja LA PAREJA de lados, que no es lo mismo que cómo es cada uno.
 ///
@@ -134,108 +124,19 @@ impl PairKey<'_> {
     }
 }
 
-/// La diferencia enumerable entre pasar a minúsculas y PLEGAR CAJA.
-///
-/// **Copia literal de `norte_core::rename::plan::fold_delta`**, cuyo rustdoc
-/// tiene la derivación completa: los 22 code points en los que un grupo de
-/// case folding simple de `CaseFolding.txt` NO comparte `to_lowercase`. La
-/// copia no es un despiste: `norte-core` es AGPL y los dos sitios naturales
-/// para compartirlo (`norte-vfs`, `norte-encoding`) son MIT/Apache, así que
-/// moverlo relicencia código ajeno y además cambia el grafo de dependencias —
-/// dos decisiones de ADR. Está pedido en
-/// <https://github.com/compilando/norte/issues/151>, y hasta que se resuelva
-/// esta tabla y aquella tienen que cambiar a la vez.
-///
-/// Por qué hace falta: un filesystem que no distingue caja pliega con case
-/// FOLDING, y `str::to_lowercase` es un MAPEO a minúsculas. Coinciden en casi
-/// todo y difieren justo aquí — y sin esta tabla, `ΟΔΟΣ` y `οδοσ` (que APFS,
-/// NTFS y un directorio ext4 `+F` llaman UN fichero) salen como dos claves,
-/// o sea dos filas `OnlyLeft`/`OnlyRight` que un plan de sincronización
-/// copiaría una encima de la otra (#129, revisión de C2–C5).
-///
-/// NO alcanza a los pliegues que EXPANDEN (`ß`→`ss`, `ﬆ`→`st`): `char → char`
-/// no puede alargar un nombre. Es un hueco real en ext4/f2fs `+F` y ACEPTADO,
-/// no silencioso — lo fija la pareja `ext4_full_fold_es_zett`/
-/// `ext4_full_fold_ss` del corpus, y lo sigue <https://github.com/compilando/norte/issues/145>.
-const fn fold_delta(c: char) -> char {
-    match c {
-        // GREEK SMALL LETTER FINAL SIGMA -> SIGMA. `to_lowercase` aplica la
-        // regla contextual `Final_Sigma`; el plegado de caja no distingue
-        // posición.
-        '\u{03C2}' => '\u{03C3}',
-        // MICRO SIGN -> GREEK SMALL LETTER MU. Unicode ya llama minúscula a
-        // U+00B5, así que `to_lowercase` lo deja quieto.
-        '\u{00B5}' => '\u{03BC}',
-        // LATIN SMALL LETTER LONG S -> s.
-        '\u{017F}' => 's',
-        // LATIN SMALL LETTER LONG S WITH DOT ABOVE -> S WITH DOT ABOVE.
-        '\u{1E9B}' => '\u{1E61}',
-        // Las variantes «símbolo» griegas, cada una a su minúscula ordinaria:
-        // beta, theta, kappa, pi, rho, épsilon lunar, phi.
-        '\u{03D0}' => '\u{03B2}',
-        '\u{03D1}' => '\u{03B8}',
-        '\u{03F0}' => '\u{03BA}',
-        '\u{03D6}' => '\u{03C0}',
-        '\u{03F1}' => '\u{03C1}',
-        '\u{03F5}' => '\u{03B5}',
-        '\u{03D5}' => '\u{03C6}',
-        // U+1C80..=U+1C88: cirílico histórico, cada uno a la minúscula
-        // ordinaria de la que es variante. Dos caen en la MISMA letra: plegar
-        // es muchos-a-uno, no es un error.
-        '\u{1C80}' => '\u{0432}',
-        '\u{1C81}' => '\u{0434}',
-        '\u{1C82}' => '\u{043E}',
-        '\u{1C83}' => '\u{0441}',
-        '\u{1C84}' | '\u{1C85}' => '\u{0442}',
-        '\u{1C86}' => '\u{044A}',
-        '\u{1C87}' => '\u{0463}',
-        '\u{1C88}' => '\u{A64B}',
-        // COMBINING GREEK YPOGEGRAMMENI -> GREEK SMALL LETTER IOTA. Su
-        // hermano U+1FBE no está: decompone canónicamente a U+03B9 él solo,
-        // así que el NFC posterior ya lo reescribe.
-        '\u{0345}' => '\u{03B9}',
-        // LATIN SMALL LIGATURE LONG S T -> LATIN SMALL LIGATURE ST. La única
-        // ligadura con pliegue SIMPLE de un solo code point.
-        '\u{FB05}' => '\u{FB06}',
-        other => other,
-    }
-}
-
-/// ¿Cambia algo plegar la caja de `s`? Sin alocar: compara el iterador de
-/// caracteres plegados contra el original. Cubre las expansiones de más de un
-/// carácter (`İ` → `i`+`◌̇`) y los titlecase (`ǅ` → `ǆ`), que
-/// `char::is_uppercase` no ve.
-///
-/// Mira `char::to_lowercase` y no `str::to_lowercase` a propósito, y por eso
-/// mira también [`fold_delta`]: `str::to_lowercase` lleva la regla contextual
-/// `Final_Sigma` y el de `char` no, así que un `ΟΔΟΣ` se detecta por su `Σ`
-/// —mayúscula en cualquier contexto— y un `οδοσ`, que no cambia al bajar de
-/// caja pero SÍ al plegar (`ς`→`σ` no aplica, pero `µ`→`μ` sí), se detecta por
-/// el delta. Sin la segunda mitad, el atajo se saltaría justo los nombres que
-/// [`fold_delta`] existe para pillar.
-fn folding_changes(s: &str) -> bool {
-    !s.chars()
-        .flat_map(char::to_lowercase)
-        .map(fold_delta)
-        .eq(s.chars())
-}
-
 /// La clave de emparejamiento de un nombre bajo unos [`Sides`].
 ///
+/// Delega en [`norte_encoding::name_key`] (ADR 0051, #151): esta función
+/// SOLO traduce `sides.fold_case` a un [`FoldMode`] — nunca
+/// [`FoldMode::Full`], que existe para ext4/f2fs `+F` (#145) pero nada de
+/// este motor sabe hoy si un directorio lo tiene, y encenderlo a ciegas sería
+/// peor que el hueco que cerraría.
+///
 /// Los bytes de entrada no se tocan: lo que sale es una clave, y el nombre
-/// sigue siendo el nombre.
-///
-/// Un nombre que NO es UTF-8 se empareja por sus bytes: ni se normaliza ni se
-/// pliega, **ni siquiera en ASCII**.
-///
-/// Plegar el ASCII de unos bytes que no son texto parece inofensivo y no lo es:
-/// en los encodings legacy de doble byte el byte de cola cae en 0x40–0x7E,
-/// donde viven `A`–`Z`. El corpus lo trae —`shift_jis_tesuto`, テスト, es
-/// `83 65 83 58 83 67`, y ese `58` es una `X`—, así que plegar convertiría ス
-/// en ベ: dos caracteres distintos, un emparejamiento falso y, con un plan de
-/// sincronización detrás, un fichero escrito encima de otro. Es además lo que
-/// hace `norte_core::rename::plan::name_key`, y las dos respuestas a «¿colisionan
-/// estos dos nombres?» tienen que ser la misma (#151).
+/// sigue siendo el nombre. Un nombre que NO es UTF-8 se empareja por sus
+/// bytes; ver el rustdoc de [`norte_encoding::name_key`] para qué pasa con un
+/// byte inválido que no es TODO el nombre (#154) y por qué un byte de cola
+/// Shift-JIS nunca se pliega como si fuera ASCII.
 ///
 /// ```
 /// use norte_compare::{Sides, key_for};
@@ -247,28 +148,12 @@ fn folding_changes(s: &str) -> bool {
 /// ```
 #[must_use]
 pub fn key_for(name: &[u8], sides: Sides) -> PairKey<'_> {
-    let Ok(text) = std::str::from_utf8(name) else {
-        // No es texto: no hay nada que normalizar ni que plegar. Ver la nota
-        // de arriba sobre los bytes de cola de Shift-JIS.
-        return PairKey(Cow::Borrowed(name));
-    };
-
-    let folded: Cow<'_, str> = if sides.fold_case && folding_changes(text) {
-        // `to_lowercase` y DESPUÉS el delta: el mapeo a minúsculas primero
-        // —que es donde está el 99% del trabajo— y encima la diferencia
-        // enumerable con el plegado de caja de verdad.
-        Cow::Owned(text.to_lowercase().chars().map(fold_delta).collect())
+    let mode = if sides.fold_case {
+        FoldMode::Simple
     } else {
-        Cow::Borrowed(text)
+        FoldMode::None
     };
-
-    if is_nfc(&folded) {
-        return match folded {
-            Cow::Borrowed(same) => PairKey(Cow::Borrowed(same.as_bytes())),
-            Cow::Owned(owned) => PairKey(Cow::Owned(owned.into_bytes())),
-        };
-    }
-    PairKey(Cow::Owned(folded.nfc().collect::<String>().into_bytes()))
+    PairKey(norte_encoding::name_key(name, mode))
 }
 
 /// Lo que [`index_side`] necesita de una entrada: los BYTES de su nombre.
@@ -522,18 +407,39 @@ mod tests {
 
     // ---- lo que los cuatro de arriba no fijan ----
 
-    /// La clave no muta los bytes: los presta cuando puede y los copia cuando
-    /// no, pero el nombre de entrada sigue siendo el que era (regla 1). Esto
-    /// es lo que hace legítimo emparejar por clave y pintar por bytes.
+    /// La clave nunca muta los bytes de ENTRADA (regla 1): `key_for` presta o
+    /// copia para construir la clave, pero `nombre` sigue siendo el que era.
+    /// Esto es lo que hace legítimo emparejar por clave y pintar por bytes.
+    ///
+    /// La CLAVE en sí, en cambio, sí pliega y normaliza el prefijo válido —
+    /// `CAFE`+U+0301 es texto UTF-8 de verdad, y el `\xff` que sigue no lo
+    /// invalida (#154): antes de la corrección, un solo byte roto al final
+    /// desactivaba el plegado del resto entero.
     #[test]
     fn la_clave_no_toca_los_bytes_del_nombre() {
         let nombre = b"CAFE\xcc\x81\xff";
         let clave = key_for(nombre, Sides::right_case_insensitive());
-        assert_eq!(clave.as_bytes(), nombre, "no es texto: sus propios bytes");
-        assert_eq!(nombre, b"CAFE\xcc\x81\xff", "el nombre no se ha tocado");
+        assert_eq!(
+            clave.as_bytes(),
+            "café"
+                .as_bytes()
+                .iter()
+                .chain(b"\xff")
+                .copied()
+                .collect::<Vec<u8>>(),
+            "el prefijo válido pliega y normaliza; el byte roto pasa tal cual",
+        );
+        assert_eq!(
+            nombre, b"CAFE\xcc\x81\xff",
+            "el nombre de ENTRADA no se ha tocado"
+        );
     }
 
-    /// Un nombre que no es UTF-8 NO se pliega, ni siquiera en ASCII.
+    /// Un nombre que no es UTF-8 EN NINGÚN PREFIJO no se pliega, ni siquiera
+    /// en ASCII — `ROTO\xff` sí pliega desde #154, porque `ROTO` es un
+    /// prefijo válido; ver `la_clave_no_toca_los_bytes_del_nombre` para esa
+    /// mitad. Esta prueba es la otra: cuando NO hay ni un byte de prefijo
+    /// válido, plegar sería el bug que #129 cerró.
     ///
     /// Parece inofensivo y no lo es: en los encodings legacy de doble byte el
     /// byte de cola cae donde viven `A`–`Z`. `shift_jis_tesuto` (テスト) es
@@ -544,7 +450,9 @@ mod tests {
     #[test]
     fn los_bytes_no_utf8_no_se_pliegan() {
         let mixto = Sides::left_case_insensitive();
-        assert_ne!(key_for(b"ROTO\xff", mixto), key_for(b"roto\xff", mixto));
+        // Prefijo válido: pliega. Ver #154 — un byte roto al final ya no
+        // desactiva el plegado del texto que sí lo es.
+        assert_eq!(key_for(b"ROTO\xff", mixto), key_for(b"roto\xff", mixto));
 
         let tesuto = corpus("shift_jis_tesuto");
         assert_eq!(

@@ -9,7 +9,11 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
-use unicode_normalization::{UnicodeNormalization, is_nfc};
+use norte_encoding::FoldMode;
+// Re-exported so a caller that used to reach `fold_delta` through this
+// module (ADR 0051, #151) still can: the primitive moved to `norte-encoding`,
+// the path did not have to.
+pub use norte_encoding::fold_delta;
 
 use super::naming::{TempNames, intent_tag, plan_hash};
 
@@ -152,119 +156,21 @@ impl RenamePlan {
     }
 }
 
-/// The delta between `str::to_lowercase` and simple case folding, applied
-/// to one `char`.
-///
-/// This is the DELTA, not case folding, and the set below was checked by
-/// EQUIVALENCE CLASS, not by comparing `to_lowercase(c)` to a fold table's
-/// literal target for each `c` in isolation — that cheaper check overcounts.
-/// It flags, for instance, every code point in Unicode 8.0's Cherokee
-/// lowercase block (`U+AB70..=U+ABBF`, 80 of them) and the six added
-/// alongside it (`U+13F8..=U+13FD`), because each one's `to_lowercase` output
-/// differs from `CaseFolding.txt`'s literal fold TARGET for it. But
-/// `to_lowercase` already merges each such pair correctly, just onto a
-/// DIFFERENT — and internally consistent — representative than case folding
-/// picks: `to_lowercase(U+13A0) == to_lowercase(U+AB70) == U+AB70`, so a
-/// collision key built from `to_lowercase` alone already treats them as one
-/// name, and none of the 86 code points in those two Cherokee ranges need an
-/// entry here. What actually needs checking is whether every member of a
-/// SIMPLE-case-folding group produces the SAME `to_lowercase` output as every
-/// other member; when it does not, THAT is the real, 22-code-point set below
-/// (verified by generating every such group from `CaseFolding.txt` and
-/// comparing `char::to_lowercase` across each group, not against memory or
-/// against the GitHub issue that first proposed this fix:
-/// <https://github.com/compilando/norte/issues/129>). Three more code points
-/// (`U+1FD3`, `U+1FE3`, `U+1FBE`) would also qualify by that same grouping,
-/// but each has a singleton canonical NFC decomposition (to `U+0390`,
-/// `U+03B0`, `U+03B9` respectively), so the earlier NFC pass in `name_key`
-/// has already rewritten it before `to_lowercase` ever runs — a codepoint
-/// with a canonical singleton decomposition can never survive NFC in ANY
-/// context, so none of the three need — or can even reach — an entry here.
-/// (An earlier version of this table kept `U+1FBE` in the match arm below
-/// alongside `U+0345` on the mistaken belief it was reachable; it never was,
-/// since NFC pre-empts it exactly like its two siblings here.)
-///
-/// It deliberately excludes anything that only has an EXPANDING full fold —
-/// `ß→ss`, `ﬁ→fi`, `ﬆ→st`, ligatures like `ﬃ`/`ﬄ`, all `CaseFolding.txt`
-/// status `F` with no `C`/`S` alternative — because `fold_delta: char -> char`
-/// cannot turn one name into a longer one. This is a real, currently-open gap
-/// on any filesystem whose OWN fold table is a FULL fold rather than a simple
-/// one: ext4/f2fs's optional case-insensitive `+F` feature casefolds with
-/// `C + F` (per the kernel's `mkutf8data` generator), so `straße.txt` and
-/// `strasse.txt` collide there and not here. APFS, HFS+, NTFS and SMB fold
-/// simple, so this delta is complete for them. Tracked as a follow-up rather
-/// than fixed here, since fixing it changes `name_key`'s return type from "a
-/// key the same length as the input" to "a key that can grow", which is a
-/// different, larger change: <https://github.com/compilando/norte/issues/145>.
-/// The gap is pinned as an ACCEPTED one, not a silent one, by the corpus pair
-/// `ext4_full_fold_es_zett`/`ext4_full_fold_ss` in `norte-testkit`.
-///
-/// A `match` over `char` rather than a `HashMap`: the set is closed and this
-/// runs on every name in every plan, so the compiler gets to turn it into a
-/// jump table.
-const fn fold_delta(c: char) -> char {
-    match c {
-        // GREEK SMALL LETTER FINAL SIGMA -> SIGMA. `to_lowercase` applies the
-        // Final_Sigma context rule and produces this in WORD-FINAL position;
-        // case folding does not distinguish position at all.
-        '\u{03C2}' => '\u{03C3}',
-        // MICRO SIGN -> GREEK SMALL LETTER MU. `to_lowercase` leaves U+00B5
-        // alone: Unicode already calls it lowercase.
-        '\u{00B5}' => '\u{03BC}',
-        // LATIN SMALL LETTER LONG S -> s.
-        '\u{017F}' => 's',
-        // LATIN SMALL LETTER LONG S WITH DOT ABOVE -> S WITH DOT ABOVE.
-        '\u{1E9B}' => '\u{1E61}',
-        // The Greek "symbol" variants, each onto its ordinary lowercase
-        // letter: beta, theta, kappa, pi, rho, lunate epsilon, phi.
-        '\u{03D0}' => '\u{03B2}',
-        '\u{03D1}' => '\u{03B8}',
-        '\u{03F0}' => '\u{03BA}',
-        '\u{03D6}' => '\u{03C0}',
-        '\u{03F1}' => '\u{03C1}',
-        '\u{03F5}' => '\u{03B5}',
-        '\u{03D5}' => '\u{03C6}',
-        // U+1C80..=U+1C88: historic Cyrillic letterforms (Unicode 9's
-        // "Cyrillic Extended-C" small letters), each onto the ordinary
-        // lowercase Cyrillic letter it is a stylistic variant of. Two of
-        // them (U+1C84 TALL TE and U+1C85 THREE-LEGGED TE) fold onto the
-        // SAME ordinary letter — that is not a bug, folding is many-to-one.
-        '\u{1C80}' => '\u{0432}',
-        '\u{1C81}' => '\u{0434}',
-        '\u{1C82}' => '\u{043E}',
-        '\u{1C83}' => '\u{0441}',
-        '\u{1C84}' | '\u{1C85}' => '\u{0442}',
-        '\u{1C86}' => '\u{044A}',
-        '\u{1C87}' => '\u{0463}',
-        '\u{1C88}' => '\u{A64B}',
-        // COMBINING GREEK YPOGEGRAMMENI -> GREEK SMALL LETTER IOTA. Its
-        // sibling GREEK PROSGEGRAMMENI (U+1FBE) is NOT here: it canonically
-        // decomposes to U+03B9 by itself, so NFC (which runs before this
-        // function, see `name_key`) already rewrites it — an entry for it
-        // would be unreachable dead code, the same reason U+1FD3/U+1FE3 are
-        // absent (see this function's rustdoc).
-        '\u{0345}' => '\u{03B9}',
-        // LATIN SMALL LIGATURE LONG S T -> LATIN SMALL LIGATURE ST. The only
-        // ligature with a single-codepoint SIMPLE fold at all — `CaseFolding
-        // .txt` carries BOTH `FB05; F; 0073 0074` (full fold, to "st") and
-        // `FB05; S; FB06` (simple fold, to U+FB06) as separate rows. `FB06`
-        // itself has only the `F` row, so it does not fold any further, and
-        // `to_lowercase(FB05) == FB05` while `to_lowercase(FB06) == FB06`:
-        // an actual equivalence-class mismatch, unlike the Cherokee ranges
-        // above.
-        '\u{FB05}' => '\u{FB06}',
-        other => other,
-    }
-}
-
 /// The key two names are compared by when deciding whether they COLLIDE.
 ///
-/// NFC when the name is valid UTF-8 — macOS hands out NFD and the same name
-/// typed elsewhere is NFC, and on APFS they are ONE file — plus a lowercase
-/// fold when the directory does not distinguish case, and then NFC once more,
-/// because folding can compose what normalising had left decomposed and the two
-/// steps do not commute. A name that is not UTF-8 is its own bytes: never
-/// normalised, never folded (hard rule 1).
+/// A thin wrapper over [`norte_encoding::name_key`] (ADR 0051, #151): the
+/// fold delta, the non-UTF-8 byte-passthrough and the fold-then-NFC order
+/// used to be duplicated here and in `norte-compare::key::key_for`, and the
+/// duplication drifted once already (#129's fix landed in one copy for a
+/// release). Both consumers already depended on `norte-encoding`
+/// (MIT OR Apache-2.0), so the primitive moved there instead of staying
+/// doubled; `norte-core` and `norte-compare` stay AGPL-3.0-only.
+///
+/// This function's own contract does not change: `caps.case_sensitive` picks
+/// [`FoldMode::None`] or [`FoldMode::Simple`] — never [`FoldMode::Full`], which
+/// exists in `norte-encoding` for ext4/f2fs `+F` (#145) but has nothing in
+/// this crate that probes for it yet, and switching it on for a directory
+/// nobody probed would be worse than the gap it would close.
 ///
 /// **This is the collision equality, not the "did anything change" equality**,
 /// and the planner deliberately uses two. Folded here, it can OVER-report on a
@@ -279,26 +185,6 @@ const fn fold_delta(c: char) -> char {
 /// towards a verdict is safe" is a claim about `plan_batch` and not about every
 /// caller of this function.
 ///
-/// **It used to UNDER-report too.** A filesystem folds case with case
-/// FOLDING; `str::to_lowercase` is a lowercase MAPPING, and the two agree on
-/// almost everything and diverge — by actual equivalence class, not by a
-/// per-code-point table lookup that overcounts — on 22 code points: Greek
-/// final sigma, `U+00B5` MICRO SIGN against `U+03BC`, `U+017F` long s, the
-/// Greek symbol variants, a handful of historic Cyrillic letters, `U+0345`,
-/// and the ligature `ﬅ` — where a case-insensitive volume says one file and
-/// `to_lowercase` alone said two. `fold_delta` closes that
-/// gap with the enumerable remap between `to_lowercase` and the second NFC
-/// pass below, and its own rustdoc has the exact set and how it was checked.
-/// Same shape as the bug the second NFC pass closes, fixed in the same
-/// place, tracked in
-/// <https://github.com/compilando/norte/issues/129>. It deliberately does NOT
-/// reach for full case folding's *expansions* (`ß→ss`, `ﬁ→fi`, `ﬆ→st`): that
-/// is a real, currently-open gap on filesystems whose own fold table also
-/// expands (ext4/f2fs `+F`, tracked in
-/// <https://github.com/compilando/norte/issues/145>), not a boundary every
-/// filesystem shares — see `fold_delta`'s rustdoc for why it is out of scope
-/// HERE rather than simply absent.
-///
 /// Whether a step is a no-op is decided on RAW BYTES instead
 /// ([`plan_batch`]), because there the failure mode is the opposite one:
 /// silently not doing the work that was asked for. Do not unify them.
@@ -309,50 +195,18 @@ const fn fold_delta(c: char) -> char {
 /// use norte_core::rename::plan::{NameCaps, name_key};
 /// let insensitive = NameCaps { case_sensitive: false };
 /// assert_eq!(name_key(b"Foo", insensitive).as_ref(), b"foo");
-/// // Not UTF-8: its own bytes, whatever the directory says about case.
-/// assert_eq!(name_key(b"A\xff", insensitive).as_ref(), b"A\xff");
+/// // A trailing byte that is not UTF-8 stays byte for byte, but no longer
+/// // disables folding of the valid text ahead of it (#154).
+/// assert_eq!(name_key(b"A\xff", insensitive).as_ref(), b"a\xff");
 /// ```
 #[must_use]
 pub fn name_key(name: &[u8], caps: NameCaps) -> Cow<'_, [u8]> {
-    let Ok(s) = std::str::from_utf8(name) else {
-        return Cow::Borrowed(name);
-    };
-    let nfc: Cow<'_, str> = if is_nfc(s) {
-        Cow::Borrowed(s)
+    let mode = if caps.case_sensitive {
+        FoldMode::None
     } else {
-        Cow::Owned(s.nfc().collect::<String>())
+        FoldMode::Simple
     };
-    // An all-ASCII name with no uppercase byte already folds to itself; anything
-    // else has to be asked, because `to_lowercase` moves more than the letters
-    // `char::is_uppercase` admits to (titlecase digraphs, for one).
-    let needs_fold =
-        !caps.case_sensitive && (!nfc.is_ascii() || nfc.bytes().any(|b| b.is_ascii_uppercase()));
-    if needs_fold {
-        // NFC AGAIN, and it is not belt-and-braces: folding can COMPOSE what
-        // normalising had left decomposed, so the two do not commute and one
-        // pass is not a fixed point. `J`+U+030C has no precomposed uppercase —
-        // NFC leaves it alone — and its lowercase `j`+U+030C composes to U+01F0
-        // `ǰ`. Stopping at `to_lowercase` answers two keys for two names every
-        // case-insensitive volume calls ONE file, which under batch rename is
-        // a missing collision and a `rename` onto an occupied name. Pinned by
-        // `folding_case_can_recompose_so_the_key_normalises_again` against the
-        // corpus pair.
-        let lowered = nfc.to_lowercase();
-        // The enumerable delta between a lowercase MAPPING and case FOLDING
-        // (#129) — applied here, after `to_lowercase` and before the second
-        // NFC pass, so the recomposition check below sees the folded result
-        // and not the merely-lowercased one.
-        let folded: String = lowered.chars().map(fold_delta).collect();
-        return Cow::Owned(if is_nfc(&folded) {
-            folded.into_bytes()
-        } else {
-            folded.nfc().collect::<String>().into_bytes()
-        });
-    }
-    match nfc {
-        Cow::Borrowed(_) => Cow::Borrowed(name),
-        Cow::Owned(o) => Cow::Owned(o.into_bytes()),
-    }
+    norte_encoding::name_key(name, mode)
 }
 
 /// A pair that survived classification and is real work.
@@ -1355,9 +1209,12 @@ mod tests {
         assert_eq!(name_key(nfd, SENSITIVE).as_ref(), "café".as_bytes());
         assert_eq!(name_key(b"Foo", SENSITIVE).as_ref(), b"Foo");
         assert_eq!(name_key(b"Foo", INSENSITIVE).as_ref(), b"foo");
-        // Not UTF-8: no NFC, no fold, whatever the directory says.
-        let hostile = b"CAF\xff";
-        assert_eq!(name_key(hostile, INSENSITIVE).as_ref(), hostile);
+        // A trailing invalid byte no longer disables folding of the valid
+        // LEADING run (#154) — only the byte itself, which is not text,
+        // passes through untouched.
+        assert_eq!(name_key(b"CAF\xff", INSENSITIVE).as_ref(), b"caf\xff");
+        // Fully non-UTF-8: no valid run at all, so nothing folds.
+        assert_eq!(name_key(b"\xff\xfe", INSENSITIVE).as_ref(), b"\xff\xfe");
         // A capital outside ASCII folds too — and to two code points, which is
         // why the ASCII shortcut cannot be the whole answer.
         assert_eq!(
@@ -1496,15 +1353,18 @@ mod tests {
             name_key("ι".as_bytes(), INSENSITIVE),
         );
         // GREEK PROSGEGRAMMENI (U+1FBE) reaches the same key by a DIFFERENT
-        // route: it canonically decomposes to U+03B9 by itself, so `name_key`
-        // 's first NFC pass rewrites it before `fold_delta` ever sees it —
-        // `fold_delta` carries no arm for it, and none is needed. This
-        // asserts the `name_key`-level guarantee, not `fold_delta` coverage.
+        // route: `fold_delta` sees it (it runs on the RAW input, before NFC —
+        // ADR 0051's unified order) and has no arm for it, and none is
+        // needed, because it canonically decomposes to U+03B9 by itself —
+        // `name_key`'s CLOSING NFC pass rewrites it AFTER folding, not
+        // before. This asserts the `name_key`-level guarantee, not
+        // `fold_delta` coverage.
         assert_eq!(
             fold_delta('\u{1FBE}'),
             '\u{1FBE}',
-            "no arm for it, and there must never be one: it is unreachable \
-             from name_key, which rewrites it via NFC before fold_delta runs",
+            "no arm for it, and there must never be one: name_key's closing \
+             NFC pass decomposes it to U+03B9 whether or not fold_delta \
+             touched it first",
         );
         assert_eq!(
             name_key("\u{1FBE}".as_bytes(), INSENSITIVE),

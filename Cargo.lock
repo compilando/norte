@@ -6237,6 +6237,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
+ "norte-encoding",
  "norte-proto",
  "norte-testkit",
  "norte-vfs",
@@ -6359,6 +6360,7 @@ dependencies = [
  "chardetng",
  "encoding_rs",
  "norte-testkit",
+ "unicode-normalization",
 ]
 
 [[package]]
