@@ -271,6 +271,21 @@ impl Pane {
         self.state.set_viewport_rows(rows);
     }
 
+    /// Deja la ventana lista para pintar `rows` filas — delegado puro a
+    /// [`norte_frontend::PaneState::reconcile_viewport`]. El run loop lo llama
+    /// ANTES de cada draw.
+    pub fn reconcile_viewport(&mut self, rows: usize) {
+        self.state.reconcile_viewport(rows);
+    }
+
+    /// La primera fila visible del listado — delegado puro a
+    /// [`norte_frontend::PaneState::viewport_offset`]. Lo leen el pintado y el
+    /// hit test del ratón, que tienen que ver la MISMA ventana.
+    #[must_use]
+    pub fn viewport_offset(&self) -> usize {
+        self.state.viewport_offset()
+    }
+
     /// Cuántas filas mueve una página en este pane (#124) — delegado puro a
     /// [`norte_frontend::PaneState::page_step`].
     #[must_use]

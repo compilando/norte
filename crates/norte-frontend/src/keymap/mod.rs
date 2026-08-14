@@ -2621,12 +2621,8 @@ keymap = [
         // `app.help` va en la lista a propósito aunque hoy lo tengan los
         // siete: es la que más se echa en falta cuando falta, y el test tiene
         // que decirlo antes que el usuario.
-        const IMPRESCINDIBLES: &[&str] = &[
-            "app.help",
-            "app.settings",
-            "app.extensions",
-            "app.palette",
-        ];
+        const IMPRESCINDIBLES: &[&str] =
+            &["app.help", "app.settings", "app.extensions", "app.palette"];
         let known = preset_commands(Screen::Browse);
         let known: Vec<&str> = known.iter().map(String::as_str).collect();
         for name in presets::NAMES {

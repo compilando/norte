@@ -2584,6 +2584,13 @@ async fn run(
             );
             app.refresh_help(ancho, alto);
         }
+        // La ventana de cada pane se reconcilia ANTES de pintar (#124 + el
+        // scroll pegajoso): el cursor ya está donde lo dejó la tecla, así que
+        // esto decide qué filas se ven y el draw las pinta. Hacerlo DESPUÉS
+        // costaba un frame de retraso — el cursor podía caer fuera de la
+        // ventana pintada, o sea desaparecer de la pantalla justo al llegar
+        // al borde.
+        ui::before_frame(app, terminal.size()?.height);
         // Exención puntual de la regla 2: el draw escribe la terminal de
         // control síncronamente (patrón async oficial de ratatui; acotado,
         // runtime multi-thread).
@@ -2596,10 +2603,10 @@ async fn run(
         // ahí en vez de constantes que mienten en cualquier terminal que no
         // mida justo eso. Con el visor abierto son 0 filas (ningún pane
         // pintado) y el modelo vuelve a sus fallbacks.
-        let filas = usize::from(ui::pane_list_rows(app, pintado.area.height));
-        for pane in &mut app.panes {
-            pane.set_viewport_rows(filas);
-        }
+        // El alto REAL del frame que se acaba de pintar: si la terminal cambió
+        // de tamaño entre `before_frame` y el draw, este es el bueno, y de él
+        // salen la paginación y el radio de la sonda de stat.
+        ui::before_frame(app, pintado.area.height);
         // MISMO trato para la geometría del ratón: el draw es quien sabe
         // dónde cayó cada pane y con qué scroll, así que la devuelve al
         // modelo y el hit test resuelve contra la pantalla que el usuario

@@ -115,6 +115,25 @@ fn list_offset(selected: Option<usize>, total: usize, height: u16) -> usize {
     selected.saturating_sub(height - 1)
 }
 
+/// Lo que hay que hacer al MODELO justo antes de pintar un frame de `height`
+/// filas: dejar la ventana de cada pane lista.
+///
+/// Va aquí y no suelto en el run loop porque los tests pintan por su cuenta y
+/// tienen que pasar por lo mismo — si esto vive solo en el bucle, un test
+/// pinta con una ventana que nadie reconcilió y comprueba una pantalla que
+/// ningún usuario ve.
+///
+/// ANTES del draw y no después: el cursor ya está donde lo dejó la tecla, así
+/// que esto decide qué filas se ven y el draw las pinta. Al revés costaba un
+/// frame de retraso, y el frame retrasado es justo el que el usuario mira
+/// cuando el cursor toca el borde.
+pub fn before_frame(app: &mut App, height: u16) {
+    let filas = usize::from(pane_list_rows(app, height));
+    for pane in &mut app.panes {
+        pane.reconcile_viewport(filas);
+    }
+}
+
 /// La geometría PINTADA de los dos panes en un frame de `area`, o `None`
 /// cuando este frame no pinta panes (visor abierto).
 ///
@@ -158,7 +177,6 @@ pub fn pane_geometry(app: &App, area: Rect) -> Option<[crate::mouse::PaneGeometr
         // search) NO consume filas — se pinta sobre el borde inferior.
         let inner_w = block.width.saturating_sub(2);
         let inner_h = block.height.saturating_sub(2);
-        let (painted, selected) = painted_len_and_selection(pane);
         // La cabecera de columnas se come la primera fila del interior.
         let list_rows = inner_h.saturating_sub(1);
         out[i] = crate::mouse::PaneGeometry {
@@ -172,7 +190,10 @@ pub fn pane_geometry(app: &App, area: Rect) -> Option<[crate::mouse::PaneGeometr
             } else {
                 list_rows
             },
-            offset: list_offset(selected, painted, list_rows),
+            // La ventana la decide el MODELO (pegajosa), y el hit test lee
+            // exactamente la misma que se pintó: deducirla aquí otra vez es
+            // como se resuelve un click contra la fila de al lado.
+            offset: pane.viewport_offset(),
         };
     }
     Some(out)
@@ -4205,15 +4226,16 @@ fn draw_pane(
     let list = List::new(items).highlight_style(theme.role(Role::Selection));
     let mut state = ListState::default();
     state.select(selected);
-    // Scroll EXPLÍCITO y no deducido por ratatui: el hit test del ratón
-    // resuelve contra esta misma fórmula ([`list_offset`]) y las dos deben
-    // salir del mismo sitio — ver su doc.
-    // `painted_len` y NO `items.len()`: el `filter_map` de arriba puede
-    // descartar un índice imposible del filtro, y entonces las dos cuentas
-    // discreparían — el hit test usa la de `painted_len_and_selection` y
-    // TODO click de ese pane caería desplazado, en silencio. Con la misma
-    // fuente, un índice imposible se ve como un hueco al pintar.
-    *state.offset_mut() = list_offset(selected, painted_len, list_area.height);
+    // Scroll EXPLÍCITO y no deducido por ratatui: la ventana es del MODELO
+    // (`PaneState::reconcile_viewport`, pegajosa) y el hit test del ratón lee
+    // esa misma, así que las dos salen del mismo sitio — deducirla dos veces
+    // es como un click acaba en la fila de al lado.
+    //
+    // El clamp contra `painted_len` sigue haciendo falta: el `filter_map` de
+    // arriba puede descartar un índice imposible del filtro, y una ventana
+    // más allá del final pintaría el listado vacío.
+    let _ = painted_len;
+    *state.offset_mut() = pane.viewport_offset().min(painted_len.saturating_sub(1));
     frame.render_stateful_widget(list, list_area, &mut state);
 }
 
