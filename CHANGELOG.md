@@ -654,6 +654,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A name containing `↔` could spoof the pair in the terminal's comparison
+  pane.** The block title joined both roots into one string —
+  `left ↔ right` — and `↔` is an ordinary printable character: it is not a
+  terminal hazard, so it was never masked and carried no badge. A directory
+  legally named `docs ↔ ⟨file⟩/home/victim/backup` therefore read as a
+  different pair of roots than the ones actually being compared. The same
+  join also let a long left root push the right one out of the title with no
+  `…` and no other sign that anything had been cut. Both roots are now built
+  and width-budgeted separately before either reaches the title, and the
+  separator is its own styled span, so an embedded `↔` stays inside its
+  root's half instead of being read as the boundary between the two (#185).
+
 - **Lowering the case of a name can re-spell it, and batch rename was not
   looking again.** When a directory does not distinguish upper from lower case,
   the batch planner compares names by normalising them and then folding the

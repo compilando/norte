@@ -29,6 +29,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use norte_proto::methods::RelPath;
 use norte_proto::{DeleteMode, VPath};
 
 use crate::journal::Actor;
@@ -135,22 +136,13 @@ impl Scope {
 }
 
 /// `true` si `path` está bajo `root` (mismo scheme+authority y los segmentos de
-/// `root` son PREFIJO de los de `path`). Byte-exacto (regla 1): compara
-/// segmentos crudos, jamás strings ni prefijo de wire (que confundiría `a`↔`ab`).
+/// `root` son PREFIJO de los de `path`). Delegado en [`RelPath::under`]
+/// (`norte-proto`), que hace la misma comparación byte-exacta por segmentos
+/// (regla dura 1) — es la única implementación desde #172. La raíz misma
+/// cuenta como contenida: un scope sobre `/a` cubre `/a`.
 #[must_use]
 pub fn is_under(root: &VPath, path: &VPath) -> bool {
-    if root.scheme() != path.scheme() || root.authority() != path.authority() {
-        return false;
-    }
-    let mut r = root.segments();
-    let mut p = path.segments();
-    loop {
-        match (r.next(), p.next()) {
-            (None, _) => return true, // root agotado → path == root o bajo él
-            (Some(rs), Some(ps)) if rs == ps => {}
-            _ => return false,
-        }
-    }
+    RelPath::under(root, path).is_some()
 }
 
 /// Resultado de la comprobación de frontera de scope.

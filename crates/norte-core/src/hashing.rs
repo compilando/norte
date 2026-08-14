@@ -11,6 +11,21 @@
 //! base de datos que ya existe en disco.** Cambiar un byte aquí invalida
 //! `verify_chain` en todos los journals ya escritos. Salieron de `journal.rs`
 //! sin tocar una línea y así tienen que seguir.
+//!
+//! # #174: `norte_sync::hash` tiene su PROPIA copia, a propósito
+//! `feed`/`feed_opt`/`hex_lower` están copiados —no compartidos— en
+//! `norte-sync/src/hash.rs`, byte a byte idénticos en comportamiento. No es
+//! descuido: `norte-sync` NO puede depender de este módulo porque es
+//! `pub(crate)` y además la dependencia va al revés (`norte-core` depende de
+//! `norte-sync`, no lo contrario), así que «extraer hacia arriba» no es un
+//! movimiento de código, y el sitio compartido natural (`norte-vfs`,
+//! `norte-encoding`) relicenciaría esto: este crate es AGPL-3.0-only, esos son
+//! MIT OR Apache-2.0. Es la misma frontera de licencia que #151 y quiere la
+//! misma ADR — hasta entonces, **esta copia es la que NO se mueve ni se
+//! reescribe**: es la cadena tamper-evident del journal (ADR 0023) y el ancla
+//! de la exportación de auditoría (ADR 0025), así que su framing no puede
+//! cambiar ni un byte sin invalidar todo `journal.db` ya escrito. La copia de
+//! `norte-sync` es libre de moverse el día que la ADR elija casa; esta no.
 
 use sha2::{Digest, Sha256};
 

@@ -1,7 +1,18 @@
-//! Corpus canónico de fixtures hostiles (spec §6.1/§12): 48 nombres de
-//! archivo + 11 contenidos detectables + 3 solo-forzables. TODO crate que toque paths o
-//! texto testea contra ESTE corpus — las fixtures nuevas entran aquí (regla
-//! de CLAUDE.md: test-first en bugs de encoding).
+//! Corpus canónico de fixtures hostiles (spec §6.1/§12): al menos 48 nombres
+//! de archivo + 11 contenidos detectables + 3 solo-forzables. TODO crate que
+//! toque paths o texto testea contra ESTE corpus — las fixtures nuevas entran
+//! aquí (regla de CLAUDE.md: test-first en bugs de encoding).
+//!
+//! Las cuentas son SUELOS (`>=`), no el número exacto (#169): antes se
+//! aserraba `== N` en dos sitios de este crate —la prueba de
+//! `tests/corpus.rs` y el doctest de [`hostile_names`]— que se ponían rojos
+//! en momentos DISTINTOS. `nextest` no corre doctests, así que añadir una
+//! fixture dejaba el segundo en rojo sin que `just t` lo viera; le pasó a
+//! `cause_join_spoof` (#161, fase C2), que no se supo hasta un `just ci`
+//! completo, dos rondas después. Un suelo no necesita tocarse al crecer el
+//! corpus —eso es justo lo que hace barata una fixture nueva— y sigue
+//! cazando el caso que la aserción existe para cazar: que alguien borre el
+//! corpus.
 
 use serde::Deserialize;
 
@@ -23,17 +34,12 @@ struct RawName {
     why: String,
 }
 
-/// Los 48 nombres hostiles canónicos.
-///
-/// La cuenta exacta se aserta AQUÍ y en `tests/corpus.rs`, y esas dos copias
-/// son la fricción que #169 describe: `nextest` no corre doctests, así que
-/// añadir una fixture deja ESTE en rojo y el gate no lo dice hasta `just ci`
-/// —le pasó a `cause_join_spoof` (#161, fase C2)—. Mientras #169 no lo
-/// rediseñe, quien añada un nombre cambia los dos.
+/// Los nombres hostiles canónicos: al menos 48 (#169 — el suelo no sube solo
+/// porque el corpus crezca).
 ///
 /// ```
 /// let names = norte_testkit::corpus::hostile_names();
-/// assert_eq!(names.len(), 48);
+/// assert!(names.len() >= 48, "{}", names.len());
 /// // Todos son segmentos VPath válidos (sin NUL ni `/`).
 /// for n in &names {
 ///     assert!(norte_proto::Segment::new(n.bytes.clone()).is_ok(), "{}", n.id);
@@ -53,6 +59,94 @@ pub fn hostile_names() -> Vec<HostileName> {
             why: r.why,
         })
         .collect()
+}
+
+/// Por qué dos nombres del corpus son la MISMA ortografía para efectos de
+/// emparejamiento (`norte-compare::key`), aunque sus bytes difieran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwinKind {
+    /// Misma forma Unicode NFC vs NFD del mismo texto — pareja incluso
+    /// comparando byte a byte con mayúsculas/minúsculas sensibles.
+    Normalization,
+    /// Mismo texto salvo un pliegue de mayúsculas SIMPLE (`char -> char`,
+    /// `CaseFolding.txt`), no `to_lowercase()`.
+    CaseFold,
+    /// Pliegue COMPLETO (`char -> chars`, puede alargar el nombre): solo
+    /// empareja en filesystems que casefoldean full (ext4/f2fs `+F`), no en
+    /// los que pliegan simple (APFS, NTFS) — hueco aceptado, ver #145.
+    CaseFoldFull,
+}
+
+/// Un par de nombres del corpus que son la misma ortografía.
+#[derive(Debug, Clone, Copy)]
+pub struct SpellingTwin {
+    /// El `id` del lado izquierdo en [`hostile_names`].
+    pub left: &'static str,
+    /// El `id` del lado derecho.
+    pub right: &'static str,
+    /// Por qué emparejan.
+    pub kind: TwinKind,
+}
+
+/// Los pares NFC/NFD y de pliegue de mayúsculas del corpus, por `id` — sin
+/// bytes hardcodeados de nuevo.
+///
+/// `norte-compare::key` es lo que estos pares prueban, y sus propios tests
+/// escribían `"café".as_bytes()` / `b"cafe\xcc\x81"` a mano en vez de leerlos
+/// de aquí (#169) — exactamente el mismo hardcodeo que un test exhaustivo de
+/// `dest_rel` habría repetido una tercera vez. Los IDs referenciados YA
+/// estaban en el corpus (#129 y auditorías de C2–C5); esta función es un
+/// ÍNDICE sobre ellos, no fixtures nuevas.
+///
+/// # Panics
+/// Nunca con el corpus commiteado: cada `id` referenciado se valida en
+/// tests.
+#[must_use]
+pub fn spelling_twins() -> Vec<SpellingTwin> {
+    vec![
+        // é NFC / é NFD (e + combining acute): la pareja de normalización
+        // base, sin ningún pliegue de por medio.
+        SpellingTwin {
+            left: "nfc_e_acute",
+            right: "nfd_e_acute",
+            kind: TwinKind::Normalization,
+        },
+        // ΟΔΟΣ / οδοσ: `str::to_lowercase` aplica Final_Sigma y da ς, que NO
+        // es el pliegue simple.
+        SpellingTwin {
+            left: "greek_uppercase_final_sigma",
+            right: "greek_medial_sigma_twin",
+            kind: TwinKind::CaseFold,
+        },
+        // µ (U+00B5 MICRO SIGN) / μ (U+03BC GREEK SMALL LETTER MU): Unicode
+        // ya llama minúscula al signo micro, así que `to_lowercase` no lo
+        // mueve — solo el pliegue lo hace.
+        SpellingTwin {
+            left: "micro_sign_mu",
+            right: "greek_mu_twin",
+            kind: TwinKind::CaseFold,
+        },
+        // ﬅ / ﬆ: la única ligadura con pliegue simple.
+        SpellingTwin {
+            left: "ligature_long_st",
+            right: "ligature_st",
+            kind: TwinKind::CaseFold,
+        },
+        // J+◌̌ (descompuesto) / ǰ (precompuesto): plegar RECOMPONE, así que
+        // el pliegue y la normalización van los dos a la vez.
+        SpellingTwin {
+            left: "nfd_uppercase_composed_only_lowercase",
+            right: "precomposed_lowercase_j_caron",
+            kind: TwinKind::CaseFold,
+        },
+        // straße.txt / strasse.txt: ß solo tiene pliegue COMPLETO (a "ss"),
+        // que expande — empareja en ext4 `+F` y no en APFS/NTFS (#145).
+        SpellingTwin {
+            left: "ext4_full_fold_es_zett",
+            right: "ext4_full_fold_ss",
+            kind: TwinKind::CaseFoldFull,
+        },
+    ]
 }
 
 /// Un contenido de archivo en un encoding no-UTF8.

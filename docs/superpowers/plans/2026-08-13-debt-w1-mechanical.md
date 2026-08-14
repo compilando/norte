@@ -16,22 +16,67 @@
   proved by the existing suite passing unedited — say so instead of adding a
   test that asserts nothing.
 - Model: cheap. Nothing here needs the largest.
-- Reviewers: none, **except #174**, which touches the journal's
-  tamper-evident chain → `security-reviewer` on that commit alone.
+- Reviewers: none **unless the diff reaches policy, journal or the wire** — and
+  you cannot know that from the issue title. #172 read as a three-copy dedup and
+  one of the three was `norte-core::policy::is_under`, the scope containment
+  check. It turned out sound (`RelPath::under` compares scheme and authority
+  before segments, and its one theoretical divergence fails CLOSED for a scope),
+  but "the existing suites pass unedited" is not proof for that file the way it
+  is for a UI helper. Look at the diff before deciding there is no reviewer.
+
+- **A change to a SHARED fixture is not scoped by the crate that owns it.**
+  `just t norte-testkit` is green while five consumers that loop over the corpus
+  are red. Whoever touches `norte-testkit/src/corpus` runs the consumers too —
+  `norte-vfs-archive`, `norte-vfs-local`, `norte-tui`, `norte-gui`, `norte-core`
+  — or hands the wave a known-unverified commit. This is the one place where the
+  "one agent, one crate cluster, `just t`" rule does not hold.
 
 **Branch:** `debt/w1-mechanical`
 
 | issue | crate(s) | what |
 | --- | --- | --- |
 | #172 | norte-core, norte-sync | three hand-written `is_at_or_under` → `RelPath::under(..).is_some()` |
-| #151 | norte-compare, norte-core | unify the filename collision key: `name_key`/`fold_delta` duplicated |
-| #174 | norte-core, norte-sync | `plan_hash` framing helpers duplicated from `norte-core::hashing` — one copy IS the journal chain |
+| #174 (half) | norte-core, norte-sync | state the duplication is DELIBERATE, in both files. Not the move — see below |
 | #169 | norte-testkit + 5 consumers | the corpus count assertion blocks every new fixture; make adding one cheap |
 | #175 | norte-compare | `walk()` returns an unfused stream — any `select!` with a second arm panics past its end |
 | #185 | norte-tui | the diff pane's block title joins both roots in one string; a name containing `↔` spoofs the pair |
 
 **Close:** `just ci-fast`, then `just ci` once. Then
 `superpowers:finishing-a-development-branch`.
+
+## What this wave actually cost, for W2's benefit
+
+Two agents on Sonnet, disjoint crates, in one warm tree: ~14 and ~19 minutes of
+agent time, five commits, no clobbering (the `cargo fmt --all` ban held). The
+gate was spent once, in the foreground and in pieces — **`just ci` does not fit
+in a background job here**, which gets killed by SIGTERM at about five minutes.
+Run the recipes individually (`lint`, `test`, `docs`, `gui-ci`, `cov`) and never
+through a `| tail`, which buffers everything and leaves nothing behind if the
+job dies.
+
+The only thing that went red was the shared-fixture blast radius above, and it
+was a genuine finding rather than a mistake: the first fixture added on the day
+the obstacle was removed found an addressing boundary nobody had stated.
+
+## Two issues left this wave after reading their bodies
+
+Tiering from titles was wrong, and this is the correction the wave's own rule
+asked for ("verify before designing anything").
+
+**#151 is ADR-sized, not mechanical.** `norte-core` is AGPL-3.0-only and the
+natural homes for the shared fold key (`norte-vfs`, `norte-encoding`) are
+MIT OR Apache-2.0, so the move RELICENSES the code — and it is a structural
+dependency change. CLAUDE.md says both are ADR material. It also carries two
+behavioural divergences to settle at the same time. Goes to W3, which already
+owns the folding rules, and wants `/adr` first.
+
+**#174 is not a fix at all; it is a decision already taken NOT to move it.**
+`norte-core::hashing`'s copy is the journal's tamper-evident chain (ADR 0023)
+and the audit export (ADR 0025). Its framing cannot change without invalidating
+every existing `journal.db` — a migration, not a refactor. What stays in this
+wave is the issue's own cheap half: **say so in both files**, so the next reader
+does not "tidy" one of them. The ADR half rides with #151, because it is the
+same licence question.
 
 **Note on #169, corrected by C2's own experience.** The issue says the count is
 asserted in five crates. Verify that number — but the premise is real and worse

@@ -102,7 +102,7 @@
   {
     "id": "cause_join_spoof",
     "hex": "696e666f726d65203ae2869220636f7069612e7478743a207065726d697373696f6e2064656e696564",
-    "why": "'informe :\u2192 copia.txt: permission denied': UN nombre que lleva LOS DOS joiners in-band de una fila de fallo de sincronizacion (sync.report) — el ' \u2192 ' que separa las dos ortografias y el ': ' que separa la causa (cli-sync-failure). Todo es imprimible corriente, asi que display_name_with no enmascara nada y el marcador '!' del CLI no salta: un solo fichero imprime una fila de fallo COMPLETA y fabricada despues de un Mirror destructivo. Legal en ext4 y APFS; el ':' no lo es en NTFS, y por eso es el lado ORIGEN el que tiene que poder producirlo. Pinea que la causa y la ortografia del destino se separen FUERA de banda (GUI: elementos hermanos; CLI: un marcador que un nombre no puede falsificar)"
+    "why": "'informe :→ copia.txt: permission denied': UN nombre que lleva LOS DOS joiners in-band de una fila de fallo de sincronizacion (sync.report) — el ' → ' que separa las dos ortografias y el ': ' que separa la causa (cli-sync-failure). Todo es imprimible corriente, asi que display_name_with no enmascara nada y el marcador '!' del CLI no salta: un solo fichero imprime una fila de fallo COMPLETA y fabricada despues de un Mirror destructivo. Legal en ext4 y APFS; el ':' no lo es en NTFS, y por eso es el lado ORIGEN el que tiene que poder producirlo. Pinea que la causa y la ortografia del destino se separen FUERA de banda (GUI: elementos hermanos; CLI: un marcador que un nombre no puede falsificar)"
   },
   {
     "id": "zwsp_twin",
@@ -238,5 +238,25 @@
     "id": "proc_mounts_octal_escape",
     "hex": "61206209630a645c65",
     "why": "'a b<TAB>c<LF>d\\e' — space, tab, newline and a literal backslash, the exact four bytes `/proc/mounts` escapes in octal (\\040 \\011 \\012 \\134) and the volumes picker (#131, 2026-08-10-volumes.md) unescapes back to raw bytes. A mount name is never routed through `String` on the way to the row, the footer or a status message, so this fixture is what a hostile or merely unlucky mount point looks like once it lands on a display: newline and tab must not reach the terminal raw, and the lone backslash must not be re-escaped into something that unescapes again"
+  },
+  {
+    "id": "archive_marker_literal",
+    "hex": "21",
+    "why": "'!': un byte de sobra, legal como nombre de fichero en ext4/APFS/NTFS, que es EXACTAMENTE el separador de composición de archivos (ADR 0018, `VPath::archive_compose`/`archive_split`). Un fichero o directorio real llamado así no es el marcador, y `archive_split` tiene que fallar al componer sobre él (\"reject composition when either side already contains a `!`\") en vez de tratarlo como si lo fuera (#169)"
+  },
+  {
+    "id": "name_max_255_invalid_tail",
+    "hex": "78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878fffe",
+    "why": "255 bytes exactos (NAME_MAX de ext4/APFS/NTFS) que NO son UTF-8 válido: 253 bytes ASCII seguidos de dos bytes inválidos como cabecera de secuencia (0xFF, 0xFE) — el patrón que deja un truncado ingenuo por CUENTA DE BYTES a mitad de una secuencia multibyte. A diferencia de `name_max_255` (ASCII puro, UTF-8 válido), ningún decoder puede normalizar esto: es el límite de longitud Y el límite de encoding a la vez (#169, encoding-auditor)"
+  },
+  {
+    "id": "trashinfo_record_spoof",
+    "hex": "5b547261736820496e666f5d0a506174683d2532466574632532467061737377640a44656c6574696f6e446174653d323032342d30312d30315430303a30303a30300a",
+    "why": "'[Trash Info]\\nPath=%2Fetc%2Fpasswd\\nDeletionDate=2024-01-01T00:00:00\\n' — un nombre de fichero que ES, byte a byte, un sidecar freedesktop `.trashinfo` completo (el `Path` va url-encoded en el formato real, así que ni falta la barra literal que `Segment` prohíbe). Un parser de la papelera que no cite el nombre al escribir o leer su propio sidecar ve esto como un registro ajeno completo y fabricado (#169, encoding-auditor)"
+  },
+  {
+    "id": "turkish_dotted_i_capital",
+    "hex": "c4b07374616e62756c2e747874",
+    "why": "'İstanbul.txt' con U+0130 LATIN CAPITAL LETTER I WITH DOT ABOVE: su pliegue COMPLETO Unicode es 'i' + U+0307 (combining dot above), DOS codepoints, no la 'i' simple que da un `to_lowercase()` ASCII o locale-naive — el clásico \"problema de la I turca\" que rompe comparaciones case-insensitive escritas a mano (#169, encoding-auditor)"
   }
 ]

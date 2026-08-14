@@ -5,7 +5,8 @@ use std::sync::{Arc, RwLock};
 
 use norte_proto::{
     CapabilityFlags, CollisionPolicy, DeleteMode, Entry, Error, ResumePolicy, Segment,
-    SymlinkPolicy, TaskId, TaskKind, VPath, VerifyPolicy, methods::PlanHash,
+    SymlinkPolicy, TaskId, TaskKind, VPath, VerifyPolicy,
+    methods::{PlanHash, RelPath},
 };
 use norte_vfs::{EntryStream, Provider};
 
@@ -2466,16 +2467,13 @@ fn spool_read_error(e: &crate::sync::SpoolError) -> Error {
 
 /// ¿Está `path` EN `root` o por debajo?
 ///
-/// Scheme, authority y luego los segmentos uno a uno por sus BYTES crudos —
-/// nunca por prefijo de cadena, que haría colgar `…/cafétière` de `…/café`
-/// (regla dura 1). Gemela de la que `norte_sync::plan` usa para su guard de
-/// solape, que es privada de aquel crate.
+/// Delegado en [`RelPath::under`] (`norte-proto`), que hace la misma
+/// comparación por segmentos y bytes crudos (regla dura 1) y es la única
+/// implementación desde #172 — antes había tres copias hechas a mano. La raíz
+/// misma SÍ cuenta como contenida, que es lo que este llamante necesita (ver
+/// [`structural_overlap`] y [`folded_overlap`]).
 fn is_at_or_under(root: &VPath, path: &VPath) -> bool {
-    if path.scheme() != root.scheme() || path.authority() != root.authority() {
-        return false;
-    }
-    let mut rest = path.segments();
-    root.segments().all(|segment| rest.next() == Some(segment))
+    RelPath::under(root, path).is_some()
 }
 
 /// Cómo se solapan dos raíces MIRÁNDOLAS, sin tocar el disco.
