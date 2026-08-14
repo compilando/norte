@@ -779,3 +779,561 @@ async fn toda_mutacion_pasa_por_el_gate_del_journal() {
         "no se creó el directorio"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #205: una operación queda ENTERA dentro del journal, o entera fuera.
+// ---------------------------------------------------------------------------
+
+/// Un `MemProvider` que SUELTA el journal en cuanto borra el primer nodo.
+///
+/// Es el reintento de #179 disparándose a mitad de una operación larga, sin
+/// carreras: el ocupante deja el fichero justo entre la primera entrada y la
+/// segunda, que es la ventana exacta en la que una Task podía empezar a
+/// registrar por el medio.
+struct SueltaElJournalAlBorrar {
+    inner: Arc<MemProvider>,
+    dueno: tokio::sync::Mutex<Option<SqliteJournal>>,
+    /// Borrados vistos. Se suelta en el SEGUNDO, no en el primero, y ahí está
+    /// la gracia: la fila de la primera entrada ya se intentó (y no llegó, el
+    /// fichero era de otro), así que lo que queda es una operación con la
+    /// cabeza sin registrar y la cola registrada — la mitad y mitad exacta que
+    /// #205 describe, no un cambio de veredicto antes de empezar.
+    vistos: std::sync::atomic::AtomicU64,
+}
+
+#[async_trait::async_trait]
+impl Provider for SueltaElJournalAlBorrar {
+    fn scheme(&self) -> &str {
+        self.inner.scheme()
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        self.inner.capabilities()
+    }
+    async fn stat(&self, p: &VPath) -> Result<norte_proto::Entry, norte_proto::Error> {
+        self.inner.stat(p).await
+    }
+    async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, norte_proto::Error> {
+        self.inner.list(p).await
+    }
+    async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, norte_proto::Error> {
+        self.inner.read(p, range).await
+    }
+    async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, norte_proto::Error> {
+        self.inner.write(p).await
+    }
+    async fn mkdir(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+        self.inner.mkdir(p).await
+    }
+    async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), norte_proto::Error> {
+        self.inner.rename(from, to).await
+    }
+    async fn remove(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+        self.inner.remove(p).await?;
+        if self
+            .vistos
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            == 1
+            && let Some(j) = self.dueno.lock().await.take()
+        {
+            // De verdad, y esperando: soltar sin cerrar dejaría el lock puesto
+            // un rato indefinido y el test dependería del reloj.
+            j.close().await;
+        }
+        Ok(())
+    }
+}
+
+/// **#205.** Una operación que empieza SIN journal se queda sin journal entera,
+/// aunque el fichero se libere a mitad.
+///
+/// Sin fijar el veredicto, `ops` lo preguntaba por MUTACIÓN: la primera entrada
+/// no dejaba fila, el ocupante soltaba, y las siguientes sí — media operación
+/// registrada dentro de UNA Task y UN actor. `undo_session` desanda entonces la
+/// cola registrada y deja la cabeza que no lo está, sin poder nombrar lo que se
+/// dejó, porque de eso no hay filas.
+///
+/// «No quedó registrado» se arregla a mano; «quedó registrado a medias» es una
+/// trampa, y la abrió el reintento de #179.
+#[tokio::test]
+async fn una_operacion_no_queda_registrada_a_medias() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dueno = SqliteJournal::open(&journal_path(dir.path()))
+        .await
+        .expect("el primero se lo lleva");
+
+    // Freno CERO: sin fijar el veredicto, la segunda entrada reintentaría y
+    // encontraría el fichero libre. Es lo que hace al test discriminante.
+    let lazy = Arc::new(LazyJournal::with_retry_brake(
+        dir.path(),
+        std::time::Duration::ZERO,
+    ));
+    let engine = Engine::with_lazy_journal(Arc::clone(&lazy));
+    let mem = Arc::new(MemProvider::new());
+    mem.mkdir(&vp("mem:///d")).await.expect("fixture");
+    for n in 0..3 {
+        let mut sink = mem
+            .write(&vp(&format!("mem:///d/f{n}.txt")))
+            .await
+            .expect("write");
+        sink.write(bytes::Bytes::from_static(b"x"))
+            .await
+            .expect("chunk");
+        sink.commit().await.expect("commit");
+    }
+    let provider = Arc::new(SueltaElJournalAlBorrar {
+        inner: Arc::clone(&mem),
+        dueno: tokio::sync::Mutex::new(Some(dueno)),
+        vistos: std::sync::atomic::AtomicU64::new(0),
+    });
+    engine.register_provider(provider as Arc<dyn Provider>);
+
+    // Un borrado permanente del árbol: cuatro entradas, una mutación cada una.
+    let h = engine
+        .delete_with(&vp("mem:///d"), norte_proto::DeleteMode::Permanent)
+        .await
+        .expect("delete");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert!(
+        mem.stat(&vp("mem:///d")).await.is_err(),
+        "el árbol se borró entero: el efecto no depende del journal"
+    );
+
+    // Y el fichero quedó libre a mitad, así que ahora esta sesión sí lo abre.
+    let journal = lazy.get().await.expect("el ocupante lo soltó");
+    assert_eq!(
+        journal.journal().count().await.expect("count"),
+        0,
+        "la operación empezó sin journal: NINGUNA de sus entradas quedó \
+         registrada, ni siquiera las de después de que el fichero se liberara. \
+         Sin fijar el veredicto son 3 de 4 — cabeza sin registrar, cola \
+         registrada — que es la operación que el undo deshace a medias"
+    );
+}
+
+/// Y la otra mitad de la misma propiedad: una operación que empieza CON journal
+/// registra todas sus entradas.
+///
+/// Las dos juntas son «entera dentro o entera fuera». Sin esta, fijar el
+/// veredicto en `NoopObserver` para todo pasaría el test de arriba.
+#[tokio::test]
+async fn una_operacion_que_empieza_con_journal_lo_registra_todo() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (engine, lazy, mem) = engine_perezoso(dir.path());
+    mem.mkdir(&vp("mem:///d")).await.expect("fixture");
+    for n in 0..3 {
+        let mut sink = mem
+            .write(&vp(&format!("mem:///d/f{n}.txt")))
+            .await
+            .expect("write");
+        sink.write(bytes::Bytes::from_static(b"x"))
+            .await
+            .expect("chunk");
+        sink.commit().await.expect("commit");
+    }
+
+    let h = engine
+        .delete_with(&vp("mem:///d"), norte_proto::DeleteMode::Permanent)
+        .await
+        .expect("delete");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let journal = lazy.get().await.expect("dueña");
+    assert_eq!(
+        journal.journal().count().await.expect("count"),
+        4,
+        "tres ficheros y su directorio: la operación entera"
+    );
+}
+
+/// Un provider que intenta SOLTAR el journal justo cuando la Task está
+/// mutando, y apunta lo que le contestaron.
+///
+/// El instante importa y por eso se pregunta desde aquí dentro: entre que el
+/// engine despacha la Task y que su cuerpo fija el veredicto no hay nadie
+/// sosteniendo el handle, y soltar AHÍ es inofensivo (todavía no hay efecto, y
+/// el `pin` lo vuelve a abrir). La ventana que importa es la otra, la que va
+/// del `pin` a la última fila, y solo se alcanza desde dentro del efecto.
+struct SueltaMientrasMuta {
+    inner: Arc<MemProvider>,
+    lazy: Arc<LazyJournal>,
+    solto: Mutex<Option<bool>>,
+}
+
+#[async_trait::async_trait]
+impl Provider for SueltaMientrasMuta {
+    fn scheme(&self) -> &str {
+        self.inner.scheme()
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        self.inner.capabilities()
+    }
+    async fn stat(&self, p: &VPath) -> Result<norte_proto::Entry, norte_proto::Error> {
+        self.inner.stat(p).await
+    }
+    async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, norte_proto::Error> {
+        self.inner.list(p).await
+    }
+    async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, norte_proto::Error> {
+        self.inner.read(p, range).await
+    }
+    async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, norte_proto::Error> {
+        self.inner.write(p).await
+    }
+    async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), norte_proto::Error> {
+        self.inner.rename(from, to).await
+    }
+    async fn remove(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+        self.inner.remove(p).await
+    }
+    async fn mkdir(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+        // El efecto ya está a punto de ocurrir y su fila todavía no existe:
+        // ESTA es la ventana.
+        let r = self.lazy.release().await;
+        *self.solto.lock().expect("lock") = Some(r);
+        self.inner.mkdir(p).await
+    }
+}
+
+/// El handle fijado se sostiene TODA la Task, así que `release` no puede cerrar
+/// la ventana entre el gate de una mutación y su fila.
+///
+/// Es la precondición que le falta al temporizador de ociosidad de #179, y la
+/// mitad de #205 que no es sobre el undo: pinchar el handle al principio la da
+/// gratis, y sin ella `release` desde otro hilo dejaría un efecto sin fila y
+/// sin error.
+#[tokio::test]
+async fn mientras_una_task_muta_el_journal_no_se_puede_soltar() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let lazy = Arc::new(LazyJournal::in_state_dir(dir.path()));
+    let engine = Engine::with_lazy_journal(Arc::clone(&lazy));
+    let mem = Arc::new(MemProvider::new());
+    let provider = Arc::new(SueltaMientrasMuta {
+        inner: Arc::clone(&mem),
+        lazy: Arc::clone(&lazy),
+        solto: Mutex::new(None),
+    });
+    engine.register_provider(Arc::clone(&provider) as Arc<dyn Provider>);
+
+    let h = engine.mkdir(&vp("mem:///nuevo")).await.expect("mkdir");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    assert_eq!(
+        *provider.solto.lock().expect("lock"),
+        Some(false),
+        "con la Task a medio mutar, soltar el journal tiene que NEGARSE: \
+         cerrarlo ahí dejaría este efecto sin fila y sin error"
+    );
+    let journal = lazy.get().await.expect("dueña");
+    assert_eq!(
+        journal.journal().count().await.expect("count"),
+        1,
+        "y la fila llegó"
+    );
+}
+
+/// Un `MemProvider` que suelta el journal tras el SEGUNDO renombrado.
+///
+/// El gemelo de [`SueltaElJournalAlBorrar`] para el otro camino que fija su
+/// veredicto fuera de `ops`: el lote de renombrados, que cuando arranca sin
+/// journal se registra por el observer crudo.
+struct SueltaElJournalAlRenombrar {
+    inner: Arc<MemProvider>,
+    dueno: tokio::sync::Mutex<Option<SqliteJournal>>,
+    vistos: std::sync::atomic::AtomicU64,
+}
+
+#[async_trait::async_trait]
+impl Provider for SueltaElJournalAlRenombrar {
+    fn scheme(&self) -> &str {
+        self.inner.scheme()
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        self.inner.capabilities()
+    }
+    async fn stat(&self, p: &VPath) -> Result<norte_proto::Entry, norte_proto::Error> {
+        self.inner.stat(p).await
+    }
+    async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, norte_proto::Error> {
+        self.inner.list(p).await
+    }
+    async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, norte_proto::Error> {
+        self.inner.read(p, range).await
+    }
+    async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, norte_proto::Error> {
+        self.inner.write(p).await
+    }
+    async fn mkdir(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+        self.inner.mkdir(p).await
+    }
+    async fn remove(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+        self.inner.remove(p).await
+    }
+    async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), norte_proto::Error> {
+        self.inner.rename(from, to).await?;
+        if self
+            .vistos
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            == 1
+            && let Some(j) = self.dueno.lock().await.take()
+        {
+            j.close().await;
+        }
+        Ok(())
+    }
+}
+
+/// **#205 en el lote de renombrados**, que fija su veredicto en `engine` y no
+/// en `ops`, y por tanto tenía la misma grieta por su cuenta.
+///
+/// Cuando `rename_batch_as` no encuentra journal al empezar, registra por el
+/// observer crudo. Sin fijarlo, cada paso volvía a preguntar — y las filas que
+/// llegaran a mitad irían ADEMÁS sin `batch_id`, o sea que el lote que el wire
+/// anuncia como una unidad deshacible quedaría medio registrado y sin agrupar.
+#[tokio::test]
+async fn un_lote_de_renombrados_tampoco_queda_registrado_a_medias() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dueno = SqliteJournal::open(&journal_path(dir.path()))
+        .await
+        .expect("el primero se lo lleva");
+
+    let lazy = Arc::new(LazyJournal::with_retry_brake(
+        dir.path(),
+        std::time::Duration::ZERO,
+    ));
+    let engine = Engine::with_lazy_journal(Arc::clone(&lazy));
+    let mem = Arc::new(MemProvider::new());
+    mem.mkdir(&vp("mem:///d")).await.expect("fixture");
+    for n in 0..3 {
+        let mut sink = mem
+            .write(&vp(&format!("mem:///d/a{n}.txt")))
+            .await
+            .expect("write");
+        sink.write(bytes::Bytes::from_static(b"x"))
+            .await
+            .expect("chunk");
+        sink.commit().await.expect("commit");
+    }
+    let provider = Arc::new(SueltaElJournalAlRenombrar {
+        inner: Arc::clone(&mem),
+        dueno: tokio::sync::Mutex::new(Some(dueno)),
+        vistos: std::sync::atomic::AtomicU64::new(0),
+    });
+    engine.register_provider(provider as Arc<dyn Provider>);
+
+    let pares: Vec<(Vec<u8>, Vec<u8>)> = (0..3)
+        .map(|n| {
+            (
+                format!("a{n}.txt").into_bytes(),
+                format!("b{n}.txt").into_bytes(),
+            )
+        })
+        .collect();
+    let plan = engine
+        .rename_batch_plan(&vp("mem:///d"), &pares)
+        .await
+        .expect("plan");
+    let (h, _report) = engine
+        .rename_batch(&vp("mem:///d"), &pares, plan.hash())
+        .await
+        .expect("rename_batch");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert!(
+        mem.stat(&vp("mem:///d/b0.txt")).await.is_ok(),
+        "los renombrados ocurrieron"
+    );
+
+    let journal = lazy.get().await.expect("el ocupante lo soltó a mitad");
+    assert_eq!(
+        journal.journal().count().await.expect("count"),
+        0,
+        "el lote empezó sin journal: NINGUNO de sus pasos quedó registrado, y \
+         desde luego no unos sí y otros no"
+    );
+}
+
+/// Arma un engine cuyo journal lo tiene otro, y que lo suelta en cuanto el
+/// provider ve su primera mutación.
+async fn escenario_que_suelta(dir: &Path) -> (Engine, Arc<LazyJournal>, Arc<MemProvider>) {
+    let dueno = SqliteJournal::open(&journal_path(dir))
+        .await
+        .expect("el primero se lo lleva");
+    let lazy = Arc::new(LazyJournal::with_retry_brake(
+        dir,
+        std::time::Duration::ZERO,
+    ));
+    let engine = Engine::with_lazy_journal(Arc::clone(&lazy));
+    let mem = Arc::new(MemProvider::new());
+    let provider = Arc::new(SueltaAlMutar {
+        inner: Arc::clone(&mem),
+        dueno: tokio::sync::Mutex::new(Some(dueno)),
+        vistos: std::sync::atomic::AtomicU64::new(0),
+    });
+    engine.register_provider(provider as Arc<dyn Provider>);
+    (engine, lazy, mem)
+}
+
+/// Un directorio con tres ficheros, para que la operación tenga entradas que
+/// partir.
+async fn arbolito(mem: &Arc<MemProvider>, raiz: &str) {
+    mem.mkdir(&vp(raiz)).await.expect("mkdir");
+    for n in 0..3 {
+        let mut sink = mem
+            .write(&vp(&format!("{raiz}/f{n}.txt")))
+            .await
+            .expect("write");
+        sink.write(bytes::Bytes::from_static(b"x"))
+            .await
+            .expect("chunk");
+        sink.commit().await.expect("commit");
+    }
+}
+
+/// Cuántas filas tiene el journal de `lazy`, que a estas alturas está libre.
+async fn filas(lazy: &Arc<LazyJournal>) -> i64 {
+    lazy.get()
+        .await
+        .expect("el ocupante lo soltó")
+        .journal()
+        .count()
+        .await
+        .expect("count")
+}
+
+/// **La regla entera de #205, y lo único que la sostiene.** TODA Task que muta
+/// fija su veredicto: empieza sin journal → termina sin journal, entera.
+///
+/// El gemelo de `toda_mutacion_pasa_por_el_gate_del_journal` para #205, y por
+/// el mismo motivo: sin él la regla vive en un comentario, y el día que alguien
+/// añada un `Engine::hardlink_as` que se olvide de fijar, ningún test se entera
+/// — la operación empezará a registrarse por el medio y el undo la deshará a
+/// medias, en silencio.
+///
+/// Cada caso corre en su propio directorio de estado: lo que se afirma es que
+/// el journal quedó VACÍO, y compartirlo haría que el de al lado lo llenara.
+#[tokio::test]
+async fn toda_task_que_muta_fija_su_veredicto() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (engine, lazy, mem) = escenario_que_suelta(dir.path()).await;
+    arbolito(&mem, "mem:///src").await;
+    let h = engine
+        .copy(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .expect("copy");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert_eq!(filas(&lazy).await, 0, "copy_tree fija su veredicto");
+
+    // Dentro del MISMO provider un move es UN rename, así que también prueba
+    // el camino de `rename_with_policy`, que es el otro que `move_task`
+    // delega.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (engine, lazy, mem) = escenario_que_suelta(dir.path()).await;
+    arbolito(&mem, "mem:///src").await;
+    let h = engine
+        .move_(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .expect("move");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert_eq!(filas(&lazy).await, 0, "move fija su veredicto");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (engine, lazy, mem) = escenario_que_suelta(dir.path()).await;
+    arbolito(&mem, "mem:///d").await;
+    let h = engine
+        .delete_with(&vp("mem:///d"), norte_proto::DeleteMode::Permanent)
+        .await
+        .expect("delete");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert_eq!(filas(&lazy).await, 0, "delete fija su veredicto");
+
+    // Una sola mutación, así que no hay mitad que partir — pero el veredicto
+    // tiene que ser el del principio igual.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (engine, lazy, _mem) = escenario_que_suelta(dir.path()).await;
+    let h = engine.mkdir(&vp("mem:///nuevo")).await.expect("mkdir");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert_eq!(filas(&lazy).await, 0, "mkdir fija su veredicto");
+}
+
+/// El provider de [`toda_task_que_muta_fija_su_veredicto`]: suelta el journal
+/// en cuanto ve su SEGUNDA mutación, sea del tipo que sea.
+struct SueltaAlMutar {
+    inner: Arc<MemProvider>,
+    dueno: tokio::sync::Mutex<Option<SqliteJournal>>,
+    vistos: std::sync::atomic::AtomicU64,
+}
+
+impl SueltaAlMutar {
+    /// Suelta en la PRIMERA mutación, no en la segunda.
+    ///
+    /// Aquí lo que se comprueba es que el veredicto de la Task no cambia, no
+    /// dónde cae el corte — de eso se ocupa
+    /// `una_operacion_no_queda_registrada_a_medias`, con su 3-de-4. Y hace
+    /// falta que sea la primera: un `move` dentro del mismo provider es UN
+    /// rename, así que esperando a la segunda no se soltaría nunca y el caso
+    /// pasaría sin probar nada.
+    async fn quizas_soltar(&self) {
+        if self
+            .vistos
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            == 0
+            && let Some(j) = self.dueno.lock().await.take()
+        {
+            j.close().await;
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for SueltaAlMutar {
+    fn scheme(&self) -> &str {
+        self.inner.scheme()
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        self.inner.capabilities()
+    }
+    async fn stat(&self, p: &VPath) -> Result<norte_proto::Entry, norte_proto::Error> {
+        self.inner.stat(p).await
+    }
+    async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, norte_proto::Error> {
+        self.inner.list(p).await
+    }
+    async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, norte_proto::Error> {
+        self.inner.read(p, range).await
+    }
+    async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, norte_proto::Error> {
+        let sink = self.inner.write(p).await?;
+        self.quizas_soltar().await;
+        Ok(sink)
+    }
+    async fn mkdir(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+        self.inner.mkdir(p).await?;
+        self.quizas_soltar().await;
+        Ok(())
+    }
+    async fn remove(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+        self.inner.remove(p).await?;
+        self.quizas_soltar().await;
+        Ok(())
+    }
+    async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), norte_proto::Error> {
+        self.inner.rename(from, to).await?;
+        self.quizas_soltar().await;
+        Ok(())
+    }
+}

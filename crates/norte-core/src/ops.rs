@@ -776,6 +776,10 @@ pub(crate) async fn copy_task(
     if ctx.cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
+    // El veredicto del journal, fijado ANTES del primer efecto (#205): esta
+    // Task queda entera dentro del journal o entera fuera. Es un `copy_tree`
+    // el ejemplo del que salió la issue.
+    let observer = crate::observer::pin_for_task(observer).await?;
     // Copiar un dir DENTRO de sí mismo produciría una copia anidada absurda;
     // copiar algo SOBRE SÍ MISMO con Overwrite lo destruiría (hallazgo B1).
     // Bajo Follow, el "sí mismo" es el TARGET resuelto del origen.
@@ -1283,6 +1287,10 @@ pub(crate) async fn move_task(
     if ctx.cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
+    // #205, y aquí importa el doble: un move por copia emite `created` por cada
+    // entrada y `removed` por cada una, así que una Task a medio registrar deja
+    // un undo que restaura la mitad del origen sobre la mitad del destino.
+    let observer = crate::observer::pin_for_task(observer).await?;
     if Arc::ptr_eq(&src, &dst) {
         if is_descendant(&to, &from) {
             return Err(Error::InvalidPath);
@@ -1588,6 +1596,10 @@ pub(crate) async fn delete_task(
     if ctx.cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
+    // #205: un borrado permanente recorre el árbol emitiendo una mutación por
+    // entrada, así que es el caso más fácil de partir por la mitad — y el más
+    // caro, porque lo que no lleva fila no se puede ni nombrar después.
+    let observer = crate::observer::pin_for_task(observer).await?;
     if mode == DeleteMode::Trash {
         ctx.progress.update(|p| {
             p.entries_total = Some(1);
@@ -1682,6 +1694,10 @@ pub(crate) async fn mkdir_task(
     if ctx.cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
+    // Una sola mutación, así que aquí no hay mitad que partir. Se fija igual:
+    // la regla es «toda Task que muta fija su veredicto», y una excepción por
+    // ser corta es la que alguien alarga sin acordarse (#205).
+    let observer = crate::observer::pin_for_task(observer).await?;
     ctx.progress.update(|p| {
         p.entries_total = Some(1);
         p.current = Some(path.clone());

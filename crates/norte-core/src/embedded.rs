@@ -96,20 +96,39 @@
 //! o quitar el fichero, que es lo que dice el mensaje. Una bandera para «muta
 //! sin registrar» acaba en un alias, y con ella el agujero vuelve entero.
 //!
-//! # Una operación puede quedar journalizada A MEDIAS (#179, residual)
+//! # El veredicto se fija POR OPERACIÓN, no por mutación (#205)
 //!
-//! El veredicto dejó de ser por SESIÓN y pasó a ser por momento, y eso tiene un
-//! filo que antes no existía. `crate::ops` pide el journal por ENTRADA, así
-//! que un `copy_tree` que empiece con el fichero ocupado y dure más que
-//! [`FRENO_TRAS_FALLO`] empieza a registrar a mitad: las primeras k entradas
-//! sin fila, las n-k siguientes con ella, dentro de UNA Task y UN actor. Un
-//! `undo` posterior desanda la cola registrada y deja la cabeza que no lo está
-//! — media copia deshecha, y sin nada que le diga al usuario cuál mitad.
+//! Que la ventana sepa reabrirse abrió un filo que antes no existía: con el
+//! journal preguntado por MUTACIÓN, un `copy_tree` que empieza con el fichero
+//! ocupado y dura más que [`FRENO_TRAS_FALLO`] empezaba a registrar a mitad —
+//! las primeras k entradas sin fila, las n-k siguientes con ella, dentro de UNA
+//! Task y UN actor. Y entonces `undo` desanda la cola registrada y deja la
+//! cabeza que no lo está: media copia deshecha, sin poder nombrar la otra
+//! mitad, porque de ella no hay filas. **«No quedó registrado» se arregla a
+//! mano; «quedó registrado a medias» es una trampa**, y era peor que el agujero
+//! que el reintento vino a cerrar.
 //!
-//! Antes era imposible: la decisión valía para toda la sesión, así que la
-//! operación quedaba entera dentro o entera fuera. Cerrarlo pide fijar el
-//! veredicto durante toda una Task —resolverlo una vez y pasar el handle hacia
-//! abajo— que es un cambio de `ops` y no de este módulo: es #205.
+//! Lo cierra [`MutationObserver::pin_for_task`](crate::observer::MutationObserver::pin_for_task):
+//! el cuerpo de cada Task que muta resuelve el journal UNA vez, antes del
+//! primer efecto, y se queda con lo que le salga —el handle, o un no-op— para
+//! todas sus mutaciones. La operación vuelve a quedar entera dentro o entera
+//! fuera, que es lo que era cuando el veredicto duraba toda la sesión.
+//!
+//! Dos corolarios que conviene tener escritos:
+//!
+//! - **el aviso de recuperación habla de lo que EMPIEZA**, no de «a partir de
+//!   ahora»: una operación en vuelo conserva el veredicto con el que arrancó, y
+//!   una frase que prometiera lo contrario sería falsa justo para ella;
+//! - **mientras una Task muta, [`LazyJournal::release`] contesta `false`**,
+//!   porque el handle fijado es un `Arc` vivo. Eso protege la ventana FIJADO →
+//!   última fila, que es donde hay filas que perder. La que va del gate al
+//!   fijado no la protege nadie —el gate suelta su `Arc` y la Task puede
+//!   esperar en la cola— y ahí soltar no rompe nada, pero puede dejar la
+//!   operación entera sin registrar si otro gana la reapertura;
+//! - **el fijado vuelve a mirar si el journal es ILEGIBLE**, y rehúsa la Task
+//!   si lo es (#178). El gate mira antes de encolar y esto mira al empezar de
+//!   verdad; entre los dos caben treinta segundos en los que un fichero puede
+//!   corromperse.
 //!
 //! # Lo que este mecanismo NO cubre
 //!
@@ -456,12 +475,19 @@ impl LazyJournal {
     /// sobre algo que funcionó— y el efecto se queda sin fila. El aviso al
     /// frontend SÍ sale, así que no es mudo, pero la regla dura 4 se rompe.
     ///
-    /// El `Arc` no basta como candado: `sync.apply` sostiene uno toda la Task
-    /// (y por eso ahí `release` contesta `false`), pero
-    /// `crate::ops` lo toma y lo suelta POR ENTRADA, así que entre dos
-    /// entradas no lo sostiene nadie. Lo que hace falta es un contador de
-    /// mutaciones en vuelo en la ventana, no un comentario. Anotado en #205,
-    /// que quiere la misma primitiva por el otro lado.
+    /// **Desde #205 la precondición se cumple sola dentro del engine**, y por
+    /// eso este método puede empezar a tener llamantes: el cuerpo de cada Task
+    /// que muta fija el journal al principio
+    /// ([`MutationObserver::pin_for_task`](crate::observer::MutationObserver::pin_for_task))
+    /// y sostiene ese `Arc` hasta el final, así que `Arc::try_unwrap` falla y
+    /// esto contesta `false` mientras haya una operación en vuelo. Antes no
+    /// era así: `crate::ops` tomaba y soltaba el handle POR ENTRADA, y entre
+    /// dos entradas no lo sostenía nadie.
+    ///
+    /// Lo que sigue sin cubrir el `Arc` es un observer que no sea este —un
+    /// embebedor con su propio [`crate::observer::MutationObserver`] que no
+    /// implemente `pin_for_task`—, y ahí la precondición vuelve a ser del
+    /// llamante.
     ///
     /// # Esto NO es cancel-safe. Córrelo entero o `tokio::spawn`-éalo.
     ///
@@ -725,6 +751,44 @@ impl crate::observer::MutationObserver for LazyJournal {
                 crate::observer::MutationObserver::on_mutation(j.as_ref(), mutation, actor).await
             }
             None => Ok(()),
+        }
+    }
+
+    /// Fija el veredicto para toda una Task (#205): o el journal, o nada, pero
+    /// LO MISMO para todas sus mutaciones.
+    ///
+    /// Devolver el [`crate::journal::SqliteJournal`] en vez de a sí mismo es lo
+    /// que quita del medio a esta ventana durante la Task: el handle ya no se
+    /// vuelve a resolver, así que ni el reintento de #179 puede empezar a
+    /// registrar por el medio ni un `release` puede dejar de hacerlo. Y como el
+    /// `Arc` vive lo que vive la Task, `release` contesta `false` mientras
+    /// tanto — que es exactamente la precondición que le falta al temporizador
+    /// de ociosidad.
+    ///
+    /// Sin journal se fija un no-op, y no `self`: si se devolviera `self`, cada
+    /// mutación volvería a preguntar y volveríamos a la mitad y mitad.
+    async fn pin_for_task(
+        &self,
+    ) -> Result<Option<Arc<dyn crate::observer::MutationObserver>>, norte_proto::Error> {
+        // `resolve` y no `get`, porque el MOTIVO decide (#178) y `get` lo tira.
+        // SIN brazo comodín: un motivo nuevo rompe la compilación en vez de
+        // colarse por «adelante sin registrar», igual que en el gate.
+        match self.resolve().await {
+            Ok(j) => Ok(Some(j as Arc<dyn crate::observer::MutationObserver>)),
+            // Ocupado: la Task corre SIN registrar, entera. Es el caso benigno
+            // y el que no puede tumbar una sesión.
+            Err(NoJournal::Busy) => Ok(Some(Arc::new(crate::observer::NoopObserver))),
+            // Ilegible: se rehúsa aquí también, y no solo en el gate. Entre el
+            // gate y este punto cabe toda la cola del scheduler, y un fichero
+            // puede corromperse en ese rato; sin esto, la Task borraría un
+            // árbol entero en silencio. Todavía no ha ocurrido ningún efecto.
+            Err(NoJournal::Failed(motivo)) => {
+                tracing::error!(
+                    motivo = %motivo,
+                    "Task rehusada al fijar su journal: no se puede abrir (#178)"
+                );
+                Err(norte_proto::Error::JournalUnavailable)
+            }
         }
     }
 }

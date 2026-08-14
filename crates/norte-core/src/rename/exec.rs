@@ -153,6 +153,19 @@ pub(crate) trait StepJournal: Send + Sync {
         to: &VPath,
         undoes: Option<i64>,
     ) -> Result<Option<i64>, Error>;
+
+    /// Does anything this recorder writes to actually END UP in the journal?
+    ///
+    /// Not a rhetorical question since #205 pinned the verdict: an embedded
+    /// batch that starts while another process holds `journal.db` records
+    /// through a no-op for its whole run, deliberately — and used to report
+    /// every step as `journalled: true` anyway. `StuckStep::journalled` is what
+    /// tells the operator "a later `undo` can finish the job once the obstacle
+    /// is gone", so saying it over rows that do not exist sends them looking
+    /// for an undo that has nothing to undo.
+    fn records(&self) -> bool {
+        true
+    }
 }
 
 /// Records through the mutation observer: no batch, no `seq`.
@@ -161,6 +174,10 @@ pub(crate) struct ObserverJournal {
     pub observer: Arc<dyn MutationObserver>,
     /// Who caused it.
     pub actor: Actor,
+    /// Whether `observer` is anything but a no-op — see
+    /// [`StepJournal::records`]. The engine knows this at construction and the
+    /// observer cannot be asked, so it travels as a flag.
+    pub records: bool,
 }
 
 #[async_trait]
@@ -182,6 +199,10 @@ impl StepJournal for ObserverJournal {
             )
             .await?;
         Ok(None)
+    }
+
+    fn records(&self) -> bool {
+        self.records
     }
 }
 
@@ -463,7 +484,11 @@ pub(crate) async fn run(
                     to: s.to.clone(),
                     pair_index: s.pair_index,
                     seq,
-                    journalled: true,
+                    // NO siempre `true` (#205): un lote embebido que empieza
+                    // sin journal registra a través de un no-op de principio a
+                    // fin, y decir que quedó journalizado manda al operador a
+                    // buscar un undo que no existe.
+                    journalled: recorder.records(),
                 });
                 report.lock().expect("batch report lock").applied += 1;
                 let current = s.to.clone();
@@ -1594,6 +1619,7 @@ mod tests {
         let recorder = ObserverJournal {
             observer: Arc::clone(&observer) as Arc<dyn MutationObserver>,
             actor: Actor::User,
+            records: true,
         };
         let report = Mutex::new(BatchReport::default());
         let _ = run(

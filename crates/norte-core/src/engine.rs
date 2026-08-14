@@ -2198,8 +2198,34 @@ impl Engine {
             // alguna vez se instala un observer en abanico JUNTO a un journal,
             // esta rama tiene que emitir a los dos o los renames por lotes
             // serán los únicos invisibles para él.
+            // FIJADO (#205), y aquí hacía falta tanto como en `ops`: sin fijar,
+            // cada rename del lote volvía a preguntarle al observer, así que un
+            // lote largo que empieza con el fichero ocupado dejaba filas a
+            // partir de la mitad. Peor que en `ops`, además: esas filas van sin
+            // `batch_id`, o sea que el lote que el wire anuncia como UNA unidad
+            // deshacible quedaba medio registrado Y sin agrupar, y el undo
+            // desandaba la cola dejando la cabeza renombrada.
+            //
+            // Se fija SIN volver a resolver: `self.journal()` ya preguntó, y
+            // preguntar otra vez podría contestar que sí —el freno es corto en
+            // los tests, y `with_retry_brake` es público— con lo que el lote
+            // quedaría registrado entero pero sin lote, que es el otro modo de
+            // romper la misma promesa.
             None => Arc::new(crate::rename::exec::ObserverJournal {
-                observer: Arc::clone(&self.observer),
+                // Un journal perezoso ausente NO registra; un observer de
+                // embebedor sí recibe, aunque no haya journal detrás. El
+                // informe dice la verdad en los dos casos (#205).
+                records: !matches!(self.journal, JournalSource::Lazy(_)),
+                observer: if matches!(self.journal, JournalSource::Lazy(_)) {
+                    // Journal perezoso que ahora mismo no está: este lote no
+                    // registra nada, y no volverá a preguntar.
+                    Arc::new(crate::observer::NoopObserver)
+                } else {
+                    // `Engine::new()`/`with_observer`: no hay ventana que
+                    // perder y el observer del embebedor tiene que seguir
+                    // recibiendo sus renames.
+                    Arc::clone(&self.observer)
+                },
                 actor: actor.clone(),
             }),
         };

@@ -2595,6 +2595,15 @@ impl App {
     /// Apagar el indicador es la mitad que importa. Un «NO se registra» que no
     /// sabe volverse «ya sí» miente en cuanto el ocupante de paso suelta el
     /// fichero, y miente sobre lo único que la barra dice de TODA la sesión.
+    ///
+    /// **Lo que el indicador no sabe decir** es que una operación ya en marcha
+    /// conserva el veredicto con el que empezó (#205): si se recupera el
+    /// journal mientras un borrado largo sigue corriendo sin registrar, la
+    /// barra se apaga y ese borrado sigue sin dejar filas. El aviso de
+    /// recuperación lo dice con todas las letras —«desde tu PRÓXIMA
+    /// operación»— pero lo borra la siguiente tecla. Distinguirlo en la barra
+    /// pediría que el core expusiera cuántas Tasks van fijadas a no-registrar,
+    /// y no lo hace.
     pub fn note_journal_recovered(&mut self) {
         self.no_journal = None;
     }

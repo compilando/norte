@@ -654,6 +654,28 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **An operation is now recorded whole, or not at all — never half.** This is a
+  trap the retry above opened, closed in the same release. Because norte can now
+  regain the journal partway through a long session, and because it used to ask
+  "am I recording?" once per file rather than once per operation, a copy or a
+  delete that began while another process held the journal and ran longer than
+  half a minute would start recording in the middle: the first files unrecorded,
+  the rest recorded, inside one operation. `undo` then reversed the recorded
+  tail and silently left the head — and could not even tell you which files it
+  had skipped, because there were no entries for them. "Nothing was recorded" is
+  something you can sort out by hand; "half was recorded" is not. Each operation
+  now settles the question once, before it touches anything, and keeps that
+  answer to the end — and if the journal has become unreadable while the
+  operation waited its turn, it is refused there too rather than running
+  silently. That covers batch renames as well, where the split was worse: the
+  entries recorded partway through would have carried no batch label, so an
+  action the interface presents as one undoable unit would have been half
+  recorded and not grouped. A batch that runs with no journal at all now also
+  stops claiming its steps were recorded, which had been sending people to look
+  for an undo that had nothing to undo. The message you get when the journal
+  comes back says all this in one line: journalling resumes from your *next*
+  operation, because one already running keeps the answer it began with (#205).
+
 - **The journal's format marker can now be signed, so re-declaring it stops
   being free.** The journal records which format it was written in, inside its
   own tamper-evident chain, so an older build can say "I cannot verify this"

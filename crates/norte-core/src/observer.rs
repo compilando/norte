@@ -2,6 +2,8 @@
 //! [`MutationObserver`] ANTES de considerarse completa (regla dura 4). En M0
 //! el observador es no-op; el journal se enchufará aquí sin tocar el engine.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use norte_proto::{Error, VPath};
 
@@ -62,6 +64,73 @@ pub trait MutationObserver: Send + Sync {
     /// # Errors
     /// El error del sink (p. ej. fallo de escritura del journal).
     async fn on_mutation(&self, mutation: &Mutation<'_>, actor: &Actor) -> Result<(), Error>;
+
+    /// El observer que UNA Task va a usar para TODAS sus mutaciones, decidido
+    /// **una sola vez, antes del primer efecto**.
+    ///
+    /// `None` —el caso por omisión— significa «yo mismo sirvo»: un observer sin
+    /// ventana que perder (el journal del daemon, ya abierto; un no-op) no tiene
+    /// nada que fijar.
+    ///
+    /// # Por qué existe: media operación registrada es peor que ninguna (#205)
+    ///
+    /// El journal EMBEBIDO puede perderse y recuperarse a mitad de sesión
+    /// (#179). Preguntándole por MUTACIÓN, una operación larga —un `copy_tree`
+    /// que empieza con el fichero ocupado y dura más que el freno de
+    /// reintento— empieza a registrar por el medio: las primeras k entradas sin
+    /// fila, las n-k siguientes con ella, dentro de UNA Task y UN actor. Y
+    /// entonces `undo_session` desanda la cola registrada y deja la cabeza que
+    /// no lo está: media copia deshecha, sin nada que le diga al usuario cuál
+    /// mitad — porque no hay filas que nombrar.
+    ///
+    /// «No quedó registrado» se arregla a mano; «quedó registrado a medias» es
+    /// una trampa. Fijando el veredicto al principio de la Task, una operación
+    /// queda entera dentro del journal o entera fuera, que es lo que era antes
+    /// de que la ventana supiera reabrirse.
+    ///
+    /// **El handle fijado se sostiene durante toda la Task**, y eso es la otra
+    /// mitad del contrato: mientras viva,
+    /// [`crate::embedded::LazyJournal::release`] no puede soltar el fichero.
+    /// Lo que eso protege es la ventana **fijado → última fila**, y conviene
+    /// no confundirla con la que va del gate al fijado: el gate resuelve y
+    /// SUELTA su `Arc`, y la Task puede esperar en la cola del scheduler un
+    /// rato indefinido antes de fijar. Un temporizador de ociosidad que
+    /// dispare ahí cierra la ventana sin romper nada —no hay filas que perder
+    /// y el fijado la reabre— pero puede dejar la operación entera sin
+    /// registrar si un tercero gana la reapertura. Quien escriba ese
+    /// temporizador tiene que mirar también las Tasks despachadas y no
+    /// empezadas.
+    ///
+    /// # Errors
+    /// [`Error::JournalUnavailable`] si el journal existe y NO SE PUEDE ABRIR
+    /// (#178). Es el mismo fail-closed que el gate del engine, repetido aquí
+    /// porque el gate mira ANTES de encolar y esto mira al empezar de verdad:
+    /// entre los dos caben treinta segundos de cola, y en ese hueco un fichero
+    /// puede pasar de sano a corrupto. No propagarlo dejaría la Task mutando
+    /// un árbol entero en silencio, que es exactamente lo que #178 rehúsa —
+    /// y aquí todavía no ha ocurrido ningún efecto, así que rehusar es gratis.
+    async fn pin_for_task(&self) -> Result<Option<Arc<dyn MutationObserver>>, Error> {
+        Ok(None)
+    }
+}
+
+/// El observer de ESTA Task, fijado de una vez (ver
+/// [`MutationObserver::pin_for_task`]).
+///
+/// Se llama al PRINCIPIO del cuerpo de cada Task que muta, antes de cualquier
+/// efecto. Que la decisión se tome aquí y no en cada `on_mutation` es lo que
+/// hace que la Task quede entera dentro o entera fuera del journal.
+/// # Errors
+/// Las de [`MutationObserver::pin_for_task`]: el journal existe y no se puede
+/// abrir. Va ANTES del primer efecto, así que la Task muere sin haber tocado
+/// nada.
+pub(crate) async fn pin_for_task(
+    observer: Arc<dyn MutationObserver>,
+) -> Result<Arc<dyn MutationObserver>, Error> {
+    Ok(match observer.pin_for_task().await? {
+        Some(fijado) => fijado,
+        None => observer,
+    })
 }
 
 /// Observador que no hace nada (M0 / tests sin journal).
