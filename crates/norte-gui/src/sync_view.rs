@@ -891,6 +891,25 @@ fn path_text(d: &norte_frontend::sync::RelDisplay) -> PathText {
 /// árbol del que se borra, y a la escucha eso solo se asocia por posición si
 /// no se dice aquí (auditoría de encoding MINOR-3). Vacío = no hace falta
 /// decir nada (una ruta de origen, que es lo normal).
+///
+/// # En banda, y por qué eso NO repite el defecto de C1 (#197)
+/// El prefijo hostil y el `qualifier` se pegan los dos AL LADO del texto ya
+/// resuelto (`out.push_str(qualifier)`, `format!("{prefix}: {label}")`) en
+/// vez de vivir en elementos hermanos separados — a diferencia de
+/// [`StepText::a11y`], cuya rustdoc explica por qué SU separador tiene que
+/// ser estructural. La auditoría de C2 (MINOR-8) lo marcó por esa misma
+/// forma, pero las dos direcciones aquí son fail-safe HOY: un nombre puede,
+/// como mucho, AÑADIR un aviso que no le toca (un fichero literalmente
+/// llamado `nombre alterado: x.txt` o `viejo (destino)` se queda con su
+/// propio prefijo/calificador puesto APARTE, duplicado pero no sustituido,
+/// porque ninguno de los dos `push`/`format!` de arriba lee el contenido de
+/// `p.label` para decidir si emitirse) — nunca puede SUPRIMIR el que sí le
+/// corresponde, porque las dos piezas se anteponen o se posponen siempre,
+/// jamás se omiten por lo que diga el nombre. **Esa asimetría es la garantía
+/// que un refactor futuro no puede invertir**: el día en que esto se vuelva
+/// estructural (elementos hermanos, como `StepText::a11y`) está bien: el día
+/// en que alguien decida el prefijo o el calificador MIRANDO `p.label` en vez
+/// de mirar `p.hostile`/`qualifier`, deja de serlo.
 #[must_use]
 pub fn path_a11y(p: &PathText, qualifier: &str) -> String {
     if p.label.is_empty() {
