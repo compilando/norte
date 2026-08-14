@@ -311,6 +311,18 @@ impl PlanHasher {
 
 /// Alimenta un campo con su LONGITUD delante: `"ab" + "c"` y `"a" + "bc"` no
 /// pueden producir el mismo digest.
+///
+/// # #174: copiado de `norte_core::hashing::feed`, a propósito
+/// Byte a byte el mismo framing, y tiene que seguir siéndolo. No comparten
+/// código porque `norte_core::hashing` es `pub(crate)` de un crate que
+/// DEPENDE de este (`norte-core` → `norte-sync`, no al revés), así que
+/// "extraer hacia arriba" no es un movimiento de código; y porque la copia de
+/// `norte-core` es la cadena tamper-evident del journal (ADR 0023) y el ancla
+/// de la auditoría (ADR 0025) — no se puede mover, ni relicenciar de
+/// AGPL-3.0-only a MIT/Apache-2.0, sin invalidar todo `journal.db` ya
+/// escrito. Esta copia SÍ es libre de mudarse a un sitio compartido; la otra
+/// no. Ver #151 para la misma frontera de licencia sobre la clave de
+/// plegado, que quiere resolver las dos con una sola ADR.
 fn feed(digest: &mut Sha256, bytes: &[u8]) {
     digest.update((bytes.len() as u64).to_le_bytes());
     digest.update(bytes);
