@@ -38,6 +38,7 @@ pub mod settings;
 pub mod shell;
 pub mod shortcuts;
 mod sort;
+pub mod space;
 pub mod sync;
 pub mod theme;
 pub mod viewer;

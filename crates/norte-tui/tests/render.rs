@@ -768,6 +768,7 @@ fn el_modal_de_un_lote_pinta_una_ruta_por_linea_y_resume_el_resto() {
         Pane::new(vp("file:///otro"), Vec::new()),
     );
     app.modal = Some(norte_tui::app::Modal::ConfirmTransfer {
+        space: None,
         kind: norte_tui::app::TransferKind::Copy,
         items,
         to: vp("file:///otro"),

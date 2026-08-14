@@ -2472,6 +2472,27 @@ async fn run(
         if let Some(params) = app.pending_compare.take() {
             launch_compare(app, backend, &mut compare_run, params).await;
         }
+        // #149: ¿cabe en el destino? Preguntar por los volúmenes es I/O, así
+        // que el modal se abre SIN el aviso y esta vuelta lo rellena. El
+        // reparto es el de `pending_compare`: el despacho decide QUÉ, el run
+        // loop lo pregunta.
+        //
+        // El fallo se traga a propósito: no poder enumerar volúmenes no puede
+        // impedir una copia ni pintar una alarma — «no lo sé» se dice
+        // callando, que es el contrato de `space::warning`.
+        if let Some(check) = app.pending_space_check.take() {
+            let libre = backend
+                .volumes(false)
+                .await
+                .ok()
+                .and_then(|vols| norte_frontend::space::free_for(&check.to, &vols));
+            if let Some(aviso) =
+                norte_frontend::space::warning(Some(check.total), libre, norte_i18n::active())
+                && let Some(Modal::ConfirmTransfer { space, .. }) = app.modal.as_mut()
+            {
+                *space = Some(aviso);
+            }
+        }
         // `Ctrl+Y` / `s` / `m`: el despacho resolvió QUÉ sincronizar, y aquí
         // se lanza — mismo reparto que la comparación, en la misma cabecera de
         // vuelta y por la misma razón.
@@ -8298,7 +8319,9 @@ async fn on_dialog_key(
                 Modal::ConfirmDelete { items, permanent } => {
                     submit_deletes(app, backend, &items, permanent).await;
                 }
-                Modal::ConfirmTransfer { kind, items, to } => {
+                Modal::ConfirmTransfer {
+                    kind, items, to, ..
+                } => {
                     submit_transfers(app, backend, kind, &items, &to, TransferOptions::default())
                         .await;
                 }

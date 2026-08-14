@@ -2283,7 +2283,12 @@ fn modal_title_body(
             .concat()
             .join("\n"),
         ),
-        Modal::ConfirmTransfer { kind, items, to } => (
+        Modal::ConfirmTransfer {
+            kind,
+            items,
+            to,
+            space,
+        } => (
             match kind {
                 TransferKind::Copy => t("modal-copy-title"),
                 TransferKind::Move => t("modal-move-title"),
@@ -2295,8 +2300,13 @@ fn modal_title_body(
                     // flecha FUERA de banda: ningún nombre de la lista de
                     // arriba puede imitar esta línea.
                     format!("→ {}", norte_frontend::path_display_with(to, reinterpret).0),
-                    hints.confirm.clone(),
                 ],
+                // #149: el aviso de espacio va DEBAJO del destino y encima de
+                // las teclas — es lo último que se lee antes de decidir. Solo
+                // cuando lo hay: cabe, o el destino no sabe decirlo, o no se
+                // sabe cuánto se mueve, y ninguna de las tres se anuncia.
+                space.clone().into_iter().collect::<Vec<String>>(),
+                vec![hints.confirm.clone()],
             ]
             .concat()
             .join("\n"),
