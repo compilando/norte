@@ -378,6 +378,11 @@ fn golden_error() {
                     relation: norte_proto::RootOverlap::DestInsideSource,
                 },
             ),
+            // 0.41.0 (#178): el journal de esta sesión no se puede abrir y la
+            // mutación se rehúsa. Sin campos, y eso es la mitad del contrato:
+            // la ruta del fichero y el error de `SQLite` son locales del
+            // proceso que la emite y no cruzan la frontera.
+            ("journal_unavailable", Error::JournalUnavailable),
         ],
     );
 }
@@ -2881,7 +2886,10 @@ fn method_names_frozen() {
     assert_eq!(methods::SYNC_PLAN_TTL_MS, 600_000);
     assert_eq!(methods::SYNC_MAX_BLOCKERS_REPORTED, 256);
     assert_eq!(methods::SYNC_MAX_INCLUDE, 4096);
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.40.0");
+    // 0.41.0 (#178): `Error::JournalUnavailable` — un journal ilegible rehúsa
+    // la mutación en vez de dejarla pasar sin registro. Categoría nueva, así
+    // que MINOR: un cliente 0.40.x la degrada a `Unknown`.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.41.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

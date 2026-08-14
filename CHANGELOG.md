@@ -654,6 +654,31 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Corrupting one file switched off the record of everything norte did, and
+  norte carried on as if nothing had happened.** Without the background service
+  running, every change you make is recorded in `journal.db` in the state
+  directory — that record is what `undo` reads, and what an audit reads.
+  Anyone able to write to that directory could make the file unreadable
+  (`chmod 000`, one byte of garbage, a stale schema) and from then on every
+  `ntc` session, every `norte cp/mv/rm/mkdir`, and — the valuable one — every
+  `norte ai rename --yes` ran completely unrecorded, behind a warning that also
+  fires in the entirely ordinary "the background service is running" case and
+  which people had therefore learned to ignore. The background service refuses
+  to start on exactly the same file; the two disagreeing was the bug.
+  An unreadable journal now **refuses the change before it happens** and says
+  which file to repair or remove, while a journal merely held by another norte
+  process still lets you work — refusing there would turn "a service is
+  running" into "the file manager does not work", and a script's `norte cp`
+  holding the file for a quarter of a second must not be able to stop you.
+  On the wire that is protocol **0.41.0**: one new error category,
+  `journal_unavailable`, so a client can say what happened in the reader's
+  language instead of showing a raw English string. Older clients degrade it to
+  "unknown error" as they do every category they do not know.
+  **This closes the clumsy half of the hole, not all of it**, and the
+  distinction is worth being plain about: a process running as you that simply
+  *holds* the journal open still makes your session run unrecorded, because
+  refusing there is exactly what must not happen. Tracked as #203 (#178).
+
 - **A quarter of a second of bad luck marked a three-hour session as
   unrecorded, for its whole life.** Without the background service running,
   norte records what it changes in a journal file that only one process may

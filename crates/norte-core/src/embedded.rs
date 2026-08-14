@@ -66,28 +66,45 @@
 //!   NO queda registrada» y una sesión que volviera a registrar en silencio lo
 //!   convertiría en mentira.
 //!
+//! # `Failed` falla en CERRADO, `Busy` no (#178)
+//!
+//! Los dos motivos tenían la MISMA consecuencia —sin journal, un aviso, y a
+//! seguir—, así que la clasificación no compraba nada y fallaba en ABIERTO
+//! justo donde el daemon falla en cerrado (`daemon run` aborta con esa misma
+//! entrada). Cualquiera con escritura en el directorio de estado desactivaba el
+//! registro de todas las sesiones embebidas —`ntc`, `norte cp/mv/rm/mkdir` y,
+//! la valiosa, `norte ai rename --yes`— en silencio y para siempre, detrás de
+//! un aviso al que el usuario está entrenado a no hacer caso porque también
+//! salta en el caso benigno. Y la pereza de #177 SUBÍA su gravedad: una sesión
+//! que aún no había mutado no tenía nada, así que un ocupante que abriera el
+//! fichero una vez y se durmiera condenaba también a las ya arrancadas.
+//!
+//! Ahora se separan, y el reparto es el que impide que el arreglo sea peor que
+//! el agujero:
+//!
+//! - **`Failed` REHÚSA**, con
+//!   [`Error::JournalUnavailable`](norte_proto::Error::JournalUnavailable), y
+//!   lo hace ANTES del efecto: en el gate de [`crate::Engine`], no en el
+//!   observer. Cuando el observer corre la mutación ya ocurrió, así que fallar
+//!   ahí no la desharía — solo diría que falló algo que funcionó.
+//! - **`Busy` SIGUE**, sin registro y avisando. Rehusar aquí convertiría «hay
+//!   un daemon» en «el gestor de ficheros no funciona», y un ocupante de paso
+//!   tumbaría una sesión de tres horas: la misma razón por la que existe el
+//!   reintento de #179, que además es lo que cura este caso solo.
+//!
+//! No hay `--no-journal` que lo salte, y es a propósito: la salida es arreglar
+//! o quitar el fichero, que es lo que dice el mensaje. Una bandera para «muta
+//! sin registrar» acaba en un alias, y con ella el agujero vuelve entero.
+//!
 //! # Lo que este mecanismo NO cubre
 //!
 //! - **Nadie suelta el journal por su cuenta.** [`LazyJournal::release`] es la
 //!   primitiva; no hay temporizador de ociosidad que la llame, así que una
 //!   sesión que mutó a las 09:00 sigue siendo la dueña hasta que el frontend
 //!   decida soltar. Esa política es la mitad de #179 que no vive aquí.
-//! - **`Failed` sigue adelante igual que `Busy`.** Un journal corrupto, sin
-//!   permisos, o OCUPADO A PROPÓSITO por alguien con acceso al directorio de
-//!   estado, deja la sesión sin registro con solo un aviso, mientras que el
-//!   daemon con esa misma entrada se niega a arrancar. Hacerlo fallar en
-//!   cerrado (con un `--no-journal` explícito para el que sepa lo que hace) es
-//!   una decisión de producto pendiente (#178), y la pereza SUBE su gravedad,
-//!   de dos maneras que conviene tener escritas:
-//!   1. Antes, quien arrancaba con el fichero libre se lo quedaba y era
-//!      inmune a un ocupante posterior. Ahora una sesión que aún no ha mutado
-//!      no tiene nada, así que un ocupante que abra el fichero UNA vez y se
-//!      duerma condena a todas las sesiones embebidas que aún no hayan mutado
-//!      —incluidas las ya arrancadas— hasta que el freno les deje reintentar.
-//!   2. La configuración que #177 hace posible —daemon y `ntc` a la vez— deja
-//!      al `ntc` sin registro TODA su vida, por diseño y no por accidente. Que
-//!      eso se vea es del indicador permanente del frontend, no de este
-//!      módulo; si alguien lo quita, esto vuelve a ser silencioso.
+//! - **`gc_partials` no pasa por el gate**, así que barre sus propios
+//!   `.norte-partial` aunque el journal esté ilegible. Es basura de este
+//!   proceso, no datos del usuario, y nunca llevó fila.
 //! - **El directorio de estado tiene que ser LOCAL.** WAL + `EXCLUSIVE` sobre
 //!   NFS/SMB depende de un `fcntl` que esos sistemas no siempre respetan, y ahí
 //!   dos máquinas pueden creerse dueñas del mismo fichero a la vez.
@@ -116,7 +133,11 @@ impl NoJournal {
     /// La frase para el humano, sin traducir.
     ///
     /// Es la del log y la del CLI. El TUI NO la usa salvo como red: su interfaz
-    /// pasa por Fluent (`msg-journal-busy` / `msg-journal-unavailable`).
+    /// pasa por Fluent (`msg-journal-busy` / `msg-journal-refused`).
+    ///
+    /// **Las dos frases dicen cosas DISTINTAS desde #178**, y confundirlas es
+    /// el defecto que esa issue existe para no repetir: `Busy` es «esto pasó y
+    /// no quedó anotado», `Failed` es «esto NO ha pasado».
     #[must_use]
     pub fn text(&self) -> String {
         match self {
@@ -124,8 +145,10 @@ impl NoJournal {
                            mutaciones de ESTA sesión no quedan registradas (#167)"
                 .to_owned(),
             Self::Failed(motivo) => format!(
-                "el journal no se pudo abrir ({motivo}): las mutaciones de ESTA sesión no \
-                 quedan registradas (#167)"
+                "el journal no se pudo abrir ({motivo}): esta sesión REHÚSA mutar mientras \
+                 siga así, porque nada quedaría registrado ni se podría deshacer. Arregla \
+                 lo que nombra el motivo —el directorio o el fichero— y vuelve a intentarlo \
+                 (#178)"
             ),
         }
     }
@@ -469,18 +492,44 @@ impl LazyJournal {
         self.get().await
     }
 
-    /// La ventana, abriéndola si hace falta y si el freno lo permite.
-    async fn resolve(&self) -> Result<Arc<crate::journal::SqliteJournal>, NoJournal> {
+    /// El journal, o el MOTIVO de que no lo haya.
+    ///
+    /// [`Self::get`] tira el motivo porque a un observer le da igual. Al gate
+    /// de mutaciones NO le da igual: `Busy` sigue adelante y `Failed` rehúsa
+    /// (#178), y ahí está toda la diferencia entre «hay un daemon vivo» y
+    /// «alguien con escritura en el directorio de estado desactivó el
+    /// registro».
+    ///
+    /// Abre si hace falta y si el freno lo permite, exactamente como `get` — y
+    /// con su misma advertencia: **el [`Arc`] devuelto no debe sobrevivir a la
+    /// operación que lo pidió**, o [`Self::release`] se convierte en un no-op
+    /// permanente y silencioso.
+    ///
+    /// # Errors
+    /// [`NoJournal::Busy`] si el lock lo tiene otro proceso;
+    /// [`NoJournal::Failed`] con el fichero y el motivo para todo lo demás
+    /// (permisos, corrupción, una DB de una era anterior a esta cadena).
+    pub async fn resolve(&self) -> Result<Arc<crate::journal::SqliteJournal>, NoJournal> {
         let mut v = self.estado.lock().await;
         if let Some(j) = &v.handle {
             return Ok(Arc::clone(j));
         }
-        // El freno: dentro de la ventana se contesta lo que dijo el último
-        // intento, sin pagar otra espera del lock y sin volver a avisar.
-        if let Some((cuando, veredicto)) = &v.ultimo_fallo
+        // El freno, y SOLO para `Busy`. Lo que el freno ahorra es la espera del
+        // lock (`ESPERA_POR_EL_LOCK`), y esa espera solo se paga cuando hay un
+        // lock que esperar: un `Failed` —no existe el directorio, no hay
+        // permisos, esto no es una base de datos— vuelve en el acto, así que
+        // frenarlo no ahorra nada y sí cuesta lo único que importa desde #178,
+        // que es CUÁNDO se entera la sesión de que el fichero ya está
+        // arreglado. Con el freno puesto, un `chmod` que devuelve los permisos
+        // dejaba hasta 30 s de mutaciones rehusadas sin forma de forzar el
+        // reintento desde la interfaz; sin él, la siguiente operación funciona.
+        // Lo mismo vale para un `Failed` TRANSITORIO (un `EMFILE` en un TUI con
+        // muchas conexiones), que es el caso en que 30 s de negativa serían
+        // puro daño.
+        if let Some((cuando, NoJournal::Busy)) = &v.ultimo_fallo
             && cuando.elapsed() < self.freno
         {
-            return Err(veredicto.clone());
+            return Err(NoJournal::Busy);
         }
         self.intentos
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -492,7 +541,16 @@ impl LazyJournal {
         {
             Ok(j) => Ok(Arc::new(j)),
             Err(e) if es_lock_ocupado(&e) => Err(NoJournal::Busy),
-            Err(e) => Err(NoJournal::Failed(motivo_saneado(&e.to_string()))),
+            // El FICHERO va en el motivo, y no solo el error de `SQLite`: desde
+            // #178 esto no es un aviso, es lo que hay que arreglar para que la
+            // sesión vuelva a poder mutar, y «unable to open database file» sin
+            // un path delante no le dice a nadie qué tocar. `Path::display` es
+            // la conversión lossy EXPLÍCITA que pide la regla 1 — esto es texto
+            // para un humano y nadie lo reparsea.
+            Err(e) => Err(NoJournal::Failed(motivo_saneado(
+                &e.to_string(),
+                &self.path,
+            ))),
         };
         match &r {
             Ok(j) => {
@@ -635,10 +693,24 @@ pub fn engine_in(state_dir: &Path) -> crate::Engine {
     crate::Engine::with_lazy_journal(Arc::new(LazyJournal::in_state_dir(state_dir)))
 }
 
-/// Tope del motivo de [`NoJournal::Failed`], en caracteres.
-const MOTIVO_MAX: usize = 200;
+/// Tope de la RAZÓN dentro de [`NoJournal::Failed`], en caracteres.
+const RAZON_MAX: usize = 160;
+
+/// Tope de la ruta que acompaña a esa razón, en caracteres, contados por la
+/// COLA.
+///
+/// Dos topes y no uno, y el orden importa: con un solo tope sobre
+/// `"<ruta>: <razón>"`, un `NORTE_CONFIG_DIR` profundo se come el presupuesto y
+/// lo que se corta es la razón — o sea el POR QUÉ, que es lo único que
+/// distingue «el directorio no se puede escribir» de «esto no es una base de
+/// datos», y son arreglos distintos. Y de la ruta lo que sirve es el final
+/// (`…/norte/journal.db`), no el principio.
+const RUTA_MAX: usize = 80;
 
 /// El texto de un error de apertura, apto para una terminal y para un log.
+///
+/// Es «`<ruta>`: `<razón>`», con un presupuesto para cada mitad y las dos
+/// saneadas.
 ///
 /// **Quien puede escribir `<state>/journal.db` escribe parte de esta frase.**
 /// La prosa de `SQLite` interpola identificadores del propio fichero
@@ -650,37 +722,94 @@ const MOTIVO_MAX: usize = 200;
 /// No sustituye a nada más: quien tiene esa escritura ya se cargó la integridad
 /// del journal, y desde #178 esa sesión además no muta. Esto solo impide que la
 /// avería se convierta en una inyección en la pantalla del operador.
-fn motivo_saneado(bruto: &str) -> String {
-    let mut out: String = bruto
+fn motivo_saneado(razon: &str, ruta: &std::path::Path) -> String {
+    format!(
+        "{}: {}",
+        recorta(&saneado(&ruta.display().to_string()), RUTA_MAX, Cola::Final),
+        saneado_y_recortado(razon)
+    )
+}
+
+/// La razón, saneada y acotada por el principio.
+fn saneado_y_recortado(razon: &str) -> String {
+    recorta(&saneado(razon), RAZON_MAX, Cola::Principio)
+}
+
+/// Por qué punta se recorta.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cola {
+    /// Se guarda el principio (una razón se lee de izquierda a derecha).
+    Principio,
+    /// Se guarda el FINAL (de una ruta lo que identifica es la cola).
+    Final,
+}
+
+/// Quita lo que un terminal interpretaría en vez de pintar.
+///
+/// Controles (que son secuencias de escape) y los reordenadores bidi de
+/// Unicode: los segundos no son `char::is_control` y reordenan lo que va
+/// DESPUÉS de ellos, así que un nombre con un `U+202E` dentro reescribe la
+/// frase entera del operador sin cambiar un byte de lo que dice.
+fn saneado(bruto: &str) -> String {
+    bruto
         .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .take(MOTIVO_MAX)
-        .collect();
-    if bruto.chars().count() > MOTIVO_MAX {
-        out.push('…');
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// Acota a `max` caracteres, marcando con `…` que se cortó.
+fn recorta(s: &str, max: usize, cola: Cola) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        return s.to_owned();
     }
-    out
+    match cola {
+        Cola::Principio => s.chars().take(max).chain(std::iter::once('…')).collect(),
+        Cola::Final => std::iter::once('…')
+            .chain(s.chars().skip(n - max))
+            .collect(),
+    }
 }
 
 /// Si este error de apertura es «lo tiene otro», y no un problema de verdad.
 ///
-/// Se mira el CÓDIGO de `SQLite`, no su prosa: `SQLITE_BUSY` (5) y
-/// `SQLITE_LOCKED` (6), tomando el byte bajo para que valgan también los
-/// extendidos (`SQLITE_BUSY_SNAPSHOT` = 261, …). El texto («database is
-/// locked») es de la capa de presentación de `sqlx` y nadie lo garantiza entre
-/// versiones; con la clasificación colgando de él, un bump que reformatee
-/// `Display` convertiría todos los `Busy` en `Failed` sin que ningún test se
-/// enterase.
+/// Se mira el CÓDIGO de `SQLite`, no su prosa: `SQLITE_BUSY` (5),
+/// `SQLITE_LOCKED` (6) y `SQLITE_PROTOCOL` (15), tomando el byte bajo para que
+/// valgan también los extendidos (`SQLITE_BUSY_SNAPSHOT` = 261, …). El texto
+/// («database is locked») es de la capa de presentación de `sqlx` y nadie lo
+/// garantiza entre versiones; con la clasificación colgando de él, un bump que
+/// reformatee `Display` convertiría todos los `Busy` en `Failed` sin que ningún
+/// test se enterase.
 ///
-/// Deliberadamente ESTRECHO: ensanchar esto a «cualquier error» convertiría una
-/// DB corrupta o un directorio sin permisos en un `Busy` silencioso, o sea en
-/// una sesión sin registro que el operador creería registrada, justo en la
-/// máquina que más lo necesita.
+/// El 15 está aquí desde #178 y por culpa de #178: es contención del protocolo
+/// de locking de WAL, su remedio documentado es REINTENTAR, y desde que
+/// `Failed` rehúsa la mutación, clasificarlo mal ya no cuesta una fila de
+/// journal — cuesta una operación negada por una carrera que se resuelve sola.
+///
+/// Lo que NO entra, y no por olvido: los sabores de lock de `SQLITE_IOERR`
+/// (`_LOCK` = 3850, `_BLOCKED` = 2826) y `SQLITE_READONLY_CANTLOCK` (520).
+/// Suenan transitorios y no lo son —un `fcntl` que falla sobre NFS, un fichero
+/// que de verdad es de solo lectura— y sus PRIMARIOS (10 y 8) son cajones
+/// enormes que se llevarían por delante media taxonomía de I/O. Un falso
+/// `Failed` cuesta una negativa que el usuario ve y puede reintentar; un falso
+/// `Busy` cuesta una mutación sin registrar que nadie ve.
+///
+/// Deliberadamente ESTRECHO por lo mismo: ensanchar esto a «cualquier error»
+/// convertiría una DB corrupta o un directorio sin permisos en un `Busy`
+/// silencioso, o sea en una sesión sin registro que el operador creería
+/// registrada, justo en la máquina que más lo necesita.
 fn es_lock_ocupado(e: &crate::journal::JournalError) -> bool {
     let crate::journal::JournalError::Sqlx(sqlx::Error::Database(db)) = e else {
         return false;
     };
     db.code()
         .and_then(|c| c.parse::<i32>().ok())
-        .is_some_and(|c| matches!(c & 0xff, 5 | 6))
+        .is_some_and(|c| matches!(c & 0xff, 5 | 6 | 15))
 }

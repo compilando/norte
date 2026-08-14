@@ -331,6 +331,62 @@ fn el_schema_de_rename_collision_kind_cubre_los_veredictos_de_la_golden() {
     );
 }
 
+/// (0.41.0, #178) El mismo mecanismo, para LA TAXONOMÍA DE ERRORES entera.
+///
+/// Es la familia a la que más le hacía falta y la única que no lo tenía. Un
+/// bump que añade categoría —0.36.0 dos, 0.40.0 una, 0.41.0 una— toca tres
+/// sitios que nada ata entre sí: la variante, el caso Rust de `golden_error` y
+/// la fixture. `check_family` cruza los dos ÚLTIMOS, así que olvidar los dos a
+/// la vez deja los dos lados de acuerdo y el test verde, con una categoría que
+/// el core emite y ninguna golden congela. El artefacto se genera del TIPO, así
+/// que cruzarlo contra la fixture cierra el triángulo.
+///
+/// [`Error`] va con tag INTERNO (`#[serde(tag = "kind")]`), no como los enums
+/// de token suelto de los dos tests de abajo: sus `const` no viven en
+/// `oneOf[].const` sino en `oneOf[].properties.kind.const`. De ahí que sea un
+/// test propio y no una fila más de la tabla.
+///
+/// `unknown` queda fuera, como en sus hermanos: es el fallback de
+/// `serde(other)` y el core JAMÁS lo emite.
+#[test]
+fn el_schema_de_la_taxonomia_de_errores_cubre_la_golden() {
+    let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+    let variantes = schema
+        .pointer("/$defs/Error/oneOf")
+        .and_then(serde_json::Value::as_array)
+        .expect("Error es un oneOf en el artefacto");
+    let del_schema: std::collections::BTreeSet<&str> = variantes
+        .iter()
+        .filter_map(|v| {
+            v.pointer("/properties/kind/const")
+                .and_then(serde_json::Value::as_str)
+        })
+        .filter(|v| *v != "unknown")
+        .collect();
+    assert!(
+        !del_schema.is_empty(),
+        "¿cambió la forma de Error en el artefacto? (tag interno: /properties/kind/const)"
+    );
+
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/types/error.json");
+    let raw = std::fs::read_to_string(&fixture).expect("leer error.json");
+    let casos: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&raw).expect("fixture JSON válida");
+    let de_la_golden: std::collections::BTreeSet<&str> = casos
+        .values()
+        .map(|caso| {
+            caso.get("kind")
+                .and_then(serde_json::Value::as_str)
+                .expect("cada error de la fixture lleva su categoría")
+        })
+        .collect();
+
+    assert_eq!(
+        del_schema, de_la_golden,
+        "toda categoría que el core puede emitir necesita fixture en error.json (y al revés)"
+    );
+}
+
 /// (0.40.0, ADR 0049) El mismo mecanismo que el test de
 /// [`RenameCollisionKind`], para el vocabulario de la sincronización: TODO
 /// token que el core puede emitir necesita fixture, y al revés.

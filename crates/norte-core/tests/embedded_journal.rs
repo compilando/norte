@@ -252,6 +252,10 @@ async fn el_veredicto_se_recuerda_dentro_del_freno() {
 /// El motivo que NO es el lock llega como [`NoJournal::Failed`] con su texto —
 /// la rama que acaba en la barra de estado de la TUI, y la única que
 /// stringifica un error del core para enseñárselo a alguien.
+///
+/// Lo que hace la mutación con ese motivo es de #178 y lo pinea
+/// `un_journal_ilegible_rehusa_la_mutacion`; lo que se comprueba aquí es la
+/// CLASIFICACIÓN, que es de lo que cuelga todo lo demás.
 #[tokio::test]
 async fn un_journal_que_no_se_puede_abrir_no_es_busy() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -259,16 +263,11 @@ async fn un_journal_que_no_se_puede_abrir_no_es_busy() {
     // culpa de ningún lock.
     std::fs::create_dir(journal_path(dir.path())).expect("ocupar el nombre");
 
-    let (engine, lazy, _mem) = engine_perezoso(dir.path());
+    let (_engine, lazy, _mem) = engine_perezoso(dir.path());
     let avisos = Arc::new(Avisos::default());
     lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
 
-    let h = engine.mkdir(&vp("mem:///d")).await.expect("mkdir");
-    assert_eq!(
-        h.join().await,
-        TaskState::Completed,
-        "un journal ilegible no rompe la sesión embebida (#178)"
-    );
+    assert!(lazy.get().await.is_none(), "no se pudo abrir");
     match avisos.vistos().as_slice() {
         [NoJournal::Failed(motivo)] => assert!(!motivo.is_empty(), "el motivo se cuenta"),
         otro => panic!("esto no es el lock de nadie: {otro:?}"),
@@ -419,7 +418,10 @@ async fn un_ocupante_de_paso_no_condena_la_sesion() {
 
     let h = engine.mkdir(&vp("mem:///d2")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
-    let journal = lazy.get().await.expect("el fichero quedó libre y se reintentó");
+    let journal = lazy
+        .get()
+        .await
+        .expect("el fichero quedó libre y se reintentó");
     let entries = journal.journal().entries().await.expect("entries");
     assert_eq!(
         entries.len(),
@@ -506,7 +508,11 @@ async fn reabrir_relee_la_cadena_del_fichero() {
     let journal = lazy.get().await.expect("reabierto");
     let entries = journal.journal().entries().await.expect("entries");
     let seqs: Vec<i64> = entries.iter().map(|e| e.seq).collect();
-    assert_eq!(seqs, vec![1, 2, 3], "la cadena sigue al OTRO escritor: {entries:?}");
+    assert_eq!(
+        seqs,
+        vec![1, 2, 3],
+        "la cadena sigue al OTRO escritor: {entries:?}"
+    );
     assert_eq!(
         entries[2].path.as_slice(),
         b"mem:///dos",
@@ -530,7 +536,10 @@ async fn dos_mutaciones_a_la_vez_abren_un_solo_handle() {
     assert_eq!(b.expect("mkdir b").join().await, TaskState::Completed);
 
     assert_eq!(lazy.attempts(), 1, "un intento, no uno por mutación");
-    assert!(avisos.vistos().is_empty(), "nada que avisar: se abrió a la primera");
+    assert!(
+        avisos.vistos().is_empty(),
+        "nada que avisar: se abrió a la primera"
+    );
     let journal = lazy.get().await.expect("dueña");
     assert_eq!(
         journal.journal().count().await.expect("count"),
@@ -604,5 +613,169 @@ async fn ensure_journal_no_contesta_desde_el_freno() {
         engine.ensure_journal().await,
         "quedó libre: la pregunta que ve un humano no se contesta desde la caché"
     );
-    assert_eq!(lazy.attempts(), 2, "y para eso hubo que intentarlo otra vez");
+    assert_eq!(
+        lazy.attempts(),
+        2,
+        "y para eso hubo que intentarlo otra vez"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #178: un journal ilegible falla en CERRADO; uno ocupado, no.
+// ---------------------------------------------------------------------------
+
+/// **#178.** Un `journal.db` que no es una base de datos —lo que deja cualquiera
+/// con escritura en el directorio de estado— REHÚSA la mutación, con su
+/// categoría propia y sin tocar nada.
+///
+/// Antes seguía adelante detrás de un aviso, o sea que corromper un fichero
+/// desactivaba el registro de TODAS las sesiones embebidas —incluido el de
+/// `norte ai rename --yes`, que es el que más falta hace— en silencio y para
+/// siempre, mientras `norte daemon run` con esa misma entrada se niega a
+/// arrancar. La asimetría era el bug.
+#[tokio::test]
+async fn un_journal_ilegible_rehusa_la_mutacion() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // Un DIRECTORIO donde va el fichero: `SQLite` no puede abrirlo, y no por
+    // culpa de ningún lock.
+    std::fs::create_dir(journal_path(dir.path())).expect("ocupar el nombre");
+
+    let (engine, lazy, mem) = engine_perezoso(dir.path());
+    let avisos = Arc::new(Estados::default());
+    lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
+
+    assert!(
+        matches!(
+            engine.mkdir(&vp("mem:///d")).await,
+            Err(norte_proto::Error::JournalUnavailable)
+        ),
+        "un journal ilegible para la mutación con su categoría"
+    );
+    assert!(
+        mem.stat(&vp("mem:///d")).await.is_err(),
+        "y no se tocó nada: la negativa es PREVIA al efecto"
+    );
+    // El motivo, con el fichero nombrado, sigue llegando por el canal de avisos
+    // — que es in-process y sí puede llevar rutas.
+    match avisos.vistos().as_slice() {
+        [JournalStatus::Lost(NoJournal::Failed(motivo))] => {
+            assert!(
+                motivo.contains("journal.db"),
+                "el fichero se nombra: {motivo}"
+            );
+        }
+        otro => panic!("esto no es el lock de nadie: {otro:?}"),
+    }
+}
+
+/// Y su gemela, que es la que impide que el arreglo sea peor que el agujero: un
+/// journal OCUPADO deja seguir.
+///
+/// El ocupante habitual es benigno —un daemon vivo, otra ventana— y rehusar
+/// convertiría «hay un daemon» en «el gestor de ficheros no funciona». Un
+/// transitorio (otro `norte cp` de un script, un daemon reiniciándose) no puede
+/// tumbar una sesión de tres horas.
+#[tokio::test]
+async fn un_journal_ocupado_deja_seguir() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+        .await
+        .expect("el primero se lo lleva");
+
+    let (engine, _lazy, mem) = engine_perezoso(dir.path());
+    let h = engine
+        .mkdir(&vp("mem:///d"))
+        .await
+        .expect("ocupado NO rehúsa");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert!(
+        mem.stat(&vp("mem:///d")).await.is_ok(),
+        "la mutación ocurrió"
+    );
+}
+
+/// El engine SIN journal por construcción (`Engine::new()`, un embebedor de la
+/// biblioteca) no queda atrapado en la negativa de #178: no tiene journal
+/// perezoso, así que no hay fichero que arreglar y nunca hubo registro que
+/// perder.
+#[tokio::test]
+async fn un_engine_sin_journal_perezoso_no_lo_echa_de_menos() {
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let h = engine.mkdir(&vp("mem:///d")).await.expect("mkdir");
+    assert_eq!(h.join().await, TaskState::Completed);
+}
+
+/// **La afirmación entera de #178, y lo único que la sostiene.** TODO punto de
+/// mutación del engine pasa por el gate del journal.
+///
+/// Sin esto, la cobertura la daba un solo `mkdir`: un `Engine::hardlink_as`
+/// futuro que se olvidara del gate no rompería ningún test y reabriría el
+/// agujero por la puerta nueva, en silencio. La lista es la de los ocho
+/// llamadores de `gate`, y crece con ellos.
+#[tokio::test]
+async fn toda_mutacion_pasa_por_el_gate_del_journal() {
+    use norte_proto::Error as E;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir(journal_path(dir.path())).expect("ocupar el nombre con un directorio");
+    let (engine, _lazy, mem) = engine_perezoso(dir.path());
+    // Un árbol con algo que copiar, mover, renombrar y borrar.
+    mem.mkdir(&vp("mem:///d")).await.expect("fixture");
+    {
+        let mut sink = mem.write(&vp("mem:///d/a.txt")).await.expect("write");
+        sink.write(bytes::Bytes::from_static(b"vivo"))
+            .await
+            .expect("chunk");
+        sink.commit().await.expect("commit");
+    }
+
+    let (from, to) = (vp("mem:///d/a.txt"), vp("mem:///d/b.txt"));
+    // El plan de renombrados se pide de verdad: `rename_batch` compara el hash
+    // ANTES del gate, así que uno inventado saldría por `PlanStale` y no
+    // probaría nada del journal. (Que el orden sea ese no es un problema:
+    // comparar no toca el árbol.)
+    let pares: Vec<(Vec<u8>, Vec<u8>)> = vec![(b"a.txt".to_vec(), b"c.txt".to_vec())];
+    let plan = engine
+        .rename_batch_plan(&vp("mem:///d"), &pares)
+        .await
+        .expect("planificar es LEER: no pasa por el gate del journal");
+    let rehusado: Vec<(&str, Result<(), norte_proto::Error>)> = vec![
+        ("copy", engine.copy(&from, &to).await.map(|_| ())),
+        ("move", engine.move_(&from, &to).await.map(|_| ())),
+        ("mkdir", engine.mkdir(&vp("mem:///nuevo")).await.map(|_| ())),
+        (
+            "delete",
+            engine.delete(&vp("mem:///d/a.txt")).await.map(|_| ()),
+        ),
+        (
+            "rename_batch",
+            engine
+                .rename_batch(&vp("mem:///d"), &pares, plan.hash())
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "undo_session",
+            engine.undo_session(Actor::User).await.map(|_| ()),
+        ),
+    ];
+    for (nombre, r) in rehusado {
+        assert!(
+            matches!(r, Err(E::JournalUnavailable)),
+            "{nombre} tiene que pasar por el gate del journal: {r:?}"
+        );
+    }
+
+    // Y nada de eso tocó el árbol: la negativa es PREVIA al efecto.
+    assert!(
+        mem.stat(&from).await.is_ok(),
+        "el fichero sigue donde estaba"
+    );
+    assert!(mem.stat(&to).await.is_err(), "no se creó el destino");
+    assert!(
+        mem.stat(&vp("mem:///nuevo")).await.is_err(),
+        "no se creó el directorio"
+    );
 }

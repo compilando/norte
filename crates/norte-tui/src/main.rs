@@ -2142,6 +2142,10 @@ fn args_or_exit(args: norte_frontend::cli::Cli) -> Result<Option<norte_frontend:
 ///
 /// El texto de `NoJournal::text()` es para el log del operador y va en crudo;
 /// esto es interfaz, y la interfaz de este binario pasa por Fluent.
+///
+/// Las dos ramas dicen cosas DISTINTAS desde #178: `Busy` es «esto pasó y no
+/// quedó anotado» y `Failed` es «esto no ha pasado». Compartir frase era el
+/// defecto.
 fn journal_warning_i18n(why: &norte_core::embedded::NoJournal) -> String {
     use norte_core::embedded::NoJournal as N;
     match why {
@@ -2151,7 +2155,7 @@ fn journal_warning_i18n(why: &norte_core::embedded::NoJournal) -> String {
         // texto derivado de rutas del entorno. La barra de estado tiene un
         // saneador para exactamente esto y todo lo demás pasa por él.
         N::Failed(motivo) => ta(
-            "msg-journal-unavailable",
+            "msg-journal-refused",
             &[("motivo", &norte_tui::app::detail_for_bar(motivo))],
         ),
         // `#[non_exhaustive]`: un motivo nuevo no puede quedarse mudo — si

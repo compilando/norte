@@ -993,13 +993,13 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.40.0 (sync.plan, ADR 0049): acepta 0.40.x (N) y 0.39.x (N-1),
-    // rechaza 0.38.x (N-2) — la ventana se desplaza con el bump, no se
+    // 0.41.0 (`Error::JournalUnavailable`, #178): acepta 0.41.x (N) y 0.40.x
+    // (N-1), rechaza 0.39.x (N-2) — la ventana se desplaza con el bump, no se
     // ensancha, y que el bump sea ADITIVO no la ensancha tampoco.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.40.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.39.0"), "N-1");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.41.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.40.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.38.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.39.9"),
         "N-2 fuera de la ventana"
     );
 }

@@ -2603,9 +2603,22 @@ impl App {
     ///
     /// Frase fija y sin el motivo: el motivo salió por `message` cuando ocurrió
     /// (con el error del core saneado), y la barra de estado tiene que caber.
+    ///
+    /// **DOS frases, porque son dos hechos distintos (#178).** `Busy` es «esto
+    /// pasó y no quedó anotado» — la sesión muta, sin registro. `Failed` es
+    /// «esto NO va a pasar»: la sesión rehúsa mutar hasta que el fichero se
+    /// arregle. Enseñar «no se puede deshacer» sobre la segunda diría lo
+    /// contrario de lo que ocurre, y esa clase de indicador es justo lo que
+    /// #178 vino a quitar.
     #[must_use]
     pub fn journal_banner(&self) -> Option<String> {
-        self.no_journal.as_ref().map(|_| t("status-no-journal"))
+        use norte_core::embedded::NoJournal as N;
+        self.no_journal.as_ref().map(|why| match why {
+            N::Failed(_) => t("status-journal-refused"),
+            // `Busy` y cualquier motivo futuro: el mensaje conservador es el
+            // que no promete que la mutación se haya parado.
+            _ => t("status-no-journal"),
+        })
     }
 
     /// Los dos indicadores persistentes de la barra, JUNTOS.

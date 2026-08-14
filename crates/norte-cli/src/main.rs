@@ -2095,9 +2095,23 @@ async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
     // un script cuyo log alguien lee) al que le toca enterarse, y ese es
     // justamente el camino donde nadie está mirando la pantalla.
     //
-    // El motivo lo acaba de decir el sink de stderr; aquí va la consecuencia.
-    if !engine.ensure_journal().await {
-        eprintln!("norte: {}", norte_i18n::t("cli-ai-rename-unjournalled"));
+    // El motivo lo acaba de decir el sink de stderr; aquí va la consecuencia —
+    // y desde #178 hay DOS consecuencias distintas, que un `bool` confundía.
+    //
+    // Con `Failed` los renombrados no van a ocurrir: `Engine::gate` los rehúsa
+    // uno a uno. Preguntar «¿seguro? no se podrán deshacer» y renombrar cero
+    // ficheros saliendo con éxito es lo peor de los dos mundos: un `norte ai
+    // rename --yes && <lo siguiente>` en un cron seguiría adelante sobre un
+    // no-op silencioso. Así que se para aquí, con el código de los rechazos.
+    match engine.journal_obstacle().await {
+        Some(norte_core::embedded::NoJournal::Failed(_)) => {
+            eprintln!("norte: {}", norte_i18n::t("cli-ai-rename-refused"));
+            return Ok(ExitCode::from(2));
+        }
+        // `Busy` (y cualquier motivo futuro) sí muta, sin quedar registrado:
+        // eso es un aviso, no un motivo para no renombrar.
+        Some(_) => eprintln!("norte: {}", norte_i18n::t("cli-ai-rename-unjournalled")),
+        None => {}
     }
 
     if !yes {
@@ -2141,7 +2155,14 @@ async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
         "{}",
         norte_i18n::ta("cli-ai-rename-done", &[("n", &ok.to_string())])
     );
-    Ok(ExitCode::SUCCESS)
+    // Un rename que no llegó a hacerse NO sale con éxito. Cada fallo ya salió
+    // por stderr, pero un script solo mira el código: éxito sobre «cero de
+    // cuarenta» es la clase de mentira que encadena un `&&` con lo siguiente.
+    Ok(if ok == plan.entries.len() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
 }
 
 /// `norte gc`: barre staging `.norte-partial` huérfano (#11, ADR 0012).

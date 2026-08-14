@@ -1206,6 +1206,19 @@
           "type": "object"
         },
         {
+          "description": "El journal de ESTA sesión no se puede abrir, así que la mutación se\nRECHAZÓ y no se tocó nada (0.41.0, #178).\n\nNo es «el fichero está ocupado»: un journal que tiene otro proceso —un\ndaemon vivo, otra sesión embebida— deja seguir, avisando, porque\nrefusarlo convertiría «hay un daemon» en «el CLI no funciona». Esto es\nel otro caso: sin permisos, corrupto, no-es-una-base-de-datos, o de una\nera anterior a la cadena de hoy. Ahí seguir significaría mutar sin\nregistro y sin undo, que es exactamente lo que la regla dura 4 prohíbe y\nlo que `norte daemon run` ya rehúsa con esa misma entrada.\n\n**Es la variante que un atacante con escritura en el directorio de\nestado hace aparecer.** Corromper `journal.db` desactivaba en silencio\nel registro de TODAS las sesiones embebidas —incluido el de\n`norte ai rename --yes`, que es el que más falta hace—; ahora las para.\nAccionable: arreglar o quitar `journal.db` del directorio de estado.\n\nSin campos A PROPÓSITO: la ruta del fichero es local del proceso que la\nemite y no significa nada en el otro extremo de un socket, y el motivo\nes el error crudo de `SQLite` —texto que moldea en parte quien pueda\nescribir el fichero— que no tiene por qué cruzar la frontera. Los dos\nviajan por el canal de avisos del journal\n(`norte_core::embedded::NoJournal`), que es in-process y saneado.\n\nEso no deja el detalle sin sitio: si algún día hace falta nombrar el\nfichero POR EL WIRE, el `message` del `RpcError` ya lleva el `Display`\nde este error, que es donde ADR 0004 pone lo legible por humanos. La\ntaxonomía se queda con la categoría; añadir un campo aquí no haría\nfalta.\n\nHoy solo la emite el transporte EMBEBIDO: el daemon con esta misma\nentrada no llega a arrancar. Un cliente N-1 (0.40.x) degradaría a\n`Unknown`.",
+          "properties": {
+            "kind": {
+              "const": "journal_unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Categoría de un protocolo más nuevo (fallback de deserialización).\nEl core JAMÁS la emite; existe para que un cliente N degrade con\nelegancia ante categorías N+1.",
           "properties": {
             "kind": {
