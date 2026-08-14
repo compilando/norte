@@ -3753,7 +3753,15 @@ fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, the
             ],
             None => vec![Line::from(Span::styled(t(id), theme.role(Role::Info)))],
         };
-        frame.render_widget(Paragraph::new(lineas), a);
+        // ENVUELTA, y el hueco lo reserva `sync_layout` con la misma cuenta:
+        // la frase creció al decir que un árbol se re-comprueba en el
+        // directorio y no por dentro, y sin envolver se cortaba justo antes
+        // del «¿Seguir?» — la pregunta desaparecía de la pantalla que la
+        // hace. Lo cazó el snapshot, otra vez.
+        frame.render_widget(
+            Paragraph::new(lineas).wrap(ratatui::widgets::Wrap { trim: false }),
+            a,
+        );
     }
 }
 
@@ -3805,9 +3813,16 @@ fn sync_layout(outer: Rect, view: &crate::app::SyncView) -> (Option<Rect>, Rect,
     // recortarlas para que quepan más pasos esconde justamente el «esto no se
     // puede deshacer». Los pasos tienen barra; el resumen no.
     let resumen = alto_resumen.min((outer.height / 2).max(1));
-    // La segunda pregunta se lleva dos filas: la pregunta y la tecla que la
-    // contesta.
-    let teclas = if view.confirming.is_some() { 2 } else { 1 };
+    // La segunda pregunta se lleva la pregunta ENVUELTA más la fila de la
+    // tecla que la contesta. Dos fijas no bastan: a 80 columnas la frase de un
+    // borrado irreversible son dos filas ella sola, y la de más abajo es la
+    // que dice «¿Seguir?». Acotada como el resumen —la mitad del marco—, y con
+    // el suelo en 2 para que la tecla no se quede nunca sin sitio.
+    let teclas = view.confirming.as_ref().map_or(1, |c| {
+        wrapped_rows(&c.text, outer.width)
+            .saturating_add(1)
+            .min((outer.height / 2).max(2))
+    });
     let filas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
