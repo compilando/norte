@@ -882,6 +882,7 @@ pub fn status_line(view: &CompareView, marked: usize, lang: Lang) -> String {
     let how = match view.state {
         CompareState::Running => ta_in(lang, "compare-status-running", &[("n", &n)]),
         CompareState::Done => ta_in(lang, "compare-status-done", &[("n", &n)]),
+        CompareState::Unknown => ta_in(lang, "compare-status-unknown", &[("n", &n)]),
         CompareState::Incomplete => ta_in(
             lang,
             "compare-status-incomplete",
@@ -938,6 +939,21 @@ pub enum CompareState {
     /// It ended, but FEWER rows arrived than the task counted: a batch was
     /// lost on the way.
     Incomplete,
+    /// The run ended and **nothing said how**: the row channel closed without
+    /// a terminal `TaskState` ever being observed, so there is no snapshot to
+    /// compare the arrived rows against.
+    ///
+    /// This exists because the honest answer is neither of the two above
+    /// (#183). There is a benign race in the design — the channel can close
+    /// before the terminal state is seen — and both frontends used to paint
+    /// `Done` for it, which is right for the race and WRONG for the case it
+    /// cannot be told apart from: a task that died early, with no snapshot
+    /// and no counts. `Done` is the one answer a comparison must never give
+    /// when it does not know, because "how complete the answer is IS the
+    /// answer" — the sentence [`CompareState::Incomplete`] is built on, and
+    /// what the CLI's exit code 2 and the MCP tool's `complete: false` both
+    /// rest on.
+    Unknown,
     /// The user cancelled (the rows that did arrive are kept).
     Cancelled,
     /// The task failed (the error goes to the status bar).
@@ -1121,8 +1137,12 @@ impl CompareView {
                 self.error = Some(crate::error::error_category_in(lang, error));
                 Some(error)
             }
+            // NO terminal: el canal de filas se cerró sin que nadie observara
+            // el desenlace. Esto era `Done` y ahí estaba el agujero (#183) —
+            // decía «terminó y llegó todo» sobre una task que pudo morir sin
+            // publicar nada.
             _ => {
-                self.state = CompareState::Done;
+                self.state = CompareState::Unknown;
                 self.rows_expected = entries_done;
                 None
             }
@@ -1592,9 +1612,18 @@ mod tests {
             "in the language ASKED FOR, not the ambient one"
         );
 
-        // The benign race: the channel closed before the terminal state was
-        // published, so `entries_done` is not final and accusing it of loss
-        // would be the CLI's and the MCP tool's mistake in reverse.
+        // The channel closed before a terminal state was published. This was
+        // `Done` until #183, and the reasoning for that was half right: the
+        // benign race — the two pumps are independent, so the channel CAN
+        // close first — must not be accused of loss, because reporting
+        // `Incomplete` for a run that was fine is the CLI's and the MCP
+        // tool's mistake in reverse.
+        //
+        // What it missed is that the same arm also covers a task that DIED
+        // before publishing anything, and at this instant the two are
+        // indistinguishable. `Done` is the one answer a comparison must never
+        // give when it does not know. So neither: a third state that says
+        // exactly what happened.
         for non_terminal in [
             TaskState::Pending,
             TaskState::Running,
@@ -1605,10 +1634,16 @@ mod tests {
             v.finish_from_task(&non_terminal, 9, 2, Lang::En);
             assert_eq!(
                 v.state,
-                CompareState::Done,
-                "{non_terminal:?}: the benign race is painted with what is here"
+                CompareState::Unknown,
+                "{non_terminal:?}: nothing said how the run ended, so neither does the pane"
             );
         }
+
+        // And a terminal state with the counts agreeing is STILL `Done`: the
+        // fix above must not turn every healthy comparison into a shrug.
+        let mut v = view();
+        v.finish_from_task(&TaskState::Completed, 9, 9, Lang::En);
+        assert_eq!(v.state, CompareState::Done);
     }
 
     /// **Branch review, MAJOR-2.** `visible_len` stopped walking and became
@@ -1669,10 +1704,14 @@ mod tests {
     /// other nine crossed crates with nothing holding them.
     #[test]
     fn the_footer_says_every_state_and_the_marks_in_both_locales() {
+        // La lista es EXHAUSTIVA a mano, así que una variante nueva que
+        // nadie añada aquí pasa sin que su cadena exista en los dos idiomas —
+        // que es el síntoma que este test caza. `Unknown` entró con #183.
         let states = [
             CompareState::Running,
             CompareState::Done,
             CompareState::Incomplete,
+            CompareState::Unknown,
             CompareState::Cancelled,
             CompareState::Failed,
         ];

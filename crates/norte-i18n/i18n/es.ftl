@@ -666,6 +666,7 @@ compare-status-done = comparación: { $n } filas
 # El flujo de filas terminó con MENOS filas de las que contó la task: se perdió
 # un lote de notificación entre el daemon y aquí. Decir «hecho» sería mentir
 # sobre lo completo que está, y en una comparación eso es toda la respuesta.
+compare-status-unknown = comparación: llegaron { $n } filas, y nada dijo si eran todas
 compare-status-incomplete = comparación: { $n } de { $total } filas (se perdieron algunas por el camino)
 compare-status-cancelled = comparación: { $n } filas (cancelada)
 compare-status-failed = comparación fallida: { $error }

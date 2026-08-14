@@ -749,9 +749,17 @@ pub fn render(
         );
     }
 
-    // El estado en rojo solo cuando se perdió algo o falló — y nunca SOLO en
-    // rojo: la frase ya lo dice con palabras.
-    let estado_malo = matches!(run.state, CompareState::Incomplete | CompareState::Failed);
+    // El estado en rojo cuando se perdió algo, falló, o NO SE SABE (#183) — y
+    // nunca SOLO en rojo: la frase ya lo dice con palabras.
+    //
+    // `Unknown` entra aquí porque el pane existe para contestar «¿coinciden
+    // estos dos árboles?», y un «no consta» leído como un «sí» es el fallo
+    // que este color previene. Es el mismo argumento por el que la variante
+    // existe en vez de plegarse sobre `Done`.
+    let estado_malo = matches!(
+        run.state,
+        CompareState::Incomplete | CompareState::Failed | CompareState::Unknown
+    );
 
     gpui::div()
         .id("compare-view")
@@ -991,18 +999,23 @@ mod tests {
     /// bombas son tasks independientes), así que el snapshot que se lee sigue
     /// diciendo `Running` y su `entries_done` todavía no es definitivo:
     /// pasarlo por la cuenta acusaría de PÉRDIDA a una carrera que no lo es.
-    /// La TUI lleva protegido este caso desde C6 (`drain_compare`), y la GUI
-    /// tiene que decir lo mismo.
+    ///
+    /// Hasta #183 la respuesta era `Done`, y eso era media verdad. El mismo
+    /// camino cubre una task que MURIÓ antes de publicar nada, y en ese
+    /// instante las dos son indistinguibles — así que decir «hecha» era la
+    /// única respuesta que una comparación no puede dar cuando no lo sabe.
+    /// Ahora es `Unknown`: ni pérdida ni terminación, que es exactamente lo
+    /// que consta.
     #[test]
-    fn la_carrera_benigna_se_pinta_hecha_y_no_perdida() {
+    fn la_carrera_benigna_no_se_pinta_ni_perdida_ni_hecha() {
         let mut v = vista_de_prueba();
         v.on_rows(TaskId::new(1), vec![fila(1)]);
         // Estado NO terminal + un contador que va por delante de las filas.
         v.on_done(TaskId::new(1), &TaskState::Running, 9);
         assert_eq!(
             v.run.state,
-            CompareState::Done,
-            "una carrera benigna no puede leerse como pérdida"
+            CompareState::Unknown,
+            "no se acusa de pérdida, y tampoco se afirma que terminó"
         );
     }
 

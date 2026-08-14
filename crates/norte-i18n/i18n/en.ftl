@@ -654,6 +654,7 @@ compare-status-done = compare: { $n } rows
 # The row stream ended with FEWER rows than the task counted: a notification
 # batch was dropped between the daemon and here. Saying "done" would be a lie
 # about completeness, which on a comparison is the whole answer.
+compare-status-unknown = compare: { $n } rows arrived, and nothing said whether that was all of them
 compare-status-incomplete = compare: { $n } of { $total } rows (some were lost in transit)
 compare-status-cancelled = compare: { $n } rows (cancelled)
 compare-status-failed = compare failed: { $error }
