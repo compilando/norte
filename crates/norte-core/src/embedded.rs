@@ -96,6 +96,21 @@
 //! o quitar el fichero, que es lo que dice el mensaje. Una bandera para «muta
 //! sin registrar» acaba en un alias, y con ella el agujero vuelve entero.
 //!
+//! # Una operación puede quedar journalizada A MEDIAS (#179, residual)
+//!
+//! El veredicto dejó de ser por SESIÓN y pasó a ser por momento, y eso tiene un
+//! filo que antes no existía. `crate::ops` pide el journal por ENTRADA, así
+//! que un `copy_tree` que empiece con el fichero ocupado y dure más que
+//! [`FRENO_TRAS_FALLO`] empieza a registrar a mitad: las primeras k entradas
+//! sin fila, las n-k siguientes con ella, dentro de UNA Task y UN actor. Un
+//! `undo` posterior desanda la cola registrada y deja la cabeza que no lo está
+//! — media copia deshecha, y sin nada que le diga al usuario cuál mitad.
+//!
+//! Antes era imposible: la decisión valía para toda la sesión, así que la
+//! operación quedaba entera dentro o entera fuera. Cerrarlo pide fijar el
+//! veredicto durante toda una Task —resolverlo una vez y pasar el handle hacia
+//! abajo— que es un cambio de `ops` y no de este módulo: es #205.
+//!
 //! # Lo que este mecanismo NO cubre
 //!
 //! - **Nadie suelta el journal por su cuenta.** [`LazyJournal::release`] es la
@@ -427,6 +442,27 @@ impl LazyJournal {
     /// — que es la razón de que aquí se DESTRUYA el handle en vez de guardarlo
     /// (ver la nota del módulo sobre `ChainState`).
     ///
+    /// # Precondición: NINGUNA mutación puede estar entre su gate y su fila
+    ///
+    /// Esto es lo que hay que resolver ANTES de llamar a esto desde un
+    /// temporizador de ociosidad, y es la razón de que el temporizador no esté
+    /// escrito todavía.
+    ///
+    /// [`crate::Engine`] comprueba el journal en el gate, ANTES del efecto, y
+    /// lo escribe en el observer, DESPUÉS. Entre esos dos instantes `release`
+    /// puede cerrar la ventana; si además otro proceso se lleva el fichero
+    /// mientras tanto, la reapertura del observer da `Busy`, `on_mutation`
+    /// contesta `Ok(())` —la mutación ya ocurrió, fallar ahí solo mentiría
+    /// sobre algo que funcionó— y el efecto se queda sin fila. El aviso al
+    /// frontend SÍ sale, así que no es mudo, pero la regla dura 4 se rompe.
+    ///
+    /// El `Arc` no basta como candado: `sync.apply` sostiene uno toda la Task
+    /// (y por eso ahí `release` contesta `false`), pero
+    /// `crate::ops` lo toma y lo suelta POR ENTRADA, así que entre dos
+    /// entradas no lo sostiene nadie. Lo que hace falta es un contador de
+    /// mutaciones en vuelo en la ventana, no un comentario. Anotado en #205,
+    /// que quiere la misma primitiva por el otro lado.
+    ///
     /// # Esto NO es cancel-safe. Córrelo entero o `tokio::spawn`-éalo.
     ///
     /// Dropear este future en el `await` del cierre deja el handle ya SACADO de
@@ -485,11 +521,22 @@ impl LazyJournal {
     /// freno es justo lo que se quiere; aquí es lo que haría mentir a la
     /// pregunta.
     pub async fn acquire_now(&self) -> Option<Arc<crate::journal::SqliteJournal>> {
-        {
-            let mut v = self.estado.lock().await;
-            v.ultimo_fallo = None;
-        }
-        self.get().await
+        self.resolve_now().await.ok()
+    }
+
+    /// Como [`Self::resolve`], pero SIN el freno — y en UNA sección crítica.
+    ///
+    /// Que sea una sola importa: soltar el lock para limpiar el veredicto y
+    /// volver a tomarlo deja un hueco en el que otra mutación puede fallar y
+    /// re-armar el freno, con lo que esto contestaría desde la caché que su
+    /// propio contrato promete saltarse.
+    ///
+    /// # Errors
+    /// Las de [`Self::resolve`].
+    pub async fn resolve_now(&self) -> Result<Arc<crate::journal::SqliteJournal>, NoJournal> {
+        let mut v = self.estado.lock().await;
+        v.ultimo_fallo = None;
+        self.resolver_bajo_lock(&mut v).await
     }
 
     /// El journal, o el MOTIVO de que no lo haya.
@@ -511,6 +558,14 @@ impl LazyJournal {
     /// (permisos, corrupción, una DB de una era anterior a esta cadena).
     pub async fn resolve(&self) -> Result<Arc<crate::journal::SqliteJournal>, NoJournal> {
         let mut v = self.estado.lock().await;
+        self.resolver_bajo_lock(&mut v).await
+    }
+
+    /// El cuerpo de [`Self::resolve`], con la ventana YA tomada.
+    async fn resolver_bajo_lock(
+        &self,
+        v: &mut Ventana,
+    ) -> Result<Arc<crate::journal::SqliteJournal>, NoJournal> {
         if let Some(j) = &v.handle {
             return Ok(Arc::clone(j));
         }
@@ -556,11 +611,11 @@ impl LazyJournal {
             Ok(j) => {
                 v.handle = Some(Arc::clone(j));
                 v.ultimo_fallo = None;
-                self.anunciar(&mut v, &JournalStatus::Recovered);
+                self.anunciar(v, &JournalStatus::Recovered);
             }
             Err(why) => {
                 v.ultimo_fallo = Some((std::time::Instant::now(), why.clone()));
-                self.anunciar(&mut v, &JournalStatus::Lost(why.clone()));
+                self.anunciar(v, &JournalStatus::Lost(why.clone()));
             }
         }
         r
@@ -569,12 +624,12 @@ impl LazyJournal {
     /// Emite una transición SI dice algo nuevo, y recuerda que la dijo.
     ///
     /// Dos filtros, y los dos son la diferencia entre un indicador útil y uno
-    /// que se ignora: una pérdida no se repite mientras el motivo no cambie
+    /// que se ignora: una pérdida no se repite mientras la CLASE no cambie
     /// (con el freno, eso son dos mensajes por minuto durante horas), y una
     /// recuperación no se emite si no había nada que recuperar — la PRIMERA
     /// apertura es lo normal, no una noticia.
     fn anunciar(&self, v: &mut Ventana, ev: &JournalStatus) {
-        if v.anunciado.as_ref() == Some(ev) {
+        if v.anunciado.as_ref().is_some_and(|ya| misma_clase(ya, ev)) {
             return;
         }
         if matches!(ev, JournalStatus::Recovered)
@@ -691,6 +746,29 @@ impl crate::observer::MutationObserver for LazyJournal {
 #[must_use]
 pub fn engine_in(state_dir: &Path) -> crate::Engine {
     crate::Engine::with_lazy_journal(Arc::new(LazyJournal::in_state_dir(state_dir)))
+}
+
+/// ¿Dicen estas dos transiciones LO MISMO para quien las pinta?
+///
+/// Por CLASE y no por valor, y la diferencia es una vía de spam: el texto de un
+/// [`NoJournal::Failed`] lo escribe en parte quien pueda escribir `journal.db`
+/// (`SQLite` interpola identificadores del fichero en su prosa), y desde #178
+/// ese motivo ya no lleva freno de reintento — se reabre en cada mutación
+/// rehusada. Comparando el `String` entero, un motivo que variase entre
+/// intentos daría un aviso por mutación: un indicador que parpadea es un
+/// indicador que se ignora, que es justo lo que #178 vino a arreglar.
+///
+/// Lo que se pierde es poder decir «ahora falla por otra razón», y no importa:
+/// el indicador dice lo mismo en las dos («este journal no se puede abrir») y
+/// el detalle viaja en el error de cada mutación rehusada.
+fn misma_clase(a: &JournalStatus, b: &JournalStatus) -> bool {
+    use {JournalStatus as S, NoJournal as N};
+    matches!(
+        (a, b),
+        (S::Recovered, S::Recovered)
+            | (S::Lost(N::Busy), S::Lost(N::Busy))
+            | (S::Lost(N::Failed(_)), S::Lost(N::Failed(_)))
+    )
 }
 
 /// Tope de la RAZÓN dentro de [`NoJournal::Failed`], en caracteres.

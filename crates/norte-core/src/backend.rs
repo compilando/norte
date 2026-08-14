@@ -336,8 +336,9 @@ impl Backend {
     /// rename`, y desde esta tarea `norte sync`).
     ///
     /// - Embebido: delega en [`Engine::ensure_journal`], que toma el lock
-    ///   perezoso AQUÍ (no en la primera mutación) y lo conserva mientras el
-    ///   proceso viva.
+    ///   perezoso AQUÍ (no en la primera mutación) y lo conserva hasta que
+    ///   alguien lo suelte (`LazyJournal::release`, que hoy no llama nadie por
+    ///   su cuenta — #179).
     /// - Remoto: siempre `true`. El daemon es DUEÑO del journal y se niega a
     ///   arrancar sin uno (ver el arranque de `norte daemon run`); no hay un
     ///   viaje de ida y vuelta que hacer para saberlo, y una conexión remota
@@ -364,6 +365,25 @@ impl Backend {
             Self::Embedded(engine) => engine.ensure_journal().await,
             #[cfg(unix)]
             Self::Remote(_) => true,
+        }
+    }
+
+    /// Lo mismo, diciendo POR QUÉ no — ver [`Engine::journal_obstacle`].
+    ///
+    /// `None` = esta sesión registra, o no hay ventana que perder (el daemon al
+    /// otro lado de un socket, o un `Engine::new()`).
+    ///
+    /// Existe por lo que #178 partió en dos: con `Busy` la operación ocurriría
+    /// sin registro —y el remedio es `--daemon`, hablar con quien tiene el
+    /// fichero— y con `Failed` no va a ocurrir en absoluto, y ahí `--daemon` no
+    /// es remedio ninguno porque el daemon se niega a arrancar con ese mismo
+    /// fichero. Un `bool` manda a la mitad de los usuarios contra la pared
+    /// equivocada.
+    pub async fn journal_obstacle(&self) -> Option<crate::embedded::NoJournal> {
+        match self {
+            Self::Embedded(engine) => engine.journal_obstacle().await,
+            #[cfg(unix)]
+            Self::Remote(_) => None,
         }
     }
 

@@ -688,8 +688,10 @@ independently through `PROTOCOL_VERSION`.
   it. **Recorded is not the same as recoverable**, and the interfaces now say
   which one you get: against a destination with no trash the entry is marked
   irreversible, so `undo` names the subtree it cannot give back rather than
-  pretending to restore it. What changed is that the deletion is no longer
-  invisible (#186).
+  pretending to restore it. The cancelled step still gets no row in the
+  synchronisation report — the run stops at the cancellation, so it counts as
+  neither done nor failed — and the journal is what tells you. What changed is
+  that the deletion is no longer invisible (#186).
 
 - **A file could be moved to the trash and then not written down.** This one
   was hit for real, not imagined: `sync.apply` trashed a destination file and
@@ -699,10 +701,13 @@ independently through `PROTOCOL_VERSION`.
   back also failed — the trash location existed only inside a log line, so
   "where is my file?" was answerable only by whoever happened to be reading the
   daemon's log at that moment. The failure now travels as its own kind of
-  error, carrying both the buried path and its trash destination, and the step
+  error carrying both the buried path and its trash destination, and the step
   is reported as failed instead of leaving a report that reads "nothing
   happened" — which is what you saw when the very first step was the one that
-  broke. The run stops before touching anything else (#160).
+  broke. The run stops before touching anything else. Where the file went is
+  still written to the log rather than shown to you: the protocol has no
+  category for "your file is in the trash and nothing recorded it", and
+  inventing one is a bigger change than this (#160).
 
 - **Corrupting one file switched off the record of everything norte did, and
   norte carried on as if nothing had happened.** Without the background service
@@ -737,9 +742,12 @@ independently through `PROTOCOL_VERSION`.
   audit, the service restarting — the session gave up on journalling
   permanently, and the "NOT journalled" warning in the status bar stayed true
   for the rest of the day even though the file had been free again a second
-  later. It now tries again, at most once every thirty seconds so that a
-  genuinely busy file costs nothing per operation, and **the warning switches
-  off when the journal comes back** rather than lying at you until you quit.
+  later. It now tries again — at most once every thirty seconds when the file
+  is merely held by someone else, so that a genuinely busy journal costs
+  nothing per operation, and immediately when it is unreadable, so that
+  repairing it takes effect on your very next action — and **the warning
+  switches off when the journal comes back** rather than lying at you until you
+  quit.
   The mechanism underneath is what took the work: reopening a journal this
   process once owned has to re-read the chain's position from the file, and a
   stale one collides with the row it is about to write — which would fail

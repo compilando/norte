@@ -1158,15 +1158,34 @@ async fn audit_verify(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .map(|(seq, _)| seq);
+    // La clave ANTES de decidir nada sobre las anclas del head: el marcador se
+    // contrasta pase lo que pase con ellas, y sin clave no se puede contrastar
+    // ninguna de las dos familias.
+    let key = tokio::task::spawn_blocking(norte_core::connect::journal_anchor_key)
+        .await
+        .map_err(|_| anyhow::anyhow!("keyring task panicked"))?
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let lines = match tokio::fs::read_to_string(&anchors_path).await {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // El MARCADOR se comprueba igual, y esta es la razón de que su
+            // comprobación viva antes de esta salida: un journal con marcador y
+            // sin mutaciones tiene ancla de marcador y NINGUNA de head, y sin
+            // esto `anchor` y `verify` se contradecían dentro del mismo commit
+            // —una escribía el ancla y la otra jamás la miraba—. Es además el
+            // estado que deja un atacante que borra el fichero de anclas del
+            // head: la señal del marcador es lo único que queda.
+            let marcador_ok = verify_marker_anchors(journal, marker_anchors_path, &key).await?;
             let msg = norte_i18n::t("cli-audit-no-anchors");
             if allow_no_anchors {
                 println!("{msg}");
-                // `--allow-no-anchors` perdona la AUSENCIA de anclas, no una
-                // cadena sin certificar.
-                return Ok(exit_for(certified));
+                // `--allow-no-anchors` perdona la AUSENCIA de anclas de head, no
+                // una cadena sin certificar ni un marcador sin anclar.
+                return Ok(if marcador_ok {
+                    exit_for(certified)
+                } else {
+                    ExitCode::FAILURE
+                });
             }
             // Ausencia = fallo por defecto: un atacante sin clave puede
             // BORRAR el fichero; solo el humano decide que «no hay» es ok.
@@ -1175,10 +1194,6 @@ async fn audit_verify(
         }
         Err(e) => return Err(e).context("journal-anchors.jsonl"),
     };
-    let key = tokio::task::spawn_blocking(norte_core::connect::journal_anchor_key)
-        .await
-        .map_err(|_| anyhow::anyhow!("keyring task panicked"))?
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
     // UN snapshot de la cadena para todo el veredicto (sin TOCTOU entre el
     // verify de arriba y los contrastes de anclas).
     let hash_by_seq: std::collections::HashMap<i64, [u8; 32]> = journal
@@ -3087,16 +3102,28 @@ async fn sync_apply_and_report(
     // ese es justamente el camino donde nadie mira la pantalla.
     //
     // Y se PARA, no se avisa: `Engine::sync_apply_as` se niega igual unas
-    // líneas más abajo (`Unsupported`), así que seguir sólo cambia dónde
-    // aparece el «no» y quién lo entiende. No es un caso raro: el journal
-    // embebido es el MISMO `journal.db` que el daemon abre en exclusiva, de
-    // modo que cualquiera con un `ntc` o un daemon vivo cae aquí, y el remedio
-    // —hablar con ese daemon en vez de pelearle el fichero— es `--daemon`, que
-    // es lo que el mensaje dice. (`ai_cmd` avisa y sigue, y puede: allí el
-    // aviso es honesto porque de verdad sigue.)
-    if !backend.ensure_journal().await {
-        eprintln!("norte: {}", norte_i18n::t("cli-sync-unjournalled"));
-        return Ok(ExitCode::from(2));
+    // líneas más abajo, así que seguir sólo cambia dónde aparece el «no» y
+    // quién lo entiende.
+    //
+    // **Dos motivos, dos frases** (#178). El caso corriente es que el journal
+    // lo tenga OTRO: el embebido es el MISMO `journal.db` que el daemon abre en
+    // exclusiva, así que cualquiera con un `ntc` o un daemon vivo cae ahí, y el
+    // remedio —hablar con ese daemon en vez de pelearle el fichero— es
+    // `--daemon`. Pero con un journal ILEGIBLE ese remedio no existe: `norte
+    // daemon run` se niega a arrancar con ese mismo fichero, así que mandar al
+    // usuario a `--daemon` sería mandarlo a otra pared. Decirle cuál de las dos
+    // paredes tiene delante es toda la diferencia entre un mensaje accionable y
+    // uno que hace perder media hora.
+    match backend.journal_obstacle().await {
+        Some(norte_core::embedded::NoJournal::Failed(_)) => {
+            eprintln!("norte: {}", norte_i18n::t("cli-sync-journal-unreadable"));
+            return Ok(ExitCode::from(2));
+        }
+        Some(_) => {
+            eprintln!("norte: {}", norte_i18n::t("cli-sync-unjournalled"));
+            return Ok(ExitCode::from(2));
+        }
+        None => {}
     }
 
     if !yes {

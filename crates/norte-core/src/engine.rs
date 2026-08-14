@@ -327,9 +327,11 @@ impl Engine {
         let JournalSource::Lazy(l) = &self.journal else {
             return None;
         };
-        // El freno fuera: esto se le enseña a un humano.
-        l.acquire_now().await;
-        l.resolve().await.err()
+        // UN solo intento, y por eso `resolve_now` y no `acquire_now` seguido de
+        // `resolve`: aquel par pagaba dos aperturas, y si el texto del error de
+        // `SQLite` difería entre ellas —lo escribe en parte quien pueda escribir
+        // el fichero— el sink recibía dos avisos por una sola pregunta.
+        l.resolve_now().await.err()
     }
 
     /// Instala el gate de policy y el resolver de aprobaciones (M3-3): a partir
@@ -439,6 +441,25 @@ impl Engine {
     /// (que no arranca sin journal, así que ya falló en cerrado antes) y el de
     /// un embebedor con `Engine::new()` (que no registra NADA por construcción
     /// y para el que no hay fichero que arreglar).
+    ///
+    /// # Lo que este gate garantiza, con su plazo
+    /// **«No estaba ilegible la última vez que se miró», y eso puede ser hasta
+    /// [`FRENO_TRAS_FALLO`](crate::embedded::FRENO_TRAS_FALLO) atrás.** El
+    /// freno de #179 hace que un veredicto `Busy` se recuerde treinta segundos
+    /// sin volver a abrir; si en esa ventana el fichero pasa
+    /// de OCUPADO a ILEGIBLE —alguien suelta el lock y acto seguido lo
+    /// corrompe— este gate sigue contestando `Ok(())` desde la clasificación
+    /// vieja y las mutaciones de esa ventana pasan sin registro.
+    ///
+    /// Se acepta, y conviene entender por qué NO es una regresión: un `Busy`
+    /// falla en abierto por diseño (arriba), y quien puede sostener el lock
+    /// mantiene a la sesión sin registro **indefinidamente**, no treinta
+    /// segundos — es la mitad de #178 que sigue abierta y que sigue #203. Un
+    /// desfase de 30 s dentro de un agujero permanente no añade capacidad
+    /// alguna. Lo que NO se puede hacer es cerrarlo saltándose el freno aquí:
+    /// eso devuelve `ESPERA_POR_EL_LOCK` por CADA mutación mientras haya un
+    /// daemon vivo, que es exactamente el coste que el freno existe para no
+    /// pagar.
     async fn journal_gate(&self) -> Result<(), Error> {
         let JournalSource::Lazy(lazy) = &self.journal else {
             return Ok(());

@@ -799,7 +799,7 @@ async fn destroy_tree(
 /// un `created` que falla DESPUÉS de un `trashed` que sí quedó deja un lote
 /// cuyo undo BLOQUEA. Devolverlo pediría borrar la copia recién puesta Y
 /// desenterrar, o sea dos mutaciones más por el camino en el que el journal ya
-/// no funciona. Eso NO se arregla aquí y tiene issue propia.
+/// no funciona. Eso NO se arregla aquí: es #206.
 async fn bury(
     targets: &SyncTargets,
     recorder: &dyn StepJournal,
