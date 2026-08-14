@@ -9750,6 +9750,11 @@ fn resolve_opener(app: &mut App) {
             program,
             argv,
             detached: true,
+            // El del pane también aquí (#144): `xdg-open` se lo pasa al
+            // programa asociado, que puede ser el mismo editor que un opener
+            // declarado — heredar el cwd de norte por qué camino se llegó
+            // sería la misma sorpresa con otra puerta.
+            cwd: norte_vfs_local::vpath_to_native(app.focused().dir()).ok(),
         });
         return;
     };
@@ -9769,6 +9774,9 @@ fn resolve_opener(app: &mut App) {
         program,
         argv: opener.argv(&[&native], &dir),
         detached: false,
+        // El MISMO `dir` que alimenta `%d`: el hijo abre en el directorio que
+        // el lector está mirando (#144).
+        cwd: Some(dir),
     });
 }
 
@@ -9787,6 +9795,7 @@ async fn launch_opener(
         program,
         argv,
         detached,
+        cwd,
     } = pending;
     let prog = program.clone();
     let available =
@@ -9797,7 +9806,7 @@ async fn launch_opener(
         return ta("msg-open-missing-program", &[("program", &program)]);
     }
     if detached {
-        return match spawn_detached(argv).await {
+        return match spawn_detached(argv, cwd).await {
             Ok(()) => ta("msg-open-launched", &[("program", &program)]),
             Err(e) => ta(
                 "msg-open-failed",
@@ -9813,10 +9822,15 @@ async fn launch_opener(
         !argv.is_empty(),
         "el argv de un opener siempre trae el binario"
     );
-    // `cwd = None`: el `%d` de un opener declarado ya viaja DENTRO del argv,
-    // así que el hijo hereda el directorio de norte, exactamente como antes
-    // de S4.
-    match run_suspended(terminal, capture, argv, None, false).await {
+    // El directorio del pane como cwd (#144). El `%d` de un opener declarado
+    // ya viaja dentro del argv, así que esto no es para resolver rutas: es
+    // para que un editor guarde, y un `:e` navegue, donde el lector está
+    // mirando — lo que hacen los tres comandos de shell desde #135 y esto no.
+    //
+    // Decidido, no descubierto: el precio es que un opener que escriba una
+    // ruta RELATIVA pasa a escribirla en el directorio del pane. Se aceptó
+    // por ser la sorpresa menor de las dos.
+    match run_suspended(terminal, capture, argv, cwd, false).await {
         Ok(_) => ta("msg-open-launched", &[("program", &program)]),
         Err(e) => ta(
             "msg-open-failed",
@@ -9832,14 +9846,23 @@ async fn launch_opener(
 /// listado. El hijo se espera en segundo plano (regla 2: en `spawn_blocking`),
 /// que es lo que lo entierra: sin ese `wait` quedaría zombi hasta que muriese
 /// el propio norte.
-async fn spawn_detached(argv: Vec<std::ffi::OsString>) -> std::io::Result<()> {
+async fn spawn_detached(
+    argv: Vec<std::ffi::OsString>,
+    cwd: Option<std::path::PathBuf>,
+) -> std::io::Result<()> {
     debug_assert!(
         !argv.is_empty(),
         "el argv del lanzador del sistema siempre trae el binario"
     );
     let mut child = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&argv[0])
-            .args(&argv[1..])
+        let mut cmd = std::process::Command::new(&argv[0]);
+        // `current_dir` solo si hay: pasar el cwd heredado explícitamente no
+        // es lo mismo que no tocarlo, y aquí no hay nada mejor que heredar
+        // (#144).
+        if let Some(dir) = &cwd {
+            cmd.current_dir(dir);
+        }
+        cmd.args(&argv[1..])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -12606,6 +12629,44 @@ mod open_tests {
         let pending = app.pending_open.expect("F4 resuelve el opener declarado");
         assert_eq!(pending.program, "bat");
         assert!(!pending.detached);
+    }
+
+    /// #144: los DOS caminos de F4 llevan el directorio del pane como cwd.
+    ///
+    /// Los tres comandos de shell lo pasan desde #135 y los openers no, así
+    /// que un editor abierto sobre un fichero del pane guardaba en el cwd de
+    /// norte. Se dejó a propósito en la ola de shell —cambiarlo cambia
+    /// comportamiento, y un opener que escriba una ruta RELATIVA pasa a
+    /// escribirla en otro sitio— y se DECIDIÓ el 2026-08-14 pasarlo: la
+    /// sorpresa de guardar donde no miras es la mayor de las dos.
+    ///
+    /// Los dos caminos y no solo el declarado: `xdg-open` entrega el fichero
+    /// al programa asociado, que puede ser el mismo editor, y heredar el cwd
+    /// según por qué puerta se llegó sería la misma sorpresa con otra cara.
+    #[test]
+    fn los_dos_caminos_de_f4_abren_en_el_directorio_del_pane() {
+        for (nombre, config) in [
+            ("informe.pdf", None),
+            (
+                "notas.txt",
+                Some("[[opener]]\nmime = \"text/*\"\ncommand = [\"bat\", \"%f\"]\n"),
+            ),
+        ] {
+            let mut app = App::new(pane_con(nombre), pane_con("otro.txt"));
+            if let Some(c) = config {
+                app.openers =
+                    norte_frontend::openers::OpenersConfig::parse(c).expect("config de test");
+            }
+            let esperado = norte_vfs_local::vpath_to_native(app.focused().dir())
+                .expect("el pane de test es local");
+            resolve_opener(&mut app);
+            let pending = app.pending_open.expect("F4 resuelve algo");
+            assert_eq!(
+                pending.cwd.as_deref(),
+                Some(esperado.as_path()),
+                "{nombre}: el hijo abre donde el lector está mirando"
+            );
+        }
     }
 
     /// Un fichero remoto no tiene ruta nativa: ni opener declarado ni

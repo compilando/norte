@@ -746,6 +746,16 @@ pub struct PendingOpen {
     /// declarado en `ns.toml`, que puede ser `bat` o un editor y necesita la
     /// terminal entera para sí.
     pub detached: bool,
+    /// El directorio del pane con el foco, que el hijo recibe como cwd
+    /// (#144).
+    ///
+    /// Los tres comandos de shell (#135) ya lo pasaban y los openers no, así
+    /// que un editor abierto sobre un fichero del pane heredaba el cwd de
+    /// norte y guardaba donde no se estaba mirando. Se dejó así a propósito
+    /// en la ola de shell —cambiarlo cambia comportamiento— y se decidió el
+    /// 2026-08-14: pasa el del pane. `None` solo si la ruta no convierte a
+    /// nativa, donde no hay nada mejor que heredar.
+    pub cwd: Option<std::path::PathBuf>,
 }
 
 /// Una SUSPENSIÓN que el despacho resolvió y el run loop ejecutará (#135).
