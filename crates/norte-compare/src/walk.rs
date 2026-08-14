@@ -92,9 +92,10 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
+use std::pin::Pin;
 
 use futures::StreamExt;
-use futures::stream::{self, BoxStream};
+use futures::stream::{self, FusedStream};
 use norte_proto::{Entry, EntryKind, VPath};
 use norte_vfs::Provider;
 use tokio_util::sync::CancellationToken;
@@ -109,12 +110,19 @@ use crate::{
 
 /// El flujo que produce [`compare`].
 ///
-/// Es un `BoxStream` y no un `impl Stream` por una razón aburrida y buena: el
-/// tipo es CONCRETO, así que `norte-core` puede guardarlo en un struct de Task
-/// sin arrastrar parámetros de tipo, y las dos raíces se pueden pasar por
+/// Es un `Box` y no un `impl Stream` por una razón aburrida y buena: el tipo
+/// es CONCRETO, así que `norte-core` puede guardarlo en un struct de Task sin
+/// arrastrar parámetros de tipo, y las dos raíces se pueden pasar por
 /// referencia sin que su préstamo quede capturado en el tipo de retorno. Una
 /// asignación por comparación entera.
-pub type CompareStream<'a> = BoxStream<'a, Result<CompareRow, CompareError>>;
+///
+/// Y es [`FusedStream`], no un `BoxStream` liso — igual que `norte_sync::plan`
+/// resolvió el mismo problema: pedirle otro elemento después del final
+/// devuelve `None` en vez de entrar en pánico, que es lo que hace el `Unfold`
+/// crudo de `futures`. Un `select!` con una segunda rama (un `tick` de flush,
+/// una cancelación) es legal sobre este flujo (#175).
+pub type CompareStream<'a> =
+    Pin<Box<dyn FusedStream<Item = Result<CompareRow, CompareError>> + Send + 'a>>;
 
 /// Compara dos árboles y emite una fila por pareja.
 ///
@@ -157,11 +165,18 @@ pub fn compare<'a>(
         next_id: 0,
         finished: false,
     };
-    stream::unfold(walk, |mut walk| async move {
-        let item = walk.step().await?;
-        Some((item, walk))
-    })
-    .boxed()
+    // `Unfold` no es fusionable por sí solo y `FusedStream` no es un
+    // auto-trait que se filtre por el `Pin<Box<dyn _>>`: sin el `.fuse()` de
+    // aquí, un llamante que lo sondee una vez de más —lo hace cualquier
+    // `select!` con un `tick` de flush— se lleva un pánico DESPUÉS de haber
+    // comparado bien (#175).
+    Box::pin(
+        stream::unfold(walk, |mut walk| async move {
+            let item = walk.step().await?;
+            Some((item, walk))
+        })
+        .fuse(),
+    )
 }
 
 /// La `Entry` de una raíz, que nadie listó: el walk la necesita para poder
@@ -2919,5 +2934,20 @@ mod tests {
             Some(10)
         );
         assert_eq!(local.stats(), 1, "solo la pareja de ficheros se statea");
+    }
+
+    #[tokio::test]
+    async fn polling_past_the_end_gives_none_instead_of_panicking() {
+        // El `Unfold` crudo de `futures` entra en PÁNICO si se le sondea
+        // después de `None`, y cualquier bucle con `select!` y un tick de
+        // flush lo hace (#175). El `.fuse()` de `compare()` es lo que lo
+        // impide — igual que en `norte_sync::plan`, que resolvió el mismo
+        // problema primero.
+        let left = MemProvider::new();
+        let right = MemProvider::new();
+        let mut stream = compare_default(&left, &right);
+        assert!(stream.next().await.is_none());
+        assert!(stream.next().await.is_none(), "y otra vez, sin pánico");
+        assert!(stream.is_terminated());
     }
 }
