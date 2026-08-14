@@ -83,6 +83,11 @@ pub fn error_key(e: &Error) -> &'static str {
             RootOverlap::DestInsideSource => "err-overlapping-roots-dest-inside",
             _ => "err-overlapping-roots",
         },
+        // 0.41.0 (#178): el journal de esta sesión no se puede abrir y la
+        // mutación se rehusó. Es de la familia accionable —hay UN fichero que
+        // arreglar o quitar— y caer en «error desconocido» dejaría al usuario
+        // ante una sesión que de pronto no muta y sin decirle por qué.
+        Error::JournalUnavailable => "err-journal-unavailable",
         _ => "err-unknown",
     }
 }

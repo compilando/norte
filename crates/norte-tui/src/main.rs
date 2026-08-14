@@ -2142,6 +2142,10 @@ fn args_or_exit(args: norte_frontend::cli::Cli) -> Result<Option<norte_frontend:
 ///
 /// El texto de `NoJournal::text()` es para el log del operador y va en crudo;
 /// esto es interfaz, y la interfaz de este binario pasa por Fluent.
+///
+/// Las dos ramas dicen cosas DISTINTAS desde #178: `Busy` es «esto pasó y no
+/// quedó anotado» y `Failed` es «esto no ha pasado». Compartir frase era el
+/// defecto.
 fn journal_warning_i18n(why: &norte_core::embedded::NoJournal) -> String {
     use norte_core::embedded::NoJournal as N;
     match why {
@@ -2151,7 +2155,7 @@ fn journal_warning_i18n(why: &norte_core::embedded::NoJournal) -> String {
         // texto derivado de rutas del entorno. La barra de estado tiene un
         // saneador para exactamente esto y todo lo demás pasa por él.
         N::Failed(motivo) => ta(
-            "msg-journal-unavailable",
+            "msg-journal-refused",
             &[("motivo", &norte_tui::app::detail_for_bar(motivo))],
         ),
         // `#[non_exhaustive]`: un motivo nuevo no puede quedarse mudo — si
@@ -2370,7 +2374,7 @@ async fn run(
         tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>,
     >,
     mut journal_warnings: Option<
-        tokio::sync::mpsc::UnboundedReceiver<norte_core::embedded::NoJournal>,
+        tokio::sync::mpsc::UnboundedReceiver<norte_core::embedded::JournalStatus>,
     >,
 ) -> Result<()> {
     let mut events = EventStream::new();
@@ -2695,20 +2699,39 @@ async fn run(
                 // preguntar por scheme cuál se degradó.
                 app.note_degraded(d);
             }
-            Some(why) = async {
+            Some(estado) = async {
                 match &mut journal_warnings {
                     Some(rx) => rx.recv().await,
                     None => std::future::pending().await,
                 }
             } => {
                 // #167/#177: esta sesión acaba de mutar sin quedar registrada.
-                // Uno por sesión (el core decide una vez), así que pisar
-                // `message` aquí no puede convertirse en un goteo. Y como
-                // `message` lo borra la siguiente tecla, el hecho se anota
-                // además en el indicador PERSISTENTE de la barra: esto no es un
-                // aviso que se pueda perder por pulsar una flecha.
-                app.message = Some(journal_warning_i18n(&why));
-                app.note_no_journal(why);
+                // Uno por EPISODIO (el core no repite mientras el motivo no
+                // cambie), así que pisar `message` aquí no puede convertirse en
+                // un goteo. Y como `message` lo borra la siguiente tecla, el
+                // hecho se anota además en el indicador PERSISTENTE de la
+                // barra: esto no es un aviso que se pueda perder por pulsar una
+                // flecha.
+                //
+                // #179: y la recuperación APAGA ese indicador. Sin esto, un
+                // ocupante de paso —otro `norte cp`, un daemon reiniciándose—
+                // dejaría a una sesión de tres horas enseñando «no se registra»
+                // sobre mutaciones que sí se registran.
+                use norte_core::embedded::JournalStatus;
+                match estado {
+                    JournalStatus::Lost(why) => {
+                        app.message = Some(journal_warning_i18n(&why));
+                        app.note_no_journal(why);
+                    }
+                    JournalStatus::Recovered => {
+                        app.message = Some(t("msg-journal-recovered"));
+                        app.note_journal_recovered();
+                    }
+                    // `#[non_exhaustive]`: una transición nueva no puede
+                    // cambiar el indicador a ciegas — se ignora hasta que
+                    // alguien la enseñe a propósito.
+                    _ => {}
+                }
             }
             res = async {
                 match &mut stat_probe {

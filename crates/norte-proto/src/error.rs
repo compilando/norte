@@ -298,6 +298,41 @@ pub enum Error {
         /// otras dos.
         relation: RootOverlap,
     },
+    /// El journal de ESTA sesión no se puede abrir, así que la mutación se
+    /// RECHAZÓ y no se tocó nada (0.41.0, #178).
+    ///
+    /// No es «el fichero está ocupado»: un journal que tiene otro proceso —un
+    /// daemon vivo, otra sesión embebida— deja seguir, avisando, porque
+    /// refusarlo convertiría «hay un daemon» en «el CLI no funciona». Esto es
+    /// el otro caso: sin permisos, corrupto, no-es-una-base-de-datos, o de una
+    /// era anterior a la cadena de hoy. Ahí seguir significaría mutar sin
+    /// registro y sin undo, que es exactamente lo que la regla dura 4 prohíbe y
+    /// lo que `norte daemon run` ya rehúsa con esa misma entrada.
+    ///
+    /// **Es la variante que un atacante con escritura en el directorio de
+    /// estado hace aparecer.** Corromper `journal.db` desactivaba en silencio
+    /// el registro de TODAS las sesiones embebidas —incluido el de
+    /// `norte ai rename --yes`, que es el que más falta hace—; ahora las para.
+    /// Accionable: arreglar o quitar `journal.db` del directorio de estado.
+    ///
+    /// Sin campos A PROPÓSITO: la ruta del fichero es local del proceso que la
+    /// emite y no significa nada en el otro extremo de un socket, y el motivo
+    /// es el error crudo de `SQLite` —texto que moldea en parte quien pueda
+    /// escribir el fichero— que no tiene por qué cruzar la frontera. Los dos
+    /// viajan por el canal de avisos del journal
+    /// (`norte_core::embedded::NoJournal`), que es in-process y saneado.
+    ///
+    /// Eso no deja el detalle sin sitio: si algún día hace falta nombrar el
+    /// fichero POR EL WIRE, el `message` del `RpcError` ya lleva el `Display`
+    /// de este error, que es donde ADR 0004 pone lo legible por humanos. La
+    /// taxonomía se queda con la categoría; añadir un campo aquí no haría
+    /// falta.
+    ///
+    /// Hoy solo la emite el transporte EMBEBIDO: el daemon con esta misma
+    /// entrada no llega a arrancar. Un cliente N-1 (0.40.x) degradaría a
+    /// `Unknown`.
+    #[error("this session's journal cannot be opened; the mutation was refused")]
+    JournalUnavailable,
     /// Categoría de un protocolo más nuevo (fallback de deserialización).
     /// El core JAMÁS la emite; existe para que un cliente N degrade con
     /// elegancia ante categorías N+1.

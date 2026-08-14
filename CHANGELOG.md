@@ -654,6 +654,133 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **An operation is now recorded whole, or not at all — never half.** This is a
+  trap the retry above opened, closed in the same release. Because norte can now
+  regain the journal partway through a long session, and because it used to ask
+  "am I recording?" once per file rather than once per operation, a copy or a
+  delete that began while another process held the journal and ran longer than
+  half a minute would start recording in the middle: the first files unrecorded,
+  the rest recorded, inside one operation. `undo` then reversed the recorded
+  tail and silently left the head — and could not even tell you which files it
+  had skipped, because there were no entries for them. "Nothing was recorded" is
+  something you can sort out by hand; "half was recorded" is not. Each operation
+  now settles the question once, before it touches anything, and keeps that
+  answer to the end — and if the journal has become unreadable while the
+  operation waited its turn, it is refused there too rather than running
+  silently. That covers batch renames as well, where the split was worse: the
+  entries recorded partway through would have carried no batch label, so an
+  action the interface presents as one undoable unit would have been half
+  recorded and not grouped. A batch that runs with no journal at all now also
+  stops claiming its steps were recorded, which had been sending people to look
+  for an undo that had nothing to undo. The message you get when the journal
+  comes back says all this in one line: journalling resumes from your *next*
+  operation, because one already running keeps the answer it began with (#205).
+
+- **The journal's format marker can now be signed, so re-declaring it stops
+  being free.** The journal records which format it was written in, inside its
+  own tamper-evident chain, so an older build can say "I cannot verify this"
+  instead of accusing an untouched file of tampering. The hole that design
+  conceded: anyone who could write the database could *re-declare* the format
+  with three column writes and no key — and a verdict that said "your history
+  was altered at entry 40" then said "I cannot read this file" instead. The
+  alarm survived; the blame did not. The HMAC anchors did not catch it either,
+  contrary to what is intuitive: the edit moves no stored digest, so every
+  anchor still verified.
+  `norte audit anchor` now signs the marker too, in a file of its own, and
+  `norte audit verify` checks it. A re-declaration is then a hash mismatch **at
+  the marker**, located and with a key behind it, for any journal that had a
+  marker when it was anchored. `verify` also says when a marker is present and
+  nothing anchors it — the state you are left in if someone removes that file,
+  and also what an *injected* marker looks like on the older journals that
+  never had one and by design never will. What it cannot cover is a journal
+  nobody ever anchored, which was always the boundary of the anchors and is
+  why keeping a copy of them somewhere else is the point (#146).
+
+- **Cancelling a mirror halfway through a deletion erased part of a folder and
+  recorded nothing.** A mirror removes what the source does not have, and
+  against a destination with no trash — an object bucket, an SFTP, a FAT
+  stick — that removal is permanent. It walks the tree file by file and checks
+  for cancellation between each one, so pressing `Ctrl+K` (or closing the sync
+  pane, which cancels it) partway through left a subtree partly and
+  irreversibly deleted with **no journal entry, therefore no undo, and no row
+  in the report either** — nothing anywhere said it had happened. The
+  comment in the code promised the entry survived a half-finished delete; the
+  condition beneath it excluded the one case where it mattered. It now records
+  what it actually removed, and a test cancels a real mirror mid-tree to prove
+  it. **Recorded is not the same as recoverable**, and the interfaces now say
+  which one you get: against a destination with no trash the entry is marked
+  irreversible, so `undo` names the subtree it cannot give back rather than
+  pretending to restore it. The cancelled step still gets no row in the
+  synchronisation report — the run stops at the cancellation, so it counts as
+  neither done nor failed — and the journal is what tells you. What changed is
+  that the deletion is no longer invisible (#186).
+
+- **A file could be moved to the trash and then not written down.** This one
+  was hit for real, not imagined: `sync.apply` trashed a destination file and
+  the journal write that should have recorded it failed, leaving the file
+  somewhere the user did not put it and nothing to say where. norte already
+  tried to put it back; what it could not do was *tell anyone* when putting it
+  back also failed — the trash location existed only inside a log line, so
+  "where is my file?" was answerable only by whoever happened to be reading the
+  daemon's log at that moment. The failure now travels as its own kind of
+  error carrying both the buried path and its trash destination, and the step
+  is reported as failed instead of leaving a report that reads "nothing
+  happened" — which is what you saw when the very first step was the one that
+  broke. The run stops before touching anything else. Where the file went is
+  still written to the log rather than shown to you: the protocol has no
+  category for "your file is in the trash and nothing recorded it", and
+  inventing one is a bigger change than this (#160).
+
+- **Corrupting one file switched off the record of everything norte did, and
+  norte carried on as if nothing had happened.** Without the background service
+  running, every change you make is recorded in `journal.db` in the state
+  directory — that record is what `undo` reads, and what an audit reads.
+  Anyone able to write to that directory could make the file unreadable
+  (`chmod 000`, one byte of garbage, a stale schema) and from then on every
+  `ntc` session, every `norte cp/mv/rm/mkdir`, and — the valuable one — every
+  `norte ai rename --yes` ran completely unrecorded, behind a warning that also
+  fires in the entirely ordinary "the background service is running" case and
+  which people had therefore learned to ignore. The background service refuses
+  to start on exactly the same file; the two disagreeing was the bug.
+  An unreadable journal now **refuses the change before it happens** and says
+  which file to repair or remove, while a journal merely held by another norte
+  process still lets you work — refusing there would turn "a service is
+  running" into "the file manager does not work", and a script's `norte cp`
+  holding the file for a quarter of a second must not be able to stop you.
+  On the wire that is protocol **0.41.0**: one new error category,
+  `journal_unavailable`, so a client can say what happened in the reader's
+  language instead of showing a raw English string. Older clients degrade it to
+  "unknown error" as they do every category they do not know.
+  **This closes the clumsy half of the hole, not all of it**, and the
+  distinction is worth being plain about: a process running as you that simply
+  *holds* the journal open still makes your session run unrecorded, because
+  refusing there is exactly what must not happen. Tracked as #203 (#178).
+
+- **A quarter of a second of bad luck marked a three-hour session as
+  unrecorded, for its whole life.** Without the background service running,
+  norte records what it changes in a journal file that only one process may
+  hold at a time, and it takes that file at the first change you make. If
+  something else held it at that exact instant — a script's `norte cp`, an
+  audit, the service restarting — the session gave up on journalling
+  permanently, and the "NOT journalled" warning in the status bar stayed true
+  for the rest of the day even though the file had been free again a second
+  later. It now tries again — at most once every thirty seconds when the file
+  is merely held by someone else, so that a genuinely busy journal costs
+  nothing per operation, and immediately when it is unreadable, so that
+  repairing it takes effect on your very next action — and **the warning
+  switches off when the journal comes back** rather than lying at you until you
+  quit.
+  The mechanism underneath is what took the work: reopening a journal this
+  process once owned has to re-read the chain's position from the file, and a
+  stale one collides with the row it is about to write — which would fail
+  every later change, applying each effect with nothing recorded. Releasing
+  therefore destroys the handle rather than parking it, and a test pins that a
+  third writer's rows are followed rather than overwritten. The prompt norte
+  shows before an AI rename — "this batch will not be recorded" — deliberately
+  ignores the thirty-second brake, because that one is a question a person
+  answers, and answering it from a half-minute-old verdict would talk them out
+  of a rename the journal would have recorded fine (#179).
+
 - **One invalid byte in a name disabled its whole collision key.** The
   filename comparison shared by `fs.compare` and batch rename ran
   `str::from_utf8` over the ENTIRE name and gave up on normalising or folding

@@ -2584,19 +2584,50 @@ impl App {
 
     /// Anota que esta sesión no está registrando sus mutaciones (#177).
     ///
-    /// Idempotente: el core avisa una sola vez por sesión, y si alguna vez
-    /// avisara dos, la segunda solo reescribe el mismo hecho.
+    /// Idempotente: el core avisa una vez por EPISODIO, y si alguna vez avisara
+    /// dos, la segunda solo reescribe el mismo hecho.
     pub fn note_no_journal(&mut self, why: norte_core::embedded::NoJournal) {
         self.no_journal = Some(why);
+    }
+
+    /// Y que volvió a registrarlas (#179): la ventana de propiedad se reabrió.
+    ///
+    /// Apagar el indicador es la mitad que importa. Un «NO se registra» que no
+    /// sabe volverse «ya sí» miente en cuanto el ocupante de paso suelta el
+    /// fichero, y miente sobre lo único que la barra dice de TODA la sesión.
+    ///
+    /// **Lo que el indicador no sabe decir** es que una operación ya en marcha
+    /// conserva el veredicto con el que empezó (#205): si se recupera el
+    /// journal mientras un borrado largo sigue corriendo sin registrar, la
+    /// barra se apaga y ese borrado sigue sin dejar filas. El aviso de
+    /// recuperación lo dice con todas las letras —«desde tu PRÓXIMA
+    /// operación»— pero lo borra la siguiente tecla. Distinguirlo en la barra
+    /// pediría que el core expusiera cuántas Tasks van fijadas a no-registrar,
+    /// y no lo hace.
+    pub fn note_journal_recovered(&mut self) {
+        self.no_journal = None;
     }
 
     /// El aviso PERSISTENTE de sesión sin journal, o `None` si sí se registra.
     ///
     /// Frase fija y sin el motivo: el motivo salió por `message` cuando ocurrió
     /// (con el error del core saneado), y la barra de estado tiene que caber.
+    ///
+    /// **DOS frases, porque son dos hechos distintos (#178).** `Busy` es «esto
+    /// pasó y no quedó anotado» — la sesión muta, sin registro. `Failed` es
+    /// «esto NO va a pasar»: la sesión rehúsa mutar hasta que el fichero se
+    /// arregle. Enseñar «no se puede deshacer» sobre la segunda diría lo
+    /// contrario de lo que ocurre, y esa clase de indicador es justo lo que
+    /// #178 vino a quitar.
     #[must_use]
     pub fn journal_banner(&self) -> Option<String> {
-        self.no_journal.as_ref().map(|_| t("status-no-journal"))
+        use norte_core::embedded::NoJournal as N;
+        self.no_journal.as_ref().map(|why| match why {
+            N::Failed(_) => t("status-journal-refused"),
+            // `Busy` y cualquier motivo futuro: el mensaje conservador es el
+            // que no promete que la mutación se haya parado.
+            _ => t("status-no-journal"),
+        })
     }
 
     /// Los dos indicadores persistentes de la barra, JUNTOS.

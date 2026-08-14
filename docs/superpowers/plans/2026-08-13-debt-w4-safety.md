@@ -58,7 +58,16 @@ same operation, both halves of "what does a `DeleteTree` actually promise".
 | #195 | `SyncFailure` carries no `kind`, so a report row's anchor rests on an invariant the wire never states |
 
 **THREE fields, ONE protocol version bump, one set of golden tests, one
-`protocol-guardian` pass.** Bumping twice for two fields is the mistake this grouping exists to
+`protocol-guardian` pass.**
+
+**Correction from W4a: this is now the SECOND bump, not the first.** The split
+was made by "what the reviewer has to be", and that put the wire in `w4b` — but
+`w4a` needed `Error::JournalUnavailable` on the wire to refuse a mutation
+against an unreadable journal, so it bumped 0.40.0 → 0.41.0 with its own golden
+and its own `protocol-guardian` pass. `w4b` starts from 0.41.0. The split was
+still right; what was wrong was assuming a non-wire branch could stay non-wire,
+and the tell was there in the issue — a refusal a client has to understand is a
+wire concern whatever branch it lands on. Bumping twice for two fields is the mistake this grouping exists to
 prevent. An ADR if the pairing semantics change, not just the schema.
 
 **Close:** `just ci` once **per branch**, at that branch's close — three runs,

@@ -267,10 +267,11 @@ impl Engine {
     /// solo en el observer, esas dos contestarían «no hay journal» sobre un
     /// engine que lo abriría sin problema. Aquí no: preguntar es abrir.
     ///
-    /// Que la apertura sea única la garantiza la celda del
-    /// [`LazyJournal`](crate::embedded::LazyJournal) —una sola, compartida con
-    /// el observer—, así que no hay forma de acabar con dos handles del mismo
-    /// fichero ni con dos dueños de la cadena.
+    /// Que no haya dos handles del mismo fichero —ni dos dueños de la cadena—
+    /// lo garantiza la ventana del [`LazyJournal`](crate::embedded::LazyJournal):
+    /// UNA, compartida con el observer, con los intentos serializados bajo su
+    /// lock y el handle destruido al soltarlo. Desde #179 la apertura ya no es
+    /// única; lo que sigue siendo único es el DUEÑO en cada instante.
     async fn journal(&self) -> Option<Arc<crate::journal::SqliteJournal>> {
         match &self.journal {
             JournalSource::None => None,
@@ -286,13 +287,51 @@ impl Engine {
     /// directorio entero con los nombres que propuso un modelo). Sin esto, la
     /// respuesta llegaría después del sí.
     ///
-    /// Toma el lock exclusivo AQUÍ, no en la primera mutación, **y este proceso
-    /// lo conserva hasta que muere**: si lo que viene después es una pregunta
-    /// al humano, `norte daemon run` no puede arrancar mientras él se lo
-    /// piensa. Solo tiene sentido a un paso de mutar, y es el precio de que la
-    /// respuesta llegue antes del sí y no después.
+    /// Toma el lock exclusivo AQUÍ, no en la primera mutación, y este proceso
+    /// lo conserva hasta que lo suelte
+    /// ([`LazyJournal::release`](crate::embedded::LazyJournal::release), que
+    /// hoy no llama nadie por su cuenta): si lo que viene después es una
+    /// pregunta al humano, `norte daemon run` no puede arrancar mientras él se
+    /// lo piensa. Solo tiene sentido a un paso de mutar, y es el precio de que
+    /// la respuesta llegue antes del sí y no después.
+    ///
+    /// **Se salta el freno de reintento de #179 a propósito.** Este es el único
+    /// llamador para el que pagar los 250 ms de espera del lock vale
+    /// obviamente la pena: contestar `false` desde un veredicto de hace medio
+    /// minuto sería decirle al humano «esto no se va a registrar» sobre un
+    /// journal que ahora mismo está libre, y con eso delante decidirá que no.
     pub async fn ensure_journal(&self) -> bool {
-        self.journal().await.is_some()
+        match &self.journal {
+            JournalSource::None => false,
+            JournalSource::Open(_) => true,
+            JournalSource::Lazy(l) => l.acquire_now().await.is_some(),
+        }
+    }
+
+    /// Lo mismo, diciendo POR QUÉ no.
+    ///
+    /// `None` = esta sesión SÍ registra, o este engine no tiene ventana que
+    /// perder (el del daemon, o un `Engine::new()` que no journaliza nada por
+    /// construcción).
+    ///
+    /// Existe porque desde #178 los dos motivos ya no significan lo mismo y un
+    /// `bool` los confunde: con `Busy` la operación OCURRE sin registro y hay
+    /// que avisar; con `Failed` la operación va a ser REHUSADA por
+    /// el gate del engine y avisar sería el preámbulo de una pregunta cuya premisa
+    /// es falsa. Lo mira `norte ai rename`, que pregunta antes de dejar que un
+    /// modelo renombre un directorio entero.
+    ///
+    /// Se salta el freno de reintento, como [`Self::ensure_journal`] y por la
+    /// misma razón.
+    pub async fn journal_obstacle(&self) -> Option<crate::embedded::NoJournal> {
+        let JournalSource::Lazy(l) = &self.journal else {
+            return None;
+        };
+        // UN solo intento, y por eso `resolve_now` y no `acquire_now` seguido de
+        // `resolve`: aquel par pagaba dos aperturas, y si el texto del error de
+        // `SQLite` difería entre ellas —lo escribe en parte quien pueda escribir
+        // el fichero— el sink recibía dos avisos por una sola pregunta.
+        l.resolve_now().await.err()
     }
 
     /// Instala el gate de policy y el resolver de aprobaciones (M3-3): a partir
@@ -353,10 +392,100 @@ impl Engine {
         self.spool.read().expect("spool lock sano").clone()
     }
 
+    /// La puerta ÚNICA de toda mutación de este engine: policy primero, journal
+    /// después.
+    ///
     /// Evalúa la policy PRE-efecto; un `Ask` suspende hasta aprobación. `Err`
     /// [`Error::PolicyDenied`] con la causa (`rule`) si se deniega — el wire lo
-    /// distingue de un `PermissionDenied` del OS/provider (M3-3b).
+    /// distingue de un `PermissionDenied` del OS/provider (M3-3b). Y después,
+    /// [`Self::journal_gate`]: un journal ILEGIBLE rehúsa (#178).
+    ///
+    /// **Ese orden, y no el otro.** El journal se pide DESPUÉS de que la policy
+    /// haya dicho que sí, porque pedirlo toma el lock exclusivo del fichero
+    /// (#177) y una operación que la policy iba a denegar no tiene por qué
+    /// quitárselo al daemon.
+    ///
+    /// Que la comprobación viva AQUÍ y no en cada llamador es lo que la hace
+    /// completa: los ocho puntos de mutación del engine pasan por esta función,
+    /// y añadir el noveno no requiere acordarse de nada. Lo pinea
+    /// `toda_mutacion_pasa_por_el_gate_del_journal` en
+    /// `tests/embedded_journal.rs`, que es lo que impide que el noveno se
+    /// olvide de todos modos.
     async fn gate(
+        &self,
+        actor: &crate::journal::Actor,
+        op: crate::policy::PolicyOp,
+        paths: &[&VPath],
+    ) -> Result<(), Error> {
+        self.policy_gate(actor, op, paths).await?;
+        self.journal_gate().await
+    }
+
+    /// Rehúsa la mutación si el journal de esta sesión no se puede ABRIR
+    /// (#178).
+    ///
+    /// Solo el caso `Failed`: sin permisos, corrupto, no-es-una-base-de-datos,
+    /// o de una era anterior a la cadena de hoy. Ahí seguir sería mutar sin
+    /// registro y sin undo, que es lo que la regla dura 4 prohíbe y lo que
+    /// `norte daemon run` ya rehúsa con esa misma entrada — la asimetría era el
+    /// bug.
+    ///
+    /// **`Busy` NO rehúsa**, y esa mitad es la que impide que el arreglo sea
+    /// peor que el agujero: el ocupante habitual es benigno (un daemon vivo,
+    /// otra ventana) o transitorio (otro `norte cp` de un script, un daemon
+    /// reiniciándose), y negar ahí convertiría «hay un daemon» en «el gestor de
+    /// ficheros no funciona» y dejaría a un ocupante de paso tumbando una
+    /// sesión de tres horas.
+    ///
+    /// Los engines que no llevan journal perezoso pasan de largo: el del daemon
+    /// (que no arranca sin journal, así que ya falló en cerrado antes) y el de
+    /// un embebedor con `Engine::new()` (que no registra NADA por construcción
+    /// y para el que no hay fichero que arreglar).
+    ///
+    /// # Lo que este gate garantiza, con su plazo
+    /// **«No estaba ilegible la última vez que se miró», y eso puede ser hasta
+    /// [`FRENO_TRAS_FALLO`](crate::embedded::FRENO_TRAS_FALLO) atrás.** El
+    /// freno de #179 hace que un veredicto `Busy` se recuerde treinta segundos
+    /// sin volver a abrir; si en esa ventana el fichero pasa
+    /// de OCUPADO a ILEGIBLE —alguien suelta el lock y acto seguido lo
+    /// corrompe— este gate sigue contestando `Ok(())` desde la clasificación
+    /// vieja y las mutaciones de esa ventana pasan sin registro.
+    ///
+    /// Se acepta, y conviene entender por qué NO es una regresión: un `Busy`
+    /// falla en abierto por diseño (arriba), y quien puede sostener el lock
+    /// mantiene a la sesión sin registro **indefinidamente**, no treinta
+    /// segundos — es la mitad de #178 que sigue abierta y que sigue #203. Un
+    /// desfase de 30 s dentro de un agujero permanente no añade capacidad
+    /// alguna. Lo que NO se puede hacer es cerrarlo saltándose el freno aquí:
+    /// eso devuelve `ESPERA_POR_EL_LOCK` por CADA mutación mientras haya un
+    /// daemon vivo, que es exactamente el coste que el freno existe para no
+    /// pagar.
+    async fn journal_gate(&self) -> Result<(), Error> {
+        let JournalSource::Lazy(lazy) = &self.journal else {
+            return Ok(());
+        };
+        match lazy.resolve().await {
+            Ok(_) | Err(crate::embedded::NoJournal::Busy) => Ok(()),
+            Err(crate::embedded::NoJournal::Failed(motivo)) => {
+                // El motivo lleva el fichero y va al LOG del operador; la
+                // categoría que cruza al frontend no lleva ninguno de los dos
+                // (ver el rustdoc de la variante).
+                tracing::error!(
+                    motivo = %motivo,
+                    "mutación rehusada: el journal de esta sesión no se puede abrir (#178)"
+                );
+                Err(Error::JournalUnavailable)
+            } // SIN brazo comodín, y eso es el fail-closed: `NoJournal` es
+              // `#[non_exhaustive]` de puertas afuera, pero aquí dentro el
+              // compilador exige exhaustividad, así que un motivo NUEVO rompe la
+              // compilación en vez de colarse como «adelante» por un `_`. Lo que
+              // no se sabe clasificar no journaliza, y lo que no journaliza no
+              // muta: que lo decida quien añada el motivo.
+        }
+    }
+
+    /// La mitad de policy de [`Self::gate`].
+    async fn policy_gate(
         &self,
         actor: &crate::journal::Actor,
         op: crate::policy::PolicyOp,
@@ -1159,6 +1288,9 @@ impl Engine {
     /// mismo árbol con las mismas opciones (que da el mismo digest) se rehúsa.
     ///
     /// # Errors
+    /// [`Error::JournalUnavailable`] si el journal de esta sesión no se puede
+    /// ABRIR (#178: ilegible ≠ ocupado — con el fichero simplemente ocupado se
+    /// contesta `Unsupported`, que es lo de siempre).
     /// [`Error::Unsupported`] sin spool o sin journal, o si el scheme de alguna
     /// raíz no tiene provider; [`Error::PlanStale`] si el hash no nombra un plan
     /// vivo de ESTA conexión (no existe, caducó, está manipulado, o ya se está
@@ -1184,6 +1316,26 @@ impl Engine {
         Error,
     > {
         let spool = self.spool().ok_or(Error::Unsupported)?;
+        // Un journal ILEGIBLE se dice con su categoría (#178) y no como
+        // «no soportado»: hay un fichero concreto que arreglar y el usuario
+        // tiene derecho a que se lo digan. Va antes del `ok_or` porque los dos
+        // caminos acaban sin journal y solo uno de ellos es accionable.
+        //
+        // Este es el ÚNICO sitio donde el journal se pide antes que la policy,
+        // al revés de lo que dice el rustdoc de `gate`, y hace falta: el lote
+        // (`alloc_batch`) y el `BatchJournal` se arman abajo con este handle, y
+        // el plan es de un solo uso — descubrir aquí que no hay journal después
+        // de haber gastado la aprobación dejaría al humano sin plan y sin
+        // sincronización.
+        //
+        // Lo que ese orden costaría —tener el lock exclusivo tomado mientras un
+        // `Ask` de policy espera a un humano— no puede ocurrir, y no por
+        // suerte: el único engine con journal PEREZOSO es el embebido, y un
+        // `Backend::Embedded` contesta `Unsupported` a `policy_decide`, así que
+        // no hay nadie que pueda aprobar y nada que suspender. El del daemon
+        // tiene `JournalSource::Open`: ya está abierto desde el arranque y
+        // `journal_gate` lo deja pasar sin tocar el fichero.
+        self.journal_gate().await?;
         let journal = self.journal().await.ok_or_else(|| {
             tracing::warn!("sync.apply sin journal: no hay lote que deshacer, no se aplica");
             Error::Unsupported
@@ -1355,10 +1507,17 @@ impl Engine {
                     if let Err(e) = spool_task.remove(conn_id, &hash_task).await {
                         tracing::warn!(error = %e, "sync.apply: el plan aplicado no se pudo borrar");
                     }
-                    out.unwrap_or_else(|_| {
-                        tracing::error!("sync.apply: pánico en el ejecutor");
-                        Err(Error::Internal { panic: true })
-                    })
+                    match out {
+                        Err(_) => {
+                            tracing::error!("sync.apply: pánico en el ejecutor");
+                            Err(Error::Internal { panic: true })
+                        }
+                        // `into_wire` y no un `?`: la conversión es LOSSY (el
+                        // estado de #160 no tiene categoría en la taxonomía) y
+                        // es ella la que lo deja dicho en el log antes de
+                        // perderlo.
+                        Ok(r) => r.map_err(crate::sync::exec::ApplyError::into_wire),
+                    }
                 })
             }),
         );
@@ -1677,8 +1836,10 @@ impl Engine {
     /// policy PRE-efecto y registra el actor real en el journal.
     ///
     /// # Errors
-    /// [`Error::PolicyDenied`] si la policy deniega; [`Error::Unsupported`]
-    /// si algún scheme no tiene provider registrado.
+    /// [`Error::JournalUnavailable`] si el journal de esta sesión
+    /// no se puede abrir (#178); [`Error::PolicyDenied`] si la policy
+    /// deniega; [`Error::Unsupported`] si algún scheme no tiene provider
+    /// registrado.
     #[tracing::instrument(skip(self, actor), fields(from = %span_path(from), to = %span_path(to)))]
     pub async fn copy_with_as(
         &self,
@@ -1735,8 +1896,10 @@ impl Engine {
     /// Move con políticas y ACTOR explícito (camino agéntico, M3-3).
     ///
     /// # Errors
-    /// [`Error::PolicyDenied`] si la policy deniega; [`Error::Unsupported`]
-    /// si algún scheme no tiene provider registrado.
+    /// [`Error::JournalUnavailable`] si el journal de esta sesión
+    /// no se puede abrir (#178); [`Error::PolicyDenied`] si la policy
+    /// deniega; [`Error::Unsupported`] si algún scheme no tiene provider
+    /// registrado.
     #[tracing::instrument(skip(self, actor), fields(from = %span_path(from), to = %span_path(to)))]
     pub async fn move_with_as(
         &self,
@@ -1940,7 +2103,8 @@ impl Engine {
     /// # Errors
     /// [`Error::PlanNotExecutable`] si el plan tiene colisiones;
     /// [`Error::PlanStale`] si el directorio derivó; [`Error::PolicyDenied`]
-    /// si el gate deniega; las de [`Self::rename_batch_plan`].
+    /// si el gate deniega; [`Error::JournalUnavailable`] si el journal de esta
+    /// sesión no se puede abrir (#178); las de [`Self::rename_batch_plan`].
     pub async fn rename_batch(
         &self,
         dir: &VPath,
@@ -2034,8 +2198,34 @@ impl Engine {
             // alguna vez se instala un observer en abanico JUNTO a un journal,
             // esta rama tiene que emitir a los dos o los renames por lotes
             // serán los únicos invisibles para él.
+            // FIJADO (#205), y aquí hacía falta tanto como en `ops`: sin fijar,
+            // cada rename del lote volvía a preguntarle al observer, así que un
+            // lote largo que empieza con el fichero ocupado dejaba filas a
+            // partir de la mitad. Peor que en `ops`, además: esas filas van sin
+            // `batch_id`, o sea que el lote que el wire anuncia como UNA unidad
+            // deshacible quedaba medio registrado Y sin agrupar, y el undo
+            // desandaba la cola dejando la cabeza renombrada.
+            //
+            // Se fija SIN volver a resolver: `self.journal()` ya preguntó, y
+            // preguntar otra vez podría contestar que sí —el freno es corto en
+            // los tests, y `with_retry_brake` es público— con lo que el lote
+            // quedaría registrado entero pero sin lote, que es el otro modo de
+            // romper la misma promesa.
             None => Arc::new(crate::rename::exec::ObserverJournal {
-                observer: Arc::clone(&self.observer),
+                // Un journal perezoso ausente NO registra; un observer de
+                // embebedor sí recibe, aunque no haya journal detrás. El
+                // informe dice la verdad en los dos casos (#205).
+                records: !matches!(self.journal, JournalSource::Lazy(_)),
+                observer: if matches!(self.journal, JournalSource::Lazy(_)) {
+                    // Journal perezoso que ahora mismo no está: este lote no
+                    // registra nada, y no volverá a preguntar.
+                    Arc::new(crate::observer::NoopObserver)
+                } else {
+                    // `Engine::new()`/`with_observer`: no hay ventana que
+                    // perder y el observer del embebedor tiene que seguir
+                    // recibiendo sus renames.
+                    Arc::clone(&self.observer)
+                },
                 actor: actor.clone(),
             }),
         };
@@ -2149,8 +2339,10 @@ impl Engine {
     /// Borrado con modo y ACTOR explícito (camino agéntico, M3-3).
     ///
     /// # Errors
-    /// [`Error::PolicyDenied`] si la policy deniega; [`Error::Unsupported`]
-    /// si el scheme no tiene provider registrado.
+    /// [`Error::JournalUnavailable`] si el journal de esta sesión
+    /// no se puede abrir (#178); [`Error::PolicyDenied`] si la policy
+    /// deniega; [`Error::Unsupported`] si el scheme no tiene provider
+    /// registrado.
     #[tracing::instrument(skip(self, actor), fields(path = %span_path(path), ?mode))]
     pub async fn delete_with_as(
         &self,
@@ -2191,8 +2383,10 @@ impl Engine {
     /// por [`crate::policy::PolicyOp::Mkdir`] PRE-efecto.
     ///
     /// # Errors
-    /// [`Error::PolicyDenied`] si la policy deniega; [`Error::Unsupported`]
-    /// si el scheme no tiene provider registrado.
+    /// [`Error::JournalUnavailable`] si el journal de esta sesión
+    /// no se puede abrir (#178); [`Error::PolicyDenied`] si la policy
+    /// deniega; [`Error::Unsupported`] si el scheme no tiene provider
+    /// registrado.
     #[tracing::instrument(skip(self, actor), fields(path = %span_path(path)))]
     pub async fn mkdir_as(
         &self,
@@ -2266,6 +2460,8 @@ impl Engine {
     /// pasar por policy.
     ///
     /// # Errors
+    /// [`Error::JournalUnavailable`] si el journal de esta sesión existe pero no
+    /// se puede ABRIR (#178).
     /// [`Error::Unsupported`] si el Engine no tiene journal ([`Self::with_journal`]),
     /// o si algún path del journal no tiene provider registrado.
     ///
@@ -2296,6 +2492,10 @@ impl Engine {
         target: &crate::journal::Actor,
         executor: crate::journal::Actor,
     ) -> Result<(TaskHandle, Arc<std::sync::Mutex<crate::UndoReport>>), Error> {
+        // Un journal ILEGIBLE se dice con su categoría y no como «no soportado»
+        // (#178): los dos caminos acaban sin cadena que leer, pero solo uno de
+        // ellos tiene un fichero concreto que arreglar.
+        self.journal_gate().await?;
         let journal = self.journal().await.ok_or(Error::Unsupported)?;
         let entries = journal
             .journal()

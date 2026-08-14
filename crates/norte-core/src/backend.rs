@@ -222,12 +222,18 @@ impl crate::connect::ConnectionObserver for ChannelConnectionObserver {
 /// dentro del core, en mitad de una mutación, y el frontend no tiene forma de
 /// preguntárselo a nadie después.
 struct ChannelJournalSink {
-    tx: mpsc::UnboundedSender<crate::embedded::NoJournal>,
+    tx: mpsc::UnboundedSender<crate::embedded::JournalStatus>,
 }
 
 impl crate::embedded::JournalWarningSink for ChannelJournalSink {
     fn on_no_journal(&self, why: &crate::embedded::NoJournal) {
-        let _ = self.tx.send(why.clone());
+        let _ = self
+            .tx
+            .send(crate::embedded::JournalStatus::Lost(why.clone()));
+    }
+
+    fn on_journal_recovered(&self) {
+        let _ = self.tx.send(crate::embedded::JournalStatus::Recovered);
     }
 }
 
@@ -330,8 +336,9 @@ impl Backend {
     /// rename`, y desde esta tarea `norte sync`).
     ///
     /// - Embebido: delega en [`Engine::ensure_journal`], que toma el lock
-    ///   perezoso AQUÍ (no en la primera mutación) y lo conserva mientras el
-    ///   proceso viva.
+    ///   perezoso AQUÍ (no en la primera mutación) y lo conserva hasta que
+    ///   alguien lo suelte (`LazyJournal::release`, que hoy no llama nadie por
+    ///   su cuenta — #179).
     /// - Remoto: siempre `true`. El daemon es DUEÑO del journal y se niega a
     ///   arrancar sin uno (ver el arranque de `norte daemon run`); no hay un
     ///   viaje de ida y vuelta que hacer para saberlo, y una conexión remota
@@ -358,6 +365,25 @@ impl Backend {
             Self::Embedded(engine) => engine.ensure_journal().await,
             #[cfg(unix)]
             Self::Remote(_) => true,
+        }
+    }
+
+    /// Lo mismo, diciendo POR QUÉ no — ver [`Engine::journal_obstacle`].
+    ///
+    /// `None` = esta sesión registra, o no hay ventana que perder (el daemon al
+    /// otro lado de un socket, o un `Engine::new()`).
+    ///
+    /// Existe por lo que #178 partió en dos: con `Busy` la operación ocurriría
+    /// sin registro —y el remedio es `--daemon`, hablar con quien tiene el
+    /// fichero— y con `Failed` no va a ocurrir en absoluto, y ahí `--daemon` no
+    /// es remedio ninguno porque el daemon se niega a arrancar con ese mismo
+    /// fichero. Un `bool` manda a la mitad de los usuarios contra la pared
+    /// equivocada.
+    pub async fn journal_obstacle(&self) -> Option<crate::embedded::NoJournal> {
+        match self {
+            Self::Embedded(engine) => engine.journal_obstacle().await,
+            #[cfg(unix)]
+            Self::Remote(_) => None,
         }
     }
 
@@ -1355,8 +1381,12 @@ impl Backend {
     /// Como [`Backend::take_degraded`], en `Embedded` INSTALA el sink en el
     /// engine en vez de tomar un canal ya hecho. Llamarlo en el arranque, antes
     /// de la primera mutación; y si una mutación se adelanta igual, el aviso no
-    /// se pierde (el `LazyJournal` lo retiene hasta que hay sink). Como mucho
-    /// llega UN mensaje por sesión.
+    /// se pierde (el `LazyJournal` lo retiene hasta que hay sink).
+    ///
+    /// Llegan PÉRDIDAS Y RECUPERACIONES (#179): la ventana de propiedad se
+    /// puede reabrir, así que un frontend que solo escuche
+    /// [`JournalStatus::Lost`](crate::embedded::JournalStatus::Lost) acaba
+    /// pintando «esta sesión no se registra» sobre una que sí.
     ///
     /// `None` también si el engine embebido no lleva journal perezoso —uno
     /// construido con `Engine::new()`, que no journaliza NADA y nunca va a
@@ -1367,7 +1397,7 @@ impl Backend {
     /// receptor (ver [`crate::embedded::LazyJournal::set_warning_sink`]).
     pub fn take_journal_warnings(
         &mut self,
-    ) -> Option<mpsc::UnboundedReceiver<crate::embedded::NoJournal>> {
+    ) -> Option<mpsc::UnboundedReceiver<crate::embedded::JournalStatus>> {
         match self {
             Self::Embedded(engine) => {
                 let (tx, rx) = mpsc::unbounded_channel();

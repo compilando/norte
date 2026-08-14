@@ -491,7 +491,49 @@ use crate::{
 /// daemon 0.39, que serde ignoraría en silencio— la corta
 /// [`version_compatible`] en el handshake: en 0.x un cliente con minor MAYOR
 /// que el servidor no negocia.
-pub const PROTOCOL_VERSION: &str = "0.40.0";
+///
+/// 0.41.0 (#178): UNA categoría de error nueva,
+/// [`Error::JournalUnavailable`](crate::Error::JournalUnavailable) — el journal
+/// de esta sesión no se puede abrir, así que la mutación se rehúsa y no se toca
+/// nada. Ni método, ni notificación, ni campo: el bump más pequeño que existe.
+///
+/// **Hoy no la emite nadie por el wire, y aun así se paga el bump.** El daemon
+/// con un journal ilegible no llega a arrancar, así que el único emisor posible
+/// es el transporte EMBEBIDO, que habla in-process. El bump cuesta interop —un
+/// frontend 0.41 deja de negociar con un daemon 0.40— y no compra un solo byte
+/// de conversación nueva. Se paga porque la taxonomía se PUBLICA
+/// (`docs/schema/proto.schema.json` va con cada release, #13): un tercero que
+/// escriba un cliente contra ese fichero tiene que poder ver la categoría que
+/// su `match` va a recibir el día que un daemon pueda perder su journal en
+/// caliente. Una categoría que existe en el tipo y no en el esquema es la clase
+/// de divergencia que ADR 0038 congela el esquema para no tener.
+///
+/// **Sin campos, y con sitio reservado para el detalle.** La ruta del fichero y
+/// el texto crudo de `SQLite` son locales del proceso que la emite —y el
+/// segundo lo moldea en parte quien pueda escribir `journal.db`—, así que no
+/// cruzan la frontera: viajan por el canal in-process
+/// `norte_core::embedded::NoJournal` (que este crate no puede enlazar: es su
+/// consumidor, no su dependencia), saneado. Si algún día un
+/// daemon necesita nombrar el fichero, el sitio ya existe y NO pide bump: el
+/// `message` del `RpcError` lleva el `Display` (ver
+/// `impl From<Error> for RpcError`), que es donde ADR 0004 pone el detalle
+/// legible. Añadirle un campo a la variante más adelante también sería aditivo
+/// en el wire —serde ignora las claves de más al decodificar una variante
+/// unitaria con tag interno— y rompería solo la API de Rust.
+///
+/// **Sin ADR, y el porqué.** La decisión de producto —un journal ilegible
+/// REHÚSA, y no hay `--no-journal` que lo salte— la toma #178 y vive en el
+/// rustdoc del módulo `norte_core::embedded`, que es donde alguien la va a
+/// buscar. Lo que llega al wire es una categoría más en un enum que ya degrada;
+/// no cambia la forma de ningún mensaje, ni la negociación, ni el modelo de
+/// confianza entre extremos. Los bumps de esa talla (0.29.0, 0.31.0, 0.35.0)
+/// tampoco llevaron ADR.
+///
+/// Ventana N=0.41.x / N-1=0.40.x: un cliente 0.40 que recibiera esta categoría
+/// la degrada a `Error::Unknown` por su `#[serde(other)]`, que es el mecanismo
+/// que este enum lleva desde M0 y tiene su propio test. En la práctica no la
+/// recibe: solo el embebido la emite, y el embebido no tiene wire.
+pub const PROTOCOL_VERSION: &str = "0.41.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver

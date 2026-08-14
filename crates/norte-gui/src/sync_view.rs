@@ -439,18 +439,20 @@ pub fn open(slot: &mut Option<SyncView>, started: Started) -> Option<ClosedTasks
 /// cancelación y deja el panel abierto para leer el informe), así que el
 /// camino corto no cierra nada por descuido.
 ///
-/// # Lo que cancelar NO devuelve, hoy
-/// La regla es que lo aplicado hasta el corte se queda journalizado (ADR
-/// 0049), o sea media sincronización pero deshacible. **Tiene una excepción, y
-/// es del core**: `sync::exec` no escribe la entrada del journal de un
-/// `DeleteTree` que se corta a MEDIO borrar (`Err(Cancelled)`), y ese borrado
-/// va entrada por entrada. Contra un destino sin papelera —un bucket, un
-/// SFTP, un FAT— eso deja un subárbol parcialmente borrado, sin fila en el
-/// journal, sin deshacer y sin fila en el informe. Es anterior a esta fase
-/// (issue #186); se anota aquí porque éste es el sitio que la dispara y
-/// porque el comentario que decía «no se pierde nada irrecuperable» era falso
-/// para justo el plan que se lleva el aviso más largo (revisión de seguridad
-/// MAJOR-2).
+/// # Lo que cancelar deja detrás
+/// Lo aplicado hasta el corte se queda journalizado (ADR 0049), y lo que es
+/// deshacible se deshace. **Journalizado no es lo mismo que recuperable, y
+/// aquí la diferencia es toda la frase.**
+///
+/// Un `DeleteTree` sin papelera cortado a MEDIO borrar ya deja su fila (#186,
+/// cerrada; antes no dejaba ninguna). Pero esa fila es `Irreversible`: el undo
+/// NO devuelve el subárbol, lo NOMBRA — sale en `unreverted_paths` y sigue. Es
+/// todo lo que un borrado permanente admite, y por eso el plan que llega hasta
+/// aquí es justo el que se lleva el aviso más largo antes de aprobarse.
+///
+/// Y el INFORME sigue sin tener fila para ese paso: el bucle sale con
+/// `Err(Cancelled)` en el acto, así que no cuenta ni como `done` ni como
+/// `failed`. Quien lo dice es el journal.
 #[must_use]
 pub fn close(slot: &mut Option<SyncView>) -> Option<ClosedTasks> {
     slot.take().as_ref().map(ClosedTasks::of)

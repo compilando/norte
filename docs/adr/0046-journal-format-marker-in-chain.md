@@ -122,6 +122,9 @@ and no query filtered by actor can return it.
 part of the chain and not part of what happened: an audit export must not gain a
 row describing no mutation, the undo's LIFO stack must not gain a step it cannot
 take, and the anchor must not point at a `seq` the export does not contain.
+(#146 qualifies that last clause: it holds for the head anchor file, and the
+marker is anchored out of band, in a file of its own, through
+`Journal::marker_hash`. See the consequences below.)
 
 `verify_chain` walks everything, marker included. `Intact { entries }` counts
 mutations, so the number a user sees does not move because of this ADR.
@@ -267,23 +270,69 @@ Negative, and stated rather than hidden:
   "entries from `seq k` onward are format N" — which is a bigger design (it
   makes the format a property of a range, not of a file) and is deliberately not
   built here.
-- **An attacker who can write the database can re-declare the format, and the
-  anchors do not catch that one.** Three column writes, no key: set the version,
-  refresh the marker's digest (keyless, publicly computable), relink `seq 1`.
-  A verdict that was `Broken { first_bad_seq: k }` becomes `UnknownFormat`, and
-  a version of `u32::MAX` guarantees no build will ever say otherwise. The
-  anchors do **not** rule it out — the edit leaves every stored digest at
-  `seq >= 1` untouched, so each anchor still verifies. This attack falls in the
-  gap between the two mechanisms: `verify_chain` catches inconsistent edits,
-  anchors catch consistent ones, and here an inconsistent edit had its verdict
-  rerouted. What survives is the alarm, not the blame: both verdicts refuse to
-  certify and both exit with failure, and the operator is told in the message
-  itself that a re-declared marker looks identical from here. The capability is
-  not new — the same write access already allowed a full, consistent rewrite,
-  which is strictly stronger — but the cost of a *narrative* dropped, and that
-  is worth stating. What would close it is anchoring the marker itself: one
-  MAC'd line at `seq 0`, after which an inconsistent re-declaration is a
-  `HashMismatch` for anyone who has ever anchored. Tracked in #146.
+- **An attacker who can write the database can re-declare the format**, and
+  the *head* anchors do not catch that one. Three column writes, no key: set
+  the version, refresh the marker's digest (keyless, publicly computable),
+  relink `seq 1`. A verdict that was `Broken { first_bad_seq: k }` becomes
+  `UnknownFormat`, and a version of `u32::MAX` guarantees no build will ever
+  say otherwise. A head anchor does **not** rule it out — the edit leaves every
+  stored digest at `seq >= 1` untouched, so each one still verifies. The attack
+  falls in the gap between the two mechanisms: `verify_chain` catches
+  inconsistent edits, anchors catch consistent ones, and here an inconsistent
+  edit had its verdict rerouted. What survived was the alarm, not the blame:
+  both verdicts refuse to certify and both exit with failure, and the operator
+  is told in the message itself that a re-declared marker looks identical from
+  here. The capability was never new — the same write access already allowed a
+  full, consistent rewrite, which is strictly stronger — but the cost of a
+  *narrative* had dropped.
+
+  **Closed for a journal that had a marker when it was anchored (#146).**
+  `norte audit anchor` now writes a second MAC'd line over the marker itself,
+  at `seq 0`, into its **own file** (`journal-marker-anchors.jsonl`);
+  `norte audit verify` checks it against `Journal::marker_hash`. A
+  re-declaration is then `AnchorVerdict::HashMismatch` **at `seq 0`** —
+  located, and with a key behind it. There is no digest-stable evasion: the
+  only marker fields a forger may vary are `ts_ms` and the version, and both
+  are inside `chain_hash`'s preimage, so changing the declared version without
+  moving the stored digest is a second preimage.
+
+  **A separate file, and the reason is this ADR's own subject.** A verifier
+  built before #146 looks each anchored `seq` up in a snapshot it builds from
+  the mutations, finds nothing at `seq 0`, and reports `MissingSeq` — "the
+  anchored seq no longer exists: truncation or rollback". That is a false
+  accusation of tampering against a file nobody touched, i.e. exactly #127,
+  delivered by the fix for it. And no other line shape avoids it: that verifier
+  fails closed on anything it cannot parse. An older binary simply does not
+  open the second file; it loses coverage it never had, and accuses no one.
+
+  §2's two accessors are kept rather than relaxed — `entry_hash_at` still
+  filters `seq >= 1`, so the marker's digest has its own narrow door
+  (`Journal::marker_hash`), and `head()` still skips `seq 0`, so the coverage
+  cross-check keeps comparing head anchors against the last MUTATION. **§2's
+  invariant, though, is now qualified rather than kept**: "the anchor must not
+  point at a `seq` the export does not contain" holds for the head anchor file
+  and no longer for the marker one. Anything that reconstructs `seq →
+  entry_hash` from `norte audit export` must be told the marker is anchored out
+  of band, or it will reproduce the `MissingSeq` above.
+
+  What it does **not** cover, and cannot:
+
+  - **A journal that never had a marker** — which, per §6, is every journal
+    written before this ADR, for life. There the attack is not re-declaration
+    but *injection*: insert a canonical `seq 0` row declaring `u32::MAX` and
+    relink `seq 1`. Same three writes, same laundered verdict, and no earlier
+    anchor to contradict it, because at anchoring time there was nothing at
+    `seq 0` to sign. What the audit can say — and now does — is that a marker
+    is present and nothing anchors it, which is precisely what an injected
+    marker looks like. It is a prompt to investigate, not a verdict.
+  - **A journal nobody ever anchored**, and one whose anchor files the attacker
+    removed along with the database. Deleting the marker anchor is invisible to
+    the coverage heuristic (it is the LOWEST seq, so removing it moves
+    `max_ok_seq` not at all, unlike a tail trim), which is the other reason the
+    unanchored-marker line above is printed rather than inferred.
+
+  All of these were already the boundary of ADR 0025 — the anchors' worth has
+  always rested on a copy kept somewhere the attacker is not.
 - **A "how many entries failed to recompute" heuristic was considered and
   rejected** as the discriminator between a genuine newer format (where nearly
   every entry fails) and a laundered one (where two do). It breaks on the shape

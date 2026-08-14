@@ -291,9 +291,11 @@ pub enum SessionCmd {
     /// que hace que el `Esc` del panel y su cierre la puedan parar), espera su
     /// desenlace y pide `sync.report` — SIEMPRE, cancelación incluida: lo
     /// aplicado hasta el corte se queda journalizado y media sincronización es
-    /// un estado real que el lector tiene que poder ver (con la excepción que
-    /// `sync_view::close` documenta: un `DeleteTree` cortado a medio borrar no
-    /// deja fila, y eso es del core — issue #186).
+    /// un estado real que el lector tiene que poder ver. Un `DeleteTree`
+    /// cortado a medio borrar deja su fila por lo que llegó a quitar (#186) —
+    /// fila que es `Irreversible`, o sea que el undo lo nombra y no lo
+    /// devuelve. Lo que el INFORME tampoco cuenta lo detalla
+    /// `sync_view::close`.
     SyncApply {
         /// La generación del panel que aprobó, ecoada en
         /// [`SessionEvent::SyncApplyStarted`] y en
