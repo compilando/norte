@@ -477,6 +477,9 @@ fn local_datetime(deleted_ms: u64) -> String {
 /// entre dispositivos sería un copy+delete largo e incancelable a mitad
 /// (excepción de plataforma que ADR 0009 anotaba y que este camino ya no
 /// tiene: aquí el movimiento es SIEMPRE un `rename` dentro de un dispositivo).
+/// Es el issue #26, y lo fija
+/// `tests::la_papelera_jamas_cruza_de_dispositivo` con dos dispositivos de
+/// verdad — sin un test, «ya no copia» es una frase, no una garantía.
 ///
 /// # Las dos papeleras NO se validan igual, y es deliberado
 /// La de casa cuelga de `$HOME`: quien pueda escribir ahí ya es este usuario, y
@@ -667,6 +670,87 @@ mod tests {
     };
     use norte_vfs::trash::TrashId;
     use std::path::Path;
+
+    /// #26: la papelera JAMÁS cruza una frontera de dispositivo.
+    ///
+    /// El fallo que este test fija no es hipotético: el crate `trash`, que es
+    /// quien hacía esto antes de que existiera este módulo, degrada a
+    /// copiar-el-árbol-y-borrar-el-origen cuando el montaje de la víctima no
+    /// admite papelera. Eso son GB dentro de UN `spawn_blocking`, sin progreso
+    /// y sin cancelación (regla dura 3), y el fichero deja de estar donde
+    /// estaba antes de que nadie pueda parar nada.
+    ///
+    /// Aquí la papelera se elige POR DISPOSITIVO ([`super::prepare_trash_dir`])
+    /// y el traslado es un `rename`, que a través de una frontera falla en vez
+    /// de copiar. El test lo comprueba de verdad, con dos dispositivos reales:
+    /// la víctima en `/dev/shm` (tmpfs) y una home-trash inyectada en el disco.
+    ///
+    /// Sin dos dispositivos no hay nada que comprobar y el test se retira
+    /// diciéndolo: fingirlo sería peor que no correrlo.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn la_papelera_jamas_cruza_de_dispositivo() {
+        use std::os::unix::fs::MetadataExt;
+
+        let casa = tempfile::tempdir().expect("tempdir");
+        let Ok(shm) = std::fs::metadata("/dev/shm") else {
+            eprintln!("sin /dev/shm: no hay dos dispositivos que comprobar");
+            return;
+        };
+        if shm.dev() == std::fs::metadata(casa.path()).expect("stat").dev() {
+            eprintln!("/dev/shm y el tempdir son el MISMO dispositivo: nada que comprobar");
+            return;
+        }
+        let base = Path::new("/dev/shm").join(format!("norte-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("dir en /dev/shm");
+        let victima = base.join("v.txt");
+        std::fs::write(&victima, b"x").expect("victima");
+
+        let dest = super::trash(&victima, Some(casa.path()), &id());
+
+        let veredicto = match &dest {
+            Ok(dest) => {
+                let d = std::fs::metadata(dest).expect("stat del destino").dev();
+                assert_eq!(
+                    d,
+                    shm.dev(),
+                    "la entrada se quedó en el dispositivo de la víctima"
+                );
+                assert!(
+                    !casa
+                        .path()
+                        .join("Trash")
+                        .join("files")
+                        .join("v.txt")
+                        .exists(),
+                    "y NADA se copió a la papelera de $HOME"
+                );
+                let _ = std::fs::remove_file(dest);
+                let _ = std::fs::remove_file(super::sidecar_of(dest).expect("sidecar"));
+                // Y la papelera del topdir que este test acaba de crear, SOLO
+                // si queda vacía: `remove_dir` falla con contenido, que es
+                // exactamente la protección que hace falta para no barrer la
+                // papelera de verdad de nadie.
+                if let Some(papelera) = dest.parent().and_then(Path::parent) {
+                    let _ = std::fs::remove_dir(papelera.join(super::FILES));
+                    let _ = std::fs::remove_dir(papelera.join(super::INFO));
+                    let _ = std::fs::remove_dir(papelera);
+                }
+                true
+            }
+            // `Unsupported` es la OTRA respuesta correcta (montaje sin
+            // papelera utilizable): el frontend reofrece borrado permanente
+            // con aviso, ADR 0009. Lo que no vale es copiar.
+            Err(norte_proto::Error::Unsupported) => {
+                assert!(victima.exists(), "una papelera imposible no mueve nada");
+                true
+            }
+            Err(e) => panic!("ni papelera en el dispositivo ni Unsupported: {e:?}"),
+        };
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(veredicto);
+    }
 
     fn id() -> TrashId {
         TrashId::new(1_726_000_000_123, 7)
