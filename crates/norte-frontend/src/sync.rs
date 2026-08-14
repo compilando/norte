@@ -52,6 +52,7 @@ use norte_proto::methods::{
     SyncReportResult, SyncStep, SyncStepKind, SyncStepsBatch,
 };
 use norte_proto::{TaskId, TaskState, VPath};
+use unicode_normalization::UnicodeNormalization;
 
 /// Why a selection of diff-pane rows cannot become a `SyncPlanParams::include`.
 ///
@@ -545,6 +546,26 @@ pub fn anchor_label(anchor: RelAnchor, lang: Lang) -> Option<String> {
     }
 }
 
+/// The reader's parenthetical for [`StepCells::dest_rel_twin`] /
+/// [`FailureCells::dest_rel_twin`] (#192), shaped exactly like
+/// [`anchor_label`] so a painter drops it in the same way: `None` when there
+/// is nothing to say, `Some` otherwise.
+///
+/// A hostile badge would be a LIE about the name — `café.txt` (NFC) and
+/// `café.txt` (NFD) are both valid UTF-8 and neither is hostile — so this is
+/// a separate sentence, never a badge folded into [`RelDisplay::hostile`].
+///
+/// ```
+/// use norte_frontend::sync::dest_twin_label;
+/// use norte_i18n::Lang;
+/// assert!(dest_twin_label(false, Lang::En).is_none());
+/// assert!(dest_twin_label(true, Lang::En).is_some());
+/// ```
+#[must_use]
+pub fn dest_twin_label(twin: bool, lang: Lang) -> Option<String> {
+    twin.then(|| t_in(lang, "sync-dest-twin"))
+}
+
 /// El nombre de un [`SyncMode`], que la cabecera pinta.
 ///
 /// El `_` NO cae a «update»: un modo que este build no sabe nombrar tiene que
@@ -962,6 +983,15 @@ pub struct StepCells {
     /// (#152). `Some` means the two sides spell one entry two ways and the
     /// pane must show both: the write lands on THIS one.
     pub dest_rel: Option<RelDisplay>,
+    /// `dest_rel` is `Some` AND its NFC form matches `rel`'s NFC form, even
+    /// though the bytes AND the `String`s differ — an NFC/NFD pair
+    /// (precomposed `café.txt` vs `café.txt` spelled with a combining
+    /// acute) is the canonical case: not `String`-equal (`'é'` is one
+    /// `char`, `'e' + '\u{301}'` is two), valid UTF-8 on both sides so
+    /// neither half is `hostile`, and rendered to the SAME glyph by any font
+    /// that composes combining marks. Nothing else says the pane is not just
+    /// repeating itself (#192). See [`dest_twin_label`].
+    pub dest_rel_twin: bool,
     /// Bytes the step moves, when the provider said.
     pub size: Option<u64>,
     /// What the undo would do with it.
@@ -1005,6 +1035,35 @@ pub struct StepCells {
 pub fn render_step(step: &SyncStep, dest_trash: DestTrash, enc: SyncEncodings) -> StepCells {
     let undo = step_undo(step, dest_trash);
     let anchor = anchor_of(step);
+    let rel = rel_display(&step.rel, enc.for_anchor(anchor));
+    // Siempre con la del DESTINO, sea cual sea el ancla: `dest_rel` existe
+    // precisamente para enseñar la ortografía de allí, que es sobre la que
+    // cae la escritura.
+    //
+    // Y se pliega AQUÍ cuando los BYTES coinciden, no en cada pintor y no
+    // por el texto pintado: `RelDisplay::text` es lossy, así que
+    // `caf\xe9.txt` y `caf\x82.txt` —dos ficheros distintos— son el mismo
+    // `caf\u{FFFD}.txt`, y un pintor que compare textos esconde justo el
+    // campo que existe para decir sobre qué nombre cae la escritura
+    // (#152). El wire ya compara por bytes
+    // (`SyncStep::shape_is_consistent`); esto es la misma regla, una sola
+    // vez, para los tres frontends.
+    let dest_rel = step
+        .dest_rel
+        .as_ref()
+        .filter(|d| **d != step.rel)
+        .map(|r| rel_display(r, enc.dest));
+    // #192: los BYTES ya distinguen las dos rutas (si no, `dest_rel` sería
+    // `None`), pero pueden RENDERIZAR igual de todas formas — un par NFC/NFD
+    // es UTF-8 válido en las dos mitades, así que ninguna llega `hostile`, y
+    // ni siquiera `text == text` lo detecta: "é" precompuesta y "e" + acento
+    // combinante son Strings DISTINTOS que una fuente compone al mismo
+    // glifo. Por NFC y no por bytes NI por igualdad de String a secas —la
+    // comparación es la única parte de esto que normaliza; `RelDisplay::text`
+    // en sí sigue siendo el enmascarado byte-exacto de siempre.
+    let dest_rel_twin = dest_rel
+        .as_ref()
+        .is_some_and(|d| d.text.nfc().eq(rel.text.nfc()));
     StepCells {
         id: step.id,
         glyphs: StepGlyphs {
@@ -1013,24 +1072,9 @@ pub fn render_step(step: &SyncStep, dest_trash: DestTrash, enc: SyncEncodings) -
             undo: undo_glyph(undo),
         },
         anchor,
-        rel: rel_display(&step.rel, enc.for_anchor(anchor)),
-        // Siempre con la del DESTINO, sea cual sea el ancla: `dest_rel` existe
-        // precisamente para enseñar la ortografía de allí, que es sobre la que
-        // cae la escritura.
-        //
-        // Y se pliega AQUÍ cuando los BYTES coinciden, no en cada pintor y no
-        // por el texto pintado: `RelDisplay::text` es lossy, así que
-        // `caf\xe9.txt` y `caf\x82.txt` —dos ficheros distintos— son el mismo
-        // `caf\u{FFFD}.txt`, y un pintor que compare textos esconde justo el
-        // campo que existe para decir sobre qué nombre cae la escritura
-        // (#152). El wire ya compara por bytes
-        // (`SyncStep::shape_is_consistent`); esto es la misma regla, una sola
-        // vez, para los tres frontends.
-        dest_rel: step
-            .dest_rel
-            .as_ref()
-            .filter(|d| **d != step.rel)
-            .map(|r| rel_display(r, enc.dest)),
+        rel,
+        dest_rel,
+        dest_rel_twin,
         size: step.size,
         undo,
         reason: step.reason,
@@ -1051,6 +1095,10 @@ pub struct FailureCells {
     pub rel: RelDisplay,
     /// La ortografía del DESTINO, si el informe la manda y DIFIERE en bytes.
     pub dest_rel: Option<RelDisplay>,
+    /// Gemelo de [`StepCells::dest_rel_twin`], y por el mismo motivo (#192):
+    /// `dest_rel` es `Some` pero pinta IGUAL que `rel` — un par NFC/NFD, por
+    /// ejemplo, es UTF-8 válido en las dos mitades y ninguna llega `hostile`.
+    pub dest_rel_twin: bool,
     /// De qué raíz cuelga [`FailureCells::rel`]: [`RelAnchor::Source`] cuando
     /// el informe manda `dest_rel`, y [`RelAnchor::Either`] cuando no — ver
     /// [`render_failure`]. **Un pintor tiene que pintarlo**: en un panel donde
@@ -1134,13 +1182,22 @@ pub fn render_failure(
     } else {
         RelAnchor::Either
     };
+    let rel = rel_display(&failure.rel, enc.for_anchor(anchor));
+    let dest_rel = failure
+        .dest_rel
+        .as_ref()
+        .filter(|d| **d != failure.rel)
+        .map(|r| rel_display(r, enc.dest));
+    // #192, la misma regla que `render_step`: por NFC, no por igualdad de
+    // `String` a secas — "é" precompuesta y "e" + acento combinante son
+    // Strings distintos que rinden al mismo glifo.
+    let dest_rel_twin = dest_rel
+        .as_ref()
+        .is_some_and(|d| d.text.nfc().eq(rel.text.nfc()));
     FailureCells {
-        rel: rel_display(&failure.rel, enc.for_anchor(anchor)),
-        dest_rel: failure
-            .dest_rel
-            .as_ref()
-            .filter(|d| **d != failure.rel)
-            .map(|r| rel_display(r, enc.dest)),
+        rel,
+        dest_rel,
+        dest_rel_twin,
         anchor,
     }
 }
@@ -3252,6 +3309,9 @@ mod tests {
             "y colapsan al pintarse, que es justo lo que hacía el pliegue por texto"
         );
         assert_ne!(dest.raw, cells.rel.raw, "pero los BYTES no colapsan");
+        // #192: el pliegue visual también deja marcado el gemelo, esté o no
+        // badgeado ya como hostil por otro motivo.
+        assert!(cells.dest_rel_twin, "las dos mitades pintan igual");
 
         // Y byte-idénticas SÍ se pliegan: enseñar la misma ruta dos veces con
         // una flecha en medio sugiere un renombrado que no hay.
@@ -3259,11 +3319,71 @@ mod tests {
             dest_rel: Some(rel_de(&uno.bytes)),
             ..paso
         };
+        let cells_mismo = render_step(&mismo, DestTrash::Restorable, SyncEncodings::default());
+        assert!(cells_mismo.dest_rel.is_none());
         assert!(
-            render_step(&mismo, DestTrash::Restorable, SyncEncodings::default())
-                .dest_rel
-                .is_none()
+            !cells_mismo.dest_rel_twin,
+            "sin `dest_rel` no hay pareja que marcar"
         );
+    }
+
+    /// #192, el caso que motivó el marcador: `café.txt` NFC y `café.txt` NFD
+    /// son BYTE-distintos, los dos UTF-8 válido, y ninguno es hostil — así
+    /// que sin `dest_rel_twin` el lector ve la misma cadena dos veces sin
+    /// nada que explique la flecha. `nfc_e_acute`/`nfd_e_acute` son la pareja
+    /// exacta que la corpus ya trae para esto.
+    #[test]
+    fn un_par_nfc_nfd_se_marca_como_la_misma_ortografia_en_pantalla() {
+        let fixtures = norte_testkit::corpus::hostile_names();
+        let nfc = fixtures
+            .iter()
+            .find(|f| f.id == "nfc_e_acute")
+            .expect("corpus");
+        let nfd = fixtures
+            .iter()
+            .find(|f| f.id == "nfd_e_acute")
+            .expect("corpus");
+        assert_ne!(nfc.bytes, nfd.bytes, "el fixture es byte-distinto");
+        let rel_de = |bytes: &[u8]| {
+            RelPath::new(vec![
+                norte_proto::Segment::new(bytes.to_vec()).expect("seg"),
+            ])
+        };
+        let paso = SyncStep {
+            rel: rel_de(&nfc.bytes),
+            dest_rel: Some(rel_de(&nfd.bytes)),
+            ..step(1, SyncStepKind::Overwrite, DestTrash::Restorable)
+        };
+        let cells = render_step(&paso, DestTrash::Restorable, SyncEncodings::default());
+        let dest = cells.dest_rel.expect("bytes distintos, dos ortografías");
+        // NO son el mismo `String` —"é" precompuesta contra "e" + acento
+        // combinante— y esa es justo la trampa: una fuente los compone al
+        // MISMO glifo, así que una igualdad de `text` a secas no cazaría
+        // este par aunque en pantalla sea indistinguible.
+        assert_ne!(dest.text, cells.rel.text, "distintos como String");
+        assert_eq!(
+            dest.text.nfc().collect::<String>(),
+            cells.rel.text.nfc().collect::<String>(),
+            "pero la MISMA forma NFC, que es lo que pinta el glifo"
+        );
+        assert!(
+            !cells.rel.hostile,
+            "NFC es UTF-8 válido, no hay nada que enmascarar"
+        );
+        assert!(!dest.hostile, "NFD también es UTF-8 válido");
+        assert!(
+            cells.dest_rel_twin,
+            "el marcador es lo único que distingue esta fila de una repetida"
+        );
+
+        // Y `render_failure` sigue exactamente la misma regla.
+        let fallo = norte_proto::methods::SyncFailure {
+            rel: rel_de(&nfc.bytes),
+            dest_rel: Some(rel_de(&nfd.bytes)),
+            cause: SyncFailureCause::IllegalName,
+        };
+        let fcells = render_failure(&fallo, SyncEncodings::default());
+        assert!(fcells.dest_rel_twin);
     }
 
     /// Un plan CERRADO cuya Task acabó cancelada (o fallando) no se aprueba, y

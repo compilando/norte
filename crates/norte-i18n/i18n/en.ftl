@@ -840,6 +840,10 @@ sync-anchor-either = (which side is not recorded)
 # `rel_display` alone paints as an empty string — this is what a pane says
 # there instead, so it does not read as an empty row (#193).
 sync-rel-root = the whole tree
+# An NFC/NFD pair (or any other byte-different, glyph-identical spelling) is
+# valid UTF-8 on both sides, so neither half is masked as hostile — this is
+# what explains the arrow instead (#192).
+sync-dest-twin = (same on screen, different bytes)
 compare-marked = { $n } marked
 msg-sync-needs-daemon = synchronising needs the daemon (--daemon): it has to be journalled
 status-no-journal = NOT journalled: this session cannot be undone

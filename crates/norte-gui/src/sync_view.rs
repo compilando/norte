@@ -842,6 +842,13 @@ pub struct StepText {
     /// diferencias (el `↔` entre las dos raíces), y el separador vuelve a ser
     /// ESTRUCTURAL por lo mismo.
     pub dest: Option<PathText>,
+    /// Nota para cuando [`StepText::dest`] pinta la MISMA cadena que
+    /// [`StepText::rel`] aun siendo bytes distintos — un par NFC/NFD, típico
+    /// de macOS, es UTF-8 válido en las dos mitades, así que ninguna llega
+    /// hostil y nada más explica por qué la fila «se repite» (#192). Vacío
+    /// cuando no aplica, igual que [`StepText::anchor`] — NUNCA un badge
+    /// hostil sobre el nombre, que sería mentir sobre él.
+    pub dest_twin: String,
     /// De qué raíz cuelga [`StepText::rel`], en palabras, cuando no es la del
     /// origen. Vacío para lo normal.
     pub anchor: String,
@@ -960,6 +967,8 @@ pub fn step_text(
         // desaparecía de la fila —sin flecha, sin marca y sin nada— justo
         // cuando los nombres eran adversarios (auditoría de encoding MAJOR-1).
         dest: cells.dest_rel.as_ref().map(path_text),
+        dest_twin: norte_frontend::sync::dest_twin_label(cells.dest_rel_twin, lang)
+            .unwrap_or_default(),
         anchor: norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active())
             .unwrap_or_default(),
         size: cells
@@ -1093,6 +1102,10 @@ pub struct FailureText {
     /// saneado no enmascara, así que unidas en banda un nombre fingiría la
     /// pareja.
     pub dest: Option<PathText>,
+    /// Gemelo de [`StepText::dest_twin`] y por el mismo motivo (#192):
+    /// [`FailureText::dest`] pinta la MISMA cadena que `rel` aun con bytes
+    /// distintos (un par NFC/NFD, típicamente), y ninguna mitad llega hostil.
+    pub dest_twin: String,
     /// Por qué no ocurrió, en palabras y en el idioma del lector.
     ///
     /// En su propio campo y en su propio elemento, jamás pegado a la ruta con
@@ -1146,6 +1159,8 @@ pub fn failure_text(
     FailureText {
         rel: path_text(&cells.rel),
         dest: cells.dest_rel.as_ref().map(path_text),
+        dest_twin: norte_frontend::sync::dest_twin_label(cells.dest_rel_twin, norte_i18n::active())
+            .unwrap_or_default(),
         // `Dest` no lo produce `render_failure` hoy —haría falta la clase en
         // el wire—, pero el compartido lo nombra igual: el día que llegue, un
         // `_` lo habría pintado como «del origen» sin decir nada.
@@ -1732,7 +1747,17 @@ fn render_failure_row(f: &FailureText, index: usize, palette: &Palette) -> gpui:
     if let Some(d) = &f.dest {
         r = r
             .child(gpui::div().flex_none().text_color(palette.dim).child("→"))
-            .child(ruta(d, "dest", ""));
+            .child(ruta(d, "dest", &f.dest_twin));
+        // #192: sin esto, un par NFC/NFD pinta la misma cadena a los dos
+        // lados de la flecha y nada dice por qué no es un renombrado vacío.
+        if !f.dest_twin.is_empty() {
+            r = r.child(
+                gpui::div()
+                    .flex_none()
+                    .text_color(palette.dim)
+                    .child(gpui::SharedString::from(f.dest_twin.clone())),
+            );
+        }
     }
     if !f.anchor.is_empty() {
         r = r.child(
@@ -1822,7 +1847,18 @@ fn render_step_row(
         // puede fingir el límite entre las dos ortografías.
         r = r
             .child(gpui::div().flex_none().text_color(palette.dim).child("→"))
-            .child(ruta(d, "dest", ""));
+            .child(ruta(d, "dest", &text.dest_twin));
+        // #192: un par NFC/NFD pinta la misma cadena a los dos lados de la
+        // flecha sin badge en ninguna mitad —las dos son UTF-8 válido—, así
+        // que sin esta nota la fila parece repetirse sola.
+        if !text.dest_twin.is_empty() {
+            r = r.child(
+                gpui::div()
+                    .flex_none()
+                    .text_color(palette.dim)
+                    .child(gpui::SharedString::from(text.dest_twin.clone())),
+            );
+        }
     }
     if !text.anchor.is_empty() {
         r = r.child(
@@ -2441,6 +2477,30 @@ mod tests {
         let t = step_text(&p, DestTrash::Restorable, SyncEncodings::default());
         let dest = t.dest.expect("dos ficheros distintos son dos ortografías");
         assert_eq!(dest.label, t.rel.label, "y se pintan igual");
+        assert!(!t.dest_twin.is_empty(), "y la nota lo dice también aquí");
+    }
+
+    /// #192, el caso que el badge hostil NO cubre: `café.txt` NFC y `café.txt`
+    /// NFD son bytes distintos, los DOS UTF-8 válido, y ninguno se enmascara
+    /// como hostil — a diferencia del par de arriba, donde el badge ya avisa.
+    /// Sin `dest_twin` la fila pinta la misma cadena a los dos lados de la
+    /// flecha y nada dice por qué.
+    #[test]
+    fn un_par_nfc_nfd_lleva_su_nota_sin_badge_hostil() {
+        let seg = |id: &str| norte_proto::Segment::new(fixture(id)).expect("seg");
+        let mut p = paso(1);
+        p.kind = SyncStepKind::Overwrite;
+        p.reversal = Some(StepReversal::RestoreTrash);
+        p.rel = RelPath::new(vec![seg("nfc_e_acute")]);
+        p.dest_rel = Some(RelPath::new(vec![seg("nfd_e_acute")]));
+        let t = step_text(&p, DestTrash::Restorable, SyncEncodings::default());
+        let dest = t.dest.expect("bytes distintos, dos ortografías");
+        assert!(!t.rel.hostile, "NFC es UTF-8 válido");
+        assert!(!dest.hostile, "NFD también");
+        assert!(
+            !t.dest_twin.is_empty(),
+            "la nota es lo único que distingue la fila de una repetida"
+        );
     }
 
     /// Las dos raíces de la cabecera tampoco se unen: cada una en su cadena,

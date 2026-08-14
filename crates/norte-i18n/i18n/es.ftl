@@ -854,6 +854,10 @@ sync-anchor-either = (no consta de qué lado)
 # `rel_display` sola pinta como una cadena vacía — esto es lo que un panel
 # dice ahí en su lugar, para que no se lea como una fila en blanco (#193).
 sync-rel-root = todo el árbol
+# Un par NFC/NFD (o cualquier otra ortografía byte-distinta pero
+# glifo-idéntica) es UTF-8 válido en las dos mitades, así que ninguna se
+# enmascara como hostil — esto es lo que explica la flecha en su lugar (#192).
+sync-dest-twin = (igual en pantalla, bytes distintos)
 compare-marked = { $n } marcadas
 msg-sync-needs-daemon = sincronizar necesita el daemon (--daemon): tiene que quedar en el journal
 status-no-journal = SIN journal: esta sesión no se puede deshacer
