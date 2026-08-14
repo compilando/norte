@@ -176,6 +176,23 @@ impl SyncView {
     /// `plan_task` de `apply_task` para poder cancelar los dos a la vez tiene
     /// este coste: la fase hay que preguntarla aparte.
     ///
+    /// **Ese segundo guard no es a prueba de carreras, y conviene que lo diga
+    /// él y no un issue** (#202). `apply_task` se pone al PROCESAR
+    /// `SyncApplyStarted`, y esa notificación y la del final del plan vienen
+    /// de dos tasks independientes (`pump_sync_plan` y `sync_apply`) por el
+    /// MISMO `UnboundedSender`: su orden relativo no está garantizado, así que
+    /// un `SyncPlanEnded` que gane la carrera todavía pinta el desenlace del
+    /// plan encima de una aplicación que arranca.
+    ///
+    /// Por qué se deja así: el canal del plan cierra microsegundos después del
+    /// `sync.plan_done`, y entre ese cierre y el `sync.apply` hay una
+    /// aprobación HUMANA. Para que la carrera exista, la tecla tendría que
+    /// caber en esos microsegundos. Cerrarla del todo pide mover el guard a
+    /// `route_plan_done` —el punto donde la fase se sabe sin carrera— y eso
+    /// cambia la transición normal del panel, que es un riesgo real a cambio
+    /// de una ganancia teórica. Es el mismo comportamiento que había antes de
+    /// #191, no una regresión suya.
+    ///
     /// El mapeo `TaskState` → [`SyncRunState`] no se decide aquí: es
     /// [`SyncRunState::from_task_state`], el MISMO que llama la TUI en
     /// `drain_sync_plan` (#161). Lo único que se queda de este lado es la

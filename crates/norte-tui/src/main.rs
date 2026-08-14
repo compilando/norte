@@ -307,6 +307,9 @@ fn spawn_stat_probe(backend: &Backend, paths: Vec<(usize, VPath)>) -> StatProbe 
 /// acota cuántos hay que pedir.
 struct CompareStatProbe {
     rx: tokio::sync::oneshot::Receiver<Vec<(VPath, Option<Entry>)>>,
+    /// La comparación bajo la que se pidió (#198): el resultado solo vale
+    /// para ella.
+    generation: u64,
 }
 
 /// Lanza la sonda #157: un `stat` por path, con el mismo timeout que la del
@@ -315,7 +318,11 @@ struct CompareStatProbe {
 /// perderse — a diferencia de [`spawn_stat_probe`], aquí SÍ hace falta saber
 /// qué se pidió y no llegó: es lo que `App::hydrate_compare_size` usa para
 /// marcarlo sondeado y no reintentarlo cada frame.
-fn spawn_compare_stat_probe(backend: &Backend, paths: Vec<VPath>) -> CompareStatProbe {
+fn spawn_compare_stat_probe(
+    backend: &Backend,
+    paths: Vec<VPath>,
+    generation: u64,
+) -> CompareStatProbe {
     use futures::StreamExt as _;
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
@@ -336,7 +343,7 @@ fn spawn_compare_stat_probe(backend: &Backend, paths: Vec<VPath>) -> CompareStat
             .await;
         let _ = tx.send(resultado);
     });
-    CompareStatProbe { rx }
+    CompareStatProbe { rx, generation }
 }
 
 /// Fetch de decoraciones de plugin EN VUELO (G3b, ADR 0037): el pane/dir
@@ -2618,7 +2625,11 @@ async fn run(
         if compare_stat_probe.is_none() {
             let objetivos = app.compare_size_probe_targets();
             if !objetivos.is_empty() {
-                compare_stat_probe = Some(spawn_compare_stat_probe(backend, objetivos));
+                compare_stat_probe = Some(spawn_compare_stat_probe(
+                    backend,
+                    objetivos,
+                    app.compare_generation(),
+                ));
             }
         }
         tokio::select! {
@@ -2748,9 +2759,9 @@ async fn run(
                     app.panes[pane].hydrate(&path, entry.size, entry.mtime_ms);
                 }
             }
-            res = async {
+            (generation, res) = async {
                 match &mut compare_stat_probe {
-                    Some(pr) => (&mut pr.rx).await.ok(),
+                    Some(pr) => (pr.generation, (&mut pr.rx).await.ok()),
                     None => std::future::pending().await,
                 }
             } => {
@@ -2762,7 +2773,9 @@ async fn run(
                 // porque la task que la pedía murió a medio camino.
                 compare_stat_probe = None;
                 for (path, entry) in res.unwrap_or_default() {
-                    app.hydrate_compare_size(path, entry.and_then(|e| e.size));
+                    // La generación es la del PEDIDO, no la de ahora: si otra
+                    // comparación empezó mientras volaba, `hydrate` la tira.
+                    app.hydrate_compare_size(generation, path, entry.and_then(|e| e.size));
                 }
             }
             (slot, res) = async {
@@ -8777,9 +8790,11 @@ async fn launch_compare(
             ));
             // #157: la caché de tamaños hidratados y su dedup son de ESTA
             // comparación — una nueva empieza sin nada pedido, igual que
-            // `last_probed` se vacía con cada listado nuevo.
-            app.compare_size_hints.clear();
-            app.compare_size_probed.clear();
+            // `last_probed` se vacía con cada listado nuevo. Y avanza la
+            // generación (#198): una sonda de la comparación anterior sigue en
+            // vuelo, y sin la marca aterrizaría en estas tablas recién
+            // vaciadas.
+            app.begin_compare_generation();
             if let Some(old) = compare_run.replace(CompareRun {
                 task,
                 rx,

@@ -573,6 +573,41 @@ impl Engine {
     /// Registra la host key de `host:port` tras confirmación explícita del
     /// usuario (flujo TOFU, método `connection.trust_host_key`).
     ///
+    /// # Ni gate de policy ni entrada de journal, y por qué (#204, regla 4)
+    ///
+    /// Esto escribe `known_hosts`, que es el fichero más sensible que norte
+    /// escribe aparte del journal y el keyring: decide qué claves de host
+    /// aceptará a partir de ahora. Y no pasa ni por el gate ni por el journal.
+    /// Las dos ausencias son deliberadas y se dicen aquí para que nadie
+    /// vuelva a deducirlas:
+    ///
+    /// * **Quién puede llegar.** El despacho del daemon rechaza
+    ///   `connection.trust_host_key` para cualquier actor que no sea
+    ///   `Actor::User`, con `INVALID_REQUEST`, igual que
+    ///   `policy.grant_scope`/`decide`/`undo_session` (#66): bendecir la
+    ///   identidad de un host es un acto de gobierno humano, no una operación
+    ///   de fichero. Un agente no lo alcanza, así que un gate de scopes aquí
+    ///   defendería una puerta que ya está cerrada — y por rutas, que no es la
+    ///   dimensión en la que este permiso se mide. Por la API embebida no hay
+    ///   agentes: `Backend::Embedded` solo lo construyen la CLI y el TUI sin
+    ///   `--daemon`, y el puente MCP va SIEMPRE por socket con
+    ///   `agent_session`.
+    ///
+    /// * **Clasificación (regla 4): `Irreversible`, con motivo.** El journal
+    ///   describe el árbol de ficheros del usuario y su undo lo devuelve a un
+    ///   estado anterior; `known_hosts` no es parte de ese árbol, y «des-confiar
+    ///   una clave» no es una operación que este programa ofrezca ni que un
+    ///   `undo_session` deba poder hacer a ciegas — retirar una clave de host
+    ///   en un `undo` que el usuario pidió por OTRA cosa rompería conexiones
+    ///   que no tenían nada que ver. Lo que sí queda es rastro: el conector
+    ///   re-verifica el fingerprint contra la clave que el host presenta AHORA
+    ///   (anti-TOCTOU, ADR 0015 D) y la decisión la toma un humano delante del
+    ///   fingerprint.
+    ///
+    /// Si algún día un agente necesitara esta puerta, lo que hace falta NO es
+    /// un scope de rutas: es una op de policy propia, y entonces sí una
+    /// entrada de journal que diga qué clave se aceptó y cuándo.
+    ///
     /// # Errors
     /// [`Error::Unsupported`] sin conector; los del conector (p. ej.
     /// [`Error::HostKeyMismatch`] si el host ya no presenta esa clave).

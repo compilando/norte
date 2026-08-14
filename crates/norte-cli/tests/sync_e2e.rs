@@ -448,6 +448,29 @@ fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
         .spawn()
         .expect("spawn norte sync");
 
+    // #201: los dos pipes se DRENAN en hilos, desde ya. Sin esto el test se
+    // podía autoanular en silencio: un plan que no cabe en el buffer del pipe
+    // (64 KiB en Linux) bloquea al hijo ANTES de aplicar, `dst` no se llena
+    // nunca, no se manda ninguna señal y la corrida entera sale por el brazo
+    // de la carrera sin haber probado nada. La fixture de hoy cabe; subirla
+    // cruzaba ese umbral sin decir una palabra.
+    //
+    // Su gemelo `sigint_tras_planificar_termina_el_proceso` depende justo de
+    // ese bloqueo para alcanzar SU ventana. El mismo mecanismo: aquí estorba,
+    // allí es el sujeto. Quien toque uno lea los dos.
+    let mut salida_hijo = child.stdout.take().expect("stdout piped");
+    let mut error_hijo = child.stderr.take().expect("stderr piped");
+    let drenador_out = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut salida_hijo, &mut buf);
+        buf
+    });
+    let drenador_err = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut error_hijo, &mut buf);
+        buf
+    });
+
     // El apply ARRANCÓ en cuanto el destino recibe su primera entrada: la
     // planificación no escribe nada ahí. El suelo es la misma cautela que
     // `sigint_durante_planificacion_no_deja_part_detras`: ver ficheros en
@@ -472,15 +495,23 @@ fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    if started {
-        unsafe_free_kill(child.id());
-    }
-    let output = child.wait_with_output().expect("wait_with_output");
+    // #201: que la señal se MANDÓ es la premisa del test, no una casualidad
+    // afortunada. Sin esto, cualquier corrida en la que el apply no arrancara
+    // pasaba sin ejercitar el arreglo.
+    assert!(
+        started,
+        "el apply no llegó a escribir en {} en 15 s: la señal jamás se mandó y este test no probó nada",
+        dst.display()
+    );
+    unsafe_free_kill(child.id());
+    let status = child.wait().expect("wait");
+    let stdout = drenador_out.join().expect("drenador de stdout");
+    let stderr = drenador_err.join().expect("drenador de stderr");
 
-    match output.status.code() {
+    match status.code() {
         Some(2) => {
-            let out = String::from_utf8_lossy(&output.stdout);
-            let err = String::from_utf8_lossy(&output.stderr);
+            let out = String::from_utf8_lossy(&stdout);
+            let err = String::from_utf8_lossy(&stderr);
             assert!(
                 out.contains("applied:"),
                 "una aplicación cancelada TIENE informe: stdout={out}"
@@ -490,9 +521,23 @@ fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
                 "lo aplicado hasta el corte NO es un destino limpio: stderr={err}"
             );
         }
-        Some(1 | 0) => {
-            // Carrera legítima: el apply terminó (o no había nada que
-            // aplicar) antes de que la señal llegara.
+        // Carrera legítima QUE TAMBIÉN SE COMPRUEBA: el apply terminó antes de
+        // que la señal llegara. Entonces terminó DEL TODO — un `0` con la
+        // mitad de los ficheros sería una aplicación que mintió sobre su
+        // desenlace, y este brazo era el sitio donde eso pasaba inadvertido.
+        Some(0) => {
+            let copiados = std::fs::read_dir(&dst).expect("leer dst").count();
+            assert_eq!(
+                copiados, 400,
+                "salió 0 (completo) con {copiados} de 400 ficheros en el destino"
+            );
+        }
+        Some(1) => {
+            let err = String::from_utf8_lossy(&stderr);
+            assert!(
+                !err.contains("destination clean"),
+                "un fallo tampoco deja «destino limpio»: stderr={err}"
+            );
         }
         other => panic!("código de salida inesperado tras SIGINT: {other:?}"),
     }
