@@ -16,8 +16,20 @@
   proved by the existing suite passing unedited — say so instead of adding a
   test that asserts nothing.
 - Model: cheap. Nothing here needs the largest.
-- Reviewers: none. #174's half is a comment; nothing here touches behaviour
-  that a reviewer would catch, and the two that DID warrant one left this wave.
+- Reviewers: none **unless the diff reaches policy, journal or the wire** — and
+  you cannot know that from the issue title. #172 read as a three-copy dedup and
+  one of the three was `norte-core::policy::is_under`, the scope containment
+  check. It turned out sound (`RelPath::under` compares scheme and authority
+  before segments, and its one theoretical divergence fails CLOSED for a scope),
+  but "the existing suites pass unedited" is not proof for that file the way it
+  is for a UI helper. Look at the diff before deciding there is no reviewer.
+
+- **A change to a SHARED fixture is not scoped by the crate that owns it.**
+  `just t norte-testkit` is green while five consumers that loop over the corpus
+  are red. Whoever touches `norte-testkit/src/corpus` runs the consumers too —
+  `norte-vfs-archive`, `norte-vfs-local`, `norte-tui`, `norte-gui`, `norte-core`
+  — or hands the wave a known-unverified commit. This is the one place where the
+  "one agent, one crate cluster, `just t`" rule does not hold.
 
 **Branch:** `debt/w1-mechanical`
 
@@ -31,6 +43,20 @@
 
 **Close:** `just ci-fast`, then `just ci` once. Then
 `superpowers:finishing-a-development-branch`.
+
+## What this wave actually cost, for W2's benefit
+
+Two agents on Sonnet, disjoint crates, in one warm tree: ~14 and ~19 minutes of
+agent time, five commits, no clobbering (the `cargo fmt --all` ban held). The
+gate was spent once, in the foreground and in pieces — **`just ci` does not fit
+in a background job here**, which gets killed by SIGTERM at about five minutes.
+Run the recipes individually (`lint`, `test`, `docs`, `gui-ci`, `cov`) and never
+through a `| tail`, which buffers everything and leaves nothing behind if the
+job dies.
+
+The only thing that went red was the shared-fixture blast radius above, and it
+was a genuine finding rather than a mistake: the first fixture added on the day
+the obstacle was removed found an addressing boundary nobody had stated.
 
 ## Two issues left this wave after reading their bodies
 
