@@ -565,6 +565,12 @@ async fn flush(
 ///   canal se cierra).
 /// - **Symlinks**: NO se siguen para descender (evita ciclos); un symlink SÍ
 ///   cuenta como candidato de NOMBRE, pero nunca se lee su contenido.
+/// - **`excluded`**: subárboles que el walk NO mira — ni desciende, ni lee, ni
+///   emite hit de nombre, ni los pone en `current` (que se difunde). Cuentan
+///   como entrada examinada y nada más. Es lo que impide que una búsqueda
+///   sobre `$HOME` de un AGENTE baje al directorio de estado del daemon
+///   (#165): el gate de lectura mira la RAÍZ de la búsqueda, así que sin esto
+///   una raíz legítima arrastraría el subárbol protegido con ella.
 /// - **Errores por entrada**: un `list`/`read` que falla se SALTA (cuenta como
 ///   entrada examinada) y la búsqueda continúa — un subdir ilegible no aborta.
 /// - **`max_hits`**: alcanzado el tope, envía lo pendiente y termina
@@ -584,9 +590,15 @@ pub async fn run_walk(
     provider: Arc<dyn Provider>,
     root: VPath,
     matchers: SearchMatchers,
+    excluded: Vec<VPath>,
     tx: mpsc::Sender<SearchHits>,
     ctx: &crate::scheduler::TaskCtx,
 ) -> Result<(), Error> {
+    // Una raíz que YA cae en lo excluido no se recorre: sin esto la exclusión
+    // por entrada dejaría pasar el listado del propio directorio protegido.
+    if excluded.iter().any(|x| crate::policy::is_under(x, &root)) {
+        return Ok(());
+    }
     let task_id = ctx.progress.snapshot().task_id;
     let content_search = matchers.searches_content();
     let mut batch = Batch::new(task_id, content_search);
@@ -634,6 +646,16 @@ pub async fn run_walk(
             // nombre, ni se filtra en `current` (que se difunde). El scope de la
             // búsqueda es invariante del core, no de la corrección del provider.
             if !crate::policy::is_under(&confine, &entry.path) {
+                ctx.progress.update(|p| p.entries_done += 1);
+                continue;
+            }
+            // Subárbol excluido (#165): se cuenta como examinado y se deja
+            // caer ENTERO, antes de tocar `current` — un path protegido no se
+            // difunde ni en el progreso.
+            if excluded
+                .iter()
+                .any(|x| crate::policy::is_under(x, &entry.path))
+            {
                 ctx.progress.update(|p| p.entries_done += 1);
                 continue;
             }
@@ -953,6 +975,120 @@ fn is_utf16(enc: &'static Encoding) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use norte_testkit::MemProvider;
+
+    fn vp(w: &str) -> VPath {
+        VPath::parse(w).expect("wire")
+    }
+
+    /// `TaskCtx` mínimo para llamar a [`run_walk`] sin scheduler.
+    fn ctx_de_test() -> crate::scheduler::TaskCtx {
+        let (reporter, _rx) =
+            crate::progress::ProgressReporter::new(TaskId::new(1), norte_proto::TaskKind::Search);
+        crate::scheduler::TaskCtx {
+            cancel: CancellationToken::new(),
+            progress: Arc::new(reporter),
+            actor: crate::journal::Actor::User,
+        }
+    }
+
+    fn params(root: &str) -> FsSearchParams {
+        FsSearchParams {
+            root: vp(root),
+            name_glob: Some("*".into()),
+            name_regex: None,
+            content: None,
+            content_regex: None,
+            case_sensitive: false,
+            max_hits: None,
+        }
+    }
+
+    async fn arbol() -> Arc<MemProvider> {
+        let mem = Arc::new(MemProvider::new());
+        for d in [
+            "mem:///home",
+            "mem:///home/u",
+            "mem:///home/u/docs",
+            "mem:///home/u/.config",
+            "mem:///home/u/.config/norte",
+            "mem:///home/u/.config/norte-backup",
+        ] {
+            mem.mkdir(&vp(d)).await.expect("mkdir");
+        }
+        for f in [
+            "mem:///home/u/docs/carta.txt",
+            "mem:///home/u/.config/norte/journal.db",
+            "mem:///home/u/.config/norte-backup/journal.db",
+        ] {
+            let mut sink = mem.write(&vp(f)).await.expect("write");
+            sink.write(bytes::Bytes::from_static(b"x"))
+                .await
+                .expect("chunk");
+            sink.commit().await.expect("commit");
+        }
+        mem
+    }
+
+    async fn walk(excluded: Vec<VPath>, root: &str) -> Vec<VPath> {
+        let mem = arbol().await;
+        let matchers = SearchMatchers::compile(&params(root)).expect("criterios");
+        let (tx, mut rx) = mpsc::channel::<SearchHits>(8);
+        let ctx = ctx_de_test();
+        let provider: Arc<dyn Provider> = mem;
+        let h = tokio::spawn(async move {
+            let mut out = Vec::new();
+            while let Some(lote) = rx.recv().await {
+                out.extend(lote.entries.into_iter().map(|e| e.path));
+            }
+            out
+        });
+        run_walk(provider, vp(root), matchers, excluded, tx, &ctx)
+            .await
+            .expect("walk completo");
+        drop(ctx);
+        h.await.expect("colector")
+    }
+
+    /// #165: el gate de lectura mira la RAÍZ de la búsqueda, así que una raíz
+    /// legítima (`$HOME`) arrastraría el directorio de estado del daemon con
+    /// ella. El walk no baja ahí — ni al dir, ni a su contenido — y el vecino
+    /// que solo comparte prefijo de bytes (`norte-backup`) sí sale.
+    #[tokio::test]
+    async fn el_walk_no_entra_en_un_subarbol_excluido() {
+        let hits = walk(vec![vp("mem:///home/u/.config/norte")], "mem:///home/u").await;
+        assert!(
+            hits.contains(&vp("mem:///home/u/docs/carta.txt")),
+            "lo de fuera sigue saliendo: {hits:?}"
+        );
+        assert!(
+            hits.contains(&vp("mem:///home/u/.config/norte-backup/journal.db")),
+            "el vecino con el mismo prefijo NO está protegido: {hits:?}"
+        );
+        assert!(
+            !hits
+                .iter()
+                .any(|p| p.to_wire().starts_with("mem:///home/u/.config/norte/")),
+            "nada de dentro del subárbol protegido: {hits:?}"
+        );
+        assert!(
+            !hits.contains(&vp("mem:///home/u/.config/norte")),
+            "ni el directorio protegido mismo: {hits:?}"
+        );
+    }
+
+    /// Y una raíz que YA cae en lo excluido no se recorre en absoluto: sin
+    /// esto el propio listado del directorio protegido se emitiría entero.
+    #[tokio::test]
+    async fn una_raiz_excluida_no_da_ni_una_fila() {
+        let hits = walk(
+            vec![vp("mem:///home/u/.config/norte")],
+            "mem:///home/u/.config/norte",
+        )
+        .await;
+        assert!(hits.is_empty(), "{hits:?}");
+    }
 
     #[test]
     fn glob_e_insensibilidad_nfc() {

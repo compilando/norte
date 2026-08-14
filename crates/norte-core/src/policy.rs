@@ -26,6 +26,7 @@
 //!   hostil; el gate razona sobre `VPath`s lógicos.
 
 use std::collections::{BTreeSet, HashMap};
+use std::path::{Component, Path};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -145,6 +146,80 @@ pub fn is_under(root: &VPath, path: &VPath) -> bool {
     RelPath::under(root, path).is_some()
 }
 
+/// El `VPath` `file://` de un directorio NATIVO **absoluto**, la inversa de lo
+/// que hace `norte-vfs-local` al resolver un `VPath` a un path del OS: los
+/// componentes se copian a segmentos POR BYTES (regla dura 1 — un nombre que
+/// no es UTF-8 sobrevive), y el prefijo de Windows (`C:`, `\\server\share`)
+/// es el primer segmento, tal como espera la raíz del provider del OS.
+///
+/// `None` si el path es RELATIVO o lleva un componente que no es un nombre
+/// (`.`/`..`): una raíz que no se puede nombrar no es una raíz, y devolver una
+/// ruta que no resuelve sería peor que no devolver ninguna.
+///
+/// ```
+/// use norte_core::policy::local_root_vpath;
+/// use std::path::Path;
+///
+/// # #[cfg(unix)] {
+/// let r = local_root_vpath(Path::new("/home/u/.config/norte")).expect("absoluto");
+/// assert_eq!(r.to_wire(), "file:///home/u/.config/norte");
+/// assert!(local_root_vpath(Path::new("relativo/norte")).is_none());
+/// # }
+/// ```
+#[must_use]
+pub fn local_root_vpath(dir: &Path) -> Option<VPath> {
+    use norte_proto::{Scheme, Segment};
+
+    if !dir.is_absolute() {
+        return None;
+    }
+    let mut out = VPath::root(Scheme::new("file").ok()?, None);
+    for comp in dir.components() {
+        let bytes = match comp {
+            // La raíz unix no aporta segmento; el prefijo de Windows SÍ (es el
+            // primer segmento del `VPath` de la raíz del OS).
+            Component::RootDir => continue,
+            Component::Prefix(p) => norte_vfs::wtf8::os_to_bytes(p.as_os_str()),
+            Component::Normal(os) => norte_vfs::wtf8::os_to_bytes(os),
+            Component::CurDir | Component::ParentDir => return None,
+        };
+        out = out.join(Segment::new(bytes).ok()?);
+    }
+    Some(out)
+}
+
+/// Los subárboles que el WALK de una lectura recursiva no debe mirar para
+/// este actor: vacío para el humano (que no se sandboxea) y la raíz protegida
+/// de este proceso para un agente o un plugin.
+///
+/// Existe porque el gate de lectura mira la RAÍZ de la petición y nada más:
+/// una búsqueda sobre `$HOME` es legítima y arrastraría el directorio de
+/// estado con ella (#165). El gate dice si puedes empezar; esto dice por dónde
+/// no se baja.
+#[must_use]
+pub fn walk_exclusions(actor: &Actor) -> Vec<VPath> {
+    match actor {
+        Actor::User => Vec::new(),
+        Actor::Agent { .. } | Actor::Plugin { .. } => daemon_state_root().into_iter().collect(),
+    }
+}
+
+/// La raíz PROTEGIDA de este proceso: el directorio de estado del daemon
+/// (`journal.db`, los spools de `sync.plan`, `index.db`, `secrets.age`,
+/// `connections.toml`, `policy.toml` — el mismo directorio, ver
+/// [`crate::connect::config_dir`]), como `VPath` `file://`.
+///
+/// `None` si el directorio resuelto no es absoluto — el fallback
+/// `./.config/norte` de un proceso sin `HOME` ni entrada de passwd. Ahí no hay
+/// raíz que proteger porque tampoco hay una ruta estable que un scope pudiese
+/// alcanzar, y quien construye el registro se queda sin la protección: se dice
+/// aquí porque un `None` silencioso en un gate de seguridad es exactamente la
+/// clase de cosa que nadie mira.
+#[must_use]
+pub fn daemon_state_root() -> Option<VPath> {
+    local_root_vpath(&crate::connect::config_dir())
+}
+
 /// Resultado de la comprobación de frontera de scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeVerdict {
@@ -157,16 +232,79 @@ pub enum ScopeVerdict {
 }
 
 /// Grants de scope por sesión de agente (en memoria; TTL). Thread-safe.
-#[derive(Clone, Default)]
+///
+/// Lleva además las **raíces protegidas** (#165): subárboles que NINGÚN grant
+/// alcanza, se conceda lo que se conceda. La única que existe hoy es el
+/// directorio de estado del daemon, y la pone [`Self::new`] sin que nadie
+/// tenga que acordarse — ver [`Self::protected_roots`].
+#[derive(Clone)]
 pub struct ScopeRegistry {
     inner: Arc<Mutex<HashMap<String, Vec<Scope>>>>,
+    /// Raíces que ningún scope alcanza. Se fija al construir y no cambia: una
+    /// exclusión que se puede quitar en caliente no es una exclusión.
+    protected: Arc<Vec<VPath>>,
+}
+
+impl Default for ScopeRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ScopeRegistry {
-    /// Registro vacío.
+    /// Registro vacío, con el directorio de estado del daemon YA protegido
+    /// ([`daemon_state_root`]).
+    ///
+    /// Protege por DEFECTO a propósito: la exclusión existe justo porque se
+    /// concede sin querer —un scope sobre `$HOME` contiene
+    /// `$HOME/.config/norte` en el layout por defecto—, así que un registro
+    /// que hubiera que recordar proteger habría fallado exactamente en el
+    /// caso que motiva el issue. Para un registro con OTRAS raíces (tests,
+    /// embebedores) está [`Self::with_protected_roots`].
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self::with_protected_roots(daemon_state_root().into_iter().collect())
+    }
+    /// Registro vacío con las raíces protegidas EXPLÍCITAS (no consulta el
+    /// entorno). Para tests y para un embebedor que ancla su estado en otro
+    /// sitio.
+    #[must_use]
+    pub fn with_protected_roots(roots: Vec<VPath>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            protected: Arc::new(roots),
+        }
+    }
+    /// Las raíces protegidas de este registro.
+    ///
+    /// Un path AT-OR-UNDER una de ellas responde
+    /// [`ScopeVerdict::OutOfScope`] en [`Self::permits`],
+    /// [`Self::covers_read`] y [`Self::covers_content`] —las tres puertas por
+    /// las que pasan las mutaciones y las lecturas de un agente— ANTES de
+    /// mirar ningún grant. Los ANCESTROS no se tocan: `fs.list` de `$HOME`
+    /// sigue funcionando y enseña el nombre del directorio de estado, que es
+    /// lo mismo que enseña `ls`; lo que no se puede es entrar.
+    ///
+    /// El veredicto es `OutOfScope` y no una categoría propia porque la causa
+    /// gruesa que viaja por el wire (`PolicyDenied.rule`) es un vocabulario
+    /// CERRADO: el path no está dentro de ningún scope alcanzable, que es
+    /// literalmente lo que dice `out-of-scope`. Añadir una categoría sería un
+    /// cambio de wire para decir lo mismo con más detalle del que un agente
+    /// denegado debería recibir.
+    ///
+    /// LO QUE NO CUBRE, dicho aquí porque un gate a medias se lee como
+    /// completo: la protección es sobre el `VPath` LÓGICO. Una ruta distinta
+    /// que resuelve al mismo directorio —un symlink desde dentro del scope—
+    /// la esquiva, y esa es la familia de #164 (`RESOLVE_BENEATH`), no algo
+    /// que este registro pueda decidir.
+    #[must_use]
+    pub fn protected_roots(&self) -> &[VPath] {
+        &self.protected
+    }
+    /// `true` si `path` cae en una raíz protegida (la raíz misma incluida).
+    #[must_use]
+    fn is_protected(&self, path: &VPath) -> bool {
+        self.protected.iter().any(|r| is_under(r, path))
     }
     /// Concede `scope` a la sesión `session`.
     ///
@@ -175,6 +313,19 @@ impl ScopeRegistry {
     pub fn grant(&self, session: &str, scope: Scope) {
         let now = Instant::now();
         let mut map = self.inner.lock().expect("scope registry lock");
+        if scope.roots.iter().any(|r| {
+            self.protected
+                .iter()
+                .any(|p| is_under(p, r) || is_under(r, p))
+        }) {
+            // El grant se acepta y se recorta al consultarlo: avisarlo aquí es
+            // lo único que evita que un operador crea que concedió el
+            // directorio de estado y se pregunte por qué el agente falla.
+            tracing::warn!(
+                session,
+                "el scope concedido toca una raíz protegida: ahí no se concede nada"
+            );
+        }
         let entry = map.entry(session.to_owned()).or_default();
         // Poda perezosa: al conceder, descarta los scopes ya expirados de esta
         // sesión para que el `Vec` no crezca monótono en un daemon longevo. La
@@ -188,6 +339,10 @@ impl ScopeRegistry {
     /// Solo si el lock interno queda envenenado.
     #[must_use]
     pub fn permits(&self, session: &str, op: PolicyOp, path: &VPath, now: Instant) -> ScopeVerdict {
+        // ANTES de mirar un solo grant (#165): lo protegido no se concede.
+        if self.is_protected(path) {
+            return ScopeVerdict::OutOfScope;
+        }
         let map = self.inner.lock().expect("scope registry lock");
         let Some(scopes) = map.get(session) else {
             return ScopeVerdict::OutOfScope;
@@ -234,6 +389,9 @@ impl ScopeRegistry {
     /// Solo si el lock interno queda envenenado.
     #[must_use]
     pub fn covers_read(&self, session: &str, path: &VPath, now: Instant) -> ScopeVerdict {
+        if self.is_protected(path) {
+            return ScopeVerdict::OutOfScope;
+        }
         let map = self.inner.lock().expect("scope registry lock");
         let Some(scopes) = map.get(session) else {
             return ScopeVerdict::OutOfScope;
@@ -295,6 +453,9 @@ impl ScopeRegistry {
     /// Solo si el lock interno queda envenenado.
     #[must_use]
     pub fn covers_content(&self, session: &str, path: &VPath, now: Instant) -> ScopeVerdict {
+        if self.is_protected(path) {
+            return ScopeVerdict::OutOfScope;
+        }
         let map = self.inner.lock().expect("scope registry lock");
         let Some(scopes) = map.get(session) else {
             return ScopeVerdict::OutOfScope;
@@ -444,6 +605,179 @@ mod tests {
             &[&vp("file:///x")],
         );
         assert!(matches!(d, Decision::Allow));
+    }
+
+    #[test]
+    fn una_raiz_protegida_no_la_concede_ni_un_scope_sobre_el_padre() {
+        // #165: el directorio de estado del daemon cae bajo un scope sobre
+        // `$HOME`, y ahí viven `journal.db` y los spools de sync.
+        let estado = vp("file:///home/u/.config/norte");
+        let reg = ScopeRegistry::with_protected_roots(vec![estado.clone()]);
+        reg.grant(
+            "s1",
+            Scope::forever(vec![vp("file:///home/u")], OpSet::all()),
+        );
+        let now = Instant::now();
+        for p in [
+            "file:///home/u/.config/norte",
+            "file:///home/u/.config/norte/journal.db",
+            "file:///home/u/.config/norte/sync-spools/c1-ab.jsonl",
+        ] {
+            let p = vp(p);
+            assert_eq!(
+                reg.covers_read("s1", &p, now),
+                ScopeVerdict::OutOfScope,
+                "lectura de {p:?}"
+            );
+            assert_eq!(
+                reg.covers_content("s1", &p, now),
+                ScopeVerdict::OutOfScope,
+                "contenido de {p:?}"
+            );
+            assert_eq!(
+                reg.permits("s1", PolicyOp::Copy, &p, now),
+                ScopeVerdict::OutOfScope,
+                "mutación sobre {p:?}"
+            );
+            assert_eq!(
+                reg.permits(
+                    "s1",
+                    PolicyOp::Delete {
+                        mode: DeleteMode::Permanent
+                    },
+                    &p,
+                    now
+                ),
+                ScopeVerdict::OutOfScope,
+                "borrado de {p:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn la_proteccion_es_por_segmentos_y_no_toca_ni_al_padre_ni_al_vecino() {
+        // Ni se come el ancestro (`fs.list` de `$HOME` sigue vivo) ni un
+        // hermano con el mismo prefijo de BYTES (`norte-backup`).
+        let reg = ScopeRegistry::with_protected_roots(vec![vp("file:///home/u/.config/norte")]);
+        reg.grant(
+            "s1",
+            Scope::forever(vec![vp("file:///home/u")], OpSet::all()),
+        );
+        let now = Instant::now();
+        for p in [
+            "file:///home/u",
+            "file:///home/u/.config",
+            "file:///home/u/.config/norte-backup/journal.db",
+            "file:///home/u/docs/x",
+        ] {
+            assert_eq!(
+                reg.covers_read("s1", &vp(p), now),
+                ScopeVerdict::Within,
+                "{p} no está protegido"
+            );
+        }
+    }
+
+    #[test]
+    fn una_raiz_protegida_de_otro_scheme_no_afecta() {
+        // La protección es del `file://` del daemon: no puede recortar en
+        // silencio un scope sobre otro provider con los mismos segmentos.
+        let reg = ScopeRegistry::with_protected_roots(vec![vp("file:///home/u/.config/norte")]);
+        reg.grant(
+            "s1",
+            Scope::forever(vec![vp("mem:///home/u")], OpSet::all()),
+        );
+        assert_eq!(
+            reg.covers_read(
+                "s1",
+                &vp("mem:///home/u/.config/norte/journal.db"),
+                Instant::now()
+            ),
+            ScopeVerdict::Within
+        );
+    }
+
+    #[test]
+    fn el_registro_por_defecto_protege_el_estado_del_daemon() {
+        // El pin del wiring: `new()` (y `default()`, que es `new()`) llevan la
+        // raíz del proceso, sin que nadie tenga que acordarse. En un proceso
+        // sin HOME ni passwd el dir resuelto es relativo y no hay raíz: el
+        // test compara contra la MISMA función, así que ambos casos valen.
+        let esperado: Vec<VPath> = daemon_state_root().into_iter().collect();
+        assert_eq!(ScopeRegistry::new().protected_roots(), esperado.as_slice());
+        assert_eq!(
+            ScopeRegistry::default().protected_roots(),
+            esperado.as_slice()
+        );
+    }
+
+    #[test]
+    fn el_scoped_policy_deniega_una_mutacion_sobre_lo_protegido() {
+        // La puerta de arriba, la que ve el agente: `out-of-scope`, la
+        // categoría gruesa de siempre (nada nuevo en el wire).
+        let reg = ScopeRegistry::with_protected_roots(vec![vp("file:///home/u/.config/norte")]);
+        reg.grant(
+            "s1",
+            Scope::forever(vec![vp("file:///home/u")], OpSet::all()),
+        );
+        let pol = ScopedPolicy::new(reg, PolicyConfig::default());
+        let agent = Actor::Agent {
+            session: "s1".into(),
+        };
+        let d = pol.evaluate(
+            &agent,
+            PolicyOp::Delete {
+                mode: DeleteMode::Permanent,
+            },
+            &[&vp("file:///home/u/.config/norte/journal.db")],
+        );
+        assert!(matches!(d, Decision::Deny(DenyReason::OutOfScope)), "{d:?}");
+    }
+
+    #[test]
+    fn las_exclusiones_del_walk_son_del_agente_no_del_humano() {
+        assert!(
+            walk_exclusions(&Actor::User).is_empty(),
+            "el humano busca en sus propios ficheros"
+        );
+        let esperado: Vec<VPath> = daemon_state_root().into_iter().collect();
+        assert_eq!(
+            walk_exclusions(&Actor::Agent {
+                session: "s1".into()
+            }),
+            esperado
+        );
+        assert_eq!(
+            walk_exclusions(&Actor::Plugin { id: "p1".into() }),
+            esperado
+        );
+    }
+
+    #[test]
+    fn local_root_vpath_conserva_los_bytes_y_exige_absoluto() {
+        assert!(local_root_vpath(std::path::Path::new("rel/ativo")).is_none());
+        assert!(
+            local_root_vpath(std::path::Path::new("/a/./b")).is_some(),
+            "`.` lo normaliza `components()`"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let dir =
+                std::path::Path::new(std::ffi::OsStr::from_bytes(b"/home/\xff\xfe/.config/norte"));
+            let v = local_root_vpath(dir).expect("absoluto");
+            let segs: Vec<Vec<u8>> = v.segments().map(<[u8]>::to_vec).collect();
+            assert_eq!(
+                segs,
+                vec![
+                    b"home".to_vec(),
+                    b"\xff\xfe".to_vec(),
+                    b".config".to_vec(),
+                    b"norte".to_vec()
+                ],
+                "un nombre que no es UTF-8 sobrevive (regla dura 1)"
+            );
+        }
     }
 
     #[test]
