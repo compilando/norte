@@ -1397,16 +1397,53 @@ async fn submit(
     match res {
         Ok(task) => {
             let id = task.id();
-            // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
-            cancellers.lock().unwrap().insert(id, task.canceller());
+            let guard = register_canceller(cancellers, &task);
             let _ = event_tx.send(SessionEvent::Submitted { task_id: id, op });
             let tx = event_tx.clone();
-            let cancellers = Arc::clone(cancellers);
-            tokio::spawn(async move { forward_progress(task, &tx, &cancellers).await });
+            tokio::spawn(async move { forward_progress(task, &tx, guard).await });
         }
         Err(error) => {
             let _ = event_tx.send(SessionEvent::SubmitFailed { op, error });
         }
+    }
+}
+
+/// El registro del canceller de UNA task, retirado al soltarse (#190).
+///
+/// Regla dura 3: una task larga se para desde fuera, y quien la para busca en
+/// este mapa. Estaba escrito como un `insert` y un `remove` a mano en cuatro
+/// sitios, y el `remove` es el que se olvida: un camino de salida temprana —o
+/// un `?` que alguien añada mañana— deja el mapa con un canceller de una task
+/// muerta, que es el mismo mapa que decide si `Cancel` encuentra algo. Con el
+/// guard, el de-registro es estructural: pasa aunque se salga por donde se
+/// salga.
+struct CancellerGuard {
+    cancellers: Arc<Mutex<HashMap<TaskId, TaskCanceller>>>,
+    id: TaskId,
+}
+
+impl Drop for CancellerGuard {
+    fn drop(&mut self) {
+        // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+        self.cancellers.lock().unwrap().remove(&self.id);
+    }
+}
+
+/// Registra el canceller de `task` y devuelve el guard que lo retira.
+///
+/// Se llama ANTES de anunciar el arranque: el `task_id` que la vista recibe
+/// tiene que ser cancelable en el instante en que lo recibe, no un poco
+/// después.
+fn register_canceller(
+    cancellers: &Arc<Mutex<HashMap<TaskId, TaskCanceller>>>,
+    task: &TaskRef,
+) -> CancellerGuard {
+    let id = task.id();
+    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+    cancellers.lock().unwrap().insert(id, task.canceller());
+    CancellerGuard {
+        cancellers: Arc::clone(cancellers),
+        id,
     }
 }
 
@@ -1417,9 +1454,8 @@ async fn submit(
 async fn forward_progress(
     task: TaskRef,
     tx: &mpsc::UnboundedSender<SessionEvent>,
-    cancellers: &Arc<Mutex<HashMap<TaskId, TaskCanceller>>>,
+    canceller: CancellerGuard,
 ) {
-    let id = task.id();
     let mut rx = task.progress();
     loop {
         let snap = rx.borrow().clone();
@@ -1437,8 +1473,8 @@ async fn forward_progress(
             break;
         }
     }
-    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
-    cancellers.lock().unwrap().remove(&id);
+    // El canceller se retira aquí, al soltar el guard.
+    drop(canceller);
 }
 
 /// Quién pidió una comparación: el eco que la GUI necesita de vuelta para
@@ -1480,8 +1516,7 @@ async fn compare(
         }
     };
     let task_id = task.id();
-    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
-    cancellers.lock().unwrap().insert(task_id, task.canceller());
+    let _canceller = register_canceller(cancellers, &task);
     let _ = tx.send(SessionEvent::CompareStarted {
         task_id,
         left_pane: who.left_pane,
@@ -1490,8 +1525,6 @@ async fn compare(
         right_root,
     });
     pump_compare(task, rx, tx).await;
-    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
-    cancellers.lock().unwrap().remove(&task_id);
 }
 
 /// Reenvía cada lote de `rx` como [`SessionEvent::CompareRows`] y, al
@@ -1577,8 +1610,7 @@ async fn sync_plan(
         }
     };
     let task_id = task.id();
-    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
-    cancellers.lock().unwrap().insert(task_id, task.canceller());
+    let _canceller = register_canceller(cancellers, &task);
     let _ = tx.send(SessionEvent::SyncPlanStarted {
         task_id,
         source_pane: who.source_pane,
@@ -1588,8 +1620,6 @@ async fn sync_plan(
         dest_root,
     });
     pump_sync_plan(task, rx, tx).await;
-    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
-    cancellers.lock().unwrap().remove(&task_id);
 }
 
 /// Reenvía cada evento de `rx` y, al CERRARSE el canal, UN
@@ -1675,16 +1705,16 @@ async fn sync_apply(
         }
     };
     let task_id = task.id();
-    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
-    cancellers.lock().unwrap().insert(task_id, task.canceller());
+    let canceller = register_canceller(cancellers, &task);
     let _ = tx.send(SessionEvent::SyncApplyStarted {
         task_id,
         generation,
     });
     let state = wait_terminal(&task).await;
     let report = backend.sync_report(task_id).await;
-    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
-    cancellers.lock().unwrap().remove(&task_id);
+    // El de-registro va ANTES del `Ended`: quien lo reciba no debe encontrar
+    // todavía un canceller de una task terminada.
+    drop(canceller);
     let _ = tx.send(SessionEvent::SyncApplyEnded {
         task_id,
         state,
@@ -1833,6 +1863,70 @@ mod tests {
         drop(watch_tx);
     }
 
+    /// #190 (regla dura 3): el ciclo de vida del canceller, que `compare`,
+    /// `sync_plan` y `sync_apply` comparten y ninguno probaba —sus tests
+    /// llegaban por la bomba, y la bomba no ve el registro—. Extraído a
+    /// [`register_canceller`], se prueba sin `Backend`: presente en cuanto la
+    /// task existe, ido en cuanto el guard se suelta, y CANCELANDO la task de
+    /// verdad mientras dura.
+    #[test]
+    fn el_canceller_vive_exactamente_lo_que_dura_su_guard() {
+        let tid = id(11);
+        let (_watch_tx, watch_rx) = tokio::sync::watch::channel(snap(tid, TaskState::Running));
+        let task = TaskRef::synthetic_for_tests(tid, watch_rx);
+        let cancellers: Arc<Mutex<HashMap<TaskId, TaskCanceller>>> = Arc::default();
+
+        assert!(cancellers.lock().unwrap().is_empty());
+        let guard = register_canceller(&cancellers, &task);
+        assert!(
+            cancellers.lock().unwrap().contains_key(&tid),
+            "cancelable en el instante en que la vista recibe el task_id"
+        );
+        // Y lo registrado para de verdad: es el canceller de ESTA task.
+        let TaskCanceller::Embedded(token) = task.canceller() else {
+            panic!("un TaskRef sintético cancela con un token embebido");
+        };
+        assert!(!token.is_cancelled());
+        cancellers
+            .lock()
+            .unwrap()
+            .get(&tid)
+            .expect("registrado")
+            .cancel();
+        assert!(
+            token.is_cancelled(),
+            "el Cancel de la sesión llega a la task"
+        );
+
+        drop(guard);
+        assert!(
+            cancellers.lock().unwrap().is_empty(),
+            "y se retira al soltarse, salga la función por donde salga"
+        );
+    }
+
+    /// El de-registro es ESTRUCTURAL: un camino que se va por un `return`
+    /// temprano —o un panic capturado— no puede dejar el canceller de una
+    /// task muerta en el mapa que decide si `Cancel` encuentra algo.
+    #[test]
+    fn una_salida_temprana_tambien_desregistra() {
+        let tid = id(12);
+        let (_watch_tx, watch_rx) = tokio::sync::watch::channel(snap(tid, TaskState::Running));
+        let task = TaskRef::synthetic_for_tests(tid, watch_rx);
+        let cancellers: Arc<Mutex<HashMap<TaskId, TaskCanceller>>> = Arc::default();
+
+        fn se_va_pronto(
+            cancellers: &Arc<Mutex<HashMap<TaskId, TaskCanceller>>>,
+            task: &TaskRef,
+        ) -> bool {
+            let _canceller = register_canceller(cancellers, task);
+            true
+        }
+
+        assert!(se_va_pronto(&cancellers, &task));
+        assert!(cancellers.lock().unwrap().is_empty());
+    }
+
     /// #85: la conexión muere SIN desenlace (el watch se cierra) —
     /// `forward_progress` sintetiza un terminal `Failed{ProviderUnavailable}`
     /// reusando id/kind del último snapshot y DE-REGISTRA el canceller.
@@ -1843,12 +1937,15 @@ mod tests {
         let task = TaskRef::synthetic_for_tests(tid, watch_rx);
         let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
         let cancellers: Arc<Mutex<HashMap<TaskId, TaskCanceller>>> = Arc::default();
-        cancellers.lock().unwrap().insert(tid, task.canceller());
+        let guard = register_canceller(&cancellers, &task);
+        assert!(
+            cancellers.lock().unwrap().contains_key(&tid),
+            "registrado ANTES de arrancar la bomba"
+        );
 
         let fut = {
-            let cancellers = Arc::clone(&cancellers);
             let ev_tx = ev_tx.clone();
-            tokio::spawn(async move { forward_progress(task, &ev_tx, &cancellers).await })
+            tokio::spawn(async move { forward_progress(task, &ev_tx, guard).await })
         };
         // Muerte de la conexión: el emisor del watch desaparece.
         drop(watch_tx);
@@ -1994,12 +2091,15 @@ mod tests {
         let task = TaskRef::synthetic_for_tests(tid, watch_rx);
         let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
         let cancellers: Arc<Mutex<HashMap<TaskId, TaskCanceller>>> = Arc::default();
-        cancellers.lock().unwrap().insert(tid, task.canceller());
+        let guard = register_canceller(&cancellers, &task);
+        assert!(
+            cancellers.lock().unwrap().contains_key(&tid),
+            "registrado ANTES de arrancar la bomba"
+        );
 
         let fut = {
-            let cancellers = Arc::clone(&cancellers);
             let ev_tx = ev_tx.clone();
-            tokio::spawn(async move { forward_progress(task, &ev_tx, &cancellers).await })
+            tokio::spawn(async move { forward_progress(task, &ev_tx, guard).await })
         };
         watch_tx
             .send(snap(tid, TaskState::Completed))
