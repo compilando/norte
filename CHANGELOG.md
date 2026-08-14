@@ -654,6 +654,26 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The journal's format marker can now be signed, so re-declaring it stops
+  being free.** The journal records which format it was written in, inside its
+  own tamper-evident chain, so an older build can say "I cannot verify this"
+  instead of accusing an untouched file of tampering. The hole that design
+  conceded: anyone who could write the database could *re-declare* the format
+  with three column writes and no key — and a verdict that said "your history
+  was altered at entry 40" then said "I cannot read this file" instead. The
+  alarm survived; the blame did not. The HMAC anchors did not catch it either,
+  contrary to what is intuitive: the edit moves no stored digest, so every
+  anchor still verified.
+  `norte audit anchor` now signs the marker too, in a file of its own, and
+  `norte audit verify` checks it. A re-declaration is then a hash mismatch **at
+  the marker**, located and with a key behind it, for any journal that had a
+  marker when it was anchored. `verify` also says when a marker is present and
+  nothing anchors it — the state you are left in if someone removes that file,
+  and also what an *injected* marker looks like on the older journals that
+  never had one and by design never will. What it cannot cover is a journal
+  nobody ever anchored, which was always the boundary of the anchors and is
+  why keeping a copy of them somewhere else is the point (#146).
+
 - **Cancelling a mirror halfway through a deletion erased part of a folder and
   recorded nothing.** A mirror removes what the source does not have, and
   against a destination with no trash — an object bucket, an SFTP, a FAT

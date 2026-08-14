@@ -1262,8 +1262,10 @@ impl Journal {
     /// refusal. **The HMAC anchors do not close that one**: such an edit
     /// changes no stored digest at `seq >= 1`, so every anchor still verifies.
     /// The alarm survives — the audit exits with failure either way — but the
-    /// blame does not. Anchors close the consistent rewrite, which is the
-    /// strictly larger attack.
+    /// blame does not. Head anchors close the consistent rewrite, which is the
+    /// strictly larger attack; the inconsistent re-declaration is closed by
+    /// anchoring the MARKER itself ([`Journal::marker_hash`], #146), which is a
+    /// separate line in a separate file for exactly that reason.
     ///
     /// # Errors
     /// [`JournalError::Sqlx`], including a column whose stored type this build
@@ -1367,20 +1369,26 @@ impl Journal {
     /// Head de la cadena: `(seq, entry_hash)` de la última MUTACIÓN (`None`
     /// sin ninguna). Es lo que un ancla HMAC firma (ADR 0025).
     ///
-    /// El marcador de formato (`seq 0`, ADR 0046) no se ancla por sí solo, y
-    /// anclarlo tendría un coste: el `seq` 0 no sale por [`Journal::entries`],
-    /// y el contraste de anclas del audit lo leería como «el seq anclado ya no
-    /// existe», que es una acusación falsa.
+    /// **Este `head` NO devuelve el marcador de formato (`seq 0`, ADR 0046), y
+    /// sigue sin devolverlo a propósito**: el `seq` 0 tampoco sale por
+    /// [`Journal::entries`], así que un ancla del HEAD que apuntara ahí la
+    /// leería el audit como «el seq anclado ya no existe» — una acusación falsa
+    /// de truncación.
     ///
-    /// La cobertura que sí tiene es TRANSITIVA y con una salvedad que hay que
-    /// decir: cada mutación encadena con el hash del marcador, así que
+    /// La cobertura que un ancla del head da al marcador es TRANSITIVA y con
+    /// una salvedad: cada mutación encadena con el hash del marcador, así que
     /// re-declarar el formato y RECOMPUTAR la cola cambia todos los hashes
     /// almacenados y ningún ancla previa casa. Pero eso vale para quien pueda
     /// recomputar la cadena, y un verificador que ya ha dicho
     /// [`ChainStatus::UnknownFormat`] es justo el que no puede: para él el
-    /// ancla no cubre el marcador. Una re-declaración que NO recomputa la cola
-    /// (tres escrituras) no mueve ningún hash almacenado y las anclas siguen
-    /// casando — ver [`Journal::verify_chain`].
+    /// ancla del head no cubre el marcador. Una re-declaración que NO recomputa
+    /// la cola (tres escrituras) no mueve ningún hash almacenado y las anclas
+    /// del head siguen casando — ver [`Journal::verify_chain`].
+    ///
+    /// **Lo que sí lo cubre es un ancla PROPIA del marcador** (#146), con su
+    /// digest tomado de [`Journal::marker_hash`] y en su propio fichero. Esa es
+    /// la razón de que este método no haya tenido que cambiar: el ancla del
+    /// marcador no pasa por aquí.
     ///
     /// # Errors
     /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] si el hash
@@ -1405,10 +1413,15 @@ impl Journal {
     /// 0025): con la cadena verificada, el hash almacenado ES el recomputado.
     ///
     /// El marcador de formato (`seq` 0) queda fuera, como en
-    /// [`Journal::head`] y [`Journal::entries`]: ningún ancla puede apuntarlo
-    /// —`head` no lo devuelve— y una respuesta aquí para un `seq` que el resto
-    /// del audit dice que no existe sería una incoherencia esperando a que
-    /// alguien la use.
+    /// [`Journal::head`] y [`Journal::entries`], y una respuesta aquí para un
+    /// `seq` que el resto del audit dice que no existe sería una incoherencia
+    /// esperando a que alguien la use.
+    ///
+    /// **Su digest se pide por [`Journal::marker_hash`]**, que es la puerta
+    /// estrecha que #146 abrió para anclarlo — no relajando esta. Las dos
+    /// coexisten porque sirven a mecanismos distintos: las anclas del HEAD
+    /// contrastan contra este filtro, y las del MARCADOR contra aquella, en su
+    /// propio fichero.
     ///
     /// # Errors
     /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] si el blob no mide
@@ -1423,6 +1436,55 @@ impl Journal {
         let hash: [u8; 32] = blob
             .try_into()
             .map_err(|_| JournalError::Corrupt("entry_hash no mide 32 bytes"))?;
+        Ok(Some(hash))
+    }
+
+    /// Digest del MARCADOR DE FORMATO (`seq 0`, ADR 0046), o `None` si este
+    /// journal no lo lleva (se creó antes de que el marcador existiera).
+    ///
+    /// Accesor propio, y no una relajación del filtro de
+    /// [`Journal::entry_hash_at`]: ese filtro está puesto a mano porque una
+    /// respuesta ahí contradiría a [`Journal::head`] y a [`Journal::entries`],
+    /// que no devuelven el `seq` 0 — y un ancla no puede apuntar a un `seq` que
+    /// el resto del audit dice que no existe. Lo que hace falta es lo
+    /// contrario: UNA puerta, estrecha y con nombre, para lo único que sí
+    /// quiere el marcador.
+    ///
+    /// # Por qué existe (#146)
+    /// ADR 0046 concedía un agujero: re-declarar el formato cuesta TRES
+    /// escrituras de columna y ninguna clave —poner la versión, refrescar el
+    /// digest del marcador (que es keyless y públicamente computable), reencadenar
+    /// el `seq 1`— y convierte un veredicto `Broken { first_bad_seq: k }` en
+    /// `UnknownFormat`, con una versión de `u32::MAX` para que ningún binario
+    /// futuro diga otra cosa. La alarma sobrevive; la CULPA no. Y las anclas de
+    /// ADR 0025 no lo cierran, al contrario de lo que parece: la edición no
+    /// mueve ningún `entry_hash` de `seq >= 1`, así que todas siguen casando.
+    ///
+    /// Con esto, `norte audit anchor` firma también el marcador y una
+    /// re-declaración incoherente sale como
+    /// [`AnchorVerdict::HashMismatch`](crate::audit::AnchorVerdict::HashMismatch)
+    /// **en el `seq` 0** — localizada, y con una clave detrás.
+    ///
+    /// # Es el digest ALMACENADO, no uno recomputado
+    /// Como [`Journal::entry_hash_at`], y con la misma condición para que
+    /// signifique algo: contrástalo DESPUÉS de un [`Journal::verify_chain`] que
+    /// haya validado el marcador — `Intact` o `UnknownFormat`, los dos brazos
+    /// que solo se alcanzan si la fila del `seq` 0 es canónica y su hash
+    /// recomputa. Bajo `Broken` este valor es lo que ponga el fichero.
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] si el blob no mide
+    /// 32 bytes.
+    pub async fn marker_hash(&self) -> Result<Option<[u8; 32]>, JournalError> {
+        let row = sqlx::query("SELECT entry_hash FROM journal WHERE seq = ?")
+            .bind(FORMAT_SEQ)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else { return Ok(None) };
+        let blob: Vec<u8> = row.try_get(0)?;
+        let hash: [u8; 32] = blob
+            .try_into()
+            .map_err(|_| JournalError::Corrupt("el entry_hash del marcador no mide 32 bytes"))?;
         Ok(Some(hash))
     }
 
@@ -3042,6 +3104,153 @@ CREATE TABLE IF NOT EXISTS journal (
         assert!(!status.is_intact(), "and it is not a clean bill of health");
         // Unreadable is not unopenable: the entries are still there to export.
         assert_eq!(j.entries().await.expect("entries").len(), 1);
+    }
+
+    /// **#146: anclar el marcador cierra el agujero que ADR 0046 concedía.**
+    ///
+    /// El ataque son tres escrituras de columna y ninguna clave: poner la
+    /// versión, refrescar el digest del marcador (keyless y públicamente
+    /// computable) y reencadenar el `seq 1`. Convierte un
+    /// `Broken { first_bad_seq: k }` en `UnknownFormat`, y con `u32::MAX` de
+    /// versión ningún binario futuro dirá otra cosa: la alarma sobrevive, la
+    /// CULPA no.
+    ///
+    /// Las anclas del HEAD no lo cazan, y esta es la mitad del test que importa
+    /// — se comprueba explícitamente abajo: la edición no mueve ningún
+    /// `entry_hash` de `seq >= 1`, así que el ancla del head SIGUE casando. Es
+    /// el hueco entre los dos mecanismos: `verify_chain` caza ediciones
+    /// incoherentes, las anclas cazan las coherentes, y esta era una
+    /// incoherente a la que le habían desviado el veredicto.
+    #[tokio::test]
+    async fn una_redeclaracion_del_formato_rompe_el_ancla_del_marcador() {
+        use crate::audit::{Anchor, AnchorVerdict, anchor_line, verify_anchor_line};
+
+        let j = Journal::open_in_memory().await.expect("open");
+        j.record(
+            "created",
+            b"file:///a",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("record");
+
+        // `norte audit anchor`: el marcador Y el head.
+        let key = b"clave de anclado del test";
+        let marcador = j
+            .marker_hash()
+            .await
+            .expect("marker_hash")
+            .expect("un journal nuevo lleva marcador");
+        let ancla_marcador = anchor_line(
+            key,
+            &Anchor {
+                seq: 0,
+                head: marcador,
+            },
+        );
+        let (seq, head) = j.head().await.expect("head").expect("hay una mutación");
+        let ancla_head = anchor_line(key, &Anchor { seq, head });
+
+        // ANTES del ataque: el ancla del marcador CASA. Es la mitad que un
+        // regresor silencioso rompería —basta con dejar de sembrar el `seq` 0
+        // en el snapshot del audit— y a partir de ahí TODO journal anclado
+        // empezaría a decir «truncación» sobre un fichero intacto.
+        assert!(
+            matches!(
+                verify_anchor_line(key, &ancla_marcador, j.marker_hash().await.expect("marker")),
+                AnchorVerdict::Ok(_)
+            ),
+            "un journal sin tocar no se acusa a sí mismo",
+        );
+
+        // El ataque, entero.
+        j.redeclare_format_for_test(&u32::MAX.to_string().into_bytes(), true)
+            .await
+            .expect("re-declarar");
+        j.relink_first_entry_for_test().await.expect("relink");
+
+        // El veredicto de la cadena, desviado: ya no acusa a nadie.
+        assert!(
+            matches!(
+                j.verify_chain().await.expect("verify"),
+                ChainStatus::UnknownFormat { .. }
+            ),
+            "el desvío del veredicto es la premisa del ataque",
+        );
+
+        // Y el ancla del HEAD sigue casando, que es justo lo que hacía que
+        // «las anclas ya lo cubren» sonara verdad y no lo fuera.
+        assert!(
+            matches!(
+                verify_anchor_line(
+                    key,
+                    &ancla_head,
+                    j.entry_hash_at(seq).await.expect("hash del head"),
+                ),
+                AnchorVerdict::Ok(_)
+            ),
+            "la edición no mueve ningún entry_hash de seq >= 1",
+        );
+
+        // La del marcador, no. Localizada en el `seq` 0 y con una clave detrás.
+        let ahora = j.marker_hash().await.expect("marker_hash");
+        assert_eq!(
+            verify_anchor_line(key, &ancla_marcador, ahora),
+            AnchorVerdict::HashMismatch(Anchor {
+                seq: 0,
+                head: marcador,
+            }),
+            "una re-declaración incoherente es HashMismatch en el seq 0",
+        );
+    }
+
+    /// **El agujero que ESTO no cierra, escrito en código y no solo en prosa.**
+    ///
+    /// Un journal ANTERIOR a ADR 0046 no tiene marcador —y por diseño no lo
+    /// gana nunca (§6)—, así que cuando se ancló no había nada del `seq` 0 que
+    /// firmar. El ataque ahí no es re-declarar sino INYECTAR: meter la fila del
+    /// `seq` 0 y reencadenar el `seq` 1. El veredicto se desvía igual, y no hay
+    /// ancla previa que lo contradiga.
+    ///
+    /// Lo que sí queda es una señal, y el audit la dice: hay marcador y nadie
+    /// lo ancla.
+    #[tokio::test]
+    async fn un_journal_sin_marcador_no_tiene_ancla_que_lo_defienda() {
+        let j = Journal::open_in_memory().await.expect("open");
+        // Se le quita el marcador, que es como nacieron los journals de antes
+        // de ADR 0046.
+        sqlx::query("DELETE FROM journal WHERE seq = 0")
+            .execute(&j.pool)
+            .await
+            .expect("borrar el marcador");
+        assert_eq!(
+            j.marker_hash().await.expect("marker_hash"),
+            None,
+            "sin marcador no hay digest que anclar, y el audit no escribe línea"
+        );
+    }
+
+    /// Y el marcador anclado NO se cuela en la historia: `entry_hash_at` sigue
+    /// filtrando `seq >= 1`, porque una respuesta ahí contradiría a `head` y a
+    /// `entries`, y un ancla no puede apuntar a un `seq` que el resto del audit
+    /// dice que no existe.
+    #[tokio::test]
+    async fn el_marcador_tiene_puerta_propia_y_no_relaja_la_de_las_mutaciones() {
+        let j = Journal::open_in_memory().await.expect("open");
+        assert!(
+            j.marker_hash().await.expect("marker_hash").is_some(),
+            "su puerta contesta"
+        );
+        assert_eq!(
+            j.entry_hash_at(0).await.expect("entry_hash_at"),
+            None,
+            "y la de las mutaciones sigue sin contestar por el seq 0"
+        );
+        assert_eq!(j.head().await.expect("head"), None, "ni head");
+        assert!(j.entries().await.expect("entries").is_empty(), "ni entries");
     }
 
     /// Same refusal when the marker is present but its version is not a number

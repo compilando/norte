@@ -931,6 +931,20 @@ async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
     let dir = norte_core::connect::config_dir();
     let journal_path = dir.join("journal.db");
     let anchors_path = dir.join("journal-anchors.jsonl");
+    // Las anclas del MARCADOR viven en su PROPIO fichero (#146), y no como una
+    // línea más de las del head. El motivo es de compatibilidad y es del tipo
+    // que se paga caro: `verify_anchors` busca cada `seq` anclado en el mapa
+    // que le pasa el llamante, y un binario ANTERIOR a este cambio no siembra
+    // el `seq` 0 — así que leería la línea del marcador como `MissingSeq`, o
+    // sea «el seq anclado ya no existe: truncación o rollback». Una acusación
+    // FALSA de manipulación contra un fichero que nadie tocó, emitida por el
+    // arreglo del ADR cuya razón de ser es no emitir exactamente eso. Y no se
+    // arregla con otra forma de línea: ese verificador falla en cerrado ante
+    // todo lo que no entiende, así que un JSON distinto saldría por `BadLine`.
+    //
+    // Con dos ficheros, un binario viejo simplemente no lo abre: no gana la
+    // cobertura nueva —que tampoco tenía— y no pierde nada.
+    let marker_anchors_path = dir.join("journal-marker-anchors.jsonl");
     let journal = Journal::open_read_only(&journal_path)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
@@ -962,22 +976,54 @@ async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
                 report_chain_not_certified(&status, declared);
                 return Ok(ExitCode::FAILURE);
             }
-            let Some((seq, head)) = journal.head().await.map_err(|e| anyhow::anyhow!("{e}"))?
-            else {
+            let cabeza = journal.head().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            // El MARCADOR DE FORMATO (`seq 0`) se ancla también, y primero
+            // (#146). ADR 0046 concedía que re-declararlo cuesta tres
+            // escrituras de columna y ninguna clave, y que las anclas del HEAD
+            // no lo cazan porque esa edición no mueve ningún `entry_hash` de
+            // `seq >= 1`. Firmarlo aparte convierte esa re-declaración en un
+            // `HashMismatch` en el `seq` 0: localizada, y con una clave detrás.
+            //
+            // Va antes que la del head para que un journal que solo tiene
+            // marcador —recién creado, sin una sola mutación— quede cubierto
+            // igual; ahí `head()` es `None` y abajo se sale.
+            let marcador = journal
+                .marker_hash()
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if marcador.is_none() && cabeza.is_none() {
                 println!("{}", norte_i18n::t("cli-audit-empty"));
                 return Ok(ExitCode::SUCCESS);
-            };
+            }
             // La clave del keyring puede bloquear (D-Bus/prompt): fuera del
             // reactor (regla 2).
             let key = tokio::task::spawn_blocking(norte_core::connect::journal_anchor_key)
                 .await
                 .map_err(|_| anyhow::anyhow!("keyring task panicked"))?
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let line = audit::anchor_line(&key, &audit::Anchor { seq, head });
-            append_line_0600(&anchors_path, &line).await?;
-            // La línea sale por stdout A PROPÓSITO: la copia EXTERNA de las
+            // Las líneas salen por stdout A PROPÓSITO: la copia EXTERNA de las
             // anclas (log remoto, otro host) es lo que hace detectable el
             // recorte del fichero local (ADR 0025).
+            if let Some(head) = marcador {
+                let line = audit::anchor_line(&key, &audit::Anchor { seq: 0, head });
+                // El ancla del marcador es DETERMINISTA: el marcador no cambia
+                // nunca, así que anclar diez veces escribiría diez líneas
+                // idénticas y el informe contaría diez anclas verificadas donde
+                // hay una. Se escribe solo si no está ya.
+                if !ya_anclado(&marker_anchors_path, &line).await? {
+                    append_line_0600(&marker_anchors_path, &line).await?;
+                }
+                println!("{line}");
+                println!("{}", norte_i18n::t("cli-audit-anchored-marker"));
+            }
+            let Some((seq, head)) = cabeza else {
+                // Y no «journal vacío: nada que anclar», que contradiría en la
+                // misma pantalla a la línea de arriba.
+                println!("{}", norte_i18n::t("cli-audit-only-marker"));
+                return Ok(ExitCode::SUCCESS);
+            };
+            let line = audit::anchor_line(&key, &audit::Anchor { seq, head });
+            append_line_0600(&anchors_path, &line).await?;
             println!("{line}");
             println!(
                 "{}",
@@ -986,7 +1032,13 @@ async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         AuditCmd::Verify { allow_no_anchors } => {
-            audit_verify(&journal, &anchors_path, allow_no_anchors).await
+            audit_verify(
+                &journal,
+                &anchors_path,
+                &marker_anchors_path,
+                allow_no_anchors,
+            )
+            .await
         }
     }
 }
@@ -1070,6 +1122,7 @@ fn report_chain_not_certified(
 async fn audit_verify(
     journal: &norte_core::Journal,
     anchors_path: &std::path::Path,
+    marker_anchors_path: &std::path::Path,
     allow_no_anchors: bool,
 ) -> anyhow::Result<ExitCode> {
     use norte_core::{ChainStatus, audit};
@@ -1135,9 +1188,11 @@ async fn audit_verify(
         .into_iter()
         .filter_map(|e| e.entry_hash.try_into().ok().map(|h: [u8; 32]| (e.seq, h)))
         .collect();
+
     let report = audit::verify_anchors(&key, &lines, &hash_by_seq);
     report_anchors(&report, head_seq, certified);
-    if !report.bad.is_empty() {
+    let marcador_ok = verify_marker_anchors(journal, marker_anchors_path, &key).await?;
+    if !report.bad.is_empty() || !marcador_ok {
         return Ok(ExitCode::FAILURE);
     }
     if certified {
@@ -1150,6 +1205,85 @@ async fn audit_verify(
         );
     }
     Ok(exit_for(certified))
+}
+
+/// Contrasta las anclas del MARCADOR (#146) y dice si el marcador se quedó SIN
+/// anclar. `false` = hay algo que reprochar y el comando sale con fallo.
+///
+/// # Por qué el «sin anclar» es una línea propia y no un silencio
+/// La defensa de ADR 0025 contra el recorte del fichero de anclas es que la
+/// COBERTURA retrocede, y eso solo funciona para la COLA. El ancla del marcador
+/// es la de `seq` más bajo que existe, así que borrarla —o borrar su fichero
+/// entero— no mueve `max_ok_seq` ni un dígito: el informe no diría nada. La
+/// receta del atacante pasaría de tres escrituras a cuatro sobre ficheros que
+/// ya puede escribir.
+///
+/// La misma línea cubre el otro hueco, y este no se puede cerrar de ninguna
+/// otra forma: un journal SIN marcador (todos los que existían antes de ADR
+/// 0046, que por diseño no lo ganan nunca) admite que le INYECTEN uno —
+/// insertar la fila del `seq` 0 y reencadenar el `seq` 1— y eso convierte un
+/// `Broken` localizado en `UnknownFormat` igual que la re-declaración. Ahí no
+/// hay ancla previa que contradecir, porque cuando se ancló no había marcador.
+/// Lo que sí se puede decir es que AHORA hay un marcador y nadie lo ha
+/// anclado, que es exactamente lo que un marcador inyectado produce.
+///
+/// # Errors
+/// Lectura del fichero de anclas del marcador, o del journal.
+async fn verify_marker_anchors(
+    journal: &norte_core::Journal,
+    path: &std::path::Path,
+    key: &[u8],
+) -> anyhow::Result<bool> {
+    use norte_core::audit;
+    let Some(marcador) = journal
+        .marker_hash()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    else {
+        // Sin marcador no hay nada que anclar ni nada que reprochar. Un fichero
+        // de anclas de marcador SOBRE un journal sin marcador sí sería raro,
+        // pero es el caso de abajo (`MissingSeq`) y se cuenta como malo.
+        return Ok(true);
+    };
+    let lines = match tokio::fs::read_to_string(path).await {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).context("journal-marker-anchors.jsonl"),
+    };
+    let snapshot: std::collections::HashMap<i64, [u8; 32]> =
+        std::iter::once((0, marcador)).collect();
+    let report = audit::verify_anchors(key, &lines, &snapshot);
+    for (line_no, verdict) in &report.bad {
+        let Some(detail) = verdict_detail(verdict) else {
+            continue;
+        };
+        eprintln!(
+            "{}",
+            norte_i18n::ta(
+                "cli-audit-anchor-bad",
+                &[("line", &line_no.to_string()), ("detail", &detail)],
+            )
+        );
+    }
+    if report.max_ok_seq.is_none() {
+        eprintln!("{}", norte_i18n::t("cli-audit-marker-unanchored"));
+        return Ok(false);
+    }
+    println!("{}", norte_i18n::t("cli-audit-marker-ok"));
+    Ok(report.bad.is_empty())
+}
+
+/// ¿Está ya esa línea EXACTA en el fichero? Evita duplicar un ancla que es
+/// determinista (la del marcador, que no cambia nunca).
+///
+/// # Errors
+/// Lectura del fichero, salvo su ausencia.
+async fn ya_anclado(path: &std::path::Path, line: &str) -> anyhow::Result<bool> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(s) => Ok(s.lines().any(|l| l == line)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e).context("journal-marker-anchors.jsonl"),
+    }
 }
 
 /// El informe de anclas: las malas una por una, la salvedad cuando la cadena
