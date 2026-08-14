@@ -75,6 +75,13 @@ pub enum TwinKind {
     /// empareja en filesystems que casefoldean full (ext4/f2fs `+F`), no en
     /// los que pliegan simple (APFS, NTFS) — hueco aceptado, ver #145.
     CaseFoldFull,
+    /// Emparejan por una descomposición SINGLETON de NFC, y **no son el mismo
+    /// texto**: U+212A KELVIN SIGN contra la `K` ASCII (#152).
+    ///
+    /// Es el único `TwinKind` cuyo par NO es un fichero visto de dos maneras,
+    /// sino DOS ficheros que la clave junta. Existe para poder escribir tests
+    /// que distingan el emparejamiento que se quiere del que hay que marcar.
+    NormalizationSingleton,
 }
 
 /// Un par de nombres del corpus que son la misma ortografía.
@@ -145,6 +152,24 @@ pub fn spelling_twins() -> Vec<SpellingTwin> {
             left: "ext4_full_fold_es_zett",
             right: "ext4_full_fold_ss",
             kind: TwinKind::CaseFoldFull,
+        },
+        // U+212A KELVIN SIGN / K: el par que NO es la misma ortografía y
+        // empareja igual, porque NFC tiene descomposiciones singleton (#152).
+        // Los otros cinco pares de esta lista son un fichero escrito de dos
+        // maneras; este son dos ficheros, y coexisten en ext4 sin problema.
+        SpellingTwin {
+            left: "singleton_kelvin_sign",
+            right: "ascii_capital_k",
+            kind: TwinKind::NormalizationSingleton,
+        },
+        // El mismo par con una cola cruda: la clave normaliza el prefijo válido
+        // de un nombre que no es texto entero (#154), así que estos dos también
+        // emparejan — y un detector de singletons que pidiera UTF-8 en TODO el
+        // nombre los daría por el mismo texto, que es el falso negativo caro.
+        SpellingTwin {
+            left: "singleton_kelvin_sign_invalid_tail",
+            right: "ascii_capital_k_invalid_tail",
+            kind: TwinKind::NormalizationSingleton,
         },
     ]
 }

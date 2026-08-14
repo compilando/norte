@@ -278,5 +278,25 @@
     "id": "partial_utf8_nfc_twin",
     "hex": "c3a9ff",
     "why": "'é' (NFC) + 0xFF inválido: la pareja de `partial_utf8_nfd_twin` — mismo fichero en APFS, sin el byte inválido interfiriendo con la composición NFC del resto del nombre (#154)"
+  },
+  {
+    "id": "singleton_kelvin_sign",
+    "hex": "e284aa2e747874",
+    "why": "U+212A KELVIN SIGN + '.txt': NFC lo reescribe a la 'K' ASCII, así que empareja con `ascii_capital_k` SIN plegar caja — NFC no es inyectiva. Dos ficheros que coexisten en ext4 y que un lector ve como dos caracteres distintos (#152)"
+  },
+  {
+    "id": "ascii_capital_k",
+    "hex": "4b2e747874",
+    "why": "'K.txt' con la K ASCII: la pareja de `singleton_kelvin_sign`. Sola no es hostil; lo hostil es que la clave de emparejamiento la junte con un nombre que no tiene nada que ver (#152)"
+  },
+  {
+    "id": "singleton_kelvin_sign_invalid_tail",
+    "hex": "e284aa2e747874ff",
+    "why": "U+212A KELVIN SIGN + '.txt' + 0xFF inválido: el singleton dentro del tramo VÁLIDO de un nombre que no es texto entero. La clave normaliza ese prefijo igual (`fold_lossy`, #154), así que empareja con `ascii_capital_k_invalid_tail` — un detector de singletons que exigiera UTF-8 en todo el nombre lo daría por inocuo (#152)"
+  },
+  {
+    "id": "ascii_capital_k_invalid_tail",
+    "hex": "4b2e747874ff",
+    "why": "'K.txt' + 0xFF inválido: la pareja de `singleton_kelvin_sign_invalid_tail`, con la misma cola cruda para que lo único que los junte sea la normalización del prefijo (#152, #154)"
   }
 ]

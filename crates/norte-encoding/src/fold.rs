@@ -362,6 +362,90 @@ pub fn name_key(name: &[u8], mode: FoldMode) -> Cow<'_, [u8]> {
     }
 }
 
+/// Does this `char` have a canonical SINGLETON decomposition — does NFC rewrite
+/// it, on its own, to one DIFFERENT character (#152)?
+///
+/// U+212A KELVIN SIGN becomes `K`, U+2126 OHM SIGN becomes U+03A9, U+212B
+/// ANGSTROM SIGN becomes U+00C5. Unicode calls each pair canonically
+/// equivalent; a filesystem does not, and neither does a reader — the two names
+/// are two files on ext4 and two different characters on screen.
+///
+/// This is the wart that makes [`name_key`]'s closing NFC pass non-injective,
+/// and the reason the pairing key can put two UNRELATED files in one row. The
+/// key still normalises — the macOS-NFD/Linux-NFC case is the whole point of it
+/// — so what this predicate buys is the ability to SAY which of the two
+/// happened.
+///
+/// The test is `NFC(c)` rather than a canonical decomposition, on purpose:
+/// `unicode_normalization::char::decompose_canonical` decomposes FULLY and
+/// recursively, so U+212B comes back as `A` plus a combining ring — two chars —
+/// and a "decomposes to exactly one other char" test would miss it. Composing
+/// instead catches every singleton, including the ones whose target decomposes
+/// further, and leaves every already-NFC character (`é`, a bare combining
+/// acute, ASCII) alone.
+///
+/// ```
+/// use norte_encoding::is_canonical_singleton;
+/// assert!(is_canonical_singleton('\u{212a}'), "KELVIN SIGN");
+/// assert!(is_canonical_singleton('\u{2126}'), "OHM SIGN");
+/// assert!(is_canonical_singleton('\u{212b}'), "ANGSTROM SIGN");
+/// // Not singletons: a precomposed letter, a combining mark, plain ASCII.
+/// assert!(!is_canonical_singleton('é'));
+/// assert!(!is_canonical_singleton('\u{301}'));
+/// assert!(!is_canonical_singleton('K'));
+/// ```
+#[must_use]
+pub fn is_canonical_singleton(c: char) -> bool {
+    let mut nfc = [c].into_iter().nfc();
+    matches!((nfc.next(), nfc.next()), (Some(target), None) if target != c)
+}
+
+/// Does this NAME contain a character with a canonical singleton decomposition
+/// ([`is_canonical_singleton`])?
+///
+/// **It asks over exactly the run [`name_key`] normalises, and that is not the
+/// whole name.** A name that is not valid UTF-8 still gets its leading valid
+/// run folded and NFC'd — that is what `fold_lossy` does, and what the corpus
+/// pair `partial_utf8_nfd_twin` / `partial_utf8_nfc_twin` pins (#154) — so a
+/// singleton inside that prefix DOES decide a pairing, and answering `false`
+/// for the whole name because of a stray byte at the end would miss it. Asking
+/// `str::from_utf8(name).is_ok()` first is exactly that miss, and the shape it
+/// misses is the file-losing one: `K.txt` (U+212A) and `K.txt` with the same
+/// invalid tail pair, differ in bytes, and would be reported as one text
+/// (`protocol-guardian`, W4b, MAJOR-1).
+///
+/// Bytes past the first invalid one pass through raw, so NFC cannot resolve a
+/// singleton there and they are not scanned.
+///
+/// ```
+/// use norte_encoding::has_canonical_singleton;
+/// assert!(has_canonical_singleton("\u{212a}.txt".as_bytes()));
+/// assert!(!has_canonical_singleton(b"K.txt"));
+/// assert!(!has_canonical_singleton(b"roto\xff\xfe"), "sin singleton en el texto");
+/// // Y el tramo VÁLIDO de un nombre que no es texto entero sí se mira.
+/// let mut roto = "\u{212a}.txt".as_bytes().to_vec();
+/// roto.push(0xFF);
+/// assert!(has_canonical_singleton(&roto));
+/// ```
+///
+/// # Panics
+/// Never: the only `expect` re-parses the bytes a `Utf8Error` has just
+/// certified valid, which is the same invariant `fold_lossy` runs on.
+#[must_use]
+pub fn has_canonical_singleton(name: &[u8]) -> bool {
+    let text = match std::str::from_utf8(name) {
+        Ok(text) => text,
+        // INVARIANTE (regla dura 6): `Utf8Error` garantiza que
+        // `name[..valid_up_to]` es UTF-8 válido, así que re-parsearlo no puede
+        // fallar. Es el mismo corte que hace `fold_lossy`, a propósito: las dos
+        // funciones tienen que mirar el MISMO tramo o la marca dice una cosa de
+        // una clave que se calculó de otra.
+        Err(error) => std::str::from_utf8(&name[..error.valid_up_to()])
+            .expect("valid_up_to bytes of a from_utf8 error are valid UTF-8"),
+    };
+    text.chars().any(is_canonical_singleton)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,6 +457,77 @@ mod tests {
             .find(|n| n.id == id)
             .unwrap_or_else(|| panic!("fixture {id} in the corpus"))
             .bytes
+    }
+
+    // ---- canonical singletons (#152) ----
+
+    /// The corpus pair, and the property that makes it dangerous: the two
+    /// names share a key WITHOUT any case folding, and they are not the same
+    /// text. `has_canonical_singleton` is what lets a caller tell this pairing
+    /// apart from the NFC/NFD one it must keep.
+    #[test]
+    fn the_kelvin_pair_shares_a_key_and_is_not_one_text() {
+        let kelvin = corpus("singleton_kelvin_sign");
+        let ascii = corpus("ascii_capital_k");
+        assert_ne!(kelvin, ascii);
+        assert_eq!(
+            name_key(&kelvin, FoldMode::None),
+            name_key(&ascii, FoldMode::None),
+        );
+        assert!(has_canonical_singleton(&kelvin));
+        assert!(!has_canonical_singleton(&ascii));
+    }
+
+    /// The NFC/NFD pair the key exists to serve is NOT flagged: it is the same
+    /// text, and a predicate that answered `true` here would make the marker
+    /// useless — every macOS-to-Linux comparison would carry it.
+    #[test]
+    fn the_nfc_nfd_pair_is_not_a_singleton() {
+        assert!(!has_canonical_singleton(&corpus("nfc_e_acute")));
+        assert!(!has_canonical_singleton(&corpus("nfd_e_acute")));
+    }
+
+    /// The two other singletons of the same family, and the one that a
+    /// "decomposes to exactly one char" test would have missed: U+212B
+    /// decomposes FULLY to `A` plus a combining ring.
+    #[test]
+    fn ohm_and_angstrom_are_singletons_too() {
+        assert!(is_canonical_singleton('\u{2126}'), "OHM SIGN");
+        assert!(is_canonical_singleton('\u{212b}'), "ANGSTROM SIGN");
+        assert!(
+            !is_canonical_singleton('\u{c5}'),
+            "its NFC target is stable"
+        );
+    }
+
+    /// Bytes that are not text have no characters to normalise, and a name with
+    /// no singleton in its TEXT answers `false` however broken its tail is
+    /// (rule 1, #154).
+    #[test]
+    fn a_name_that_is_not_utf8_has_no_singleton() {
+        assert!(!has_canonical_singleton(b"roto\xff\xfe"));
+        assert!(!has_canonical_singleton(&corpus("partial_utf8_nfd_twin")));
+    }
+
+    /// **The false negative that would have cost a file** (`protocol-guardian`,
+    /// W4b MAJOR-1): `name_key` normalises the leading valid run of a name that
+    /// is not text all the way through, so a singleton inside that run decides
+    /// the pairing. The two corpus names below share a key with both sides
+    /// case-sensitive and are two different files; a predicate that required
+    /// the WHOLE name to be UTF-8 would have called the pair one text.
+    #[test]
+    fn a_singleton_inside_the_valid_run_of_a_broken_name_still_counts() {
+        let kelvin = corpus("singleton_kelvin_sign_invalid_tail");
+        let ascii = corpus("ascii_capital_k_invalid_tail");
+        assert!(std::str::from_utf8(&kelvin).is_err(), "no es texto entero");
+        assert_ne!(kelvin, ascii);
+        assert_eq!(
+            name_key(&kelvin, FoldMode::None),
+            name_key(&ascii, FoldMode::None),
+            "y aun así emparejan: la clave normaliza el prefijo válido"
+        );
+        assert!(has_canonical_singleton(&kelvin));
+        assert!(!has_canonical_singleton(&ascii));
     }
 
     // ---- the basics ----
