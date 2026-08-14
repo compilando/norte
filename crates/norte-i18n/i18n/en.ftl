@@ -205,7 +205,10 @@ cli-sync-plan = Sync plan:
 cli-sync-unjournalled = without a journal this sync cannot be applied — norte refuses to write a tree it could not undo. Another process holds it (a running `ntc` or daemon owns journal.db exclusively): use --daemon to go through it
 cli-sync-noninteractive = there is no terminal to ask, and nothing was applied — use --yes to apply without a question
 cli-sync-blocked = the plan cannot run, so nothing was applied
-cli-sync-blocker = { $rel }: { $why }
+# A blocker is two fields on two lines, not one joined by `: ` — the same
+# reason as the failure rows below (corpus `cause_join_spoof`).
+cli-sync-blocker = { $rel }
+cli-sync-blocker-why = { $why }
 cli-sync-blockers-more = … and { $n } more
 cli-sync-integrity = the plan above is not all of the plan that would be applied, so it will not be: { $detail }
 cli-sync-nothing-to-apply = every step is a skip: there is nothing to apply

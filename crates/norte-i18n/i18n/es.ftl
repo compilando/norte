@@ -207,7 +207,10 @@ cli-sync-plan = Plan de sincronización:
 cli-sync-unjournalled = sin journal esta sincronización no se puede aplicar — norte rehúsa escribir un árbol que no podría deshacer. Lo tiene otro proceso (un `ntc` o un daemon vivos abren journal.db en exclusiva): usa --daemon para ir por él
 cli-sync-noninteractive = no hay terminal a la que preguntar, y no se aplicó nada — usa --yes para aplicar sin pregunta
 cli-sync-blocked = el plan no se puede ejecutar, así que no se aplicó nada
-cli-sync-blocker = { $rel }: { $why }
+# Un bloqueo son DOS campos en DOS líneas, no uno unido por `: ` — el mismo
+# motivo que las filas de fallo de abajo (corpus `cause_join_spoof`).
+cli-sync-blocker = { $rel }
+cli-sync-blocker-why = { $why }
 cli-sync-blockers-more = … y { $n } más
 cli-sync-integrity = el plan de arriba no es todo el plan que se aplicaría, así que no se aplica: { $detail }
 cli-sync-nothing-to-apply = todos los pasos son omisiones: no hay nada que aplicar

@@ -2719,23 +2719,37 @@ async fn sync_plan_show_apply(
 ///
 /// A stderr porque no es el plan —el plan no existe: `!executable` ⟹ `steps`
 /// vacío— sino la explicación de que no lo haya.
+///
+/// Cada bloqueo son TRES líneas —ruta, ancla si consta, y motivo— nunca una
+/// sola con `: ` en medio: era la misma forma que se le quitó a
+/// `cli-sync-failure`, y un nombre puede fingirla (corpus `cause_join_spoof`,
+/// #189). El ancla importa porque tres de las cuatro clases nombradas
+/// —`AmbiguousDest`, `DestReadOnly`, `DirTooLarge`— nombran el DESTINO por
+/// definición, y antes de `blocker_anchor` esta lista las leía con la
+/// reinterpretación del origen (#152 reproducido contra tres rutas del otro
+/// árbol).
 fn report_blockers(done: &norte_proto::methods::SyncPlanDone) -> ExitCode {
     eprintln!("norte: {}", norte_i18n::t("cli-sync-blocked"));
+    let lang = norte_i18n::active();
+    let enc = norte_frontend::sync::SyncEncodings::default();
     for blocker in &done.blockers {
+        let anchor = norte_frontend::sync::blocker_anchor(blocker);
+        let rel = norte_frontend::sync::rel_display(&blocker.rel, enc.for_anchor(anchor));
         eprintln!(
             "  {}",
+            norte_i18n::ta("cli-sync-blocker", &[("rel", &rel_marcado(&rel))])
+        );
+        if let Some(q) = norte_frontend::sync::anchor_label(anchor, lang) {
+            eprintln!("    {q}");
+        }
+        eprintln!(
+            "    {}",
             norte_i18n::ta(
-                "cli-sync-blocker",
-                &[
-                    (
-                        "rel",
-                        &rel_marcado(&norte_frontend::sync::rel_display(&blocker.rel, None)),
-                    ),
-                    (
-                        "why",
-                        &norte_frontend::sync::blocker_label(blocker.kind, norte_i18n::active()),
-                    ),
-                ],
+                "cli-sync-blocker-why",
+                &[(
+                    "why",
+                    &norte_frontend::sync::blocker_label(blocker.kind, lang),
+                )],
             )
         );
     }
@@ -3536,6 +3550,59 @@ mod tests {
         assert_eq!(tab, "a\\tb");
         assert_eq!(render_attr_value(&AttrValue::Uint(7)), "7");
         assert_eq!(render_attr_value(&AttrValue::Unknown), "?");
+    }
+
+    /// `cli-sync-blocker` no vuelve a unir la ruta y el motivo con `: `
+    /// (#189): la fixture `cause_join_spoof` de la corpus llevaba justo ese
+    /// joiner y habría fingido una fila entera.
+    #[test]
+    fn el_bloqueo_no_une_ruta_y_motivo_en_una_linea() {
+        for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+            let rel_line = norte_i18n::ta_in(lang, "cli-sync-blocker", &[("rel", "sub/a.txt")]);
+            assert_eq!(rel_line, "sub/a.txt", "{lang:?}: nada pegado a la ruta");
+            let why_line =
+                norte_i18n::ta_in(lang, "cli-sync-blocker-why", &[("why", "dest read only")]);
+            assert!(why_line.contains("dest read only"), "{lang:?}: {why_line}");
+            assert!(!why_line.contains("sub/a.txt"), "{lang:?}: {why_line}");
+        }
+    }
+
+    /// `report_blockers` no panica para ninguna combinación de clase y lado,
+    /// y siempre devuelve el 2 —nada se aplicó— sea cual sea el bloqueo.
+    #[test]
+    fn report_blockers_no_panica_para_cualquier_clase_o_lado() {
+        use norte_proto::methods::{
+            DestTrash, PlanHash, Side, SyncBlocker, SyncBlockerKind, SyncCounts, SyncPlanDone,
+        };
+        for kind in [
+            SyncBlockerKind::AmbiguousDest,
+            SyncBlockerKind::OverlapDetected,
+            SyncBlockerKind::DestReadOnly,
+            SyncBlockerKind::DirTooLarge,
+            SyncBlockerKind::TypeMismatchDir,
+            SyncBlockerKind::Unknown,
+        ] {
+            for side in [None, Some(Side::Left), Some(Side::Right)] {
+                let done = SyncPlanDone {
+                    task_id: norte_proto::TaskId::new(1),
+                    plan_hash: PlanHash::parse(&"a".repeat(64)).expect("hex"),
+                    counts: SyncCounts::default(),
+                    blockers: vec![SyncBlocker {
+                        rel: norte_proto::methods::RelPath::parse_wire("sub/a.txt").expect("rel"),
+                        kind,
+                        side,
+                    }],
+                    blockers_total: 1,
+                    executable: false,
+                    dest_trash: DestTrash::Restorable,
+                };
+                assert_eq!(
+                    report_blockers(&done),
+                    ExitCode::from(2),
+                    "{kind:?}/{side:?}"
+                );
+            }
+        }
     }
 }
 

@@ -47,9 +47,9 @@
 
 use norte_i18n::{Lang, t_in, ta_in};
 use norte_proto::methods::{
-    CompareRow, DestTrash, PlanHash, RelPath, SYNC_MAX_INCLUDE, StepReversal, SyncBlockerKind,
-    SyncCounts, SyncFailureCause, SyncMode, SyncPlanDone, SyncReason, SyncReportResult, SyncStep,
-    SyncStepKind, SyncStepsBatch,
+    CompareRow, DestTrash, PlanHash, RelPath, SYNC_MAX_INCLUDE, Side, StepReversal, SyncBlocker,
+    SyncBlockerKind, SyncCounts, SyncFailureCause, SyncMode, SyncPlanDone, SyncReason,
+    SyncReportResult, SyncStep, SyncStepKind, SyncStepsBatch,
 };
 use norte_proto::{TaskId, TaskState, VPath};
 
@@ -698,6 +698,61 @@ pub fn anchor_of(step: &SyncStep) -> RelAnchor {
         // class is a shape this family HAS, so painting an unknown one under
         // the source column would put a path in a tree it may not be in.
         _ => RelAnchor::Either,
+    }
+}
+
+/// Which root a [`SyncBlocker`]'s `rel` hangs from — the third member of the
+/// family [`anchor_of`] and [`render_failure`] already form (#189).
+///
+/// [`SyncBlocker::side`] is normative when it is present: the wire's
+/// convention is [`Side::Left`] for the source and [`Side::Right`] for the
+/// destination, always, independent of which pane launched the plan. Three of
+/// the four named kinds name a DESTINATION path by definition even without a
+/// `side` — [`SyncBlockerKind::AmbiguousDest`], [`SyncBlockerKind::DestReadOnly`]
+/// and [`SyncBlockerKind::DirTooLarge`] are never about the source.
+/// [`SyncBlockerKind::OverlapDetected`] is about both roots at once, so it
+/// answers [`RelAnchor::Either`] rather than pick one it cannot justify.
+/// [`SyncBlockerKind::TypeMismatchDir`] carries `side` on the wire ALWAYS
+/// (normative, see its rustdoc), so its fall-through here is defensive, not
+/// reachable against a conforming daemon.
+///
+/// Without this, the obvious code for a pane that lists blockers is
+/// `rel_display(&b.rel, view.source_encoding)`, which reproduces #152 against
+/// three paths that are never the source's spelling.
+///
+/// ```
+/// use norte_frontend::sync::{RelAnchor, blocker_anchor};
+/// use norte_proto::methods::{RelPath, Side, SyncBlocker, SyncBlockerKind};
+/// let dest_ro = SyncBlocker {
+///     rel: RelPath::parse_wire("").expect("rel"),
+///     kind: SyncBlockerKind::DestReadOnly,
+///     side: None,
+/// };
+/// assert_eq!(blocker_anchor(&dest_ro), RelAnchor::Dest);
+///
+/// // `side` wins when present, even against a kind that would otherwise
+/// // derive the opposite anchor.
+/// let overlap_from_the_left = SyncBlocker {
+///     rel: RelPath::parse_wire("shared").expect("rel"),
+///     kind: SyncBlockerKind::OverlapDetected,
+///     side: Some(Side::Left),
+/// };
+/// assert_eq!(blocker_anchor(&overlap_from_the_left), RelAnchor::Source);
+/// ```
+#[must_use]
+pub fn blocker_anchor(blocker: &SyncBlocker) -> RelAnchor {
+    match blocker.side {
+        Some(Side::Right) => RelAnchor::Dest,
+        Some(Side::Left) => RelAnchor::Source,
+        // `Side::Unknown` is the decoder's `#[serde(other)]` fallback, which
+        // the core never emits — treated the same as absent, since neither
+        // root is provably named.
+        Some(Side::Unknown) | None => match blocker.kind {
+            SyncBlockerKind::AmbiguousDest
+            | SyncBlockerKind::DestReadOnly
+            | SyncBlockerKind::DirTooLarge => RelAnchor::Dest,
+            _ => RelAnchor::Either,
+        },
     }
 }
 
@@ -2441,9 +2496,7 @@ pub fn status_line(view: &SyncView, lang: Lang) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norte_proto::methods::{
-        CompareConfidence, CompareCriterion, PlanHash, Side, SyncBlocker, SyncBlockerKind,
-    };
+    use norte_proto::methods::{CompareConfidence, CompareCriterion};
 
     fn rel(wire: &str) -> RelPath {
         RelPath::parse_wire(wire).expect("rel")
@@ -2932,6 +2985,56 @@ mod tests {
 
         let copy = step(3, SyncStepKind::Copy, DestTrash::Restorable);
         assert_eq!(anchor_of(&copy), RelAnchor::Source);
+    }
+
+    /// A blocker's anchor: `side` wins when present, and the three
+    /// destination-named kinds still answer `Dest` without one. `Either`
+    /// covers what neither the wire nor the kind can tell apart — a solaced
+    /// overlap with no `side`, and a decoder-unknown kind (#189).
+    #[test]
+    fn a_blocker_s_anchor_prefers_side_then_the_kind() {
+        let blocker = |kind: SyncBlockerKind, side: Option<Side>| SyncBlocker {
+            rel: rel("sub"),
+            kind,
+            side,
+        };
+        // The three kinds that name the destination by definition, with no
+        // `side` on the wire.
+        for kind in [
+            SyncBlockerKind::AmbiguousDest,
+            SyncBlockerKind::DestReadOnly,
+            SyncBlockerKind::DirTooLarge,
+        ] {
+            assert_eq!(
+                blocker_anchor(&blocker(kind, None)),
+                RelAnchor::Dest,
+                "{kind:?}"
+            );
+        }
+        // An overlap names neither root alone.
+        assert_eq!(
+            blocker_anchor(&blocker(SyncBlockerKind::OverlapDetected, None)),
+            RelAnchor::Either
+        );
+        // `TypeMismatchDir` always carries `side` on a conforming daemon, and
+        // the wire wins over the kind's usual "destination" pull the moment
+        // it says the SOURCE had the directory.
+        assert_eq!(
+            blocker_anchor(&blocker(SyncBlockerKind::TypeMismatchDir, Some(Side::Left))),
+            RelAnchor::Source
+        );
+        assert_eq!(
+            blocker_anchor(&blocker(
+                SyncBlockerKind::TypeMismatchDir,
+                Some(Side::Right)
+            )),
+            RelAnchor::Dest
+        );
+        // A newer daemon's kind, with no side either: nothing to derive from.
+        assert_eq!(
+            blocker_anchor(&blocker(SyncBlockerKind::Unknown, None)),
+            RelAnchor::Either
+        );
     }
 
     /// A subtree the walk could not read is a `Skip`, not a blocker, so a plan
