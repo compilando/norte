@@ -23,6 +23,7 @@ the close, not one per task.** No security reviewer: nothing here mutates.
 | #191 | norte-gui | `on_apply_started` reassigns `task_id`, orphaning the plan task's cancel handle |
 | #194 | norte-gui | step element ids come from a daemon-supplied `SyncStep::id` with no uniqueness check |
 | #197 | norte-gui | the anchor qualifier and the hostile prefix are appended in band in the aural surface |
+| #144 | norte-tui, norte-gui | an opener runs without the pane's directory as cwd — **decided**, see below |
 
 **#159 is an investigation, not a fix.** Cause unidentified; suspects are on the
 issue. Timebox it and reproduce with the tmux harness
@@ -47,10 +48,21 @@ scheduler, so it goes to **W4**, which already owns the rule-3 work — and it
 matters there: a sync that is actively rewriting a subtree is invisible unless
 the pane that launched it stays open.
 
-**#144 is a deferred DECISION, not a defect.** The openers path passes `None`
-where the shell commands pass the pane's directory, and it was left that way on
-purpose: an opener that writes a relative path would start writing it somewhere
-else. Needs a call before it needs code. Held out of the wave until it has one.
+**#144 was a deferred DECISION, and it now has an answer.** The openers path
+passed `None` where the shell commands pass the pane's directory, left that way
+on purpose because an opener that writes a relative path would start writing it
+somewhere else.
+
+**Decided 2026-08-14 (Oscar): pass the pane's directory.** The reasoning is that
+an editor opened on a file in the pane should save and navigate where the reader
+is looking — the behaviour anyone arriving from mc or Far expects — and the
+relative-path risk is the smaller of the two surprises. So `run_suspended`'s
+`cwd` gets the pane's directory on the openers path too, matching the three
+shell commands.
+
+Do it LAST in this wave: it touches `norte-tui` and `norte-gui` at once, which
+is exactly the pair the two agents own while they run. One commit, and say in
+its message that the behaviour change was decided rather than discovered.
 
 **#180 and #187 are the same story** — what a `Ctrl+C` during `norte sync`
 leaves behind — and want one design: the spool file and the report are two
