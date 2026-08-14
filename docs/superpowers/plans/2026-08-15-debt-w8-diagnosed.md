@@ -64,3 +64,26 @@ schema regenerated in the same commit.
 - #156: `rust-reviewer` on the concurrency, and the determinism test is the
   thing to point it at.
 - #149: `encoding-auditor` is not needed; `rust-reviewer` is.
+
+
+## Cómo acabó
+
+Cinco entraron, cuatro se arreglaron y una estaba hecha.
+
+| # | resultado |
+| --- | --- |
+| #210 | la ventana pegajosa en los otros dos paneles, `list_offset` borrado, y la barra de estado deja de comerse su contador |
+| #182 | el rechazo viaja con taxonomía (`LimitExceeded` + token nuevo); `norte-mcp` borra sus dos constantes copiadas. Proto **0.44.0** |
+| #209 | las exclusiones llegan al walk de comparación y a `sync.plan`; ADR 0052 pierde una viñeta de «lo que no cubre» |
+| #156 | **ya estaba hecho** (`1cc094b`): verificado y cerrado |
+| #149 | avisa y deja seguir, con las tres silencios que lo hacen honesto |
+
+**La regla que se ha ganado el sitio**: *leer el código antes de planificar un
+issue viejo*. Dos olas seguidas han metido en la lista algo que ya estaba
+construido (#179 en W7, #156 aquí), y las dos veces se descubrió al abrir el
+fichero, no al leer el issue. Cuesta un `grep`; ahorra media tarea.
+
+**Lo que no se pudo verificar en vivo**: el aviso de #149 contra un disco de
+verdad lleno. Hace falta un destino más pequeño que el origen, y esta máquina
+no puede ofrecerlo sin root. Lo cubren los tests de unidad y el del modal
+pintado, y el commit lo dice en vez de fingirlo.

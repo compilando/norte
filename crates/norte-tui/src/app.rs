@@ -828,7 +828,9 @@ pub struct SpaceCheck {
     /// El directorio DESTINO, que es de quien se pregunta el espacio.
     pub to: VPath,
     /// Bytes que la transferencia va a escribir. Solo se construye cuando se
-    /// conocen TODOS: ver [`App::transfer_total`].
+    /// conocen TODOS — un directorio no trae tamaño en el listado, y sumar
+    /// solo lo conocido avisaría con un número menor que el real (lo calcula
+    /// `App::transfer_total`, privado).
     pub total: u64,
 }
 
