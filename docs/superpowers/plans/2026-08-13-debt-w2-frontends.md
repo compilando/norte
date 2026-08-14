@@ -14,13 +14,11 @@ the close, not one per task.** No security reviewer: nothing here mutates.
 | issue | crate(s) | what |
 | --- | --- | --- |
 | #183 | norte-tui, norte-gui | a comparison that fails before publishing its snapshot is painted `Done` by both frontends |
-| #173 | norte-tui, norte-core | an applying sync is invisible to the task board, because `TaskRef` is not `Clone` |
 | #157 | norte-tui | the diff pane shows the size of the pairs and not of the orphans |
 | #184 | norte-gui | the help overlay dispatches command ids the GUI's own `COMMANDS` table never declared |
 | #147 | norte-gui | the unbind and the paste fixes stopped at the TUI |
 | #180 | norte-cli | `Ctrl+C` during `norte sync`'s planning phase orphans a `.part` spool file forever |
 | #187 | norte-cli | a cancelled `norte sync` prints "destination clean" and never reaches its report |
-| #144 | norte-tui, norte-gui | an opener runs without the pane's directory as cwd |
 | #159 | norte-tui | under tmux no MODIFIED function key arrives: `Shift+F2`, `Shift+F6`, `Alt+F7` dead while `F5` works |
 | #191 | norte-gui | `on_apply_started` reassigns `task_id`, orphaning the plan task's cancel handle |
 | #194 | norte-gui | step element ids come from a daemon-supplied `SyncStep::id` with no uniqueness check |
@@ -35,6 +33,24 @@ do not sink the wave into it.
 **#183 and #147 both span two frontends.** Fix the shared decision in
 `norte-frontend` and let both call it. The C1/C2 reviews caught exactly this
 twice: a fix applied to the GUI copy while the TUI kept the defect.
+
+## Two issues left this wave after reading their bodies
+
+Same correction W1 needed, for the same reason: titles do not carry cost.
+
+**#173 is a scheduler change, and its own issue says so** — "it is not a
+two-line fix". `TaskRef` is deliberately not `Clone`, because a cancellation
+handle with two owners is a handle two places think they own. Closing it means
+either making the task board a subscriber (a `TaskId` plus a channel) or adding
+a cheap cloneable observer and handing the board THAT. Either way it touches the
+scheduler, so it goes to **W4**, which already owns the rule-3 work — and it
+matters there: a sync that is actively rewriting a subtree is invisible unless
+the pane that launched it stays open.
+
+**#144 is a deferred DECISION, not a defect.** The openers path passes `None`
+where the shell commands pass the pane's directory, and it was left that way on
+purpose: an opener that writes a relative path would start writing it somewhere
+else. Needs a call before it needs code. Held out of the wave until it has one.
 
 **#180 and #187 are the same story** — what a `Ctrl+C` during `norte sync`
 leaves behind — and want one design: the spool file and the report are two

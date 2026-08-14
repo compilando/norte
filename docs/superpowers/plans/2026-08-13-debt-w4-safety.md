@@ -37,6 +37,7 @@ same operation, both halves of "what does a `DeleteTree` actually promise".
 | #168 | norte-vfs-sftp, norte-vfs-object | the provider contract never runs with the logical trash enabled |
 | #26 | norte-vfs-local | cross-device trash on freedesktop is an uncancellable copy+delete (hard rule 3) |
 | #190 | norte-gui, norte-core | `compare`/`sync_plan`/`sync_apply` register a canceller with NO clean-cancellation test (hard rule 3) |
+| #173 | norte-core, norte-tui | an applying sync is invisible to the task board: `TaskRef` is not `Clone`, so the board would take the only cancel handle |
 | #196 | norte-frontend | a plan's steps are held unbounded in client memory |
 
 ## The wire — ONE bump for both
