@@ -993,6 +993,31 @@ pub struct App {
     /// una `Entry` que `extend_listing` pueda tragar. Ocupa el sitio de los
     /// dos panes mientras está abierto, que es lo que un diff es.
     pub compare: Option<CompareView>,
+    /// Tamaños hidratados bajo demanda para el panel de diferencias, por
+    /// `VPath` (#157).
+    ///
+    /// Solo la fila SELECCIONADA se sondea, nunca una ventana: a diferencia
+    /// del pane normal (radio de filas, #52), `list_offset` ya mete la fila
+    /// seleccionada dentro del área pintada en cuanto el panel de
+    /// diferencias es lo que se está pintando, así que "en pantalla" es casi
+    /// una tautología aquí — sondear solo esa fila cubre exactamente el caso
+    /// que el issue señala: un huérfano `OnlyLeft`/`OnlyRight` sin tamaño es
+    /// la fila que más lo pide, porque es la que decide si se copia.
+    ///
+    /// Vive en la TUI y no en `ComparePane` (`norte-frontend`) A PROPÓSITO:
+    /// es una caché de PRESENTACIÓN, nunca viaja por el wire y ningún otro
+    /// frontend la necesita, y `ComparePane` no tiene hoy ninguna vía de
+    /// mutar una fila ya llegada — sus filas no cambian nunca tras `extend`
+    /// (ver su rustdoc: "Rows only ever grow"). Guardarlo aquí y pintarlo
+    /// como una superposición en `ui::draw_compare` evita necesitar esa vía.
+    pub compare_size_hints: std::collections::HashMap<VPath, u64>,
+    /// Paths YA sondeados para [`Self::compare_size_hints`], acierto o
+    /// fallo, para no reintentar un stat que falló en cada frame — mismo
+    /// criterio que `last_probed` para el pane normal. Se vacía cuando
+    /// `launch_compare` abre una comparación nueva, nunca durante una: las
+    /// filas de una comparación en curso no cambian bajo los pies (ver la
+    /// nota de [`Self::compare_size_hints`]).
+    pub compare_size_probed: std::collections::HashSet<VPath>,
     /// Params de `fs.compare` que el despacho resolvió y el run loop aún no
     /// ha lanzado (`Shift+F2`). Mismo reparto que [`Self::pending_open`] y
     /// [`Self::pending_shell`]: `dispatch` decide QUÉ, el run loop —dueño del
@@ -1943,6 +1968,8 @@ impl App {
             nav_popup: None,
             search_dialog: None,
             compare: None,
+            compare_size_hints: std::collections::HashMap::new(),
+            compare_size_probed: std::collections::HashSet::new(),
             pending_compare: None,
             sync: None,
             pending_sync: None,
@@ -2610,6 +2637,48 @@ impl App {
             );
         }
         out
+    }
+
+    /// Paths de la fila SELECCIONADA del panel de diferencias que valen la
+    /// pena sondear con un `stat` (#157): un lado con entrada, de tipo
+    /// `File` (los directorios y los enlaces no tienen un tamaño que un
+    /// `stat` corriente resuelva — mismo criterio que
+    /// [`Self::focused_needs_stat`]), sin `size` ya, y que
+    /// [`Self::compare_size_probed`] no haya pedido todavía.
+    ///
+    /// `None` cuando no hay panel abierto o su fila seleccionada no tiene
+    /// nada que hidratar — que es el caso normal en cuanto la sonda ya
+    /// contestó, así que el run loop no vuelve a pedir lo mismo cada frame.
+    #[must_use]
+    pub fn compare_size_probe_targets(&self) -> Vec<VPath> {
+        let Some(view) = &self.compare else {
+            return Vec::new();
+        };
+        let Some(row) = view.pane.selected_row() else {
+            return Vec::new();
+        };
+        [row.left.as_ref(), row.right.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter(|e| {
+                e.kind == EntryKind::File
+                    && e.size.is_none()
+                    && !self.compare_size_probed.contains(&e.path)
+            })
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
+    /// Mete el resultado de la sonda #157 en la caché de presentación
+    /// ([`Self::compare_size_hints`]) y lo marca sondeado
+    /// ([`Self::compare_size_probed`]) pase lo que pase — un `stat` que
+    /// falló tampoco se reintenta hasta la próxima comparación, mismo
+    /// criterio que el pane normal con `last_probed`.
+    pub fn hydrate_compare_size(&mut self, path: VPath, size: Option<u64>) {
+        self.compare_size_probed.insert(path.clone());
+        if let Some(size) = size {
+            self.compare_size_hints.insert(path, size);
+        }
     }
 
     /// El pane con foco, mutable.
@@ -5222,6 +5291,100 @@ mod tests {
         dir_lazy.size = None;
         app.panes[0] = Pane::new(root(), vec![dir_lazy]);
         assert!(app.focused_needs_stat().is_none(), "un Dir no se sondea");
+    }
+
+    /// Fila de comparación de un lado (huérfano) con la clase y el tamaño
+    /// pedidos, para las pruebas de `compare_size_probe_targets` (#157).
+    fn fila_huerfana(
+        id: u64,
+        kind: EntryKind,
+        size: Option<u64>,
+    ) -> norte_proto::methods::CompareRow {
+        use norte_proto::methods::{CompareConfidence, CompareCriterion, CompareVerdict};
+        norte_proto::methods::CompareRow {
+            id,
+            left: Some(Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: root()
+                    .join(norte_proto::Segment::new(format!("f{id}").into_bytes()).unwrap()),
+                kind,
+                size,
+                mtime_ms: None,
+            }),
+            right: None,
+            verdict: CompareVerdict::OnlyLeft,
+            criterion: CompareCriterion::Presence,
+            confidence: CompareConfidence::Certain,
+            newer: None,
+            reason: None,
+            side: None,
+        }
+    }
+
+    /// #157: un huérfano `File` sin `size` es candidato a la sonda de la fila
+    /// seleccionada, y deja de serlo en cuanto `hydrate_compare_size` lo
+    /// resuelve — con éxito o sin él, para no reintentarlo cada frame.
+    #[test]
+    fn compare_size_probe_targets_solo_file_sin_size_y_no_repite() {
+        let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
+        let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
+        let fila = fila_huerfana(1, EntryKind::File, None);
+        let path = fila.left.as_ref().unwrap().path.clone();
+        view.pane.extend(vec![fila]);
+        app.compare = Some(view);
+
+        assert_eq!(
+            app.compare_size_probe_targets(),
+            vec![path.clone()],
+            "huérfano File sin size es candidato"
+        );
+
+        // Sondeado con ÉXITO: ya no es candidato, y el hint queda puesto.
+        app.hydrate_compare_size(path.clone(), Some(42));
+        assert!(
+            app.compare_size_probe_targets().is_empty(),
+            "ya hidratado, no se repite"
+        );
+        assert_eq!(app.compare_size_hints.get(&path), Some(&42));
+    }
+
+    /// Un `stat` que falla (`None`) también se marca sondeado: no se
+    /// reintenta cada frame contra un provider roto, mismo criterio que
+    /// `last_probed` en el pane normal.
+    #[test]
+    fn compare_size_probe_targets_no_reintenta_un_stat_fallido() {
+        let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
+        let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
+        let fila = fila_huerfana(1, EntryKind::File, None);
+        let path = fila.left.as_ref().unwrap().path.clone();
+        view.pane.extend(vec![fila]);
+        app.compare = Some(view);
+
+        app.hydrate_compare_size(path, None);
+        assert!(
+            app.compare_size_probe_targets().is_empty(),
+            "un fallo también se marca sondeado"
+        );
+        assert!(app.compare_size_hints.is_empty(), "sin hint sobre un fallo");
+    }
+
+    /// Un directorio o un huérfano que YA trae `size` no son candidatos —
+    /// mismo criterio que `focused_needs_stat` para el pane normal: un `Dir`
+    /// no tiene un tamaño que un `stat` corriente resuelva.
+    #[test]
+    fn compare_size_probe_targets_ignora_dir_y_lo_ya_hidratado() {
+        let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
+        let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
+        view.pane.extend(vec![
+            fila_huerfana(1, EntryKind::Dir, None),
+            fila_huerfana(2, EntryKind::File, Some(7)),
+        ]);
+        app.compare = Some(view);
+
+        assert!(
+            app.compare_size_probe_targets().is_empty(),
+            "un Dir sin size y un File que ya lo trae no son candidatos"
+        );
     }
 
     fn vp(wire: &str) -> VPath {

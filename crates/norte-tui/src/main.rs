@@ -300,6 +300,45 @@ fn spawn_stat_probe(backend: &Backend, paths: Vec<(usize, VPath)>) -> StatProbe 
     StatProbe { rx }
 }
 
+/// Sonda de stat de la fila seleccionada del panel de diferencias (#157).
+/// Molde de [`StatProbe`], reducido a lo que ese caso necesita: como mucho
+/// dos paths (los dos lados de una fila), así que no hace falta
+/// `STAT_BATCH_CONCURRENCY` ni un tope de tanda — la propia selección ya
+/// acota cuántos hay que pedir.
+struct CompareStatProbe {
+    rx: tokio::sync::oneshot::Receiver<Vec<(VPath, Option<Entry>)>>,
+}
+
+/// Lanza la sonda #157: un `stat` por path, con el mismo timeout que la del
+/// pane normal para no dejarla en vuelo para siempre contra un provider
+/// colgado. Un fallo (error o timeout) viaja como `(path, None)` en vez de
+/// perderse — a diferencia de [`spawn_stat_probe`], aquí SÍ hace falta saber
+/// qué se pidió y no llegó: es lo que `App::hydrate_compare_size` usa para
+/// marcarlo sondeado y no reintentarlo cada frame.
+fn spawn_compare_stat_probe(backend: &Backend, paths: Vec<VPath>) -> CompareStatProbe {
+    use futures::StreamExt as _;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let b = backend.clone();
+    tokio::spawn(async move {
+        let resultado: Vec<(VPath, Option<Entry>)> = futures::stream::iter(paths)
+            .map(|path| {
+                let b = b.clone();
+                async move {
+                    let entry = tokio::time::timeout(STAT_PROBE_TIMEOUT, b.stat(&path))
+                        .await
+                        .ok()
+                        .and_then(Result::ok);
+                    (path, entry)
+                }
+            })
+            .buffer_unordered(STAT_BATCH_CONCURRENCY)
+            .collect()
+            .await;
+        let _ = tx.send(resultado);
+    });
+    CompareStatProbe { rx }
+}
+
 /// Fetch de decoraciones de plugin EN VUELO (G3b, ADR 0037): el pane/dir
 /// destino y el canal one-shot. Molde de [`StatProbe`] — UNO POR PANE
 /// (#117-follow-up review MINOR-2: con un slot global, un cd en el pane B
@@ -2383,6 +2422,12 @@ async fn run(
     // selección).
     let mut stat_probe: Option<StatProbe> = None;
     let mut last_probed: Probed = Probed::new();
+    // Sonda de stat de la fila SELECCIONADA del panel de diferencias (#157):
+    // mismo molde que `stat_probe`, a lo sumo una en vuelo. El dedup vive en
+    // `App::compare_size_probed` y no en una variable local del run loop
+    // (a diferencia de `last_probed`) porque `App::compare_size_probe_targets`
+    // ya lo consulta para decidir qué falta por pedir.
+    let mut compare_stat_probe: Option<CompareStatProbe> = None;
     // Fetch de decoraciones de plugin en vuelo (G3b, ADR 0037): a lo sumo
     // uno, molde de `stat_probe`/`fill`.
     let mut decorate_fetch: [Option<DecorateFetch>; 2] = [None, None];
@@ -2565,6 +2610,13 @@ async fn run(
                 stat_probe = Some(spawn_stat_probe(backend, tanda));
             }
         }
+        // #157: la fila seleccionada del panel de diferencias, mismo trato.
+        if compare_stat_probe.is_none() {
+            let objetivos = app.compare_size_probe_targets();
+            if !objetivos.is_empty() {
+                compare_stat_probe = Some(spawn_compare_stat_probe(backend, objetivos));
+            }
+        }
         tokio::select! {
             _ = tick.tick() => {
                 // Mutación terminada → refresh de panes; el ritual completo
@@ -2671,6 +2723,23 @@ async fn run(
                 stat_probe = None;
                 for (pane, path, entry) in res.unwrap_or_default() {
                     app.panes[pane].hydrate(&path, entry.size, entry.mtime_ms);
+                }
+            }
+            res = async {
+                match &mut compare_stat_probe {
+                    Some(pr) => (&mut pr.rx).await.ok(),
+                    None => std::future::pending().await,
+                }
+            } => {
+                // Sonda de la fila seleccionada del panel de diferencias
+                // (#157): el slot se limpia SIEMPRE, igual que la de arriba.
+                // Un canal cerrado (`res` es `None`) no marca nada sondeado:
+                // la próxima vez que la selección lo vuelva a pedir se
+                // reintenta, en vez de dejar la fila huérfana para siempre
+                // porque la task que la pedía murió a medio camino.
+                compare_stat_probe = None;
+                for (path, entry) in res.unwrap_or_default() {
+                    app.hydrate_compare_size(path, entry.and_then(|e| e.size));
                 }
             }
             (slot, res) = async {
@@ -8683,6 +8752,11 @@ async fn launch_compare(
                 left_encoding,
                 right_encoding,
             ));
+            // #157: la caché de tamaños hidratados y su dedup son de ESTA
+            // comparación — una nueva empieza sin nada pedido, igual que
+            // `last_probed` se vacía con cada listado nuevo.
+            app.compare_size_hints.clear();
+            app.compare_size_probed.clear();
             if let Some(old) = compare_run.replace(CompareRun {
                 task,
                 rx,
