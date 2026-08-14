@@ -187,6 +187,13 @@ pub async fn run_compare(
     let mut last_flush = Instant::now();
 
     let sides = probed_sides(left.as_ref(), &left_root, right.as_ref(), &right_root).await;
+    // Lo que este ACTOR no puede recorrer (#209): el gate de lectura del
+    // daemon mira las dos RAÍCES, así que comparar `$HOME` contra otra cosa es
+    // legítimo y arrastraba el directorio de estado del daemon con ello —
+    // `journal.db`, los spools de sync y, con el rung de hash encendido, un
+    // oráculo de igualdad sobre sus bytes. Es la mitad que #165 dejó abierta,
+    // y sale del MISMO sitio que las exclusiones del walk de `fs.search`.
+    let excluded = crate::policy::walk_exclusions(&ctx.actor);
     let mut stream = norte_compare::compare(
         left.as_ref(),
         &left_root,
@@ -194,6 +201,7 @@ pub async fn run_compare(
         &right_root,
         opts,
         sides,
+        excluded,
         ctx.cancel.clone(),
     );
 

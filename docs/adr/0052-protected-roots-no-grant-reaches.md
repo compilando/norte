@@ -112,12 +112,12 @@ the protected subtree along with it.
   That is #164's family (`RESOLVE_BENEATH`), not something a registry of paths
   can decide, and it is stated in the rustdoc rather than left to be
   discovered.
-- **`fs.compare` still descends into it.** The comparison engine's options are
-  a `Copy` struct and its walk takes no exclusion list, so a compare over
-  `$HOME` still emits rows naming the state directory's contents (names,
-  sizes, verdicts — and, with the hash rung, an equality oracle over their
-  bytes). That is a separate change to `norte-compare`'s walk signature and is
-  filed as #209 rather than smuggled into this one.
+- ~~**`fs.compare` still descends into it.**~~ Closed by #209: `compare()`
+  takes an exclusion list and drops excluded entries from the LISTING, before
+  pairing — so a protected subtree produces no row, no descent and no `stat`.
+  Filtering at the listing and not at the descent is the point: a row saying
+  "only on the left: journal.db" already tells what the gate meant to keep
+  quiet. `sync.plan` reads two trees the same way and got the same exclusions.
 - A process with no `HOME` and no passwd entry resolves a relative state
   directory, which cannot be named as a `VPath`, so it gets no protection.
   `daemon_state_root()` returns `None` there and says so.

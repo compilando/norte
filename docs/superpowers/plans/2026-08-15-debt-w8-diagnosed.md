@@ -9,7 +9,7 @@ the fix looks like. Two needed a decision first and now have one.
 | #210 | norte-tui, norte-frontend | the compare and sync panes still pin the cursor to the last row | — |
 | #182 | norte-proto, norte-core, norte-mcp | a daemon refusal reads as "internal error" because the message dies in `to_taxonomy` | a REAL taxonomy in `data` |
 | #209 | norte-compare, norte-core | `fs.compare` still descends into the protected state directory | — |
-| #156 | norte-compare | on-demand hydration is SERIAL: 2N chained round trips on a network mount | — |
+| ~~#156~~ | norte-compare | ~~on-demand hydration is SERIAL~~ — **ya estaba hecho** (`1cc094b`), verificado y cerrado | — |
 | #149 | norte-core, norte-tui, norte-gui | a copy never asks whether the destination has room | WARN, never refuse |
 
 Order is that table: cheapest first, and #149 last because it is the only one
@@ -39,7 +39,7 @@ walks from a legitimate root and still descends into it. `CompareOptions` is
 `Copy`, so the exclusions ride with `Sides` — the thing the core already
 computes and hands the engine (ADR 0051, #153's precedent).
 
-**#156 — 2N chained round trips.** `Walk::visit` holds both listings before it
+**#156 — ya estaba hecho.** `1cc094b` lo construyó y nadie cerró el issue: `HYDRATE_CONCURRENCY = 12`, la pasada previa sobre las parejas del directorio, y el `id` asignado en orden de CLAVE con un test que fuerza los `stat` a terminar al revés. Segunda vez en dos olas que un issue sobrevive a su arreglo (#179 fue la otra) — **leer el código antes de planificar un issue viejo** es la regla que ya estaba escrita y que hay que aplicar ANTES, no al empezar la tarea. El texto original decía: `Walk::visit` holds both listings before it
 emits a row, so the set of file pairs that will need hydrating is known up
 front: one bounded `buffer_unordered` pass instead of one `stat` at a time.
 `file://` is not "local disk" — it is whatever the OS mounted, SMB and NFS
