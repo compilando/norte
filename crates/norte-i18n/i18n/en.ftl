@@ -836,6 +836,10 @@ sync-dest-spelling = destination: { $path }
 # A step's path hangs off the destination root, not the source one.
 sync-anchor-dest = (destination)
 sync-anchor-either = (which side is not recorded)
+# A whole-tree blocker (a read-only destination) names the ROOT, which
+# `rel_display` alone paints as an empty string — this is what a pane says
+# there instead, so it does not read as an empty row (#193).
+sync-rel-root = the whole tree
 compare-marked = { $n } marked
 msg-sync-needs-daemon = synchronising needs the daemon (--daemon): it has to be journalled
 status-no-journal = NOT journalled: this session cannot be undone

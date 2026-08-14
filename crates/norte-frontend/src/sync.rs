@@ -760,9 +760,12 @@ pub fn blocker_anchor(blocker: &SyncBlocker) -> RelAnchor {
 /// flag that says the two differ (rule 1, spec §6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelDisplay {
-    /// Display form: lossy, and safe to paint. EMPTY for the root, which is
-    /// what a whole-tree blocker such as [`SyncBlockerKind::DestReadOnly`]
-    /// carries — a pane says "the whole tree" there rather than nothing.
+    /// Display form: lossy, and safe to paint. NEVER empty for the root
+    /// —which is what a whole-tree blocker such as
+    /// [`SyncBlockerKind::DestReadOnly`] carries— when built through
+    /// [`rel_display_or_root`]: a pane says "the whole tree" there rather
+    /// than nothing. [`rel_display`] itself has no [`Lang`] to say it in and
+    /// stays empty; it is the wrapper's job (#193).
     pub text: String,
     /// The path's ORIGINAL bytes, `/`-joined. A theme matches an extension
     /// against these, never against [`RelDisplay::text`].
@@ -797,6 +800,52 @@ pub fn rel_display(rel: &RelPath, reinterpret: Option<norte_encoding::NameEncodi
         raw.extend_from_slice(bytes);
     }
     RelDisplay { text, raw, hostile }
+}
+
+/// The same as [`rel_display`], except the root reads as the localized
+/// "whole tree" sentence instead of an empty string — the contract
+/// [`RelDisplay::text`] documents and no painter honoured (#193).
+///
+/// Lives here, once, and not per painter: a root [`RelDisplay`] is not a
+/// [`SyncBlocker`] concept, it is a [`RelPath::is_root`] one, so whichever
+/// surface eventually paints a whole-tree blocker gets the same sentence
+/// without writing it again. An EMPTY string painted in a pane reads as
+/// "there is no row here", the opposite of what the wire is saying — a
+/// [`SyncBlockerKind::DestReadOnly`] names the destination root precisely
+/// because there IS something to say about every path under it.
+///
+/// [`RelDisplay::raw`] and [`RelDisplay::hostile`] are untouched: the root has
+/// no bytes to badge, so `raw` stays empty and `hostile` stays `false` — the
+/// sentence is this module's words, not a reading of the name.
+///
+/// ```
+/// use norte_frontend::sync::rel_display_or_root;
+/// use norte_i18n::Lang;
+/// use norte_proto::methods::RelPath;
+/// let whole = rel_display_or_root(&RelPath::parse_wire("").expect("rel"), None, Lang::En);
+/// assert!(!whole.text.is_empty());
+/// assert!(whole.raw.is_empty(), "no hay bytes que decir");
+/// assert!(!whole.hostile, "la raíz no es un nombre hostil");
+///
+/// // Cualquier otra ruta se comporta exactamente como `rel_display`.
+/// let named = rel_display_or_root(&RelPath::parse_wire("a.txt").expect("rel"), None, Lang::En);
+/// assert_eq!(named.text, "a.txt");
+/// ```
+#[must_use]
+pub fn rel_display_or_root(
+    rel: &RelPath,
+    reinterpret: Option<norte_encoding::NameEncoding>,
+    lang: Lang,
+) -> RelDisplay {
+    let display = rel_display(rel, reinterpret);
+    if rel.is_root() {
+        RelDisplay {
+            text: t_in(lang, "sync-rel-root"),
+            ..display
+        }
+    } else {
+        display
+    }
 }
 
 /// Las reinterpretaciones de nombres (#57) de los dos lados de una
@@ -3076,6 +3125,33 @@ mod tests {
         assert!(d.hostile, "un salto de línea en un nombre se marca");
         assert!(!d.text.contains('\n'), "el byte crudo no llega a pintarse");
         assert_eq!(d.raw, b"sub/a\nb\xff.txt", "los bytes viajan intactos");
+    }
+
+    /// La raíz (#193): `rel_display` sola la pinta vacía, y eso es justo lo
+    /// que un panel de sincronización NO puede decir de un bloqueo de todo el
+    /// árbol —un destino de solo lectura no tiene «ningún nombre», tiene
+    /// TODOS—. `rel_display_or_root` es el contrato que documenta
+    /// `RelDisplay::text`.
+    #[test]
+    fn la_raiz_dice_todo_el_arbol_y_no_nada() {
+        let root = RelPath::parse_wire("").expect("rel");
+        assert!(root.is_root());
+
+        let bare = rel_display(&root, None);
+        assert!(
+            bare.text.is_empty(),
+            "el contrato es de la envoltura, no de esta función"
+        );
+
+        let whole = rel_display_or_root(&root, None, Lang::En);
+        assert!(!whole.text.is_empty());
+        assert_ne!(whole.text, bare.text);
+        assert!(whole.raw.is_empty(), "la raíz no tiene bytes que decir");
+        assert!(!whole.hostile, "la frase no es una lectura del nombre");
+
+        // Una ruta normal se comporta exactamente como `rel_display`.
+        let named = rel_display_or_root(&rel("a.txt"), None, Lang::En);
+        assert_eq!(named, rel_display(&rel("a.txt"), None));
     }
 
     /// A pair the two sides spell differently shows BOTH names: the write

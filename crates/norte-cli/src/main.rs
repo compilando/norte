@@ -2734,7 +2734,13 @@ fn report_blockers(done: &norte_proto::methods::SyncPlanDone) -> ExitCode {
     let enc = norte_frontend::sync::SyncEncodings::default();
     for blocker in &done.blockers {
         let anchor = norte_frontend::sync::blocker_anchor(blocker);
-        let rel = norte_frontend::sync::rel_display(&blocker.rel, enc.for_anchor(anchor));
+        // Y no `rel_display` a secas: un bloqueo que no es de un sitio
+        // concreto —un destino de solo lectura— trae la RAÍZ (`rel` vacío),
+        // y `rel_display` sola pinta eso como nada. `rel_display_or_root` es
+        // el contrato que `RelDisplay::text` documenta y que ningún painter
+        // cumplía (#193): «todo el árbol», no una línea en blanco.
+        let rel =
+            norte_frontend::sync::rel_display_or_root(&blocker.rel, enc.for_anchor(anchor), lang);
         eprintln!(
             "  {}",
             norte_i18n::ta("cli-sync-blocker", &[("rel", &rel_marcado(&rel))])
@@ -3565,6 +3571,25 @@ mod tests {
             assert!(why_line.contains("dest read only"), "{lang:?}: {why_line}");
             assert!(!why_line.contains("sub/a.txt"), "{lang:?}: {why_line}");
         }
+    }
+
+    /// Un bloqueo de todo el árbol (`DestReadOnly`, cuyo `rel` es la raíz) no
+    /// se pinta como una ruta vacía (#193): `report_blockers` usa
+    /// `rel_display_or_root`, no `rel_display` a secas, precisamente para
+    /// esto.
+    #[test]
+    fn un_bloqueo_de_todo_el_arbol_no_imprime_una_ruta_vacia() {
+        let root = norte_proto::methods::RelPath::parse_wire("").expect("rel");
+        assert!(root.is_root());
+        let blocker = norte_proto::methods::SyncBlocker {
+            rel: root.clone(),
+            kind: norte_proto::methods::SyncBlockerKind::DestReadOnly,
+            side: None,
+        };
+        let anchor = norte_frontend::sync::blocker_anchor(&blocker);
+        let rel = norte_frontend::sync::rel_display_or_root(&root, None, norte_i18n::Lang::En);
+        assert!(!rel.text.is_empty(), "la raíz no se pinta como nada");
+        assert_eq!(anchor, norte_frontend::sync::RelAnchor::Dest);
     }
 
     /// `report_blockers` no panica para ninguna combinación de clase y lado,

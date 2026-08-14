@@ -850,6 +850,10 @@ sync-dest-spelling = destino: { $path }
 # La ruta del paso cuelga de la raíz del destino, no de la del origen.
 sync-anchor-dest = (destino)
 sync-anchor-either = (no consta de qué lado)
+# Un bloqueo de todo el árbol (un destino de solo lectura) nombra la RAÍZ, que
+# `rel_display` sola pinta como una cadena vacía — esto es lo que un panel
+# dice ahí en su lugar, para que no se lea como una fila en blanco (#193).
+sync-rel-root = todo el árbol
 compare-marked = { $n } marcadas
 msg-sync-needs-daemon = sincronizar necesita el daemon (--daemon): tiene que quedar en el journal
 status-no-journal = SIN journal: esta sesión no se puede deshacer
