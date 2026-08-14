@@ -791,10 +791,10 @@ sync-summary-blocked = { $n } bloqueos impiden este plan — en cualquier punto 
 # Una pregunta por pronóstico, diciendo lo MISMO que dijo el resumen: un
 # titular que dice «parte se puede deshacer» encima de una confirmación que
 # dice «no se puede deshacer nada» enseña a saltarse las dos.
-sync-confirm-delete = se van a borrar { $n } árboles del destino. Van a la papelera y se pueden restaurar. ¿Seguir?
-sync-confirm-delete-final = se van a borrar { $n } árboles del destino y NO se van a poder restaurar. ¿Seguir?
-sync-confirm-delete-partial = se van a borrar { $n } árboles del destino, y { $steps } pasos de este plan no se van a poder deshacer. ¿Seguir?
-sync-confirm-delete-unclear = se van a borrar { $n } árboles del destino, y esta versión no puede decir si se podrían restaurar. ¿Seguir?
+sync-confirm-delete = se van a borrar { $n } árboles del destino. Van a la papelera y se pueden restaurar. Un árbol se vuelve a comprobar en el directorio, no por dentro: algo añadido más abajo desde que aprobaste no detendrá el borrado. ¿Seguir?
+sync-confirm-delete-final = se van a borrar { $n } árboles del destino y NO se van a poder restaurar. Un árbol se vuelve a comprobar en el directorio, no por dentro: algo añadido más abajo desde que aprobaste no detendrá el borrado. ¿Seguir?
+sync-confirm-delete-partial = se van a borrar { $n } árboles del destino, y { $steps } pasos de este plan no se van a poder deshacer. Un árbol se vuelve a comprobar en el directorio, no por dentro: algo añadido más abajo desde que aprobaste no detendrá el borrado. ¿Seguir?
+sync-confirm-delete-unclear = se van a borrar { $n } árboles del destino, y esta versión no puede decir si se podrían restaurar. Un árbol se vuelve a comprobar en el directorio, no por dentro: algo añadido más abajo desde que aprobaste no detendrá el borrado. ¿Seguir?
 sync-confirm-no-way-back = { $n } pasos van a cambiar el destino y ninguno se va a poder deshacer. ¿Seguir?
 sync-confirm-partial = { $n } pasos de este plan no se van a poder deshacer. ¿Seguir?
 sync-confirm-unclear = esta versión no puede decir si estos { $n } cambios se van a poder deshacer. ¿Seguir?

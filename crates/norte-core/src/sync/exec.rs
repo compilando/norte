@@ -476,8 +476,19 @@ async fn stat(
 /// revalida limpio y se borra entero. Es el paso con más radio de acción de toda
 /// la función y su comprobación es la más floja; cerrarlo pediría un re-listado
 /// o un recuento en el testigo, que es un listado por paso destructivo.
-/// Archivado como **#176**: un riesgo conocido que solo vive en un comentario
-/// no lo ve nadie que tenga que decidir sobre él.
+/// **#176 decidió lo que se podía decidir aquí y no más.** La frase de
+/// aprobación lo dice ahora en las CUATRO variantes de borrado: un árbol se
+/// vuelve a comprobar en el directorio, no por dentro. Un riesgo conocido que
+/// solo vive en un rustdoc no lo ve quien tiene que decidir sobre él, y quien
+/// decide está mirando ese diálogo.
+///
+/// Contar las entradas del primer nivel —la opción barata que el issue
+/// proponía— NO entra aquí: el testigo lo pone el transductor de
+/// `norte-sync::plan`, que es puro y no tiene provider, y el recorrido de
+/// comparación no desciende en un huérfano del destino a propósito (es lo que
+/// hace que un subárbol sea UNA entrada de journal y no cuarenta mil). Un
+/// recuento pediría darle provider a esa capa, que es un cambio de diseño y no
+/// un arreglo de deuda. Queda en #176 con ese motivo escrito.
 ///
 /// Y con un testigo sin tamaño ni fecha esto se queda en «sigue
 /// existiendo y sigue siendo de la misma clase». Es menos de lo que la spec

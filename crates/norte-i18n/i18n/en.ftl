@@ -778,10 +778,10 @@ sync-summary-blocked = { $n } blockers stop this plan — anywhere in the two tr
 # One question per outlook, saying exactly what the summary said: a headline
 # that reads "some of this can be undone" over a confirmation that reads "none
 # of it can" teaches the reader to skip both.
-sync-confirm-delete = { $n } trees will be deleted from the destination. They go to the trash and can be restored. Continue?
-sync-confirm-delete-final = { $n } trees will be deleted from the destination and CANNOT be restored afterwards. Continue?
-sync-confirm-delete-partial = { $n } trees will be deleted from the destination, and { $steps } steps of this plan cannot be undone afterwards. Continue?
-sync-confirm-delete-unclear = { $n } trees will be deleted from the destination, and this version cannot tell whether they could be restored. Continue?
+sync-confirm-delete = { $n } trees will be deleted from the destination. They go to the trash and can be restored. A tree is re-checked at the directory itself, not inside it: something added deeper since you approved will not stop the deletion. Continue?
+sync-confirm-delete-final = { $n } trees will be deleted from the destination and CANNOT be restored afterwards. A tree is re-checked at the directory itself, not inside it: something added deeper since you approved will not stop the deletion. Continue?
+sync-confirm-delete-partial = { $n } trees will be deleted from the destination, and { $steps } steps of this plan cannot be undone afterwards. A tree is re-checked at the directory itself, not inside it: something added deeper since you approved will not stop the deletion. Continue?
+sync-confirm-delete-unclear = { $n } trees will be deleted from the destination, and this version cannot tell whether they could be restored. A tree is re-checked at the directory itself, not inside it: something added deeper since you approved will not stop the deletion. Continue?
 sync-confirm-no-way-back = { $n } steps will change the destination and none of them can be undone afterwards. Continue?
 sync-confirm-partial = { $n } steps of this plan cannot be undone afterwards. Continue?
 sync-confirm-unclear = this version cannot tell whether these { $n } changes can be undone afterwards. Continue?
