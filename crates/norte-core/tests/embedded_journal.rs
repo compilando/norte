@@ -375,6 +375,13 @@ impl JournalWarningSink for Estados {
             .expect("lock de estados")
             .push(JournalStatus::Recovered);
     }
+
+    fn on_journal_squatted(&self) {
+        self.0
+            .lock()
+            .expect("lock de estados")
+            .push(JournalStatus::Squatted);
+    }
 }
 
 impl Estados {
@@ -435,6 +442,108 @@ async fn un_ocupante_de_paso_no_condena_la_sesion() {
             JournalStatus::Recovered
         ],
         "el indicador permanente del frontend tiene que poder apagarse"
+    );
+}
+
+/// Un probe de presencia de daemon que contesta lo que el test le diga (#203).
+struct DaemonDice(bool);
+
+impl norte_core::embedded::DaemonPresence for DaemonDice {
+    fn any_daemon_listening(&self) -> bool {
+        self.0
+    }
+}
+
+/// **#203.** Un `Busy` que lleva minutos Y sin daemon escuchando deja de
+/// parecerse al caso benigno.
+///
+/// Es la mitad que el aviso genérico no podía dar: `Busy` sale igual cuando hay
+/// un daemon vivo —lo normal— que cuando alguien retiene `journal.db` con un
+/// `begin exclusive`, y un aviso que sale siempre no lo mira nadie.
+///
+/// El plazo se inyecta a cero, así que aquí sube en el PRIMER intento; en
+/// producción son cinco minutos y los primeros avisos son los de siempre. Lo
+/// que este test fija es el veredicto, no el reloj — el reloj lo fija su
+/// gemelo de abajo, y ninguno de los dos duerme.
+#[tokio::test]
+async fn un_busy_persistente_sin_daemon_se_dice_distinto() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+        .await
+        .expect("el primero se lo lleva");
+
+    let estados = Arc::new(Estados::default());
+    let lazy = Arc::new(
+        LazyJournal::with_retry_brake(dir.path(), std::time::Duration::ZERO)
+            .with_daemon_presence(Arc::new(DaemonDice(false)))
+            .with_suspicion_delay(std::time::Duration::ZERO),
+    );
+    lazy.set_warning_sink(Arc::clone(&estados) as Arc<dyn JournalWarningSink>);
+
+    assert!(lazy.resolve().await.is_err());
+    assert_eq!(
+        estados.vistos(),
+        vec![JournalStatus::Squatted],
+        "sin daemon y con el plazo cumplido, la frase es la fuerte"
+    );
+
+    // Y no se repite: un indicador que parpadea es un indicador que se ignora.
+    assert!(lazy.resolve().await.is_err());
+    assert!(lazy.resolve().await.is_err());
+    assert_eq!(estados.vistos().len(), 1);
+}
+
+/// Y ANTES del plazo no sube, por muchos intentos que se hagan: el plazo es lo
+/// que separa «un daemon tardando en arrancar» de «alguien retiene tu
+/// journal».
+///
+/// Medido en veredictos y no en reloj — el plazo se pone a una hora, así que
+/// ningún intento de este test puede cumplirlo por lento que vaya la máquina.
+#[tokio::test]
+async fn antes_del_plazo_el_aviso_sigue_siendo_el_de_siempre() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+        .await
+        .expect("el primero se lo lleva");
+
+    let estados = Arc::new(Estados::default());
+    let lazy = Arc::new(
+        LazyJournal::with_retry_brake(dir.path(), std::time::Duration::ZERO)
+            .with_daemon_presence(Arc::new(DaemonDice(false)))
+            .with_suspicion_delay(std::time::Duration::from_hours(1)),
+    );
+    lazy.set_warning_sink(Arc::clone(&estados) as Arc<dyn JournalWarningSink>);
+
+    for _ in 0..3 {
+        assert!(lazy.resolve().await.is_err());
+    }
+    assert_eq!(estados.vistos(), vec![JournalStatus::Lost(NoJournal::Busy)]);
+}
+
+/// Con un daemon escuchando NO sube, por mucho que dure: ése es el caso
+/// benigno, y confundirlo es exactamente el ruido que #203 viene a quitar.
+#[tokio::test]
+async fn un_busy_con_daemon_vivo_se_queda_en_el_aviso_de_siempre() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+        .await
+        .expect("el primero se lo lleva");
+
+    let estados = Arc::new(Estados::default());
+    let lazy = Arc::new(
+        LazyJournal::with_retry_brake(dir.path(), std::time::Duration::ZERO)
+            .with_daemon_presence(Arc::new(DaemonDice(true)))
+            .with_suspicion_delay(std::time::Duration::ZERO),
+    );
+    lazy.set_warning_sink(Arc::clone(&estados) as Arc<dyn JournalWarningSink>);
+
+    for _ in 0..3 {
+        assert!(lazy.resolve().await.is_err());
+    }
+    assert_eq!(
+        estados.vistos(),
+        vec![JournalStatus::Lost(NoJournal::Busy)],
+        "hay un daemon: es el caso corriente y se dice una vez"
     );
 }
 

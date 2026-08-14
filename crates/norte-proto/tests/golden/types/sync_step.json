@@ -79,6 +79,15 @@
     "reason": "ambiguous_source",
     "rel": "LEEME%FF.txt"
   },
+  "skip_non_injective_pairing": {
+    "confidence": "certain",
+    "criterion": "size",
+    "dest_rel": "K.txt",
+    "id": 12,
+    "kind": "skip",
+    "reason": "non_injective_pairing",
+    "rel": "K.txt"
+  },
   "skip_unknown_confidence": {
     "confidence": "unknown",
     "criterion": "mtime",

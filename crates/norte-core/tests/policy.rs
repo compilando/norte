@@ -195,14 +195,75 @@ async fn undo_of_agent_is_blocked_when_reverse_op_denied_by_policy() {
     let (uh, report) = engine.undo_session(agent()).await.expect("undo submit");
     assert_eq!(uh.join().await, TaskState::Completed);
     let r = report.lock().expect("lock").clone();
-    assert_eq!(r.undone, 0, "el undo (delete) lo bloquea la policy");
+    assert_eq!(r.undone, 0, "el undo (delete) lo deniega la policy");
+    // #171: una denegación de policy es una FILA del informe, no un `blocked`.
+    // `blocked` sigue significando «paré por drift y el árbol quedó
+    // consistente»; esto significa «esta unidad no se tocó, y seguí».
+    assert!(r.blocked.is_none(), "no es un bloqueo: {:?}", r.blocked);
+    assert_eq!(r.denied_total, 1);
     assert!(
-        matches!(&r.blocked, Some((_, Error::PolicyDenied { rule })) if rule == "policy-rule"),
-        "bloqueado por policy: {:?}",
-        r.blocked
+        matches!(r.denied.first(), Some((_, Error::PolicyDenied { rule })) if rule == "policy-rule"),
+        "denegado por policy: {:?}",
+        r.denied
     );
     // No pisó: dst sigue existiendo (el undo no llegó a borrarlo).
     assert!(mem.stat(&vp("mem:///dst.txt")).await.is_ok());
+}
+
+/// **#171: una unidad denegada no se lleva por delante a las demás.**
+///
+/// El undo va en LIFO, así que aquí la denegada es la PRIMERA que se procesa:
+/// si parase ahí —que es lo que hacía antes— el `move` de debajo nunca
+/// volvería. Es la misma regla que el ejecutor hacia delante: `Deny` es una
+/// fila de informe y el trabajo sigue.
+#[tokio::test]
+async fn una_unidad_denegada_no_para_el_undo_de_las_demas() {
+    // `move` permitido, `delete` denegado: el undo de un `Created` es un
+    // delete (denegado) y el de un `Moved` es un rename_back (permitido).
+    let cfg = PolicyConfig::parse(
+        "[[rule]]\nop=\"copy\"\naction=\"allow\"\n[[rule]]\nop=\"move\"\naction=\"allow\"\n[[rule]]\nop=\"delete\"\naction=\"deny\"",
+    )
+    .expect("cfg");
+    let (engine, mem, _j) = engine_with_policy(cfg, full_scope(), Arc::new(DenyAll)).await;
+    write_file(&mem, "mem:///origen.txt", b"x").await;
+    write_file(&mem, "mem:///otro.txt", b"y").await;
+
+    // 1) Un move: su undo es un rename_back, PERMITIDO.
+    let h = engine
+        .move_with_as(
+            &vp("mem:///otro.txt"),
+            &vp("mem:///movido.txt"),
+            norte_core::TransferOptions::default(),
+            agent(),
+        )
+        .await
+        .expect("move");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    // 2) Una copia: su undo es un delete, DENEGADO. Va después, así que el
+    //    LIFO la procesa PRIMERO.
+    let h = engine
+        .copy_with_as(
+            &vp("mem:///origen.txt"),
+            &vp("mem:///copia.txt"),
+            norte_core::TransferOptions::default(),
+            agent(),
+        )
+        .await
+        .expect("copy");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let (uh, report) = engine.undo_session(agent()).await.expect("undo submit");
+    assert_eq!(uh.join().await, TaskState::Completed);
+    let r = report.lock().expect("lock").clone();
+
+    assert_eq!(r.denied_total, 1, "la copia: su delete está denegado");
+    assert!(r.blocked.is_none());
+    assert!(r.undone >= 1, "y el move de debajo SÍ volvió: {r:?}");
+    // El árbol lo confirma: la copia sigue puesta y el move volvió a su sitio.
+    assert!(mem.stat(&vp("mem:///copia.txt")).await.is_ok());
+    assert!(mem.stat(&vp("mem:///otro.txt")).await.is_ok());
+    assert!(mem.stat(&vp("mem:///movido.txt")).await.is_err());
 }
 
 /// El ejemplo commiteado de policy (`docs/policy-example.toml`) parsea SIEMPRE

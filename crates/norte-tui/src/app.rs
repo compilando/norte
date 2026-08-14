@@ -807,6 +807,18 @@ fn caps_key(at: &VPath) -> CapsKey {
 /// retained listings and its approvals cap.
 const DEGRADED_MAX: usize = 32;
 
+/// Lo que la barra dice del journal de ESTA sesión.
+///
+/// Un enum y no un `Option<NoJournal>` más un bool: son estados excluyentes de
+/// una misma cosa —qué frase toca— y dos campos podrían contradecirse.
+#[derive(Debug, Clone)]
+enum JournalIndicator {
+    /// No se está registrando, por este motivo (#177/#178).
+    NotRecorded(norte_core::embedded::NoJournal),
+    /// Y además lleva minutos así sin daemon que lo explique (#203).
+    Squatted,
+}
+
 /// Estado completo del TUI: dos panes y el foco.
 pub struct App {
     /// Los dos paneles (izquierda, derecha).
@@ -980,7 +992,7 @@ pub struct App {
     ///
     /// Privado: se lee por [`Self::journal_banner`] y se escribe por
     /// [`Self::note_no_journal`].
-    no_journal: Option<norte_core::embedded::NoJournal>,
+    no_journal: Option<JournalIndicator>,
     /// Historial de directorios por pane (spec 2026-07-18, `Alt+↓`): mismo
     /// índice que `panes`. Vive en `App` y no en `Pane` (el historial no es
     /// estado de render): cada cd EXITOSO empuja el dir anterior (main.rs).
@@ -2594,7 +2606,18 @@ impl App {
     /// Idempotente: el core avisa una vez por EPISODIO, y si alguna vez avisara
     /// dos, la segunda solo reescribe el mismo hecho.
     pub fn note_no_journal(&mut self, why: norte_core::embedded::NoJournal) {
-        self.no_journal = Some(why);
+        self.no_journal = Some(JournalIndicator::NotRecorded(why));
+    }
+
+    /// El journal lleva minutos ocupado y NO hay daemon escuchando (#203).
+    ///
+    /// Es el MISMO hecho que un `Busy` —la sesión muta sin registro— con una
+    /// explicación distinta, así que enciende el indicador de siempre y además
+    /// marca que ya no hay una razón inocente a mano. La barra lo dice con otra
+    /// frase: la suave sale también cuando no pasa nada, y es la que el lector
+    /// ya aprendió a no mirar.
+    pub fn note_journal_squatted(&mut self) {
+        self.no_journal = Some(JournalIndicator::Squatted);
     }
 
     /// Y que volvió a registrarlas (#179): la ventana de propiedad se reabrió.
@@ -2629,11 +2652,16 @@ impl App {
     #[must_use]
     pub fn journal_banner(&self) -> Option<String> {
         use norte_core::embedded::NoJournal as N;
-        self.no_journal.as_ref().map(|why| match why {
-            N::Failed(_) => t("status-journal-refused"),
+        self.no_journal.as_ref().map(|estado| match estado {
+            // #203: el mismo hecho que un `Busy` con otra explicación. La
+            // frase suave sale también cuando hay un daemon vivo —el caso
+            // corriente— así que sobre un ocupante sin explicar dice
+            // demasiado poco.
+            JournalIndicator::Squatted => t("status-journal-squatted"),
+            JournalIndicator::NotRecorded(N::Failed(_)) => t("status-journal-refused"),
             // `Busy` y cualquier motivo futuro: el mensaje conservador es el
             // que no promete que la mutación se haya parado.
-            _ => t("status-no-journal"),
+            JournalIndicator::NotRecorded(_) => t("status-no-journal"),
         })
     }
 
@@ -5889,6 +5917,32 @@ mod tests {
     /// siguiente tecla. Llega UNA vez, en mitad de una operación que el usuario
     /// acaba de lanzar, y `app.message` lo borra la pulsación siguiente — que
     /// es como decir que no se avisó.
+    /// #203: el ocupante SIN daemon que lo explique se dice con otra frase.
+    ///
+    /// El hecho es el mismo que un `Busy` —la sesión muta sin quedar
+    /// registrada— y por eso el indicador sigue encendido; lo que cambia es que
+    /// la frase suave sale también cuando hay un daemon vivo, o sea casi
+    /// siempre, y es la que el lector ya aprendió a no mirar.
+    #[test]
+    fn el_ocupante_sin_daemon_tiene_su_propia_frase() {
+        let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
+        app.note_no_journal(norte_core::embedded::NoJournal::Busy);
+        let suave = app.journal_banner().expect("indicador encendido");
+
+        app.note_journal_squatted();
+        let fuerte = app.journal_banner().expect("sigue encendido");
+        assert_ne!(suave, fuerte, "dos hechos distintos, dos frases");
+
+        // Y se apaga igual: una recuperación borra los dos.
+        app.note_journal_recovered();
+        assert!(app.journal_banner().is_none());
+
+        // Un `Busy` posterior vuelve a la frase suave y no se queda con la
+        // fuerte pegada.
+        app.note_no_journal(norte_core::embedded::NoJournal::Busy);
+        assert_eq!(app.journal_banner().as_deref(), Some(suave.as_str()));
+    }
+
     #[test]
     fn la_sesion_sin_journal_tiene_indicador_persistente() {
         let mut app = app_dos_panes();

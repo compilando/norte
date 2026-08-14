@@ -33,6 +33,14 @@ use crate::progress::ProgressReporter;
 use crate::rename::exec::{BatchJournal, BatchReport, PlannedStep};
 use crate::rename::plan::{NameCaps, name_key};
 
+/// Tope de unidades denegadas que el informe LISTA (#171). Las demás solo
+/// cuentan.
+///
+/// El mismo número y el mismo motivo que los topes de `sync`: una lista sin
+/// tope viaja por el wire y se queda en memoria del cliente, y con una policy
+/// que deniegue por defecto son tantas filas como unidades tenga la sesión.
+pub use norte_proto::methods::UNDO_MAX_DENIED_REPORTED;
+
 /// Resultado de un [`crate::Engine::undo_session`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UndoReport {
@@ -52,7 +60,21 @@ pub struct UndoReport {
     pub skipped_created_no_trash: u64,
     /// Primer paso bloqueado (drift/conflicto): `seq` original + motivo. La
     /// sesión para ahí (estricto).
+    ///
+    /// **No es lo mismo que [`Self::denied`]**, y confundirlos sería leer el
+    /// informe al revés: esto dice «paré aquí y el árbol quedó consistente»;
+    /// aquello dice «esta unidad no se tocó y el undo siguió con las demás».
     pub blocked: Option<(i64, Error)>,
+    /// Unidades que la POLICY denegó, con el `seq` de su primera entrada y el
+    /// motivo (#171). El undo NO para: bloquea esa unidad y sigue.
+    ///
+    /// Acotada a [`UNDO_MAX_DENIED_REPORTED`]; [`Self::denied_total`] las
+    /// cuenta todas. Un undo de medio millón de entradas bajo una policy que
+    /// deniega por defecto llenaría la memoria del cliente con la lista, que
+    /// es el mismo fallo que #196 en el otro extremo.
+    pub denied: Vec<(i64, Error)>,
+    /// Cuántas unidades denegó la policy en total, recortadas o no.
+    pub denied_total: u64,
     /// **Deshacer un lote se quedó a medias.** El ejecutor no pudo devolver
     /// algún paso de undo que ya había aplicado, así que el directorio NO
     /// volvió a como estaba: aquí está el paso concreto, con nombres.

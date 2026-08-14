@@ -2319,6 +2319,14 @@ fn handle_policy_undo_report(
             .as_ref()
             .map(crate::rename::stuck_to_proto),
         compensations_lost: snapshot.compensations_lost,
+        // #171: lo que la policy denegó unidad a unidad. Va aparte de
+        // `blocked` porque dice lo contrario que él — el undo NO paró.
+        denied: snapshot
+            .denied
+            .into_iter()
+            .map(|(seq, error)| methods::UndoBlocked { seq, error })
+            .collect(),
+        denied_total: snapshot.denied_total,
     })
 }
 

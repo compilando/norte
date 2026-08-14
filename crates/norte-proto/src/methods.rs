@@ -583,7 +583,7 @@ use crate::{
 /// La inversa —un daemon 0.41 mandando un informe SIN `dest_trash` a un cliente
 /// 0.42, que fallaría al deserializar— no ocurre: [`version_compatible`] no
 /// negocia un cliente con minor MAYOR que el servidor.
-pub const PROTOCOL_VERSION: &str = "0.42.0";
+pub const PROTOCOL_VERSION: &str = "0.43.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -3707,6 +3707,34 @@ pub enum SyncReason {
     /// del destino, igual para todos los pasos— y donde un diálogo la puede
     /// leer una vez.
     NoTrashOnTarget,
+    /// **Los dos lados emparejaron por una transformación que puede juntar
+    /// ficheros DISTINTOS**, así que el plan no actúa sobre esa pareja
+    /// (0.43.0, #207).
+    ///
+    /// El caso que lo motiva es
+    /// [`PairTransform::NormalizationSingleton`]: `K.txt` con U+212A KELVIN
+    /// SIGN contra `K.txt` con la `K` ASCII. Unicode los declara canónicamente
+    /// equivalentes, ext4 los guarda como dos ficheros, y un `Overwrite` sobre
+    /// esa pareja escribe los bytes de uno encima del otro — que es la pérdida
+    /// de datos que #152 describió.
+    ///
+    /// El criterio es [`PairTransform::names_one_text`] y no la variante
+    /// concreta: se salta TODA transformación de la que este binario no pueda
+    /// afirmar que nombra un solo texto, incluida una que nombre un daemon más
+    /// nuevo. Las corrientes —[`PairTransform::CaseFold`] y
+    /// [`PairTransform::Normalization`]— siguen actuando: son las parejas para
+    /// las que la clave de emparejamiento existe, y negarlas rompería el caso
+    /// macOS↔Linux que sirve.
+    ///
+    /// Es un `Skip` y NO un bloqueo a propósito: el plan sigue siendo
+    /// aprobable y el resto del árbol se sincroniza. Un bloqueo dejaría sin
+    /// sincronizar el árbol entero por una pareja rara, y la fila peligrosa se
+    /// ve igual en el plan antes de aprobar nada.
+    ///
+    /// Un cliente N-1 lo decodifica como [`SyncReason::Unknown`] y pinta «un
+    /// motivo que esta versión no sabe nombrar»: no actúa de menos ni de más,
+    /// porque el paso ya es un `Skip` en el wire.
+    NonInjectivePairing,
     /// Motivo que este decodificador no conoce (`#[serde(other)]`). El core
     /// jamás lo emite.
     #[doc(hidden)]
@@ -5192,7 +5220,37 @@ pub struct PolicyUndoReportResult {
     /// encontrará y se bloqueará ahí. Es la única señal de eso.
     #[serde(default)]
     pub compensations_lost: u64,
+    /// **Unidades que la POLICY denegó y el undo saltó** (0.43.0, #171).
+    ///
+    /// No es [`Self::blocked`], y leerlas como lo mismo sería leer el informe
+    /// al revés: `blocked` dice «paré aquí, el árbol quedó consistente», y
+    /// esto dice «esta unidad no se tocó y el undo siguió con las demás». Cada
+    /// fila lleva el `seq` de la primera entrada de su unidad y el motivo, con
+    /// la misma forma que un bloqueo porque la pregunta del lector es la misma:
+    /// qué no volvió y por qué.
+    ///
+    /// El undo pregunta a la policy unidad a unidad y DENTRO de la Task
+    /// (antes lo hacía todo por adelantado, en el hilo de quien llamaba), así
+    /// que un scope que vence a mitad lo ve la unidad que le toca. Es la misma
+    /// regla que el ejecutor hacia delante: `Deny` es una fila de informe, no
+    /// un modal por paso.
+    ///
+    /// Recortada a [`UNDO_MAX_DENIED_REPORTED`];
+    /// [`Self::denied_total`] las cuenta todas.
+    #[serde(default)]
+    pub denied: Vec<UndoBlocked>,
+    /// Cuántas unidades denegó la policy, recortadas o no (0.43.0, #171).
+    #[serde(default)]
+    pub denied_total: u64,
 }
+
+/// Tope de filas de [`PolicyUndoReportResult::denied`] que el informe LISTA
+/// (0.43.0, #171); `denied_total` las cuenta todas.
+///
+/// Mismo criterio que los topes de `sync`: una lista sin tope viaja por el
+/// wire y se queda en memoria del cliente, y bajo una policy que deniegue por
+/// defecto habría una fila por unidad de la sesión.
+pub const UNDO_MAX_DENIED_REPORTED: usize = 256;
 
 /// Un bloqueo del undo: dónde y por qué (elemento de
 /// [`PolicyUndoReportResult::blocked`]).

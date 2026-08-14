@@ -993,16 +993,21 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.42.0 (#170, #152, #195): acepta 0.42.x (N) y 0.41.x (N-1), rechaza
-    // 0.40.x (N-2) — la ventana se desplaza con el bump, no se ensancha, y que
-    // el bump sea ADITIVO no la ensancha tampoco. Aquí importa especialmente:
-    // dos de los tres campos son OBLIGATORIOS, así que un informe 0.41 —sin
-    // `dest_trash`— no deserializa contra este binario, y lo que impide que eso
-    // se intente siquiera es esta ventana, no un default.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.42.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.41.0"), "N-1");
+    // 0.43.0 (#207): acepta 0.43.x (N) y 0.42.x (N-1), rechaza 0.41.x (N-2) —
+    // la ventana se DESPLAZA con el bump y no se ensancha, y que el bump sea
+    // aditivo no la ensancha tampoco.
+    //
+    // Lo que la ventana compra aquí es distinto de lo que compraba en 0.42.0:
+    // allí dos de los tres campos eran obligatorios y un informe N-1 ni
+    // siquiera deserializaba. `SyncReason::NonInjectivePairing` sí degrada
+    // (`#[serde(other)]` → `Unknown`), así que un cliente 0.42 leería el paso
+    // sin romperse — pero leería «un motivo que no sé nombrar» sobre un `Skip`
+    // que sí sabe no ejecutar, y eso es exactamente lo que la ventana N/N-1
+    // permite que pase y N-2 no.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.43.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.42.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.40.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.41.9"),
         "N-2 fuera de la ventana"
     );
 }

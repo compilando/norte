@@ -2971,6 +2971,21 @@
           "minimum": 0,
           "type": "integer"
         },
+        "denied": {
+          "default": [],
+          "description": "**Unidades que la POLICY denegó y el undo saltó** (0.43.0, #171).\n\nNo es [`Self::blocked`], y leerlas como lo mismo sería leer el informe\nal revés: `blocked` dice «paré aquí, el árbol quedó consistente», y\nesto dice «esta unidad no se tocó y el undo siguió con las demás». Cada\nfila lleva el `seq` de la primera entrada de su unidad y el motivo, con\nla misma forma que un bloqueo porque la pregunta del lector es la misma:\nqué no volvió y por qué.\n\nEl undo pregunta a la policy unidad a unidad y DENTRO de la Task\n(antes lo hacía todo por adelantado, en el hilo de quien llamaba), así\nque un scope que vence a mitad lo ve la unidad que le toca. Es la misma\nregla que el ejecutor hacia delante: `Deny` es una fila de informe, no\nun modal por paso.\n\nRecortada a [`UNDO_MAX_DENIED_REPORTED`];\n[`Self::denied_total`] las cuenta todas.",
+          "items": {
+            "$ref": "#/$defs/UndoBlocked"
+          },
+          "type": "array"
+        },
+        "denied_total": {
+          "default": 0,
+          "description": "Cuántas unidades denegó la policy, recortadas o no (0.43.0, #171).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "skipped_created_no_trash": {
           "description": "Reversas de `Created` saltadas porque el provider no tiene papelera\n(#65): el nodo SIGUE en el destino — deshacerlo habría sido un borrado\npermanente y el undo jamás destruye de forma irrecuperable.",
           "format": "uint64",
@@ -3852,6 +3867,11 @@
         {
           "const": "no_trash_on_target",
           "description": "**El destino no tiene una papelera de la que VOLVER**, así que este paso\nno se puede deshacer. Acompaña SIEMPRE a [`StepReversal::Irreversible`].\n\nCubre los dos casos, y quien lo pinte no debe prometer que son el mismo:\n\n- el destino no tiene papelera, y lo que este paso entierra no está en\n  ningún sitio;\n- el destino SÍ tiene papelera pero no dice dónde deja las cosas\n  (`Provider::trash_restorable` en `false`: macOS y Windows). Lo\n  enterrado se saca a mano desde la papelera del sistema, pero el undo\n  de norte no puede acertar cuál era — y entonces NINGÚN paso del plan\n  es reversible, ni siquiera una copia, porque deshacer una creación\n  también pasa por la papelera (#65).\n\nEl token del wire no distingue los dos a propósito: son la misma\nconsecuencia para quien aprueba, y separarlos sería una variante nueva\n(bump de protocolo) para una frase.\n\nLa distinción sí viaja, pero del PLAN y no del paso:\n[`SyncPlanDone::dest_trash`] separa «no hay papelera»\n([`DestTrash::Absent`]) de «la hay y no dice dónde deja las cosas»\n([`DestTrash::Opaque`]), que es donde tiene sentido —es una propiedad\ndel destino, igual para todos los pasos— y donde un diálogo la puede\nleer una vez.",
+          "type": "string"
+        },
+        {
+          "const": "non_injective_pairing",
+          "description": "**Los dos lados emparejaron por una transformación que puede juntar\nficheros DISTINTOS**, así que el plan no actúa sobre esa pareja\n(0.43.0, #207).\n\nEl caso que lo motiva es\n[`PairTransform::NormalizationSingleton`]: `K.txt` con U+212A KELVIN\nSIGN contra `K.txt` con la `K` ASCII. Unicode los declara canónicamente\nequivalentes, ext4 los guarda como dos ficheros, y un `Overwrite` sobre\nesa pareja escribe los bytes de uno encima del otro — que es la pérdida\nde datos que #152 describió.\n\nEl criterio es [`PairTransform::names_one_text`] y no la variante\nconcreta: se salta TODA transformación de la que este binario no pueda\nafirmar que nombra un solo texto, incluida una que nombre un daemon más\nnuevo. Las corrientes —[`PairTransform::CaseFold`] y\n[`PairTransform::Normalization`]— siguen actuando: son las parejas para\nlas que la clave de emparejamiento existe, y negarlas rompería el caso\nmacOS↔Linux que sirve.\n\nEs un `Skip` y NO un bloqueo a propósito: el plan sigue siendo\naprobable y el resto del árbol se sincroniza. Un bloqueo dejaría sin\nsincronizar el árbol entero por una pareja rara, y la fila peligrosa se\nve igual en el plan antes de aprobar nada.\n\nUn cliente N-1 lo decodifica como [`SyncReason::Unknown`] y pinta «un\nmotivo que esta versión no sabe nombrar»: no actúa de menos ni de más,\nporque el paso ya es un `Skip` en el wire.",
           "type": "string"
         },
         {

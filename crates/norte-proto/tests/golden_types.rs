@@ -1758,6 +1758,18 @@ fn check_methods_session(fixtures: &BTreeMap<String, Value>) {
                 still_applied: 2,
             }),
             compensations_lost: 1,
+            // 0.43.0 (#171): la policy denegó una unidad y el undo SIGUIÓ. Va
+            // en la misma fixture que `blocked` a propósito: los dos pueden
+            // salir juntos y dicen cosas opuestas —«paré» frente a «me salté
+            // ésta y continué»—, así que una fixture que solo pudiera llevar
+            // uno dejaría creer que se excluyen.
+            denied: vec![UndoBlocked {
+                seq: 37,
+                error: norte_proto::Error::PolicyDenied {
+                    rule: "scope-expired".into(),
+                },
+            }],
+            denied_total: 1,
         },
     );
     // Sin bloqueo: `blocked` y `batch_stuck` se OMITEN (skip_serializing_if),
@@ -1774,6 +1786,10 @@ fn check_methods_session(fixtures: &BTreeMap<String, Value>) {
             blocked: None,
             batch_stuck: None,
             compensations_lost: 0,
+            // Vacía y en cero: como `compensations_lost`, viajan igual — un
+            // contador ausente y uno en cero no deben poder confundirse.
+            denied: Vec::new(),
+            denied_total: 0,
         },
     );
 }
@@ -2937,7 +2953,21 @@ fn method_names_frozen() {
     // `CompareRow::paired_under`. Ni método ni notificación nuevos, así que no
     // hay literal que añadir arriba; lo que cambia son las formas, y eso lo
     // pinean `methods.json` y `compare_row.json`.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.42.0");
+    //
+    // 0.43.0 (#171): `PolicyUndoReportResult` gana `denied`/`denied_total` — la
+    // policy se pregunta unidad a unidad y DENTRO de la Task, así que una
+    // denegación es una fila del informe en vez de parar el undo entero.
+    // Campos nuevos con `#[serde(default)]`, así que un cliente 0.42.x los
+    // ignora y ve el informe de siempre.
+    //
+    // 0.43.0 (#207): `SyncReason::NonInjectivePairing` — un plan ya no
+    // sobrescribe una pareja que solo se sostiene sobre una transformación que
+    // puede juntar ficheros distintos (el singleton NFC). Variante nueva de un
+    // enum que degrada con `#[serde(other)]`, así que MINOR: un cliente 0.42.x
+    // la lee como `Unknown` y pinta «un motivo que esta versión no sabe
+    // nombrar» sobre un paso que YA es un `Skip` en el wire — no actúa de
+    // menos ni de más.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.43.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,
@@ -3645,6 +3675,25 @@ fn sync_step_cases_skipped() -> Vec<(&'static str, norte_proto::methods::SyncSte
                     "secreto",
                     Crit::Presence,
                     Conf::Unknown,
+                    None,
+                )
+            },
+        ),
+        (
+            // 0.43.0 (#207): la pareja del KELVIN. LAS DOS ORTOGRAFÍAS viajan
+            // —`rel` con U+212A y `dest_rel` con la `K` ASCII— porque son el
+            // punto de la fila: quien la lea tiene que poder ver que los dos
+            // nombres NO son el mismo texto. Sin `size`, como todo `Skip`.
+            "skip_non_injective_pairing",
+            SyncStep {
+                reason: Some(Why::NonInjectivePairing),
+                dest_rel: Some(norte_proto::methods::RelPath::parse_wire("K.txt").expect("rel")),
+                ..sync_step(
+                    12,
+                    Kind::Skip,
+                    "\u{212A}.txt",
+                    Crit::Size,
+                    Conf::Certain,
                     None,
                 )
             },

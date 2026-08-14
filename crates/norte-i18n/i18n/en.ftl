@@ -737,6 +737,7 @@ sync-reason-unreadable = it could not be read, so the plan leaves it alone
 # put things" (macOS, Windows): the wire token does not separate them, so this
 # sentence must not claim either.
 sync-reason-no-trash-on-target = the destination cannot give this back: it has no trash, or one that does not say where it puts things
+sync-reason-non-injective-pairing = the two names may be different files that Unicode calls equal — the plan does not touch this pair
 sync-reason-unknown = reason this version does not know
 sync-blocker-ambiguous-dest = two names on the destination collapse into one — writing there could hit the wrong file
 sync-blocker-overlap-detected = the two roots are the same tree
@@ -856,6 +857,8 @@ sync-rel-root = the whole tree
 sync-dest-twin = (same on screen, different bytes)
 compare-marked = { $n } marked
 msg-sync-needs-daemon = synchronising needs the daemon (--daemon): it has to be journalled
+msg-journal-squatted = your journal has been held by another process for minutes and no daemon is listening: nothing is being recorded
+status-journal-squatted = ⛔ someone is holding your journal — nothing recorded
 status-no-journal = NOT journalled: this session cannot be undone
 status-journal-refused = journal UNREADABLE: this session refuses to change your files
 msg-journal-busy = this session is NOT recorded in the journal: another norte process holds it (a daemon, or another window)

@@ -311,6 +311,10 @@ impl crate::embedded::JournalWarningSink for ChannelJournalSink {
     fn on_journal_recovered(&self) {
         let _ = self.tx.send(crate::embedded::JournalStatus::Recovered);
     }
+
+    fn on_journal_squatted(&self) {
+        let _ = self.tx.send(crate::embedded::JournalStatus::Squatted);
+    }
 }
 
 /// La «conexión» del brazo EMBEBIDO, para lo que la lleva por llave: hoy solo

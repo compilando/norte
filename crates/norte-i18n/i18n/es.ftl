@@ -750,6 +750,7 @@ sync-reason-unreadable = no se pudo leer, así que el plan lo deja como está
 # (macOS, Windows)—: el token del wire no los separa, así que esta frase no
 # puede afirmar ninguno de los dos.
 sync-reason-no-trash-on-target = el destino no puede devolver esto: no tiene papelera, o tiene una que no dice dónde deja las cosas
+sync-reason-non-injective-pairing = los dos nombres pueden ser ficheros DISTINTOS que Unicode declara iguales — el plan no toca esta pareja
 sync-reason-unknown = motivo que esta versión no conoce
 sync-blocker-ambiguous-dest = dos nombres del destino colapsan en uno — escribir ahí podría dar al fichero equivocado
 sync-blocker-overlap-detected = las dos raíces son el mismo árbol
@@ -870,6 +871,8 @@ sync-rel-root = todo el árbol
 sync-dest-twin = (igual en pantalla, bytes distintos)
 compare-marked = { $n } marcadas
 msg-sync-needs-daemon = sincronizar necesita el daemon (--daemon): tiene que quedar en el journal
+msg-journal-squatted = otro proceso lleva minutos reteniendo tu journal y no hay ningún daemon escuchando: no se está registrando nada
+status-journal-squatted = ⛔ alguien retiene tu journal — sin registrar
 status-no-journal = SIN journal: esta sesión no se puede deshacer
 status-journal-refused = journal ILEGIBLE: esta sesión rehúsa tocar tus ficheros
 msg-journal-busy = esta sesión NO queda registrada en el journal: lo tiene otro proceso norte (un daemon, u otra ventana)
