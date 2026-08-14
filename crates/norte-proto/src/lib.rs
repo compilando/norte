@@ -5,6 +5,7 @@
 //! (regla dura de `CLAUDE.md`; procedimiento en la spec §11).
 #![forbid(unsafe_code)]
 
+pub mod hashing;
 pub mod wire;
 
 pub mod attrs;

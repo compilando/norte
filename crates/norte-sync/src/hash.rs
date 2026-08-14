@@ -203,7 +203,7 @@ impl PlanHasher {
         feed_opt_u64(&mut digest, max_depth.map(u64::from));
         feed_u64(&mut digest, u64::from(*mtime_tolerance_ms));
         feed_flag(&mut digest, *follow_symlinks);
-        feed_opt_name(&mut digest, descend_orphans.map(descend_side_name));
+        feed_opt_name(&mut digest, descend_orphans.map(descend_side_name).as_ref());
         Self { digest, items: 0 }
     }
 
@@ -252,8 +252,8 @@ impl PlanHasher {
         feed_opt_u64(&mut self.digest, *size);
         feed_name(&mut self.digest, &criterion_name(*criterion));
         feed_name(&mut self.digest, &confidence_name(*confidence));
-        feed_opt_name(&mut self.digest, reversal.map(reversal_name));
-        feed_opt_name(&mut self.digest, reason.map(reason_name));
+        feed_opt_name(&mut self.digest, reversal.map(reversal_name).as_ref());
+        feed_opt_name(&mut self.digest, reason.map(reason_name).as_ref());
         self.items = self.items.saturating_add(1);
     }
 
@@ -276,7 +276,7 @@ impl PlanHasher {
         self.digest.update([TAG_BLOCKER]);
         feed_name(&mut self.digest, &blocker_kind_name(*kind));
         feed_rel(&mut self.digest, rel);
-        feed_opt_name(&mut self.digest, side.map(side_name));
+        feed_opt_name(&mut self.digest, side.map(side_name).as_ref());
         self.items = self.items.saturating_add(1);
     }
 
@@ -312,21 +312,17 @@ impl PlanHasher {
 /// Alimenta un campo con su LONGITUD delante: `"ab" + "c"` y `"a" + "bc"` no
 /// pueden producir el mismo digest.
 ///
-/// # #174: copiado de `norte_core::hashing::feed`, a propósito
-/// Byte a byte el mismo framing, y tiene que seguir siéndolo. No comparten
-/// código porque `norte_core::hashing` es `pub(crate)` de un crate que
-/// DEPENDE de este (`norte-core` → `norte-sync`, no al revés), así que
-/// "extraer hacia arriba" no es un movimiento de código; y porque la copia de
-/// `norte-core` es la cadena tamper-evident del journal (ADR 0023) y el ancla
-/// de la auditoría (ADR 0025) — no se puede mover, ni relicenciar de
-/// AGPL-3.0-only a MIT/Apache-2.0, sin invalidar todo `journal.db` ya
-/// escrito. Esta copia SÍ es libre de mudarse a un sitio compartido; la otra
-/// no. Ver #151 para la misma frontera de licencia sobre la clave de
-/// plegado, que quiere resolver las dos con una sola ADR.
-fn feed(digest: &mut Sha256, bytes: &[u8]) {
-    digest.update((bytes.len() as u64).to_le_bytes());
-    digest.update(bytes);
-}
+/// # #174: ya no es una copia — es [`norte_proto::hashing::feed`]
+/// Este crate tenía la suya, byte a byte igual a la de `norte_core::hashing`,
+/// porque compartir hacia arriba no era posible (`norte-core` → `norte-sync`,
+/// no al revés) y el sitio compartido natural relicenciaba código AGPL. ADR
+/// 0051 eligió casa: `norte-proto`, que este crate ya usa y que ve todo el
+/// que habla el protocolo. La copia de `norte-core` se queda donde está —es
+/// la cadena tamper-evident del journal (ADR 0023) y el ancla de la auditoría
+/// (ADR 0025), y su framing no puede cambiar ni un byte sin invalidar todo
+/// `journal.db` escrito—, pero ya no puede derivar en silencio: un test suyo
+/// la compara con ésta.
+use norte_proto::hashing::feed;
 
 /// Un texto, por sus bytes.
 fn feed_str(digest: &mut Sha256, text: &str) {
@@ -350,24 +346,12 @@ fn feed_u64(digest: &mut Sha256, value: u64) {
 
 /// Un entero OPCIONAL, con byte de presencia.
 fn feed_opt_u64(digest: &mut Sha256, value: Option<u64>) {
-    match value {
-        None => digest.update([0u8]),
-        Some(value) => {
-            digest.update([1u8]);
-            feed_u64(digest, value);
-        }
-    }
+    norte_proto::hashing::feed_opt(digest, value.map(u64::to_le_bytes).as_ref().map(|b| &b[..]));
 }
 
 /// Un nombre de token OPCIONAL, con byte de presencia.
-fn feed_opt_name(digest: &mut Sha256, name: Option<Cow<'_, str>>) {
-    match name {
-        None => digest.update([0u8]),
-        Some(name) => {
-            digest.update([1u8]);
-            feed_name(digest, &name);
-        }
-    }
+fn feed_opt_name(digest: &mut Sha256, name: Option<&Cow<'_, str>>) {
+    norte_proto::hashing::feed_opt(digest, name.map(|n| n.as_bytes()));
 }
 
 /// Una raíz: scheme, authority (con su byte de presencia — `file://` no tiene y
@@ -380,7 +364,7 @@ fn feed_opt_name(digest: &mut Sha256, name: Option<Cow<'_, str>>) {
 /// hashear igual.
 fn feed_root(digest: &mut Sha256, root: &VPath) {
     feed_str(digest, root.scheme());
-    feed_opt_name(digest, root.authority().map(Cow::Borrowed));
+    norte_proto::hashing::feed_opt(digest, root.authority().map(str::as_bytes));
     let segments: Vec<&[u8]> = root.segments().collect();
     feed_u64(digest, segments.len() as u64);
     for segment in segments {
