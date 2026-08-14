@@ -81,3 +81,5 @@ the wire. `w4c` does not, except on #165 and #26.
 | #190 | norte-gui, norte-core | `compare`/`sync_plan`/`sync_apply` register a canceller with NO clean-cancellation test (hard rule 3) |
 | #173 | norte-core, norte-tui | an applying sync is invisible to the task board: `TaskRef` is not `Clone`, so the board would take the only cancel handle |
 | #196 | norte-frontend | a plan's steps are held unbounded in client memory |
+| #155 | norte-core | `fs.compare`/`fs.search`: a client that does not drain is evicted from the subscriber map and loses the completeness signal — a `security-reviewer` MAJOR applied half way |
+| #122 | norte-index, norte-ai | the M4-IA-2 bag, and its symlink-swap TOCTOU: a swapped indexed file gets its 32 KiB prefix sent to the embedding provider, against the module's own claim. Relative of #164. Also a vector-retention story |
