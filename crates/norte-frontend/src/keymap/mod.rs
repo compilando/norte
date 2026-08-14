@@ -2603,6 +2603,47 @@ keymap = [
         }
     }
 
+    /// **Las superficies PROPIAS de norte tienen tecla en TODOS los presets.**
+    ///
+    /// Un preset es una transcripción del gestor original, y esos gestores no
+    /// tenían pantalla de ajustes, ni gestor de extensiones, ni paleta de
+    /// comandos: no había nada que transcribir, así que cuatro de los siete
+    /// (`krusader`, `far`, `norton`, `total-commander`) salieron SIN ninguna
+    /// de las tres. El efecto para quien los usa es que la configuración de
+    /// norte no se alcanza desde el teclado — ni siquiera por la paleta, que
+    /// es la vía por la que se llega a un comando sin tecla.
+    ///
+    /// Fidelidad es transcribir lo que el original TENÍA, no callar lo que
+    /// norte tiene de más. Este test es la línea que lo impide en el siguiente
+    /// preset que entre.
+    #[test]
+    fn todo_preset_alcanza_las_superficies_propias_de_norte() {
+        // `app.help` va en la lista a propósito aunque hoy lo tengan los
+        // siete: es la que más se echa en falta cuando falta, y el test tiene
+        // que decirlo antes que el usuario.
+        const IMPRESCINDIBLES: &[&str] = &[
+            "app.help",
+            "app.settings",
+            "app.extensions",
+            "app.palette",
+        ];
+        let known = preset_commands(Screen::Browse);
+        let known: Vec<&str> = known.iter().map(String::as_str).collect();
+        for name in presets::NAMES {
+            let src = presets::source(name).expect("NAMES resuelve");
+            let kf = parse_keymap(src).expect("preset parsea");
+            let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            for cmd in IMPRESCINDIBLES {
+                assert!(
+                    eff.bindings().iter().any(|(_, c)| c == cmd),
+                    "preset {name}: `{cmd}` no tiene tecla, así que esa pantalla \
+                     no se alcanza desde el teclado"
+                );
+            }
+        }
+    }
+
     /// WHICH presets count is a decision, not an implementation detail: `vim`
     /// does because vim does, `orthodox` and `cua` do not because their
     /// originals do not and turning it on would take `1`..`9` away from them.

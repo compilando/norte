@@ -44,6 +44,15 @@ keymap = [
     { on = ["f1"], run = "app.help" },
     { on = ["f10"], run = "app.quit" },
     { on = ["ctrl+o"], run = "app.toggle-panels" },
+    # Las superficies PROPIAS de norte, que este gestor no tenía y por
+    # tanto no hay nada que transcribir: ajustes, extensiones y paleta.
+    # Sin ellas la configuración no se alcanza desde el teclado, que es
+    # lo que pasaba hasta ahora en este preset. F11/F12 están libres
+    # aquí y son lo que usan orthodox/vim/cua; para la paleta, ctrl+p
+    # (libre en Norton).
+    { on = ["f11"], run = "app.settings" },
+    { on = ["f12"], run = "app.extensions" },
+    { on = ["ctrl+p"], run = "app.palette" },
 ]
 
 [pane]

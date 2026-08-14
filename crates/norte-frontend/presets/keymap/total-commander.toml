@@ -40,6 +40,16 @@ keymap = [
     { on = ["tab"], run = "pane.switch" },
     { on = ["f1"], run = "app.help" },
     { on = ["alt+f4"], run = "app.quit" },
+    # Las superficies PROPIAS de norte, que este gestor no tenía y por
+    # tanto no hay nada que transcribir: ajustes, extensiones y paleta.
+    # Sin ellas la configuración no se alcanza desde el teclado, que es
+    # lo que pasaba hasta ahora en este preset. F11/F12 están libres
+    # aquí y son lo que usan orthodox/vim/cua; para la paleta, ctrl+P (la P mayúscula ES el shift: la gramática
+    # de acordes no combina shift con un carácter)
+    # (Ctrl+P es `pane.copy-path` en Total Commander).
+    { on = ["f11"], run = "app.settings" },
+    { on = ["f12"], run = "app.extensions" },
+    { on = ["ctrl+P"], run = "app.palette" },
 ]
 
 [pane]
