@@ -654,6 +654,36 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Cancelling a mirror halfway through a deletion erased part of a folder and
+  recorded nothing.** A mirror removes what the source does not have, and
+  against a destination with no trash — an object bucket, an SFTP, a FAT
+  stick — that removal is permanent. It walks the tree file by file and checks
+  for cancellation between each one, so pressing `Ctrl+K` (or closing the sync
+  pane, which cancels it) partway through left a subtree partly and
+  irreversibly deleted with **no journal entry, therefore no undo, and no row
+  in the report either** — nothing anywhere said it had happened. The
+  comment in the code promised the entry survived a half-finished delete; the
+  condition beneath it excluded the one case where it mattered. It now records
+  what it actually removed, and a test cancels a real mirror mid-tree to prove
+  it. **Recorded is not the same as recoverable**, and the interfaces now say
+  which one you get: against a destination with no trash the entry is marked
+  irreversible, so `undo` names the subtree it cannot give back rather than
+  pretending to restore it. What changed is that the deletion is no longer
+  invisible (#186).
+
+- **A file could be moved to the trash and then not written down.** This one
+  was hit for real, not imagined: `sync.apply` trashed a destination file and
+  the journal write that should have recorded it failed, leaving the file
+  somewhere the user did not put it and nothing to say where. norte already
+  tried to put it back; what it could not do was *tell anyone* when putting it
+  back also failed — the trash location existed only inside a log line, so
+  "where is my file?" was answerable only by whoever happened to be reading the
+  daemon's log at that moment. The failure now travels as its own kind of
+  error, carrying both the buried path and its trash destination, and the step
+  is reported as failed instead of leaving a report that reads "nothing
+  happened" — which is what you saw when the very first step was the one that
+  broke. The run stops before touching anything else (#160).
+
 - **Corrupting one file switched off the record of everything norte did, and
   norte carried on as if nothing had happened.** Without the background service
   running, every change you make is recorded in `journal.db` in the state

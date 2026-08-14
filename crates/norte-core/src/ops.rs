@@ -73,6 +73,26 @@ pub(crate) async fn with_retry<'a, T: 'a>(
     }
 }
 
+/// Qué se sabe del EFECTO de una mutación que falló.
+///
+/// Una mutación puntual que falla tras un transitorio deja el otro extremo en
+/// duda: el `remove` pudo llegar y perderse la respuesta (el timeout
+/// post-commit de un remoto, issue #17). Los `*_retrying` de aquí llevan esa
+/// duda desde siempre; lo que no hacían era CONTARLA, y quien la necesita es el
+/// llamante que decide si journalizar.
+///
+/// El árbol entero resuelve la duda hacia «lo hicimos» —así lo hacen ya los
+/// brazos `Err(NotFound) if ambiguous` de aquí abajo y la re-lista de
+/// `mkdir_retrying`— porque el error de esa elección es una fila de más, y el
+/// de la contraria es un efecto sin fila.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ambiguity {
+    /// El fallo llegó antes de que nada cambiara: el efecto NO se aplicó.
+    NotApplied,
+    /// Hubo un transitorio por medio: el efecto PUDO quedar aplicado.
+    MaybeApplied,
+}
+
 /// `remove` con reintentos y desambiguación (issue #17): tras un fallo
 /// transitorio el efecto pudo aplicarse — `NotFound` en el reintento
 /// significa "ya no está", que ES el estado que el remove perseguía (lo
@@ -83,21 +103,58 @@ pub(crate) async fn remove_retrying(
     path: &VPath,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
+    remove_retrying_amb(p, path, cancel)
+        .await
+        .map_err(|(e, _)| e)
+}
+
+/// Como [`remove_retrying`], DICIENDO si el efecto quedó en duda.
+///
+/// Lo pide el borrado de árboles de `sync::exec` (#186): un `remove` que falla
+/// tras un transitorio pudo haber llegado al bucket, y si era el primer nodo
+/// del post-orden, contarlo como «no quitado» deja el árbol dentado y sin fila
+/// de journal — que es exactamente el agujero que #186 cerró por la otra
+/// puerta.
+pub(crate) async fn remove_retrying_amb(
+    p: &dyn Provider,
+    path: &VPath,
+    cancel: &CancellationToken,
+) -> Result<(), (Error, Ambiguity)> {
     let mut attempt = 0u32;
     let mut ambiguous = false;
+    // La duda, una vez sembrada, viaja con TODA salida de error — incluida la
+    // cancelación que corta el backoff, que es la que #186 llegó a producir en
+    // vivo (el usuario ve el parón y pulsa Ctrl+K).
+    let dudoso = |ambiguous: bool| {
+        if ambiguous {
+            Ambiguity::MaybeApplied
+        } else {
+            Ambiguity::NotApplied
+        }
+    };
     loop {
         if cancel.is_cancelled() {
-            return Err(Error::Cancelled);
+            return Err((Error::Cancelled, dudoso(ambiguous)));
         }
         match p.remove(path).await {
             Ok(()) => return Ok(()),
             Err(Error::NotFound) if ambiguous => return Ok(()),
-            Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !cancel.is_cancelled() => {
+            // La duda se siembra en cuanto se VE un transitorio, no solo cuando
+            // se decide reintentar: el efecto pudo quedar aplicado en el otro
+            // extremo con independencia de lo que hagamos después, y agotar los
+            // reintentos y cancelar son precisamente las dos salidas por las que
+            // #186 se escapaba.
+            Err(e) if is_transient(&e) => {
                 ambiguous = true;
-                backoff_or_cancel(cancel, attempt).await?;
+                if attempt >= MAX_RETRIES || cancel.is_cancelled() {
+                    return Err((e, Ambiguity::MaybeApplied));
+                }
+                backoff_or_cancel(cancel, attempt)
+                    .await
+                    .map_err(|e| (e, Ambiguity::MaybeApplied))?;
                 attempt += 1;
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err((e, dudoso(ambiguous))),
         }
     }
 }
@@ -116,21 +173,51 @@ pub(crate) async fn trash_retrying(
     id: &norte_vfs::trash::TrashId,
     cancel: &CancellationToken,
 ) -> Result<Option<VPath>, Error> {
+    trash_retrying_amb(provider, path, id, cancel)
+        .await
+        .map_err(|(e, _)| e)
+}
+
+/// Como [`trash_retrying`], DICIENDO si el efecto quedó en duda. Mismo motivo
+/// que [`remove_retrying_amb`] (#186).
+pub(crate) async fn trash_retrying_amb(
+    provider: &dyn Provider,
+    path: &VPath,
+    id: &norte_vfs::trash::TrashId,
+    cancel: &CancellationToken,
+) -> Result<Option<VPath>, (Error, Ambiguity)> {
     let mut attempt = 0u32;
     let mut ambiguous = false;
+    let dudoso = |ambiguous: bool| {
+        if ambiguous {
+            Ambiguity::MaybeApplied
+        } else {
+            Ambiguity::NotApplied
+        }
+    };
     loop {
         if cancel.is_cancelled() {
-            return Err(Error::Cancelled);
+            return Err((Error::Cancelled, dudoso(ambiguous)));
         }
         match provider.trash(path, id).await {
             Ok(dest) => return Ok(dest),
             Err(Error::NotFound) if ambiguous => return Ok(None),
-            Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !cancel.is_cancelled() => {
+            // La duda se siembra en cuanto se VE un transitorio, no solo cuando
+            // se decide reintentar: el efecto pudo quedar aplicado en el otro
+            // extremo con independencia de lo que hagamos después, y agotar los
+            // reintentos y cancelar son precisamente las dos salidas por las que
+            // #186 se escapaba.
+            Err(e) if is_transient(&e) => {
                 ambiguous = true;
-                backoff_or_cancel(cancel, attempt).await?;
+                if attempt >= MAX_RETRIES || cancel.is_cancelled() {
+                    return Err((e, Ambiguity::MaybeApplied));
+                }
+                backoff_or_cancel(cancel, attempt)
+                    .await
+                    .map_err(|e| (e, Ambiguity::MaybeApplied))?;
                 attempt += 1;
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err((e, dudoso(ambiguous))),
         }
     }
 }

@@ -1486,10 +1486,17 @@ impl Engine {
                     if let Err(e) = spool_task.remove(conn_id, &hash_task).await {
                         tracing::warn!(error = %e, "sync.apply: el plan aplicado no se pudo borrar");
                     }
-                    out.unwrap_or_else(|_| {
-                        tracing::error!("sync.apply: pánico en el ejecutor");
-                        Err(Error::Internal { panic: true })
-                    })
+                    match out {
+                        Err(_) => {
+                            tracing::error!("sync.apply: pánico en el ejecutor");
+                            Err(Error::Internal { panic: true })
+                        }
+                        // `into_wire` y no un `?`: la conversión es LOSSY (el
+                        // estado de #160 no tiene categoría en la taxonomía) y
+                        // es ella la que lo deja dicho en el log antes de
+                        // perderlo.
+                        Ok(r) => r.map_err(crate::sync::exec::ApplyError::into_wire),
+                    }
                 })
             }),
         );

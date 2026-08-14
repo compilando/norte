@@ -8,6 +8,14 @@
 //! rollback**.
 //!
 //! # Media sincronización es un estado real; media permutación no
+//!
+//! Y **medio borrado también lo es**: un `DeleteTree` cortado a mitad escribe
+//! su entrada por lo que llegó a quitar (#186). La condición que se la saltaba
+//! ante `Err(Cancelled)` excluía justo el caso en que la entrada importa —
+//! `remove_tree` mira el token ENTRE entradas, así que para cuando devuelve
+//! `Cancelled` ya han caído un número arbitrario de nodos, y contra un destino
+//! sin papelera han caído para siempre.
+//!
 //! El lote de renames se desanda entero ante el primer fallo porque un
 //! directorio a medio renombrar no es ni el de antes ni el de después. Un árbol
 //! a medio sincronizar sí es algo: es el árbol de antes con cuarenta mil
@@ -47,7 +55,7 @@
 //! | `Overwrite` con papelera | `trashed` + `created` | `RestoreTrash` + `Delete` |
 //! | `Overwrite` sin papelera | `created` | `Irreversible` |
 //! | `DeleteTree` con papelera | `trashed` (UNA, por el árbol entero) | `RestoreTrash` |
-//! | `DeleteTree` sin papelera | `removed` (UNA, por el árbol entero) | `Irreversible` |
+//! | `DeleteTree` sin papelera | `removed` (UNA, por lo que se llegara a quitar) | `Irreversible` |
 //! | `Skip` | ninguna | — |
 //!
 //! **«Sin papelera» aquí es «sin reversa», y son dos cosas distintas.** Un
@@ -269,11 +277,86 @@ pub(crate) fn new_report(batch_id: i64) -> SyncReportResult {
 }
 
 /// Qué le pasó a UN paso.
+#[derive(Debug)]
 enum Applied {
     /// Se ejecutó, moviendo estos bytes.
     Wrote(u64),
     /// No tocó nada: el plan ya lo traía como [`SyncStepKind::Skip`].
     Skipped,
+}
+
+/// Lo que se enterró y NO quedó registrado, con todo lo que hace falta para
+/// encontrarlo a mano.
+///
+/// Existe porque #160 se dio EN VIVO y lo único que quedaba de él era una línea
+/// de log: `sync.apply` enterró el destino, la fila de journal no llegó, y la
+/// ruta de la papelera —el único sitio donde está el fichero ahora— vivía en un
+/// campo de `tracing` que el llamante no puede leer. La regla 6 pide un error
+/// tipado, y este es el dato que ese error tiene que llevar.
+#[derive(Debug)]
+pub(crate) struct Unrecorded {
+    /// La ruta que se enterró: lo que el usuario cree que sigue ahí.
+    pub buried: VPath,
+    /// Dónde fue a parar, si la papelera del destino NOMBRA lo que se lleva.
+    /// `None` con `DestTrash::Opaque` (macOS, Windows), y entonces no hay
+    /// adónde apuntar a nadie.
+    pub at: Option<VPath>,
+    /// El error del journal que empezó todo esto.
+    pub source: Error,
+}
+
+/// Por qué paró una aplicación de plan.
+///
+/// Dos variantes y no un [`Error`] a secas porque los dos estados en que puede
+/// quedar el árbol son distintos y el llamante tiene que poder distinguirlos:
+/// con [`Self::Stopped`] lo aplicado está journalizado y el paso que falló no
+/// dejó rastro; con [`Self::Unrecorded`] hay un fichero movido que el journal
+/// no conoce.
+#[derive(Debug)]
+pub(crate) enum ApplyError {
+    /// Lo de siempre: la cancelación, el journal, un spool que dejó de leerse.
+    /// Lo aplicado hasta aquí está registrado.
+    Stopped(Error),
+    /// Regla dura 4 rota, y no se pudo compensar (#160). Lleva la ruta
+    /// enterrada y su destino en la papelera para que quien lo reciba lo pueda
+    /// DECIR — que es lo que un `tracing::error!` no permite.
+    Unrecorded(Box<Unrecorded>),
+}
+
+impl ApplyError {
+    /// La forma que el wire entiende, DESPUÉS de dejar dicho lo que no cabe en
+    /// ella.
+    ///
+    /// El detalle de [`Self::Unrecorded`] no tiene categoría en la taxonomía
+    /// —no existe «tu fichero está en la papelera y nadie lo apuntó»— así que
+    /// se pierde en la conversión, y por eso esta función lo escribe en el log
+    /// del operador antes de perderlo. **Y por eso no hay `From`**: un `?` en
+    /// un llamador futuro convertiría en silencio y volvería a dejar el estado
+    /// sin decir, que es #160 otra vez.
+    pub(crate) fn into_wire(self) -> Error {
+        match self {
+            Self::Stopped(e) => e,
+            Self::Unrecorded(u) => {
+                // La única línea que nombra las dos rutas. `bury` ya no la
+                // escribe para este caso: dos `error!` por un mismo hecho es
+                // ruido, y el que sirve es este, que sale cuando la Task muere.
+                tracing::error!(
+                    error = %u.source,
+                    enterrado = %crate::engine::span_path(&u.buried),
+                    en = u.at.as_ref().map(crate::engine::span_path),
+                    salida = if u.at.is_some() {
+                        "sácalo a mano desde la ruta de `en`"
+                    } else {
+                        "esta papelera no dice adónde se lo llevó (macOS/Windows): búscalo en la \
+                         papelera del sistema"
+                    },
+                    "sync.apply: PARADO — el destino se enterró, su entrada de journal NO llegó \
+                     y devolverlo tampoco funcionó",
+                );
+                u.source
+            }
+        }
+    }
 }
 
 /// Por qué se paró un paso, y si eso para también la Task.
@@ -283,6 +366,16 @@ enum StepError {
     Failed(Error),
     /// Nada puede seguir: una cancelación, o el journal.
     Fatal(Error),
+    /// Nada puede seguir Y el árbol no es el que era: se enterró algo, su fila
+    /// no llegó, y devolverlo tampoco se pudo. Se separa de [`Self::Fatal`]
+    /// porque el estado es distinto —ahí el destino quedó intacto, aquí no— y
+    /// porque solo esta lleva adónde mirar.
+    ///
+    /// `Box` porque dos `VPath` y un `Error` hacen de esta variante cuatro
+    /// veces el tamaño de las otras dos, y `StepError` es el `Err` de una
+    /// función que se llama una vez por paso de un plan de medio millón: el
+    /// camino frío no le paga el tamaño al camino de siempre.
+    Unrecoverable(Box<Unrecorded>),
 }
 
 impl StepError {
@@ -549,26 +642,56 @@ async fn place(
 /// Las entradas de dentro NO se journalizan una a una: el paso es UNO —«este
 /// árbol ya no está»— y su entrada también, igual que la papelera entierra el
 /// árbol de una pieza.
-async fn remove_tree(provider: &dyn Provider, path: &VPath, ctx: &TaskCtx) -> Result<(), Error> {
+async fn remove_tree(
+    provider: &dyn Provider,
+    path: &VPath,
+    ctx: &TaskCtx,
+) -> (u64, Result<(), Error>) {
     // El `stat` no es de adorno y es el mismo que hace `ops::delete_task`: el
     // walk empieza por un `list`, y un `list` sobre un fichero es
     // `Conflict{TypeMismatch}`. Un `DeleteTree` nombra la entrada huérfana, que
     // la mayoría de las veces es un FICHERO — sin esto, `Mirror` contra un
     // destino sin papelera (un bucket, un SFTP) contestaría «conflicto» por cada
     // fichero que sobra y no borraría ninguno.
-    let entry = stat(provider, path, ctx).await?.ok_or(Error::NotFound)?;
+    // `quitados` cuenta lo que YA NO ESTÁ, y se devuelve pase lo que pase — es
+    // lo único que distingue «no se llegó a tocar el árbol» de «el árbol está a
+    // medio destruir», y de esa distinción cuelga si hay que journalizar (#186).
+    let mut quitados = 0u64;
+    let entry = match stat(provider, path, ctx).await {
+        Ok(Some(e)) => e,
+        Ok(None) => return (quitados, Err(Error::NotFound)),
+        Err(e) => return (quitados, Err(e)),
+    };
     if entry.kind == EntryKind::Dir {
         // El walk emite cada padre antes que sus hijos, así que recorrerlo al
         // revés ES el post-orden y todo directorio llega vacío a su `remove`.
-        let entries = crate::ops::walk(provider, path, &ctx.cancel).await?;
+        let entries = match crate::ops::walk(provider, path, &ctx.cancel).await {
+            Ok(e) => e,
+            Err(e) => return (quitados, Err(e)),
+        };
         for entry in entries.iter().rev() {
             if ctx.cancel.is_cancelled() {
-                return Err(Error::Cancelled);
+                return (quitados, Err(Error::Cancelled));
             }
-            crate::ops::remove_retrying(provider, &entry.path, &ctx.cancel).await?;
+            match crate::ops::remove_retrying_amb(provider, &entry.path, &ctx.cancel).await {
+                Ok(()) => quitados += 1,
+                // Un fallo TRAS un transitorio deja el nodo en duda: el
+                // `remove` pudo llegar al bucket y perderse la respuesta. Cuenta
+                // como quitado, porque el error de contarlo es una fila de más
+                // y el de no contarlo es un objeto borrado para siempre sin
+                // fila ninguna (#186, revisión de seguridad MAJOR-1).
+                Err((e, crate::ops::Ambiguity::MaybeApplied)) => {
+                    return (quitados + 1, Err(e));
+                }
+                Err((e, crate::ops::Ambiguity::NotApplied)) => return (quitados, Err(e)),
+            }
         }
     }
-    crate::ops::remove_retrying(provider, path, &ctx.cancel).await
+    match crate::ops::remove_retrying_amb(provider, path, &ctx.cancel).await {
+        Ok(()) => (quitados + 1, Ok(())),
+        Err((e, crate::ops::Ambiguity::MaybeApplied)) => (quitados + 1, Err(e)),
+        Err((e, crate::ops::Ambiguity::NotApplied)) => (quitados, Err(e)),
+    }
 }
 
 /// Un id de papelera determinista para UN paso, estable en todo reintento (#99).
@@ -621,11 +744,23 @@ async fn destroy_tree(
     to: &VPath,
     step_id: u64,
     ctx: &TaskCtx,
-) -> Result<(), Error> {
+) -> (u64, Result<(), Error>) {
     if targets.delete_mode == norte_proto::DeleteMode::Trash {
-        crate::ops::trash_retrying(targets.dest.as_ref(), to, &trash_id(step_id), &ctx.cancel)
-            .await?;
-        return Ok(());
+        // La papelera se lleva el árbol de una pieza: o cero nodos o «este
+        // árbol», que a efectos del journal es UNA entrada igual que antes.
+        return match crate::ops::trash_retrying_amb(
+            targets.dest.as_ref(),
+            to,
+            &trash_id(step_id),
+            &ctx.cancel,
+        )
+        .await
+        {
+            Ok(_) => (1, Ok(())),
+            // Igual que arriba: un `trash` en duda cuenta como llevado.
+            Err((e, crate::ops::Ambiguity::MaybeApplied)) => (1, Err(e)),
+            Err((e, crate::ops::Ambiguity::NotApplied)) => (0, Err(e)),
+        };
     }
     remove_tree(targets.dest.as_ref(), to, ctx).await
 }
@@ -651,11 +786,20 @@ async fn destroy_tree(
 /// corre [`crate::undo`] al restaurar un `Trashed` con `reversal_ref`, del
 /// que esto no es más que otro llamador.
 ///
+/// **Y cuando la compensación NO llega**, el paso sale como
+/// [`StepError::Unrecoverable`] y no como un `Fatal` cualquiera: son dos
+/// estados distintos del árbol —uno intacto, el otro con un fichero movido que
+/// el journal no conoce— y solo el segundo puede decir adónde mirar. La ruta
+/// enterrada y su destino en la papelera viajan DENTRO del error (regla 6),
+/// que es lo que #160 no tenía: vivían en campos de `tracing`, así que
+/// «¿dónde está mi fichero?» solo lo contestaba quien estuviera leyendo el log
+/// del daemon en ese instante.
+///
 /// **Lo que sigue sin compensarse** es la otra mitad del par de un `Overwrite`:
 /// un `created` que falla DESPUÉS de un `trashed` que sí quedó deja un lote
 /// cuyo undo BLOQUEA. Devolverlo pediría borrar la copia recién puesta Y
 /// desenterrar, o sea dos mutaciones más por el camino en el que el journal ya
-/// no funciona. #160 sigue abierta por esa mitad.
+/// no funciona. Eso NO se arregla aquí y tiene issue propia.
 async fn bury(
     targets: &SyncTargets,
     recorder: &dyn StepJournal,
@@ -686,14 +830,29 @@ async fn bury(
         // nadie. Se dice ADEMÁS si la compensación llegó — un `restore_from` que
         // también falla deja el fichero enterrado, y eso el operador lo necesita
         // saber en la misma línea.
-        tracing::error!(
-            error = %e,
-            enterrado = %crate::engine::span_path(to),
-            en = buried.as_ref().map(crate::engine::span_path),
-            devuelto = devuelto.is_ok(),
-            "sync.apply: se enterró el destino y su entrada de journal NO llegó",
-        );
-        return Err(StepError::Fatal(e));
+        // La diferencia que un `error!` no sabía hacer. Si la compensación
+        // llegó, el árbol es el de antes y esto es un fallo de journal como
+        // cualquier otro: se dice aquí y se acabó. Si no, el fichero está en
+        // otro sitio y nada lo registra — eso es un ESTADO, no un fallo, y sale
+        // TIPADO con la ruta enterrada y su destino dentro, para que el llamante
+        // pueda decirlo (y para que un test pueda comprobarlo, que es lo que
+        // #160 no tenía). Ese caso NO se loguea aquí: lo hace
+        // `ApplyError::into_wire`, una vez, cuando la Task muere.
+        if devuelto.is_ok() {
+            tracing::error!(
+                error = %e,
+                enterrado = %crate::engine::span_path(to),
+                en = buried.as_ref().map(crate::engine::span_path),
+                "sync.apply: se enterró el destino, su entrada de journal NO llegó, y se devolvió \
+                 a su sitio",
+            );
+            return Err(StepError::Fatal(e));
+        }
+        return Err(StepError::Unrecoverable(Box::new(Unrecorded {
+            buried: to.clone(),
+            at: buried,
+            source: e,
+        })));
     }
     Ok(())
 }
@@ -788,7 +947,16 @@ async fn overwrite(
                 // entrada o una clasificación `Irreversible` explícita; esta es
                 // las dos cosas). El informe la nombra, pero el informe es de la
                 // Task y se va con ella.
-                recorder.removed(to).await.map_err(StepError::Fatal)?;
+                //
+                // Que esa entrada falle es irreparable por lo mismo que en
+                // `delete_tree`: el borrado fue permanente. Sale tipada.
+                if let Err(e) = recorder.removed(to).await {
+                    return Err(StepError::Unrecoverable(Box::new(Unrecorded {
+                        buried: to.clone(),
+                        at: None,
+                        source: e,
+                    })));
+                }
             }
             placed
         }
@@ -814,16 +982,51 @@ async fn delete_tree(
             Ok(Applied::Wrote(0))
         }
         Some(StepReversal::Irreversible) => {
-            let removed = destroy_tree(targets, to, record.step.id, ctx).await;
+            let (quitados, removed) = destroy_tree(targets, to, record.step.id, ctx).await;
+            if quitados > 0 && removed.is_err() {
+                // Ni el journal ni el informe saben decir «a medias»: la fila
+                // dice `removed <raíz>` y el informe no llega a tener fila. La
+                // única forma que queda de distinguir «ya no está» de
+                // «abollado» es decirlo aquí.
+                tracing::warn!(
+                    quitados,
+                    path = %crate::engine::span_path(to),
+                    "sync.apply: el árbol se quedó a MEDIO borrar; su fila de journal dice la \
+                     raíz, no cuánto cayó",
+                );
+            }
             // La entrada se escribe aunque el borrado se haya quedado a medias:
             // «este árbol ya no está entero» es una mutación irreversible tanto
             // si el `remove` llegó al final como si murió en el fichero 40 000, y
             // sin ella la parte destruida se queda fuera del journal (regla dura
-            // 4). Lo único que NO la merece es un fallo antes del primer borrado,
-            // y ese es exactamente `NotFound`/`Conflict` de la revalidación, que
-            // ya salió por arriba.
-            if !matches!(removed, Err(Error::Cancelled)) {
-                recorder.removed(to).await.map_err(StepError::Fatal)?;
+            // 4).
+            //
+            // **La cancelación NO es la excepción, y creerlo era el bug (#186).**
+            // `remove_tree` mira el token ENTRE entradas, así que cuando
+            // devuelve `Cancelled` ya han caído un número arbitrario de nodos —
+            // para un `Mirror` sobre un destino sin papelera, permanentemente.
+            // Saltarse la fila ahí dejaba un subárbol medio borrado sin entrada
+            // de journal (sin undo) y sin fila de informe (el bucle sale con
+            // `Err` en el acto), o sea sin rastro alguno; y encima tres
+            // frontends afirman en prosa que lo aplicado queda journalizado.
+            //
+            // Lo que decide es `quitados`, no la clase del error: cero nodos es
+            // «no se llegó a tocar el árbol» —la revalidación que ya salió por
+            // arriba, un `walk` que falló, una cancelación antes del primer
+            // borrado— y eso sí que no merece entrada.
+            if quitados > 0 {
+                // Y si ESTA fila tampoco llega, es la misma avería que `bury`
+                // pero peor: lo borrado es permanente y no hay compensación
+                // posible, así que el error tiene que llevar al menos la ruta.
+                // `at: None` porque no hay papelera adonde apuntar — eso es lo
+                // que significa `Irreversible` aquí.
+                if let Err(e) = recorder.removed(to).await {
+                    return Err(StepError::Unrecoverable(Box::new(Unrecorded {
+                        buried: to.clone(),
+                        at: None,
+                        source: e,
+                    })));
+                }
             }
             removed.map_err(StepError::from_provider)?;
             Ok(Applied::Wrote(0))
@@ -960,14 +1163,14 @@ pub(crate) async fn run<S>(
     steps: S,
     ctx: &TaskCtx,
     report: &Mutex<SyncReportResult>,
-) -> Result<(), Error>
+) -> Result<(), ApplyError>
 where
     S: Stream<Item = Result<SpoolStep, Error>>,
 {
     let mut steps = std::pin::pin!(steps);
     loop {
         if ctx.cancel.is_cancelled() {
-            return Err(Error::Cancelled);
+            return Err(ApplyError::Stopped(Error::Cancelled));
         }
         let Some(next) = steps.next().await else {
             return Ok(());
@@ -979,7 +1182,7 @@ where
                     error = %e,
                     "sync.apply: el plan dejó de poder leerse a mitad de la ejecución"
                 );
-                return Err(e);
+                return Err(ApplyError::Stopped(e));
             }
         };
         match execute(targets, &record, recorder, ctx).await {
@@ -1000,7 +1203,21 @@ where
             // La cancelación y el journal paran la Task. El journal, porque
             // seguir produciría más efectos fuera de él (regla dura 4); la
             // cancelación, porque es lo que se pidió.
-            Err(StepError::Fatal(e)) => return Err(e),
+            Err(StepError::Fatal(e)) => return Err(ApplyError::Stopped(e)),
+            // Y esta para por lo mismo, pero llevándose ADÓNDE MIRAR: el
+            // destino está enterrado, su fila no llegó y devolverlo falló.
+            //
+            // Con FILA DE INFORME, y es la mitad que #160 pedía por su nombre
+            // («report the step as failed rather than leaving the task in an
+            // unstated state»). Sin ella el informe sale `done: 0, failed: 0`
+            // cuando la avería es en el primer paso, todos los frontends pintan
+            // ceros y el humano lee «no pasó nada» sobre un fichero que está en
+            // la papelera. El log del daemon no le llega a nadie que no lo esté
+            // mirando.
+            Err(StepError::Unrecoverable(u)) => {
+                record_failure(report, &record.step, SyncFailureCause::Io);
+                return Err(ApplyError::Unrecorded(u));
+            }
         }
         ctx.progress.update(|p| p.entries_done += 1);
     }
@@ -1138,6 +1355,23 @@ mod tests {
             reason: reversal
                 .filter(|r| *r == StepReversal::Irreversible)
                 .map(|_| norte_proto::methods::SyncReason::NoTrashOnTarget),
+        }
+    }
+
+    /// Un paso `Overwrite` con papelera sobre `nombre`, con el testigo que la
+    /// revalidación exige tomado del destino REAL.
+    async fn sobrescribe(mem: &Arc<MemProvider>, nombre: &str) -> SpoolStep {
+        let entry = mem
+            .stat(&vp(&format!("mem:///d/{nombre}")))
+            .await
+            .expect("stat del destino");
+        SpoolStep {
+            step: step(
+                SyncStepKind::Overwrite,
+                nombre,
+                Some(StepReversal::RestoreTrash),
+            ),
+            dest: Some(DestWitness::of(&entry)),
         }
     }
 
@@ -1406,7 +1640,10 @@ mod tests {
         )
         .await
         .expect_err("el plan dejó de leerse");
-        assert!(matches!(err, Error::Io { .. }), "{err:?}");
+        assert!(
+            matches!(err, ApplyError::Stopped(Error::Io { .. })),
+            "{err:?}"
+        );
 
         let (done, failed) = {
             let report = report.lock().expect("lock");
@@ -1451,11 +1688,363 @@ mod tests {
         );
     }
 
+    /// Un `MemProvider` que CANCELA en cuanto ha borrado algo.
+    ///
+    /// Es lo que hace determinista el test de #186: `remove_tree` mira el token
+    /// ENTRE entradas, así que «cancelado a mitad» solo se reproduce si el
+    /// token cae entre dos `remove`. Con una tarea que cancela por reloj eso es
+    /// una carrera, y una carrera en la suite es un test que un día se pone
+    /// rojo y no dice nada.
+    struct CancelaAlBorrar {
+        inner: Arc<MemProvider>,
+        cancel: CancellationToken,
+    }
+
+    #[async_trait]
+    impl Provider for CancelaAlBorrar {
+        fn scheme(&self) -> &str {
+            self.inner.scheme()
+        }
+        fn capabilities(&self) -> norte_proto::Capabilities {
+            self.inner.capabilities()
+        }
+        async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+            self.inner.stat(p).await
+        }
+        async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+            self.inner.list(p).await
+        }
+        async fn read(
+            &self,
+            p: &VPath,
+            range: Option<norte_proto::ByteRange>,
+        ) -> Result<norte_vfs::ByteStream, Error> {
+            self.inner.read(p, range).await
+        }
+        async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+            self.inner.write(p).await
+        }
+        async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
+            self.inner.mkdir(p).await
+        }
+        async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
+            self.inner.rename(from, to).await
+        }
+        /// Borra de verdad, y ENTONCES cancela: al volver, el árbol ya está a
+        /// medias y el token ya está caído.
+        async fn remove(&self, p: &VPath) -> Result<(), Error> {
+            self.inner.remove(p).await?;
+            self.cancel.cancel();
+            Ok(())
+        }
+    }
+
+    /// Un `MemProvider` cuyo `remove` APLICA el efecto y contesta un fallo
+    /// transitorio, cancelando de paso.
+    ///
+    /// Es el «timeout tras commit» de un remoto (issue #17) atrapado por una
+    /// cancelación: el objeto ya no está en el bucket, la respuesta se perdió,
+    /// y el usuario —que lleva un rato mirando el parón— pulsa `Ctrl+K`. Sin
+    /// esto no hay forma determinista de llegar a esa esquina.
+    struct BorraYMiente {
+        inner: Arc<MemProvider>,
+        cancel: CancellationToken,
+    }
+
+    #[async_trait]
+    impl Provider for BorraYMiente {
+        fn scheme(&self) -> &str {
+            self.inner.scheme()
+        }
+        fn capabilities(&self) -> norte_proto::Capabilities {
+            self.inner.capabilities()
+        }
+        async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+            self.inner.stat(p).await
+        }
+        async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+            self.inner.list(p).await
+        }
+        async fn read(
+            &self,
+            p: &VPath,
+            range: Option<norte_proto::ByteRange>,
+        ) -> Result<norte_vfs::ByteStream, Error> {
+            self.inner.read(p, range).await
+        }
+        async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+            self.inner.write(p).await
+        }
+        async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
+            self.inner.mkdir(p).await
+        }
+        async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
+            self.inner.rename(from, to).await
+        }
+        async fn remove(&self, p: &VPath) -> Result<(), Error> {
+            self.inner.remove(p).await?;
+            self.cancel.cancel();
+            Err(Error::Io { retryable: true })
+        }
+    }
+
+    /// **#186 por la otra puerta, la que la primera versión del arreglo dejaba
+    /// abierta.** Un `remove` que se aplica y muere en un transitorio cuenta
+    /// como quitado.
+    ///
+    /// El objeto ya no está en el bucket y la respuesta se perdió; si ese es el
+    /// PRIMER nodo del post-orden, contarlo como «no quitado» deja el árbol
+    /// dentado, borrado para siempre, y sin fila de journal — que es
+    /// exactamente el agujero, alcanzado sin cancelar entre entradas. Todo el
+    /// árbol resuelve la duda hacia «lo hicimos»: el error de esa elección es
+    /// una fila de más, el de la contraria es un efecto sin fila.
+    #[tokio::test]
+    async fn un_borrado_ambiguo_cuenta_como_borrado() {
+        let mem = Arc::new(MemProvider::with_flags(CapabilityFlags::CASE_SENSITIVE));
+        mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d/sub")).await.expect("mkdir");
+        write(&mem, "mem:///d/sub/a.txt", b"uno").await;
+        let entry = mem.stat(&vp("mem:///d/sub")).await.expect("stat");
+
+        let cancel = CancellationToken::new();
+        let dest = Arc::new(BorraYMiente {
+            inner: Arc::clone(&mem),
+            cancel: cancel.clone(),
+        });
+        let t = SyncTargets {
+            dest: dest as Arc<dyn Provider>,
+            delete_mode: norte_proto::DeleteMode::Permanent,
+            ..targets(&mem)
+        };
+        let recorder = Recorder::default();
+        let err = delete_tree(
+            &t,
+            &SpoolStep {
+                step: step(
+                    SyncStepKind::DeleteTree,
+                    "sub",
+                    Some(StepReversal::Irreversible),
+                ),
+                dest: Some(DestWitness::of(&entry)),
+            },
+            &recorder,
+            &vp("mem:///d/sub"),
+            &ctx(cancel),
+        )
+        .await
+        .expect_err("el remove murió en un transitorio");
+        assert!(
+            matches!(err, StepError::Failed(Error::Io { .. })),
+            "{err:?}"
+        );
+
+        assert!(
+            mem.stat(&vp("mem:///d/sub/a.txt")).await.is_err(),
+            "el efecto SÍ se aplicó, aunque la respuesta se perdiera"
+        );
+        assert_eq!(
+            recorder.entries.lock().expect("lock").len(),
+            1,
+            "y por tanto hay fila: un efecto en duda se resuelve hacia «ocurrió»"
+        );
+    }
+
+    /// **#186.** Un `DeleteTree` irreversible cancelado A MITAD escribe la fila
+    /// de lo que SÍ borró.
+    ///
+    /// `remove_tree` mira el token de cancelación ENTRE entradas, así que
+    /// cuando devuelve `Cancelled` ya han caído un número arbitrario de nodos —
+    /// y para un `Mirror` contra un destino sin papelera (un bucket, un SFTP,
+    /// un pincho FAT), permanentemente. La condición de antes se saltaba la
+    /// fila justo en ese caso, y dejaba un subárbol medio borrado con: sin
+    /// entrada de journal (sin undo), sin fila de informe (el bucle sale con
+    /// `Err` en el acto) y sin nada que decirle al usuario. Los tres frontends
+    /// afirman en prosa que lo aplicado queda journalizado.
+    #[tokio::test]
+    async fn un_borrado_de_arbol_cancelado_a_medias_deja_su_fila() {
+        // Sin papelera en el destino: el borrado es PERMANENTE, que es el caso
+        // en el que la fila es lo único que queda.
+        let mem = Arc::new(MemProvider::with_flags(CapabilityFlags::CASE_SENSITIVE));
+        mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d/sub")).await.expect("mkdir");
+        write(&mem, "mem:///d/sub/a.txt", b"uno").await;
+        write(&mem, "mem:///d/sub/b.txt", b"dos").await;
+        let entry = mem.stat(&vp("mem:///d/sub")).await.expect("stat");
+
+        let cancel = CancellationToken::new();
+        let dest = Arc::new(CancelaAlBorrar {
+            inner: Arc::clone(&mem),
+            cancel: cancel.clone(),
+        });
+        let t = SyncTargets {
+            dest: dest as Arc<dyn Provider>,
+            delete_mode: norte_proto::DeleteMode::Permanent,
+            ..targets(&mem)
+        };
+        let recorder = Recorder::default();
+        let record = SpoolStep {
+            step: step(
+                SyncStepKind::DeleteTree,
+                "sub",
+                Some(StepReversal::Irreversible),
+            ),
+            dest: Some(DestWitness::of(&entry)),
+        };
+        let report = Mutex::new(new_report(7));
+        let err = run(
+            &t,
+            &recorder,
+            futures::stream::iter(vec![Ok(record)]),
+            &ctx(cancel),
+            &report,
+        )
+        .await
+        .expect_err("cancelado a mitad del árbol");
+        assert!(
+            matches!(err, ApplyError::Stopped(Error::Cancelled)),
+            "{err:?}"
+        );
+
+        // Algo cayó, y para siempre.
+        assert!(
+            mem.stat(&vp("mem:///d/sub/b.txt")).await.is_err(),
+            "el primer hijo del post-orden se borró"
+        );
+        assert!(
+            mem.stat(&vp("mem:///d/sub")).await.is_ok(),
+            "y el árbol NO llegó a caer entero: esto es media destrucción"
+        );
+
+        // Y eso está en el journal, que es lo único que #186 pide.
+        assert_eq!(
+            recorder.entries.lock().expect("lock").as_slice(),
+            [Anotada {
+                op: "removed",
+                path: "mem:///d/sub".to_owned(),
+                reversal: Reversal::Irreversible,
+                reversal_ref: None,
+            }],
+            "un árbol a medio destruir es un estado real, y la regla dura 4 no lo exime"
+        );
+    }
+
+    /// Y su gemela, que es la que impide que el arreglo se pase de largo: una
+    /// cancelación que llega ANTES del primer borrado no deja fila.
+    ///
+    /// Cero nodos quitados es «no se llegó a tocar el árbol», y anotarlo diría
+    /// que se destruyó algo que sigue entero — un `removed` irreversible sobre
+    /// un directorio intacto es peor que no anotar nada.
+    #[tokio::test]
+    async fn un_borrado_cancelado_antes_de_tocar_nada_no_deja_fila() {
+        let mem = Arc::new(MemProvider::with_flags(CapabilityFlags::CASE_SENSITIVE));
+        mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d/sub")).await.expect("mkdir");
+        write(&mem, "mem:///d/sub/a.txt", b"uno").await;
+        let entry = mem.stat(&vp("mem:///d/sub")).await.expect("stat");
+
+        let t = SyncTargets {
+            delete_mode: norte_proto::DeleteMode::Permanent,
+            ..targets(&mem)
+        };
+        let recorder = Recorder::default();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        // Por `delete_tree` y no por `destroy_tree`: el recorder solo llega al
+        // primero, así que afirmarlo sobre el segundo era una aserción que no
+        // podía fallar.
+        let err = delete_tree(
+            &t,
+            &SpoolStep {
+                step: step(
+                    SyncStepKind::DeleteTree,
+                    "sub",
+                    Some(StepReversal::Irreversible),
+                ),
+                dest: Some(DestWitness::of(&entry)),
+            },
+            &recorder,
+            &vp("mem:///d/sub"),
+            &ctx(cancel),
+        )
+        .await
+        .expect_err("cancelado");
+        assert!(matches!(err, StepError::Fatal(Error::Cancelled)), "{err:?}");
+        assert!(
+            mem.stat(&vp("mem:///d/sub/a.txt")).await.is_ok(),
+            "el árbol sigue entero"
+        );
+        assert!(
+            recorder.entries.lock().expect("lock").is_empty(),
+            "y por tanto no hay nada que anotar: un `removed` irreversible sobre un \
+             directorio intacto sería peor que el silencio"
+        );
+    }
+
+    /// **#160, y la razón de que exista [`Unrecorded`].** Cuando la fila no
+    /// llega Y la compensación tampoco, el error que sube NOMBRA lo enterrado y
+    /// su destino en la papelera — y para la Task antes del paso siguiente.
+    ///
+    /// Antes esto era un `tracing::error!` y un `Fatal(Io)` pelado: el
+    /// llamante no podía distinguir «el destino quedó intacto» de «tu fichero
+    /// está en la papelera y nadie lo apuntó», y `¿dónde está mi fichero?` no
+    /// lo contestaba nadie que no estuviera leyendo el log del daemon en ese
+    /// momento. Es lo que se vio en vivo al final de la tarea 13 del plan de
+    /// sincronización.
+    #[tokio::test]
+    async fn un_journal_que_falla_sin_poder_devolver_nombra_lo_enterrado() {
+        // Papelera OPACA: `trash()` no dice adónde se llevó el fichero, así que
+        // `restore_from` no tiene a qué apuntar y la compensación es imposible.
+        let mem = Arc::new(MemProvider::new());
+        mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        write(&mem, "mem:///d/a.txt", b"viejo").await;
+        write(&mem, "mem:///d/b.txt", b"tambien viejo").await;
+        write(&mem, "mem:///s/a.txt", b"nuevo").await;
+        write(&mem, "mem:///s/b.txt", b"nuevo tambien").await;
+        let t = targets(&mem);
+
+        // DOS pasos, para poder comprobar que el segundo no llega a correr.
+        let pasos = vec![
+            Ok(sobrescribe(&mem, "a.txt").await),
+            Ok(sobrescribe(&mem, "b.txt").await),
+        ];
+        let report = Mutex::new(new_report(7));
+        let err = run(
+            &t,
+            &TrashedFalla,
+            futures::stream::iter(pasos),
+            &ctx(CancellationToken::new()),
+            &report,
+        )
+        .await
+        .expect_err("el journal falló tras enterrar");
+
+        let ApplyError::Unrecorded(u) = err else {
+            panic!("el estado tiene que salir tipado, no en una línea de log: {err:?}");
+        };
+        assert_eq!(u.buried, vp("mem:///d/a.txt"), "nombra lo enterrado");
+        assert!(
+            matches!(u.source, Error::Io { .. }),
+            "y el error que lo causó: {:?}",
+            u.source
+        );
+        assert_eq!(
+            read(&mem, "mem:///d/b.txt").await,
+            b"tambien viejo",
+            "y la Task paró: el paso siguiente no llegó a correr"
+        );
+    }
+
     /// #160, el otro brazo: una papelera "vanish" (macOS/Windows, `Opaque`) no
     /// nombra lo que se llevó — `buried` llega `None` y no hay adónde apuntar
-    /// `restore_from`. La compensación no es posible; lo único que le queda al
-    /// operador es la línea de log, y el fallo de journal se sigue propagando
-    /// para que la Task pare (no se pretende éxito).
+    /// `restore_from`. La compensación no es posible, así que el paso sale como
+    /// [`StepError::Unrecoverable`] y no como un `Fatal` cualquiera: el árbol NO
+    /// es el que era, y lo enterrado viaja en el error para que alguien pueda
+    /// decirlo. Sin destino de papelera que ofrecer, eso sí — es justo lo que
+    /// esta papelera no sabe.
     #[tokio::test]
     async fn una_papelera_opaca_no_compensa_pero_sigue_fallando_alto() {
         let mem = Arc::new(MemProvider::new());
@@ -1473,9 +2062,13 @@ mod tests {
         )
         .await
         .expect_err("el journal falló");
+        let StepError::Unrecoverable(u) = err else {
+            panic!("sin compensación posible el estado es OTRO, y sale tipado: {err:?}");
+        };
+        assert_eq!(u.buried, vp("mem:///d/a.txt"));
         assert!(
-            matches!(err, StepError::Fatal(Error::Io { .. })),
-            "el fallo de journal para la Task, igual que con papelera nombrada: {err:?}"
+            u.at.is_none(),
+            "una papelera opaca no dice adónde se lo llevó"
         );
 
         assert!(
