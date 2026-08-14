@@ -3525,6 +3525,33 @@ impl NorteGui {
         )
     }
 
+    /// The unbind's own door call — same cut, same preset lookup as
+    /// [`Self::plan_rebind`], for the removal instead of the write (#147,
+    /// closing the gap #141 left between the two frontends).
+    ///
+    /// Before this, [`Self::unbind_shortcut`] matched the row's PAINTED
+    /// sequence against the file byte-exact — the writer's own comparison,
+    /// done a second time by hand — so a hand-written twin spelling (`mod+p`
+    /// for a row painted `ctrl+p`) found nothing to remove while the message
+    /// still claimed it had. `plan_unbind`/`unbind_dry_run` fixes that the
+    /// same way the TUI's does: it matches by PARSED sequence, and hands back
+    /// the file's OWN spelling to write with.
+    fn plan_unbind(
+        &self,
+        screen: norte_frontend::keymap::Screen,
+        seq: &[norte_frontend::keymap::Chord],
+    ) -> Result<norte_frontend::keymap::UnbindWrite, norte_frontend::shortcuts::PlanError> {
+        let (kinds, layers) = rebind_layers(&self.cfg_snapshot);
+        norte_frontend::shortcuts::plan_unbind(
+            &self.cfg_snapshot.common.preset,
+            &kinds,
+            &layers,
+            keymap::screen_commands(screen),
+            screen,
+            seq,
+        )
+    }
+
     /// Confirms the capture: the door ([`Self::plan_rebind`]) and, only if it
     /// passes, the writer — on the BACKGROUND executor (rule 2:
     /// `persist_keymap_bind` takes a file lock and does synchronous I/O, and
@@ -3625,18 +3652,21 @@ impl NorteGui {
     /// user's lists — the reason c1 wrote `persist_keymap_unbind`: an editor
     /// that can only add is an editor that cannot fix a mistake.
     ///
-    /// No door, deliberately, for half the load: removing an entry cannot
-    /// introduce an illegal shape, so there is no load to simulate.
+    /// **Now goes through the same door as a bind** ([`Self::plan_unbind`] /
+    /// `unbind_dry_run`, #147 closing what #141 left TUI-only): matches by
+    /// PARSED sequence, not by the row's painted bytes, so a hand-written
+    /// twin spelling (`mod+p` for a row painted `ctrl+p`) is found and
+    /// removed with ITS OWN spelling instead of surviving a byte-exact miss
+    /// while the message claimed it was gone. And the message comes from the
+    /// map REBUILT without the entry (`unbind_outcome_message`), not from
+    /// "removed from your keymap.toml": that sentence is true and useless the
+    /// moment a lower layer still binds the key.
     ///
-    /// What is NOT checked is the EFFECT, which is why both messages talk
-    /// about the FILE and not about the key — "removed from your
-    /// keymap.toml", never "this key no longer does X". Three cases this
-    /// path cannot tell apart, all tracked in #141: the binding lives in
-    /// `[global]`, which `Screen::section` never names; the file spells it
-    /// another legal way (`mod+p` for `ctrl+p`) and the writer matches byte
-    /// for byte; or another layer binds the same key and it keeps working.
-    /// Same wording as the TUI's, and for the same reason — promising more
-    /// here would make the GUI the surface that lies.
+    /// A `[global]` row is refused BEFORE the door, the same way
+    /// `ShortcutsState::begin_capture` already refuses one for a rebind:
+    /// `Screen::section` never names `"global"`, so a write through this row
+    /// would land in a section that changes all three screens, or find
+    /// nothing to write to at all.
     fn unbind_shortcut(&mut self, cx: &mut Context<Self>) {
         let selected = self
             .shortcuts_view
@@ -3645,19 +3675,42 @@ impl NorteGui {
             .map(|r| {
                 (
                     r.screen,
-                    r.seq.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                    r.command.clone(),
+                    r.seq.clone(),
                     r.chord.clone(),
+                    r.is_editable(),
+                    r.is_bound(),
                 )
             });
         // Nothing selected (an empty filter result): the key must still say
         // something. A `ctrl+u` that neither removes nor speaks reads as a
         // dead key, and this one is destructive when it is not.
-        let Some((screen, chords, command, painted)) = selected else {
+        let Some((screen, seq, painted, editable, bound)) = selected else {
             self.set_shortcuts_status(norte_i18n::t("msg-shortcut-nothing-to-unbind"), true);
             return;
         };
-        if chords.is_empty() {
+        if !editable {
+            self.set_shortcuts_status(norte_i18n::t("shortcuts-row-global"), true);
+            return;
+        }
+        if !bound {
+            self.set_shortcuts_status(norte_i18n::t("msg-shortcut-nothing-to-unbind"), true);
+            return;
+        }
+        let write = match self.plan_unbind(screen, &seq) {
+            Ok(w) => w,
+            Err(e) => {
+                let msg = norte_frontend::shortcuts::plan_error_message(&e, norte_i18n::active());
+                self.set_shortcuts_status(msg, true);
+                return;
+            }
+        };
+        if matches!(
+            write.outcome,
+            norte_frontend::keymap::UnbindOutcome::NotBound
+        ) {
+            // Nada que escribir: la propia puerta ya vio que esta capa no
+            // tenía la secuencia (una fila de otra capa, o una lectura
+            // obsoleta) — mismo criterio que la TUI.
             self.set_shortcuts_status(norte_i18n::t("msg-shortcut-nothing-to-unbind"), true);
             return;
         }
@@ -3666,13 +3719,11 @@ impl NorteGui {
             return;
         };
         let lang = norte_i18n::active();
-        let label = norte_frontend::whichkey::command_label(&command, lang);
-        let ok = norte_i18n::ta(
-            "msg-shortcut-unbound",
-            &[("chord", painted.as_str()), ("command", label.as_str())],
-        );
+        let ok = norte_frontend::shortcuts::unbind_outcome_message(&write.outcome, &painted, lang);
         let nothing = norte_i18n::t("msg-shortcut-nothing-to-unbind");
-        let section = screen.section();
+        let section = write.section;
+        let chords = write.chords;
+        let command = write.command;
         let write_gen = self.next_shortcut_write();
         cx.spawn(async move |this, cx| {
             let (written, reloaded) = cx
@@ -13530,6 +13581,57 @@ keymap = [
         assert!(matches!(
             door(Screen::Browse, "tab", "pane.mkdir"),
             Err(PlanError::Door(_))
+        ));
+    }
+
+    /// #147: the unbind door, called exactly as `NorteGui::plan_unbind`
+    /// calls it — same layer stack as the rebind test above (the GUI
+    /// supplement sits BELOW, same reason, so a wiring mistake there would
+    /// break this door exactly as silently).
+    ///
+    /// The scenario this GUI used to get wrong: the row painted `ctrl+j` (the
+    /// PARSED sequence `Effective` resolves to), but the user's own
+    /// `keymap.toml` spells it `mod+j` — a legal twin `parse_chord` accepts
+    /// identically. The old code matched `persist_keymap_unbind` byte-exact
+    /// against the PAINTED spelling and found nothing; the door matches by
+    /// parsed sequence and hands back the file's OWN bytes.
+    ///
+    /// And it happens to land on the OTHER interesting case too:
+    /// `gui_supplement` binds this same `ctrl+j` to `app.palette` — below the
+    /// user's entry, so it never fires today, but it resurfaces the moment
+    /// the user's override is gone. `Runs`, not `Cleared`, is the honest
+    /// answer, and "removed from your keymap.toml" would have said nothing
+    /// about it.
+    #[test]
+    fn la_puerta_de_unbind_encuentra_un_gemelo_por_secuencia_no_por_bytes() {
+        use norte_frontend::keymap::{Screen, UnbindOutcome, parse_chord, parse_keymap};
+        use norte_frontend::shortcuts::plan_unbind;
+
+        let mut cfg = empty_frontend_config();
+        cfg.keymap_layers = vec![
+            parse_keymap("[pane]\nprepend_keymap = [{ on = [\"mod+j\"], run = \"pane.move\" }]\n")
+                .expect("capa de usuario válida"),
+        ];
+        cfg.keymap_layer_kinds = vec![norte_config::Layer::User];
+        let (kinds, layers) = rebind_layers(&cfg);
+
+        let w = plan_unbind(
+            norte_config::DEFAULT_PRESET,
+            &kinds,
+            &layers,
+            keymap::screen_commands(Screen::Browse),
+            Screen::Browse,
+            &[parse_chord("ctrl+j").expect("chord")],
+        )
+        .expect("el mapa sin la entrada sigue cargando");
+        // The file's OWN spelling, not the painted `ctrl+j` — this is what
+        // `persist_keymap_unbind` has to be handed for the byte-exact writer
+        // to find the entry at all.
+        assert_eq!(w.chords, vec!["mod+j".to_owned()]);
+        assert_eq!(w.command, "pane.move");
+        assert!(matches!(
+            w.outcome,
+            UnbindOutcome::Runs { ref command, .. } if command == "app.palette"
         ));
     }
 
