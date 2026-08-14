@@ -2590,7 +2590,10 @@ async fn run(
         // costaba un frame de retraso — el cursor podía caer fuera de la
         // ventana pintada, o sea desaparecer de la pantalla justo al llegar
         // al borde.
-        ui::before_frame(app, terminal.size()?.height);
+        {
+            let s = terminal.size()?;
+            ui::before_frame(app, ratatui::layout::Rect::new(0, 0, s.width, s.height));
+        }
         // Exención puntual de la regla 2: el draw escribe la terminal de
         // control síncronamente (patrón async oficial de ratatui; acotado,
         // runtime multi-thread).
@@ -2606,7 +2609,7 @@ async fn run(
         // El alto REAL del frame que se acaba de pintar: si la terminal cambió
         // de tamaño entre `before_frame` y el draw, este es el bueno, y de él
         // salen la paginación y el radio de la sonda de stat.
-        ui::before_frame(app, pintado.area.height);
+        ui::before_frame(app, pintado.area);
         // MISMO trato para la geometría del ratón: el draw es quien sabe
         // dónde cayó cada pane y con qué scroll, así que la devuelve al
         // modelo y el hit test resuelve contra la pantalla que el usuario

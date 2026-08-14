@@ -91,6 +91,57 @@ fn app_base() -> App {
     app
 }
 
+/// #210: en la barra de estado la RUTA cede, y el contador `pos/total` no.
+///
+/// Con una ruta larga, ratatui recortaba la cola: lo que quedaba a la vista
+/// era un dígito suelto del total, que se lee como cualquier otra cosa. Ahora
+/// la ruta se elipsa por el medio —el principio dice dónde estás y el final
+/// qué carpeta es— y todo lo que viene detrás sobrevive entero.
+#[test]
+fn la_barra_de_estado_recorta_la_ruta_y_no_el_contador() {
+    let hondo = vp(&format!(
+        "file:///{}",
+        ["carpeta-con-nombre-larguisimo"; 6].join("/")
+    ));
+    let mut app = App::new(
+        Pane::new(
+            hondo.clone(),
+            (0..42)
+                .map(|i| {
+                    entry(
+                        &hondo,
+                        format!("f{i:03}.txt").as_bytes(),
+                        EntryKind::File,
+                        Some(1),
+                    )
+                })
+                .collect(),
+        ),
+        Pane::new(hondo, Vec::new()),
+    );
+    app.focused_mut().set_cursor(7);
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+    ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 80, 24));
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let barra = terminal
+        .backend()
+        .to_string()
+        .lines()
+        .last()
+        .expect("barra de estado")
+        .to_owned();
+
+    assert!(
+        barra.contains("8/42"),
+        "el contador entero, que es lo que dice cuánto hay: {barra:?}"
+    );
+    assert!(
+        barra.contains('…'),
+        "y la ruta cede por el medio: {barra:?}"
+    );
+}
+
 #[test]
 fn snapshot_navegacion() {
     insta::assert_snapshot!(render(&app_base()));

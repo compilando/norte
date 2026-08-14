@@ -1582,6 +1582,12 @@ pub struct SyncPlan {
     selected: Option<u64>,
     /// Steps counted but not retained ([`PLAN_STEPS_RETAINED_MAX`], #196).
     dropped: u64,
+    /// La primera fila VISIBLE de la lista de pasos, PEGAJOSA (#210): se
+    /// arrastra solo cuando el cursor se sale — ver
+    /// [`crate::viewport::sticky_offset`]. Un plan tiene cientos de miles de
+    /// pasos, así que es la lista donde más se nota que el cursor viva clavado
+    /// en la última fila.
+    viewport_offset: usize,
 }
 
 impl SyncPlan {
@@ -1595,6 +1601,24 @@ impl SyncPlan {
     #[must_use]
     pub fn counts(&self) -> &SyncCounts {
         &self.done.counts
+    }
+
+    /// Deja la ventana de la lista de pasos lista para pintar `rows` filas
+    /// (#210): se arrastra solo cuando el cursor se sale.
+    pub fn reconcile_viewport(&mut self, rows: usize) {
+        let cursor = self
+            .selected
+            .and_then(|id| self.steps.iter().position(|s| s.id == id))
+            .unwrap_or(0);
+        self.viewport_offset =
+            crate::viewport::sticky_offset(self.viewport_offset, cursor, self.steps.len(), rows);
+    }
+
+    /// La primera fila visible de la lista de pasos — ver
+    /// [`Self::reconcile_viewport`].
+    #[must_use]
+    pub fn viewport_offset(&self) -> usize {
+        self.viewport_offset
     }
 
     /// How many steps were counted but NOT retained
@@ -2086,6 +2110,7 @@ impl SyncState {
             unreadable: planning.unreadable,
             selected,
             dropped: planning.dropped,
+            viewport_offset: 0,
         });
         true
     }

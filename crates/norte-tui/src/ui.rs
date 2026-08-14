@@ -89,35 +89,6 @@ pub fn pane_list_rows(app: &App, frame_height: u16) -> u16 {
         .saturating_sub(3) // bordes del bloque (2) + cabecera de columnas (1)
 }
 
-/// Primer índice PINTADO de un listado de `total` items con `selected`
-/// seleccionado en un área de `height` filas.
-///
-/// Existe para que el DRAW y el HIT TEST del ratón ([`pane_geometry`])
-/// compartan UNA sola fuente del scroll. `draw_pane` se lo pasa al
-/// `ListState` en vez de dejar que ratatui lo deduzca: la deducción de
-/// ratatui coincide hoy con esta fórmula (arranca del offset del estado —
-/// 0 en un `ListState` nuevo — y baja lo justo para que la selección
-/// entre), pero si algún día dejara de coincidir, el ratón resolvería
-/// clicks contra un scroll que la pantalla no tiene, y eso no se ve: se
-/// marca el fichero de al lado.
-///
-/// El TUI no guarda scroll independiente del cursor — el listado se
-/// desplaza porque el cursor se sale de la ventana, y por eso el cursor
-/// acaba pegado al borde inferior en cuanto se pasa de la primera página.
-/// Es también lo que hace que la rueda (que mueve el cursor) desplace el
-/// listado.
-#[must_use]
-fn list_offset(selected: Option<usize>, total: usize, height: u16) -> usize {
-    let height = usize::from(height);
-    let (Some(selected), true) = (selected, height > 0) else {
-        return 0;
-    };
-    // `min(total-1)` calca el clamp de ratatui: un selected fuera de rango
-    // no debe pintar (ni resolver) una ventana vacía.
-    let selected = selected.min(total.saturating_sub(1));
-    selected.saturating_sub(height - 1)
-}
-
 /// Lo que hay que hacer al MODELO justo antes de pintar un frame de `height`
 /// filas: dejar la ventana de cada pane lista.
 ///
@@ -130,11 +101,52 @@ fn list_offset(selected: Option<usize>, total: usize, height: u16) -> usize {
 /// que esto decide qué filas se ven y el draw las pinta. Al revés costaba un
 /// frame de retraso, y el frame retrasado es justo el que el usuario mira
 /// cuando el cursor toca el borde.
-pub fn before_frame(app: &mut App, height: u16) {
-    let filas = usize::from(pane_list_rows(app, height));
+pub fn before_frame(app: &mut App, area: Rect) {
+    let filas = usize::from(pane_list_rows(app, area.height));
     for pane in &mut app.panes {
         pane.reconcile_viewport(filas);
     }
+    // Las OTRAS dos listas largas (#210). El alto sale de replicar aquí el
+    // mismo recorte que hace su `draw`, por lo mismo que `pane_geometry`
+    // replica el suyo: si el layout cambia, lo que rompe es el test de al
+    // lado y no el scroll en silencio.
+    let cuerpo = overlay_body(app, area);
+    if let Some(view) = &mut app.sync {
+        let (_, lista, _) = sync_layout_rows(cuerpo, view);
+        if let Some(plan) = view.state.plan_mut() {
+            plan.reconcile_viewport(usize::from(lista.height));
+        }
+    } else if let Some(view) = &mut app.compare {
+        let (_, lista, _, _) = compare_layout(inner_de_bloque(cuerpo));
+        view.pane.reconcile_viewport(usize::from(lista.height));
+    }
+}
+
+/// El área que ocupan los panes —o el panel que los sustituye— en un frame de
+/// `area`: el alto del frame menos la franja de tasks y la barra de estado.
+///
+/// Es el `rows[0]` de [`draw`], y vive aquí para que [`before_frame`] y el
+/// pintado no puedan discrepar sobre cuánto sitio hay.
+fn overlay_body(app: &App, area: Rect) -> Rect {
+    let alto = area
+        .height
+        .saturating_sub(tasks_rows(app))
+        .saturating_sub(1);
+    Rect {
+        height: alto,
+        ..area
+    }
+}
+
+/// El interior de un bloque con borde por los cuatro lados.
+fn inner_de_bloque(area: Rect) -> Rect {
+    Block::default().borders(Borders::ALL).inner(area)
+}
+
+/// Como [`sync_layout`], desde el área EXTERNA del panel (la que recibe
+/// `draw_sync`): descuenta el borde antes de repartir.
+fn sync_layout_rows(area: Rect, view: &crate::app::SyncView) -> (Option<Rect>, Rect, Option<Rect>) {
+    sync_layout(inner_de_bloque(area), view)
 }
 
 /// La geometría PINTADA de los dos panes en un frame de `area`, o `None`
@@ -3364,7 +3376,8 @@ fn draw_compare(
     let visibles = view.pane.visible_len();
     let alto = usize::from(inner.height);
     let selected = view.pane.visible_index();
-    let offset = list_offset(selected, visibles, inner.height);
+    // La ventana la decide el MODELO (#210, pegajosa como la del listado).
+    let offset = view.pane.viewport_offset().min(visibles.saturating_sub(1));
     let rows: Vec<ListItem<'_>> = view
         .pane
         .visible()
@@ -3850,7 +3863,11 @@ fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, the
             .plan()
             .and_then(norte_frontend::sync::SyncPlan::selected_id)
             .and_then(|id| steps.iter().position(|s| s.id == id));
-        let offset = list_offset(selected, steps.len(), inner.height);
+        let offset = view
+            .state
+            .plan()
+            .map_or(0, norte_frontend::sync::SyncPlan::viewport_offset)
+            .min(steps.len().saturating_sub(1));
         // Solo se construye lo que cabe, por lo mismo que en el panel de
         // diferencias: un plan puede tener cientos de miles de pasos y esto se
         // repinta diez veces por segundo mientras siguen llegando.
@@ -4767,7 +4784,22 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         // encoding fuera del recorte. Deuda real (#103): un presupuesto de
         // ancho que elipsise `dir_texto` para que NINGÚN campo posterior se
         // recorte jamás, en vez de solo reordenar por prioridad.
-        format!(" {marca}{dir_texto}{pos_total}{omitidas}{nombres}{pruned}{ocultas}{marked}{seq}")
+        // La RUTA cede, y ceden ella sola: todo lo demás de esta línea es un
+        // aviso o un contador, y recortar la cola —que es lo que hacía
+        // ratatui— se llevaba lo que decía cuántas entradas hay o que el
+        // listado está incompleto. Con una ruta larga, lo que se veía del
+        // `pos/total` era un dígito suelto.
+        //
+        // `middle_ellipsis` recorta por el MEDIO: el principio de una ruta
+        // dice dónde estás y el final dice qué carpeta es, y perder cualquiera
+        // de los dos extremos es perder la mitad útil.
+        let cola = format!("{pos_total}{omitidas}{nombres}{pruned}{ocultas}{marked}{seq}");
+        let sitio = usize::from(area.width)
+            .saturating_sub(cells(&cola))
+            .saturating_sub(cells(marca))
+            .saturating_sub(1); // el margen izquierdo
+        let dir_texto = norte_frontend::middle_ellipsis(&dir_texto, sitio);
+        format!(" {marca}{dir_texto}{cola}")
     };
     frame.render_widget(
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
