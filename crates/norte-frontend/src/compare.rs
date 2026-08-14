@@ -570,6 +570,11 @@ pub struct ComparePane {
     /// The selected row's `id` — never an index. A filter changes which rows
     /// are on screen and must not change which one is selected.
     selected: Option<u64>,
+    /// La primera fila VISIBLE, que es PEGAJOSA (#210): se arrastra solo
+    /// cuando el cursor se sale, igual que la del listado de ficheros. Antes
+    /// se deducía del cursor en cada frame y eso lo dejaba clavado en la
+    /// última fila — ver [`crate::viewport::sticky_offset`].
+    viewport_offset: usize,
     /// The rows the reader MARKED, by `id`, for the same reason `selected` is
     /// an id: a filter must not change what was picked.
     ///
@@ -609,6 +614,7 @@ impl ComparePane {
             hidden: Vec::new(),
             counts: [0; CATEGORIES.len()],
             selected: None,
+            viewport_offset: 0,
             marked: std::collections::BTreeSet::new(),
             active: Side::Left,
         }
@@ -785,6 +791,24 @@ impl ComparePane {
     pub fn visible_index(&self) -> Option<usize> {
         let id = self.selected?;
         self.visible().position(|r| r.id == id)
+    }
+
+    /// Deja la ventana lista para pintar `rows` filas con el cursor donde
+    /// está (#210): la arrastra SOLO si el cursor se salió. Se llama una vez
+    /// por frame, antes de pintar.
+    pub fn reconcile_viewport(&mut self, rows: usize) {
+        self.viewport_offset = crate::viewport::sticky_offset(
+            self.viewport_offset,
+            self.visible_index().unwrap_or(0),
+            self.visible_len(),
+            rows,
+        );
+    }
+
+    /// La primera fila visible — ver [`Self::reconcile_viewport`].
+    #[must_use]
+    pub fn viewport_offset(&self) -> usize {
+        self.viewport_offset
     }
 
     /// Moves the cursor `delta` rows through what is VISIBLE, clamped at both

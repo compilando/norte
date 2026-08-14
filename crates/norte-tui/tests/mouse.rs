@@ -73,7 +73,7 @@ fn pintar(app: &mut App) -> Vec<String> {
     // El MISMO orden que el run loop: reconciliar la ventana, pintar,
     // devolver la geometría. Sin el primer paso se pintaría una ventana que
     // nadie reconcilió, o sea una pantalla que ningún usuario ve.
-    ui::before_frame(app, H);
+    ui::before_frame(app, ratatui::layout::Rect::new(0, 0, W, H));
     let frame = terminal.draw(|f| ui::draw(f, app)).expect("draw");
     let geometria = ui::pane_geometry(app, frame.area);
     mouse::after_frame(app, geometria);

@@ -822,6 +822,18 @@ fn caps_key(at: &VPath) -> CapsKey {
 /// retained listings and its approvals cap.
 const DEGRADED_MAX: usize = 32;
 
+/// Lo que el run loop tiene que preguntar para poder avisar de espacio (#149).
+#[derive(Debug, Clone)]
+pub struct SpaceCheck {
+    /// El directorio DESTINO, que es de quien se pregunta el espacio.
+    pub to: VPath,
+    /// Bytes que la transferencia va a escribir. Solo se construye cuando se
+    /// conocen TODOS — un directorio no trae tamaño en el listado, y sumar
+    /// solo lo conocido avisaría con un número menor que el real (lo calcula
+    /// `App::transfer_total`, privado).
+    pub total: u64,
+}
+
 /// Lo que la barra dice del journal de ESTA sesión.
 ///
 /// Un enum y no un `Option<NoJournal>` más un bool: son estados excluyentes de
@@ -1061,6 +1073,10 @@ pub struct App {
     /// a las tablas recién vaciadas de la SIGUIENTE. Lo que impide eso es que
     /// el resultado traiga la generación con la que se pidió.
     compare_generation: u64,
+    /// La comprobación de espacio que el run loop tiene pendiente (#149):
+    /// `open_transfer` sabe QUÉ se va a mover, y preguntar por los volúmenes
+    /// es I/O, que es del run loop. Mismo reparto que `pending_compare`.
+    pub pending_space_check: Option<SpaceCheck>,
     /// Params de `fs.compare` que el despacho resolvió y el run loop aún no
     /// ha lanzado (`Shift+F2`). Mismo reparto que [`Self::pending_open`] y
     /// [`Self::pending_shell`]: `dispatch` decide QUÉ, el run loop —dueño del
@@ -2015,6 +2031,7 @@ impl App {
             compare_size_probed: std::collections::HashSet::new(),
             compare_generation: 0,
             pending_compare: None,
+            pending_space_check: None,
             sync: None,
             pending_sync: None,
             pending_sync_apply: None,
@@ -3071,13 +3088,46 @@ impl App {
                 self.open_transfer_name_with(kind, from, one.clone(), to_dir, from_marks);
             }
             _ => {
+                // El total SOLO si TODOS los ítems traen tamaño (#149): un
+                // directorio no lo trae en el listado, y sumar lo que sí
+                // avisaría con un número menor que el real — peor que callar.
+                self.pending_space_check =
+                    self.transfer_total(from, &items)
+                        .map(|total| crate::app::SpaceCheck {
+                            to: to_dir.clone(),
+                            total,
+                        });
                 self.modal = Some(Modal::ConfirmTransfer {
                     kind,
                     items,
                     to: to_dir,
+                    space: None,
                 });
             }
         }
+    }
+
+    /// Los bytes que una transferencia va a escribir, o `None` si alguno de
+    /// los ítems no lo dice (#149).
+    ///
+    /// Todo o nada, y a propósito: un directorio no trae tamaño en el listado
+    /// y un listado perezoso puede no traerlo ni para un fichero. Sumar solo
+    /// lo conocido daría un total MENOR que el real, y avisar con él es avisar
+    /// de menos — que sobre «no cabe» es exactamente el error que no se puede
+    /// cometer.
+    fn transfer_total(&self, pane: usize, items: &[VPath]) -> Option<u64> {
+        let mut total: u64 = 0;
+        for path in items {
+            let entry = self.panes[pane]
+                .entries()
+                .iter()
+                .find(|e| &e.path == path)?;
+            if entry.kind != norte_proto::EntryKind::File {
+                return None;
+            }
+            total = total.checked_add(entry.size?)?;
+        }
+        Some(total)
     }
 
     /// Abre el modal de borrado (F8, #103 T10) sobre las MARCAS del pane con
@@ -4533,6 +4583,13 @@ pub enum Modal {
         items: Vec<VPath>,
         /// Directorio destino.
         to: VPath,
+        /// El aviso de espacio, cuando lo hay (#149): lo escribe el run loop
+        /// —preguntar por los volúmenes es I/O— y lo pinta este modal.
+        ///
+        /// `None` es el caso NORMAL, y significa las tres cosas honestas a la
+        /// vez: cabe, o el destino no sabe decir cuánto le queda, o no se sabe
+        /// cuánto se va a mover. Ninguna de las tres se anuncia.
+        space: Option<String>,
     },
     /// Colisión: elegir política y REENVIAR la operación entera (ADR 0005:
     /// el engine trata Ask como Fail; el TUI pregunta a nivel de task).

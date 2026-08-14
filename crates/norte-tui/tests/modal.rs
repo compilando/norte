@@ -25,6 +25,7 @@ fn confirm() -> Modal {
         kind: TransferKind::Copy,
         items: vec![vp("file:///a")],
         to: vp("file:///b"),
+        space: None,
     }
 }
 
@@ -69,7 +70,7 @@ fn trust_host() -> Modal {
 
 /// Safety pin H1 T2: Enter (`dialog.confirm`) es INERTE sobre una
 /// aprobación de agente — aprobar una mutación de agente no es una
-/// respuesta inocua que Enter deba disparar sola (decisión 2 del plan).
+
 #[test]
 fn aprobacion_ignora_confirm() {
     assert_eq!(dialog_action(&approval(), "dialog.confirm"), None);

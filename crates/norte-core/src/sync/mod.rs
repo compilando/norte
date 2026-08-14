@@ -300,10 +300,20 @@ async fn compared_rows<'a>(
     dest: &'a dyn Provider,
     dest_root: &'a norte_proto::VPath,
     opts: norte_compare::CompareOptions,
+    excluded: Vec<norte_proto::VPath>,
     cancel: CancellationToken,
 ) -> norte_compare::CompareStream<'a> {
     let sides = crate::compare::probed_sides(source, source_root, dest, dest_root).await;
-    norte_compare::compare(source, source_root, dest, dest_root, opts, sides, cancel)
+    norte_compare::compare(
+        source,
+        source_root,
+        dest,
+        dest_root,
+        opts,
+        sides,
+        excluded,
+        cancel,
+    )
 }
 
 /// # Errors
@@ -349,6 +359,10 @@ pub(crate) async fn run_sync_plan(
         dest.as_ref(),
         &opts.dest_root,
         compare_options(&compare, &opts),
+        // Lo mismo que en `fs.compare` (#209): un plan de sincronización LEE
+        // los dos árboles igual que una comparación, así que un agente no
+        // puede inventariar por aquí el directorio de estado del daemon.
+        crate::policy::walk_exclusions(&ctx.actor),
         ctx.cancel.clone(),
     )
     .await;

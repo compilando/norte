@@ -2553,6 +2553,7 @@ mod tests {
             &raiz,
             CompareOptions::cheap(),
             sides,
+            Vec::new(),
             CancellationToken::new(),
         );
         let plan_opts = SyncOptions {

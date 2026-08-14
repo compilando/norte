@@ -950,42 +950,38 @@ fn merge_plan_done(
     Ok(())
 }
 
-/// Como [`map_backend_err`], pero para `sync.plan`, cuyo error más probable en
-/// uso normal llega como «internal error».
+/// Como [`map_backend_err`], pero para `sync.plan`: el rechazo que un agente
+/// alcanza sin hacer nada raro es el tope de planes RETENIDOS por conexión, y
+/// lo que hay que decirle es qué hacer con él.
 ///
-/// El daemon retiene como mucho 16 planes POR CONEXIÓN (10 min de TTL) y
-/// rehúsa el 17.º con `OVERLOADED` y un mensaje que dice exactamente qué pasa.
-/// Ese mensaje se pierde: `RpcError::protocol` no lleva `data`, y
-/// `RemoteBackend::to_taxonomy` colapsa un `Rpc` sin `data` en
-/// `Error::Internal { panic: false }`, que se imprime «internal error (panic:
-/// false)». El puente tiene UNA conexión de streams para todo el proceso, no
-/// puede aplicar y no hay método para descartar, así que el tope es alcanzable
-/// sin hacer nada raro — y «internal error» es justo el texto que hace que un
-/// agente reintente en bucle, que es lo que llenó el tope.
+/// Desde #182 ese rechazo llega con TAXONOMÍA
+/// ([`Error::LIMIT_RETAINED_SYNC_PLANS`](norte_proto::Error::LIMIT_RETAINED_SYNC_PLANS)),
+/// no como «internal error», así que esta función ya no adivina la causa: la
+/// LEE. Lo que queda es el consejo, que la taxonomía no lleva y el agente
+/// necesita — sobre todo el «no reintentes en bucle», porque reintentar es lo
+/// que llena este tope.
 ///
-/// Se nombra la causa probable sin afirmarla: el mensaje del daemon no ha
-/// llegado hasta aquí y decir que fue el tope cuando fue otra cosa sería la
-/// misma clase de mentira. Que el texto del RPC viaje entero es
-/// <https://github.com/compilando/norte/issues/182>.
+/// Se fue con el arreglo: las dos constantes copiadas de `daemon::server` (que
+/// las tiene privadas) y el párrafo que nombraba la causa «probable» sin poder
+/// afirmarla.
 fn map_plan_err(e: norte_proto::Error) -> String {
     match e {
-        norte_proto::Error::Internal { panic: false } => format!(
-            "sync.plan was refused and the daemon's reason did not survive the trip \
-             (issue #182). The cause reachable in normal use is the cap of \
-             {MAX_RETAINED_SYNC_PLANS_HINT} retained plans per connection, which expire on \
-             their own after ~{SYNC_PLAN_TTL_MIN_HINT} minutes. Do NOT retry in a loop: \
-             report the plans you already have and let the older ones expire."
-        ),
+        norte_proto::Error::LimitExceeded { ref limit }
+            if limit == norte_proto::Error::LIMIT_RETAINED_SYNC_PLANS =>
+        {
+            format!(
+                "sync.plan was refused: this connection is holding as many retained plans as \
+                 the daemon allows. They expire on their own after ~{SYNC_PLAN_TTL_MIN_HINT} \
+                 minutes. Do NOT retry in a loop: report the plans you already have and let \
+                 the older ones expire."
+            )
+        }
         other => map_backend_err(other),
     }
 }
 
-/// Los dos números que [`map_plan_err`] nombra, y que el daemon no exporta:
-/// `MAX_RETAINED_SYNC_PLANS` es privado de `norte_core::daemon::server`. Si
-/// alguno cambia allí, este texto miente — por eso están aquí arriba y con
-/// nombre, y no incrustados en un `format!`.
-const MAX_RETAINED_SYNC_PLANS_HINT: usize = 16;
-/// El TTL del plan retenido, en minutos ([`methods::SYNC_PLAN_TTL_MS`]).
+/// El TTL del plan retenido, en minutos ([`methods::SYNC_PLAN_TTL_MS`]): lo
+/// ÚNICO que sigue haciendo falta nombrar, y viene del wire en vez de copiado.
 const SYNC_PLAN_TTL_MIN_HINT: u64 = methods::SYNC_PLAN_TTL_MS / 60_000;
 
 /// Traduce el arg opcional `criteria` (array de strings) de `compare` y de
@@ -1858,17 +1854,30 @@ mod tests {
         assert!(!token.is_cancelled(), "el camino normal no cancela nada");
     }
 
-    /// MAJOR: el 17.º plan de una conexión llega como `Internal`, y "internal
-    /// error" es justo el texto que hace reintentar a un agente.
+    /// #182: el 17.º plan de una conexión llega con su TAXONOMÍA, y el texto
+    /// que se le da al agente le dice qué hacer — nunca «internal error», que
+    /// es justo la cadena que le hace reintentar, y reintentar es lo que llena
+    /// este tope.
     #[test]
     fn el_error_de_plan_nombra_el_tope_en_vez_de_decir_internal() {
-        let texto = map_plan_err(norte_proto::Error::Internal { panic: false });
+        let texto = map_plan_err(norte_proto::Error::LimitExceeded {
+            limit: norte_proto::Error::LIMIT_RETAINED_SYNC_PLANS.to_owned(),
+        });
         assert!(texto.contains("retained plans"), "{texto}");
-        assert!(texto.contains("#182"), "el issue del arreglo real: {texto}");
+        assert!(
+            texto.contains("Do NOT retry"),
+            "el consejo que importa: {texto}"
+        );
         assert!(
             !texto.contains("internal error"),
             "ni siquiera nombrándolo: es LA cadena que hace reintentar: {texto}"
         );
+        // Y OTRO límite (un contenedor enorme) no se disfraza de tope de
+        // planes: cada token dice lo suyo.
+        let otro = map_plan_err(norte_proto::Error::LimitExceeded {
+            limit: norte_proto::Error::LIMIT_ENTRIES.to_owned(),
+        });
+        assert!(!otro.contains("retained plans"), "{otro}");
         // Lo demás sigue saliendo con el texto accionable de siempre.
         let denegado = map_plan_err(norte_proto::Error::PolicyDenied {
             rule: "r".to_owned(),

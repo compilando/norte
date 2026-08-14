@@ -762,6 +762,7 @@ sync-blocker-unknown = bloqueo que esta versión no conoce
 # deshacer» habla del PLAN, jamás es una garantía por entrada — una entrada que
 # la papelera no sepa nombrar, o una ruta que haya cambiado entretanto, se
 # NOMBRA en el informe del undo en vez de tocarla.
+space-warning = { $size } a escribir y { $free } libres en el destino
 sync-outlook-full = todo esto se puede deshacer después, salvo lo que cambie entretanto
 sync-outlook-partial = parte de esto se puede deshacer después y parte no
 sync-outlook-nothing = nada de esto lo puede deshacer norte

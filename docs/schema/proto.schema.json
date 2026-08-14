@@ -1071,7 +1071,7 @@
               "type": "string"
             },
             "limit": {
-              "description": "QUÉ límite se excedió — vocabulario CERRADO, comparable por\nigualdad (nunca el valor numérico, que es configuración local):\n[`Error::LIMIT_ENTRIES`] (entradas del índice — o anunciadas por\nel EOCD — por encima de `max_entries`, presupuesto de omitidas\nincluido), [`Error::LIMIT_DECOMPRESSED_BYTES`] (inflado\nacumulado por encima de `max_decompressed_bytes`) o\n[`Error::LIMIT_NESTING`] (capas de archivo anidadas por encima\nde `max_nesting`, #56/proto 0.24). Los emisores usan las\nconstantes, jamás literales sueltos (fuente única, pin en\ntests). Forward-compat: un token DESCONOCIDO (peer más nuevo)\nse trata como límite genérico — mostrar el string tal cual,\njamás fallar el parse ni adivinar.",
+              "description": "QUÉ límite se excedió — vocabulario CERRADO, comparable por\nigualdad (nunca el valor numérico, que es configuración local):\n[`Error::LIMIT_ENTRIES`] (entradas del índice — o anunciadas por\nel EOCD — por encima de `max_entries`, presupuesto de omitidas\nincluido), [`Error::LIMIT_DECOMPRESSED_BYTES`] (inflado\nacumulado por encima de `max_decompressed_bytes`) o\n[`Error::LIMIT_NESTING`] (capas de archivo anidadas por encima\nde `max_nesting`, #56/proto 0.24) o\n[`Error::LIMIT_RETAINED_SYNC_PLANS`] (planes de sincronización\nretenidos por una conexión, 0.44.0). Los emisores usan las\nconstantes, jamás literales sueltos (fuente única, pin en\ntests). Forward-compat: un token DESCONOCIDO (peer más nuevo)\nse trata como límite genérico — mostrar el string tal cual,\njamás fallar el parse ni adivinar.",
               "type": "string"
             }
           },

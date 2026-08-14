@@ -583,7 +583,7 @@ use crate::{
 /// La inversa —un daemon 0.41 mandando un informe SIN `dest_trash` a un cliente
 /// 0.42, que fallaría al deserializar— no ocurre: [`version_compatible`] no
 /// negocia un cliente con minor MAYOR que el servidor.
-pub const PROTOCOL_VERSION: &str = "0.43.0";
+pub const PROTOCOL_VERSION: &str = "0.44.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver

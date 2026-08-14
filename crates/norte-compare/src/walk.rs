@@ -152,6 +152,7 @@ pub type CompareStream<'a> =
 /// descender la izquierda de `(a, b)` es el espejo de descender la derecha de
 /// `(b, a)`, no el de descender la izquierda.
 #[must_use]
+#[allow(clippy::too_many_arguments)] // el octavo es `excluded`, y agrupar (provider, raíz) en un tipo nuevo sería una API distinta para no cambiar nada más
 pub fn compare<'a>(
     left: &'a dyn Provider,
     left_root: &VPath,
@@ -159,13 +160,23 @@ pub fn compare<'a>(
     right_root: &VPath,
     opts: CompareOptions,
     sides: Sides,
+    excluded: Vec<VPath>,
     cancel: CancellationToken,
 ) -> CompareStream<'a> {
+    // Una raíz que YA cae en lo excluido no se compara: sin esto, el propio
+    // listado del directorio protegido saldría entero en filas (#209).
+    if excluded
+        .iter()
+        .any(|x| es_descendiente(x, left_root) || es_descendiente(x, right_root))
+    {
+        return Box::pin(stream::empty());
+    }
     let walk = Walk {
         left,
         right,
         opts,
         sides,
+        excluded,
         cancel,
         stack: vec![Frame {
             left: Some(synthetic_dir(left_root)),
@@ -418,6 +429,18 @@ struct Walk<'a> {
     /// Cómo empareja la PAREJA de lados — la decide el llamante de
     /// [`compare`], no este struct (#153).
     sides: Sides,
+    /// Subárboles que este walk NO mira: ni fila, ni descenso, ni `stat`
+    /// (#209).
+    ///
+    /// Existe porque el gate de lectura del daemon mira las dos RAÍCES y nada
+    /// más: comparar `$HOME` contra otra cosa es legítimo y arrastraba el
+    /// directorio de estado del daemon con ello — `journal.db`, los spools de
+    /// sync y, con el rung de hash encendido, un oráculo de igualdad sobre sus
+    /// bytes. Es la mitad que #165 no pudo cerrar.
+    ///
+    /// Vive aquí y no en [`CompareOptions`] porque esa struct es `Copy` y esto
+    /// es una lista; y no en [`Sides`] por lo mismo.
+    excluded: Vec<VPath>,
     cancel: CancellationToken,
     /// Pila explícita: profundidad primero sin recursión async.
     stack: Vec<Frame>,
@@ -426,6 +449,12 @@ struct Walk<'a> {
     /// Contador monótono de [`CompareRow::id`].
     next_id: u64,
     finished: bool,
+}
+
+/// `true` si `path` cae bajo `root` (la raíz misma cuenta), byte a byte por
+/// segmentos — la misma comparación que hace el gate del daemon.
+fn es_descendiente(root: &VPath, path: &VPath) -> bool {
+    norte_proto::methods::RelPath::under(root, path).is_some()
 }
 
 /// Cuántos `stat` de hidratación corren A LA VEZ (#156). Dentro del `8..16`
@@ -532,6 +561,25 @@ impl Walk<'_> {
     /// También atiende el frame de UN SOLO lado —el descenso por un huérfano—:
     /// el lado ausente aporta el listado vacío y todo lo demás es el mismo
     /// camino, filas huérfanas incluidas.
+    /// [`list_side`] menos lo EXCLUIDO (#209): una entrada bajo un subárbol
+    /// protegido se cae aquí, antes de emparejar, así que no produce fila, ni
+    /// descenso, ni `stat` de hidratación.
+    ///
+    /// Se filtra sobre el listado y no en el descenso porque un subárbol
+    /// protegido no debe ni NOMBRARSE: una fila que dijera «solo a la
+    /// izquierda: journal.db» ya cuenta lo que el gate quería callar.
+    async fn list_visible(
+        &self,
+        provider: &dyn Provider,
+        dir: Option<&Entry>,
+    ) -> Result<Vec<Entry>, ListFailure> {
+        let mut entries = list_side(provider, dir, &self.cancel).await?;
+        if !self.excluded.is_empty() {
+            entries.retain(|e| !self.excluded.iter().any(|x| es_descendiente(x, &e.path)));
+        }
+        Ok(entries)
+    }
+
     async fn visit(&mut self, frame: Frame) {
         debug_assert!(
             frame.left.is_some() || frame.right.is_some(),
@@ -545,8 +593,8 @@ impl Walk<'_> {
         // es el vacío, y de ahí sale una fila huérfana por cada entrada del
         // lado que sí está, por el mismo camino que todo lo demás.
         let listed = (
-            list_side(self.left, frame.left.as_ref(), &self.cancel).await,
-            list_side(self.right, frame.right.as_ref(), &self.cancel).await,
+            self.list_visible(self.left, frame.left.as_ref()).await,
+            self.list_visible(self.right, frame.right.as_ref()).await,
         );
         if matches!(listed.0, Err(ListFailure::Cancelled))
             || matches!(listed.1, Err(ListFailure::Cancelled))
@@ -1408,6 +1456,7 @@ mod tests {
             &MemProvider::root(),
             opts,
             sides,
+            Vec::new(),
             CancellationToken::new(),
         )
     }
@@ -1466,6 +1515,64 @@ mod tests {
 
     /// The base case, and the one a user runs after every copy: two identical
     /// trees produce nothing but `Same`, at every depth.
+    /// #209: un subárbol EXCLUIDO no sale en ninguna fila, ni por un lado ni
+    /// por el otro, ni se desciende.
+    ///
+    /// Es la mitad que #165 no pudo cerrar: el gate de lectura del daemon mira
+    /// las dos RAÍCES, así que comparar `$HOME` contra otra cosa es legítimo y
+    /// arrastraba el directorio de estado del daemon con ello. Una fila que
+    /// dijera «solo a la izquierda: journal.db» ya cuenta lo que el gate
+    /// quería callar, así que la exclusión se aplica al LISTADO y no al
+    /// descenso.
+    #[tokio::test]
+    async fn un_subarbol_excluido_no_sale_en_ninguna_fila() {
+        let izq = tree(&["docs/a.txt", "estado/journal.db", "estado/spools/s.jsonl"]).await;
+        let der = tree(&["docs/a.txt"]).await;
+        let excluido = MemProvider::root().join(Segment::new(b"estado".to_vec()).expect("seg"));
+
+        let filas = collect(compare(
+            &izq,
+            &MemProvider::root(),
+            &der,
+            &MemProvider::root(),
+            CompareOptions::cheap(),
+            Sides::from_capabilities(izq.capabilities(), der.capabilities()),
+            vec![excluido.clone()],
+            CancellationToken::new(),
+        ))
+        .await;
+
+        let nombres: Vec<String> = filas
+            .iter()
+            .filter_map(|r| r.left.as_ref().or(r.right.as_ref()))
+            .map(|e| e.path.display_lossy())
+            .collect();
+        assert!(
+            nombres.iter().any(|n| n.contains("a.txt")),
+            "lo de fuera se compara igual: {nombres:?}"
+        );
+        assert!(
+            !nombres.iter().any(|n| n.contains("estado")),
+            "ni el directorio protegido ni nada de dentro: {nombres:?}"
+        );
+
+        // Y una RAÍZ excluida no produce nada en absoluto: sin esto, el propio
+        // listado del directorio protegido saldría entero.
+        let raiz = excluido.clone();
+        let vacio = collect(compare(
+            &izq,
+            &raiz,
+            &der,
+            &MemProvider::root(),
+            CompareOptions::cheap(),
+            Sides::from_capabilities(izq.capabilities(), der.capabilities()),
+            vec![excluido],
+            CancellationToken::new(),
+        ))
+        .await;
+        assert!(vacio.is_empty(), "{vacio:?}");
+    }
+
     #[tokio::test]
     async fn identical_trees_are_all_same() {
         let (l, r) = twin_trees(&["a.txt", "sub/b.txt", "sub/deep/c.txt"]).await;
@@ -1670,6 +1777,7 @@ mod tests {
             &MemProvider::root(),
             descending(Side::Left),
             sides,
+            Vec::new(),
             cancel.clone(),
         );
         let mut vistas = 0_usize;
@@ -1995,6 +2103,7 @@ mod tests {
             &MemProvider::root(),
             CompareOptions::cheap(),
             sides,
+            Vec::new(),
             CancellationToken::new(),
         ))
         .await;
@@ -2103,6 +2212,7 @@ mod tests {
             &MemProvider::root(),
             CompareOptions::cheap(),
             sides,
+            Vec::new(),
             cancel.clone(),
         );
         let first = stream.next().await.expect("at least one row");
@@ -2130,6 +2240,7 @@ mod tests {
             &MemProvider::root(),
             CompareOptions::cheap(),
             sides,
+            Vec::new(),
             cancel,
         )
         .collect()
@@ -2569,6 +2680,7 @@ mod tests {
             &MemProvider::root(),
             CompareOptions::cheap().with_hash(),
             sides,
+            Vec::new(),
             cancel,
         )
         .collect()
@@ -2630,6 +2742,7 @@ mod tests {
             &LocalProvider::root(),
             opts,
             sides,
+            Vec::new(),
             CancellationToken::new(),
         )
     }
@@ -2829,6 +2942,7 @@ mod tests {
             &MemProvider::root(),
             opts,
             sides,
+            Vec::new(),
             CancellationToken::new(),
         )
     }
@@ -2933,6 +3047,7 @@ mod tests {
             &MemProvider::root(),
             CompareOptions::cheap(),
             sides,
+            Vec::new(),
             CancellationToken::new(),
         ))
         .await;
@@ -3105,6 +3220,7 @@ mod tests {
             &MemProvider::root(),
             CompareOptions::cheap(),
             sides,
+            Vec::new(),
             CancellationToken::new(),
         ))
         .await;
@@ -3257,6 +3373,7 @@ mod tests {
             &MemProvider::root(),
             CompareOptions::cheap(),
             sides,
+            Vec::new(),
             cancel,
         );
 
@@ -3468,6 +3585,7 @@ mod tests {
             &zip_root,
             CompareOptions::cheap(),
             sides,
+            Vec::new(),
             CancellationToken::new(),
         );
         let rows = collect(stream).await;

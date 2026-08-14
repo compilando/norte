@@ -749,6 +749,7 @@ sync-blocker-unknown = blocker this version does not know
 # undone" is a statement about the PLAN, never a guarantee per entry — an
 # entry the trash cannot name, or a path that changed in the meantime, is
 # named in the undo report instead of being touched.
+space-warning = { $size } to write and { $free } free at the destination
 sync-outlook-full = you can undo all of this afterwards, except anything that changes in the meantime
 sync-outlook-partial = some of this can be undone afterwards, and some cannot
 sync-outlook-nothing = nothing here can be undone by norte

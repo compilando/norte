@@ -91,6 +91,106 @@ fn app_base() -> App {
     app
 }
 
+/// #210: en la barra de estado la RUTA cede, y el contador `pos/total` no.
+///
+/// Con una ruta larga, ratatui recortaba la cola: lo que quedaba a la vista
+/// era un dígito suelto del total, que se lee como cualquier otra cosa. Ahora
+/// la ruta se elipsa por el medio —el principio dice dónde estás y el final
+/// qué carpeta es— y todo lo que viene detrás sobrevive entero.
+/// #149: el aviso de espacio se pinta DEBAJO del destino y ENCIMA de las
+/// teclas — lo último que se lee antes de decidir.
+///
+/// Y solo cuando lo hay: que quepa, que el destino no sepa decir cuánto le
+/// queda o que no se sepa cuánto se va a mover se callan las tres, porque un
+/// «sí cabe» en cada copia enseña a no leer la línea.
+#[test]
+fn el_modal_de_transferencia_pinta_el_aviso_de_espacio() {
+    let dir = vp("file:///casa");
+    let pintar = |space: Option<String>| {
+        let mut app = App::new(
+            Pane::new(dir.clone(), Vec::new()),
+            Pane::new(dir.clone(), Vec::new()),
+        );
+        app.dialog_hints = default_dialog_hints();
+        app.modal = Some(Modal::ConfirmTransfer {
+            kind: TransferKind::Copy,
+            items: vec![vp("file:///casa/a.bin"), vp("file:///casa/b.bin")],
+            to: vp("file:///medios"),
+            space,
+        });
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+        terminal.backend().to_string()
+    };
+
+    let aviso = norte_frontend::space::warning(
+        Some(4_200_000_000),
+        Some(1_100_000_000),
+        norte_i18n::active(),
+    )
+    .expect("no cabe: hay aviso");
+    let con = pintar(Some(aviso.clone()));
+    let lineas: Vec<&str> = con.lines().collect();
+    let fila = |aguja: &str| {
+        lineas
+            .iter()
+            .position(|l| l.contains(aguja))
+            .unwrap_or_else(|| panic!("falta {aguja:?} en:\n{con}"))
+    };
+    let destino = fila("medios");
+    let avisada = fila(aviso.split_whitespace().next().expect("primera palabra"));
+    assert!(avisada > destino, "el aviso va debajo del destino:\n{con}");
+
+    // Sin aviso, ni rastro de él.
+    let sin = pintar(None);
+    assert!(!sin.contains(&aviso), "cuando cabe no se dice nada:\n{sin}");
+}
+
+#[test]
+fn la_barra_de_estado_recorta_la_ruta_y_no_el_contador() {
+    let hondo = vp(&format!(
+        "file:///{}",
+        ["carpeta-con-nombre-larguisimo"; 6].join("/")
+    ));
+    let mut app = App::new(
+        Pane::new(
+            hondo.clone(),
+            (0..42)
+                .map(|i| {
+                    entry(
+                        &hondo,
+                        format!("f{i:03}.txt").as_bytes(),
+                        EntryKind::File,
+                        Some(1),
+                    )
+                })
+                .collect(),
+        ),
+        Pane::new(hondo, Vec::new()),
+    );
+    app.focused_mut().set_cursor(7);
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+    ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 80, 24));
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let barra = terminal
+        .backend()
+        .to_string()
+        .lines()
+        .last()
+        .expect("barra de estado")
+        .to_owned();
+
+    assert!(
+        barra.contains("8/42"),
+        "el contador entero, que es lo que dice cuánto hay: {barra:?}"
+    );
+    assert!(
+        barra.contains('…'),
+        "y la ruta cede por el medio: {barra:?}"
+    );
+}
+
 #[test]
 fn snapshot_navegacion() {
     insta::assert_snapshot!(render(&app_base()));
@@ -563,6 +663,7 @@ fn snapshot_modal_confirm_transfer_cjk() {
         kind: TransferKind::Copy,
         items: vec![vp("file:///casa/notas.txt")],
         to: vp("file:///otro/日本語のファイル名.txt"),
+        space: None,
     });
     insta::assert_snapshot!(render(&app));
 }
@@ -686,6 +787,7 @@ fn ningun_modal_con_hint_generado_ofrece_verbos_bajo_la_ayuda() {
                 kind: TransferKind::Copy,
                 items: vec![vp("file:///casa/notas.txt")],
                 to: vp("file:///otro"),
+                space: None,
             },
             hints.confirm.clone(),
         ),

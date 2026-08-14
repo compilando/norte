@@ -2472,6 +2472,27 @@ async fn run(
         if let Some(params) = app.pending_compare.take() {
             launch_compare(app, backend, &mut compare_run, params).await;
         }
+        // #149: ¿cabe en el destino? Preguntar por los volúmenes es I/O, así
+        // que el modal se abre SIN el aviso y esta vuelta lo rellena. El
+        // reparto es el de `pending_compare`: el despacho decide QUÉ, el run
+        // loop lo pregunta.
+        //
+        // El fallo se traga a propósito: no poder enumerar volúmenes no puede
+        // impedir una copia ni pintar una alarma — «no lo sé» se dice
+        // callando, que es el contrato de `space::warning`.
+        if let Some(check) = app.pending_space_check.take() {
+            let libre = backend
+                .volumes(false)
+                .await
+                .ok()
+                .and_then(|vols| norte_frontend::space::free_for(&check.to, &vols));
+            if let Some(aviso) =
+                norte_frontend::space::warning(Some(check.total), libre, norte_i18n::active())
+                && let Some(Modal::ConfirmTransfer { space, .. }) = app.modal.as_mut()
+            {
+                *space = Some(aviso);
+            }
+        }
         // `Ctrl+Y` / `s` / `m`: el despacho resolvió QUÉ sincronizar, y aquí
         // se lanza — mismo reparto que la comparación, en la misma cabecera de
         // vuelta y por la misma razón.
@@ -2590,7 +2611,10 @@ async fn run(
         // costaba un frame de retraso — el cursor podía caer fuera de la
         // ventana pintada, o sea desaparecer de la pantalla justo al llegar
         // al borde.
-        ui::before_frame(app, terminal.size()?.height);
+        {
+            let s = terminal.size()?;
+            ui::before_frame(app, ratatui::layout::Rect::new(0, 0, s.width, s.height));
+        }
         // Exención puntual de la regla 2: el draw escribe la terminal de
         // control síncronamente (patrón async oficial de ratatui; acotado,
         // runtime multi-thread).
@@ -2606,7 +2630,7 @@ async fn run(
         // El alto REAL del frame que se acaba de pintar: si la terminal cambió
         // de tamaño entre `before_frame` y el draw, este es el bueno, y de él
         // salen la paginación y el radio de la sonda de stat.
-        ui::before_frame(app, pintado.area.height);
+        ui::before_frame(app, pintado.area);
         // MISMO trato para la geometría del ratón: el draw es quien sabe
         // dónde cayó cada pane y con qué scroll, así que la devuelve al
         // modelo y el hit test resuelve contra la pantalla que el usuario
@@ -8295,7 +8319,9 @@ async fn on_dialog_key(
                 Modal::ConfirmDelete { items, permanent } => {
                     submit_deletes(app, backend, &items, permanent).await;
                 }
-                Modal::ConfirmTransfer { kind, items, to } => {
+                Modal::ConfirmTransfer {
+                    kind, items, to, ..
+                } => {
                     submit_transfers(app, backend, kind, &items, &to, TransferOptions::default())
                         .await;
                 }

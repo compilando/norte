@@ -208,6 +208,7 @@ mod tests {
                 kind: TransferKind::Copy,
                 items: vec![vp("file:///x/a")],
                 to: vp("file:///y"),
+                space: None,
             },
             collision_modal_de_test(),
             approval_modal_de_test(),

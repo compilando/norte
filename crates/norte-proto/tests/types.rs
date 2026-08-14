@@ -1004,10 +1004,10 @@ fn version_ventana_actual() {
     // sin romperse — pero leería «un motivo que no sé nombrar» sobre un `Skip`
     // que sí sabe no ejecutar, y eso es exactamente lo que la ventana N/N-1
     // permite que pase y N-2 no.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.43.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.42.0"), "N-1");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.44.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.43.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.41.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.42.9"),
         "N-2 fuera de la ventana"
     );
 }

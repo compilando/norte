@@ -4033,6 +4033,7 @@ mod tests {
             &raiz,
             CompareOptions::cheap(),
             sides,
+            Vec::new(),
             CancellationToken::new(),
         );
         let opts = SyncOptions {
@@ -4102,6 +4103,7 @@ mod tests {
                 ..CompareOptions::cheap()
             },
             sides,
+            Vec::new(),
             CancellationToken::new(),
         );
         let opts = SyncOptions {
