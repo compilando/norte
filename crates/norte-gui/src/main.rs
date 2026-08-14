@@ -2205,13 +2205,17 @@ impl NorteGui {
                 }
                 // Regla 3: planificar recorre los dos árboles enteros, así que
                 // lo que se suelta se cancela — el arranque vencido, que ni
-                // llega a abrir, y el plan al que sustituye.
-                let cancel = match start {
-                    sync_view::Start::Superseded(t) => Some(t),
-                    sync_view::Start::Opened(previo) => previo,
-                };
-                if let Some(t) = cancel {
-                    let _ = self.cmds.send(SessionCmd::Cancel(t));
+                // llega a abrir, y las Tasks del panel al que sustituye,
+                // plan y aplicación si había arrancado (#191).
+                match start {
+                    sync_view::Start::Superseded(t) => {
+                        let _ = self.cmds.send(SessionCmd::Cancel(t));
+                    }
+                    sync_view::Start::Opened(previo) => {
+                        for t in previo.into_iter().flat_map(sync_view::ClosedTasks::ids) {
+                            let _ = self.cmds.send(SessionCmd::Cancel(t));
+                        }
+                    }
                 }
             }
             // Sin guard de generación, y es la corrección de la revisión rust
@@ -2739,7 +2743,12 @@ impl NorteGui {
             // recorrió—. El panel se queda abierto para poder leerlo.
             sync_view::Key::CancelTask => {
                 if let Some(view) = self.sync.as_mut() {
-                    let _ = self.cmds.send(SessionCmd::Cancel(view.task_id));
+                    // La Task que este `Esc` para es la que está VIVA ahora:
+                    // la de aplicación una vez adoptada, y si no la del plan
+                    // — el mismo par que antes vivía reasignado en un único
+                    // campo (#191).
+                    let live = view.apply_task.unwrap_or(view.plan_task);
+                    let _ = self.cmds.send(SessionCmd::Cancel(live));
                     view.run.cancel_requested = true;
                     // La segunda pregunta se cae con la Task que la motivó:
                     // dejarla puesta es cómo un `y` posterior aprueba otra
@@ -2798,23 +2807,27 @@ impl NorteGui {
         }
     }
 
-    /// Cierra el panel de sincronización y **cancela siempre** la Task que lo
-    /// alimentaba, por lo mismo que [`Self::close_compare`]: en remoto el
-    /// daemon seguiría recorriendo los dos árboles para un panel que ya no
-    /// existe, y un `task.cancel` sobre una Task terminada es un no-op.
+    /// Cierra el panel de sincronización y **cancela siempre** las Tasks que
+    /// lo alimentaban —plan, y aplicación si había arrancado (#191)—, por lo
+    /// mismo que [`Self::close_compare`]: en remoto el daemon seguiría
+    /// recorriendo los dos árboles para un panel que ya no existe, y un
+    /// `task.cancel` sobre una Task terminada es un no-op.
     ///
     /// Es el TERCER camino que suelta el panel (los otros dos están en
     /// `sync_view::on_start`), y por eso cancela aquí: la regla la enuncia
     /// `sync_view::route_steps`. Lo llaman el `Esc` del panel
     /// ([`Self::on_sync_key`]) y la apertura del visor, que lo excluye.
     ///
-    /// **A media APLICACIÓN esto la cancela**, y es deliberado: desde el
-    /// `SyncApplyStarted` la Task del panel es la que escribe y borra, así que
-    /// cerrar la para. Ver `sync_view::close`, que enuncia la regla y lo que
-    /// hoy NO cubre.
+    /// **A media APLICACIÓN esto cancela LAS DOS**, y es deliberado: desde el
+    /// `SyncApplyStarted` `apply_task` es la Task que escribe y borra, así que
+    /// cerrar la para — y `plan_task` sigue siendo una Task real (su canal
+    /// puede seguir en vuelo), así que cerrar la para también. Ver
+    /// `sync_view::close`, que enuncia la regla.
     fn close_sync(&mut self) {
-        if let Some(task_id) = sync_view::close(&mut self.sync) {
-            let _ = self.cmds.send(SessionCmd::Cancel(task_id));
+        if let Some(tasks) = sync_view::close(&mut self.sync) {
+            for task_id in tasks.ids() {
+                let _ = self.cmds.send(SessionCmd::Cancel(task_id));
+            }
         }
     }
 

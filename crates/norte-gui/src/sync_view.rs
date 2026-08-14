@@ -72,7 +72,8 @@ use crate::sp;
 /// El panel de sincronización abierto en la GUI: el run compartido con la
 /// TUI, más lo que solo esta GUI necesita.
 pub struct SyncView {
-    /// La Task que ALIMENTA este panel: la del plan mientras se planifica.
+    /// La Task del PLAN: la que arrancó este panel, y la que
+    /// [`SyncView::on_plan_ended`] filtra contra.
     ///
     /// No es decoración, y no es redundante con el `task_id` que el modelo
     /// guarda en `SyncState::Planning`: ese se cae en cuanto el plan cierra
@@ -81,17 +82,25 @@ pub struct SyncView {
     /// seguir recorriendo los dos árboles aunque el plan ya esté cerrado, y
     /// cancelar una Task terminada es un no-op—.
     ///
-    /// También es el filtro de [`SyncView::on_plan_ended`]: cuando la tarea 4
-    /// lance `sync.apply`, el final del canal del PLAN seguirá en vuelo, y
-    /// sin este contraste pintaría «hecho» sobre una aplicación en curso.
+    /// **Ya NO se reasigna al arrancar `sync.apply`** (#191): antes este
+    /// campo se sobrescribía en [`SyncView::on_apply_started`] con la Task de
+    /// escritura, y eso perdía el ÚNICO sitio que sabía cuál era la Task del
+    /// plan. `sync.plan_done` llega ANTES de que el canal del plan cierre
+    /// (documentado en [`SyncView::on_plan_ended`]), así que aprobar
+    /// enseguida deja ese canal todavía en vuelo cuando la reasignación ya
+    /// había borrado el único id que lo nombraba — nada en la GUI podía
+    /// cancelarlo. Ahora este campo se queda fijo mientras el panel vive, y
+    /// [`Self::apply_task`] es quien nombra la Task de escritura una vez
+    /// arranca.
+    pub plan_task: TaskId,
+    /// La Task de `sync.apply`, una vez arrancada — `None` mientras se
+    /// planifica y antes de aprobar.
     ///
-    /// **Se REASIGNA al arrancar `sync.apply`**
-    /// ([`SyncView::on_apply_started`]), y no es cosmético: [`close`] y el
-    /// `Esc` cancelan lo que este campo diga, así que un `task_id` que se
-    /// quedara en el del plan cancelaría una Task ya terminada (no-op) y
-    /// dejaría corriendo la que está BORRANDO, para un panel que ya no existe
-    /// (revisión rust MINOR-3).
-    pub task_id: TaskId,
+    /// Puesta por [`SyncView::on_apply_started`], que es también quien decide
+    /// si el panel la ADOPTA. [`close`] y el `Esc` cancelan las DOS Tasks que
+    /// este struct nombra, plan y aplicación, precisamente porque las dos
+    /// pueden seguir corriendo a la vez (#191).
+    pub apply_task: Option<TaskId>,
     /// El pane que pidió el plan, o sea el lado ORIGEN. Viaja congelado
     /// desde la petición (mismo motivo que
     /// [`crate::compare_view::CompareView`]): el foco puede haberse movido
@@ -108,7 +117,8 @@ impl SyncView {
     #[must_use]
     pub fn new(started: Started) -> Self {
         Self {
-            task_id: started.task_id,
+            plan_task: started.task_id,
+            apply_task: None,
             source_pane: started.source_pane & 1,
             run: SyncRun::new(
                 started.task_id,
@@ -152,12 +162,19 @@ impl SyncView {
     /// —no hay `plan_hash`—.
     ///
     /// Devuelve `None` sin tocar nada si el final es de OTRA Task, y ese
-    /// contraste es lo ÚNICO que protege este camino: el evento no lleva
-    /// generación (ver [`route_steps`]), así que el final del plan al que un
-    /// panel nuevo sustituyó llega igual, y sin esto pintaría su desenlace
-    /// encima. Lo mismo valdrá cuando la tarea 4 lance `sync.apply`: el final
-    /// del canal del PLAN seguirá en vuelo mientras la aplicación corre, y
-    /// apagaría su `Running` con un «hecho» que habla de otra cosa.
+    /// contraste protege un camino: el evento no lleva generación (ver
+    /// [`route_steps`]), así que el final del plan al que un panel nuevo
+    /// sustituyó llega igual, y sin esto pintaría su desenlace encima.
+    ///
+    /// **Y también sin tocar nada si `sync.apply` ya arrancó** (#191): el
+    /// final del canal del PLAN sigue en vuelo mientras la aplicación corre
+    /// —`sync.plan_done` llega ANTES de que ese canal cierre—, y sin este
+    /// SEGUNDO guard apagaría el `Running` de la aplicación con un «hecho»
+    /// que habla de otra Task. Antes de #191 esto lo conseguía gratis la
+    /// reasignación de un único campo (`task_id` pasaba a nombrar la Task de
+    /// escritura, así que el contraste de arriba fallaba solo); separar
+    /// `plan_task` de `apply_task` para poder cancelar los dos a la vez tiene
+    /// este coste: la fase hay que preguntarla aparte.
     ///
     /// El mapeo `TaskState` → [`SyncRunState`] no se decide aquí: es
     /// [`SyncRunState::from_task_state`], el MISMO que llama la TUI en
@@ -174,7 +191,7 @@ impl SyncView {
     /// no es una regresión de esta GUI; queda anotado aquí porque éste es el
     /// sitio donde se heredó (revisión rust MINOR-6).
     pub fn on_plan_ended(&mut self, task_id: TaskId, state: &TaskState) -> Option<String> {
-        if task_id != self.task_id {
+        if task_id != self.plan_task || self.apply_task.is_some() {
             return None;
         }
         self.run.run = SyncRunState::from_task_state(state);
@@ -214,12 +231,14 @@ impl SyncView {
     ///   más estricta—. Se pregunta a la ÚNICA función que contesta eso en
     ///   toda la GUI, no a una segunda comprobación escrita aquí.
     ///
-    /// # La reasignación de `task_id` es la mitad importante
-    /// [`close`] y el `Esc` cancelan lo que ese campo diga. Sin reasignarlo,
-    /// cerrar el panel cancelaría la Task del PLAN —ya terminada, o sea un
-    /// no-op— y dejaría corriendo la que está ESCRIBIENDO y BORRANDO, para un
-    /// panel que ya no existe. Y se reasigna solo si el modelo ACEPTÓ de
-    /// verdad: la última palabra sobre si esto se está aplicando la tiene él.
+    /// # `apply_task` se RELLENA, no reasigna (#191)
+    /// [`close`] y el `Esc` cancelan las DOS Tasks que el panel conoce, plan
+    /// y aplicación — antes de #191 esto SOBRESCRIBÍA `plan_task`, así que
+    /// cerrar cancelaba únicamente la que estaba ESCRIBIENDO y dejaba
+    /// corriendo, sin nadie que la nombrara, la del plan (`sync.plan_done`
+    /// llega antes de que su canal cierre — ver [`on_plan_ended`]). Se rellena
+    /// solo si el modelo ACEPTÓ de verdad: la última palabra sobre si esto se
+    /// está aplicando la tiene él.
     pub fn on_apply_started(&mut self, task_id: TaskId) -> bool {
         // El guard (`cancel_requested`) y el pestillo viven en
         // `norte_frontend::sync::SyncView` desde la revisión de rama de C2:
@@ -231,7 +250,7 @@ impl SyncView {
         // es quien tiene la última palabra sobre si esto se está aplicando.
         let adoptada = matches!(&self.run.state, SyncState::Applying(a) if a.task_id() == task_id);
         if adoptada {
-            self.task_id = task_id;
+            self.apply_task = Some(task_id);
         }
         adoptada
     }
@@ -262,7 +281,7 @@ impl SyncView {
         state: &TaskState,
         report: Result<SyncReportResult, norte_proto::Error>,
     ) -> Option<String> {
-        if task_id != self.task_id {
+        if Some(task_id) != self.apply_task {
             return None;
         }
         let categoria = self.run.on_apply_ended(state, report);
@@ -302,6 +321,41 @@ pub struct Started {
 /// que la necesitan (TUI, GUI y CLI).
 pub use norte_frontend::sync::SyncEncodings;
 
+/// Las Tasks vivas de un panel que se suelta: siempre la del PLAN, y la de
+/// `sync.apply` si había arrancado.
+///
+/// #191: antes de esto, un panel guardaba una Task en un único campo que se
+/// REASIGNABA a la de escritura en cuanto `sync.apply` arrancaba, así que
+/// soltar el panel —por [`close`] o al sustituirlo en [`open`]— solo podía
+/// cancelar UNA de las dos, nunca las dos a la vez. `sync.plan_done` llega
+/// ANTES de que el canal del plan cierre (ver la rustdoc de
+/// [`SyncView::on_plan_ended`]), así que una aprobación pronta deja la Task
+/// del plan todavía viva en el instante en que la reasignación borraba el
+/// único id que la nombraba — nada en la GUI podía cancelarla ya.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub struct ClosedTasks {
+    /// La Task del plan. Cancelar una Task terminada es un no-op en el
+    /// daemon, así que viaja siempre, sin mirar si su canal ya cerró.
+    pub plan: TaskId,
+    /// La Task de `sync.apply`, si había arrancado.
+    pub apply: Option<TaskId>,
+}
+
+impl ClosedTasks {
+    fn of(view: &SyncView) -> Self {
+        Self {
+            plan: view.plan_task,
+            apply: view.apply_task,
+        }
+    }
+
+    /// Los ids a los que mandarles `task.cancel`, plan primero.
+    pub fn ids(self) -> impl Iterator<Item = TaskId> {
+        std::iter::once(self.plan).chain(self.apply)
+    }
+}
+
 /// Qué Task hay que cancelar cuando llega un `SyncPlanStarted`.
 ///
 /// La decisión ENTERA de ese evento, en un valor: quién se queda el hueco y a
@@ -317,11 +371,12 @@ pub enum Start {
     /// planificar recorre los dos árboles enteros, y nadie va a mirar el
     /// resultado.
     Superseded(TaskId),
-    /// Se abrió el panel. Si había otro, ésta es su Task, que también se
-    /// cancela: dos planes a la vez serían dos flujos alimentando un diálogo
-    /// cuyo `plan_hash` es lo que se aprueba (regla 3), mismo criterio que
+    /// Se abrió el panel. Si había otro, éstas son SUS Tasks —plan y, si
+    /// llegó a aplicar, aplicación (#191)—, que también se cancelan: dos
+    /// planes a la vez serían dos flujos alimentando un diálogo cuyo
+    /// `plan_hash` es lo que se aprueba (regla 3), mismo criterio que
     /// `launch_sync_plan` en la TUI.
-    Opened(Option<TaskId>),
+    Opened(Option<ClosedTasks>),
 }
 
 /// Decide qué hacer con un `SyncPlanStarted` y lo aplica sobre el hueco.
@@ -352,30 +407,33 @@ pub fn on_start(
 /// vista. El llamante de esta GUI es [`on_start`], que le pone delante el
 /// guard de generación.
 #[must_use]
-pub fn open(slot: &mut Option<SyncView>, started: Started) -> Option<TaskId> {
-    let superseded = slot.take().map(|old| old.task_id);
+pub fn open(slot: &mut Option<SyncView>, started: Started) -> Option<ClosedTasks> {
+    let superseded = slot.take().as_ref().map(ClosedTasks::of);
     *slot = Some(SyncView::new(started));
     superseded
 }
 
-/// Suelta el panel y devuelve la Task a la que hay que mandarle `task.cancel`.
+/// Suelta el panel y devuelve las Tasks a las que hay que mandarle
+/// `task.cancel` ([`ClosedTasks`]).
 ///
 /// La decisión de los dos caminos que lo sueltan desde la ventana —el `Esc`
 /// del propio panel y la apertura del visor, que lo excluye— en un valor, por
 /// lo mismo que [`on_start`]: `main.rs` no se puede testear, así que lo que se
 /// puede equivocar no vive allí (revisión rust MINOR-4).
 ///
-/// **Siempre devuelve la Task, sin mirar si sigue viva**: un `task.cancel`
-/// sobre una Task terminada es un no-op en el daemon, y mirar antes sería una
-/// condición que un día se evalúa mal sobre algo que recorre —o BORRA— dos
-/// árboles para un panel que ya no existe (regla dura 3).
+/// **Siempre devuelve la Task del plan, sin mirar si sigue viva**: un
+/// `task.cancel` sobre una Task terminada es un no-op en el daemon, y mirar
+/// antes sería una condición que un día se evalúa mal sobre algo que recorre
+/// —o BORRA— dos árboles para un panel que ya no existe (regla dura 3).
 ///
 /// # Qué significa cerrar A MEDIA APLICACIÓN
-/// **Cancelar la aplicación**, y es una decisión, no un accidente: desde el
-/// [`SyncView::on_apply_started`] la Task que este campo nombra es la que
-/// ESCRIBE y BORRA, así que soltar el panel la para. La alternativa —dejarla
-/// corriendo— es exactamente lo que la regla 3 prohíbe: algo que reescribe un
-/// árbol sin nadie que lo vea ni lo pueda parar. Es también lo que hace la TUI.
+/// **Cancelar la aplicación, Y el plan (#191)**, y es una decisión, no un
+/// accidente: desde [`SyncView::on_apply_started`] `apply_task` nombra la
+/// Task que ESCRIBE y BORRA, así que soltar el panel la para — pero
+/// `plan_task` sigue siendo una Task real (su canal puede seguir en vuelo, ver
+/// [`SyncView::on_plan_ended`]) y dejarla corriendo es exactamente lo que la
+/// regla 3 prohíbe igual que con la de escritura. Es también lo que hace la
+/// TUI.
 ///
 /// Llegar aquí a media aplicación pide DOS `Esc` (el primero pide la
 /// cancelación y deja el panel abierto para leer el informe), así que el
@@ -394,8 +452,8 @@ pub fn open(slot: &mut Option<SyncView>, started: Started) -> Option<TaskId> {
 /// para justo el plan que se lleva el aviso más largo (revisión de seguridad
 /// MAJOR-2).
 #[must_use]
-pub fn close(slot: &mut Option<SyncView>) -> Option<TaskId> {
-    slot.take().map(|view| view.task_id)
+pub fn close(slot: &mut Option<SyncView>) -> Option<ClosedTasks> {
+    slot.take().as_ref().map(ClosedTasks::of)
 }
 
 /// Encamina un lote de pasos: entra si es del plan abierto, y se descarta si
@@ -2024,11 +2082,14 @@ mod tests {
         );
         assert_eq!(
             on_start(&mut hueco, 1, 1, arranque(otra_task(), 1)),
-            Start::Opened(Some(task())),
+            Start::Opened(Some(ClosedTasks {
+                plan: task(),
+                apply: None
+            })),
             "el segundo devuelve la Task del primero para cancelarla"
         );
         let v = hueco.expect("abierto");
-        assert_eq!(v.task_id, otra_task());
+        assert_eq!(v.plan_task, otra_task());
         assert_eq!(v.source_pane, 1);
     }
 
@@ -2049,7 +2110,7 @@ mod tests {
             "la generación 1 ya está superada por la 2"
         );
         let v = hueco.expect("el panel vigente sigue abierto");
-        assert_eq!(v.task_id, task());
+        assert_eq!(v.plan_task, task());
     }
 
     /// **La regresión que la revisión (BLOCKER-1) destapó**: una petición
@@ -2480,14 +2541,26 @@ mod tests {
         );
 
         let mut hueco = Some(vista_de_prueba());
-        assert_eq!(close(&mut hueco), Some(task()));
+        assert_eq!(
+            close(&mut hueco),
+            Some(ClosedTasks {
+                plan: task(),
+                apply: None
+            })
+        );
         assert!(hueco.is_none());
 
         // Con la Task ya terminada, IGUAL: el desenlace no cambia la decisión.
         let mut v = vista_de_prueba();
         assert!(v.on_plan_ended(task(), &TaskState::Completed).is_none());
         let mut hueco = Some(v);
-        assert_eq!(close(&mut hueco), Some(task()));
+        assert_eq!(
+            close(&mut hueco),
+            Some(ClosedTasks {
+                plan: task(),
+                apply: None
+            })
+        );
     }
 
     // -----------------------------------------------------------------
@@ -2589,7 +2662,14 @@ mod tests {
         );
 
         assert!(v.on_apply_started(otra_task()), "el modelo la adopta");
-        assert_eq!(v.task_id, otra_task(), "y el panel pasa a cancelar ÉSA");
+        assert_eq!(
+            v.apply_task,
+            Some(otra_task()),
+            "y el panel pasa a cancelar ÉSA además del plan"
+        );
+        // #191: el plan sigue nombrado — antes esto se perdía al reasignar el
+        // único campo que existía.
+        assert_eq!(v.plan_task, task(), "y NO se pierde la Task del plan");
         assert!(!v.run.can_approve());
         assert_eq!(
             approve(&mut v),
@@ -2723,7 +2803,8 @@ mod tests {
             "la Task se cancela en vez de adoptarse"
         );
         let v = hueco.expect("abierto");
-        assert_eq!(v.task_id, task(), "y el panel no se queda la que borra");
+        assert_eq!(v.plan_task, task(), "el plan sigue siendo el mismo");
+        assert_eq!(v.apply_task, None, "y el panel no se queda la que borra");
         assert!(
             !v.run.is_submitted(),
             "el pestillo se suelta: la petición se resolvió"
@@ -2769,8 +2850,8 @@ mod tests {
             "la generación 1 ya está superada: el lector pidió otro plan"
         );
         assert_eq!(
-            hueco.as_ref().expect("intacto").task_id,
-            task(),
+            hueco.as_ref().expect("intacto").apply_task,
+            None,
             "y el panel vencido no se queda la Task de la aplicación"
         );
 
@@ -2788,24 +2869,27 @@ mod tests {
             ApplyStart::Orphan(otra_task())
         );
         assert_eq!(
-            planificando.expect("abierto").task_id,
-            task(),
-            "y no se le reasigna el `task_id` a un panel que no la adoptó"
+            planificando.expect("abierto").apply_task,
+            None,
+            "y no se le pone `apply_task` a un panel que no la adoptó"
         );
 
-        // Y el caso feliz: adoptada, y el panel pasa a cancelar ESA.
+        // Y el caso feliz: adoptada, y el panel pasa a cancelar ESA además
+        // del plan.
         let mut hueco = Some(vista_cerrada());
         assert_eq!(
             on_apply_start(&mut hueco, 1, 1, otra_task()),
             ApplyStart::Adopted
         );
-        assert_eq!(hueco.expect("abierto").task_id, otra_task());
+        let v = hueco.expect("abierto");
+        assert_eq!(v.apply_task, Some(otra_task()));
+        assert_eq!(v.plan_task, task(), "y el plan sigue nombrado (#191)");
     }
 
-    /// Cerrar a media aplicación CANCELA la aplicación, y eso es lo que hace
-    /// que no pueda quedarse corriendo invisible. El `task_id` reasignado es
-    /// lo único que lo consigue: sin él se cancelaría la Task del plan —ya
-    /// terminada, o sea un no-op— y seguiría borrando la otra.
+    /// Cerrar a media aplicación CANCELA la aplicación Y el plan (#191): las
+    /// dos Tasks pueden estar vivas a la vez, y antes de #191 solo una de las
+    /// dos quedaba nombrada — la que se REASIGNABA a `apply_task` borraba el
+    /// único campo que existía, y `close` solo podía devolver esa.
     #[test]
     fn cerrar_a_media_aplicacion_cancela_la_aplicacion() {
         let mut v = vista_cerrada();
@@ -2814,8 +2898,12 @@ mod tests {
         let mut hueco = Some(v);
         assert_eq!(
             close(&mut hueco),
-            Some(otra_task()),
-            "lo que se cancela es la Task que ESCRIBE, no la del plan"
+            Some(ClosedTasks {
+                plan: task(),
+                apply: Some(otra_task()),
+            }),
+            "se cancela la Task que ESCRIBE Y la del plan, aunque su canal \
+             siga en vuelo (#191)"
         );
 
         // Y el `Esc` no cierra a la primera: pide la cancelación y deja el
