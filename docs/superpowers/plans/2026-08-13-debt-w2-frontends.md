@@ -28,11 +28,19 @@ the older rule, and what it established was that the rule should change.)
 | #197 | norte-gui | the anchor qualifier and the hostile prefix are appended in band in the aural surface |
 | #144 | norte-tui, norte-gui | an opener runs without the pane's directory as cwd — **decided**, see below |
 
-**#159 is an investigation, not a fix.** Cause unidentified; suspects are on the
-issue. Timebox it and reproduce with the tmux harness
-(`[Harness tmux para la TUI]`) rather than reasoning from the parser. If it
-turns out to be upstream (tmux `extended-keys`, crossterm), relabel and close —
-do not sink the wave into it.
+**#159 was an investigation and it stays OPEN — deliberately.** Reproduced
+against the exact configuration on record (tmux 3.7b, `default-terminal
+"alacritty"`, `extended-keys off`) with a fresh binary: `Shift+F2`, `Shift+F6`
+and `Alt+F7` all dispatched correctly via `tmux send-keys`, each verified
+against the DIFFERENT binding of its unmodified twin — `Shift+F6`'s "move to"
+dialog targeted the file's own parent rather than the other pane's directory,
+which proves `pane.rename` fired and not `pane.move`.
+
+**Not reproducible is not confirmed upstream.** `send-keys` injects into tmux's
+input queue; it cannot simulate a physical keypress travelling
+alacritty → tmux, which is suspect #1 on the issue. Relabelling it as upstream
+on this evidence would have closed a live bug with a green test that never
+touched the failing path. The findings are a comment on the issue.
 
 **#183 and #147 both span two frontends.** Fix the shared decision in
 `norte-frontend` and let both call it. The C1/C2 reviews caught exactly this
@@ -76,5 +84,29 @@ over the same code, which is why they read as separate issues.
 `Mirror` and the diff-pane sync gesture — and it needs its own
 `security-reviewer` pass, because wiring `Mirror` is what makes #186 reachable
 from the GUI. Roadmap, not debt wave.
+
+## What the branch review found, and what was done with it
+
+One BLOCKER, three MAJORs, nine MINORs. The BLOCKER is why this wave's
+controller pass earned itself: #180 left `Ctrl+C` inert from the end of
+planning onwards, including the `[y/N]` prompt of a destructive sync, because
+tokio's SIGINT registration is process-wide and permanent while the abort only
+kills the listener. No per-task review could have seen it — it lives in the gap
+BETWEEN two tasks' work.
+
+Applied: the BLOCKER, all three MAJORs, and MINOR-4.
+
+Filed rather than fixed, with the reviewer's reasoning: #198 (the #157 probe
+leaks across comparisons), #199 (#157's GUI half — the mirror image of the
+warning this very plan gives), #200 (paste does not work anywhere in the GUI,
+which is the honest residue of #147's security question), #201 (the #187 signal
+test can pass without exercising the fix once the fixture outgrows a pipe
+buffer), #202 (`on_plan_ended`'s guard is racy in principle and its rustdoc
+overclaims).
+
+Skipped with a reason: MINOR-5 is historical (#194 landed as two commits and
+one of them rendered a raw id; the second commit says so). MINOR-6 asks for a
+test pinning #197's fail-safe asymmetry — worth having, and it belongs with
+#200's paste work, since both are about what reaches a text field.
 
 **Close:** `just gui-ci` and `just ci-fast`, then `just ci` once.
