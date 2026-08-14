@@ -128,9 +128,20 @@ pub type CompareStream<'a> =
 ///
 /// `left`/`right` son los dos providers y `left_root`/`right_root` las dos
 /// raíces; no tienen por qué ser del mismo provider ni del mismo scheme.
-/// `cancel` es el token de la Task (regla dura 3): en cuanto se dispara, el
-/// flujo suelta lo que tuviera pendiente, emite un
-/// [`CompareError::Cancelled`] y termina.
+/// `sides` es cómo empareja LA PAREJA de lados — normalmente
+/// `Sides::from_capabilities(left.capabilities(), right.capabilities())`,
+/// pero SIEMPRE calculado por el llamante y nunca por este motor (#153): antes
+/// se recalculaba aquí dentro, en el primer listado, contra
+/// `Provider::capabilities()` — que no toma path, así que un mismo provider
+/// sirviendo dos MONTAJES distintos (un `LocalProvider` para `/home` y para
+/// `/mnt/usb`, dos filesystems reales) contestaba la MISMA respuesta para los
+/// dos. Mover el cálculo a quien conoce las dos raíces no cierra ese hueco por
+/// sí solo — `Provider::capabilities()` sigue sin tomar path — pero es el paso
+/// que no requiere tocar el trait `Provider` (una query por-path es #164's
+/// forma, y quiere su propia ADR), y dónde se calcula ahora es dónde puede
+/// crecer sin volver a tocar este motor. `cancel` es el token de la Task
+/// (regla dura 3): en cuanto se dispara, el flujo suelta lo que tuviera
+/// pendiente, emite un [`CompareError::Cancelled`] y termina.
 ///
 /// No muta nada y no lee contenido salvo que `opts.criteria.hash` lo pida.
 ///
@@ -147,14 +158,14 @@ pub fn compare<'a>(
     right: &'a dyn Provider,
     right_root: &VPath,
     opts: CompareOptions,
+    sides: Sides,
     cancel: CancellationToken,
 ) -> CompareStream<'a> {
     let walk = Walk {
         left,
         right,
         opts,
-        // Se rellena tras el PRIMER listado, no aquí: ver `Walk::sides`.
-        sides: None,
+        sides,
         cancel,
         stack: vec![Frame {
             left: Some(synthetic_dir(left_root)),
@@ -404,9 +415,9 @@ struct Walk<'a> {
     left: &'a dyn Provider,
     right: &'a dyn Provider,
     opts: CompareOptions,
-    /// Cómo empareja la PAREJA de lados. `None` hasta el primer listado: ver
-    /// [`Walk::sides`].
-    sides: Option<Sides>,
+    /// Cómo empareja la PAREJA de lados — la decide el llamante de
+    /// [`compare`], no este struct (#153).
+    sides: Sides,
     cancel: CancellationToken,
     /// Pila explícita: profundidad primero sin recursión async.
     stack: Vec<Frame>,
@@ -416,6 +427,74 @@ struct Walk<'a> {
     next_id: u64,
     finished: bool,
 }
+
+/// Cuántos `stat` de hidratación corren A LA VEZ (#156). Dentro del `8..16`
+/// que pide el issue: bastante para amortizar la latencia de una red sin
+/// machacar un disco que gira, y acotado — no "todo el directorio a la vez",
+/// que sobre 400 000 parejas sería la misma sobrecarga que
+/// [`COMPARE_MAX_DIR_ENTRIES`] existe para evitar en otro sitio.
+const HYDRATE_CONCURRENCY: usize = 12;
+
+/// Una fila resuelta a falta SOLO de su `id` — que [`Walk::visit`] asigna en
+/// el orden de EMISIÓN, no en el orden en que terminó su `stat` (#156: la
+/// concurrencia va en la hidratación, no en la emisión, y el `id` es
+/// monótono con la fila, no con cuándo se calculó).
+enum PendingRow {
+    /// Lo que decidió la cascada, o el rung de presencia (sin I/O).
+    Decision {
+        decision: Decision,
+        left: Option<Entry>,
+        right: Option<Entry>,
+    },
+    /// Una colisión o un fallo de lectura: motivo y lado obligatorios, igual
+    /// que [`flagged`].
+    Flagged {
+        left: Option<Entry>,
+        right: Option<Entry>,
+        verdict: CompareVerdict,
+        criterion: CompareCriterion,
+        reason: CompareReason,
+        side: Side,
+    },
+}
+
+impl PendingRow {
+    fn into_row(self, id: u64) -> CompareRow {
+        match self {
+            Self::Decision {
+                decision,
+                left,
+                right,
+            } => decision.into_row(id, left, right),
+            Self::Flagged {
+                left,
+                right,
+                verdict,
+                criterion,
+                reason,
+                side,
+            } => flagged(id, left, right, verdict, criterion, reason, side),
+        }
+    }
+}
+
+/// Un paso del merge-join de [`Walk::merge_join`], en orden de CLAVE.
+enum Step {
+    /// Ya resuelta sin I/O: el rung de presencia, o una colisión. `Box`
+    /// porque `PendingRow` es bastante más grande que un `usize` y esta
+    /// variante es la infrecuente — la mayoría de un directorio grande son
+    /// parejas [`Self::Equal`].
+    Ready(Box<PendingRow>),
+    /// Pareja por clave: el índice en el `Vec` de parejas que
+    /// [`Walk::merge_join`] devuelve junto a los pasos, hidratada aparte
+    /// (#156).
+    Equal(usize),
+}
+
+/// Lo que devuelve [`Walk::merge_join`]: los pasos en orden de clave, las
+/// parejas pendientes de hidratar que nombran los [`Step::Equal`] (mismo
+/// orden que sus índices), y los frames a descender.
+type MergeJoinResult<'e> = (Vec<Step>, Vec<(&'e Entry, &'e Entry)>, Vec<Frame>);
 
 impl Walk<'_> {
     /// Un paso del flujo: entrega la siguiente fila, emparejando directorios
@@ -487,7 +566,7 @@ impl Walk<'_> {
             return;
         };
 
-        let sides = self.sides();
+        let sides = self.sides;
         let left_index = index_side(&lefts, sides);
         let right_index = index_side(&rights, sides);
         let left_collided = collided_keys(&left_index, sides);
@@ -502,18 +581,110 @@ impl Walk<'_> {
             self.push_ambiguous(None, Some(entry.clone()), reason, Side::Right);
         }
 
-        // Los frames que este directorio deja pendientes, en orden de CLAVE:
-        // parejas comunes y —si se pidió— huérfanos del lado nombrado, todos
-        // por la misma pila.
-        let mut descend: Vec<Frame> = Vec::new();
+        // PASO 1 — el merge-join, síncrono: decide el ORDEN de las filas y
+        // qué parejas quedan pendientes de hidratar (#156).
         let depth = frame.depth.saturating_add(1);
+        let Some((steps, pairs, descend)) = self.merge_join(
+            &left_index,
+            &right_index,
+            &left_collided,
+            &right_collided,
+            frame.depth,
+            depth,
+        ) else {
+            return;
+        };
+
+        // PASO 2 — hidrata TODAS las parejas de este directorio a la vez,
+        // acotado (#156): antes cada `stat` esperaba al anterior, hasta 2N
+        // viajes encadenados sobre un montaje de red. `Walk::pair_outcome`
+        // toma `&self` — no `&mut self` — precisamente para poder correr
+        // muchas copias a la vez; asignar el `id` y publicar la fila es del
+        // paso 3, secuencial, para que el CONTADOR siga siendo monótono con
+        // el orden de emisión y no con el orden en que terminó cada `stat`.
+        let mut resolved: Vec<Option<PendingRow>> = Vec::with_capacity(pairs.len());
+        resolved.resize_with(pairs.len(), || None);
+        if !pairs.is_empty() {
+            let this: &Self = self;
+            // Un `Vec` de futuros construido de antemano, no
+            // `Iterator::map` con un cierre async: el cierre de `map`
+            // necesita UN tipo que valga para cualquier invocación
+            // (`FnMut`), y ahí rustc no infiere el lifetime prestado de
+            // `pairs` — "implementation of `FnOnce` is not general enough".
+            // Un bucle corriente, en cambio, instancia cada futuro con SU
+            // propio lifetime concreto sin pedirle nada genérico al cierre.
+            let futures: Vec<_> = pairs
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(i, (l, r))| async move { (i, this.pair_outcome(l, r).await) })
+                .collect();
+            let mut hydrating = stream::iter(futures).buffer_unordered(HYDRATE_CONCURRENCY);
+            while let Some((i, outcome)) = hydrating.next().await {
+                resolved[i] = outcome;
+            }
+        }
+        // Cancelado a mitad de la hidratación: `pair_outcome` solo devuelve
+        // `None` por eso (regla dura 3, comprobada por `stat` dentro de
+        // `hydrate` — ver su rustdoc). Igual que antes: nada de este
+        // directorio se publica, el paso del flujo se encarga de terminar.
+        if self.cancel.is_cancelled() {
+            return;
+        }
+
+        // PASO 3 — emite, en el orden decidido por el paso 1, con el `id`
+        // asignado AQUÍ y no antes.
+        for step in steps {
+            let row = match step {
+                Step::Ready(row) => *row,
+                Step::Equal(i) => resolved[i].take().expect(
+                    "cada índice de `pairs` recibió su resultado del stream de arriba, y \
+                     `pair_outcome` solo devuelve `None` por cancelación — ya comprobada",
+                ),
+            };
+            let id = self.next_id();
+            self.pending.push_back(row.into_row(id));
+        }
+
+        // Al revés: la pila es LIFO, así que apilar en orden inverso de clave
+        // es lo que hace que se saquen en orden de clave.
+        for pending in descend.into_iter().rev() {
+            self.stack.push(pending);
+        }
+    }
+
+    /// El merge-join de un directorio: decide el ORDEN final de las filas
+    /// (extraído de [`Walk::visit`] — #156, para que esa función quepa en el
+    /// límite de líneas del gate). Síncrono, sin un solo `await`: nada de
+    /// esto necesita I/O, ni siquiera para una pareja `Equal`, cuyo `stat`
+    /// —si hace falta uno— es el trabajo de [`Walk::pair_outcome`] después.
+    ///
+    /// Devuelve `None` si el token se disparó a mitad del recorrido —caso en
+    /// el que `Walk::visit` no publica nada de este directorio, igual que
+    /// antes de #156—; si no, los pasos en orden de clave, las parejas que
+    /// quedaron pendientes de hidratar (en el mismo orden que las nombran los
+    /// `Step::Equal`) y los frames a descender (todavía en orden de clave,
+    /// sin invertir — invertirlos para la pila LIFO es cosa de la llamante).
+    #[must_use = "None significa cancelado: la llamante tiene que soltar el directorio entero"]
+    fn merge_join<'e>(
+        &self,
+        left_index: &SideIndex<'e, Entry>,
+        right_index: &SideIndex<'e, Entry>,
+        left_collided: &BTreeMap<Vec<u8>, CompareReason>,
+        right_collided: &BTreeMap<Vec<u8>, CompareReason>,
+        parent_depth: u32,
+        child_depth: u32,
+    ) -> Option<MergeJoinResult<'e>> {
+        let mut steps: Vec<Step> = Vec::new();
+        let mut pairs: Vec<(&'e Entry, &'e Entry)> = Vec::new();
+        let mut descend: Vec<Frame> = Vec::new();
         let mut lefts_iter = left_index.unique().peekable();
         let mut rights_iter = right_index.unique().peekable();
         loop {
             // Por PAREJA, y no solo por directorio: dos listados al tope caben
-            // 400 000 parejas, y con el rung caro apagado no hay un solo
-            // `await` en todo el merge-join, así que sin esto la cancelación
-            // esperaría a que terminase el directorio entero (regla dura 3).
+            // 400 000 parejas, y este paso no tiene un solo `await`, así que
+            // sin esto la cancelación esperaría a que terminase el directorio
+            // entero (regla dura 3).
             //
             // Ningún test puede verlo desde fuera —`step` ya tira `pending`
             // entero al cancelar, así que la SALIDA es la misma con o sin este
@@ -521,7 +692,7 @@ impl Walk<'_> {
             // parejas de trabajo tirado. No es un invariante sin test, es un
             // invariante de latencia.
             if self.cancel.is_cancelled() {
-                return;
+                return None;
             }
             let order = match (lefts_iter.peek(), rights_iter.peek()) {
                 (None, None) => break,
@@ -536,45 +707,46 @@ impl Walk<'_> {
                     // `next` no puede ser `None` (regla dura 6).
                     let (key, entry) = lefts_iter.next().expect("peek dijo que había");
                     let collided = right_collided.get(key.as_bytes()).copied();
-                    if self.only_on_one_side(Some(entry.clone()), None, collided, Side::Right) {
-                        descend.extend(self.orphan_frame(entry, Side::Left, frame.depth));
+                    let (row, can_descend) =
+                        Self::side_outcome(Some(entry.clone()), None, collided, Side::Right);
+                    steps.push(Step::Ready(Box::new(row)));
+                    if can_descend {
+                        descend.extend(self.orphan_frame(entry, Side::Left, parent_depth));
                     }
                 }
                 Ordering::Greater => {
                     let (key, entry) = rights_iter.next().expect("peek dijo que había");
                     let collided = left_collided.get(key.as_bytes()).copied();
-                    if self.only_on_one_side(None, Some(entry.clone()), collided, Side::Left) {
-                        descend.extend(self.orphan_frame(entry, Side::Right, frame.depth));
+                    let (row, can_descend) =
+                        Self::side_outcome(None, Some(entry.clone()), collided, Side::Left);
+                    steps.push(Step::Ready(Box::new(row)));
+                    if can_descend {
+                        descend.extend(self.orphan_frame(entry, Side::Right, parent_depth));
                     }
                 }
                 Ordering::Equal => {
                     let (_, left_entry) = lefts_iter.next().expect("peek dijo que había");
                     let (_, right_entry) = rights_iter.next().expect("peek dijo que había");
-                    // Cancelado a mitad del rung caro: no hay fila que publicar
-                    // —sería un veredicto provisional— y el paso del flujo se
-                    // encarga de terminar. Lo que quedaba apilado se tira: nada
-                    // se ha escrito.
-                    let Some(is_dir_pair) = self.pair_row(left_entry, right_entry).await else {
-                        return;
-                    };
-                    if is_dir_pair && self.descends_below(frame.depth) {
+                    // El descenso de una pareja de directorios lo decide el
+                    // KIND, que ya se conoce — nunca `stat`, así que no hace
+                    // falta esperar a la hidratación de después para saberlo
+                    // (dos directorios NUNCA se hidratan: ver `hydrate_rungs`).
+                    if left_entry.kind == EntryKind::Dir
+                        && right_entry.kind == EntryKind::Dir
+                        && self.descends_below(parent_depth)
+                    {
                         descend.push(Frame {
                             left: Some(left_entry.clone()),
                             right: Some(right_entry.clone()),
-                            depth,
+                            depth: child_depth,
                         });
                     }
+                    steps.push(Step::Equal(pairs.len()));
+                    pairs.push((left_entry, right_entry));
                 }
             }
         }
-        drop(lefts_iter);
-        drop(rights_iter);
-
-        // Al revés: la pila es LIFO, así que apilar en orden inverso de clave
-        // es lo que hace que se saquen en orden de clave.
-        for pending in descend.into_iter().rev() {
-            self.stack.push(pending);
-        }
+        Some((steps, pairs, descend))
     }
 
     /// Una entrada que solo aparece en un lado. Si la clave que le tocaba en el
@@ -587,38 +759,51 @@ impl Walk<'_> {
     /// fichero que colisiona. `Ambiguous` hace que ese plan se niegue a actuar,
     /// que es la única respuesta segura mientras nadie deshaga la colisión.
     ///
-    /// Devuelve `true` si la fila salió huérfana DE VERDAD, que es la condición
-    /// para poder descender por ella: un directorio ambiguo se lleva su
-    /// subárbol por delante, igual que uno ilegible, y enumerar lo que hay
-    /// dentro de algo que nadie va a copiar sería listar por listar.
+    /// No publica nada — a diferencia de la versión previa a #156, que
+    /// empujaba directamente a `self.pending` — porque `Walk::visit` decide el
+    /// `id` en el paso 3, después de hidratar. Devuelve la fila resuelta y si
+    /// se puede descender por ella.
     #[must_use = "el valor dice si se puede descender por esta fila"]
-    fn only_on_one_side(
-        &mut self,
+    fn side_outcome(
         left: Option<Entry>,
         right: Option<Entry>,
         collided_with: Option<CompareReason>,
         collision_side: Side,
-    ) -> bool {
+    ) -> (PendingRow, bool) {
         if let Some(reason) = collided_with {
-            self.push_ambiguous(left, right, reason, collision_side);
-            return false;
+            let row = PendingRow::Flagged {
+                left,
+                right,
+                verdict: CompareVerdict::Ambiguous,
+                criterion: CompareCriterion::Presence,
+                reason,
+                side: collision_side,
+            };
+            return (row, false);
         }
         let decision = if left.is_some() {
             Decision::only_left()
         } else {
             Decision::only_right()
         };
-        let id = self.next_id();
-        self.pending.push_back(decision.into_row(id, left, right));
-        true
+        (
+            PendingRow::Decision {
+                decision,
+                left,
+                right,
+            },
+            true,
+        )
     }
 
-    /// Apunta la fila de UNA pareja emparejada y dice si hay que bajar por
-    /// ella.
+    /// La pareja YA HIDRATADA (o su fallo), sin `id`: eso lo decide
+    /// `Walk::visit` en el paso 3, secuencial (#156). `&self`, no `&mut
+    /// self`, para que muchas copias puedan correr A LA VEZ por
+    /// `buffer_unordered` — ni `next_id` ni `pending` se tocan aquí.
     ///
-    /// `None` significa cancelado: ni fila ni descenso, y quien llama suelta
-    /// el directorio entero.
-    async fn pair_row(&mut self, left: &Entry, right: &Entry) -> Option<bool> {
+    /// `None` significa cancelado: la pareja no produce fila, y `visit`
+    /// suelta el directorio entero, igual que antes de #156.
+    async fn pair_outcome(&self, left: &Entry, right: &Entry) -> Option<PendingRow> {
         // Lo que el listado no trajo y la cascada va a necesitar, preguntado
         // ANTES de decidir. Las filas llevan las entradas hidratadas: una fila
         // que dice «distinto por tamaño» sobre dos tamaños vacíos no se puede
@@ -632,58 +817,43 @@ impl Walk<'_> {
                 side,
                 rung,
             } => {
-                let id = self.next_id();
-                self.pending.push_back(flagged(
-                    id,
-                    // Lo que se llegó a saber viaja: si la izquierda contestó y
-                    // la derecha no, su tamaño es cierto y la celda del panel lo
-                    // enseña.
-                    Some(left.into_owned()),
-                    Some(right.into_owned()),
-                    CompareVerdict::Error,
+                return Some(PendingRow::Flagged {
+                    // Lo que se llegó a saber viaja: si la izquierda contestó
+                    // y la derecha no, su tamaño es cierto y la celda del
+                    // panel lo enseña.
+                    left: Some(left.into_owned()),
+                    right: Some(right.into_owned()),
+                    verdict: CompareVerdict::Error,
                     // El rung que se quedó sin su dato, igual que una lectura
                     // rota dice `Hash`: ese rung corrió y se murió.
-                    rung,
-                    CompareReason::Unreadable,
+                    criterion: rung,
+                    reason: CompareReason::Unreadable,
                     side,
-                ));
-                // Solo las parejas de ficheros se hidratan, así que no hay
-                // descenso que plantearse.
-                return Some(false);
+                });
             }
         };
         let (left, right) = (left.as_ref(), right.as_ref());
         match self.verdict_for_pair(left, right).await {
             PairOutcome::Cancelled => None,
-            PairOutcome::Decided(decision) => {
-                let id = self.next_id();
-                self.pending.push_back(decision.into_row(
-                    id,
-                    Some(left.clone()),
-                    Some(right.clone()),
-                ));
-                Some(left.kind == EntryKind::Dir && right.kind == EntryKind::Dir)
-            }
+            PairOutcome::Decided(decision) => Some(PendingRow::Decision {
+                decision,
+                left: Some(left.clone()),
+                right: Some(right.clone()),
+            }),
             // Una lectura rota cuesta SU fila y el walk sigue, igual que un
             // listado ilegible. La fila lleva los dos lados: la pareja sí se
-            // emparejó, lo que falló fue verificarla. Y no hay descenso que
-            // plantearse: solo los ficheros llegan al rung de hash.
-            PairOutcome::ReadFailed(side) => {
-                let id = self.next_id();
-                self.pending.push_back(flagged(
-                    id,
-                    Some(left.clone()),
-                    Some(right.clone()),
-                    CompareVerdict::Error,
-                    // `Hash` y no `Presence`: el rung CORRIÓ y se murió. La
-                    // convención de `Presence` es para las filas donde no
-                    // corrió ninguno.
-                    CompareCriterion::Hash,
-                    CompareReason::ReadFailed,
-                    side,
-                ));
-                Some(false)
-            }
+            // emparejó, lo que falló fue verificarla.
+            PairOutcome::ReadFailed(side) => Some(PendingRow::Flagged {
+                left: Some(left.clone()),
+                right: Some(right.clone()),
+                verdict: CompareVerdict::Error,
+                // `Hash` y no `Presence`: el rung CORRIÓ y se murió. La
+                // convención de `Presence` es para las filas donde no corrió
+                // ninguno.
+                criterion: CompareCriterion::Hash,
+                reason: CompareReason::ReadFailed,
+                side,
+            }),
         }
     }
 
@@ -839,30 +1009,6 @@ impl Walk<'_> {
             HashOutcome::Equal
         } else {
             HashOutcome::Differ
-        })
-    }
-
-    /// Cómo empareja la pareja de lados, preguntado DESPUÉS del primer listado
-    /// y recordado.
-    ///
-    /// No se puede preguntar en [`compare`], que es síncrona: las
-    /// `Capabilities` de un provider local son EXACTAS solo tras su primera
-    /// operación async —el sondeo corre ahí—, y antes son el default del OS,
-    /// o sea un `cfg!(target_os)`. Emparejar con eso significa no plegar caja
-    /// contra un exFAT montado en Linux (y perder sus colisiones) o plegarla
-    /// contra un APFS sensible a caja (y declarar ambiguo lo que no lo es).
-    /// Aquí ya ha corrido un `list` en los dos lados, así que lo que se lee es
-    /// lo sondeado. Sigue siendo cierto en un frame de UN solo lado: el primer
-    /// frame es siempre el de las dos raíces, y un frame de uno solo únicamente
-    /// nace de una fila huérfana, que ya exigió listar los dos.
-    ///
-    /// Sigue siendo UNA respuesta para toda la comparación, porque
-    /// `Provider::capabilities` no toma path: dos mounts distintos servidos por
-    /// un mismo provider comparten veredicto
-    /// (<https://github.com/compilando/norte/issues/153>).
-    fn sides(&mut self) -> Sides {
-        *self.sides.get_or_insert_with(|| {
-            Sides::from_capabilities(self.left.capabilities(), self.right.capabilities())
         })
     }
 
@@ -1242,12 +1388,14 @@ mod tests {
         right: &'a MemProvider,
         opts: CompareOptions,
     ) -> CompareStream<'a> {
+        let sides = Sides::from_capabilities(left.capabilities(), right.capabilities());
         compare(
             left,
             &MemProvider::root(),
             right,
             &MemProvider::root(),
             opts,
+            sides,
             CancellationToken::new(),
         )
     }
@@ -1502,12 +1650,14 @@ mod tests {
         let right = MemProvider::new();
 
         let cancel = CancellationToken::new();
+        let sides = Sides::from_capabilities(left.capabilities(), right.capabilities());
         let mut stream = compare(
             &left,
             &MemProvider::root(),
             &right,
             &MemProvider::root(),
             descending(Side::Left),
+            sides,
             cancel.clone(),
         );
         let mut vistas = 0_usize;
@@ -1718,12 +1868,14 @@ mod tests {
                 attrs: BTreeMap::new(),
             },
         };
+        let sides = Sides::from_capabilities(liar.capabilities(), honest.capabilities());
         let rows = collect(compare(
             &liar,
             &MemProvider::root(),
             &honest,
             &MemProvider::root(),
             CompareOptions::cheap(),
+            sides,
             CancellationToken::new(),
         ))
         .await;
@@ -1824,12 +1976,14 @@ mod tests {
     async fn cancelling_stops_the_stream_cleanly() {
         let (l, r) = twin_trees_with_wide_dir(5_000).await;
         let cancel = CancellationToken::new();
+        let sides = Sides::from_capabilities(l.capabilities(), r.capabilities());
         let mut stream = compare(
             &l,
             &MemProvider::root(),
             &r,
             &MemProvider::root(),
             CompareOptions::cheap(),
+            sides,
             cancel.clone(),
         );
         let first = stream.next().await.expect("at least one row");
@@ -1849,12 +2003,14 @@ mod tests {
         let (l, r) = twin_trees(&["a.txt", "sub/b.txt"]).await;
         let cancel = CancellationToken::new();
         cancel.cancel();
+        let sides = Sides::from_capabilities(l.capabilities(), r.capabilities());
         let items: Vec<Result<CompareRow, CompareError>> = compare(
             &l,
             &MemProvider::root(),
             &r,
             &MemProvider::root(),
             CompareOptions::cheap(),
+            sides,
             cancel,
         )
         .collect()
@@ -2286,12 +2442,14 @@ mod tests {
         let (l, r) = pair_with_content("x.bin", b"aaaa", b"aaaa").await;
         let cancel = CancellationToken::new();
         cancel.cancel();
+        let sides = Sides::from_capabilities(l.capabilities(), r.capabilities());
         let items: Vec<Result<CompareRow, CompareError>> = compare(
             &l,
             &MemProvider::root(),
             &r,
             &MemProvider::root(),
             CompareOptions::cheap().with_hash(),
+            sides,
             cancel,
         )
         .collect()
@@ -2334,17 +2492,25 @@ mod tests {
             .expect("fijar la fecha");
     }
 
-    fn compare_local<'a>(
+    async fn compare_local<'a>(
         left: &'a LocalProvider,
         right: &'a LocalProvider,
         opts: CompareOptions,
     ) -> CompareStream<'a> {
+        // `LocalProvider::capabilities()` es exacta solo tras una operación
+        // async (el sondeo corre ahí): un `stat` de la raíz la fuerza antes de
+        // leerla, igual que `norte-core` hace ahora que #153 movió el cálculo
+        // de `Sides` fuera de este motor.
+        let _ = left.stat(&LocalProvider::root()).await;
+        let _ = right.stat(&LocalProvider::root()).await;
+        let sides = Sides::from_capabilities(left.capabilities(), right.capabilities());
         compare(
             left,
             &LocalProvider::root(),
             right,
             &LocalProvider::root(),
             opts,
+            sides,
             CancellationToken::new(),
         )
     }
@@ -2364,7 +2530,7 @@ mod tests {
             std::fs::write(d.join("a.txt"), b"hola mundo!!").expect("sembrar");
         });
 
-        let rows = collect(compare_local(&l, &r, CompareOptions::cheap())).await;
+        let rows = collect(compare_local(&l, &r, CompareOptions::cheap()).await).await;
         assert_eq!(rows.len(), 1, "{rows:#?}");
         assert_eq!(
             (rows[0].verdict, rows[0].criterion, rows[0].confidence),
@@ -2396,7 +2562,7 @@ mod tests {
             set_mtime(&p, 1_700_000_060);
         });
 
-        let rows = collect(compare_local(&l, &r, CompareOptions::cheap())).await;
+        let rows = collect(compare_local(&l, &r, CompareOptions::cheap()).await).await;
         assert_eq!(rows.len(), 1, "{rows:#?}");
         assert_eq!(
             (rows[0].verdict, rows[0].criterion, rows[0].confidence),
@@ -2536,12 +2702,14 @@ mod tests {
         right: &'a LazyProvider,
         opts: CompareOptions,
     ) -> CompareStream<'a> {
+        let sides = Sides::from_capabilities(left.capabilities(), right.capabilities());
         compare(
             left,
             &MemProvider::root(),
             right,
             &MemProvider::root(),
             opts,
+            sides,
             CancellationToken::new(),
         )
     }
@@ -2638,12 +2806,14 @@ mod tests {
         let count = || std::sync::atomic::AtomicUsize::new(0);
         let l = Contado(tree(&["a.txt", "sub/b.txt"]).await, count());
         let r = Contado(tree(&["a.txt", "sub/b.txt"]).await, count());
+        let sides = Sides::from_capabilities(l.capabilities(), r.capabilities());
         let rows = collect(compare(
             &l,
             &MemProvider::root(),
             &r,
             &MemProvider::root(),
             CompareOptions::cheap(),
+            sides,
             CancellationToken::new(),
         ))
         .await;
@@ -2693,6 +2863,293 @@ mod tests {
         // derecha no cambiaría ni una letra de ella.
         assert_eq!(l.stats(), 2, "un `stat` por pareja, no más");
         assert_eq!(r.stats(), 0, "un lado roto no arrastra al otro");
+    }
+
+    /// Un `LazyProvider` cuyo `stat` cede el turno cooperativamente ANTES de
+    /// contestar — más veces cuanto MENOR el índice del nombre — para que las
+    /// parejas terminen su hidratación en el orden INVERSO al que se
+    /// sometieron. Sin reloj de pared (nada de `tokio::time::sleep`, que el
+    /// repo evita como mecanismo de orden: "bajo carga cualquiera puede
+    /// perder su carrera"): `yield_now` reordena el POLLING de
+    /// `buffer_unordered` de forma determinista, no por azar de temporizador.
+    ///
+    /// Existe para que `hidratar_muchas_parejas_a_la_vez_no_cruza_sus_filas`
+    /// ejerza de verdad el camino fuera-de-orden — sin esto, `LazyProvider`
+    /// contesta cada `stat` en el primer `poll`, así que `buffer_unordered`
+    /// las resolvería en el mismo orden en que se sometieron y una regresión
+    /// que escribiera `resolved` por orden de LLEGADA en vez de por índice
+    /// pasaría inadvertida.
+    struct ReorderedProvider {
+        inner: LazyProvider,
+        /// Cuántas parejas hay en total: el índice `i` cede `total - 1 - i`
+        /// veces, así que la pareja `total - 1` (la última sometida) no cede
+        /// nada y la `0` cede más que ninguna otra.
+        total: usize,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for ReorderedProvider {
+        fn scheme(&self) -> &str {
+            self.inner.scheme()
+        }
+        fn capabilities(&self) -> norte_proto::Capabilities {
+            self.inner.capabilities()
+        }
+        async fn stat(&self, p: &VPath) -> Result<Entry, norte_proto::Error> {
+            let name = p.file_name().map(Segment::as_bytes).unwrap_or_default();
+            let name = std::str::from_utf8(name).unwrap_or_default();
+            if let Some(i) = name.get(1..3).and_then(|s| s.parse::<usize>().ok()) {
+                for _ in 0..self.total.saturating_sub(1).saturating_sub(i) {
+                    tokio::task::yield_now().await;
+                }
+            }
+            self.inner.stat(p).await
+        }
+        async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, norte_proto::Error> {
+            self.inner.list(p).await
+        }
+        async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, norte_proto::Error> {
+            self.inner.read_link(p).await
+        }
+        async fn symlink(
+            &self,
+            link: &VPath,
+            target: &[u8],
+            kind: norte_vfs::SymlinkKind,
+        ) -> Result<(), norte_proto::Error> {
+            self.inner.symlink(link, target, kind).await
+        }
+        async fn read(
+            &self,
+            p: &VPath,
+            range: Option<norte_proto::ByteRange>,
+        ) -> Result<norte_vfs::ByteStream, norte_proto::Error> {
+            self.inner.read(p, range).await
+        }
+        async fn write(
+            &self,
+            p: &VPath,
+        ) -> Result<Box<dyn norte_vfs::ByteSink>, norte_proto::Error> {
+            self.inner.write(p).await
+        }
+        async fn mkdir(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.mkdir(p).await
+        }
+        async fn remove(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.remove(p).await
+        }
+        async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.rename(from, to).await
+        }
+    }
+
+    /// #156: hidratar muchas parejas A LA VEZ (`buffer_unordered`, que
+    /// resuelve fuera de orden — aquí forzado a terminar en el orden
+    /// INVERSO al de sumisión vía [`ReorderedProvider`]) no puede mezclar el
+    /// resultado de una pareja con el índice de otra, NI reordenar las filas
+    /// emitidas: `Walk::visit` asigna el `id` en el orden de CLAVE del paso
+    /// 1, nunca en el orden en que terminó su `stat`. Con 16 parejas contra
+    /// `HYDRATE_CONCURRENCY = 12`, al menos cuatro tienen que esperar cola
+    /// detrás de las primeras doce.
+    #[tokio::test]
+    async fn hidratar_muchas_parejas_a_la_vez_no_cruza_sus_filas() {
+        const N: usize = 16;
+        let names: Vec<String> = (0..N).map(|i| format!("p{i:02}.txt")).collect();
+        let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+        let l = MemProvider::new();
+        let r = MemProvider::new();
+        for (i, name) in paths.iter().enumerate() {
+            // Contenido único por PAREJA y por LADO (ni el tamaño izquierdo
+            // ni el derecho se repiten entre dos parejas cualesquiera), para
+            // que una fila con el dato de OTRA pareja se note incluso si esa
+            // otra pareja también fuera `Same`.
+            let left_content = vec![b'x'; 100 + i];
+            let right_content = if i.is_multiple_of(2) {
+                left_content.clone() // par: `Same`
+            } else {
+                vec![b'x'; 100 + i + 1] // impar: `Different`, un byte más
+            };
+            seed(&l, name, &left_content).await;
+            seed(&r, name, &right_content).await;
+        }
+        let l = ReorderedProvider {
+            inner: LazyProvider::new(l),
+            total: N,
+        };
+        let r = LazyProvider::new(r);
+
+        let sides = Sides::from_capabilities(l.capabilities(), r.capabilities());
+        let rows = collect(compare(
+            &l,
+            &MemProvider::root(),
+            &r,
+            &MemProvider::root(),
+            CompareOptions::cheap(),
+            sides,
+            CancellationToken::new(),
+        ))
+        .await;
+        assert_eq!(rows.len(), N, "{rows:#?}");
+        for (k, row) in rows.iter().enumerate() {
+            let left = row.left.as_ref().expect("emparejada: lado izquierdo");
+            let right = row.right.as_ref().expect("emparejada: lado derecho");
+            // El orden de EMISIÓN es el orden de CLAVE — `p00.txt` primero,
+            // `p15.txt` último — pase lo que pase con el orden en que
+            // terminaron sus `stat` (#156, id asignado en el paso 3).
+            assert_eq!(
+                left.path.file_name().map(Segment::as_bytes),
+                Some(paths[k].as_bytes()),
+                "fila {k}: el orden de emisión no es el de clave: {rows:#?}"
+            );
+            assert_eq!(
+                left.path.file_name().map(Segment::as_bytes),
+                right.path.file_name().map(Segment::as_bytes),
+                "la fila tiene que emparejar el MISMO nombre a los dos lados: {row:#?}"
+            );
+            let expected_left_size = 100 + k as u64;
+            assert_eq!(
+                left.size,
+                Some(expected_left_size),
+                "el tamaño izquierdo de {} no es el de OTRA pareja: {row:#?}",
+                paths[k],
+            );
+            if k.is_multiple_of(2) {
+                assert_eq!(row.verdict, CompareVerdict::Same, "{}: {row:#?}", paths[k]);
+                assert_eq!(
+                    right.size,
+                    Some(expected_left_size),
+                    "{}: {row:#?}",
+                    paths[k]
+                );
+            } else {
+                assert_eq!(
+                    row.verdict,
+                    CompareVerdict::Different,
+                    "{}: {row:#?}",
+                    paths[k]
+                );
+                assert_eq!(
+                    right.size,
+                    Some(expected_left_size + 1),
+                    "el tamaño derecho de {} es el de otra pareja: {row:#?}",
+                    paths[k],
+                );
+            }
+        }
+    }
+
+    /// Un `LazyProvider` cuyo `stat` dispara `cancel` él mismo, tras un
+    /// número fijo de llamadas — para cancelar MIENTRAS otras hidrataciones
+    /// siguen en vuelo bajo `buffer_unordered`, sin sleeps a ciegas ni
+    /// carrera con el reloj.
+    struct CancelAfterN {
+        inner: LazyProvider,
+        remaining: std::sync::atomic::AtomicI64,
+        cancel: CancellationToken,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for CancelAfterN {
+        fn scheme(&self) -> &str {
+            self.inner.scheme()
+        }
+        fn capabilities(&self) -> norte_proto::Capabilities {
+            self.inner.capabilities()
+        }
+        async fn stat(&self, p: &VPath) -> Result<Entry, norte_proto::Error> {
+            if self
+                .remaining
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+                == 1
+            {
+                self.cancel.cancel();
+            }
+            self.inner.stat(p).await
+        }
+        async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, norte_proto::Error> {
+            self.inner.list(p).await
+        }
+        async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, norte_proto::Error> {
+            self.inner.read_link(p).await
+        }
+        async fn symlink(
+            &self,
+            link: &VPath,
+            target: &[u8],
+            kind: norte_vfs::SymlinkKind,
+        ) -> Result<(), norte_proto::Error> {
+            self.inner.symlink(link, target, kind).await
+        }
+        async fn read(
+            &self,
+            p: &VPath,
+            range: Option<norte_proto::ByteRange>,
+        ) -> Result<norte_vfs::ByteStream, norte_proto::Error> {
+            self.inner.read(p, range).await
+        }
+        async fn write(
+            &self,
+            p: &VPath,
+        ) -> Result<Box<dyn norte_vfs::ByteSink>, norte_proto::Error> {
+            self.inner.write(p).await
+        }
+        async fn mkdir(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.mkdir(p).await
+        }
+        async fn remove(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.remove(p).await
+        }
+        async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.rename(from, to).await
+        }
+    }
+
+    /// #156: cancelar MIENTRAS la hidratación concurrente está EN VUELO no
+    /// hace pánico (el `resolved[i].take().expect(..)` del paso 3 de
+    /// `Walk::visit` depende de que la comprobación de cancelación de
+    /// después del paso 2 sea exhaustiva) y no publica ni una fila del
+    /// directorio — igual que si el token ya hubiera venido disparado, que es
+    /// lo que fija `un_token_ya_cancelado_no_empareja_nada`. Esta prueba es
+    /// la mitad que esa NO cubre: un cancel que llega a mitad de un `stat`
+    /// real bajo `buffer_unordered`, con otras hidrataciones todavía
+    /// pendientes (20 parejas contra `HYDRATE_CONCURRENCY = 12`).
+    #[tokio::test]
+    async fn cancelar_a_mitad_de_la_hidratacion_concurrente_no_hace_panico() {
+        const N: usize = 20;
+        let names: Vec<String> = (0..N).map(|i| format!("q{i:02}.txt")).collect();
+        let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+        let l = tree(&paths).await;
+        let r = tree(&paths).await;
+
+        let cancel = CancellationToken::new();
+        let l = CancelAfterN {
+            inner: LazyProvider::new(l),
+            // Dispara a media hidratación: bastante para que otras parejas
+            // del primer lote de `HYDRATE_CONCURRENCY` sigan en vuelo.
+            remaining: std::sync::atomic::AtomicI64::new(3),
+            cancel: cancel.clone(),
+        };
+        let r = LazyProvider::new(r);
+        let sides = Sides::from_capabilities(l.capabilities(), r.capabilities());
+        let mut stream = compare(
+            &l,
+            &MemProvider::root(),
+            &r,
+            &MemProvider::root(),
+            CompareOptions::cheap(),
+            sides,
+            cancel,
+        );
+
+        let mut items = Vec::new();
+        while let Some(item) = stream.next().await {
+            items.push(item);
+        }
+        // Llegar aquí sin pánico ES la mitad de esta prueba. La otra mitad:
+        // el único frame (la raíz, plana) se descarta entero — ni una fila a
+        // medio hidratar, ni una publicada dos veces — y el flujo termina en
+        // el mismo `Cancelled` que si el token hubiera venido ya disparado.
+        assert_eq!(items, vec![Err(CompareError::Cancelled)], "{items:#?}");
     }
 
     /// Un fichero que DESAPARECE entre el `list` y el `stat` sale como fila de
@@ -2884,12 +3341,14 @@ mod tests {
         .expect("symlink");
         let local = LazyProvider::new(mem);
 
+        let sides = Sides::from_capabilities(local.capabilities(), zip.capabilities());
         let stream = compare(
             &local,
             &MemProvider::root(),
             &zip,
             &zip_root,
             CompareOptions::cheap(),
+            sides,
             CancellationToken::new(),
         );
         let rows = collect(stream).await;

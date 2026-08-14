@@ -290,6 +290,22 @@ pub(crate) struct SyncPlanJob {
 ///   toca (llevaría un `VPath` a un broadcast que ven todos los humanos
 ///   conectados, y el gate de esta Task es por RAÍZ).
 ///
+/// `Sides` + el flujo de `norte_compare::compare`, en una función aparte para
+/// que [`run_sync_plan`] quepa en el límite de líneas del gate (#153,
+/// ADR 0051) — ver el rustdoc de `crate::compare::probed_sides` para por qué
+/// `Sides` se calcula AQUÍ y no dentro del motor de comparación.
+async fn compared_rows<'a>(
+    source: &'a dyn Provider,
+    source_root: &'a norte_proto::VPath,
+    dest: &'a dyn Provider,
+    dest_root: &'a norte_proto::VPath,
+    opts: norte_compare::CompareOptions,
+    cancel: CancellationToken,
+) -> norte_compare::CompareStream<'a> {
+    let sides = crate::compare::probed_sides(source, source_root, dest, dest_root).await;
+    norte_compare::compare(source, source_root, dest, dest_root, opts, sides, cancel)
+}
+
 /// # Errors
 /// [`Error::Cancelled`] si se canceló o si el dueño dejó de recibir;
 /// [`Error::Io`] si el spool no se pudo escribir; [`Error::Internal`] si el
@@ -327,14 +343,15 @@ pub(crate) async fn run_sync_plan(
     // El flujo se construye AQUÍ DENTRO: `compare` toma prestados los DOS
     // providers, así que el préstamo tiene que nacer dentro del `async` que lo
     // consume.
-    let rows = norte_compare::compare(
+    let rows = compared_rows(
         source.as_ref(),
         &opts.source_root,
         dest.as_ref(),
         &opts.dest_root,
         compare_options(&compare, &opts),
         ctx.cancel.clone(),
-    );
+    )
+    .await;
     // Fijado en la pila: el flujo del transductor no es `Unpin` (su `Unfold`
     // guarda el `async` que lo produce), y aquí se sondea desde un bucle.
     let mut items = std::pin::pin!(norte_sync::plan(rows, opts.clone(), ctx.cancel.clone()));

@@ -76,6 +76,51 @@ enum FlushOutcome {
     Cancelled,
 }
 
+/// Cómo empareja la PAREJA de lados, calculado por QUIEN CONOCE LAS DOS
+/// RAÍCES — `norte_compare::compare` ya no lo calcula sola (#153, ADR 0051):
+/// antes lo hacía internamente, en el primer listado, contra
+/// `Provider::capabilities()` sin path — un mismo `LocalProvider` sirviendo
+/// `/home` (ext4) y `/mnt/usb` (exFAT) contestaba la MISMA respuesta para los
+/// dos, y las colisiones de plegado del segundo mount se perdían en silencio.
+///
+/// El `stat` de cada raíz fuerza el sondeo de `norte-vfs-local` ANTES de leer
+/// `capabilities()`, que si no es exacta solo tras la primera operación async
+/// (el sondeo corre ahí; antes es el default del OS vía `cfg!(target_os)`).
+/// **Esto no cierra el hueco de #153 por sí solo** — `Provider::capabilities`
+/// sigue sin tomar path, así que dos raíces servidas por el MISMO provider
+/// siguen compartiendo una `Capabilities` — pero es el paso que no exige
+/// tocar el trait `Provider` (una query por-path es la forma de #164 y quiere
+/// su propia ADR), y es DONDE puede crecer sin volver a tocar
+/// `norte-compare`: quien conoce las dos raíces es quien puede, mañana,
+/// resolver el mount real de cada una.
+///
+/// Los errores de `stat` se ignoran a propósito: una raíz que no existe sigue
+/// fallando su propio `list` dentro del motor de comparación, con su fila de
+/// error — aquí solo interesa el efecto secundario del sondeo.
+///
+/// Esto asume que un provider deja su sondeo de capacidades EN EL ESTADO QUE
+/// SEA (probado u honestamente sin probar) aunque la operación que lo
+/// disparó falle — cierto hoy de `norte-vfs-local::ensure_caps`, que corre
+/// antes que el `stat` pueda fallar, pero no es parte del contrato de
+/// `Provider`. Un provider futuro cuyo sondeo solo completase en el camino
+/// de ÉXITO degradaría en silencio a `default_capabilities()` para la
+/// comparación entera; el `trace!` de abajo es la única señal si eso pasa.
+pub(crate) async fn probed_sides(
+    left: &dyn Provider,
+    left_root: &VPath,
+    right: &dyn Provider,
+    right_root: &VPath,
+) -> norte_compare::Sides {
+    let (left_probe, right_probe) = tokio::join!(left.stat(left_root), right.stat(right_root));
+    if let Err(e) = left_probe {
+        tracing::trace!(error = %e, "probed_sides: stat de la raíz izquierda falló (ignorado a propósito)");
+    }
+    if let Err(e) = right_probe {
+        tracing::trace!(error = %e, "probed_sides: stat de la raíz derecha falló (ignorado a propósito)");
+    }
+    norte_compare::Sides::from_capabilities(left.capabilities(), right.capabilities())
+}
+
 /// Envía el lote pendiente (si lo hay). Un `send` bloqueado por backpressure
 /// (canal lleno + receptor lento) NO ignora la cancelación: se hace `select`
 /// contra el token.
@@ -141,12 +186,14 @@ pub async fn run_compare(
     let mut batch = Batch::new(task_id);
     let mut last_flush = Instant::now();
 
+    let sides = probed_sides(left.as_ref(), &left_root, right.as_ref(), &right_root).await;
     let mut stream = norte_compare::compare(
         left.as_ref(),
         &left_root,
         right.as_ref(),
         &right_root,
         opts,
+        sides,
         ctx.cancel.clone(),
     );
 

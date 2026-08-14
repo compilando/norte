@@ -2544,12 +2544,15 @@ mod tests {
         seed(&origen, b"solo-aqui.txt", SECRETO).await;
 
         let raiz = norte_testkit::MemProvider::root();
+        let sides =
+            norte_compare::Sides::from_capabilities(origen.capabilities(), destino.capabilities());
         let rows = compare(
             &origen,
             &raiz,
             &destino,
             &raiz,
             CompareOptions::cheap(),
+            sides,
             CancellationToken::new(),
         );
         let plan_opts = SyncOptions {

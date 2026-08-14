@@ -667,6 +667,18 @@ independently through `PROTOCOL_VERSION`.
   now folds and normalises on its own; only the bytes that are not text pass
   through untouched (#154).
 
+- **Comparing two directories over a network mount hydrated their sizes and
+  dates one file at a time, in series.** `fs.compare` asks a provider for
+  `size`/`mtime` only when its own directory listing did not already carry
+  them, which keeps a local comparison free — but those `stat` calls
+  themselves ran one after another, a left `stat` then a right `stat` then
+  the next pair, so a tree of N paired files could cost up to 2N chained
+  round trips. Over `file://` served by a real network mount (SMB, NFS,
+  sshfs) or a remote provider whose listing does not always carry a date,
+  that latency was the whole runtime. Every file pair in one directory now
+  hydrates concurrently, bounded, instead of one at a time; row order and
+  per-pair error reporting are unchanged (#156).
+
 - **A name containing `↔` could spoof the pair in the terminal's comparison
   pane.** The block title joined both roots into one string —
   `left ↔ right` — and `↔` is an ordinary printable character: it is not a
