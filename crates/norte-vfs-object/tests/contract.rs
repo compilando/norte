@@ -53,6 +53,34 @@ norte_vfs::provider_contract! {
     hostile_names: hostile_names(),
 }
 
+/// El mismo provider con la papelera lógica ENCENDIDA (ADR 0019).
+fn fresh_con_papelera() -> ObjectProvider {
+    fresh().with_logical_trash(true)
+}
+
+// La suite entera, otra vez, con la papelera lógica puesta (#168).
+//
+// No es duplicación: es la ÚNICA configuración en la que corre la rama del
+// contrato que dice «el destino existe y se restaura» — la que exige que
+// `trash()` nombre lo que entierra, que `reversal_ref` sea `Some`, y que
+// `restore_from` devuelva el nodo exacto con sus bytes y su nombre, nombres
+// no-UTF8 incluidos.
+//
+// Esta pasada existe porque su ausencia ya costó un fallo real: este provider
+// devolvía `Some` de `trash()` y nunca sobreescribió `trash_restorable()`,
+// que por defecto es `false`. Una sincronización contra S3 con la papelera
+// encendida se habría planificado ENTERA como irreversible —cada paso, las
+// copias incluidas— tirando su `reversal_ref`, mientras la papelera era
+// perfectamente restaurable. El plan le habría dicho al humano «nada de esto
+// se puede deshacer» y luego habría enterrado cosas en un sitio que sabía
+// alcanzar.
+norte_vfs::provider_contract! {
+    mod object_fs_papelera,
+    factory: fresh_con_papelera(),
+    root: ObjectProvider::root("s3", Authority::new("norte-test").expect("authority válida")),
+    hostile_names: hostile_names(),
+}
+
 // ---------- attrs s3 (#108 bloque 2) ----------
 
 #[tokio::test]
