@@ -5359,6 +5359,7 @@ mod tests {
             newer: None,
             reason: None,
             side: None,
+            paired_under: None,
         }
     }
 

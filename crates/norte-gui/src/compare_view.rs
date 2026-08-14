@@ -955,6 +955,7 @@ mod tests {
             newer: None,
             reason: Some(CompareReason::Unreadable),
             side: None,
+            paired_under: None,
         }
     }
 
@@ -1069,6 +1070,7 @@ mod tests {
             newer: None,
             reason: None,
             side: None,
+            paired_under: None,
         }
     }
 

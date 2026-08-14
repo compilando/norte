@@ -7,7 +7,10 @@
 mod fold;
 
 pub use encoding_rs::{Encoding, UTF_8};
-pub use fold::{FoldMode, fold_delta, full_fold_expansion, name_key};
+pub use fold::{
+    FoldMode, fold_delta, full_fold_expansion, has_canonical_singleton, is_canonical_singleton,
+    name_key,
+};
 
 /// Muestra de cabecera para chardetng: 64 KiB (spec §6.2).
 const SNIFF_LEN: usize = 64 * 1024;

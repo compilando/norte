@@ -83,6 +83,7 @@ struct ProtocolSchema {
     initialize_result: InitializeResult,
     match_info: MatchInfo,
     on_unknown: OnUnknown,
+    pair_transform: PairTransform,
     pending_approval: PendingApproval,
     plan_hash: PlanHash,
     plugin_column_info: PluginColumnInfo,
@@ -413,9 +414,18 @@ fn el_schema_del_vocabulario_de_sync_cubre_las_goldens() {
         ("SyncBlockerKind", "sync_blocker.json", "", "kind"),
         ("SyncFailureCause", "methods.json", "sync_", "cause"),
         ("SyncMode", "methods.json", "sync_", "mode"),
-        ("DestTrash", "methods.json", "sync_plan_done", "dest_trash"),
+        // El prefijo es `sync_` y no `sync_plan_done` desde 0.42.0: la papelera
+        // del destino viaja también en el INFORME (#170), y el barrido tiene
+        // que ver los dos sitios — si un día divergieran, el que se quedara
+        // corto de valores rompería aquí.
+        ("DestTrash", "methods.json", "sync_", "dest_trash"),
         ("OnUnknown", "methods.json", "sync_", "on_unknown"),
         ("RootOverlap", "error.json", "overlapping_roots", "relation"),
+        // (0.42.0, #152) De la familia de COMPARACIÓN, y aquí por el mismo
+        // mecanismo: es el vocabulario que un plan de sincronización tiene que
+        // leer para no escribir sobre un fichero que solo empareja por una
+        // descomposición singleton de NFC.
+        ("PairTransform", "compare_row.json", "", "paired_under"),
     ] {
         let variantes = schema
             .pointer(&format!("/$defs/{tipo}/oneOf"))

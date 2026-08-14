@@ -78,7 +78,7 @@ minutes.
 
 So the lever is **write less**, and it is mostly the controller's to pull.
 
-**Dispatch prompts point at the plan; they do not contain it.** Pasting a
+**When you do dispatch, the prompt points at the plan; it does not contain it.** Pasting a
 task's full text into a subagent prompt costs 3–6k tokens of *controller
 output* — 80 seconds of generation each, eleven times a session. The subagent
 reading `docs/superpowers/plans/<plan>.md` costs it ~2k tokens of *input*,
@@ -137,6 +137,80 @@ recompiling what the other just built. A worktree isolates both. It is not
 free: its `target/` is its own, so it is another ~30 GB and one cold build
 (~250s). Use it when sessions genuinely overlap, and `git worktree remove` when
 they stop — a forgotten worktree is 30 GB of nothing (`just disk` lists them).
+
+### Who does the work: default to doing it yourself
+
+**Measured on the debt-wave session (2026-08-14, five waves, 26 issues closed):**
+
+| | wall clock | tokens |
+| --- | --- | --- |
+| 7 implementing subagents | **~7 hours** | ~2.9M |
+| 4 reviewing subagents | ~20 min (they run in parallel) | 800k |
+
+The reviewers were never the expense. The implementers were, and the reason is
+not that they are slow: **a subagent rebuilds context the controller already
+holds.** It re-reads the plan, the issues and the code you just read. One
+implementer spent 143 minutes and 513k tokens on five coupled issues whose plan
+and code the controller already had in front of it.
+
+So the default flipped:
+
+- **Write the code yourself.** For most tasks the controller is faster in wall
+  clock, because it skips the rebuild, and the human sees progress commit by
+  commit instead of waiting on a black box.
+- **Dispatch only when the work is genuinely parallel across disjoint crates
+  AND self-contained enough that the rebuild is small.** Two agents on disjoint
+  crates was worth it once (W1: 33 minutes for six mechanical issues). It was
+  not worth it for anything coupled.
+- **Never two agents in one tree.** Measured cost, all in one session: one
+  commit that scooped the other agent's staged files, one shared index left
+  holding a state *behind* HEAD (a reversal armed for whoever committed next),
+  and one empty commit whose message claimed to close an issue. If two agents
+  must share a tree, each uses a private index — `env GIT_INDEX_FILE=…` per
+  command, never `export`, which is not syntax in fish.
+- **Reviews are dispatched by whoever does the work, before committing.** A
+  controller-run review at the close sits on the critical path: the human waits
+  out every minute. The same review inside the work costs nothing visible.
+- **A whole-branch review is the exception**, for the three things no per-task
+  review can see: coherence across tasks, the journal/policy/wire surfaces, and
+  a branch two agents wrote. Each of those paid for itself this session; the
+  frontend-only one did not.
+
+**Tell every dispatched agent that nothing will notify it.** Two agents in one
+session stalled waiting on a "monitor" that does not exist — one of them for
+most of its life. The existing rule names `sleep` and `tail -f`; waiting on an
+imaginary signal is the same waste with no command to grep for.
+
+### Three blind spots in the RED→GREEN loop, and they are a family
+
+All three bit in one session:
+
+- `just t` runs **nextest, which does not run doctests**. Adding a corpus
+  fixture went green locally and red two gate runs later.
+- `just c` runs **clippy, which does not check intra-doc links**.
+- **Neither runs `cargo doc`**, where the link lint is denied. A `[`Type`]`
+  pointing outside scope passes the whole loop and fails in the recipe agents
+  are told not to run.
+
+If you touch a documented item: `cargo test -p <crate> --doc`. If you write a
+doc link: `cargo doc -p <crate> --no-deps`. Seconds each.
+
+### Two git habits that are not optional
+
+- **Read `git diff --cached --stat` before every commit.** `commit-tree` will
+  happily produce an empty commit, and this session produced one whose message
+  claimed to close an issue and described work it did not contain.
+- **`just ci` does not fit in a background job here** — it is killed at about
+  five minutes. Run the recipes one at a time in the foreground (`lint`, `test`,
+  `docs`, `gui-ci`, `cov`), and never through `| tail`: a killed pipe leaves
+  nothing behind, so five minutes of compute reports nothing at all.
+
+### Tier work by reading the issue, never the title
+
+Three waves in a row lost issues at dispatch time because the title said
+"mechanical" and the body said "this is not a two-line fix" or "this needs an
+ADR". Read the bodies before deciding what a batch contains. It costs minutes
+and it is the difference between a wave that lands and a wave that stalls.
 
 ### The disk budget
 

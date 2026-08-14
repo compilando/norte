@@ -36,7 +36,7 @@
 use norte_proto::{Entry, EntryKind};
 
 use crate::{
-    CompareConfidence, CompareCriterion, CompareOptions, CompareRow, CompareVerdict, Side,
+    CompareConfidence, CompareCriterion, CompareOptions, CompareRow, CompareVerdict, PairName, Side,
 };
 
 /// Lo que el rung caro (sha256) tiene YA dicho sobre una pareja cuando
@@ -215,6 +215,14 @@ impl Decision {
     /// ```
     #[must_use]
     pub fn into_row(self, id: u64, left: Option<Entry>, right: Option<Entry>) -> CompareRow {
+        // La marca de #152 se calcula AQUÍ y no la pone la llamante porque aquí
+        // están las dos entradas y no hay otro camino a una fila con los dos
+        // lados: una fila que se emitiera sin pasar por este constructor no
+        // podría olvidarse la marca, porque no existe.
+        let paired_under = match (left.as_ref(), right.as_ref()) {
+            (Some(l), Some(r)) => crate::key::pair_transform(l.pair_name(), r.pair_name()),
+            _ => None,
+        };
         let row = CompareRow {
             id,
             left,
@@ -227,7 +235,17 @@ impl Decision {
             // son del walk (colisiones, listados ilegibles, lecturas rotas).
             reason: None,
             side: None,
+            paired_under,
         };
+        // La invariante que el wire enuncia y no sabe comprobar
+        // (`CompareRow::paired_under`): una transformación es propiedad de una
+        // PAREJA, así que marcar una fila de un solo lado no significaría nada.
+        // Hoy es cierta por construcción —el `match` de arriba—, y este assert
+        // es lo que la mantiene cierta si alguien reescribe ese `match`.
+        debug_assert!(
+            row.paired_under.is_none() || (row.left.is_some() && row.right.is_some()),
+            "transformación de emparejamiento en una fila sin dos lados"
+        );
         debug_assert!(
             row.sides_are_consistent(),
             "veredicto {:?} con left={} right={}",

@@ -245,6 +245,7 @@ impl DestWitness {
 ///     newer: None,
 ///     reason: None,
 ///     side: None,
+///     paired_under: None,
 /// };
 ///
 /// let items: Vec<_> = futures::executor::block_on(
@@ -507,6 +508,13 @@ where
         if row.verdict == CompareVerdict::Ambiguous {
             return self.absorb_ambiguous(row, source, dest, source_rel);
         }
+        // Lo que este planificador TODAVÍA no mira es `row.paired_under`
+        // (0.42.0, #152): una pareja que solo empareja por una descomposición
+        // singleton de NFC —`K` U+212A contra la `K` ASCII— llega aquí como un
+        // `Different` corriente y sale como una sobrescritura, encima de un
+        // fichero que no tiene nada que ver. El bump puso el DATO en el wire;
+        // qué hace un plan con él —`Skip` con motivo, o bloqueo, y con qué
+        // vocabulario— es una decisión con ADR propio: #207.
 
         // El motivo del `Skip`, cuando el veredicto acaba en uno. Lo pone quien
         // decide la clase, que es el único que lo sabe.
@@ -1321,6 +1329,7 @@ mod tests {
             newer: None,
             reason: None,
             side: None,
+            paired_under: None,
         }
     }
 
@@ -3040,10 +3049,18 @@ mod tests {
     /// produce.** `norte_frontend::sync::render_failure` decide el ancla de
     /// una fila de fallo con la ÚNICA prueba que queda en el wire: si el
     /// informe manda `dest_rel`, `rel` es la mitad del ORIGEN. Un
-    /// `SyncFailure` no lleva clase, así que esa regla solo es correcta
-    /// mientras un `DeleteTree` —cuyo `rel` cuelga del DESTINO— no traiga
+    /// `SyncFailure` no llevaba clase, así que esa regla solo era correcta
+    /// mientras un `DeleteTree` —cuyo `rel` cuelga del DESTINO— no trajera
     /// nunca `dest_rel`. Hoy no lo trae, y `anchor_of` lo sabe porque para un
     /// PASO sí tiene la clase y la mira primero.
+    ///
+    /// **0.42.0 (#195) le pone la clase al fallo, y este test SE QUEDA.** Con
+    /// `SyncFailure::kind` en el wire, el ancla deja de deducirse y se lee, así
+    /// que el painter ya no depende de esta invariante — pero un `DeleteTree`
+    /// que empezara a llevar `dest_rel` seguiría contradiciendo lo que el campo
+    /// dice de sí mismo («la ruta del destino CUANDO no se deletrea como
+    /// `rel`»), y este test cuesta cero segundos. Es la guarda barata de una
+    /// propiedad del planificador, no ya el andamio de un frontend.
     ///
     /// Sin este test, añadir `dest_rel` a un `DeleteTree` —algo razonable el
     /// día que se quiera enseñar la ortografía del destino— cambiaría en

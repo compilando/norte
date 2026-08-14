@@ -1163,9 +1163,10 @@ pub fn failure_text(
         dest: cells.dest_rel.as_ref().map(path_text),
         dest_twin: norte_frontend::sync::dest_twin_label(cells.dest_rel_twin, norte_i18n::active())
             .unwrap_or_default(),
-        // `Dest` no lo produce `render_failure` hoy —haría falta la clase en
-        // el wire—, pero el compartido lo nombra igual: el día que llegue, un
-        // `_` lo habría pintado como «del origen» sin decir nada.
+        // `Dest` no lo produce `render_failure` hoy, aunque desde 0.42.0 la
+        // clase YA está en el wire (`SyncFailure::kind`, #195) y leerla es
+        // #208. El compartido lo nombra igual desde antes: un `_` lo habría
+        // pintado como «del origen» sin decir nada.
         anchor: norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active())
             .unwrap_or_default(),
         a11y: cause.clone(),
@@ -1980,6 +1981,7 @@ mod tests {
             bytes: 0,
             failures: vec![],
             batch_id: Some(11),
+            dest_trash: DestTrash::Restorable,
         }
     }
 
@@ -1989,6 +1991,7 @@ mod tests {
             rel: RelPath::parse_wire(rel).expect("rel"),
             dest_rel: dest.map(|d| RelPath::parse_wire(d).expect("rel")),
             cause,
+            kind: SyncStepKind::Copy,
         }
     }
 
@@ -3208,6 +3211,7 @@ mod tests {
                     seg,
                 ])),
                 cause: SyncFailureCause::Conflict,
+                kind: SyncStepKind::Copy,
             };
             let t = failure_text(&f, SyncEncodings::default());
             for (cual, ruta) in [("rel", &t.rel), ("dest", t.dest.as_ref().expect("dest"))] {
@@ -3242,6 +3246,7 @@ mod tests {
             rel: RelPath::new(vec![norte_proto::Segment::new(nombre).expect("seg")]),
             dest_rel: None,
             cause: SyncFailureCause::Denied,
+            kind: SyncStepKind::Copy,
         };
         let t = failure_text(&f, SyncEncodings::default());
         assert!(!t.rel.hostile, "es imprimible corriente: llega sin badge");
@@ -3314,6 +3319,7 @@ mod tests {
                 seg,
             ])),
             cause: SyncFailureCause::IllegalName,
+            kind: SyncStepKind::Copy,
         };
         let t = failure_text(
             &f,
@@ -3379,6 +3385,7 @@ mod tests {
             rel: RelPath::new(vec![seg("lossy_collapse_ff")]),
             dest_rel: Some(RelPath::new(vec![seg("lossy_collapse_fe")])),
             cause: SyncFailureCause::Conflict,
+            kind: SyncStepKind::Copy,
         };
         let t = failure_text(&f, SyncEncodings::default());
         let dest = t.dest.expect("dos ficheros distintos son dos ortografías");

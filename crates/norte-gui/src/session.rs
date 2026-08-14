@@ -1895,6 +1895,7 @@ mod tests {
             newer: None,
             reason: Some(norte_proto::methods::CompareReason::Unreadable),
             side: None,
+            paired_under: None,
         }
     }
 

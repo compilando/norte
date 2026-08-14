@@ -993,13 +993,16 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.41.0 (`Error::JournalUnavailable`, #178): acepta 0.41.x (N) y 0.40.x
-    // (N-1), rechaza 0.39.x (N-2) — la ventana se desplaza con el bump, no se
-    // ensancha, y que el bump sea ADITIVO no la ensancha tampoco.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.41.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.40.0"), "N-1");
+    // 0.42.0 (#170, #152, #195): acepta 0.42.x (N) y 0.41.x (N-1), rechaza
+    // 0.40.x (N-2) — la ventana se desplaza con el bump, no se ensancha, y que
+    // el bump sea ADITIVO no la ensancha tampoco. Aquí importa especialmente:
+    // dos de los tres campos son OBLIGATORIOS, así que un informe 0.41 —sin
+    // `dest_trash`— no deserializa contra este binario, y lo que impide que eso
+    // se intente siquiera es esta ventana, no un default.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.42.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.41.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.39.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.40.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -1532,6 +1535,7 @@ fn compare_row(
         newer: None,
         reason: None,
         side: None,
+        paired_under: None,
     }
 }
 
@@ -1549,7 +1553,7 @@ fn compare_entry(wire: &str) -> Entry {
 /// token desconocido cae en la variante forward-compat, no da error.
 #[test]
 fn unknown_enum_tokens_degrade_and_do_not_error() {
-    use norte_proto::methods::{CompareCriterion, CompareReason, CompareVerdict};
+    use norte_proto::methods::{CompareCriterion, CompareReason, CompareVerdict, PairTransform};
     let v: CompareVerdict = serde_json::from_str("\"teleported\"").expect("degrades");
     assert_eq!(v, CompareVerdict::Unknown);
     let c: CompareCriterion = serde_json::from_str("\"vibes\"").expect("degrades");
@@ -1558,6 +1562,74 @@ fn unknown_enum_tokens_degrade_and_do_not_error() {
     assert_eq!(r, CompareReason::Unknown);
     let s: norte_proto::methods::Side = serde_json::from_str("\"middle\"").expect("degrades");
     assert_eq!(s, norte_proto::methods::Side::Unknown);
+    // 0.42.0 (#152): el quinto fallback de esta familia. Y no basta con que
+    // degrade — una transformación que este binario no sabe nombrar tampoco
+    // sabe si es inocua, así que el default prudente se comprueba aquí.
+    let pt: PairTransform = serde_json::from_str("\"transliteration\"").expect("degrades");
+    assert_eq!(pt, PairTransform::Unknown);
+    assert!(!pt.names_one_text());
+}
+
+/// 0.42.0 (#170, #195): los otros dos campos del bump son OBLIGATORIOS, y eso
+/// es una decisión, no un descuido — un default sería una respuesta inventada
+/// sobre si algo se puede deshacer, o sobre de qué raíz cuelga la ruta de un
+/// fallo. Lo que la sostiene es la ventana N/N-1: la forma de 0.41 no llega
+/// nunca a un decodificador 0.42 porque el handshake no negocia un cliente con
+/// minor MAYOR que el servidor.
+///
+/// Este test pinea que, si llegara, se RECHAZA. `DestTrash` y `SyncStepKind` no
+/// derivan `Default`, así que un `#[serde(default)]` a secas no compilaría —
+/// pero un `#[serde(default = "...")]` con una función explícita sí, y es
+/// exactamente el cambio que hay que notar (`protocol-guardian`, W4b MINOR-3).
+#[test]
+fn los_dos_campos_obligatorios_de_0_42_rechazan_la_forma_de_0_41() {
+    use norte_proto::methods::{SyncFailure, SyncReportResult};
+    let informe_0_41 = serde_json::json!({
+        "done": 3, "failed": 0, "skipped": 0, "bytes": 4096,
+        "failures": [], "batch_id": 12
+    });
+    assert!(
+        serde_json::from_value::<SyncReportResult>(informe_0_41).is_err(),
+        "sin `dest_trash` no hay informe: inventarla sería contestar «se puede \
+         deshacer» sin saberlo"
+    );
+    let fallo_0_41 = serde_json::json!({"rel": "a.txt", "cause": "denied"});
+    assert!(
+        serde_json::from_value::<SyncFailure>(fallo_0_41).is_err(),
+        "sin `kind` no hay fila de fallo: su ausencia dejaría el ancla otra vez \
+         a la deducción que #195 cierra"
+    );
+}
+
+/// 0.42.0 (#152): `paired_under` es OPCIONAL y se omite, así que la fila que
+/// mandaba un daemon 0.41 sigue decodificando y una fila corriente sigue
+/// viajando exactamente igual que antes del bump.
+#[test]
+fn paired_under_es_aditivo_en_las_dos_direcciones() {
+    use norte_proto::methods::{CompareVerdict, PairTransform};
+    let mut row = compare_row(
+        CompareVerdict::Same,
+        Some(compare_entry("file:///l/a")),
+        Some(compare_entry("file:///r/a")),
+    );
+    let json = serde_json::to_value(&row).expect("json");
+    assert!(
+        json.as_object()
+            .expect("objeto")
+            .get("paired_under")
+            .is_none(),
+        "sin transformación no hay clave: {json}"
+    );
+    // Y la forma de 0.41.0 —sin la clave— sigue decodificando a `None`.
+    let back: norte_proto::methods::CompareRow = serde_json::from_value(json).expect("0.41 shape");
+    assert_eq!(back, row);
+
+    row.paired_under = Some(PairTransform::NormalizationSingleton);
+    let json = serde_json::to_value(&row).expect("json");
+    assert_eq!(
+        json["paired_under"],
+        serde_json::json!("normalization_singleton")
+    );
 }
 
 /// `Unknown` en CONFIDENCE es un VALOR — «el provider no puede decirlo» —, así

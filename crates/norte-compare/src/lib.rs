@@ -42,12 +42,12 @@ pub mod key;
 pub mod walk;
 
 pub use cascade::{Decision, HashOutcome, Prefetched, decide};
-pub use key::{PairKey, PairName, SideIndex, Sides, index_side, key_for};
+pub use key::{PairKey, PairName, SideIndex, Sides, index_side, key_for, pair_transform};
 pub use walk::{CompareStream, compare};
 
 pub use norte_proto::methods::{
     COMPARE_MAX_DIR_ENTRIES, COMPARE_ROWS_MAX_BATCH, CompareConfidence, CompareCriteria,
-    CompareCriterion, CompareReason, CompareRow, CompareVerdict, Side,
+    CompareCriterion, CompareReason, CompareRow, CompareVerdict, PairTransform, Side,
 };
 
 /// Lo único que puede terminar una comparación antes de tiempo.

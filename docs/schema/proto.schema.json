@@ -421,7 +421,7 @@
       ]
     },
     "CompareRow": {
-      "description": "UNA fila de una comparación (0.39.0, ADR 0048): una pareja, su veredicto, y\ncuánto vale ese veredicto.\n\nLa fila se emite FINAL: ninguna se corrige después, así que el wire no\nnecesita actualizaciones de fila ni el panel reconciliación.\n\nLleva los dos [`Entry`] ENTEROS y no dos paths porque el panel pinta\ntamaño, fecha y los BYTES del nombre de cada lado, y el walk acaba de\nlistar ambos directorios: refetchear por fila convertiría un listado en N\n`fs.stat` sobre dos providers, con el árbol ya cambiando debajo.\n\n```\nuse norte_proto::methods::{\n    CompareConfidence, CompareCriterion, CompareRow, CompareVerdict,\n};\nuse norte_proto::{Entry, EntryKind, VPath};\nlet izquierda = Entry {\n    path: VPath::parse(\"file:///a/informe%FF%FE.dat\").expect(\"path\"),\n    kind: EntryKind::File,\n    size: Some(7),\n    mtime_ms: None,\n    attrs: Default::default(),\n};\nlet row = CompareRow {\n    id: 1,\n    left: Some(izquierda),\n    right: None,\n    verdict: CompareVerdict::OnlyLeft,\n    criterion: CompareCriterion::Presence,\n    confidence: CompareConfidence::Certain,\n    newer: None,\n    reason: None,\n    side: None,\n};\nassert!(row.sides_are_consistent() && row.reason_is_consistent());\n// Lo ausente NO viaja: ni `null` ni clave (comprobado sobre las CLAVES\n// del objeto, no por substring: un path puede contener \"right\").\nlet json = serde_json::to_string(&row).expect(\"json\");\nlet obj: serde_json::Value = serde_json::from_str(&json).expect(\"objeto\");\nfor ausente in [\"right\", \"newer\", \"reason\", \"side\"] {\n    assert!(obj.get(ausente).is_none(), \"{ausente} no debe viajar: {json}\");\n}\n// Y el nombre no-UTF8 vuelve byte a byte (regla dura 1).\nlet back: CompareRow = serde_json::from_str(&json).expect(\"json\");\nassert_eq!(back, row);\n```",
+      "description": "UNA fila de una comparación (0.39.0, ADR 0048): una pareja, su veredicto, y\ncuánto vale ese veredicto.\n\nLa fila se emite FINAL: ninguna se corrige después, así que el wire no\nnecesita actualizaciones de fila ni el panel reconciliación.\n\nLleva los dos [`Entry`] ENTEROS y no dos paths porque el panel pinta\ntamaño, fecha y los BYTES del nombre de cada lado, y el walk acaba de\nlistar ambos directorios: refetchear por fila convertiría un listado en N\n`fs.stat` sobre dos providers, con el árbol ya cambiando debajo.\n\n```\nuse norte_proto::methods::{\n    CompareConfidence, CompareCriterion, CompareRow, CompareVerdict,\n};\nuse norte_proto::{Entry, EntryKind, VPath};\nlet izquierda = Entry {\n    path: VPath::parse(\"file:///a/informe%FF%FE.dat\").expect(\"path\"),\n    kind: EntryKind::File,\n    size: Some(7),\n    mtime_ms: None,\n    attrs: Default::default(),\n};\nlet row = CompareRow {\n    id: 1,\n    left: Some(izquierda),\n    right: None,\n    verdict: CompareVerdict::OnlyLeft,\n    criterion: CompareCriterion::Presence,\n    confidence: CompareConfidence::Certain,\n    newer: None,\n    reason: None,\n    side: None,\n    paired_under: None,\n};\nassert!(row.sides_are_consistent() && row.reason_is_consistent());\n// Lo ausente NO viaja: ni `null` ni clave (comprobado sobre las CLAVES\n// del objeto, no por substring: un path puede contener \"right\").\nlet json = serde_json::to_string(&row).expect(\"json\");\nlet obj: serde_json::Value = serde_json::from_str(&json).expect(\"objeto\");\nfor ausente in [\"right\", \"newer\", \"reason\", \"side\", \"paired_under\"] {\n    assert!(obj.get(ausente).is_none(), \"{ausente} no debe viajar: {json}\");\n}\n// Y el nombre no-UTF8 vuelve byte a byte (regla dura 1).\nlet back: CompareRow = serde_json::from_str(&json).expect(\"json\");\nassert_eq!(back, row);\n```",
       "properties": {
         "confidence": {
           "$ref": "#/$defs/CompareConfidence",
@@ -458,6 +458,17 @@
             }
           ],
           "description": "Qué lado es más NUEVO, cuando la fecha decidió la fila. Nada de esta\nspec lo lee: la spec 2 (el plan de sincronización) lo necesita para\nproponer una dirección, y producirlo aquí no cuesta nada."
+        },
+        "paired_under": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PairTransform"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Los dos lados emparejaron y **sus nombres NO son los mismos bytes**:\nbajo qué transformación emparejaron (0.42.0, #152).\n\n`None` en el caso corriente —una pareja de nombres byte a byte iguales,\no una fila que no tiene dos lados—, y por eso la clave se OMITE: el\npayload de una comparación normal sigue siendo byte a byte el de 0.41.0.\n\nEs independiente de [`CompareRow::reason`] a propósito. Un\nemparejamiento por normalización no hace la fila ambigua —el veredicto\nes un `Same` o un `Different` legítimo, decidido por el rung que tocara—\ny meterlo en `reason` habría exigido relajar\n[`CompareRow::reason_is_consistent`], con lo que un cliente 0.41 vería\nfilas buenas fallar su propia comprobación de coherencia.\n\n**Lo que un cliente NO debe hacer es recalcularlo.** Los dos [`Entry`]\nviajan enteros, así que comparar los bytes de los dos nombres es\nposible; saber si el plegado de caja estaba en vigor no lo es, porque\neso sale de las [`Capabilities`](crate::Capabilities) de los DOS\nproviders y es una propiedad de la pareja, no de un lado. Quien empareja\nes quien puede contestar, y este campo es su respuesta.\n\n# Habla del NOMBRE de esta fila, no de su ruta entera\nEl emparejamiento es por segmento, y este campo también: dice cómo\nemparejaron los dos ÚLTIMOS segmentos, no si algún directorio de encima\nemparejó por una transformación. Un directorio `K/` (U+212A) contra un\n`K/` ASCII sale con su propia fila marcada, se DESCIENDE —los dos son\ndirectorios y emparejaron—, y cada hijo de dentro empareja por nombres\nidénticos y llega con `None`.\n\n**Un consumidor que decida sobre un SUBÁRBOL tiene que propagar la marca\ndel ancestro él mismo.** Las filas llegan en pre-orden —el directorio\nantes que su contenido—, así que se puede; lo que no se puede es leer\nfila a fila y creer que un `None` significa «esta ruta es segura».\nProtegido fichero a fichero, un `Mirror` seguiría espejando un subárbol\nentero bajo un directorio que solo empareja por un singleton\n(`protocol-guardian`, W4b, MAJOR-2).\n\n# Invariantes (el core las mantiene; un cliente puede asumirlas)\n`Some` ⟹ la fila tiene los DOS lados: una transformación es una\npropiedad de una pareja, y una fila con un solo lado no la tiene. En\nparticular una [`CompareVerdict::Ambiguous`] —que es de UN lado por\ndefinición— jamás lo lleva. Una [`CompareVerdict::Error`] SÍ puede, si\ntrae las dos entradas: el directorio emparejó y lo que falló fue\nlistarlo."
         },
         "reason": {
           "anyOf": [
@@ -2123,6 +2134,31 @@
         }
       ]
     },
+    "PairTransform": {
+      "description": "Bajo qué transformación emparejaron dos nombres que NO son los mismos bytes\n(0.42.0, #152).\n\nLa clave de emparejamiento pliega caja y normaliza a NFC, y **ninguna de las\ndos es inyectiva**: `README` y `readme` emparejan porque un lado no puede\nsostener las dos grafías, y `café` NFC y `café` NFD porque son el MISMO\ntexto escrito de dos maneras. Las dos cosas son el comportamiento que se\nquiere. Lo que no se veía es que la fila resultante —un [`CompareVerdict::Same`]\no un [`CompareVerdict::Different`] perfectamente normales— no decía que sus\ndos mitades no son los mismos bytes, y\n[`CompareRow::reason_is_consistent`] prohíbe un [`CompareReason`] fuera de\n[`CompareVerdict::Ambiguous`]/[`CompareVerdict::Error`], así que no había\ndónde decirlo.\n\n[`PairTransform::NormalizationSingleton`] es el caso por el que este campo\nexiste. NFC tiene descomposiciones SINGLETON —U+212A KELVIN SIGN normaliza\na `K`, U+2126 OHM SIGN a U+03A9—, así que dos ficheros que coexisten en\next4, sin plegado de caja de por medio, y que un lector lee como caracteres\nDISTINTOS, emparejan y se comparan como si fueran uno. Sin marca en el wire,\nuna sincronización lee esa fila como «actualiza el de la derecha con el de\nla izquierda» y escribe encima de un fichero que no tiene nada que ver.\n\n**Separar el singleton del resto es todo el valor de este vocabulario.** Un\nconsumidor que solo supiera «estos dos nombres difieren en bytes» tendría\nque elegir entre fiarse de todo emparejamiento por normalización —que es el\nfallo— o rechazarlos todos, y eso rompe el caso macOS↔Linux para el que la\nclave se diseñó.\n\nDaemon→client: `#[serde(other)]`, como todo el vocabulario de ADR 0048.\n\n```\nuse norte_proto::methods::PairTransform;\nassert_eq!(\n    serde_json::to_string(&PairTransform::NormalizationSingleton).expect(\"json\"),\n    r#\"\"normalization_singleton\"\"#\n);\n// Una transformación de un daemon N+1 degrada; NO tira el lote de filas.\nlet futuro: PairTransform = serde_json::from_str(r#\"\"transliteration\"\"#).expect(\"degrada\");\nassert_eq!(futuro, PairTransform::Unknown);\nassert!(!PairTransform::Unknown.names_one_text());\n```",
+      "oneOf": [
+        {
+          "const": "case_fold",
+          "description": "**Sin plegar caja NO emparejan**: hizo falta el pliegue, porque uno de\nlos dos lados no distingue caja (ver `norte_compare::Sides`).\n\nNo dice «difieren SOLO en la caja»: una pareja que además esté en\ngrafías Unicode distintas —`CAFÉ` precompuesta contra `café`\ndescompuesta— contesta esto, porque lo que la junta es el pliegue. Lo\nque sí promete es [`PairTransform::names_one_text`].\n\nNo es un aviso: en el lado que no distingue caja los dos nombres NO\npueden coexistir, así que emparejarlos es exactamente lo correcto. Viaja\npara que un pintor pueda explicar por qué la fila enseña dos grafías.",
+          "type": "string"
+        },
+        {
+          "const": "normalization",
+          "description": "Canónicamente equivalentes con grafías distintas: el par NFC/NFD\nclásico, macOS repartiendo NFD y Linux NFC.\n\nTampoco es un aviso — es el caso para el que la clave existe—, pero un\ndestino que deletrea el nombre de otra manera sí importa al escribir:\nes lo que [`SyncStep::dest_rel`] lleva.",
+          "type": "string"
+        },
+        {
+          "const": "normalization_singleton",
+          "description": "Emparejaron por una descomposición SINGLETON de NFC, y esa es la que\n**puede estar juntando dos ficheros distintos**: U+212A KELVIN SIGN\ncontra `K`, U+2126 OHM SIGN contra U+03A9. Unicode los declara\ncanónicamente equivalentes; ext4 los guarda como dos ficheros y un\nlector los ve como dos caracteres.\n\nGana sobre las otras dos cuando concurren: una pareja que además pliega\ncaja sigue siendo la peligrosa, y el consumidor que solo mira esta\nvariante tiene que verla.\n\n**Es BEST-EFFORT y se equivoca hacia el lado seguro.** Quien la produce\nmira si alguno de los dos nombres CONTIENE un carácter con\ndescomposición singleton, no si ese carácter es exactamente el que los\nsepara: una pareja NFC/NFD que además lleve un OHM SIGN idéntico en los\ndos lados se marca aquí. El conjunto de caracteres es diminuto y ninguno\naparece en un nombre corriente, así que el falso positivo cuesta un\naviso de más y el falso negativo costaría un fichero.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Transformación que este decodificador no conoce (`#[serde(other)]`): un\ndaemon N+1 la emitió. **No se puede leer como «inocua»** — ver\n[`PairTransform::names_one_text`].",
+          "type": "string"
+        }
+      ]
+    },
     "PendingApproval": {
       "description": "Una aprobación pendiente (elemento de [`PolicyPendingResult`]).",
       "properties": {
@@ -3617,7 +3653,7 @@
       "type": "object"
     },
     "SyncFailure": {
-      "description": "UN paso que no ocurrió (0.40.0, ADR 0049).",
+      "description": "UN paso que no ocurrió (0.40.0, ADR 0049).\n\n```\nuse norte_proto::methods::{RelPath, SyncFailure, SyncFailureCause, SyncStepKind};\nlet f = SyncFailure {\n    rel: RelPath::parse_wire(\"viejo\").expect(\"rel\"),\n    dest_rel: None,\n    cause: SyncFailureCause::Denied,\n    kind: SyncStepKind::DeleteTree,\n};\nlet json = serde_json::to_value(&f).expect(\"json\");\nassert_eq!(json[\"kind\"], serde_json::json!(\"delete_tree\"));\n// Y con la clase delante, la fila dice de qué raíz cuelga su `rel` sin\n// que nadie tenga que deducirlo (0.42.0, #195).\nassert!(!json.as_object().expect(\"objeto\").contains_key(\"dest_rel\"));\n```",
       "properties": {
         "cause": {
           "$ref": "#/$defs/SyncFailureCause",
@@ -3634,6 +3670,10 @@
           ],
           "description": "La ruta del DESTINO sobre la que el paso caía, cuando no se deletrea como\n`rel` — el mismo campo y la misma regla que [`SyncStep::dest_rel`],\nrepetidos aquí porque el informe se lee sin el plan delante.\n\nSin él, el caso de [`SyncFailureCause::IllegalName`] se cuenta al revés:\nun `café/x.txt` NFC del origen cuya carpeta el destino deletrea en NFD\nfalla por longitud del nombre —NFD ocupa más— y el informe enseñaría la\ngrafía NFC, que es la corta y la legal. «Este nombre no vale» señalando un\nnombre que sí vale."
         },
+        "kind": {
+          "$ref": "#/$defs/SyncStepKind",
+          "description": "QUÉ paso era (0.42.0, #195): la misma clase que llevaba en el plan,\n[`SyncStep::kind`].\n\nEl informe se lee SIN el plan delante, y hasta 0.41.0 esa era la\ndiferencia entre un paso y un fallo: [`SyncStep`] declara su clase y\n[`SyncFailure`] la tiraba, aunque el core la tiene en la mano cuando\nconstruye la fila. Lo que se perdía es **de qué raíz cuelga `rel`**. Un\n[`SyncStepKind::DeleteTree`] habla siempre del DESTINO; todo lo demás\nque escribe, del origen. Sin la clase, la única prueba que quedaba en el\nwire era `dest_rel`, y de su ausencia no se deduce nada: un `DeleteTree`\ndenegado por permisos contra un destino de solo lectura —la fila hostil\nmás corriente de un [`SyncMode::Mirror`]— no lleva `dest_rel` y su `rel`\ncuelga del destino. Un panel que pinte esa ruta bajo la columna del\norigen, o que la decodifique con el override de encoding del árbol que\nno se ha tocado, está nombrando un subárbol del destino con el codepage\ndel otro lado, en la pantalla donde se explica qué se ha borrado.\n\n**Obligatorio y sin `serde(default)`**, por lo mismo que\n[`SyncPlanDone::dest_trash`]: un default sería una clase inventada sobre\nun paso que falló, y [`SyncStepKind::Unknown`] —el `#[serde(other)]` del\nenum— significa «un daemon N+1 nombró una clase que este binario no\nconoce», que es una respuesta distinta de «el emisor no la dijo». La\nventana N/N-1 no lo necesita: un daemon 0.41 hablando con un cliente\n0.42 no negocia (ver [`version_compatible`]), y un cliente 0.41 leyendo\nun informe 0.42 ignora la clave de más.\n\n**Con una salvedad sobre [`SyncStepKind::Unknown`]**, que es el único\nsitio del wire donde el core PODRÍA emitirlo: un paso cuya clase este\nbinario no sabe nombrar falla con\n[`SyncFailureCause::Io`]-por-`Unsupported` y su clase se copia tal cual\na esta fila. Hoy no ocurre —el spool rechaza al LEER un paso de clase\ndesconocida, así que un plan con uno no llega a ejecutarse—, y si\nocurriera significaría «este binario leyó un plan que no entiende», no\n«el emisor no dijo la clase». Un cliente lo trata igual que un\n[`SyncStepKind::Unknown`] en un paso: sin ancla que afirmar."
+        },
         "rel": {
           "$ref": "#/$defs/RelPath",
           "description": "Dónde, RELATIVO a las dos raíces y en BYTES, igual que\n[`SyncStep::rel`]."
@@ -3641,7 +3681,8 @@
       },
       "required": [
         "rel",
-        "cause"
+        "cause",
+        "kind"
       ],
       "type": "object"
     },
@@ -3712,7 +3753,7 @@
         },
         "dest_trash": {
           "$ref": "#/$defs/DestTrash",
-          "description": "Qué papelera tiene el DESTINO, o sea qué puede devolver el undo de este\nplan si se aplica ([`DestTrash`]).\n\n**Sin este campo no se puede pintar el diálogo de aprobación sin\nmentir**, y el motivo está entero en el rustdoc de [`DestTrash`]: el\n[`StepReversal`] de cada paso no distingue un plan de copias que se\ndeshace entero de uno idéntico que no se deshace nada. Habla del plan\nCOMPLETO —es una propiedad del provider del destino, no de un paso—, así\nque [`SyncPlanParams::include`] no lo afecta.\n\nSin `serde(default)` a propósito, por lo mismo que los contadores nuevos\nde [`SyncCounts`]: un default sería una respuesta inventada sobre si algo\nse puede deshacer, y no hay ninguna versión publicada que lo omita (0.40.0\nes el bump que estrena la familia entera). [`DestTrash`] tampoco deriva\n`Default`, así que ponerle un `serde(default)` más adelante no compila en\nsilencio: hay que elegir a mano qué se inventa, que es justo la decisión\nque no debe pasar desapercibida.\n\nNo entra en el `plan_hash` y no hace falta que entre: sale de\n`dest_has_trash` y `dest_trash_restorable`, que el hasher ya siembra, así\nque dos planes con papeleras distintas ya tienen digests distintos. O\nsea que este campo no puede contradecir al plan que autoriza ejecutar.\n\n**DESPUÉS de aplicar, quien manda es el informe.**\n[`SyncReportResult`] no lleva esta información —quien aplica tiene el\n`sync.plan_done` delante— y su `batch_id` ausente significa que no llegó\na abrirse lote alguno, o sea que no hay nada que deshacer por mucho que\nel plan dijera. Lo que el undo acabó salvando lo cuenta\n`PolicyUndoReportResult`, con `skipped_created_no_trash` como la cara\n*a posteriori* de [`DestTrash::Absent`]."
+          "description": "Qué papelera tiene el DESTINO, o sea qué puede devolver el undo de este\nplan si se aplica ([`DestTrash`]).\n\n**Sin este campo no se puede pintar el diálogo de aprobación sin\nmentir**, y el motivo está entero en el rustdoc de [`DestTrash`]: el\n[`StepReversal`] de cada paso no distingue un plan de copias que se\ndeshace entero de uno idéntico que no se deshace nada. Habla del plan\nCOMPLETO —es una propiedad del provider del destino, no de un paso—, así\nque [`SyncPlanParams::include`] no lo afecta.\n\nSin `serde(default)` a propósito, por lo mismo que los contadores nuevos\nde [`SyncCounts`]: un default sería una respuesta inventada sobre si algo\nse puede deshacer, y no hay ninguna versión publicada que lo omita (0.40.0\nes el bump que estrena la familia entera). [`DestTrash`] tampoco deriva\n`Default`, así que ponerle un `serde(default)` más adelante no compila en\nsilencio: hay que elegir a mano qué se inventa, que es justo la decisión\nque no debe pasar desapercibida.\n\nNo entra en el `plan_hash` y no hace falta que entre: sale de\n`dest_has_trash` y `dest_trash_restorable`, que el hasher ya siembra, así\nque dos planes con papeleras distintas ya tienen digests distintos. O\nsea que este campo no puede contradecir al plan que autoriza ejecutar.\n\n**DESPUÉS de aplicar, quien manda es el informe.**\n[`SyncReportResult::dest_trash`] repite este valor (0.42.0, #170) para\nque el informe se baste solo, pero es el `batch_id` de ese informe el\nque dice si hay algo que deshacer: ausente significa que no llegó a\nabrirse lote alguno, por mucho que el plan prometiera. Lo que el undo\nacabó salvando lo cuenta `PolicyUndoReportResult`, con\n`skipped_created_no_trash` como la cara *a posteriori* de\n[`DestTrash::Absent`]."
         },
         "executable": {
           "description": "`true` cuando el plan se puede ejecutar tal cual. Campo NORMATIVO, con la\nmisma dirección que [`FsRenameBatchPlanResult::executable`]: el frontend\ndeshabilita el confirmar con `!executable` y NO deduce nada de\n`blockers`, porque un bloqueo futuro podría no tener nombre que listar.\n\nINVARIANTE (el core lo mantiene, un cliente puede asumirlo): `blockers`\nno vacío ⟹ `executable == false`; y `executable == false` ⟹\n[`SYNC_APPLY`] rehúsa con\n[`Error::PlanNotExecutable`](crate::Error::PlanNotExecutable) aunque el\nhash case.\n\n**[`SyncPlanParams::include`] NO recorta los bloqueos**, así que esto\nhabla siempre de la comparación ENTERA. Es deliberado: hay bloqueos cuyo\nalcance es el árbol —[`SyncBlockerKind::DestReadOnly`] cuelga de la raíz,\nque ninguna selección nombra— y recortarlos por la selección convertiría\nun destino de solo lectura en un plan ejecutable. La consecuencia que un\nfrontend tiene que saber pintar: una selección de tres ficheros puede\nvolver con `executable: false` por algo que está a cuarenta mil filas de\ndistancia y que el usuario no tiene delante.",
@@ -3834,7 +3875,7 @@
       "type": "object"
     },
     "SyncReportResult": {
-      "description": "Result de [`SYNC_REPORT`] (0.40.0, ADR 0049): qué hizo la aplicación del\nplan.\n\nUn fallo es una FILA del informe, no el final de la Task: un paso que muere\nen el fichero 40 000 de 500 000 se anota y la Task sigue, igual que la\ncomparación convirtió sus errores en filas.\n\n```\nuse norte_proto::methods::SyncReportResult;\nlet r = SyncReportResult {\n    done: 3, failed: 0, skipped: 1, bytes: 4096,\n    failures: vec![], batch_id: Some(12),\n};\nlet json = serde_json::to_value(&r).expect(\"json\");\nassert_eq!(json[\"failures\"], serde_json::json!([]));\nassert_eq!(json[\"batch_id\"], serde_json::json!(12));\n```",
+      "description": "Result de [`SYNC_REPORT`] (0.40.0, ADR 0049): qué hizo la aplicación del\nplan.\n\nUn fallo es una FILA del informe, no el final de la Task: un paso que muere\nen el fichero 40 000 de 500 000 se anota y la Task sigue, igual que la\ncomparación convirtió sus errores en filas.\n\n```\nuse norte_proto::methods::{DestTrash, SyncReportResult};\nlet r = SyncReportResult {\n    done: 3, failed: 0, skipped: 1, bytes: 4096,\n    failures: vec![], batch_id: Some(12), dest_trash: DestTrash::Restorable,\n};\nlet json = serde_json::to_value(&r).expect(\"json\");\nassert_eq!(json[\"failures\"], serde_json::json!([]));\nassert_eq!(json[\"batch_id\"], serde_json::json!(12));\n// El informe se basta solo: «¿se puede devolver esto?» se contesta con él\n// en la mano, sin haber conservado el `sync.plan_done` (0.42.0, #170).\nassert_eq!(json[\"dest_trash\"], serde_json::json!(\"restorable\"));\n```",
       "properties": {
         "batch_id": {
           "description": "La unidad del journal bajo la que quedó todo lo aplicado. Referencia\nOPACA para el cliente: sirve para CITARLA —en un log, en un aviso, en un\ninforme de soporte—, no para interpretarla, y ningún método la acepta\ncomo parámetro (el undo se pide por sesión con\n[`POLICY_UNDO_SESSION`], y agrupar por lote es asunto del core).\n\n`None` SOLO cuando la aplicación murió antes de poder abrir una — no\ncuando no hizo nada.",
@@ -3849,6 +3890,10 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "dest_trash": {
+          "$ref": "#/$defs/DestTrash",
+          "description": "Qué papelera tenía el DESTINO cuando esto se aplicó, o sea qué puede\ndevolver el undo de este lote (0.42.0, #170).\n\nEl MISMO valor que viajó en [`SyncPlanDone::dest_trash`], sacado del\nmismo par de opciones del plan, y por el mismo motivo: sin él,\n«¿se puede deshacer esto?» no tiene respuesta. Un plan de solo copias\ncontra un destino sin papelera y otro idéntico contra uno con papelera\nrestaurable son byte a byte el mismo informe, y uno se deshace entero y\nel otro no se deshace nada (ADR 0049, #65).\n\n**Está aquí porque el informe se lee sin el `plan_done` delante.** Quien\naplicó lo recibió segundos antes —tuvo que recibirlo para tener el\n`plan_hash`—, pero un cliente que reconectó, que no fue quien planificó,\no que simplemente soltó la notificación, podía leer qué se copió, qué se\nsobrescribió y qué se borró, y no podía saber si algo de eso vuelve.\n[`PolicyUndoReportResult`] contesta lo mismo *a posteriori*, con\n`skipped_created_no_trash`, que es exactamente el momento equivocado:\nesto informa una decisión ANTES de tomarla.\n\nObligatorio y sin `serde(default)`, igual que su gemelo de\n[`SyncPlanDone`] y por la misma razón — un default sería una respuesta\ninventada sobre si algo se puede deshacer.\n\n**No sustituye a `batch_id`.** Un [`DestTrash::Restorable`] con\n`batch_id` ausente sigue significando que no llegó a abrirse lote alguno\ny no hay nada que deshacer; los dos campos contestan preguntas\ndistintas y hay que leerlos juntos."
         },
         "done": {
           "description": "Pasos ejecutados Y journalizados.",
@@ -3881,7 +3926,8 @@
         "failed",
         "skipped",
         "bytes",
-        "failures"
+        "failures",
+        "dest_trash"
       ],
       "type": "object"
     },
@@ -4631,6 +4677,9 @@
     "on_unknown": {
       "$ref": "#/$defs/OnUnknown"
     },
+    "pair_transform": {
+      "$ref": "#/$defs/PairTransform"
+    },
     "pending_approval": {
       "$ref": "#/$defs/PendingApproval"
     },
@@ -4950,6 +4999,7 @@
     "initialize_result",
     "match_info",
     "on_unknown",
+    "pair_transform",
     "pending_approval",
     "plan_hash",
     "plugin_column_info",
