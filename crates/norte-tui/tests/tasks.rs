@@ -38,7 +38,7 @@ async fn el_board_ve_terminar_una_task() {
         .copy(&vp("mem:///a"), &vp("mem:///b"), TransferOptions::default())
         .await
         .unwrap();
-    board.push(task, None);
+    board.push(&task, None);
     assert_eq!(board.rows().len(), 1);
 
     // La task termina; el tick la detecta como terminal UNA sola vez.
@@ -66,7 +66,7 @@ async fn cancelar_la_ultima_en_marcha() {
         .copy(&vp("mem:///a"), &vp("mem:///b"), TransferOptions::default())
         .await
         .unwrap();
-    board.push(task, None);
+    board.push(&task, None);
     assert!(board.cancel_last_running(), "había una en marcha");
 
     let mut terminales = Vec::new();

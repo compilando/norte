@@ -2662,7 +2662,7 @@ async fn run(
                 }
             } => {
                 // Task de OTRO frontend de la misma sesión (fase 3): al panel.
-                app.board.push_foreign(task);
+                app.board.push_foreign(&task);
             }
             Some(ev) = async {
                 match &mut conn_events {
@@ -3616,7 +3616,7 @@ async fn run(
                                     if let Some(target) = app.mkdir_confirm() {
                                         match backend.mkdir(&target).await {
                                             Ok(task) => {
-                                                app.board.push(task, None);
+                                                app.board.push(&task, None);
                                                 app.mkdir_submitted();
                                             }
                                             // MINOR-1: el nombre sobrevive
@@ -8411,7 +8411,7 @@ async fn submit_deletes(app: &mut App, backend: &Backend, items: &[VPath], perma
         match backend.delete(target, del_mode).await {
             Ok(task) => {
                 app.board
-                    .push_full(task, None, (!permanent).then(|| target.clone()));
+                    .push_full(&task, None, (!permanent).then(|| target.clone()));
             }
             Err(e) => app.message = Some(error_message(&e)),
         }
@@ -8441,7 +8441,7 @@ async fn submit_transfer(
             // colisión llega async y el foco puede haber cambiado.
             let name_encoding = app.focused().name_encoding();
             app.board.push(
-                task,
+                &task,
                 Some(RetrySpec {
                     kind,
                     from,
@@ -8505,7 +8505,7 @@ async fn apply_ai_rename(
     let n = plan.real_steps();
     match backend.rename_batch(dir, &pairs, &resuelto.plan_hash).await {
         Ok(task) => {
-            app.board.push(task, None);
+            app.board.push(&task, None);
             app.message = Some(ta("msg-rename-batch-applied", &[("n", &n.to_string())]));
         }
         Err(e) => {
@@ -8939,11 +8939,14 @@ async fn launch_sync_apply(
                 task.cancel();
                 return;
             }
-            // Sin tablero, a propósito: `TaskRef` no es clonable, y el
-            // tablero se la QUEDARÍA — dejando al panel sin nada que cancelar
-            // con `Esc`, que es el único sitio desde el que se para un plan
-            // aprobado. Verla también ahí quiere un `TaskRef` compartido, y
-            // eso es un cambio del core.
+            // Y AL TABLERO (#173): el panel conserva la task —`Esc` sigue
+            // siendo desde donde se para un plan aprobado— y el tablero se
+            // queda un `TaskObserver`, que pinta y cancela sin poseer. Antes
+            // no estaba porque el tablero se quedaba el `TaskRef` entero, así
+            // que la operación más destructiva del programa era la única
+            // invisible: cerrado el panel, un `Mirror` seguía reescribiendo un
+            // subárbol sin fila, sin progreso y sin forma de pararlo.
+            app.board.push_observed(task.observer(), None);
             // La del plan se cancela SIEMPRE al sustituirla: `Ready` se alcanza
             // al RECIBIR el `sync.plan_done`, y su flujo puede no haberse
             // cerrado todavía. `TaskRef` no tiene `Drop`, así que soltarla sin

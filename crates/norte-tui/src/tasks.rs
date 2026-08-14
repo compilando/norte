@@ -3,7 +3,7 @@
 //! task; el tick copia el último snapshot publicado.
 
 use norte_core::TransferOptions;
-use norte_core::backend::TaskRef;
+use norte_core::backend::{TaskObserver, TaskRef};
 use norte_proto::{TaskProgress, TaskState, VPath};
 
 use crate::app::TransferKind;
@@ -29,7 +29,7 @@ pub struct RetrySpec {
 
 /// Una fila del panel.
 pub struct TaskRow {
-    task: TaskRef,
+    task: TaskObserver,
     rx: tokio::sync::watch::Receiver<TaskProgress>,
     /// Último snapshot copiado (lo que se pinta).
     pub last: TaskProgress,
@@ -67,28 +67,45 @@ pub struct TaskBoard {
 
 impl TaskBoard {
     /// Añade una task recién encolada por ESTE frontend.
-    pub fn push(&mut self, task: TaskRef, retry: Option<RetrySpec>) {
+    pub fn push(&mut self, task: &TaskRef, retry: Option<RetrySpec>) {
         self.push_full(task, retry, None);
+    }
+
+    /// Añade una task de la que este frontend conserva el handle: el tablero
+    /// se queda un [`TaskObserver`], no la task (#173). Es lo que permite que
+    /// una sincronización APLICÁNDOSE salga en el tablero sin quitarle a su
+    /// panel lo único con lo que se puede parar.
+    pub fn push_observed(&mut self, task: TaskObserver, retry: Option<RetrySpec>) {
+        self.push_observed_full(task, retry, None);
     }
 
     /// Añade una task FORÁNEA (otro frontend de la misma sesión, fase 3):
     /// sin contexto de reintento (no la lanzamos nosotros) — se ve
     /// progresar en el panel como una más. Duplicados por id se ignoran
     /// (la propia puede llegar también por broadcast).
-    pub fn push_foreign(&mut self, task: TaskRef) {
-        if self.rows.iter().any(|r| r.task.id() == task.id()) {
-            return;
-        }
+    pub fn push_foreign(&mut self, task: &TaskRef) {
         self.push_full(task, None, None);
     }
 
     /// Como [`Self::push`], con objetivo de papelera (deletes Trash).
     pub fn push_full(
         &mut self,
-        task: TaskRef,
+        task: &TaskRef,
         retry: Option<RetrySpec>,
         trash_target: Option<VPath>,
     ) {
+        self.push_observed_full(task.observer(), retry, trash_target);
+    }
+
+    /// Como [`Self::push_full`], desde un observador ya obtenido.
+    pub fn push_observed_full(
+        &mut self,
+        task: TaskObserver,
+        retry: Option<RetrySpec>,
+        trash_target: Option<VPath>,
+    ) {
+        // Duplicados por id se ignoran: la propia puede llegar también por
+        // broadcast, y una sincronización se empuja al lanzarla.
         if self.rows.iter().any(|r| r.task.id() == task.id()) {
             return;
         }
@@ -198,23 +215,44 @@ mod has_active_tests {
     #[test]
     fn una_fila_en_vuelo_es_activa() {
         let mut board = TaskBoard::default();
-        board.push(task_ref(1, TaskState::Running), None);
+        board.push(&task_ref(1, TaskState::Running), None);
         assert!(board.has_active());
     }
 
     #[test]
     fn todas_las_filas_terminales_no_es_activa() {
         let mut board = TaskBoard::default();
-        board.push(task_ref(1, TaskState::Completed), None);
-        board.push(task_ref(2, TaskState::Cancelled), None);
+        board.push(&task_ref(1, TaskState::Completed), None);
+        board.push(&task_ref(2, TaskState::Cancelled), None);
         assert!(!board.has_active());
     }
 
     #[test]
     fn mezcla_una_en_vuelo_entre_terminales_es_activa() {
         let mut board = TaskBoard::default();
-        board.push(task_ref(1, TaskState::Completed), None);
-        board.push(task_ref(2, TaskState::Running), None);
+        board.push(&task_ref(1, TaskState::Completed), None);
+        board.push(&task_ref(2, TaskState::Running), None);
         assert!(board.has_active());
+    }
+
+    /// #173: el tablero se queda un OBSERVADOR, así que quien lanzó la task
+    /// conserva el `TaskRef` —y con él el `Esc` del panel de sincronización,
+    /// que es el único sitio desde el que se para un plan aprobado—. Antes
+    /// esto no se podía escribir: `push` se llevaba la task.
+    #[test]
+    fn el_tablero_observa_sin_quedarse_la_task() {
+        let task = task_ref(4, TaskState::Running);
+        let mut board = TaskBoard::default();
+        board.push_observed(task.observer(), None);
+        assert_eq!(board.rows().len(), 1);
+        assert!(board.has_active());
+        // La task sigue siendo de quien la lanzó: el tablero no se la llevó.
+        assert_eq!(task.id(), norte_proto::TaskId::new(4));
+        // Y el tablero puede pararla.
+        assert!(board.cancel_last_running());
+        // Un segundo empujón con el mismo id no duplica la fila (la propia
+        // puede llegar además por broadcast).
+        board.push_observed(task.observer(), None);
+        assert_eq!(board.rows().len(), 1);
     }
 }
