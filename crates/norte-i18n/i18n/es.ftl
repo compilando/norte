@@ -750,6 +750,7 @@ sync-reason-unreadable = no se pudo leer, así que el plan lo deja como está
 # (macOS, Windows)—: el token del wire no los separa, así que esta frase no
 # puede afirmar ninguno de los dos.
 sync-reason-no-trash-on-target = el destino no puede devolver esto: no tiene papelera, o tiene una que no dice dónde deja las cosas
+sync-reason-non-injective-pairing = los dos nombres pueden ser ficheros DISTINTOS que Unicode declara iguales — el plan no toca esta pareja
 sync-reason-unknown = motivo que esta versión no conoce
 sync-blocker-ambiguous-dest = dos nombres del destino colapsan en uno — escribir ahí podría dar al fichero equivocado
 sync-blocker-overlap-detected = las dos raíces son el mismo árbol

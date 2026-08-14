@@ -489,6 +489,7 @@ pub fn reason_label(reason: SyncReason, lang: Lang) -> String {
         SyncReason::UnknownConfidence => "unknown-confidence",
         SyncReason::Unreadable => "unreadable",
         SyncReason::NoTrashOnTarget => "no-trash-on-target",
+        SyncReason::NonInjectivePairing => "non-injective-pairing",
         _ => "unknown",
     };
     t_in(lang, &format!("sync-reason-{id}"))

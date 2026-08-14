@@ -737,6 +737,7 @@ sync-reason-unreadable = it could not be read, so the plan leaves it alone
 # put things" (macOS, Windows): the wire token does not separate them, so this
 # sentence must not claim either.
 sync-reason-no-trash-on-target = the destination cannot give this back: it has no trash, or one that does not say where it puts things
+sync-reason-non-injective-pairing = the two names may be different files that Unicode calls equal — the plan does not touch this pair
 sync-reason-unknown = reason this version does not know
 sync-blocker-ambiguous-dest = two names on the destination collapse into one — writing there could hit the wrong file
 sync-blocker-overlap-detected = the two roots are the same tree

@@ -58,3 +58,4 @@ edits.
 | [0050](0050-the-agent-plans-and-does-not-apply.md) | The agent plans and does not apply | accepted |
 | [0051](0051-shared-fold-key-and-hash-framing.md) | The fold key moves to the permissive layer; the journal's framing stays and is pinned equal | accepted |
 | [0052](0052-protected-roots-no-grant-reaches.md) | The daemon's own state directory is a root no grant reaches | accepted |
+| [0053](0053-a-pairing-that-may-join-two-files-is-not-a-step.md) | A pairing that may join two files is skipped, not acted on | accepted |

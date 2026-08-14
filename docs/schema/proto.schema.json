@@ -3855,6 +3855,11 @@
           "type": "string"
         },
         {
+          "const": "non_injective_pairing",
+          "description": "**Los dos lados emparejaron por una transformación que puede juntar\nficheros DISTINTOS**, así que el plan no actúa sobre esa pareja\n(0.43.0, #207).\n\nEl caso que lo motiva es\n[`PairTransform::NormalizationSingleton`]: `K.txt` con U+212A KELVIN\nSIGN contra `K.txt` con la `K` ASCII. Unicode los declara canónicamente\nequivalentes, ext4 los guarda como dos ficheros, y un `Overwrite` sobre\nesa pareja escribe los bytes de uno encima del otro — que es la pérdida\nde datos que #152 describió.\n\nEl criterio es [`PairTransform::names_one_text`] y no la variante\nconcreta: se salta TODA transformación de la que este binario no pueda\nafirmar que nombra un solo texto, incluida una que nombre un daemon más\nnuevo. Las corrientes —[`PairTransform::CaseFold`] y\n[`PairTransform::Normalization`]— siguen actuando: son las parejas para\nlas que la clave de emparejamiento existe, y negarlas rompería el caso\nmacOS↔Linux que sirve.\n\nEs un `Skip` y NO un bloqueo a propósito: el plan sigue siendo\naprobable y el resto del árbol se sincroniza. Un bloqueo dejaría sin\nsincronizar el árbol entero por una pareja rara, y la fila peligrosa se\nve igual en el plan antes de aprobar nada.\n\nUn cliente N-1 lo decodifica como [`SyncReason::Unknown`] y pinta «un\nmotivo que esta versión no sabe nombrar»: no actúa de menos ni de más,\nporque el paso ya es un `Skip` en el wire.",
+          "type": "string"
+        },
+        {
           "const": "unknown",
           "description": "Motivo que este decodificador no conoce (`#[serde(other)]`). El core\njamás lo emite.",
           "type": "string"

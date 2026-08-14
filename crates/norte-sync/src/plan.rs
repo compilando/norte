@@ -508,13 +508,26 @@ where
         if row.verdict == CompareVerdict::Ambiguous {
             return self.absorb_ambiguous(row, source, dest, source_rel);
         }
-        // Lo que este planificador TODAVÍA no mira es `row.paired_under`
-        // (0.42.0, #152): una pareja que solo empareja por una descomposición
-        // singleton de NFC —`K` U+212A contra la `K` ASCII— llega aquí como un
-        // `Different` corriente y sale como una sobrescritura, encima de un
-        // fichero que no tiene nada que ver. El bump puso el DATO en el wire;
-        // qué hace un plan con él —`Skip` con motivo, o bloqueo, y con qué
-        // vocabulario— es una decisión con ADR propio: #207.
+        // Y una pareja que solo se sostiene sobre una transformación NO
+        // INYECTIVA no se toca (#207, ADR 0053): `K.txt` con U+212A KELVIN
+        // SIGN contra `K.txt` con la `K` ASCII son dos ficheros para ext4 y
+        // uno para Unicode, así que el `Overwrite` que salía de aquí escribía
+        // los bytes de uno encima del OTRO. Es la pérdida de datos de #152, y
+        // el 0.42.0 puso el dato en el wire justo para poder pararla aquí.
+        //
+        // El criterio es `names_one_text()` y no la variante concreta: se
+        // salta toda transformación de la que este binario no pueda afirmar
+        // que nombra un solo texto, incluida una que nombre un daemon más
+        // nuevo. `CaseFold` y `Normalization` SIGUEN actuando — son las
+        // parejas para las que la clave existe, y negarlas rompería el caso
+        // macOS↔Linux al que sirve.
+        //
+        // Va antes del veredicto porque no depende de él: lo que no es de
+        // fiar es la PAREJA, y una pareja que no es de fiar no se sobrescribe
+        // ni se declara igual.
+        if row.paired_under.is_some_and(|t| !t.names_one_text()) {
+            return self.absorb_non_injective(row, source, dest, source_rel);
+        }
 
         // El motivo del `Skip`, cuando el veredicto acaba en uno. Lo pone quien
         // decide la clase, que es el único que lo sabe.
@@ -795,6 +808,48 @@ where
             dest_rel,
             None,
             Some(SyncReason::AmbiguousSource),
+            None,
+        );
+        Ok(())
+    }
+
+    /// Una pareja que solo se sostiene sobre una transformación NO INYECTIVA:
+    /// un [`SyncStepKind::Skip`] que la nombra (#207, ADR 0053).
+    ///
+    /// Molde de [`Self::absorb_ambiguous`] y por el mismo motivo: lo que falla
+    /// no es el veredicto sino la PAREJA, así que no hay tabla de veredictos
+    /// que aplicar — hay una fila que informar y un árbol que no se toca.
+    ///
+    /// A diferencia de una colisión, esta no tiene «lado»: la transformación
+    /// junta un nombre de CADA lado, así que no existe el caso `AmbiguousDest`
+    /// que allí es un bloqueo. Y el `rel` sale del origen cuando lo hay, que
+    /// es de donde salen todos los `rel` de un paso que habla de una pareja.
+    fn absorb_non_injective(
+        &mut self,
+        row: &CompareRow,
+        source: Option<&Entry>,
+        dest: Option<&Entry>,
+        source_rel: Option<RelPath>,
+    ) -> Result<(), SyncError> {
+        // Sin nada que nombrar no hay `Skip` que informe. Con lado del destino
+        // y sin lado del origen —una pareja no puede estar así, pero la fila
+        // viene del wire— se nombra el destino antes que no decir nada.
+        let rel = match (source_rel, dest) {
+            (Some(rel), _) => rel,
+            (None, Some(entry)) => rel_under(&self.opts.dest_root, &entry.path)?,
+            (None, None) => return Ok(()),
+        };
+        // La segunda ortografía es EL punto de la fila: los dos nombres se
+        // escriben distinto, y quien lea el plan tiene que poder ver los dos.
+        let dest_rel = self.dest_rel_of(&rel, dest)?;
+        let _ = source;
+        self.push(
+            row,
+            SyncStepKind::Skip,
+            rel,
+            dest_rel,
+            None,
+            Some(SyncReason::NonInjectivePairing),
             None,
         );
         Ok(())
@@ -1396,6 +1451,82 @@ mod tests {
         let blockers = blockers_of(items);
         assert_eq!(blockers.len(), 1, "se esperaba UN bloqueo: {items:?}");
         blockers[0]
+    }
+
+    /// #207 (ADR 0053): una pareja que solo se sostiene sobre una
+    /// transformación NO INYECTIVA no se sobrescribe.
+    ///
+    /// `K.txt` con U+212A KELVIN SIGN contra `K.txt` con la `K` ASCII: Unicode
+    /// los declara canónicamente equivalentes, ext4 los guarda como DOS
+    /// ficheros. Sin esto, un `Different` corriente salía como `Overwrite` y
+    /// escribía los bytes de uno encima del otro — la pérdida de datos de
+    /// #152, con el dato ya en el wire desde 0.42.0 y nadie leyéndolo.
+    #[tokio::test]
+    async fn una_pareja_no_inyectiva_no_se_sobrescribe() {
+        use norte_proto::methods::PairTransform;
+
+        let mut fila = row(
+            CompareVerdict::Different,
+            CompareCriterion::Size,
+            CompareConfidence::Certain,
+            Some(src_file("K.txt", 10)),
+            Some(dst_file("K.txt", 20)),
+        );
+        fila.paired_under = Some(PairTransform::NormalizationSingleton);
+        let items = run(vec![fila], opts_update()).await;
+        let steps = steps_of(&items);
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].kind, SyncStepKind::Skip, "jamás un Overwrite");
+        assert_eq!(steps[0].reason, Some(SyncReason::NonInjectivePairing));
+    }
+
+    /// Y una transformación que este binario NO conoce cae del mismo lado: el
+    /// criterio es `names_one_text()`, no la variante. Un daemon una versión
+    /// por delante no puede autorizar una sobrescritura por omisión.
+    #[tokio::test]
+    async fn una_transformacion_desconocida_tampoco_actua() {
+        use norte_proto::methods::PairTransform;
+
+        // `#[serde(other)]`: la variante que este binario usa para «no la
+        // conozco». Se construye por el mismo camino por el que llegaría del
+        // wire — el `Unknown` del enum.
+        let desconocida = PairTransform::Unknown;
+        assert!(!desconocida.names_one_text());
+        let mut fila = row(
+            CompareVerdict::Different,
+            CompareCriterion::Size,
+            CompareConfidence::Certain,
+            Some(src_file("x.txt", 10)),
+            Some(dst_file("x.txt", 20)),
+        );
+        fila.paired_under = Some(desconocida);
+        let items = run(vec![fila], opts_update()).await;
+        assert_eq!(steps_of(&items)[0].kind, SyncStepKind::Skip);
+    }
+
+    /// Las CORRIENTES siguen actuando: `CaseFold` y `Normalization` son las
+    /// parejas para las que la clave de emparejamiento existe, y negarlas
+    /// rompería el caso macOS↔Linux al que sirve.
+    #[tokio::test]
+    async fn una_pareja_nfc_nfd_sigue_sobrescribiendo() {
+        use norte_proto::methods::PairTransform;
+
+        for transform in [PairTransform::Normalization, PairTransform::CaseFold] {
+            let mut fila = row(
+                CompareVerdict::Different,
+                CompareCriterion::Size,
+                CompareConfidence::Certain,
+                Some(src_file("cafe.txt", 10)),
+                Some(dst_file("cafe.txt", 20)),
+            );
+            fila.paired_under = Some(transform);
+            let items = run(vec![fila], opts_update()).await;
+            assert_eq!(
+                steps_of(&items)[0].kind,
+                SyncStepKind::Overwrite,
+                "{transform:?} nombra UN texto y sí actúa"
+            );
+        }
     }
 
     #[tokio::test]
