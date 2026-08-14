@@ -24,6 +24,15 @@
   but "the existing suites pass unedited" is not proof for that file the way it
   is for a UI helper. Look at the diff before deciding there is no reviewer.
 
+- **`just t` and `just c` do not run `cargo doc`, and the intra-doc link lint
+  is denied.** A rustdoc `[`Type`]` pointing at something not in scope compiles,
+  passes nextest and passes clippy, and fails only in `just docs` — which the
+  wave rules forbid agents from running. W2 shipped exactly that from #187 and
+  the controller found it at the close. So: **anyone writing a rustdoc link runs
+  `cargo doc -p <crate> --no-deps` before committing.** It is seconds, and it is
+  the third member of the family — nextest misses doctests, clippy misses doc
+  links, and the RED→GREEN loop sees neither.
+
 - **Two agents in one tree share `.git/index`, and that is the sharp edge.**
   Banning `cargo fmt --all` and `git add -A` is not enough: a plain
   `git commit -m "..."` commits **whatever is in the index at that instant**,

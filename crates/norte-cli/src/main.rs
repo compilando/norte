@@ -2999,7 +2999,8 @@ async fn sync_apply_and_report(
     ))
 }
 
-/// La línea de cuentas y la lista de fallos de un [`SyncReportResult`], en el
+/// La línea de cuentas y la lista de fallos de un
+/// [`SyncReportResult`](norte_proto::methods::SyncReportResult), en el
 /// mismo formato pase lo que pase (#187): un informe cancelado a medias se
 /// imprime IGUAL que uno completo, porque lo aplicado hasta el corte es tan
 /// real como lo demás.
