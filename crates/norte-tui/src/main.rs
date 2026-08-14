@@ -2738,6 +2738,13 @@ async fn run(
                         app.message = Some(t("msg-journal-recovered"));
                         app.note_journal_recovered();
                     }
+                    // #203: mismo hecho, otra explicación — y la barra lo dice
+                    // con otra frase, porque la de siempre sale también cuando
+                    // hay un daemon vivo y por eso ya no se mira.
+                    JournalStatus::Squatted => {
+                        app.message = Some(t("msg-journal-squatted"));
+                        app.note_journal_squatted();
+                    }
                     // `#[non_exhaustive]`: una transición nueva no puede
                     // cambiar el indicador a ciegas — se ignora hasta que
                     // alguien la enseñe a propósito.

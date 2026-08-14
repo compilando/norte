@@ -204,6 +204,26 @@ pub enum JournalStatus {
     Lost(NoJournal),
     /// Y volvió a quedarlo: la ventana se reabrió.
     Recovered,
+    /// **El journal lleva [`SOSPECHA_TRAS`] ocupado y no hay daemon
+    /// escuchando** (#203).
+    ///
+    /// [`NoJournal::Busy`] es benigno casi siempre: un daemon vivo, otro `ntc`,
+    /// un `norte cp` de un script. Por eso sigue adelante y solo avisa — y por
+    /// eso mismo el aviso se ignora, que es lo que hace barato el ataque:
+    /// cualquiera con el mismo uid retiene el lock (`begin exclusive`) y todas
+    /// las sesiones embebidas dejan de registrar, detrás de una frase que
+    /// también sale cuando no pasa nada.
+    ///
+    /// Estos dos hechos juntos SÍ distinguen un caso del otro, y hoy nadie los
+    /// juntaba: *lleva minutos ocupado* y *el socket del daemon no contesta*.
+    /// No prueba que haya un atacante —un daemon muerto a mitad de una
+    /// transacción larga da lo mismo— pero deja de ser el caso corriente, y
+    /// eso es exactamente lo que un indicador tiene que poder decir.
+    ///
+    /// Lo que NO hace es rehusar la mutación. Convertir «alguien tiene tu
+    /// journal» en «el gestor de ficheros no funciona» es el arreglo que #178
+    /// evitó a propósito.
+    Squatted,
 }
 
 /// Quien recibe los cambios de «esta sesión queda registrada» o no.
@@ -236,6 +256,18 @@ pub trait JournalWarningSink: Send + Sync {
     ///
     /// No se emite en la PRIMERA apertura, que no recupera nada.
     fn on_journal_recovered(&self);
+
+    /// El journal lleva minutos ocupado y NO hay daemon escuchando (#203):
+    /// [`JournalStatus::Squatted`].
+    ///
+    /// Con cuerpo por omisión, al revés que [`Self::on_journal_recovered`], y
+    /// la asimetría es deliberada: olvidarse de la recuperación deja un
+    /// indicador MINTIENDO, mientras que olvidarse de ésta solo deja el aviso
+    /// genérico —que es lo que se enseñaba hasta ahora— así que el default cae
+    /// del lado de decir menos, nunca de decir algo falso.
+    fn on_journal_squatted(&self) {
+        self.on_no_journal(&NoJournal::Busy);
+    }
 }
 
 /// Lo que se espera a que el lock quede libre antes de darlo por ocupado.
@@ -256,6 +288,47 @@ const ESPERA_POR_EL_LOCK: std::time::Duration = std::time::Duration::from_millis
 /// tarde—. Treinta segundos es el orden de magnitud de «reiniciar un daemon»
 /// sin ser el de «notarlo al copiar».
 pub const FRENO_TRAS_FALLO: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Cuánto lleva `Busy` un journal antes de que valga la pena preguntarse si
+/// quien lo tiene es un daemon (#203).
+///
+/// Cinco minutos, y el número tiene dos lados. Corto de más, un daemon que
+/// arranca lento o una sesión de otro `ntc` se llevarían la frase fuerte, que
+/// es exactamente el ruido que este issue viene a quitar. Largo de más, la
+/// sesión pasa la tarde entera sin registrar detrás del aviso suave. Un
+/// arranque de daemon y un `norte cp` de un script viven en segundos; cinco
+/// minutos no es ninguno de los dos.
+pub const SOSPECHA_TRAS: std::time::Duration = std::time::Duration::from_mins(5);
+
+/// Quién contesta «¿hay un daemon escuchando?» (#203).
+///
+/// Es una inyección y no una llamada directa por dos razones, y la segunda es
+/// la que manda: un test no puede levantar un daemon para probar el caso en
+/// que NO lo hay, y el `LazyJournal` no tiene por qué saber dónde vive un
+/// socket. El default de producción es [`DaemonSocketProbe`].
+pub trait DaemonPresence: Send + Sync {
+    /// `true` si algo contesta en el socket del daemon de este usuario.
+    ///
+    /// Un socket huérfano (el daemon murió sin limpiarlo) contesta `false`:
+    /// lo que importa es si hay alguien AL OTRO LADO, no si el fichero existe.
+    fn any_daemon_listening(&self) -> bool;
+}
+
+/// El probe de producción: un `connect` al socket por omisión de este uid.
+///
+/// Mismo criterio que el arranque del daemon usa para detectar otro vivo — un
+/// `connect` lo delata, y un socket huérfano da `ECONNREFUSED`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DaemonSocketProbe;
+
+impl DaemonPresence for DaemonSocketProbe {
+    fn any_daemon_listening(&self) -> bool {
+        // Síncrono y no bloqueante en la práctica: un `connect` a un socket
+        // unix local resuelve en el acto, exista o no. Corre con el lock de la
+        // ventana tomado, así que aquí no cabe nada más caro.
+        std::os::unix::net::UnixStream::connect(crate::daemon::default_socket_path(None)).is_ok()
+    }
+}
 
 /// Lo que se espera a que el pool termine de cerrarse en [`LazyJournal::release`].
 ///
@@ -310,6 +383,13 @@ pub struct LazyJournal {
     /// gratis el `OnceCell` que había aquí antes, y la que hay que reproducir a
     /// mano ahora que el intento puede repetirse.
     estado: tokio::sync::Mutex<Ventana>,
+    /// Quién contesta si hay un daemon escuchando (#203). Se consulta SOLO
+    /// cuando un `Busy` ya lleva [`Self::sospecha`], que es lo que hace que el
+    /// `connect` no cueste nada en el caso normal.
+    presencia: Arc<dyn DaemonPresence>,
+    /// Cuánto tiene que llevar ocupado un episodio antes de preguntarse por el
+    /// daemon. [`SOSPECHA_TRAS`] salvo en tests.
+    sospecha: std::time::Duration,
     /// A dónde van los avisos, y el aviso que espera a que haya dónde.
     ///
     /// **Orden de locks: `estado` → `sink`, y jamás al revés.** `emitir` corre
@@ -339,6 +419,11 @@ struct Ventana {
     ultimo_fallo: Option<(std::time::Instant, NoJournal)>,
     /// Lo último que se le contó al sink, para no repetirlo ni contradecirlo.
     anunciado: Option<JournalStatus>,
+    /// Desde cuándo lleva ocupado este EPISODIO (#203): lo pone el primer
+    /// `Busy` y lo borra cualquier otra cosa —una apertura buena, un `Failed`—,
+    /// porque lo que se mide es «cuánto lleva ESTE ocupante», no cuántos ha
+    /// habido.
+    ocupado_desde: Option<std::time::Instant>,
 }
 
 /// El sink y el aviso PENDIENTE, bajo un solo lock.
@@ -381,9 +466,34 @@ impl LazyJournal {
             path: state_dir.join("journal.db"),
             freno,
             estado: tokio::sync::Mutex::new(Ventana::default()),
+            presencia: Arc::new(DaemonSocketProbe),
+            sospecha: SOSPECHA_TRAS,
             sink: Mutex::new(SinkSlot::default()),
             intentos: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Con otro probe de presencia de daemon (#203).
+    ///
+    /// Para los tests, que necesitan el caso «lleva ocupado un buen rato y no
+    /// hay daemon» sin levantar ninguno, y para un embebedor que sepa por otra
+    /// vía si hay uno.
+    #[must_use]
+    pub fn with_daemon_presence(mut self, presencia: Arc<dyn DaemonPresence>) -> Self {
+        self.presencia = presencia;
+        self
+    }
+
+    /// Con otro plazo de sospecha (#203).
+    ///
+    /// Para los tests, que no pueden esperar [`SOSPECHA_TRAS`] ni fiarse de un
+    /// reloj para ver que el plazo NO se cumplió. `Duration::ZERO` sospecha en
+    /// el segundo intento del mismo episodio — el primero abre el episodio, y
+    /// eso es del diseño y no del plazo.
+    #[must_use]
+    pub fn with_suspicion_delay(mut self, sospecha: std::time::Duration) -> Self {
+        self.sospecha = sospecha;
+        self
     }
 
     /// Instala a quien recibe los avisos, y le entrega el que ya hubiera.
@@ -637,11 +747,33 @@ impl LazyJournal {
             Ok(j) => {
                 v.handle = Some(Arc::clone(j));
                 v.ultimo_fallo = None;
+                v.ocupado_desde = None;
                 self.anunciar(v, &JournalStatus::Recovered);
             }
             Err(why) => {
-                v.ultimo_fallo = Some((std::time::Instant::now(), why.clone()));
-                self.anunciar(v, &JournalStatus::Lost(why.clone()));
+                let ahora = std::time::Instant::now();
+                v.ultimo_fallo = Some((ahora, why.clone()));
+                // El reloj del episodio (#203) es SOLO de `Busy`: un `Failed`
+                // no es un ocupante, es un fichero roto, y ya rehúsa la
+                // mutación por su cuenta desde #178.
+                let sospechoso = match why {
+                    NoJournal::Busy => {
+                        let desde = *v.ocupado_desde.get_or_insert(ahora);
+                        // El `connect` se paga SOLO pasado el plazo: en el caso
+                        // normal —un daemon vivo, que es la mayoría de los
+                        // `Busy`— este brazo no se toca nunca.
+                        desde.elapsed() >= self.sospecha && !self.presencia.any_daemon_listening()
+                    }
+                    NoJournal::Failed(_) => {
+                        v.ocupado_desde = None;
+                        false
+                    }
+                };
+                if sospechoso {
+                    self.anunciar(v, &JournalStatus::Squatted);
+                } else {
+                    self.anunciar(v, &JournalStatus::Lost(why.clone()));
+                }
             }
         }
         r
@@ -693,6 +825,7 @@ impl LazyJournal {
         match (&slot.sink, ev) {
             (Some(s), JournalStatus::Lost(why)) => s.on_no_journal(why),
             (Some(s), JournalStatus::Recovered) => s.on_journal_recovered(),
+            (Some(s), JournalStatus::Squatted) => s.on_journal_squatted(),
             (None, JournalStatus::Lost(why)) => {
                 tracing::warn!(motivo = %why.text(), "sesión embebida SIN journal");
                 slot.pendiente = Some(why.clone());
@@ -700,6 +833,17 @@ impl LazyJournal {
             (None, JournalStatus::Recovered) => {
                 tracing::info!("la sesión embebida volvió a tener journal");
                 slot.pendiente = None;
+            }
+            // Sin sink, lo pendiente sigue siendo un `Busy`: es lo que un sink
+            // tardío tiene que ver, y `on_journal_squatted` cae por omisión en
+            // esa misma frase. Lo que sí sube de nivel es el LOG — este es el
+            // renglón que un operador busca cuando pregunta por qué no hay
+            // registro (#203).
+            (None, JournalStatus::Squatted) => {
+                tracing::warn!(
+                    "el journal lleva minutos ocupado y no hay daemon escuchando:                      alguien retiene `journal.db`"
+                );
+                slot.pendiente = Some(NoJournal::Busy);
             }
         }
     }
@@ -832,6 +976,14 @@ fn misma_clase(a: &JournalStatus, b: &JournalStatus) -> bool {
         (S::Recovered, S::Recovered)
             | (S::Lost(N::Busy), S::Lost(N::Busy))
             | (S::Lost(N::Failed(_)), S::Lost(N::Failed(_)))
+            // `Squatted` es su propia clase, y por eso SUBE desde un `Busy` ya
+            // anunciado en vez de callarse: la sesión lleva media hora viendo
+            // «no se está registrando» y lo que cambia ahora es que eso ya no
+            // tiene una explicación inocente. Bajar de vuelta a `Busy` sí se
+            // calla —un daemon que arranca no es una noticia mejor que la
+            // anterior, es la misma— y la única salida hacia arriba de este
+            // estado es `Recovered`.
+            | (S::Squatted, S::Squatted | S::Lost(N::Busy))
     )
 }
 

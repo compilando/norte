@@ -599,6 +599,13 @@ impl norte_core::embedded::JournalWarningSink for AvisoDeJournalPorStderr {
     fn on_journal_recovered(&self) {
         aviso(&norte_i18n::t("msg-journal-recovered"));
     }
+
+    /// #203: lleva minutos ocupado y no hay daemon que lo explique. Frase
+    /// propia, porque la de siempre («no queda registrado») es la que el
+    /// usuario ya aprendió a ignorar — sale igual cuando no pasa nada.
+    fn on_journal_squatted(&self) {
+        aviso(&norte_i18n::t("msg-journal-squatted"));
+    }
 }
 
 /// Una línea de aviso a stderr que NO puede tumbar la operación que la produjo.
