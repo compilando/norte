@@ -44,6 +44,29 @@ first caller that cannot close a window to escape it.
 | #179 | the ownership window primitive, with the `ChainState` re-read on every acquisition. Not a five-line change and its own body says so |
 | #199 | a design question the issue states: the GUI list is virtualised and has no run loop to hang a probe off |
 
+## Cómo acabó
+
+Siete de ocho. Cerradas: #198, #202, #201, #181, #204, #174, #208.
+
+**#200 se queda abierta, y no por tamaño.** Al abrirlo: en esta GUI no existe
+pegado de ninguna clase — ni `InputHandler` registrado, ni una lectura de
+portapapeles para entrada de texto — así que no hay un filtro que cablear,
+hay que construir la entrada por pegado Y su filtro a la vez. Y lo que decide
+el trabajo no es eso, es el ENRUTADO: la TUI necesitó una cadena entera
+(`route_paste`) porque un pegado tiene que llegar exactamente al mismo sumidero
+que llegaría la misma tecla, y un `y` pegado en un modal de confirmación no
+puede confirmar. Esa cadena hay que escribirla para las superficies de la GUI,
+que no son las mismas.
+
+Es una rama con `encoding-auditor`, no la cola de una ola. Lo que sí queda
+hecho es la pregunta de seguridad que la abrió: **no hay bypass del filtro de
+hazards, porque no hay pegado**.
+
+Lo que sí conviene mover cuando se haga: `first_pasted_line` vive en
+`norte-tui/src/main.rs` y es la primitiva compartible (dónde está el límite de
+línea: CRLF, `\r` suelto, NEL/LS/PS). La cadena de enrutado no es
+compartible; la primitiva sí.
+
 ## Gate
 
 `just t <crate>` in the loop. `just ci-fast` once around #204. `just ci` at the
