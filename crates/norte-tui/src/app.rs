@@ -4226,13 +4226,34 @@ impl HelpView {
             }
         };
         self.state.clamp_scroll(self.body.lines.len());
+        if self.state.focus() != norte_frontend::help::Focus::Body {
+            return;
+        }
+        // El foco ACABA de llegar al cuerpo (o el lector acaba de paginar):
+        // entonces manda la VISTA. El cursor se posa en la primera acción que
+        // cae dentro de la ventana, y si no hay ninguna se queda donde esté
+        // sin arrastrar nada. Antes de esto, `Tab` te llevaba a la primera
+        // línea ejecutable —detrás de toda la prosa en una página larga—, así
+        // que no parecía cambiar de columna: parecía saltar al final.
+        if self.state.action_follows_view() {
+            let ventana = self.state.body_scroll()..self.state.body_scroll().saturating_add(height);
+            if let Some(i) = self
+                .body
+                .action_lines
+                .iter()
+                .position(|line| ventana.contains(line))
+            {
+                self.state.settle_action_cursor(i);
+            }
+            return;
+        }
+        // Y si el cursor se movió, manda ÉL: la vista lo persigue.
+        //
         // The guard is not defensive noise: a topic with neither commands nor
         // `see_also` has no line to reveal, and `HelpState` only refuses the
         // FOCUS on an empty action list — the cursor itself can be stale for
         // one frame after a filter rebuilt the page under it.
-        if self.state.focus() == norte_frontend::help::Focus::Body
-            && let Some(&line) = self.body.action_lines.get(self.state.action_cursor())
-        {
+        if let Some(&line) = self.body.action_lines.get(self.state.action_cursor()) {
             self.state.reveal(line, height);
         }
     }

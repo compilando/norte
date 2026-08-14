@@ -70,17 +70,42 @@ pub(crate) fn without_navigation<'a>(supported: &'a [&'a str]) -> Vec<&'a str> {
 /// included. `ALLOW_HELP` and the dispatch in `app.rs` are untouched either
 /// way — this is the printed hint only.
 ///
-/// Navigation is absent for the reason [`without_navigation`] gives, and
-/// `help_priority_covers_every_printable_verb` pins that this list stays a
-/// complete projection of `ALLOW_HELP`: a verb added there must be ranked
-/// here, not silently unprintable.
+/// **La paginación SÍ está**, al contrario que en los demás overlays. En una
+/// lista de opciones las flechas se dan por sabidas y el pie es estrecho; aquí
+/// el cuerpo es PROSA de doscientas líneas en una ventana de veinte, y no
+/// había nada en pantalla que dijera cómo bajar por ella. `dialog.up`/`down`
+/// siguen fuera: en esta pantalla mueven el cursor entre filas ejecutables, y
+/// eso se descubre solo — bajar por el texto no.
+///
+/// `help_priority_covers_every_printable_verb` fija que esta lista siga siendo
+/// una proyección completa de `ALLOW_HELP`: un verbo añadido allí hay que
+/// rankearlo aquí, no dejarlo mudo para siempre.
 const HELP_HINT_PRIORITY: &[&str] = &[
+    "dialog.pane",
+    "dialog.page-down",
+    "dialog.page-up",
     "dialog.filter",
     "dialog.back",
-    "dialog.pane",
     "dialog.confirm",
     "dialog.cancel",
 ];
+
+/// La etiqueta de un verbo EN LA AYUDA, que no siempre es la del mismo verbo
+/// en un diálogo.
+///
+/// `dialog.pane` es el caso que lo motiva: en un modal significa «el otro
+/// panel», y aquí significa «índice ↔ contenido» — pintar «otro panel» sobre
+/// un overlay que no tiene panes le dice al lector algo que no puede hacer, y
+/// le esconde lo único que necesita para llegar al texto. La paginación
+/// también se dice distinta: aquí no pagina una lista, desplaza la página.
+fn help_hint_id(cmd: &str) -> String {
+    match cmd {
+        "dialog.pane" => "help-cmd-pane".to_owned(),
+        "dialog.page-up" => "help-cmd-page-up".to_owned(),
+        "dialog.page-down" => "help-cmd-page-down".to_owned(),
+        otro => dialog_hint_id(otro),
+    }
+}
 
 /// Footer hint for an overlay: the join of its SUPPORTED dialog commands ×
 /// the effective dialog keymap × Fluent labels — same invariant as F1 help
@@ -131,6 +156,11 @@ pub fn dialog_hints(supported: &[&str], eff: &Effective) -> String {
 /// (a constant ranking); a repeat would simply print its group twice.
 #[must_use]
 pub fn dialog_hints_in_order(order: &[&str], eff: &Effective) -> String {
+    hints_in_order_with(order, eff, dialog_hint_id)
+}
+
+/// Como [`dialog_hints_in_order`], con la etiqueta que decida `label`.
+fn hints_in_order_with(order: &[&str], eff: &Effective, label: impl Fn(&str) -> String) -> String {
     order
         .iter()
         .filter_map(|cmd| {
@@ -138,7 +168,7 @@ pub fn dialog_hints_in_order(order: &[&str], eff: &Effective) -> String {
             // chord of the command in the effective's precedence order),
             // through the same `paint_chord` presentation home.
             norte_frontend::palette::first_chord(cmd, eff)
-                .map(|chord| format!("[{chord}] {}", t(&dialog_hint_id(cmd))))
+                .map(|chord| format!("[{chord}] {}", t(&label(cmd))))
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -242,7 +272,7 @@ impl DialogHints {
             // H3b: offered WHOLE, in priority order — the width decides how
             // much of it is printed (`ui::fit_hint_groups`), not a fixed
             // exclusion. See [`HELP_HINT_PRIORITY`].
-            help: dialog_hints_in_order(HELP_HINT_PRIORITY, eff),
+            help: hints_in_order_with(HELP_HINT_PRIORITY, eff, help_hint_id),
             // Los hints RECIÉN construidos describen teclas que sí responden;
             // solo `with_modals_inert` levanta el flag, y solo mientras una
             // ayuda tape el modal.
@@ -449,16 +479,25 @@ mod tests {
 
     /// H3b: the help overlay's footer is GENERATED like every other
     /// overlay's — the three verbs it adds must reach it with their chords.
+    ///
+    /// Con la etiqueta de la AYUDA, que no es la del mismo verbo en un modal:
+    /// `dialog.pane` aquí es «índice ↔ texto» y no «otro panel», que sobre un
+    /// overlay sin panes nombra algo que el lector no puede hacer.
     #[test]
     fn el_hint_de_la_ayuda_lista_sus_verbos_propios() {
         let hints = DialogHints::build(&orthodox_dialog());
         for cmd in ["dialog.filter", "dialog.back", "dialog.pane"] {
             assert!(
-                hints.help.contains(&t(&crate::keymap::dialog_hint_id(cmd))),
+                hints.help.contains(&t(&help_hint_id(cmd))),
                 "{cmd} debe aparecer en el pie de la ayuda: {}",
                 hints.help
             );
         }
+        assert!(
+            !hints.help.contains(&t("dialog-cmd-pane")),
+            "y jamás con la etiqueta del modal: {}",
+            hints.help
+        );
     }
 
     /// H3b, adaptive footer: the help hint is OFFERED whole — all five
@@ -472,7 +511,7 @@ mod tests {
         let posicion = |cmd: &str| {
             hints
                 .help
-                .find(&t(&dialog_hint_id(cmd)))
+                .find(&t(&help_hint_id(cmd)))
                 .unwrap_or_else(|| panic!("{cmd} debe estar en el pie de la ayuda: {}", hints.help))
         };
         let orden: Vec<usize> = HELP_HINT_PRIORITY.iter().map(|c| posicion(c)).collect();
@@ -482,13 +521,23 @@ mod tests {
              qué sobrevive a un frame estrecho: {}",
             hints.help
         );
-        // …y la navegación sigue fuera (`without_navigation`, MAJOR-1).
-        for cmd in NAVIGATION_HINT_EXCLUDED {
+        // Las FLECHAS siguen fuera —mover el cursor entre filas ejecutables se
+        // descubre solo— pero la paginación SÍ está: el cuerpo es prosa larga
+        // en una ventana corta, y nada más en pantalla dice cómo bajar por
+        // ella. Es la diferencia entre esta pantalla y una lista de opciones.
+        for cmd in ["dialog.up", "dialog.down"] {
             assert!(
                 !hints
                     .help
                     .contains(&format!("] {}", t(&dialog_hint_id(cmd)))),
                 "{cmd} es autoevidente y no gasta ancho: {}",
+                hints.help
+            );
+        }
+        for cmd in ["dialog.page-up", "dialog.page-down"] {
+            assert!(
+                hints.help.contains(&t(&help_hint_id(cmd))),
+                "{cmd} es lo que nadie adivina en una página de prosa: {}",
                 hints.help
             );
         }
@@ -501,7 +550,15 @@ mod tests {
     #[test]
     fn help_priority_covers_every_printable_verb() {
         use crate::app::{ALLOW_HELP, help_action};
-        let printable = without_navigation(ALLOW_HELP);
+        // La paginación SÍ se imprime en esta pantalla (ver
+        // `HELP_HINT_PRIORITY`): lo único que no gasta ancho aquí son las
+        // flechas, que mueven el cursor entre filas ejecutables y se
+        // descubren solas.
+        let printable: Vec<&str> = ALLOW_HELP
+            .iter()
+            .copied()
+            .filter(|c| !matches!(*c, "dialog.up" | "dialog.down"))
+            .collect();
         for cmd in &printable {
             assert!(
                 HELP_HINT_PRIORITY.contains(cmd),

@@ -990,6 +990,9 @@ gui-banner-font-unknown = font { $family } not found; using the default
 # --- Dialog footer hints (H1 T3, closes #24) — generated: supported
 # dialog.* commands × the effective dialog keymap × these labels. NEVER a
 # hand-written footer string again: a rebind can't desync it.
+help-cmd-pane = index ↔ text
+help-cmd-page-up = scroll up
+help-cmd-page-down = scroll down
 dialog-cmd-confirm = confirm
 dialog-cmd-cancel = cancel
 dialog-cmd-approve = approve

@@ -1007,6 +1007,9 @@ gui-banner-font-unknown = fuente { $family } no encontrada; se usa la de por def
 # dialog.* soportados × el keymap dialog EFECTIVO × estas etiquetas. Jamás
 # un string de pie de página escrito a mano otra vez: un rebind no puede
 # desincronizarlo.
+help-cmd-pane = índice ↔ texto
+help-cmd-page-up = subir
+help-cmd-page-down = bajar
 dialog-cmd-confirm = confirmar
 dialog-cmd-cancel = cancelar
 dialog-cmd-approve = aprobar

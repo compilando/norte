@@ -984,11 +984,19 @@ fn el_pie_de_la_ayuda_se_adapta_al_ancho() {
             .to_owned()
     };
 
-    let ancho = pie_a(113, 16);
-    for verbo in ["filtrar", "atrás", "otro panel", "confirmar", "cancelar"] {
+    let ancho = pie_a(124, 16);
+    for verbo in [
+        "índice ↔ texto",
+        "bajar",
+        "subir",
+        "filtrar",
+        "atrás",
+        "confirmar",
+        "cancelar",
+    ] {
         assert!(
             ancho.contains(verbo),
-            "a 113 columnas caben los cinco grupos, y `{verbo}` falta: {ancho:?}"
+            "en un frame ancho caben los siete grupos, y `{verbo}` falta: {ancho:?}"
         );
     }
     assert!(
@@ -997,7 +1005,10 @@ fn el_pie_de_la_ayuda_se_adapta_al_ancho() {
     );
 
     let estrecho = pie_a(80, 16);
-    for verbo in ["filtrar", "atrás", "otro panel"] {
+    // Los que sobreviven son la CABEZA del ranking: cómo se pasa al texto y
+    // cómo se baja por él, que es lo que nadie adivina en una pantalla que no
+    // se parece a ninguna otra del programa.
+    for verbo in ["índice ↔ texto", "bajar"] {
         assert!(
             estrecho.contains(verbo),
             "a 80 columnas sobreviven los verbos que el lector no puede \
@@ -1338,9 +1349,10 @@ fn la_lateral_de_la_ayuda_se_dimensiona_a_sus_titulos() {
     );
 
     // Y el cuerpo tiene medida tipográfica: la prosa no crece con el terminal
-    // más allá de lo que se lee de un vistazo.
+    // más allá de lo que se lee de un vistazo. Una celda menos que la medida:
+    // la última columna del cuerpo es su barra de scroll.
     let (cuerpo, _) = ui::help_body_size(Rect::new(0, 0, 200, 40), Lang::Es);
-    assert_eq!(cuerpo, 72, "la prosa se corta en su medida, no en el borde");
+    assert_eq!(cuerpo, 71, "la prosa se corta en su medida, no en el borde");
 }
 
 /// …y con sitio, NINGÚN título sale recortado.
@@ -1515,6 +1527,11 @@ fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
     let view = app.help.as_mut().expect("overlay abierto");
     view.state.open(&norte_help::TopicId::new("copying"));
     view.state.toggle_focus();
+    // Y se MUEVE por las filas ejecutables: desde que `Tab` respeta dónde está
+    // el lector (deja la vista quieta y trae el cursor a ella), llegar a las
+    // filas de comando es lo que hace quien las quiere ver — un movimiento del
+    // cursor, no un efecto secundario de cambiar de columna.
+    view.state.up();
     refresh_help_en(&mut app, 100, 30);
 
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");

@@ -9,7 +9,10 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{
+    Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState,
+};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{AI_RENAME_PAIR_LIMIT, App, Pane, SEMANTIC_HIT_LIMIT, display_name};
@@ -1200,6 +1203,14 @@ const HELP_SIDEBAR_PCT: u16 = 35;
 /// read as one broken line.
 const HELP_GUTTER: u16 = 2;
 
+/// Ancho de una barra de scroll: una celda.
+///
+/// La ayuda es la única pantalla con DOS listas que se desplazan a la vez —el
+/// índice y la página— y hasta ahora ninguna de las dos decía por dónde iba ni
+/// cuánto le quedaba. El indicador `N/M` del pie habla solo del cuerpo, y solo
+/// cuando no cabe.
+const HELP_SCROLLBAR: u16 = 1;
+
 /// Typographic measure of the body in CELLS. Prose is read at 60–72 cells; at
 /// 90 the eye loses the line on the return sweep, and the surplus is exactly
 /// what the sidebar needs to stop truncating its titles.
@@ -1327,7 +1338,14 @@ fn help_layout(base: Rect, sidebar_desired: u16) -> (Rect, Rect, Rect, Rect) {
 #[must_use]
 pub fn help_body_size(base: Rect, lang: norte_help::Lang) -> (usize, usize) {
     let (_, _, body, _) = help_layout(base, help_sidebar_desired(lang));
-    (usize::from(body.width), usize::from(body.height))
+    // La última columna del cuerpo es su barra de scroll, así que la prosa se
+    // envuelve a una celda menos. Sale de aquí y no del pintado porque quien
+    // maqueta la página es el run loop, y una anchura que no case con la
+    // pintada parte las líneas por donde no toca.
+    (
+        usize::from(body.width.saturating_sub(HELP_SCROLLBAR)),
+        usize::from(body.height),
+    )
 }
 
 /// Overlay de ayuda (H3b), a pantalla (casi) completa y por encima de todo:
@@ -1362,6 +1380,15 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiThem
     );
 
     let state = &help.state;
+    // La barra del índice vive en la PRIMERA celda del canalón: pegada a la
+    // lateral y sin quitarle ni una columna a los títulos, que es lo que el
+    // canalón estaba para dar.
+    let sidebar_scrollbar = Rect {
+        x: sidebar.x.saturating_add(sidebar.width),
+        y: sidebar.y,
+        width: HELP_SCROLLBAR.min(frame.area().width.saturating_sub(sidebar.x + sidebar.width)),
+        height: sidebar.height,
+    };
     // El canalón es una COLUMNA propia del layout, así que la lateral puede
     // gastarse su ancho entero en el título.
     let side_w = usize::from(sidebar.width);
@@ -1412,6 +1439,10 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiThem
             }
         }
     }
+    // Cuántas filas tiene el índice PINTADO (con sus separadores): es el
+    // total contra el que se dimensiona su barra, y hay que leerlo antes de
+    // que el widget se lleve la lista.
+    let filas_indice = items.len();
     let mut list_state = ListState::default();
     // `HelpState` garantiza que el cursor se apoya SIEMPRE en una fila
     // seleccionable (nunca en una cabecera); con el filtro sin resultados no
@@ -1443,8 +1474,52 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiThem
             }
         })
         .collect();
-    frame.render_widget(Paragraph::new(cuerpo), body_area);
+    // La última columna del cuerpo es su barra: la prosa ya viene envuelta a
+    // una celda menos (`help_body_size`), así que aquí solo se reparte.
+    let (texto_area, barra_cuerpo) = split_scrollbar(body_area);
+    frame.render_widget(Paragraph::new(cuerpo), texto_area);
+    // Las DOS columnas dicen por dónde van. Hasta ahora ninguna lo decía: el
+    // `N/M` del pie habla solo del cuerpo y solo cuando no cabe, así que en el
+    // índice no había NADA que dijera que quedaban filas debajo.
+    render_scrollbar(
+        frame,
+        barra_cuerpo,
+        theme,
+        lines.len(),
+        state.body_scroll(),
+        usize::from(body_area.height),
+    );
+    render_scrollbar(
+        frame,
+        sidebar_scrollbar,
+        theme,
+        filas_indice,
+        list_state.offset(),
+        usize::from(sidebar.height),
+    );
 
+    draw_help_footer(
+        frame,
+        footer_area,
+        theme,
+        state,
+        hint,
+        lines.len(),
+        body_area.height,
+    );
+}
+
+/// El pie del overlay de ayuda: el hint (o el filtro) a la izquierda y dónde
+/// va el lector a la derecha.
+fn draw_help_footer(
+    frame: &mut Frame<'_>,
+    footer_area: Rect,
+    theme: &TuiTheme,
+    state: &norte_frontend::help::HelpState,
+    hint: &str,
+    total: usize,
+    body_height: u16,
+) {
     // Dónde está el lector dentro de la página, con el MISMO idioma que el
     // visor (`{fila}/{total}`, `draw_viewer`). Solo cuando la página NO cabe:
     // un `1/9` sobre nueve líneas visibles es ruido. Importa más aquí que en
@@ -1452,8 +1527,7 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiThem
     // `Enter` para el que existe este overlay — se pintan DETRÁS de toda la
     // prosa, así que en una página larga no se ven en el primer render y sin
     // esto nada dice que estén ahí.
-    let total = lines.len();
-    let pos = (total > usize::from(body_area.height)).then(|| {
+    let pos = (total > usize::from(body_height)).then(|| {
         format!(
             " {}/{} ",
             (state.body_scroll() + 1).min(total.max(1)),
@@ -1483,6 +1557,52 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiThem
     frame.render_widget(
         Paragraph::new(footer).style(theme.role(Role::BorderUnfocused)),
         footer_area,
+    );
+}
+
+/// Parte un área en (contenido, barra de scroll): la ÚLTIMA columna es la
+/// barra. Con menos de dos celdas no hay barra que pintar y se devuelve el
+/// área entera — una barra que se come el texto es peor que no tenerla.
+fn split_scrollbar(area: Rect) -> (Rect, Rect) {
+    if area.width < 2 {
+        return (area, Rect::new(area.x, area.y, 0, area.height));
+    }
+    let texto = Rect {
+        width: area.width - HELP_SCROLLBAR,
+        ..area
+    };
+    let barra = Rect {
+        x: area.x + area.width - HELP_SCROLLBAR,
+        width: HELP_SCROLLBAR,
+        ..area
+    };
+    (texto, barra)
+}
+
+/// Pinta una barra de scroll vertical en `area` para un contenido de `total`
+/// filas del que se ven `visible` desde `offset`.
+///
+/// No pinta nada cuando cabe todo: una barra llena de arriba abajo no informa
+/// de nada y encima invita a arrastrarla.
+fn render_scrollbar(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    theme: &TuiTheme,
+    total: usize,
+    offset: usize,
+    visible: usize,
+) {
+    if area.width == 0 || area.height == 0 || total <= visible {
+        return;
+    }
+    let mut estado = ScrollbarState::new(total.saturating_sub(visible)).position(offset);
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .style(theme.role(Role::BorderUnfocused)),
+        area,
+        &mut estado,
     );
 }
 
