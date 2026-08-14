@@ -258,5 +258,25 @@
     "id": "turkish_dotted_i_capital",
     "hex": "c4b07374616e62756c2e747874",
     "why": "'İstanbul.txt' con U+0130 LATIN CAPITAL LETTER I WITH DOT ABOVE: su pliegue COMPLETO Unicode es 'i' + U+0307 (combining dot above), DOS codepoints, no la 'i' simple que da un `to_lowercase()` ASCII o locale-naive — el clásico \"problema de la I turca\" que rompe comparaciones case-insensitive escritas a mano (#169, encoding-auditor)"
+  },
+  {
+    "id": "partial_utf8_cased_latin",
+    "hex": "c384eda080",
+    "why": "'Ä' (NFC) seguida de un surrogate suelto (WTF-8, inválido en UTF-8 estricto): un decodificador ingenuo que aplique `str::from_utf8` al nombre ENTERO ve un error y no pliega ni normaliza NADA, ni siquiera la 'Ä' que sí es texto válido — pareja con `partial_utf8_cased_latin_lower` para pinear que el pliegue de caja SOBREVIVE a un byte inválido en el mismo nombre (#154)"
+  },
+  {
+    "id": "partial_utf8_cased_latin_lower",
+    "hex": "c3a4eda080",
+    "why": "'ä' (NFC) + el MISMO surrogate suelto que `partial_utf8_cased_latin`: en NTFS son un solo fichero. Sin este par, la clave de emparejamiento no se puede probar contra un nombre que es 99% UTF-8 válido con un byte roto al final (#154)"
+  },
+  {
+    "id": "partial_utf8_nfd_twin",
+    "hex": "65cc81ff",
+    "why": "'e' + U+0301 (acento combinante, NFD) + 0xFF inválido: la NFC tiene que componer la 'e'+acento en 'é' AUNQUE el byte final no sea texto — pareja con `partial_utf8_nfc_twin` para pinear que la normalización sobrevive a un byte inválido en el mismo nombre (#154)"
+  },
+  {
+    "id": "partial_utf8_nfc_twin",
+    "hex": "c3a9ff",
+    "why": "'é' (NFC) + 0xFF inválido: la pareja de `partial_utf8_nfd_twin` — mismo fichero en APFS, sin el byte inválido interfiriendo con la composición NFC del resto del nombre (#154)"
   }
 ]

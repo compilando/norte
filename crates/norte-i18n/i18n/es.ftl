@@ -207,7 +207,10 @@ cli-sync-plan = Plan de sincronización:
 cli-sync-unjournalled = sin journal esta sincronización no se puede aplicar — norte rehúsa escribir un árbol que no podría deshacer. Lo tiene otro proceso (un `ntc` o un daemon vivos abren journal.db en exclusiva): usa --daemon para ir por él
 cli-sync-noninteractive = no hay terminal a la que preguntar, y no se aplicó nada — usa --yes para aplicar sin pregunta
 cli-sync-blocked = el plan no se puede ejecutar, así que no se aplicó nada
-cli-sync-blocker = { $rel }: { $why }
+# Un bloqueo son DOS campos en DOS líneas, no uno unido por `: ` — el mismo
+# motivo que las filas de fallo de abajo (corpus `cause_join_spoof`).
+cli-sync-blocker = { $rel }
+cli-sync-blocker-why = { $why }
 cli-sync-blockers-more = … y { $n } más
 cli-sync-integrity = el plan de arriba no es todo el plan que se aplicaría, así que no se aplica: { $detail }
 cli-sync-nothing-to-apply = todos los pasos son omisiones: no hay nada que aplicar
@@ -847,6 +850,14 @@ sync-dest-spelling = destino: { $path }
 # La ruta del paso cuelga de la raíz del destino, no de la del origen.
 sync-anchor-dest = (destino)
 sync-anchor-either = (no consta de qué lado)
+# Un bloqueo de todo el árbol (un destino de solo lectura) nombra la RAÍZ, que
+# `rel_display` sola pinta como una cadena vacía — esto es lo que un panel
+# dice ahí en su lugar, para que no se lea como una fila en blanco (#193).
+sync-rel-root = todo el árbol
+# Un par NFC/NFD (o cualquier otra ortografía byte-distinta pero
+# glifo-idéntica) es UTF-8 válido en las dos mitades, así que ninguna se
+# enmascara como hostil — esto es lo que explica la flecha en su lugar (#192).
+sync-dest-twin = (igual en pantalla, bytes distintos)
 compare-marked = { $n } marcadas
 msg-sync-needs-daemon = sincronizar necesita el daemon (--daemon): tiene que quedar en el journal
 status-no-journal = SIN journal: esta sesión no se puede deshacer

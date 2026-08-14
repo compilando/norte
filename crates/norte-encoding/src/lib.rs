@@ -4,7 +4,10 @@
 //! workspace consume ESTA API, jamás `chardetng`/`encoding_rs` directos.
 #![forbid(unsafe_code)]
 
+mod fold;
+
 pub use encoding_rs::{Encoding, UTF_8};
+pub use fold::{FoldMode, fold_delta, full_fold_expansion, name_key};
 
 /// Muestra de cabecera para chardetng: 64 KiB (spec §6.2).
 const SNIFF_LEN: usize = 64 * 1024;

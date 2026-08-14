@@ -205,7 +205,10 @@ cli-sync-plan = Sync plan:
 cli-sync-unjournalled = without a journal this sync cannot be applied — norte refuses to write a tree it could not undo. Another process holds it (a running `ntc` or daemon owns journal.db exclusively): use --daemon to go through it
 cli-sync-noninteractive = there is no terminal to ask, and nothing was applied — use --yes to apply without a question
 cli-sync-blocked = the plan cannot run, so nothing was applied
-cli-sync-blocker = { $rel }: { $why }
+# A blocker is two fields on two lines, not one joined by `: ` — the same
+# reason as the failure rows below (corpus `cause_join_spoof`).
+cli-sync-blocker = { $rel }
+cli-sync-blocker-why = { $why }
 cli-sync-blockers-more = … and { $n } more
 cli-sync-integrity = the plan above is not all of the plan that would be applied, so it will not be: { $detail }
 cli-sync-nothing-to-apply = every step is a skip: there is nothing to apply
@@ -833,6 +836,14 @@ sync-dest-spelling = destination: { $path }
 # A step's path hangs off the destination root, not the source one.
 sync-anchor-dest = (destination)
 sync-anchor-either = (which side is not recorded)
+# A whole-tree blocker (a read-only destination) names the ROOT, which
+# `rel_display` alone paints as an empty string — this is what a pane says
+# there instead, so it does not read as an empty row (#193).
+sync-rel-root = the whole tree
+# An NFC/NFD pair (or any other byte-different, glyph-identical spelling) is
+# valid UTF-8 on both sides, so neither half is masked as hostile — this is
+# what explains the arrow instead (#192).
+sync-dest-twin = (same on screen, different bytes)
 compare-marked = { $n } marked
 msg-sync-needs-daemon = synchronising needs the daemon (--daemon): it has to be journalled
 status-no-journal = NOT journalled: this session cannot be undone

@@ -12,6 +12,10 @@ authors.workspace = true
 # `Stream` + `StreamExt`: el walk PRODUCE un flujo de filas y CONSUME los
 # `EntryStream` de los dos providers. Ya es dependencia de norte-vfs.
 futures.workspace = true
+# La clave de emparejamiento (ADR 0051, #151): compartida con
+# `norte-core::rename::plan`, relicenciada MIT/Apache porque es un primitivo
+# de texto puro y ambos consumidores ya dependían de este crate.
+norte-encoding.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
 # El rung caro: sha256 en streaming. YA en el workspace (norte-core, norte-index,

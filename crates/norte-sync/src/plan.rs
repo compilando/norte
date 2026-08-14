@@ -3855,7 +3855,8 @@ mod tests {
         // La primera versión de esto era una pila, pasaba los cinco tests hechos
         // a mano y fallaba aquí: `nuevo.txt` salía sin `dest_rel` o, peor, con
         // uno que nombraba una carpeta que no existe en ninguno de los dos lados.
-        use norte_compare::{CompareOptions, compare};
+        use norte_compare::{CompareOptions, Sides, compare};
+        use norte_vfs::Provider as _;
         let origen = norte_testkit::MemProvider::new();
         let destino = norte_testkit::MemProvider::new();
         // Origen en NFC; destino en NFD, que es lo que devuelve un macOS. La
@@ -3876,12 +3877,14 @@ mod tests {
         .await;
 
         let raiz = norte_testkit::MemProvider::root();
+        let sides = Sides::from_capabilities(origen.capabilities(), destino.capabilities());
         let rows = compare(
             &origen,
             &raiz,
             &destino,
             &raiz,
             CompareOptions::cheap(),
+            sides,
             CancellationToken::new(),
         );
         let opts = SyncOptions {
@@ -3931,7 +3934,8 @@ mod tests {
         // toca el contrato que cruza los dos crates: TODA ruta que el walk
         // emite cuelga de la raíz que se le dio. Si deja de cumplirse, el plan
         // entero muere con `OutsideRoot` — y solo se ve aquí.
-        use norte_compare::{CompareOptions, compare};
+        use norte_compare::{CompareOptions, Sides, compare};
+        use norte_vfs::Provider as _;
         let origen = norte_testkit::MemProvider::new();
         let destino = norte_testkit::MemProvider::new();
         seed(&origen, &[b"sub", b"informe\xff\xfe.dat"], b"nuevo").await;
@@ -3939,6 +3943,7 @@ mod tests {
         seed(&destino, &[b"raiz.txt"], b"viejo mas largo").await;
 
         let raiz = norte_testkit::MemProvider::root();
+        let sides = Sides::from_capabilities(origen.capabilities(), destino.capabilities());
         let rows = compare(
             &origen,
             &raiz,
@@ -3948,6 +3953,7 @@ mod tests {
                 descend_orphans: Some(Side::Left),
                 ..CompareOptions::cheap()
             },
+            sides,
             CancellationToken::new(),
         );
         let opts = SyncOptions {

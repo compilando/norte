@@ -47,11 +47,12 @@
 
 use norte_i18n::{Lang, t_in, ta_in};
 use norte_proto::methods::{
-    CompareRow, DestTrash, PlanHash, RelPath, SYNC_MAX_INCLUDE, StepReversal, SyncBlockerKind,
-    SyncCounts, SyncFailureCause, SyncMode, SyncPlanDone, SyncReason, SyncReportResult, SyncStep,
-    SyncStepKind, SyncStepsBatch,
+    CompareRow, DestTrash, PlanHash, RelPath, SYNC_MAX_INCLUDE, Side, StepReversal, SyncBlocker,
+    SyncBlockerKind, SyncCounts, SyncFailureCause, SyncMode, SyncPlanDone, SyncReason,
+    SyncReportResult, SyncStep, SyncStepKind, SyncStepsBatch,
 };
 use norte_proto::{TaskId, TaskState, VPath};
+use unicode_normalization::UnicodeNormalization;
 
 /// Why a selection of diff-pane rows cannot become a `SyncPlanParams::include`.
 ///
@@ -545,6 +546,26 @@ pub fn anchor_label(anchor: RelAnchor, lang: Lang) -> Option<String> {
     }
 }
 
+/// The reader's parenthetical for [`StepCells::dest_rel_twin`] /
+/// [`FailureCells::dest_rel_twin`] (#192), shaped exactly like
+/// [`anchor_label`] so a painter drops it in the same way: `None` when there
+/// is nothing to say, `Some` otherwise.
+///
+/// A hostile badge would be a LIE about the name — `café.txt` (NFC) and
+/// `café.txt` (NFD) are both valid UTF-8 and neither is hostile — so this is
+/// a separate sentence, never a badge folded into [`RelDisplay::hostile`].
+///
+/// ```
+/// use norte_frontend::sync::dest_twin_label;
+/// use norte_i18n::Lang;
+/// assert!(dest_twin_label(false, Lang::En).is_none());
+/// assert!(dest_twin_label(true, Lang::En).is_some());
+/// ```
+#[must_use]
+pub fn dest_twin_label(twin: bool, lang: Lang) -> Option<String> {
+    twin.then(|| t_in(lang, "sync-dest-twin"))
+}
+
 /// El nombre de un [`SyncMode`], que la cabecera pinta.
 ///
 /// El `_` NO cae a «update»: un modo que este build no sabe nombrar tiene que
@@ -701,13 +722,71 @@ pub fn anchor_of(step: &SyncStep) -> RelAnchor {
     }
 }
 
+/// Which root a [`SyncBlocker`]'s `rel` hangs from — the third member of the
+/// family [`anchor_of`] and [`render_failure`] already form (#189).
+///
+/// [`SyncBlocker::side`] is normative when it is present: the wire's
+/// convention is [`Side::Left`] for the source and [`Side::Right`] for the
+/// destination, always, independent of which pane launched the plan. Three of
+/// the four named kinds name a DESTINATION path by definition even without a
+/// `side` — [`SyncBlockerKind::AmbiguousDest`], [`SyncBlockerKind::DestReadOnly`]
+/// and [`SyncBlockerKind::DirTooLarge`] are never about the source.
+/// [`SyncBlockerKind::OverlapDetected`] is about both roots at once, so it
+/// answers [`RelAnchor::Either`] rather than pick one it cannot justify.
+/// [`SyncBlockerKind::TypeMismatchDir`] carries `side` on the wire ALWAYS
+/// (normative, see its rustdoc), so its fall-through here is defensive, not
+/// reachable against a conforming daemon.
+///
+/// Without this, the obvious code for a pane that lists blockers is
+/// `rel_display(&b.rel, view.source_encoding)`, which reproduces #152 against
+/// three paths that are never the source's spelling.
+///
+/// ```
+/// use norte_frontend::sync::{RelAnchor, blocker_anchor};
+/// use norte_proto::methods::{RelPath, Side, SyncBlocker, SyncBlockerKind};
+/// let dest_ro = SyncBlocker {
+///     rel: RelPath::parse_wire("").expect("rel"),
+///     kind: SyncBlockerKind::DestReadOnly,
+///     side: None,
+/// };
+/// assert_eq!(blocker_anchor(&dest_ro), RelAnchor::Dest);
+///
+/// // `side` wins when present, even against a kind that would otherwise
+/// // derive the opposite anchor.
+/// let overlap_from_the_left = SyncBlocker {
+///     rel: RelPath::parse_wire("shared").expect("rel"),
+///     kind: SyncBlockerKind::OverlapDetected,
+///     side: Some(Side::Left),
+/// };
+/// assert_eq!(blocker_anchor(&overlap_from_the_left), RelAnchor::Source);
+/// ```
+#[must_use]
+pub fn blocker_anchor(blocker: &SyncBlocker) -> RelAnchor {
+    match blocker.side {
+        Some(Side::Right) => RelAnchor::Dest,
+        Some(Side::Left) => RelAnchor::Source,
+        // `Side::Unknown` is the decoder's `#[serde(other)]` fallback, which
+        // the core never emits — treated the same as absent, since neither
+        // root is provably named.
+        Some(Side::Unknown) | None => match blocker.kind {
+            SyncBlockerKind::AmbiguousDest
+            | SyncBlockerKind::DestReadOnly
+            | SyncBlockerKind::DirTooLarge => RelAnchor::Dest,
+            _ => RelAnchor::Either,
+        },
+    }
+}
+
 /// A relative path ready to paint: masked text, the original bytes, and the
 /// flag that says the two differ (rule 1, spec §6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelDisplay {
-    /// Display form: lossy, and safe to paint. EMPTY for the root, which is
-    /// what a whole-tree blocker such as [`SyncBlockerKind::DestReadOnly`]
-    /// carries — a pane says "the whole tree" there rather than nothing.
+    /// Display form: lossy, and safe to paint. NEVER empty for the root
+    /// —which is what a whole-tree blocker such as
+    /// [`SyncBlockerKind::DestReadOnly`] carries— when built through
+    /// [`rel_display_or_root`]: a pane says "the whole tree" there rather
+    /// than nothing. [`rel_display`] itself has no [`Lang`] to say it in and
+    /// stays empty; it is the wrapper's job (#193).
     pub text: String,
     /// The path's ORIGINAL bytes, `/`-joined. A theme matches an extension
     /// against these, never against [`RelDisplay::text`].
@@ -742,6 +821,52 @@ pub fn rel_display(rel: &RelPath, reinterpret: Option<norte_encoding::NameEncodi
         raw.extend_from_slice(bytes);
     }
     RelDisplay { text, raw, hostile }
+}
+
+/// The same as [`rel_display`], except the root reads as the localized
+/// "whole tree" sentence instead of an empty string — the contract
+/// [`RelDisplay::text`] documents and no painter honoured (#193).
+///
+/// Lives here, once, and not per painter: a root [`RelDisplay`] is not a
+/// [`SyncBlocker`] concept, it is a [`RelPath::is_root`] one, so whichever
+/// surface eventually paints a whole-tree blocker gets the same sentence
+/// without writing it again. An EMPTY string painted in a pane reads as
+/// "there is no row here", the opposite of what the wire is saying — a
+/// [`SyncBlockerKind::DestReadOnly`] names the destination root precisely
+/// because there IS something to say about every path under it.
+///
+/// [`RelDisplay::raw`] and [`RelDisplay::hostile`] are untouched: the root has
+/// no bytes to badge, so `raw` stays empty and `hostile` stays `false` — the
+/// sentence is this module's words, not a reading of the name.
+///
+/// ```
+/// use norte_frontend::sync::rel_display_or_root;
+/// use norte_i18n::Lang;
+/// use norte_proto::methods::RelPath;
+/// let whole = rel_display_or_root(&RelPath::parse_wire("").expect("rel"), None, Lang::En);
+/// assert!(!whole.text.is_empty());
+/// assert!(whole.raw.is_empty(), "no hay bytes que decir");
+/// assert!(!whole.hostile, "la raíz no es un nombre hostil");
+///
+/// // Cualquier otra ruta se comporta exactamente como `rel_display`.
+/// let named = rel_display_or_root(&RelPath::parse_wire("a.txt").expect("rel"), None, Lang::En);
+/// assert_eq!(named.text, "a.txt");
+/// ```
+#[must_use]
+pub fn rel_display_or_root(
+    rel: &RelPath,
+    reinterpret: Option<norte_encoding::NameEncoding>,
+    lang: Lang,
+) -> RelDisplay {
+    let display = rel_display(rel, reinterpret);
+    if rel.is_root() {
+        RelDisplay {
+            text: t_in(lang, "sync-rel-root"),
+            ..display
+        }
+    } else {
+        display
+    }
 }
 
 /// Las reinterpretaciones de nombres (#57) de los dos lados de una
@@ -858,6 +983,15 @@ pub struct StepCells {
     /// (#152). `Some` means the two sides spell one entry two ways and the
     /// pane must show both: the write lands on THIS one.
     pub dest_rel: Option<RelDisplay>,
+    /// `dest_rel` is `Some` AND its NFC form matches `rel`'s NFC form, even
+    /// though the bytes AND the `String`s differ — an NFC/NFD pair
+    /// (precomposed `café.txt` vs `café.txt` spelled with a combining
+    /// acute) is the canonical case: not `String`-equal (`'é'` is one
+    /// `char`, `'e' + '\u{301}'` is two), valid UTF-8 on both sides so
+    /// neither half is `hostile`, and rendered to the SAME glyph by any font
+    /// that composes combining marks. Nothing else says the pane is not just
+    /// repeating itself (#192). See [`dest_twin_label`].
+    pub dest_rel_twin: bool,
     /// Bytes the step moves, when the provider said.
     pub size: Option<u64>,
     /// What the undo would do with it.
@@ -901,6 +1035,35 @@ pub struct StepCells {
 pub fn render_step(step: &SyncStep, dest_trash: DestTrash, enc: SyncEncodings) -> StepCells {
     let undo = step_undo(step, dest_trash);
     let anchor = anchor_of(step);
+    let rel = rel_display(&step.rel, enc.for_anchor(anchor));
+    // Siempre con la del DESTINO, sea cual sea el ancla: `dest_rel` existe
+    // precisamente para enseñar la ortografía de allí, que es sobre la que
+    // cae la escritura.
+    //
+    // Y se pliega AQUÍ cuando los BYTES coinciden, no en cada pintor y no
+    // por el texto pintado: `RelDisplay::text` es lossy, así que
+    // `caf\xe9.txt` y `caf\x82.txt` —dos ficheros distintos— son el mismo
+    // `caf\u{FFFD}.txt`, y un pintor que compare textos esconde justo el
+    // campo que existe para decir sobre qué nombre cae la escritura
+    // (#152). El wire ya compara por bytes
+    // (`SyncStep::shape_is_consistent`); esto es la misma regla, una sola
+    // vez, para los tres frontends.
+    let dest_rel = step
+        .dest_rel
+        .as_ref()
+        .filter(|d| **d != step.rel)
+        .map(|r| rel_display(r, enc.dest));
+    // #192: los BYTES ya distinguen las dos rutas (si no, `dest_rel` sería
+    // `None`), pero pueden RENDERIZAR igual de todas formas — un par NFC/NFD
+    // es UTF-8 válido en las dos mitades, así que ninguna llega `hostile`, y
+    // ni siquiera `text == text` lo detecta: "é" precompuesta y "e" + acento
+    // combinante son Strings DISTINTOS que una fuente compone al mismo
+    // glifo. Por NFC y no por bytes NI por igualdad de String a secas —la
+    // comparación es la única parte de esto que normaliza; `RelDisplay::text`
+    // en sí sigue siendo el enmascarado byte-exacto de siempre.
+    let dest_rel_twin = dest_rel
+        .as_ref()
+        .is_some_and(|d| d.text.nfc().eq(rel.text.nfc()));
     StepCells {
         id: step.id,
         glyphs: StepGlyphs {
@@ -909,24 +1072,9 @@ pub fn render_step(step: &SyncStep, dest_trash: DestTrash, enc: SyncEncodings) -
             undo: undo_glyph(undo),
         },
         anchor,
-        rel: rel_display(&step.rel, enc.for_anchor(anchor)),
-        // Siempre con la del DESTINO, sea cual sea el ancla: `dest_rel` existe
-        // precisamente para enseñar la ortografía de allí, que es sobre la que
-        // cae la escritura.
-        //
-        // Y se pliega AQUÍ cuando los BYTES coinciden, no en cada pintor y no
-        // por el texto pintado: `RelDisplay::text` es lossy, así que
-        // `caf\xe9.txt` y `caf\x82.txt` —dos ficheros distintos— son el mismo
-        // `caf\u{FFFD}.txt`, y un pintor que compare textos esconde justo el
-        // campo que existe para decir sobre qué nombre cae la escritura
-        // (#152). El wire ya compara por bytes
-        // (`SyncStep::shape_is_consistent`); esto es la misma regla, una sola
-        // vez, para los tres frontends.
-        dest_rel: step
-            .dest_rel
-            .as_ref()
-            .filter(|d| **d != step.rel)
-            .map(|r| rel_display(r, enc.dest)),
+        rel,
+        dest_rel,
+        dest_rel_twin,
         size: step.size,
         undo,
         reason: step.reason,
@@ -947,6 +1095,10 @@ pub struct FailureCells {
     pub rel: RelDisplay,
     /// La ortografía del DESTINO, si el informe la manda y DIFIERE en bytes.
     pub dest_rel: Option<RelDisplay>,
+    /// Gemelo de [`StepCells::dest_rel_twin`], y por el mismo motivo (#192):
+    /// `dest_rel` es `Some` pero pinta IGUAL que `rel` — un par NFC/NFD, por
+    /// ejemplo, es UTF-8 válido en las dos mitades y ninguna llega `hostile`.
+    pub dest_rel_twin: bool,
     /// De qué raíz cuelga [`FailureCells::rel`]: [`RelAnchor::Source`] cuando
     /// el informe manda `dest_rel`, y [`RelAnchor::Either`] cuando no — ver
     /// [`render_failure`]. **Un pintor tiene que pintarlo**: en un panel donde
@@ -1030,13 +1182,22 @@ pub fn render_failure(
     } else {
         RelAnchor::Either
     };
+    let rel = rel_display(&failure.rel, enc.for_anchor(anchor));
+    let dest_rel = failure
+        .dest_rel
+        .as_ref()
+        .filter(|d| **d != failure.rel)
+        .map(|r| rel_display(r, enc.dest));
+    // #192, la misma regla que `render_step`: por NFC, no por igualdad de
+    // `String` a secas — "é" precompuesta y "e" + acento combinante son
+    // Strings distintos que rinden al mismo glifo.
+    let dest_rel_twin = dest_rel
+        .as_ref()
+        .is_some_and(|d| d.text.nfc().eq(rel.text.nfc()));
     FailureCells {
-        rel: rel_display(&failure.rel, enc.for_anchor(anchor)),
-        dest_rel: failure
-            .dest_rel
-            .as_ref()
-            .filter(|d| **d != failure.rel)
-            .map(|r| rel_display(r, enc.dest)),
+        rel,
+        dest_rel,
+        dest_rel_twin,
         anchor,
     }
 }
@@ -2441,9 +2602,7 @@ pub fn status_line(view: &SyncView, lang: Lang) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norte_proto::methods::{
-        CompareConfidence, CompareCriterion, PlanHash, Side, SyncBlocker, SyncBlockerKind,
-    };
+    use norte_proto::methods::{CompareConfidence, CompareCriterion};
 
     fn rel(wire: &str) -> RelPath {
         RelPath::parse_wire(wire).expect("rel")
@@ -2934,6 +3093,56 @@ mod tests {
         assert_eq!(anchor_of(&copy), RelAnchor::Source);
     }
 
+    /// A blocker's anchor: `side` wins when present, and the three
+    /// destination-named kinds still answer `Dest` without one. `Either`
+    /// covers what neither the wire nor the kind can tell apart — a solaced
+    /// overlap with no `side`, and a decoder-unknown kind (#189).
+    #[test]
+    fn a_blocker_s_anchor_prefers_side_then_the_kind() {
+        let blocker = |kind: SyncBlockerKind, side: Option<Side>| SyncBlocker {
+            rel: rel("sub"),
+            kind,
+            side,
+        };
+        // The three kinds that name the destination by definition, with no
+        // `side` on the wire.
+        for kind in [
+            SyncBlockerKind::AmbiguousDest,
+            SyncBlockerKind::DestReadOnly,
+            SyncBlockerKind::DirTooLarge,
+        ] {
+            assert_eq!(
+                blocker_anchor(&blocker(kind, None)),
+                RelAnchor::Dest,
+                "{kind:?}"
+            );
+        }
+        // An overlap names neither root alone.
+        assert_eq!(
+            blocker_anchor(&blocker(SyncBlockerKind::OverlapDetected, None)),
+            RelAnchor::Either
+        );
+        // `TypeMismatchDir` always carries `side` on a conforming daemon, and
+        // the wire wins over the kind's usual "destination" pull the moment
+        // it says the SOURCE had the directory.
+        assert_eq!(
+            blocker_anchor(&blocker(SyncBlockerKind::TypeMismatchDir, Some(Side::Left))),
+            RelAnchor::Source
+        );
+        assert_eq!(
+            blocker_anchor(&blocker(
+                SyncBlockerKind::TypeMismatchDir,
+                Some(Side::Right)
+            )),
+            RelAnchor::Dest
+        );
+        // A newer daemon's kind, with no side either: nothing to derive from.
+        assert_eq!(
+            blocker_anchor(&blocker(SyncBlockerKind::Unknown, None)),
+            RelAnchor::Either
+        );
+    }
+
     /// A subtree the walk could not read is a `Skip`, not a blocker, so a plan
     /// can be complete and executable while a whole branch was never seen.
     /// The summary leads with that count the way it leads with the
@@ -2973,6 +3182,33 @@ mod tests {
         assert!(d.hostile, "un salto de línea en un nombre se marca");
         assert!(!d.text.contains('\n'), "el byte crudo no llega a pintarse");
         assert_eq!(d.raw, b"sub/a\nb\xff.txt", "los bytes viajan intactos");
+    }
+
+    /// La raíz (#193): `rel_display` sola la pinta vacía, y eso es justo lo
+    /// que un panel de sincronización NO puede decir de un bloqueo de todo el
+    /// árbol —un destino de solo lectura no tiene «ningún nombre», tiene
+    /// TODOS—. `rel_display_or_root` es el contrato que documenta
+    /// `RelDisplay::text`.
+    #[test]
+    fn la_raiz_dice_todo_el_arbol_y_no_nada() {
+        let root = RelPath::parse_wire("").expect("rel");
+        assert!(root.is_root());
+
+        let bare = rel_display(&root, None);
+        assert!(
+            bare.text.is_empty(),
+            "el contrato es de la envoltura, no de esta función"
+        );
+
+        let whole = rel_display_or_root(&root, None, Lang::En);
+        assert!(!whole.text.is_empty());
+        assert_ne!(whole.text, bare.text);
+        assert!(whole.raw.is_empty(), "la raíz no tiene bytes que decir");
+        assert!(!whole.hostile, "la frase no es una lectura del nombre");
+
+        // Una ruta normal se comporta exactamente como `rel_display`.
+        let named = rel_display_or_root(&rel("a.txt"), None, Lang::En);
+        assert_eq!(named, rel_display(&rel("a.txt"), None));
     }
 
     /// A pair the two sides spell differently shows BOTH names: the write
@@ -3073,6 +3309,9 @@ mod tests {
             "y colapsan al pintarse, que es justo lo que hacía el pliegue por texto"
         );
         assert_ne!(dest.raw, cells.rel.raw, "pero los BYTES no colapsan");
+        // #192: el pliegue visual también deja marcado el gemelo, esté o no
+        // badgeado ya como hostil por otro motivo.
+        assert!(cells.dest_rel_twin, "las dos mitades pintan igual");
 
         // Y byte-idénticas SÍ se pliegan: enseñar la misma ruta dos veces con
         // una flecha en medio sugiere un renombrado que no hay.
@@ -3080,11 +3319,71 @@ mod tests {
             dest_rel: Some(rel_de(&uno.bytes)),
             ..paso
         };
+        let cells_mismo = render_step(&mismo, DestTrash::Restorable, SyncEncodings::default());
+        assert!(cells_mismo.dest_rel.is_none());
         assert!(
-            render_step(&mismo, DestTrash::Restorable, SyncEncodings::default())
-                .dest_rel
-                .is_none()
+            !cells_mismo.dest_rel_twin,
+            "sin `dest_rel` no hay pareja que marcar"
         );
+    }
+
+    /// #192, el caso que motivó el marcador: `café.txt` NFC y `café.txt` NFD
+    /// son BYTE-distintos, los dos UTF-8 válido, y ninguno es hostil — así
+    /// que sin `dest_rel_twin` el lector ve la misma cadena dos veces sin
+    /// nada que explique la flecha. `nfc_e_acute`/`nfd_e_acute` son la pareja
+    /// exacta que la corpus ya trae para esto.
+    #[test]
+    fn un_par_nfc_nfd_se_marca_como_la_misma_ortografia_en_pantalla() {
+        let fixtures = norte_testkit::corpus::hostile_names();
+        let nfc = fixtures
+            .iter()
+            .find(|f| f.id == "nfc_e_acute")
+            .expect("corpus");
+        let nfd = fixtures
+            .iter()
+            .find(|f| f.id == "nfd_e_acute")
+            .expect("corpus");
+        assert_ne!(nfc.bytes, nfd.bytes, "el fixture es byte-distinto");
+        let rel_de = |bytes: &[u8]| {
+            RelPath::new(vec![
+                norte_proto::Segment::new(bytes.to_vec()).expect("seg"),
+            ])
+        };
+        let paso = SyncStep {
+            rel: rel_de(&nfc.bytes),
+            dest_rel: Some(rel_de(&nfd.bytes)),
+            ..step(1, SyncStepKind::Overwrite, DestTrash::Restorable)
+        };
+        let cells = render_step(&paso, DestTrash::Restorable, SyncEncodings::default());
+        let dest = cells.dest_rel.expect("bytes distintos, dos ortografías");
+        // NO son el mismo `String` —"é" precompuesta contra "e" + acento
+        // combinante— y esa es justo la trampa: una fuente los compone al
+        // MISMO glifo, así que una igualdad de `text` a secas no cazaría
+        // este par aunque en pantalla sea indistinguible.
+        assert_ne!(dest.text, cells.rel.text, "distintos como String");
+        assert_eq!(
+            dest.text.nfc().collect::<String>(),
+            cells.rel.text.nfc().collect::<String>(),
+            "pero la MISMA forma NFC, que es lo que pinta el glifo"
+        );
+        assert!(
+            !cells.rel.hostile,
+            "NFC es UTF-8 válido, no hay nada que enmascarar"
+        );
+        assert!(!dest.hostile, "NFD también es UTF-8 válido");
+        assert!(
+            cells.dest_rel_twin,
+            "el marcador es lo único que distingue esta fila de una repetida"
+        );
+
+        // Y `render_failure` sigue exactamente la misma regla.
+        let fallo = norte_proto::methods::SyncFailure {
+            rel: rel_de(&nfc.bytes),
+            dest_rel: Some(rel_de(&nfd.bytes)),
+            cause: SyncFailureCause::IllegalName,
+        };
+        let fcells = render_failure(&fallo, SyncEncodings::default());
+        assert!(fcells.dest_rel_twin);
     }
 
     /// Un plan CERRADO cuya Task acabó cancelada (o fallando) no se aprueba, y

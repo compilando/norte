@@ -11,6 +11,10 @@ authors.workspace = true
 [dependencies]
 chardetng.workspace = true
 encoding_rs.workspace = true
+# La normalización NFC del emparejamiento de nombres (ADR 0051, #151): YA en
+# el workspace (norte-compare, norte-core, norte-vfs-local, norte-testkit),
+# así que la regla dura 8 no pide justificación.
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 norte-testkit.workspace = true

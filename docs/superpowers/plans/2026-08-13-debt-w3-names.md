@@ -24,11 +24,9 @@ per-agent reviews.
 | #151 | norte-compare, norte-core | unify the filename collision key: `name_key`/`fold_delta` duplicated. **Wants an ADR first** — the move relicenses AGPL-3.0-only code into MIT OR Apache-2.0 and changes a structural dependency. Settle #174's home question with it |
 | #153 | norte-compare, norte-core | case folding is decided per PROVIDER, not per mount |
 | #156 | norte-core | `fs.compare` hydrates on demand IN SERIES: over a network mount that is 2N chained round trips |
-| #155 | norte-core | `fs.compare`/`fs.search`: a client that does not drain loses the subscription, and with it the completeness signal |
 | #189 | norte-cli, norte-frontend | `cli-sync-blocker` joins in band AND drops the `side` the wire carries; wants a shared `blocker_anchor` |
 | #192 | norte-frontend | NFC/NFD twins render as two identical strings with nothing to explain the arrow |
 | #193 | norte-frontend | the root `rel` renders as nothing, against its own documented contract |
-| #122 | norte-index, norte-ai | M4-IA-2 semantic index: deferred review items |
 
 **#153 is the one that can grow.** "Per mount" needs somewhere to hang the
 mount's identity; check whether volumes (#roadmap item 3, already built) already
@@ -41,9 +39,82 @@ a `norte-proto` change and rides W4's bump.
 **#122 is a bag of unknown size.** Read it first and split it: whatever is
 mechanical joins W1's tail, whatever is semantic stays.
 
+## Two left this wave, and one is not what its title says
+
+**#155 lives in the daemon, not in the names.** `send_to_conn_impl`
+(`crates/norte-core/src/daemon/server.rs`) evicts a connection from the
+subscriber map, and the issue is a `security-reviewer` MAJOR that was applied
+only half way. That is W4c's surface and W4c's reviewer.
+
+**#122 is a bag, and there is a TOCTOU inside it.** A symlink swapped between
+`index.build` and `index.embed` gets its 32 KiB prefix sent to the embedding
+provider, which falsifies the module's own claim that not a byte of a denied
+prefix is read; hard links defeat the path filter without even racing. There is
+also a retention story: vectors are invertible to an approximation of the text
+and survive a file being added to `denied_prefixes`. Neither is a naming
+problem. The whole bag goes to W4, and its symlink half is a relative of #164.
+
+## Two decisions taken up front, because two issues cannot start without them
+
+**#153 — folding per mount.** The issue offers two ways out. Taken: **`compare()`
+takes `Sides` as a parameter**, supplied by `norte-core`, which is the layer
+that knows both roots. The alternative — a per-path capability query on
+`Provider` — is a trait change every provider has to answer, which is #164's
+shape and wants its own ADR. This does not need one.
+
+**#145 — ext4 `+F`.** The unified key takes its fold MODE from capabilities:
+simple (APFS/HFS+/NTFS/SMB) or full (ext4/f2fs `casefold`, whose kernel table is
+built from `C + F` rows). Simple stays the default. Full can EXPAND a name —
+`ß` → `ss`, `ﬁ` → `fi` — so it is not a cosmetic flag and must never be
+switched on for a filesystem nobody probed.
+
 **#189 is the one to design first.** `blocker_anchor` is the third member of
 the family `anchor_of` and `render_failure` already form, and until it exists
 the obvious code for anyone listing blockers reproduces #152 verbatim against
 three destination paths.
 
 **Close:** `just ci-fast`, then `just ci` once.
+
+## What W3 actually closed, and what it did not
+
+Merged with the gate green: `lint`, 4266 tests, `docs`, `gui-ci`, `cov`.
+
+**Closed:** #151 (the fold key unified into `norte-encoding` per ADR 0051),
+#154 (a stray byte no longer disables NFC and folding for the whole name),
+#189 (a blocker states its anchor and side, and `blocker_anchor` becomes the
+third member of the `anchor_of`/`render_failure` family), #192 (two spellings
+that paint the same say so), #193 (the root path reads as "the whole tree").
+
+**Left open on purpose, both for the same missing capability:**
+
+- **#153.** The plumbing landed — `compare()` takes `Sides` from its caller —
+  but `Provider::capabilities()` still takes no path, so two mounts behind one
+  `LocalProvider` still get one answer. **The decision that scoped this was
+  wrong.** Passing the parameter moves WHERE the answer is supplied without
+  giving anyone a way to COMPUTE a per-mount one.
+- **#145.** `FoldMode::Full` exists and is tested, but nothing selects it.
+
+Both need a per-path capability query, which is exactly the trait-shaped
+question #164 asks in W5. They go there, and the ADR covers all three.
+
+**#154's fix is narrower than the obvious one, deliberately.** It folds the
+leading valid run and passes everything from the first invalid byte through
+raw, rather than folding every valid run between invalid bytes — the general
+version reopens the Shift-JIS trail-byte hazard #129 closed, because a DBCS
+trail byte can look like a lone foldable ASCII letter once its lead byte fails
+to decode.
+
+## What the wave cost, and the two process failures
+
+Two agents, ~80 and ~49 minutes. The second spent most of its life **waiting on
+a monitor that does not exist**, and then on a cross-agent blocker that had
+already cleared. CLAUDE.md forbids idling and names `sleep` and `tail -f`;
+waiting on an imaginary signal is the same waste with no command to grep for.
+Dispatch prompts should say it: *nothing will notify you, drive your own work
+to completion.*
+
+The other failure was the controller's. Believing that agent had not committed,
+it committed the same work again — and `commit-tree` made an **empty commit**
+whose message claimed to close #192 and described work it did not contain. The
+`--cached --stat` that would have caught it was printed and not read. Dropped
+with `git rebase --onto`; the rule above now says to read that output.

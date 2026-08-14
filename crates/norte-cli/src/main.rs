@@ -2719,23 +2719,43 @@ async fn sync_plan_show_apply(
 ///
 /// A stderr porque no es el plan —el plan no existe: `!executable` ⟹ `steps`
 /// vacío— sino la explicación de que no lo haya.
+///
+/// Cada bloqueo son TRES líneas —ruta, ancla si consta, y motivo— nunca una
+/// sola con `: ` en medio: era la misma forma que se le quitó a
+/// `cli-sync-failure`, y un nombre puede fingirla (corpus `cause_join_spoof`,
+/// #189). El ancla importa porque tres de las cuatro clases nombradas
+/// —`AmbiguousDest`, `DestReadOnly`, `DirTooLarge`— nombran el DESTINO por
+/// definición, y antes de `blocker_anchor` esta lista las leía con la
+/// reinterpretación del origen (#152 reproducido contra tres rutas del otro
+/// árbol).
 fn report_blockers(done: &norte_proto::methods::SyncPlanDone) -> ExitCode {
     eprintln!("norte: {}", norte_i18n::t("cli-sync-blocked"));
+    let lang = norte_i18n::active();
+    let enc = norte_frontend::sync::SyncEncodings::default();
     for blocker in &done.blockers {
+        let anchor = norte_frontend::sync::blocker_anchor(blocker);
+        // Y no `rel_display` a secas: un bloqueo que no es de un sitio
+        // concreto —un destino de solo lectura— trae la RAÍZ (`rel` vacío),
+        // y `rel_display` sola pinta eso como nada. `rel_display_or_root` es
+        // el contrato que `RelDisplay::text` documenta y que ningún painter
+        // cumplía (#193): «todo el árbol», no una línea en blanco.
+        let rel =
+            norte_frontend::sync::rel_display_or_root(&blocker.rel, enc.for_anchor(anchor), lang);
         eprintln!(
             "  {}",
+            norte_i18n::ta("cli-sync-blocker", &[("rel", &rel_marcado(&rel))])
+        );
+        if let Some(q) = norte_frontend::sync::anchor_label(anchor, lang) {
+            eprintln!("    {q}");
+        }
+        eprintln!(
+            "    {}",
             norte_i18n::ta(
-                "cli-sync-blocker",
-                &[
-                    (
-                        "rel",
-                        &rel_marcado(&norte_frontend::sync::rel_display(&blocker.rel, None)),
-                    ),
-                    (
-                        "why",
-                        &norte_frontend::sync::blocker_label(blocker.kind, norte_i18n::active()),
-                    ),
-                ],
+                "cli-sync-blocker-why",
+                &[(
+                    "why",
+                    &norte_frontend::sync::blocker_label(blocker.kind, lang),
+                )],
             )
         );
     }
@@ -2815,6 +2835,12 @@ fn plan_step_lines(cells: &norte_frontend::sync::StepCells) -> Vec<String> {
             "  {}",
             norte_i18n::ta("cli-sync-step-dest", &[("dest", &rel_marcado(d))])
         ));
+        // Las dos mitades pintan igual (un par NFC/NFD, típicamente) sin que
+        // ninguna llegue hostil: sin esto la CLI repite la misma cadena en
+        // dos líneas y nada explica por qué (#192).
+        if let Some(q) = norte_frontend::sync::dest_twin_label(cells.dest_rel_twin, lang) {
+            lineas.push(format!("  {q}"));
+        }
     }
     // El porqué de una omisión, o de un undo que no devolvería el fichero.
     if let Some(r) = cells.reason {
@@ -3069,6 +3095,13 @@ fn print_sync_report(report: &norte_proto::methods::SyncReportResult) {
                 "  {}",
                 norte_i18n::ta("cli-sync-failure-dest", &[("dest", &rel_marcado(d))])
             );
+            // #192: sin badge en ninguna mitad (las dos son UTF-8 válido), un
+            // par NFC/NFD se repite en dos líneas sin nada que lo explique.
+            if let Some(q) =
+                norte_frontend::sync::dest_twin_label(cells.dest_rel_twin, norte_i18n::active())
+            {
+                eprintln!("  {q}");
+            }
         }
         eprintln!(
             "  {}",
@@ -3537,6 +3570,122 @@ mod tests {
         assert_eq!(render_attr_value(&AttrValue::Uint(7)), "7");
         assert_eq!(render_attr_value(&AttrValue::Unknown), "?");
     }
+
+    /// `cli-sync-blocker` no vuelve a unir la ruta y el motivo con `: `
+    /// (#189): la fixture `cause_join_spoof` de la corpus llevaba justo ese
+    /// joiner y habría fingido una fila entera.
+    #[test]
+    fn el_bloqueo_no_une_ruta_y_motivo_en_una_linea() {
+        for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+            let rel_line = norte_i18n::ta_in(lang, "cli-sync-blocker", &[("rel", "sub/a.txt")]);
+            assert_eq!(rel_line, "sub/a.txt", "{lang:?}: nada pegado a la ruta");
+            let why_line =
+                norte_i18n::ta_in(lang, "cli-sync-blocker-why", &[("why", "dest read only")]);
+            assert!(why_line.contains("dest read only"), "{lang:?}: {why_line}");
+            assert!(!why_line.contains("sub/a.txt"), "{lang:?}: {why_line}");
+        }
+    }
+
+    /// Un bloqueo de todo el árbol (`DestReadOnly`, cuyo `rel` es la raíz) no
+    /// se pinta como una ruta vacía (#193): `report_blockers` usa
+    /// `rel_display_or_root`, no `rel_display` a secas, precisamente para
+    /// esto.
+    #[test]
+    fn un_bloqueo_de_todo_el_arbol_no_imprime_una_ruta_vacia() {
+        let root = norte_proto::methods::RelPath::parse_wire("").expect("rel");
+        assert!(root.is_root());
+        let blocker = norte_proto::methods::SyncBlocker {
+            rel: root.clone(),
+            kind: norte_proto::methods::SyncBlockerKind::DestReadOnly,
+            side: None,
+        };
+        let anchor = norte_frontend::sync::blocker_anchor(&blocker);
+        let rel = norte_frontend::sync::rel_display_or_root(&root, None, norte_i18n::Lang::En);
+        assert!(!rel.text.is_empty(), "la raíz no se pinta como nada");
+        assert_eq!(anchor, norte_frontend::sync::RelAnchor::Dest);
+    }
+
+    /// #189, con un nombre ADVERSARIAL: `cause_join_spoof`
+    /// (`informe :→ copia.txt: permission denied`) lleva los DOS joiners que
+    /// una fila de bloqueo en banda fabricaría (` → ` y `: `), y es
+    /// imprimible corriente —`display_name_with` no lo enmascara, así que
+    /// `rel_marcado` no lo marca—. La prueba tibia de arriba solo cubre la
+    /// plantilla con literales inocuos; ésta hace pasar el nombre REAL por
+    /// el mismo camino que `report_blockers` usa (`rel_display_or_root` +
+    /// `rel_marcado`), que es donde una fila fabricada tendría que aparecer
+    /// si alguien reintrodujera el joiner.
+    #[test]
+    fn un_bloqueo_con_un_nombre_adversarial_no_fabrica_una_fila() {
+        let fixture = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|f| f.id == "cause_join_spoof")
+            .expect("corpus");
+        let blocker = norte_proto::methods::SyncBlocker {
+            rel: norte_proto::methods::RelPath::new(vec![
+                norte_proto::Segment::new(fixture.bytes.clone()).expect("seg"),
+            ]),
+            kind: norte_proto::methods::SyncBlockerKind::DestReadOnly,
+            side: None,
+        };
+        let lang = norte_i18n::Lang::En;
+        let anchor = norte_frontend::sync::blocker_anchor(&blocker);
+        let rel = norte_frontend::sync::rel_display_or_root(
+            &blocker.rel,
+            norte_frontend::sync::SyncEncodings::default().for_anchor(anchor),
+            lang,
+        );
+        let rel_line = rel_marcado(&rel);
+        let why_line = norte_frontend::sync::blocker_label(blocker.kind, lang);
+        assert!(
+            !rel_line.contains(&why_line),
+            "la línea de la ruta no lleva pegado el motivo: {rel_line:?}"
+        );
+        assert!(
+            !why_line.contains("permission denied"),
+            "la línea del motivo no lleva pegados los bytes del nombre: {why_line:?}"
+        );
+        // Y el propio joiner que el fixture lleva DENTRO del nombre no se
+        // confunde con uno estructural: sigue siendo parte del texto pintado.
+        assert!(rel_line.contains("permission denied"), "{rel_line:?}");
+    }
+
+    /// `report_blockers` no panica para ninguna combinación de clase y lado,
+    /// y siempre devuelve el 2 —nada se aplicó— sea cual sea el bloqueo.
+    #[test]
+    fn report_blockers_no_panica_para_cualquier_clase_o_lado() {
+        use norte_proto::methods::{
+            DestTrash, PlanHash, Side, SyncBlocker, SyncBlockerKind, SyncCounts, SyncPlanDone,
+        };
+        for kind in [
+            SyncBlockerKind::AmbiguousDest,
+            SyncBlockerKind::OverlapDetected,
+            SyncBlockerKind::DestReadOnly,
+            SyncBlockerKind::DirTooLarge,
+            SyncBlockerKind::TypeMismatchDir,
+            SyncBlockerKind::Unknown,
+        ] {
+            for side in [None, Some(Side::Left), Some(Side::Right)] {
+                let done = SyncPlanDone {
+                    task_id: norte_proto::TaskId::new(1),
+                    plan_hash: PlanHash::parse(&"a".repeat(64)).expect("hex"),
+                    counts: SyncCounts::default(),
+                    blockers: vec![SyncBlocker {
+                        rel: norte_proto::methods::RelPath::parse_wire("sub/a.txt").expect("rel"),
+                        kind,
+                        side,
+                    }],
+                    blockers_total: 1,
+                    executable: false,
+                    dest_trash: DestTrash::Restorable,
+                };
+                assert_eq!(
+                    report_blockers(&done),
+                    ExitCode::from(2),
+                    "{kind:?}/{side:?}"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3678,6 +3827,46 @@ mod plan_step_lines_tests {
         assert!(
             lineas.iter().skip(1).any(|l| l.contains(&esperado)),
             "el calificador del ancla se pinta: {lineas:?}"
+        );
+    }
+
+    /// Un par NFC/NFD (#192) pinta la misma cadena en las dos líneas de
+    /// ortografía, y sin la nota el lector no tiene forma de distinguir eso
+    /// de un renombrado que no hizo nada.
+    #[test]
+    fn un_par_nfc_nfd_lleva_su_propia_nota() {
+        let fixtures = norte_testkit::corpus::hostile_names();
+        let nfc = fixtures
+            .iter()
+            .find(|f| f.id == "nfc_e_acute")
+            .expect("corpus");
+        let nfd = fixtures
+            .iter()
+            .find(|f| f.id == "nfd_e_acute")
+            .expect("corpus");
+        let paso = norte_proto::methods::SyncStep {
+            id: 3,
+            kind: norte_proto::methods::SyncStepKind::Overwrite,
+            rel: seg(&nfc.bytes),
+            dest_rel: Some(seg(&nfd.bytes)),
+            size: Some(1),
+            criterion: norte_proto::methods::CompareCriterion::Size,
+            confidence: norte_proto::methods::CompareConfidence::Certain,
+            reversal: Some(norte_proto::methods::StepReversal::Delete),
+            reason: None,
+        };
+        let cells = norte_frontend::sync::render_step(
+            &paso,
+            norte_proto::methods::DestTrash::Restorable,
+            norte_frontend::sync::SyncEncodings::default(),
+        );
+        assert!(cells.dest_rel_twin);
+        let lineas = plan_step_lines(&cells);
+        let esperado = norte_frontend::sync::dest_twin_label(true, norte_i18n::active())
+            .expect("hay nota cuando twin es true");
+        assert!(
+            lineas.iter().any(|l| l.contains(&esperado)),
+            "la nota se pinta: {lineas:?}"
         );
     }
 }
