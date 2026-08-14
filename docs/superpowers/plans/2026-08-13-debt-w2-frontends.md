@@ -3,11 +3,14 @@
 **Tier T1.** Local bugs in TUI, GUI and CLI. Clear repro, one crate each,
 test-first.
 
-**Rules:** the same six as
-[W1](2026-08-13-debt-w1-mechanical.md) — issue as spec, one agent per crate
-cluster, no `ci`/`ci-fast` inside an agent, one commit per issue, test-first,
-mid-tier model. **Reviewers: one `rust-reviewer` over the whole branch diff at
-the close, not one per task.** No security reviewer: nothing here mutates.
+**Rules:** the same as [W1](2026-08-13-debt-w1-mechanical.md) — issue as spec,
+one agent per crate cluster, no `ci`/`ci-fast` inside an agent, one commit per
+issue, test-first, mid-tier model, private git index.
+
+**Reviewers: each agent dispatches its own `rust-reviewer` on its own diff
+before its last commit.** No controller pass at the close: this is a
+frontend-only wave and nothing here mutates. (This wave ran one anyway, under
+the older rule, and what it established was that the rule should change.)
 
 **Branch:** `debt/w2-frontends`
 

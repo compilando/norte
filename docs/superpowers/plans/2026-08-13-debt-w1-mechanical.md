@@ -16,6 +16,30 @@
   proved by the existing suite passing unedited — say so instead of adding a
   test that asserts nothing.
 - Model: cheap. Nothing here needs the largest.
+- **Reviewers are dispatched BY THE AGENT DOING THE WORK, before its last
+  commit — never by the controller at the close.** CLAUDE.md has said this all
+  along and the waves were not following it: a controller-run close pass sits on
+  the critical path, so the human waits out every minute of it, while the same
+  review inside an implementer's lifetime runs in parallel with the other
+  implementer and costs zero perceived time. Measured on this session: reviewers
+  are 8–11 minutes each and implementers 14–57, so the reviewers were never the
+  expense — but they were the part that was *waited on*.
+
+  Use a **cheap model** for a routine review. Inherit the big one only for the
+  surfaces below.
+
+- **A whole-branch pass by the controller is reserved for what no per-task
+  review can see**, and it is the exception:
+  - **coherence across tasks** — the failure mode where every task is correct
+    against its own specification and the branch is wrong anyway. This is what
+    caught the C2 branch's worst defect;
+  - **journal, policy engine, the wire** — expensive and silent when wrong;
+  - **a branch two agents wrote in one tree**, where the first question is
+    integrity: does each commit contain what its message says.
+
+  Frontend-only waves do not get one. W2's was spent finding out that it did not
+  need one.
+
 - Reviewers: none **unless the diff reaches policy, journal or the wire** — and
   you cannot know that from the issue title. #172 read as a three-copy dedup and
   one of the three was `norte-core::policy::is_under`, the scope containment
@@ -38,17 +62,27 @@
   `git commit -m "..."` commits **whatever is in the index at that instant**,
   including the other agent's staged files. W2 caught exactly that — a
   four-file commit that scooped a concurrent agent's `norte-cli` work, undone
-  with `git reset --soft` and re-split. So the rule is:
+  with `git reset --soft` and re-split, while the other agent independently
+  hit it and built its way out. Between them that was most of the gap between
+  W1's 5.5 minutes per issue and W2's 9.
+
+  **Use a private index. Do not touch the shared one at all:**
 
   ```sh
+  export GIT_INDEX_FILE=$(mktemp -d)/index      # yours alone, for the session
+  git read-tree HEAD
   git add crates/mine/src/thing.rs
-  git diff --cached --stat          # LOOK at it
-  git commit -m "..." -- crates/mine/src/thing.rs   # pathspec, always
+  git diff --cached --stat                       # LOOK at it
+  TREE=$(git write-tree)
+  COMMIT=$(git commit-tree "$TREE" -p HEAD -m "$MSG")
+  git update-ref --create-reflog refs/heads/<branch> "$COMMIT" "$(git rev-parse HEAD)"
   ```
 
-  The pathspec form is safe by construction; the naked form is a race. When one
-  file carries hunks belonging to two issues, split with `git apply --cached` on
-  an extracted patch rather than staging the whole file.
+  The `update-ref` with an expected old value is a compare-and-swap: if the
+  other agent committed in between, it FAILS instead of clobbering, and you
+  re-read and retry. `git commit -m "..." -- <pathspec>` is the simpler fallback
+  and is safe against scooping, but it cannot split hunks inside one file, which
+  is exactly what a shared `i18n/*.ftl` or a shared `main.rs` needs.
 
 - **A change to a SHARED fixture is not scoped by the crate that owns it.**
   `just t norte-testkit` is green while five consumers that loop over the corpus
