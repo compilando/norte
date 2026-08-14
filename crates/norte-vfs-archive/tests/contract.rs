@@ -8,11 +8,34 @@ use norte_proto::VPath;
 use norte_testkit::TarSmith;
 use norte_vfs_archive::ArchiveProvider;
 
+/// Nombres que el DIRECCIONAMIENTO de ADR 0018 no puede representar dentro de
+/// un archivo, y que por tanto no pueden entrar en un contrato que exige
+/// round-trip byte-exacto.
+///
+/// Hoy es uno: un componente igual a `!`, el marcador que separa el contenedor
+/// del interior. `ArchiveIndex` lo rechaza a propósito y con su razón escrita
+/// (`crates/norte-vfs-archive/src/index.rs`, «componente `!` (marcador ADR
+/// 0018, indireccionable)»), y `VPath::archive_split` corta por el primer
+/// segmento que lo iguale — de modo que una entrada así, admitida, sería
+/// direccionable como OTRA cosa. La elección de diseño es saltarla, o sea
+/// fallar cerrado, y `index::tests::omite_traversal_y_absolutos_y_marcador`
+/// la pinea — así que excluirla AQUÍ no la esconde: la frontera sigue teniendo
+/// un test que la afirma, y este comentario dice dónde.
+///
+/// Lo destapó la fixture `archive_marker_literal` al entrar en el corpus
+/// (#169): el contrato alimenta el corpus ENTERO, así que una frontera del
+/// direccionamiento aparece aquí como un round-trip que falta. Excluirla por
+/// `id` y no por bytes deja dicho cuál es y por qué, en vez de esconderla.
+fn no_representables_en_archivo(id: &str) -> bool {
+    id == "archive_marker_literal"
+}
+
 /// Nombres del corpus que caben en un header ustar (`TarSmith` no forja GNU
 /// longname): ≤ 100 bytes. Los largos los cubre la suite zip (fase 8e).
 fn hostile_names() -> Vec<Vec<u8>> {
     norte_testkit::corpus::hostile_names()
         .into_iter()
+        .filter(|n| !no_representables_en_archivo(&n.id))
         .map(|n| n.bytes)
         .filter(|b| {
             // `hostile/` + nombre debe caber en los 100 bytes del header.
@@ -88,6 +111,7 @@ norte_vfs::readonly_provider_contract! {
 fn zip_hostile_names() -> Vec<Vec<u8>> {
     norte_testkit::corpus::hostile_names()
         .into_iter()
+        .filter(|n| !no_representables_en_archivo(&n.id))
         .map(|n| n.bytes)
         .collect()
 }
