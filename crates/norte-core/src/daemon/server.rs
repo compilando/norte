@@ -216,6 +216,12 @@ struct Shared {
     /// `recent`). El `Arc` interior es EL MISMO que llena la Task en vuelo:
     /// el informe se puede consultar en progreso (snapshot parcial).
     undo_reports: Mutex<std::collections::VecDeque<(u64, Arc<Mutex<crate::UndoReport>>)>>,
+    /// Conexiones que son DUEÑAS de al menos un feed dirigido vivo
+    /// (`compare.rows`, `search.hits`, `sync.steps`), con cuántos (#155). Una
+    /// conexión de esta lista NO se expulsa del mapa de suscriptores porque su
+    /// outbox se llene: pierde el FRAME, jamás la suscripción — ver
+    /// [`Shared::broadcast_where`].
+    directed_feeds: Mutex<HashMap<u64, u32>>,
     /// Runtime WASM compartido para ejecutar comandos de plugin (M4-P4). Se
     /// construye UNA vez en el bind (arranca un hilo "ticker" de época) y se
     /// reutiliza entre `plugin.run_command`. `Arc` porque `PluginRuntime` es
@@ -256,6 +262,31 @@ struct Subscriber {
 struct RegisteredTask {
     handle: TaskHandle,
     owner: Actor,
+}
+
+/// El derecho de una conexión a no ser expulsada mientras su feed dirigido
+/// vive (#155). Se cuenta, no se marca: una conexión puede tener a la vez una
+/// búsqueda y una comparación, y la primera en terminar no puede quitarle el
+/// derecho a la otra.
+struct DirectedFeed {
+    shared: Arc<Shared>,
+    conn_id: u64,
+}
+
+impl Drop for DirectedFeed {
+    fn drop(&mut self) {
+        let mut feeds = self
+            .shared
+            .directed_feeds
+            .lock()
+            .expect("directed feeds lock sano");
+        if let Some(n) = feeds.get_mut(&self.conn_id) {
+            *n -= 1;
+            if *n == 0 {
+                feeds.remove(&self.conn_id);
+            }
+        }
+    }
 }
 
 /// Empuja un terminal al anillo `recent` respetando los topes por clase
@@ -351,45 +382,97 @@ impl Shared {
 
     /// Envía un frame a UNA conexión concreta (los hits de una `fs.search` son
     /// del que la lanzó — jamás broadcast, security T4). No-op si la conexión
-    /// murió o ya no está suscrita; mismo criterio de expulsión que
-    /// [`Self::broadcast_where`]: un dueño que no drena su outbox (llena) pierde
-    /// la suscripción y morirá en su próximo response — el backlog nunca crece
-    /// sin límite.
+    /// murió o ya no está suscrita.
     ///
-    /// Devuelve `false` si el frame NO se entregó (conexión desaparecida o
-    /// recién expulsada). Sirve para que una bomba de feed dirigido deje de
-    /// producir: seguir comparando dos árboles durante una hora para un dueño
-    /// que ya no existe es trabajo tirado y un permiso del scheduler
-    /// retenido.
+    /// Una outbox LLENA pierde el frame y NO la suscripción (#155): la
+    /// expulsión era irreversible —la entrada solo se inserta en
+    /// `initialize`— y se llevaba por delante el `task.progress` terminal, que
+    /// es justo la señal con la que el cliente detecta que le faltan filas. El
+    /// backlog sigue acotado por el canal, que es quien lo acotaba de verdad;
+    /// lo que se pierde son frames, y eso el contrato ya sabe decirlo. Una
+    /// outbox CERRADA sí retira la entrada: ahí no hay nadie a quien proteger.
+    ///
+    /// Devuelve `false` si el frame NO se entregó. Sirve para que una bomba de
+    /// feed dirigido deje de producir: seguir comparando dos árboles durante
+    /// una hora para un dueño que no lee es trabajo tirado y un permiso del
+    /// scheduler retenido.
     fn send_to_conn(&self, conn_id: u64, frame: &Arc<[u8]>) -> bool {
         send_to_conn_impl(&self.subscribers, conn_id, frame)
     }
 
+    /// Marca `conn_id` como dueño de un feed dirigido vivo hasta que el guard
+    /// se dropee (#155).
+    fn feed_guard(self: &Arc<Self>, conn_id: u64) -> DirectedFeed {
+        *self
+            .directed_feeds
+            .lock()
+            .expect("directed feeds lock sano")
+            .entry(conn_id)
+            .or_insert(0) += 1;
+        DirectedFeed {
+            shared: Arc::clone(self),
+            conn_id,
+        }
+    }
+
     fn broadcast_where(&self, frame: &Arc<[u8]>, wants: impl Fn(&Subscriber) -> bool) {
-        let mut subs = self.subscribers.lock().expect("subscribers lock sano");
-        // try_send: el que tiene la outbox llena pierde la suscripción (y
-        // pronto la conexión, cuando su próximo response tampoco quepa) —
-        // el backlog de un cliente lento jamás crece sin límite.
-        subs.retain(|conn, s| {
-            // Un suscriptor excluido de ESTA notif conserva su suscripción.
-            if !wants(s) {
-                return true;
-            }
-            match s.tx.try_send(Arc::clone(frame)) {
-                Ok(()) => true,
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    tracing::warn!(conn, "suscriptor sin drenar: expulsado del broadcast");
-                    false
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => false,
-            }
-        });
+        // Quién NO se expulsa por una outbox llena (#155): el dueño de un feed
+        // dirigido vivo. Se lee ANTES de tomar el lock de suscriptores — anidar
+        // los dos por cada frame de broadcast es un orden de bloqueo que no
+        // hace falta inventar.
+        let feeds: Vec<u64> = self
+            .directed_feeds
+            .lock()
+            .expect("directed feeds lock sano")
+            .keys()
+            .copied()
+            .collect();
+        broadcast_impl(&self.subscribers, &feeds, frame, wants);
     }
 }
 
+/// Núcleo testeable de [`Shared::broadcast_where`]: manda `frame` a cada
+/// suscriptor que `wants` acepte y RETIRA al que tenga el receptor muerto.
+///
+/// Una outbox LLENA expulsa —el backlog de un cliente lento jamás crece sin
+/// límite (M1)— SALVO que la conexión esté en `feeds`, es decir sea dueña de
+/// un feed dirigido vivo (#155): a ésa la expulsión le quitaría también el
+/// `task.progress` terminal de su propia task, que es la señal con la que
+/// comprueba si le llegaron todas las filas. Pierde el frame y sigue
+/// suscrita.
+fn broadcast_impl(
+    subs: &Mutex<HashMap<u64, Subscriber>>,
+    feeds: &[u64],
+    frame: &Arc<[u8]>,
+    wants: impl Fn(&Subscriber) -> bool,
+) {
+    let mut subs = subs.lock().expect("subscribers lock sano");
+    subs.retain(|conn, s| {
+        // Un suscriptor excluido de ESTA notif conserva su suscripción.
+        if !wants(s) {
+            return true;
+        }
+        match s.tx.try_send(Arc::clone(frame)) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                if feeds.contains(conn) {
+                    tracing::warn!(
+                        conn,
+                        "dueño de un feed dirigido sin drenar: se pierde el frame, no la suscripción"
+                    );
+                    return true;
+                }
+                tracing::warn!(conn, "suscriptor sin drenar: expulsado del broadcast");
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => false,
+        }
+    });
+}
+
 /// Núcleo testeable de [`Shared::send_to_conn`]: envía `frame` a la conexión
-/// `conn_id` de `subs` (si existe) y RETIRA la entrada si su receptor murió o
-/// no drena (outbox llena) — mismo criterio de expulsión que el broadcast.
+/// `conn_id` de `subs` (si existe) y RETIRA la entrada solo si su receptor
+/// MURIÓ. Una outbox llena pierde el frame y conserva la suscripción (#155).
 ///
 /// `true` = entregado.
 fn send_to_conn_impl(
@@ -403,8 +486,11 @@ fn send_to_conn_impl(
         Some(s) => match s.tx.try_send(Arc::clone(frame)) {
             Ok(()) => (true, false),
             Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!(conn = conn_id, "dueño de búsqueda sin drenar: expulsado");
-                (false, true)
+                tracing::warn!(
+                    conn = conn_id,
+                    "dueño de un feed dirigido sin drenar: se pierde el frame, no la suscripción"
+                );
+                (false, false)
             }
             Err(mpsc::error::TrySendError::Closed(_)) => (false, true),
         },
@@ -558,6 +644,7 @@ impl Daemon {
             undo_reports: Mutex::new(std::collections::VecDeque::new()),
             plugins: Mutex::new(plugins),
             plugin_runtime,
+            directed_feeds: Mutex::new(HashMap::new()),
         });
         // La salida del router de aprobaciones hacia los suscriptores. `Weak`
         // rompe el ciclo Shared → approvals → closure → Shared: muerto el
@@ -3084,11 +3171,17 @@ async fn handle_fs_compare(
     // scheme. `fs.compare` es el caso que lo pide: a diferencia de
     // `fs.search`, no tiene `max_hits` que lo acote.
     //
-    // Lo que esto NO arregla (#155): al expulsado se le lleva por delante
-    // también el `task.progress` terminal, que es la única señal con la que
-    // podría saber que le faltan filas.
+    // Y lo que ya NO pasa (#155): pararla no le cuesta la suscripción, así que
+    // el `task.progress` terminal —la única señal con la que puede saber que le
+    // faltan filas— le sigue llegando.
     let shared_pump = Arc::clone(shared);
+    // #155: mientras esta bomba viva, su dueño no se expulsa del mapa de
+    // suscriptores por una outbox llena — perdería el `task.progress` terminal
+    // con el que compara filas recibidas contra `entries_done`, que es la
+    // única forma que tiene de saber que la comparación le llegó entera.
+    let feed = shared_pump.feed_guard(conn_id);
     tokio::spawn(async move {
+        let _feed = feed;
         while let Some(rows) = rx.recv().await {
             let notif = Notification {
                 jsonrpc: norte_proto::wire::JsonRpcVersion,
@@ -3219,12 +3312,15 @@ async fn handle_sync_plan(
     // plan aprobable) y termina. Sin esto, un plan de tres horas seguiría
     // recorriendo dos árboles para nadie, reteniendo su permiso del scheduler.
     //
-    // Lo que esto NO arregla (#155): al expulsado se le lleva por delante
-    // también el `task.progress` terminal, así que no tiene forma de saber si le
-    // faltan pasos. Un cliente al que le falte el `sync.plan_done` no tiene
-    // `plan_hash`, y sin él no puede aplicar nada: el fallo es visible y seguro.
+    // Lo que ya NO pasa (#155): el dueño de este feed no se expulsa del mapa de
+    // suscriptores mientras dure, así que conserva su `task.progress` terminal.
+    // Aquí el fallo era el menos grave de los tres —un cliente sin
+    // `sync.plan_done` no tiene `plan_hash` y no puede aplicar nada— pero es el
+    // mismo mecanismo, y arreglarlo en dos de tres bombas es dejarlo a medias.
     let shared_pump = Arc::clone(shared);
+    let feed = shared_pump.feed_guard(conn_id);
     tokio::spawn(async move {
+        let _feed = feed;
         while let Some(event) = rx.recv().await {
             let (method, params) = match event {
                 crate::sync::SyncPlanEvent::Steps(batch) => {
@@ -3429,7 +3525,12 @@ async fn handle_fs_search(
     // `search.hits` SOLO al dueño. Muere sola cuando el walker cierra `tx`
     // (terminal, cancel o receptor —el propio dueño— desaparecido).
     let shared_pump = Arc::clone(shared);
+    // #155: igual que `compare.rows` — el dueño de un feed dirigido vivo
+    // pierde frames, jamás la suscripción.
+    let feed = shared_pump.feed_guard(conn_id);
+
     tokio::spawn(async move {
+        let _feed = feed;
         while let Some(hits) = rx.recv().await {
             let notif = Notification {
                 jsonrpc: norte_proto::wire::JsonRpcVersion,
@@ -4167,6 +4268,91 @@ mod tests {
             "la conexión con receptor cerrado se retira"
         );
         assert!(subs.lock().expect("lock").contains_key(&2), "la viva sigue");
+    }
+
+    /// #155: una outbox LLENA cuesta el frame y NO la suscripción. La
+    /// expulsión era irreversible —la entrada solo se inserta en
+    /// `initialize`— y se llevaba con ella el `task.progress` terminal, que es
+    /// justo lo que el contrato de `compare.rows` manda comparar contra las
+    /// filas recibidas para saber si llegaron todas.
+    #[test]
+    fn una_outbox_llena_cuesta_el_frame_no_la_suscripcion() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        use tokio::sync::mpsc;
+
+        use super::{Subscriber, send_to_conn_impl};
+        use crate::journal::Actor;
+
+        let subs = Mutex::new(HashMap::new());
+        let (tx, _rx) = mpsc::channel::<Arc<[u8]>>(1);
+        subs.lock().expect("lock").insert(
+            1u64,
+            Subscriber {
+                tx,
+                actor: Actor::User,
+            },
+        );
+        let frame: Arc<[u8]> = Arc::from(vec![1u8].into_boxed_slice());
+
+        assert!(send_to_conn_impl(&subs, 1, &frame), "el primero cabe");
+        assert!(
+            !send_to_conn_impl(&subs, 1, &frame),
+            "el segundo no cabe: no entregado"
+        );
+        assert!(
+            subs.lock().expect("lock").contains_key(&1),
+            "y sigue suscrita: sin esto pierde también su terminal"
+        );
+    }
+
+    /// El broadcast SÍ sigue expulsando al que no drena —el backlog de un
+    /// cliente lento no puede crecer sin límite (M1)—, salvo al dueño de un
+    /// feed dirigido vivo (#155).
+    #[test]
+    fn el_broadcast_expulsa_al_que_no_drena_pero_no_al_dueno_de_un_feed() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        use tokio::sync::mpsc;
+
+        use super::{Subscriber, broadcast_impl};
+        use crate::journal::Actor;
+
+        let subs = Mutex::new(HashMap::new());
+        // Los receptores se retienen vivos: cerrarlos sería el OTRO caso
+        // (outbox muerta), y aquí lo que se prueba es la LLENA.
+        let mut vivos = Vec::new();
+        for conn in [1u64, 2u64] {
+            let (tx, rx) = mpsc::channel::<Arc<[u8]>>(1);
+            vivos.push(rx);
+            subs.lock().expect("lock").insert(
+                conn,
+                Subscriber {
+                    tx,
+                    actor: Actor::User,
+                },
+            );
+        }
+        let frame: Arc<[u8]> = Arc::from(vec![1u8].into_boxed_slice());
+
+        // El primer frame cabe en las dos.
+        broadcast_impl(&subs, &[], &frame, |_| true);
+        assert_eq!(subs.lock().expect("lock").len(), 2);
+
+        // El segundo no cabe en ninguna, pero la 2 es dueña de un feed vivo.
+        broadcast_impl(&subs, &[2], &frame, |_| true);
+        let subs = subs.lock().expect("lock");
+        assert!(
+            !subs.contains_key(&1),
+            "el que no drena y no tiene feed, fuera"
+        );
+        assert!(
+            subs.contains_key(&2),
+            "el dueño de un feed dirigido vivo conserva la suscripción"
+        );
+        drop(vivos);
     }
 
     /// La política de admisión es EXACTAMENTE mismo-uid: ni root entra.
