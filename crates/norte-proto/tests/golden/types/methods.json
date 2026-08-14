@@ -5,11 +5,35 @@
   },
   "ai_rename_plan_result": {
     "entries": [
-      { "from": "IMG 001.jpg", "to": "2024-01-01-beach.jpg" }
+      {
+        "from": "IMG 001.jpg",
+        "to": "2024-01-01-beach.jpg"
+      }
     ]
   },
   "ai_rename_plan_result_empty": {
     "entries": []
+  },
+  "compare_rows_batch": {
+    "rows": [
+      {
+        "confidence": "certain",
+        "criterion": "presence",
+        "id": 1,
+        "left": {
+          "kind": "file",
+          "mtime_ms": 1720000000000,
+          "path": "file:///home/user/origen/informe%FF%FE.dat",
+          "size": 1234
+        },
+        "verdict": "only_left"
+      }
+    ],
+    "task_id": 7
+  },
+  "compare_rows_batch_empty": {
+    "rows": [],
+    "task_id": 7
   },
   "connection_degraded": {
     "host": "backup.example",
@@ -53,14 +77,48 @@
     }
   },
   "fs_capabilities_result_con_attrs": {
+    "attrs": [
+      {
+        "hint": "mode",
+        "id": "posix.mode",
+        "label": "Mode",
+        "type": "uint"
+      },
+      {
+        "hint": "identity",
+        "id": "sftp.owner",
+        "label": "Owner",
+        "type": "bytes"
+      }
+    ],
     "capabilities": {
       "flags": "RENAME_ATOMIC | SYMLINKS",
       "max_path": null
+    }
+  },
+  "fs_compare_params": {
+    "criteria": {
+      "hash": true,
+      "mtime": true,
+      "size": true
     },
-    "attrs": [
-      { "id": "posix.mode", "label": "Mode", "type": "uint", "hint": "mode" },
-      { "id": "sftp.owner", "label": "Owner", "type": "bytes", "hint": "identity" }
-    ]
+    "descend_orphans": "left",
+    "follow_symlinks": false,
+    "left": "file:///home/user/fotos-a%FF%FE",
+    "max_depth": 3,
+    "mtime_tolerance_ms": 0,
+    "right": "sftp://nas/fotos-a%FF%FE"
+  },
+  "fs_compare_params_minimo": {
+    "criteria": {
+      "hash": false,
+      "mtime": true,
+      "size": true
+    },
+    "follow_symlinks": false,
+    "left": "file:///home/user/origen",
+    "mtime_tolerance_ms": 2000,
+    "right": "file:///home/user/copia"
   },
   "fs_copy_params": {
     "from": "file:///src/a.txt",
@@ -92,10 +150,13 @@
     "path": "file:///home/user"
   },
   "fs_list_params_con_attrs": {
+    "attrs": [
+      "posix.mode",
+      "posix.uid"
+    ],
     "cursor": null,
     "limit": 500,
-    "path": "file:///home/user",
-    "attrs": ["posix.mode", "posix.uid"]
+    "path": "file:///home/user"
   },
   "fs_list_params_paginado": {
     "cursor": "3",
@@ -248,8 +309,10 @@
     "path": "file:///home/user/doc.txt"
   },
   "fs_stat_params_con_attrs": {
-    "path": "file:///home/user/doc.txt",
-    "attrs": ["s3.storage_class"]
+    "attrs": [
+      "s3.storage_class"
+    ],
+    "path": "file:///home/user/doc.txt"
   },
   "fs_stat_result": {
     "entry": {
@@ -275,19 +338,19 @@
   "host_volumes_result": {
     "volumes": [
       {
-        "mount": "file:///media/USB-Nico",
-        "label": "VVNCIE5pY28=",
+        "free_bytes": 12000000000,
         "fs_type": "vfat",
         "kind": "removable",
-        "total_bytes": 64000000000,
-        "free_bytes": 12000000000,
-        "read_only": false
+        "label": "VVNCIE5pY28=",
+        "mount": "file:///media/USB-Nico",
+        "read_only": false,
+        "total_bytes": 64000000000
       },
       {
-        "mount": "file:///media/informe%FF%FE",
-        "label": "//4=",
         "fs_type": "nfs4",
         "kind": "network",
+        "label": "//4=",
+        "mount": "file:///media/informe%FF%FE",
         "read_only": true
       }
     ]
@@ -381,6 +444,10 @@
     "paths_total": 9,
     "session": "s1"
   },
+  "plugin_column_info": {
+    "header": "Git",
+    "id": "git-status"
+  },
   "plugin_column_values_params": {
     "column_id": "git-status",
     "paths": [
@@ -401,30 +468,26 @@
       null
     ]
   },
-  "plugin_column_info": {
-    "id": "git-status",
-    "header": "Git"
-  },
   "plugin_command_info": {
     "id": "greet",
     "title": "Greet"
   },
   "plugin_config_key_wire_bare": {
+    "default": "hola",
     "key": "greeting",
     "kind": "string",
-    "default": "hola",
-    "values": [],
-    "value": "hola"
+    "value": "hola",
+    "values": []
   },
   "plugin_config_key_wire_full": {
+    "default": "3",
+    "description": "Número de reintentos.",
     "key": "retries",
     "kind": "int",
-    "default": "3",
-    "min": 0,
     "max": 10,
-    "values": [],
-    "description": "Número de reintentos.",
-    "value": "5"
+    "min": 0,
+    "value": "5",
+    "values": []
   },
   "plugin_decorate_params": {
     "paths": [
@@ -455,18 +518,21 @@
   "plugin_get_config_result": {
     "keys": [
       {
+        "default": "hola",
         "key": "greeting",
         "kind": "string",
-        "default": "hola",
-        "values": [],
-        "value": "hola"
+        "value": "hola",
+        "values": []
       },
       {
+        "default": "fast",
         "key": "mode",
         "kind": "enum",
-        "default": "fast",
-        "values": ["fast", "thorough"],
-        "value": "thorough"
+        "value": "thorough",
+        "values": [
+          "fast",
+          "thorough"
+        ]
       }
     ]
   },
@@ -477,28 +543,28 @@
     "id": "acme.ftp"
   },
   "plugin_help_result": {
+    "lossy": false,
     "markdown": "+++\ntitle = \"FTP\"\n+++\nBody.",
-    "truncated": false,
-    "lossy": false
+    "truncated": false
   },
   "plugin_help_result_absent": {
-    "truncated": false,
-    "lossy": false
+    "lossy": false,
+    "truncated": false
   },
   "plugin_help_result_empty": {
+    "lossy": false,
     "markdown": "",
-    "truncated": false,
-    "lossy": false
+    "truncated": false
   },
   "plugin_help_result_flags": {
+    "lossy": true,
     "markdown": "cut",
-    "truncated": true,
-    "lossy": true
+    "truncated": true
   },
   "plugin_help_result_lossy": {
-    "markdown": "Ver\uFFFDsion \u202Egnp.exe",
-    "truncated": false,
-    "lossy": true
+    "lossy": true,
+    "markdown": "Ver�sion ‮gnp.exe",
+    "truncated": false
   },
   "plugin_info": {
     "approved": true,
@@ -522,8 +588,8 @@
     "category": "previewer",
     "columns": [
       {
-        "id": "git-status",
-        "header": "Git"
+        "header": "Git",
+        "id": "git-status"
       }
     ],
     "commands": [
@@ -716,12 +782,24 @@
       "seq": 41
     },
     "compensations_lost": 1,
+    "denied": [
+      {
+        "error": {
+          "kind": "policy_denied",
+          "rule": "scope-expired"
+        },
+        "seq": 37
+      }
+    ],
+    "denied_total": 1,
     "skipped_created_no_trash": 2,
     "skipped_irreversible": 1,
     "undone": 3
   },
   "policy_undo_report_result_clean": {
     "compensations_lost": 0,
+    "denied": [],
+    "denied_total": 0,
     "skipped_created_no_trash": 0,
     "skipped_irreversible": 0,
     "undone": 4
@@ -782,6 +860,187 @@
     "role": "match",
     "text": "año"
   },
+  "sync_apply_params": {
+    "plan_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "sync_plan_done": {
+    "blockers": [],
+    "blockers_total": 0,
+    "counts": {
+      "bytes": 4096,
+      "copy": 40,
+      "create_dir": 2,
+      "delete_tree": 1,
+      "irreversible": 1,
+      "overwrite": 3,
+      "skip": 2,
+      "unknown_kind": 2,
+      "unmeasured_steps": 7
+    },
+    "dest_trash": "restorable",
+    "executable": true,
+    "plan_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+    "task_id": 7
+  },
+  "sync_plan_done_blocked": {
+    "blockers": [
+      {
+        "kind": "ambiguous_dest",
+        "rel": "LEEME%FF.txt",
+        "side": "right"
+      }
+    ],
+    "blockers_total": 300,
+    "counts": {
+      "bytes": 10,
+      "copy": 1,
+      "create_dir": 0,
+      "delete_tree": 0,
+      "irreversible": 0,
+      "overwrite": 0,
+      "skip": 0,
+      "unknown_kind": 0,
+      "unmeasured_steps": 0
+    },
+    "dest_trash": "absent",
+    "executable": false,
+    "plan_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+    "task_id": 8
+  },
+  "sync_plan_done_opaque": {
+    "blockers": [],
+    "blockers_total": 0,
+    "counts": {
+      "bytes": 20,
+      "copy": 1,
+      "create_dir": 0,
+      "delete_tree": 0,
+      "irreversible": 2,
+      "overwrite": 1,
+      "skip": 0,
+      "unknown_kind": 0,
+      "unmeasured_steps": 0
+    },
+    "dest_trash": "opaque",
+    "executable": true,
+    "plan_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+    "task_id": 9
+  },
+  "sync_plan_params": {
+    "compare": {
+      "criteria": {
+        "hash": true,
+        "mtime": true,
+        "size": true
+      },
+      "follow_symlinks": false,
+      "max_depth": 3,
+      "mtime_tolerance_ms": 0
+    },
+    "dest": "sftp://nas/fotos-a%FF%FE",
+    "include": [
+      "informe%FF%FE.dat",
+      "sub/fotos"
+    ],
+    "mode": "mirror",
+    "on_unknown": "skip",
+    "source": "file:///home/user/fotos-a%FF%FE"
+  },
+  "sync_plan_params_minimo": {
+    "compare": {
+      "criteria": {
+        "hash": false,
+        "mtime": true,
+        "size": true
+      },
+      "follow_symlinks": false,
+      "mtime_tolerance_ms": 2000
+    },
+    "dest": "file:///home/user/copia",
+    "mode": "update",
+    "on_unknown": "copy",
+    "source": "file:///home/user/origen"
+  },
+  "sync_report_params": {
+    "task_id": 9
+  },
+  "sync_report_result": {
+    "batch_id": 12,
+    "bytes": 4096,
+    "dest_trash": "restorable",
+    "done": 40,
+    "failed": 5,
+    "failures": [
+      {
+        "cause": "conflict",
+        "kind": "overwrite",
+        "rel": "a.txt"
+      },
+      {
+        "cause": "denied",
+        "kind": "delete_tree",
+        "rel": "b%FF.txt"
+      },
+      {
+        "cause": "io",
+        "kind": "copy",
+        "rel": "sub/c.txt"
+      },
+      {
+        "cause": "denied",
+        "kind": "create_dir",
+        "rel": "sub"
+      },
+      {
+        "cause": "illegal_name",
+        "dest_rel": "notas/informe.txt",
+        "kind": "copy",
+        "rel": "NOTAS/informe.txt"
+      }
+    ],
+    "skipped": 2
+  },
+  "sync_report_result_clean": {
+    "batch_id": 12,
+    "bytes": 4096,
+    "dest_trash": "absent",
+    "done": 3,
+    "failed": 0,
+    "failures": [],
+    "skipped": 0
+  },
+  "sync_report_result_died": {
+    "bytes": 0,
+    "dest_trash": "opaque",
+    "done": 0,
+    "failed": 1,
+    "failures": [
+      {
+        "cause": "denied",
+        "kind": "copy",
+        "rel": "a.txt"
+      }
+    ],
+    "skipped": 0
+  },
+  "sync_steps_batch": {
+    "steps": [
+      {
+        "confidence": "certain",
+        "criterion": "presence",
+        "id": 1,
+        "kind": "copy",
+        "rel": "informe%FF%FE.dat",
+        "reversal": "delete",
+        "size": 1234
+      }
+    ],
+    "task_id": 7
+  },
+  "sync_steps_batch_empty": {
+    "steps": [],
+    "task_id": 7
+  },
   "task_cancel_params": {
     "task_id": 7
   },
@@ -807,251 +1066,25 @@
     "tasks": []
   },
   "volume": {
-    "mount": "file:///media/USB-Nico",
-    "label": "VVNCIE5pY28=",
+    "free_bytes": 12000000000,
     "fs_type": "vfat",
     "kind": "removable",
-    "total_bytes": 64000000000,
-    "free_bytes": 12000000000,
-    "read_only": false
+    "label": "VVNCIE5pY28=",
+    "mount": "file:///media/USB-Nico",
+    "read_only": false,
+    "total_bytes": 64000000000
   },
   "volume_future_kind": {
-    "mount": "file:///mnt/exotic",
     "fs_type": "zfs-cluster",
     "kind": "quantum_bay",
+    "mount": "file:///mnt/exotic",
     "read_only": false
   },
   "volume_hostile_no_sizes": {
-    "mount": "file:///media/informe%FF%FE",
-    "label": "//4=",
     "fs_type": "nfs4",
     "kind": "network",
+    "label": "//4=",
+    "mount": "file:///media/informe%FF%FE",
     "read_only": true
-  },
-  "compare_rows_batch": {
-    "task_id": 7,
-    "rows": [
-      {
-        "id": 1,
-        "left": {
-          "path": "file:///home/user/origen/informe%FF%FE.dat",
-          "kind": "file",
-          "size": 1234,
-          "mtime_ms": 1720000000000
-        },
-        "verdict": "only_left",
-        "criterion": "presence",
-        "confidence": "certain"
-      }
-    ]
-  },
-  "compare_rows_batch_empty": {
-    "task_id": 7,
-    "rows": []
-  },
-  "fs_compare_params": {
-    "left": "file:///home/user/fotos-a%FF%FE",
-    "right": "sftp://nas/fotos-a%FF%FE",
-    "criteria": {
-      "size": true,
-      "mtime": true,
-      "hash": true
-    },
-    "max_depth": 3,
-    "mtime_tolerance_ms": 0,
-    "follow_symlinks": false,
-    "descend_orphans": "left"
-  },
-  "fs_compare_params_minimo": {
-    "left": "file:///home/user/origen",
-    "right": "file:///home/user/copia",
-    "criteria": {
-      "size": true,
-      "mtime": true,
-      "hash": false
-    },
-    "mtime_tolerance_ms": 2000,
-    "follow_symlinks": false
-  },
-  "sync_plan_params_minimo": {
-    "source": "file:///home/user/origen",
-    "dest": "file:///home/user/copia",
-    "mode": "update",
-    "compare": {
-      "criteria": {
-        "size": true,
-        "mtime": true,
-        "hash": false
-      },
-      "mtime_tolerance_ms": 2000,
-      "follow_symlinks": false
-    },
-    "on_unknown": "copy"
-  },
-  "sync_plan_params": {
-    "source": "file:///home/user/fotos-a%FF%FE",
-    "dest": "sftp://nas/fotos-a%FF%FE",
-    "mode": "mirror",
-    "compare": {
-      "criteria": {
-        "size": true,
-        "mtime": true,
-        "hash": true
-      },
-      "max_depth": 3,
-      "mtime_tolerance_ms": 0,
-      "follow_symlinks": false
-    },
-    "on_unknown": "skip",
-    "include": [
-      "informe%FF%FE.dat",
-      "sub/fotos"
-    ]
-  },
-  "sync_steps_batch": {
-    "task_id": 7,
-    "steps": [
-      {
-        "id": 1,
-        "kind": "copy",
-        "rel": "informe%FF%FE.dat",
-        "size": 1234,
-        "criterion": "presence",
-        "confidence": "certain",
-        "reversal": "delete"
-      }
-    ]
-  },
-  "sync_steps_batch_empty": {
-    "task_id": 7,
-    "steps": []
-  },
-  "sync_plan_done": {
-    "task_id": 7,
-    "plan_hash": "1111111111111111111111111111111111111111111111111111111111111111",
-    "counts": {
-      "create_dir": 2,
-      "copy": 40,
-      "overwrite": 3,
-      "delete_tree": 1,
-      "skip": 2,
-      "unknown_kind": 2,
-      "irreversible": 1,
-      "bytes": 4096,
-      "unmeasured_steps": 7
-    },
-    "blockers": [],
-    "blockers_total": 0,
-    "executable": true,
-    "dest_trash": "restorable"
-  },
-  "sync_plan_done_blocked": {
-    "task_id": 8,
-    "plan_hash": "2222222222222222222222222222222222222222222222222222222222222222",
-    "counts": {
-      "create_dir": 0,
-      "copy": 1,
-      "overwrite": 0,
-      "delete_tree": 0,
-      "skip": 0,
-      "unknown_kind": 0,
-      "irreversible": 0,
-      "bytes": 10,
-      "unmeasured_steps": 0
-    },
-    "blockers": [
-      {
-        "rel": "LEEME%FF.txt",
-        "kind": "ambiguous_dest",
-        "side": "right"
-      }
-    ],
-    "blockers_total": 300,
-    "executable": false,
-    "dest_trash": "absent"
-  },
-  "sync_plan_done_opaque": {
-    "task_id": 9,
-    "plan_hash": "3333333333333333333333333333333333333333333333333333333333333333",
-    "counts": {
-      "create_dir": 0,
-      "copy": 1,
-      "overwrite": 1,
-      "delete_tree": 0,
-      "skip": 0,
-      "unknown_kind": 0,
-      "irreversible": 2,
-      "bytes": 20,
-      "unmeasured_steps": 0
-    },
-    "blockers": [],
-    "blockers_total": 0,
-    "executable": true,
-    "dest_trash": "opaque"
-  },
-  "sync_apply_params": {
-    "plan_hash": "1111111111111111111111111111111111111111111111111111111111111111"
-  },
-  "sync_report_params": {
-    "task_id": 9
-  },
-  "sync_report_result": {
-    "done": 40,
-    "failed": 5,
-    "skipped": 2,
-    "bytes": 4096,
-    "failures": [
-      {
-        "rel": "a.txt",
-        "cause": "conflict",
-        "kind": "overwrite"
-      },
-      {
-        "rel": "b%FF.txt",
-        "cause": "denied",
-        "kind": "delete_tree"
-      },
-      {
-        "rel": "sub/c.txt",
-        "cause": "io",
-        "kind": "copy"
-      },
-      {
-        "rel": "sub",
-        "cause": "denied",
-        "kind": "create_dir"
-      },
-      {
-        "rel": "NOTAS/informe.txt",
-        "dest_rel": "notas/informe.txt",
-        "cause": "illegal_name",
-        "kind": "copy"
-      }
-    ],
-    "batch_id": 12,
-    "dest_trash": "restorable"
-  },
-  "sync_report_result_clean": {
-    "done": 3,
-    "failed": 0,
-    "skipped": 0,
-    "bytes": 4096,
-    "failures": [],
-    "batch_id": 12,
-    "dest_trash": "absent"
-  },
-  "sync_report_result_died": {
-    "done": 0,
-    "failed": 1,
-    "skipped": 0,
-    "bytes": 0,
-    "failures": [
-      {
-        "rel": "a.txt",
-        "cause": "denied",
-        "kind": "copy"
-      }
-    ],
-    "dest_trash": "opaque"
   }
 }

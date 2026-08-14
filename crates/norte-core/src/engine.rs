@@ -150,6 +150,74 @@ pub struct Engine {
     sync_reports: std::sync::Mutex<std::collections::VecDeque<SyncReportEntry>>,
 }
 
+/// La puerta de policy, capturable (#171).
+///
+/// Existe para que el cuerpo de una Task pueda preguntar por SU cuenta, sin
+/// `&self`: es lo que separa «gatear todo antes de empezar» de «gatear cada
+/// unidad cuando le toca». Ver [`Engine::policy_checker`].
+#[derive(Clone)]
+struct PolicyChecker {
+    policy: Arc<dyn crate::policy::PolicyGate>,
+    approvals: Arc<dyn crate::approval::ApprovalResolver>,
+}
+
+impl PolicyChecker {
+    /// La mitad de policy de [`Self::gate`].
+    async fn check(
+        &self,
+        actor: &crate::journal::Actor,
+        op: crate::policy::PolicyOp,
+        paths: &[&VPath],
+    ) -> Result<(), Error> {
+        use crate::policy::{Decision, DenyReason};
+        let denied = |reason: DenyReason| Error::PolicyDenied {
+            rule: reason.rule_id().to_owned(),
+        };
+        match self.policy.evaluate(actor, op, paths) {
+            Decision::Allow => Ok(()),
+            Decision::Deny(reason) => {
+                tracing::info!(?reason, op = op.kind(), "policy denegó la operación");
+                Err(denied(reason))
+            }
+            Decision::Ask => {
+                let req = crate::approval::ApprovalRequest {
+                    actor: actor.clone(),
+                    op,
+                    // Redactadas como los spans (regla 10): son SOLO display
+                    // para el frontend que aprueba, jamás se reparsean.
+                    //
+                    // Y ACOTADAS. La DECISIÓN se toma sobre `paths` entero
+                    // (arriba, `policy.evaluate`); lo que se recorta es lo que
+                    // se le enseña al humano. Desde el rename por lotes un solo
+                    // gate puede traer miles de rutas, y esta lista se difunde a
+                    // cada conexión humana y se retiene durante el TTL: sin
+                    // tope, un agente bajo una regla `ask` convierte cada
+                    // petición en megabytes de notificación y expulsa a los
+                    // suscriptores lentos por outbox lleno. Ningún frontend
+                    // pinta tantas rutas de todos modos.
+                    paths: paths
+                        .iter()
+                        .take(APPROVAL_PATHS_SHOWN)
+                        .map(|p| span_path(p))
+                        .collect(),
+                    // Y el TOTAL viaja con ellas. Recortar la lista es
+                    // necesario; recortarla EN SILENCIO convertiría el modal en
+                    // una mentira — el humano aprobaría 32 rutas inocentes sin
+                    // saber que la decisión cubría ocho mil.
+                    paths_total: paths.len() as u64,
+                };
+                match self.approvals.request(req).await {
+                    crate::approval::ApprovalOutcome::Approved => Ok(()),
+                    crate::approval::ApprovalOutcome::Denied
+                    | crate::approval::ApprovalOutcome::TimedOut => {
+                        Err(denied(DenyReason::NotApproved))
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl Engine {
     /// Engine con el observador no-op (el journal llega en M3).
     #[must_use]
@@ -484,58 +552,26 @@ impl Engine {
         }
     }
 
-    /// La mitad de policy de [`Self::gate`].
     async fn policy_gate(
         &self,
         actor: &crate::journal::Actor,
         op: crate::policy::PolicyOp,
         paths: &[&VPath],
     ) -> Result<(), Error> {
-        use crate::policy::{Decision, DenyReason};
-        let denied = |reason: DenyReason| Error::PolicyDenied {
-            rule: reason.rule_id().to_owned(),
-        };
-        match self.policy.evaluate(actor, op, paths) {
-            Decision::Allow => Ok(()),
-            Decision::Deny(reason) => {
-                tracing::info!(?reason, op = op.kind(), "policy denegó la operación");
-                Err(denied(reason))
-            }
-            Decision::Ask => {
-                let req = crate::approval::ApprovalRequest {
-                    actor: actor.clone(),
-                    op,
-                    // Redactadas como los spans (regla 10): son SOLO display
-                    // para el frontend que aprueba, jamás se reparsean.
-                    //
-                    // Y ACOTADAS. La DECISIÓN se toma sobre `paths` entero
-                    // (arriba, `policy.evaluate`); lo que se recorta es lo que
-                    // se le enseña al humano. Desde el rename por lotes un solo
-                    // gate puede traer miles de rutas, y esta lista se difunde a
-                    // cada conexión humana y se retiene durante el TTL: sin
-                    // tope, un agente bajo una regla `ask` convierte cada
-                    // petición en megabytes de notificación y expulsa a los
-                    // suscriptores lentos por outbox lleno. Ningún frontend
-                    // pinta tantas rutas de todos modos.
-                    paths: paths
-                        .iter()
-                        .take(APPROVAL_PATHS_SHOWN)
-                        .map(|p| span_path(p))
-                        .collect(),
-                    // Y el TOTAL viaja con ellas. Recortar la lista es
-                    // necesario; recortarla EN SILENCIO convertiría el modal en
-                    // una mentira — el humano aprobaría 32 rutas inocentes sin
-                    // saber que la decisión cubría ocho mil.
-                    paths_total: paths.len() as u64,
-                };
-                match self.approvals.request(req).await {
-                    crate::approval::ApprovalOutcome::Approved => Ok(()),
-                    crate::approval::ApprovalOutcome::Denied
-                    | crate::approval::ApprovalOutcome::TimedOut => {
-                        Err(denied(DenyReason::NotApproved))
-                    }
-                }
-            }
+        self.policy_checker().check(actor, op, paths).await
+    }
+
+    /// La puerta de policy SIN `&self`: dos `Arc` que sí caben dentro del
+    /// cuerpo `'static` de una Task (#171).
+    ///
+    /// Preguntarle a la policy DESDE DENTRO de la Task —que es lo que hace el
+    /// ejecutor hacia delante y lo que el undo no hacía— exige poder capturar
+    /// la puerta. Es lo mismo que `sync::exec::SyncTargets` ya se lleva para
+    /// consultar paso a paso.
+    fn policy_checker(&self) -> PolicyChecker {
+        PolicyChecker {
+            policy: Arc::clone(&self.policy),
+            approvals: Arc::clone(&self.approvals),
         }
     }
 
@@ -2569,33 +2605,31 @@ impl Engine {
         // el lote completo, igual que en la ida.
         let units = crate::undo::undo_units(entries);
 
-        // Planning: gatea cada reversa por policy y resuelve su provider ANTES de
-        // spawnear (el cuerpo de la Task es 'static y no puede tener `&self`).
-        // Gate → provider (para no conectar a schemes del journal sin policy).
+        // Planning: SOLO resuelve el provider de cada unidad, que es lo único
+        // que necesita `&self` (el cuerpo de la Task es `'static`). El gate se
+        // pregunta DENTRO, unidad a unidad — #171.
+        //
+        // Lo que esto quita del hilo del llamante es lo que crecía sin tope:
+        // `undo_gate_targets` parsea hasta `unit.len() * 2` `VPath`s, y una
+        // unidad de sincronización tiene un paso por entrada. Con un `Mirror`
+        // de medio millón, `policy.undo_session` se pasaba medio millón de
+        // parseos antes de devolver un `task_id`, sin progreso y sin poder
+        // cancelarse. Ahora devuelve el id de inmediato y el trabajo va dentro,
+        // con el token en el bucle (regla dura 3).
+        //
+        // El ANCLA sí se parsea aquí, pero es UNA ruta por unidad y no dos por
+        // entrada: es lo que dice a qué provider preguntar.
         let mut plan: Vec<(Vec<crate::journal::JournalEntry>, Arc<dyn Provider>)> =
             Vec::with_capacity(units.len());
         for unit in units {
-            let Some(targets) = undo_gate_targets(&unit)? else {
+            let Some(first) = unit.first() else {
                 continue; // imposible: `undo_units` no produce unidades vacías.
             };
-            let Some(first) = unit.first() else { continue };
-            // TODAS las puertas antes de tocar nada: una unidad denegada por
-            // cualquiera de sus clases no se aplica ni a medias.
-            let mut denied = None;
-            for (undo_op, paths) in &targets.gates {
-                let gate_paths: Vec<&VPath> = paths.iter().collect();
-                if let Err(err) = self.gate(&executor, *undo_op, &gate_paths).await {
-                    denied = Some(err);
-                    break;
-                }
-            }
-            if let Some(err) = denied {
-                report.lock().expect("undo report lock").blocked = Some((first.seq, err));
-                break; // estricto: para al primer bloqueo de policy (LIFO).
-            }
-            let provider = self.provider_for(&targets.anchor).await?;
+            let anchor = wire_engine(&first.path)?;
+            let provider = self.provider_for(&anchor).await?;
             plan.push((unit, provider));
         }
+        let checker = self.policy_checker();
 
         let report_task = Arc::clone(&report);
         let key = "undo".to_owned();
@@ -2614,6 +2648,33 @@ impl Engine {
                     for (unit, provider) in plan {
                         if ctx.cancel.is_cancelled() {
                             return Err(Error::Cancelled);
+                        }
+                        // La puerta, AQUÍ y por unidad (#171). Dos cosas
+                        // cambian respecto a preguntarla toda por adelantado:
+                        // el trabajo de parsear va dentro de la Task, y el
+                        // veredicto es el de AHORA — un scope que vence a
+                        // mitad lo ve esta unidad, no una foto de hace media
+                        // hora.
+                        //
+                        // Y una denegación NO mata el undo: bloquea SU unidad,
+                        // deja fila en el informe y sigue. Es la misma
+                        // decisión que el ejecutor hacia delante tomó en la
+                        // tarea 9 —`Deny` y `Ask` son fila, no modal— y por el
+                        // mismo motivo: un plan de medio millón de pasos no se
+                        // puede parar en seco por uno. `blocked` sigue
+                        // significando lo que significaba: el LIFO paró por
+                        // DRIFT, y el árbol quedó consistente.
+                        let denegada = undo_unit_denial(&checker, &ctx.actor, &unit).await;
+                        if let Some(err) = denegada {
+                            if let Some(first) = unit.first() {
+                                let mut r = report_task.lock().expect("undo report lock");
+                                r.denied_total = r.denied_total.saturating_add(1);
+                                if r.denied.len() < crate::undo::UNDO_MAX_DENIED_REPORTED {
+                                    r.denied.push((first.seq, err));
+                                }
+                            }
+                            ctx.progress.update(|p| p.entries_done += 1);
+                            continue;
                         }
                         // `undone` sí cuenta ENTRADAS: es lo que la unidad
                         // deshizo del journal, y un lote deshace las suyas.
@@ -3157,9 +3218,9 @@ fn undo_gate_targets(unit: &[crate::journal::JournalEntry]) -> Result<Option<Und
             _ => deletes.push(path),
         }
     }
-    let Some(anchor) = anchor else {
+    if anchor.is_none() {
         return Ok(None);
-    };
+    }
     let mut gates: Vec<(crate::policy::PolicyOp, Vec<VPath>)> = Vec::with_capacity(2);
     if !deletes.is_empty() {
         gates.push((
@@ -3172,21 +3233,51 @@ fn undo_gate_targets(unit: &[crate::journal::JournalEntry]) -> Result<Option<Und
     if !moves.is_empty() {
         gates.push((crate::policy::PolicyOp::Move, moves));
     }
-    Ok(Some(UndoGates { anchor, gates }))
+    Ok(Some(UndoGates { gates }))
+}
+
+/// Pregunta a la policy por UNA unidad del undo, y devuelve el motivo si la
+/// deniega (#171).
+///
+/// Corre DENTRO de la Task: aquí es donde se paga el parseo de hasta
+/// `unit.len() * 2` `VPath`s, que es lo que antes se hacía entero en el hilo
+/// de quien llamaba, antes de que existiera la Task y sin nada que pudiera
+/// cancelarlo.
+///
+/// Una ruta del journal que no parsea cuenta como denegación de SU unidad y de
+/// nadie más: tumbar el undo entero por una fila rota le quitaría al humano
+/// las demás, que están bien.
+async fn undo_unit_denial(
+    checker: &PolicyChecker,
+    actor: &crate::journal::Actor,
+    unit: &[crate::journal::JournalEntry],
+) -> Option<Error> {
+    let targets = match undo_gate_targets(unit) {
+        Ok(Some(targets)) => targets,
+        Ok(None) => return None,
+        Err(e) => return Some(e),
+    };
+    for (undo_op, paths) in &targets.gates {
+        let gate_paths: Vec<&VPath> = paths.iter().collect();
+        if let Err(err) = checker.check(actor, *undo_op, &gate_paths).await {
+            return Some(err);
+        }
+    }
+    None
 }
 
 /// Lo que la policy tiene que aprobar antes de deshacer una unidad, y dónde
 /// vive esa unidad.
 struct UndoGates {
-    /// Una ruta cualquiera de la unidad, para resolver el provider. Todas las
-    /// de una unidad viven en el mismo: lo comprueban `inverse_chain` para un
-    /// lote de renombrados y `one_provider` para uno de sincronización.
+    /// Las puertas, por clase de operación. Vacío = la unidad no actúa (todas
+    /// sus entradas son `irreversible`), y entonces no hay nada que preguntar.
     ///
-    /// Es la PRIMERA entrada, y no una de las que se gatean, precisamente
-    /// porque una unidad enteramente `irreversible` no gatea ninguna y aun así
-    /// necesita un provider con el que llegar a contarse como saltada.
-    anchor: VPath,
-    /// Las puertas, por clase de operación. Vacío = la unidad no actúa.
+    /// El provider ya NO sale de aquí: lo resuelve quien planifica, desde la
+    /// primera entrada de la unidad (#171). Todas las rutas de una unidad
+    /// viven en el mismo provider — lo comprueban `inverse_chain` para un lote
+    /// de renombrados y `one_provider` para uno de sincronización — y la
+    /// primera entrada sirve aunque la unidad entera sea `irreversible` y no
+    /// gatee ninguna ruta.
     gates: Vec<(crate::policy::PolicyOp, Vec<VPath>)>,
 }
 

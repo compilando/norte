@@ -367,15 +367,18 @@ async fn undo_de_sesion_de_agente_ejecutado_por_humano() {
         .await
         .expect("seed");
 
-    // Sanity: el agente sin scope NO puede deshacerse a sí mismo (bloqueado
-    // por policy antes de tocar nada).
+    // Sanity: el agente sin scope NO puede deshacerse a sí mismo. Desde #171
+    // eso es una fila de `denied` y no un `blocked` —la policy se pregunta
+    // unidad a unidad, dentro de la Task— pero el efecto sobre el árbol es el
+    // mismo: no se toca nada.
     let (h, report) = engine
         .undo_session(agent.clone())
         .await
         .expect("submit self-undo");
     let _ = h.join().await;
     let r = report.lock().expect("lock").clone();
-    assert!(r.blocked.is_some(), "out-of-scope bloquea el self-undo");
+    assert_eq!(r.denied_total, 1, "out-of-scope deniega el self-undo");
+    assert!(r.blocked.is_none(), "y no es un bloqueo por drift");
     assert_eq!(r.undone, 0);
     assert!(mem.stat(&vp("mem:///agent_made.txt")).await.is_ok());
 

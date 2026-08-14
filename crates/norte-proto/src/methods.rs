@@ -5220,7 +5220,37 @@ pub struct PolicyUndoReportResult {
     /// encontrará y se bloqueará ahí. Es la única señal de eso.
     #[serde(default)]
     pub compensations_lost: u64,
+    /// **Unidades que la POLICY denegó y el undo saltó** (0.43.0, #171).
+    ///
+    /// No es [`Self::blocked`], y leerlas como lo mismo sería leer el informe
+    /// al revés: `blocked` dice «paré aquí, el árbol quedó consistente», y
+    /// esto dice «esta unidad no se tocó y el undo siguió con las demás». Cada
+    /// fila lleva el `seq` de la primera entrada de su unidad y el motivo, con
+    /// la misma forma que un bloqueo porque la pregunta del lector es la misma:
+    /// qué no volvió y por qué.
+    ///
+    /// El undo pregunta a la policy unidad a unidad y DENTRO de la Task
+    /// (antes lo hacía todo por adelantado, en el hilo de quien llamaba), así
+    /// que un scope que vence a mitad lo ve la unidad que le toca. Es la misma
+    /// regla que el ejecutor hacia delante: `Deny` es una fila de informe, no
+    /// un modal por paso.
+    ///
+    /// Recortada a [`UNDO_MAX_DENIED_REPORTED`];
+    /// [`Self::denied_total`] las cuenta todas.
+    #[serde(default)]
+    pub denied: Vec<UndoBlocked>,
+    /// Cuántas unidades denegó la policy, recortadas o no (0.43.0, #171).
+    #[serde(default)]
+    pub denied_total: u64,
 }
+
+/// Tope de filas de [`PolicyUndoReportResult::denied`] que el informe LISTA
+/// (0.43.0, #171); `denied_total` las cuenta todas.
+///
+/// Mismo criterio que los topes de `sync`: una lista sin tope viaja por el
+/// wire y se queda en memoria del cliente, y bajo una policy que deniegue por
+/// defecto habría una fila por unidad de la sesión.
+pub const UNDO_MAX_DENIED_REPORTED: usize = 256;
 
 /// Un bloqueo del undo: dónde y por qué (elemento de
 /// [`PolicyUndoReportResult::blocked`]).
