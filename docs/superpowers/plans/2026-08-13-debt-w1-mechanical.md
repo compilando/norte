@@ -69,14 +69,31 @@
   **Use a private index. Do not touch the shared one at all:**
 
   ```sh
-  export GIT_INDEX_FILE=$(mktemp -d)/index      # yours alone, for the session
-  git read-tree HEAD
-  git add crates/mine/src/thing.rs
-  git diff --cached --stat                       # LOOK at it
-  TREE=$(git write-tree)
-  COMMIT=$(git commit-tree "$TREE" -p HEAD -m "$MSG")
-  git update-ref --create-reflog refs/heads/<branch> "$COMMIT" "$(git rev-parse HEAD)"
+  # `env` per command, NOT `export`: the user's shell here is fish, where
+  # `export VAR=value` is not syntax at all. Verified the hard way in W3 — the
+  # exported form silently staged into the SHARED index instead.
+  IDX=$(mktemp -d)/index
+  env GIT_INDEX_FILE=$IDX git read-tree HEAD
+  env GIT_INDEX_FILE=$IDX git add crates/mine/src/thing.rs
+  env GIT_INDEX_FILE=$IDX git diff --cached --stat   # LOOK at it — empty means
+                                                     # you staged nothing
+  TREE=$(env GIT_INDEX_FILE=$IDX git write-tree)
+  OLD=$(git rev-parse HEAD)
+  COMMIT=$(git commit-tree "$TREE" -p "$OLD" -m "$MSG")
+  git update-ref --create-reflog refs/heads/<branch> "$COMMIT" "$OLD"
   ```
+
+  **Read that `--cached --stat` before committing.** An empty stat means an
+  empty commit, and `commit-tree` will happily make one: W3 produced a commit
+  whose message claimed to close an issue and described work it did not
+  contain, on top of another agent's commit that had already done it. It was
+  dropped with `git rebase --onto`, but nothing warned.
+
+  **A stale shared index is a loaded reversal.** W3 also found the shared index
+  holding a tree BEHIND `HEAD` — `git diff --cached` showed −307/+22 against two
+  commits that had just landed — so any plain `git commit` would have partly
+  reverted them. `git reset` (mixed, no paths) disarms it and never touches the
+  working tree. Check it whenever two agents have been committing.
 
   The `update-ref` with an expected old value is a compare-and-swap: if the
   other agent committed in between, it FAILS instead of clobbering, and you

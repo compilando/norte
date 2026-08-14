@@ -74,3 +74,47 @@ the obvious code for anyone listing blockers reproduces #152 verbatim against
 three destination paths.
 
 **Close:** `just ci-fast`, then `just ci` once.
+
+## What W3 actually closed, and what it did not
+
+Merged with the gate green: `lint`, 4266 tests, `docs`, `gui-ci`, `cov`.
+
+**Closed:** #151 (the fold key unified into `norte-encoding` per ADR 0051),
+#154 (a stray byte no longer disables NFC and folding for the whole name),
+#189 (a blocker states its anchor and side, and `blocker_anchor` becomes the
+third member of the `anchor_of`/`render_failure` family), #192 (two spellings
+that paint the same say so), #193 (the root path reads as "the whole tree").
+
+**Left open on purpose, both for the same missing capability:**
+
+- **#153.** The plumbing landed — `compare()` takes `Sides` from its caller —
+  but `Provider::capabilities()` still takes no path, so two mounts behind one
+  `LocalProvider` still get one answer. **The decision that scoped this was
+  wrong.** Passing the parameter moves WHERE the answer is supplied without
+  giving anyone a way to COMPUTE a per-mount one.
+- **#145.** `FoldMode::Full` exists and is tested, but nothing selects it.
+
+Both need a per-path capability query, which is exactly the trait-shaped
+question #164 asks in W5. They go there, and the ADR covers all three.
+
+**#154's fix is narrower than the obvious one, deliberately.** It folds the
+leading valid run and passes everything from the first invalid byte through
+raw, rather than folding every valid run between invalid bytes — the general
+version reopens the Shift-JIS trail-byte hazard #129 closed, because a DBCS
+trail byte can look like a lone foldable ASCII letter once its lead byte fails
+to decode.
+
+## What the wave cost, and the two process failures
+
+Two agents, ~80 and ~49 minutes. The second spent most of its life **waiting on
+a monitor that does not exist**, and then on a cross-agent blocker that had
+already cleared. CLAUDE.md forbids idling and names `sleep` and `tail -f`;
+waiting on an imaginary signal is the same waste with no command to grep for.
+Dispatch prompts should say it: *nothing will notify you, drive your own work
+to completion.*
+
+The other failure was the controller's. Believing that agent had not committed,
+it committed the same work again — and `commit-tree` made an **empty commit**
+whose message claimed to close #192 and described work it did not contain. The
+`--cached --stat` that would have caught it was printed and not read. Dropped
+with `git rebase --onto`; the rule above now says to read that output.
