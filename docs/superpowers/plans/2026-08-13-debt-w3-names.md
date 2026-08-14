@@ -3,10 +3,17 @@
 **Tier T1/T2.** Correctness of the folding and pairing rules, plus the
 deferred review items of the semantic index.
 
-**Rules:** as [W1](2026-08-13-debt-w1-mechanical.md), with two changes.
-**One `encoding-auditor` over the whole branch diff at the close**, not one per
-task — this is the wave it exists for. Model: the largest, for #153 and #154;
-mid-tier for the rest.
+**Rules:** as [W1](2026-08-13-debt-w1-mechanical.md), including the private git
+index and the "each agent dispatches its own `rust-reviewer`" rule.
+
+**Plus one `encoding-auditor` over the whole branch diff at the close** — this
+wave keeps its controller pass, and it is one of the two that earns it: the
+folding rules are exactly the kind of thing where each task is right on its own
+and the branch is wrong anyway, and W0's audit of that surface found four MAJORs
+no per-task review would have seen.
+
+Model: the largest for #153 and #154; mid-tier for the rest; cheap for the
+per-agent reviews.
 
 **Branch:** `debt/w3-names`
 

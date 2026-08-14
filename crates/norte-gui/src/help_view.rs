@@ -13,7 +13,7 @@ use std::collections::{BTreeSet, HashMap};
 use norte_frontend::availability::Facts;
 use norte_frontend::keymap::{Effective, Screen, paint_chord};
 use norte_frontend::keysheet::{self, SheetRow};
-use norte_help::{Availability, ChordResolver};
+use norte_help::{Availability, ChordResolver, Reason};
 
 use crate::help_render;
 
@@ -178,6 +178,31 @@ impl GuiChords {
     }
 }
 
+/// Whether this frontend dispatches `command` at all, independent of whether
+/// it can run RIGHT NOW.
+///
+/// #184: the identity question — "does `NorteGui::run_command` have an arm
+/// for this?" — has to be answered BEFORE the state question the shared
+/// `norte_frontend::availability` table answers, because that table is
+/// fail-OPEN for ids it does not know (see [`GuiChords::availability`]'s
+/// rustdoc). `COMMANDS`/`VIEWER_COMMANDS` are the two catalogues this GUI
+/// actually implements — the same ones `crate::keymap::Effective` filters the
+/// keyboard and palette against — so an id in neither is one the help
+/// overlay must refuse before it reaches `run_command`'s catch-all.
+///
+/// `plugin:`/`lua:`-prefixed ids are let through unchecked: neither catalogue
+/// can ever list them. A plugin's registry is populated at runtime from
+/// `plugin.list` (ADR 0043 decision 2 — no static list is possible), and this
+/// GUI has no Lua host to consult (`rust-reviewer` MAJOR-2 on
+/// `crate::main::run_command`) — a `lua:` id is always `NotHere` there, never
+/// a dispatch this function needs to prevent.
+fn dispatchable(command: &str) -> bool {
+    crate::keymap::COMMANDS.contains(&command)
+        || crate::keymap::VIEWER_COMMANDS.contains(&command)
+        || command.starts_with(PLUGIN_KEY_PREFIX)
+        || command.starts_with("lua:")
+}
+
 impl ChordResolver for GuiChords {
     /// The command's chord in the screen it belongs to, masked — see the chord
     /// map for why it is filled the way it is, and
@@ -254,13 +279,48 @@ impl ChordResolver for GuiChords {
     /// Whether the command can run in the context the overlay was opened in,
     /// answered by the ONE shared table
     /// (`norte_frontend::availability::verdict_with_plugins`) so a dimmed help
-    /// row and a greyed-out context-menu entry can never disagree.
+    /// row and a greyed-out context-menu entry can never disagree — but only
+    /// AFTER [`dispatchable`] confirms this frontend answers to the id at all.
     ///
-    /// Routed through `verdict_with_plugins` and never through plain `verdict`:
-    /// the latter answers a `plugin:` key through its fail-OPEN wildcard,
-    /// lighting every such row unconditionally, and a plugin's own page lists
-    /// exactly those rows.
+    /// #184: the shared table is documented fail-OPEN for any id it has no
+    /// arm for ("an id with no arm here is `Available`") — right for the
+    /// table, which cannot know the whole vocabulary of every frontend and
+    /// every plugin, but wrong here. The keyboard/palette path
+    /// (`crate::keymap::Effective`, built from `COMMANDS`/`VIEWER_COMMANDS`)
+    /// already tags a preset binding to a command this GUI does not implement
+    /// as `NotHere` before it ever reaches the shared table; this resolver
+    /// used to skip that gate entirely, so a help-corpus id with no
+    /// `COMMANDS` entry (or a `dialog.*` verb, which this GUI answers with
+    /// fixed keys per open modal rather than through `run_command`) sailed
+    /// through as `Available`. `activate` then dispatched it, landing on
+    /// `NorteGui::run_command`'s catch-all arm, whose `debug_assert!` expects
+    /// every unrecognised id to start with `lua:` — a panic in a debug build,
+    /// a silent no-op behind a false "unavailable" flash in release.
+    ///
+    /// Routed through `verdict_with_plugins` and never through plain `verdict`
+    /// for whatever passes [`dispatchable`]: the latter answers a `plugin:`
+    /// key through its fail-OPEN wildcard, lighting every such row
+    /// unconditionally, and a plugin's own page lists exactly those rows.
     fn availability(&self, command: &str) -> Availability {
+        if !dispatchable(command) {
+            return Availability::Unavailable {
+                // El `dialog.*` NO es «el backend no lo soporta» (revisión de
+                // rama de W2, MAJOR-1). Esas seis teclas las contesta el
+                // overlay abierto con teclas fijas, sin despachar ningún id,
+                // así que no están fuera de `COMMANDS` por falta de soporte
+                // sino porque la pregunta va a la tabla equivocada. Con
+                // `Unsupported`, la página «Responder un diálogo» —cuyo cuerpo
+                // dice que todo overlay, ESTA AYUDA INCLUIDA, habla los mismos
+                // seis verbos— pintaba sus seis filas apagadas con una frase
+                // sobre el backend, mientras el overlay que el lector tenía
+                // delante las estaba contestando.
+                reason: if command.starts_with("dialog.") {
+                    Reason::AnsweredByTheOverlay
+                } else {
+                    Reason::Unsupported
+                },
+            };
+        }
         norte_frontend::availability::verdict_with_plugins(
             command,
             &self.facts,
@@ -1353,6 +1413,50 @@ mod tests {
                 );
             }
             other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    /// #184: [`enter_sobre_una_fila_ejecutable_despacha_el_mismo_id_que_la_paleta`]
+    /// only ever checked ONE topic's first row (`copying`). This is the sweep
+    /// the reviewer asked for, over every `Action::Run` id ANY corpus topic
+    /// declares, both languages — the generalized version of that test.
+    ///
+    /// Two directions, not one, because the `dialog.*` family is a REAL split
+    /// the issue itself flagged as needing verification: `dialogs.md` lists
+    /// `dialog.confirm` and friends in its own `commands = [...]`, so they DO
+    /// become `Action::Run` rows on that topic's page (`rebuild_actions` maps
+    /// every declared command, unconditionally) — but this GUI answers a
+    /// dialog verb with a FIXED key inside whichever modal is actually open,
+    /// never through `run_command`, so they correctly stay `Unsupported` and
+    /// must NOT be asserted dispatchable. What every id must satisfy instead:
+    ///
+    /// - `Available` implies [`dispatchable`] — the direction that actually
+    ///   guards #184. A row the resolver lights up green has to be a command
+    ///   `run_command` has an arm for, or it is the exact bug this issue is
+    ///   about: a click reaching the catch-all `debug_assert`.
+    /// - [`dispatchable`] implies `Available` — under `NO_IMPEDIMENT` (via
+    ///   [`chords`], no plugin snapshot) every arm in
+    ///   `norte_frontend::availability::verdict` gates on a `Facts` field
+    ///   that is permissive here, so a command this GUI actually implements
+    ///   should never sit dimmed on a page where nothing is in its way.
+    #[test]
+    fn cada_id_de_topico_casa_con_dispatchable_en_ambas_direcciones() {
+        let c = chords();
+        for lang in [norte_help::Lang::En, norte_help::Lang::Es] {
+            for topic in norte_help::topics(lang) {
+                for cmd in &topic.commands {
+                    let known = dispatchable(cmd);
+                    let available = c.availability(cmd).is_available();
+                    assert_eq!(
+                        available, known,
+                        "[{lang:?}] topic {:?}: {cmd:?} — available={available} \
+                         dispatchable={known}. Available-but-not-dispatchable reaches \
+                         run_command's catch-all; dispatchable-but-dimmed means the \
+                         resolver and COMMANDS/VIEWER_COMMANDS have drifted apart",
+                        topic.id
+                    );
+                }
+            }
         }
     }
 

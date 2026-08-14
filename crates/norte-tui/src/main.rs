@@ -300,6 +300,45 @@ fn spawn_stat_probe(backend: &Backend, paths: Vec<(usize, VPath)>) -> StatProbe 
     StatProbe { rx }
 }
 
+/// Sonda de stat de la fila seleccionada del panel de diferencias (#157).
+/// Molde de [`StatProbe`], reducido a lo que ese caso necesita: como mucho
+/// dos paths (los dos lados de una fila), así que no hace falta
+/// `STAT_BATCH_CONCURRENCY` ni un tope de tanda — la propia selección ya
+/// acota cuántos hay que pedir.
+struct CompareStatProbe {
+    rx: tokio::sync::oneshot::Receiver<Vec<(VPath, Option<Entry>)>>,
+}
+
+/// Lanza la sonda #157: un `stat` por path, con el mismo timeout que la del
+/// pane normal para no dejarla en vuelo para siempre contra un provider
+/// colgado. Un fallo (error o timeout) viaja como `(path, None)` en vez de
+/// perderse — a diferencia de [`spawn_stat_probe`], aquí SÍ hace falta saber
+/// qué se pidió y no llegó: es lo que `App::hydrate_compare_size` usa para
+/// marcarlo sondeado y no reintentarlo cada frame.
+fn spawn_compare_stat_probe(backend: &Backend, paths: Vec<VPath>) -> CompareStatProbe {
+    use futures::StreamExt as _;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let b = backend.clone();
+    tokio::spawn(async move {
+        let resultado: Vec<(VPath, Option<Entry>)> = futures::stream::iter(paths)
+            .map(|path| {
+                let b = b.clone();
+                async move {
+                    let entry = tokio::time::timeout(STAT_PROBE_TIMEOUT, b.stat(&path))
+                        .await
+                        .ok()
+                        .and_then(Result::ok);
+                    (path, entry)
+                }
+            })
+            .buffer_unordered(STAT_BATCH_CONCURRENCY)
+            .collect()
+            .await;
+        let _ = tx.send(resultado);
+    });
+    CompareStatProbe { rx }
+}
+
 /// Fetch de decoraciones de plugin EN VUELO (G3b, ADR 0037): el pane/dir
 /// destino y el canal one-shot. Molde de [`StatProbe`] — UNO POR PANE
 /// (#117-follow-up review MINOR-2: con un slot global, un cd en el pane B
@@ -2383,6 +2422,12 @@ async fn run(
     // selección).
     let mut stat_probe: Option<StatProbe> = None;
     let mut last_probed: Probed = Probed::new();
+    // Sonda de stat de la fila SELECCIONADA del panel de diferencias (#157):
+    // mismo molde que `stat_probe`, a lo sumo una en vuelo. El dedup vive en
+    // `App::compare_size_probed` y no en una variable local del run loop
+    // (a diferencia de `last_probed`) porque `App::compare_size_probe_targets`
+    // ya lo consulta para decidir qué falta por pedir.
+    let mut compare_stat_probe: Option<CompareStatProbe> = None;
     // Fetch de decoraciones de plugin en vuelo (G3b, ADR 0037): a lo sumo
     // uno, molde de `stat_probe`/`fill`.
     let mut decorate_fetch: [Option<DecorateFetch>; 2] = [None, None];
@@ -2565,6 +2610,13 @@ async fn run(
                 stat_probe = Some(spawn_stat_probe(backend, tanda));
             }
         }
+        // #157: la fila seleccionada del panel de diferencias, mismo trato.
+        if compare_stat_probe.is_none() {
+            let objetivos = app.compare_size_probe_targets();
+            if !objetivos.is_empty() {
+                compare_stat_probe = Some(spawn_compare_stat_probe(backend, objetivos));
+            }
+        }
         tokio::select! {
             _ = tick.tick() => {
                 // Mutación terminada → refresh de panes; el ritual completo
@@ -2671,6 +2723,23 @@ async fn run(
                 stat_probe = None;
                 for (pane, path, entry) in res.unwrap_or_default() {
                     app.panes[pane].hydrate(&path, entry.size, entry.mtime_ms);
+                }
+            }
+            res = async {
+                match &mut compare_stat_probe {
+                    Some(pr) => (&mut pr.rx).await.ok(),
+                    None => std::future::pending().await,
+                }
+            } => {
+                // Sonda de la fila seleccionada del panel de diferencias
+                // (#157): el slot se limpia SIEMPRE, igual que la de arriba.
+                // Un canal cerrado (`res` es `None`) no marca nada sondeado:
+                // la próxima vez que la selección lo vuelva a pedir se
+                // reintenta, en vez de dejar la fila huérfana para siempre
+                // porque la task que la pedía murió a medio camino.
+                compare_stat_probe = None;
+                for (path, entry) in res.unwrap_or_default() {
+                    app.hydrate_compare_size(path, entry.and_then(|e| e.size));
                 }
             }
             (slot, res) = async {
@@ -8683,6 +8752,11 @@ async fn launch_compare(
                 left_encoding,
                 right_encoding,
             ));
+            // #157: la caché de tamaños hidratados y su dedup son de ESTA
+            // comparación — una nueva empieza sin nada pedido, igual que
+            // `last_probed` se vacía con cada listado nuevo.
+            app.compare_size_hints.clear();
+            app.compare_size_probed.clear();
             if let Some(old) = compare_run.replace(CompareRun {
                 task,
                 rx,
@@ -9676,6 +9750,11 @@ fn resolve_opener(app: &mut App) {
             program,
             argv,
             detached: true,
+            // El del pane también aquí (#144): `xdg-open` se lo pasa al
+            // programa asociado, que puede ser el mismo editor que un opener
+            // declarado — heredar el cwd de norte por qué camino se llegó
+            // sería la misma sorpresa con otra puerta.
+            cwd: norte_vfs_local::vpath_to_native(app.focused().dir()).ok(),
         });
         return;
     };
@@ -9695,6 +9774,9 @@ fn resolve_opener(app: &mut App) {
         program,
         argv: opener.argv(&[&native], &dir),
         detached: false,
+        // El MISMO `dir` que alimenta `%d`: el hijo abre en el directorio que
+        // el lector está mirando (#144).
+        cwd: Some(dir),
     });
 }
 
@@ -9713,6 +9795,7 @@ async fn launch_opener(
         program,
         argv,
         detached,
+        cwd,
     } = pending;
     let prog = program.clone();
     let available =
@@ -9723,7 +9806,7 @@ async fn launch_opener(
         return ta("msg-open-missing-program", &[("program", &program)]);
     }
     if detached {
-        return match spawn_detached(argv).await {
+        return match spawn_detached(argv, cwd).await {
             Ok(()) => ta("msg-open-launched", &[("program", &program)]),
             Err(e) => ta(
                 "msg-open-failed",
@@ -9739,10 +9822,15 @@ async fn launch_opener(
         !argv.is_empty(),
         "el argv de un opener siempre trae el binario"
     );
-    // `cwd = None`: el `%d` de un opener declarado ya viaja DENTRO del argv,
-    // así que el hijo hereda el directorio de norte, exactamente como antes
-    // de S4.
-    match run_suspended(terminal, capture, argv, None, false).await {
+    // El directorio del pane como cwd (#144). El `%d` de un opener declarado
+    // ya viaja dentro del argv, así que esto no es para resolver rutas: es
+    // para que un editor guarde, y un `:e` navegue, donde el lector está
+    // mirando — lo que hacen los tres comandos de shell desde #135 y esto no.
+    //
+    // Decidido, no descubierto: el precio es que un opener que escriba una
+    // ruta RELATIVA pasa a escribirla en el directorio del pane. Se aceptó
+    // por ser la sorpresa menor de las dos.
+    match run_suspended(terminal, capture, argv, cwd, false).await {
         Ok(_) => ta("msg-open-launched", &[("program", &program)]),
         Err(e) => ta(
             "msg-open-failed",
@@ -9758,14 +9846,23 @@ async fn launch_opener(
 /// listado. El hijo se espera en segundo plano (regla 2: en `spawn_blocking`),
 /// que es lo que lo entierra: sin ese `wait` quedaría zombi hasta que muriese
 /// el propio norte.
-async fn spawn_detached(argv: Vec<std::ffi::OsString>) -> std::io::Result<()> {
+async fn spawn_detached(
+    argv: Vec<std::ffi::OsString>,
+    cwd: Option<std::path::PathBuf>,
+) -> std::io::Result<()> {
     debug_assert!(
         !argv.is_empty(),
         "el argv del lanzador del sistema siempre trae el binario"
     );
     let mut child = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&argv[0])
-            .args(&argv[1..])
+        let mut cmd = std::process::Command::new(&argv[0]);
+        // `current_dir` solo si hay: pasar el cwd heredado explícitamente no
+        // es lo mismo que no tocarlo, y aquí no hay nada mejor que heredar
+        // (#144).
+        if let Some(dir) = &cwd {
+            cmd.current_dir(dir);
+        }
+        cmd.args(&argv[1..])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -12532,6 +12629,44 @@ mod open_tests {
         let pending = app.pending_open.expect("F4 resuelve el opener declarado");
         assert_eq!(pending.program, "bat");
         assert!(!pending.detached);
+    }
+
+    /// #144: los DOS caminos de F4 llevan el directorio del pane como cwd.
+    ///
+    /// Los tres comandos de shell lo pasan desde #135 y los openers no, así
+    /// que un editor abierto sobre un fichero del pane guardaba en el cwd de
+    /// norte. Se dejó a propósito en la ola de shell —cambiarlo cambia
+    /// comportamiento, y un opener que escriba una ruta RELATIVA pasa a
+    /// escribirla en otro sitio— y se DECIDIÓ el 2026-08-14 pasarlo: la
+    /// sorpresa de guardar donde no miras es la mayor de las dos.
+    ///
+    /// Los dos caminos y no solo el declarado: `xdg-open` entrega el fichero
+    /// al programa asociado, que puede ser el mismo editor, y heredar el cwd
+    /// según por qué puerta se llegó sería la misma sorpresa con otra cara.
+    #[test]
+    fn los_dos_caminos_de_f4_abren_en_el_directorio_del_pane() {
+        for (nombre, config) in [
+            ("informe.pdf", None),
+            (
+                "notas.txt",
+                Some("[[opener]]\nmime = \"text/*\"\ncommand = [\"bat\", \"%f\"]\n"),
+            ),
+        ] {
+            let mut app = App::new(pane_con(nombre), pane_con("otro.txt"));
+            if let Some(c) = config {
+                app.openers =
+                    norte_frontend::openers::OpenersConfig::parse(c).expect("config de test");
+            }
+            let esperado = norte_vfs_local::vpath_to_native(app.focused().dir())
+                .expect("el pane de test es local");
+            resolve_opener(&mut app);
+            let pending = app.pending_open.expect("F4 resuelve algo");
+            assert_eq!(
+                pending.cwd.as_deref(),
+                Some(esperado.as_path()),
+                "{nombre}: el hijo abre donde el lector está mirando"
+            );
+        }
     }
 
     /// Un fichero remoto no tiene ruta nativa: ni opener declarado ni

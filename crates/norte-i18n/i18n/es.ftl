@@ -214,6 +214,7 @@ cli-sync-nothing-to-apply = todos los pasos son omisiones: no hay nada que aplic
 cli-sync-confirm = ¿Aplicar este plan? [s/N]
 cli-sync-abort = cancelado; no se aplicó nada
 cli-sync-done = aplicado: { $done } hechos, { $failed } fallidos, { $skipped } omitidos
+cli-sync-cancelled = cancelado — lo aplicado antes del corte se queda, journalizado; el resto no se aplicó
 # Un fallo son TRES campos en TRES líneas, jamás uno unido por `: ` y ` → `:
 # los dos joiners son imprimibles corrientes que el enmascarado de nombres deja
 # pasar, así que un nombre puede fabricar una fila entera en banda (corpus
@@ -662,6 +663,7 @@ gui-compare-hint = tab lado · 1-5 filtro · enter ir · esc cerrar
 compare-active-side = actuando sobre: { $side }
 compare-status-running = comparación: { $n } filas (comparando…)
 compare-status-done = comparación: { $n } filas
+compare-status-unknown = comparación: llegaron { $n } filas, y nada dijo si eran todas
 # El flujo de filas terminó con MENOS filas de las que contó la task: se perdió
 # un lote de notificación entre el daemon y aquí. Decir «hecho» sería mentir
 # sobre lo completo que está, y en una comparación eso es toda la respuesta.
@@ -770,6 +772,7 @@ sync-summary-unreadable = { $n } entradas no se pudieron leer: este plan no las 
 sync-summary-mismatch = llegaron { $received } pasos y el plan dice { $n }: este plan no se puede aprobar
 sync-summary-unnameable = { $n } pasos son de una clase que esta versión no sabe enseñar: este plan no se puede aprobar
 sync-summary-malformed = { $n } pasos se contradicen a sí mismos: este plan no se puede aprobar
+sync-summary-duplicate-ids = { $n } pasos repiten un id que ya usó uno anterior: este plan no se puede aprobar
 # Las clases cuadran y un número de los que el diálogo enseña primero, no.
 sync-summary-contradictory = las cuentas del propio plan no cuadran con los pasos que mandó: este plan no se puede aprobar
 # La selección no recorta los bloqueos, así que esto habla de la comparación
@@ -917,6 +920,7 @@ gui-menu-copied = { $n } ruta(s) copiada(s) al portapapeles
 # después de este catálogo (el enum es `#[non_exhaustive]`).
 reason-read-only = backend de solo lectura
 reason-wrong-target = no aplica a esta selección
+reason-answered-by-overlay = lo contesta el propio overlay abierto
 reason-unsupported = el backend no lo soporta
 reason-plugin-inactive = la extensión está desactivada o sin aprobar
 reason-policy-denied = la policy lo deniega

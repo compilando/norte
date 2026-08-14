@@ -1157,6 +1157,24 @@ pub enum PlanIntegrity {
         /// How many such steps arrived.
         steps: u64,
     },
+    /// Two or more steps arrived sharing the same [`SyncStep::id`] (#194).
+    ///
+    /// `integrity_of` cross-checks every OTHER counter against the daemon
+    /// precisely because the daemon is not trusted to be self-consistent —
+    /// id uniqueness is one more such counter, not a special case. It matters
+    /// on this frontend specifically because a step's element id is built
+    /// from `step.id` (`sync-step-{id}`, `sync-step-{id}-{rel|dest}`), and
+    /// GPUI's own accessibility guide says two nodes under the same ancestors
+    /// with the same id collapse to ONE AccessKit global id — in a release
+    /// build the second is silently dropped. `SyncPlan::select` and
+    /// `selected_step` compound it: both take the FIRST match, so a repeated
+    /// id also gives a cursor that can never reach the second row. Refusing
+    /// the plan is cheaper than painting it half-reachable.
+    DuplicateIds {
+        /// How many steps arrived carrying an id an EARLIER step already
+        /// used, in wire order.
+        steps: u64,
+    },
 }
 
 impl PlanIntegrity {
@@ -1191,6 +1209,11 @@ pub struct Planning {
     counts: SyncCounts,
     unreadable: u64,
     malformed: u64,
+    /// Ids seen so far, to catch a repeat as it arrives rather than
+    /// re-scanning the whole plan at close (#194).
+    seen_ids: std::collections::HashSet<u64>,
+    /// How many steps arrived with an id [`Self::seen_ids`] already had.
+    duplicate_ids: u64,
 }
 
 impl Planning {
@@ -1230,6 +1253,12 @@ impl Planning {
             }
             if !step.shape_is_consistent() {
                 self.malformed = self.malformed.saturating_add(1);
+            }
+            // #194: the daemon is not trusted to hand out unique ids any more
+            // than it is trusted to hand out consistent shapes above — a
+            // repeat is counted the same incremental way, across batches.
+            if !self.seen_ids.insert(step.id) {
+                self.duplicate_ids = self.duplicate_ids.saturating_add(1);
             }
             self.steps.push(step);
         }
@@ -1492,6 +1521,11 @@ impl SyncPlan {
                 "sync-summary-malformed",
                 &[("n", &steps.to_string())],
             )),
+            PlanIntegrity::DuplicateIds { steps } => lines.push(ta_in(
+                lang,
+                "sync-summary-duplicate-ids",
+                &[("n", &steps.to_string())],
+            )),
             PlanIntegrity::Contradictory => lines.push(t_in(lang, "sync-summary-contradictory")),
         }
         if !self.done.executable {
@@ -1725,7 +1759,12 @@ impl SyncState {
             return false;
         }
         let planning = std::mem::take(planning);
-        let integrity = integrity_of(&planning.counts, &done.counts, planning.malformed);
+        let integrity = integrity_of(
+            &planning.counts,
+            &done.counts,
+            planning.malformed,
+            planning.duplicate_ids,
+        );
         let selected = planning.steps.first().map(|s| s.id);
         *self = Self::Ready(SyncPlan {
             done,
@@ -1806,8 +1845,16 @@ impl SyncState {
 ///
 /// A step this build cannot name is reported FIRST, because it is the stronger
 /// statement: the totals may match perfectly and the plan still contain
-/// something that cannot be painted.
-fn integrity_of(local: &SyncCounts, remote: &SyncCounts, malformed: u64) -> PlanIntegrity {
+/// something that cannot be painted. Duplicate ids follow the same per-step
+/// class as malformed shapes, and for the same reason (#194): each is a
+/// defect in ONE step's identity, not in the totals, so it is checked before
+/// anything that sums.
+fn integrity_of(
+    local: &SyncCounts,
+    remote: &SyncCounts,
+    malformed: u64,
+    duplicate_ids: u64,
+) -> PlanIntegrity {
     // The daemon's own `unknown_kind` counts too, and it is not redundant: a
     // daemon that reports one while every step we decoded had a name is
     // telling us the plan holds something neither of us can show.
@@ -1817,6 +1864,11 @@ fn integrity_of(local: &SyncCounts, remote: &SyncCounts, malformed: u64) -> Plan
     }
     if malformed > 0 {
         return PlanIntegrity::Malformed { steps: malformed };
+    }
+    if duplicate_ids > 0 {
+        return PlanIntegrity::DuplicateIds {
+            steps: duplicate_ids,
+        };
     }
     let classes_agree = local.create_dir == remote.create_dir
         && local.copy == remote.copy
@@ -3560,6 +3612,48 @@ mod tests {
         assert!(!plan.can_approve());
     }
 
+    /// #194: two steps sharing an id refuse the plan, the same way a
+    /// self-contradicting step does. Each is individually well-formed — the
+    /// defect is only that the SECOND repeats the first's id — so nothing
+    /// short of a uniqueness check catches it: the totals agree (both count
+    /// as two `Copy`s), and `shape_is_consistent` never looks at another
+    /// step.
+    #[test]
+    fn two_steps_sharing_an_id_stop_the_approval() {
+        let first = step(1, SyncStepKind::Copy, DestTrash::Restorable);
+        let repeat = step(1, SyncStepKind::Copy, DestTrash::Restorable);
+        let plan = ready(vec![first, repeat], DestTrash::Restorable);
+        assert_eq!(plan.integrity(), PlanIntegrity::DuplicateIds { steps: 1 });
+        assert!(!plan.can_approve());
+    }
+
+    /// The SAME plan, arriving in two `sync.steps` batches instead of one
+    /// call to [`ready`]: the check has to survive the split, because that is
+    /// how the daemon actually delivers a plan.
+    #[test]
+    fn a_repeated_id_across_two_batches_still_refuses() {
+        let first = step(1, SyncStepKind::Copy, DestTrash::Restorable);
+        let repeat = step(1, SyncStepKind::Copy, DestTrash::Restorable);
+        let done = done_for(&[first.clone(), repeat.clone()], DestTrash::Restorable);
+        let mut state = SyncState::Planning(Planning::new(task()));
+        assert!(state.on_steps(batch(task(), vec![first])));
+        assert!(state.on_steps(batch(task(), vec![repeat])));
+        assert!(state.on_plan_done(done));
+        let plan = state.plan().expect("closed");
+        assert_eq!(plan.integrity(), PlanIntegrity::DuplicateIds { steps: 1 });
+    }
+
+    /// Two DIFFERENT ids next to each other never trip the check — the
+    /// common case has to stay `Complete`, or every ordinary plan would
+    /// refuse.
+    #[test]
+    fn distinct_ids_do_not_trip_the_duplicate_check() {
+        let a = step(1, SyncStepKind::Copy, DestTrash::Restorable);
+        let b = step(2, SyncStepKind::Copy, DestTrash::Restorable);
+        let plan = ready(vec![a, b], DestTrash::Restorable);
+        assert_eq!(plan.integrity(), PlanIntegrity::Complete);
+    }
+
     /// A reversal a newer daemon named is an admitted unknown, and an
     /// admitted unknown is never a promise: one such step downgrades the whole
     /// headline, which the counters alone could not do.
@@ -3820,6 +3914,12 @@ mod tests {
             ("sync-summary-unnameable", &[("n", "1")]),
             ("sync-summary-malformed", &[("n", "1")]),
             ("sync-summary-contradictory", &[]),
+            // #194. La prueba de que esta lista es load-bearing está en el
+            // historial de su propia rama: `1dacd58` embarcó
+            // `PlanIntegrity::DuplicateIds` y su `ta_in` SIN cadena en ningún
+            // `.ftl`, `ta_in` devuelve el id cuando falta el mensaje, y la
+            // suite no se puso roja. Las cadenas llegaron en `5ed8899`.
+            ("sync-summary-duplicate-ids", &[("n", "1")]),
             ("sync-summary-blocked", &[("n", "300")]),
             ("sync-confirm-delete", &[("n", "4")]),
             ("sync-confirm-delete-final", &[("n", "4")]),

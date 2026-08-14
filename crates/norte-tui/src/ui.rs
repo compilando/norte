@@ -260,7 +260,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             // las filas es cerrar el plan.
             draw_sync(frame, rows[0], view, &app.theme);
         } else if let Some(view) = &app.compare {
-            draw_compare(frame, rows[0], view, &app.theme);
+            draw_compare(frame, rows[0], view, &app.theme, &app.compare_size_hints);
         } else {
             for (i, pane) in app.panes.iter().enumerate() {
                 draw_pane(
@@ -3164,11 +3164,19 @@ fn styled_columns(
 /// visibles, la selección y las marcas salen de
 /// [`norte_frontend::compare`], que se testea sin terminal. Este lado reparte
 /// anchos y elige colores.
+///
+/// `size_hints` es la caché de presentación de la sonda #157
+/// (`App::compare_size_hints`): una superposición sobre `RowFace::size`, NO
+/// una mutación de las filas del modelo (`ComparePane` no expone ninguna vía
+/// para eso, a propósito — sus filas no cambian tras `extend`). Solo se
+/// consulta cuando el propio `Entry` no trajo tamaño; un tamaño real del
+/// listado nunca se pisa.
 fn draw_compare(
     frame: &mut Frame<'_>,
     area: Rect,
     view: &crate::app::CompareView,
     theme: &TuiTheme,
+    size_hints: &std::collections::HashMap<norte_proto::VPath, u64>,
 ) {
     use norte_frontend::compare::cells_for;
 
@@ -3222,7 +3230,23 @@ fn draw_compare(
         .skip(offset)
         .take(alto)
         .map(|row| {
-            let cells = cells_for(row, view.left_encoding, view.right_encoding);
+            let mut cells = cells_for(row, view.left_encoding, view.right_encoding);
+            // #157: el `Entry` no trajo tamaño (huérfano, directorio o
+            // enlace — ningún rung de la comparación lo mira), pero la
+            // sonda de la fila seleccionada puede haberlo hidratado desde
+            // entonces. Solo se rellena el HUECO: un tamaño que el listado
+            // sí trajo no se toca.
+            for (face, entry) in [
+                (cells.left.as_mut(), row.left.as_ref()),
+                (cells.right.as_mut(), row.right.as_ref()),
+            ] {
+                if let (Some(face), Some(entry)) = (face, entry)
+                    && face.size.is_none()
+                    && let Some(&hinted) = size_hints.get(&entry.path)
+                {
+                    face.size = Some(hinted);
+                }
+            }
             // La marca de selección va a la IZQUIERDA del todo, fuera de las
             // dos caras: es una decisión del lector sobre la fila entera, no
             // sobre uno de los dos lados.

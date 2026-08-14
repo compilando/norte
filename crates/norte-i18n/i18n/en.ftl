@@ -212,6 +212,7 @@ cli-sync-nothing-to-apply = every step is a skip: there is nothing to apply
 cli-sync-confirm = Apply this plan? [y/N]
 cli-sync-abort = aborted; nothing was applied
 cli-sync-done = applied: { $done } done, { $failed } failed, { $skipped } skipped
+cli-sync-cancelled = cancelled — what was applied before the cut stays, journalled; the rest was not applied
 # One failure is THREE fields on THREE lines, never one joined by `: ` and
 # ` → `: both joiners are ordinary printable characters that the name masker
 # leaves alone, so a filename can forge a whole fabricated row in band (corpus
@@ -650,6 +651,7 @@ gui-compare-hint = tab side · 1-5 filter · enter go · esc close
 compare-active-side = acting on: { $side }
 compare-status-running = compare: { $n } rows (comparing…)
 compare-status-done = compare: { $n } rows
+compare-status-unknown = compare: { $n } rows arrived, and nothing said whether that was all of them
 # The row stream ended with FEWER rows than the task counted: a notification
 # batch was dropped between the daemon and here. Saying "done" would be a lie
 # about completeness, which on a comparison is the whole answer.
@@ -757,6 +759,7 @@ sync-summary-unreadable = { $n } entries could not be read: neither they nor any
 sync-summary-mismatch = { $received } steps arrived and the plan says { $n }: this plan cannot be approved
 sync-summary-unnameable = { $n } steps are of a kind this version cannot show: this plan cannot be approved
 sync-summary-malformed = { $n } steps contradict themselves: this plan cannot be approved
+sync-summary-duplicate-ids = { $n } steps repeat an id already used by an earlier one: this plan cannot be approved
 # The classes add up and a number the dialog leads with does not.
 sync-summary-contradictory = the plan's own totals do not match the steps it sent: this plan cannot be approved
 # Blockers are never filtered by the selection, so this is about the whole
@@ -901,6 +904,7 @@ gui-menu-copied = { $n } path(s) copied to the clipboard
 # added after this catalogue (the enum is `#[non_exhaustive]`).
 reason-read-only = read-only backend
 reason-wrong-target = does not apply to this selection
+reason-answered-by-overlay = the open overlay answers this key itself
 reason-unsupported = the backend does not support it
 reason-plugin-inactive = the plugin is disabled or unapproved
 reason-policy-denied = the policy denies it
