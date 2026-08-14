@@ -2584,10 +2584,19 @@ impl App {
 
     /// Anota que esta sesión no está registrando sus mutaciones (#177).
     ///
-    /// Idempotente: el core avisa una sola vez por sesión, y si alguna vez
-    /// avisara dos, la segunda solo reescribe el mismo hecho.
+    /// Idempotente: el core avisa una vez por EPISODIO, y si alguna vez avisara
+    /// dos, la segunda solo reescribe el mismo hecho.
     pub fn note_no_journal(&mut self, why: norte_core::embedded::NoJournal) {
         self.no_journal = Some(why);
+    }
+
+    /// Y que volvió a registrarlas (#179): la ventana de propiedad se reabrió.
+    ///
+    /// Apagar el indicador es la mitad que importa. Un «NO se registra» que no
+    /// sabe volverse «ya sí» miente en cuanto el ocupante de paso suelta el
+    /// fichero, y miente sobre lo único que la barra dice de TODA la sesión.
+    pub fn note_journal_recovered(&mut self) {
+        self.no_journal = None;
     }
 
     /// El aviso PERSISTENTE de sesión sin journal, o `None` si sí se registra.

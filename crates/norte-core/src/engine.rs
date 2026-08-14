@@ -267,10 +267,11 @@ impl Engine {
     /// solo en el observer, esas dos contestarían «no hay journal» sobre un
     /// engine que lo abriría sin problema. Aquí no: preguntar es abrir.
     ///
-    /// Que la apertura sea única la garantiza la celda del
-    /// [`LazyJournal`](crate::embedded::LazyJournal) —una sola, compartida con
-    /// el observer—, así que no hay forma de acabar con dos handles del mismo
-    /// fichero ni con dos dueños de la cadena.
+    /// Que no haya dos handles del mismo fichero —ni dos dueños de la cadena—
+    /// lo garantiza la ventana del [`LazyJournal`](crate::embedded::LazyJournal):
+    /// UNA, compartida con el observer, con los intentos serializados bajo su
+    /// lock y el handle destruido al soltarlo. Desde #179 la apertura ya no es
+    /// única; lo que sigue siendo único es el DUEÑO en cada instante.
     async fn journal(&self) -> Option<Arc<crate::journal::SqliteJournal>> {
         match &self.journal {
             JournalSource::None => None,
@@ -286,13 +287,25 @@ impl Engine {
     /// directorio entero con los nombres que propuso un modelo). Sin esto, la
     /// respuesta llegaría después del sí.
     ///
-    /// Toma el lock exclusivo AQUÍ, no en la primera mutación, **y este proceso
-    /// lo conserva hasta que muere**: si lo que viene después es una pregunta
-    /// al humano, `norte daemon run` no puede arrancar mientras él se lo
-    /// piensa. Solo tiene sentido a un paso de mutar, y es el precio de que la
-    /// respuesta llegue antes del sí y no después.
+    /// Toma el lock exclusivo AQUÍ, no en la primera mutación, y este proceso
+    /// lo conserva hasta que lo suelte
+    /// ([`LazyJournal::release`](crate::embedded::LazyJournal::release), que
+    /// hoy no llama nadie por su cuenta): si lo que viene después es una
+    /// pregunta al humano, `norte daemon run` no puede arrancar mientras él se
+    /// lo piensa. Solo tiene sentido a un paso de mutar, y es el precio de que
+    /// la respuesta llegue antes del sí y no después.
+    ///
+    /// **Se salta el freno de reintento de #179 a propósito.** Este es el único
+    /// llamador para el que pagar los 250 ms de espera del lock vale
+    /// obviamente la pena: contestar `false` desde un veredicto de hace medio
+    /// minuto sería decirle al humano «esto no se va a registrar» sobre un
+    /// journal que ahora mismo está libre, y con eso delante decidirá que no.
     pub async fn ensure_journal(&self) -> bool {
-        self.journal().await.is_some()
+        match &self.journal {
+            JournalSource::None => false,
+            JournalSource::Open(_) => true,
+            JournalSource::Lazy(l) => l.acquire_now().await.is_some(),
+        }
     }
 
     /// Instala el gate de policy y el resolver de aprobaciones (M3-3): a partir

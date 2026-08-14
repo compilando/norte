@@ -863,6 +863,7 @@ msg-sync-needs-daemon = sincronizar necesita el daemon (--daemon): tiene que que
 status-no-journal = SIN journal: esta sesión no se puede deshacer
 msg-journal-busy = esta sesión NO queda registrada en el journal: lo tiene otro proceso norte (un daemon, u otra ventana)
 msg-journal-unavailable = esta sesión NO queda registrada en el journal: no se pudo abrir ({ $motivo })
+msg-journal-recovered = el journal volvió a estar disponible: lo que hagas a partir de ahora SÍ queda registrado
 msg-sync-too-many-marks = { $n } marcas pasan de las { $max } que admite esta petición: marca menos, o marca un directorio que las contenga
 msg-sync-cannot-approve = este plan no se puede aprobar tal como está
 msg-sync-mark-outside-roots = una fila marcada no está en ninguno de los dos directorios: repite la comparación

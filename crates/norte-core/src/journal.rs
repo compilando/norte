@@ -630,6 +630,12 @@ struct ChainState {
 
 /// El journal transaccional sobre `SQLite` (WAL).
 pub struct Journal {
+    /// **No se CLONA fuera de este tipo**, y de eso depende
+    /// [`crate::embedded::LazyJournal::release`]: un `SqlitePool` clonado
+    /// sobrevive al `Arc::try_unwrap` que decide que nadie sostiene el journal,
+    /// y mantiene el fichero abierto después de que este proceso se haya
+    /// declarado no-dueño. `pub(crate)` no lo impide; esta línea sí lo dice.
+    /// Todos los usos del árbol son préstamos (`&self.pool`).
     pub(crate) pool: SqlitePool,
     chain: Mutex<ChainState>,
     /// ¿Tiene la tabla la columna `batch_id`? Siempre `true` tras un [`Journal::open`]
@@ -749,6 +755,21 @@ impl Journal {
             let _ = tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).await;
         }
         Ok(this)
+    }
+
+    /// Cierra el journal y ESPERA a que el fichero quede libre.
+    ///
+    /// Soltar el valor no basta y por eso esto existe: `sqlx` cierra la
+    /// conexión de `SQLite` en su hilo trabajador, así que un `drop` devuelve
+    /// antes de que el lock exclusivo del fichero se haya soltado y el
+    /// siguiente en abrir se lleva un `database is locked` que nadie sostiene.
+    /// Lo nota [`crate::embedded::LazyJournal::release`], que suelta para que
+    /// OTRO proceso pueda abrir acto seguido.
+    ///
+    /// Consume el journal: reabrir es [`Self::open`], y tiene que serlo — es
+    /// ahí donde `last_seq`/`last_hash` se releen del fichero.
+    pub async fn close(self) {
+        self.pool.close().await;
     }
 
     /// Journal efímero en memoria (tests).
@@ -1565,6 +1586,12 @@ impl SqliteJournal {
         &self.journal
     }
 
+    /// Cierra el journal subyacente y espera a que el fichero quede libre
+    /// (ver [`Journal::close`]).
+    pub async fn close(self) {
+        self.journal.close().await;
+    }
+
     /// Abre (o crea) el journal en `path` y lo envuelve como observer, listo
     /// para [`crate::Engine::with_observer`]. Crea el directorio contenedor si
     /// falta.
@@ -1576,11 +1603,11 @@ impl SqliteJournal {
     /// abrir en vez de compartir.
     ///
     /// Quién es ese dueño ya no es siempre el daemon: desde #167 un proceso
-    /// embebido (TUI, o un `norte cp` sin daemon) abre este mismo fichero y se
-    /// lo queda mientras vive — ver [`crate::embedded::LazyJournal`], que es
-    /// quien decide qué hacer cuando el lock ya lo tiene otro, y que desde #177
-    /// no lo abre hasta la primera mutación (así, una sesión que solo navega no
-    /// se lo quita a nadie).
+    /// embebido (TUI, o un `norte cp` sin daemon) abre este mismo fichero — ver
+    /// [`crate::embedded::LazyJournal`], que es quien decide qué hacer cuando
+    /// el lock ya lo tiene otro, que desde #177 no lo abre hasta la primera
+    /// mutación (así, una sesión que solo navega no se lo quita a nadie) y que
+    /// desde #179 lo reintenta y sabe soltarlo.
     ///
     /// # Errors
     /// [`JournalError::Io`] si no puede crear el directorio contenedor;

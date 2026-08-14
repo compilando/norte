@@ -222,12 +222,18 @@ impl crate::connect::ConnectionObserver for ChannelConnectionObserver {
 /// dentro del core, en mitad de una mutación, y el frontend no tiene forma de
 /// preguntárselo a nadie después.
 struct ChannelJournalSink {
-    tx: mpsc::UnboundedSender<crate::embedded::NoJournal>,
+    tx: mpsc::UnboundedSender<crate::embedded::JournalStatus>,
 }
 
 impl crate::embedded::JournalWarningSink for ChannelJournalSink {
     fn on_no_journal(&self, why: &crate::embedded::NoJournal) {
-        let _ = self.tx.send(why.clone());
+        let _ = self
+            .tx
+            .send(crate::embedded::JournalStatus::Lost(why.clone()));
+    }
+
+    fn on_journal_recovered(&self) {
+        let _ = self.tx.send(crate::embedded::JournalStatus::Recovered);
     }
 }
 
@@ -1355,8 +1361,12 @@ impl Backend {
     /// Como [`Backend::take_degraded`], en `Embedded` INSTALA el sink en el
     /// engine en vez de tomar un canal ya hecho. Llamarlo en el arranque, antes
     /// de la primera mutación; y si una mutación se adelanta igual, el aviso no
-    /// se pierde (el `LazyJournal` lo retiene hasta que hay sink). Como mucho
-    /// llega UN mensaje por sesión.
+    /// se pierde (el `LazyJournal` lo retiene hasta que hay sink).
+    ///
+    /// Llegan PÉRDIDAS Y RECUPERACIONES (#179): la ventana de propiedad se
+    /// puede reabrir, así que un frontend que solo escuche
+    /// [`JournalStatus::Lost`](crate::embedded::JournalStatus::Lost) acaba
+    /// pintando «esta sesión no se registra» sobre una que sí.
     ///
     /// `None` también si el engine embebido no lleva journal perezoso —uno
     /// construido con `Engine::new()`, que no journaliza NADA y nunca va a
@@ -1367,7 +1377,7 @@ impl Backend {
     /// receptor (ver [`crate::embedded::LazyJournal::set_warning_sink`]).
     pub fn take_journal_warnings(
         &mut self,
-    ) -> Option<mpsc::UnboundedReceiver<crate::embedded::NoJournal>> {
+    ) -> Option<mpsc::UnboundedReceiver<crate::embedded::JournalStatus>> {
         match self {
             Self::Embedded(engine) => {
                 let (tx, rx) = mpsc::unbounded_channel();

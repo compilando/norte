@@ -583,8 +583,34 @@ struct AvisoDeJournalPorStderr;
 
 impl norte_core::embedded::JournalWarningSink for AvisoDeJournalPorStderr {
     fn on_no_journal(&self, why: &norte_core::embedded::NoJournal) {
-        eprintln!("aviso: {}", why.text());
+        aviso(&why.text());
     }
+
+    /// Un `norte cp` hace una mutación y se muere, así que la recuperación de
+    /// #179 aquí es casi teórica — pero un `norte ai rename --yes` de cuarenta
+    /// ficheros dura lo bastante como para que el ocupante suelte a mitad, y
+    /// entonces el aviso de arriba se quedó dicho sobre unos ficheros y no
+    /// sobre los otros. Decirlo cuesta una línea.
+    ///
+    /// Por Fluent, a diferencia de su hermano: `NoJournal::text()` está
+    /// documentado como la frase SIN traducir del log del operador, y esta no
+    /// tiene esa excusa — es interfaz, y un `LANG=en` no puede leerla en
+    /// castellano.
+    fn on_journal_recovered(&self) {
+        aviso(&norte_i18n::t("msg-journal-recovered"));
+    }
+}
+
+/// Una línea de aviso a stderr que NO puede tumbar la operación que la produjo.
+///
+/// `eprintln!` PANICA si stderr falla (cerrado, o lleno en un pipeline), y este
+/// sink corre dentro del `on_mutation` de una mutación que ya se aplicó: ese
+/// pánico haría fallar la Task de algo que funcionó, que es exactamente lo que
+/// el rustdoc de `JournalWarningSink` prohíbe. Además se emite con locks del
+/// engine tomados.
+fn aviso(frase: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr(), "aviso: {frase}");
 }
 
 #[allow(clippy::too_many_lines)]

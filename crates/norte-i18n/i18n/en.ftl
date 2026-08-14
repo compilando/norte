@@ -849,6 +849,7 @@ msg-sync-needs-daemon = synchronising needs the daemon (--daemon): it has to be 
 status-no-journal = NOT journalled: this session cannot be undone
 msg-journal-busy = this session is NOT recorded in the journal: another norte process holds it (a daemon, or another window)
 msg-journal-unavailable = this session is NOT recorded in the journal: it could not be opened ({ $motivo })
+msg-journal-recovered = the journal is available again: what you do from now on IS recorded
 msg-sync-too-many-marks = { $n } marks is over the { $max } this request takes: mark fewer, or mark a directory that holds them
 msg-sync-cannot-approve = this plan cannot be approved as it stands
 msg-sync-mark-outside-roots = a marked row is in neither of the two directories: re-run the comparison

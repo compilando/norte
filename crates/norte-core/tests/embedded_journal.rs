@@ -10,7 +10,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use norte_core::embedded::{JournalWarningSink, LazyJournal, NoJournal};
+use norte_core::embedded::{JournalStatus, JournalWarningSink, LazyJournal, NoJournal};
 use norte_core::journal::Actor;
 use norte_core::{Engine, SqliteJournal};
 use norte_proto::{TaskState, VPath};
@@ -29,6 +29,9 @@ impl JournalWarningSink for Avisos {
     fn on_no_journal(&self, why: &NoJournal) {
         self.0.lock().expect("lock de avisos").push(why.clone());
     }
+
+    /// Este sink solo cuenta pérdidas; las recuperaciones las mira `Estados`.
+    fn on_journal_recovered(&self) {}
 }
 
 impl Avisos {
@@ -219,11 +222,13 @@ async fn el_undo_sin_journal_sigue_siendo_unsupported() {
     );
 }
 
-/// El resultado se decide UNA vez: si el lock era de otro, esta sesión sigue
-/// sin registro aunque el otro suelte — y no vuelve a pagar los 250 ms de
-/// espera en cada mutación.
+/// El veredicto se RECUERDA entre mutaciones: dentro de la ventana del freno,
+/// una sesión que se encontró el journal ocupado no vuelve a pagar la espera
+/// del lock por cada mutación (#179 pide el reintento, no el reintento en cada
+/// fila). Lo que sí cambia respecto de #177 es que la decisión ya no es para
+/// siempre: ver `un_ocupante_de_paso_no_condena_la_sesion`.
 #[tokio::test]
-async fn el_resultado_se_cachea() {
+async fn el_veredicto_se_recuerda_dentro_del_freno() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dueno = SqliteJournal::open(&journal_path(dir.path()))
         .await
@@ -237,17 +242,11 @@ async fn el_resultado_se_cachea() {
     drop(dueno);
     let h = engine.mkdir(&vp("mem:///d2")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert!(
-        lazy.get().await.is_none(),
-        "la decisión es de la sesión, no de cada mutación"
+    assert_eq!(
+        lazy.attempts(),
+        1,
+        "el freno de 30 s no había pasado: ni un intento más"
     );
-    // Y se comprueba por el FICHERO, no por el reloj: «tardó menos de X» mide
-    // la carga de la máquina tanto como el código, y el margen contra los
-    // 250 ms de espera del lock no daba para distinguirlos. Que el journal
-    // siga libre dice exactamente lo mismo y no depende de nada.
-    SqliteJournal::open(&journal_path(dir.path()))
-        .await
-        .expect("la sesión no reintentó: el journal sigue de quien lo quiera");
 }
 
 /// El motivo que NO es el lock llega como [`NoJournal::Failed`] con su texto —
@@ -344,7 +343,7 @@ async fn el_backend_entrega_el_aviso_por_su_canal() {
     assert_eq!(h.join().await, TaskState::Completed);
     assert_eq!(
         rx.try_recv(),
-        Ok(NoJournal::Busy),
+        Ok(JournalStatus::Lost(NoJournal::Busy)),
         "el aviso llegó al canal"
     );
 
@@ -353,4 +352,257 @@ async fn el_backend_entrega_el_aviso_por_su_canal() {
         sin_journal.take_journal_warnings().is_none(),
         "un engine que no journaliza nada no puede prometer avisar de ello"
     );
+}
+
+// ---------------------------------------------------------------------------
+// #179: la ventana de propiedad se abre y se cierra más de una vez.
+// ---------------------------------------------------------------------------
+
+/// Sink que apunta TODO lo que le llega, pérdidas y recuperaciones.
+#[derive(Default)]
+struct Estados(Mutex<Vec<JournalStatus>>);
+
+impl JournalWarningSink for Estados {
+    fn on_no_journal(&self, why: &NoJournal) {
+        self.0
+            .lock()
+            .expect("lock de estados")
+            .push(JournalStatus::Lost(why.clone()));
+    }
+
+    fn on_journal_recovered(&self) {
+        self.0
+            .lock()
+            .expect("lock de estados")
+            .push(JournalStatus::Recovered);
+    }
+}
+
+impl Estados {
+    fn vistos(&self) -> Vec<JournalStatus> {
+        self.0.lock().expect("lock de estados").clone()
+    }
+}
+
+/// Como [`engine_perezoso`], con el freno de reintento que el test necesite.
+fn engine_con_freno(
+    dir: &Path,
+    freno: std::time::Duration,
+) -> (Engine, Arc<LazyJournal>, Arc<MemProvider>) {
+    let lazy = Arc::new(LazyJournal::with_retry_brake(dir, freno));
+    let engine = Engine::with_lazy_journal(Arc::clone(&lazy));
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    (engine, lazy, mem)
+}
+
+/// **#179.1.** El ocupante de la primera mutación era de paso, y la sesión
+/// vuelve a registrar en cuanto suelta: una superposición de un cuarto de
+/// segundo dejaba marcada una sesión de tres horas.
+#[tokio::test]
+async fn un_ocupante_de_paso_no_condena_la_sesion() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dueno = SqliteJournal::open(&journal_path(dir.path()))
+        .await
+        .expect("el primero se lo lleva");
+
+    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::ZERO);
+    let avisos = Arc::new(Estados::default());
+    lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
+
+    let h = engine.mkdir(&vp("mem:///d")).await.expect("mkdir");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert!(lazy.get().await.is_none(), "el lock era de otro");
+
+    // El de paso suelta.
+    dueno.close().await;
+
+    let h = engine.mkdir(&vp("mem:///d2")).await.expect("mkdir");
+    assert_eq!(h.join().await, TaskState::Completed);
+    let journal = lazy.get().await.expect("el fichero quedó libre y se reintentó");
+    let entries = journal.journal().entries().await.expect("entries");
+    assert_eq!(
+        entries.len(),
+        1,
+        "la mutación de después del reintento SÍ quedó registrada: {entries:?}"
+    );
+    assert_eq!(
+        avisos.vistos(),
+        vec![
+            JournalStatus::Lost(NoJournal::Busy),
+            JournalStatus::Recovered
+        ],
+        "el indicador permanente del frontend tiene que poder apagarse"
+    );
+}
+
+/// **#179, el freno.** Reintentar no puede costar `ESPERA_POR_EL_LOCK` por
+/// mutación. Se mide en INTENTOS, no en reloj: «tardó menos de X» mide la carga
+/// de la máquina tanto como el código.
+#[tokio::test]
+async fn el_reintento_lleva_freno() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+        .await
+        .expect("el primero se lo lleva");
+
+    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::from_hours(1));
+
+    for n in 0..3 {
+        let h = engine
+            .mkdir(&vp(&format!("mem:///d{n}")))
+            .await
+            .expect("mkdir");
+        assert_eq!(h.join().await, TaskState::Completed);
+    }
+    assert_eq!(
+        lazy.attempts(),
+        1,
+        "dentro de la ventana del freno no se vuelve a pagar la espera del lock"
+    );
+}
+
+/// **La trampa del `ChainState`, y la razón de que esto no sea pequeño.**
+///
+/// Reabrir un journal que este proceso YA TUVO obliga a releer `last_seq` y
+/// `last_hash` del fichero. Con el par viejo, el insert choca contra la PK de
+/// `seq` — y como `last_seq` solo avanza al acertar, fallan TODAS las
+/// mutaciones siguientes: efecto aplicado sin fila, en bucle.
+#[tokio::test]
+async fn reabrir_relee_la_cadena_del_fichero() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::ZERO);
+
+    let h = engine.mkdir(&vp("mem:///uno")).await.expect("mkdir");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert!(lazy.release().await, "nadie más tiene el handle");
+
+    // OTRO escritor avanza la cadena mientras esta sesión no la tiene.
+    {
+        let otro = SqliteJournal::open(&journal_path(dir.path()))
+            .await
+            .expect("soltado de verdad: el fichero está libre");
+        otro.journal()
+            .record(
+                "created",
+                b"mem:///de-otro",
+                None,
+                norte_core::journal::Reversal::Delete,
+                None,
+                &Actor::User,
+            )
+            .await
+            .expect("la fila del otro");
+        otro.close().await;
+    }
+
+    let h = engine.mkdir(&vp("mem:///dos")).await.expect("mkdir");
+    assert_eq!(
+        h.join().await,
+        TaskState::Completed,
+        "la mutación de después de reabrir NO puede chocar con la PK de seq"
+    );
+
+    let journal = lazy.get().await.expect("reabierto");
+    let entries = journal.journal().entries().await.expect("entries");
+    let seqs: Vec<i64> = entries.iter().map(|e| e.seq).collect();
+    assert_eq!(seqs, vec![1, 2, 3], "la cadena sigue al OTRO escritor: {entries:?}");
+    assert_eq!(
+        entries[2].path.as_slice(),
+        b"mem:///dos",
+        "y la última es la nuestra: {entries:?}"
+    );
+}
+
+/// Dos mutaciones a la vez sobre un journal LIBRE abren UN handle, no dos: el
+/// segundo se vería `Busy` contra el lock del primero — un proceso negándose a
+/// journalizar por culpa de sí mismo.
+#[tokio::test]
+async fn dos_mutaciones_a_la_vez_abren_un_solo_handle() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::ZERO);
+    let avisos = Arc::new(Estados::default());
+    lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
+
+    let (pa, pb) = (vp("mem:///a"), vp("mem:///b"));
+    let (a, b) = tokio::join!(engine.mkdir(&pa), engine.mkdir(&pb));
+    assert_eq!(a.expect("mkdir a").join().await, TaskState::Completed);
+    assert_eq!(b.expect("mkdir b").join().await, TaskState::Completed);
+
+    assert_eq!(lazy.attempts(), 1, "un intento, no uno por mutación");
+    assert!(avisos.vistos().is_empty(), "nada que avisar: se abrió a la primera");
+    let journal = lazy.get().await.expect("dueña");
+    assert_eq!(
+        journal.journal().count().await.expect("count"),
+        2,
+        "las dos mutaciones quedaron registradas"
+    );
+}
+
+/// Soltar con alguien más sosteniendo el handle NO suelta: abrir un segundo
+/// handle sobre el mismo fichero sería este proceso quitándose el journal a sí
+/// mismo.
+#[tokio::test]
+async fn soltar_con_el_handle_prestado_no_suelta() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::ZERO);
+    let h = engine.mkdir(&vp("mem:///d")).await.expect("mkdir");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let prestado = lazy.get().await.expect("dueña");
+    assert!(!lazy.release().await, "hay un Arc vivo por ahí");
+    drop(prestado);
+    assert!(lazy.release().await, "ya no");
+}
+
+/// El motivo de un journal ilegible pasa por un saneador antes de llegar a una
+/// terminal: quien puede escribir el fichero escribe parte de esa frase, y la
+/// prosa de `SQLite` interpola identificadores del propio fichero.
+#[tokio::test]
+async fn el_motivo_de_un_journal_roto_no_lleva_controles_a_la_pantalla() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // Un fichero que no es una base de datos, con un identificador hostil
+    // dentro: `SQLite` lo devolverá en su mensaje.
+    std::fs::write(
+        journal_path(dir.path()),
+        b"no soy sqlite \x1b[31m\x07 \x1b]0;pwned\x07",
+    )
+    .expect("fixture");
+
+    let (_engine, lazy, _mem) = engine_perezoso(dir.path());
+    let avisos = Arc::new(Avisos::default());
+    lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
+    assert!(lazy.get().await.is_none(), "no es una base de datos");
+
+    match avisos.vistos().as_slice() {
+        [NoJournal::Failed(motivo)] => {
+            assert!(
+                !motivo.chars().any(char::is_control),
+                "ni un byte de control llega a la barra de estado: {motivo:?}"
+            );
+            assert!(motivo.chars().count() <= 201, "acotado: {}", motivo.len());
+        }
+        otro => panic!("no es el lock de nadie: {otro:?}"),
+    }
+}
+
+/// `ensure_journal` se salta el freno: es lo que `norte ai rename` pregunta
+/// ANTES de pedir confirmación, y contestar desde un veredicto de hace medio
+/// minuto le diría al humano «esto no se registra» sobre un fichero libre.
+#[tokio::test]
+async fn ensure_journal_no_contesta_desde_el_freno() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dueno = SqliteJournal::open(&journal_path(dir.path()))
+        .await
+        .expect("el primero se lo lleva");
+    // Freno LARGO: una mutación normal no reintentaría en toda la sesión.
+    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::from_hours(1));
+
+    assert!(!engine.ensure_journal().await, "el fichero era de otro");
+    dueno.close().await;
+    assert!(
+        engine.ensure_journal().await,
+        "quedó libre: la pregunta que ve un humano no se contesta desde la caché"
+    );
+    assert_eq!(lazy.attempts(), 2, "y para eso hubo que intentarlo otra vez");
 }

@@ -654,6 +654,28 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A quarter of a second of bad luck marked a three-hour session as
+  unrecorded, for its whole life.** Without the background service running,
+  norte records what it changes in a journal file that only one process may
+  hold at a time, and it takes that file at the first change you make. If
+  something else held it at that exact instant — a script's `norte cp`, an
+  audit, the service restarting — the session gave up on journalling
+  permanently, and the "NOT journalled" warning in the status bar stayed true
+  for the rest of the day even though the file had been free again a second
+  later. It now tries again, at most once every thirty seconds so that a
+  genuinely busy file costs nothing per operation, and **the warning switches
+  off when the journal comes back** rather than lying at you until you quit.
+  The mechanism underneath is what took the work: reopening a journal this
+  process once owned has to re-read the chain's position from the file, and a
+  stale one collides with the row it is about to write — which would fail
+  every later change, applying each effect with nothing recorded. Releasing
+  therefore destroys the handle rather than parking it, and a test pins that a
+  third writer's rows are followed rather than overwritten. The prompt norte
+  shows before an AI rename — "this batch will not be recorded" — deliberately
+  ignores the thirty-second brake, because that one is a question a person
+  answers, and answering it from a half-minute-old verdict would talk them out
+  of a rename the journal would have recorded fine (#179).
+
 - **One invalid byte in a name disabled its whole collision key.** The
   filename comparison shared by `fs.compare` and batch rename ran
   `str::from_utf8` over the ENTIRE name and gave up on normalising or folding
