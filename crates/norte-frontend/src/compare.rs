@@ -192,6 +192,7 @@ pub struct Glyphs {
 ///     newer: None,
 ///     reason: None,
 ///     side: None,
+///     paired_under: None,
 /// };
 /// assert_eq!(glyphs(&row).verdict, '=');
 /// ```
@@ -446,6 +447,7 @@ fn face(entry: &norte_proto::Entry, reinterpret: Option<norte_encoding::NameEnco
 ///     newer: None,
 ///     reason: None,
 ///     side: None,
+///     paired_under: None,
 /// };
 /// let cells = cells_for(&row, None, None);
 /// assert_eq!(cells.left.expect("left face").name, "b.txt");
@@ -1201,6 +1203,7 @@ mod tests {
                 _ => None,
             },
             side: None,
+            paired_under: None,
         }
     }
 

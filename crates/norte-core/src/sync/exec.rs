@@ -84,8 +84,8 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
 use norte_proto::methods::RelPath;
 use norte_proto::methods::{
-    SYNC_MAX_FAILURES_REPORTED, StepReversal, SyncFailure, SyncFailureCause, SyncReportResult,
-    SyncStep, SyncStepKind,
+    DestTrash, SYNC_MAX_FAILURES_REPORTED, StepReversal, SyncFailure, SyncFailureCause,
+    SyncReportResult, SyncStep, SyncStepKind,
 };
 use norte_proto::{ConflictKind, Entry, EntryKind, Error, VPath};
 use norte_sync::DestWitness;
@@ -264,8 +264,13 @@ impl StepJournal for BatchJournal {
 }
 
 /// Un informe recién abierto, con su lote ya puesto.
+///
+/// La papelera del destino entra AQUÍ, al abrirlo (#170), y no al cerrarlo: sale
+/// de las opciones del plan que se está aplicando —las mismas de las que salió
+/// el [`DestTrash`] del `sync.plan_done`—, así que el informe no puede acabar
+/// diciendo una cosa distinta de la que se aprobó.
 #[must_use]
-pub(crate) fn new_report(batch_id: i64) -> SyncReportResult {
+pub(crate) fn new_report(batch_id: i64, dest_trash: DestTrash) -> SyncReportResult {
     SyncReportResult {
         done: 0,
         failed: 0,
@@ -273,6 +278,7 @@ pub(crate) fn new_report(batch_id: i64) -> SyncReportResult {
         bytes: 0,
         failures: Vec::new(),
         batch_id: Some(batch_id),
+        dest_trash,
     }
 }
 
@@ -1112,6 +1118,11 @@ fn record_failure(report: &Mutex<SyncReportResult>, step: &SyncStep, cause: Sync
     if report.failures.len() < SYNC_MAX_FAILURES_REPORTED {
         report.failures.push(SyncFailure {
             rel: step.rel.clone(),
+            // La CLASE del paso, que el core tiene delante y hasta 0.41.0 tiraba
+            // (#195). Es lo que dice de qué raíz cuelga `rel` —un `DeleteTree`
+            // habla siempre del destino— sin que quien lee el informe, que no
+            // tiene el plan, lo deduzca de la presencia de `dest_rel`.
+            kind: step.kind,
             // La ortografía del DESTINO viaja con el fallo: sin ella, el caso
             // estrella de `IllegalName` —un nombre que revienta `NAME_MAX` al
             // recomponerse en NFD— se enseñaría con la grafía del origen, que es
@@ -1544,7 +1555,7 @@ mod tests {
             ),
             dest: Some(DestWitness::of(&entry)),
         };
-        let report = Mutex::new(new_report(7));
+        let report = Mutex::new(new_report(7, DestTrash::Restorable));
         run(
             &t,
             &recorder,
@@ -1590,7 +1601,7 @@ mod tests {
             ),
             dest: Some(DestWitness::of(&entry)),
         };
-        let report = Mutex::new(new_report(7));
+        let report = Mutex::new(new_report(7, DestTrash::Restorable));
         run(
             &t,
             &recorder,
@@ -1623,7 +1634,7 @@ mod tests {
         write(&mem, "mem:///s/a.txt", b"x").await;
         let t = targets(&mem);
         let recorder = Recorder::default();
-        let report = Mutex::new(new_report(7));
+        let report = Mutex::new(new_report(7, DestTrash::Restorable));
         let flujo = futures::stream::iter(vec![
             Ok(SpoolStep {
                 step: step(SyncStepKind::Copy, "a.txt", Some(StepReversal::Delete)),
@@ -1892,7 +1903,7 @@ mod tests {
             ),
             dest: Some(DestWitness::of(&entry)),
         };
-        let report = Mutex::new(new_report(7));
+        let report = Mutex::new(new_report(7, DestTrash::Restorable));
         let err = run(
             &t,
             &recorder,
@@ -2011,7 +2022,7 @@ mod tests {
             Ok(sobrescribe(&mem, "a.txt").await),
             Ok(sobrescribe(&mem, "b.txt").await),
         ];
-        let report = Mutex::new(new_report(7));
+        let report = Mutex::new(new_report(7, DestTrash::Restorable));
         let err = run(
             &t,
             &TrashedFalla,

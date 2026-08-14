@@ -1124,6 +1124,16 @@ fn flagged(
     reason: CompareReason,
     side: Side,
 ) -> CompareRow {
+    // Una `Ambiguous` es de UN lado y una `Error` puede no tener entrada que
+    // enseñar, pero una `Error` SÍ puede traer las dos —un directorio que
+    // emparejó y no se dejó listar—, y entonces sus dos nombres emparejaron
+    // como los de cualquier otra fila. El campo significa lo mismo en todas o
+    // no significa nada, así que se contesta con la misma regla que en
+    // `Decision::into_row` (#152).
+    let paired_under = match (left.as_ref(), right.as_ref()) {
+        (Some(l), Some(r)) => crate::key::pair_transform(l.pair_name(), r.pair_name()),
+        _ => None,
+    };
     let row = CompareRow {
         id,
         left,
@@ -1134,6 +1144,7 @@ fn flagged(
         newer: None,
         reason: Some(reason),
         side: Some(side),
+        paired_under,
     };
     debug_assert!(row.reason_is_consistent(), "fila {verdict:?} sin motivo");
     debug_assert!(
@@ -1277,6 +1288,7 @@ mod tests {
     use norte_vfs_local::LocalProvider;
 
     use super::*;
+    use crate::PairTransform;
 
     // ---------- utillería de árboles ----------
 
@@ -1678,6 +1690,113 @@ mod tests {
         cancel.cancel();
         let rest: Vec<Result<CompareRow, CompareError>> = stream.collect().await;
         assert_eq!(rest, vec![Err(CompareError::Cancelled)]);
+    }
+
+    /// **#152 de punta a punta**: `K.txt` (U+212A KELVIN SIGN) a la izquierda y
+    /// `K.txt` (ASCII) a la derecha son DOS ficheros —coexisten en ext4, ningún
+    /// plegado de caja de por medio— y la clave los empareja, porque NFC no es
+    /// inyectiva. La fila que sale es un `Same`/`Different` normal, y lo único
+    /// que la distingue de una pareja de verdad es `paired_under`.
+    ///
+    /// Sin esa marca, un plan de sincronización lee la fila como «actualiza el
+    /// de la derecha con el de la izquierda» y escribe sobre un fichero que no
+    /// tiene nada que ver.
+    #[tokio::test]
+    async fn el_singleton_de_nfc_marca_la_pareja_que_junta() {
+        let corpus = norte_testkit::corpus::hostile_names();
+        let bytes = |id: &str| {
+            corpus
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("fixture {id} en el corpus"))
+                .bytes
+                .clone()
+        };
+        let left = MemProvider::new();
+        let right = MemProvider::new();
+        for (mem, id, content) in [
+            (&left, "singleton_kelvin_sign", &b"kelvin"[..]),
+            (&right, "ascii_capital_k", &b"la-ka-de-verdad"[..]),
+        ] {
+            let file = MemProvider::root().join(Segment::new(bytes(id)).expect("seg"));
+            let mut sink = mem.write(&file).await.expect("write");
+            sink.write(Bytes::copy_from_slice(content))
+                .await
+                .expect("chunk");
+            sink.commit().await.expect("commit");
+        }
+
+        let rows = collect(compare_default(&left, &right)).await;
+        assert_eq!(rows.len(), 1, "emparejan: UNA fila, no dos huérfanos");
+        let row = &rows[0];
+        assert_eq!(
+            row.verdict,
+            CompareVerdict::Different,
+            "por tamaño, que es lo que la cascada mira"
+        );
+        assert_eq!(
+            row.paired_under,
+            Some(PairTransform::NormalizationSingleton),
+            "y la fila DICE que sus dos mitades no son el mismo nombre"
+        );
+        // Los bytes de cada lado siguen siendo los suyos (regla dura 1): la
+        // clave empareja, el path nombra.
+        assert_eq!(
+            row.left
+                .as_ref()
+                .expect("izquierda")
+                .path
+                .file_name()
+                .expect("nombre")
+                .as_bytes(),
+            bytes("singleton_kelvin_sign").as_slice()
+        );
+        assert_eq!(
+            row.right
+                .as_ref()
+                .expect("derecha")
+                .path
+                .file_name()
+                .expect("nombre")
+                .as_bytes(),
+            bytes("ascii_capital_k").as_slice()
+        );
+    }
+
+    /// La otra mitad del contrato: la pareja NFC/NFD que la clave existe para
+    /// juntar sigue emparejando, se marca como lo que es y NO como la
+    /// peligrosa. Un consumidor que rechazara todo `paired_under` rompería el
+    /// caso macOS↔Linux, así que las dos respuestas tienen que ser distintas.
+    #[tokio::test]
+    async fn la_pareja_nfc_nfd_se_marca_pero_no_como_singleton() {
+        let corpus = norte_testkit::corpus::hostile_names();
+        let bytes = |id: &str| {
+            corpus
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("fixture {id} en el corpus"))
+                .bytes
+                .clone()
+        };
+        let left = MemProvider::new();
+        let right = MemProvider::new();
+        for (mem, id) in [(&left, "nfc_e_acute"), (&right, "nfd_e_acute")] {
+            let file = MemProvider::root().join(Segment::new(bytes(id)).expect("seg"));
+            let mut sink = mem.write(&file).await.expect("write");
+            sink.write(Bytes::from_static(b"mismo"))
+                .await
+                .expect("chunk");
+            sink.commit().await.expect("commit");
+        }
+
+        let rows = collect(compare_default(&left, &right)).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].verdict, CompareVerdict::Same);
+        assert_eq!(rows[0].paired_under, Some(PairTransform::Normalization));
+        assert!(
+            rows[0].paired_under.expect("marcada").names_one_text(),
+            "es el MISMO texto, y el wire tiene que poder decirlo"
+        );
     }
 
     /// El corpus hostil ENTERO dentro de un huérfano descendido: cada nombre

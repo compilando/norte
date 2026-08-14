@@ -280,6 +280,7 @@ fn any_row(source_right: bool) -> impl Strategy<Value = CompareRow> {
                     newer: None,
                     reason,
                     side,
+                    paired_under: None,
                 }
             },
         )
@@ -317,6 +318,7 @@ fn same_rows_strategy(source_right: bool) -> impl Strategy<Value = Vec<CompareRo
                 newer: None,
                 reason: None,
                 side: None,
+                paired_under: None,
             }
         },
     );
@@ -363,6 +365,7 @@ fn paired_rows_strategy() -> impl Strategy<Value = Vec<CompareRow>> {
                     newer: None,
                     reason: (verdict == CompareVerdict::Error).then_some(CompareReason::Unreadable),
                     side: None,
+                    paired_under: None,
                 }
             },
         );
@@ -395,6 +398,7 @@ fn folder_then_child() -> impl Strategy<Value = (Vec<u8>, Vec<u8>, Vec<CompareRo
             newer: None,
             reason: None,
             side: None,
+            paired_under: None,
         };
         let child = CompareRow {
             id: 1,
@@ -411,6 +415,7 @@ fn folder_then_child() -> impl Strategy<Value = (Vec<u8>, Vec<u8>, Vec<CompareRo
             newer: None,
             reason: None,
             side: None,
+            paired_under: None,
         };
         (folder, leaf, vec![pair, child])
     })

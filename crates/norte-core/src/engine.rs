@@ -1393,6 +1393,7 @@ impl Engine {
     > {
         use crate::policy::PolicyOp;
         use norte_proto::DeleteMode;
+        use norte_proto::methods::DestTrash;
 
         // Un plan con bloqueos no se ejecuta aunque su hash case: el hash dice
         // «este es el plan que se te enseñó», jamás «este plan se puede
@@ -1403,7 +1404,7 @@ impl Engine {
         let counts = reader.summary().counts;
         let source_root = reader.header().options.source_root.clone();
         let dest_root = reader.header().options.dest_root.clone();
-        let dest_has_trash = reader.header().options.dest_has_trash;
+        let trash = plan_dest_trash(&reader);
 
         self.gate(&actor, PolicyOp::Copy, &[&source_root, &dest_root])
             .await?;
@@ -1412,10 +1413,13 @@ impl Engine {
         }
         // La clase de borrado que de verdad va a ocurrir: la misma de la que sale
         // la reversa de cada paso, así que el gate pregunta por lo que pasa.
-        let mode = if dest_has_trash {
-            DeleteMode::Trash
-        } else {
+        // `Absent` es exactamente «el destino no tiene papelera» — ver
+        // [`plan_dest_trash`] —, así que el gate sigue preguntando por lo mismo
+        // que antes de que este valor existiera.
+        let mode = if trash == DestTrash::Absent {
             DeleteMode::Permanent
+        } else {
+            DeleteMode::Trash
         };
         if counts.overwrite > 0 || counts.delete_tree > 0 {
             self.gate(&actor, PolicyOp::Delete { mode }, &[&dest_root])
@@ -1444,7 +1448,7 @@ impl Engine {
             delete_mode: mode,
         };
         let report = Arc::new(std::sync::Mutex::new(crate::sync::exec::new_report(
-            batch_id,
+            batch_id, trash,
         )));
         let report_task = Arc::clone(&report);
         let spool_task = spool.clone();
@@ -3219,6 +3223,22 @@ mod batch_report_ring_tests {
         assert_eq!(ring.len(), BATCH_REPORTS_MAX);
         assert!(!ids(&ring).contains(&0), "se fue el más viejo");
     }
+}
+
+/// La papelera del DESTINO de un plan retenido, del mismo par de opciones del
+/// que salió el [`DestTrash`](norte_proto::methods::DestTrash) que se le enseñó a quien lo aprobó (#170).
+///
+/// Una función y no una línea dentro de `sync_apply_opened` porque ahí manda dos
+/// veces: el informe la lleva —para que «¿se puede devolver este lote?» se
+/// conteste con el informe delante y sin haber conservado el `sync.plan_done`—
+/// y el gate de borrado pregunta por la clase de borrado que de verdad va a
+/// ocurrir. Las dos tienen que salir del MISMO sitio o el informe puede acabar
+/// diciendo una papelera y el gate preguntando por otra.
+fn plan_dest_trash(reader: &crate::sync::SpoolReader) -> norte_proto::methods::DestTrash {
+    norte_proto::methods::DestTrash::of(
+        reader.header().options.dest_has_trash,
+        reader.header().options.dest_trash_restorable,
+    )
 }
 
 #[cfg(test)]

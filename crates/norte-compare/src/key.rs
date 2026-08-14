@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 
 use norte_encoding::FoldMode;
 use norte_proto::Segment;
-use norte_proto::methods::CompareReason;
+use norte_proto::methods::{CompareReason, PairTransform};
 use norte_vfs::{Capabilities, CapabilityFlags, Entry};
 
 /// Cómo empareja LA PAREJA de lados, que no es lo mismo que cómo es cada uno.
@@ -154,6 +154,82 @@ pub fn key_for(name: &[u8], sides: Sides) -> PairKey<'_> {
         FoldMode::None
     };
     PairKey(norte_encoding::name_key(name, mode))
+}
+
+/// Bajo qué transformación emparejaron dos nombres, cuando NO son los mismos
+/// bytes (#152).
+///
+/// **PRECONDICIÓN: los dos nombres emparejaron** — son las dos mitades de una
+/// pareja que [`index_side`] y el merge-join juntaron. Con dos nombres que no
+/// emparejan la respuesta es `None`, igual que con dos nombres idénticos: no
+/// hay transformación que nombrar, y decir una sería inventarla.
+///
+/// El orden de las preguntas ES el contrato, y el singleton gana:
+///
+/// 1. **Bytes iguales** → `None`. El caso corriente, y por eso
+///    [`CompareRow::paired_under`](norte_proto::methods::CompareRow::paired_under)
+///    se omite en el wire.
+/// 2. **Alguno de los dos nombres lleva un carácter con descomposición
+///    singleton** ([`norte_encoding::has_canonical_singleton`]) →
+///    [`PairTransform::NormalizationSingleton`], aunque además pliegue caja.
+///    Es la única de las tres que puede estar juntando dos ficheros DISTINTOS,
+///    así que un consumidor que solo mire esa variante tiene que verla.
+/// 3. **Emparejan SIN plegar** → [`PairTransform::Normalization`]: son el mismo
+///    texto en NFC y en NFD.
+/// 4. **Si no, hizo falta el pliegue** → [`PairTransform::CaseFold`].
+///
+/// El paso 2 se equivoca hacia el lado seguro a propósito: mira si el nombre
+/// CONTIENE un singleton, no si ese carácter es exactamente el que separa a los
+/// dos. Una pareja NFC/NFD que llevara además un OHM SIGN idéntico en los dos
+/// lados sale marcada como singleton. El conjunto de caracteres es diminuto y
+/// ninguno aparece en un nombre corriente, así que ese falso positivo cuesta un
+/// aviso de más — y el falso negativo costaría un fichero.
+///
+/// ```
+/// use norte_compare::pair_transform;
+/// use norte_proto::methods::PairTransform;
+///
+/// // Lo corriente: los mismos bytes, nada que decir.
+/// assert_eq!(pair_transform(b"a.txt", b"a.txt"), None);
+/// // NFC contra NFD del mismo texto.
+/// assert_eq!(
+///     pair_transform("café".as_bytes(), b"cafe\xcc\x81"),
+///     Some(PairTransform::Normalization)
+/// );
+/// // Caja: emparejan porque un lado no puede sostener las dos grafías.
+/// assert_eq!(pair_transform(b"README", b"readme"), Some(PairTransform::CaseFold));
+/// // #152: U+212A KELVIN SIGN contra la `K` ASCII — dos ficheros que
+/// // coexisten en ext4 y que NFC junta.
+/// assert_eq!(
+///     pair_transform("\u{212a}.txt".as_bytes(), b"K.txt"),
+///     Some(PairTransform::NormalizationSingleton)
+/// );
+/// // Dos nombres que no emparejan no tienen transformación que nombrar.
+/// assert_eq!(pair_transform(b"a.txt", b"b.txt"), None);
+/// ```
+#[must_use]
+pub fn pair_transform(left: &[u8], right: &[u8]) -> Option<PairTransform> {
+    if left == right {
+        return None;
+    }
+    let sin_plegar = Sides::both_case_sensitive();
+    let normaliza = key_for(left, sin_plegar) == key_for(right, sin_plegar);
+    // Cualquiera de los dos `Sides` que plieguen sirve: lo que se pregunta es
+    // si emparejan CON pliegue, y `fold_case` es propiedad de la pareja.
+    let plegando = Sides::left_case_insensitive();
+    if !normaliza && key_for(left, plegando) != key_for(right, plegando) {
+        return None;
+    }
+    if norte_encoding::has_canonical_singleton(left)
+        || norte_encoding::has_canonical_singleton(right)
+    {
+        return Some(PairTransform::NormalizationSingleton);
+    }
+    Some(if normaliza {
+        PairTransform::Normalization
+    } else {
+        PairTransform::CaseFold
+    })
 }
 
 /// Lo que [`index_side`] necesita de una entrada: los BYTES de su nombre.
@@ -348,6 +424,69 @@ mod tests {
             .find(|n| n.id == id)
             .unwrap_or_else(|| panic!("fixture {id} en el corpus"))
             .bytes
+    }
+
+    /// #152 en una línea: los dos nombres del corpus emparejan —la clave es la
+    /// misma, sin plegar caja— y NO son el mismo texto.
+    #[test]
+    fn el_singleton_de_nfc_empareja_dos_ficheros_distintos() {
+        let kelvin = corpus("singleton_kelvin_sign");
+        let ascii = corpus("ascii_capital_k");
+        let sensible = Sides::both_case_sensitive();
+        assert_ne!(kelvin, ascii, "son dos ficheros, y coexisten en ext4");
+        assert_eq!(
+            key_for(&kelvin, sensible),
+            key_for(&ascii, sensible),
+            "y aun así emparejan: NFC no es inyectiva"
+        );
+        assert_eq!(
+            pair_transform(&kelvin, &ascii),
+            Some(PairTransform::NormalizationSingleton),
+            "y la fila tiene que poder decirlo"
+        );
+    }
+
+    /// Todo par de gemelos del corpus se clasifica como lo que el corpus dice
+    /// que es. Es el cruce que impide que las dos listas —el vocabulario del
+    /// wire y el índice de fixtures— se separen sin que nada avise.
+    ///
+    /// El par de pliegue COMPLETO queda fuera: solo empareja en ext4/f2fs `+F`,
+    /// que es un [`FoldMode`] que este motor no enciende jamás (#145), así que
+    /// para esta clave no son una pareja y la respuesta correcta es `None`.
+    #[test]
+    fn los_gemelos_del_corpus_se_clasifican_como_el_corpus_dice() {
+        use norte_testkit::corpus::TwinKind;
+        for gemelo in norte_testkit::corpus::spelling_twins() {
+            let left = corpus(gemelo.left);
+            let right = corpus(gemelo.right);
+            let esperado = match gemelo.kind {
+                TwinKind::Normalization => Some(PairTransform::Normalization),
+                TwinKind::CaseFold => Some(PairTransform::CaseFold),
+                TwinKind::NormalizationSingleton => Some(PairTransform::NormalizationSingleton),
+                TwinKind::CaseFoldFull => None,
+            };
+            assert_eq!(
+                pair_transform(&left, &right),
+                esperado,
+                "[{} / {}] {:?}",
+                gemelo.left,
+                gemelo.right,
+                gemelo.kind
+            );
+        }
+    }
+
+    /// Dos nombres que NO emparejan no tienen transformación que nombrar, y
+    /// contestar una sería peor que callar: quien la lea creerá que la pareja
+    /// existe.
+    #[test]
+    fn dos_nombres_que_no_emparejan_no_llevan_transformacion() {
+        assert_eq!(pair_transform(b"a.txt", b"b.txt"), None);
+        assert_eq!(pair_transform(b"a.txt", b"a.txt"), None, "mismos bytes");
+        // Ni siquiera cuando uno de los dos lleva un singleton: el singleton
+        // gana ENTRE las tres respuestas, no sobre la pregunta de si emparejan.
+        let kelvin = corpus("singleton_kelvin_sign");
+        assert_eq!(pair_transform(&kelvin, b"otra.txt"), None);
     }
 
     /// macOS hands out NFD, Linux NFC. The same file copied between them must

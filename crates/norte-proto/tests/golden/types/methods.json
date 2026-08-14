@@ -997,29 +997,39 @@
   },
   "sync_report_result": {
     "done": 40,
-    "failed": 4,
+    "failed": 5,
     "skipped": 2,
     "bytes": 4096,
     "failures": [
       {
         "rel": "a.txt",
-        "cause": "conflict"
+        "cause": "conflict",
+        "kind": "overwrite"
       },
       {
         "rel": "b%FF.txt",
-        "cause": "denied"
+        "cause": "denied",
+        "kind": "delete_tree"
       },
       {
         "rel": "sub/c.txt",
-        "cause": "io"
+        "cause": "io",
+        "kind": "copy"
+      },
+      {
+        "rel": "sub",
+        "cause": "denied",
+        "kind": "create_dir"
       },
       {
         "rel": "NOTAS/informe.txt",
         "dest_rel": "notas/informe.txt",
-        "cause": "illegal_name"
+        "cause": "illegal_name",
+        "kind": "copy"
       }
     ],
-    "batch_id": 12
+    "batch_id": 12,
+    "dest_trash": "restorable"
   },
   "sync_report_result_clean": {
     "done": 3,
@@ -1027,7 +1037,8 @@
     "skipped": 0,
     "bytes": 4096,
     "failures": [],
-    "batch_id": 12
+    "batch_id": 12,
+    "dest_trash": "absent"
   },
   "sync_report_result_died": {
     "done": 0,
@@ -1037,8 +1048,10 @@
     "failures": [
       {
         "rel": "a.txt",
-        "cause": "denied"
+        "cause": "denied",
+        "kind": "copy"
       }
-    ]
+    ],
+    "dest_trash": "opaque"
   }
 }

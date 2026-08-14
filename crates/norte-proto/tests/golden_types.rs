@@ -2372,7 +2372,8 @@ fn check_methods_sync_notifs(fixtures: &BTreeMap<String, Value>) {
 /// La segunda mitad de la familia: aplicar un plan aprobado, y su informe.
 fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
-        SyncApplyParams, SyncFailure, SyncFailureCause, SyncReportParams, SyncReportResult,
+        DestTrash, SyncApplyParams, SyncFailure, SyncFailureCause, SyncReportParams,
+        SyncReportResult, SyncStepKind,
     };
     check_one(
         fixtures,
@@ -2392,12 +2393,12 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
         fixtures,
         "sync_report_result",
         // `failed` cuenta TODOS los fallos y `failures` es la lista recortada,
-        // así que `failures.len() <= failed` siempre. Con cuatro filas y un
-        // `failed: 3` la golden enseñaría lo contrario a quien la lea para
+        // así que `failures.len() <= failed` siempre. Con cinco filas y un
+        // `failed: 4` la golden enseñaría lo contrario a quien la lea para
         // escribir un cliente.
         &SyncReportResult {
             done: 40,
-            failed: 4,
+            failed: 5,
             skipped: 2,
             bytes: 4096,
             failures: vec![
@@ -2405,16 +2406,36 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
                     rel: rel_path("a.txt"),
                     dest_rel: None,
                     cause: SyncFailureCause::Conflict,
+                    kind: SyncStepKind::Overwrite,
                 },
+                // La fila hostil MÁS corriente de un `Mirror`, y la que motivó
+                // `SyncFailure::kind` (0.42.0, #195): un `DeleteTree` denegado.
+                // No lleva `dest_rel` —no hay pareja que deletrear— y su `rel`
+                // cuelga del DESTINO, así que antes de este campo la única
+                // prueba en el wire (`dest_rel` presente ⟹ `rel` es del origen)
+                // no decía nada y el lector tenía que elegir una raíz a ciegas.
                 SyncFailure {
                     rel: rel_path("b%FF.txt"),
                     dest_rel: None,
                     cause: SyncFailureCause::Denied,
+                    kind: SyncStepKind::DeleteTree,
                 },
                 SyncFailure {
                     rel: rel_path("sub/c.txt"),
                     dest_rel: None,
                     cause: SyncFailureCause::Io,
+                    kind: SyncStepKind::Copy,
+                },
+                // La cuarta clase que el ejecutor puede anotar, y la que el
+                // barrido del esquema NO cazaría: `SyncStepKind` se pinea
+                // contra `sync_step.json`, así que una clase sin fila de FALLO
+                // aquí pasaría desapercibida. `Skip` no puede: no se ejecuta,
+                // así que no falla (`protocol-guardian`, W4b MINOR-4).
+                SyncFailure {
+                    rel: rel_path("sub"),
+                    dest_rel: None,
+                    cause: SyncFailureCause::Denied,
+                    kind: SyncStepKind::CreateDir,
                 },
                 // La legalidad del nombre bajo la raíz de DESTINO no se valida al
                 // planificar, así que aflora aquí y con nombre propio. Y con la
@@ -2434,9 +2455,14 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
                     rel: rel_path("NOTAS/informe.txt"),
                     dest_rel: Some(rel_path("notas/informe.txt")),
                     cause: SyncFailureCause::IllegalName,
+                    kind: SyncStepKind::Copy,
                 },
             ],
             batch_id: Some(12),
+            // Un `Mirror` que borra contra un destino con papelera que NOMBRA
+            // lo que entierra: con esto en el informe, «¿se puede devolver este
+            // lote?» se contesta sin haber guardado el `sync.plan_done` (#170).
+            dest_trash: DestTrash::Restorable,
         },
     );
     check_one(
@@ -2449,6 +2475,10 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
             bytes: 4096,
             failures: vec![],
             batch_id: Some(12),
+            // El contraste que hace útil el campo: tres copias limpias, y NADA
+            // de esto vuelve. Sin `dest_trash` este informe y el de arriba son
+            // el mismo informe para quien tenga que decidir si deshacer.
+            dest_trash: DestTrash::Absent,
         },
     );
     check_one(
@@ -2463,8 +2493,20 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
                 rel: rel_path("a.txt"),
                 dest_rel: None,
                 cause: SyncFailureCause::Denied,
+                kind: SyncStepKind::Copy,
             }],
             batch_id: None,
+            // `Opaque`: hay papelera y no dice dónde deja las cosas. Que el
+            // `batch_id` sea `None` no lo contradice — son dos preguntas, y con
+            // lote ausente no hay nada que deshacer de todos modos.
+            //
+            // Esta fixture es de DECODE: `new_report` siempre abre el informe
+            // con su lote puesto y es el único constructor del core, así que un
+            // informe sin `batch_id` no lo produce este daemon. Se congela
+            // porque el campo es opcional en el wire desde 0.40.0 y un cliente
+            // tiene que saber leer la forma sin él (`protocol-guardian`, W4b
+            // MINOR-6).
+            dest_trash: DestTrash::Opaque,
         },
     );
 }
@@ -2889,7 +2931,13 @@ fn method_names_frozen() {
     // 0.41.0 (#178): `Error::JournalUnavailable` — un journal ilegible rehúsa
     // la mutación en vez de dejarla pasar sin registro. Categoría nueva, así
     // que MINOR: un cliente 0.40.x la degrada a `Unknown`.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.41.0");
+    //
+    // 0.42.0 (#170, #152, #195): TRES campos en tipos que ya existían, un solo
+    // bump — `SyncReportResult::dest_trash`, `SyncFailure::kind` y
+    // `CompareRow::paired_under`. Ni método ni notificación nuevos, así que no
+    // hay literal que añadir arriba; lo que cambia son las formas, y eso lo
+    // pinean `methods.json` y `compare_row.json`.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.42.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,
@@ -2924,16 +2972,18 @@ fn compare_row(
         newer: None,
         reason: None,
         side: None,
+        paired_under: None,
     }
 }
 
 /// La FILA de `fs.compare` (0.39.0, ADR 0048), congelada: una fixture por
 /// veredicto y, entre todas, el vocabulario ENTERO que el core llega a emitir
-/// — los seis criterios, las tres confianzas, los cinco motivos y los dos
-/// lados. Los cuatro fallbacks de `#[serde(other)]` NO tienen fixture a
-/// propósito: el core jamás los emite, así que no hay dirección de encode que
-/// pinear, y su degradación en DECODE la cubre `types.rs`
-/// (`unknown_enum_tokens_degrade_and_do_not_error`).
+/// — los seis criterios, las tres confianzas, los cinco motivos, los dos
+/// lados y, desde 0.42.0, las tres transformaciones de emparejamiento
+/// ([`compare_row_cases_paired`]). Los cinco fallbacks de `#[serde(other)]` NO
+/// tienen fixture a propósito: el core jamás los emite, así que no hay
+/// dirección de encode que pinear, y su degradación en DECODE la cubre
+/// `types.rs` (`unknown_enum_tokens_degrade_and_do_not_error`).
 ///
 /// Lo que estas fixtures pinean, campo a campo:
 ///
@@ -2962,11 +3012,16 @@ fn compare_row(
 ///   (`error_read_failed_left`, que muere DENTRO del hash). El tipo no tiene
 ///   variante «ningún rung» y no se le inventa una aquí: `unknown` es el
 ///   fallback de decode y el core no lo emite jamás.
+/// - Las QUINCE filas de 0.39.0 no llevan `paired_under` y su JSON no cambió ni
+///   un byte al añadirlo (0.42.0): la clave se omite cuando no hay
+///   transformación que nombrar, que es el caso corriente. Eso es lo que hace
+///   ADITIVO el campo, y este fichero es donde se ve.
 #[test]
 fn golden_compare_row() {
     let mut cases = compare_row_cases_content();
     cases.extend(compare_row_cases_presence());
     cases.extend(compare_row_cases_problems());
+    cases.extend(compare_row_cases_paired());
 
     // Toda fixture congelada tiene que ser una fila LEGAL: si un golden dijera
     // `OnlyLeft` llevando lado derecho, congelaría el bug en vez del contrato,
@@ -2977,6 +3032,83 @@ fn golden_compare_row() {
     }
 
     check_family("compare_row.json", &cases);
+}
+
+/// Las parejas cuyos dos nombres NO son los mismos bytes (0.42.0, #152): el
+/// veredicto es normal —`Same` o `Different`, decidido por el rung que tocara—
+/// y lo que congela cada fixture es [`CompareRow::paired_under`], que es lo
+/// único que dice que las dos mitades se deletrean distinto.
+///
+/// Las tres, y no una: separar el singleton de las otras dos ES el contrato.
+/// Un consumidor que solo viera «difieren en bytes» tendría que elegir entre
+/// fiarse de todo emparejamiento por normalización —el bug de #152— o
+/// rechazarlos todos, que rompe el caso macOS↔Linux para el que la clave
+/// existe.
+///
+/// El KELVIN SIGN y el gemelo NFD van escritos con escapes `\u`, por lo mismo
+/// que `ambiguous_normalization_right`: un editor que normalizara el fichero
+/// convertiría estos tests en tautologías.
+fn compare_row_cases_paired() -> Vec<(&'static str, norte_proto::methods::CompareRow)> {
+    use norte_proto::methods::CompareConfidence as Conf;
+    use norte_proto::methods::CompareCriterion as Crit;
+    use norte_proto::methods::CompareVerdict as V;
+    use norte_proto::methods::{CompareRow, PairTransform};
+    vec![
+        // Un lado no distingue caja, así que los dos nombres NO pueden
+        // coexistir allí y emparejarlos es lo correcto. Viaja para que un
+        // pintor pueda explicar por qué la fila enseña dos grafías.
+        (
+            "same_paired_under_case_fold",
+            CompareRow {
+                paired_under: Some(PairTransform::CaseFold),
+                ..compare_row(
+                    16,
+                    Some(cf("file:///l/LEEME.txt", Some(7), Some(COMPARE_T))),
+                    Some(cf("file:///r/leeme.txt", Some(7), Some(COMPARE_T))),
+                    V::Same,
+                    Crit::Hash,
+                    Conf::Certain,
+                )
+            },
+        ),
+        // El caso para el que se diseñó la clave: el MISMO texto repartido en
+        // NFC por Linux y en NFD por macOS. Tampoco es un aviso; lo que importa
+        // al escribir es que el destino se deletrea de otra manera.
+        (
+            "same_paired_under_normalization",
+            CompareRow {
+                paired_under: Some(PairTransform::Normalization),
+                ..compare_row(
+                    17,
+                    Some(cf("file:///l/caf\u{e9}.txt", Some(3), Some(COMPARE_T))),
+                    Some(cf("file:///r/cafe\u{301}.txt", Some(3), Some(COMPARE_T))),
+                    V::Same,
+                    Crit::Hash,
+                    Conf::Certain,
+                )
+            },
+        ),
+        // #152 entero en una fila: U+212A KELVIN SIGN contra la `K` ASCII.
+        // Coexisten en ext4, se leen como caracteres DISTINTOS, y sin esta
+        // marca un plan de sincronización lee este `Different` como «actualiza
+        // el de la derecha con el de la izquierda» y escribe encima de un
+        // fichero que no tiene nada que ver. El veredicto y el criterio son los
+        // normales: lo anómalo no es la comparación, es la PAREJA.
+        (
+            "different_paired_under_singleton",
+            CompareRow {
+                paired_under: Some(PairTransform::NormalizationSingleton),
+                ..compare_row(
+                    18,
+                    Some(cf("file:///l/\u{212a}.txt", Some(10), Some(COMPARE_T))),
+                    Some(cf("file:///r/K.txt", Some(20), Some(COMPARE_T))),
+                    V::Different,
+                    Crit::Size,
+                    Conf::Certain,
+                )
+            },
+        ),
+    ]
 }
 
 /// La fecha de referencia de las fixtures de comparación.

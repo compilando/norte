@@ -13249,6 +13249,7 @@ mod compare_tests {
             newer: None,
             reason: Some(norte_proto::methods::CompareReason::Unreadable),
             side: None,
+            paired_under: None,
         }
     }
 
@@ -13595,6 +13596,7 @@ mod sync_tests {
             newer: None,
             reason: None,
             side: None,
+            paired_under: None,
         }
     }
 
@@ -13966,6 +13968,7 @@ mod sync_tests {
                     bytes: 10,
                     failures: Vec::new(),
                     batch_id: Some(1),
+                    dest_trash: norte_proto::methods::DestTrash::Restorable,
                 });
         }
         approve_sync(&mut app);
@@ -14169,6 +14172,7 @@ mod sync_tests {
                 newer: None,
                 reason: None,
                 side: None,
+                paired_under: None,
             }]);
             view.pane.toggle_mark(99);
         }
@@ -14198,6 +14202,7 @@ mod sync_tests {
                 newer: None,
                 reason: None,
                 side: None,
+                paired_under: None,
             }]);
             view.pane.toggle_mark(98);
         }

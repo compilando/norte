@@ -239,5 +239,62 @@
     "confidence": "unknown",
     "reason": "read_failed",
     "side": "left"
+  },
+  "same_paired_under_case_fold": {
+    "id": 16,
+    "left": {
+      "path": "file:///l/LEEME.txt",
+      "kind": "file",
+      "size": 7,
+      "mtime_ms": 1720000000000
+    },
+    "right": {
+      "path": "file:///r/leeme.txt",
+      "kind": "file",
+      "size": 7,
+      "mtime_ms": 1720000000000
+    },
+    "verdict": "same",
+    "criterion": "hash",
+    "confidence": "certain",
+    "paired_under": "case_fold"
+  },
+  "same_paired_under_normalization": {
+    "id": 17,
+    "left": {
+      "path": "file:///l/caf\u00e9.txt",
+      "kind": "file",
+      "size": 3,
+      "mtime_ms": 1720000000000
+    },
+    "right": {
+      "path": "file:///r/cafe\u0301.txt",
+      "kind": "file",
+      "size": 3,
+      "mtime_ms": 1720000000000
+    },
+    "verdict": "same",
+    "criterion": "hash",
+    "confidence": "certain",
+    "paired_under": "normalization"
+  },
+  "different_paired_under_singleton": {
+    "id": 18,
+    "left": {
+      "path": "file:///l/\u212a.txt",
+      "kind": "file",
+      "size": 10,
+      "mtime_ms": 1720000000000
+    },
+    "right": {
+      "path": "file:///r/K.txt",
+      "kind": "file",
+      "size": 20,
+      "mtime_ms": 1720000000000
+    },
+    "verdict": "different",
+    "criterion": "size",
+    "confidence": "certain",
+    "paired_under": "normalization_singleton"
   }
 }

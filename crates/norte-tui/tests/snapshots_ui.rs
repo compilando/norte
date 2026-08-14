@@ -1858,6 +1858,7 @@ fn fila_compare(
         reason: matches!(verdict, CompareVerdict::Ambiguous | CompareVerdict::Error)
             .then_some(CompareReason::Unreadable),
         side: None,
+        paired_under: None,
     }
 }
 

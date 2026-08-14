@@ -364,6 +364,24 @@ have to pick one by convention and then say something false.
 
 ### The bump
 
+*(Amended in protocol 0.42.0: two of this ADR's types gain a MANDATORY field,
+and both are the same omission — a message read without the context that
+produced it. `SyncReportResult::dest_trash` (#170) repeats what
+`SyncPlanDone::dest_trash` already carried, because the report is read by
+clients that did not plan, reconnected, or dropped the notification, and
+"what was copied and deleted" without "does any of it come back" is the
+question this ADR says must be answered before a decision, not after.
+`SyncFailure::kind` (#195) is the class the executor holds in hand and threw
+away; without it, which root a failure's `rel` hangs from was inferred from
+whether `dest_rel` happened to be present, which is sound only while a
+`DeleteTree` never carries one — an invariant this ADR relied on and never
+stated. Both are mandatory and neither has a `serde` default, for the reason
+`dest_trash` was mandatory on `SyncPlanDone`: a default is an invented answer
+to "can this be undone" and "which tree is this path in". The N/N-1 window is
+what makes that safe — a daemon one minor behind does not negotiate with a
+client one ahead — and a test now pins that the 0.41 shape is REFUSED rather
+than defaulted.)*
+
 0.40.0 is **additive**: new methods, new notifications, new types, two new
 `TaskKind` variants and one new `Error` variant, with no existing type changing
 shape. The published JSON Schema artifact gains lines and loses none. The two

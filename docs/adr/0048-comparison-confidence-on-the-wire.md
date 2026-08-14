@@ -109,6 +109,27 @@ different things:
 - `confidence` — **what that rung's answer is worth** (`certain`, `probable`,
   `unknown`).
 
+*(Amended in protocol 0.42.0, #152: a fourth, OPTIONAL field, `paired_under`.
+It is not a fourth part of the verdict — it says nothing about what was
+concluded — but about the PAIRING that produced the row at all. The key pairs
+names by their NFC form and NFC is not injective: U+212A KELVIN SIGN normalises
+to `K`, so two files that coexist on ext4 with no case-insensitivity involved
+paired and were compared as one, and the resulting ordinary `same`/`different`
+row had nowhere to say that its two halves are not the same name —
+`reason_is_consistent` forbids a `CompareReason` outside `ambiguous`/`error`,
+and relaxing that would make an N-1 client's own consistency check reject good
+rows. `PairTransform` keeps `normalization_singleton` separate from `case_fold`
+and `normalization` because a consumer that could only see "these differ in
+bytes" would have to choose between trusting every normalised pairing — the bug
+— and rejecting all of them, which breaks the macOS-to-Linux case this key
+exists to serve. Note this against the reasoning below on `ambiguous`: a
+collision is one-sided and is reported as one row per entry, whereas this marks
+a row that HAS two sides, which is why it is a field and not a verdict. It
+describes the two NAMES of this row, not its whole path: a consumer deciding
+about a subtree must propagate an ancestor's mark itself, which pre-order
+delivery makes possible. What a synchronisation should DO about such a pair is
+deliberately not decided here — first the fact, then the policy.)*
+
 `certain` means the criterion proves its verdict: presence, kind, symlink
 target, a differing size, a hash. `probable` means it suggests it without
 proof, which today is exactly the mtime rung in both directions. `unknown`

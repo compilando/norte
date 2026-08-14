@@ -20,8 +20,8 @@ use norte_core::journal::{Journal, JournalEntry, SqliteJournal};
 use norte_core::sync::{Spool, SyncPlanEvent};
 use norte_core::{Actor, Engine, UndoReport};
 use norte_proto::methods::{
-    OnUnknown, PlanHash, SyncCompareOptions, SyncMode, SyncPlanDone, SyncPlanParams,
-    SyncReportResult,
+    DestTrash, OnUnknown, PlanHash, SyncCompareOptions, SyncMode, SyncPlanDone, SyncPlanParams,
+    SyncReportResult, SyncStepKind,
 };
 use norte_proto::{CapabilityFlags, Error as ProtoError, TaskState, VPath};
 use norte_testkit::MemProvider;
@@ -190,6 +190,14 @@ async fn un_plan_aprobado_se_ejecuta_y_queda_en_un_solo_lote() {
     assert_eq!(report.failed, 0, "{:?}", report.failures);
     assert_eq!(report.done, 3, "createdir + copy + overwrite");
     assert!(report.batch_id.is_some(), "el undo lo necesita");
+    // #170: el informe se basta solo. Quien lo lee puede no ser quien aplicó
+    // —una reconexión, otra conexión, un `plan_done` que se soltó—, y sin esto
+    // no podía saber si algo de lo que acaba de leer vuelve.
+    assert_eq!(report.dest_trash, DestTrash::Restorable);
+    assert_eq!(
+        report.dest_trash, done.dest_trash,
+        "el informe no puede decir otra papelera que la que se aprobó"
+    );
 
     assert_eq!(read_file(&h.mem, "mem:///d/nueva/a.txt").await, b"nueva-a");
     assert_eq!(
@@ -240,6 +248,11 @@ async fn una_sobrescritura_sin_papelera_se_declara_irreversible() {
     let (state, report) = apply(&h, &done.plan_hash).await;
     assert_eq!(state, TaskState::Completed);
     assert_eq!(report.done, 1);
+    // El contraste de #170, y el motivo de que el campo no tenga default: este
+    // informe y el del test 1 son el mismo informe salvo por esta clave, y uno
+    // se deshace entero y el otro no se deshace nada.
+    assert_eq!(report.dest_trash, DestTrash::Absent);
+    assert_eq!(report.dest_trash, done.dest_trash);
     assert_eq!(read_file(&h.mem, "mem:///d/a.txt").await, b"origen");
 
     let es = entries(&h).await;
@@ -330,9 +343,50 @@ async fn un_fallo_en_mitad_no_mata_la_task() {
     assert_eq!(report.done, 2);
     assert_eq!(report.failed, 1);
     assert_eq!(report.failures[0].rel.to_wire(), "b.txt");
+    // #195: la clase del paso que falló. Aquí es un `Copy`, cuyo `rel` cuelga
+    // del ORIGEN — que es lo que la fila hostil del test de abajo NO hace.
+    assert_eq!(report.failures[0].kind, SyncStepKind::Copy);
     assert!(
         exists(&h.mem, "mem:///d/c.txt").await,
         "el recorrido siguió"
+    );
+}
+
+// 5b ──────────────────────────────────────────────────────────────────────
+/// **La fila hostil más común de un `Mirror`, y todo el motivo de #195**: un
+/// `DeleteTree` que no ocurre. Su `rel` cuelga del DESTINO, no lleva `dest_rel`
+/// —el borrado ya está deletreado como el destino lo deletrea— y hasta 0.41.0
+/// el informe no traía nada con lo que distinguirla de un `Copy` fallido, cuyo
+/// `rel` cuelga del origen. Un panel que la pintase bajo la columna del origen
+/// manda al operador a mirar el árbol que no se ha tocado.
+#[tokio::test]
+async fn un_delete_tree_que_falla_se_reconoce_por_su_clase() {
+    let h = harness(with_trash()).await;
+    h.mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+    h.mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+    h.mem.mkdir(&vp("mem:///d/sobra")).await.expect("mkdir");
+    write_file(&h.mem, "mem:///d/sobra/x.txt", b"x").await;
+
+    let done = plan(&h, SyncMode::Mirror).await;
+    assert_eq!(done.counts.delete_tree, 1);
+    // El árbol desaparece entre aprobar y aplicar: la revalidación lo caza y el
+    // paso sale como fila del informe en vez de tocar nada.
+    h.mem
+        .remove(&vp("mem:///d/sobra/x.txt"))
+        .await
+        .expect("remove");
+    h.mem.remove(&vp("mem:///d/sobra")).await.expect("remove");
+
+    let (state, report) = apply(&h, &done.plan_hash).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(report.failed, 1, "{:?}", report.failures);
+    let fallo = &report.failures[0];
+    assert_eq!(fallo.kind, SyncStepKind::DeleteTree);
+    assert_eq!(fallo.rel.to_wire(), "sobra");
+    assert_eq!(
+        fallo.dest_rel, None,
+        "un borrado ya viene deletreado como el destino: sin esta clase, la fila \
+         no tenía NADA que dijera de qué raíz cuelga su `rel`"
     );
 }
 

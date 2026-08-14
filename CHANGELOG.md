@@ -654,6 +654,52 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A finished synchronisation now says, by itself, whether it can be given
+  back.** The report you can ask for after a synchronisation told you what was
+  copied, overwritten, deleted and what failed — and not whether any of it
+  comes back. That answer lives in the destination's trash, and it only ever
+  travelled once, on the notification that closes the plan, which is fine for
+  whoever approved the plan seconds earlier and useless for anyone who
+  reconnected, was not the one who planned it, or simply did not keep the
+  notification. Two synchronisations of nothing but copies produce byte-for-byte
+  the same report, and one of them undoes completely while the other undoes
+  nothing at all. The report now carries the same trash answer the approval
+  screen was given, from the same plan, so it cannot say something different
+  from what you agreed to. On the wire that is protocol **0.42.0** (#170).
+
+- **A step that failed now says what it was, so a panel can tell you which of
+  the two folders to go and look at.** A failure row carries a path, and that
+  path is measured against the source for everything that writes and against
+  the DESTINATION for a deletion — but the report is read without the plan in
+  front of it, and the row did not say which kind of step it had been. The most
+  ordinary hostile row of a mirror is exactly the ambiguous one: a deletion
+  refused on permissions, whose path is in the destination and which carries
+  nothing else to prove it. Until now that was inferred from whether the row
+  happened to carry a second, destination spelling — sound only for as long as a
+  deletion never carries one, which nothing on the wire said out loud. The class
+  now travels with the failure (protocol **0.42.0**), so the rule is read rather
+  than deduced. The panels still infer, and switching them over is deliberately
+  a separate change, tracked in #208: it changes what two interfaces paint
+  (#195).
+
+- **Two unrelated files could be compared as if they were one, with nothing
+  saying so.** Names are paired by their NFC form so that the same file copied
+  between macOS and Linux lines up, and NFC is not injective: U+212A KELVIN SIGN
+  becomes `K`, U+2126 OHM SIGN becomes the Greek omega. Two files that sit side
+  by side on ext4 without any case-insensitivity involved therefore paired, and
+  the resulting row — an ordinary "same" or "different" — had no way to say that
+  its two halves are not the same name. A synchronisation reading that row would
+  overwrite a file that has nothing to do with the one it came from. Comparison
+  rows now state, when the two names differ in bytes, WHICH transformation
+  paired them (protocol **0.42.0**), and they keep the dangerous case separate
+  from the two ordinary ones — a consumer that could only see "these differ in
+  bytes" would have to choose between trusting every normalised pairing, which
+  is the bug, and rejecting all of them, which breaks the macOS-to-Linux case
+  the pairing exists to serve. The corpus gains the two names that prove it.
+  Deciding what a synchronisation should DO about such a pair is the next step
+  and is tracked separately (#207); this is the fact it needs in order to decide
+  anything at all (#152).
+
 - **An operation is now recorded whole, or not at all — never half.** This is a
   trap the retry above opened, closed in the same release. Because norte can now
   regain the journal partway through a long session, and because it used to ask

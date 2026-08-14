@@ -1139,17 +1139,24 @@ pub struct FailureCells {
 /// ([`SyncEncodings::for_anchor`]) porque no hay nada mejor que elegir; con
 /// dos overrides #57 distintos eso puede nombrar un subárbol del destino con
 /// el codepage del árbol que no se tocó, y llega marcado como hostil pero no
-/// como «del otro lado». Cerrarlo del todo pide una clase en el wire
-/// (`SyncFailure::kind`, issue abierta): el core la tiene en la mano cuando
-/// construye el fallo y la tira.
+/// como «del otro lado».
+///
+/// **Desde 0.42.0 hay con qué cerrarlo, y esta función todavía no lo usa**
+/// (#195 lo puso en el wire, #208 lo consume):
+/// [`norte_proto::methods::SyncFailure::kind`] lleva la clase que el core tenía
+/// en la mano y tiraba, así que un `DeleteTree` que falló ya se puede anclar en
+/// el DESTINO con la misma regla que [`anchor_of`] aplica a un paso, en vez de
+/// caer en `Either`. Cambiar lo que este módulo devuelve cambia lo que dos
+/// frontends pintan, así que no viaja en el bump del wire.
 ///
 /// ```
 /// use norte_frontend::sync::{RelAnchor, SyncEncodings, render_failure};
-/// use norte_proto::methods::{RelPath, SyncFailure, SyncFailureCause};
+/// use norte_proto::methods::{RelPath, SyncFailure, SyncFailureCause, SyncStepKind};
 /// let f = SyncFailure {
 ///     rel: RelPath::parse_wire("sub/a.txt").expect("rel"),
 ///     dest_rel: Some(RelPath::parse_wire("sub/a.txt").expect("rel")),
 ///     cause: SyncFailureCause::Denied,
+///     kind: SyncStepKind::Copy,
 /// };
 /// let cells = render_failure(&f, SyncEncodings::default());
 /// assert_eq!(cells.rel.text, "sub/a.txt");
@@ -1164,7 +1171,10 @@ pub struct FailureCells {
 ///     rel: RelPath::parse_wire("viejo").expect("rel"),
 ///     dest_rel: None,
 ///     cause: SyncFailureCause::Io,
+///     kind: SyncStepKind::DeleteTree,
 /// };
+/// // …y desde 0.42.0 el wire SÍ lo dice (`kind`), pero esta función todavía
+/// // no lo lee: cambiar lo que pinta es la ola siguiente, no el bump.
 /// assert_eq!(
 ///     render_failure(&solo, SyncEncodings::default()).anchor,
 ///     RelAnchor::Either
@@ -3381,6 +3391,7 @@ mod tests {
             rel: rel_de(&nfc.bytes),
             dest_rel: Some(rel_de(&nfd.bytes)),
             cause: SyncFailureCause::IllegalName,
+            kind: SyncStepKind::Copy,
         };
         let fcells = render_failure(&fallo, SyncEncodings::default());
         assert!(fcells.dest_rel_twin);
@@ -3482,6 +3493,7 @@ mod tests {
             bytes: 30,
             failures: vec![],
             batch_id: Some(7),
+            dest_trash: DestTrash::Restorable,
         };
 
         // Terminó bien y con informe: `Done`, sin nada que decir.
@@ -3574,6 +3586,7 @@ mod tests {
             bytes: 30,
             failures: vec![],
             batch_id: Some(7),
+            dest_trash: DestTrash::Restorable,
         });
 
         v.run = SyncRunState::Done;
@@ -3699,6 +3712,7 @@ mod tests {
             bytes: 10,
             failures: vec![],
             batch_id: Some(3),
+            dest_trash: DestTrash::Restorable,
         });
         match &s {
             SyncState::Applied(a) => assert_eq!(a.report().done, 1),
@@ -4059,6 +4073,7 @@ mod tests {
             bytes: 0,
             failures: vec![],
             batch_id: None,
+            dest_trash: DestTrash::Restorable,
         });
         match &s {
             SyncState::Applied(a) => assert!(
