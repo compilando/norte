@@ -1176,15 +1176,13 @@ fn directory_side(source: Option<&Entry>, dest: Option<&Entry>) -> Option<Side> 
 
 /// ¿Está `path` EN `root` o por debajo?
 ///
-/// Compara scheme, authority y luego los segmentos uno a uno por sus bytes
-/// crudos, igual que [`rel_under`] y por el mismo motivo: por prefijo de cadena,
-/// `…/cafétière` colgaría de `…/café` (regla dura 1).
+/// Delegado en [`RelPath::under`], igual que [`rel_under`] y por el mismo
+/// motivo — es la única implementación desde #172. La raíz misma cuenta como
+/// contenida, que es lo que las dos llamantes de este módulo necesitan: si el
+/// walk alcanzó la propia raíz contraria, el subárbol entero está dentro
+/// igual (ver [`Transducer::overlap_reached`] y [`Transducer::overlap_prunes`]).
 fn is_at_or_under(root: &VPath, path: &VPath) -> bool {
-    if path.scheme() != root.scheme() || path.authority() != root.authority() {
-        return false;
-    }
-    let mut rest = path.segments();
-    root.segments().all(|segment| rest.next() == Some(segment))
+    RelPath::under(root, path).is_some()
 }
 
 /// La ruta de `path` RELATIVA a `root`, o el error que dice que no cuelga.
