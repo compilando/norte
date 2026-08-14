@@ -912,6 +912,13 @@ impl Engine {
     /// asimetría sin sentido. El `actor` se propaga a la Task (por consistencia
     /// con las mutaciones y para auditoría futura), pero no gatea nada.
     ///
+    /// **Lo que el `actor` SÍ decide** (#165): las
+    /// [`walk_exclusions`](crate::policy::walk_exclusions) del recorrido. El
+    /// gate de lectura del daemon mira la RAÍZ, así que una búsqueda de un
+    /// AGENTE sobre `$HOME` —legítima— bajaría al directorio de estado del
+    /// daemon y devolvería `journal.db` y los spools de sync. No es un gate:
+    /// es por dónde no se baja, y el humano no lleva ninguna.
+    ///
     /// **Mapeo de progreso** (lo consume el TUI): `entries_done` = entradas
     /// examinadas (incluidas las saltadas por error); `bytes_done` = nº de hits
     /// acumulados (no hay bytes reales en una búsqueda — se reutiliza el campo);
@@ -941,6 +948,11 @@ impl Engine {
         })?;
         let provider = self.provider_for(&params.root).await?;
         let root = params.root;
+        // Lo que un AGENTE no puede recorrer aunque su raíz sea legítima
+        // (#165): el directorio de estado del daemon cuelga de `$HOME`, y el
+        // gate de lectura del daemon solo mira la raíz de la búsqueda. El
+        // humano no se sandboxea, así que busca en sus propios ficheros.
+        let excluded = crate::policy::walk_exclusions(&actor);
         let (tx, rx) = tokio::sync::mpsc::channel(8);
         let key = root.scheme().to_owned();
         let handle = self.sched.submit(
@@ -950,7 +962,7 @@ impl Engine {
             actor,
             Box::new(move |ctx| {
                 Box::pin(async move {
-                    crate::search::run_walk(provider, root, matchers, tx, &ctx).await
+                    crate::search::run_walk(provider, root, matchers, excluded, tx, &ctx).await
                 })
             }),
         );
@@ -1713,6 +1725,13 @@ impl Engine {
 
     /// Consulta el índice de `root` por `text` (M4). Lectura directa (no Task).
     ///
+    /// Los hits de un subárbol protegido se CAEN para un agente o un plugin
+    /// (#165): el índice lo construye normalmente el humano, así que puede
+    /// contener el directorio de estado del daemon aunque un agente no pueda
+    /// listarlo. El filtro va DESPUÉS del `limit` del índice, así que una
+    /// consulta cuyos hits caen todos en lo protegido devuelve menos filas de
+    /// las pedidas — que es exactamente lo que debe devolver.
+    ///
     /// # Errors
     /// [`Error::Unsupported`] si no hay índice; error del índice mapeado a `Io`.
     pub async fn index_query_as(
@@ -1720,15 +1739,16 @@ impl Engine {
         root: &VPath,
         text: &str,
         limit: u32,
-        _actor: crate::journal::Actor,
+        actor: crate::journal::Actor,
     ) -> Result<Vec<norte_index::IndexHit>, Error> {
         let index = self.index.clone().ok_or(Error::Unsupported)?;
-        index.query(root, text, limit).await.map_err(|e| {
+        let hits = index.query(root, text, limit).await.map_err(|e| {
             tracing::debug!(error = %e, "index.query falló");
             Error::Io {
                 retryable: e.is_retryable(),
             }
-        })
+        })?;
+        Ok(drop_excluded(hits, &crate::policy::walk_exclusions(&actor)))
     }
 
     /// `index.search_semantic`: UNA llamada de embed para la query + barrido
@@ -3135,6 +3155,22 @@ struct UndoGates {
     gates: Vec<(crate::policy::PolicyOp, Vec<VPath>)>,
 }
 
+/// Deja fuera los hits que caen en un subárbol excluido (#165). Separado de
+/// [`Engine::index_query_as`] para poder probarlo sin índice y sin entorno:
+/// las exclusiones reales las resuelve
+/// [`crate::policy::walk_exclusions`] del proceso.
+fn drop_excluded(
+    hits: Vec<norte_index::IndexHit>,
+    excluded: &[VPath],
+) -> Vec<norte_index::IndexHit> {
+    if excluded.is_empty() {
+        return hits;
+    }
+    hits.into_iter()
+        .filter(|h| !excluded.iter().any(|x| crate::policy::is_under(x, &h.path)))
+        .collect()
+}
+
 /// Reconstruye un `VPath` desde los bytes `to_wire` del journal (undo M3-2).
 fn wire_engine(bytes: &[u8]) -> Result<VPath, Error> {
     let s = std::str::from_utf8(bytes).map_err(|_| Error::InvalidPath)?;
@@ -3244,6 +3280,41 @@ fn plan_dest_trash(reader: &crate::sync::SpoolReader) -> norte_proto::methods::D
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hit(wire: &str) -> norte_index::IndexHit {
+        norte_index::IndexHit {
+            path: VPath::parse(wire).expect("wire"),
+            kind: norte_proto::EntryKind::File,
+            size: None,
+            mtime_ms: None,
+        }
+    }
+
+    /// #165: el índice lo construye el humano y puede contener el directorio
+    /// de estado del daemon; un agente que lo consulta no se lo lleva.
+    #[test]
+    fn los_hits_de_un_subarbol_protegido_no_salen() {
+        let hits = vec![
+            hit("file:///home/u/docs/carta.txt"),
+            hit("file:///home/u/.config/norte/journal.db"),
+            hit("file:///home/u/.config/norte"),
+            hit("file:///home/u/.config/norte-backup/journal.db"),
+        ];
+        let excluido = vec![VPath::parse("file:///home/u/.config/norte").expect("wire")];
+        let quedan: Vec<String> = drop_excluded(hits.clone(), &excluido)
+            .into_iter()
+            .map(|h| h.path.to_wire())
+            .collect();
+        assert_eq!(
+            quedan,
+            vec![
+                "file:///home/u/docs/carta.txt".to_owned(),
+                "file:///home/u/.config/norte-backup/journal.db".to_owned(),
+            ]
+        );
+        // Sin exclusiones (el humano) no se cae ni una.
+        assert_eq!(drop_excluded(hits, &[]).len(), 4);
+    }
 
     /// #166: un `Engine` sin `with_policy` gatea con `AllowAll`, y eso no se
     /// distingue de una policy permisiva a propósito. El daemon avisa en el

@@ -46,6 +46,29 @@ norte_vfs::provider_contract! {
     hostile_names: hostile_names(),
 }
 
+/// El mismo provider con la papelera lógica ENCENDIDA (ADR 0019).
+async fn fresh_con_papelera() -> SftpProvider {
+    fresh().await.with_logical_trash(true)
+}
+
+// La suite entera, otra vez, con la papelera lógica puesta (#168).
+//
+// Mismo motivo que en `norte-vfs-object`: es la única configuración en la que
+// corre la rama del contrato que dice «el destino existe y se restaura», o
+// sea la que comprueba que `trash()` nombra lo que entierra, que
+// `reversal_ref` es `Some` y que `restore_from` devuelve el nodo exacto —
+// bytes y nombre, nombres no-UTF8 incluidos.
+//
+// Los overrides de este provider se creían correctos porque se habían LEÍDO.
+// El de object estaba en ese mismo estado cuando se escribió el fallo que
+// #168 documenta.
+norte_vfs::provider_contract! {
+    mod sftp_inproc_papelera,
+    factory: fresh_con_papelera().await,
+    root: SftpProvider::root(Authority::new("test:22").expect("authority válida")),
+    hostile_names: hostile_names(),
+}
+
 // ---------- attrs posix (#108 bloque 2) ----------
 
 #[tokio::test]

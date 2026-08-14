@@ -862,6 +862,13 @@ pub const PLAN_HASH_LEN: usize = 64;
 /// [`FS_SEARCH`]. SOLO viaja a la conexión que lanzó la búsqueda (jamás
 /// broadcast, mismo criterio direccional que
 /// [`POLICY_APPROVAL_REQUIRED`]).
+///
+/// Un cliente que no vacía su cola pierde los frames que no quepan, pero NO
+/// la suscripción (#155): el dueño de un feed dirigido vivo conserva su sitio
+/// para recibir el snapshot terminal de la Task. Con `max_hits` puesto, ese
+/// snapshot es además contra lo que se mide una búsqueda truncada; con
+/// `max_hits: None` es la única señal que hay, igual que en
+/// [`COMPARE_ROWS`].
 pub const SEARCH_HITS: &str = "search.hits";
 /// Tope de entries por notificación [`SEARCH_HITS`] (coalescing
 /// server-side, mismo espíritu que [`FS_LIST_MAX_PAGE`]).
@@ -900,10 +907,14 @@ pub const FS_COMPARE: &str = "fs.compare";
 /// [`SEARCH_HITS`]).
 ///
 /// # Cómo se sabe si llegaron TODAS
-/// Una notificación se puede perder: el daemon expulsa a un suscriptor que no
-/// vacía su cola, y a diferencia de `fs.search` aquí no hay un `max_hits`
-/// contra el que contar (hallazgo MINOR de protocol-guardian, revisión de C1).
-/// La señal es
+/// Una notificación se puede perder: un cliente que no vacía su cola pierde
+/// los frames que no caben, y a diferencia de `fs.search` aquí no hay un
+/// `max_hits` contra el que contar (hallazgo MINOR de protocol-guardian,
+/// revisión de C1). Lo que NO pierde es la suscripción: el dueño de un feed
+/// dirigido vivo se queda en el mapa aunque su cola se llene, precisamente
+/// para que le llegue el snapshot terminal con el que hace esta comprobación
+/// (#155 — antes se le expulsaba, y la comprobación se perdía justo en el
+/// caso para el que existe). La señal es
 /// [`TaskProgress::entries_done`](crate::TaskProgress::entries_done), que en
 /// una Task [`TaskKind::Compare`](crate::TaskKind::Compare) cuenta FILAS
 /// emitidas: el último snapshot de `task.progress` lleva siempre estado

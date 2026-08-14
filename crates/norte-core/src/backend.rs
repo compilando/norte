@@ -81,6 +81,10 @@ const AI_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
 pub use norte_vfs::EntryStream;
 
 /// Una task en marcha, venga del scheduler embebido o del daemon.
+///
+/// NO es `Clone` a propósito: [`Self::join`] consume el handle, y dos dueños
+/// de la espera son dos sitios que creen que van a ver el desenlace. Lo que sí
+/// se puede repartir es OBSERVARLA — ver [`Self::observer`] (#173).
 pub struct TaskRef {
     id: TaskId,
     rx: watch::Receiver<TaskProgress>,
@@ -124,6 +128,28 @@ impl TaskRef {
         self.canceller.clone()
     }
 
+    /// Una vista CLONABLE de esta task: id, progreso y cancelación, sin la
+    /// espera (#173).
+    ///
+    /// Existe para el tablero de tasks de un frontend, que necesita PINTAR el
+    /// progreso y PEDIR la cancelación, no poseer la task. Antes tenía que
+    /// quedarse el [`TaskRef`] entero, así que quien lo lanzaba se quedaba sin
+    /// él — y por eso una sincronización APLICÁNDOSE, que solo se puede parar
+    /// desde su panel, no aparecía en el tablero: la operación más destructiva
+    /// del programa era la única invisible.
+    ///
+    /// Que dos sitios puedan cancelar no rompe nada: [`TaskCanceller`] ya era
+    /// clonable, y una cancelación es idempotente y cooperativa. Lo que sigue
+    /// teniendo un solo dueño es la ESPERA.
+    #[must_use]
+    pub fn observer(&self) -> TaskObserver {
+        TaskObserver {
+            id: self.id,
+            rx: self.rx.clone(),
+            canceller: self.canceller.clone(),
+        }
+    }
+
     /// Petición de cancelación cooperativa.
     pub fn cancel(&self) {
         self.canceller.cancel();
@@ -156,6 +182,56 @@ impl TaskRef {
             rx: handle.progress(),
             canceller: TaskCanceller::Embedded(handle.cancel_token()),
         }
+    }
+}
+
+/// Vista clonable de una task viva: lo que hace falta para PINTARLA y
+/// PARARLA, sin poseerla ([`TaskRef::observer`], #173).
+///
+/// ```
+/// use norte_core::backend::TaskRef;
+/// use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
+///
+/// let (_tx, rx) = tokio::sync::watch::channel(TaskProgress {
+///     task_id: TaskId::new(7),
+///     kind: TaskKind::Sync,
+///     state: TaskState::Running,
+///     bytes_done: 0,
+///     bytes_total: None,
+///     entries_done: 0,
+///     entries_total: None,
+///     current: None,
+/// });
+/// let task = TaskRef::synthetic_for_tests(TaskId::new(7), rx);
+/// let observador = task.observer();
+/// // Dos observadores de la MISMA task, y la task sigue siendo de quien la lanzó.
+/// assert_eq!(observador.clone().id(), task.id());
+/// assert!(!observador.progress().borrow().state.is_terminal());
+/// ```
+#[derive(Clone)]
+pub struct TaskObserver {
+    id: TaskId,
+    rx: watch::Receiver<TaskProgress>,
+    canceller: TaskCanceller,
+}
+
+impl TaskObserver {
+    /// Id de la task observada.
+    #[must_use]
+    pub fn id(&self) -> TaskId {
+        self.id
+    }
+
+    /// Snapshots vivos (el mismo `watch` que [`TaskRef::progress`]).
+    #[must_use]
+    pub fn progress(&self) -> watch::Receiver<TaskProgress> {
+        self.rx.clone()
+    }
+
+    /// Pide la cancelación cooperativa. Idempotente, y sobre una task ya
+    /// terminada no hace nada.
+    pub fn cancel(&self) {
+        self.canceller.cancel();
     }
 }
 
@@ -4463,5 +4539,69 @@ pub mod remote {
             let proto = crate::backend::volume_to_proto(v);
             assert_eq!(proto.label, Some(hostile), "los bytes cruzan sin cambiar");
         }
+    }
+}
+
+#[cfg(test)]
+mod observer_tests {
+    use super::*;
+
+    fn progreso(id: u64) -> (watch::Sender<TaskProgress>, watch::Receiver<TaskProgress>) {
+        let (tx, rx) = watch::channel(TaskProgress {
+            task_id: TaskId::new(id),
+            kind: norte_proto::TaskKind::Sync,
+            state: TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+        });
+        // El emisor se devuelve para que el test lo retenga vivo: un `watch`
+        // sin emisor no es lo que este test observa.
+        (tx, rx)
+    }
+
+    /// #173: el observador cancela LA MISMA task, no una copia inerte. Es la
+    /// propiedad de la que depende que un tablero pueda parar una
+    /// sincronización que se está aplicando sin quitarle el handle a su panel.
+    #[test]
+    fn el_observador_cancela_la_misma_task() {
+        let (_tx, rx) = progreso(7);
+        let task = TaskRef::synthetic_for_tests(TaskId::new(7), rx);
+        let TaskCanceller::Embedded(token) = task.canceller() else {
+            panic!("un TaskRef sintético cancela con un token embebido");
+        };
+        assert!(!token.is_cancelled());
+        let observador = task.observer();
+        // Y clonado: el tablero clona su fila al reordenarla.
+        observador.clone().cancel();
+        assert!(token.is_cancelled(), "la cancelación llega a la task real");
+        assert_eq!(observador.id(), task.id());
+    }
+
+    /// Y observar no consume: quien lanzó la task se la queda entera —
+    /// incluida la ESPERA, que es lo único que sigue teniendo un solo dueño.
+    #[tokio::test]
+    async fn observar_no_le_quita_la_task_a_quien_la_lanzo() {
+        let (tx, rx) = watch::channel(TaskProgress {
+            task_id: TaskId::new(9),
+            kind: norte_proto::TaskKind::Sync,
+            state: TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+        });
+        let task = TaskRef::synthetic_for_tests(TaskId::new(9), rx);
+        let observador = task.observer();
+        tx.send_modify(|p| p.state = TaskState::Completed);
+        assert_eq!(
+            observador.progress().borrow().state,
+            TaskState::Completed,
+            "el observador ve el mismo canal"
+        );
+        assert!(matches!(task.join().await, TaskState::Completed));
     }
 }

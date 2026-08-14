@@ -461,10 +461,14 @@ macro_rules! provider_contract {
                 // Y una víctima con nombre HOSTIL (no-UTF8): el trash de
                 // los 3 OS debe tragarlo o rechazar limpio, jamás panicar.
                 // (Si el FS rechaza el nombre — APFS — simplemente no está.)
-                if let Ok(mut sink) = p.write(&child(&dir, b"tr\xE1sh")).await {
+                let sembrado_hostil = if let Ok(mut sink) =
+                    p.write(&child(&dir, b"tr\xE1sh")).await
+                {
                     let _ = sink.write(Bytes::from_static(b"x")).await;
-                    let _ = sink.commit().await;
-                }
+                    sink.commit().await.is_ok()
+                } else {
+                    false
+                };
                 if p.capabilities().flags.contains(CapabilityFlags::TRASH) {
                     let dest = p.trash(&dir, &$crate::trash::TrashId::new(0, 0))
                         .await
@@ -492,6 +496,27 @@ macro_rules! provider_contract {
                             p.stat(&dir).await.is_ok(),
                             "restaurado desde el destino que el propio provider dio"
                         );
+                        // Y vuelve el NODO EXACTO, no un directorio con su
+                        // nombre (#168). Un restore que recrea la carpeta y
+                        // pierde lo de dentro pasa el `stat` de arriba y es
+                        // justo la forma en que un undo dice «hecho» sobre
+                        // datos que ya no están.
+                        assert_eq!(
+                            read_all(&p, &child(&dir, b"hijo"))
+                                .await
+                                .expect("el hijo restaurado se lee"),
+                            b"x".to_vec(),
+                            "el contenido del hijo vuelve byte a byte"
+                        );
+                        // Incluido el nombre NO-UTF8, si el FS lo aceptó al
+                        // sembrarlo: es el que se pierde cuando un provider
+                        // reconstruye rutas por texto en vez de por bytes.
+                        let hostil = child(&dir, b"tr\xE1sh");
+                        if sembrado_hostil {
+                            p.stat(&hostil)
+                                .await
+                                .expect("el nombre no-UTF8 vuelve con sus bytes");
+                        }
                     }
                 } else {
                     assert!(matches!(

@@ -75,6 +75,41 @@ which is what the split costs and what makes each review small enough to be one.
 `w4a` and `w4b` also want the second, external pass: they are the journal and
 the wire. `w4c` does not, except on #165 and #26.
 
+## `w4c` — tasks, providers and the policy boundary — **MERGED**
+
+Closed #168, #165, #196, #155, #173, #190 and #26. #176 landed HALF (the
+warning; the count is still open). New debt: #209. No protocol bump: the only
+`norte-proto` change is documentation.
+
+What the branch learned, and it is the same lesson three times: **a gate that
+covers the direct call and not the recursive one reads as if it covers both.**
+
+| issue | what it turned out to be |
+| --- | --- |
+| #165 | the deny in the scope registry is the cheap half. `fs.search` walks from a legitimate root, `index.query` returns paths the human indexed — each needed its own exclusion, and `fs.compare` still needs one (#209) |
+| #155 | eviction was never what bounded the backlog; the channel was. What eviction added was PERMANENCE, and it took the terminal snapshot with it — the one signal the completeness contract is built on |
+| #196 | the cap on step bodies was the obvious half; the id set that grew with the plan was the half that would have kept the issue alive. The wire already promised monotonic ids, so the MAXIMUM replaces the set |
+| #173 | `TaskRef` not being `Clone` was protecting `join`, not cancellation — `TaskCanceller` was already clonable. A non-owning observer was always allowed |
+| #26 | already fixed by the freedesktop implementation. What was missing was a test with two real devices, and "it no longer copies" without one is a sentence |
+| #190 | the lifecycle was untestable because it was inline; extracting it to an RAII guard made it both testable and structurally correct |
+
+And one that was not on the list: the previous commit's i18n string grew and
+the TUI snapshot went red, because `just t norte-tui` did not run. The
+confirmation now WRAPS — it was losing the word "¿Seguir?" off the right edge.
+
+**Also worth knowing for the next GUI task:** `cargo test` in `norte-gui`
+fails 7 tests that `cargo nextest run` passes. The i18n active language is
+process-global and `cargo test` shares one process. `just gui-ci` uses nextest,
+so the gate is honest; a bare `cargo test` there is not.
+
+### What is left, and why none of it belonged here
+
+| issue | why it needs its own branch |
+| --- | --- |
+| #171 | it has a DESIGN question first: what a mid-stream policy denial does — a report row, like the forward executor, or a failed Task |
+| #163 | it grows `Capabilities`, which is on the wire: a bump and a `protocol-guardian` pass. `w4c` was split precisely so it would not be a wire branch |
+| #122 | the M4-IA-2 bag, and its symlink TOCTOU is #164's family — W5 |
+
 ## `w4c` — tasks, providers and the policy boundary
 
 | issue | crate(s) | what |

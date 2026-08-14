@@ -782,7 +782,8 @@ sync-summary-unreadable = { $n } entradas no se pudieron leer: este plan no las 
 sync-summary-mismatch = llegaron { $received } pasos y el plan dice { $n }: este plan no se puede aprobar
 sync-summary-unnameable = { $n } pasos son de una clase que esta versión no sabe enseñar: este plan no se puede aprobar
 sync-summary-malformed = { $n } pasos se contradicen a sí mismos: este plan no se puede aprobar
-sync-summary-duplicate-ids = { $n } pasos repiten un id que ya usó uno anterior: este plan no se puede aprobar
+sync-summary-duplicate-ids = { $n } pasos traen un id que no avanza sobre uno anterior: este plan no se puede aprobar
+sync-summary-list-truncated = la lista enseña los primeros { $shown } pasos; hay { $hidden } más contados y sin listar
 # Las clases cuadran y un número de los que el diálogo enseña primero, no.
 sync-summary-contradictory = las cuentas del propio plan no cuadran con los pasos que mandó: este plan no se puede aprobar
 # La selección no recorta los bloqueos, así que esto habla de la comparación
@@ -791,10 +792,10 @@ sync-summary-blocked = { $n } bloqueos impiden este plan — en cualquier punto 
 # Una pregunta por pronóstico, diciendo lo MISMO que dijo el resumen: un
 # titular que dice «parte se puede deshacer» encima de una confirmación que
 # dice «no se puede deshacer nada» enseña a saltarse las dos.
-sync-confirm-delete = se van a borrar { $n } árboles del destino. Van a la papelera y se pueden restaurar. ¿Seguir?
-sync-confirm-delete-final = se van a borrar { $n } árboles del destino y NO se van a poder restaurar. ¿Seguir?
-sync-confirm-delete-partial = se van a borrar { $n } árboles del destino, y { $steps } pasos de este plan no se van a poder deshacer. ¿Seguir?
-sync-confirm-delete-unclear = se van a borrar { $n } árboles del destino, y esta versión no puede decir si se podrían restaurar. ¿Seguir?
+sync-confirm-delete = se van a borrar { $n } árboles del destino. Van a la papelera y se pueden restaurar. Un árbol se vuelve a comprobar en el directorio, no por dentro: algo añadido más abajo desde que aprobaste no detendrá el borrado. ¿Seguir?
+sync-confirm-delete-final = se van a borrar { $n } árboles del destino y NO se van a poder restaurar. Un árbol se vuelve a comprobar en el directorio, no por dentro: algo añadido más abajo desde que aprobaste no detendrá el borrado. ¿Seguir?
+sync-confirm-delete-partial = se van a borrar { $n } árboles del destino, y { $steps } pasos de este plan no se van a poder deshacer. Un árbol se vuelve a comprobar en el directorio, no por dentro: algo añadido más abajo desde que aprobaste no detendrá el borrado. ¿Seguir?
+sync-confirm-delete-unclear = se van a borrar { $n } árboles del destino, y esta versión no puede decir si se podrían restaurar. Un árbol se vuelve a comprobar en el directorio, no por dentro: algo añadido más abajo desde que aprobaste no detendrá el borrado. ¿Seguir?
 sync-confirm-no-way-back = { $n } pasos van a cambiar el destino y ninguno se va a poder deshacer. ¿Seguir?
 sync-confirm-partial = { $n } pasos de este plan no se van a poder deshacer. ¿Seguir?
 sync-confirm-unclear = esta versión no puede decir si estos { $n } cambios se van a poder deshacer. ¿Seguir?
