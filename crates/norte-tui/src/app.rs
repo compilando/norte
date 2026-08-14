@@ -6006,9 +6006,27 @@ mod tests {
     /// reimplementing the masking rule a second time. `target` stays the
     /// clean mount throughout: a hostile label must never leak into
     /// Enter-to-navigate.
+    ///
+    /// #169's `archive_marker_literal` (a label whose own CLEAN text is
+    /// `"!"`, the same glyph as [`crate::ui::HOSTILE_BADGE`]) caught this
+    /// assertion checking `display.starts_with('!')` — true for that
+    /// fixture even with `label_hostil == false`, because the UN-badged
+    /// label prefix (`"{label} — "`) itself starts with `!`. A leading `!`
+    /// is not proof of a badge, and even `"! "` is not enough: that fixture's
+    /// clean prefix is `"! — "`, which also starts with `"! "`. Nothing
+    /// short of the FULL string settles it, so the expected display is
+    /// rebuilt here from the same primitives `volume_item_display` calls
+    /// (`display_name`, `path_display_with`, `t`) — not the masking rule
+    /// itself, only the template it is spliced into — and compared for
+    /// EXACT equality.
     #[test]
     fn volume_label_hostile_corpus_sweep() {
         let mount = vp("mem:///media/usb");
+        let (path_text, path_hostil) = norte_frontend::path_display_with(&mount, None);
+        assert!(!path_hostil, "control: el mount fijo del test no es hostil");
+        let (fs_text, fs_hostil) = display_name(b"vfat");
+        assert!(!fs_hostil, "control: \"vfat\" no es hostil");
+        let sizes = format!("{u} / {u}", u = t("volumes-size-unknown"));
         for fixture in norte_testkit::corpus::hostile_names() {
             let vol = norte_proto::methods::Volume {
                 mount: mount.clone(),
@@ -6021,13 +6039,17 @@ mod tests {
             };
             let items = volume_items(std::slice::from_ref(&vol), None);
             let display = &items[0].display;
-            let (_, label_hostil) = display_name(&fixture.bytes);
+            let (label_text, label_hostil) = display_name(&fixture.bytes);
+            let body = format!("{label_text} — {path_text}  {fs_text}  {sizes}");
+            let expected = if label_hostil {
+                format!("{} {body}", crate::ui::HOSTILE_BADGE)
+            } else {
+                body
+            };
             assert_eq!(
-                display.starts_with('!'),
-                label_hostil,
-                "{}: badge debe coincidir con display_name({:?}): {display}",
-                fixture.id,
-                fixture.bytes
+                display, &expected,
+                "{}: badge debe coincidir con display_name({:?})",
+                fixture.id, fixture.bytes
             );
             assert_eq!(
                 items[0].target,

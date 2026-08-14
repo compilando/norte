@@ -1,11 +1,18 @@
-//! Sanidad del corpus canónico: 62 fixtures (48 nombres + 11+3 contenidos),
-//! nombres válidos como segmentos `VPath`, contenidos con la forma declarada.
+//! Sanidad del corpus canónico: al menos 62 fixtures (48 nombres + 11+3
+//! contenidos), nombres válidos como segmentos `VPath`, contenidos con la
+//! forma declarada.
 
-use norte_testkit::corpus::{content_fixtures, hostile_chords, hostile_names};
+use norte_testkit::corpus::{content_fixtures, hostile_chords, hostile_names, spelling_twins};
 
 #[test]
 fn corpus_counts() {
-    assert_eq!(hostile_names().len(), 48, "nombres hostiles");
+    // Suelo, no cuenta exacta (#169): antes esto y el doctest de
+    // `hostile_names` aserraban `== 48` cada uno, y se ponían rojos en
+    // momentos distintos porque `nextest` no corre doctests — añadir una
+    // fixture dejaba el doctest rojo sin que `just t` lo viera. Un suelo
+    // sigue cazando "el corpus se vació por accidente" sin que crecerlo
+    // cueste tocar dos sitios.
+    assert!(hostile_names().len() >= 48, "nombres hostiles");
     assert_eq!(content_fixtures().len(), 11, "contenidos detectables");
     assert_eq!(
         norte_testkit::corpus::content_fixtures_forced().len(),
@@ -42,6 +49,68 @@ fn names_are_valid_segments_and_unique() {
         );
         assert!(seen.insert(n.bytes.clone()), "[{}] bytes duplicados", n.id);
         assert!(!n.why.is_empty(), "[{}] documenta por qué es hostil", n.id);
+    }
+}
+
+/// #169: las cuatro fixtures pedidas por las tres deferrals de
+/// `2026-08-11-directory-sync.md`, pinando la propiedad concreta que cada
+/// una dice tener y no solo que exista.
+#[test]
+fn fixtures_nuevas_de_169_cumplen_lo_que_prometen() {
+    let names = hostile_names();
+    let find = |id: &str| {
+        names
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("fixture {id} en el corpus"))
+    };
+
+    // `!`: el marcador de composición de archivos (ADR 0018) como nombre
+    // real, byte a byte y nada más.
+    assert_eq!(find("archive_marker_literal").bytes, b"!");
+
+    // 255 bytes (NAME_MAX) que NO son UTF-8 válido, a diferencia de
+    // `name_max_255` (puro ASCII).
+    let tail = find("name_max_255_invalid_tail");
+    assert_eq!(tail.bytes.len(), 255);
+    assert!(std::str::from_utf8(&tail.bytes).is_err());
+
+    // Un nombre que ES un sidecar `.trashinfo` completo, sin la barra que
+    // `Segment` prohíbe (el `Path` real va url-encoded).
+    let spoof = find("trashinfo_record_spoof");
+    assert!(!spoof.bytes.contains(&b'/'));
+    let texto = std::str::from_utf8(&spoof.bytes).expect("UTF-8 válido");
+    assert!(texto.contains("Path="));
+    assert!(texto.contains("DeletionDate="));
+
+    // U+0130, cuyo pliegue completo son DOS codepoints ('i' + U+0307), no
+    // una 'i' simple.
+    let turco = find("turkish_dotted_i_capital");
+    let texto = std::str::from_utf8(&turco.bytes).expect("UTF-8 válido");
+    assert!(texto.starts_with('\u{0130}'));
+}
+
+/// #169: `spelling_twins()` referencia `id`s del corpus, no bytes propios —
+/// los dos lados de cada par tienen que existir de verdad y ser distintos.
+#[test]
+fn spelling_twins_referencian_ids_reales_y_distintos() {
+    let names = hostile_names();
+    let ids: std::collections::HashSet<&str> = names.iter().map(|n| n.id.as_str()).collect();
+    for twin in spelling_twins() {
+        assert!(
+            ids.contains(twin.left),
+            "[{}] no está en el corpus",
+            twin.left
+        );
+        assert!(
+            ids.contains(twin.right),
+            "[{}] no está en el corpus",
+            twin.right
+        );
+        assert_ne!(
+            twin.left, twin.right,
+            "un par no es un nombre consigo mismo"
+        );
     }
 }
 
