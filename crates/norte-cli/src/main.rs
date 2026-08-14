@@ -2563,7 +2563,11 @@ async fn sync_cmd(
     dest: &std::path::Path,
     opts: SyncCliOpts<'_>,
 ) -> anyhow::Result<ExitCode> {
-    let salida = sync_plan_show_apply(backend, source, dest, opts).await;
+    // UNA vez por mandato, y antes de cualquier fase: ver `SigintGate`. Armarla
+    // por fase deja el prompt `[y/N]` con un `Ctrl+C` que tokio se traga y que
+    // ya no mata el proceso (revisión de rama de W2, BLOCKER-1).
+    let sigint = SigintGate::arm();
+    let salida = sync_plan_show_apply(backend, source, dest, opts, &sigint).await;
     // Un Ctrl+C durante la planificación YA no mata el proceso a las bravas
     // (#180: `sync_plan_show_apply` arma su propio `watch_ctrl_c` y cancela
     // por el token, así que `run_sync_plan` cierra el spool antes de volver
@@ -2581,6 +2585,7 @@ async fn sync_plan_show_apply(
     source: &std::path::Path,
     dest: &std::path::Path,
     opts: SyncCliOpts<'_>,
+    sigint: &SigintGate,
 ) -> anyhow::Result<ExitCode> {
     let source = vpath(source)?;
     let dest = vpath(dest)?;
@@ -2623,7 +2628,7 @@ async fn sync_plan_show_apply(
     // daemon que lo recoja al arrancar. Cancelado LIMPIO, en cambio,
     // `run_sync_plan` ve el token, corta el flujo y llama
     // `writer.finish(PlanOutcome::Interrupted)`, que sí borra el `.part`.
-    let sig = watch_ctrl_c(&task);
+    sigint.apunta_a(&task);
 
     // El ÚNICO sitio donde los pasos se cuadran contra `SyncPlanDone::counts`
     // es `SyncState`; montar un `SyncPlan` a mano sería una segunda ocasión de
@@ -2642,7 +2647,7 @@ async fn sync_plan_show_apply(
     // La Task terminó (el canal se cerró): el manejador ya no tiene nada que
     // cancelar. Sin este `abort()` el `ctrl_c()` de dentro se queda vivo para
     // siempre, esperando una señal que ya no le sirve a nadie.
-    sig.abort();
+    sigint.suelta();
 
     // El canal se cierra cuando la Task termina, así que este `join` no
     // espera de más. Se exige AMBAS cosas: que el estado haya cerrado
@@ -2706,7 +2711,7 @@ async fn sync_plan_show_apply(
     if opts.dry_run {
         return Ok(ExitCode::from(1));
     }
-    sync_apply_and_report(backend, &plan, opts.yes).await
+    sync_apply_and_report(backend, &plan, opts.yes, sigint).await
 }
 
 /// Enseña por qué un plan no se puede ejecutar, y devuelve el código con el
@@ -2856,6 +2861,7 @@ async fn sync_apply_and_report(
     backend: &Backend,
     plan: &norte_frontend::sync::SyncPlan,
     yes: bool,
+    sigint: &SigintGate,
 ) -> anyhow::Result<ExitCode> {
     // Ni un paso que escriba: todo lo que el plan trae son omisiones. No hay
     // nada que aprobar (`SyncPlan::can_approve` lo dice también así) y aplicar
@@ -2950,7 +2956,7 @@ async fn sync_apply_and_report(
     // termina, cancelación incluida (`harvest_sync_apply`,
     // `norte_frontend::sync::SyncView::on_apply_ended`). Este comando era el
     // único de los tres frontends que no podía decirlo.
-    let final_state = drive_task(apply_task, true).await;
+    let final_state = drive_task(apply_task, true, Some(sigint)).await;
     match &final_state {
         TaskState::Completed => {}
         TaskState::Cancelled => {
@@ -3192,6 +3198,77 @@ fn render_attr_value(v: &norte_proto::AttrValue) -> String {
 ///
 /// El llamante tiene que `abort()` el `JoinHandle` devuelto en cuanto la Task
 /// termina — si no, el `ctrl_c()` de dentro se queda esperando para siempre.
+/// El vigilante de SIGINT de TODO `norte sync`, con objetivo intercambiable.
+///
+/// Existe porque [`watch_ctrl_c`] por fase es incorrecto y esta rama lo
+/// demostró (revisión de rama de W2, BLOCKER-1). Registrar `ctrl_c()` en tokio
+/// es **de proceso y permanente**: la doc de tokio lo dice con todas las letras
+/// —«even if this `Signal` instance is dropped, subsequent `SIGINT` deliveries
+/// will end up captured by Tokio, and the default platform behavior will NOT be
+/// reset»—, así que abortar la task que esperaba NO devuelve la señal al SO.
+///
+/// Con un vigilante por fase, cada hueco ENTRE fases queda con un SIGINT que
+/// tokio se traga y que ya no mata el proceso. El hueco que importa es el
+/// prompt `[y/N]`: el sitio donde un humano se sienta minutos decidiendo si
+/// borra un subárbol, y donde antes de #180 `Ctrl+C` sí funcionaba porque
+/// todavía no se había registrado nada.
+///
+/// Un solo vigilante para todo el mandato, y las fases le van poniendo su
+/// cancelador. Sin cancelador puesto, el `Ctrl+C` sale con 130 él mismo, que es
+/// lo que hacía el SO. Y `take()` en vez de leer: el PRIMER `Ctrl+C` cancela la
+/// task, el SEGUNDO sale — el mismo pacto que el doble `Esc` de los paneles.
+struct SigintGate {
+    objetivo: std::sync::Arc<std::sync::Mutex<Option<norte_core::backend::TaskCanceller>>>,
+    _handle: tokio::task::JoinHandle<()>,
+}
+
+impl SigintGate {
+    /// Arma el vigilante. Una vez por mandato, nunca por fase.
+    fn arm() -> Self {
+        let objetivo: std::sync::Arc<std::sync::Mutex<Option<norte_core::backend::TaskCanceller>>> =
+            std::sync::Arc::default();
+        let visto = std::sync::Arc::clone(&objetivo);
+        let handle = tokio::spawn(async move {
+            loop {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    break;
+                }
+                // INVARIANTE: el Mutex nunca se envenena — bajo el lock solo
+                // hay un `take`/`replace` de un Option, sin panic posible.
+                let actual = visto.lock().unwrap().take();
+                match actual {
+                    Some(c) => {
+                        eprintln!("\n{}", norte_i18n::t("cli-cancelling"));
+                        c.cancel();
+                    }
+                    // Nada vivo que cancelar (el prompt, el plan en pantalla,
+                    // un `--dry-run` saliendo): se hace lo que haría el SO.
+                    None => {
+                        eprintln!();
+                        std::process::exit(130);
+                    }
+                }
+            }
+        });
+        Self {
+            objetivo,
+            _handle: handle,
+        }
+    }
+
+    /// Esta Task es la que un `Ctrl+C` cancela a partir de ahora.
+    fn apunta_a(&self, task: &TaskRef) {
+        // INVARIANTE: como arriba.
+        *self.objetivo.lock().unwrap() = Some(task.canceller());
+    }
+
+    /// Ya no hay Task viva: el siguiente `Ctrl+C` sale con 130.
+    fn suelta(&self) {
+        // INVARIANTE: como arriba.
+        *self.objetivo.lock().unwrap() = None;
+    }
+}
+
 fn watch_ctrl_c(task: &TaskRef) -> tokio::task::JoinHandle<()> {
     let canceller = task.canceller();
     tokio::spawn(async move {
@@ -3213,8 +3290,18 @@ fn watch_ctrl_c(task: &TaskRef) -> tokio::task::JoinHandle<()> {
 /// Colapsar los dos casos en la rama `Cancelled` de un único traductor es
 /// exactamente cómo el CLI se quedó siendo el único de los tres frontends que
 /// no podía decirlo.
-async fn drive_task(task: TaskRef, show_bytes: bool) -> TaskState {
-    let sig = watch_ctrl_c(&task);
+async fn drive_task(task: TaskRef, show_bytes: bool, sigint: Option<&SigintGate>) -> TaskState {
+    // Con puerta —`norte sync`, que tiene varias fases y un prompt entre
+    // ellas— se le APUNTA. Sin ella —`cp`/`mv`/`rm`/`undo`, un solo mandato
+    // que sale en cuanto la Task termina— basta el vigilante de siempre: el
+    // hueco que `SigintGate` cierra no existe ahí, porque no hay nada después.
+    let sig = sigint.map_or_else(
+        || Some(watch_ctrl_c(&task)),
+        |g| {
+            g.apunta_a(&task);
+            None
+        },
+    );
 
     let mut rx = task.progress();
     loop {
@@ -3227,7 +3314,11 @@ async fn drive_task(task: TaskRef, show_bytes: bool) -> TaskState {
             break;
         }
     }
-    sig.abort();
+    match (&sig, sigint) {
+        (Some(h), _) => h.abort(),
+        (None, Some(g)) => g.suelta(),
+        (None, None) => {}
+    }
     let final_state = rx.borrow().state.clone();
     eprintln!();
     final_state
@@ -3236,7 +3327,7 @@ async fn drive_task(task: TaskRef, show_bytes: bool) -> TaskState {
 /// Corre una Task pintando progreso en stderr; Ctrl-C cancela cooperativamente
 /// (la task deja destino limpio o `.norte-partial`, regla dura 3).
 async fn run_task(task: TaskRef, show_bytes: bool) -> ExitCode {
-    match drive_task(task, show_bytes).await {
+    match drive_task(task, show_bytes, None).await {
         TaskState::Completed => ExitCode::SUCCESS,
         TaskState::Cancelled => {
             eprintln!("{}", norte_i18n::t("cli-cancelled-clean"));

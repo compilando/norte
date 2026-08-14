@@ -497,3 +497,85 @@ fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
         other => panic!("código de salida inesperado tras SIGINT: {other:?}"),
     }
 }
+
+/// **BLOCKER de la revisión de rama de W2.** `Ctrl+C` DESPUÉS de planificar.
+///
+/// Registrar `ctrl_c()` en tokio es de PROCESO y permanente: la doc de tokio
+/// dice que soltar el `Signal` no restaura el comportamiento por defecto. Con
+/// un vigilante por fase, el `abort()` al acabar la planificación mataba al que
+/// escuchaba y dejaba el registro puesto — así que a partir de ahí la señal la
+/// consumía tokio, no la atendía nadie, y `Ctrl+C` no hacía NADA en toda la
+/// ventana que va desde el fin del plan hasta el principio del apply: imprimir
+/// el plan, los bloqueadores, el prompt `[y/N]` y la salida de `--dry-run`.
+///
+/// Aquí se provoca la ventana con `--dry-run` sobre un árbol grande y un
+/// `stdout` que NADIE drena: el hijo se bloquea escribiendo el plan contra un
+/// pipe lleno, que es justo el estado «planificación terminada, nada vivo que
+/// cancelar». Antes del arreglo el proceso se quedaba ahí para siempre.
+///
+/// El prompt de verdad no se puede probar sin PTY —esta CLI no pregunta sin
+/// terminal, y hay un test que lo fija— así que se prueba la MISMA ventana por
+/// el lado que sí es alcanzable. Los otros dos tests de señal no la ven: los
+/// dos pasan `--yes`.
+#[test]
+fn sigint_tras_planificar_termina_el_proceso() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let estado = dir.path().join("estado");
+    std::fs::create_dir_all(&estado).expect("mkdir estado");
+    let src = dir.path().join("src");
+    let dst = dir.path().join("dst");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::create_dir_all(&dst).expect("mkdir dst");
+    // Bastantes ficheros para que el plan impreso NO quepa en el buffer del
+    // pipe (64 KiB en Linux): así el hijo se queda bloqueado escribiéndolo.
+    for i in 0..20_000 {
+        std::fs::write(src.join(format!("f{i:05}")), b"").expect("write");
+    }
+
+    let bin = assert_cmd::cargo::cargo_bin("norte");
+    let mut child = std::process::Command::new(bin)
+        .env("NORTE_CONFIG_DIR", &estado)
+        .env("NORTE_LANG", "en")
+        .arg("sync")
+        .arg("--mode")
+        .arg("update")
+        .arg("--dry-run")
+        .arg(&src)
+        .arg(&dst)
+        // Piped y NUNCA leído: el pipe se llena y el hijo se bloquea ahí.
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn norte sync");
+
+    // Suelo antes de señalar, por lo mismo que los otros dos: el manejador
+    // vive en un worker distinto del que planifica. Aquí además hay que dejar
+    // que la planificación TERMINE y que el hijo se atasque escribiendo.
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+
+    // El mismo helper que los otros dos: `kill -INT` por proceso, sin añadir
+    // `libc` como dependencia solo para un test (regla 8).
+    unsafe_free_kill(child.id());
+
+    // Y TIENE que morir. Antes del arreglo se quedaba bloqueado para siempre:
+    // la señal la consumía tokio y no la escuchaba nadie.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match child.try_wait().expect("try_wait") {
+            Some(status) => {
+                assert!(
+                    !status.success(),
+                    "un sync interrumpido tras planificar no sale con éxito: {status:?}"
+                );
+                return;
+            }
+            None if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            None => {
+                let _ = child.kill();
+                panic!("Ctrl+C tras planificar no hizo nada: el proceso sigue vivo");
+            }
+        }
+    }
+}
