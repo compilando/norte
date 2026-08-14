@@ -16,22 +16,41 @@
   proved by the existing suite passing unedited — say so instead of adding a
   test that asserts nothing.
 - Model: cheap. Nothing here needs the largest.
-- Reviewers: none, **except #174**, which touches the journal's
-  tamper-evident chain → `security-reviewer` on that commit alone.
+- Reviewers: none. #174's half is a comment; nothing here touches behaviour
+  that a reviewer would catch, and the two that DID warrant one left this wave.
 
 **Branch:** `debt/w1-mechanical`
 
 | issue | crate(s) | what |
 | --- | --- | --- |
 | #172 | norte-core, norte-sync | three hand-written `is_at_or_under` → `RelPath::under(..).is_some()` |
-| #151 | norte-compare, norte-core | unify the filename collision key: `name_key`/`fold_delta` duplicated |
-| #174 | norte-core, norte-sync | `plan_hash` framing helpers duplicated from `norte-core::hashing` — one copy IS the journal chain |
+| #174 (half) | norte-core, norte-sync | state the duplication is DELIBERATE, in both files. Not the move — see below |
 | #169 | norte-testkit + 5 consumers | the corpus count assertion blocks every new fixture; make adding one cheap |
 | #175 | norte-compare | `walk()` returns an unfused stream — any `select!` with a second arm panics past its end |
 | #185 | norte-tui | the diff pane's block title joins both roots in one string; a name containing `↔` spoofs the pair |
 
 **Close:** `just ci-fast`, then `just ci` once. Then
 `superpowers:finishing-a-development-branch`.
+
+## Two issues left this wave after reading their bodies
+
+Tiering from titles was wrong, and this is the correction the wave's own rule
+asked for ("verify before designing anything").
+
+**#151 is ADR-sized, not mechanical.** `norte-core` is AGPL-3.0-only and the
+natural homes for the shared fold key (`norte-vfs`, `norte-encoding`) are
+MIT OR Apache-2.0, so the move RELICENSES the code — and it is a structural
+dependency change. CLAUDE.md says both are ADR material. It also carries two
+behavioural divergences to settle at the same time. Goes to W3, which already
+owns the folding rules, and wants `/adr` first.
+
+**#174 is not a fix at all; it is a decision already taken NOT to move it.**
+`norte-core::hashing`'s copy is the journal's tamper-evident chain (ADR 0023)
+and the audit export (ADR 0025). Its framing cannot change without invalidating
+every existing `journal.db` — a migration, not a refactor. What stays in this
+wave is the issue's own cheap half: **say so in both files**, so the next reader
+does not "tidy" one of them. The ADR half rides with #151, because it is the
+same licence question.
 
 **Note on #169, corrected by C2's own experience.** The issue says the count is
 asserted in five crates. Verify that number — but the premise is real and worse

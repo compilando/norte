@@ -14,6 +14,7 @@ mid-tier for the rest.
 | --- | --- | --- |
 | #154 | norte-encoding, norte-compare | one invalid byte disables NFC **and** case folding for the whole filename |
 | #145 | norte-encoding | `name_key`: ext4 `+F` uses FULL fold, not simple fold — `straße`/`strasse` still miss as a collision |
+| #151 | norte-compare, norte-core | unify the filename collision key: `name_key`/`fold_delta` duplicated. **Wants an ADR first** — the move relicenses AGPL-3.0-only code into MIT OR Apache-2.0 and changes a structural dependency. Settle #174's home question with it |
 | #153 | norte-compare, norte-core | case folding is decided per PROVIDER, not per mount |
 | #156 | norte-core | `fs.compare` hydrates on demand IN SERIES: over a network mount that is 2N chained round trips |
 | #155 | norte-core | `fs.compare`/`fs.search`: a client that does not drain loses the subscription, and with it the completeness signal |
