@@ -290,3 +290,118 @@ fn un_nombre_con_flecha_no_finge_una_pareja_en_el_plan() {
         "el porqué tampoco se une en banda: {fila:?}"
     );
 }
+
+// ---------- Ctrl+C durante `norte sync` (#180) ----------
+
+/// `kill(pid, SIGINT)` sin dependencias: mismo helper que
+/// `smoke.rs::unsafe_free_kill`, duplicado a propósito — cada fichero de test
+/// es su propio binario y no hay una crate de soporte compartida entre ellos
+/// (mismo criterio que la duplicación de `config_dir_del_test`).
+#[cfg(unix)]
+fn unsafe_free_kill(pid: u32) {
+    let status = std::process::Command::new("kill")
+        .arg("-INT")
+        .arg(pid.to_string())
+        .status()
+        .expect("kill disponible");
+    assert!(status.success(), "kill -INT falló");
+}
+
+/// #180: un Ctrl+C DURANTE la planificación no puede dejar un `.part` de
+/// spool huérfano.
+///
+/// Antes de la corrección, `sync_plan_show_apply` drenaba el stream de
+/// `sync.plan` en un `while let` sin manejador de Ctrl+C: el SIGINT mataba el
+/// proceso ENTERO por el comportamiento por defecto del SO, sin darle a
+/// `run_sync_plan` la ocasión de ver su `CancellationToken`, cerrar el spool
+/// y borrar el `.part` (`SpoolWriter::finish`/`Drop`). El TTL solo barre
+/// planes CERRADOS, así que ese fichero se quedaba para siempre.
+///
+/// Un árbol con muchas entradas (no bytes: lo que hace lenta la
+/// PLANIFICACIÓN es listar y comparar filas, no escribir contenido — eso es
+/// el apply) da tiempo a comprobar que el `.part` existe antes de señalar.
+/// Si la planificación termina antes de que se detecte —carrera legítima, la
+/// misma que tolera `cp_sigint_cancels_cleanly` en `smoke.rs`— la aserción de
+/// abajo sigue siendo cierta trivialmente: no queda nada en el spool.
+#[cfg(unix)]
+#[test]
+fn sigint_durante_planificacion_no_deja_part_detras() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let estado = dir.path().join("estado");
+    std::fs::create_dir_all(&estado).expect("mkdir estado");
+    let src = dir.path().join("src");
+    let dst = dir.path().join("dst");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::create_dir_all(&dst).expect("mkdir dst");
+    for i in 0..20_000 {
+        std::fs::write(src.join(format!("f{i:05}")), b"").expect("write");
+    }
+
+    let bin = assert_cmd::cargo::cargo_bin("norte");
+    let mut child = std::process::Command::new(bin)
+        .env("NORTE_CONFIG_DIR", &estado)
+        .env("NORTE_LANG", "en")
+        .arg("sync")
+        .arg("--mode")
+        .arg("update")
+        .arg("--yes")
+        .arg(&src)
+        .arg(&dst)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn norte sync");
+
+    let spool_dir = estado.join("sync-spools");
+    // Espera a que el `.part` exista (la planificación ARRANCÓ y el spool se
+    // creó) antes de señalar. Eso solo no basta: `.part` lo escribe la Task
+    // de `sync.plan`, en un WORKER aparte del que instala `watch_ctrl_c` en
+    // el proceso hijo, así que verlo no prueba que ESE manejador ya recibió
+    // su primer `poll` — bajo carga (varios procesos por núcleo) el
+    // scheduler puede adelantar el worker de la Task y dejar el del
+    // manejador sin turno todavía. Sin este suelo, SIGINT podía llegar
+    // mientras el SIGINT por defecto del SO seguía vigente, matando el
+    // proceso por señal cruda y saltándose el `Drop` que borra el `.part`
+    // (encontrado corriendo esta suite bajo carga de CI; nunca en una
+    // corrida aislada). Es la misma condición de carrera que ya resolvió el
+    // comentario de `cp_sigint_cancels_cleanly`, aquí sin un `dst.exists()`
+    // causal en el que apoyarse porque la creación del `.part` es server-side
+    // y no depende de que el manejador ya esté armado.
+    let arranque = std::time::Instant::now();
+    let suelo = std::time::Duration::from_millis(50);
+    let deadline = arranque + std::time::Duration::from_secs(15);
+    let mut started = false;
+    loop {
+        if child.try_wait().expect("try_wait").is_some() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        let tiene_part = std::fs::read_dir(&spool_dir).is_ok_and(|it| {
+            it.flatten()
+                .any(|e| e.file_name().to_string_lossy().ends_with(".part"))
+        });
+        if tiene_part && arranque.elapsed() >= suelo {
+            started = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    if started {
+        unsafe_free_kill(child.id());
+    }
+    let _status = child.wait().expect("wait");
+
+    let quedan: Vec<String> = std::fs::read_dir(&spool_dir)
+        .map(|it| {
+            it.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        quedan.is_empty(),
+        "un Ctrl+C durante la planificación no puede dejar nada en el spool: {quedan:?}"
+    );
+}

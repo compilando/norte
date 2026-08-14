@@ -2564,9 +2564,12 @@ async fn sync_cmd(
     opts: SyncCliOpts<'_>,
 ) -> anyhow::Result<ExitCode> {
     let salida = sync_plan_show_apply(backend, source, dest, opts).await;
-    // Lo único que esto NO puede tapar es un Ctrl+C durante la planificación:
-    // mata el proceso con un `.part` a medio escribir, y el TTL sólo reapa
-    // planes CERRADOS, así que ese fichero no lo recoge nadie (#180).
+    // Un Ctrl+C durante la planificación YA no mata el proceso a las bravas
+    // (#180: `sync_plan_show_apply` arma su propio `watch_ctrl_c` y cancela
+    // por el token, así que `run_sync_plan` cierra el spool antes de volver
+    // aquí). Esta llamada sigue siendo necesaria por lo demás: un `--dry-run`
+    // o una pregunta contestada que no también dejarían el plan retenido si
+    // nadie lo soltara.
     backend.drop_retained_plans().await;
     salida
 }
@@ -2610,6 +2613,18 @@ async fn sync_plan_show_apply(
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context(norte_i18n::t("cli-sync-failed"))?;
 
+    // Ctrl+C durante el drenaje cancela la Task por su `CancellationToken`
+    // (regla dura 3), igual que la mitad de apply — y no por el SIGINT por
+    // defecto del SO. Antes de esto, este `while let` no tenía manejador
+    // alguno: Ctrl+C mataba el proceso ENTERO antes de que `run_sync_plan`
+    // pudiera ver el token y cerrar el spool, así que el `.part` que
+    // `sync.plan` deja en `<estado>/sync-spools/` quedaba huérfano para
+    // siempre (#180) — el TTL solo barre planes CERRADOS y esta CLI no tiene
+    // daemon que lo recoja al arrancar. Cancelado LIMPIO, en cambio,
+    // `run_sync_plan` ve el token, corta el flujo y llama
+    // `writer.finish(PlanOutcome::Interrupted)`, que sí borra el `.part`.
+    let sig = watch_ctrl_c(&task);
+
     // El ÚNICO sitio donde los pasos se cuadran contra `SyncPlanDone::counts`
     // es `SyncState`; montar un `SyncPlan` a mano sería una segunda ocasión de
     // olvidar esa comprobación (la razón de ser de esta tarea).
@@ -2624,6 +2639,10 @@ async fn sync_plan_show_apply(
             }
         }
     }
+    // La Task terminó (el canal se cerró): el manejador ya no tiene nada que
+    // cancelar. Sin este `abort()` el `ctrl_c()` de dentro se queda vivo para
+    // siempre, esperando una señal que ya no le sirve a nadie.
+    sig.abort();
 
     // El canal se cierra cuando la Task termina, así que este `join` no
     // espera de más. Se exige AMBAS cosas: que el estado haya cerrado
@@ -3109,16 +3128,35 @@ fn render_attr_value(v: &norte_proto::AttrValue) -> String {
     }
 }
 
-/// Corre una Task pintando progreso en stderr; Ctrl-C cancela cooperativamente
-/// (la task deja destino limpio o `.norte-partial`, regla dura 3).
-async fn run_task(task: TaskRef, show_bytes: bool) -> ExitCode {
+/// Arma el manejador de Ctrl+C de una Task: cancela por su
+/// [`norte_core::backend::TaskCanceller`] (regla dura 3) en vez de dejar que
+/// el SO mate el proceso con el SIGINT por defecto.
+///
+/// Compartido entre [`run_task`] y `sync.plan` (#180): antes de esto solo
+/// `run_task` lo armaba, así que un Ctrl+C durante el drenaje de
+/// `sync_plan_show_apply` —que no pasa por `run_task`— no tenía manejador
+/// alguno y el proceso moría por SIGINT sin correr ningún `Drop`. Eso importa
+/// aquí más que en `cp`/`mv`/`rm`: un `.part` de spool solo se limpia si
+/// `SpoolWriter::finish`/`Drop` llega a ejecutarse, y ninguno de los dos
+/// corre cuando el SO termina el proceso por señal en vez de por un retorno
+/// normal.
+///
+/// El llamante tiene que `abort()` el `JoinHandle` devuelto en cuanto la Task
+/// termina — si no, el `ctrl_c()` de dentro se queda esperando para siempre.
+fn watch_ctrl_c(task: &TaskRef) -> tokio::task::JoinHandle<()> {
     let canceller = task.canceller();
-    let sig = tokio::spawn(async move {
+    tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             eprintln!("\n{}", norte_i18n::t("cli-cancelling"));
             canceller.cancel();
         }
-    });
+    })
+}
+
+/// Corre una Task pintando progreso en stderr; Ctrl-C cancela cooperativamente
+/// (la task deja destino limpio o `.norte-partial`, regla dura 3).
+async fn run_task(task: TaskRef, show_bytes: bool) -> ExitCode {
+    let sig = watch_ctrl_c(&task);
 
     let mut rx = task.progress();
     loop {
