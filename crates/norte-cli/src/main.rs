@@ -2935,17 +2935,44 @@ async fn sync_apply_and_report(
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context(norte_i18n::t("cli-sync-failed"))?;
     let task_id = apply_task.id();
-    // Mismo cableado que `cp`/`mv`/`rm`/`undo` (`run_task`, no un `join` a
-    // pelo): Ctrl+C tiene que cancelar LIMPIO por el `CancellationToken` de la
-    // Task (regla dura 3), no matar el proceso a medio escribir un árbol — la
-    // trampa que la propia CLAUDE.md nombra («cancelar una copia debe dejar un
-    // destino limpio o un `.norte-partial`, nunca un parcial sin marcar»).
-    // `run_task` ya imprime y codifica `Cancelled`/`Failed` por su cuenta; un
-    // resultado que no sea `Completed` no tiene informe que enseñar (mismo
-    // criterio que `undo_cmd`), así que se devuelve tal cual.
-    let outcome = run_task(apply_task, true).await;
-    if outcome != ExitCode::SUCCESS {
-        return Ok(outcome);
+    // `drive_task` y no `run_task`: Ctrl+C tiene que cancelar LIMPIO por el
+    // `CancellationToken` de la Task (regla dura 3), no matar el proceso a
+    // medio escribir un árbol — la trampa que la propia CLAUDE.md nombra
+    // («cancelar una copia debe dejar un destino limpio o un
+    // `.norte-partial`, nunca un parcial sin marcar»). Hasta ahí es lo mismo
+    // que `cp`/`mv`/`rm`/`undo`.
+    //
+    // Donde diverge (#187): `run_task` traduciría un `Cancelled` a «destino
+    // limpio» y volvería sin pedir el informe — cierto para esos cuatro
+    // comandos, falso aquí. Un `sync.apply` cancelado deja lo aplicado hasta
+    // el corte JOURNALIZADO (regla dura 4), y `sync.report` es la única forma
+    // de decir cuánto: la TUI y la GUI ya lo piden siempre que la Task
+    // termina, cancelación incluida (`harvest_sync_apply`,
+    // `norte_frontend::sync::SyncView::on_apply_ended`). Este comando era el
+    // único de los tres frontends que no podía decirlo.
+    let final_state = drive_task(apply_task, true).await;
+    match &final_state {
+        TaskState::Completed => {}
+        TaskState::Cancelled => {
+            eprintln!("{}", norte_i18n::t("cli-sync-cancelled"));
+        }
+        TaskState::Failed { error } => {
+            eprintln!(
+                "{}",
+                norte_i18n::ta("cli-final-error", &[("error", &error.to_string())])
+            );
+        }
+        other => {
+            // El canal de progreso se cerró sin que la Task llegara a un
+            // desenlace terminal (la conexión murió a medio camino): no hay
+            // nada fiable que pedir, mismo criterio que la rama equivalente de
+            // `run_task`.
+            eprintln!(
+                "{}",
+                norte_i18n::ta("cli-unexpected-state", &[("state", &format!("{other:?}"))])
+            );
+            return Ok(ExitCode::from(2));
+        }
     }
     let report = backend
         .sync_report(task_id)
@@ -2953,6 +2980,33 @@ async fn sync_apply_and_report(
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context(norte_i18n::t("cli-sync-failed"))?;
 
+    print_sync_report(&report);
+
+    // El ÚNICO 1 de este comando: un apply que TERMINÓ (`Completed`) y no
+    // dejó ningún fallo detrás. Todo lo demás —lo que no se pudo planificar,
+    // lo que no se aprobó, lo que no se pudo aplicar, lo que se canceló y lo
+    // que se aplicó a medias— es 2. Antes de #187 una `Task` que `Failed`
+    // salía por el 1 de `ExitCode::FAILURE` de `run_task` — el MISMO código
+    // que un apply limpio sin fallos, colisión que el `match` de arriba ya
+    // resolvió devolviendo 2 antes de llegar hasta aquí para todo lo que no
+    // sea `Completed`.
+    Ok(ExitCode::from(
+        if matches!(final_state, TaskState::Completed) && report.failed == 0 {
+            1
+        } else {
+            2
+        },
+    ))
+}
+
+/// La línea de cuentas y la lista de fallos de un [`SyncReportResult`], en el
+/// mismo formato pase lo que pase (#187): un informe cancelado a medias se
+/// imprime IGUAL que uno completo, porque lo aplicado hasta el corte es tan
+/// real como lo demás.
+///
+/// Separada de [`sync_apply_and_report`] solo por longitud (`too_many_lines`
+/// de clippy) — no hay un segundo llamante.
+fn print_sync_report(report: &norte_proto::methods::SyncReportResult) {
     println!(
         "{}",
         norte_i18n::ta(
@@ -2977,10 +3031,9 @@ async fn sync_apply_and_report(
     // llega badgeado. Es lo que la GUI consigue con elementos hermanos y una
     // tubería no tiene.
     //
-    // Lo que este bucle todavía NO arregla: una aplicación CANCELADA no llega
-    // hasta aquí —`run_task` imprime «destino limpio» y el comando vuelve—,
-    // así que el CLI es el único frontend que no puede decir qué escribió un
-    // `Mirror` cortado a medias. Issue #187.
+    // Esta lista ya se enseña también tras una cancelación (#187): el
+    // `match` de arriba solo AVISA de cómo acabó, y el informe —éste, con sus
+    // fallos— se pide y se imprime igual sea cual sea el desenlace terminal.
     for failure in &report.failures {
         // Por `render_failure` y no por dos `rel_display` sueltos: el plegado
         // de la ortografía del destino cuando los BYTES coinciden es la misma
@@ -3021,11 +3074,6 @@ async fn sync_apply_and_report(
             )
         );
     }
-
-    // El ÚNICO 1 de este comando: un apply que TERMINÓ y no dejó ningún fallo
-    // detrás. Todo lo demás —lo que no se pudo planificar, lo que no se
-    // aprobó, lo que no se pudo aplicar y lo que se aplicó a medias— es 2.
-    Ok(ExitCode::from(if report.failed > 0 { 2 } else { 1 }))
 }
 
 async fn ls(
@@ -3153,9 +3201,18 @@ fn watch_ctrl_c(task: &TaskRef) -> tokio::task::JoinHandle<()> {
     })
 }
 
-/// Corre una Task pintando progreso en stderr; Ctrl-C cancela cooperativamente
-/// (la task deja destino limpio o `.norte-partial`, regla dura 3).
-async fn run_task(task: TaskRef, show_bytes: bool) -> ExitCode {
+/// El bucle compartido entre [`run_task`] y `sync.apply`: pinta progreso en
+/// stderr, arma [`watch_ctrl_c`], y devuelve el [`TaskState`] terminal SIN
+/// traducirlo a código de salida ni a mensaje.
+///
+/// La traducción vive en cada llamante a propósito (#187): para `run_task`
+/// —`cp`/`mv`/`rm`/`undo`— un `Cancelled` ES «destino limpio». Para
+/// `sync.apply` no lo es: lo aplicado hasta el corte se queda, journalizado,
+/// y el único frontend que puede decir cuánto es el que pide `sync.report`.
+/// Colapsar los dos casos en la rama `Cancelled` de un único traductor es
+/// exactamente cómo el CLI se quedó siendo el único de los tres frontends que
+/// no podía decirlo.
+async fn drive_task(task: TaskRef, show_bytes: bool) -> TaskState {
     let sig = watch_ctrl_c(&task);
 
     let mut rx = task.progress();
@@ -3172,7 +3229,13 @@ async fn run_task(task: TaskRef, show_bytes: bool) -> ExitCode {
     sig.abort();
     let final_state = rx.borrow().state.clone();
     eprintln!();
-    match final_state {
+    final_state
+}
+
+/// Corre una Task pintando progreso en stderr; Ctrl-C cancela cooperativamente
+/// (la task deja destino limpio o `.norte-partial`, regla dura 3).
+async fn run_task(task: TaskRef, show_bytes: bool) -> ExitCode {
+    match drive_task(task, show_bytes).await {
         TaskState::Completed => ExitCode::SUCCESS,
         TaskState::Cancelled => {
             eprintln!("{}", norte_i18n::t("cli-cancelled-clean"));

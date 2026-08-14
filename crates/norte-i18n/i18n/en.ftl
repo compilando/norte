@@ -212,6 +212,7 @@ cli-sync-nothing-to-apply = every step is a skip: there is nothing to apply
 cli-sync-confirm = Apply this plan? [y/N]
 cli-sync-abort = aborted; nothing was applied
 cli-sync-done = applied: { $done } done, { $failed } failed, { $skipped } skipped
+cli-sync-cancelled = cancelled — what was applied before the cut stays, journalled; the rest was not applied
 # One failure is THREE fields on THREE lines, never one joined by `: ` and
 # ` → `: both joiners are ordinary printable characters that the name masker
 # leaves alone, so a filename can forge a whole fabricated row in band (corpus

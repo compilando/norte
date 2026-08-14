@@ -214,6 +214,7 @@ cli-sync-nothing-to-apply = todos los pasos son omisiones: no hay nada que aplic
 cli-sync-confirm = ¿Aplicar este plan? [s/N]
 cli-sync-abort = cancelado; no se aplicó nada
 cli-sync-done = aplicado: { $done } hechos, { $failed } fallidos, { $skipped } omitidos
+cli-sync-cancelled = cancelado — lo aplicado antes del corte se queda, journalizado; el resto no se aplicó
 # Un fallo son TRES campos en TRES líneas, jamás uno unido por `: ` y ` → `:
 # los dos joiners son imprimibles corrientes que el enmascarado de nombres deja
 # pasar, así que un nombre puede fabricar una fila entera en banda (corpus

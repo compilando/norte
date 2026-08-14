@@ -291,7 +291,7 @@ fn un_nombre_con_flecha_no_finge_una_pareja_en_el_plan() {
     );
 }
 
-// ---------- Ctrl+C durante `norte sync` (#180) ----------
+// ---------- Ctrl+C durante `norte sync` (#180, #187) ----------
 
 /// `kill(pid, SIGINT)` sin dependencias: mismo helper que
 /// `smoke.rs::unsafe_free_kill`, duplicado a propósito — cada fichero de test
@@ -404,4 +404,96 @@ fn sigint_durante_planificacion_no_deja_part_detras() {
         quedan.is_empty(),
         "un Ctrl+C durante la planificación no puede dejar nada en el spool: {quedan:?}"
     );
+}
+
+/// #187: un `norte sync` CANCELADO llega a su informe, y el código de salida
+/// se queda en 2 — nunca el 0 de `run_task` (que en `sync.apply` sería
+/// mentira: la aplicación se cortó) ni un mensaje de «destino limpio», que es
+/// falso para un `Mirror` cortado a medias (lo aplicado hasta el corte se
+/// queda, journalizado, regla dura 4).
+///
+/// Un árbol grande en BYTES (y no solo en número de entradas) para que la
+/// fase de apply —que sí escribe— dure lo bastante como para señalarla
+/// después de que el plan ya se aprobó con `--yes`.
+#[cfg(unix)]
+#[test]
+fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
+    use std::io::Write as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let estado = dir.path().join("estado");
+    std::fs::create_dir_all(&estado).expect("mkdir estado");
+    let src = dir.path().join("src");
+    let dst = dir.path().join("dst");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::create_dir_all(&dst).expect("mkdir dst");
+    let payload = vec![0x42u8; 64 * 1024];
+    for i in 0..400 {
+        let mut f = std::fs::File::create(src.join(format!("f{i:04}"))).expect("create");
+        f.write_all(&payload).expect("write");
+    }
+
+    let bin = assert_cmd::cargo::cargo_bin("norte");
+    let mut child = std::process::Command::new(bin)
+        .env("NORTE_CONFIG_DIR", &estado)
+        .env("NORTE_LANG", "en")
+        .arg("sync")
+        .arg("--mode")
+        .arg("update")
+        .arg("--yes")
+        .arg(&src)
+        .arg(&dst)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn norte sync");
+
+    // El apply ARRANCÓ en cuanto el destino recibe su primera entrada: la
+    // planificación no escribe nada ahí. El suelo es la misma cautela que
+    // `sigint_durante_planificacion_no_deja_part_detras`: ver ficheros en
+    // `dst` no prueba que `watch_ctrl_c` ya recibió su primer `poll` en el
+    // proceso hijo, así que bajo carga un `kill` demasiado pronto puede topar
+    // con el SIGINT por defecto del SO en vez de con el manejador cooperativo.
+    let arranque = std::time::Instant::now();
+    let suelo = std::time::Duration::from_millis(50);
+    let deadline = arranque + std::time::Duration::from_secs(15);
+    let mut started = false;
+    loop {
+        if child.try_wait().expect("try_wait").is_some() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        let tiene_algo = std::fs::read_dir(&dst).is_ok_and(|it| it.flatten().next().is_some());
+        if tiene_algo && arranque.elapsed() >= suelo {
+            started = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    if started {
+        unsafe_free_kill(child.id());
+    }
+    let output = child.wait_with_output().expect("wait_with_output");
+
+    match output.status.code() {
+        Some(2) => {
+            let out = String::from_utf8_lossy(&output.stdout);
+            let err = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                out.contains("applied:"),
+                "una aplicación cancelada TIENE informe: stdout={out}"
+            );
+            assert!(
+                !err.contains("destination clean"),
+                "lo aplicado hasta el corte NO es un destino limpio: stderr={err}"
+            );
+        }
+        Some(1 | 0) => {
+            // Carrera legítima: el apply terminó (o no había nada que
+            // aplicar) antes de que la señal llegara.
+        }
+        other => panic!("código de salida inesperado tras SIGINT: {other:?}"),
+    }
 }
