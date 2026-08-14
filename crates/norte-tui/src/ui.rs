@@ -3172,33 +3172,12 @@ fn draw_compare(
 ) {
     use norte_frontend::compare::cells_for;
 
-    let (left_txt, left_hostil) =
-        norte_frontend::path_display_with(&view.left_root, view.left_encoding);
-    let (right_txt, right_hostil) =
-        norte_frontend::path_display_with(&view.right_root, view.right_encoding);
-    let badge = |h: bool| if h { HOSTILE_BADGE } else { "" };
-    // #185: las dos raíces van UNIDAS en una sola cadena, y eso se puede
-    // falsificar. `↔` es imprimible corriente —`display_name_with` no lo
-    // enmascara y no sale badge—, así que un directorio llamado
-    // `docs ↔ ⟨file⟩/home/victima/backup` se lee como OTRO par de raíces; y
-    // una raíz izquierda larga expulsa a la derecha entera por el truncado
-    // del bloque, sin `…`. La GUI lo cerró estructuralmente (cada raíz en su
-    // elemento, `compare_view::title_text`), pero un título de `Block` de
-    // ratatui NO se puede partir así: se maqueta como una sola línea que el
-    // bloque recorta entera. Hace falta una decisión de diseño —#185 lista
-    // las opciones—, no una transcripción del arreglo de la GUI.
-    let title = format!(
-        " {} — {}{} ↔ {}{} ",
-        t("compare-title"),
-        badge(left_hostil),
-        left_txt,
-        badge(right_hostil),
-        right_txt
-    );
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(theme.role(Role::BorderFocus))
-        .title(Span::styled(title, theme.role(Role::Title)))
+        // #185: cada raíz llega en su propio span, con el separador en el
+        // suyo — ver `compare_title` para el porqué.
+        .title(compare_title(view, area.width, theme))
         .title_bottom(Span::styled(
             compare_status_line(view),
             theme.role(Role::Info),
@@ -3320,6 +3299,171 @@ fn draw_compare(
 
 /// Ancho que se llevan las dos marcas del centro, con su separación.
 const COMPARE_MARKS_W: u16 = 5;
+
+/// El separador ESTRUCTURAL del título del panel de comparación (#185): va
+/// en su propio `Span`, con su propio rol, para que un `↔` incrustado en un
+/// nombre de raíz (fixture `arrow_join_spoof`) no se pueda confundir con él.
+const COMPARE_TITLE_SEP: &str = " ↔ ";
+
+/// El título del marco del panel de comparación: las dos raíces, cada una en
+/// su propio `Span`.
+///
+/// #185: antes las dos raíces iban UNIDAS en una sola cadena, y eso se podía
+/// falsificar. `↔` es imprimible corriente —`display_name_with` no lo
+/// enmascara y no sale badge—, así que un directorio llamado
+/// `docs ↔ ⟨file⟩/home/victima/backup` se leía como OTRO par de raíces; y una
+/// raíz izquierda larga expulsaba a la derecha entera por el truncado del
+/// bloque, sin `…`. Un título de `Block` de ratatui no se puede partir en
+/// elementos como hace la GUI (`compare_view::title_text`): se maqueta como
+/// una sola línea que el marco recorta ENTERA por la derecha si no cabe,
+/// aunque esa línea lleve varios `Span`s. Por eso `compare_title_halves`
+/// reparte el ancho ANTES de construir ningún span —igual que
+/// `sync_step_item` reparte `ruta_w` antes de separar origen y destino
+/// (commit d984f83)— y el separador va en su PROPIO span con un rol
+/// distinto: un `↔` incrustado en un nombre es texto de raíz y se pinta como
+/// tal, así que el de verdad se distingue por estilo aunque el glifo sea el
+/// mismo.
+fn compare_title(
+    view: &crate::app::CompareView,
+    frame_width: u16,
+    theme: &TuiTheme,
+) -> Line<'static> {
+    let (izq, der) = compare_title_halves(view, usize::from(frame_width));
+    let badge_span = |h: bool| {
+        Span::styled(
+            if h { HOSTILE_BADGE } else { "" },
+            theme.role(Role::Warning),
+        )
+    };
+    Line::from(vec![
+        Span::styled(
+            format!(" {} — ", t("compare-title")),
+            theme.role(Role::Title),
+        ),
+        badge_span(izq.hostile),
+        Span::styled(izq.text, theme.role(Role::Title)),
+        Span::styled(COMPARE_TITLE_SEP, theme.role(Role::Info)),
+        badge_span(der.hostile),
+        Span::styled(der.text, theme.role(Role::Title)),
+        Span::raw(" "),
+    ])
+}
+
+/// Una de las dos raíces del título del panel de comparación, ya recortada
+/// para caber en el presupuesto que le tocó.
+struct CompareTitleHalf {
+    /// El texto YA acotado por celdas (`middle_ellipsis`).
+    text: String,
+    /// Si el saneado alteró el nombre — el badge va en un span propio.
+    hostile: bool,
+}
+
+/// Reparte el ancho disponible del título del marco entre las dos raíces,
+/// ANTES de construir ningún span.
+///
+/// Esto es lo que evita los dos defectos de #185 a la vez: el presupuesto
+/// para el prefijo, el separador, el sufijo y las dos marcas se descuenta
+/// PRIMERO, y lo que sobra se reparte a la mitad entre las dos raíces — así
+/// una raíz izquierda larga nunca se come a la derecha (se recorta con `…`,
+/// nunca en silencio), y el `↔` real siempre llega en su propio span porque
+/// nunca compite por espacio con el texto de una raíz.
+fn compare_title_halves(
+    view: &crate::app::CompareView,
+    frame_width: usize,
+) -> (CompareTitleHalf, CompareTitleHalf) {
+    let (left_txt, left_hostil) =
+        norte_frontend::path_display_with(&view.left_root, view.left_encoding);
+    let (right_txt, right_hostil) =
+        norte_frontend::path_display_with(&view.right_root, view.right_encoding);
+    let badge_w = |h: bool| if h { HOSTILE_BADGE.width() } else { 0 };
+    let prefix_w = format!(" {} — ", t("compare-title")).width();
+    // Bordes del marco (2) + prefijo + separador + el espacio final + las
+    // dos marcas — todo lo que NO es texto de raíz, reservado antes de
+    // repartir lo que queda.
+    let fixed =
+        2 + prefix_w + COMPARE_TITLE_SEP.width() + 1 + badge_w(left_hostil) + badge_w(right_hostil);
+    let roots_w = frame_width.saturating_sub(fixed).max(2);
+    let left_w = (roots_w / 2).max(1);
+    let right_w = roots_w.saturating_sub(left_w).max(1);
+    (
+        CompareTitleHalf {
+            text: norte_frontend::middle_ellipsis(&left_txt, left_w),
+            hostile: left_hostil,
+        },
+        CompareTitleHalf {
+            text: norte_frontend::middle_ellipsis(&right_txt, right_w),
+            hostile: right_hostil,
+        },
+    )
+}
+
+#[cfg(test)]
+mod compare_title_tests {
+    use super::compare_title_halves;
+    use norte_proto::VPath;
+
+    fn vp(s: &str) -> VPath {
+        VPath::parse(s).expect("vpath")
+    }
+
+    fn vista(left: VPath, right: VPath) -> crate::app::CompareView {
+        crate::app::CompareView::new(left, right, 0, None, None)
+    }
+
+    /// #185: un nombre con una flecha DENTRO (fixture `arrow_join_spoof`) se
+    /// queda en su propia mitad — nunca se confunde con el separador real, y
+    /// la otra raíz llega intacta.
+    #[test]
+    fn arrow_join_spoof_no_fabrica_pareja() {
+        let spoof = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "arrow_join_spoof")
+            .expect("fixture del corpus");
+        let seg = norte_proto::Segment::new(spoof.bytes.clone()).expect("segmento");
+        let izquierda = vp("mem:///izquierda").join(seg);
+        let derecha = vp("mem:///derecha/de/verdad");
+        let (izq, der) = compare_title_halves(&vista(izquierda, derecha), 200);
+        assert!(
+            izq.text.contains('→'),
+            "la flecha se queda DENTRO de su mitad: {}",
+            izq.text
+        );
+        assert!(
+            der.text.ends_with("de/verdad"),
+            "y la derecha llega intacta a la suya: {}",
+            der.text
+        );
+    }
+
+    /// Una raíz izquierda kilométrica se recorta CON marca (`…`), nunca en
+    /// silencio, y no se come a la derecha: el reparto de ancho es POR
+    /// MITAD, reservado antes de construir ningún span.
+    #[test]
+    fn raiz_larga_se_recorta_y_no_expulsa_a_la_otra() {
+        let larga =
+            vp("mem:///").join(norte_proto::Segment::new(vec![b'x'; 4096]).expect("segmento"));
+        let derecha = vp("mem:///derecha/de/verdad");
+        let (izq, der) = compare_title_halves(&vista(larga, derecha), 60);
+        assert!(izq.text.contains('…'), "el corte se MARCA: {}", izq.text);
+        assert!(
+            der.text.ends_with("de/verdad") || der.text.contains("de/verdad"),
+            "la otra raíz sigue intacta: {}",
+            der.text
+        );
+    }
+
+    /// Con espacio de sobra las dos raíces llegan completas, sin badge (no
+    /// son hostiles).
+    #[test]
+    fn sin_saneado_las_dos_raices_llegan_completas() {
+        let (izq, der) =
+            compare_title_halves(&vista(vp("mem:///izquierda"), vp("mem:///derecha")), 200);
+        assert!(!izq.hostile);
+        assert!(!der.hostile);
+        assert!(izq.text.contains("izquierda"));
+        assert!(der.text.contains("derecha"));
+    }
+}
 
 /// Reparte el interior del marco: cabecera de columnas, lista, filtros y
 /// teclas.
