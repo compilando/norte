@@ -30,15 +30,14 @@ journal's ownership and failure model told three ways, and #186 is the same
 story reaching the executor: a `DeleteTree` cancelled mid-tree that writes no
 entry is hard rule 3 meeting hard rule 4. One design, not four patches.
 
-## `w4a` — the embedded journal's ownership and failure model
+## `w4a` — the embedded journal's ownership and failure model — **MERGED**
+
+Closed #178, #160, #186, #146 and #205 (opened and closed on the same branch).
+Protocol 0.41.0. Plan: `2026-08-14-w4a-journal-ownership.md`. What survives:
 
 | issue | crate(s) | what |
 | --- | --- | --- |
-| #160 | norte-core | a journal write that fails after a successful trash leaves the file moved and unrecorded |
-| #178 | norte-core | an embedded session whose journal is corrupt or squatted runs unjournalled behind a warning |
-| #179 | norte-core | the embedded journal's ownership window is all-or-nothing: no retry after a busy open, no release when idle |
-| #146 | norte-core | anchor the journal's format marker, so a re-declaration is caught outright |
-| #186 | norte-core | a `DeleteTree` cancelled mid-tree writes no journal entry, so a half-deleted subtree is lost silently |
+| #179 | norte-core | **half done.** The window reopens; nothing calls `release()` on a timer. That half needs a caller that knows how many mutating Tasks are live, and `pin_for_task` gave it the precondition it was missing. Goes with #203 |
 
 #160, #178 and #179 are one story — the embedded journal's ownership and
 failure model — and want one design, not three patches.
