@@ -145,6 +145,15 @@ pub struct HelpState {
     focus: Focus,
     actions: Vec<Action>,
     action_cursor: usize,
+    /// El foco ACABA de llegar al cuerpo y el cursor de acciones todavía no se
+    /// ha movido (#ayuda): mientras esté puesto, quien pinta debe traer el
+    /// cursor a lo que YA se está leyendo en vez de llevarse la vista hasta
+    /// donde esté el cursor.
+    ///
+    /// Sin esto, pasar al cuerpo te teletransportaba a la primera línea
+    /// ejecutable — que en una página larga está detrás de toda la prosa—, así
+    /// que `Tab` no parecía cambiar de columna: parecía saltar al final.
+    action_follows_view: bool,
     body_scroll: usize,
     /// Plugin nodes, in catalogue order, minus the ones dropped by
     /// [`HelpState::set_plugins`].
@@ -193,6 +202,7 @@ impl HelpState {
             focus: Focus::Topics,
             actions: Vec::new(),
             action_cursor: 0,
+            action_follows_view: false,
             body_scroll: 0,
             plugins: Vec::new(),
             plugin_topics: BTreeMap::new(),
@@ -590,6 +600,7 @@ impl HelpState {
     /// Moves the cursor one row up: one topic in the sidebar, one action in
     /// the body.
     pub fn up(&mut self) {
+        self.action_follows_view = false;
         match self.focus {
             Focus::Topics => self.move_sidebar(false, 1),
             Focus::Body => self.action_cursor = self.action_cursor.saturating_sub(1),
@@ -599,6 +610,7 @@ impl HelpState {
     /// Moves the cursor one row down: one topic in the sidebar, one action in
     /// the body.
     pub fn down(&mut self) {
+        self.action_follows_view = false;
         match self.focus {
             Focus::Topics => self.move_sidebar(true, 1),
             Focus::Body => self.clamp_action(self.action_cursor.saturating_add(1)),
@@ -611,6 +623,9 @@ impl HelpState {
     /// a movement over prose, and most of a topic is prose with no action on
     /// it at all.
     pub fn page_up(&mut self, n: usize) {
+        // Paginar es leer, no elegir: la vista manda y el cursor se queda
+        // donde el lector lo deje al volver a moverlo.
+        self.action_follows_view = true;
         match self.focus {
             Focus::Topics => self.move_sidebar(false, n),
             Focus::Body => self.body_scroll = self.body_scroll.saturating_sub(n),
@@ -620,6 +635,7 @@ impl HelpState {
     /// Moves `n` topics down in the sidebar, or scrolls the body `n` lines
     /// down. See [`page_up`](Self::page_up).
     pub fn page_down(&mut self, n: usize) {
+        self.action_follows_view = true;
         match self.focus {
             Focus::Topics => self.move_sidebar(true, n),
             Focus::Body => self.body_scroll = self.body_scroll.saturating_add(n),
@@ -702,8 +718,29 @@ impl HelpState {
         self.focus = match self.focus {
             Focus::Body => Focus::Topics,
             Focus::Topics if self.actions.is_empty() => Focus::Topics,
-            Focus::Topics => Focus::Body,
+            Focus::Topics => {
+                // El cursor va a donde está el lector, no al revés.
+                self.action_follows_view = true;
+                Focus::Body
+            }
         };
+    }
+
+    /// ¿Tiene que traerse el cursor de acciones a la vista actual, en vez de
+    /// llevarse la vista al cursor? Ver [`Self::action_follows_view`] en la
+    /// struct: lo arma [`Self::toggle_focus`] y lo desarma el primer
+    /// movimiento del lector.
+    #[must_use]
+    pub fn action_follows_view(&self) -> bool {
+        self.action_follows_view
+    }
+
+    /// Pone el cursor de acciones en `i` SIN que la vista lo persiga: es lo
+    /// que hace quien pinta cuando el foco acaba de llegar al cuerpo y ya sabe
+    /// qué acciones caen dentro de la ventana.
+    pub fn settle_action_cursor(&mut self, i: usize) {
+        self.clamp_action(i);
+        self.action_follows_view = false;
     }
 
     /// Id under the sidebar cursor, or `None` when the filter left the

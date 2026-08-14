@@ -271,6 +271,21 @@ impl Pane {
         self.state.set_viewport_rows(rows);
     }
 
+    /// Deja la ventana lista para pintar `rows` filas — delegado puro a
+    /// [`norte_frontend::PaneState::reconcile_viewport`]. El run loop lo llama
+    /// ANTES de cada draw.
+    pub fn reconcile_viewport(&mut self, rows: usize) {
+        self.state.reconcile_viewport(rows);
+    }
+
+    /// La primera fila visible del listado — delegado puro a
+    /// [`norte_frontend::PaneState::viewport_offset`]. Lo leen el pintado y el
+    /// hit test del ratón, que tienen que ver la MISMA ventana.
+    #[must_use]
+    pub fn viewport_offset(&self) -> usize {
+        self.state.viewport_offset()
+    }
+
     /// Cuántas filas mueve una página en este pane (#124) — delegado puro a
     /// [`norte_frontend::PaneState::page_step`].
     #[must_use]
@@ -4211,13 +4226,34 @@ impl HelpView {
             }
         };
         self.state.clamp_scroll(self.body.lines.len());
+        if self.state.focus() != norte_frontend::help::Focus::Body {
+            return;
+        }
+        // El foco ACABA de llegar al cuerpo (o el lector acaba de paginar):
+        // entonces manda la VISTA. El cursor se posa en la primera acción que
+        // cae dentro de la ventana, y si no hay ninguna se queda donde esté
+        // sin arrastrar nada. Antes de esto, `Tab` te llevaba a la primera
+        // línea ejecutable —detrás de toda la prosa en una página larga—, así
+        // que no parecía cambiar de columna: parecía saltar al final.
+        if self.state.action_follows_view() {
+            let ventana = self.state.body_scroll()..self.state.body_scroll().saturating_add(height);
+            if let Some(i) = self
+                .body
+                .action_lines
+                .iter()
+                .position(|line| ventana.contains(line))
+            {
+                self.state.settle_action_cursor(i);
+            }
+            return;
+        }
+        // Y si el cursor se movió, manda ÉL: la vista lo persigue.
+        //
         // The guard is not defensive noise: a topic with neither commands nor
         // `see_also` has no line to reveal, and `HelpState` only refuses the
         // FOCUS on an empty action list — the cursor itself can be stale for
         // one frame after a filter rebuilt the page under it.
-        if self.state.focus() == norte_frontend::help::Focus::Body
-            && let Some(&line) = self.body.action_lines.get(self.state.action_cursor())
-        {
+        if let Some(&line) = self.body.action_lines.get(self.state.action_cursor()) {
             self.state.reveal(line, height);
         }
     }

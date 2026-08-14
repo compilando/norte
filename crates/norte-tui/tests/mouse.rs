@@ -70,6 +70,10 @@ fn app_pintada(n: usize) -> App {
 /// resuelven un índice lo CONTRASTAN contra el texto de esa fila.
 fn pintar(app: &mut App) -> Vec<String> {
     let mut terminal = Terminal::new(TestBackend::new(W, H)).expect("terminal de test");
+    // El MISMO orden que el run loop: reconciliar la ventana, pintar,
+    // devolver la geometría. Sin el primer paso se pintaría una ventana que
+    // nadie reconcilió, o sea una pantalla que ningún usuario ve.
+    ui::before_frame(app, H);
     let frame = terminal.draw(|f| ui::draw(f, app)).expect("draw");
     let geometria = ui::pane_geometry(app, frame.area);
     mouse::after_frame(app, geometria);
@@ -940,4 +944,36 @@ fn el_panel_de_diferencias_se_come_el_raton_como_cualquier_overlay() {
         dir_antes
     );
     assert!(app.compare.is_some(), "y el panel sigue donde estaba");
+}
+
+/// La ventana pegajosa, END-TO-END: `End` y luego subir hasta arriba tiene que
+/// dejar el listado enseñando el principio, no clavado donde estaba.
+#[test]
+fn subir_desde_el_final_acaba_arrastrando_la_ventana() {
+    let mut app = app_pintada(60);
+    app.panes[0].move_to_end();
+    let _ = pintar(&mut app);
+    let abajo = app.mouse.geometry().expect("geometría")[0].offset;
+    assert!(abajo > 0, "el final desplaza la ventana: {abajo}");
+
+    // Sube UNA fila: la ventana no se mueve (el cursor va dentro).
+    app.panes[0].move_up(1);
+    let _ = pintar(&mut app);
+    assert_eq!(
+        app.mouse.geometry().expect("geometría")[0].offset,
+        abajo,
+        "subir dentro de la ventana no la mueve"
+    );
+
+    // Y hasta arriba del todo: la ventana acaba en 0.
+    for _ in 0..60 {
+        app.panes[0].move_up(1);
+    }
+    let _ = pintar(&mut app);
+    assert_eq!(app.panes[0].cursor(), 0);
+    assert_eq!(
+        app.mouse.geometry().expect("geometría")[0].offset,
+        0,
+        "el cursor arriba del todo tiene que verse"
+    );
 }

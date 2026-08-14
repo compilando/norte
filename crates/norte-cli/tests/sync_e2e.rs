@@ -390,9 +390,15 @@ fn sigint_durante_planificacion_no_deja_part_detras() {
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+        let vivo = child.try_wait().expect("try_wait").is_none();
         assert!(
             started,
-            "la planificación no llegó a escribir un `.part` en 15 s (intento {intento}): no había nada que cancelar"
+            "la planificación no llegó a escribir un `.part` en 15 s (intento {intento}; \
+             ¿sigue vivo el hijo? {vivo}; en el spool: {:?}): no había nada que cancelar",
+            std::fs::read_dir(&spool_dir).map(|it| it
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>())
         );
         unsafe_free_kill(child.id());
         let status = child.wait().expect("wait");
@@ -421,7 +427,9 @@ fn sigint_durante_planificacion_no_deja_part_detras() {
             .unwrap_or_default();
         assert!(
             quedan.is_empty(),
-            "un Ctrl+C durante la planificación no puede dejar nada en el spool: {quedan:?}"
+            "un Ctrl+C durante la planificación no puede dejar nada en el spool: {quedan:?} \
+             (intento {intento}, salió con {:?}, muertes crudas hasta aquí: {crudas})",
+            status.code()
         );
         return;
     }
