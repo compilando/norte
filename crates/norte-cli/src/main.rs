@@ -3236,17 +3236,14 @@ impl SigintGate {
                 // INVARIANTE: el Mutex nunca se envenena — bajo el lock solo
                 // hay un `take`/`replace` de un Option, sin panic posible.
                 let actual = visto.lock().unwrap().take();
-                match actual {
-                    Some(c) => {
-                        eprintln!("\n{}", norte_i18n::t("cli-cancelling"));
-                        c.cancel();
-                    }
+                if let Some(c) = actual {
+                    eprintln!("\n{}", norte_i18n::t("cli-cancelling"));
+                    c.cancel();
+                } else {
                     // Nada vivo que cancelar (el prompt, el plan en pantalla,
                     // un `--dry-run` saliendo): se hace lo que haría el SO.
-                    None => {
-                        eprintln!();
-                        std::process::exit(130);
-                    }
+                    eprintln!();
+                    std::process::exit(130);
                 }
             }
         });
