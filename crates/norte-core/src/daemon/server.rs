@@ -3290,13 +3290,15 @@ async fn handle_sync_plan(
     if let Some(spool) = shared.engine.spool()
         && spool.retained_for(conn_id) >= MAX_RETAINED_SYNC_PLANS
     {
-        return Err(RpcError::protocol(
-            codes::OVERLOADED,
-            format!(
-                "too many retained sync plans on this connection \
-                 (max {MAX_RETAINED_SYNC_PLANS}); apply or drop one first"
-            ),
-        ));
+        // Con TAXONOMÍA en `data` y no solo con la frase (#182): un rechazo
+        // sin taxonomía llega al cliente como `Internal { panic: false }` —
+        // «internal error»— porque `to_taxonomy` no tiene otra cosa que
+        // devolver, y a un agente eso le dice «vuelve a intentarlo», que es lo
+        // que llenaba este mismo tope. `LimitExceeded` dice lo que pasa: el
+        // plan es válido, lo que se acabó es el presupuesto.
+        return Err(RpcError::from(norte_proto::Error::LimitExceeded {
+            limit: norte_proto::Error::LIMIT_RETAINED_SYNC_PLANS.to_owned(),
+        }));
     }
 
     let (handle, mut rx) = shared

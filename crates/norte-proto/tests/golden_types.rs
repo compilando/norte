@@ -2967,7 +2967,12 @@ fn method_names_frozen() {
     // la lee como `Unknown` y pinta «un motivo que esta versión no sabe
     // nombrar» sobre un paso que YA es un `Skip` en el wire — no actúa de
     // menos ni de más.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.43.0");
+    //
+    // 0.44.0 (#182): `Error::LIMIT_RETAINED_SYNC_PLANS` — un token más del
+    // vocabulario ABIERTO de `LimitExceeded`, para que el rechazo del tope de
+    // planes retenidos viaje con taxonomía en vez de llegar como «internal
+    // error». Un cliente N-1 lo enseña tal cual, que es el contrato del campo.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.44.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

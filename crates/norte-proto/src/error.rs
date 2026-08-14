@@ -216,7 +216,9 @@ pub enum Error {
         /// incluido), [`Error::LIMIT_DECOMPRESSED_BYTES`] (inflado
         /// acumulado por encima de `max_decompressed_bytes`) o
         /// [`Error::LIMIT_NESTING`] (capas de archivo anidadas por encima
-        /// de `max_nesting`, #56/proto 0.24). Los emisores usan las
+        /// de `max_nesting`, #56/proto 0.24) o
+        /// [`Error::LIMIT_RETAINED_SYNC_PLANS`] (planes de sincronización
+        /// retenidos por una conexión, 0.44.0). Los emisores usan las
         /// constantes, jamás literales sueltos (fuente única, pin en
         /// tests). Forward-compat: un token DESCONOCIDO (peer más nuevo)
         /// se trata como límite genérico — mostrar el string tal cual,
@@ -361,4 +363,21 @@ impl Error {
     /// archivo anidadas por encima de `max_nesting` (lo gobierna el engine —
     /// el direccionamiento en sí es ilimitado sintácticamente).
     pub const LIMIT_NESTING: &'static str = "nesting";
+    /// Vocabulario de [`Error::LimitExceeded`] (0.44.0, #182): planes de
+    /// sincronización RETENIDOS por una conexión, por encima del tope del
+    /// daemon.
+    ///
+    /// No es un contenedor —los otros tres hablan de archivos— y aun así vive
+    /// aquí, porque lo que el cliente necesita saber es exactamente lo mismo:
+    /// «esto NO está roto; norte se niega a pagar su coste con los límites de
+    /// hoy». La alternativa era una variante nueva de la taxonomía para decir
+    /// lo mismo con otra palabra.
+    ///
+    /// Lo que arregla es concreto (#182): ese rechazo viajaba con su frase en
+    /// `message` y SIN taxonomía en `data`, así que el cliente lo recibía como
+    /// `Internal { panic: false }` — «internal error», que es justo el texto
+    /// que hace a un modelo reintentar, y reintentar es lo que llenaba el
+    /// tope. Un cliente N-1 lo lee como límite genérico y enseña el token tal
+    /// cual, que es el contrato de este campo desde que existe.
+    pub const LIMIT_RETAINED_SYNC_PLANS: &'static str = "retained-sync-plans";
 }
