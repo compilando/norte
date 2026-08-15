@@ -1,0 +1,117 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 02 copiar/mover · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">02</span><span class="sep">/</span>
+    <span>Copiar y mover · GUI</span><span class="sep">·</span>
+    <span class="keys">F5 · el conflicto se resuelve sin bloquear el resto de la cola</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">norte</span>
+      <span class="wpath">copiando 3 elementos → norte-ci</span>
+      <span class="wright">
+        <span class="pill on"><i></i>task 7f3a</span>
+        <span class="pill">journal 0x91ac</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <aside class="side">
+        <h4>Volúmenes</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">▤</span>Sistema<span class="tail">412 GB</span></div>
+          <div class="it"><span class="ico">▤</span>Datos<span class="tail">1.8 TB</span></div>
+        </div>
+        <h4>Remotos</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">↗</span>norte-ci<span class="tail">4 flujos</span></div>
+          <div class="it"><span class="ico">↗</span>assets-eu<span class="tail">s3</span></div>
+        </div>
+        <h4>En curso</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">◐</span>Copiar 3 · 61 %</div>
+          <div class="it"><span class="ico">◑</span>Indexar raw · 12 %</div>
+        </div>
+        <div class="card" style="margin-top:22px">
+          <h5>Cancelación</h5>
+          <p style="margin:0;font-size:11.5px;line-height:1.55;color:var(--muted)">
+            Cancelar cierra el flujo y deja
+            <span class="mono am">.norte-partial-…</span>
+            en destino. Nunca un fichero parcial sin marcar.
+          </p>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div class="gpanes">
+          <section class="gpane active">
+            <div class="gpane-head"><span class="dotk"></span>local:/home/oscar/media/2026<span style="margin-left:auto" class="am">3 marcados</span></div>
+            <div class="gcols"><span>Nombre</span><span>Tamaño</span><span>Estado</span></div>
+            <div class="grows">
+              <div class="gr mark"><span class="gn"><span class="ico">◫</span><span class="txt">DSC_2048.ARW</span></span><span class="gs">42.1 MB</span><span class="gd am">conflicto</span></div>
+              <div class="gr mark sel"><span class="gn"><span class="ico">◫</span><span class="txt">DSC_2049.ARW</span></span><span class="gs">41.7 MB</span><span class="gd ph">44 %</span></div>
+              <div class="gr mark"><span class="gn"><span class="ico">◫</span><span class="txt">DSC_2050.ARW</span></span><span class="gs">43.0 MB</span><span class="gd">en cola</span></div>
+              <div class="gr"><span class="gn"><span class="ico">◫</span><span class="txt">DSC_2051.ARW</span></span><span class="gs">40.9 MB</span><span class="gd dim">—</span></div>
+            </div>
+          </section>
+
+          <section class="gpane">
+            <div class="gpane-head"><span class="dotk"></span>sftp://build@norte-ci/…/2026-08-14<span style="margin-left:auto" class="dim">destino</span></div>
+            <div class="gcols"><span>Nombre</span><span>Tamaño</span><span>Modificado</span></div>
+            <div class="grows">
+              <div class="gr"><span class="gn"><span class="ico">◫</span><span class="txt">DSC_2048.ARW</span></span><span class="gs">42.1 MB</span><span class="gd">08-14 11:06</span></div>
+              <div class="gr"><span class="gn"><span class="ico am">◌</span><span class="txt am">.norte-partial-DSC_2049.ARW</span></span><span class="gs am">18.2 MB</span><span class="gd">08-14 11:07</span></div>
+            </div>
+
+            <!-- El conflicto es una tarjeta del pane, no un modal que congela la app. -->
+            <div style="padding:14px 16px;border-top:1px solid var(--line)">
+              <div class="card" style="border-color:rgba(240,198,116,.45)">
+                <h5 class="am">Conflicto · 1 de 3</h5>
+                <div style="display:flex;gap:22px;font-size:12px;color:var(--muted);margin-bottom:12px">
+                  <div><div class="dim mono" style="font-size:9.5px;letter-spacing:.12em">ORIGEN</div><div class="mono" style="color:var(--ink)">42.1 MB</div><div class="mono dim">2026-08-14 10:58</div></div>
+                  <div><div class="dim mono" style="font-size:9.5px;letter-spacing:.12em">DESTINO</div><div class="mono" style="color:var(--ink)">42.1 MB</div><div class="mono dim">2026-08-14 11:06</div></div>
+                  <div><div class="dim mono" style="font-size:9.5px;letter-spacing:.12em">HASH</div><div class="mono cy">idéntico</div><div class="mono dim">blake3</div></div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <span class="kbd" style="border-color:var(--phosphor);background:var(--phosphor);color:var(--base);padding:5px 12px">Sobrescribir</span>
+                  <span class="kbd" style="padding:5px 12px">Omitir</span>
+                  <span class="kbd" style="padding:5px 12px">Renombrar</span>
+                  <span class="kbd" style="padding:5px 12px">Si es más nuevo</span>
+                  <span class="kbd" style="padding:5px 12px;color:var(--muted)">Aplicar a todos</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Bandeja: la cola vive aquí y sobrevive al cierre del diálogo. -->
+        <div class="tray">
+          <div class="tray-row">
+            <span class="tname">Copiar 3 → norte-ci</span>
+            <span class="track"><i style="width:61%"></i></span>
+            <span class="tpct">61 %</span>
+            <span class="tmeta">31.4 MB/s · ETA 00:01:34 · Ctrl+K</span>
+          </div>
+          <div class="tray-row">
+            <span class="tname">Indexar raw/ (24 310 ficheros)</span>
+            <span class="track cyan"><i style="width:12%"></i></span>
+            <span class="tpct" style="color:var(--cyan)">12 %</span>
+            <span class="tmeta">en segundo plano · sin bloquear panes</span>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="k">task 7f3a · running</span>
+          <span>journal 0x91ac abierta · pin_for_task</span>
+          <span class="right"><span class="k"><b>F5</b> copiar</span> &nbsp; <span class="k"><b>F6</b> mover</span> &nbsp; <span class="k"><b>Ctrl+K</b> cancelar</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

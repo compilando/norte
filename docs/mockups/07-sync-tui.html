@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 07 sincronizar · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">07</span><span class="sep">/</span>
+    <span>Sincronizar · TUI</span><span class="sep">·</span>
+    <span class="keys">Ctrl+Y · el plan se retiene y se aprueba, no se ejecuta al vuelo</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">plan 4f2c · retenido en spool</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">Sincronizar</span><span class="dim">  local:/home/oscar/media/2026  →  sftp://build@norte-ci/srv/artifacts</span>
+        <span style="flex:1"></span><span class="dim">plan 4f2c · caduca en 09:41</span>
+      </div>
+
+      <!-- Cabecera del plan: dirección, política de borrado y alcance. -->
+      <div class="pane active" style="height:calc(8 * var(--cell-h));flex:0 0 auto">
+        <div class="pane-title"><span class="ph">▌</span>Plan<span style="flex:1"></span><span class="dim">Tab cambia campo · Space alterna</span></div>
+        <div class="pane-body">
+          <div class="e"><span class="n"><span class="mu">Dirección   </span>[<span class="ph">•</span>] una vía →   [ ] una vía ←   [ ] dos vías (por fecha)</span></div>
+          <div class="e"><span class="n"><span class="mu">Alcance     </span>[<span class="ph">x</span>] crear   [<span class="ph">x</span>] actualizar   [<span class="ph">x</span>] borrar sobrantes   [ ] permisos</span></div>
+          <div class="e cur"><span class="n"><span>Sobrantes   </span>( ) dejar   (<span>•</span>) a la papelera del destino   ( ) borrar de verdad</span></div>
+          <div class="e"><span class="n"><span class="mu">Verificar   </span>[<span class="ph">x</span>] blake3 tras escribir   [ ] sólo tamaño   ·  <span class="mu">Conflicto  </span>preguntar</span></div>
+          <div class="e"><span class="n"><span class="mu">Excluir     </span><span class="cy">.git/  node_modules/  *.tmp  .norte-partial-*</span></span></div>
+        </div>
+        <div class="pane-foot"><span class="dim">«a la papelera del destino» exige que el destino tenga papelera propia; sftp no la tiene → se avisa abajo</span></div>
+      </div>
+
+      <div class="pane" style="flex:1 1 auto;min-height:0">
+        <div class="pane-title"><span class="dim">▌</span>Operaciones · 9<span style="flex:1"></span><span class="dim">Space excluye una línea · Enter ve el par</span></div>
+        <div class="pane-head"><span style="width:12ch">ACCIÓN</span><span style="flex:1">RUTA</span><span style="width:11ch;text-align:right">TAMAÑO</span><span style="width:18ch;text-align:right">REVERSIÓN</span></div>
+        <div class="pane-body">
+          <div class="e"><span style="width:12ch" class="cy">crear</span><span class="n">DSC_2050.ARW</span><span style="width:11ch;text-align:right">43.0 MB</span><span style="width:18ch;text-align:right" class="dim">borrar destino</span></div>
+          <div class="e"><span style="width:12ch" class="cy">crear</span><span class="n">raw/ (24 310 ficheros)</span><span style="width:11ch;text-align:right">1.9 TB</span><span style="width:18ch;text-align:right" class="dim">borrar destino</span></div>
+          <div class="e cur"><span style="width:12ch">actualizar</span><span class="n">release-notes.md</span><span style="width:11ch;text-align:right">7 KB</span><span style="width:18ch;text-align:right">copia previa</span></div>
+          <div class="e"><span style="width:12ch">actualizar</span><span class="n">informe-año.md</span><span style="width:11ch;text-align:right">14 KB</span><span style="width:18ch;text-align:right" class="dim">copia previa</span></div>
+          <div class="e"><span style="width:12ch" class="am">borrar</span><span class="n am">provenance.intoto.jsonl</span><span style="width:11ch;text-align:right">9 KB</span><span style="width:18ch;text-align:right" class="am">papelera destino</span></div>
+          <div class="e"><span style="width:12ch" class="am">borrar</span><span class="n am">sbom.spdx.json</span><span style="width:11ch;text-align:right">340 KB</span><span style="width:18ch;text-align:right" class="am">papelera destino</span></div>
+          <div class="e"><span style="width:12ch" class="dg">borrar</span><span class="n dg">nightly/ (312 ficheros)</span><span style="width:11ch;text-align:right">4.1 GB</span><span style="width:18ch;text-align:right" class="dg">IRREVERSIBLE</span></div>
+          <div class="e dim"><span style="width:12ch">saltar</span><span class="n">café.jpg · NFD vs NFC, mismo contenido</span><span style="width:11ch;text-align:right">2.1 MB</span><span style="width:18ch;text-align:right">—</span></div>
+          <div class="e dim"><span style="width:12ch">saltar</span><span class="n">19 ficheros iguales</span><span style="width:11ch;text-align:right">618 MB</span><span style="width:18ch;text-align:right">—</span></div>
+        </div>
+        <div class="pane-foot">
+          <span class="cy">crear 2</span><span class="dim"> · </span><span>actualizar 2</span><span class="dim"> · </span><span class="am">borrar 3</span><span class="dim"> · saltar 21  ·  neto +1.9 TB en destino</span>
+          <span style="flex:1"></span><span class="dim">hash del plan 4f2c…</span>
+        </div>
+      </div>
+
+      <!-- El aviso que no se puede ocultar: qué NO se podrá deshacer. -->
+      <div class="row row-2" style="align-items:flex-start;flex-direction:column;justify-content:center">
+        <div class="status"><span class="dg">⚠ El destino sftp no tiene papelera</span><span class="dim">1 borrado quedará como IRREVERSIBLE y así se anota en el journal, con su motivo.</span></div>
+        <div class="status"><span class="mu">Aprobar ejecuta el plan retenido</span><span class="dim">nadie más puede canjearlo: se guarda por conexión</span><span style="flex:1"></span><span class="btn primary">F2 aprobar</span><span> </span><span class="btn">F3 simular</span><span> </span><span class="btn danger">Esc descartar</span></div>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Aprobar</span></span>
+        <span class="k"><b>3</b><span>Simular</span></span>
+        <span class="k"><b>4</b><span>Ver par</span></span>
+        <span class="k"><b>5</b><span>Dirección</span></span>
+        <span class="k"><b>6</b><span>Sobrantes</span></span>
+        <span class="k"><b>7</b><span>Excluir</span></span>
+        <span class="k"><b>8</b><span>Quitar</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Cerrar</span></span>
+      </div>
+    </div>
+  </div>
+</div>

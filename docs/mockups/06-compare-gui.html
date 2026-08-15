@@ -1,0 +1,98 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 06 comparar directorios · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+<style>
+  /* La tabla es simétrica: nombre · tamaño · estado · tamaño · nombre.
+     El nombre de la derecha necesita aire tras la columna numérica. */
+  .gcols > span:nth-child(4), .gr > *:nth-child(4) { padding-right: 0; }
+  .gcols > span:nth-child(5), .gr > *:nth-child(5) { padding-left: 16px; }
+  .gcols > span:nth-child(3) { letter-spacing: 0.08em; }
+</style>
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">06</span><span class="sep">/</span>
+    <span>Comparar directorios · GUI</span><span class="sep">·</span>
+    <span class="keys">un lado que se expande expande el par</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">Comparar</span>
+      <span class="wpath">media/2026 ⟷ norte-ci:/srv/artifacts</span>
+      <span class="wright">
+        <span class="pill">tamaño + mtime + blake3</span>
+        <span class="pill on"><i></i>task c447 · 34 %</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <aside class="side">
+        <h4>Criterio</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">✓</span>Tamaño</div>
+          <div class="it on"><span class="ico">✓</span>Fecha (±2 s)</div>
+          <div class="it on"><span class="ico">✓</span>Contenido<span class="tail">blake3</span></div>
+          <div class="it"><span class="ico">·</span>Permisos</div>
+        </div>
+
+        <h4>Mostrar</h4>
+        <div class="grp">
+          <div class="it"><span class="ico ph">=</span>Iguales<span class="tail">19</span></div>
+          <div class="it on"><span class="ico">≠</span>Distintos<span class="tail">3</span></div>
+          <div class="it on"><span class="ico cy">→</span>Sólo izquierda<span class="tail">4</span></div>
+          <div class="it on"><span class="ico dg">←</span>Sólo derecha<span class="tail">2</span></div>
+          <div class="it on"><span class="ico am">⚠</span>Avisos<span class="tail">1</span></div>
+        </div>
+
+        <div class="card" style="margin-top:22px;border-color:rgba(240,198,116,.4)">
+          <h5 class="am">Aviso de nombres</h5>
+          <p style="margin:0;font-size:11.5px;line-height:1.55;color:var(--muted)">
+            <span class="mono">café.jpg</span> llega en NFD desde macOS y existe en NFC aquí.
+            Se compara en NFC y se conservan los bytes de cada lado.
+          </p>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div style="flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:var(--base)">
+          <div class="gcols" style="grid-template-columns:1fr 96px 60px 96px 1fr">
+            <span>Izquierda · local</span><span>Tamaño</span><span style="text-align:center">Estado</span><span>Tamaño</span><span style="text-align:left">Derecha · sftp</span>
+          </div>
+          <div class="grows">
+            <div class="gr" style="grid-template-columns:1fr 96px 60px 96px 1fr"><span class="gn"><span class="ico">◫</span><span class="txt">DSC_2048.ARW</span></span><span class="gs">42.1 MB</span><span class="gd ph" style="text-align:center">=</span><span class="gs">42.1 MB</span><span class="gn"><span class="txt">DSC_2048.ARW</span></span></div>
+            <div class="gr sel" style="grid-template-columns:1fr 96px 60px 96px 1fr"><span class="gn"><span class="ico">◫</span><span class="txt">DSC_2049.ARW</span></span><span class="gs">41.7 MB</span><span class="gd" style="text-align:center">≠</span><span class="gs">41.7 MB</span><span class="gn"><span class="txt">DSC_2049.ARW</span></span></div>
+            <div class="gr" style="grid-template-columns:1fr 96px 60px 96px 1fr;background:rgba(135,221,215,.07)"><span class="gn"><span class="ico cy">◫</span><span class="txt cy">DSC_2050.ARW</span></span><span class="gs">43.0 MB</span><span class="gd cy" style="text-align:center">→</span><span class="gs dim">—</span><span class="gn"><span class="txt dim">no está</span></span></div>
+            <div class="gr" style="grid-template-columns:1fr 96px 60px 96px 1fr"><span class="gn"><span class="ico">·</span><span class="txt am">informe-año.md</span></span><span class="gs">14 KB</span><span class="gd am" style="text-align:center">≠</span><span class="gs">14 KB</span><span class="gn"><span class="txt am">informe-año.md</span></span></div>
+            <div class="gr" style="grid-template-columns:1fr 96px 60px 96px 1fr"><span class="gn"><span class="ico">·</span><span class="txt">release-notes.md</span></span><span class="gs">6 KB</span><span class="gd" style="text-align:center">≠</span><span class="gs">7 KB</span><span class="gn"><span class="txt">release-notes.md</span></span></div>
+            <div class="gr" style="grid-template-columns:1fr 96px 60px 96px 1fr;background:rgba(255,107,107,.07)"><span class="gn"><span class="txt dim">no está</span></span><span class="gs dim">—</span><span class="gd dg" style="text-align:center">←</span><span class="gs">9 KB</span><span class="gn"><span class="ico dg">·</span><span class="txt dg">provenance.intoto.jsonl</span></span></div>
+            <div class="gr" style="grid-template-columns:1fr 96px 60px 96px 1fr;background:rgba(255,107,107,.07)"><span class="gn"><span class="txt dim">no está</span></span><span class="gs dim">—</span><span class="gd dg" style="text-align:center">←</span><span class="gs">340 KB</span><span class="gn"><span class="ico dg">·</span><span class="txt dg">sbom.spdx.json</span></span></div>
+            <div class="gr" style="grid-template-columns:1fr 96px 60px 96px 1fr;background:rgba(240,198,116,.07)"><span class="gn"><span class="ico am">◫</span><span class="txt am">café.jpg <span class="mono dim" style="font-size:10px">NFD</span></span></span><span class="gs">2.1 MB</span><span class="gd am" style="text-align:center">⚠</span><span class="gs">2.1 MB</span><span class="gn"><span class="txt am">café.jpg <span class="mono dim" style="font-size:10px">NFC</span></span></span></div>
+
+            <!-- Un directorio que se expande, se expande a los dos lados. -->
+            <div class="gr dir" style="grid-template-columns:1fr 96px 60px 96px 1fr;background:rgba(255,255,255,.02)"><span class="gn"><span class="ico">▾</span><span class="txt">raw</span></span><span class="gs">24 310</span><span class="gd cy" style="text-align:center">→</span><span class="gs dim">—</span><span class="gn"><span class="txt dim">no está</span></span></div>
+            <div class="gr" style="grid-template-columns:1fr 96px 60px 96px 1fr"><span class="gn" style="padding-left:22px"><span class="ico">◫</span><span class="txt">A7R_0001.ARW</span></span><span class="gs">88 MB</span><span class="gd cy" style="text-align:center">→</span><span class="gs dim">—</span><span class="gn"><span class="txt dim">—</span></span></div>
+            <div class="gr" style="grid-template-columns:1fr 96px 60px 96px 1fr"><span class="gn" style="padding-left:22px"><span class="ico">◫</span><span class="txt">A7R_0002.ARW</span></span><span class="gs">87 MB</span><span class="gd cy" style="text-align:center">→</span><span class="gs dim">—</span><span class="gn"><span class="txt dim">—</span></span></div>
+            <div class="gr" style="grid-template-columns:1fr 96px 60px 96px 1fr"><span class="gn"><span class="ico">·</span><span class="txt">SHA256SUMS</span></span><span class="gs">412 B</span><span class="gd ph" style="text-align:center">=</span><span class="gs">412 B</span><span class="gn"><span class="txt">SHA256SUMS</span></span></div>
+          </div>
+        </div>
+
+        <div class="tray">
+          <div class="tray-row">
+            <span class="tname">Hash blake3 · 1 204 ficheros</span>
+            <span class="track"><i style="width:34%"></i></span>
+            <span class="tpct">34 %</span>
+            <span class="tmeta">comparar no muta nada · Ctrl+Y convierte esto en un plan</span>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="k">19 iguales · 3 distintos · 4 sólo izquierda · 2 sólo derecha</span>
+          <span class="right"><span class="k"><b>Shift+F2</b> comparar</span> &nbsp; <span class="k"><b>Ctrl+Y</b> sincronizar</span> &nbsp; <span class="k"><b>Enter</b> abrir par</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

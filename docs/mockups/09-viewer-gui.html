@@ -1,0 +1,101 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 09 visor · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">09</span><span class="sep">/</span>
+    <span>Visor · GUI</span><span class="sep">·</span>
+    <span class="keys">la codificación es un control visible, no una suposición</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">Visor</span>
+      <span class="wpath">legacy/facturación-1998.txt</span>
+      <span class="wright">
+        <span class="pill warn"><i></i>CP1252 · heurística 0.94</span>
+        <span class="pill">CRLF</span>
+        <span class="pill">sólo lectura</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <aside class="side" style="width:268px;flex:0 0 268px">
+        <h4>Codificación</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">◆</span>CP1252<span class="tail">0.94</span></div>
+          <div class="it"><span class="ico">◇</span>UTF-8<span class="tail">3 err</span></div>
+          <div class="it"><span class="ico">◇</span>CP437<span class="tail">0.61</span></div>
+          <div class="it"><span class="ico">◇</span>ISO-8859-15<span class="tail">0.88</span></div>
+          <div class="it"><span class="ico">◇</span>UTF-16LE<span class="tail">0.02</span></div>
+        </div>
+
+        <h4>Vista</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">¶</span>Texto</div>
+          <div class="it"><span class="ico">⬚</span>Hex</div>
+          <div class="it"><span class="ico">⊞</span>Ambas</div>
+          <div class="it"><span class="ico">↵</span>Ajustar líneas</div>
+        </div>
+
+        <h4>Fichero</h4>
+        <div class="card" style="padding:11px 13px">
+          <div class="mono" style="font-size:10.5px;line-height:1.75;color:var(--muted)">
+            1.4 MB · 18 412 líneas<br>
+            CRLF · sin BOM<br>
+            <span class="dg">3 bytes inválidos</span><br>
+            mtime intacto
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:18px;border-color:rgba(240,198,116,.4)">
+          <h5 class="am">Por qué importa</h5>
+          <p style="margin:0;font-size:11.5px;line-height:1.55;color:var(--muted)">
+            <span class="mono">0xF3</span> es <b style="color:var(--ink)">ó</b> en CP1252 y una secuencia inválida en UTF-8.
+            Elegir mal no rompe el fichero — no se escribe — pero sí lo que lees.
+          </p>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div style="flex:1 1 auto;min-height:0;display:flex;background:var(--base)">
+          <div style="flex:1 1 60%;min-width:0;padding:16px 20px;font-family:var(--mono);font-size:12.5px;line-height:1.95;color:var(--muted);overflow:hidden">
+            <div><span class="dim" style="display:inline-block;width:4ch;text-align:right">6</span>  Bodegas Ñora     Instalación eléctrica      1.240.000</div>
+            <div><span class="dim" style="display:inline-block;width:4ch;text-align:right">7</span>  Muñoz e Hijos    Mantenimiento anual          380.000</div>
+            <div><span class="dim" style="display:inline-block;width:4ch;text-align:right">8</span>  Talleres Súñer   Reparación línea 3           925.500</div>
+            <div><span class="dim" style="display:inline-block;width:4ch;text-align:right">9</span>  </div>
+            <div style="background:rgba(183,255,82,.1);margin:0 -20px;padding:0 20px"><span class="dim" style="display:inline-block;width:4ch;text-align:right">10</span>  la <span class="ph" style="background:rgba(183,255,82,.22)">factura del trimestre</span> se emitió el día 5 de abril</div>
+            <div><span class="dim" style="display:inline-block;width:4ch;text-align:right">11</span>  con vencimiento a 30 días.</div>
+            <div><span class="dim" style="display:inline-block;width:4ch;text-align:right">12</span>  </div>
+            <div><span class="dim" style="display:inline-block;width:4ch;text-align:right">13</span>  NOTA: fichero exportado desde el AS/400. Los acentos</div>
+            <div><span class="dim" style="display:inline-block;width:4ch;text-align:right">14</span>  venían en CP437 y se pasaron a CP1252 en 2004.</div>
+            <div><span class="dim" style="display:inline-block;width:4ch;text-align:right">15</span>  byte inválido → <span class="dg" style="background:rgba(255,107,107,.18)">\xB1</span> <span class="dim">nunca se sustituye en silencio</span></div>
+          </div>
+
+          <div style="flex:1 1 40%;min-width:0;border-left:1px solid var(--line);background:#080b0c;padding:16px 18px;font-family:var(--mono);font-size:11.5px;line-height:1.95;color:var(--muted);overflow:hidden">
+            <div class="dim" style="font-size:9.5px;letter-spacing:.14em;margin-bottom:10px">HEX · MISMO OFFSET</div>
+            <div class="dim">0000A410  6C 61 20 66 61 63 74 75  |la factu|</div>
+            <div class="dim">0000A418  72 61 20 64 65 6C 20 74  |ra del t|</div>
+            <div class="dim">0000A420  72 69 6D 65 73 74 72 65  |rimestre|</div>
+            <div>0000A428  20 73 65 20 65 6D 69 74  | se emit|</div>
+            <div>0000A430  69 <span class="am">F3</span> 20 65 6C 20 64 <span class="am">ED</span>  |i<span class="am">ó</span> el d<span class="am">í</span>|</div>
+            <div>0000A438  61 20 35 0D 0A 63 6F 6E  |a 5..con|</div>
+            <div>0000A440  20 76 65 6E 63 69 6D 69  | vencimi|</div>
+            <div>0000A448  65 6E 74 6F 20 61 20 33  |ento a 3|</div>
+            <div>0000A450  30 20 64 <span class="am">ED</span> 61 73 2E 0D  |0 d<span class="am">í</span>as..|</div>
+            <div>0000A458  0A <span class="dg">B1</span> 20 4E 4F 54 41 3A  |.<span class="dg">·</span> NOTA:|</div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="k">línea 10 / 18 412 · col 4 · byte 0x0000A41F</span>
+          <span class="am">3 bytes inválidos</span>
+          <span class="right"><span class="k"><b>F3</b> ver</span> &nbsp; <span class="k"><b>Alt+E</b> codificación</span> &nbsp; <span class="k"><b>Tab</b> texto/hex</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

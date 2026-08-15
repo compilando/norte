@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 04 rename por lotes · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">04</span><span class="sep">/</span>
+    <span>Rename por lotes · TUI</span><span class="sep">·</span>
+    <span class="keys">Shift+F6 · plan completo antes de tocar el disco</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">38 pares · un solo undo</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">Renombrar lote</span><span class="dim">  local:/home/oscar/media/2026/campaña-otoño · 38 marcados</span>
+        <span style="flex:1"></span><span class="dim">Esc cancela · F2 aplica</span>
+      </div>
+
+      <!-- Pila de reglas: el orden importa y se ve. -->
+      <div class="pane active" style="height:calc(10 * var(--cell-h));flex:0 0 auto">
+        <div class="pane-title"><span class="ph">▌</span>Reglas<span style="flex:1"></span><span class="dim">a añadir · d borrar · J/K reordenar</span></div>
+        <div class="pane-body">
+          <div class="e"><span class="n"><span class="dim">1</span>  regex        <span class="cy">^IMG_(\d+)</span> → <span class="ph">otoño-$1</span>            <span class="dim">·  aplica a  nombre</span></span></div>
+          <div class="e"><span class="n"><span class="dim">2</span>  minúsculas   <span class="dim">extensión únicamente</span>                     <span class="dim">·  JPG → jpg</span></span></div>
+          <div class="e"><span class="n"><span class="dim">3</span>  limpiar      <span class="dim">espacios dobles, guiones repetidos, ( )</span>    <span class="dim">·  NFC, bytes intactos</span></span></div>
+          <div class="e cur"><span class="n"><span>4</span>  contador     <span>inicio 001 · paso 1 · 3 dígitos · sufijo</span>   <span>·  orden actual del pane</span></span></div>
+          <div class="e"><span class="n"><span class="dim">5</span>  recorte      <span class="dim">quitar «-copia», «(1)», « final»</span>          <span class="dim">·  sólo al final</span></span></div>
+          <div class="e dim"><span class="n">+  añadir regla…</span></div>
+        </div>
+        <div class="pane-foot"><span class="dim">las reglas producen pares; el ejecutor es el mismo que usa el rename de IA</span><span style="flex:1"></span><span class="dim">5 reglas</span></div>
+      </div>
+
+      <!-- Previsualización: el plan entero, con las colisiones señaladas. -->
+      <div class="pane" style="flex:1 1 auto;min-height:0">
+        <div class="pane-title"><span class="dim">▌</span>Previsualización<span style="flex:1"></span><span class="am">2 colisiones · 1 ciclo</span></div>
+        <div class="pane-head"><span style="flex:1">ACTUAL</span><span style="width:3ch"></span><span style="flex:1">NUEVO</span><span style="width:16ch;text-align:right">ESTADO</span></div>
+        <div class="pane-body">
+          <div class="e"><span class="n">IMG_4471.JPG</span><span style="width:3ch" class="dim">→</span><span class="n">otoño-001.jpg</span><span style="width:16ch;text-align:right" class="ph">ok</span></div>
+          <div class="e"><span class="n">IMG_4472.JPG</span><span style="width:3ch" class="dim">→</span><span class="n">otoño-002.jpg</span><span style="width:16ch;text-align:right" class="ph">ok</span></div>
+          <div class="e"><span class="n">IMG_4473 (1).JPG</span><span style="width:3ch" class="dim">→</span><span class="n">otoño-003.jpg</span><span style="width:16ch;text-align:right" class="ph">ok</span></div>
+          <div class="e mark"><span class="n">otoño-004.jpg</span><span style="width:3ch">→</span><span class="n">otoño-005.jpg</span><span style="width:16ch;text-align:right">ciclo · ok</span></div>
+          <div class="e mark"><span class="n">otoño-005.jpg</span><span style="width:3ch">→</span><span class="n">otoño-004.jpg</span><span style="width:16ch;text-align:right">ciclo · ok</span></div>
+          <div class="e cur"><span class="n">IMG_4476.JPG</span><span style="width:3ch">→</span><span class="n">otoño-006.jpg</span><span style="width:16ch;text-align:right">ok</span></div>
+          <div class="e"><span class="n dg">IMG_4477.JPG</span><span style="width:3ch" class="dim">→</span><span class="n dg">otoño-007.jpg</span><span style="width:16ch;text-align:right" class="dg">colisión ↓</span></div>
+          <div class="e"><span class="n dg">IMG_4478.jpg</span><span style="width:3ch" class="dim">→</span><span class="n dg">otoño-007.jpg</span><span style="width:16ch;text-align:right" class="dg">colisión ↑</span></div>
+          <div class="e"><span class="n am">CAFÉ.jpg</span><span style="width:3ch" class="dim">→</span><span class="n am">café.jpg</span><span style="width:16ch;text-align:right" class="am">sólo mayúsculas</span></div>
+          <div class="e"><span class="n">informe final.pdf</span><span style="width:3ch" class="dim">→</span><span class="n">informe.pdf</span><span style="width:16ch;text-align:right" class="ph">ok</span></div>
+          <div class="e dim"><span class="n">… 28 pares más</span><span style="width:3ch"></span><span class="n"></span><span style="width:16ch;text-align:right"></span></div>
+        </div>
+        <div class="pane-foot">
+          <span class="dg">colisión</span><span class="dim"> dos orígenes piden el mismo nombre · </span>
+          <span class="am">sólo mayúsculas</span><span class="dim"> el destino distingue may/min: se comprueba contra el destino, no el origen</span>
+        </div>
+      </div>
+
+      <div class="status">
+        <span class="am">⚠ 2 colisiones bloquean el plan</span>
+        <span class="dim">el ejecutor es transaccional: o entran los 38 pares o no entra ninguno</span>
+        <span style="flex:1"></span><span class="dim">el ciclo se ordena solo</span>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Aplicar</span></span>
+        <span class="k"><b>3</b><span>Reglas</span></span>
+        <span class="k"><b>4</b><span>Editar</span></span>
+        <span class="k"><b>5</b><span>Guardar</span></span>
+        <span class="k"><b>6</b><span>Cargar</span></span>
+        <span class="k off"><b>7</b><span>Mkdir</span></span>
+        <span class="k"><b>8</b><span>Quitar</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Cerrar</span></span>
+      </div>
+    </div>
+  </div>
+</div>

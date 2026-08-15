@@ -1,0 +1,132 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 03 tareas async · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">03</span><span class="sep">/</span>
+    <span>Cola de tareas · GUI</span><span class="sep">·</span>
+    <span class="keys">misma cola que la TUI, misma sesión del core</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">norte</span>
+      <span class="wpath">Tareas</span>
+      <span class="wright">
+        <span class="pill on"><i></i>4 en curso</span>
+        <span class="pill">2 en cola</span>
+        <span class="pill warn"><i></i>1 reintentando</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <aside class="side">
+        <h4>Filtro</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">◐</span>En curso<span class="tail">4</span></div>
+          <div class="it"><span class="ico">◔</span>En cola<span class="tail">2</span></div>
+          <div class="it"><span class="ico">⏸</span>Pausadas<span class="tail">1</span></div>
+          <div class="it"><span class="ico">✕</span>Con error<span class="tail">1</span></div>
+          <div class="it"><span class="ico">✓</span>Terminadas<span class="tail">2</span></div>
+        </div>
+        <h4>Concurrencia</h4>
+        <div class="grp">
+          <div class="it"><span class="ico">≡</span>Local<span class="tail">8</span></div>
+          <div class="it"><span class="ico">≡</span>sftp norte-ci<span class="tail">4</span></div>
+          <div class="it"><span class="ico">≡</span>s3 assets-eu<span class="tail">16</span></div>
+        </div>
+        <div class="card" style="margin-top:22px">
+          <h5>Regla</h5>
+          <p style="margin:0;font-size:11.5px;line-height:1.55;color:var(--muted)">
+            Un <span class="mono ph">panic</span> falla su tarea y deja un informe local.
+            No tumba el daemon ni el resto de la cola.
+          </p>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div style="flex:1 1 auto;min-height:0;overflow:hidden;padding:18px 20px;display:flex;flex-direction:column;gap:12px;background:var(--base)">
+
+          <div class="card" style="border-color:rgba(183,255,82,.4)">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="mono ph" style="font-size:11px">7f3a</span>
+              <span style="font-size:14px;color:var(--ink)">Copiar 3 elementos → norte-ci:/srv/artifacts</span>
+              <span class="pill on" style="margin-left:auto"><i></i>running</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px;margin-top:12px">
+              <span class="track"><i style="width:61%"></i></span>
+              <span class="mono ph" style="font-size:12px;width:46px;text-align:right">61 %</span>
+            </div>
+            <div class="mono dim" style="font-size:10.5px;margin-top:9px">
+              77.4 / 126.8 MB · 31.4 MB/s · ETA 00:01:34 · journal 0x91ac · <span class="am">1 conflicto esperando decisión</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="mono cy" style="font-size:11px">a10c</span>
+              <span style="font-size:14px;color:var(--ink)">Indexar local:/home/oscar/media/2026/raw</span>
+              <span class="pill" style="margin-left:auto">running</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px;margin-top:12px">
+              <span class="track cyan"><i style="width:12%"></i></span>
+              <span class="mono cy" style="font-size:12px;width:46px;text-align:right">12 %</span>
+            </div>
+            <div class="mono dim" style="font-size:10.5px;margin-top:9px">2 917 / 24 310 ficheros · embeddings en cola · sin bloquear panes</div>
+          </div>
+
+          <div class="card">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="mono cy" style="font-size:11px">3b91</span>
+              <span style="font-size:14px;color:var(--ink)">Buscar contenido «factura» en ~/proyectos</span>
+              <span class="pill" style="margin-left:auto">streaming</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px;margin-top:12px">
+              <span class="track cyan"><i style="width:88%"></i></span>
+              <span class="mono cy" style="font-size:12px;width:46px;text-align:right">88 %</span>
+            </div>
+            <div class="mono dim" style="font-size:10.5px;margin-top:9px">341 aciertos ya operables en el pane virtual · resultados en streaming</div>
+          </div>
+
+          <div class="card" style="border-color:rgba(240,198,116,.4)">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="mono am" style="font-size:11px">b7d0</span>
+              <span style="font-size:14px;color:var(--ink)">Copiar voz-en-off.wav → SONY_CARD</span>
+              <span class="pill warn" style="margin-left:auto"><i></i>pausada</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px;margin-top:12px">
+              <span class="track amber"><i style="width:45%"></i></span>
+              <span class="mono am" style="font-size:12px;width:46px;text-align:right">45 %</span>
+            </div>
+            <div class="mono dim" style="font-size:10.5px;margin-top:9px">reanudar continúa desde .norte-partial-voz-en-off.wav</div>
+          </div>
+
+          <div class="card" style="border-color:rgba(255,107,107,.45)">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="mono dg" style="font-size:11px">f331</span>
+              <span style="font-size:14px;color:var(--ink)">Mover informe-año.md → Datos</span>
+              <span class="pill" style="margin-left:auto;color:var(--danger);border-color:rgba(255,107,107,.45)">EBUSY</span>
+            </div>
+            <div class="mono dim" style="font-size:10.5px;margin-top:11px">
+              fichero bloqueado por otro proceso · <span class="dg">reintento 3/5 en 00:04</span> · backoff acotado · el journal no anota hasta que gana
+            </div>
+            <div style="display:flex;gap:8px;margin-top:11px">
+              <span class="kbd" style="padding:5px 12px">Reintentar ya</span>
+              <span class="kbd" style="padding:5px 12px">Ver traza</span>
+              <span class="kbd" style="padding:5px 12px;color:var(--danger);border-color:rgba(255,107,107,.45)">Cancelar</span>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="statusbar">
+          <span class="k">cancelación cooperativa · CancellationToken en cada bucle</span>
+          <span class="right"><span class="k"><b>Ctrl+K</b> cancelar</span> &nbsp; <span class="k"><b>P</b> pausar</span> &nbsp; <span class="k"><b>Enter</b> traza</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

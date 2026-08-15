@@ -1,12 +1,13 @@
-import { CommandStrip } from "@/components/command-strip";
-import { Core } from "@/components/core";
-import { Features } from "@/components/features";
+import { AiWorkflows } from "@/components/ai-workflows";
+import { AsyncEngine } from "@/components/async-engine";
+import { Capabilities } from "@/components/capabilities";
 import { FinalCta } from "@/components/final-cta";
 import { Footer } from "@/components/footer";
 import { Hero } from "@/components/hero";
-import { Manifesto } from "@/components/manifesto";
 import { Nav } from "@/components/nav";
-import { Speed } from "@/components/speed";
+import { Philosophy } from "@/components/philosophy";
+import { SignalStrip } from "@/components/signal-strip";
+import { Surfaces } from "@/components/surfaces";
 import { Trust } from "@/components/trust";
 
 export default function Home() {
@@ -14,12 +15,13 @@ export default function Home() {
     <main className="min-h-screen overflow-hidden bg-base text-ink">
       <Nav />
       <Hero />
-      <CommandStrip />
-      <Manifesto />
-      <Features />
-      <Speed />
+      <SignalStrip />
+      <Philosophy />
+      <AsyncEngine />
+      <AiWorkflows />
+      <Capabilities />
+      <Surfaces />
       <Trust />
-      <Core />
       <FinalCta />
       <Footer />
     </main>

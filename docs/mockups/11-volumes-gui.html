@@ -1,0 +1,124 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 11 volúmenes · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">11</span><span class="sep">/</span>
+    <span>Volúmenes y montajes · GUI</span><span class="sep">·</span>
+    <span class="keys">expulsar dice qué se rompe antes de romperlo</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">Volúmenes</span>
+      <span class="wpath">7 unidades · 2 remotas</span>
+      <span class="wright">
+        <span class="pill warn"><i></i>SONY_CARD en uso</span>
+        <span class="pill">udisks2</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <aside class="side" style="width:268px;flex:0 0 268px">
+        <h4>Locales</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">▤</span>Sistema<span class="tail">412 GB</span></div>
+          <div class="it"><span class="ico">▤</span>Datos<span class="tail">1.8 TB</span></div>
+          <div class="it"><span class="ico am">▤</span>win-data<span class="tail">88 GB</span></div>
+        </div>
+
+        <h4>Extraíbles</h4>
+        <div class="grp">
+          <div class="it"><span class="ico am">⏏</span>SONY_CARD<span class="tail">1.2 GB</span></div>
+        </div>
+
+        <h4>Remotos</h4>
+        <div class="grp">
+          <div class="it"><span class="ico cy">↗</span>norte-ci<span class="tail">sftp</span></div>
+          <div class="it"><span class="ico cy">↗</span>assets-eu<span class="tail">s3</span></div>
+        </div>
+
+        <div class="card" style="margin-top:20px">
+          <h5>Antes de copiar</h5>
+          <p style="margin:0;font-size:11.5px;line-height:1.55;color:var(--muted)">
+            126.8 MB a SONY_CARD (1.2 GB libres): <span class="ph">cabe</span>.
+            A <span class="mono">win-data</span> también, pero es NTFS <span class="am">sin papelera</span>: borrar allí no vuelve.
+          </p>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div style="flex:1 1 auto;min-height:0;background:var(--base);padding:18px 20px;display:flex;flex-direction:column;gap:11px">
+
+          <div class="card">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="font-size:14px;color:var(--ink)">Sistema</span>
+              <span class="mono dim" style="font-size:10.5px">/ · ext4 · atómico · papelera</span>
+              <span class="mono" style="margin-left:auto;font-size:11px;color:var(--muted)">412 GB libres de 916 GB</span>
+            </div>
+            <div style="margin-top:11px"><span class="track" style="height:6px"><i style="width:55%"></i></span></div>
+          </div>
+
+          <div class="card">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="font-size:14px;color:var(--ink)">Datos</span>
+              <span class="mono dim" style="font-size:10.5px">/mnt/datos · btrfs · snapshots</span>
+              <span class="mono" style="margin-left:auto;font-size:11px;color:var(--muted)">1.8 TB libres de 3.6 TB</span>
+            </div>
+            <div style="margin-top:11px"><span class="track" style="height:6px"><i style="width:50%"></i></span></div>
+          </div>
+
+          <div class="card" style="border-color:rgba(240,198,116,.35)">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="font-size:14px;color:var(--ink)">win-data</span>
+              <span class="mono am" style="font-size:10.5px">/mnt/win-data · ntfs · case-insensitive · sin papelera</span>
+              <span class="mono am" style="margin-left:auto;font-size:11px">88 GB libres de 1 TB</span>
+            </div>
+            <div style="margin-top:11px"><span class="track amber" style="height:6px"><i style="width:91%"></i></span></div>
+          </div>
+
+          <!-- La tarjeta que se quiere expulsar, con el porqué del aviso. -->
+          <div class="card" style="border-color:rgba(240,198,116,.55)">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="font-size:14px;color:var(--ink)">SONY_CARD</span>
+              <span class="mono dim" style="font-size:10.5px">exfat · extraíble · montado 11:02</span>
+              <span class="pill warn" style="margin-left:auto"><i></i>en uso</span>
+            </div>
+            <div style="margin-top:11px"><span class="track amber" style="height:6px"><i style="width:96%"></i></span></div>
+            <div style="display:flex;gap:26px;margin-top:13px;font-family:var(--mono);font-size:10.5px;color:var(--muted)">
+              <span>1 tarea escribiendo · <span class="am">b7d0 pausada al 45 %</span></span>
+              <span>18 MB sin volcar</span>
+              <span>0 ficheros abiertos</span>
+            </div>
+            <div style="font-size:12px;color:var(--muted);margin-top:11px;line-height:1.5">
+              Expulsar aborta <span class="mono">b7d0</span> y deja <span class="mono am">.norte-partial-voz-en-off.wav</span> en la tarjeta.
+              Se hace <span class="mono">sync()</span> antes de desmontar; si el kernel responde <span class="mono">EBUSY</span>, no se fuerza.
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <span class="kbd" style="padding:6px 14px;border-color:var(--amber);color:var(--amber)">Expulsar igual</span>
+              <span class="kbd" style="padding:6px 14px">Terminar la tarea primero</span>
+              <span class="kbd" style="padding:6px 14px">Cancelar</span>
+            </div>
+          </div>
+
+          <div class="card" style="opacity:.75">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="font-size:14px;color:var(--ink)">norte-ci · assets-eu</span>
+              <span class="mono dim" style="font-size:10.5px">remotos · sin cuota conocida</span>
+              <span class="mono dim" style="margin-left:auto;font-size:11px">el hueco libre no se inventa: se muestra «—»</span>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="statusbar">
+          <span class="k">montar · desmontar · expulsar son operaciones del core, no del frontend</span>
+          <span class="right"><span class="k"><b>Alt+F1/F2</b> unidad</span> &nbsp; <span class="k"><b>E</b> expulsar</span> &nbsp; <span class="k"><b>Enter</b> abrir</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

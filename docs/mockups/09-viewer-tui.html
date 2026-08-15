@@ -1,0 +1,87 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 09 visor · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">09</span><span class="sep">/</span>
+    <span>Visor · TUI</span><span class="sep">·</span>
+    <span class="keys">F3 · texto, hex y codificación explícita</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">visor · sólo lectura</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">Ver</span><span class="dim">  legacy/facturación-1998.txt  ·  1.4 MB  ·  no cabe en memoria: se lee por ventanas</span>
+        <span style="flex:1"></span><span class="dim">q cierra</span>
+      </div>
+
+      <div class="pane active" style="flex:1 1 auto;min-height:0">
+        <div class="pane-title">
+          <span class="ph">▌</span>texto
+          <span class="dim"> · </span><span class="am">CP1252 detectado</span><span class="dim"> (BOM no · heurística 0.94) · CRLF · sin BOM</span>
+          <span style="flex:1"></span><span class="dim">Alt+E cambia codificación</span>
+        </div>
+        <div class="pane-body">
+          <div class="e dim"><span class="n">   1  FACTURACIÓN 1998 — ARCHIVO HISTÓRICO</span></div>
+          <div class="e dim"><span class="n">   2  ════════════════════════════════════</span></div>
+          <div class="e dim"><span class="n">   3</span></div>
+          <div class="e dim"><span class="n">   4  Cliente          Concepto                     Importe   Estado</span></div>
+          <div class="e dim"><span class="n">   5  ─────────────────────────────────────────────────────────────</span></div>
+          <div class="e dim"><span class="n">   6  Bodegas Ñora     Instalación eléctrica      1.240.000  cobrado</span></div>
+          <div class="e dim"><span class="n">   7  Muñoz e Hijos    Mantenimiento anual          380.000  pendiente</span></div>
+          <div class="e dim"><span class="n">   8  Talleres Súñer   Reparación línea 3           925.500  cobrado</span></div>
+          <div class="e dim"><span class="n">   9</span></div>
+          <div class="e"><span class="n">  10  <span class="dim">la </span><span style="background:var(--phosphor);color:var(--base)">factura del trimestre</span><span class="dim"> se emitió el día 5 de abril</span></span></div>
+          <div class="e dim"><span class="n">  11  con vencimiento a 30 días.</span></div>
+          <div class="e dim"><span class="n">  12</span></div>
+          <div class="e dim"><span class="n">  13  NOTA: fichero exportado desde el AS/400. Los acentos venían en</span></div>
+          <div class="e dim"><span class="n">  14  CP437 y se convirtieron a CP1252 en 2004; hay 3 bytes inválidos.</span></div>
+          <div class="e"><span class="n">  15  <span class="dg">un byte inválido se pinta así →</span> <span class="dg" style="background:rgba(255,107,107,.18)">\xB1</span><span class="dim">, nunca se sustituye en silencio</span></span></div>
+        </div>
+        <div class="pane-foot">
+          <span class="dim">línea 10 de 18 412 · col 4 · byte 0x0000A41F · </span><span class="am">3 bytes inválidos</span>
+          <span style="flex:1"></span><span class="dim">/ busca dentro · n siguiente</span>
+        </div>
+      </div>
+
+      <!-- Vista hex del mismo offset: lo que el modo texto está interpretando. -->
+      <div class="pane" style="height:calc(9 * var(--cell-h));flex:0 0 auto">
+        <div class="pane-title"><span class="dim">▌</span>hex<span style="flex:1"></span><span class="dim">Tab alterna texto/hex · los bytes son la verdad</span></div>
+        <div class="pane-body">
+          <div class="e dim"><span class="n">0000A410  6C 61 20 66 61 63 74 75  72 61 20 64 65 6C 20 74  |la factura del t|</span></div>
+          <div class="e dim"><span class="n">0000A420  72 69 6D 65 73 74 72 65  20 73 65 20 65 6D 69 74  |rimestre se emit|</span></div>
+          <div class="e dim"><span class="n">0000A430  69 F3 20 65 6C 20 64 ED  61 20 35 0D 0A 63 6F 6E  |i. el d.a 5..con|</span></div>
+          <div class="e"><span class="n">0000A440  20 76 65 6E 63 69 6D 69  65 6E 74 6F 20 61 20 33  | vencimiento a 3|</span></div>
+          <div class="e"><span class="n">0000A450  30 20 64 ED 61 73 2E 0D  0A <span class="dg">B1</span> 20 4E 4F 54 41  |0 d.as....&nbsp;NOTA|</span></div>
+        </div>
+        <div class="pane-foot"><span class="dim">0xF3 = ó y 0xED = í en CP1252 · en UTF-8 serían secuencias inválidas: por eso la codificación se elige, no se adivina y ya</span></div>
+      </div>
+
+      <div class="status">
+        <span class="mu">el visor no modifica nada</span><span class="dim">abre en sólo lectura y no toca el mtime</span>
+        <span style="flex:1"></span><span class="dim">F4 abre el editor</span>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Encoding</span></span>
+        <span class="k"><b>3</b><span>Texto/Hex</span></span>
+        <span class="k"><b>4</b><span>Editar</span></span>
+        <span class="k"><b>5</b><span>Ir a</span></span>
+        <span class="k"><b>6</b><span>Ajuste</span></span>
+        <span class="k"><b>7</b><span>Buscar</span></span>
+        <span class="k"><b>8</b><span>Siguiente</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Cerrar</span></span>
+      </div>
+    </div>
+  </div>
+</div>

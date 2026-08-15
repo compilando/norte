@@ -15,13 +15,18 @@ const jetBrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "[NOMBRE] — Command every file. Trust every move.",
-  description: "The keyboard-first file commander with a native Rust core, a universal filesystem, and a journal behind every move.",
+  title: "Norte — The open-source file commander for the agent era",
+  description: "One fast, asynchronous Rust core for every file, terminal and AI agent. Local, remote and cloud storage—with review, policy, journal and undo.",
+  openGraph: {
+    title: "Norte — Your files have a new sense of direction.",
+    description: "The open-source, AI-native file commander. Async by design. Reversible by default.",
+    images: ["https://raw.githubusercontent.com/compilando/norte/main/landing/public/norte-aurora.png"],
+  },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className="scroll-smooth">
+    <html lang="en" className="scroll-smooth" suppressHydrationWarning>
       <body className={`${inter.variable} ${jetBrainsMono.variable}`}>{children}</body>
     </html>
   );

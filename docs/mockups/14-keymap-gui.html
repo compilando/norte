@@ -1,0 +1,113 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 14 teclado · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">14</span><span class="sep">/</span>
+    <span>Editor de atajos · GUI</span><span class="sep">·</span>
+    <span class="keys">preset + capa de usuario, con los conflictos a la vista</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">Atajos</span>
+      <span class="wpath">orthodox + capa de usuario</span>
+      <span class="wright">
+        <span class="pill on"><i></i>recarga en caliente</span>
+        <span class="pill warn"><i></i>1 conflicto</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <aside class="side" style="width:280px;flex:0 0 280px">
+        <h4>Preset base</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">◆</span>orthodox<span class="tail">mc</span></div>
+          <div class="it"><span class="ico">◇</span>vim</div>
+          <div class="it"><span class="ico">◇</span>cua</div>
+          <div class="it"><span class="ico">◇</span>far</div>
+          <div class="it"><span class="ico">◇</span>krusader</div>
+          <div class="it"><span class="ico">◇</span>total</div>
+          <div class="it"><span class="ico">◇</span>nnn</div>
+        </div>
+
+        <h4>Contexto</h4>
+        <div class="grp">
+          <div class="it"><span class="ico">≡</span>global<span class="tail">9</span></div>
+          <div class="it on"><span class="ico">▤</span>pane<span class="tail">34</span></div>
+          <div class="it"><span class="ico">¶</span>viewer<span class="tail">12</span></div>
+          <div class="it"><span class="ico">◱</span>compare<span class="tail">7</span></div>
+          <div class="it"><span class="ico">◆</span>tasks<span class="tail">5</span></div>
+        </div>
+
+        <div class="card" style="margin-top:20px">
+          <h5>Teclas sagradas</h5>
+          <p style="margin:0;font-size:11.5px;line-height:1.55;color:var(--muted)">
+            <span class="kbd">Tab</span> cambia de pane en todos los presets, y no puede abrir una secuencia:
+            si fuera prefijo, dejaría de ser inmediata.
+          </p>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div style="flex:1 1 auto;min-height:0;display:flex">
+          <div style="flex:1 1 60%;min-width:0;display:flex;flex-direction:column;background:var(--base)">
+            <div class="gcols" style="grid-template-columns:1fr 148px 110px"><span>Comando</span><span style="text-align:left">Tecla</span><span style="text-align:right">Origen</span></div>
+            <div class="grows">
+              <div class="gr" style="grid-template-columns:1fr 148px 110px"><span class="gn"><span class="txt mono" style="font-size:12px">pane.switch</span></span><span><span class="kbd">Tab</span></span><span class="gd dim">sagrada</span></div>
+              <div class="gr" style="grid-template-columns:1fr 148px 110px"><span class="gn"><span class="txt mono" style="font-size:12px">pane.copy</span></span><span><span class="kbd">F5</span></span><span class="gd dim">preset</span></div>
+              <div class="gr" style="grid-template-columns:1fr 148px 110px"><span class="gn"><span class="txt mono" style="font-size:12px">pane.move</span></span><span><span class="kbd">F6</span></span><span class="gd dim">preset</span></div>
+              <div class="gr" style="grid-template-columns:1fr 148px 110px"><span class="gn"><span class="txt mono" style="font-size:12px">pane.rename</span></span><span><span class="kbd">Shift+F6</span></span><span class="gd dim">preset</span></div>
+              <div class="gr sel" style="grid-template-columns:1fr 148px 110px"><span class="gn"><span class="txt mono" style="font-size:12px">pane.compare-dirs</span></span><span><span class="kbd">Shift+F2</span></span><span class="gd ph">usuario</span></div>
+              <div class="gr" style="grid-template-columns:1fr 148px 110px"><span class="gn"><span class="txt mono" style="font-size:12px">pane.sync-dirs</span></span><span><span class="kbd">Ctrl+Y</span></span><span class="gd dim">preset</span></div>
+              <div class="gr" style="grid-template-columns:1fr 148px 110px"><span class="gn"><span class="txt mono" style="font-size:12px">pane.search</span></span><span><span class="kbd">Alt+F7</span></span><span class="gd dim">preset</span></div>
+              <div class="gr" style="grid-template-columns:1fr 148px 110px"><span class="gn"><span class="txt mono" style="font-size:12px">mark.toggle</span></span><span><span class="kbd">Space</span> <span class="kbd">Insert</span></span><span class="gd dim">preset</span></div>
+              <div class="gr" style="grid-template-columns:1fr 148px 110px"><span class="gn"><span class="txt mono" style="font-size:12px">mark.pattern-add</span></span><span><span class="kbd">+</span></span><span class="gd dim">preset</span></div>
+              <div class="gr" style="grid-template-columns:1fr 148px 110px;background:rgba(240,198,116,.09)"><span class="gn"><span class="txt mono am" style="font-size:12px">task.cancel</span></span><span><span class="kbd" style="border-color:var(--amber);color:var(--amber)">Ctrl+K</span></span><span class="gd am">conflicto</span></div>
+              <div class="gr" style="grid-template-columns:1fr 148px 110px"><span class="gn"><span class="txt mono" style="font-size:12px">app.palette</span></span><span><span class="kbd">Ctrl+P</span></span><span class="gd dim">preset</span></div>
+              <div class="gr" style="grid-template-columns:1fr 148px 110px"><span class="gn"><span class="txt mono dim" style="font-size:12px">pane.bookmark-add</span></span><span class="dim">sin asignar</span><span class="gd dim">planeado</span></div>
+            </div>
+          </div>
+
+          <!-- Paleta de comandos: el mismo nombre que usa el agente. -->
+          <div style="flex:1 1 40%;min-width:0;border-left:1px solid var(--line);background:#080b0c;display:flex;flex-direction:column">
+            <div style="padding:16px 18px;border-bottom:1px solid var(--line)">
+              <div class="mono dim" style="font-size:9.5px;letter-spacing:.16em">PALETA · CTRL+P</div>
+              <div class="mono" style="font-size:14px;color:var(--ink);margin-top:9px">&gt; compar<span class="ph">▏</span></div>
+            </div>
+            <div style="padding:8px 0">
+              <div style="padding:9px 18px;background:rgba(183,255,82,.1);box-shadow:inset 3px 0 0 var(--phosphor)">
+                <div class="mono" style="font-size:12px;color:var(--ink)">pane.compare-dirs</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px">Comparar los dos panes · <span class="kbd">Shift+F2</span></div>
+              </div>
+              <div style="padding:9px 18px">
+                <div class="mono" style="font-size:12px;color:var(--muted)">pane.sync-dirs</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px">Sincronizar a partir de la comparación · <span class="kbd">Ctrl+Y</span></div>
+              </div>
+              <div style="padding:9px 18px">
+                <div class="mono" style="font-size:12px;color:var(--muted)">compare.set-criteria</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px">Tamaño, fecha o contenido · <span class="dim">sin tecla</span></div>
+              </div>
+            </div>
+
+            <div style="margin-top:auto;padding:16px 18px;border-top:1px solid var(--line)">
+              <div class="mono am" style="font-size:9.5px;letter-spacing:.14em">CONFLICTO</div>
+              <div style="font-size:11.5px;color:var(--muted);margin-top:7px;line-height:1.55">
+                <span class="mono">Ctrl+K</span> es <span class="mono">task.cancel</span> en <span class="mono">pane</span> y borrar-hasta-fin en el campo de texto.
+                Gana el contexto más específico; el editor lo enseña en vez de resolverlo en silencio.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="k">un comando, un nombre: teclado, paleta, Lua y agentes llaman al mismo</span>
+          <span class="right"><span class="k"><b>Ctrl+P</b> paleta</span> &nbsp; <span class="k"><b>F1</b> ayuda</span> &nbsp; <span class="k"><b>F11</b> ajustes</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
