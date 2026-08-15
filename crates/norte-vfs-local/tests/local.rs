@@ -1186,8 +1186,13 @@ mod papelera_freedesktop {
 
 // ---------- capabilities por DIRECTORIO (ADR 0054, #153/#145) ----------
 
+/// `capabilities_at` no escribe NUNCA, en ningún filesystem: se responde tras
+/// el gate de LECTURA, así que una sonda de escritura ahí sería un fichero
+/// creado por un actor que solo tiene permiso para mirar. El tempdir de este
+/// test está en tmpfs, que la escalera de solo lectura NO reconoce — es decir,
+/// es justo el caso que antes caía en la sonda de escritura.
 #[tokio::test]
-async fn capabilities_at_answers_without_writing_to_the_directory() {
+async fn capabilities_at_never_writes_anywhere() {
     let (p, root, base) = provider();
     let sub = base.join("sub");
     std::fs::create_dir(&sub).expect("mkdir");
@@ -1201,7 +1206,7 @@ async fn capabilities_at_answers_without_writing_to_the_directory() {
         .collect();
     assert!(
         restos.is_empty(),
-        "la escalera de solo lectura no deja rastro: {restos:?}"
+        "ni durante ni después: la escalera no muta nada ({restos:?})"
     );
 }
 
@@ -1223,7 +1228,8 @@ async fn a_directory_without_write_permission_still_gets_an_answer() {
         .expect("responde igual");
 
     // Qué responda depende del FS de CI; lo que se afirma es que RESPONDE lo
-    // mismo que para la raíz, que está en el mismo filesystem.
+    // mismo que para la raíz, que está en el mismo filesystem — y sin haber
+    // podido escribir en el directorio para averiguarlo.
     assert_eq!(
         caps.flags.contains(CapabilityFlags::CASE_SENSITIVE),
         p.capabilities_at(&root)
@@ -1267,14 +1273,17 @@ async fn a_file_is_answered_by_its_containing_directory() {
     );
 }
 
+/// Una ruta que no está NO es un error: `capabilities()` jamás pudo fallar, y
+/// hacer fallar a su versión por ubicación rompería el caso corriente de
+/// planificar hacia un destino que todavía no existe.
 #[tokio::test]
-async fn a_missing_path_is_not_found() {
+async fn a_missing_path_answers_the_declaration() {
     let (p, root, _) = provider();
     assert_eq!(
         p.capabilities_at(&child(&root, b"no-existe"))
             .await
-            .unwrap_err(),
-        norte_proto::Error::NotFound
+            .expect("responde igualmente"),
+        p.capabilities()
     );
 }
 

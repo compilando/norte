@@ -1268,8 +1268,17 @@ impl Engine {
             source.capabilities_at(&params.source),
             dest.capabilities_at(&params.dest)
         );
-        let caps = dest_caps?;
-        let sides = norte_compare::Sides::from_capabilities(source_caps?, caps);
+        // Una raíz que no sabe responder NO tumba la planificación: se declara
+        // lo del provider, igual que en `compare::probed_sides`, y la raíz
+        // sigue fallando donde tiene que fallar —su propio listado, con su fila
+        // de error—. Planificar hacia un destino que todavía no existe es el
+        // caso corriente de un mirror, y tumbarlo aquí sería un método del wire
+        // que empieza a fallar donde antes respondía.
+        let caps = crate::compare::degradada(dest_caps, dest.as_ref(), &params.dest);
+        let sides = norte_compare::Sides::from_capabilities(
+            crate::compare::degradada(source_caps, source.as_ref(), &params.source),
+            caps,
+        );
         if sides.folds_case()
             && let Some(relation) = folded_overlap(&params.source, &params.dest, sides)
         {

@@ -105,15 +105,36 @@ pub(crate) async fn probed_sides(
         left.capabilities_at(left_root),
         right.capabilities_at(right_root)
     );
-    let left_caps = left_caps.unwrap_or_else(|e| {
-        tracing::trace!(error = %e, "probed_sides: capabilities_at de la raíz izquierda falló (se declara la del provider)");
-        left.capabilities()
-    });
-    let right_caps = right_caps.unwrap_or_else(|e| {
-        tracing::trace!(error = %e, "probed_sides: capabilities_at de la raíz derecha falló (se declara la del provider)");
-        right.capabilities()
-    });
-    norte_compare::Sides::from_capabilities(left_caps, right_caps)
+    norte_compare::Sides::from_capabilities(
+        degradada(left_caps, left, left_root),
+        degradada(right_caps, right, right_root),
+    )
+}
+
+/// Las capabilities de una raíz, o las que el provider declare si no supo
+/// responder — **diciéndolo**.
+///
+/// La degradación importa y por eso no va en `trace!`: el default de un Linux
+/// es `CASE_SENSITIVE`, o sea «no pliegues nada», así que una raíz que deja de
+/// responder a mitad convierte una comparación en una que no reporta
+/// colisiones de caja. ADR 0054 dice que donde la garantía no está se DICE, y
+/// una línea de TRACE no la dice: en producción no se ve.
+pub(crate) fn degradada(
+    resultado: Result<norte_proto::Capabilities, Error>,
+    provider: &dyn Provider,
+    root: &VPath,
+) -> norte_proto::Capabilities {
+    match resultado {
+        Ok(caps) => caps,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                root = %root.display_lossy(),
+                "no se pudieron sondear las capabilities de esta raíz: se usa lo que el provider declara"
+            );
+            provider.capabilities()
+        }
+    }
 }
 
 /// Envía el lote pendiente (si lo hay). Un `send` bloqueado por backpressure

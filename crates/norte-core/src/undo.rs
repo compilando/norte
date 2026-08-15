@@ -704,7 +704,15 @@ pub(crate) async fn revert_batch(
         Err(blocked) => return Ok(blocked),
     };
 
-    let caps = provider.capabilities();
+    // Se le pregunta al DIRECTORIO, no al provider (ADR 0054): el lote se
+    // planificó con el plegado de este directorio, y deshacerlo con otro es lo
+    // que hace que `feasible` declare viable un paso inverso que el filesystem
+    // va a colapsar. Un fallo aquí bloquea la unidad y lo dice, como el fallo
+    // de listar de abajo — jamás mata la sesión de undo.
+    let caps = match provider.capabilities_at(&dir).await {
+        Ok(caps) => caps,
+        Err(error) => return Ok(Reverted::blocked(first.seq, error)),
+    };
     if caps.flags.contains(CapabilityFlags::READ_ONLY) {
         return Ok(Reverted::blocked(first.seq, Error::Unsupported));
     }

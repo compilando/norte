@@ -227,12 +227,12 @@
   {
     "id": "ext4_full_fold_es_zett",
     "hex": "73747261c39f652e747874",
-    "why": "straße.txt with U+00DF LATIN SMALL LETTER SHARP S — an ACCEPTED, currently open gap, not a silent one. `CaseFolding.txt` only gives ß a FULL fold, to the two letters \"ss\": ext4/f2fs's optional `+F` case-insensitivity casefolds with C+F (per the kernel's `mkutf8data` generator), so on that filesystem this name and `ext4_full_fold_ss` are ONE file. `name_key`'s `fold_delta` is deliberately `char -> char` and cannot expand a name into more bytes, so on APFS/NTFS/SMB (which fold simple, not full) they are correctly two files, and here they still answer two keys as well — a real miss on ext4 `+F` specifically, tracked in issue #145 rather than fixed inline, because fixing it changes what kind of function `name_key` is. This pair exists so the gap has a fixture pinning it as known, not an assumption nobody checks"
+    "why": "straße.txt with U+00DF LATIN SMALL LETTER SHARP S — an ACCEPTED, currently open gap, not a silent one. `CaseFolding.txt` only gives ß a FULL fold, to the two letters \"ss\": ext4/f2fs's optional `+F` case-insensitivity casefolds with C+F (per the kernel's `mkutf8data` generator), so on that filesystem this name and `ext4_full_fold_ss` are ONE file. `FoldMode::Simple` is `char -> char` and cannot expand a name, so on APFS/NTFS/SMB (which fold simple, not full) they are correctly two files. On ext4 `+F` they are ONE, and since ADR 0054 norte answers that too: a side whose `capabilities_at` declares `FULL_FOLD` selects `FoldMode::Full` and this pair shares a key there and only there. The pair started life pinning the gap #145 described; it now pins the fix, in both directions"
   },
   {
     "id": "ext4_full_fold_ss",
     "hex": "737472617373652e747874",
-    "why": "strasse.txt — the twin of `ext4_full_fold_es_zett`: the plain-ASCII spelling an ß gets expanded to under FULL case folding. Real users hit this pair when a German filename crosses from a full-folding filesystem (ext4 `+F`) to a simple-folding one (APFS, NTFS) or back — one volume calls it one file, the other calls it two, and #145 is what would make `name_key` agree with the full-folding side"
+    "why": "strasse.txt — the twin of `ext4_full_fold_es_zett`: the plain-ASCII spelling an ß gets expanded to under FULL case folding. Real users hit this pair when a German filename crosses from a full-folding filesystem (ext4 `+F`) to a simple-folding one (APFS, NTFS) or back — one volume calls it one file, the other calls it two. Since ADR 0054 norte says which volume it is talking about, and a comparison that involves a `+F` side pairs them under `PairTransform::FullFold` — a pairing that deliberately does NOT claim the two names are one text, because on the other side they are two files"
   },
   {
     "id": "proc_mounts_octal_escape",

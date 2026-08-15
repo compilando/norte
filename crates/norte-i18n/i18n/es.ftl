@@ -690,6 +690,7 @@ compare-side-unknown = un lado desconocido
 compare-verdict-same = igual
 compare-paired-under = los dos nombres se escriben distinto y aun así emparejan
 compare-paired-under-singleton = AVISO: estos dos nombres pueden ser ficheros DISTINTOS que Unicode declara iguales
+compare-paired-under-full-fold = AVISO: estos dos nombres pueden ser ficheros DISTINTOS que este filesystem pliega en uno
 compare-verdict-different = distinto
 compare-verdict-only-left = solo a la izquierda
 compare-verdict-only-right = solo a la derecha

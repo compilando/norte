@@ -421,6 +421,11 @@ fn el_schema_del_vocabulario_de_sync_cubre_las_goldens() {
         ("DestTrash", "methods.json", "sync_", "dest_trash"),
         ("OnUnknown", "methods.json", "sync_", "on_unknown"),
         ("RootOverlap", "error.json", "overlapping_roots", "relation"),
+        // (0.45.0) La taxonomía de conflictos no estaba cruzada, y por eso
+        // `escapes_root` pudo llegar al schema sin fixture: `check_family`
+        // compara contra una lista escrita a mano, así que olvidarse en los dos
+        // sitios a la vez deja el test verde.
+        ("ConflictKind", "error.json", "conflict_", "conflict"),
         // (0.42.0, #152) De la familia de COMPARACIÓN, y aquí por el mismo
         // mecanismo: es el vocabulario que un plan de sincronización tiene que
         // leer para no escribir sobre un fichero que solo empareja por una

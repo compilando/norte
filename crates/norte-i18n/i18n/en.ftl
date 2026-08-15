@@ -678,6 +678,7 @@ compare-side-unknown = an unknown side
 compare-verdict-same = same
 compare-paired-under = the two names are spelled differently and match anyway
 compare-paired-under-singleton = WARNING: these two names may be different files that Unicode calls equal
+compare-paired-under-full-fold = WARNING: these two names may be different files that this filesystem folds into one
 compare-verdict-different = different
 compare-verdict-only-left = only on the left
 compare-verdict-only-right = only on the right

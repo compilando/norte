@@ -278,6 +278,25 @@
     "confidence": "certain",
     "paired_under": "normalization"
   },
+  "different_paired_under_full_fold": {
+    "id": 19,
+    "left": {
+      "path": "file:///l/stra\u00dfe.txt",
+      "kind": "file",
+      "size": 11,
+      "mtime_ms": 1720000000000
+    },
+    "right": {
+      "path": "file:///r/strasse.txt",
+      "kind": "file",
+      "size": 22,
+      "mtime_ms": 1720000000000
+    },
+    "verdict": "different",
+    "criterion": "size",
+    "confidence": "certain",
+    "paired_under": "full_fold"
+  },
   "different_paired_under_singleton": {
     "id": 18,
     "left": {

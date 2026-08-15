@@ -140,6 +140,11 @@ pub struct MemProvider {
     /// `/usb` en exFAT, o un directorio ext4 en `+F`. Vacío (default) = todas
     /// las ubicaciones responden [`Self::capabilities`].
     caps_at: Arc<Mutex<BTreeMap<SegPath, Capabilities>>>,
+    /// Rutas por las que alguien preguntó con `capabilities_at`, en orden.
+    /// Costura de test: es la única forma de comprobar que un camino pregunta
+    /// por la UBICACIÓN y no por el provider, cuando las dos respuestas
+    /// coinciden.
+    caps_at_asked: Arc<Mutex<Vec<SegPath>>>,
     tree: Arc<Mutex<Tree>>,
     faults: Arc<Faults>,
 }
@@ -197,6 +202,7 @@ impl MemProvider {
             logical_trash: false,
             attr_defs: Vec::new(),
             caps_at: Arc::new(Mutex::new(BTreeMap::new())),
+            caps_at_asked: Arc::new(Mutex::new(Vec::new())),
             tree: Arc::new(Mutex::new(Tree::default())),
             faults: Arc::new(Faults::default()),
         }
@@ -220,6 +226,31 @@ impl MemProvider {
             .lock()
             .expect("caps_at lock sano")
             .insert(seg_path(p), caps);
+    }
+
+    /// ¿Alguien preguntó por la ubicación `p` con `capabilities_at`?
+    ///
+    /// # Panics
+    /// Si el mutex quedó envenenado por un panic previo — en un testkit eso ya
+    /// es un test roto.
+    #[must_use]
+    pub fn was_asked_about(&self, p: &VPath) -> bool {
+        self.caps_at_asked
+            .lock()
+            .expect("caps_at lock sano")
+            .contains(&seg_path(p))
+    }
+
+    /// Olvida quién preguntó, para que un test pueda separar dos fases (lo que
+    /// preguntó el plan de lo que pregunta el undo).
+    ///
+    /// # Panics
+    /// Si el mutex quedó envenenado por un panic previo.
+    pub fn forget_who_asked(&self) {
+        self.caps_at_asked
+            .lock()
+            .expect("caps_at lock sano")
+            .clear();
     }
 
     /// Atributos SINTÉTICOS deterministas (#108 bloque 2) con valores
@@ -673,11 +704,16 @@ impl Provider for MemProvider {
     }
 
     async fn capabilities_at(&self, p: &VPath) -> Result<Capabilities, Error> {
+        let key = seg_path(p);
+        self.caps_at_asked
+            .lock()
+            .expect("caps_at lock sano")
+            .push(key.clone());
         Ok(self
             .caps_at
             .lock()
             .expect("caps_at lock sano")
-            .get(&seg_path(p))
+            .get(&key)
             .copied()
             .unwrap_or(self.caps))
     }

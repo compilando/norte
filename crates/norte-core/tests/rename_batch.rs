@@ -1105,3 +1105,47 @@ async fn the_first_plan_uses_the_probed_case_regime_not_the_guess() {
         norte_core::rename::CollisionKind::External,
     );
 }
+
+/// ADR 0054: el undo pregunta al DIRECTORIO, igual que preguntó el plan.
+///
+/// Los dos juzgan el mismo lote y tienen que juzgarlo con el MISMO plegado: si
+/// el plan lo calcula con el del directorio (un ext4/f2fs `+F`) y el undo con
+/// el que el provider declara para sí, `feasible` opina sobre un directorio
+/// que no es este. No se prueba con un escenario —un `+F` de verdad no puede
+/// sostener a la vez las dos grafías, así que el caso «el inverso choca con el
+/// gemelo» no se puede montar sin fingir un filesystem imposible—: se prueba
+/// que la pregunta se hace, que es exactamente lo que se arregló.
+#[tokio::test]
+async fn el_undo_pregunta_por_el_directorio() {
+    let (engine, provider, _journal, dir) = engine_with(&[b"a", b"b"]).await;
+    let ps = pairs(&[(b"a", b"x"), (b"b", b"y")]);
+    let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
+    let (applied, _r) = engine
+        .rename_batch(&dir, &ps, plan.hash())
+        .await
+        .expect("submit");
+    assert_eq!(applied.join().await, TaskState::Completed);
+
+    assert!(
+        provider.was_asked_about(&dir),
+        "el plan pregunta por la ubicación"
+    );
+    // Se olvida lo que preguntó el plan: lo que se afirma abajo es que el undo
+    // vuelve a preguntar, no que alguien preguntara alguna vez.
+    provider.forget_who_asked();
+
+    let (handle, report) = engine
+        .undo_session(norte_core::journal::Actor::User)
+        .await
+        .expect("undo");
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(
+        report.lock().expect("report").undone,
+        2,
+        "y el undo revierte el lote entero"
+    );
+    assert!(
+        provider.was_asked_about(&dir),
+        "el undo pregunta por la MISMA ubicación que el plan"
+    );
+}

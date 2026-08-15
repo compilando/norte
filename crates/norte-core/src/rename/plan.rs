@@ -35,10 +35,10 @@ impl NameCaps {
     /// From the [`Capabilities`](norte_proto::Capabilities) a provider answers
     /// FOR THAT DIRECTORY (`Provider::capabilities_at`, ADR 0054).
     ///
-    /// The mapping lives here and in `norte_compare::Sides` and nowhere else,
-    /// and the two agree by construction rather than by memory: `FULL_FOLD`
-    /// wins, then a directory that does not distinguish case folds simple,
-    /// then nothing folds.
+    /// The mapping itself lives in `norte_compare::Sides::mode_of` and this
+    /// delegates to it, so the comparison engine and the rename planner cannot
+    /// answer differently about one directory. They used to hold a copy each,
+    /// which is what #151 cost when the fold key itself was transcribed.
     ///
     /// ```
     /// use norte_core::rename::plan::NameCaps;
@@ -52,15 +52,9 @@ impl NameCaps {
     /// ```
     #[must_use]
     pub fn from_capabilities(c: norte_proto::Capabilities) -> Self {
-        use norte_proto::CapabilityFlags;
-        let fold = if c.flags.contains(CapabilityFlags::FULL_FOLD) {
-            FoldMode::Full
-        } else if c.flags.contains(CapabilityFlags::CASE_SENSITIVE) {
-            FoldMode::None
-        } else {
-            FoldMode::Simple
-        };
-        Self { fold }
+        Self {
+            fold: norte_compare::Sides::mode_of(c),
+        }
     }
 }
 

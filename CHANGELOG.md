@@ -19,10 +19,19 @@ independently through `PROTOCOL_VERSION`.
   case-insensitivity switched on) are recognised too: there `straße.txt` and
   `strasse.txt` are one file, and the batch rename planner now says so before
   you approve a plan that would die halfway through (#153, #145, ADR 0054).
-  Finding this out costs no writing: norte asks the kernel, and only falls back
-  to the old create-a-file-and-see probe where nothing else can answer — which
-  also means a read-only mount and someone else's directory now get an answer
-  instead of a shrug.
+  **Finding this out never writes anything.** norte asks the kernel, and where
+  the kernel has no answer — tmpfs, btrfs, XFS, network shares — it says so and
+  keeps the filesystem's declared behaviour rather than creating a probe file in
+  a directory you only asked it to read about. A read-only mount and someone
+  else's directory get an answer instead of a shrug.
+  On the wire that is protocol 0.45.0: two capability flags (`FULL_FOLD`,
+  `CONFINED_WRITES`), one conflict subtype (`escapes_root`) and one pairing
+  transformation (`full_fold`) — all additive, all of them read by a 0.44 client
+  as "something I do not know" rather than as something wrong. A pairing that
+  only holds because one side expands is reported as its own kind precisely so
+  nothing downstream reads it as "these two names are the same text": on the
+  other volume they are two files, and a synchronisation must not overwrite one
+  with the other.
 
 - **Synchronise two directories, one way, and be told what you cannot take
   back before you say yes:** `Ctrl+y` over the two panes plans a

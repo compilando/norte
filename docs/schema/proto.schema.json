@@ -1254,7 +1254,7 @@
       "properties": {
         "path": {
           "$ref": "#/$defs/VPath",
-          "description": "Un path del provider a consultar."
+          "description": "La UBICACIÓN a consultar. Un fichero se responde por el directorio que\nlo contiene (ADR 0054)."
         }
       },
       "required": [
@@ -1275,7 +1275,7 @@
         },
         "capabilities": {
           "$ref": "#/$defs/Capabilities",
-          "description": "Capabilities declaradas por el provider."
+          "description": "Capabilities de la ubicación consultada (ADR 0054): la declaración del\nprovider, refinada con lo que se pueda averiguar de ESE directorio."
         }
       },
       "required": [
@@ -2150,6 +2150,11 @@
         {
           "const": "normalization",
           "description": "Canónicamente equivalentes con grafías distintas: el par NFC/NFD\nclásico, macOS repartiendo NFD y Linux NFC.\n\nTampoco es un aviso — es el caso para el que la clave existe—, pero un\ndestino que deletrea el nombre de otra manera sí importa al escribir:\nes lo que [`SyncStep::dest_rel`] lleva.",
+          "type": "string"
+        },
+        {
+          "const": "full_fold",
+          "description": "Los junta el pliegue COMPLETO de un ext4/f2fs `+F` (0.45.0, #145): la\nexpansión que `straße.txt` y `strasse.txt` comparten en ESA ubicación y\nen ninguna otra.\n\nEs distinta de [`PairTransform::CaseFold`] y no un matiz suyo: dos\nnombres que solo emparejan expandiendo **no nombran un mismo texto**.\nSon dos textos que un volumen concreto no puede sostener a la vez, que\nes exactamente la situación de [`PairTransform::NormalizationSingleton`]\n— el otro lado de la comparación puede tener los dos ficheros, y\ndistintos. Por eso [`PairTransform::names_one_text`] contesta `false`\naquí, y un plan de sincronización no sobrescribe sobre esta pareja.\n\nUn cliente 0.44 la lee como [`PairTransform::Unknown`]\n(`#[serde(other)]`), que también contesta `false`: degrada al lado\nprudente sin saber por qué.",
           "type": "string"
         },
         {

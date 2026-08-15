@@ -129,6 +129,30 @@ macro_rules! provider_contract {
                         && at.flags.contains(CapabilityFlags::CASE_SENSITIVE)),
                     "FULL_FOLD solo tiene sentido sin CASE_SENSITIVE"
                 );
+                // Lo que es de la UBICACIÓN no se declara sin path. Con
+                // `CONFINED_WRITES` no es cosmético: es una promesa de
+                // confinamiento con garantía del kernel sobre la que un caller
+                // ACTÚA (se salta el paseo con `lstat` al que si no degrada), y
+                // una promesa así no puede venir de una respuesta que no sabe
+                // de qué mount habla.
+                for flag in [CapabilityFlags::FULL_FOLD, CapabilityFlags::CONFINED_WRITES] {
+                    assert!(
+                        !p.capabilities().flags.contains(flag),
+                        "{flag:?} es de la ubicación: solo lo contesta capabilities_at"
+                    );
+                }
+            }
+
+            /// Preguntar por algo que no existe no es un error: `capabilities()`
+            /// jamás pudo fallar, y planificar hacia un destino que todavía no
+            /// está es el caso corriente de un mirror.
+            #[tokio::test]
+            async fn contract_capabilities_at_missing_path_is_not_an_error() {
+                let p = $factory;
+                let root: VPath = $root;
+                p.capabilities_at(&child(&root, b"no-existe-jamas"))
+                    .await
+                    .expect("una ruta ausente se responde igual");
             }
 
             #[tokio::test]

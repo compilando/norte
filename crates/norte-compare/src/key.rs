@@ -72,7 +72,25 @@ impl Sides {
     }
 
     /// El modo de plegado que declaran unas capabilities de UBICACIÓN.
-    fn mode_of(c: Capabilities) -> FoldMode {
+    ///
+    /// Es público porque es la ÚNICA copia: `norte_core::rename::plan::NameCaps`
+    /// hace la misma pregunta sobre las mismas flags y llama aquí en vez de
+    /// transcribirla. Transcribir esta clase de mapeo es exactamente lo que
+    /// costó el #151 (la clave de plegado copiada, divergiendo un ciclo entero
+    /// de release sin que nada las comparase).
+    ///
+    /// ```
+    /// use norte_compare::Sides;
+    /// use norte_encoding::FoldMode;
+    /// use norte_vfs::{Capabilities, CapabilityFlags};
+    /// let ext4_f = Capabilities {
+    ///     flags: CapabilityFlags::CASE_PRESERVING | CapabilityFlags::FULL_FOLD,
+    ///     max_path: None,
+    /// };
+    /// assert_eq!(Sides::mode_of(ext4_f), FoldMode::Full);
+    /// ```
+    #[must_use]
+    pub fn mode_of(c: Capabilities) -> FoldMode {
         if c.flags.contains(CapabilityFlags::FULL_FOLD) {
             FoldMode::Full
         } else if c.flags.contains(CapabilityFlags::CASE_SENSITIVE) {
@@ -236,14 +254,18 @@ pub fn pair_transform(left: &[u8], right: &[u8]) -> Option<PairTransform> {
     }
     let sin_plegar = Sides::both_case_sensitive();
     let normaliza = key_for(left, sin_plegar) == key_for(right, sin_plegar);
-    // Se pregunta con el pliegue MÁS fuerte (`Full`), no con el simple: la
-    // precondición es que los dos nombres YA emparejaron, así que una pareja
-    // que solo empareja expandiendo (`straße`/`strasse` en un ext4 `+F`, #145)
-    // viene de unos `Sides` que expanden — y preguntarle con el pliegue simple
-    // contestaría «ninguna transformación», que sobre una fila con dos grafías
-    // distintas es justo la respuesta que hace pensar que son el mismo nombre.
-    let plegando = Sides::new(FoldMode::Full, FoldMode::None);
-    if !normaliza && key_for(left, plegando) != key_for(right, plegando) {
+    // Se pregunta por los DOS pliegues, y la diferencia entre ellos no es un
+    // matiz: una pareja que solo empareja EXPANDIENDO (`straße`/`strasse` en un
+    // ext4 `+F`, #145) no nombra un mismo texto — son dos textos que ese
+    // volumen no puede sostener a la vez, y el otro lado sí puede tener los dos
+    // ficheros, distintos. Contestar `CaseFold` ahí sería decir que son el
+    // mismo nombre, y quien lee esa respuesta (`names_one_text`, y con ella la
+    // puerta de ADR 0053 en `norte-sync`) sobrescribiría sobre ella.
+    let simple = Sides::new(FoldMode::Simple, FoldMode::None);
+    let completo = Sides::new(FoldMode::Full, FoldMode::None);
+    let pliega_simple = key_for(left, simple) == key_for(right, simple);
+    let pliega_completo = pliega_simple || key_for(left, completo) == key_for(right, completo);
+    if !normaliza && !pliega_completo {
         return None;
     }
     if norte_encoding::has_canonical_singleton(left)
@@ -251,10 +273,13 @@ pub fn pair_transform(left: &[u8], right: &[u8]) -> Option<PairTransform> {
     {
         return Some(PairTransform::NormalizationSingleton);
     }
-    Some(if normaliza {
-        PairTransform::Normalization
-    } else {
+    if normaliza {
+        return Some(PairTransform::Normalization);
+    }
+    Some(if pliega_simple {
         PairTransform::CaseFold
+    } else {
+        PairTransform::FullFold
     })
 }
 
@@ -476,9 +501,10 @@ mod tests {
     /// que es. Es el cruce que impide que las dos listas —el vocabulario del
     /// wire y el índice de fixtures— se separen sin que nada avise.
     ///
-    /// El par de pliegue COMPLETO entra desde ADR 0054: un lado que declare
-    /// `FULL_FOLD` para su raíz lo enciende, y entonces son una pareja como
-    /// cualquier otra que junte el pliegue.
+    /// El par de pliegue COMPLETO entra desde ADR 0054 con variante PROPIA: un
+    /// lado que declare `FULL_FOLD` para su raíz lo empareja, y la respuesta
+    /// dice que fue el pliegue COMPLETO — que es lo que permite a
+    /// `names_one_text` contestar `false` sobre él.
     #[test]
     fn los_gemelos_del_corpus_se_clasifican_como_el_corpus_dice() {
         use norte_testkit::corpus::TwinKind;
@@ -487,12 +513,13 @@ mod tests {
             let right = corpus(gemelo.right);
             let esperado = match gemelo.kind {
                 TwinKind::Normalization => Some(PairTransform::Normalization),
-                // El pliegue COMPLETO también es pliegue de caja: el
-                // vocabulario del wire no distingue la fuerza, y para quien
-                // pinta la fila la explicación es la misma («los junta el
-                // pliegue»). Antes de ADR 0054 esto era `None` porque el motor
+                TwinKind::CaseFold => Some(PairTransform::CaseFold),
+                // El pliegue COMPLETO tiene variante PROPIA (0.45.0): junta dos
+                // nombres que pueden ser dos ficheros, así que no puede
+                // contestar lo mismo que el pliegue simple, que sí nombra un
+                // solo texto. Antes de ADR 0054 esto era `None` porque el motor
                 // no sabía expandir en ningún caso.
-                TwinKind::CaseFold | TwinKind::CaseFoldFull => Some(PairTransform::CaseFold),
+                TwinKind::CaseFoldFull => Some(PairTransform::FullFold),
                 TwinKind::NormalizationSingleton => Some(PairTransform::NormalizationSingleton),
             };
             assert_eq!(

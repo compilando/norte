@@ -534,6 +534,26 @@ use crate::{
 /// que este enum lleva desde M0 y tiene su propio test. En la práctica no la
 /// recibe: solo el embebido la emite, y el embebido no tiene wire.
 ///
+/// 0.45.0 (#153, #145, #164, ADR 0054): un provider deja de responder solo
+/// sobre sí mismo. Dos flags de capability nuevos —
+/// [`CapabilityFlags::FULL_FOLD`](crate::CapabilityFlags::FULL_FOLD) (esta
+/// ubicación pliega EXPANDIENDO: un ext4/f2fs en `+F`) y
+/// [`CapabilityFlags::CONFINED_WRITES`](crate::CapabilityFlags::CONFINED_WRITES)
+/// (una escritura bajo esta ubicación puede confinarse bajo la raíz que nombre
+/// el caller)—, un subtipo de conflicto ([`ConflictKind::EscapesRoot`](crate::ConflictKind::EscapesRoot))
+/// y una transformación de emparejamiento ([`PairTransform::FullFold`]).
+///
+/// Los tres primeros degradan solos en un cliente 0.44 (nombre desconocido que
+/// se ignora, ADR 0004; subtipo que cae en `Unknown`, ADR 0005). El cuarto es
+/// el que decidió que esto fuera una variante NUEVA y no un valor existente:
+/// dos nombres que solo emparejan expandiendo **no nombran un mismo texto**, y
+/// meterlos en `CaseFold` habría hecho que [`PairTransform::names_one_text`]
+/// contestara `true` sobre una pareja que puede ser dos ficheros — con la
+/// puerta de ADR 0053 en `norte-sync` sobrescribiendo detrás.
+///
+/// `fs.capabilities` no cambia de forma y sí de SIGNIFICADO: siempre tomó un
+/// path y ahora responde por él.
+///
 /// 0.42.0 (#170, #152, #195): TRES campos, en tres tipos que ya existían, y
 /// **un solo bump**. Los tres son la misma clase de hueco —un mensaje que se
 /// lee sin el contexto que lo produjo y al que le falta el dato que ese
@@ -613,8 +633,21 @@ pub const TASK_LIST: &str = "task.list";
 /// dice si el archivo terminó — si es `false`, el caller repite con el
 /// offset avanzado.
 pub const FS_READ: &str = "fs.read";
-/// `fs.capabilities` — capabilities del provider que sirve un path
-/// (0.5.0): el frontend decide p. ej. si F8 ofrece papelera (ADR 0009).
+/// `fs.capabilities` — capabilities de LA UBICACIÓN que nombra un path
+/// (0.5.0; por ubicación desde 0.45.0, ADR 0054): el frontend decide p. ej. si
+/// F8 ofrece papelera (ADR 0009).
+///
+/// Siempre tomó un path y hasta 0.44 contestaba lo mismo para todos, que es
+/// falso en cuanto una máquina monta dos filesystems distintos. Desde 0.45.0
+/// la respuesta la da el directorio: `CASE_SENSITIVE` y
+/// [`CapabilityFlags::FULL_FOLD`](crate::CapabilityFlags::FULL_FOLD) pueden
+/// diferir entre dos rutas de un mismo provider, mientras que lo que es del
+/// backend —`READ_ONLY`, `TRASH`, `SYMLINKS`— sale igual por las dos puertas.
+///
+/// Preguntar por un FICHERO responde por el directorio que lo contiene: lo que
+/// se decide con esta respuesta es si dos nombres pueden convivir ahí. Y una
+/// ruta que no existe **no es un error**: se contesta lo que el provider
+/// declara, igual que antes de 0.45.0.
 pub const FS_CAPABILITIES: &str = "fs.capabilities";
 
 /// `host.volumes` — enumera los volúmenes del HOST (0.37.0, #131): mount
@@ -2267,7 +2300,8 @@ pub struct FsReadResult {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsCapabilitiesParams {
-    /// Un path del provider a consultar.
+    /// La UBICACIÓN a consultar. Un fichero se responde por el directorio que
+    /// lo contiene (ADR 0054).
     pub path: VPath,
 }
 
@@ -2287,7 +2321,8 @@ pub struct FsCapabilitiesParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsCapabilitiesResult {
-    /// Capabilities declaradas por el provider.
+    /// Capabilities de la ubicación consultada (ADR 0054): la declaración del
+    /// provider, refinada con lo que se pueda averiguar de ESE directorio.
     pub capabilities: crate::Capabilities,
     /// Provider attributes this provider offers (0.30.0, ADR 0039): the
     /// discovery half of [`Entry::attrs`](crate::Entry::attrs). Empty (the
@@ -2801,6 +2836,22 @@ pub enum PairTransform {
     /// destino que deletrea el nombre de otra manera sí importa al escribir:
     /// es lo que [`SyncStep::dest_rel`] lleva.
     Normalization,
+    /// Los junta el pliegue COMPLETO de un ext4/f2fs `+F` (0.45.0, #145): la
+    /// expansión que `straße.txt` y `strasse.txt` comparten en ESA ubicación y
+    /// en ninguna otra.
+    ///
+    /// Es distinta de [`PairTransform::CaseFold`] y no un matiz suyo: dos
+    /// nombres que solo emparejan expandiendo **no nombran un mismo texto**.
+    /// Son dos textos que un volumen concreto no puede sostener a la vez, que
+    /// es exactamente la situación de [`PairTransform::NormalizationSingleton`]
+    /// — el otro lado de la comparación puede tener los dos ficheros, y
+    /// distintos. Por eso [`PairTransform::names_one_text`] contesta `false`
+    /// aquí, y un plan de sincronización no sobrescribe sobre esta pareja.
+    ///
+    /// Un cliente 0.44 la lee como [`PairTransform::Unknown`]
+    /// (`#[serde(other)]`), que también contesta `false`: degrada al lado
+    /// prudente sin saber por qué.
+    FullFold,
     /// Emparejaron por una descomposición SINGLETON de NFC, y esa es la que
     /// **puede estar juntando dos ficheros distintos**: U+212A KELVIN SIGN
     /// contra `K`, U+2126 OHM SIGN contra U+03A9. Unicode los declara
@@ -2841,6 +2892,7 @@ impl PairTransform {
     /// use norte_proto::methods::PairTransform;
     /// assert!(PairTransform::CaseFold.names_one_text());
     /// assert!(PairTransform::Normalization.names_one_text());
+    /// assert!(!PairTransform::FullFold.names_one_text());
     /// assert!(!PairTransform::NormalizationSingleton.names_one_text());
     /// assert!(!PairTransform::Unknown.names_one_text());
     /// ```

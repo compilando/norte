@@ -30,31 +30,31 @@ pub(crate) struct LocationCaps {
     pub(crate) case_sensitive: Option<bool>,
     /// ¿El plegado de este directorio EXPANDE (`ß` → `ss`)? Solo lo hace la
     /// casefold de ext4/f2fs, y solo si el directorio lleva el flag.
-    pub(crate) full_fold: bool,
+    ///
+    /// `None` = no se pudo averiguar, que NO es «no expande»: el llamante
+    /// conserva lo que el provider declare en vez de apagar un flag que nadie
+    /// contradijo.
+    pub(crate) full_fold: Option<bool>,
 }
 
-/// Sondea `dir` y responde lo que la plataforma sepa decir. BLOQUEANTE: va
-/// dentro de `spawn_blocking` (regla dura 2).
+/// Sondea `dir` y responde lo que la plataforma sepa decir SIN escribir nada.
+/// BLOQUEANTE: va dentro de `spawn_blocking` (regla dura 2).
 ///
-/// `probe_write` es la sonda de escritura del provider, pasada como argumento
-/// para que este módulo no dependa del orden de declaración de `provider.rs` —
-/// y para que el último peldaño se pueda desactivar en un test sin tocar los
-/// demás.
-pub(crate) fn probe_location(
-    dir: &Path,
-    probe_write: impl FnOnce(&Path) -> Option<bool>,
-) -> LocationCaps {
-    let mut caps = LocationCaps::default();
-
-    if let Some(fs) = fs_probe(dir) {
-        caps = fs;
-    }
-
-    if caps.case_sensitive.is_none() {
-        caps.case_sensitive = probe_write(dir);
-    }
-
-    caps
+/// **Aquí no hay sonda de escritura, y es una decisión de seguridad.**
+/// `capabilities_at` se responde detrás del gate de LECTURA
+/// (`fs.capabilities`, `fs.compare`, `sync.plan`), así que un actor con
+/// permiso de lectura sobre un directorio provocaría, si esta escalera
+/// escribiera, la creación de un fichero ahí — sin pasar por el gate de
+/// escritura (regla 9) y sin entrada de journal (regla 4). La sonda de
+/// escritura sigue existiendo, para la raíz PROPIA del provider y una sola vez
+/// (`probe_capabilities`), que es donde el provider ya tiene permiso por
+/// construcción.
+///
+/// Consecuencia, dicha en vez de escondida: en un filesystem que esta escalera
+/// no reconoce (tmpfs, btrfs, xfs, nfs, cifs, fuse…) la respuesta es «no lo
+/// sé», y el llamante se queda con lo que el provider declara.
+pub(crate) fn probe_location(dir: &Path) -> LocationCaps {
+    fs_probe(dir).unwrap_or_default()
 }
 
 /// Peldaños de plataforma que NO mutan nada. `None` = esta plataforma (o este
@@ -70,16 +70,14 @@ fn fs_probe(dir: &Path) -> Option<LocationCaps> {
 fn fs_probe(dir: &Path) -> Option<LocationCaps> {
     Some(LocationCaps {
         case_sensitive: Some(macos::case_sensitive(dir)?),
-        full_fold: false,
+        // Ningún filesystem de Apple expande al plegar.
+        full_fold: Some(false),
     })
 }
 
 #[cfg(windows)]
 fn fs_probe(dir: &Path) -> Option<LocationCaps> {
-    Some(LocationCaps {
-        case_sensitive: Some(windows::case_sensitive(dir)?),
-        full_fold: false,
-    })
+    windows::case_sensitive(dir)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
@@ -88,7 +86,7 @@ fn fs_probe(_dir: &Path) -> Option<LocationCaps> {
 }
 
 #[cfg(target_os = "linux")]
-mod linux {
+pub(crate) mod linux {
     use std::os::unix::ffi::OsStrExt as _;
     use std::os::unix::io::AsRawFd as _;
     use std::path::Path;
@@ -96,9 +94,23 @@ mod linux {
     use super::LocationCaps;
 
     /// `FS_CASEFOLD_FL` de `<linux/fs.h>`: el directorio está en `+F`.
-    const FS_CASEFOLD_FL: libc::c_long = 0x4000_0000;
-    /// `FS_IOC_GETFLAGS`: `_IOR('f', 1, long)`.
-    const FS_IOC_GETFLAGS: libc::c_ulong = 0x8008_6601;
+    const FS_CASEFOLD_FL: libc::c_uint = 0x4000_0000;
+
+    /// `FS_IOC_GETFLAGS`, o sea `_IOR('f', 1, long)`.
+    ///
+    /// La codificación miente sobre el tamaño y hay que respetarla igual: el
+    /// número lleva `sizeof(long)` dentro, así que en 32 bits es
+    /// `0x8004_6601` y en 64 bits `0x8008_6601` — pasar el de 64 en una
+    /// máquina de 32 devuelve `ENOTTY` y apagaría la detección de `+F` en
+    /// silencio. Lo que el kernel ESCRIBE, en cambio, son 4 bytes en los dos
+    /// casos (`ioctl_getflags` hace `put_user` de un `unsigned int`), que es
+    /// por lo que el buffer de abajo es un `c_uint` y no un `c_long`.
+    pub(super) fn fs_ioc_getflags() -> libc::Ioctl {
+        const IOC_READ: u64 = 2;
+        let size = std::mem::size_of::<libc::c_long>() as u64;
+        let request = (IOC_READ << 30) | (size << 16) | (u64::from(b'f') << 8) | 1;
+        request as libc::Ioctl
+    }
 
     // Magics de `<linux/magic.h>`. Solo están los filesystems cuya respuesta
     // se conoce SIN escribir; cualquier otro cae al peldaño siguiente.
@@ -106,8 +118,6 @@ mod linux {
     const F2FS: i64 = 0xF2F5_2010;
     const MSDOS: i64 = 0x4d44;
     const EXFAT: i64 = 0x2011_BAB0;
-    const NTFS: i64 = 0x5346_544e;
-    const NTFS3: i64 = 0x7366_746E;
 
     /// La respuesta de Linux, o `None` si este filesystem no la da sin
     /// escribir.
@@ -118,24 +128,41 @@ mod linux {
     /// un ext4 a ojos del comparador. El flag solo decide donde significa algo
     /// —ext4 y f2fs—, y el resto se responde por familia de filesystem.
     pub(super) fn probe(dir: &Path) -> Option<LocationCaps> {
-        match fs_type(dir)? {
+        probe_from_magic(fs_type(dir)?, || directory_is_casefold(dir))
+    }
+
+    /// La decisión, separada de las syscalls para que cada arma se pueda
+    /// probar sin un volumen de ese tipo montado — que es la única forma de
+    /// probarlas en esta máquina.
+    pub(super) fn probe_from_magic(
+        magic: i64,
+        casefold: impl FnOnce() -> Option<bool>,
+    ) -> Option<LocationCaps> {
+        match magic {
             EXT4 | F2FS => {
-                let casefold = directory_is_casefold(dir)?;
+                let casefold = casefold()?;
                 Some(LocationCaps {
                     case_sensitive: Some(!casefold),
-                    full_fold: casefold,
+                    full_fold: Some(casefold),
                 })
             }
-            // La familia FAT y los dos NTFS del kernel no distinguen caja y no
-            // expanden al plegar. Es una respuesta que también vale en un
-            // mount de solo lectura, que es donde la sonda de escritura calla.
-            MSDOS | EXFAT | NTFS | NTFS3 => Some(LocationCaps {
+            // vfat y exFAT no distinguen caja SIEMPRE —vfat por definición,
+            // exFAT por su tabla Up-case en disco, que es 1:1 y no expande— y
+            // no hay opción de montaje que lo cambie. Es una respuesta que
+            // también vale en un mount de solo lectura.
+            MSDOS | EXFAT => Some(LocationCaps {
                 case_sensitive: Some(false),
-                full_fold: false,
+                full_fold: Some(false),
             }),
+            // NTFS NO entra aquí, y los dos drivers son la razón: `ntfs3`
+            // compara SENSIBLE salvo con `-o nocase`, y el `ntfs` legacy hace
+            // justo lo contrario. Dos defaults opuestos y los dos
+            // sobreescribibles al montar = lo mismo que cifs, y se responde
+            // igual: no lo sé.
+            //
             // tmpfs, btrfs, xfs, nfs, cifs, fuse…: o depende de opciones de
-            // montaje (cifs) o no hay constante fiable. Lo sabe la sonda de
-            // escritura, y si tampoco puede, se declara lo del provider.
+            // montaje o no hay constante fiable. El llamante se queda con lo
+            // que el provider declare.
             _ => None,
         }
     }
@@ -171,12 +198,14 @@ mod linux {
         // O_PATH no vale: el ioctl exige un fd de verdad. O_RDONLY sobre un
         // directorio no lee nada y no lo muta.
         let file = std::fs::File::open(dir).ok()?;
-        let mut flags: libc::c_long = 0;
-        // SAFETY: `file` está vivo durante toda la llamada y su fd es válido;
-        // `FS_IOC_GETFLAGS` escribe un `long` en el puntero que se le pasa, y
-        // `flags` es exactamente un `long` propio y alineado. El valor de
-        // retorno se comprueba antes de leerlo.
-        let rc = unsafe { libc::ioctl(file.as_raw_fd(), FS_IOC_GETFLAGS, &raw mut flags) };
+        let mut flags: libc::c_uint = 0;
+        // SAFETY: `file` está vivo durante toda la llamada y su fd es válido.
+        // El handler del kernel (`ioctl_getflags`) hace `put_user` de un
+        // `unsigned int` a través de este puntero — CUATRO bytes, pese a lo que
+        // diga el `long` de la codificación del número—, y `flags` es
+        // exactamente un `c_uint` propio y alineado. El retorno se comprueba
+        // antes de leerlo.
+        let rc = unsafe { libc::ioctl(file.as_raw_fd(), fs_ioc_getflags(), &raw mut flags) };
         if rc != 0 {
             return None;
         }
@@ -209,32 +238,112 @@ mod macos {
 mod windows {
     use std::path::Path;
 
-    /// `FILE_CASE_SENSITIVE_SEARCH` de `lpFileSystemFlags`.
-    const FILE_CASE_SENSITIVE_SEARCH: u32 = 0x0000_0001;
+    use super::LocationCaps;
 
-    /// ¿Distingue caja el volumen que sostiene `dir`?
+    /// Windows NO tiene peldaño de solo lectura, y `FILE_CASE_SENSITIVE_SEARCH`
+    /// es la razón por la que no lo tiene.
     ///
-    /// Es del VOLUMEN: el flag por-directorio de WSL
-    /// (`FILE_CASE_SENSITIVE_INFORMATION`) no se consulta aquí, y su ausencia
-    /// se comporta como cualquier otro `None` de esta escalera.
+    /// Ese flag de `GetVolumeInformationW` significa «el driver del volumen
+    /// SABE sostener nombres sensibles a la caja», no «aquí las búsquedas
+    /// distinguen caja»: NTFS lo trae puesto y aun así el gestor de objetos de
+    /// Win32 pliega por encima del filesystem. Leerlo como respuesta convertiría
+    /// cada NTFS en un volumen sensible, apagaría el plegado y con él la
+    /// detección de colisiones `README`/`readme` en toda la plataforma — una
+    /// regresión, no una mejora, y ninguna máquina de este proyecto compila
+    /// Windows para verla.
     ///
-    /// `None` si `dir` no empieza por una letra de unidad (una ruta UNC lo
-    /// hace) o si `GetVolumeInformationW` no respondió.
-    pub(super) fn case_sensitive(dir: &Path) -> Option<bool> {
-        let letter = drive_letter(dir)?;
-        let info = crate::mounts_windows::volume_info(letter)?;
-        Some(info.flags & FILE_CASE_SENSITIVE_SEARCH != 0)
+    /// La respuesta por directorio que SÍ gobierna la resolución es
+    /// `FileCaseSensitiveInformation` (`GetFileInformationByHandleEx`), y hasta
+    /// que exista se contesta «no lo sé»: el provider declara su default
+    /// —insensible— y su raíz sigue teniendo la sonda de escritura de siempre.
+    pub(super) fn case_sensitive(_dir: &Path) -> Option<LocationCaps> {
+        None
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    /// Cada arma de la tabla de magics, sin un volumen de ese tipo montado —
+    /// que es la única forma de probarlas en esta máquina. La sonda del
+    /// casefold se inyecta: si un arma la llama cuando no debe, se ve.
+    #[test]
+    fn la_tabla_de_magics_responde_lo_que_dice_responder() {
+        let nunca = || panic!("este filesystem no debe preguntar por el flag +F");
+
+        // ext4/f2fs: manda el flag del DIRECTORIO.
+        assert_eq!(
+            linux::probe_from_magic(0xEF53, || Some(true)),
+            Some(LocationCaps {
+                case_sensitive: Some(false),
+                full_fold: Some(true),
+            }),
+            "ext4 con +F: no distingue caja y EXPANDE"
+        );
+        assert_eq!(
+            linux::probe_from_magic(0xEF53, || Some(false)),
+            Some(LocationCaps {
+                case_sensitive: Some(true),
+                full_fold: Some(false),
+            }),
+            "ext4 sin +F: distingue caja"
+        );
+        assert_eq!(
+            linux::probe_from_magic(0xF2F5_2010, || Some(true)),
+            Some(LocationCaps {
+                case_sensitive: Some(false),
+                full_fold: Some(true),
+            }),
+            "f2fs casefold, igual que ext4"
+        );
+        // Un ioctl que no contesta no se inventa una respuesta.
+        assert_eq!(linux::probe_from_magic(0xEF53, || None), None);
+
+        // vfat y exFAT: respuesta fija, sin preguntar por un flag que no
+        // tienen.
+        for magic in [0x4d44, 0x2011_BAB0] {
+            assert_eq!(
+                linux::probe_from_magic(magic, nunca),
+                Some(LocationCaps {
+                    case_sensitive: Some(false),
+                    full_fold: Some(false),
+                }),
+                "familia FAT: no distingue caja y no expande ({magic:#x})"
+            );
+        }
+
+        // Los dos NTFS del kernel dependen de opciones de montaje y tienen
+        // defaults OPUESTOS entre sí: no se contesta por ellos.
+        for magic in [0x5346_544e_i64, 0x7366_746E] {
+            assert_eq!(
+                linux::probe_from_magic(magic, nunca),
+                None,
+                "NTFS no se responde de memoria ({magic:#x})"
+            );
+        }
+
+        // tmpfs, btrfs, xfs, nfs, cifs, fuse: fuera de la tabla.
+        for magic in [
+            0x0102_1994_i64,
+            0x9123_683E,
+            0x5846_5342,
+            0x6969,
+            0xFF53_4D42,
+        ] {
+            assert_eq!(linux::probe_from_magic(magic, nunca), None);
+        }
     }
 
-    /// Letra de unidad de una ruta nativa, con o sin prefijo verbatim.
-    fn drive_letter(dir: &Path) -> Option<u8> {
-        // Bytes, jamás `to_str` (regla dura 1): una ruta de Windows es WTF-8
-        // en este crate y puede no ser UTF-8 válido, y la letra de unidad se
-        // lee igual de bien byte a byte.
-        let bytes = dir.as_os_str().as_encoded_bytes();
-        let bytes = bytes.strip_prefix(br"\\?\").unwrap_or(bytes);
-        let letter = *bytes.first()?;
-        (bytes.get(1) == Some(&b':') && letter.is_ascii_alphabetic())
-            .then(|| letter.to_ascii_uppercase())
+    /// El número del ioctl lleva `sizeof(long)` dentro, y equivocarlo devuelve
+    /// `ENOTTY` — o sea, apaga la detección de `+F` sin decir nada.
+    #[test]
+    fn el_numero_del_ioctl_es_el_de_esta_arquitectura() {
+        let esperado: libc::Ioctl = if std::mem::size_of::<libc::c_long>() == 8 {
+            0x8008_6601_u64 as libc::Ioctl
+        } else {
+            0x8004_6601_u64 as libc::Ioctl
+        };
+        assert_eq!(linux::fs_ioc_getflags(), esperado);
     }
 }

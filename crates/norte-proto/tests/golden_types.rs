@@ -310,6 +310,12 @@ fn golden_error() {
                 },
             ),
             (
+                "conflict_escapes_root",
+                Error::Conflict {
+                    conflict: ConflictKind::EscapesRoot,
+                },
+            ),
+            (
                 "provider_unavailable_retryable",
                 Error::ProviderUnavailable { retryable: true },
             ),
@@ -3126,6 +3132,25 @@ fn compare_row_cases_paired() -> Vec<(&'static str, norte_proto::methods::Compar
                     Some(cf("file:///r/cafe\u{301}.txt", Some(3), Some(COMPARE_T))),
                     V::Same,
                     Crit::Hash,
+                    Conf::Certain,
+                )
+            },
+        ),
+        // #145 en una fila: `straße.txt` contra `strasse.txt`. Los junta el
+        // pliegue COMPLETO de un ext4/f2fs `+F` y nada más — en cualquier otro
+        // volumen son dos ficheros, y pueden ser dos ficheros distintos. Por
+        // eso NO comparte variante con `case_fold`, cuya promesa es «un mismo
+        // texto escrito de dos maneras».
+        (
+            "different_paired_under_full_fold",
+            CompareRow {
+                paired_under: Some(PairTransform::FullFold),
+                ..compare_row(
+                    19,
+                    Some(cf("file:///l/stra\u{df}e.txt", Some(11), Some(COMPARE_T))),
+                    Some(cf("file:///r/strasse.txt", Some(22), Some(COMPARE_T))),
+                    V::Different,
+                    Crit::Size,
                     Conf::Certain,
                 )
             },
