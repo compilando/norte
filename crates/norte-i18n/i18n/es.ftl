@@ -690,6 +690,7 @@ compare-side-unknown = un lado desconocido
 compare-verdict-same = igual
 compare-paired-under = los dos nombres se escriben distinto y aun así emparejan
 compare-paired-under-singleton = AVISO: estos dos nombres pueden ser ficheros DISTINTOS que Unicode declara iguales
+compare-paired-under-full-fold = AVISO: estos dos nombres pueden ser ficheros DISTINTOS que este filesystem pliega en uno
 compare-verdict-different = distinto
 compare-verdict-only-left = solo a la izquierda
 compare-verdict-only-right = solo a la derecha
@@ -763,6 +764,12 @@ sync-blocker-unknown = bloqueo que esta versión no conoce
 # la papelera no sepa nombrar, o una ruta que haya cambiado entretanto, se
 # NOMBRA en el informe del undo en vez de tocarla.
 space-warning = { $size } a escribir y { $free } libres en el destino
+# #164: este destino no sabe abrir una raíz confinada, así que una escritura
+# llega a su sitio resolviendo una ruta. Quien pueda plantar un symlink dentro
+# del destino entre este diálogo y la escritura puede desviarla. Se dice, jamás
+# se rehúsa: rehusar dejaría sin copiar a los destinos que no pueden dar esa
+# defensa, que cuesta mucho más que la carrera que evita.
+confine-warning = este destino no puede confinar las escrituras: un symlink puesto dentro podría desviar esto a otro sitio
 sync-outlook-full = todo esto se puede deshacer después, salvo lo que cambie entretanto
 sync-outlook-partial = parte de esto se puede deshacer después y parte no
 sync-outlook-nothing = nada de esto lo puede deshacer norte

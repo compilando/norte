@@ -2472,25 +2472,47 @@ async fn run(
         if let Some(params) = app.pending_compare.take() {
             launch_compare(app, backend, &mut compare_run, params).await;
         }
-        // #149: ¿cabe en el destino? Preguntar por los volúmenes es I/O, así
-        // que el modal se abre SIN el aviso y esta vuelta lo rellena. El
-        // reparto es el de `pending_compare`: el despacho decide QUÉ, el run
-        // loop lo pregunta.
+        // #149 y #164: ¿cabe en el destino, y sabe el destino sujetar lo que se
+        // escriba en él? Las dos son I/O, así que el modal se abre SIN los
+        // avisos y esta vuelta los rellena. El reparto es el de
+        // `pending_compare`: el despacho decide QUÉ, el run loop lo pregunta.
         //
-        // El fallo se traga a propósito: no poder enumerar volúmenes no puede
-        // impedir una copia ni pintar una alarma — «no lo sé» se dice
-        // callando, que es el contrato de `space::warning`.
-        if let Some(check) = app.pending_space_check.take() {
-            let libre = backend
-                .volumes(false)
-                .await
-                .ok()
-                .and_then(|vols| norte_frontend::space::free_for(&check.to, &vols));
-            if let Some(aviso) =
-                norte_frontend::space::warning(Some(check.total), libre, norte_i18n::active())
-                && let Some(Modal::ConfirmTransfer { space, .. }) = app.modal.as_mut()
-            {
-                *space = Some(aviso);
+        // Las dos preguntas fallan de forma DISTINTA, y es deliberado.
+        //
+        // El espacio se traga el fallo: no poder enumerar volúmenes no puede
+        // impedir una copia ni pintar una alarma, y «no lo sé» se dice callando
+        // — ese es el contrato de `space::warning`.
+        //
+        // El confinamiento no. Ahí el silencio SIGNIFICA «este destino sujeta
+        // sus escrituras», así que tragarse el fallo sería afirmarlo sin
+        // saberlo: fail-open en una línea de seguridad. Si no se sabe, se
+        // avisa (revisión de seguridad de W5 B).
+        if let Some(check) = app.pending_dest_check.take() {
+            let libre = match check.total {
+                // Sin total no hay pregunta de espacio que hacer, y enumerar
+                // volúmenes para tirar la respuesta es I/O por nada.
+                None => None,
+                Some(_) => backend
+                    .volumes(false)
+                    .await
+                    .ok()
+                    .and_then(|vols| norte_frontend::space::free_for(&check.to, &vols)),
+            };
+            let aviso_espacio =
+                norte_frontend::space::warning(check.total, libre, norte_i18n::active());
+            let aviso_confinamiento = match backend.capabilities(&check.to).await {
+                Ok(caps) => norte_frontend::confine::warning(caps, norte_i18n::active()),
+                Err(_) => norte_frontend::confine::warning(
+                    norte_proto::Capabilities {
+                        flags: norte_proto::CapabilityFlags::empty(),
+                        max_path: None,
+                    },
+                    norte_i18n::active(),
+                ),
+            };
+            if let Some(Modal::ConfirmTransfer { space, confine, .. }) = app.modal.as_mut() {
+                *space = aviso_espacio;
+                *confine = aviso_confinamiento;
             }
         }
         // `Ctrl+Y` / `s` / `m`: el despacho resolvió QUÉ sincronizar, y aquí

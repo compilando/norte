@@ -438,6 +438,10 @@ fn face(entry: &norte_proto::Entry, reinterpret: Option<norte_encoding::NameEnco
 ///   cuando [`PairTransform::names_one_text`](norte_proto::methods::PairTransform::names_one_text) contesta `false`. Un singleton
 ///   puede estar juntando DOS FICHEROS DISTINTOS, y una transformación que un
 ///   daemon más nuevo nombró no se puede leer como inocua.
+/// * Y una CUARTA, que es una fuerte con otro culpable:
+///   [`PairTransform::FullFold`](norte_proto::methods::PairTransform::FullFold) junta dos ficheros que pueden ser distintos,
+///   pero no los junta Unicode — los junta el volumen (un ext4/f2fs `+F`).
+///   Decirlo mal manda a buscar el problema donde no está.
 ///
 /// ```
 /// use norte_frontend::compare::paired_under_label;
@@ -457,10 +461,16 @@ pub fn paired_under_label(
     lang: norte_i18n::Lang,
 ) -> Option<String> {
     let transform = paired_under?;
-    Some(if transform.names_one_text() {
-        t_in(lang, "compare-paired-under")
-    } else {
-        t_in(lang, "compare-paired-under-singleton")
+    Some(match transform {
+        t if t.names_one_text() => t_in(lang, "compare-paired-under"),
+        // El pliegue COMPLETO también junta dos ficheros que pueden ser
+        // distintos, pero no lo hace Unicode: lo hace ESTE volumen. Decir
+        // «Unicode los declara iguales» sobre `straße`/`strasse` mandaría a
+        // buscar el problema donde no está.
+        norte_proto::methods::PairTransform::FullFold => {
+            t_in(lang, "compare-paired-under-full-fold")
+        }
+        _ => t_in(lang, "compare-paired-under-singleton"),
     })
 }
 

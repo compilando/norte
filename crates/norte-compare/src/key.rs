@@ -28,7 +28,11 @@ use norte_vfs::{Capabilities, CapabilityFlags, Entry};
 ///
 /// El plegado de caja es propiedad del par y no de un lado: basta con que uno
 /// de los dos no distinga caja para que la comparación entera tenga que
-/// plegar, porque ese lado no puede sostener las dos grafías.
+/// plegar, porque ese lado no puede sostener las dos grafías. Y lo mismo con
+/// la fuerza del pliegue: si un lado **expande** al plegar (ext4/f2fs `+F`,
+/// #145), ahí `straße.txt` y `strasse.txt` son un solo fichero, así que la
+/// pareja entera tiene que expandir o la comparación diría que no colisionan
+/// dos nombres que el destino no puede sostener a la vez.
 ///
 /// ```
 /// use norte_compare::Sides;
@@ -41,55 +45,97 @@ use norte_vfs::{Capabilities, CapabilityFlags, Entry};
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Sides {
-    fold_case: bool,
+    left: FoldMode,
+    right: FoldMode,
 }
 
 impl Sides {
-    /// A partir de si cada lado distingue caja.
+    /// A partir del modo de plegado de cada lado.
     ///
     /// ```
     /// use norte_compare::Sides;
-    /// assert!(Sides::new(true, false).folds_case());
-    /// assert!(!Sides::new(true, true).folds_case());
+    /// use norte_encoding::FoldMode;
+    /// assert!(Sides::new(FoldMode::None, FoldMode::Simple).folds_case());
+    /// assert!(!Sides::new(FoldMode::None, FoldMode::None).folds_case());
     /// ```
     #[must_use]
-    pub fn new(left_case_sensitive: bool, right_case_sensitive: bool) -> Self {
-        Self {
-            fold_case: !(left_case_sensitive && right_case_sensitive),
-        }
+    pub fn new(left: FoldMode, right: FoldMode) -> Self {
+        Self { left, right }
     }
 
-    /// A partir de las [`Capabilities`] que declaran los dos providers.
+    /// A partir de las [`Capabilities`] que responden los dos lados **para sus
+    /// raíces** (`Provider::capabilities_at`, ADR 0054 — no `capabilities()`,
+    /// que responde por el mount del provider y no por el que se compara).
     #[must_use]
     pub fn from_capabilities(left: Capabilities, right: Capabilities) -> Self {
-        Self::new(
-            left.flags.contains(CapabilityFlags::CASE_SENSITIVE),
-            right.flags.contains(CapabilityFlags::CASE_SENSITIVE),
-        )
+        Self::new(Self::mode_of(left), Self::mode_of(right))
+    }
+
+    /// El modo de plegado que declaran unas capabilities de UBICACIÓN.
+    ///
+    /// Es público porque es la ÚNICA copia: `norte_core::rename::plan::NameCaps`
+    /// hace la misma pregunta sobre las mismas flags y llama aquí en vez de
+    /// transcribirla. Transcribir esta clase de mapeo es exactamente lo que
+    /// costó el #151 (la clave de plegado copiada, divergiendo un ciclo entero
+    /// de release sin que nada las comparase).
+    ///
+    /// ```
+    /// use norte_compare::Sides;
+    /// use norte_encoding::FoldMode;
+    /// use norte_vfs::{Capabilities, CapabilityFlags};
+    /// let ext4_f = Capabilities {
+    ///     flags: CapabilityFlags::CASE_PRESERVING | CapabilityFlags::FULL_FOLD,
+    ///     max_path: None,
+    /// };
+    /// assert_eq!(Sides::mode_of(ext4_f), FoldMode::Full);
+    /// ```
+    #[must_use]
+    pub fn mode_of(c: Capabilities) -> FoldMode {
+        if c.flags.contains(CapabilityFlags::FULL_FOLD) {
+            FoldMode::Full
+        } else if c.flags.contains(CapabilityFlags::CASE_SENSITIVE) {
+            FoldMode::None
+        } else {
+            FoldMode::Simple
+        }
     }
 
     /// Los dos lados distinguen caja (ext4 contra ext4): NO se pliega.
     #[must_use]
     pub fn both_case_sensitive() -> Self {
-        Self::new(true, true)
+        Self::new(FoldMode::None, FoldMode::None)
     }
 
-    /// El lado izquierdo no distingue caja: se pliega.
+    /// El lado izquierdo no distingue caja: se pliega (simple).
     #[must_use]
     pub fn left_case_insensitive() -> Self {
-        Self::new(false, true)
+        Self::new(FoldMode::Simple, FoldMode::None)
     }
 
-    /// El lado derecho no distingue caja: se pliega.
+    /// El lado derecho no distingue caja: se pliega (simple).
     #[must_use]
     pub fn right_case_insensitive() -> Self {
-        Self::new(true, false)
+        Self::new(FoldMode::None, FoldMode::Simple)
     }
 
-    /// ¿Pliega caja este emparejamiento?
+    /// Cómo pliega LA PAREJA: el modo más fuerte de los dos lados.
+    ///
+    /// «Más fuerte» es el orden en que cada modo junta más nombres —
+    /// `None` < `Simple` < `Full`— y el criterio es el mismo de siempre: el
+    /// lado que no puede sostener dos grafías decide por los dos.
+    #[must_use]
+    pub fn fold(self) -> FoldMode {
+        match (self.left, self.right) {
+            (FoldMode::Full, _) | (_, FoldMode::Full) => FoldMode::Full,
+            (FoldMode::Simple, _) | (_, FoldMode::Simple) => FoldMode::Simple,
+            _ => FoldMode::None,
+        }
+    }
+
+    /// ¿Pliega caja este emparejamiento? (Sea simple o completo.)
     #[must_use]
     pub fn folds_case(self) -> bool {
-        self.fold_case
+        !matches!(self.fold(), FoldMode::None)
     }
 }
 
@@ -126,11 +172,10 @@ impl PairKey<'_> {
 
 /// La clave de emparejamiento de un nombre bajo unos [`Sides`].
 ///
-/// Delega en [`norte_encoding::name_key`] (ADR 0051, #151): esta función
-/// SOLO traduce `sides.fold_case` a un [`FoldMode`] — nunca
-/// [`FoldMode::Full`], que existe para ext4/f2fs `+F` (#145) pero nada de
-/// este motor sabe hoy si un directorio lo tiene, y encenderlo a ciegas sería
-/// peor que el hueco que cerraría.
+/// Delega en [`norte_encoding::name_key`] (ADR 0051, #151): esta función SOLO
+/// traslada el [`FoldMode`] de la pareja ([`Sides::fold`]), que desde ADR 0054
+/// puede ser [`FoldMode::Full`] — lo enciende un lado que declare
+/// `FULL_FOLD` para su raíz, jamás una suposición sobre el filesystem.
 ///
 /// Los bytes de entrada no se tocan: lo que sale es una clave, y el nombre
 /// sigue siendo el nombre. Un nombre que NO es UTF-8 se empareja por sus
@@ -148,12 +193,7 @@ impl PairKey<'_> {
 /// ```
 #[must_use]
 pub fn key_for(name: &[u8], sides: Sides) -> PairKey<'_> {
-    let mode = if sides.fold_case {
-        FoldMode::Simple
-    } else {
-        FoldMode::None
-    };
-    PairKey(norte_encoding::name_key(name, mode))
+    PairKey(norte_encoding::name_key(name, sides.fold()))
 }
 
 /// Bajo qué transformación emparejaron dos nombres, cuando NO son los mismos
@@ -214,10 +254,18 @@ pub fn pair_transform(left: &[u8], right: &[u8]) -> Option<PairTransform> {
     }
     let sin_plegar = Sides::both_case_sensitive();
     let normaliza = key_for(left, sin_plegar) == key_for(right, sin_plegar);
-    // Cualquiera de los dos `Sides` que plieguen sirve: lo que se pregunta es
-    // si emparejan CON pliegue, y `fold_case` es propiedad de la pareja.
-    let plegando = Sides::left_case_insensitive();
-    if !normaliza && key_for(left, plegando) != key_for(right, plegando) {
+    // Se pregunta por los DOS pliegues, y la diferencia entre ellos no es un
+    // matiz: una pareja que solo empareja EXPANDIENDO (`straße`/`strasse` en un
+    // ext4 `+F`, #145) no nombra un mismo texto — son dos textos que ese
+    // volumen no puede sostener a la vez, y el otro lado sí puede tener los dos
+    // ficheros, distintos. Contestar `CaseFold` ahí sería decir que son el
+    // mismo nombre, y quien lee esa respuesta (`names_one_text`, y con ella la
+    // puerta de ADR 0053 en `norte-sync`) sobrescribiría sobre ella.
+    let simple = Sides::new(FoldMode::Simple, FoldMode::None);
+    let completo = Sides::new(FoldMode::Full, FoldMode::None);
+    let pliega_simple = key_for(left, simple) == key_for(right, simple);
+    let pliega_completo = pliega_simple || key_for(left, completo) == key_for(right, completo);
+    if !normaliza && !pliega_completo {
         return None;
     }
     if norte_encoding::has_canonical_singleton(left)
@@ -225,10 +273,13 @@ pub fn pair_transform(left: &[u8], right: &[u8]) -> Option<PairTransform> {
     {
         return Some(PairTransform::NormalizationSingleton);
     }
-    Some(if normaliza {
-        PairTransform::Normalization
-    } else {
+    if normaliza {
+        return Some(PairTransform::Normalization);
+    }
+    Some(if pliega_simple {
         PairTransform::CaseFold
+    } else {
+        PairTransform::FullFold
     })
 }
 
@@ -450,9 +501,10 @@ mod tests {
     /// que es. Es el cruce que impide que las dos listas —el vocabulario del
     /// wire y el índice de fixtures— se separen sin que nada avise.
     ///
-    /// El par de pliegue COMPLETO queda fuera: solo empareja en ext4/f2fs `+F`,
-    /// que es un [`FoldMode`] que este motor no enciende jamás (#145), así que
-    /// para esta clave no son una pareja y la respuesta correcta es `None`.
+    /// El par de pliegue COMPLETO entra desde ADR 0054 con variante PROPIA: un
+    /// lado que declare `FULL_FOLD` para su raíz lo empareja, y la respuesta
+    /// dice que fue el pliegue COMPLETO — que es lo que permite a
+    /// `names_one_text` contestar `false` sobre él.
     #[test]
     fn los_gemelos_del_corpus_se_clasifican_como_el_corpus_dice() {
         use norte_testkit::corpus::TwinKind;
@@ -462,8 +514,13 @@ mod tests {
             let esperado = match gemelo.kind {
                 TwinKind::Normalization => Some(PairTransform::Normalization),
                 TwinKind::CaseFold => Some(PairTransform::CaseFold),
+                // El pliegue COMPLETO tiene variante PROPIA (0.45.0): junta dos
+                // nombres que pueden ser dos ficheros, así que no puede
+                // contestar lo mismo que el pliegue simple, que sí nombra un
+                // solo texto. Antes de ADR 0054 esto era `None` porque el motor
+                // no sabía expandir en ningún caso.
+                TwinKind::CaseFoldFull => Some(PairTransform::FullFold),
                 TwinKind::NormalizationSingleton => Some(PairTransform::NormalizationSingleton),
-                TwinKind::CaseFoldFull => None,
             };
             assert_eq!(
                 pair_transform(&left, &right),
@@ -474,6 +531,63 @@ mod tests {
                 gemelo.kind
             );
         }
+    }
+
+    /// #145: en un directorio que pliega COMPLETO (ext4/f2fs `+F`) `straße.txt`
+    /// y `strasse.txt` son UN fichero, y la clave tiene que decir lo mismo —
+    /// mientras que en uno que pliega simple (APFS, NTFS) siguen siendo dos.
+    #[test]
+    fn un_lado_que_expande_hace_expandir_a_la_pareja() {
+        let zett = corpus("ext4_full_fold_es_zett");
+        let ss = corpus("ext4_full_fold_ss");
+
+        let ext4_f = Capabilities {
+            flags: CapabilityFlags::CASE_PRESERVING | CapabilityFlags::FULL_FOLD,
+            max_path: None,
+        };
+        let ext4 = Capabilities {
+            flags: CapabilityFlags::CASE_SENSITIVE,
+            max_path: None,
+        };
+        let apfs = Capabilities {
+            flags: CapabilityFlags::CASE_PRESERVING,
+            max_path: None,
+        };
+
+        let con_mas_f = Sides::from_capabilities(ext4, ext4_f);
+        assert_eq!(
+            key_for(&zett, con_mas_f),
+            key_for(&ss, con_mas_f),
+            "basta con que UN lado expanda"
+        );
+
+        let sin_mas_f = Sides::from_capabilities(ext4, apfs);
+        assert_ne!(
+            key_for(&zett, sin_mas_f),
+            key_for(&ss, sin_mas_f),
+            "el pliegue simple no expande"
+        );
+    }
+
+    /// El modo de la pareja es el MÁS fuerte de los dos lados, y `folds_case`
+    /// sigue significando lo que significaba.
+    #[test]
+    fn el_modo_de_la_pareja_es_el_mas_fuerte_de_los_dos() {
+        use norte_encoding::FoldMode;
+        assert_eq!(
+            Sides::new(FoldMode::None, FoldMode::None).fold(),
+            FoldMode::None
+        );
+        assert_eq!(
+            Sides::new(FoldMode::None, FoldMode::Simple).fold(),
+            FoldMode::Simple
+        );
+        assert_eq!(
+            Sides::new(FoldMode::Simple, FoldMode::Full).fold(),
+            FoldMode::Full
+        );
+        assert!(!Sides::new(FoldMode::None, FoldMode::None).folds_case());
+        assert!(Sides::new(FoldMode::Full, FoldMode::None).folds_case());
     }
 
     /// Dos nombres que NO emparejan no tienen transformación que nombrar, y

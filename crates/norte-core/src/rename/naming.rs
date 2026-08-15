@@ -8,6 +8,8 @@ use std::collections::HashSet;
 
 use sha2::{Digest, Sha256};
 
+use norte_encoding::FoldMode;
+
 use super::plan::{Collision, NameCaps, Step, name_key};
 use crate::hashing::{feed, hex_lower};
 
@@ -30,12 +32,28 @@ pub(crate) const TEMP_PREFIX: &[u8] = b".norte-rename-";
 /// under `-0` and `-1` swapped. One cycle — the common case, and the one
 /// `the_temporary_does_not_depend_on_the_order_of_the_pairs` pins — always
 /// lands on the same name.
+/// El byte con el que el plegado del directorio entra en los dos digests.
+///
+/// Los valores de `None` y `Simple` son los que tenía `u8::from(case_sensitive)`
+/// —1 y 0— **a propósito**: un plan calculado antes de que existiera el
+/// plegado completo tiene que seguir dando el mismo `plan_hash`, o el ejecutor
+/// rechazaría un plan que el humano acaba de aprobar con un binario anterior.
+/// `Full` estrena valor, que es lo correcto: un plan planificado sobre un `+F`
+/// NO es el mismo plan.
+fn fold_byte(caps: NameCaps) -> u8 {
+    match caps.fold {
+        FoldMode::Simple => 0,
+        FoldMode::None => 1,
+        FoldMode::Full => 2,
+    }
+}
+
 pub(crate) fn intent_tag(pairs: &[(Vec<u8>, Vec<u8>)], caps: NameCaps) -> String {
     let mut sorted: Vec<&(Vec<u8>, Vec<u8>)> = pairs.iter().collect();
     sorted.sort();
     let mut h = Sha256::new();
     h.update(b"norte-rename-temp-v1");
-    feed(&mut h, &[u8::from(caps.case_sensitive)]);
+    feed(&mut h, &[fold_byte(caps)]);
     for (from, to) in sorted {
         feed(&mut h, from);
         feed(&mut h, to);
@@ -109,7 +127,7 @@ impl TempNames {
 pub(crate) fn plan_hash(steps: &[Step], collisions: &[Collision], caps: NameCaps) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(b"norte-rename-plan-v1");
-    feed(&mut h, &[u8::from(caps.case_sensitive)]);
+    feed(&mut h, &[fold_byte(caps)]);
     feed(&mut h, &(steps.len() as u64).to_le_bytes());
     for s in steps {
         feed(&mut h, &s.from);

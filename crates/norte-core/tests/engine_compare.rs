@@ -233,3 +233,54 @@ async fn follow_symlinks_se_rechaza_en_vez_de_ignorarse() {
     };
     assert!(matches!(err, ProtoError::Unsupported), "fue {err:?}");
 }
+
+// ADR 0054 ────────────────────────────────────────────────────────────────
+/// #153/#145: la comparación pliega como pliega LA RAÍZ, no como pliega el
+/// provider. El `MemProvider` declara `CASE_SENSITIVE` para sí mismo y guioniza
+/// un `+F` solo para la raíz derecha; si `fs.compare` preguntase por el
+/// provider —lo que hacía—, esta pareja saldría como dos huérfanas.
+#[tokio::test]
+async fn la_comparacion_pliega_como_pliega_la_raiz() {
+    let (engine, mem) = setup();
+    mkdir(&mem, "mem:///l").await;
+    mkdir(&mem, "mem:///r").await;
+
+    let fixture = |id: &str| {
+        norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("fixture {id} en el corpus"))
+            .bytes
+    };
+    let zett = String::from_utf8(fixture("ext4_full_fold_es_zett")).expect("UTF-8");
+    let ss = String::from_utf8(fixture("ext4_full_fold_ss")).expect("UTF-8");
+    write_file(&mem, &format!("mem:///l/{zett}"), b"x").await;
+    write_file(&mem, &format!("mem:///r/{ss}"), b"x").await;
+
+    mem.set_caps_at(
+        &vp("mem:///r"),
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::CASE_PRESERVING
+                | norte_proto::CapabilityFlags::FULL_FOLD,
+            max_path: None,
+        },
+    );
+
+    let (h, rx) = engine
+        .compare_as(params("mem:///l", "mem:///r"), Actor::User)
+        .await
+        .expect("compare");
+    let rows: Vec<_> = drain(rx).await.into_iter().flat_map(|b| b.rows).collect();
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    assert_eq!(
+        rows.len(),
+        1,
+        "una pareja, no dos huérfanas: {:?}",
+        rows.iter().map(|r| r.verdict).collect::<Vec<_>>()
+    );
+    assert!(
+        rows[0].left.is_some() && rows[0].right.is_some(),
+        "y la fila lleva los dos lados"
+    );
+}

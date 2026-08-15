@@ -14,6 +14,10 @@
     "conflict": "normalization",
     "kind": "conflict"
   },
+  "conflict_escapes_root": {
+    "conflict": "escapes_root",
+    "kind": "conflict"
+  },
   "conflict_type_mismatch": {
     "conflict": "type_mismatch",
     "kind": "conflict"

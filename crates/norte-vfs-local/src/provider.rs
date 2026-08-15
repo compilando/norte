@@ -35,6 +35,13 @@ const READ_CHUNK: usize = 256 * 1024;
 pub struct LocalProvider {
     base: PathBuf,
     caps: std::sync::Arc<std::sync::OnceLock<Capabilities>>,
+    /// Capabilities sondeadas POR DIRECTORIO (ADR 0054), con la identidad del
+    /// directorio como clave (`dev`, `ino`, `ctime`): dos rutas al mismo sitio
+    /// son una entrada, un `..` o un symlink no multiplican el sondeo, y un
+    /// inodo reutilizado no hereda la respuesta del difunto. Acotado, con desalojo del
+    /// más antiguo — una sesión larga no puede acabar con un mapa de todos los
+    /// directorios que visitó.
+    caps_at: std::sync::Arc<std::sync::Mutex<CapsAtCache>>,
     /// Sustituto de `$XDG_DATA_HOME` para la papelera freedesktop; `None` =
     /// resolver del entorno, que es lo que hace producción.
     trash_home: Option<PathBuf>,
@@ -56,9 +63,28 @@ impl LocalProvider {
         Self {
             base,
             caps: std::sync::Arc::new(std::sync::OnceLock::new()),
+            caps_at: std::sync::Arc::new(std::sync::Mutex::new(CapsAtCache::default())),
             trash_home: None,
             _guard: None,
         }
+    }
+
+    /// Fuerza el paseo componente a componente aunque el kernel tenga
+    /// `openat2`, mientras el guard viva (costura de test): es la única forma
+    /// de ejercitar las dos ramas del confinamiento en una misma máquina.
+    #[cfg(target_os = "linux")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn force_component_walk_for_test() -> crate::confined::ForceComponentWalk {
+        crate::confined::ForceComponentWalk::new()
+    }
+
+    /// Cuántas veces se ha SONDEADO de verdad una ubicación (costura de test:
+    /// lo que la caché ahorra no se ve de ninguna otra forma).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn caps_at_probe_count(&self) -> u64 {
+        self.caps_at.lock().expect("caps_at lock sano").probes
     }
 
     /// Sondea capabilities UNA vez, dentro de `spawn_blocking` (regla 2:
@@ -148,6 +174,7 @@ impl LocalProvider {
             let s = Self {
                 base: PathBuf::new(),
                 caps: std::sync::Arc::new(std::sync::OnceLock::new()),
+                caps_at: std::sync::Arc::new(std::sync::Mutex::new(CapsAtCache::default())),
                 trash_home: None,
                 _guard: None,
             };
@@ -239,6 +266,26 @@ fn stable_partial_vpath(p: &VPath) -> Result<VPath, Error> {
     p.with_file_name(seg).ok_or(Error::InvalidPath)
 }
 
+/// Nombre de staging EFÍMERO para el destino `final_name`:
+/// `.norte-partial.<16 hex>.<pid>-<seq>`.
+///
+/// pid + secuencia: (a) un archivo real del usuario jamás se toca (el
+/// `O_EXCL`/`create_new` de quien lo abre además lo garantiza) y (b) dos
+/// writes concurrentes al mismo destino no comparten staging. El prefijo lo
+/// hace reconocible para el GC (ADR 0012) — la forma la valida
+/// [`is_norte_partial`], así que quien la construya debe hacerlo AQUÍ y no en
+/// una segunda copia del `format!`.
+pub(crate) fn ephemeral_partial_name(final_name: &[u8]) -> Vec<u8> {
+    let hash = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::hash::DefaultHasher::new();
+        final_name.hash(&mut h);
+        h.finish()
+    };
+    let seq = PARTIAL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{PARTIAL_PREFIX}{hash:016x}.{}-{seq}", std::process::id()).into_bytes()
+}
+
 /// ¿`name` (bytes) tiene la FORMA de un staging de norte? Estrecho a las
 /// dos formas conocidas — NO al prefijo suelto (H2 del encoding-auditor:
 /// un archivo real del usuario `.norte-partial.backup` NO debe barrerse):
@@ -324,7 +371,7 @@ fn spawn_guarded_producer<T: Send + 'static>(
 
 /// Ejecuta I/O bloqueante; un panic dentro se supervisa y NO tumba el proceso
 /// (política de panics de la spec §17.7).
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, Error> + Send + 'static,
 ) -> Result<T, Error> {
     tokio::task::spawn_blocking(f)
@@ -782,6 +829,79 @@ fn default_capabilities() -> Capabilities {
     }
 }
 
+/// Caché acotada de capabilities por directorio, con la identidad del nodo
+/// como clave.
+///
+/// No es un LRU de acceso sino de INSERCIÓN: lo que hay que impedir es que un
+/// recorrido largo haga crecer el mapa sin fin, y para eso basta con desalojar
+/// la entrada más vieja. Un comparador toca un puñado de raíces; un indexador
+/// que recorra miles pagará una syscall de más al volver sobre la primera, que
+/// es más barato que la contabilidad de un LRU de verdad.
+#[derive(Debug, Default)]
+struct CapsAtCache {
+    /// `(dev, ino)` → capabilities ya sondeadas.
+    map: std::collections::HashMap<(u64, u64, i64), Capabilities>,
+    /// Orden de inserción, para el desalojo.
+    order: std::collections::VecDeque<(u64, u64, i64)>,
+    /// Sondeos REALES (los que no salieron de aquí). Costura de test.
+    probes: u64,
+}
+
+/// Techo de la caché. Un directorio ocupa decenas de bytes; 256 cubre de sobra
+/// las raíces de una comparación, una sincronización y los dos paneles.
+const CAPS_AT_CACHE_MAX: usize = 256;
+
+impl CapsAtCache {
+    fn get(&self, key: (u64, u64, i64)) -> Option<Capabilities> {
+        self.map.get(&key).copied()
+    }
+
+    fn insert(&mut self, key: (u64, u64, i64), caps: Capabilities) {
+        if self.map.insert(key, caps).is_none() {
+            self.order.push_back(key);
+            while self.order.len() > CAPS_AT_CACHE_MAX {
+                if let Some(viejo) = self.order.pop_front() {
+                    self.map.remove(&viejo);
+                }
+            }
+        }
+    }
+}
+
+/// Identidad de un directorio para la caché: `(dev, ino, ctime_nsec)`.
+///
+/// El `ctime` está ahí por la REUTILIZACIÓN de inodos, que es lo que hace
+/// insuficiente a `(dev, ino)` solo: ext4 recicla números de inodo dentro del
+/// mismo grupo de bloques, así que borrar un directorio `+F` y crear otro
+/// corriente puede devolver la misma pareja y servirle la respuesta del
+/// muerto — un `FULL_FOLD` falso, que empareja dos ficheros que son distintos.
+/// El `ctime` cambia en toda reasignación de inodo y ya viene en la `Metadata`
+/// que se acaba de leer, así que cuesta cero.
+///
+/// (El flag `+F` de un directorio VIVO no cambia: se hereda al crearlo, no se
+/// puede poner sobre un directorio no vacío ni quitar. Lo que se invalida aquí
+/// es la identidad, no el veredicto.)
+#[cfg(unix)]
+#[allow(clippy::unnecessary_wraps)]
+fn dir_identity(md: &std::fs::Metadata) -> Option<(u64, u64, i64)> {
+    use std::os::unix::fs::MetadataExt as _;
+    Some((md.dev(), md.ino(), md.ctime_nsec()))
+}
+
+/// Windows: `std` no expone la identidad del volumen ni el índice del fichero
+/// desde `Metadata`, así que aquí no hay clave y cada pregunta se sondea. En
+/// Windows la escalera de solo lectura no responde nada todavía (ver
+/// `caps_at::windows`), así que sondear es leer una `Metadata` y poco más.
+#[cfg(windows)]
+fn dir_identity(_md: &std::fs::Metadata) -> Option<(u64, u64, i64)> {
+    None
+}
+
+/// La clave de caché de un directorio, stateándolo.
+fn dir_key(dir: &Path) -> Option<(u64, u64, i64)> {
+    std::fs::metadata(dir).ok().as_ref().and_then(dir_identity)
+}
+
 fn probe_capabilities(base: &Path) -> Capabilities {
     let mut caps = default_capabilities();
     let default_sensitive = caps.flags.contains(CapabilityFlags::CASE_SENSITIVE);
@@ -808,6 +928,87 @@ impl Provider for LocalProvider {
             .get()
             .copied()
             .unwrap_or_else(default_capabilities)
+    }
+
+    async fn capabilities_at(&self, p: &VPath) -> Result<Capabilities, Error> {
+        self.ensure_caps().await;
+        let mut declared = self.capabilities();
+        // Confinar es de la PLATAFORMA, no de la ubicación ni del estado del
+        // árbol: en unix hay `openat` —con `openat2` o con el paseo, los dos
+        // garantizan lo mismo—, y en Windows todavía no. Va antes de cualquier
+        // sonda porque tiene que valer también en el camino degradado de abajo:
+        // si no, `file:///destino-que-aun-no-existe` diría «no sé confinar» y
+        // `file:///` diría que sí, que es una respuesta distinta para la misma
+        // máquina y el caso corriente de planificar un mirror.
+        declared
+            .flags
+            .set(CapabilityFlags::CONFINED_WRITES, cfg!(unix));
+        let native = self.native(p)?;
+        let cache = std::sync::Arc::clone(&self.caps_at);
+        blocking(move || {
+            // La pregunta es SIEMPRE sobre el directorio que CONTIENE al
+            // nombre: lo que se decide con la respuesta es si dos nombres
+            // pueden coexistir ahí, y eso lo manda el directorio donde van a
+            // estar. Para un fichero —o para un symlink, que es un nombre en
+            // el directorio del enlace y no en el de su destino— eso es su
+            // padre; para un directorio, él mismo. `symlink_metadata`, por
+            // tanto, y no `metadata`.
+            let Ok(md) = std::fs::symlink_metadata(&native) else {
+                // Una ruta que no está (o que no se deja mirar) NO es un error
+                // aquí: `capabilities()` jamás pudo fallar, y hacer fallar a
+                // su versión por ubicación convertiría «planificar hacia un
+                // destino que aún no existe» —el caso corriente de un mirror—
+                // en un error, además de cambiar el contrato de un método del
+                // wire ya publicado. Se declara lo del provider (ADR 0054: la
+                // degradación es el comportamiento de siempre).
+                return Ok(declared);
+            };
+            let dir: &Path = if md.is_dir() {
+                &native
+            } else {
+                native.parent().unwrap_or(&native)
+            };
+            let key = dir_key(dir);
+
+            if let Some(k) = key
+                && let Some(hit) = cache.lock().expect("caps_at lock sano").get(k)
+            {
+                return Ok(hit);
+            }
+
+            let found = crate::caps_at::probe_location(dir);
+            let mut caps = declared;
+            if let Some(sensitive) = found.case_sensitive {
+                caps.flags.set(CapabilityFlags::CASE_SENSITIVE, sensitive);
+            }
+            // `None` = la escalera no supo; se deja lo declarado en vez de
+            // apagar un flag que nadie contradijo.
+            if let Some(full) = found.full_fold {
+                caps.flags.set(CapabilityFlags::FULL_FOLD, full);
+            }
+            let mut guard = cache.lock().expect("caps_at lock sano");
+            guard.probes += 1;
+            if let Some(k) = key {
+                guard.insert(k, caps);
+            }
+            Ok(caps)
+        })
+        .await
+    }
+
+    #[cfg(unix)]
+    async fn open_root(&self, root: &VPath) -> Result<Box<dyn norte_vfs::ConfinedRoot>, Error> {
+        self.ensure_caps().await;
+        let native = self.native(root)?;
+        let vpath = root.clone();
+        blocking(move || {
+            let abierta = crate::confined::LocalRoot::open(&native)?;
+            Ok(
+                Box::new(crate::confined::LocalConfinedRoot::new(abierta, vpath))
+                    as Box<dyn norte_vfs::ConfinedRoot>,
+            )
+        })
+        .await
     }
 
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
@@ -1370,15 +1571,7 @@ impl Provider for LocalProvider {
         // mismo destino no comparten staging. El prefijo `.norte-partial` lo
         // hace reconocible para el GC del journal (M3).
         let name = p.file_name().ok_or(Error::InvalidPath)?;
-        let hash = {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::hash::DefaultHasher::new();
-            name.as_bytes().hash(&mut h);
-            h.finish()
-        };
-        let seq = PARTIAL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let partial_name =
-            format!(".norte-partial.{hash:016x}.{}-{seq}", std::process::id()).into_bytes();
+        let partial_name = ephemeral_partial_name(name.as_bytes());
         let partial_seg = Segment::new(partial_name).map_err(|_| Error::InvalidPath)?;
         let partial_vpath = p.with_file_name(partial_seg).ok_or(Error::InvalidPath)?;
         let partial_native = self.native(&partial_vpath)?;

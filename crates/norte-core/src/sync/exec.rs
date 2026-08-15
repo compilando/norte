@@ -115,17 +115,28 @@ pub(crate) struct SyncTargets {
     /// deserialización lo vuelve a impedir después de decodificar, así que un
     /// `%2E%2E` tampoco cuela.
     ///
-    /// **Lo que eso no promete es que los BYTES se queden dentro.** La
-    /// resolución la hace el sistema de ficheros, y ningún provider de este
-    /// árbol abre con `O_NOFOLLOW`/`RESOLVE_BENEATH`: un symlink puesto en un
-    /// componente INTERMEDIO entre aprobar y aplicar redirige la escritura fuera
-    /// del árbol, con las credenciales del daemon. Los pasos destructivos lo
-    /// esquivan de rebote —`stat` es un `lstat`, así que la revalidación ve un
-    /// `Symlink` donde el testigo decía `Dir` y contesta conflicto; y `walk` no
-    /// desciende symlinks— pero un `Copy` y un `CreateDir` no tienen defensa
-    /// aquí. Cerrarlo pide resolución acotada en el provider, que es un cambio de
-    /// `norte-vfs-local` y no de este fichero.
+    /// **Que los BYTES se queden dentro lo garantiza [`Self::dest_confined`]**,
+    /// no esta composición: la resolución la hace el sistema de ficheros, y un
+    /// symlink puesto en un componente INTERMEDIO entre aprobar y aplicar
+    /// redirigiría la escritura fuera del árbol con las credenciales del daemon
+    /// (#164). Los pasos destructivos lo esquivan de rebote —`stat` es un
+    /// `lstat`, así que la revalidación ve un `Symlink` donde el testigo decía
+    /// `Dir` y contesta conflicto; y `walk` no desciende symlinks—; el `Copy` y
+    /// el `CreateDir` se defienden con la raíz confinada, cuando el destino sabe
+    /// darla.
     pub dest_root: VPath,
+    /// La raíz de destino ABIERTA, cuando este destino sabe confinarse
+    /// (ADR 0054).
+    ///
+    /// Se abre UNA vez por Task, aquí, y a partir de ahí cada paso que crea algo
+    /// direcciona segmentos relativos a ella en vez de una ruta: sin ruta que
+    /// recomponer no hay ventana entre comprobar y escribir.
+    ///
+    /// `None` = este destino no sabe (`file://` en Windows, SFTP, un bucket).
+    /// Entonces se escribe por ruta, como siempre, y se dice en el log: negarse
+    /// dejaría sin sincronizar a los destinos que no pueden dar esa defensa,
+    /// que es un precio mucho más alto que el riesgo que evita.
+    pub dest_confined: Option<Box<dyn norte_vfs::ConfinedRoot>>,
     /// El gate de policy, consultado paso a paso sobre la ruta REAL.
     ///
     /// El gate de la raíz que `sync.apply` pide antes de empezar resuelve la
@@ -143,6 +154,42 @@ pub(crate) struct SyncTargets {
 }
 
 impl SyncTargets {
+    /// Abre la raíz de destino confinada, si este destino sabe darla.
+    ///
+    /// Se hace DENTRO de la Task, no al construir: aquí hay `task_id` con el
+    /// que decir en el log de qué operación se está hablando cuando el destino
+    /// no sabe confinarse y hay que degradar.
+    /// # Errors
+    /// El del `open_root` cuando el destino declaró que sabía confinar y no
+    /// pudo. NO se degrada: ver [`crate::ops::open_dest_root`], donde está el
+    /// razonamiento de por qué eso sería la llave que reabre #164.
+    pub(crate) async fn with_dest_confined(mut self, task_id: u64) -> Result<Self, Error> {
+        self.dest_confined =
+            crate::ops::open_dest_root(self.dest.as_ref(), &self.dest_root, task_id).await?;
+        Ok(self)
+    }
+
+    /// El destino de un paso: la ruta real, más el relativo bajo la raíz
+    /// confinada si la hay.
+    ///
+    /// `to` viene de [`dest_path`], que ya lo compuso pegando el relativo del
+    /// paso a [`Self::dest_root`], así que el relativo se recupera de ahí y
+    /// vuelve a salir el MISMO — y si no cayera dentro (no puede, pero el tipo
+    /// no lo sabe), el paso se degrada al camino por ruta en vez de escribir en
+    /// un sitio que la raíz no cubre.
+    fn dest_at(&self, to: &VPath) -> crate::ops::Dest<'_> {
+        match self
+            .dest_confined
+            .as_deref()
+            .zip(crate::ops::rel_under(&self.dest_root, to))
+        {
+            Some((root, rel)) => {
+                crate::ops::Dest::under(self.dest.as_ref(), Some(root), rel, to.clone())
+            }
+            None => crate::ops::Dest::plain(self.dest.as_ref(), to.clone()),
+        }
+    }
+
     /// ¿Autoriza la policy ESTE paso sobre ESTA ruta?
     ///
     /// Un `Deny` es una fila del informe ([`SyncFailureCause::Denied`]), no el
@@ -562,8 +609,7 @@ async fn copy_leaf(
         // `Unknown`: el kind lo resuelve el provider destino contra su propio
         // árbol, igual que en la copia normal (issue #18).
         crate::ops::symlink_retrying(
-            targets.dest.as_ref(),
-            to,
+            &targets.dest_at(to),
             &target,
             SymlinkKind::Unknown,
             &ctx.cancel,
@@ -592,9 +638,8 @@ async fn copy_leaf(
     let observer: Arc<dyn crate::observer::MutationObserver> = Arc::new(NoopObserver);
     crate::ops::copy_file_retrying(
         targets.source.as_ref(),
-        targets.dest.as_ref(),
+        &targets.dest_at(to),
         from,
-        to,
         entry.size,
         opts,
         &observer,
@@ -910,7 +955,7 @@ async fn create_dir(
             conflict: ConflictKind::Exists,
         }));
     }
-    crate::ops::mkdir_retrying(targets.dest.as_ref(), to, &ctx.cancel)
+    crate::ops::mkdir_retrying(&targets.dest_at(to), &ctx.cancel)
         .await
         .map_err(StepError::from_provider)?;
     recorder
@@ -1180,7 +1225,7 @@ fn record_failure(report: &Mutex<SyncReportResult>, step: &SyncStep, cause: Sync
     )
 )]
 pub(crate) async fn run<S>(
-    targets: &SyncTargets,
+    targets: SyncTargets,
     recorder: &dyn StepJournal,
     steps: S,
     ctx: &TaskCtx,
@@ -1189,6 +1234,18 @@ pub(crate) async fn run<S>(
 where
     S: Stream<Item = Result<SpoolStep, Error>>,
 {
+    if ctx.cancel.is_cancelled() {
+        return Err(ApplyError::Stopped(Error::Cancelled));
+    }
+    // La raíz de destino se abre AQUÍ, una vez para toda la Task (#164): por eso
+    // los `targets` entran por valor, y no prestados como todo lo demás. Que no
+    // se pueda abrir un destino que dijo saber confinar PARA la Task entera, y
+    // para antes de tocar nada — no es una fila del informe, es que la defensa
+    // que el humano vio anunciada no está.
+    let targets = &targets
+        .with_dest_confined(ctx.progress.snapshot().task_id.get())
+        .await
+        .map_err(ApplyError::Stopped)?;
     let mut steps = std::pin::pin!(steps);
     loop {
         if ctx.cancel.is_cancelled() {
@@ -1405,6 +1462,7 @@ mod tests {
             dest_root: vp("mem:///d"),
             policy: Arc::new(crate::policy::AllowAll),
             delete_mode: norte_proto::DeleteMode::Trash,
+            dest_confined: None,
         }
     }
 
@@ -1568,7 +1626,7 @@ mod tests {
         };
         let report = Mutex::new(new_report(7, DestTrash::Restorable));
         run(
-            &t,
+            t,
             &recorder,
             futures::stream::iter(vec![Ok(record)]),
             &ctx(CancellationToken::new()),
@@ -1614,7 +1672,7 @@ mod tests {
         };
         let report = Mutex::new(new_report(7, DestTrash::Restorable));
         run(
-            &t,
+            t,
             &recorder,
             futures::stream::iter(vec![Ok(record)]),
             &ctx(CancellationToken::new()),
@@ -1653,15 +1711,9 @@ mod tests {
             }),
             Err(Error::Io { retryable: false }),
         ]);
-        let err = run(
-            &t,
-            &recorder,
-            flujo,
-            &ctx(CancellationToken::new()),
-            &report,
-        )
-        .await
-        .expect_err("el plan dejó de leerse");
+        let err = run(t, &recorder, flujo, &ctx(CancellationToken::new()), &report)
+            .await
+            .expect_err("el plan dejó de leerse");
         assert!(
             matches!(err, ApplyError::Stopped(Error::Io { .. })),
             "{err:?}"
@@ -1916,7 +1968,7 @@ mod tests {
         };
         let report = Mutex::new(new_report(7, DestTrash::Restorable));
         let err = run(
-            &t,
+            t,
             &recorder,
             futures::stream::iter(vec![Ok(record)]),
             &ctx(cancel),
@@ -2035,7 +2087,7 @@ mod tests {
         ];
         let report = Mutex::new(new_report(7, DestTrash::Restorable));
         let err = run(
-            &t,
+            t,
             &TrashedFalla,
             futures::stream::iter(pasos),
             &ctx(CancellationToken::new()),

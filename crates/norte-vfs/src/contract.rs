@@ -106,6 +106,55 @@ macro_rules! provider_contract {
 
             // ---------- stat ----------
 
+            /// ADR 0054: `capabilities_at` puede REFINAR la declaración del
+            /// backend, no contradecirla. Lo que no depende de la ubicación
+            /// —que el backend entero sea de solo lectura— tiene que salir
+            /// igual por las dos puertas, y un `FULL_FOLD` sobre algo que
+            /// distingue caja es una respuesta imposible, no un refinamiento.
+            #[tokio::test]
+            async fn contract_capabilities_at_refines_without_contradicting() {
+                let p = $factory;
+                let root: VPath = $root;
+                let at = p
+                    .capabilities_at(&root)
+                    .await
+                    .expect("capabilities_at responde por la raíz");
+                assert_eq!(
+                    at.flags.contains(CapabilityFlags::READ_ONLY),
+                    p.capabilities().flags.contains(CapabilityFlags::READ_ONLY),
+                    "READ_ONLY es del backend, no de la ubicación"
+                );
+                assert!(
+                    !(at.flags.contains(CapabilityFlags::FULL_FOLD)
+                        && at.flags.contains(CapabilityFlags::CASE_SENSITIVE)),
+                    "FULL_FOLD solo tiene sentido sin CASE_SENSITIVE"
+                );
+                // Lo que es de la UBICACIÓN no se declara sin path. Con
+                // `CONFINED_WRITES` no es cosmético: es una promesa de
+                // confinamiento con garantía del kernel sobre la que un caller
+                // ACTÚA (se salta el paseo con `lstat` al que si no degrada), y
+                // una promesa así no puede venir de una respuesta que no sabe
+                // de qué mount habla.
+                for flag in [CapabilityFlags::FULL_FOLD, CapabilityFlags::CONFINED_WRITES] {
+                    assert!(
+                        !p.capabilities().flags.contains(flag),
+                        "{flag:?} es de la ubicación: solo lo contesta capabilities_at"
+                    );
+                }
+            }
+
+            /// Preguntar por algo que no existe no es un error: `capabilities()`
+            /// jamás pudo fallar, y planificar hacia un destino que todavía no
+            /// está es el caso corriente de un mirror.
+            #[tokio::test]
+            async fn contract_capabilities_at_missing_path_is_not_an_error() {
+                let p = $factory;
+                let root: VPath = $root;
+                p.capabilities_at(&child(&root, b"no-existe-jamas"))
+                    .await
+                    .expect("una ruta ausente se responde igual");
+            }
+
             #[tokio::test]
             async fn contract_stat_root_is_dir() {
                 let p = $factory;

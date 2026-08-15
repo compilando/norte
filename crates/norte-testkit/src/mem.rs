@@ -135,6 +135,16 @@ pub struct MemProvider {
     /// sin attrs; [`Self::with_synthetic_attrs`] lo puebla con valores
     /// deterministas y deliberadamente hostiles.
     attr_defs: Vec<norte_proto::AttrInfo>,
+    /// Capabilities guionizadas POR UBICACIÓN (ADR 0054): simula un backend
+    /// que sirve más de un filesystem tras un scheme — la raíz en ext4 y un
+    /// `/usb` en exFAT, o un directorio ext4 en `+F`. Vacío (default) = todas
+    /// las ubicaciones responden [`Self::capabilities`].
+    caps_at: Arc<Mutex<BTreeMap<SegPath, Capabilities>>>,
+    /// Rutas por las que alguien preguntó con `capabilities_at`, en orden.
+    /// Costura de test: es la única forma de comprobar que un camino pregunta
+    /// por la UBICACIÓN y no por el provider, cuando las dos respuestas
+    /// coinciden.
+    caps_at_asked: Arc<Mutex<Vec<SegPath>>>,
     tree: Arc<Mutex<Tree>>,
     faults: Arc<Faults>,
 }
@@ -191,9 +201,56 @@ impl MemProvider {
             list_skipped: None,
             logical_trash: false,
             attr_defs: Vec::new(),
+            caps_at: Arc::new(Mutex::new(BTreeMap::new())),
+            caps_at_asked: Arc::new(Mutex::new(Vec::new())),
             tree: Arc::new(Mutex::new(Tree::default())),
             faults: Arc::new(Faults::default()),
         }
+    }
+
+    /// Guioniza las capabilities de UNA ubicación (ADR 0054): a partir de aquí
+    /// `capabilities_at(p)` responde `caps` en vez de la declaración del
+    /// backend. Es la costura con la que se prueba un `+F` o un exFAT montado
+    /// sin tener ninguno — ningún CI de este proyecto los tiene.
+    ///
+    /// Solo afecta a la ubicación EXACTA: un hijo suyo sigue respondiendo la
+    /// declaración, porque el testkit no simula herencia por mount y fingirla
+    /// escondería justo el fallo que #153 describe.
+    ///
+    /// # Panics
+    ///
+    /// Si el mutex del guion quedó envenenado por un panic previo — en un
+    /// testkit eso ya es un test roto.
+    pub fn set_caps_at(&self, p: &VPath, caps: Capabilities) {
+        self.caps_at
+            .lock()
+            .expect("caps_at lock sano")
+            .insert(seg_path(p), caps);
+    }
+
+    /// ¿Alguien preguntó por la ubicación `p` con `capabilities_at`?
+    ///
+    /// # Panics
+    /// Si el mutex quedó envenenado por un panic previo — en un testkit eso ya
+    /// es un test roto.
+    #[must_use]
+    pub fn was_asked_about(&self, p: &VPath) -> bool {
+        self.caps_at_asked
+            .lock()
+            .expect("caps_at lock sano")
+            .contains(&seg_path(p))
+    }
+
+    /// Olvida quién preguntó, para que un test pueda separar dos fases (lo que
+    /// preguntó el plan de lo que pregunta el undo).
+    ///
+    /// # Panics
+    /// Si el mutex quedó envenenado por un panic previo.
+    pub fn forget_who_asked(&self) {
+        self.caps_at_asked
+            .lock()
+            .expect("caps_at lock sano")
+            .clear();
     }
 
     /// Atributos SINTÉTICOS deterministas (#108 bloque 2) con valores
@@ -644,6 +701,21 @@ impl Provider for MemProvider {
 
     fn capabilities(&self) -> Capabilities {
         self.caps
+    }
+
+    async fn capabilities_at(&self, p: &VPath) -> Result<Capabilities, Error> {
+        let key = seg_path(p);
+        self.caps_at_asked
+            .lock()
+            .expect("caps_at lock sano")
+            .push(key.clone());
+        Ok(self
+            .caps_at
+            .lock()
+            .expect("caps_at lock sano")
+            .get(&key)
+            .copied()
+            .unwrap_or(self.caps))
     }
 
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {

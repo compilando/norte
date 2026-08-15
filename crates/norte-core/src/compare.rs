@@ -83,42 +83,58 @@ enum FlushOutcome {
 /// `/home` (ext4) y `/mnt/usb` (exFAT) contestaba la MISMA respuesta para los
 /// dos, y las colisiones de plegado del segundo mount se perdían en silencio.
 ///
-/// El `stat` de cada raíz fuerza el sondeo de `norte-vfs-local` ANTES de leer
-/// `capabilities()`, que si no es exacta solo tras la primera operación async
-/// (el sondeo corre ahí; antes es el default del OS vía `cfg!(target_os)`).
-/// **Esto no cierra el hueco de #153 por sí solo** — `Provider::capabilities`
-/// sigue sin tomar path, así que dos raíces servidas por el MISMO provider
-/// siguen compartiendo una `Capabilities` — pero es el paso que no exige
-/// tocar el trait `Provider` (una query por-path es la forma de #164 y quiere
-/// su propia ADR), y es DONDE puede crecer sin volver a tocar
-/// `norte-compare`: quien conoce las dos raíces es quien puede, mañana,
-/// resolver el mount real de cada una.
+/// Desde ADR 0054 se le pregunta a CADA RAÍZ (`Provider::capabilities_at`), que
+/// es lo que cierra #153: la respuesta ya no es del provider sino del
+/// directorio, y en `file://` sale de una escalera de solo lectura que también
+/// sabe reconocer un ext4/f2fs en `+F` (#145). El `stat` previo que forzaba el
+/// sondeo perezoso sobra: `capabilities_at` ES una operación async y sondea
+/// ella misma.
 ///
-/// Los errores de `stat` se ignoran a propósito: una raíz que no existe sigue
-/// fallando su propio `list` dentro del motor de comparación, con su fila de
-/// error — aquí solo interesa el efecto secundario del sondeo.
-///
-/// Esto asume que un provider deja su sondeo de capacidades EN EL ESTADO QUE
-/// SEA (probado u honestamente sin probar) aunque la operación que lo
-/// disparó falle — cierto hoy de `norte-vfs-local::ensure_caps`, que corre
-/// antes que el `stat` pueda fallar, pero no es parte del contrato de
-/// `Provider`. Un provider futuro cuyo sondeo solo completase en el camino
-/// de ÉXITO degradaría en silencio a `default_capabilities()` para la
-/// comparación entera; el `trace!` de abajo es la única señal si eso pasa.
+/// Una raíz que no existe hace fallar aquí su `capabilities_at`, y entonces se
+/// responde lo que el provider DECLARA en vez de propagar el error: la raíz
+/// sigue fallando su propio `list` dentro del motor, con su fila de error, que
+/// es donde el usuario tiene que verlo. Fallar aquí convertiría una fila de
+/// error en una comparación que no arranca.
 pub(crate) async fn probed_sides(
     left: &dyn Provider,
     left_root: &VPath,
     right: &dyn Provider,
     right_root: &VPath,
 ) -> norte_compare::Sides {
-    let (left_probe, right_probe) = tokio::join!(left.stat(left_root), right.stat(right_root));
-    if let Err(e) = left_probe {
-        tracing::trace!(error = %e, "probed_sides: stat de la raíz izquierda falló (ignorado a propósito)");
+    let (left_caps, right_caps) = tokio::join!(
+        left.capabilities_at(left_root),
+        right.capabilities_at(right_root)
+    );
+    norte_compare::Sides::from_capabilities(
+        degradada(left_caps, left, left_root),
+        degradada(right_caps, right, right_root),
+    )
+}
+
+/// Las capabilities de una raíz, o las que el provider declare si no supo
+/// responder — **diciéndolo**.
+///
+/// La degradación importa y por eso no va en `trace!`: el default de un Linux
+/// es `CASE_SENSITIVE`, o sea «no pliegues nada», así que una raíz que deja de
+/// responder a mitad convierte una comparación en una que no reporta
+/// colisiones de caja. ADR 0054 dice que donde la garantía no está se DICE, y
+/// una línea de TRACE no la dice: en producción no se ve.
+pub(crate) fn degradada(
+    resultado: Result<norte_proto::Capabilities, Error>,
+    provider: &dyn Provider,
+    root: &VPath,
+) -> norte_proto::Capabilities {
+    match resultado {
+        Ok(caps) => caps,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                root = %root.display_lossy(),
+                "no se pudieron sondear las capabilities de esta raíz: se usa lo que el provider declara"
+            );
+            provider.capabilities()
+        }
     }
-    if let Err(e) = right_probe {
-        tracing::trace!(error = %e, "probed_sides: stat de la raíz derecha falló (ignorado a propósito)");
-    }
-    norte_compare::Sides::from_capabilities(left.capabilities(), right.capabilities())
 }
 
 /// Envía el lote pendiente (si lo hay). Un `send` bloqueado por backpressure

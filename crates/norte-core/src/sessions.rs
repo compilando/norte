@@ -527,8 +527,26 @@ impl Provider for SessionProvider {
     fn capabilities(&self) -> norte_proto::Capabilities {
         self.inner.capabilities()
     }
+    async fn capabilities_at(
+        &self,
+        p: &norte_proto::VPath,
+    ) -> Result<norte_proto::Capabilities, Error> {
+        self.observe(self.inner.capabilities_at(p).await)
+    }
     fn attrs(&self) -> &[norte_proto::AttrInfo] {
         self.inner.attrs()
+    }
+    async fn open_root(
+        &self,
+        root: &norte_proto::VPath,
+    ) -> Result<Box<dyn norte_vfs::ConfinedRoot>, Error> {
+        // `Unsupported` NO evicta: es la respuesta honesta de un backend que no
+        // sabe confinar (sftp, object, archive), no el síntoma de una sesión
+        // muerta. Cualquier otro error sí, como en el resto del wrapper.
+        match self.inner.open_root(root).await {
+            Err(Error::Unsupported) => Err(Error::Unsupported),
+            otro => self.observe(otro),
+        }
     }
     async fn stat(&self, p: &norte_proto::VPath) -> Result<norte_proto::Entry, Error> {
         self.observe(self.inner.stat(p).await)
@@ -672,6 +690,15 @@ mod tests {
                 flags: norte_proto::CapabilityFlags::empty(),
                 max_path: None,
             }
+        }
+        async fn capabilities_at(&self, _p: &VPath) -> Result<norte_proto::Capabilities, Error> {
+            Err(pu())
+        }
+        async fn open_root(
+            &self,
+            _root: &VPath,
+        ) -> Result<Box<dyn norte_vfs::ConfinedRoot>, Error> {
+            Err(pu())
         }
         fn attrs(&self) -> &[norte_proto::AttrInfo] {
             static UNO: std::sync::LazyLock<Vec<norte_proto::AttrInfo>> =
@@ -861,6 +888,8 @@ mod tests {
             }};
         }
 
+        evicta!(w.capabilities_at(&p).await);
+        evicta!(w.open_root(&p).await);
         evicta!(w.stat(&p).await);
         evicta!(w.stat_with(&p, &norte_vfs::ListOptions::default()).await);
         evicta!(w.list(&p).await);

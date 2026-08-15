@@ -9,6 +9,63 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A recursive copy cannot be redirected out of the folder you pointed it at.**
+  Approve a synchronisation or a copy of a folder, and between saying yes and
+  the bytes landing there was a window: anyone who could drop a symbolic link inside the
+  destination — a shared directory, a network mount, a machine with other
+  people on it — could make a subfolder of it point somewhere else entirely, and
+  norte would follow it and write outside, with the daemon's permissions. It
+  affected copying and creating folders; deleting and renaming already dodged it
+  for reasons of their own.
+  norte now opens the destination **once** and works underneath it by name from
+  there on, so there is no path left to re-resolve between the check and the
+  write — which is the only way to close this rather than narrow it, since any
+  "look before you leap" check has that window by construction. A component that
+  tries to leave the destination fails and is reported as a conflict; the file
+  is not written. Symbolic links **inside** the destination are still followed,
+  because forbidding them would break ordinary trees and buy nothing. This is
+  #164, closed on Linux and macOS for the two operations it was reachable
+  through: copying into a folder, and creating one.
+  **Two edges of it are still open, and are named rather than glossed over.**
+  Copying a *single* file still resolves its destination by path — the honest
+  anchor there is the permission scope rather than a folder, which is a larger
+  change (#219). And when a copy is set to overwrite, the deletion it performs
+  first still goes by path, so under the same attack it can destroy a file
+  outside the folder even though nothing is written there (#218). Neither is new;
+  both used to be the whole picture.
+  **Where it cannot be done, norte says so instead of pretending.** Windows has
+  no equivalent call yet (#217), and a remote destination — SFTP, an object
+  store — resolves names on the far side where norte has no say. Those copy the
+  way they always did, and the confirmation dialog tells you, on one line, above
+  the keys, that this destination cannot confine its writes. It never refuses:
+  refusing would strand every destination that cannot offer the defence, which
+  costs far more than the race it avoids. On the wire the destination's answer is
+  the `confined_writes` capability, per location, which is what ADR 0054 is for.
+
+- **A collision is judged against the volume it will land on, not against
+  whatever the program happened to ask first.** norte asks a filesystem about
+  *the directory in question* rather than about itself, so comparing your home
+  directory against a USB stick no longer answers the home directory's rules
+  for both. Two files called `README` and `readme` on a stick that cannot tell
+  them apart are now reported as the collision they are, and on Linux the
+  directories that fold names the *expanding* way (ext4 and f2fs with
+  case-insensitivity switched on) are recognised too: there `straße.txt` and
+  `strasse.txt` are one file, and the batch rename planner now says so before
+  you approve a plan that would die halfway through (#153, #145, ADR 0054).
+  **Finding this out never writes anything.** norte asks the kernel, and where
+  the kernel has no answer — tmpfs, btrfs, XFS, network shares — it says so and
+  keeps the filesystem's declared behaviour rather than creating a probe file in
+  a directory you only asked it to read about. A read-only mount and someone
+  else's directory get an answer instead of a shrug.
+  On the wire that is protocol 0.45.0: two capability flags (`FULL_FOLD`,
+  `CONFINED_WRITES`), one conflict subtype (`escapes_root`) and one pairing
+  transformation (`full_fold`) — all additive, all of them read by a 0.44 client
+  as "something I do not know" rather than as something wrong. A pairing that
+  only holds because one side expands is reported as its own kind precisely so
+  nothing downstream reads it as "these two names are the same text": on the
+  other volume they are two files, and a synchronisation must not overwrite one
+  with the other.
+
 - **Synchronise two directories, one way, and be told what you cannot take
   back before you say yes:** `Ctrl+y` over the two panes plans a
   synchronisation, and inside the **terminal interface's** diff pane `s`

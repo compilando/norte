@@ -320,6 +320,32 @@ fn capabilities_unknown_flag_names_ignored() {
 }
 
 #[test]
+fn full_fold_round_trips_on_the_wire() {
+    // #145: el plegado de un directorio ext4/f2fs `+F` EXPANDE (ß -> ss), que
+    // es una capability distinta de "no distingue caja".
+    let c = Capabilities {
+        flags: CapabilityFlags::CASE_PRESERVING | CapabilityFlags::FULL_FOLD,
+        max_path: None,
+    };
+    let json = serde_json::to_value(c).expect("serializa");
+    assert_eq!(json["flags"], "CASE_PRESERVING | FULL_FOLD");
+    assert_eq!(roundtrip(&c), c);
+}
+
+#[test]
+fn confined_writes_round_trips_on_the_wire() {
+    // #164: lo responde `capabilities_at`, jamás `capabilities()` — depende
+    // del mount, de la plataforma y del kernel en marcha.
+    let c = Capabilities {
+        flags: CapabilityFlags::CONFINED_WRITES,
+        max_path: None,
+    };
+    let json = serde_json::to_value(c).expect("serializa");
+    assert_eq!(json["flags"], "CONFINED_WRITES");
+    assert_eq!(roundtrip(&c), c);
+}
+
+#[test]
 fn capabilities_hex_bits_rejected() {
     // Bits sin nombre NO viajan: bitflags::parser::from_str los retendría en
     // silencio vía hex; el wire los rechaza siempre.
@@ -494,6 +520,29 @@ fn error_roundtrip_all_variants() {
     for e in errors {
         assert_eq!(roundtrip(&e), e);
     }
+}
+
+#[test]
+fn escapes_root_round_trips_and_a_future_subtype_still_degrades() {
+    // #164: una ruta relativa que se sale de su raíz confinada. NO es
+    // NotFound — un caller que ve NotFound reintenta creando el padre, que es
+    // justo lo que este subtipo existe para impedir.
+    let e = Error::Conflict {
+        conflict: ConflictKind::EscapesRoot,
+    };
+    let json = serde_json::to_value(&e).expect("serializa");
+    assert_eq!(json["conflict"], "escapes_root");
+    assert_eq!(roundtrip(&e), e);
+
+    // Y la política N-1 sigue viva para el subtipo que venga después.
+    let futuro: Error =
+        serde_json::from_str(r#"{"kind": "conflict", "conflict": "subtipo_de_0_99"}"#).unwrap();
+    assert_eq!(
+        futuro,
+        Error::Conflict {
+            conflict: ConflictKind::Unknown
+        }
+    );
 }
 
 #[test]
@@ -1004,10 +1053,16 @@ fn version_ventana_actual() {
     // sin romperse — pero leería «un motivo que no sé nombrar» sobre un `Skip`
     // que sí sabe no ejecutar, y eso es exactamente lo que la ventana N/N-1
     // permite que pase y N-2 no.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.44.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.43.0"), "N-1");
+    //
+    // 0.45.0 (ADR 0054): dos flags de capability y un subtipo de conflicto. Los
+    // tres degradan solos —los nombres desconocidos se ignoran (ADR 0004) y el
+    // subtipo cae en `Unknown` (ADR 0005)—, y aun así la ventana se DESPLAZA:
+    // un cliente 0.43 que no conoce `CONFINED_WRITES` no sabe que una escritura
+    // pudo ir sin confinar, así que no puede avisar de ello.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.45.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.44.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.42.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.43.9"),
         "N-2 fuera de la ventana"
     );
 }

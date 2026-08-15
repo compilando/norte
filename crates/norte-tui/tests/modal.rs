@@ -26,6 +26,7 @@ fn confirm() -> Modal {
         items: vec![vp("file:///a")],
         to: vp("file:///b"),
         space: None,
+        confine: None,
     }
 }
 

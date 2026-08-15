@@ -25,6 +25,267 @@ const MAX_RETRIES: u32 = 3;
 /// Base del backoff exponencial: 100 ms · 2^n, determinista (sin jitter).
 const BACKOFF_BASE_MS: u64 = 100;
 
+/// A DÓNDE escribe una operación, y por qué camino.
+///
+/// La ruta REAL sigue estando siempre (`path`): es la que va al journal, a la
+/// barra de progreso y al texto de los errores, y es la que se lee para
+/// desambiguar un reintento. Lo que cambia es cómo se ESCRIBE:
+///
+/// - sin raíz confinada, contra el provider y por ruta absoluta, que es el
+///   comportamiento de siempre;
+/// - con ella ([`norte_vfs::ConfinedRoot`]), por segmentos relativos, y
+///   entonces un componente intermedio que sea un symlink hacia fuera no puede
+///   desviar la escritura (#164, ADR 0054).
+///
+/// Se construye por DESTINO —no por operación— porque el relativo tiene que
+/// corresponder a la ruta final, y la política de colisiones puede haberla
+/// cambiado de nombre antes de que nadie escriba nada.
+pub(crate) struct Dest<'a> {
+    provider: &'a dyn Provider,
+    path: VPath,
+    /// La raíz y el relativo bajo ella, cuando el destino sabe confinarse.
+    confined: Option<(&'a dyn norte_vfs::ConfinedRoot, Vec<Segment>)>,
+}
+
+impl<'a> Dest<'a> {
+    /// Un destino sin confinar: ruta absoluta contra el provider.
+    pub(crate) fn plain(provider: &'a dyn Provider, path: VPath) -> Self {
+        Self {
+            provider,
+            path,
+            confined: None,
+        }
+    }
+
+    /// Un destino bajo `root`, si la hay. `rel` son los segmentos de `path`
+    /// que cuelgan de la raíz; `None` en `root` deja el destino sin confinar,
+    /// que es lo que le toca a un backend que no sabe hacerlo.
+    pub(crate) fn under(
+        provider: &'a dyn Provider,
+        root: Option<&'a dyn norte_vfs::ConfinedRoot>,
+        rel: Vec<Segment>,
+        path: VPath,
+    ) -> Self {
+        // Un relativo VACÍO es la raíz misma, y ninguna de estas operaciones
+        // actúa sobre ella: sin segmento final no hay nombre que crear, así que
+        // se degrada al camino de siempre en vez de inventarse uno.
+        let confined = root.filter(|_| !rel.is_empty()).map(|r| (r, rel));
+        Self {
+            provider,
+            path,
+            confined,
+        }
+    }
+
+    /// La ruta real. Para journal, progreso, errores y lecturas.
+    pub(crate) fn path(&self) -> &VPath {
+        &self.path
+    }
+
+    /// El provider del destino. Para lo que este handle no cubre —leer,
+    /// desambiguar, `copy_native`—, que no es lo que hay que confinar.
+    pub(crate) fn provider(&self) -> &'a dyn Provider {
+        self.provider
+    }
+
+    async fn mkdir(&self) -> Result<(), Error> {
+        match &self.confined {
+            Some((root, rel)) => root.mkdir(rel).await,
+            None => self.provider.mkdir(&self.path).await,
+        }
+    }
+
+    async fn write(&self) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+        match &self.confined {
+            Some((root, rel)) => root.write(rel).await,
+            None => self.provider.write(&self.path).await,
+        }
+    }
+
+    /// Como [`Provider::open_resumable`]. Un destino confinado NO reanuda: su
+    /// staging es efímero, así que se abre fresco y el caller recopia entero
+    /// —ver [`Dest::resumes`], que es lo que impide que un reintento vaya
+    /// dejando parciales que nadie va a continuar—.
+    async fn open_resumable(&self) -> Result<(Box<dyn norte_vfs::ByteSink>, u64), Error> {
+        match &self.confined {
+            Some((root, rel)) => root.open_resumable(rel).await,
+            None => self.provider.open_resumable(&self.path).await,
+        }
+    }
+
+    /// ¿Puede este destino continuar un parcial suyo?
+    ///
+    /// Solo el camino sin confinar. El confinado abre su staging con un nombre
+    /// efímero por sink, así que conservarlo al cancelar dejaría un
+    /// `.norte-partial` por intento que ningún `open_resumable` posterior va a
+    /// encontrar. Con `false`, el sink ABORTA y el destino queda limpio.
+    pub(crate) fn resumes(&self) -> bool {
+        self.confined.is_none()
+    }
+
+    async fn symlink(&self, target: &[u8], kind: SymlinkKind) -> Result<(), Error> {
+        match &self.confined {
+            Some((root, rel)) => root.symlink(rel, target, kind).await,
+            None => self.provider.symlink(&self.path, target, kind).await,
+        }
+    }
+}
+
+/// El destino de una operación RECURSIVA: su provider, su raíz confinada si la
+/// hay, y la ruta base de la que cuelga todo lo que va a escribir.
+///
+/// Va junto porque los tres se necesitan juntos en cada paso, y porque así la
+/// raíz se abre UNA vez por operación en vez de una por hoja (#164).
+pub(crate) struct Destination<'a> {
+    provider: &'a dyn Provider,
+    root: Option<&'a dyn norte_vfs::ConfinedRoot>,
+    base: &'a VPath,
+}
+
+impl<'a> Destination<'a> {
+    /// Con la raíz que [`open_dest_root`] haya podido abrir.
+    pub(crate) fn new(
+        provider: &'a dyn Provider,
+        root: Option<&'a dyn norte_vfs::ConfinedRoot>,
+        base: &'a VPath,
+    ) -> Self {
+        Self {
+            provider,
+            root,
+            base,
+        }
+    }
+
+    /// Sin raíz: una hoja suelta no cuelga de ningún árbol aprobado, así que no
+    /// hay raíz que abrir y cada ruta va tal cual.
+    pub(crate) fn unconfined(provider: &'a dyn Provider, base: &'a VPath) -> Self {
+        Self::new(provider, None, base)
+    }
+
+    /// El provider, para lo que no se confina (leer, desambiguar, colisiones).
+    pub(crate) fn provider(&self) -> &'a dyn Provider {
+        self.provider
+    }
+
+    /// El destino de UNA ruta bajo esta base, confinado si cae dentro de ella.
+    pub(crate) fn at(&self, path: VPath) -> Dest<'a> {
+        match self.root.zip(rel_under(self.base, &path)) {
+            Some((root, rel)) => Dest::under(self.provider, Some(root), rel, path),
+            None => Dest::plain(self.provider, path),
+        }
+    }
+}
+
+/// ¿La raíz que se abrió es el nodo que hay en `path` AHORA MISMO?
+///
+/// El confinamiento ancla en un descriptor, pero el descriptor se consigue
+/// abriendo una ruta, y esa apertura resuelve symlinks como cualquier otra —a
+/// propósito: un `~/copias -> /mnt/disco/copias` es un destino legítimo—. Entre
+/// crear el directorio y abrirlo cabe un cambiazo (`rmdir` + symlink), y
+/// entonces todo lo que venga después va perfectamente confinado AL ÁRBOL
+/// EQUIVOCADO, sin que nada chirríe: lo encontró la revisión de seguridad de
+/// esta fase.
+///
+/// Lo que lo cierra es comparar identidades: el `stat` es un `lstat`, así que
+/// un `path` sustituido por un symlink sale con la identidad del ENLACE y no
+/// con la del directorio abierto, y no casan. Restaurar el directorio de verdad
+/// tampoco cuela: sería otro inodo.
+///
+/// Un backend sin identidad estable (`Ok(None)` en cualquiera de los dos lados)
+/// no tiene nada que comparar y pasa: es la misma degradación honesta de
+/// siempre, y `node_id` ya la documenta.
+async fn same_root_or_fail(
+    dst: &dyn Provider,
+    root: &dyn norte_vfs::ConfinedRoot,
+    path: &VPath,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    let abierta = root.root_id().await?;
+    let en_ruta = with_retry(cancel, || dst.node_id(path, FollowLinks::No).boxed()).await?;
+    let (Some(abierta), Some(en_ruta)) = (abierta, en_ruta) else {
+        return Ok(());
+    };
+    if abierta == en_ruta {
+        return Ok(());
+    }
+    tracing::error!(
+        dest = %crate::engine::span_path(path),
+        "la raíz de destino cambió entre crearla y abrirla: se para en vez de escribir \
+         confinadamente en otro árbol (#164)"
+    );
+    Err(Error::Conflict {
+        conflict: ConflictKind::EscapesRoot,
+    })
+}
+
+/// Los segmentos de `path` que cuelgan de `root`, o `None` si `path` no está
+/// bajo `root` — en cuyo caso no hay relativo que dar y quien pregunta se
+/// queda sin confinar, que es lo honesto.
+pub(crate) fn rel_under(root: &VPath, path: &VPath) -> Option<Vec<Segment>> {
+    if path.scheme() != root.scheme() || path.authority() != root.authority() {
+        return None;
+    }
+    let prefix: Vec<&[u8]> = root.segments().collect();
+    let full: Vec<&[u8]> = path.segments().collect();
+    if full.len() < prefix.len() || full[..prefix.len()] != prefix[..] {
+        return None;
+    }
+    full[prefix.len()..]
+        .iter()
+        .map(|s| Segment::new(s.to_vec()).ok())
+        .collect()
+}
+
+/// Abre la raíz confinada de `root`, o dice por qué no la hay.
+///
+/// **Un destino que no sabe confinarse no se rechaza: se avisa y se sigue.**
+/// Lo contrario dejaría sin copiar hacia un SFTP, un bucket o un Windows por
+/// una defensa que esos destinos no pueden dar, y el agujero que cierra
+/// necesita que alguien plante un symlink en el momento justo. El aviso va UNA
+/// vez por operación, no una por paso.
+pub(crate) async fn open_dest_root(
+    dst: &dyn Provider,
+    root: &VPath,
+    task_id: u64,
+) -> Result<Option<Box<dyn norte_vfs::ConfinedRoot>>, Error> {
+    match dst.open_root(root).await {
+        Ok(r) => Ok(Some(r)),
+        // «No sé confinar»: el único caso en el que se degrada, y es el que el
+        // ADR 0054 razona. El backend no puede, y no copiar hacia él por eso
+        // sería peor.
+        Err(Error::Unsupported) => {
+            tracing::warn!(
+                task_id,
+                dest = %crate::engine::span_path(root),
+                "el destino no sabe confinar sus escrituras: un symlink intermedio podría \
+                 desviar esta operación fuera de su raíz (#164)"
+            );
+            Ok(None)
+        }
+        // **Cualquier otro fallo PARA la operación, y esto es un cambio de la
+        // revisión de seguridad de esta fase.** Degradar aquí era el
+        // comportamiento de antes, sí, pero antes no había ninguna promesa que
+        // romper: hoy `capabilities_at` ya le dijo al humano que este destino
+        // confina —el diálogo se lo dijo CALLANDO— y seguir por ruta sin
+        // decírselo convierte «haz fallar el `open` una vez» en la llave que
+        // reabre #164 para toda la operación. Un `ENOTDIR` de un cambiazo
+        // momentáneo, un `EMFILE`, un `EACCES` transitorio: todos valían.
+        //
+        // El destino que NO puede confinar ya está cubierto por el brazo de
+        // arriba, así que aquí solo cae quien dijo que podía y falló.
+        Err(e) => {
+            tracing::error!(
+                task_id,
+                dest = %crate::engine::span_path(root),
+                error = %e,
+                "no se pudo abrir la raíz de destino confinada y el destino declaró que sabía: \
+                 se para en vez de escribir por ruta sin decirlo (#164)"
+            );
+            Err(e)
+        }
+    }
+}
+
 /// ¿Merece reintento? Solo lo explícitamente transitorio; el resto de
 /// errores JAMÁS se reintenta (repetir un `Conflict` no lo arregla).
 fn is_transient(e: &Error) -> bool {
@@ -237,18 +498,31 @@ pub(crate) async fn trash_retrying_amb(
 /// Un `Conflict` SIN transitorio previo sí es colisión real (carrera
 /// externa): se propaga sin listar y la política del caller decide.
 pub(crate) async fn mkdir_retrying(
-    p: &dyn Provider,
-    path: &VPath,
+    dest: &Dest<'_>,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
     let mut attempt = 0u32;
     let mut ambiguous = false;
+    let (p, path) = (dest.provider(), dest.path());
     loop {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        match p.mkdir(path).await {
+        match dest.mkdir().await {
+            // Un escape es un VEREDICTO, no un «quizá se aplicó». Tiene que
+            // salir antes que la desambiguación: esa lee por RUTA, siguiendo el
+            // mismo componente hostil que acaba de producirlo, y un directorio
+            // vacío al otro lado se leería como «lo creamos nosotros» — con su
+            // `Created` en el journal y un undo que va a la papelera con algo
+            // de fuera del árbol.
+            Err(
+                e @ Error::Conflict {
+                    conflict: ConflictKind::EscapesRoot,
+                },
+            ) => return Err(e),
             Err(e @ Error::Conflict { .. }) if ambiguous => {
+                // La desambiguación LEE, y leer no es por lo que este destino
+                // se confina: el `list` va por ruta, como siempre.
                 let mut stream = with_retry(cancel, || p.list(path).boxed()).await?;
                 return match stream.next().await {
                     None => Ok(()),
@@ -280,22 +554,30 @@ pub(crate) async fn mkdir_retrying(
 /// y otro kind pasaría por nuestro (requiere transitorio + preexistencia
 /// exacta; el target manda, jamás hay pérdida).
 pub(crate) async fn symlink_retrying(
-    dst: &dyn Provider,
-    link: &VPath,
+    dest: &Dest<'_>,
     target: &[u8],
     kind: SymlinkKind,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
     let mut attempt = 0u32;
     let mut ambiguous = false;
+    let (backend, link) = (dest.provider(), dest.path());
     loop {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        match dst.symlink(link, target, kind).await {
+        match dest.symlink(target, kind).await {
             Ok(()) => return Ok(()),
+            // Terminal, por lo mismo que en `mkdir_retrying`: el `read_link` de
+            // la desambiguación va por ruta y podría contestar que el enlace
+            // «ya es nuestro» leyendo uno que está fuera de la raíz.
+            Err(
+                e @ Error::Conflict {
+                    conflict: ConflictKind::EscapesRoot,
+                },
+            ) => return Err(e),
             Err(e @ Error::Conflict { .. }) if ambiguous => {
-                return match with_retry(cancel, || dst.read_link(link).boxed()).await {
+                return match with_retry(cancel, || backend.read_link(link).boxed()).await {
                     Ok(bytes) if bytes == target => Ok(()),
                     Err(Error::Cancelled) => Err(Error::Cancelled),
                     _ => Err(e),
@@ -610,13 +892,13 @@ async fn overwrite_existing(
 /// un dir preexistente bajo merge es neutro o mejor (el stat sustituye al
 /// mkdir fallido + stat del camino viejo).
 async fn ensure_dir(
-    dst: &dyn Provider,
-    to: &VPath,
+    dest: &Dest<'_>,
     opts: TransferOptions,
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
-    let pre = match with_retry(&ctx.cancel, || dst.stat(to).boxed()).await {
+    let (backend, to) = (dest.provider(), dest.path());
+    let pre = match with_retry(&ctx.cancel, || backend.stat(to).boxed()).await {
         Ok(e) => Some(e),
         Err(Error::NotFound) => None,
         Err(e) => return Err(e),
@@ -635,18 +917,26 @@ async fn ensure_dir(
             })
         };
     }
-    match mkdir_retrying(dst, to, &ctx.cancel).await {
+    match mkdir_retrying(dest, &ctx.cancel).await {
         Ok(()) => {
             observer
                 .on_mutation(&Mutation::Created(to), &ctx.actor)
                 .await?;
             Ok(())
         }
+        // Un escape NO es una colisión que fusionar: el `stat` de abajo va por
+        // ruta y encontraría el directorio de FUERA, con lo que la fusión
+        // seguiría adelante sobre un sitio que la raíz no cubre.
+        Err(
+            e @ Error::Conflict {
+                conflict: ConflictKind::EscapesRoot,
+            },
+        ) => Err(e),
         // Conflict SIN ambigüedad: un tercero creó el dir entre nuestro
         // pre-stat y el mkdir (carrera externa). Merge lo absorbe SIN
         // Created (no es nuestro); Fail/Ask fallan en seguro.
         Err(Error::Conflict { .. }) if merge_allowed(opts.on_collision) => {
-            let existing = with_retry(&ctx.cancel, || dst.stat(to).boxed()).await?;
+            let existing = with_retry(&ctx.cancel, || backend.stat(to).boxed()).await?;
             if existing.kind == EntryKind::Dir {
                 Ok(())
             } else {
@@ -664,35 +954,29 @@ async fn ensure_dir(
 /// el resume por offset llega en M2).
 async fn copy_file_leaf(
     src: &dyn Provider,
-    dst: &dyn Provider,
+    into: &Destination<'_>,
     entry: &Entry,
     to: &VPath,
     opts: TransferOptions,
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<Placed, Error> {
-    let Some(target) = resolve_collision(dst, to, entry, opts.on_collision, observer, ctx).await?
+    let Some(target) =
+        resolve_collision(into.provider(), to, entry, opts.on_collision, observer, ctx).await?
     else {
         return Ok(Placed::Skipped);
     };
-    copy_file_retrying(
-        src,
-        dst,
-        &entry.path,
-        &target,
-        entry.size,
-        opts,
-        observer,
-        ctx,
-    )
-    .await?;
+    // DESPUÉS de la colisión: la política pudo cambiarle el nombre, y el
+    // relativo tiene que ser el de la ruta sobre la que se escribe de verdad.
+    let dest = into.at(target);
+    copy_file_retrying(src, &dest, &entry.path, entry.size, opts, observer, ctx).await?;
     Ok(Placed::Done)
 }
 
 /// Copia una hoja SYMLINK según la política (ADR 0005).
 async fn copy_symlink_leaf(
     src: &dyn Provider,
-    dst: &dyn Provider,
+    into: &Destination<'_>,
     entry: &Entry,
     to: &VPath,
     opts: TransferOptions,
@@ -705,20 +989,15 @@ async fn copy_symlink_leaf(
             let target_bytes =
                 with_retry(&ctx.cancel, || src.read_link(&entry.path).boxed()).await?;
             let Some(target) =
-                resolve_collision(dst, to, entry, opts.on_collision, observer, ctx).await?
+                resolve_collision(into.provider(), to, entry, opts.on_collision, observer, ctx)
+                    .await?
             else {
                 return Ok(Placed::Skipped);
             };
             // `Unknown` (issue #18): el kind lo resuelve el provider DESTINO
             // best-effort contra su propio árbol; unix lo ignora gratis.
-            symlink_retrying(
-                dst,
-                &target,
-                &target_bytes,
-                SymlinkKind::Unknown,
-                &ctx.cancel,
-            )
-            .await?;
+            let dest = into.at(target.clone());
+            symlink_retrying(&dest, &target_bytes, SymlinkKind::Unknown, &ctx.cancel).await?;
             observer
                 .on_mutation(&Mutation::Created(&target), &ctx.actor)
                 .await?;
@@ -738,15 +1017,15 @@ async fn copy_symlink_leaf(
                 Err(e) => return Err(e),
             }
             let Some(target) =
-                resolve_collision(dst, to, entry, opts.on_collision, observer, ctx).await?
+                resolve_collision(into.provider(), to, entry, opts.on_collision, observer, ctx)
+                    .await?
             else {
                 return Ok(Placed::Skipped);
             };
             // Tamaño desconocido (el stat describe el LINK, no el destino).
             // El target pudo cambiar tras el sondeo: se re-mapea igual.
-            match copy_file_retrying(src, dst, &entry.path, &target, None, opts, observer, ctx)
-                .await
-            {
+            let dest = into.at(target);
+            match copy_file_retrying(src, &dest, &entry.path, None, opts, observer, ctx).await {
                 Ok(()) => Ok(Placed::Done),
                 Err(Error::Conflict {
                     conflict: ConflictKind::TypeMismatch,
@@ -797,7 +1076,16 @@ pub(crate) async fn copy_task(
                 p.entries_total = Some(1);
                 p.current = Some(from.clone());
             });
-            copy_file_leaf(&*src, &*dst, &src_entry, &to, opts, &observer, ctx).await?;
+            copy_file_leaf(
+                &*src,
+                &Destination::unconfined(&*dst, &to),
+                &src_entry,
+                &to,
+                opts,
+                &observer,
+                ctx,
+            )
+            .await?;
             ctx.progress.update(|p| p.entries_done = 1);
             Ok(())
         }
@@ -817,7 +1105,16 @@ pub(crate) async fn copy_task(
                 p.entries_total = Some(1);
                 p.current = Some(from.clone());
             });
-            copy_symlink_leaf(&*src, &*dst, &src_entry, &to, opts, &observer, ctx).await?;
+            copy_symlink_leaf(
+                &*src,
+                &Destination::unconfined(&*dst, &to),
+                &src_entry,
+                &to,
+                opts,
+                &observer,
+                ctx,
+            )
+            .await?;
             ctx.progress.update(|p| p.entries_done = 1);
             Ok(())
         }
@@ -896,11 +1193,24 @@ async fn copy_tree(
         p.entries_total = Some(total);
     });
 
-    ensure_dir(&**dst, to, opts, observer, ctx).await?;
+    // La raíz del árbol se crea por RUTA: su padre no es un sitio del que este
+    // destino tenga raíz, y crearla es justo lo que da la raíz que confina todo
+    // lo demás.
+    ensure_dir(&Dest::plain(&**dst, to.clone()), opts, observer, ctx).await?;
     ctx.progress.update(|p| {
         p.entries_done += 1;
         p.current = Some(to.clone());
     });
+    // Y a partir de aquí, TODO cuelga de ella: se abre una vez por operación
+    // (#164) y cada paso direcciona su relativo. Un destino que no sabe
+    // confinarse lo dice en el log y sigue por el camino de siempre; uno que
+    // dijo saber y no pudo PARA la copia (ver `open_dest_root`).
+    let root = open_dest_root(&**dst, to, ctx.progress.snapshot().task_id.get()).await?;
+    // Y que la raíz abierta sea la que se acaba de crear, no otra.
+    if let Some(root) = root.as_deref() {
+        same_root_or_fail(&**dst, root, to, &ctx.cancel).await?;
+    }
+    let into = Destination::new(&**dst, root.as_deref(), to);
 
     let mut skipped: Vec<VPath> = Vec::new();
     for pe in plan {
@@ -913,10 +1223,10 @@ async fn copy_tree(
             .update(|p| p.current = Some(entry.path.clone()));
         match entry.kind {
             EntryKind::Dir => {
-                ensure_dir(&**dst, &target, opts, observer, ctx).await?;
+                ensure_dir(&into.at(target), opts, observer, ctx).await?;
             }
             EntryKind::File => {
-                if copy_file_leaf(&**src, &**dst, entry, &target, opts, observer, ctx).await?
+                if copy_file_leaf(&**src, &into, entry, &target, opts, observer, ctx).await?
                     == Placed::Skipped
                 {
                     // La barra debe poder llegar a 100%: lo saltado no cuenta.
@@ -929,7 +1239,7 @@ async fn copy_tree(
                 }
             }
             EntryKind::Symlink => {
-                if copy_symlink_leaf(&**src, &**dst, entry, &target, opts, observer, ctx).await?
+                if copy_symlink_leaf(&**src, &into, entry, &target, opts, observer, ctx).await?
                     == Placed::Skipped
                 {
                     skipped.push(entry.path.clone());
@@ -951,9 +1261,8 @@ async fn copy_tree(
 #[allow(clippy::too_many_arguments)] // función interna del módulo, no API
 pub(crate) async fn copy_file_retrying(
     src: &dyn Provider,
-    dst: &dyn Provider,
+    dest: &Dest<'_>,
     from: &VPath,
-    to: &VPath,
     known_size: Option<u64>,
     opts: TransferOptions,
     observer: &Arc<dyn MutationObserver>,
@@ -962,7 +1271,7 @@ pub(crate) async fn copy_file_retrying(
     let base = ctx.progress.snapshot().bytes_done;
     let mut attempt = 0u32;
     loop {
-        match copy_file(src, dst, from, to, known_size, base, opts, observer, ctx).await {
+        match copy_file(src, dest, from, known_size, base, opts, observer, ctx).await {
             Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !ctx.cancel.is_cancelled() => {
                 // Base del archivo: `copy_file` recompone `base + already`
                 // (con resume, `already` crece; sin resume, vuelve a 0).
@@ -1034,9 +1343,8 @@ async fn hash_source_prefix(
 #[allow(clippy::too_many_arguments)]
 async fn should_discard_partial(
     src: &dyn Provider,
-    dst: &dyn Provider,
+    dest: &Dest<'_>,
     from: &VPath,
-    to: &VPath,
     already: u64,
     known_size: Option<u64>,
     verify: VerifyPolicy,
@@ -1052,7 +1360,7 @@ async fn should_discard_partial(
     }
     // Hash: sin digest del staging el provider no permite verificar → degrada
     // a Length (el check de tamaño de arriba ya se aplicó).
-    let Some(partial_dig) = dst.partial_digest(to, already).await? else {
+    let Some(partial_dig) = dest.provider().partial_digest(dest.path(), already).await? else {
         return Ok(false);
     };
     // `None` = origen más corto que el parcial → descartar. Un error REAL se
@@ -1073,18 +1381,18 @@ async fn should_discard_partial(
 #[allow(clippy::too_many_arguments)] // función interna del módulo, no API
 async fn copy_file(
     src: &dyn Provider,
-    dst: &dyn Provider,
+    dest: &Dest<'_>,
     from: &VPath,
-    to: &VPath,
     known_size: Option<u64>,
     base: u64,
     opts: TransferOptions,
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
+    let (backend, to) = (dest.provider(), dest.path());
     if std::ptr::eq(
         std::ptr::from_ref(src).cast::<()>(),
-        std::ptr::from_ref(dst).cast::<()>(),
+        std::ptr::from_ref(backend).cast::<()>(),
     ) && src
         .capabilities()
         .flags
@@ -1128,10 +1436,12 @@ async fn copy_file(
     // default seguro `(write, 0)` degrada limpio en un provider sin
     // reanudación real; no se gatea por capability (S3 reanuda por
     // multipart, no por APPEND — M1 del rust-reviewer).
-    let resume = opts.resume == norte_proto::ResumePolicy::On;
+    // Un destino confinado NO reanuda (`Dest::resumes`): conservar su staging
+    // efímero dejaría un `.norte-partial` por intento que nadie continúa.
+    let resume = opts.resume == norte_proto::ResumePolicy::On && dest.resumes();
     // Abre el sink: reanudable (con offset ya durable) o fresco.
     let (mut sink, already) = if resume {
-        let (sink, already) = dst.open_resumable(to).await?;
+        let (sink, already) = dest.open_resumable().await?;
         // ¿Descartar el parcial y empezar de cero? El origen pudo cambiar
         // bajo los pies entre invocaciones (ADR 0012, #35):
         //   - Length: un parcial más largo que el origen no cuadra.
@@ -1139,13 +1449,12 @@ async fn copy_file(
         //     del parcial. Si el provider no expone digest del staging,
         //     DEGRADA a Length (documentado en el trait).
         let discard =
-            should_discard_partial(src, dst, from, to, already, known_size, opts.verify, ctx)
-                .await?;
+            should_discard_partial(src, dest, from, already, known_size, opts.verify, ctx).await?;
         if discard {
             // Propagar el fallo de abort (M2 del rust-reviewer): tragarlo y
             // seguir dejaría bytes obsoletos y el destino saldría corrupto.
             sink.abort().await?;
-            let (fresh, fresh_already) = dst.open_resumable(to).await?;
+            let (fresh, fresh_already) = dest.open_resumable().await?;
             if fresh_already != 0 {
                 // El staging sigue ahí tras el abort: no se puede reanudar
                 // limpio — fallar en vez de publicar algo dudoso.
@@ -1156,7 +1465,7 @@ async fn copy_file(
             (sink, already)
         }
     } else {
-        (dst.write(to).await?, 0)
+        (dest.write().await?, 0)
     };
 
     // El tramo ya presente cuenta como hecho de inmediato (la barra no
@@ -1224,7 +1533,7 @@ async fn copy_file(
         // episodio transitorio que también agote el `stat`, no confirman y
         // recaen en el camino de fallo.
         Err(e) if is_transient(&e) => {
-            match with_retry(&ctx.cancel, || dst.stat(to).boxed()).await {
+            match with_retry(&ctx.cancel, || backend.stat(to).boxed()).await {
                 // Aplicó: `to` existe con el tamaño esperado → cae al Created.
                 Ok(entry) if entry.size == Some(final_size) => {}
                 // Cancelado durante la comprobación: propaga cancelación.
@@ -1492,10 +1801,11 @@ async fn move_by_copy(
                 p.entries_total = Some(2);
                 p.current = Some(from.clone());
             });
+            let into = Destination::unconfined(&*dst, &to);
             let placed = if src_entry.kind == EntryKind::File {
-                copy_file_leaf(&*src, &*dst, &src_entry, &to, opts, &observer, ctx).await?
+                copy_file_leaf(&*src, &into, &src_entry, &to, opts, &observer, ctx).await?
             } else {
-                copy_symlink_leaf(&*src, &*dst, &src_entry, &to, opts, &observer, ctx).await?
+                copy_symlink_leaf(&*src, &into, &src_entry, &to, opts, &observer, ctx).await?
             };
             ctx.progress.update(|p| p.entries_done = 1);
             if placed == Placed::Skipped {
@@ -1711,7 +2021,7 @@ pub(crate) async fn mkdir_task(
         Err(Error::NotFound) => {}
         Err(e) => return Err(e),
     }
-    mkdir_retrying(&*provider, &path, &ctx.cancel).await?;
+    mkdir_retrying(&Dest::plain(&*provider, path.clone()), &ctx.cancel).await?;
     observer
         .on_mutation(&Mutation::Created(&path), &ctx.actor)
         .await?;
@@ -2038,7 +2348,7 @@ mod tests {
         // Primer intento: transitorio SIN aplicar → ambiguous.
         mem.faults().unavailable_for_next(1);
         let cancel = CancellationToken::new();
-        let r = super::mkdir_retrying(&mem, &dir, &cancel).await;
+        let r = super::mkdir_retrying(&super::Dest::plain(&mem, dir.clone()), &cancel).await;
         assert!(
             matches!(r, Err(Error::Conflict { .. })),
             "un dir con contenido es de un tercero, jamás nuestro: {r:?}"
@@ -2049,7 +2359,7 @@ mod tests {
         let vacio = VPath::parse("mem:///vacio").expect("wire");
         mem.mkdir(&vacio).await.expect("mkdir ajeno vacío");
         mem.faults().unavailable_for_next(1);
-        let r = super::mkdir_retrying(&mem, &vacio, &cancel).await;
+        let r = super::mkdir_retrying(&super::Dest::plain(&mem, vacio.clone()), &cancel).await;
         assert!(r.is_ok(), "{r:?}");
     }
 
@@ -2239,8 +2549,13 @@ mod tests {
             .await
             .expect("symlink previo");
         mem.faults().unavailable_for_next(1);
-        let res =
-            super::symlink_retrying(&mem, &ajeno, b"nuestro", SymlinkKind::File, &cancel).await;
+        let res = super::symlink_retrying(
+            &super::Dest::plain(&mem, ajeno.clone()),
+            b"nuestro",
+            SymlinkKind::File,
+            &cancel,
+        )
+        .await;
         assert!(
             matches!(res, Err(Error::Conflict { .. })),
             "un link ajeno jamás se adopta: {res:?}"
@@ -2254,9 +2569,14 @@ mod tests {
         // Positiva con bytes CRUDOS no-UTF8 (regla 1: comparación por bytes).
         let crudo = root.join(seg(b"crudo"));
         mem.faults().ambiguous_mutations(1);
-        super::symlink_retrying(&mem, &crudo, b"caf\xE9", SymlinkKind::File, &cancel)
-            .await
-            .expect("efecto aplicado + verificado por bytes = ok");
+        super::symlink_retrying(
+            &super::Dest::plain(&mem, crudo.clone()),
+            b"caf\xE9",
+            SymlinkKind::File,
+            &cancel,
+        )
+        .await
+        .expect("efecto aplicado + verificado por bytes = ok");
         assert_eq!(mem.read_link(&crudo).await.expect("existe"), b"caf\xE9");
         // El stream de list sigue vivo tras todo esto (sanidad).
         drop(mem.list(&root).await.expect("list ok").next().await);
