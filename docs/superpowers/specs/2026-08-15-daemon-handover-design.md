@@ -48,14 +48,16 @@ stops accepting:
 | field | meaning |
 | --- | --- |
 | `reconnect` | `true` = come back; a replacement is expected. `false` = this daemon is stopping and staying stopped. |
-| `grace_ms` | how long the daemon will wait for live tasks before exiting, so a client can show something honest instead of a spinner with no end |
 
-`grace_ms` is the daemon's, not the caller's: it comes from `DaemonConfig`
-alongside `idle_timeout`, and is reported in the notification rather than
-accepted in the request. A client that could name its own grace period could
-name a very long one, and a shutdown is an act of governance over a process the
-caller does not own. Its default is the same order as the idle timeout —
-minutes, not seconds — because the thing it waits for is a file copy.
+**This carried a `grace_ms` in the first draft, and writing the plan removed
+it.** The idea was that the daemon would wait for live tasks and refuse if the
+wait ran out. It cannot: the `daemon.shutdown` reply goes out immediately, so a
+refusal decided minutes later has nobody to tell, and by then the listener has
+already stopped — "refusing" would mean resuming acceptance, a state machine
+nobody asked for.
+
+So the refusal moved to the front, where there is still someone to answer: see
+*Sequencing* below. With no wait to describe, the field describes nothing.
 
 `reconnect: false` is not decoration. Sending it on an ordinary shutdown is what
 lets a frontend say "the daemon was stopped" instead of "connection lost", which
@@ -97,14 +99,21 @@ that licence into next week's connection attempt.
    connections cannot shut the daemon down and cannot hand it over either —
    same rule, same reason (it is an act of human governance, like
    `policy.grant_scope`).
-2. The daemon broadcasts `going_away { reconnect: true, grace_ms }`.
+2. The daemon broadcasts `going_away { reconnect: true }`.
 3. It stops accepting. The `shutdown` token already does this first; the code is
    there.
-4. It waits for live tasks up to `grace_ms`. **Waiting, not cancelling**, and
-   this is the whole reason `graceful` and `mode` are separate axes: a copy
-   killed mid-tree is precisely the mess the journal then has to clean up.
-5. It exits. The socket is released.
-6. Clients reconnect, spawning the replacement if it is not up yet.
+4. It exits. The socket is released.
+5. Clients reconnect, spawning the replacement if it is not up yet.
+
+Step 1 is where a handover can fail, and the only place it can: **if any task is
+live, the call is refused and nothing happens** — no notification, no stop, no
+exit, and the daemon keeps accepting. The reply names the count, so the caller
+(a human, a package manager script) can wait and retry.
+
+That is the whole reason `graceful` and `mode` are separate axes. A copy killed
+mid-tree is precisely the mess the journal then has to clean up, so a handover
+never kills one; a caller who genuinely wants them cancelled already has
+`graceful: false`, and no second door is opened to the same room.
 
 **What does not survive, stated rather than discovered:**
 
@@ -117,13 +126,10 @@ that licence into next week's connection attempt.
   with the daemon that asked. The operation behind it does not proceed.
 - **Task progress subscriptions.** Restored by the existing `task.list` resync,
   which is what it was built for.
-- **Live tasks.** They are waited for, so they finish before the exit. What the
-  grace period cannot cover — a copy of a terabyte — is reported to the caller
-  as "still running" instead of being killed, and the handover is refused.
-
-That last point is a decision: **a handover that cannot drain does not
-happen.** The alternative is a `--force` that cancels, and it already exists
-under a different name (`graceful: false`). No new door to the same room.
+- **Live tasks.** There are none, because a handover with one does not start.
+  What a package manager pays for that is a retry loop while a large copy
+  finishes — which is correct, and better than guessing how long a terabyte
+  takes.
 
 ## Protocol impact
 
@@ -150,8 +156,8 @@ directions is that the handover degrades to a stop, which is where we are now.
   and both clients come back with their tasks resynced. This is the test the
   whole item exists for, and it is the one that must not be simulated with a
   mock — two real connections, a real socket, a real replacement process.
-- A handover with a live task waits for it, and reports rather than killing it
-  when the grace period runs out.
+- A handover with a live task is refused in the reply, and nothing moves: the
+  daemon still accepts and the task still runs.
 - An agent connection is refused `mode: "handover"` with `INVALID_REQUEST`, like
   every other act of human governance.
 
