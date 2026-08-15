@@ -69,6 +69,16 @@ impl LocalProvider {
         }
     }
 
+    /// Fuerza el paseo componente a componente aunque el kernel tenga
+    /// `openat2`, mientras el guard viva (costura de test): es la única forma
+    /// de ejercitar las dos ramas del confinamiento en una misma máquina.
+    #[cfg(target_os = "linux")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn force_component_walk_for_test() -> crate::confined::ForceComponentWalk {
+        crate::confined::ForceComponentWalk::new()
+    }
+
     /// Cuántas veces se ha SONDEADO de verdad una ubicación (costura de test:
     /// lo que la caché ahorra no se ve de ninguna otra forma).
     #[doc(hidden)]
@@ -361,7 +371,7 @@ fn spawn_guarded_producer<T: Send + 'static>(
 
 /// Ejecuta I/O bloqueante; un panic dentro se supervisa y NO tumba el proceso
 /// (política de panics de la spec §17.7).
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, Error> + Send + 'static,
 ) -> Result<T, Error> {
     tokio::task::spawn_blocking(f)
@@ -966,6 +976,10 @@ impl Provider for LocalProvider {
             if let Some(full) = found.full_fold {
                 caps.flags.set(CapabilityFlags::FULL_FOLD, full);
             }
+            // Confinar es de la UBICACIÓN y del kernel que corre, jamás del
+            // backend (ADR 0054): en unix hay `openat` —con `openat2` o con el
+            // paseo, los dos garantizan lo mismo—, y en Windows todavía no.
+            caps.flags.set(CapabilityFlags::CONFINED_WRITES, cfg!(unix));
 
             let mut guard = cache.lock().expect("caps_at lock sano");
             guard.probes += 1;
@@ -973,6 +987,21 @@ impl Provider for LocalProvider {
                 guard.insert(k, caps);
             }
             Ok(caps)
+        })
+        .await
+    }
+
+    #[cfg(unix)]
+    async fn open_root(&self, root: &VPath) -> Result<Box<dyn norte_vfs::ConfinedRoot>, Error> {
+        self.ensure_caps().await;
+        let native = self.native(root)?;
+        let vpath = root.clone();
+        blocking(move || {
+            let abierta = crate::confined::LocalRoot::open(&native)?;
+            Ok(
+                Box::new(crate::confined::LocalConfinedRoot::new(abierta, vpath))
+                    as Box<dyn norte_vfs::ConfinedRoot>,
+            )
         })
         .await
     }

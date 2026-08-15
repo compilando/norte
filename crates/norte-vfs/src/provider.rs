@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use norte_proto::{AttrInfo, ByteRange, Capabilities, Entry, Error, VPath};
+use norte_proto::{AttrInfo, ByteRange, Capabilities, Entry, Error, Segment, VPath};
 
 use crate::options::ListOptions;
 use crate::sink::ByteSink;
@@ -117,6 +117,30 @@ pub trait Provider: Send + Sync {
     async fn capabilities_at(&self, p: &VPath) -> Result<Capabilities, Error> {
         let _ = p;
         Ok(self.capabilities())
+    }
+
+    /// Abre `root` como RAÍZ CONFINADA: todo lo que se haga con el handle
+    /// direcciona segmentos RELATIVOS a ella y no puede salirse, sea cual sea
+    /// la forma del árbol por debajo — un componente INTERMEDIO que sea un
+    /// symlink hacia fuera falla en vez de redirigir la escritura (#164).
+    ///
+    /// No es una comprobación antes de abrir: no hay ninguna ruta que
+    /// recomponer, que es lo que lo hace libre de la ventana TOCTOU que una
+    /// comprobación del lado del caller tiene por construcción.
+    ///
+    /// Lo que se prohíbe es SALIRSE, no «que haya symlinks»: uno que apunte a
+    /// otro sitio dentro de la raíz se sigue, porque prohibirlo rompería
+    /// árboles legítimos sin ganar seguridad ninguna.
+    ///
+    /// [`Error::Unsupported`] (default) = este backend no sabe confinar. El
+    /// caller DEGRADA —no rechaza— y lo dice; ver
+    /// [`norte_proto::CapabilityFlags::CONFINED_WRITES`], que lo anuncia por
+    /// ubicación (ADR 0054).
+    ///
+    /// Errores: los de abrir `root` ([`Error::NotFound`] si no está).
+    async fn open_root(&self, root: &VPath) -> Result<Box<dyn ConfinedRoot>, Error> {
+        let _ = root;
+        Err(Error::Unsupported)
     }
 
     /// Metadatos de un nodo. Symlinks: describe el LINK (kind `Symlink`),
@@ -471,4 +495,42 @@ pub struct NodeId {
     /// Índice del nodo dentro del volumen (`ino`; 128 bits cubren el
     /// `FileId` de `ReFS`).
     pub index: u128,
+}
+
+/// Operaciones bajo una raíz de las que no se puede salir (#164, ADR 0054).
+///
+/// Se obtiene de [`Provider::open_root`]. `rel` es SIEMPRE relativo a esa raíz
+/// y jamás se compone con ella: quien resuelve es el backend, sosteniendo la
+/// raíz abierta, y por eso entre dos operaciones nadie puede sustituir un
+/// componente por un symlink que mande la siguiente a otro sitio.
+///
+/// Un `rel` que se saldría responde [`Error::Conflict`] con
+/// [`norte_proto::ConflictKind::EscapesRoot`] — jamás [`Error::NotFound`], que
+/// un caller contesta creando el padre, o sea haciendo exactamente lo que este
+/// trait existe para impedir.
+///
+/// La superficie es corta a propósito: `Copy` y `CreateDir` son las dos
+/// operaciones por las que el agujero era alcanzable. Las destructivas lo
+/// esquivan por razones que están escritas (`DeleteTree` no desciende
+/// symlinks; la revalidación es un `lstat`), y darles handle sería alcance que
+/// nadie pidió.
+#[async_trait]
+pub trait ConfinedRoot: Send + Sync {
+    /// Crea un directorio en `rel`. Mismo contrato que [`Provider::mkdir`].
+    async fn mkdir(&self, rel: &[Segment]) -> Result<(), Error>;
+
+    /// Abre un sink para `rel`. Mismo contrato que [`Provider::write`],
+    /// publicación incluida: el paso de staging a definitivo va confinado
+    /// también, que es donde la garantía se escaparía si no.
+    async fn write(&self, rel: &[Segment]) -> Result<Box<dyn ByteSink>, Error>;
+
+    /// Mismo contrato que [`Provider::open_resumable`]. Default: sin
+    /// reanudación, que es correcto y seguro (el engine recopia entero).
+    async fn open_resumable(&self, rel: &[Segment]) -> Result<(Box<dyn ByteSink>, u64), Error> {
+        Ok((self.write(rel).await?, 0))
+    }
+
+    /// Mismo contrato que [`Provider::stat`]: describe el LINK, jamás su
+    /// destino.
+    async fn stat(&self, rel: &[Segment]) -> Result<Entry, Error>;
 }

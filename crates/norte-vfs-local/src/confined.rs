@@ -14,18 +14,24 @@
 //!
 //! # Qué se prohíbe exactamente
 //!
-//! Salirse de la raíz. **No** «que haya symlinks»: un symlink que apunta a otro
-//! sitio DENTRO de la raíz se sigue, porque prohibirlo rompería árboles
-//! legítimos (un `dst/data -> dst/almacen` corriente) sin ganar seguridad
-//! ninguna. Es la semántica de `RESOLVE_BENEATH`, y el paseo de emulación la
-//! imita comprobando contención en vez de negarse a seguir.
+//! Salirse de la raíz, y esa es la regla completa — **no** «que haya
+//! symlinks». Un symlink RELATIVO que apunta a otro sitio dentro de la raíz se
+//! sigue, porque prohibirlo rompería árboles legítimos (un `dst/data ->
+//! almacen` corriente) sin ganar seguridad ninguna.
+//!
+//! Uno ABSOLUTO se rechaza aunque su destino caiga dentro. No es una decisión
+//! de este módulo: es lo que hace `RESOLVE_BENEATH` —para el kernel una ruta
+//! absoluta ya empieza fuera de la raíz—, y el paseo de emulación la copia
+//! porque las dos ramas tienen que dar el MISMO veredicto. Un confinamiento
+//! que significara una cosa con `openat2` y otra sin él no sería una garantía,
+//! sería una lotería de versión de kernel.
 //!
 //! # Cómo, por plataforma
 //!
 //! | dónde | cómo |
 //! | --- | --- |
 //! | Linux ≥5.6 | `openat2(RESOLVE_BENEATH)` — lo garantiza el kernel, paso a paso |
-//! | Linux <5.6, seccomp (`ENOSYS`), macOS | paseo componente a componente con `openat` relativo al fd anterior, y comprobación de contención cuando el componente es un symlink |
+//! | Linux <5.6, seccomp (`ENOSYS`), macOS | paseo componente a componente con `openat` relativo al fd anterior; un componente que es symlink se rechaza si es absoluto y se comprueba por contención si es relativo |
 //! | Windows | no hay `openat`: este módulo no existe ahí y `open_root` responde `Unsupported` |
 
 use std::ffi::CString;
@@ -186,16 +192,46 @@ fn walk_beneath(root: RawFd, parents: &[Segment]) -> Result<OwnedFd, Error> {
     let mut current = dup(root)?;
     for seg in parents {
         let name = CString::new(seg.as_bytes().to_vec()).map_err(|_| Error::InvalidPath)?;
-        let es_symlink = is_symlink_at(current.as_raw_fd(), &name)?;
-        let next = openat_dir(current.as_raw_fd(), &name)?;
-        if es_symlink && !is_beneath(next.as_raw_fd(), root_id)? {
-            return Err(Error::Conflict {
-                conflict: ConflictKind::EscapesRoot,
-            });
+        if is_symlink_at(current.as_raw_fd(), &name)? {
+            // Un symlink ABSOLUTO se rechaza aunque apunte dentro. Es lo que
+            // hace `RESOLVE_BENEATH` —para el kernel una ruta absoluta ya
+            // «empieza» fuera de la raíz— y las dos ramas tienen que dar el
+            // mismo veredicto o el confinamiento significaría una cosa en un
+            // kernel y otra en el de al lado.
+            if link_target_is_absolute(current.as_raw_fd(), &name)? {
+                return Err(Error::Conflict {
+                    conflict: ConflictKind::EscapesRoot,
+                });
+            }
+            let next = openat_dir(current.as_raw_fd(), &name)?;
+            if !is_beneath(next.as_raw_fd(), root_id)? {
+                return Err(Error::Conflict {
+                    conflict: ConflictKind::EscapesRoot,
+                });
+            }
+            current = next;
+        } else {
+            current = openat_dir(current.as_raw_fd(), &name)?;
         }
-        current = next;
     }
     Ok(current)
+}
+
+/// ¿El destino CRUDO del symlink `name` empieza por `/`?
+///
+/// Se leen los bytes tal cual y no se resuelve nada (regla 1): lo único que se
+/// pregunta es si es absoluto.
+#[allow(unsafe_code)]
+fn link_target_is_absolute(dir: RawFd, name: &CString) -> Result<bool, Error> {
+    let mut buf = [0i8; 2];
+    // SAFETY: `dir` vive, `name` es NUL-terminada y viva, y `buf` tiene sitio
+    // para los bytes que se piden. `readlinkat` NO termina en NUL: por eso solo
+    // se mira lo que dice haber escrito.
+    let n = unsafe { libc::readlinkat(dir, name.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
+    if n < 0 {
+        return Err(map_errno(&std::io::Error::last_os_error()));
+    }
+    Ok(n > 0 && buf[0] == i8::try_from(b'/').unwrap_or(0))
 }
 
 /// `openat` de un componente como directorio. Un solo componente: aquí no hay
@@ -526,9 +562,8 @@ fn create_exclusive(dir: RawFd, name: &CString) -> Result<std::fs::File, Error> 
     if raw < 0 {
         return Err(map_errno(&std::io::Error::last_os_error()));
     }
-    use std::os::fd::FromRawFd as _;
     // SAFETY: `raw` es un fd recién abierto y sin dueño; `File` pasa a serlo.
-    Ok(unsafe { std::fs::File::from_raw_fd(raw) })
+    Ok(unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(raw) })
 }
 
 /// Nombre de staging efímero, con la MISMA forma que el del provider
@@ -560,12 +595,16 @@ fn entry_from_stat(path: norte_proto::VPath, st: &libc::stat) -> Entry {
 
 /// mtime en milisegundos UTC desde un `stat`.
 fn mtime_ms_of(st: &libc::stat) -> Option<i64> {
+    // Los tipos de `st_mtime`/`st_mtime_nsec` cambian con la plataforma y la
+    // libc, así que la conversión es redundante SOLO en el objetivo de hoy.
+    #[allow(clippy::useless_conversion)]
     let secs = i64::try_from(st.st_mtime).ok()?;
+    #[allow(clippy::useless_conversion)]
     let nanos = i64::try_from(st.st_mtime_nsec).ok()?;
     secs.checked_mul(1000)?.checked_add(nanos / 1_000_000)
 }
 
-/// Un segmento como CString. Un segmento con un NUL dentro no es un nombre que
+/// Un segmento como `CString`. Un segmento con un NUL dentro no es un nombre que
 /// ningún filesystem unix pueda sostener.
 fn cstring(seg: &Segment) -> Result<CString, Error> {
     CString::new(seg.as_bytes().to_vec()).map_err(|_| Error::InvalidPath)
@@ -580,4 +619,167 @@ fn rename_error(e: &std::io::Error) -> Error {
         };
     }
     map_errno(e)
+}
+
+// ---------- el handle que ve el core ----------
+
+/// [`norte_vfs::ConfinedRoot`] sobre una [`LocalRoot`].
+///
+/// El `Arc` no es por compartir: el sink que devuelve `write` sobrevive al
+/// handle si el caller lo suelta antes de hacer commit, y el descriptor del
+/// directorio tiene que seguir vivo para que el `renameat` de la publicación
+/// siga siendo el mismo directorio y no una ruta que se vuelve a resolver.
+#[derive(Debug)]
+pub(crate) struct LocalConfinedRoot {
+    root: std::sync::Arc<LocalRoot>,
+    /// La raíz como `VPath`, SOLO para poder nombrar lo que `stat` devuelve.
+    /// Jamás se usa para resolver nada.
+    vpath: norte_proto::VPath,
+}
+
+impl LocalConfinedRoot {
+    pub(crate) fn new(root: LocalRoot, vpath: norte_proto::VPath) -> Self {
+        Self {
+            root: std::sync::Arc::new(root),
+            vpath,
+        }
+    }
+
+    /// El `VPath` de `rel` bajo la raíz. Es para PINTAR el resultado de un
+    /// `stat`, no para abrir nada.
+    fn vpath_of(&self, rel: &[Segment]) -> norte_proto::VPath {
+        let mut p = self.vpath.clone();
+        for seg in rel {
+            p = p.join(seg.clone());
+        }
+        p
+    }
+}
+
+#[async_trait::async_trait]
+impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
+    async fn mkdir(&self, rel: &[Segment]) -> Result<(), Error> {
+        let root = std::sync::Arc::clone(&self.root);
+        let rel = rel.to_vec();
+        crate::provider::blocking(move || root.mkdir(&rel)).await
+    }
+
+    async fn write(&self, rel: &[Segment]) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+        let root = std::sync::Arc::clone(&self.root);
+        let rel = rel.to_vec();
+        let staging = crate::provider::blocking(move || root.open_write(&rel)).await?;
+        Ok(Box::new(ConfinedSink::new(staging)))
+    }
+
+    async fn stat(&self, rel: &[Segment]) -> Result<Entry, Error> {
+        let root = std::sync::Arc::clone(&self.root);
+        let path = self.vpath_of(rel);
+        let rel = rel.to_vec();
+        crate::provider::blocking(move || root.stat(&rel, path)).await
+    }
+}
+
+/// El sink de una escritura confinada.
+///
+/// Sostiene el descriptor del directorio, no su ruta: entre `write` y `commit`
+/// nadie puede sustituir un componente por un symlink y desviar la
+/// publicación, porque no queda ninguna ruta que volver a resolver.
+#[derive(Debug)]
+struct ConfinedSink {
+    dir: Option<OwnedFd>,
+    file: Option<std::fs::File>,
+    staging: CString,
+    final_name: CString,
+    /// `true` cuando commit/abort ya se ocuparon del staging (Drop no toca).
+    done: bool,
+}
+
+impl ConfinedSink {
+    fn new(s: ConfinedStaging) -> Self {
+        Self {
+            dir: Some(s.dir),
+            file: Some(s.file),
+            staging: s.staging,
+            final_name: s.final_name,
+            done: false,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl norte_vfs::ByteSink for ConfinedSink {
+    async fn write(&mut self, chunk: bytes::Bytes) -> Result<(), Error> {
+        let mut file = self.file.take().ok_or(Error::Io { retryable: false })?;
+        let (file, res) = tokio::task::spawn_blocking(move || {
+            use std::io::Write as _;
+            let res = file
+                .write_all(&chunk)
+                .map_err(|e| crate::provider::map_io(&e));
+            (file, res)
+        })
+        .await
+        .map_err(|_| Error::Internal { panic: true })?;
+        self.file = Some(file);
+        res
+    }
+
+    async fn commit(mut self: Box<Self>) -> Result<(), Error> {
+        let file = self.file.take().ok_or(Error::Io { retryable: false })?;
+        let dir = self.dir.take().ok_or(Error::Io { retryable: false })?;
+        let staging = self.staging.clone();
+        let final_name = self.final_name.clone();
+        let res = crate::provider::blocking(move || {
+            file.sync_all().map_err(|e| crate::provider::map_io(&e))?;
+            drop(file);
+            let out = publish(dir.as_raw_fd(), &staging, &final_name);
+            if out.is_err() {
+                // Un publish que no publica no deja el staging por ahí: es la
+                // misma promesa del sink de siempre.
+                let _ = discard(dir.as_raw_fd(), &staging);
+            }
+            out
+        })
+        .await;
+        if !matches!(res, Err(Error::Internal { .. })) {
+            self.done = true;
+        }
+        res
+    }
+
+    async fn abort(mut self: Box<Self>) -> Result<(), Error> {
+        self.file.take();
+        let dir = self.dir.take().ok_or(Error::Io { retryable: false })?;
+        self.done = true;
+        let staging = self.staging.clone();
+        crate::provider::blocking(move || discard(dir.as_raw_fd(), &staging)).await
+    }
+
+    async fn keep(mut self: Box<Self>) -> Result<(), Error> {
+        // Conserva el staging para un `open_resumable` posterior (ADR 0012):
+        // durabiliza y NO renombra ni borra.
+        let file = self.file.take();
+        self.done = true;
+        crate::provider::blocking(move || {
+            if let Some(f) = file {
+                f.sync_all().map_err(|e| crate::provider::map_io(&e))?;
+            }
+            Ok(())
+        })
+        .await
+    }
+}
+
+impl Drop for ConfinedSink {
+    fn drop(&mut self) {
+        // Un sink soltado sin commit ni abort no deja staging detrás. Es
+        // best-effort y síncrono a propósito: aquí ya no hay a quién devolverle
+        // un error.
+        if self.done {
+            return;
+        }
+        self.file.take();
+        if let Some(dir) = self.dir.take() {
+            let _ = discard(dir.as_raw_fd(), &self.staging);
+        }
+    }
 }

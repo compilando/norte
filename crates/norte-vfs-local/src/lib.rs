@@ -13,6 +13,8 @@
 #![deny(unsafe_code)]
 
 mod caps_at;
+#[cfg(unix)]
+mod confined;
 #[cfg(target_os = "macos")]
 pub mod mounts_macos;
 #[cfg(windows)]
