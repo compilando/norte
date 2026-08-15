@@ -1183,3 +1183,144 @@ mod papelera_freedesktop {
         );
     }
 }
+
+// ---------- capabilities por DIRECTORIO (ADR 0054, #153/#145) ----------
+
+#[tokio::test]
+async fn capabilities_at_answers_without_writing_to_the_directory() {
+    let (p, root, base) = provider();
+    let sub = base.join("sub");
+    std::fs::create_dir(&sub).expect("mkdir");
+    let vsub = child(&root, b"sub");
+
+    let _ = p.capabilities_at(&vsub).await.expect("responde");
+
+    let restos: Vec<_> = std::fs::read_dir(&sub)
+        .expect("listar")
+        .map(|e| e.expect("entrada").file_name())
+        .collect();
+    assert!(
+        restos.is_empty(),
+        "la escalera de solo lectura no deja rastro: {restos:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_directory_without_write_permission_still_gets_an_answer() {
+    // Un mount de solo lectura no se puede fabricar en CI; un directorio sin
+    // permiso de escritura sí, y es lo que rompía a la sonda de ESCRITURA:
+    // fallaba y no distinguía "no escribible" de "no pliega".
+    use std::os::unix::fs::PermissionsExt;
+    let (p, root, base) = provider();
+    let ro = base.join("ro");
+    std::fs::create_dir(&ro).expect("mkdir");
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o500)).expect("chmod");
+
+    let caps = p
+        .capabilities_at(&child(&root, b"ro"))
+        .await
+        .expect("responde igual");
+
+    // Qué responda depende del FS de CI; lo que se afirma es que RESPONDE lo
+    // mismo que para la raíz, que está en el mismo filesystem.
+    assert_eq!(
+        caps.flags.contains(CapabilityFlags::CASE_SENSITIVE),
+        p.capabilities_at(&root)
+            .await
+            .expect("responde")
+            .flags
+            .contains(CapabilityFlags::CASE_SENSITIVE)
+    );
+}
+
+#[tokio::test]
+async fn two_paths_to_one_directory_probe_once() {
+    let (p, root, base) = provider();
+    std::fs::create_dir(base.join("sub")).expect("mkdir");
+    let directo = child(&root, b"sub");
+
+    let antes = p.caps_at_probe_count();
+    let _ = p.capabilities_at(&directo).await.expect("responde");
+    let _ = p.capabilities_at(&directo).await.expect("responde");
+    assert_eq!(
+        p.caps_at_probe_count() - antes,
+        1,
+        "la clave es (dev, ino): la segunda pregunta sale de la caché"
+    );
+}
+
+#[tokio::test]
+async fn a_file_is_answered_by_its_containing_directory() {
+    let (p, root, base) = provider();
+    std::fs::write(base.join("f.txt"), b"x").expect("write");
+
+    let del_fichero = p
+        .capabilities_at(&child(&root, b"f.txt"))
+        .await
+        .expect("responde");
+    let del_dir = p.capabilities_at(&root).await.expect("responde");
+
+    assert_eq!(
+        del_fichero, del_dir,
+        "la pregunta es siempre sobre el directorio que lo contiene"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_path_is_not_found() {
+    let (p, root, _) = provider();
+    assert_eq!(
+        p.capabilities_at(&child(&root, b"no-existe"))
+            .await
+            .unwrap_err(),
+        norte_proto::Error::NotFound
+    );
+}
+
+/// El caso que DISCRIMINA la escalera: un directorio sin permiso de escritura
+/// **en ext4**. La sonda de escritura no puede responder ahí —es justo su
+/// límite—, así que una respuesta correcta solo puede venir del peldaño de
+/// solo lectura (`statfs` + `FS_IOC_GETFLAGS`).
+///
+/// Se enraíza en el árbol del repo y no en `/tmp`, que en esta máquina es
+/// tmpfs: sobre tmpfs la escalera cae al peldaño de escritura y el test no
+/// probaría nada.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_read_only_ext4_directory_is_answered_without_writing() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir en el repo");
+    let base = dir.path().to_path_buf();
+    let ro = base.join("ro");
+    std::fs::create_dir(&ro).expect("mkdir");
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o500)).expect("chmod");
+    let p = LocalProvider::rooted(base.clone()).with_guard(Box::new(dir));
+
+    let caps = p
+        .capabilities_at(&child(&LocalProvider::root(), b"ro"))
+        .await
+        .expect("responde");
+
+    // Si el árbol del repo no está en ext4/f2fs (un contenedor con overlayfs,
+    // por ejemplo), la escalera cae al peldaño de escritura, que sobre este
+    // directorio no puede responder — y entonces el test no aplica.
+    let en_ext4 = std::process::Command::new("stat")
+        .args(["-f", "-c", "%T", base.to_str().expect("ruta de test ASCII")])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+    if en_ext4.as_deref() != Some("ext2/ext3") {
+        eprintln!("skip: el árbol del repo no está en ext4 ({en_ext4:?})");
+        return;
+    }
+
+    assert!(
+        caps.flags.contains(CapabilityFlags::CASE_SENSITIVE),
+        "ext4 sin +F distingue caja, y aquí no se pudo escribir para averiguarlo"
+    );
+    assert!(
+        !caps.flags.contains(CapabilityFlags::FULL_FOLD),
+        "y sin +F no expande"
+    );
+}

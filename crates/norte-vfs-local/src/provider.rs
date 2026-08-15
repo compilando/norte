@@ -35,6 +35,12 @@ const READ_CHUNK: usize = 256 * 1024;
 pub struct LocalProvider {
     base: PathBuf,
     caps: std::sync::Arc<std::sync::OnceLock<Capabilities>>,
+    /// Capabilities sondeadas POR DIRECTORIO (ADR 0054), con la identidad del
+    /// directorio como clave: dos rutas al mismo sitio son una entrada, y un
+    /// `..` o un symlink no multiplican el sondeo. Acotado, con desalojo del
+    /// más antiguo — una sesión larga no puede acabar con un mapa de todos los
+    /// directorios que visitó.
+    caps_at: std::sync::Arc<std::sync::Mutex<CapsAtCache>>,
     /// Sustituto de `$XDG_DATA_HOME` para la papelera freedesktop; `None` =
     /// resolver del entorno, que es lo que hace producción.
     trash_home: Option<PathBuf>,
@@ -56,9 +62,21 @@ impl LocalProvider {
         Self {
             base,
             caps: std::sync::Arc::new(std::sync::OnceLock::new()),
+            caps_at: std::sync::Arc::new(std::sync::Mutex::new(CapsAtCache::default())),
             trash_home: None,
             _guard: None,
         }
+    }
+
+    /// Cuántas veces se ha SONDEADO de verdad una ubicación (costura de test:
+    /// lo que la caché ahorra no se ve de ninguna otra forma).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn caps_at_probe_count(&self) -> u64 {
+        self.caps_at
+            .lock()
+            .expect("caps_at lock sano")
+            .probes
     }
 
     /// Sondea capabilities UNA vez, dentro de `spawn_blocking` (regla 2:
@@ -148,6 +166,7 @@ impl LocalProvider {
             let s = Self {
                 base: PathBuf::new(),
                 caps: std::sync::Arc::new(std::sync::OnceLock::new()),
+                caps_at: std::sync::Arc::new(std::sync::Mutex::new(CapsAtCache::default())),
                 trash_home: None,
                 _guard: None,
             };
@@ -782,6 +801,66 @@ fn default_capabilities() -> Capabilities {
     }
 }
 
+/// Caché acotada de capabilities por directorio, con la identidad del nodo
+/// como clave.
+///
+/// No es un LRU de acceso sino de INSERCIÓN: lo que hay que impedir es que un
+/// recorrido largo haga crecer el mapa sin fin, y para eso basta con desalojar
+/// la entrada más vieja. Un comparador toca un puñado de raíces; un indexador
+/// que recorra miles pagará una syscall de más al volver sobre la primera, que
+/// es más barato que la contabilidad de un LRU de verdad.
+#[derive(Debug, Default)]
+struct CapsAtCache {
+    /// `(dev, ino)` → capabilities ya sondeadas.
+    map: std::collections::HashMap<(u64, u64), Capabilities>,
+    /// Orden de inserción, para el desalojo.
+    order: std::collections::VecDeque<(u64, u64)>,
+    /// Sondeos REALES (los que no salieron de aquí). Costura de test.
+    probes: u64,
+}
+
+/// Techo de la caché. Un directorio ocupa decenas de bytes; 256 cubre de sobra
+/// las raíces de una comparación, una sincronización y los dos paneles.
+const CAPS_AT_CACHE_MAX: usize = 256;
+
+impl CapsAtCache {
+    fn get(&self, key: (u64, u64)) -> Option<Capabilities> {
+        self.map.get(&key).copied()
+    }
+
+    fn insert(&mut self, key: (u64, u64), caps: Capabilities) {
+        if self.map.insert(key, caps).is_none() {
+            self.order.push_back(key);
+            while self.order.len() > CAPS_AT_CACHE_MAX {
+                if let Some(viejo) = self.order.pop_front() {
+                    self.map.remove(&viejo);
+                }
+            }
+        }
+    }
+}
+
+/// Identidad `(dev, ino)` de un directorio ya stateado.
+///
+/// `Option` para que la firma sea la misma en unix y en Windows, donde no hay
+/// identidad que devolver: quien llama pregunta «¿hay clave?» una sola vez y
+/// no una por plataforma.
+#[cfg(unix)]
+#[allow(clippy::unnecessary_wraps)]
+fn dir_identity(md: &std::fs::Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt as _;
+    Some((md.dev(), md.ino()))
+}
+
+/// Windows: `std` no expone la identidad del volumen ni el índice del fichero
+/// desde `Metadata`, así que aquí no hay clave y cada pregunta se sondea. El
+/// sondeo de Windows es una llamada al volumen, no una escritura, así que
+/// repetirla es barato — y una clave inventada sería peor que ninguna.
+#[cfg(windows)]
+fn dir_identity(_md: &std::fs::Metadata) -> Option<(u64, u64)> {
+    None
+}
+
 fn probe_capabilities(base: &Path) -> Capabilities {
     let mut caps = default_capabilities();
     let default_sensitive = caps.flags.contains(CapabilityFlags::CASE_SENSITIVE);
@@ -808,6 +887,52 @@ impl Provider for LocalProvider {
             .get()
             .copied()
             .unwrap_or_else(default_capabilities)
+    }
+
+    async fn capabilities_at(&self, p: &VPath) -> Result<Capabilities, Error> {
+        self.ensure_caps().await;
+        let declared = self.capabilities();
+        let native = self.native(p)?;
+        let cache = std::sync::Arc::clone(&self.caps_at);
+        blocking(move || {
+            // La pregunta es SIEMPRE sobre el directorio que contiene a `p`:
+            // el plegado y el confinamiento son del directorio, y un fichero
+            // no tiene respuesta propia. `metadata` (no `symlink_metadata`)
+            // porque un symlink a un directorio pregunta por su destino, que
+            // es donde acabarían de verdad los nombres.
+            let md = std::fs::metadata(&native).map_err(|e| map_io(&e))?;
+            let dir: &Path = if md.is_dir() {
+                &native
+            } else {
+                native.parent().unwrap_or(&native)
+            };
+            let key = if md.is_dir() {
+                dir_identity(&md)
+            } else {
+                std::fs::metadata(dir).ok().and_then(|m| dir_identity(&m))
+            };
+
+            if let Some(k) = key
+                && let Some(hit) = cache.lock().expect("caps_at lock sano").get(k)
+            {
+                return Ok(hit);
+            }
+
+            let found = crate::caps_at::probe_location(dir, probe_case_sensitivity);
+            let mut caps = declared;
+            if let Some(sensitive) = found.case_sensitive {
+                caps.flags.set(CapabilityFlags::CASE_SENSITIVE, sensitive);
+            }
+            caps.flags.set(CapabilityFlags::FULL_FOLD, found.full_fold);
+
+            let mut guard = cache.lock().expect("caps_at lock sano");
+            guard.probes += 1;
+            if let Some(k) = key {
+                guard.insert(k, caps);
+            }
+            Ok(caps)
+        })
+        .await
     }
 
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {

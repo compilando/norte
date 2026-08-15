@@ -775,7 +775,9 @@ async fn a_scripted_location_overrides_the_declaration() {
     let at = mem.capabilities_at(&usb).await.expect("responde");
     assert!(at.flags.contains(CapabilityFlags::FULL_FOLD));
     assert!(
-        !mem.capabilities().flags.contains(CapabilityFlags::FULL_FOLD),
+        !mem.capabilities()
+            .flags
+            .contains(CapabilityFlags::FULL_FOLD),
         "y el backend sigue declarando lo suyo"
     );
 

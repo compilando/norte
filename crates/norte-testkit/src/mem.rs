@@ -210,6 +210,11 @@ impl MemProvider {
     /// Solo afecta a la ubicación EXACTA: un hijo suyo sigue respondiendo la
     /// declaración, porque el testkit no simula herencia por mount y fingirla
     /// escondería justo el fallo que #153 describe.
+    ///
+    /// # Panics
+    ///
+    /// Si el mutex del guion quedó envenenado por un panic previo — en un
+    /// testkit eso ya es un test roto.
     pub fn set_caps_at(&self, p: &VPath, caps: Capabilities) {
         self.caps_at
             .lock()
