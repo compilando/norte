@@ -1131,6 +1131,28 @@ git commit -m "feat(vfs-local): a confined write publishes through the same fd"
 
 ### Task B4: the core uses the root when there is one
 
+> **Rescoped after B3 landed, by reading the call sites.** Three things this
+> task's original text did not know:
+>
+> 1. **`ConfinedRoot` needs a `symlink` method.** `sync::exec::copy_leaf` copies
+>    a symlink entry by CREATING one at the destination
+>    (`ops::symlink_retrying`), which composes a path exactly like the other two.
+>    Without it, a `Copy` whose source is a symlink stays unconfined — and it is
+>    one trait method plus a `symlinkat`.
+> 2. **`ops::copy_file` reaches the destination in four places** — `copy_native`,
+>    `open_resumable`, `write`, and the partial digest — and only the middle two
+>    create anything. The seam that keeps this small is a destination *opener*
+>    (an enum over `(&dyn Provider, VPath)` and `(&dyn ConfinedRoot, Vec<Segment>)`)
+>    used for those two calls, leaving the `VPath` in place for progress,
+>    journal and error text.
+> 3. **The root is opened once per Task, in `SyncTargets`**, next to
+>    `dest_root` — whose rustdoc is where #164 was written down, and which this
+>    task should rewrite rather than leave describing a hole that is closed.
+>
+> Do NOT land half of it. A wave where `CreateDir` is confined and `Copy` is not
+> closes the secondary vector and leaves the primary one open, while the
+> capability says the location can be confined.
+
 **Files:**
 - Modify: `crates/norte-core/src/ops.rs:250` (`mkdir_retrying`), `:1159` (the copy sink)
 - Modify: whatever calls them with a known root (`sync/`, the copy engine)
