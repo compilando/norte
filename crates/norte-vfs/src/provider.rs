@@ -530,6 +530,24 @@ pub trait ConfinedRoot: Send + Sync {
         Ok((self.write(rel).await?, 0))
     }
 
+    /// Crea un symlink en `rel` apuntando a `target`. Mismo contrato que
+    /// [`Provider::symlink`], `kind` incluido.
+    ///
+    /// Está aquí porque copiar un symlink es CREAR uno en el destino, y esa
+    /// creación compone una ruta igual que las otras dos: sin este método, una
+    /// copia cuyo origen es un symlink se quedaría sin confinar y el agujero
+    /// seguiría abierto por el camino más corriente que hay de alcanzarlo.
+    ///
+    /// Lo que se confina es DÓNDE cae el link, jamás a dónde apunta: un target
+    /// que sale de la raíz es un symlink roto o que apunta fuera, que es
+    /// exactamente lo que el origen decía y lo que `Preserve` promete copiar.
+    ///
+    /// # Errors
+    /// [`Error::Conflict`] si `rel` está ocupado o se saldría de la raíz;
+    /// [`Error::Unsupported`] si este backend no sabe crear symlinks.
+    async fn symlink(&self, rel: &[Segment], target: &[u8], kind: SymlinkKind)
+    -> Result<(), Error>;
+
     /// Mismo contrato que [`Provider::stat`]: describe el LINK, jamás su
     /// destino.
     async fn stat(&self, rel: &[Segment]) -> Result<Entry, Error>;

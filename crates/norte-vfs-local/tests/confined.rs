@@ -8,6 +8,8 @@
 
 #![cfg(unix)]
 
+use std::os::unix::ffi::OsStrExt as _;
+
 use bytes::Bytes;
 use norte_proto::{ConflictKind, Error, Segment, VPath};
 use norte_vfs::Provider;
@@ -283,4 +285,109 @@ async fn un_symlink_absoluto_se_rechaza_aunque_apunte_dentro() {
             "paseo={forzar_paseo}: y no escribió"
         );
     }
+}
+
+/// Copiar un symlink es CREAR uno en el destino, y esa creación se confina
+/// igual que las otras dos: el componente intermedio hostil no se la lleva.
+#[tokio::test]
+async fn un_symlink_no_se_crea_al_otro_lado_de_un_componente_hostil() {
+    let (p, raiz, dentro, fuera) = escenario();
+    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let err = root
+        .symlink(
+            &[seg(b"sub"), seg(b"enlace")],
+            b"/etc/passwd",
+            norte_vfs::SymlinkKind::Unknown,
+        )
+        .await
+        .expect_err("tiene que negarse");
+
+    assert!(
+        matches!(
+            err,
+            Error::Conflict {
+                conflict: ConflictKind::EscapesRoot
+            }
+        ),
+        "respondió {err:?}"
+    );
+    assert!(
+        fuera.join("enlace").symlink_metadata().is_err(),
+        "no plantó el enlace fuera"
+    );
+}
+
+/// Y dentro de la raíz se crea tal cual, con los BYTES del target sin tocar:
+/// lo confinado es dónde CAE el enlace, no a dónde apunta.
+#[tokio::test]
+async fn un_symlink_dentro_de_la_raiz_conserva_su_target_crudo() {
+    let (p, raiz, dentro, _fuera) = escenario();
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+
+    root.mkdir(&[seg(b"sub")]).await.expect("mkdir");
+    root.symlink(
+        &[seg(b"sub"), seg(b"enlace")],
+        b"../caf\xe9",
+        norte_vfs::SymlinkKind::Unknown,
+    )
+    .await
+    .expect("symlink");
+
+    let leido = std::fs::read_link(dentro.join("sub/enlace")).expect("read_link");
+    assert_eq!(
+        leido.as_os_str().as_bytes(),
+        b"../caf\xe9",
+        "los bytes del target salen tal cual, sin pasar por UTF-8"
+    );
+
+    // Y un nombre ya ocupado es conflicto, no un enlace pisado.
+    let err = root
+        .symlink(
+            &[seg(b"sub"), seg(b"enlace")],
+            b"otro",
+            norte_vfs::SymlinkKind::Unknown,
+        )
+        .await
+        .expect_err("ocupado");
+    assert!(
+        matches!(
+            err,
+            Error::Conflict {
+                conflict: ConflictKind::Exists
+            }
+        ),
+        "respondió {err:?}"
+    );
+}
+
+/// El contrato de `Provider::write` sobre la raíz confinada: un destino ya
+/// ocupado se sabe AL ABRIR, no después de haber transferido el fichero.
+#[tokio::test]
+async fn un_destino_ocupado_es_conflicto_al_abrir_el_sink() {
+    let (p, raiz, dentro, _fuera) = escenario();
+    std::fs::write(dentro.join("ya.txt"), b"lo que hab\xEDa").expect("ocupante");
+
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let err = root
+        .write(&[seg(b"ya.txt")])
+        .await
+        .err()
+        .expect("el sink no llega a abrirse");
+
+    assert!(
+        matches!(
+            err,
+            Error::Conflict {
+                conflict: ConflictKind::Exists
+            }
+        ),
+        "respondió {err:?}"
+    );
+    assert_eq!(
+        std::fs::read(dentro.join("ya.txt")).expect("leer"),
+        b"lo que hab\xEDa",
+        "y no tocó lo que había"
+    );
 }

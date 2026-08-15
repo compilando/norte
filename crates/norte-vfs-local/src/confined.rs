@@ -412,6 +412,35 @@ impl LocalRoot {
         Ok(())
     }
 
+    /// `symlink` de `rel` bajo la raíz, apuntando a `target`.
+    ///
+    /// Lo confinado es DÓNDE cae el link: el `symlinkat` va contra el
+    /// descriptor del padre ya resuelto, así que un componente intermedio que
+    /// sea un puente hacia fuera no puede llevárselo. A dónde APUNTA no se
+    /// toca —se copian los bytes del origen tal cual, como hace
+    /// `Provider::symlink`—: recortar el target sería inventarse un enlace
+    /// distinto del que se está copiando.
+    #[allow(unsafe_code)]
+    pub(crate) fn symlink(&self, rel: &[Segment], target: &[u8]) -> Result<(), Error> {
+        let (dir, name) = self.parent_of(rel)?;
+        let name = cstring(name)?;
+        // Un target con un NUL dentro no es una ruta que ningún unix sostenga.
+        let target = CString::new(target.to_vec()).map_err(|_| Error::InvalidPath)?;
+        // SAFETY: `dir` vive durante toda la llamada y las dos CStrings son
+        // NUL-terminadas y vivas también.
+        let rc = unsafe { libc::symlinkat(target.as_ptr(), dir.as_raw_fd(), name.as_ptr()) };
+        if rc != 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                return Err(Error::Conflict {
+                    conflict: ConflictKind::Exists,
+                });
+            }
+            return Err(map_errno(&e));
+        }
+        Ok(())
+    }
+
     /// `lstat` de `rel` bajo la raíz: describe el LINK, jamás su destino
     /// (mismo contrato que `Provider::stat`).
     #[allow(unsafe_code)]
@@ -445,6 +474,24 @@ impl LocalRoot {
     pub(crate) fn open_write(&self, rel: &[Segment]) -> Result<ConfinedStaging, Error> {
         let (dir, name) = self.parent_of(rel)?;
         let final_name = cstring(name)?;
+        // `Provider::write` promete un archivo NUEVO y lo dice AL ABRIR: sin
+        // esto, un destino ocupado no se sabría hasta el `commit`, o sea
+        // después de haber transferido el fichero entero para nada.
+        //
+        // No es LA garantía —esa es el `RENAME_NOREPLACE` de la publicación,
+        // que no tiene ventana—, y por eso una carrera perdida aquí no pierde
+        // nada: sale como conflicto un momento más tarde.
+        //
+        // Único matiz frente al camino por ruta: allí `collision_kind_for`
+        // relee el directorio y distingue una colisión de CAJA o de
+        // normalización; aquí se contesta `Exists` a secas. Nada del core
+        // decide por esa distinción (solo se pinta), y releer el directorio
+        // sería recorrer lo que este camino existe para no recorrer.
+        if exists_at(dir.as_raw_fd(), &final_name) {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            });
+        }
         let staging_name = ephemeral_staging_name(name.as_bytes());
         let file = create_exclusive(dir.as_raw_fd(), &staging_name)?;
         Ok(ConfinedStaging {
@@ -502,20 +549,19 @@ pub(crate) fn publish(dir: RawFd, staging: &CString, final_name: &CString) -> Re
     plain_rename(dir, staging, final_name)
 }
 
+/// ¿Hay ya algo con ese nombre en este directorio? Mira el NODO, no lo que
+/// apunte: un symlink roto ocupa el nombre igual que un fichero.
+#[allow(unsafe_code)]
+fn exists_at(dir: RawFd, name: &CString) -> bool {
+    // SAFETY: `dir` vive y `name` es NUL-terminada y viva.
+    unsafe { libc::faccessat(dir, name.as_ptr(), libc::F_OK, libc::AT_SYMLINK_NOFOLLOW) == 0 }
+}
+
 /// `renameat` llano, con la comprobación previa que su falta de atomicidad
 /// obliga a hacer (documentada desde M0).
 #[allow(unsafe_code)]
 fn plain_rename(dir: RawFd, staging: &CString, final_name: &CString) -> Result<(), Error> {
-    // SAFETY: `dir` vive y `final_name` es NUL-terminada y viva.
-    let existe = unsafe {
-        libc::faccessat(
-            dir,
-            final_name.as_ptr(),
-            libc::F_OK,
-            libc::AT_SYMLINK_NOFOLLOW,
-        )
-    } == 0;
-    if existe {
+    if exists_at(dir, final_name) {
         return Err(Error::Conflict {
             conflict: ConflictKind::Exists,
         });
@@ -669,6 +715,19 @@ impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
         let rel = rel.to_vec();
         let staging = crate::provider::blocking(move || root.open_write(&rel)).await?;
         Ok(Box::new(ConfinedSink::new(staging)))
+    }
+
+    async fn symlink(
+        &self,
+        rel: &[Segment],
+        target: &[u8],
+        _kind: norte_vfs::SymlinkKind,
+    ) -> Result<(), Error> {
+        // `kind` es de Windows, y en Windows este módulo no existe.
+        let root = std::sync::Arc::clone(&self.root);
+        let rel = rel.to_vec();
+        let target = target.to_vec();
+        crate::provider::blocking(move || root.symlink(&rel, &target)).await
     }
 
     async fn stat(&self, rel: &[Segment]) -> Result<Entry, Error> {

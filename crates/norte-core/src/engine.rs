@@ -1538,6 +1538,9 @@ impl Engine {
             // dentro del árbol solo se ve preguntando por esa ruta.
             policy: Arc::clone(&self.policy),
             delete_mode: mode,
+            // Se abre dentro de la Task, que es donde hay `task_id` con el que
+            // decir en el log que este destino no sabe confinarse.
+            dest_confined: None,
         };
         let report = Arc::new(std::sync::Mutex::new(crate::sync::exec::new_report(
             batch_id, trash,
@@ -1590,7 +1593,7 @@ impl Engine {
                     // se gasta, y después se contesta lo que el scheduler habría
                     // contestado.
                     let out = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(crate::sync::exec::run(
-                        &targets,
+                        targets,
                         &recorder,
                         steps,
                         &ctx,
