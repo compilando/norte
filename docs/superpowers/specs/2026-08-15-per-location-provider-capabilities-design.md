@@ -167,9 +167,21 @@ async fn open_root(&self, root: &VPath) -> Result<Box<dyn ConfinedRoot>, Error> 
 pub trait ConfinedRoot: Send + Sync {
     async fn mkdir(&self, rel: &[Segment]) -> Result<(), Error>;
     async fn write(&self, rel: &[Segment]) -> Result<Box<dyn ByteSink>, Error>;
+    /// Same contract as `Provider::open_resumable`. Default: `(write(rel), 0)`.
+    async fn open_resumable(&self, rel: &[Segment])
+        -> Result<(Box<dyn ByteSink>, u64), Error> {
+        Ok((self.write(rel).await?, 0))
+    }
     async fn stat(&self, rel: &[Segment]) -> Result<Entry, Error>;
 }
 ```
+
+`open_resumable` is on the handle because the copy engine reaches for it
+first (`ops.rs:1159` picks between `dst.open_resumable(to)` and `dst.write(to)`
+by policy); a handle without it would route every resumable copy back around
+the confinement. The sink it returns publishes with `renameat` against the same
+root fd, so the staging-to-final step is confined too — that step composes a
+path today and is exactly where the guarantee would otherwise leak.
 
 The caller opens the root ONCE and then addresses relative segments. There is
 no path to recompose, which is what makes it TOCTOU-free rather than
@@ -208,9 +220,21 @@ mount, the platform and the running kernel. It does two jobs:
 - **before**: at the confirmation, the frontend asks `fs.capabilities` (already
   exists, already takes a path) and warns the way free space warns since #149 —
   it states the fact and lets the human decide.
-- **after**: the journal entry for the mutation carries `confined: bool`. A
-  field, not a taxonomy: either it was done with a kernel guarantee or it was
-  not.
+- **after**: a `tracing` WARN on the effectful core function, with `task_id`
+  and a redacted VPath, which is where this codebase already puts the facts
+  about what an operation did.
+
+**The journal does NOT get a `confined` column, and that is a cost decision.**
+`chain_hash` (`norte-core/src/journal.rs:443`) carries an explicit warning that
+`batch_id`'s trick — last field, `None` feeds nothing — is not reusable: a
+second optional field added the same way makes `(batch=Some(x), other=None)`
+and `(batch=None, other=Some(x))` hash identically. A hashed field therefore
+costs a new chain format version, with the anchors, `verify_chain` and a
+security review behind it. That is a wave of its own for a boolean, and the
+witness that actually changes an outcome is the one BEFORE the operation, where
+a human is still deciding. An unhashed column was considered and rejected: it
+would sit in `norte audit export` looking like evidence while being editable by
+anyone who can write the DB.
 
 Without the flag, `norte-core` falls back to the `lstat` component walk it can
 do everywhere. That closes the accidental case — the rsync-ed tree with a
@@ -229,8 +253,6 @@ One minor protocol bump for the whole wave:
 - `CapabilityFlags::FULL_FOLD` (bit 9) and `CONFINED_WRITES` (bit 10)
 - `ConflictKind::EscapesRoot` (additive: the enum already has a `#[serde(other)]
   `Unknown` fallback, so an N-1 client reads it as `Unknown` rather than failing)
-- `confined: bool` on the journal entry for tree mutations
-
 All additive; ADR 0004 already requires an N-1 client to ignore an unknown
 well-formed flag name. Goldens and the JSON Schema regenerate in the same
 commit. `protocol-guardian` is mandatory on that commit.
@@ -274,6 +296,8 @@ is a security boundary), `encoding-auditor` (phase A is filename folding),
   today for reasons that are written down; widening the handle to cover them is
   a change with no bug behind it.
 - **A third capability state ("unknown").** Discussed in §1 and rejected.
+- **A tamper-evident record of an unconfined write.** It needs chain format 2;
+  see §3. Its own wave if anyone wants it.
 - **#122** (M4-IA-2 deferred review items), which W5's plan file lists as
   arriving here. It shares no mechanism with these three and is not part of
   this spec.
