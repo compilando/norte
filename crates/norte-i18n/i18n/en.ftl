@@ -751,6 +751,12 @@ sync-blocker-unknown = blocker this version does not know
 # entry the trash cannot name, or a path that changed in the meantime, is
 # named in the undo report instead of being touched.
 space-warning = { $size } to write and { $free } free at the destination
+# #164: this destination cannot open a confined root, so a write reaches its
+# place by resolving a path. Someone who can drop a symlink inside the
+# destination between this prompt and the write can send it elsewhere. Said,
+# never refused: refusing would strand every destination that cannot offer the
+# defence, which costs far more than the race it avoids.
+confine-warning = this destination cannot confine writes: a symlink placed inside it could send this somewhere else
 sync-outlook-full = you can undo all of this afterwards, except anything that changes in the meantime
 sync-outlook-partial = some of this can be undone afterwards, and some cannot
 sync-outlook-nothing = nothing here can be undone by norte

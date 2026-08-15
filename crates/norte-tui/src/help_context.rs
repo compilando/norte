@@ -209,6 +209,7 @@ mod tests {
                 items: vec![vp("file:///x/a")],
                 to: vp("file:///y"),
                 space: None,
+                confine: None,
             },
             collision_modal_de_test(),
             approval_modal_de_test(),

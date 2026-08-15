@@ -19,6 +19,7 @@ pub mod columns;
 pub mod columns_picker;
 pub mod compare;
 pub mod config;
+pub mod confine;
 mod decoration;
 mod display;
 pub mod error;

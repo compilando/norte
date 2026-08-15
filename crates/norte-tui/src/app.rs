@@ -822,16 +822,24 @@ fn caps_key(at: &VPath) -> CapsKey {
 /// retained listings and its approvals cap.
 const DEGRADED_MAX: usize = 32;
 
-/// Lo que el run loop tiene que preguntar para poder avisar de espacio (#149).
+/// Lo que el run loop tiene que preguntarle al DESTINO antes de que el humano
+/// diga que sí: si cabe (#149) y si sabe sujetar sus escrituras (#164).
+///
+/// Van juntas porque son la misma pregunta hecha al mismo sitio en el mismo
+/// momento, y separarlas costaría dos rondas de I/O por diálogo para pintar dos
+/// líneas contiguas.
 #[derive(Debug, Clone)]
-pub struct SpaceCheck {
-    /// El directorio DESTINO, que es de quien se pregunta el espacio.
+pub struct DestCheck {
+    /// El directorio DESTINO, que es de quien se pregunta todo esto.
     pub to: VPath,
-    /// Bytes que la transferencia va a escribir. Solo se construye cuando se
-    /// conocen TODOS — un directorio no trae tamaño en el listado, y sumar
-    /// solo lo conocido avisaría con un número menor que el real (lo calcula
-    /// `App::transfer_total`, privado).
-    pub total: u64,
+    /// Bytes que la transferencia va a escribir, si se saben.
+    ///
+    /// `None` = alguno de los ítems no dice cuánto ocupa (un directorio no lo
+    /// trae en el listado), y entonces NO hay pregunta de espacio: sumar solo
+    /// lo conocido avisaría con un número menor que el real (lo calcula
+    /// `App::transfer_total`, privado). La de confinamiento se hace igual — no
+    /// depende del tamaño, y es justo el caso recursivo el que más la necesita.
+    pub total: Option<u64>,
 }
 
 /// Lo que la barra dice del journal de ESTA sesión.
@@ -1073,10 +1081,11 @@ pub struct App {
     /// a las tablas recién vaciadas de la SIGUIENTE. Lo que impide eso es que
     /// el resultado traiga la generación con la que se pidió.
     compare_generation: u64,
-    /// La comprobación de espacio que el run loop tiene pendiente (#149):
-    /// `open_transfer` sabe QUÉ se va a mover, y preguntar por los volúmenes
-    /// es I/O, que es del run loop. Mismo reparto que `pending_compare`.
-    pub pending_space_check: Option<SpaceCheck>,
+    /// Lo que hay que preguntarle al destino y el run loop aún no ha
+    /// preguntado (#149, #164): `open_transfer` sabe QUÉ se va a mover, y
+    /// preguntar por los volúmenes y las capacidades es I/O, que es del run
+    /// loop. Mismo reparto que `pending_compare`.
+    pub pending_dest_check: Option<DestCheck>,
     /// Params de `fs.compare` que el despacho resolvió y el run loop aún no
     /// ha lanzado (`Shift+F2`). Mismo reparto que [`Self::pending_open`] y
     /// [`Self::pending_shell`]: `dispatch` decide QUÉ, el run loop —dueño del
@@ -2031,7 +2040,7 @@ impl App {
             compare_size_probed: std::collections::HashSet::new(),
             compare_generation: 0,
             pending_compare: None,
-            pending_space_check: None,
+            pending_dest_check: None,
             sync: None,
             pending_sync: None,
             pending_sync_apply: None,
@@ -3091,17 +3100,16 @@ impl App {
                 // El total SOLO si TODOS los ítems traen tamaño (#149): un
                 // directorio no lo trae en el listado, y sumar lo que sí
                 // avisaría con un número menor que el real — peor que callar.
-                self.pending_space_check =
-                    self.transfer_total(from, &items)
-                        .map(|total| crate::app::SpaceCheck {
-                            to: to_dir.clone(),
-                            total,
-                        });
+                self.pending_dest_check = Some(crate::app::DestCheck {
+                    to: to_dir.clone(),
+                    total: self.transfer_total(from, &items),
+                });
                 self.modal = Some(Modal::ConfirmTransfer {
                     kind,
                     items,
                     to: to_dir,
                     space: None,
+                    confine: None,
                 });
             }
         }
@@ -4590,6 +4598,13 @@ pub enum Modal {
         /// vez: cabe, o el destino no sabe decir cuánto le queda, o no se sabe
         /// cuánto se va a mover. Ninguna de las tres se anuncia.
         space: Option<String>,
+        /// El aviso de confinamiento, cuando lo hay (#164): igual que
+        /// [`Modal::ConfirmTransfer::space`], lo escribe el run loop y lo pinta
+        /// este modal.
+        ///
+        /// `None` = este destino sabe sujetar sus escrituras, que es el caso
+        /// normal en Linux y macOS y no se anuncia.
+        confine: Option<String>,
     },
     /// Colisión: elegir política y REENVIAR la operación entera (ADR 0005:
     /// el engine trata Ask como Fail; el TUI pregunta a nivel de task).

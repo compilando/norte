@@ -117,6 +117,7 @@ fn el_modal_de_transferencia_pinta_el_aviso_de_espacio() {
             items: vec![vp("file:///casa/a.bin"), vp("file:///casa/b.bin")],
             to: vp("file:///medios"),
             space,
+            confine: None,
         });
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
         terminal.draw(|f| ui::draw(f, &app)).expect("draw");
@@ -144,6 +145,72 @@ fn el_modal_de_transferencia_pinta_el_aviso_de_espacio() {
     // Sin aviso, ni rastro de él.
     let sin = pintar(None);
     assert!(!sin.contains(&aviso), "cuando cabe no se dice nada:\n{sin}");
+}
+
+/// #164: y debajo del de espacio, el de confinamiento — misma clase de línea
+/// (un hecho del destino, antes de decir que sí) y mismo contrato: solo cuando
+/// lo hay, y sin bloquear nada.
+#[test]
+fn el_modal_de_transferencia_pinta_el_aviso_de_confinamiento() {
+    let dir = vp("file:///casa");
+    let pintar = |space: Option<String>, confine: Option<String>| {
+        let mut app = App::new(
+            Pane::new(dir.clone(), Vec::new()),
+            Pane::new(dir.clone(), Vec::new()),
+        );
+        app.dialog_hints = default_dialog_hints();
+        app.modal = Some(Modal::ConfirmTransfer {
+            kind: TransferKind::Copy,
+            items: vec![vp("file:///casa/a.bin")],
+            to: vp("sftp://host/medios"),
+            space,
+            confine,
+        });
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+        terminal.backend().to_string()
+    };
+
+    let sin_confinar = norte_frontend::confine::warning(
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::empty(),
+            max_path: None,
+        },
+        norte_i18n::active(),
+    )
+    .expect("un destino que no confina lo dice");
+    let espacio = norte_frontend::space::warning(
+        Some(4_200_000_000),
+        Some(1_100_000_000),
+        norte_i18n::active(),
+    )
+    .expect("no cabe: hay aviso");
+
+    let con = pintar(Some(espacio.clone()), Some(sin_confinar.clone()));
+    let lineas: Vec<&str> = con.lines().collect();
+    let fila = |aguja: &str| {
+        lineas
+            .iter()
+            .position(|l| l.contains(aguja))
+            .unwrap_or_else(|| panic!("falta {aguja:?} en:\n{con}"))
+    };
+    let destino = fila("medios");
+    let del_espacio = fila(espacio.split_whitespace().next().expect("palabra"));
+    // El modal envuelve, así que se busca una palabra que la línea no comparta
+    // con ninguna otra en vez de la frase entera.
+    let del_confinamiento = fila("symlink");
+    assert!(del_espacio > destino, "espacio bajo el destino:\n{con}");
+    assert!(
+        del_confinamiento > del_espacio,
+        "y el confinamiento debajo del espacio:\n{con}"
+    );
+
+    // Un destino que sí confina no dice nada, que es el caso normal.
+    let sin = pintar(None, None);
+    assert!(
+        !sin.contains("symlink"),
+        "quien confina no se anuncia:\n{sin}"
+    );
 }
 
 #[test]
@@ -664,6 +731,7 @@ fn snapshot_modal_confirm_transfer_cjk() {
         items: vec![vp("file:///casa/notas.txt")],
         to: vp("file:///otro/日本語のファイル名.txt"),
         space: None,
+        confine: None,
     });
     insta::assert_snapshot!(render(&app));
 }
@@ -788,6 +856,7 @@ fn ningun_modal_con_hint_generado_ofrece_verbos_bajo_la_ayuda() {
                 items: vec![vp("file:///casa/notas.txt")],
                 to: vp("file:///otro"),
                 space: None,
+                confine: None,
             },
             hints.confirm.clone(),
         ),

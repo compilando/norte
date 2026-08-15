@@ -2288,6 +2288,7 @@ fn modal_title_body(
             items,
             to,
             space,
+            confine,
         } => (
             match kind {
                 TransferKind::Copy => t("modal-copy-title"),
@@ -2306,6 +2307,11 @@ fn modal_title_body(
                 // cuando lo hay: cabe, o el destino no sabe decirlo, o no se
                 // sabe cuánto se mueve, y ninguna de las tres se anuncia.
                 space.clone().into_iter().collect::<Vec<String>>(),
+                // #164: y justo debajo, si el destino no sabe confinar lo que
+                // se escriba en él. Las dos líneas son de la misma clase —un
+                // hecho del destino que conviene saber antes de decir que sí—
+                // y ninguna bloquea nada.
+                confine.clone().into_iter().collect::<Vec<String>>(),
                 vec![hints.confirm.clone()],
             ]
             .concat()
