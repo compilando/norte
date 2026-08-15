@@ -745,3 +745,45 @@ async fn synthetic_attrs_hostiles_y_deterministas() {
         assert!(e.expect("entrada").attrs.is_empty());
     }
 }
+
+// ---------- capabilities por ubicación (ADR 0054) ----------
+
+#[tokio::test]
+async fn capabilities_at_defaults_to_the_declaration() {
+    let mem = MemProvider::new();
+    let root = MemProvider::root();
+    assert_eq!(
+        mem.capabilities_at(&root).await.expect("responde"),
+        mem.capabilities(),
+        "sin guion, la ubicación responde lo que declara el backend"
+    );
+}
+
+#[tokio::test]
+async fn a_scripted_location_overrides_the_declaration() {
+    let mem = MemProvider::new();
+    let usb = vp("mem:///usb");
+    mem.mkdir(&usb).await.expect("dir");
+    mem.set_caps_at(
+        &usb,
+        norte_proto::Capabilities {
+            flags: CapabilityFlags::CASE_PRESERVING | CapabilityFlags::FULL_FOLD,
+            max_path: None,
+        },
+    );
+
+    let at = mem.capabilities_at(&usb).await.expect("responde");
+    assert!(at.flags.contains(CapabilityFlags::FULL_FOLD));
+    assert!(
+        !mem.capabilities().flags.contains(CapabilityFlags::FULL_FOLD),
+        "y el backend sigue declarando lo suyo"
+    );
+
+    // Una ubicación sin guion propio no hereda el del vecino.
+    assert_eq!(
+        mem.capabilities_at(&MemProvider::root())
+            .await
+            .expect("responde"),
+        mem.capabilities()
+    );
+}

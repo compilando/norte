@@ -527,6 +527,12 @@ impl Provider for SessionProvider {
     fn capabilities(&self) -> norte_proto::Capabilities {
         self.inner.capabilities()
     }
+    async fn capabilities_at(
+        &self,
+        p: &norte_proto::VPath,
+    ) -> Result<norte_proto::Capabilities, Error> {
+        self.observe(self.inner.capabilities_at(p).await)
+    }
     fn attrs(&self) -> &[norte_proto::AttrInfo] {
         self.inner.attrs()
     }
@@ -672,6 +678,12 @@ mod tests {
                 flags: norte_proto::CapabilityFlags::empty(),
                 max_path: None,
             }
+        }
+        async fn capabilities_at(
+            &self,
+            _p: &VPath,
+        ) -> Result<norte_proto::Capabilities, Error> {
+            Err(pu())
         }
         fn attrs(&self) -> &[norte_proto::AttrInfo] {
             static UNO: std::sync::LazyLock<Vec<norte_proto::AttrInfo>> =
@@ -861,6 +873,7 @@ mod tests {
             }};
         }
 
+        evicta!(w.capabilities_at(&p).await);
         evicta!(w.stat(&p).await);
         evicta!(w.stat_with(&p, &norte_vfs::ListOptions::default()).await);
         evicta!(w.list(&p).await);

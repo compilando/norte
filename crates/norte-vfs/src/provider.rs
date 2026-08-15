@@ -96,6 +96,29 @@ pub trait Provider: Send + Sync {
     /// Capacidades declaradas; el core elige estrategia consultándolas.
     fn capabilities(&self) -> Capabilities;
 
+    /// Capacidades REFINADAS para `p`: la misma declaración, corregida con lo
+    /// que el backend pueda averiguar de ESA ubicación — cómo pliega la caja
+    /// ese mount, si el directorio es un ext4/f2fs `+F`
+    /// ([`norte_proto::CapabilityFlags::FULL_FOLD`]), si una escritura bajo él puede
+    /// confinarse ([`norte_proto::CapabilityFlags::CONFINED_WRITES`]).
+    ///
+    /// Es `async` porque la respuesta cuesta I/O: una sonda va en
+    /// `spawn_blocking` (regla dura 2), no en el runtime. El default responde
+    /// [`Self::capabilities`], que es lo correcto para cualquier backend cuyas
+    /// ubicaciones son todas iguales; sobreescribirlo es para el que sirve más
+    /// de un filesystem tras un mismo scheme (ADR 0054).
+    ///
+    /// Una sonda que no sabe responder NO es error: se devuelve la
+    /// declaración. [`Capabilities`] no sabe decir «no lo sé» —un flag ausente
+    /// significa ausente— y eso es una decisión, no un olvido: la degradación
+    /// es exactamente el comportamiento declarado de siempre.
+    ///
+    /// Errores: los que produzca `p` ([`Error::NotFound`] si no existe).
+    async fn capabilities_at(&self, p: &VPath) -> Result<Capabilities, Error> {
+        let _ = p;
+        Ok(self.capabilities())
+    }
+
     /// Metadatos de un nodo. Symlinks: describe el LINK (kind `Symlink`),
     /// jamás el destino.
     async fn stat(&self, p: &VPath) -> Result<Entry, Error>;

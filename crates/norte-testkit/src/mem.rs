@@ -135,6 +135,11 @@ pub struct MemProvider {
     /// sin attrs; [`Self::with_synthetic_attrs`] lo puebla con valores
     /// deterministas y deliberadamente hostiles.
     attr_defs: Vec<norte_proto::AttrInfo>,
+    /// Capabilities guionizadas POR UBICACIÓN (ADR 0054): simula un backend
+    /// que sirve más de un filesystem tras un scheme — la raíz en ext4 y un
+    /// `/usb` en exFAT, o un directorio ext4 en `+F`. Vacío (default) = todas
+    /// las ubicaciones responden [`Self::capabilities`].
+    caps_at: Arc<Mutex<BTreeMap<SegPath, Capabilities>>>,
     tree: Arc<Mutex<Tree>>,
     faults: Arc<Faults>,
 }
@@ -191,9 +196,25 @@ impl MemProvider {
             list_skipped: None,
             logical_trash: false,
             attr_defs: Vec::new(),
+            caps_at: Arc::new(Mutex::new(BTreeMap::new())),
             tree: Arc::new(Mutex::new(Tree::default())),
             faults: Arc::new(Faults::default()),
         }
+    }
+
+    /// Guioniza las capabilities de UNA ubicación (ADR 0054): a partir de aquí
+    /// `capabilities_at(p)` responde `caps` en vez de la declaración del
+    /// backend. Es la costura con la que se prueba un `+F` o un exFAT montado
+    /// sin tener ninguno — ningún CI de este proyecto los tiene.
+    ///
+    /// Solo afecta a la ubicación EXACTA: un hijo suyo sigue respondiendo la
+    /// declaración, porque el testkit no simula herencia por mount y fingirla
+    /// escondería justo el fallo que #153 describe.
+    pub fn set_caps_at(&self, p: &VPath, caps: Capabilities) {
+        self.caps_at
+            .lock()
+            .expect("caps_at lock sano")
+            .insert(seg_path(p), caps);
     }
 
     /// Atributos SINTÉTICOS deterministas (#108 bloque 2) con valores
@@ -644,6 +665,16 @@ impl Provider for MemProvider {
 
     fn capabilities(&self) -> Capabilities {
         self.caps
+    }
+
+    async fn capabilities_at(&self, p: &VPath) -> Result<Capabilities, Error> {
+        Ok(self
+            .caps_at
+            .lock()
+            .expect("caps_at lock sano")
+            .get(&seg_path(p))
+            .copied()
+            .unwrap_or(self.caps))
     }
 
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
