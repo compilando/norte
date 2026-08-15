@@ -31,6 +31,14 @@ pub enum ConflictKind {
     Normalization,
     /// El destino existe con otro tipo (dir donde va un archivo o viceversa).
     TypeMismatch,
+    /// La ruta relativa se sale de su raíz confinada (0.45.0, #164, ADR 0054):
+    /// un componente INTERMEDIO es un symlink, y seguirlo escribiría fuera de
+    /// la raíz que nombró el caller.
+    ///
+    /// No es [`Self::Exists`] ni `Error::NotFound` a propósito: un caller que
+    /// ve `NotFound` responde creando el padre, que es exactamente la
+    /// operación que este subtipo existe para impedir.
+    EscapesRoot,
     /// Subtipo de un protocolo más nuevo (fallback de deserialización).
     /// El core JAMÁS lo emite.
     #[doc(hidden)]
@@ -45,6 +53,7 @@ impl fmt::Display for ConflictKind {
             Self::CaseCollision => "case-insensitive collision",
             Self::Normalization => "unicode normalization collision",
             Self::TypeMismatch => "destination type mismatch",
+            Self::EscapesRoot => "path escapes its confined root",
             Self::Unknown => "unknown conflict kind (newer protocol)",
         })
     }

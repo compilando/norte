@@ -38,6 +38,25 @@ bitflags::bitflags! {
         /// directorios): TODA mutación responde `Unsupported`. La UI veta
         /// upfront y el copy engine rechaza destinos aquí sin round-trip.
         const READ_ONLY = 1 << 8;
+        /// El plegado de caja de esta UBICACIÓN **expande** (0.45.0, #145,
+        /// ADR 0054): ext4/f2fs con el directorio en `+F`, cuya tabla del
+        /// kernel se construye de `CaseFolding.txt` con estado `C + F`, así
+        /// que `straße.txt` y `strasse.txt` son UN archivo ahí.
+        ///
+        /// Solo tiene sentido SIN [`Self::CASE_SENSITIVE`] —un directorio que
+        /// distingue caja no pliega nada— y solo lo responde
+        /// `Provider::capabilities_at`: es del directorio, no del backend.
+        const FULL_FOLD = 1 << 9;
+        /// Una escritura bajo esta ubicación puede confinarse bajo la raíz que
+        /// nombre el caller, con garantía del kernel (0.45.0, #164, ADR 0054):
+        /// `Provider::open_root` devuelve un handle en vez de `Unsupported`.
+        ///
+        /// Lo responde `Provider::capabilities_at` y JAMÁS `capabilities()`:
+        /// depende del mount, de la plataforma y del kernel en marcha. Su
+        /// ausencia no impide nada —el core degrada al paseo con `lstat` y lo
+        /// dice— pero significa que un symlink en un componente INTERMEDIO
+        /// puede redirigir la escritura fuera de su raíz.
+        const CONFINED_WRITES = 1 << 10;
     }
 }
 

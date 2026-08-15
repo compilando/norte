@@ -2972,7 +2972,14 @@ fn method_names_frozen() {
     // vocabulario ABIERTO de `LimitExceeded`, para que el rechazo del tope de
     // planes retenidos viaje con taxonomía en vez de llegar como «internal
     // error». Un cliente N-1 lo enseña tal cual, que es el contrato del campo.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.44.0");
+    // 0.45.0 (#145, #164, ADR 0054): `CapabilityFlags::FULL_FOLD` y
+    // `CONFINED_WRITES`, más `ConflictKind::EscapesRoot`. Los dos flags son
+    // nombres nuevos de un vocabulario que ADR 0004 obliga a IGNORAR cuando no
+    // se conoce, y el subtipo de conflicto degrada a `Unknown` por el
+    // `#[serde(other)]` de ADR 0005: un cliente 0.44.x lee «conflicto que esta
+    // versión no sabe nombrar» sobre una operación que igualmente falló, no
+    // actúa de más. MINOR, por tanto, y no MAJOR.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.45.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

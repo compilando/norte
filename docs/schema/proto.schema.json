@@ -606,6 +606,11 @@
           "type": "string"
         },
         {
+          "const": "escapes_root",
+          "description": "La ruta relativa se sale de su raíz confinada (0.45.0, #164, ADR 0054):\nun componente INTERMEDIO es un symlink, y seguirlo escribiría fuera de\nla raíz que nombró el caller.\n\nNo es [`Self::Exists`] ni `Error::NotFound` a propósito: un caller que\nve `NotFound` responde creando el padre, que es exactamente la\noperación que este subtipo existe para impedir.",
+          "type": "string"
+        },
+        {
           "const": "unknown",
           "description": "Subtipo de un protocolo más nuevo (fallback de deserialización).\nEl core JAMÁS lo emite.",
           "type": "string"
