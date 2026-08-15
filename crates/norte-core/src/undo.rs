@@ -708,9 +708,7 @@ pub(crate) async fn revert_batch(
     if caps.flags.contains(CapabilityFlags::READ_ONLY) {
         return Ok(Reverted::blocked(first.seq, Error::Unsupported));
     }
-    let name_caps = NameCaps {
-        case_sensitive: caps.flags.contains(CapabilityFlags::CASE_SENSITIVE),
-    };
+    let name_caps = NameCaps::from_capabilities(caps);
     // Un fallo al listar NO mata la sesión: bloquea esta unidad y el reporte
     // dice cuál. Morir aquí devolvería un `UndoReport` vacío, sin `seq` ni
     // motivo, y con todo lo más viejo de la sesión sin intentar siquiera —
@@ -1436,7 +1434,7 @@ mod tests {
     }
 
     const SENSITIVE: NameCaps = NameCaps {
-        case_sensitive: true,
+        fold: norte_encoding::FoldMode::None,
     };
 
     fn inv(from: &[u8], to: &[u8], seq: i64) -> Inverse {
@@ -1484,7 +1482,7 @@ mod tests {
     #[test]
     fn undoing_a_case_only_rename_is_not_a_conflict() {
         let insensitive = NameCaps {
-            case_sensitive: false,
+            fold: norte_encoding::FoldMode::Simple,
         };
         let steps = vec![inv(b"foo", b"Foo", 1)];
         assert!(feasible(&steps, &[b"foo".to_vec()], insensitive).is_ok());

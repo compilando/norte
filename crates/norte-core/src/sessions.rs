@@ -679,10 +679,7 @@ mod tests {
                 max_path: None,
             }
         }
-        async fn capabilities_at(
-            &self,
-            _p: &VPath,
-        ) -> Result<norte_proto::Capabilities, Error> {
+        async fn capabilities_at(&self, _p: &VPath) -> Result<norte_proto::Capabilities, Error> {
             Err(pu())
         }
         fn attrs(&self) -> &[norte_proto::AttrInfo] {

@@ -2149,9 +2149,7 @@ impl Engine {
         if caps.flags.contains(CapabilityFlags::READ_ONLY) {
             return Err(Error::Unsupported);
         }
-        let name_caps = crate::rename::NameCaps {
-            case_sensitive: caps.flags.contains(CapabilityFlags::CASE_SENSITIVE),
-        };
+        let name_caps = crate::rename::NameCaps::from_capabilities(caps);
         let owned: Vec<(Vec<u8>, Vec<u8>)> = pairs.to_vec();
         // El planificador es SÍNCRONO y asigna una clave de comparación por
         // entrada del listado: sobre un directorio de cien mil ficheros eso es

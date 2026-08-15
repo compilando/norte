@@ -25,8 +25,43 @@ use super::naming::{TempNames, intent_tag, plan_hash};
 /// both regimes mounted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NameCaps {
-    /// `true` when `Foo` and `foo` are two names in this directory.
-    pub case_sensitive: bool,
+    /// How this directory folds names. `FoldMode::None` = `Foo` and `foo` are
+    /// two names here; `Full` = the fold EXPANDS (ext4/f2fs `+F`), so
+    /// `straße.txt` and `strasse.txt` are one name (#145).
+    pub fold: FoldMode,
+}
+
+impl NameCaps {
+    /// From the [`Capabilities`](norte_proto::Capabilities) a provider answers
+    /// FOR THAT DIRECTORY (`Provider::capabilities_at`, ADR 0054).
+    ///
+    /// The mapping lives here and in `norte_compare::Sides` and nowhere else,
+    /// and the two agree by construction rather than by memory: `FULL_FOLD`
+    /// wins, then a directory that does not distinguish case folds simple,
+    /// then nothing folds.
+    ///
+    /// ```
+    /// use norte_core::rename::plan::NameCaps;
+    /// use norte_encoding::FoldMode;
+    /// use norte_proto::{Capabilities, CapabilityFlags};
+    /// let ext4_f = Capabilities {
+    ///     flags: CapabilityFlags::CASE_PRESERVING | CapabilityFlags::FULL_FOLD,
+    ///     max_path: None,
+    /// };
+    /// assert_eq!(NameCaps::from_capabilities(ext4_f).fold, FoldMode::Full);
+    /// ```
+    #[must_use]
+    pub fn from_capabilities(c: norte_proto::Capabilities) -> Self {
+        use norte_proto::CapabilityFlags;
+        let fold = if c.flags.contains(CapabilityFlags::FULL_FOLD) {
+            FoldMode::Full
+        } else if c.flags.contains(CapabilityFlags::CASE_SENSITIVE) {
+            FoldMode::None
+        } else {
+            FoldMode::Simple
+        };
+        Self { fold }
+    }
 }
 
 /// Why a plan cannot run. Mirrors `norte_proto::methods::RenameCollisionKind`;
@@ -193,7 +228,8 @@ impl RenamePlan {
 ///
 /// ```
 /// use norte_core::rename::plan::{NameCaps, name_key};
-/// let insensitive = NameCaps { case_sensitive: false };
+/// # use norte_encoding::FoldMode;
+/// let insensitive = NameCaps { fold: FoldMode::Simple };
 /// assert_eq!(name_key(b"Foo", insensitive).as_ref(), b"foo");
 /// // A trailing byte that is not UTF-8 stays byte for byte, but no longer
 /// // disables folding of the valid text ahead of it (#154).
@@ -201,12 +237,7 @@ impl RenamePlan {
 /// ```
 #[must_use]
 pub fn name_key(name: &[u8], caps: NameCaps) -> Cow<'_, [u8]> {
-    let mode = if caps.case_sensitive {
-        FoldMode::None
-    } else {
-        FoldMode::Simple
-    };
-    norte_encoding::name_key(name, mode)
+    norte_encoding::name_key(name, caps.fold)
 }
 
 /// A pair that survived classification and is real work.
@@ -370,7 +401,8 @@ impl<'a> Listing<'a> {
 ///
 /// ```
 /// use norte_core::rename::plan::{NameCaps, plan_batch};
-/// let caps = NameCaps { case_sensitive: true };
+/// # use norte_encoding::FoldMode;
+/// let caps = NameCaps { fold: FoldMode::None };
 /// // A swap: one temporary breaks the cycle, and it lands last.
 /// let pairs = vec![(b"a".to_vec(), b"b".to_vec()), (b"b".to_vec(), b"a".to_vec())];
 /// let plan = plan_batch(&pairs, &[b"a".to_vec(), b"b".to_vec()], caps);
@@ -590,11 +622,50 @@ mod tests {
     }
 
     const SENSITIVE: NameCaps = NameCaps {
-        case_sensitive: true,
+        fold: FoldMode::None,
     };
     const INSENSITIVE: NameCaps = NameCaps {
-        case_sensitive: false,
+        fold: FoldMode::Simple,
     };
+    /// ext4/f2fs con el directorio en `+F`: el pliegue EXPANDE (#145).
+    const FULL_FOLD: NameCaps = NameCaps {
+        fold: FoldMode::Full,
+    };
+
+    /// #145: on a directory that folds FULL (ext4/f2fs `+F`), `strasse.txt` is
+    /// already `straße.txt`. A planner that folds simple reports no collision,
+    /// collision, the human approves, and the batch dies mid-execution against the real
+    /// filesystem — which is the failure #129 fixed for the simple fold and
+    /// this closes for the full one.
+    #[test]
+    fn a_full_folding_directory_sees_the_collision_a_simple_fold_misses() {
+        // Del corpus canónico, no a mano: son los dos nombres que #145 dejo
+        // puestos como pareja conocida (`straße.txt` / `strasse.txt`).
+        let fixture = |id: &str| {
+            norte_testkit::corpus::hostile_names()
+                .into_iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("fixture {id} en el corpus"))
+                .bytes
+        };
+        let zett = fixture("ext4_full_fold_es_zett");
+        let ss = fixture("ext4_full_fold_ss");
+        let listing = vec![name(b"otro.txt"), ss];
+        let batch = vec![(name(b"otro.txt"), zett)];
+
+        let full = plan_batch(&batch, &listing, FULL_FOLD);
+        assert!(
+            !full.executable(),
+            "en +F el destino YA existe con otra grafía"
+        );
+        assert_eq!(full.collisions[0].kind, CollisionKind::External);
+
+        let simple = plan_batch(&batch, &listing, INSENSITIVE);
+        assert!(
+            simple.executable(),
+            "y donde se pliega simple son dos nombres, como siempre"
+        );
+    }
 
     /// The ordinary case: three independent renames stay in one step each.
     #[test]
@@ -1863,7 +1934,9 @@ mod tests {
             idx in proptest::collection::vec((0usize..8, 0usize..8), 0..8),
             insensitive in any::<bool>(),
         ) {
-            let caps = NameCaps { case_sensitive: !insensitive };
+            let caps = NameCaps {
+                fold: if insensitive { FoldMode::Simple } else { FoldMode::None },
+            };
             let listing: Vec<Vec<u8>> = names.clone();
             let ps: Vec<(Vec<u8>, Vec<u8>)> = idx
                 .iter()
@@ -1950,7 +2023,9 @@ mod tests {
             insensitive in any::<bool>(),
         ) {
             let hostile = hostile_corpus();
-            let caps = NameCaps { case_sensitive: !insensitive };
+            let caps = NameCaps {
+                fold: if insensitive { FoldMode::Simple } else { FoldMode::None },
+            };
             // A directory cannot hold one byte string twice.
             let mut listing: Vec<Vec<u8>> = Vec::new();
             for i in listing_idx {

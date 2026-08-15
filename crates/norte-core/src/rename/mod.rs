@@ -209,7 +209,7 @@ mod tests {
         let pairs = vec![(b"a".to_vec(), b"x".to_vec())];
         let listing = vec![b"a".to_vec()];
         let caps = NameCaps {
-            case_sensitive: true,
+            fold: norte_encoding::FoldMode::None,
         };
         let plan = plan_batch(&pairs, &listing, caps);
         let here = DirPlan::bind(
