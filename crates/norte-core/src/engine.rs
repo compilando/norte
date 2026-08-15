@@ -1259,17 +1259,17 @@ impl Engine {
                 relation: norte_proto::RootOverlap::Same,
             });
         }
-        // DESPUÉS de una operación async sobre el provider: `capabilities` es
-        // síncrono (regla 2: no puede hacer I/O) y `norte-vfs-local` sondea de
-        // forma perezosa dentro de la primera operación async. Preguntar antes
-        // devuelve el default de `cfg!(target_os)`.
-        let caps = dest.capabilities();
-        // 3ª puerta: la contención que ve un volumen que PLIEGA. Solo puede
-        // disparar cuando scheme y authority coinciden, y entonces las dos
-        // raíces salen del mismo objeto provider (el pool cachea por
-        // `scheme://authority`), así que el `node_id` de arriba ya forzó el
-        // sondeo perezoso de capacidades y estas son las de verdad.
-        let sides = norte_compare::Sides::from_capabilities(source.capabilities(), caps);
+        // 3ª puerta: la contención que ve un volumen que PLIEGA. Se le pregunta
+        // a CADA RAÍZ y no al provider (ADR 0054): las dos pueden estar en
+        // mounts distintos del mismo `file://`, y es el mount que no distingue
+        // caja —o el que además EXPANDE, un ext4 en `+F`— el que decide si
+        // estas dos raíces se solapan.
+        let (source_caps, dest_caps) = tokio::join!(
+            source.capabilities_at(&params.source),
+            dest.capabilities_at(&params.dest)
+        );
+        let caps = dest_caps?;
+        let sides = norte_compare::Sides::from_capabilities(source_caps?, caps);
         if sides.folds_case()
             && let Some(relation) = folded_overlap(&params.source, &params.dest, sides)
         {
@@ -2133,19 +2133,18 @@ impl Engine {
             }
         }
         let provider = self.provider_for(dir).await?;
-        // El LISTADO va primero, y el orden es la corrección, no un detalle de
-        // estilo. `Provider::capabilities` es síncrono (regla 2: no puede hacer
-        // I/O) y `norte-vfs-local` sondea el régimen de mayúsculas de forma
-        // PEREZOSA, dentro de la primera operación async; hasta entonces
-        // contesta el default de `cfg!(target_os)` — justo lo que la doc de
-        // `NameCaps` promete que no se hace. Preguntar antes de listar
-        // planifica un volumen que pliega el caso como si lo distinguiera: una
-        // colisión `External` que no se reporta, y un plan que el humano
-        // aprueba sin la línea que le importaba. Es el caso normal de un
-        // puente MCP o un CLI de un solo tiro, donde planificar ES la primera
-        // operación del provider.
+        // El LISTADO va primero, y el orden sigue siendo la corrección aunque
+        // `capabilities_at` ya sondee por su cuenta (ADR 0054): un directorio
+        // que no se deja listar no tiene plan que calcular, y preguntar por sus
+        // capabilities antes solo adelantaría trabajo para tirarlo.
+        //
+        // Y se pregunta por el DIRECTORIO, no por el provider, que es lo que la
+        // doc de `NameCaps` promete: planificar sobre un volumen que pliega
+        // como si distinguiera caja es una colisión `External` que no se
+        // reporta y un plan que el humano aprueba sin la línea que le
+        // importaba.
         let names = list_base_names(&*provider, dir).await?;
-        let caps = provider.capabilities();
+        let caps = provider.capabilities_at(dir).await?;
         if caps.flags.contains(CapabilityFlags::READ_ONLY) {
             return Err(Error::Unsupported);
         }
@@ -2503,13 +2502,19 @@ impl Engine {
         ))
     }
 
-    /// Capabilities del provider que sirve `p` (para que el frontend
-    /// decida, p. ej., si el F8 va a papelera o avisa de permanente).
+    /// Capabilities de LA UBICACIÓN `p` (para que el frontend decida, p. ej.,
+    /// si el F8 va a papelera o avisa de permanente).
+    ///
+    /// Desde ADR 0054 responde por la ubicación y no por el provider entero:
+    /// el método del wire (`fs.capabilities`) siempre tomó un path y hasta
+    /// ahora contestaba lo mismo para cualquiera de ellos, lo cual es falso en
+    /// cuanto una máquina monta dos filesystems distintos.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si el scheme no tiene provider registrado.
+    /// [`Error::Unsupported`] si el scheme no tiene provider registrado, y lo
+    /// que produzca `p` en el provider ([`Error::NotFound`] si no existe).
     pub async fn capabilities(&self, p: &VPath) -> Result<norte_proto::Capabilities, Error> {
-        Ok(self.provider_for(p).await?.capabilities())
+        self.provider_for(p).await?.capabilities_at(p).await
     }
 
     /// Barre el staging `.norte-partial` huérfano (crashes previos, ADR 0012 /
