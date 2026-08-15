@@ -9,6 +9,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A collision is judged against the volume it will land on, not against
+  whatever the program happened to ask first.** norte asks a filesystem about
+  *the directory in question* rather than about itself, so comparing your home
+  directory against a USB stick no longer answers the home directory's rules
+  for both. Two files called `README` and `readme` on a stick that cannot tell
+  them apart are now reported as the collision they are, and on Linux the
+  directories that fold names the *expanding* way (ext4 and f2fs with
+  case-insensitivity switched on) are recognised too: there `straße.txt` and
+  `strasse.txt` are one file, and the batch rename planner now says so before
+  you approve a plan that would die halfway through (#153, #145, ADR 0054).
+  Finding this out costs no writing: norte asks the kernel, and only falls back
+  to the old create-a-file-and-see probe where nothing else can answer — which
+  also means a read-only mount and someone else's directory now get an answer
+  instead of a shrug.
+
 - **Synchronise two directories, one way, and be told what you cannot take
   back before you say yes:** `Ctrl+y` over the two panes plans a
   synchronisation, and inside the **terminal interface's** diff pane `s`

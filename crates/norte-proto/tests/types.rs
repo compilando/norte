@@ -327,7 +327,7 @@ fn full_fold_round_trips_on_the_wire() {
         flags: CapabilityFlags::CASE_PRESERVING | CapabilityFlags::FULL_FOLD,
         max_path: None,
     };
-    let json = serde_json::to_value(&c).expect("serializa");
+    let json = serde_json::to_value(c).expect("serializa");
     assert_eq!(json["flags"], "CASE_PRESERVING | FULL_FOLD");
     assert_eq!(roundtrip(&c), c);
 }
@@ -340,7 +340,7 @@ fn confined_writes_round_trips_on_the_wire() {
         flags: CapabilityFlags::CONFINED_WRITES,
         max_path: None,
     };
-    let json = serde_json::to_value(&c).expect("serializa");
+    let json = serde_json::to_value(c).expect("serializa");
     assert_eq!(json["flags"], "CONFINED_WRITES");
     assert_eq!(roundtrip(&c), c);
 }

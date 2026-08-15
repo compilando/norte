@@ -73,10 +73,7 @@ impl LocalProvider {
     #[doc(hidden)]
     #[must_use]
     pub fn caps_at_probe_count(&self) -> u64 {
-        self.caps_at
-            .lock()
-            .expect("caps_at lock sano")
-            .probes
+        self.caps_at.lock().expect("caps_at lock sano").probes
     }
 
     /// Sondea capabilities UNA vez, dentro de `spawn_blocking` (regla 2:
