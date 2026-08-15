@@ -9,6 +9,31 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A copy cannot be redirected out of the folder you pointed it at.** Approve a
+  synchronisation or a recursive copy, and between saying yes and the bytes
+  landing there was a window: anyone who could drop a symbolic link inside the
+  destination — a shared directory, a network mount, a machine with other
+  people on it — could make a subfolder of it point somewhere else entirely, and
+  norte would follow it and write outside, with the daemon's permissions. It
+  affected copying and creating folders; deleting and renaming already dodged it
+  for reasons of their own.
+  norte now opens the destination **once** and works underneath it by name from
+  there on, so there is no path left to re-resolve between the check and the
+  write — which is the only way to close this rather than narrow it, since any
+  "look before you leap" check has that window by construction. A component that
+  tries to leave the destination fails and is reported as a conflict; the file
+  is not written. Symbolic links **inside** the destination are still followed,
+  because forbidding them would break ordinary trees and buy nothing. This is
+  #164, and it is closed on Linux and macOS.
+  **Where it cannot be done, norte says so instead of pretending.** Windows has
+  no equivalent call yet (#217), and a remote destination — SFTP, an object
+  store — resolves names on the far side where norte has no say. Those copy the
+  way they always did, and the confirmation dialog tells you, on one line, above
+  the keys, that this destination cannot confine its writes. It never refuses:
+  refusing would strand every destination that cannot offer the defence, which
+  costs far more than the race it avoids. On the wire the destination's answer is
+  the `confined_writes` capability, per location, which is what ADR 0054 is for.
+
 - **A collision is judged against the volume it will land on, not against
   whatever the program happened to ask first.** norte asks a filesystem about
   *the directory in question* rather than about itself, so comparing your home
