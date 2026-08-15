@@ -2477,9 +2477,16 @@ async fn run(
         // avisos y esta vuelta los rellena. El reparto es el de
         // `pending_compare`: el despacho decide QUÉ, el run loop lo pregunta.
         //
-        // Los fallos se tragan a propósito: no poder enumerar volúmenes ni leer
-        // capacidades puede impedir una copia ni pintar una alarma — «no lo sé»
-        // se dice callando, que es el contrato de las dos funciones.
+        // Las dos preguntas fallan de forma DISTINTA, y es deliberado.
+        //
+        // El espacio se traga el fallo: no poder enumerar volúmenes no puede
+        // impedir una copia ni pintar una alarma, y «no lo sé» se dice callando
+        // — ese es el contrato de `space::warning`.
+        //
+        // El confinamiento no. Ahí el silencio SIGNIFICA «este destino sujeta
+        // sus escrituras», así que tragarse el fallo sería afirmarlo sin
+        // saberlo: fail-open en una línea de seguridad. Si no se sabe, se
+        // avisa (revisión de seguridad de W5 B).
         if let Some(check) = app.pending_dest_check.take() {
             let libre = match check.total {
                 // Sin total no hay pregunta de espacio que hacer, y enumerar
@@ -2495,7 +2502,13 @@ async fn run(
                 norte_frontend::space::warning(check.total, libre, norte_i18n::active());
             let aviso_confinamiento = match backend.capabilities(&check.to).await {
                 Ok(caps) => norte_frontend::confine::warning(caps, norte_i18n::active()),
-                Err(_) => None,
+                Err(_) => norte_frontend::confine::warning(
+                    norte_proto::Capabilities {
+                        flags: norte_proto::CapabilityFlags::empty(),
+                        max_path: None,
+                    },
+                    norte_i18n::active(),
+                ),
             };
             if let Some(Modal::ConfirmTransfer { space, confine, .. }) = app.modal.as_mut() {
                 *space = aviso_espacio;

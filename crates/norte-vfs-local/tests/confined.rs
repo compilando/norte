@@ -391,3 +391,92 @@ async fn un_destino_ocupado_es_conflicto_al_abrir_el_sink() {
         "y no tocó lo que había"
     );
 }
+
+/// El paseo de emulación resolvía un componente en dos syscalls: `lstat` para
+/// preguntar si era symlink y, si no lo era, un `openat` SIN `O_NOFOLLOW`.
+/// Entre las dos cabe una sustitución, y el `openat` seguía el enlace que
+/// acababa de aparecer sin comprobar dónde caía.
+///
+/// El test no gana la carrera a mano —no se puede, es de nanosegundos—: pone
+/// el árbol en el estado que la carrera PRODUCE (el componente ya es un
+/// symlink cuando se resuelve) y comprueba el veredicto, que es lo que el
+/// `openat` sin `O_NOFOLLOW` contestaba mal. Con `openat2` la primera rama ni
+/// se ejecuta, así que se fuerza el paseo.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn el_paseo_no_sigue_un_componente_que_se_volvio_symlink_bajo_sus_pies() {
+    let _forzado = LocalProvider::force_component_walk_for_test();
+    let (p, raiz, dentro, fuera) = escenario();
+    // Un directorio de verdad en medio, que es lo que el `lstat` de la carrera
+    // habría visto…
+    std::fs::create_dir(dentro.join("sub")).expect("sub real");
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    // …y que para cuando se abre ya es un puente a `fuera`.
+    std::fs::remove_dir(dentro.join("sub")).expect("quitar sub");
+    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+
+    let err = escribe(root.as_ref(), &[seg(b"sub"), seg(b"botin.txt")], b"x")
+        .await
+        .expect_err("el paseo tiene que negarse");
+
+    assert!(
+        matches!(
+            err,
+            Error::Conflict {
+                conflict: ConflictKind::EscapesRoot
+            }
+        ),
+        "respondió {err:?}"
+    );
+    assert!(
+        !fuera.join("botin.txt").exists(),
+        "y sobre todo: no escribió fuera"
+    );
+}
+
+/// La raíz se abre RESOLVIENDO una ruta, symlinks incluidos —un
+/// `~/copias -> /mnt/disco/copias` es un destino legítimo y negarlo rompería
+/// árboles de verdad—. Eso deja una ventana: si entre validar la ruta y abrirla
+/// alguien la sustituye por un enlace, lo que se abre es otro árbol y todo lo
+/// que venga después va perfectamente confinado al sitio equivocado.
+///
+/// Lo que el core compara para descartarlo es la IDENTIDAD, y esto comprueba
+/// que los dos lados de esa comparación existen y se distinguen: la del nodo
+/// abierto (`root_id`) y la que un `lstat` de la ruta da cuando es un enlace.
+#[tokio::test]
+async fn la_identidad_de_la_raiz_delata_una_ruta_sustituida_por_un_enlace() {
+    use norte_vfs::FollowLinks;
+
+    let (p, _raiz, dentro, fuera) = escenario();
+    // `dest/puente` es un enlace a `fuera`, que es lo que produciría el
+    // cambiazo. Abrir por ahí da la raíz de `fuera`…
+    std::os::unix::fs::symlink(&fuera, dentro.join("puente")).expect("symlink");
+    let via_enlace = child(&child(&LocalProvider::root(), b"dest"), b"puente");
+
+    let root = p.open_root(&via_enlace).await.expect("se abre: lo sigue");
+    let abierta = root.root_id().await.expect("id de la raíz abierta");
+
+    // …y el `lstat` de la ruta da la del ENLACE, que es otra cosa.
+    let en_ruta = p
+        .node_id(&via_enlace, FollowLinks::No)
+        .await
+        .expect("node_id");
+    assert!(
+        abierta.is_some() && en_ruta.is_some(),
+        "los dos lados existen"
+    );
+    assert_ne!(
+        abierta, en_ruta,
+        "una ruta que es un enlace no tiene la identidad del árbol que abre"
+    );
+
+    // Y sobre un directorio de verdad, las dos identidades son la MISMA: la
+    // comprobación no puede dar falsos positivos en el caso corriente.
+    let directo = child(&LocalProvider::root(), b"dest");
+    let root = p.open_root(&directo).await.expect("raíz");
+    assert_eq!(
+        root.root_id().await.expect("id"),
+        p.node_id(&directo, FollowLinks::No).await.expect("node_id"),
+        "un directorio de verdad casa consigo mismo"
+    );
+}

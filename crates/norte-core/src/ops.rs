@@ -176,6 +176,48 @@ impl<'a> Destination<'a> {
     }
 }
 
+/// ¿La raíz que se abrió es el nodo que hay en `path` AHORA MISMO?
+///
+/// El confinamiento ancla en un descriptor, pero el descriptor se consigue
+/// abriendo una ruta, y esa apertura resuelve symlinks como cualquier otra —a
+/// propósito: un `~/copias -> /mnt/disco/copias` es un destino legítimo—. Entre
+/// crear el directorio y abrirlo cabe un cambiazo (`rmdir` + symlink), y
+/// entonces todo lo que venga después va perfectamente confinado AL ÁRBOL
+/// EQUIVOCADO, sin que nada chirríe: lo encontró la revisión de seguridad de
+/// esta fase.
+///
+/// Lo que lo cierra es comparar identidades: el `stat` es un `lstat`, así que
+/// un `path` sustituido por un symlink sale con la identidad del ENLACE y no
+/// con la del directorio abierto, y no casan. Restaurar el directorio de verdad
+/// tampoco cuela: sería otro inodo.
+///
+/// Un backend sin identidad estable (`Ok(None)` en cualquiera de los dos lados)
+/// no tiene nada que comparar y pasa: es la misma degradación honesta de
+/// siempre, y `node_id` ya la documenta.
+async fn same_root_or_fail(
+    dst: &dyn Provider,
+    root: &dyn norte_vfs::ConfinedRoot,
+    path: &VPath,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    let abierta = root.root_id().await?;
+    let en_ruta = with_retry(cancel, || dst.node_id(path, FollowLinks::No).boxed()).await?;
+    let (Some(abierta), Some(en_ruta)) = (abierta, en_ruta) else {
+        return Ok(());
+    };
+    if abierta == en_ruta {
+        return Ok(());
+    }
+    tracing::error!(
+        dest = %crate::engine::span_path(path),
+        "la raíz de destino cambió entre crearla y abrirla: se para en vez de escribir \
+         confinadamente en otro árbol (#164)"
+    );
+    Err(Error::Conflict {
+        conflict: ConflictKind::EscapesRoot,
+    })
+}
+
 /// Los segmentos de `path` que cuelgan de `root`, o `None` si `path` no está
 /// bajo `root` — en cuyo caso no hay relativo que dar y quien pregunta se
 /// queda sin confinar, que es lo honesto.
@@ -205,9 +247,12 @@ pub(crate) async fn open_dest_root(
     dst: &dyn Provider,
     root: &VPath,
     task_id: u64,
-) -> Option<Box<dyn norte_vfs::ConfinedRoot>> {
+) -> Result<Option<Box<dyn norte_vfs::ConfinedRoot>>, Error> {
     match dst.open_root(root).await {
-        Ok(r) => Some(r),
+        Ok(r) => Ok(Some(r)),
+        // «No sé confinar»: el único caso en el que se degrada, y es el que el
+        // ADR 0054 razona. El backend no puede, y no copiar hacia él por eso
+        // sería peor.
         Err(Error::Unsupported) => {
             tracing::warn!(
                 task_id,
@@ -215,20 +260,28 @@ pub(crate) async fn open_dest_root(
                 "el destino no sabe confinar sus escrituras: un symlink intermedio podría \
                  desviar esta operación fuera de su raíz (#164)"
             );
-            None
+            Ok(None)
         }
-        // Un fallo REAL al abrir la raíz (no está, no se puede leer) no se
-        // resuelve aquí: el primer paso que la toque dará ese mismo error con
-        // su ruta y su fila en el informe. Degradar es lo mismo que hacía el
-        // código de antes de que esto existiera.
+        // **Cualquier otro fallo PARA la operación, y esto es un cambio de la
+        // revisión de seguridad de esta fase.** Degradar aquí era el
+        // comportamiento de antes, sí, pero antes no había ninguna promesa que
+        // romper: hoy `capabilities_at` ya le dijo al humano que este destino
+        // confina —el diálogo se lo dijo CALLANDO— y seguir por ruta sin
+        // decírselo convierte «haz fallar el `open` una vez» en la llave que
+        // reabre #164 para toda la operación. Un `ENOTDIR` de un cambiazo
+        // momentáneo, un `EMFILE`, un `EACCES` transitorio: todos valían.
+        //
+        // El destino que NO puede confinar ya está cubierto por el brazo de
+        // arriba, así que aquí solo cae quien dijo que podía y falló.
         Err(e) => {
-            tracing::warn!(
+            tracing::error!(
                 task_id,
                 dest = %crate::engine::span_path(root),
                 error = %e,
-                "no se pudo abrir la raíz de destino confinada; se escribe por ruta (#164)"
+                "no se pudo abrir la raíz de destino confinada y el destino declaró que sabía: \
+                 se para en vez de escribir por ruta sin decirlo (#164)"
             );
-            None
+            Err(e)
         }
     }
 }
@@ -456,6 +509,17 @@ pub(crate) async fn mkdir_retrying(
             return Err(Error::Cancelled);
         }
         match dest.mkdir().await {
+            // Un escape es un VEREDICTO, no un «quizá se aplicó». Tiene que
+            // salir antes que la desambiguación: esa lee por RUTA, siguiendo el
+            // mismo componente hostil que acaba de producirlo, y un directorio
+            // vacío al otro lado se leería como «lo creamos nosotros» — con su
+            // `Created` en el journal y un undo que va a la papelera con algo
+            // de fuera del árbol.
+            Err(
+                e @ Error::Conflict {
+                    conflict: ConflictKind::EscapesRoot,
+                },
+            ) => return Err(e),
             Err(e @ Error::Conflict { .. }) if ambiguous => {
                 // La desambiguación LEE, y leer no es por lo que este destino
                 // se confina: el `list` va por ruta, como siempre.
@@ -504,6 +568,14 @@ pub(crate) async fn symlink_retrying(
         }
         match dest.symlink(target, kind).await {
             Ok(()) => return Ok(()),
+            // Terminal, por lo mismo que en `mkdir_retrying`: el `read_link` de
+            // la desambiguación va por ruta y podría contestar que el enlace
+            // «ya es nuestro» leyendo uno que está fuera de la raíz.
+            Err(
+                e @ Error::Conflict {
+                    conflict: ConflictKind::EscapesRoot,
+                },
+            ) => return Err(e),
             Err(e @ Error::Conflict { .. }) if ambiguous => {
                 return match with_retry(cancel, || backend.read_link(link).boxed()).await {
                     Ok(bytes) if bytes == target => Ok(()),
@@ -852,6 +924,14 @@ async fn ensure_dir(
                 .await?;
             Ok(())
         }
+        // Un escape NO es una colisión que fusionar: el `stat` de abajo va por
+        // ruta y encontraría el directorio de FUERA, con lo que la fusión
+        // seguiría adelante sobre un sitio que la raíz no cubre.
+        Err(
+            e @ Error::Conflict {
+                conflict: ConflictKind::EscapesRoot,
+            },
+        ) => Err(e),
         // Conflict SIN ambigüedad: un tercero creó el dir entre nuestro
         // pre-stat y el mkdir (carrera externa). Merge lo absorbe SIN
         // Created (no es nuestro); Fail/Ask fallan en seguro.
@@ -1123,8 +1203,13 @@ async fn copy_tree(
     });
     // Y a partir de aquí, TODO cuelga de ella: se abre una vez por operación
     // (#164) y cada paso direcciona su relativo. Un destino que no sabe
-    // confinarse lo dice en el log y sigue por el camino de siempre.
-    let root = open_dest_root(&**dst, to, ctx.progress.snapshot().task_id.get()).await;
+    // confinarse lo dice en el log y sigue por el camino de siempre; uno que
+    // dijo saber y no pudo PARA la copia (ver `open_dest_root`).
+    let root = open_dest_root(&**dst, to, ctx.progress.snapshot().task_id.get()).await?;
+    // Y que la raíz abierta sea la que se acaba de crear, no otra.
+    if let Some(root) = root.as_deref() {
+        same_root_or_fail(&**dst, root, to, &ctx.cancel).await?;
+    }
     let into = Destination::new(&**dst, root.as_deref(), to);
 
     let mut skipped: Vec<VPath> = Vec::new();

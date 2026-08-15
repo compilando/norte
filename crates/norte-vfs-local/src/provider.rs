@@ -932,7 +932,17 @@ impl Provider for LocalProvider {
 
     async fn capabilities_at(&self, p: &VPath) -> Result<Capabilities, Error> {
         self.ensure_caps().await;
-        let declared = self.capabilities();
+        let mut declared = self.capabilities();
+        // Confinar es de la PLATAFORMA, no de la ubicación ni del estado del
+        // árbol: en unix hay `openat` —con `openat2` o con el paseo, los dos
+        // garantizan lo mismo—, y en Windows todavía no. Va antes de cualquier
+        // sonda porque tiene que valer también en el camino degradado de abajo:
+        // si no, `file:///destino-que-aun-no-existe` diría «no sé confinar» y
+        // `file:///` diría que sí, que es una respuesta distinta para la misma
+        // máquina y el caso corriente de planificar un mirror.
+        declared
+            .flags
+            .set(CapabilityFlags::CONFINED_WRITES, cfg!(unix));
         let native = self.native(p)?;
         let cache = std::sync::Arc::clone(&self.caps_at);
         blocking(move || {
@@ -976,11 +986,6 @@ impl Provider for LocalProvider {
             if let Some(full) = found.full_fold {
                 caps.flags.set(CapabilityFlags::FULL_FOLD, full);
             }
-            // Confinar es de la UBICACIÓN y del kernel que corre, jamás del
-            // backend (ADR 0054): en unix hay `openat` —con `openat2` o con el
-            // paseo, los dos garantizan lo mismo—, y en Windows todavía no.
-            caps.flags.set(CapabilityFlags::CONFINED_WRITES, cfg!(unix));
-
             let mut guard = cache.lock().expect("caps_at lock sano");
             guard.probes += 1;
             if let Some(k) = key {

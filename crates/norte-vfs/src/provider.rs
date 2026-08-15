@@ -138,6 +138,25 @@ pub trait Provider: Send + Sync {
     /// ubicación (ADR 0054).
     ///
     /// Errores: los de abrir `root` ([`Error::NotFound`] si no está).
+    ///
+    /// ```
+    /// # use norte_vfs::Provider;
+    /// # use norte_proto::{Error, VPath};
+    /// # async fn demo(p: &dyn Provider) {
+    /// let raiz = VPath::parse("mem:///destino").expect("wire");
+    /// match p.open_root(&raiz).await {
+    ///     // El backend confina: todo lo que se haga con el handle es
+    ///     // relativo a `raiz` y no puede salirse de ella.
+    ///     Ok(root) => {
+    ///         assert!(root.root_id().await.is_ok());
+    ///     }
+    ///     // Y el que no sabe lo dice, en vez de fingir que sí: el caller
+    ///     // degrada al camino por ruta y lo cuenta.
+    ///     Err(Error::Unsupported) => {}
+    ///     Err(e) => panic!("open_root respondió {e:?}"),
+    /// }
+    /// # }
+    /// ```
     async fn open_root(&self, root: &VPath) -> Result<Box<dyn ConfinedRoot>, Error> {
         let _ = root;
         Err(Error::Unsupported)
@@ -509,11 +528,29 @@ pub struct NodeId {
 /// un caller contesta creando el padre, o sea haciendo exactamente lo que este
 /// trait existe para impedir.
 ///
-/// La superficie es corta a propósito: `Copy` y `CreateDir` son las dos
-/// operaciones por las que el agujero era alcanzable. Las destructivas lo
-/// esquivan por razones que están escritas (`DeleteTree` no desciende
-/// symlinks; la revalidación es un `lstat`), y darles handle sería alcance que
-/// nadie pidió.
+/// Un `rel` VACÍO es la raíz misma, y NINGUNA de estas operaciones la
+/// direcciona: sin último segmento no hay nombre sobre el que actuar, así que
+/// responden [`Error::InvalidPath`]. Para preguntar por la raíz está
+/// [`Self::root_id`].
+///
+/// # Lo que esta superficie NO cubre, y conviene no leerlo de más
+///
+/// Es corta a propósito: `Copy` y `CreateDir` son las dos operaciones por las
+/// que el agujero era alcanzable ESCRIBIENDO. Quedan fuera, y son deuda
+/// escrita, no cobertura:
+///
+/// - **El borrado que hace una sobrescritura.** `CollisionPolicy::Overwrite` y
+///   `Newer` vacían el destino antes de copiar, y ese borrado sigue yendo por
+///   ruta: bajo un componente hostil destruye fuera de la raíz aunque la
+///   escritura que viene detrás se niegue. La sincronización lo tiene mucho
+///   más tapado (revalida contra el testigo antes de destruir), la copia
+///   recursiva no.
+/// - **`DeleteTree` y `rename`.** Esquivan el agujero por razones propias
+///   —`DeleteTree` no desciende symlinks, la revalidación es un `lstat`—, que
+///   es distinto de estar confinados.
+/// - **Un symlink COPIADO que apunta fuera** queda dentro del árbol y es una
+///   trampa para cualquier caller que después escriba ahí SIN raíz confinada.
+///   Por aquí no se puede seguir —la resolución lo rechaza—, pero por ruta sí.
 #[async_trait]
 pub trait ConfinedRoot: Send + Sync {
     /// Crea un directorio en `rel`. Mismo contrato que [`Provider::mkdir`].
@@ -528,6 +565,27 @@ pub trait ConfinedRoot: Send + Sync {
     /// reanudación, que es correcto y seguro (el engine recopia entero).
     async fn open_resumable(&self, rel: &[Segment]) -> Result<(Box<dyn ByteSink>, u64), Error> {
         Ok((self.write(rel).await?, 0))
+    }
+
+    /// La identidad del NODO que esta raíz tiene abierto.
+    ///
+    /// Existe para que el caller pueda comprobar que la raíz que le dieron es
+    /// la que él validó, y no otra. La ancla del confinamiento se consigue
+    /// abriendo una RUTA —`open_root` la resuelve como cualquier otra, symlinks
+    /// incluidos, porque un `~/copias -> /mnt/disco/copias` es legítimo y
+    /// negarlo rompería árboles de verdad—, así que entre validar esa ruta y
+    /// abrirla hay la misma ventana de siempre. Todo lo que va DESPUÉS queda
+    /// perfectamente confinado; lo que hay que descartar es que lo esté al
+    /// árbol equivocado.
+    ///
+    /// `Ok(None)` = este backend no tiene identidad estable, igual que
+    /// [`Provider::node_id`]. Entonces no hay nada que comparar y el caller
+    /// decide con lo que tenga.
+    ///
+    /// # Errors
+    /// Los de mirar el nodo ya abierto.
+    async fn root_id(&self) -> Result<Option<NodeId>, Error> {
+        Ok(None)
     }
 
     /// Crea un symlink en `rel` apuntando a `target`. Mismo contrato que

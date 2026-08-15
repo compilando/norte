@@ -9,9 +9,9 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
-- **A copy cannot be redirected out of the folder you pointed it at.** Approve a
-  synchronisation or a recursive copy, and between saying yes and the bytes
-  landing there was a window: anyone who could drop a symbolic link inside the
+- **A recursive copy cannot be redirected out of the folder you pointed it at.**
+  Approve a synchronisation or a copy of a folder, and between saying yes and
+  the bytes landing there was a window: anyone who could drop a symbolic link inside the
   destination — a shared directory, a network mount, a machine with other
   people on it — could make a subfolder of it point somewhere else entirely, and
   norte would follow it and write outside, with the daemon's permissions. It
@@ -24,7 +24,15 @@ independently through `PROTOCOL_VERSION`.
   tries to leave the destination fails and is reported as a conflict; the file
   is not written. Symbolic links **inside** the destination are still followed,
   because forbidding them would break ordinary trees and buy nothing. This is
-  #164, and it is closed on Linux and macOS.
+  #164, closed on Linux and macOS for the two operations it was reachable
+  through: copying into a folder, and creating one.
+  **Two edges of it are still open, and are named rather than glossed over.**
+  Copying a *single* file still resolves its destination by path — the honest
+  anchor there is the permission scope rather than a folder, which is a larger
+  change (#219). And when a copy is set to overwrite, the deletion it performs
+  first still goes by path, so under the same attack it can destroy a file
+  outside the folder even though nothing is written there (#218). Neither is new;
+  both used to be the whole picture.
   **Where it cannot be done, norte says so instead of pretending.** Windows has
   no equivalent call yet (#217), and a remote destination — SFTP, an object
   store — resolves names on the far side where norte has no say. Those copy the

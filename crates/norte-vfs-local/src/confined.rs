@@ -31,7 +31,15 @@
 //! | dónde | cómo |
 //! | --- | --- |
 //! | Linux ≥5.6 | `openat2(RESOLVE_BENEATH)` — lo garantiza el kernel, paso a paso |
-//! | Linux <5.6, seccomp (`ENOSYS`), macOS | paseo componente a componente con `openat` relativo al fd anterior; un componente que es symlink se rechaza si es absoluto y se comprueba por contención si es relativo |
+//! | Linux <5.6, seccomp (`ENOSYS`/`EPERM`), macOS | paseo componente a componente: `openat(O_NOFOLLOW)` relativo al fd anterior, y el `ELOOP` que eso da ES la respuesta a «¿era un symlink?» — absoluto se rechaza, relativo se sigue y se comprueba por contención SOBRE EL DESCRIPTOR |
+//!
+//! Las dos ramas dan el mismo veredicto en todo lo que importa, con una
+//! diferencia conocida y en la dirección segura: `openat2` rechaza un symlink
+//! relativo que SALE y vuelve a entrar (`../../raiz/dentro`) porque mira el
+//! camino, y el paseo lo acepta porque mira dónde acaba. Y la subida de
+//! [`is_beneath`] es best-effort bajo renombrados concurrentes, mientras que
+//! `openat2` no tiene esa ventana: donde el kernel sabe hacerlo, es el kernel
+//! quien lo hace.
 //! | Windows | no hay `openat`: este módulo no existe ahí y `open_root` responde `Unsupported` |
 
 use std::ffi::CString;
@@ -187,31 +195,59 @@ fn openat2_beneath(root: RawFd, parents: &[Segment]) -> Result<OwnedFd, std::io:
 /// SIGUE y después se comprueba que lo seguido cae bajo la raíz — la
 /// alternativa (negarse a seguir ningún symlink) sería más estricta que
 /// `RESOLVE_BENEATH` y rompería árboles legítimos.
+///
+/// **Se abre SIEMPRE con `O_NOFOLLOW` y el symlink se descubre por el `ELOOP`
+/// que eso produce**, jamás preguntando antes si el nombre es un symlink.
+/// Preguntar primero y abrir después son dos syscalls sobre un NOMBRE, y entre
+/// las dos cabe una sustitución: la revisión de esta fase encontró justo eso —
+/// el componente que el `lstat` había visto como directorio se abría sin
+/// `O_NOFOLLOW` y sin comprobar contención, así que un cambiazo ganado en esa
+/// rendija mandaba el resto del paseo fuera de la raíz. Un `openat` que falla
+/// no ha abierto nada, y lo que se comprueba después es siempre el DESCRIPTOR
+/// ya abierto, no un nombre.
 fn walk_beneath(root: RawFd, parents: &[Segment]) -> Result<OwnedFd, Error> {
     let root_id = node_id_of(root)?;
     let mut current = dup(root)?;
     for seg in parents {
         let name = CString::new(seg.as_bytes().to_vec()).map_err(|_| Error::InvalidPath)?;
-        if is_symlink_at(current.as_raw_fd(), &name)? {
-            // Un symlink ABSOLUTO se rechaza aunque apunte dentro. Es lo que
-            // hace `RESOLVE_BENEATH` —para el kernel una ruta absoluta ya
-            // «empieza» fuera de la raíz— y las dos ramas tienen que dar el
-            // mismo veredicto o el confinamiento significaría una cosa en un
-            // kernel y otra en el de al lado.
-            if link_target_is_absolute(current.as_raw_fd(), &name)? {
-                return Err(Error::Conflict {
-                    conflict: ConflictKind::EscapesRoot,
-                });
+        match openat_dir_nofollow(current.as_raw_fd(), &name) {
+            Ok(next) => current = next,
+            // Con `O_NOFOLLOW` un symlink final sale como `ELOOP`… salvo que
+            // también vaya `O_DIRECTORY`, y entonces el kernel prefiere
+            // contestar `ENOTDIR` —que es además la respuesta legítima para un
+            // fichero corriente en medio de la ruta—. Así que los dos errnos
+            // significan «quizá era un symlink», y quien lo desempata es el
+            // `readlinkat` de abajo: si no lo era, el error original vale.
+            Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)) => {
+                // Un symlink ABSOLUTO se rechaza aunque apunte dentro. Es lo
+                // que hace `RESOLVE_BENEATH` —para el kernel una ruta absoluta
+                // ya «empieza» fuera de la raíz— y las dos ramas tienen que dar
+                // el mismo veredicto o el confinamiento significaría una cosa
+                // en un kernel y otra en el de al lado.
+                match link_target_is_absolute(current.as_raw_fd(), &name)? {
+                    // No era un symlink: un fichero corriente donde la ruta
+                    // pedía un directorio. Su error es el que vale.
+                    None => return Err(map_errno(&e)),
+                    Some(true) => {
+                        return Err(Error::Conflict {
+                            conflict: ConflictKind::EscapesRoot,
+                        });
+                    }
+                    Some(false) => {}
+                }
+                // Seguirlo: aquí sí se abre sin `O_NOFOLLOW`, y da igual que
+                // entre el `ELOOP` y esto lo sustituyan por otro symlink —lo
+                // que se comprueba a continuación es el descriptor que salga,
+                // no el nombre por el que se pidió—.
+                let next = openat_dir(current.as_raw_fd(), &name)?;
+                if !is_beneath(next.as_raw_fd(), root_id)? {
+                    return Err(Error::Conflict {
+                        conflict: ConflictKind::EscapesRoot,
+                    });
+                }
+                current = next;
             }
-            let next = openat_dir(current.as_raw_fd(), &name)?;
-            if !is_beneath(next.as_raw_fd(), root_id)? {
-                return Err(Error::Conflict {
-                    conflict: ConflictKind::EscapesRoot,
-                });
-            }
-            current = next;
-        } else {
-            current = openat_dir(current.as_raw_fd(), &name)?;
+            Err(e) => return Err(map_errno(&e)),
         }
     }
     Ok(current)
@@ -221,23 +257,56 @@ fn walk_beneath(root: RawFd, parents: &[Segment]) -> Result<OwnedFd, Error> {
 ///
 /// Se leen los bytes tal cual y no se resuelve nada (regla 1): lo único que se
 /// pregunta es si es absoluto.
+///
+/// `Ok(None)` = `name` NO es un symlink (`EINVAL` de `readlinkat`), que es
+/// también la forma de desempatar el `ENOTDIR` de un `openat(O_NOFOLLOW |
+/// O_DIRECTORY)`: ese errno lo produce tanto un symlink como un fichero
+/// corriente, y solo esto los separa.
 #[allow(unsafe_code)]
-fn link_target_is_absolute(dir: RawFd, name: &CString) -> Result<bool, Error> {
+fn link_target_is_absolute(dir: RawFd, name: &CString) -> Result<Option<bool>, Error> {
     let mut buf = [0i8; 2];
     // SAFETY: `dir` vive, `name` es NUL-terminada y viva, y `buf` tiene sitio
     // para los bytes que se piden. `readlinkat` NO termina en NUL: por eso solo
     // se mira lo que dice haber escrito.
     let n = unsafe { libc::readlinkat(dir, name.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
     if n < 0 {
-        return Err(map_errno(&std::io::Error::last_os_error()));
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() == Some(libc::EINVAL) {
+            return Ok(None);
+        }
+        return Err(map_errno(&e));
     }
-    Ok(n > 0 && buf[0] == i8::try_from(b'/').unwrap_or(0))
+    Ok(Some(n > 0 && buf[0] == i8::try_from(b'/').unwrap_or(0)))
 }
 
-/// `openat` de un componente como directorio. Un solo componente: aquí no hay
-/// ruta que resolver, solo un nombre en un directorio concreto.
+/// `openat` de un componente como directorio, SIN seguir un symlink final.
+///
+/// Devuelve el `io::Error` crudo y no la taxonomía: quien llama necesita
+/// distinguir el `ELOOP` de «esto es un symlink» del resto, y `map_errno` los
+/// funde a propósito en un solo veredicto.
 #[allow(unsafe_code)]
-fn openat_dir(dir: RawFd, name: &CString) -> Result<OwnedFd, Error> {
+fn openat_dir_nofollow(dir: RawFd, name: &CString) -> Result<OwnedFd, std::io::Error> {
+    // SAFETY: `dir` está vivo y `name` es una CString NUL-terminada viva
+    // durante toda la llamada. `O_PATH` no lee ni escribe.
+    let raw = unsafe {
+        libc::openat(
+            dir,
+            name.as_ptr(),
+            libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if raw < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `raw` es un fd recién abierto y sin dueño.
+    Ok(unsafe { OwnedFd::from_raw_fd(raw) })
+}
+
+/// `openat` de un componente como directorio SIGUIENDO el symlink, que es lo
+/// que se quiere una vez sabido que lo es y que su destino es relativo. Lo que
+/// salga se comprueba con [`is_beneath`] antes de usarse para nada.
+#[allow(unsafe_code)]
+fn openat_dir(dir: RawFd, name: &std::ffi::CStr) -> Result<OwnedFd, Error> {
     // SAFETY: `dir` está vivo y `name` es una CString NUL-terminada viva
     // durante toda la llamada. `O_PATH` no lee ni escribe.
     let raw = unsafe {
@@ -254,43 +323,28 @@ fn openat_dir(dir: RawFd, name: &CString) -> Result<OwnedFd, Error> {
     Ok(unsafe { OwnedFd::from_raw_fd(raw) })
 }
 
-/// ¿`name` dentro de `dir` es un symlink? `lstat`, jamás `stat`.
-#[allow(unsafe_code)]
-fn is_symlink_at(dir: RawFd, name: &CString) -> Result<bool, Error> {
-    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
-    // SAFETY: `dir` vive, `name` es NUL-terminada y viva, y `st` es un `stat`
-    // propio y alineado que la llamada rellena entero. Solo se lee tras
-    // comprobar que devolvió 0.
-    let rc = unsafe {
-        libc::fstatat(
-            dir,
-            name.as_ptr(),
-            st.as_mut_ptr(),
-            libc::AT_SYMLINK_NOFOLLOW,
-        )
-    };
-    if rc != 0 {
-        return Err(map_errno(&std::io::Error::last_os_error()));
-    }
-    // SAFETY: `fstatat` devolvió 0, así que dejó `st` inicializado.
-    let st = unsafe { st.assume_init() };
-    Ok(st.st_mode & libc::S_IFMT == libc::S_IFLNK)
-}
-
 /// ¿Se llega desde `fd` hasta `root_id` subiendo por `..`?
 ///
 /// La comprobación se hace sobre el DESCRIPTOR ya abierto, no sobre una ruta,
-/// así que lo que se valida es exactamente el objeto que se va a usar después:
-/// que alguien mueva el directorio a otro sitio mientras tanto no convierte un
-/// fd contenido en uno que no lo está.
+/// así que lo que se valida es exactamente el objeto que se va a usar después,
+/// y no un nombre que pueda apuntar a otra cosa para cuando se abra.
+///
+/// **La subida en sí es best-effort bajo renombrados concurrentes**, y eso hay
+/// que decirlo en vez de dejarlo suponer: si alguien mueve el directorio ya
+/// abierto FUERA de la raíz entre este cálculo y el `mkdirat`/`openat` que
+/// venga después, el veredicto se calculó sobre un árbol que ya no es. Hace
+/// falta permiso de escritura DENTRO de la raíz para intentarlo, y `openat2`
+/// —que es el camino de serie en Linux— no tiene esa ventana porque lo resuelve
+/// el kernel de una pieza. `libpathrs` documenta la misma limitación para la
+/// misma emulación.
 fn is_beneath(fd: RawFd, root_id: (u64, u64)) -> Result<bool, Error> {
     if node_id_of(fd)? == root_id {
         return Ok(true);
     }
-    let dotdot = CString::new("..").expect("literal sin NUL");
+    let dotdot = c"..";
     let mut current = dup(fd)?;
     for _ in 0..MAX_CLIMB {
-        let parent = openat_dir(current.as_raw_fd(), &dotdot)?;
+        let parent = openat_dir(current.as_raw_fd(), dotdot)?;
         let parent_id = node_id_of(parent.as_raw_fd())?;
         if parent_id == root_id {
             return Ok(true);
@@ -338,6 +392,13 @@ fn join(parents: &[Segment]) -> Vec<u8> {
     out
 }
 
+/// ¿Dice este error que `openat2` no está disponible?
+///
+/// `ENOSYS` es el kernel <5.6. `EPERM` es lo que contesta un filtro seccomp que
+/// no conoce el syscall (el perfil por defecto de Docker, durante años), y por
+/// eso cuenta: es la MISMA situación —no hay `openat2`— dicha de otra forma.
+/// Que un `EPERM` real de otra procedencia caiga aquí no abre nada: el paseo
+/// confina igual y volverá a fallar con el mismo `EPERM` si lo era de verdad.
 #[cfg(target_os = "linux")]
 fn is_enosys(e: &std::io::Error) -> bool {
     e.raw_os_error() == Some(libc::ENOSYS) || e.raw_os_error() == Some(libc::EPERM)
@@ -368,8 +429,9 @@ fn force_walk() -> bool {
 #[cfg(target_os = "linux")]
 static FORCE_WALK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Guard que fuerza el paseo mientras vive (costura de test, `#[doc(hidden)]`).
+/// Guard que fuerza el paseo mientras vive (costura de test).
 #[cfg(target_os = "linux")]
+#[doc(hidden)]
 #[derive(Debug)]
 pub struct ForceComponentWalk(());
 
@@ -487,7 +549,7 @@ impl LocalRoot {
         // normalización; aquí se contesta `Exists` a secas. Nada del core
         // decide por esa distinción (solo se pinta), y releer el directorio
         // sería recorrer lo que este camino existe para no recorrer.
-        if exists_at(dir.as_raw_fd(), &final_name) {
+        if !name_is_free(dir.as_raw_fd(), &final_name)? {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
             });
@@ -549,19 +611,82 @@ pub(crate) fn publish(dir: RawFd, staging: &CString, final_name: &CString) -> Re
     plain_rename(dir, staging, final_name)
 }
 
-/// ¿Hay ya algo con ese nombre en este directorio? Mira el NODO, no lo que
-/// apunte: un symlink roto ocupa el nombre igual que un fichero.
+/// ¿Está LIBRE ese nombre en este directorio? Mira el NODO, no lo que apunte:
+/// un symlink roto ocupa el nombre igual que un fichero.
+///
+/// `Ok(false)` = ocupado. `Ok(true)` = libre, y solo lo dice el `ENOENT`:
+/// cualquier otro errno es «no lo sé» y sale como `Err`, porque quien pregunta
+/// lo hace justo antes de un rename que PISA. La versión anterior usaba
+/// `faccessat(F_OK, AT_SYMLINK_NOFOLLOW)` y leía cualquier fallo como «libre»,
+/// que es fail-OPEN: ese flag necesita `faccessat2` (kernel 5.8+) y en un
+/// kernel viejo, o en una libc que no lo use, contesta `EINVAL` para siempre —
+/// con lo que el nombre parecía libre siempre y el rename degradado destruía lo
+/// que hubiera. Lo encontró la revisión de seguridad de esta fase.
 #[allow(unsafe_code)]
-fn exists_at(dir: RawFd, name: &CString) -> bool {
-    // SAFETY: `dir` vive y `name` es NUL-terminada y viva.
-    unsafe { libc::faccessat(dir, name.as_ptr(), libc::F_OK, libc::AT_SYMLINK_NOFOLLOW) == 0 }
+fn name_is_free(dir: RawFd, name: &CString) -> Result<bool, Error> {
+    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `dir` vive, `name` es NUL-terminada y viva, y `st` es un `stat`
+    // propio y alineado. Solo se leería tras un 0, y aquí ni se lee.
+    let rc = unsafe {
+        libc::fstatat(
+            dir,
+            name.as_ptr(),
+            st.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if rc == 0 {
+        return Ok(false);
+    }
+    let e = std::io::Error::last_os_error();
+    if e.kind() == std::io::ErrorKind::NotFound {
+        return Ok(true);
+    }
+    Err(map_errno(&e))
 }
 
-/// `renameat` llano, con la comprobación previa que su falta de atomicidad
-/// obliga a hacer (documentada desde M0).
+/// Publica sin poder pisar, allí donde `renameat2` no está.
+///
+/// **Primero se intenta `linkat` + `unlinkat`, que SÍ es no-replace atómico y
+/// es portable.** `link` falla con `EEXIST` si el destino existe, y eso lo
+/// decide el kernel sin ventana ninguna — que es la propiedad entera. Solo si
+/// el filesystem no sabe enlazar (`EPERM`/`EOPNOTSUPP`/`EMLINK`, y `EXDEV` no
+/// puede pasar porque los dos nombres cuelgan del MISMO descriptor) se cae al
+/// `renameat` llano precedido de la comprobación, que es la ventana que M0 ya
+/// documenta.
+///
+/// Importa más de lo que parece: en macOS no hay `renameat2`, así que este era
+/// el ÚNICO camino de publicación de todo el módulo, y la revisión de seguridad
+/// señaló que la comprobación previa dejaba a cada publicación de macOS con una
+/// rendija en la que se pisa un fichero ajeno sin decir nada.
 #[allow(unsafe_code)]
 fn plain_rename(dir: RawFd, staging: &CString, final_name: &CString) -> Result<(), Error> {
-    if exists_at(dir, final_name) {
+    // SAFETY: `dir` vive y las dos CStrings son NUL-terminadas y vivas. Sin
+    // `AT_SYMLINK_FOLLOW`: se enlaza el staging, jamás lo que apuntara.
+    let rc = unsafe { libc::linkat(dir, staging.as_ptr(), dir, final_name.as_ptr(), 0) };
+    if rc == 0 {
+        // Publicado. El staging sobra: su borrado es best-effort porque el
+        // fichero YA está en su sitio y fallar aquí sería fallar después de
+        // haber tenido éxito.
+        let _ = discard(dir, staging);
+        return Ok(());
+    }
+    let e = std::io::Error::last_os_error();
+    if e.kind() == std::io::ErrorKind::AlreadyExists {
+        return Err(Error::Conflict {
+            conflict: ConflictKind::Exists,
+        });
+    }
+    if !matches!(
+        e.raw_os_error(),
+        Some(libc::EPERM | libc::EOPNOTSUPP | libc::EMLINK)
+    ) {
+        return Err(rename_error(&e));
+    }
+    // Sin enlaces duros: queda el rename llano, y su comprobación previa.
+    // `name_is_free` falla en duda, así que un errno raro NO se lee como
+    // «libre» y no se pisa nada por no saber.
+    if !name_is_free(dir, final_name)? {
         return Err(Error::Conflict {
             conflict: ConflictKind::Exists,
         });
@@ -704,6 +829,18 @@ impl LocalConfinedRoot {
 
 #[async_trait::async_trait]
 impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
+    async fn root_id(&self) -> Result<Option<norte_vfs::NodeId>, Error> {
+        let root = std::sync::Arc::clone(&self.root);
+        crate::provider::blocking(move || {
+            let (dev, ino) = node_id_of(root.fd.as_raw_fd())?;
+            Ok(Some(norte_vfs::NodeId {
+                volume: dev,
+                index: u128::from(ino),
+            }))
+        })
+        .await
+    }
+
     async fn mkdir(&self, rel: &[Segment]) -> Result<(), Error> {
         let root = std::sync::Arc::clone(&self.root);
         let rel = rel.to_vec();
@@ -728,6 +865,21 @@ impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
         let rel = rel.to_vec();
         let target = target.to_vec();
         crate::provider::blocking(move || root.symlink(&rel, &target)).await
+    }
+
+    /// Esta raíz NO reanuda, y lo dice en vez de fingirlo.
+    ///
+    /// El default del trait contesta `(write, 0)`, que es seguro pero le
+    /// promete al caller un sink cuyo `keep` conservaría algo continuable — y
+    /// el de aquí no puede (ver [`ConfinedSink::keep`]). `Unsupported` es la
+    /// respuesta exacta: el motor recopia entero, que es lo que iba a hacer de
+    /// todas formas con `already = 0`.
+    async fn open_resumable(
+        &self,
+        rel: &[Segment],
+    ) -> Result<(Box<dyn norte_vfs::ByteSink>, u64), Error> {
+        let _ = rel;
+        Err(Error::Unsupported)
     }
 
     async fn stat(&self, rel: &[Segment]) -> Result<Entry, Error> {
@@ -813,18 +965,22 @@ impl norte_vfs::ByteSink for ConfinedSink {
         crate::provider::blocking(move || discard(dir.as_raw_fd(), &staging)).await
     }
 
-    async fn keep(mut self: Box<Self>) -> Result<(), Error> {
-        // Conserva el staging para un `open_resumable` posterior (ADR 0012):
-        // durabiliza y NO renombra ni borra.
-        let file = self.file.take();
-        self.done = true;
-        crate::provider::blocking(move || {
-            if let Some(f) = file {
-                f.sync_all().map_err(|e| crate::provider::map_io(&e))?;
-            }
-            Ok(())
-        })
-        .await
+    /// **Aquí `keep` BORRA, y no es una contradicción con el trait: es la
+    /// única forma honesta de cumplirlo.**
+    ///
+    /// `keep` existe para conservar el staging y que un `open_resumable`
+    /// posterior lo continúe (ADR 0012). El de esta raíz lleva un nombre
+    /// EFÍMERO —pid y secuencia—, así que nadie puede volver a encontrarlo:
+    /// conservarlo dejaría un `.norte-partial` por intento que ningún resume va
+    /// a consumir y que el siguiente `Mirror` vería como huérfano y borraría.
+    /// Sin resume que servir, conservar no conserva nada; solo ensucia.
+    ///
+    /// Hoy el core no llega aquí —`Dest::resumes()` es `false` para un destino
+    /// confinado, así que la cancelación va por `abort`—, y precisamente por
+    /// eso se cierra en el TIPO en vez de confiarlo a esa invariante, que vive
+    /// en otro crate y la puede romper el siguiente que pase.
+    async fn keep(self: Box<Self>) -> Result<(), Error> {
+        self.abort().await
     }
 }
 

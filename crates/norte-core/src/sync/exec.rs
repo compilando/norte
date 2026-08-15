@@ -159,10 +159,14 @@ impl SyncTargets {
     /// Se hace DENTRO de la Task, no al construir: aquí hay `task_id` con el
     /// que decir en el log de qué operación se está hablando cuando el destino
     /// no sabe confinarse y hay que degradar.
-    pub(crate) async fn with_dest_confined(mut self, task_id: u64) -> Self {
+    /// # Errors
+    /// El del `open_root` cuando el destino declaró que sabía confinar y no
+    /// pudo. NO se degrada: ver [`crate::ops::open_dest_root`], donde está el
+    /// razonamiento de por qué eso sería la llave que reabre #164.
+    pub(crate) async fn with_dest_confined(mut self, task_id: u64) -> Result<Self, Error> {
         self.dest_confined =
-            crate::ops::open_dest_root(self.dest.as_ref(), &self.dest_root, task_id).await;
-        self
+            crate::ops::open_dest_root(self.dest.as_ref(), &self.dest_root, task_id).await?;
+        Ok(self)
     }
 
     /// El destino de un paso: la ruta real, más el relativo bajo la raíz
@@ -1230,11 +1234,18 @@ pub(crate) async fn run<S>(
 where
     S: Stream<Item = Result<SpoolStep, Error>>,
 {
+    if ctx.cancel.is_cancelled() {
+        return Err(ApplyError::Stopped(Error::Cancelled));
+    }
     // La raíz de destino se abre AQUÍ, una vez para toda la Task (#164): por eso
-    // los `targets` entran por valor, y no prestados como todo lo demás.
+    // los `targets` entran por valor, y no prestados como todo lo demás. Que no
+    // se pueda abrir un destino que dijo saber confinar PARA la Task entera, y
+    // para antes de tocar nada — no es una fila del informe, es que la defensa
+    // que el humano vio anunciada no está.
     let targets = &targets
         .with_dest_confined(ctx.progress.snapshot().task_id.get())
-        .await;
+        .await
+        .map_err(ApplyError::Stopped)?;
     let mut steps = std::pin::pin!(steps);
     loop {
         if ctx.cancel.is_cancelled() {

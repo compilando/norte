@@ -1276,14 +1276,25 @@ async fn a_file_is_answered_by_its_containing_directory() {
 /// Una ruta que no está NO es un error: `capabilities()` jamás pudo fallar, y
 /// hacer fallar a su versión por ubicación rompería el caso corriente de
 /// planificar hacia un destino que todavía no existe.
+///
+/// Lo que sí lleva ese camino degradado es `CONFINED_WRITES`, y no es una
+/// excepción caprichosa: confinar es de la PLATAFORMA —hay `openat` o no lo
+/// hay—, no del árbol ni de si la ruta existe todavía. Sin esto,
+/// `file:///destino-que-no-existe` contestaría «no sé confinar» y `file:///`
+/// que sí, dos respuestas distintas de la misma máquina — y la primera es
+/// justo la que ve un mirror al planificar (revisión de seguridad de W5 B).
 #[tokio::test]
 async fn a_missing_path_answers_the_declaration() {
     let (p, root, _) = provider();
+    let mut esperado = p.capabilities();
+    esperado
+        .flags
+        .set(norte_proto::CapabilityFlags::CONFINED_WRITES, cfg!(unix));
     assert_eq!(
         p.capabilities_at(&child(&root, b"no-existe"))
             .await
             .expect("responde igualmente"),
-        p.capabilities()
+        esperado
     );
 }
 
