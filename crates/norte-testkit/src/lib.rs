@@ -14,4 +14,4 @@ pub mod strategies;
 
 pub use faults::Faults;
 pub use mem::{MemProvider, Normalization};
-pub use smith::{TarSmith, ZipSmith};
+pub use smith::{RarSmith, TarSmith, ZipSmith, which_7z};

@@ -45,7 +45,7 @@ Measured on this machine against a real fixture (`unrar` 7.23, `7z` 26.02):
 
 | file | responsibility |
 | --- | --- |
-| `crates/norte-testkit/src/rar5.rs` | write a RAR5 archive with stored entries (fixtures) |
+| `crates/norte-testkit/src/smith.rs` | `RarSmith`: forge RAR5 bytes with stored entries |
 | `crates/norte-vfs-rar/src/lib.rs` | crate docs, re-exports, `RarLimits` |
 | `crates/norte-vfs-rar/src/delegate.rs` | discovery, argv construction, process spawn, rule 9 |
 | `crates/norte-vfs-rar/src/listing.rs` | **pure** parsers: `7z -slt` and `unrar vt` bytes → entries |
@@ -64,9 +64,14 @@ so nothing in the tree can produce a `.rar`. Storing raw bytes inside the
 documented container does not touch the compression algorithm.
 
 **Files:**
-- Create: `crates/norte-testkit/src/rar5.rs`
-- Modify: `crates/norte-testkit/src/lib.rs` (add `pub mod rar5;`)
-- Test: inside `rar5.rs`
+- Modify: `crates/norte-testkit/src/smith.rs` (it already forges ZIP and TAR
+  fixture bytes and owns the `crc32` helper — RAR belongs beside them, not in a
+  new module)
+- Modify: `crates/norte-testkit/src/lib.rs` (re-export)
+
+**DONE (2026-08-16).** The API is `RarSmith::new().file(name, content).build() ->
+Vec<u8>`, matching `ZipSmith`/`TarSmith`, plus `which_7z()`. A real `7z` lists
+what it forges, raw non-UTF-8 name bytes included.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -85,15 +90,12 @@ mod tests {
         };
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("t.rar");
-        write_rar5(
-            &path,
-            &[
-                Rar5Entry::file(b"hello.txt", b"hola norte\n"),
-                Rar5Entry::file("ñandú.txt".as_bytes(), b"utf8\n"),
-                Rar5Entry::file(b"cp437-\xa4\xa5.txt", b"bytes\n"),
-            ],
-        )
-        .expect("escribe");
+        let bytes = RarSmith::new()
+            .file(b"hello.txt", b"hola norte\n")
+            .file("ñandú.txt".as_bytes(), b"utf8\n")
+            .file(CRUDO, b"bytes\n")
+            .build();
+        std::fs::write(&path, &bytes).expect("escribe");
 
         let out = std::process::Command::new(sevenz)
             .args(["l", "-slt", "-p", "--"])
@@ -129,12 +131,14 @@ Expected: FAIL — `write_rar5`, `Rar5Entry`, `vint`, `which_7z` do not exist.
 Signatures:
 
 ```rust
-/// Una entrada ALMACENADA (sin comprimir) de un RAR5 de fixture.
-pub struct Rar5Entry { pub name: Vec<u8>, pub content: Vec<u8>, pub mtime: u32 }
-impl Rar5Entry { pub fn file(name: &[u8], content: &[u8]) -> Self; }
-
-/// Escribe un `.rar` (RAR5, método 0 = almacenado) en `path`.
-pub fn write_rar5(path: &std::path::Path, entries: &[Rar5Entry]) -> std::io::Result<()>;
+/// Forja de bytes RAR5 con entradas ALMACENADAS, hermana de `ZipSmith`.
+pub struct RarSmith { /* entries, mtime fijo */ }
+impl RarSmith {
+    pub fn new() -> Self;
+    pub fn file(self, name: &[u8], content: &[u8]) -> Self;   // nombre en BYTES
+    pub fn dir(self, name: &[u8]) -> Self;
+    pub fn build(self) -> Vec<u8>;
+}
 
 /// El ejecutable `7z` si está en PATH (los tests se retiran si no).
 pub fn which_7z() -> Option<std::path::PathBuf>;
@@ -552,12 +556,12 @@ fn un_nombre_inseguro_se_SALTA_y_se_CUENTA() {
 
 #[tokio::test]
 async fn listar_y_leer_contra_un_delegado_real() {
-    let Some(_) = norte_testkit::rar5::which_7z() else { eprintln!("sin 7z: retirado"); return };
+    let Some(_) = norte_testkit::which_7z() else { eprintln!("sin 7z: retirado"); return };
     let dir = tempfile::tempdir().unwrap();
     let archive = dir.path().join("t.rar");
-    norte_testkit::rar5::write_rar5(&archive, &[
-        norte_testkit::rar5::Rar5Entry::file(b"docs/hello.txt", b"hola norte\n"),
-    ]).unwrap();
+    std::fs::write(&archive, norte_testkit::RarSmith::new()
+        .file(b"docs/hello.txt", b"hola norte\n")
+        .build()).unwrap();
 
     let p = RarProvider::new(archive, Delegate::discover().unwrap(), RarLimits::default());
     let root = VPath::parse("rar+file:///t.rar/!/").unwrap();
@@ -630,7 +634,7 @@ size), same invalidation as `norte-vfs-archive`.
 
 `crates/norte-vfs-rar/tests/contract_ro.rs` invokes `norte_vfs::readonly_contract!`
 with a factory that writes the canonical tree the macro documents
-(`crates/norte-vfs/src/contract_ro.rs:21-30`) using `norte_testkit::rar5`, and
+(`crates/norte-vfs/src/contract_ro.rs:21-30`) using `norte_testkit::RarSmith`, and
 the hostile-name subset the RAR5 writer can carry. Read that macro's doc comment
 before writing the factory.
 
