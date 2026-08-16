@@ -76,6 +76,12 @@ pub struct ArchiveSection {
     pub max_decompressed_bytes: Option<u64>,
     /// `[archive] max_nesting` (#56): tope de capas de archivo anidadas.
     pub max_nesting: Option<usize>,
+    /// `[archive] rar_delegate` (roadmap ítem 11): ruta ABSOLUTA del programa
+    /// externo que lee RAR (`7z`, `7zz` o `unrar`). Ausente = se sondea
+    /// `PATH`. **Nunca se honra desde la capa Project**: una clave que nombra
+    /// un ejecutable, leída de un `.norte.toml` dentro de un repositorio,
+    /// sería ejecución de código arbitrario al entrar en el directorio.
+    pub rar_delegate: Option<String>,
 }
 
 /// The `[daemon]` section of `norte.toml` (ADR 0011).
