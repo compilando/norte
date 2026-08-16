@@ -612,7 +612,7 @@ use crate::{
 /// 0.45 ignora la notificación —correctamente— y por tanto no se entera de que
 /// venía un relevo, con lo que se queda reconectando contra un socket muerto.
 /// No se rompe; simplemente no obtiene lo que 0.46 existe para dar.
-/// **0.47.0** (roadmap ítem 11): `rar` entra en [`ARCHIVE_FORMATS`]
+/// **0.47.0** (roadmap ítem 11): `rar` entra en [`ARCHIVE_FORMATS`](crate::ARCHIVE_FORMATS)
 /// (`crates/norte-proto/src/vpath.rs`). La whitelist decide qué schemes
 /// compuestos puede FORMAR un cliente, así que ampliarla es cambio de wire
 /// aunque no mueva un solo byte de un mensaje existente.
