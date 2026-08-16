@@ -1,0 +1,32 @@
+[package]
+name = "norte-vfs-rar"
+description = "Provider VFS read-only: RAR delegando en un unrar/7z instalado (ADR 0018, decisión de producto 5)"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+futures.workspace = true
+norte-proto.workspace = true
+norte-vfs.workspace = true
+thiserror.workspace = true
+# `process`: el delegado ES un proceso hijo (kill_on_drop, stdin a null).
+# `sync`: semáforo que acota hijos concurrentes y canal hacia el ByteStream.
+# `time`: el plazo de pared que mata a un delegado que no termina.
+tokio = { workspace = true, features = ["process", "rt", "sync", "time", "io-util"] }
+tokio-util.workspace = true
+# warn! de entradas omitidas (mismo contrato de omitir-CON-señal que ADR 0018).
+tracing.workspace = true
+
+[dev-dependencies]
+norte-testkit.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

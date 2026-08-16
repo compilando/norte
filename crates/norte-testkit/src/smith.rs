@@ -764,10 +764,10 @@ impl RarSmith {
         out
     }
 
-    /// Cabecera de fichero (head_type 2) seguida de sus datos crudos.
+    /// Cabecera de fichero (`head_type` 2) seguida de sus datos crudos.
     fn rar_file_block(&self, e: &RarEntry) -> Vec<u8> {
         // FileFlags: 0x0001 directorio | 0x0002 mtime presente | 0x0004 crc.
-        let file_flags: u64 = if e.is_dir { 0x0001 } else { 0 } | 0x0002 | 0x0004;
+        let file_flags: u64 = u64::from(e.is_dir) | 0x0002 | 0x0004;
         let attrs: u64 = if e.is_dir { 0x10 } else { 0x20 };
         let mut body = vint(file_flags);
         body.extend_from_slice(&vint(e.content.len() as u64));
@@ -964,11 +964,11 @@ mod tests {
     /// «correcto» según nuestra propia lectura no demuestra nada.
     #[test]
     fn un_delegado_real_lista_lo_que_forjamos() {
+        const CRUDO: &[u8] = b"cp437-\xa4\xa5.txt";
         let Some(sevenz) = which_7z() else {
             eprintln!("sin 7z instalado: test retirado");
             return;
         };
-        const CRUDO: &[u8] = b"cp437-\xa4\xa5.txt";
         let bytes = RarSmith::new()
             .file(b"hello.txt", b"hola norte\n")
             .file("\u{f1}and\u{fa}.txt".as_bytes(), b"utf8\n")
