@@ -2449,7 +2449,7 @@ async fn run(
     // watch()/unwatch() de rewatch son syscalls cortas inline (mismo
     // criterio documentado que el draw síncrono de ratatui más abajo);
     // solo corren al arrancar o al CAMBIAR de dir.
-    let mut dir_watch = norte_tui::watch::DirWatch::new();
+    let mut dir_watch = norte_frontend::watch::DirWatch::new();
     let mut dir_watch_alive = true;
     loop {
         dir_watch.rewatch(&watch_targets(app));

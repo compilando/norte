@@ -57,10 +57,19 @@ unicode-width = "0.2"
 # workspace graph (every provider that composes over local goes through it);
 # nothing new enters the dependency tree.
 norte-vfs-local.workspace = true
+# Vigilancia de los dirs visibles (#106), compartida por los dos frontends: la
+# TUI la estrenó y la GUI la necesita igual, y duplicarla sería duplicar también
+# el pitfall de inotify que ya está resuelto una vez aquí. `notify` ya es
+# dependencia del workspace (la usa `norte-config` para recargar la config) y
+# `tokio` ya estaba en el grafo de este crate por `norte-vfs-local`: las dos son
+# una ARISTA nueva, no código nuevo que entre al árbol (regla 8).
+notify.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
 
 [dev-dependencies]
 norte-testkit.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [features]
 # Generación de los JSON Schema publicados (golden test de docs/schema);
