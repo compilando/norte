@@ -2016,7 +2016,7 @@ impl Backend {
                             return Ok(vec![None; expected_len]);
                         };
                         inst.set_settings(settings);
-                        let Ok(raw) = inst.column_values(&column_id_owned, &entries) else {
+                        let Ok(raw) = inst.column_values(&column_id_owned, None, &entries) else {
                             tracing::warn!(plugin = %id, "columns: fallo al ejecutar, celdas vacías");
                             return Ok(vec![None; expected_len]);
                         };

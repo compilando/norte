@@ -30,6 +30,7 @@ wit_bindgen::generate!({
 
 use exports::norte::plugin::columns::Guest as ColumnsGuest;
 use norte::host::host_log;
+use norte::location::location;
 
 struct ColumnsDemo;
 
@@ -37,13 +38,44 @@ struct ColumnsDemo;
 /// su manifiesto de prueba en `plugins_column_values_e2e.rs`).
 const NAME_LEN_COLUMN: &str = "name-len";
 
+/// Columna de prueba de la capacidad `location` (ADR 0057): por cada entrada
+/// devuelve el tamaño que `stat` reporta bajo el token, o `none` si el host no
+/// da ubicación (sin capacidad aprobada, o sin token). Un guest sin ubicación
+/// tiene que seguir contestando, no fallar.
+const STAT_SIZE_COLUMN: &str = "stat-size";
+
 impl ColumnsGuest for ColumnsDemo {
-    fn column_values(id: String, entries: Vec<Vec<u8>>) -> Vec<Option<String>> {
-        host_log::log(&format!("columns-demo: id={id} {} entradas", entries.len()));
-        if id != NAME_LEN_COLUMN {
+    fn column_values(
+        id: String,
+        location: Option<String>,
+        entries: Vec<Vec<u8>>,
+    ) -> Vec<Option<String>> {
+        host_log::log(&format!(
+            "columns-demo: id={id} {} entradas, ubicacion={}",
+            entries.len(),
+            if location.is_some() { "si" } else { "no" }
+        ));
+        if id != NAME_LEN_COLUMN && id != STAT_SIZE_COLUMN {
             // Un id que este guest no aporta: `none` para TODA la página,
             // nunca se adivina ni se omite del vector posicional.
             return entries.iter().map(|_| None).collect();
+        }
+        if id == STAT_SIZE_COLUMN {
+            let Some(token) = location else {
+                return entries.iter().map(|_| None).collect();
+            };
+            return entries
+                .iter()
+                .map(|raw| match location::stat(&token, raw) {
+                    Ok(meta) => Some(meta.size.to_string()),
+                    // El host dice que no (sin capacidad, token desconocido):
+                    // celda vacía, jamás una traba.
+                    Err(why) => {
+                        host_log::log(&format!("columns-demo: stat denegado: {why}"));
+                        None
+                    }
+                })
+                .collect();
         }
         entries
             .iter()

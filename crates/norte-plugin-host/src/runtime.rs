@@ -215,6 +215,10 @@ pub struct HostState {
     caps: Capabilities,
     logs: Vec<String>,
     scoped_resources: HashMap<String, Vec<u8>>,
+    /// Quién sabe resolver un token de ubicación (ADR 0057). `None` = el
+    /// caller no inyectó ninguno, y entonces la interfaz responde error aunque
+    /// la capability esté declarada: fail-closed en los dos ejes.
+    location: Option<Arc<dyn LocationHost>>,
     /// Valores VALIDADOS de `[config]` (P2 decisión 3/4): defaults del
     /// esquema del manifiesto con `config.toml` ya superpuesto —
     /// `norte-plugin-host::resolve_settings` corre ANTES de instanciar (en el
@@ -261,6 +265,70 @@ impl host_log::Host for HostState {
             Some(bytes) => Ok(bytes.clone()),
             None => Err("token desconocido".into()),
         }
+    }
+}
+
+/// Lo que el HOST consumidor (hoy `norte-core`) sabe hacer con un token de
+/// ubicación.
+///
+/// La interfaz WIT no toca el sistema de ficheros desde este crate, y no es un
+/// detalle de gusto: `norte-plugin-host` es el crate del sandbox y no puede
+/// depender de `norte-vfs-local` — esa dirección metería el sistema de ficheros
+/// DENTRO del sandbox. Aquí solo hay un trait; quien lo implementa es quien ya
+/// tiene derecho a leer.
+pub trait LocationHost: Send + Sync + std::fmt::Debug {
+    /// Bytes de un fichero bajo el token, o un error legible.
+    ///
+    /// # Errors
+    /// Lo que el implementador considere: la cadena viaja tal cual al guest.
+    fn read(&self, token: &str, rel: &[u8]) -> Result<Vec<u8>, String>;
+
+    /// Metadatos de una entrada bajo el token (sin seguir symlinks).
+    ///
+    /// # Errors
+    /// Igual que [`Self::read`].
+    fn stat(&self, token: &str, rel: &[u8]) -> Result<location::Meta, String>;
+
+    /// Entradas de un directorio bajo el token.
+    ///
+    /// # Errors
+    /// Igual que [`Self::read`].
+    fn list_dir(&self, token: &str, rel: &[u8]) -> Result<Vec<location::Dirent>, String>;
+}
+
+/// `location` (ADR 0057). Cada rama gatea contra la capability ANTES de mirar
+/// el token, igual que [`HostState::read_scoped`] gatea contra `fs-read`: sin
+/// permiso no se resuelve ni un byte, y el guest no aprende siquiera si el
+/// token era válido.
+impl location::Host for HostState {
+    fn read(&mut self, token: String, rel: Vec<u8>) -> Result<Vec<u8>, String> {
+        let host = self.location_host()?;
+        host.read(&token, &rel)
+    }
+
+    fn stat(&mut self, token: String, rel: Vec<u8>) -> Result<location::Meta, String> {
+        let host = self.location_host()?;
+        host.stat(&token, &rel)
+    }
+
+    fn list_dir(&mut self, token: String, rel: Vec<u8>) -> Result<Vec<location::Dirent>, String> {
+        let host = self.location_host()?;
+        host.list_dir(&token, &rel)
+    }
+}
+
+impl HostState {
+    /// El resolutor de ubicaciones, si la capability está declarada Y el caller
+    /// inyectó uno. Fail-closed por los dos lados, y con el mismo mensaje: un
+    /// guest no distingue «no me aprobaron» de «aquí no hay ubicación», y no
+    /// tiene por qué.
+    fn location_host(&self) -> Result<Arc<dyn LocationHost>, String> {
+        if !self.caps.location.granted() {
+            return Err("location no declarada".into());
+        }
+        self.location
+            .clone()
+            .ok_or_else(|| "location no disponible".into())
     }
 }
 
@@ -420,8 +488,24 @@ impl PluginRuntime {
         wasm_path: &Path,
         caps: Capabilities,
     ) -> Result<ColumnsInstance, RuntimeError> {
+        self.instantiate_columns_with_location(wasm_path, caps, None)
+    }
+
+    /// Como [`Self::instantiate_columns`], inyectando quién resuelve los tokens
+    /// de ubicación (ADR 0057). `None` = nadie: la interfaz `location` sigue
+    /// linkada y sigue respondiendo error, que es lo que tiene que hacer.
+    ///
+    /// # Errors
+    /// Igual que [`Self::instantiate`].
+    pub fn instantiate_columns_with_location(
+        &self,
+        wasm_path: &Path,
+        caps: Capabilities,
+        location: Option<Arc<dyn LocationHost>>,
+    ) -> Result<ColumnsInstance, RuntimeError> {
         use crate::bindings::columns_world::NorteColumns;
         let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        store.data_mut().location = location;
         let bindings = NorteColumns::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
         Ok(ColumnsInstance { store, bindings })
@@ -510,6 +594,11 @@ impl PluginRuntime {
             |s| s,
         )
         .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
+        // `location` (ADR 0057): también SIEMPRE en el linker, por el mismo
+        // motivo que las dos de arriba — un import de más nunca rompe, uno no
+        // resuelto sí. Lo que decide si sirve algo es la capability, dentro.
+        location::add_to_linker::<HostState, wasmtime::component::HasSelf<_>>(&mut linker, |s| s)
+            .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
 
         // Sandbox WASI: sin stdio heredado, sin preopens, sin env. La RED se
         // concede SOLO si la capability `net` está declarada, y aun así
@@ -553,6 +642,7 @@ impl PluginRuntime {
             caps,
             logs: Vec::new(),
             scoped_resources: HashMap::new(),
+            location: None,
             // Vacío hasta que el caller conozca el plugin concreto y llame a
             // `set_settings` (mismo patrón que `scoped_resources`/
             // `preload_scoped`, P2 Task 3) — equivale a un manifiesto sin
@@ -947,6 +1037,12 @@ impl ProviderInstance {
 /// módulo de bindings generado (ADR 0037 decisión 2).
 pub use crate::bindings::decorator_world::exports::norte::plugin::decorator as decorator_iface;
 
+/// Los tipos de la interfaz `location` (ADR 0057): `Meta`, `Dirent` y
+/// `EntryKind` tal y como cruzan la ABI. Reexportados para que quien implemente
+/// [`LocationHost`] no tenga que nombrar el módulo generado.
+pub use crate::bindings::columns_world::norte::location::location as location_iface;
+use crate::bindings::columns_world::norte::location::location;
+
 /// Tipos del export `previewer` (record `Span`, alias `PreviewInput`) —
 /// re-exportados igual que [`provider_iface`]/[`decorator_iface`]: el
 /// caller (`norte-core`, G3a) necesita construir el `Vec<Vec<Span>>` que
@@ -1040,15 +1136,21 @@ impl ColumnsInstance {
     /// - [`RuntimeError::Trap`] si el guest atrapa.
     /// - [`RuntimeError::ReturnTooLarge`] si el lote devuelto supera el tope
     ///   agregado.
+    ///
+    /// `location` es el token OPACO de la ubicación que se está listando, o
+    /// `None` si al guest no se le aprobó la capacidad (o el host no pudo
+    /// abrir el directorio). Un guest que recibe `None` tiene que seguir
+    /// contestando.
     pub fn column_values(
         &mut self,
         id: &str,
+        location: Option<&str>,
         entries: &[Vec<u8>],
     ) -> Result<Vec<Option<String>>, RuntimeError> {
         let out = self
             .bindings
             .norte_plugin_columns()
-            .call_column_values(&mut self.store, id, entries)
+            .call_column_values(&mut self.store, id, location, entries)
             .map_err(|e| RuntimeError::Trap(e.to_string()))?;
         let total: usize = out.iter().map(|v| v.as_deref().map_or(0, str::len)).sum();
         cap_total_bytes(total)?;
@@ -1100,6 +1202,7 @@ mod tests {
             caps: Capabilities::default(),
             logs: Vec::new(),
             scoped_resources: HashMap::new(),
+            location: None,
             settings,
             limits: StoreLimitsBuilder::new().build(),
         }

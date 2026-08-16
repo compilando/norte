@@ -88,7 +88,23 @@
 // los nombres de host-log/host-config cambian de paquete. Los guests de
 // `examples-wasm/` se recompilan en este mismo cambio (symlink `wit`), igual
 // que `crates/norte-core/resources/ftp-provider.wasm` vía `just build-ftp-wasm`.
-package norte:plugin@0.7.0;
+// 0.7.0 → 0.8.0 (2026-08-16, roadmap ítem 6 / ADR 0057): `columns::column-values`
+// gana un parámetro `location: option<string>` — el token opaco con el que un
+// guest APROBADO lee bajo el directorio que se está listando (paquete nuevo
+// `norte:location@0.1.0`, importado por el world `norte-columns`).
+//
+// Es RUPTURA por partida doble y a propósito: cambia la firma de un export
+// existente —los records y las funciones WIT no tienen parámetros opcionales—
+// y, por el AVISO de arriba verificado ya tres veces, el bump del paquete
+// invalida igualmente todo `.wasm` compilado contra 0.7.0 por el lado de
+// IMPORT. Vale la pena porque sin ubicación no puede existir un plugin de
+// columnas que diga algo sobre el fichero y no solo sobre su nombre: el
+// primero que se quiere, el estado de git, necesita leer `.git/index`.
+//
+// El token es opaco y de un solo uso lógico (lo acuña el host por petición):
+// el guest no aprende la ruta, que es lo que hace que esto no sea un agujero
+// en la regla 9 sino una capacidad con su propio permiso.
+package norte:plugin@0.8.0;
 
 /// Genera una previsualización de UN recurso que el HOST ya leyó y le pasa
 /// (regla 9: el guest jamás toca el FS; recibe los bytes). Devuelve texto
@@ -172,7 +188,14 @@ interface columns {
     /// (p. ej. "duración" sobre un fichero que no es media), distinguible de
     /// un valor real vacío — NUNCA se omite del vector, siempre 1:1 con
     /// `entries`.
-    column-values: func(id: string, entries: list<list<u8>>) -> list<option<string>>;
+    ///
+    /// `location` (0.8.0) es el token OPACO de la ubicación que se está
+    /// listando, para un guest al que se le aprobó la capacidad `location`;
+    /// `none` = no se le aprobó, o el host no pudo abrir el directorio. Un
+    /// guest que reciba `none` tiene que seguir contestando —con celdas
+    /// `none`— en vez de fallar: la columna se queda vacía, el panel no.
+    column-values: func(id: string, location: option<string>,
+                        entries: list<list<u8>>) -> list<option<string>>;
 }
 
 /// El world que un plugin de norte implementa. Un plugin concreto exporta las
@@ -201,5 +224,10 @@ world norte-decorator {
 world norte-columns {
     import norte:host/host-log@0.1.0;
     import norte:host/host-config@0.1.0;
+    // Importado SIEMPRE: el linker del host ofrece la interfaz a todo guest de
+    // columnas, y lo que decide si SIRVE algo es la capacidad aprobada del
+    // manifiesto (un token `none`, o un error por token desconocido). Un
+    // import de más en el linker nunca rompe nada; uno no resuelto sí.
+    import norte:location/location@0.1.0;
     export columns;
 }

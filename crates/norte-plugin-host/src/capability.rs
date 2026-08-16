@@ -79,6 +79,40 @@ impl Scope {
     }
 }
 
+/// Acceso de UBICACIÓN (ADR 0057): nada, o lectura bajo el token opaco que el
+/// host entrega al pintar una columna.
+///
+/// Vocabulario CERRADO, como `exec`: un valor que no esté aquí es un
+/// manifiesto inválido, no una capacidad que se ignora en silencio. Lo que se
+/// concede es leer BAJO un directorio que el host abrió y confinó — el guest
+/// jamás recibe la ruta, así que esto no abre la regla 9: la mantiene con un
+/// permiso propio y visible al aprobar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LocationCap {
+    /// Sin acceso a la ubicación.
+    #[default]
+    None,
+    /// Lectura (`read`/`stat`/`list`) bajo el token.
+    Read,
+}
+
+impl LocationCap {
+    /// `true` si concede algún acceso (para pintar el badge).
+    #[must_use]
+    pub fn granted(self) -> bool {
+        matches!(self, Self::Read)
+    }
+
+    /// Byte canónico y estable para el digest, igual que [`Scope::digest_tag`].
+    fn digest_tag(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Read => 1,
+        }
+    }
+}
+
 /// Permiso de red: una allow-list de hosts.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NetCap {
@@ -108,6 +142,9 @@ pub struct Capabilities {
     /// crudo (los modos concretos se tipan en M4-ai).
     #[serde(default)]
     pub ai: Option<String>,
+    /// Ubicación (`location = "read"`); ausente = sin ubicación (ADR 0057).
+    #[serde(default)]
+    pub location: LocationCap,
     /// `exec`: DEBE ser `none` o estar ausente. Se valida y descarta al parsear
     /// el manifiesto ([`crate::Manifest::from_toml`]); jamás se expone aquí.
     #[serde(default)]
@@ -187,6 +224,19 @@ impl Capabilities {
         }
         // ai: presencia + cadena longitud-prefijada.
         update_opt_str(h, self.ai.as_deref());
+        // location (ADR 0057): entra en el digest SOLO cuando se concede.
+        //
+        // El orden importa. Emitirla siempre movería el digest de todos los
+        // manifiestos que NO la piden, y eso resetea todas las aprobaciones
+        // humanas ya dadas — el mismo pinchazo que P2 dejó pineado en
+        // `manifest_sin_config_digesta_identico_a_pre_p2`. Emitirla solo
+        // cuando se pide conserva esas aprobaciones Y sigue exigiendo una
+        // nueva a quien pida la capacidad: es la propiedad que hace falta, y
+        // la ausencia sigue siendo inequívoca porque lo anterior (el `exec`
+        // opcional) ya se autodelimita.
+        if self.location.granted() {
+            h.update([b'L', self.location.digest_tag()]);
+        }
         // exec: SIEMPRE `none`/ausente (se valida al parsear), pero entra en el
         // digest por completitud — si un futuro relajara la invariante, el cambio
         // se reflejaría en la aprobación.
@@ -209,6 +259,9 @@ impl Capabilities {
         }
         if self.ai.is_some() {
             out.push("ai");
+        }
+        if self.location.granted() {
+            out.push("location");
         }
         out
     }

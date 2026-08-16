@@ -617,6 +617,51 @@ fn manifest_sin_config_digesta_identico_a_pre_p2() {
     );
 }
 
+/// ADR 0057: pedir `location` CAMBIA el digest —o sea, exige aprobar otra vez—
+/// y no pedirla lo deja intacto. Las dos mitades son la misma decisión: una
+/// capacidad nueva no se cuela sin consentimiento, y añadirla al esquema no
+/// puede invalidar el consentimiento que ya existe.
+#[test]
+fn location_declarada_entra_en_el_digest_de_aprobacion() {
+    let sin = Manifest::from_toml(COLUMNS_PLUGIN).unwrap();
+    let con = Manifest::from_toml(
+        &COLUMNS_PLUGIN.replace("[capabilities]", "[capabilities]\nlocation = \"read\""),
+    )
+    .unwrap();
+    assert_ne!(
+        sin.approval_digest(),
+        con.approval_digest(),
+        "pedir una capacidad nueva EXIGE aprobarla de nuevo"
+    );
+    assert!(con.capabilities.location.granted());
+    assert!(con.capabilities.badges().contains(&"location"));
+}
+
+/// Vocabulario CERRADO, como `exec`: un valor inventado es un manifiesto
+/// inválido, jamás una capacidad que se ignora en silencio.
+#[test]
+fn un_valor_desconocido_de_location_es_error_de_manifiesto() {
+    let m = COLUMNS_PLUGIN.replace("[capabilities]", "[capabilities]\nlocation = \"write\"");
+    assert!(Manifest::from_toml(&m).is_err());
+}
+
+/// Un manifiesto de columnas CON `[capabilities]` pero sin `location`.
+const COLUMNS_PLUGIN: &str = r#"
+[plugin]
+id = "org.norte.columnas"
+name = "Columnas"
+publisher = "norte"
+version = "0.1.0"
+category = "columns"
+
+[capabilities]
+fs-read = "none"
+
+[[contributions.columns]]
+id = "name-len"
+header = "Largo"
+"#;
+
 // --- P2: esquema `[config]` del manifiesto (dentro del approval digest) ---
 
 const WITH_CONFIG: &str = r#"

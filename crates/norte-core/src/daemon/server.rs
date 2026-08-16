@@ -2930,7 +2930,7 @@ async fn handle_plugin_column_values(
             return vec![None; expected_len];
         };
         inst.set_settings(settings);
-        let Ok(raw) = inst.column_values(&column_id, &entries) else {
+        let Ok(raw) = inst.column_values(&column_id, None, &entries) else {
             tracing::warn!(plugin = %id, "columns: fallo al ejecutar, celdas vacías");
             return vec![None; expected_len];
         };

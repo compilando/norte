@@ -67,3 +67,91 @@ fn target_installed(target: &str) -> bool {
                 .any(|l| l == target)
         })
 }
+
+/// Un [`LocationHost`](norte_plugin_host::LocationHost) de mentira que CUENTA
+/// las veces que se le pregunta: así un test puede afirmar que el host no
+/// resolvió nada, que es distinto de que resolviera y el guest tirara el dato.
+// `support` se compila DENTRO de cada binario de test, y solo `columns_e2e`
+// usa el espía: en los demás está muerto por construcción, no por olvido.
+#[allow(dead_code)]
+#[derive(Debug, Default)]
+pub struct SpyLocation {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[allow(dead_code)]
+impl SpyLocation {
+    /// Cuántas veces se le ha preguntado algo.
+    #[must_use]
+    pub fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn count(&self) {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl norte_plugin_host::LocationHost for SpyLocation {
+    fn read(&self, _token: &str, rel: &[u8]) -> Result<Vec<u8>, String> {
+        self.count();
+        if rel == b"a.txt" {
+            Ok(b"contenido".to_vec())
+        } else {
+            Err("no existe".into())
+        }
+    }
+
+    fn stat(
+        &self,
+        _token: &str,
+        rel: &[u8],
+    ) -> Result<norte_plugin_host::location_iface::Meta, String> {
+        self.count();
+        if rel != b"a.txt" {
+            return Err("no existe".into());
+        }
+        Ok(norte_plugin_host::location_iface::Meta {
+            kind: norte_plugin_host::location_iface::EntryKind::File,
+            size: 42,
+            mtime_sec: 1,
+            mtime_nsec: 0,
+            ctime_sec: 1,
+            ctime_nsec: 0,
+            ino: 7,
+            dev: 9,
+            mode: 0o100_644,
+        })
+    }
+
+    fn list_dir(
+        &self,
+        _token: &str,
+        _rel: &[u8],
+    ) -> Result<Vec<norte_plugin_host::location_iface::Dirent>, String> {
+        self.count();
+        Ok(Vec::new())
+    }
+}
+
+/// Capabilities con `location = "read"` concedida.
+#[allow(dead_code)]
+#[must_use]
+pub fn caps_con_location() -> norte_plugin_host::Capabilities {
+    norte_plugin_host::Manifest::from_toml(
+        r#"
+[plugin]
+id = "org.norte.columnas"
+name = "Columnas"
+publisher = "norte"
+version = "0.1.0"
+category = "columns"
+
+[capabilities]
+location = "read"
+"#,
+    )
+    .expect("manifiesto de prueba válido")
+    .capabilities
+}
