@@ -43,6 +43,13 @@ pub enum RarError {
     /// reintento: repetir lo mismo vuelve a colgarse.
     #[error("the RAR reader took longer than {}s and was killed", .0.as_secs())]
     Timeout(Duration),
+    /// El nombre de la entrada, tratado como el patrón que el delegado
+    /// aplicaría, alcanza a OTRA entrada del archivo.
+    ///
+    /// Se rehúsa en vez de adivinar: el flujo de la entrada equivocada tiene
+    /// exactamente el mismo aspecto que el de la correcta.
+    #[error("the entry name would match more than one entry as a pattern; refusing to guess")]
+    AmbiguousForDelegate,
     /// El hijo terminó mal. `stderr` va recortado: es diagnóstico, no un canal.
     #[error("the RAR reader failed (exit {code}): {stderr}")]
     Failed {
@@ -58,7 +65,9 @@ impl From<RarError> for Error {
     /// categorías, y la frase se queda en el log de este lado.
     fn from(e: RarError) -> Self {
         match e {
-            RarError::NoDelegate => Self::Unsupported,
+            // Ninguna de las dos se arregla reintentando, y las dos tienen
+            // una frase que el log sí lleva.
+            RarError::NoDelegate | RarError::AmbiguousForDelegate => Self::Unsupported,
             RarError::Spawn { .. } | RarError::Timeout(_) => {
                 Self::ProviderUnavailable { retryable: false }
             }
