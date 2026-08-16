@@ -17,5 +17,5 @@
 mod delegate;
 mod listing;
 
-pub use delegate::{Delegate, RarError};
+pub use delegate::{Delegate, LIST_TIMEOUT, RarError};
 pub use listing::{Listing, RawEntry, parse_7z_slt, parse_unrar_vt};

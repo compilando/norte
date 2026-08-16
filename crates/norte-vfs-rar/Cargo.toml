@@ -20,11 +20,16 @@ thiserror.workspace = true
 # `time`: el plazo de pared que mata a un delegado que no termina.
 tokio = { workspace = true, features = ["process", "rt", "sync", "time", "io-util"] }
 tokio-util.workspace = true
+# Ya en el grafo (norte-vfs-local, norte-connect): envuelve el receptor del
+# hijo como Stream sin escribir un `unfold` a mano.
+tokio-stream.workspace = true
 # warn! de entradas omitidas (mismo contrato de omitir-CON-señal que ADR 0018).
 tracing.workspace = true
 
 [dev-dependencies]
+futures.workspace = true
 norte-testkit.workspace = true
+tokio-util.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 

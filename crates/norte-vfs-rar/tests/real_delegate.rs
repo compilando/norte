@@ -2,8 +2,9 @@
 //! ninguno en la máquina, el test se retira diciéndolo: la suite pura de
 //! `listing.rs` ya cubre la gramática.
 
+use futures::StreamExt;
 use norte_testkit::RarSmith;
-use norte_vfs_rar::{parse_7z_slt, parse_unrar_vt};
+use norte_vfs_rar::{Delegate, LIST_TIMEOUT, parse_7z_slt, parse_unrar_vt};
 
 /// Un `.rar` forjado con las tres formas que importan: ASCII, un nombre
 /// anidado y un nombre que NO es UTF-8.
@@ -91,4 +92,41 @@ fn which_unrar() -> Option<std::path::PathBuf> {
     std::env::split_paths(&path)
         .map(|d| d.join("unrar"))
         .find(|c| c.is_file())
+}
+
+/// El endurecimiento de regla 9 no rompe al delegado real: con el entorno
+/// VACÍO, `stdin` a null y el `cwd` fuera del árbol del usuario, `7z` sigue
+/// listando — y `run_stream` entrega el contenido de UNA entrada.
+#[tokio::test]
+async fn con_regla_9_puesta_el_delegado_real_sigue_leyendo() {
+    let Some(sevenz) = norte_testkit::which_7z() else {
+        eprintln!("sin 7z instalado: test retirado");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = forge(tmp.path());
+    let d = Delegate::SevenZip(sevenz);
+    let stdout = d
+        .run_capture(&d.list_argv(&archive), LIST_TIMEOUT)
+        .await
+        .expect("7z lista con el entorno vacío");
+    let listing = parse_7z_slt(&stdout);
+    assert!(
+        listing.entries.iter().any(|e| e.name == b"hello.txt"),
+        "listado con regla 9 puesta"
+    );
+
+    let argv = d.read_argv(&archive, b"hello.txt");
+    let stream = d
+        .run_stream(&argv, tokio_util::sync::CancellationToken::new())
+        .await
+        .expect("7z extrae a stdout");
+    let bytes: Vec<u8> = stream
+        .map(|r| r.expect("el flujo no falla"))
+        .fold(Vec::new(), |mut acc, c| async move {
+            acc.extend_from_slice(&c);
+            acc
+        })
+        .await;
+    assert_eq!(bytes, b"hola norte\n", "el contenido llega entero");
 }
