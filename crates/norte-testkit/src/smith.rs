@@ -653,6 +653,165 @@ fn emit_tar(out: &mut Vec<u8>, name: &[u8], data: &[u8], typeflag: u8, link: &[u
     }
 }
 
+// --- RAR5 -----------------------------------------------------------------
+
+/// Entero de longitud variable de RAR5: 7 bits por byte, bit alto = «sigue».
+fn vint(mut n: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    loop {
+        let b = u8::try_from(n & 0x7f).expect("7 bits caben en u8");
+        n >>= 7;
+        if n == 0 {
+            out.push(b);
+            return out;
+        }
+        out.push(b | 0x80);
+    }
+}
+
+/// El ejecutable `7z` si está en `PATH`. Los tests que necesitan un delegado
+/// real se retiran diciéndolo cuando devuelve `None`.
+///
+/// ```
+/// // En una máquina sin 7z instalado esto es `None`, y eso no es un fallo.
+/// let _ = norte_testkit::which_7z();
+/// ```
+#[must_use]
+pub fn which_7z() -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        for exe in ["7z", "7zz"] {
+            let candidate = dir.join(exe);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Una entrada de la forja RAR5.
+struct RarEntry {
+    name: Vec<u8>,
+    content: Vec<u8>,
+    is_dir: bool,
+}
+
+/// Forja de bytes RAR5 con entradas ALMACENADAS (método 0), hermana de
+/// [`ZipSmith`] y [`TarSmith`].
+///
+/// Existe porque el compresor de RAR es la mitad no libre: nada en este árbol
+/// puede producir un `.rar` comprimido, así que sin esto no hay fixture
+/// ninguna — ni corpus hostil, ni suite contractual. El CONTENEDOR está
+/// documentado y meter bytes crudos dentro no toca el algoritmo propietario.
+///
+/// ```
+/// let bytes = norte_testkit::RarSmith::new()
+///     .file(b"docs/hola.txt", b"hola")
+///     .build();
+/// assert_eq!(&bytes[..8], b"Rar!\x1a\x07\x01\x00");
+/// ```
+#[derive(Default)]
+pub struct RarSmith {
+    entries: Vec<RarEntry>,
+    mtime: u32,
+}
+
+impl RarSmith {
+    /// Forja vacía. `mtime` fijo (2021-01-14) para determinismo total.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            mtime: 0x6000_0000,
+        }
+    }
+
+    /// Fichero almacenado. `name` va en BYTES crudos: un nombre no-UTF8 es
+    /// exactamente el caso que hay que poder forjar (regla dura 1).
+    #[must_use]
+    pub fn file(mut self, name: &[u8], content: &[u8]) -> Self {
+        self.entries.push(RarEntry {
+            name: name.to_vec(),
+            content: content.to_vec(),
+            is_dir: false,
+        });
+        self
+    }
+
+    /// Entrada de directorio explícita (sin datos).
+    #[must_use]
+    pub fn dir(mut self, name: &[u8]) -> Self {
+        self.entries.push(RarEntry {
+            name: name.to_vec(),
+            content: Vec::new(),
+            is_dir: true,
+        });
+        self
+    }
+
+    /// Los bytes del `.rar`.
+    #[must_use]
+    pub fn build(self) -> Vec<u8> {
+        let mut out = Vec::from(*b"Rar!\x1a\x07\x01\x00");
+        // Cabecera principal: head_type 1, sin flags, ArchiveFlags = 0.
+        out.extend_from_slice(&rar_block(1, 0, &vint(0), &[]));
+        for e in &self.entries {
+            out.extend_from_slice(&self.rar_file_block(e));
+        }
+        // Fin de archivo: head_type 5, EndFlags = 0.
+        out.extend_from_slice(&rar_block(5, 0, &vint(0), &[]));
+        out
+    }
+
+    /// Cabecera de fichero (`head_type` 2) seguida de sus datos crudos.
+    fn rar_file_block(&self, e: &RarEntry) -> Vec<u8> {
+        // FileFlags: 0x0001 directorio | 0x0002 mtime presente | 0x0004 crc.
+        let file_flags: u64 = u64::from(e.is_dir) | 0x0002 | 0x0004;
+        let attrs: u64 = if e.is_dir { 0x10 } else { 0x20 };
+        let mut body = vint(file_flags);
+        body.extend_from_slice(&vint(e.content.len() as u64));
+        body.extend_from_slice(&vint(attrs));
+        body.extend_from_slice(&self.mtime.to_le_bytes());
+        body.extend_from_slice(&crc32(&e.content).to_le_bytes());
+        // CompressionInfo: versión 0, método 0 (almacenado), diccionario 0.
+        body.extend_from_slice(&vint(0));
+        // HostOS: 1 = unix.
+        body.extend_from_slice(&vint(1));
+        body.extend_from_slice(&vint(e.name.len() as u64));
+        body.extend_from_slice(&e.name);
+
+        // head_flags 0x0002 = el bloque declara DataSize (los bytes que lo
+        // siguen). Un directorio no lleva datos y no lo declara.
+        let mut block = if e.is_dir {
+            rar_block(2, 0, &body, &[])
+        } else {
+            rar_block(2, 0x0002, &body, &e.content)
+        };
+        block.extend_from_slice(&e.content);
+        block
+    }
+}
+
+/// Un bloque RAR5: `crc32(len ++ inner) ++ len ++ inner`, donde `inner` es
+/// `head_type ++ head_flags ++ [data_size] ++ body`. El CRC cubre la longitud
+/// y el interior, no los datos que van detrás del bloque.
+fn rar_block(head_type: u64, head_flags: u64, body: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut inner = vint(head_type);
+    inner.extend_from_slice(&vint(head_flags));
+    if head_flags & 0x0002 != 0 {
+        inner.extend_from_slice(&vint(data.len() as u64));
+    }
+    inner.extend_from_slice(body);
+
+    let mut hdr = vint(inner.len() as u64);
+    hdr.extend_from_slice(&inner);
+
+    let mut out = Vec::from(crc32(&hdr).to_le_bytes());
+    out.extend_from_slice(&hdr);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -797,5 +956,60 @@ mod tests {
                 "name_len={name_len}: LEN == longitud real"
             );
         }
+    }
+
+    // --- RarSmith (ADR 0018 / item 11 del roadmap) -------------------------
+
+    /// El writer produce un archivo que el DELEGADO REAL sabe leer. Un writer
+    /// «correcto» según nuestra propia lectura no demuestra nada.
+    #[test]
+    fn un_delegado_real_lista_lo_que_forjamos() {
+        const CRUDO: &[u8] = b"cp437-\xa4\xa5.txt";
+        let Some(sevenz) = which_7z() else {
+            eprintln!("sin 7z instalado: test retirado");
+            return;
+        };
+        let bytes = RarSmith::new()
+            .file(b"hello.txt", b"hola norte\n")
+            .file("\u{f1}and\u{fa}.txt".as_bytes(), b"utf8\n")
+            .file(CRUDO, b"bytes\n")
+            .build();
+        let dir = std::env::temp_dir().join(format!("norte-rarsmith-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("tempdir");
+        let path = dir.join("t.rar");
+        std::fs::write(&path, &bytes).expect("escribe");
+
+        let out = std::process::Command::new(sevenz)
+            .args(["l", "-slt", "-p", "--"])
+            .arg(&path)
+            .output()
+            .expect("7z corre");
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(out.status.success(), "7z falló: {out:?}");
+        // Los BYTES crudos del nombre no-UTF8 sobreviven al listado de 7z.
+        assert!(
+            out.stdout.windows(CRUDO.len()).any(|w| w == CRUDO),
+            "el nombre crudo no aparece en el listado de 7z: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
+    #[test]
+    fn vint_codifica_multibyte() {
+        assert_eq!(vint(0), vec![0x00]);
+        assert_eq!(vint(0x7f), vec![0x7f]);
+        assert_eq!(vint(0x80), vec![0x80, 0x01]);
+        assert_eq!(vint(0x3fff), vec![0xff, 0x7f]);
+    }
+
+    #[test]
+    fn la_firma_es_rar5_y_el_contenido_va_crudo() {
+        let bytes = RarSmith::new().file(b"a.txt", b"CRUDO").build();
+        assert_eq!(&bytes[..8], b"Rar!\x1a\x07\x01\x00");
+        // Método 0 = almacenado: el contenido está literalmente ahí dentro.
+        assert!(
+            bytes.windows(5).any(|w| w == b"CRUDO"),
+            "una entrada almacenada no comprime nada"
+        );
     }
 }

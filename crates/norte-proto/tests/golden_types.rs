@@ -3021,7 +3021,14 @@ fn method_names_frozen() {
     // `ShutdownMode` NO lleva `#[serde(other)]`, contra la costumbre de este
     // wire: degradar está bien cuando malinterpretar un valor cuesta una
     // feature, y mal cuando apaga un daemon de una forma que nadie pidió.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.46.0");
+    // 0.47.0 (roadmap ítem 11): `rar` en `ARCHIVE_FORMATS`. Ampliar la
+    // whitelist no cambia ningún mensaje: cambia qué schemes compuestos se
+    // pueden FORMAR. Un cliente 0.46 no los forma y no ve la funcionalidad;
+    // uno 0.47 contra un daemon 0.46 no llega a intentarlo, porque
+    // `version_compatible` no negocia un minor de cliente MAYOR que el del
+    // servidor. MINOR.
+    assert!(norte_proto::ARCHIVE_FORMATS.contains(&"rar"));
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.47.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

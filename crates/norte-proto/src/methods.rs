@@ -612,7 +612,19 @@ use crate::{
 /// 0.45 ignora la notificación —correctamente— y por tanto no se entera de que
 /// venía un relevo, con lo que se queda reconectando contra un socket muerto.
 /// No se rompe; simplemente no obtiene lo que 0.46 existe para dar.
-pub const PROTOCOL_VERSION: &str = "0.46.0";
+/// **0.47.0** (roadmap ítem 11): `rar` entra en [`ARCHIVE_FORMATS`](crate::ARCHIVE_FORMATS)
+/// (`crates/norte-proto/src/vpath.rs`). La whitelist decide qué schemes
+/// compuestos puede FORMAR un cliente, así que ampliarla es cambio de wire
+/// aunque no mueva un solo byte de un mensaje existente.
+///
+/// Ventana N=0.47.x / N-1=0.46.x, y la asimetría es la de siempre: un cliente
+/// 0.46 no forma `rar+file://…` porque su propia whitelist no lo trae, así
+/// que sencillamente no ve la funcionalidad. Al revés, un cliente 0.47 contra
+/// un daemon 0.46 sí forma el path —y el daemon viejo responde `Unsupported`
+/// por su arm `_` de dispatch, que es la respuesta honesta— porque
+/// [`version_compatible`] no negocia un cliente con minor MAYOR que el
+/// servidor: la conexión ni se establece. Aditivo, por tanto, MINOR.
+pub const PROTOCOL_VERSION: &str = "0.47.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver

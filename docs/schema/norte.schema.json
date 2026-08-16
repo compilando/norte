@@ -113,6 +113,13 @@
             "integer",
             "null"
           ]
+        },
+        "rar_delegate": {
+          "description": "`[archive] rar_delegate` (roadmap ítem 11): ruta ABSOLUTA del programa\nexterno que lee RAR (`7z`, `7zz` o `unrar`). Ausente = se sondea\n`PATH`. **Nunca se honra desde la capa Project**: una clave que nombra\nun ejecutable, leída de un `.norte.toml` dentro de un repositorio,\nsería ejecución de código arbitrario al entrar en el directorio.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"

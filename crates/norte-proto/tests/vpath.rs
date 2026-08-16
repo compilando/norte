@@ -520,9 +520,22 @@ fn archive_compose_preserva_authority() {
 
 #[test]
 fn archive_compose_rechaza_formato_desconocido() {
-    let outer = path("file:///a.rar");
-    assert!(VPath::archive_compose("rar", &outer, &[]).is_err());
+    let outer = path("file:///a.7z");
+    // `7z` NO está en la whitelist; `rar` sí desde 0.47.0 (roadmap ítem 11),
+    // así que el ejemplo de formato desconocido tuvo que cambiar de token.
+    assert!(VPath::archive_compose("7z", &outer, &[]).is_err());
     assert!(VPath::archive_compose("", &outer, &[]).is_err());
+}
+
+/// `rar` es un formato de archivo desde 0.47.0: se compone y se desmonta como
+/// cualquier otro, y el exterior sale intacto.
+#[test]
+fn rar_es_un_formato_de_archivo() {
+    let p = VPath::parse("rar+file:///a.rar/!/x.txt").unwrap();
+    let r = p.archive_split().unwrap().unwrap();
+    assert_eq!(r.format, "rar");
+    assert_eq!(r.outer.to_wire(), "file:///a.rar");
+    assert_eq!(r.inner[0].as_bytes(), b"x.txt");
 }
 
 #[test]

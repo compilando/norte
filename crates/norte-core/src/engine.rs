@@ -103,6 +103,10 @@ pub struct Engine {
     /// contenedor (los providers compuestos se cachean con los límites
     /// vigentes en su primer uso).
     archive_limits: RwLock<norte_vfs_archive::Limits>,
+    /// Ejecutable FIJADO para leer RAR (`[archive] rar_delegate`), o `None`
+    /// para sondear `PATH`. Se pone en el arranque con
+    /// [`Self::set_rar_delegate`], nunca desde la capa Project.
+    rar_delegate: RwLock<Option<std::path::PathBuf>>,
     /// Proveedor de IA para el rename revisable (M4-A2, ADR 0031). `None` =
     /// sin IA (`ai_rename_plan` → `Unsupported`). Inyectado con
     /// [`Self::set_ai_provider`].
@@ -248,6 +252,7 @@ impl Engine {
             policy_explicit: false,
             approvals: Arc::new(crate::approval::DenyAll),
             archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
+            rar_delegate: RwLock::new(None),
             ai_provider: RwLock::new(None),
             ai_embed: RwLock::new(None),
             ai_config: RwLock::new(crate::ai::AiConfig::default()),
@@ -256,6 +261,60 @@ impl Engine {
             batch_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             sync_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
+    }
+
+    /// Compone el provider de RAR para `aref`, o dice que no se puede.
+    ///
+    /// Las dos negativas son la frontera del ítem 11:
+    ///
+    /// - el interior tiene que ser `file://` **sin authority**: el delegado
+    ///   recibe una ruta del sistema de ficheros, y no existe tal ruta para
+    ///   un `sftp://` ni para una entrada dentro de otro archivo;
+    /// - sin `7z` ni `unrar` instalados no hay lector: `Unsupported`, con la
+    ///   frase que nombra qué instalar en el log (el wire no lleva prosa).
+    fn rar_provider_for(
+        &self,
+        aref: &norte_proto::ArchiveRef,
+        key: String,
+    ) -> Result<Arc<dyn Provider>, Error> {
+        if aref.outer.scheme() != "file" || aref.outer.authority().is_some() {
+            tracing::warn!(
+                outer = %aref.outer.scheme(),
+                "rar solo se monta sobre un fichero LOCAL: el delegado necesita una ruta"
+            );
+            return Err(Error::Unsupported);
+        }
+        let archive = norte_vfs_local::vpath_to_native(&aref.outer)?;
+        let pinned = self
+            .rar_delegate
+            .read()
+            .expect("rar_delegate lock sano")
+            .clone();
+        let delegate = match pinned {
+            Some(program) => norte_vfs_rar::Delegate::pinned(program),
+            None => norte_vfs_rar::Delegate::discover().map_err(|e| {
+                tracing::warn!(error = %e, "no hay lector de RAR instalado");
+                Error::from(e)
+            })?,
+        };
+        let provider: Arc<dyn Provider> = Arc::new(norte_vfs_rar::RarProvider::new(
+            archive,
+            delegate,
+            norte_vfs_rar::RarLimits::default(),
+        ));
+        Ok(self.sessions.insert_composite(key, provider))
+    }
+
+    /// El ejecutable que lee RAR, si la configuración FIJA uno
+    /// (`[archive] rar_delegate`). `None` = sondear `PATH`.
+    ///
+    /// La clave viene de las capas System/User y NUNCA de Project: un
+    /// repositorio no elige qué binario se lanza al entrar en él.
+    ///
+    /// # Panics
+    /// Si el lock interno está envenenado, como el resto de los del engine.
+    pub fn set_rar_delegate(&self, program: Option<std::path::PathBuf>) {
+        *self.rar_delegate.write().expect("rar_delegate lock sano") = program;
     }
 
     /// Fija los límites anti-bomba de los providers archive (#95.2, canal
@@ -707,6 +766,15 @@ impl Engine {
                 return Err(Error::LimitExceeded {
                     limit: Error::LIMIT_NESTING.into(),
                 });
+            }
+            // `rar` no compone sobre un provider interior: el delegado
+            // externo necesita una RUTA de verdad, así que el interior tiene
+            // que ser un `file://` local y sin authority. Cualquier otra cosa
+            // —sftp, s3, o un archivo dentro de otro archivo— se niega AQUÍ,
+            // antes de componer nada, en vez de traerse el contenedor entero
+            // por una descarga que nadie pidió.
+            if aref.format == "rar" {
+                return self.rar_provider_for(&aref, key);
             }
             let format = match aref.format.as_str() {
                 "tar" => norte_vfs_archive::Format::Tar,

@@ -9,6 +9,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`.rar` archives open as folders.** Press Enter on one and it browses like
+  any other archive, with the files readable inside it. norte does not contain
+  a RAR decompressor — that code is not free, and no amount of wanting changes
+  it — so it asks a program you already have: `7z` (from p7zip) or `unrar`,
+  whichever is installed, `7z` first because `unrar` cannot print a filename
+  that is not valid text and loses everything after the first odd byte. If
+  neither is installed, opening a `.rar` says so and names what to install,
+  instead of showing you an empty folder.
+  Reading only: writing a RAR needs the proprietary half. Encrypted entries are
+  listed but will not open, because the password prompt is deliberately
+  unreachable — the helper program runs with no keyboard attached to it, no
+  environment, and a working directory somewhere empty that is not your files.
+  A `.rar` sitting on a remote server or inside another archive is refused
+  rather than quietly downloaded whole. If you want to choose the program
+  yourself, `[archive] rar_delegate` in your `norte.toml` does it — and it is
+  ignored from a repository's own config file, because a folder you happen to
+  `cd` into does not get to pick which binaries run.
+
 - **Upgrading norte no longer drops what you had open.** Replacing a running
   daemon used to look identical, from a window's point of view, to somebody
   stopping it: the connection closed and that was all anyone knew. So the

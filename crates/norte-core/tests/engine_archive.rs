@@ -289,3 +289,74 @@ async fn set_archive_limits_gobierna_la_composicion() {
         .await;
     assert_eq!(n, 3);
 }
+
+// ---------- rar (roadmap ítem 11): solo sobre un fichero LOCAL ----------
+
+/// El delegado necesita una ruta del sistema de ficheros. Traerse el `.rar`
+/// entero desde sftp/s3 sería una descarga que nadie pidió, así que la
+/// composición se niega ANTES de ocurrir, con `Unsupported`.
+#[tokio::test]
+async fn rar_sobre_un_interior_remoto_se_niega_con_motivo() {
+    let engine = Engine::new();
+    let p = vp("rar+sftp://host/a.rar/!/x.txt");
+    assert!(matches!(engine.stat(&p).await, Err(Error::Unsupported)));
+}
+
+/// Un `.rar` DENTRO de otro archivo tampoco es un fichero local: no hay ruta
+/// que darle al delegado, y la capa exterior no se materializa a un temporal
+/// a espaldas de nadie.
+#[tokio::test]
+async fn rar_anidado_en_otro_archivo_tampoco_es_local() {
+    let engine = Engine::new();
+    let p = vp("rar+zip+file:///o.zip/!/a.rar/!/x.txt");
+    assert!(matches!(engine.stat(&p).await, Err(Error::Unsupported)));
+}
+
+/// Un `rar+mem://` es la misma negativa: `mem` es un provider de tests, no un
+/// sistema de ficheros, y el arm de dispatch no mira quién está registrado.
+#[tokio::test]
+async fn rar_sobre_mem_se_niega_aunque_el_provider_este_registrado() {
+    let engine = engine_with_container("a.rar", b"Rar!\x1a\x07\x01\x00").await;
+    assert!(matches!(
+        engine.stat(&vp("rar+mem:///a.rar/!/x.txt")).await,
+        Err(Error::Unsupported)
+    ));
+}
+
+/// Y sobre un fichero local SÍ compone: el engine lista lo que el delegado
+/// lee. Sin `7z` ni `unrar` en la máquina, el test se retira diciéndolo.
+#[tokio::test]
+async fn rar_sobre_un_fichero_local_lista_de_verdad() {
+    if norte_testkit::which_7z().is_none() {
+        eprintln!("sin 7z instalado: test retirado");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let archive = dir.path().join("a.rar");
+    std::fs::write(
+        &archive,
+        norte_testkit::RarSmith::new()
+            .file(b"docs/hello.txt", b"hola norte\n")
+            .build(),
+    )
+    .expect("escribir");
+    let engine = Engine::new();
+    engine.register_provider(
+        Arc::new(norte_vfs_local::LocalProvider::rooted("/")) as Arc<dyn Provider>
+    );
+    let root = VPath::archive_compose(
+        "rar",
+        &norte_vfs_local::vpath_from_native(&archive).expect("vpath del fichero"),
+        &[],
+    )
+    .expect("compose");
+    let entries: Vec<_> = engine
+        .list(&root)
+        .await
+        .expect("list de la raíz del rar")
+        .map(|e| e.expect("entrada ok"))
+        .collect()
+        .await;
+    assert_eq!(entries.len(), 1, "el directorio `docs`");
+    assert_eq!(entries[0].path.file_name().unwrap().as_bytes(), b"docs");
+}

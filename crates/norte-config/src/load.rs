@@ -1368,6 +1368,11 @@ pub struct CommonConfig {
     pub archive_max_decompressed_bytes: Option<u64>,
     /// `[archive] max_nesting` (#56, last-wins; never from Project).
     pub archive_max_nesting: Option<usize>,
+    /// `[archive] rar_delegate` (roadmap ítem 11, last-wins; never from
+    /// Project — naming an executable is not presentation, and honouring it
+    /// from a repository's `.norte.toml` is arbitrary code execution on `cd`).
+    /// `None` = probe `PATH`.
+    pub archive_rar_delegate: Option<String>,
     /// `[log] dir` (last-wins; None = `<state_dir>/logs`; never from Project —
     /// fail-closed, same reasoning as `[daemon]`: choosing where a process
     /// writes is not presentation).
@@ -1466,21 +1471,30 @@ fn merge_log_layer(
 /// per field, infallible — every field is a plain scalar copy). Extracted
 /// out of [`load`] to stay under clippy's line-count cap, same pattern as
 /// [`merge_ai_layer`].
-fn merge_archive_layer(
-    archive_max_entries: &mut Option<u64>,
-    archive_max_decompressed_bytes: &mut Option<u64>,
-    archive_max_nesting: &mut Option<usize>,
-    a: &crate::schema::ArchiveSection,
-) {
+fn merge_archive_layer(acc: &mut ArchiveAccum, a: &crate::schema::ArchiveSection) {
     if let Some(n) = a.max_entries {
-        *archive_max_entries = Some(n);
+        acc.max_entries = Some(n);
     }
     if let Some(b) = a.max_decompressed_bytes {
-        *archive_max_decompressed_bytes = Some(b);
+        acc.max_decompressed_bytes = Some(b);
     }
     if let Some(n) = a.max_nesting {
-        *archive_max_nesting = Some(n);
+        acc.max_nesting = Some(n);
     }
+    if let Some(d) = a.rar_delegate.as_ref() {
+        acc.rar_delegate = Some(d.clone());
+    }
+}
+
+/// Los acumuladores de `[archive]` mientras [`load`] recorre las capas. Van
+/// juntos porque se pasan juntos: un parámetro por campo hacía crecer la
+/// firma de [`merge_archive_layer`] con cada clave nueva.
+#[derive(Default)]
+struct ArchiveAccum {
+    max_entries: Option<u64>,
+    max_decompressed_bytes: Option<u64>,
+    max_nesting: Option<usize>,
+    rar_delegate: Option<String>,
 }
 
 /// Merges one layer's already-parsed `[ui] font`/`mono_font`/`font_size`/
@@ -1800,9 +1814,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut log_dir: Option<PathBuf> = None;
     let mut log_retain: Option<usize> = None;
     let mut hotlist: Vec<HotlistItem> = Vec::new();
-    let mut archive_max_entries: Option<u64> = None;
-    let mut archive_max_decompressed_bytes: Option<u64> = None;
-    let mut archive_max_nesting: Option<usize> = None;
+    let mut archive = ArchiveAccum::default();
     let mut ai = AiSettings::default();
     let mut sources = Vec::new();
     for (dir, kind) in &layers.dirs {
@@ -1865,12 +1877,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 for entry in parsed.hotlist {
                     merge_hotlist_entry(&mut hotlist, entry);
                 }
-                merge_archive_layer(
-                    &mut archive_max_entries,
-                    &mut archive_max_decompressed_bytes,
-                    &mut archive_max_nesting,
-                    &parsed.archive,
-                );
+                merge_archive_layer(&mut archive, &parsed.archive);
                 merge_daemon_layer(&mut daemon_mode, &mut daemon_socket, parsed.daemon);
                 merge_log_layer(&mut log_dir, &mut log_retain, parsed.log);
                 merge_ai_layer(&mut ai, parsed.ai, &norte)?;
@@ -1896,9 +1903,10 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         log_dir,
         log_retain,
         hotlist,
-        archive_max_entries,
-        archive_max_decompressed_bytes,
-        archive_max_nesting,
+        archive_max_entries: archive.max_entries,
+        archive_max_decompressed_bytes: archive.max_decompressed_bytes,
+        archive_max_nesting: archive.max_nesting,
+        archive_rar_delegate: archive.rar_delegate,
         ai,
         sources,
     })
@@ -2102,6 +2110,38 @@ mod hotlist_tests {
             cfg.hotlist[0].target.as_ref().unwrap(),
             &VPath::parse("file:///nuevo").unwrap(),
             "la última aparición dentro de la capa gana"
+        );
+    }
+
+    /// El layer Project JAMÁS elige qué ejecutable se lanza: un repositorio
+    /// que trae su propio `.norte.toml` con `[archive] rar_delegate` sería
+    /// ejecución de código arbitrario con solo entrar en el directorio. Misma
+    /// regla fail-closed que el resto de `[archive]`, y aquí más afilada.
+    #[test]
+    fn rar_delegate_del_layer_project_se_ignora() {
+        let usuario = tempfile::tempdir().unwrap();
+        std::fs::write(
+            usuario.path().join("norte.toml"),
+            "[archive]\nrar_delegate = \"/usr/bin/7z\"\n",
+        )
+        .unwrap();
+        let proyecto = tempfile::tempdir().unwrap();
+        std::fs::write(
+            proyecto.path().join("norte.toml"),
+            "[archive]\nrar_delegate = \"/tmp/evil\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (usuario.path().to_path_buf(), Layer::User),
+                (proyecto.path().to_path_buf(), Layer::Project),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(
+            cfg.archive_rar_delegate.as_deref(),
+            Some("/usr/bin/7z"),
+            "el layer Project jamás elige el ejecutable"
         );
     }
 
