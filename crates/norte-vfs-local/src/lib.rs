@@ -15,6 +15,10 @@
 mod caps_at;
 #[cfg(unix)]
 mod confined;
+/// Lectura acotada bajo un directorio, para la capacidad `location` del
+/// plugin-host (ADR 0057).
+#[cfg(unix)]
+mod location;
 #[cfg(target_os = "macos")]
 pub mod mounts_macos;
 #[cfg(windows)]
@@ -31,5 +35,9 @@ mod provider;
 ))]
 mod trash_fdo;
 
+#[cfg(unix)]
+pub use location::{
+    Bounds, ConfinedRoot, LocationDirent, LocationError, LocationKind, LocationMeta,
+};
 pub use native_path::{vpath_from_native, vpath_to_native};
 pub use provider::LocalProvider;

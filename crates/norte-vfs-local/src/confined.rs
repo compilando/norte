@@ -104,7 +104,7 @@ impl LocalRoot {
     }
 
     /// Abre el directorio `parents` bajo la raíz, confinado.
-    fn resolve_dir(&self, parents: &[Segment]) -> Result<OwnedFd, Error> {
+    pub(crate) fn resolve_dir(&self, parents: &[Segment]) -> Result<OwnedFd, Error> {
         if parents.is_empty() {
             return dup(self.fd.as_raw_fd());
         }
@@ -410,7 +410,7 @@ fn is_enosys(e: &std::io::Error) -> bool {
 /// se habría salido, y `ELOOP` lo que contesta un `O_NOFOLLOW`: los dos son el
 /// mismo veredicto y NO son `NotFound`, porque un caller que ve `NotFound`
 /// responde creando el padre — justo la operación que esto existe para impedir.
-fn map_errno(e: &std::io::Error) -> Error {
+pub(crate) fn map_errno(e: &std::io::Error) -> Error {
     match e.raw_os_error() {
         Some(libc::EXDEV | libc::ELOOP) => Error::Conflict {
             conflict: ConflictKind::EscapesRoot,
