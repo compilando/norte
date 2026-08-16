@@ -160,3 +160,45 @@ fn sin_wasm_no_se_instala() {
     ));
     assert!(!cfg.path().join("plugins").exists());
 }
+
+/// ADR 0057: la capacidad de ubicación viaja al frontend por el MISMO canal
+/// que las demás — `PluginInfo::capabilities`, que es vocabulario ABIERTO.
+///
+/// Por eso este cambio NO toca el wire: un campo propio para `location` sería
+/// una segunda forma de decir lo mismo, con su bump y sus goldens, y un
+/// cliente N-1 lo pintaría igual de bien leyendo el badge que ya recibe.
+#[test]
+fn el_badge_de_location_llega_al_listado_sin_tocar_el_wire() {
+    const CON_LOCATION: &str = r#"
+[plugin]
+id = "org.norte.git-status"
+name = "Git status"
+publisher = "norte"
+version = "0.1.0"
+category = "columns"
+
+[[contributions.columns]]
+id = "git-status"
+header = "Git"
+
+[capabilities]
+location = "read"
+"#;
+    let cfg = tempfile::tempdir().expect("tempdir");
+    let src = origen(cfg.path(), CON_LOCATION, b"\0asm");
+    install(cfg.path(), &src, false).expect("instala");
+
+    let reg = PluginRegistry::discover(cfg.path()).expect("descubre");
+    let listado = reg.list();
+    let info = listado
+        .plugins
+        .iter()
+        .find(|p| p.id == "org.norte.git-status")
+        .expect("el plugin está");
+    assert!(
+        info.capabilities.iter().any(|c| c == "location"),
+        "el humano ve QUÉ va a aprobar: {:?}",
+        info.capabilities
+    );
+    assert!(!info.approved, "instalar no consiente nada");
+}
