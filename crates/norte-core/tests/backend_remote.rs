@@ -1185,3 +1185,85 @@ async fn remote_sync_plan_sin_spool_es_unsupported() {
         Err(norte_proto::Error::Unsupported)
     ));
 }
+
+/// Roadmap ítem 10: tras un RELEVO el cliente arranca al que viene, y tras una
+/// PARADA no resucita nada. Son la misma conexión cerrada; lo único que las
+/// separa es la notificación.
+///
+/// El `spawn_cmd` no es un daemon: es un `touch`, que es lo que deja OBSERVAR
+/// la decisión sin montar un segundo proceso de verdad. Lo que se prueba es
+/// exactamente eso — si el cliente decide arrancar algo o no—, y el arranque en
+/// sí es el mismo camino que la primera conexión ya usa.
+#[tokio::test]
+async fn tras_un_relevo_se_arranca_al_que_viene_y_tras_una_parada_no() {
+    async fn corre(modo: norte_proto::methods::ShutdownMode) -> bool {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = dir.path().join("d.sock");
+        let testigo = dir.path().join("arrancado");
+        let mem = Arc::new(MemProvider::new());
+        let (_shutdown, run) = bind_at(Arc::clone(&mem), socket.clone()).await;
+
+        let backend = RemoteBackend::connect(
+            socket.clone(),
+            Some(vec![
+                std::ffi::OsString::from("/usr/bin/touch"),
+                testigo.clone().into_os_string(),
+            ]),
+            ClientInfo {
+                name: "backend-test".into(),
+                version: "0.0.0".into(),
+            },
+        )
+        .await
+        .expect("connect");
+        // La PRIMERA conexión no arrancó nada (había daemon), así que el
+        // testigo solo puede aparecer por la reconexión.
+        assert!(!testigo.exists(), "la primera conexión no arranca nada");
+
+        let mut cliente = norte_core::daemon::Client::connect(&socket)
+            .await
+            .expect("cliente de control");
+        cliente
+            .initialize(ClientInfo {
+                name: "control".into(),
+                version: "0.0.0".into(),
+            })
+            .await
+            .expect("initialize");
+        let _: norte_proto::methods::DaemonShutdownResult = cliente
+            .call(
+                norte_proto::methods::DAEMON_SHUTDOWN,
+                &norte_proto::methods::DaemonShutdownParams {
+                    graceful: true,
+                    mode: modo,
+                },
+            )
+            .await
+            .expect("shutdown aceptado");
+        tokio::time::timeout(Duration::from_secs(5), run)
+            .await
+            .expect("apagado")
+            .expect("join")
+            .expect("run ok");
+
+        // Se le da al backend tiempo de una reconexión con su backoff.
+        for _ in 0..40 {
+            if testigo.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let arrancado = testigo.exists();
+        drop(backend);
+        arrancado
+    }
+
+    assert!(
+        corre(norte_proto::methods::ShutdownMode::Handover).await,
+        "un relevo SÍ autoriza a arrancar al que viene"
+    );
+    assert!(
+        !corre(norte_proto::methods::ShutdownMode::Stop).await,
+        "una parada NO: el usuario lo paró, y nadie lo resucita"
+    );
+}

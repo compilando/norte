@@ -2424,6 +2424,20 @@ pub mod remote {
         /// que reconectara sin ella volvería como `Actor::User` — el actor se
         /// blanquearía solo, en silencio, al primer corte del daemon.
         agent_session: Option<String>,
+        /// El daemon dijo que venía un RELEVO (`daemon.going_away` con
+        /// `reconnect: true`), así que la próxima reconexión puede arrancarlo.
+        ///
+        /// Existe porque un relevo y una parada son la MISMA conexión cerrada
+        /// vistas desde aquí, y la respuesta correcta es la contraria: sin esta
+        /// señal, reconectar siempre resucitaría un daemon que el usuario acaba
+        /// de parar, y no reconectar nunca dejaría la sesión muerta tras una
+        /// actualización.
+        ///
+        /// Se GASTA en el intento que lo usa, salga bien o mal. Un frontend al
+        /// que le dijeron que venía un relevo, que no lo encontró y se rindió,
+        /// no puede llevarse esa licencia a la conexión de la semana que viene:
+        /// para entonces «el daemon no está» vuelve a significar lo de siempre.
+        handover_expected: std::sync::atomic::AtomicBool,
         client: tokio::sync::RwLock<Option<Arc<Client>>>,
         watches: Mutex<HashMap<u64, watch::Sender<TaskProgress>>>,
         /// Desenlaces vistos SIN watch receptor (el broadcast terminal
@@ -2584,6 +2598,7 @@ pub mod remote {
                     spawn_cmd,
                     client_info,
                     agent_session,
+                    handover_expected: std::sync::atomic::AtomicBool::new(false),
                     client: tokio::sync::RwLock::new(None),
                     watches: Mutex::new(HashMap::new()),
                     finished: Mutex::new(std::collections::VecDeque::new()),
@@ -4119,6 +4134,21 @@ pub mod remote {
                     inner.push_degraded(d);
                     continue;
                 }
+                // El daemon se va (0.46.0). Lo único que hay que quedarse es
+                // si volver, y hay que quedárselo AQUÍ: cuando la conexión se
+                // cierre no habrá forma de distinguir un relevo de una parada.
+                if n.method == methods::DAEMON_GOING_AWAY {
+                    let volver = n
+                        .params
+                        .and_then(|p| serde_json::from_value::<methods::DaemonGoingAway>(p).ok())
+                        .is_some_and(|g| g.reconnect);
+                    let Some(inner) = weak.upgrade() else { return };
+                    inner
+                        .handover_expected
+                        .store(volver, std::sync::atomic::Ordering::SeqCst);
+                    tracing::info!(reconnect = volver, "el daemon avisa de que se va");
+                    continue;
+                }
                 // Lote de hits de una búsqueda viva (live search T5): al `rx`
                 // de su `task_id`. Malformado = descartado con traza.
                 if n.method == methods::SEARCH_HITS {
@@ -4284,7 +4314,15 @@ pub mod remote {
                     approvals_rx: Mutex::new(None),
                     degraded_rx: Mutex::new(None),
                 };
-                match backend.establish(false).await {
+                // El permiso de arranque se GASTA aquí, con `swap`: sea cual
+                // sea el resultado, este intento es el que lo consume. Volver a
+                // intentarlo con él puesto sería resucitar un daemon parado,
+                // solo que más tarde.
+                let relevo = backend
+                    .inner
+                    .handover_expected
+                    .swap(false, std::sync::atomic::Ordering::SeqCst);
+                match backend.establish(relevo).await {
                     Ok(rx) => {
                         let _ = backend.inner.events_tx.send(ConnEvent::Restored);
                         break rx;
@@ -4318,6 +4356,7 @@ pub mod remote {
                     version: "0".into(),
                 },
                 agent_session: None,
+                handover_expected: std::sync::atomic::AtomicBool::new(false),
                 client: tokio::sync::RwLock::new(None),
                 watches: Mutex::new(HashMap::new()),
                 finished: Mutex::new(std::collections::VecDeque::new()),
@@ -4556,6 +4595,7 @@ pub mod remote {
                     version: "0".into(),
                 },
                 agent_session: None,
+                handover_expected: std::sync::atomic::AtomicBool::new(false),
                 client: tokio::sync::RwLock::new(None),
                 watches: Mutex::new(HashMap::new()),
                 finished: Mutex::new(std::collections::VecDeque::new()),
