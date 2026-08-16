@@ -67,7 +67,7 @@ pub enum VPathError {
 /// `tar+gz+file` es formato `tar+gz` sobre `file`, nunca formato `tar` sobre
 /// un interior huérfano `gz+file`. Reserva normativa: ningún provider
 /// registra schemes que empiecen por `<formato>+`.
-pub const ARCHIVE_FORMATS: &[&str] = &["zip", "tar", "tar+gz"];
+pub const ARCHIVE_FORMATS: &[&str] = &["zip", "tar", "tar+gz", "rar"];
 
 /// Referencia desmontada de un path de archivo-como-directorio (ADR 0018):
 /// `<formato>+<scheme>://auth/<exterior>/!/<interior>`.

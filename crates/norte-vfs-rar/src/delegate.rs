@@ -180,6 +180,33 @@ impl Delegate {
         Err(RarError::NoDelegate)
     }
 
+    /// El delegado FIJADO por configuración (`[archive] rar_delegate`).
+    ///
+    /// El dialecto se decide por el nombre del ejecutable —`unrar` habla
+    /// `vt`/`p`, cualquier otra cosa se trata como `7z`—, y un binario que no
+    /// exista no falla aquí sino al usarlo, con un error que lo NOMBRA: fijar
+    /// una ruta rota y no enterarse hasta abrir un `.rar` es peor que
+    /// enterarse abriendo un `.rar`.
+    ///
+    /// ```
+    /// use std::path::PathBuf;
+    /// use norte_vfs_rar::Delegate;
+    ///
+    /// assert!(matches!(
+    ///     Delegate::pinned(PathBuf::from("/opt/bin/unrar")),
+    ///     Delegate::Unrar(_)
+    /// ));
+    /// ```
+    #[must_use]
+    pub fn pinned(program: PathBuf) -> Self {
+        let name = program.file_name().unwrap_or_default().to_string_lossy();
+        if name.contains("unrar") {
+            Self::Unrar(program)
+        } else {
+            Self::SevenZip(program)
+        }
+    }
+
     /// La ruta absoluta del ejecutable elegido.
     #[must_use]
     pub fn program(&self) -> &Path {
@@ -582,6 +609,25 @@ mod tests {
         ])
         .expect("hay candidatos");
         assert_eq!(found, Delegate::SevenZip(PathBuf::from("/opt/7zz")));
+    }
+
+    #[test]
+    fn un_delegado_fijado_elige_dialecto_por_su_nombre() {
+        assert_eq!(
+            Delegate::pinned(PathBuf::from("/usr/local/bin/7zz")),
+            Delegate::SevenZip(PathBuf::from("/usr/local/bin/7zz"))
+        );
+        assert_eq!(
+            Delegate::pinned(PathBuf::from("/opt/unrar")),
+            Delegate::Unrar(PathBuf::from("/opt/unrar"))
+        );
+        // Un nombre que no dice nada se trata como 7z: es el dialecto que
+        // conserva los bytes crudos, o sea el que menos pierde si acertamos
+        // a medias.
+        assert_eq!(
+            Delegate::pinned(PathBuf::from("/opt/lector")),
+            Delegate::SevenZip(PathBuf::from("/opt/lector"))
+        );
     }
 
     #[test]

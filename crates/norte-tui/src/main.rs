@@ -2218,6 +2218,16 @@ async fn make_backend(
         ) {
             engine.set_archive_limits(limits);
         }
+        // Ítem 11 del roadmap: el programa que lee los RAR, si la config fija
+        // uno. Viene del mismo `cfg.common` que ya se cargó, así que no honra
+        // la capa Project — y aquí eso no es una preferencia, es que un repo
+        // ajeno no elige qué binario se lanza.
+        engine.set_rar_delegate(
+            cfg.common
+                .archive_rar_delegate
+                .as_ref()
+                .map(std::path::PathBuf::from),
+        );
         engine.register_provider(Arc::new(LocalProvider::os_root()));
         // Conexiones remotas (fase 6e): un path sftp://…/ftp://… navegable si
         // la host key ya es de confianza. La CONFIRMACIÓN TOFU interactiva

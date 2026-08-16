@@ -6329,6 +6329,7 @@ dependencies = [
  "norte-vfs-archive",
  "norte-vfs-local",
  "norte-vfs-object",
+ "norte-vfs-rar",
  "norte-vfs-sftp",
  "opendal",
  "proptest",

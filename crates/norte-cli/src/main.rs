@@ -2235,6 +2235,13 @@ async fn apply_archive_limits(engine: &Engine) -> anyhow::Result<()> {
     {
         engine.set_archive_limits(limits);
     }
+    // Ítem 11 del roadmap: qué programa lee los RAR. `None` = sondear PATH.
+    engine.set_rar_delegate(
+        tokio::task::spawn_blocking(norte_core::archive_config::load_rar_delegate)
+            .await
+            .context("carga de norte.toml")?
+            .context("norte.toml inválido ([archive] rar_delegate)")?,
+    );
     Ok(())
 }
 

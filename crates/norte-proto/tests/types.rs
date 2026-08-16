@@ -1110,10 +1110,16 @@ fn version_ventana_actual() {
     // le manda hacer— y por tanto NO se entera de que venía un relevo. No se
     // rompe; se queda reconectando contra un socket muerto, que es justo el
     // comportamiento que 0.46 existe para arreglar.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.46.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.45.0"), "N-1");
+    //
+    // 0.47.0 (roadmap ítem 11): `rar` entra en `ARCHIVE_FORMATS`. No mueve un
+    // byte de ningún mensaje: mueve qué schemes compuestos se pueden FORMAR.
+    // Un cliente 0.46 no forma `rar+file://…` —su whitelist no lo trae— y se
+    // queda sin la funcionalidad, que es la misma clase de pérdida silenciosa
+    // que desplaza la ventana en los bumps anteriores.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.47.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.46.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.44.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.45.9"),
         "N-2 fuera de la ventana"
     );
 }

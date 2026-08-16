@@ -58,6 +58,25 @@ pub fn load_archive_limits_from(layers: &norte_config::Layers) -> std::io::Resul
     ))
 }
 
+/// The pinned RAR delegate (`[archive] rar_delegate`) from the given layers,
+/// or `None` to probe `PATH` (roadmap item 11).
+///
+/// Same layer rule as the limits, and sharper here: the key names an
+/// EXECUTABLE, so honouring it from a repository's `.norte.toml` would be
+/// arbitrary code execution on `cd`. `norte-config::load` already drops it
+/// from the Project layer; this loader never even reads that layer.
+///
+/// # Errors
+/// Those of [`load_archive_limits_from`] — a config that exists but does not
+/// parse aborts startup rather than silently falling back to `PATH`.
+pub fn load_rar_delegate_from(
+    layers: &norte_config::Layers,
+) -> std::io::Result<Option<std::path::PathBuf>> {
+    let cfg = norte_config::load(layers)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    Ok(cfg.archive_rar_delegate.map(std::path::PathBuf::from))
+}
+
 /// Layered load from the standard layers. SYNC (startup): wrap in
 /// `spawn_blocking` from async contexts.
 ///
@@ -72,6 +91,14 @@ pub fn load_archive_limits_from(layers: &norte_config::Layers) -> std::io::Resul
 /// Those of [`load_archive_limits_from`].
 pub fn load_archive_limits() -> std::io::Result<Option<Limits>> {
     load_archive_limits_from(&norte_config::standard_layers_no_project())
+}
+
+/// [`load_rar_delegate_from`] over the standard layers, Project excluded.
+///
+/// # Errors
+/// Those of [`load_rar_delegate_from`].
+pub fn load_rar_delegate() -> std::io::Result<Option<std::path::PathBuf>> {
+    load_rar_delegate_from(&norte_config::standard_layers_no_project())
 }
 
 #[cfg(test)]
