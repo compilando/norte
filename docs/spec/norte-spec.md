@@ -337,7 +337,9 @@ GUI. The scope and exit criteria did not change.
 4. SQLite with FTS5 is the first index and storage engine. Tantivy remains a
    possible upgrade if a corpus above one million files demonstrates a need.
 5. RAR remains read-only through optional delegation to an installed `unrar` or
-   `7z` executable; non-free code does not enter the dependency graph.
+   `7z` executable; non-free code does not enter the dependency graph. **Built**
+   (`norte-vfs-rar`, ADR 0056): the delegate gets a path, an entry name and a
+   pipe, never the filesystem, and only over a local `file://` container.
 6. norte collects no telemetry. Diagnostic reports are generated locally and
    shared only when a user chooses to do so.
 

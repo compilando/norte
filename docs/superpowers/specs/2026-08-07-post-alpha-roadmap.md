@@ -2,9 +2,9 @@
 
 **Date:** 2026-08-07
 **Status:** accepted, updated 2026-08-16. Items **1 (all three specs), 2, 3, 4,
-5, 7, 8, 9 and 10 are built.** What remains is item 6 (git status as the
-official columns plugin) and item 11 (read-only RAR by delegation); item 12
-(packaging tier two) stays parked on infrastructure decisions, not code.
+5, 7, 8, 9, 10 and 11 are built.** What remains is item 6 (git status as the
+official columns plugin); item 12 (packaging tier two) stays parked on
+infrastructure decisions, not code.
 **Context:** every milestone M0–M5 is met and packaging now turns a tag into
 downloadable artefacts. What remains is not debt — it is the part of
 specification §17 that was never built. This orders it by what the software
