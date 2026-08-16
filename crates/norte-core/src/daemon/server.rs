@@ -368,6 +368,13 @@ impl Shared {
             && self.tasks.lock().expect("tasks lock sano").is_empty()
     }
 
+    /// Difunde a TODAS las conexiones. Hoy solo `daemon.going_away`: que este
+    /// daemon se vaya le pasa igual a un agente que a un humano, y los dos
+    /// tienen que decidir lo mismo (volver o no).
+    fn broadcast_all(&self, frame: &Arc<[u8]>) {
+        self.broadcast_where(frame, |_| true);
+    }
+
     /// Difunde SOLO a conexiones humanas (no-agente): notifs `policy.*`.
     fn broadcast_humans(&self, frame: &Arc<[u8]>) {
         self.broadcast_where(frame, |s| matches!(s.actor, Actor::User));
@@ -2065,6 +2072,47 @@ fn handle_daemon_shutdown(
             .filter(|v| !v.is_null())
             .or_else(|| Some(serde_json::json!({}))),
     )?;
+    // Un RELEVO con tasks vivas se rehúsa AQUÍ, que es el único momento en el
+    // que queda alguien a quien contestar: la respuesta de este método sale en
+    // el acto, así que una negativa decidida después de esperar no tendría
+    // destinatario — y para entonces el listener ya habría dejado de aceptar,
+    // con lo que «rehusar» significaría volver a aceptar.
+    //
+    // Esperar y NO cancelar es lo que separa este eje de `graceful`: una copia
+    // muerta a mitad de árbol es justo el estropicio que el journal tiene luego
+    // que limpiar. Quien de verdad quiera cancelarlas ya tiene `graceful:
+    // false`, y no se abre una segunda puerta a la misma habitación.
+    if p.mode == methods::ShutdownMode::Handover {
+        let vivas = shared.tasks.lock().expect("tasks lock sano").len();
+        if vivas > 0 {
+            return Err(RpcError::protocol(
+                codes::INVALID_REQUEST,
+                format!(
+                    "a handover needs an idle daemon: {vivas} task(s) still running \
+                     (wait, or use graceful:false to cancel them)"
+                ),
+            ));
+        }
+    }
+    // El aviso va ANTES de dejar de aceptar, o no llega a nadie: `shutdown`
+    // corta el bucle de accept y las conexiones se van detrás.
+    //
+    // A TODAS las conexiones, no solo a las humanas: la sesión de un agente
+    // muere con este daemon igual que la de un humano, y necesita saber si
+    // volver. Es información sobre el TRANSPORTE, no sobre gobierno.
+    let aviso = methods::DaemonGoingAway {
+        reconnect: p.mode == methods::ShutdownMode::Handover,
+    };
+    if let Ok(params) = serde_json::to_value(aviso) {
+        let n = Notification {
+            jsonrpc: norte_proto::wire::JsonRpcVersion,
+            method: methods::DAEMON_GOING_AWAY.into(),
+            params: Some(params),
+        };
+        if let Ok(frame) = encode_frame(&n) {
+            shared.broadcast_all(&Arc::from(frame.into_boxed_slice()));
+        }
+    }
     if !p.graceful {
         shared.hard_shutdown.cancel();
     }

@@ -1779,6 +1779,137 @@ async fn daemon_shutdown_graceful_espera_y_apaga() {
     assert!(!d.socket.exists(), "el socket se retira del FS");
 }
 
+/// Espera una `daemon.going_away` y devuelve si dice que vuelvas.
+async fn going_away(c: &mut Client) -> bool {
+    loop {
+        let n = tokio::time::timeout(Duration::from_secs(5), c.notification())
+            .await
+            .expect("notificación antes del timeout")
+            .expect("conexión viva");
+        if n.method == methods::DAEMON_GOING_AWAY {
+            let p: methods::DaemonGoingAway =
+                serde_json::from_value(n.params.expect("params")).expect("DaemonGoingAway");
+            return p.reconnect;
+        }
+    }
+}
+
+/// Un RELEVO avisa de que vuelvas, y avisa ANTES de dejar de aceptar.
+#[tokio::test]
+async fn un_relevo_avisa_de_que_vuelvas() {
+    let d = spawn_daemon(None).await;
+    let mut c = connected_client(&d).await;
+    let _: DaemonShutdownResult = c
+        .call(
+            methods::DAEMON_SHUTDOWN,
+            &DaemonShutdownParams {
+                graceful: true,
+                mode: methods::ShutdownMode::Handover,
+            },
+        )
+        .await
+        .expect("relevo aceptado");
+
+    assert!(going_away(&mut c).await, "un relevo dice que vuelvas");
+}
+
+/// Y una parada corriente avisa de lo CONTRARIO. Es lo que separa «el daemon se
+/// paró» de «se cayó la conexión», que para quien lo lee no son lo mismo — y es
+/// lo que impide que un cliente resucite lo que el usuario acaba de parar.
+#[tokio::test]
+async fn una_parada_avisa_de_que_no_vuelvas() {
+    let d = spawn_daemon(None).await;
+    let mut c = connected_client(&d).await;
+    let _: DaemonShutdownResult = c
+        .call(methods::DAEMON_SHUTDOWN, &DaemonShutdownParams::default())
+        .await
+        .expect("parada aceptada");
+
+    assert!(!going_away(&mut c).await, "una parada dice que no vuelvas");
+}
+
+/// Un relevo con una task VIVA se rehúsa, en la respuesta, mientras todavía hay
+/// alguien a quien contestar — y no toca nada: el daemon sigue aceptando.
+///
+/// La negativa va DELANTE y no después de esperar a las tasks porque la
+/// respuesta de `daemon.shutdown` sale en el acto: una negativa decidida
+/// minutos más tarde no tendría a quién decírsela, y para entonces el listener
+/// ya habría dejado de aceptar — «rehusar» significaría volver a aceptar, que
+/// es una máquina de estados que nadie pidió.
+#[tokio::test]
+async fn un_relevo_con_una_task_viva_se_rehusa_y_no_toca_nada() {
+    let mem = MemProvider::new();
+    write_file(&mem, "mem:///src.bin", &vec![7u8; 256 * 1024]).await;
+    // Latencia por operación: la copia sigue viva mientras se pide el relevo,
+    // de forma determinista y sin dormir a ciegas.
+    mem.faults()
+        .set_latency_per_op(Some(Duration::from_millis(50)));
+    let d = spawn_daemon_mem(None, Duration::from_mins(2), mem).await;
+    let c = connected_client(&d).await;
+    let _: FsTaskResult = c
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///src.bin"),
+                to: vp("mem:///dst.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+            },
+        )
+        .await
+        .expect("copia lanzada");
+
+    let err = c
+        .call::<_, DaemonShutdownResult>(
+            methods::DAEMON_SHUTDOWN,
+            &DaemonShutdownParams {
+                graceful: true,
+                mode: methods::ShutdownMode::Handover,
+            },
+        )
+        .await
+        .expect_err("con una copia viva, no");
+    assert!(
+        matches!(&err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST),
+        "{err:?}"
+    );
+
+    // Y no tocó nada: el daemon sigue en pie y sirviendo.
+    let _: FsStatResult = c
+        .call(
+            methods::FS_STAT,
+            &FsStatParams {
+                path: vp("mem:///"),
+                attrs: Vec::new(),
+            },
+        )
+        .await
+        .expect("el daemon sigue aceptando tras rehusar el relevo");
+}
+
+/// Un AGENTE no releva, igual que no apaga: es un acto de gobierno humano.
+#[tokio::test]
+async fn un_agente_no_puede_relevar() {
+    let d = spawn_daemon(None).await;
+    let c = connected_agent(&d, "sesion-de-prueba").await;
+    let err = c
+        .call::<_, DaemonShutdownResult>(
+            methods::DAEMON_SHUTDOWN,
+            &DaemonShutdownParams {
+                graceful: true,
+                mode: methods::ShutdownMode::Handover,
+            },
+        )
+        .await
+        .expect_err("un agente no");
+    assert!(
+        matches!(&err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST),
+        "{err:?}"
+    );
+}
+
 #[tokio::test]
 async fn daemon_se_apaga_solo_por_inactividad() {
     // Idle holgado (1,2 s): una CI congelada no puede apagar el daemon
