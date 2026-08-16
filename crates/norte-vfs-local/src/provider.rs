@@ -1903,6 +1903,41 @@ fn same_node(_from_md: &std::fs::Metadata, _to_md: &std::fs::Metadata) -> bool {
     false
 }
 
+/// Escribe `chunk` dejando AGUJERO donde es todo ceros (roadmap ítem 8).
+///
+/// Un chunk entero de ceros no se escribe: se salta la posición y se fija la
+/// longitud. Quien decide si eso es un agujero de verdad es el filesystem
+/// —ext4, XFS y APFS sí; uno que no los tenga asigna al escribir y sale igual
+/// de correcto—, y lo que se lee después son los mismos bytes en los dos casos.
+///
+/// **La longitud se fija AQUÍ y no en el commit**, que es la parte que no se ve
+/// venir: `open_resumable` deriva su `already` del tamaño del staging y
+/// `partial_digest` lee sus primeros `len` bytes. Con la longitud aplazada, un
+/// parcial que acabara en agujero diría tener menos bytes de los que tiene, y
+/// el reintento escribiría encima de lo ya hecho.
+///
+/// Límite honesto: la unidad es el CHUNK. Un agujero más pequeño que un chunk,
+/// o desalineado con él, se materializa — esto no busca huecos dentro de los
+/// datos, solo se abstiene de escribir los que ya vienen enteros.
+///
+/// INVARIANTE: el sink escribe secuencialmente desde el final, así que la
+/// posición tras el salto es siempre mayor que la longitud y el `set_len` solo
+/// puede EXTENDER. Un sink que retrocediera truncaría.
+pub(crate) fn write_maybe_sparse(file: &mut std::fs::File, chunk: &[u8]) -> std::io::Result<()> {
+    use std::io::{Seek, SeekFrom, Write as _};
+    if chunk.is_empty() {
+        return Ok(());
+    }
+    if chunk.iter().any(|&b| b != 0) {
+        return file.write_all(chunk);
+    }
+    let salto = i64::try_from(chunk.len()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "chunk mayor que i64")
+    })?;
+    let pos = file.seek(SeekFrom::Current(salto))?;
+    file.set_len(pos)
+}
+
 struct LocalSink {
     file: Option<std::fs::File>,
     partial: PathBuf,
@@ -1914,10 +1949,10 @@ struct LocalSink {
 #[async_trait]
 impl ByteSink for LocalSink {
     async fn write(&mut self, chunk: Bytes) -> Result<(), Error> {
-        let mut file = self.file.take().ok_or(Error::Io { retryable: false })?;
+        let file = self.file.take().ok_or(Error::Io { retryable: false })?;
         let (file, res) = tokio::task::spawn_blocking(move || {
-            use std::io::Write;
-            let res = file.write_all(&chunk).map_err(|e| map_io(&e));
+            let mut file = file;
+            let res = write_maybe_sparse(&mut file, &chunk).map_err(|e| map_io(&e));
             (file, res)
         })
         .await

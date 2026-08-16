@@ -920,11 +920,10 @@ impl ConfinedSink {
 #[async_trait::async_trait]
 impl norte_vfs::ByteSink for ConfinedSink {
     async fn write(&mut self, chunk: bytes::Bytes) -> Result<(), Error> {
-        let mut file = self.file.take().ok_or(Error::Io { retryable: false })?;
+        let file = self.file.take().ok_or(Error::Io { retryable: false })?;
         let (file, res) = tokio::task::spawn_blocking(move || {
-            use std::io::Write as _;
-            let res = file
-                .write_all(&chunk)
+            let mut file = file;
+            let res = crate::provider::write_maybe_sparse(&mut file, &chunk)
                 .map_err(|e| crate::provider::map_io(&e));
             (file, res)
         })
