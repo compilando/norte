@@ -108,13 +108,23 @@ longest-match grammar is untouched — `rar` contains no `+`.
 ### The delegate
 
 ```rust
-pub enum Delegate { Unrar(PathBuf), SevenZip(PathBuf) }
+pub enum Delegate { SevenZip(PathBuf), Unrar(PathBuf) }
 ```
 
-Discovery probes `PATH` once and caches the result for the process:
-`unrar` first, then `7z`, then `7zz`. Configuration
-(`[archive] rar_delegate = "auto" | "<absolute path>"`) can pin one; a pinned
-path that does not exist is an error at use, named.
+Discovery probes `PATH` once and caches the result for the process: **`7z`
+first, then `7zz`, then `unrar`**. That order is measured, not taste — see the
+table below: `unrar`'s text output cannot carry a name that is not valid UTF-8,
+and `7z`'s can.
+
+Configuration (`[archive] rar_delegate = "auto" | "<absolute path>"`) can pin
+one; a pinned path that does not exist is an error at use, named.
+
+**This key is user-layer only, never project.** `[archive]` already carries that
+rule for its limits (`crates/norte-config/src/load.rs:1365`, "never from
+Project") and here it is sharper: a key naming an executable, honoured from a
+`.norte.toml` inside a repository, is arbitrary code execution on `cd`. The
+loader must refuse it from the project layer the same way it refuses a raised
+limit.
 
 Absent delegate is not a panic and not a silent empty listing: `Unsupported`
 whose message names what to install. That sentence is the feature — a `.rar`
@@ -126,9 +136,10 @@ Every invocation, both for listing and for reading:
 
 - absolute executable path, no shell, no `sh -c`;
 - arguments terminated by `--` before any archive path or entry name;
-- `stdin` = `null`, plus `-p-` (unrar) / `-p` with an empty password (7z), so an
+- `stdin` = `null`, plus `-p` with an empty password (7z) / `-p-` (unrar), so an
   encrypted archive **cannot** block the daemon waiting on a password;
-- `-inul` (unrar) to keep the tool's own messages off the data stream;
+- `-bd -y` (7z) / `-inul` (unrar) to keep the tool's own messages and prompts off
+  the data stream;
 - `cwd` = an empty directory under the state directory, never the user's tree,
   so a delegate that decides to write relative paths writes nowhere interesting;
 - a minimal environment;
@@ -139,8 +150,10 @@ Every invocation, both for listing and for reading:
 
 ### Listing
 
-`unrar vt -p- -- <archive>` (or `7z l -slt -p -- <archive>`), **stdout read as
-bytes**. Never `String`, never `to_str()`: hard rule 1 does not stop being true
+`7z l -slt -p -- <archive>` (or `unrar vt -p- -- <archive>`), **stdout read as
+bytes**. The `-slt` output starts with a header block describing the archive
+itself — the first `Path =` line is the `.rar` file, not an entry — so the parse
+begins after the separator line. Never `String`, never `to_str()`: hard rule 1 does not stop being true
 because the bytes arrived through a pipe.
 
 The parse yields per entry: raw name bytes, size, mtime, directory flag,
@@ -169,7 +182,8 @@ opposed to inspecting the output stream and hoping to notice.
 
 ### Reads
 
-`unrar p -inul -p- -- <archive> <name>` streams one entry to stdout. A ranged
+`7z e -so -bd -y -p -- <archive> <name>` (or `unrar p -inul -p- -- <archive>
+<name>`) streams one entry to stdout. A ranged
 read skips the prefix and stops early, killing the child; a backwards seek is a
 new process. Sequential readers therefore cost one process, random access costs
 one per jump, and that asymmetry is documented rather than hidden.
@@ -210,22 +224,50 @@ rar_delegate = "auto"     # or an absolute path
 Nothing else. Concurrency and timeout bounds live with the other archive limits
 already in the engine.
 
-## What has to be measured, not decided
+## What was measured
 
-**The encoding of the names the delegate prints.** RAR stores names in UTF-16
-or in an OEM code page depending on how they were written, and what `unrar`
-prints depends on that *and* on the child's locale. This design refuses to
-state the contract from memory. The plan's first task builds hostile fixtures
-(a UTF-8 name, a CP437 name, a name with an invalid byte) and records what
-comes back under `LANG=C` and under a UTF-8 locale; the answer decides whether
-the child gets a forced locale and whether any transcoding happens at all.
-Whatever it is, the bytes reach `VPath` as bytes.
+The delegates are installed on the development machine, and the questions this
+design refused to answer from memory were answered with a real archive before
+the plan was written. A minimal RAR5 writer that stores entries uncompressed
+(the container format is documented; the *compression* is the proprietary half,
+and storing raw bytes does not touch it) produced a fixture with a UTF-8 name, a
+name holding the invalid bytes `\xa4\xa5`, and the pair `star*name.txt` /
+`starXname.txt`.
+
+| question | `unrar` 7.23 | `7z` |
+| --- | --- | --- |
+| non-UTF-8 name in the listing | **truncated at the first invalid byte** — `cp437-\xa4\xa5.txt` prints as `cp437-`, extension and all lost | **raw bytes preserved** in `l -slt`: `cp437-\244\245.txt` |
+| non-UTF-8 name as an argument | unusable — the name it printed is not the name | accepted verbatim; `e -so` returns that entry's content |
+| entry name treated as a pattern | **yes** — `star?name.txt` extracts two entries | **yes** — same |
+| single entry to stdout | `p -inul` | `e -so` |
+
+Two consequences, both now in this design:
+
+1. **`7z` is the preferred delegate and `unrar` is the fallback**, which is the
+   reverse of what this spec said before the measurement. Under `unrar`, an
+   entry whose name is not valid UTF-8 is skipped-and-counted, because the name
+   it prints is not a name that can be asked for again. Under `7z` it is a
+   normal entry.
+2. **The wildcard trap is confirmed on both**, so the glob-against-our-own-index
+   refusal is not a precaution against a hypothetical; it is required.
+
+What is still open is only the RAR4 side: these fixtures are RAR5, where names
+are UTF-8 by format. A RAR4 archive with an OEM-code-page name is what a decade
+of downloads actually contains, and no writer here can produce one. The plan
+carries it as an explicit gap rather than a claim.
 
 ## Tests
 
-- **Fixtures**, committed to the `norte-testkit` corpus (they cannot be
-  generated — the compressor is the non-free half): a small archive with
-  hostile names, one solid archive, one encrypted archive, one truncated file.
+- **Fixtures are generated, not committed.** `norte-testkit` gains a minimal
+  RAR5 writer for **stored** entries — a documented container around raw bytes,
+  never the proprietary compressor — so the hostile corpus reaches RAR the same
+  way it reaches ZIP and TAR, and the canonical tree the read-only contract
+  needs can be seeded at all. Prototyped and verified against the real `unrar`
+  and `7z` before this plan.
+- **What the writer cannot make** is a solid archive and an encrypted one. Solid
+  and encrypted flags are covered by parser unit tests over recorded delegate
+  output; "an encrypted entry never blocks on stdin" is covered by a stub
+  delegate that would hang if stdin were open.
 - **Read-only provider contract** (ADR 0018), the one that asserts every
   mutation returns `Unsupported`.
 - **Cancellation**: a read of a large entry is cancelled and the child is gone.
