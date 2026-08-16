@@ -202,3 +202,28 @@ fn archive_limits_ultimo_gana_y_proyecto_no_los_toca() {
         "campo no pisado conserva la capa inferior"
     );
 }
+
+/// Roadmap ítem 9: este binario dibuja en la pantalla alternativa, así que su
+/// diagnóstico va al FICHERO y stderr se queda limpio. Instalar aquí el
+/// `logging::init` de la CLI —el que sí lleva capa de stderr— rompería la
+/// pantalla en cuanto algo avisara.
+///
+/// Es una RED de seguridad, no un test que fallara antes: hasta el ítem 9 la
+/// TUI no instalaba subscriber ninguno, así que stderr ya estaba limpio. Lo que
+/// pinnea es que siga estándolo ahora que sí hay uno.
+#[test]
+fn el_frontend_de_terminal_no_escribe_en_stderr() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let salida = std::process::Command::new(env!("CARGO_BIN_EXE_ntc"))
+        .arg("--version")
+        .env("XDG_STATE_HOME", dir.path())
+        .env("RUST_LOG", "debug")
+        .output()
+        .expect("ejecuta");
+
+    assert!(
+        salida.stderr.is_empty(),
+        "stderr tiene que quedar limpio: {}",
+        String::from_utf8_lossy(&salida.stderr)
+    );
+}

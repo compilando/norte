@@ -1787,6 +1787,18 @@ async fn main() -> Result<()> {
         norte_i18n::Lang::from_env()
     };
     let _ = norte_i18n::force(lang);
+    // Roadmap ítem 9: el log va al FICHERO y solo al fichero. Hasta aquí este
+    // binario no instalaba subscriber ninguno y lo decía en un comentario más
+    // abajo: un `fmt` a stderr pelea con la pantalla alternativa, así que cada
+    // `tracing::warn!` de la TUI se descartaba mudo.
+    //
+    // Va DESPUÉS de cargar la config porque `[log] dir` sale de ella, lo que
+    // significa que un `--help`/`--version` —que salen antes— no deja rastro.
+    // Correcto: no hacen nada que merezca un log.
+    //
+    // El guard se sostiene hasta el final de `main` (ver `logging::init`): el
+    // writer es no bloqueante y vacía la cola al soltarlo.
+    let _log_guard = norte_core::logging::init_to_file(cfg.common.log_dir.as_deref());
     let (browse_eff, viewer_eff, dialog_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
     // Bindings `lua:` descartados del keymap.toml de PROYECTO (seguridad,
     // review M4 Lua): se avisa tras crear la App, jamás descarte mudo. El
@@ -2214,11 +2226,12 @@ async fn make_backend(
             norte_core::connect::config_dir(),
         )));
         // IA (M4-IA): opt-in; sin [ai] el backend degrada (Unsupported).
-        // Diagnóstico por eprintln, no tracing (rust review MINOR-4): el TUI
-        // no instala subscriber (`logging::init` es de cli/daemon; un fmt a
-        // stderr pelearía con la pantalla alternativa) — un `tracing::warn!`
-        // aquí se descartaría mudo, y este punto es PRE-ratatui, donde stderr
-        // aún llega al terminal. Mismo patrón que el wiring del daemon-run.
+        //
+        // Estos diagnósticos eran `eprintln!` y llevaban un comentario
+        // explicando que un `tracing::warn!` aquí se descartaría mudo, porque
+        // este binario no instalaba subscriber. Ya lo instala (`init_to_file`,
+        // roadmap ítem 9), así que van al log como el resto — y sin escribir en
+        // una pantalla que ratatui está a punto de tomar.
         match tokio::task::spawn_blocking(norte_core::ai::AiConfig::load).await {
             Ok(Ok(ai_cfg)) => {
                 if let Some(pcfg) = ai_cfg.rename_provider_config().cloned() {
@@ -2229,7 +2242,7 @@ async fn make_backend(
                     .await
                     {
                         Ok(provider) => engine.set_ai_provider(provider),
-                        Err(e) => eprintln!("aviso: proveedor de IA no disponible ({e})"),
+                        Err(e) => tracing::warn!(error = %e, "proveedor de IA no disponible"),
                     }
                 }
                 // Embeddings (M4-IA-2): proveedor propio, opt-in igual —
@@ -2237,12 +2250,12 @@ async fn make_backend(
                 // índice (with_index es del daemon), el wiring es por paridad
                 // para cuando lo gane.
                 if let Some(w) = norte_core::ai::install_embed_provider(&engine, &ai_cfg).await {
-                    eprintln!("{w}");
+                    tracing::warn!(aviso = %w, "proveedor de embeddings");
                 }
                 engine.set_ai_config(ai_cfg);
             }
-            Ok(Err(e)) => eprintln!("aviso: [ai] inválido ({e})"),
-            Err(e) => eprintln!("aviso: carga de [ai] falló ({e})"),
+            Ok(Err(e)) => tracing::warn!(error = %e, "[ai] inválido"),
+            Err(e) => tracing::warn!(error = %e, "la carga de [ai] falló"),
         }
         return Ok(Backend::Embedded(Arc::new(engine)));
     }

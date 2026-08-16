@@ -11667,6 +11667,20 @@ fn main() {
     };
     let _ = norte_i18n::force(lang);
 
+    // Roadmap ítem 9: al FICHERO y solo al fichero. Este binario no instalaba
+    // subscriber ninguno, así que hasta ahora todo `tracing::warn!` suyo —y el
+    // de todo `norte-core` corriendo bajo él— se descartaba mudo.
+    //
+    // El guard vive hasta el final de `main` (ver `logging::init`): el writer
+    // es no bloqueante y vacía la cola al soltarlo, así que soltarlo antes
+    // tiraría las últimas líneas, que son las del fallo que se investiga.
+    let _log_guard = norte_core::logging::init_to_file(
+        loaded
+            .as_ref()
+            .ok()
+            .and_then(|c| c.common.log_dir.as_deref()),
+    );
+
     // (`set_mod_key` ya corrió: es la primera sentencia de `main`.)
 
     application().run(move |cx: &mut App| {
