@@ -36,6 +36,12 @@ allow = [
 ]
 
 exceptions = [
+    # El watcher de directorios (#106), que la GUI hereda vía `norte-frontend`
+    # desde que la vigilancia se comparte entre los dos frontends. CC0 =
+    # dedicación al dominio público. El `deny.toml` del workspace lo acota
+    # igual por su propia rama (`norte-config`, recarga de config); aquí llega
+    # por otra, y la excepción es la misma con el mismo motivo.
+    { name = "notify", allow = ["CC0-1.0"] },
     # Dominio público. Acotado por-crate y jamás en el `allow` global, mismo
     # criterio que el `deny.toml` del workspace aplica a `notify`.
     { name = "hexf-parse", allow = ["CC0-1.0"] },

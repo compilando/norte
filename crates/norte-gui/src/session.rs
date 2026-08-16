@@ -83,6 +83,13 @@ pub enum SessionCmd {
         /// caché); un fallo del catálogo JAMÁS tumba el listado.
         fetch_catalog: bool,
     },
+    /// Los dirs que el watcher debe vigilar ahora (#106), uno por pane;
+    /// `None` = ese pane no es vigilable (remoto, archivo, virtual).
+    ///
+    /// La vigilancia vive en ESTE hilo y no en la vista porque necesita un
+    /// runtime tokio, y el runtime es de aquí: la vista corre en el hilo de
+    /// GPUI, donde un `tokio::spawn` no tiene a quién pedírselo.
+    Watch([Option<PathBuf>; 2]),
     /// Lanza una operación mutante (copy/move/delete) como task.
     Submit(PendingOp),
     /// Cancela una task en curso (`task.cancel`, fire-and-forget).
@@ -346,6 +353,14 @@ pub enum ViewerContent {
 
 /// Evento del hilo de sesión hacia la GUI.
 pub enum SessionEvent {
+    /// Algo cambió en un dir vigilado (#106), ya coalescido por el debouncer:
+    /// la vista re-lista sus panes vigilables. Sin payload a propósito — el
+    /// watcher dice QUE hubo cambio, y quién sabe en qué dir está cada pane es
+    /// la vista.
+    DirsChanged,
+    /// El watcher nativo no arrancó y se degradó a sondeo (pitfall de
+    /// inotify): se avisa UNA vez por sesión.
+    WatchDegraded,
     /// Resultado de un `List` (etiquetado con pane/generación/dir).
     Listed {
         /// Pane destino.
@@ -800,8 +815,36 @@ pub fn spawn(
             let _ = event_tx.send(SessionEvent::Connected { journalled });
             let cancellers: Arc<Mutex<HashMap<TaskId, TaskCanceller>>> =
                 Arc::new(Mutex::new(HashMap::new()));
-            while let Some(cmd) = cmd_rx.recv().await {
+            // #106: la vigilancia de dirs vive aquí, que es donde hay runtime.
+            // Soltarla al salir del bloque la para (cancelación por drop).
+            let mut dir_watch = norte_frontend::watch::DirWatch::new();
+            let mut watch_alive = true;
+            loop {
+                let cmd = tokio::select! {
+                    cmd = cmd_rx.recv() => match cmd {
+                        Some(c) => c,
+                        // La vista soltó su extremo: se acabó la sesión.
+                        None => break,
+                    },
+                    ev = dir_watch.rx.recv(), if watch_alive => {
+                        if ev.is_none() {
+                            // Inalcanzable mientras `dir_watch` viva (retiene
+                            // el emisor crudo); si pasara, desarmar la rama en
+                            // vez de girar en vacío.
+                            watch_alive = false;
+                        } else {
+                            let _ = event_tx.send(SessionEvent::DirsChanged);
+                        }
+                        continue;
+                    }
+                };
                 match cmd {
+                    SessionCmd::Watch(dirs) => {
+                        dir_watch.rewatch(&dirs);
+                        if dir_watch.take_degraded_notice() {
+                            let _ = event_tx.send(SessionEvent::WatchDegraded);
+                        }
+                    }
                     SessionCmd::List {
                         pane,
                         generation,
