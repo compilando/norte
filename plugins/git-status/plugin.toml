@@ -1,0 +1,18 @@
+[plugin]
+id = "org.norte.git-status"
+name = "Git status"
+publisher = "norte"
+version = "0.1.0"
+category = "columns"
+description = "Marca en el panel qué ficheros cambiaron respecto al índice de git."
+
+[[contributions.columns]]
+id = "git-status"
+header = "S"
+
+[capabilities]
+# Leer bajo la ubicación, y que la ubicación sea la raíz del repositorio: sin
+# el marcador, el token confina al directorio visible y `.git` queda arriba,
+# fuera de alcance (ADR 0057).
+location = "read"
+location-root-marker = ".git"

@@ -36,6 +36,9 @@ pub struct IndexEntry {
     pub dev: u32,
     /// Modo del fichero.
     pub mode: u32,
+    /// Id de objeto del blob que git tiene registrado. Es lo que desempata el
+    /// caso «racy», donde el `stat` no dice nada.
+    pub oid: [u8; 20],
     /// `true` si la entrada está en un estado de conflicto de merge (stage
     /// distinto de 0). Un fichero en conflicto no es «modificado».
     pub conflicted: bool,
@@ -176,12 +179,53 @@ fn parse_entry(raw: &[u8], at: usize, version: u32) -> Result<(IndexEntry, usize
         ino: be32(&f[20..24]),
         mode: be32(&f[24..28]),
         size: be32(&f[36..40]),
+        oid: {
+            let mut oid = [0u8; 20];
+            oid.copy_from_slice(&f[40..60]);
+            oid
+        },
         conflicted,
     };
     // Relleno hasta múltiplo de 8, contando desde el principio de la entrada.
     let used = name_end - at;
     let padded = used + (8 - used % 8);
     Ok((entry, at + padded))
+}
+
+/// La forja de índices que usan los tests de ESTE módulo y los de `status`.
+/// Vive fuera de `mod tests` para que otro módulo pueda usarla sin duplicar
+/// el formato — que es justo lo que haría que las dos copias divergieran.
+#[cfg(test)]
+pub mod tests_support {
+    use super::*;
+
+    /// Un índice v2 con `(ruta, tamaño, mtime, oid)` por entrada.
+    #[must_use]
+    pub fn forja(entradas: &[(&[u8], u32, u32, [u8; 20])]) -> Vec<u8> {
+        let mut out = b"DIRC".to_vec();
+        out.extend_from_slice(&2u32.to_be_bytes());
+        out.extend_from_slice(&(entradas.len() as u32).to_be_bytes());
+        for (name, size, mtime, oid) in entradas {
+            let start = out.len();
+            out.extend_from_slice(&7u32.to_be_bytes());
+            out.extend_from_slice(&0u32.to_be_bytes());
+            out.extend_from_slice(&mtime.to_be_bytes());
+            out.extend_from_slice(&0u32.to_be_bytes());
+            out.extend_from_slice(&3u32.to_be_bytes());
+            out.extend_from_slice(&5u32.to_be_bytes());
+            out.extend_from_slice(&0o100_644u32.to_be_bytes());
+            out.extend_from_slice(&0u32.to_be_bytes());
+            out.extend_from_slice(&0u32.to_be_bytes());
+            out.extend_from_slice(&size.to_be_bytes());
+            out.extend_from_slice(oid);
+            let len = u16::try_from(name.len()).unwrap_or(0x0FFF).min(0x0FFF);
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(name);
+            let used = out.len() - start;
+            out.extend(core::iter::repeat_n(0u8, 8 - used % 8));
+        }
+        out
+    }
 }
 
 #[cfg(test)]
