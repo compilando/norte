@@ -15,5 +15,7 @@
 #![forbid(unsafe_code)]
 
 mod delegate;
+mod listing;
 
 pub use delegate::{Delegate, RarError};
+pub use listing::{Listing, RawEntry, parse_7z_slt, parse_unrar_vt};
