@@ -7623,26 +7623,6 @@ async fn reload_config(
 /// siguientes se encolan hasta aquí; llena, solo queda el aviso.
 const LUA_QUEUE_MAX: usize = 8;
 
-/// Directorio de ESTADO del usuario: `$XDG_STATE_HOME/norte` o
-/// `~/.local/state/norte` (Windows: `%LOCALAPPDATA%\norte\state`). Sin
-/// precedente en el workspace (verificado 2026-07-18: ningún uso de
-/// `XDG_STATE_HOME`; la config usa `XDG_CONFIG_HOME` —
-/// `config::user_config_dir`): el trust store de Lua es ESTADO local de la
-/// máquina, no config que deba viajar con los dotfiles. `None` si el
-/// entorno no define nada (CI pelada): el caller degrada con aviso
-/// (fail-closed para el TOFU — sin store no corre el script de proyecto).
-fn state_dir() -> Option<std::path::PathBuf> {
-    use std::path::PathBuf;
-    if cfg!(windows) {
-        return std::env::var_os("LOCALAPPDATA")
-            .map(|d| PathBuf::from(d).join("norte").join("state"));
-    }
-    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(xdg).join("norte"));
-    }
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state/norte"))
-}
-
 /// Etiqueta ESTABLE de una capa para `err-lua-load` (no localizada: es un
 /// identificador de capa, no prosa).
 fn lua_layer_label(layer: Layer) -> &'static str {
@@ -7834,7 +7814,7 @@ async fn load_lua_project(app: &mut App, host: &LuaHost, dir: std::path::PathBuf
         }
         ProjectLua::Ready(path, bytes) => (path, bytes),
     };
-    let Some(state) = state_dir() else {
+    let Some(state) = norte_config::dirs::state_dir() else {
         // Sin dir de estado no hay store; sin store no hay TOFU; sin TOFU el
         // script de proyecto NO corre (fail-closed) — con aviso.
         app.message = Some(t("err-lua-no-state-dir"));
@@ -7913,7 +7893,7 @@ async fn resolve_lua_trust(app: &mut App, host: Option<&LuaHost>, code: KeyCode)
     if let Some((path, bytes)) = app.lua_pending_trust.take() {
         let (rec_path, rec_bytes) = (path.clone(), bytes.clone());
         let record = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-            let dir = state_dir().ok_or_else(|| {
+            let dir = norte_config::dirs::state_dir().ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "sin directorio de estado")
             })?;
             let mut store = TrustStore::open(dir.join("lua-trust.toml"))?;

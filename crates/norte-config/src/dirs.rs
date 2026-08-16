@@ -124,6 +124,43 @@ pub fn config_dir() -> PathBuf {
     user_config_dir().unwrap_or_else(|| PathBuf::from(".").join(".config").join("norte"))
 }
 
+/// Test seam behind [`state_dir`]: same resolution, with the target platform
+/// selected explicitly. Not general API — call [`state_dir`] instead.
+#[doc(hidden)]
+#[must_use]
+pub fn state_dir_on(windows: bool, get: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    if windows {
+        return get("LOCALAPPDATA").map(|d| PathBuf::from(d).join("norte").join("state"));
+    }
+    if let Some(xdg) = get("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(xdg).join("norte"));
+    }
+    get("HOME").map(|h| PathBuf::from(h).join(".local/state/norte"))
+}
+
+/// El directorio de ESTADO del usuario: `$XDG_STATE_HOME/norte`,
+/// `~/.local/state/norte`, o `%LOCALAPPDATA%\norte\state` en Windows.
+///
+/// **Estado, no configuración, y la diferencia importa**: aquí van el trust
+/// store de Lua, el journal embebido y el log local — cosas de ESTA máquina que
+/// no deben viajar con los dotfiles del usuario. Por eso `XDG_STATE_HOME` y no
+/// `XDG_CONFIG_HOME`, que es lo que resuelve [`user_config_dir`].
+///
+/// `None` si el entorno no define nada (una CI pelada, un servicio sin `HOME`):
+/// el caller DEGRADA con aviso, nunca inventa una ruta relativa al cwd. Para el
+/// trust store eso significa fail-closed (sin store no corre el script de
+/// proyecto); para el log, no hay fichero y queda stderr.
+///
+/// ```
+/// // En una máquina con `HOME`, resuelve; sin nada definido, `None`.
+/// let d = norte_config::dirs::state_dir();
+/// assert!(d.is_none() || d.expect("hay").ends_with("norte"));
+/// ```
+#[must_use]
+pub fn state_dir() -> Option<PathBuf> {
+    state_dir_on(cfg!(windows), &|k| std::env::var_os(k))
+}
+
 /// Test seam behind [`standard_layers_from`]: same layering, but with the
 /// target platform selected explicitly. Not general API — call
 /// [`standard_layers_from`] instead.
@@ -192,6 +229,34 @@ mod tests {
                 .find(|(n, _)| *n == k)
                 .map(|(_, x)| OsString::from(x))
         }
+    }
+
+    /// Precedencia del directorio de ESTADO, con el entorno inyectado — así la
+    /// rama de Windows la fija una suite que solo corre en Linux, igual que
+    /// hace `user_config_dir_on`.
+    #[test]
+    fn state_dir_sigue_su_precedencia() {
+        // XDG gana al HOME.
+        assert_eq!(
+            state_dir_on(false, &env(&[("XDG_STATE_HOME", "/x"), ("HOME", "/h")])),
+            Some(PathBuf::from("/x/norte"))
+        );
+        // Vacío es AUSENTE, no una ruta a la raíz — mismo criterio que la
+        // config con su `XDG_CONFIG_HOME`.
+        assert_eq!(
+            state_dir_on(false, &env(&[("XDG_STATE_HOME", ""), ("HOME", "/h")])),
+            Some(PathBuf::from("/h/.local/state/norte"))
+        );
+        // Windows no mira XDG.
+        assert_eq!(
+            state_dir_on(
+                true,
+                &env(&[("XDG_STATE_HOME", "/x"), ("LOCALAPPDATA", "C:/s")])
+            ),
+            Some(PathBuf::from("C:/s").join("norte").join("state"))
+        );
+        // Y un entorno pelado no inventa nada: el caller degrada con aviso.
+        assert_eq!(state_dir_on(false, &env(&[])), None);
     }
 
     #[test]
