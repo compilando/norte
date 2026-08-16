@@ -2818,6 +2818,33 @@ fn meta_to_wire(meta: &norte_vfs_local::LocationMeta) -> norte_plugin_host::loca
 /// vacías, jamás un error que tumbe el listado.
 ///
 /// BLOQUEANTE (instancia WASM y abre un directorio): va en `spawn_blocking`.
+/// [`run_column_values`] para los e2e: mismo camino exacto que el daemon y el
+/// backend embebido, expuesto porque el test que importa —el plugin oficial
+/// instalado como el de un tercero— vive fuera de este crate. Reexportar la
+/// función es preferible a que el test monte su propia versión del camino,
+/// que es como dos caminos se separan.
+#[doc(hidden)]
+#[must_use]
+pub fn run_column_values_for_test(
+    runtime: &norte_plugin_host::PluginRuntime,
+    resolved: ResolvedDecorator,
+    column_id: &str,
+    location_dir: Option<&norte_proto::VPath>,
+    climb: bool,
+    entries: &[Vec<u8>],
+    expected_len: usize,
+) -> Vec<Option<String>> {
+    run_column_values(
+        runtime,
+        resolved,
+        column_id,
+        location_dir,
+        climb,
+        entries,
+        expected_len,
+    )
+}
+
 pub(crate) fn run_column_values(
     runtime: &norte_plugin_host::PluginRuntime,
     resolved: ResolvedDecorator,
