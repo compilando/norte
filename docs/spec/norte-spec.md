@@ -374,7 +374,9 @@ GUI. The scope and exit criteria did not change.
 - **Shell integration:** cd-on-quit wrappers, file-picker mode, and opening a
   terminal in the active pane.
 - **Git awareness:** ship status as an official columns plugin, not a Git client
-  in the core.
+  in the core. **Built** (`plugins/git-status/`, ADR 0057): the core learns
+  nothing about git — the plugin is handed a confined handle to the directory
+  and reads the index itself.
 - **Localization and accessibility:** Fluent resources for English and Spanish,
   textual cues that do not rely only on colour, high-contrast themes, and
   AccessKit in the GUI.

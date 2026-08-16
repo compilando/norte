@@ -227,3 +227,15 @@ None yet. G3's Task 4 (decorator/column HOST implementation) and Task 5 (GUI
 palette/manager) are expected to close out the plan without needing a wire
 or WIT change beyond what this ADR already locks; if either surfaces a
 protocol gap, it amends this record rather than opening a parallel one.
+
+## Addendum (2026-08-16, ADR 0057): `column-values` changed shape
+
+`columns::column-values` now takes a `location: option<location-ref>` —
+the opaque token of the directory being listed plus the prefix the user is
+looking at — and the package moved to `norte:plugin@0.8.0`.
+
+The basename-only contract this ADR chose is **not** reversed: a guest still
+never receives a path. What ADR 0057 adds is a handle, gated by its own
+capability, so a column can say something about the file instead of only about
+its name. Everything else here — the positional 1:1 contract, `none` meaning
+"does not apply", the host-side caps on returned bytes — is unchanged.
