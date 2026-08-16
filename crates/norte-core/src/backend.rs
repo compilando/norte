@@ -1995,45 +1995,39 @@ impl Backend {
                 let dir = crate::connect::config_dir();
                 let entries = crate::plugins::paths_to_basenames(paths);
                 let expected_len = paths.len();
+                // El directorio padre de la página: la ubicación que el guest
+                // puede leer si se le aprobó (ADR 0057).
+                let location = paths.first().and_then(norte_proto::VPath::parent);
                 let column_id_owned = column_id.to_owned();
                 let plugin_id_owned = plugin_id.to_owned();
-                let values = tokio::task::spawn_blocking(
-                    move || -> Result<Vec<Option<String>>, Error> {
+                let values =
+                    tokio::task::spawn_blocking(move || -> Result<Vec<Option<String>>, Error> {
                         let reg = crate::PluginRegistry::discover(&dir)
                             .map_err(|_| Error::Io { retryable: false })?;
                         // ESE plugin o ninguno (#120): dos plugins consentidos
                         // que declaren el mismo id bare no pueden servirse el
                         // uno por el otro.
-                        let Some((id, _name, wasm, caps, settings)) =
+                        let Some(resolved) =
                             reg.resolve_columns_of(Some(&plugin_id_owned), &column_id_owned)
                         else {
                             return Ok(vec![None; expected_len]);
                         };
                         let runtime = norte_plugin_host::PluginRuntime::new()
                             .map_err(|_| Error::Internal { panic: false })?;
-                        let Ok(mut inst) = runtime.instantiate_columns(&wasm, caps) else {
-                            tracing::warn!(plugin = %id, "columns: fallo al instanciar, celdas vacías");
-                            return Ok(vec![None; expected_len]);
-                        };
-                        inst.set_settings(settings);
-                        let Ok(raw) = inst.column_values(&column_id_owned, None, &entries) else {
-                            tracing::warn!(plugin = %id, "columns: fallo al ejecutar, celdas vacías");
-                            return Ok(vec![None; expected_len]);
-                        };
-                        Ok(
-                            crate::plugins::column_values_checked(raw, expected_len)
-                                .unwrap_or_else(|| {
-                                    tracing::warn!(
-                                        plugin = %id,
-                                        "columns: longitud no casa el contrato posicional, celdas vacías"
-                                    );
-                                    vec![None; expected_len]
-                                }),
-                        )
-                    },
-                )
-                .await
-                .map_err(|_| Error::Internal { panic: true })??;
+                        // MISMA función que el daemon: la capacidad de
+                        // ubicación no puede significar una cosa aquí y otra
+                        // allí.
+                        Ok(crate::plugins::run_column_values(
+                            &runtime,
+                            resolved,
+                            &column_id_owned,
+                            location.as_ref(),
+                            &entries,
+                            expected_len,
+                        ))
+                    })
+                    .await
+                    .map_err(|_| Error::Internal { panic: true })??;
                 Ok(values)
             }
             #[cfg(unix)]

@@ -2917,30 +2917,26 @@ async fn handle_plugin_column_values(
         // 0.34: se conserva el primero-que-case de antes.
         reg.resolve_columns_of(p.plugin_id.as_deref(), &p.column_id)
     };
-    let Some((id, _name, wasm, caps, settings)) = resolved else {
+    let Some(resolved) = resolved else {
         return to_value(&methods::PluginColumnValuesResult {
             values: vec![None; expected_len],
         });
     };
     let runtime = Arc::clone(&shared.plugin_runtime);
     let column_id = p.column_id;
+    // La UBICACIÓN es el directorio padre de la página (ADR 0057). Se toma del
+    // primer path, que ya pasó el gate de lectura de arriba: el plugin no
+    // alcanza nada que el actor no pudiera listar él mismo.
+    let location = p.paths.first().and_then(norte_proto::VPath::parent);
     let values = tokio::task::spawn_blocking(move || {
-        let Ok(mut inst) = runtime.instantiate_columns(&wasm, caps) else {
-            tracing::warn!(plugin = %id, "columns: fallo al instanciar, celdas vacías");
-            return vec![None; expected_len];
-        };
-        inst.set_settings(settings);
-        let Ok(raw) = inst.column_values(&column_id, None, &entries) else {
-            tracing::warn!(plugin = %id, "columns: fallo al ejecutar, celdas vacías");
-            return vec![None; expected_len];
-        };
-        crate::plugins::column_values_checked(raw, expected_len).unwrap_or_else(|| {
-            tracing::warn!(
-                plugin = %id,
-                "columns: longitud no casa el contrato posicional, celdas vacías"
-            );
-            vec![None; expected_len]
-        })
+        crate::plugins::run_column_values(
+            &runtime,
+            resolved,
+            &column_id,
+            location.as_ref(),
+            &entries,
+            expected_len,
+        )
     })
     .await
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "column_values task panicked"))?;

@@ -55,6 +55,9 @@ norte-vfs-sftp.workspace = true
 # in the workspace graph as norte-core's own dev-dependency until now;
 # promoted here because `volumes::linux` needs it outside tests too.
 norte-vfs-local.workspace = true
+# Tokens de ubicación (ADR 0057): 32 bytes del CSPRNG del sistema. Ya es dep
+# del workspace (norte-connect la usa para los nonces de `secrets.age`).
+getrandom.workspace = true
 # Ítem 11 del roadmap: el provider de RAR, que el dispatch compone SOLO sobre
 # un `file://` local (el delegado necesita una ruta de verdad).
 norte-vfs-rar.workspace = true

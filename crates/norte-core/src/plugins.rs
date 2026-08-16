@@ -2070,6 +2070,104 @@ header = "Size"
         );
     }
 
+    /// El token muere con la llamada: el `Drop` de la sesión ES el mecanismo
+    /// de expiración, y por eso no hay TTL que ajustar ni barrido que olvidar.
+    #[test]
+    fn el_token_muere_con_la_llamada() {
+        let dir = tempfile::tempdir().unwrap();
+        let vpath = crate::policy::local_root_vpath(dir.path()).expect("vpath del tempdir");
+        let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
+        let token = {
+            let sesion = mint.mint_for(&vpath).expect("acuña");
+            let token = sesion.token().to_owned();
+            assert!(
+                mint.resolve(&token).is_ok(),
+                "vivo mientras dura la llamada"
+            );
+            assert_eq!(mint.live_tokens(), 1);
+            token
+        };
+        assert!(
+            mint.resolve(&token).is_err(),
+            "un token de la página anterior está muerto"
+        );
+        assert_eq!(mint.live_tokens(), 0, "y no queda nada retenido");
+    }
+
+    /// Dos tokens distintos no se cruzan, y ninguno es adivinable.
+    #[test]
+    fn dos_ubicaciones_no_comparten_token() {
+        use norte_plugin_host::LocationHost as _;
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("solo-en-a"), b"x").unwrap();
+        let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
+        let sa = mint
+            .mint_for(&crate::policy::local_root_vpath(a.path()).unwrap())
+            .expect("acuña a");
+        let sb = mint
+            .mint_for(&crate::policy::local_root_vpath(b.path()).unwrap())
+            .expect("acuña b");
+        assert_ne!(sa.token(), sb.token());
+        assert_eq!(sa.token().len(), 64, "32 bytes en hex");
+        assert!(mint.read(sa.token(), b"solo-en-a").is_ok());
+        assert!(
+            mint.read(sb.token(), b"solo-en-a").is_err(),
+            "el token de B no alcanza el árbol de A"
+        );
+    }
+
+    /// Sin ruta local no hay token: el guest lee de un descriptor de
+    /// directorio, y un `sftp://` no tiene ninguno.
+    #[test]
+    fn una_ubicacion_que_no_es_file_no_acuna_token() {
+        let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
+        let remote = norte_proto::VPath::parse("sftp://host/dir").unwrap();
+        assert!(
+            mint.mint_for(&remote).is_none(),
+            "sin ruta local no hay token"
+        );
+        let archivo = norte_proto::VPath::parse("zip+file:///a.zip/!/dentro").unwrap();
+        assert!(
+            mint.mint_for(&archivo).is_none(),
+            "dentro de un archivo tampoco"
+        );
+    }
+
+    /// ADR 0052: una raíz protegida no se rodea porque quien pregunta sea un
+    /// plugin en vez de un agente.
+    #[test]
+    fn el_directorio_de_estado_sigue_sin_leerse_por_aqui() {
+        let estado = tempfile::tempdir().unwrap();
+        let raiz = crate::policy::local_root_vpath(estado.path()).unwrap();
+        std::fs::create_dir(estado.path().join("dentro")).unwrap();
+        let mint =
+            LocationMint::with_protected(vec![raiz.clone()], norte_vfs_local::Bounds::default());
+        assert!(mint.mint_for(&raiz).is_none(), "la raíz protegida, no");
+        let hijo = crate::policy::local_root_vpath(&estado.path().join("dentro")).unwrap();
+        assert!(mint.mint_for(&hijo).is_none(), "ni nada bajo ella");
+    }
+
+    /// Sin la capability aprobada no se acuña NADA: ni se abre el directorio.
+    /// Es el mismo gate que hace cumplir el host, un paso antes.
+    #[test]
+    fn sin_capability_no_se_acuna_ni_se_abre_el_directorio() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f"), b"x").unwrap();
+        let vpath = crate::policy::local_root_vpath(dir.path()).unwrap();
+        let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
+        // `run_column_values` solo llama a `mint_for` cuando la capability
+        // está concedida; aquí se pinea la mitad observable: con capabilities
+        // por defecto, `granted()` es falso.
+        assert!(
+            !norte_plugin_host::Capabilities::default()
+                .location
+                .granted()
+        );
+        drop(mint.mint_for(&vpath));
+        assert_eq!(mint.live_tokens(), 0);
+    }
+
     #[test]
     fn column_values_checked_longitud_correcta_y_distinta() {
         assert_eq!(
@@ -2350,5 +2448,251 @@ pub fn install(config_dir: &Path, src: &Path, force: bool) -> Result<InstallRepo
         id: manifest.id,
         name: manifest.name,
         replaced,
+    })
+}
+
+// ---------- ubicación para plugins de columnas (ADR 0057) ----------
+
+/// Acuña los tokens OPACOS con los que un guest de columnas lee bajo el
+/// directorio que se está listando, y los resuelve mientras la llamada vive.
+///
+/// El guest jamás recibe la ruta. Recibe una cadena aleatoria que solo
+/// significa algo dentro de este proceso y solo mientras dura la llamada que
+/// la acuñó: cuando la [`LocationSession`] se suelta, el token deja de
+/// resolver. Un token de la página anterior está muerto, y un guest que lo
+/// guarde no gana nada con él.
+#[derive(Debug)]
+pub(crate) struct LocationMint {
+    bounds: norte_vfs_local::Bounds,
+    /// Raíces que NO se abren aunque las pida un plugin (ADR 0052: el
+    /// directorio de estado del daemon no se rodea porque el que pregunta sea
+    /// un plugin en vez de un agente).
+    protected: Vec<norte_proto::VPath>,
+    live: std::sync::Mutex<
+        std::collections::HashMap<String, std::sync::Arc<norte_vfs_local::ConfinedRoot>>,
+    >,
+}
+
+impl LocationMint {
+    /// Un acuñador con las raíces protegidas de este proceso.
+    pub(crate) fn new(bounds: norte_vfs_local::Bounds) -> std::sync::Arc<Self> {
+        Self::with_protected(
+            crate::policy::daemon_state_root().into_iter().collect(),
+            bounds,
+        )
+    }
+
+    /// Como [`Self::new`], diciendo qué raíces están protegidas (tests).
+    pub(crate) fn with_protected(
+        protected: Vec<norte_proto::VPath>,
+        bounds: norte_vfs_local::Bounds,
+    ) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            bounds,
+            protected,
+            live: std::sync::Mutex::new(std::collections::HashMap::new()),
+        })
+    }
+
+    /// Acuña un token para `dir`, o `None` si esa ubicación no se sirve:
+    /// no es un `file://` local, cae bajo una raíz protegida, o no se pudo
+    /// abrir. `None` NO es un error de la petición — la columna se queda
+    /// vacía y el panel sigue.
+    ///
+    /// BLOQUEANTE (abre un directorio): va dentro de `spawn_blocking`.
+    pub(crate) fn mint_for(
+        self: &std::sync::Arc<Self>,
+        dir: &norte_proto::VPath,
+    ) -> Option<LocationSession> {
+        if dir.scheme() != "file" || dir.authority().is_some() {
+            return None;
+        }
+        if self
+            .protected
+            .iter()
+            .any(|root| crate::policy::is_under(root, dir))
+        {
+            tracing::debug!("columns: ubicación bajo una raíz protegida, sin token");
+            return None;
+        }
+        let native = norte_vfs_local::vpath_to_native(dir).ok()?;
+        let root = norte_vfs_local::ConfinedRoot::open(&native, self.bounds).ok()?;
+        let token = mint_token();
+        self.live
+            .lock()
+            .expect("live lock sano")
+            .insert(token.clone(), std::sync::Arc::new(root));
+        Some(LocationSession {
+            mint: std::sync::Arc::clone(self),
+            token,
+        })
+    }
+
+    fn resolve(
+        &self,
+        token: &str,
+    ) -> Result<std::sync::Arc<norte_vfs_local::ConfinedRoot>, String> {
+        self.live
+            .lock()
+            .expect("live lock sano")
+            .get(token)
+            .cloned()
+            .ok_or_else(|| "token desconocido".to_owned())
+    }
+
+    fn retire(&self, token: &str) {
+        self.live.lock().expect("live lock sano").remove(token);
+    }
+
+    /// Cuántos tokens siguen vivos. Un número que no sea 0 entre páginas es un
+    /// escape de sesión, así que los tests lo miran.
+    #[cfg(test)]
+    pub(crate) fn live_tokens(&self) -> usize {
+        self.live.lock().expect("live lock sano").len()
+    }
+}
+
+/// El token de UNA llamada. Al soltarse, el token deja de resolver: ese es
+/// todo el mecanismo de expiración, y por eso no hay TTL que ajustar.
+#[derive(Debug)]
+pub(crate) struct LocationSession {
+    pub(crate) mint: std::sync::Arc<LocationMint>,
+    token: String,
+}
+
+impl LocationSession {
+    /// El token que se le pasa al guest.
+    pub(crate) fn token(&self) -> &str {
+        &self.token
+    }
+}
+
+impl Drop for LocationSession {
+    fn drop(&mut self) {
+        self.mint.retire(&self.token);
+    }
+}
+
+/// 32 bytes aleatorios en hex: ni adivinable ni derivable de la ruta.
+fn mint_token() -> String {
+    let mut bytes = [0u8; 32];
+    // Del CSPRNG del sistema: un token derivable de la ruta o de un contador
+    // sería adivinable desde OTRO plugin del mismo proceso.
+    getrandom::fill(&mut bytes).expect("el CSPRNG del sistema no falla");
+    let mut out = String::with_capacity(64);
+    for b in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
+impl norte_plugin_host::LocationHost for LocationMint {
+    fn read(&self, token: &str, rel: &[u8]) -> Result<Vec<u8>, String> {
+        self.resolve(token)?.read(rel).map_err(|e| e.to_string())
+    }
+
+    fn stat(
+        &self,
+        token: &str,
+        rel: &[u8],
+    ) -> Result<norte_plugin_host::location_iface::Meta, String> {
+        let meta = self.resolve(token)?.stat(rel).map_err(|e| e.to_string())?;
+        Ok(meta_to_wire(&meta))
+    }
+
+    fn list_dir(
+        &self,
+        token: &str,
+        rel: &[u8],
+    ) -> Result<Vec<norte_plugin_host::location_iface::Dirent>, String> {
+        let entries = self.resolve(token)?.list(rel).map_err(|e| e.to_string())?;
+        Ok(entries
+            .into_iter()
+            .map(|e| norte_plugin_host::location_iface::Dirent {
+                name: e.name,
+                kind: kind_to_wire(e.kind),
+            })
+            .collect())
+    }
+}
+
+fn kind_to_wire(
+    kind: norte_vfs_local::LocationKind,
+) -> norte_plugin_host::location_iface::EntryKind {
+    use norte_plugin_host::location_iface::EntryKind as Wire;
+    match kind {
+        norte_vfs_local::LocationKind::File => Wire::File,
+        norte_vfs_local::LocationKind::Dir => Wire::Dir,
+        norte_vfs_local::LocationKind::Symlink => Wire::Symlink,
+        norte_vfs_local::LocationKind::Other => Wire::Other,
+    }
+}
+
+fn meta_to_wire(meta: &norte_vfs_local::LocationMeta) -> norte_plugin_host::location_iface::Meta {
+    norte_plugin_host::location_iface::Meta {
+        kind: kind_to_wire(meta.kind),
+        size: meta.size,
+        mtime_sec: meta.mtime_sec,
+        mtime_nsec: meta.mtime_nsec,
+        ctime_sec: meta.ctime_sec,
+        ctime_nsec: meta.ctime_nsec,
+        ino: meta.ino,
+        dev: meta.dev,
+        mode: meta.mode,
+    }
+}
+
+/// Corre `column-values` de UN plugin ya resuelto, con ubicación si se le
+/// aprobó. El ÚNICO sitio donde eso se hace: el daemon y el backend embebido
+/// llaman aquí, porque una capacidad exigida en un camino y no en el otro es
+/// el fallo que este repositorio ya se ha escrito tres veces (#165, #201,
+/// #181).
+///
+/// Fail-closed en todos sus bordes — no instancia, trapea, rompe el contrato
+/// posicional, o la ubicación no se puede abrir: la página sale con celdas
+/// vacías, jamás un error que tumbe el listado.
+///
+/// BLOQUEANTE (instancia WASM y abre un directorio): va en `spawn_blocking`.
+pub(crate) fn run_column_values(
+    runtime: &norte_plugin_host::PluginRuntime,
+    resolved: ResolvedDecorator,
+    column_id: &str,
+    location_dir: Option<&norte_proto::VPath>,
+    entries: &[Vec<u8>],
+    expected_len: usize,
+) -> Vec<Option<String>> {
+    let (id, _name, wasm, caps, settings) = resolved;
+    // La sesión vive hasta el final de esta función y ni un instante más: al
+    // soltarse, el token deja de resolver.
+    let sesion = if caps.location.granted() {
+        let mint = LocationMint::new(norte_vfs_local::Bounds::default());
+        location_dir.and_then(|dir| mint.mint_for(dir))
+    } else {
+        None
+    };
+    let host: Option<std::sync::Arc<dyn norte_plugin_host::LocationHost>> =
+        sesion.as_ref().map(|s| {
+            std::sync::Arc::clone(&s.mint) as std::sync::Arc<dyn norte_plugin_host::LocationHost>
+        });
+    let Ok(mut inst) = runtime.instantiate_columns_with_location(&wasm, caps, host) else {
+        tracing::warn!(plugin = %id, "columns: fallo al instanciar, celdas vacías");
+        return vec![None; expected_len];
+    };
+    inst.set_settings(settings);
+    let Ok(raw) = inst.column_values(
+        column_id,
+        sesion.as_ref().map(LocationSession::token),
+        entries,
+    ) else {
+        tracing::warn!(plugin = %id, "columns: fallo al ejecutar, celdas vacías");
+        return vec![None; expected_len];
+    };
+    column_values_checked(raw, expected_len).unwrap_or_else(|| {
+        tracing::warn!(
+            plugin = %id,
+            "columns: longitud no casa el contrato posicional, celdas vacías"
+        );
+        vec![None; expected_len]
     })
 }
