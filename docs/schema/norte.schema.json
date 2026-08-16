@@ -241,6 +241,31 @@
       },
       "type": "object"
     },
+    "LogSection": {
+      "additionalProperties": false,
+      "description": "`[log]`: the local diagnostic log (roadmap item 9).\n\nNever honoured from the project layer, same as [`DaemonSection`] and for the\nsame reason: deciding where a process writes is not presentation, and a\n`norte.toml` arriving with somebody else's repository must not redirect it.\n\nThere is no level key on purpose. `RUST_LOG` already selects levels, and a\nsecond mechanism for one setting is how the two drift apart.",
+      "properties": {
+        "dir": {
+          "default": null,
+          "description": "Where the rotated files go. Absent = `<state_dir>/logs`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retain": {
+          "default": null,
+          "description": "How many rotated files survive. Absent = the appender's own default.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "SchemeColumnsSection": {
       "additionalProperties": false,
       "description": "One scheme's override inside `[ui.columns.scheme.<scheme>]`.",
@@ -535,6 +560,10 @@
     "keymap": {
       "$ref": "#/$defs/KeymapSection",
       "description": "Keymap settings."
+    },
+    "log": {
+      "$ref": "#/$defs/LogSection",
+      "description": "Local diagnostic log (`[log]`, roadmap item 9)."
     },
     "ui": {
       "$ref": "#/$defs/UiSection",
