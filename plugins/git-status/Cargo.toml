@@ -1,0 +1,31 @@
+# El plugin oficial de columnas: estado de git (roadmap ítem 6, ADR 0057).
+#
+# NO es miembro del workspace, igual que los guests de `examples-wasm/`:
+# compila a `wasm32-wasip2` con su propio lockfile y perfil. A diferencia de
+# ellos SÍ tiene tests propios que corren en el host — el parser del índice y
+# el matcher de ignores son código puro, y probarlos dentro de un wasm sería
+# pagar un runtime para no ganar nada.
+[workspace]
+
+[package]
+name = "git-status"
+edition = "2021"
+version = "0.1.0"
+publish = false
+license = "AGPL-3.0-only"
+description = "Columna de estado de git para norte, como plugin WASM"
+
+[lib]
+# `cdylib` es lo que hace un componente; `rlib` es lo que hace testeable el
+# parser desde el host.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# wit-bindgen GUEST-side: los bindings salen del MISMO WIT que el host
+# (symlink `wit` -> ../../crates/norte-plugin-host/wit).
+wit-bindgen = "0.46"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true

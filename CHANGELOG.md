@@ -9,6 +9,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A git status column, and plugins that can finally say something about a
+  file.** Turn it on in the extension manager and the panel marks what changed
+  since your last commit: `M` for modified, `D` for deleted, `?` for untracked,
+  `!` for ignored, nothing at all for clean, and a folder shows the strongest
+  thing inside it. It reads `.gitignore` too, otherwise `target/` alone would
+  drown the column.
+  Until now a column plugin only ever saw the *names* on screen, which is why
+  the only one that existed counted characters. It can now be handed a way to
+  read where you are — and only that: a handle to the folder, never a path, and
+  the operating system itself refuses anything that tries to climb out of it.
+  A plugin has to ask for the permission in its manifest, you approve it by
+  name in the extension manager, and a plugin that adds the permission later
+  has to be approved again.
+  The git column is installed exactly the way somebody else's plugin would be,
+  because that is the path worth proving. It reads only what it needs: the
+  index git already keeps, and the file itself only when timestamps cannot
+  settle the question.
+
 - **`.rar` archives open as folders.** Press Enter on one and it browses like
   any other archive, with the files readable inside it. norte does not contain
   a RAR decompressor — that code is not free, and no amount of wanting changes

@@ -42,6 +42,11 @@ the protocol, a frontend cannot provide it.
 
 Other subsystems include `norte-index` and `norte-mcp`.
 
+Outside the workspace, `plugins/git-status/` is the first official plugin: a
+columns guest built to `wasm32-wasip2` and installed under
+`config_dir/plugins/` exactly the way a third party's would be (ADR 0057). Its
+gate is `just plugin-git-ci`; `just build-git-wasm` produces the component.
+
 ## Dependency rules
 
 The main dependency direction is:

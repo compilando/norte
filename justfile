@@ -354,6 +354,22 @@ uninstall:
 # solo habla norte-proto), así que `just ci` no lo cubre — este es su gate a un
 # comando. Correrlo al tocar norte-gui o cualquier crate que la GUI consume
 # (frontend/proto/core).
+# Gate del plugin oficial de columnas (`plugins/git-status`, roadmap ítem 6).
+# Está FUERA del workspace, como los guests de `examples-wasm/`: compila a
+# `wasm32-wasip2` con su propio lockfile. Lo que corre aquí en el HOST son sus
+# tests puros —el parser del índice de git y el matcher de ignores—, porque
+# meterlos dentro de un wasm sería pagar un runtime para no ganar nada.
+plugin-git-ci:
+    cargo nextest run --manifest-path plugins/git-status/Cargo.toml
+    cargo clippy --manifest-path plugins/git-status/Cargo.toml --all-targets -- -D warnings
+    cargo fmt --manifest-path plugins/git-status/Cargo.toml --check
+
+# Recompila el plugin de git a wasm32-wasip2 y deja el componente donde el
+# instalador lo espera.
+build-git-wasm:
+    cargo build --release --target wasm32-wasip2 --manifest-path plugins/git-status/Cargo.toml
+    @echo "componente en plugins/git-status/target/wasm32-wasip2/release/git_status.wasm"
+
 gui-ci:
     cd crates/norte-gui && cargo nextest run && cargo clippy --all-targets -- -D warnings && cargo fmt --check
     # La GUI es miembro del workspace pero está FUERA del grafo de `cargo deny`

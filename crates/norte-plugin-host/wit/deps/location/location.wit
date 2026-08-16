@@ -1,0 +1,54 @@
+// `norte:location` es la capacidad de LEER BAJO el directorio que el host está
+// listando, sin que el guest sepa cuál es. El host acuña un `token` opaco por
+// petición; el guest lo devuelve en cada llamada y jamás recibe una ruta.
+//
+// Por qué un paquete propio y no una interfaz más de `norte:plugin` (ADR 0041
+// decisión 4): la versión del paquete viaja dentro del nombre de CADA interfaz,
+// así que un cambio aquí no puede permitirse invalidar a los previewers de
+// terceros. Empieza en 0.1.0 y sube por su cuenta.
+package norte:location@0.1.0;
+
+/// Lectura ACOTADA bajo una ubicación que el host abrió y confinó
+/// (`openat2(RESOLVE_BENEATH)` en `norte-vfs-local`). Todo lo que aquí falla
+/// devuelve un `string` legible: el guest no distingue causas del sistema
+/// operativo, y no tiene por qué.
+interface location {
+    /// Qué es una entrada. Grueso a propósito.
+    enum entry-kind { file, dir, symlink, other }
+
+    /// Lo que `stat` devuelve: exactamente los campos que el índice de git
+    /// guarda. Comparar solo `mtime` es cómo se pierde un cambio hecho dentro
+    /// del mismo segundo, así que van también `ctime`, `ino` y `dev`.
+    record meta {
+        kind: entry-kind,
+        size: u64,
+        mtime-sec: s64,
+        mtime-nsec: u32,
+        ctime-sec: s64,
+        ctime-nsec: u32,
+        ino: u64,
+        dev: u64,
+        mode: u32,
+    }
+
+    /// Una entrada de un listado. `name` va en BYTES: la regla dura 1 no deja
+    /// de aplicar porque la ruta cruce una ABI.
+    record dirent {
+        name: list<u8>,
+        kind: entry-kind,
+    }
+
+    /// Lee un fichero bajo la ubicación. `rel` es relativo y en bytes; un `..`
+    /// que se salga, una ruta absoluta o un symlink final son un error, no un
+    /// contenido.
+    read: func(token: string, rel: list<u8>) -> result<list<u8>, string>;
+
+    /// `lstat` de una entrada bajo la ubicación (el symlink NO se sigue).
+    stat: func(token: string, rel: list<u8>) -> result<meta, string>;
+
+    /// Lista un directorio bajo la ubicación. `.` y `..` no salen.
+    ///
+    /// Se llama `list-dir` y no `list` porque `list` es palabra reservada de
+    /// WIT (es el constructor de tipo `list<T>`), y el parser corta ahí.
+    list-dir: func(token: string, rel: list<u8>) -> result<list<dirent>, string>;
+}

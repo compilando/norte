@@ -34,7 +34,7 @@ mod config_values;
 mod manifest;
 mod runtime;
 
-pub use capability::{Capabilities, NetCap, Scope};
+pub use capability::{Capabilities, LocationCap, NetCap, Scope};
 pub use catalog::{Catalog, HelpPresence, LoadError, PluginEntry, Tier, verified_child};
 pub use config_values::{
     CONFIG_VALUES_MAX_BYTES, ConfigValueError, encode_wire_value, persist_plugin_setting,
@@ -47,8 +47,9 @@ pub use manifest::{
     HookContrib, Manifest, ManifestError, PreviewerContrib, ProviderContrib, is_valid_plugin_id,
 };
 pub use runtime::{
-    ColumnsInstance, DecoratorInstance, PluginInstance, PluginRuntime, ProviderInstance,
-    RuntimeError, decorator_iface, previewer_iface, provider_iface,
+    ColumnsInstance, DecoratorInstance, LocationHost, PluginInstance, PluginRuntime,
+    ProviderInstance, RuntimeError, columns_iface, decorator_iface, location_iface,
+    previewer_iface, provider_iface,
 };
 /// Handle opaco de un `writer` resource del guest (#30 stage 2b-write): el
 /// adapter host lo lleva en su `ByteSink` y lo pasa a los métodos
