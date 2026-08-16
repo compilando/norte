@@ -78,6 +78,13 @@ tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"
 tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# Appender rotatorio del log local (roadmap ítem 9). Es del proyecto tokio y es
+# el appender alrededor del que `tracing-subscriber` está diseñado; la
+# alternativa es escribir a mano la rotación, el nombrado de los ficheros, la
+# poda por retención y el guard del writer no bloqueante — más código que la
+# propia feature, y en el camino que tiene que funcionar cuando todo lo demás
+# ya ha fallado (regla 8).
+tracing-appender = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # volumes::linux (plan 2026-08-10): `statvfs`. See the workspace Cargo.toml

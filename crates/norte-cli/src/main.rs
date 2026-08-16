@@ -624,7 +624,12 @@ fn aviso(frase: &str) {
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // Tracing con el cap de seguridad `suppaftp=info` (issue #43, regla 10):
     // sin esto un `RUST_LOG=trace` volcaría `PASS <password>` de suppaftp.
-    norte_core::logging::init();
+    //
+    // El guard SE SOSTIENE hasta el final de `run` (roadmap ítem 9): el writer
+    // del fichero es no bloqueante y su hilo vacía la cola al soltarlo, así que
+    // dejarlo caer aquí tiraría justo las últimas líneas — las del fallo que
+    // alguien está diagnosticando.
+    let _log_guard = norte_core::logging::init();
 
     // El daemon construye SU PROPIO engine (con journal+policy, M3-4): el
     // embebido de abajo es solo para el resto de subcomandos.
