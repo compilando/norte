@@ -1368,6 +1368,13 @@ pub struct CommonConfig {
     pub archive_max_decompressed_bytes: Option<u64>,
     /// `[archive] max_nesting` (#56, last-wins; never from Project).
     pub archive_max_nesting: Option<usize>,
+    /// `[log] dir` (last-wins; None = `<state_dir>/logs`; never from Project —
+    /// fail-closed, same reasoning as `[daemon]`: choosing where a process
+    /// writes is not presentation).
+    pub log_dir: Option<std::path::PathBuf>,
+    /// `[log] retain` (last-wins; None = the appender's default). How many
+    /// rotated files survive.
+    pub log_retain: Option<usize>,
     /// `[ai]` merged (never from Project).
     pub ai: AiSettings,
     /// Files that participated (watcher + diagnostics).
@@ -1434,6 +1441,23 @@ fn merge_daemon_layer(
     }
     if let Some(sock) = d.socket {
         *daemon_socket = Some(sock);
+    }
+}
+
+/// Merges one layer's already-parsed `[log]` section (already filtered to
+/// non-Project by the caller) into the accumulators (last-present-wins per
+/// field, infallible). Extracted out of [`load`] to stay under clippy's
+/// line-count cap, same pattern as [`merge_daemon_layer`].
+fn merge_log_layer(
+    log_dir: &mut Option<PathBuf>,
+    log_retain: &mut Option<usize>,
+    l: crate::schema::LogSection,
+) {
+    if let Some(d) = l.dir {
+        *log_dir = Some(d);
+    }
+    if let Some(r) = l.retain {
+        *log_retain = Some(r);
     }
 }
 
@@ -1773,6 +1797,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_columns = ColumnsConfig::default();
     let mut daemon_mode: Option<DaemonMode> = None;
     let mut daemon_socket: Option<PathBuf> = None;
+    let mut log_dir: Option<PathBuf> = None;
+    let mut log_retain: Option<usize> = None;
     let mut hotlist: Vec<HotlistItem> = Vec::new();
     let mut archive_max_entries: Option<u64> = None;
     let mut archive_max_decompressed_bytes: Option<u64> = None;
@@ -1816,44 +1842,37 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             if let Some(cols) = &parsed.ui.columns {
                 merge_ui_columns(&mut ui_columns, cols, &norte)?;
             }
-            // `[daemon]` is NOT honored from Project either (review MAJOR-1):
-            // a foreign repo must not redirect the core transport to an
-            // attacker-controlled socket — same fail-closed carve-out as
-            // `[archive]`/`[ai]`/hotlist.
-            if *kind != Layer::Project {
-                merge_daemon_layer(&mut daemon_mode, &mut daemon_socket, parsed.daemon);
-            }
-            // La hotlist se acumula de TODAS las capas MENOS la de
-            // proyecto (deuda #75 cerrada: el kind viaja POR DIR, ya no se
-            // infiere por posición). Un `./.norte/norte.toml` de un repo
-            // ajeno no debe poder inyectar favoritos en la sesión del
-            // usuario (spec 2026-07-18, decisión 3). Los ESCALARES de UI
-            // (quick_search, theme, lang) SÍ se honran desde proyecto: son
-            // config estructural de presentación (coherente con theme), no
-            // data que dirija navegación como la hotlist.
+            // TODO lo que sigue queda FUERA del alcance de la capa de
+            // proyecto, y era el mismo `if` escrito cinco veces con su motivo
+            // repetido; una sola vez, con los cinco motivos juntos:
+            //
+            // - **hotlist** (spec 2026-07-18, decisión 3): un repo ajeno no
+            //   inyecta favoritos en la sesión del usuario.
+            // - **`[archive]`** (#95.2): son los límites anti-bomba, y SUBIRLOS
+            //   desarma la protección justo donde viven los contenedores
+            //   hostiles.
+            // - **`[daemon]`** (review MAJOR-1): no redirige el transporte del
+            //   core a un socket ajeno.
+            // - **`[ai]`** (ADR 0035 decisión 3): no habilita la IA ni
+            //   redirige sus proveedores.
+            // - **`[log]`** (roadmap ítem 9): no decide dónde escribe este
+            //   proceso.
+            //
+            // Los ESCALARES de UI (quick_search, theme, lang) SÍ se honran
+            // desde proyecto: son presentación, y ninguno de ellos lanza,
+            // escribe ni redirige nada. Ésa es la línea.
             if *kind != Layer::Project {
                 for entry in parsed.hotlist {
                     merge_hotlist_entry(&mut hotlist, entry);
                 }
-            }
-            // `[archive]` (#95.2) TAMPOCO se honra desde proyecto: son
-            // límites de SEGURIDAD anti-bomba — un `./.norte/norte.toml` de
-            // un repo ajeno no debe poder SUBIRLOS y desarmar la protección
-            // justo donde viven los contenedores hostiles (mismo criterio
-            // fail-closed que la hotlist).
-            if *kind != Layer::Project {
                 merge_archive_layer(
                     &mut archive_max_entries,
                     &mut archive_max_decompressed_bytes,
                     &mut archive_max_nesting,
                     &parsed.archive,
                 );
-            }
-            // `[ai]` (ADR 0035 decisión 3) TAMPOCO se honra desde proyecto:
-            // un `./.norte/norte.toml` de un repo ajeno no debe poder
-            // habilitar la IA ni redirigir sus proveedores — mismo
-            // carve-out fail-closed que `[archive]`/hotlist.
-            if *kind != Layer::Project {
+                merge_daemon_layer(&mut daemon_mode, &mut daemon_socket, parsed.daemon);
+                merge_log_layer(&mut log_dir, &mut log_retain, parsed.log);
                 merge_ai_layer(&mut ai, parsed.ai, &norte)?;
             }
             sources.push(norte);
@@ -1874,6 +1893,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_columns,
         daemon_mode,
         daemon_socket,
+        log_dir,
+        log_retain,
         hotlist,
         archive_max_entries,
         archive_max_decompressed_bytes,
@@ -2705,6 +2726,40 @@ format = "exact"
         let cfg = load(&layers).expect("carga");
         assert_eq!(cfg.daemon_mode, None, "project mode ignored");
         assert_eq!(cfg.daemon_socket, None, "project socket ignored");
+    }
+
+    /// `[log]` se lee de las capas de máquina y de usuario, JAMÁS de la de
+    /// proyecto: un `norte.toml` que llega con un repositorio ajeno no puede
+    /// decidir dónde escribe sus logs este proceso. Misma regla fail-closed que
+    /// `[daemon]` (review MAJOR-1) y por el mismo motivo — redirigir una
+    /// escritura no es presentación.
+    #[test]
+    fn log_de_proyecto_se_ignora() {
+        let usuario = tempfile::tempdir().unwrap();
+        std::fs::write(
+            usuario.path().join("norte.toml"),
+            "[log]\ndir = \"/de-usuario\"\nretain = 3\n",
+        )
+        .unwrap();
+        let proyecto = tempfile::tempdir().unwrap();
+        std::fs::write(
+            proyecto.path().join("norte.toml"),
+            "[log]\ndir = \"/del-repo\"\nretain = 99\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (usuario.path().to_path_buf(), Layer::User),
+                (proyecto.path().to_path_buf(), Layer::Project),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(
+            cfg.log_dir.as_deref(),
+            Some(std::path::Path::new("/de-usuario")),
+            "gana la capa de usuario; la de proyecto ni se mira"
+        );
+        assert_eq!(cfg.log_retain, Some(3));
     }
 
     /// Security review item 4 (C1, NIT F4): the persist helpers' "existing

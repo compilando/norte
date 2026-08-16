@@ -9,6 +9,40 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The graphical interface notices changes it did not make.** Something else
+  writes a file into a folder you are looking at — another program, a download,
+  a `git checkout` — and the pane now updates on its own, as the terminal
+  interface has done for a while. Same limits, and they are worth knowing: only
+  local folders are watched (a remote or archive pane still refreshes on
+  demand), and where the system runs out of watches norte says so in the status
+  bar and falls back to checking every couple of seconds, which notices files
+  appearing, disappearing and being renamed but not a file being edited in
+  place (#106).
+
+- **Copying a file full of holes no longer fills them in.** Disk images, virtual
+  machine disks, database files and anything else stored sparsely used to arrive
+  at the destination with every empty byte written out — a 64 GB image that
+  occupied 2 GB became a 64 GB image occupying 64 GB. The copy now leaves the
+  holes as holes. It reads back byte for byte identical either way; what changes
+  is what the disk keeps.
+  Two honest limits: the source is still read in full, so this saves space and
+  not time, and the unit is the block norte copies in — a hole smaller than one,
+  or straddling two, is still written out.
+
+- **There is a log, and `norte doctor` tells you where it is.** norte kept
+  diagnostics about what it was doing and had nowhere to put them: the terminal
+  interface could not print them without corrupting its own screen, so it
+  discarded them, and the graphical one did the same. Both now write to a
+  rotating file under your state directory, a week of them kept, and neither
+  writes a byte to the screen it is drawing on. `[log]` in `norte.toml` moves
+  the directory or changes how many are kept.
+  **Nothing leaves the machine.** There is no upload, no telemetry and no
+  network in any of this — the point is that a bug report from someone who is
+  not us can now include what actually happened. FTP passwords are capped out of
+  the log at the filter, which is now tested against the file and not only
+  against the terminal, because a password in a file that persists is worse than
+  one that scrolled past.
+
 - **A recursive copy cannot be redirected out of the folder you pointed it at.**
   Approve a synchronisation or a copy of a folder, and between saying yes and
   the bytes landing there was a window: anyone who could drop a symbolic link inside the

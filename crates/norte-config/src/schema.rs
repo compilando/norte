@@ -26,6 +26,9 @@ pub struct NorteToml {
     /// Archive-provider limits (`[archive]`, #95.2).
     #[serde(default)]
     pub archive: ArchiveSection,
+    /// Local diagnostic log (`[log]`, roadmap item 9).
+    #[serde(default)]
+    pub log: LogSection,
     /// Favourite directories shown by `Ctrl+D`.
     ///
     /// Entries accumulate across layers instead of replacing lower-layer
@@ -89,6 +92,26 @@ pub struct DaemonSection {
     /// Daemon socket path. When absent, use the operating-system default.
     #[serde(default)]
     pub socket: Option<PathBuf>,
+}
+
+/// `[log]`: the local diagnostic log (roadmap item 9).
+///
+/// Never honoured from the project layer, same as [`DaemonSection`] and for the
+/// same reason: deciding where a process writes is not presentation, and a
+/// `norte.toml` arriving with somebody else's repository must not redirect it.
+///
+/// There is no level key on purpose. `RUST_LOG` already selects levels, and a
+/// second mechanism for one setting is how the two drift apart.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct LogSection {
+    /// Where the rotated files go. Absent = `<state_dir>/logs`.
+    #[serde(default)]
+    pub dir: Option<PathBuf>,
+    /// How many rotated files survive. Absent = the appender's own default.
+    #[serde(default)]
+    pub retain: Option<usize>,
 }
 
 /// Core transport. This changes transport only, not behaviour.

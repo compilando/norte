@@ -1787,6 +1787,19 @@ async fn main() -> Result<()> {
         norte_i18n::Lang::from_env()
     };
     let _ = norte_i18n::force(lang);
+    // Roadmap ítem 9: el log va al FICHERO y solo al fichero. Hasta aquí este
+    // binario no instalaba subscriber ninguno y lo decía en un comentario más
+    // abajo: un `fmt` a stderr pelea con la pantalla alternativa, así que cada
+    // `tracing::warn!` de la TUI se descartaba mudo.
+    //
+    // Va DESPUÉS de cargar la config porque `[log] dir` sale de ella, lo que
+    // significa que un `--help`/`--version` —que salen antes— no deja rastro.
+    // Correcto: no hacen nada que merezca un log.
+    //
+    norte_core::logging::init_to_file(norte_core::logging::LogConfig {
+        dir: cfg.common.log_dir.as_deref(),
+        retain: cfg.common.log_retain,
+    });
     let (browse_eff, viewer_eff, dialog_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
     // Bindings `lua:` descartados del keymap.toml de PROYECTO (seguridad,
     // review M4 Lua): se avisa tras crear la App, jamás descarte mudo. El
@@ -2214,11 +2227,12 @@ async fn make_backend(
             norte_core::connect::config_dir(),
         )));
         // IA (M4-IA): opt-in; sin [ai] el backend degrada (Unsupported).
-        // Diagnóstico por eprintln, no tracing (rust review MINOR-4): el TUI
-        // no instala subscriber (`logging::init` es de cli/daemon; un fmt a
-        // stderr pelearía con la pantalla alternativa) — un `tracing::warn!`
-        // aquí se descartaría mudo, y este punto es PRE-ratatui, donde stderr
-        // aún llega al terminal. Mismo patrón que el wiring del daemon-run.
+        //
+        // Estos diagnósticos eran `eprintln!` y llevaban un comentario
+        // explicando que un `tracing::warn!` aquí se descartaría mudo, porque
+        // este binario no instalaba subscriber. Ya lo instala (`init_to_file`,
+        // roadmap ítem 9), así que van al log como el resto — y sin escribir en
+        // una pantalla que ratatui está a punto de tomar.
         match tokio::task::spawn_blocking(norte_core::ai::AiConfig::load).await {
             Ok(Ok(ai_cfg)) => {
                 if let Some(pcfg) = ai_cfg.rename_provider_config().cloned() {
@@ -2229,7 +2243,7 @@ async fn make_backend(
                     .await
                     {
                         Ok(provider) => engine.set_ai_provider(provider),
-                        Err(e) => eprintln!("aviso: proveedor de IA no disponible ({e})"),
+                        Err(e) => tracing::warn!(error = %e, "proveedor de IA no disponible"),
                     }
                 }
                 // Embeddings (M4-IA-2): proveedor propio, opt-in igual —
@@ -2237,12 +2251,12 @@ async fn make_backend(
                 // índice (with_index es del daemon), el wiring es por paridad
                 // para cuando lo gane.
                 if let Some(w) = norte_core::ai::install_embed_provider(&engine, &ai_cfg).await {
-                    eprintln!("{w}");
+                    tracing::warn!(aviso = %w, "proveedor de embeddings");
                 }
                 engine.set_ai_config(ai_cfg);
             }
-            Ok(Err(e)) => eprintln!("aviso: [ai] inválido ({e})"),
-            Err(e) => eprintln!("aviso: carga de [ai] falló ({e})"),
+            Ok(Err(e)) => tracing::warn!(error = %e, "[ai] inválido"),
+            Err(e) => tracing::warn!(error = %e, "la carga de [ai] falló"),
         }
         return Ok(Backend::Embedded(Arc::new(engine)));
     }
@@ -2449,7 +2463,7 @@ async fn run(
     // watch()/unwatch() de rewatch son syscalls cortas inline (mismo
     // criterio documentado que el draw síncrono de ratatui más abajo);
     // solo corren al arrancar o al CAMBIAR de dir.
-    let mut dir_watch = norte_tui::watch::DirWatch::new();
+    let mut dir_watch = norte_frontend::watch::DirWatch::new();
     let mut dir_watch_alive = true;
     loop {
         dir_watch.rewatch(&watch_targets(app));
@@ -7623,26 +7637,6 @@ async fn reload_config(
 /// siguientes se encolan hasta aquí; llena, solo queda el aviso.
 const LUA_QUEUE_MAX: usize = 8;
 
-/// Directorio de ESTADO del usuario: `$XDG_STATE_HOME/norte` o
-/// `~/.local/state/norte` (Windows: `%LOCALAPPDATA%\norte\state`). Sin
-/// precedente en el workspace (verificado 2026-07-18: ningún uso de
-/// `XDG_STATE_HOME`; la config usa `XDG_CONFIG_HOME` —
-/// `config::user_config_dir`): el trust store de Lua es ESTADO local de la
-/// máquina, no config que deba viajar con los dotfiles. `None` si el
-/// entorno no define nada (CI pelada): el caller degrada con aviso
-/// (fail-closed para el TOFU — sin store no corre el script de proyecto).
-fn state_dir() -> Option<std::path::PathBuf> {
-    use std::path::PathBuf;
-    if cfg!(windows) {
-        return std::env::var_os("LOCALAPPDATA")
-            .map(|d| PathBuf::from(d).join("norte").join("state"));
-    }
-    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(xdg).join("norte"));
-    }
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state/norte"))
-}
-
 /// Etiqueta ESTABLE de una capa para `err-lua-load` (no localizada: es un
 /// identificador de capa, no prosa).
 fn lua_layer_label(layer: Layer) -> &'static str {
@@ -7834,7 +7828,7 @@ async fn load_lua_project(app: &mut App, host: &LuaHost, dir: std::path::PathBuf
         }
         ProjectLua::Ready(path, bytes) => (path, bytes),
     };
-    let Some(state) = state_dir() else {
+    let Some(state) = norte_config::dirs::state_dir() else {
         // Sin dir de estado no hay store; sin store no hay TOFU; sin TOFU el
         // script de proyecto NO corre (fail-closed) — con aviso.
         app.message = Some(t("err-lua-no-state-dir"));
@@ -7913,7 +7907,7 @@ async fn resolve_lua_trust(app: &mut App, host: Option<&LuaHost>, code: KeyCode)
     if let Some((path, bytes)) = app.lua_pending_trust.take() {
         let (rec_path, rec_bytes) = (path.clone(), bytes.clone());
         let record = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-            let dir = state_dir().ok_or_else(|| {
+            let dir = norte_config::dirs::state_dir().ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "sin directorio de estado")
             })?;
             let mut store = TrustStore::open(dir.join("lua-trust.toml"))?;

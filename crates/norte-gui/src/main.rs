@@ -157,6 +157,16 @@ mod sp {
     pub const RADIUS_PANEL: f32 = 6.0;
 }
 
+/// Los dirs que el watcher puede vigilar, uno por pane (#106).
+///
+/// Solo los LOCALES: `vpath_to_native` es lo que decide, y falla para todo lo
+/// que no sea un `file://` de esta máquina. Un pane remoto o de archivo no
+/// tiene inotify que pedir y su refresco sigue siendo manual — el mismo
+/// alcance que estrenó la TUI, y por la misma razón.
+fn watch_targets(panes: &[PaneState; 2]) -> [Option<std::path::PathBuf>; 2] {
+    std::array::from_fn(|i| norte_vfs_local::vpath_to_native(panes[i].dir()).ok())
+}
+
 /// El *root view*: dos panes navegables, cuál tiene el foco, el tema cacheado y
 /// el canal hacia el hilo de sesión persistente (para relistar en cada `cd`).
 struct NorteGui {
@@ -1257,6 +1267,9 @@ impl NorteGui {
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
                 gui.cd(1, dir, cx);
+                // #106: los dos panes ya están en su dir, así que esto vigila
+                // lo correcto desde el primer instante.
+                gui.rewatch();
                 gui
             }
             Err(e) => {
@@ -1463,9 +1476,54 @@ impl NorteGui {
         .detach();
     }
 
+    /// Le dice al hilo de sesión qué vigilar ahora (#106).
+    ///
+    /// Se llama tras cada cambio de dir de cualquier pane. Es idempotente y
+    /// barato: `rewatch` compara con lo que ya vigilaba y no hace nada si no
+    /// cambió nada.
+    fn rewatch(&self) {
+        let _ = self
+            .cmds
+            .send(SessionCmd::Watch(watch_targets(&self.panes)));
+    }
+
+    /// Un cambio en un dir vigilado: re-lista los panes que se vigilan (#106).
+    ///
+    /// Por `refresh_dir` y no por `cd`, que es toda la diferencia: un refresco
+    /// que no pidió el usuario NO puede llevarse sus marcas por delante. El
+    /// coalescing de `relist_dirs` (#84) hace el resto si llega una ráfaga que
+    /// el debouncer no absorbió.
+    fn on_dirs_changed(&mut self, cx: &mut Context<Self>) {
+        for pane in 0..2 {
+            if norte_vfs_local::vpath_to_native(self.panes[pane].dir()).is_err() {
+                continue;
+            }
+            if self.panes[pane].loading() {
+                // Coalesce (#84), el mismo que `relist_dirs`: ya hay una list
+                // en vuelo. Duplicarla no solo la desperdicia — `refresh_dir`
+                // sube la generación, así que INVALIDA la que estaba a punto de
+                // aterrizar, y bajo escrituras externas sostenidas los listados
+                // se descartarían más rápido de lo que llegan. Se marca y se
+                // re-lista al aterrizar, que es cuando se sabe que el listado
+                // vio el árbol después del burst.
+                self.relist_pending[pane] = true;
+            } else {
+                let dir = self.panes[pane].dir().clone();
+                self.refresh_dir(pane, dir, cx);
+            }
+        }
+    }
+
     /// Aplica UN evento de sesión al estado.
     fn apply_event(&mut self, ev: SessionEvent, cx: &mut Context<Self>) {
         match ev {
+            SessionEvent::DirsChanged => self.on_dirs_changed(cx),
+            SessionEvent::WatchDegraded => {
+                self.keymap_error = Some(push_banner(
+                    self.keymap_error.take(),
+                    norte_i18n::t("status-watch-degraded"),
+                ));
+            }
             SessionEvent::Listed {
                 pane,
                 generation,
@@ -1505,6 +1563,7 @@ impl NorteGui {
                         // que la dedup de la hidratación caduca entera.
                         self.probed[pane].clear();
                         self.errors[pane] = None;
+
                         if !refilled {
                             // Solo el camino del `cd` mata el quick search vivo
                             // (`set_listing`); `refill` lo RE-APLICA, así que
@@ -1565,6 +1624,18 @@ impl NorteGui {
                         self.errors[pane] = Some(msg);
                     }
                 }
+                // #106: re-armar la vigilancia, pase lo que pase con el
+                // listado. Va aquí y no dentro de un brazo porque las dos
+                // formas de fallar el sitio son reales: un `cd` a un directorio
+                // que no se deja listar (permisos, un montaje que desapareció)
+                // deja el pane EN él con la lista vacía, y un refresco que gane
+                // la carrera a un `cd` aterriza con `refilled` puesto — en los
+                // dos casos el pane está en un sitio y el watcher en otro.
+                //
+                // Es barato incondicional: `rewatch` compara con lo que ya
+                // vigilaba bajo un lock y vuelve antes de tocar una syscall. La
+                // TUI lo hace igual, una vez por vuelta de bucle.
+                self.rewatch();
                 // Coalesce (#84): si se saltó un relist mientras este list volaba,
                 // re-relista ahora (una sola vez; el dir ya no está `loading`).
                 if self.relist_pending[pane] {
@@ -11614,6 +11685,15 @@ fn main() {
     };
     let _ = norte_i18n::force(lang);
 
+    // Roadmap ítem 9: al FICHERO y solo al fichero. Este binario no instalaba
+    // subscriber ninguno, así que hasta ahora todo `tracing::warn!` suyo —y el
+    // de todo `norte-core` corriendo bajo él— se descartaba mudo.
+    let comun = loaded.as_ref().ok().map(|c| &c.common);
+    norte_core::logging::init_to_file(norte_core::logging::LogConfig {
+        dir: comun.and_then(|c| c.log_dir.as_deref()),
+        retain: comun.and_then(|c| c.log_retain),
+    });
+
     // (`set_mod_key` ya corrió: es la primera sentencia de `main`.)
 
     application().run(move |cx: &mut App| {
@@ -12952,6 +13032,31 @@ mod tests {
         assert!(!refilled, "otro dir jamás va por refill");
         assert_eq!(pane.marks_len(), 0, "un cd limpia las marcas por diseño");
         assert_eq!(pane.dir(), &VPath::parse("mem:///otro").unwrap());
+    }
+
+    /// #106: qué dirs puede vigilar el watcher. Solo los LOCALES: un pane
+    /// remoto o de archivo no tiene inotify que pedir, y su refresco sigue
+    /// siendo manual — el mismo alcance que estrenó la TUI.
+    ///
+    /// Es la única parte de esta feature con una decisión dentro; lo que
+    /// cuelga de ella (recibir del canal y llamar a `refresh_dir`) son dos
+    /// líneas de vista, que en este crate no se testean por construcción.
+    #[test]
+    fn solo_los_panes_locales_se_vigilan() {
+        let local = super::PaneState::new(VPath::parse("file:///casa").unwrap(), Vec::new());
+        let remoto = super::PaneState::new(VPath::parse("sftp://h/casa").unwrap(), Vec::new());
+
+        let objetivos = super::watch_targets(&[local, remoto]);
+
+        assert_eq!(
+            objetivos[0].as_deref(),
+            Some(std::path::Path::new("/casa")),
+            "un pane `file://` se vigila por su ruta nativa"
+        );
+        assert_eq!(
+            objetivos[1], None,
+            "uno remoto no: no hay inotify que pedir"
+        );
     }
 
     /// #103: un `cd` al MISMO dir (F5 sobre el propio directorio, o un

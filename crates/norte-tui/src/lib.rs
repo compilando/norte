@@ -20,4 +20,3 @@ pub mod theme;
 pub mod tty;
 pub mod ui;
 pub mod viewer;
-pub mod watch;

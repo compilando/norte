@@ -316,10 +316,18 @@ pub(crate) fn parse_cd<R: Read + Seek>(
             resolve_extra(&extra, comp32, uncomp32, off32)
         else {
             stats.hostile_skipped += 1;
-            tracing::warn!(
-                name = ?String::from_utf8_lossy(&name_raw),
-                "extra zip64 con marcador sin valor: entrada omitida (hostil)"
-            );
+            // **`debug!` y sin el nombre, y eso es una decisión de tamaño.**
+            // Este `warn!` llevaba el nombre CRUDO de la entrada —hasta 64 KiB,
+            // elegidos por quien hizo el zip— y una entrada hostil mínima
+            // cuesta 46 bytes de contenedor. Mientras el log era una terminal
+            // efímera eso era ruido; desde que hay fichero (roadmap ítem 9) es
+            // amplificación: un zip de 50 MB puesto en un directorio que
+            // alguien mire —listar un archivo no pide confirmación— escribe
+            // cientos de MB en el log del día, y el escape de los bytes de
+            // control multiplica por seis. El total agregado sí se reporta
+            // (`hostile_skipped`), que es la señal operativa; el detalle por
+            // entrada vive en `debug`, como el resto de este parser ya dice.
+            tracing::debug!("extra zip64 con marcador sin valor: entrada omitida (hostil)");
             continue;
         };
         per_entry(CdEntry {

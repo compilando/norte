@@ -639,6 +639,78 @@ fn masked_and_capped(value: &str) -> String {
     truncated
 }
 
+/// El estado del log local (roadmap ítem 9): dónde está, cuánto ocupa, y si se
+/// puede escribir en él.
+///
+/// **Es la fila que convierte «hay logs» en «alguien que no seas tú puede
+/// reportar un fallo».** `doctor` es donde un usuario mira cuando algo va mal, y
+/// hasta ahora no había forma de que supiera que el fichero existe ni dónde.
+///
+/// Ninguno de sus estados es [`Severity::Error`], a propósito: una máquina sin
+/// directorio de estado, o con uno que no se deja escribir, FUNCIONA — solo no
+/// deja rastro. Un `Error` haría que `norte doctor` saliera distinto de cero
+/// (decisión 4) por algo que no rompe nada, y eso entrena a ignorar su código
+/// de salida.
+///
+/// `dir` es lo que resuelva [`norte_core::logging::log_dir`]; `None` = no hay
+/// directorio de estado en esta máquina.
+#[must_use]
+pub fn check_logs(dir: Option<&Path>) -> Vec<Finding> {
+    let Some(dir) = dir else {
+        return vec![Finding {
+            section: "logs",
+            severity: Severity::Warn,
+            code: "logs-no-state-dir",
+            detail: String::new(),
+        }];
+    };
+    // Escribible se comprueba INTENTÁNDOLO, no leyendo permisos: los permisos
+    // no cuentan ACLs, ni un montaje de solo lectura, ni SELinux. Se crea y se
+    // borra, que es exactamente lo que hará el appender.
+    //
+    // **`create_new`, jamás `fs::write`.** `write` es `O_TRUNC` y SIGUE
+    // symlinks: con un enlace plantado en el nombre de la sonda —fijo y
+    // predecible, así que no hay carrera que ganar— un `norte doctor` truncaba
+    // a cero lo que apuntara, y el `remove_file` de después borraba el ENLACE y
+    // no el destino, así que el fichero se quedaba vacío y la prueba
+    // desaparecía. `O_EXCL` se niega a seguir un enlace y se niega a pisar algo
+    // que ya exista, que es exactamente lo que hace falta aquí.
+    let sonda = dir.join(format!(".norte-doctor-probe.{}", std::process::id()));
+    let escribible = std::fs::create_dir_all(dir).is_ok()
+        && std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&sonda)
+            .is_ok();
+    // Un borrado que falle no se reporta: acaba de demostrarse que el
+    // directorio se deja escribir, así que el único resto posible es uno por
+    // pid, y el `create_new` de la próxima vez lo detectaría como no-escribible
+    // en vez de pisarlo — que es el lado seguro del error.
+    let _ = std::fs::remove_file(&sonda);
+    if !escribible {
+        return vec![Finding {
+            section: "logs",
+            severity: Severity::Warn,
+            code: "logs-unwritable",
+            detail: dir.display().to_string(),
+        }];
+    }
+    let bytes: u64 = match std::fs::read_dir(dir) {
+        Ok(rd) => rd
+            .flatten()
+            .filter_map(|e| e.metadata().ok())
+            .map(|m| m.len())
+            .sum(),
+        Err(_) => 0,
+    };
+    vec![Finding {
+        section: "logs",
+        severity: Severity::Ok,
+        code: "logs-ok",
+        detail: format!("{} ({bytes} bytes)", dir.display()),
+    }]
+}
+
 /// Checks `config_dir/connections.toml` (decision 2: side-effect-free v1 —
 /// secret PRESENCE only, never the value; keyring/age are NOT probed here,
 /// that would touch the OS keychain or prompt).
@@ -1709,5 +1781,64 @@ max = 10
         assert_eq!(f.severity, Severity::Error);
         assert!(!f.detail.contains("hunter2"), "{}", f.detail);
         assert!(!f.detail.contains('"'), "{}", f.detail);
+    }
+
+    /// El log es lo que hace posible un reporte de bug de alguien que no somos
+    /// nosotros, así que lo primero que tiene que decir `doctor` es DÓNDE está.
+    #[test]
+    fn doctor_nombra_el_fichero_de_log() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let logs = dir.path().join("logs");
+        std::fs::create_dir_all(&logs).expect("logs");
+        std::fs::write(logs.join("norte.log.2026-08-16"), b"una linea\n").expect("log");
+
+        let hallazgos = check_logs(Some(&logs));
+        let f = una(&hallazgos, "logs");
+        assert_eq!(f.severity, Severity::Ok);
+        assert_eq!(f.code, "logs-ok");
+        assert!(
+            f.detail.contains(&logs.display().to_string()),
+            "la fila lleva la RUTA: {}",
+            f.detail
+        );
+    }
+
+    /// Un directorio de estado que no existe es una DEGRADACIÓN, no una avería:
+    /// la máquina funciona, simplemente no deja rastro. `Error` haría que
+    /// `norte doctor` saliera distinto de cero por algo que no rompe nada
+    /// (decisión 4).
+    #[test]
+    fn sin_directorio_de_estado_es_aviso_y_no_error() {
+        let hallazgos = check_logs(None);
+        let f = una(&hallazgos, "logs");
+        assert_eq!(f.severity, Severity::Warn);
+        assert_eq!(f.code, "logs-no-state-dir");
+    }
+
+    /// Y un directorio que no se deja escribir tampoco es una avería: se avisa
+    /// y el programa arranca igual, que es lo que hace `logging::init_to_file`.
+    #[cfg(unix)]
+    #[test]
+    fn un_directorio_no_escribible_avisa() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("tmp");
+        let logs = dir.path().join("logs");
+        std::fs::create_dir_all(&logs).expect("logs");
+        std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o500)).expect("chmod");
+
+        let hallazgos = check_logs(Some(&logs));
+        let f = una(&hallazgos, "logs");
+        // Restaurar antes de cualquier assert: si falla, el TempDir tiene que
+        // poder borrarse igual.
+        std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        assert_eq!(f.severity, Severity::Warn);
+        assert_eq!(f.code, "logs-unwritable");
+    }
+
+    /// La única fila de `section` en `findings`.
+    fn una<'a>(findings: &'a [Finding], section: &str) -> &'a Finding {
+        let filas: Vec<&Finding> = findings.iter().filter(|f| f.section == section).collect();
+        assert_eq!(filas.len(), 1, "una fila de {section}: {findings:?}");
+        filas[0]
     }
 }

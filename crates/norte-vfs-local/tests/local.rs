@@ -1344,3 +1344,143 @@ async fn a_read_only_ext4_directory_is_answered_without_writing() {
         "y sin +F no expande"
     );
 }
+
+/// Roadmap ítem 8: un fichero con un agujero se copia SIN materializarlo.
+///
+/// Las dos aserciones dicen cosas distintas y las dos hacen falta: los bytes
+/// son idénticos (que es la corrección) y los BLOQUES no (que es lo único que
+/// demuestra que la optimización ocurrió). Sin la segunda, el test pasaría
+/// igual con la implementación de antes.
+#[cfg(unix)]
+#[tokio::test]
+async fn un_destino_con_agujero_no_se_materializa() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    // 64 MiB de agujero: el caso de la imagen de VM que nombra el roadmap.
+    const HUECO: u64 = 64 * 1024 * 1024;
+
+    let (p, root, base) = provider();
+    let f = std::fs::File::create(base.join("origen.img")).expect("crear");
+    f.set_len(HUECO).expect("agujero");
+    drop(f);
+
+    let mut sink = p.write(&child(&root, b"destino.img")).await.expect("write");
+    let mut leido = p
+        .read(&child(&root, b"origen.img"), None)
+        .await
+        .expect("read");
+    while let Some(chunk) = leido.next().await {
+        sink.write(chunk.expect("chunk")).await.expect("escribe");
+    }
+    sink.commit().await.expect("commit");
+
+    let md = std::fs::metadata(base.join("destino.img")).expect("stat");
+    assert_eq!(md.len(), HUECO, "el tamaño LÓGICO se conserva entero");
+    assert_eq!(
+        std::fs::read(base.join("destino.img")).expect("leer"),
+        vec![0u8; usize::try_from(HUECO).expect("cabe")],
+        "y los bytes que se leen son los mismos"
+    );
+    assert!(
+        md.blocks() * 512 < HUECO / 8,
+        "pero el disco no los guarda: {} bloques para {HUECO} bytes",
+        md.blocks()
+    );
+}
+
+/// El caso que la optimización NO puede romper: ceros que alguien escribió a
+/// propósito, en medio de datos. Que el destino salga disperso está permitido;
+/// que un byte cambie, no.
+#[tokio::test]
+async fn unos_ceros_en_medio_se_leen_igual() {
+    let (p, root, _base) = provider();
+    let mut contenido = vec![b'a'; 1024];
+    contenido.extend(std::iter::repeat_n(0u8, 256 * 1024));
+    contenido.extend(std::iter::repeat_n(b'z', 1024));
+
+    let mut sink = p.write(&child(&root, b"mixto.bin")).await.expect("write");
+    sink.write(Bytes::from(contenido.clone()))
+        .await
+        .expect("escribe");
+    sink.commit().await.expect("commit");
+
+    let mut leido = p
+        .read(&child(&root, b"mixto.bin"), None)
+        .await
+        .expect("read");
+    let mut out = Vec::new();
+    while let Some(chunk) = leido.next().await {
+        out.extend_from_slice(&chunk.expect("chunk"));
+    }
+    assert_eq!(out, contenido, "byte a byte, sin excepciones");
+}
+
+/// Y la reanudación sigue sabiendo por dónde iba: el agujero tiene que contar
+/// en la LONGITUD del staging desde que se escribe, no desde el commit — es lo
+/// que leen `open_resumable` (su `already`) y `partial_digest`. Con la longitud
+/// aplazada, un parcial que acabara en agujero diría tener menos bytes de los
+/// que tiene y el reintento escribiría encima de lo ya hecho.
+#[tokio::test]
+async fn un_agujero_cuenta_en_el_offset_de_reanudacion() {
+    let (p, root, _base) = provider();
+    let destino = child(&root, b"resume.bin");
+
+    let (mut sink, already) = p.open_resumable(&destino).await.expect("abre");
+    assert_eq!(already, 0, "staging fresco");
+    sink.write(Bytes::from(vec![0u8; 128 * 1024]))
+        .await
+        .expect("todo ceros");
+    sink.keep().await.expect("conserva el parcial");
+
+    let (_sink, already) = p.open_resumable(&destino).await.expect("reabre");
+    assert_eq!(
+        already,
+        128 * 1024,
+        "el agujero YA cuenta: reanudar desde 0 recopiaría lo hecho"
+    );
+}
+
+/// **El caso que la escritura dispersa casi rompe, y es corrupción silenciosa.**
+///
+/// Un staging reabierto para reanudar se abre con `O_APPEND`, y `O_APPEND` NO
+/// coloca el offset al final: lo deja en 0 y solo se reposiciona justo antes de
+/// cada `write`. Así que un salto RELATIVO sobre un parcial de N bytes saltaba
+/// desde 0, y el `set_len` que venía detrás no extendía — TRUNCABA, tirando lo
+/// ya copiado sin que nada lo comprobara (el commit publica y ya está).
+///
+/// Es justo el caso corriente que la feature persigue: una imagen de disco,
+/// interrumpida una vez, reanudada — y una imagen es mayormente ceros, así que
+/// el primer chunk tras reanudar siendo todo ceros es lo NORMAL, no el borde.
+#[tokio::test]
+async fn reanudar_con_un_chunk_de_ceros_no_se_come_lo_ya_copiado() {
+    let (p, root, base) = provider();
+    let destino = child(&root, b"reanudado.img");
+
+    // Primer tramo: datos de verdad, y se conserva el parcial.
+    let (mut sink, already) = p.open_resumable(&destino).await.expect("abre");
+    assert_eq!(already, 0);
+    sink.write(Bytes::from(vec![b'a'; 64 * 1024]))
+        .await
+        .expect("datos");
+    sink.keep().await.expect("conserva");
+
+    // Se reanuda, y lo primero que llega es un hueco.
+    let (mut sink, already) = p.open_resumable(&destino).await.expect("reabre");
+    assert_eq!(already, 64 * 1024, "el parcial sigue entero");
+    sink.write(Bytes::from(vec![0u8; 256 * 1024]))
+        .await
+        .expect("ceros");
+    sink.write(Bytes::from(vec![b'z'; 1024]))
+        .await
+        .expect("cola");
+    sink.commit().await.expect("commit");
+
+    let mut esperado = vec![b'a'; 64 * 1024];
+    esperado.extend(std::iter::repeat_n(0u8, 256 * 1024));
+    esperado.extend(std::iter::repeat_n(b'z', 1024));
+    assert_eq!(
+        std::fs::read(base.join("reanudado.img")).expect("leer"),
+        esperado,
+        "los bytes de antes de reanudar tienen que seguir ahí"
+    );
+}

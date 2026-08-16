@@ -355,8 +355,11 @@ impl Provider for PluginProvider {
                         // stage-2b: contarlo y exponerlo por `list_skipped`.
                         let name = e.name;
                         let Ok(seg) = Segment::new(name.clone()) else {
-                            tracing::warn!(
-                                name = ?String::from_utf8_lossy(&name),
+                            // Sin el nombre y en `debug`, por lo mismo que su
+                            // gemelo de `zip_cd`: es un byte string elegido por
+                            // el plugin, de longitud que decide él, y desde el
+                            // ítem 9 del roadmap el log persiste en disco.
+                            tracing::debug!(
                                 "nombre del provider no representable como VPath: omitido"
                             );
                             continue;
