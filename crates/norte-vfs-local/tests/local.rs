@@ -1439,3 +1439,48 @@ async fn un_agujero_cuenta_en_el_offset_de_reanudacion() {
         "el agujero YA cuenta: reanudar desde 0 recopiaría lo hecho"
     );
 }
+
+/// **El caso que la escritura dispersa casi rompe, y es corrupción silenciosa.**
+///
+/// Un staging reabierto para reanudar se abre con `O_APPEND`, y `O_APPEND` NO
+/// coloca el offset al final: lo deja en 0 y solo se reposiciona justo antes de
+/// cada `write`. Así que un salto RELATIVO sobre un parcial de N bytes saltaba
+/// desde 0, y el `set_len` que venía detrás no extendía — TRUNCABA, tirando lo
+/// ya copiado sin que nada lo comprobara (el commit publica y ya está).
+///
+/// Es justo el caso corriente que la feature persigue: una imagen de disco,
+/// interrumpida una vez, reanudada — y una imagen es mayormente ceros, así que
+/// el primer chunk tras reanudar siendo todo ceros es lo NORMAL, no el borde.
+#[tokio::test]
+async fn reanudar_con_un_chunk_de_ceros_no_se_come_lo_ya_copiado() {
+    let (p, root, base) = provider();
+    let destino = child(&root, b"reanudado.img");
+
+    // Primer tramo: datos de verdad, y se conserva el parcial.
+    let (mut sink, already) = p.open_resumable(&destino).await.expect("abre");
+    assert_eq!(already, 0);
+    sink.write(Bytes::from(vec![b'a'; 64 * 1024]))
+        .await
+        .expect("datos");
+    sink.keep().await.expect("conserva");
+
+    // Se reanuda, y lo primero que llega es un hueco.
+    let (mut sink, already) = p.open_resumable(&destino).await.expect("reabre");
+    assert_eq!(already, 64 * 1024, "el parcial sigue entero");
+    sink.write(Bytes::from(vec![0u8; 256 * 1024]))
+        .await
+        .expect("ceros");
+    sink.write(Bytes::from(vec![b'z'; 1024]))
+        .await
+        .expect("cola");
+    sink.commit().await.expect("commit");
+
+    let mut esperado = vec![b'a'; 64 * 1024];
+    esperado.extend(std::iter::repeat_n(0u8, 256 * 1024));
+    esperado.extend(std::iter::repeat_n(b'z', 1024));
+    assert_eq!(
+        std::fs::read(base.join("reanudado.img")).expect("leer"),
+        esperado,
+        "los bytes de antes de reanudar tienen que seguir ahí"
+    );
+}

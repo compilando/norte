@@ -1495,7 +1495,19 @@ impl NorteGui {
     /// el debouncer no absorbió.
     fn on_dirs_changed(&mut self, cx: &mut Context<Self>) {
         for pane in 0..2 {
-            if norte_vfs_local::vpath_to_native(self.panes[pane].dir()).is_ok() {
+            if norte_vfs_local::vpath_to_native(self.panes[pane].dir()).is_err() {
+                continue;
+            }
+            if self.panes[pane].loading() {
+                // Coalesce (#84), el mismo que `relist_dirs`: ya hay una list
+                // en vuelo. Duplicarla no solo la desperdicia — `refresh_dir`
+                // sube la generación, así que INVALIDA la que estaba a punto de
+                // aterrizar, y bajo escrituras externas sostenidas los listados
+                // se descartarían más rápido de lo que llegan. Se marca y se
+                // re-lista al aterrizar, que es cuando se sabe que el listado
+                // vio el árbol después del burst.
+                self.relist_pending[pane] = true;
+            } else {
                 let dir = self.panes[pane].dir().clone();
                 self.refresh_dir(pane, dir, cx);
             }
@@ -1551,13 +1563,7 @@ impl NorteGui {
                         // que la dedup de la hidratación caduca entera.
                         self.probed[pane].clear();
                         self.errors[pane] = None;
-                        // #106: el dir del pane cambia AQUÍ y no en el `cd`
-                        // —hasta que el listado aterriza, el pane sigue donde
-                        // estaba—, así que aquí es donde se re-arma lo que se
-                        // vigila. Hacerlo en el `cd` vigilaría el dir viejo.
-                        if !refilled {
-                            self.rewatch();
-                        }
+
                         if !refilled {
                             // Solo el camino del `cd` mata el quick search vivo
                             // (`set_listing`); `refill` lo RE-APLICA, así que
@@ -1618,6 +1624,18 @@ impl NorteGui {
                         self.errors[pane] = Some(msg);
                     }
                 }
+                // #106: re-armar la vigilancia, pase lo que pase con el
+                // listado. Va aquí y no dentro de un brazo porque las dos
+                // formas de fallar el sitio son reales: un `cd` a un directorio
+                // que no se deja listar (permisos, un montaje que desapareció)
+                // deja el pane EN él con la lista vacía, y un refresco que gane
+                // la carrera a un `cd` aterriza con `refilled` puesto — en los
+                // dos casos el pane está en un sitio y el watcher en otro.
+                //
+                // Es barato incondicional: `rewatch` compara con lo que ya
+                // vigilaba bajo un lock y vuelve antes de tocar una syscall. La
+                // TUI lo hace igual, una vez por vuelta de bucle.
+                self.rewatch();
                 // Coalesce (#84): si se saltó un relist mientras este list volaba,
                 // re-relista ahora (una sola vez; el dir ya no está `loading`).
                 if self.relist_pending[pane] {
@@ -11670,16 +11688,11 @@ fn main() {
     // Roadmap ítem 9: al FICHERO y solo al fichero. Este binario no instalaba
     // subscriber ninguno, así que hasta ahora todo `tracing::warn!` suyo —y el
     // de todo `norte-core` corriendo bajo él— se descartaba mudo.
-    //
-    // El guard vive hasta el final de `main` (ver `logging::init`): el writer
-    // es no bloqueante y vacía la cola al soltarlo, así que soltarlo antes
-    // tiraría las últimas líneas, que son las del fallo que se investiga.
-    let _log_guard = norte_core::logging::init_to_file(
-        loaded
-            .as_ref()
-            .ok()
-            .and_then(|c| c.common.log_dir.as_deref()),
-    );
+    let comun = loaded.as_ref().ok().map(|c| &c.common);
+    norte_core::logging::init_to_file(norte_core::logging::LogConfig {
+        dir: comun.and_then(|c| c.log_dir.as_deref()),
+        retain: comun.and_then(|c| c.log_retain),
+    });
 
     // (`set_mod_key` ya corrió: es la primera sentencia de `main`.)
 

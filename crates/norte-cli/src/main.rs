@@ -629,7 +629,15 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // del fichero es no bloqueante y su hilo vacía la cola al soltarlo, así que
     // dejarlo caer aquí tiraría justo las últimas líneas — las del fallo que
     // alguien está diagnosticando.
-    let _log_guard = norte_core::logging::init();
+    // `[log]` sale de la config, así que se carga ANTES del subscriber. Es una
+    // lectura de ficheros pequeños y sin ella la CLI y el daemon escribirían en
+    // un sitio distinto del que escriben los frontends — con `norte doctor`
+    // señalando uno de los dos, que es peor que no señalar ninguno.
+    let cfg_log = norte_config::load(&norte_config::standard_layers()).ok();
+    norte_core::logging::init(norte_core::logging::LogConfig {
+        dir: cfg_log.as_ref().and_then(|c| c.log_dir.as_deref()),
+        retain: cfg_log.as_ref().and_then(|c| c.log_retain),
+    });
 
     // El daemon construye SU PROPIO engine (con journal+policy, M3-4): el
     // embebido de abajo es solo para el resto de subcomandos.
@@ -1483,6 +1491,7 @@ async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
     // `doctor::check_*` do synchronous fs I/O (norte-config's own design —
     // see its crate doc); never call them directly on the async executor
     // (rule 2).
+    let layers_log = layers.clone();
     let findings = tokio::task::spawn_blocking(move || {
         let env = |k: &str| std::env::var_os(k);
         let mut findings = doctor::check_config(&layers, &env);
@@ -1490,10 +1499,16 @@ async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
         findings.extend(doctor::check_keymaps(&layers));
         findings.extend(doctor::check_plugins(&config_dir));
         findings.extend(doctor::check_connections(&config_dir, &env));
-        // Roadmap ítem 9: dónde está el log. Sin esta fila, el fichero existe
-        // y nadie sabe pedirlo cuando hace falta.
+        // Roadmap ítem 9: dónde está el log. Sin esta fila el fichero existe y
+        // nadie sabe pedirlo cuando hace falta — y tiene que resolver el MISMO
+        // `[log] dir` que resuelven los frontends: apuntar al default mientras
+        // el log de verdad está en otro sitio es peor que no decir nada.
+        let dir_log = norte_config::load(&layers_log)
+            .ok()
+            .and_then(|c| c.log_dir)
+            .filter(|d| d.is_absolute());
         findings.extend(doctor::check_logs(
-            norte_core::logging::log_dir(None).as_deref(),
+            norte_core::logging::log_dir(dir_log.as_deref()).as_deref(),
         ));
         findings
     })

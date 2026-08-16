@@ -84,7 +84,7 @@ tracing-subscriber.workspace = true
 # poda por retención y el guard del writer no bloqueante — más código que la
 # propia feature, y en el camino que tiene que funcionar cuando todo lo demás
 # ya ha fallado (regla 8).
-tracing-appender = "0.2"
+tracing-appender.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # volumes::linux (plan 2026-08-10): `statvfs`. See the workspace Cargo.toml

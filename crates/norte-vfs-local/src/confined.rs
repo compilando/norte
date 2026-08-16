@@ -899,6 +899,13 @@ impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
 struct ConfinedSink {
     dir: Option<OwnedFd>,
     file: Option<std::fs::File>,
+    /// Bytes ya entregados, agujeros incluidos: el ancla de
+    /// [`crate::provider::write_maybe_sparse`]. Esta raíz abre su staging con
+    /// `O_CREAT | O_EXCL`, así que siempre empieza en cero — pero el campo
+    /// existe igual, porque la alternativa es preguntarle la posición al
+    /// descriptor, y ése es exactamente el error que el sink de al lado
+    /// cometió.
+    pos: u64,
     staging: CString,
     final_name: CString,
     /// `true` cuando commit/abort ya se ocuparon del staging (Drop no toca).
@@ -910,6 +917,7 @@ impl ConfinedSink {
         Self {
             dir: Some(s.dir),
             file: Some(s.file),
+            pos: 0,
             staging: s.staging,
             final_name: s.final_name,
             done: false,
@@ -921,15 +929,17 @@ impl ConfinedSink {
 impl norte_vfs::ByteSink for ConfinedSink {
     async fn write(&mut self, chunk: bytes::Bytes) -> Result<(), Error> {
         let file = self.file.take().ok_or(Error::Io { retryable: false })?;
-        let (file, res) = tokio::task::spawn_blocking(move || {
+        let mut pos = self.pos;
+        let (file, pos, res) = tokio::task::spawn_blocking(move || {
             let mut file = file;
-            let res = crate::provider::write_maybe_sparse(&mut file, &chunk)
+            let res = crate::provider::write_maybe_sparse(&mut file, &mut pos, &chunk)
                 .map_err(|e| crate::provider::map_io(&e));
-            (file, res)
+            (file, pos, res)
         })
         .await
         .map_err(|_| Error::Internal { panic: true })?;
         self.file = Some(file);
+        self.pos = pos;
         res
     }
 

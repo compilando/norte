@@ -9,6 +9,20 @@
 //! El crate NO conoce ningún framework de render: opera sobre bytes crudos y
 //! [`norte_proto`] y devuelve `String` + un flag `hostil`; el BADGE que marca
 //! un nombre alterado lo aplica cada frontend en su capa de render.
+//!
+//! # «Pura» dejó de ser exacto, y conviene decirlo
+//!
+//! Desde el ítem 7 del roadmap post-alpha vive aquí [`watch`], que vigila
+//! directorios: trae `notify`, una dependencia de `tokio` y una task de fondo.
+//! No es presentación. Está aquí porque es INFRAESTRUCTURA DE FRONTEND
+//! independiente del toolkit —lo mismo que el resto del crate, con otra clase
+//! de contenido— y porque la alternativa era un crate cuyo contenido entero es
+//! un fichero con dos consumidores.
+//!
+//! La regla que sigue valiendo, y que es la que importa, es la de la regla dura
+//! 7: aquí no hay lógica de NEGOCIO. Vigilar un directorio no decide nada sobre
+//! los ficheros; dice que algo cambió y quien decide qué hacer es el frontend,
+//! por el mismo camino que su refresco manual.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

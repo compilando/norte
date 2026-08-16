@@ -667,8 +667,25 @@ pub fn check_logs(dir: Option<&Path>) -> Vec<Finding> {
     // Escribible se comprueba INTENTÁNDOLO, no leyendo permisos: los permisos
     // no cuentan ACLs, ni un montaje de solo lectura, ni SELinux. Se crea y se
     // borra, que es exactamente lo que hará el appender.
-    let sonda = dir.join(".norte-doctor-probe");
-    let escribible = std::fs::create_dir_all(dir).is_ok() && std::fs::write(&sonda, b"").is_ok();
+    //
+    // **`create_new`, jamás `fs::write`.** `write` es `O_TRUNC` y SIGUE
+    // symlinks: con un enlace plantado en el nombre de la sonda —fijo y
+    // predecible, así que no hay carrera que ganar— un `norte doctor` truncaba
+    // a cero lo que apuntara, y el `remove_file` de después borraba el ENLACE y
+    // no el destino, así que el fichero se quedaba vacío y la prueba
+    // desaparecía. `O_EXCL` se niega a seguir un enlace y se niega a pisar algo
+    // que ya exista, que es exactamente lo que hace falta aquí.
+    let sonda = dir.join(format!(".norte-doctor-probe.{}", std::process::id()));
+    let escribible = std::fs::create_dir_all(dir).is_ok()
+        && std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&sonda)
+            .is_ok();
+    // Un borrado que falle no se reporta: acaba de demostrarse que el
+    // directorio se deja escribir, así que el único resto posible es uno por
+    // pid, y el `create_new` de la próxima vez lo detectaría como no-escribible
+    // en vez de pisarlo — que es el lado seguro del error.
     let _ = std::fs::remove_file(&sonda);
     if !escribible {
         return vec![Finding {
@@ -678,13 +695,14 @@ pub fn check_logs(dir: Option<&Path>) -> Vec<Finding> {
             detail: dir.display().to_string(),
         }];
     }
-    let bytes: u64 = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| e.metadata().ok())
-        .map(|m| m.len())
-        .sum();
+    let bytes: u64 = match std::fs::read_dir(dir) {
+        Ok(rd) => rd
+            .flatten()
+            .filter_map(|e| e.metadata().ok())
+            .map(|m| m.len())
+            .sum(),
+        Err(_) => 0,
+    };
     vec![Finding {
         section: "logs",
         severity: Severity::Ok,

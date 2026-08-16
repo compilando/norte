@@ -203,27 +203,59 @@ fn archive_limits_ultimo_gana_y_proyecto_no_los_toca() {
     );
 }
 
-/// Roadmap ítem 9: este binario dibuja en la pantalla alternativa, así que su
-/// diagnóstico va al FICHERO y stderr se queda limpio. Instalar aquí el
-/// `logging::init` de la CLI —el que sí lleva capa de stderr— rompería la
-/// pantalla en cuanto algo avisara.
+/// Roadmap ítem 9, y las DOS mitades son la aserción: lo que este binario
+/// diagnostica llega al FICHERO, y NO a stderr.
 ///
-/// Es una RED de seguridad, no un test que fallara antes: hasta el ítem 9 la
-/// TUI no instalaba subscriber ninguno, así que stderr ya estaba limpio. Lo que
-/// pinnea es que siga estándolo ahora que sí hay uno.
+/// La primera versión de este test lanzaba `--version`, que sale treinta líneas
+/// ANTES de que se instale el subscriber — así que el proceso bajo prueba no
+/// instalaba ninguno y la aserción se cumplía sola, incluido si alguien cambiara
+/// `init_to_file` por el `init` de la CLI, que es justo la regresión que decía
+/// pinnear. Ahora se le da un `[ai]` roto, que es un aviso real por un camino
+/// que sí carga config, instala el subscriber y sale sin abrir la TTY.
 #[test]
-fn el_frontend_de_terminal_no_escribe_en_stderr() {
-    let dir = tempfile::tempdir().expect("tmp");
+fn el_frontend_de_terminal_loguea_al_fichero_y_no_a_la_pantalla() {
+    let estado = tempfile::tempdir().expect("tmp");
+    let config = tempfile::tempdir().expect("tmp");
+    // Config VÁLIDA con un proveedor de IA que no resuelve: parsea (el tipo de
+    // proveedor no se valida al leer, a propósito — lo rechaza la puerta de la
+    // IA al usarlo, donde el diagnóstico puede nombrarlo), así que se llega a
+    // instalar el subscriber y el aviso sale por `tracing::warn!`. Uno que no
+    // parseara abortaría por stderr ANTES, que es correcto y no es esto.
+    std::fs::write(
+        config.path().join("norte.toml"),
+        "[ai]\nenabled = true\nrename_provider = \"x\"\n\n\
+         [ai.providers.x]\nkind = \"inventado\"\nmodel = \"m\"\n",
+    )
+    .expect("config");
+
     let salida = std::process::Command::new(env!("CARGO_BIN_EXE_ntc"))
-        .arg("--version")
-        .env("XDG_STATE_HOME", dir.path())
-        .env("RUST_LOG", "debug")
+        .arg("--pick")
+        .arg(estado.path())
+        .env("XDG_STATE_HOME", estado.path())
+        .env("NORTE_CONFIG_DIR", config.path())
+        .env("RUST_LOG", "warn")
         .output()
         .expect("ejecuta");
 
+    // El proceso muere al no encontrar TTY, y ese error SÍ va a stderr a
+    // propósito: es lo que le dice al usuario por qué no arrancó. Lo que no
+    // puede aparecer ahí es el DIAGNÓSTICO, que es lo que rompería la pantalla
+    // si hubiera pantalla.
+    let stderr = String::from_utf8_lossy(&salida.stderr).into_owned();
     assert!(
-        salida.stderr.is_empty(),
-        "stderr tiene que quedar limpio: {}",
-        String::from_utf8_lossy(&salida.stderr)
+        !stderr.contains("proveedor de IA no disponible"),
+        "el aviso no puede salir por la pantalla: {stderr}"
+    );
+
+    // Y la otra mitad: el aviso ESTÁ, en el fichero.
+    let logs = estado.path().join("norte").join("logs");
+    let texto: String = std::fs::read_dir(&logs)
+        .unwrap_or_else(|e| panic!("no hay directorio de logs en {logs:?}: {e}"))
+        .flatten()
+        .map(|f| std::fs::read_to_string(f.path()).unwrap_or_default())
+        .collect();
+    assert!(
+        texto.contains("proveedor de IA no disponible"),
+        "el aviso tiene que estar en el log: {texto}"
     );
 }

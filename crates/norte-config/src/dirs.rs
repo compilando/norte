@@ -129,13 +129,25 @@ pub fn config_dir() -> PathBuf {
 #[doc(hidden)]
 #[must_use]
 pub fn state_dir_on(windows: bool, get: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    // Una variable VACÍA es ausente, en las tres. Sin este filtro, `HOME=""`
+    // devolvía `.local/state/norte` RELATIVO al cwd — y el cwd de un gestor de
+    // ficheros es el directorio desde el que lo lanzaste, a menudo un
+    // repositorio. Como `state_dir` decide también dónde vive
+    // `lua-trust.toml`, eso dejaba que un repo hostil trajera su propio almacén
+    // de confianza pre-aprobando su `.norte/init.lua`, y el prompt de TOFU no
+    // aparecía nunca. Es el mismo peligro que ADR 0035 C1 documenta para el
+    // directorio de config, con la misma respuesta.
     if windows {
-        return get("LOCALAPPDATA").map(|d| PathBuf::from(d).join("norte").join("state"));
+        return get("LOCALAPPDATA")
+            .filter(|v| !v.is_empty())
+            .map(|d| PathBuf::from(d).join("norte").join("state"));
     }
     if let Some(xdg) = get("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(xdg).join("norte"));
     }
-    get("HOME").map(|h| PathBuf::from(h).join(".local/state/norte"))
+    get("HOME")
+        .filter(|v| !v.is_empty())
+        .map(|h| PathBuf::from(h).join(".local/state/norte"))
 }
 
 /// El directorio de ESTADO del usuario: `$XDG_STATE_HOME/norte`,
@@ -158,7 +170,15 @@ pub fn state_dir_on(windows: bool, get: &impl Fn(&str) -> Option<OsString>) -> O
 /// ```
 #[must_use]
 pub fn state_dir() -> Option<PathBuf> {
-    state_dir_on(cfg!(windows), &|k| std::env::var_os(k))
+    state_dir_on(cfg!(windows), &|k| std::env::var_os(k)).or_else(|| {
+        // Paridad con `user_config_dir`: sin variables de entorno se le
+        // pregunta al SO (getpwuid_r en unix, el perfil en Windows). Sin esto,
+        // un daemon sin `HOME` —unidad de systemd, cron, contenedor— se
+        // quedaría sin directorio de estado, que es fail-closed para el almacén
+        // de confianza pero también deja al log sin sitio.
+        #[allow(deprecated)]
+        std::env::home_dir().map(|h| h.join(".local/state/norte"))
+    })
 }
 
 /// Test seam behind [`standard_layers_from`]: same layering, but with the
@@ -257,6 +277,11 @@ mod tests {
         );
         // Y un entorno pelado no inventa nada: el caller degrada con aviso.
         assert_eq!(state_dir_on(false, &env(&[])), None);
+        // `HOME` vacío es AUSENTE, no una ruta relativa al cwd: ahí acaba
+        // también `lua-trust.toml`, y un almacén de confianza dentro del árbol
+        // de trabajo lo escribe el repositorio que estés mirando.
+        assert_eq!(state_dir_on(false, &env(&[("HOME", "")])), None);
+        assert_eq!(state_dir_on(true, &env(&[("LOCALAPPDATA", "")])), None);
     }
 
     #[test]

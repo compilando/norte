@@ -1796,9 +1796,10 @@ async fn main() -> Result<()> {
     // significa que un `--help`/`--version` —que salen antes— no deja rastro.
     // Correcto: no hacen nada que merezca un log.
     //
-    // El guard se sostiene hasta el final de `main` (ver `logging::init`): el
-    // writer es no bloqueante y vacía la cola al soltarlo.
-    let _log_guard = norte_core::logging::init_to_file(cfg.common.log_dir.as_deref());
+    norte_core::logging::init_to_file(norte_core::logging::LogConfig {
+        dir: cfg.common.log_dir.as_deref(),
+        retain: cfg.common.log_retain,
+    });
     let (browse_eff, viewer_eff, dialog_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
     // Bindings `lua:` descartados del keymap.toml de PROYECTO (seguridad,
     // review M4 Lua): se avisa tras crear la App, jamás descarte mudo. El

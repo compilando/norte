@@ -1599,6 +1599,8 @@ impl Provider for LocalProvider {
 
         Ok(Box::new(LocalSink {
             file: Some(file),
+            // Staging recién creado: se empieza en cero.
+            pos: 0,
             partial: partial_native,
             final_path: final_native,
             done: false,
@@ -1680,6 +1682,10 @@ impl Provider for LocalProvider {
         Ok((
             Box::new(LocalSink {
                 file: Some(file),
+                // REANUDANDO: la posición es lo que ya hay, y no lo que diga el
+                // descriptor — se abrió con `O_APPEND`, que deja el offset en 0
+                // hasta la primera escritura (ver `write_maybe_sparse`).
+                pos: already,
                 partial: partial_native,
                 final_path: final_native,
                 done: false,
@@ -1905,41 +1911,67 @@ fn same_node(_from_md: &std::fs::Metadata, _to_md: &std::fs::Metadata) -> bool {
 
 /// Escribe `chunk` dejando AGUJERO donde es todo ceros (roadmap ítem 8).
 ///
-/// Un chunk entero de ceros no se escribe: se salta la posición y se fija la
-/// longitud. Quien decide si eso es un agujero de verdad es el filesystem
-/// —ext4, XFS y APFS sí; uno que no los tenga asigna al escribir y sale igual
-/// de correcto—, y lo que se lee después son los mismos bytes en los dos casos.
+/// Un chunk entero de ceros no se escribe: se extiende la longitud y se coloca
+/// la posición al final. Quien decide si eso es un agujero de verdad es el
+/// filesystem —ext4, XFS y APFS sí; uno que no los tenga asigna al escribir y
+/// sale igual de correcto—, y lo que se lee después son los mismos bytes en los
+/// dos casos.
 ///
-/// **La longitud se fija AQUÍ y no en el commit**, que es la parte que no se ve
-/// venir: `open_resumable` deriva su `already` del tamaño del staging y
-/// `partial_digest` lee sus primeros `len` bytes. Con la longitud aplazada, un
-/// parcial que acabara en agujero diría tener menos bytes de los que tiene, y
-/// el reintento escribiría encima de lo ya hecho.
+/// **`pos` lo lleva el sink y NO se pregunta al descriptor**, que es la parte
+/// donde esto se rompió una vez y de la peor manera. La primera versión saltaba
+/// con `SeekFrom::Current` y fijaba la longitud con lo que devolviera el salto,
+/// apoyándose en que el sink escribe secuencialmente desde el final. Es falso
+/// para el sink REANUDADO: se abre con `O_APPEND`, y `O_APPEND` no coloca el
+/// offset al final al abrir —lo deja en 0 y solo se reposiciona justo antes de
+/// cada `write`—, así que sobre un parcial de N bytes el salto arrancaba de 0 y
+/// el `set_len` truncaba en vez de extender. Se comía lo ya copiado, el commit
+/// lo publicaba y nadie lo comprobaba. Con `pos` explícito la invariante deja
+/// de ser una afirmación en un comentario y pasa a ser cierta por construcción:
+/// `pos` solo crece, así que el `set_len` solo puede extender.
+///
+/// La longitud se fija SOBRE LA MARCHA y no en el commit: `open_resumable`
+/// deriva su `already` del tamaño del staging y `partial_digest` lee sus
+/// primeros bytes. Con la longitud aplazada, un parcial que acabara en agujero
+/// diría tener menos bytes de los que tiene.
 ///
 /// Límite honesto: la unidad es el CHUNK. Un agujero más pequeño que un chunk,
 /// o desalineado con él, se materializa — esto no busca huecos dentro de los
 /// datos, solo se abstiene de escribir los que ya vienen enteros.
 ///
-/// INVARIANTE: el sink escribe secuencialmente desde el final, así que la
-/// posición tras el salto es siempre mayor que la longitud y el `set_len` solo
-/// puede EXTENDER. Un sink que retrocediera truncaría.
-pub(crate) fn write_maybe_sparse(file: &mut std::fs::File, chunk: &[u8]) -> std::io::Result<()> {
+/// Windows: `set_len` sobre un handle abierto solo para APPEND puede contestar
+/// `ERROR_ACCESS_DENIED`, así que el camino de reanudación con un chunk de
+/// ceros está sin verificar ahí (#222, bloqueada por CI como #220 y #221).
+pub(crate) fn write_maybe_sparse(
+    file: &mut std::fs::File,
+    pos: &mut u64,
+    chunk: &[u8],
+) -> std::io::Result<()> {
     use std::io::{Seek, SeekFrom, Write as _};
     if chunk.is_empty() {
         return Ok(());
     }
+    let len = chunk.len() as u64;
     if chunk.iter().any(|&b| b != 0) {
-        return file.write_all(chunk);
+        file.write_all(chunk)?;
+    } else {
+        let fin = pos.checked_add(len).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "posición desbordada")
+        })?;
+        // Primero extender, después colocarse: en este orden la longitud nunca
+        // pasa por un valor menor del que ya tenía.
+        file.set_len(fin)?;
+        file.seek(SeekFrom::Start(fin))?;
     }
-    let salto = i64::try_from(chunk.len()).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "chunk mayor que i64")
-    })?;
-    let pos = file.seek(SeekFrom::Current(salto))?;
-    file.set_len(pos)
+    *pos += len;
+    Ok(())
 }
 
 struct LocalSink {
     file: Option<std::fs::File>,
+    /// Bytes ya entregados a este sink, agujeros incluidos. Es el ancla de
+    /// [`write_maybe_sparse`]: el descriptor NO sabe dónde está cuando se
+    /// abrió con `O_APPEND` para reanudar.
+    pos: u64,
     partial: PathBuf,
     final_path: PathBuf,
     /// `true` cuando commit/abort ya se ocuparon del staging (Drop no toca nada).
@@ -1950,14 +1982,16 @@ struct LocalSink {
 impl ByteSink for LocalSink {
     async fn write(&mut self, chunk: Bytes) -> Result<(), Error> {
         let file = self.file.take().ok_or(Error::Io { retryable: false })?;
-        let (file, res) = tokio::task::spawn_blocking(move || {
+        let mut pos = self.pos;
+        let (file, pos, res) = tokio::task::spawn_blocking(move || {
             let mut file = file;
-            let res = write_maybe_sparse(&mut file, &chunk).map_err(|e| map_io(&e));
-            (file, res)
+            let res = write_maybe_sparse(&mut file, &mut pos, &chunk).map_err(|e| map_io(&e));
+            (file, pos, res)
         })
         .await
         .map_err(|_| Error::Internal { panic: true })?;
         self.file = Some(file);
+        self.pos = pos;
         res
     }
 

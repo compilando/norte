@@ -9,7 +9,6 @@
 
 use std::path::Path;
 
-use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::LevelFilter;
@@ -35,60 +34,136 @@ fn filter_from(env: Option<&str>) -> EnvFilter {
 /// real lleva la fecha detrás.
 const LOG_PREFIX: &str = "norte.log";
 
-/// La capa de fichero y su guard, o `None` si el directorio no se pudo crear.
+/// Crea el directorio del log CERRADO, y aprieta lo que ya haya dentro.
 ///
-/// **El guard hay que SOSTENERLO mientras dure el proceso.** El writer es no
-/// bloqueante y su hilo vacía la cola al soltarlo: un `let _ = …` aquí
-/// perdería las últimas líneas, que son justamente las del fallo que se está
-/// diagnosticando.
+/// **0700, y no la umask.** Lo que este log guarda es lo mismo que guarda el
+/// journal —cada copia, cada borrado, cada host remoto— y en este árbol todo lo
+/// que es estado va cerrado: `journal.db` 0600 en un dir 0700, el spool igual,
+/// `lua-trust.toml` igual, `secrets.age` 0600, el socket del daemon 0600. Con
+/// la umask de serie esto salía 0755/0644, o sea legible por cualquier cuenta
+/// local.
+///
+/// **Y el modo se aplica a los padres que cree de paso, que es la mitad
+/// importante.** `init_to_file` es lo PRIMERO que toca `<state_dir>` en los dos
+/// frontends —antes del journal, antes de todo—, así que un `create_dir_all`
+/// sin modo creaba `<state_dir>` a 0755; el journal llega después con su
+/// `DirBuilder::mode(0o700)`, que sobre un directorio que YA existe no hace
+/// chmod ninguno. El 0755 se quedaba para siempre, enseñando el listado de
+/// `journal.db`, `lua-trust.toml` y el spool. En una instalación nueva, y sin
+/// que nada avisara.
+#[cfg(unix)]
+fn create_dir_locked(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
+    // Un directorio preexistente NO lo toca el `create` de arriba (ése es el
+    // agujero que esto cierra), y el appender abre sus ficheros con la umask
+    // porque `tracing-appender` no deja elegir modo. Se aprieta lo que haya.
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    for entrada in std::fs::read_dir(dir)?.flatten() {
+        if entrada
+            .file_name()
+            .as_encoded_bytes()
+            .starts_with(LOG_PREFIX.as_bytes())
+        {
+            let _ =
+                std::fs::set_permissions(entrada.path(), std::fs::Permissions::from_mode(0o600));
+        }
+    }
+    Ok(())
+}
+
+/// En Windows los permisos son ACLs y `<state_dir>` cuelga de `%LOCALAPPDATA%`,
+/// que ya es del usuario. Sin equivalente que aplicar aquí.
+#[cfg(not(unix))]
+fn create_dir_locked(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
+/// La capa de fichero, o `None` si el directorio no se pudo preparar.
+///
+/// **Escribe SÍNCRONO, sin writer no bloqueante y por tanto sin guard**, y esa
+/// es una decisión y no un descuido. Un `WorkerGuard` vacía la cola al soltarlo,
+/// lo que significa que cualquier salida por `std::process::exit` —y hay
+/// varias: el Ctrl+C de la CLI, el `--pick` de la TUI, el `terminate:` de
+/// macOS— tira justo las últimas líneas, que son las del fallo que alguien
+/// está investigando. Estos binarios loguean a nivel INFO unas pocas líneas por
+/// sesión; el coste de escribir a pelo no se mide, y a cambio desaparece toda
+/// una clase de fallo.
 ///
 /// `None` en vez de `Err`: un log es diagnóstico, y un diagnóstico que impide
 /// arrancar es peor que no tenerlo.
-fn file_layer<S>(dir: &Path, retain: usize) -> Option<(impl Layer<S>, WorkerGuard)>
+fn file_layer<S>(dir: &Path, retain: usize) -> Option<impl Layer<S>>
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
-    std::fs::create_dir_all(dir).ok()?;
+    create_dir_locked(dir).ok()?;
     let appender = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix(LOG_PREFIX)
-        .max_log_files(retain)
+        // `max_log_files(0)` haría que la poda borrase el fichero que está a
+        // punto de escribir: uno es el mínimo que significa algo.
+        .max_log_files(retain.max(1))
         .build(dir)
         .ok()?;
-    let (writer, guard) = tracing_appender::non_blocking(appender);
-    let layer = tracing_subscriber::fmt::layer()
-        // Un fichero no es una terminal: los códigos de color solo lo ensucian.
-        .with_ansi(false)
-        .with_writer(writer);
-    Some((layer, guard))
+    Some(
+        tracing_subscriber::fmt::layer()
+            // Un fichero no es una terminal: los códigos de color lo ensucian.
+            .with_ansi(false)
+            .with_writer(appender),
+    )
 }
 
 /// Cuántos ficheros rotados se conservan cuando la config no dice otra cosa.
-/// Una semana: suficiente para que un fallo de ayer siga estando, poco para
-/// que esto crezca sin que nadie lo mire.
+/// Una semana: suficiente para que un fallo de ayer siga estando, poco para que
+/// esto crezca sin que nadie lo mire.
 const RETAIN_DEFAULT: usize = 7;
 
 /// Dónde va el log: `[log] dir`, o `<state_dir>/logs`.
 ///
 /// `None` = no hay directorio de estado (una CI pelada, un servicio sin `HOME`)
 /// y por tanto no hay fichero. El caller degrada.
+///
+/// Un `[log] dir` RELATIVO se rehúsa y cae al default: se resolvería contra el
+/// cwd, que en un gestor de ficheros es el directorio desde el que lo lanzaste
+/// —a menudo un repositorio—, y el log acabaría dentro del árbol de trabajo de
+/// cualquiera. Mismo criterio que ADR 0035 C1 aplica al directorio de config.
 #[must_use]
 pub fn log_dir(configured: Option<&Path>) -> Option<std::path::PathBuf> {
     match configured {
-        Some(d) => Some(d.to_path_buf()),
+        Some(d) if d.is_absolute() => Some(d.to_path_buf()),
+        Some(d) => {
+            tracing::warn!(
+                dir = %d.display(),
+                "[log] dir es relativo y se ignora: el log iría a parar al cwd"
+            );
+            norte_config::dirs::state_dir().map(|s| s.join("logs"))
+        }
         None => norte_config::dirs::state_dir().map(|s| s.join("logs")),
     }
+}
+
+/// Lo que `[log]` dice, tal y como los binarios lo tienen a mano.
+///
+/// Un struct y no dos parámetros sueltos porque los tres sitios que instalan
+/// logging tienen que pasar LO MISMO, y dos `Option` en fila son dos
+/// oportunidades de cruzarlos.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LogConfig<'a> {
+    /// `[log] dir`. `None` = `<state_dir>/logs`.
+    pub dir: Option<&'a Path>,
+    /// `[log] retain`. `None` = una semana de ficheros.
+    pub retain: Option<usize>,
 }
 
 /// Instala el subscriber global: stderr MÁS el fichero rotatorio, con el cap de
 /// seguridad. Para `norte-cli` y el daemon.
 ///
-/// Idempotente y no-fatal: si ya hay un subscriber, no hace nada. Devuelve el
-/// guard del writer de fichero (ver [`file_layer`]) — **hay que sostenerlo**—,
-/// o `None` si no hubo fichero que abrir.
-#[must_use]
-pub fn init() -> Option<WorkerGuard> {
-    init_with(true, None)
+/// Idempotente y no-fatal: si ya hay un subscriber, no hace nada.
+pub fn init(cfg: LogConfig<'_>) {
+    init_with(true, cfg);
 }
 
 /// Como [`init`] pero SOLO al fichero. Para los frontends.
@@ -99,19 +174,15 @@ pub fn init() -> Option<WorkerGuard> {
 /// instalaba ninguno. Los dos frontends que un usuario ejecuta de verdad no
 /// producían un solo diagnóstico; esto es lo que lo arregla, y sin escribir un
 /// byte en una pantalla que están dibujando.
-#[must_use]
-pub fn init_to_file(configured: Option<&Path>) -> Option<WorkerGuard> {
-    init_with(false, configured)
+pub fn init_to_file(cfg: LogConfig<'_>) {
+    init_with(false, cfg);
 }
 
 /// El montaje común. `stderr` decide si va también la capa de terminal.
-fn init_with(stderr: bool, configured: Option<&Path>) -> Option<WorkerGuard> {
-    let (file, guard) = match log_dir(configured) {
-        Some(d) => match file_layer(&d, RETAIN_DEFAULT) {
-            Some((l, g)) => (Some(l), Some(g)),
-            None => (None, None),
-        },
-        None => (None, None),
+fn init_with(stderr: bool, cfg: LogConfig<'_>) {
+    let file = match log_dir(cfg.dir) {
+        Some(d) => file_layer(&d, cfg.retain.unwrap_or(RETAIN_DEFAULT)),
+        None => None,
     };
     let terminal = stderr.then(|| tracing_subscriber::fmt::layer().with_writer(std::io::stderr));
     let _ = tracing_subscriber::registry()
@@ -119,7 +190,6 @@ fn init_with(stderr: bool, configured: Option<&Path>) -> Option<WorkerGuard> {
         .with(terminal)
         .with(filter_from(None))
         .try_init();
-    guard
 }
 
 #[cfg(test)]
@@ -184,14 +254,13 @@ mod tests {
     #[test]
     fn el_log_aterriza_en_un_fichero() {
         let dir = tempfile::tempdir().expect("tmp");
-        let (layer, guard) = file_layer(dir.path(), 3).expect("appender");
+        let layer = file_layer(dir.path(), 3).expect("appender");
         let sub = tracing_subscriber::registry()
             .with(layer)
             .with(filter_from(None));
         tracing::subscriber::with_default(sub, || {
             tracing::info!(target: "norte_core::prueba", "una linea");
         });
-        drop(guard);
 
         let (cuantos, texto) = volcado(dir.path());
         assert_eq!(cuantos, 1, "un fichero de log");
@@ -208,7 +277,7 @@ mod tests {
     #[test]
     fn la_password_de_ftp_no_llega_al_fichero() {
         let dir = tempfile::tempdir().expect("tmp");
-        let (layer, guard) = file_layer(dir.path(), 3).expect("appender");
+        let layer = file_layer(dir.path(), 3).expect("appender");
         let sub = tracing_subscriber::registry()
             .with(layer)
             .with(filter_from(Some("trace,suppaftp=trace")));
@@ -216,7 +285,6 @@ mod tests {
             tracing::trace!(target: "suppaftp", "PASS hunter2");
             tracing::info!(target: "suppaftp", "conectado");
         });
-        drop(guard);
 
         let (_, texto) = volcado(dir.path());
         assert!(
@@ -224,6 +292,96 @@ mod tests {
             "la password llegó al fichero: {texto}"
         );
         assert!(texto.contains("conectado"), "y lo que sí pasa, pasa");
+    }
+
+    /// **El directorio del log es 0700, y los ficheros que caen dentro 0600.**
+    ///
+    /// Lo que el log guarda es lo mismo que guarda el journal —cada copia, cada
+    /// borrado, cada host remoto al que te conectas— y el journal es 0600. Con
+    /// la umask por defecto esto salía 0755/0644, o sea legible por cualquier
+    /// cuenta local de la máquina.
+    #[cfg(unix)]
+    #[test]
+    fn el_log_no_lo_puede_leer_cualquiera() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = tempfile::tempdir().expect("tmp");
+        let dir = tmp.path().join("logs");
+        let layer = file_layer(&dir, 3).expect("appender");
+        let sub = tracing_subscriber::registry()
+            .with(layer)
+            .with(filter_from(None));
+        tracing::subscriber::with_default(sub, || {
+            tracing::info!(target: "norte_core::prueba", "una linea");
+        });
+
+        let modo =
+            |p: &std::path::Path| std::fs::metadata(p).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(
+            modo(&dir),
+            0o700,
+            "el directorio, solo para su dueño: es lo que hace inalcanzable lo de dentro"
+        );
+    }
+
+    /// Y el barrido aprieta lo que ya hubiera de días anteriores.
+    ///
+    /// Hace falta porque `tracing-appender` abre sus ficheros él, con la umask
+    /// y sin dejar elegir modo: el de HOY sale 0644 y el de mañana también. Que
+    /// eso no importe depende del 0700 del directorio, así que el barrido es lo
+    /// que arregla el caso en el que el directorio fue laxo alguna vez —una
+    /// instalación anterior a este arreglo, por ejemplo— y quedaron ficheros
+    /// legibles dentro.
+    #[cfg(unix)]
+    #[test]
+    fn el_barrido_cierra_los_ficheros_que_ya_estaban() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = tempfile::tempdir().expect("tmp");
+        let dir = tmp.path().join("logs");
+        std::fs::create_dir_all(&dir).expect("dir");
+        let viejo = dir.join("norte.log.2026-08-01");
+        std::fs::write(&viejo, b"de ayer").expect("fichero");
+        std::fs::set_permissions(&viejo, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        // Un fichero AJENO no se toca: este directorio es nuestro, pero el
+        // barrido solo se mete con lo que lleva nuestro prefijo.
+        let ajeno = dir.join("otra-cosa.txt");
+        std::fs::write(&ajeno, b"ajeno").expect("fichero");
+        std::fs::set_permissions(&ajeno, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        create_dir_locked(&dir).expect("barrido");
+
+        let modo =
+            |p: &std::path::Path| std::fs::metadata(p).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(modo(&viejo), 0o600, "el log de ayer, cerrado");
+        assert_eq!(modo(&ajeno), 0o644, "lo que no es un log, intacto");
+    }
+
+    /// Y NO degrada el directorio de estado que lo contiene.
+    ///
+    /// Éste es el que de verdad muerde: `init_to_file` es lo PRIMERO que toca
+    /// `<state_dir>` en los dos frontends —antes del journal, antes de todo—,
+    /// así que un `create_dir_all` sin modo creaba `<state_dir>` a 0755. El
+    /// journal viene después con su `DirBuilder::mode(0o700)`, que sobre un
+    /// directorio que YA existe no hace chmod ninguno: el 0755 se quedaba para
+    /// siempre, enseñando el listado de `journal.db`, `lua-trust.toml` y el
+    /// spool a cualquier cuenta local. En una instalación nueva, y en silencio.
+    #[cfg(unix)]
+    #[test]
+    fn crear_el_log_no_afloja_el_directorio_de_estado() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = tempfile::tempdir().expect("tmp");
+        let state = tmp.path().join("state").join("norte");
+        let _layer =
+            file_layer::<tracing_subscriber::Registry>(&state.join("logs"), 3).expect("appender");
+
+        let modo = std::fs::metadata(&state)
+            .expect("stat")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(modo, 0o700, "el padre creado de paso, también cerrado");
     }
 
     /// Un directorio que no se puede crear NO tumba el programa: se degrada.

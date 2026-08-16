@@ -7,9 +7,11 @@
 //! flanco de cola): una ráfaga de escrituras = un refresh, no una tormenta.
 //!
 //! Alcance v1: solo panes locales no-virtuales (un dir sftp/S3/archive no
-//! tiene inotify; su refresh sigue siendo manual, Ctrl+R). El run loop
-//! reacciona a cada evento con el MISMO camino que `pane.refresh`
-//! (cancelable, marcas sobreviven, ritual post-refresh #118).
+//! tiene inotify; su refresh sigue siendo manual). Quien consume reacciona a
+//! cada evento con SU camino de refresco —el de una mutación, no el de un
+//! `cd`—, que es lo que conserva las marcas: `Ctrl+R` en la TUI,
+//! `refresh_dir` en la GUI. Las dos lo usan desde el ítem 7 del roadmap
+//! post-alpha; lo estrenó la TUI y por eso el vocabulario de aquí es el suyo.
 //!
 //! Límites documentados del modo degradado: el sondeo mira el mtime del
 //! DIRECTORIO — crear/borrar/renombrar dentro se ve; escribir en un
@@ -94,6 +96,11 @@ pub struct DirWatch {
 impl DirWatch {
     /// Arranca el pipeline: watcher nativo (si puede) + task
     /// debouncer/poller. Nunca falla: sin nativo queda DEGRADADO (sondeo).
+    ///
+    /// # Panics
+    /// Si se llama FUERA de un runtime de tokio: el debouncer es un
+    /// `tokio::spawn`. En la GUI eso significa el hilo de sesión y no el de
+    /// GPUI, que no tiene runtime al que pedírselo.
     #[must_use]
     pub fn new() -> Self {
         Self::new_with(DEBOUNCE, POLL)
