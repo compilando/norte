@@ -1,10 +1,10 @@
 # Post-alpha roadmap — ordered by the functionality worth building
 
 **Date:** 2026-08-07
-**Status:** accepted, updated 2026-08-12. Items 2, 3, 4 and 5 are built. Item 1
-is three specs and **two are built**: comparison (spec 1) and one-way
-synchronisation (spec 2). What remains of it is spec 3 — the CLI, MCP and GUI
-surfaces — so the largest thing left is now item 6 onwards.
+**Status:** accepted, updated 2026-08-16. Items **1 (all three specs), 2, 3, 4,
+5, 7, 8, 9 and 10 are built.** What remains is item 6 (git status as the
+official columns plugin) and item 11 (read-only RAR by delegation); item 12
+(packaging tier two) stays parked on infrastructure decisions, not code.
 **Context:** every milestone M0–M5 is met and packaging now turns a tag into
 downloadable artefacts. What remains is not debt — it is the part of
 specification §17 that was never built. This orders it by what the software
