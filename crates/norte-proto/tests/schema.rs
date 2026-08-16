@@ -38,6 +38,7 @@ struct ProtocolSchema {
     connection_degraded: ConnectionDegraded,
     connection_trust_host_key_params: ConnectionTrustHostKeyParams,
     connection_trust_host_key_result: ConnectionTrustHostKeyResult,
+    daemon_going_away: DaemonGoingAway,
     daemon_shutdown_params: DaemonShutdownParams,
     daemon_shutdown_result: DaemonShutdownResult,
     decoration_wire: DecorationWire,

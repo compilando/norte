@@ -9,6 +9,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Upgrading norte no longer drops what you had open.** Replacing a running
+  daemon used to look identical, from a window's point of view, to somebody
+  stopping it: the connection closed and that was all anyone knew. So the
+  windows sat there reconnecting to nothing, because reconnecting on your behalf
+  after *you* stopped the daemon would be worse — it would restart the thing you
+  just asked to stop. The daemon now says which of the two is happening before
+  it goes, and the windows come back on their own when a replacement is
+  expected, with their running tasks picked back up. Stopping it still means
+  stopped.
+  **A replacement waits for your files.** Asking for one while a copy or a
+  synchronisation is running is refused, and says how many are still going, so
+  nothing gets killed halfway through a folder. Wait for them, or stop the
+  daemon the ordinary way, which cancels them deliberately.
+  What does not survive: a synchronisation you approved but had not applied has
+  to be planned again, because a plan belongs to the connection that approved it
+  — deliberately, so nobody else can redeem it. `norte daemon stop --handover`
+  is the switch, for whoever is doing the replacing.
+
 - **The graphical interface notices changes it did not make.** Something else
   writes a file into a folder you are looking at — another program, a download,
   a `git checkout` — and the pane now updates on its own, as the terminal

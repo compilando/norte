@@ -2225,6 +2225,23 @@ pub mod remote {
 
     /// Backoff de reconexión (se recorre y se queda en el último).
     const RECONNECT_BACKOFF_MS: &[u64] = &[250, 500, 1000, 2000, 5000];
+
+    /// Cuánto vale un permiso de arranque tras un `daemon.going_away`.
+    ///
+    /// Tiene que cubrir lo que tarda el daemon viejo en SALIR DEL PROCESO —no
+    /// en contestar—, porque hasta entonces retiene el lock exclusivo de
+    /// `journal.db` y el reemplazo aborta al abrirlo. Treinta segundos son de
+    /// sobra para eso, y siguen siendo poco para lo que la regla protege: que
+    /// un daemon que el usuario paró no resucite más tarde.
+    const HANDOVER_SPAWN_WINDOW: Duration = Duration::from_secs(30);
+
+    /// ¿Sigue vivo el permiso de arranque?
+    ///
+    /// Función aparte y pura para poder probar la caducidad sin gastar treinta
+    /// segundos de reloj.
+    fn spawn_allowed(hasta: Option<std::time::Instant>, ahora: std::time::Instant) -> bool {
+        hasta.is_some_and(|d| ahora < d)
+    }
     /// Tope de una llamada RPC: un daemon vivo-pero-atascado (stat sobre un
     /// NFS muerto) jamás congela el frontend (M4 del rust-reviewer).
     const CALL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -2424,6 +2441,33 @@ pub mod remote {
         /// que reconectara sin ella volvería como `Actor::User` — el actor se
         /// blanquearía solo, en silencio, al primer corte del daemon.
         agent_session: Option<String>,
+        /// El daemon dijo que venía un RELEVO (`daemon.going_away` con
+        /// `reconnect: true`), así que la próxima reconexión puede arrancarlo.
+        ///
+        /// Existe porque un relevo y una parada son la MISMA conexión cerrada
+        /// vistas desde aquí, y la respuesta correcta es la contraria: sin esta
+        /// señal, reconectar siempre resucitaría un daemon que el usuario acaba
+        /// de parar, y no reconectar nunca dejaría la sesión muerta tras una
+        /// actualización.
+        ///
+        /// **Caduca por TIEMPO, no por intentos**, y la diferencia es la que hay
+        /// entre que el relevo funcione y que no.
+        ///
+        /// La primera versión lo gastaba en el primer intento de reconexión,
+        /// que llega a los 250 ms. Para entonces el daemon viejo TODAVÍA no ha
+        /// salido del proceso, y con él retiene el lock exclusivo de
+        /// `journal.db` — que es lo primero que abre el reemplazo, y aborta si
+        /// no puede. Así que el relevo moría en ese lock, el permiso se iba con
+        /// el intento fallido, y ningún intento posterior volvía a arrancar
+        /// nada: sesión muerta para siempre tras una actualización rutinaria,
+        /// que es exactamente el fallo que esta feature existe para evitar.
+        /// Lo encontró la revisión de seguridad de esta fase.
+        ///
+        /// Lo que la regla de no-resucitar quiere es que la licencia no
+        /// sobreviva «hasta la semana que viene», y eso es una cota de TIEMPO.
+        /// Dentro de la ventana se arranca tantas veces como haga falta;
+        /// pasada, «el daemon no está» vuelve a significar lo de siempre.
+        handover_until: Mutex<Option<std::time::Instant>>,
         client: tokio::sync::RwLock<Option<Arc<Client>>>,
         watches: Mutex<HashMap<u64, watch::Sender<TaskProgress>>>,
         /// Desenlaces vistos SIN watch receptor (el broadcast terminal
@@ -2584,6 +2628,7 @@ pub mod remote {
                     spawn_cmd,
                     client_info,
                     agent_session,
+                    handover_until: Mutex::new(None),
                     client: tokio::sync::RwLock::new(None),
                     watches: Mutex::new(HashMap::new()),
                     finished: Mutex::new(std::collections::VecDeque::new()),
@@ -4119,6 +4164,39 @@ pub mod remote {
                     inner.push_degraded(d);
                     continue;
                 }
+                // El daemon se va (0.46.0). Lo único que hay que quedarse es
+                // si volver, y hay que quedárselo AQUÍ: cuando la conexión se
+                // cierre no habrá forma de distinguir un relevo de una parada.
+                if n.method == methods::DAEMON_GOING_AWAY {
+                    // Malformada = descartada CON traza, y SIN tocar el
+                    // permiso: «no se entiende» no es «no vuelvas».
+                    let Some(params) = n.params else {
+                        tracing::warn!("daemon.going_away sin params: descartada");
+                        continue;
+                    };
+                    let aviso = match serde_json::from_value::<methods::DaemonGoingAway>(params) {
+                        Ok(g) => g,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "daemon.going_away malformada");
+                            continue;
+                        }
+                    };
+                    let Some(inner) = weak.upgrade() else { return };
+                    // Un backend de AGENTE no arranca daemons: su `spawn_cmd`
+                    // es `None` por construcción, así que no se le guarda un
+                    // permiso que no puede usar. Hoy es redundante; mañana, si
+                    // alguien le diera comando de arranque, esto es lo único
+                    // que impediría que una notificación del daemon hiciera que
+                    // el puente MCP lance procesos.
+                    if inner.agent_session.is_some() {
+                        continue;
+                    }
+                    *inner.handover_until.lock().expect("handover lock sano") = aviso
+                        .reconnect
+                        .then(|| std::time::Instant::now() + HANDOVER_SPAWN_WINDOW);
+                    tracing::info!(reconnect = aviso.reconnect, "el daemon avisa de que se va");
+                    continue;
+                }
                 // Lote de hits de una búsqueda viva (live search T5): al `rx`
                 // de su `task_id`. Malformado = descartado con traza.
                 if n.method == methods::SEARCH_HITS {
@@ -4284,7 +4362,24 @@ pub mod remote {
                     approvals_rx: Mutex::new(None),
                     degraded_rx: Mutex::new(None),
                 };
-                match backend.establish(false).await {
+                // ¿Sigue vivo el permiso de arranque? Por TIEMPO, no por
+                // intentos (ver `Inner::handover_until`): dentro de la ventana
+                // se puede insistir, que es lo que deja sobrevivir al lock del
+                // journal que el daemon viejo todavía retiene.
+                let relevo = {
+                    let mut hasta = backend
+                        .inner
+                        .handover_until
+                        .lock()
+                        .expect("handover lock sano");
+                    let vivo = spawn_allowed(*hasta, std::time::Instant::now());
+                    if !vivo {
+                        // Caducado: se limpia para no volver a mirarlo.
+                        *hasta = None;
+                    }
+                    vivo
+                };
+                match backend.establish(relevo).await {
                     Ok(rx) => {
                         let _ = backend.inner.events_tx.send(ConnEvent::Restored);
                         break rx;
@@ -4318,6 +4413,7 @@ pub mod remote {
                     version: "0".into(),
                 },
                 agent_session: None,
+                handover_until: Mutex::new(None),
                 client: tokio::sync::RwLock::new(None),
                 watches: Mutex::new(HashMap::new()),
                 finished: Mutex::new(std::collections::VecDeque::new()),
@@ -4425,6 +4521,28 @@ pub mod remote {
                 inner.client.read().await.is_none(),
                 "y el hueco queda VACÍO: con un cliente ahí, nadie enruta y un join() cuelga para siempre"
             );
+        }
+
+        /// El permiso de arranque caduca por TIEMPO y no por intentos.
+        ///
+        /// Es la corrección de un fallo que la revisión de seguridad encontró y
+        /// que anulaba la feature entera: gastándolo en el primer intento —a
+        /// los 250 ms— el reemplazo todavía no puede arrancar, porque el daemon
+        /// viejo no ha salido del proceso y retiene el lock de `journal.db`. El
+        /// intento fallaba, el permiso se iba con él, y la sesión quedaba
+        /// muerta para siempre tras una actualización normal.
+        #[test]
+        fn el_permiso_de_arranque_caduca_por_tiempo() {
+            let ahora = std::time::Instant::now();
+            // Sin aviso, jamás: es la regla de no resucitar un daemon parado.
+            assert!(!spawn_allowed(None, ahora));
+            // Dentro de la ventana, tantas veces como haga falta — que es lo
+            // que deja sobrevivir al lock del journal.
+            let hasta = ahora + HANDOVER_SPAWN_WINDOW;
+            assert!(spawn_allowed(Some(hasta), ahora));
+            assert!(spawn_allowed(Some(hasta), ahora + Duration::from_secs(29)));
+            // Pasada, «el daemon no está» vuelve a significar lo de siempre.
+            assert!(!spawn_allowed(Some(hasta), ahora + Duration::from_secs(31)));
         }
 
         /// El feed de `sync.plan` se CIERRA cuando el consumidor no drena, en
@@ -4556,6 +4674,7 @@ pub mod remote {
                     version: "0".into(),
                 },
                 agent_session: None,
+                handover_until: Mutex::new(None),
                 client: tokio::sync::RwLock::new(None),
                 watches: Mutex::new(HashMap::new()),
                 finished: Mutex::new(std::collections::VecDeque::new()),

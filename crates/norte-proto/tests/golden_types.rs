@@ -9,11 +9,11 @@ use std::fmt::Debug;
 use std::path::Path;
 
 use norte_proto::methods::{
-    ClientInfo, DaemonShutdownParams, DaemonShutdownResult, FsCapabilitiesParams,
+    ClientInfo, DaemonGoingAway, DaemonShutdownParams, DaemonShutdownResult, FsCapabilitiesParams,
     FsCapabilitiesResult, FsCopyParams, FsDeleteParams, FsListParams, FsListResult, FsMoveParams,
     FsReadParams, FsReadResult, FsSearchParams, FsStatParams, FsStatResult, FsTaskResult,
-    InitializeParams, InitializeResult, MatchInfo, SearchHits, ServerInfo, TaskCancelParams,
-    TaskCancelResult, TaskListParams, TaskListResult,
+    InitializeParams, InitializeResult, MatchInfo, SearchHits, ServerInfo, ShutdownMode,
+    TaskCancelParams, TaskCancelResult, TaskListParams, TaskListResult,
 };
 use norte_proto::{
     AttrCatalog, AttrHint, AttrInfo, AttrType, AttrValue, ByteRange, Capabilities, CapabilityFlags,
@@ -845,7 +845,11 @@ fn golden_methods() {
     // propio (`sync_step.json`, `sync_blocker.json`): sus familias pinean una
     // forma por clase. Los TRES cierres de plan son las tres papeleras
     // ([`DestTrash`]), que es lo que decide si el plan se puede deshacer.
-    assert_eq!(fixtures.len(), 142, "[methods.json] fixtures sin caso Rust");
+    // 142 → 144 en 0.46.0 (roadmap ítem 10): + daemon_shutdown_params_handover
+    // y daemon_going_away. El relevo tiene fixture PROPIA en vez de cambiar la
+    // de la parada, que es lo que deja ver de un vistazo que el mensaje de una
+    // parada corriente no ha cambiado un byte.
+    assert_eq!(fixtures.len(), 144, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `fs.rename_batch*` (0.36.0): las PETICIONES de plan y de ejecución.
@@ -2603,14 +2607,34 @@ fn check_methods_daemon(fixtures: &BTreeMap<String, Value>) {
     check_one(
         fixtures,
         "daemon_shutdown_params_graceful",
-        &DaemonShutdownParams { graceful: true },
+        &DaemonShutdownParams {
+            graceful: true,
+            mode: ShutdownMode::Stop,
+        },
     );
     check_one(
         fixtures,
         "daemon_shutdown_params_hard",
-        &DaemonShutdownParams { graceful: false },
+        &DaemonShutdownParams {
+            graceful: false,
+            mode: ShutdownMode::Stop,
+        },
     );
     check_one(fixtures, "daemon_shutdown_result", &DaemonShutdownResult {});
+    // 0.46.0: el relevo, y la notificación con la que se anuncia.
+    check_one(
+        fixtures,
+        "daemon_shutdown_params_handover",
+        &DaemonShutdownParams {
+            graceful: true,
+            mode: ShutdownMode::Handover,
+        },
+    );
+    check_one(
+        fixtures,
+        "daemon_going_away",
+        &DaemonGoingAway { reconnect: true },
+    );
 }
 
 /// Métodos de 0.5.0 (fase 3): task.list, fs.read, fs.capabilities.
@@ -2985,7 +3009,19 @@ fn method_names_frozen() {
     // `#[serde(other)]` de ADR 0005: un cliente 0.44.x lee «conflicto que esta
     // versión no sabe nombrar» sobre una operación que igualmente falló, no
     // actúa de más. MINOR, por tanto, y no MAJOR.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.45.0");
+    assert_eq!(methods::DAEMON_GOING_AWAY, "daemon.going_away");
+    // 0.46.0 (roadmap ítem 10): `daemon.going_away` y `DaemonShutdownParams.mode`.
+    // Los dos son ADITIVOS y ninguno cambia lo que ya se emitía: `mode` no se
+    // serializa cuando vale `Stop`, así que una parada corriente de un cliente
+    // 0.46 es byte por byte el mensaje de 0.45; y una notificación que un
+    // cliente viejo no conoce se ignora, que es lo que ADR 0004 le obliga a
+    // hacer — se queda sin saber que venía un relevo y reconecta como siempre,
+    // que es exactamente el comportamiento de hoy. MINOR.
+    //
+    // `ShutdownMode` NO lleva `#[serde(other)]`, contra la costumbre de este
+    // wire: degradar está bien cuando malinterpretar un valor cuesta una
+    // feature, y mal cuando apaga un daemon de una forma que nadie pidió.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.46.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

@@ -55,8 +55,15 @@
   "connection_trust_host_key_result": {
     "trusted": true
   },
+  "daemon_going_away": {
+    "reconnect": true
+  },
   "daemon_shutdown_params_graceful": {
     "graceful": true
+  },
+  "daemon_shutdown_params_handover": {
+    "graceful": true,
+    "mode": "handover"
   },
   "daemon_shutdown_params_hard": {
     "graceful": false

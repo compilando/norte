@@ -368,6 +368,13 @@ impl Shared {
             && self.tasks.lock().expect("tasks lock sano").is_empty()
     }
 
+    /// Difunde a TODAS las conexiones. Hoy solo `daemon.going_away`: que este
+    /// daemon se vaya le pasa igual a un agente que a un humano, y los dos
+    /// tienen que decidir lo mismo (volver o no).
+    fn broadcast_all(&self, frame: &Arc<[u8]>) {
+        self.broadcast_where(frame, |_| true);
+    }
+
     /// Difunde SOLO a conexiones humanas (no-agente): notifs `policy.*`.
     fn broadcast_humans(&self, frame: &Arc<[u8]>) {
         self.broadcast_where(frame, |s| matches!(s.actor, Actor::User));
@@ -740,6 +747,25 @@ impl Daemon {
         // el drop); hard = cancelar tasks; graceful = esperarlas — y si el
         // hard llega DURANTE la espera (segunda señal), se cancelan ya.
         drop(self.listener);
+        // **La ruta se retira AQUÍ, antes de drenar, y el orden importa desde
+        // que existe el relevo (roadmap ítem 10).**
+        //
+        // Con el listener muerto y el fichero todavía en su sitio, un cliente
+        // que reconecte recibe `ECONNREFUSED` y —solo tras un relevo, porque
+        // solo entonces tiene permiso— arranca el reemplazo. El reemplazo ve
+        // una ruta rancia, la borra, y enlaza la suya. Cuando este daemon
+        // terminara de drenar, su `remove_file` borraría el socket DEL
+        // REEMPLAZO: se quedaría escuchando en un inodo sin nombre, y como el
+        // permiso de arranque es de un solo uso, nadie lo volvería a levantar.
+        //
+        // Borrando antes, la ventana pasa de «lo que dure el drenaje» a
+        // microsegundos, y lo que este daemon borra es siempre suyo. Nadie
+        // pierde nada: con el listener ya muerto, la ruta solo servía para dar
+        // `ECONNREFUSED` en vez de `NotFound`.
+        let socket_path = self.socket_path.clone();
+        let socket_para_borrar = socket_path.clone();
+        // Regla 2: ni un unlink síncrono en el runtime.
+        let _ = tokio::task::spawn_blocking(move || std::fs::remove_file(socket_para_borrar)).await;
         let mut hard_done = false;
         loop {
             if shared.hard_shutdown.is_cancelled() && !hard_done {
@@ -753,9 +779,7 @@ impl Daemon {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let socket_path = self.socket_path.clone();
-        // Regla 2: ni un unlink síncrono en el runtime.
-        let _ = tokio::task::spawn_blocking(move || std::fs::remove_file(socket_path)).await;
+        let _ = socket_path;
         tracing::info!("daemon apagado");
         Ok(())
     }
@@ -2065,10 +2089,56 @@ fn handle_daemon_shutdown(
             .filter(|v| !v.is_null())
             .or_else(|| Some(serde_json::json!({}))),
     )?;
+    // Un RELEVO con tasks vivas se rehúsa AQUÍ, que es el único momento en el
+    // que queda alguien a quien contestar: la respuesta de este método sale en
+    // el acto, así que una negativa decidida después de esperar no tendría
+    // destinatario — y para entonces el listener ya habría dejado de aceptar,
+    // con lo que «rehusar» significaría volver a aceptar.
+    //
+    // Esperar y NO cancelar es lo que separa este eje de `graceful`: una copia
+    // muerta a mitad de árbol es justo el estropicio que el journal tiene luego
+    // que limpiar. Quien de verdad quiera cancelarlas ya tiene `graceful:
+    // false`, y no se abre una segunda puerta a la misma habitación.
+    // Contar y APAGAR bajo el mismo lock: entre soltarlo y cancelar, otra
+    // conexión puede registrar una task, y entonces el relevo empezaría
+    // igualmente con una copia viva — que es exactamente lo que se está
+    // rehusando. El lock es de `std` y todo lo que hay dentro es síncrono.
+    let vivas = shared.tasks.lock().expect("tasks lock sano");
+    if p.mode == methods::ShutdownMode::Handover && !vivas.is_empty() {
+        let cuantas = vivas.len();
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            format!(
+                "a handover needs an idle daemon: {cuantas} task(s) still running. \
+                 Wait for them; a handover never cancels a task, not even with \
+                 graceful:false — use a plain stop for that"
+            ),
+        ));
+    }
+    // El aviso va ANTES de dejar de aceptar, o no llega a nadie: `shutdown`
+    // corta el bucle de accept y las conexiones se van detrás.
+    //
+    // A TODAS las conexiones, no solo a las humanas: la sesión de un agente
+    // muere con este daemon igual que la de un humano, y necesita saber si
+    // volver. Es información sobre el TRANSPORTE, no sobre gobierno.
+    let aviso = methods::DaemonGoingAway {
+        reconnect: p.mode == methods::ShutdownMode::Handover,
+    };
+    if let Ok(params) = serde_json::to_value(aviso) {
+        let n = Notification {
+            jsonrpc: norte_proto::wire::JsonRpcVersion,
+            method: methods::DAEMON_GOING_AWAY.into(),
+            params: Some(params),
+        };
+        if let Ok(frame) = encode_frame(&n) {
+            shared.broadcast_all(&Arc::from(frame.into_boxed_slice()));
+        }
+    }
     if !p.graceful {
         shared.hard_shutdown.cancel();
     }
     shared.shutdown.cancel();
+    drop(vivas);
     to_value(&methods::DaemonShutdownResult {})
 }
 

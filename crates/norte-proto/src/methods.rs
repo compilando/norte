@@ -603,7 +603,16 @@ use crate::{
 /// La inversa —un daemon 0.41 mandando un informe SIN `dest_trash` a un cliente
 /// 0.42, que fallaría al deserializar— no ocurre: [`version_compatible`] no
 /// negocia un cliente con minor MAYOR que el servidor.
-pub const PROTOCOL_VERSION: &str = "0.45.0";
+///
+/// **0.46.0** (roadmap ítem 10): [`DAEMON_GOING_AWAY`] y
+/// [`DaemonShutdownParams::mode`]. Aditivo: `mode` no se serializa cuando vale
+/// [`ShutdownMode::Stop`], así que una parada corriente sale byte por byte como
+/// en 0.45, y una notificación desconocida se ignora (ADR 0004). La ventana se
+/// DESPLAZA igualmente, y éste es el ejemplo más claro de por qué: un cliente
+/// 0.45 ignora la notificación —correctamente— y por tanto no se entera de que
+/// venía un relevo, con lo que se queda reconectando contra un socket muerto.
+/// No se rompe; simplemente no obtiene lo que 0.46 existe para dar.
+pub const PROTOCOL_VERSION: &str = "0.46.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -681,6 +690,36 @@ pub const FS_LIST_MAX_PAGE: u32 = 10_000;
 /// pueden separarse en silencio— y cambiarlo cambia el contrato de wire, con
 /// bump.
 pub const PLUGIN_HELP_MAX_BYTES: usize = 64 * 1024;
+
+/// ¿Es `version` al menos `major.minor`?
+///
+/// Para decidir si el OTRO extremo conoce una capacidad concreta, que es una
+/// pregunta distinta de [`version_compatible`]: aquélla dice si se pueden
+/// hablar, ésta dice si merece la pena pedir algo que llegó en una versión
+/// dada. Un `false` no es un error — es la señal de degradar Y DECIRLO, que es
+/// lo que separa «esto no se hizo» de un silencio.
+///
+/// Una versión que no parsea contesta `false`: sin saber qué habla el otro, no
+/// se le supone nada.
+///
+/// ```
+/// use norte_proto::methods::version_at_least;
+/// assert!(version_at_least("0.46.0", 0, 46));
+/// assert!(version_at_least("0.47.1", 0, 46));
+/// assert!(!version_at_least("0.45.9", 0, 46));
+/// assert!(!version_at_least("no-semver", 0, 46));
+/// ```
+#[must_use]
+pub fn version_at_least(version: &str, major: u64, minor: u64) -> bool {
+    let mut it = version.split('.');
+    let (Some(j), Some(n)) = (it.next(), it.next()) else {
+        return false;
+    };
+    let (Ok(j), Ok(n)) = (j.parse::<u64>(), n.parse::<u64>()) else {
+        return false;
+    };
+    (j, n) >= (major, minor)
+}
 
 /// ¿Acepta un core `server` a un cliente `client`? N y N-1 (spec §11):
 /// mismo major; en 0.x el "major efectivo" es el minor — se acepta el
@@ -1100,6 +1139,18 @@ pub const CONNECTION_TRUST_HOST_KEY: &str = "connection.trust_host_key";
 /// decisión. Se difunde solo a conexiones humanas. Un cliente N-1 la ignora
 /// (notif desconocida, ADR 0004) — degrada al comportamiento previo (solo log).
 pub const CONNECTION_DEGRADED: &str = "connection.degraded";
+/// `daemon.going_away` — el daemon avisa de que se va ANTES de dejar de
+/// aceptar (0.46.0).
+///
+/// Existe porque un RELEVO y una PARADA son el mismo evento visto desde el
+/// cliente —una conexión cerrada— y la respuesta correcta es la contraria en
+/// cada caso: volver, o rendirse. Sin esto, un cliente que reconectara siempre
+/// resucitaría un daemon que el usuario acaba de parar, y uno que no
+/// reconectara nunca dejaría la sesión muerta tras una actualización.
+///
+/// Va a TODAS las conexiones, también a las de agente: la sesión de un agente
+/// muere con el daemon igual que la de un humano, y necesita saberlo.
+pub const DAEMON_GOING_AWAY: &str = "daemon.going_away";
 /// `task.progress` — notificación server→client, coalescida (≤30 Hz).
 pub const TASK_PROGRESS: &str = "task.progress";
 /// `policy.request_scope` — un agente pide un scope (rutas+ops+TTL, M3-3b).
@@ -2213,6 +2264,61 @@ pub struct InitializeResult {
     pub encodings: Vec<String>,
 }
 
+/// Params de [`DAEMON_GOING_AWAY`].
+///
+/// ```
+/// use norte_proto::methods::DaemonGoingAway;
+/// let n = DaemonGoingAway { reconnect: true };
+/// let j = serde_json::to_value(&n).expect("json");
+/// assert_eq!(j["reconnect"], serde_json::json!(true));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonGoingAway {
+    /// `true` = viene un relevo; vuelve a conectar, y arráncalo si no está.
+    /// `false` = este daemon se para y se queda parado.
+    ///
+    /// El `false` no es decoración: mandarlo en una parada corriente es lo que
+    /// deja a un frontend decir «el daemon se paró» en vez de «se cayó la
+    /// conexión», que para quien lo lee no son lo mismo.
+    pub reconnect: bool,
+}
+
+/// Qué clase de apagado es (0.46.0).
+///
+/// ORTOGONAL a [`DaemonShutdownParams::graceful`], que decide qué pasa con las
+/// tasks vivas. Éste decide quién viene después.
+///
+/// **Sin `#[serde(other)]`, a diferencia de casi todo este wire.** El resto de
+/// los enums degradan ante un valor desconocido porque malinterpretarlos cuesta
+/// una feature; malinterpretar éste apaga un daemon de una forma que el que
+/// llamó no pidió. Misma asimetría que las políticas de mutación (ADR 0005).
+///
+/// ```
+/// use norte_proto::methods::ShutdownMode;
+/// assert_eq!(ShutdownMode::default(), ShutdownMode::Stop);
+/// assert!(serde_json::from_str::<ShutdownMode>(r#""inventado""#).is_err());
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShutdownMode {
+    /// Se para y se queda parado. El comportamiento de siempre.
+    #[default]
+    Stop,
+    /// Viene un relevo: los clientes deben volver, y arrancarlo si no está.
+    Handover,
+}
+
+impl ShutdownMode {
+    /// ¿Es la parada de siempre? Lo usa el `skip_serializing_if` de
+    /// [`DaemonShutdownParams::mode`].
+    #[must_use]
+    pub const fn is_stop(&self) -> bool {
+        matches!(self, Self::Stop)
+    }
+}
+
 /// Params de [`DAEMON_SHUTDOWN`].
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2221,11 +2327,23 @@ pub struct DaemonShutdownParams {
     /// `false`: cancelarlas primero (estado limpio garantizado igual).
     #[serde(default = "default_graceful")]
     pub graceful: bool,
+    /// Parada o relevo (0.46.0). Default [`ShutdownMode::Stop`], que es lo que
+    /// hacía este método antes de que el campo existiera.
+    ///
+    /// No se serializa cuando es `Stop`: el mensaje que este cliente manda para
+    /// una parada corriente sigue siendo BYTE POR BYTE el de 0.45, así que la
+    /// compatibilidad hacia atrás no depende de que el otro lado ignore campos
+    /// que no conoce — depende de que no haya campo.
+    #[serde(default, skip_serializing_if = "ShutdownMode::is_stop")]
+    pub mode: ShutdownMode,
 }
 
 impl Default for DaemonShutdownParams {
     fn default() -> Self {
-        Self { graceful: true }
+        Self {
+            graceful: true,
+            mode: ShutdownMode::Stop,
+        }
     }
 }
 
