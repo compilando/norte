@@ -655,6 +655,42 @@ fn plan_hash_malformado_muere_en_el_wire() {
 }
 
 #[test]
+fn el_modo_de_apagado_no_degrada() {
+    use norte_proto::methods;
+
+    // El default reproduce EXACTAMENTE lo de hoy: un cliente que no conoce el
+    // campo sigue APAGANDO el daemon, no relevándolo.
+    let p: methods::DaemonShutdownParams = serde_json::from_str("{}").expect("todo-opcionales");
+    assert_eq!(p.mode, methods::ShutdownMode::Stop);
+    assert!(p.graceful, "y `graceful` no cambia de default");
+
+    // `mode` y `graceful` son ejes ORTOGONALES: relevar dice quién viene
+    // después, `graceful` dice qué se hace con las tasks vivas.
+    let p: methods::DaemonShutdownParams =
+        serde_json::from_str(r#"{"mode":"handover","graceful":false}"#).expect("json");
+    assert_eq!(p.mode, methods::ShutdownMode::Handover);
+    assert!(!p.graceful);
+
+    // Y un modo que este binario no conoce NO se adivina. El resto de este wire
+    // degrada ante un valor desconocido, y está bien: malinterpretarlo cuesta
+    // una feature. Aquí cuesta apagar un daemon de una forma que el que llamó
+    // no pidió, así que es la misma asimetría que `unknown_policies_are_hard_errors`.
+    assert!(
+        serde_json::from_str::<methods::ShutdownMode>(r#""teletransportar""#).is_err(),
+        "un modo inventado no puede degradar a `stop`"
+    );
+}
+
+/// La notificación lleva lo único que el cliente necesita para decidir: si
+/// volver. Sin eso, un relevo y una parada son la misma conexión cerrada.
+#[test]
+fn going_away_dice_si_volver() {
+    let n = norte_proto::methods::DaemonGoingAway { reconnect: true };
+    let j = serde_json::to_value(n).expect("json");
+    assert_eq!(j["reconnect"], serde_json::json!(true));
+}
+
+#[test]
 fn unknown_policies_are_hard_errors() {
     // Asimetría deliberada (ADR 0005): las políticas viajan client→server
     // como ÓRDENES mutantes — un core que no las entiende debe rechazar el
@@ -1059,10 +1095,17 @@ fn version_ventana_actual() {
     // subtipo cae en `Unknown` (ADR 0005)—, y aun así la ventana se DESPLAZA:
     // un cliente 0.43 que no conoce `CONFINED_WRITES` no sabe que una escritura
     // pudo ir sin confinar, así que no puede avisar de ello.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.45.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.44.0"), "N-1");
+    //
+    // 0.46.0 (roadmap ítem 10): `daemon.going_away` y `DaemonShutdownParams.mode`.
+    // El caso más claro de por qué la ventana se desplaza aunque el bump sea
+    // aditivo: un cliente 0.45 ignora la notificación —que es lo que ADR 0004
+    // le manda hacer— y por tanto NO se entera de que venía un relevo. No se
+    // rompe; se queda reconectando contra un socket muerto, que es justo el
+    // comportamiento que 0.46 existe para arreglar.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.46.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.45.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.43.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.44.9"),
         "N-2 fuera de la ventana"
     );
 }

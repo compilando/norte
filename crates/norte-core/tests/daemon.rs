@@ -1764,7 +1764,10 @@ async fn daemon_shutdown_graceful_espera_y_apaga() {
     let _: DaemonShutdownResult = c
         .call(
             methods::DAEMON_SHUTDOWN,
-            &DaemonShutdownParams { graceful: true },
+            &DaemonShutdownParams {
+                graceful: true,
+                ..Default::default()
+            },
         )
         .await
         .expect("shutdown aceptado");
@@ -1994,7 +1997,10 @@ async fn call_tras_el_cierre_no_se_cuelga() {
     let _: DaemonShutdownResult = c
         .call(
             methods::DAEMON_SHUTDOWN,
-            &DaemonShutdownParams { graceful: true },
+            &DaemonShutdownParams {
+                graceful: true,
+                ..Default::default()
+            },
         )
         .await
         .expect("shutdown");
@@ -3352,7 +3358,10 @@ async fn daemon_shutdown_de_agente_es_invalid_request() {
     let err = agent
         .call::<_, DaemonShutdownResult>(
             methods::DAEMON_SHUTDOWN,
-            &DaemonShutdownParams { graceful: false },
+            &DaemonShutdownParams {
+                graceful: false,
+                ..Default::default()
+            },
         )
         .await
         .expect_err("un agente no apaga el daemon");

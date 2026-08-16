@@ -509,6 +509,13 @@ enum DaemonCmd {
         /// Cancela las tasks vivas en vez de esperarlas
         #[arg(long)]
         hard: bool,
+        /// Relevo: avisa a los clientes de que VUELVAN (viene un daemon nuevo)
+        ///
+        /// Sin esto, parar el daemon les dice que no vuelvan — que es lo
+        /// correcto cuando lo paras tú, y lo contrario de lo que hace falta
+        /// cuando lo estás sustituyendo. Se rehúsa si hay tasks vivas.
+        #[arg(long)]
+        handover: bool,
     },
 }
 
@@ -2121,7 +2128,11 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
             daemon.run().await.context("el daemon terminó con error")?;
             Ok(ExitCode::SUCCESS)
         }
-        DaemonCmd::Stop { socket, hard } => {
+        DaemonCmd::Stop {
+            socket,
+            hard,
+            handover,
+        } => {
             // La resolución del path por defecto puede sondear el FS
             // (regla 2): fuera del hilo del runtime.
             let socket = match socket {
@@ -2143,7 +2154,14 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
             let _: norte_proto::methods::DaemonShutdownResult = client
                 .call(
                     norte_proto::methods::DAEMON_SHUTDOWN,
-                    &norte_proto::methods::DaemonShutdownParams { graceful: !hard },
+                    &norte_proto::methods::DaemonShutdownParams {
+                        graceful: !hard,
+                        mode: if handover {
+                            norte_proto::methods::ShutdownMode::Handover
+                        } else {
+                            norte_proto::methods::ShutdownMode::Stop
+                        },
+                    },
                 )
                 .await
                 .context("daemon.shutdown")?;

@@ -694,6 +694,19 @@
       ],
       "type": "object"
     },
+    "DaemonGoingAway": {
+      "description": "Params de [`DAEMON_GOING_AWAY`].\n\n```\nuse norte_proto::methods::DaemonGoingAway;\nlet n = DaemonGoingAway { reconnect: true };\nlet j = serde_json::to_value(&n).expect(\"json\");\nassert_eq!(j[\"reconnect\"], serde_json::json!(true));\n```",
+      "properties": {
+        "reconnect": {
+          "description": "`true` = viene un relevo; vuelve a conectar, y arráncalo si no está.\n`false` = este daemon se para y se queda parado.\n\nEl `false` no es decoración: mandarlo en una parada corriente es lo que\ndeja a un frontend decir «el daemon se paró» en vez de «se cayó la\nconexión», que para quien lo lee no son lo mismo.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reconnect"
+      ],
+      "type": "object"
+    },
     "DaemonShutdownParams": {
       "description": "Params de [`DAEMON_SHUTDOWN`].",
       "properties": {
@@ -701,6 +714,10 @@
           "default": true,
           "description": "`true` (default): terminar las tasks vivas antes de salir.\n`false`: cancelarlas primero (estado limpio garantizado igual).",
           "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/$defs/ShutdownMode",
+          "description": "Parada o relevo (0.46.0). Default [`ShutdownMode::Stop`], que es lo que\nhacía este método antes de que el campo existiera.\n\nNo se serializa cuando es `Stop`: el mensaje que este cliente manda para\nuna parada corriente sigue siendo BYTE POR BYTE el de 0.45, así que la\ncompatibilidad hacia atrás no depende de que el otro lado ignore campos\nque no conoce — depende de que no haya campo."
         }
       },
       "type": "object"
@@ -3382,6 +3399,21 @@
       ],
       "type": "object"
     },
+    "ShutdownMode": {
+      "description": "Qué clase de apagado es (0.46.0).\n\nORTOGONAL a [`DaemonShutdownParams::graceful`], que decide qué pasa con las\ntasks vivas. Éste decide quién viene después.\n\n**Sin `#[serde(other)]`, a diferencia de casi todo este wire.** El resto de\nlos enums degradan ante un valor desconocido porque malinterpretarlos cuesta\nuna feature; malinterpretar éste apaga un daemon de una forma que el que\nllamó no pidió. Misma asimetría que las políticas de mutación (ADR 0005).\n\n```\nuse norte_proto::methods::ShutdownMode;\nassert_eq!(ShutdownMode::default(), ShutdownMode::Stop);\nassert!(serde_json::from_str::<ShutdownMode>(r#\"\"inventado\"\"#).is_err());\n```",
+      "oneOf": [
+        {
+          "const": "stop",
+          "description": "Se para y se queda parado. El comportamiento de siempre.",
+          "type": "string"
+        },
+        {
+          "const": "handover",
+          "description": "Viene un relevo: los clientes deben volver, y arrancarlo si no está.",
+          "type": "string"
+        }
+      ]
+    },
     "Side": {
       "description": "Un lado de la comparación (0.39.0, ADR 0048): el panel izquierdo es el que\nlanzó la comparación.\n\n```\nuse norte_proto::methods::Side;\nassert_eq!(serde_json::to_string(&Side::Right).expect(\"json\"), r#\"\"right\"\"#);\nlet futuro: Side = serde_json::from_str(r#\"\"middle\"\"#).expect(\"degrada\");\nassert_eq!(futuro, Side::Unknown);\n```",
       "oneOf": [
@@ -4572,6 +4604,9 @@
     "connection_trust_host_key_result": {
       "$ref": "#/$defs/ConnectionTrustHostKeyResult"
     },
+    "daemon_going_away": {
+      "$ref": "#/$defs/DaemonGoingAway"
+    },
     "daemon_shutdown_params": {
       "$ref": "#/$defs/DaemonShutdownParams"
     },
@@ -4984,6 +5019,7 @@
     "connection_degraded",
     "connection_trust_host_key_params",
     "connection_trust_host_key_result",
+    "daemon_going_away",
     "daemon_shutdown_params",
     "daemon_shutdown_result",
     "decoration_wire",
