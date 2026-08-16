@@ -1490,6 +1490,11 @@ async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
         findings.extend(doctor::check_keymaps(&layers));
         findings.extend(doctor::check_plugins(&config_dir));
         findings.extend(doctor::check_connections(&config_dir, &env));
+        // Roadmap ítem 9: dónde está el log. Sin esta fila, el fichero existe
+        // y nadie sabe pedirlo cuando hace falta.
+        findings.extend(doctor::check_logs(
+            norte_core::logging::log_dir(None).as_deref(),
+        ));
         findings
     })
     .await
