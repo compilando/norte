@@ -3009,6 +3009,7 @@ fn method_names_frozen() {
     // `#[serde(other)]` de ADR 0005: un cliente 0.44.x lee «conflicto que esta
     // versión no sabe nombrar» sobre una operación que igualmente falló, no
     // actúa de más. MINOR, por tanto, y no MAJOR.
+    assert_eq!(methods::DAEMON_GOING_AWAY, "daemon.going_away");
     // 0.46.0 (roadmap ítem 10): `daemon.going_away` y `DaemonShutdownParams.mode`.
     // Los dos son ADITIVOS y ninguno cambia lo que ya se emitía: `mode` no se
     // serializa cuando vale `Stop`, así que una parada corriente de un cliente

@@ -268,6 +268,13 @@ cli-audit-anchors-ok = { $count } ancla(s) verificadas contra la cadena
 cli-audit-anchors-ok-unverified-chain = { $count } ancla(s) casan con los hashes ALMACENADOS — que no es una cadena verificada: este binario no pudo recomputar las entradas que cubren
 cli-plugin-run-failed = no se pudo ejecutar el plugin: { $error }
 cli-daemon-stopped = apagado pedido al daemon
+# Un relevo pedido a un daemon demasiado viejo para saber qué es. Hizo un
+# apagado corriente, así que a los frontends no se les dijo nada y no van a
+# volver solos — que conviene decirlo, porque si no la CLI daría por bueno algo
+# que no ocurrió. Es la PRIMERA actualización a 0.46 por definición, o sea el
+# caso normal y no un rincón.
+cli-daemon-handover-unsupported = este daemon habla el protocolo { $version } y no sabe de relevos: se le ha parado sin más, así que las ventanas abiertas no van a reconectar solas
+cli-daemon-handover-requested = relevo pedido: las ventanas volverán cuando el reemplazo esté en pie
 cli-daemon-hard-shutdown = segunda señal: cancelando tasks…
 cli-hostkey-unknown = primera conexión a { $host }:{ $port } — host key sin registrar
 cli-hostkey-fingerprint = huella { $algo }: { $fingerprint }

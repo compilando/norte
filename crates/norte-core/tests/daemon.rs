@@ -1889,6 +1889,68 @@ async fn un_relevo_con_una_task_viva_se_rehusa_y_no_toca_nada() {
         .expect("el daemon sigue aceptando tras rehusar el relevo");
 }
 
+/// **El socket se retira ANTES de drenar, no después**, y eso solo importa
+/// desde que existe el relevo.
+///
+/// Al apagar, el daemon suelta el listener y espera a sus tasks. Si el fichero
+/// del socket sigue ahí durante esa espera, un cliente que reconecte recibe
+/// `ECONNREFUSED`, arranca el reemplazo —cosa que ANTES de esta fase no hacía
+/// nunca—, el reemplazo borra la ruta rancia y enlaza la suya… y el daemon
+/// viejo, al terminar de drenar, borra el socket DEL REEMPLAZO. Éste se queda
+/// escuchando en un inodo sin nombre, y como el permiso de arranque es de un
+/// solo uso, nadie lo vuelve a levantar.
+///
+/// El test fija el orden: con una task viva —o sea, en pleno drenaje— la ruta
+/// ya no existe.
+#[tokio::test]
+async fn el_socket_se_retira_antes_de_drenar() {
+    let mem = MemProvider::new();
+    write_file(&mem, "mem:///src.bin", &vec![7u8; 4 * 1024 * 1024]).await;
+    // Latencia ALTA por operación: el drenaje dura segundos, así que «el
+    // socket se fue» y «el daemon terminó» no pueden confundirse.
+    mem.faults()
+        .set_latency_per_op(Some(Duration::from_millis(200)));
+    let mut d = spawn_daemon_mem(None, Duration::from_mins(2), mem).await;
+    let c = connected_client(&d).await;
+    let _: FsTaskResult = c
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///src.bin"),
+                to: vp("mem:///dst.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+            },
+        )
+        .await
+        .expect("copia lanzada");
+
+    // Parada graceful: entra en el drenaje con la copia viva.
+    let _: DaemonShutdownResult = c
+        .call(methods::DAEMON_SHUTDOWN, &DaemonShutdownParams::default())
+        .await
+        .expect("parada aceptada");
+
+    // La ruta tiene que desaparecer MIENTRAS todavía se drena. Las dos mitades
+    // son la aserción: sin la segunda, un drenaje que acabara rápido haría pasar
+    // el test con el borrado al final, que es justo lo que rompe el relevo.
+    let mut retirado = false;
+    for _ in 0..50 {
+        if !d.socket.exists() {
+            retirado = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(retirado, "el socket sigue ahí durante el drenaje");
+    assert!(
+        futures::FutureExt::now_or_never(&mut d.run).is_none(),
+        "y el daemon TODAVÍA no ha terminado: si ya terminó, este test no          distingue el borrado temprano del tardío"
+    );
+}
+
 /// Un AGENTE no releva, igual que no apaga: es un acto de gobierno humano.
 #[tokio::test]
 async fn un_agente_no_puede_relevar() {

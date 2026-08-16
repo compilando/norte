@@ -603,6 +603,15 @@ use crate::{
 /// La inversa —un daemon 0.41 mandando un informe SIN `dest_trash` a un cliente
 /// 0.42, que fallaría al deserializar— no ocurre: [`version_compatible`] no
 /// negocia un cliente con minor MAYOR que el servidor.
+///
+/// **0.46.0** (roadmap ítem 10): [`DAEMON_GOING_AWAY`] y
+/// [`DaemonShutdownParams::mode`]. Aditivo: `mode` no se serializa cuando vale
+/// [`ShutdownMode::Stop`], así que una parada corriente sale byte por byte como
+/// en 0.45, y una notificación desconocida se ignora (ADR 0004). La ventana se
+/// DESPLAZA igualmente, y éste es el ejemplo más claro de por qué: un cliente
+/// 0.45 ignora la notificación —correctamente— y por tanto no se entera de que
+/// venía un relevo, con lo que se queda reconectando contra un socket muerto.
+/// No se rompe; simplemente no obtiene lo que 0.46 existe para dar.
 pub const PROTOCOL_VERSION: &str = "0.46.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
@@ -681,6 +690,36 @@ pub const FS_LIST_MAX_PAGE: u32 = 10_000;
 /// pueden separarse en silencio— y cambiarlo cambia el contrato de wire, con
 /// bump.
 pub const PLUGIN_HELP_MAX_BYTES: usize = 64 * 1024;
+
+/// ¿Es `version` al menos `major.minor`?
+///
+/// Para decidir si el OTRO extremo conoce una capacidad concreta, que es una
+/// pregunta distinta de [`version_compatible`]: aquélla dice si se pueden
+/// hablar, ésta dice si merece la pena pedir algo que llegó en una versión
+/// dada. Un `false` no es un error — es la señal de degradar Y DECIRLO, que es
+/// lo que separa «esto no se hizo» de un silencio.
+///
+/// Una versión que no parsea contesta `false`: sin saber qué habla el otro, no
+/// se le supone nada.
+///
+/// ```
+/// use norte_proto::methods::version_at_least;
+/// assert!(version_at_least("0.46.0", 0, 46));
+/// assert!(version_at_least("0.47.1", 0, 46));
+/// assert!(!version_at_least("0.45.9", 0, 46));
+/// assert!(!version_at_least("no-semver", 0, 46));
+/// ```
+#[must_use]
+pub fn version_at_least(version: &str, major: u64, minor: u64) -> bool {
+    let mut it = version.split('.');
+    let (Some(j), Some(n)) = (it.next(), it.next()) else {
+        return false;
+    };
+    let (Ok(j), Ok(n)) = (j.parse::<u64>(), n.parse::<u64>()) else {
+        return false;
+    };
+    (j, n) >= (major, minor)
+}
 
 /// ¿Acepta un core `server` a un cliente `client`? N y N-1 (spec §11):
 /// mismo major; en 0.x el "major efectivo" es el minor — se acepta el

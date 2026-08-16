@@ -266,6 +266,13 @@ cli-audit-anchors-ok = { $count } anchor(s) verified against the chain
 cli-audit-anchors-ok-unverified-chain = { $count } anchor(s) match the STORED hashes — which is not a verified chain: this build could not recompute the entries they cover
 cli-plugin-run-failed = plugin run failed: { $error }
 cli-daemon-stopped = shutdown requested
+# A handover asked of a daemon too old to know what one is. It performed an
+# ordinary shutdown instead, so the frontends were told nothing and will not
+# come back on their own — which is worth saying, because the CLI would
+# otherwise report success for something that did not happen. This is the
+# FIRST upgrade to 0.46 by definition, so it is the common case, not a corner.
+cli-daemon-handover-unsupported = this daemon speaks protocol { $version } and does not know about handovers: it was stopped instead, so open windows will not reconnect on their own
+cli-daemon-handover-requested = handover requested: the windows will come back when the replacement is up
 cli-daemon-hard-shutdown = second signal: cancelling tasks…
 cli-hostkey-unknown = first connection to { $host }:{ $port } — unregistered host key
 cli-hostkey-fingerprint = fingerprint { $algo }: { $fingerprint }

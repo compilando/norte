@@ -1393,11 +1393,31 @@ async fn open_viewer(
     }
 }
 
-/// Conecta al daemon (sin autoarrancarlo).
+/// Conecta al daemon.
+///
+/// Con comando de autoarranque (roadmap ítem 10). No es para arrancarlo la
+/// primera vez —esta GUI se conecta a uno que ya está— sino para el RELEVO:
+/// tras un `daemon.going_away` que dice «vuelve», el backend tiene permiso
+/// para levantar al que viene, y sin `spawn_cmd` ese permiso no vale nada.
+/// El diseño nombra a esta ventana la primera de las que no deben perder su
+/// sesión al actualizar, y sin esto era precisamente la única que sí la perdía.
+///
+/// El binario del daemon es `norte` (la CLI), junto al ejecutable actual: el
+/// mismo criterio y la misma resolución absoluta que usa la TUI, sin pasar por
+/// `PATH`.
 async fn connect(socket: &Path) -> Result<RemoteBackend, norte_proto::Error> {
+    let spawn_cmd = std::env::current_exe().ok().map(|exe| {
+        vec![
+            exe.with_file_name("norte").into_os_string(),
+            "daemon".into(),
+            "run".into(),
+            "--socket".into(),
+            socket.to_path_buf().into_os_string(),
+        ]
+    });
     RemoteBackend::connect(
         socket.to_path_buf(),
-        None,
+        spawn_cmd,
         ClientInfo {
             name: "norte-gui".into(),
             version: env!("CARGO_PKG_VERSION").into(),

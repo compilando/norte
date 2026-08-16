@@ -671,6 +671,14 @@ fn el_modo_de_apagado_no_degrada() {
     assert_eq!(p.mode, methods::ShutdownMode::Handover);
     assert!(!p.graceful);
 
+    // `"stop"` explícito también se acepta: nuestro emisor no lo escribe nunca
+    // (`skip_serializing_if`), pero el schema lo publica como valor legal, así
+    // que un cliente de terceros lo manda — y un `rename` futuro los rompería
+    // con la suite en verde.
+    let p: methods::DaemonShutdownParams =
+        serde_json::from_str(r#"{"mode":"stop"}"#).expect("json");
+    assert_eq!(p.mode, methods::ShutdownMode::Stop);
+
     // Y un modo que este binario no conoce NO se adivina. El resto de este wire
     // degrada ante un valor desconocido, y está bien: malinterpretarlo cuesta
     // una feature. Aquí cuesta apagar un daemon de una forma que el que llamó

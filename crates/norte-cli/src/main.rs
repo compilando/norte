@@ -2144,13 +2144,29 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
             let mut client = Client::connect(&socket)
                 .await
                 .context("no hay daemon escuchando en el socket")?;
-            client
+            let init = client
                 .initialize(norte_proto::methods::ClientInfo {
                     name: "norte-cli".into(),
                     version: env!("CARGO_PKG_VERSION").into(),
                 })
                 .await
                 .context("initialize")?;
+            // Un daemon anterior a 0.46 IGNORA `mode` y hace una parada
+            // corriente: a los frontends no se les avisa y no vuelven solos.
+            // Sin esta comprobación la CLI diría «hecho» de algo que no pasó —
+            // y es el caso NORMAL, porque la primera actualización a 0.46 la
+            // recibe por definición un daemon 0.45.
+            let sabe_relevar =
+                norte_proto::methods::version_at_least(&init.protocol_version, 0, 46);
+            if handover && !sabe_relevar {
+                eprintln!(
+                    "{}",
+                    norte_i18n::ta(
+                        "cli-daemon-handover-unsupported",
+                        &[("version", init.protocol_version.as_str())],
+                    )
+                );
+            }
             let _: norte_proto::methods::DaemonShutdownResult = client
                 .call(
                     norte_proto::methods::DAEMON_SHUTDOWN,
@@ -2165,7 +2181,14 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
                 )
                 .await
                 .context("daemon.shutdown")?;
-            eprintln!("{}", norte_i18n::t("cli-daemon-stopped"));
+            eprintln!(
+                "{}",
+                if handover && sabe_relevar {
+                    norte_i18n::t("cli-daemon-handover-requested")
+                } else {
+                    norte_i18n::t("cli-daemon-stopped")
+                }
+            );
             Ok(ExitCode::SUCCESS)
         }
     }
