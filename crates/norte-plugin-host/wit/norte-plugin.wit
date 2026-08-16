@@ -194,7 +194,22 @@ interface columns {
     /// `none` = no se le aprobó, o el host no pudo abrir el directorio. Un
     /// guest que reciba `none` tiene que seguir contestando —con celdas
     /// `none`— en vez de fallar: la columna se queda vacía, el panel no.
-    column-values: func(id: string, location: option<string>,
+    /// La ubicación que el host abrió para esta llamada: el token opaco con
+    /// el que se lee, y el `prefix` —relativo a esa raíz— del directorio que
+    /// se está listando.
+    ///
+    /// Los dos hacen falta porque la raíz NO tiene por qué ser el directorio
+    /// visible: un plugin puede declarar en su manifiesto un `marcador` de
+    /// raíz de proyecto (`.git`, por ejemplo) y entonces el host abre el
+    /// ANCESTRO que lo contiene. Sin `prefix`, el guest no sabría qué parte
+    /// de esa raíz está mirando el usuario; con él, no necesita —ni puede—
+    /// subir por su cuenta.
+    record location-ref {
+        token: string,
+        prefix: list<u8>,
+    }
+
+    column-values: func(id: string, location: option<location-ref>,
                         entries: list<list<u8>>) -> list<option<string>>;
 }
 

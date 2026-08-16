@@ -145,6 +145,22 @@ pub struct Capabilities {
     /// Ubicación (`location = "read"`); ausente = sin ubicación (ADR 0057).
     #[serde(default)]
     pub location: LocationCap,
+    /// Marcador de RAÍZ DE PROYECTO (`location-root-marker = ".git"`).
+    ///
+    /// Con él, el host no abre el directorio que se está listando sino el
+    /// ANCESTRO más cercano que contenga una entrada con ese nombre — y le
+    /// dice al guest qué prefijo mira el usuario. Sin él, la raíz es el
+    /// directorio visible.
+    ///
+    /// Existe porque la confinación es real: un token no puede subir (`..` lo
+    /// rechaza el kernel), así que un plugin que necesita el fichero de
+    /// control de un proyecto —`.git/index`, `Cargo.toml`, `.hg`— solo podría
+    /// trabajar cuando el usuario está justo en la raíz. Lo que se concede
+    /// sigue siendo VISIBLE al aprobar: el nombre del marcador se enseña con
+    /// el badge, y subir de más se corta en las raíces protegidas y en un
+    /// tope de niveles.
+    #[serde(default, rename = "location-root-marker")]
+    pub location_root_marker: Option<String>,
     /// `exec`: DEBE ser `none` o estar ausente. Se valida y descarta al parsear
     /// el manifiesto ([`crate::Manifest::from_toml`]); jamás se expone aquí.
     #[serde(default)]
@@ -236,6 +252,9 @@ impl Capabilities {
         // opcional) ya se autodelimita.
         if self.location.granted() {
             h.update([b'L', self.location.digest_tag()]);
+            // El marcador entra CON la capacidad: cambiar `.git` por otra cosa
+            // cambia qué directorio se abre, así que exige aprobar otra vez.
+            update_opt_str(h, self.location_root_marker.as_deref());
         }
         // exec: SIEMPRE `none`/ausente (se valida al parsear), pero entra en el
         // digest por completitud — si un futuro relajara la invariante, el cambio

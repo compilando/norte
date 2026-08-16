@@ -1041,6 +1041,10 @@ pub use crate::bindings::decorator_world::exports::norte::plugin::decorator as d
 /// `EntryKind` tal y como cruzan la ABI. Reexportados para que quien implemente
 /// [`LocationHost`] no tenga que nombrar el módulo generado.
 pub use crate::bindings::columns_world::norte::location::location as location_iface;
+
+/// Los tipos que la interfaz `columns` pone en el cable hacia el guest — hoy
+/// [`columns_iface::LocationRef`], el par (token, prefijo) de ADR 0057.
+pub use crate::bindings::columns_world::exports::norte::plugin::columns as columns_iface;
 use crate::bindings::columns_world::norte::location::location;
 
 /// Tipos del export `previewer` (record `Span`, alias `PreviewInput`) —
@@ -1144,7 +1148,7 @@ impl ColumnsInstance {
     pub fn column_values(
         &mut self,
         id: &str,
-        location: Option<&str>,
+        location: Option<&columns_iface::LocationRef>,
         entries: &[Vec<u8>],
     ) -> Result<Vec<Option<String>>, RuntimeError> {
         let out = self

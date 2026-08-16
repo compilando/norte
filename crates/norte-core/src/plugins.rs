@@ -2078,7 +2078,7 @@ header = "Size"
         let vpath = crate::policy::local_root_vpath(dir.path()).expect("vpath del tempdir");
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
         let token = {
-            let sesion = mint.mint_for(&vpath).expect("acuña");
+            let sesion = mint.mint_for(&vpath, None, false).expect("acuña");
             let token = sesion.token().to_owned();
             assert!(
                 mint.resolve(&token).is_ok(),
@@ -2103,10 +2103,18 @@ header = "Size"
         std::fs::write(a.path().join("solo-en-a"), b"x").unwrap();
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
         let sa = mint
-            .mint_for(&crate::policy::local_root_vpath(a.path()).unwrap())
+            .mint_for(
+                &crate::policy::local_root_vpath(a.path()).unwrap(),
+                None,
+                false,
+            )
             .expect("acuña a");
         let sb = mint
-            .mint_for(&crate::policy::local_root_vpath(b.path()).unwrap())
+            .mint_for(
+                &crate::policy::local_root_vpath(b.path()).unwrap(),
+                None,
+                false,
+            )
             .expect("acuña b");
         assert_ne!(sa.token(), sb.token());
         assert_eq!(sa.token().len(), 64, "32 bytes en hex");
@@ -2124,12 +2132,12 @@ header = "Size"
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
         let remote = norte_proto::VPath::parse("sftp://host/dir").unwrap();
         assert!(
-            mint.mint_for(&remote).is_none(),
+            mint.mint_for(&remote, None, false).is_none(),
             "sin ruta local no hay token"
         );
         let archivo = norte_proto::VPath::parse("zip+file:///a.zip/!/dentro").unwrap();
         assert!(
-            mint.mint_for(&archivo).is_none(),
+            mint.mint_for(&archivo, None, false).is_none(),
             "dentro de un archivo tampoco"
         );
     }
@@ -2143,9 +2151,89 @@ header = "Size"
         std::fs::create_dir(estado.path().join("dentro")).unwrap();
         let mint =
             LocationMint::with_protected(vec![raiz.clone()], norte_vfs_local::Bounds::default());
-        assert!(mint.mint_for(&raiz).is_none(), "la raíz protegida, no");
+        assert!(
+            mint.mint_for(&raiz, None, false).is_none(),
+            "la raíz protegida, no"
+        );
         let hijo = crate::policy::local_root_vpath(&estado.path().join("dentro")).unwrap();
-        assert!(mint.mint_for(&hijo).is_none(), "ni nada bajo ella");
+        assert!(
+            mint.mint_for(&hijo, None, false).is_none(),
+            "ni nada bajo ella"
+        );
+    }
+
+    /// El marcador de raíz de proyecto: con `.git` declarado, lo que se abre
+    /// es el ANCESTRO que lo contiene, y el prefijo dice qué mira el usuario.
+    /// Sin esto la columna solo funcionaría con el panel justo en la raíz del
+    /// repositorio, porque un token NO puede subir.
+    #[test]
+    fn el_marcador_abre_el_ancestro_y_dice_el_prefijo() {
+        use norte_plugin_host::LocationHost as _;
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        std::fs::write(repo.path().join(".git/index"), b"DIRC").unwrap();
+        std::fs::create_dir_all(repo.path().join("src/deep")).unwrap();
+        let dir = crate::policy::local_root_vpath(&repo.path().join("src/deep")).unwrap();
+
+        let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
+        let sesion = mint.mint_for(&dir, Some(".git"), true).expect("acuña");
+        assert_eq!(sesion.as_ref().prefix, b"src/deep");
+        assert_eq!(
+            mint.read(sesion.token(), b".git/index").unwrap(),
+            b"DIRC",
+            "la raíz abierta es el repositorio, no el directorio visible"
+        );
+    }
+
+    /// Sin `climb` no se sube: un agente acotado a su scope no gana un ancestro
+    /// porque el plugin declare un marcador.
+    #[test]
+    fn sin_climb_la_raiz_es_el_directorio_visible() {
+        use norte_plugin_host::LocationHost as _;
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        std::fs::create_dir(repo.path().join("src")).unwrap();
+        let dir = crate::policy::local_root_vpath(&repo.path().join("src")).unwrap();
+        let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
+        let sesion = mint.mint_for(&dir, Some(".git"), false).expect("acuña");
+        assert!(sesion.as_ref().prefix.is_empty());
+        assert!(
+            mint.read(sesion.token(), b".git/index").is_err(),
+            "sin subir, el repositorio queda fuera"
+        );
+    }
+
+    /// Un marcador que no aparece por encima no hace subir a ningún sitio: la
+    /// raíz sigue siendo el directorio visible.
+    #[test]
+    fn un_marcador_ausente_no_sube_por_si_acaso() {
+        let dir_t = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir_t.path().join("sub")).unwrap();
+        let dir = crate::policy::local_root_vpath(&dir_t.path().join("sub")).unwrap();
+        let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
+        let sesion = mint
+            .mint_for(&dir, Some(".no-existe"), true)
+            .expect("acuña");
+        assert!(sesion.as_ref().prefix.is_empty());
+    }
+
+    /// La subida se para en una raíz protegida: el directorio de estado no se
+    /// convierte en la raíz de nadie (ADR 0052).
+    #[test]
+    fn la_subida_se_para_en_una_raiz_protegida() {
+        let estado = tempfile::tempdir().unwrap();
+        // El marcador está en el PADRE protegido; el directorio visible cuelga
+        // de él.
+        std::fs::create_dir(estado.path().join(".git")).unwrap();
+        std::fs::create_dir(estado.path().join("dentro")).unwrap();
+        let raiz = crate::policy::local_root_vpath(estado.path()).unwrap();
+        let dir = crate::policy::local_root_vpath(&estado.path().join("dentro")).unwrap();
+        let mint =
+            LocationMint::with_protected(vec![raiz.clone()], norte_vfs_local::Bounds::default());
+        assert!(
+            mint.mint_for(&dir, Some(".git"), true).is_none(),
+            "ni el directorio visible se sirve, porque ya está bajo la raíz protegida"
+        );
     }
 
     /// Sin la capability aprobada no se acuña NADA: ni se abre el directorio.
@@ -2164,7 +2252,7 @@ header = "Size"
                 .location
                 .granted()
         );
-        drop(mint.mint_for(&vpath));
+        drop(mint.mint_for(&vpath, None, false));
         assert_eq!(mint.live_tokens(), 0);
     }
 
@@ -2494,29 +2582,45 @@ impl LocationMint {
         })
     }
 
-    /// Acuña un token para `dir`, o `None` si esa ubicación no se sirve:
-    /// no es un `file://` local, cae bajo una raíz protegida, o no se pudo
-    /// abrir. `None` NO es un error de la petición — la columna se queda
-    /// vacía y el panel sigue.
+    /// Tope de niveles que sube la búsqueda del marcador de raíz. Un proyecto
+    /// anidado 64 directorios por debajo de su raíz no es un proyecto.
+    const MAX_CLIMB: usize = 64;
+
+    /// Acuña un token para `dir`, o `None` si esa ubicación no se sirve: no es
+    /// un `file://` local, cae bajo una raíz protegida, o no se pudo abrir.
+    /// `None` NO es un error de la petición — la columna se queda vacía y el
+    /// panel sigue.
     ///
-    /// BLOQUEANTE (abre un directorio): va dentro de `spawn_blocking`.
+    /// `marker` es el marcador de raíz de proyecto que declara el manifiesto
+    /// (`.git`): si viene, lo que se abre es el ANCESTRO más cercano que lo
+    /// contenga, y el `prefix` de la sesión dice qué parte de esa raíz está
+    /// mirando el usuario. Sin marcador —o si no aparece por encima— la raíz
+    /// es `dir` y el prefijo va vacío.
+    ///
+    /// `climb` lo decide el llamante: solo se sube para el actor HUMANO. Un
+    /// agente o un plugin están acotados a su scope, y subir por encima de él
+    /// sería justo lo que el gate de lectura impide.
+    ///
+    /// BLOQUEANTE (abre directorios): va dentro de `spawn_blocking`.
     pub(crate) fn mint_for(
         self: &std::sync::Arc<Self>,
         dir: &norte_proto::VPath,
+        marker: Option<&str>,
+        climb: bool,
     ) -> Option<LocationSession> {
         if dir.scheme() != "file" || dir.authority().is_some() {
             return None;
         }
-        if self
-            .protected
-            .iter()
-            .any(|root| crate::policy::is_under(root, dir))
-        {
+        if self.is_protected(dir) {
             tracing::debug!("columns: ubicación bajo una raíz protegida, sin token");
             return None;
         }
         let native = norte_vfs_local::vpath_to_native(dir).ok()?;
-        let root = norte_vfs_local::ConfinedRoot::open(&native, self.bounds).ok()?;
+        let (root_native, prefix) = match marker.filter(|_| climb) {
+            Some(marker) => self.climb_to_marker(dir, &native, marker),
+            None => (native, Vec::new()),
+        };
+        let root = norte_vfs_local::ConfinedRoot::open(&root_native, self.bounds).ok()?;
         let token = mint_token();
         self.live
             .lock()
@@ -2525,7 +2629,54 @@ impl LocationMint {
         Some(LocationSession {
             mint: std::sync::Arc::clone(self),
             token,
+            prefix,
         })
+    }
+
+    fn is_protected(&self, path: &norte_proto::VPath) -> bool {
+        self.protected
+            .iter()
+            .any(|root| crate::policy::is_under(root, path))
+    }
+
+    /// El ancestro más cercano que contiene una entrada llamada `marker`, y el
+    /// camino desde él hasta `dir` en bytes. Si no hay ninguno, `dir` mismo con
+    /// prefijo vacío — nunca se sube «por si acaso».
+    ///
+    /// La subida se corta en la primera raíz protegida (ADR 0052) y a los
+    /// [`Self::MAX_CLIMB`] niveles.
+    fn climb_to_marker(
+        &self,
+        dir: &norte_proto::VPath,
+        native: &std::path::Path,
+        marker: &str,
+    ) -> (std::path::PathBuf, Vec<u8>) {
+        use std::os::unix::ffi::OsStrExt as _;
+        let mut prefix: Vec<Vec<u8>> = Vec::new();
+        let mut actual_v = dir.clone();
+        let mut actual_n = native.to_path_buf();
+        for _ in 0..=Self::MAX_CLIMB {
+            if actual_n.join(marker).symlink_metadata().is_ok() {
+                return (actual_n, prefix.join(&b'/'));
+            }
+            let Some(padre_v) = actual_v.parent() else {
+                break;
+            };
+            let Some(padre_n) = actual_n.parent().map(std::path::Path::to_path_buf) else {
+                break;
+            };
+            if self.is_protected(&padre_v) {
+                break;
+            }
+            let nombre = actual_n
+                .file_name()
+                .map(|n| n.as_bytes().to_vec())
+                .unwrap_or_default();
+            prefix.insert(0, nombre);
+            actual_v = padre_v;
+            actual_n = padre_n;
+        }
+        (native.to_path_buf(), Vec::new())
     }
 
     fn resolve(
@@ -2558,12 +2709,25 @@ impl LocationMint {
 pub(crate) struct LocationSession {
     pub(crate) mint: std::sync::Arc<LocationMint>,
     token: String,
+    /// Qué parte de la raíz está mirando el usuario, en bytes y sin barra
+    /// final. Vacío = la raíz ES el directorio visible.
+    prefix: Vec<u8>,
 }
 
 impl LocationSession {
-    /// El token que se le pasa al guest.
+    /// El token que se le pasa al guest. Solo lo miran los tests: el camino
+    /// real usa [`Self::as_ref`], que lleva token Y prefijo juntos.
+    #[cfg(test)]
     pub(crate) fn token(&self) -> &str {
         &self.token
+    }
+
+    /// El par (token, prefijo) tal y como cruza al guest.
+    pub(crate) fn as_ref(&self) -> norte_plugin_host::columns_iface::LocationRef {
+        norte_plugin_host::columns_iface::LocationRef {
+            token: self.token.clone(),
+            prefix: self.prefix.clone(),
+        }
     }
 }
 
@@ -2659,6 +2823,7 @@ pub(crate) fn run_column_values(
     resolved: ResolvedDecorator,
     column_id: &str,
     location_dir: Option<&norte_proto::VPath>,
+    climb: bool,
     entries: &[Vec<u8>],
     expected_len: usize,
 ) -> Vec<Option<String>> {
@@ -2667,7 +2832,7 @@ pub(crate) fn run_column_values(
     // soltarse, el token deja de resolver.
     let sesion = if caps.location.granted() {
         let mint = LocationMint::new(norte_vfs_local::Bounds::default());
-        location_dir.and_then(|dir| mint.mint_for(dir))
+        location_dir.and_then(|dir| mint.mint_for(dir, caps.location_root_marker.as_deref(), climb))
     } else {
         None
     };
@@ -2680,11 +2845,8 @@ pub(crate) fn run_column_values(
         return vec![None; expected_len];
     };
     inst.set_settings(settings);
-    let Ok(raw) = inst.column_values(
-        column_id,
-        sesion.as_ref().map(LocationSession::token),
-        entries,
-    ) else {
+    let refe = sesion.as_ref().map(LocationSession::as_ref);
+    let Ok(raw) = inst.column_values(column_id, refe.as_ref(), entries) else {
         tracing::warn!(plugin = %id, "columns: fallo al ejecutar, celdas vacías");
         return vec![None; expected_len];
     };

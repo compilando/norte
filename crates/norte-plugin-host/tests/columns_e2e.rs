@@ -13,6 +13,15 @@ use norte_plugin_host::{Capabilities, PluginRuntime};
 
 mod support;
 
+/// La ubicación tal y como cruza al guest: token y prefijo vacío (la raíz ES
+/// el directorio visible en estos tests).
+fn loc(token: &str) -> norte_plugin_host::columns_iface::LocationRef {
+    norte_plugin_host::columns_iface::LocationRef {
+        token: token.to_owned(),
+        prefix: Vec::new(),
+    }
+}
+
 #[test]
 fn columns_wit_e2e_positional_roundtrip_wasm_real() {
     let Some(wasm) = support::build_guest("columns-demo") else {
@@ -67,7 +76,7 @@ fn sin_la_capability_el_host_niega_antes_de_tocar_nada_wasm_real() {
         .expect("instanciar el columns");
 
     let out = inst
-        .column_values("stat-size", Some("tok"), &[b"a.txt".to_vec()])
+        .column_values("stat-size", Some(&loc("tok")), &[b"a.txt".to_vec()])
         .expect("column_values sin trap");
     assert_eq!(out, vec![None], "sin capacidad, celda vacía");
     assert_eq!(espia.calls(), 0, "el host no resolvió ni un byte");
@@ -88,7 +97,7 @@ fn con_la_capability_el_guest_lee_bajo_el_token_wasm_real() {
     let out = inst
         .column_values(
             "stat-size",
-            Some("tok"),
+            Some(&loc("tok")),
             &[b"a.txt".to_vec(), b"no".to_vec()],
         )
         .expect("column_values sin trap");

@@ -28,7 +28,7 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-use exports::norte::plugin::columns::Guest as ColumnsGuest;
+use exports::norte::plugin::columns::{Guest as ColumnsGuest, LocationRef};
 use norte::host::host_log;
 use norte::location::location;
 
@@ -47,7 +47,7 @@ const STAT_SIZE_COLUMN: &str = "stat-size";
 impl ColumnsGuest for ColumnsDemo {
     fn column_values(
         id: String,
-        location: Option<String>,
+        location: Option<LocationRef>,
         entries: Vec<Vec<u8>>,
     ) -> Vec<Option<String>> {
         host_log::log(&format!(
@@ -61,12 +61,22 @@ impl ColumnsGuest for ColumnsDemo {
             return entries.iter().map(|_| None).collect();
         }
         if id == STAT_SIZE_COLUMN {
-            let Some(token) = location else {
+            let Some(loc) = location else {
                 return entries.iter().map(|_| None).collect();
             };
             return entries
                 .iter()
-                .map(|raw| match location::stat(&token, raw) {
+                .map(|raw| {
+                    // La entrada visible cuelga del PREFIJO, no de la raíz: la
+                    // raíz puede ser un ancestro (marcador de proyecto).
+                    let mut rel = loc.prefix.clone();
+                    if !rel.is_empty() {
+                        rel.push(b'/');
+                    }
+                    rel.extend_from_slice(raw);
+                    rel
+                })
+                .map(|rel| match location::stat(&loc.token, &rel) {
                     Ok(meta) => Some(meta.size.to_string()),
                     // El host dice que no (sin capacidad, token desconocido):
                     // celda vacía, jamás una traba.

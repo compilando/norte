@@ -570,6 +570,18 @@ pub enum ManifestError {
     /// `exec` distinto de `none`: PROHIBIDO (spec §7.1, invariante dura).
     #[error("capability `exec` prohibida: debe ser `none` (o ausente)")]
     ExecForbidden,
+    /// `location-root-marker` que no es UN nombre: vacío, con separador, con
+    /// NUL, `.`/`..`, o absurdamente largo. Un marcador con una barra dentro
+    /// haría que el host buscase por una RUTA subiendo, que es otra capacidad.
+    #[error("`location-root-marker` debe ser un nombre simple (sin `/`, sin NUL, no `.`/`..`)")]
+    LocationMarker,
+    /// `location-root-marker` declarado SIN `location = "read"`: pediría abrir
+    /// un ancestro sin pedir la capacidad que lo lee. Se rechaza en vez de
+    /// ignorarse, para que el autor se entere.
+    #[error(
+        "`location-root-marker` sin `location = \"read\"`: declara la capacidad o quita el marcador"
+    )]
+    LocationMarkerWithoutCap,
     /// Un hook declarado —como categoría primaria o como contribución— cuando
     /// NADA lo ejecuta: no hay interfaz WIT `hook`, ni world, ni sitio en el
     /// host que la llame. Aceptarlo instalaría algo inerte que el gestor
@@ -726,6 +738,24 @@ impl Manifest {
             .is_some_and(|e| e != "none")
         {
             return Err(ManifestError::ExecForbidden);
+        }
+        // El marcador de raíz es UN nombre, jamás una ruta: con una barra
+        // dentro el host estaría subiendo por un camino elegido por el plugin,
+        // que es una capacidad distinta de la que se aprueba.
+        if let Some(marker) = raw.capabilities.location_root_marker.as_deref() {
+            if !raw.capabilities.location.granted() {
+                return Err(ManifestError::LocationMarkerWithoutCap);
+            }
+            let malo = marker.is_empty()
+                || marker.len() > 64
+                || marker.contains('/')
+                || marker.contains('\\')
+                || marker.contains('\0')
+                || marker == "."
+                || marker == "..";
+            if malo {
+                return Err(ManifestError::LocationMarker);
+            }
         }
         // id reverse-DNS REAL: uno o más segmentos `[A-Za-z0-9-]+` separados por
         // puntos, con al menos un punto, sin segmento vacío (ni punto inicial/

@@ -2022,6 +2022,9 @@ impl Backend {
                             resolved,
                             &column_id_owned,
                             location.as_ref(),
+                            // Embebido: quien mira es la persona que abrió el
+                            // panel, el mismo caso que `Actor::User`.
+                            true,
                             &entries,
                             expected_len,
                         ))

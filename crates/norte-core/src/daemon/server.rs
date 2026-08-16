@@ -2928,12 +2928,17 @@ async fn handle_plugin_column_values(
     // primer path, que ya pasó el gate de lectura de arriba: el plugin no
     // alcanza nada que el actor no pudiera listar él mismo.
     let location = p.paths.first().and_then(norte_proto::VPath::parent);
+    let climb = matches!(actor, Actor::User);
     let values = tokio::task::spawn_blocking(move || {
         crate::plugins::run_column_values(
             &runtime,
             resolved,
             &column_id,
             location.as_ref(),
+            // Solo el humano sube a buscar la raíz del proyecto: un agente o
+            // un plugin están acotados a su scope, y subir por encima de él es
+            // exactamente lo que el gate de lectura impide.
+            climb,
             &entries,
             expected_len,
         )
