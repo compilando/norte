@@ -2888,6 +2888,10 @@ async fn sync_plan_show_apply(
         include: None,
     };
 
+    // La Task nace DENTRO de `sync_plan`, y el `.part` del spool con ella: el
+    // `Ctrl+C` que llegue entre una cosa y otra tiene que esperar al handle,
+    // no matar el proceso (que se saltaría el `Drop` que borra el `.part`).
+    sigint.naciendo();
     let (task, mut rx) = backend
         .sync_plan(params)
         .await
@@ -3249,6 +3253,11 @@ async fn sync_apply_and_report(
         }
     }
 
+    // Misma ventana que en la planificación: la Task de apply ya está
+    // ESCRIBIENDO antes de que `drive_task` la apunte, y un `Ctrl+C` ahí
+    // mataba el proceso en crudo — sin cancelación limpia y sin el
+    // `.norte-partial` que la regla dura 3 promete.
+    sigint.naciendo();
     let apply_task = backend
         .sync_apply(&plan.done().plan_hash)
         .await
@@ -3552,51 +3561,146 @@ fn render_attr_value(v: &norte_proto::AttrValue) -> String {
 /// lo que hacía el SO. Y `take()` en vez de leer: el PRIMER `Ctrl+C` cancela la
 /// task, el SEGUNDO sale — el mismo pacto que el doble `Esc` de los paneles.
 struct SigintGate {
-    objetivo: std::sync::Arc<std::sync::Mutex<Option<norte_core::backend::TaskCanceller>>>,
+    estado: std::sync::Arc<std::sync::Mutex<SigintState<norte_core::backend::TaskCanceller>>>,
     _handle: tokio::task::JoinHandle<()>,
+}
+
+/// Qué hacer con un `Ctrl+C`, decidido SOLO por el estado del vigilante.
+///
+/// Se separa de la puerta para poder probarlo sin señales ni procesos: el
+/// hueco que cierra es de milisegundos y no se reproduce a mano.
+#[derive(Debug, PartialEq, Eq)]
+enum SigintAction {
+    /// Hay Task viva: cancelarla (regla dura 3).
+    Cancel,
+    /// Hay una Task NACIENDO: apuntar el `Ctrl+C` y cancelarla en cuanto
+    /// exista. Salir aquí mataría el proceso sin que corriese el `Drop` que
+    /// borra el `.part` del spool — que es justo lo que #180 arregló y esta
+    /// ventana volvía a abrir.
+    Defer,
+    /// No hay nada vivo ni naciendo (el prompt `[y/N]`, el plan en pantalla):
+    /// se hace lo que haría el SO.
+    Exit,
+}
+
+/// El estado del vigilante. Genérico en el cancelador para que los tests no
+/// necesiten un `TaskRef` de verdad.
+struct SigintState<C> {
+    objetivo: Option<C>,
+    /// Hay una Task pedida cuyo handle todavía no ha vuelto.
+    naciendo: bool,
+    /// Llegó un `Ctrl+C` mientras nacía.
+    pendiente: bool,
+}
+
+impl<C> Default for SigintState<C> {
+    fn default() -> Self {
+        Self {
+            objetivo: None,
+            naciendo: false,
+            pendiente: false,
+        }
+    }
+}
+
+impl<C> SigintState<C> {
+    /// Decide qué hacer con la señal, llevándose el cancelador si lo hay.
+    fn on_signal(&mut self) -> (SigintAction, Option<C>) {
+        if let Some(c) = self.objetivo.take() {
+            return (SigintAction::Cancel, Some(c));
+        }
+        if self.naciendo {
+            self.pendiente = true;
+            return (SigintAction::Defer, None);
+        }
+        (SigintAction::Exit, None)
+    }
+
+    /// Se ha PEDIDO una Task: desde aquí y hasta [`Self::apunta_a`], un
+    /// `Ctrl+C` se aparca en vez de matar el proceso.
+    fn naciendo(&mut self) {
+        self.naciendo = true;
+    }
+
+    /// La Task ya existe. Devuelve el cancelador si hay que usarlo YA porque
+    /// el `Ctrl+C` llegó mientras nacía.
+    fn apunta_a(&mut self, canceller: C) -> Option<C> {
+        self.naciendo = false;
+        if std::mem::take(&mut self.pendiente) {
+            return Some(canceller);
+        }
+        self.objetivo = Some(canceller);
+        None
+    }
+
+    /// Ya no hay Task viva: el siguiente `Ctrl+C` sale con 130.
+    fn suelta(&mut self) {
+        self.objetivo = None;
+        self.naciendo = false;
+        self.pendiente = false;
+    }
 }
 
 impl SigintGate {
     /// Arma el vigilante. Una vez por mandato, nunca por fase.
     fn arm() -> Self {
-        let objetivo: std::sync::Arc<std::sync::Mutex<Option<norte_core::backend::TaskCanceller>>> =
-            std::sync::Arc::default();
-        let visto = std::sync::Arc::clone(&objetivo);
+        let estado: std::sync::Arc<
+            std::sync::Mutex<SigintState<norte_core::backend::TaskCanceller>>,
+        > = std::sync::Arc::default();
+        let visto = std::sync::Arc::clone(&estado);
         let handle = tokio::spawn(async move {
             loop {
                 if tokio::signal::ctrl_c().await.is_err() {
                     break;
                 }
                 // INVARIANTE: el Mutex nunca se envenena — bajo el lock solo
-                // hay un `take`/`replace` de un Option, sin panic posible.
-                let actual = visto.lock().unwrap().take();
-                if let Some(c) = actual {
-                    eprintln!("\n{}", norte_i18n::t("cli-cancelling"));
-                    c.cancel();
-                } else {
-                    // Nada vivo que cancelar (el prompt, el plan en pantalla,
-                    // un `--dry-run` saliendo): se hace lo que haría el SO.
-                    eprintln!();
-                    std::process::exit(130);
+                // se mueven Options y bools, sin panic posible.
+                let (accion, canceller) = visto.lock().unwrap().on_signal();
+                match accion {
+                    SigintAction::Cancel => {
+                        eprintln!("\n{}", norte_i18n::t("cli-cancelling"));
+                        if let Some(c) = canceller {
+                            c.cancel();
+                        }
+                    }
+                    // La Task todavía no ha vuelto: se aparca y `apunta_a` la
+                    // cancela en cuanto exista. Salir aquí sería `exit(130)`
+                    // sin `Drop`, y el `.part` del spool quedaría huérfano.
+                    SigintAction::Defer => eprintln!("\n{}", norte_i18n::t("cli-cancelling")),
+                    SigintAction::Exit => {
+                        eprintln!();
+                        std::process::exit(130);
+                    }
                 }
             }
         });
         Self {
-            objetivo,
+            estado,
             _handle: handle,
         }
     }
 
-    /// Esta Task es la que un `Ctrl+C` cancela a partir de ahora.
+    /// Se ha PEDIDO una Task. Llamar ANTES de arrancarla: entre la petición y
+    /// el handle hay una ventana en la que un `Ctrl+C` mataba el proceso en
+    /// crudo, saltándose el `Drop` que borra el `.part` del spool.
+    fn naciendo(&self) {
+        self.estado.lock().unwrap().naciendo();
+    }
+
+    /// Esta Task es la que un `Ctrl+C` cancela a partir de ahora — y si la
+    /// señal ya llegó mientras nacía, se la cancela AQUÍ.
     fn apunta_a(&self, task: &TaskRef) {
         // INVARIANTE: como arriba.
-        *self.objetivo.lock().unwrap() = Some(task.canceller());
+        let ya = self.estado.lock().unwrap().apunta_a(task.canceller());
+        if let Some(c) = ya {
+            c.cancel();
+        }
     }
 
     /// Ya no hay Task viva: el siguiente `Ctrl+C` sale con 130.
     fn suelta(&self) {
         // INVARIANTE: como arriba.
-        *self.objetivo.lock().unwrap() = None;
+        self.estado.lock().unwrap().suelta();
     }
 }
 
@@ -3697,6 +3801,56 @@ fn render(p: &norte_proto::TaskProgress, show_bytes: bool) {
         eprint!("\r{bytes} — {entries} entradas   ");
     } else {
         eprint!("\r{entries} entradas   ");
+    }
+}
+
+#[cfg(test)]
+mod sigint_gate_tests {
+    use super::{SigintAction, SigintState};
+
+    /// Regresión del hueco que `just test` destapó bajo carga: la Task nace
+    /// DENTRO de `sync_plan`, y el `.part` del spool con ella. Un `Ctrl+C` en
+    /// esa ventana salía por `process::exit(130)` — sin `Drop`, y por tanto
+    /// con el `.part` huérfano que #180 existía para evitar. El código de
+    /// salida no distinguía los dos casos: 130 en los dos.
+    #[test]
+    fn una_senal_mientras_la_task_nace_no_mata_el_proceso() {
+        let mut estado = SigintState::<&str>::default();
+        estado.naciendo();
+        let (accion, canceller) = estado.on_signal();
+        assert_eq!(accion, SigintAction::Defer, "jamás Exit mientras nace");
+        assert!(canceller.is_none());
+        // Y en cuanto la Task existe, se la cancela YA: la señal no se pierde.
+        assert_eq!(estado.apunta_a("canceller"), Some("canceller"));
+    }
+
+    #[test]
+    fn con_task_viva_la_senal_cancela_una_sola_vez() {
+        let mut estado = SigintState::<&str>::default();
+        assert_eq!(estado.apunta_a("canceller"), None);
+        assert_eq!(
+            estado.on_signal(),
+            (SigintAction::Cancel, Some("canceller"))
+        );
+        // El SEGUNDO Ctrl+C sale, que es el pacto del doble Esc.
+        assert_eq!(estado.on_signal(), (SigintAction::Exit, None));
+    }
+
+    #[test]
+    fn sin_nada_vivo_la_senal_sale_como_haria_el_so() {
+        let mut estado = SigintState::<&str>::default();
+        assert_eq!(estado.on_signal(), (SigintAction::Exit, None));
+    }
+
+    /// Soltar la Task borra también un `Ctrl+C` aparcado: si la que nacía ya
+    /// terminó, cancelar a la SIGUIENTE sería cancelar lo que nadie pidió.
+    #[test]
+    fn soltar_olvida_la_senal_aparcada() {
+        let mut estado = SigintState::<&str>::default();
+        estado.naciendo();
+        assert_eq!(estado.on_signal().0, SigintAction::Defer);
+        estado.suelta();
+        assert_eq!(estado.apunta_a("otra"), None, "no se cancela la siguiente");
     }
 }
 
