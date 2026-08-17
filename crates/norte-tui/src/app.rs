@@ -5403,6 +5403,12 @@ pub const ALLOW_PLACES: &[&str] = &[
     "dialog.confirm",
     "dialog.toggle-enabled",
     "dialog.cancel",
+    // Su PROPIA tecla, que por eso está atada en `[global]`: sin ella el
+    // sidebar se queda el `alt+b` y no puede cerrarse a sí mismo — abrías el
+    // panel y la misma tecla dejaba de existir. Lo destapó pilotar la TUI en
+    // tmux con la suite entera en verde, que es exactamente para lo que
+    // sirve el harness.
+    "layout.places",
 ];
 
 /// ALLOWLIST de DESPACHO del popup de navegación (`on_nav_popup_key`,

@@ -2351,10 +2351,15 @@ fn draw_places(
                 // «lleno» (la palabra entera la sigue diciendo el popup, que
                 // sí tiene sitio).
                 let libre = free.map_or_else(|| "?".to_owned(), norte_frontend::human_bytes_short);
+                // El nombre de un montaje se recorta por el MEDIO: lo que
+                // identifica `/home/oscar/.cache` es la cola, y con seis
+                // montajes bajo `/home` una lista recortada por delante son
+                // seis filas que ponen lo mismo.
                 ListItem::new(Line::raw(dos_campos(
                     &con_badge(&nombre, hostil),
                     &libre,
                     ancho,
+                    medio,
                 )))
             }
             PlaceRow::Favorite { name, target } => {
@@ -2370,7 +2375,7 @@ fn draw_places(
                     // esconderla: un favorito que desaparece solo es un fallo
                     // de config invisible.
                     Err(_) => ListItem::new(Line::styled(
-                        dos_campos(&izq, "!", ancho),
+                        dos_campos(&izq, "!", ancho, cabeza),
                         theme.role(Role::Info),
                     )),
                 }
@@ -2424,19 +2429,25 @@ fn nombre_de_montaje(mount: &norte_proto::VPath) -> (String, bool) {
 /// un TAMAÑO, y un `38.2 GiB` recortado por la cabeza pinta `8.2 GiB`, que no
 /// es una etiqueta rota sino un número FALSO. Si no cabe entero, se cae el
 /// campo derecho y queda solo el nombre.
-fn dos_campos(izq: &str, der: &str, ancho: usize) -> String {
+fn dos_campos(izq: &str, der: &str, ancho: usize, corta: fn(&str, usize) -> String) -> String {
     /// Celdas por debajo de las cuales el nombre deja de identificar nada.
     const SUELO: usize = 6;
     let d = norte_frontend::cells(der);
-    // Una celda de aire a cada lado del par, más el suelo del nombre: si el
-    // campo derecho no deja ni eso, el que sobra es él.
-    if d + 2 + SUELO >= ancho {
-        return cabeza(&format!(" {izq}"), ancho);
+    // Aire a los dos lados del par, MÁS una celda de separación entre los dos
+    // campos: sin ella un nombre que llena su sitio deja el `…` pegado al
+    // número (`/home/os…1P`), que se lee como un dato y no como un recorte.
+    if d + 3 + SUELO >= ancho {
+        return corta(&format!(" {izq}"), ancho);
     }
-    let sitio = ancho - d - 2;
-    let i = cabeza(&format!(" {izq}"), sitio);
-    let hueco = sitio.saturating_sub(norte_frontend::cells(&i));
+    let sitio = ancho - d - 3;
+    let i = corta(&format!(" {izq}"), sitio);
+    let hueco = sitio.saturating_sub(norte_frontend::cells(&i)) + 1;
     format!("{i}{}{der} ", " ".repeat(hueco))
+}
+
+/// Recorte por el MEDIO, para lo que se identifica por su cola: una ruta.
+fn medio(texto: &str, ancho: usize) -> String {
+    norte_frontend::middle_ellipsis(texto, ancho)
 }
 
 /// Recorta por la COLA a `ancho` celdas, marcando con `…`.

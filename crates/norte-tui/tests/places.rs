@@ -309,25 +309,40 @@ fn plegar_desde_la_app_esconde_las_filas() {
     assert!(app.places_slot().is_some(), "plegar no cierra el sidebar");
 }
 
-/// `layout.places` está atado en los SIETE presets.
+/// `layout.places` está atado en los SIETE presets, y en `[global]`.
 ///
-/// Un comando de núcleo atado en unos y no en otros es el agujero que L1b
-/// metió con `pane.tab-next`: podías abrir una pestaña y no volver a ella en
-/// cinco de los siete. Una superficie que solo se abre por la palette es una
-/// superficie que nadie abre.
+/// Lo primero, porque un comando de núcleo atado en unos y no en otros es el
+/// agujero que L1b metió con `pane.tab-next`: podías abrir una pestaña y no
+/// volver a ella en cinco de los siete.
+///
+/// Lo segundo lo destapó pilotar la TUI en tmux con la suite en verde: atado
+/// solo en `[pane]`, la tecla no existía para la pantalla `dialog`, que es la
+/// que resuelve mientras el teclado está DENTRO del sidebar. O sea que abrías
+/// el panel y la tecla de cerrarlo dejaba de funcionar. Por eso se comprueban
+/// las DOS pantallas: la que dispara es la que importa.
 #[test]
-fn layout_places_esta_atado_en_los_siete_presets() {
-    use norte_frontend::keymap::{CATALOGUE, Effective, parse_keymap, presets};
+fn layout_places_esta_atado_en_los_siete_presets_y_en_las_dos_pantallas() {
+    use norte_frontend::keymap::{CATALOGUE, Effective, Screen, parse_keymap, presets};
     let conocidos: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
     for nombre in presets::NAMES {
         let src = presets::source(nombre).expect("el preset existe");
         let kf = parse_keymap(src).expect("el preset parsea");
-        let eff = Effective::build(&kf, None, &conocidos).expect("el preset fusiona");
-        assert!(
-            eff.bindings()
-                .iter()
-                .any(|(_, cmd)| *cmd == "layout.places"),
-            "{nombre} no ata layout.places"
-        );
+        for pantalla in [Screen::Browse, Screen::Dialog] {
+            let eff =
+                Effective::build_for(&kf, &[], &conocidos, pantalla).expect("el preset fusiona");
+            assert!(
+                eff.bindings()
+                    .iter()
+                    .any(|(_, cmd)| *cmd == "layout.places"),
+                "{nombre} no ata layout.places en {pantalla:?}"
+            );
+        }
     }
+}
+
+/// Y el sidebar DESPACHA su propia tecla: sin esto la tecla llega y se cae en
+/// el allowlist, que es la misma pantalla muerta con otro culpable.
+#[test]
+fn el_sidebar_despacha_su_propia_tecla() {
+    assert!(norte_tui::app::ALLOW_PLACES.contains(&"layout.places"));
 }

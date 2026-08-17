@@ -13,6 +13,7 @@ keymap = [
     { on = ["f12"], run = "app.extensions" },
     { on = ["ctrl+p"], run = "app.palette" },
     { on = ["alt+m"], run = "app.menu" },
+    { on = ["alt+b"], run = "layout.places" },
 ]
 
 [pane]
@@ -70,7 +71,6 @@ keymap = [
     { on = ["alt+p"], run = "pane.tab-prev" },
     { on = ["alt+h"], run = "layout.split-h" },
     { on = ["alt+v"], run = "layout.split-v" },
-    { on = ["alt+b"], run = "layout.places" },
 ]
 
 [viewer]

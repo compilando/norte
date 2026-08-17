@@ -7617,6 +7617,9 @@ async fn on_places_key(
         }
         // Suelta el teclado, NO cierra el panel: cerrarlo es `layout.places`.
         "dialog.cancel" => app.return_keys_to_panes(),
+        // Y `layout.places` con el teclado DENTRO cierra: es la tercera
+        // pulsación de la secuencia abrir → enfocar → cerrar.
+        "layout.places" => app.toggle_places(),
         "dialog.confirm" => {
             if let Some(path) = app.places_activate() {
                 let pane = app.focus();
