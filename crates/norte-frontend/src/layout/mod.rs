@@ -24,9 +24,11 @@
 //! en `docs/superpowers/specs/2026-08-17-layout-slots-tabs-design.md`.
 
 mod kinds;
+mod resolve;
 mod tree;
 
 pub use kinds::{KindDecl, KindRegistry};
+pub use resolve::{Resolved, resolve};
 pub use tree::{Bindings, Dir, Follow, KindId, Node, Params, Rect, RoleId, SlotId};
 
 /// Lo que impide usar un layout.
