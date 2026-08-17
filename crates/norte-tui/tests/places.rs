@@ -248,3 +248,63 @@ fn cerrado_no_pinta_nada() {
         "sin abrirlo, el título del sidebar no aparece"
     );
 }
+
+/// Enter sobre un favorito lleva al LISTADO ENFOCADO a ese sitio, y devuelve
+/// el teclado. El sidebar es un MANDO, no un panel con directorio propio.
+#[test]
+fn enter_en_un_favorito_da_el_destino_y_suelta_el_teclado() {
+    let mut app = app_con_sidebar();
+    // Cabecera Unidades, dos discos, cabecera Favoritos, trabajo.
+    for _ in 0..4 {
+        app.places_down();
+    }
+    let destino = app.places_activate().expect("un favorito da destino");
+    assert_eq!(destino, vp("file:///trabajo"));
+    assert_eq!(app.key_owner(), KeyOwner::Panes);
+}
+
+/// Enter sobre una cabecera no hace nada, y el teclado se queda donde está.
+#[test]
+fn enter_en_una_cabecera_no_hace_nada() {
+    let mut app = app_con_sidebar();
+    assert!(app.places_activate().is_none());
+    assert_eq!(app.key_owner(), KeyOwner::Places);
+}
+
+/// Enter sobre un favorito ROTO no navega y la barra dice por qué: es la otra
+/// mitad de pintarlo marcado, porque en catorce celdas cabe el aviso y no la
+/// explicación.
+#[test]
+fn enter_en_un_favorito_roto_explica_en_la_barra() {
+    let mut app = app_con_sidebar();
+    for _ in 0..5 {
+        app.places_down();
+    }
+    assert!(app.places_activate().is_none());
+    assert_eq!(app.key_owner(), KeyOwner::Places, "no suelta el teclado");
+    assert_eq!(
+        app.message.as_deref(),
+        Some(norte_i18n::t_in(norte_i18n::Lang::Es, "hotlist-invalid").as_str()),
+        "la barra dice el motivo"
+    );
+}
+
+/// Enter sobre un disco lleva a su punto de montaje.
+#[test]
+fn enter_en_un_disco_da_su_montaje() {
+    let mut app = app_con_sidebar();
+    app.places_down();
+    assert_eq!(app.places_activate(), Some(vp("file:///")));
+}
+
+/// Plegar una sección esconde sus filas sin cerrar nada.
+#[test]
+fn plegar_desde_la_app_esconde_las_filas() {
+    let mut app = app_con_sidebar();
+    let id = app.places_slot().expect("abierto");
+    let antes = app.panes.places(id).expect("sidebar").rows().len();
+    app.places_toggle_fold();
+    let despues = app.panes.places(id).expect("sidebar").rows().len();
+    assert!(despues < antes);
+    assert!(app.places_slot().is_some(), "plegar no cierra el sidebar");
+}

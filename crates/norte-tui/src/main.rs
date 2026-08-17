@@ -22,12 +22,13 @@ use norte_proto::DeleteMode;
 use norte_proto::methods::{FsSearchParams, SearchHits};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
-    ALLOW_COLUMNS, ALLOW_EXTENSIONS, ALLOW_NAV_POPUP, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, App,
-    CompareState, DialogOutcome, ExtensionManager, HelpOutcome, HelpView, KeymapsError, Modal,
-    NavPopup, NavPopupKind, Palette, Pane, PendingWrite, PickerAction, SearchDialog, SearchState,
-    Settings, SettingsEditError, Shortcuts, Trail, TrailStep, TransferKind, config_error_category,
-    detail_for_bar, dialog_action, error_category, error_message, io_error_category,
-    keymaps_error_category, theme_error_category, trust_lua_key, volume_items,
+    ALLOW_COLUMNS, ALLOW_EXTENSIONS, ALLOW_NAV_POPUP, ALLOW_PICKER, ALLOW_PLACES,
+    ALLOW_PLUGIN_CONFIG, App, CompareState, DialogOutcome, ExtensionManager, HelpOutcome, HelpView,
+    KeymapsError, Modal, NavPopup, NavPopupKind, Palette, Pane, PendingWrite, PickerAction,
+    SearchDialog, SearchState, Settings, SettingsEditError, Shortcuts, Trail, TrailStep,
+    TransferKind, config_error_category, detail_for_bar, dialog_action, error_category,
+    error_message, io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
+    volume_items,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::help::TuiChords;
@@ -3551,6 +3552,40 @@ async fn run(
                                     key.code,
                                 )
                                 .await;
+                            } else if app.key_owner() == norte_tui::app::KeyOwner::Places
+                                && !modal_wins(app)
+                            {
+                                // Sidebar de sitios (L3): Enter sobre una fila
+                                // manda el LISTADO enfocado a ese sitio, por el
+                                // flujo de cd de siempre.
+                                let outcome = on_places_key(
+                                    app,
+                                    backend,
+                                    &mut events,
+                                    dialog_resolver,
+                                    key.modifiers,
+                                    key.code,
+                                )
+                                .await;
+                                if let Some(pane) = cd_landed_pane(&outcome) {
+                                    app.apply_scheme_sort(pane);
+                                    let dir = app.panes[pane].dir().clone();
+                                    let paths: Vec<VPath> =
+                                        app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
+                                    let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                                    decorate_fetch.set(
+            app.panes.slot_of(pane),
+            spawn_decorate_fetch(backend, app.panes.slot_of(pane), dir, paths, plugin_cols),
+        );
+                                }
+                                apply_cd(
+                                    &app.panes,
+                                    &mut fill,
+                                    &mut decorate_fetch,
+                                    &mut last_probed,
+                                    &mut search_run,
+                                    outcome,
+                                );
                             } else if app.nav_popup.is_some() && !modal_wins(app) {
                                 // Popup historial/hotlist (spec 2026-07-18): Enter
                                 // sobre un item NAVEGA por el flujo de cd normal —
@@ -7537,6 +7572,90 @@ async fn open_drive_popup(app: &mut App, backend: &Backend, pane: usize, include
 /// (design §D); si el cd desde el HISTORIAL falla con `NotFound`, la entrada
 /// se retira (spec 2026-07-18) — la de hotlist y volúmenes NO (hotlist es
 /// config del usuario y un volumen no se retira porque un cd puntual falle).
+/// Teclas del sidebar de sitios (L3), resueltas por el contexto `dialog`.
+///
+/// El sidebar no navega por su cuenta: Enter devuelve una ruta y el `cd` va al
+/// LISTADO enfocado, por el mismo camino que cualquier otro. Es lo que hace
+/// que abrirlo no cambie a dónde van las operaciones.
+async fn on_places_key(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) -> Cd {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return Cd::Cancelled;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return Cd::Cancelled; // tecla no modelada por el keymap: ignorar
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run { command: cmd, .. } => cmd,
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
+            resolver.reset();
+            return Cd::Cancelled;
+        }
+        Resolution::Reset => return Cd::Cancelled,
+    };
+    if !ALLOW_PLACES.contains(&cmd.as_str()) {
+        return Cd::Cancelled; // fuera del allowlist de este panel: inerte
+    }
+    match cmd.as_str() {
+        "dialog.up" => app.places_up(),
+        "dialog.down" => app.places_down(),
+        "dialog.toggle-enabled" => {
+            app.places_toggle_fold();
+            // Desplegar las unidades ES el momento de volver a pedirlas: un
+            // disco montado o desmontado desde que se abrió el panel se ve
+            // aquí, y sin un reloj de por medio.
+            if app.places_drives_visible() {
+                refresh_places_drives(app, backend).await;
+            }
+        }
+        // Suelta el teclado, NO cierra el panel: cerrarlo es `layout.places`.
+        "dialog.cancel" => app.return_keys_to_panes(),
+        "dialog.confirm" => {
+            if let Some(path) = app.places_activate() {
+                let pane = app.focus();
+                return cd_in(app, backend, events, pane, path, Trail::Record).await;
+            }
+        }
+        _ => {}
+    }
+    Cd::Cancelled
+}
+
+/// Pide los volúmenes al host y los deja en el sidebar.
+///
+/// Lo llaman abrir el sidebar y desplegar su sección de unidades. Y nadie
+/// más: un sidebar con reloj sería la regla de suspensión del ADR 0058 rota
+/// desde el primer frame, y `host.volumes` no es gratis (monta y consulta
+/// espacio en cada filesystem).
+///
+/// Un fallo NO vacía la lista que hubiera: lo que se veía sigue siendo lo
+/// último que el host dijo, y el error sale por la barra como cualquier otro.
+async fn refresh_places_drives(app: &mut App, backend: &Backend) {
+    let Some(id) = app.places_slot() else {
+        return;
+    };
+    match backend.volumes(false).await {
+        Ok(res) => {
+            if let Some(state) = app.panes.places_mut(id) {
+                state.set_drives(&res);
+            }
+        }
+        Err(e) => {
+            app.message = Some(ta(
+                "gui-msg-volumes-failed",
+                &[("error", &error_category(&e))],
+            ));
+        }
+    }
+}
+
 async fn on_nav_popup_key(
     app: &mut App,
     backend: &Backend,

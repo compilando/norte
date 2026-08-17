@@ -107,7 +107,7 @@ pub enum PlaceRow {
 /// assert!(matches!(s.rows()[s.cursor()], PlaceRow::Favorite { .. }));
 /// assert!(s.activate().is_some());
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PlacesState {
     drives: Vec<PlaceRow>,
     favorites: Vec<PlaceRow>,
@@ -117,11 +117,31 @@ pub struct PlacesState {
     cursor: usize,
 }
 
+impl Default for PlacesState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlacesState {
     /// Un sidebar vacío: sin volúmenes y sin favoritos todavía.
+    ///
+    /// Vacío de CONTENIDO, no de filas: las dos cabeceras existen desde el
+    /// primer frame. Sin ellas, el panel recién abierto sería una caja en
+    /// blanco mientras `host.volumes` contesta, y plegar no querría decir nada
+    /// porque el cursor no estaría en ninguna sección.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        let mut s = Self {
+            drives: Vec::new(),
+            favorites: Vec::new(),
+            drives_folded: false,
+            favorites_folded: false,
+            rows: Vec::new(),
+            cursor: 0,
+        };
+        s.rebuild();
+        s
     }
 
     /// Sustituye los volúmenes por los que acaba de contestar el host.
@@ -205,6 +225,19 @@ impl PlacesState {
             PlaceRow::Header { .. } => None,
             PlaceRow::Drive { mount, .. } => Some(mount),
             PlaceRow::Favorite { target, .. } => target.as_ref().ok(),
+        }
+    }
+
+    /// ¿Está plegada esa sección?
+    ///
+    /// Lo pregunta quien tiene el `Backend` delante: desplegar las unidades es
+    /// el momento de volver a pedirlas, y plegarlas es el momento de NO
+    /// pedirlas.
+    #[must_use]
+    pub const fn is_folded(&self, section: Section) -> bool {
+        match section {
+            Section::Drives => self.drives_folded,
+            Section::Favorites => self.favorites_folded,
         }
     }
 
@@ -329,6 +362,17 @@ mod tests {
         s.toggle_fold();
         assert_eq!(s.rows().len(), 3);
         assert!(s.cursor() < s.rows().len());
+    }
+
+    /// `is_folded` dice lo mismo que la cabecera pinta: es lo que mira quien
+    /// decide si toca volver a pedir los volúmenes.
+    #[test]
+    fn is_folded_sigue_al_toggle() {
+        let mut s = PlacesState::new();
+        assert!(!s.is_folded(Section::Drives));
+        s.toggle_fold();
+        assert!(s.is_folded(Section::Drives));
+        assert!(!s.is_folded(Section::Favorites));
     }
 
     /// Plegar desde una fila cualquiera pliega SU sección, no la primera.

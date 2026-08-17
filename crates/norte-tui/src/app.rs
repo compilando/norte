@@ -3128,6 +3128,75 @@ impl App {
         }
     }
 
+    /// Mueve el cursor del sidebar, si está abierto.
+    pub fn places_up(&mut self) {
+        if let Some(id) = self.places_slot()
+            && let Some(s) = self.panes.places_mut(id)
+        {
+            s.up();
+        }
+    }
+
+    /// Baja el cursor del sidebar.
+    pub fn places_down(&mut self) {
+        if let Some(id) = self.places_slot()
+            && let Some(s) = self.panes.places_mut(id)
+        {
+            s.down();
+        }
+    }
+
+    /// Pliega o despliega la sección donde está el cursor del sidebar.
+    pub fn places_toggle_fold(&mut self) {
+        if let Some(id) = self.places_slot()
+            && let Some(s) = self.panes.places_mut(id)
+        {
+            s.toggle_fold();
+        }
+    }
+
+    /// ¿Están DESPLEGADAS las unidades del sidebar?
+    ///
+    /// `false` también cuando no hay sidebar: quien pregunta es el run loop
+    /// para decidir si vuelve a pedir `host.volumes`, y sin panel no hay a
+    /// quién dárselos.
+    #[must_use]
+    pub fn places_drives_visible(&self) -> bool {
+        self.places_slot()
+            .and_then(|id| self.panes.places(id))
+            .is_some_and(|s| !s.is_folded(norte_frontend::places::Section::Drives))
+    }
+
+    /// Confirma la fila del sidebar: a dónde hay que llevar el listado.
+    ///
+    /// Devuelve la ruta en vez de navegar porque un `cd` es I/O y esto es
+    /// estado puro; quien tiene el `Backend` delante lo hace.
+    ///
+    /// Tres desenlaces y los tres importan:
+    ///
+    /// - una fila que lleva a un sitio: se devuelve la ruta y el teclado vuelve
+    ///   a los listados, porque el sidebar es un MANDO y no un panel con
+    ///   directorio propio;
+    /// - una cabecera: no pasa nada, y el teclado se queda donde está;
+    /// - un favorito roto: la barra dice POR QUÉ. Es la otra mitad de pintarlo
+    ///   marcado: en catorce celdas cabe el aviso, no la explicación.
+    pub fn places_activate(&mut self) -> Option<VPath> {
+        use norte_frontend::places::PlaceRow;
+        let id = self.places_slot()?;
+        let estado = self.panes.places(id)?;
+        if let Some(PlaceRow::Favorite {
+            target: Err(clave), ..
+        }) = estado.rows().get(estado.cursor())
+        {
+            let motivo = t(clave);
+            self.message = Some(motivo);
+            return None;
+        }
+        let destino = estado.activate()?.clone();
+        self.key_owner = KeyOwner::Panes;
+        Some(destino)
+    }
+
     /// Cierra el panel enfocado.
     ///
     /// Se NIEGA a cerrar el último `browser`: una pantalla sin ningún listado
@@ -5318,6 +5387,21 @@ pub const ALLOW_PLUGIN_CONFIG: &[&str] = &[
     "dialog.up",
     "dialog.down",
     "dialog.confirm",
+    "dialog.cancel",
+];
+
+/// ALLOWLIST del sidebar de sitios (L3, `on_places_key` en main.rs).
+///
+/// El mismo vocabulario `dialog.*` que ya atan los siete presets: un panel que
+/// se mueve con flechas y confirma con Enter no necesita idioma propio, y
+/// dárselo habría sido siete presets tocados por una tecla nueva.
+/// `toggle-enabled` pliega la sección, `cancel` devuelve el teclado a los
+/// listados SIN cerrar el sidebar — cerrarlo es cosa de `layout.places`.
+pub const ALLOW_PLACES: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.confirm",
+    "dialog.toggle-enabled",
     "dialog.cancel",
 ];
 
