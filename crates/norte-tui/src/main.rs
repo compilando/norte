@@ -195,6 +195,7 @@ struct RenameBatchRun {
 /// ambos frontends); ver su doc para la relación con `SEMANTIC_HIT_LIMIT`
 /// y el techo del server.
 use norte_frontend::SEMANTIC_K;
+use norte_frontend::layout::{BySlot, SlotId};
 
 /// Petición `index.search_semantic` EN VUELO (M4-IA-2). Mismo contrato de
 /// cancelación que [`AiRenameRun`] (regla 3): `abort()` dropea el future del
@@ -364,7 +365,9 @@ type PluginColumnValues =
     std::collections::HashMap<String, std::collections::HashMap<VPath, String>>;
 
 struct DecorateFetch {
-    pane: usize,
+    /// El HUECO al que va, no la posición: una respuesta tardía tiene que
+    /// aterrizar en el listado que la pidió, no en quien ocupe su sitio.
+    slot: SlotId,
     dir: VPath,
     rx: tokio::sync::oneshot::Receiver<(
         std::collections::HashMap<VPath, norte_frontend::Decoration>,
@@ -388,7 +391,7 @@ struct DecorateFetch {
 /// en vuelo, un solo guard anti-stale.
 fn spawn_decorate_fetch(
     backend: &Backend,
-    pane: usize,
+    slot: SlotId,
     dir: VPath,
     paths: Vec<VPath>,
     plugin_cols: Vec<(String, String)>,
@@ -407,7 +410,7 @@ fn spawn_decorate_fetch(
         let cols = fetch_plugin_columns(&b, &plugin_cols, &paths, || tx.is_closed()).await;
         let _ = tx.send((merged, cols));
     });
-    Some(DecorateFetch { pane, dir, rx })
+    Some(DecorateFetch { slot, dir, rx })
 }
 
 /// Valores de las columnas `plugin:` configuradas (#117-follow-up): la
@@ -1625,8 +1628,9 @@ mod palette_help_tests {
 /// pasar antes del [`reap_search_run`] que estos mismos call sites hacen a
 /// continuación.
 fn apply_cd(
-    fill: &mut [Option<Fill>; 2],
-    decorate_fetch: &mut [Option<DecorateFetch>; 2],
+    panes: &norte_tui::panel::PaneSlots,
+    fill: &mut BySlot<Fill>,
+    decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
     outcome: Cd,
@@ -1636,11 +1640,11 @@ fn apply_cd(
             // Listado nuevo (lazy): la dedup de la sonda #52 caduca — la
             // misma entrada re-enfocada debe poder re-hidratarse.
             last_probed.clear();
-            fill[pane] = Some(f);
+            fill.insert(panes.slot_of(pane), f);
         }
         Cd::Replaced(pane) => {
             last_probed.clear();
-            fill[pane] = None;
+            fill.remove(panes.slot_of(pane));
         }
         // El pane no cambió: su relleno (si lo había) sigue drenando el mismo
         // listado. Soltarlo aquí lo dejaba colgado en `loading=true` (#78).
@@ -1652,10 +1656,17 @@ fn apply_cd(
         // `reap_search_run` no hace falta aquí: `refresh_panes` SALTA los
         // panes virtuales (jamás los saca del modo), así que no hay run de
         // búsqueda que cosechar por este camino.
-        Cd::Refreshed(refreshed) => release_refreshed_fill(refreshed, fill, last_probed),
+        Cd::Refreshed(refreshed) => release_refreshed_fill(panes, &refreshed, fill, last_probed),
         // `pane.swap`: `App::swap_panes` ya cruzó panes e historiales; aquí
         // se cruza la mitad que vive en el run loop.
-        Cd::Swapped => reconcile_swap(fill, decorate_fetch, last_probed, search_run),
+        Cd::Swapped => reconcile_swap(
+            panes.slot_of(0),
+            panes.slot_of(1),
+            fill,
+            decorate_fetch,
+            last_probed,
+            search_run,
+        ),
     }
 }
 
@@ -1681,15 +1692,18 @@ fn apply_cd(
 /// the key handling, each pane would watch the other's directory for one
 /// tick after a swap. Read the call site before trusting this comment.
 fn reconcile_swap(
-    fill: &mut [Option<Fill>; 2],
-    decorate_fetch: &mut [Option<DecorateFetch>; 2],
+    slot_a: SlotId,
+    slot_b: SlotId,
+    fill: &mut BySlot<Fill>,
+    decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
 ) {
-    // Un hueco por pane: cruzarlos ES el reconciliado (el índice del array es
-    // el pane, y no hay copia del índice dentro del `Fill` que mantener a
-    // mano — ver [`Fill`]).
-    fill.swap(0, 1);
+    // Intercambiar paneles mueve el CONTENIDO entre huecos y deja los ids
+    // donde estaban, así que el trabajo en vuelo tiene que viajar con su
+    // listado. Cruzar los ids EN EL ÁRBOL en vez del contenido haría este
+    // reconciliado innecesario entero — anotado en el plan de P6.
+    fill.swap(slot_a, slot_b);
     // La búsqueda VIVA guarda su pane virtual como el relleno guardaba el suyo,
     // y aquí es donde TIENE que voltear: el mismo call site cosecha con
     // `reap_search_run` justo después de `apply_cd`, y esa cosecha mira
@@ -1703,7 +1717,7 @@ fn reconcile_swap(
     }
     // Cada slot lleva su `dir` como guard anti-stale, así que cruzarlos basta:
     // el fetch sigue correspondiendo al listado que ahora está al otro lado.
-    decorate_fetch.swap(0, 1);
+    decorate_fetch.swap(slot_a, slot_b);
     // Es una caché de dedup de `stat`, no estado: traducir sus claves cuesta
     // más que volver a sondear, y un sondeo de más es invisible.
     last_probed.clear();
@@ -1716,17 +1730,16 @@ fn reconcile_swap(
 /// entries). Cuerpo ÚNICO para [`after_panes_refresh`] (run loop) y el brazo
 /// `Cd::Refreshed` de [`apply_cd`] (Ctrl+R vía `dispatch`).
 fn release_refreshed_fill(
-    refreshed: [bool; 2],
-    fill: &mut [Option<Fill>; 2],
+    panes: &norte_tui::panel::PaneSlots,
+    refreshed: &[bool],
+    fill: &mut BySlot<Fill>,
     last_probed: &mut Probed,
 ) {
-    if refreshed == [false; 2] {
+    if !refreshed.iter().any(|r| *r) {
         return;
     }
-    for pane in 0..2 {
-        if refreshed[pane] {
-            fill[pane] = None;
-        }
+    for (pane, _) in refreshed.iter().enumerate().filter(|(_, r)| **r) {
+        fill.remove(panes.slot_of(pane));
     }
     last_probed.clear();
 }
@@ -1738,21 +1751,29 @@ fn release_refreshed_fill(
 /// propio root de la búsqueda colándose entre resultados): se suelta el fill y
 /// se DESCARTA el lote. Cinturón simétrico al drain-guard de [`drain_search`];
 /// el tirante es soltar el fill en `launch_search`.
-fn apply_fill_msg(app: &mut App, fill: &mut [Option<Fill>; 2], pane: usize, msg: Option<FillMsg>) {
-    if app.panes[pane].virtual_search {
-        fill[pane] = None;
+fn apply_fill_msg(app: &mut App, fill: &mut BySlot<Fill>, slot: SlotId, msg: Option<FillMsg>) {
+    // El lote va a SU hueco, no a una posición. Si ese hueco ya no existe
+    // —se cerró el panel, se cerró la pestaña— el lote se TIRA: aplicarlo a
+    // quien ocupe ahora esa posición sería pintar en un listado las entradas
+    // de otro directorio, y nada lo diría.
+    let Some(pane) = app.panes.browser_mut(slot) else {
+        fill.remove(slot);
+        return;
+    };
+    if pane.virtual_search {
+        fill.remove(slot);
         return;
     }
     match msg {
-        Some(FillMsg::Batch(batch)) => app.panes[pane].extend_listing(batch),
+        Some(FillMsg::Batch(batch)) => pane.extend_listing(batch),
         Some(FillMsg::Failed) => {
-            app.panes[pane].finish_listing();
+            pane.finish_listing();
             app.message = Some(t("msg-list-incomplete"));
-            fill[pane] = None;
+            fill.remove(slot);
         }
         None => {
-            app.panes[pane].finish_listing();
-            fill[pane] = None;
+            pane.finish_listing();
+            fill.remove(slot);
         }
     }
 }
@@ -2418,7 +2439,9 @@ async fn run(
     // Listados paginados rellenándose en background (ADR 0017): un hueco POR
     // PANE — los dos panes pueden estar paginando a la vez, y con un hueco
     // global el cd de uno mataba el drenador del otro (ver [`Fill`]).
-    let mut fill: [Option<Fill>; 2] = [None, None];
+    let mut fill: BySlot<Fill> = BySlot::new();
+    // Por dónde sigue el barrido de `fill` (ver el brazo del `select!`).
+    let mut fill_cursor: usize = 0;
     // Búsqueda viva en curso (liveSearch T6): a lo sumo una (el pane virtual
     // es uno). Molde `Fill`: se drena en el select y se suelta al salir.
     let mut search_run: Option<SearchRun> = None;
@@ -2465,7 +2488,7 @@ async fn run(
     let mut compare_stat_probe: Option<CompareStatProbe> = None;
     // Fetch de decoraciones de plugin en vuelo (G3b, ADR 0037): a lo sumo
     // uno, molde de `stat_probe`/`fill`.
-    let mut decorate_fetch: [Option<DecorateFetch>; 2] = [None, None];
+    let mut decorate_fetch: BySlot<DecorateFetch> = BySlot::new();
     // #106 (watching): vigilancia de los dirs visibles — notify con
     // fallback a sondeo (pitfall inotify). El conjunto vigilado se
     // re-sincroniza en CADA vuelta (diff barato, no-op sin cambios).
@@ -2710,619 +2733,534 @@ async fn run(
             }
         }
         tokio::select! {
-            _ = tick.tick() => {
-                // Mutación terminada → refresh de panes; el ritual completo
-                // (drenador/sonda #52/búsqueda) vive en `after_panes_refresh`
-                // — ÚNICO para los tres disparadores del refresh (#117).
-                let refreshed = on_tick(app, backend, &mut events).await;
-                after_panes_refresh(app, refreshed, &mut fill, &mut last_probed, &mut search_run);
-            }
-            ev = dir_watch.rx.recv(), if dir_watch_alive && watch_refresh_allowed(app) => {
-                // #106: cambio EXTERNO en un dir vigilado (debounced) —
-                // mismo camino que pane.refresh (Ctrl+R): refresh
-                // cancelable + ritual #118. GATEADO (review MAJOR-2): con
-                // un overlay/quick abierto, `refresh_panes` se comería las
-                // teclas del usuario y Esc cambiaría de significado — la
-                // precondición deja el evento ENCOLADO (canal de capacidad
-                // 1) y dispara al cerrarse el overlay.
-                if let Some(()) = ev {
-                    let refreshed = refresh_panes(app, backend, &mut events).await;
-                    after_panes_refresh(
-                        app,
-                        refreshed,
-                        &mut fill,
-                        &mut last_probed,
-                        &mut search_run,
-                    );
-                } else {
-                    // Inalcanzable con `dir_watch` vivo (retiene el emisor
-                    // crudo): si pasara, DESARMAR el brazo — un canal
-                    // cerrado devolvería None en bucle (spin al 100%,
-                    // review MINOR-1).
-                    tracing::warn!("dir watch pipeline murió; brazo desarmado");
-                    dir_watch_alive = false;
-                }
-            }
-            Some(task) = async {
-                match &mut foreign_tasks {
-                    Some(rx) => rx.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                // Task de OTRO frontend de la misma sesión (fase 3): al panel.
-                app.board.push_foreign(&task);
-            }
-            Some(ev) = async {
-                match &mut conn_events {
-                    Some(rx) => rx.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                app.message = Some(match ev {
-                    ConnEvent::Lost => t("msg-daemon-lost"),
-                    ConnEvent::Restored => t("msg-daemon-restored"),
-                });
-            }
-            Some(req) = async {
-                match &mut approvals {
-                    Some(rx) => rx.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                // Aprobación de policy pendiente (M3-3b T5): a la cola de
-                // diálogos (jamás pisa un modal abierto) y se abre si procede.
-                app.pending_approvals.push_back(req);
-                app.open_next_pending();
-            }
-            Some(d) = async {
-                match &mut degraded {
-                    Some(rx) => rx.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                // #44: sesión remota degradó a texto plano — indicador
-                // PERSISTENTE en la status bar (no pisa `message` transitorio).
-                // H3d: se retiene el valor ESTRUCTURADO, no la frase — la barra
-                // la compone (`App::connection_banner`) y la ayuda puede
-                // preguntar por scheme cuál se degradó.
-                app.note_degraded(d);
-            }
-            Some(estado) = async {
-                match &mut journal_warnings {
-                    Some(rx) => rx.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                // #167/#177: esta sesión acaba de mutar sin quedar registrada.
-                // Uno por EPISODIO (el core no repite mientras el motivo no
-                // cambie), así que pisar `message` aquí no puede convertirse en
-                // un goteo. Y como `message` lo borra la siguiente tecla, el
-                // hecho se anota además en el indicador PERSISTENTE de la
-                // barra: esto no es un aviso que se pueda perder por pulsar una
-                // flecha.
-                //
-                // #179: y la recuperación APAGA ese indicador. Sin esto, un
-                // ocupante de paso —otro `norte cp`, un daemon reiniciándose—
-                // dejaría a una sesión de tres horas enseñando «no se registra»
-                // sobre mutaciones que sí se registran.
-                use norte_core::embedded::JournalStatus;
-                match estado {
-                    JournalStatus::Lost(why) => {
-                        app.message = Some(journal_warning_i18n(&why));
-                        app.note_no_journal(why);
+                    _ = tick.tick() => {
+                        // Mutación terminada → refresh de panes; el ritual completo
+                        // (drenador/sonda #52/búsqueda) vive en `after_panes_refresh`
+                        // — ÚNICO para los tres disparadores del refresh (#117).
+                        let refreshed = on_tick(app, backend, &mut events).await;
+                        after_panes_refresh(app, refreshed, &mut fill, &mut last_probed, &mut search_run);
                     }
-                    JournalStatus::Recovered => {
-                        app.message = Some(t("msg-journal-recovered"));
-                        app.note_journal_recovered();
-                    }
-                    // #203: mismo hecho, otra explicación — y la barra lo dice
-                    // con otra frase, porque la de siempre sale también cuando
-                    // hay un daemon vivo y por eso ya no se mira.
-                    JournalStatus::Squatted => {
-                        app.message = Some(t("msg-journal-squatted"));
-                        app.note_journal_squatted();
-                    }
-                    // `#[non_exhaustive]`: una transición nueva no puede
-                    // cambiar el indicador a ciegas — se ignora hasta que
-                    // alguien la enseñe a propósito.
-                    _ => {}
-                }
-            }
-            res = async {
-                match &mut stat_probe {
-                    Some(pr) => (&mut pr.rx).await.ok(),
-                    None => std::future::pending().await,
-                }
-            } => {
-                // Sonda de stat del viewport (#52): el slot se limpia SIEMPRE
-                // (haya hidratado algo, fallara el stat o se cerrara el canal)
-                // — la dedup por `last_probed` evita reintentar hasta que un
-                // listado nuevo la vacíe.
-                stat_probe = None;
-                for (pane, path, entry) in res.unwrap_or_default() {
-                    app.panes[pane].hydrate(&path, entry.size, entry.mtime_ms);
-                }
-            }
-            (generation, res) = async {
-                match &mut compare_stat_probe {
-                    Some(pr) => (pr.generation, (&mut pr.rx).await.ok()),
-                    None => std::future::pending().await,
-                }
-            } => {
-                // Sonda de la fila seleccionada del panel de diferencias
-                // (#157): el slot se limpia SIEMPRE, igual que la de arriba.
-                // Un canal cerrado (`res` es `None`) no marca nada sondeado:
-                // la próxima vez que la selección lo vuelva a pedir se
-                // reintenta, en vez de dejar la fila huérfana para siempre
-                // porque la task que la pedía murió a medio camino.
-                compare_stat_probe = None;
-                for (path, entry) in res.unwrap_or_default() {
-                    // La generación es la del PEDIDO, no la de ahora: si otra
-                    // comparación empezó mientras volaba, `hydrate` la tira.
-                    app.hydrate_compare_size(generation, path, entry.and_then(|e| e.size));
-                }
-            }
-            (slot, res) = async {
-                // Un slot POR PANE (review MINOR-2): se espera al primero
-                // que responda; con ambos vacíos, pendiente.
-                let [slot_a, slot_b] = &mut decorate_fetch;
-                match (slot_a, slot_b) {
-                    (Some(a), Some(b)) => tokio::select! {
-                        r = &mut a.rx => (0, r.ok()),
-                        r = &mut b.rx => (1, r.ok()),
-                    },
-                    (Some(a), None) => (0, (&mut a.rx).await.ok()),
-                    (None, Some(b)) => (1, (&mut b.rx).await.ok()),
-                    (None, None) => std::future::pending().await,
-                }
-            } => {
-                // Fetch de decoraciones (G3b): se limpia SIEMPRE. Una
-                // respuesta tardía cuyo `dir` ya no case el del pane (el
-                // usuario cd'eó de nuevo mientras estaba en vuelo) se
-                // DESCARTA — nunca pinta badges de un listado que ya no se
-                // ve (mismo criterio anti-stale que el drain-guard de
-                // `apply_fill_msg` para búsqueda virtual).
-                if let Some(f) = decorate_fetch[slot].take()
-                    && let Some((map, cols)) = res
-                    && app.panes[f.pane].dir() == &f.dir
-                {
-                    app.panes[f.pane].set_decorations(map);
-                    // #117-follow-up: los valores de columnas plugin: viajan
-                    // en el mismo fetch y comparten el guard anti-stale.
-                    app.panes[f.pane].set_plugin_columns(cols);
-                }
-            }
-            (pane, msg) = async {
-                // Un hueco POR PANE (igual que `decorate_fetch`): se espera al
-                // primero que hable; con los dos vacíos, pendiente. `recv` es
-                // cancel-safe, así que perder la carrera no pierde el lote del
-                // otro brazo.
-                let [slot_a, slot_b] = &mut fill;
-                match (slot_a, slot_b) {
-                    (Some(a), Some(b)) => tokio::select! {
-                        m = a.rx.recv() => (0, m),
-                        m = b.rx.recv() => (1, m),
-                    },
-                    (Some(a), None) => (0, a.rx.recv().await),
-                    (None, Some(b)) => (1, b.rx.recv().await),
-                    (None, None) => std::future::pending().await,
-                }
-            } => {
-                // Lote del drenador del listado paginado (ADR 0017): al pane
-                // de SU hueco. `None` = canal cerrado (fin del drenado).
-                apply_fill_msg(app, &mut fill, pane, msg);
-            }
-            hits = async {
-                // Solo se drena mientras el run sigue vivo (`Running`): un
-                // canal cerrado devolvería `None` en bucle (spin) — al leer el
-                // `None` se pasa a terminal y este brazo queda pendiente.
-                match &mut search_run {
-                    Some(s) if s.state == SearchState::Running => s.rx.recv().await,
-                    _ => std::future::pending().await,
-                }
-            } => {
-                drain_search(app, &mut search_run, hits);
-            }
-            batch = async {
-                // Igual que el brazo de hits: solo se drena con el run VIVO,
-                // porque un canal cerrado devolvería `None` en bucle (spin).
-                match &mut compare_run {
-                    Some(c) if c.state == CompareState::Running => c.rx.recv().await,
-                    _ => std::future::pending().await,
-                }
-            } => {
-                drain_compare(app, &mut compare_run, batch);
-            }
-            // UN solo brazo para las dos Tasks del diálogo: `select!` no deja
-            // tomar prestado `sync_run` dos veces, y son fases sucesivas del
-            // mismo run — nunca hay plan y aplicación a la vez.
-            tick = async {
-                let Some(s) = &mut sync_run else {
-                    return std::future::pending().await;
-                };
-                if s.applying {
-                    // La aplicación no tiene canal: se espera a que su Task
-                    // cambie de estado. `changed()` con el emisor caído
-                    // devuelve `Err`, y eso también es un final — se sale y el
-                    // cosechado lee el snapshot que haya.
-                    let vivo = s.progress.changed().await.is_ok();
-                    return SyncTick::Applied { vivo };
-                }
-                match &mut s.rx {
-                    // Un canal ya cerrado devolvería `None` en bucle (spin):
-                    // `drain_sync_plan` pone `rx = None` al cerrarse.
-                    Some(rx) => SyncTick::Plan(rx.recv().await),
-                    None => std::future::pending().await,
-                }
-            } => {
-                match tick {
-                    SyncTick::Plan(event) => drain_sync_plan(app, &mut sync_run, event),
-                    SyncTick::Applied { vivo } => {
-                        harvest_sync_apply(app, backend, &mut sync_run, vivo).await;
-                    }
-                }
-            }
-            res = async {
-                // ai.rename_plan en vuelo (M4-IA): cosecha sin bloquear —
-                // el brazo solo se arma con un run vivo (molde stat_probe).
-                match &mut ai_rename_run {
-                    Some(r) => (&mut r.handle).await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                if let Some(run) = ai_rename_run.take() {
-                    match res {
-                        Ok(Ok(plan)) if plan.entries.is_empty() => {
-                            app.message = Some(t("msg-ai-rename-empty"));
-                        }
-                        // Cinturón de INGESTIÓN (quality review 78eb243
-                        // MINOR-5): un plan legítimo del engine queda muy
-                        // por debajo del tope; superarlo delata un daemon
-                        // hostil/N+1 inflando la respuesta — rechazo en
-                        // bloque, ni se abre el modal.
-                        Ok(Ok(plan))
-                            if plan.entries.len() > norte_frontend::MAX_AI_PLAN_ENTRIES =>
-                        {
-                            app.message = Some(t("msg-ai-rename-invalid-plan"));
-                        }
-                        Ok(Ok(plan)) => {
-                            // §17: el plan del LOTE se pide AQUÍ, en el mismo
-                            // viaje que el plan IA — el modal necesita el
-                            // `plan_hash` para que confirmar haga algo, y un
-                            // plan retenido tras otro modal no tendría quién
-                            // se lo pidiera después.
-                            //
-                            // SPAWNEADO, como la llamada al modelo: contra un
-                            // dir enorme o un daemon lento esto es un `fs.list`
-                            // entero, y esperarlo aquí congelaría el loop —
-                            // sin dibujo, sin teclas, sin Esc. El modal abre en
-                            // `Pending` y se rellena solo.
-                            //
-                            // Cinturón fail-loud COMPARTIDO con la GUI (audit
-                            // MAJOR-2): una pareja que no es un `Segment`
-                            // delata un daemon hostil/roto — ni se le pide
-                            // plan al core, y confirmar queda muerto.
-                            let estado = if let Some(pairs) =
-                                norte_frontend::rename_pairs(&plan.entries)
-                            {
-                                let b = backend.clone();
-                                let d = run.dir.clone();
-                                let handle =
-                                    tokio::spawn(
-                                        async move { b.rename_batch_plan(&d, &pairs).await },
-                                    );
-                                if let Some(old) =
-                                    rename_batch_run.replace(RenameBatchRun { handle })
-                                {
-                                    old.handle.abort();
-                                }
-                                app.message = None;
-                                norte_frontend::BatchPlan::Pending
-                            } else {
-                                app.message = Some(t("msg-ai-rename-invalid-plan"));
-                                norte_frontend::BatchPlan::Failed
-                            };
-                            let ready = PendingAiPlan {
-                                dir: run.dir,
-                                entries: plan.entries,
-                                plan: estado,
-                            };
-                            if app.modal.is_none() {
-                                app.modal = Some(Modal::AiRenamePlan {
-                                    dir: ready.dir,
-                                    entries: ready.entries,
-                                    offset: 0,
-                                    plan: ready.plan,
-                                });
-                            } else {
-                                // Otro modal abierto (aprobación, colisión…):
-                                // el plan espera su turno, jamás lo pisa. A
-                                // diferencia de la GUI (banner superseded), aquí
-                                // el overwrite es inalcanzable: run único en
-                                // vuelo y el prompt no abre sobre otro modal.
-                                pending_ai_plan = Some(ready);
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            app.message = Some(ta(
-                                "msg-ai-rename-failed",
-                                &[("error", &detail_for_bar(&error_category(&e)))],
-                            ));
-                        }
-                        // Abortado por Esc: silencio, la barra ya se limpió.
-                        // (Un pánico del future del backend cae aquí también:
-                        // no hay plan que abrir, el run ya está cosechado.)
-                        Err(_join) => {}
-                    }
-                }
-            }
-            res = async {
-                // fs.rename_batch_plan en vuelo (§17): cosecha sin bloquear,
-                // molde del brazo de `ai_rename_run`.
-                match &mut rename_batch_run {
-                    Some(r) => (&mut r.handle).await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                if rename_batch_run.take().is_some() {
-                    let estado = match res {
-                        Ok(Ok(plan)) => norte_frontend::BatchPlan::Ready(Box::new(plan)),
-                        Ok(Err(e)) => {
-                            app.message = Some(ta(
-                                "msg-rename-batch-plan-failed",
-                                &[("error", &detail_for_bar(&error_category(&e)))],
-                            ));
-                            norte_frontend::BatchPlan::Failed
-                        }
-                        // Abortado (otra petición lo relevó) o pánico del
-                        // future: no hay plan y no hay nada más que decir —
-                        // quien lo relevó ya puso SU mensaje.
-                        Err(_join) => norte_frontend::BatchPlan::Failed,
-                    };
-                    // El modal puede estar abierto, RETENIDO tras otro, o ya
-                    // cerrado por el humano. En los dos primeros casos se
-                    // rellena; en el tercero la respuesta se tira.
-                    if !app.settle_ai_batch_plan(&estado)
-                        && let Some(p) = &mut pending_ai_plan
-                        && p.plan == norte_frontend::BatchPlan::Pending
-                    {
-                        p.plan = estado;
-                    }
-                }
-            }
-            res = async {
-                // index.search_semantic en vuelo (M4-IA-2): cosecha sin
-                // bloquear — molde del brazo de `ai_rename_run`.
-                match &mut semantic_run {
-                    Some(r) => (&mut r.handle).await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                semantic_run = None;
-                match res {
-                    Ok(Ok(hits)) if hits.is_empty() => {
-                        app.message = Some(t("msg-semantic-empty"));
-                    }
-                    // Cinturón de INGESTIÓN (paridad IA-1): una respuesta
-                    // por encima del techo contractual del server o con un
-                    // score no finito delata un daemon hostil/N+1 — rechazo
-                    // en bloque, ni se abre el modal (el guard es
-                    // `norte_frontend::validate_semantic_hits`, pura y
-                    // compartida con la GUI).
-                    Ok(Ok(hits)) => match norte_frontend::validate_semantic_hits(hits) {
-                        None => {
-                            app.message = Some(t("msg-semantic-invalid"));
-                        }
-                        Some(hits) => {
-                            app.message = None;
-                            if app.modal.is_none() {
-                                app.modal = Some(Modal::SemanticHits {
-                                    hits,
-                                    offset: 0,
-                                    cursor: 0,
-                                });
-                            } else {
-                                // Otro modal abierto (aprobación, colisión…):
-                                // los hits esperan su turno, jamás lo pisan.
-                                pending_semantic = Some(hits);
-                            }
-                        }
-                    },
-                    Ok(Err(e)) => {
-                        app.message = Some(ta(
-                            "msg-semantic-failed",
-                            &[("error", &detail_for_bar(&error_category(&e)))],
-                        ));
-                    }
-                    // Abortado por Esc: silencio, la barra ya se limpió.
-                    // (Un pánico del future del backend cae aquí también:
-                    // no hay hits que abrir, el run ya está cosechado.)
-                    Err(_join) => {}
-                }
-            }
-            outcome = async {
-                match &mut lua_run {
-                    Some((run, _)) => run.await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                // DROP INMEDIATO del CommandRun resuelto (contrato del
-                // driver): retenerlo mantendría `run_active` encendido y la
-                // statusbar Lua congelada.
-                lua_run = None;
-                match outcome {
-                    RunOutcome::Ok { messages } => {
-                        if !messages.is_empty() {
-                            // Unidos con « · » y por detail_for_bar (tope +
-                            // enmascarado): la barra es una línea.
-                            app.message = Some(detail_for_bar(&messages.join(" · ")));
-                        }
-                    }
-                    RunOutcome::Err { detail, .. } => {
-                        app.message = Some(ta(
-                            "err-lua-command",
-                            &[("detail", &detail_for_bar(&detail))],
-                        ));
-                    }
-                    RunOutcome::Cancelled => app.message = Some(t("err-lua-cancelled")),
-                    RunOutcome::TimedOut => app.message = Some(t("err-lua-timeout")),
-                }
-                // FIFO: arranca el siguiente encolado. En bucle: si uno ya
-                // no existe (hot-reload lo quitó → `err-lua-unknown`), el
-                // resto de la cola no se queda atascado.
-                if let Some(host) = lua_host.as_ref() {
-                    while lua_run.is_none() {
-                        let Some(next) = lua_queue.pop_front() else {
-                            break;
-                        };
-                        lua_run = start_lua_run(app, host, backend, &next);
-                    }
-                }
-            }
-            Some(()) = cfg_rx.recv() => {
-                // Ráfaga de guardados: empuja el deadline (ADR 0007).
-                reload_at =
-                    Some(tokio::time::Instant::now() + std::time::Duration::from_millis(300));
-            }
-            () = async {
-                match reload_at {
-                    Some(d) => tokio::time::sleep_until(d).await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                reload_at = None;
-                while cfg_rx.try_recv().is_ok() {}
-                // #117: si el reload cambia los attrs configurados de un
-                // pane visible, hay que re-listar (los valores solo llegan
-                // pidiéndolos) — mismo camino que el confirm del picker.
-                let attrs_before = pane_attr_ids(app);
-                reload_config(
-                    app,
-                    backend,
-                    resolver,
-                    viewer_resolver,
-                    dialog_resolver,
-                    help_lines,
-                    lang,
-                    &layers,
-                    cli_preset.as_deref(),
-                    &mut quick_mode,
-                    &mut confirm_quit,
-                    &mut cfg,
-                )
-                .await;
-                // `[ui] mouse` en caliente: encenderla o apagarla sin
-                // reiniciar. `set` es idempotente, así que un reload que
-                // no tocó la clave (o que falló entero, dejando la config
-                // vigente) no manda nada a la terminal.
-                //
-                // Exención puntual de la regla 2, la MISMA que el draw de
-                // arriba: son unos pocos bytes de escape a la terminal de
-                // control síncronos, acotados, y solo cuando la clave CAMBIA.
-                if let Err(e) =
-                    capture.set(cfg.common.ui_mouse.unwrap_or(true), terminal.backend_mut())
-                {
-                    // Y se dice, como en el arranque: quien acaba de
-                    // encender el ratón desde el overlay de ajustes y se
-                    // encuentra con que hacer click no hace nada merece
-                    // saber por qué (antes esto solo iba al log).
-                    tracing::warn!(error = %e, "no se pudo cambiar la captura de ratón");
-                    app.message = Some(t("msg-mouse-capture-failed"));
-                }
-                if pane_attr_ids(app) != attrs_before {
-                    let refreshed = refresh_panes(app, backend, &mut events).await;
-                    after_panes_refresh(
-                        app,
-                        refreshed,
-                        &mut fill,
-                        &mut last_probed,
-                        &mut search_run,
-                    );
-                }
-                // Hot-reload del scripting Lua (ADR 0026): host NUEVO entero
-                // (jamás estado a medias). Un `CommandRun` en vuelo retiene
-                // el estado VIEJO vía sus handles clonados (documentado en
-                // `lua::api`) y no se toca; statusbar/estado renacen. La
-                // cola también: sus nombres apuntaban al registro viejo
-                // (y si `load_lua` dio None, no quedaría quién drenarla).
-                lua_host = load_lua(app, &layers).await;
-                lua_queue.clear();
-            }
-            maybe = events.next() => {
-                let Some(event) = maybe else { return Ok(()); };
-                let event = event.context("evento de terminal")?;
-                // Ratón (`[ui] mouse`): solo llega si la captura está
-                // pedida — sin ella el emulador no reporta nada y este
-                // brazo no corre. La semántica del gesto (marcar, barrer,
-                // transferir) vive en `norte-frontend` (regla 7); aquí solo
-                // se resuelve la celda y se aplica.
-                if let Event::Mouse(me) = event {
-                    match mouse::handle(app, me) {
-                        mouse::After::Nothing => {}
-                        // Doble click = `nav.enter`, por el MISMO `dispatch`
-                        // que la tecla: mismo cd, mismo relleno paginado,
-                        // misma cosecha de la búsqueda viva. Un segundo
-                        // camino para entrar en un directorio sería un
-                        // segundo sitio donde arreglar cada bug de cd.
-                        mouse::After::Enter => {
-                            // K3a: un gesto es OTRA entrada. La secuencia que
-                            // el lector estuviera tecleando se abandona con su
-                            // panel — no la completa el ratón, y dejarla
-                            // armada haría que la siguiente tecla disparase un
-                            // comando pedido antes de cambiar de directorio.
-                            app.abandon_pending(resolver);
-                            let outcome = dispatch(
+                    ev = dir_watch.rx.recv(), if dir_watch_alive && watch_refresh_allowed(app) => {
+                        // #106: cambio EXTERNO en un dir vigilado (debounced) —
+                        // mismo camino que pane.refresh (Ctrl+R): refresh
+                        // cancelable + ritual #118. GATEADO (review MAJOR-2): con
+                        // un overlay/quick abierto, `refresh_panes` se comería las
+                        // teclas del usuario y Esc cambiaría de significado — la
+                        // precondición deja el evento ENCOLADO (canal de capacidad
+                        // 1) y dispara al cerrarse el overlay.
+                        if let Some(()) = ev {
+                            let refreshed = refresh_panes(app, backend, &mut events).await;
+                            after_panes_refresh(
                                 app,
-                                backend,
-                                &mut events,
-                                help_lines,
-                                lang,
-                                quick_mode,
-                                confirm_quit,
-                                &cfg,
-                                Command::NavEnter,
-                            )
-                            .await;
-                            if let Some(pane) = cd_landed_pane(&outcome) {
-                                app.apply_scheme_sort(pane);
-                                let dir = app.panes[pane].dir().clone();
-                                let paths: Vec<VPath> = app.panes[pane]
-                                    .entries()
-                                    .iter()
-                                    .map(|e| e.path.clone())
-                                    .collect();
-                                let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
-                                decorate_fetch[pane] =
-                                    spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
-                            }
-                            apply_cd(
+                                refreshed,
                                 &mut fill,
-                                &mut decorate_fetch,
                                 &mut last_probed,
                                 &mut search_run,
-                                outcome,
                             );
-                            // Paridad con el sitio del resolver: entrar en
-                            // un hit apaga el modo virtual del pane, y hay
-                            // que cosechar el run (regla 3).
-                            reap_search_run(app, &mut search_run);
+                        } else {
+                            // Inalcanzable con `dir_watch` vivo (retiene el emisor
+                            // crudo): si pasara, DESARMAR el brazo — un canal
+                            // cerrado devolvería None en bucle (spin al 100%,
+                            // review MINOR-1).
+                            tracing::warn!("dir watch pipeline murió; brazo desarmado");
+                            dir_watch_alive = false;
                         }
                     }
-                } else if let Event::Key(key) = event
-                    && key.kind == crossterm::event::KeyEventKind::Press
-                {
-                    app.message = None;
-                    if app.theme_picker.is_some() && !modal_wins(app) {
-                        on_theme_picker_key(app, dialog_resolver, key.modifiers, key.code).await;
-                    } else if app.columns_picker.is_some() && !modal_wins(app) {
-                        // Picker de columnas (#108 7a): mismo puesto en la
-                        // cadena que el selector de tema (overlay antes que
-                        // el brazo del modal, precedencia existente).
-                        if on_columns_key(app, dialog_resolver, key.modifiers, key.code).await {
-                            // #117: el set de attrs pintado cambió — los
-                            // valores solo llegan pidiéndolos, así que se
-                            // re-lista por el MISMO camino que tras una
-                            // mutación (ritual en `after_panes_refresh`).
+                    Some(task) = async {
+                        match &mut foreign_tasks {
+                            Some(rx) => rx.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        // Task de OTRO frontend de la misma sesión (fase 3): al panel.
+                        app.board.push_foreign(&task);
+                    }
+                    Some(ev) = async {
+                        match &mut conn_events {
+                            Some(rx) => rx.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        app.message = Some(match ev {
+                            ConnEvent::Lost => t("msg-daemon-lost"),
+                            ConnEvent::Restored => t("msg-daemon-restored"),
+                        });
+                    }
+                    Some(req) = async {
+                        match &mut approvals {
+                            Some(rx) => rx.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        // Aprobación de policy pendiente (M3-3b T5): a la cola de
+                        // diálogos (jamás pisa un modal abierto) y se abre si procede.
+                        app.pending_approvals.push_back(req);
+                        app.open_next_pending();
+                    }
+                    Some(d) = async {
+                        match &mut degraded {
+                            Some(rx) => rx.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        // #44: sesión remota degradó a texto plano — indicador
+                        // PERSISTENTE en la status bar (no pisa `message` transitorio).
+                        // H3d: se retiene el valor ESTRUCTURADO, no la frase — la barra
+                        // la compone (`App::connection_banner`) y la ayuda puede
+                        // preguntar por scheme cuál se degradó.
+                        app.note_degraded(d);
+                    }
+                    Some(estado) = async {
+                        match &mut journal_warnings {
+                            Some(rx) => rx.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        // #167/#177: esta sesión acaba de mutar sin quedar registrada.
+                        // Uno por EPISODIO (el core no repite mientras el motivo no
+                        // cambie), así que pisar `message` aquí no puede convertirse en
+                        // un goteo. Y como `message` lo borra la siguiente tecla, el
+                        // hecho se anota además en el indicador PERSISTENTE de la
+                        // barra: esto no es un aviso que se pueda perder por pulsar una
+                        // flecha.
+                        //
+                        // #179: y la recuperación APAGA ese indicador. Sin esto, un
+                        // ocupante de paso —otro `norte cp`, un daemon reiniciándose—
+                        // dejaría a una sesión de tres horas enseñando «no se registra»
+                        // sobre mutaciones que sí se registran.
+                        use norte_core::embedded::JournalStatus;
+                        match estado {
+                            JournalStatus::Lost(why) => {
+                                app.message = Some(journal_warning_i18n(&why));
+                                app.note_no_journal(why);
+                            }
+                            JournalStatus::Recovered => {
+                                app.message = Some(t("msg-journal-recovered"));
+                                app.note_journal_recovered();
+                            }
+                            // #203: mismo hecho, otra explicación — y la barra lo dice
+                            // con otra frase, porque la de siempre sale también cuando
+                            // hay un daemon vivo y por eso ya no se mira.
+                            JournalStatus::Squatted => {
+                                app.message = Some(t("msg-journal-squatted"));
+                                app.note_journal_squatted();
+                            }
+                            // `#[non_exhaustive]`: una transición nueva no puede
+                            // cambiar el indicador a ciegas — se ignora hasta que
+                            // alguien la enseñe a propósito.
+                            _ => {}
+                        }
+                    }
+                    res = async {
+                        match &mut stat_probe {
+                            Some(pr) => (&mut pr.rx).await.ok(),
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        // Sonda de stat del viewport (#52): el slot se limpia SIEMPRE
+                        // (haya hidratado algo, fallara el stat o se cerrara el canal)
+                        // — la dedup por `last_probed` evita reintentar hasta que un
+                        // listado nuevo la vacíe.
+                        stat_probe = None;
+                        for (pane, path, entry) in res.unwrap_or_default() {
+                            app.panes[pane].hydrate(&path, entry.size, entry.mtime_ms);
+                        }
+                    }
+                    (generation, res) = async {
+                        match &mut compare_stat_probe {
+                            Some(pr) => (pr.generation, (&mut pr.rx).await.ok()),
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        // Sonda de la fila seleccionada del panel de diferencias
+                        // (#157): el slot se limpia SIEMPRE, igual que la de arriba.
+                        // Un canal cerrado (`res` es `None`) no marca nada sondeado:
+                        // la próxima vez que la selección lo vuelva a pedir se
+                        // reintenta, en vez de dejar la fila huérfana para siempre
+                        // porque la task que la pedía murió a medio camino.
+                        compare_stat_probe = None;
+                        for (path, entry) in res.unwrap_or_default() {
+                            // La generación es la del PEDIDO, no la de ahora: si otra
+                            // comparación empezó mientras volaba, `hydrate` la tira.
+                            app.hydrate_compare_size(generation, path, entry.and_then(|e| e.size));
+                        }
+                    }
+                    (slot, res) = std::future::poll_fn(|cx| {
+                        // Uno por HUECO, y tantos como huecos haya. `oneshot::Receiver`
+                        // es `Unpin`, así que se sondea a mano; `select!` tiene aridad
+                        // fija y aquí la aridad la pone el layout.
+                        for (id, f) in decorate_fetch.iter_mut() {
+                            if let std::task::Poll::Ready(r) =
+                                std::pin::Pin::new(&mut f.rx).poll(cx)
+                            {
+                                return std::task::Poll::Ready((id, r.ok()));
+                            }
+                        }
+                        std::task::Poll::Pending
+                    }) => {
+                        // Fetch de decoraciones (G3b): se limpia SIEMPRE. Una
+                        // respuesta tardía cuyo `dir` ya no case el del pane (el
+                        // usuario cd'eó de nuevo mientras estaba en vuelo) se
+                        // DESCARTA — nunca pinta badges de un listado que ya no se
+                        // ve (mismo criterio anti-stale que el drain-guard de
+                        // `apply_fill_msg` para búsqueda virtual).
+                        if let Some(f) = decorate_fetch.remove(slot)
+                            && let Some((map, cols)) = res
+                            && let Some(p) = app.panes.browser_mut(f.slot)
+                            && p.dir() == &f.dir
+                        {
+                            p.set_decorations(map);
+                            // #117-follow-up: los valores de columnas plugin:
+                            // viajan en el mismo fetch y comparten el guard
+                            // anti-stale.
+                            p.set_plugin_columns(cols);
+                        }
+                    }
+                    (pane, msg) = std::future::poll_fn(|cx| {
+                        // Un canal POR HUECO, no por posición, y tantos como huecos
+                        // haya. `tokio::select!` tiene aridad fija, así que se sondean
+                        // a mano: `poll_recv` registra el waker, o sea que esto es tan
+                        // cancel-safe como `recv` y perder la carrera no pierde el
+                        // lote del otro.
+                        //
+                        // El barrido ARRANCA donde acabó el anterior. Sondear siempre
+                        // desde el principio deja que un drenador rápido en el primer
+                        // hueco no deje hablar nunca a los demás — con dos paneles
+                        // `select!` lo evitaba solo, porque elige al azar.
+                        let n = fill.len();
+                        for k in 0..n {
+                            let Some((id, f)) = fill.iter_mut().nth((fill_cursor + k) % n) else {
+                                break;
+                            };
+                            if let std::task::Poll::Ready(m) = f.rx.poll_recv(cx) {
+                                fill_cursor = (fill_cursor + k + 1) % n;
+                                return std::task::Poll::Ready((id, m));
+                            }
+                        }
+                        std::task::Poll::Pending
+                    }) => {
+                        // Lote del drenador del listado paginado (ADR 0017): al pane
+                        // de SU hueco. `None` = canal cerrado (fin del drenado).
+                        apply_fill_msg(app, &mut fill, pane, msg);
+                    }
+                    hits = async {
+                        // Solo se drena mientras el run sigue vivo (`Running`): un
+                        // canal cerrado devolvería `None` en bucle (spin) — al leer el
+                        // `None` se pasa a terminal y este brazo queda pendiente.
+                        match &mut search_run {
+                            Some(s) if s.state == SearchState::Running => s.rx.recv().await,
+                            _ => std::future::pending().await,
+                        }
+                    } => {
+                        drain_search(app, &mut search_run, hits);
+                    }
+                    batch = async {
+                        // Igual que el brazo de hits: solo se drena con el run VIVO,
+                        // porque un canal cerrado devolvería `None` en bucle (spin).
+                        match &mut compare_run {
+                            Some(c) if c.state == CompareState::Running => c.rx.recv().await,
+                            _ => std::future::pending().await,
+                        }
+                    } => {
+                        drain_compare(app, &mut compare_run, batch);
+                    }
+                    // UN solo brazo para las dos Tasks del diálogo: `select!` no deja
+                    // tomar prestado `sync_run` dos veces, y son fases sucesivas del
+                    // mismo run — nunca hay plan y aplicación a la vez.
+                    tick = async {
+                        let Some(s) = &mut sync_run else {
+                            return std::future::pending().await;
+                        };
+                        if s.applying {
+                            // La aplicación no tiene canal: se espera a que su Task
+                            // cambie de estado. `changed()` con el emisor caído
+                            // devuelve `Err`, y eso también es un final — se sale y el
+                            // cosechado lee el snapshot que haya.
+                            let vivo = s.progress.changed().await.is_ok();
+                            return SyncTick::Applied { vivo };
+                        }
+                        match &mut s.rx {
+                            // Un canal ya cerrado devolvería `None` en bucle (spin):
+                            // `drain_sync_plan` pone `rx = None` al cerrarse.
+                            Some(rx) => SyncTick::Plan(rx.recv().await),
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        match tick {
+                            SyncTick::Plan(event) => drain_sync_plan(app, &mut sync_run, event),
+                            SyncTick::Applied { vivo } => {
+                                harvest_sync_apply(app, backend, &mut sync_run, vivo).await;
+                            }
+                        }
+                    }
+                    res = async {
+                        // ai.rename_plan en vuelo (M4-IA): cosecha sin bloquear —
+                        // el brazo solo se arma con un run vivo (molde stat_probe).
+                        match &mut ai_rename_run {
+                            Some(r) => (&mut r.handle).await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        if let Some(run) = ai_rename_run.take() {
+                            match res {
+                                Ok(Ok(plan)) if plan.entries.is_empty() => {
+                                    app.message = Some(t("msg-ai-rename-empty"));
+                                }
+                                // Cinturón de INGESTIÓN (quality review 78eb243
+                                // MINOR-5): un plan legítimo del engine queda muy
+                                // por debajo del tope; superarlo delata un daemon
+                                // hostil/N+1 inflando la respuesta — rechazo en
+                                // bloque, ni se abre el modal.
+                                Ok(Ok(plan))
+                                    if plan.entries.len() > norte_frontend::MAX_AI_PLAN_ENTRIES =>
+                                {
+                                    app.message = Some(t("msg-ai-rename-invalid-plan"));
+                                }
+                                Ok(Ok(plan)) => {
+                                    // §17: el plan del LOTE se pide AQUÍ, en el mismo
+                                    // viaje que el plan IA — el modal necesita el
+                                    // `plan_hash` para que confirmar haga algo, y un
+                                    // plan retenido tras otro modal no tendría quién
+                                    // se lo pidiera después.
+                                    //
+                                    // SPAWNEADO, como la llamada al modelo: contra un
+                                    // dir enorme o un daemon lento esto es un `fs.list`
+                                    // entero, y esperarlo aquí congelaría el loop —
+                                    // sin dibujo, sin teclas, sin Esc. El modal abre en
+                                    // `Pending` y se rellena solo.
+                                    //
+                                    // Cinturón fail-loud COMPARTIDO con la GUI (audit
+                                    // MAJOR-2): una pareja que no es un `Segment`
+                                    // delata un daemon hostil/roto — ni se le pide
+                                    // plan al core, y confirmar queda muerto.
+                                    let estado = if let Some(pairs) =
+                                        norte_frontend::rename_pairs(&plan.entries)
+                                    {
+                                        let b = backend.clone();
+                                        let d = run.dir.clone();
+                                        let handle =
+                                            tokio::spawn(
+                                                async move { b.rename_batch_plan(&d, &pairs).await },
+                                            );
+                                        if let Some(old) =
+                                            rename_batch_run.replace(RenameBatchRun { handle })
+                                        {
+                                            old.handle.abort();
+                                        }
+                                        app.message = None;
+                                        norte_frontend::BatchPlan::Pending
+                                    } else {
+                                        app.message = Some(t("msg-ai-rename-invalid-plan"));
+                                        norte_frontend::BatchPlan::Failed
+                                    };
+                                    let ready = PendingAiPlan {
+                                        dir: run.dir,
+                                        entries: plan.entries,
+                                        plan: estado,
+                                    };
+                                    if app.modal.is_none() {
+                                        app.modal = Some(Modal::AiRenamePlan {
+                                            dir: ready.dir,
+                                            entries: ready.entries,
+                                            offset: 0,
+                                            plan: ready.plan,
+                                        });
+                                    } else {
+                                        // Otro modal abierto (aprobación, colisión…):
+                                        // el plan espera su turno, jamás lo pisa. A
+                                        // diferencia de la GUI (banner superseded), aquí
+                                        // el overwrite es inalcanzable: run único en
+                                        // vuelo y el prompt no abre sobre otro modal.
+                                        pending_ai_plan = Some(ready);
+                                    }
+                                }
+                                Ok(Err(e)) => {
+                                    app.message = Some(ta(
+                                        "msg-ai-rename-failed",
+                                        &[("error", &detail_for_bar(&error_category(&e)))],
+                                    ));
+                                }
+                                // Abortado por Esc: silencio, la barra ya se limpió.
+                                // (Un pánico del future del backend cae aquí también:
+                                // no hay plan que abrir, el run ya está cosechado.)
+                                Err(_join) => {}
+                            }
+                        }
+                    }
+                    res = async {
+                        // fs.rename_batch_plan en vuelo (§17): cosecha sin bloquear,
+                        // molde del brazo de `ai_rename_run`.
+                        match &mut rename_batch_run {
+                            Some(r) => (&mut r.handle).await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        if rename_batch_run.take().is_some() {
+                            let estado = match res {
+                                Ok(Ok(plan)) => norte_frontend::BatchPlan::Ready(Box::new(plan)),
+                                Ok(Err(e)) => {
+                                    app.message = Some(ta(
+                                        "msg-rename-batch-plan-failed",
+                                        &[("error", &detail_for_bar(&error_category(&e)))],
+                                    ));
+                                    norte_frontend::BatchPlan::Failed
+                                }
+                                // Abortado (otra petición lo relevó) o pánico del
+                                // future: no hay plan y no hay nada más que decir —
+                                // quien lo relevó ya puso SU mensaje.
+                                Err(_join) => norte_frontend::BatchPlan::Failed,
+                            };
+                            // El modal puede estar abierto, RETENIDO tras otro, o ya
+                            // cerrado por el humano. En los dos primeros casos se
+                            // rellena; en el tercero la respuesta se tira.
+                            if !app.settle_ai_batch_plan(&estado)
+                                && let Some(p) = &mut pending_ai_plan
+                                && p.plan == norte_frontend::BatchPlan::Pending
+                            {
+                                p.plan = estado;
+                            }
+                        }
+                    }
+                    res = async {
+                        // index.search_semantic en vuelo (M4-IA-2): cosecha sin
+                        // bloquear — molde del brazo de `ai_rename_run`.
+                        match &mut semantic_run {
+                            Some(r) => (&mut r.handle).await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        semantic_run = None;
+                        match res {
+                            Ok(Ok(hits)) if hits.is_empty() => {
+                                app.message = Some(t("msg-semantic-empty"));
+                            }
+                            // Cinturón de INGESTIÓN (paridad IA-1): una respuesta
+                            // por encima del techo contractual del server o con un
+                            // score no finito delata un daemon hostil/N+1 — rechazo
+                            // en bloque, ni se abre el modal (el guard es
+                            // `norte_frontend::validate_semantic_hits`, pura y
+                            // compartida con la GUI).
+                            Ok(Ok(hits)) => match norte_frontend::validate_semantic_hits(hits) {
+                                None => {
+                                    app.message = Some(t("msg-semantic-invalid"));
+                                }
+                                Some(hits) => {
+                                    app.message = None;
+                                    if app.modal.is_none() {
+                                        app.modal = Some(Modal::SemanticHits {
+                                            hits,
+                                            offset: 0,
+                                            cursor: 0,
+                                        });
+                                    } else {
+                                        // Otro modal abierto (aprobación, colisión…):
+                                        // los hits esperan su turno, jamás lo pisan.
+                                        pending_semantic = Some(hits);
+                                    }
+                                }
+                            },
+                            Ok(Err(e)) => {
+                                app.message = Some(ta(
+                                    "msg-semantic-failed",
+                                    &[("error", &detail_for_bar(&error_category(&e)))],
+                                ));
+                            }
+                            // Abortado por Esc: silencio, la barra ya se limpió.
+                            // (Un pánico del future del backend cae aquí también:
+                            // no hay hits que abrir, el run ya está cosechado.)
+                            Err(_join) => {}
+                        }
+                    }
+                    outcome = async {
+                        match &mut lua_run {
+                            Some((run, _)) => run.await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        // DROP INMEDIATO del CommandRun resuelto (contrato del
+                        // driver): retenerlo mantendría `run_active` encendido y la
+                        // statusbar Lua congelada.
+                        lua_run = None;
+                        match outcome {
+                            RunOutcome::Ok { messages } => {
+                                if !messages.is_empty() {
+                                    // Unidos con « · » y por detail_for_bar (tope +
+                                    // enmascarado): la barra es una línea.
+                                    app.message = Some(detail_for_bar(&messages.join(" · ")));
+                                }
+                            }
+                            RunOutcome::Err { detail, .. } => {
+                                app.message = Some(ta(
+                                    "err-lua-command",
+                                    &[("detail", &detail_for_bar(&detail))],
+                                ));
+                            }
+                            RunOutcome::Cancelled => app.message = Some(t("err-lua-cancelled")),
+                            RunOutcome::TimedOut => app.message = Some(t("err-lua-timeout")),
+                        }
+                        // FIFO: arranca el siguiente encolado. En bucle: si uno ya
+                        // no existe (hot-reload lo quitó → `err-lua-unknown`), el
+                        // resto de la cola no se queda atascado.
+                        if let Some(host) = lua_host.as_ref() {
+                            while lua_run.is_none() {
+                                let Some(next) = lua_queue.pop_front() else {
+                                    break;
+                                };
+                                lua_run = start_lua_run(app, host, backend, &next);
+                            }
+                        }
+                    }
+                    Some(()) = cfg_rx.recv() => {
+                        // Ráfaga de guardados: empuja el deadline (ADR 0007).
+                        reload_at =
+                            Some(tokio::time::Instant::now() + std::time::Duration::from_millis(300));
+                    }
+                    () = async {
+                        match reload_at {
+                            Some(d) => tokio::time::sleep_until(d).await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        reload_at = None;
+                        while cfg_rx.try_recv().is_ok() {}
+                        // #117: si el reload cambia los attrs configurados de un
+                        // pane visible, hay que re-listar (los valores solo llegan
+                        // pidiéndolos) — mismo camino que el confirm del picker.
+                        let attrs_before = pane_attr_ids(app);
+                        reload_config(
+                            app,
+                            backend,
+                            resolver,
+                            viewer_resolver,
+                            dialog_resolver,
+                            help_lines,
+                            lang,
+                            &layers,
+                            cli_preset.as_deref(),
+                            &mut quick_mode,
+                            &mut confirm_quit,
+                            &mut cfg,
+                        )
+                        .await;
+                        // `[ui] mouse` en caliente: encenderla o apagarla sin
+                        // reiniciar. `set` es idempotente, así que un reload que
+                        // no tocó la clave (o que falló entero, dejando la config
+                        // vigente) no manda nada a la terminal.
+                        //
+                        // Exención puntual de la regla 2, la MISMA que el draw de
+                        // arriba: son unos pocos bytes de escape a la terminal de
+                        // control síncronos, acotados, y solo cuando la clave CAMBIA.
+                        if let Err(e) =
+                            capture.set(cfg.common.ui_mouse.unwrap_or(true), terminal.backend_mut())
+                        {
+                            // Y se dice, como en el arranque: quien acaba de
+                            // encender el ratón desde el overlay de ajustes y se
+                            // encuentra con que hacer click no hace nada merece
+                            // saber por qué (antes esto solo iba al log).
+                            tracing::warn!(error = %e, "no se pudo cambiar la captura de ratón");
+                            app.message = Some(t("msg-mouse-capture-failed"));
+                        }
+                        if pane_attr_ids(app) != attrs_before {
                             let refreshed = refresh_panes(app, backend, &mut events).await;
                             after_panes_refresh(
                                 app,
@@ -3332,174 +3270,378 @@ async fn run(
                                 &mut search_run,
                             );
                         }
-                    } else if app.extensions.is_some() && !modal_wins(app) {
-                        on_extensions_key(
-                            app,
-                            backend,
-                            dialog_resolver,
-                            lang,
-                            help_lines,
-                            key.modifiers,
-                            key.code,
-                        )
-                        .await;
-                    } else if app.nav_popup.is_some() && !modal_wins(app) {
-                        // Popup historial/hotlist (spec 2026-07-18): Enter
-                        // sobre un item NAVEGA por el flujo de cd normal —
-                        // su desenlace toca el relleno como cualquier cd.
-                        let outcome = on_nav_popup_key(
-                            app,
-                            backend,
-                            &mut events,
-                            dialog_resolver,
-                            key.modifiers,
-                            key.code,
-                        )
-                        .await;
-                        if let Some(pane) = cd_landed_pane(&outcome) {
-                            app.apply_scheme_sort(pane);
-                            let dir = app.panes[pane].dir().clone();
-                            let paths: Vec<VPath> =
-                                app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
-                            let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
-                            decorate_fetch[pane] =
-                                spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
-                        }
-                        apply_cd(
-                            &mut fill,
-                            &mut decorate_fetch,
-                            &mut last_probed,
-                            &mut search_run,
-                            outcome,
-                        );
-                    } else if app.search_dialog.is_some() && !modal_wins(app) {
-                        // Diálogo Alt+F7 (liveSearch T6): captura imprimibles
-                        // como los demás overlays; Enter con criterio lanza la
-                        // búsqueda (abre el pane virtual) — el resto de teclas
-                        // no navegan.
-                        if let Some(params) =
-                            on_search_dialog_key(app, key.modifiers, key.code)
-                        {
-                            launch_search(app, backend, &mut fill, &mut search_run, params)
-                                .await;
-                        }
-                    } else if app.sync.is_some() && !modal_wins(app) {
-                        // Panel de sincronización: teclas FIJAS, como las del
-                        // de diferencias. Va ANTES que él porque se pinta
-                        // encima: el de diferencias sigue vivo detrás con sus
-                        // marcas, y el teclado tiene que ir a lo que se ve.
-                        on_sync_key(app, &mut sync_run, key.modifiers, key.code);
-                    } else if app.compare.is_some() && !modal_wins(app) {
-                        // Panel de diferencias (`Shift+F2`): teclas FIJAS,
-                        // como el diálogo de búsqueda y la palette. No resuelve
-                        // por el contexto `dialog` porque no hay vocabulario
-                        // `dialog.*` para «cambia de lado» ni «esconde los
-                        // iguales», y no es una pantalla del keymap propia
-                        // porque eso serían siete presets tocados por una
-                        // tecla que todavía no tiene idioma establecido.
-                        on_compare_key(
-                            app,
-                            backend,
-                            &mut events,
-                            &mut fill,
-                            &mut decorate_fetch,
-                            &mut last_probed,
-                            &mut search_run,
-                            &mut compare_run,
-                            key.modifiers,
-                            key.code,
-                        )
-                        .await;
-                    } else if app.palette.is_some() && !modal_wins(app) {
-                        // Command palette (H1 T4): editor de filtro libre,
-                        // como el diálogo de búsqueda de arriba — sus
-                        // teclas son FIJAS, no resuelven por el contexto
-                        // `dialog` (decisión 8 del plan H1: no hay
-                        // vocabulario `dialog.*` para "teclear un carácter"
-                        // o "correr la selección"). ctrl+c conserva su
-                        // significado global (salir), como TODOS los
-                        // overlays.
-                        if key.modifiers.contains(KeyModifiers::CONTROL)
-                            && key.code == KeyCode::Char('c')
-                        {
-                            app.quit = true;
-                            continue;
-                        }
-                        let plain = key.modifiers.is_empty()
-                            || key.modifiers == KeyModifiers::SHIFT;
-                        match key.code {
-                            KeyCode::Char(c) if plain => {
-                                if let Some(p) = &mut app.palette {
-                                    p.push_char(c);
-                                }
-                            }
-                            KeyCode::Backspace if plain => {
-                                if let Some(p) = &mut app.palette {
-                                    p.backspace();
-                                }
-                            }
-                            KeyCode::Esc if plain => app.palette = None,
-                            // H3c: el puente hacia la página que documenta la
-                            // fila resaltada. Va AQUÍ, explícito junto a
-                            // `ctrl+c`/`ctrl+p`, porque las teclas de la
-                            // palette son FIJAS (decisión 8, arriba): no hay
-                            // verbo `dialog.*` para «explícame esta fila», así
-                            // que tampoco puede resolverse por el keymap.
-                            KeyCode::F(1) if plain => {
-                                palette_help(app, lang, help_lines);
-                            }
-                            KeyCode::Up if plain => {
-                                if let Some(p) = &mut app.palette {
-                                    p.up();
-                                }
-                            }
-                            KeyCode::Down if plain => {
-                                if let Some(p) = &mut app.palette {
-                                    p.down();
-                                }
-                            }
-                            KeyCode::PageUp if plain => {
-                                if let Some(p) = &mut app.palette {
-                                    p.page_up(PAGE);
-                                }
-                            }
-                            KeyCode::PageDown if plain => {
-                                if let Some(p) = &mut app.palette {
-                                    p.page_down(PAGE);
-                                }
-                            }
-                            KeyCode::Enter if plain => {
-                                let cmd = app.palette.as_ref().and_then(Palette::selected);
-                                app.palette = None;
-                                if let Some(cmd) = cmd {
-                                    // (P1) Enter sobre una fila de PLUGIN: la
-                                    // `key` es `plugin:{id}:{command}`
-                                    // (`palette::plugin_rows`, jamás pintada)
-                                    // — no vive en `COMMANDS`, así que se
-                                    // enruta AQUÍ, antes del vocabulario
-                                    // tipado (#112). El resultado del plugin
-                                    // es texto NO confiable: `detail_for_bar`
-                                    // (enmascarado + tope, patrón #73).
-                                    if let Some((id, command)) = parse_plugin_key(&cmd) {
-                                        let (id, command) =
-                                            (id.to_owned(), command.to_owned());
-                                        run_plugin_command(app, backend, &id, &command)
-                                            .await;
-                                        continue;
+                        // Hot-reload del scripting Lua (ADR 0026): host NUEVO entero
+                        // (jamás estado a medias). Un `CommandRun` en vuelo retiene
+                        // el estado VIEJO vía sus handles clonados (documentado en
+                        // `lua::api`) y no se toca; statusbar/estado renacen. La
+                        // cola también: sus nombres apuntaban al registro viejo
+                        // (y si `load_lua` dio None, no quedaría quién drenarla).
+                        lua_host = load_lua(app, &layers).await;
+                        lua_queue.clear();
+                    }
+                    maybe = events.next() => {
+                        let Some(event) = maybe else { return Ok(()); };
+                        let event = event.context("evento de terminal")?;
+                        // Ratón (`[ui] mouse`): solo llega si la captura está
+                        // pedida — sin ella el emulador no reporta nada y este
+                        // brazo no corre. La semántica del gesto (marcar, barrer,
+                        // transferir) vive en `norte-frontend` (regla 7); aquí solo
+                        // se resuelve la celda y se aplica.
+                        if let Event::Mouse(me) = event {
+                            match mouse::handle(app, me) {
+                                mouse::After::Nothing => {}
+                                // Doble click = `nav.enter`, por el MISMO `dispatch`
+                                // que la tecla: mismo cd, mismo relleno paginado,
+                                // misma cosecha de la búsqueda viva. Un segundo
+                                // camino para entrar en un directorio sería un
+                                // segundo sitio donde arreglar cada bug de cd.
+                                mouse::After::Enter => {
+                                    // K3a: un gesto es OTRA entrada. La secuencia que
+                                    // el lector estuviera tecleando se abandona con su
+                                    // panel — no la completa el ratón, y dejarla
+                                    // armada haría que la siguiente tecla disparase un
+                                    // comando pedido antes de cambiar de directorio.
+                                    app.abandon_pending(resolver);
+                                    let outcome = dispatch(
+                                        app,
+                                        backend,
+                                        &mut events,
+                                        help_lines,
+                                        lang,
+                                        quick_mode,
+                                        confirm_quit,
+                                        &cfg,
+                                        Command::NavEnter,
+                                    )
+                                    .await;
+                                    if let Some(pane) = cd_landed_pane(&outcome) {
+                                        app.apply_scheme_sort(pane);
+                                        let dir = app.panes[pane].dir().clone();
+                                        let paths: Vec<VPath> = app.panes[pane]
+                                            .entries()
+                                            .iter()
+                                            .map(|e| e.path.clone())
+                                            .collect();
+                                        let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                                        decorate_fetch.set(
+            app.panes.slot_of(pane),
+            spawn_decorate_fetch(backend, app.panes.slot_of(pane), dir, paths, plugin_cols),
+        );
                                     }
-                                    // MISMA función de despacho que el
-                                    // resolver del keymap invoca (#dispatch):
-                                    // un comando elegido en la palette corre
-                                    // EXACTAMENTE como si su tecla se
-                                    // hubiera pulsado — incluida la apertura
-                                    // de otro overlay (p.ej. `app.help`).
-                                    // Las filas de la palette nacen de
-                                    // `COMMANDS`, así que el parse no puede
-                                    // fallar; el guard es defensivo (#112).
-                                    let Some(cmd) = Command::parse(&cmd) else {
-                                        debug_assert!(false, "palette fuera de COMMANDS");
-                                        continue;
-                                    };
+                                    apply_cd(
+                                        &app.panes,
+                                        &mut fill,
+                                        &mut decorate_fetch,
+                                        &mut last_probed,
+                                        &mut search_run,
+                                        outcome,
+                                    );
+                                    // Paridad con el sitio del resolver: entrar en
+                                    // un hit apaga el modo virtual del pane, y hay
+                                    // que cosechar el run (regla 3).
+                                    reap_search_run(app, &mut search_run);
+                                }
+                            }
+                        } else if let Event::Key(key) = event
+                            && key.kind == crossterm::event::KeyEventKind::Press
+                        {
+                            app.message = None;
+                            if app.theme_picker.is_some() && !modal_wins(app) {
+                                on_theme_picker_key(app, dialog_resolver, key.modifiers, key.code).await;
+                            } else if app.columns_picker.is_some() && !modal_wins(app) {
+                                // Picker de columnas (#108 7a): mismo puesto en la
+                                // cadena que el selector de tema (overlay antes que
+                                // el brazo del modal, precedencia existente).
+                                if on_columns_key(app, dialog_resolver, key.modifiers, key.code).await {
+                                    // #117: el set de attrs pintado cambió — los
+                                    // valores solo llegan pidiéndolos, así que se
+                                    // re-lista por el MISMO camino que tras una
+                                    // mutación (ritual en `after_panes_refresh`).
+                                    let refreshed = refresh_panes(app, backend, &mut events).await;
+                                    after_panes_refresh(
+                                        app,
+                                        refreshed,
+                                        &mut fill,
+                                        &mut last_probed,
+                                        &mut search_run,
+                                    );
+                                }
+                            } else if app.extensions.is_some() && !modal_wins(app) {
+                                on_extensions_key(
+                                    app,
+                                    backend,
+                                    dialog_resolver,
+                                    lang,
+                                    help_lines,
+                                    key.modifiers,
+                                    key.code,
+                                )
+                                .await;
+                            } else if app.nav_popup.is_some() && !modal_wins(app) {
+                                // Popup historial/hotlist (spec 2026-07-18): Enter
+                                // sobre un item NAVEGA por el flujo de cd normal —
+                                // su desenlace toca el relleno como cualquier cd.
+                                let outcome = on_nav_popup_key(
+                                    app,
+                                    backend,
+                                    &mut events,
+                                    dialog_resolver,
+                                    key.modifiers,
+                                    key.code,
+                                )
+                                .await;
+                                if let Some(pane) = cd_landed_pane(&outcome) {
+                                    app.apply_scheme_sort(pane);
+                                    let dir = app.panes[pane].dir().clone();
+                                    let paths: Vec<VPath> =
+                                        app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
+                                    let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                                    decorate_fetch.set(
+            app.panes.slot_of(pane),
+            spawn_decorate_fetch(backend, app.panes.slot_of(pane), dir, paths, plugin_cols),
+        );
+                                }
+                                apply_cd(
+                                    &app.panes,
+                                    &mut fill,
+                                    &mut decorate_fetch,
+                                    &mut last_probed,
+                                    &mut search_run,
+                                    outcome,
+                                );
+                            } else if app.search_dialog.is_some() && !modal_wins(app) {
+                                // Diálogo Alt+F7 (liveSearch T6): captura imprimibles
+                                // como los demás overlays; Enter con criterio lanza la
+                                // búsqueda (abre el pane virtual) — el resto de teclas
+                                // no navegan.
+                                if let Some(params) =
+                                    on_search_dialog_key(app, key.modifiers, key.code)
+                                {
+                                    launch_search(app, backend, &mut fill, &mut search_run, params)
+                                        .await;
+                                }
+                            } else if app.sync.is_some() && !modal_wins(app) {
+                                // Panel de sincronización: teclas FIJAS, como las del
+                                // de diferencias. Va ANTES que él porque se pinta
+                                // encima: el de diferencias sigue vivo detrás con sus
+                                // marcas, y el teclado tiene que ir a lo que se ve.
+                                on_sync_key(app, &mut sync_run, key.modifiers, key.code);
+                            } else if app.compare.is_some() && !modal_wins(app) {
+                                // Panel de diferencias (`Shift+F2`): teclas FIJAS,
+                                // como el diálogo de búsqueda y la palette. No resuelve
+                                // por el contexto `dialog` porque no hay vocabulario
+                                // `dialog.*` para «cambia de lado» ni «esconde los
+                                // iguales», y no es una pantalla del keymap propia
+                                // porque eso serían siete presets tocados por una
+                                // tecla que todavía no tiene idioma establecido.
+                                on_compare_key(
+                                    app,
+                                    backend,
+                                    &mut events,
+                                    &mut fill,
+                                    &mut decorate_fetch,
+                                    &mut last_probed,
+                                    &mut search_run,
+                                    &mut compare_run,
+                                    key.modifiers,
+                                    key.code,
+                                )
+                                .await;
+                            } else if app.palette.is_some() && !modal_wins(app) {
+                                // Command palette (H1 T4): editor de filtro libre,
+                                // como el diálogo de búsqueda de arriba — sus
+                                // teclas son FIJAS, no resuelven por el contexto
+                                // `dialog` (decisión 8 del plan H1: no hay
+                                // vocabulario `dialog.*` para "teclear un carácter"
+                                // o "correr la selección"). ctrl+c conserva su
+                                // significado global (salir), como TODOS los
+                                // overlays.
+                                if key.modifiers.contains(KeyModifiers::CONTROL)
+                                    && key.code == KeyCode::Char('c')
+                                {
+                                    app.quit = true;
+                                    continue;
+                                }
+                                let plain = key.modifiers.is_empty()
+                                    || key.modifiers == KeyModifiers::SHIFT;
+                                match key.code {
+                                    KeyCode::Char(c) if plain => {
+                                        if let Some(p) = &mut app.palette {
+                                            p.push_char(c);
+                                        }
+                                    }
+                                    KeyCode::Backspace if plain => {
+                                        if let Some(p) = &mut app.palette {
+                                            p.backspace();
+                                        }
+                                    }
+                                    KeyCode::Esc if plain => app.palette = None,
+                                    // H3c: el puente hacia la página que documenta la
+                                    // fila resaltada. Va AQUÍ, explícito junto a
+                                    // `ctrl+c`/`ctrl+p`, porque las teclas de la
+                                    // palette son FIJAS (decisión 8, arriba): no hay
+                                    // verbo `dialog.*` para «explícame esta fila», así
+                                    // que tampoco puede resolverse por el keymap.
+                                    KeyCode::F(1) if plain => {
+                                        palette_help(app, lang, help_lines);
+                                    }
+                                    KeyCode::Up if plain => {
+                                        if let Some(p) = &mut app.palette {
+                                            p.up();
+                                        }
+                                    }
+                                    KeyCode::Down if plain => {
+                                        if let Some(p) = &mut app.palette {
+                                            p.down();
+                                        }
+                                    }
+                                    KeyCode::PageUp if plain => {
+                                        if let Some(p) = &mut app.palette {
+                                            p.page_up(PAGE);
+                                        }
+                                    }
+                                    KeyCode::PageDown if plain => {
+                                        if let Some(p) = &mut app.palette {
+                                            p.page_down(PAGE);
+                                        }
+                                    }
+                                    KeyCode::Enter if plain => {
+                                        let cmd = app.palette.as_ref().and_then(Palette::selected);
+                                        app.palette = None;
+                                        if let Some(cmd) = cmd {
+                                            // (P1) Enter sobre una fila de PLUGIN: la
+                                            // `key` es `plugin:{id}:{command}`
+                                            // (`palette::plugin_rows`, jamás pintada)
+                                            // — no vive en `COMMANDS`, así que se
+                                            // enruta AQUÍ, antes del vocabulario
+                                            // tipado (#112). El resultado del plugin
+                                            // es texto NO confiable: `detail_for_bar`
+                                            // (enmascarado + tope, patrón #73).
+                                            if let Some((id, command)) = parse_plugin_key(&cmd) {
+                                                let (id, command) =
+                                                    (id.to_owned(), command.to_owned());
+                                                run_plugin_command(app, backend, &id, &command)
+                                                    .await;
+                                                continue;
+                                            }
+                                            // MISMA función de despacho que el
+                                            // resolver del keymap invoca (#dispatch):
+                                            // un comando elegido en la palette corre
+                                            // EXACTAMENTE como si su tecla se
+                                            // hubiera pulsado — incluida la apertura
+                                            // de otro overlay (p.ej. `app.help`).
+                                            // Las filas de la palette nacen de
+                                            // `COMMANDS`, así que el parse no puede
+                                            // fallar; el guard es defensivo (#112).
+                                            let Some(cmd) = Command::parse(&cmd) else {
+                                                debug_assert!(false, "palette fuera de COMMANDS");
+                                                continue;
+                                            };
+                                            let outcome = dispatch(
+                                                app,
+                                                backend,
+                                                &mut events,
+                                                help_lines,
+                                                lang,
+                                                quick_mode,
+                                                confirm_quit,
+                                                &cfg,
+                                                cmd,
+                                            )
+                                            .await;
+                                            if let Some(pane) = cd_landed_pane(&outcome) {
+                                    app.apply_scheme_sort(pane);
+                                    let dir = app.panes[pane].dir().clone();
+                                    let paths: Vec<VPath> =
+                                        app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
+                                    let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                                    decorate_fetch.set(
+            app.panes.slot_of(pane),
+            spawn_decorate_fetch(backend, app.panes.slot_of(pane), dir, paths, plugin_cols),
+        );
+                                }
+                                apply_cd(
+                                    &app.panes,
+                                    &mut fill,
+                                    &mut decorate_fetch,
+                                    &mut last_probed,
+                                    &mut search_run,
+                                    outcome,
+                                );
+                                            // Paridad con el sitio del resolver (#118
+                                            // review): un cd elegido en la palette
+                                            // (nav.parent…) también puede apagar el
+                                            // modo virtual — cosecha del run (regla 3);
+                                            // y un `pane.open` de la palette deja su
+                                            // comando externo resuelto — lanzarlo YA,
+                                            // no en la siguiente tecla.
+                                            reap_search_run(app, &mut search_run);
+                                            if let Some(pending) = app.pending_open.take() {
+                                                app.message = Some(launch_opener(terminal, capture, pending).await);
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            } else if app.shortcuts.is_some() && !modal_wins(app) {
+                                // K3c: el editor de atajos se pinta POR ENCIMA del
+                                // overlay de ajustes (que sigue abierto detrás), así
+                                // que también se queda las teclas ANTES que él. En
+                                // modo captura son TODAS suyas — eso es lo que
+                                // significa capturar.
+                                on_shortcuts_key(
+                                    app,
+                                    &cfg,
+                                    cli_preset.as_deref(),
+                                    &Maps {
+                                        browse: resolver.effective(),
+                                        viewer: viewer_resolver.effective(),
+                                        dialog: dialog_resolver.effective(),
+                                    },
+                                    key.modifiers,
+                                    key.code,
+                                )
+                                .await;
+                            } else if app.settings.is_some() && !modal_wins(app) {
+                                // Overlay de ajustes (S3): mismo criterio que la
+                                // palette de arriba (decisión 8 del plan H1) — sus
+                                // teclas son fijas, hardcodeadas en `on_settings_key`.
+                                on_settings_key(
+                                    app,
+                                    &Maps {
+                                        browse: resolver.effective(),
+                                        viewer: viewer_resolver.effective(),
+                                        dialog: dialog_resolver.effective(),
+                                    },
+                                    key.modifiers,
+                                    key.code,
+                                )
+                                .await;
+                            } else if help_owns_keys(app) {
+                                // H3b: overlay de ayuda. La ruta de teclas vive en
+                                // `on_help_key` (testeable, como `on_columns_key`);
+                                // aquí solo queda lo que necesita el run loop, que es
+                                // DESPACHAR la fila activada. El overlay ya se cerró:
+                                // el comando actúa sobre los panes de debajo y la
+                                // ayuda taparía la confirmación que abra.
+                                match on_help_key(app, dialog_resolver, key.modifiers, key.code) {
+                                    // (H3e) Una fila de PLUGIN sale por el MISMO
+                                    // despacho que el Enter de la palette, no por un
+                                    // camino paralelo: `plugin.run_command` es de
+                                    // donde sale la autorización y la ayuda no la
+                                    // rodea. No toca los panes, así que no arrastra la
+                                    // contabilidad de cd del brazo de abajo.
+                                    Some(HelpDispatch::Plugin(id, command)) => {
+                                        run_plugin_command(app, backend, &id, &command).await;
+                                    }
+                                    None => {}
+                                    Some(HelpDispatch::Command(cmd)) => {
+                                    // MISMO despacho y MISMA contabilidad posterior que
+                                    // el Enter de la palette: una fila de la ayuda es
+                                    // `nav.parent` tanto como lo es una de la palette,
+                                    // así que el camino del cd (relleno paginado,
+                                    // decoración, cosecha de la búsqueda viva, opener
+                                    // externo pendiente) tiene que ser el mismo.
                                     let outcome = dispatch(
                                         app,
                                         backend,
@@ -3513,689 +3655,510 @@ async fn run(
                                     )
                                     .await;
                                     if let Some(pane) = cd_landed_pane(&outcome) {
-                            app.apply_scheme_sort(pane);
-                            let dir = app.panes[pane].dir().clone();
-                            let paths: Vec<VPath> =
-                                app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
-                            let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
-                            decorate_fetch[pane] =
-                                spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
-                        }
-                        apply_cd(
-                            &mut fill,
-                            &mut decorate_fetch,
-                            &mut last_probed,
-                            &mut search_run,
-                            outcome,
-                        );
-                                    // Paridad con el sitio del resolver (#118
-                                    // review): un cd elegido en la palette
-                                    // (nav.parent…) también puede apagar el
-                                    // modo virtual — cosecha del run (regla 3);
-                                    // y un `pane.open` de la palette deja su
-                                    // comando externo resuelto — lanzarlo YA,
-                                    // no en la siguiente tecla.
+                                        app.apply_scheme_sort(pane);
+                                        let dir = app.panes[pane].dir().clone();
+                                        let paths: Vec<VPath> = app.panes[pane]
+                                            .entries()
+                                            .iter()
+                                            .map(|e| e.path.clone())
+                                            .collect();
+                                        let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                                        decorate_fetch.set(
+            app.panes.slot_of(pane),
+            spawn_decorate_fetch(backend, app.panes.slot_of(pane), dir, paths, plugin_cols),
+        );
+                                    }
+                                    apply_cd(
+                                        &app.panes,
+                                        &mut fill,
+                                        &mut decorate_fetch,
+                                        &mut last_probed,
+                                        &mut search_run,
+                                        outcome,
+                                    );
                                     reap_search_run(app, &mut search_run);
                                     if let Some(pending) = app.pending_open.take() {
-                                        app.message = Some(launch_opener(terminal, capture, pending).await);
+                                        app.message =
+                                            Some(launch_opener(terminal, capture, pending).await);
+                                    }
                                     }
                                 }
-                            }
-                            _ => {}
-                        }
-                    } else if app.shortcuts.is_some() && !modal_wins(app) {
-                        // K3c: el editor de atajos se pinta POR ENCIMA del
-                        // overlay de ajustes (que sigue abierto detrás), así
-                        // que también se queda las teclas ANTES que él. En
-                        // modo captura son TODAS suyas — eso es lo que
-                        // significa capturar.
-                        on_shortcuts_key(
-                            app,
-                            &cfg,
-                            cli_preset.as_deref(),
-                            &Maps {
-                                browse: resolver.effective(),
-                                viewer: viewer_resolver.effective(),
-                                dialog: dialog_resolver.effective(),
-                            },
-                            key.modifiers,
-                            key.code,
-                        )
-                        .await;
-                    } else if app.settings.is_some() && !modal_wins(app) {
-                        // Overlay de ajustes (S3): mismo criterio que la
-                        // palette de arriba (decisión 8 del plan H1) — sus
-                        // teclas son fijas, hardcodeadas en `on_settings_key`.
-                        on_settings_key(
-                            app,
-                            &Maps {
-                                browse: resolver.effective(),
-                                viewer: viewer_resolver.effective(),
-                                dialog: dialog_resolver.effective(),
-                            },
-                            key.modifiers,
-                            key.code,
-                        )
-                        .await;
-                    } else if help_owns_keys(app) {
-                        // H3b: overlay de ayuda. La ruta de teclas vive en
-                        // `on_help_key` (testeable, como `on_columns_key`);
-                        // aquí solo queda lo que necesita el run loop, que es
-                        // DESPACHAR la fila activada. El overlay ya se cerró:
-                        // el comando actúa sobre los panes de debajo y la
-                        // ayuda taparía la confirmación que abra.
-                        match on_help_key(app, dialog_resolver, key.modifiers, key.code) {
-                            // (H3e) Una fila de PLUGIN sale por el MISMO
-                            // despacho que el Enter de la palette, no por un
-                            // camino paralelo: `plugin.run_command` es de
-                            // donde sale la autorización y la ayuda no la
-                            // rodea. No toca los panes, así que no arrastra la
-                            // contabilidad de cd del brazo de abajo.
-                            Some(HelpDispatch::Plugin(id, command)) => {
-                                run_plugin_command(app, backend, &id, &command).await;
-                            }
-                            None => {}
-                            Some(HelpDispatch::Command(cmd)) => {
-                            // MISMO despacho y MISMA contabilidad posterior que
-                            // el Enter de la palette: una fila de la ayuda es
-                            // `nav.parent` tanto como lo es una de la palette,
-                            // así que el camino del cd (relleno paginado,
-                            // decoración, cosecha de la búsqueda viva, opener
-                            // externo pendiente) tiene que ser el mismo.
-                            let outcome = dispatch(
-                                app,
-                                backend,
-                                &mut events,
-                                help_lines,
-                                lang,
-                                quick_mode,
-                                confirm_quit,
-                                &cfg,
-                                cmd,
-                            )
-                            .await;
-                            if let Some(pane) = cd_landed_pane(&outcome) {
-                                app.apply_scheme_sort(pane);
-                                let dir = app.panes[pane].dir().clone();
-                                let paths: Vec<VPath> = app.panes[pane]
-                                    .entries()
-                                    .iter()
-                                    .map(|e| e.path.clone())
-                                    .collect();
-                                let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
-                                decorate_fetch[pane] =
-                                    spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
-                            }
-                            apply_cd(
-                                &mut fill,
-                                &mut decorate_fetch,
-                                &mut last_probed,
-                                &mut search_run,
-                                outcome,
-                            );
-                            reap_search_run(app, &mut search_run);
-                            if let Some(pending) = app.pending_open.take() {
-                                app.message =
-                                    Some(launch_opener(terminal, capture, pending).await);
-                            }
-                            }
-                        }
-                    } else if app.modal.is_some() {
-                        // MINOR-4 (H1 close): un modal llegado mientras la
-                        // palette estaba abierta la cierra AQUÍ — obsoleta,
-                        // y esta MISMA tecla responde al modal en vez de
-                        // desaparecer dentro del filtro de la palette. El
-                        // overlay de ajustes (S3) es el MISMO caso: un modal
-                        // asíncrono (p.ej. una aprobación de policy) gana.
-                        // El resto de overlays (selector de tema, picker de
-                        // columnas, extensiones, popup de navegación,
-                        // diálogo de búsqueda) también ceden la tecla
-                        // (`modal_wins`) pero NO se cierran: sus filas no
-                        // caducan como las de la palette/ajustes, y el
-                        // usuario los recupera intactos al responder. La
-                        // ayuda es el caso mixto (H3c) y lo decide
-                        // `close_stale_overlays`.
-                        close_stale_overlays(app);
-                        // El TOFU de Lua se resuelve AQUÍ (necesita el host,
-                        // que vive en este loop): no navega ni toca `fill`.
-                        if matches!(app.modal, Some(Modal::TrustLuaInit { .. })) {
-                            resolve_lua_trust(app, lua_host.as_ref(), key.code).await;
-                            continue;
-                        }
-                        // ctrl+c conserva su significado global (salir),
-                        // como los demás overlays (H1 T2) — ANTES de
-                        // resolver contra el contexto `dialog`, hardcodeado.
-                        if key.modifiers.contains(KeyModifiers::CONTROL)
-                            && key.code == KeyCode::Char('c')
-                        {
-                            app.quit = true;
-                            continue;
-                        }
-                        // `Modal::MarkPattern` (#103 T9) es TEXTO libre, como
-                        // el diálogo de búsqueda de arriba: consume
-                        // caracteres crudos ANTES del contexto `dialog` — no
-                        // tiene ALLOWLIST de `dialog_action` (`ctrl+c` ya
-                        // quedó resuelto arriba, igual que para el resto de
-                        // modales).
-                        if matches!(app.modal, Some(Modal::MarkPattern { .. })) {
-                            let plain = key.modifiers.is_empty()
-                                || key.modifiers == KeyModifiers::SHIFT;
-                            match key.code {
-                                KeyCode::Char(c) if plain => app.mark_pattern_push(c),
-                                KeyCode::Backspace if plain => app.mark_pattern_pop(),
-                                // Un `Err` deja el diagnóstico en el propio
-                                // modal (`mark_pattern_confirm`, que lo deja
-                                // abierto): nada más que hacer aquí.
-                                KeyCode::Enter if plain => {
-                                    if let Ok(n) = app.mark_pattern_confirm() {
-                                        app.message = Some(ta(
-                                            "msg-marked-by-pattern",
-                                            &[("n", &n.to_string())],
-                                        ));
-                                    }
+                            } else if app.modal.is_some() {
+                                // MINOR-4 (H1 close): un modal llegado mientras la
+                                // palette estaba abierta la cierra AQUÍ — obsoleta,
+                                // y esta MISMA tecla responde al modal en vez de
+                                // desaparecer dentro del filtro de la palette. El
+                                // overlay de ajustes (S3) es el MISMO caso: un modal
+                                // asíncrono (p.ej. una aprobación de policy) gana.
+                                // El resto de overlays (selector de tema, picker de
+                                // columnas, extensiones, popup de navegación,
+                                // diálogo de búsqueda) también ceden la tecla
+                                // (`modal_wins`) pero NO se cierran: sus filas no
+                                // caducan como las de la palette/ajustes, y el
+                                // usuario los recupera intactos al responder. La
+                                // ayuda es el caso mixto (H3c) y lo decide
+                                // `close_stale_overlays`.
+                                close_stale_overlays(app);
+                                // El TOFU de Lua se resuelve AQUÍ (necesita el host,
+                                // que vive en este loop): no navega ni toca `fill`.
+                                if matches!(app.modal, Some(Modal::TrustLuaInit { .. })) {
+                                    resolve_lua_trust(app, lua_host.as_ref(), key.code).await;
+                                    continue;
                                 }
-                                KeyCode::Esc if plain => app.cancel_mark_pattern(),
-                                _ => {}
-                            }
-                            continue;
-                        }
-                        // `Modal::Mkdir` (#104): mismo molde de texto libre.
-                        // El submit vive AQUÍ (async): el modal valida y
-                        // devuelve el destino; la task se registra en el
-                        // board como cualquier otra mutación.
-                        if matches!(app.modal, Some(Modal::Mkdir { .. })) {
-                            let plain = key.modifiers.is_empty()
-                                || key.modifiers == KeyModifiers::SHIFT;
-                            match key.code {
-                                KeyCode::Char(c) if plain => app.mkdir_push(c),
-                                KeyCode::Backspace if plain => app.mkdir_pop(),
-                                KeyCode::Enter if plain => {
-                                    if let Some(target) = app.mkdir_confirm() {
-                                        match backend.mkdir(&target).await {
-                                            Ok(task) => {
-                                                app.board.push(&task, None);
-                                                app.mkdir_submitted();
+                                // ctrl+c conserva su significado global (salir),
+                                // como los demás overlays (H1 T2) — ANTES de
+                                // resolver contra el contexto `dialog`, hardcodeado.
+                                if key.modifiers.contains(KeyModifiers::CONTROL)
+                                    && key.code == KeyCode::Char('c')
+                                {
+                                    app.quit = true;
+                                    continue;
+                                }
+                                // `Modal::MarkPattern` (#103 T9) es TEXTO libre, como
+                                // el diálogo de búsqueda de arriba: consume
+                                // caracteres crudos ANTES del contexto `dialog` — no
+                                // tiene ALLOWLIST de `dialog_action` (`ctrl+c` ya
+                                // quedó resuelto arriba, igual que para el resto de
+                                // modales).
+                                if matches!(app.modal, Some(Modal::MarkPattern { .. })) {
+                                    let plain = key.modifiers.is_empty()
+                                        || key.modifiers == KeyModifiers::SHIFT;
+                                    match key.code {
+                                        KeyCode::Char(c) if plain => app.mark_pattern_push(c),
+                                        KeyCode::Backspace if plain => app.mark_pattern_pop(),
+                                        // Un `Err` deja el diagnóstico en el propio
+                                        // modal (`mark_pattern_confirm`, que lo deja
+                                        // abierto): nada más que hacer aquí.
+                                        KeyCode::Enter if plain => {
+                                            if let Ok(n) = app.mark_pattern_confirm() {
+                                                app.message = Some(ta(
+                                                    "msg-marked-by-pattern",
+                                                    &[("n", &n.to_string())],
+                                                ));
                                             }
-                                            // MINOR-1: el nombre sobrevive
-                                            // al fallo del submit.
-                                            Err(e) => app
-                                                .mkdir_set_error(error_message(&e)),
                                         }
+                                        KeyCode::Esc if plain => app.cancel_mark_pattern(),
+                                        _ => {}
                                     }
+                                    continue;
                                 }
-                                KeyCode::Esc if plain => app.cancel_mkdir(),
-                                _ => {}
-                            }
-                            continue;
-                        }
-                        // `Modal::CommandLine` (#135): mismo molde de texto
-                        // libre que Mkdir. Enter deja la SUSPENSIÓN pendiente
-                        // (la ejecuta la cabecera de la vuelta, que es donde
-                        // vive la terminal) y cierra el prompt.
-                        if matches!(app.modal, Some(Modal::CommandLine { .. })) {
-                            let plain = key.modifiers.is_empty()
-                                || key.modifiers == KeyModifiers::SHIFT;
-                            match key.code {
-                                KeyCode::Char(c) if plain => app.command_line_push(c),
-                                KeyCode::Backspace if plain => app.command_line_pop(),
-                                KeyCode::Enter if plain => {
-                                    if let Some(cmd) = app.command_line_confirm() {
-                                        submit_command_line(app, &cmd);
-                                    }
-                                }
-                                KeyCode::Esc if plain => app.cancel_command_line(),
-                                _ => {}
-                            }
-                            continue;
-                        }
-                        // `Modal::AiRenameInstruction` (M4-IA): mismo molde de
-                        // texto libre que Mkdir. Enter SPAWNEA la petición al
-                        // modelo (la única llamada larga del loop) y cierra el
-                        // prompt; la cosecha vive en el select.
-                        if matches!(app.modal, Some(Modal::AiRenameInstruction { .. })) {
-                            let plain = key.modifiers.is_empty()
-                                || key.modifiers == KeyModifiers::SHIFT;
-                            match key.code {
-                                KeyCode::Char(c) if plain => app.ai_rename_push(c),
-                                KeyCode::Backspace if plain => app.ai_rename_pop(),
-                                KeyCode::Enter if plain => {
-                                    if let Some(instruction) = app.ai_rename_confirm() {
-                                        let dir = app.focused().dir().clone();
-                                        let b = backend.clone();
-                                        let d = dir.clone();
-                                        let handle = tokio::spawn(async move {
-                                            b.ai_rename_plan(&d, &instruction).await
-                                        });
-                                        // Relanzar con un run vivo lo ABORTA
-                                        // (dropear el handle solo desvincula):
-                                        // a lo sumo una petición en vuelo.
-                                        if let Some(old) =
-                                            ai_rename_run.replace(AiRenameRun { handle, dir })
-                                        {
-                                            old.handle.abort();
+                                // `Modal::Mkdir` (#104): mismo molde de texto libre.
+                                // El submit vive AQUÍ (async): el modal valida y
+                                // devuelve el destino; la task se registra en el
+                                // board como cualquier otra mutación.
+                                if matches!(app.modal, Some(Modal::Mkdir { .. })) {
+                                    let plain = key.modifiers.is_empty()
+                                        || key.modifiers == KeyModifiers::SHIFT;
+                                    match key.code {
+                                        KeyCode::Char(c) if plain => app.mkdir_push(c),
+                                        KeyCode::Backspace if plain => app.mkdir_pop(),
+                                        KeyCode::Enter if plain => {
+                                            if let Some(target) = app.mkdir_confirm() {
+                                                match backend.mkdir(&target).await {
+                                                    Ok(task) => {
+                                                        app.board.push(&task, None);
+                                                        app.mkdir_submitted();
+                                                    }
+                                                    // MINOR-1: el nombre sobrevive
+                                                    // al fallo del submit.
+                                                    Err(e) => app
+                                                        .mkdir_set_error(error_message(&e)),
+                                                }
+                                            }
                                         }
-                                        // Invariante: lanzar VACÍA el stash —
-                                        // un plan retenido de una petición
-                                        // ANTERIOR jamás debe abrirse como si
-                                        // fuera de esta.
-                                        pending_ai_plan = None;
-                                        app.message = Some(t("msg-ai-rename-running"));
-                                        app.ai_rename_submitted();
+                                        KeyCode::Esc if plain => app.cancel_mkdir(),
+                                        _ => {}
                                     }
+                                    continue;
                                 }
-                                KeyCode::Esc if plain => app.cancel_ai_rename(),
-                                _ => {}
-                            }
-                            continue;
-                        }
-                        // `Modal::SemanticQuery` (M4-IA-2): mismo molde de
-                        // texto libre. Enter SPAWNEA la consulta al índice
-                        // (root = None: todos los roots) y cierra el prompt;
-                        // la cosecha vive en el select.
-                        if matches!(app.modal, Some(Modal::SemanticQuery { .. })) {
-                            let plain = key.modifiers.is_empty()
-                                || key.modifiers == KeyModifiers::SHIFT;
-                            match key.code {
-                                KeyCode::Char(c) if plain => app.semantic_push(c),
-                                KeyCode::Backspace if plain => app.semantic_pop(),
-                                KeyCode::Enter if plain => {
-                                    if let Some(query) = app.semantic_confirm() {
-                                        let b = backend.clone();
-                                        let handle = tokio::spawn(async move {
-                                            b.index_search_semantic(None, &query, SEMANTIC_K)
+                                // `Modal::CommandLine` (#135): mismo molde de texto
+                                // libre que Mkdir. Enter deja la SUSPENSIÓN pendiente
+                                // (la ejecuta la cabecera de la vuelta, que es donde
+                                // vive la terminal) y cierra el prompt.
+                                if matches!(app.modal, Some(Modal::CommandLine { .. })) {
+                                    let plain = key.modifiers.is_empty()
+                                        || key.modifiers == KeyModifiers::SHIFT;
+                                    match key.code {
+                                        KeyCode::Char(c) if plain => app.command_line_push(c),
+                                        KeyCode::Backspace if plain => app.command_line_pop(),
+                                        KeyCode::Enter if plain => {
+                                            if let Some(cmd) = app.command_line_confirm() {
+                                                submit_command_line(app, &cmd);
+                                            }
+                                        }
+                                        KeyCode::Esc if plain => app.cancel_command_line(),
+                                        _ => {}
+                                    }
+                                    continue;
+                                }
+                                // `Modal::AiRenameInstruction` (M4-IA): mismo molde de
+                                // texto libre que Mkdir. Enter SPAWNEA la petición al
+                                // modelo (la única llamada larga del loop) y cierra el
+                                // prompt; la cosecha vive en el select.
+                                if matches!(app.modal, Some(Modal::AiRenameInstruction { .. })) {
+                                    let plain = key.modifiers.is_empty()
+                                        || key.modifiers == KeyModifiers::SHIFT;
+                                    match key.code {
+                                        KeyCode::Char(c) if plain => app.ai_rename_push(c),
+                                        KeyCode::Backspace if plain => app.ai_rename_pop(),
+                                        KeyCode::Enter if plain => {
+                                            if let Some(instruction) = app.ai_rename_confirm() {
+                                                let dir = app.focused().dir().clone();
+                                                let b = backend.clone();
+                                                let d = dir.clone();
+                                                let handle = tokio::spawn(async move {
+                                                    b.ai_rename_plan(&d, &instruction).await
+                                                });
+                                                // Relanzar con un run vivo lo ABORTA
+                                                // (dropear el handle solo desvincula):
+                                                // a lo sumo una petición en vuelo.
+                                                if let Some(old) =
+                                                    ai_rename_run.replace(AiRenameRun { handle, dir })
+                                                {
+                                                    old.handle.abort();
+                                                }
+                                                // Invariante: lanzar VACÍA el stash —
+                                                // un plan retenido de una petición
+                                                // ANTERIOR jamás debe abrirse como si
+                                                // fuera de esta.
+                                                pending_ai_plan = None;
+                                                app.message = Some(t("msg-ai-rename-running"));
+                                                app.ai_rename_submitted();
+                                            }
+                                        }
+                                        KeyCode::Esc if plain => app.cancel_ai_rename(),
+                                        _ => {}
+                                    }
+                                    continue;
+                                }
+                                // `Modal::SemanticQuery` (M4-IA-2): mismo molde de
+                                // texto libre. Enter SPAWNEA la consulta al índice
+                                // (root = None: todos los roots) y cierra el prompt;
+                                // la cosecha vive en el select.
+                                if matches!(app.modal, Some(Modal::SemanticQuery { .. })) {
+                                    let plain = key.modifiers.is_empty()
+                                        || key.modifiers == KeyModifiers::SHIFT;
+                                    match key.code {
+                                        KeyCode::Char(c) if plain => app.semantic_push(c),
+                                        KeyCode::Backspace if plain => app.semantic_pop(),
+                                        KeyCode::Enter if plain => {
+                                            if let Some(query) = app.semantic_confirm() {
+                                                let b = backend.clone();
+                                                let handle = tokio::spawn(async move {
+                                                    b.index_search_semantic(None, &query, SEMANTIC_K)
+                                                        .await
+                                                });
+                                                // Relanzar con un run vivo lo ABORTA
+                                                // (dropear el handle solo desvincula):
+                                                // a lo sumo una consulta en vuelo.
+                                                if let Some(old) =
+                                                    semantic_run.replace(SemanticRun { handle })
+                                                {
+                                                    old.handle.abort();
+                                                }
+                                                // Invariante: lanzar VACÍA el stash —
+                                                // unos hits retenidos de una consulta
+                                                // ANTERIOR jamás deben abrirse como si
+                                                // fueran de esta.
+                                                pending_semantic = None;
+                                                app.message = Some(t("msg-semantic-running"));
+                                                app.semantic_submitted();
+                                            }
+                                        }
+                                        KeyCode::Esc if plain => app.cancel_semantic(),
+                                        _ => {}
+                                    }
+                                    continue;
+                                }
+                                // `Modal::TransferName` (#105): mismo molde. El
+                                // submit reusa `submit_transfer` — colisiones por el
+                                // camino existente (`Modal::Collision` + backlog).
+                                if matches!(app.modal, Some(Modal::TransferName { .. })) {
+                                    let plain = key.modifiers.is_empty()
+                                        || key.modifiers == KeyModifiers::SHIFT;
+                                    match key.code {
+                                        KeyCode::Char(c) if plain => app.transfer_name_push(c),
+                                        KeyCode::Backspace if plain => app.transfer_name_pop(),
+                                        KeyCode::Enter if plain => {
+                                            if let Some((kind, from, dest)) =
+                                                app.transfer_name_confirm()
+                                            {
+                                                // Cierra SOLO si encoló (disciplina
+                                                // MINOR-1 de #104): un submit
+                                                // fallido conserva el nombre; el
+                                                // detalle queda en la barra.
+                                                if submit_transfer(
+                                                    app,
+                                                    backend,
+                                                    kind,
+                                                    from,
+                                                    dest,
+                                                    TransferOptions::default(),
+                                                )
                                                 .await
-                                        });
-                                        // Relanzar con un run vivo lo ABORTA
-                                        // (dropear el handle solo desvincula):
-                                        // a lo sumo una consulta en vuelo.
-                                        if let Some(old) =
-                                            semantic_run.replace(SemanticRun { handle })
-                                        {
-                                            old.handle.abort();
+                                                {
+                                                    app.transfer_name_submitted();
+                                                } else {
+                                                    app.transfer_name_set_error(t(
+                                                        "msg-transfer-name-failed",
+                                                    ));
+                                                }
+                                            }
                                         }
-                                        // Invariante: lanzar VACÍA el stash —
-                                        // unos hits retenidos de una consulta
-                                        // ANTERIOR jamás deben abrirse como si
-                                        // fueran de esta.
-                                        pending_semantic = None;
-                                        app.message = Some(t("msg-semantic-running"));
-                                        app.semantic_submitted();
-                                    }
-                                }
-                                KeyCode::Esc if plain => app.cancel_semantic(),
-                                _ => {}
-                            }
-                            continue;
-                        }
-                        // `Modal::TransferName` (#105): mismo molde. El
-                        // submit reusa `submit_transfer` — colisiones por el
-                        // camino existente (`Modal::Collision` + backlog).
-                        if matches!(app.modal, Some(Modal::TransferName { .. })) {
-                            let plain = key.modifiers.is_empty()
-                                || key.modifiers == KeyModifiers::SHIFT;
-                            match key.code {
-                                KeyCode::Char(c) if plain => app.transfer_name_push(c),
-                                KeyCode::Backspace if plain => app.transfer_name_pop(),
-                                KeyCode::Enter if plain => {
-                                    if let Some((kind, from, dest)) =
-                                        app.transfer_name_confirm()
-                                    {
-                                        // Cierra SOLO si encoló (disciplina
-                                        // MINOR-1 de #104): un submit
-                                        // fallido conserva el nombre; el
-                                        // detalle queda en la barra.
-                                        if submit_transfer(
-                                            app,
-                                            backend,
-                                            kind,
-                                            from,
-                                            dest,
-                                            TransferOptions::default(),
-                                        )
-                                        .await
-                                        {
-                                            app.transfer_name_submitted();
-                                        } else {
-                                            app.transfer_name_set_error(t(
-                                                "msg-transfer-name-failed",
-                                            ));
-                                        }
-                                    }
-                                }
-                                KeyCode::Esc if plain => app.cancel_transfer_name(),
-                                _ => {}
-                            }
-                            continue;
-                        }
-                        // El modal TOFU (#45) puede NAVEGAR al confiar: su Cd
-                        // se aplica igual que el de un comando.
-                        let outcome = on_dialog_key(
-                            app,
-                            backend,
-                            &mut events,
-                            dialog_resolver,
-                            key.modifiers,
-                            key.code,
-                            lang,
-                            help_lines,
-                        )
-                        .await;
-                        if let Some(pane) = cd_landed_pane(&outcome) {
-                            app.apply_scheme_sort(pane);
-                            let dir = app.panes[pane].dir().clone();
-                            let paths: Vec<VPath> =
-                                app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
-                            let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
-                            decorate_fetch[pane] =
-                                spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
-                        }
-                        apply_cd(
-                            &mut fill,
-                            &mut decorate_fetch,
-                            &mut last_probed,
-                            &mut search_run,
-                            outcome,
-                        );
-                    } else {
-                        // Esc con un comando Lua en vuelo (BROWSE: sin modal
-                        // ni overlay, y NO en el viewer): pide cancelación
-                        // (regla 3) y CONSUME la tecla — no cae al resolver.
-                        if app.viewer.is_none()
-                            && key.modifiers.is_empty()
-                            && key.code == KeyCode::Esc
-                            && let Some((_, token)) = &lua_run
-                        {
-                            token.cancel();
-                            // K3a: la tecla se CONSUME aquí, así que el
-                            // resolver no la ve — y una secuencia a medias
-                            // (con su panel which-key encima) se quedaría
-                            // armada mientras el lector cree haber cancelado.
-                            app.abandon_pending(resolver);
-                            continue;
-                        }
-                        // Esc con ai.rename_plan en vuelo (BROWSE, M4-IA):
-                        // cancelar (regla 3) y CONSUMIR la tecla. Abortar
-                        // dropea el future del backend en el runtime →
-                        // rpc.cancel (remoto) / drop del stream (embebido).
-                        if app.viewer.is_none()
-                            && key.modifiers.is_empty()
-                            && key.code == KeyCode::Esc
-                            && let Some(run) = ai_rename_run.take()
-                        {
-                            run.handle.abort();
-                            app.message = None;
-                            // K3a: ídem — Esc consumido aquí también cancela
-                            // la secuencia en vuelo, jamás solo su pintura.
-                            app.abandon_pending(resolver);
-                            continue;
-                        }
-                        // Esc con una búsqueda semántica en vuelo (BROWSE,
-                        // M4-IA-2): mismo contrato de cancelación (regla 3).
-                        if app.viewer.is_none()
-                            && key.modifiers.is_empty()
-                            && key.code == KeyCode::Esc
-                            && let Some(run) = semantic_run.take()
-                        {
-                            run.handle.abort();
-                            app.message = None;
-                            app.abandon_pending(resolver);
-                            continue;
-                        }
-                        // Pane virtual de búsqueda (liveSearch T6): con un
-                        // search_run en el pane con foco (y sin quick vivo),
-                        // Esc y Enter tienen semántica propia ANTES del
-                        // resolver. El RESTO de teclas (cursor, F5/F8/F3…) cae
-                        // al resolver y opera sobre el hit bajo el cursor.
-                        if app.viewer.is_none()
-                            && key.modifiers.is_empty()
-                            && app.focused().quick().is_none()
-                            && app.focused().virtual_search
-                            && search_run
-                                .as_ref()
-                                .is_some_and(|s| s.pane == app.focus())
-                        {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    // Task viva → cancela (hits conservados,
-                                    // pasará a Cancelled al cerrarse el canal).
-                                    // Ya terminada → sale del modo virtual
-                                    // restaurando el dir anterior.
-                                    on_search_escape(
-                                        app,
-                                        backend,
-                                        &mut events,
-                                        &mut fill,
-                                        &mut decorate_fetch,
-                                        &mut last_probed,
-                                        &mut search_run,
-                                    )
-                                    .await;
-                                    continue;
-                                }
-                                KeyCode::Enter => {
-                                    // Enter sobre un hit: cd al PADRE del hit y
-                                    // cursor sobre él (sale del modo virtual).
-                                    on_search_enter(
-                                        app,
-                                        backend,
-                                        &mut events,
-                                        &mut fill,
-                                        &mut decorate_fetch,
-                                        &mut last_probed,
-                                        &mut search_run,
-                                    )
-                                    .await;
-                                    continue;
-                                }
-                                _ => {}
-                            }
-                        }
-                        // Quick search ACTIVO en el pane con foco (BROWSE):
-                        // sus teclas se comen ANTES del resolver — un char
-                        // (incluida otra `/`) alimenta la query y jamás
-                        // re-entra al keymap (sin recursión). El RESTO de
-                        // teclas (F5, F8, F3, Tab en Filter…) NO se consume:
-                        // cae al resolver y opera sobre `selected()` ya
-                        // filtrado — feed-to-listbox gratis. Decisión
-                        // consciente: las teclas de navegación NO
-                        // interceptadas (PageUp/PageDown/Home/End) también
-                        // caen al resolver y mueven el CURSOR REAL, que con
-                        // el filtro activo es invisible; al cancelar (Esc)
-                        // reaparece donde lo dejaron. Conectarlas a la
-                        // selección del filtro no compensa el estado extra.
-                        if app.viewer.is_none() && app.focused().quick().is_some() {
-                            let jump = app
-                                .focused()
-                                .quick()
-                                .is_some_and(|q| q.mode() == nav::Mode::Jump);
-                            // SHIFT pasa (una mayúscula llega como
-                            // Char('A')+SHIFT y el char ya viene tal cual);
-                            // ctrl/alt caen al resolver (ctrl+c sigue
-                            // saliendo).
-                            let plain = key.modifiers.is_empty()
-                                || key.modifiers == KeyModifiers::SHIFT;
-                            match key.code {
-                                KeyCode::Char(c) if plain => {
-                                    app.focused_mut().quick_char(c);
-                                    continue;
-                                }
-                                KeyCode::Backspace if plain => {
-                                    app.focused_mut().quick_backspace();
-                                    continue;
-                                }
-                                KeyCode::Up if plain => {
-                                    app.focused_mut().quick_up();
-                                    continue;
-                                }
-                                KeyCode::Down if plain => {
-                                    app.focused_mut().quick_down();
-                                    continue;
-                                }
-                                KeyCode::Tab if plain && jump => {
-                                    app.focused_mut().quick_next();
-                                    continue;
-                                }
-                                KeyCode::Esc if plain => {
-                                    app.focused_mut().quick_cancel();
-                                    continue;
-                                }
-                                KeyCode::Enter if plain => {
-                                    // Confirma (cursor real = seleccionado) y
-                                    // REUSA el camino de nav.enter: un dir (o
-                                    // contenedor) entra, un fichero se queda.
-                                    // `false` = el filtro no tenía matches:
-                                    // solo cierra — jamás despachar sobre una
-                                    // entrada que el usuario no veía (review
-                                    // MAJOR T4).
-                                    if app.focused_mut().quick_confirm() {
-                                        let outcome = dispatch(
-                                            app,
-                                            backend,
-                                            &mut events,
-                                            help_lines,
-                                            lang,
-                                            quick_mode,
-                                            confirm_quit,
-                                            &cfg,
-                                            Command::NavEnter,
-                                        )
-                                        .await;
-                                        if let Some(pane) = cd_landed_pane(&outcome) {
-                            app.apply_scheme_sort(pane);
-                            let dir = app.panes[pane].dir().clone();
-                            let paths: Vec<VPath> =
-                                app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
-                            let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
-                            decorate_fetch[pane] =
-                                spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
-                        }
-                        apply_cd(
-                            &mut fill,
-                            &mut decorate_fetch,
-                            &mut last_probed,
-                            &mut search_run,
-                            outcome,
-                        );
-                                        // Paridad con el sitio del resolver
-                                        // (#118 review): el Enter del quick
-                                        // search ES un nav.enter — entrar en
-                                        // un hit apaga el modo virtual del
-                                        // pane; sin cosecha, la Task de
-                                        // búsqueda quedaba viva (regla 3).
-                                        reap_search_run(app, &mut search_run);
+                                        KeyCode::Esc if plain => app.cancel_transfer_name(),
+                                        _ => {}
                                     }
                                     continue;
                                 }
-                                _ => {}
-                            }
-                        }
-                        // `--pick` (S2, design §B): Enter/Ctrl+Enter accept
-                        // the selection HERE, where the key turns into a
-                        // command — never in a preset, which must not have
-                        // to know `--pick` exists. Browse only (the viewer
-                        // has nothing to pick); quick search and the
-                        // live-search pane already resolved their own Enter
-                        // above and `continue`d past this point, so reaching
-                        // here means neither is active.
-                        if app.pick && app.viewer.is_none() {
-                            let ctrl_enter = key.code == KeyCode::Enter
-                                && key.modifiers == KeyModifiers::CONTROL;
-                            // Plain Enter keeps navigating whenever there is
-                            // somewhere to go (`nav_enter_target`) — taking
-                            // that away would make the picker unusable for
-                            // reaching anything below the start directory.
-                            let plain_enter = key.code == KeyCode::Enter
-                                && key.modifiers.is_empty()
-                                && nav_enter_target(app).is_none();
-                            if ctrl_enter || plain_enter {
-                                app.abandon_pending(resolver);
-                                let _ = dispatch(
+                                // El modal TOFU (#45) puede NAVEGAR al confiar: su Cd
+                                // se aplica igual que el de un comando.
+                                let outcome = on_dialog_key(
                                     app,
                                     backend,
                                     &mut events,
-                                    help_lines,
+                                    dialog_resolver,
+                                    key.modifiers,
+                                    key.code,
                                     lang,
-                                    quick_mode,
-                                    confirm_quit,
-                                    &cfg,
-                                    Command::AppPickAccept,
+                                    help_lines,
                                 )
                                 .await;
-                                continue;
-                            }
-                        }
-                        // Pantalla activa: el viewer tiene su contexto.
-                        let active = if app.viewer.is_some() {
-                            &mut *viewer_resolver
-                        } else {
-                            &mut *resolver
-                        };
-                        // Teclas que el keymap no modela (Media, BackTab,
-                        // CapsLock…) no llegan al resolver como chord, pero
-                        // el trato SÍ es el mismo que un `Resolution::Reset`:
-                        // `active.reset()` rompe cualquier secuencia
-                        // pendiente EN EL RESOLVER (no solo el `app.pending`
-                        // de pantalla) — antes `from_event` siempre empujaba
-                        // un chord (aunque exótico) y el `Miss` resultante
-                        // limpiaba el pending interno; `chord_from_crossterm`
-                        // devuelve `None` en su lugar, así que el reset hay
-                        // que pedirlo explícito, jamás dejar la secuencia a
-                        // medias viva.
-                        if let Some(chord) = chord_from_crossterm(key.modifiers, key.code) {
-                            match active.push(chord) {
-                                Resolution::Run { command: cmd, count } => {
-                                    // K3a: cierra TAMBIÉN el panel which-key, y
-                                    // antes de `keyboard_owner(app)` — el
-                                    // fingerprint del contador se toma con el
-                                    // panel ya cerrado, así que el cierre no
-                                    // cuenta como «el despacho movió el
-                                    // teclado» y no parte un `5j`.
-                                    app.clear_pending();
-                                    // K2a: un contador sobre un comando que no
-                                    // lo acepta NO se traga — corre una vez y
-                                    // se dice. Se pone ANTES del despacho a
-                                    // propósito: si el comando tiene algo que
-                                    // decir, su mensaje es el que manda.
-                                    if let Count::Ignored(n) = count {
-                                        app.message = Some(count_ignored_message(&cmd, n));
+                                if let Some(pane) = cd_landed_pane(&outcome) {
+                                    app.apply_scheme_sort(pane);
+                                    let dir = app.panes[pane].dir().clone();
+                                    let paths: Vec<VPath> =
+                                        app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
+                                    let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                                    decorate_fetch.set(
+            app.panes.slot_of(pane),
+            spawn_decorate_fetch(backend, app.panes.slot_of(pane), dir, paths, plugin_cols),
+        );
+                                }
+                                apply_cd(
+                                    &app.panes,
+                                    &mut fill,
+                                    &mut decorate_fetch,
+                                    &mut last_probed,
+                                    &mut search_run,
+                                    outcome,
+                                );
+                            } else {
+                                // Esc con un comando Lua en vuelo (BROWSE: sin modal
+                                // ni overlay, y NO en el viewer): pide cancelación
+                                // (regla 3) y CONSUME la tecla — no cae al resolver.
+                                if app.viewer.is_none()
+                                    && key.modifiers.is_empty()
+                                    && key.code == KeyCode::Esc
+                                    && let Some((_, token)) = &lua_run
+                                {
+                                    token.cancel();
+                                    // K3a: la tecla se CONSUME aquí, así que el
+                                    // resolver no la ve — y una secuencia a medias
+                                    // (con su panel which-key encima) se quedaría
+                                    // armada mientras el lector cree haber cancelado.
+                                    app.abandon_pending(resolver);
+                                    continue;
+                                }
+                                // Esc con ai.rename_plan en vuelo (BROWSE, M4-IA):
+                                // cancelar (regla 3) y CONSUMIR la tecla. Abortar
+                                // dropea el future del backend en el runtime →
+                                // rpc.cancel (remoto) / drop del stream (embebido).
+                                if app.viewer.is_none()
+                                    && key.modifiers.is_empty()
+                                    && key.code == KeyCode::Esc
+                                    && let Some(run) = ai_rename_run.take()
+                                {
+                                    run.handle.abort();
+                                    app.message = None;
+                                    // K3a: ídem — Esc consumido aquí también cancela
+                                    // la secuencia en vuelo, jamás solo su pintura.
+                                    app.abandon_pending(resolver);
+                                    continue;
+                                }
+                                // Esc con una búsqueda semántica en vuelo (BROWSE,
+                                // M4-IA-2): mismo contrato de cancelación (regla 3).
+                                if app.viewer.is_none()
+                                    && key.modifiers.is_empty()
+                                    && key.code == KeyCode::Esc
+                                    && let Some(run) = semantic_run.take()
+                                {
+                                    run.handle.abort();
+                                    app.message = None;
+                                    app.abandon_pending(resolver);
+                                    continue;
+                                }
+                                // Pane virtual de búsqueda (liveSearch T6): con un
+                                // search_run en el pane con foco (y sin quick vivo),
+                                // Esc y Enter tienen semántica propia ANTES del
+                                // resolver. El RESTO de teclas (cursor, F5/F8/F3…) cae
+                                // al resolver y opera sobre el hit bajo el cursor.
+                                if app.viewer.is_none()
+                                    && key.modifiers.is_empty()
+                                    && app.focused().quick().is_none()
+                                    && app.focused().virtual_search
+                                    && search_run
+                                        .as_ref()
+                                        .is_some_and(|s| s.pane == app.focus())
+                                {
+                                    match key.code {
+                                        KeyCode::Esc => {
+                                            // Task viva → cancela (hits conservados,
+                                            // pasará a Cancelled al cerrarse el canal).
+                                            // Ya terminada → sale del modo virtual
+                                            // restaurando el dir anterior.
+                                            on_search_escape(
+                                                app,
+                                                backend,
+                                                &mut events,
+                                                &mut fill,
+                                                &mut decorate_fetch,
+                                                &mut last_probed,
+                                                &mut search_run,
+                                            )
+                                            .await;
+                                            continue;
+                                        }
+                                        KeyCode::Enter => {
+                                            // Enter sobre un hit: cd al PADRE del hit y
+                                            // cursor sobre él (sale del modo virtual).
+                                            on_search_enter(
+                                                app,
+                                                backend,
+                                                &mut events,
+                                                &mut fill,
+                                                &mut decorate_fetch,
+                                                &mut last_probed,
+                                                &mut search_run,
+                                            )
+                                            .await;
+                                            continue;
+                                        }
+                                        _ => {}
                                     }
-                                    // `lua:<nombre>` (M4): al despachador Lua —
-                                    // jamás a `dispatch` (no es comando fijo).
-                                    // Un `lua:` no está en el catálogo, así que
-                                    // su contador siempre es `Ignored`: corre
-                                    // UNA vez, sin bucle.
-                                    if let Some(name) = cmd.strip_prefix("lua:") {
-                                        run_lua_command(
-                                            app,
-                                            lua_host.as_ref(),
-                                            backend,
-                                            name,
-                                            &mut lua_run,
-                                            &mut lua_queue,
-                                        );
-                                        continue;
+                                }
+                                // Quick search ACTIVO en el pane con foco (BROWSE):
+                                // sus teclas se comen ANTES del resolver — un char
+                                // (incluida otra `/`) alimenta la query y jamás
+                                // re-entra al keymap (sin recursión). El RESTO de
+                                // teclas (F5, F8, F3, Tab en Filter…) NO se consume:
+                                // cae al resolver y opera sobre `selected()` ya
+                                // filtrado — feed-to-listbox gratis. Decisión
+                                // consciente: las teclas de navegación NO
+                                // interceptadas (PageUp/PageDown/Home/End) también
+                                // caen al resolver y mueven el CURSOR REAL, que con
+                                // el filtro activo es invisible; al cancelar (Esc)
+                                // reaparece donde lo dejaron. Conectarlas a la
+                                // selección del filtro no compensa el estado extra.
+                                if app.viewer.is_none() && app.focused().quick().is_some() {
+                                    let jump = app
+                                        .focused()
+                                        .quick()
+                                        .is_some_and(|q| q.mode() == nav::Mode::Jump);
+                                    // SHIFT pasa (una mayúscula llega como
+                                    // Char('A')+SHIFT y el char ya viene tal cual);
+                                    // ctrl/alt caen al resolver (ctrl+c sigue
+                                    // saliendo).
+                                    let plain = key.modifiers.is_empty()
+                                        || key.modifiers == KeyModifiers::SHIFT;
+                                    match key.code {
+                                        KeyCode::Char(c) if plain => {
+                                            app.focused_mut().quick_char(c);
+                                            continue;
+                                        }
+                                        KeyCode::Backspace if plain => {
+                                            app.focused_mut().quick_backspace();
+                                            continue;
+                                        }
+                                        KeyCode::Up if plain => {
+                                            app.focused_mut().quick_up();
+                                            continue;
+                                        }
+                                        KeyCode::Down if plain => {
+                                            app.focused_mut().quick_down();
+                                            continue;
+                                        }
+                                        KeyCode::Tab if plain && jump => {
+                                            app.focused_mut().quick_next();
+                                            continue;
+                                        }
+                                        KeyCode::Esc if plain => {
+                                            app.focused_mut().quick_cancel();
+                                            continue;
+                                        }
+                                        KeyCode::Enter if plain => {
+                                            // Confirma (cursor real = seleccionado) y
+                                            // REUSA el camino de nav.enter: un dir (o
+                                            // contenedor) entra, un fichero se queda.
+                                            // `false` = el filtro no tenía matches:
+                                            // solo cierra — jamás despachar sobre una
+                                            // entrada que el usuario no veía (review
+                                            // MAJOR T4).
+                                            if app.focused_mut().quick_confirm() {
+                                                let outcome = dispatch(
+                                                    app,
+                                                    backend,
+                                                    &mut events,
+                                                    help_lines,
+                                                    lang,
+                                                    quick_mode,
+                                                    confirm_quit,
+                                                    &cfg,
+                                                    Command::NavEnter,
+                                                )
+                                                .await;
+                                                if let Some(pane) = cd_landed_pane(&outcome) {
+                                    app.apply_scheme_sort(pane);
+                                    let dir = app.panes[pane].dir().clone();
+                                    let paths: Vec<VPath> =
+                                        app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
+                                    let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                                    decorate_fetch.set(
+            app.panes.slot_of(pane),
+            spawn_decorate_fetch(backend, app.panes.slot_of(pane), dir, paths, plugin_cols),
+        );
+                                }
+                                apply_cd(
+                                    &app.panes,
+                                    &mut fill,
+                                    &mut decorate_fetch,
+                                    &mut last_probed,
+                                    &mut search_run,
+                                    outcome,
+                                );
+                                                // Paridad con el sitio del resolver
+                                                // (#118 review): el Enter del quick
+                                                // search ES un nav.enter — entrar en
+                                                // un hit apaga el modo virtual del
+                                                // pane; sin cosecha, la Task de
+                                                // búsqueda quedaba viva (regla 3).
+                                                reap_search_run(app, &mut search_run);
+                                            }
+                                            continue;
+                                        }
+                                        _ => {}
                                     }
-                                    // #112: el keymap se validó contra
-                                    // COMMANDS al cargar — el parse no puede
-                                    // fallar; guard defensivo.
-                                    let Some(cmd) = Command::parse(&cmd) else {
-                                        debug_assert!(false, "keymap fuera de COMMANDS");
-                                        continue;
-                                    };
-                                    // El contador repite el DESPACHO: ninguna
-                                    // firma de comando cambia y ninguno puede
-                                    // olvidarse de honrarlo. El cuerpo entero
-                                    // (outcome, cd, cosecha, opener) va DENTRO
-                                    // — un `dispatch` sin su outcome deja
-                                    // Tasks vivas y panes sin refrescar.
-                                    // Ningún `continue` del loop exterior vive
-                                    // aquí dentro: los dos que tenía este
-                                    // brazo (la rama Lua y el guard del parse)
-                                    // quedan ARRIBA, antes del bucle, así que
-                                    // el contador no puede saltarse.
-                                    let owner_before = keyboard_owner(app);
-                                    for _ in 0..count.times() {
-                                        let outcome = dispatch(
+                                }
+                                // `--pick` (S2, design §B): Enter/Ctrl+Enter accept
+                                // the selection HERE, where the key turns into a
+                                // command — never in a preset, which must not have
+                                // to know `--pick` exists. Browse only (the viewer
+                                // has nothing to pick); quick search and the
+                                // live-search pane already resolved their own Enter
+                                // above and `continue`d past this point, so reaching
+                                // here means neither is active.
+                                if app.pick && app.viewer.is_none() {
+                                    let ctrl_enter = key.code == KeyCode::Enter
+                                        && key.modifiers == KeyModifiers::CONTROL;
+                                    // Plain Enter keeps navigating whenever there is
+                                    // somewhere to go (`nav_enter_target`) — taking
+                                    // that away would make the picker unusable for
+                                    // reaching anything below the start directory.
+                                    let plain_enter = key.code == KeyCode::Enter
+                                        && key.modifiers.is_empty()
+                                        && nav_enter_target(app).is_none();
+                                    if ctrl_enter || plain_enter {
+                                        app.abandon_pending(resolver);
+                                        let _ = dispatch(
                                             app,
                                             backend,
                                             &mut events,
@@ -4204,115 +4167,205 @@ async fn run(
                                             quick_mode,
                                             confirm_quit,
                                             &cfg,
-                                            cmd,
+                                            Command::AppPickAccept,
                                         )
                                         .await;
-                                        // Leído ANTES de que `apply_cd`
-                                        // consuma el outcome.
-                                        let stalled = nav_stalled(cmd, &outcome);
-                                        if let Some(pane) = cd_landed_pane(&outcome) {
-                                            app.apply_scheme_sort(pane);
-                                            let dir = app.panes[pane].dir().clone();
-                                            let paths: Vec<VPath> = app.panes[pane]
-                                                .entries()
-                                                .iter()
-                                                .map(|e| e.path.clone())
-                                                .collect();
-                                            let plugin_cols =
-                                                app.columns.plugin_ids_for(dir.scheme());
-                                            decorate_fetch[pane] = spawn_decorate_fetch(
-                                                backend,
-                                                pane,
-                                                dir,
-                                                paths,
-                                                plugin_cols,
-                                            );
-                                        }
-                                        apply_cd(
-                                            &mut fill,
-                                            &mut decorate_fetch,
-                                            &mut last_probed,
-                                            &mut search_run,
-                                            outcome,
-                                        );
-                                        // Un cd (nav.parent…) apagó el modo
-                                        // virtual del pane de búsqueda: suelta
-                                        // el run y cancela.
-                                        reap_search_run(app, &mut search_run);
-                                        // #28: `pane.open` dejó un comando
-                                        // externo resuelto — el run loop (dueño
-                                        // de la terminal) sondea el binario y
-                                        // lo lanza.
-                                        if let Some(pending) = app.pending_open.take() {
-                                            app.message = Some(
-                                                launch_opener(terminal, capture, pending).await,
-                                            );
-                                        }
-                                        // Parar en seco si la app se va:
-                                        // `9999` seguido de una tecla de salida
-                                        // no puede encolar 9998 salidas más. El
-                                        // loop exterior comprueba `app.quit`
-                                        // tras el draw, así que sin este break
-                                        // el resto de las vueltas correría con
-                                        // la app muerta. Lo mismo si el
-                                        // despacho movió el teclado a otra
-                                        // superficie (modal, visor, overlay):
-                                        // lo que quede del contador dispararía
-                                        // comandos DETRÁS de ella
-                                        // (`keyboard_owner` los cubre todos, no
-                                        // solo el modal). Y lo mismo si un paso
-                                        // del rastro no aterrizó: se rebobina,
-                                        // así que la vuelta siguiente repetiría
-                                        // el MISMO listado remoto.
-                                        if app.quit
-                                            || stalled
-                                            || keyboard_owner(app) != owner_before
-                                        {
-                                            break;
-                                        }
+                                        continue;
                                     }
                                 }
-                                // K2a: una secuencia a medias y un contador a
-                                // medio teclear se pintan IGUAL y a la vez —
-                                // `pending_display` compone los dos (en `12gg`
-                                // conviven). Un contador que no se ve es un
-                                // contador que no se puede cancelar.
-                                //
-                                // K3a: y el mismo estado abre (o no) el panel
-                                // which-key. Los dos brazos llaman a UNA sola
-                                // función porque la barra y el panel describen
-                                // el MISMO resolver: es `show_pending` quien
-                                // sabe que un contador suelto no tiene panel
-                                // (su secuencia pendiente está vacía), no este
-                                // `match`. Sin temporizador de ningún tipo: el
-                                // panel aparece con la tecla que deja el
-                                // prefijo pendiente (ADR 0006).
-                                Resolution::Pending(_) | Resolution::Counting(_) => {
-                                    app.show_pending(active, lang);
-                                }
-                                // K1 T4: la tecla ESTÁ ligada y esta build no
-                                // puede correr lo que tiene ligado. Antes se
-                                // despachaba un nombre sin brazo; ahora la
-                                // barra de estado dice por qué.
-                                Resolution::Unavailable { command, why } => {
+                                // Pantalla activa: el viewer tiene su contexto.
+                                let active = if app.viewer.is_some() {
+                                    &mut *viewer_resolver
+                                } else {
+                                    &mut *resolver
+                                };
+                                // Teclas que el keymap no modela (Media, BackTab,
+                                // CapsLock…) no llegan al resolver como chord, pero
+                                // el trato SÍ es el mismo que un `Resolution::Reset`:
+                                // `active.reset()` rompe cualquier secuencia
+                                // pendiente EN EL RESOLVER (no solo el `app.pending`
+                                // de pantalla) — antes `from_event` siempre empujaba
+                                // un chord (aunque exótico) y el `Miss` resultante
+                                // limpiaba el pending interno; `chord_from_crossterm`
+                                // devuelve `None` en su lugar, así que el reset hay
+                                // que pedirlo explícito, jamás dejar la secuencia a
+                                // medias viva.
+                                if let Some(chord) = chord_from_crossterm(key.modifiers, key.code) {
+                                    match active.push(chord) {
+                                        Resolution::Run { command: cmd, count } => {
+                                            // K3a: cierra TAMBIÉN el panel which-key, y
+                                            // antes de `keyboard_owner(app)` — el
+                                            // fingerprint del contador se toma con el
+                                            // panel ya cerrado, así que el cierre no
+                                            // cuenta como «el despacho movió el
+                                            // teclado» y no parte un `5j`.
+                                            app.clear_pending();
+                                            // K2a: un contador sobre un comando que no
+                                            // lo acepta NO se traga — corre una vez y
+                                            // se dice. Se pone ANTES del despacho a
+                                            // propósito: si el comando tiene algo que
+                                            // decir, su mensaje es el que manda.
+                                            if let Count::Ignored(n) = count {
+                                                app.message = Some(count_ignored_message(&cmd, n));
+                                            }
+                                            // `lua:<nombre>` (M4): al despachador Lua —
+                                            // jamás a `dispatch` (no es comando fijo).
+                                            // Un `lua:` no está en el catálogo, así que
+                                            // su contador siempre es `Ignored`: corre
+                                            // UNA vez, sin bucle.
+                                            if let Some(name) = cmd.strip_prefix("lua:") {
+                                                run_lua_command(
+                                                    app,
+                                                    lua_host.as_ref(),
+                                                    backend,
+                                                    name,
+                                                    &mut lua_run,
+                                                    &mut lua_queue,
+                                                );
+                                                continue;
+                                            }
+                                            // #112: el keymap se validó contra
+                                            // COMMANDS al cargar — el parse no puede
+                                            // fallar; guard defensivo.
+                                            let Some(cmd) = Command::parse(&cmd) else {
+                                                debug_assert!(false, "keymap fuera de COMMANDS");
+                                                continue;
+                                            };
+                                            // El contador repite el DESPACHO: ninguna
+                                            // firma de comando cambia y ninguno puede
+                                            // olvidarse de honrarlo. El cuerpo entero
+                                            // (outcome, cd, cosecha, opener) va DENTRO
+                                            // — un `dispatch` sin su outcome deja
+                                            // Tasks vivas y panes sin refrescar.
+                                            // Ningún `continue` del loop exterior vive
+                                            // aquí dentro: los dos que tenía este
+                                            // brazo (la rama Lua y el guard del parse)
+                                            // quedan ARRIBA, antes del bucle, así que
+                                            // el contador no puede saltarse.
+                                            let owner_before = keyboard_owner(app);
+                                            for _ in 0..count.times() {
+                                                let outcome = dispatch(
+                                                    app,
+                                                    backend,
+                                                    &mut events,
+                                                    help_lines,
+                                                    lang,
+                                                    quick_mode,
+                                                    confirm_quit,
+                                                    &cfg,
+                                                    cmd,
+                                                )
+                                                .await;
+                                                // Leído ANTES de que `apply_cd`
+                                                // consuma el outcome.
+                                                let stalled = nav_stalled(cmd, &outcome);
+                                                if let Some(pane) = cd_landed_pane(&outcome) {
+                                                    app.apply_scheme_sort(pane);
+                                                    let dir = app.panes[pane].dir().clone();
+                                                    let paths: Vec<VPath> = app.panes[pane]
+                                                        .entries()
+                                                        .iter()
+                                                        .map(|e| e.path.clone())
+                                                        .collect();
+                                                    let plugin_cols =
+                                                        app.columns.plugin_ids_for(dir.scheme());
+                                                    decorate_fetch.set(
+                                                        app.panes.slot_of(pane),
+                                                        spawn_decorate_fetch(
+                                                            backend,
+                                                            app.panes.slot_of(pane),
+                                                            dir,
+                                                            paths,
+                                                            plugin_cols,
+                                                        ),
+                                                    );
+                                                }
+                                                apply_cd(
+                                                    &app.panes,
+                                                    &mut fill,
+                                                    &mut decorate_fetch,
+                                                    &mut last_probed,
+                                                    &mut search_run,
+                                                    outcome,
+                                                );
+                                                // Un cd (nav.parent…) apagó el modo
+                                                // virtual del pane de búsqueda: suelta
+                                                // el run y cancela.
+                                                reap_search_run(app, &mut search_run);
+                                                // #28: `pane.open` dejó un comando
+                                                // externo resuelto — el run loop (dueño
+                                                // de la terminal) sondea el binario y
+                                                // lo lanza.
+                                                if let Some(pending) = app.pending_open.take() {
+                                                    app.message = Some(
+                                                        launch_opener(terminal, capture, pending).await,
+                                                    );
+                                                }
+                                                // Parar en seco si la app se va:
+                                                // `9999` seguido de una tecla de salida
+                                                // no puede encolar 9998 salidas más. El
+                                                // loop exterior comprueba `app.quit`
+                                                // tras el draw, así que sin este break
+                                                // el resto de las vueltas correría con
+                                                // la app muerta. Lo mismo si el
+                                                // despacho movió el teclado a otra
+                                                // superficie (modal, visor, overlay):
+                                                // lo que quede del contador dispararía
+                                                // comandos DETRÁS de ella
+                                                // (`keyboard_owner` los cubre todos, no
+                                                // solo el modal). Y lo mismo si un paso
+                                                // del rastro no aterrizó: se rebobina,
+                                                // así que la vuelta siguiente repetiría
+                                                // el MISMO listado remoto.
+                                                if app.quit
+                                                    || stalled
+                                                    || keyboard_owner(app) != owner_before
+                                                {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        // K2a: una secuencia a medias y un contador a
+                                        // medio teclear se pintan IGUAL y a la vez —
+                                        // `pending_display` compone los dos (en `12gg`
+                                        // conviven). Un contador que no se ve es un
+                                        // contador que no se puede cancelar.
+                                        //
+                                        // K3a: y el mismo estado abre (o no) el panel
+                                        // which-key. Los dos brazos llaman a UNA sola
+                                        // función porque la barra y el panel describen
+                                        // el MISMO resolver: es `show_pending` quien
+                                        // sabe que un contador suelto no tiene panel
+                                        // (su secuencia pendiente está vacía), no este
+                                        // `match`. Sin temporizador de ningún tipo: el
+                                        // panel aparece con la tecla que deja el
+                                        // prefijo pendiente (ADR 0006).
+                                        Resolution::Pending(_) | Resolution::Counting(_) => {
+                                            app.show_pending(active, lang);
+                                        }
+                                        // K1 T4: la tecla ESTÁ ligada y esta build no
+                                        // puede correr lo que tiene ligado. Antes se
+                                        // despachaba un nombre sin brazo; ahora la
+                                        // barra de estado dice por qué.
+                                        Resolution::Unavailable { command, why } => {
+                                            app.clear_pending();
+                                            app.message = Some(unavailable_message(&command, why));
+                                        }
+                                        Resolution::Reset => app.clear_pending(),
+                                    }
+                                } else {
+                                    active.reset();
                                     app.clear_pending();
-                                    app.message = Some(unavailable_message(&command, why));
                                 }
-                                Resolution::Reset => app.clear_pending(),
                             }
-                        } else {
-                            active.reset();
-                            app.clear_pending();
+                        } else if let Event::Paste(text) = event {
+                            // Bracketed paste (#143): ONE router beside the key
+                            // dispatch above, not a second one — see `route_paste`.
+                            app.message = None;
+                            route_paste(app, &text);
                         }
                     }
-                } else if let Event::Paste(text) = event {
-                    // Bracketed paste (#143): ONE router beside the key
-                    // dispatch above, not a second one — see `route_paste`.
-                    app.message = None;
-                    route_paste(app, &text);
                 }
-            }
-        }
         // Resize/Focus/etc: el draw del inicio del loop repinta solo.
     }
 }
@@ -8189,14 +8242,14 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
 fn after_panes_refresh(
     app: &mut App,
     refreshed: [bool; 2],
-    fill: &mut [Option<Fill>; 2],
+    fill: &mut BySlot<Fill>,
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
 ) {
     if refreshed == [false; 2] {
         return;
     }
-    release_refreshed_fill(refreshed, fill, last_probed);
+    release_refreshed_fill(&app.panes, &refreshed, fill, last_probed);
     reap_search_run(app, search_run);
     if app.help.is_some() {
         app.freeze_help_facts();
@@ -8728,7 +8781,7 @@ fn search_params(dialog: &SearchDialog, root: VPath) -> FsSearchParams {
 async fn launch_search(
     app: &mut App,
     backend: &Backend,
-    fill: &mut [Option<Fill>; 2],
+    fill: &mut BySlot<Fill>,
     search_run: &mut Option<SearchRun>,
     params: FsSearchParams,
 ) {
@@ -8750,7 +8803,7 @@ async fn launch_search(
             // pane (dir aún cargándose) alimentaría el listado real como hits
             // (review MAJOR T6) — se suelta ya (tirante; `apply_fill_msg` es
             // el cinturón por si llega un lote antes).
-            fill[pane] = None;
+            fill.remove(app.panes.slot_of(pane));
             // Un run previo (raro: el diálogo se cierra al lanzar) se cancela.
             if let Some(old) = search_run.replace(SearchRun {
                 task,
@@ -9272,8 +9325,8 @@ async fn on_compare_key(
     app: &mut App,
     backend: &Backend,
     events: &mut EventStream,
-    fill: &mut [Option<Fill>; 2],
-    decorate_fetch: &mut [Option<DecorateFetch>; 2],
+    fill: &mut BySlot<Fill>,
+    decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
     compare_run: &mut Option<CompareRun>,
@@ -9576,8 +9629,8 @@ async fn on_compare_enter(
     app: &mut App,
     backend: &Backend,
     events: &mut EventStream,
-    fill: &mut [Option<Fill>; 2],
-    decorate_fetch: &mut [Option<DecorateFetch>; 2],
+    fill: &mut BySlot<Fill>,
+    decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
     compare_run: &mut Option<CompareRun>,
@@ -9624,7 +9677,14 @@ async fn on_compare_enter(
         app.panes[destino_pane].set_pending_focus(p);
     }
     let outcome = cd(app, backend, events, destino).await;
-    apply_cd(fill, decorate_fetch, last_probed, search_run, outcome);
+    apply_cd(
+        &app.panes,
+        fill,
+        decorate_fetch,
+        last_probed,
+        search_run,
+        outcome,
+    );
 }
 
 /// Lee el estado terminal de un [`SearchRun`] del `TaskProgress` (no
@@ -9651,8 +9711,8 @@ async fn on_search_escape(
     app: &mut App,
     backend: &Backend,
     events: &mut EventStream,
-    fill: &mut [Option<Fill>; 2],
-    decorate_fetch: &mut [Option<DecorateFetch>; 2],
+    fill: &mut BySlot<Fill>,
+    decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
 ) {
@@ -9666,7 +9726,14 @@ async fn on_search_escape(
     let prev = s.prev_dir.clone();
     *search_run = None;
     let outcome = cd(app, backend, events, prev).await;
-    apply_cd(fill, decorate_fetch, last_probed, search_run, outcome);
+    apply_cd(
+        &app.panes,
+        fill,
+        decorate_fetch,
+        last_probed,
+        search_run,
+        outcome,
+    );
 }
 
 /// Enter sobre un hit del pane virtual (liveSearch T6): cd al PADRE del hit y
@@ -9676,8 +9743,8 @@ async fn on_search_enter(
     app: &mut App,
     backend: &Backend,
     events: &mut EventStream,
-    fill: &mut [Option<Fill>; 2],
-    decorate_fetch: &mut [Option<DecorateFetch>; 2],
+    fill: &mut BySlot<Fill>,
+    decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
 ) {
@@ -9695,7 +9762,14 @@ async fn on_search_enter(
     *search_run = None;
     let pane = app.focus();
     let outcome = cd(app, backend, events, parent).await;
-    apply_cd(fill, decorate_fetch, last_probed, search_run, outcome);
+    apply_cd(
+        &app.panes,
+        fill,
+        decorate_fetch,
+        last_probed,
+        search_run,
+        outcome,
+    );
     // Re-ancla el cursor sobre el hit por path (el cd resetea a 0); si cayó
     // en una página aún no drenada, el cursor se queda arriba (v1).
     if let Some(i) = app.panes[pane].entries().iter().position(|e| e.path == hit) {
@@ -13010,14 +13084,15 @@ mod search_fill_tests {
         );
         // Relleno paginado vivo del pane 0 (dir aún cargándose).
         let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
-        let mut fill = [Some(Fill { rx }), None];
+        let mut fill: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        fill.insert(norte_tui::panel::SLOT_LEFT, Fill { rx });
         // Alt+F7 sobre el pane 0: pasa a virtual y se vacía.
         app.panes[0].begin_search(root.clone());
         // Llega un lote del drenador del listado REAL.
         apply_fill_msg(
             &mut app,
             &mut fill,
-            0,
+            norte_tui::panel::SLOT_LEFT,
             Some(FillMsg::Batch(vec![
                 file(&root, "real1"),
                 file(&root, "real2"),
@@ -13027,10 +13102,52 @@ mod search_fill_tests {
             app.panes[0].entries().is_empty(),
             "el listado real NO entra en el pane virtual"
         );
-        assert!(fill[0].is_none(), "el fill obsoleto se suelta");
+        assert!(
+            fill.get(norte_tui::panel::SLOT_LEFT).is_none(),
+            "el fill obsoleto se suelta"
+        );
         assert!(
             app.panes[0].virtual_search,
             "el pane sigue en modo búsqueda"
+        );
+    }
+
+    /// Un lote que llega para un hueco que YA NO EXISTE se tira.
+    ///
+    /// Es el fallo que paga el refactor de P6. Con el relleno archivado por
+    /// POSICIÓN, el lote de un panel cerrado se aplicaba a quien ocupara esa
+    /// posición al llegar: el lector veía crecer un listado con las entradas
+    /// de otro directorio, sin que nada lo dijera y sin que ninguna suite
+    /// verde lo viera, porque el listado seguía llegando — solo que al sitio
+    /// que no era.
+    #[test]
+    fn un_lote_para_un_hueco_cerrado_se_tira() {
+        let root = vp("mem:///d");
+        let mut app = App::new(
+            Pane::new(root.clone(), vec![file(&root, "a")]),
+            Pane::new(root.clone(), vec![]),
+        );
+        let antes = app.panes[0].entries().len();
+        let fantasma = norte_frontend::layout::SlotId(9_999);
+        let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
+        let mut fill: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        fill.insert(fantasma, Fill { rx });
+
+        apply_fill_msg(
+            &mut app,
+            &mut fill,
+            fantasma,
+            Some(FillMsg::Batch(vec![file(&root, "de-otro-sitio")])),
+        );
+
+        assert_eq!(
+            app.panes[0].entries().len(),
+            antes,
+            "el listado visible no recibe entradas de un panel cerrado"
+        );
+        assert!(
+            fill.get(fantasma).is_none(),
+            "y el hueco fantasma se suelta en vez de quedarse drenando"
         );
     }
 }
@@ -13074,8 +13191,10 @@ mod mirror_fill_tests {
         // El pane 0 —el enfocado, el que el lector mira— está paginando.
         app.panes[0].begin_listing(dir.clone(), vec![file(&dir, "a")], true, None);
         let (tx0, rx0) = tokio::sync::mpsc::channel::<FillMsg>(1);
-        let mut fill = [Some(Fill { rx: rx0 }), None];
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut fill: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        fill.insert(norte_tui::panel::SLOT_LEFT, Fill { rx: rx0 });
+        let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
+            norte_frontend::layout::BySlot::new();
         let mut lp = Probed::new();
 
         // `pane.mirror`: el pane 1 viaja, y su listado también viene paginado.
@@ -13083,6 +13202,7 @@ mod mirror_fill_tests {
         app.panes[1].begin_listing(dir.clone(), Vec::new(), true, None);
         let mut sr: Option<SearchRun> = None;
         apply_cd(
+            &app.panes,
             &mut fill,
             &mut df,
             &mut lp,
@@ -13097,13 +13217,13 @@ mod mirror_fill_tests {
         // soltó el `rx` por debajo.
         tx0.try_send(FillMsg::Batch(vec![file(&dir, "b")]))
             .expect("el drenador del pane 0 no fue abandonado");
-        let msg = fill[0]
-            .as_mut()
+        let msg = fill
+            .get_mut(norte_tui::panel::SLOT_LEFT)
             .expect("el relleno del pane 0 sigue en su hueco")
             .rx
             .try_recv()
             .ok();
-        apply_fill_msg(&mut app, &mut fill, 0, msg);
+        apply_fill_msg(&mut app, &mut fill, norte_tui::panel::SLOT_LEFT, msg);
 
         assert_eq!(
             app.panes[0].entries().len(),
@@ -13114,13 +13234,32 @@ mod mirror_fill_tests {
             app.panes[0].loading(),
             "y el «cargando…» sigue vivo: nadie terminó el listado por él"
         );
-        assert!(fill[1].is_some(), "el espejo se quedó con SU hueco");
+        assert!(
+            fill.get(norte_tui::panel::SLOT_RIGHT).is_some(),
+            "el espejo se quedó con SU hueco"
+        );
     }
 }
 
 #[cfg(test)]
 mod apply_cd_tests {
     use super::{Cd, DecorateFetch, Fill, FillMsg, Probed, SearchRun, apply_cd};
+    use norte_frontend::layout::BySlot;
+    use norte_tui::panel::{PaneSlots, SLOT_LEFT, SLOT_RIGHT};
+
+    /// Dos paneles de mentira: `apply_cd` solo les pregunta qué hueco ocupa
+    /// cada posición.
+    fn panes() -> PaneSlots {
+        let d = norte_proto::VPath::parse("mem:///x").expect("wire");
+        PaneSlots::new(
+            norte_tui::app::Pane::new(d.clone(), Vec::new()),
+            norte_tui::app::Pane::new(d, Vec::new()),
+        )
+    }
+
+    fn hueco(i: usize) -> norte_frontend::layout::SlotId {
+        if i == 0 { SLOT_LEFT } else { SLOT_RIGHT }
+    }
     use norte_proto::Error;
 
     fn fill() -> Fill {
@@ -13130,8 +13269,10 @@ mod apply_cd_tests {
 
     /// El hueco del pane 0 ocupado y el del 1 libre: la disposición de
     /// partida de casi todos estos casos.
-    fn en_el_pane_0() -> [Option<Fill>; 2] {
-        [Some(fill()), None]
+    fn en_el_pane_0() -> BySlot<Fill> {
+        let mut f = BySlot::new();
+        f.insert(SLOT_LEFT, fill());
+        f
     }
 
     /// Un REEMPLAZO del mismo pane suelta su relleno obsoleto.
@@ -13139,10 +13280,13 @@ mod apply_cd_tests {
     fn replaced_suelta_el_fill_del_pane() {
         let mut f = en_el_pane_0();
         let mut lp = Probed::new();
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut df: BySlot<DecorateFetch> = BySlot::new();
         let mut sr: Option<SearchRun> = None;
-        apply_cd(&mut f, &mut df, &mut lp, &mut sr, Cd::Replaced(0));
-        assert!(f[0].is_none(), "el fill del listado viejo se suelta");
+        apply_cd(&panes(), &mut f, &mut df, &mut lp, &mut sr, Cd::Replaced(0));
+        assert!(
+            f.get(hueco(0)).is_none(),
+            "el fill del listado viejo se suelta"
+        );
     }
 
     /// Un reemplazo de OTRO pane no toca el relleno vivo.
@@ -13150,10 +13294,10 @@ mod apply_cd_tests {
     fn replaced_de_otro_pane_no_toca() {
         let mut f = en_el_pane_0();
         let mut lp = Probed::new();
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut df: BySlot<DecorateFetch> = BySlot::new();
         let mut sr: Option<SearchRun> = None;
-        apply_cd(&mut f, &mut df, &mut lp, &mut sr, Cd::Replaced(1));
-        assert!(f[0].is_some(), "el fill del pane 0 sobrevive");
+        apply_cd(&panes(), &mut f, &mut df, &mut lp, &mut sr, Cd::Replaced(1));
+        assert!(f.get(hueco(0)).is_some(), "el fill del pane 0 sobrevive");
     }
 
     /// #78: un cd FALLIDO NO suelta el relleno — el pane sigue en su listado
@@ -13162,9 +13306,10 @@ mod apply_cd_tests {
     fn failed_conserva_el_fill() {
         let mut f = en_el_pane_0();
         let mut lp = Probed::new();
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut df: BySlot<DecorateFetch> = BySlot::new();
         let mut sr: Option<SearchRun> = None;
         apply_cd(
+            &panes(),
             &mut f,
             &mut df,
             &mut lp,
@@ -13172,7 +13317,7 @@ mod apply_cd_tests {
             Cd::Failed(Error::NotFound),
         );
         assert!(
-            f[0].is_some(),
+            f.get(hueco(0)).is_some(),
             "el fill del listado anterior sigue vivo tras un cd fallido"
         );
     }
@@ -13182,10 +13327,10 @@ mod apply_cd_tests {
     fn cancelled_conserva_el_fill() {
         let mut f = en_el_pane_0();
         let mut lp = Probed::new();
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut df: BySlot<DecorateFetch> = BySlot::new();
         let mut sr: Option<SearchRun> = None;
-        apply_cd(&mut f, &mut df, &mut lp, &mut sr, Cd::Cancelled);
-        assert!(f[0].is_some());
+        apply_cd(&panes(), &mut f, &mut df, &mut lp, &mut sr, Cd::Cancelled);
+        assert!(f.get(hueco(0)).is_some());
     }
 
     /// Un listado nuevo ocupa el hueco DE SU PANE y solo ese: el relleno del
@@ -13196,9 +13341,10 @@ mod apply_cd_tests {
     fn filling_de_un_pane_no_toca_el_hueco_del_otro() {
         let mut f = en_el_pane_0();
         let mut lp = Probed::new();
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut df: BySlot<DecorateFetch> = BySlot::new();
         let mut sr: Option<SearchRun> = None;
         apply_cd(
+            &panes(),
             &mut f,
             &mut df,
             &mut lp,
@@ -13208,8 +13354,11 @@ mod apply_cd_tests {
                 fill: fill(),
             },
         );
-        assert!(f[0].is_some(), "el relleno del pane 0 sigue en su hueco");
-        assert!(f[1].is_some(), "y el nuevo ocupa el suyo");
+        assert!(
+            f.get(hueco(0)).is_some(),
+            "el relleno del pane 0 sigue en su hueco"
+        );
+        assert!(f.get(hueco(1)).is_some(), "y el nuevo ocupa el suyo");
     }
 
     /// #118: Ctrl+R re-listó el pane 0 (listado COMPLETO nuevo) — su
@@ -13219,28 +13368,10 @@ mod apply_cd_tests {
     fn refreshed_suelta_el_fill_del_pane_relistado() {
         let mut f = en_el_pane_0();
         let mut lp = Probed::from([(0, norte_proto::VPath::parse("file:///d/x").unwrap())]);
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut df: BySlot<DecorateFetch> = BySlot::new();
         let mut sr: Option<SearchRun> = None;
         apply_cd(
-            &mut f,
-            &mut df,
-            &mut lp,
-            &mut sr,
-            Cd::Refreshed([true, false]),
-        );
-        assert!(f[0].is_none(), "el drenador del listado viejo se suelta");
-        assert!(lp.is_empty(), "la dedup de la sonda #52 caduca");
-    }
-
-    /// #118: Esc a medias — el pane 1 NO llegó a re-listarse, su relleno
-    /// paginado sigue siendo válido (#78: soltarlo lo colgaba en loading).
-    #[test]
-    fn refreshed_a_medias_conserva_el_fill_del_pane_no_relistado() {
-        let mut f = [None, Some(fill())];
-        let mut lp = Probed::new();
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
-        let mut sr: Option<SearchRun> = None;
-        apply_cd(
+            &panes(),
             &mut f,
             &mut df,
             &mut lp,
@@ -13248,7 +13379,31 @@ mod apply_cd_tests {
             Cd::Refreshed([true, false]),
         );
         assert!(
-            f[1].is_some(),
+            f.get(hueco(0)).is_none(),
+            "el drenador del listado viejo se suelta"
+        );
+        assert!(lp.is_empty(), "la dedup de la sonda #52 caduca");
+    }
+
+    /// #118: Esc a medias — el pane 1 NO llegó a re-listarse, su relleno
+    /// paginado sigue siendo válido (#78: soltarlo lo colgaba en loading).
+    #[test]
+    fn refreshed_a_medias_conserva_el_fill_del_pane_no_relistado() {
+        let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        f.insert(norte_tui::panel::SLOT_RIGHT, fill());
+        let mut lp = Probed::new();
+        let mut df: BySlot<DecorateFetch> = BySlot::new();
+        let mut sr: Option<SearchRun> = None;
+        apply_cd(
+            &panes(),
+            &mut f,
+            &mut df,
+            &mut lp,
+            &mut sr,
+            Cd::Refreshed([true, false]),
+        );
+        assert!(
+            f.get(hueco(1)).is_some(),
             "el fill del pane NO re-listado sobrevive al Esc a medias"
         );
     }
@@ -13256,18 +13411,21 @@ mod apply_cd_tests {
     /// Y el simétrico: un refresh de los DOS panes suelta los dos huecos.
     #[test]
     fn refreshed_de_ambos_panes_suelta_los_dos_huecos() {
-        let mut f = [Some(fill()), Some(fill())];
+        let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        f.insert(SLOT_LEFT, fill());
+        f.insert(SLOT_RIGHT, fill());
         let mut lp = Probed::new();
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut df: BySlot<DecorateFetch> = BySlot::new();
         let mut sr: Option<SearchRun> = None;
         apply_cd(
+            &panes(),
             &mut f,
             &mut df,
             &mut lp,
             &mut sr,
             Cd::Refreshed([true, true]),
         );
-        assert!(f[0].is_none() && f[1].is_none());
+        assert!(f.get(hueco(0)).is_none() && f.get(hueco(1)).is_none());
     }
 
     /// #118: refresh totalmente abandonado (Esc antes del primer pane) o
@@ -13276,16 +13434,20 @@ mod apply_cd_tests {
     fn refreshed_vacio_no_toca_nada() {
         let mut f = en_el_pane_0();
         let mut lp = Probed::from([(0, norte_proto::VPath::parse("file:///d/x").unwrap())]);
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut df: BySlot<DecorateFetch> = BySlot::new();
         let mut sr: Option<SearchRun> = None;
         apply_cd(
+            &panes(),
             &mut f,
             &mut df,
             &mut lp,
             &mut sr,
             Cd::Refreshed([false, false]),
         );
-        assert!(f[0].is_some(), "sin pane re-listado, el fill sigue");
+        assert!(
+            f.get(hueco(0)).is_some(),
+            "sin pane re-listado, el fill sigue"
+        );
         assert!(!lp.is_empty(), "sin pane re-listado, la dedup sigue");
     }
 }
@@ -14362,10 +14524,10 @@ mod swap_tests {
         }
     }
 
-    fn decorate(pane: usize) -> DecorateFetch {
+    fn decorate(slot: norte_frontend::layout::SlotId) -> DecorateFetch {
         let (_tx, rx) = tokio::sync::oneshot::channel();
         DecorateFetch {
-            pane,
+            slot,
             dir: vp("mem:///d"),
             rx,
         }
@@ -14381,25 +14543,45 @@ mod swap_tests {
     #[test]
     fn el_intercambio_cruza_los_huecos_del_relleno_en_vuelo() {
         let (tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
-        let mut f = [Some(Fill { rx }), None];
-        let mut df: [Option<DecorateFetch>; 2] = [Some(decorate(0)), None];
+        let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        f.insert(norte_tui::panel::SLOT_LEFT, Fill { rx });
+        let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
+            norte_frontend::layout::BySlot::new();
+        df.insert(
+            norte_tui::panel::SLOT_LEFT,
+            decorate(norte_tui::panel::SLOT_LEFT),
+        );
         let mut lp = Probed::from([(0, vp("mem:///d/x"))]);
         let mut sr: Option<SearchRun> = None;
 
-        reconcile_swap(&mut f, &mut df, &mut lp, &mut sr);
+        reconcile_swap(
+            norte_tui::panel::SLOT_LEFT,
+            norte_tui::panel::SLOT_RIGHT,
+            &mut f,
+            &mut df,
+            &mut lp,
+            &mut sr,
+        );
 
-        assert!(f[0].is_none(), "el hueco del pane 0 queda libre");
+        assert!(
+            f.get(norte_tui::panel::SLOT_LEFT).is_none(),
+            "el hueco del pane 0 queda libre"
+        );
         tx.try_send(FillMsg::Failed)
             .expect("el drenador sigue vivo");
         assert!(
-            f[1].as_mut()
+            f.get_mut(norte_tui::panel::SLOT_RIGHT)
                 .expect("cruzado al hueco del pane 1")
                 .rx
                 .try_recv()
                 .is_ok(),
             "y es EL MISMO drenador el que ahora alimenta al pane 1"
         );
-        assert!(df[1].is_some() && df[0].is_none(), "cruzados");
+        assert!(
+            df.get(norte_tui::panel::SLOT_RIGHT).is_some()
+                && df.get(norte_tui::panel::SLOT_LEFT).is_none(),
+            "cruzados"
+        );
         assert!(lp.is_empty(), "la caché de stat se tira, no se traduce");
     }
 
@@ -14407,13 +14589,27 @@ mod swap_tests {
     /// puede inventar un relleno ni un fetch donde no los había.
     #[test]
     fn el_intercambio_sin_nada_en_vuelo_no_inventa_nada() {
-        let mut f: [Option<Fill>; 2] = [None, None];
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
+            norte_frontend::layout::BySlot::new();
         let mut lp = Probed::new();
         let mut sr: Option<SearchRun> = None;
-        reconcile_swap(&mut f, &mut df, &mut lp, &mut sr);
-        assert!(f[0].is_none() && f[1].is_none());
-        assert!(df[0].is_none() && df[1].is_none());
+        reconcile_swap(
+            norte_tui::panel::SLOT_LEFT,
+            norte_tui::panel::SLOT_RIGHT,
+            &mut f,
+            &mut df,
+            &mut lp,
+            &mut sr,
+        );
+        assert!(
+            f.get(norte_tui::panel::SLOT_LEFT).is_none()
+                && f.get(norte_tui::panel::SLOT_RIGHT).is_none()
+        );
+        assert!(
+            df.get(norte_tui::panel::SLOT_LEFT).is_none()
+                && df.get(norte_tui::panel::SLOT_RIGHT).is_none()
+        );
     }
 
     /// El desenlace `Cd::Swapped` tiene que LLEGAR al reconciliado: la mitad
@@ -14423,13 +14619,29 @@ mod swap_tests {
     #[test]
     fn apply_cd_swapped_reconcilia_el_estado_del_run_loop() {
         let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
-        let mut f = [None, Some(Fill { rx })];
-        let mut df: [Option<DecorateFetch>; 2] = [None, Some(decorate(1))];
+        let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        f.insert(norte_tui::panel::SLOT_RIGHT, Fill { rx });
+        let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
+            norte_frontend::layout::BySlot::new();
+        df.insert(
+            norte_tui::panel::SLOT_RIGHT,
+            decorate(norte_tui::panel::SLOT_RIGHT),
+        );
         let mut lp = Probed::from([(1, vp("mem:///d/x"))]);
         let mut sr: Option<SearchRun> = None;
-        apply_cd(&mut f, &mut df, &mut lp, &mut sr, Cd::Swapped);
-        assert!(f[0].is_some() && f[1].is_none());
-        assert!(df[0].is_some() && df[1].is_none());
+        let panes = norte_tui::panel::PaneSlots::new(
+            Pane::new(vp("mem:///d"), Vec::new()),
+            Pane::new(vp("mem:///d"), Vec::new()),
+        );
+        apply_cd(&panes, &mut f, &mut df, &mut lp, &mut sr, Cd::Swapped);
+        assert!(
+            f.get(norte_tui::panel::SLOT_LEFT).is_some()
+                && f.get(norte_tui::panel::SLOT_RIGHT).is_none()
+        );
+        assert!(
+            df.get(norte_tui::panel::SLOT_LEFT).is_some()
+                && df.get(norte_tui::panel::SLOT_RIGHT).is_none()
+        );
         assert!(lp.is_empty());
     }
 
@@ -14439,12 +14651,20 @@ mod swap_tests {
     /// pane de al lado.
     #[test]
     fn el_intercambio_voltea_el_pane_de_la_busqueda_viva() {
-        let mut f: [Option<Fill>; 2] = [None, None];
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
+            norte_frontend::layout::BySlot::new();
         let mut lp = Probed::new();
         let mut sr = Some(search_run(0));
 
-        reconcile_swap(&mut f, &mut df, &mut lp, &mut sr);
+        reconcile_swap(
+            norte_tui::panel::SLOT_LEFT,
+            norte_tui::panel::SLOT_RIGHT,
+            &mut f,
+            &mut df,
+            &mut lp,
+            &mut sr,
+        );
 
         assert_eq!(
             sr.as_ref().expect("el run sigue vivo").pane,
@@ -14475,13 +14695,18 @@ mod swap_tests {
         // Búsqueda viva en el pane 0 (el `Alt+F7` lo dejó virtual).
         app.panes[0].begin_search(vp("file:///izq"));
         let mut sr = Some(search_run(0));
-        let mut f: [Option<Fill>; 2] = [None, None];
-        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
+            norte_frontend::layout::BySlot::new();
         let mut lp = Probed::new();
 
         // `Ctrl+U`: `dispatch` cruza los panes y el run loop reconcilia…
         app.swap_panes();
-        apply_cd(&mut f, &mut df, &mut lp, &mut sr, Cd::Swapped);
+        let panes = norte_tui::panel::PaneSlots::new(
+            Pane::new(vp("mem:///d"), Vec::new()),
+            Pane::new(vp("mem:///d"), Vec::new()),
+        );
+        apply_cd(&panes, &mut f, &mut df, &mut lp, &mut sr, Cd::Swapped);
         // …y el MISMO call site cosecha a continuación.
         reap_search_run(&app, &mut sr);
 
@@ -14539,12 +14764,13 @@ mod refresh_ritual_tests {
     #[test]
     fn esc_a_medias_conserva_el_fill_del_pane_no_refrescado() {
         let mut app = app();
-        let mut f = [None, Some(fill())];
+        let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        f.insert(norte_tui::panel::SLOT_RIGHT, fill());
         let mut lp = Probed::from([(1, VPath::parse("file:///d/x").unwrap())]);
         let mut sr: Option<SearchRun> = None;
         after_panes_refresh(&mut app, [true, false], &mut f, &mut lp, &mut sr);
         assert!(
-            f[1].is_some(),
+            f.get(norte_tui::panel::SLOT_RIGHT).is_some(),
             "el fill del pane 1 (no re-listado) sobrevive al Esc a medias"
         );
         assert!(lp.is_empty(), "la dedup de la sonda #52 caduca igualmente");
@@ -14583,7 +14809,7 @@ mod refresh_ritual_tests {
         // La tarea termina, el refresh entra por debajo del overlay y se lleva
         // por delante la entrada de la que hablaban los hechos.
         app.panes[0].refresh_listing(Vec::new());
-        let mut f = [None, None];
+        let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
         let mut lp = Probed::new();
         let mut sr: Option<SearchRun> = None;
         after_panes_refresh(&mut app, [true, false], &mut f, &mut lp, &mut sr);

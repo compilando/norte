@@ -799,6 +799,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A directory still loading no longer pours its entries into the wrong
+  panel.** Swap the panels while a large directory is still filling — or, now,
+  close one — and the batches still arriving were applied to whichever panel
+  happened to be in that position. You watched a listing grow with another
+  directory's contents, and nothing said so. The work in flight now belongs to
+  the listing that asked for it, and a batch for a panel that no longer exists
+  is dropped.
+
 - **A finished synchronisation now says, by itself, whether it can be given
   back.** The report you can ask for after a synchronisation told you what was
   copied, overwritten, deleted and what failed — and not whether any of it

@@ -53,6 +53,21 @@ impl<T> BySlot<T> {
         self.inner.remove(&id)
     }
 
+    /// Pone o quita el valor de un hueco, según venga `Some` o `None`.
+    ///
+    /// Es la forma que tenía el array (`x[i] = ...`) sin la parte que hacía
+    /// daño: la clave es el hueco.
+    pub fn set(&mut self, id: SlotId, v: Option<T>) {
+        match v {
+            Some(v) => {
+                self.inner.insert(id, v);
+            }
+            None => {
+                self.inner.remove(&id);
+            }
+        }
+    }
+
     /// ¿Hay algo para ese hueco?
     #[must_use]
     pub fn contains(&self, id: SlotId) -> bool {
@@ -79,6 +94,25 @@ impl<T> BySlot<T> {
     /// Los pares, para mutarlos.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (SlotId, &mut T)> {
         self.inner.iter_mut().map(|(id, v)| (*id, v))
+    }
+
+    /// Intercambia lo que hay en dos huecos.
+    ///
+    /// Hace falta porque intercambiar paneles mueve el CONTENIDO entre huecos
+    /// (los ids se quedan donde estaban), así que el trabajo en vuelo tiene que
+    /// viajar con su listado. Intercambiar los ids EN EL ÁRBOL en vez del
+    /// contenido haría esto innecesario, y es la mejora que anota el plan.
+    pub fn swap(&mut self, a: SlotId, b: SlotId) {
+        if a == b {
+            return;
+        }
+        let (va, vb) = (self.inner.remove(&a), self.inner.remove(&b));
+        if let Some(v) = vb {
+            self.inner.insert(a, v);
+        }
+        if let Some(v) = va {
+            self.inner.insert(b, v);
+        }
     }
 
     /// Tira lo que `tree` ya no menciona.
