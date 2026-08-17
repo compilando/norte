@@ -323,6 +323,35 @@ impl Node {
         }
     }
 
+    /// Los huecos que se VERÍAN: como [`Self::slot_ids`], pero de cada
+    /// [`Node::Tabs`] solo la pestaña activa.
+    ///
+    /// No es lo mismo que las colocaciones de un reparto —esto no sabe si algo
+    /// cabe— y por eso existe: hay que saber quién queda visible justo DESPUÉS
+    /// de tocar el árbol, antes de que haya un frame que repartir.
+    #[must_use]
+    pub fn visible_slot_ids(&self) -> Vec<SlotId> {
+        let mut out = Vec::new();
+        self.collect_visible(&mut out);
+        out
+    }
+
+    fn collect_visible(&self, out: &mut Vec<SlotId>) {
+        match self {
+            Self::Split { children, .. } => {
+                for c in children {
+                    c.collect_visible(out);
+                }
+            }
+            Self::Tabs { children, active } => {
+                if let Some(c) = children.get(*active).or_else(|| children.first()) {
+                    c.collect_visible(out);
+                }
+            }
+            Self::Slot { id, .. } => out.push(*id),
+        }
+    }
+
     /// El kind del hueco `id`, si el árbol lo contiene.
     #[must_use]
     pub fn kind_of(&self, id: SlotId) -> Option<&KindId> {

@@ -107,6 +107,11 @@ impl<P> SlotStore<P> {
         self.slots.values_mut()
     }
 
+    /// Los pares `(id, estado)`, en orden de [`SlotId`], para mutarlos.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (SlotId, &mut P)> {
+        self.slots.iter_mut().map(|(id, p)| (*id, p))
+    }
+
     /// Intercambia el estado de dos huecos, dejando los ids donde estaban.
     ///
     /// Lo pide el gesto de intercambiar paneles: lo que cambia de sitio es el

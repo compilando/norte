@@ -864,6 +864,10 @@ pub struct App {
     pub kinds: norte_frontend::layout::KindRegistry,
     /// Los roles, reconciliados tras cada reparto.
     pub roles: norte_frontend::layout::Roles,
+    /// El siguiente `SlotId` a acuñar. Nunca decrece y nunca se reutiliza:
+    /// un id reciclado haría que el estado huérfano de un hueco cerrado
+    /// resucitara dentro de otro que no tiene nada que ver.
+    next_slot: u32,
     /// Config de columnas resuelta (#108 bloque 4): set por scheme + sort.
     /// La siembra el arranque desde `[ui.columns]`; el render y los hooks
     /// de cd la consultan.
@@ -2014,6 +2018,8 @@ impl App {
             layout: crate::panel::orthodox(),
             kinds: norte_frontend::layout::KindRegistry::builtin(),
             roles: norte_frontend::layout::Roles::con_active(crate::panel::SLOT_LEFT),
+            // Los cuatro primeros son los del preset `orthodox`.
+            next_slot: 5,
             render_now_ms: None,
             attr_catalogs: std::collections::HashMap::new(),
             caps: std::collections::HashMap::new(),
@@ -2866,6 +2872,84 @@ impl App {
         // demás viaja con su pane, así que quien compare por lado no ve
         // moverse nada (ver [`Self::swap_seq`]).
         self.swap_seq = self.swap_seq.wrapping_add(1);
+    }
+
+    /// Acuña un `SlotId` que no se ha usado nunca en esta sesión.
+    fn mint_slot(&mut self) -> norte_frontend::layout::SlotId {
+        let id = norte_frontend::layout::SlotId(self.next_slot);
+        self.next_slot = self.next_slot.saturating_add(1);
+        id
+    }
+
+    /// El hueco que el lado enfocado enseña ahora.
+    #[must_use]
+    pub fn focused_slot(&self) -> norte_frontend::layout::SlotId {
+        self.panes.slot_of(self.focus)
+    }
+
+    /// Abre una pestaña nueva junto al pane enfocado, en el mismo directorio.
+    ///
+    /// Hereda las entradas ya listadas en vez de pedir un listado: es el MISMO
+    /// directorio que se está mirando, así que la pestaña aparece llena en el
+    /// acto y no parpadea vacía mientras alguien vuelve a leer lo mismo.
+    pub fn tab_new(&mut self) {
+        let foco = self.focused_slot();
+        let (dir, entradas) = {
+            let p = &self.panes[self.focus];
+            (p.dir().clone(), p.entries().to_vec())
+        };
+        let id = self.mint_slot();
+        self.panes.insert_browser(id, Pane::new(dir, entradas));
+        self.layout = self.layout.add_tab(
+            foco,
+            &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
+        );
+        self.panes.refresh_visible(&self.layout);
+    }
+
+    /// Cierra la pestaña enfocada. Sin efecto si el pane no está en un grupo.
+    pub fn tab_close(&mut self) {
+        let foco = self.focused_slot();
+        if let Some(nuevo) = self.layout.close_tab(foco) {
+            self.layout = nuevo;
+            self.panes.refresh_visible(&self.layout);
+        }
+    }
+
+    /// Cambia de pestaña dentro del grupo enfocado, ciclando.
+    pub fn tab_cycle(&mut self, delta: isize) {
+        let foco = self.focused_slot();
+        let Some((tabs, activa)) = self.layout.tabs_of(foco) else {
+            return;
+        };
+        if tabs.is_empty() {
+            return;
+        }
+        let n = isize::try_from(tabs.len()).unwrap_or(1);
+        let i = isize::try_from(activa).unwrap_or(0);
+        let destino = usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0);
+        self.layout = self.layout.set_active_for(foco, destino);
+        self.panes.refresh_visible(&self.layout);
+    }
+
+    /// Va a la pestaña `n` (base 1) del grupo enfocado.
+    pub fn tab_goto(&mut self, n: usize) {
+        let foco = self.focused_slot();
+        if self.layout.tabs_of(foco).is_some() {
+            self.layout = self.layout.set_active_for(foco, n.saturating_sub(1));
+            self.panes.refresh_visible(&self.layout);
+        }
+    }
+
+    /// Mueve la pestaña enfocada dentro de su grupo. No da la vuelta: una
+    /// pestaña que salta del final al principio por una pulsación de más es
+    /// justo lo que nadie quería.
+    pub fn tab_move(&mut self, delta: isize) {
+        let foco = self.focused_slot();
+        if self.layout.tabs_of(foco).is_some() {
+            self.layout = self.layout.move_tab(foco, delta);
+            self.panes.refresh_visible(&self.layout);
+        }
     }
 
     /// How many times [`Self::swap_panes`] has run.

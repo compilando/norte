@@ -27,9 +27,10 @@ const LANGS: [Lang; 2] = [Lang::En, Lang::Es];
 /// the corpus so that DELETING a topic file is a test failure too: a check
 /// that reads the corpus to decide what the corpus should contain cannot see
 /// an absence.
-const EXPECTED: [&str; 17] = [
+const EXPECTED: [&str; 18] = [
     "index",
     "panes",
+    "tabs",
     "selection",
     "mouse",
     "help",
@@ -476,7 +477,7 @@ fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 86] = [
+const DOCUMENTED: [&str; 101] = [
     "app.extensions",
     "app.help",
     "app.palette",
@@ -552,6 +553,21 @@ const DOCUMENTED: [&str; 86] = [
     "pane.sync-dirs",
     "pane.toggle-hidden",
     "pane.view",
+    "tab.close",
+    "tab.goto-1",
+    "tab.goto-2",
+    "tab.goto-3",
+    "tab.goto-4",
+    "tab.goto-5",
+    "tab.goto-6",
+    "tab.goto-7",
+    "tab.goto-8",
+    "tab.goto-9",
+    "tab.move-left",
+    "tab.move-right",
+    "tab.new",
+    "tab.next",
+    "tab.prev",
     "task.cancel",
     "viewer.bottom",
     "viewer.close",

@@ -10794,6 +10794,21 @@ async fn dispatch(
             }
         }
         Command::PaneSwitch => app.switch_focus(),
+        Command::TabNew => app.tab_new(),
+        Command::TabClose => app.tab_close(),
+        Command::TabNext => app.tab_cycle(1),
+        Command::TabPrev => app.tab_cycle(-1),
+        Command::TabMoveLeft => app.tab_move(-1),
+        Command::TabMoveRight => app.tab_move(1),
+        Command::TabGoto1 => app.tab_goto(1),
+        Command::TabGoto2 => app.tab_goto(2),
+        Command::TabGoto3 => app.tab_goto(3),
+        Command::TabGoto4 => app.tab_goto(4),
+        Command::TabGoto5 => app.tab_goto(5),
+        Command::TabGoto6 => app.tab_goto(6),
+        Command::TabGoto7 => app.tab_goto(7),
+        Command::TabGoto8 => app.tab_goto(8),
+        Command::TabGoto9 => app.tab_goto(9),
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
             let plan = mirror_plan(app);
