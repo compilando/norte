@@ -357,6 +357,90 @@ fn cada_pestana_conserva_su_historial() {
     );
 }
 
+/// Partir da TRES paneles, y la geometría de los tres cuadra con el buffer.
+///
+/// Es el techo que P6 retira: hasta ahora `PaneSlots` solo podía representar
+/// dos, y un tercero habría quedado pintado pero fuera del alcance del ratón.
+#[test]
+fn partir_da_tres_paneles_y_los_tres_cuadran() {
+    let mut app = app_de_prueba_con(60);
+    app.layout_split(norte_frontend::layout::Dir::Horizontal);
+    let lineas = pintar(&mut app);
+    let area = ratatui::layout::Rect::new(0, 0, W, H);
+    let geom = ui::pane_geometry(&app, area).expect("hay geometría");
+    assert_eq!(geom.len(), 3, "tres paneles");
+    let ancho: u32 = geom.iter().map(|g| u32::from(g.width)).sum();
+    assert_eq!(ancho, u32::from(W), "y suman el frame entero");
+    for (i, g) in geom.iter().enumerate() {
+        let esperada = nombre_visible(&app, i, g.offset);
+        let fila = recorte(&lineas, g.first_list_row, g.x, g.width);
+        assert!(
+            fila.contains(&esperada),
+            "panel {i}: la fila {} debería llevar {esperada:?}, lleva {fila:?}",
+            g.first_list_row
+        );
+    }
+}
+
+/// El panel nuevo se queda con el foco: partir es pedir sitio para trabajar
+/// en él, no para mirarlo desde el de al lado.
+#[test]
+fn el_panel_recien_partido_se_queda_el_foco() {
+    let mut app = app_de_prueba_con(60);
+    let antes = app.focused_slot();
+    app.layout_split(norte_frontend::layout::Dir::Horizontal);
+    let _ = pintar(&mut app);
+    assert_ne!(app.focused_slot(), antes, "el foco viaja al nuevo");
+}
+
+/// Con tres paneles, cerrar uno vuelve a dos y el foco sobrevive.
+#[test]
+fn con_tres_paneles_cerrar_uno_vuelve_a_dos() {
+    let mut app = app_de_prueba_con(60);
+    app.layout_split(norte_frontend::layout::Dir::Horizontal);
+    let _ = pintar(&mut app);
+    assert!(app.layout_close_slot(), "con tres SÍ se puede cerrar");
+    let _ = pintar(&mut app);
+    let geom =
+        ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("hay geometría");
+    assert_eq!(geom.len(), 2);
+    assert!(app.focus() < 2, "el foco quedó en rango");
+}
+
+/// Con TRES paneles, una copia sin destino designado NO adivina.
+///
+/// Con dos, el destino es el otro y nadie tuvo que decirlo. Con tres,
+/// adivinar es cómo una copia sale hacia un panel que el lector no tenía en
+/// la cabeza — pérdida de datos silenciosa.
+#[test]
+fn con_tres_paneles_no_hay_destino_hasta_que_se_designa() {
+    let mut app = app_de_prueba_con(60);
+    assert!(app.target_index().is_some(), "con dos, el otro");
+    app.layout_split(norte_frontend::layout::Dir::Horizontal);
+    let _ = pintar(&mut app);
+    assert_eq!(app.target_index(), None, "con tres, hay que designarlo");
+    app.layout_set_target();
+    let _ = pintar(&mut app);
+    let destino = app.target_index().expect("designado");
+    assert_ne!(destino, app.focus(), "y nunca es uno mismo");
+}
+
+/// El destino designado se MARCA en su cromo, y solo a partir de tres: con
+/// dos sería ruido en el caso de siempre.
+#[test]
+fn el_destino_designado_se_marca_y_solo_cuando_hace_falta() {
+    let mut app = app_de_prueba_con(60);
+    let dos = pintar(&mut app).join("\n");
+    assert!(!dos.contains("-> "), "con dos paneles no se marca nada");
+    app.layout_split(norte_frontend::layout::Dir::Horizontal);
+    app.layout_set_target();
+    let tres = pintar(&mut app).join("\n");
+    assert!(
+        tres.contains("-> "),
+        "con tres, el destino se ve en el cromo:\n{tres}"
+    );
+}
+
 /// El criterio de aceptación de L1a/// El criterio de aceptación de L1a, escrito como test: esta pantalla es
 /// idéntica antes y después del refactor.
 ///

@@ -127,6 +127,8 @@ commands! {
     "pane.tab-goto-7" => TabGoto7,
     "pane.tab-goto-8" => TabGoto8,
     "pane.tab-goto-9" => TabGoto9,
+    "layout.split-h" => LayoutSplitH,
+    "layout.split-v" => LayoutSplitV,
     "layout.focus-next" => LayoutFocusNext,
     "layout.focus-prev" => LayoutFocusPrev,
     "layout.close-slot" => LayoutCloseSlot,

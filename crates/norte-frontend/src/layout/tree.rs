@@ -323,6 +323,40 @@ impl Node {
         }
     }
 
+    /// Parte el hueco `id` en dos a lo largo de `dir`, con `nuevo` al lado.
+    ///
+    /// Los dos quedan con el mismo peso. Si `id` está dentro de una `Tabs`, el
+    /// corte va DENTRO de esa pestaña y no alrededor del grupo: partir una
+    /// pestaña es partir lo que estás mirando, no reorganizar sus hermanas.
+    #[must_use]
+    pub fn split_slot(&self, id: SlotId, dir: Dir, nuevo: &Self) -> Self {
+        match self {
+            Self::Slot { id: i, .. } if *i == id => {
+                Self::split(dir, vec![self.clone(), nuevo.clone()])
+            }
+            Self::Slot { .. } => self.clone(),
+            Self::Split {
+                dir: d,
+                children,
+                sizes,
+            } => Self::Split {
+                dir: *d,
+                sizes: sizes.clone(),
+                children: children
+                    .iter()
+                    .map(|c| c.split_slot(id, dir, nuevo))
+                    .collect(),
+            },
+            Self::Tabs { children, active } => Self::Tabs {
+                active: *active,
+                children: children
+                    .iter()
+                    .map(|c| c.split_slot(id, dir, nuevo))
+                    .collect(),
+            },
+        }
+    }
+
     /// Cierra el hueco `id`: lo saca de su padre.
     ///
     /// Un `Split` o una `Tabs` que se queda con UN hijo se disuelve en él.
@@ -952,6 +986,36 @@ mod tests {
             nuevo.tabs_of(SlotId(2)),
             Some((vec![SlotId(1), SlotId(2)], 1))
         );
+    }
+
+    /// Partir un hueco lo deja con el nuevo al lado, los dos al mismo peso.
+    #[test]
+    fn partir_un_hueco_deja_a_los_dos_al_mismo_peso() {
+        let arbol = b(1);
+        let nuevo = arbol.split_slot(SlotId(1), Dir::Vertical, &b(9));
+        assert_eq!(nuevo.slot_ids(), vec![SlotId(1), SlotId(9)]);
+        let Node::Split { dir, sizes, .. } = &nuevo else {
+            panic!("split")
+        };
+        assert_eq!(*dir, Dir::Vertical);
+        assert_eq!(*sizes, vec![Size::Weight(1), Size::Weight(1)]);
+    }
+
+    /// Partir una PESTAÑA parte lo que estás mirando, no reorganiza sus
+    /// hermanas: el corte va dentro de la pestaña, no alrededor del grupo.
+    #[test]
+    fn partir_una_pestana_corta_dentro_de_ella() {
+        let arbol = Node::Tabs {
+            children: vec![b(1), b(2)],
+            active: 1,
+        };
+        let nuevo = arbol.split_slot(SlotId(2), Dir::Horizontal, &b(9));
+        let Node::Tabs { children, active } = &nuevo else {
+            panic!("sigue siendo un grupo de pestañas")
+        };
+        assert_eq!(*active, 1, "la pestaña activa no se mueve");
+        assert_eq!(children.len(), 2, "sigue habiendo DOS pestañas");
+        assert_eq!(children[1].slot_ids(), vec![SlotId(2), SlotId(9)]);
     }
 
     /// Cerrar un hueco deja al hermano ocupando el sitio de los dos.

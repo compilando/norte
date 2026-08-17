@@ -24,6 +24,8 @@ commands = [
     "pane.select-drive-right",
     "pane.compare-dirs",
     "pane.sync-dirs",
+    "layout.split-h",
+    "layout.split-v",
     "layout.focus-next",
     "layout.focus-prev",
     "layout.close-slot",
@@ -254,3 +256,10 @@ two they do what {{cmd:pane.switch}} does; they exist for when there are more.
 {{cmd:layout.set-target}} sets which panel a copy goes to. With two panels the
 destination is already the other one and nothing changes — it is for the day
 there are more than two and the tie cannot be broken on its own.
+
+{{cmd:layout.split-h}} splits the focused panel side by side and
+{{cmd:layout.split-v}} splits it top and bottom. The new panel starts in the
+same directory, already filled, and takes the focus: splitting is asking for
+room to work in. From three panels on, which one a copy goes to stops being
+obvious — that is what {{cmd:layout.set-target}} is for, and the panel you
+designate is marked on its border.
