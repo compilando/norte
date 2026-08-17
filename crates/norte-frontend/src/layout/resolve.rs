@@ -1,6 +1,6 @@
 //! El reparto: árbol + área → quién se pinta, dónde, y quién no.
 
-use super::{Dir, KindRegistry, LayoutDiagnostic, Node, Rect, SlotId};
+use super::{Dir, KindRegistry, LayoutDiagnostic, Node, Rect, Size, SlotId};
 
 /// Lo que un frame necesita saber, en un solo valor.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -41,43 +41,91 @@ fn min_of(node: &Node, decls: &KindRegistry) -> (u16, u16) {
             .iter()
             .map(|c| min_of(c, decls))
             .fold((0, 0), |(w, h), (cw, ch)| (w.max(cw), h.max(ch))),
-        Node::Split { dir, children, .. } => {
-            children
-                .iter()
-                .map(|c| min_of(c, decls))
-                .fold((0, 0), |(w, h), (cw, ch)| match dir {
-                    Dir::Horizontal => (w.saturating_add(cw), h.max(ch)),
-                    Dir::Vertical => (w.max(cw), h.saturating_add(ch)),
-                })
-        }
+        Node::Split {
+            dir,
+            children,
+            sizes,
+        } => children
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let (cw, ch) = min_of(c, decls);
+                // Un hijo FIJO no pide su mínimo a lo largo del eje: pide
+                // exactamente lo que declara, y eso gana.
+                match (sizes.get(i), dir) {
+                    (Some(Size::Fixed(n)), Dir::Horizontal) => (*n, ch),
+                    (Some(Size::Fixed(n)), Dir::Vertical) => (cw, *n),
+                    (Some(Size::Auto), Dir::Horizontal) => (0, ch),
+                    (Some(Size::Auto), Dir::Vertical) => (cw, 0),
+                    _ => (cw, ch),
+                }
+            })
+            .fold((0, 0), |(w, h), (cw, ch)| match dir {
+                Dir::Horizontal => (w.saturating_add(cw), h.max(ch)),
+                Dir::Vertical => (w.max(cw), h.saturating_add(ch)),
+            }),
     }
 }
 
-/// Reparte `area` en trozos proporcionales a `pesos` a lo largo de `dir`.
+/// Reparte `area` entre `sizes` a lo largo de `dir`.
 ///
-/// El resto va al ÚLTIMO: con un ancho impar la división entera perdería una
-/// columna, y una columna sin pintar en el borde de un pane se ve.
-fn distribute(area: Rect, dir: Dir, pesos: &[u32]) -> Vec<Rect> {
-    let total: u32 = pesos.iter().sum::<u32>().max(1);
-    let extent = u32::from(match dir {
+/// Los FIJOS cobran primero y en orden; si ya no caben, se recortan y los
+/// pesos se quedan sin nada — que es lo que hace que un terminal diminuto siga
+/// pintando la barra de estado en vez de la nada. El resto se reparte entre
+/// los pesos, y el sobrante de la división entera va al ÚLTIMO PONDERADO: con
+/// un ancho impar se perdería una columna, y una columna sin pintar en el
+/// borde de un pane se ve.
+///
+/// Un [`Size::Auto`] cuenta como cero. No debería llegar hasta aquí
+/// —[`Node::substitute_auto`] lo sustituye antes— pero un reparto no es sitio
+/// para reventar.
+fn distribute(area: Rect, dir: Dir, sizes: &[Size]) -> Vec<Rect> {
+    let extent = u64::from(match dir {
         Dir::Horizontal => area.width,
         Dir::Vertical => area.height,
     });
-    let mut out = Vec::with_capacity(pesos.len());
-    let mut usado: u32 = 0;
-    for (i, p) in pesos.iter().enumerate() {
-        let size = if i + 1 == pesos.len() {
-            extent.saturating_sub(usado)
-        } else {
-            extent.saturating_mul(*p) / total
-        };
-        let off = u16::try_from(usado).unwrap_or(u16::MAX);
-        let size16 = u16::try_from(size).unwrap_or(u16::MAX);
+    let mut asignado: Vec<u64> = vec![0; sizes.len()];
+    let mut usado: u64 = 0;
+    for (i, s) in sizes.iter().enumerate() {
+        if let Size::Fixed(n) = s {
+            let cabe = u64::from(*n).min(extent.saturating_sub(usado));
+            asignado[i] = cabe;
+            usado = usado.saturating_add(cabe);
+        }
+    }
+    let resto = extent.saturating_sub(usado);
+    let pesos: Vec<u64> = sizes
+        .iter()
+        .map(|s| match s {
+            Size::Weight(w) => u64::from((*w).max(1)),
+            Size::Fixed(_) | Size::Auto => 0,
+        })
+        .collect();
+    let total: u64 = pesos.iter().sum();
+    if let Some(ultimo) = pesos.iter().rposition(|p| *p > 0) {
+        let mut dado: u64 = 0;
+        for (i, p) in pesos.iter().enumerate() {
+            if *p == 0 {
+                continue;
+            }
+            asignado[i] = if i == ultimo {
+                resto.saturating_sub(dado)
+            } else {
+                resto.saturating_mul(*p).checked_div(total).unwrap_or(0)
+            };
+            dado = dado.saturating_add(asignado[i]);
+        }
+    }
+    let mut out = Vec::with_capacity(sizes.len());
+    let mut off: u64 = 0;
+    for size in asignado {
+        let o = u16::try_from(off).unwrap_or(u16::MAX);
+        let s16 = u16::try_from(size).unwrap_or(u16::MAX);
         out.push(match dir {
-            Dir::Horizontal => Rect::new(area.x.saturating_add(off), area.y, size16, area.height),
-            Dir::Vertical => Rect::new(area.x, area.y.saturating_add(off), area.width, size16),
+            Dir::Horizontal => Rect::new(area.x.saturating_add(o), area.y, s16, area.height),
+            Dir::Vertical => Rect::new(area.x, area.y.saturating_add(o), area.width, s16),
         });
-        usado = usado.saturating_add(size);
+        off = off.saturating_add(size);
     }
     out
 }
@@ -106,23 +154,34 @@ fn place(node: &Node, area: Rect, decls: &KindRegistry, out: &mut Resolved) {
         Node::Split {
             dir,
             children,
-            weights,
+            sizes,
         } => {
-            let pesos: Vec<u32> = (0..children.len())
-                .map(|i| {
-                    let w = weights.get(i).copied().unwrap_or(1);
-                    if w == 0 {
+            let tam: Vec<Size> = (0..children.len())
+                .map(|i| match sizes.get(i) {
+                    Some(Size::Weight(0)) => {
                         out.diagnostics
                             .push(LayoutDiagnostic::ZeroWeightRaised { at: i });
+                        Size::Weight(1)
                     }
-                    u32::from(w.max(1))
+                    Some(otro) => *otro,
+                    None => Size::Weight(1),
                 })
                 .collect();
-            let rects = distribute(area, *dir, &pesos);
-            let cabe = children.iter().zip(&rects).all(|(c, r)| {
-                let (mw, mh) = min_of(c, decls);
-                r.width >= mw && r.height >= mh
-            });
+            let rects = distribute(area, *dir, &tam);
+            // Un `Split` colapsa SOLO si todos sus hijos son ponderados.
+            //
+            // Colapsar es «estos hermanos se disputan el mismo eje y no caben,
+            // así que enseña uno». En cuanto hay un hijo fijo, el reparto ya no
+            // es una disputa: es cromo acoplado más una zona flexible, y
+            // colapsarlo se llevaría por delante el cromo. Con el preset
+            // `orthodox` eso sería, literalmente, quedarse sin barra de estado
+            // en un terminal bajo. Lo que sí colapsa es la zona flexible por su
+            // cuenta, cuando le toque.
+            let cabe = !tam.iter().all(|s| matches!(s, Size::Weight(_)))
+                || children.iter().zip(&rects).all(|(c, r)| {
+                    let (mw, mh) = min_of(c, decls);
+                    r.width >= mw && r.height >= mh
+                });
             if cabe {
                 for (c, r) in children.iter().zip(rects) {
                     place(c, r, decls, out);
@@ -164,7 +223,7 @@ mod tests {
     fn dos(a: Node, b: Node, dir: Dir) -> Node {
         Node::Split {
             dir,
-            weights: vec![1, 1],
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![a, b],
         }
     }
@@ -307,7 +366,7 @@ mod tests {
     fn un_peso_de_cero_se_sube_a_uno_con_diagnostico() {
         let arbol = Node::Split {
             dir: Dir::Horizontal,
-            weights: vec![0, 1],
+            sizes: vec![Size::Weight(0), Size::Weight(1)],
             children: vec![browser(1), browser(2)],
         };
         let out = resolve(r(0, 0, 100, 30), &arbol, &reg());
@@ -319,10 +378,128 @@ mod tests {
         );
     }
 
+    /// Un hijo `Fixed` cobra lo suyo y los `Weight` se reparten el resto.
+    #[test]
+    fn un_fijo_se_lleva_lo_suyo_y_los_pesos_el_resto() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(4), Size::Weight(1)],
+            children: vec![browser(1), browser(2), browser(3)],
+        };
+        let out = resolve(r(0, 0, 40, 24), &arbol, &reg());
+        let altos: Vec<u16> = out.placements.iter().map(|(_, re)| re.height).collect();
+        assert_eq!(
+            altos,
+            vec![10, 4, 10],
+            "20 de resto entre dos pesos, y el fijo aparte"
+        );
+    }
+
+    /// Un `Fixed` por debajo del mínimo de su kind SE RESPETA: el mínimo
+    /// decide cuándo colapsa un reparto proporcional, no desautoriza una
+    /// orden explícita.
+    #[test]
+    fn un_fijo_por_debajo_del_minimo_de_su_kind_se_respeta() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(1)],
+            children: vec![browser(1), browser(2)],
+        };
+        let out = resolve(r(0, 0, 40, 24), &arbol, &reg());
+        assert_eq!(out.placements.len(), 2, "no colapsa por culpa del fijo");
+        assert_eq!(
+            out.placements[1].1.height, 1,
+            "una fila, aunque el mínimo sean 5"
+        );
+    }
+
+    /// Si los fijos ya no caben se recortan en orden y los pesos se quedan sin
+    /// nada. Es lo que hace que un terminal diminuto siga pintando la barra de
+    /// estado en vez de la nada.
+    #[test]
+    fn si_los_fijos_no_caben_se_recortan_y_los_pesos_se_quedan_sin_nada() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Fixed(3), Size::Fixed(9), Size::Weight(1)],
+            children: vec![browser(1), browser(2), browser(3)],
+        };
+        let out = resolve(r(0, 0, 40, 5), &arbol, &reg());
+        let altos: Vec<u16> = out.placements.iter().map(|(_, re)| re.height).collect();
+        assert_eq!(
+            altos,
+            vec![3, 2, 0],
+            "el primero entero, el segundo recortado, el peso a cero"
+        );
+    }
+
+    /// Un `Split` con un hijo fijo NO colapsa aunque el ponderado se quede sin
+    /// sitio: colapsarlo se llevaría el cromo por delante. Con `orthodox` sería
+    /// quedarse sin barra de estado en un terminal bajo.
+    #[test]
+    fn un_split_con_un_hijo_fijo_no_colapsa() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(1)],
+            children: vec![browser(1), Node::slot(SlotId(2), KindId::new("status"))],
+        };
+        let out = resolve(r(0, 0, 40, 2), &arbol, &reg());
+        assert_eq!(out.placements.len(), 2, "la barra de estado sobrevive");
+        assert_eq!(out.placements[1].1.height, 1);
+    }
+
+    /// `Auto` cuenta como cero si llega hasta aquí. No debería —lo sustituye
+    /// `substitute_auto`— pero un reparto no es sitio para reventar.
+    #[test]
+    fn un_auto_sin_sustituir_cuenta_como_cero() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Auto],
+            children: vec![browser(1), browser(2)],
+        };
+        let out = resolve(r(0, 0, 40, 24), &arbol, &reg());
+        let altos: Vec<u16> = out.placements.iter().map(|(_, re)| re.height).collect();
+        assert_eq!(altos, vec![24, 0]);
+    }
+
     // --- propiedades ---
 
     fn se_solapan(a: Rect, b: Rect) -> bool {
         a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+    }
+
+    /// Tamaños arbitrarios, `Auto` incluido: `resolve` no debería verlo nunca
+    /// —lo sustituye `substitute_auto`— y las propiedades tienen que aguantar
+    /// que alguien se salte ese paso.
+    fn tam_arbitrario() -> impl Strategy<Value = Size> {
+        prop_oneof![
+            (0u16..5).prop_map(Size::Weight),
+            (0u16..12).prop_map(Size::Fixed),
+            Just(Size::Auto),
+        ]
+    }
+
+    /// Como [`arbol_arbitrario`] pero sin `Fixed` ni `Auto`.
+    fn arbol_ponderado() -> impl Strategy<Value = Node> {
+        let kinds = prop::sample::select(vec![
+            "browser", "tasks", "viewer", "compare", "sync", "terminal",
+        ]);
+        let hoja = (0u32..64, kinds).prop_map(|(id, k)| Node::slot(SlotId(id), KindId::new(k)));
+        hoja.prop_recursive(3, 24, 4, |inner| {
+            prop_oneof![
+                (prop::collection::vec(inner.clone(), 1..4), any::<bool>()).prop_map(
+                    |(children, horiz)| Node::split(
+                        if horiz {
+                            Dir::Horizontal
+                        } else {
+                            Dir::Vertical
+                        },
+                        children
+                    )
+                ),
+                (prop::collection::vec(inner, 1..4), 0usize..5)
+                    .prop_map(|(children, active)| Node::Tabs { children, active }),
+            ]
+        })
     }
 
     fn arbol_arbitrario() -> impl Strategy<Value = Node> {
@@ -334,11 +511,11 @@ mod tests {
             prop_oneof![
                 (
                     prop::collection::vec(inner.clone(), 1..4),
-                    prop::collection::vec(0u16..5, 1..4),
+                    prop::collection::vec(tam_arbitrario(), 1..4),
                     any::<bool>()
                 )
-                    .prop_map(|(children, mut weights, horiz)| {
-                        weights.resize(children.len(), 1);
+                    .prop_map(|(children, mut sizes, horiz)| {
+                        sizes.resize(children.len(), Size::Weight(1));
                         Node::Split {
                             dir: if horiz {
                                 Dir::Horizontal
@@ -346,7 +523,7 @@ mod tests {
                                 Dir::Vertical
                             },
                             children,
-                            weights,
+                            sizes,
                         }
                     }),
                 (prop::collection::vec(inner, 1..4), 0usize..5)
@@ -374,9 +551,13 @@ mod tests {
 
         /// Todo hueco colocado cumple su mínimo, salvo en el caso «no cabe
         /// nada», que se reconoce porque solo hay UNA colocación.
+        ///
+        /// Sobre árboles SOLO PONDERADOS, porque la propiedad es del reparto
+        /// proporcional: un hijo `Fixed` puede quedar por debajo de su mínimo
+        /// a propósito —lo pidió el usuario— y eso tiene sus tests de tabla.
         #[test]
         fn todo_lo_colocado_cumple_su_minimo(
-            arbol in arbol_arbitrario(), w in 1u16..200, h in 1u16..80
+            arbol in arbol_ponderado(), w in 1u16..200, h in 1u16..80
         ) {
             // Con ids repetidos `kind_of` devuelve el del PRIMERO, así que el
             // mínimo que compararíamos podría no ser el de este hueco.

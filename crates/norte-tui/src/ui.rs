@@ -78,15 +78,15 @@ fn tasks_rows(app: &App) -> u16 {
 /// las filas que aparecen de verdad en el buffer — si el layout cambia, ese
 /// test cae aquí.
 #[must_use]
-pub fn pane_list_rows(app: &App, frame_height: u16) -> u16 {
+pub fn pane_list_rows(app: &App, area: Rect) -> u16 {
     // Con el visor abierto no se pinta ningún pane: 0 filas visibles.
     if app.viewer.is_some() {
         return 0;
     }
-    frame_height
-        .saturating_sub(tasks_rows(app))
-        .saturating_sub(1) // barra de estado
-        .saturating_sub(3) // bordes del bloque (2) + cabecera de columnas (1)
+    // El alto sale del REPARTO, no de restar a mano la franja de tareas y la
+    // barra: esas dos son ya huecos del árbol. Lo que queda aquí es el cromo
+    // del propio pane, que el árbol no conoce.
+    pane_rects(app, area)[0].height.saturating_sub(3) // bordes del bloque (2) + cabecera de columnas (1)
 }
 
 /// Lo que hay que hacer al MODELO justo antes de pintar un frame de `height`
@@ -102,7 +102,7 @@ pub fn pane_list_rows(app: &App, frame_height: u16) -> u16 {
 /// frame de retraso, y el frame retrasado es justo el que el usuario mira
 /// cuando el cursor toca el borde.
 pub fn before_frame(app: &mut App, area: Rect) {
-    let filas = usize::from(pane_list_rows(app, area.height));
+    let filas = usize::from(pane_list_rows(app, area));
     for pane in &mut app.panes {
         pane.reconcile_viewport(filas);
     }
@@ -122,12 +122,70 @@ pub fn before_frame(app: &mut App, area: Rect) {
     }
 }
 
-/// El área que ocupan los panes —o el panel que los sustituye— en un frame de
-/// `area`: el alto del frame menos la franja de tasks y la barra de estado.
+/// El reparto de ESTE frame, con los `Auto` ya sustituidos.
 ///
-/// Es el `rows[0]` de [`draw`], y vive aquí para que [`before_frame`] y el
-/// pintado no puedan discrepar sobre cuánto sitio hay.
-fn overlay_body(app: &App, area: Rect) -> Rect {
+/// El árbol guardado (`app.layout`) conserva sus `Auto`; el del frame no.
+/// Sustituir aquí y no dentro de `resolve` es lo que mantiene al motor puro y
+/// sin closures en su firma.
+fn resolved_frame(app: &App, area: Rect) -> norte_frontend::layout::Resolved {
+    let arbol = app.layout.substitute_auto(&|id| natural(app, id));
+    norte_frontend::layout::resolve(crate::panel::from_ratatui(area), &arbol, &app.kinds)
+}
+
+/// El tamaño que pide un hueco por su CONTENIDO.
+///
+/// Solo la franja de tareas tiene uno: `min(tareas, 6)` filas, y cero en
+/// reposo. Es lo único de la pantalla que el árbol no puede saber solo.
+fn natural(app: &App, id: norte_frontend::layout::SlotId) -> (u16, u16) {
+    if id == crate::panel::SLOT_TASKS {
+        (0, tasks_rows(app))
+    } else {
+        (0, 0)
+    }
+}
+
+/// Dónde cayó un hueco en este reparto.
+fn slot_rect(
+    res: &norte_frontend::layout::Resolved,
+    id: norte_frontend::layout::SlotId,
+) -> Option<Rect> {
+    res.placements
+        .iter()
+        .find(|(i, _)| *i == id)
+        .map(|(_, r)| crate::panel::to_ratatui(*r))
+}
+
+/// El CUERPO: la caja envolvente de los dos `browser` colocados.
+///
+/// Con uno solo colocado —el `Split` colapsó— la caja es ese mismo, que es
+/// exactamente el sitio que un visor o un panel de diferencias debe ocupar.
+fn body_rect(res: &norte_frontend::layout::Resolved) -> Option<Rect> {
+    let mut caja: Option<Rect> = None;
+    for id in [crate::panel::SLOT_LEFT, crate::panel::SLOT_RIGHT] {
+        if let Some(r) = slot_rect(res, id) {
+            caja = Some(match caja {
+                None => r,
+                Some(c) => {
+                    let x = c.x.min(r.x);
+                    let y = c.y.min(r.y);
+                    Rect {
+                        x,
+                        y,
+                        width: (c.x + c.width).max(r.x + r.width) - x,
+                        height: (c.y + c.height).max(r.y + r.height) - y,
+                    }
+                }
+            });
+        }
+    }
+    caja
+}
+
+/// El cuerpo calculado a mano, para cuando el reparto no coloca ningún pane.
+///
+/// No pasa con el preset `orthodox`; existe porque un layout sin `browser` no
+/// puede dejar sin sitio a un visor abierto.
+fn chrome_body(app: &App, area: Rect) -> Rect {
     let alto = area
         .height
         .saturating_sub(tasks_rows(app))
@@ -138,41 +196,33 @@ fn overlay_body(app: &App, area: Rect) -> Rect {
     }
 }
 
-/// Dónde caen los DOS panes en un frame de `area`, según el motor de layout.
+/// El área que ocupan los panes —o el panel que los sustituye— en `area`.
+fn overlay_body(app: &App, area: Rect) -> Rect {
+    let res = resolved_frame(app, area);
+    body_rect(&res).unwrap_or_else(|| chrome_body(app, area))
+}
+
+/// Dónde caen los DOS panes, según el reparto `res`.
 ///
 /// Es la única aritmética del corte entre panes que queda en el TUI: `draw` y
-/// [`pane_geometry`] la leen los dos, en vez de calcular cada uno su
-/// `Percentage(50)` y confiar en que coincidan. El reparto lo hace
-/// `norte_frontend::layout::resolve` sobre el árbol de `app.layout`, que en
-/// L1a es siempre el preset `orthodox`.
+/// [`pane_geometry`] la leen los dos en vez de calcular cada uno su mitad y
+/// confiar en que coincidan.
 ///
 /// # El respaldo, y cuándo desaparece
 ///
-/// Si el motor NO coloca los dos —el cuerpo es más estrecho que dos veces el
-/// mínimo del `browser`, así que el `Split` colapsa a pestañas— se cae al
-/// corte mitad y mitad de siempre. Pintar de verdad el colapso pide dos cosas
-/// que L1a no tiene: pintar un solo pane donde hoy siempre hay dos, y
-/// reconciliar el foco cuando el pane enfocado deja de estar en pantalla. Las
-/// dos son de L1b, y hacerlas aquí sería cambiar la pantalla en el commit que
-/// promete no cambiarla.
-fn pane_rects(app: &App, area: Rect) -> [Rect; 2] {
-    let cuerpo = overlay_body(app, area);
-    let resuelto = norte_frontend::layout::resolve(
-        crate::panel::from_ratatui(cuerpo),
-        &app.layout,
-        &app.kinds,
-    );
-    let mut out = [None, None];
-    for (id, r) in &resuelto.placements {
-        if *id == crate::panel::SLOT_LEFT {
-            out[0] = Some(crate::panel::to_ratatui(*r));
-        } else if *id == crate::panel::SLOT_RIGHT {
-            out[1] = Some(crate::panel::to_ratatui(*r));
-        }
-    }
-    if let [Some(a), Some(b)] = out {
+/// Si el motor no coloca los dos —el cuerpo es más estrecho que dos veces el
+/// mínimo del `browser`, así que el `Split` colapsa— se cae al corte mitad y
+/// mitad de siempre. Pintar de verdad el colapso pide pintar un solo pane
+/// donde hoy siempre hay dos y reconciliar el foco cuando el enfocado sale de
+/// pantalla: es la fase P2.
+fn pane_cols(app: &App, res: &norte_frontend::layout::Resolved, area: Rect) -> [Rect; 2] {
+    if let (Some(a), Some(b)) = (
+        slot_rect(res, crate::panel::SLOT_LEFT),
+        slot_rect(res, crate::panel::SLOT_RIGHT),
+    ) {
         return [a, b];
     }
+    let cuerpo = body_rect(res).unwrap_or_else(|| chrome_body(app, area));
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -180,7 +230,13 @@ fn pane_rects(app: &App, area: Rect) -> [Rect; 2] {
     [cols[0], cols[1]]
 }
 
-/// El interior de un bloque con borde por los cuatro lados.
+/// Como [`pane_cols`], resolviendo el frame por su cuenta.
+fn pane_rects(app: &App, area: Rect) -> [Rect; 2] {
+    let res = resolved_frame(app, area);
+    pane_cols(app, &res, area)
+}
+
+/// El interior de un bloque con borde por los cuatro lados./// El interior de un bloque con borde por los cuatro lados.
 fn inner_de_bloque(area: Rect) -> Rect {
     Block::default().borders(Borders::ALL).inner(area)
 }
@@ -269,6 +325,71 @@ fn painted_len_and_selection(pane: &Pane) -> (usize, Option<usize>) {
     }
 }
 
+/// El cuerpo del frame: los dos panes —o el panel que los sustituye—, la
+/// franja de tareas y la barra de estado.
+///
+/// Aparte de [`draw`] porque un reparto, dos ramas de sustitución y tres
+/// pintados no caben en una función que además monta todos los overlays.
+fn draw_body(frame: &mut Frame<'_>, app: &App) {
+    // UN reparto por frame: de él salen el cuerpo, los dos panes, la
+    // franja de tareas y la barra de estado.
+    let res = resolved_frame(app, frame.area());
+    let cuerpo = body_rect(&res).unwrap_or_else(|| chrome_body(app, frame.area()));
+    let tasks_area = slot_rect(&res, crate::panel::SLOT_TASKS).unwrap_or(Rect {
+        x: cuerpo.x,
+        y: cuerpo.y.saturating_add(cuerpo.height),
+        width: cuerpo.width,
+        height: 0,
+    });
+    let status_area = slot_rect(&res, crate::panel::SLOT_STATUS).unwrap_or(Rect {
+        x: cuerpo.x,
+        y: frame.area().height.saturating_sub(1),
+        width: cuerpo.width,
+        height: 1,
+    });
+    let cols = pane_cols(app, &res, frame.area());
+    // #108 L5: `now` de las celdas de tiempo relativo — UNA lectura por
+    // frame; los tests lo fijan (`App::render_now_ms`) para snapshots
+    // estables.
+    let now_ms = app.render_now_ms.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+    });
+
+    // El panel de diferencias ocupa el sitio de los DOS panes: una fila
+    // tiene dos caras y un veredicto en medio, así que no cabe en media
+    // pantalla. La franja de tasks y la barra se quedan debajo, aunque la
+    // comparación no entre en el `TaskBoard` (igual que la búsqueda viva:
+    // su progreso lo pinta el pie del propio panel) — lo que se ve ahí
+    // debajo son las OTRAS tasks, que siguen corriendo.
+    if let Some(view) = &app.sync {
+        // Encima del de diferencias, que sigue vivo detrás con sus marcas:
+        // el plan es lo que hay que mirar mientras se decide, y volver a
+        // las filas es cerrar el plan.
+        draw_sync(frame, cuerpo, view, &app.theme);
+    } else if let Some(view) = &app.compare {
+        draw_compare(frame, cuerpo, view, &app.theme, &app.compare_size_hints);
+    } else {
+        for (i, pane) in app.panes.iter().enumerate() {
+            draw_pane(
+                frame,
+                cols[i],
+                pane,
+                app.focus() == i,
+                &app.theme,
+                now_ms,
+                &app.columns,
+                // #117 tarea 2: el catálogo cacheado del scheme del pane (hints
+                // y cabeceras); sin él se pinta con defaults, jamás se espera.
+                app.attr_catalog(pane.dir().scheme()),
+            );
+        }
+    }
+    draw_tasks(frame, tasks_area, app);
+    draw_status(frame, status_area, app);
+}
+
 /// Pinta el frame completo: panes (o viewer) + panel de tasks + barra de
 /// estado + modal por encima.
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
@@ -298,56 +419,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(viewer) = &app.viewer {
         draw_viewer(frame, viewer, app);
     } else {
-        let tasks_h = tasks_rows(app);
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(1),
-                Constraint::Length(tasks_h),
-                Constraint::Length(1),
-            ])
-            .split(frame.area());
-        let cols = pane_rects(app, frame.area());
-        // #108 L5: `now` de las celdas de tiempo relativo — UNA lectura por
-        // frame; los tests lo fijan (`App::render_now_ms`) para snapshots
-        // estables.
-        let now_ms = app.render_now_ms.unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        });
-
-        // El panel de diferencias ocupa el sitio de los DOS panes: una fila
-        // tiene dos caras y un veredicto en medio, así que no cabe en media
-        // pantalla. La franja de tasks y la barra se quedan debajo, aunque la
-        // comparación no entre en el `TaskBoard` (igual que la búsqueda viva:
-        // su progreso lo pinta el pie del propio panel) — lo que se ve ahí
-        // debajo son las OTRAS tasks, que siguen corriendo.
-        if let Some(view) = &app.sync {
-            // Encima del de diferencias, que sigue vivo detrás con sus marcas:
-            // el plan es lo que hay que mirar mientras se decide, y volver a
-            // las filas es cerrar el plan.
-            draw_sync(frame, rows[0], view, &app.theme);
-        } else if let Some(view) = &app.compare {
-            draw_compare(frame, rows[0], view, &app.theme, &app.compare_size_hints);
-        } else {
-            for (i, pane) in app.panes.iter().enumerate() {
-                draw_pane(
-                    frame,
-                    cols[i],
-                    pane,
-                    app.focus() == i,
-                    &app.theme,
-                    now_ms,
-                    &app.columns,
-                    // #117 tarea 2: el catálogo cacheado del scheme del pane (hints
-                    // y cabeceras); sin él se pinta con defaults, jamás se espera.
-                    app.attr_catalog(pane.dir().scheme()),
-                );
-            }
-        }
-        draw_tasks(frame, rows[1], app);
-        draw_status(frame, rows[2], app);
+        draw_body(frame, app);
     }
     if let Some(help) = &app.help {
         draw_help(frame, help, &app.theme, &app.dialog_hints.help);

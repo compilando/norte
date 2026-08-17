@@ -86,6 +86,27 @@ pub enum Dir {
     Vertical,
 }
 
+/// Cuánto sitio pide un hijo de un [`Node::Split`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Size {
+    /// Tantas celdas, pase lo que pase. La barra de estado es `Fixed(1)`.
+    ///
+    /// **Gana al mínimo del kind**: si pides tres celdas para algo cuyo mínimo
+    /// son cinco, te dan tres. El mínimo decide cuándo colapsa un reparto
+    /// PROPORCIONAL; no desautoriza una orden explícita.
+    Fixed(u16),
+    /// Reparto proporcional de lo que sobre tras los fijos. Los panes.
+    Weight(u16),
+    /// Lo que pida su contenido.
+    ///
+    /// La franja de tareas mide `min(tareas, 6)` filas y vale CERO en reposo,
+    /// y eso solo lo sabe quien tiene el `TaskBoard` delante. Se sustituye por
+    /// un [`Size::Fixed`] con [`Node::substitute_auto`] ANTES de repartir, así
+    /// que `resolve` nunca lo ve y sigue siendo pura.
+    Auto,
+}
+
 /// Parámetros de un hueco: bolsa OPACA que solo interpreta su kind.
 ///
 /// El motor no la lee nunca — es la mitad cliente de la misma decisión que
@@ -159,14 +180,14 @@ pub struct Bindings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Node {
-    /// Los hijos se reparten el área a lo largo de `dir`, según `weights`.
+    /// Los hijos se reparten el área a lo largo de `dir`, según `sizes`.
     Split {
         /// Por dónde se corta.
         dir: Dir,
         /// Los hijos, en orden de pintado.
         children: Vec<Node>,
-        /// Peso de cada hijo. Índice-paralelo a `children`.
-        weights: Vec<u16>,
+        /// Cuánto pide cada hijo. Índice-paralelo a `children`.
+        sizes: Vec<Size>,
     },
     /// Los hijos ocupan el mismo área y solo uno se ve.
     Tabs {
@@ -219,6 +240,82 @@ impl Node {
                 }
             }
             Self::Slot { id, .. } => out.push(*id),
+        }
+    }
+
+    /// Un `Split` de hijos con el mismo peso. El caso corriente.
+    #[must_use]
+    pub fn split(dir: Dir, children: Vec<Node>) -> Self {
+        let sizes = vec![Size::Weight(1); children.len()];
+        Self::Split {
+            dir,
+            children,
+            sizes,
+        }
+    }
+
+    /// El primer hueco del subárbol en orden de lectura.
+    ///
+    /// Es a quien se le pregunta su tamaño natural: un `Auto` sobre un
+    /// subárbol entero no tiene más remedio que apoyarse en alguien, y el
+    /// primero es el único que no depende de cómo se reparta después.
+    #[must_use]
+    pub fn first_slot_id(&self) -> Option<SlotId> {
+        match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => {
+                children.iter().find_map(Self::first_slot_id)
+            }
+            Self::Slot { id, .. } => Some(*id),
+        }
+    }
+
+    /// El mismo árbol con cada [`Size::Auto`] sustituido por el [`Size::Fixed`]
+    /// que diga `natural` para el primer hueco de ese hijo.
+    ///
+    /// El árbol GUARDADO conserva sus `Auto`; el árbol del FRAME no los tiene.
+    /// Así `resolve` no necesita una closure en su firma —que todos sus tests
+    /// tendrían que pasar— y esta función se prueba sola.
+    #[must_use]
+    pub fn substitute_auto(&self, natural: &dyn Fn(SlotId) -> (u16, u16)) -> Self {
+        match self {
+            Self::Split {
+                dir,
+                children,
+                sizes,
+            } => {
+                let hijos: Vec<Self> = children
+                    .iter()
+                    .map(|c| c.substitute_auto(natural))
+                    .collect();
+                let nuevos = children
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| match sizes.get(i) {
+                        Some(Size::Auto) => {
+                            let (w, h) = c.first_slot_id().map_or((0, 0), natural);
+                            Size::Fixed(match dir {
+                                Dir::Horizontal => w,
+                                Dir::Vertical => h,
+                            })
+                        }
+                        Some(otro) => *otro,
+                        None => Size::Weight(1),
+                    })
+                    .collect();
+                Self::Split {
+                    dir: *dir,
+                    children: hijos,
+                    sizes: nuevos,
+                }
+            }
+            Self::Tabs { children, active } => Self::Tabs {
+                children: children
+                    .iter()
+                    .map(|c| c.substitute_auto(natural))
+                    .collect(),
+                active: *active,
+            },
+            Self::Slot { .. } => self.clone(),
         }
     }
 
@@ -275,7 +372,7 @@ mod tests {
     fn el_arbol_hace_round_trip() {
         let arbol = Node::Split {
             dir: Dir::Horizontal,
-            weights: vec![1, 1],
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::Tabs {
@@ -319,12 +416,72 @@ mod tests {
         assert_eq!(arbol.slot_ids(), vec![SlotId(1), SlotId(2)]);
     }
 
+    /// `substitute_auto` cambia los `Auto` por `Fixed` y NO toca nada más: el
+    /// árbol guardado conserva sus `Auto`, el del frame no los tiene.
+    #[test]
+    fn substitute_auto_solo_cambia_los_auto() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
+            children: vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::new("tasks")),
+                Node::slot(SlotId(3), KindId::new("status")),
+            ],
+        };
+        let del_frame = arbol.substitute_auto(&|id| if id == SlotId(2) { (0, 4) } else { (0, 0) });
+        let Node::Split { sizes, .. } = &del_frame else {
+            panic!("sigue siendo un split")
+        };
+        assert_eq!(
+            *sizes,
+            vec![Size::Weight(1), Size::Fixed(4), Size::Fixed(1)]
+        );
+        let Node::Split { sizes: orig, .. } = &arbol else {
+            panic!("split")
+        };
+        assert_eq!(orig[1], Size::Auto, "el árbol guardado no se toca");
+    }
+
+    /// En un corte HORIZONTAL, `Auto` toma el ANCHO natural, no el alto. Una
+    /// sidebar mide lo que mide de ancha; su alto lo pone el reparto.
+    #[test]
+    fn substitute_auto_toma_el_eje_del_corte() {
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Auto, Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(1), KindId::new("places")),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        };
+        let del_frame = arbol.substitute_auto(&|_| (18, 3));
+        let Node::Split { sizes, .. } = &del_frame else {
+            panic!("split")
+        };
+        assert_eq!(sizes[0], Size::Fixed(18), "el ancho, no el alto");
+    }
+
+    /// El `Auto` de un subárbol se apoya en su PRIMER hueco: es el único que
+    /// no depende de cómo se reparta después.
+    #[test]
+    fn el_primer_hueco_es_a_quien_se_le_pregunta() {
+        let arbol = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(7), KindId::browser()),
+                Node::slot(SlotId(8), KindId::browser()),
+            ],
+        );
+        assert_eq!(arbol.first_slot_id(), Some(SlotId(7)));
+    }
+
     /// Dos huecos con el mismo id es incoherente, y el árbol sabe decirlo.
     #[test]
     fn los_ids_repetidos_se_detectan() {
         let arbol = Node::Split {
             dir: Dir::Vertical,
-            weights: vec![1, 1],
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(1), KindId::browser()),

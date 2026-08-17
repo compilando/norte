@@ -35,7 +35,7 @@ pub use kinds::{KindDecl, KindRegistry};
 pub use resolve::{Resolved, resolve};
 pub use roles::{Roles, resolve_follow};
 pub use store::SlotStore;
-pub use tree::{Bindings, Dir, Follow, KindId, Node, Params, Rect, RoleId, SlotId};
+pub use tree::{Bindings, Dir, Follow, KindId, Node, Params, Rect, RoleId, Size, SlotId};
 
 /// Lo que impide usar un layout.
 ///
@@ -51,10 +51,10 @@ pub enum LayoutError {
     /// Un `Split` sin hijos no reparte nada.
     #[error("un `Split` sin hijos")]
     EmptySplit,
-    /// Los pesos son índice-paralelos a los hijos.
-    #[error("{count} pesos para {children} hijos")]
+    /// Los tamaños son índice-paralelos a los hijos.
+    #[error("{count} tamaños para {children} hijos")]
     WeightsMismatch {
-        /// Cuántos pesos había.
+        /// Cuántos tamaños había.
         count: usize,
         /// Cuántos hijos hay.
         children: usize,
@@ -104,14 +104,14 @@ pub fn validate(tree: &Node) -> Result<(), LayoutError> {
 fn validate_shape(node: &Node) -> Result<(), LayoutError> {
     match node {
         Node::Split {
-            children, weights, ..
+            children, sizes, ..
         } => {
             if children.is_empty() {
                 return Err(LayoutError::EmptySplit);
             }
-            if weights.len() != children.len() {
+            if sizes.len() != children.len() {
                 return Err(LayoutError::WeightsMismatch {
-                    count: weights.len(),
+                    count: sizes.len(),
                     children: children.len(),
                 });
             }
@@ -141,7 +141,7 @@ mod tests {
     fn un_arbol_con_ids_repetidos_no_se_usa() {
         let arbol = Node::Split {
             dir: Dir::Vertical,
-            weights: vec![1, 1],
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(1), KindId::browser()),
@@ -153,13 +153,13 @@ mod tests {
         );
     }
 
-    /// Los pesos son índice-paralelos: uno de menos y el reparto pintaría un
-    /// hueco donde no toca en vez de fallar.
+    /// Los tamaños son índice-paralelos: uno de menos y el reparto pintaría
+    /// un hueco donde no toca en vez de fallar.
     #[test]
-    fn los_pesos_tienen_que_ser_tantos_como_hijos() {
+    fn los_tamanos_tienen_que_ser_tantos_como_hijos() {
         let arbol = Node::Split {
             dir: Dir::Horizontal,
-            weights: vec![1],
+            sizes: vec![Size::Weight(1)],
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::browser()),
@@ -178,7 +178,7 @@ mod tests {
     fn un_arbol_sano_valida() {
         let arbol = Node::Split {
             dir: Dir::Horizontal,
-            weights: vec![1, 1],
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::browser()),

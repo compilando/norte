@@ -147,7 +147,7 @@ impl<P> SlotStore<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{Dir, KindId};
+    use crate::layout::{Dir, KindId, Size};
 
     fn browser(id: u32) -> Node {
         Node::slot(SlotId(id), KindId::browser())
@@ -155,7 +155,7 @@ mod tests {
     fn dos(a: u32, b: u32) -> Node {
         Node::Split {
             dir: Dir::Horizontal,
-            weights: vec![1, 1],
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![browser(a), browser(b)],
         }
     }

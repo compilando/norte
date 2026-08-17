@@ -123,12 +123,7 @@ mod tests {
         (arbol, res)
     }
     fn split(children: Vec<Node>) -> Node {
-        let weights = vec![1; children.len()];
-        Node::Split {
-            dir: Dir::Horizontal,
-            children,
-            weights,
-        }
+        Node::split(Dir::Horizontal, children)
     }
 
     /// Con dos browsers, `target` es el otro. Eso es lo que hace que el layout
