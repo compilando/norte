@@ -42,3 +42,8 @@ nothing. Closing the last panel on a side is **not** this; that is
 
 A tab you cannot see costs nothing: it does not watch its directory and asks
 for nothing. It catches up when you come back to it.
+
+With the mouse: click a tab to go to it, `[+]` to open another and `[x]` to
+close the one you are looking at. Clicking a panel's bar gives it the focus
+first — clicking on one side and having the other act would be the opposite of
+what the finger said.

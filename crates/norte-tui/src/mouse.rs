@@ -157,6 +157,10 @@ pub struct MouseState {
     /// hubo frame. Sin geometría no se resuelve NADA: un click contra una
     /// pantalla que no existe es peor que un click ignorado.
     geometry: Option<Vec<PaneGeometry>>,
+    /// Las zonas pulsables de las barras de pestañas del último frame.
+    ///
+    /// Vacío = ningún panel tiene pestañas, que es el caso de siempre.
+    tab_zones: Vec<crate::ui::TabZone>,
     /// La máquina de gestos compartida (`norte-frontend`).
     drag: Drag,
     /// `(cuándo, dónde)` del último click izquierdo, para el doble.
@@ -209,7 +213,11 @@ impl MouseState {
 /// serán cinco mañana, y el quinto no tiene por qué acordarse. Lo que sí es
 /// invariante es que un gesto vive de índices y los índices los mueve el
 /// listado: comprobarlo aquí cubre los cuatro, y al quinto gratis.
-pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>) {
+pub fn after_frame(
+    app: &mut App,
+    geometry: Option<Vec<PaneGeometry>>,
+    tab_zones: Vec<crate::ui::TabZone>,
+) {
     let vigencia = Vigencia {
         epochs: app
             .panes
@@ -225,6 +233,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>) {
     }
     app.mouse.vigencia = vigencia;
     app.mouse.geometry = geometry;
+    app.mouse.tab_zones = tab_zones;
 }
 
 /// Qué debe hacer el run loop tras un evento de ratón. Todo lo que se puede
@@ -361,6 +370,28 @@ fn overlay_open(app: &App) -> bool {
         || app.compare.is_some()
 }
 
+/// La zona de barra de pestañas bajo `(col, row)`, si hay alguna.
+fn tab_zone_at(app: &App, col: u16, row: u16) -> Option<crate::ui::TabZone> {
+    app.mouse
+        .tab_zones
+        .iter()
+        .find(|z| z.row == row && col >= z.x0 && col <= z.x1)
+        .copied()
+}
+
+/// Aplica lo que hace pulsar una zona de la barra de pestañas.
+fn apply_tab_zone(app: &mut App, z: crate::ui::TabZone) {
+    // El panel de la barra pulsada pasa a tener el foco: pulsar una pestaña
+    // del otro lado y que la orden la reciba este sería lo contrario de lo
+    // que el dedo dijo.
+    app.set_focus(z.pane);
+    match z.action {
+        crate::ui::TabAction::Goto(i) => app.tab_goto(i + 1),
+        crate::ui::TabAction::New => app.tab_new(),
+        crate::ui::TabAction::Close => app.tab_close(),
+    }
+}
+
 /// Un evento de ratón de crossterm, con el reloj real.
 pub fn handle(app: &mut App, ev: MouseEvent) -> After {
     handle_at(app, ev, Instant::now())
@@ -371,6 +402,15 @@ pub fn handle(app: &mut App, ev: MouseEvent) -> After {
 /// test que falla en CI un martes.
 pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     if overlay_open(app) {
+        return After::Nothing;
+    }
+    // Las barras de pestañas se atienden ANTES: sus celdas son cromo para el
+    // hit test del listado, así que un click ahí caería en «este panel,
+    // ninguna fila» y el botón no haría nada.
+    if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
+        && let Some(z) = tab_zone_at(app, ev.column, ev.row)
+    {
+        apply_tab_zone(app, z);
         return After::Nothing;
     }
     let hit = hit_test(app, ev.column, ev.row);

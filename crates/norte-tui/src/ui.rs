@@ -285,10 +285,13 @@ fn pane_rects(app: &App, area: Rect) -> Vec<Rect> {
 
 /// Las pestañas del pane del lado `side`, si está en un grupo.
 ///
+/// `pub` porque el ratón necesita los mismos títulos para medir las zonas.
+///
 /// El título de cada una es el nombre del directorio de su hueco, saneado por
 /// `display_name`: un directorio con nombre hostil dentro de una pestaña es
 /// tan hostil como dentro de un listado (regla 1).
-fn tab_strip_for(app: &App, side: usize) -> Option<TabStrip> {
+#[must_use]
+pub fn tab_strip_for(app: &App, side: usize) -> Option<TabStrip> {
     let slot = app.panes.slot_of(side);
     let (huecos, activa) = app.layout.tabs_of(slot)?;
     let titulos = huecos
@@ -4497,6 +4500,90 @@ pub struct TabStrip {
     pub activa: usize,
 }
 
+/// Lo que se puede pulsar en una barra de pestañas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabAction {
+    /// Ir a la pestaña `n` (base 0).
+    Goto(usize),
+    /// Abrir una pestaña.
+    New,
+    /// Cerrar la activa.
+    Close,
+}
+
+/// Una zona pulsable de la barra de pestañas de un panel.
+///
+/// Se calcula del MISMO sitio que pinta la barra, por lo mismo que la
+/// geometría del listado: un rango deducido a ojo resuelve el click a la
+/// pestaña de al lado, y eso no se ve como un bug de ratón.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabZone {
+    /// Posición visible del panel.
+    pub pane: usize,
+    /// Fila donde está la barra.
+    pub row: u16,
+    /// Primera columna, inclusive.
+    pub x0: u16,
+    /// Última columna, inclusive.
+    pub x1: u16,
+    /// Qué hace pulsarla.
+    pub action: TabAction,
+}
+
+/// El botón de abrir pestaña. ASCII: un `+` en una caja no puede medir dos
+/// celdas en un terminal cualquiera, y un `⊕` sí.
+const TAB_NEW: &str = "[+]";
+/// El botón de cerrar la activa.
+const TAB_CLOSE: &str = "[x]";
+
+/// Los trozos de la barra, cada uno con su ancho y qué hace pulsarlo.
+fn tab_pieces(t: &TabStrip) -> Vec<(String, TabAction)> {
+    let mut v: Vec<(String, TabAction)> = t
+        .titulos
+        .iter()
+        .enumerate()
+        .map(|(i, titulo)| (format!(" {titulo} "), TabAction::Goto(i)))
+        .collect();
+    v.push((TAB_NEW.to_owned(), TabAction::New));
+    v.push((TAB_CLOSE.to_owned(), TabAction::Close));
+    v
+}
+
+/// Las zonas pulsables de los paneles con pestañas, en el frame de `area`.
+///
+/// Vive junto al pintado —y no en el ratón— por lo mismo que
+/// [`pane_geometry`]: quien sabe dónde cayó cada cosa es el `draw`.
+#[must_use]
+pub fn tab_zones(app: &App, area: Rect) -> Vec<TabZone> {
+    let cols = pane_rects(app, area);
+    let mut out = Vec::new();
+    for (pane, rect) in cols.iter().enumerate() {
+        let Some(t) = tab_strip_for(app, pane) else {
+            continue;
+        };
+        // La barra es la PRIMERA fila del interior del bloque.
+        let row = rect.y.saturating_add(1);
+        let mut x = rect.x.saturating_add(1);
+        let tope = rect.x.saturating_add(rect.width).saturating_sub(1);
+        for (texto, action) in tab_pieces(&t) {
+            let w = u16::try_from(UnicodeWidthStr::width(texto.as_str())).unwrap_or(0);
+            if w == 0 || x >= tope {
+                break;
+            }
+            let x1 = x.saturating_add(w).saturating_sub(1).min(tope - 1);
+            out.push(TabZone {
+                pane,
+                row,
+                x0: x,
+                x1,
+                action,
+            });
+            x = x.saturating_add(w);
+        }
+    }
+    out
+}
+
 /// Marca del panel DESTINO en su título. ASCII a propósito, como el badge
 /// hostil: una flecha unicode es ambiguous-width y ocuparía dos celdas en
 /// muchos terminales.
@@ -4533,16 +4620,19 @@ fn draw_tab_strip(
 
 /// La línea de la barra de pestañas.
 fn tab_strip_line<'a>(t: &TabStrip, theme: &TuiTheme) -> ratatui::text::Line<'a> {
-    let mut spans = Vec::new();
-    for (i, titulo) in t.titulos.iter().enumerate() {
-        let etiqueta = format!(" {titulo} ");
-        let estilo = if i == t.activa {
-            theme.role(Role::Selection)
-        } else {
-            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)
-        };
-        spans.push(ratatui::text::Span::styled(etiqueta, estilo));
-    }
+    // Los MISMOS trozos que mide `tab_zones`: si los dos los calcularan por
+    // su cuenta, un click resolvería a la pestaña de al lado.
+    let spans = tab_pieces(t)
+        .into_iter()
+        .map(|(texto, action)| {
+            let estilo = if action == TabAction::Goto(t.activa) {
+                theme.role(Role::Selection)
+            } else {
+                ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)
+            };
+            ratatui::text::Span::styled(texto, estilo)
+        })
+        .collect::<Vec<_>>();
     ratatui::text::Line::from(spans)
 }
 
