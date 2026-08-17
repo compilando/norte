@@ -156,6 +156,15 @@ impl PaneSlots {
         self.store.get(id).and_then(TuiPanel::as_browser)
     }
 
+    /// El listado de un hueco cualquiera, para mutarlo.
+    ///
+    /// Es la puerta que necesita el bucle: una respuesta en vuelo lleva el
+    /// HUECO al que iba, y aplicarla por posición sería aplicarla a quien
+    /// ocupe esa posición cuando llegue.
+    pub fn browser_mut(&mut self, id: SlotId) -> Option<&mut Pane> {
+        self.store.get_mut(id).and_then(TuiPanel::as_browser_mut)
+    }
+
     /// Mete un listado nuevo en el store, para un hueco recién acuñado.
     pub fn insert_browser(&mut self, id: SlotId, pane: Pane) {
         self.store.insert(id, TuiPanel::Browser(Box::new(pane)));
