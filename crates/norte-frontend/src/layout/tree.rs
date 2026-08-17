@@ -107,6 +107,41 @@ pub enum Size {
     Auto,
 }
 
+/// Un borde contra el que se acopla un panel.
+///
+/// Existe para [`Node::dock`]: un sidebar no se «parte» de un hueco (eso es
+/// [`Node::split_slot`], que reparte el sitio de UNO), se pega al costado de
+/// lo que ya hay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Edge {
+    /// Izquierda: primer hijo de un `Split` horizontal.
+    Left,
+    /// Derecha: último hijo de un `Split` horizontal.
+    Right,
+    /// Arriba: primer hijo de un `Split` vertical.
+    Top,
+    /// Abajo: último hijo de un `Split` vertical.
+    Bottom,
+}
+
+impl Edge {
+    /// El eje en el que corta este borde.
+    #[must_use]
+    pub const fn axis(self) -> Dir {
+        match self {
+            Self::Left | Self::Right => Dir::Horizontal,
+            Self::Top | Self::Bottom => Dir::Vertical,
+        }
+    }
+
+    /// ¿Va DELANTE de los que ya están?
+    #[must_use]
+    pub const fn is_front(self) -> bool {
+        matches!(self, Self::Left | Self::Top)
+    }
+}
+
 /// Parámetros de un hueco: bolsa OPACA que solo interpreta su kind.
 ///
 /// El motor no la lee nunca — es la mitad cliente de la misma decisión que
@@ -355,6 +390,89 @@ impl Node {
                     .collect(),
             },
         }
+    }
+
+    /// Acopla `nuevo` contra el borde `edge` del reparto donde vive `anchor`.
+    ///
+    /// El sitio exacto es el `Split` MÁS PROFUNDO que contiene a `anchor` y
+    /// corre en el eje de `edge`; ahí entra como primer hijo (`Left`/`Top`) o
+    /// como último (`Right`/`Bottom`), con el tamaño `size`.
+    ///
+    /// Buscar ese split y no la raíz es la diferencia entre un sidebar al lado
+    /// de los listados y un sidebar al lado de TODO: en el preset `orthodox`
+    /// la raíz es vertical (cuerpo, tareas, barra de estado), así que envolver
+    /// la raíz dejaría la barra de estado y la franja de tareas a la derecha
+    /// del sidebar en vez de debajo de los listados.
+    ///
+    /// Si ningún ancestro corre en ese eje —un solo panel, o una pila
+    /// vertical— se envuelve el árbol entero en un `Split` nuevo, con lo que
+    /// había ponderado. Un `anchor` que no está devuelve el árbol intacto.
+    ///
+    /// Lo contrario es [`Self::close_slot`], que ya disuelve el `Split` que se
+    /// queda con un hijo: acoplar y desacoplar devuelve el árbol de partida.
+    #[must_use]
+    pub fn dock(&self, anchor: SlotId, edge: Edge, size: Size, nuevo: &Self) -> Self {
+        if !self.contains(anchor) {
+            return self.clone();
+        }
+        self.dock_inner(anchor, edge, size, nuevo)
+            .unwrap_or_else(|| {
+                let (children, sizes) = if edge.is_front() {
+                    (
+                        vec![nuevo.clone(), self.clone()],
+                        vec![size, Size::Weight(1)],
+                    )
+                } else {
+                    (
+                        vec![self.clone(), nuevo.clone()],
+                        vec![Size::Weight(1), size],
+                    )
+                };
+                Self::Split {
+                    dir: edge.axis(),
+                    children,
+                    sizes,
+                }
+            })
+    }
+
+    /// `Some` si algún `Split` del camino a `anchor` corría en el eje pedido y
+    /// se quedó con `nuevo`; `None` si ninguno, y entonces decide [`Self::dock`].
+    fn dock_inner(&self, anchor: SlotId, edge: Edge, size: Size, nuevo: &Self) -> Option<Self> {
+        let hijos = match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => children,
+            Self::Slot { .. } => return None,
+        };
+        let pos = hijos.iter().position(|c| c.contains(anchor))?;
+        // Primero hacia dentro: el reparto que manda es el más PROFUNDO que
+        // corre en el eje, no el primero que se encuentra bajando.
+        if let Some(dentro) = hijos[pos].dock_inner(anchor, edge, size, nuevo) {
+            return Some(self.with_child(pos, dentro));
+        }
+        // Una `Tabs` no acepta el acople: meterlo dentro de una pestaña haría
+        // que el sidebar desapareciera al cambiar de pestaña, que es justo lo
+        // que un sidebar no hace. Sube al padre.
+        let Self::Split {
+            dir,
+            children,
+            sizes,
+        } = self
+        else {
+            return None;
+        };
+        if *dir != edge.axis() {
+            return None;
+        }
+        let mut nc = children.clone();
+        let mut ns = sizes.clone();
+        let at = if edge.is_front() { 0 } else { nc.len() };
+        nc.insert(at, nuevo.clone());
+        ns.insert(at.min(ns.len()), size);
+        Some(Self::Split {
+            dir: *dir,
+            children: nc,
+            sizes: ns,
+        })
     }
 
     /// Cierra el hueco `id`: lo saca de su padre.
@@ -1132,5 +1250,162 @@ mod tests {
             ],
         };
         assert_eq!(arbol.duplicate_slot_ids(), vec![SlotId(1)]);
+    }
+
+    /// Un dock a la izquierda entra en el `Split` HORIZONTAL que ya existe, no
+    /// alrededor del árbol entero: si envolviera la raíz, la barra de estado y
+    /// la franja de tareas se quedarían a la DERECHA del sidebar en vez de
+    /// debajo de los listados.
+    #[test]
+    fn dock_izquierda_entra_en_el_split_del_cuerpo() {
+        let cuerpo = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let raiz = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(1)],
+            children: vec![cuerpo, Node::slot(SlotId(4), KindId::new("status"))],
+        };
+        let con = raiz.dock(
+            SlotId(1),
+            Edge::Left,
+            Size::Fixed(16),
+            &Node::slot(SlotId(9), KindId::new("places")),
+        );
+        let Node::Split { children, .. } = &con else {
+            panic!("la raíz sigue siendo un Split");
+        };
+        let Node::Split {
+            children: cuerpo,
+            sizes,
+            dir,
+        } = &children[0]
+        else {
+            panic!("el cuerpo sigue siendo un Split");
+        };
+        assert_eq!(*dir, Dir::Horizontal);
+        assert_eq!(cuerpo.len(), 3);
+        assert_eq!(cuerpo[0].first_slot_id(), Some(SlotId(9)));
+        assert_eq!(sizes[0], Size::Fixed(16));
+        // Y la barra de estado NO se movió: sigue siendo hija de la raíz.
+        assert_eq!(children[1].first_slot_id(), Some(SlotId(4)));
+    }
+
+    /// A la derecha, al final del mismo split.
+    #[test]
+    fn dock_derecha_va_al_final() {
+        let arbol = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let con = arbol.dock(
+            SlotId(1),
+            Edge::Right,
+            Size::Weight(1),
+            &Node::slot(SlotId(9), KindId::new("viewer")),
+        );
+        let Node::Split { children, .. } = &con else {
+            panic!("split")
+        };
+        assert_eq!(children.len(), 3);
+        assert_eq!(children[2].first_slot_id(), Some(SlotId(9)));
+    }
+
+    /// Sin ancestro en el eje pedido, se ENVUELVE. Un solo pane es el caso
+    /// real: tras cerrar uno, el cuerpo puede ser una hoja suelta.
+    #[test]
+    fn sin_ancestro_en_el_eje_se_envuelve() {
+        let arbol = Node::slot(SlotId(1), KindId::browser());
+        let con = arbol.dock(
+            SlotId(1),
+            Edge::Left,
+            Size::Fixed(16),
+            &Node::slot(SlotId(9), KindId::new("places")),
+        );
+        let Node::Split {
+            dir,
+            children,
+            sizes,
+        } = &con
+        else {
+            panic!("envuelto en Split")
+        };
+        assert_eq!(*dir, Dir::Horizontal);
+        assert_eq!(children[0].first_slot_id(), Some(SlotId(9)));
+        assert_eq!(children[1].first_slot_id(), Some(SlotId(1)));
+        assert_eq!(sizes, &vec![Size::Fixed(16), Size::Weight(1)]);
+    }
+
+    /// Un ancla dentro de una `Tabs` acopla FUERA del grupo: un sidebar que
+    /// desaparece al cambiar de pestaña no es un sidebar.
+    #[test]
+    fn con_el_ancla_en_una_pestana_el_acople_va_fuera_del_grupo() {
+        let arbol = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::Tabs {
+                    children: vec![
+                        Node::slot(SlotId(1), KindId::browser()),
+                        Node::slot(SlotId(3), KindId::browser()),
+                    ],
+                    active: 0,
+                },
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let con = arbol.dock(
+            SlotId(1),
+            Edge::Left,
+            Size::Fixed(16),
+            &Node::slot(SlotId(9), KindId::new("places")),
+        );
+        let Node::Split { children, .. } = &con else {
+            panic!("split")
+        };
+        assert_eq!(children.len(), 3);
+        assert_eq!(children[0].first_slot_id(), Some(SlotId(9)));
+        assert!(matches!(children[1], Node::Tabs { .. }));
+    }
+
+    /// Un ancla que no está en el árbol no inventa nada.
+    #[test]
+    fn un_ancla_que_no_existe_deja_el_arbol_intacto() {
+        let arbol = Node::slot(SlotId(1), KindId::browser());
+        let con = arbol.dock(
+            SlotId(77),
+            Edge::Left,
+            Size::Fixed(16),
+            &Node::slot(SlotId(9), KindId::new("places")),
+        );
+        assert_eq!(con, arbol);
+    }
+
+    /// Y deshacerlo es `close_slot`, que ya existe: el `Split` de un solo hijo
+    /// se disuelve y el árbol vuelve a ser el de antes. Es lo que hace que el
+    /// toggle sea reversible de verdad y no deje un Split degenerado por cada
+    /// vez que alguien abrió y cerró el sidebar.
+    #[test]
+    fn undock_es_close_slot_y_devuelve_el_arbol_de_antes() {
+        let arbol = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let con = arbol.dock(
+            SlotId(1),
+            Edge::Left,
+            Size::Fixed(16),
+            &Node::slot(SlotId(9), KindId::new("places")),
+        );
+        assert_eq!(con.close_slot(SlotId(9)), Some(arbol));
     }
 }
