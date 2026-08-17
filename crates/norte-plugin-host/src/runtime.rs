@@ -75,14 +75,27 @@ const MAX_STYLED_TOTAL_TEXT_BYTES: usize = MAX_RETURN_BYTES;
 const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Periodo del hilo "ticker" que incrementa la época del motor. Junto con el
-/// deadline por store define el timeout de CPU efectivo (≈ deadline × periodo).
+/// deadline por llamada define el tope de RELOJ de una operación del guest
+/// (≈ deadline × periodo). De reloj y no de CPU: el ticker avanza aunque el
+/// guest esté descheduleado (#211).
 const EPOCH_TICK: Duration = Duration::from_millis(50);
 
-/// Deadline de época por defecto en producción: ≈ [`EPOCH_TICK`] × 200 ≈ 10 s.
-/// Un guest que consuma CPU más allá de esto TRAPA (regla dura 3: nada de
-/// operaciones largas sin corte). Holgado a propósito para no matar plugins
-/// legítimos; los tests usan [`PluginRuntime::with_epoch_deadline`] con un valor
-/// mucho menor para no tardar.
+/// Deadline de época por defecto: ≈ [`EPOCH_TICK`] × 200 ≈ 10 s **por
+/// LLAMADA** (#211). Un guest que se pase de ahí en UNA operación TRAPA (regla
+/// dura 3: nada de operaciones largas sin corte). Holgado a propósito para no
+/// matar plugins legítimos; los tests usan
+/// [`PluginRuntime::with_epoch_deadline`] con un valor mucho menor para no
+/// tardar.
+///
+/// **Por llamada, y no por instancia**, desde que [`PluginInstance::rearm`] lo
+/// rearma en cada entrada al guest: armado una sola vez al crear el store, los
+/// diez segundos eran el presupuesto de toda la VIDA de la instancia, así que
+/// una conexión FTP se moría a los diez segundos de estar abierta.
+///
+/// Y son diez segundos de RELOJ, no de CPU del guest: las épocas las avanza un
+/// hilo ticker, así que un host cargado se los come igual. Con el corte por
+/// llamada eso deja de ser un flake de la suite —era `#211`— y pasa a ser lo
+/// que dice: una operación no puede durar más de diez segundos.
 const DEFAULT_EPOCH_DEADLINE: u64 = 200;
 
 /// Fallo del runtime de plugins.
@@ -356,7 +369,7 @@ impl host_config::Host for HostState {
 ///
 /// Arranca un hilo "ticker" que incrementa la época del motor cada `EPOCH_TICK`
 /// (50 ms); combinado con el deadline por store ([`Store::set_epoch_deadline`])
-/// da un timeout de CPU real para el guest (regla dura 3). El hilo se para
+/// pone un tope de RELOJ a cada llamada del guest (regla dura 3). El hilo se para
 /// limpio en [`Drop`].
 pub struct PluginRuntime {
     engine: Engine,
@@ -437,7 +450,11 @@ impl PluginRuntime {
         let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
         let bindings = NortePlugin::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
-        Ok(PluginInstance { store, bindings })
+        Ok(PluginInstance {
+            store,
+            bindings,
+            epoch_deadline: self.epoch_deadline,
+        })
     }
 
     /// Instancia un guest PROVIDER (world `norte-provider`, #30 stage 2) con el
@@ -456,7 +473,11 @@ impl PluginRuntime {
         let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
         let bindings = NorteProvider::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
-        Ok(ProviderInstance { store, bindings })
+        Ok(ProviderInstance {
+            store,
+            bindings,
+            epoch_deadline: self.epoch_deadline,
+        })
     }
 
     /// Instancia un guest DECORATOR (world `norte-decorator`, ADR 0037
@@ -474,7 +495,11 @@ impl PluginRuntime {
         let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
         let bindings = NorteDecorator::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
-        Ok(DecoratorInstance { store, bindings })
+        Ok(DecoratorInstance {
+            store,
+            bindings,
+            epoch_deadline: self.epoch_deadline,
+        })
     }
 
     /// Instancia un guest COLUMNS (world `norte-columns`, ADR 0037 decisión
@@ -508,7 +533,11 @@ impl PluginRuntime {
         store.data_mut().location = location;
         let bindings = NorteColumns::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
-        Ok(ColumnsInstance { store, bindings })
+        Ok(ColumnsInstance {
+            store,
+            bindings,
+            epoch_deadline: self.epoch_deadline,
+        })
     }
 
     /// Como [`Self::instantiate_provider`] pero desde los BYTES de un componente
@@ -535,7 +564,11 @@ impl PluginRuntime {
         let (mut store, linker) = self.prepare_common(caps)?;
         let bindings = NorteProvider::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
-        Ok(ProviderInstance { store, bindings })
+        Ok(ProviderInstance {
+            store,
+            bindings,
+            epoch_deadline: self.epoch_deadline,
+        })
     }
 
     /// Prepara el `Store` (sandbox WASI vacío + límites + deadline) y el
@@ -679,6 +712,10 @@ impl Drop for PluginRuntime {
 /// world para llamar a sus exports.
 pub struct PluginInstance {
     store: Store<HostState>,
+    /// Los ticks de época que se le dan a CADA llamada al guest.
+    ///
+    /// Por llamada y no por instancia: ver [`PluginInstance::rearm`].
+    epoch_deadline: u64,
     bindings: NortePlugin,
 }
 
@@ -691,6 +728,28 @@ impl std::fmt::Debug for PluginInstance {
 }
 
 impl PluginInstance {
+    /// Rearma el presupuesto de época ANTES de cada llamada al guest (#211).
+    ///
+    /// `Store::set_epoch_deadline` fija un instante ABSOLUTO (la época de
+    /// ahora más N), no un presupuesto que se renueve solo. Armado una vez al
+    /// crear el store —como estaba— lo que se le da al plugin no es un
+    /// presupuesto por operación sino uno por VIDA: con el default de 10
+    /// segundos, una conexión FTP dejaba de funcionar a los diez segundos de
+    /// tenerla abierta, y cada llamada posterior trapaba. En los tests eso
+    /// salía como un `contract_hostile_names_roundtrip` rojo solo bajo carga,
+    /// que es como se descubrió; en producción es una sesión que se muere
+    /// mientras la usas.
+    ///
+    /// Y las épocas avanzan por RELOJ, no por CPU del guest (el hilo ticker
+    /// las incrementa cada `EPOCH_TICK`), así que el presupuesto por llamada
+    /// también es de reloj: un host cargado puede seguir cortando a un guest
+    /// que solo es lento. Eso es lo que queda vivo de #211 — con el corte por
+    /// llamada, el margen es el de UNA operación y no el de una sesión
+    /// entera, que es la diferencia entre un tope holgado y uno inservible.
+    fn rearm(&mut self) {
+        self.store.set_epoch_deadline(self.epoch_deadline);
+    }
+
     /// Las líneas de log que el plugin ha acumulado vía `host-log::log`.
     #[must_use]
     pub fn logs(&self) -> &[String] {
@@ -729,6 +788,7 @@ impl PluginInstance {
         mimetype: &str,
         content: &[u8],
     ) -> Result<String, RuntimeError> {
+        self.rearm();
         let input = PreviewInput {
             mimetype: mimetype.to_owned(),
             content: content.to_vec(),
@@ -758,6 +818,7 @@ impl PluginInstance {
         mimetype: &str,
         content: &[u8],
     ) -> Result<Vec<Vec<Span>>, RuntimeError> {
+        self.rearm();
         let input = PreviewInput {
             mimetype: mimetype.to_owned(),
             content: content.to_vec(),
@@ -779,6 +840,7 @@ impl PluginInstance {
     /// - [`RuntimeError::ReturnTooLarge`] si el texto devuelto supera
     ///   `MAX_RETURN_BYTES`.
     pub fn run_command(&mut self, id: &str, arg: &str) -> Result<String, RuntimeError> {
+        self.rearm();
         let out = self
             .bindings
             .norte_plugin_command()
@@ -802,6 +864,9 @@ pub use crate::bindings::provider_world::exports::norte::provider::provider as p
 pub struct ProviderInstance {
     store: Store<HostState>,
     bindings: crate::bindings::provider_world::NorteProvider,
+    /// Los ticks de época de CADA llamada al guest. Ver
+    /// [`PluginInstance::rearm`], que explica por qué es por llamada.
+    epoch_deadline: u64,
 }
 
 impl std::fmt::Debug for ProviderInstance {
@@ -811,6 +876,14 @@ impl std::fmt::Debug for ProviderInstance {
 }
 
 impl ProviderInstance {
+    /// Rearma el presupuesto de época antes de cada llamada (#211). Ver
+    /// [`PluginInstance::rearm`]: un provider por plugin es justo el caso
+    /// donde un presupuesto por VIDA de instancia se nota, porque su store
+    /// dura lo que dure la conexión.
+    fn rearm(&mut self) {
+        self.store.set_epoch_deadline(self.epoch_deadline);
+    }
+
     /// Instala los valores VALIDADOS de `[config]` (P2 Task 3) que el guest
     /// PROVIDER verá vía `host-config::get`/`all`. Mismo contrato que
     /// [`PluginInstance::set_settings`]: llamar ANTES de invocar cualquier
@@ -824,6 +897,7 @@ impl ProviderInstance {
     /// # Errors
     /// [`RuntimeError::Trap`] si el guest atrapa.
     pub fn capabilities(&mut self) -> Result<provider_iface::Caps, RuntimeError> {
+        self.rearm();
         self.bindings
             .norte_provider_provider()
             .call_capabilities(&mut self.store)
@@ -839,6 +913,7 @@ impl ProviderInstance {
         &mut self,
         segments: &[Vec<u8>],
     ) -> Result<Result<provider_iface::Entry, provider_iface::VfsError>, RuntimeError> {
+        self.rearm();
         self.bindings
             .norte_provider_provider()
             .call_stat(&mut self.store, segments)
@@ -856,6 +931,7 @@ impl ProviderInstance {
         segments: &[Vec<u8>],
         cursor: Option<&[u8]>,
     ) -> Result<Result<provider_iface::Page, provider_iface::VfsError>, RuntimeError> {
+        self.rearm();
         self.bindings
             .norte_provider_provider()
             .call_list_dir(&mut self.store, segments, cursor)
@@ -880,6 +956,7 @@ impl ProviderInstance {
         offset: u64,
         len: u64,
     ) -> Result<Result<Vec<u8>, provider_iface::VfsError>, RuntimeError> {
+        self.rearm();
         let out = self
             .bindings
             .norte_provider_provider()
@@ -907,6 +984,7 @@ impl ProviderInstance {
         &mut self,
         cfg: &provider_iface::ProviderConfig,
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.rearm();
         self.bindings
             .norte_provider_provider()
             .call_configure(&mut self.store, cfg)
@@ -925,6 +1003,7 @@ impl ProviderInstance {
         &mut self,
         segments: &[Vec<u8>],
     ) -> Result<Result<ResourceAny, provider_iface::VfsError>, RuntimeError> {
+        self.rearm();
         self.bindings
             .norte_provider_provider()
             .call_open_writer(&mut self.store, segments)
@@ -940,6 +1019,7 @@ impl ProviderInstance {
         writer: ResourceAny,
         chunk: &[u8],
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.rearm();
         self.bindings
             .norte_provider_provider()
             .writer()
@@ -955,6 +1035,7 @@ impl ProviderInstance {
         &mut self,
         writer: ResourceAny,
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.rearm();
         self.bindings
             .norte_provider_provider()
             .writer()
@@ -970,6 +1051,7 @@ impl ProviderInstance {
         &mut self,
         writer: ResourceAny,
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.rearm();
         self.bindings
             .norte_provider_provider()
             .writer()
@@ -983,6 +1065,7 @@ impl ProviderInstance {
     /// # Errors
     /// [`RuntimeError::Trap`] si el drop del guest atrapa.
     pub fn writer_drop(&mut self, writer: ResourceAny) -> Result<(), RuntimeError> {
+        self.rearm();
         writer
             .resource_drop(&mut self.store)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
@@ -996,6 +1079,7 @@ impl ProviderInstance {
         &mut self,
         segments: &[Vec<u8>],
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.rearm();
         self.bindings
             .norte_provider_provider()
             .call_make_dir(&mut self.store, segments)
@@ -1010,6 +1094,7 @@ impl ProviderInstance {
         &mut self,
         segments: &[Vec<u8>],
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.rearm();
         self.bindings
             .norte_provider_provider()
             .call_remove(&mut self.store, segments)
@@ -1025,6 +1110,7 @@ impl ProviderInstance {
         src: &[Vec<u8>],
         dst: &[Vec<u8>],
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.rearm();
         self.bindings
             .norte_provider_provider()
             .call_rename(&mut self.store, src, dst)
@@ -1060,6 +1146,8 @@ pub use crate::bindings::exports::norte::plugin::previewer as previewer_iface;
 pub struct DecoratorInstance {
     store: Store<HostState>,
     bindings: crate::bindings::decorator_world::NorteDecorator,
+    /// Los ticks de época de CADA llamada. Ver [`PluginInstance::rearm`].
+    epoch_deadline: u64,
 }
 
 impl std::fmt::Debug for DecoratorInstance {
@@ -1069,6 +1157,12 @@ impl std::fmt::Debug for DecoratorInstance {
 }
 
 impl DecoratorInstance {
+    /// Rearma el presupuesto de época antes de cada llamada (#211). Ver
+    /// [`PluginInstance::rearm`].
+    fn rearm(&mut self) {
+        self.store.set_epoch_deadline(self.epoch_deadline);
+    }
+
     /// Instala los valores VALIDADOS de `[config]` que el guest DECORATOR
     /// verá vía `host-config::get`/`all`. Mismo contrato que
     /// [`PluginInstance::set_settings`]: llamar ANTES de invocar `decorate`.
@@ -1092,6 +1186,7 @@ impl DecoratorInstance {
         &mut self,
         entries: &[Vec<u8>],
     ) -> Result<Vec<decorator_iface::Decoration>, RuntimeError> {
+        self.rearm();
         let out = self
             .bindings
             .norte_plugin_decorator()
@@ -1112,6 +1207,8 @@ impl DecoratorInstance {
 pub struct ColumnsInstance {
     store: Store<HostState>,
     bindings: crate::bindings::columns_world::NorteColumns,
+    /// Los ticks de época de CADA llamada. Ver [`PluginInstance::rearm`].
+    epoch_deadline: u64,
 }
 
 impl std::fmt::Debug for ColumnsInstance {
@@ -1121,6 +1218,12 @@ impl std::fmt::Debug for ColumnsInstance {
 }
 
 impl ColumnsInstance {
+    /// Rearma el presupuesto de época antes de cada llamada (#211). Ver
+    /// [`PluginInstance::rearm`].
+    fn rearm(&mut self) {
+        self.store.set_epoch_deadline(self.epoch_deadline);
+    }
+
     /// Instala los valores VALIDADOS de `[config]` que el guest COLUMNS verá
     /// vía `host-config::get`/`all`. Mismo contrato que
     /// [`PluginInstance::set_settings`]: llamar ANTES de invocar
@@ -1151,6 +1254,7 @@ impl ColumnsInstance {
         location: Option<&columns_iface::LocationRef>,
         entries: &[Vec<u8>],
     ) -> Result<Vec<Option<String>>, RuntimeError> {
+        self.rearm();
         let out = self
             .bindings
             .norte_plugin_columns()
