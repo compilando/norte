@@ -110,7 +110,10 @@ pub fn before_frame(app: &mut App, area: Rect) {
     // Quién se ve dónde: con pestañas, el hueco de cada lado cambia.
     let vis = browsers_visibles(&res, &app.layout);
     let orden: Vec<_> = vis.iter().map(|(id, _)| *id).collect();
+    // Las dos juntas, siempre: dos listas de orden que se puedan desincronizar
+    // son un fallo que solo se ve al cambiar de pestaña.
     app.panes.set_visible(&orden);
+    app.history.set_order(&orden);
     let cols = pane_cols(&res, &app.layout);
     // El foco no puede quedarse en un pane que este frame no pinta: sería un
     // teclado que mueve un cursor que nadie ve. Con dos lados esto es
