@@ -1264,6 +1264,35 @@ actually cost and anything it discovered, then use
 
 ---
 
+## What actually happened
+
+Recorded here because the plan was wrong about the two expensive parts, and the
+next plan should not repeat it.
+
+- **Task 8 was not 213 call sites; it was one.** Rewriting them all would have
+  moved the storage and, in the commit that promises not to change behaviour,
+  offered 213 chances to change it. `PaneSlots` is a `SlotStore` behind an
+  adapter that still indexes by side, iterates and swaps like the array did, so
+  everything compiled untouched except `pane_read_only` — whose index comes
+  from outside and wants a `None`, not a panic. **When a plan says "N mechanical
+  sites", ask first whether an adapter makes N zero.**
+- **The orthodox tree covers the body, not the frame.** A `Split` only divides
+  proportionally; the status bar is a fixed height and the task strip is sized
+  by its contents. The plan's line about `overlay_body`'s arithmetic "becoming
+  the weights of the orthodox tree" was not achievable. See the spec's *Sizing*
+  section — it is L1b's first item, before tabs, because it changes the stored
+  format.
+- **`TuiPanel` has two live variants, not five.** The viewer, compare and sync
+  views stay `App` fields until L1b: moving them is not needed for the engine to
+  land.
+- **`pane_list_rows` did not retire.** It computes vertical chrome, which is not
+  in the tree for the reason above. `pane_geometry` did stop computing its own
+  split, which was the duplication that mattered.
+- **`cargo-insta` is not installed here**; accepting a snapshot is a manual move.
+- **The doc-link trap fired three times** — `SlotStore`, `resolve` and
+  `pane_rects` — all of them green under `just t` and `just c`. `cargo doc -p
+  <crate> --no-deps` after every task, not at the end.
+
 ## L1b, so nobody builds it here
 
 Left for the next plan, in this order:

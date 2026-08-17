@@ -384,6 +384,29 @@ Sketched, not specified. Its boundary:
   Live mirroring is deliberately out; two writers over shared state is conflict
   resolution, and that is not something you bolt onto a window system.
 
+### Sizing: what building L1a found
+
+A `Split` divides its axis **proportionally, and only that**. Two of the things
+already on screen cannot be expressed that way:
+
+- the **status bar** is a fixed height (one row);
+- the **task strip** is sized by its *contents* — it grows with the number of
+  running tasks, capped at six rows.
+
+So the `orthodox` preset covers the **body**, where the panes live, and the
+frame's outer chrome stays hand-written in `draw`. That is a real limit, not a
+shortcut: the tree cannot describe a whole screen until a node can be sized
+`Fixed(n)` or `Auto` (ask the panel) as well as by weight.
+
+It belongs to **L1b**, and to the front of it, because the two consumers that
+will settle its shape do not exist yet — the `places` sidebar wants a fixed
+width the user can drag, and a docked task panel wants content sizing with a
+cap — and because a `Size` enum changes the stored format, which is the one
+thing that is expensive to get wrong twice.
+
+The duplication that mattered is gone regardless: the 50/50 cut between panes
+was computed in `draw` and again in `pane_geometry`, and is now computed once.
+
 ## L3: new kinds
 
 Each is small on top of L1: `places` (the sidebar), `metadata`, docked

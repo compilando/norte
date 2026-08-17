@@ -1062,6 +1062,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **The screen is now built from a layout, and nothing about it has moved.**
+  The two panes used to be a fixed field and a split written out by hand in
+  three places — once to paint, once so the mouse could tell which row you
+  clicked, once so pagination knew how many rows fit. They are now slots in a
+  tree that one function divides, and the painter and the mouse read the same
+  answer. You will not notice: the default layout is exactly the screen you had,
+  and there is deliberately no way yet to change it. What it buys is the next
+  part — tabs, a places sidebar, a docked preview, and a session that remembers
+  your arrangement across the terminal and the graphical app.
+
 - **The terminal binary is `ntc`.** Nobody types `norte-tui` twice a day;
   Norton Commander was `nc`. `norte tui` still launches it and the CRATE keeps
   its name — renaming that would touch five manifests and a crates.io identity
