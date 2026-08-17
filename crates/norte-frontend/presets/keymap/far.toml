@@ -142,6 +142,8 @@ keymap = [
     { on = ["-"], run = "mark.pattern-remove" },
     { on = ["*"], run = "mark.invert" },
     { on = ["alt+shift+insert"], run = "pane.copy-path" },
+    { on = ["ctrl+T"], run = "pane.tab-new" },
+    { on = ["ctrl+W"], run = "pane.tab-close" },
 ]
 
 [viewer]

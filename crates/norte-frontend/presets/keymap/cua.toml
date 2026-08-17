@@ -62,6 +62,8 @@ keymap = [
     { on = ["*"], run = "mark.invert" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
+    { on = ["ctrl+t"], run = "pane.tab-new" },
+    { on = ["ctrl+w"], run = "pane.tab-close" },
 ]
 
 [viewer]

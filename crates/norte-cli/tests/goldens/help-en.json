@@ -184,78 +184,78 @@
     {
       "commands": [
         {
-          "chord": null,
-          "command": "tab.new",
+          "chord": "Ctrl+t",
+          "command": "pane.tab-new",
           "label": "new tab"
         },
         {
-          "chord": null,
-          "command": "tab.close",
+          "chord": "Ctrl+w",
+          "command": "pane.tab-close",
           "label": "close tab"
         },
         {
           "chord": null,
-          "command": "tab.next",
+          "command": "pane.tab-next",
           "label": "next tab"
         },
         {
           "chord": null,
-          "command": "tab.prev",
+          "command": "pane.tab-prev",
           "label": "previous tab"
         },
         {
           "chord": null,
-          "command": "tab.move-left",
+          "command": "pane.tab-move-left",
           "label": "move tab left"
         },
         {
           "chord": null,
-          "command": "tab.move-right",
+          "command": "pane.tab-move-right",
           "label": "move tab right"
         },
         {
           "chord": null,
-          "command": "tab.goto-1",
+          "command": "pane.tab-goto-1",
           "label": "go to tab 1"
         },
         {
           "chord": null,
-          "command": "tab.goto-2",
+          "command": "pane.tab-goto-2",
           "label": "go to tab 2"
         },
         {
           "chord": null,
-          "command": "tab.goto-3",
+          "command": "pane.tab-goto-3",
           "label": "go to tab 3"
         },
         {
           "chord": null,
-          "command": "tab.goto-4",
+          "command": "pane.tab-goto-4",
           "label": "go to tab 4"
         },
         {
           "chord": null,
-          "command": "tab.goto-5",
+          "command": "pane.tab-goto-5",
           "label": "go to tab 5"
         },
         {
           "chord": null,
-          "command": "tab.goto-6",
+          "command": "pane.tab-goto-6",
           "label": "go to tab 6"
         },
         {
           "chord": null,
-          "command": "tab.goto-7",
+          "command": "pane.tab-goto-7",
           "label": "go to tab 7"
         },
         {
           "chord": null,
-          "command": "tab.goto-8",
+          "command": "pane.tab-goto-8",
           "label": "go to tab 8"
         },
         {
           "chord": null,
-          "command": "tab.goto-9",
+          "command": "pane.tab-goto-9",
           "label": "go to tab 9"
         }
       ],
@@ -268,7 +268,7 @@
       "tags": [
         "basics"
       ],
-      "text": "Tabs in a panel\n───────────────\n\nA panel can hold several tabs, and each one is a whole listing: its own directory, cursor, marks and history. Switching tabs remembers nothing because it forgot nothing.\n\nnew tab opens a tab beside the one in front of you, in the same directory and already filled — it is what you were looking at, so there is nothing to read again. From there the two move independently.\n\nnext tab and previous tab walk the group, wrapping around. go to tab 1 through go to tab 9 jump straight to one. move tab left and move tab right reorder the current tab and stop at the edge: a tab that jumps from last to first on one keypress too many is not what anyone wanted.\n\nclose tab closes the current one. When only one is left the group disappears and the panel is a panel again — a tab bar with a single tab says nothing. Closing the last panel on a side is not this; that is layout.close-slot.\n\nA tab you cannot see costs nothing: it does not watch its directory and asks for nothing. It catches up when you come back to it.\n\n  —              new tab\n  —              close tab\n  —              next tab\n  —              previous tab\n  —              move tab left\n  —              move tab right\n  —              go to tab 1\n  —              go to tab 2\n  —              go to tab 3\n  —              go to tab 4\n  —              go to tab 5\n  —              go to tab 6\n  —              go to tab 7\n  —              go to tab 8\n  —              go to tab 9\n\nSee also: Two panes, one destination, Marking what to act on\n",
+      "text": "Tabs in a panel\n───────────────\n\nA panel can hold several tabs, and each one is a whole listing: its own directory, cursor, marks and history. Switching tabs remembers nothing because it forgot nothing.\n\nCtrl+t opens a tab beside the one in front of you, in the same directory and already filled — it is what you were looking at, so there is nothing to read again. From there the two move independently.\n\nnext tab and previous tab walk the group, wrapping around. go to tab 1 through go to tab 9 jump straight to one. move tab left and move tab right reorder the current tab and stop at the edge: a tab that jumps from last to first on one keypress too many is not what anyone wanted.\n\nCtrl+w closes the current one. When only one is left the group disappears and the panel is a panel again — a tab bar with a single tab says nothing. Closing the last panel on a side is not this; that is layout.close-slot.\n\nA tab you cannot see costs nothing: it does not watch its directory and asks for nothing. It catches up when you come back to it.\n\n  Ctrl+t         new tab\n  Ctrl+w         close tab\n  —              next tab\n  —              previous tab\n  —              move tab left\n  —              move tab right\n  —              go to tab 1\n  —              go to tab 2\n  —              go to tab 3\n  —              go to tab 4\n  —              go to tab 5\n  —              go to tab 6\n  —              go to tab 7\n  —              go to tab 8\n  —              go to tab 9\n\nSee also: Two panes, one destination, Marking what to act on\n",
       "title": "Tabs in a panel"
     },
     {
@@ -1267,6 +1267,24 @@
           "availability": {
             "state": "built"
           },
+          "chord": "Ctrl+t",
+          "command": "pane.tab-new",
+          "label": "new tab",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Ctrl+w",
+          "command": "pane.tab-close",
+          "label": "close tab",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
           "chord": "q",
           "command": "app.quit",
           "label": "quit norte",
@@ -1826,7 +1844,7 @@
       "tags": [
         "keys"
       ],
-      "text": "Keyboard\n\nKeys norte has not built yet are listed too, marked with the issue that tracks them. A key without that mark is built; which frontend implements it is not knowable from here.\n\n── Browsing (panes) ──\n  Up             move cursor up\n  Down           move cursor down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  Enter          enter the selected directory\n  Backspace      go to parent directory\n  Alt+Left       back to the previous directory\n  Alt+Right      forward again\n  Alt+i          send this location to the other pane\n  Alt+u          go where the other pane is\n  Ctrl+u         swap the two panes\n  F5             copy selection to the other pane\n  F6             move selection to the other pane\n  F7             create a directory (F7)\n  Shift+F6       rename in place (Shift+F6)\n  F8             delete (trash when available)\n  Shift+F8       PERMANENT delete\n  Ctrl+k         cancel the most recent task\n  F3             view the selected file\n  F4             open the selected file with an external program (openers.toml)\n  /              quick search in pane (filter/jump)\n  Alt+Down       directory history\n  Alt+F7         search by name/content (Alt+F7)\n  Shift+F2       compare the two panes and open the diff pane\n  Ctrl+y         plan a one-way synchronisation from this pane to the other\n  Alt+e          show names as… (cp437/cp866/Shift-JIS/GBK/…; display only)\n  Ctrl+r         reload both panes (Ctrl+R)\n  Ctrl+h         show or hide hidden entries\n  Alt+.          show or hide hidden entries\n  Alt+c          column picker\n  Ctrl+d         favorite directories\n  Insert         toggle mark on the entry under the cursor\n  Space          toggle mark on the entry under the cursor\n  Ctrl+a         mark every visible entry\n  Ctrl+A         clear every mark\n  *              invert the marks\n  Plus           mark by pattern\n  -              unmark by pattern\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n── Viewer ──\n  q              close the viewer\n  Esc            close the viewer\n  F3             close the viewer\n  F10            close the viewer\n  Up             one line up\n  Down           one line down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  e              reload as… (next encoding)\n  E              back to auto-detection\n  x              toggle hex view\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n── Dialogs and overlays ──\n  each dialog supports its own subset of these keys\n  Enter          confirm\n  y              approve\n  n              deny\n  Esc            cancel\n  o              overwrite\n  s              skip\n  r              rename\n  w              keep newer\n  Up             up\n  Down           down\n  PgUp           pg up\n  PgDn           pg dn\n  a              add\n  e              toggle\n  Space          toggle\n  d              remove\n  Shift+Up       move up\n  Shift+Down     move down\n  K              move up\n  J              move down\n  Ctrl+s         sort by\n  f              format\n  Tab            other pane\n  Backspace      back\n  /              filter\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n",
+      "text": "Keyboard\n\nKeys norte has not built yet are listed too, marked with the issue that tracks them. A key without that mark is built; which frontend implements it is not knowable from here.\n\n── Browsing (panes) ──\n  Up             move cursor up\n  Down           move cursor down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  Enter          enter the selected directory\n  Backspace      go to parent directory\n  Alt+Left       back to the previous directory\n  Alt+Right      forward again\n  Alt+i          send this location to the other pane\n  Alt+u          go where the other pane is\n  Ctrl+u         swap the two panes\n  F5             copy selection to the other pane\n  F6             move selection to the other pane\n  F7             create a directory (F7)\n  Shift+F6       rename in place (Shift+F6)\n  F8             delete (trash when available)\n  Shift+F8       PERMANENT delete\n  Ctrl+k         cancel the most recent task\n  F3             view the selected file\n  F4             open the selected file with an external program (openers.toml)\n  /              quick search in pane (filter/jump)\n  Alt+Down       directory history\n  Alt+F7         search by name/content (Alt+F7)\n  Shift+F2       compare the two panes and open the diff pane\n  Ctrl+y         plan a one-way synchronisation from this pane to the other\n  Alt+e          show names as… (cp437/cp866/Shift-JIS/GBK/…; display only)\n  Ctrl+r         reload both panes (Ctrl+R)\n  Ctrl+h         show or hide hidden entries\n  Alt+.          show or hide hidden entries\n  Alt+c          column picker\n  Ctrl+d         favorite directories\n  Insert         toggle mark on the entry under the cursor\n  Space          toggle mark on the entry under the cursor\n  Ctrl+a         mark every visible entry\n  Ctrl+A         clear every mark\n  *              invert the marks\n  Plus           mark by pattern\n  -              unmark by pattern\n  Ctrl+t         new tab\n  Ctrl+w         close tab\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n── Viewer ──\n  q              close the viewer\n  Esc            close the viewer\n  F3             close the viewer\n  F10            close the viewer\n  Up             one line up\n  Down           one line down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  e              reload as… (next encoding)\n  E              back to auto-detection\n  x              toggle hex view\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n── Dialogs and overlays ──\n  each dialog supports its own subset of these keys\n  Enter          confirm\n  y              approve\n  n              deny\n  Esc            cancel\n  o              overwrite\n  s              skip\n  r              rename\n  w              keep newer\n  Up             up\n  Down           down\n  PgUp           pg up\n  PgDn           pg dn\n  a              add\n  e              toggle\n  Space          toggle\n  d              remove\n  Shift+Up       move up\n  Shift+Down     move down\n  K              move up\n  J              move down\n  Ctrl+s         sort by\n  f              format\n  Tab            other pane\n  Backspace      back\n  /              filter\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n",
       "title": "Keyboard"
     }
   ],

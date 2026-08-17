@@ -568,7 +568,7 @@ impl Node {
     /// sola entrada para siempre.
     ///
     /// Devuelve `None` si `id` no está dentro de ninguna `Tabs` — cerrar un
-    /// panel suelto es `layout.close-slot`, no `tab.close`.
+    /// panel suelto es `layout.close-slot`, no `pane.tab-close`.
     #[must_use]
     pub fn close_tab(&self, id: SlotId) -> Option<Self> {
         let hijos = match self {
@@ -901,7 +901,7 @@ mod tests {
         assert_eq!(nuevo, b(1), "el grupo desaparece y queda el hueco");
     }
 
-    /// Cerrar un panel SUELTO no es `tab.close`: devuelve `None` y el llamante
+    /// Cerrar un panel SUELTO no es `pane.tab-close`: devuelve `None` y el llamante
     /// decide (será `layout.close-slot`).
     #[test]
     fn cerrar_un_panel_suelto_no_es_cerrar_una_pestana() {
