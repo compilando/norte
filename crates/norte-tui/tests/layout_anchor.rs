@@ -192,8 +192,9 @@ fn a_treinta_columnas_se_pinta_un_solo_pane_a_ancho_completo() {
     let geom = ui::pane_geometry(&app, area).expect("hay geometría");
     assert_eq!(geom[0].width, 30, "el que se pinta ocupa todo");
     assert_eq!(
-        geom[1].list_rows, 0,
-        "el que no se pinta no tiene ni una fila que clicar"
+        geom.len(),
+        1,
+        "y no hay geometría para el que no se pintó: un click ahí no resuelve nada"
     );
 }
 
