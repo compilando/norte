@@ -1070,6 +1070,22 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **More than two panels.** Split the focused panel side by side or top and
+  bottom, as many times as you like. The new panel starts in the directory you
+  were in, already filled, and takes the focus — splitting is asking for room
+  to work in. Splitting a tab cuts inside that tab, not around its siblings.
+
+- **From three panels on, you say where a copy goes.** With two, the
+  destination was always the other one and nobody had to be told. With three
+  that stops being obvious, so norte stops guessing: designate a destination
+  and it is marked on its panel, or a copy asks you for a path instead of
+  choosing for you.
+
+- **A layout you can name and keep.** `[ui] layout` points at a file in
+  `layouts/` and norte starts with that arrangement. One that does not load
+  never leaves you without a screen: it says so and starts with the usual two
+  panels. `norte doctor` tells you before you find out the hard way.
+
 - **Tabs.** A panel can hold several tabs, and each one is a whole listing with
   its own directory, cursor, marks and history — switching tabs remembers
   nothing because it forgot nothing. `Ctrl+T` opens one in the directory you are

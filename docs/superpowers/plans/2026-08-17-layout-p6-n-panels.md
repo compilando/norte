@@ -155,3 +155,30 @@ pub fn split_slot(&self, id: SlotId, dir: Dir, nuevo: &Node) -> Node;
       which already exist.
 - [ ] **F.3** `norte doctor` reports `LayoutDiagnostic`.
 - [ ] **F.4** `just ci`, changelog, memory, branch review.
+
+## What actually happened
+
+Six stages, all landed.
+
+- **The blocker was measured correctly**, and that was the single most useful
+  thing in this plan: not ~212 call sites but a handful of position-keyed
+  structures, because `PaneSlots` had already absorbed the rest.
+- **The adapter trick worked a third time.** `Histories` keys by slot and is
+  still indexed by position, so all 59 history call sites were untouched. Ask
+  whether an adapter makes N zero *before* rewriting N sites.
+- **Stage C paid for the whole refactor**, exactly as predicted. It also found
+  something the plan did not: `tokio::select!` has fixed arity, so two arms
+  became `poll_fn` loops, and the fill scan had to **rotate its starting
+  point** — sweeping from the front every time lets a fast drainer in the first
+  slot starve the rest, which `select!` avoided by choosing at random. That
+  would have been a silent regression.
+- **Stage D exposed a live bug the moment splits existed**: the destination was
+  `focus ^ 1`, which with a third panel is not merely wrong but out of range.
+- **`reconcile_swap` survives.** Swapping panels moves the CONTENTS between
+  slots and leaves the ids in place, so work in flight still travels with its
+  listing. Swapping the **ids in the tree** instead would make the whole
+  reconciliation unnecessary and would make `swap_seq` redundant with the epoch
+  vector. Worth doing; not worth doing at the end of a long session.
+- **`layout.set-target` ships unbound.** Picking a chord that clears seven
+  presets is churn with no payoff while the palette reaches it, and the same
+  rule already applies to the rest of `layout.*`.
