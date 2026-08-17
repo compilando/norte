@@ -2974,6 +2974,31 @@ impl App {
         self.set_focus(usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0));
     }
 
+    /// Cambia la disposición entera, poniendo al día lo que depende de ella.
+    ///
+    /// Los huecos del árbol nuevo que no tengan listado se crean vacíos en el
+    /// directorio del panel enfocado: un layout guardado nombra huecos, no
+    /// dice qué había dentro, y arrancar con paneles muertos sería peor que
+    /// arrancar con paneles repetidos.
+    pub fn set_layout(&mut self, tree: norte_frontend::layout::Node) {
+        let dir = self.panes[self.focus].dir().clone();
+        for id in tree.slot_ids() {
+            let es_browser = tree
+                .kind_of(id)
+                .is_some_and(|k| *k == norte_frontend::layout::KindId::browser());
+            if es_browser && self.panes.browser(id).is_none() {
+                self.panes
+                    .insert_browser(id, Pane::new(dir.clone(), Vec::new()));
+            }
+            // Los ids del layout no pueden chocar con los que se acuñen luego.
+            self.next_slot = self.next_slot.max(id.0.saturating_add(1));
+        }
+        self.layout = tree;
+        self.panes.refresh_visible(&self.layout);
+        self.history.retain_tree(&self.layout);
+        self.set_focus(0);
+    }
+
     /// Parte el panel enfocado en dos, con el nuevo al lado.
     ///
     /// El panel nuevo hereda directorio y entradas del que se partió, igual

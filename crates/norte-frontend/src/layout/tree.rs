@@ -1018,6 +1018,30 @@ mod tests {
         assert_eq!(children[1].slot_ids(), vec![SlotId(2), SlotId(9)]);
     }
 
+    #[test]
+    fn el_arbol_round_trippea_en_toml() {
+        use crate::layout::{Dir, KindId, Node, Size, SlotId};
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
+            children: vec![
+                Node::split(
+                    Dir::Horizontal,
+                    vec![
+                        Node::slot(SlotId(1), KindId::browser()),
+                        Node::slot(SlotId(2), KindId::browser()),
+                    ],
+                ),
+                Node::slot(SlotId(3), KindId::new("tasks")),
+                Node::slot(SlotId(4), KindId::new("status")),
+            ],
+        };
+        let t = toml::to_string_pretty(&arbol).expect("serializa a TOML");
+        println!("---\n{t}\n---");
+        let vuelta: Node = toml::from_str(&t).expect("vuelve de TOML");
+        assert_eq!(vuelta, arbol);
+    }
+
     /// Cerrar un hueco deja al hermano ocupando el sitio de los dos.
     #[test]
     fn cerrar_un_hueco_disuelve_el_split_de_dos() {

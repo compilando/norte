@@ -1878,6 +1878,25 @@ async fn main() -> Result<()> {
             pane.set_show_hidden(show);
         }
     }
+    // `[ui] layout`: una disposición guardada. Un layout que no carga NO deja
+    // a norte sin pantalla — se avisa por la barra y se arranca con
+    // `orthodox`, que es lo que el usuario tenía antes de escribir la clave.
+    if let Some(nombre) = cfg.common.ui_layout.as_deref()
+        && nombre != "orthodox"
+    {
+        match norte_frontend::layout::config::load(
+            &config::user_config_dir().unwrap_or_default(),
+            nombre,
+        ) {
+            Ok(arbol) => app.set_layout(arbol),
+            Err(e) => {
+                app.message = Some(norte_i18n::ta(
+                    "msg-layout-load-failed",
+                    &[("name", nombre), ("err", &e.to_string())],
+                ));
+            }
+        }
+    }
     apply_theme(&mut app, &cfg);
     // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
     // `Ctrl+D`; se refresca en cada hot-reload OK (`reload_config`).

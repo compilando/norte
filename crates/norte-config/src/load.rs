@@ -1349,6 +1349,10 @@ pub struct CommonConfig {
     /// the other `[ui]` scalars above: hiding dotfiles cannot launch, write,
     /// or redirect anything.
     pub ui_show_hidden: Option<bool>,
+    /// `[ui] layout` (last-wins; None = el preset `orthodox`). Nombre de un
+    /// fichero en `layouts/`. Presentación-solo, como el resto de escalares
+    /// `[ui]`: repartir la pantalla no lanza, escribe ni redirige nada.
+    pub ui_layout: Option<String>,
     /// `[ui] mouse` (last-wins; None = captured). Honored from ALL layers
     /// including Project — presentation-only, same class as the other
     /// `[ui]` scalars above: capturing (or not capturing) the pointer
@@ -1552,10 +1556,12 @@ fn merge_ui_fonts(
 fn merge_ui_flags(
     ui_show_hidden: &mut Option<bool>,
     ui_mouse: &mut Option<bool>,
+    ui_layout: &mut Option<String>,
     ui: &crate::schema::UiSection,
 ) {
     *ui_show_hidden = ui.show_hidden.or(*ui_show_hidden);
     *ui_mouse = ui.mouse.or(*ui_mouse);
+    *ui_layout = ui.layout.clone().or(ui_layout.take());
 }
 
 /// Fusiona una capa de `[ui.columns]` sobre el acumulado (#108): last-wins
@@ -1808,6 +1814,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_reduce_motion: Option<bool> = None;
     let mut ui_confirm_quit = ConfirmQuit::default();
     let (mut ui_show_hidden, mut ui_mouse) = (None, None);
+    let mut ui_layout: Option<String> = None;
     let mut ui_columns = ColumnsConfig::default();
     let mut daemon_mode: Option<DaemonMode> = None;
     let mut daemon_socket: Option<PathBuf> = None;
@@ -1824,7 +1831,12 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 path: norte.clone(),
                 message: toml_diag(&raw, &e),
             })?;
-            merge_ui_flags(&mut ui_show_hidden, &mut ui_mouse, &parsed.ui);
+            merge_ui_flags(
+                &mut ui_show_hidden,
+                &mut ui_mouse,
+                &mut ui_layout,
+                &parsed.ui,
+            );
             if let Some(p) = parsed.keymap.preset {
                 preset = Some(p);
             }
@@ -1896,6 +1908,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_reduce_motion,
         ui_confirm_quit,
         ui_show_hidden,
+        ui_layout,
         ui_mouse,
         ui_columns,
         daemon_mode,

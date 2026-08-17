@@ -593,6 +593,7 @@ help-cmd-layout-equalize = equalise panels
 help-cmd-layout-set-target = set destination
 msg-layout-last-panel = cannot close the last panel
 msg-layout-no-target = with more than two panels, set the destination first
+msg-layout-load-failed = could not load layout "{$name}": {$err}
 help-cmd-cursor-up = move cursor up
 help-cmd-cursor-down = move cursor down
 help-cmd-cursor-page-up = page up

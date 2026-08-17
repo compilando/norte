@@ -604,6 +604,7 @@ help-cmd-layout-equalize = igualar paneles
 help-cmd-layout-set-target = fijar destino
 msg-layout-last-panel = no se puede cerrar el último panel
 msg-layout-no-target = con más de dos paneles hay que fijar el destino
+msg-layout-load-failed = no se pudo cargar el layout «{$name}»: {$err}
 help-cmd-cursor-up = subir el cursor
 help-cmd-cursor-down = bajar el cursor
 help-cmd-cursor-page-up = subir una página

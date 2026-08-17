@@ -24,6 +24,7 @@
 //! en `docs/superpowers/specs/2026-08-17-layout-slots-tabs-design.md`.
 
 mod by_slot;
+pub mod config;
 mod focus;
 mod kinds;
 mod resolve;
@@ -53,6 +54,15 @@ pub enum LayoutError {
     /// Un `Split` sin hijos no reparte nada.
     #[error("un `Split` sin hijos")]
     EmptySplit,
+    /// El nombre de un layout no puede llevar una ruta dentro.
+    #[error("nombre de layout inválido: {0:?}")]
+    BadName(String),
+    /// No hay fichero con ese nombre.
+    #[error("no hay layout en {0}")]
+    NotFound(String),
+    /// El fichero no es TOML válido, o no describe un árbol.
+    #[error("el layout no se pudo leer: {0}")]
+    Parse(String),
     /// Los tamaños son índice-paralelos a los hijos.
     #[error("{count} tamaños para {children} hijos")]
     WeightsMismatch {

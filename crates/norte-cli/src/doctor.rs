@@ -96,6 +96,53 @@ pub fn check_config(layers: &Layers, env: &impl Fn(&str) -> Option<OsString>) ->
     findings
 }
 
+/// `[ui] layout`: el fichero nombrado tiene que existir y describir un árbol
+/// coherente.
+///
+/// Es `Warn` y no `Error` por la misma razón por la que el arranque no muere:
+/// un layout que no carga cae a `orthodox`, así que norte sigue siendo usable
+/// — pero en silencio el usuario habría creído que su disposición se aplicó.
+#[must_use]
+pub fn check_layout(layers: &Layers) -> Vec<Finding> {
+    let Ok(cfg) = norte_config::load(layers) else {
+        return Vec::new(); // el parse ya lo reporta check_config
+    };
+    let Some(nombre) = cfg.ui_layout.as_deref() else {
+        return Vec::new();
+    };
+    if nombre == "orthodox" {
+        return vec![Finding {
+            section: "layout",
+            severity: Severity::Ok,
+            code: "layout-builtin",
+            detail: nombre.to_owned(),
+        }];
+    }
+    // El layout es del USUARIO: un layout de sistema o de proyecto podría
+    // repartir la pantalla de alguien que no lo escribió.
+    let Some((dir, _)) = layers
+        .dirs
+        .iter()
+        .find(|(_, l)| matches!(l, norte_config::Layer::User))
+    else {
+        return Vec::new();
+    };
+    match norte_frontend::layout::config::load(dir, nombre) {
+        Ok(_) => vec![Finding {
+            section: "layout",
+            severity: Severity::Ok,
+            code: "layout-ok",
+            detail: nombre.to_owned(),
+        }],
+        Err(e) => vec![Finding {
+            section: "layout",
+            severity: Severity::Warn,
+            code: "layout-unusable",
+            detail: format!("{nombre}: {e} (se arrancará con «orthodox»)"),
+        }],
+    }
+}
+
 /// `[ui.columns]` (#108 b4): ids que no parsean = Warn (se saltan al
 /// pintar — «un id configurado que desaparece en silencio es un bug, no
 /// una degradación», spec de columnas §Diagnostics). Los `plugin:` y los
