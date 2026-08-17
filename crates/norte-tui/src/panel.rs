@@ -18,7 +18,7 @@
 use std::ops::{Index, IndexMut};
 
 use norte_frontend::layout::{
-    Dir, KindId, Node, Params, Rect as LayoutRect, Size, SlotId, SlotStore,
+    BySlot, Dir, KindId, Node, Params, Rect as LayoutRect, Size, SlotId, SlotStore,
 };
 
 use crate::app::Pane;
@@ -83,14 +83,14 @@ impl TuiPanel {
 #[derive(Debug)]
 pub struct PaneSlots {
     store: SlotStore<TuiPanel>,
-    /// Qué hueco enseña cada lado AHORA.
+    /// Qué hueco enseña cada POSICIÓN visible, de izquierda a derecha.
     ///
-    /// Con pestañas hay más de dos `browser` vivos, pero solo dos se ven, y
-    /// «el pane izquierdo» sigue queriendo decir lo mismo que siempre: el
-    /// listado que está pintado a la izquierda. Esto es lo que deja intactos
-    /// los ~212 sitios que dicen `app.panes[0]` mientras por debajo hay N
-    /// listados. Lo pone al día [`Self::set_visible`] tras cada reparto.
-    visible: [SlotId; 2],
+    /// Con pestañas hay más `browser` vivos que visibles, y con splits hay más
+    /// de dos visibles. «El pane izquierdo» sigue queriendo decir lo mismo que
+    /// siempre —el listado pintado más a la izquierda—, así que los ~212 sitios
+    /// que dicen `app.panes[0]` valen igual. Lo pone al día
+    /// [`Self::set_visible`] tras cada reparto.
+    visible: Vec<SlotId>,
 }
 
 impl PaneSlots {
@@ -102,32 +102,26 @@ impl PaneSlots {
         store.insert(SLOT_RIGHT, TuiPanel::Browser(Box::new(right)));
         Self {
             store,
-            visible: [SLOT_LEFT, SLOT_RIGHT],
+            visible: vec![SLOT_LEFT, SLOT_RIGHT],
         }
     }
 
-    /// El hueco que enseña un lado ahora mismo.
+    /// El hueco que enseña una posición. Fuera de rango, la última.
     #[must_use]
-    pub const fn slot_of(&self, side: usize) -> SlotId {
-        if side == 0 {
-            self.visible[0]
-        } else {
-            self.visible[1]
-        }
+    pub fn slot_of(&self, side: usize) -> SlotId {
+        let i = side.min(self.visible.len().saturating_sub(1));
+        self.visible.get(i).copied().unwrap_or(SLOT_LEFT)
     }
 
-    /// Dice qué hueco enseña cada lado. Lo llama el frontend tras repartir,
+    /// Dice qué hueco enseña cada posición. Lo llama el frontend tras repartir,
     /// con los `browser` colocados ordenados de izquierda a derecha.
     ///
-    /// Un lado sin `browser` colocado —el `Split` colapsó— conserva el que
-    /// tenía: su geometría ya es cero, así que nadie lo pinta ni lo clica, y
-    /// mantener el id evita que su estado quede huérfano por un frame estrecho.
-    pub fn set_visible(&mut self, izq: Option<SlotId>, der: Option<SlotId>) {
-        if let Some(i) = izq {
-            self.visible[0] = i;
-        }
-        if let Some(d) = der {
-            self.visible[1] = d;
+    /// Una lista VACÍA no borra nada: pasa cuando el reparto no coloca ningún
+    /// pane (visor abierto, o una ventana imposible), y en ese frame lo que
+    /// había sigue siendo lo correcto.
+    pub fn set_visible(&mut self, orden: &[SlotId]) {
+        if !orden.is_empty() {
+            self.visible = orden.to_vec();
         }
     }
 
@@ -137,9 +131,9 @@ impl PaneSlots {
     /// sin esto, un lado apuntaría al hueco que se acaba de cerrar y el
     /// siguiente `app.panes[i]` reventaría.
     ///
-    /// Con un solo `browser` vivo, LOS DOS lados apuntan a él. Es feo y es lo
-    /// correcto: su geometría es cero, así que no se pinta ni se clica, y las
-    /// operaciones que hablan de «el otro pane» no tienen otro del que hablar.
+    /// Con un solo `browser` vivo la lista tiene UNA entrada, y `len()` lo
+    /// dice: quien pregunte por «el otro pane» recibe ese mismo, que es la
+    /// verdad — no hay otro.
     pub fn refresh_visible(&mut self, tree: &Node) {
         let vivos: Vec<SlotId> = tree
             .visible_slot_ids()
@@ -149,9 +143,8 @@ impl PaneSlots {
                     && matches!(self.store.get(*id), Some(TuiPanel::Browser(_)))
             })
             .collect();
-        if let Some(primero) = vivos.first() {
-            self.visible[0] = *primero;
-            self.visible[1] = vivos.get(1).copied().unwrap_or(*primero);
+        if !vivos.is_empty() {
+            self.visible = vivos;
         }
         self.store.sync_with(tree);
     }
@@ -168,16 +161,16 @@ impl PaneSlots {
         self.store.insert(id, TuiPanel::Browser(Box::new(pane)));
     }
 
-    /// Cuántos listados hay. Dos en L1a, por construcción.
+    /// Cuántos listados hay VISIBLES.
     #[must_use]
     pub fn len(&self) -> usize {
-        2
+        self.visible.len()
     }
 
-    /// Nunca. Existe porque clippy lo pide junto a [`Self::len`].
+    /// Nunca: siempre hay al menos un listado en pantalla.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        false
+        self.visible.is_empty()
     }
 
     /// El listado de un lado, o `None` si el índice no es `0|1`.
@@ -195,14 +188,11 @@ impl PaneSlots {
             .and_then(TuiPanel::as_browser)
     }
 
-    /// Los huecos visibles, sin repetir. Uno solo cuando los dos lados
-    /// enseñan el mismo listado (queda un `browser` en el árbol).
+    /// Los huecos visibles, sin repetir.
     fn visibles(&self) -> Vec<SlotId> {
-        if self.visible[0] == self.visible[1] {
-            vec![self.visible[0]]
-        } else {
-            vec![self.visible[0], self.visible[1]]
-        }
+        let mut v = self.visible.clone();
+        v.dedup();
+        v
     }
 
     /// Los listados VISIBLES, de izquierda a derecha.
@@ -287,6 +277,89 @@ impl<'a> IntoIterator for &'a mut PaneSlots {
 
     fn into_iter(self) -> Self::IntoIter {
         Box::new(self.iter_mut())
+    }
+}
+
+/// Los historiales de navegación, indexados por HUECO y accedidos por
+/// posición.
+///
+/// Estaban en un `[History; 2]` porque había exactamente dos panes. Con
+/// pestañas y splits, un historial pertenece a su listado, no al sitio de la
+/// pantalla donde se pinta hoy: cambiar de pestaña y encontrarse el historial
+/// de la otra sería el mismo bug que ver su cursor.
+///
+/// El orden lo pone [`Self::set_order`], en la MISMA función que
+/// [`PaneSlots::set_visible`] y con el mismo valor — están juntas a propósito,
+/// porque dos listas de orden que se puedan desincronizar son un fallo que solo
+/// se ve al cambiar de pestaña.
+#[derive(Debug, Default)]
+pub struct Histories {
+    por_hueco: BySlot<crate::nav::History>,
+    orden: Vec<SlotId>,
+}
+
+impl Histories {
+    /// Los dos de arranque.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            por_hueco: BySlot::new(),
+            orden: vec![SLOT_LEFT, SLOT_RIGHT],
+        }
+    }
+
+    /// Dice qué hueco ocupa cada posición visible.
+    pub fn set_order(&mut self, orden: &[SlotId]) {
+        if !orden.is_empty() {
+            self.orden = orden.to_vec();
+        }
+    }
+
+    /// El hueco de una posición.
+    fn slot_of(&self, side: usize) -> SlotId {
+        let i = side.min(self.orden.len().saturating_sub(1));
+        self.orden.get(i).copied().unwrap_or(SLOT_LEFT)
+    }
+
+    /// Intercambia el historial de dos posiciones, para el gesto de
+    /// intercambiar paneles.
+    pub fn swap(&mut self, a: usize, b: usize) {
+        let (sa, sb) = (self.slot_of(a), self.slot_of(b));
+        if sa == sb {
+            return;
+        }
+        let (va, vb) = (self.por_hueco.remove(sa), self.por_hueco.remove(sb));
+        if let Some(v) = vb {
+            self.por_hueco.insert(sa, v);
+        }
+        if let Some(v) = va {
+            self.por_hueco.insert(sb, v);
+        }
+    }
+
+    /// Tira los historiales de los huecos que el árbol ya no tiene.
+    pub fn retain_tree(&mut self, tree: &Node) {
+        self.por_hueco.retain_tree(tree);
+    }
+}
+
+impl std::ops::Index<usize> for Histories {
+    type Output = crate::nav::History;
+
+    fn index(&self, side: usize) -> &Self::Output {
+        // Un hueco sin historial todavía es un hueco recién abierto: se le
+        // devuelve uno vacío, que es exactamente su historia.
+        static VACIO: std::sync::OnceLock<crate::nav::History> = std::sync::OnceLock::new();
+        self.por_hueco
+            .get(self.slot_of(side))
+            .unwrap_or_else(|| VACIO.get_or_init(crate::nav::History::default))
+    }
+}
+
+impl std::ops::IndexMut<usize> for Histories {
+    fn index_mut(&mut self, side: usize) -> &mut Self::Output {
+        let id = self.slot_of(side);
+        self.por_hueco.entry(id)
     }
 }
 

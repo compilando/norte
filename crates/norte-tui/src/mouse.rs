@@ -127,10 +127,14 @@ pub struct Hit {
 /// refill tras una mutación, una página de un relleno paginado, un
 /// re-ordenado— el índice pasa a nombrar otro fichero, y el gesto ha dejado
 /// de ser el que el usuario hizo.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct Vigencia {
-    /// [`crate::app::Pane::listing_epoch`] de cada pane.
-    epochs: [u64; 2],
+    /// [`crate::app::Pane::listing_epoch`] de cada pane VISIBLE, en orden.
+    ///
+    /// Longitud variable desde P6: con splits hay más de dos, y un vector que
+    /// CAMBIA DE LONGITUD también invalida el gesto — que es lo correcto,
+    /// porque abrir o cerrar un panel mueve todo lo demás de sitio.
+    epochs: Vec<u64>,
     /// [`crate::app::App::swap_seq`]. Las épocas NO cubren un `pane.swap`:
     /// viajan con su pane, así que el intercambio se limita a cruzar los dos
     /// valores y, cuando empatan —lo normal recién arrancado—, la
@@ -152,7 +156,7 @@ pub struct MouseState {
     /// `None` = el último frame no pintó panes (visor abierto) o todavía no
     /// hubo frame. Sin geometría no se resuelve NADA: un click contra una
     /// pantalla que no existe es peor que un click ignorado.
-    geometry: Option<[PaneGeometry; 2]>,
+    geometry: Option<Vec<PaneGeometry>>,
     /// La máquina de gestos compartida (`norte-frontend`).
     drag: Drag,
     /// `(cuándo, dónde)` del último click izquierdo, para el doble.
@@ -173,10 +177,10 @@ pub struct MouseState {
 }
 
 impl MouseState {
-    /// La geometría del último frame.
+    /// La geometría del último frame, un `PaneGeometry` por panel visible.
     #[must_use]
-    pub const fn geometry(&self) -> Option<&[PaneGeometry; 2]> {
-        self.geometry.as_ref()
+    pub fn geometry(&self) -> Option<&[PaneGeometry]> {
+        self.geometry.as_deref()
     }
 
     /// Suelta el gesto armado y el click a medio emparejar.
@@ -205,9 +209,13 @@ impl MouseState {
 /// serán cinco mañana, y el quinto no tiene por qué acordarse. Lo que sí es
 /// invariante es que un gesto vive de índices y los índices los mueve el
 /// listado: comprobarlo aquí cubre los cuatro, y al quinto gratis.
-pub fn after_frame(app: &mut App, geometry: Option<[PaneGeometry; 2]>) {
+pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>) {
     let vigencia = Vigencia {
-        epochs: [app.panes[0].listing_epoch(), app.panes[1].listing_epoch()],
+        epochs: app
+            .panes
+            .iter()
+            .map(crate::app::Pane::listing_epoch)
+            .collect(),
         swap: app.swap_seq(),
         overlay: overlay_open(app),
     };

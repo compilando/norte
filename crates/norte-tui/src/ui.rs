@@ -88,7 +88,8 @@ pub fn pane_list_rows(app: &App, area: Rect) -> u16 {
     // del propio pane, que el árbol no conoce.
     // Bordes del bloque (2) + cabecera de columnas (1). Un pane que este
     // frame no pinta (el `Split` colapsó) no tiene filas de listado.
-    pane_rects(app, area)[0]
+    pane_rects(app, area)
+        .first()
         .map_or(0, |r| r.height)
         .saturating_sub(pane_chrome_rows(app, 0))
 }
@@ -109,18 +110,18 @@ pub fn before_frame(app: &mut App, area: Rect) {
     let res = resolved_frame(app, area);
     // Quién se ve dónde: con pestañas, el hueco de cada lado cambia.
     let vis = browsers_visibles(&res, &app.layout);
-    app.panes.set_visible(
-        vis.first().map(|(id, _)| *id),
-        vis.get(1).map(|(id, _)| *id),
-    );
+    let orden: Vec<_> = vis.iter().map(|(id, _)| *id).collect();
+    // Las dos juntas, siempre: dos listas de orden que se puedan desincronizar
+    // son un fallo que solo se ve al cambiar de pestaña.
+    app.panes.set_visible(&orden);
+    app.history.set_order(&orden);
     let cols = pane_cols(&res, &app.layout);
     // El foco no puede quedarse en un pane que este frame no pinta: sería un
     // teclado que mueve un cursor que nadie ve. Con dos lados esto es
     // `position`; cuando haya N huecos lo hará `layout::focus_next`.
-    if cols[app.focus()].is_none()
-        && let Some(i) = cols.iter().position(Option::is_some)
-    {
-        app.set_focus(i);
+    // El foco no puede señalar una posición que este frame no pinta.
+    if app.focus() >= cols.len() && !cols.is_empty() {
+        app.set_focus(0);
     }
     // Y los roles se ponen al día con lo que hay en pantalla: `active` es el
     // foco, `target` es el otro si sigue visible.
@@ -130,12 +131,13 @@ pub fn before_frame(app: &mut App, area: Rect) {
     // Una ventana POR PANE: el que no se pinta no tiene filas, y reconciliar
     // el suyo contra el alto del otro le dejaría una ventana que nadie vio.
     let visor = app.viewer.is_some();
-    for (i, col) in cols.iter().enumerate() {
+    for i in 0..app.panes.len() {
         let filas = if visor {
             0
         } else {
             usize::from(
-                col.map_or(0, |r| r.height)
+                cols.get(i)
+                    .map_or(0, |r| r.height)
                     .saturating_sub(pane_chrome_rows(app, i)),
             )
         };
@@ -269,13 +271,15 @@ fn browsers_visibles(
 fn pane_cols(
     res: &norte_frontend::layout::Resolved,
     tree: &norte_frontend::layout::Node,
-) -> [Option<Rect>; 2] {
-    let v = browsers_visibles(res, tree);
-    [v.first().map(|(_, r)| *r), v.get(1).map(|(_, r)| *r)]
+) -> Vec<Rect> {
+    browsers_visibles(res, tree)
+        .into_iter()
+        .map(|(_, r)| r)
+        .collect()
 }
 
 /// Como [`pane_cols`], resolviendo el frame por su cuenta.
-fn pane_rects(app: &App, area: Rect) -> [Option<Rect>; 2] {
+fn pane_rects(app: &App, area: Rect) -> Vec<Rect> {
     pane_cols(&resolved_frame(app, area), &app.layout)
 }
 
@@ -347,7 +351,7 @@ fn sync_layout_rows(area: Rect, view: &crate::app::SyncView) -> (Option<Rect>, R
 /// izquierdo (1), contenido, borde derecho (1). Todo lo que no sea listado
 /// es CROMO, y un click ahí resuelve a «este pane, ninguna fila».
 #[must_use]
-pub fn pane_geometry(app: &App, area: Rect) -> Option<[crate::mouse::PaneGeometry; 2]> {
+pub fn pane_geometry(app: &App, area: Rect) -> Option<Vec<crate::mouse::PaneGeometry>> {
     // Ni con el visor ni con el panel de diferencias: los dos sustituyen a
     // los panes, y una geometría de algo que no está pintado es un click
     // resuelto contra una fila que el lector no puede ver.
@@ -355,12 +359,14 @@ pub fn pane_geometry(app: &App, area: Rect) -> Option<[crate::mouse::PaneGeometr
         return None;
     }
     let cols = pane_rects(app, area);
-    let mut out = [crate::mouse::PaneGeometry::default(); 2];
+    // Un `PaneGeometry` por panel PINTADO. La longitud varía con el layout,
+    // y el hit test resuelve contra la del último frame — que es lo que el
+    // lector tenía delante.
+    let mut out = vec![crate::mouse::PaneGeometry::default(); cols.len()];
     for (i, pane) in app.panes.iter().enumerate() {
-        // Geometría CERO para el lado que no se pintó: el hit test ya trata
-        // `list_rows == 0` como «ninguna fila», así que un click ahí no
-        // resuelve nada en vez de resolver contra un pane invisible.
-        let Some(block) = cols[i] else { continue };
+        let Some(block) = cols.get(i).copied() else {
+            continue;
+        };
         // Interior del bloque con `Borders::ALL`, sin construir el bloque:
         // un margen de 1 por lado. `title_bottom` (el input del quick
         // search) NO consume filas — se pinta sobre el borde inferior.
@@ -458,7 +464,9 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
         for (i, pane) in app.panes.iter().enumerate() {
             // Un pane que el reparto no colocó no se pinta: el `Split`
             // colapsó y su sitio lo ocupa entero el otro.
-            let Some(rect) = cols[i] else { continue };
+            let Some(rect) = cols.get(i).copied() else {
+                continue;
+            };
             draw_pane(
                 frame,
                 rect,

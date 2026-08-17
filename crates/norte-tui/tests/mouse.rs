@@ -137,7 +137,8 @@ fn el_layout_de_estos_tests_es_el_que_se_pinta() {
     // aritmética confusa.
     let mut app = app_pintada(5);
     let lineas = pintar(&mut app);
-    let [izq, der] = *app.mouse.geometry().expect("hay geometría");
+    let geom = app.mouse.geometry().expect("hay geometría");
+    let (izq, der) = (geom[0], geom[1]);
     assert_eq!((izq.x, izq.y, izq.width, izq.height), (0, 0, 30, 11));
     assert_eq!((der.x, der.y, der.width, der.height), (30, 0, 30, 11));
     assert_eq!(izq.first_list_row, FILA0, "borde superior + cabecera");

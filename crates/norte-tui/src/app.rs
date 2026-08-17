@@ -1041,7 +1041,7 @@ pub struct App {
     /// Historial de directorios por pane (spec 2026-07-18, `Alt+↓`): mismo
     /// índice que `panes`. Vive en `App` y no en `Pane` (el historial no es
     /// estado de render): cada cd EXITOSO empuja el dir anterior (main.rs).
-    pub history: [crate::nav::History; 2],
+    pub history: crate::panel::Histories,
     /// Copia de la hotlist de `LoadedConfig` (clonada en arranque y en cada
     /// hot-reload OK): la fuente para el popup `Ctrl+D`. Los adds/removes
     /// SOLO la tocan tras persistir con éxito (consistencia con disco).
@@ -2043,10 +2043,7 @@ impl App {
             lua_status: None,
             degraded: std::collections::VecDeque::new(),
             no_journal: None,
-            history: [
-                crate::nav::History::default(),
-                crate::nav::History::default(),
-            ],
+            history: crate::panel::Histories::new(),
             hotlist: Vec::new(),
             nav_popup: None,
             search_dialog: None,
@@ -2905,6 +2902,7 @@ impl App {
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
         );
         self.panes.refresh_visible(&self.layout);
+        self.history.retain_tree(&self.layout);
     }
 
     /// Cierra la pestaña enfocada. Sin efecto si el pane no está en un grupo.
@@ -2913,6 +2911,7 @@ impl App {
         if let Some(nuevo) = self.layout.close_tab(foco) {
             self.layout = nuevo;
             self.panes.refresh_visible(&self.layout);
+            self.history.retain_tree(&self.layout);
         }
     }
 
@@ -2930,6 +2929,7 @@ impl App {
         let destino = usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0);
         self.layout = self.layout.set_active_for(foco, destino);
         self.panes.refresh_visible(&self.layout);
+        self.history.retain_tree(&self.layout);
     }
 
     /// Va a la pestaña `n` (base 1) del grupo enfocado.
@@ -2938,6 +2938,7 @@ impl App {
         if self.layout.tabs_of(foco).is_some() {
             self.layout = self.layout.set_active_for(foco, n.saturating_sub(1));
             self.panes.refresh_visible(&self.layout);
+            self.history.retain_tree(&self.layout);
         }
     }
 
@@ -2949,6 +2950,7 @@ impl App {
         if self.layout.tabs_of(foco).is_some() {
             self.layout = self.layout.move_tab(foco, delta);
             self.panes.refresh_visible(&self.layout);
+            self.history.retain_tree(&self.layout);
         }
     }
 
@@ -2990,6 +2992,7 @@ impl App {
         };
         self.layout = nuevo;
         self.panes.refresh_visible(&self.layout);
+        self.history.retain_tree(&self.layout);
         true
     }
 

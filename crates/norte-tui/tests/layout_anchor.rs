@@ -192,8 +192,9 @@ fn a_treinta_columnas_se_pinta_un_solo_pane_a_ancho_completo() {
     let geom = ui::pane_geometry(&app, area).expect("hay geometría");
     assert_eq!(geom[0].width, 30, "el que se pinta ocupa todo");
     assert_eq!(
-        geom[1].list_rows, 0,
-        "el que no se pinta no tiene ni una fila que clicar"
+        geom.len(),
+        1,
+        "y no hay geometría para el que no se pintó: un click ahí no resuelve nada"
     );
 }
 
@@ -328,6 +329,32 @@ fn igualar_devuelve_los_paneles_a_la_mitad() {
     let _ = pintar(&mut app);
     let geom = ui::pane_geometry(&app, area).expect("dos panes");
     assert_eq!(geom[0].width, geom[1].width);
+}
+
+/// Cada pestaña tiene su propio HISTORIAL, no solo su cursor.
+///
+/// Estaba en un array de dos, así que era del sitio de la pantalla y no del
+/// listado: cambiar de pestaña te habría dado el historial de la otra, que es
+/// el mismo bug que ver su cursor.
+#[test]
+fn cada_pestana_conserva_su_historial() {
+    use norte_proto::VPath;
+    let mut app = app_de_prueba_con(60);
+    app.history[0].record(VPath::parse("mem:///una").expect("wire"));
+    app.tab_new();
+    let _ = pintar(&mut app);
+    assert!(
+        app.history[0].entries().is_empty(),
+        "la pestaña nueva empieza sin historial"
+    );
+    app.history[0].record(VPath::parse("mem:///otra").expect("wire"));
+    app.tab_cycle(-1);
+    let _ = pintar(&mut app);
+    assert_eq!(
+        app.history[0].entries().front().map(VPath::to_wire),
+        Some("mem:///una".to_owned()),
+        "la de antes recupera el suyo"
+    );
 }
 
 /// El criterio de aceptación de L1a/// El criterio de aceptación de L1a, escrito como test: esta pantalla es
