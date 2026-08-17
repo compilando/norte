@@ -93,6 +93,7 @@ keymap = [
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
     { on = ["ctrl+p"], run = "app.palette" },
+    { on = ["alt+m"], run = "app.menu" },
 ]
 
 [pane]

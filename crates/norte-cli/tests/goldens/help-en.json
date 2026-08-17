@@ -395,6 +395,11 @@
           "chord": "Backspace",
           "command": "dialog.back",
           "label": "back"
+        },
+        {
+          "chord": "Alt+m",
+          "command": "app.menu",
+          "label": "menu bar"
         }
       ],
       "context": [],
@@ -406,7 +411,7 @@
       "tags": [
         "basics"
       ],
-      "text": "Reading this help\n─────────────────\n\nF1 opens this overlay from anywhere. The list on the left is every page; the panel on the right is the page you are on.\n\nTab moves between the two. On the left, up and down change the page, and the cursor OPENS what it lands on — arrowing down the list is reading it, not choosing what to read. On the right they walk the runnable rows and the links at the bottom. Enter on a runnable row closes the help and runs the command exactly as its own key would: the same confirmation, the same policy gate, the same journal entry. Enter on a link follows it, and Backspace returns to the page you came from.\n\nRows for the overlay's own verbs — the three on this page — are the exception. They are listed so their keys can be looked up, but they mean something only inside an overlay, so a pane has nothing to run: Enter on one says so and leaves the help open.\n\n/ starts filtering the list on the left. It matches page titles, page ids and the commands each page documents — a command from the start of the id or of any of its dotted parts — so copy brings up every page that documents pane.copy, not only the one named after it. Leaving the search box keeps what you typed; emptying it is what backspace is for.\n\nThe keys here are yours\n\nNo key in these pages is written into the text. Each one is looked up in your effective keymap as the page is drawn, so a rebind changes the prose. A command with no key at all shows its name instead of claiming one.\n\nThe last entry in the list, keys, is the other direction: the whole effective keymap, generated, including the dialog.* verbs that overlay footers leave out for want of width.\n\n  tip: Ctrl+p is the fast version of the same model: type, Enter, gone. This help is the version that explains.\n\n  F1             this help\n  Ctrl+p         command palette\n  /              filter\n  Tab            other pane\n  Backspace      back\n\nSee also: Welcome to norte, Two panes, one destination\n",
+      "text": "Reading this help\n─────────────────\n\nF1 opens this overlay from anywhere. The list on the left is every page; the panel on the right is the page you are on.\n\nTab moves between the two. On the left, up and down change the page, and the cursor OPENS what it lands on — arrowing down the list is reading it, not choosing what to read. On the right they walk the runnable rows and the links at the bottom. Enter on a runnable row closes the help and runs the command exactly as its own key would: the same confirmation, the same policy gate, the same journal entry. Enter on a link follows it, and Backspace returns to the page you came from.\n\nRows for the overlay's own verbs — the three on this page — are the exception. They are listed so their keys can be looked up, but they mean something only inside an overlay, so a pane has nothing to run: Enter on one says so and leaves the help open.\n\n/ starts filtering the list on the left. It matches page titles, page ids and the commands each page documents — a command from the start of the id or of any of its dotted parts — so copy brings up every page that documents pane.copy, not only the one named after it. Leaving the search box keeps what you typed; emptying it is what backspace is for.\n\nThe keys here are yours\n\nNo key in these pages is written into the text. Each one is looked up in your effective keymap as the page is drawn, so a rebind changes the prose. A command with no key at all shows its name instead of claiming one.\n\nThe last entry in the list, keys, is the other direction: the whole effective keymap, generated, including the dialog.* verbs that overlay footers leave out for want of width.\n\n  tip: Ctrl+p is the fast version of the same model: type, Enter, gone. This help is the version that explains.\n\nAlt+m opens a menu bar with the same commands arranged by topic. It adds nothing the keyboard cannot do; it adds a way to FIND it — the palette asks you to know the name of what you want and this help asks you to read, while a menu can be walked. Arrows move, Enter runs, Esc closes, and with the mouse you just click.\n\n  F1             this help\n  Ctrl+p         command palette\n  /              filter\n  Tab            other pane\n  Backspace      back\n  Alt+m          menu bar\n\nSee also: Welcome to norte, Two panes, one destination\n",
       "title": "Reading this help"
     },
     {
@@ -1412,6 +1417,15 @@
           "availability": {
             "state": "built"
           },
+          "chord": "Alt+m",
+          "command": "app.menu",
+          "label": "menu bar",
+          "screen": "browse"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
           "chord": "q",
           "command": "viewer.close",
           "label": "close the viewer",
@@ -1586,6 +1600,15 @@
           "chord": "Ctrl+p",
           "command": "app.palette",
           "label": "command palette",
+          "screen": "viewer"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Alt+m",
+          "command": "app.menu",
+          "label": "menu bar",
           "screen": "viewer"
         },
         {
@@ -1884,13 +1907,22 @@
           "command": "app.palette",
           "label": "command palette",
           "screen": "dialog"
+        },
+        {
+          "availability": {
+            "state": "built"
+          },
+          "chord": "Alt+m",
+          "command": "app.menu",
+          "label": "menu bar",
+          "screen": "dialog"
         }
       ],
       "see_also": [],
       "tags": [
         "keys"
       ],
-      "text": "Keyboard\n\nKeys norte has not built yet are listed too, marked with the issue that tracks them. A key without that mark is built; which frontend implements it is not knowable from here.\n\n── Browsing (panes) ──\n  Up             move cursor up\n  Down           move cursor down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  Enter          enter the selected directory\n  Backspace      go to parent directory\n  Alt+Left       back to the previous directory\n  Alt+Right      forward again\n  Alt+i          send this location to the other pane\n  Alt+u          go where the other pane is\n  Ctrl+u         swap the two panes\n  F5             copy selection to the other pane\n  F6             move selection to the other pane\n  F7             create a directory (F7)\n  Shift+F6       rename in place (Shift+F6)\n  F8             delete (trash when available)\n  Shift+F8       PERMANENT delete\n  Ctrl+k         cancel the most recent task\n  F3             view the selected file\n  F4             open the selected file with an external program (openers.toml)\n  /              quick search in pane (filter/jump)\n  Alt+Down       directory history\n  Alt+F7         search by name/content (Alt+F7)\n  Shift+F2       compare the two panes and open the diff pane\n  Ctrl+y         plan a one-way synchronisation from this pane to the other\n  Alt+e          show names as… (cp437/cp866/Shift-JIS/GBK/…; display only)\n  Ctrl+r         reload both panes (Ctrl+R)\n  Ctrl+h         show or hide hidden entries\n  Alt+.          show or hide hidden entries\n  Alt+c          column picker\n  Ctrl+d         favorite directories\n  Insert         toggle mark on the entry under the cursor\n  Space          toggle mark on the entry under the cursor\n  Ctrl+a         mark every visible entry\n  Ctrl+A         clear every mark\n  *              invert the marks\n  Plus           mark by pattern\n  -              unmark by pattern\n  Ctrl+t         new tab\n  Ctrl+w         close tab\n  Alt+n          next tab\n  Alt+p          previous tab\n  Alt+h          split side by side\n  Alt+v          split top and bottom\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n── Viewer ──\n  q              close the viewer\n  Esc            close the viewer\n  F3             close the viewer\n  F10            close the viewer\n  Up             one line up\n  Down           one line down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  e              reload as… (next encoding)\n  E              back to auto-detection\n  x              toggle hex view\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n── Dialogs and overlays ──\n  each dialog supports its own subset of these keys\n  Enter          confirm\n  y              approve\n  n              deny\n  Esc            cancel\n  o              overwrite\n  s              skip\n  r              rename\n  w              keep newer\n  Up             up\n  Down           down\n  PgUp           pg up\n  PgDn           pg dn\n  a              add\n  e              toggle\n  Space          toggle\n  d              remove\n  Shift+Up       move up\n  Shift+Down     move down\n  K              move up\n  J              move down\n  Ctrl+s         sort by\n  f              format\n  Tab            other pane\n  Backspace      back\n  /              filter\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n",
+      "text": "Keyboard\n\nKeys norte has not built yet are listed too, marked with the issue that tracks them. A key without that mark is built; which frontend implements it is not knowable from here.\n\n── Browsing (panes) ──\n  Up             move cursor up\n  Down           move cursor down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  Enter          enter the selected directory\n  Backspace      go to parent directory\n  Alt+Left       back to the previous directory\n  Alt+Right      forward again\n  Alt+i          send this location to the other pane\n  Alt+u          go where the other pane is\n  Ctrl+u         swap the two panes\n  F5             copy selection to the other pane\n  F6             move selection to the other pane\n  F7             create a directory (F7)\n  Shift+F6       rename in place (Shift+F6)\n  F8             delete (trash when available)\n  Shift+F8       PERMANENT delete\n  Ctrl+k         cancel the most recent task\n  F3             view the selected file\n  F4             open the selected file with an external program (openers.toml)\n  /              quick search in pane (filter/jump)\n  Alt+Down       directory history\n  Alt+F7         search by name/content (Alt+F7)\n  Shift+F2       compare the two panes and open the diff pane\n  Ctrl+y         plan a one-way synchronisation from this pane to the other\n  Alt+e          show names as… (cp437/cp866/Shift-JIS/GBK/…; display only)\n  Ctrl+r         reload both panes (Ctrl+R)\n  Ctrl+h         show or hide hidden entries\n  Alt+.          show or hide hidden entries\n  Alt+c          column picker\n  Ctrl+d         favorite directories\n  Insert         toggle mark on the entry under the cursor\n  Space          toggle mark on the entry under the cursor\n  Ctrl+a         mark every visible entry\n  Ctrl+A         clear every mark\n  *              invert the marks\n  Plus           mark by pattern\n  -              unmark by pattern\n  Ctrl+t         new tab\n  Ctrl+w         close tab\n  Alt+n          next tab\n  Alt+p          previous tab\n  Alt+h          split side by side\n  Alt+v          split top and bottom\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n  Alt+m          menu bar\n\n── Viewer ──\n  q              close the viewer\n  Esc            close the viewer\n  F3             close the viewer\n  F10            close the viewer\n  Up             one line up\n  Down           one line down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  e              reload as… (next encoding)\n  E              back to auto-detection\n  x              toggle hex view\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n  Alt+m          menu bar\n\n── Dialogs and overlays ──\n  each dialog supports its own subset of these keys\n  Enter          confirm\n  y              approve\n  n              deny\n  Esc            cancel\n  o              overwrite\n  s              skip\n  r              rename\n  w              keep newer\n  Up             up\n  Down           down\n  PgUp           pg up\n  PgDn           pg dn\n  a              add\n  e              toggle\n  Space          toggle\n  d              remove\n  Shift+Up       move up\n  Shift+Down     move down\n  K              move up\n  J              move down\n  Ctrl+s         sort by\n  f              format\n  Tab            other pane\n  Backspace      back\n  /              filter\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n  Alt+m          menu bar\n\n",
       "title": "Keyboard"
     }
   ],

@@ -89,12 +89,21 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
     // CERRAR el frame como el run loop: devolver al modelo la geometría y las
     // zonas pulsables. Sin esto el ratón resuelve contra una pantalla que
     // nadie le contó, y un test de botones pasaría sin pulsar nada.
-    norte_tui::mouse::after_frame(app, ui::pane_geometry(app, area), ui::tab_zones(app, area));
+    norte_tui::mouse::after_frame(
+        app,
+        ui::pane_geometry(app, area),
+        ui::tab_zones(app, area),
+        ui::menu_zones(app, area),
+    );
+    // `TestBackend::to_string()` envuelve CADA fila entre comillas. Sin
+    // quitarlas, todo recorte por columna va desplazado una celda — y un
+    // `contains` lo disimula, que es exactamente cómo un test de geometría
+    // deja de comprobar geometría.
     terminal
         .backend()
         .to_string()
         .lines()
-        .map(ToOwned::to_owned)
+        .map(|l| l.trim_matches('"').to_owned())
         .collect()
 }
 
@@ -532,6 +541,85 @@ fn un_click_en_el_hueco_de_la_barra_no_hace_nada() {
     assert_eq!(
         ui::tab_strip_for(&app, 0).expect("grupo").titulos.len(),
         antes
+    );
+}
+
+/// El menú se pinta con su desplegable, y las zonas que el ratón mide son las
+/// que se pintaron.
+#[test]
+fn el_menu_se_pinta_y_sus_zonas_coinciden() {
+    let mut app = app_de_prueba_con(60);
+    app.menu = Some(norte_frontend::menu::MenuState::new());
+    let lineas = pintar(&mut app);
+    let area = ratatui::layout::Rect::new(0, 0, W, H);
+    let zonas = ui::menu_zones(&app, area);
+    assert!(!zonas.is_empty(), "hay títulos y elementos que pulsar");
+
+    // El primer título está pintado donde su zona dice.
+    let titulo = zonas
+        .iter()
+        .find(|z| z.hit == ui::MenuHit::Title(0))
+        .copied()
+        .expect("el primer título tiene zona");
+    let texto = recorte(&lineas, titulo.row, titulo.x0, titulo.x1 - titulo.x0 + 1);
+    assert!(
+        texto.trim() == norte_i18n::t("menu-file"),
+        "la zona del título no cae donde se pintó: {texto:?}"
+    );
+
+    // Y el primer elemento del desplegable lleva su etiqueta.
+    let item = zonas
+        .iter()
+        .find(|z| z.hit == ui::MenuHit::Item(0))
+        .copied()
+        .expect("el primer elemento tiene zona");
+    let fila = recorte(&lineas, item.row, item.x0, item.x1 - item.x0 + 1);
+    assert!(
+        !fila.trim().is_empty(),
+        "el desplegable no pintó su primer elemento"
+    );
+}
+
+/// Pulsar un título abre ESE menú; pulsar fuera cierra la barra.
+#[test]
+fn pulsar_un_titulo_abre_su_menu_y_fuera_cierra() {
+    let mut app = app_de_prueba_con(60);
+    app.menu = Some(norte_frontend::menu::MenuState::new());
+    let _ = pintar(&mut app);
+    let area = ratatui::layout::Rect::new(0, 0, W, H);
+    let zonas = ui::menu_zones(&app, area);
+    let tercero = zonas
+        .iter()
+        .find(|z| z.hit == ui::MenuHit::Title(2))
+        .copied()
+        .expect("hay un tercer menú");
+    pulsar(&mut app, tercero.x0, tercero.row);
+    assert_eq!(
+        app.menu.expect("sigue abierta").menu(),
+        2,
+        "se abrió el que se pulsó"
+    );
+
+    let mut app = app_de_prueba_con(60);
+    app.menu = Some(norte_frontend::menu::MenuState::new());
+    let _ = pintar(&mut app);
+    // Una fila de listado, lejos de la barra y del desplegable.
+    pulsar(&mut app, W - 2, H - 3);
+    assert!(app.menu.is_none(), "un click fuera cierra el menú");
+}
+
+/// Un menú abierto se queda TODAS las teclas: si no, un comando despachado por
+/// detrás dejaría la barra comiéndose las teclas de lo que acaba de abrirse.
+#[test]
+fn un_menu_abierto_es_dueno_del_teclado() {
+    let mut app = app_de_prueba_con(60);
+    let antes = app.panes[0].cursor();
+    app.menu = Some(norte_frontend::menu::MenuState::new());
+    let _ = pintar(&mut app);
+    assert_eq!(
+        app.panes[0].cursor(),
+        antes,
+        "abrir el menú no mueve nada de detrás"
     );
 }
 

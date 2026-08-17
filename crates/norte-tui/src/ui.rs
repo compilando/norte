@@ -523,6 +523,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     } else {
         draw_body(frame, app);
     }
+    if app.menu.is_some() {
+        draw_menu(frame, app);
+    }
     if let Some(help) = &app.help {
         draw_help(frame, help, &app.theme, &app.dialog_hints.help);
     }
@@ -4498,6 +4501,186 @@ pub struct TabStrip {
     pub titulos: Vec<String>,
     /// Cuál está activa.
     pub activa: usize,
+}
+
+/// Lo que se puede pulsar en la barra de menús.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuHit {
+    /// Un título: lo abre.
+    Title(usize),
+    /// Un elemento del menú abierto: lo ejecuta.
+    Item(usize),
+}
+
+/// Una zona pulsable de la barra de menús.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MenuZone {
+    /// Fila.
+    pub row: u16,
+    /// Primera columna, inclusive.
+    pub x0: u16,
+    /// Última columna, inclusive.
+    pub x1: u16,
+    /// Qué hace pulsarla.
+    pub hit: MenuHit,
+}
+
+/// La geometría del menú: títulos con su rango y el desplegable con el suyo.
+///
+/// UNA fuente para lo que se pinta y lo que se pulsa, por lo mismo que la
+/// barra de pestañas: medirlo dos veces es cómo un click abre el menú de al
+/// lado.
+struct MenuGeom {
+    /// `(etiqueta, x0, x1)` de cada título.
+    titles: Vec<(String, u16, u16)>,
+    /// La caja del desplegable.
+    drop: Rect,
+    /// `(etiqueta, chord)` de cada elemento del menú abierto.
+    items: Vec<(String, String)>,
+}
+
+/// Calcula la geometría del menú abierto, o `None` si no hay ninguno.
+fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
+    let st = app.menu.as_ref()?;
+    let mut titles = Vec::new();
+    let mut x = area.x;
+    for m in norte_frontend::menu::MENUS {
+        let etiqueta = format!(" {} ", norte_i18n::t(m.title));
+        let w = u16::try_from(UnicodeWidthStr::width(etiqueta.as_str())).unwrap_or(0);
+        let x1 = x.saturating_add(w).saturating_sub(1);
+        titles.push((etiqueta, x, x1));
+        x = x.saturating_add(w);
+    }
+    let m = norte_frontend::menu::MENUS.get(st.menu())?;
+    let items: Vec<(String, String)> = m
+        .items
+        .iter()
+        .map(|id| {
+            let fila = app.palette_rows.iter().find(|r| r.key == *id);
+            (
+                fila.map_or_else(|| (*id).to_owned(), |r| r.desc.clone()),
+                fila.map_or_else(|| "—".to_owned(), |r| r.chord.clone()),
+            )
+        })
+        .collect();
+    // Ancho: la etiqueta más larga, su tecla, dos bordes y el hueco entre
+    // ambas columnas.
+    let ancho_texto = items
+        .iter()
+        .map(|(l, c)| UnicodeWidthStr::width(l.as_str()) + UnicodeWidthStr::width(c.as_str()) + 3)
+        .max()
+        .unwrap_or(10);
+    let w = u16::try_from(ancho_texto + 2)
+        .unwrap_or(u16::MAX)
+        .min(area.width);
+    let h = u16::try_from(items.len() + 2)
+        .unwrap_or(u16::MAX)
+        .min(area.height.saturating_sub(1));
+    let x0 = titles
+        .get(st.menu())
+        .map_or(area.x, |(_, x0, _)| *x0)
+        .min(area.x.saturating_add(area.width).saturating_sub(w));
+    Some(MenuGeom {
+        titles,
+        drop: Rect {
+            x: x0,
+            y: area.y.saturating_add(1),
+            width: w,
+            height: h,
+        },
+        items,
+    })
+}
+
+/// Las zonas pulsables de la barra de menús.
+#[must_use]
+pub fn menu_zones(app: &App, area: Rect) -> Vec<MenuZone> {
+    let Some(g) = menu_geom(app, area) else {
+        return Vec::new();
+    };
+    let mut out: Vec<MenuZone> = g
+        .titles
+        .iter()
+        .enumerate()
+        .map(|(i, (_, x0, x1))| MenuZone {
+            row: area.y,
+            x0: *x0,
+            x1: *x1,
+            hit: MenuHit::Title(i),
+        })
+        .collect();
+    for (i, _) in g.items.iter().enumerate() {
+        let row = g
+            .drop
+            .y
+            .saturating_add(1)
+            .saturating_add(u16::try_from(i).unwrap_or(0));
+        if row >= g.drop.y.saturating_add(g.drop.height).saturating_sub(1) {
+            break;
+        }
+        out.push(MenuZone {
+            row,
+            x0: g.drop.x.saturating_add(1),
+            x1: g.drop.x.saturating_add(g.drop.width).saturating_sub(2),
+            hit: MenuHit::Item(i),
+        });
+    }
+    out
+}
+
+/// Pinta la barra de menús y su desplegable.
+fn draw_menu(frame: &mut Frame<'_>, app: &App) {
+    let area = frame.area();
+    let Some(g) = menu_geom(app, area) else {
+        return;
+    };
+    let Some(st) = app.menu.as_ref() else {
+        return;
+    };
+    let barra = Rect { height: 1, ..area };
+    clear_themed(frame, barra, &app.theme);
+    let spans: Vec<ratatui::text::Span<'static>> = g
+        .titles
+        .iter()
+        .enumerate()
+        .map(|(i, (etiqueta, _, _))| {
+            let estilo = if i == st.menu() {
+                app.theme.role(Role::Selection)
+            } else {
+                app.theme.role(Role::Title)
+            };
+            ratatui::text::Span::styled(etiqueta.clone(), estilo)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), barra);
+
+    clear_themed(frame, g.drop, &app.theme);
+    let interior = Block::default().borders(Borders::ALL).inner(g.drop);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(app.theme.role(Role::BorderFocus)),
+        g.drop,
+    );
+    let ancho = usize::from(interior.width);
+    let lineas: Vec<ratatui::text::Line<'static>> = g
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, (etiqueta, chord))| {
+            let hueco = ancho
+                .saturating_sub(UnicodeWidthStr::width(etiqueta.as_str()))
+                .saturating_sub(UnicodeWidthStr::width(chord.as_str()));
+            let texto = format!("{etiqueta}{}{chord}", " ".repeat(hueco));
+            let estilo = if i == st.item() {
+                app.theme.role(Role::Selection)
+            } else {
+                app.theme.role(Role::Regular)
+            };
+            ratatui::text::Line::styled(texto, estilo)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lineas), interior);
 }
 
 /// Lo que se puede pulsar en una barra de pestañas.

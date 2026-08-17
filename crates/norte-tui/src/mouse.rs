@@ -157,6 +157,8 @@ pub struct MouseState {
     /// hubo frame. Sin geometría no se resuelve NADA: un click contra una
     /// pantalla que no existe es peor que un click ignorado.
     geometry: Option<Vec<PaneGeometry>>,
+    /// Las zonas pulsables de la barra de menús del último frame.
+    menu_zones: Vec<crate::ui::MenuZone>,
     /// Las zonas pulsables de las barras de pestañas del último frame.
     ///
     /// Vacío = ningún panel tiene pestañas, que es el caso de siempre.
@@ -217,6 +219,7 @@ pub fn after_frame(
     app: &mut App,
     geometry: Option<Vec<PaneGeometry>>,
     tab_zones: Vec<crate::ui::TabZone>,
+    menu_zones: Vec<crate::ui::MenuZone>,
 ) {
     let vigencia = Vigencia {
         epochs: app
@@ -234,6 +237,7 @@ pub fn after_frame(
     app.mouse.vigencia = vigencia;
     app.mouse.geometry = geometry;
     app.mouse.tab_zones = tab_zones;
+    app.mouse.menu_zones = menu_zones;
 }
 
 /// Qué debe hacer el run loop tras un evento de ratón. Todo lo que se puede
@@ -244,6 +248,10 @@ pub enum After {
     /// Nada: el evento se resolvió entero aquí.
     #[default]
     Nothing,
+    /// Se pulsó un elemento del menú: el run loop debe ejecutarlo, por el
+    /// mismo camino que `Enter`. Este módulo no puede: despachar es asíncrono
+    /// y necesita el backend.
+    MenuAccept,
     /// Doble click sobre una fila: despacha `nav.enter`, EL MISMO comando
     /// del teclado (jamás un segundo camino que entre en directorios por su
     /// cuenta).
@@ -370,6 +378,42 @@ fn overlay_open(app: &App) -> bool {
         || app.compare.is_some()
 }
 
+/// Un click con la barra de menús abierta.
+///
+/// Fuera de toda zona la CIERRA: es lo que hace cualquier menú, y dejarla
+/// abierta tras pulsar en otra parte convierte un click de más en un menú
+/// pegado a la pantalla.
+///
+/// Pulsar un elemento NO lo ejecuta aquí: solo lo resalta y devuelve
+/// [`After::MenuAccept`], porque ejecutar un comando es asíncrono y este módulo
+/// no tiene el backend. El run loop lo remata por el mismo camino que `Enter`.
+fn menu_click(app: &mut App, col: u16, row: u16) -> After {
+    let zona = app
+        .mouse
+        .menu_zones
+        .iter()
+        .find(|z| z.row == row && col >= z.x0 && col <= z.x1)
+        .copied();
+    match zona.map(|z| z.hit) {
+        Some(crate::ui::MenuHit::Title(i)) => {
+            if let Some(m) = &mut app.menu {
+                m.open(i);
+            }
+            After::Nothing
+        }
+        Some(crate::ui::MenuHit::Item(i)) => {
+            if let Some(m) = &mut app.menu {
+                m.point_at(i);
+            }
+            After::MenuAccept
+        }
+        None => {
+            app.menu = None;
+            After::Nothing
+        }
+    }
+}
+
 /// La zona de barra de pestañas bajo `(col, row)`, si hay alguna.
 fn tab_zone_at(app: &App, col: u16, row: u16) -> Option<crate::ui::TabZone> {
     app.mouse
@@ -401,6 +445,15 @@ pub fn handle(app: &mut App, ev: MouseEvent) -> After {
 /// de tiempo, y un test que dependiera del reloj de la máquina sería un
 /// test que falla en CI un martes.
 pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
+    // La barra de menús se atiende ANTES de todo: es un overlay, así que
+    // mientras está abierta nada de detrás debe recibir un click, y sus propias
+    // zonas tienen que poder pulsarse.
+    if app.menu.is_some() {
+        if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return menu_click(app, ev.column, ev.row);
+        }
+        return After::Nothing;
+    }
     if overlay_open(app) {
         return After::Nothing;
     }

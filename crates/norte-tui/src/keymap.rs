@@ -153,6 +153,7 @@ commands! {
     "app.theme" => AppTheme,
     "app.extensions" => AppExtensions,
     "app.palette" => AppPalette,
+    "app.menu" => AppMenu,
     "app.settings" => AppSettings,
     "app.pick-accept" => AppPickAccept,
     "app.terminal" => AppTerminal,

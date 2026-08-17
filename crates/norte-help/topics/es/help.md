@@ -9,6 +9,7 @@ commands = [
     "dialog.filter",
     "dialog.pane",
     "dialog.back",
+    "app.menu",
 ]
 +++
 {{cmd:app.help}} abre esta ayuda desde cualquier sitio. La lista de la
@@ -47,3 +48,9 @@ efectivo entero, generado, con los verbos `dialog.*` que los pies de los
 overlays se dejan fuera por falta de ancho.
 
 > 💡 {{cmd:app.palette}} es la versión rápida del mismo modelo: escribes, Enter, y fuera. Esta ayuda es la versión que explica.
+
+{{cmd:app.menu}} abre una barra de menús con las mismas órdenes ordenadas por
+tema. No añade nada que el teclado no pueda: añade una forma de ENCONTRARLO —
+la paleta pide saber el nombre de lo que buscas y esta ayuda pide leer,
+mientras que un menú se recorre. Las flechas se mueven, `Enter` ejecuta, `Esc`
+cierra, y con el ratón se pulsa directamente.

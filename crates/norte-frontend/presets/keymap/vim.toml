@@ -22,6 +22,7 @@ keymap = [
     # `:` libre en [global]/[pane] (H1 T4): la palette es el análogo del
     # command-line mode de vim — muscle memory obvia.
     { on = [":"], run = "app.palette" },
+    { on = ["alt+m"], run = "app.menu" },
 ]
 
 [pane]
