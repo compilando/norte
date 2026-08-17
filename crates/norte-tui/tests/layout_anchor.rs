@@ -635,3 +635,40 @@ fn la_pantalla_orthodox_no_se_mueve() {
     let lineas = pintar(&mut app);
     insta::assert_snapshot!("orthodox-100x30", lineas.join("\n"));
 }
+
+/// El ancla, otra vez, CON el sidebar abierto (L3).
+///
+/// Es el mismo test de arriba, y por eso vale: lo que el motor cree que pintó
+/// sigue siendo lo que hay en el buffer cuando delante de los listados hay un
+/// panel que no es un listado. Un `Fixed(16)` mal restado desplaza los dos
+/// panes una celda y ningún snapshot de los que ya existen lo vería, porque
+/// ninguno lleva sidebar.
+#[test]
+fn la_geometria_declarada_coincide_con_lo_pintado_con_el_sidebar_abierto() {
+    let mut app = app_de_prueba_con(60);
+    app.toggle_places();
+    let lineas = pintar(&mut app);
+    let area = ratatui::layout::Rect::new(0, 0, W, H);
+    let geom = ui::pane_geometry(&app, area).expect("dos panes pintados");
+
+    assert_eq!(geom.len(), 2, "el sidebar no es un pane");
+    assert_eq!(
+        geom[0].x, 16,
+        "el primer listado empieza tras las 16 celdas"
+    );
+    assert_eq!(
+        u32::from(geom[0].width) + u32::from(geom[1].width),
+        u32::from(W) - 16,
+        "los dos listados se reparten lo que el sidebar deja"
+    );
+
+    for (i, g) in geom.iter().enumerate() {
+        let esperada = nombre_visible(&app, i, g.offset);
+        let primera = recorte(&lineas, g.first_list_row, g.x, g.width);
+        assert!(
+            primera.contains(&esperada),
+            "pane {i}: la fila {} debería llevar {esperada:?}, lleva {primera:?}",
+            g.first_list_row
+        );
+    }
+}

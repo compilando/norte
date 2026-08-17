@@ -535,6 +535,12 @@ volumes-mode-all = showing everything
 # A size the filesystem did not answer in time (design §A): never a bare `0`,
 # which would read as "full" — the opposite of "unknown".
 volumes-size-unknown = unknown
+# L3: the places sidebar (`layout.places`) — a panel, not a popup, so its
+# labels are LABELS: 14 cells of room and no sentence fits in them.
+places-title = Places
+places-section-drives = Drives
+places-section-favorites = Favorites
+places-empty = nothing here yet
 msg-theme-applied = theme applied: { $name }
 msg-theme-reverted = theme unchanged
 msg-theme-saved = theme saved: { $name } → { $path }

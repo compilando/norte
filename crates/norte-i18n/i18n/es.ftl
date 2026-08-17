@@ -544,6 +544,12 @@ volumes-mode-all = mostrando todo
 # Un tamaño que el filesystem no respondió a tiempo (diseño §A): nunca un `0`
 # pelado, que se leería como «lleno» — justo lo contrario de «desconocido».
 volumes-size-unknown = desconocido
+# L3: el sidebar de sitios (`layout.places`) — un panel, no un popup, así que
+# sus etiquetas son ETIQUETAS: hay 14 celdas y ahí no cabe una frase.
+places-title = Sitios
+places-section-drives = Unidades
+places-section-favorites = Favoritos
+places-empty = todavía nada
 msg-theme-applied = tema aplicado: { $name }
 msg-theme-reverted = tema sin cambios
 msg-theme-saved = tema guardado: { $name } → { $path }

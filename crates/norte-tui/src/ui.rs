@@ -192,6 +192,23 @@ fn slot_rect(
         .map(|(_, r)| crate::panel::to_ratatui(*r))
 }
 
+/// El primer hueco COLOCADO con ese kind, y dónde cayó.
+///
+/// Del REPARTO y no del árbol: quien pinta solo puede pintar lo que se colocó,
+/// y un hueco detrás de una pestaña o dentro de un `Split` colapsado no se
+/// colocó. Ahí es donde la suspensión de un hueco oculto deja de ser una regla
+/// escrita y pasa a ser lo único que el código puede hacer.
+fn placed_of_kind(
+    res: &norte_frontend::layout::Resolved,
+    tree: &norte_frontend::layout::Node,
+    kind: &str,
+) -> Option<(norte_frontend::layout::SlotId, Rect)> {
+    res.placements
+        .iter()
+        .find(|(id, _)| tree.kind_of(*id).is_some_and(|k| k.as_str() == kind))
+        .map(|(id, r)| (*id, crate::panel::to_ratatui(*r)))
+}
+
 /// El CUERPO: la caja envolvente de los `browser` colocados.
 ///
 /// Con uno solo colocado —el `Split` colapsó— la caja es ese mismo, que es
@@ -487,6 +504,20 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
                 app.panes.len() > 2 && app.target_index() == Some(i),
             );
         }
+    }
+    // El sidebar va DESPUÉS de los listados y antes del cromo de abajo: su
+    // hueco sale del mismo reparto, así que si no se colocó —cerrado, o
+    // colapsado por falta de sitio— aquí no hay nada que hacer.
+    if let Some((id, rect)) = placed_of_kind(&res, &app.layout, "places")
+        && let Some(state) = app.panes.places(id)
+    {
+        draw_places(
+            frame,
+            rect,
+            state,
+            app.key_owner() == crate::app::KeyOwner::Places,
+            &app.theme,
+        );
     }
     draw_tasks(frame, tasks_area, app);
     draw_status(frame, status_area, app);
@@ -2258,6 +2289,178 @@ fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App)
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
         rows[1],
     );
+}
+
+/// El sidebar de sitios (L3): discos y favoritos en un panel que se queda.
+///
+/// Todo lo que la plataforma nos da —la etiqueta de un volumen, su punto de
+/// montaje, el nombre que el usuario le puso a un favorito— pasa por el mismo
+/// enmascarado que el popup de unidades (`display_name`/`path_display`): un
+/// `fuse.<subtype>` lo elige un usuario sin privilegios, y una etiqueta de
+/// FAT es tan hostil como un nombre de fichero.
+///
+/// Un favorito roto se pinta ATENUADO y con su motivo traducido, nunca se
+/// esconde: un favorito que desaparece solo es un fallo de config invisible.
+fn draw_places(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &norte_frontend::places::PlacesState,
+    con_teclado: bool,
+    theme: &TuiTheme,
+) {
+    use norte_frontend::places::PlaceRow;
+
+    let borde = if con_teclado {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("places-title")))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(borde));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let ancho = inner.width as usize;
+    let items: Vec<ListItem<'_>> = state
+        .rows()
+        .iter()
+        .map(|fila| match fila {
+            PlaceRow::Header { section, folded } => {
+                let flecha = if *folded { '▸' } else { '▾' };
+                ListItem::new(Line::styled(
+                    cabeza(&format!("{flecha} {}", t(section.label_key())), ancho),
+                    theme.role(Role::Title),
+                ))
+            }
+            PlaceRow::Drive {
+                label, mount, free, ..
+            } => {
+                let (nombre, hostil) = if label.is_empty() {
+                    nombre_de_montaje(mount)
+                } else {
+                    display_name(label)
+                };
+                // Corto y sin decimales: catorce celdas tienen que llevar el
+                // nombre del montaje Y su espacio. Un `?` cuando el
+                // filesystem no contestó — jamás un cero, que se leería como
+                // «lleno» (la palabra entera la sigue diciendo el popup, que
+                // sí tiene sitio).
+                let libre = free.map_or_else(|| "?".to_owned(), norte_frontend::human_bytes_short);
+                ListItem::new(Line::raw(dos_campos(
+                    &con_badge(&nombre, hostil),
+                    &libre,
+                    ancho,
+                )))
+            }
+            PlaceRow::Favorite { name, target } => {
+                let (texto, hostil) = display_name(name.as_bytes());
+                let izq = con_badge(&texto, hostil);
+                match target {
+                    Ok(_) => ListItem::new(Line::raw(cabeza(&format!(" {izq}"), ancho))),
+                    // Roto: marca `!` y fila ATENUADA. El motivo entero no
+                    // cabe en catorce celdas —«ruta inválida» son trece— y
+                    // recortarlo dejaría media palabra diciendo nada, así que
+                    // la fila dice QUE está roto y la barra de estado dice por
+                    // qué cuando el cursor cae encima. Lo que no se hace es
+                    // esconderla: un favorito que desaparece solo es un fallo
+                    // de config invisible.
+                    Err(_) => ListItem::new(Line::styled(
+                        dos_campos(&izq, "!", ancho),
+                        theme.role(Role::Info),
+                    )),
+                }
+            }
+        })
+        .collect();
+    let list = List::new(items).highlight_style(theme.role(Role::Selection));
+    let mut estado = ListState::default();
+    estado.select(con_teclado.then(|| state.cursor()));
+    frame.render_stateful_widget(list, inner, &mut estado);
+}
+
+/// El texto con su badge de nombre hostil delante, si lo lleva.
+fn con_badge(texto: &str, hostil: bool) -> String {
+    if hostil {
+        format!("{HOSTILE_BADGE} {texto}")
+    } else {
+        texto.to_owned()
+    }
+}
+
+/// Cómo se llama un punto de montaje en catorce celdas.
+///
+/// Sin el prefijo `⟨file⟩` de [`norte_frontend::path_display`] cuando el
+/// esquema es local, que es SIEMPRE en `host.volumes`: en un panel de catorce
+/// celdas ese prefijo se come la ruta entera y deja al lector mirando seis
+/// filas que ponen lo mismo. El enmascarado no se pierde — cada segmento pasa
+/// por `display_name` igual que hace `path_display`.
+fn nombre_de_montaje(mount: &norte_proto::VPath) -> (String, bool) {
+    if mount.scheme() != "file" || mount.authority().is_some() {
+        return norte_frontend::path_display(mount);
+    }
+    let mut texto = String::new();
+    let mut hostil = false;
+    for seg in mount.segments() {
+        let (t, h) = display_name(seg);
+        texto.push('/');
+        texto.push_str(&t);
+        hostil |= h;
+    }
+    if texto.is_empty() {
+        texto.push('/');
+    }
+    (texto, hostil)
+}
+
+/// Una fila de dos campos en `ancho` celdas: `izq` a la izquierda, `der`
+/// pegado a la derecha.
+///
+/// El campo de la derecha NUNCA se recorta, y esa es la regla que importa: es
+/// un TAMAÑO, y un `38.2 GiB` recortado por la cabeza pinta `8.2 GiB`, que no
+/// es una etiqueta rota sino un número FALSO. Si no cabe entero, se cae el
+/// campo derecho y queda solo el nombre.
+fn dos_campos(izq: &str, der: &str, ancho: usize) -> String {
+    /// Celdas por debajo de las cuales el nombre deja de identificar nada.
+    const SUELO: usize = 6;
+    let d = norte_frontend::cells(der);
+    // Una celda de aire a cada lado del par, más el suelo del nombre: si el
+    // campo derecho no deja ni eso, el que sobra es él.
+    if d + 2 + SUELO >= ancho {
+        return cabeza(&format!(" {izq}"), ancho);
+    }
+    let sitio = ancho - d - 2;
+    let i = cabeza(&format!(" {izq}"), sitio);
+    let hueco = sitio.saturating_sub(norte_frontend::cells(&i));
+    format!("{i}{}{der} ", " ".repeat(hueco))
+}
+
+/// Recorta por la COLA a `ancho` celdas, marcando con `…`.
+///
+/// Por la cola y no por el medio ([`norte_frontend::middle_ellipsis`]) porque
+/// aquí lo que identifica la fila está al principio: el nombre de un favorito
+/// y el de una sección. La elipsis media existe para rutas, donde lo que
+/// identifica es el final.
+fn cabeza(texto: &str, ancho: usize) -> String {
+    if norte_frontend::cells(texto) <= ancho {
+        return texto.to_owned();
+    }
+    let mut out = String::new();
+    let mut usado = 0usize;
+    for c in texto.chars() {
+        let w = UnicodeWidthChar::width(c).unwrap_or(0);
+        if usado + w + 1 > ancho {
+            break;
+        }
+        usado += w;
+        out.push(c);
+    }
+    out.push('…');
+    out
 }
 
 fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {

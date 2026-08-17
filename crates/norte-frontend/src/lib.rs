@@ -68,7 +68,7 @@ pub use decoration::{BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_de
 pub use display::{
     cells, display_name, display_name_with, middle_ellipsis, path_display, path_display_with,
 };
-pub use format::human_bytes;
+pub use format::{human_bytes, human_bytes_short};
 pub use modal::{
     AI_RENAME_PAIR_LIMIT, BatchPlan, MAX_AI_PLAN_ENTRIES, MODAL_ITEM_LIMIT, RENAME_COLLISION_LIMIT,
     SEMANTIC_HIT_LIMIT, SEMANTIC_K, collision_kind_key, item_lines, item_lines_with, rename_pairs,

@@ -5,10 +5,15 @@
 //! queriendo decir «el i-ésimo LISTADO». Un sidebar no es un lado, y el día
 //! que lo fuera, una copia podría tener por destino una lista de discos.
 
+use norte_proto::methods::{Volume, VolumeKind};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_tui::app::{App, KeyOwner, Pane};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 
 fn vp(wire: &str) -> VPath {
+    // Idioma fijo: el snapshot congela texto localizado.
+    let _ = norte_i18n::force(norte_i18n::Lang::Es);
     VPath::parse(wire).expect("wire válido")
 }
 
@@ -108,5 +113,138 @@ fn abrirlo_dos_veces_no_acuna_dos_huecos() {
                 .is_some_and(|k| k.as_str() == "places"))
             .count(),
         1
+    );
+}
+
+fn volumen(mount: &str, free: u64, total: u64) -> Volume {
+    Volume {
+        mount: vp(mount),
+        label: None,
+        fs_type: "ext4".to_owned(),
+        kind: VolumeKind::Fixed,
+        total_bytes: Some(total),
+        free_bytes: Some(free),
+        read_only: false,
+    }
+}
+
+/// Una `App` con el sidebar abierto y poblado, lista para pintar.
+fn app_con_sidebar() -> App {
+    let mut app = app_de_prueba();
+    app.render_now_ms = Some(0);
+    app.toggle_places();
+    let id = app.places_slot().expect("abierto");
+    let sidebar = app.panes.places_mut(id).expect("es un sidebar");
+    sidebar.set_drives(&[
+        volumen("file:///", 41_000_000_000, 120_000_000_000),
+        volumen("file:///boot", 402_000_000, 1_000_000_000),
+    ]);
+    sidebar.set_favorites(&[
+        ("trabajo".to_owned(), Ok(vp("file:///trabajo"))),
+        ("roto".to_owned(), Err("hotlist-invalid".to_owned())),
+    ]);
+    app
+}
+
+fn buffer_de(app: &App, w: u16, h: u16) -> ratatui::buffer::Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
+    terminal
+        .draw(|f| norte_tui::ui::draw(f, app))
+        .expect("draw");
+    terminal.backend().buffer().clone()
+}
+
+/// Las filas del buffer, celda a celda.
+///
+/// A mano y NO con `TestBackend::to_string()`: ese envuelve cada fila en
+/// comillas, así que todo recorte por columna sale desplazado una celda —y un
+/// `contains()` lo tapa. Un test de geometría con `contains` no comprueba
+/// geometría.
+fn filas(buf: &ratatui::buffer::Buffer) -> Vec<String> {
+    (buf.area.top()..buf.area.bottom())
+        .map(|y| {
+            (buf.area.left()..buf.area.right())
+                .map(|x| buf[(x, y)].symbol())
+                .collect()
+        })
+        .collect()
+}
+
+/// El sidebar mide 16 celdas EXACTAS y el primer listado empieza justo
+/// después. `Fixed` gana al mínimo del kind, así que este número es el ancho
+/// de verdad y no una sugerencia.
+#[test]
+fn el_sidebar_ocupa_dieciseis_celdas_y_el_listado_empieza_en_la_diecisiete() {
+    let app = app_con_sidebar();
+    let buf = buffer_de(&app, 100, 30);
+    let f = filas(&buf);
+    // Fila 1: dentro de los dos bloques, ya sin el borde superior.
+    let fila = &f[1];
+    let celda = |x: usize| fila.chars().nth(x).expect("la celda está pintada");
+    assert_eq!(celda(0), '│', "borde izquierdo del sidebar");
+    assert_eq!(celda(15), '│', "borde derecho del sidebar, en la celda 15");
+    assert_eq!(
+        celda(16),
+        '│',
+        "borde izquierdo del primer listado, en la 16"
+    );
+}
+
+/// La pantalla entera con el sidebar abierto.
+#[test]
+fn snapshot_sidebar_abierto() {
+    let app = app_con_sidebar();
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+    terminal
+        .draw(|f| norte_tui::ui::draw(f, &app))
+        .expect("draw");
+    insta::assert_snapshot!(terminal.backend().to_string());
+}
+
+/// Un favorito roto se PINTA, marcado y atenuado. Esconderlo sería un fallo
+/// de configuración que el lector no puede ver; y el motivo entero no cabe en
+/// catorce celdas, así que lo dice la barra de estado (ver `places_activate`).
+#[test]
+fn el_favorito_roto_se_pinta_marcado_y_atenuado() {
+    let app = app_con_sidebar();
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+    terminal
+        .draw(|f| norte_tui::ui::draw(f, &app))
+        .expect("draw");
+    let buf = terminal.backend().buffer().clone();
+    let f = filas(&buf);
+    let y = f
+        .iter()
+        .position(|fila| fila.chars().take(16).collect::<String>().contains("roto"))
+        .expect("la fila del favorito roto está pintada");
+    let sidebar: String = f[y].chars().take(16).collect();
+    assert!(sidebar.contains('!'), "va marcada: {sidebar:?}");
+    // Y ATENUADA: el volcado de texto no lleva estilos, así que celda a celda.
+    let x = sidebar.find("roto").expect("el nombre está");
+    let estilo = buf[(
+        u16::try_from(x).expect("cabe"),
+        u16::try_from(y).expect("cabe"),
+    )]
+        .style();
+    assert_eq!(
+        estilo.fg,
+        app.theme.role(norte_theme::Role::Info).fg,
+        "la fila de un favorito roto se pinta con el frente atenuado"
+    );
+}
+
+/// Cerrado —el default— la pantalla no lleva sidebar ninguno: el criterio de
+/// aceptación de L3 es que el usuario no note nada hasta abrirlo, y los
+/// snapshots ortodoxos que ya existen lo comprueban celda a celda.
+#[test]
+fn cerrado_no_pinta_nada() {
+    let mut app = app_de_prueba();
+    app.render_now_ms = Some(0);
+    let buf = buffer_de(&app, 100, 30);
+    let f = filas(&buf);
+    assert!(
+        !f.iter()
+            .any(|fila| fila.contains(&norte_i18n::t_in(norte_i18n::Lang::Es, "places-title"))),
+        "sin abrirlo, el título del sidebar no aparece"
     );
 }
