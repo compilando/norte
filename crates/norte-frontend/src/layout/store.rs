@@ -97,6 +97,34 @@ impl<P> SlotStore<P> {
         }
     }
 
+    /// Los estados, en orden de [`SlotId`].
+    pub fn values(&self) -> impl Iterator<Item = &P> {
+        self.slots.values()
+    }
+
+    /// Los estados, en orden de [`SlotId`], para mutarlos.
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut P> {
+        self.slots.values_mut()
+    }
+
+    /// Intercambia el estado de dos huecos, dejando los ids donde estaban.
+    ///
+    /// Lo pide el gesto de intercambiar paneles: lo que cambia de sitio es el
+    /// CONTENIDO, no la identidad del hueco — si se movieran los ids, todo lo
+    /// que guarda un `SlotId` de antes pasaría a nombrar al otro.
+    pub fn swap(&mut self, a: SlotId, b: SlotId) {
+        if a == b {
+            return;
+        }
+        let (va, vb) = (self.slots.remove(&a), self.slots.remove(&b));
+        if let Some(v) = vb {
+            self.slots.insert(a, v);
+        }
+        if let Some(v) = va {
+            self.slots.insert(b, v);
+        }
+    }
+
     /// Los ids huérfanos, del más antiguo al más reciente.
     #[must_use]
     pub fn orphans(&self) -> Vec<SlotId> {
@@ -168,6 +196,19 @@ mod tests {
         s.sync_with(&dos(1, 2));
         assert_eq!(s.get(SlotId(2)), Some(&20));
         assert!(s.orphans().is_empty());
+    }
+
+    /// Intercambiar mueve el CONTENIDO y deja los ids quietos: si se movieran
+    /// los ids, cualquier `SlotId` guardado de antes nombraría al otro hueco.
+    #[test]
+    fn intercambiar_mueve_el_contenido_no_los_ids() {
+        let mut s: SlotStore<u32> = SlotStore::default();
+        s.insert(SlotId(1), 10);
+        s.insert(SlotId(2), 20);
+        s.swap(SlotId(1), SlotId(2));
+        assert_eq!(s.get(SlotId(1)), Some(&20));
+        assert_eq!(s.get(SlotId(2)), Some(&10));
+        assert_eq!(s.values().copied().collect::<Vec<_>>(), vec![20, 10]);
     }
 
     /// Dos `sync_with` seguidos sin cambios no duplican el huérfano: si lo

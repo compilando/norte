@@ -856,8 +856,8 @@ enum JournalIndicator {
 
 /// Estado completo del TUI: dos panes y el foco.
 pub struct App {
-    /// Los dos paneles (izquierda, derecha).
-    pub panes: [Pane; 2],
+    /// Los dos paneles (izquierda, derecha), guardados por hueco.
+    pub panes: crate::panel::PaneSlots,
     /// Config de columnas resuelta (#108 bloque 4): set por scheme + sort.
     /// La siembra el arranque desde `[ui.columns]`; el render y los hooks
     /// de cd la consultan.
@@ -2004,7 +2004,7 @@ impl App {
     #[must_use]
     pub fn new(left: Pane, right: Pane) -> Self {
         Self {
-            panes: [left, right],
+            panes: crate::panel::PaneSlots::new(left, right),
             render_now_ms: None,
             attr_catalogs: std::collections::HashMap::new(),
             caps: std::collections::HashMap::new(),
