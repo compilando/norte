@@ -61,3 +61,6 @@ edits.
 | [0053](0053-a-pairing-that-may-join-two-files-is-not-a-step.md) | A pairing that may join two files is skipped, not acted on | accepted |
 | [0054](0054-a-provider-answers-about-a-location.md) | A provider answers about a location, not only about itself | accepted |
 | [0055](0055-a-daemon-may-tell-a-client-to-start-its-replacement.md) | A daemon may tell a client to start its replacement | accepted |
+| [0056](0056-a-provider-may-delegate-to-a-program-it-does-not-trust.md) | A provider may delegate to a program it does not trust | accepted |
+| [0057](0057-a-plugin-may-be-given-a-location-it-cannot-name.md) | A plugin may be given a location it cannot name | accepted |
+| [0058](0058-a-screen-is-a-tree-the-core-keeps-and-does-not-read.md) | A screen is a tree the core keeps and does not read | accepted |

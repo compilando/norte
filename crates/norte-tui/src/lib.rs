@@ -14,6 +14,7 @@ pub mod lua;
 pub mod mouse;
 pub mod nav;
 pub mod palette;
+pub mod panel;
 pub mod settings;
 pub mod tasks;
 pub mod theme;
