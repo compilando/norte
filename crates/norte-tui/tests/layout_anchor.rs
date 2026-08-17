@@ -63,8 +63,13 @@ fn app_de_prueba_con(n: usize) -> App {
 /// Devolver el buffer no es comodidad: sin él el test solo comprobaría que
 /// `pane_geometry` está de acuerdo consigo misma.
 fn pintar(app: &mut App) -> Vec<String> {
-    let mut terminal = Terminal::new(TestBackend::new(W, H)).expect("terminal de test");
-    ui::before_frame(app, ratatui::layout::Rect::new(0, 0, W, H));
+    pintar_en(app, W, H)
+}
+
+/// Como [`pintar`] a un tamaño cualquiera.
+fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal de test");
+    ui::before_frame(app, ratatui::layout::Rect::new(0, 0, w, h));
     terminal.draw(|f| ui::draw(f, app)).expect("draw");
     terminal
         .backend()
@@ -140,6 +145,53 @@ fn la_geometria_declarada_coincide_con_las_filas_pintadas() {
             "pane {i}: el borde inferior no cae donde dice la geometría"
         );
     }
+}
+
+/// Un ancho IMPAR no pierde una columna: los dos panes suman el frame entero.
+///
+/// Vale la pena aunque parezca aritmética: el corte lo hacía ratatui y ahora
+/// lo hace `layout::resolve`, y las dos reparten el resto de la división a
+/// sitios distintos. Con anchos pares —los que usan todos los demás tests— la
+/// diferencia no existe, así que sin este test el cambio sería invisible hasta
+/// que alguien abriera un terminal de 101 columnas.
+#[test]
+fn con_ancho_impar_los_dos_panes_suman_el_frame() {
+    let mut app = app_de_prueba_con(60);
+    let lineas = pintar_en(&mut app, 101, H);
+    let area = ratatui::layout::Rect::new(0, 0, 101, H);
+    let geom = ui::pane_geometry(&app, area).expect("dos panes");
+    assert_eq!(geom[0].x, 0);
+    assert_eq!(
+        u32::from(geom[0].width) + u32::from(geom[1].width),
+        101,
+        "se perdió una columna"
+    );
+    assert_eq!(
+        geom[1].x, geom[0].width,
+        "el derecho empieza donde acaba el izquierdo"
+    );
+    // Y lo pintado coincide: la última columna del frame no queda en blanco.
+    let borde = recorte(&lineas, 0, geom[1].x, geom[1].width);
+    assert_eq!(
+        borde.chars().count(),
+        geom[1].width as usize,
+        "el pane derecho no llega al borde del frame"
+    );
+}
+
+/// A 30 columnas los dos mínimos del `browser` no caben y el motor colapsaría
+/// a pestañas — pero L1a se cae al corte de siempre y sigue pintando DOS.
+///
+/// Este test no defiende el comportamiento: lo DOCUMENTA, y es el que hay que
+/// cambiar en L1b cuando existan pintar un solo pane y reconciliar el foco.
+#[test]
+fn a_treinta_columnas_l1a_sigue_pintando_dos_panes() {
+    let mut app = app_de_prueba_con(60);
+    let _ = pintar_en(&mut app, 30, H);
+    let area = ratatui::layout::Rect::new(0, 0, 30, H);
+    let geom = ui::pane_geometry(&app, area).expect("dos panes");
+    assert_eq!(geom[0].width, 15);
+    assert_eq!(geom[1].width, 15);
 }
 
 /// El criterio de aceptación de L1a, escrito como test: esta pantalla es

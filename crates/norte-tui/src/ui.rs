@@ -138,6 +138,48 @@ fn overlay_body(app: &App, area: Rect) -> Rect {
     }
 }
 
+/// Dónde caen los DOS panes en un frame de `area`, según el motor de layout.
+///
+/// Es la única aritmética del corte entre panes que queda en el TUI: `draw` y
+/// [`pane_geometry`] la leen los dos, en vez de calcular cada uno su
+/// `Percentage(50)` y confiar en que coincidan. El reparto lo hace
+/// `norte_frontend::layout::resolve` sobre el árbol de `app.layout`, que en
+/// L1a es siempre el preset `orthodox`.
+///
+/// # El respaldo, y cuándo desaparece
+///
+/// Si el motor NO coloca los dos —el cuerpo es más estrecho que dos veces el
+/// mínimo del `browser`, así que el `Split` colapsa a pestañas— se cae al
+/// corte mitad y mitad de siempre. Pintar de verdad el colapso pide dos cosas
+/// que L1a no tiene: pintar un solo pane donde hoy siempre hay dos, y
+/// reconciliar el foco cuando el pane enfocado deja de estar en pantalla. Las
+/// dos son de L1b, y hacerlas aquí sería cambiar la pantalla en el commit que
+/// promete no cambiarla.
+fn pane_rects(app: &App, area: Rect) -> [Rect; 2] {
+    let cuerpo = overlay_body(app, area);
+    let resuelto = norte_frontend::layout::resolve(
+        crate::panel::from_ratatui(cuerpo),
+        &app.layout,
+        &app.kinds,
+    );
+    let mut out = [None, None];
+    for (id, r) in &resuelto.placements {
+        if *id == crate::panel::SLOT_LEFT {
+            out[0] = Some(crate::panel::to_ratatui(*r));
+        } else if *id == crate::panel::SLOT_RIGHT {
+            out[1] = Some(crate::panel::to_ratatui(*r));
+        }
+    }
+    if let [Some(a), Some(b)] = out {
+        return [a, b];
+    }
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(cuerpo);
+    [cols[0], cols[1]]
+}
+
 /// El interior de un bloque con borde por los cuatro lados.
 fn inner_de_bloque(area: Rect) -> Rect {
     Block::default().borders(Borders::ALL).inner(area)
@@ -151,6 +193,11 @@ fn sync_layout_rows(area: Rect, view: &crate::app::SyncView) -> (Option<Rect>, R
 
 /// La geometría PINTADA de los dos panes en un frame de `area`, o `None`
 /// cuando este frame no pinta panes (visor abierto).
+///
+/// El reparto YA NO se calcula aquí: sale de `pane_rects`, la misma llamada
+/// que usa `draw`. Lo que sigue viviendo aquí es el CROMO — los bordes del
+/// bloque y la cabecera de columnas—, que es lo que convierte un rectángulo de
+/// pane en filas de listado.
 ///
 /// Mismo trato que [`pane_list_rows`] (#124): el draw es quien sabe dónde
 /// cayó cada cosa, así que el run loop devuelve esto al modelo
@@ -172,18 +219,7 @@ pub fn pane_geometry(app: &App, area: Rect) -> Option<[crate::mouse::PaneGeometr
     if app.viewer.is_some() || app.compare.is_some() {
         return None;
     }
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(tasks_rows(app)),
-            Constraint::Length(1),
-        ])
-        .split(area);
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(rows[0]);
+    let cols = pane_rects(app, area);
     let mut out = [crate::mouse::PaneGeometry::default(); 2];
     for (i, pane) in app.panes.iter().enumerate() {
         let block = cols[i];
@@ -271,10 +307,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                 Constraint::Length(1),
             ])
             .split(frame.area());
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(rows[0]);
+        let cols = pane_rects(app, frame.area());
         // #108 L5: `now` de las celdas de tiempo relativo — UNA lectura por
         // frame; los tests lo fijan (`App::render_now_ms`) para snapshots
         // estables.

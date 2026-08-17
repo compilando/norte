@@ -17,7 +17,7 @@
 
 use std::ops::{Index, IndexMut};
 
-use norte_frontend::layout::{KindId, Params, SlotId, SlotStore};
+use norte_frontend::layout::{Dir, KindId, Node, Params, Rect as LayoutRect, SlotId, SlotStore};
 
 use crate::app::Pane;
 
@@ -197,6 +197,55 @@ impl<'a> IntoIterator for &'a mut PaneSlots {
     }
 }
 
+/// El preset por defecto: los dos listados al 50 %.
+///
+/// # Qué cubre y qué no, y por qué
+///
+/// Cubre el CUERPO —el sitio de los dos panes—, no el frame entero. La franja
+/// de tareas y la barra de estado siguen fuera del árbol porque un `Split`
+/// solo sabe repartir en proporción, y esas dos son de tamaño FIJO (la barra)
+/// y de tamaño según su CONTENIDO (la franja crece con las tareas, con tope
+/// 6). Meterlas dentro pide dos formas de tamaño que el motor no tiene, y
+/// diseñarlas ahora sin la sidebar ni el panel de tareas acoplado delante
+/// sería adivinar. Es trabajo de L1b, anotado en la spec.
+///
+/// Lo que sí desaparece es la duplicación que importaba: el corte 50/50 se
+/// calculaba en `draw` y otra vez en `pane_geometry`.
+#[must_use]
+pub fn orthodox() -> Node {
+    Node::Split {
+        dir: Dir::Horizontal,
+        weights: vec![1, 1],
+        children: vec![
+            Node::slot(SLOT_LEFT, KindId::browser()),
+            Node::slot(SLOT_RIGHT, KindId::browser()),
+        ],
+    }
+}
+
+/// Celdas a `ratatui::layout::Rect`, campo a campo. Los nombres coinciden a
+/// propósito: aquí no hay interpretación que hacer.
+#[must_use]
+pub const fn to_ratatui(r: LayoutRect) -> ratatui::layout::Rect {
+    ratatui::layout::Rect {
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
+    }
+}
+
+/// Y de vuelta.
+#[must_use]
+pub const fn from_ratatui(r: ratatui::layout::Rect) -> LayoutRect {
+    LayoutRect {
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +271,21 @@ mod tests {
         let slots = PaneSlots::new(pane("mem:///izq"), pane("mem:///der"));
         let dirs: Vec<String> = slots.iter().map(|p| p.dir().to_wire()).collect();
         assert_eq!(dirs, vec!["mem:///izq".to_owned(), "mem:///der".to_owned()]);
+    }
+
+    /// El preset lleva los dos huecos bien conocidos, y solo esos: si trajera
+    /// otro id, el estado de arranque y el layout dejarían de ser la misma
+    /// cosa y habría que migrar algo que nunca hizo falta migrar.
+    #[test]
+    fn el_preset_orthodox_lleva_los_dos_huecos_de_siempre() {
+        assert_eq!(orthodox().slot_ids(), vec![SLOT_LEFT, SLOT_RIGHT]);
+    }
+
+    /// La conversión de rectángulos es campo a campo en los dos sentidos.
+    #[test]
+    fn los_rectangulos_van_y_vuelven_iguales() {
+        let r = LayoutRect::new(3, 4, 50, 20);
+        assert_eq!(from_ratatui(to_ratatui(r)), r);
     }
 
     /// Intercambiar mueve el contenido y NO los huecos: lo que guarda un

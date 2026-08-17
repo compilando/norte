@@ -858,6 +858,12 @@ enum JournalIndicator {
 pub struct App {
     /// Los dos paneles (izquierda, derecha), guardados por hueco.
     pub panes: crate::panel::PaneSlots,
+    /// El árbol de huecos vigente. En L1a es siempre `orthodox`.
+    pub layout: norte_frontend::layout::Node,
+    /// Los kinds que este binario sabe pintar.
+    pub kinds: norte_frontend::layout::KindRegistry,
+    /// Los roles, reconciliados tras cada reparto.
+    pub roles: norte_frontend::layout::Roles,
     /// Config de columnas resuelta (#108 bloque 4): set por scheme + sort.
     /// La siembra el arranque desde `[ui.columns]`; el render y los hooks
     /// de cd la consultan.
@@ -2005,6 +2011,9 @@ impl App {
     pub fn new(left: Pane, right: Pane) -> Self {
         Self {
             panes: crate::panel::PaneSlots::new(left, right),
+            layout: crate::panel::orthodox(),
+            kinds: norte_frontend::layout::KindRegistry::builtin(),
+            roles: norte_frontend::layout::Roles::con_active(crate::panel::SLOT_LEFT),
             render_now_ms: None,
             attr_catalogs: std::collections::HashMap::new(),
             caps: std::collections::HashMap::new(),
