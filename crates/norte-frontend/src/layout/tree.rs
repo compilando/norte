@@ -172,6 +172,10 @@ pub struct Bindings {
     pub follows: Option<Follow>,
 }
 
+/// Cómo queda una [`Node::Tabs`] tras una operación: sus hijos nuevos y cuál
+/// queda activa. Recibe los hijos de ahora y la posición del que se opera.
+type ReTab<'a> = dyn Fn(&[Node], usize) -> (Vec<Node>, usize) + 'a;
+
 /// Un nodo del árbol.
 ///
 /// Tres variantes y ni una más: **las pestañas son un TIPO DE NODO, no una
@@ -345,6 +349,236 @@ impl Node {
         }
     }
 
+    /// ¿Está el hueco `id` en este subárbol?
+    #[must_use]
+    pub fn contains(&self, id: SlotId) -> bool {
+        self.slot_ids().contains(&id)
+    }
+
+    /// El mismo árbol con el hueco `id` metido en una [`Node::Tabs`] de una
+    /// sola pestaña. Si ya es hijo directo de una `Tabs`, no cambia nada.
+    #[must_use]
+    pub fn wrap_in_tabs(&self, id: SlotId) -> Self {
+        match self {
+            Self::Tabs { children, active } => {
+                if children
+                    .iter()
+                    .any(|c| matches!(c, Self::Slot { id: i, .. } if *i == id))
+                {
+                    return self.clone();
+                }
+                Self::Tabs {
+                    children: children.iter().map(|c| c.wrap_in_tabs(id)).collect(),
+                    active: *active,
+                }
+            }
+            Self::Split {
+                dir,
+                children,
+                sizes,
+            } => Self::Split {
+                dir: *dir,
+                sizes: sizes.clone(),
+                children: children.iter().map(|c| c.wrap_in_tabs(id)).collect(),
+            },
+            Self::Slot { id: i, .. } if *i == id => Self::Tabs {
+                children: vec![self.clone()],
+                active: 0,
+            },
+            Self::Slot { .. } => self.clone(),
+        }
+    }
+
+    /// Abre `nuevo` como pestaña al lado de `id`, y la deja activa.
+    ///
+    /// Si `id` no estaba en pestañas, lo envuelve primero: abrir una pestaña
+    /// desde un panel suelto es lo que convierte ese panel en el primero de un
+    /// grupo, y pedirle al usuario dos pasos para eso no tendría sentido.
+    #[must_use]
+    pub fn add_tab(&self, id: SlotId, nuevo: &Self) -> Self {
+        let envuelto = self.wrap_in_tabs(id);
+        envuelto.insert_tab_near(id, nuevo).unwrap_or(envuelto)
+    }
+
+    fn insert_tab_near(&self, id: SlotId, nuevo: &Self) -> Option<Self> {
+        let hijos = match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => children,
+            Self::Slot { .. } => return None,
+        };
+        // Más adentro primero: la `Tabs` que manda es la INTERIOR, no la que
+        // envuelve media pantalla.
+        for (i, c) in hijos.iter().enumerate() {
+            if let Some(cambiado) = c.insert_tab_near(id, nuevo) {
+                return Some(self.with_child(i, cambiado));
+            }
+        }
+        if let Self::Tabs { children, .. } = self
+            && let Some(pos) = children.iter().position(|c| c.contains(id))
+        {
+            let mut nuevos = children.clone();
+            nuevos.insert(pos + 1, nuevo.clone());
+            return Some(Self::Tabs {
+                children: nuevos,
+                active: pos + 1,
+            });
+        }
+        None
+    }
+
+    /// Cierra la pestaña que contiene `id`.
+    ///
+    /// Una `Tabs` que se queda con UN hijo se DISUELVE en él: un grupo de una
+    /// pestaña no es un grupo, y dejarlo pintaría una barra de pestañas con una
+    /// sola entrada para siempre.
+    ///
+    /// Devuelve `None` si `id` no está dentro de ninguna `Tabs` — cerrar un
+    /// panel suelto es `layout.close-slot`, no `tab.close`.
+    #[must_use]
+    pub fn close_tab(&self, id: SlotId) -> Option<Self> {
+        let hijos = match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => children,
+            Self::Slot { .. } => return None,
+        };
+        for (i, c) in hijos.iter().enumerate() {
+            if let Some(cambiado) = c.close_tab(id) {
+                return Some(self.with_child(i, cambiado));
+            }
+        }
+        if let Self::Tabs { children, active } = self
+            && children.len() > 1
+            && let Some(pos) = children.iter().position(|c| c.contains(id))
+        {
+            let mut nuevos = children.clone();
+            nuevos.remove(pos);
+            if nuevos.len() == 1 {
+                return nuevos.into_iter().next();
+            }
+            // Cerrar una pestaña ANTERIOR a la activa arrastra el índice; si
+            // no, el activo pasaría a nombrar a la de al lado. El clamp va
+            // DESPUÉS del arrastre: al revés se comen los dos y el activo cae
+            // una posición de más.
+            let act = if pos < *active {
+                active.saturating_sub(1)
+            } else {
+                *active
+            }
+            .min(nuevos.len() - 1);
+            return Some(Self::Tabs {
+                children: nuevos,
+                active: act,
+            });
+        }
+        None
+    }
+
+    /// Las pestañas del grupo que contiene `id`: el hueco que encabeza cada
+    /// una y cuál está activa. `None` si `id` no está en un grupo.
+    ///
+    /// Lo usa el render de la barra de pestañas, y por eso devuelve el PRIMER
+    /// hueco de cada pestaña: es de quien se saca el título.
+    #[must_use]
+    pub fn tabs_of(&self, id: SlotId) -> Option<(Vec<SlotId>, usize)> {
+        let hijos = match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => children,
+            Self::Slot { .. } => return None,
+        };
+        for c in hijos {
+            if let Some(v) = c.tabs_of(id) {
+                return Some(v);
+            }
+        }
+        if let Self::Tabs { children, active } = self
+            && children.iter().any(|c| c.contains(id))
+        {
+            return Some((
+                children.iter().filter_map(Self::first_slot_id).collect(),
+                (*active).min(children.len().saturating_sub(1)),
+            ));
+        }
+        None
+    }
+
+    /// Deja activa la pestaña `i` del grupo que contiene `id`.
+    #[must_use]
+    pub fn set_active_for(&self, id: SlotId, i: usize) -> Self {
+        self.map_tabs_of(id, &|children, _| {
+            (children.to_vec(), i.min(children.len() - 1))
+        })
+    }
+
+    /// Mueve la pestaña que contiene `id` `delta` posiciones, sin salirse.
+    #[must_use]
+    pub fn move_tab(&self, id: SlotId, delta: isize) -> Self {
+        self.map_tabs_of(id, &|children, pos| {
+            let destino = pos
+                .saturating_add_signed(delta)
+                .min(children.len().saturating_sub(1));
+            let mut nuevos = children.to_vec();
+            let quien = nuevos.remove(pos);
+            nuevos.insert(destino, quien);
+            (nuevos, destino)
+        })
+    }
+
+    /// Aplica `f` a la `Tabs` que contiene `id`, dándole sus hijos y la
+    /// posición del que lo contiene, y esperando los hijos nuevos y el activo.
+    fn map_tabs_of(&self, id: SlotId, f: &ReTab<'_>) -> Self {
+        let hijos = match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => children,
+            Self::Slot { .. } => return self.clone(),
+        };
+        for (i, c) in hijos.iter().enumerate() {
+            if c.contains(id) && !matches!(c, Self::Slot { .. }) {
+                let dentro = c.map_tabs_of(id, f);
+                if dentro != *c {
+                    return self.with_child(i, dentro);
+                }
+            }
+        }
+        if let Self::Tabs { children, .. } = self
+            && let Some(pos) = children.iter().position(|c| c.contains(id))
+        {
+            let (nuevos, act) = f(children, pos);
+            return Self::Tabs {
+                children: nuevos,
+                active: act,
+            };
+        }
+        self.clone()
+    }
+
+    /// El mismo nodo con el hijo `i` sustituido.
+    fn with_child(&self, i: usize, hijo: Self) -> Self {
+        match self {
+            Self::Split {
+                dir,
+                children,
+                sizes,
+            } => {
+                let mut nuevos = children.clone();
+                if let Some(slot) = nuevos.get_mut(i) {
+                    *slot = hijo;
+                }
+                Self::Split {
+                    dir: *dir,
+                    children: nuevos,
+                    sizes: sizes.clone(),
+                }
+            }
+            Self::Tabs { children, active } => {
+                let mut nuevos = children.clone();
+                if let Some(slot) = nuevos.get_mut(i) {
+                    *slot = hijo;
+                }
+                Self::Tabs {
+                    children: nuevos,
+                    active: *active,
+                }
+            }
+            Self::Slot { .. } => self.clone(),
+        }
+    }
+
     /// Los ids repetidos, si los hay. Un layout con dos huecos del mismo id es
     /// incoherente y NO se adivina cuál gana.
     #[must_use]
@@ -474,6 +708,114 @@ mod tests {
             ],
         );
         assert_eq!(arbol.first_slot_id(), Some(SlotId(7)));
+    }
+
+    fn b(id: u32) -> Node {
+        Node::slot(SlotId(id), KindId::browser())
+    }
+
+    /// Abrir una pestaña desde un panel suelto lo envuelve y deja activa la
+    /// nueva. Pedir dos pasos para eso no tendría sentido.
+    #[test]
+    fn abrir_una_pestana_desde_un_panel_suelto_lo_envuelve() {
+        let arbol = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
+        let nuevo = arbol.add_tab(SlotId(2), &b(9));
+        assert_eq!(nuevo.slot_ids(), vec![SlotId(1), SlotId(2), SlotId(9)]);
+        assert_eq!(
+            nuevo.tabs_of(SlotId(2)),
+            Some((vec![SlotId(2), SlotId(9)], 1))
+        );
+    }
+
+    /// La `Tabs` que manda es la INTERIOR, no la que envuelve media pantalla.
+    #[test]
+    fn una_pestana_nueva_entra_en_el_grupo_mas_interior() {
+        let arbol = Node::Tabs {
+            children: vec![Node::split(
+                Dir::Horizontal,
+                vec![
+                    b(1),
+                    Node::Tabs {
+                        children: vec![b(2)],
+                        active: 0,
+                    },
+                ],
+            )],
+            active: 0,
+        };
+        let nuevo = arbol.add_tab(SlotId(2), &b(9));
+        assert_eq!(
+            nuevo.tabs_of(SlotId(2)),
+            Some((vec![SlotId(2), SlotId(9)], 1))
+        );
+        // El grupo de fuera sigue con una sola pestaña.
+        assert_eq!(nuevo.tabs_of(SlotId(1)), Some((vec![SlotId(1)], 0)));
+    }
+
+    /// Una `Tabs` que se queda con UN hijo se DISUELVE: un grupo de una
+    /// pestaña no es un grupo, y dejarlo pintaría una barra con una sola
+    /// entrada para siempre.
+    #[test]
+    fn cerrar_la_penultima_pestana_disuelve_el_grupo() {
+        let arbol = Node::Tabs {
+            children: vec![b(1), b(2)],
+            active: 1,
+        };
+        let nuevo = arbol.close_tab(SlotId(2)).expect("estaba en un grupo");
+        assert_eq!(nuevo, b(1), "el grupo desaparece y queda el hueco");
+    }
+
+    /// Cerrar un panel SUELTO no es `tab.close`: devuelve `None` y el llamante
+    /// decide (será `layout.close-slot`).
+    #[test]
+    fn cerrar_un_panel_suelto_no_es_cerrar_una_pestana() {
+        let arbol = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
+        assert_eq!(arbol.close_tab(SlotId(2)), None);
+    }
+
+    /// Cerrar una pestaña anterior a la activa arrastra el índice activo: si
+    /// no, el activo pasaría a nombrar a la pestaña de al lado.
+    #[test]
+    fn cerrar_una_pestana_anterior_arrastra_el_activo() {
+        let arbol = Node::Tabs {
+            children: vec![b(1), b(2), b(3)],
+            active: 2,
+        };
+        let nuevo = arbol.close_tab(SlotId(1)).expect("está en el grupo");
+        assert_eq!(
+            nuevo.tabs_of(SlotId(3)),
+            Some((vec![SlotId(2), SlotId(3)], 1))
+        );
+    }
+
+    /// Mover una pestaña se la lleva el activo con ella.
+    #[test]
+    fn mover_una_pestana_se_lleva_el_activo() {
+        let arbol = Node::Tabs {
+            children: vec![b(1), b(2), b(3)],
+            active: 0,
+        };
+        let nuevo = arbol.move_tab(SlotId(1), 2);
+        assert_eq!(
+            nuevo.tabs_of(SlotId(1)),
+            Some((vec![SlotId(2), SlotId(3), SlotId(1)], 2))
+        );
+    }
+
+    /// Mover más allá del borde se queda en el borde, no da la vuelta: una
+    /// pestaña que salta de la última a la primera al pulsar una vez de más es
+    /// exactamente lo que nadie quería.
+    #[test]
+    fn mover_una_pestana_no_da_la_vuelta() {
+        let arbol = Node::Tabs {
+            children: vec![b(1), b(2)],
+            active: 1,
+        };
+        let nuevo = arbol.move_tab(SlotId(2), 5);
+        assert_eq!(
+            nuevo.tabs_of(SlotId(2)),
+            Some((vec![SlotId(1), SlotId(2)], 1))
+        );
     }
 
     /// Dos huecos con el mismo id es incoherente, y el árbol sabe decirlo.
