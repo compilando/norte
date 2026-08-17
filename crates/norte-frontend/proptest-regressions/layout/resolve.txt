@@ -1,8 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 884838d0337c91cb2e78f51363bfedfa45d3c81ff7cd9795445cb5ef40cdd070 # shrinks to arbol = Slot { id: SlotId(0), kind: KindId("browser"), params: Params({}), bindings: Bindings { follows: None } }, w = 1, h = 1
-cc a2b7520863b628be142bcdf04eb2ace6a9c9f6a9a820ac900364153a78d702d2 # shrinks to arbol = Slot { id: SlotId(0), kind: KindId("browser"), params: Params({}), bindings: Bindings { follows: None } }, w = 1, h = 1
