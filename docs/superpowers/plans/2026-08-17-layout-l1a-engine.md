@@ -161,9 +161,15 @@ fn la_pantalla_orthodox_no_se_mueve() {
 
 - [ ] **Step 5: Accept the baseline and commit**
 
+`cargo-insta` **no está instalado en esta máquina**, así que aceptar un
+snapshot es mover el fichero a mano: borrar la línea `assertion_line:` de la
+cabecera (cambia con cada edición del test y ensuciaría el diff) y renombrar
+`.snap.new` a `.snap`. Míralo antes de aceptarlo.
+
 ```sh
 just t norte-tui        # falla: snapshot nuevo sin aceptar
-cargo insta accept -p norte-tui
+sed -i '/^assertion_line:/d' crates/norte-tui/tests/snapshots/layout_anchor__orthodox-100x30.snap.new
+mv crates/norte-tui/tests/snapshots/layout_anchor__orthodox-100x30.snap{.new,}
 just t norte-tui        # PASS
 git add crates/norte-tui/tests/layout_anchor.rs crates/norte-tui/tests/snapshots/
 git commit -m "test(tui): anchor the painted geometry and the orthodox screen"
