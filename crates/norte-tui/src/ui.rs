@@ -109,10 +109,8 @@ pub fn before_frame(app: &mut App, area: Rect) {
     let res = resolved_frame(app, area);
     // Quién se ve dónde: con pestañas, el hueco de cada lado cambia.
     let vis = browsers_visibles(&res, &app.layout);
-    app.panes.set_visible(
-        vis.first().map(|(id, _)| *id),
-        vis.get(1).map(|(id, _)| *id),
-    );
+    let orden: Vec<_> = vis.iter().map(|(id, _)| *id).collect();
+    app.panes.set_visible(&orden);
     let cols = pane_cols(&res, &app.layout);
     // El foco no puede quedarse en un pane que este frame no pinta: sería un
     // teclado que mueve un cursor que nadie ve. Con dos lados esto es

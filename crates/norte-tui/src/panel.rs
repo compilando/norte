@@ -83,14 +83,14 @@ impl TuiPanel {
 #[derive(Debug)]
 pub struct PaneSlots {
     store: SlotStore<TuiPanel>,
-    /// Qué hueco enseña cada lado AHORA.
+    /// Qué hueco enseña cada POSICIÓN visible, de izquierda a derecha.
     ///
-    /// Con pestañas hay más de dos `browser` vivos, pero solo dos se ven, y
-    /// «el pane izquierdo» sigue queriendo decir lo mismo que siempre: el
-    /// listado que está pintado a la izquierda. Esto es lo que deja intactos
-    /// los ~212 sitios que dicen `app.panes[0]` mientras por debajo hay N
-    /// listados. Lo pone al día [`Self::set_visible`] tras cada reparto.
-    visible: [SlotId; 2],
+    /// Con pestañas hay más `browser` vivos que visibles, y con splits hay más
+    /// de dos visibles. «El pane izquierdo» sigue queriendo decir lo mismo que
+    /// siempre —el listado pintado más a la izquierda—, así que los ~212 sitios
+    /// que dicen `app.panes[0]` valen igual. Lo pone al día
+    /// [`Self::set_visible`] tras cada reparto.
+    visible: Vec<SlotId>,
 }
 
 impl PaneSlots {
@@ -102,32 +102,26 @@ impl PaneSlots {
         store.insert(SLOT_RIGHT, TuiPanel::Browser(Box::new(right)));
         Self {
             store,
-            visible: [SLOT_LEFT, SLOT_RIGHT],
+            visible: vec![SLOT_LEFT, SLOT_RIGHT],
         }
     }
 
-    /// El hueco que enseña un lado ahora mismo.
+    /// El hueco que enseña una posición. Fuera de rango, la última.
     #[must_use]
-    pub const fn slot_of(&self, side: usize) -> SlotId {
-        if side == 0 {
-            self.visible[0]
-        } else {
-            self.visible[1]
-        }
+    pub fn slot_of(&self, side: usize) -> SlotId {
+        let i = side.min(self.visible.len().saturating_sub(1));
+        self.visible.get(i).copied().unwrap_or(SLOT_LEFT)
     }
 
-    /// Dice qué hueco enseña cada lado. Lo llama el frontend tras repartir,
+    /// Dice qué hueco enseña cada posición. Lo llama el frontend tras repartir,
     /// con los `browser` colocados ordenados de izquierda a derecha.
     ///
-    /// Un lado sin `browser` colocado —el `Split` colapsó— conserva el que
-    /// tenía: su geometría ya es cero, así que nadie lo pinta ni lo clica, y
-    /// mantener el id evita que su estado quede huérfano por un frame estrecho.
-    pub fn set_visible(&mut self, izq: Option<SlotId>, der: Option<SlotId>) {
-        if let Some(i) = izq {
-            self.visible[0] = i;
-        }
-        if let Some(d) = der {
-            self.visible[1] = d;
+    /// Una lista VACÍA no borra nada: pasa cuando el reparto no coloca ningún
+    /// pane (visor abierto, o una ventana imposible), y en ese frame lo que
+    /// había sigue siendo lo correcto.
+    pub fn set_visible(&mut self, orden: &[SlotId]) {
+        if !orden.is_empty() {
+            self.visible = orden.to_vec();
         }
     }
 
@@ -137,9 +131,9 @@ impl PaneSlots {
     /// sin esto, un lado apuntaría al hueco que se acaba de cerrar y el
     /// siguiente `app.panes[i]` reventaría.
     ///
-    /// Con un solo `browser` vivo, LOS DOS lados apuntan a él. Es feo y es lo
-    /// correcto: su geometría es cero, así que no se pinta ni se clica, y las
-    /// operaciones que hablan de «el otro pane» no tienen otro del que hablar.
+    /// Con un solo `browser` vivo la lista tiene UNA entrada, y `len()` lo
+    /// dice: quien pregunte por «el otro pane» recibe ese mismo, que es la
+    /// verdad — no hay otro.
     pub fn refresh_visible(&mut self, tree: &Node) {
         let vivos: Vec<SlotId> = tree
             .visible_slot_ids()
@@ -149,9 +143,8 @@ impl PaneSlots {
                     && matches!(self.store.get(*id), Some(TuiPanel::Browser(_)))
             })
             .collect();
-        if let Some(primero) = vivos.first() {
-            self.visible[0] = *primero;
-            self.visible[1] = vivos.get(1).copied().unwrap_or(*primero);
+        if !vivos.is_empty() {
+            self.visible = vivos;
         }
         self.store.sync_with(tree);
     }
@@ -168,16 +161,16 @@ impl PaneSlots {
         self.store.insert(id, TuiPanel::Browser(Box::new(pane)));
     }
 
-    /// Cuántos listados hay. Dos en L1a, por construcción.
+    /// Cuántos listados hay VISIBLES.
     #[must_use]
     pub fn len(&self) -> usize {
-        2
+        self.visible.len()
     }
 
-    /// Nunca. Existe porque clippy lo pide junto a [`Self::len`].
+    /// Nunca: siempre hay al menos un listado en pantalla.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        false
+        self.visible.is_empty()
     }
 
     /// El listado de un lado, o `None` si el índice no es `0|1`.
@@ -195,14 +188,11 @@ impl PaneSlots {
             .and_then(TuiPanel::as_browser)
     }
 
-    /// Los huecos visibles, sin repetir. Uno solo cuando los dos lados
-    /// enseñan el mismo listado (queda un `browser` en el árbol).
+    /// Los huecos visibles, sin repetir.
     fn visibles(&self) -> Vec<SlotId> {
-        if self.visible[0] == self.visible[1] {
-            vec![self.visible[0]]
-        } else {
-            vec![self.visible[0], self.visible[1]]
-        }
+        let mut v = self.visible.clone();
+        v.dedup();
+        v
     }
 
     /// Los listados VISIBLES, de izquierda a derecha.
