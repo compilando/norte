@@ -9,6 +9,7 @@ commands = [
     "dialog.filter",
     "dialog.pane",
     "dialog.back",
+    "app.menu",
 ]
 +++
 {{cmd:app.help}} opens this overlay from anywhere. The list on the left is
@@ -44,3 +45,9 @@ keymap, generated, including the `dialog.*` verbs that overlay footers leave out
 for want of width.
 
 > 💡 {{cmd:app.palette}} is the fast version of the same model: type, Enter, gone. This help is the version that explains.
+
+{{cmd:app.menu}} opens a menu bar with the same commands arranged by topic. It
+adds nothing the keyboard cannot do; it adds a way to FIND it — the palette
+asks you to know the name of what you want and this help asks you to read,
+while a menu can be walked. Arrows move, `Enter` runs, `Esc` closes, and with
+the mouse you just click.

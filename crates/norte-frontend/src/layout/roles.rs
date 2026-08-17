@@ -10,23 +10,46 @@ use super::{Follow, KindRegistry, LayoutDiagnostic, Node, Resolved, RoleId, Slot
 /// segundo sitio. Se resuelven en cada frame porque son afirmaciones sobre lo
 /// que hay AHORA en pantalla, no propiedades guardadas del layout.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Roles(BTreeMap<RoleId, SlotId>);
+pub struct Roles {
+    map: BTreeMap<RoleId, SlotId>,
+    /// ¿Lo designó una PERSONA?
+    ///
+    /// Distinguirlo importa porque con dos paneles el destino se asigna solo
+    /// —es el otro, y nadie lo nota— y ese default NO puede sobrevivir a un
+    /// split: quien parte un panel se encuentra tres, y un destino que él no
+    /// eligió marcado en uno de ellos es exactamente la adivinanza que la
+    /// ADR 0058 D7 prohíbe.
+    target_explicit: bool,
+}
 
 impl Roles {
     /// Quién tiene el rol `role`, si alguien.
     #[must_use]
     pub fn get(&self, role: RoleId) -> Option<SlotId> {
-        self.0.get(&role).copied()
+        self.map.get(&role).copied()
     }
 
-    /// Da el rol `role` a `slot`.
+    /// Da el rol `role` a `slot`. Un `target` puesto por aquí es EXPLÍCITO:
+    /// lo eligió alguien, así que sobrevive a que aparezcan más candidatos.
     pub fn set(&mut self, role: RoleId, slot: SlotId) {
-        self.0.insert(role, slot);
+        if role == RoleId::Target {
+            self.target_explicit = true;
+        }
+        self.map.insert(role, slot);
     }
 
     /// Quita el rol `role` a quien lo tuviera.
     pub fn clear(&mut self, role: RoleId) {
-        self.0.remove(&role);
+        if role == RoleId::Target {
+            self.target_explicit = false;
+        }
+        self.map.remove(&role);
+    }
+
+    /// ¿Eligió alguien el destino, o se lo asignó el motor por no haber otro?
+    #[must_use]
+    pub const fn target_is_explicit(&self) -> bool {
+        self.target_explicit
     }
 
     /// Solo el foco. Atajo para el arranque y para los tests.
@@ -67,15 +90,19 @@ impl Roles {
                     .is_some_and(|k| decls.holds_role(k, RoleId::Target))
             })
             .collect();
-        match self.get(RoleId::Target) {
-            Some(actual) if candidatos.contains(&actual) => {}
-            _ => {
-                if let [unico] = candidatos[..] {
-                    self.set(RoleId::Target, unico);
-                } else {
-                    self.clear(RoleId::Target);
-                }
-            }
+        // Un destino EXPLÍCITO sobrevive mientras siga siendo candidato. El
+        // asignado por defecto, no: en cuanto hay más de un candidato deja de
+        // ser «el otro» y pasa a ser una adivinanza.
+        let actual = self.get(RoleId::Target);
+        let sigue_valiendo = actual.is_some_and(|a| candidatos.contains(&a));
+        if sigue_valiendo && (self.target_explicit || candidatos.len() == 1) {
+            return;
+        }
+        if let [unico] = candidatos[..] {
+            self.map.insert(RoleId::Target, unico);
+            self.target_explicit = false;
+        } else {
+            self.clear(RoleId::Target);
         }
     }
 }
@@ -179,6 +206,27 @@ mod tests {
         let mut roles = Roles::default();
         roles.reconcile(&arbol, &res, &reg(), SlotId(1));
         assert_eq!(roles.get(RoleId::Target), None);
+    }
+
+    /// El destino ASIGNADO por defecto (había un solo candidato) NO sobrevive
+    /// a que aparezca un segundo: entonces deja de ser «el otro» y pasa a ser
+    /// una adivinanza. Lo destapó pilotar la TUI en tmux — tras partir un
+    /// panel aparecía marcado un destino que nadie había elegido.
+    #[test]
+    fn el_destino_por_defecto_no_sobrevive_a_un_tercer_panel() {
+        let (arbol, res) = pintado(split(vec![browser(1), browser(2)]));
+        let mut roles = Roles::default();
+        roles.reconcile(&arbol, &res, &reg(), SlotId(1));
+        assert_eq!(roles.get(RoleId::Target), Some(SlotId(2)));
+        assert!(!roles.target_is_explicit(), "lo puso el motor, no nadie");
+
+        let (arbol, res) = pintado(split(vec![browser(1), browser(2), browser(3)]));
+        roles.reconcile(&arbol, &res, &reg(), SlotId(1));
+        assert_eq!(
+            roles.get(RoleId::Target),
+            None,
+            "con dos candidatos no hay destino que el motor pueda dar"
+        );
     }
 
     /// Pero un destino designado A MANO se respeta aunque haya varios: el

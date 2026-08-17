@@ -2725,7 +2725,12 @@ async fn run(
         // está mirando. Sin esto habría que recalcular el layout en cada
         // click, y un click resuelto contra un layout que no es el pintado
         // no falla ruidosamente: marca el fichero de al lado.
-        mouse::after_frame(app, ui::pane_geometry(app, pintado.area));
+        mouse::after_frame(
+            app,
+            ui::pane_geometry(app, pintado.area),
+            ui::tab_zones(app, pintado.area),
+            ui::menu_zones(app, pintado.area),
+        );
         // #52: listado lazy — las entradas VISIBLES sin size se hidratan por
         // tandas (máx. una en vuelo; dedup por (pane, path) en `last_probed`).
         if stat_probe.is_none() {
@@ -3309,6 +3314,49 @@ async fn run(
                         if let Event::Mouse(me) = event {
                             match mouse::handle(app, me) {
                                 mouse::After::Nothing => {}
+                                // Pulsar un elemento del menú: el ratón ya
+                                // dejó el cursor encima; ejecutarlo es
+                                // asíncrono y necesita el backend, así que se
+                                // remata aquí — el MISMO camino que `Enter`,
+                                // que es lo que hace que un menú y una tecla no
+                                // puedan divergir.
+                                mouse::After::MenuAccept => {
+                                    let elegido = app
+                                        .menu
+                                        .as_ref()
+                                        .and_then(norte_frontend::menu::MenuState::selected);
+                                    app.menu = None;
+                                    if let Some(id) = elegido
+                                        && let Some(cmd) = Command::parse(id)
+                                    {
+                                        let outcome = dispatch(
+                                            app,
+                                            backend,
+                                            &mut events,
+                                            help_lines,
+                                            lang,
+                                            quick_mode,
+                                            confirm_quit,
+                                            &cfg,
+                                            cmd,
+                                        )
+                                        .await;
+                                        apply_cd(
+                                            &app.panes,
+                                            &mut fill,
+                                            &mut decorate_fetch,
+                                            &mut last_probed,
+                                            &mut search_run,
+                                            outcome,
+                                        );
+                                        reap_search_run(app, &mut search_run);
+                                        if let Some(pending) = app.pending_open.take() {
+                                            app.message = Some(
+                                                launch_opener(terminal, capture, pending).await,
+                                            );
+                                        }
+                                    }
+                                }
                                 // Doble click = `nav.enter`, por el MISMO `dispatch`
                                 // que la tecla: mismo cd, mismo relleno paginado,
                                 // misma cosecha de la búsqueda viva. Un segundo
@@ -3365,7 +3413,114 @@ async fn run(
                             && key.kind == crossterm::event::KeyEventKind::Press
                         {
                             app.message = None;
-                            if app.theme_picker.is_some() && !modal_wins(app) {
+                            if app.menu.is_some() && !modal_wins(app) {
+                                // La barra de menús: teclas FIJAS, como la
+                                // palette. No hay verbos `dialog.*` para
+                                // «siguiente menú», así que tampoco pueden
+                                // salir del keymap.
+                                let plain = key.modifiers.is_empty()
+                                    || key.modifiers == KeyModifiers::SHIFT;
+                                match key.code {
+                                    KeyCode::Esc if plain => app.menu = None,
+                                    KeyCode::Left if plain => {
+                                        if let Some(m) = &mut app.menu {
+                                            m.cycle_menu(-1);
+                                        }
+                                    }
+                                    KeyCode::Right if plain => {
+                                        if let Some(m) = &mut app.menu {
+                                            m.cycle_menu(1);
+                                        }
+                                    }
+                                    KeyCode::Up if plain => {
+                                        if let Some(m) = &mut app.menu {
+                                            m.cycle_item(-1);
+                                        }
+                                    }
+                                    KeyCode::Down if plain => {
+                                        if let Some(m) = &mut app.menu {
+                                            m.cycle_item(1);
+                                        }
+                                    }
+                                    KeyCode::Enter if plain => {
+                                        // El menú se CIERRA antes de despachar,
+                                        // por lo mismo que la palette: el
+                                        // comando puede abrir otro overlay, y
+                                        // hacerlo por detrás de este dejaría el
+                                        // menú comiéndose las teclas del que
+                                        // acaba de abrirse.
+                                        let elegido = app
+                                            .menu
+                                            .as_ref()
+                                            .and_then(norte_frontend::menu::MenuState::selected);
+                                        app.menu = None;
+                                        if let Some(id) = elegido
+                                            && let Some(cmd) = Command::parse(id)
+                                        {
+                                            // MISMO camino que la palette y que
+                                            // el resolver: un comando elegido en
+                                            // un menú corre exactamente como si
+                                            // se hubiera pulsado su tecla.
+                                            //
+                                            // El cuerpo está duplicado del brazo
+                                            // de la palette a sabiendas:
+                                            // extraerlo pide una función de doce
+                                            // parámetros —`&mut events`,
+                                            // `terminal`, `capture`— o refactorizar
+                                            // el run loop, y ninguna de las dos
+                                            // cabe en el cambio que trae el menú.
+                                            let outcome = dispatch(
+                                                app,
+                                                backend,
+                                                &mut events,
+                                                help_lines,
+                                                lang,
+                                                quick_mode,
+                                                confirm_quit,
+                                                &cfg,
+                                                cmd,
+                                            )
+                                            .await;
+                                            if let Some(pane) = cd_landed_pane(&outcome) {
+                                                app.apply_scheme_sort(pane);
+                                                let dir = app.panes[pane].dir().clone();
+                                                let paths: Vec<VPath> = app.panes[pane]
+                                                    .entries()
+                                                    .iter()
+                                                    .map(|e| e.path.clone())
+                                                    .collect();
+                                                let plugin_cols =
+                                                    app.columns.plugin_ids_for(dir.scheme());
+                                                decorate_fetch.set(
+                                                    app.panes.slot_of(pane),
+                                                    spawn_decorate_fetch(
+                                                        backend,
+                                                        app.panes.slot_of(pane),
+                                                        dir,
+                                                        paths,
+                                                        plugin_cols,
+                                                    ),
+                                                );
+                                            }
+                                            apply_cd(
+                                                &app.panes,
+                                                &mut fill,
+                                                &mut decorate_fetch,
+                                                &mut last_probed,
+                                                &mut search_run,
+                                                outcome,
+                                            );
+                                            reap_search_run(app, &mut search_run);
+                                            if let Some(pending) = app.pending_open.take() {
+                                                app.message = Some(
+                                                    launch_opener(terminal, capture, pending).await,
+                                                );
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            } else if app.theme_picker.is_some() && !modal_wins(app) {
                                 on_theme_picker_key(app, dialog_resolver, key.modifiers, key.code).await;
                             } else if app.columns_picker.is_some() && !modal_wins(app) {
                                 // Picker de columnas (#108 7a): mismo puesto en la
@@ -10718,6 +10873,7 @@ fn nav_stalled(cmd: Command, outcome: &Cd) -> bool {
 /// moved the keyboard.
 fn keyboard_owner(app: &App) -> u16 {
     let bits = [
+        app.menu.is_some(),
         app.modal.is_some(),
         app.viewer.is_some(),
         app.help.is_some(),
@@ -10902,6 +11058,15 @@ async fn dispatch(
         Command::TabGoto7 => app.tab_goto(7),
         Command::TabGoto8 => app.tab_goto(8),
         Command::TabGoto9 => app.tab_goto(9),
+        Command::AppMenu => {
+            // Alternar: la misma tecla lo abre y lo cierra, como los demás
+            // overlays.
+            app.menu = if app.menu.is_some() {
+                None
+            } else {
+                Some(norte_frontend::menu::MenuState::new())
+            };
+        }
         Command::LayoutSplitH => app.layout_split(norte_frontend::layout::Dir::Horizontal),
         Command::LayoutSplitV => app.layout_split(norte_frontend::layout::Dir::Vertical),
         Command::LayoutFocusNext => app.layout_focus(1),

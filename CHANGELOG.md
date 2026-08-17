@@ -1070,6 +1070,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **A menu bar.** `Alt+M` opens one: File, Mark, Panels, Tabs, Find, View,
+  Help. It adds nothing the keyboard cannot do — it adds a way to find it. The
+  palette asks you to know the name of what you want and the help asks you to
+  read; a menu you can walk. Arrows move, `Enter` runs, `Esc` closes, and with
+  the mouse you just click.
+
+- **The tab bar is a set of buttons.** Click a tab to switch to it, `[+]` to
+  open one, `[x]` to close the one you are looking at.
+
 - **More than two panels.** Split the focused panel side by side or top and
   bottom, as many times as you like. The new panel starts in the directory you
   were in, already filled, and takes the focus — splitting is asking for room

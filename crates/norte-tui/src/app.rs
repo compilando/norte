@@ -864,6 +864,9 @@ pub struct App {
     pub kinds: norte_frontend::layout::KindRegistry,
     /// Los roles, reconciliados tras cada reparto.
     pub roles: norte_frontend::layout::Roles,
+    /// La barra de menús, si está abierta. Overlay: se queda TODAS las teclas
+    /// mientras está, como el resto.
+    pub menu: Option<norte_frontend::menu::MenuState>,
     /// El siguiente `SlotId` a acuñar. Nunca decrece y nunca se reutiliza:
     /// un id reciclado haría que el estado huérfano de un hueco cerrado
     /// resucitara dentro de otro que no tiene nada que ver.
@@ -2018,6 +2021,7 @@ impl App {
             layout: crate::panel::orthodox(),
             kinds: norte_frontend::layout::KindRegistry::builtin(),
             roles: norte_frontend::layout::Roles::con_active(crate::panel::SLOT_LEFT),
+            menu: None,
             // Los cuatro primeros son los del preset `orthodox`.
             next_slot: 5,
             render_now_ms: None,

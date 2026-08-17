@@ -76,7 +76,12 @@ fn pintar(app: &mut App) -> Vec<String> {
     ui::before_frame(app, ratatui::layout::Rect::new(0, 0, W, H));
     let frame = terminal.draw(|f| ui::draw(f, app)).expect("draw");
     let geometria = ui::pane_geometry(app, frame.area);
-    mouse::after_frame(app, geometria);
+    mouse::after_frame(
+        app,
+        geometria,
+        ui::tab_zones(app, frame.area),
+        ui::menu_zones(app, frame.area),
+    );
     terminal
         .backend()
         .to_string()
@@ -890,7 +895,7 @@ fn con_mouse_false_no_hay_captura_ni_manejo() {
     assert!(out.is_empty(), "nada escrito al terminal");
 
     let mut app = app_pintada(5);
-    mouse::after_frame(&mut app, None);
+    mouse::after_frame(&mut app, None, Vec::new(), Vec::new());
     let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 3));
     assert_eq!(
         app.panes[0].cursor(),

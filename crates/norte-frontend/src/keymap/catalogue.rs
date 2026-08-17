@@ -65,6 +65,7 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("app.settings", false),
     live("app.extensions", false),
     live("app.palette", false),
+    live("app.menu", false),
     // `--pick` (S2): being in this table only means the NAME is known to the
     // vocabulary (help, palette, rebind checks). No preset binds it — the
     // TUI's run loop decides, per keystroke, whether Enter/Ctrl+Enter means

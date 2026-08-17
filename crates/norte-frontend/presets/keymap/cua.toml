@@ -18,6 +18,7 @@ keymap = [
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
     { on = ["ctrl+p"], run = "app.palette" },
+    { on = ["alt+m"], run = "app.menu" },
 ]
 
 [pane]
@@ -64,6 +65,10 @@ keymap = [
     { on = ["-"], run = "mark.pattern-remove" },
     { on = ["ctrl+t"], run = "pane.tab-new" },
     { on = ["ctrl+w"], run = "pane.tab-close" },
+    { on = ["alt+n"], run = "pane.tab-next" },
+    { on = ["alt+p"], run = "pane.tab-prev" },
+    { on = ["alt+h"], run = "layout.split-h" },
+    { on = ["alt+v"], run = "layout.split-v" },
 ]
 
 [viewer]

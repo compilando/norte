@@ -42,3 +42,8 @@ para eso está `layout.close-slot`.
 
 Una pestaña que no se ve no gasta: no vigila su directorio ni pide nada. Al
 volver a ella se pone al día.
+
+Con el ratón: pulsa una pestaña para ir a ella, `[+]` para abrir otra y
+`[x]` para cerrar la que estás viendo. Pulsar la barra de un panel le da el
+foco antes de hacer nada — pulsar en un lado y que la orden la reciba el otro
+sería lo contrario de lo que dijo el dedo.
