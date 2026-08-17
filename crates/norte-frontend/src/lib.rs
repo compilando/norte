@@ -50,6 +50,7 @@ pub mod nav;
 pub mod openers;
 pub mod palette;
 mod pane;
+pub mod places;
 pub mod plugin_config;
 pub mod settings;
 pub mod shell;
