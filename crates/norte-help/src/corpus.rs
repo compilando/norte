@@ -25,6 +25,7 @@ use norte_i18n::Lang;
 const EN: &[(&str, &str)] = &[
     ("index", include_str!("../topics/en/index.md")),
     ("panes", include_str!("../topics/en/panes.md")),
+    ("tabs", include_str!("../topics/en/tabs.md")),
     ("selection", include_str!("../topics/en/selection.md")),
     ("mouse", include_str!("../topics/en/mouse.md")),
     ("help", include_str!("../topics/en/help.md")),
@@ -49,6 +50,7 @@ const EN: &[(&str, &str)] = &[
 const ES: &[(&str, &str)] = &[
     ("index", include_str!("../topics/es/index.md")),
     ("panes", include_str!("../topics/es/panes.md")),
+    ("tabs", include_str!("../topics/es/tabs.md")),
     ("selection", include_str!("../topics/es/selection.md")),
     ("mouse", include_str!("../topics/es/mouse.md")),
     ("help", include_str!("../topics/es/help.md")),

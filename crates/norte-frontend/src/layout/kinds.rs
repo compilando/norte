@@ -64,6 +64,8 @@ impl KindRegistry {
                 decl("browser", (20, 5), true, true, true, ROLES_BROWSER),
                 // La franja de tareas: se mira, no se enfoca, y hay una.
                 decl("tasks", (20, 3), false, false, false, SIN_ROLES),
+                // La barra de estado: una fila, nadie la enfoca.
+                decl("status", (1, 1), false, false, false, SIN_ROLES),
                 decl("viewer", (20, 5), true, true, false, SIN_ROLES),
                 decl("compare", (40, 8), true, true, false, SIN_ROLES),
                 decl("sync", (40, 8), true, true, false, SIN_ROLES),

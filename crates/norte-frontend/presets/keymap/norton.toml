@@ -80,6 +80,8 @@ keymap = [
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
     { on = ["*"], run = "mark.invert" },
+    { on = ["ctrl+t"], run = "pane.tab-new" },
+    { on = ["ctrl+w"], run = "pane.tab-close" },
 ]
 
 [viewer]

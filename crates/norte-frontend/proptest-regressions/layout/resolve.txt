@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a1e5ec4ba53d7a1e38e990b1e02e22cbbecf88d9c4311abe2805ec7789f09edb # shrinks to arbol = Split { dir: Vertical, children: [Slot { id: SlotId(0), kind: KindId("browser"), params: Params({}), bindings: Bindings { follows: None } }, Slot { id: SlotId(1), kind: KindId("browser"), params: Params({}), bindings: Bindings { follows: None } }], sizes: [Auto, Weight(1)] }, w = 20, h = 5

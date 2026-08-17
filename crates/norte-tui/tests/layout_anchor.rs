@@ -179,22 +179,158 @@ fn con_ancho_impar_los_dos_panes_suman_el_frame() {
     );
 }
 
-/// A 30 columnas los dos mínimos del `browser` no caben y el motor colapsaría
-/// a pestañas — pero L1a se cae al corte de siempre y sigue pintando DOS.
+/// A 30 columnas los dos mínimos del `browser` no caben, así que el `Split`
+/// colapsa y se pinta UNO a ancho completo.
 ///
-/// Este test no defiende el comportamiento: lo DOCUMENTA, y es el que hay que
-/// cambiar en L1b cuando existan pintar un solo pane y reconciliar el foco.
+/// Es la contrapartida visible de todo el motor: dos panes de quince columnas
+/// no enseñan ni un nombre con su tamaño, y hasta ahora eran lo único posible.
 #[test]
-fn a_treinta_columnas_l1a_sigue_pintando_dos_panes() {
+fn a_treinta_columnas_se_pinta_un_solo_pane_a_ancho_completo() {
     let mut app = app_de_prueba_con(60);
     let _ = pintar_en(&mut app, 30, H);
     let area = ratatui::layout::Rect::new(0, 0, 30, H);
-    let geom = ui::pane_geometry(&app, area).expect("dos panes");
-    assert_eq!(geom[0].width, 15);
-    assert_eq!(geom[1].width, 15);
+    let geom = ui::pane_geometry(&app, area).expect("hay geometría");
+    assert_eq!(geom[0].width, 30, "el que se pinta ocupa todo");
+    assert_eq!(
+        geom[1].list_rows, 0,
+        "el que no se pinta no tiene ni una fila que clicar"
+    );
 }
 
-/// El criterio de aceptación de L1a, escrito como test: esta pantalla es
+/// Y el foco no se queda en el pane que dejó de pintarse: sería un teclado
+/// moviendo un cursor que nadie ve.
+#[test]
+fn el_foco_abandona_el_pane_que_el_colapso_dejo_fuera() {
+    let mut app = app_de_prueba_con(60);
+    app.set_focus(1);
+    let _ = pintar_en(&mut app, 30, H);
+    assert_eq!(app.focus(), 0, "el foco cae en el que sí se ve");
+}
+
+/// Con una pestaña abierta, el ancla sigue valiendo: la barra se come una
+/// fila y la geometría lo sabe.
+///
+/// Es el test que importa de las pestañas. La barra cambia el cromo del pane,
+/// y si `pane_geometry` no lo descuenta, cada click resuelve una fila más
+/// arriba de lo que el usuario ve — el fallo silencioso que la geometría
+/// existe para no tener.
+#[test]
+fn con_una_pestana_abierta_la_geometria_sigue_cuadrando() {
+    let mut app = app_de_prueba_con(60);
+    let antes =
+        ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("dos panes")[0];
+    app.tab_new();
+    let lineas = pintar(&mut app);
+    let geom = ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("dos panes");
+    assert_eq!(
+        geom[0].first_list_row,
+        antes.first_list_row + 1,
+        "la barra de pestañas baja el listado una fila"
+    );
+    assert_eq!(
+        geom[0].list_rows,
+        antes.list_rows - 1,
+        "y le quita una fila de listado"
+    );
+    let esperada = nombre_visible(&app, 0, geom[0].offset);
+    let fila = recorte(&lineas, geom[0].first_list_row, geom[0].x, geom[0].width);
+    assert!(
+        fila.contains(&esperada),
+        "la primera fila de listado debería llevar {esperada:?}, lleva {fila:?}"
+    );
+}
+
+/// Una pestaña nueva nace en el mismo directorio y YA LLENA: es lo mismo que
+/// se estaba mirando, así que no parpadea vacía mientras alguien relee.
+#[test]
+fn una_pestana_nueva_nace_llena_y_en_el_mismo_sitio() {
+    let mut app = app_de_prueba_con(60);
+    let dir = app.panes[0].dir().clone();
+    let n = app.panes[0].entries().len();
+    app.tab_new();
+    let _ = pintar(&mut app);
+    assert_eq!(app.panes[0].dir(), &dir);
+    assert_eq!(app.panes[0].entries().len(), n);
+}
+
+/// Cerrar la penúltima pestaña disuelve el grupo y devuelve la fila.
+#[test]
+fn al_cerrar_la_ultima_pestana_el_pane_recupera_su_fila() {
+    let mut app = app_de_prueba_con(60);
+    let antes =
+        ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("dos panes")[0];
+    app.tab_new();
+    let _ = pintar(&mut app);
+    app.tab_close();
+    let _ = pintar(&mut app);
+    let geom = ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("dos panes");
+    assert_eq!(geom[0].list_rows, antes.list_rows);
+}
+
+/// Cambiar de pestaña cambia el listado que el lado enseña, y cada una
+/// conserva su cursor: no hay nada que recordar porque nada se olvidó.
+#[test]
+fn cada_pestana_conserva_su_cursor() {
+    let mut app = app_de_prueba_con(60);
+    app.panes[0].set_cursor(7);
+    app.tab_new();
+    let _ = pintar(&mut app);
+    app.panes[0].set_cursor(2);
+    assert_eq!(
+        app.panes[0].cursor(),
+        2,
+        "la pestaña nueva va por su cuenta"
+    );
+    app.tab_cycle(-1);
+    let _ = pintar(&mut app);
+    assert_eq!(app.panes[0].cursor(), 7, "la de antes sigue donde estaba");
+}
+
+/// Cerrar el último panel se NIEGA. Es lo que mantiene distintos los dos
+/// lados: con un solo listado, «el otro pane» sería este mismo y una copia
+/// tendría por destino su propio origen.
+#[test]
+fn no_se_puede_cerrar_el_ultimo_panel() {
+    let mut app = app_de_prueba_con(60);
+    assert!(!app.layout_close_slot(), "con dos paneles ya no se puede");
+    let _ = pintar(&mut app);
+    assert!(
+        ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).is_some(),
+        "los dos siguen ahí"
+    );
+}
+
+/// Agrandar un panel le da sitio de verdad, y el otro lo pierde.
+#[test]
+fn agrandar_un_panel_le_da_sitio_y_al_otro_se_lo_quita() {
+    let mut app = app_de_prueba_con(60);
+    let area = ratatui::layout::Rect::new(0, 0, W, H);
+    let antes = ui::pane_geometry(&app, area).expect("dos panes")[0].width;
+    app.layout_resize(1);
+    let _ = pintar(&mut app);
+    let geom = ui::pane_geometry(&app, area).expect("dos panes");
+    assert!(geom[0].width > antes, "el enfocado crece");
+    assert_eq!(
+        u32::from(geom[0].width) + u32::from(geom[1].width),
+        u32::from(W),
+        "y siguen sumando el frame"
+    );
+}
+
+/// Igualar los devuelve a la mitad cada uno.
+#[test]
+fn igualar_devuelve_los_paneles_a_la_mitad() {
+    let mut app = app_de_prueba_con(60);
+    let area = ratatui::layout::Rect::new(0, 0, W, H);
+    app.layout_resize(3);
+    let _ = pintar(&mut app);
+    app.layout_equalize();
+    let _ = pintar(&mut app);
+    let geom = ui::pane_geometry(&app, area).expect("dos panes");
+    assert_eq!(geom[0].width, geom[1].width);
+}
+
+/// El criterio de aceptación de L1a/// El criterio de aceptación de L1a, escrito como test: esta pantalla es
 /// idéntica antes y después del refactor.
 ///
 /// Si cambia una celda, o el refactor movió algo o alguien cambió el render a

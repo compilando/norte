@@ -266,8 +266,8 @@ layout.focus-prev  layout.grow  layout.shrink  layout.equalize  layout.set-targe
 Fifteen commands times seven presets, plus the reference sheet, which-key and
 the help, is where the time goes — and each preset imitates a different manager
 with its own conventions, so it cannot be done with a `sed`. Therefore:
-**bind only the core by default** (`tab.new`, `tab.close`, `tab.next`,
-`tab.prev`, `layout.focus-next`, `layout.set-target`); the rest ship **unbound**,
+**bind only the core by default** (`pane.tab-new`, `pane.tab-close`, `pane.tab-next`,
+`pane.tab-prev`, `layout.focus-next`, `layout.set-target`); the rest ship **unbound**,
 reachable from the palette and shown greyed in the sheet. That is the pattern
 the repository already uses for planned capabilities (#132–#140).
 

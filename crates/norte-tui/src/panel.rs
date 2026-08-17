@@ -17,7 +17,9 @@
 
 use std::ops::{Index, IndexMut};
 
-use norte_frontend::layout::{Dir, KindId, Node, Params, Rect as LayoutRect, SlotId, SlotStore};
+use norte_frontend::layout::{
+    Dir, KindId, Node, Params, Rect as LayoutRect, Size, SlotId, SlotStore,
+};
 
 use crate::app::Pane;
 
@@ -31,6 +33,8 @@ pub const SLOT_LEFT: SlotId = SlotId(1);
 pub const SLOT_RIGHT: SlotId = SlotId(2);
 /// El hueco de la franja de tareas en el preset `orthodox`.
 pub const SLOT_TASKS: SlotId = SlotId(3);
+/// El hueco de la barra de estado en el preset `orthodox`.
+pub const SLOT_STATUS: SlotId = SlotId(4);
 
 /// Lo que puede haber dentro de un hueco en el TUI.
 ///
@@ -79,6 +83,14 @@ impl TuiPanel {
 #[derive(Debug)]
 pub struct PaneSlots {
     store: SlotStore<TuiPanel>,
+    /// Qué hueco enseña cada lado AHORA.
+    ///
+    /// Con pestañas hay más de dos `browser` vivos, pero solo dos se ven, y
+    /// «el pane izquierdo» sigue queriendo decir lo mismo que siempre: el
+    /// listado que está pintado a la izquierda. Esto es lo que deja intactos
+    /// los ~212 sitios que dicen `app.panes[0]` mientras por debajo hay N
+    /// listados. Lo pone al día [`Self::set_visible`] tras cada reparto.
+    visible: [SlotId; 2],
 }
 
 impl PaneSlots {
@@ -88,13 +100,72 @@ impl PaneSlots {
         let mut store = SlotStore::default();
         store.insert(SLOT_LEFT, TuiPanel::Browser(Box::new(left)));
         store.insert(SLOT_RIGHT, TuiPanel::Browser(Box::new(right)));
-        Self { store }
+        Self {
+            store,
+            visible: [SLOT_LEFT, SLOT_RIGHT],
+        }
     }
 
-    /// El hueco de un lado.
+    /// El hueco que enseña un lado ahora mismo.
     #[must_use]
-    pub const fn slot_of(side: usize) -> SlotId {
-        if side == 0 { SLOT_LEFT } else { SLOT_RIGHT }
+    pub const fn slot_of(&self, side: usize) -> SlotId {
+        if side == 0 {
+            self.visible[0]
+        } else {
+            self.visible[1]
+        }
+    }
+
+    /// Dice qué hueco enseña cada lado. Lo llama el frontend tras repartir,
+    /// con los `browser` colocados ordenados de izquierda a derecha.
+    ///
+    /// Un lado sin `browser` colocado —el `Split` colapsó— conserva el que
+    /// tenía: su geometría ya es cero, así que nadie lo pinta ni lo clica, y
+    /// mantener el id evita que su estado quede huérfano por un frame estrecho.
+    pub fn set_visible(&mut self, izq: Option<SlotId>, der: Option<SlotId>) {
+        if let Some(i) = izq {
+            self.visible[0] = i;
+        }
+        if let Some(d) = der {
+            self.visible[1] = d;
+        }
+    }
+
+    /// Pone al día los lados a partir del ÁRBOL, sin repartir nada.
+    ///
+    /// Se llama justo después de tocar el layout, cuando todavía no hay frame:
+    /// sin esto, un lado apuntaría al hueco que se acaba de cerrar y el
+    /// siguiente `app.panes[i]` reventaría.
+    ///
+    /// Con un solo `browser` vivo, LOS DOS lados apuntan a él. Es feo y es lo
+    /// correcto: su geometría es cero, así que no se pinta ni se clica, y las
+    /// operaciones que hablan de «el otro pane» no tienen otro del que hablar.
+    pub fn refresh_visible(&mut self, tree: &Node) {
+        let vivos: Vec<SlotId> = tree
+            .visible_slot_ids()
+            .into_iter()
+            .filter(|id| {
+                tree.kind_of(*id).is_some_and(|k| *k == KindId::browser())
+                    && matches!(self.store.get(*id), Some(TuiPanel::Browser(_)))
+            })
+            .collect();
+        if let Some(primero) = vivos.first() {
+            self.visible[0] = *primero;
+            self.visible[1] = vivos.get(1).copied().unwrap_or(*primero);
+        }
+        self.store.sync_with(tree);
+    }
+
+    /// El listado de un hueco cualquiera, visible o no. Lo pide la barra de
+    /// pestañas, que tiene que titular también las que no se ven.
+    #[must_use]
+    pub fn browser(&self, id: SlotId) -> Option<&Pane> {
+        self.store.get(id).and_then(TuiPanel::as_browser)
+    }
+
+    /// Mete un listado nuevo en el store, para un hueco recién acuñado.
+    pub fn insert_browser(&mut self, id: SlotId, pane: Pane) {
+        self.store.insert(id, TuiPanel::Browser(Box::new(pane)));
     }
 
     /// Cuántos listados hay. Dos en L1a, por construcción.
@@ -120,23 +191,45 @@ impl PaneSlots {
             return None;
         }
         self.store
-            .get(Self::slot_of(side))
+            .get(self.slot_of(side))
             .and_then(TuiPanel::as_browser)
     }
 
-    /// Los listados, de izquierda a derecha.
-    pub fn iter(&self) -> impl Iterator<Item = &Pane> {
-        self.store.values().filter_map(TuiPanel::as_browser)
+    /// Los huecos visibles, sin repetir. Uno solo cuando los dos lados
+    /// enseñan el mismo listado (queda un `browser` en el árbol).
+    fn visibles(&self) -> Vec<SlotId> {
+        if self.visible[0] == self.visible[1] {
+            vec![self.visible[0]]
+        } else {
+            vec![self.visible[0], self.visible[1]]
+        }
     }
 
-    /// Los listados, para mutarlos.
+    /// Los listados VISIBLES, de izquierda a derecha.
+    ///
+    /// Los de las pestañas ocultas NO salen: quien itera los panes está
+    /// haciendo algo con lo que hay en pantalla —vigilar su directorio, pedir
+    /// una página, refrescar—, y una pestaña que nadie mira no debe costar
+    /// nada. La suspensión de un hueco oculto no es código aparte: es esto.
+    pub fn iter(&self) -> impl Iterator<Item = &Pane> {
+        self.visibles()
+            .into_iter()
+            .filter_map(|id| self.store.get(id).and_then(TuiPanel::as_browser))
+    }
+
+    /// Como [`Self::iter`], para mutarlos.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Pane> {
-        self.store.values_mut().filter_map(TuiPanel::as_browser_mut)
+        let ids = self.visibles();
+        self.store
+            .iter_mut()
+            .filter(move |(id, _)| ids.contains(id))
+            .filter_map(|(_, p)| p.as_browser_mut())
     }
 
     /// Intercambia el contenido de los dos lados, dejando los ids quietos.
     pub fn swap(&mut self, a: usize, b: usize) {
-        self.store.swap(Self::slot_of(a), Self::slot_of(b));
+        let (sa, sb) = (self.slot_of(a), self.slot_of(b));
+        self.store.swap(sa, sb);
     }
 
     /// El store de verdad, para quien ya piensa en huecos.
@@ -161,7 +254,7 @@ impl Index<usize> for PaneSlots {
     /// es [`PaneSlots::swap`], que los intercambia entre sí.
     fn index(&self, side: usize) -> &Self::Output {
         self.store
-            .get(Self::slot_of(side))
+            .get(self.slot_of(side))
             .and_then(TuiPanel::as_browser)
             .expect("el preset orthodox siempre lleva sus dos listados")
     }
@@ -173,7 +266,7 @@ impl IndexMut<usize> for PaneSlots {
     /// Igual que [`Index::index`].
     fn index_mut(&mut self, side: usize) -> &mut Self::Output {
         self.store
-            .get_mut(Self::slot_of(side))
+            .get_mut(self.slot_of(side))
             .and_then(TuiPanel::as_browser_mut)
             .expect("el preset orthodox siempre lleva sus dos listados")
     }
@@ -197,28 +290,35 @@ impl<'a> IntoIterator for &'a mut PaneSlots {
     }
 }
 
-/// El preset por defecto: los dos listados al 50 %.
+/// El preset por defecto: el FRAME entero, tal como se ve hoy.
 ///
-/// # Qué cubre y qué no, y por qué
+/// ```text
+/// Split V   [Weight(1), Auto, Fixed(1)]
+///   ├── Split H  [Weight(1), Weight(1)]  →  browser, browser
+///   ├── tasks     ← Auto: mide lo que pidan las tareas, CERO en reposo
+///   └── status    ← Fixed(1)
+/// ```
 ///
-/// Cubre el CUERPO —el sitio de los dos panes—, no el frame entero. La franja
-/// de tareas y la barra de estado siguen fuera del árbol porque un `Split`
-/// solo sabe repartir en proporción, y esas dos son de tamaño FIJO (la barra)
-/// y de tamaño según su CONTENIDO (la franja crece con las tareas, con tope
-/// 6). Meterlas dentro pide dos formas de tamaño que el motor no tiene, y
-/// diseñarlas ahora sin la sidebar ni el panel de tareas acoplado delante
-/// sería adivinar. Es trabajo de L1b, anotado en la spec.
-///
-/// Lo que sí desaparece es la duplicación que importaba: el corte 50/50 se
-/// calculaba en `draw` y otra vez en `pane_geometry`.
+/// El `Auto` de la franja de tareas es la razón de que exista [`Size::Auto`]:
+/// hoy vale cero con el sistema en reposo, así que un `Fixed(6)` pintaría seis
+/// filas vacías donde ahora no hay nada. Lo sustituye el frontend con
+/// [`Node::substitute_auto`] antes de repartir, porque el único que sabe
+/// cuántas tareas hay es quien tiene el `TaskBoard` delante.
 #[must_use]
 pub fn orthodox() -> Node {
     Node::Split {
-        dir: Dir::Horizontal,
-        weights: vec![1, 1],
+        dir: Dir::Vertical,
+        sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
         children: vec![
-            Node::slot(SLOT_LEFT, KindId::browser()),
-            Node::slot(SLOT_RIGHT, KindId::browser()),
+            Node::split(
+                Dir::Horizontal,
+                vec![
+                    Node::slot(SLOT_LEFT, KindId::browser()),
+                    Node::slot(SLOT_RIGHT, KindId::browser()),
+                ],
+            ),
+            Node::slot(SLOT_TASKS, KindId::new("tasks")),
+            Node::slot(SLOT_STATUS, KindId::new("status")),
         ],
     }
 }
@@ -278,7 +378,10 @@ mod tests {
     /// cosa y habría que migrar algo que nunca hizo falta migrar.
     #[test]
     fn el_preset_orthodox_lleva_los_dos_huecos_de_siempre() {
-        assert_eq!(orthodox().slot_ids(), vec![SLOT_LEFT, SLOT_RIGHT]);
+        assert_eq!(
+            orthodox().slot_ids(),
+            vec![SLOT_LEFT, SLOT_RIGHT, SLOT_TASKS, SLOT_STATUS]
+        );
     }
 
     /// La conversión de rectángulos es campo a campo en los dos sentidos.

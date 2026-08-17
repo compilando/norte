@@ -16,6 +16,7 @@ directorios locales.
 # Por dónde seguir
 
 - [[panes]] — los dos paneles, el foco y por qué el otro es el destino
+- [[tabs]] — varias pestañas en un panel, cada una con su directorio y su cursor
 - [[selection]] — marcar sobre qué van a actuar los comandos
 - [[mouse]] — click, rueda y arrastre, y qué le cuesta la captura al terminal
 - [[help]] — moverse por estas páginas y de dónde salen sus teclas

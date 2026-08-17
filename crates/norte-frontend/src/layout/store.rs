@@ -107,6 +107,11 @@ impl<P> SlotStore<P> {
         self.slots.values_mut()
     }
 
+    /// Los pares `(id, estado)`, en orden de [`SlotId`], para mutarlos.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (SlotId, &mut P)> {
+        self.slots.iter_mut().map(|(id, p)| (*id, p))
+    }
+
     /// Intercambia el estado de dos huecos, dejando los ids donde estaban.
     ///
     /// Lo pide el gesto de intercambiar paneles: lo que cambia de sitio es el
@@ -147,7 +152,7 @@ impl<P> SlotStore<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{Dir, KindId};
+    use crate::layout::{Dir, KindId, Size};
 
     fn browser(id: u32) -> Node {
         Node::slot(SlotId(id), KindId::browser())
@@ -155,7 +160,7 @@ mod tests {
     fn dos(a: u32, b: u32) -> Node {
         Node::Split {
             dir: Dir::Horizontal,
-            weights: vec![1, 1],
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![browser(a), browser(b)],
         }
     }

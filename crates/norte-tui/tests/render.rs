@@ -1102,7 +1102,10 @@ fn pane_list_rows_cuenta_las_filas_que_de_verdad_se_pintan() {
         let pintado = terminal.backend().to_string();
         let filas = pintado.lines().filter(|l| l.contains(".txt")).count();
         assert_eq!(
-            usize::from(ui::pane_list_rows(&app, alto)),
+            usize::from(ui::pane_list_rows(
+                &app,
+                ratatui::layout::Rect::new(0, 0, 60, alto)
+            )),
             filas,
             "alto {alto}: la cuenta debe ser la del buffer real:\n{pintado}"
         );
@@ -1113,5 +1116,8 @@ fn pane_list_rows_cuenta_las_filas_que_de_verdad_se_pintan() {
         b"x".to_vec(),
         false,
     ));
-    assert_eq!(ui::pane_list_rows(&app, 24), 0);
+    assert_eq!(
+        ui::pane_list_rows(&app, ratatui::layout::Rect::new(0, 0, 60, 24)),
+        0
+    );
 }

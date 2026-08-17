@@ -85,6 +85,35 @@ pub const CATALOGUE: &[CommandDef] = &[
     // --- pane ---
     live("pane.command-line", false),
     live("pane.switch", false),
+    // --- pestañas (L1b, cierra #137) ---
+    //
+    // Los cuatro primeros estaban RESERVADOS aquí como `planned` desde K2, y
+    // varios presets ya los ataban: `total-commander` y `krusader` los tenían
+    // escritos y en gris. Construirlos con otro nombre habría dejado dos
+    // vocabularios para lo mismo y esas teclas muertas para siempre.
+    live("pane.tab-new", false),
+    live("pane.tab-close", false),
+    live("pane.tab-next", false),
+    live("pane.tab-prev", false),
+    live("pane.tab-move-left", false),
+    live("pane.tab-move-right", false),
+    live("pane.tab-goto-1", false),
+    live("pane.tab-goto-2", false),
+    live("pane.tab-goto-3", false),
+    live("pane.tab-goto-4", false),
+    live("pane.tab-goto-5", false),
+    live("pane.tab-goto-6", false),
+    live("pane.tab-goto-7", false),
+    live("pane.tab-goto-8", false),
+    live("pane.tab-goto-9", false),
+    // --- layout (L1b) ---
+    live("layout.focus-next", false),
+    live("layout.focus-prev", false),
+    live("layout.close-slot", false),
+    live("layout.grow", true),
+    live("layout.shrink", true),
+    live("layout.equalize", false),
+    live("layout.set-target", false),
     live("pane.mirror", false),
     live("pane.pull", false),
     live("pane.swap", false),
@@ -221,10 +250,6 @@ pub const CATALOGUE: &[CommandDef] = &[
     // family's reason id (`keymap-reason-shell`) went with them, out of both
     // locales, because nothing else claimed it.
     planned("pane.tree", "keymap-reason-tree", 136),
-    planned("pane.tab-new", "keymap-reason-tabs", 137),
-    planned("pane.tab-close", "keymap-reason-tabs", 137),
-    planned("pane.tab-next", "keymap-reason-tabs", 137),
-    planned("pane.tab-prev", "keymap-reason-tabs", 137),
     planned("pane.sort-name", "keymap-reason-sort", 138),
     planned("pane.sort-ext", "keymap-reason-sort", 138),
     planned("pane.sort-size", "keymap-reason-sort", 138),
@@ -328,6 +353,11 @@ mod tests {
                 "cursor.page-down",
                 "cursor.page-up",
                 "cursor.up",
+                // Un contador REPITE el despacho (ADR 0044), así que «3
+                // agrandar» agranda tres veces. Es la misma lectura que
+                // `cursor.down`, no una excepción.
+                "layout.grow",
+                "layout.shrink",
                 "nav.back",
                 "nav.forward",
                 "viewer.down",
