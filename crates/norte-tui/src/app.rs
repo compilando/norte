@@ -2974,6 +2974,58 @@ impl App {
         self.set_focus(usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0));
     }
 
+    /// Cambia la disposición entera, poniendo al día lo que depende de ella.
+    ///
+    /// Los huecos del árbol nuevo que no tengan listado se crean vacíos en el
+    /// directorio del panel enfocado: un layout guardado nombra huecos, no
+    /// dice qué había dentro, y arrancar con paneles muertos sería peor que
+    /// arrancar con paneles repetidos.
+    pub fn set_layout(&mut self, tree: norte_frontend::layout::Node) {
+        let dir = self.panes[self.focus].dir().clone();
+        for id in tree.slot_ids() {
+            let es_browser = tree
+                .kind_of(id)
+                .is_some_and(|k| *k == norte_frontend::layout::KindId::browser());
+            if es_browser && self.panes.browser(id).is_none() {
+                self.panes
+                    .insert_browser(id, Pane::new(dir.clone(), Vec::new()));
+            }
+            // Los ids del layout no pueden chocar con los que se acuñen luego.
+            self.next_slot = self.next_slot.max(id.0.saturating_add(1));
+        }
+        self.layout = tree;
+        self.panes.refresh_visible(&self.layout);
+        self.history.retain_tree(&self.layout);
+        self.set_focus(0);
+    }
+
+    /// Parte el panel enfocado en dos, con el nuevo al lado.
+    ///
+    /// El panel nuevo hereda directorio y entradas del que se partió, igual
+    /// que una pestaña nueva: es lo mismo que se está mirando, así que aparece
+    /// lleno en vez de parpadear vacío mientras alguien relee lo mismo. Y se
+    /// queda con el FOCO, que es lo que uno acaba de pedir.
+    pub fn layout_split(&mut self, dir: norte_frontend::layout::Dir) {
+        let foco = self.focused_slot();
+        let (d, entradas) = {
+            let p = &self.panes[self.focus];
+            (p.dir().clone(), p.entries().to_vec())
+        };
+        let id = self.mint_slot();
+        self.panes.insert_browser(id, Pane::new(d, entradas));
+        self.layout = self.layout.split_slot(
+            foco,
+            dir,
+            &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
+        );
+        self.panes.refresh_visible(&self.layout);
+        self.history.retain_tree(&self.layout);
+        // El foco al recién nacido: partir es pedir sitio para trabajar en él.
+        if let Some(i) = (0..self.panes.len()).find(|i| self.panes.slot_of(*i) == id) {
+            self.set_focus(i);
+        }
+    }
+
     /// Cierra el panel enfocado.
     ///
     /// Se NIEGA a cerrar el último `browser`: una pantalla sin ningún listado
@@ -3014,8 +3066,41 @@ impl App {
     /// para el día en que haya más de dos y el motor deje de poder desempatar
     /// solo (ADR 0058 D7).
     pub fn layout_set_target(&mut self) {
-        let otro = self.panes.slot_of(1 - self.focus.min(1));
-        self.roles.set(norte_frontend::layout::RoleId::Target, otro);
+        let n = self.panes.len();
+        if n < 2 {
+            return;
+        }
+        let actual = self
+            .roles
+            .get(norte_frontend::layout::RoleId::Target)
+            .and_then(|t| (0..n).find(|i| self.panes.slot_of(*i) == t))
+            .unwrap_or(self.focus);
+        // El siguiente que no sea el enfocado: designarse a uno mismo como
+        // destino es pedirle a una copia que se copie encima.
+        let mut i = (actual + 1) % n;
+        if i == self.focus {
+            i = (i + 1) % n;
+        }
+        let slot = self.panes.slot_of(i);
+        self.roles.set(norte_frontend::layout::RoleId::Target, slot);
+    }
+
+    /// La posición del panel DESTINO, si la hay.
+    ///
+    /// Con dos paneles es el otro y nadie tuvo que decirlo. Con tres o más
+    /// hace falta haberlo designado: adivinar aquí es cómo una copia sale
+    /// hacia un panel que el lector no tenía en la cabeza, que es pérdida de
+    /// datos silenciosa (ADR 0058 D7).
+    #[must_use]
+    pub fn target_index(&self) -> Option<usize> {
+        let n = self.panes.len();
+        if let Some(t) = self.roles.get(norte_frontend::layout::RoleId::Target)
+            && let Some(i) = (0..n).find(|i| self.panes.slot_of(*i) == t)
+            && i != self.focus
+        {
+            return Some(i);
+        }
+        (n == 2).then_some(self.focus ^ 1)
     }
 
     /// How many times [`Self::swap_panes`] has run.

@@ -1503,6 +1503,7 @@ async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
         let env = |k: &str| std::env::var_os(k);
         let mut findings = doctor::check_config(&layers, &env);
         findings.extend(doctor::check_columns(&layers));
+        findings.extend(doctor::check_layout(&layers));
         findings.extend(doctor::check_keymaps(&layers));
         findings.extend(doctor::check_plugins(&config_dir));
         findings.extend(doctor::check_connections(&config_dir, &env));

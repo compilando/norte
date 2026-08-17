@@ -24,6 +24,8 @@ commands = [
     "pane.select-drive-right",
     "pane.compare-dirs",
     "pane.sync-dirs",
+    "layout.split-h",
+    "layout.split-v",
     "layout.focus-next",
     "layout.focus-prev",
     "layout.close-slot",
@@ -261,3 +263,10 @@ Con dos hacen lo mismo que {{cmd:pane.switch}}; existen para cuando haya más.
 {{cmd:layout.set-target}} fija cuál es el destino de una copia. Con dos
 paneles el destino ya es el otro y no cambia nada — es para el día en que
 haya más de dos y no se pueda desempatar solo.
+
+{{cmd:layout.split-h}} parte el panel enfocado en dos lado a lado y
+{{cmd:layout.split-v}} lo parte arriba y abajo. El panel nuevo nace en el
+mismo directorio, ya lleno, y se queda con el foco: partir es pedir sitio para
+trabajar en él. A partir de tres paneles, cuál es el destino de una copia deja
+de ser obvio — para eso está {{cmd:layout.set-target}}, y el destino designado
+se marca en el borde del panel.

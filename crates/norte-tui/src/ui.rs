@@ -479,6 +479,9 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
                 // y cabeceras); sin él se pinta con defaults, jamás se espera.
                 app.attr_catalog(pane.dir().scheme()),
                 tab_strip_for(app, i).as_ref(),
+                // Solo a partir de TRES paneles: con dos, el destino es el
+                // otro y el marcador sería ruido en el caso de siempre.
+                app.panes.len() > 2 && app.target_index() == Some(i),
             );
         }
     }
@@ -3191,7 +3194,20 @@ mod draw_pane_attr_tests {
         let theme = TuiTheme::default();
         let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal de test");
         terminal
-            .draw(|f| draw_pane(f, f.area(), &pane, true, &theme, 0, &settings, None, None))
+            .draw(|f| {
+                draw_pane(
+                    f,
+                    f.area(),
+                    &pane,
+                    true,
+                    &theme,
+                    0,
+                    &settings,
+                    None,
+                    None,
+                    false,
+                );
+            })
             .expect("draw");
         let text = terminal.backend().to_string();
         // 1. Ninguna celda del buffer lleva un char peligroso crudo
@@ -3256,7 +3272,20 @@ mod draw_pane_attr_tests {
         let theme = TuiTheme::default();
         let mut terminal = Terminal::new(TestBackend::new(60, 8)).expect("terminal de test");
         terminal
-            .draw(|f| draw_pane(f, f.area(), &pane, true, &theme, 0, &settings, None, None))
+            .draw(|f| {
+                draw_pane(
+                    f,
+                    f.area(),
+                    &pane,
+                    true,
+                    &theme,
+                    0,
+                    &settings,
+                    None,
+                    None,
+                    false,
+                );
+            })
             .expect("draw");
         let buf = terminal.backend().buffer();
         // La x (en CELDAS del buffer, no chars) del «1» del tamaño en la
@@ -4468,6 +4497,11 @@ pub struct TabStrip {
     pub activa: usize,
 }
 
+/// Marca del panel DESTINO en su título. ASCII a propósito, como el badge
+/// hostil: una flecha unicode es ambiguous-width y ocuparía dos celdas en
+/// muchos terminales.
+const TARGET_BADGE: &str = "->";
+
 /// Pinta la barra de pestañas si la hay, y devuelve dónde caen la cabecera de
 /// columnas y el listado.
 ///
@@ -4526,6 +4560,7 @@ fn draw_pane(
     settings: &norte_frontend::columns::ColumnsSettings,
     catalog: Option<&norte_proto::AttrCatalog>,
     tabs: Option<&TabStrip>,
+    es_destino: bool,
 ) {
     let border_style = if focused {
         theme.role(Role::BorderFocus)
@@ -4547,6 +4582,15 @@ fn draw_pane(
             " [{}]",
             norte_i18n::ta("pane-loading", &[("n", &pane.entries().len().to_string())])
         );
+    }
+    // El DESTINO se marca en el cromo, y solo cuando hace falta: con dos
+    // paneles el destino es el otro y nadie necesita que se lo digan, pero a
+    // partir de tres una copia hacia un panel que el lector no tenía en la
+    // cabeza es pérdida de datos silenciosa (ADR 0058 D7). El marcador va en
+    // el título y FUERA del nombre del directorio, como el badge hostil: un
+    // directorio llamado «→» no puede fingirlo.
+    if es_destino {
+        title = format!("{TARGET_BADGE} {title}");
     }
     let mut block = Block::default()
         .borders(Borders::ALL)

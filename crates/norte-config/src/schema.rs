@@ -195,6 +195,14 @@ pub struct UiSection {
     /// initial state.
     #[serde(default)]
     pub show_hidden: Option<bool>,
+    /// Qué disposición de paneles arranca. Ausente = `orthodox`, la de
+    /// siempre: dos paneles al 50 %, la franja de tareas y la barra de estado.
+    ///
+    /// Cualquier otro nombre se busca en `layouts/<nombre>.toml` dentro del
+    /// directorio de configuración. Un layout que no carga NO deja a norte sin
+    /// pantalla: se avisa y se arranca con `orthodox`.
+    #[serde(default)]
+    pub layout: Option<String>,
     /// Whether the TUI captures the mouse (click, wheel, drag). Absent =
     /// `true` (captured).
     ///

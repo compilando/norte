@@ -107,6 +107,8 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("pane.tab-goto-8", false),
     live("pane.tab-goto-9", false),
     // --- layout (L1b) ---
+    live("layout.split-h", false),
+    live("layout.split-v", false),
     live("layout.focus-next", false),
     live("layout.focus-prev", false),
     live("layout.close-slot", false),

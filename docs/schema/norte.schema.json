@@ -440,6 +440,14 @@
             "null"
           ]
         },
+        "layout": {
+          "default": null,
+          "description": "Qué disposición de paneles arranca. Ausente = `orthodox`, la de\nsiempre: dos paneles al 50 %, la franja de tareas y la barra de estado.\n\nCualquier otro nombre se busca en `layouts/<nombre>.toml` dentro del\ndirectorio de configuración. Un layout que no carga NO deja a norte sin\npantalla: se avisa y se arranca con `orthodox`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "mono_font": {
           "default": null,
           "description": "Monospace font family for listings/viewer (GP spec, same design doc).\nWhen absent, use the bundled monospace font.",

@@ -1878,6 +1878,25 @@ async fn main() -> Result<()> {
             pane.set_show_hidden(show);
         }
     }
+    // `[ui] layout`: una disposición guardada. Un layout que no carga NO deja
+    // a norte sin pantalla — se avisa por la barra y se arranca con
+    // `orthodox`, que es lo que el usuario tenía antes de escribir la clave.
+    if let Some(nombre) = cfg.common.ui_layout.as_deref()
+        && nombre != "orthodox"
+    {
+        match norte_frontend::layout::config::load(
+            &config::user_config_dir().unwrap_or_default(),
+            nombre,
+        ) {
+            Ok(arbol) => app.set_layout(arbol),
+            Err(e) => {
+                app.message = Some(norte_i18n::ta(
+                    "msg-layout-load-failed",
+                    &[("name", nombre), ("err", &e.to_string())],
+                ));
+            }
+        }
+    }
     apply_theme(&mut app, &cfg);
     // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
     // `Ctrl+D`; se refresca en cada hot-reload OK (`reload_config`).
@@ -8008,7 +8027,7 @@ fn start_lua_run(
     name: &str,
 ) -> Option<(CommandRun, CancellationToken)> {
     let pane = app.focused();
-    let other = &app.panes[1 - app.focus()];
+    let other = &app.panes[app.target_index().unwrap_or_else(|| app.focus())];
     let current = pane.selected().map(|e| e.path.clone());
     let ctx = PaneCtx {
         cwd: pane.dir().clone(),
@@ -10883,6 +10902,8 @@ async fn dispatch(
         Command::TabGoto7 => app.tab_goto(7),
         Command::TabGoto8 => app.tab_goto(8),
         Command::TabGoto9 => app.tab_goto(9),
+        Command::LayoutSplitH => app.layout_split(norte_frontend::layout::Dir::Horizontal),
+        Command::LayoutSplitV => app.layout_split(norte_frontend::layout::Dir::Vertical),
         Command::LayoutFocusNext => app.layout_focus(1),
         Command::LayoutFocusPrev => app.layout_focus(-1),
         Command::LayoutCloseSlot => {
@@ -11029,7 +11050,14 @@ async fn dispatch(
             // la que entra un drop del ratón: una segunda ruta para someter
             // una transferencia es una ruta que se queda sin confirmación,
             // sin colisiones o sin undo en cuanto una de las dos cambie.
-            app.open_transfer(kind, app.focus(), app.focus() ^ 1, None);
+            // Sin destino designado y con más de dos paneles, no se adivina:
+            // una copia hacia un panel que el lector no tenía en la cabeza es
+            // pérdida de datos silenciosa (ADR 0058 D7).
+            if let Some(destino) = app.target_index() {
+                app.open_transfer(kind, app.focus(), destino, None);
+            } else {
+                app.message = Some(norte_i18n::t("msg-layout-no-target"));
+            }
         }
         // #105: shift+F6 — rename in situ (Move al PADRE de `from`, nombre
         // editable). Correcto también en el pane virtual: el destino sale
