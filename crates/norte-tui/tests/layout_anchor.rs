@@ -179,22 +179,35 @@ fn con_ancho_impar_los_dos_panes_suman_el_frame() {
     );
 }
 
-/// A 30 columnas los dos mínimos del `browser` no caben y el motor colapsaría
-/// a pestañas — pero L1a se cae al corte de siempre y sigue pintando DOS.
+/// A 30 columnas los dos mínimos del `browser` no caben, así que el `Split`
+/// colapsa y se pinta UNO a ancho completo.
 ///
-/// Este test no defiende el comportamiento: lo DOCUMENTA, y es el que hay que
-/// cambiar en L1b cuando existan pintar un solo pane y reconciliar el foco.
+/// Es la contrapartida visible de todo el motor: dos panes de quince columnas
+/// no enseñan ni un nombre con su tamaño, y hasta ahora eran lo único posible.
 #[test]
-fn a_treinta_columnas_l1a_sigue_pintando_dos_panes() {
+fn a_treinta_columnas_se_pinta_un_solo_pane_a_ancho_completo() {
     let mut app = app_de_prueba_con(60);
     let _ = pintar_en(&mut app, 30, H);
     let area = ratatui::layout::Rect::new(0, 0, 30, H);
-    let geom = ui::pane_geometry(&app, area).expect("dos panes");
-    assert_eq!(geom[0].width, 15);
-    assert_eq!(geom[1].width, 15);
+    let geom = ui::pane_geometry(&app, area).expect("hay geometría");
+    assert_eq!(geom[0].width, 30, "el que se pinta ocupa todo");
+    assert_eq!(
+        geom[1].list_rows, 0,
+        "el que no se pinta no tiene ni una fila que clicar"
+    );
 }
 
-/// El criterio de aceptación de L1a, escrito como test: esta pantalla es
+/// Y el foco no se queda en el pane que dejó de pintarse: sería un teclado
+/// moviendo un cursor que nadie ve.
+#[test]
+fn el_foco_abandona_el_pane_que_el_colapso_dejo_fuera() {
+    let mut app = app_de_prueba_con(60);
+    app.set_focus(1);
+    let _ = pintar_en(&mut app, 30, H);
+    assert_eq!(app.focus(), 0, "el foco cae en el que sí se ve");
+}
+
+/// El criterio de aceptación de L1a/// El criterio de aceptación de L1a, escrito como test: esta pantalla es
 /// idéntica antes y después del refactor.
 ///
 /// Si cambia una celda, o el refactor movió algo o alguien cambió el render a

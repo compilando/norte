@@ -86,7 +86,11 @@ pub fn pane_list_rows(app: &App, area: Rect) -> u16 {
     // El alto sale del REPARTO, no de restar a mano la franja de tareas y la
     // barra: esas dos son ya huecos del árbol. Lo que queda aquí es el cromo
     // del propio pane, que el árbol no conoce.
-    pane_rects(app, area)[0].height.saturating_sub(3) // bordes del bloque (2) + cabecera de columnas (1)
+    // Bordes del bloque (2) + cabecera de columnas (1). Un pane que este
+    // frame no pinta (el `Split` colapsó) no tiene filas de listado.
+    pane_rects(app, area)[0]
+        .map_or(0, |r| r.height)
+        .saturating_sub(3)
 }
 
 /// Lo que hay que hacer al MODELO justo antes de pintar un frame de `height`
@@ -102,8 +106,30 @@ pub fn pane_list_rows(app: &App, area: Rect) -> u16 {
 /// frame de retraso, y el frame retrasado es justo el que el usuario mira
 /// cuando el cursor toca el borde.
 pub fn before_frame(app: &mut App, area: Rect) {
-    let filas = usize::from(pane_list_rows(app, area));
-    for pane in &mut app.panes {
+    let res = resolved_frame(app, area);
+    let cols = pane_cols(&res);
+    // El foco no puede quedarse en un pane que este frame no pinta: sería un
+    // teclado que mueve un cursor que nadie ve. Con dos lados esto es
+    // `position`; cuando haya N huecos lo hará `layout::focus_next`.
+    if cols[app.focus()].is_none()
+        && let Some(i) = cols.iter().position(Option::is_some)
+    {
+        app.set_focus(i);
+    }
+    // Y los roles se ponen al día con lo que hay en pantalla: `active` es el
+    // foco, `target` es el otro si sigue visible.
+    let foco = crate::panel::PaneSlots::slot_of(app.focus());
+    let (arbol, kinds) = (app.layout.clone(), app.kinds.clone());
+    app.roles.reconcile(&arbol, &res, &kinds, foco);
+    // Una ventana POR PANE: el que no se pinta no tiene filas, y reconciliar
+    // el suyo contra el alto del otro le dejaría una ventana que nadie vio.
+    let visor = app.viewer.is_some();
+    for (i, pane) in app.panes.iter_mut().enumerate() {
+        let filas = if visor {
+            0
+        } else {
+            usize::from(cols[i].map_or(0, |r| r.height).saturating_sub(3))
+        };
         pane.reconcile_viewport(filas);
     }
     // Las OTRAS dos listas largas (#210). El alto sale de replicar aquí el
@@ -202,41 +228,29 @@ fn overlay_body(app: &App, area: Rect) -> Rect {
     body_rect(&res).unwrap_or_else(|| chrome_body(app, area))
 }
 
-/// Dónde caen los DOS panes, según el reparto `res`.
+/// Dónde cae cada pane según el reparto `res`, o `None` si no se pinta.
 ///
 /// Es la única aritmética del corte entre panes que queda en el TUI: `draw` y
 /// [`pane_geometry`] la leen los dos en vez de calcular cada uno su mitad y
 /// confiar en que coincidan.
 ///
-/// # El respaldo, y cuándo desaparece
-///
-/// Si el motor no coloca los dos —el cuerpo es más estrecho que dos veces el
-/// mínimo del `browser`, así que el `Split` colapsa— se cae al corte mitad y
-/// mitad de siempre. Pintar de verdad el colapso pide pintar un solo pane
-/// donde hoy siempre hay dos y reconciliar el foco cuando el enfocado sale de
-/// pantalla: es la fase P2.
-fn pane_cols(app: &App, res: &norte_frontend::layout::Resolved, area: Rect) -> [Rect; 2] {
-    if let (Some(a), Some(b)) = (
+/// Un `None` no es un error: significa que el `Split` colapsó porque el cuerpo
+/// no da para dos veces el mínimo del `browser`, y entonces el otro se pinta a
+/// ancho completo. Quien tuviera el foco ahí lo pierde en [`before_frame`],
+/// que es donde el modelo se pone al día.
+fn pane_cols(res: &norte_frontend::layout::Resolved) -> [Option<Rect>; 2] {
+    [
         slot_rect(res, crate::panel::SLOT_LEFT),
         slot_rect(res, crate::panel::SLOT_RIGHT),
-    ) {
-        return [a, b];
-    }
-    let cuerpo = body_rect(res).unwrap_or_else(|| chrome_body(app, area));
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(cuerpo);
-    [cols[0], cols[1]]
+    ]
 }
 
 /// Como [`pane_cols`], resolviendo el frame por su cuenta.
-fn pane_rects(app: &App, area: Rect) -> [Rect; 2] {
-    let res = resolved_frame(app, area);
-    pane_cols(app, &res, area)
+fn pane_rects(app: &App, area: Rect) -> [Option<Rect>; 2] {
+    pane_cols(&resolved_frame(app, area))
 }
 
-/// El interior de un bloque con borde por los cuatro lados./// El interior de un bloque con borde por los cuatro lados.
+/// El interior de un bloque con borde por los cuatro lados./// El interior de un bloque con borde por los cuatro lados./// El interior de un bloque con borde por los cuatro lados.
 fn inner_de_bloque(area: Rect) -> Rect {
     Block::default().borders(Borders::ALL).inner(area)
 }
@@ -278,7 +292,10 @@ pub fn pane_geometry(app: &App, area: Rect) -> Option<[crate::mouse::PaneGeometr
     let cols = pane_rects(app, area);
     let mut out = [crate::mouse::PaneGeometry::default(); 2];
     for (i, pane) in app.panes.iter().enumerate() {
-        let block = cols[i];
+        // Geometría CERO para el lado que no se pintó: el hit test ya trata
+        // `list_rows == 0` como «ninguna fila», así que un click ahí no
+        // resuelve nada en vez de resolver contra un pane invisible.
+        let Some(block) = cols[i] else { continue };
         // Interior del bloque con `Borders::ALL`, sin construir el bloque:
         // un margen de 1 por lado. `title_bottom` (el input del quick
         // search) NO consume filas — se pinta sobre el borde inferior.
@@ -347,7 +364,7 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
         width: cuerpo.width,
         height: 1,
     });
-    let cols = pane_cols(app, &res, frame.area());
+    let cols = pane_cols(&res);
     // #108 L5: `now` de las celdas de tiempo relativo — UNA lectura por
     // frame; los tests lo fijan (`App::render_now_ms`) para snapshots
     // estables.
@@ -372,9 +389,12 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
         draw_compare(frame, cuerpo, view, &app.theme, &app.compare_size_hints);
     } else {
         for (i, pane) in app.panes.iter().enumerate() {
+            // Un pane que el reparto no colocó no se pinta: el `Split`
+            // colapsó y su sitio lo ocupa entero el otro.
+            let Some(rect) = cols[i] else { continue };
             draw_pane(
                 frame,
-                cols[i],
+                rect,
                 pane,
                 app.focus() == i,
                 &app.theme,
