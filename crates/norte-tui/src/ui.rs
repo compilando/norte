@@ -4539,6 +4539,12 @@ struct MenuGeom {
     items: Vec<(String, String)>,
 }
 
+/// Tope de ancho del desplegable: un menú es una lista de etiquetas cortas,
+/// así que uno ancho es siempre un síntoma. El tope evita que una traducción
+/// larga vuelva a tapar la pantalla, que es lo que pasaba cuando las etiquetas
+/// eran las frases de `help-cmd-*`.
+const DROP_MAX: u16 = 44;
+
 /// Calcula la geometría del menú abierto, o `None` si no hay ninguno.
 fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
     let st = app.menu.as_ref()?;
@@ -4556,11 +4562,17 @@ fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
         .items
         .iter()
         .map(|id| {
-            let fila = app.palette_rows.iter().find(|r| r.key == *id);
-            (
-                fila.map_or_else(|| (*id).to_owned(), |r| r.desc.clone()),
-                fila.map_or_else(|| "—".to_owned(), |r| r.chord.clone()),
-            )
+            // La etiqueta es CORTA y propia (`menu-item-*`), no la frase de
+            // `help-cmd-*`: esa es una descripción, y usarla hacía el
+            // desplegable de setenta columnas y tapaba los dos paneles. Lo
+            // destapó pilotar la TUI en tmux, no la suite.
+            let etiqueta = norte_i18n::t(&format!("menu-item-{}", id.replace('.', "-")));
+            let chord = app
+                .palette_rows
+                .iter()
+                .find(|r| r.key == *id)
+                .map_or_else(|| "—".to_owned(), |r| r.chord.clone());
+            (etiqueta, chord)
         })
         .collect();
     // Ancho: la etiqueta más larga, su tecla, dos bordes y el hueco entre
@@ -4572,7 +4584,8 @@ fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
         .unwrap_or(10);
     let w = u16::try_from(ancho_texto + 2)
         .unwrap_or(u16::MAX)
-        .min(area.width);
+        .min(area.width)
+        .min(DROP_MAX);
     let h = u16::try_from(items.len() + 2)
         .unwrap_or(u16::MAX)
         .min(area.height.saturating_sub(1));
