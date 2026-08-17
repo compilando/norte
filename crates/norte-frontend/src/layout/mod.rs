@@ -23,8 +23,10 @@
 //! La decisión y sus alternativas descartadas están en la ADR 0058; el diseño,
 //! en `docs/superpowers/specs/2026-08-17-layout-slots-tabs-design.md`.
 
+mod kinds;
 mod tree;
 
+pub use kinds::{KindDecl, KindRegistry};
 pub use tree::{Bindings, Dir, Follow, KindId, Node, Params, Rect, RoleId, SlotId};
 
 /// Lo que impide usar un layout.
