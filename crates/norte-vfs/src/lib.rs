@@ -9,6 +9,7 @@
 
 mod contract;
 mod contract_ro;
+pub mod deadline;
 mod options;
 mod provider;
 mod sink;

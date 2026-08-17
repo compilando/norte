@@ -18,7 +18,6 @@
 //! matters starting with V4 since Linux never populates it.
 
 use norte_proto::VPath;
-use std::time::Duration;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -27,52 +26,12 @@ mod macos;
 #[cfg(windows)]
 mod windows;
 
-/// Runs `query` (blocking) on a DETACHED [`std::thread`], not
-/// [`tokio::task::spawn_blocking`] — hoisted out of `linux` (2026-08-10-
-/// volumes.md task V4) so `macos` and `windows` share the exact same
-/// mechanism instead of each growing its own copy that could drift (a
-/// platform whose deadline silently stopped being detached would starve the
-/// daemon's shared blocking pool the same way a bare `spawn_blocking` would
-/// have from the start).
-///
-/// Tokio's blocking pool is bounded (512 threads by default) and SHARED with
-/// every other blocking operation in the process, including every
-/// `spawn_blocking` call `norte-vfs-local` makes for ordinary local
-/// filesystem work. A platform mount/space query can hang indefinitely on a
-/// dead network share, and there is no way to cancel a syscall already in
-/// flight — if that hang happened on the shared pool, one dead mount would
-/// tie up one pool slot for as long as it stayed dead, and reopening the
-/// picker against the same mount (or several dead mounts) would eventually
-/// starve the pool the daemon depends on for every other local file
-/// operation. A plain `std::thread` costs one leaked OS thread per hung probe
-/// instead of one consumed slot of a shared resource — worse in isolation (a
-/// fresh stack, never reused), but it cannot blockade anything else, and a
-/// `oneshot` whose receiver `timeout` walks away from lets the runtime shut
-/// down without waiting for it. (`spawn_blocking`'s task, by contrast, is
-/// awaited by the runtime at shutdown even after its caller stopped waiting
-/// on it.)
-///
-/// `None` if `query` does not answer within `deadline`; the caller decides
-/// what "no answer" means for its platform (Linux: that one mount's sizes are
-/// unknown; macOS: the whole table is empty this round; Windows: that one
-/// drive's info/space is unknown) — this function has no opinion on it.
-pub(crate) async fn blocking_with_deadline<T, F>(query: F, deadline: Duration) -> Option<T>
-where
-    T: Send + 'static,
-    F: FnOnce() -> T + Send + 'static,
-{
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        // The receiver may already be gone (deadline elapsed and `timeout`
-        // dropped it): `send` returning `Err` just means nobody is
-        // listening anymore, not a bug to report.
-        let _ = tx.send(query());
-    });
-    tokio::time::timeout(deadline, rx)
-        .await
-        .ok()
-        .and_then(Result::ok)
-}
+/// El plazo compartido, ahora en `norte-vfs` (#213): lo necesitan también los
+/// providers —`capabilities_at` sondea el filesystem de cualquier ruta que le
+/// nombren— y dos copias que puedan divergir en si el hilo es DESACOPLADO son
+/// exactamente el fallo del que protege. La prosa de por qué un hilo suelto y
+/// no el pool de tokio vive con la función.
+pub(crate) use norte_vfs::deadline::blocking_with_deadline;
 
 /// Converts a mount point's raw bytes to a `file://` [`VPath`], via
 /// [`norte_vfs_local::vpath_from_native`] — the SAME conversion the local
