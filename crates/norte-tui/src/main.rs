@@ -10809,6 +10809,17 @@ async fn dispatch(
         Command::TabGoto7 => app.tab_goto(7),
         Command::TabGoto8 => app.tab_goto(8),
         Command::TabGoto9 => app.tab_goto(9),
+        Command::LayoutFocusNext => app.layout_focus(1),
+        Command::LayoutFocusPrev => app.layout_focus(-1),
+        Command::LayoutCloseSlot => {
+            if !app.layout_close_slot() {
+                app.message = Some(norte_i18n::t("msg-layout-last-panel"));
+            }
+        }
+        Command::LayoutGrow => app.layout_resize(1),
+        Command::LayoutShrink => app.layout_resize(-1),
+        Command::LayoutEqualize => app.layout_equalize(),
+        Command::LayoutSetTarget => app.layout_set_target(),
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
             let plan = mirror_plan(app);

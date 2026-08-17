@@ -24,6 +24,13 @@ commands = [
     "pane.select-drive-right",
     "pane.compare-dirs",
     "pane.sync-dirs",
+    "layout.focus-next",
+    "layout.focus-prev",
+    "layout.close-slot",
+    "layout.grow",
+    "layout.shrink",
+    "layout.equalize",
+    "layout.set-target",
 ]
 context = ["browse"]
 +++
@@ -234,3 +241,16 @@ has no journal — the key says so rather than failing halfway.
 > 💡 A directory you visit often is worth a favourite: the pane remembers where it has been, and favourites are shared by both panes.
 
 > 💡 When there is nothing further back, the key says so. A key that goes quiet is indistinguishable from a broken one.
+
+Panels can be resized and closed. {{cmd:layout.grow}} and
+{{cmd:layout.shrink}} give the focused panel room or take it away, and
+{{cmd:layout.equalize}} returns them all to the same size.
+{{cmd:layout.close-slot}} closes the focused one and **refuses to close the
+last**: a screen with no listing at all is not a layout, it is a hang with
+borders.
+
+{{cmd:layout.focus-next}} and {{cmd:layout.focus-prev}} walk the panels. With
+two they do what {{cmd:pane.switch}} does; they exist for when there are more.
+{{cmd:layout.set-target}} sets which panel a copy goes to. With two panels the
+destination is already the other one and nothing changes — it is for the day
+there are more than two and the tie cannot be broken on its own.

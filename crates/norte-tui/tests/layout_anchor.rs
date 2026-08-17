@@ -286,6 +286,50 @@ fn cada_pestana_conserva_su_cursor() {
     assert_eq!(app.panes[0].cursor(), 7, "la de antes sigue donde estaba");
 }
 
+/// Cerrar el último panel se NIEGA. Es lo que mantiene distintos los dos
+/// lados: con un solo listado, «el otro pane» sería este mismo y una copia
+/// tendría por destino su propio origen.
+#[test]
+fn no_se_puede_cerrar_el_ultimo_panel() {
+    let mut app = app_de_prueba_con(60);
+    assert!(!app.layout_close_slot(), "con dos paneles ya no se puede");
+    let _ = pintar(&mut app);
+    assert!(
+        ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).is_some(),
+        "los dos siguen ahí"
+    );
+}
+
+/// Agrandar un panel le da sitio de verdad, y el otro lo pierde.
+#[test]
+fn agrandar_un_panel_le_da_sitio_y_al_otro_se_lo_quita() {
+    let mut app = app_de_prueba_con(60);
+    let area = ratatui::layout::Rect::new(0, 0, W, H);
+    let antes = ui::pane_geometry(&app, area).expect("dos panes")[0].width;
+    app.layout_resize(1);
+    let _ = pintar(&mut app);
+    let geom = ui::pane_geometry(&app, area).expect("dos panes");
+    assert!(geom[0].width > antes, "el enfocado crece");
+    assert_eq!(
+        u32::from(geom[0].width) + u32::from(geom[1].width),
+        u32::from(W),
+        "y siguen sumando el frame"
+    );
+}
+
+/// Igualar los devuelve a la mitad cada uno.
+#[test]
+fn igualar_devuelve_los_paneles_a_la_mitad() {
+    let mut app = app_de_prueba_con(60);
+    let area = ratatui::layout::Rect::new(0, 0, W, H);
+    app.layout_resize(3);
+    let _ = pintar(&mut app);
+    app.layout_equalize();
+    let _ = pintar(&mut app);
+    let geom = ui::pane_geometry(&app, area).expect("dos panes");
+    assert_eq!(geom[0].width, geom[1].width);
+}
+
 /// El criterio de aceptación de L1a/// El criterio de aceptación de L1a, escrito como test: esta pantalla es
 /// idéntica antes y después del refactor.
 ///

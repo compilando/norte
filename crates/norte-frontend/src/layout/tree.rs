@@ -323,6 +323,113 @@ impl Node {
         }
     }
 
+    /// Cierra el hueco `id`: lo saca de su padre.
+    ///
+    /// Un `Split` o una `Tabs` que se queda con UN hijo se disuelve en él.
+    /// Devuelve `None` si `id` es la raíz o no está: cerrar el último panel
+    /// dejaría una pantalla sin nada, y eso lo decide el llamante.
+    #[must_use]
+    pub fn close_slot(&self, id: SlotId) -> Option<Self> {
+        let hijos = match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => children,
+            Self::Slot { .. } => return None,
+        };
+        for (i, c) in hijos.iter().enumerate() {
+            if let Some(cambiado) = c.close_slot(id) {
+                return Some(self.with_child(i, cambiado));
+            }
+        }
+        let pos = hijos.iter().position(|c| c.contains(id))?;
+        if hijos.len() <= 1 {
+            return None;
+        }
+        match self {
+            Self::Split {
+                dir,
+                children,
+                sizes,
+            } => {
+                let mut nc = children.clone();
+                let mut ns = sizes.clone();
+                nc.remove(pos);
+                if pos < ns.len() {
+                    ns.remove(pos);
+                }
+                if nc.len() == 1 {
+                    return nc.into_iter().next();
+                }
+                Some(Self::Split {
+                    dir: *dir,
+                    children: nc,
+                    sizes: ns,
+                })
+            }
+            Self::Tabs { .. } => self.close_tab(id),
+            Self::Slot { .. } => None,
+        }
+    }
+
+    /// Cambia el peso del hijo que contiene `id` en `delta`, entre 1 y 10.
+    ///
+    /// Solo toca hijos PONDERADOS: un fijo pidió un tamaño y agrandarlo por
+    /// una tecla lo convertiría en otra cosa sin decirlo.
+    #[must_use]
+    pub fn resize(&self, id: SlotId, delta: i16) -> Self {
+        self.map_split_of(id, &|sizes, pos| {
+            let mut ns = sizes.to_vec();
+            if let Some(Size::Weight(w)) = ns.get(pos) {
+                let nuevo = i32::from(*w).saturating_add(i32::from(delta)).clamp(1, 10);
+                ns[pos] = Size::Weight(u16::try_from(nuevo).unwrap_or(1));
+            }
+            ns
+        })
+    }
+
+    /// Deja a todos los hermanos ponderados del hueco `id` con el mismo peso.
+    #[must_use]
+    pub fn equalize(&self, id: SlotId) -> Self {
+        self.map_split_of(id, &|sizes, _| {
+            sizes
+                .iter()
+                .map(|s| match s {
+                    Size::Weight(_) => Size::Weight(1),
+                    otro => *otro,
+                })
+                .collect()
+        })
+    }
+
+    /// Aplica `f` a los tamaños del `Split` que contiene `id`, dándole la
+    /// posición del hijo que lo contiene.
+    fn map_split_of(&self, id: SlotId, f: &dyn Fn(&[Size], usize) -> Vec<Size>) -> Self {
+        let hijos = match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => children,
+            Self::Slot { .. } => return self.clone(),
+        };
+        for (i, c) in hijos.iter().enumerate() {
+            if c.contains(id) && !matches!(c, Self::Slot { .. }) {
+                let dentro = c.map_split_of(id, f);
+                if dentro != *c {
+                    return self.with_child(i, dentro);
+                }
+            }
+        }
+        if let Self::Split {
+            dir,
+            children,
+            sizes,
+        } = self
+            && let Some(pos) = children.iter().position(|c| c.contains(id))
+        {
+            return Self::Split {
+                dir: *dir,
+                children: children.clone(),
+                sizes: f(sizes, pos),
+            };
+        }
+        self.clone()
+    }
+
     /// Los huecos que se VERÍAN: como [`Self::slot_ids`], pero de cada
     /// [`Node::Tabs`] solo la pestaña activa.
     ///
@@ -844,6 +951,84 @@ mod tests {
         assert_eq!(
             nuevo.tabs_of(SlotId(2)),
             Some((vec![SlotId(1), SlotId(2)], 1))
+        );
+    }
+
+    /// Cerrar un hueco deja al hermano ocupando el sitio de los dos.
+    #[test]
+    fn cerrar_un_hueco_disuelve_el_split_de_dos() {
+        let arbol = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
+        assert_eq!(arbol.close_slot(SlotId(2)), Some(b(1)));
+    }
+
+    /// Cerrar el ÚNICO hueco devuelve `None`: una pantalla sin nada no la
+    /// decide el árbol.
+    #[test]
+    fn cerrar_el_unico_hueco_no_se_hace_solo() {
+        assert_eq!(b(1).close_slot(SlotId(1)), None);
+    }
+
+    /// Al cerrar, el tamaño del hueco se va CON él: dejarlo desplazaría todos
+    /// los pesos una posición y el reparto pasaría a ser otro sin avisar.
+    #[test]
+    fn cerrar_un_hueco_se_lleva_su_tamano() {
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Weight(3), Size::Weight(1), Size::Weight(1)],
+            children: vec![b(1), b(2), b(3)],
+        };
+        let nuevo = arbol.close_slot(SlotId(1)).expect("quedan dos");
+        let Node::Split { sizes, .. } = &nuevo else {
+            panic!("sigue siendo un split")
+        };
+        assert_eq!(*sizes, vec![Size::Weight(1), Size::Weight(1)]);
+    }
+
+    /// Agrandar toca el peso del hueco enfocado, con tope.
+    #[test]
+    fn agrandar_sube_el_peso_hasta_el_tope() {
+        let arbol = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
+        let mut a = arbol;
+        for _ in 0..20 {
+            a = a.resize(SlotId(1), 1);
+        }
+        let Node::Split { sizes, .. } = &a else {
+            panic!("split")
+        };
+        assert_eq!(sizes[0], Size::Weight(10), "no crece sin fin");
+    }
+
+    /// Un hijo FIJO no se agranda por una tecla: pidió un tamaño, y cambiarlo
+    /// en silencio lo convertiría en otra cosa.
+    #[test]
+    fn agrandar_no_toca_un_hijo_fijo() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(1)],
+            children: vec![b(1), Node::slot(SlotId(2), KindId::new("status"))],
+        };
+        let nuevo = arbol.resize(SlotId(2), 3);
+        let Node::Split { sizes, .. } = &nuevo else {
+            panic!("split")
+        };
+        assert_eq!(sizes[1], Size::Fixed(1));
+    }
+
+    /// Igualar devuelve los pesos a uno y deja los fijos en paz.
+    #[test]
+    fn igualar_solo_toca_los_ponderados() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(7), Size::Fixed(2), Size::Weight(3)],
+            children: vec![b(1), b(2), b(3)],
+        };
+        let nuevo = arbol.equalize(SlotId(1));
+        let Node::Split { sizes, .. } = &nuevo else {
+            panic!("split")
+        };
+        assert_eq!(
+            *sizes,
+            vec![Size::Weight(1), Size::Fixed(2), Size::Weight(1)]
         );
     }
 

@@ -2952,6 +2952,69 @@ impl App {
         }
     }
 
+    /// Cuántos `browser` hay en el árbol, visibles u ocultos.
+    fn browsers_en_el_arbol(&self) -> usize {
+        self.layout
+            .slot_ids()
+            .into_iter()
+            .filter(|id| {
+                self.layout
+                    .kind_of(*id)
+                    .is_some_and(|k| *k == norte_frontend::layout::KindId::browser())
+            })
+            .count()
+    }
+
+    /// Pasa el foco al siguiente lado visible.
+    pub fn layout_focus(&mut self, delta: isize) {
+        let n = isize::try_from(self.panes.len()).unwrap_or(2);
+        let i = isize::try_from(self.focus).unwrap_or(0);
+        self.set_focus(usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0));
+    }
+
+    /// Cierra el panel enfocado.
+    ///
+    /// Se NIEGA a cerrar el último `browser`: una pantalla sin ningún listado
+    /// no es un layout, es un cuelgue con bordes. Además es el invariante que
+    /// mantiene distintos los dos lados — con un solo listado, «el otro pane»
+    /// sería este mismo y una copia tendría por destino su propio origen.
+    ///
+    /// Devuelve `false` si no se pudo, para que el llamante avise.
+    pub fn layout_close_slot(&mut self) -> bool {
+        if self.browsers_en_el_arbol() <= 2 {
+            return false;
+        }
+        let foco = self.focused_slot();
+        let Some(nuevo) = self.layout.close_slot(foco) else {
+            return false;
+        };
+        self.layout = nuevo;
+        self.panes.refresh_visible(&self.layout);
+        true
+    }
+
+    /// Agranda (`delta > 0`) o encoge el panel enfocado.
+    pub fn layout_resize(&mut self, delta: i16) {
+        let foco = self.focused_slot();
+        self.layout = self.layout.resize(foco, delta);
+    }
+
+    /// Devuelve a los hermanos del panel enfocado el mismo tamaño.
+    pub fn layout_equalize(&mut self) {
+        let foco = self.focused_slot();
+        self.layout = self.layout.equalize(foco);
+    }
+
+    /// Designa el OTRO lado visible como destino de las operaciones.
+    ///
+    /// Con dos paneles el destino ya es el otro y esto no cambia nada; existe
+    /// para el día en que haya más de dos y el motor deje de poder desempatar
+    /// solo (ADR 0058 D7).
+    pub fn layout_set_target(&mut self) {
+        let otro = self.panes.slot_of(1 - self.focus.min(1));
+        self.roles.set(norte_frontend::layout::RoleId::Target, otro);
+    }
+
     /// How many times [`Self::swap_panes`] has run.
     ///
     /// Only useful as an equality check against a previously read value: any

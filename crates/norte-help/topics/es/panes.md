@@ -24,6 +24,13 @@ commands = [
     "pane.select-drive-right",
     "pane.compare-dirs",
     "pane.sync-dirs",
+    "layout.focus-next",
+    "layout.focus-prev",
+    "layout.close-slot",
+    "layout.grow",
+    "layout.shrink",
+    "layout.equalize",
+    "layout.set-target",
 ]
 context = ["browse"]
 +++
@@ -241,3 +248,16 @@ tiene journal — la tecla lo dice en vez de fallar a medias.
 > 💡 Un directorio al que vuelves a menudo merece un favorito: el panel recuerda por dónde ha pasado, y los favoritos son comunes a los dos paneles.
 
 > 💡 Cuando ya no queda rastro hacia atrás, la tecla lo dice. Una tecla que se calla es indistinguible de una rota.
+
+Los paneles se pueden redimensionar y cerrar. {{cmd:layout.grow}} y
+{{cmd:layout.shrink}} le dan o le quitan sitio al panel enfocado, y
+{{cmd:layout.equalize}} los devuelve a todos al mismo tamaño.
+{{cmd:layout.close-slot}} cierra el enfocado, y **se niega a cerrar el
+último**: una pantalla sin ningún listado no es un layout, es un cuelgue con
+bordes.
+
+{{cmd:layout.focus-next}} y {{cmd:layout.focus-prev}} recorren los paneles.
+Con dos hacen lo mismo que {{cmd:pane.switch}}; existen para cuando haya más.
+{{cmd:layout.set-target}} fija cuál es el destino de una copia. Con dos
+paneles el destino ya es el otro y no cambia nada — es para el día en que
+haya más de dos y no se pueda desempatar solo.

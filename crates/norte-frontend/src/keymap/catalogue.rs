@@ -101,6 +101,14 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("tab.goto-7", false),
     live("tab.goto-8", false),
     live("tab.goto-9", false),
+    // --- layout (L1b) ---
+    live("layout.focus-next", false),
+    live("layout.focus-prev", false),
+    live("layout.close-slot", false),
+    live("layout.grow", true),
+    live("layout.shrink", true),
+    live("layout.equalize", false),
+    live("layout.set-target", false),
     live("pane.mirror", false),
     live("pane.pull", false),
     live("pane.swap", false),
@@ -344,6 +352,11 @@ mod tests {
                 "cursor.page-down",
                 "cursor.page-up",
                 "cursor.up",
+                // Un contador REPITE el despacho (ADR 0044), así que «3
+                // agrandar» agranda tres veces. Es la misma lectura que
+                // `cursor.down`, no una excepción.
+                "layout.grow",
+                "layout.shrink",
                 "nav.back",
                 "nav.forward",
                 "viewer.down",
