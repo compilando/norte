@@ -550,6 +550,12 @@ places-title = Sitios
 places-section-drives = Unidades
 places-section-favorites = Favoritos
 places-empty = todavía nada
+# L3: lo que el visor acoplado dice EN VEZ de un fichero. Un directorio no
+# se lee nunca: el preview sigue al cursor, y leer lo que sea es como uno
+# se convierte en abrir un dispositivo de bloque sin querer.
+preview-directory = directorio
+preview-empty = nada seleccionado
+preview-not-a-file = no es un fichero normal
 msg-theme-applied = tema aplicado: { $name }
 msg-theme-reverted = tema sin cambios
 msg-theme-saved = tema guardado: { $name } → { $path }

@@ -541,6 +541,12 @@ places-title = Places
 places-section-drives = Drives
 places-section-favorites = Favorites
 places-empty = nothing here yet
+# L3: what the docked viewer says INSTEAD of a file. A directory is never
+# read: a preview follows the cursor, so reading whatever the cursor lands
+# on is how one turns into opening a block device by accident.
+preview-directory = directory
+preview-empty = nothing selected
+preview-not-a-file = not a regular file
 msg-theme-applied = theme applied: { $name }
 msg-theme-reverted = theme unchanged
 msg-theme-saved = theme saved: { $name } → { $path }

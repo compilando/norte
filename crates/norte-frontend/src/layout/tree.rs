@@ -262,6 +262,21 @@ impl Node {
         }
     }
 
+    /// Un hueco con vínculos: de quién es vista.
+    ///
+    /// Lo pide el preview acoplado, que es el kind `viewer` de siempre con un
+    /// `follows` puesto — el kind dice QUÉ hay dentro y el vínculo dice de
+    /// quién es vista, que es justo la separación del ADR 0058.
+    #[must_use]
+    pub fn slot_bound(id: SlotId, kind: KindId, bindings: Bindings) -> Self {
+        Self::Slot {
+            id,
+            kind,
+            params: Params::new(),
+            bindings,
+        }
+    }
+
     /// Todos los ids del árbol en orden de lectura, INCLUIDOS los de pestañas
     /// no activas: un hueco oculto sigue existiendo y sigue teniendo estado.
     #[must_use]

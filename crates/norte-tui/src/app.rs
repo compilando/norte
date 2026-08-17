@@ -3197,6 +3197,65 @@ impl App {
         Some(destino)
     }
 
+    /// El hueco del visor acoplado, si está en el árbol.
+    #[must_use]
+    pub fn preview_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::preview::KIND)
+    }
+
+    /// Abre el visor acoplado, lo enfoca, o lo cierra. Misma secuencia que
+    /// [`Self::toggle_places`].
+    ///
+    /// Se acopla a la DERECHA, ponderado, y con `follows: Role(Active)`: no es
+    /// un kind nuevo, es el `viewer` de siempre con un vínculo puesto. El kind
+    /// dice qué hay dentro y el vínculo de quién es vista (ADR 0058), así que
+    /// un visor fijado y uno que sigue al cursor son el MISMO renderer.
+    pub fn toggle_preview(&mut self) {
+        use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, RoleId, Size};
+        match self.preview_slot() {
+            Some(id) if self.key_owner == KeyOwner::Preview => {
+                if let Some(nuevo) = self.layout.close_slot(id) {
+                    self.layout = nuevo;
+                    self.panes.refresh_visible(&self.layout);
+                    self.history.retain_tree(&self.layout);
+                }
+                self.key_owner = KeyOwner::Panes;
+            }
+            Some(_) => self.key_owner = KeyOwner::Preview,
+            None => {
+                let id = self.mint_slot();
+                self.panes
+                    .insert_preview(id, crate::preview::Preview::new());
+                self.layout = self.layout.dock(
+                    self.focused_slot(),
+                    Edge::Right,
+                    Size::Weight(1),
+                    &Node::slot_bound(
+                        id,
+                        KindId::new(crate::preview::KIND),
+                        Bindings {
+                            follows: Some(Follow::Role(RoleId::Active)),
+                        },
+                    ),
+                );
+                self.panes.refresh_visible(&self.layout);
+                self.key_owner = KeyOwner::Preview;
+            }
+        }
+    }
+
+    /// El preview no pudo leer: se pinta el motivo DENTRO del hueco.
+    ///
+    /// Y no se pregunta nada. El preview sigue al cursor, así que una
+    /// denegación de policy no puede abrir un diálogo: bajar por un directorio
+    /// sería una ráfaga de modales, y el lector no ha pedido abrir nada.
+    pub fn preview_failed(&mut self, slot: norte_frontend::layout::SlotId, clave: &str) {
+        let texto = t(clave);
+        if let Some(p) = self.panes.preview_mut(slot) {
+            p.say(None, texto);
+        }
+    }
+
     /// Cierra el panel enfocado.
     ///
     /// Se NIEGA a cerrar el último `browser`: una pantalla sin ningún listado

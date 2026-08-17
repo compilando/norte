@@ -376,6 +376,32 @@ struct DecorateFetch {
     )>,
 }
 
+/// Una lectura de preview en vuelo, por HUECO.
+///
+/// Guarda la ruta que pidió: cuando llega, si el hueco ya quiere otra cosa
+/// —el cursor se movió mientras volaba— la respuesta se TIRA. Es la regla 3
+/// del spec y la lección de la fase C de P6, que es la misma cosa.
+struct PreviewFetch {
+    path: VPath,
+    rx: tokio::sync::oneshot::Receiver<Result<Viewer, Error>>,
+}
+
+/// Lee `path` en segundo plano para el hueco `slot`.
+///
+/// Sin `select!` sobre el teclado, a diferencia de [`open_viewer`]: nadie está
+/// esperando delante del preview, así que no hay nada que cancelar con `Esc`.
+/// Lo que sí hay es supersesión: mover el cursor deja caer este `Receiver` y
+/// la respuesta se pierde sin aplicarse.
+fn spawn_preview_fetch(backend: &Backend, path: VPath) -> PreviewFetch {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let b = backend.clone();
+    let p = path.clone();
+    tokio::spawn(async move {
+        let _ = tx.send(viewer_for(&b, &p).await);
+    });
+    PreviewFetch { path, rx }
+}
+
 /// Lanza el fetch de decoraciones (G3b) para TODAS las entradas actualmente
 /// listadas de `pane` (la "página visible" — el listado YA cargado, sea la
 /// primera página de un dir grande paginándose o el dir entero; el resto de
@@ -2509,6 +2535,8 @@ async fn run(
     // Fetch de decoraciones de plugin en vuelo (G3b, ADR 0037): a lo sumo
     // uno, molde de `stat_probe`/`fill`.
     let mut decorate_fetch: BySlot<DecorateFetch> = BySlot::new();
+    // L3: una lectura de preview en vuelo por hueco, superseded al moverse.
+    let mut preview_fetch: BySlot<PreviewFetch> = BySlot::new();
     // #106 (watching): vigilancia de los dirs visibles — notify con
     // fallback a sondeo (pitfall inotify). El conjunto vigilado se
     // re-sincroniza en CADA vuelta (diff barato, no-op sin cambios).
@@ -2732,6 +2760,42 @@ async fn run(
             ui::tab_zones(app, pintado.area),
             ui::menu_zones(app, pintado.area),
         );
+        // L3: el visor acoplado sigue al cursor del listado activo. Lo que se
+        // pide sale de `preview::want`, que devuelve `None` cuando el hueco no
+        // se colocó — cerrado, detrás de una pestaña, o colapsado por falta de
+        // sitio. Por eso la suspensión de un hueco oculto no es una
+        // comprobación que alguien pueda olvidarse de escribir: sin objetivo
+        // no hay nada que pedir.
+        {
+            let res = ui::resolved_for(app, pintado.area);
+            match norte_tui::preview::want(app, &res) {
+                Some((slot, norte_tui::preview::Want::File(path))) => {
+                    let ya = app
+                        .panes
+                        .preview(slot)
+                        .and_then(|p| p.shown().cloned())
+                        .is_some_and(|s| s == path);
+                    let en_vuelo = preview_fetch.get(slot).is_some_and(|f| f.path == path);
+                    if !ya && !en_vuelo {
+                        // Empezar otra SUSTITUYE la que hubiera: el `Receiver`
+                        // viejo se cae aquí y su respuesta no se aplica nunca.
+                        preview_fetch.set(slot, Some(spawn_preview_fetch(backend, path)));
+                    }
+                }
+                Some((slot, norte_tui::preview::Want::Note(clave))) => {
+                    // Un directorio no se lee: se dice lo que es. Y lo que
+                    // hubiera en vuelo deja de importar.
+                    preview_fetch.remove(slot);
+                    let texto = t(clave);
+                    if let Some(p) = app.panes.preview_mut(slot)
+                        && (p.note().is_none_or(|n| n != texto) || p.shown().is_some())
+                    {
+                        p.say(None, texto);
+                    }
+                }
+                None => {}
+            }
+        }
         // #52: listado lazy — las entradas VISIBLES sin size se hidratan por
         // tandas (máx. una en vuelo; dedup por (pane, path) en `last_probed`).
         if stat_probe.is_none() {
@@ -2939,6 +3003,42 @@ async fn run(
                             // viajan en el mismo fetch y comparten el guard
                             // anti-stale.
                             p.set_plugin_columns(cols);
+                        }
+                    }
+                    (slot, res) = std::future::poll_fn(|cx| {
+                        // Lecturas del preview, una por hueco. Mismo sondeo a mano
+                        // que las decoraciones y por el mismo motivo: la aridad la
+                        // pone el layout, no `select!`.
+                        for (id, f) in preview_fetch.iter_mut() {
+                            if let std::task::Poll::Ready(r) =
+                                std::pin::Pin::new(&mut f.rx).poll(cx)
+                            {
+                                return std::task::Poll::Ready((id, r.ok()));
+                            }
+                        }
+                        std::task::Poll::Pending
+                    }) => {
+                        // La respuesta se aplica SOLO si el hueco sigue queriendo
+                        // esa misma ruta: mientras volaba, el cursor pudo moverse.
+                        // Y un error se PINTA, jamás se pregunta — el preview sigue
+                        // al cursor, así que un diálogo por pulsación convertiría
+                        // bajar por un directorio en una ráfaga de modales.
+                        if let Some(f) = preview_fetch.remove(slot) {
+                            match res {
+                                Some(Ok(viewer)) => {
+                                    if let Some(p) = app.panes.preview_mut(slot) {
+                                        p.show(f.path, viewer);
+                                    }
+                                }
+                                Some(Err(e)) => {
+                                    let clave = error_category(&e);
+                                    app.preview_failed(slot, &clave);
+                                }
+                                // La task murió sin contestar: no se pinta un error
+                                // inventado, se deja lo que hubiera y el siguiente
+                                // movimiento del cursor lo vuelve a intentar.
+                                None => {}
+                            }
                         }
                     }
                     (pane, msg) = std::future::poll_fn(|cx| {

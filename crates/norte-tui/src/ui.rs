@@ -169,6 +169,16 @@ fn resolved_frame(app: &App, area: Rect) -> norte_frontend::layout::Resolved {
     norte_frontend::layout::resolve(crate::panel::from_ratatui(area), &arbol, &app.kinds)
 }
 
+/// El reparto de este frame, para quien no pinta.
+///
+/// `pub` porque el run loop necesita saber qué huecos se COLOCARON para
+/// decidir qué pedir: un preview que no se colocó no lee (regla 2 del spec), y
+/// eso solo lo sabe el reparto.
+#[must_use]
+pub fn resolved_for(app: &App, area: Rect) -> norte_frontend::layout::Resolved {
+    resolved_frame(app, area)
+}
+
 /// El tamaño que pide un hueco por su CONTENIDO.
 ///
 /// Solo la franja de tareas tiene uno: `min(tareas, 6)` filas, y cero en

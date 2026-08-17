@@ -46,6 +46,10 @@ pub const SLOT_STATUS: SlotId = SlotId(4);
 pub enum TuiPanel {
     /// Un listado de ficheros.
     Browser(Box<Pane>),
+    /// El visor ACOPLADO (L3): el kind `viewer` en un hueco, siguiendo al
+    /// listado activo. El visor a pantalla completa sigue siendo `App::viewer`
+    /// y no pasa por aquí.
+    Preview(Box<crate::preview::Preview>),
     /// El sidebar de sitios (L3): discos y favoritos.
     ///
     /// El primer panel que no es un listado. Que `as_browser` devuelva `None`
@@ -69,7 +73,7 @@ impl TuiPanel {
     pub fn as_browser(&self) -> Option<&Pane> {
         match self {
             Self::Browser(p) => Some(p),
-            Self::Places(_) | Self::Unknown { .. } => None,
+            Self::Places(_) | Self::Preview(_) | Self::Unknown { .. } => None,
         }
     }
 
@@ -77,7 +81,7 @@ impl TuiPanel {
     pub fn as_browser_mut(&mut self) -> Option<&mut Pane> {
         match self {
             Self::Browser(p) => Some(p),
-            Self::Places(_) | Self::Unknown { .. } => None,
+            Self::Places(_) | Self::Preview(_) | Self::Unknown { .. } => None,
         }
     }
 
@@ -86,7 +90,7 @@ impl TuiPanel {
     pub fn as_places(&self) -> Option<&norte_frontend::places::PlacesState> {
         match self {
             Self::Places(s) => Some(s),
-            Self::Browser(_) | Self::Unknown { .. } => None,
+            Self::Browser(_) | Self::Preview(_) | Self::Unknown { .. } => None,
         }
     }
 
@@ -94,7 +98,7 @@ impl TuiPanel {
     pub fn as_places_mut(&mut self) -> Option<&mut norte_frontend::places::PlacesState> {
         match self {
             Self::Places(s) => Some(s),
-            Self::Browser(_) | Self::Unknown { .. } => None,
+            Self::Browser(_) | Self::Preview(_) | Self::Unknown { .. } => None,
         }
     }
 }
@@ -263,6 +267,28 @@ impl PaneSlots {
     /// El sidebar de un hueco, para mutarlo.
     pub fn places_mut(&mut self, id: SlotId) -> Option<&mut norte_frontend::places::PlacesState> {
         self.store.get_mut(id).and_then(TuiPanel::as_places_mut)
+    }
+
+    /// El preview de un hueco, si lo hay.
+    #[must_use]
+    pub fn preview(&self, id: SlotId) -> Option<&crate::preview::Preview> {
+        match self.store.get(id) {
+            Some(TuiPanel::Preview(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// El preview de un hueco, para mutarlo.
+    pub fn preview_mut(&mut self, id: SlotId) -> Option<&mut crate::preview::Preview> {
+        match self.store.get_mut(id) {
+            Some(TuiPanel::Preview(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Mete un preview nuevo en el store, para un hueco recién acuñado.
+    pub fn insert_preview(&mut self, id: SlotId, p: crate::preview::Preview) {
+        self.store.insert(id, TuiPanel::Preview(Box::new(p)));
     }
 
     /// Mete un sidebar nuevo en el store, para un hueco recién acuñado.
