@@ -12479,39 +12479,44 @@ fn viewer_do(app: &mut App, f: impl FnOnce(&mut Viewer)) {
 /// el hilo del loop — harían falta `spawn_blocking` + índice de líneas.
 const VIEW_CAP: u64 = 256 * 1024;
 
-/// Abre el viewer leyendo la CABECERA vía el core (regla 7), cancelable
-/// como el cd (Esc abandona, Ctrl-C sale).
-async fn open_viewer(app: &mut App, backend: &Backend, events: &mut EventStream, path: VPath) {
-    // Fase 1 leer la cabecera, fase 2 (M4-P5) intentar el preview de un plugin.
-    // Ambas van dentro de la MISMA future para que Esc/Ctrl-C cancelen en
-    // cualquiera de las dos. Un fallo del preview NUNCA impide ver el crudo.
-    let fut = async {
-        let (bytes, truncated) = read_head(backend, &path).await?;
-        // G3a (ADR 0037): intenta el preview CON ESTILO primero; `Ok(None)`
-        // (ningún previewer aplica, un guest cayó, o los topes del wire se
-        // violaron — todos degradan igual, ver `Backend::
-        // plugin_preview_styled`) cae al preview PLANO clásico, que a su
-        // vez cae a la vista cruda si tampoco aplica. Un fallo de RED (no
-        // `Ok`) en el intento estilizado tampoco bloquea: se trata igual
-        // que `None` y se reintenta con el plano (mismo criterio que ya
-        // regía para el plano frente a la vista cruda).
-        let viewer = match backend.plugin_preview_styled(&path).await {
-            Ok(Some(p)) => {
-                Viewer::with_plugin_preview_styled(path.clone(), p.plugin_name, &p.lines, p.lossy)
-            }
-            Ok(None) | Err(_) => match backend.plugin_preview(&path).await {
-                Ok(res) => match res.preview {
-                    Some(p) => {
-                        Viewer::with_plugin_preview(path.clone(), p.plugin_name, &p.output, p.lossy)
-                    }
-                    None => Viewer::new(path.clone(), bytes, truncated),
-                },
-                // Un plugin roto no bloquea el archivo: vista cruda de siempre.
-                Err(_) => Viewer::new(path.clone(), bytes, truncated),
+/// Lee la cabecera de `path` y construye su [`Viewer`], con la cadena de
+/// preview de plugin y todas sus degradaciones.
+///
+/// NO es cancelable: quien la llama pone el `select!` si tiene a alguien
+/// esperando delante ([`open_viewer`] lo hace, para que `Esc` abandone). El
+/// preview acoplado no puede hacerlo —nadie está esperando: el lector sigue
+/// moviéndose por el listado— y por eso el read y su envoltorio modal son dos
+/// cosas separadas desde L3.
+///
+/// El orden de las degradaciones es el contrato (ADR 0037): preview de plugin
+/// CON ESTILO, luego preview plano, luego la vista cruda. Un `Ok(None)` —
+/// ningún previewer aplica, un guest se cayó, o se violaron los topes del
+/// wire— y un fallo de RED degradan IGUAL: un plugin roto nunca impide ver el
+/// fichero.
+async fn viewer_for(backend: &Backend, path: &VPath) -> Result<Viewer, Error> {
+    let (bytes, truncated) = read_head(backend, path).await?;
+    let viewer = match backend.plugin_preview_styled(path).await {
+        Ok(Some(p)) => {
+            Viewer::with_plugin_preview_styled(path.clone(), p.plugin_name, &p.lines, p.lossy)
+        }
+        Ok(None) | Err(_) => match backend.plugin_preview(path).await {
+            Ok(res) => match res.preview {
+                Some(p) => {
+                    Viewer::with_plugin_preview(path.clone(), p.plugin_name, &p.output, p.lossy)
+                }
+                None => Viewer::new(path.clone(), bytes, truncated),
             },
-        };
-        Ok::<Viewer, Error>(viewer)
+            // Un plugin roto no bloquea el archivo: vista cruda de siempre.
+            Err(_) => Viewer::new(path.clone(), bytes, truncated),
+        },
     };
+    Ok(viewer)
+}
+
+/// Abre el viewer a pantalla completa leyendo la CABECERA vía el core (regla
+/// 7), cancelable como el cd (Esc abandona, Ctrl-C sale).
+async fn open_viewer(app: &mut App, backend: &Backend, events: &mut EventStream, path: VPath) {
+    let fut = viewer_for(backend, &path);
     tokio::pin!(fut);
     loop {
         tokio::select! {
