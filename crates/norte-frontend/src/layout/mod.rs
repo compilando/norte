@@ -27,12 +27,14 @@ mod focus;
 mod kinds;
 mod resolve;
 mod roles;
+mod store;
 mod tree;
 
 pub use focus::{focus_next, focus_prev};
 pub use kinds::{KindDecl, KindRegistry};
 pub use resolve::{Resolved, resolve};
 pub use roles::{Roles, resolve_follow};
+pub use store::SlotStore;
 pub use tree::{Bindings, Dir, Follow, KindId, Node, Params, Rect, RoleId, SlotId};
 
 /// Lo que impide usar un layout.

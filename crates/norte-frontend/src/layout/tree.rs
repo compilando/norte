@@ -42,7 +42,7 @@ impl Rect {
 /// Identidad de un hueco.
 ///
 /// Se acuña por layout y NO se reutiliza dentro de una sesión: cerrar un hueco
-/// deja su estado huérfano en el `SlotStore` (tarea 7), para que
+/// deja su estado huérfano en el [`crate::layout::SlotStore`], para que
 /// reabrir la misma disposición recupere el historial en vez de arrancar en
 /// blanco.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

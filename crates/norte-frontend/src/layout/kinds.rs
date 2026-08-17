@@ -13,7 +13,7 @@ pub struct KindDecl {
     /// Qué kind describe.
     pub id: KindId,
     /// Ancho y alto MÍNIMOS en celdas. Por debajo de esto,
-    /// `resolve` (tarea 4) colapsa el `Split` que lo contiene.
+    /// [`super::resolve`] colapsa el `Split` que lo contiene.
     pub min: (u16, u16),
     /// ¿Puede tener el foco?
     pub focusable: bool,
