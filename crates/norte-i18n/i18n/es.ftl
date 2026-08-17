@@ -544,6 +544,19 @@ volumes-mode-all = mostrando todo
 # Un tamaño que el filesystem no respondió a tiempo (diseño §A): nunca un `0`
 # pelado, que se leería como «lleno» — justo lo contrario de «desconocido».
 volumes-size-unknown = desconocido
+# L3: el sidebar de sitios (`layout.places`) — un panel, no un popup, así que
+# sus etiquetas son ETIQUETAS: hay 14 celdas y ahí no cabe una frase.
+places-title = Sitios
+places-section-drives = Unidades
+places-section-favorites = Favoritos
+places-empty = todavía nada
+# L3: lo que el visor acoplado dice EN VEZ de un fichero. Un directorio no
+# se lee nunca: el preview sigue al cursor, y leer lo que sea es como uno
+# se convierte en abrir un dispositivo de bloque sin querer.
+preview-title = Vista
+preview-directory = directorio
+preview-empty = nada seleccionado
+preview-not-a-file = no es un fichero normal
 msg-theme-applied = tema aplicado: { $name }
 msg-theme-reverted = tema sin cambios
 msg-theme-saved = tema guardado: { $name } → { $path }
@@ -604,6 +617,8 @@ menu-item-layout-grow = Agrandar
 menu-item-layout-shrink = Encoger
 menu-item-layout-equalize = Igualar
 menu-item-layout-set-target = Fijar destino
+menu-item-layout-places = Panel de sitios
+menu-item-layout-preview = Visor acoplado
 menu-item-pane-tab-new = Abrir pestaña
 menu-item-pane-tab-close = Cerrar pestaña
 menu-item-pane-tab-next = Pestaña siguiente
@@ -655,6 +670,8 @@ help-cmd-layout-grow = agrandar panel
 help-cmd-layout-shrink = encoger panel
 help-cmd-layout-equalize = igualar paneles
 help-cmd-layout-set-target = fijar destino
+help-cmd-layout-places = enseñar u ocultar el panel de sitios
+help-cmd-layout-preview = enseñar u ocultar el visor acoplado
 msg-layout-last-panel = no se puede cerrar el último panel
 msg-layout-no-target = con más de dos paneles hay que fijar el destino
 msg-layout-load-failed = no se pudo cargar el layout «{$name}»: {$err}

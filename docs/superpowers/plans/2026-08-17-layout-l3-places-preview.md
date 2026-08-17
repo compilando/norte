@@ -931,3 +931,58 @@ git commit -am "feat(tui,frontend): layout.preview, bound and in the menu"
 - Still open from before: `metadata` (#139 first), remotes in the sidebar
   (#140 first), and P6's note about swapping ids in the tree instead of
   contents.
+
+---
+
+## What actually happened (2026-08-17)
+
+Eleven tasks, ten commits, `just ci-fast` twice as budgeted. **The plan's three
+"things in the way" were the right three**, and none of them cost what the
+plan feared. What cost was the two things the plan did not name.
+
+### The two bugs, and both came from the same harness
+
+The suite was green for both.
+
+1. **A sidebar that keeps `alt+b` cannot close itself.** `layout.places` went
+   into `[pane]`, so it did not exist for the `dialog` screen — the one that
+   resolves while the keyboard is INSIDE the sidebar. You opened the panel and
+   its own key stopped working. Fixed by binding in `[global]` (like `app.menu`)
+   AND adding the command to the panel's own allowlist: **both halves are
+   needed, and each looks sufficient on its own.** The test now walks both
+   screens, because the screen that DISPATCHES is the one that matters.
+2. **A preview that takes the keyboard switches itself off.** `toggle_preview`
+   mirrored `toggle_places` and took the keys on open — so the arrows stopped
+   moving the cursor the panel exists to follow. The sidebar is opened to pick
+   something IN it; the preview is opened to keep browsing. Same three-state
+   cycle, different starting state.
+
+Both were one tmux session, minutes apart, on a suite of 800 green tests. The
+sidebar also read `⟨file⟩/home/os…1P` there — six mounts under `/home` printed
+as six identical rows, with the ellipsis glued to the number.
+
+### What the plan got right, and what it over-planned
+
+- **`Node::dock` was the right primitive**, and targeting the nearest ancestor
+  split of the anchor (not the root) is what keeps the status bar under the
+  sidebar instead of beside it. Undock needed nothing: `close_slot` already
+  dissolves the one-child split, and a test pins that dock+close is identity.
+- **`KeyOwner` instead of `focus: SlotId`** cost three lines and no refactor.
+- **`preview::want` in the lib** is the whole testing story: a hidden slot
+  produces no target, so there is no request to count, and the counting backend
+  the spec asked for was never needed.
+- **Over-planned:** the plan budgeted a task for extracting `viewer_for` out of
+  `open_viewer`. It was ten minutes and zero test churn.
+
+### Three things worth carrying forward
+
+1. **A truncated size is not a broken label, it is a FALSE NUMBER.** `38.2 GiB`
+   clipped from the head paints `8.2 GiB`. Names get truncated; sizes never do.
+   That is why `human_bytes_short` exists and why it rounds DOWN.
+2. **Adding one command moves four goldens**: the help corpus list and its
+   `[&str; N]` size, the help overlay snapshot (row count), and the CLI's
+   `help-en.json`. Budget the regeneration, and read the golden diff — it is
+   where you see the sentence a user will actually read.
+3. **`PlacesState::new()` needed its `rebuild()`.** A `#[derive(Default)]` gave
+   a state with zero rows, so folding did nothing and a freshly opened panel was
+   an empty box. Found by a test that asserted a fold flag, not by the render.

@@ -46,6 +46,16 @@ pub const SLOT_STATUS: SlotId = SlotId(4);
 pub enum TuiPanel {
     /// Un listado de ficheros.
     Browser(Box<Pane>),
+    /// El visor ACOPLADO (L3): el kind `viewer` en un hueco, siguiendo al
+    /// listado activo. El visor a pantalla completa sigue siendo `App::viewer`
+    /// y no pasa por aquí.
+    Preview(Box<crate::preview::Preview>),
+    /// El sidebar de sitios (L3): discos y favoritos.
+    ///
+    /// El primer panel que no es un listado. Que `as_browser` devuelva `None`
+    /// para él es lo que mantiene `app.panes[i]` queriendo decir «el i-ésimo
+    /// LISTADO»: un sidebar no es un lado.
+    Places(Box<norte_frontend::places::PlacesState>),
     /// Un kind que este binario no conoce: se pinta como una caja con su
     /// nombre y sus `params` se conservan intactos, para que abrir el layout
     /// de la GUI en el TUI no le borre nada.
@@ -63,7 +73,7 @@ impl TuiPanel {
     pub fn as_browser(&self) -> Option<&Pane> {
         match self {
             Self::Browser(p) => Some(p),
-            Self::Unknown { .. } => None,
+            Self::Places(_) | Self::Preview(_) | Self::Unknown { .. } => None,
         }
     }
 
@@ -71,7 +81,24 @@ impl TuiPanel {
     pub fn as_browser_mut(&mut self) -> Option<&mut Pane> {
         match self {
             Self::Browser(p) => Some(p),
-            Self::Unknown { .. } => None,
+            Self::Places(_) | Self::Preview(_) | Self::Unknown { .. } => None,
+        }
+    }
+
+    /// El sidebar, si este panel es uno.
+    #[must_use]
+    pub fn as_places(&self) -> Option<&norte_frontend::places::PlacesState> {
+        match self {
+            Self::Places(s) => Some(s),
+            Self::Browser(_) | Self::Preview(_) | Self::Unknown { .. } => None,
+        }
+    }
+
+    /// El sidebar, para mutarlo.
+    pub fn as_places_mut(&mut self) -> Option<&mut norte_frontend::places::PlacesState> {
+        match self {
+            Self::Places(s) => Some(s),
+            Self::Browser(_) | Self::Preview(_) | Self::Unknown { .. } => None,
         }
     }
 }
@@ -229,6 +256,44 @@ impl PaneSlots {
     pub fn swap(&mut self, a: usize, b: usize) {
         let (sa, sb) = (self.slot_of(a), self.slot_of(b));
         self.store.swap(sa, sb);
+    }
+
+    /// El sidebar de un hueco, si lo hay.
+    #[must_use]
+    pub fn places(&self, id: SlotId) -> Option<&norte_frontend::places::PlacesState> {
+        self.store.get(id).and_then(TuiPanel::as_places)
+    }
+
+    /// El sidebar de un hueco, para mutarlo.
+    pub fn places_mut(&mut self, id: SlotId) -> Option<&mut norte_frontend::places::PlacesState> {
+        self.store.get_mut(id).and_then(TuiPanel::as_places_mut)
+    }
+
+    /// El preview de un hueco, si lo hay.
+    #[must_use]
+    pub fn preview(&self, id: SlotId) -> Option<&crate::preview::Preview> {
+        match self.store.get(id) {
+            Some(TuiPanel::Preview(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// El preview de un hueco, para mutarlo.
+    pub fn preview_mut(&mut self, id: SlotId) -> Option<&mut crate::preview::Preview> {
+        match self.store.get_mut(id) {
+            Some(TuiPanel::Preview(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Mete un preview nuevo en el store, para un hueco recién acuñado.
+    pub fn insert_preview(&mut self, id: SlotId, p: crate::preview::Preview) {
+        self.store.insert(id, TuiPanel::Preview(Box::new(p)));
+    }
+
+    /// Mete un sidebar nuevo en el store, para un hueco recién acuñado.
+    pub fn insert_places(&mut self, id: SlotId, state: norte_frontend::places::PlacesState) {
+        self.store.insert(id, TuiPanel::Places(Box::new(state)));
     }
 
     /// El store de verdad, para quien ya piensa en huecos.

@@ -33,6 +33,8 @@ commands = [
     "layout.shrink",
     "layout.equalize",
     "layout.set-target",
+    "layout.places",
+    "layout.preview",
 ]
 context = ["browse"]
 +++
@@ -270,3 +272,24 @@ mismo directorio, ya lleno, y se queda con el foco: partir es pedir sitio para
 trabajar en él. A partir de tres paneles, cuál es el destino de una copia deja
 de ser obvio — para eso está {{cmd:layout.set-target}}, y el destino designado
 se marca en el borde del panel.
+
+{{cmd:layout.places}} abre a la izquierda un panel con tus unidades y tus
+favoritos, y `Enter` sobre una fila lleva ahí al **listado enfocado**: es un
+mando, no un panel con directorio propio. La segunda pulsación se lleva el
+teclado al panel; la tercera lo cierra. Las unidades se piden al abrirlo y al
+desplegar su sección, nunca por reloj: preguntarle el espacio libre a cada
+filesystem cada pocos segundos se nota en un disco de red.
+
+Un favorito cuya ruta ya no vale sale marcado con `!` y atenuado, no
+desaparece — un favorito que se esconde solo es un fallo de configuración que
+no puedes ver. El motivo lo dice la barra de estado al pulsarlo.
+
+{{cmd:layout.preview}} abre a la derecha un visor que **sigue al cursor** del
+listado activo: mover el cursor cambia lo que enseña, sin pulsar nada. Es el
+mismo visor de {{cmd:pane.view}} —mismas teclas, mismos encodings, mismo hex—
+metido en un hueco en vez de ocupar la pantalla.
+
+Un directorio no se lee: la caja dice que lo es. Un fichero que no se puede
+leer tampoco pregunta nada — el motivo se pinta dentro, porque un panel que
+sigue al cursor no puede abrir un diálogo por cada tecla que bajas. Y un visor
+acoplado que no se ve —detrás de una pestaña, o sin sitio— no lee NADA.

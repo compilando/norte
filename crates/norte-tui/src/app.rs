@@ -854,7 +854,28 @@ enum JournalIndicator {
     Squatted,
 }
 
-/// Estado completo del TUI: dos panes y el foco.
+/// Quién se queda el teclado del cuerpo de la pantalla.
+///
+/// NO es el foco. [`App::focus`] sigue apuntando al LISTADO en el que estabas,
+/// y toda operación —una copia, un borrado, un `cd`— sigue yendo ahí: lo que
+/// esto decide es solo a quién se le entregan las teclas mientras un panel
+/// auxiliar está delante, igual que hacen la ayuda o la palette.
+///
+/// Existe porque `App::focus` es un índice sobre los listados VISIBLES, así
+/// que un sidebar no puede tenerlo sin el refactor a `SlotId` que P6 aplazó.
+/// El día que ese refactor llegue, esto se pliega dentro de él.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeyOwner {
+    /// Los listados, que es lo de siempre.
+    #[default]
+    Panes,
+    /// El sidebar de sitios.
+    Places,
+    /// El visor acoplado.
+    Preview,
+}
+
+/// Estado completo del TUI: los paneles y el foco.
 pub struct App {
     /// Los dos paneles (izquierda, derecha), guardados por hueco.
     pub panes: crate::panel::PaneSlots,
@@ -864,6 +885,8 @@ pub struct App {
     pub kinds: norte_frontend::layout::KindRegistry,
     /// Los roles, reconciliados tras cada reparto.
     pub roles: norte_frontend::layout::Roles,
+    /// Quién tiene el teclado del cuerpo (L3). Ver [`KeyOwner`].
+    key_owner: KeyOwner,
     /// La barra de menús, si está abierta. Overlay: se queda TODAS las teclas
     /// mientras está, como el resto.
     pub menu: Option<norte_frontend::menu::MenuState>,
@@ -2021,6 +2044,7 @@ impl App {
             layout: crate::panel::orthodox(),
             kinds: norte_frontend::layout::KindRegistry::builtin(),
             roles: norte_frontend::layout::Roles::con_active(crate::panel::SLOT_LEFT),
+            key_owner: KeyOwner::Panes,
             menu: None,
             // Los cuatro primeros son los del preset `orthodox`.
             next_slot: 5,
@@ -3027,6 +3051,216 @@ impl App {
         // El foco al recién nacido: partir es pedir sitio para trabajar en él.
         if let Some(i) = (0..self.panes.len()).find(|i| self.panes.slot_of(*i) == id) {
             self.set_focus(i);
+        }
+    }
+
+    /// Quién tiene el teclado del cuerpo ahora mismo (L3).
+    #[must_use]
+    pub const fn key_owner(&self) -> KeyOwner {
+        self.key_owner
+    }
+
+    /// Devuelve el teclado a los listados.
+    ///
+    /// Lo llaman `dialog.cancel` desde el sidebar y `viewer.close` desde el
+    /// visor acoplado: los dos sueltan las teclas SIN cerrar el panel — cerrar
+    /// algo que el lector solo quería dejar de manejar es la respuesta
+    /// equivocada, y cerrarlo es lo que hace su propio comando de layout.
+    pub const fn return_keys_to_panes(&mut self) {
+        self.key_owner = KeyOwner::Panes;
+    }
+
+    /// El hueco del sidebar de sitios, si está en el árbol.
+    #[must_use]
+    pub fn places_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind("places")
+    }
+
+    /// El primer hueco del ÁRBOL con ese kind, visible o no.
+    ///
+    /// Del árbol y no del reparto: quien pregunta si el sidebar está abierto
+    /// quiere saber si existe, y un hueco detrás de una pestaña sigue
+    /// existiendo.
+    fn slot_of_kind(&self, kind: &str) -> Option<norte_frontend::layout::SlotId> {
+        self.layout
+            .slot_ids()
+            .into_iter()
+            .find(|id| self.layout.kind_of(*id).is_some_and(|k| k.as_str() == kind))
+    }
+
+    /// Abre el sidebar de sitios, lo enfoca, o lo cierra.
+    ///
+    /// Las tres en una tecla, y en este orden: si no está, se acopla a la
+    /// IZQUIERDA del reparto donde vive el listado enfocado y se queda el
+    /// teclado; si está y el teclado lo tienen los listados, se lo lleva; y
+    /// solo si ya lo tenía, se cierra. Una segunda pulsación no puede cerrar
+    /// lo que el lector acaba de mirar de reojo.
+    ///
+    /// Abrirlo NO toca los listados: ni cuántos hay, ni cuál está enfocado, ni
+    /// dónde está su cursor.
+    pub fn toggle_places(&mut self) {
+        use norte_frontend::layout::{Edge, KindId, Node, Size};
+        match self.places_slot() {
+            Some(id) if self.key_owner == KeyOwner::Places => {
+                if let Some(nuevo) = self.layout.close_slot(id) {
+                    self.layout = nuevo;
+                    self.panes.refresh_visible(&self.layout);
+                    self.history.retain_tree(&self.layout);
+                }
+                self.key_owner = KeyOwner::Panes;
+            }
+            Some(_) => self.key_owner = KeyOwner::Places,
+            None => {
+                let id = self.mint_slot();
+                self.panes
+                    .insert_places(id, norte_frontend::places::PlacesState::new());
+                self.layout = self.layout.dock(
+                    self.focused_slot(),
+                    Edge::Left,
+                    // 16 celdas: el mínimo del kind son 14 y un `Fixed` gana
+                    // al mínimo, así que este número es el ancho de verdad.
+                    Size::Fixed(16),
+                    &Node::slot(id, KindId::new("places")),
+                );
+                self.panes.refresh_visible(&self.layout);
+                self.key_owner = KeyOwner::Places;
+            }
+        }
+    }
+
+    /// Mueve el cursor del sidebar, si está abierto.
+    pub fn places_up(&mut self) {
+        if let Some(id) = self.places_slot()
+            && let Some(s) = self.panes.places_mut(id)
+        {
+            s.up();
+        }
+    }
+
+    /// Baja el cursor del sidebar.
+    pub fn places_down(&mut self) {
+        if let Some(id) = self.places_slot()
+            && let Some(s) = self.panes.places_mut(id)
+        {
+            s.down();
+        }
+    }
+
+    /// Pliega o despliega la sección donde está el cursor del sidebar.
+    pub fn places_toggle_fold(&mut self) {
+        if let Some(id) = self.places_slot()
+            && let Some(s) = self.panes.places_mut(id)
+        {
+            s.toggle_fold();
+        }
+    }
+
+    /// ¿Están DESPLEGADAS las unidades del sidebar?
+    ///
+    /// `false` también cuando no hay sidebar: quien pregunta es el run loop
+    /// para decidir si vuelve a pedir `host.volumes`, y sin panel no hay a
+    /// quién dárselos.
+    #[must_use]
+    pub fn places_drives_visible(&self) -> bool {
+        self.places_slot()
+            .and_then(|id| self.panes.places(id))
+            .is_some_and(|s| !s.is_folded(norte_frontend::places::Section::Drives))
+    }
+
+    /// Confirma la fila del sidebar: a dónde hay que llevar el listado.
+    ///
+    /// Devuelve la ruta en vez de navegar porque un `cd` es I/O y esto es
+    /// estado puro; quien tiene el `Backend` delante lo hace.
+    ///
+    /// Tres desenlaces y los tres importan:
+    ///
+    /// - una fila que lleva a un sitio: se devuelve la ruta y el teclado vuelve
+    ///   a los listados, porque el sidebar es un MANDO y no un panel con
+    ///   directorio propio;
+    /// - una cabecera: no pasa nada, y el teclado se queda donde está;
+    /// - un favorito roto: la barra dice POR QUÉ. Es la otra mitad de pintarlo
+    ///   marcado: en catorce celdas cabe el aviso, no la explicación.
+    pub fn places_activate(&mut self) -> Option<VPath> {
+        use norte_frontend::places::PlaceRow;
+        let id = self.places_slot()?;
+        let estado = self.panes.places(id)?;
+        if let Some(PlaceRow::Favorite {
+            target: Err(clave), ..
+        }) = estado.rows().get(estado.cursor())
+        {
+            let motivo = t(clave);
+            self.message = Some(motivo);
+            return None;
+        }
+        let destino = estado.activate()?.clone();
+        self.key_owner = KeyOwner::Panes;
+        Some(destino)
+    }
+
+    /// El hueco del visor acoplado, si está en el árbol.
+    #[must_use]
+    pub fn preview_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::preview::KIND)
+    }
+
+    /// Abre el visor acoplado, lo enfoca, o lo cierra.
+    ///
+    /// Abre SIN llevarse el teclado, al revés que [`Self::toggle_places`], y
+    /// la diferencia no es un capricho: el sidebar se abre para elegir algo en
+    /// él, y el preview se abre para seguir mirando el listado. Con el teclado
+    /// dentro, las flechas dejarían de mover el cursor —el mismo cursor al que
+    /// el panel sigue—, o sea que abrirlo apagaría lo único que hace. Pilotar
+    /// la TUI en tmux lo enseñó en la primera pulsación.
+    ///
+    /// La secuencia es abrir → enfocar (para `viewer.*`: hex, encoding,
+    /// desplazar) → cerrar.
+    ///
+    /// Se acopla a la DERECHA, ponderado, y con `follows: Role(Active)`: no es
+    /// un kind nuevo, es el `viewer` de siempre con un vínculo puesto. El kind
+    /// dice qué hay dentro y el vínculo de quién es vista (ADR 0058), así que
+    /// un visor fijado y uno que sigue al cursor son el MISMO renderer.
+    pub fn toggle_preview(&mut self) {
+        use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, RoleId, Size};
+        match self.preview_slot() {
+            Some(id) if self.key_owner == KeyOwner::Preview => {
+                if let Some(nuevo) = self.layout.close_slot(id) {
+                    self.layout = nuevo;
+                    self.panes.refresh_visible(&self.layout);
+                    self.history.retain_tree(&self.layout);
+                }
+                self.key_owner = KeyOwner::Panes;
+            }
+            Some(_) => self.key_owner = KeyOwner::Preview,
+            None => {
+                let id = self.mint_slot();
+                self.panes
+                    .insert_preview(id, crate::preview::Preview::new());
+                self.layout = self.layout.dock(
+                    self.focused_slot(),
+                    Edge::Right,
+                    Size::Weight(1),
+                    &Node::slot_bound(
+                        id,
+                        KindId::new(crate::preview::KIND),
+                        Bindings {
+                            follows: Some(Follow::Role(RoleId::Active)),
+                        },
+                    ),
+                );
+                self.panes.refresh_visible(&self.layout);
+            }
+        }
+    }
+
+    /// El preview no pudo leer: se pinta el motivo DENTRO del hueco.
+    ///
+    /// Y no se pregunta nada. El preview sigue al cursor, así que una
+    /// denegación de policy no puede abrir un diálogo: bajar por un directorio
+    /// sería una ráfaga de modales, y el lector no ha pedido abrir nada.
+    pub fn preview_failed(&mut self, slot: norte_frontend::layout::SlotId, clave: &str) {
+        let texto = t(clave);
+        if let Some(p) = self.panes.preview_mut(slot) {
+            p.say(None, texto);
         }
     }
 
@@ -5221,6 +5455,27 @@ pub const ALLOW_PLUGIN_CONFIG: &[&str] = &[
     "dialog.down",
     "dialog.confirm",
     "dialog.cancel",
+];
+
+/// ALLOWLIST del sidebar de sitios (L3, `on_places_key` en main.rs).
+///
+/// El mismo vocabulario `dialog.*` que ya atan los siete presets: un panel que
+/// se mueve con flechas y confirma con Enter no necesita idioma propio, y
+/// dárselo habría sido siete presets tocados por una tecla nueva.
+/// `toggle-enabled` pliega la sección, `cancel` devuelve el teclado a los
+/// listados SIN cerrar el sidebar — cerrarlo es cosa de `layout.places`.
+pub const ALLOW_PLACES: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.confirm",
+    "dialog.toggle-enabled",
+    "dialog.cancel",
+    // Su PROPIA tecla, que por eso está atada en `[global]`: sin ella el
+    // sidebar se queda el `alt+b` y no puede cerrarse a sí mismo — abrías el
+    // panel y la misma tecla dejaba de existir. Lo destapó pilotar la TUI en
+    // tmux con la suite entera en verde, que es exactamente para lo que
+    // sirve el harness.
+    "layout.places",
 ];
 
 /// ALLOWLIST de DESPACHO del popup de navegación (`on_nav_popup_key`,

@@ -535,6 +535,19 @@ volumes-mode-all = showing everything
 # A size the filesystem did not answer in time (design §A): never a bare `0`,
 # which would read as "full" — the opposite of "unknown".
 volumes-size-unknown = unknown
+# L3: the places sidebar (`layout.places`) — a panel, not a popup, so its
+# labels are LABELS: 14 cells of room and no sentence fits in them.
+places-title = Places
+places-section-drives = Drives
+places-section-favorites = Favorites
+places-empty = nothing here yet
+# L3: what the docked viewer says INSTEAD of a file. A directory is never
+# read: a preview follows the cursor, so reading whatever the cursor lands
+# on is how one turns into opening a block device by accident.
+preview-title = Preview
+preview-directory = directory
+preview-empty = nothing selected
+preview-not-a-file = not a regular file
 msg-theme-applied = theme applied: { $name }
 msg-theme-reverted = theme unchanged
 msg-theme-saved = theme saved: { $name } → { $path }
@@ -593,6 +606,8 @@ menu-item-layout-grow = Grow
 menu-item-layout-shrink = Shrink
 menu-item-layout-equalize = Equalise
 menu-item-layout-set-target = Set destination
+menu-item-layout-places = Places sidebar
+menu-item-layout-preview = Docked viewer
 menu-item-pane-tab-new = New tab
 menu-item-pane-tab-close = Close tab
 menu-item-pane-tab-next = Next tab
@@ -644,6 +659,8 @@ help-cmd-layout-grow = grow panel
 help-cmd-layout-shrink = shrink panel
 help-cmd-layout-equalize = equalise panels
 help-cmd-layout-set-target = set destination
+help-cmd-layout-places = show or hide the places sidebar
+help-cmd-layout-preview = show or hide the docked viewer
 msg-layout-last-panel = cannot close the last panel
 msg-layout-no-target = with more than two panels, set the destination first
 msg-layout-load-failed = could not load layout "{$name}": {$err}

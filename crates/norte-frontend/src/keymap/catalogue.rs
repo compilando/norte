@@ -117,6 +117,13 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("layout.shrink", true),
     live("layout.equalize", false),
     live("layout.set-target", false),
+    // L3: el sidebar de sitios. En la familia `layout.*` y no en `pane.*`
+    // porque lo que hace es REORGANIZAR la pantalla —acopla un panel nuevo—,
+    // no operar sobre un listado.
+    live("layout.places", false),
+    // L3: el visor acoplado. Mismo motivo para estar en `layout.*`: acopla un
+    // panel. Lo que hay DENTRO es el kind `viewer` de siempre.
+    live("layout.preview", false),
     live("pane.mirror", false),
     live("pane.pull", false),
     live("pane.swap", false),

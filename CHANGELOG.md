@@ -9,6 +9,28 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A sidebar with your drives and your favourites, and a viewer that follows
+  the cursor.** `Alt+b` opens a panel down the left with every mount and how
+  much room is left on it, plus the favourites you have saved; `Enter` on a row
+  sends the focused listing there. It is a control, not a third pane: the
+  listings do not move, the destination of a copy does not change, and a second
+  press moves the keyboard into it so you can pick with the arrows.
+  A favourite whose path no longer parses is marked and dimmed instead of
+  quietly disappearing, because a favourite that hides itself is a
+  configuration mistake you cannot see; press it and the status bar says what
+  is wrong with it. Drives are asked for when the panel opens and when you
+  unfold their section — never on a timer, because asking every filesystem how
+  much room it has left, every few seconds, is felt on a network mount.
+
+  `Alt+q` opens a viewer on the right that shows whatever the cursor is on,
+  and keeps up as you move. It is the same viewer `F3` opens — same keys, same
+  encodings, same hex, same plugin previews — sitting in a slot instead of over
+  the whole screen, so pressing `Alt+q` again moves the keyboard into it and a
+  third press closes it. It never interrupts: a directory is not read, a file
+  it may not read paints the reason where the text would go instead of raising
+  a dialog for every key you press going down a listing, and one you cannot see
+  — behind a tab, or squeezed out of a small terminal — reads nothing at all.
+
 - **A git status column, and plugins that can finally say something about a
   file.** Turn it on in the extension manager and the panel marks what changed
   since your last commit: `M` for modified, `D` for deleted, `?` for untracked,

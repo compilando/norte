@@ -66,6 +66,12 @@ impl KindRegistry {
                 decl("tasks", (20, 3), false, false, false, SIN_ROLES),
                 // La barra de estado: una fila, nadie la enfoca.
                 decl("status", (1, 1), false, false, false, SIN_ROLES),
+                // El sidebar de sitios (L3): se enfoca y toma teclas, pero NO
+                // opta a ningún rol — un sidebar jamás es el destino de una
+                // copia. Y hay uno: dos listas idénticas de discos no son un
+                // layout, son un fallo. El mínimo de 14 columnas es lo que
+                // ocupa `/boot 402M` con el marco alrededor.
+                decl("places", (14, 5), true, true, false, SIN_ROLES),
                 decl("viewer", (20, 5), true, true, false, SIN_ROLES),
                 decl("compare", (40, 8), true, true, false, SIN_ROLES),
                 decl("sync", (40, 8), true, true, false, SIN_ROLES),
@@ -135,6 +141,19 @@ mod tests {
         let d = reg.get(&KindId::new("tasks")).expect("tasks está");
         assert!(!d.focusable && !d.takes_keys && !d.multi);
         assert!(d.roles.is_empty());
+    }
+
+    /// El sidebar no opta a ningún rol y no admite dos. Lo primero es lo que
+    /// impide que una copia acabe teniendo por destino una lista de discos.
+    #[test]
+    fn places_no_toma_roles_y_es_unico() {
+        let reg = KindRegistry::builtin();
+        let d = reg.get(&KindId::new("places")).expect("places está");
+        assert_eq!(d.min, (14, 5));
+        assert!(d.focusable && d.takes_keys);
+        assert!(!d.multi);
+        assert!(d.roles.is_empty());
+        assert!(!reg.holds_role(&KindId::new("places"), RoleId::Target));
     }
 
     /// `insert` REEMPLAZA: dos declaraciones del mismo kind harían que `get`

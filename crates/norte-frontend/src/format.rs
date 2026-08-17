@@ -46,9 +46,60 @@ pub fn human_bytes(n: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
+/// El mismo tamaño en CUATRO o cinco celdas: sin decimales y con la inicial de
+/// la unidad. `38G`, `402M`, `900B`.
+///
+/// Existe por el sidebar de sitios (L3), que tiene catorce celdas para el
+/// nombre del montaje Y su espacio libre: con `38.2 GiB` no cabe ninguno de
+/// los dos, y recortar un tamaño no da una etiqueta rota sino un NÚMERO FALSO
+/// (`38.2 GiB` recortado por la cabeza pinta `8.2 GiB`).
+///
+/// Redondea hacia ABAJO a propósito: el espacio libre que se anuncia nunca
+/// debe ser más del que hay.
+///
+/// La unidad no se localiza, por el mismo motivo que en [`human_bytes`].
+///
+/// ```
+/// use norte_frontend::human_bytes_short;
+/// assert_eq!(human_bytes_short(900), "900B");
+/// assert_eq!(human_bytes_short(402 * 1000 * 1000), "383M");
+/// assert_eq!(human_bytes_short(41_000_000_000), "38G");
+/// ```
+#[must_use]
+pub fn human_bytes_short(n: u64) -> String {
+    const UNITS: [char; 6] = ['K', 'M', 'G', 'T', 'P', 'E'];
+    if n < 1024 {
+        return format!("{n}B");
+    }
+    let mut value = n / 1024;
+    let mut unit = 0usize;
+    while value >= 1024 && unit + 1 < UNITS.len() {
+        value /= 1024;
+        unit += 1;
+    }
+    format!("{value}{}", UNITS[unit])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// El corto redondea hacia ABAJO: anunciar más espacio libre del que hay
+    /// es la mentira que importa aquí.
+    #[test]
+    fn el_corto_no_redondea_hacia_arriba() {
+        assert_eq!(human_bytes_short(1023), "1023B");
+        assert_eq!(human_bytes_short(2047), "1K");
+        assert_eq!(human_bytes_short(1024 * 1024 - 1), "1023K");
+    }
+
+    /// Y jamás pasa de cinco celdas, que es lo que el sidebar puede pagar.
+    #[test]
+    fn el_corto_cabe_en_cinco_celdas() {
+        for n in [0, 1, 1023, 1024, u64::MAX / 2, u64::MAX] {
+            assert!(human_bytes_short(n).chars().count() <= 5, "{n}");
+        }
+    }
 
     #[test]
     fn bytes_under_a_kilobyte_are_exact() {

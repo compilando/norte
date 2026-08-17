@@ -38,7 +38,7 @@ pub use kinds::{KindDecl, KindRegistry};
 pub use resolve::{Resolved, resolve};
 pub use roles::{Roles, resolve_follow};
 pub use store::SlotStore;
-pub use tree::{Bindings, Dir, Follow, KindId, Node, Params, Rect, RoleId, Size, SlotId};
+pub use tree::{Bindings, Dir, Edge, Follow, KindId, Node, Params, Rect, RoleId, Size, SlotId};
 
 /// Lo que impide usar un layout.
 ///

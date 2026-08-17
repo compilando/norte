@@ -22,12 +22,13 @@ use norte_proto::DeleteMode;
 use norte_proto::methods::{FsSearchParams, SearchHits};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
-    ALLOW_COLUMNS, ALLOW_EXTENSIONS, ALLOW_NAV_POPUP, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, App,
-    CompareState, DialogOutcome, ExtensionManager, HelpOutcome, HelpView, KeymapsError, Modal,
-    NavPopup, NavPopupKind, Palette, Pane, PendingWrite, PickerAction, SearchDialog, SearchState,
-    Settings, SettingsEditError, Shortcuts, Trail, TrailStep, TransferKind, config_error_category,
-    detail_for_bar, dialog_action, error_category, error_message, io_error_category,
-    keymaps_error_category, theme_error_category, trust_lua_key, volume_items,
+    ALLOW_COLUMNS, ALLOW_EXTENSIONS, ALLOW_NAV_POPUP, ALLOW_PICKER, ALLOW_PLACES,
+    ALLOW_PLUGIN_CONFIG, App, CompareState, DialogOutcome, ExtensionManager, HelpOutcome, HelpView,
+    KeymapsError, Modal, NavPopup, NavPopupKind, Palette, Pane, PendingWrite, PickerAction,
+    SearchDialog, SearchState, Settings, SettingsEditError, Shortcuts, Trail, TrailStep,
+    TransferKind, config_error_category, detail_for_bar, dialog_action, error_category,
+    error_message, io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
+    volume_items,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::help::TuiChords;
@@ -373,6 +374,32 @@ struct DecorateFetch {
         std::collections::HashMap<VPath, norte_frontend::Decoration>,
         PluginColumnValues,
     )>,
+}
+
+/// Una lectura de preview en vuelo, por HUECO.
+///
+/// Guarda la ruta que pidió: cuando llega, si el hueco ya quiere otra cosa
+/// —el cursor se movió mientras volaba— la respuesta se TIRA. Es la regla 3
+/// del spec y la lección de la fase C de P6, que es la misma cosa.
+struct PreviewFetch {
+    path: VPath,
+    rx: tokio::sync::oneshot::Receiver<Result<Viewer, Error>>,
+}
+
+/// Lee `path` en segundo plano para el hueco `slot`.
+///
+/// Sin `select!` sobre el teclado, a diferencia de [`open_viewer`]: nadie está
+/// esperando delante del preview, así que no hay nada que cancelar con `Esc`.
+/// Lo que sí hay es supersesión: mover el cursor deja caer este `Receiver` y
+/// la respuesta se pierde sin aplicarse.
+fn spawn_preview_fetch(backend: &Backend, path: VPath) -> PreviewFetch {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let b = backend.clone();
+    let p = path.clone();
+    tokio::spawn(async move {
+        let _ = tx.send(viewer_for(&b, &p).await);
+    });
+    PreviewFetch { path, rx }
 }
 
 /// Lanza el fetch de decoraciones (G3b) para TODAS las entradas actualmente
@@ -2508,6 +2535,8 @@ async fn run(
     // Fetch de decoraciones de plugin en vuelo (G3b, ADR 0037): a lo sumo
     // uno, molde de `stat_probe`/`fill`.
     let mut decorate_fetch: BySlot<DecorateFetch> = BySlot::new();
+    // L3: una lectura de preview en vuelo por hueco, superseded al moverse.
+    let mut preview_fetch: BySlot<PreviewFetch> = BySlot::new();
     // #106 (watching): vigilancia de los dirs visibles — notify con
     // fallback a sondeo (pitfall inotify). El conjunto vigilado se
     // re-sincroniza en CADA vuelta (diff barato, no-op sin cambios).
@@ -2731,6 +2760,42 @@ async fn run(
             ui::tab_zones(app, pintado.area),
             ui::menu_zones(app, pintado.area),
         );
+        // L3: el visor acoplado sigue al cursor del listado activo. Lo que se
+        // pide sale de `preview::want`, que devuelve `None` cuando el hueco no
+        // se colocó — cerrado, detrás de una pestaña, o colapsado por falta de
+        // sitio. Por eso la suspensión de un hueco oculto no es una
+        // comprobación que alguien pueda olvidarse de escribir: sin objetivo
+        // no hay nada que pedir.
+        {
+            let res = ui::resolved_for(app, pintado.area);
+            match norte_tui::preview::want(app, &res) {
+                Some((slot, norte_tui::preview::Want::File(path))) => {
+                    let ya = app
+                        .panes
+                        .preview(slot)
+                        .and_then(|p| p.shown().cloned())
+                        .is_some_and(|s| s == path);
+                    let en_vuelo = preview_fetch.get(slot).is_some_and(|f| f.path == path);
+                    if !ya && !en_vuelo {
+                        // Empezar otra SUSTITUYE la que hubiera: el `Receiver`
+                        // viejo se cae aquí y su respuesta no se aplica nunca.
+                        preview_fetch.set(slot, Some(spawn_preview_fetch(backend, path)));
+                    }
+                }
+                Some((slot, norte_tui::preview::Want::Note(clave))) => {
+                    // Un directorio no se lee: se dice lo que es. Y lo que
+                    // hubiera en vuelo deja de importar.
+                    preview_fetch.remove(slot);
+                    let texto = t(clave);
+                    if let Some(p) = app.panes.preview_mut(slot)
+                        && (p.note().is_none_or(|n| n != texto) || p.shown().is_some())
+                    {
+                        p.say(None, texto);
+                    }
+                }
+                None => {}
+            }
+        }
         // #52: listado lazy — las entradas VISIBLES sin size se hidratan por
         // tandas (máx. una en vuelo; dedup por (pane, path) en `last_probed`).
         if stat_probe.is_none() {
@@ -2938,6 +3003,42 @@ async fn run(
                             // viajan en el mismo fetch y comparten el guard
                             // anti-stale.
                             p.set_plugin_columns(cols);
+                        }
+                    }
+                    (slot, res) = std::future::poll_fn(|cx| {
+                        // Lecturas del preview, una por hueco. Mismo sondeo a mano
+                        // que las decoraciones y por el mismo motivo: la aridad la
+                        // pone el layout, no `select!`.
+                        for (id, f) in preview_fetch.iter_mut() {
+                            if let std::task::Poll::Ready(r) =
+                                std::pin::Pin::new(&mut f.rx).poll(cx)
+                            {
+                                return std::task::Poll::Ready((id, r.ok()));
+                            }
+                        }
+                        std::task::Poll::Pending
+                    }) => {
+                        // La respuesta se aplica SOLO si el hueco sigue queriendo
+                        // esa misma ruta: mientras volaba, el cursor pudo moverse.
+                        // Y un error se PINTA, jamás se pregunta — el preview sigue
+                        // al cursor, así que un diálogo por pulsación convertiría
+                        // bajar por un directorio en una ráfaga de modales.
+                        if let Some(f) = preview_fetch.remove(slot) {
+                            match res {
+                                Some(Ok(viewer)) => {
+                                    if let Some(p) = app.panes.preview_mut(slot) {
+                                        p.show(f.path, viewer);
+                                    }
+                                }
+                                Some(Err(e)) => {
+                                    let clave = error_category(&e);
+                                    app.preview_failed(slot, &clave);
+                                }
+                                // La task murió sin contestar: no se pinta un error
+                                // inventado, se deja lo que hubiera y el siguiente
+                                // movimiento del cursor lo vuelve a intentar.
+                                None => {}
+                            }
                         }
                     }
                     (pane, msg) = std::future::poll_fn(|cx| {
@@ -3551,6 +3652,40 @@ async fn run(
                                     key.code,
                                 )
                                 .await;
+                            } else if app.key_owner() == norte_tui::app::KeyOwner::Places
+                                && !modal_wins(app)
+                            {
+                                // Sidebar de sitios (L3): Enter sobre una fila
+                                // manda el LISTADO enfocado a ese sitio, por el
+                                // flujo de cd de siempre.
+                                let outcome = on_places_key(
+                                    app,
+                                    backend,
+                                    &mut events,
+                                    dialog_resolver,
+                                    key.modifiers,
+                                    key.code,
+                                )
+                                .await;
+                                if let Some(pane) = cd_landed_pane(&outcome) {
+                                    app.apply_scheme_sort(pane);
+                                    let dir = app.panes[pane].dir().clone();
+                                    let paths: Vec<VPath> =
+                                        app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
+                                    let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                                    decorate_fetch.set(
+            app.panes.slot_of(pane),
+            spawn_decorate_fetch(backend, app.panes.slot_of(pane), dir, paths, plugin_cols),
+        );
+                                }
+                                apply_cd(
+                                    &app.panes,
+                                    &mut fill,
+                                    &mut decorate_fetch,
+                                    &mut last_probed,
+                                    &mut search_run,
+                                    outcome,
+                                );
                             } else if app.nav_popup.is_some() && !modal_wins(app) {
                                 // Popup historial/hotlist (spec 2026-07-18): Enter
                                 // sobre un item NAVEGA por el flujo de cd normal —
@@ -4348,7 +4483,9 @@ async fn run(
                                     }
                                 }
                                 // Pantalla activa: el viewer tiene su contexto.
-                                let active = if app.viewer.is_some() {
+                                let active = if app.viewer.is_some()
+                                    || app.key_owner() == norte_tui::app::KeyOwner::Preview
+                                {
                                     &mut *viewer_resolver
                                 } else {
                                     &mut *resolver
@@ -7537,6 +7674,112 @@ async fn open_drive_popup(app: &mut App, backend: &Backend, pane: usize, include
 /// (design §D); si el cd desde el HISTORIAL falla con `NotFound`, la entrada
 /// se retira (spec 2026-07-18) — la de hotlist y volúmenes NO (hotlist es
 /// config del usuario y un volumen no se retira porque un cd puntual falle).
+/// Teclas del sidebar de sitios (L3), resueltas por el contexto `dialog`.
+///
+/// El sidebar no navega por su cuenta: Enter devuelve una ruta y el `cd` va al
+/// LISTADO enfocado, por el mismo camino que cualquier otro. Es lo que hace
+/// que abrirlo no cambie a dónde van las operaciones.
+async fn on_places_key(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) -> Cd {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return Cd::Cancelled;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return Cd::Cancelled; // tecla no modelada por el keymap: ignorar
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run { command: cmd, .. } => cmd,
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
+            resolver.reset();
+            return Cd::Cancelled;
+        }
+        Resolution::Reset => return Cd::Cancelled,
+    };
+    if !ALLOW_PLACES.contains(&cmd.as_str()) {
+        return Cd::Cancelled; // fuera del allowlist de este panel: inerte
+    }
+    match cmd.as_str() {
+        "dialog.up" => app.places_up(),
+        "dialog.down" => app.places_down(),
+        "dialog.toggle-enabled" => {
+            app.places_toggle_fold();
+            // Desplegar las unidades ES el momento de volver a pedirlas: un
+            // disco montado o desmontado desde que se abrió el panel se ve
+            // aquí, y sin un reloj de por medio.
+            if app.places_drives_visible() {
+                refresh_places_drives(app, backend).await;
+            }
+        }
+        // Suelta el teclado, NO cierra el panel: cerrarlo es `layout.places`.
+        "dialog.cancel" => app.return_keys_to_panes(),
+        // Y `layout.places` con el teclado DENTRO cierra: es la tercera
+        // pulsación de la secuencia abrir → enfocar → cerrar.
+        "layout.places" => app.toggle_places(),
+        "dialog.confirm" => {
+            if let Some(path) = app.places_activate() {
+                let pane = app.focus();
+                return cd_in(app, backend, events, pane, path, Trail::Record).await;
+            }
+        }
+        _ => {}
+    }
+    Cd::Cancelled
+}
+
+/// Copia la hotlist vigente al sidebar.
+///
+/// De `App::hotlist`, que ya es la copia que mantienen el arranque y cada
+/// `dialog.add`/`dialog.remove`: el sidebar no vuelve a leer la config ni se
+/// queda con una foto vieja de ella.
+fn refresh_places_favorites(app: &mut App) {
+    let Some(id) = app.places_slot() else {
+        return;
+    };
+    let items: Vec<(String, Result<VPath, String>)> = app
+        .hotlist
+        .iter()
+        .map(|h| (h.name.clone(), h.target.clone()))
+        .collect();
+    if let Some(state) = app.panes.places_mut(id) {
+        state.set_favorites(&items);
+    }
+}
+
+/// Pide los volúmenes al host y los deja en el sidebar.
+///
+/// Lo llaman abrir el sidebar y desplegar su sección de unidades. Y nadie
+/// más: un sidebar con reloj sería la regla de suspensión del ADR 0058 rota
+/// desde el primer frame, y `host.volumes` no es gratis (monta y consulta
+/// espacio en cada filesystem).
+///
+/// Un fallo NO vacía la lista que hubiera: lo que se veía sigue siendo lo
+/// último que el host dijo, y el error sale por la barra como cualquier otro.
+async fn refresh_places_drives(app: &mut App, backend: &Backend) {
+    let Some(id) = app.places_slot() else {
+        return;
+    };
+    match backend.volumes(false).await {
+        Ok(res) => {
+            if let Some(state) = app.panes.places_mut(id) {
+                state.set_drives(&res);
+            }
+        }
+        Err(e) => {
+            app.message = Some(ta(
+                "gui-msg-volumes-failed",
+                &[("error", &error_category(&e))],
+            ));
+        }
+    }
+}
+
 async fn on_nav_popup_key(
     app: &mut App,
     backend: &Backend,
@@ -11080,6 +11323,20 @@ async fn dispatch(
         Command::LayoutShrink => app.layout_resize(-1),
         Command::LayoutEqualize => app.layout_equalize(),
         Command::LayoutSetTarget => app.layout_set_target(),
+        // L3: abrir el sidebar es el momento de pedir los volúmenes, y el
+        // ÚNICO junto con desplegar su sección. Si ya estaba abierto no se
+        // vuelven a pedir: esa pulsación solo se lleva el teclado.
+        Command::LayoutPlaces => {
+            let estaba = app.places_slot().is_some();
+            app.toggle_places();
+            if !estaba && app.places_drives_visible() {
+                refresh_places_drives(app, backend).await;
+            }
+            refresh_places_favorites(app);
+        }
+        // El visor acoplado no pide nada aquí: lo que lea sale de
+        // `preview::want` en el bucle, contra el cursor de cada frame.
+        Command::LayoutPreview => app.toggle_preview(),
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
             let plan = mirror_plan(app);
@@ -11356,7 +11613,17 @@ async fn dispatch(
             Ok(_) => app.open_command_line(),
             Err(msg) => app.message = Some(msg),
         },
-        Command::ViewerClose => app.viewer = None,
+        Command::ViewerClose => {
+            // Con el preview acoplado, `viewer.close` SUELTA el teclado y deja
+            // el panel donde está: cerrarlo es `layout.preview`. Cerrar un
+            // panel que el lector solo quería dejar de manejar es la respuesta
+            // equivocada, y es la misma regla que el sidebar.
+            if app.key_owner() == norte_tui::app::KeyOwner::Preview {
+                app.return_keys_to_panes();
+            } else {
+                app.viewer = None;
+            }
+        }
         Command::ViewerUp => viewer_do(app, |v| v.scroll_up(1)),
         Command::ViewerDown => viewer_do(app, |v| v.scroll_down(1)),
         Command::ViewerPageUp => viewer_do(app, |v| v.scroll_up(norte_tui::viewer::PAGE)),
@@ -12316,6 +12583,17 @@ mod parse_plugin_key_tests {
 }
 
 fn viewer_do(app: &mut App, f: impl FnOnce(&mut Viewer)) {
+    // Al visor que tenga el teclado. Con el preview acoplado enfocado las
+    // teclas `viewer.*` mueven ESE, sin bindings nuevos y sin un segundo
+    // vocabulario: es el mismo visor en otro sitio (L3).
+    if app.key_owner() == norte_tui::app::KeyOwner::Preview {
+        if let Some(id) = app.preview_slot()
+            && let Some(v) = app.panes.preview_mut(id).and_then(|p| p.viewer_mut())
+        {
+            f(v);
+        }
+        return;
+    }
     if let Some(v) = &mut app.viewer {
         f(v);
     }
@@ -12327,39 +12605,44 @@ fn viewer_do(app: &mut App, f: impl FnOnce(&mut Viewer)) {
 /// el hilo del loop — harían falta `spawn_blocking` + índice de líneas.
 const VIEW_CAP: u64 = 256 * 1024;
 
-/// Abre el viewer leyendo la CABECERA vía el core (regla 7), cancelable
-/// como el cd (Esc abandona, Ctrl-C sale).
-async fn open_viewer(app: &mut App, backend: &Backend, events: &mut EventStream, path: VPath) {
-    // Fase 1 leer la cabecera, fase 2 (M4-P5) intentar el preview de un plugin.
-    // Ambas van dentro de la MISMA future para que Esc/Ctrl-C cancelen en
-    // cualquiera de las dos. Un fallo del preview NUNCA impide ver el crudo.
-    let fut = async {
-        let (bytes, truncated) = read_head(backend, &path).await?;
-        // G3a (ADR 0037): intenta el preview CON ESTILO primero; `Ok(None)`
-        // (ningún previewer aplica, un guest cayó, o los topes del wire se
-        // violaron — todos degradan igual, ver `Backend::
-        // plugin_preview_styled`) cae al preview PLANO clásico, que a su
-        // vez cae a la vista cruda si tampoco aplica. Un fallo de RED (no
-        // `Ok`) en el intento estilizado tampoco bloquea: se trata igual
-        // que `None` y se reintenta con el plano (mismo criterio que ya
-        // regía para el plano frente a la vista cruda).
-        let viewer = match backend.plugin_preview_styled(&path).await {
-            Ok(Some(p)) => {
-                Viewer::with_plugin_preview_styled(path.clone(), p.plugin_name, &p.lines, p.lossy)
-            }
-            Ok(None) | Err(_) => match backend.plugin_preview(&path).await {
-                Ok(res) => match res.preview {
-                    Some(p) => {
-                        Viewer::with_plugin_preview(path.clone(), p.plugin_name, &p.output, p.lossy)
-                    }
-                    None => Viewer::new(path.clone(), bytes, truncated),
-                },
-                // Un plugin roto no bloquea el archivo: vista cruda de siempre.
-                Err(_) => Viewer::new(path.clone(), bytes, truncated),
+/// Lee la cabecera de `path` y construye su [`Viewer`], con la cadena de
+/// preview de plugin y todas sus degradaciones.
+///
+/// NO es cancelable: quien la llama pone el `select!` si tiene a alguien
+/// esperando delante ([`open_viewer`] lo hace, para que `Esc` abandone). El
+/// preview acoplado no puede hacerlo —nadie está esperando: el lector sigue
+/// moviéndose por el listado— y por eso el read y su envoltorio modal son dos
+/// cosas separadas desde L3.
+///
+/// El orden de las degradaciones es el contrato (ADR 0037): preview de plugin
+/// CON ESTILO, luego preview plano, luego la vista cruda. Un `Ok(None)` —
+/// ningún previewer aplica, un guest se cayó, o se violaron los topes del
+/// wire— y un fallo de RED degradan IGUAL: un plugin roto nunca impide ver el
+/// fichero.
+async fn viewer_for(backend: &Backend, path: &VPath) -> Result<Viewer, Error> {
+    let (bytes, truncated) = read_head(backend, path).await?;
+    let viewer = match backend.plugin_preview_styled(path).await {
+        Ok(Some(p)) => {
+            Viewer::with_plugin_preview_styled(path.clone(), p.plugin_name, &p.lines, p.lossy)
+        }
+        Ok(None) | Err(_) => match backend.plugin_preview(path).await {
+            Ok(res) => match res.preview {
+                Some(p) => {
+                    Viewer::with_plugin_preview(path.clone(), p.plugin_name, &p.output, p.lossy)
+                }
+                None => Viewer::new(path.clone(), bytes, truncated),
             },
-        };
-        Ok::<Viewer, Error>(viewer)
+            // Un plugin roto no bloquea el archivo: vista cruda de siempre.
+            Err(_) => Viewer::new(path.clone(), bytes, truncated),
+        },
     };
+    Ok(viewer)
+}
+
+/// Abre el viewer a pantalla completa leyendo la CABECERA vía el core (regla
+/// 7), cancelable como el cd (Esc abandona, Ctrl-C sale).
+async fn open_viewer(app: &mut App, backend: &Backend, events: &mut EventStream, path: VPath) {
+    let fut = viewer_for(backend, &path);
     tokio::pin!(fut);
     loop {
         tokio::select! {
