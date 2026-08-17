@@ -854,7 +854,28 @@ enum JournalIndicator {
     Squatted,
 }
 
-/// Estado completo del TUI: dos panes y el foco.
+/// Quién se queda el teclado del cuerpo de la pantalla.
+///
+/// NO es el foco. [`App::focus`] sigue apuntando al LISTADO en el que estabas,
+/// y toda operación —una copia, un borrado, un `cd`— sigue yendo ahí: lo que
+/// esto decide es solo a quién se le entregan las teclas mientras un panel
+/// auxiliar está delante, igual que hacen la ayuda o la palette.
+///
+/// Existe porque `App::focus` es un índice sobre los listados VISIBLES, así
+/// que un sidebar no puede tenerlo sin el refactor a `SlotId` que P6 aplazó.
+/// El día que ese refactor llegue, esto se pliega dentro de él.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeyOwner {
+    /// Los listados, que es lo de siempre.
+    #[default]
+    Panes,
+    /// El sidebar de sitios.
+    Places,
+    /// El visor acoplado.
+    Preview,
+}
+
+/// Estado completo del TUI: los paneles y el foco.
 pub struct App {
     /// Los dos paneles (izquierda, derecha), guardados por hueco.
     pub panes: crate::panel::PaneSlots,
@@ -864,6 +885,8 @@ pub struct App {
     pub kinds: norte_frontend::layout::KindRegistry,
     /// Los roles, reconciliados tras cada reparto.
     pub roles: norte_frontend::layout::Roles,
+    /// Quién tiene el teclado del cuerpo (L3). Ver [`KeyOwner`].
+    key_owner: KeyOwner,
     /// La barra de menús, si está abierta. Overlay: se queda TODAS las teclas
     /// mientras está, como el resto.
     pub menu: Option<norte_frontend::menu::MenuState>,
@@ -2021,6 +2044,7 @@ impl App {
             layout: crate::panel::orthodox(),
             kinds: norte_frontend::layout::KindRegistry::builtin(),
             roles: norte_frontend::layout::Roles::con_active(crate::panel::SLOT_LEFT),
+            key_owner: KeyOwner::Panes,
             menu: None,
             // Los cuatro primeros son los del preset `orthodox`.
             next_slot: 5,
@@ -3027,6 +3051,80 @@ impl App {
         // El foco al recién nacido: partir es pedir sitio para trabajar en él.
         if let Some(i) = (0..self.panes.len()).find(|i| self.panes.slot_of(*i) == id) {
             self.set_focus(i);
+        }
+    }
+
+    /// Quién tiene el teclado del cuerpo ahora mismo (L3).
+    #[must_use]
+    pub const fn key_owner(&self) -> KeyOwner {
+        self.key_owner
+    }
+
+    /// Devuelve el teclado a los listados.
+    ///
+    /// Lo llaman `dialog.cancel` desde el sidebar y `viewer.close` desde el
+    /// visor acoplado: los dos sueltan las teclas SIN cerrar el panel — cerrar
+    /// algo que el lector solo quería dejar de manejar es la respuesta
+    /// equivocada, y cerrarlo es lo que hace su propio comando de layout.
+    pub const fn return_keys_to_panes(&mut self) {
+        self.key_owner = KeyOwner::Panes;
+    }
+
+    /// El hueco del sidebar de sitios, si está en el árbol.
+    #[must_use]
+    pub fn places_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind("places")
+    }
+
+    /// El primer hueco del ÁRBOL con ese kind, visible o no.
+    ///
+    /// Del árbol y no del reparto: quien pregunta si el sidebar está abierto
+    /// quiere saber si existe, y un hueco detrás de una pestaña sigue
+    /// existiendo.
+    fn slot_of_kind(&self, kind: &str) -> Option<norte_frontend::layout::SlotId> {
+        self.layout
+            .slot_ids()
+            .into_iter()
+            .find(|id| self.layout.kind_of(*id).is_some_and(|k| k.as_str() == kind))
+    }
+
+    /// Abre el sidebar de sitios, lo enfoca, o lo cierra.
+    ///
+    /// Las tres en una tecla, y en este orden: si no está, se acopla a la
+    /// IZQUIERDA del reparto donde vive el listado enfocado y se queda el
+    /// teclado; si está y el teclado lo tienen los listados, se lo lleva; y
+    /// solo si ya lo tenía, se cierra. Una segunda pulsación no puede cerrar
+    /// lo que el lector acaba de mirar de reojo.
+    ///
+    /// Abrirlo NO toca los listados: ni cuántos hay, ni cuál está enfocado, ni
+    /// dónde está su cursor.
+    pub fn toggle_places(&mut self) {
+        use norte_frontend::layout::{Edge, KindId, Node, Size};
+        match self.places_slot() {
+            Some(id) if self.key_owner == KeyOwner::Places => {
+                if let Some(nuevo) = self.layout.close_slot(id) {
+                    self.layout = nuevo;
+                    self.panes.refresh_visible(&self.layout);
+                    self.history.retain_tree(&self.layout);
+                }
+                self.key_owner = KeyOwner::Panes;
+            }
+            Some(_) => self.key_owner = KeyOwner::Places,
+            None => {
+                let id = self.mint_slot();
+                self.panes
+                    .insert_places(id, norte_frontend::places::PlacesState::new());
+                self.layout = self.layout.dock(
+                    self.focused_slot(),
+                    Edge::Left,
+                    // 16 celdas: el mínimo del kind son 14 y un `Fixed` gana
+                    // al mínimo, así que este número es el ancho de verdad.
+                    Size::Fixed(16),
+                    &Node::slot(id, KindId::new("places")),
+                );
+                self.panes.refresh_visible(&self.layout);
+                self.key_owner = KeyOwner::Places;
+            }
         }
     }
 
