@@ -13,9 +13,16 @@ async-trait.workspace = true
 bytes.workspace = true
 futures.workspace = true
 norte-proto.workspace = true
+# `deadline::blocking_with_deadline` (#213): un plazo sobre una syscall que no
+# se puede cancelar, compartido por el core y por los providers. Vive aquí
+# porque el motivo por el que existe —un montaje de red muerto— no es de nadie
+# en particular, y dos copias que puedan divergir en si el hilo es DESACOPLADO
+# es exactamente el fallo del que protege. `rt`/`sync`/`time` y nada más: este
+# crate no impone runtime a quien no llame a esa función.
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 # `wtf8::encode_from_wide`'s corpus round-trip test (2026-08-10-volumes.md
 # task V4, encoding-auditor finding). `norte-testkit` depends on `norte-vfs`
 # normally, so this is a dev-deps cycle — the pattern

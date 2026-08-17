@@ -371,6 +371,15 @@ fn spawn_guarded_producer<T: Send + 'static>(
 
 /// Ejecuta I/O bloqueante; un panic dentro se supervisa y NO tumba el proceso
 /// (política de panics de la spec §17.7).
+/// Lo que `capabilities_at` espera a que el filesystem conteste (#213).
+///
+/// El mismo número que usan las consultas de volúmenes del core
+/// (`SPACE_QUERY_DEADLINE`, `ENUMERATE_DEADLINE`, `QUERY_DEADLINE`) y por el
+/// mismo motivo: la escalera son un `statfs` y un `ioctl` sobre un montaje
+/// vivo —microsegundos—, así que 200 ms no recorta ninguna respuesta real y
+/// sí acota lo que un montaje muerto puede hacer esperar a quien pregunta.
+const CAPS_AT_DEADLINE: std::time::Duration = std::time::Duration::from_millis(200);
+
 pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, Error> + Send + 'static,
 ) -> Result<T, Error> {
@@ -945,55 +954,72 @@ impl Provider for LocalProvider {
             .set(CapabilityFlags::CONFINED_WRITES, cfg!(unix));
         let native = self.native(p)?;
         let cache = std::sync::Arc::clone(&self.caps_at);
-        blocking(move || {
-            // La pregunta es SIEMPRE sobre el directorio que CONTIENE al
-            // nombre: lo que se decide con la respuesta es si dos nombres
-            // pueden coexistir ahí, y eso lo manda el directorio donde van a
-            // estar. Para un fichero —o para un symlink, que es un nombre en
-            // el directorio del enlace y no en el de su destino— eso es su
-            // padre; para un directorio, él mismo. `symlink_metadata`, por
-            // tanto, y no `metadata`.
-            let Ok(md) = std::fs::symlink_metadata(&native) else {
-                // Una ruta que no está (o que no se deja mirar) NO es un error
-                // aquí: `capabilities()` jamás pudo fallar, y hacer fallar a
-                // su versión por ubicación convertiría «planificar hacia un
-                // destino que aún no existe» —el caso corriente de un mirror—
-                // en un error, además de cambiar el contrato de un método del
-                // wire ya publicado. Se declara lo del provider (ADR 0054: la
-                // degradación es el comportamiento de siempre).
-                return Ok(declared);
-            };
-            let dir: &Path = if md.is_dir() {
-                &native
-            } else {
-                native.parent().unwrap_or(&native)
-            };
-            let key = dir_key(dir);
+        // Con PLAZO, y en un hilo desacoplado (#213). Todo lo que hay dentro
+        // —el `symlink_metadata`, el `statfs` y el `ioctl` de la escalera— se
+        // cuelga indefinidamente sobre un NFS o un CIFS muerto, y una syscall
+        // en vuelo no se cancela. En el pool de bloqueo eso ataría una plaza
+        // COMPARTIDA por montaje caído; peor todavía, `sync.plan` pregunta
+        // esto dos veces ANTES de `sched.submit`, o sea fuera de toda Task y
+        // de todo `CancellationToken` (regla dura 3): la RPC se quedaba colgada
+        // sin nada que cancelar.
+        //
+        // Vencido el plazo se responde lo DECLARADO por el provider, que es la
+        // degradación que el ADR 0054 ya define para «no lo sé», y no se
+        // cachea nada: un montaje que vuelve contesta la próxima vez.
+        let declared_on_timeout = declared;
+        norte_vfs::deadline::blocking_with_deadline(
+            move || {
+                // La pregunta es SIEMPRE sobre el directorio que CONTIENE al
+                // nombre: lo que se decide con la respuesta es si dos nombres
+                // pueden coexistir ahí, y eso lo manda el directorio donde van a
+                // estar. Para un fichero —o para un symlink, que es un nombre en
+                // el directorio del enlace y no en el de su destino— eso es su
+                // padre; para un directorio, él mismo. `symlink_metadata`, por
+                // tanto, y no `metadata`.
+                let Ok(md) = std::fs::symlink_metadata(&native) else {
+                    // Una ruta que no está (o que no se deja mirar) NO es un error
+                    // aquí: `capabilities()` jamás pudo fallar, y hacer fallar a
+                    // su versión por ubicación convertiría «planificar hacia un
+                    // destino que aún no existe» —el caso corriente de un mirror—
+                    // en un error, además de cambiar el contrato de un método del
+                    // wire ya publicado. Se declara lo del provider (ADR 0054: la
+                    // degradación es el comportamiento de siempre).
+                    return Ok(declared);
+                };
+                let dir: &Path = if md.is_dir() {
+                    &native
+                } else {
+                    native.parent().unwrap_or(&native)
+                };
+                let key = dir_key(dir);
 
-            if let Some(k) = key
-                && let Some(hit) = cache.lock().expect("caps_at lock sano").get(k)
-            {
-                return Ok(hit);
-            }
+                if let Some(k) = key
+                    && let Some(hit) = cache.lock().expect("caps_at lock sano").get(k)
+                {
+                    return Ok(hit);
+                }
 
-            let found = crate::caps_at::probe_location(dir);
-            let mut caps = declared;
-            if let Some(sensitive) = found.case_sensitive {
-                caps.flags.set(CapabilityFlags::CASE_SENSITIVE, sensitive);
-            }
-            // `None` = la escalera no supo; se deja lo declarado en vez de
-            // apagar un flag que nadie contradijo.
-            if let Some(full) = found.full_fold {
-                caps.flags.set(CapabilityFlags::FULL_FOLD, full);
-            }
-            let mut guard = cache.lock().expect("caps_at lock sano");
-            guard.probes += 1;
-            if let Some(k) = key {
-                guard.insert(k, caps);
-            }
-            Ok(caps)
-        })
+                let found = crate::caps_at::probe_location(dir);
+                let mut caps = declared;
+                if let Some(sensitive) = found.case_sensitive {
+                    caps.flags.set(CapabilityFlags::CASE_SENSITIVE, sensitive);
+                }
+                // `None` = la escalera no supo; se deja lo declarado en vez de
+                // apagar un flag que nadie contradijo.
+                if let Some(full) = found.full_fold {
+                    caps.flags.set(CapabilityFlags::FULL_FOLD, full);
+                }
+                let mut guard = cache.lock().expect("caps_at lock sano");
+                guard.probes += 1;
+                if let Some(k) = key {
+                    guard.insert(k, caps);
+                }
+                Ok(caps)
+            },
+            CAPS_AT_DEADLINE,
+        )
         .await
+        .unwrap_or(Ok(declared_on_timeout))
     }
 
     #[cfg(unix)]

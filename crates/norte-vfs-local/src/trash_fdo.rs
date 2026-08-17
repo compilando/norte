@@ -687,6 +687,29 @@ mod tests {
     ///
     /// Sin dos dispositivos no hay nada que comprobar y el test se retira
     /// diciéndolo: fingirlo sería peor que no correrlo.
+    ///
+    /// # Por qué las DOS mitades viven en un solo test (#216)
+    ///
+    /// La segunda mitad —que la papelera elegida es la del topdir del montaje
+    /// de la víctima, y no la de casa— era un test aparte, y los dos eran
+    /// intermitentemente rojos bajo `cargo test --lib` (verdes bajo nextest,
+    /// que es lo que corre `just t`, así que el gate no lo veía).
+    ///
+    /// El recurso compartido no era una variable de entorno ni el cwd: era una
+    /// **ruta REAL del sistema**, `/dev/shm/.Trash-$uid`. La papelera de un
+    /// topdir la fija el spec freedesktop, así que los dos tests no tenían más
+    /// remedio que usar exactamente la misma, y la limpieza de cada uno
+    /// borraba la que el otro estaba usando. Falla en las dos direcciones:
+    /// «y queda lista» cuando le borran el `files/` recién creado, y «ni
+    /// papelera en el dispositivo ni Unsupported» cuando le borran la papelera
+    /// a mitad del `trash()`.
+    ///
+    /// Un mutex no basta: nextest da un PROCESO por test, así que la exclusión
+    /// tendría que ser entre procesos. Fundirlos es lo que quita la carrera en
+    /// los dos runners, y de paso deja juntas dos aserciones sobre la misma
+    /// regla. Reproducción del rojo, antes del arreglo:
+    /// `cargo test -p norte-vfs-local --lib -- --test-threads=2 dispositivo`
+    /// en bucle — uno de cada quince fallaba.
     #[cfg(target_os = "linux")]
     #[test]
     fn la_papelera_jamas_cruza_de_dispositivo() {
@@ -750,6 +773,23 @@ mod tests {
         };
         let _ = std::fs::remove_dir_all(&base);
         assert!(veredicto);
+
+        // Segunda mitad: la papelera ELEGIDA es la del topdir del montaje de
+        // la víctima, no la de casa. Va aquí, en secuencia, por lo que dice el
+        // doc de arriba: comparte `/dev/shm/.Trash-$uid` con lo de encima.
+        let victima = tempfile::tempdir_in("/dev/shm").expect("tempdir en /dev/shm");
+        let esperada = Path::new("/dev/shm").join(format!(".Trash-{}", super::uid()));
+        let existia = esperada.exists();
+        let dir = super::prepare_trash_dir(&victima.path().join("v.txt"), Some(casa.path()))
+            .expect("hay papelera");
+        assert_eq!(
+            dir, esperada,
+            "la papelera es la del montaje de la víctima, no la de casa"
+        );
+        assert!(dir.join(super::FILES).is_dir(), "y queda lista");
+        if !existia {
+            let _ = std::fs::remove_dir_all(&esperada);
+        }
     }
 
     fn id() -> TrashId {
@@ -865,44 +905,6 @@ mod tests {
         let top = dir.path();
         std::os::unix::fs::symlink("/tmp", top.join(".Trash")).expect("symlink");
         assert_eq!(shared_topdir_trash(top, 1000), None, "cae en .Trash-$uid");
-    }
-
-    /// Una víctima en OTRO dispositivo no cruza: usa la papelera del topdir de
-    /// su montaje (`.Trash-$uid`), que es lo que evita el copy+delete
-    /// entre dispositivos —largo e incancelable a mitad— que ADR 0009
-    /// anotaba como excepción de plataforma.
-    ///
-    /// Depende del entorno: hace falta un segundo dispositivo montado. Con uno
-    /// solo, skip limpio (como el resto de los tests de papelera del crate).
-    #[test]
-    fn una_victima_en_otro_dispositivo_usa_el_topdir_de_su_montaje() {
-        use super::{prepare_trash_dir, uid};
-        let otro = Path::new("/dev/shm");
-        let casa = tempfile::tempdir().expect("tempdir");
-        let (Ok(a), Ok(b)) = (std::fs::metadata(otro), std::fs::metadata(casa.path())) else {
-            eprintln!("skip: sin segundo dispositivo montado");
-            return;
-        };
-        {
-            use std::os::unix::fs::MetadataExt as _;
-            if a.dev() == b.dev() {
-                eprintln!("skip: /dev/shm y el tempdir están en el mismo dispositivo");
-                return;
-            }
-        }
-        let victima = tempfile::tempdir_in(otro).expect("tempdir en /dev/shm");
-        let esperada = otro.join(format!(".Trash-{}", uid()));
-        let existia = esperada.exists();
-        let dir = prepare_trash_dir(&victima.path().join("v.txt"), Some(casa.path()))
-            .expect("hay papelera");
-        assert_eq!(
-            dir, esperada,
-            "la papelera es la del montaje de la víctima, no la de casa"
-        );
-        assert!(dir.join(super::FILES).is_dir(), "y queda lista");
-        if !existia {
-            let _ = std::fs::remove_dir_all(&esperada);
-        }
     }
 
     /// En el mismo dispositivo manda la papelera de casa.

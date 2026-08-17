@@ -153,6 +153,23 @@ pub fn spelling_twins() -> Vec<SpellingTwin> {
             right: "ext4_full_fold_ss",
             kind: TwinKind::CaseFoldFull,
         },
+        // ﬁle.txt / file.txt: la MISMA forma que el par de la ß, en la familia
+        // que la ß no alcanza. Hasta #214 la tabla de expansiones solo estaba
+        // ejercitada por `ß`, así que borrarle todas las demás filas no habría
+        // puesto un test rojo.
+        SpellingTwin {
+            left: "full_fold_fi_ligature",
+            right: "full_fold_fi_plain",
+            kind: TwinKind::CaseFoldFull,
+        },
+        // ﬔ.txt / մե.txt: una fila que a la tabla le FALTABA (#214), y no
+        // ASCII en ninguno de los dos lados — que es lo que caza una tabla de
+        // expansiones escrita como si por el otro lado solo saliera ASCII.
+        SpellingTwin {
+            left: "full_fold_armenian_ligature",
+            right: "full_fold_armenian_plain",
+            kind: TwinKind::CaseFoldFull,
+        },
         // U+212A KELVIN SIGN / K: el par que NO es la misma ortografía y
         // empareja igual, porque NFC tiene descomposiciones singleton (#152).
         // Los otros cinco pares de esta lista son un fichero escrito de dos

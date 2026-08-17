@@ -162,22 +162,131 @@ pub const fn fold_delta(c: char) -> char {
     }
 }
 
+/// Las MISMAS filas que [`full_fold_expansion`], en forma recorrible.
+///
+/// Existe para que un test pueda comprobar la tabla ENTERA en vez de una
+/// muestra: un `match` no se itera, y una tabla que solo se prueba por
+/// muestreo es una tabla en la que nadie nota la fila que falta. El test que
+/// las empareja (`la_tabla_y_el_match_dicen_lo_mismo`) también barre todo el
+/// espacio de code points para probar que el `match` no tiene filas de MÁS.
+#[cfg(test)]
+const FULL_FOLD_ROWS: &[(char, &str)] = &[
+    ('\u{00DF}', "ss"),
+    ('\u{0149}', "\u{02BC}\u{006E}"),
+    ('\u{0587}', "\u{0565}\u{0582}"),
+    ('\u{1E9A}', "\u{0061}\u{02BE}"),
+    ('\u{1F80}', "\u{1F00}\u{03B9}"),
+    ('\u{1F81}', "\u{1F01}\u{03B9}"),
+    ('\u{1F82}', "\u{1F02}\u{03B9}"),
+    ('\u{1F83}', "\u{1F03}\u{03B9}"),
+    ('\u{1F84}', "\u{1F04}\u{03B9}"),
+    ('\u{1F85}', "\u{1F05}\u{03B9}"),
+    ('\u{1F86}', "\u{1F06}\u{03B9}"),
+    ('\u{1F87}', "\u{1F07}\u{03B9}"),
+    ('\u{1F90}', "\u{1F20}\u{03B9}"),
+    ('\u{1F91}', "\u{1F21}\u{03B9}"),
+    ('\u{1F92}', "\u{1F22}\u{03B9}"),
+    ('\u{1F93}', "\u{1F23}\u{03B9}"),
+    ('\u{1F94}', "\u{1F24}\u{03B9}"),
+    ('\u{1F95}', "\u{1F25}\u{03B9}"),
+    ('\u{1F96}', "\u{1F26}\u{03B9}"),
+    ('\u{1F97}', "\u{1F27}\u{03B9}"),
+    ('\u{1FA0}', "\u{1F60}\u{03B9}"),
+    ('\u{1FA1}', "\u{1F61}\u{03B9}"),
+    ('\u{1FA2}', "\u{1F62}\u{03B9}"),
+    ('\u{1FA3}', "\u{1F63}\u{03B9}"),
+    ('\u{1FA4}', "\u{1F64}\u{03B9}"),
+    ('\u{1FA5}', "\u{1F65}\u{03B9}"),
+    ('\u{1FA6}', "\u{1F66}\u{03B9}"),
+    ('\u{1FA7}', "\u{1F67}\u{03B9}"),
+    ('\u{1FB2}', "\u{1F70}\u{03B9}"),
+    ('\u{1FB3}', "\u{03B1}\u{03B9}"),
+    ('\u{1FB4}', "\u{03AC}\u{03B9}"),
+    ('\u{1FB7}', "\u{03B1}\u{0342}\u{03B9}"),
+    ('\u{1FC2}', "\u{1F74}\u{03B9}"),
+    ('\u{1FC3}', "\u{03B7}\u{03B9}"),
+    ('\u{1FC4}', "\u{03AE}\u{03B9}"),
+    ('\u{1FC7}', "\u{03B7}\u{0342}\u{03B9}"),
+    ('\u{1FF2}', "\u{1F7C}\u{03B9}"),
+    ('\u{1FF3}', "\u{03C9}\u{03B9}"),
+    ('\u{1FF4}', "\u{03CE}\u{03B9}"),
+    ('\u{1FF7}', "\u{03C9}\u{0342}\u{03B9}"),
+    ('\u{FB00}', "ff"),
+    ('\u{FB01}', "fi"),
+    ('\u{FB02}', "fl"),
+    ('\u{FB03}', "ffi"),
+    ('\u{FB04}', "ffl"),
+    ('\u{FB05}', "st"),
+    ('\u{FB06}', "st"),
+    ('\u{FB13}', "\u{0574}\u{0576}"),
+    ('\u{FB14}', "\u{0574}\u{0565}"),
+    ('\u{FB15}', "\u{0574}\u{056B}"),
+    ('\u{FB16}', "\u{057E}\u{0576}"),
+    ('\u{FB17}', "\u{0574}\u{056D}"),
+];
+
+/// Los code points cuyo full fold es multi-carácter y que NO están en
+/// [`full_fold_expansion`] porque su expansión vuelve a componerse en NFC.
+///
+/// Van aquí, y con su propio test, porque «ausente» y «ausente a propósito»
+/// se distinguen mirando el código y no la intención de quien lo escribió.
+#[cfg(test)]
+const FULL_FOLD_INERT: &[(char, &str)] = &[
+    ('\u{01F0}', "\u{006A}\u{030C}"),
+    ('\u{0390}', "\u{03B9}\u{0308}\u{0301}"),
+    ('\u{03B0}', "\u{03C5}\u{0308}\u{0301}"),
+    ('\u{1E96}', "\u{0068}\u{0331}"),
+    ('\u{1E97}', "\u{0074}\u{0308}"),
+    ('\u{1E98}', "\u{0077}\u{030A}"),
+    ('\u{1E99}', "\u{0079}\u{030A}"),
+    ('\u{1F50}', "\u{03C5}\u{0313}"),
+    ('\u{1F52}', "\u{03C5}\u{0313}\u{0300}"),
+    ('\u{1F54}', "\u{03C5}\u{0313}\u{0301}"),
+    ('\u{1F56}', "\u{03C5}\u{0313}\u{0342}"),
+    ('\u{1FB6}', "\u{03B1}\u{0342}"),
+    ('\u{1FC6}', "\u{03B7}\u{0342}"),
+    ('\u{1FD2}', "\u{03B9}\u{0308}\u{0300}"),
+    ('\u{1FD3}', "\u{03B9}\u{0308}\u{0301}"),
+    ('\u{1FD6}', "\u{03B9}\u{0342}"),
+    ('\u{1FD7}', "\u{03B9}\u{0308}\u{0342}"),
+    ('\u{1FE2}', "\u{03C5}\u{0308}\u{0300}"),
+    ('\u{1FE3}', "\u{03C5}\u{0308}\u{0301}"),
+    ('\u{1FE4}', "\u{03C1}\u{0313}"),
+    ('\u{1FE6}', "\u{03C5}\u{0342}"),
+    ('\u{1FE7}', "\u{03C5}\u{0308}\u{0342}"),
+    ('\u{1FF6}', "\u{03C9}\u{0342}"),
+];
+
 /// The multi-character expansion a code point folds to under
 /// [`FoldMode::Full`] and NOT under [`FoldMode::Simple`] — `CaseFolding.txt`
 /// status `F` rows with no `C`/`S` alternative, i.e. exactly the characters
 /// whose full fold is not a single `char`.
 ///
-/// This is deliberately the small, VERIFIED subset directly relevant to
-/// #145's own examples (`ß -> ss`, `ﬁ -> fi`) plus the rest of the Latin `ff`
-/// family and the `ſt`/`st` ligature pair — not a hand-transcribed copy of
-/// every `F`-only row in `CaseFolding.txt`. The wider table (Armenian
-/// ligatures, a handful of combining-mark expansions in the `1E9x` block, the
-/// Greek dialytika-tonos precompositions) exists but was not reachable to
-/// verify against the authoritative table from here, and an unverifiable
-/// entry is worse than an absent one: it would claim a collision that might
-/// not be real. Absent here means [`name_key`] still answers two keys for
-/// that pair under [`FoldMode::Full`] — an accepted, narrower gap than #145
-/// started with, not a silent one.
+/// # Complete, and against what (#214)
+///
+/// This table used to be a small hand-picked subset (`ß`, the `ff` family,
+/// `ſt`/`st`) because the authoritative rows "were not reachable to verify
+/// from here", and an unverifiable entry claims a collision that may not
+/// exist. That stopped being acceptable when ADR 0054 made
+/// [`FoldMode::Full`] the answer norte gives about a REAL filesystem: every
+/// omitted row is a collision an ext4/f2fs `+F` directory makes and norte
+/// does not warn about — a plan approved with no warning that dies mid-batch.
+///
+/// It is now every `F`-only row **that this crate's pipeline can actually
+/// observe**, derived from the Unicode 16 tables (`str::casefold`'s own
+/// source data) rather than transcribed by hand.
+///
+/// # What is deliberately NOT here, and why that is not a gap
+///
+/// 23 further code points have a multi-character full fold whose expansion
+/// **normalises back to the character itself**: `ǰ` → `j`+U+030C, `ẖ` →
+/// `h`+U+0331, `ΐ` → `ι`+U+0308+U+0301, and the rest of the Greek and Latin
+/// combining-mark family. [`name_key`] folds and THEN normalises to NFC, so
+/// an entry for any of them would expand and immediately recompose: dead
+/// code that reads as coverage. They pair correctly today, and they pair
+/// correctly through this absence, which is why the check that keeps this
+/// table honest is written as "the key of the character equals the key of its
+/// expansion" rather than "the table has N rows".
 ///
 /// Applied to the character AS `to_lowercase` LEFT IT (i.e. after the
 /// ordinary lowercase mapping, before [`fold_delta`]): `ẞ` (U+1E9E LATIN
@@ -186,18 +295,64 @@ pub const fn fold_delta(c: char) -> char {
 #[must_use]
 pub const fn full_fold_expansion(c: char) -> Option<&'static str> {
     match c {
-        // LATIN SMALL LETTER SHARP S -> "ss". The example #145 names.
-        '\u{00DF}' => Some("ss"),
-        // The Latin `ff`-family ligatures, each to its letter sequence.
-        '\u{FB00}' => Some("ff"),
-        '\u{FB01}' => Some("fi"),
-        '\u{FB02}' => Some("fl"),
-        '\u{FB03}' => Some("ffi"),
-        '\u{FB04}' => Some("ffl"),
-        // `ſt`/`st`: FULL folding sends BOTH to "st" (unlike SIMPLE, which
-        // sends FB05 to FB06 via `fold_delta` and leaves FB06, which has no
-        // `C`/`S` row, unchanged).
+        // --- latin ---
+        '\u{00DF}' => Some("ss"), // LATIN SMALL LETTER SHARP S
+        '\u{0149}' => Some("\u{02BC}\u{006E}"), // LATIN SMALL LETTER N PRECEDED BY APOSTROPHE
+        '\u{1E9A}' => Some("\u{0061}\u{02BE}"), // LATIN SMALL LETTER A WITH RIGHT HALF RING
+        '\u{FB00}' => Some("ff"), // LATIN SMALL LIGATURE FF
+        '\u{FB01}' => Some("fi"), // LATIN SMALL LIGATURE FI
+        '\u{FB02}' => Some("fl"), // LATIN SMALL LIGATURE FL
+        '\u{FB03}' => Some("ffi"), // LATIN SMALL LIGATURE FFI
+        '\u{FB04}' => Some("ffl"), // LATIN SMALL LIGATURE FFL
+        // LATIN SMALL LIGATURE LONG S T y LATIN SMALL LIGATURE ST: las dos a
+        // "st". Juntas y no en dos brazos porque clippy tiene razón —
+        // `match_same_arms`— y porque decirlo así es más exacto: bajo `Full`
+        // las dos ligaduras son la misma palabra.
         '\u{FB05}' | '\u{FB06}' => Some("st"),
+        // --- armenian ---
+        '\u{0587}' => Some("\u{0565}\u{0582}"), // ARMENIAN SMALL LIGATURE ECH YIWN
+        '\u{FB13}' => Some("\u{0574}\u{0576}"), // ARMENIAN SMALL LIGATURE MEN NOW
+        '\u{FB14}' => Some("\u{0574}\u{0565}"), // ARMENIAN SMALL LIGATURE MEN ECH
+        '\u{FB15}' => Some("\u{0574}\u{056B}"), // ARMENIAN SMALL LIGATURE MEN INI
+        '\u{FB16}' => Some("\u{057E}\u{0576}"), // ARMENIAN SMALL LIGATURE VEW NOW
+        '\u{FB17}' => Some("\u{0574}\u{056D}"), // ARMENIAN SMALL LIGATURE MEN XEH
+        // --- greek ---
+        '\u{1F80}' => Some("\u{1F00}\u{03B9}"), // GREEK SMALL LETTER ALPHA WITH PSILI AND YPOGEGRAMMENI
+        '\u{1F81}' => Some("\u{1F01}\u{03B9}"), // GREEK SMALL LETTER ALPHA WITH DASIA AND YPOGEGRAMMENI
+        '\u{1F82}' => Some("\u{1F02}\u{03B9}"), // GREEK SMALL LETTER ALPHA WITH PSILI AND VARIA AND YPOGEGRAMMENI
+        '\u{1F83}' => Some("\u{1F03}\u{03B9}"), // GREEK SMALL LETTER ALPHA WITH DASIA AND VARIA AND YPOGEGRAMMENI
+        '\u{1F84}' => Some("\u{1F04}\u{03B9}"), // GREEK SMALL LETTER ALPHA WITH PSILI AND OXIA AND YPOGEGRAMMENI
+        '\u{1F85}' => Some("\u{1F05}\u{03B9}"), // GREEK SMALL LETTER ALPHA WITH DASIA AND OXIA AND YPOGEGRAMMENI
+        '\u{1F86}' => Some("\u{1F06}\u{03B9}"), // GREEK SMALL LETTER ALPHA WITH PSILI AND PERISPOMENI AND YPOGEGRAMMENI
+        '\u{1F87}' => Some("\u{1F07}\u{03B9}"), // GREEK SMALL LETTER ALPHA WITH DASIA AND PERISPOMENI AND YPOGEGRAMMENI
+        '\u{1F90}' => Some("\u{1F20}\u{03B9}"), // GREEK SMALL LETTER ETA WITH PSILI AND YPOGEGRAMMENI
+        '\u{1F91}' => Some("\u{1F21}\u{03B9}"), // GREEK SMALL LETTER ETA WITH DASIA AND YPOGEGRAMMENI
+        '\u{1F92}' => Some("\u{1F22}\u{03B9}"), // GREEK SMALL LETTER ETA WITH PSILI AND VARIA AND YPOGEGRAMMENI
+        '\u{1F93}' => Some("\u{1F23}\u{03B9}"), // GREEK SMALL LETTER ETA WITH DASIA AND VARIA AND YPOGEGRAMMENI
+        '\u{1F94}' => Some("\u{1F24}\u{03B9}"), // GREEK SMALL LETTER ETA WITH PSILI AND OXIA AND YPOGEGRAMMENI
+        '\u{1F95}' => Some("\u{1F25}\u{03B9}"), // GREEK SMALL LETTER ETA WITH DASIA AND OXIA AND YPOGEGRAMMENI
+        '\u{1F96}' => Some("\u{1F26}\u{03B9}"), // GREEK SMALL LETTER ETA WITH PSILI AND PERISPOMENI AND YPOGEGRAMMENI
+        '\u{1F97}' => Some("\u{1F27}\u{03B9}"), // GREEK SMALL LETTER ETA WITH DASIA AND PERISPOMENI AND YPOGEGRAMMENI
+        '\u{1FA0}' => Some("\u{1F60}\u{03B9}"), // GREEK SMALL LETTER OMEGA WITH PSILI AND YPOGEGRAMMENI
+        '\u{1FA1}' => Some("\u{1F61}\u{03B9}"), // GREEK SMALL LETTER OMEGA WITH DASIA AND YPOGEGRAMMENI
+        '\u{1FA2}' => Some("\u{1F62}\u{03B9}"), // GREEK SMALL LETTER OMEGA WITH PSILI AND VARIA AND YPOGEGRAMMENI
+        '\u{1FA3}' => Some("\u{1F63}\u{03B9}"), // GREEK SMALL LETTER OMEGA WITH DASIA AND VARIA AND YPOGEGRAMMENI
+        '\u{1FA4}' => Some("\u{1F64}\u{03B9}"), // GREEK SMALL LETTER OMEGA WITH PSILI AND OXIA AND YPOGEGRAMMENI
+        '\u{1FA5}' => Some("\u{1F65}\u{03B9}"), // GREEK SMALL LETTER OMEGA WITH DASIA AND OXIA AND YPOGEGRAMMENI
+        '\u{1FA6}' => Some("\u{1F66}\u{03B9}"), // GREEK SMALL LETTER OMEGA WITH PSILI AND PERISPOMENI AND YPOGEGRAMMENI
+        '\u{1FA7}' => Some("\u{1F67}\u{03B9}"), // GREEK SMALL LETTER OMEGA WITH DASIA AND PERISPOMENI AND YPOGEGRAMMENI
+        '\u{1FB2}' => Some("\u{1F70}\u{03B9}"), // GREEK SMALL LETTER ALPHA WITH VARIA AND YPOGEGRAMMENI
+        '\u{1FB3}' => Some("\u{03B1}\u{03B9}"), // GREEK SMALL LETTER ALPHA WITH YPOGEGRAMMENI
+        '\u{1FB4}' => Some("\u{03AC}\u{03B9}"), // GREEK SMALL LETTER ALPHA WITH OXIA AND YPOGEGRAMMENI
+        '\u{1FB7}' => Some("\u{03B1}\u{0342}\u{03B9}"), // GREEK SMALL LETTER ALPHA WITH PERISPOMENI AND YPOGEGRAMMENI
+        '\u{1FC2}' => Some("\u{1F74}\u{03B9}"), // GREEK SMALL LETTER ETA WITH VARIA AND YPOGEGRAMMENI
+        '\u{1FC3}' => Some("\u{03B7}\u{03B9}"), // GREEK SMALL LETTER ETA WITH YPOGEGRAMMENI
+        '\u{1FC4}' => Some("\u{03AE}\u{03B9}"), // GREEK SMALL LETTER ETA WITH OXIA AND YPOGEGRAMMENI
+        '\u{1FC7}' => Some("\u{03B7}\u{0342}\u{03B9}"), // GREEK SMALL LETTER ETA WITH PERISPOMENI AND YPOGEGRAMMENI
+        '\u{1FF2}' => Some("\u{1F7C}\u{03B9}"), // GREEK SMALL LETTER OMEGA WITH VARIA AND YPOGEGRAMMENI
+        '\u{1FF3}' => Some("\u{03C9}\u{03B9}"), // GREEK SMALL LETTER OMEGA WITH YPOGEGRAMMENI
+        '\u{1FF4}' => Some("\u{03CE}\u{03B9}"), // GREEK SMALL LETTER OMEGA WITH OXIA AND YPOGEGRAMMENI
+        '\u{1FF7}' => Some("\u{03C9}\u{0342}\u{03B9}"), // GREEK SMALL LETTER OMEGA WITH PERISPOMENI AND YPOGEGRAMMENI
         _ => None,
     }
 }
@@ -730,6 +885,76 @@ mod tests {
         for id in ["ext4_full_fold_es_zett", "ligature_long_st"] {
             let raw = corpus(id);
             assert!(name_key(&raw, FoldMode::Simple).len() <= raw.len());
+        }
+    }
+
+    /// La tabla recorrible y el `match` dicen lo MISMO, en las dos
+    /// direcciones: cada fila está en el `match`, y el `match` no tiene filas
+    /// que la tabla no declare. Lo segundo barre el espacio entero de code
+    /// points, que es lo único que lo demuestra.
+    #[test]
+    fn la_tabla_y_el_match_dicen_lo_mismo() {
+        for (c, esperado) in FULL_FOLD_ROWS {
+            assert_eq!(
+                full_fold_expansion(*c),
+                Some(*esperado),
+                "U+{:04X} no está en el match",
+                u32::from(*c)
+            );
+        }
+        for cp in 0..=0x0010_FFFF_u32 {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            if full_fold_expansion(c).is_some() {
+                assert!(
+                    FULL_FOLD_ROWS.iter().any(|(k, _)| *k == c),
+                    "U+{cp:04X} está en el match y no en la tabla"
+                );
+            }
+        }
+    }
+
+    /// Lo que la tabla PROMETE: bajo `Full`, un carácter y su expansión dan la
+    /// misma clave. Es la aserción que importa —«esto colisiona en un `+F`»— y
+    /// se comprueba fila a fila, no por muestreo.
+    #[test]
+    fn cada_fila_empareja_su_expansion() {
+        for (c, expansion) in FULL_FOLD_ROWS {
+            let texto = c.to_string();
+            let uno = name_key(texto.as_bytes(), FoldMode::Full);
+            let otro = name_key(expansion.as_bytes(), FoldMode::Full);
+            assert_eq!(
+                uno,
+                otro,
+                "U+{:04X} y {expansion:?} tendrían que colisionar bajo Full",
+                u32::from(*c)
+            );
+        }
+    }
+
+    /// Y lo que la AUSENCIA promete: los 23 que no están en la tabla emparejan
+    /// igual, porque el paso NFC de `name_key` recompone su expansión. Sin este
+    /// test, «lo quitamos porque NFC ya lo hace» es una afirmación sin
+    /// comprobar, que es como una tabla incompleta se disfraza de decisión.
+    #[test]
+    fn los_ausentes_emparejan_por_nfc_y_no_por_la_tabla() {
+        for (c, expansion) in FULL_FOLD_INERT {
+            assert_eq!(
+                full_fold_expansion(*c),
+                None,
+                "U+{:04X} no debería estar en la tabla",
+                u32::from(*c)
+            );
+            let texto = c.to_string();
+            let uno = name_key(texto.as_bytes(), FoldMode::Full);
+            let otro = name_key(expansion.as_bytes(), FoldMode::Full);
+            assert_eq!(
+                uno,
+                otro,
+                "U+{:04X} tiene que emparejar igual, por NFC",
+                u32::from(*c)
+            );
         }
     }
 }

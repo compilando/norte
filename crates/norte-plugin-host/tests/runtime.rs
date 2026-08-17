@@ -107,6 +107,44 @@ fn guest_en_bucle_trapea_por_deadline_no_cuelga_el_host() {
     );
 }
 
+/// El presupuesto de época es POR LLAMADA, no por vida de la instancia (#211).
+///
+/// `Store::set_epoch_deadline` fija un instante ABSOLUTO, así que armarlo una
+/// vez al crear el store le daba al plugin un presupuesto que se gastaba con
+/// el RELOJ aunque no corriera nada: una conexión FTP dejaba de funcionar a
+/// los diez segundos de tenerla abierta. Aquí se comprueba con un presupuesto
+/// corto y una espera MÁS LARGA que él entre dos llamadas rápidas: si el
+/// deadline fuera por vida, la segunda trapa.
+#[test]
+fn el_presupuesto_de_epoca_se_rearma_en_cada_llamada() {
+    let Some(wasm) = support::build_guest("command-demo") else {
+        return;
+    };
+    // ~250 ms de presupuesto (5 ticks × 50 ms) contra 600 ms de espera.
+    let rt = norte_plugin_host::PluginRuntime::with_epoch_deadline(5).expect("engine");
+    let mut inst = rt
+        .instantiate(&wasm, norte_plugin_host::Capabilities::default())
+        .expect("instancia");
+    assert_eq!(inst.run_command("echo", "uno").expect("primera"), "uno");
+    // La espera es del HOST, no del guest: el guest no corre nada aquí, que es
+    // justo lo que un presupuesto de CPU no debería contar.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(
+        inst.run_command("echo", "dos")
+            .expect("segunda, tras la espera"),
+        "dos",
+        "el presupuesto se rearma por llamada"
+    );
+    // Y sigue cortando lo que tiene que cortar: un bucle dentro de UNA llamada.
+    let err = inst
+        .run_command("spin", "")
+        .expect_err("un bucle sigue trapando");
+    assert!(
+        matches!(err, norte_plugin_host::RuntimeError::Trap(_)),
+        "fue {err:?}"
+    );
+}
+
 #[test]
 fn fs_read_scoped_gatea_la_puerta_en_el_host() {
     let Some(wasm) = support::build_guest("command-demo") else {

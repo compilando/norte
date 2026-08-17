@@ -7,6 +7,28 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A plugin-backed connection no longer dies after ten seconds.** The time
+  budget a plugin gets was being handed out once, when the connection opened,
+  instead of once per operation — so an FTP session stopped answering ten
+  seconds after you opened it, and said the plugin had crashed, which it had
+  not. Each operation now gets its own budget.
+
+- **Two names that a Linux volume calls one file are recognised as such far
+  more widely.** On ext4 or f2fs with case folding turned on, `ﬁle.txt` and
+  `file.txt` are the same file, and so are dozens of Greek and Armenian pairs.
+  norte only knew about the German `ß`/`ss` case and a handful of Latin
+  ligatures, so a copy planned against such a volume could be approved with no
+  warning and collide on arrival. It now knows every expansion the standard
+  defines.
+
+- **A dead network mount no longer wedges comparing, synchronising or asking
+  what a folder supports.** Those three questions each ask the filesystem what
+  it can do, and on a hung NFS or SMB mount that question never comes back —
+  the whole request waited forever with nothing to cancel. It now gives up
+  after a fifth of a second and answers with what it already knew.
+
 ### Added
 
 - **A sidebar with your drives and your favourites, and a viewer that follows
