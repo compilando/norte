@@ -7628,6 +7628,25 @@ async fn on_places_key(
     Cd::Cancelled
 }
 
+/// Copia la hotlist vigente al sidebar.
+///
+/// De `App::hotlist`, que ya es la copia que mantienen el arranque y cada
+/// `dialog.add`/`dialog.remove`: el sidebar no vuelve a leer la config ni se
+/// queda con una foto vieja de ella.
+fn refresh_places_favorites(app: &mut App) {
+    let Some(id) = app.places_slot() else {
+        return;
+    };
+    let items: Vec<(String, Result<VPath, String>)> = app
+        .hotlist
+        .iter()
+        .map(|h| (h.name.clone(), h.target.clone()))
+        .collect();
+    if let Some(state) = app.panes.places_mut(id) {
+        state.set_favorites(&items);
+    }
+}
+
 /// Pide los volúmenes al host y los deja en el sidebar.
 ///
 /// Lo llaman abrir el sidebar y desplegar su sección de unidades. Y nadie
@@ -11199,6 +11218,17 @@ async fn dispatch(
         Command::LayoutShrink => app.layout_resize(-1),
         Command::LayoutEqualize => app.layout_equalize(),
         Command::LayoutSetTarget => app.layout_set_target(),
+        // L3: abrir el sidebar es el momento de pedir los volúmenes, y el
+        // ÚNICO junto con desplegar su sección. Si ya estaba abierto no se
+        // vuelven a pedir: esa pulsación solo se lleva el teclado.
+        Command::LayoutPlaces => {
+            let estaba = app.places_slot().is_some();
+            app.toggle_places();
+            if !estaba && app.places_drives_visible() {
+                refresh_places_drives(app, backend).await;
+            }
+            refresh_places_favorites(app);
+        }
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
             let plan = mirror_plan(app);

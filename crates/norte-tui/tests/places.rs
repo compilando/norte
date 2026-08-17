@@ -308,3 +308,26 @@ fn plegar_desde_la_app_esconde_las_filas() {
     assert!(despues < antes);
     assert!(app.places_slot().is_some(), "plegar no cierra el sidebar");
 }
+
+/// `layout.places` está atado en los SIETE presets.
+///
+/// Un comando de núcleo atado en unos y no en otros es el agujero que L1b
+/// metió con `pane.tab-next`: podías abrir una pestaña y no volver a ella en
+/// cinco de los siete. Una superficie que solo se abre por la palette es una
+/// superficie que nadie abre.
+#[test]
+fn layout_places_esta_atado_en_los_siete_presets() {
+    use norte_frontend::keymap::{CATALOGUE, Effective, parse_keymap, presets};
+    let conocidos: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
+    for nombre in presets::NAMES {
+        let src = presets::source(nombre).expect("el preset existe");
+        let kf = parse_keymap(src).expect("el preset parsea");
+        let eff = Effective::build(&kf, None, &conocidos).expect("el preset fusiona");
+        assert!(
+            eff.bindings()
+                .iter()
+                .any(|(_, cmd)| *cmd == "layout.places"),
+            "{nombre} no ata layout.places"
+        );
+    }
+}

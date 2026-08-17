@@ -33,6 +33,7 @@ commands = [
     "layout.shrink",
     "layout.equalize",
     "layout.set-target",
+    "layout.places",
 ]
 context = ["browse"]
 +++
@@ -263,3 +264,14 @@ same directory, already filled, and takes the focus: splitting is asking for
 room to work in. From three panels on, which one a copy goes to stops being
 obvious — that is what {{cmd:layout.set-target}} is for, and the panel you
 designate is marked on its border.
+
+{{cmd:layout.places}} opens a panel on the left with your drives and your
+favourites, and `Enter` on a row sends the **focused listing** there: it is a
+control, not a panel with a directory of its own. A second press moves the
+keyboard into it; a third closes it. Drives are asked for when it opens and
+when you unfold their section, never on a clock: asking every filesystem how
+much room it has left every few seconds is felt on a network mount.
+
+A favourite whose path no longer parses is marked `!` and dimmed rather than
+dropped — a favourite that hides itself is a configuration bug you cannot see.
+The status bar says why when you press it.

@@ -136,6 +136,7 @@ commands! {
     "layout.shrink" => LayoutShrink,
     "layout.equalize" => LayoutEqualize,
     "layout.set-target" => LayoutSetTarget,
+    "layout.places" => LayoutPlaces,
     "pane.mirror" => PaneMirror,
     "pane.pull" => PanePull,
     "pane.swap" => PaneSwap,

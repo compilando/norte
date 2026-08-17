@@ -33,6 +33,7 @@ commands = [
     "layout.shrink",
     "layout.equalize",
     "layout.set-target",
+    "layout.places",
 ]
 context = ["browse"]
 +++
@@ -270,3 +271,14 @@ mismo directorio, ya lleno, y se queda con el foco: partir es pedir sitio para
 trabajar en él. A partir de tres paneles, cuál es el destino de una copia deja
 de ser obvio — para eso está {{cmd:layout.set-target}}, y el destino designado
 se marca en el borde del panel.
+
+{{cmd:layout.places}} abre a la izquierda un panel con tus unidades y tus
+favoritos, y `Enter` sobre una fila lleva ahí al **listado enfocado**: es un
+mando, no un panel con directorio propio. La segunda pulsación se lleva el
+teclado al panel; la tercera lo cierra. Las unidades se piden al abrirlo y al
+desplegar su sección, nunca por reloj: preguntarle el espacio libre a cada
+filesystem cada pocos segundos se nota en un disco de red.
+
+Un favorito cuya ruta ya no vale sale marcado con `!` y atenuado, no
+desaparece — un favorito que se esconde solo es un fallo de configuración que
+no puedes ver. El motivo lo dice la barra de estado al pulsarlo.

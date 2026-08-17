@@ -86,6 +86,7 @@ pub const MENUS: &[Menu] = &[
     Menu {
         title: "menu-view",
         items: &[
+            "layout.places",
             "pane.toggle-hidden",
             "pane.columns",
             "pane.names-encoding",

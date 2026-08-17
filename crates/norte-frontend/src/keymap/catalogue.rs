@@ -117,6 +117,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("layout.shrink", true),
     live("layout.equalize", false),
     live("layout.set-target", false),
+    // L3: el sidebar de sitios. En la familia `layout.*` y no en `pane.*`
+    // porque lo que hace es REORGANIZAR la pantalla —acopla un panel nuevo—,
+    // no operar sobre un listado.
+    live("layout.places", false),
     live("pane.mirror", false),
     live("pane.pull", false),
     live("pane.swap", false),
