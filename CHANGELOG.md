@@ -1062,6 +1062,23 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **Tabs.** A panel can hold several tabs, and each one is a whole listing with
+  its own directory, cursor, marks and history — switching tabs remembers
+  nothing because it forgot nothing. `Ctrl+T` opens one in the directory you are
+  already in, filled, and `Ctrl+W` closes it; when one tab is left the bar
+  disappears and the panel is a panel again. A tab you cannot see costs nothing:
+  it does not watch its directory and asks for nothing until you come back.
+  Total Commander and Krusader users get the keys their preset already showed in
+  grey.
+
+- **Panels can be resized and closed.** Give the focused panel room, take it
+  away, or put them back to equal. Closing refuses to take the last one: a
+  screen with no listing is not a layout.
+
+- **A narrow terminal now shows one panel instead of two useless ones.** Below
+  about forty columns two panes cannot show a name next to its size, so the
+  split folds and one panel takes the width. The focus follows it.
+
 - **The screen is now built from a layout, and nothing about it has moved.**
   The two panes used to be a fixed field and a split written out by hand in
   three places — once to paint, once so the mouse could tell which row you
