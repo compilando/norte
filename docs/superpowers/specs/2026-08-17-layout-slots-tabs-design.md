@@ -147,17 +147,30 @@ the door to a plugin contributing a kind — which would contradict decision 3
 downstream.
 
 ```rust
-pub enum PanelState {
-    Browser(PaneState),        // today's, UNCHANGED
-    Viewer(ViewerState),
-    Tasks(TaskBoardState),
-    Compare(CompareState),
-    Sync(SyncState),
+pub struct SlotStore<P> { slots: BTreeMap<SlotId, P> }
+```
+
+**The store is generic over the panel state, and each frontend supplies its
+own.** `norte-frontend` owns the pure halves (`pane`, `viewer`, `compare`,
+`sync`), but the TUI wraps several of them in view types of its own
+(`crate::app::CompareView`, `crate::viewer::Viewer`) and the GUI does the same
+differently. A concrete `PanelState` enum in the shared crate would drag one
+frontend's view types into the other's dependency graph. So the shared crate
+stores whatever it is given, and the TUI writes:
+
+```rust
+pub enum TuiPanel {
+    Browser(crate::app::Pane),            // today's wrapper, UNCHANGED
+    Viewer(crate::viewer::Viewer),
+    Tasks(crate::tasks::TaskBoard),
+    Compare(crate::app::CompareView),
+    Sync(crate::app::SyncView),
     Unknown { kind: KindId, raw: Params },
 }
-
-pub struct SlotStore { slots: BTreeMap<SlotId, PanelState> }
 ```
+
+Role eligibility does not need a trait on `P`: it is decided by the slot's
+`kind` in the tree plus the registry, never by the state itself.
 
 **`PaneState` does not change.** Its sixty fields, `listing_epoch`,
 `sweep_baseline`, the pruned marks — all intact. The refactor is about *where
