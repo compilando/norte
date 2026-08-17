@@ -3203,8 +3203,17 @@ impl App {
         self.slot_of_kind(crate::preview::KIND)
     }
 
-    /// Abre el visor acoplado, lo enfoca, o lo cierra. Misma secuencia que
-    /// [`Self::toggle_places`].
+    /// Abre el visor acoplado, lo enfoca, o lo cierra.
+    ///
+    /// Abre SIN llevarse el teclado, al revés que [`Self::toggle_places`], y
+    /// la diferencia no es un capricho: el sidebar se abre para elegir algo en
+    /// él, y el preview se abre para seguir mirando el listado. Con el teclado
+    /// dentro, las flechas dejarían de mover el cursor —el mismo cursor al que
+    /// el panel sigue—, o sea que abrirlo apagaría lo único que hace. Pilotar
+    /// la TUI en tmux lo enseñó en la primera pulsación.
+    ///
+    /// La secuencia es abrir → enfocar (para `viewer.*`: hex, encoding,
+    /// desplazar) → cerrar.
     ///
     /// Se acopla a la DERECHA, ponderado, y con `follows: Role(Active)`: no es
     /// un kind nuevo, es el `viewer` de siempre con un vínculo puesto. El kind
@@ -3239,7 +3248,6 @@ impl App {
                     ),
                 );
                 self.panes.refresh_visible(&self.layout);
-                self.key_owner = KeyOwner::Preview;
             }
         }
     }

@@ -79,6 +79,12 @@ impl Preview {
         self.viewer.as_deref()
     }
 
+    /// El visor, para moverlo: las teclas `viewer.*` valen aquí igual que a
+    /// pantalla completa, porque es el mismo visor.
+    pub fn viewer_mut(&mut self) -> Option<&mut Viewer> {
+        self.viewer.as_deref_mut()
+    }
+
     /// El texto que sustituye al fichero: un directorio, un error, una
     /// denegación.
     #[must_use]

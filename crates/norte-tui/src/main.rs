@@ -4483,7 +4483,9 @@ async fn run(
                                     }
                                 }
                                 // Pantalla activa: el viewer tiene su contexto.
-                                let active = if app.viewer.is_some() {
+                                let active = if app.viewer.is_some()
+                                    || app.key_owner() == norte_tui::app::KeyOwner::Preview
+                                {
                                     &mut *viewer_resolver
                                 } else {
                                     &mut *resolver
@@ -11332,6 +11334,9 @@ async fn dispatch(
             }
             refresh_places_favorites(app);
         }
+        // El visor acoplado no pide nada aquí: lo que lea sale de
+        // `preview::want` en el bucle, contra el cursor de cada frame.
+        Command::LayoutPreview => app.toggle_preview(),
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
             let plan = mirror_plan(app);
@@ -11608,7 +11613,17 @@ async fn dispatch(
             Ok(_) => app.open_command_line(),
             Err(msg) => app.message = Some(msg),
         },
-        Command::ViewerClose => app.viewer = None,
+        Command::ViewerClose => {
+            // Con el preview acoplado, `viewer.close` SUELTA el teclado y deja
+            // el panel donde está: cerrarlo es `layout.preview`. Cerrar un
+            // panel que el lector solo quería dejar de manejar es la respuesta
+            // equivocada, y es la misma regla que el sidebar.
+            if app.key_owner() == norte_tui::app::KeyOwner::Preview {
+                app.return_keys_to_panes();
+            } else {
+                app.viewer = None;
+            }
+        }
         Command::ViewerUp => viewer_do(app, |v| v.scroll_up(1)),
         Command::ViewerDown => viewer_do(app, |v| v.scroll_down(1)),
         Command::ViewerPageUp => viewer_do(app, |v| v.scroll_up(norte_tui::viewer::PAGE)),
@@ -12568,6 +12583,17 @@ mod parse_plugin_key_tests {
 }
 
 fn viewer_do(app: &mut App, f: impl FnOnce(&mut Viewer)) {
+    // Al visor que tenga el teclado. Con el preview acoplado enfocado las
+    // teclas `viewer.*` mueven ESE, sin bindings nuevos y sin un segundo
+    // vocabulario: es el mismo visor en otro sitio (L3).
+    if app.key_owner() == norte_tui::app::KeyOwner::Preview {
+        if let Some(id) = app.preview_slot()
+            && let Some(v) = app.panes.preview_mut(id).and_then(|p| p.viewer_mut())
+        {
+            f(v);
+        }
+        return;
+    }
     if let Some(v) = &mut app.viewer {
         f(v);
     }

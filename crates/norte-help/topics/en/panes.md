@@ -34,6 +34,7 @@ commands = [
     "layout.equalize",
     "layout.set-target",
     "layout.places",
+    "layout.preview",
 ]
 context = ["browse"]
 +++
@@ -275,3 +276,14 @@ much room it has left every few seconds is felt on a network mount.
 A favourite whose path no longer parses is marked `!` and dimmed rather than
 dropped — a favourite that hides itself is a configuration bug you cannot see.
 The status bar says why when you press it.
+
+{{cmd:layout.preview}} opens a viewer on the right that **follows the cursor**
+of the active listing: moving the cursor changes what it shows, with nothing
+else pressed. It is the same viewer {{cmd:pane.view}} opens — same keys, same
+encodings, same hex — placed in a slot instead of over the screen.
+
+A directory is not read: the box says that is what it is. A file that cannot be
+read asks nothing either — the reason is painted inside, because a panel that
+follows the cursor cannot raise a dialog for every key you press going down a
+listing. And a docked viewer you cannot see — behind a tab, or with no room —
+reads NOTHING.

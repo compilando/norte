@@ -177,21 +177,38 @@ fn si_muere_el_hueco_seguido_se_degrada_al_activo_y_lo_dice() {
     );
 }
 
-/// Abrir el preview no cambia cuántos LISTADOS hay ni cuál está enfocado.
+/// Abrir el preview no cambia cuántos LISTADOS hay, ni cuál está enfocado, ni
+/// —y esto es lo que importa— quién tiene el teclado.
+///
+/// Un preview que se lleva las flechas apaga lo único que hace: seguir a un
+/// cursor que ya no se puede mover. Lo enseñó tmux en la primera pulsación.
 #[test]
-fn abrir_el_preview_no_toca_los_lados() {
+fn abrir_el_preview_no_se_lleva_el_teclado() {
     let mut app = app_de_prueba();
     let antes = (app.panes.len(), app.focus());
     app.toggle_preview();
     assert_eq!((app.panes.len(), app.focus()), antes);
-    assert_eq!(app.key_owner(), KeyOwner::Preview);
+    assert_eq!(app.key_owner(), KeyOwner::Panes);
+    assert!(app.preview_slot().is_some());
 }
 
-/// Y cerrarlo deja el árbol como estaba.
+/// La segunda pulsación SÍ se lo lleva: es como se llega a `viewer.hex` y a
+/// los encodings sin inventar teclas nuevas.
 #[test]
-fn cerrar_el_preview_devuelve_el_arbol_de_antes() {
+fn la_segunda_pulsacion_enfoca_el_preview() {
+    let mut app = app_de_prueba();
+    app.toggle_preview();
+    app.toggle_preview();
+    assert_eq!(app.key_owner(), KeyOwner::Preview);
+    assert!(app.preview_slot().is_some(), "enfocar no cierra");
+}
+
+/// Y la tercera lo cierra, dejando el árbol como estaba.
+#[test]
+fn la_tercera_pulsacion_cierra_y_devuelve_el_arbol_de_antes() {
     let mut app = app_de_prueba();
     let antes = app.layout.clone();
+    app.toggle_preview();
     app.toggle_preview();
     app.toggle_preview();
     assert_eq!(app.layout, antes);
@@ -224,4 +241,28 @@ fn una_lectura_denegada_pinta_el_motivo_y_no_abre_modal() {
         texto.contains(&motivo),
         "el motivo se lee dentro del hueco:\n{texto}"
     );
+}
+
+/// `layout.preview` está atado en los siete presets y en las dos pantallas que
+/// lo necesitan: la de navegar y la del VISOR, que es la que resuelve mientras
+/// el teclado está dentro del preview. Misma trampa que destapó `alt+b` en
+/// tmux, cerrada aquí antes de que muerda.
+#[test]
+fn layout_preview_esta_atado_en_los_siete_presets_y_en_las_dos_pantallas() {
+    use norte_frontend::keymap::{CATALOGUE, Effective, Screen, parse_keymap, presets};
+    let conocidos: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
+    for nombre in presets::NAMES {
+        let src = presets::source(nombre).expect("el preset existe");
+        let kf = parse_keymap(src).expect("el preset parsea");
+        for pantalla in [Screen::Browse, Screen::Viewer] {
+            let eff =
+                Effective::build_for(&kf, &[], &conocidos, pantalla).expect("el preset fusiona");
+            assert!(
+                eff.bindings()
+                    .iter()
+                    .any(|(_, cmd)| *cmd == "layout.preview"),
+                "{nombre} no ata layout.preview en {pantalla:?}"
+            );
+        }
+    }
 }

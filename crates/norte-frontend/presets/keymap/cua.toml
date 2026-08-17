@@ -20,6 +20,7 @@ keymap = [
     { on = ["ctrl+p"], run = "app.palette" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
+    { on = ["alt+q"], run = "layout.preview" },
 ]
 
 [pane]

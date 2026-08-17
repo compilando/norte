@@ -34,6 +34,7 @@ commands = [
     "layout.equalize",
     "layout.set-target",
     "layout.places",
+    "layout.preview",
 ]
 context = ["browse"]
 +++
@@ -282,3 +283,13 @@ filesystem cada pocos segundos se nota en un disco de red.
 Un favorito cuya ruta ya no vale sale marcado con `!` y atenuado, no
 desaparece — un favorito que se esconde solo es un fallo de configuración que
 no puedes ver. El motivo lo dice la barra de estado al pulsarlo.
+
+{{cmd:layout.preview}} abre a la derecha un visor que **sigue al cursor** del
+listado activo: mover el cursor cambia lo que enseña, sin pulsar nada. Es el
+mismo visor de {{cmd:pane.view}} —mismas teclas, mismos encodings, mismo hex—
+metido en un hueco en vez de ocupar la pantalla.
+
+Un directorio no se lee: la caja dice que lo es. Un fichero que no se puede
+leer tampoco pregunta nada — el motivo se pinta dentro, porque un panel que
+sigue al cursor no puede abrir un diálogo por cada tecla que bajas. Y un visor
+acoplado que no se ve —detrás de una pestaña, o sin sitio— no lee NADA.
