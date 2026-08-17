@@ -529,6 +529,17 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
             &app.theme,
         );
     }
+    if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::preview::KIND)
+        && let Some(p) = app.panes.preview(id)
+    {
+        draw_preview(
+            frame,
+            rect,
+            p,
+            app.key_owner() == crate::app::KeyOwner::Preview,
+            app,
+        );
+    }
     draw_tasks(frame, tasks_area, app);
     draw_status(frame, status_area, app);
 }
@@ -2299,6 +2310,97 @@ fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App)
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
         rows[1],
     );
+}
+
+/// El visor ACOPLADO (L3): el fichero bajo el cursor, en su hueco.
+///
+/// El mismo renderer que [`draw_viewer`] —mismas filas, mismo preview de
+/// plugin— dentro de un bloque del tamaño del hueco en vez de la pantalla
+/// entera. La línea de estado del visor (encoding, EOL, pérdidas, truncado) va
+/// en el borde de abajo: es el único sitio que dice QUÉ se está viendo, y un
+/// visor que no lo dice miente por omisión.
+///
+/// Sin fichero, el hueco lleva un texto: un directorio, un listado vacío, o el
+/// motivo por el que la lectura no pudo hacerse. Una denegación se PINTA aquí
+/// y no abre nada — el preview sigue al cursor, así que un diálogo por
+/// pulsación convertiría bajar por un directorio en una ráfaga de modales.
+fn draw_preview(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    preview: &crate::preview::Preview,
+    con_teclado: bool,
+    app: &App,
+) {
+    let borde = if con_teclado {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    let Some(viewer) = preview.viewer() else {
+        let texto = preview.note().unwrap_or_default().to_owned();
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", t("preview-title")))
+            .title_style(app.theme.role(Role::Title))
+            .border_style(app.theme.role(borde));
+        frame.render_widget(
+            Paragraph::new(Line::styled(texto, app.theme.role(Role::Info))).block(block),
+            area,
+        );
+        return;
+    };
+    let (title, hostil) =
+        norte_frontend::path_display_with(&viewer.path, app.focused().name_encoding());
+    let title = if hostil {
+        format!("{HOSTILE_BADGE} {title}")
+    } else {
+        title
+    };
+    let ancho = usize::from(area.width.saturating_sub(2));
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        // La ruta se recorta por el MEDIO: en un hueco estrecho lo que
+        // identifica un fichero es su nombre, o sea la cola.
+        .title(norte_frontend::middle_ellipsis(&title, ancho))
+        .title_style(app.theme.role(Role::Title))
+        .border_style(app.theme.role(borde))
+        .title_bottom(Line::raw(norte_frontend::middle_ellipsis(
+            &crate::viewer::status(viewer),
+            ancho,
+        )));
+    if let Some(plugin) = viewer.preview_plugin() {
+        block = block.title(
+            Line::from(Span::styled(
+                ta("viewer-plugin-preview", &[("plugin", plugin)]),
+                app.theme.role(Role::Info),
+            ))
+            .right_aligned(),
+        );
+    }
+    let inner_h = area.height.saturating_sub(2) as usize;
+    let lines: Vec<Line<'_>> = match viewer.plugin_styled_rows(inner_h) {
+        Some(styled) => styled
+            .into_iter()
+            .map(|line| {
+                Line::from(
+                    line.iter()
+                        .map(|span| {
+                            let s = Span::raw(span.text.clone());
+                            if let Some(role) = span.role {
+                                s.style(app.theme.role(role))
+                            } else if let Some((r, g, b)) = span.fg {
+                                s.style(Style::default().fg(Color::Rgb(r, g, b)))
+                            } else {
+                                s
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect(),
+        None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
+    };
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// El sidebar de sitios (L3): discos y favoritos en un panel que se queda.

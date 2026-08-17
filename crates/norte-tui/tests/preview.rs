@@ -198,3 +198,30 @@ fn cerrar_el_preview_devuelve_el_arbol_de_antes() {
     assert!(app.preview_slot().is_none());
     assert_eq!(app.key_owner(), KeyOwner::Panes);
 }
+
+/// Una lectura denegada se PINTA en el hueco, y no abre ningún modal.
+///
+/// El preview sigue al cursor: un diálogo por pulsación convertiría bajar por
+/// un directorio en una ráfaga de modales que nadie pidió.
+#[test]
+fn una_lectura_denegada_pinta_el_motivo_y_no_abre_modal() {
+    let mut app = app_de_prueba();
+    app.toggle_preview();
+    let hueco = app.preview_slot().expect("abierto");
+    app.preview_failed(hueco, "err-permission-denied");
+    assert!(app.modal.is_none(), "no se pregunta nada");
+
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(W, H)).expect("terminal");
+    app.render_now_ms = Some(0);
+    norte_tui::ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, W, H));
+    terminal
+        .draw(|f| norte_tui::ui::draw(f, &app))
+        .expect("draw");
+    let texto = terminal.backend().to_string();
+    let motivo = norte_i18n::t_in(norte_i18n::Lang::Es, "err-permission-denied");
+    assert!(
+        texto.contains(&motivo),
+        "el motivo se lee dentro del hueco:\n{texto}"
+    );
+}
