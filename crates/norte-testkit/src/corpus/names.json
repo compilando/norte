@@ -217,7 +217,7 @@
   {
     "id": "ligature_long_st",
     "hex": "efac852e747874",
-    "why": "ﬅ.txt with U+FB05 LATIN SMALL LIGATURE LONG S T — a typographic ligature `str::to_lowercase` leaves untouched (it is already lowercase). `CaseFolding.txt` carries two rows for it: a FULL fold to the two letters \"st\" (which `name_key` deliberately does not implement — see `fold_delta`'s rustdoc), and a SIMPLE fold, single codepoint, onto `ligature_st`'s U+FB06. `to_lowercase` alone answered two keys for a pair every simple-folding volume (APFS, NTFS, ext4 `+F`) calls one file (#129) — the one ligature pair the fold delta needed to cover, found by the encoding auditor re-checking #129's own fix against `CaseFolding.txt` directly rather than against the issue that first proposed it"
+    "why": "ﬅ.txt with U+FB05 LATIN SMALL LIGATURE LONG S T — a typographic ligature `str::to_lowercase` leaves untouched (it is already lowercase). `CaseFolding.txt` carries two rows for it: a FULL fold to the two letters \"st\" (implemented since #214: under `FoldMode::Full` both this name and `ligature_st` key as \"st.txt\"), and a SIMPLE fold, single codepoint, onto `ligature_st`'s U+FB06. `to_lowercase` alone answered two keys for a pair every simple-folding volume (APFS, NTFS, ext4 `+F`) calls one file (#129) — the one ligature pair the fold delta needed to cover, found by the encoding auditor re-checking #129's own fix against `CaseFolding.txt` directly rather than against the issue that first proposed it"
   },
   {
     "id": "ligature_st",
@@ -298,5 +298,25 @@
     "id": "ascii_capital_k_invalid_tail",
     "hex": "4b2e747874ff",
     "why": "'K.txt' + 0xFF inválido: la pareja de `singleton_kelvin_sign_invalid_tail`, con la misma cola cruda para que lo único que los junte sea la normalización del prefijo (#152, #154)"
+  },
+  {
+    "id": "full_fold_fi_ligature",
+    "hex": "efac816c652e747874",
+    "why": "ﬁle.txt with U+FB01 LATIN SMALL LIGATURE FI — the second half of what `full_fold_expansion` promises, and until #214 the half nothing exercised: only ß/ss was covered, so a table with every OTHER row deleted would still have passed the suite. Its full fold is the two letters \"fi\", with no `C`/`S` alternative, so on ext4/f2fs `+F` this name and `full_fold_fi_plain` are ONE file and on APFS/NTFS they are two — the same shape as the ß pair, in the family the ß pair does not reach"
+  },
+  {
+    "id": "full_fold_fi_plain",
+    "hex": "66696c652e747874",
+    "why": "file.txt — the twin of `full_fold_fi_ligature`, the plain-ASCII spelling its ligature expands to under FULL case folding. Worth having as ITSELF and not just as a twin: it is the most ordinary filename there is, and the pairing it takes part in is only visible because the other side is exotic"
+  },
+  {
+    "id": "full_fold_armenian_ligature",
+    "hex": "efac942e747874",
+    "why": "ﬔ.txt with U+FB14 ARMENIAN SMALL LIGATURE MEN ECH — an F-only row that #214 found MISSING from `full_fold_expansion`, which had the Latin ligatures and stopped there. On ext4/f2fs `+F` it is one file with `full_fold_armenian_plain`; before #214 norte answered two keys and would have approved a plan that collides on arrival. It is in the corpus so that the completeness of that table is a fixture and not a claim in a rustdoc"
+  },
+  {
+    "id": "full_fold_armenian_plain",
+    "hex": "d5b4d5a52e747874",
+    "why": "մե.txt (U+0574 U+0565) — the twin of `full_fold_armenian_ligature`: the two letters its ligature expands to under FULL case folding. Non-ASCII on BOTH sides, unlike the ß and ﬁ pairs, which is what makes it the pair that catches an expansion table written as if only ASCII came out the other end"
   }
 ]
