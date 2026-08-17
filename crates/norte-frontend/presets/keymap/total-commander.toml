@@ -112,6 +112,8 @@ keymap = [
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
     { on = ["*"], run = "mark.invert" },
+    { on = ["alt+h"], run = "layout.split-h" },
+    { on = ["alt+v"], run = "layout.split-v" },
 ]
 
 [viewer]
