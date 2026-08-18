@@ -855,6 +855,34 @@
     "path": "file:///home/user/informe-a%FF%FE.txt",
     "score": 0.5
   },
+  "session_get_result": {
+    "owner": true,
+    "session": {
+      "body": {
+        "slots": {
+          "1": {
+            "cursor": 12
+          }
+        }
+      },
+      "revision": 3,
+      "version": 1
+    }
+  },
+  "session_put_params": {
+    "body": {
+      "slots": {
+        "1": {
+          "cursor": 12
+        }
+      }
+    },
+    "revision": 3,
+    "version": 1
+  },
+  "session_put_result": {
+    "revision": 4
+  },
   "span_wire_bare": {
     "text": "fn"
   },
@@ -1093,5 +1121,13 @@
     "label": "//4=",
     "mount": "file:///media/informe%FF%FE",
     "read_only": true
+  },
+  "session_get_result_empty": {
+    "owner": false,
+    "session": {
+      "body": null,
+      "revision": 0,
+      "version": 0
+    }
   }
 }

@@ -82,6 +82,7 @@ async fn spawn_daemon_mem(
             idle_timeout: idle,
             listing_ttl,
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -126,6 +127,7 @@ async fn spawn_daemon_policy() -> TestDaemon {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -163,6 +165,7 @@ async fn spawn_daemon_ask(approval_ttl: Duration) -> TestDaemon {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -582,6 +585,7 @@ async fn fs_list_skipped_viaja_en_todas_las_paginas() {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -2002,6 +2006,7 @@ async fn dos_daemons_no_comparten_socket() {
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -2026,6 +2031,7 @@ async fn bind_rechaza_dir_symlink() {
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -2062,6 +2068,7 @@ async fn spawn_daemon_at(socket: PathBuf) -> TestDaemon {
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -2386,6 +2393,7 @@ async fn spawn_daemon_journal() -> TestDaemon {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -2567,6 +2575,7 @@ async fn spawn_daemon_plugins() -> TestDaemon {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: Some(plugins_root),
+            state_dir: None,
         },
     )
     .await
@@ -2747,6 +2756,7 @@ async fn spawn_daemon_help_plugin(
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: Some(plugins_root),
+            state_dir: None,
         },
     )
     .await
@@ -2927,6 +2937,7 @@ async fn spawn_daemon_config_plugin() -> TestDaemon {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: Some(plugins_root),
+            state_dir: None,
         },
     )
     .await
@@ -3216,6 +3227,7 @@ async fn spawn_daemon_plugins_ok_y_roto() -> (TestDaemon, PathBuf) {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: Some(cfg.clone()),
+            state_dir: None,
         },
     )
     .await
@@ -5723,6 +5735,7 @@ async fn spawn_daemon_degrading() -> TestDaemon {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -5929,6 +5942,7 @@ async fn spawn_daemon_ai_delay(reply: &str, delay: Option<Duration>) -> TestDaem
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -6153,6 +6167,7 @@ async fn spawn_daemon_embed(delay: Option<Duration>) -> TestDaemon {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -7277,4 +7292,502 @@ async fn sync_report_ajeno_contesta_lo_mismo_que_un_id_inventado() {
         )
         .await
         .expect("un humano ve los informes del daemon que gobierna");
+}
+
+// ---------- L2: la sesión de UI por el socket ----------
+
+/// La sesión va y vuelve, y la revisión sube. La primera conexión humana que
+/// pregunta se la queda.
+#[tokio::test]
+async fn session_get_y_put_por_el_socket() {
+    // Con `state_dir`, porque `owner` significa «esto se guarda»: un daemon
+    // sin dónde escribir contesta que no, y con razón.
+    let estado = tempfile::tempdir().expect("tempdir");
+    let d = spawn_daemon_estado(estado.path()).await;
+    let c = connected_client(&d).await;
+    let g: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert_eq!(g.session.revision, 0);
+    assert_eq!(
+        g.session.version, 0,
+        "sin esquema hasta que alguien escriba"
+    );
+    assert!(g.owner, "la primera conexión humana se la queda");
+
+    let cuerpo = serde_json::json!({ "version": 1, "slots": {} });
+    let p: methods::SessionPutResult = c
+        .call(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: cuerpo.clone(),
+            },
+        )
+        .await
+        .expect("session.put");
+    assert_eq!(p.revision, 1);
+
+    let g2: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert_eq!(g2.session.body, cuerpo, "vuelve el mismo documento");
+    assert_eq!(g2.session.version, 1);
+    assert_eq!(g2.session.revision, 1);
+}
+
+/// Una revisión rancia por el wire es la taxonomía `Conflict` en `data`, no un
+/// error de transporte: el cliente distingue «vuelve a leer» de «el daemon se
+/// rompió».
+#[tokio::test]
+async fn session_put_rancio_es_conflict() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let _: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    let params = methods::SessionPutParams {
+        version: 1,
+        revision: 0,
+        body: serde_json::json!({}),
+    };
+    let _: methods::SessionPutResult = c
+        .call(methods::SESSION_PUT, &params)
+        .await
+        .expect("el primero entra");
+    let err = c
+        .call::<_, methods::SessionPutResult>(methods::SESSION_PUT, &params)
+        .await
+        .expect_err("la revisión ya no es la vigente");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert_eq!(
+                rpc.data,
+                Some(Error::Conflict {
+                    conflict: norte_proto::ConflictKind::StaleRevision
+                }),
+                "{:?}",
+                rpc.data
+            );
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// Por encima del tope: `LimitExceeded` con SU token, y la sesión almacenada
+/// se queda como estaba.
+#[tokio::test]
+async fn session_put_sobre_el_tope_es_limit_exceeded() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let _: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    let gordo = serde_json::json!({ "x": "y".repeat(methods::SESSION_BODY_MAX + 1) });
+    let err = c
+        .call::<_, methods::SessionPutResult>(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: gordo,
+            },
+        )
+        .await
+        .expect_err("no cabe");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert!(
+                matches!(
+                    rpc.data,
+                    Some(Error::LimitExceeded { ref limit }) if limit == Error::LIMIT_SESSION_BODY
+                ),
+                "LimitExceeded session-body, fue {:?}",
+                rpc.data
+            );
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+    let g: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert_eq!(g.session.revision, 0, "no se escribió nada");
+}
+
+/// Un agente no tiene pantalla que guardar: `session.*` es `INVALID_REQUEST`,
+/// el mismo criterio que `daemon.shutdown` y `policy.pending`.
+#[tokio::test]
+async fn session_es_de_humanos() {
+    let d = spawn_daemon(None).await;
+    let agente = connected_agent(&d, "a1").await;
+    let err = agente
+        .call::<_, methods::SessionGetResult>(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect_err("un agente no lee la pantalla de nadie");
+    assert_rpc_code(&err, codes::INVALID_REQUEST);
+    let err = agente
+        .call::<_, methods::SessionPutResult>(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect_err("ni la escribe");
+    assert_rpc_code(&err, codes::INVALID_REQUEST);
+}
+
+/// El segundo cliente del MISMO daemon recibe una copia y corre suelto: su
+/// `put` se rehúsa y la sesión de la dueña se queda intacta.
+#[tokio::test]
+async fn el_segundo_cliente_recibe_copia_y_no_escribe() {
+    let estado = tempfile::tempdir().expect("tempdir");
+    let d = spawn_daemon_estado(estado.path()).await;
+    let uno = connected_client(&d).await;
+    let g1: methods::SessionGetResult = uno
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(g1.owner);
+    let _: methods::SessionPutResult = uno
+        .call(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: serde_json::json!({ "quien": "uno" }),
+            },
+        )
+        .await
+        .expect("la dueña escribe");
+
+    let dos = connected_client(&d).await;
+    let g2: methods::SessionGetResult = dos
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(!g2.owner, "la segunda corre suelta");
+    assert_eq!(
+        g2.session.body["quien"],
+        serde_json::json!("uno"),
+        "recibe COPIA"
+    );
+    let err = dos
+        .call::<_, methods::SessionPutResult>(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 1,
+                body: serde_json::json!({ "quien": "dos" }),
+            },
+        )
+        .await
+        .expect_err("quien no es dueña no escribe");
+    // Con taxonomía y no con prosa: el cliente distingue «no mandas» de «tus
+    // params están mal» sin leer inglés — y es la misma negativa que da el
+    // brazo embebido.
+    match err {
+        ClientError::Rpc(ref rpc) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert_eq!(rpc.data, Some(Error::PermissionDenied), "{:?}", rpc.data);
+        }
+        ref other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+    let g3: methods::SessionGetResult = uno
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert_eq!(g3.session.body["quien"], serde_json::json!("uno"));
+}
+
+/// La dueña que se va SUELTA la sesión: la siguiente conexión humana la toma.
+/// Sin esto, un cliente que muere deja la pantalla de rehén hasta el relevo.
+#[tokio::test]
+async fn al_morir_la_duena_la_sesion_queda_libre() {
+    let estado = tempfile::tempdir().expect("tempdir");
+    let d = spawn_daemon_estado(estado.path()).await;
+    let uno = connected_client(&d).await;
+    let g1: methods::SessionGetResult = uno
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(g1.owner);
+    drop(uno);
+
+    // La desconexión se procesa en el servidor; se reintenta hasta verla. El
+    // límite es de TIEMPO y no un número de vueltas: bajo carga, «50 yields»
+    // es una carrera que se pierde y un rojo intermitente.
+    let libre = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let dos = connected_client(&d).await;
+            let g: methods::SessionGetResult = dos
+                .call(methods::SESSION_GET, &serde_json::json!({}))
+                .await
+                .expect("session.get");
+            if g.owner {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(
+        libre.is_ok(),
+        "la sesión quedó de rehén de una conexión muerta"
+    );
+}
+
+/// Un daemon SIN dónde escribir no dice que manda: `owner: false`, y el
+/// cliente se ve suelto en vez de escribir cada segundo una pantalla que no
+/// va a llegar a ningún disco.
+#[tokio::test]
+async fn sin_state_dir_nadie_es_duena() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let g: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(!g.owner, "sin escritor no hay dueña que prometer");
+}
+
+/// Daemon con `state_dir` propio: el que persiste la sesión de UI (L2). El
+/// directorio lo pone el test, y por eso ningún test toca el estado real.
+async fn spawn_daemon_estado(state: &std::path::Path) -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let engine = Arc::new(Engine::new());
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
+            state_dir: Some(state.to_path_buf()),
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    }
+}
+
+/// El relevo es el evento por el que esto existe: un daemon se va, y lo que el
+/// cliente había puesto está en disco cuando arranca el siguiente.
+#[tokio::test]
+async fn la_sesion_sobrevive_a_un_relevo() {
+    let estado = tempfile::tempdir().expect("tmp");
+    let d = spawn_daemon_estado(estado.path()).await;
+    let c = connected_client(&d).await;
+    let _: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    let _: methods::SessionPutResult = c
+        .call(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: serde_json::json!({ "dir": "file:///casa" }),
+            },
+        )
+        .await
+        .expect("session.put");
+    let _: DaemonShutdownResult = c
+        .call(
+            methods::DAEMON_SHUTDOWN,
+            &DaemonShutdownParams {
+                graceful: true,
+                mode: methods::ShutdownMode::Handover,
+            },
+        )
+        .await
+        .expect("daemon.shutdown");
+    drop(c);
+    // El volcado y la suelta del lock ocurren DENTRO de `run`: esperarlo es
+    // esperar exactamente a lo que el sucesor necesita encontrar hecho.
+    d.run.await.expect("join").expect("apagado limpio");
+
+    let d2 = spawn_daemon_estado(estado.path()).await;
+    let c2 = connected_client(&d2).await;
+    let g: methods::SessionGetResult = c2
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert_eq!(g.session.body["dir"], serde_json::json!("file:///casa"));
+    assert_eq!(g.session.revision, 1, "la revisión también sobrevive");
+    assert_eq!(g.session.version, 1);
+}
+
+/// **La promesa de ADR 0059, de punta a punta**: una sesión que escribió un
+/// binario MÁS NUEVO no se lee y —lo que importa— no se pisa.
+///
+/// Sin el gate en el escritor, esto se rompía en un segundo y en silencio: el
+/// fichero del futuro no se cargaba, el core arrancaba en la revisión 0, el
+/// primer `put` del cliente la aceptaba, y el volcado siguiente publicaba
+/// encima. Perder la sesión de un binario nuevo contra uno viejo no se
+/// recupera, así que la afirmación es sobre los BYTES del fichero.
+#[tokio::test]
+async fn una_sesion_del_futuro_no_se_pisa_por_el_socket() {
+    let estado = tempfile::tempdir().expect("tmp");
+    let futura = methods::Session {
+        version: norte_core::ui_session::disk::SCHEMA_VERSION + 1,
+        revision: 7,
+        body: serde_json::json!({ "de": "un binario más nuevo" }),
+    };
+    norte_core::ui_session::disk::write(estado.path(), &futura).expect("escribe la del futuro");
+    let fichero = norte_core::ui_session::disk::path(estado.path());
+    let antes = std::fs::read(&fichero).expect("lee");
+
+    let d = spawn_daemon_estado(estado.path()).await;
+    let c = connected_client(&d).await;
+    let g: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(!g.owner, "no se lee, así que tampoco se escribe");
+    assert_eq!(g.session.revision, 0, "arranca desde la configuración");
+    // Y un cliente que IGNORE `owner` tampoco la pisa: lo escrito se queda en
+    // la memoria de este core y no llega al disco.
+    let _: methods::SessionPutResult = c
+        .call(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: serde_json::json!({ "yo": "el binario viejo" }),
+            },
+        )
+        .await
+        .expect("en su propia memoria sí escribe");
+    let _: DaemonShutdownResult = c
+        .call(
+            methods::DAEMON_SHUTDOWN,
+            &DaemonShutdownParams {
+                graceful: true,
+                mode: methods::ShutdownMode::Stop,
+            },
+        )
+        .await
+        .expect("daemon.shutdown");
+    drop(c);
+    d.run.await.expect("join").expect("apagado limpio");
+
+    assert_eq!(
+        std::fs::read(&fichero).expect("lee"),
+        antes,
+        "el fichero del futuro tiene que seguir byte a byte como estaba"
+    );
+}
+
+/// El core que no tiene el lock sirve la pantalla y NO la escribe: dos cores
+/// sobre un mismo estado no se pisan.
+#[tokio::test]
+async fn un_core_suelto_no_escribe_el_estado_ajeno() {
+    let estado = tempfile::tempdir().expect("tmp");
+    let duena = spawn_daemon_estado(estado.path()).await;
+    let c = connected_client(&duena).await;
+    let _: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    let _: methods::SessionPutResult = c
+        .call(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: serde_json::json!({ "quien": "la dueña" }),
+            },
+        )
+        .await
+        .expect("session.put");
+
+    // El segundo core arranca CON la pantalla —el lock decide quién escribe,
+    // no quién lee— aunque todavía no esté en disco.
+    let suelto = spawn_daemon_estado(estado.path()).await;
+    let c2 = connected_client(&suelto).await;
+    let _: methods::SessionGetResult = c2
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    let _: methods::SessionPutResult = c2
+        .call(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: serde_json::json!({ "quien": "el suelto" }),
+            },
+        )
+        .await
+        .expect("en su propia memoria sí escribe");
+    let _: DaemonShutdownResult = c2
+        .call(
+            methods::DAEMON_SHUTDOWN,
+            &DaemonShutdownParams {
+                graceful: true,
+                mode: methods::ShutdownMode::Stop,
+            },
+        )
+        .await
+        .expect("daemon.shutdown");
+    drop(c2);
+    suelto.run.await.expect("join").expect("apagado limpio");
+
+    // En disco no ha dejado NADA suyo. El fichero puede existir ya —la dueña
+    // vuelca cada segundo, y este test no compite con ese reloj— pero lo que
+    // diga es de ELLA. La afirmación no es «no hay fichero», que dependería
+    // del tick, sino «el fichero no es del suelto», que no depende de nada.
+    let fichero = norte_core::ui_session::disk::path(estado.path());
+    let quien = |ruta: &std::path::Path| -> Option<String> {
+        let raw = std::fs::read(ruta).ok()?;
+        let s: methods::Session = serde_json::from_slice(&raw).ok()?;
+        Some(s.body["quien"].to_string())
+    };
+    if let Some(q) = quien(&fichero) {
+        assert_eq!(
+            q, "\"la dueña\"",
+            "un core suelto escribió el estado de otro"
+        );
+    }
+
+    // Y al apagarse la dueña, el fichero es suyo sin ambigüedad: su volcado
+    // final es el que manda.
+    let _: DaemonShutdownResult = c
+        .call(
+            methods::DAEMON_SHUTDOWN,
+            &DaemonShutdownParams {
+                graceful: true,
+                mode: methods::ShutdownMode::Stop,
+            },
+        )
+        .await
+        .expect("daemon.shutdown");
+    drop(c);
+    duena.run.await.expect("join").expect("apagado limpio");
+    assert_eq!(
+        quien(&fichero).as_deref(),
+        Some("\"la dueña\""),
+        "el volcado final es el de la dueña"
+    );
 }

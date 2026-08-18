@@ -546,6 +546,20 @@ fn escapes_root_round_trips_and_a_future_subtype_still_degrades() {
 }
 
 #[test]
+fn stale_revision_round_trips_as_a_conflict() {
+    // L2: la sesión de UI que se escribe contra una revisión que ya no es la
+    // vigente. Es conflicto y no error de parámetros porque nada se escribió y
+    // el caller arregla releyendo — y un cliente 0.47 lo degrada a `Unknown`,
+    // que le deja exactamente la misma conducta.
+    let e = Error::Conflict {
+        conflict: ConflictKind::StaleRevision,
+    };
+    let json = serde_json::to_value(&e).expect("serializa");
+    assert_eq!(json["conflict"], "stale_revision");
+    assert_eq!(roundtrip(&e), e);
+}
+
+#[test]
 fn error_unknown_kind_degrades() {
     // Tolerancia N/N-1: categoría desconocida → error genérico, no reventón.
     let e: Error = serde_json::from_str(r#"{"kind": "quota_del_futuro"}"#).unwrap();
@@ -1116,10 +1130,17 @@ fn version_ventana_actual() {
     // Un cliente 0.46 no forma `rar+file://…` —su whitelist no lo trae— y se
     // queda sin la funcionalidad, que es la misma clase de pérdida silenciosa
     // que desplaza la ventana en los bumps anteriores.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.47.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.46.0"), "N-1");
+    //
+    // 0.48.0 (L2, la sesión de UI): `session.get` y `session.put` con sus
+    // cuatro tipos. Aditivo —ningún tipo existente cambia de forma—, y aun así
+    // la ventana se DESPLAZA por la razón de siempre: un cliente 0.47 no
+    // conoce `session.*`, así que arranca sin la pantalla que dejó y jamás la
+    // escribe. No se rompe; pierde en silencio justo lo que esta fase existe
+    // para conservar.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.48.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.47.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.45.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.46.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -2526,4 +2547,60 @@ fn the_counters_saturate_instead_of_panicking() {
     c.add(&counted_step(SyncStepKind::Copy, Some(10)));
     assert_eq!(c.bytes, u64::MAX);
     assert_eq!(c.copy, u64::MAX);
+}
+
+/// L2: la sesión viaja como documento OPACO. El round trip conserva el body
+/// entero —incluido un kind que ningún binario declara— porque nadie lo
+/// interpreta por el camino.
+#[test]
+fn session_round_trips_an_opaque_body() {
+    use norte_proto::methods::Session;
+    let body = serde_json::json!({
+        "version": 1,
+        "layouts": { "default": { "kind": "kind-que-nadie-declara", "params": { "x": 1 } } },
+        "slots": {}
+    });
+    let s = Session {
+        version: 1,
+        revision: 7,
+        body: body.clone(),
+    };
+    let ida = serde_json::to_string(&s).expect("serializa");
+    let vuelta: Session = serde_json::from_str(&ida).expect("deserializa");
+    assert_eq!(vuelta.revision, 7);
+    assert_eq!(vuelta.body, body, "el body vuelve entero, sin normalizar");
+}
+
+/// El tope del body es del PROTOCOLO, no una constante suelta del daemon: el
+/// cliente necesita el mismo número para decidir qué tirar antes de
+/// reintentar.
+#[test]
+fn session_body_max_es_un_mebibyte() {
+    assert_eq!(norte_proto::methods::SESSION_BODY_MAX, 1024 * 1024);
+}
+
+/// `owner` viaja en el GET: el segundo cliente recibe una copia y tiene que
+/// saber que lo es antes de intentar escribir.
+#[test]
+fn session_get_result_dice_quien_es_la_duena() {
+    use norte_proto::methods::{Session, SessionGetResult};
+    let r = SessionGetResult {
+        session: Session {
+            version: 1,
+            revision: 0,
+            body: serde_json::json!({}),
+        },
+        owner: false,
+    };
+    let v = serde_json::to_value(&r).expect("serializa");
+    assert_eq!(v["owner"], serde_json::json!(false));
+}
+
+/// Una sesión nunca escrita es el Default: revisión 0 y sin esquema. El store
+/// del core la construye así, y el cliente distingue «no hay» de «falló».
+#[test]
+fn session_default_es_revision_cero() {
+    let s = norte_proto::methods::Session::default();
+    assert_eq!(s.revision, 0);
+    assert_eq!(s.version, 0);
 }

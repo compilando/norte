@@ -1926,6 +1926,11 @@ async fn main() -> Result<()> {
     {
         app.apply_layout(nombre, &config::user_config_dir().unwrap_or_default());
     }
+    // L2: la pantalla que dejaste. Va DESPUÉS de `[ui] layout` a propósito —
+    // una sesión guardada es más específica que una preferencia de config, y
+    // es la que gana— y antes del tema, que no depende de ninguna de las dos.
+    // Un fallo NO tumba el arranque: se sigue con la pantalla de la config.
+    restore_session(&mut app, &backend).await;
     apply_theme(&mut app, &cfg);
     // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
     // `Ctrl+D`; se refresca en cada hot-reload OK (`reload_config`).
@@ -2483,6 +2488,12 @@ async fn run(
     // Tick del panel de tasks: copia snapshots del watch (jamás bloquea).
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // L2: la sesión se escribe UNA vez por segundo, no por tecla. Su propio
+    // tick y no el de 100 ms porque son dos ritmos distintos: el panel de
+    // tareas mira un `watch` en memoria y esto acaba en un fichero.
+    let mut session_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    session_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut session_push = SessionPush::new(app.session.revision);
     // Debounce del hot-reload SIN bloquear el loop (revisión fase 6): cada
     // evento de config empuja el deadline; el reload corre cuando vence.
     let mut reload_at: Option<tokio::time::Instant> = None;
@@ -2842,6 +2853,9 @@ async fn run(
             }
         }
         tokio::select! {
+                    _ = session_tick.tick() => {
+                        push_session(app, backend, &mut session_push).await;
+                    }
                     _ = tick.tick() => {
                         // Mutación terminada → refresh de panes; el ritual completo
                         // (drenador/sonda #52/búsqueda) vive en `after_panes_refresh`
@@ -12798,6 +12812,233 @@ async fn read_head(backend: &Backend, path: &VPath) -> Result<(Vec<u8>, bool), E
         out.truncate(usize::try_from(VIEW_CAP).unwrap_or(usize::MAX));
     }
     Ok((out, truncated))
+}
+
+/// Trae la sesión guardada y la pone en pantalla (L2).
+///
+/// Tres cosas y en este orden: se pregunta quién es la dueña, se aplica el
+/// cuerpo, y se listan los huecos que la sesión colocó —hasta que llega el
+/// listado, el cursor guardado no tiene dónde ponerse—.
+///
+/// Nada de esto puede impedir arrancar. Un core que no sabe de sesiones, una
+/// sesión ilegible o un directorio que ya no existe dejan lo que había: la
+/// disposición de la configuración, que es lo que se tenía antes de que esto
+/// existiera.
+async fn restore_session(app: &mut App, backend: &Backend) {
+    let (sesion, dueña) = match backend.session_get().await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(error = %e, "sin sesión guardada");
+            return;
+        }
+    };
+    app.session.detached = !dueña;
+    app.session.revision = sesion.revision;
+    if !dueña {
+        app.message = Some(t("msg-session-detached"));
+    }
+    // Revisión 0 es «nadie la ha escrito todavía»: no hay nada que aplicar y
+    // tampoco nada roto que contar.
+    if sesion.revision == 0 {
+        return;
+    }
+    app.apply_session_value(&sesion.body);
+    for id in app.layout.slot_ids() {
+        let Some(dir) = app.panes.browser(id).map(|p| p.dir().clone()) else {
+            continue;
+        };
+        let attrs = app.columns.attr_ids_for(dir.scheme());
+        match initial_pane(backend, &dir, &attrs).await {
+            Ok(pane) => {
+                // El orden y los ocultos son de la SESIÓN, no del listado
+                // nuevo: se conservan al reemplazar el pane.
+                let (sort, hidden) = app
+                    .panes
+                    .browser(id)
+                    .map_or((None, None), |p| (Some(p.sort()), Some(p.show_hidden())));
+                app.panes.insert_browser(id, pane);
+                if let Some(p) = app.panes.browser_mut(id) {
+                    if let Some(s) = sort {
+                        p.set_sort(s);
+                    }
+                    if let Some(h) = hidden {
+                        p.set_show_hidden(h);
+                    }
+                }
+                app.restore_cursor(id);
+            }
+            // Un directorio que ya no está NO deja el arranque a medias: el
+            // pane se queda vacío en esa ruta y el lector navega desde ahí,
+            // que es lo mismo que pasa si lo borran contigo dentro.
+            Err(e) => tracing::warn!(error = %e, "un hueco de la sesión no se pudo listar"),
+        }
+    }
+}
+
+/// Lo que hace falta para ir escribiendo la sesión durante el run (L2).
+struct SessionPush {
+    /// La revisión que el core dio en el último `get`/`put`.
+    revision: u64,
+    /// Lo último que se escribió: se compara para no escribir lo mismo dos
+    /// veces. Comparar el documento entero cuesta menos que un flag de sucio
+    /// puesto a mano en los cientos de sitios que mueven un cursor —y no se
+    /// puede olvidar en uno.
+    last: Option<norte_frontend::session::SessionBody>,
+    /// El cuerpo no cabe ni sin historial: se deja de escribir en este run y
+    /// se dice UNA vez.
+    stopped: bool,
+    /// Ya no cupo una vez: a partir de aquí se escribe SIN historial.
+    ///
+    /// Se recuerda porque recortar solo la copia del tick era recortar nada:
+    /// el tick siguiente volvía a capturar el historial entero desde `App`,
+    /// el cuerpo volvía a no caber, y lo que salía era un `put` rehusado y un
+    /// aviso POR SEGUNDO, encima de cualquier otro mensaje que el lector
+    /// estuviera intentando leer.
+    trimmed: bool,
+}
+
+impl SessionPush {
+    /// Al arrancar no se ha escrito nada todavía.
+    fn new(revision: u64) -> Self {
+        Self {
+            revision,
+            last: None,
+            stopped: false,
+            trimmed: false,
+        }
+    }
+}
+
+/// Tira los dos rastros de cada hueco: es lo que más ocupa de una sesión y lo
+/// que menos duele perder.
+fn vaciar_historial(body: &mut norte_frontend::session::SessionBody) {
+    for slot in body.slots.values_mut() {
+        slot.back.clear();
+        slot.forward.clear();
+    }
+}
+
+/// Sella AHORA los huecos VIVOS cuyo estado ha cambiado desde el último
+/// volcado.
+///
+/// Capturar no es tocar —dos capturas seguidas de la misma pantalla tienen que
+/// dar el mismo documento, o el coalescing no coalesce nada—, así que el sello
+/// no puede ir en `session_body`. Va aquí, que es el único sitio que sabe
+/// contra qué comparar: si el hueco cambió, se ha usado.
+///
+/// Y solo los VIVOS: sellar también los huérfanos les devolvería la juventud
+/// en cada arranque, y entonces la barrida por edad no barrería nunca. Sin
+/// sello ninguno, `touched_ms` se quedaba en 0 contra un reloj epoch y la
+/// barrida se llevaba TODOS los huérfanos en el primer volcado — la promesa de
+/// «volver a la disposición de ayer devuelve el panel donde estaba» no se
+/// cumplía jamás.
+fn sellar_los_vivos(
+    app: &mut App,
+    body: &mut norte_frontend::session::SessionBody,
+    ultimo: Option<&norte_frontend::session::SessionBody>,
+    ahora: u64,
+) {
+    for id in app.layout.slot_ids() {
+        let Some(estado) = body.slots.get_mut(&id.0) else {
+            continue;
+        };
+        if ultimo
+            .and_then(|b| b.slots.get(&id.0))
+            .is_some_and(|antes| antes == estado)
+        {
+            continue;
+        }
+        estado.touched_ms = ahora;
+        app.touch_session_slot(id, ahora);
+    }
+}
+
+/// Escribe la sesión si ha cambiado (L2).
+///
+/// Se llama una vez por segundo. Coalescer es el punto: el cursor se mueve en
+/// cada flecha, y esto acaba en un fichero.
+///
+/// Las dos negativas del core se contestan distinto, y por eso están aquí y no
+/// en el `Backend`: un conflicto se arregla releyendo —otra ventana escribió—
+/// y un exceso de tamaño se arregla tirando historial, que es lo que más ocupa
+/// y lo que menos duele perder. Si tirándolo tampoco cabe, se deja de escribir
+/// en este run: reintentar cada segundo un cuerpo que no cabe es un error por
+/// segundo.
+async fn push_session(app: &mut App, backend: &Backend, st: &mut SessionPush) {
+    use norte_frontend::session::SCHEMA_VERSION;
+
+    if st.stopped || app.session.detached || app.modal.is_some() {
+        // Con un modal delante no se escribe: la sesión trata de dónde estás,
+        // no de lo que estás decidiendo.
+        return;
+    }
+    let ahora = now_ms();
+    let mut body = app.session_body();
+    // Si ya se supo que no cabe, se captura recortado DESDE EL PRINCIPIO: es
+    // lo que hace que la comparación de abajo vuelva a servir de freno.
+    if st.trimmed {
+        vaciar_historial(&mut body);
+    }
+    body.prune(ahora);
+    if st.last.as_ref() == Some(&body) {
+        return;
+    }
+    sellar_los_vivos(app, &mut body, st.last.as_ref(), ahora);
+    match backend
+        .session_put(SCHEMA_VERSION, st.revision, body.to_value())
+        .await
+    {
+        Ok(rev) => {
+            st.revision = rev;
+            st.last = Some(body);
+        }
+        // Otra ventana escribió entre nuestro último `get` y este `put`: se
+        // relee y se reintenta UNA vez con la revisión de verdad. La pantalla
+        // que gana es la de quien acaba de moverse, que es esta.
+        Err(Error::Conflict { .. }) => {
+            if let Ok((sesion, _)) = backend.session_get().await {
+                st.revision = sesion.revision;
+                if let Ok(rev) = backend
+                    .session_put(SCHEMA_VERSION, st.revision, body.to_value())
+                    .await
+                {
+                    st.revision = rev;
+                    st.last = Some(body);
+                }
+            }
+        }
+        Err(Error::LimitExceeded { .. }) => {
+            if st.trimmed {
+                // Ya venía recortado y sigue sin caber: reintentarlo cada
+                // segundo sería un error por segundo.
+                st.stopped = true;
+                return;
+            }
+            st.trimmed = true;
+            vaciar_historial(&mut body);
+            // Se dice UNA vez, la del recorte: el historial se ha perdido y a
+            // partir de aquí ya no se vuelve a intentar entero.
+            app.message = Some(t("msg-session-too-large"));
+            if let Ok(rev) = backend
+                .session_put(SCHEMA_VERSION, st.revision, body.to_value())
+                .await
+            {
+                st.revision = rev;
+                st.last = Some(body);
+            } else {
+                st.stopped = true;
+            }
+        }
+        Err(e) => tracing::debug!(error = %e, "la sesión no se pudo escribir"),
+    }
+}
+
+/// Ahora, en milisegundos desde el epoch. Cero si el reloj del sistema está
+/// antes de 1970, que solo hace que la barrida por edad no barra nada.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// Pane inicial del arranque: listado COMPLETO de `start` pidiendo los

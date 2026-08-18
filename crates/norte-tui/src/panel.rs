@@ -477,6 +477,17 @@ impl Histories {
         }
     }
 
+    /// El historial de UN hueco, por su id.
+    #[must_use]
+    pub fn for_slot(&self, id: SlotId) -> Option<&crate::nav::History> {
+        self.por_hueco.get(id)
+    }
+
+    /// El historial de UN hueco, creándolo vacío si no lo tenía.
+    pub fn for_slot_mut(&mut self, id: SlotId) -> &mut crate::nav::History {
+        self.por_hueco.entry(id)
+    }
+
     /// Tira los historiales de los huecos que el árbol ya no tiene.
     pub fn retain_tree(&mut self, tree: &Node) {
         self.por_hueco.retain_tree(tree);

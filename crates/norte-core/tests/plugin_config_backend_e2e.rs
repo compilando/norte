@@ -50,6 +50,7 @@ async fn plugin_get_set_config_e2e_a_traves_del_backend_remote() {
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
             plugins_dir: Some(cfg.path().to_path_buf()),
+            state_dir: None,
         },
     )
     .await

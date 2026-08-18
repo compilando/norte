@@ -5,7 +5,8 @@ use norte_proto::{Entry, EntryKind};
 /// Orden elegido para el listado (#108 L7): columna + dirección + grupo de
 /// dirs. El default reproduce EXACTAMENTE el orden histórico (name/asc/
 /// dirs-first), así que nada cambia hasta que el usuario elige otra cosa.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct SortSpec {
     /// Columna por la que se ordena.
     pub column: SortColumn,
@@ -52,7 +53,8 @@ impl SortSpec {
 
 /// Columna de orden (#108). Solo built-ins por ahora — `attr:`/`plugin:`
 /// llegan con los bloques 2/7 del diseño de columnas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SortColumn {
     /// Nombre (forma NFC como clave, bytes crudos de desempate) — el orden
     /// de siempre.
@@ -65,7 +67,8 @@ pub enum SortColumn {
 }
 
 /// Dirección del orden de la columna.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SortDir {
     /// Ascendente.
     Asc,

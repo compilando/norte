@@ -39,6 +39,14 @@ pub enum ConflictKind {
     /// ve `NotFound` responde creando el padre, que es exactamente la
     /// operación que este subtipo existe para impedir.
     EscapesRoot,
+    /// La `revision` que traía el escritor no es la vigente (0.48.0, L2): otro
+    /// cliente escribió la sesión de UI entre su lectura y su escritura.
+    ///
+    /// Es un conflicto y no un error de parámetros porque cumple lo que esta
+    /// categoría promete: NADA se escribió, y el caller arregla releyendo. Un
+    /// cliente N-1 lo degrada a [`Self::Unknown`] y enseña «conflicto» a
+    /// secas, que sigue siendo la conducta correcta: volver a leer.
+    StaleRevision,
     /// Subtipo de un protocolo más nuevo (fallback de deserialización).
     /// El core JAMÁS lo emite.
     #[doc(hidden)]
@@ -54,6 +62,7 @@ impl fmt::Display for ConflictKind {
             Self::Normalization => "unicode normalization collision",
             Self::TypeMismatch => "destination type mismatch",
             Self::EscapesRoot => "path escapes its confined root",
+            Self::StaleRevision => "stale revision",
             Self::Unknown => "unknown conflict kind (newer protocol)",
         })
     }
@@ -227,7 +236,9 @@ pub enum Error {
         /// [`Error::LIMIT_NESTING`] (capas de archivo anidadas por encima
         /// de `max_nesting`, #56/proto 0.24) o
         /// [`Error::LIMIT_RETAINED_SYNC_PLANS`] (planes de sincronización
-        /// retenidos por una conexión, 0.44.0). Los emisores usan las
+        /// retenidos por una conexión, 0.44.0) o
+        /// [`Error::LIMIT_SESSION_BODY`] (cuerpo de la sesión de UI por
+        /// encima de 1 MiB, 0.48.0). Los emisores usan las
         /// constantes, jamás literales sueltos (fuente única, pin en
         /// tests). Forward-compat: un token DESCONOCIDO (peer más nuevo)
         /// se trata como límite genérico — mostrar el string tal cual,
@@ -389,4 +400,10 @@ impl Error {
     /// tope. Un cliente N-1 lo lee como límite genérico y enseña el token tal
     /// cual, que es el contrato de este campo desde que existe.
     pub const LIMIT_RETAINED_SYNC_PLANS: &'static str = "retained-sync-plans";
+
+    /// El cuerpo de una sesión de UI pasa de
+    /// [`crate::methods::SESSION_BODY_MAX`] (0.48.0, L2). El core lo mide en
+    /// bytes serializados y rehúsa entero: no trunca un documento cuyo
+    /// esquema no conoce. El cliente tira historial y reintenta UNA vez.
+    pub const LIMIT_SESSION_BODY: &'static str = "session-body";
 }

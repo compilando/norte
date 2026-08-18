@@ -64,3 +64,4 @@ edits.
 | [0056](0056-a-provider-may-delegate-to-a-program-it-does-not-trust.md) | A provider may delegate to a program it does not trust | accepted |
 | [0057](0057-a-plugin-may-be-given-a-location-it-cannot-name.md) | A plugin may be given a location it cannot name | accepted |
 | [0058](0058-a-screen-is-a-tree-the-core-keeps-and-does-not-read.md) | A screen is a tree the core keeps and does not read | accepted |
+| [0059](0059-the-session-is-a-document-with-one-writer.md) | The session is a document with one writer | accepted |

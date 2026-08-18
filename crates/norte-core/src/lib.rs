@@ -31,6 +31,7 @@ mod scheduler;
 pub mod search;
 mod sessions;
 pub mod sync;
+pub mod ui_session;
 mod undo;
 pub mod volumes;
 

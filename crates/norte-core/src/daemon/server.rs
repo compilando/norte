@@ -144,6 +144,12 @@ pub struct DaemonConfig {
     /// `Some(dir)` = ese directorio — para tests, SIEMPRE un tempdir, jamás el
     /// `~/.config` real.
     pub plugins_dir: Option<PathBuf>,
+    /// Dónde vive la sesión de UI (L2): `<state_dir>/session.json` y su lock.
+    /// `None` = **no se persiste nada** — ni se toma el lock ni se arranca el
+    /// escritor—, que es lo que quiere un test y lo que jamás debe pasarle al
+    /// `state_dir` real por descuido. El binario pasa
+    /// [`norte_config::dirs::state_dir`] explícitamente.
+    pub state_dir: Option<PathBuf>,
 }
 
 impl Default for DaemonConfig {
@@ -153,6 +159,7 @@ impl Default for DaemonConfig {
             idle_timeout: Some(Duration::from_mins(5)),
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         }
     }
 }
@@ -222,6 +229,23 @@ struct Shared {
     /// outbox se llene: pierde el FRAME, jamás la suscripción — ver
     /// [`Shared::broadcast_where`].
     directed_feeds: Mutex<HashMap<u64, u32>>,
+    /// La sesión de UI del daemon (L2): UN documento, con su revisión y su
+    /// conexión dueña. `Arc` porque el volcado a disco la mira desde otra
+    /// task. El core la guarda y no la lee (ADR 0058).
+    ui_session: Arc<crate::ui_session::SessionStore>,
+    /// Si lo que se escriba en esa sesión va a LLEGAR al disco: hay
+    /// `state_dir`, este core tiene el lock, y el fichero que había no es de
+    /// una versión más nueva.
+    ///
+    /// Es lo que `session.get` contesta como `owner`, y no solo «te la
+    /// quedaste»: para el cliente las dos cosas son la misma pregunta —«¿mis
+    /// escrituras se guardan?»— y contestar que sí cuando no hay escritor es
+    /// prometer una pantalla que se pierde entera y en silencio.
+    session_persists: bool,
+    /// Despierta al escritor de la sesión fuera de su tick: la última
+    /// conexión que se va no debería dejar un segundo de pantalla sin volcar.
+    /// `Arc` porque el escritor NO retiene el `Shared` (lo mantendría vivo).
+    session_flush: Arc<tokio::sync::Notify>,
     /// Runtime WASM compartido para ejecutar comandos de plugin (M4-P4). Se
     /// construye UNA vez en el bind (arranca un hilo "ticker" de época) y se
     /// reutiliza entre `plugin.run_command`. `Arc` porque `PluginRuntime` es
@@ -517,6 +541,41 @@ pub struct Daemon {
     socket_path: PathBuf,
     shared: Arc<Shared>,
     idle_timeout: Option<Duration>,
+    /// El derecho a escribir la sesión de UI, mientras este daemon viva.
+    /// `None` = no se persiste (sin `state_dir`) o lo tiene otro core: en los
+    /// dos casos la pantalla se sirve igual y no se escribe.
+    session_lock: Option<crate::ui_session::disk::SessionLock>,
+    /// El escritor de la sesión, si lo hay. Se espera a que termine ANTES de
+    /// soltar el lock: el sucesor de un relevo tiene que encontrar el fichero
+    /// ya escrito y el lock ya libre. Y si el daemon se va por cualquier otro
+    /// camino, su `Drop` lo aborta (ver [`SessionWriter`]).
+    session_writer: Option<SessionWriter>,
+}
+
+/// El escritor de la sesión, que se PARA si su daemon muere sin apagarse.
+///
+/// Dropear un `JoinHandle` de tokio DESLIGA la task, no la para. Sin este
+/// envoltorio, un daemon que se va por un camino que no es el apagado ordenado
+/// —un `accept` que falla, un bind que se dropea, un test que abandona— suelta
+/// su `session_lock` y deja la task viva: un proceso escribiendo el fichero
+/// SIN el derecho a escribirlo, que es exactamente el segundo escritor que
+/// todo esto existe para que no haya.
+struct SessionWriter(Option<tokio::task::JoinHandle<()>>);
+
+impl SessionWriter {
+    /// El handle, para ESPERARLO en el apagado ordenado. Lo que queda ya no
+    /// aborta nada.
+    fn take(&mut self) -> Option<tokio::task::JoinHandle<()>> {
+        self.0.take()
+    }
+}
+
+impl Drop for SessionWriter {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
 }
 
 impl std::fmt::Debug for Daemon {
@@ -631,6 +690,17 @@ impl Daemon {
         listener.set_nonblocking(true)?;
         let listener = UnixListener::from_std(listener)?;
 
+        // La sesión de UI (L2): el lock y la carga son I/O síncrono, así que
+        // van a un pool blocking (regla 2). Sin `state_dir` no se persiste
+        // nada, que es lo que quiere un test; con él, quien no consigue el
+        // lock arranca CON la pantalla y sin escritor —clona y corre suelto—.
+        let (session_lock, sesion, escribible) = open_session(cfg.state_dir.clone()).await?;
+        // Persistir es las TRES cosas a la vez, y por eso se calcula una sola
+        // vez y en un sitio: hay dónde, se tiene el derecho, y lo que hay en
+        // disco no es de un binario más nuevo.
+        let session_persists = session_lock.is_some() && cfg.state_dir.is_some() && escribible;
+        let session_flush = Arc::new(tokio::sync::Notify::new());
+
         tracing::info!(socket = %socket_path.display(), uid, "daemon enlazado");
         let shared = Arc::new(Shared {
             engine,
@@ -652,6 +722,9 @@ impl Daemon {
             plugins: Mutex::new(plugins),
             plugin_runtime,
             directed_feeds: Mutex::new(HashMap::new()),
+            ui_session: Arc::new(crate::ui_session::SessionStore::new(sesion)),
+            session_persists,
+            session_flush: Arc::clone(&session_flush),
         });
         // La salida del router de aprobaciones hacia los suscriptores. `Weak`
         // rompe el ciclo Shared → approvals → closure → Shared: muerto el
@@ -682,11 +755,27 @@ impl Daemon {
             .set_connection_observer(Arc::new(DaemonConnectionObserver {
                 shared: Arc::downgrade(&shared),
             }));
+        // El escritor solo existe si esta instancia es la DUEÑA del estado y
+        // lo que hay en disco se puede pisar. Un core suelto —o uno que
+        // encontró una sesión de un binario más nuevo— tiene la pantalla y no
+        // la escribe: sin este gate, «no se lee» acababa siendo «se pisa un
+        // segundo después», que es justo lo contrario de lo que promete.
+        let session_writer = match (session_persists, cfg.state_dir) {
+            (true, Some(dir)) => Some(SessionWriter(Some(tokio::spawn(session_writer(
+                Arc::clone(&shared.ui_session),
+                dir,
+                session_flush,
+                shared.shutdown.clone(),
+            ))))),
+            _ => None,
+        };
         Ok(Self {
             listener,
             socket_path,
             shared,
             idle_timeout: cfg.idle_timeout,
+            session_lock,
+            session_writer,
         })
     }
 
@@ -712,13 +801,22 @@ impl Daemon {
     /// # Panics
     /// Nunca: los locks internos no se envenenan (nadie panica con ellos).
     #[tracing::instrument(skip(self), fields(socket = %self.socket_path.display()))]
-    pub async fn run(self) -> Result<(), DaemonError> {
+    pub async fn run(mut self) -> Result<(), DaemonError> {
         let shared = Arc::clone(&self.shared);
         let mut idle_since = tokio::time::Instant::now();
+        // Un `accept` que falla NO sale por `?`: saliendo por ahí se saltaría
+        // el apagado ordenado de abajo, y lo que queda detrás es un escritor
+        // de sesión SUELTO —el `JoinHandle` se dropea sin abortar, o sea que
+        // la task sigue— escribiendo el fichero con el lock ya soltado. El
+        // error se guarda y se devuelve DESPUÉS de apagar.
+        let mut fallo: Option<std::io::Error> = None;
         loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
-                    let (stream, _addr) = accepted?;
+                    let (stream, _addr) = match accepted {
+                        Ok(v) => v,
+                        Err(e) => { fallo = Some(e); break }
+                    };
                     // El keepalive de inactividad NO cuenta conexiones sin
                     // autenticar (la resetea serve tras la auth); el cap
                     // anti-agotamiento corta aquí, antes de gastar nada.
@@ -742,6 +840,21 @@ impl Daemon {
                 }
             }
         }
+
+        // La sesión de UI se vuelca y el lock se suelta AQUÍ, antes de retirar
+        // la ruta del socket — que es lo que le da permiso al sucesor de un
+        // relevo para arrancar. Al revés, el sucesor encontraría el lock
+        // todavía tomado y correría suelto: un relevo dejaría al daemon nuevo
+        // sin poder guardar nada, que es justo lo contrario de lo que un
+        // relevo promete. El token se cancela también aquí porque el camino de
+        // inactividad sale del bucle sin pasar por `daemon.shutdown`.
+        shared.shutdown.cancel();
+        if let Some(mut writer) = self.session_writer.take()
+            && let Some(handle) = writer.take()
+        {
+            let _ = handle.await;
+        }
+        drop(self.session_lock.take());
 
         // Fase de apagado: nada de clientes nuevos (el listener muere con
         // el drop); hard = cancelar tasks; graceful = esperarlas — y si el
@@ -781,7 +894,10 @@ impl Daemon {
         }
         let _ = socket_path;
         tracing::info!("daemon apagado");
-        Ok(())
+        match fallo {
+            Some(e) => Err(DaemonError::Io(e)),
+            None => Ok(()),
+        }
     }
 
     /// Token que CANCELA las tasks vivas además de apagar (segunda señal
@@ -789,6 +905,103 @@ impl Daemon {
     #[must_use]
     pub fn hard_shutdown_token(&self) -> CancellationToken {
         self.shared.hard_shutdown.clone()
+    }
+}
+
+/// Toma el lock de la sesión de UI y la carga (L2).
+///
+/// Sin `state_dir` no se persiste nada: ni lock ni fichero. Con él, el lock
+/// decide quién ESCRIBE —quien no lo consigue arranca igual, con la misma
+/// pantalla, y no la escribe nunca— y la carga nunca falla: sus desenlaces
+/// malos dan una sesión vacía y un aviso.
+///
+/// Todo el I/O va a un pool blocking (regla 2).
+async fn open_session(
+    state_dir: Option<PathBuf>,
+) -> Result<
+    (
+        Option<crate::ui_session::disk::SessionLock>,
+        norte_proto::methods::Session,
+        bool,
+    ),
+    DaemonError,
+> {
+    let Some(dir) = state_dir else {
+        return Ok((None, norte_proto::methods::Session::default(), false));
+    };
+    tokio::task::spawn_blocking(move || {
+        // Un lock que no se puede ni intentar (permisos, disco lleno) NO
+        // impide arrancar: deja al core suelto, que es la degradación que ya
+        // existe para el segundo core.
+        let lock = crate::ui_session::disk::lock(&dir).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "no se pudo tomar el lock de la sesión de UI");
+            None
+        });
+        let r = crate::ui_session::disk::load_or_default(&dir);
+        (lock, r.session, r.writable)
+    })
+    .await
+    .map_err(|e| DaemonError::Io(std::io::Error::other(e)))
+}
+
+/// El único escritor de la sesión de UI: coalesce los cambios y los vuelca.
+///
+/// Un tick por segundo, y en cada uno **solo si hay algo sucio**. Coalescer es
+/// el punto entero: el cursor se mueve en cada flecha y esto es un fichero, no
+/// una base de datos. `session_flush` lo adelanta cuando se va la última
+/// conexión, y el token lo termina — con un último volcado, que es el del
+/// relevo y la razón de ser de todo esto.
+///
+/// Un fallo de escritura es un `warn!`, la marca de sucio VUELVE a ponerse y
+/// el siguiente tick reintenta: perder una sesión es una tarde mala, y tumbar
+/// el daemon por ella es peor. (Reintentar de verdad es lo que hace
+/// `mark_dirty`; sin él la marca ya estaba limpia y el aviso era todo lo que
+/// pasaba.)
+async fn session_writer(
+    store: Arc<crate::ui_session::SessionStore>,
+    dir: PathBuf,
+    flush: Arc<tokio::sync::Notify>,
+    stop: CancellationToken,
+) {
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = tick.tick() => flush_session(&store, &dir).await,
+            () = flush.notified() => flush_session(&store, &dir).await,
+            () = stop.cancelled() => {
+                // El último, y por eso el que importa: aquí es donde la
+                // pantalla sobrevive a un relevo.
+                flush_session(&store, &dir).await;
+                break;
+            }
+        }
+    }
+}
+
+/// Vuelca la sesión si hay algo que volcar. Nada sucio = ni un `open`, que es
+/// lo que hace barato despertarse cada segundo.
+async fn flush_session(store: &Arc<crate::ui_session::SessionStore>, dir: &Path) {
+    let Some(session) = store.take_dirty() else {
+        return;
+    };
+    let dir = dir.to_path_buf();
+    // Regla 2: la escritura es I/O de disco y va a un pool blocking.
+    let escrito =
+        tokio::task::spawn_blocking(move || crate::ui_session::disk::write(&dir, &session)).await;
+    match escrito {
+        Ok(Ok(())) => {}
+        // Lo sucio se lo llevó `take_dirty`, así que un fallo SIN volver a
+        // marcarlo no se reintenta nunca: el tick siguiente no vería nada que
+        // hacer y la pantalla se perdería por un `ENOSPC` de un segundo.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "no se pudo escribir la sesión de UI; se reintenta");
+            store.mark_dirty();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "el volcado de la sesión de UI se cayó; se reintenta");
+            store.mark_dirty();
+        }
     }
 }
 
@@ -1048,7 +1261,11 @@ fn spawn_connection(stream: UnixStream, shared: Arc<Shared>) {
         if let Err(e) = serve_connection(stream, &shared).await {
             tracing::debug!(error = %e, "conexión terminada con error");
         }
-        shared.connections.fetch_sub(1, Ordering::SeqCst);
+        // Con la última conexión fuera no hay nadie a quien servir, y lo que
+        // acaba de dejar puesto no debería esperar al siguiente tick.
+        if shared.connections.fetch_sub(1, Ordering::SeqCst) == 1 {
+            shared.session_flush.notify_one();
+        }
     });
 }
 
@@ -1577,6 +1794,10 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
             pending.remove(id);
         }
     }
+    // La dueña de la sesión de UI la SUELTA al irse: sin esto, un cliente que
+    // muere deja la pantalla de rehén y el siguiente terminal corre suelto
+    // para siempre. Soltar lo ajeno es un no-op (no desaloja a nadie).
+    shared.ui_session.release(conn_id);
     drop_sync_plans(shared, conn_id).await;
     drop(tx);
     // Cerrar el inbox termina al reader si aún vive (su `send` falla).
@@ -1962,6 +2183,11 @@ async fn dispatch(
             })
         }
         methods::DAEMON_SHUTDOWN => handle_daemon_shutdown(&conn.actor, req.params, shared),
+        methods::SESSION_GET => handle_session_get(&conn.actor, conn_id, shared),
+        methods::SESSION_PUT => {
+            let p: methods::SessionPutParams = parse_params(req.params)?;
+            handle_session_put(&conn.actor, conn_id, p, shared)
+        }
         // fs.list vive AQUÍ (no en dispatch_fs_task): necesita el ConnState
         // para retener el stream paginado entre páginas (ADR 0017).
         methods::FS_LIST => {
@@ -2245,6 +2471,96 @@ fn handle_grant_scope(
     tracing::info!(session = %req.session, ops = ?req.ops, "scope concedido a la sesión de agente");
     shared.scopes.grant(&req.session, scope);
     to_value(&methods::GrantScopeResult {})
+}
+
+/// `session.get` (L2, 0.48.0) — la pantalla que el cliente dejó, y si ESTA
+/// conexión es la que puede escribirla.
+///
+/// Reclamar la propiedad es parte de LEER, y no un método aparte: quien
+/// arranca lee, y quien lee es el candidato natural a escribir. La primera
+/// conexión humana se la queda; las siguientes reciben la misma copia y corren
+/// sueltas —abrir un segundo terminal da lo que el lector esperaba, y nunca
+/// hay dos escritores sobre un estado—.
+///
+/// SOLO humanos, mismo criterio que `daemon.shutdown` y `policy.pending`: una
+/// sesión de agente no tiene pantalla que guardar.
+fn handle_session_get(
+    actor: &Actor,
+    conn_id: u64,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection has a UI session",
+        ));
+    }
+    // Dueña Y con dónde escribir: un daemon sin `state_dir`, sin el lock, o
+    // que encontró en disco una sesión de un binario más nuevo, acepta `put`
+    // en memoria y no persiste nada. Decir `owner: true` ahí sería mandar al
+    // cliente a escribir cada segundo una pantalla que se pierde al salir, sin
+    // un solo aviso — y el brazo embebido ya contestaba lo correcto, así que
+    // era además la MISMA pregunta con dos respuestas.
+    let owner = shared.ui_session.claim(conn_id) && shared.session_persists;
+    to_value(&methods::SessionGetResult {
+        session: shared.ui_session.get(),
+        owner,
+    })
+}
+
+/// `session.put` (L2, 0.48.0) — reemplaza la sesión entera.
+///
+/// Tres negativas, y cada una dice algo distinto al cliente:
+/// [`norte_proto::Error::PermissionDenied`] si no es la dueña (releer no
+/// arregla nada: esta conexión no escribe nunca),
+/// [`norte_proto::Error::Conflict`] con
+/// [`norte_proto::ConflictKind::StaleRevision`] si trae una revisión pasada
+/// (releer SÍ lo arregla) y [`norte_proto::Error::LimitExceeded`] con
+/// [`norte_proto::Error::LIMIT_SESSION_BODY`] si el cuerpo pasa del tope
+/// (releer no; tirar historial y reintentar, sí). En los tres casos lo
+/// almacenado se queda exactamente como estaba.
+fn handle_session_put(
+    actor: &Actor,
+    conn_id: u64,
+    p: methods::SessionPutParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection has a UI session",
+        ));
+    }
+    // La propiedad se comprueba ANTES que la revisión y que el tope: para una
+    // conexión que no manda, las otras dos respuestas serían consejos falsos
+    // («re-lee», «recorta») sobre una escritura que jamás se va a aceptar.
+    if shared.ui_session.owner() != Some(conn_id) {
+        // Con TAXONOMÍA, como las otras dos negativas (#182): un cliente que
+        // solo tuviera la prosa inglesa no podría distinguir «no mandas» de
+        // «tus params están mal», y es la misma negativa que el brazo embebido
+        // ya daba como `PermissionDenied`.
+        return Err(RpcError::from(norte_proto::Error::PermissionDenied));
+    }
+    match shared.ui_session.put(p.version, p.revision, p.body) {
+        Ok(revision) => to_value(&methods::SessionPutResult { revision }),
+        Err(crate::ui_session::PutError::Conflict { current }) => {
+            // Con TAXONOMÍA en `data` (#182): sin ella el cliente lee
+            // «internal error» y no sabe que releer lo arregla. La revisión
+            // vigente NO viaja en el error — se pide con `session.get`, que es
+            // el mismo viaje que hay que hacer de todas formas para saber
+            // contra qué cuerpo se estaba escribiendo.
+            tracing::debug!(current, "session.put con revisión rancia");
+            Err(RpcError::from(norte_proto::Error::Conflict {
+                conflict: norte_proto::ConflictKind::StaleRevision,
+            }))
+        }
+        Err(crate::ui_session::PutError::TooLarge { bytes }) => {
+            tracing::warn!(bytes, "session.put por encima del tope");
+            Err(RpcError::from(norte_proto::Error::LimitExceeded {
+                limit: norte_proto::Error::LIMIT_SESSION_BODY.to_owned(),
+            }))
+        }
+    }
 }
 
 /// `policy.decide` (M3-3b Task 4): un humano aprueba/deniega una pendiente.

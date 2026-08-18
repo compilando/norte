@@ -2091,6 +2091,12 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
                     socket_path: socket,
                     idle_timeout: (idle_timeout > 0)
                         .then(|| std::time::Duration::from_secs(idle_timeout)),
+                    // La sesión de UI (L2) vive en el directorio de estado, y
+                    // se pasa EXPLÍCITA: el default no persiste nada, para que
+                    // ningún test ni embebedor escriba el estado real por
+                    // descuido. Sin directorio de estado —un entorno sin HOME—
+                    // el daemon sirve la pantalla y no la guarda.
+                    state_dir: norte_config::dirs::state_dir(),
                     ..DaemonConfig::default()
                 },
             )
