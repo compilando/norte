@@ -821,6 +821,7 @@ fn golden_methods() {
     check_methods_policy(&fixtures);
     check_methods_session(&fixtures);
     check_methods_ui_session(&fixtures);
+    check_methods_dir_size(&fixtures);
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
@@ -870,7 +871,27 @@ fn golden_methods() {
     // sesión a propósito: lo que la fixture demuestra es que el cuerpo vuelve
     // igual que fue. La VACÍA tiene fixture propia porque es la que sale en
     // cada primer arranque y la única con `body: null`.
-    assert_eq!(fixtures.len(), 148, "[methods.json] fixtures sin caso Rust");
+    // 148 → 149 en 0.49.0 (#139): + fs_dir_size_params. El RESULT no tiene
+    // fixture propia porque no tiene tipo propio — es el `FsTaskResult` de
+    // siempre, ya congelado.
+    assert_eq!(fixtures.len(), 149, "[methods.json] fixtures sin caso Rust");
+}
+
+/// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
+/// como una LISTA —una selección se mide de una vez— y con la forma de wire de
+/// `VPath`, no como texto suelto.
+fn check_methods_dir_size(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::FsDirSizeParams;
+    check_one(
+        fixtures,
+        "fs_dir_size_params",
+        &FsDirSizeParams {
+            paths: vec![
+                norte_proto::VPath::parse("file:///a").expect("vpath"),
+                norte_proto::VPath::parse("file:///b/c").expect("vpath"),
+            ],
+        },
+    );
 }
 
 /// Familia `session.*` de UI (0.48.0, L2): la pantalla que el daemon guarda.
@@ -3110,7 +3131,11 @@ fn method_names_frozen() {
     // este test dice que lo mira.
     assert_eq!(methods::SESSION_GET, "session.get");
     assert_eq!(methods::SESSION_PUT, "session.put");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.48.0");
+    // 0.49.0 (#139): `fs.dir_size` y su `TaskKind::DirSize`. Aditivo — un
+    // método nuevo que un cliente viejo no forma, y una variante de kind que su
+    // `#[serde(other)]` degrada a `Unknown` desde 0.10. MINOR.
+    assert_eq!(methods::FS_DIR_SIZE, "fs.dir_size");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.49.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

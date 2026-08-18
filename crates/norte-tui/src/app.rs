@@ -4093,6 +4093,62 @@ impl App {
         self.focused_mut().set_sort(spec);
     }
 
+    /// Abre las propiedades de la entrada bajo el cursor (#139).
+    ///
+    /// Devuelve la ruta cuyo tamaño hay que contar, si es una carpeta: el
+    /// diálogo no habla con el backend —esto es `App`, no el run loop— así que
+    /// dice qué hace falta y quien puede lo pide.
+    pub fn open_properties(&mut self) -> Option<VPath> {
+        let entry = self.focused().selected()?.clone();
+        let contar = (entry.kind == norte_proto::EntryKind::Dir).then(|| entry.path.clone());
+        self.modal = Some(Modal::Properties {
+            entry: Box::new(entry),
+            size_task: None,
+            size: None,
+        });
+        contar
+    }
+
+    /// Mete en el diálogo la entrada RECIÉN pedida al backend.
+    ///
+    /// Un listado perezoso (#52) no trae ni tamaño ni fecha, y de una carpeta
+    /// no los trae NUNCA: sin esto, las propiedades de un directorio decían
+    /// «lo desconoce el backend» de algo que un `stat` sabe perfectamente.
+    /// Conserva el recuento —es de otra pregunta— y no pisa el diálogo si el
+    /// humano ya lo cerró.
+    pub fn properties_hydrate(&mut self, fresca: norte_proto::Entry) {
+        if let Some(Modal::Properties { entry, .. }) = &mut self.modal
+            && entry.path == fresca.path
+        {
+            **entry = fresca;
+        }
+    }
+
+    /// Ata al diálogo de propiedades el recuento que se acaba de lanzar.
+    pub fn properties_counting(&mut self, task: norte_proto::TaskId) {
+        if let Some(Modal::Properties { size_task, .. }) = &mut self.modal {
+            *size_task = Some(task);
+        }
+    }
+
+    /// Mete en el diálogo el resultado de SU recuento (#139).
+    ///
+    /// Por `task_id` y no «el último que llegue»: entre abrir el diálogo y que
+    /// termine la cuenta cabe otra cuenta —la que el humano lanzó a mano sobre
+    /// una selección—, y enseñar ese número aquí sería contestar otra pregunta.
+    ///
+    /// Devuelve `true` si era el suyo.
+    pub fn properties_sized(&mut self, task: norte_proto::TaskId, bytes: u64, entries: u64) -> bool {
+        let Some(Modal::Properties { size_task, size, .. }) = &mut self.modal else {
+            return false;
+        };
+        if *size_task != Some(task) {
+            return false;
+        }
+        *size = Some((bytes, entries));
+        true
+    }
+
     /// Abre el modal de marcado por patrón (#103).
     pub fn open_mark_pattern(&mut self, mark: bool) {
         self.modal = Some(Modal::MarkPattern {
@@ -5574,6 +5630,21 @@ impl TrailStep {
 /// tipo de proto.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Modal {
+    /// Las propiedades de la entrada bajo el cursor (#139).
+    ///
+    /// Lo que enseña sale del LISTADO, que ya lo tiene: nombre, clase, tamaño,
+    /// fecha y los atributos que el provider haya reportado. Abrirlo no pide
+    /// nada — salvo una cosa, y es justo la que un listado no puede saber: lo
+    /// que ocupa una carpeta. Eso se cuenta, y mientras se cuenta el diálogo lo
+    /// dice.
+    Properties {
+        /// La entrada, tal como está en el listado.
+        entry: Box<norte_proto::Entry>,
+        /// El recuento en marcha, si se lanzó uno (solo para directorios).
+        size_task: Option<norte_proto::TaskId>,
+        /// `(bytes, entradas)` cuando el recuento terminó.
+        size: Option<(u64, u64)>,
+    },
     /// Confirmación de borrado (F8) sobre las MARCAS. `permanent = false` →
     /// papelera.
     ConfirmDelete {
@@ -6095,6 +6166,10 @@ pub const ALLOW_HELP: &[&str] = &[
 pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
     use norte_proto::CollisionPolicy as P;
     match modal {
+        // #139: las propiedades no PREGUNTAN nada — se leen y se cierran—, así
+        // que solo entienden cancelar. Darle un «confirmar» a un cuadro de
+        // solo lectura es enseñarle al lector que Enter hace algo aquí.
+        Modal::Properties { .. } => (cmd == "dialog.cancel").then_some(DialogOutcome::Cancelled),
         // M4-IA: `AiRenamePlan` es una superficie de decisión sobre contenido
         // INICIADO y REVISADO por el humano — semántica [`ALLOW_CONFIRM`]
         // (Enter confirma, como un delete/transfer), NO el allowlist de
@@ -7870,6 +7945,47 @@ mod tests {
         assert_eq!(kind, TransferKind::Move);
         assert_eq!(from, VPath::parse("mem:///a.txt").unwrap());
         assert_eq!(dest, VPath::parse("mem:///a.txt2").unwrap());
+    }
+
+    /// #139: las propiedades salen del LISTADO, y sobre una carpeta piden lo
+    /// único que el listado no sabe.
+    #[test]
+    fn las_propiedades_de_una_carpeta_piden_contarla() {
+        let mut app = app_with_entries(&["a.txt"]);
+        // Sobre un fichero no hay nada que contar: su tamaño ya está.
+        assert!(app.open_properties().is_none());
+        assert!(matches!(app.modal, Some(Modal::Properties { .. })));
+    }
+
+    /// El resultado de un recuento va al diálogo que lo pidió, y a NINGÚN
+    /// otro: entre abrir el diálogo y que termine la cuenta cabe otra cuenta
+    /// —la que el humano lanzó sobre una selección— y enseñar ese número aquí
+    /// sería contestar otra pregunta.
+    #[test]
+    fn el_recuento_ajeno_no_entra_en_el_dialogo() {
+        use norte_proto::TaskId;
+
+        let mut app = app_with_entries(&["a.txt"]);
+        app.open_properties();
+        let mio = TaskId::new(7);
+        app.properties_counting(mio);
+        assert!(
+            !app.properties_sized(TaskId::new(8), 1, 1),
+            "el de otro no entra"
+        );
+        assert!(app.properties_sized(mio, 4096, 12), "el mío sí");
+        let Some(Modal::Properties { size, .. }) = &app.modal else {
+            panic!("sigue abierto")
+        };
+        assert_eq!(*size, Some((4096, 12)));
+    }
+
+    /// Sin diálogo abierto, un recuento no tiene dónde entrar y lo dice: es lo
+    /// que hace que el run loop mande el número a la barra de estado.
+    #[test]
+    fn sin_dialogo_el_recuento_no_encuentra_donde_ir() {
+        let mut app = app_with_entries(&["a.txt"]);
+        assert!(!app.properties_sized(norte_proto::TaskId::new(1), 10, 1));
     }
 
     /// #138: la tecla de orden hace lo mismo que un click en la cabecera —

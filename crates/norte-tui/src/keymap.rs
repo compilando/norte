@@ -200,6 +200,8 @@ commands! {
     "pane.sort-size" => PaneSortSize,
     "pane.sort-time" => PaneSortTime,
     "pane.sort-menu" => PaneSortMenu,
+    "pane.properties" => PaneProperties,
+    "pane.dir-size" => PaneDirSize,
     "pane.mkdir" => PaneMkdir,
     "pane.rename" => PaneRename,
     "pane.refresh" => PaneRefresh,

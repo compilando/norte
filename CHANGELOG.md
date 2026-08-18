@@ -9,6 +9,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Properties, and how much a folder actually takes.** `pane.properties`
+  (Alt+Enter in the Total Commander and Krusader presets, Ctrl+A in Far) opens
+  what norte knows about the entry under the cursor: kind, size, date, path and
+  whatever attributes the backend reported. All of that is already in the
+  listing, so opening it asks for nothing — except the one thing a listing
+  cannot know, which is how much a folder takes. That is counted, and the dialog
+  says so while it counts. `pane.dir-size` (Ctrl+L in TC, Alt+Shift+S in
+  Krusader) counts without opening anything, over what you marked. Counting is a
+  cancellable task like any other, and an unreadable folder in the middle of a
+  big tree costs its own subtree rather than the whole count (#139).
+
 - **Sorting has keys now.** Sort the focused panel by name, extension, size or
   date without opening anything; pressing the one already in use reverses it,
   exactly like clicking a header twice. The presets that bind these keys — Far's

@@ -53,6 +53,7 @@ struct ProtocolSchema {
     fs_compare_params: FsCompareParams,
     fs_copy_params: FsCopyParams,
     fs_delete_params: FsDeleteParams,
+    fs_dir_size_params: FsDirSizeParams,
     fs_list_params: FsListParams,
     fs_list_result: FsListResult,
     fs_mkdir_params: FsMkdirParams,

@@ -1420,6 +1420,20 @@
       ],
       "type": "object"
     },
+    "FsDirSizeParams": {
+      "description": "Params de [`FS_DIR_SIZE`] (0.49.0, #139).\n\n```\nuse norte_proto::methods::FsDirSizeParams;\nlet p: FsDirSizeParams =\n    serde_json::from_str(r#\"{\"paths\":[\"file:///a\"]}\"#).expect(\"params\");\nassert_eq!(p.paths.len(), 1);\n```",
+      "properties": {
+        "paths": {
+          "default": [],
+          "description": "Lo que hay que medir. VARIAS raíces a propósito: lo que el humano tiene\nmarcado es una selección, y sumarla de una vez da UN número —el que\ncontesta «¿cabe esto en el destino?»— en vez de N tareas que él tenga\nque sumar a mano.\n\nUn fichero suelto vale: cuenta su propio tamaño y no recorre nada.\nVacío es `-32602`: medir la nada no es una petición.",
+          "items": {
+            "$ref": "#/$defs/VPath"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "FsListParams": {
       "description": "Params de [`FS_LIST`] (paginación por cursor desde 0.8.0, ADR 0017).",
       "properties": {
@@ -4289,6 +4303,11 @@
           "type": "string"
         },
         {
+          "const": "dir_size",
+          "description": "Cuánto ocupa un árbol de directorios\n(`fs.dir_size`/[`FS_DIR_SIZE`](crate::methods::FS_DIR_SIZE), 0.49.0,\n#139). Lectura pura (regla 4 no aplica): sin journal, sin undo, ni un\nbyte escrito.\n\nEl progreso de ésta SÍ cuenta bytes, al revés que\n[`TaskKind::Compare`]: los bytes son justo lo que se está preguntando.\nLo que no lleva son totales —`bytes_total` y `entries_total` van a\n`None` hasta el final— porque el total es el resultado, y una barra\nhacia un número inventado es peor que ninguna barra.\n\nEntra CON el método. Un cliente N-1 (0.48.x) la degrada a\n[`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que\n`Search`/`Index`/`Embed`/`RenameBatch`/`Compare`.",
+          "type": "string"
+        },
+        {
           "const": "sync_plan",
           "description": "Planificación de una sincronización de un sentido\n(`sync.plan`/[`SYNC_PLAN`](crate::methods::SYNC_PLAN), 0.40.0, ADR\n0049). Lectura pura (regla 4 no aplica): planificar no escribe un byte\n— lo que escribe es [`TaskKind::Sync`]. El progreso cuenta PASOS\nemitidos, no bytes, por el mismo motivo que\n[`TaskKind::Compare`]: es la comparación de debajo con una decisión por\nfila, y con el rung de hash apagado no se lee contenido alguno.\n\nEntra CON el método, en su mismo bump, y por la misma razón que\n`Compare`: el `task_id` de un lote de\n[`SYNC_STEPS`](crate::methods::SYNC_STEPS) correlaciona con una Task que\nel cliente tiene que poder clasificar en `task.list`. Un cliente N-1\n(0.39.x) la degrada a [`TaskKind::Unknown`] por el `serde(other)` de\nabajo.",
           "type": "string"
@@ -4735,6 +4754,9 @@
     "fs_delete_params": {
       "$ref": "#/$defs/FsDeleteParams"
     },
+    "fs_dir_size_params": {
+      "$ref": "#/$defs/FsDirSizeParams"
+    },
     "fs_list_params": {
       "$ref": "#/$defs/FsListParams"
     },
@@ -5132,6 +5154,7 @@
     "fs_compare_params",
     "fs_copy_params",
     "fs_delete_params",
+    "fs_dir_size_params",
     "fs_list_params",
     "fs_list_result",
     "fs_mkdir_params",

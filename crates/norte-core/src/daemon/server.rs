@@ -3559,6 +3559,40 @@ fn content_gate(
 /// misma asimetría que ya tienen los criterios de `fs.search`, y el contrato
 /// publicado en `methods::FS_COMPARE` es el código, no la taxonomía.)
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
+/// `fs.dir_size` (0.49.0, #139): cuánto ocupa lo que se pida, como Task.
+///
+/// Gate de LECTURA sobre CADA raíz, y antes de validar nada más: un actor sin
+/// derechos sobre lo que pide no llega a saber si su petición era además
+/// incorrecta. Recorrer un árbol revela su FORMA —cuántas cosas hay y cómo se
+/// llaman los directorios por los que se baja—, que es exactamente lo que un
+/// listado revela y por eso es el mismo gate.
+async fn handle_fs_dir_size(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::FsDirSizeParams = parse_params(params)?;
+    for path in &p.paths {
+        read_gate(actor, path, shared)?;
+    }
+    if p.paths.is_empty() {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "fs.dir_size: paths must not be empty",
+        ));
+    }
+    let handle = shared
+        .engine
+        .dir_size_as(p, actor.clone())
+        .await
+        .map_err(RpcError::from)?;
+    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
+    // `dir_size_as`) y este register — la Task jamás corre FUERA de
+    // `shared.tasks`.
+    let task_id = register_task_id(shared, handle, actor.clone())?;
+    to_value(&methods::FsTaskResult { task_id })
+}
+
 async fn handle_fs_compare(
     params: Option<serde_json::Value>,
     conn_id: u64,
@@ -4095,6 +4129,9 @@ async fn dispatch_fs_task(
         // fs.compare (0.39.0): las FILAS son del que la lanzó → conn_id, igual
         // que `fs.search` (envío dirigido, jamás broadcast).
         methods::FS_COMPARE => handle_fs_compare(req.params, conn_id, &actor, shared).await,
+        // fs.dir_size (0.49.0, #139): sin conn_id — no enruta nada, el total
+        // viaja en el progreso que ya escucha todo el mundo.
+        methods::FS_DIR_SIZE => handle_fs_dir_size(req.params, &actor, shared).await,
         // sync.plan (0.40.0): los PASOS son del que lo lanzó, y el plan queda
         // RETENIDO a nombre de esta conexión → conn_id por partida doble.
         methods::SYNC_PLAN => handle_sync_plan(req.params, conn_id, &actor, shared).await,

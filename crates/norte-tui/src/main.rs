@@ -8641,6 +8641,22 @@ async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> 
     for fin in finished {
         use norte_proto::TaskState;
         match fin.state {
+            // #139: contar no muta nada, así que no recarga los paneles — y su
+            // resultado ES su progreso: el último snapshot trae el total.
+            TaskState::Completed if fin.progress.kind == norte_proto::TaskKind::DirSize => {
+                let (bytes, entradas) = (fin.progress.bytes_done, fin.progress.entries_done);
+                // Si el diálogo de propiedades esperaba ESTE recuento, el
+                // número va ahí; si no, a la barra.
+                if !app.properties_sized(fin.progress.task_id, bytes, entradas) {
+                    app.message = Some(ta(
+                        "msg-dir-size",
+                        &[
+                            ("size", &norte_frontend::human_bytes(bytes)),
+                            ("count", &entradas.to_string()),
+                        ],
+                    ));
+                }
+            }
             TaskState::Completed => {
                 refresh = true;
                 app.message = Some(t("msg-done"));
@@ -8993,6 +9009,11 @@ async fn on_dialog_key(
                         return outcome;
                     }
                 }
+                // #139: las propiedades no llegan aquí —`dialog_action` solo
+                // les entiende cancelar—, y nombrarlas es lo que hace que
+                // añadir un «confirmar» a este cuadro sea un error de
+                // compilación en vez de un Enter que hace algo a escondidas.
+                Modal::Properties { .. } => {}
             }
             // Todas las ramas salvo el retry TOFU (que ya volvió) abren aquí
             // la siguiente pendiente, con el modal ya cerrado.
@@ -9087,6 +9108,38 @@ async fn submit_deletes(app: &mut App, backend: &Backend, items: &[VPath], perma
         }
     }
     app.consume_marks();
+}
+
+/// Lanza un recuento de tamaño y lo registra en el panel de tasks (#139).
+///
+/// `para_el_dialogo` ata la Task al modal de propiedades abierto, para que su
+/// resultado llegue AHÍ y no solo a la barra de estado.
+///
+/// El total no vuelve por aquí: llega en el progreso terminal de la Task, que
+/// es lo que `on_tick` ya está mirando para todas las demás.
+async fn lanza_recuento(
+    app: &mut App,
+    backend: &Backend,
+    paths: Vec<VPath>,
+    para_el_dialogo: bool,
+) {
+    if paths.is_empty() {
+        return;
+    }
+    match backend
+        .dir_size(norte_proto::methods::FsDirSizeParams { paths })
+        .await
+    {
+        Ok(task) => {
+            if para_el_dialogo {
+                app.properties_counting(task.id());
+            } else {
+                app.message = Some(t("msg-dir-size-counting"));
+            }
+            app.board.push(&task, None);
+        }
+        Err(e) => app.message = Some(error_message(&e)),
+    }
 }
 
 /// Encola una transferencia y la registra en el panel con su contexto de
@@ -11828,6 +11881,25 @@ async fn dispatch(
                 .map(|l| l.plugins)
                 .unwrap_or_default();
             app.open_columns_picker(&plugins);
+        }
+        // #139: las propiedades salen del listado. Lo único que hay que pedir
+        // es lo que un listado no sabe —cuánto ocupa una carpeta—, y se pide
+        // solo si la entrada es una.
+        Command::PaneProperties => {
+            if let Some(dir) = app.open_properties() {
+                // La fecha de una carpeta no viene en un listado perezoso
+                // (#52) y un `stat` la sabe: se pide una vez, al abrir.
+                if let Ok(fresca) = backend.stat(&dir).await {
+                    app.properties_hydrate(fresca);
+                }
+                lanza_recuento(app, backend, vec![dir], true).await;
+            }
+        }
+        // Y contar a mano, sobre lo MARCADO (o el cursor si no hay marcas):
+        // «¿cuánto ocupa todo esto?» es una pregunta sobre la selección.
+        Command::PaneDirSize => {
+            let objetivos = app.focused().marked_paths();
+            lanza_recuento(app, backend, objetivos, false).await;
         }
         Command::PaneColumns => {
             let plugins = backend

@@ -279,8 +279,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("pane.sort-size", false),
     live("pane.sort-time", false),
     live("pane.sort-menu", false),
-    planned("pane.properties", "keymap-reason-properties", 139),
-    planned("pane.dir-size", "keymap-reason-properties", 139),
+    // #139: las propiedades salen del listado; el tamaño de una carpeta se
+    // CUENTA, y por eso es una Task cancelable y no un campo del diálogo.
+    live("pane.properties", false),
+    live("pane.dir-size", false),
     planned("pane.connect", "keymap-reason-connections", 140),
     planned("pane.disconnect", "keymap-reason-connections", 140),
 ];

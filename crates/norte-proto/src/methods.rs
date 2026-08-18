@@ -628,7 +628,7 @@ use crate::{
 /// [`Session`], [`SessionGetResult`], [`SessionPutParams`] y
 /// [`SessionPutResult`]. Aditivo: ningún mensaje existente cambia de forma, y
 /// el cuerpo de la sesión es OPACO para este crate y para el core.
-pub const PROTOCOL_VERSION: &str = "0.48.0";
+pub const PROTOCOL_VERSION: &str = "0.49.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -989,6 +989,32 @@ pub const SEARCH_HITS_MAX_BATCH: usize = 256;
 /// hash cuestan SU fila y el walk sigue. Una comparación de tres horas no
 /// puede morirse en un `EACCES` de la hoja 40 000.
 pub const FS_COMPARE: &str = "fs.compare";
+
+/// `fs.dir_size` — cuánto ocupa de verdad un directorio (0.49.0, #139).
+///
+/// Un listado dice el tamaño de un fichero y NO el de una carpeta: saberlo
+/// exige recorrerla entera, y un listado que lo hiciera por cada fila
+/// convertiría bajar un nivel en una tormenta de peticiones. Por eso se pide,
+/// no se supone.
+///
+/// Devuelve una Task, y el TOTAL viaja en el progreso que ya existe:
+/// `bytes_done` suma los tamaños y `entries_done` cuenta las entradas, así que
+/// el último snapshot ES el resultado. Cero tipos nuevos para el result
+/// —[`FsTaskResult`], como `fs.copy`— y cero notificaciones nuevas: un cliente
+/// que ya pinta la barra de una copia sabe pintar ésta.
+///
+/// `bytes_total`/`entries_total` van SIEMPRE a `None`: se sabrá cuánto era
+/// cuando termine, y fingir un total mientras se cuenta sería una barra que
+/// avanza hacia un número inventado.
+///
+/// NO muta: sin journal, sin undo, ni un byte escrito (la regla 4 no aplica).
+/// Lee la FORMA del árbol, no su contenido, así que va sujeto al mismo gate de
+/// lectura que un listado sobre cada raíz que se le pase.
+///
+/// Un subdirectorio ilegible cuesta lo suyo y el recorrido sigue: contar una
+/// carpeta de tres horas no puede morirse en un `EACCES` de la hoja 40 000, y
+/// el número que sale es el de lo que se pudo leer.
+pub const FS_DIR_SIZE: &str = "fs.dir_size";
 /// `compare.rows` — notificación server→client con un LOTE de filas de
 /// [`FS_COMPARE`] ([`CompareRowsBatch`]). SOLO viaja a la conexión que lanzó
 /// la comparación (jamás broadcast, mismo criterio direccional que
@@ -3305,6 +3331,28 @@ impl CompareRow {
             _ => self.reason.is_none(),
         }
     }
+}
+
+/// Params de [`FS_DIR_SIZE`] (0.49.0, #139).
+///
+/// ```
+/// use norte_proto::methods::FsDirSizeParams;
+/// let p: FsDirSizeParams =
+///     serde_json::from_str(r#"{"paths":["file:///a"]}"#).expect("params");
+/// assert_eq!(p.paths.len(), 1);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FsDirSizeParams {
+    /// Lo que hay que medir. VARIAS raíces a propósito: lo que el humano tiene
+    /// marcado es una selección, y sumarla de una vez da UN número —el que
+    /// contesta «¿cabe esto en el destino?»— en vez de N tareas que él tenga
+    /// que sumar a mano.
+    ///
+    /// Un fichero suelto vale: cuenta su propio tamaño y no recorre nada.
+    /// Vacío es `-32602`: medir la nada no es una petición.
+    pub paths: Vec<VPath>,
 }
 
 /// Params de [`FS_COMPARE`] (0.39.0, ADR 0048).

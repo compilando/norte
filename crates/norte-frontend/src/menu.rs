@@ -26,6 +26,10 @@ pub const MENUS: &[Menu] = &[
         items: &[
             "pane.view",
             "pane.open",
+            // #139: las propiedades son del FICHERO, así que van con lo que se
+            // hace a un fichero, no con lo que se cambia de la pantalla.
+            "pane.properties",
+            "pane.dir-size",
             "pane.copy",
             "pane.move",
             "pane.rename",
@@ -93,6 +97,9 @@ pub const MENUS: &[Menu] = &[
             "layout.pick",
             "pane.toggle-hidden",
             "pane.columns",
+            // #138: el orden es de la VISTA, y aquí es donde se cambia lo que
+            // la vista enseña.
+            "pane.sort-menu",
             "pane.names-encoding",
             "app.theme",
             "app.settings",
@@ -190,6 +197,35 @@ impl MenuState {
 
 #[cfg(test)]
 mod tests {
+    /// Cada ítem del menú tiene ETIQUETA en los dos idiomas.
+    ///
+    /// Sin esto, un comando nuevo sale en el menú con su clave cruda
+    /// —`menu-item-pane-properties` en mitad de la lista—, que es exactamente
+    /// lo que pasó al añadir los de #138 y #139: la suite entera en verde y la
+    /// pantalla enseñando el identificador. El menú lo pinta el frontend, así
+    /// que el gate vive aquí.
+    #[test]
+    fn cada_item_del_menu_tiene_etiqueta_en_los_dos_idiomas() {
+        for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
+            let _ = norte_i18n::force(lang);
+            for menu in MENUS {
+                let titulo = norte_i18n::t(menu.title);
+                assert!(
+                    !titulo.is_empty() && titulo != menu.title,
+                    "{lang:?}: el menú {} no tiene título", menu.title
+                );
+                for id in menu.items {
+                    let clave = format!("menu-item-{}", id.replace('.', "-"));
+                    let etiqueta = norte_i18n::t(&clave);
+                    assert!(
+                        !etiqueta.is_empty() && etiqueta != clave,
+                        "{lang:?}: {id} sale en el menú sin etiqueta ({clave})"
+                    );
+                }
+            }
+        }
+    }
+
     use super::*;
     use crate::keymap::catalogue::{Status, lookup};
 

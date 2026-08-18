@@ -1196,6 +1196,37 @@ impl Backend {
     /// se entrega como [`Error::Unsupported`] — «tu daemon es más viejo», no
     /// un fallo real. Resto, taxonomía del protocolo; daemon caído =
     /// `ProviderUnavailable`.
+    /// Cuánto ocupa lo que se le pase, como Task (`fs.dir_size`, 0.49.0,
+    /// #139).
+    ///
+    /// El TOTAL no vuelve por aquí: viaja en el progreso de la Task
+    /// (`bytes_done`/`entries_done`), que es lo que el frontend ya escucha para
+    /// pintar cualquier otra. El último snapshot es el resultado.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidPath`] sin rutas, y lo que devuelva el core. Un daemon
+    /// N-1 sin el método contesta `METHOD_NOT_FOUND` → [`Error::Unsupported`],
+    /// para que el frontend distinga «tu daemon es más viejo» de un fallo real.
+    pub async fn dir_size(
+        &self,
+        params: norte_proto::methods::FsDirSizeParams,
+    ) -> Result<TaskRef, Error> {
+        if params.paths.is_empty() {
+            return Err(Error::InvalidPath);
+        }
+        match self {
+            Self::Embedded(engine) => {
+                let handle = engine
+                    .dir_size_as(params, crate::journal::Actor::User)
+                    .await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.dir_size(params).await,
+        }
+    }
+
     pub async fn compare(
         &self,
         params: norte_proto::methods::FsCompareParams,
@@ -3444,6 +3475,27 @@ pub mod remote {
                 &i.compare_routes
             });
             Ok((self.own_task(id, TaskKind::Compare), rx))
+        }
+
+        /// `fs.dir_size` (0.49.0, #139): lanza la Task y devuelve su
+        /// referencia. Sin canal: lo que hay que escuchar es el progreso, que
+        /// ya llega por la suscripción de siempre.
+        pub(super) async fn dir_size(
+            &self,
+            params: methods::FsDirSizeParams,
+        ) -> Result<TaskRef, Error> {
+            let client = self.client().await?;
+            let call = client.call::<_, FsTaskResult>(methods::FS_DIR_SIZE, &params);
+            let result: FsTaskResult = match tokio::time::timeout(CALL_TIMEOUT, call).await {
+                Ok(Err(ClientError::Rpc(ref rpc)))
+                    if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+                {
+                    return Err(Error::Unsupported);
+                }
+                Ok(res) => res.map_err(to_taxonomy)?,
+                Err(_) => return Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            Ok(self.own_task(result.task_id, TaskKind::DirSize))
         }
 
         /// `sync.plan` (0.40.0, ADR 0049): lanza la Task y devuelve el `rx` por

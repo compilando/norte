@@ -1129,5 +1129,11 @@
       "revision": 0,
       "version": 0
     }
+  },
+  "fs_dir_size_params": {
+    "paths": [
+      "file:///a",
+      "file:///b/c"
+    ]
   }
 }

@@ -3,6 +3,7 @@ id = "columns"
 title = "What the listing shows"
 tags = ["doing"]
 see_also = ["finding", "panes", "remote"]
+context = ["dialog.properties"]
 commands = [
     "pane.columns",
     "pane.sort-name",
@@ -10,6 +11,8 @@ commands = [
     "pane.sort-size",
     "pane.sort-time",
     "pane.sort-menu",
+    "pane.properties",
+    "pane.dir-size",
     "dialog.toggle-enabled",
     "dialog.move-up",
     "dialog.move-down",
@@ -85,3 +88,24 @@ together — grouping them is what sorting by extension is for — even though t
 remain different names for everything else. A name that starts with a dot has no
 extension: `.bashrc` is a whole name. Anything with no extension sorts last, in
 both directions, like a size the backend cannot tell you.
+
+# What this entry is, and how much it takes
+
+{{cmd:pane.properties}} opens the properties of whatever is under the cursor:
+kind, size, date, path and whatever attributes the backend reported. All of that
+is already in the listing, so opening it asks for nothing.
+
+Except one thing, and it is exactly the one a listing cannot know: **how much a
+folder takes**. A listing knows the size of a file; a folder's means walking it
+whole, and doing that per row would turn going down one level into a storm of
+requests. So it is counted when you ask: opening the properties of a folder
+starts the count and says so while it runs.
+
+{{cmd:pane.dir-size}} counts without opening anything, over what is MARKED — or
+what is under the cursor if you marked nothing: the question it answers is "how
+much does all of this take?", which is the one you ask before copying.
+
+Counting is a task like any other: it shows in the task panel and it can be
+cancelled. What cannot be read does not sink it — one forbidden folder in the
+middle of a three-hour tree cannot cost you the whole count — so the number is
+for what could be read.

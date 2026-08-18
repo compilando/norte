@@ -3116,6 +3116,14 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         // cómputo dinámico `body_lines + 3` que
         // ConfirmDelete/ConfirmTransfer. Estable al scroll: la ventana
         // clampada siempre pinta `min(len, LIMIT)` parejas.
+        // #139: nombre, clase, tamaño, fecha y ruta, más un atributo por línea
+        // y la línea del recuento cuando la entrada es una carpeta.
+        Modal::Properties { entry, size, .. } => {
+            let lineas = 5
+                + entry.attrs.len()
+                + usize::from(entry.kind == norte_proto::EntryKind::Dir || size.is_some());
+            u16::try_from(lineas).unwrap_or(u16::MAX).saturating_add(3)
+        }
         Modal::AiRenamePlan { entries, plan, .. } => {
             let lineas = 2
                 + 2 * entries.len().min(AI_RENAME_PAIR_LIMIT)
@@ -3271,6 +3279,13 @@ fn modal_title_body(
         ),
         // S2 (`[ui] confirm_quit`): sin datos propios — un título+cuerpo
         // fijos más el hint (`hints.confirm`, ALLOW_CONFIRM reutilizado).
+        // #139: las propiedades salen del LISTADO —nada que pedir— salvo el
+        // recuento de una carpeta, que es lo único que un listado no sabe.
+        Modal::Properties {
+            entry,
+            size,
+            size_task,
+        } => properties_modal_text(entry, *size, size_task.is_some()),
         Modal::ConfirmQuit => (
             t("modal-confirm-quit-title"),
             format!("{}\n{}", t("modal-confirm-quit-body"), hints.confirm),
@@ -3481,6 +3496,119 @@ fn approval_modal_text(
 /// tan fácil como tecleado, y `PatternError` EMBEBE el patrón verbatim en su
 /// mensaje (rustdoc de `PatternError::Glob`) — el enmascarado alcanza
 /// también a la línea de error.
+/// El texto del diálogo de propiedades (#139).
+///
+/// El nombre y los valores de atributo son datos de FICHERO, así que van
+/// enmascarados con el mismo `display_name` que el listado: un nombre con bidi
+/// o invisibles no reordena este diálogo.
+fn properties_modal_text(
+    entry: &norte_proto::Entry,
+    size: Option<(u64, u64)>,
+    contando: bool,
+) -> (String, String) {
+    use norte_proto::EntryKind;
+
+    let (nombre, hostil) = display_name(
+        entry
+            .path
+            .file_name()
+            .map_or(b"".as_slice(), norte_proto::Segment::as_bytes),
+    );
+    let titulo = if hostil {
+        format!("{HOSTILE_BADGE} {nombre}")
+    } else {
+        nombre
+    };
+    let clase = match entry.kind {
+        EntryKind::Dir => t("props-kind-dir"),
+        EntryKind::File => t("props-kind-file"),
+        EntryKind::Symlink => t("props-kind-symlink"),
+        _ => t("props-kind-other"),
+    };
+    let mut lineas = vec![format!("{}: {}", t("props-kind"), clase)];
+    // El tamaño de una CARPETA no sale del listado: o se ha contado, o se está
+    // contando, o —si nadie lo pidió— se dice que se puede pedir. Fingir un
+    // cero sería la única respuesta claramente falsa.
+    let tamano = match (entry.kind, size, contando) {
+        (_, Some((bytes, entradas)), _) => format!(
+            "{} ({})",
+            norte_frontend::human_bytes(bytes),
+            ta("props-entries", &[("count", &entradas.to_string())])
+        ),
+        (EntryKind::Dir, None, true) => t("props-counting"),
+        (EntryKind::Dir, None, false) => t("props-count-hint"),
+        (_, None, _) => entry
+            .size
+            .map_or_else(|| t("props-size-unknown"), norte_frontend::human_bytes),
+    };
+    lineas.push(format!("{}: {}", t("props-size"), tamano));
+    lineas.push(format!(
+        "{}: {}",
+        t("props-modified"),
+        entry.mtime_ms.map_or_else(
+            || t("props-mtime-unknown"),
+            |ms| norte_frontend::columns::format_mtime(
+                ms,
+                norte_frontend::columns::TimeFormat::Iso,
+                0
+            )
+        )
+    ));
+    let (ruta, ruta_hostil) = display_name(entry.path.to_wire().as_bytes());
+    lineas.push(format!(
+        "{}: {}{}",
+        t("props-path"),
+        if ruta_hostil {
+            format!("{HOSTILE_BADGE} ")
+        } else {
+            String::new()
+        },
+        ruta
+    ));
+    // Los atributos que el provider haya reportado, tal cual: los pinta quien
+    // los pidió, y esta ventana no pide ninguno de más.
+    for (id, valor) in &entry.attrs {
+        let (v, v_hostil) = attr_texto(valor);
+        lineas.push(format!(
+            "{id}: {}{v}",
+            if v_hostil {
+                format!("{HOSTILE_BADGE} ")
+            } else {
+                String::new()
+            }
+        ));
+    }
+    lineas.push(t("props-hint"));
+    (titulo, lineas.join("\n"))
+}
+
+/// El valor de un atributo, listo para pintar, y si hubo que enmascararlo.
+///
+/// Los dos de TERCEROS —texto y bytes— pasan por `display_name`, el mismo
+/// camino lossy-con-badge que un nombre de fichero: un `owner` con bidi no
+/// reordena este diálogo, y los bytes originales no se tocan (regla 1).
+fn attr_texto(v: &norte_proto::AttrValue) -> (String, bool) {
+    use norte_proto::AttrValue;
+    match v {
+        AttrValue::Uint(n) => (n.to_string(), false),
+        AttrValue::Int(i) => (i.to_string(), false),
+        AttrValue::TimeMs(ms) => (
+            norte_frontend::columns::format_mtime(
+                *ms,
+                norte_frontend::columns::TimeFormat::Iso,
+                0,
+            ),
+            false,
+        ),
+        AttrValue::Bool(b) => (t(if *b { "col-cell-yes" } else { "col-cell-no" }), false),
+        AttrValue::Text(s) => display_name(s.as_bytes()),
+        AttrValue::Bytes(b) => display_name(b),
+        // Presente-pero-impintable: «?» visible. El blanco queda reservado
+        // para AUSENTE, como en las celdas del listado.
+        AttrValue::Unknown => ("?".to_owned(), false),
+    }
+}
+
 fn mark_pattern_modal_text(mark: bool, pattern: &str, error: Option<&str>) -> (String, String) {
     let (masked, hostil) = display_name(pattern.as_bytes());
     // #103 T9 review MINOR: `PaneState::mark_glob` compila el patrón CRUDO,
