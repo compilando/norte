@@ -65,6 +65,35 @@ impl History {
         self.deque.truncate(HISTORY_MAX);
     }
 
+    /// El rastro de vuelta, del más viejo al más reciente: lo que la sesión
+    /// guarda para que `nav.back` siga funcionando tras un reinicio.
+    #[must_use]
+    pub fn trail(&self) -> &[VPath] {
+        &self.back
+    }
+
+    /// La rama de la que se salió con un `nav.back`, del más viejo al más
+    /// reciente.
+    #[must_use]
+    pub fn forward_trail(&self) -> &[VPath] {
+        &self.fwd
+    }
+
+    /// Siembra los dos rastros desde una sesión guardada.
+    ///
+    /// El MRU se reconstruye DEL rastro y no se guarda aparte: es lo que el
+    /// popup lista, se deriva de por dónde se ha pasado, y guardarlo por
+    /// separado sería una segunda copia de la misma historia que puede
+    /// contradecir a la primera. Se empuja del más viejo al más reciente para
+    /// que el orden del popup salga igual que si se hubiera andado.
+    pub fn seed(&mut self, back: Vec<VPath>, fwd: Vec<VPath>) {
+        for p in &back {
+            self.push(p.clone());
+        }
+        self.back = back;
+        self.fwd = fwd;
+    }
+
     /// Retira TODAS las ocurrencias de `path` (p.ej. tras un `cd` fallido
     /// con `NotFound` al navegar desde el popup — la spec dice "se
     /// RETIRA si el cd falla con `NotFound`").

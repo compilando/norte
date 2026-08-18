@@ -937,6 +937,117 @@ impl crate::observer::MutationObserver for LazyJournal {
     }
 }
 
+/// La sesión de UI de un proceso SIN daemon (L2).
+///
+/// El daemon guarda la pantalla en un `SessionStore` y la vuelca a
+/// `<state_dir>/session.json`. Un frontend embebido no tiene daemon, así que
+/// es su propio almacén: el mismo fichero y el MISMO lock, para que un
+/// embebido y un daemon —o dos embebidos— no se pisen la pantalla.
+///
+/// Uno por proceso, y por eso es un `OnceLock`: dos almacenes vivos serían dos
+/// candidatos al mismo lock dentro del mismo proceso, y el segundo se vería
+/// suelto por culpa del primero.
+static UI_SESSION: std::sync::OnceLock<EmbeddedSession> = std::sync::OnceLock::new();
+
+/// El almacén embebido: la sesión viva, dónde se escribe, y el derecho a
+/// escribirla.
+struct EmbeddedSession {
+    /// La sesión viva de ESTE proceso.
+    store: Arc<crate::ui_session::SessionStore>,
+    /// Dónde volcarla. `Some` solo si además se tiene el lock: sin él no se
+    /// escribe, y guardar la ruta invitaría a hacerlo.
+    dir: Option<PathBuf>,
+    /// El derecho a escribir, mientras el proceso viva.
+    _lock: Option<crate::ui_session::disk::SessionLock>,
+}
+
+/// El almacén de este proceso, abriéndolo la primera vez.
+///
+/// Síncrono a propósito: lo llaman los dos envoltorios de abajo desde DENTRO
+/// de un `spawn_blocking` (regla 2).
+fn ui_session_blocking() -> &'static EmbeddedSession {
+    UI_SESSION.get_or_init(|| {
+        let Some(dir) = norte_config::dirs::state_dir() else {
+            // Sin directorio de estado —un entorno sin `HOME`— hay pantalla
+            // viva y no hay dónde guardarla. Es lo que ya pasaba antes de que
+            // existiera la sesión, no un fallo nuevo.
+            return EmbeddedSession {
+                store: Arc::new(crate::ui_session::SessionStore::default()),
+                dir: None,
+                _lock: None,
+            };
+        };
+        let lock = crate::ui_session::disk::lock(&dir).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "no se pudo tomar el lock de la sesión de UI");
+            None
+        });
+        let session = crate::ui_session::disk::load_or_default(&dir);
+        EmbeddedSession {
+            // El derecho a escribir es del lock: sin él hay ruta en el disco y
+            // no hay a dónde escribir.
+            dir: lock.is_some().then_some(dir),
+            store: Arc::new(crate::ui_session::SessionStore::new(session)),
+            _lock: lock,
+        }
+    })
+}
+
+/// La sesión guardada y si este proceso puede escribirla.
+///
+/// El `conn` que reclama la propiedad es el mismo para todo el proceso: en
+/// embebido no hay conexiones, hay UNA superficie.
+pub async fn session_get() -> (norte_proto::methods::Session, bool) {
+    tokio::task::spawn_blocking(|| {
+        let s = ui_session_blocking();
+        let dueño = s.store.claim(0) && s.dir.is_some();
+        (s.store.get(), dueño)
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Reemplaza la sesión y la vuelca, si este proceso es quien escribe.
+///
+/// Un proceso SUELTO —el que no consiguió el lock— sí actualiza su sesión en
+/// memoria y no toca el disco: es la misma semántica que el segundo cliente de
+/// un daemon, y lo que hace que abrir una segunda ventana no le cueste la
+/// pantalla a la primera.
+///
+/// # Errors
+///
+/// [`norte_proto::Error::Conflict`] con `StaleRevision` y
+/// [`norte_proto::Error::LimitExceeded`] con `LIMIT_SESSION_BODY`: las mismas
+/// dos negativas que da el daemon, para que el cliente no tenga dos caminos.
+pub async fn session_put(
+    version: u32,
+    revision: u64,
+    body: serde_json::Value,
+) -> Result<u64, norte_proto::Error> {
+    tokio::task::spawn_blocking(move || {
+        let s = ui_session_blocking();
+        let rev = s.store.put(version, revision, body).map_err(|e| match e {
+            crate::ui_session::PutError::Conflict { .. } => norte_proto::Error::Conflict {
+                conflict: norte_proto::ConflictKind::StaleRevision,
+            },
+            crate::ui_session::PutError::TooLarge { .. } => norte_proto::Error::LimitExceeded {
+                limit: norte_proto::Error::LIMIT_SESSION_BODY.to_owned(),
+            },
+            crate::ui_session::PutError::NotOwner => norte_proto::Error::PermissionDenied,
+        })?;
+        if let Some(dir) = &s.dir
+            && let Some(sesion) = s.store.take_dirty()
+            && let Err(e) = crate::ui_session::disk::write(dir, &sesion)
+        {
+            // Un volcado fallido no tumba nada: la sesión viva sigue en pie y
+            // el siguiente `put` la vuelve a intentar entera.
+            tracing::warn!(error = %e, "no se pudo escribir la sesión de UI");
+        }
+        Ok(rev)
+    })
+    .await
+    .unwrap_or(Err(norte_proto::Error::Internal { panic: true }))
+}
+
 /// El engine embebido de un frontend: journal perezoso sobre `state_dir`.
 ///
 /// Es lo que llaman `norte-tui` y `norte-cli` en vez de `Engine::new()`. No

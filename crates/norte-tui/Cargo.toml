@@ -18,6 +18,11 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+# El cuerpo OPACO de la sesión de UI (L2) cruza el wire como
+# `serde_json::Value`: este crate lo captura y lo aplica, así que necesita el
+# tipo. Ya estaba aquí como dev-dependency y en el grafo vía norte-proto —
+# nada nuevo entra a compilar (regla 8).
+serde_json.workspace = true
 crossterm = { workspace = true, features = ["event-stream"] }
 futures.workspace = true
 mlua.workspace = true

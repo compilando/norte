@@ -1076,6 +1076,46 @@ impl Backend {
         }
     }
 
+    /// La sesión de UI guardada y si ESTA superficie puede escribirla (L2).
+    ///
+    /// Contra el daemon es `session.get`. En EMBEBIDO no hay socket, así que
+    /// el proceso es su propio almacén: el fichero de `<state_dir>` y el mismo
+    /// lock que usa el daemon, tomado una vez por proceso. Sin `state_dir` —un
+    /// entorno sin `HOME`— se sirve una sesión vacía que nadie escribe, que es
+    /// exactamente lo que hoy hace un arranque sin sesión guardada.
+    ///
+    /// # Errors
+    ///
+    /// Lo que devuelva el transporte. Un fallo NO es motivo para no arrancar:
+    /// el llamante sigue con la pantalla de la configuración.
+    pub async fn session_get(&self) -> Result<(norte_proto::methods::Session, bool), Error> {
+        match self {
+            Self::Embedded(_) => Ok(crate::embedded::session_get().await),
+            #[cfg(unix)]
+            Self::Remote(r) => r.session_get().await,
+        }
+    }
+
+    /// Reemplaza la sesión de UI y devuelve la revisión NUEVA (L2).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Conflict`] si la revisión venía rancia (re-lee y reintenta),
+    /// [`Error::LimitExceeded`] si el cuerpo pasa del tope, y lo que dé el
+    /// transporte en lo demás.
+    pub async fn session_put(
+        &self,
+        version: u32,
+        revision: u64,
+        body: serde_json::Value,
+    ) -> Result<u64, Error> {
+        match self {
+            Self::Embedded(_) => crate::embedded::session_put(version, revision, body).await,
+            #[cfg(unix)]
+            Self::Remote(r) => r.session_put(version, revision, body).await,
+        }
+    }
+
     /// Búsqueda viva (`fs.search`, live search): devuelve la Task
     /// ([`TaskRef`], cancelable con `TaskRef::cancel`) y el STREAM de lotes de
     /// hits ([`norte_proto::methods::SearchHits`]).
@@ -3670,6 +3710,35 @@ pub mod remote {
                 )
                 .await?;
             Ok(result.volumes)
+        }
+
+        /// `session.get` contra el daemon (L2): la pantalla y si ESTA conexión
+        /// es la dueña.
+        pub(super) async fn session_get(&self) -> Result<(methods::Session, bool), Error> {
+            let r: methods::SessionGetResult = self
+                .call_timed(methods::SESSION_GET, &serde_json::json!({}))
+                .await?;
+            Ok((r.session, r.owner))
+        }
+
+        /// `session.put` contra el daemon (L2): devuelve la revisión NUEVA.
+        pub(super) async fn session_put(
+            &self,
+            version: u32,
+            revision: u64,
+            body: serde_json::Value,
+        ) -> Result<u64, Error> {
+            let r: methods::SessionPutResult = self
+                .call_timed(
+                    methods::SESSION_PUT,
+                    &methods::SessionPutParams {
+                        version,
+                        revision,
+                        body,
+                    },
+                )
+                .await?;
+            Ok(r.revision)
         }
 
         /// `plugin.set_approval` contra el daemon (M4-P3).

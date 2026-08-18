@@ -139,6 +139,39 @@ pub fn write(state_dir: &Path, session: &Session) -> std::io::Result<()> {
     std::fs::rename(&tmp, &file)
 }
 
+/// La sesión de `state_dir`, contando en voz alta lo que no sea «cargada».
+///
+/// Los tres desenlaces que no traen sesión tienen la MISMA respuesta —arrancar
+/// desde la configuración— y solo se diferencian en lo que hay que decirle al
+/// humano, así que la elección de qué hacer no es del llamante: lo único suyo
+/// es dónde vive el estado. Lo comparten el daemon y el frontend embebido, que
+/// si no dirían dos cosas distintas del mismo fichero.
+///
+/// Los avisos son la mitad del valor de estos desenlaces: sin ellos, «la
+/// pantalla salió en blanco» es indistinguible de «nunca se guardó».
+///
+/// Síncrono: los dos llamantes lo invocan dentro de un `spawn_blocking`
+/// (regla 2).
+#[must_use]
+pub fn load_or_default(state_dir: &Path) -> Session {
+    match load(state_dir) {
+        LoadOutcome::Loaded(s) => s,
+        LoadOutcome::Fresh => Session::default(),
+        LoadOutcome::Corrupt { reason } => {
+            tracing::warn!(%reason, "sesión de UI ilegible: se arranca desde la configuración");
+            Session::default()
+        }
+        LoadOutcome::FromTheFuture { version } => {
+            tracing::warn!(
+                version,
+                conocida = SCHEMA_VERSION,
+                "sesión de UI de una versión más nueva: no se lee y NO se pisa"
+            );
+            Session::default()
+        }
+    }
+}
+
 /// El derecho a ESCRIBIR la sesión de este `state_dir`, mientras viva.
 ///
 /// Lo suelta su `Drop`, y el SO lo suelta igual si el proceso muere de golpe:

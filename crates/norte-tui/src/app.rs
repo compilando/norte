@@ -620,6 +620,12 @@ impl Pane {
         self.state.set_show_hidden(show);
     }
 
+    /// ¿Se ven los ocultos? Delegado puro.
+    #[must_use]
+    pub fn show_hidden(&self) -> bool {
+        self.state.show_hidden()
+    }
+
     /// Entradas apartadas por la ocultación (#107). Delegado puro.
     #[must_use]
     pub fn hidden_count(&self) -> usize {
@@ -879,6 +885,38 @@ pub enum KeyOwner {
     Metadata,
 }
 
+/// Lo que este proceso sabe de la sesión guardada (L2).
+///
+/// Junto y no cinco campos sueltos en [`App`]: son una sola cosa —la pantalla
+/// que se guarda— y los tres privados solo tienen sentido entre ellos.
+#[derive(Debug, Default)]
+pub struct SessionUi {
+    /// Esta ventana NO es la dueña: otra la tiene, así que ésta arranca con la
+    /// misma pantalla y a partir de ahí va por su cuenta sin escribir nada. Lo
+    /// dice la barra de estado.
+    pub detached: bool,
+    /// La revisión que este proceso tiene por vigente: la del último
+    /// `get`/`put`. Un `put` que la traiga rancia se rehúsa, que es toda la
+    /// historia de concurrencia que hay.
+    pub revision: u64,
+    /// Estado por hueco que vino en la sesión y que este layout NO tiene.
+    ///
+    /// Se conserva y se vuelve a escribir tal cual: cambiar de disposición no
+    /// puede costarte el historial de un panel al que vas a volver. Lo recorta
+    /// [`norte_frontend::session::SessionBody::prune`], que es quien sabe
+    /// cuántos huérfanos caben.
+    orphans: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
+    /// Cuándo se tocó cada hueco por última vez (epoch ms), para la barrida
+    /// por edad. Se guarda en vez de sellarse al capturar porque capturar no
+    /// es tocar: dos capturas seguidas de la misma pantalla tienen que dar el
+    /// mismo documento.
+    touched: std::collections::HashMap<u32, u64>,
+    /// El cursor que traía la sesión, hasta que llegue el listado que lo puede
+    /// colocar: sobre un pane vacío, poner el cursor en la fila 12 es ponerlo
+    /// en la 0.
+    cursors: std::collections::HashMap<u32, u64>,
+}
+
 /// Estado completo del TUI: los paneles y el foco.
 pub struct App {
     /// Los dos paneles (izquierda, derecha), guardados por hueco.
@@ -969,6 +1007,8 @@ pub struct App {
     pub modal: Option<Modal>,
     /// Último mensaje para la barra (error por categoría o resultado).
     pub message: Option<String>,
+    /// Todo lo que este proceso sabe de la sesión guardada (L2).
+    pub session: SessionUi,
     /// Panel de tasks vivo.
     pub board: crate::tasks::TaskBoard,
     /// Viewer abierto (F3); None = navegando.
@@ -2065,6 +2105,7 @@ impl App {
             which_key: None,
             modal: None,
             message: None,
+            session: SessionUi::default(),
             board: crate::tasks::TaskBoard::default(),
             viewer: None,
             help: None,
@@ -3515,6 +3556,126 @@ impl App {
         self.layout_picker = Some(norte_frontend::layout_picker::LayoutPicker::open(
             del_usuario,
         ));
+    }
+
+    /// La pantalla de AHORA como cuerpo de sesión (L2).
+    ///
+    /// Lleva la disposición y, por hueco de listado, dónde está, cómo mira y
+    /// por dónde ha pasado. NO lleva las marcas: son el estado de una
+    /// operación a medias, no de una sesión, y devolverlas al arrancar sería
+    /// devolver un `F8` apuntando a lo que uno marcó ayer.
+    ///
+    /// Los huecos que la sesión traía y este layout no tiene viajan de vuelta
+    /// intactos ([`SessionUi::orphans`]).
+    #[must_use]
+    pub fn session_body(&self) -> norte_frontend::session::SessionBody {
+        use norte_frontend::session::{SessionBody, SlotState};
+
+        let mut body = SessionBody {
+            layouts: std::iter::once(("default".to_owned(), self.layout.clone())).collect(),
+            slots: self.session.orphans.clone(),
+        };
+        for id in self.layout.slot_ids() {
+            let Some(pane) = self.panes.browser(id) else {
+                continue;
+            };
+            let historia = self.history.for_slot(id);
+            body.slots.insert(
+                id.0,
+                SlotState {
+                    path: pane.dir().clone(),
+                    cursor: pane.cursor() as u64,
+                    back: historia.map(|h| h.trail().to_vec()).unwrap_or_default(),
+                    forward: historia
+                        .map(|h| h.forward_trail().to_vec())
+                        .unwrap_or_default(),
+                    sort: pane.sort(),
+                    // Las columnas son de la CONFIGURACIÓN por scheme, no
+                    // estado por hueco: capturarlas aquí inventaría un estado
+                    // que este frontend no tiene. El campo existe para quien
+                    // sí lo tenga.
+                    columns: Vec::new(),
+                    show_hidden: pane.show_hidden(),
+                    touched_ms: self.session.touched.get(&id.0).copied().unwrap_or_default(),
+                },
+            );
+        }
+        body
+    }
+
+    /// Aplica una sesión guardada y dice qué huecos necesitan listado.
+    ///
+    /// Pone la disposición, siembra cada listado con su directorio, su orden,
+    /// sus ocultos y sus dos rastros, y GUARDA el cursor para cuando llegue el
+    /// listado ([`Self::restore_cursor`]): sobre un pane vacío no hay fila 12
+    /// donde ponerlo.
+    ///
+    /// Lo que el layout no tiene se conserva aparte en vez de tirarse.
+    pub fn apply_session(
+        &mut self,
+        body: &norte_frontend::session::SessionBody,
+    ) -> Vec<norte_frontend::layout::SlotId> {
+        if let Some(arbol) = body.layouts.get("default") {
+            self.set_layout(arbol.clone());
+        }
+        let mut pedir = Vec::new();
+        self.session.orphans.clear();
+        for (raw, estado) in &body.slots {
+            let id = norte_frontend::layout::SlotId(*raw);
+            self.session.touched.insert(*raw, estado.touched_ms);
+            let Some(pane) = self.panes.browser_mut(id) else {
+                // Un hueco que este layout no tiene NO se borra: se guarda tal
+                // cual y se vuelve a escribir. Volver a la disposición de ayer
+                // devuelve el panel donde estaba.
+                self.session.orphans.insert(*raw, estado.clone());
+                continue;
+            };
+            *pane = Pane::new(estado.path.clone(), Vec::new());
+            pane.set_sort(estado.sort);
+            pane.set_show_hidden(estado.show_hidden);
+            self.session.cursors.insert(*raw, estado.cursor);
+            self.history
+                .for_slot_mut(id)
+                .seed(estado.back.clone(), estado.forward.clone());
+            pedir.push(id);
+        }
+        pedir
+    }
+
+    /// Coloca el cursor que traía la sesión, ahora que el listado ya está.
+    ///
+    /// Se consume: es de UNA vez, la del arranque. Fuera del listado se clampa
+    /// —un directorio con menos entradas que ayer no deja el cursor fuera— y
+    /// eso lo hace [`Pane::set_cursor`].
+    pub fn restore_cursor(&mut self, id: norte_frontend::layout::SlotId) {
+        let Some(fila) = self.session.cursors.remove(&id.0) else {
+            return;
+        };
+        if let Some(pane) = self.panes.browser_mut(id) {
+            pane.set_cursor(usize::try_from(fila).unwrap_or(usize::MAX));
+        }
+    }
+
+    /// Marca un hueco como tocado AHORA, para la barrida por edad.
+    pub fn touch_session_slot(&mut self, id: norte_frontend::layout::SlotId, now_ms: u64) {
+        self.session.touched.insert(id.0, now_ms);
+    }
+
+    /// Aplica el cuerpo OPACO que vino del core, o dice por qué no.
+    ///
+    /// Un cuerpo que no se puede leer NO deja pantalla en blanco: se queda la
+    /// disposición de la configuración y se avisa. Es la misma decisión que
+    /// toma el core con un fichero corrupto, un proceso más allá.
+    pub fn apply_session_value(&mut self, v: &serde_json::Value) {
+        match norte_frontend::session::SessionBody::from_value(v) {
+            Ok(body) => {
+                self.apply_session(&body);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "sesión de UI ilegible");
+                self.message = Some(t("msg-session-unreadable"));
+            }
+        }
     }
 
     /// Pone la disposición `name`, y dice si lo consiguió.

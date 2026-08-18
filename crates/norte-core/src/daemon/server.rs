@@ -879,38 +879,10 @@ async fn open_session(
             tracing::warn!(error = %e, "no se pudo tomar el lock de la sesión de UI");
             None
         });
-        (lock, load_session(&dir))
+        (lock, crate::ui_session::disk::load_or_default(&dir))
     })
     .await
     .map_err(|e| DaemonError::Io(std::io::Error::other(e)))
-}
-
-/// Carga la sesión de UI de `state_dir`, contando en voz alta lo que no sea
-/// «cargada» y devolviendo una vacía en los tres casos restantes.
-///
-/// Síncrono: se llama dentro del `spawn_blocking` del bind (regla 2).
-fn load_session(state_dir: &Path) -> norte_proto::methods::Session {
-    use crate::ui_session::disk::LoadOutcome;
-
-    match crate::ui_session::disk::load(state_dir) {
-        LoadOutcome::Loaded(s) => s,
-        LoadOutcome::Fresh => norte_proto::methods::Session::default(),
-        // Los dos avisos son la mitad del valor de estos desenlaces: sin
-        // ellos, «la pantalla salió en blanco» es indistinguible de «nunca se
-        // guardó», y el humano no tiene ni qué mirar ni qué contar.
-        LoadOutcome::Corrupt { reason } => {
-            tracing::warn!(%reason, "sesión de UI ilegible: se arranca desde la configuración");
-            norte_proto::methods::Session::default()
-        }
-        LoadOutcome::FromTheFuture { version } => {
-            tracing::warn!(
-                version,
-                conocida = crate::ui_session::disk::SCHEMA_VERSION,
-                "sesión de UI de una versión más nueva: no se lee y NO se pisa"
-            );
-            norte_proto::methods::Session::default()
-        }
-    }
 }
 
 /// El único escritor de la sesión de UI: coalesce los cambios y los vuelca.
