@@ -609,6 +609,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(p) = &app.columns_picker {
         draw_columns_picker(frame, p, &app.theme, &app.dialog_hints.columns);
     }
+    // Fase A: el selector de disposiciones, con el mismo allowlist de teclas
+    // que el de temas (`ALLOW_PICKER`) y por eso el mismo hint.
+    if let Some(p) = &app.layout_picker {
+        draw_layout_picker(frame, p, &app.theme, &app.dialog_hints.picker);
+    }
     if let Some(mgr) = &app.extensions {
         if let Some(panel) = &mgr.config {
             draw_plugin_config_panel(frame, panel, &app.theme, &app.dialog_hints.plugin_config);
@@ -1481,6 +1486,155 @@ fn draw_columns_picker(
     let mut state = ListState::default();
     state.select(Some(p.cursor()));
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// Ancho, en celdas, de la vista previa del selector de disposiciones.
+///
+/// Fijo, y no proporcional al frame: la vista previa es un DIBUJO a escala de
+/// la pantalla, y su parecido con lo que saldrá no mejora por ser más grande.
+const LAYOUT_PREVIEW_W: u16 = 30;
+
+/// Alto de esa misma vista previa. La proporción importa más que el tamaño —
+/// una vista previa cuadrada haría pasar por alto un `simple` por un
+/// `orthodox`.
+const LAYOUT_PREVIEW_H: u16 = 10;
+
+/// Fase A: el selector de disposiciones. Las filas a la izquierda y, a la
+/// derecha, la pantalla que daría la que está bajo el cursor.
+///
+/// **La vista previa sale del REPARTO del árbol**, no de un dibujo guardado al
+/// lado del fichero: un dibujo guardado empieza a mentir en cuanto alguien
+/// toca un tamaño, y el lector no tiene forma de saber cuál de los dos es la
+/// pantalla de verdad.
+///
+/// Solo se dibuja la de un preset DE FÁBRICA, cuyo TOML va embebido. Una
+/// disposición del usuario vive en disco, y leer un fichero en el camino de
+/// pintado —una vez por frame— es la clase de coste que no se ve hasta que la
+/// config está en un directorio de red.
+fn draw_layout_picker(
+    frame: &mut Frame<'_>,
+    p: &norte_frontend::layout_picker::LayoutPicker,
+    theme: &TuiTheme,
+    hint: &str,
+) {
+    use norte_frontend::layout::{KindRegistry, presets};
+    use norte_frontend::layout_picker::preview;
+
+    let filas: Vec<String> = p
+        .rows()
+        .iter()
+        .map(|r| {
+            let procedencia = if r.factory {
+                t("layout-picker-factory")
+            } else {
+                t("layout-picker-mine")
+            };
+            // El nombre viene de `NAMES` o de un STEM de fichero, que el
+            // listador ya filtró a UTF-8; el enmascarado es cinturón, como en
+            // el picker de columnas.
+            let nombre = norte_encoding::mask_terminal_hazards(&r.name);
+            format!(" {nombre} · {procedencia}")
+        })
+        .collect();
+    // La nota del keymap habla de la fila BAJO EL CURSOR, no de la lista: es
+    // un aviso sobre lo que el lector está a punto de elegir.
+    // La nota va DENTRO de la caja, en su propia línea, y no en el pie: un
+    // aviso que se corta a media frase por no caber en el borde es peor que
+    // no darlo, y a 80 columnas el pie no da para las dos cosas.
+    let texto_nota = format!(" {}", t("layout-picker-keymap-note"));
+    let hay_nota = p
+        .rows()
+        .get(p.cursor())
+        .is_some_and(|r| r.shares_keymap_name);
+    let pie = format!(" {hint} ");
+
+    let lista_w = filas
+        .iter()
+        .map(|f| Line::raw(f.as_str()).width())
+        .max()
+        .unwrap_or(0);
+    let lista_w = u16::try_from(lista_w).unwrap_or(u16::MAX).max(18);
+    let dentro = lista_w.saturating_add(LAYOUT_PREVIEW_W).saturating_add(1);
+    // `+ 2` por los bordes, y el pie se mide DENTRO de ellos: sin sumarlos
+    // aquí la nota del keymap se corta a media palabra, que es peor que no
+    // darla.
+    // El ancho se reserva para la nota SIEMPRE que alguna fila pueda pedirla,
+    // no solo cuando la pide la de ahora: si no, la caja se encoge y se
+    // ensancha mientras el cursor recorre las filas, y lo que se compara es
+    // justamente el dibujo de dentro.
+    let nota_w = if p.rows().iter().any(|r| r.shares_keymap_name) {
+        u16::try_from(Line::raw(texto_nota.as_str()).width()).unwrap_or(u16::MAX)
+    } else {
+        0
+    };
+    let ancho = dentro
+        .max(u16::try_from(Line::raw(pie.as_str()).width()).unwrap_or(u16::MAX))
+        .max(nota_w)
+        .saturating_add(2)
+        .min(frame.area().width);
+    let alto_filas = u16::try_from(filas.len()).unwrap_or(u16::MAX);
+    // La línea de la nota se reserva SIEMPRE que la lista pueda pedirla, por
+    // lo mismo que el ancho: la caja no debe cambiar de alto al moverse.
+    let alto_nota = u16::from(nota_w > 0);
+    let alto = alto_filas
+        .max(LAYOUT_PREVIEW_H)
+        .saturating_add(2)
+        .saturating_add(alto_nota)
+        .min(frame.area().height.max(3));
+    let area = centered(frame.area(), ancho, alto);
+    clear_themed(frame, area, theme);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("layout-picker-title")))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(Line::raw(pie))
+        .border_style(theme.role(Role::ModalBorder));
+    let dentro_area = block.inner(area);
+    frame.render_widget(block, area);
+
+    let franjas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(alto_nota)])
+        .split(dentro_area);
+    if hay_nota && franjas[1].height > 0 {
+        frame.render_widget(
+            Paragraph::new(Line::raw(texto_nota.as_str())).style(theme.role(Role::Info)),
+            franjas[1],
+        );
+    }
+    let mitades = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(lista_w.min(franjas[0].width)),
+            Constraint::Min(0),
+        ])
+        .split(franjas[0]);
+
+    let items: Vec<ListItem<'_>> = filas.into_iter().map(ListItem::new).collect();
+    let list = List::new(items).highlight_style(theme.role(Role::Selection));
+    let mut state = ListState::default();
+    state.select(Some(p.cursor()));
+    frame.render_stateful_widget(list, mitades[0], &mut state);
+
+    if mitades[1].width == 0 || mitades[1].height == 0 {
+        return; // un frame estrecho se queda con la lista, que es lo que se elige
+    }
+    let arbol = p
+        .rows()
+        .get(p.cursor())
+        .filter(|r| r.factory)
+        .and_then(|r| presets::tree(&r.name).ok());
+    if let Some(arbol) = arbol {
+        let lineas = preview(
+            &arbol,
+            mitades[1].width,
+            mitades[1].height,
+            &KindRegistry::builtin(),
+        );
+        let texto: Vec<Line<'_>> = lineas.into_iter().map(Line::raw).collect();
+        frame.render_widget(Paragraph::new(texto), mitades[1]);
+    }
 }
 
 /// Lower bound in CELLS of the help sidebar: the width it used to have,

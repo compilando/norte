@@ -450,6 +450,35 @@ fn snapshot_columns_picker_80x24() {
     insta::assert_snapshot!(texto);
 }
 
+/// Fase A: el selector de disposiciones a 80×24. Las cinco de fábrica con su
+/// procedencia, la vista previa DIBUJADA del reparto del árbol —no de un
+/// dibujo guardado— y la nota de que elegir disposición no toca las teclas,
+/// que aparece porque `orthodox` es también el nombre de un preset de keymap.
+///
+/// El estado de este picker ya tenía tests; lo PINTADO no, y por eso pudo
+/// abrirse un diálogo invisible que se quedaba el teclado. Este snapshot es
+/// la puerta que faltaba.
+#[test]
+fn snapshot_layout_picker_80x24() {
+    let mut app = app_base();
+    app.open_layout_picker(&[]);
+    let texto = render_80x24(&app);
+    let hint = &app.dialog_hints.picker;
+    assert!(
+        !hint.is_empty(),
+        "el preset orthodox liga confirmar/cancelar"
+    );
+    assert!(
+        texto.contains("orthodox") && texto.contains("full"),
+        "las cinco de fábrica se ofrecen:\n{texto}"
+    );
+    assert!(
+        texto.contains(&norte_i18n::t("layout-picker-keymap-note")),
+        "la nota del keymap cabe entera bajo la fila que la merece:\n{texto}"
+    );
+    insta::assert_snapshot!(texto);
+}
+
 /// #117 encoding-audit L1: un id de config KILOMÉTRICO que no parsea se
 /// enseña en el picker CAPADO a `HEADER_MAX_CHARS` (paridad GUI) — sin el
 /// cap el overlay entero se ensancharía hasta el frame por un solo id.

@@ -1,0 +1,28 @@
+---
+source: crates/norte-tui/tests/snapshots_ui.rs
+expression: texto
+---
+"┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
+"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
+"│  /docs                               ││   cosa                  1 B          │"
+"│  /src                                ││                                      │"
+"│  @enlace                             ││                                      │"
+"│   nota┌ Disposición ────────────────────────────────────────────────┐        │"
+"│ ! �.da│ orthodox · de fábrica·······································│        │"
+"│       │ simple · de fábrica  ·bbbbbbbbbbbbbbbbb··bbbbbbbbbbbbbbbbbb·│        │"
+"│       │ krusader · de fábrica·bbbbbbbbbbbbbbbbb··bbbbbbbbbbbbbbbbbb·│        │"
+"│       │ explorer · de fábrica·bbbbbbbbbbbbbbbbb··bbbbbbbbbbbbbbbbbb·│        │"
+"│       │ full · de fábrica    ·bbbbbbbbbbbbbbbbb··bbbbbbbbbbbbbbbbbb·│        │"
+"│       │                      ·bbbbbbbbbbbbbbbbb··bbbbbbbbbbbbbbbbbb·│        │"
+"│       │                      ·bbbbbbbbbbbbbbbbb··bbbbbbbbbbbbbbbbbb·│        │"
+"│       │                      ·······································│        │"
+"│       │                      ·ttttttttttttttttttttttttttttttttttttt·│        │"
+"│       │                      ·sssssssssssssssssssssssssssssssssssss·│        │"
+"│       │ la disposición no cambia tus teclas (eso es [keymap] preset)│        │"
+"│       └ [Enter] confirmar [Esc] cancelar ───────────────────────────┘        │"
+"│                                      ││                                      │"
+"│                                      ││                                      │"
+"│                                      ││                                      │"
+"│                                      ││                                      │"
+"└──────────────────────────────────────┘└──────────────────────────────────────┘"
+" ⟨file⟩/casa  2/5                                                               "
