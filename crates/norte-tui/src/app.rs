@@ -899,9 +899,13 @@ pub struct SessionUi {
     /// También se pone suelta la ventana que encuentra un cuerpo de una
     /// versión más nueva: no se lee, y sobre todo no se pisa.
     pub detached: bool,
-    /// La revisión que este proceso tiene por vigente: la del último
-    /// `get`/`put`. Un `put` que la traiga rancia se rehúsa, que es toda la
-    /// historia de concurrencia que hay.
+    /// La revisión que este proceso tiene por vigente, SOLO para arrancar el
+    /// escritor de la sesión.
+    ///
+    /// A partir de ahí la de verdad la lleva el escritor, que es quien ve las
+    /// respuestas del core; ésta solo se refresca cuando avisa de un relevo. No
+    /// se compara con nada: leerla para decidir algo sería leer un número
+    /// viejo.
     pub revision: u64,
     /// Estado por hueco que vino en la sesión y que este layout NO tiene.
     ///
@@ -3657,6 +3661,29 @@ impl App {
         };
         if let Some(pane) = self.panes.browser_mut(id) {
             pane.set_cursor(usize::try_from(fila).unwrap_or(usize::MAX));
+        }
+    }
+
+    /// Adopta huecos que otra ventana guardaba y esta no tenía (#231).
+    ///
+    /// Los que el layout VIVO tiene ganan los nuestros: esta pantalla es la que
+    /// acaba de moverse. Los demás se guardan en el rincón de huérfanos y se
+    /// vuelven a escribir tal cual — el único camino que trae este mapa es un
+    /// relevo de propiedad, o sea justo cuando lo guardado no es nuestro, y
+    /// reescribir encima sin más le tiraría a alguien el historial de un panel
+    /// al que iba a volver.
+    pub fn adopt_session_orphans(
+        &mut self,
+        ajenos: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
+    ) {
+        let vivos: std::collections::BTreeSet<u32> =
+            self.layout.slot_ids().into_iter().map(|s| s.0).collect();
+        for (id, estado) in ajenos {
+            if vivos.contains(&id) {
+                continue;
+            }
+            self.session.touched.insert(id, estado.touched_ms);
+            self.session.orphans.insert(id, estado);
         }
     }
 

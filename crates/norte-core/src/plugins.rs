@@ -2565,7 +2565,7 @@ impl LocationMint {
     /// Un acuñador con las raíces protegidas de este proceso.
     pub(crate) fn new(bounds: norte_vfs_local::Bounds) -> std::sync::Arc<Self> {
         Self::with_protected(
-            crate::policy::daemon_state_root().into_iter().collect(),
+            crate::policy::protected_roots(),
             bounds,
         )
     }

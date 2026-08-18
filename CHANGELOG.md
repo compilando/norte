@@ -9,6 +9,50 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **An agent cannot reach your session file.** The policy engine protects the
+  directory holding `journal.db` and the sync spools, but the screen norte saves
+  lives in a different one — `~/.local/state/norte` — which was outside it. An
+  agent granted a scope over `$HOME` could therefore read `session.json`, which
+  is the list of every directory you have visited, or delete the lock beside it
+  and leave two norte windows both believing they were the only writer. Both
+  directories are protected now.
+
+- **Navigating no longer stutters once a second.** Saving the session ended in
+  an `fsync`, or in a round trip to the daemon, and the terminal was not reading
+  your keys while that was in flight — once a second, and precisely while you
+  were moving around, which is when there is something to save. The write now
+  happens in a task of its own (#230).
+
+- **A second window is no longer stuck as a copy forever.** Open two norte
+  windows and the second one runs detached: it says so and does not overwrite
+  the first one's screen. If the first one then closes, the second now takes
+  over saving within half a minute, instead of spending the rest of its life
+  unable to save and losing its screen on exit (#234).
+
+- **Quitting saves where you actually were.** The session was written once a
+  second and not on the way out, so closing norte right after a `cd` — or from
+  the quit dialog — stored the directory you had left. It now takes one last
+  snapshot before the process goes.
+
+- **Two windows no longer cost each other their history.** When two windows
+  raced to save, the one that lost re-read the session and rewrote its own over
+  it, dropping the panels the other one had been keeping. What only the other
+  window had is now kept (#231).
+
+- **A write that arrives while the daemon is shutting down says so.** It used to
+  be accepted and answered with a new revision, for a file nobody was going to
+  write any more (#233).
+
+- **A small terminal no longer leaves you with a screen full of panels and no
+  files.** The `explorer` and `full` screens are built from docked panels with
+  fixed sizes — a sidebar, a viewer column, a processes panel — and in a 40x10
+  terminal those sizes added up to more than the screen, so the file listings
+  were squeezed to nothing and what was left was three panel headers. A frame
+  that cannot show a listing now sets aside the biggest docked panel on the axis
+  that is short, and only that one: at 40x10 `full` gives you the sidebar, two
+  listings and the status bar. Nothing is saved or forgotten — grow the terminal
+  and the panels come straight back (#229).
+
 - **A sidebar you can widen.** Grow and shrink did nothing to a panel with a
   fixed width, which is every sidebar, so the places panel was stuck at the
   width it opened with. It now moves two columns at a time (#227).

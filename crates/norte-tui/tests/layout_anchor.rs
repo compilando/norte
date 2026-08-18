@@ -682,11 +682,12 @@ fn la_geometria_declarada_coincide_con_lo_pintado_con_el_sidebar_abierto() {
 /// - La hoja de detalles sale con «nada bajo el cursor». No es un fallo: la
 ///   llena el run loop cada vuelta (`metadata::want`), y aquí solo se pinta un
 ///   frame. Lo que la hoja enseña de verdad lo fijan los tests de `metadata`.
-/// - A 40x10, `explorer` y `full` se quedan sin listado visible: los tamaños
-///   FIJOS (16 del sidebar, 30 de la columna derecha, 8 de procesos) se
-///   respetan aunque el hermano ponderado caiga por debajo de su mínimo, que
-///   es la regla del motor. Un layout que en un terminal diminuto no enseña
-///   ni un listado es deuda —#229—, no la conducta que queremos.
+/// - A 40x10, `explorer` y `full` APARTAN cromo (#229): el panel de procesos en
+///   los dos, y en `full` también la columna derecha. Lo que se queda es lo que
+///   cabe —sidebar, listados con filas de verdad y la barra de estado—, y lo
+///   apartado vuelve solo al crecer el terminal, porque el árbol no se toca.
+///   Antes de #229 estos dos snapshots enseñaban tres cabeceras de cromo y ni
+///   un nombre de fichero.
 #[test]
 fn los_cinco_presets_pintan_lo_que_dicen() {
     for name in norte_frontend::layout::presets::NAMES {

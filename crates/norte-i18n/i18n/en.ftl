@@ -693,6 +693,7 @@ msg-layout-last-panel = cannot close the last panel
 msg-transfer-dest-invalid = that is not an address: {$err}
 msg-layout-load-failed = could not load layout "{$name}": {$err}
 msg-session-detached = another window owns the session; this one runs on its own
+msg-session-owned = this window now keeps the session
 msg-session-too-large = the session is too big to store; history dropped
 msg-session-unreadable = the stored session could not be read; starting from the configured layout
 msg-layout-applied = layout applied: { $name }

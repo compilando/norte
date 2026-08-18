@@ -1,6 +1,6 @@
 //! El reparto: árbol + área → quién se pinta, dónde, y quién no.
 
-use super::{Dir, KindRegistry, LayoutDiagnostic, Node, Rect, Size, SlotId};
+use super::{Dir, KindRegistry, LayoutDiagnostic, Node, Rect, RoleId, Size, SlotId};
 
 /// Lo que un frame necesita saber, en un solo valor.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -27,7 +27,303 @@ pub struct Resolved {
 pub fn resolve(area: Rect, tree: &Node, decls: &KindRegistry) -> Resolved {
     let mut out = Resolved::default();
     place(tree, area, decls, &mut out);
+    // #229: una pantalla sin un listado USABLE no es una pantalla, es un
+    // cuelgue con bordes. `layout.close-slot` ya se niega a cerrar el último
+    // listado por esta razón; el reparto podía producir exactamente eso, y esta
+    // es la otra mitad de la misma regla.
+    //
+    // Pasa porque los FIJOS cobran enteros y antes que los pesos, y un `Split`
+    // con un hijo fijo no colapsa (colapsarlo se llevaría el cromo). Con
+    // `full` a 40x10 eso son 16 del sidebar más 30 de la columna derecha sobre
+    // 40 columnas: los dos browsers a cero.
+    if listado_usable(&out, tree, decls) || !tiene_listado(tree, decls) {
+        return out;
+    }
+    // El cromo se aparta DEL MÁS GRANDE AL MÁS PEQUEÑO y de uno en uno, y se
+    // para en el primer intento que sí enseña un listado: así la barra de
+    // estado —un fijo de una fila— sobrevive a que se aparte un panel de ocho.
+    // El árbol de entrada NO se toca: esto vive y muere con el frame, como el
+    // colapso (ADR 0058 D5).
+    let mut podado = tree.clone();
+    let mut apartados: Vec<SlotId> = Vec::new();
+    let mut corto = ejes_cortos(&out, tree, decls);
+    // El más grande DE UN EJE CORTO, uno por vuelta. Los candidatos se
+    // recalculan sobre el árbol ya podado —apartar un hijo mueve los índices de
+    // sus hermanos— y los ejes también: apartar un panel ancho puede dejar el
+    // ancho resuelto y el alto no. Cada vuelta quita uno, así que termina.
+    while let Some(elegido) = cromo_de_mayor_a_menor(&podado, decls)
+        .into_iter()
+        .find(|c| match c.eje {
+            Dir::Horizontal => corto.0,
+            Dir::Vertical => corto.1,
+        })
+    {
+        let Some(mas_pequeno) = sin_camino(&podado, &elegido.camino) else {
+            break;
+        };
+        podado = mas_pequeno;
+        apartados.extend(elegido.slots.iter().copied());
+        let mut intento = Resolved::default();
+        place(&podado, area, decls, &mut intento);
+        if listado_usable(&intento, tree, decls) {
+            for id in &apartados {
+                intento
+                    .diagnostics
+                    .push(LayoutDiagnostic::ChromeSetAside { slot: *id });
+            }
+            // Apartado es SUSPENDIDO, no perdido: `placements` y `hidden`
+            // parten los huecos del árbol, y un panel que no se pinta y
+            // tampoco se suspende se queda con su watch abierto.
+            intento.hidden.extend(apartados);
+            return intento;
+        }
+        corto = ejes_cortos(&intento, tree, decls);
+    }
+    // Apartar todo el cromo tampoco lo arregla: se queda el reparto de verdad,
+    // que al menos respeta lo que el usuario fijó. Cambiarlo por una pantalla
+    // igual de inútil y además sin cromo no le sirve a nadie.
     out
+}
+
+/// El TOPE del suelo de «esto enseña algo»: doce columnas y cuatro filas.
+///
+/// Doce columnas es lo que ocupa un nombre corto entre bordes —un `browser` de
+/// 12x8 está apretado y sirve, y por eso el preset `krusader` a 40x10 conserva
+/// su sidebar y esta regla ni se entera—; cuatro filas son dos bordes, la
+/// cabecera y una entrada. Un panel por debajo de esto no está apretado: está
+/// vacío.
+///
+/// No es el mínimo del kind, y la diferencia es la que separa «apretado» de
+/// «vacío». El mínimo de un `browser` son 20x5 y dice cuándo un reparto
+/// PROPORCIONAL colapsa —«por debajo de esto no pinto un nombre con su
+/// tamaño»—; esto dice cuándo el panel no pinta NADA.
+///
+/// Es un TOPE y no el número final: el suelo de verdad lo da
+/// [`minimo_visible`], que parte del mínimo del kind. Así un kind modesto no
+/// tiene que fingir que necesita doce columnas, y uno exigente —el registro es
+/// abierto— no arrastra el rescate a apartar cromo persiguiendo un tamaño
+/// imposible.
+const CONTENIDO: (u16, u16) = (12, 4);
+
+/// El suelo de un kind: su propio mínimo, TOPADO por [`CONTENIDO`].
+///
+/// El tope es lo que impide que un kind exigente —el registro es abierto y
+/// `insert` es público, así que un plugin puede declarar `min = (40, 8)`— haga
+/// que el rescate aparte cromo eternamente persiguiendo un tamaño que la
+/// pantalla no tiene. El mínimo propio es lo que impide lo contrario: dar por
+/// «usable» a 4 columnas algo que declaró necesitar cuarenta.
+fn minimo_visible(decls: &KindRegistry, kind: &super::KindId) -> (u16, u16) {
+    let (mw, mh) = decls.min_of(kind);
+    (mw.min(CONTENIDO.0), mh.min(CONTENIDO.1))
+}
+
+/// ¿Hay en `out` un hueco que pueda tomar el rol `active` y con sitio para
+/// enseñar algo?
+fn listado_usable(out: &Resolved, tree: &Node, decls: &KindRegistry) -> bool {
+    out.placements.iter().any(|(id, re)| {
+        tree.kind_of(*id).is_some_and(|k| {
+            let (mw, mh) = minimo_visible(decls, k);
+            decls.holds_role(k, RoleId::Active) && re.width >= mw && re.height >= mh
+        })
+    })
+}
+
+/// En qué EJES se queda corto el mejor listado de `out`: `(ancho, alto)`.
+///
+/// Se mira por eje y no en bloque porque el cromo también es de un eje: un
+/// panel fijo dentro de un `Split` vertical se come alto y no ancho, y
+/// apartarlo no arregla un ancho corto. Sin esto, un `full` a 80x10 —donde solo
+/// falta ALTO— perdía además el sidebar y la columna derecha, que no estorbaban.
+fn ejes_cortos(out: &Resolved, tree: &Node, decls: &KindRegistry) -> (bool, bool) {
+    // Un eje se ataca si le falta a ALGUNO, no si les falta a todos.
+    //
+    // Esta función solo se llama cuando NINGÚN listado sirve, así que la
+    // pregunta no es «¿están todos estrechos?» sino «¿a cuál de los dos ejes le
+    // puedo dar sitio para que alguno sirva?». Con el «todos» fallaba una
+    // pantalla real: un listado ancho y de una fila arriba, y otro alto y de
+    // dos columnas abajo. Ninguno servía, cada uno cojeaba de un eje distinto,
+    // y como no TODOS eran estrechos ni TODOS bajos, el rescate contestaba que
+    // no faltaba ningún eje y devolvía la pantalla rota intacta.
+    let listados = || {
+        out.placements.iter().filter_map(|(id, re)| {
+            let k = tree.kind_of(*id)?;
+            decls
+                .holds_role(k, RoleId::Active)
+                .then(|| (minimo_visible(decls, k), re))
+        })
+    };
+    let mut falta = (false, false);
+    let mut hay = false;
+    for ((mw, mh), re) in listados() {
+        hay = true;
+        falta.0 |= re.width < mw;
+        falta.1 |= re.height < mh;
+    }
+    // Sin ningún listado colocado, los dos ejes están en juego: lo que falta es
+    // sitio, y no se sabe de cuál.
+    if hay { falta } else { (true, true) }
+}
+
+/// ¿Tiene el árbol algún hueco que pueda tomar el rol `active`?
+///
+/// Un layout que no lo tiene —una pantalla de solo cromo— es legal, y para él
+/// no hay nada que rescatar: se reparte y se pinta.
+fn tiene_listado(node: &Node, decls: &KindRegistry) -> bool {
+    match node {
+        Node::Slot { kind, .. } => decls.holds_role(kind, RoleId::Active),
+        Node::Split { children, .. } | Node::Tabs { children, .. } => {
+            children.iter().any(|c| tiene_listado(c, decls))
+        }
+    }
+}
+
+/// El cromo del árbol, del más grande al más pequeño.
+///
+/// **Cromo = hijo con tamaño `Fixed` cuyo subárbol no tiene ni un hueco que
+/// pueda tomar `active`.** Las dos mitades importan. Fijo, porque un ponderado
+/// ya cede sitio solo. Y sin listado dentro, porque un fijo que ES un listado
+/// no es cromo: apartarlo sería quitar una pantalla para dársela a otra.
+///
+/// No se entra en un hijo que ya es cromo: se aparta entero, y sus fijos
+/// interiores no son decisiones separadas.
+fn cromo_de_mayor_a_menor(node: &Node, decls: &KindRegistry) -> Vec<Cromo> {
+    let mut fuera = Vec::new();
+    recoge_cromo(node, decls, &[], &mut fuera);
+    // Empate resuelto por los ids: el reparto de un frame no puede depender
+    // del orden en que un `sort_unstable` deje dos panes del mismo tamaño.
+    fuera.sort_by(|a, b| {
+        b.declarado
+            .cmp(&a.declarado)
+            .then_with(|| a.slots.cmp(&b.slots))
+    });
+    fuera
+}
+
+/// Un panel acoplado que se puede apartar, y por qué eje se come el sitio.
+#[derive(Debug, Clone)]
+struct Cromo {
+    /// Las celdas que declara en el eje de su padre.
+    declarado: u16,
+    /// El eje del `Split` que lo contiene: el sitio que devuelve al apartarlo.
+    eje: Dir,
+    /// Los índices de hijo desde la raíz hasta él.
+    ///
+    /// Por POSICIÓN y no por sus `SlotId`, y no es un detalle: un árbol puede
+    /// traer el mismo id dos veces —[`super::validate`] lo rechaza, pero
+    /// `resolve` tiene que aguantar cualquier árbol— y apartar «los huecos con
+    /// este id» se llevaba también la otra copia, que se quedaba sin pintar y
+    /// sin suspender. Un hueco vivo que nadie pinta y nadie suspende es un
+    /// watch abierto mirando a nada, y lo cazó la propiedad de partición.
+    camino: Vec<usize>,
+    /// Los huecos que se lleva.
+    slots: Vec<SlotId>,
+}
+
+/// Acumula el cromo de `node` en `fuera`, arrastrando el camino desde la raíz.
+fn recoge_cromo(node: &Node, decls: &KindRegistry, aqui: &[usize], fuera: &mut Vec<Cromo>) {
+    let (Node::Split { children, .. } | Node::Tabs { children, .. }) = node else {
+        return;
+    };
+    // Un `Tabs` no reparte sitio: sus hijos lo comparten, así que ninguno es
+    // cromo por tamaño y aquí solo se baja a mirar.
+    let eje = if let Node::Split { dir, .. } = node {
+        *dir
+    } else {
+        Dir::Horizontal
+    };
+    for (i, c) in children.iter().enumerate() {
+        let mut camino = aqui.to_vec();
+        camino.push(i);
+        match (sizes_get(node, i), tiene_listado(c, decls)) {
+            (Some(Size::Fixed(n)), false) => fuera.push(Cromo {
+                declarado: n,
+                eje,
+                camino,
+                slots: c.slot_ids(),
+            }),
+            _ => recoge_cromo(c, decls, &camino, fuera),
+        }
+    }
+}
+
+/// El tamaño del hijo `i`, si su padre reparte por tamaños. Un `Tabs` no
+/// reparte: sus hijos comparten el sitio, así que ninguno es cromo por tamaño.
+fn sizes_get(node: &Node, i: usize) -> Option<Size> {
+    match node {
+        Node::Split { sizes, .. } => sizes.get(i).copied(),
+        Node::Slot { .. } | Node::Tabs { .. } => None,
+    }
+}
+
+/// El árbol sin el hijo que `camino` señala, o `None` si no queda nada.
+///
+/// Privada a propósito, y no un método de [`Node`]: los de allí son
+/// intenciones del usuario y se PERSISTEN. Esto es un apaño de un frame, y
+/// tenerlo a mano donde se guarda un layout es cómo el tamaño del terminal
+/// acaba borrándole el sidebar a alguien para siempre.
+fn sin_camino(node: &Node, camino: &[usize]) -> Option<Node> {
+    let Some((&i, resto)) = camino.split_first() else {
+        // Camino agotado: este nodo ES el que se va.
+        return None;
+    };
+    match node {
+        // Un camino que atraviesa un hueco no existe; el árbol se queda igual.
+        Node::Slot { .. } => Some(node.clone()),
+        Node::Split {
+            dir,
+            children,
+            sizes,
+        } => {
+            let mut hijos = Vec::new();
+            let mut tam = Vec::new();
+            for (j, c) in children.iter().enumerate() {
+                let queda = if j == i {
+                    sin_camino(c, resto)
+                } else {
+                    Some(c.clone())
+                };
+                if let Some(q) = queda {
+                    hijos.push(q);
+                    tam.push(sizes.get(j).copied().unwrap_or(Size::Weight(1)));
+                }
+            }
+            if hijos.is_empty() {
+                return None;
+            }
+            Some(Node::Split {
+                dir: *dir,
+                children: hijos,
+                sizes: tam,
+            })
+        }
+        Node::Tabs { children, active } => {
+            let mut hijos = Vec::new();
+            // La pestaña activa es un ÍNDICE: quitar una de delante mueve a
+            // todas las de detrás. Clamparlo sin más dejaba a la vista la
+            // siguiente y SUSPENDÍA la que el usuario estaba mirando.
+            let mut activo = *active;
+            for (j, c) in children.iter().enumerate() {
+                let queda = if j == i {
+                    sin_camino(c, resto)
+                } else {
+                    Some(c.clone())
+                };
+                if queda.is_none() && j < activo {
+                    activo -= 1;
+                }
+                if let Some(q) = queda {
+                    hijos.push(q);
+                }
+            }
+            if hijos.is_empty() {
+                return None;
+            }
+            Some(Node::Tabs {
+                active: activo.min(hijos.len() - 1),
+                children: hijos,
+            })
+        }
+    }
 }
 
 /// Lo que exige un subárbol ENTERO para caber.
@@ -445,6 +741,308 @@ mod tests {
         let out = resolve(r(0, 0, 40, 2), &arbol, &reg());
         assert_eq!(out.placements.len(), 2, "la barra de estado sobrevive");
         assert_eq!(out.placements[1].1.height, 1);
+    }
+
+    /// **#229**: el cromo acoplado se APARTA antes de dejar la pantalla sin un
+    /// listado usable.
+    ///
+    /// Es el preset `full` a 40x10: sidebar fijo de 16 y columna derecha fija
+    /// de 30 ya pasan de 40 columnas, así que los dos browsers cobraban CERO y
+    /// desaparecían; y abajo, procesos (8) más la barra (1) dejaban la fila
+    /// principal en una sola línea. Lo que quedaba en pantalla eran tres
+    /// cabeceras de cromo y ni un nombre de fichero.
+    #[test]
+    fn el_cromo_se_aparta_antes_de_dejar_la_pantalla_sin_listado() {
+        let derecha = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(6), KindId::new("viewer")),
+                Node::slot(SlotId(8), KindId::new("metadata")),
+            ],
+        };
+        let fila = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![
+                Size::Fixed(16),
+                Size::Weight(1),
+                Size::Weight(1),
+                Size::Fixed(30),
+            ],
+            children: vec![
+                Node::slot(SlotId(5), KindId::new("places")),
+                browser(1),
+                browser(2),
+                derecha,
+            ],
+        };
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(8), Size::Fixed(1)],
+            children: vec![
+                fila,
+                Node::slot(SlotId(7), KindId::new("processes")),
+                Node::slot(SlotId(4), KindId::new("status")),
+            ],
+        };
+        let out = resolve(r(0, 0, 40, 10), &arbol, &reg());
+
+        let listados: Vec<&(SlotId, Rect)> = out
+            .placements
+            .iter()
+            .filter(|(id, _)| *id == SlotId(1) || *id == SlotId(2))
+            .collect();
+        assert!(
+            listados
+                .iter()
+                .any(|(_, re)| re.width >= 4 && re.height >= 4),
+            "ningún listado enseña una fila: {:?}",
+            out.placements
+        );
+        // Se aparta lo GRANDE de un eje corto, y nada más: la columna derecha
+        // (30 de ancho) y el panel de procesos (8 de alto). Lo que cabía se
+        // queda —el sidebar y la barra de estado—, que es la diferencia entre
+        // «este layout se adapta» y «este layout se rinde».
+        for id in [SlotId(6), SlotId(8), SlotId(7)] {
+            assert!(out.hidden.contains(&id), "{id:?} debería estar apartado");
+        }
+        for id in [SlotId(5), SlotId(4)] {
+            assert!(
+                out.placements.iter().any(|(p, _)| *p == id),
+                "{id:?} cabía y se ha ido: {:?}",
+                out.placements
+            );
+        }
+        // Y apartar es SUSPENDER, con su diagnóstico: sin lo primero un panel
+        // invisible se queda con su watch abierto, y sin lo segundo nadie sabe
+        // por qué su sidebar no está.
+        assert!(
+            out.diagnostics
+                .iter()
+                .any(|d| matches!(d, LayoutDiagnostic::ChromeSetAside { .. })),
+            "sin diagnóstico: {:?}",
+            out.diagnostics
+        );
+    }
+
+    /// Dos listados que fallan cada uno POR UN EJE DISTINTO siguen siendo una
+    /// pantalla sin listado usable.
+    ///
+    /// Preguntar «¿hay alguno suficientemente ancho?» y «¿hay alguno
+    /// suficientemente alto?» por separado contestaba que no falta ningún eje
+    /// —uno cumple cada pregunta— y el rescate no se intentaba. Se mide sobre
+    /// el MEJOR candidato, que es de quien depende que la pantalla sirva.
+    #[test]
+    fn dos_listados_cojos_de_ejes_distintos_no_hacen_una_pantalla_buena() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(9)],
+            children: vec![
+                browser(1),
+                Node::Split {
+                    dir: Dir::Horizontal,
+                    sizes: vec![Size::Fixed(30), Size::Weight(1)],
+                    children: vec![Node::slot(SlotId(3), KindId::new("viewer")), browser(2)],
+                },
+            ],
+        };
+        let out = resolve(r(0, 0, 32, 10), &arbol, &reg());
+        assert!(
+            out.placements
+                .iter()
+                .any(|(id, re)| (*id == SlotId(1) || *id == SlotId(2))
+                    && re.width >= 12
+                    && re.height >= 4),
+            "ninguno de los dos listados quedó usable: {:?}",
+            out.placements
+        );
+    }
+
+    /// Apartar una pestaña de DELANTE no cambia cuál se está mirando.
+    ///
+    /// El índice activo es una posición, así que quitar la de delante corría a
+    /// todas las de detrás: se pintaba la siguiente y se suspendía la que el
+    /// usuario tenía abierta.
+    #[test]
+    fn apartar_una_pestana_no_cambia_la_que_se_esta_mirando() {
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Fixed(30), Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(9), KindId::new("viewer")),
+                Node::Tabs {
+                    active: 1,
+                    children: vec![browser(1), browser(2)],
+                },
+            ],
+        };
+        let out = resolve(r(0, 0, 34, 10), &arbol, &reg());
+        assert!(
+            out.placements.iter().any(|(id, _)| *id == SlotId(2)),
+            "se mira la pestaña 2, y es la que tiene que quedar: {:?}",
+            out.placements
+        );
+        assert!(out.hidden.contains(&SlotId(1)));
+    }
+
+    /// Un kind EXIGENTE no arrastra el rescate a apartar cromo persiguiendo un
+    /// tamaño que la pantalla no tiene: el suelo es su mínimo TOPADO.
+    #[test]
+    fn un_kind_exigente_no_vacia_la_pantalla_de_cromo() {
+        let mut reg = reg();
+        reg.insert(crate::layout::KindDecl {
+            id: KindId::new("exigente"),
+            min: (80, 30),
+            focusable: true,
+            takes_keys: true,
+            multi: false,
+            roles: &[RoleId::Active],
+        });
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Fixed(10), Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(5), KindId::new("places")),
+                Node::slot(SlotId(1), KindId::new("exigente")),
+            ],
+        };
+        let out = resolve(r(0, 0, 40, 10), &arbol, &reg);
+        assert!(
+            out.placements.iter().any(|(id, _)| *id == SlotId(5)),
+            "el sidebar cabía: 30 columnas bastan para enseñar algo"
+        );
+    }
+
+    /// Un árbol con el MISMO id dos veces no pierde una copia al apartar cromo.
+    ///
+    /// [`super::validate`] rechaza los ids repetidos, pero `resolve` tiene que
+    /// aguantar cualquier árbol, y la primera versión de esta regla apartaba
+    /// «los huecos con estos ids»: se llevaba también la otra copia, que se
+    /// quedaba sin pintar Y sin suspender —un watch abierto mirando a nada—. Lo
+    /// cazó la propiedad de partición; el caso mínimo está pineado en
+    /// `proptest-regressions/layout/resolve.txt` y esto lo dice con nombre.
+    #[test]
+    fn con_ids_repetidos_apartar_cromo_no_pierde_un_hueco() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
+            children: vec![
+                Node::Split {
+                    dir: Dir::Vertical,
+                    sizes: vec![Size::Fixed(2)],
+                    children: vec![Node::slot(SlotId(10), KindId::new("tasks"))],
+                },
+                Node::Tabs {
+                    active: 1,
+                    children: vec![browser(1), Node::slot(SlotId(10), KindId::browser())],
+                },
+            ],
+        };
+        let out = resolve(r(0, 0, 4, 4), &arbol, &reg());
+        let mut vistos: Vec<SlotId> = out.placements.iter().map(|(id, _)| *id).collect();
+        vistos.extend(out.hidden.iter().copied());
+        vistos.sort_unstable();
+        let mut todos = arbol.slot_ids();
+        todos.sort_unstable();
+        assert_eq!(vistos, todos, "un hueco se quedó sin pintar y sin suspender");
+    }
+
+    /// Cuando solo falta ALTO, el cromo de ancho no se toca. Es el mismo `full`
+    /// a 80x10: sobra ancho para el sidebar y la columna derecha, y lo único
+    /// que estorba son las ocho filas del panel de procesos.
+    #[test]
+    fn solo_se_aparta_el_cromo_del_eje_que_falta() {
+        let derecha = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(6), KindId::new("viewer")),
+                Node::slot(SlotId(8), KindId::new("metadata")),
+            ],
+        };
+        let fila = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![
+                Size::Fixed(16),
+                Size::Weight(1),
+                Size::Weight(1),
+                Size::Fixed(30),
+            ],
+            children: vec![
+                Node::slot(SlotId(5), KindId::new("places")),
+                browser(1),
+                browser(2),
+                derecha,
+            ],
+        };
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(8), Size::Fixed(1)],
+            children: vec![
+                fila,
+                Node::slot(SlotId(7), KindId::new("processes")),
+                Node::slot(SlotId(4), KindId::new("status")),
+            ],
+        };
+        let out = resolve(r(0, 0, 80, 10), &arbol, &reg());
+        // Apartado: SOLO el panel de procesos, que es el único cromo del eje
+        // que falta. El sidebar y la columna derecha son cromo de ANCHO y ahí
+        // sobra sitio, así que no se tocan.
+        assert!(out.hidden.contains(&SlotId(7)));
+        for id in [SlotId(5), SlotId(1), SlotId(2), SlotId(6), SlotId(4)] {
+            assert!(
+                out.placements.iter().any(|(p, _)| *p == id),
+                "{id:?} debería seguir en pantalla: {:?}",
+                out.placements
+            );
+        }
+        // La hoja de atributos NO se pinta, y no es cosa de esta regla: en las
+        // nueve filas que quedan no caben un visor (mínimo 5) y una hoja
+        // (mínimo 4) apilados, así que su `Split` se degrada a pestañas — el
+        // colapso de siempre.
+        assert!(out.hidden.contains(&SlotId(8)));
+        assert_eq!(
+            out.diagnostics
+                .iter()
+                .filter(|d| matches!(d, LayoutDiagnostic::ChromeSetAside { .. }))
+                .count(),
+            1,
+            "un solo panel apartado: {:?}",
+            out.diagnostics
+        );
+    }
+
+    /// Apartar cromo que NO arregla nada no se hace: a 40x2 ningún listado
+    /// llega a su mínimo ni quitando la barra, así que la barra se queda. Es la
+    /// otra mitad de #229, y la que impide que un terminal diminuto pierda el
+    /// cromo a cambio de nada.
+    #[test]
+    fn el_cromo_no_se_aparta_si_apartarlo_no_arregla_nada() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(1)],
+            children: vec![browser(1), Node::slot(SlotId(2), KindId::new("status"))],
+        };
+        let out = resolve(r(0, 0, 40, 2), &arbol, &reg());
+        assert_eq!(out.placements.len(), 2, "la barra de estado sobrevive");
+        assert!(out.hidden.is_empty());
+    }
+
+    /// Un hijo FIJO que es él mismo un listado no es cromo: apartarlo sería
+    /// quitar una pantalla para dársela a otra. La tabla de
+    /// [`si_los_fijos_no_caben_se_recortan_y_los_pesos_se_quedan_sin_nada`]
+    /// sigue valiendo tal cual, y esto lo dice por su nombre.
+    #[test]
+    fn un_fijo_que_es_un_listado_no_es_cromo() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Fixed(3), Size::Fixed(9), Size::Weight(1)],
+            children: vec![browser(1), browser(2), browser(3)],
+        };
+        let out = resolve(r(0, 0, 40, 5), &arbol, &reg());
+        let altos: Vec<u16> = out.placements.iter().map(|(_, re)| re.height).collect();
+        assert_eq!(altos, vec![3, 2, 0], "nada que apartar, nada que cambie");
+        assert!(out.hidden.is_empty());
     }
 
     /// `Auto` cuenta como cero si llega hasta aquí. No debería —lo sustituye

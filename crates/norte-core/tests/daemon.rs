@@ -7726,16 +7726,22 @@ async fn un_core_suelto_no_escribe_el_estado_ajeno() {
     // no quién lee— aunque todavía no esté en disco.
     let suelto = spawn_daemon_estado(estado.path()).await;
     let c2 = connected_client(&suelto).await;
-    let _: methods::SessionGetResult = c2
+    let g2: methods::SessionGetResult = c2
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
+    assert!(!g2.owner, "el segundo core corre suelto");
+    // La revisión sale de SU `get` y no se da por cero: el core suelto carga lo
+    // que haya en disco, y para cuando arranca, la dueña puede haber volcado ya
+    // —el primer tick de su escritor es inmediato—. Fijar el cero aquí era
+    // afirmar quién ganaba esa carrera, y bajo carga la perdía: rojo
+    // intermitente en un test que no habla de revisiones.
     let _: methods::SessionPutResult = c2
         .call(
             methods::SESSION_PUT,
             &methods::SessionPutParams {
                 version: 1,
-                revision: 0,
+                revision: g2.session.revision,
                 body: serde_json::json!({ "quien": "el suelto" }),
             },
         )

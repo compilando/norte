@@ -33,6 +33,9 @@ pub enum PutError {
         /// Bytes serializados que traía.
         bytes: usize,
     },
+    /// La sesión está CERRADA: este proceso ya volcó por última vez.
+    #[error("la sesión ya está cerrada; no queda quien la escriba")]
+    Sealed,
 }
 
 /// La sesión viva del daemon: una por proceso, con su revisión y su dueña.
@@ -48,6 +51,8 @@ struct Inner {
     owner: Option<u64>,
     /// Hay cambios sin volcar a disco.
     dirty: bool,
+    /// Ya no se admite nada más: el proceso se está apagando.
+    sealed: bool,
 }
 
 impl SessionStore {
@@ -59,6 +64,7 @@ impl SessionStore {
                 session,
                 owner: None,
                 dirty: false,
+                sealed: false,
             }),
         }
     }
@@ -92,6 +98,14 @@ impl SessionStore {
             return Err(PutError::TooLarge { bytes });
         }
         let mut g = self.lock();
+        // Bajo el MISMO lock que la mutación, y no contra un token atómico
+        // aparte: comprobar fuera y mutar dentro deja una ventana —un hilo
+        // desalojado justo en medio— por la que un `put` entra DESPUÉS del
+        // último volcado y se le contesta con una revisión que no va a llegar a
+        // ningún disco. Es la misma lección que `pin_for_task` en #205.
+        if g.sealed {
+            return Err(PutError::Sealed);
+        }
         if g.session.revision != revision {
             return Err(PutError::Conflict {
                 current: g.session.revision,
@@ -99,7 +113,13 @@ impl SessionStore {
         }
         g.session.version = version;
         g.session.body = body;
-        g.session.revision += 1;
+        // `saturating_add`: la revisión ENTRA del fichero, y un fichero es algo
+        // que cualquier proceso del mismo uid puede dejar puesto. En el tope,
+        // seguir aceptando `put` y dejar de contar es lo peor que pasa; sumar
+        // sin más era un panic en debug —dentro del mutex, envenenándolo— y una
+        // vuelta a cero en release, que reabre justo la ventana de escritor
+        // rancio que la revisión existe para cerrar.
+        g.session.revision = g.session.revision.saturating_add(1);
         g.dirty = true;
         Ok(g.session.revision)
     }
@@ -150,6 +170,64 @@ impl SessionStore {
         }
         g.dirty = false;
         Some(g.session.clone())
+    }
+
+    /// Cierra la sesión: a partir de aquí ningún `put` entra.
+    ///
+    /// Lo llama el apagado JUSTO antes del último volcado. Lo que llegue
+    /// después recibe una negativa honesta en vez de un `Ok(revision)` sobre un
+    /// fichero que ya no va a escribir nadie —y cuyo lock está a punto de
+    /// soltarse—.
+    pub fn seal(&self) {
+        self.lock().sealed = true;
+    }
+
+    /// ¿Está cerrada?
+    #[must_use]
+    pub fn sealed(&self) -> bool {
+        self.lock().sealed
+    }
+
+    /// Adopta el documento que hay EN DISCO al conseguir tarde el derecho a
+    /// escribir.
+    ///
+    /// Se lleva el cuerpo Y la revisión, no solo el número. Mientras este
+    /// proceso corría suelto, el que tenía el lock siguió guardando: su
+    /// documento es el vigente, y quedarse solo con su revisión significaba
+    /// contestarle al cliente su PROPIO cuerpo con el número del otro — y que
+    /// la primera escritura tras el relevo pisara, sin conflicto y sin aviso,
+    /// todo lo que el otro había guardado. Lo que el cliente quiera conservar
+    /// de ese documento lo decide él, que es el único que sabe leerlo.
+    ///
+    /// Una revisión más baja no se adopta: el número no va hacia atrás.
+    pub fn adopt_from_disk(&self, session: Session) {
+        let mut g = self.lock();
+        if session.revision >= g.session.revision {
+            g.session = session;
+            // Lo adoptado ya ESTÁ en disco: marcarlo sucio lo reescribiría
+            // igual, y el primer volcado del relevo sería una copia.
+            g.dirty = false;
+        }
+    }
+
+    /// Sube la revisión a la que ya hay EN DISCO, si es más alta.
+    ///
+    /// Es para un caso concreto: un proceso que arrancó sin el derecho a
+    /// escribir y lo consigue más tarde (la ventana que lo tenía se cerró).
+    /// Mientras estaba suelto, la otra siguió subiendo la revisión del fichero,
+    /// y volcar la nuestra tal cual la renumeraría HACIA ATRÁS — «la sube el
+    /// core en cada put aceptado» dejaría de ser verdad para quien lea el
+    /// fichero después.
+    ///
+    /// El cuerpo NO se toca: la pantalla que se guarda es la de esta ventana,
+    /// que es la que sigue viva. Lo que el cliente tiene que hacer con lo que
+    /// guardó la otra —conservarle los huecos que solo ella tenía— lo decide
+    /// el cliente, que es el único que sabe leer el cuerpo.
+    pub fn adopt_revision(&self, revision: u64) {
+        let mut g = self.lock();
+        if revision > g.session.revision {
+            g.session.revision = revision;
+        }
     }
 
     /// Vuelve a marcar sucio lo que [`Self::take_dirty`] se llevó y no se pudo
@@ -259,7 +337,54 @@ mod tests {
         assert!(matches!(e, PutError::TooLarge { .. }), "{e:?}");
     }
 
-    /// Un volcado que falla vuelve a marcar sucio: sin esto la marca ya estaba
+    /// **#233**: cerrada la sesión, un `put` ya no entra — y el cierre se
+    /// comprueba BAJO EL MISMO LOCK que la mutación.
+    ///
+    /// Contra un token atómico aparte quedaba la ventana entera: un hilo
+    /// desalojado entre «¿se está apagando?» y el lock del almacén escribía
+    /// DESPUÉS del último volcado, y se le contestaba con una revisión que no
+    /// iba a llegar a ningún disco.
+    #[test]
+    fn cerrada_la_sesion_un_put_no_entra() {
+        let s = SessionStore::default();
+        assert!(s.claim(1));
+        s.put(1, 0, body(1)).expect("antes del cierre entra");
+        assert!(!s.sealed());
+        s.seal();
+        assert!(s.sealed());
+        let e = s.put(1, 1, body(2)).expect_err("después no");
+        assert!(matches!(e, PutError::Sealed), "{e:?}");
+        assert_eq!(s.get().body, body(1), "y lo almacenado se queda");
+    }
+
+    /// Al conseguir tarde el derecho a escribir se adopta el DOCUMENTO entero,
+    /// no solo su número.
+    ///
+    /// Quedarse con la revisión y no con el cuerpo hacía que la primera
+    /// escritura tras el relevo encajara sin conflicto y pisara, sin un aviso,
+    /// todo lo que la otra ventana había guardado mientras esta corría suelta.
+    #[test]
+    fn adoptar_lo_de_disco_se_lleva_el_cuerpo_y_no_solo_la_revision() {
+        let s = SessionStore::default();
+        s.adopt_from_disk(Session {
+            version: 1,
+            revision: 42,
+            body: body(3),
+        });
+        let g = s.get();
+        assert_eq!(g.revision, 42);
+        assert_eq!(g.body, body(3), "el cuerpo de la otra ventana");
+        assert!(!s.dirty(), "lo adoptado ya está en disco");
+        // Y no va hacia atrás: un fichero más viejo no desmonta lo vigente.
+        s.adopt_from_disk(Session {
+            version: 1,
+            revision: 7,
+            body: body(9),
+        });
+        assert_eq!(s.get().revision, 42);
+    }
+
+    /// Un volcado que falla vuelve a marcar sucio    /// Un volcado que falla vuelve a marcar sucio: sin esto la marca ya estaba
     /// limpia y el tick siguiente no reintentaba NADA.
     #[test]
     fn un_volcado_fallido_se_vuelve_a_marcar() {
