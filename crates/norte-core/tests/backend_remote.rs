@@ -65,6 +65,7 @@ async fn spawn_daemon_with(dir: tempfile::TempDir, mem: Arc<MemProvider>) -> Tes
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -324,6 +325,7 @@ async fn bind_at(
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -741,6 +743,7 @@ async fn spawn_daemon_ask() -> TestDaemon {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -1005,6 +1008,7 @@ async fn submit_abandonado_envia_rpc_cancel_y_mata_el_dispatch() {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await
@@ -1075,6 +1079,7 @@ async fn spawn_daemon_sync() -> TestDaemon {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await

@@ -139,6 +139,52 @@ pub fn write(state_dir: &Path, session: &Session) -> std::io::Result<()> {
     std::fs::rename(&tmp, &file)
 }
 
+/// El derecho a ESCRIBIR la sesión de este `state_dir`, mientras viva.
+///
+/// Lo suelta su `Drop`, y el SO lo suelta igual si el proceso muere de golpe:
+/// un core que se cuelga no deja el fichero bloqueado para siempre.
+#[derive(Debug)]
+pub struct SessionLock {
+    /// El descriptor bloqueado. El lock ES este handle: cerrarlo lo suelta.
+    _file: std::fs::File,
+}
+
+/// Intenta tomar el derecho a escribir la sesión de `state_dir`.
+///
+/// `Ok(None)` = lo tiene otro proceso; quien no lo consigue corre SUELTO —
+/// carga la pantalla, la usa, y no escribe—. Es `try_lock` y no `lock` a
+/// propósito: esperar colgaría un arranque detrás de un core que está vivo y
+/// no piensa soltarlo.
+///
+/// El lock va sobre un `session.json.lock` hermano y JAMÁS sobre el fichero
+/// mismo, por lo que ya documenta `lock_config_file` en `norte-config`: el
+/// escritor reemplaza el fichero por `rename`, así que un lock sobre él sería
+/// un lock sobre un inodo que deja de ser el fichero en cuanto alguien
+/// escribe.
+///
+/// # Errors
+///
+/// Fallos de I/O al crear el directorio o abrir el fichero de lock.
+pub fn lock(state_dir: &Path) -> std::io::Result<Option<SessionLock>> {
+    ensure_dir(state_dir)?;
+    let mut name = path(state_dir).into_os_string();
+    name.push(".lock");
+    // SIN truncar (la misma razón que en `norte-config`): `CREATE_ALWAYS`
+    // sobre un lockfile que otro proceso tiene tomado puede fallar en Windows
+    // en vez de llegar al intento de lock, que es justo la contención que esto
+    // existe para resolver.
+    let handle = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(PathBuf::from(name))?;
+    match handle.try_lock() {
+        Ok(()) => Ok(Some(SessionLock { _file: handle })),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
+    }
+}
+
 /// Crea `<state_dir>` con permisos de solo-el-dueño.
 fn ensure_dir(dir: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
@@ -270,6 +316,24 @@ mod tests {
             .filter(|n| n.contains("tmp") || n.ends_with('~'))
             .collect();
         assert!(restos.is_empty(), "restos: {restos:?}");
+    }
+
+    /// Un segundo core sobre el mismo estado NO escribe: clona y corre suelto.
+    /// Y al irse el primero, el siguiente sí lo toma — que es lo que hace que
+    /// un relevo no deje al sucesor sin poder guardar nada.
+    #[test]
+    fn un_segundo_core_no_escribe_sobre_el_estado_ajeno() {
+        let d = tempfile::tempdir().expect("tmp");
+        let uno = lock(d.path()).expect("lock").expect("libre");
+        assert!(
+            lock(d.path()).expect("lock").is_none(),
+            "el segundo no la toma"
+        );
+        drop(uno);
+        assert!(
+            lock(d.path()).expect("lock").is_some(),
+            "al soltarla, el siguiente sí"
+        );
     }
 
     /// El fichero no lo puede leer cualquiera: la sesión lleva las rutas por

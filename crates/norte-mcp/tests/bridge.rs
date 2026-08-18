@@ -67,6 +67,7 @@ async fn spawn_daemon_allow() -> TestDaemon {
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         },
     )
     .await

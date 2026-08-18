@@ -144,6 +144,12 @@ pub struct DaemonConfig {
     /// `Some(dir)` = ese directorio — para tests, SIEMPRE un tempdir, jamás el
     /// `~/.config` real.
     pub plugins_dir: Option<PathBuf>,
+    /// Dónde vive la sesión de UI (L2): `<state_dir>/session.json` y su lock.
+    /// `None` = **no se persiste nada** — ni se toma el lock ni se arranca el
+    /// escritor—, que es lo que quiere un test y lo que jamás debe pasarle al
+    /// `state_dir` real por descuido. El binario pasa
+    /// [`norte_config::dirs::state_dir`] explícitamente.
+    pub state_dir: Option<PathBuf>,
 }
 
 impl Default for DaemonConfig {
@@ -153,6 +159,7 @@ impl Default for DaemonConfig {
             idle_timeout: Some(Duration::from_mins(5)),
             listing_ttl: Duration::from_mins(2),
             plugins_dir: None,
+            state_dir: None,
         }
     }
 }
@@ -226,6 +233,10 @@ struct Shared {
     /// conexión dueña. `Arc` porque el volcado a disco la mira desde otra
     /// task. El core la guarda y no la lee (ADR 0058).
     ui_session: Arc<crate::ui_session::SessionStore>,
+    /// Despierta al escritor de la sesión fuera de su tick: la última
+    /// conexión que se va no debería dejar un segundo de pantalla sin volcar.
+    /// `Arc` porque el escritor NO retiene el `Shared` (lo mantendría vivo).
+    session_flush: Arc<tokio::sync::Notify>,
     /// Runtime WASM compartido para ejecutar comandos de plugin (M4-P4). Se
     /// construye UNA vez en el bind (arranca un hilo "ticker" de época) y se
     /// reutiliza entre `plugin.run_command`. `Arc` porque `PluginRuntime` es
@@ -521,6 +532,14 @@ pub struct Daemon {
     socket_path: PathBuf,
     shared: Arc<Shared>,
     idle_timeout: Option<Duration>,
+    /// El derecho a escribir la sesión de UI, mientras este daemon viva.
+    /// `None` = no se persiste (sin `state_dir`) o lo tiene otro core: en los
+    /// dos casos la pantalla se sirve igual y no se escribe.
+    session_lock: Option<crate::ui_session::disk::SessionLock>,
+    /// El escritor de la sesión, si lo hay. Se espera a que termine ANTES de
+    /// soltar el lock: el sucesor de un relevo tiene que encontrar el fichero
+    /// ya escrito y el lock ya libre.
+    session_writer: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for Daemon {
@@ -635,6 +654,13 @@ impl Daemon {
         listener.set_nonblocking(true)?;
         let listener = UnixListener::from_std(listener)?;
 
+        // La sesión de UI (L2): el lock y la carga son I/O síncrono, así que
+        // van a un pool blocking (regla 2). Sin `state_dir` no se persiste
+        // nada, que es lo que quiere un test; con él, quien no consigue el
+        // lock arranca CON la pantalla y sin escritor —clona y corre suelto—.
+        let (session_lock, sesion) = open_session(cfg.state_dir.clone()).await?;
+        let session_flush = Arc::new(tokio::sync::Notify::new());
+
         tracing::info!(socket = %socket_path.display(), uid, "daemon enlazado");
         let shared = Arc::new(Shared {
             engine,
@@ -656,7 +682,8 @@ impl Daemon {
             plugins: Mutex::new(plugins),
             plugin_runtime,
             directed_feeds: Mutex::new(HashMap::new()),
-            ui_session: Arc::new(crate::ui_session::SessionStore::default()),
+            ui_session: Arc::new(crate::ui_session::SessionStore::new(sesion)),
+            session_flush: Arc::clone(&session_flush),
         });
         // La salida del router de aprobaciones hacia los suscriptores. `Weak`
         // rompe el ciclo Shared → approvals → closure → Shared: muerto el
@@ -687,11 +714,25 @@ impl Daemon {
             .set_connection_observer(Arc::new(DaemonConnectionObserver {
                 shared: Arc::downgrade(&shared),
             }));
+        // El escritor solo existe si esta instancia es la DUEÑA del estado.
+        // Un core suelto tiene la pantalla y no la escribe: es exactamente la
+        // diferencia que el lock decide.
+        let session_writer = match (&session_lock, cfg.state_dir) {
+            (Some(_), Some(dir)) => Some(tokio::spawn(session_writer(
+                Arc::clone(&shared.ui_session),
+                dir,
+                session_flush,
+                shared.shutdown.clone(),
+            ))),
+            _ => None,
+        };
         Ok(Self {
             listener,
             socket_path,
             shared,
             idle_timeout: cfg.idle_timeout,
+            session_lock,
+            session_writer,
         })
     }
 
@@ -717,7 +758,7 @@ impl Daemon {
     /// # Panics
     /// Nunca: los locks internos no se envenenan (nadie panica con ellos).
     #[tracing::instrument(skip(self), fields(socket = %self.socket_path.display()))]
-    pub async fn run(self) -> Result<(), DaemonError> {
+    pub async fn run(mut self) -> Result<(), DaemonError> {
         let shared = Arc::clone(&self.shared);
         let mut idle_since = tokio::time::Instant::now();
         loop {
@@ -747,6 +788,19 @@ impl Daemon {
                 }
             }
         }
+
+        // La sesión de UI se vuelca y el lock se suelta AQUÍ, antes de retirar
+        // la ruta del socket — que es lo que le da permiso al sucesor de un
+        // relevo para arrancar. Al revés, el sucesor encontraría el lock
+        // todavía tomado y correría suelto: un relevo dejaría al daemon nuevo
+        // sin poder guardar nada, que es justo lo contrario de lo que un
+        // relevo promete. El token se cancela también aquí porque el camino de
+        // inactividad sale del bucle sin pasar por `daemon.shutdown`.
+        shared.shutdown.cancel();
+        if let Some(writer) = self.session_writer.take() {
+            let _ = writer.await;
+        }
+        drop(self.session_lock.take());
 
         // Fase de apagado: nada de clientes nuevos (el listener muere con
         // el drop); hard = cancelar tasks; graceful = esperarlas — y si el
@@ -794,6 +848,117 @@ impl Daemon {
     #[must_use]
     pub fn hard_shutdown_token(&self) -> CancellationToken {
         self.shared.hard_shutdown.clone()
+    }
+}
+
+/// Toma el lock de la sesión de UI y la carga (L2).
+///
+/// Sin `state_dir` no se persiste nada: ni lock ni fichero. Con él, el lock
+/// decide quién ESCRIBE —quien no lo consigue arranca igual, con la misma
+/// pantalla, y no la escribe nunca— y la carga nunca falla: sus desenlaces
+/// malos dan una sesión vacía y un aviso.
+///
+/// Todo el I/O va a un pool blocking (regla 2).
+async fn open_session(
+    state_dir: Option<PathBuf>,
+) -> Result<
+    (
+        Option<crate::ui_session::disk::SessionLock>,
+        norte_proto::methods::Session,
+    ),
+    DaemonError,
+> {
+    let Some(dir) = state_dir else {
+        return Ok((None, norte_proto::methods::Session::default()));
+    };
+    tokio::task::spawn_blocking(move || {
+        // Un lock que no se puede ni intentar (permisos, disco lleno) NO
+        // impide arrancar: deja al core suelto, que es la degradación que ya
+        // existe para el segundo core.
+        let lock = crate::ui_session::disk::lock(&dir).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "no se pudo tomar el lock de la sesión de UI");
+            None
+        });
+        (lock, load_session(&dir))
+    })
+    .await
+    .map_err(|e| DaemonError::Io(std::io::Error::other(e)))
+}
+
+/// Carga la sesión de UI de `state_dir`, contando en voz alta lo que no sea
+/// «cargada» y devolviendo una vacía en los tres casos restantes.
+///
+/// Síncrono: se llama dentro del `spawn_blocking` del bind (regla 2).
+fn load_session(state_dir: &Path) -> norte_proto::methods::Session {
+    use crate::ui_session::disk::LoadOutcome;
+
+    match crate::ui_session::disk::load(state_dir) {
+        LoadOutcome::Loaded(s) => s,
+        LoadOutcome::Fresh => norte_proto::methods::Session::default(),
+        // Los dos avisos son la mitad del valor de estos desenlaces: sin
+        // ellos, «la pantalla salió en blanco» es indistinguible de «nunca se
+        // guardó», y el humano no tiene ni qué mirar ni qué contar.
+        LoadOutcome::Corrupt { reason } => {
+            tracing::warn!(%reason, "sesión de UI ilegible: se arranca desde la configuración");
+            norte_proto::methods::Session::default()
+        }
+        LoadOutcome::FromTheFuture { version } => {
+            tracing::warn!(
+                version,
+                conocida = crate::ui_session::disk::SCHEMA_VERSION,
+                "sesión de UI de una versión más nueva: no se lee y NO se pisa"
+            );
+            norte_proto::methods::Session::default()
+        }
+    }
+}
+
+/// El único escritor de la sesión de UI: coalesce los cambios y los vuelca.
+///
+/// Un tick por segundo, y en cada uno **solo si hay algo sucio**. Coalescer es
+/// el punto entero: el cursor se mueve en cada flecha y esto es un fichero, no
+/// una base de datos. `session_flush` lo adelanta cuando se va la última
+/// conexión, y el token lo termina — con un último volcado, que es el del
+/// relevo y la razón de ser de todo esto.
+///
+/// Un fallo de escritura es un `warn!` y el siguiente tick reintenta: perder
+/// una sesión es una tarde mala, y tumbar el daemon por ella es peor.
+async fn session_writer(
+    store: Arc<crate::ui_session::SessionStore>,
+    dir: PathBuf,
+    flush: Arc<tokio::sync::Notify>,
+    stop: CancellationToken,
+) {
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = tick.tick() => flush_session(&store, &dir).await,
+            () = flush.notified() => flush_session(&store, &dir).await,
+            () = stop.cancelled() => {
+                // El último, y por eso el que importa: aquí es donde la
+                // pantalla sobrevive a un relevo.
+                flush_session(&store, &dir).await;
+                break;
+            }
+        }
+    }
+}
+
+/// Vuelca la sesión si hay algo que volcar. Nada sucio = ni un `open`, que es
+/// lo que hace barato despertarse cada segundo.
+async fn flush_session(store: &Arc<crate::ui_session::SessionStore>, dir: &Path) {
+    let Some(session) = store.take_dirty() else {
+        return;
+    };
+    let dir = dir.to_path_buf();
+    // Regla 2: la escritura es I/O de disco y va a un pool blocking.
+    let escrito =
+        tokio::task::spawn_blocking(move || crate::ui_session::disk::write(&dir, &session)).await;
+    match escrito {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(error = %e, "no se pudo escribir la sesión de UI"),
+        Err(e) => tracing::warn!(error = %e, "el volcado de la sesión de UI se cayó"),
     }
 }
 
@@ -1053,7 +1218,11 @@ fn spawn_connection(stream: UnixStream, shared: Arc<Shared>) {
         if let Err(e) = serve_connection(stream, &shared).await {
             tracing::debug!(error = %e, "conexión terminada con error");
         }
-        shared.connections.fetch_sub(1, Ordering::SeqCst);
+        // Con la última conexión fuera no hay nadie a quien servir, y lo que
+        // acaba de dejar puesto no debería esperar al siguiente tick.
+        if shared.connections.fetch_sub(1, Ordering::SeqCst) == 1 {
+            shared.session_flush.notify_one();
+        }
     });
 }
 

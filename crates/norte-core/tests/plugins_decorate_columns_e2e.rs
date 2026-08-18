@@ -151,6 +151,7 @@ async fn plugin_decorate_y_column_values_e2e_wasm_real_a_traves_del_backend() {
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
             plugins_dir: Some(cfg.path().to_path_buf()),
+            state_dir: None,
         },
     )
     .await
