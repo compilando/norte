@@ -541,6 +541,22 @@ places-title = Places
 places-section-drives = Drives
 places-section-favorites = Favorites
 places-empty = nothing here yet
+
+# Fase A: el panel de procesos y la hoja de atributos. Dos paneles nuevos que
+# se abren a mano; la franja de tareas de siempre no se toca.
+processes-title = Processes
+processes-empty = nothing running
+task-failed = failed
+metadata-title = Details
+metadata-empty = nothing under the cursor
+metadata-name = Name
+metadata-kind = Kind
+metadata-size = Size
+metadata-mtime = Modified
+metadata-kind-dir = folder
+metadata-kind-file = file
+metadata-kind-symlink = link
+metadata-kind-other = other
 # L3: what the docked viewer says INSTEAD of a file. A directory is never
 # read: a preview follows the cursor, so reading whatever the cursor lands
 # on is how one turns into opening a block device by accident.
@@ -608,6 +624,8 @@ menu-item-layout-equalize = Equalise
 menu-item-layout-set-target = Set destination
 menu-item-layout-places = Places sidebar
 menu-item-layout-preview = Docked viewer
+menu-item-layout-processes = Processes panel
+menu-item-layout-metadata = Details panel
 menu-item-pane-tab-new = New tab
 menu-item-pane-tab-close = Close tab
 menu-item-pane-tab-next = Next tab
@@ -661,6 +679,8 @@ help-cmd-layout-equalize = equalise panels
 help-cmd-layout-set-target = set destination
 help-cmd-layout-places = show or hide the places sidebar
 help-cmd-layout-preview = show or hide the docked viewer
+help-cmd-layout-processes = show or hide the processes panel
+help-cmd-layout-metadata = show or hide the details panel
 msg-layout-last-panel = cannot close the last panel
 msg-layout-no-target = with more than two panels, set the destination first
 msg-layout-load-failed = could not load layout "{$name}": {$err}

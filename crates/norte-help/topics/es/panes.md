@@ -35,6 +35,8 @@ commands = [
     "layout.set-target",
     "layout.places",
     "layout.preview",
+    "layout.processes",
+    "layout.metadata",
 ]
 context = ["browse"]
 +++
@@ -293,3 +295,19 @@ Un directorio no se lee: la caja dice que lo es. Un fichero que no se puede
 leer tampoco pregunta nada — el motivo se pinta dentro, porque un panel que
 sigue al cursor no puede abrir un diálogo por cada tecla que bajas. Y un visor
 acoplado que no se ve —detrás de una pestaña, o sin sitio— no lee NADA.
+
+{{cmd:layout.processes}} abre un panel con una fila por tarea en marcha: su
+barra, por dónde va, y cancelar la fila bajo el cursor. La franja de tareas del
+pie no se va — el panel es lo que se abre para **actuar** sobre una tarea, no
+para mirarla. Toma el teclado al abrirse y la segunda pulsación lo cierra: al
+revés que el visor acoplado, y a propósito, porque lo abriste para pulsar algo
+dentro.
+
+No hay pausa. El protocolo tiene cancelar y nada más, y un control que no hace
+lo que dice es peor que un control que falta.
+
+{{cmd:layout.metadata}} abre a la derecha un panel de detalles que también
+sigue al cursor: nombre, clase, tamaño, cuándo se modificó y lo que el provider
+ya hubiera dicho de la entrada. Para eso no lee **nada** —todo lo que enseña
+vino con el listado—, así que bajar por un directorio con él abierto no cuesta
+ni una petición.

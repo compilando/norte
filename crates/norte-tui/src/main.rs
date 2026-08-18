@@ -2795,6 +2795,22 @@ async fn run(
                 }
                 None => {}
             }
+            // La hoja de atributos NO pide nada: lo que enseña ya vino en el
+            // listado, así que esto es una copia, no una petición. Un hueco
+            // que el reparto no colocó no produce objetivo y no se toca.
+            match norte_tui::metadata::want(app, &res) {
+                Some((slot, norte_tui::metadata::Want::Entry(e))) => {
+                    if let Some(hoja) = app.panes.metadata_mut(slot) {
+                        *hoja = Some(*e);
+                    }
+                }
+                Some((slot, norte_tui::metadata::Want::Note(_))) => {
+                    if let Some(hoja) = app.panes.metadata_mut(slot) {
+                        *hoja = None;
+                    }
+                }
+                None => {}
+            }
         }
         // #52: listado lazy — las entradas VISIBLES sin size se hidratan por
         // tandas (máx. una en vuelo; dedup por (pane, path) en `last_probed`).
@@ -11337,6 +11353,8 @@ async fn dispatch(
         // El visor acoplado no pide nada aquí: lo que lea sale de
         // `preview::want` en el bucle, contra el cursor de cada frame.
         Command::LayoutPreview => app.toggle_preview(),
+        Command::LayoutProcesses => app.toggle_processes(),
+        Command::LayoutMetadata => app.toggle_metadata(),
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
             let plan = mirror_plan(app);

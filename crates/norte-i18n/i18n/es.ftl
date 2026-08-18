@@ -619,6 +619,8 @@ menu-item-layout-equalize = Igualar
 menu-item-layout-set-target = Fijar destino
 menu-item-layout-places = Panel de sitios
 menu-item-layout-preview = Visor acoplado
+menu-item-layout-processes = Panel de procesos
+menu-item-layout-metadata = Panel de detalles
 menu-item-pane-tab-new = Abrir pestaña
 menu-item-pane-tab-close = Cerrar pestaña
 menu-item-pane-tab-next = Pestaña siguiente
@@ -672,6 +674,8 @@ help-cmd-layout-equalize = igualar paneles
 help-cmd-layout-set-target = fijar destino
 help-cmd-layout-places = enseñar u ocultar el panel de sitios
 help-cmd-layout-preview = enseñar u ocultar el visor acoplado
+help-cmd-layout-processes = muestra u oculta el panel de procesos
+help-cmd-layout-metadata = muestra u oculta el panel de detalles
 msg-layout-last-panel = no se puede cerrar el último panel
 msg-layout-no-target = con más de dos paneles hay que fijar el destino
 msg-layout-load-failed = no se pudo cargar el layout «{$name}»: {$err}
@@ -1303,3 +1307,18 @@ gui-shortcuts-cmd-note = ⌘ no es alcanzable en la terminal
 # escritura, y esa reconstrucción es todo-o-nada. Decir solo «guardado»
 # describiría una tecla que no cambió.
 gui-msg-shortcut-saved-not-applied = guardado, pero esta ventana conservó el keymap anterior
+
+# Fase A: el panel de procesos y la hoja de atributos.
+processes-title = Procesos
+processes-empty = nada en marcha
+task-failed = falló
+metadata-title = Detalles
+metadata-empty = nada bajo el cursor
+metadata-name = Nombre
+metadata-kind = Clase
+metadata-size = Tamaño
+metadata-mtime = Modificado
+metadata-kind-dir = carpeta
+metadata-kind-file = fichero
+metadata-kind-symlink = enlace
+metadata-kind-other = otro

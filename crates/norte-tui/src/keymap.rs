@@ -138,6 +138,8 @@ commands! {
     "layout.set-target" => LayoutSetTarget,
     "layout.places" => LayoutPlaces,
     "layout.preview" => LayoutPreview,
+    "layout.processes" => LayoutProcesses,
+    "layout.metadata" => LayoutMetadata,
     "pane.mirror" => PaneMirror,
     "pane.pull" => PanePull,
     "pane.swap" => PaneSwap,

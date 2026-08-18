@@ -35,6 +35,8 @@ commands = [
     "layout.set-target",
     "layout.places",
     "layout.preview",
+    "layout.processes",
+    "layout.metadata",
 ]
 context = ["browse"]
 +++
@@ -287,3 +289,19 @@ read asks nothing either — the reason is painted inside, because a panel that
 follows the cursor cannot raise a dialog for every key you press going down a
 listing. And a docked viewer you cannot see — behind a tab, or with no room —
 reads NOTHING.
+
+{{cmd:layout.processes}} opens a panel with one row per running task: its
+progress bar, how far along it is, and cancel on the row under the cursor. The
+task strip at the foot of the screen does not go away — the panel is what you
+open when you want to **act** on a task rather than watch it. It takes the
+keyboard on opening, and a second press closes it: the opposite of the docked
+viewer, and deliberately so, because you opened it to press something in it.
+
+There is no pause. The protocol has cancel and nothing else, and a control that
+does not do what it says is worse than a control that is missing.
+
+{{cmd:layout.metadata}} opens a details panel on the right that also follows
+the cursor: name, kind, size, when it was last modified, and whatever the
+provider already said about the entry. It reads **nothing** to do it —
+everything it shows arrived with the listing — so walking down a directory with
+it open costs no requests at all.
