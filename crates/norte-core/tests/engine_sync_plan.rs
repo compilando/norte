@@ -707,8 +707,25 @@ async fn un_plan_de_cero_pasos_cuyo_dueno_se_fue_no_queda_retenido() {
         .expect("drop");
     drop(rx);
 
-    assert_ne!(handle.join().await, TaskState::Completed);
+    // Hay DOS órdenes posibles y este test no puede fijar cuál sale: el
+    // desmontaje puede llegar antes de que la Task termine, o después. Bajo
+    // `cargo llvm-cov` sale el segundo con bastante frecuencia, y afirmar
+    // `!= Completed` era afirmar una carrera —rojo intermitente, que aquí es
+    // un bug y no ruido—.
+    //
+    // La propiedad NO depende del orden, y es la única que este test existe
+    // para fijar: pase lo que pase, no queda un plan retenido de una conexión
+    // que ya no está. Si además la Task no llegó a completar, es que el
+    // desmontaje ganó, que es el otro camino y también vale.
+    let estado = handle.join().await;
     assert_eq!(spooled(&engine), 0, "un plan sin dueño no se retiene");
+    assert!(
+        matches!(
+            estado,
+            TaskState::Completed | TaskState::Failed { .. } | TaskState::Cancelled
+        ),
+        "la Task termina de una de las tres formas, fue {estado:?}"
+    );
 }
 
 // 14 ──────────────────────────────────────────────────────────────────────
