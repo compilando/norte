@@ -75,6 +75,16 @@ impl KindRegistry {
                 decl("viewer", (20, 5), true, true, false, SIN_ROLES),
                 decl("compare", (40, 8), true, true, false, SIN_ROLES),
                 decl("sync", (40, 8), true, true, false, SIN_ROLES),
+                // El panel de procesos: la franja `tasks` sigue existiendo y
+                // sigue siendo lo que trae `orthodox`. Este es el panel de
+                // verdad —se enfoca, se recorre y cancela la fila del cursor—
+                // y hay uno. El mínimo de 30x4 es lo que ocupa una fila con
+                // nombre, barra y porcentaje.
+                decl("processes", (30, 4), true, true, false, SIN_ROLES),
+                // La hoja de atributos: sigue al rol `active` con el mismo
+                // vínculo que el visor acoplado. 24 columnas es la etiqueta
+                // más larga con su valor al lado.
+                decl("metadata", (24, 4), true, true, false, SIN_ROLES),
             ],
         }
     }
@@ -112,6 +122,25 @@ impl KindRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Los dos kinds de la fase A. Ninguno opta a un rol: un panel de
+    /// procesos y una hoja de atributos jamás son el destino de una copia, y
+    /// dejarles `Target` es como una tecla de copiar acaba apuntando a una
+    /// caja que no es un directorio.
+    #[test]
+    fn processes_y_metadata_se_enfocan_pero_no_son_destino() {
+        let reg = KindRegistry::builtin();
+        for id in ["processes", "metadata"] {
+            let d = reg.get(&KindId::new(id)).expect("declarado");
+            assert!(d.focusable, "{id} se enfoca");
+            assert!(d.takes_keys, "{id} toma teclas");
+            assert!(!d.multi, "{id} es uno solo");
+            assert!(d.roles.is_empty(), "{id} no opta a rol");
+            assert!(!reg.holds_role(&KindId::new(id), RoleId::Target));
+        }
+        assert_eq!(reg.min_of(&KindId::new("processes")), (30, 4));
+        assert_eq!(reg.min_of(&KindId::new("metadata")), (24, 4));
+    }
 
     /// Un kind que el registro no conoce no revienta: devuelve `None` y quien
     /// pinta dibuja la caja con el nombre. Es la regla 3 del modelo.
