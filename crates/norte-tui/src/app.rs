@@ -883,6 +883,8 @@ pub enum KeyOwner {
     Processes,
     /// La hoja de atributos.
     Metadata,
+    /// El árbol de directorios (#136).
+    Tree,
 }
 
 /// Lo que este proceso sabe de la sesión guardada (L2).
@@ -1043,6 +1045,8 @@ pub struct App {
     /// Selector de disposición abierto (F9 → `layout.pick`): None = cerrado.
     /// El modelo vive en norte-frontend (regla 7); aquí solo se guarda.
     pub layout_picker: Option<norte_frontend::layout_picker::LayoutPicker>,
+    /// El selector de conexiones (#140), si está abierto.
+    pub connections_picker: Option<norte_frontend::connections_picker::ConnectionsPicker>,
     /// Overlay del picker de columnas (#108 7a): mismo patrón que
     /// `theme_picker` — un Option en App, NO una variante de Modal (Modal es
     /// confirmación; esto es lista con cursor). El modelo vive en
@@ -1196,6 +1200,13 @@ pub struct App {
     /// 0049). Un `Box` porque es el mayor de los `pending_*` con diferencia y
     /// clippy mide el `App` entero.
     pub pending_sync_apply: Option<Box<norte_proto::methods::PlanHash>>,
+    /// A dónde llevar el panel que acaba de desconectar (#140).
+    ///
+    /// La RUTA y no una bandera, por dos razones: el bucle no tiene que
+    /// adivinar a dónde —lo decide quien desconectó— y `App` no engorda su
+    /// cuenta de `bool`s, que es un lint de este repo y una señal de que el
+    /// estado se estaba volviendo una bolsa de banderitas.
+    pub pending_disconnect_home: Option<VPath>,
     /// Reinterpretación de nombres (#57) del lado ORIGEN, congelada junto con
     /// [`Self::pending_sync`] y no cuando el run loop abre el panel: entre una
     /// cosa y la otra el lector puede haber pulsado `Alt+E`, y un plan que se
@@ -2122,6 +2133,7 @@ impl App {
             theme: crate::theme::TuiTheme::default(),
             theme_picker: None,
             layout_picker: None,
+            connections_picker: None,
             columns_picker: None,
             extensions: None,
             lua_pending_trust: None,
@@ -2141,6 +2153,7 @@ impl App {
             sync: None,
             pending_sync: None,
             pending_sync_apply: None,
+            pending_disconnect_home: None,
             pending_sync_encoding: (None, None),
             // Fail-CLOSED: el `App` de un test no tiene backend, y ofrecer
             // sincronizar por defecto convertiría cada test en un permiso.
@@ -3094,6 +3107,17 @@ impl App {
                 Some(crate::metadata::KIND) if self.panes.metadata(id).is_none() => {
                     self.panes.insert_metadata(id, None);
                 }
+                // #136: anclado donde está el listado, igual que al abrirlo a
+                // mano. Un layout guardado con el árbol dentro —una sesión de
+                // ayer, un preset que lo traiga— llega por aquí, y sin este
+                // brazo el hueco se pinta en blanco para siempre: el toggle
+                // que habría creado su estado no se va a pulsar, porque el
+                // panel ya está en pantalla.
+                Some(crate::tree::KIND) if self.panes.tree(id).is_none() => {
+                    let mut arbol = crate::tree::Tree::default();
+                    arbol.anchor(dir.clone());
+                    self.panes.insert_tree(id, arbol);
+                }
                 _ => {}
             }
             // Los ids del layout no pueden chocar con los que se acuñen luego.
@@ -3330,6 +3354,74 @@ impl App {
         }
     }
 
+    /// El hueco del árbol, si está abierto.
+    #[must_use]
+    pub fn tree_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::tree::KIND)
+    }
+
+    /// Abre el árbol de directorios, lo enfoca, o lo cierra (#136).
+    ///
+    /// Tres estados como el sidebar y el panel de procesos: un árbol se abre
+    /// para MOVERSE por él, así que llevarse el teclado al abrir es lo que se
+    /// espera.
+    ///
+    /// Se ancla en el directorio del listado con foco. Un árbol que colgara
+    /// siempre de la raíz del sistema enseñaría diez mil ramas para llegar a
+    /// donde ya estás.
+    pub fn toggle_tree(&mut self) {
+        use norte_frontend::layout::{Edge, KindId, Node, Size};
+        match self.tree_slot() {
+            Some(id) if self.key_owner == KeyOwner::Tree => {
+                if let Some(nuevo) = self.layout.close_slot(id) {
+                    self.layout = nuevo;
+                    self.panes.refresh_visible(&self.layout);
+                    self.history.retain_tree(&self.layout);
+                }
+                self.key_owner = KeyOwner::Panes;
+            }
+            Some(id) => {
+                // Re-anclar al abrirlo de nuevo: el listado puede estar en otro
+                // sitio desde la última vez.
+                let dir = self.focused().dir().clone();
+                if let Some(t) = self.panes.tree_mut(id) {
+                    t.anchor(dir);
+                }
+                self.key_owner = KeyOwner::Tree;
+            }
+            None => {
+                let id = self.mint_slot();
+                let mut arbol = crate::tree::Tree::default();
+                arbol.anchor(self.focused().dir().clone());
+                self.panes.insert_tree(id, arbol);
+                self.layout = self.layout.dock(
+                    self.focused_slot(),
+                    Edge::Left,
+                    // A la izquierda y con el ancho del sidebar: es el mismo
+                    // gesto —una columna de navegación al lado del listado— y
+                    // dos anchos distintos para lo mismo se notan.
+                    Size::Fixed(24),
+                    &Node::slot(id, KindId::new(crate::tree::KIND)),
+                );
+                self.panes.refresh_visible(&self.layout);
+                self.key_owner = KeyOwner::Tree;
+            }
+        }
+    }
+
+    /// El árbol abierto, para mutarlo.
+    pub fn tree_mut(&mut self) -> Option<&mut crate::tree::Tree> {
+        let id = self.tree_slot()?;
+        self.panes.tree_mut(id)
+    }
+
+    /// El árbol abierto.
+    #[must_use]
+    pub fn tree(&self) -> Option<&crate::tree::Tree> {
+        let id = self.tree_slot()?;
+        self.panes.tree(id)
+    }
+
     /// El hueco del panel de procesos, si está abierto.
     #[must_use]
     pub fn processes_slot(&self) -> Option<norte_frontend::layout::SlotId> {
@@ -3564,6 +3656,45 @@ impl App {
         self.layout_picker = Some(norte_frontend::layout_picker::LayoutPicker::open(
             del_usuario,
         ));
+    }
+
+    /// Abre el selector de conexiones (#140) con lo que haya en
+    /// `connections.toml`. Leerlo es del frontend: este tipo no toca disco.
+    pub fn open_connections_picker(
+        &mut self,
+        filas: Vec<norte_frontend::connections_picker::Row>,
+    ) {
+        self.connections_picker = Some(
+            norte_frontend::connections_picker::ConnectionsPicker::open(filas),
+        );
+    }
+
+    /// Teclas del selector de conexiones. Confirmar devuelve la URL elegida
+    /// —navegar es del run loop, que es quien tiene el backend— y cerrar el
+    /// selector es parte de confirmar: la conexión se pide una vez.
+    pub fn connections_picker_input(&mut self, action: PickerAction) -> Option<String> {
+        match action {
+            PickerAction::Up => {
+                if let Some(p) = &mut self.connections_picker {
+                    p.up();
+                }
+                None
+            }
+            PickerAction::Down => {
+                if let Some(p) = &mut self.connections_picker {
+                    p.down();
+                }
+                None
+            }
+            PickerAction::Confirm => self
+                .connections_picker
+                .take()
+                .and_then(|p| p.chosen().map(String::from)),
+            PickerAction::Cancel => {
+                self.connections_picker = None;
+                None
+            }
+        }
     }
 
     /// La pantalla de AHORA como cuerpo de sesión (L2).
@@ -4077,6 +4208,76 @@ impl App {
         let scheme = self.panes[pane].dir().scheme().to_owned();
         let spec = self.columns.sort_for(&scheme);
         self.panes[pane].set_sort(spec);
+    }
+
+    /// Ordena el pane con el FOCO por `col`, con la semántica del click de
+    /// cabecera (#138).
+    ///
+    /// La columna activa invierte su dirección; una nueva ordena ascendente.
+    /// `dirs_first` no lo toca ninguna tecla de orden: es una preferencia del
+    /// usuario, no un criterio de columna — se cambia en el diálogo de
+    /// columnas, que es donde vive.
+    ///
+    /// Solo el pane enfocado: el orden es de UN listado, igual que el cursor.
+    pub fn sort_focused_by(&mut self, col: norte_frontend::SortColumn) {
+        let spec = self.focused().sort().after_click(col);
+        self.focused_mut().set_sort(spec);
+    }
+
+    /// Abre las propiedades de la entrada bajo el cursor (#139).
+    ///
+    /// Devuelve la ruta cuyo tamaño hay que contar, si es una carpeta: el
+    /// diálogo no habla con el backend —esto es `App`, no el run loop— así que
+    /// dice qué hace falta y quien puede lo pide.
+    pub fn open_properties(&mut self) -> Option<VPath> {
+        let entry = self.focused().selected()?.clone();
+        let contar = (entry.kind == norte_proto::EntryKind::Dir).then(|| entry.path.clone());
+        self.modal = Some(Modal::Properties {
+            entry: Box::new(entry),
+            size_task: None,
+            size: None,
+        });
+        contar
+    }
+
+    /// Mete en el diálogo la entrada RECIÉN pedida al backend.
+    ///
+    /// Un listado perezoso (#52) no trae ni tamaño ni fecha, y de una carpeta
+    /// no los trae NUNCA: sin esto, las propiedades de un directorio decían
+    /// «lo desconoce el backend» de algo que un `stat` sabe perfectamente.
+    /// Conserva el recuento —es de otra pregunta— y no pisa el diálogo si el
+    /// humano ya lo cerró.
+    pub fn properties_hydrate(&mut self, fresca: norte_proto::Entry) {
+        if let Some(Modal::Properties { entry, .. }) = &mut self.modal
+            && entry.path == fresca.path
+        {
+            **entry = fresca;
+        }
+    }
+
+    /// Ata al diálogo de propiedades el recuento que se acaba de lanzar.
+    pub fn properties_counting(&mut self, task: norte_proto::TaskId) {
+        if let Some(Modal::Properties { size_task, .. }) = &mut self.modal {
+            *size_task = Some(task);
+        }
+    }
+
+    /// Mete en el diálogo el resultado de SU recuento (#139).
+    ///
+    /// Por `task_id` y no «el último que llegue»: entre abrir el diálogo y que
+    /// termine la cuenta cabe otra cuenta —la que el humano lanzó a mano sobre
+    /// una selección—, y enseñar ese número aquí sería contestar otra pregunta.
+    ///
+    /// Devuelve `true` si era el suyo.
+    pub fn properties_sized(&mut self, task: norte_proto::TaskId, bytes: u64, entries: u64) -> bool {
+        let Some(Modal::Properties { size_task, size, .. }) = &mut self.modal else {
+            return false;
+        };
+        if *size_task != Some(task) {
+            return false;
+        }
+        *size = Some((bytes, entries));
+        true
     }
 
     /// Abre el modal de marcado por patrón (#103).
@@ -5560,6 +5761,21 @@ impl TrailStep {
 /// tipo de proto.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Modal {
+    /// Las propiedades de la entrada bajo el cursor (#139).
+    ///
+    /// Lo que enseña sale del LISTADO, que ya lo tiene: nombre, clase, tamaño,
+    /// fecha y los atributos que el provider haya reportado. Abrirlo no pide
+    /// nada — salvo una cosa, y es justo la que un listado no puede saber: lo
+    /// que ocupa una carpeta. Eso se cuenta, y mientras se cuenta el diálogo lo
+    /// dice.
+    Properties {
+        /// La entrada, tal como está en el listado.
+        entry: Box<norte_proto::Entry>,
+        /// El recuento en marcha, si se lanzó uno (solo para directorios).
+        size_task: Option<norte_proto::TaskId>,
+        /// `(bytes, entradas)` cuando el recuento terminó.
+        size: Option<(u64, u64)>,
+    },
     /// Confirmación de borrado (F8) sobre las MARCAS. `permanent = false` →
     /// papelera.
     ConfirmDelete {
@@ -6081,6 +6297,10 @@ pub const ALLOW_HELP: &[&str] = &[
 pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
     use norte_proto::CollisionPolicy as P;
     match modal {
+        // #139: las propiedades no PREGUNTAN nada — se leen y se cierran—, así
+        // que solo entienden cancelar. Darle un «confirmar» a un cuadro de
+        // solo lectura es enseñarle al lector que Enter hace algo aquí.
+        Modal::Properties { .. } => (cmd == "dialog.cancel").then_some(DialogOutcome::Cancelled),
         // M4-IA: `AiRenamePlan` es una superficie de decisión sobre contenido
         // INICIADO y REVISADO por el humano — semántica [`ALLOW_CONFIRM`]
         // (Enter confirma, como un delete/transfer), NO el allowlist de
@@ -7856,6 +8076,164 @@ mod tests {
         assert_eq!(kind, TransferKind::Move);
         assert_eq!(from, VPath::parse("mem:///a.txt").unwrap());
         assert_eq!(dest, VPath::parse("mem:///a.txt2").unwrap());
+    }
+
+    /// #136: el árbol se abre anclado DONDE está el listado, no en la raíz del
+    /// sistema: un árbol que colgara siempre de `/` enseñaría diez mil ramas
+    /// para llegar a donde ya estás.
+    #[test]
+    fn el_arbol_se_ancla_donde_esta_el_listado() {
+        let mut app = app_dos_panes();
+        let dir = app.focused().dir().clone();
+        app.toggle_tree();
+        assert_eq!(app.tree().and_then(|t| t.root().cloned()), Some(dir));
+        assert_eq!(app.key_owner(), KeyOwner::Tree, "se lleva el teclado");
+    }
+
+    /// **Un layout RESTAURADO con el árbol dentro trae su estado.**
+    ///
+    /// Es el fallo que encontró pilotar la TUI: la sesión de ayer guarda el
+    /// árbol, al arrancar el hueco vuelve… y se pinta en blanco, porque el
+    /// toggle que habría creado su estado no se va a pulsar — el panel ya está
+    /// ahí. `set_layout` siembra el estado de CADA kind por esta razón, y el
+    /// árbol tenía que entrar en esa lista.
+    #[test]
+    fn un_layout_con_arbol_trae_su_estado() {
+        use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+
+        let mut app = app_dos_panes();
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Fixed(24), Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(90), KindId::new(crate::tree::KIND)),
+                Node::slot(SlotId(91), KindId::browser()),
+            ],
+        };
+        app.set_layout(arbol);
+        assert!(
+            app.panes.tree(SlotId(90)).is_some(),
+            "el hueco del árbol llegó sin estado y se pintaría vacío"
+        );
+        assert!(
+            app.panes.tree(SlotId(90)).and_then(|t| t.root()).is_some(),
+            "y anclado en algún sitio, o no pide nada"
+        );
+    }
+
+    /// Y el hueco del árbol SE COLOCA en el reparto: sin esto el layout le
+    /// reserva sitio y nadie lo pinta, que es una columna en blanco.
+    #[test]
+    fn el_hueco_del_arbol_se_coloca() {
+        use norte_frontend::layout::{KindRegistry, Rect, resolve};
+
+        let mut app = app_dos_panes();
+        app.toggle_tree();
+        let id = app.tree_slot().expect("abierto");
+        let res = resolve(Rect::new(0, 0, 110, 30), &app.layout, &KindRegistry::builtin());
+        assert!(
+            res.placements.iter().any(|(p, _)| *p == id),
+            "el hueco del árbol no se colocó: {:?}",
+            res.placements
+        );
+        assert!(app.panes.tree(id).is_some(), "y su panel está");
+    }
+
+    /// Tres pulsaciones, como el sidebar: abre y enfoca, vuelve a enfocar,
+    /// cierra. La del medio es la que hace que soltar el teclado no cierre el
+    /// panel.
+    #[test]
+    fn el_arbol_abre_enfoca_y_cierra() {
+        let mut app = app_dos_panes();
+        app.toggle_tree();
+        assert!(app.tree_slot().is_some());
+        app.return_keys_to_panes();
+        app.toggle_tree();
+        assert!(app.tree_slot().is_some(), "la segunda solo recupera el teclado");
+        assert_eq!(app.key_owner(), KeyOwner::Tree);
+        app.toggle_tree();
+        assert!(app.tree_slot().is_none(), "y la tercera cierra");
+        assert_eq!(app.key_owner(), KeyOwner::Panes);
+    }
+
+    /// #139: las propiedades salen del LISTADO, y sobre una carpeta piden lo
+    /// único que el listado no sabe.
+    #[test]
+    fn las_propiedades_de_una_carpeta_piden_contarla() {
+        let mut app = app_with_entries(&["a.txt"]);
+        // Sobre un fichero no hay nada que contar: su tamaño ya está.
+        assert!(app.open_properties().is_none());
+        assert!(matches!(app.modal, Some(Modal::Properties { .. })));
+    }
+
+    /// El resultado de un recuento va al diálogo que lo pidió, y a NINGÚN
+    /// otro: entre abrir el diálogo y que termine la cuenta cabe otra cuenta
+    /// —la que el humano lanzó sobre una selección— y enseñar ese número aquí
+    /// sería contestar otra pregunta.
+    #[test]
+    fn el_recuento_ajeno_no_entra_en_el_dialogo() {
+        use norte_proto::TaskId;
+
+        let mut app = app_with_entries(&["a.txt"]);
+        app.open_properties();
+        let mio = TaskId::new(7);
+        app.properties_counting(mio);
+        assert!(
+            !app.properties_sized(TaskId::new(8), 1, 1),
+            "el de otro no entra"
+        );
+        assert!(app.properties_sized(mio, 4096, 12), "el mío sí");
+        let Some(Modal::Properties { size, .. }) = &app.modal else {
+            panic!("sigue abierto")
+        };
+        assert_eq!(*size, Some((4096, 12)));
+    }
+
+    /// Sin diálogo abierto, un recuento no tiene dónde entrar y lo dice: es lo
+    /// que hace que el run loop mande el número a la barra de estado.
+    #[test]
+    fn sin_dialogo_el_recuento_no_encuentra_donde_ir() {
+        let mut app = app_with_entries(&["a.txt"]);
+        assert!(!app.properties_sized(norte_proto::TaskId::new(1), 10, 1));
+    }
+
+    /// #138: la tecla de orden hace lo mismo que un click en la cabecera —
+    /// invierte si ya está activa, ordena ascendente si es nueva— y SOLO sobre
+    /// el panel con el foco: el orden es de un listado, como el cursor.
+    #[test]
+    fn una_tecla_de_orden_solo_toca_el_panel_con_el_foco() {
+        use norte_frontend::{SortColumn, SortDir};
+
+        let mut app = app_dos_panes();
+        let otro = app.panes[1].sort();
+        app.sort_focused_by(SortColumn::Size);
+        assert_eq!(app.focused().sort().column, SortColumn::Size);
+        assert_eq!(app.focused().sort().dir, SortDir::Asc, "una nueva, ascendente");
+        assert_eq!(app.panes[1].sort(), otro, "el otro panel no se entera");
+
+        app.sort_focused_by(SortColumn::Size);
+        assert_eq!(
+            app.focused().sort().dir,
+            SortDir::Desc,
+            "la misma otra vez invierte"
+        );
+        app.sort_focused_by(SortColumn::Extension);
+        assert_eq!(app.focused().sort().column, SortColumn::Extension);
+        assert_eq!(app.focused().sort().dir, SortDir::Asc);
+    }
+
+    /// Y `dirs_first` no lo toca ninguna tecla de orden: es una preferencia,
+    /// no un criterio de columna.
+    #[test]
+    fn una_tecla_de_orden_no_toca_los_directorios_primero() {
+        use norte_frontend::SortColumn;
+
+        let mut app = app_dos_panes();
+        let mut spec = app.focused().sort();
+        spec.dirs_first = false;
+        app.focused_mut().set_sort(spec);
+        app.sort_focused_by(SortColumn::Mtime);
+        assert!(!app.focused().sort().dirs_first);
     }
 
     /// #108 b4: `apply_scheme_sort` aplica el orden de la config al pane

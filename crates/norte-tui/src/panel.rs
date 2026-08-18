@@ -57,6 +57,8 @@ pub enum TuiPanel {
     /// El panel de procesos (fase A): su cursor. Las filas son del
     /// `TaskBoard`, que es de `App`: aquí no hay una segunda copia.
     Processes(Box<crate::processes::Processes>),
+    /// El árbol de directorios (#136): sus ramas abiertas y su cursor.
+    Tree(Box<crate::tree::Tree>),
     /// La hoja de atributos (fase A): la entrada que se está enseñando.
     ///
     /// Guarda la `Entry` y no su ruta: la hoja se dibuja entera desde ella y
@@ -82,6 +84,7 @@ impl TuiPanel {
             Self::Places(_)
             | Self::Preview(_)
             | Self::Processes(_)
+            | Self::Tree(_)
             | Self::Metadata(_)
             | Self::Unknown { .. } => None,
         }
@@ -94,6 +97,7 @@ impl TuiPanel {
             Self::Places(_)
             | Self::Preview(_)
             | Self::Processes(_)
+            | Self::Tree(_)
             | Self::Metadata(_)
             | Self::Unknown { .. } => None,
         }
@@ -107,6 +111,7 @@ impl TuiPanel {
             Self::Browser(_)
             | Self::Preview(_)
             | Self::Processes(_)
+            | Self::Tree(_)
             | Self::Metadata(_)
             | Self::Unknown { .. } => None,
         }
@@ -119,6 +124,7 @@ impl TuiPanel {
             Self::Browser(_)
             | Self::Preview(_)
             | Self::Processes(_)
+            | Self::Tree(_)
             | Self::Metadata(_)
             | Self::Unknown { .. } => None,
         }
@@ -331,6 +337,29 @@ impl PaneSlots {
     }
 
     /// Mete un panel de procesos nuevo, para un hueco recién acuñado.
+    /// El árbol de ese hueco, si lo es.
+    #[must_use]
+    pub fn tree(&self, id: SlotId) -> Option<&crate::tree::Tree> {
+        match self.store.get(id) {
+            Some(TuiPanel::Tree(t)) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// El árbol de ese hueco, para mutarlo.
+    pub fn tree_mut(&mut self, id: SlotId) -> Option<&mut crate::tree::Tree> {
+        match self.store.get_mut(id) {
+            Some(TuiPanel::Tree(t)) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// Mete un árbol en un hueco.
+    pub fn insert_tree(&mut self, id: SlotId, t: crate::tree::Tree) {
+        self.store.insert(id, TuiPanel::Tree(Box::new(t)));
+    }
+
+    /// Mete el panel de procesos en un hueco.
     pub fn insert_processes(&mut self, id: SlotId, p: crate::processes::Processes) {
         self.store.insert(id, TuiPanel::Processes(Box::new(p)));
     }

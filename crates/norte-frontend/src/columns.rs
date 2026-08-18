@@ -1851,6 +1851,7 @@ fn map_sort(s: Option<&norte_config::SortChoice>) -> crate::sort::SortSpec {
             norte_config::SortColumnKey::Name => SortColumn::Name,
             norte_config::SortColumnKey::Size => SortColumn::Size,
             norte_config::SortColumnKey::Mtime => SortColumn::Mtime,
+            norte_config::SortColumnKey::Extension => SortColumn::Extension,
         },
         dir: if s.descending {
             SortDir::Desc

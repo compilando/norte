@@ -821,6 +821,7 @@ fn golden_methods() {
     check_methods_policy(&fixtures);
     check_methods_session(&fixtures);
     check_methods_ui_session(&fixtures);
+    check_methods_dir_size(&fixtures);
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
@@ -870,7 +871,43 @@ fn golden_methods() {
     // sesión a propósito: lo que la fixture demuestra es que el cuerpo vuelve
     // igual que fue. La VACÍA tiene fixture propia porque es la que sale en
     // cada primer arranque y la única con `body: null`.
-    assert_eq!(fixtures.len(), 148, "[methods.json] fixtures sin caso Rust");
+    // 148 → 151 en 0.49.0: + fs_dir_size_params (#139) y los dos de
+    // `connection.close` (#140). El RESULT no tiene
+    // fixture propia porque no tiene tipo propio — es el `FsTaskResult` de
+    // siempre, ya congelado.
+    assert_eq!(fixtures.len(), 151, "[methods.json] fixtures sin caso Rust");
+}
+
+/// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
+/// como una LISTA —una selección se mide de una vez— y con la forma de wire de
+/// `VPath`, no como texto suelto.
+fn check_methods_dir_size(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{ConnectionCloseParams, ConnectionCloseResult, FsDirSizeParams};
+    // `connection.close` (#140): lo que se congela es que se cierra por una
+    // RUTA —el frontend no tiene que saber cómo se llavea una sesión— y que el
+    // result dice si había algo que cerrar.
+    check_one(
+        fixtures,
+        "connection_close_params",
+        &ConnectionCloseParams {
+            path: norte_proto::VPath::parse("sftp://host/casa").expect("vpath"),
+        },
+    );
+    check_one(
+        fixtures,
+        "connection_close_result",
+        &ConnectionCloseResult { closed: true },
+    );
+    check_one(
+        fixtures,
+        "fs_dir_size_params",
+        &FsDirSizeParams {
+            paths: vec![
+                norte_proto::VPath::parse("file:///a").expect("vpath"),
+                norte_proto::VPath::parse("file:///b/c").expect("vpath"),
+            ],
+        },
+    );
 }
 
 /// Familia `session.*` de UI (0.48.0, L2): la pantalla que el daemon guarda.
@@ -3110,7 +3147,15 @@ fn method_names_frozen() {
     // este test dice que lo mira.
     assert_eq!(methods::SESSION_GET, "session.get");
     assert_eq!(methods::SESSION_PUT, "session.put");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.48.0");
+    // 0.49.0: `fs.dir_size` con su `TaskKind::DirSize` (#139) y
+    // `connection.close` (#140). Aditivo — métodos nuevos que un cliente viejo
+    // no forma, y una variante de kind que su `#[serde(other)]` degrada a
+    // `Unknown` desde 0.10. Los dos van en el MISMO bump a propósito: la
+    // ventana se mueve una vez por release del wire, y esta rama no ha salido.
+    // MINOR.
+    assert_eq!(methods::FS_DIR_SIZE, "fs.dir_size");
+    assert_eq!(methods::CONNECTION_CLOSE, "connection.close");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.49.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

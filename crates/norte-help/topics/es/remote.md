@@ -9,7 +9,9 @@ commands = [
     "pane.refresh",
     "dialog.add",
     "dialog.remove",
-]
+
+    "pane.connect",
+    "pane.disconnect",]
 context = ["dialog.trust-host"]
 +++
 Un panel sostiene un sitio remoto igual que sostiene un directorio. La
@@ -79,3 +81,18 @@ porque una URL acaba en el historial, en los logs y en pantalla.
 > ⚠ El FTP va en claro. No «salvo que actives TLS»: todavía no hay FTPS, así que ese ajuste no significa nada y la contraseña y todos los bytes de todos los ficheros cruzan la red a la vista. Cada conexión FTP te lo avisa. Fuera de tu propia red, usa `sftp://`.
 
 > ⚠ En el almacenamiento de objetos **no hay directorios**. Una carpeta es el prefijo común de las claves que cuelgan de ella, así que una carpeta vacía solo existe si alguien escribió un objeto marcador, y borrar la última clave de un prefijo hace desaparecer la carpeta. Renombrarla es copiar todas las claves y luego borrarlas todas, no una operación instantánea.
+
+# Abrir y cerrar una conexión
+
+{{cmd:pane.connect}} enseña las conexiones que tienes en `connections.toml` y
+lleva el panel a la que elijas. La lista sale del fichero, así que lo que ves
+aquí es lo que escribiste ahí — nombre y dirección, nunca una contraseña: las
+credenciales se referencian, no se guardan (por eso hay un llavero).
+
+{{cmd:pane.disconnect}} hace las dos cosas que su nombre promete: **suelta la
+sesión** —el socket se cierra ahora, no cuando venza sola— y devuelve el panel a
+tu carpeta personal. Sobre un panel local no hay nada que cerrar y te lo dice,
+en vez de contestar «hecho» a algo que no ha hecho nada.
+
+Cerrar no prohíbe: la siguiente vez que navegues ahí, norte vuelve a conectar
+por el camino de siempre.

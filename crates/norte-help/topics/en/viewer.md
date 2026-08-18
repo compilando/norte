@@ -16,6 +16,8 @@ commands = [
     "viewer.encoding-auto",
     "viewer.hex",
     "pane.open",
+    "pane.edit",
+    "pane.edit-new",
 ]
 context = ["viewer"]
 +++
@@ -86,3 +88,24 @@ writing a file yourself.
 While an external program has the terminal, norte does not — it takes it back
 when the program exits, and a program launched from here never inherits a
 terminal left in mouse mode. See [[mouse]].
+
+# Editing
+
+{{cmd:pane.edit}} opens whatever is under the cursor **in your editor**: the one
+in `$VISUAL`, or in `$EDITOR`, or `vi` if you set neither. norte ships no editor
+of its own and does not intend to — its job is moving files around, and the one
+you already use knows more about editing than anything that would fit in here.
+
+While the editor is up, norte steps aside and hands it the whole terminal, just
+as {{cmd:app.terminal}} does. Leaving the editor brings the panels back and
+reloads the listing, so whatever you saved is already visible.
+
+{{cmd:pane.edit-new}} opens the editor on an EMPTY buffer in the directory you
+are looking at. The name is asked for when you save, which is where your editor
+knows how to ask.
+
+Two things it will not do, both on purpose: it does not edit a folder (`⏎` is
+how you enter one) and it does not edit in a remote panel. An editor opens a
+file on this system; fetching it, editing it and putting it back is a different
+feature — with its own conflict and its own undo — and norte would rather say so
+than do half of it.

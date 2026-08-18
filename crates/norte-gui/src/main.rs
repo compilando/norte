@@ -4920,6 +4920,12 @@ impl NorteGui {
                                 norte_frontend::SortColumn::Name => "name",
                                 norte_frontend::SortColumn::Size => "size",
                                 norte_frontend::SortColumn::Mtime => "mtime",
+                                // #138: la GUI todavía no ofrece ordenar por
+                                // extensión —no hay cabecera que pulsar— pero
+                                // SÍ puede recibirla de una config escrita
+                                // desde el TUI, y guardarla como otra cosa
+                                // reescribiría el ajuste del usuario.
+                                norte_frontend::SortColumn::Extension => "extension",
                             },
                             descending: sort.dir == norte_frontend::SortDir::Desc,
                             dirs_first: sort.dirs_first,

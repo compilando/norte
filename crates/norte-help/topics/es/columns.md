@@ -3,8 +3,16 @@ id = "columns"
 title = "Qué enseña el listado"
 tags = ["doing"]
 see_also = ["finding", "panes", "remote"]
+context = ["dialog.properties"]
 commands = [
     "pane.columns",
+    "pane.sort-name",
+    "pane.sort-ext",
+    "pane.sort-size",
+    "pane.sort-time",
+    "pane.sort-menu",
+    "pane.properties",
+    "pane.dir-size",
     "dialog.toggle-enabled",
     "dialog.move-up",
     "dialog.move-down",
@@ -65,3 +73,41 @@ hace nada al pulsarla, en vez de inventarse un ranking.
 El orden es por panel y se conserva mientras el panel viva, así que los dos
 pueden estar ordenados distinto: que es justo lo que quieres cuando uno es un
 listado que estás leyendo y el otro un destino que estás llenando.
+
+# Ordenar sin abrir nada
+
+Cuatro teclas ordenan el panel con el foco sin pasar por el diálogo:
+{{cmd:pane.sort-name}}, {{cmd:pane.sort-ext}}, {{cmd:pane.sort-size}} y
+{{cmd:pane.sort-time}}. Pulsar la que ya está activa invierte la dirección,
+igual que hacer clic dos veces en una cabecera. {{cmd:pane.sort-menu}} abre el
+diálogo de columnas, que es donde viven la dirección y el «directorios
+primero»: ninguna tecla de orden los toca, porque son preferencias tuyas y no
+criterios de una columna.
+
+Ordenar por extensión mira lo que va después del ÚLTIMO punto. `.TXT` y `.txt`
+caen juntas —agruparlas es de lo que va ordenar por extensión— aunque sigan
+siendo nombres distintos para todo lo demás. Un nombre que empieza por punto no
+tiene extensión: `.bashrc` es un nombre entero. Lo que no tiene extensión va al
+final, en las dos direcciones, igual que un tamaño que el backend no sabe
+decir.
+
+# Qué es esta entrada, y cuánto ocupa
+
+{{cmd:pane.properties}} abre las propiedades de lo que hay bajo el cursor:
+clase, tamaño, fecha, ruta y los atributos que el backend haya reportado. Todo
+eso ya está en el listado, así que abrirlo no pide nada.
+
+Menos una cosa, y es justo la que un listado no puede saber: **lo que ocupa una
+carpeta**. Un listado dice el tamaño de un fichero; el de una carpeta exige
+recorrerla entera, y hacerlo por cada fila convertiría bajar un nivel en una
+tormenta de peticiones. Por eso se cuenta cuando lo pides: al abrir las
+propiedades de una carpeta el diálogo empieza a contar y lo dice mientras tanto.
+
+{{cmd:pane.dir-size}} cuenta sin abrir nada, y sobre lo MARCADO —o lo que haya
+bajo el cursor si no marcaste nada—: la pregunta que contesta es «¿cuánto ocupa
+todo esto?», que es la que te haces antes de copiar.
+
+Contar es una tarea como cualquier otra: sale en el panel de tareas y se puede
+cancelar. Lo que no se pueda leer no la tumba —una carpeta prohibida en medio de
+un árbol de tres horas no puede costarte el recuento entero—, así que el número
+es el de lo que se pudo leer.

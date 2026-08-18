@@ -141,6 +141,32 @@ pub async fn named_url(dir: &std::path::Path, name: &str) -> Result<String, Erro
         .ok_or(Error::NotFound)
 }
 
+/// Las conexiones NOMBRADAS de `<dir>/connections.toml`, en orden alfabético
+/// (#140): `(nombre, url)`.
+///
+/// La URL, y jamás un secreto: `ConnectionSpec` referencia sus credenciales
+/// (ADR 0015) y esta lista es para pintar un selector.
+///
+/// Un fichero que no está es una lista VACÍA y no un error: no tener
+/// conexiones configuradas es lo normal el primer día. Uno que no parsea sí lo
+/// es — decir «no tienes ninguna» cuando lo que pasa es que su fichero tiene
+/// una coma de más sería mentir sobre lo que el usuario escribió.
+///
+/// # Errors
+/// [`Error::InvalidPath`] si el fichero existe y no parsea.
+pub async fn named_connections(dir: &std::path::Path) -> Result<Vec<(String, String)>, Error> {
+    let dir = dir.to_path_buf();
+    let file = tokio::task::spawn_blocking(move || ConnectionsFile::load(&dir))
+        .await
+        .map_err(|_| Error::Internal { panic: true })?
+        .map_err(log_and_map)?;
+    Ok(file
+        .connections
+        .into_iter()
+        .map(|(nombre, spec)| (nombre, spec.url))
+        .collect())
+}
+
 /// La implementación real de [`RemoteConnector`] sobre `norte-connect`.
 pub struct ConnectionManager {
     config_dir: PathBuf,

@@ -64,6 +64,12 @@ pub enum SortColumn {
     Size,
     /// `Entry.mtime_ms` (negativos pre-1970 válidos). Ausente = al final.
     Mtime,
+    /// Extensión del nombre: lo que sigue al ÚLTIMO punto (#138).
+    ///
+    /// Un directorio no tiene extensión, y un nombre que empieza por punto
+    /// tampoco —`.bashrc` es un nombre, no una extensión—: las dos van AL
+    /// FINAL en ambas direcciones, como cualquier valor ausente.
+    Extension,
 }
 
 /// Dirección del orden de la columna.
@@ -175,6 +181,7 @@ pub(crate) fn cmp_keyed_with(
         SortColumn::Name => cmp_name(a, b),
         SortColumn::Size => cmp_missing_last(a.1.size, b.1.size, spec.dir),
         SortColumn::Mtime => cmp_missing_last(a.1.mtime_ms, b.1.mtime_ms, spec.dir),
+        SortColumn::Extension => cmp_ext(a.1, b.1, spec.dir),
     };
     let col = match (spec.column, spec.dir) {
         // Name lleva el desempate integrado y su inversión es del bloque
@@ -183,6 +190,62 @@ pub(crate) fn cmp_keyed_with(
         _ => col,
     };
     col.then_with(|| cmp_name(a, b))
+}
+
+/// La extensión de una entry: los bytes tras el ÚLTIMO punto, o `None`.
+///
+/// `None` para un directorio, para un nombre sin punto, para uno que EMPIEZA
+/// por punto (`.bashrc` es un nombre entero) y para uno que acaba en punto (no
+/// hay nada detrás). Devuelve BYTES, no texto: un nombre no tiene por qué ser
+/// UTF-8 (regla 1).
+fn ext_bytes(e: &Entry) -> Option<&[u8]> {
+    if e.kind == EntryKind::Dir {
+        return None;
+    }
+    let name = name_bytes(e);
+    let punto = name.iter().rposition(|b| *b == b'.')?;
+    if punto == 0 || punto + 1 == name.len() {
+        return None;
+    }
+    Some(&name[punto + 1..])
+}
+
+/// Compara dos extensiones SIN distinguir mayúsculas.
+///
+/// `.TXT` y `.txt` son la misma extensión para quien ordena —agruparlas es el
+/// punto entero de ordenar por extensión— aunque sigan siendo nombres
+/// distintos para todo lo demás: la identidad jamás se pliega (ADR 0051), el
+/// ORDEN sí.
+///
+/// El camino común (extensión ASCII) no reserva memoria; el raro delega en el
+/// mismo `fold` que usa la búsqueda rápida, para no inventar un segundo
+/// vocabulario de plegado.
+fn cmp_ext_bytes(uno: &[u8], otro: &[u8]) -> std::cmp::Ordering {
+    if uno.is_ascii() && otro.is_ascii() {
+        return uno
+            .iter()
+            .map(u8::to_ascii_lowercase)
+            .cmp(otro.iter().map(u8::to_ascii_lowercase));
+    }
+    crate::nav::fold(uno).cmp(&crate::nav::fold(otro))
+}
+
+/// La columna EXTENSIÓN: ausente al final en las dos direcciones, igual que un
+/// tamaño o una fecha que no se conocen.
+fn cmp_ext(izq: &Entry, der: &Entry, dir: SortDir) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (ext_bytes(izq), ext_bytes(der)) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(uno), Some(otro)) => {
+            let orden = cmp_ext_bytes(uno, otro);
+            match dir {
+                SortDir::Asc => orden,
+                SortDir::Desc => orden.reverse(),
+            }
+        }
+    }
 }
 
 /// El orden de NOMBRE de siempre: clave NFC y desempate por bytes crudos.
@@ -607,5 +670,110 @@ mod sort_spec_tests {
         };
         sort_entries_with(&mut es, spec);
         assert_eq!(names(&es), vec![b"a".as_slice(), b"z-dir"]);
+    }
+}
+
+#[cfg(test)]
+mod extension_tests {
+    use super::*;
+
+    fn e(nombre: &str, kind: EntryKind) -> Entry {
+        crudo(nombre.as_bytes(), kind)
+    }
+
+    fn crudo(nombre: &[u8], kind: EntryKind) -> Entry {
+        let seg = norte_proto::Segment::new(nombre.to_vec()).expect("segmento");
+        Entry {
+            path: norte_proto::VPath::parse("file:///d")
+                .expect("vpath")
+                .join(seg),
+            kind,
+            size: None,
+            mtime_ms: None,
+            attrs: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn nombres(v: &[Entry]) -> Vec<String> {
+        v.iter()
+            .map(|e| String::from_utf8_lossy(name_bytes(e)).into_owned())
+            .collect()
+    }
+
+    fn por_extension(dir: SortDir) -> SortSpec {
+        SortSpec {
+            column: SortColumn::Extension,
+            dir,
+            dirs_first: true,
+        }
+    }
+
+    /// `.TXT` va con `.txt`: agrupar las dos es el punto entero de ordenar por
+    /// extensión. La identidad no se pliega jamás (ADR 0051); el ORDEN sí.
+    #[test]
+    fn la_extension_agrupa_sin_distinguir_mayusculas() {
+        let mut v = vec![
+            e("b.TXT", EntryKind::File),
+            e("a.rs", EntryKind::File),
+            e("c.txt", EntryKind::File),
+        ];
+        sort_entries_with(&mut v, por_extension(SortDir::Asc));
+        assert_eq!(nombres(&v), ["a.rs", "b.TXT", "c.txt"]);
+    }
+
+    /// Lo que no tiene extensión va AL FINAL en las DOS direcciones, como
+    /// cualquier ausente: un `desc` no llena la cabecera del pane de nombres
+    /// pelados. Y un nombre que EMPIEZA por punto no tiene extensión —
+    /// `.bashrc` es un nombre entero—, ni uno que acaba en punto.
+    #[test]
+    fn lo_que_no_tiene_extension_va_al_final_en_las_dos_direcciones() {
+        for dir in [SortDir::Asc, SortDir::Desc] {
+            let mut v = vec![
+                e("leeme", EntryKind::File),
+                e(".bashrc", EntryKind::File),
+                e("a.rs", EntryKind::File),
+                e("punto.", EntryKind::File),
+            ];
+            sort_entries_with(&mut v, por_extension(dir));
+            assert_eq!(nombres(&v)[0], "a.rs", "el único con extensión manda ({dir:?})");
+        }
+    }
+
+    /// Una extensión que no es UTF-8 ordena igual y no muta un byte (regla 1).
+    #[test]
+    fn una_extension_no_utf8_ordena_sin_romperse() {
+        let mut v = vec![
+            crudo(b"raro\xff.zz", EntryKind::File),
+            e("a.aa", EntryKind::File),
+        ];
+        sort_entries_with(&mut v, por_extension(SortDir::Asc));
+        assert_eq!(nombres(&v)[0], "a.aa", "aa < zz");
+        assert_eq!(
+            name_bytes(&v[1]),
+            b"raro\xff.zz",
+            "y los bytes vuelven intactos"
+        );
+    }
+
+    /// El grupo de directorios manda antes que la columna, como con cualquier
+    /// otra: un dir no tiene extensión y aun así sale primero.
+    #[test]
+    fn los_directorios_siguen_primero() {
+        let mut v = vec![e("z.rs", EntryKind::File), e("dir", EntryKind::Dir)];
+        sort_entries_with(&mut v, por_extension(SortDir::Asc));
+        assert_eq!(v[0].kind, EntryKind::Dir);
+    }
+
+    /// Empate de extensión: desempata el nombre, SIEMPRE ascendente, como en
+    /// las demás columnas.
+    #[test]
+    fn a_igual_extension_desempata_el_nombre() {
+        let mut v = vec![
+            e("z.rs", EntryKind::File),
+            e("a.rs", EntryKind::File),
+            e("m.rs", EntryKind::File),
+        ];
+        sort_entries_with(&mut v, por_extension(SortDir::Desc));
+        assert_eq!(nombres(&v), ["a.rs", "m.rs", "z.rs"]);
     }
 }

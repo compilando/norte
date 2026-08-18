@@ -260,8 +260,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     planned("pane.test-archive", "keymap-reason-archive-write", 132),
     planned("pane.split-file", "keymap-reason-archive-write", 132),
     planned("pane.combine-files", "keymap-reason-archive-write", 132),
-    planned("pane.edit", "keymap-reason-editor", 133),
-    planned("pane.edit-new", "keymap-reason-editor", 133),
+    // #133: norte no trae editor —lo suyo es el gestor— y F4 abre el TUYO,
+    // que es lo que hacen los cuatro presets al atarlo.
+    live("pane.edit", false),
+    live("pane.edit-new", false),
     // #134's second half (`pane.sync-dirs`) left this block and is `live`
     // above; `keymap-reason-sync` went with it, out of both locales, because
     // nothing else claimed it — same disposal as `keymap-reason-shell` when
@@ -269,16 +271,25 @@ pub const CATALOGUE: &[CommandDef] = &[
     // The three of issue #135 left this block in S4 and are `live` above; the
     // family's reason id (`keymap-reason-shell`) went with them, out of both
     // locales, because nothing else claimed it.
-    planned("pane.tree", "keymap-reason-tree", 136),
-    planned("pane.sort-name", "keymap-reason-sort", 138),
-    planned("pane.sort-ext", "keymap-reason-sort", 138),
-    planned("pane.sort-size", "keymap-reason-sort", 138),
-    planned("pane.sort-time", "keymap-reason-sort", 138),
-    planned("pane.sort-menu", "keymap-reason-sort", 138),
-    planned("pane.properties", "keymap-reason-properties", 139),
-    planned("pane.dir-size", "keymap-reason-properties", 139),
-    planned("pane.connect", "keymap-reason-connections", 140),
-    planned("pane.disconnect", "keymap-reason-connections", 140),
+    // #136: el árbol de directorios, acoplado a la izquierda del listado.
+    live("pane.tree", false),
+    // Orden por tecla (#138). `sort-menu` no abre un menú propio: abre el
+    // diálogo de columnas, que es donde vive el orden desde #108 —tiene la
+    // columna, la dirección y `dirs_first` en un sitio— y así no hay dos
+    // pantallas que digan lo mismo con distinta letra.
+    live("pane.sort-name", false),
+    live("pane.sort-ext", false),
+    live("pane.sort-size", false),
+    live("pane.sort-time", false),
+    live("pane.sort-menu", false),
+    // #139: las propiedades salen del listado; el tamaño de una carpeta se
+    // CUENTA, y por eso es una Task cancelable y no un campo del diálogo.
+    live("pane.properties", false),
+    live("pane.dir-size", false),
+    // #140: abrir es elegir de `connections.toml`; desconectar SUELTA la
+    // sesión de verdad, no solo se va del panel.
+    live("pane.connect", false),
+    live("pane.disconnect", false),
 ];
 
 /// The entry for `name`, or `None` if the vocabulary has never heard of it —

@@ -41,6 +41,10 @@ pub const CONTEXTS: &[&str] = &[
     "dialog.command-line",
     "dialog.ai-rename",
     "dialog.semantic-search",
+    // #139: las propiedades de una entrada son «qué me dice el listado de
+    // esto», que es de lo que va la página de columnas — no un diálogo de
+    // decisión, así que no comparte id con ninguno de los que preguntan.
+    "dialog.properties",
 ];
 
 /// The context of `modal`.
@@ -74,6 +78,7 @@ fn modal_context(modal: &Modal) -> &'static str {
         Modal::CommandLine { .. } => "dialog.command-line",
         Modal::AiRenameInstruction { .. } | Modal::AiRenamePlan { .. } => "dialog.ai-rename",
         Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => "dialog.semantic-search",
+        Modal::Properties { .. } => "dialog.properties",
     }
 }
 
@@ -125,6 +130,8 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::ApproveAgentOp { .. }
         | Modal::TrustHostKey { .. }
         | Modal::AiRenamePlan { .. }
+        // #139: se lee, no se escribe — F1 encima no le roba una tecla a nadie.
+        | Modal::Properties { .. }
         | Modal::SemanticHits { .. } => true,
     }
 }
@@ -230,6 +237,17 @@ mod tests {
                 hash_abbrev: "ab12cd34ef56ab78ab12cd34ef56ab78".into(),
             },
             Modal::ConfirmQuit,
+            Modal::Properties {
+                entry: Box::new(norte_proto::Entry {
+                    path: norte_proto::VPath::parse("file:///d").expect("vpath"),
+                    kind: norte_proto::EntryKind::Dir,
+                    size: None,
+                    mtime_ms: None,
+                    attrs: std::collections::BTreeMap::new(),
+                }),
+                size_task: None,
+                size: None,
+            },
             Modal::MarkPattern {
                 mark: true,
                 pattern: "*.rs".into(),

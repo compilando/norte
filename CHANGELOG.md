@@ -7,6 +7,62 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **A directory tree panel.** `pane.tree` opens a column on the left with the
+  tree hanging from the directory you are looking at; `⏎` on a branch expands it
+  and sends the listing there. It is read branch by branch — opening one lists
+  that directory and nothing else — because a tree that read itself whole would
+  take minutes on a big folder and far longer on a remote one. Only directories
+  show: a tree with files in it is a worse copy of the listing next to it. Three
+  presses like the places panel: open and take the keyboard, take it back, close
+  (#136).
+
+- **Opening and closing a connection from the keyboard.** `pane.connect`
+  (Ctrl+N in the Total Commander and Krusader presets) lists what is in your
+  `connections.toml` — name and address, never a password — and takes the panel
+  to the one you pick. `pane.disconnect` (Ctrl+Shift+D) does both things its
+  name promises: it releases the session, so the socket closes now instead of
+  when it eventually times out, and sends the panel home. On a local panel it
+  says there is nothing to close rather than answering "done" (#140).
+
+- **F4 edits.** It opened the file with the system handler, which is a
+  different thing and is what #133 was about. `pane.edit` now hands the file to
+  your editor — `$VISUAL`, then `$EDITOR`, then `vi` — and steps aside while it
+  runs, exactly as it does for a shell; leaving the editor brings the panels
+  back and reloads the listing. `pane.edit-new` opens an empty buffer in the
+  directory you are looking at, and lets the editor ask for the name when you
+  save. The path travels as its own argument rather than inside a command line,
+  so a filename with a quote or a newline in it reaches the editor unchanged
+  instead of breaking the line. It refuses a folder and a remote panel, and says
+  which (#133).
+
+- **Properties, and how much a folder actually takes.** `pane.properties`
+  (Alt+Enter in the Total Commander and Krusader presets, Ctrl+A in Far) opens
+  what norte knows about the entry under the cursor: kind, size, date, path and
+  whatever attributes the backend reported. All of that is already in the
+  listing, so opening it asks for nothing — except the one thing a listing
+  cannot know, which is how much a folder takes. That is counted, and the dialog
+  says so while it counts. `pane.dir-size` (Ctrl+L in TC, Alt+Shift+S in
+  Krusader) counts without opening anything, over what you marked. Counting is a
+  cancellable task like any other, and an unreadable folder in the middle of a
+  big tree costs its own subtree rather than the whole count (#139).
+
+- **Sorting has keys now.** Sort the focused panel by name, extension, size or
+  date without opening anything; pressing the one already in use reverses it,
+  exactly like clicking a header twice. The presets that bind these keys — Far's
+  Ctrl+F3..F6 and its Ctrl+F12 sort menu, Total Commander's, Krusader's — stop
+  saying "not built". Sorting by extension is new as an order: `.TXT` and `.txt`
+  land together, `.bashrc` counts as a name rather than an extension, and
+  anything without one sorts last in both directions. It can also be your
+  default, with `sort.column = "extension"` under `[ui.columns]` (#138).
+
+- **The default preset binds all of it.** F4 edits and Alt+F4 keeps the old
+  "open with the system handler"; Ctrl+F3..F6 sort; Alt+Enter shows properties
+  and Ctrl+L counts a folder; Alt+T opens the tree; Ctrl+N opens a connection
+  and Alt+N closes it. The four transcribed presets already bound these names
+  and were waiting for the commands to exist.
+
 ### Fixed
 
 - **An agent cannot reach your session file.** The policy engine protects the

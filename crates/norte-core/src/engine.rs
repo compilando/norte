@@ -733,6 +733,21 @@ impl Engine {
         }
     }
 
+    /// Cierra la sesión remota de `p` (#140). `false` si no había ninguna.
+    ///
+    /// Un scheme de PROCESO —`file://`, `mem://`, el de un provider-plugin— no
+    /// se cierra: no hay sesión que soltar, y decir que sí sería mentir sobre
+    /// algo que sigue exactamente igual. La siguiente operación sobre esa
+    /// autoridad vuelve a conectar por el camino de siempre: cerrar suelta, no
+    /// prohíbe.
+    pub fn close_connection(&self, p: &VPath) -> bool {
+        // Registrado por scheme entero = provider de proceso, no una sesión.
+        if self.sessions.lookup(p.scheme()).is_some() {
+            return false;
+        }
+        self.sessions.close(&Self::provider_key(p))
+    }
+
     async fn provider_for(&self, p: &VPath) -> Result<Arc<dyn Provider>, Error> {
         let key = Self::provider_key(p);
         // Primero el provider de proceso registrado para el scheme entero
@@ -1204,6 +1219,54 @@ impl Engine {
             }),
         );
         Ok((handle, rx))
+    }
+
+    /// Cuánto ocupa lo que se le pase, como Task cancelable (`fs.dir_size`,
+    /// 0.49.0, #139).
+    ///
+    /// **No muta**: recorre y suma. Sin journal y sin undo (la regla 4 no
+    /// aplica), como [`Self::compare_as`].
+    ///
+    /// **El total no se devuelve aquí**: viaja en el progreso de la Task
+    /// (`bytes_done`/`entries_done`), que es lo que un frontend ya sabe pintar,
+    /// y el último snapshot es el resultado.
+    ///
+    /// **Gate de policy**: ninguno aquí, y por el mismo motivo que
+    /// `compare_as` — el gate de LECTURA vive en el daemon, que es quien ata
+    /// una conexión a un actor.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidPath`] si no se pasa ni una ruta —medir la nada no es
+    /// una petición— y lo que devuelva la resolución de providers.
+    pub async fn dir_size_as(
+        &self,
+        params: norte_proto::methods::FsDirSizeParams,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        // ANTES de crear Task alguna: es un rechazo del REQUEST, no el fallo de
+        // una Task ya lanzada (mismo criterio que `compare_as`).
+        let Some(primera) = params.paths.first() else {
+            tracing::debug!("fs.dir_size sin rutas");
+            return Err(Error::InvalidPath);
+        };
+        // La cola del scheduler es la de la PRIMERA raíz. Una selección
+        // mezclada de providers tiene que encolarse en algún sitio, y elegir
+        // otro no cambiaría nada.
+        let key = primera.scheme().to_owned();
+        let mut roots = Vec::with_capacity(params.paths.len());
+        for p in params.paths {
+            let provider = self.provider_for(&p).await?;
+            roots.push((provider, p));
+        }
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::DirSize,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| Box::pin(async move { crate::ops::dir_size(roots, &ctx).await })),
+        );
+        Ok(handle)
     }
 
     /// Planifica una sincronización de UN sentido como Task cancelable

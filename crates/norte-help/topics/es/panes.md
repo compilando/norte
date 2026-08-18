@@ -38,7 +38,8 @@ commands = [
     "layout.processes",
     "layout.metadata",
     "layout.pick",
-]
+
+    "pane.tree",]
 context = ["browse"]
 +++
 En pantalla hay siempre dos paneles. Uno tiene el foco: es donde se mueve el
@@ -329,3 +330,21 @@ su pie, para que la coincidencia sea una comodidad y no una trampa.
 Un fichero tuyo gana al de fábrica con el mismo nombre: `layouts/simple.toml`
 es lo que carga `simple`. Borra el fichero y vuelve el original. `--layout
 <nombre>` elige una para un solo arranque, sin tocar tu configuración.
+
+# El árbol de directorios
+
+{{cmd:pane.tree}} abre una columna a la izquierda con el árbol que cuelga del
+directorio que estás mirando. `⏎` sobre una rama la despliega y manda el listado
+ahí: ver qué hay dentro y estar dentro son la misma respuesta.
+
+Se lee **por ramas**: abrir una lista ESE directorio y nada más. Un árbol que se
+leyera entero tardaría minutos en una carpeta grande y mucho más en un remoto, y
+lo que lleva dentro no cambia por plegarlo — así que plegar y volver a abrir no
+cuesta otro viaje.
+
+Solo salen directorios. Un árbol con ficheros sería un segundo listado peor que
+el que ya tienes al lado; lo que este panel contesta es cómo está organizado
+esto.
+
+Tres pulsaciones, como el panel de sitios: la primera abre y se lleva el
+teclado, la segunda lo vuelve a coger si lo habías soltado, la tercera cierra.

@@ -2029,6 +2029,138 @@ pub(crate) async fn mkdir_task(
     Ok(())
 }
 
+/// Cuánto ocupan `roots`, contando lo que se pueda leer (#139).
+///
+/// El total NO se devuelve: viaja en el progreso (`bytes_done`/`entries_done`),
+/// que ya existe y que todo frontend sabe pintar. El último snapshot ES el
+/// resultado, y por eso esta función no inventa un tipo nuevo.
+///
+/// **Un directorio ilegible no mata el recuento.** Contar un árbol grande puede
+/// tardar minutos, y morirse en un `EACCES` de la hoja 40 000 devolvería nada a
+/// cambio de todo el trabajo hecho: lo que sale es el tamaño de lo que se pudo
+/// leer. La cancelación sí para: es una orden, no un tropiezo.
+///
+/// No materializa el árbol —a diferencia de [`walk`], que devuelve un `Vec`—
+/// porque aquí no hace falta ninguna entrada después de sumarla, y un
+/// directorio de diez millones de ficheros no cabe dos veces en memoria por
+/// gusto.
+pub(crate) async fn dir_size(
+    roots: Vec<(std::sync::Arc<dyn Provider>, VPath)>,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    let mut bytes: u64 = 0;
+    let mut entries: u64 = 0;
+    let mut ilegibles: u64 = 0;
+    for (provider, root) in roots {
+        // La raíz cuenta por sí misma: medir un FICHERO suelto es una pregunta
+        // legítima y no recorre nada.
+        match provider.stat(&root).await {
+            Ok(e) if e.kind != EntryKind::Dir => {
+                bytes = bytes.saturating_add(e.size.unwrap_or(0));
+                entries = entries.saturating_add(1);
+                ctx.progress.update(|p| {
+                    p.bytes_done = bytes;
+                    p.entries_done = entries;
+                });
+                continue;
+            }
+            Ok(_) => {}
+            // Una raíz que no se deja ni mirar cuenta como ilegible y no tumba
+            // el recuento de las demás: una selección de veinte carpetas no se
+            // pierde por una.
+            Err(e) => {
+                if matches!(e, Error::Cancelled) {
+                    return Err(Error::Cancelled);
+                }
+                ilegibles = ilegibles.saturating_add(1);
+                continue;
+            }
+        }
+        let mut pending = vec![root];
+        while let Some(dir) = pending.pop() {
+            if ctx.cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let mut stream = match provider.list(&dir).await {
+                Ok(s) => s,
+                Err(e) => {
+                    if matches!(e, Error::Cancelled) {
+                        return Err(Error::Cancelled);
+                    }
+                    ilegibles = ilegibles.saturating_add(1);
+                    continue;
+                }
+            };
+            ctx.progress.update(|p| p.current = Some(dir.clone()));
+            while let Some(item) = stream.next().await {
+                // Inner loop de verdad (regla 3): un dir de 10^6 entradas o un
+                // provider lento no pueden retrasar la cancelación al pop.
+                if ctx.cancel.is_cancelled() {
+                    return Err(Error::Cancelled);
+                }
+                let entry = match item {
+                    Ok(e) => e,
+                    Err(e) => {
+                        if matches!(e, Error::Cancelled) {
+                            return Err(Error::Cancelled);
+                        }
+                        ilegibles = ilegibles.saturating_add(1);
+                        continue;
+                    }
+                };
+                entries = entries.saturating_add(1);
+                if entry.kind == EntryKind::Dir {
+                    pending.push(entry.path);
+                } else {
+                    // Un listado PEREZOSO no trae tamaños (#52: el provider
+                    // local los deja en `None` y quien los necesita los pide),
+                    // así que aquí hay que pedirlos: sumar `unwrap_or(0)` daba
+                    // «0 B» para un árbol entero, que es la respuesta más
+                    // equivocada posible a la única pregunta que se hizo.
+                    //
+                    // Un `stat` por fichero es lo que hace `du`, y es lo que
+                    // hace la hidratación de una copia (`hydrate_plan`). En un
+                    // provider que SÍ trae el tamaño en el listado no se pide
+                    // nada. En serie, como la hidratación: contra SFTP eso son
+                    // N viajes y ya está anotado como #156 para las dos.
+                    let size = match entry.size {
+                        Some(n) => Some(n),
+                        None => match provider.stat(&entry.path).await {
+                            Ok(st) => st.size,
+                            Err(Error::Cancelled) => return Err(Error::Cancelled),
+                            // Un fichero que se deja listar y no statear cuenta
+                            // como ilegible: su tamaño no se sabe, y el resto
+                            // del recuento no se pierde por él.
+                            Err(_) => {
+                                ilegibles = ilegibles.saturating_add(1);
+                                None
+                            }
+                        },
+                    };
+                    bytes = bytes.saturating_add(size.unwrap_or(0));
+                }
+                ctx.progress.update(|p| {
+                    p.bytes_done = bytes;
+                    p.entries_done = entries;
+                });
+            }
+        }
+    }
+    if ilegibles > 0 {
+        tracing::info!(ilegibles, "fs.dir_size: partes del árbol no se pudieron leer");
+    }
+    ctx.progress.update(|p| {
+        p.bytes_done = bytes;
+        p.entries_done = entries;
+        // Al terminar, el total ES lo contado: decirlo cierra la barra en vez
+        // de dejarla en un «de cuánto» que nunca llegó.
+        p.bytes_total = Some(bytes);
+        p.entries_total = Some(entries);
+        p.current = None;
+    });
+    Ok(())
+}
+
 /// Recorre el árbol bajo `root` (sin incluirlo). Garantía de orden: todo
 /// directorio aparece ANTES que cualquiera de sus descendientes.
 pub(crate) async fn walk(

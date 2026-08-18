@@ -215,6 +215,93 @@ pub fn login_shell_from(env_shell: Option<&std::ffi::OsStr>) -> std::path::PathB
     }
 }
 
+/// The argv that opens `file` in the user's editor (#133).
+///
+/// `$VISUAL` first, then `$EDITOR`, then a fallback POSIX requires to exist.
+/// That order is the convention every editor-launching tool follows, and
+/// getting it backwards is how a user who set `VISUAL` for their GUI editor
+/// ends up in `vi`.
+#[must_use]
+pub fn editor_argv(file: &std::path::Path) -> Vec<std::ffi::OsString> {
+    editor_argv_from(
+        std::env::var_os("VISUAL").as_deref(),
+        std::env::var_os("EDITOR").as_deref(),
+        file,
+    )
+}
+
+/// Testable core of [`editor_argv`].
+///
+/// **The path is its OWN argument and is never interpolated into a command
+/// line.** Going through `$SHELL -c "$EDITOR <path>"` would mean quoting a
+/// filename that norte treats as bytes — a name with a quote, a newline or a
+/// `$` in it either breaks the line or executes part of itself (rule 1 plus
+/// the obvious). Passing argv directly means the bytes reach the editor
+/// exactly as they are on disk.
+///
+/// The editor SPEC is split on ASCII whitespace, so `EDITOR="code -w"` works.
+/// The cost of that convenience is an editor whose own program path contains a
+/// space, which would have to be spelled without one; the trade is worth it
+/// because flags in `$EDITOR` are common and spaces in `/usr/bin` are not.
+///
+/// An absent or empty spec is the same answer, for the same reason
+/// [`login_shell_from`] treats them alike: `EDITOR=` is what a stripped
+/// environment leaves, and spawning `""` is a confusing failure several frames
+/// later rather than an error anyone can read.
+#[must_use]
+pub fn editor_argv_from(
+    visual: Option<&std::ffi::OsStr>,
+    editor: Option<&std::ffi::OsStr>,
+    file: &std::path::Path,
+) -> Vec<std::ffi::OsString> {
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    fn trocea(spec: &std::ffi::OsStr) -> Vec<OsString> {
+        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+        spec.as_bytes()
+            .split(u8::is_ascii_whitespace)
+            .filter(|t| !t.is_empty())
+            .map(|t| OsString::from_vec(t.to_vec()))
+            .collect()
+    }
+    #[cfg(not(unix))]
+    fn trocea(spec: &std::ffi::OsStr) -> Vec<OsString> {
+        spec.to_string_lossy()
+            .split_ascii_whitespace()
+            .map(OsString::from)
+            .collect()
+    }
+
+    let elegido = [visual, editor]
+        .into_iter()
+        .flatten()
+        .find(|s| !s.is_empty())
+        .map(trocea)
+        .filter(|v| !v.is_empty());
+    let mut argv = elegido.unwrap_or_else(|| {
+        vec![OsString::from(if cfg!(windows) {
+            "notepad.exe"
+        } else {
+            "vi"
+        })]
+    });
+    argv.push(file.as_os_str().to_os_string());
+    argv
+}
+
+/// Just the editor program, with no file: an EMPTY buffer (#133).
+///
+/// Same resolution as [`editor_argv`] — `$VISUAL`, then `$EDITOR`, then the
+/// fallback — and the same splitting, so `EDITOR="code -w"` keeps its flag.
+#[must_use]
+pub fn login_shell_editor() -> std::ffi::OsString {
+    // Una ruta vacía no añade argumento: `editor_argv` empuja el fichero al
+    // final, así que se pide con uno y se descarta.
+    let mut argv = editor_argv(std::path::Path::new(""));
+    argv.pop();
+    argv.first().cloned().unwrap_or_default()
+}
+
 /// The argv that runs ONE command line through `shell`, non-interactively.
 ///
 /// The flag is a DECISION and belongs here, not in a frontend (rule 7): POSIX
@@ -519,6 +606,63 @@ pub fn next_norte_level_from(current: Option<&std::ffi::OsStr>) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// #133: `$VISUAL` manda sobre `$EDITOR`, y la ruta va SIEMPRE como su
+    /// propio argumento — jamás interpolada en una línea de comandos, que es
+    /// como un nombre con una comilla acaba ejecutando parte de sí mismo.
+    #[test]
+    fn el_editor_sale_de_visual_luego_de_editor_y_la_ruta_va_aparte() {
+        use std::ffi::OsStr;
+        let f = std::path::Path::new("/tmp/a b.txt");
+        assert_eq!(
+            editor_argv_from(Some(OsStr::new("hx")), Some(OsStr::new("nano")), f),
+            [OsStr::new("hx"), OsStr::new("/tmp/a b.txt")]
+        );
+        assert_eq!(
+            editor_argv_from(None, Some(OsStr::new("nano")), f),
+            [OsStr::new("nano"), OsStr::new("/tmp/a b.txt")]
+        );
+    }
+
+    /// Un spec con banderas se trocea: `EDITOR="code -w"` es lo normal.
+    #[test]
+    fn un_editor_con_banderas_se_trocea() {
+        use std::ffi::OsStr;
+        let f = std::path::Path::new("/x");
+        assert_eq!(
+            editor_argv_from(Some(OsStr::new("code  -w")), None, f),
+            [OsStr::new("code"), OsStr::new("-w"), OsStr::new("/x")]
+        );
+    }
+
+    /// Ausente y VACÍO son la misma respuesta, como en `login_shell_from`:
+    /// `EDITOR=` es lo que deja un entorno pelado, y lanzar `""` es un fallo
+    /// confuso tres marcos más abajo en vez de un error que alguien pueda leer.
+    #[test]
+    fn sin_editor_hay_un_fallback_que_existe() {
+        use std::ffi::OsStr;
+        let f = std::path::Path::new("/x");
+        let esperado: &str = if cfg!(windows) { "notepad.exe" } else { "vi" };
+        assert_eq!(
+            editor_argv_from(None, None, f),
+            [OsStr::new(esperado), OsStr::new("/x")]
+        );
+        assert_eq!(
+            editor_argv_from(Some(OsStr::new("")), Some(OsStr::new("   ")), f),
+            [OsStr::new(esperado), OsStr::new("/x")]
+        );
+    }
+
+    /// Un nombre que NO es UTF-8 llega al editor byte a byte (regla 1).
+    #[cfg(unix)]
+    #[test]
+    fn un_nombre_no_utf8_llega_intacto_al_editor() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+        let crudo = OsStr::from_bytes(b"/tmp/raro\xff.txt");
+        let argv = editor_argv_from(Some(OsStr::new("nano")), None, std::path::Path::new(crudo));
+        assert_eq!(argv[1].as_bytes(), b"/tmp/raro\xff.txt");
+    }
+
     use super::*;
     use norte_proto::VPath;
 

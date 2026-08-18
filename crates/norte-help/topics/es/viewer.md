@@ -16,6 +16,8 @@ commands = [
     "viewer.encoding-auto",
     "viewer.hex",
     "pane.open",
+    "pane.edit",
+    "pane.edit-new",
 ]
 context = ["viewer"]
 +++
@@ -88,3 +90,23 @@ escribiendo tú un fichero.
 Mientras un programa externo tiene el terminal, norte no lo tiene: lo recupera
 cuando ese programa termina, y un programa lanzado desde aquí nunca hereda un
 terminal en modo ratón. De eso va [[mouse]].
+
+# Editar
+
+{{cmd:pane.edit}} abre lo que hay bajo el cursor **en tu editor**: el de
+`$VISUAL`, o el de `$EDITOR`, o `vi` si no has puesto ninguno. norte no trae
+editor propio y no piensa traerlo — lo suyo es mover ficheros, y el que ya usas
+sabe más de editar que cualquier cosa que cupiera aquí.
+
+Mientras el editor está delante, norte se aparta: le devuelve la terminal
+entera, igual que con {{cmd:app.terminal}}. Al salir del editor vuelves a los
+paneles y el listado se recarga, así que lo que hayas guardado ya se ve.
+
+{{cmd:pane.edit-new}} abre el editor con un buffer VACÍO en el directorio que
+estás mirando. El nombre lo pides al guardar, que es donde tu editor sabe
+preguntarlo.
+
+Dos cosas que no hace, y las dos a propósito: no edita una carpeta (para entrar
+está `⏎`) y no edita en un panel remoto. Un editor abre un fichero del sistema;
+bajarlo, editarlo y volver a subirlo es otra cosa —con su conflicto y su
+reversa— y norte prefiere decírtelo a hacerlo a medias.

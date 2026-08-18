@@ -18,6 +18,7 @@ pub mod palette;
 pub mod panel;
 pub mod preview;
 pub mod processes;
+pub mod tree;
 pub mod settings;
 pub mod tasks;
 pub mod theme;

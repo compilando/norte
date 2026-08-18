@@ -551,6 +551,17 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
             app.key_owner() == crate::app::KeyOwner::Processes,
         );
     }
+    if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::tree::KIND)
+        && let Some(t) = app.panes.tree(id)
+    {
+        draw_tree(
+            frame,
+            rect,
+            t,
+            app,
+            app.key_owner() == crate::app::KeyOwner::Tree,
+        );
+    }
     if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::metadata::KIND)
         && let Some(e) = app.panes.metadata(id)
     {
@@ -613,6 +624,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     // que el de temas (`ALLOW_PICKER`) y por eso el mismo hint.
     if let Some(p) = &app.layout_picker {
         draw_layout_picker(frame, p, &app.theme, &app.dialog_hints.picker);
+    }
+    // #140: el selector de conexiones, mismo allowlist y mismo hint que los
+    // otros dos — es una lista con cursor que no muta nada.
+    if let Some(p) = &app.connections_picker {
+        draw_connections_picker(frame, p, &app.theme, &app.dialog_hints.picker);
     }
     if let Some(mgr) = &app.extensions {
         if let Some(panel) = &mgr.config {
@@ -1511,6 +1527,70 @@ const LAYOUT_PREVIEW_H: u16 = 10;
 /// disposición del usuario vive en disco, y leer un fichero en el camino de
 /// pintado —una vez por frame— es la clase de coste que no se ve hasta que la
 /// config está en un directorio de red.
+/// El selector de conexiones (#140).
+///
+/// Nombre y dirección, que es lo que hay en `connections.toml`: jamás un
+/// secreto — las credenciales se referencian (ADR 0015) y aquí no llegan. Las
+/// dos cosas se enmascaran igual: son texto de un fichero que el usuario
+/// escribió, y un nombre con bidi no reordena este cuadro.
+fn draw_connections_picker(
+    frame: &mut Frame<'_>,
+    p: &norte_frontend::connections_picker::ConnectionsPicker,
+    theme: &TuiTheme,
+    hint: &str,
+) {
+    let filas: Vec<String> = p
+        .rows()
+        .iter()
+        .map(|r| {
+            format!(
+                " {} · {}",
+                norte_encoding::mask_terminal_hazards(&r.name),
+                norte_encoding::mask_terminal_hazards(&r.url)
+            )
+        })
+        .collect();
+    // Sin conexiones se enseña POR QUÉ está vacío y dónde se ponen: una caja
+    // vacía deja al lector pensando que la tecla se rompió.
+    let cuerpo: Vec<String> = if filas.is_empty() {
+        vec![format!(" {}", t("connections-picker-empty"))]
+    } else {
+        filas
+    };
+    let ancho = cuerpo
+        .iter()
+        .map(|f| Line::raw(f.as_str()).width())
+        .max()
+        .unwrap_or(0);
+    let ancho = u16::try_from(ancho).unwrap_or(u16::MAX).max(24);
+    let pie = format!(" {hint} ");
+    let ancho = ancho.max(u16::try_from(pie.chars().count()).unwrap_or(u16::MAX));
+    let alto = u16::try_from(cuerpo.len()).unwrap_or(u16::MAX).saturating_add(2);
+    let area = centered(frame.area(), ancho.saturating_add(2), alto);
+    clear_themed(frame, area, theme);
+    let bloque = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("connections-picker-title")))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(Line::raw(pie))
+        .border_style(theme.role(Role::ModalBorder));
+    let dentro = bloque.inner(area);
+    frame.render_widget(bloque, area);
+    let lineas: Vec<Line<'_>> = cuerpo
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let l = Line::raw(f.as_str());
+            if i == p.cursor() && !p.rows().is_empty() {
+                l.style(theme.role(Role::Selection))
+            } else {
+                l
+            }
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lineas), dentro);
+}
+
 fn draw_layout_picker(
     frame: &mut Frame<'_>,
     p: &norte_frontend::layout_picker::LayoutPicker,
@@ -2780,6 +2860,79 @@ fn progreso_pct(p: &norte_proto::TaskProgress) -> u64 {
 /// Las filas salen del `TaskBoard` que ya pinta la franja — este panel no
 /// guarda una segunda lista — y el cursor se acota AQUÍ contra las filas de
 /// este frame: una tarea puede terminar y desaparecer entre dos pinturas.
+/// El árbol de directorios (#136).
+///
+/// Un nombre por fila, sangrado por profundidad, con un indicador de tres
+/// estados: desplegada, plegada-con-hijos, y sin leer. El tercero importa —
+/// pintar «hoja» a algo que todavía no se ha listado sería inventarse la
+/// respuesta— y es el mismo criterio que el resto de la pantalla: lo que no se
+/// sabe se dice, no se rellena.
+///
+/// Los nombres van por `display_name`, como el listado: un directorio con bidi
+/// o invisibles no reordena esta columna.
+fn draw_tree(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    arbol: &crate::tree::Tree,
+    app: &App,
+    con_teclado: bool,
+) {
+    let theme = &app.theme;
+    let borde = if con_teclado {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("tree-title")))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(borde));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let filas = arbol.rows();
+    if filas.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::styled(t("tree-loading"), theme.role(Role::Title))),
+            inner,
+        );
+        return;
+    }
+    let cursor = arbol.cursor();
+    let items: Vec<ListItem<'_>> = filas
+        .iter()
+        .map(|r| {
+            let marca = match (r.expanded, r.children) {
+                (true, _) => "▾",
+                (false, Some(true)) => "▸",
+                // Leída y sin hijos: una hoja de verdad.
+                (false, Some(false)) => " ",
+                // Sin leer: ni hoja ni rama, todavía.
+                (false, None) => "·",
+            };
+            let (nombre, hostil) = display_name(
+                r.path
+                    .file_name()
+                    .map_or(b"/".as_slice(), norte_proto::Segment::as_bytes),
+            );
+            let sangria = "  ".repeat(r.depth);
+            let texto = if hostil {
+                format!("{sangria}{marca} {HOSTILE_BADGE} {nombre}")
+            } else {
+                format!("{sangria}{marca} {nombre}")
+            };
+            ListItem::new(Line::raw(texto))
+        })
+        .collect();
+    let mut estado_lista = ListState::default();
+    estado_lista.select(Some(cursor));
+    let lista = List::new(items).highlight_style(theme.role(Role::Selection));
+    frame.render_stateful_widget(lista, inner, &mut estado_lista);
+}
+
 fn draw_processes(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -3116,6 +3269,14 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         // cómputo dinámico `body_lines + 3` que
         // ConfirmDelete/ConfirmTransfer. Estable al scroll: la ventana
         // clampada siempre pinta `min(len, LIMIT)` parejas.
+        // #139: nombre, clase, tamaño, fecha y ruta, más un atributo por línea
+        // y la línea del recuento cuando la entrada es una carpeta.
+        Modal::Properties { entry, size, .. } => {
+            let lineas = 5
+                + entry.attrs.len()
+                + usize::from(entry.kind == norte_proto::EntryKind::Dir || size.is_some());
+            u16::try_from(lineas).unwrap_or(u16::MAX).saturating_add(3)
+        }
         Modal::AiRenamePlan { entries, plan, .. } => {
             let lineas = 2
                 + 2 * entries.len().min(AI_RENAME_PAIR_LIMIT)
@@ -3271,6 +3432,13 @@ fn modal_title_body(
         ),
         // S2 (`[ui] confirm_quit`): sin datos propios — un título+cuerpo
         // fijos más el hint (`hints.confirm`, ALLOW_CONFIRM reutilizado).
+        // #139: las propiedades salen del LISTADO —nada que pedir— salvo el
+        // recuento de una carpeta, que es lo único que un listado no sabe.
+        Modal::Properties {
+            entry,
+            size,
+            size_task,
+        } => properties_modal_text(entry, *size, size_task.is_some()),
         Modal::ConfirmQuit => (
             t("modal-confirm-quit-title"),
             format!("{}\n{}", t("modal-confirm-quit-body"), hints.confirm),
@@ -3481,6 +3649,119 @@ fn approval_modal_text(
 /// tan fácil como tecleado, y `PatternError` EMBEBE el patrón verbatim en su
 /// mensaje (rustdoc de `PatternError::Glob`) — el enmascarado alcanza
 /// también a la línea de error.
+/// El texto del diálogo de propiedades (#139).
+///
+/// El nombre y los valores de atributo son datos de FICHERO, así que van
+/// enmascarados con el mismo `display_name` que el listado: un nombre con bidi
+/// o invisibles no reordena este diálogo.
+fn properties_modal_text(
+    entry: &norte_proto::Entry,
+    size: Option<(u64, u64)>,
+    contando: bool,
+) -> (String, String) {
+    use norte_proto::EntryKind;
+
+    let (nombre, hostil) = display_name(
+        entry
+            .path
+            .file_name()
+            .map_or(b"".as_slice(), norte_proto::Segment::as_bytes),
+    );
+    let titulo = if hostil {
+        format!("{HOSTILE_BADGE} {nombre}")
+    } else {
+        nombre
+    };
+    let clase = match entry.kind {
+        EntryKind::Dir => t("props-kind-dir"),
+        EntryKind::File => t("props-kind-file"),
+        EntryKind::Symlink => t("props-kind-symlink"),
+        EntryKind::Other => t("props-kind-other"),
+    };
+    let mut lineas = vec![format!("{}: {}", t("props-kind"), clase)];
+    // El tamaño de una CARPETA no sale del listado: o se ha contado, o se está
+    // contando, o —si nadie lo pidió— se dice que se puede pedir. Fingir un
+    // cero sería la única respuesta claramente falsa.
+    let tamano = match (entry.kind, size, contando) {
+        (_, Some((bytes, entradas)), _) => format!(
+            "{} ({})",
+            norte_frontend::human_bytes(bytes),
+            ta("props-entries", &[("count", &entradas.to_string())])
+        ),
+        (EntryKind::Dir, None, true) => t("props-counting"),
+        (EntryKind::Dir, None, false) => t("props-count-hint"),
+        (_, None, _) => entry
+            .size
+            .map_or_else(|| t("props-size-unknown"), norte_frontend::human_bytes),
+    };
+    lineas.push(format!("{}: {}", t("props-size"), tamano));
+    lineas.push(format!(
+        "{}: {}",
+        t("props-modified"),
+        entry.mtime_ms.map_or_else(
+            || t("props-mtime-unknown"),
+            |ms| norte_frontend::columns::format_mtime(
+                ms,
+                norte_frontend::columns::TimeFormat::Iso,
+                0
+            )
+        )
+    ));
+    let (ruta, ruta_hostil) = display_name(entry.path.to_wire().as_bytes());
+    lineas.push(format!(
+        "{}: {}{}",
+        t("props-path"),
+        if ruta_hostil {
+            format!("{HOSTILE_BADGE} ")
+        } else {
+            String::new()
+        },
+        ruta
+    ));
+    // Los atributos que el provider haya reportado, tal cual: los pinta quien
+    // los pidió, y esta ventana no pide ninguno de más.
+    for (id, valor) in &entry.attrs {
+        let (v, v_hostil) = attr_texto(valor);
+        lineas.push(format!(
+            "{id}: {}{v}",
+            if v_hostil {
+                format!("{HOSTILE_BADGE} ")
+            } else {
+                String::new()
+            }
+        ));
+    }
+    lineas.push(t("props-hint"));
+    (titulo, lineas.join("\n"))
+}
+
+/// El valor de un atributo, listo para pintar, y si hubo que enmascararlo.
+///
+/// Los dos de TERCEROS —texto y bytes— pasan por `display_name`, el mismo
+/// camino lossy-con-badge que un nombre de fichero: un `owner` con bidi no
+/// reordena este diálogo, y los bytes originales no se tocan (regla 1).
+fn attr_texto(v: &norte_proto::AttrValue) -> (String, bool) {
+    use norte_proto::AttrValue;
+    match v {
+        AttrValue::Uint(n) => (n.to_string(), false),
+        AttrValue::Int(i) => (i.to_string(), false),
+        AttrValue::TimeMs(ms) => (
+            norte_frontend::columns::format_mtime(
+                *ms,
+                norte_frontend::columns::TimeFormat::Iso,
+                0,
+            ),
+            false,
+        ),
+        AttrValue::Bool(b) => (t(if *b { "col-cell-yes" } else { "col-cell-no" }), false),
+        AttrValue::Text(s) => display_name(s.as_bytes()),
+        AttrValue::Bytes(b) => display_name(b),
+        // Presente-pero-impintable: «?» visible. El blanco queda reservado
+        // para AUSENTE, como en las celdas del listado.
+        AttrValue::Unknown => ("?".to_owned(), false),
+    }
+}
+
 fn mark_pattern_modal_text(mark: bool, pattern: &str, error: Option<&str>) -> (String, String) {
     let (masked, hostil) = display_name(pattern.as_bytes());
     // #103 T9 review MINOR: `PaneState::mark_glob` compila el patrón CRUDO,

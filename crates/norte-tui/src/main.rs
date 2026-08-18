@@ -679,6 +679,7 @@ fn route_paste(app: &mut App, text: &str) {
 
     let outcome = if (app.theme_picker.is_some()
         || app.layout_picker.is_some()
+        || app.connections_picker.is_some()
         || app.columns_picker.is_some())
         && !modal_wins(app)
     {
@@ -2636,6 +2637,19 @@ async fn run(
         if let Some(hash) = app.pending_sync_apply.take() {
             launch_sync_apply(app, backend, &mut sync_run, &hash).await;
         }
+        // #140: el panel que acaba de desconectar vuelve a casa por el mismo
+        // `cd` que cualquier otra navegación, con su ritual de vuelta.
+        if let Some(casa) = app.pending_disconnect_home.take() {
+            let outcome = cd(app, backend, &mut events, casa).await;
+            apply_cd(
+                &app.panes,
+                &mut fill,
+                &mut decorate_fetch,
+                &mut last_probed,
+                &mut search_run,
+                outcome,
+            );
+        }
         if let Some(pending) = app.pending_shell.take() {
             let norte_tui::app::PendingShell {
                 argv,
@@ -2823,6 +2837,32 @@ async fn run(
                     }
                 }
                 None => {}
+            }
+            // #136: el árbol SÍ pide, y por eso pide UNA rama por vuelta: un
+            // directorio de diez mil entradas o un remoto lento no pueden
+            // trabar el bucle, y la siguiente vuelta pide la siguiente.
+            if let Some(dir) = app.tree().and_then(norte_tui::tree::Tree::wants) {
+                let hijos = match backend.list(&dir).await {
+                    Ok(mut entries) => {
+                        // El MISMO orden que el listado de al lado, con el
+                        // mismo comparador: dos columnas que enseñan lo mismo
+                        // en distinto orden se leen como si dijeran cosas
+                        // distintas.
+                        norte_frontend::sort_entries(&mut entries);
+                        entries
+                            .into_iter()
+                            .filter(|e| e.kind == norte_proto::EntryKind::Dir)
+                            .map(|e| e.path)
+                            .collect()
+                    }
+                    // Una rama que no se deja leer se marca como leída y VACÍA:
+                    // sin esto se volvería a pedir en cada vuelta, que es un
+                    // bucle de peticiones contra un directorio prohibido.
+                    Err(_) => Vec::new(),
+                };
+                if let Some(t) = app.tree_mut() {
+                    t.insert_children(dir, hijos);
+                }
             }
             // La hoja de atributos NO pide nada: lo que enseña ya vino en el
             // listado, así que esto es una copia, no una petición. Un hueco
@@ -3675,6 +3715,34 @@ async fn run(
                                 }
                             } else if app.theme_picker.is_some() && !modal_wins(app) {
                                 on_theme_picker_key(app, dialog_resolver, key.modifiers, key.code).await;
+                            } else if app.connections_picker.is_some() && !modal_wins(app) {
+                                // #140: confirmar devuelve la URL y navegar es
+                                // un `cd` como cualquier otro — con su ritual
+                                // de vuelta, para que el drenador paginado y
+                                // las sondas del pane anterior no sigan vivos.
+                                if let Some(url) =
+                                    on_connections_picker_key(app, dialog_resolver, key.modifiers, key.code)
+                                {
+                                    match VPath::parse(&url) {
+                                        Ok(destino) => {
+                                            let outcome = cd(app, backend, &mut events, destino).await;
+                                            apply_cd(
+                                                &app.panes,
+                                                &mut fill,
+                                                &mut decorate_fetch,
+                                                &mut last_probed,
+                                                &mut search_run,
+                                                outcome,
+                                            );
+                                        }
+                                        Err(_) => {
+                                            app.message = Some(ta(
+                                                "msg-connect-bad-url",
+                                                &[("url", &norte_encoding::mask_terminal_hazards(&url))],
+                                            ));
+                                        }
+                                    }
+                                }
                             } else if app.layout_picker.is_some() && !modal_wins(app) {
                                 // Mismo puesto en la cadena y el MISMO
                                 // allowlist que el selector de tema: los dos
@@ -3709,6 +3777,28 @@ async fn run(
                                     key.code,
                                 )
                                 .await;
+                            } else if app.key_owner() == norte_tui::app::KeyOwner::Tree
+                                && !modal_wins(app)
+                            {
+                                // #136: el árbol manda el listado a la rama
+                                // elegida por el flujo de cd de siempre.
+                                let outcome = on_tree_key(
+                                    app,
+                                    backend,
+                                    &mut events,
+                                    dialog_resolver,
+                                    key.modifiers,
+                                    key.code,
+                                )
+                                .await;
+                                apply_cd(
+                                    &app.panes,
+                                    &mut fill,
+                                    &mut decorate_fetch,
+                                    &mut last_probed,
+                                    &mut search_run,
+                                    outcome,
+                                );
                             } else if app.key_owner() == norte_tui::app::KeyOwner::Places
                                 && !modal_wins(app)
                             {
@@ -4872,6 +4962,40 @@ async fn on_theme_picker_key(
 /// No es `async` y no persiste nada: elegir una disposición vale para esta
 /// sesión, y lo que la fija entre arranques es `[ui] layout` en tu config.
 /// Guardarla al vuelo convertiría una prueba en un cambio permanente.
+/// Teclas del selector de conexiones (#140): mismo reparto y mismo allowlist
+/// que el de disposiciones. Devuelve la URL elegida, si se confirmó.
+fn on_connections_picker_key(
+    app: &mut App,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) -> Option<String> {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return None;
+    }
+    let chord = chord_from_crossterm(mods, code)?;
+    let cmd = match resolver.push(chord) {
+        Resolution::Run { command: cmd, .. } => cmd,
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
+            resolver.reset();
+            return None;
+        }
+        Resolution::Reset => return None,
+    };
+    if !ALLOW_PICKER.contains(&cmd.as_str()) {
+        return None;
+    }
+    let action = match cmd.as_str() {
+        "dialog.up" => PickerAction::Up,
+        "dialog.down" => PickerAction::Down,
+        "dialog.confirm" => PickerAction::Confirm,
+        "dialog.cancel" => PickerAction::Cancel,
+        _ => return None,
+    };
+    app.connections_picker_input(action)
+}
+
 fn on_layout_picker_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code: KeyCode) {
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.quit = true;
@@ -6282,6 +6406,7 @@ async fn apply_picked_columns(
                     norte_frontend::SortColumn::Name => "name",
                     norte_frontend::SortColumn::Size => "size",
                     norte_frontend::SortColumn::Mtime => "mtime",
+                    norte_frontend::SortColumn::Extension => "extension",
                 },
                 descending: sort.dir == norte_frontend::SortDir::Desc,
                 dirs_first: sort.dirs_first,
@@ -7798,6 +7923,73 @@ async fn open_drive_popup(app: &mut App, backend: &Backend, pane: usize, include
 /// El sidebar no navega por su cuenta: Enter devuelve una ruta y el `cd` va al
 /// LISTADO enfocado, por el mismo camino que cualquier otro. Es lo que hace
 /// que abrirlo no cambie a dónde van las operaciones.
+/// Teclas del árbol (#136): mismo reparto y mismo allowlist que el sidebar.
+///
+/// `⏎` sobre una rama la despliega o la pliega; `dialog.confirm` con la rama ya
+/// abierta MANDA el listado ahí, que es para lo que se abre un árbol. Cancelar
+/// suelta el teclado y deja el panel abierto — cerrarlo es `pane.tree`, la
+/// misma tercera pulsación que el sidebar.
+async fn on_tree_key(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) -> Cd {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return Cd::Cancelled;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return Cd::Cancelled;
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run { command: cmd, .. } => cmd,
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
+            resolver.reset();
+            return Cd::Cancelled;
+        }
+        Resolution::Reset => return Cd::Cancelled,
+    };
+    if !ALLOW_PLACES.contains(&cmd.as_str()) {
+        return Cd::Cancelled;
+    }
+    match cmd.as_str() {
+        "dialog.up" => {
+            if let Some(t) = app.tree_mut() {
+                t.up();
+            }
+        }
+        "dialog.down" => {
+            if let Some(t) = app.tree_mut() {
+                t.down();
+            }
+        }
+        "dialog.toggle-enabled" => {
+            if let Some(t) = app.tree_mut() {
+                t.toggle();
+            }
+        }
+        "dialog.cancel" => app.return_keys_to_panes(),
+        "pane.tree" => app.toggle_tree(),
+        "dialog.confirm" => {
+            let destino = app.tree().and_then(norte_tui::tree::Tree::selected);
+            if let Some(dir) = destino {
+                // Desplegar Y navegar: quien pulsa Enter sobre una rama quiere
+                // ver qué hay dentro, y verlo en el listado es la respuesta
+                // completa.
+                if let Some(t) = app.tree_mut() {
+                    t.expand();
+                }
+                return cd(app, backend, events, dir).await;
+            }
+        }
+        _ => {}
+    }
+    Cd::Cancelled
+}
+
 async fn on_places_key(
     app: &mut App,
     backend: &Backend,
@@ -8640,6 +8832,22 @@ async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> 
     for fin in finished {
         use norte_proto::TaskState;
         match fin.state {
+            // #139: contar no muta nada, así que no recarga los paneles — y su
+            // resultado ES su progreso: el último snapshot trae el total.
+            TaskState::Completed if fin.progress.kind == norte_proto::TaskKind::DirSize => {
+                let (bytes, entradas) = (fin.progress.bytes_done, fin.progress.entries_done);
+                // Si el diálogo de propiedades esperaba ESTE recuento, el
+                // número va ahí; si no, a la barra.
+                if !app.properties_sized(fin.progress.task_id, bytes, entradas) {
+                    app.message = Some(ta(
+                        "msg-dir-size",
+                        &[
+                            ("size", &norte_frontend::human_bytes(bytes)),
+                            ("count", &entradas.to_string()),
+                        ],
+                    ));
+                }
+            }
             TaskState::Completed => {
                 refresh = true;
                 app.message = Some(t("msg-done"));
@@ -8946,7 +9154,12 @@ async fn on_dialog_key(
                 // devuelve `None` para ambos, así que `on_dialog_key` ya
                 // habría retornado antes de llegar a este match: inalcanzable
                 // aquí, no-op defensivo.
-                Modal::Collision { .. }
+                // Y las propiedades (#139) tampoco: `dialog_action` solo les
+                // entiende cancelar, así que un «confirmar» no llega aquí —
+                // nombrarlas es lo que hace que añadir uno sea un error de
+                // compilación y no un Enter que hace algo a escondidas.
+                Modal::Properties { .. }
+                | Modal::Collision { .. }
                 | Modal::TrustLuaInit { .. }
                 | Modal::MarkPattern { .. }
                 | Modal::Mkdir { .. }
@@ -9086,6 +9299,38 @@ async fn submit_deletes(app: &mut App, backend: &Backend, items: &[VPath], perma
         }
     }
     app.consume_marks();
+}
+
+/// Lanza un recuento de tamaño y lo registra en el panel de tasks (#139).
+///
+/// `para_el_dialogo` ata la Task al modal de propiedades abierto, para que su
+/// resultado llegue AHÍ y no solo a la barra de estado.
+///
+/// El total no vuelve por aquí: llega en el progreso terminal de la Task, que
+/// es lo que `on_tick` ya está mirando para todas las demás.
+async fn lanza_recuento(
+    app: &mut App,
+    backend: &Backend,
+    paths: Vec<VPath>,
+    para_el_dialogo: bool,
+) {
+    if paths.is_empty() {
+        return;
+    }
+    match backend
+        .dir_size(norte_proto::methods::FsDirSizeParams { paths })
+        .await
+    {
+        Ok(task) => {
+            if para_el_dialogo {
+                app.properties_counting(task.id());
+            } else {
+                app.message = Some(t("msg-dir-size-counting"));
+            }
+            app.board.push(&task, None);
+        }
+        Err(e) => app.message = Some(error_message(&e)),
+    }
 }
 
 /// Encola una transferencia y la registra en el panel con su contexto de
@@ -10957,6 +11202,75 @@ fn submit_command_line(app: &mut App, cmd: &str) {
 /// con permiso de escritura en el padre puede cambiar el directorio por un
 /// symlink. Cerrarlo de verdad pide `openat`/`fchdir` y no lo hace ninguna
 /// otra ruta de norte; está dicho en los límites honestos del tema de ayuda.
+/// Cierra la sesión del panel con foco y lo devuelve a casa (#140).
+///
+/// Las dos mitades importan y en este orden: primero se suelta la sesión
+/// —mientras la ruta del panel sigue siendo la remota, que es de donde sale la
+/// clave— y después se navega. Al revés habría que recordar de dónde se venía.
+///
+/// En un panel LOCAL no hay nada que cerrar y se dice: una tecla que contesta
+/// «hecho» sobre algo que no ha hecho nada enseña a no fiarse del mensaje.
+async fn desconectar(app: &mut App, backend: &Backend) {
+    let dir = app.focused().dir().clone();
+    if norte_vfs_local::vpath_to_native(&dir).is_ok() {
+        app.message = Some(t("msg-disconnect-local"));
+        return;
+    }
+    match backend.close_connection(&dir).await {
+        Ok(cerrada) => {
+            app.message = Some(t(if cerrada {
+                "msg-disconnect-done"
+            } else {
+                "msg-disconnect-none"
+            }));
+            // A casa: el panel no puede quedarse mirando una conexión que
+            // acaba de cerrarse. La navegación la pide el run loop en la
+            // siguiente vuelta, como cualquier otra.
+            // A casa, o a la raíz local si el entorno no dice cuál es: lo que
+            // no puede pasar es que el panel se quede mirando la conexión que
+            // se acaba de cerrar.
+            app.pending_disconnect_home = std::env::home_dir()
+                .and_then(|h| norte_vfs_local::vpath_from_native(&h).ok())
+                .or_else(|| VPath::parse("file:///").ok());
+        }
+        Err(e) => app.message = Some(error_message(&e)),
+    }
+}
+
+/// El editor sobre la entrada bajo el cursor (#133).
+///
+/// Un editor abre un FICHERO DEL SISTEMA: sobre un pane remoto no hay ninguno
+/// que darle —bajarlo, editarlo y volverlo a subir es otra feature, con su
+/// conflicto y su reversa—, así que se dice y no se abre nada. Es el mismo
+/// guard, y el mismo mensaje, que el shell y la línea de comandos.
+///
+/// Sobre un directorio tampoco: quien quiera entrar tiene `nav.enter`, y
+/// abrirle un editor a una carpeta es enseñarle al editor lo que no sabe.
+fn editar_lo_de_debajo(app: &App) -> Result<norte_tui::app::PendingShell, String> {
+    let Some(entrada) = app.focused().selected() else {
+        return Err(t("msg-edit-nothing"));
+    };
+    if entrada.kind == norte_proto::EntryKind::Dir {
+        return Err(t("msg-edit-not-a-file"));
+    }
+    let Ok(native) = norte_vfs_local::vpath_to_native(&entrada.path) else {
+        return Err(shell_remote_message(app));
+    };
+    // El cwd del hijo es el directorio que se está mirando, como con el shell:
+    // un `:w otro.txt` del editor cae donde el humano está, no donde arrancó
+    // norte.
+    let cwd = norte_vfs_local::vpath_to_native(app.focused().dir())
+        .ok()
+        .and_then(|d| norte_frontend::shell::child_cwd(&d));
+    Ok(norte_tui::app::PendingShell {
+        argv: norte_frontend::shell::editor_argv(&native),
+        cwd,
+        // Un editor de pantalla completa se despide él solo; esperar una tecla
+        // después sería un paso de más entre guardar y volver a los paneles.
+        wait_for_key: false,
+    })
+}
+
 fn shell_cwd(app: &App) -> Result<std::path::PathBuf, String> {
     let Ok(native) = norte_vfs_local::vpath_to_native(app.focused().dir()) else {
         return Err(shell_remote_message(app));
@@ -11458,6 +11772,9 @@ async fn dispatch(
         // `preview::want` en el bucle, contra el cursor de cada frame.
         Command::LayoutPreview => app.toggle_preview(),
         Command::LayoutProcesses => app.toggle_processes(),
+        // #136: el árbol se abre, se enfoca y se cierra como el sidebar. Su
+        // contenido lo pide el run loop, una rama por vuelta.
+        Command::PaneTree => app.toggle_tree(),
         Command::LayoutMetadata => app.toggle_metadata(),
         // El listado del directorio de layouts se hace AQUÍ, fuera del
         // runtime, y llega hecho al `App` (regla 2). Un directorio que no se
@@ -11714,7 +12031,51 @@ async fn dispatch(
                 open_viewer(app, backend, events, path).await;
             }
         }
+        // #140: elegir de `connections.toml`. Leer el fichero es del frontend
+        // —el selector no toca disco— y navegar, del run loop.
+        Command::PaneConnect => {
+            let dir = norte_core::connect::config_dir();
+            match norte_core::connect::named_connections(&dir).await {
+                Ok(filas) => app.open_connections_picker(
+                    filas
+                        .into_iter()
+                        .map(|(name, url)| norte_frontend::connections_picker::Row { name, url })
+                        .collect(),
+                ),
+                Err(e) => app.message = Some(error_message(&e)),
+            }
+        }
+        // Y desconectar SUELTA la sesión, no solo se va del panel: si no, el
+        // socket seguiría abierto hasta que la sesión venciera sola y
+        // «desconectar» sería un nombre para irse a otro sitio.
+        Command::PaneDisconnect => desconectar(app, backend).await,
         Command::PaneOpen => resolve_opener(app),
+        // #133: F4 EDITA. Lo ejecuta el run loop, como el shell y como
+        // `pane.open`: es él quien tiene la terminal, y suspender la TUI para
+        // devolvérsela a un programa de pantalla completa es exactamente lo
+        // que ya hace `app.terminal`.
+        //
+        // La ruta viaja como ARGUMENTO y no dentro de una línea de comandos:
+        // un nombre con una comilla, un `$` o un salto de línea o rompe la
+        // línea o ejecuta parte de sí mismo, y aquí los nombres son bytes
+        // (regla 1).
+        Command::PaneEdit => match editar_lo_de_debajo(app) {
+            Ok(pendiente) => app.pending_shell = Some(pendiente),
+            Err(msg) => app.message = Some(msg),
+        },
+        // Shift+F4: el editor con un buffer VACÍO en este directorio, que es
+        // lo que hacen mc y Krusader. El nombre es cosa del editor —lo pide al
+        // guardar—, y pedirlo aquí sería un diálogo que hace lo mismo peor.
+        Command::PaneEditNew => match shell_cwd(app) {
+            Ok(dir) => {
+                app.pending_shell = Some(norte_tui::app::PendingShell {
+                    argv: vec![norte_frontend::shell::login_shell_editor()],
+                    cwd: Some(dir),
+                    wait_for_key: false,
+                });
+            }
+            Err(msg) => app.message = Some(msg),
+        },
         // #135 (S4, design §D): los tres se RESUELVEN aquí y los ejecuta el
         // run loop, que es el dueño de la terminal — mismo reparto que
         // `pane.open`. Nada de esto va al journal: un shell que abre el
@@ -11808,6 +12169,45 @@ async fn dispatch(
         // plugin salen de `plugin.list` (aprobado + activado). Un fetch
         // fallido NO impide abrir el picker — degrada a builtins + attrs,
         // igual que la palette degrada a built-ins.
+        // #138: la misma semántica que un click en la cabecera
+        // (`SortSpec::after_click`) — la columna activa invierte, una nueva
+        // ordena ascendente— y sobre el pane con el FOCO, no sobre los dos: el
+        // orden es de un listado, como el cursor.
+        Command::PaneSortName => app.sort_focused_by(norte_frontend::SortColumn::Name),
+        Command::PaneSortExt => app.sort_focused_by(norte_frontend::SortColumn::Extension),
+        Command::PaneSortSize => app.sort_focused_by(norte_frontend::SortColumn::Size),
+        Command::PaneSortTime => app.sort_focused_by(norte_frontend::SortColumn::Mtime),
+        // El «menú de orden» es el diálogo de columnas: ahí está la columna,
+        // la dirección y `dirs_first`, y `dialog.sort` ordena por la fila bajo
+        // el cursor. Una segunda pantalla para lo mismo sería otra que
+        // mantener y otra que aprender.
+        Command::PaneSortMenu => {
+            let plugins = backend
+                .plugins_list()
+                .await
+                .map(|l| l.plugins)
+                .unwrap_or_default();
+            app.open_columns_picker(&plugins);
+        }
+        // #139: las propiedades salen del listado. Lo único que hay que pedir
+        // es lo que un listado no sabe —cuánto ocupa una carpeta—, y se pide
+        // solo si la entrada es una.
+        Command::PaneProperties => {
+            if let Some(dir) = app.open_properties() {
+                // La fecha de una carpeta no viene en un listado perezoso
+                // (#52) y un `stat` la sabe: se pide una vez, al abrir.
+                if let Ok(fresca) = backend.stat(&dir).await {
+                    app.properties_hydrate(fresca);
+                }
+                lanza_recuento(app, backend, vec![dir], true).await;
+            }
+        }
+        // Y contar a mano, sobre lo MARCADO (o el cursor si no hay marcas):
+        // «¿cuánto ocupa todo esto?» es una pregunta sobre la selección.
+        Command::PaneDirSize => {
+            let objetivos = app.focused().marked_paths();
+            lanza_recuento(app, backend, objetivos, false).await;
+        }
         Command::PaneColumns => {
             let plugins = backend
                 .plugins_list()
@@ -16183,5 +16583,89 @@ mod session_push_tests {
             VPath::parse("file:///x").expect("wire"),
             "y un hueco VIVO no lo pisa la sesión de otra ventana"
         );
+    }
+}
+#[cfg(test)]
+mod edit_tests {
+    use super::*;
+
+    fn app_local() -> App {
+        let d = VPath::parse("file:///tmp").expect("wire de test");
+        App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
+    }
+
+    /// #133: sin nada bajo el cursor no hay nada que editar, y se dice.
+    #[test]
+    fn editar_la_nada_lo_dice() {
+        let app = app_local();
+        assert!(editar_lo_de_debajo(&app).is_err());
+    }
+
+    /// Una CARPETA no se edita: para entrar está `nav.enter`, y abrirle un
+    /// editor a un directorio es enseñarle al editor lo que no sabe.
+    #[test]
+    fn una_carpeta_no_se_edita() {
+        let mut app = app_local();
+        app.panes[0].begin_listing(
+            VPath::parse("file:///tmp").expect("wire"),
+            vec![norte_proto::Entry {
+                path: VPath::parse("file:///tmp/sub").expect("wire"),
+                kind: norte_proto::EntryKind::Dir,
+                size: None,
+                mtime_ms: None,
+                attrs: std::collections::BTreeMap::new(),
+            }],
+            false,
+            None,
+        );
+        let err = editar_lo_de_debajo(&app).expect_err("una carpeta no");
+        assert!(!err.is_empty());
+    }
+
+    /// Un pane REMOTO no tiene fichero de sistema que darle al editor, así que
+    /// se dice en vez de abrir nada.
+    #[test]
+    fn en_un_pane_remoto_no_se_edita() {
+        let d = VPath::parse("sftp://host/casa").expect("wire");
+        let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d.clone(), Vec::new()));
+        app.panes[0].begin_listing(
+            d.clone(),
+            vec![norte_proto::Entry {
+                path: VPath::parse("sftp://host/casa/a.txt").expect("wire"),
+                kind: norte_proto::EntryKind::File,
+                size: Some(1),
+                mtime_ms: None,
+                attrs: std::collections::BTreeMap::new(),
+            }],
+            false,
+            None,
+        );
+        assert!(editar_lo_de_debajo(&app).is_err());
+    }
+
+    /// Y sobre un fichero local sale el argv del editor con la ruta APARTE.
+    #[test]
+    fn sobre_un_fichero_local_sale_el_editor_con_la_ruta_aparte() {
+        let mut app = app_local();
+        app.panes[0].begin_listing(
+            VPath::parse("file:///tmp").expect("wire"),
+            vec![norte_proto::Entry {
+                path: VPath::parse("file:///tmp/a.txt").expect("wire"),
+                kind: norte_proto::EntryKind::File,
+                size: Some(1),
+                mtime_ms: None,
+                attrs: std::collections::BTreeMap::new(),
+            }],
+            false,
+            None,
+        );
+        let pendiente = editar_lo_de_debajo(&app).expect("local y fichero");
+        assert_eq!(pendiente.argv.len(), 2, "programa y ruta, sin línea de shell");
+        assert_eq!(
+            pendiente.argv[1],
+            std::ffi::OsString::from("/tmp/a.txt"),
+            "la ruta va como su propio argumento"
+        );
+        assert!(!pendiente.wait_for_key, "un editor se despide solo");
     }
 }

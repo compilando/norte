@@ -1196,6 +1196,92 @@ impl Backend {
     /// se entrega como [`Error::Unsupported`] — «tu daemon es más viejo», no
     /// un fallo real. Resto, taxonomía del protocolo; daemon caído =
     /// `ProviderUnavailable`.
+    /// Cierra la sesión remota de `path` (#140). `false` = no había ninguna.
+    ///
+    /// # Errors
+    ///
+    /// Lo que devuelva el transporte. Un daemon N-1 sin el método contesta
+    /// `METHOD_NOT_FOUND` → [`Error::Unsupported`].
+    pub async fn close_connection(&self, path: &norte_proto::VPath) -> Result<bool, Error> {
+        match self {
+            Self::Embedded(engine) => Ok(engine.close_connection(path)),
+            #[cfg(unix)]
+            Self::Remote(r) => r.close_connection(path).await,
+        }
+    }
+
+    /// Cuánto ocupa lo que se le pase, como Task (`fs.dir_size`, 0.49.0,
+    /// #139).
+    ///
+    /// El TOTAL no vuelve por aquí: viaja en el progreso de la Task
+    /// (`bytes_done`/`entries_done`), que es lo que el frontend ya escucha para
+    /// pintar cualquier otra. El último snapshot es el resultado.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidPath`] sin rutas, y lo que devuelva el core. Un daemon
+    /// N-1 sin el método contesta `METHOD_NOT_FOUND` → [`Error::Unsupported`],
+    /// para que el frontend distinga «tu daemon es más viejo» de un fallo real.
+    pub async fn dir_size(
+        &self,
+        params: norte_proto::methods::FsDirSizeParams,
+    ) -> Result<TaskRef, Error> {
+        if params.paths.is_empty() {
+            return Err(Error::InvalidPath);
+        }
+        match self {
+            Self::Embedded(engine) => {
+                let handle = engine
+                    .dir_size_as(params, crate::journal::Actor::User)
+                    .await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.dir_size(params).await,
+        }
+    }
+
+    /// Comparación de dos árboles (`fs.compare`, 0.39.0, ADR 0048): devuelve
+    /// la Task ([`TaskRef`], cancelable) y el STREAM de lotes de filas
+    /// ([`norte_proto::methods::CompareRowsBatch`]).
+    ///
+    /// Mismo ciclo de vida del canal que [`Self::search`]: embebido, el walk
+    /// cierra el `tx` al terminar; remoto, la bomba enruta cada `compare.rows`
+    /// por `task_id` y el route se retira tras el terminal (con la misma
+    /// gracia). El criterio de "comparación terminada" es el estado terminal
+    /// de la [`TaskRef`]; el cierre del `rx` es la señal cómoda.
+    ///
+    /// **No muta nada**: sin journal, sin undo (regla dura 4 no aplica).
+    ///
+    /// # Cuándo están TODAS las filas
+    /// El cierre del `rx` NO significa «llegaron todas»: una notificación se
+    /// puede perder (el daemon expulsa a un suscriptor que no drena, la bomba
+    /// del cliente descarta un lote si su buffer se llena, y una reconexión
+    /// suelta los routes cerrando el `rx` de forma indistinguible de un final
+    /// limpio). La señal es
+    /// [`TaskProgress::entries_done`](norte_proto::TaskProgress::entries_done),
+    /// que en una Task [`TaskKind::Compare`](norte_proto::TaskKind::Compare)
+    /// cuenta FILAS emitidas: se comparan las recibidas con ese número, y
+    /// **DESPUÉS de que el `rx` se cierre**, no al llegar el snapshot terminal
+    /// —la bomba de filas y la de progreso son tasks distintas, así que el
+    /// terminal puede adelantar al último lote—. Quien vaya a ESCRIBIR a
+    /// partir de estas filas (el plan de sincronización de la spec 2) tiene
+    /// que hacer esa comprobación.
+    ///
+    /// # Errors
+    /// Dos raíces iguales → [`Error::InvalidPath`]; `follow_symlinks: true` →
+    /// [`Error::Unsupported`]. Los dos se comprueban AQUÍ, antes de elegir
+    /// brazo, para que el embebido y el remoto contesten lo mismo: el daemon
+    /// los rechaza con `-32602` pelado (es su contrato publicado) y
+    /// `to_taxonomy` convertiría eso en `Internal`, o sea la misma respuesta
+    /// que da un provider que panica. El daemon los sigue comprobando por su
+    /// cuenta: aquello es la frontera, esto es la paridad de las dos vías
+    /// (mismo criterio que `check_pairs_cap`).
+    ///
+    /// Un daemon N-1 (0.38.x) sin el método responde `METHOD_NOT_FOUND`, que
+    /// se entrega como [`Error::Unsupported`] — «tu daemon es más viejo», no
+    /// un fallo real. Resto, taxonomía del protocolo; daemon caído =
+    /// `ProviderUnavailable`.
     pub async fn compare(
         &self,
         params: norte_proto::methods::FsCompareParams,
@@ -3444,6 +3530,49 @@ pub mod remote {
                 &i.compare_routes
             });
             Ok((self.own_task(id, TaskKind::Compare), rx))
+        }
+
+        /// `connection.close` (0.49.0, #140): suelta la sesión de esa ruta.
+        pub(super) async fn close_connection(
+            &self,
+            path: &norte_proto::VPath,
+        ) -> Result<bool, Error> {
+            let client = self.client().await?;
+            let params = methods::ConnectionCloseParams { path: path.clone() };
+            let call = client.call::<_, methods::ConnectionCloseResult>(
+                methods::CONNECTION_CLOSE,
+                &params,
+            );
+            match tokio::time::timeout(CALL_TIMEOUT, call).await {
+                Ok(Err(ClientError::Rpc(ref rpc)))
+                    if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+                {
+                    Err(Error::Unsupported)
+                }
+                Ok(res) => res.map(|r| r.closed).map_err(to_taxonomy),
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            }
+        }
+
+        /// `fs.dir_size` (0.49.0, #139): lanza la Task y devuelve su
+        /// referencia. Sin canal: lo que hay que escuchar es el progreso, que
+        /// ya llega por la suscripción de siempre.
+        pub(super) async fn dir_size(
+            &self,
+            params: methods::FsDirSizeParams,
+        ) -> Result<TaskRef, Error> {
+            let client = self.client().await?;
+            let call = client.call::<_, FsTaskResult>(methods::FS_DIR_SIZE, &params);
+            let result: FsTaskResult = match tokio::time::timeout(CALL_TIMEOUT, call).await {
+                Ok(Err(ClientError::Rpc(ref rpc)))
+                    if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+                {
+                    return Err(Error::Unsupported);
+                }
+                Ok(res) => res.map_err(to_taxonomy)?,
+                Err(_) => return Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            Ok(self.own_task(result.task_id, TaskKind::DirSize))
         }
 
         /// `sync.plan` (0.40.0, ADR 0049): lanza la Task y devuelve el `rx` por

@@ -9,7 +9,9 @@ commands = [
     "pane.refresh",
     "dialog.add",
     "dialog.remove",
-]
+
+    "pane.connect",
+    "pane.disconnect",]
 context = ["dialog.trust-host"]
 +++
 A pane holds a remote location the same way it holds a directory. The address
@@ -78,3 +80,18 @@ ends up in history, in logs and on screen.
 > ⚠ FTP is plaintext. Not "unless you turn on TLS" — there is no FTPS yet, so the setting means nothing and the password and every byte of every file cross the network in the clear. Each FTP connection says so. Off your own network, use `sftp://`.
 
 > ⚠ Object storage has **no directories**. A folder there is a common prefix of the keys under it, so an empty folder exists only if something wrote a marker object for it, and removing the last key under a prefix makes the folder itself disappear. Renaming one is a copy of every key followed by a delete of every key, not an instant operation.
+
+# Opening and closing a connection
+
+{{cmd:pane.connect}} shows the connections in your `connections.toml` and takes
+the panel to the one you pick. The list comes from that file, so what you see
+here is what you wrote there — name and address, never a password: credentials
+are referenced rather than stored, which is what the keyring is for.
+
+{{cmd:pane.disconnect}} does both things its name promises: it **releases the
+session** — the socket closes now, not when it eventually times out — and sends
+the panel back to your home directory. On a local panel there is nothing to
+close and it says so, rather than answering "done" to something it did not do.
+
+Closing does not forbid: next time you navigate there, norte connects again the
+usual way.

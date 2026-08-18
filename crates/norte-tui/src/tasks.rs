@@ -51,6 +51,14 @@ pub struct Finished {
     /// Para un delete a PAPELERA: el objetivo (si falla Unsupported, el
     /// TUI reofrece el diálogo de permanente — ADR 0009).
     pub trash_target: Option<VPath>,
+    /// El ÚLTIMO snapshot, el mismo que publicó el estado terminal.
+    ///
+    /// Hay tasks cuyo resultado ES su progreso —`fs.dir_size` cuenta bytes y
+    /// entradas, y el total es lo que lleva la última publicación (#139)— así
+    /// que sin esto habría que ir a buscarlo por `task_id` a un tablero que ya
+    /// lo tiene delante. Y trae el `kind`, que es lo que distingue «terminó una
+    /// mutación, recarga los paneles» de «terminó una cuenta, no toques nada».
+    pub progress: TaskProgress,
 }
 
 /// Filas máximas del panel. Política: al empujar una task nueva caen las
@@ -146,6 +154,7 @@ impl TaskBoard {
                     state: row.last.state.clone(),
                     retry: row.retry.clone(),
                     trash_target: row.trash_target.clone(),
+                    progress: row.last.clone(),
                 });
             }
         }

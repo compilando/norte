@@ -102,6 +102,37 @@ impl SessionPool {
             .insert(scheme, provider);
     }
 
+    /// Cierra la sesión cacheada bajo `key` y los compuestos que colgaran de
+    /// ella (#140). Devuelve `true` si había algo que cerrar.
+    ///
+    /// Soltar el `Arc` ES cerrar: el provider remoto cierra su transporte en su
+    /// propio `Drop`, así que quitarlo del mapa basta —siempre que nadie más lo
+    /// tenga cogido, y una operación en vuelo lo tiene: esa termina con la
+    /// conexión que ya tenía, y es lo correcto. Lo que no vuelve a pasar es que
+    /// una petición NUEVA la reutilice.
+    ///
+    /// Los compuestos de archivo (`fmt+key`) se barren con ella por la misma
+    /// razón que en una evicción: el wrapper de archivo cachea el `Arc` de la
+    /// sesión, y dejarlo vivo sería servir el índice de una conexión muerta
+    /// (#62).
+    pub(crate) fn close(&self, key: &str) -> bool {
+        let mut providers = self.inner.providers.write().expect("providers lock sano");
+        let compuestos: Vec<String> = providers
+            .keys()
+            .filter(|ck| {
+                ck.len() > key.len() + 1
+                    && ck.ends_with(key)
+                    && ck.as_bytes()[ck.len() - key.len() - 1] == b'+'
+            })
+            .cloned()
+            .collect();
+        let habia = providers.remove(key).is_some();
+        for ck in compuestos {
+            providers.remove(&ck);
+        }
+        habia
+    }
+
     /// El provider cacheado bajo `key`, si lo hay.
     pub(crate) fn lookup(&self, key: &str) -> Option<Arc<dyn Provider>> {
         self.inner

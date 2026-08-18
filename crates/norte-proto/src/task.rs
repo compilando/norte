@@ -118,6 +118,21 @@ pub enum TaskKind {
     /// `serde(other)` de abajo, igual que `Search`/`Index`/`Embed`/
     /// `RenameBatch`.
     Compare,
+    /// Cuánto ocupa un árbol de directorios
+    /// (`fs.dir_size`/[`FS_DIR_SIZE`](crate::methods::FS_DIR_SIZE), 0.49.0,
+    /// #139). Lectura pura (regla 4 no aplica): sin journal, sin undo, ni un
+    /// byte escrito.
+    ///
+    /// El progreso de ésta SÍ cuenta bytes, al revés que
+    /// [`TaskKind::Compare`]: los bytes son justo lo que se está preguntando.
+    /// Lo que no lleva son totales —`bytes_total` y `entries_total` van a
+    /// `None` hasta el final— porque el total es el resultado, y una barra
+    /// hacia un número inventado es peor que ninguna barra.
+    ///
+    /// Entra CON el método. Un cliente N-1 (0.48.x) la degrada a
+    /// [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que
+    /// `Search`/`Index`/`Embed`/`RenameBatch`/`Compare`.
+    DirSize,
     /// Planificación de una sincronización de un sentido
     /// (`sync.plan`/[`SYNC_PLAN`](crate::methods::SYNC_PLAN), 0.40.0, ADR
     /// 0049). Lectura pura (regla 4 no aplica): planificar no escribe un byte

@@ -1137,10 +1137,15 @@ fn version_ventana_actual() {
     // conoce `session.*`, así que arranca sin la pantalla que dejó y jamás la
     // escribe. No se rompe; pierde en silencio justo lo que esta fase existe
     // para conservar.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.48.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.47.0"), "N-1");
+    //
+    // 0.49.0 (#139): `fs.dir_size` y `TaskKind::DirSize`. Aditivo por partida
+    // doble —un método que un cliente viejo no forma y una variante de kind que
+    // su `serde(other)` degrada desde 0.10—, y la ventana se desplaza por lo de
+    // siempre: un cliente 0.48 no sabe preguntar cuánto ocupa una carpeta.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.49.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.48.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.46.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.47.9"),
         "N-2 fuera de la ventana"
     );
 }

@@ -477,7 +477,7 @@ fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 116] = [
+const DOCUMENTED: [&str; 128] = [
     "app.extensions",
     "app.help",
     "app.menu",
@@ -516,12 +516,6 @@ const DOCUMENTED: [&str; 116] = [
     "dialog.sort",
     "dialog.toggle-enabled",
     "dialog.up",
-    "mark.all",
-    "mark.clear",
-    "mark.invert",
-    "mark.pattern-add",
-    "mark.pattern-remove",
-    "mark.toggle",
     "layout.close-slot",
     "layout.equalize",
     "layout.focus-next",
@@ -536,6 +530,12 @@ const DOCUMENTED: [&str; 116] = [
     "layout.shrink",
     "layout.split-h",
     "layout.split-v",
+    "mark.all",
+    "mark.clear",
+    "mark.invert",
+    "mark.pattern-add",
+    "mark.pattern-remove",
+    "mark.toggle",
     "nav.back",
     "nav.enter",
     "nav.forward",
@@ -544,9 +544,14 @@ const DOCUMENTED: [&str; 116] = [
     "pane.columns",
     "pane.command-line",
     "pane.compare-dirs",
+    "pane.connect",
     "pane.copy",
     "pane.delete",
     "pane.delete-permanent",
+    "pane.dir-size",
+    "pane.disconnect",
+    "pane.edit",
+    "pane.edit-new",
     "pane.history",
     "pane.hotlist",
     "pane.mirror",
@@ -554,6 +559,7 @@ const DOCUMENTED: [&str; 116] = [
     "pane.move",
     "pane.names-encoding",
     "pane.open",
+    "pane.properties",
     "pane.pull",
     "pane.quick-search",
     "pane.refresh",
@@ -563,11 +569,14 @@ const DOCUMENTED: [&str; 116] = [
     "pane.select-drive-left",
     "pane.select-drive-right",
     "pane.semantic-search",
+    "pane.sort-ext",
+    "pane.sort-menu",
+    "pane.sort-name",
+    "pane.sort-size",
+    "pane.sort-time",
     "pane.swap",
     "pane.switch",
     "pane.sync-dirs",
-    "pane.toggle-hidden",
-    "pane.view",
     "pane.tab-close",
     "pane.tab-goto-1",
     "pane.tab-goto-2",
@@ -583,6 +592,9 @@ const DOCUMENTED: [&str; 116] = [
     "pane.tab-new",
     "pane.tab-next",
     "pane.tab-prev",
+    "pane.toggle-hidden",
+    "pane.tree",
+    "pane.view",
     "task.cancel",
     "viewer.bottom",
     "viewer.close",
@@ -606,7 +618,7 @@ const DOCUMENTED: [&str; 116] = [
 /// `tests/help_gate.rs`, which reads `help_context::CONTEXTS` directly; this
 /// is the pin that the corpus does not drift from it in the meantime, and a
 /// disagreement surfaces there as an `UnknownContext`.
-const CONTEXTS: [&str; 15] = [
+const CONTEXTS: [&str; 16] = [
     "browse",
     "viewer",
     "dialog.confirm",
@@ -622,6 +634,7 @@ const CONTEXTS: [&str; 15] = [
     "dialog.command-line",
     "dialog.ai-rename",
     "dialog.semantic-search",
+    "dialog.properties",
 ];
 
 #[test]
