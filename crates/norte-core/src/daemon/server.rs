@@ -222,6 +222,10 @@ struct Shared {
     /// outbox se llene: pierde el FRAME, jamás la suscripción — ver
     /// [`Shared::broadcast_where`].
     directed_feeds: Mutex<HashMap<u64, u32>>,
+    /// La sesión de UI del daemon (L2): UN documento, con su revisión y su
+    /// conexión dueña. `Arc` porque el volcado a disco la mira desde otra
+    /// task. El core la guarda y no la lee (ADR 0058).
+    ui_session: Arc<crate::ui_session::SessionStore>,
     /// Runtime WASM compartido para ejecutar comandos de plugin (M4-P4). Se
     /// construye UNA vez en el bind (arranca un hilo "ticker" de época) y se
     /// reutiliza entre `plugin.run_command`. `Arc` porque `PluginRuntime` es
@@ -652,6 +656,7 @@ impl Daemon {
             plugins: Mutex::new(plugins),
             plugin_runtime,
             directed_feeds: Mutex::new(HashMap::new()),
+            ui_session: Arc::new(crate::ui_session::SessionStore::default()),
         });
         // La salida del router de aprobaciones hacia los suscriptores. `Weak`
         // rompe el ciclo Shared → approvals → closure → Shared: muerto el
@@ -1577,6 +1582,10 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
             pending.remove(id);
         }
     }
+    // La dueña de la sesión de UI la SUELTA al irse: sin esto, un cliente que
+    // muere deja la pantalla de rehén y el siguiente terminal corre suelto
+    // para siempre. Soltar lo ajeno es un no-op (no desaloja a nadie).
+    shared.ui_session.release(conn_id);
     drop_sync_plans(shared, conn_id).await;
     drop(tx);
     // Cerrar el inbox termina al reader si aún vive (su `send` falla).
@@ -1962,6 +1971,11 @@ async fn dispatch(
             })
         }
         methods::DAEMON_SHUTDOWN => handle_daemon_shutdown(&conn.actor, req.params, shared),
+        methods::SESSION_GET => handle_session_get(&conn.actor, conn_id, shared),
+        methods::SESSION_PUT => {
+            let p: methods::SessionPutParams = parse_params(req.params)?;
+            handle_session_put(&conn.actor, conn_id, p, shared)
+        }
         // fs.list vive AQUÍ (no en dispatch_fs_task): necesita el ConnState
         // para retener el stream paginado entre páginas (ADR 0017).
         methods::FS_LIST => {
@@ -2245,6 +2259,94 @@ fn handle_grant_scope(
     tracing::info!(session = %req.session, ops = ?req.ops, "scope concedido a la sesión de agente");
     shared.scopes.grant(&req.session, scope);
     to_value(&methods::GrantScopeResult {})
+}
+
+/// `session.get` (L2, 0.48.0) — la pantalla que el cliente dejó, y si ESTA
+/// conexión es la que puede escribirla.
+///
+/// Reclamar la propiedad es parte de LEER, y no un método aparte: quien
+/// arranca lee, y quien lee es el candidato natural a escribir. La primera
+/// conexión humana se la queda; las siguientes reciben la misma copia y corren
+/// sueltas —abrir un segundo terminal da lo que el lector esperaba, y nunca
+/// hay dos escritores sobre un estado—.
+///
+/// SOLO humanos, mismo criterio que `daemon.shutdown` y `policy.pending`: una
+/// sesión de agente no tiene pantalla que guardar.
+fn handle_session_get(
+    actor: &Actor,
+    conn_id: u64,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection has a UI session",
+        ));
+    }
+    let owner = shared.ui_session.claim(conn_id);
+    to_value(&methods::SessionGetResult {
+        session: shared.ui_session.get(),
+        owner,
+    })
+}
+
+/// `session.put` (L2, 0.48.0) — reemplaza la sesión entera.
+///
+/// Tres negativas, y cada una dice algo distinto al cliente:
+/// `INVALID_REQUEST` si no es la dueña (releer no arregla nada: esta conexión
+/// no escribe nunca), [`norte_proto::Error::Conflict`] con
+/// [`norte_proto::ConflictKind::StaleRevision`] si trae una revisión pasada
+/// (releer SÍ lo arregla) y [`norte_proto::Error::LimitExceeded`] con
+/// [`norte_proto::Error::LIMIT_SESSION_BODY`] si el cuerpo pasa del tope
+/// (releer no; tirar historial y reintentar, sí). En los tres casos lo
+/// almacenado se queda exactamente como estaba.
+fn handle_session_put(
+    actor: &Actor,
+    conn_id: u64,
+    p: methods::SessionPutParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection has a UI session",
+        ));
+    }
+    // La propiedad se comprueba ANTES que la revisión y que el tope: para una
+    // conexión que no manda, las otras dos respuestas serían consejos falsos
+    // («re-lee», «recorta») sobre una escritura que jamás se va a aceptar.
+    if shared.ui_session.owner() != Some(conn_id) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "another connection owns the UI session",
+        ));
+    }
+    match shared.ui_session.put(p.version, p.revision, p.body) {
+        Ok(revision) => to_value(&methods::SessionPutResult { revision }),
+        Err(crate::ui_session::PutError::Conflict { current }) => {
+            // Con TAXONOMÍA en `data` (#182): sin ella el cliente lee
+            // «internal error» y no sabe que releer lo arregla. La revisión
+            // vigente NO viaja en el error — se pide con `session.get`, que es
+            // el mismo viaje que hay que hacer de todas formas para saber
+            // contra qué cuerpo se estaba escribiendo.
+            tracing::debug!(current, "session.put con revisión rancia");
+            Err(RpcError::from(norte_proto::Error::Conflict {
+                conflict: norte_proto::ConflictKind::StaleRevision,
+            }))
+        }
+        Err(crate::ui_session::PutError::TooLarge { bytes }) => {
+            tracing::warn!(bytes, "session.put por encima del tope");
+            Err(RpcError::from(norte_proto::Error::LimitExceeded {
+                limit: norte_proto::Error::LIMIT_SESSION_BODY.to_owned(),
+            }))
+        }
+        // El store nombra `NotOwner` para que las dos capas lo llamen igual,
+        // pero lo construye ESTA, que es la que sabe qué conexión habla.
+        Err(crate::ui_session::PutError::NotOwner) => Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "another connection owns the UI session",
+        )),
+    }
 }
 
 /// `policy.decide` (M3-3b Task 4): un humano aprueba/deniega una pendiente.

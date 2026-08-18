@@ -7278,3 +7278,236 @@ async fn sync_report_ajeno_contesta_lo_mismo_que_un_id_inventado() {
         .await
         .expect("un humano ve los informes del daemon que gobierna");
 }
+
+// ---------- L2: la sesión de UI por el socket ----------
+
+/// La sesión va y vuelve, y la revisión sube. La primera conexión humana que
+/// pregunta se la queda.
+#[tokio::test]
+async fn session_get_y_put_por_el_socket() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let g: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert_eq!(g.session.revision, 0);
+    assert_eq!(
+        g.session.version, 0,
+        "sin esquema hasta que alguien escriba"
+    );
+    assert!(g.owner, "la primera conexión humana se la queda");
+
+    let cuerpo = serde_json::json!({ "version": 1, "slots": {} });
+    let p: methods::SessionPutResult = c
+        .call(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: cuerpo.clone(),
+            },
+        )
+        .await
+        .expect("session.put");
+    assert_eq!(p.revision, 1);
+
+    let g2: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert_eq!(g2.session.body, cuerpo, "vuelve el mismo documento");
+    assert_eq!(g2.session.version, 1);
+    assert_eq!(g2.session.revision, 1);
+}
+
+/// Una revisión rancia por el wire es la taxonomía `Conflict` en `data`, no un
+/// error de transporte: el cliente distingue «vuelve a leer» de «el daemon se
+/// rompió».
+#[tokio::test]
+async fn session_put_rancio_es_conflict() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let _: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    let params = methods::SessionPutParams {
+        version: 1,
+        revision: 0,
+        body: serde_json::json!({}),
+    };
+    let _: methods::SessionPutResult = c
+        .call(methods::SESSION_PUT, &params)
+        .await
+        .expect("el primero entra");
+    let err = c
+        .call::<_, methods::SessionPutResult>(methods::SESSION_PUT, &params)
+        .await
+        .expect_err("la revisión ya no es la vigente");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert_eq!(
+                rpc.data,
+                Some(Error::Conflict {
+                    conflict: norte_proto::ConflictKind::StaleRevision
+                }),
+                "{:?}",
+                rpc.data
+            );
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// Por encima del tope: `LimitExceeded` con SU token, y la sesión almacenada
+/// se queda como estaba.
+#[tokio::test]
+async fn session_put_sobre_el_tope_es_limit_exceeded() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let _: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    let gordo = serde_json::json!({ "x": "y".repeat(methods::SESSION_BODY_MAX + 1) });
+    let err = c
+        .call::<_, methods::SessionPutResult>(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: gordo,
+            },
+        )
+        .await
+        .expect_err("no cabe");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert!(
+                matches!(
+                    rpc.data,
+                    Some(Error::LimitExceeded { ref limit }) if limit == Error::LIMIT_SESSION_BODY
+                ),
+                "LimitExceeded session-body, fue {:?}",
+                rpc.data
+            );
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+    let g: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert_eq!(g.session.revision, 0, "no se escribió nada");
+}
+
+/// Un agente no tiene pantalla que guardar: `session.*` es `INVALID_REQUEST`,
+/// el mismo criterio que `daemon.shutdown` y `policy.pending`.
+#[tokio::test]
+async fn session_es_de_humanos() {
+    let d = spawn_daemon(None).await;
+    let agente = connected_agent(&d, "a1").await;
+    let err = agente
+        .call::<_, methods::SessionGetResult>(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect_err("un agente no lee la pantalla de nadie");
+    assert_rpc_code(&err, codes::INVALID_REQUEST);
+    let err = agente
+        .call::<_, methods::SessionPutResult>(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect_err("ni la escribe");
+    assert_rpc_code(&err, codes::INVALID_REQUEST);
+}
+
+/// El segundo cliente del MISMO daemon recibe una copia y corre suelto: su
+/// `put` se rehúsa y la sesión de la dueña se queda intacta.
+#[tokio::test]
+async fn el_segundo_cliente_recibe_copia_y_no_escribe() {
+    let d = spawn_daemon(None).await;
+    let uno = connected_client(&d).await;
+    let g1: methods::SessionGetResult = uno
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(g1.owner);
+    let _: methods::SessionPutResult = uno
+        .call(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: serde_json::json!({ "quien": "uno" }),
+            },
+        )
+        .await
+        .expect("la dueña escribe");
+
+    let dos = connected_client(&d).await;
+    let g2: methods::SessionGetResult = dos
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(!g2.owner, "la segunda corre suelta");
+    assert_eq!(
+        g2.session.body["quien"],
+        serde_json::json!("uno"),
+        "recibe COPIA"
+    );
+    let err = dos
+        .call::<_, methods::SessionPutResult>(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 1,
+                body: serde_json::json!({ "quien": "dos" }),
+            },
+        )
+        .await
+        .expect_err("quien no es dueña no escribe");
+    assert_rpc_code(&err, codes::INVALID_REQUEST);
+    let g3: methods::SessionGetResult = uno
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert_eq!(g3.session.body["quien"], serde_json::json!("uno"));
+}
+
+/// La dueña que se va SUELTA la sesión: la siguiente conexión humana la toma.
+/// Sin esto, un cliente que muere deja la pantalla de rehén hasta el relevo.
+#[tokio::test]
+async fn al_morir_la_duena_la_sesion_queda_libre() {
+    let d = spawn_daemon(None).await;
+    let uno = connected_client(&d).await;
+    let g1: methods::SessionGetResult = uno
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(g1.owner);
+    drop(uno);
+
+    // La desconexión se procesa en el servidor; se reintenta hasta verla.
+    let mut dueña = false;
+    for _ in 0..50 {
+        let dos = connected_client(&d).await;
+        let g: methods::SessionGetResult = dos
+            .call(methods::SESSION_GET, &serde_json::json!({}))
+            .await
+            .expect("session.get");
+        if g.owner {
+            dueña = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(dueña, "la sesión quedó de rehén de una conexión muerta");
+}
