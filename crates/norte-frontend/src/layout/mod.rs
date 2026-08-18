@@ -95,6 +95,12 @@ pub enum LayoutDiagnostic {
         /// El hueco cuyo vínculo se redirigió.
         slot: SlotId,
     },
+    /// Cromo apartado PARA ESTE FRAME porque, con él, no cabía ni un listado
+    /// usable (#229). El árbol no se toca: al crecer el terminal vuelve.
+    ChromeSetAside {
+        /// El hueco que se apartó.
+        slot: SlotId,
+    },
 }
 
 /// Valida un árbol antes de usarlo.

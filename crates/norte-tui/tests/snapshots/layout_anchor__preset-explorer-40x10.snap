@@ -3,12 +3,12 @@ source: crates/norte-tui/tests/layout_anchor.rs
 expression: "lineas.join(\"\\n\")"
 ---
 ┌ Sitios ──────┐┌⟨file⟩/cas┐┌ Vista ───┐
-┌ Procesos ────────────────────────────┐
-│nada en marcha                        │
-│                                      │
-│                                      │
-│                                      │
-│                                      │
-│                                      │
-└──────────────────────────────────────┘
+│▾ Unidades    ││Nombre▲   ││          │
+│▾ Favoritos   ││   f00    ││          │
+│              ││   f01    ││          │
+│              ││   f02    ││          │
+│              ││   f03    ││          │
+│              ││   f04    ││          │
+│              ││   f05    ││          │
+└──────────────┘└──────────┘└──────────┘
  ⟨file⟩/casa  1/60

@@ -9,6 +9,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A small terminal no longer leaves you with a screen full of panels and no
+  files.** The `explorer` and `full` screens are built from docked panels with
+  fixed sizes — a sidebar, a viewer column, a processes panel — and in a 40x10
+  terminal those sizes added up to more than the screen, so the file listings
+  were squeezed to nothing and what was left was three panel headers. A frame
+  that cannot show a listing now sets aside the biggest docked panel on the axis
+  that is short, and only that one: at 40x10 `full` gives you the sidebar, two
+  listings and the status bar. Nothing is saved or forgotten — grow the terminal
+  and the panels come straight back (#229).
+
 - **A sidebar you can widen.** Grow and shrink did nothing to a panel with a
   fixed width, which is every sidebar, so the places panel was stuck at the
   width it opened with. It now moves two columns at a time (#227).
