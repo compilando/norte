@@ -944,7 +944,10 @@ mod tests {
         vistos.sort_unstable();
         let mut todos = arbol.slot_ids();
         todos.sort_unstable();
-        assert_eq!(vistos, todos, "un hueco se quedó sin pintar y sin suspender");
+        assert_eq!(
+            vistos, todos,
+            "un hueco se quedó sin pintar y sin suspender"
+        );
     }
 
     /// Cuando solo falta ALTO, el cromo de ancho no se toca. Es el mismo `full`

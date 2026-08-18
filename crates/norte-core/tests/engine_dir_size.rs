@@ -62,7 +62,11 @@ async fn el_total_de_un_arbol_viaja_en_el_progreso() {
     let p = prog.borrow().clone();
     assert_eq!(p.bytes_done, 50, "10 + 32 + 8");
     assert_eq!(p.entries_done, 4, "tres ficheros y el subdirectorio");
-    assert_eq!(p.bytes_total, Some(50), "al terminar, el total es lo contado");
+    assert_eq!(
+        p.bytes_total,
+        Some(50),
+        "al terminar, el total es lo contado"
+    );
     assert_eq!(p.entries_total, Some(4));
 }
 

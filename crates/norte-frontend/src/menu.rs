@@ -221,7 +221,8 @@ mod tests {
                 let titulo = norte_i18n::t(menu.title);
                 assert!(
                     !titulo.is_empty() && titulo != menu.title,
-                    "{lang:?}: el menú {} no tiene título", menu.title
+                    "{lang:?}: el menú {} no tiene título",
+                    menu.title
                 );
                 for id in menu.items {
                     let clave = format!("menu-item-{}", id.replace('.', "-"));

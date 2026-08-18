@@ -3539,10 +3539,8 @@ pub mod remote {
         ) -> Result<bool, Error> {
             let client = self.client().await?;
             let params = methods::ConnectionCloseParams { path: path.clone() };
-            let call = client.call::<_, methods::ConnectionCloseResult>(
-                methods::CONNECTION_CLOSE,
-                &params,
-            );
+            let call = client
+                .call::<_, methods::ConnectionCloseResult>(methods::CONNECTION_CLOSE, &params);
             match tokio::time::timeout(CALL_TIMEOUT, call).await {
                 Ok(Err(ClientError::Rpc(ref rpc)))
                     if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>

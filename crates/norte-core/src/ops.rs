@@ -2147,7 +2147,10 @@ pub(crate) async fn dir_size(
         }
     }
     if ilegibles > 0 {
-        tracing::info!(ilegibles, "fs.dir_size: partes del árbol no se pudieron leer");
+        tracing::info!(
+            ilegibles,
+            "fs.dir_size: partes del árbol no se pudieron leer"
+        );
     }
     ctx.progress.update(|p| {
         p.bytes_done = bytes;
