@@ -3786,6 +3786,69 @@ fn content_gate(
     Ok(())
 }
 
+/// `connection.close` (0.49.0, #140): suelta la sesión remota de una ruta.
+///
+/// Gate de LECTURA sobre la ruta, que es el mismo criterio que para mirarla:
+/// cerrar una conexión no destruye datos —la siguiente operación reconecta—
+/// pero sí interrumpe a quien la estuviera usando, y quien no puede ni leer ahí
+/// no tiene por qué poder hacer eso.
+///
+/// SOLO humanos: desconectar es una decisión de quien está delante. Un agente
+/// que pudiera cerrar la sesión de su humano tendría una palanca de denegación
+/// de servicio gratis, sin que le sirva para nada de lo suyo.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+fn handle_connection_close(
+    actor: &Actor,
+    params: Option<serde_json::Value>,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::ConnectionCloseParams = parse_params(params)?;
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection closes a session",
+        ));
+    }
+    read_gate(actor, &p.path, shared)?;
+    let closed = shared.engine.close_connection(&p.path);
+    to_value(&methods::ConnectionCloseResult { closed })
+}
+
+/// `fs.dir_size` (0.49.0, #139): cuánto ocupa lo que se pida, como Task.
+///
+/// Gate de LECTURA sobre CADA raíz, y antes de validar nada más: un actor sin
+/// derechos sobre lo que pide no llega a saber si su petición era además
+/// incorrecta. Recorrer un árbol revela su FORMA —cuántas cosas hay y cómo se
+/// llaman los directorios por los que se baja—, que es exactamente lo que un
+/// listado revela y por eso es el mismo gate.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+async fn handle_fs_dir_size(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::FsDirSizeParams = parse_params(params)?;
+    for path in &p.paths {
+        read_gate(actor, path, shared)?;
+    }
+    if p.paths.is_empty() {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "fs.dir_size: paths must not be empty",
+        ));
+    }
+    let handle = shared
+        .engine
+        .dir_size_as(p, actor.clone())
+        .await
+        .map_err(RpcError::from)?;
+    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
+    // `dir_size_as`) y este register — la Task jamás corre FUERA de
+    // `shared.tasks`.
+    let task_id = register_task_id(shared, handle, actor.clone())?;
+    to_value(&methods::FsTaskResult { task_id })
+}
+
 /// `fs.compare` (0.39.0, ADR 0048): compara dos árboles como Task cancelable.
 /// Las FILAS llegan por `compare.rows` SOLO a la conexión `conn_id` que la
 /// lanzó (envío dirigido, jamás broadcast — mismo criterio que `search.hits`).
@@ -3815,67 +3878,6 @@ fn content_gate(
 /// misma asimetría que ya tienen los criterios de `fs.search`, y el contrato
 /// publicado en `methods::FS_COMPARE` es el código, no la taxonomía.)
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
-/// `connection.close` (0.49.0, #140): suelta la sesión remota de una ruta.
-///
-/// Gate de LECTURA sobre la ruta, que es el mismo criterio que para mirarla:
-/// cerrar una conexión no destruye datos —la siguiente operación reconecta—
-/// pero sí interrumpe a quien la estuviera usando, y quien no puede ni leer ahí
-/// no tiene por qué poder hacer eso.
-///
-/// SOLO humanos: desconectar es una decisión de quien está delante. Un agente
-/// que pudiera cerrar la sesión de su humano tendría una palanca de denegación
-/// de servicio gratis, sin que le sirva para nada de lo suyo.
-fn handle_connection_close(
-    actor: &Actor,
-    params: Option<serde_json::Value>,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
-    let p: methods::ConnectionCloseParams = parse_params(params)?;
-    if !matches!(actor, Actor::User) {
-        return Err(RpcError::protocol(
-            codes::INVALID_REQUEST,
-            "only a human (non-agent) connection closes a session",
-        ));
-    }
-    read_gate(actor, &p.path, shared)?;
-    let closed = shared.engine.close_connection(&p.path);
-    to_value(&methods::ConnectionCloseResult { closed })
-}
-
-/// `fs.dir_size` (0.49.0, #139): cuánto ocupa lo que se pida, como Task.
-///
-/// Gate de LECTURA sobre CADA raíz, y antes de validar nada más: un actor sin
-/// derechos sobre lo que pide no llega a saber si su petición era además
-/// incorrecta. Recorrer un árbol revela su FORMA —cuántas cosas hay y cómo se
-/// llaman los directorios por los que se baja—, que es exactamente lo que un
-/// listado revela y por eso es el mismo gate.
-async fn handle_fs_dir_size(
-    params: Option<serde_json::Value>,
-    actor: &Actor,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
-    let p: methods::FsDirSizeParams = parse_params(params)?;
-    for path in &p.paths {
-        read_gate(actor, path, shared)?;
-    }
-    if p.paths.is_empty() {
-        return Err(RpcError::protocol(
-            codes::INVALID_PARAMS,
-            "fs.dir_size: paths must not be empty",
-        ));
-    }
-    let handle = shared
-        .engine
-        .dir_size_as(p, actor.clone())
-        .await
-        .map_err(RpcError::from)?;
-    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
-    // `dir_size_as`) y este register — la Task jamás corre FUERA de
-    // `shared.tasks`.
-    let task_id = register_task_id(shared, handle, actor.clone())?;
-    to_value(&methods::FsTaskResult { task_id })
-}
-
 async fn handle_fs_compare(
     params: Option<serde_json::Value>,
     conn_id: u64,

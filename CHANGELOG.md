@@ -82,6 +82,14 @@ independently through `PROTOCOL_VERSION`.
   lists it — an empty listing you cannot tell from an empty directory is a
   screen that lies (#235).
 
+- **`fs.compare` gets its tracing span back.** Adding `connection.close` and
+  `fs.dir_size` inserted the two handlers between an attribute and the
+  function it decorated, so `fs.compare`'s `#[instrument]` and its whole doc
+  block landed on `connection.close`: comparing silently stopped emitting its
+  span, and `connection.close` published rustdoc describing gates it does not
+  have. Both are back where they belong, and `fs.dir_size` has one now too
+  (found by `protocol-guardian`).
+
 - **A detached core no longer accepts a screen it cannot save.** `session.put`
   against a daemon that is not the writer answered `Ok` and kept the body in
   memory, where the embedded half had always refused it outright. That stopped
