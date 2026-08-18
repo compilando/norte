@@ -899,9 +899,13 @@ pub struct SessionUi {
     /// También se pone suelta la ventana que encuentra un cuerpo de una
     /// versión más nueva: no se lee, y sobre todo no se pisa.
     pub detached: bool,
-    /// La revisión que este proceso tiene por vigente: la del último
-    /// `get`/`put`. Un `put` que la traiga rancia se rehúsa, que es toda la
-    /// historia de concurrencia que hay.
+    /// La revisión que este proceso tiene por vigente, SOLO para arrancar el
+    /// escritor de la sesión.
+    ///
+    /// A partir de ahí la de verdad la lleva el escritor, que es quien ve las
+    /// respuestas del core; ésta solo se refresca cuando avisa de un relevo. No
+    /// se compara con nada: leerla para decidir algo sería leer un número
+    /// viejo.
     pub revision: u64,
     /// Estado por hueco que vino en la sesión y que este layout NO tiene.
     ///

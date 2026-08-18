@@ -85,29 +85,45 @@ pub fn resolve(area: Rect, tree: &Node, decls: &KindRegistry) -> Resolved {
     out
 }
 
-/// Lo que un panel necesita para enseñar UNA fila: dos bordes, la cabecera y
-/// la fila.
+/// El TOPE del suelo de «esto enseña algo»: doce columnas y cuatro filas.
+///
+/// Doce columnas es lo que ocupa un nombre corto entre bordes —un `browser` de
+/// 12x8 está apretado y sirve, y por eso el preset `krusader` a 40x10 conserva
+/// su sidebar y esta regla ni se entera—; cuatro filas son dos bordes, la
+/// cabecera y una entrada. Un panel por debajo de esto no está apretado: está
+/// vacío.
 ///
 /// No es el mínimo del kind, y la diferencia es la que separa «apretado» de
 /// «vacío». El mínimo de un `browser` son 20x5 y dice cuándo un reparto
 /// PROPORCIONAL colapsa —«por debajo de esto no pinto un nombre con su
-/// tamaño»—; esto dice cuándo el panel no pinta NADA. Un browser de 12x8 está
-/// apretado y sirve: se leen diez caracteres de cada nombre. Uno de 12x1 es una
-/// línea de borde.
+/// tamaño»—; esto dice cuándo el panel no pinta NADA.
 ///
-/// Vive aquí y no en `KindRegistry` porque hoy solo se le pregunta a los kinds
-/// que pueden tomar `active`, y son los `browser`. El día que un kind necesite
-/// su propio número, esta constante se muda a `KindDecl` al lado de `min`.
-const CONTENIDO: (u16, u16) = (4, 4);
+/// Es un TOPE y no el número final: el suelo de verdad lo da
+/// [`minimo_visible`], que parte del mínimo del kind. Así un kind modesto no
+/// tiene que fingir que necesita doce columnas, y uno exigente —el registro es
+/// abierto— no arrastra el rescate a apartar cromo persiguiendo un tamaño
+/// imposible.
+const CONTENIDO: (u16, u16) = (12, 4);
+
+/// El suelo de un kind: su propio mínimo, TOPADO por [`CONTENIDO`].
+///
+/// El tope es lo que impide que un kind exigente —el registro es abierto y
+/// `insert` es público, así que un plugin puede declarar `min = (40, 8)`— haga
+/// que el rescate aparte cromo eternamente persiguiendo un tamaño que la
+/// pantalla no tiene. El mínimo propio es lo que impide lo contrario: dar por
+/// «usable» a 4 columnas algo que declaró necesitar cuarenta.
+fn minimo_visible(decls: &KindRegistry, kind: &super::KindId) -> (u16, u16) {
+    let (mw, mh) = decls.min_of(kind);
+    (mw.min(CONTENIDO.0), mh.min(CONTENIDO.1))
+}
 
 /// ¿Hay en `out` un hueco que pueda tomar el rol `active` y con sitio para
 /// enseñar algo?
 fn listado_usable(out: &Resolved, tree: &Node, decls: &KindRegistry) -> bool {
     out.placements.iter().any(|(id, re)| {
         tree.kind_of(*id).is_some_and(|k| {
-            decls.holds_role(k, RoleId::Active)
-                && re.width >= CONTENIDO.0
-                && re.height >= CONTENIDO.1
+            let (mw, mh) = minimo_visible(decls, k);
+            decls.holds_role(k, RoleId::Active) && re.width >= mw && re.height >= mh
         })
     })
 }
@@ -119,16 +135,33 @@ fn listado_usable(out: &Resolved, tree: &Node, decls: &KindRegistry) -> bool {
 /// apartarlo no arregla un ancho corto. Sin esto, un `full` a 80x10 —donde solo
 /// falta ALTO— perdía además el sidebar y la columna derecha, que no estorbaban.
 fn ejes_cortos(out: &Resolved, tree: &Node, decls: &KindRegistry) -> (bool, bool) {
+    // Un eje se ataca si le falta a ALGUNO, no si les falta a todos.
+    //
+    // Esta función solo se llama cuando NINGÚN listado sirve, así que la
+    // pregunta no es «¿están todos estrechos?» sino «¿a cuál de los dos ejes le
+    // puedo dar sitio para que alguno sirva?». Con el «todos» fallaba una
+    // pantalla real: un listado ancho y de una fila arriba, y otro alto y de
+    // dos columnas abajo. Ninguno servía, cada uno cojeaba de un eje distinto,
+    // y como no TODOS eran estrechos ni TODOS bajos, el rescate contestaba que
+    // no faltaba ningún eje y devolvía la pantalla rota intacta.
     let listados = || {
-        out.placements.iter().filter(|(id, _)| {
-            tree.kind_of(*id)
-                .is_some_and(|k| decls.holds_role(k, RoleId::Active))
+        out.placements.iter().filter_map(|(id, re)| {
+            let k = tree.kind_of(*id)?;
+            decls
+                .holds_role(k, RoleId::Active)
+                .then(|| (minimo_visible(decls, k), re))
         })
     };
-    (
-        !listados().any(|(_, re)| re.width >= CONTENIDO.0),
-        !listados().any(|(_, re)| re.height >= CONTENIDO.1),
-    )
+    let mut falta = (false, false);
+    let mut hay = false;
+    for ((mw, mh), re) in listados() {
+        hay = true;
+        falta.0 |= re.width < mw;
+        falta.1 |= re.height < mh;
+    }
+    // Sin ningún listado colocado, los dos ejes están en juego: lo que falta es
+    // sitio, y no se sabe de cuál.
+    if hay { falta } else { (true, true) }
 }
 
 /// ¿Tiene el árbol algún hueco que pueda tomar el rol `active`?
@@ -265,12 +298,19 @@ fn sin_camino(node: &Node, camino: &[usize]) -> Option<Node> {
         }
         Node::Tabs { children, active } => {
             let mut hijos = Vec::new();
+            // La pestaña activa es un ÍNDICE: quitar una de delante mueve a
+            // todas las de detrás. Clamparlo sin más dejaba a la vista la
+            // siguiente y SUSPENDÍA la que el usuario estaba mirando.
+            let mut activo = *active;
             for (j, c) in children.iter().enumerate() {
                 let queda = if j == i {
                     sin_camino(c, resto)
                 } else {
                     Some(c.clone())
                 };
+                if queda.is_none() && j < activo {
+                    activo -= 1;
+                }
                 if let Some(q) = queda {
                     hijos.push(q);
                 }
@@ -279,7 +319,7 @@ fn sin_camino(node: &Node, camino: &[usize]) -> Option<Node> {
                 return None;
             }
             Some(Node::Tabs {
-                active: (*active).min(hijos.len() - 1),
+                active: activo.min(hijos.len() - 1),
                 children: hijos,
             })
         }
@@ -782,6 +822,94 @@ mod tests {
                 .any(|d| matches!(d, LayoutDiagnostic::ChromeSetAside { .. })),
             "sin diagnóstico: {:?}",
             out.diagnostics
+        );
+    }
+
+    /// Dos listados que fallan cada uno POR UN EJE DISTINTO siguen siendo una
+    /// pantalla sin listado usable.
+    ///
+    /// Preguntar «¿hay alguno suficientemente ancho?» y «¿hay alguno
+    /// suficientemente alto?» por separado contestaba que no falta ningún eje
+    /// —uno cumple cada pregunta— y el rescate no se intentaba. Se mide sobre
+    /// el MEJOR candidato, que es de quien depende que la pantalla sirva.
+    #[test]
+    fn dos_listados_cojos_de_ejes_distintos_no_hacen_una_pantalla_buena() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(9)],
+            children: vec![
+                browser(1),
+                Node::Split {
+                    dir: Dir::Horizontal,
+                    sizes: vec![Size::Fixed(30), Size::Weight(1)],
+                    children: vec![Node::slot(SlotId(3), KindId::new("viewer")), browser(2)],
+                },
+            ],
+        };
+        let out = resolve(r(0, 0, 32, 10), &arbol, &reg());
+        assert!(
+            out.placements
+                .iter()
+                .any(|(id, re)| (*id == SlotId(1) || *id == SlotId(2))
+                    && re.width >= 12
+                    && re.height >= 4),
+            "ninguno de los dos listados quedó usable: {:?}",
+            out.placements
+        );
+    }
+
+    /// Apartar una pestaña de DELANTE no cambia cuál se está mirando.
+    ///
+    /// El índice activo es una posición, así que quitar la de delante corría a
+    /// todas las de detrás: se pintaba la siguiente y se suspendía la que el
+    /// usuario tenía abierta.
+    #[test]
+    fn apartar_una_pestana_no_cambia_la_que_se_esta_mirando() {
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Fixed(30), Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(9), KindId::new("viewer")),
+                Node::Tabs {
+                    active: 1,
+                    children: vec![browser(1), browser(2)],
+                },
+            ],
+        };
+        let out = resolve(r(0, 0, 34, 10), &arbol, &reg());
+        assert!(
+            out.placements.iter().any(|(id, _)| *id == SlotId(2)),
+            "se mira la pestaña 2, y es la que tiene que quedar: {:?}",
+            out.placements
+        );
+        assert!(out.hidden.contains(&SlotId(1)));
+    }
+
+    /// Un kind EXIGENTE no arrastra el rescate a apartar cromo persiguiendo un
+    /// tamaño que la pantalla no tiene: el suelo es su mínimo TOPADO.
+    #[test]
+    fn un_kind_exigente_no_vacia_la_pantalla_de_cromo() {
+        let mut reg = reg();
+        reg.insert(crate::layout::KindDecl {
+            id: KindId::new("exigente"),
+            min: (80, 30),
+            focusable: true,
+            takes_keys: true,
+            multi: false,
+            roles: &[RoleId::Active],
+        });
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Fixed(10), Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(5), KindId::new("places")),
+                Node::slot(SlotId(1), KindId::new("exigente")),
+            ],
+        };
+        let out = resolve(r(0, 0, 40, 10), &arbol, &reg);
+        assert!(
+            out.placements.iter().any(|(id, _)| *id == SlotId(5)),
+            "el sidebar cabía: 30 columnas bastan para enseñar algo"
         );
     }
 

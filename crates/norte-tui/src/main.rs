@@ -2756,8 +2756,16 @@ async fn run(
             // que pasó dentro de ese segundo, y salir es cuando más duele:
             // hasta aquí, cerrar norte justo después de un `cd` guardaba el
             // directorio anterior.
-            push_session(app, &mut session_push);
-            session_push.cierra().await;
+            //
+            // Sin el gate del modal, a propósito: un modal abierto significa
+            // «no guardes lo que estoy decidiendo», y aquí ya no se está
+            // decidiendo nada — se está saliendo, y lo que hay que guardar es
+            // dónde se estaba.
+            drena_avisos(app, &mut session_push);
+            let ultima = (!app.session.detached)
+                .then(|| captura_session(app, &mut session_push))
+                .flatten();
+            session_push.cierra(ultima).await;
             return Ok(());
         }
         // #124: el alto REAL del viewport vuelve al modelo tras cada frame —
@@ -3445,7 +3453,11 @@ async fn run(
                         lua_queue.clear();
                     }
                     maybe = events.next() => {
-                        let Some(event) = maybe else { return Ok(()); };
+                        // EOF del terminal —te cierran la ventana—: se sale por
+                        // el MISMO sitio que un `app.quit`, que es donde se
+                        // guarda la última foto de la sesión. Saliendo aquí con
+                        // un `return` se perdía.
+                        let Some(event) = maybe else { app.quit = true; continue; };
                         let event = event.context("evento de terminal")?;
                         // Ratón (`[ui] mouse`): solo llega si la captura está
                         // pedida — sin ella el emulador no reporta nada y este
@@ -12902,9 +12914,11 @@ const ESPERA_AL_SALIR: std::time::Duration = std::time::Duration::from_secs(2);
 enum SessionOrden {
     /// Escribe esto.
     ///
-    /// `Box` porque el cuerpo lleva el árbol y el estado de cada hueco, y una
-    /// variante gorda engorda el enum entero (`clippy::large_enum_variant`).
-    Escribe(Box<norte_frontend::session::SessionBody>),
+    /// `Arc` porque el cuerpo lleva el árbol y el estado de cada hueco: la
+    /// pantalla lo comparte con el escritor en vez de copiarle hasta 1 MiB una
+    /// vez por segundo, y de paso la variante no engorda el enum
+    /// (`clippy::large_enum_variant`).
+    Escribe(Arc<norte_frontend::session::SessionBody>),
     /// ¿Ya puedo escribir? La hace una ventana suelta cada [`REINTENTO_DUENA`]
     /// ticks.
     Pregunta,
@@ -12929,7 +12943,21 @@ enum SessionAviso {
     Duena {
         /// La revisión vigente en el momento de tomarla.
         revision: u64,
+        /// Los huecos que guardaba quien la tenía y esta pantalla no conoce.
+        ///
+        /// Un relevo NO pasa por `Conflict` —la revisión que se adopta es
+        /// justo la vigente, así que la siguiente escritura encaja— y ese era
+        /// el agujero: la ventana que tomaba el relevo pisaba en su primer tick
+        /// todo lo que la otra hubiera guardado mientras ésta corría suelta.
+        huerfanos: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
     },
+    /// Esta ventana ha DEJADO de ser la dueña: otra la tiene, o el daemon que
+    /// la atendía se fue y la conexión nueva no reclamó nada.
+    ///
+    /// Sin este aviso, el escritor se apagaba solo y nadie volvía a preguntar:
+    /// tras un relevo de daemon la ventana dejaba de guardar para el resto de
+    /// su vida, creyéndose la dueña y sin decir una palabra.
+    Suelta,
 }
 
 /// El lado de la PANTALLA del escritor de sesión (L2).
@@ -12946,7 +12974,7 @@ struct SessionPush {
     /// dos veces. Comparar el documento entero cuesta menos que un flag de
     /// sucio puesto a mano en los cientos de sitios que mueven un cursor —y no
     /// se puede olvidar en uno.
-    last: Option<norte_frontend::session::SessionBody>,
+    last: Option<Arc<norte_frontend::session::SessionBody>>,
     /// Hacia el escritor. Capacidad 1: si está ocupado, este tick se salta, que
     /// es coalescing y no pérdida —el cuerpo siguiente lleva lo mismo y más—.
     ordenes: tokio::sync::mpsc::Sender<SessionOrden>,
@@ -13000,9 +13028,20 @@ impl SessionPush {
         }
     }
 
-    /// Suelta el canal y espera al escritor: la última foto tiene que estar en
-    /// disco antes de que el proceso se vaya.
-    async fn cierra(&mut self) {
+    /// Manda la última foto, suelta el canal y espera al escritor.
+    ///
+    /// La foto va con `send` y un plazo, no con `try_send`: al salir no hay un
+    /// «tick siguiente» que lo reintente, así que con el escritor ocupado —un
+    /// `fsync` lento, un daemon parado— un `try_send` habría tirado justo la
+    /// escritura que este camino existe para no perder.
+    async fn cierra(&mut self, ultima: Option<Arc<norte_frontend::session::SessionBody>>) {
+        if let Some(body) = ultima {
+            let _ = tokio::time::timeout(
+                ESPERA_AL_SALIR,
+                self.ordenes.send(SessionOrden::Escribe(body)),
+            )
+            .await;
+        }
         let (vacio, _) = tokio::sync::mpsc::channel(1);
         // Soltar el emisor es lo que termina el bucle del escritor.
         self.ordenes = vacio;
@@ -13034,6 +13073,9 @@ async fn escribe_la_sesion(
     let mut recortando = false;
     // No cupo ni sin historial: se deja de escribir en este run.
     let mut parado = false;
+    // Lo último que se mandó a escribir, para saber qué de un documento ajeno
+    // no teníamos.
+    let mut ultimo: Option<SessionBody> = None;
     while let Some(orden) = ordenes.recv().await {
         let mut body = match orden {
             SessionOrden::Pregunta => {
@@ -13042,11 +13084,24 @@ async fn escribe_la_sesion(
                 {
                     revision = sesion.revision;
                     parado = false;
-                    let _ = avisos.send(SessionAviso::Duena { revision }).await;
+                    // El documento que había: lo que guardó quien tenía la
+                    // sesión y esta pantalla no conoce viaja de vuelta, o el
+                    // primer volcado del relevo se lo lleva por delante.
+                    let huerfanos = SessionBody::from_value(&sesion.body)
+                        .map(|remoto| {
+                            huerfanos_ajenos(ultimo.as_ref().unwrap_or(&SessionBody::default()), &remoto)
+                        })
+                        .unwrap_or_default();
+                    let _ = avisos
+                        .send(SessionAviso::Duena {
+                            revision,
+                            huerfanos,
+                        })
+                        .await;
                 }
                 continue;
             }
-            SessionOrden::Escribe(body) => *body,
+            SessionOrden::Escribe(body) => (*body).clone(),
         };
         if parado {
             continue;
@@ -13058,18 +13113,35 @@ async fn escribe_la_sesion(
             .session_put(SCHEMA_VERSION, revision, body.to_value())
             .await
         {
-            Ok(rev) => revision = rev,
+            Ok(rev) => {
+                revision = rev;
+                ultimo = Some(body);
+            }
             // Otra ventana escribió entre nuestro último `get` y este `put`.
             // Se re-lee para saber contra qué, y lo que ella guardaba y esta
-            // pantalla no tiene se le devuelve a la pantalla: reescribir el
-            // cuerpo local a pelo le tiraría los huecos huérfanos a alguien
-            // que quizá los tenía desde ayer (#231).
+            // pantalla no tiene se conserva por DOS vías: se mete en el cuerpo
+            // que se reintenta ahora mismo —si esto es el último volcado, no
+            // hay un «luego»— y se le devuelve a la pantalla, que es quien
+            // tiene que llevarlo en los siguientes (#231).
             Err(Error::Conflict { .. }) => {
                 let mut huerfanos = std::collections::BTreeMap::new();
                 if let Ok((sesion, _)) = backend.session_get().await {
                     revision = sesion.revision;
                     if let Ok(remoto) = SessionBody::from_value(&sesion.body) {
                         huerfanos = huerfanos_ajenos(&body, &remoto);
+                        for (id, estado) in &huerfanos {
+                            body.slots.insert(*id, estado.clone());
+                        }
+                    }
+                    // Un reintento INMEDIATO y uno solo: con la revisión de
+                    // verdad delante, no reintentarlo aquí dejaba la última
+                    // foto de una salida en el aire.
+                    if let Ok(rev) = backend
+                        .session_put(SCHEMA_VERSION, revision, body.to_value())
+                        .await
+                    {
+                        revision = rev;
+                        ultimo = Some(body);
                     }
                 }
                 let _ = avisos.send(SessionAviso::Reintenta { huerfanos }).await;
@@ -13093,10 +13165,26 @@ async fn escribe_la_sesion(
                 }
             }
             // Esta ventana ya no escribe: perdió la propiedad, o el daemon se
-            // está apagando. Las dos se arreglan volviendo a preguntar, y de
-            // eso se encarga `Pregunta`.
-            Err(Error::PermissionDenied | Error::Cancelled) => parado = true,
-            Err(e) => tracing::debug!(error = %e, "la sesión no se pudo escribir"),
+            // está apagando (o se fue y la conexión nueva no reclamó nada).
+            // Se para Y SE DICE: sin el aviso nadie volvía a preguntar nunca
+            // —`Pregunta` solo sale de una ventana que se sabe suelta— y la
+            // pantalla se perdía en silencio tras cualquier relevo de daemon.
+            Err(Error::PermissionDenied | Error::Cancelled) => {
+                parado = true;
+                let _ = avisos.send(SessionAviso::Suelta).await;
+            }
+            // Cualquier otro fallo —transporte caído, un `Io`, un plazo— NO da
+            // el cuerpo por escrito: la pantalla lo dio por mandado al meterlo
+            // en el canal, así que sin esto se perdía hasta que el lector
+            // volviera a mover algo.
+            Err(e) => {
+                tracing::debug!(error = %e, "la sesión no se pudo escribir");
+                let _ = avisos
+                    .send(SessionAviso::Reintenta {
+                        huerfanos: std::collections::BTreeMap::new(),
+                    })
+                    .await;
+            }
         }
     }
 }
@@ -13174,23 +13262,7 @@ fn sellar_los_vivos(
 /// canal. Volver a poner un `await` en esta función es volver a trabar el
 /// bucle de eventos una vez por segundo.
 fn push_session(app: &mut App, st: &mut SessionPush) {
-    // Lo que el escritor contó desde la última vuelta.
-    while let Ok(aviso) = st.avisos.try_recv() {
-        match aviso {
-            SessionAviso::NoCabe => app.message = Some(t("msg-session-too-large")),
-            SessionAviso::Reintenta { huerfanos } => {
-                app.adopt_session_orphans(huerfanos);
-                // Lo mandado no llegó: que la comparación de abajo no lo dé
-                // por escrito.
-                st.last = None;
-            }
-            SessionAviso::Duena { revision } => {
-                app.session.detached = false;
-                app.session.revision = revision;
-                app.message = Some(t("msg-session-owned"));
-            }
-        }
-    }
+    drena_avisos(app, st);
     if app.session.detached {
         // Una ventana suelta no escribe, pero sí vuelve a preguntar: la dueña
         // pudo cerrarse hace un rato y nadie avisa de eso (#234).
@@ -13206,23 +13278,74 @@ fn push_session(app: &mut App, st: &mut SessionPush) {
         // no de lo que estás decidiendo.
         return;
     }
-    let ahora = now_ms();
-    let mut body = app.session_body();
-    body.prune(ahora);
-    if st.last.as_ref() == Some(&body) {
+    let Some(body) = captura_session(app, st) else {
         return;
-    }
-    sellar_los_vivos(app, &mut body, st.last.as_ref(), ahora);
+    };
     // `try_send` y no `send`: con el escritor ocupado, este tick se salta y el
     // siguiente manda un cuerpo más nuevo. Y `last` solo se actualiza si de
     // verdad se mandó, o un cuerpo saltado se daría por escrito.
-    if st
-        .ordenes
-        .try_send(SessionOrden::Escribe(Box::new(body.clone())))
-        .is_ok()
-    {
-        st.last = Some(body);
+    match st.ordenes.try_send(SessionOrden::Escribe(Arc::clone(&body))) {
+        Ok(()) => st.last = Some(body),
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+        // El escritor se murió (un panic dentro de la task). Sin esto la
+        // pantalla reintentaba contra un canal cerrado el resto del run sin
+        // decir una palabra.
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            tracing::warn!("el escritor de la sesión no está: esta ventana deja de guardar");
+            app.session.detached = true;
+            app.message = Some(t("msg-session-detached"));
+        }
     }
+}
+
+/// Lo que el escritor contó desde la última vuelta.
+fn drena_avisos(app: &mut App, st: &mut SessionPush) {
+    while let Ok(aviso) = st.avisos.try_recv() {
+        match aviso {
+            SessionAviso::NoCabe => app.message = Some(t("msg-session-too-large")),
+            SessionAviso::Reintenta { huerfanos } => {
+                app.adopt_session_orphans(huerfanos);
+                // Lo mandado no llegó: que la comparación no lo dé por escrito.
+                st.last = None;
+            }
+            SessionAviso::Duena {
+                revision,
+                huerfanos,
+            } => {
+                app.session.detached = false;
+                app.session.revision = revision;
+                app.adopt_session_orphans(huerfanos);
+                app.message = Some(t("msg-session-owned"));
+            }
+            SessionAviso::Suelta => {
+                app.session.detached = true;
+                app.message = Some(t("msg-session-detached"));
+                // Se vuelve a preguntar en el tick siguiente y no dentro de
+                // treinta segundos: esto suele ser un relevo de daemon, y la
+                // sesión ya está libre.
+                st.reintento = 1;
+            }
+        }
+    }
+}
+
+/// La pantalla de AHORA, si ha cambiado desde lo último que se mandó.
+///
+/// `Arc` y no un `Box` clonado: el cuerpo puede llegar a 1 MiB y esto corre en
+/// el bucle de eventos una vez por segundo. Compartirlo con el escritor no
+/// cuesta nada; copiarlo sí.
+fn captura_session(
+    app: &mut App,
+    st: &mut SessionPush,
+) -> Option<Arc<norte_frontend::session::SessionBody>> {
+    let ahora = now_ms();
+    let mut body = app.session_body();
+    body.prune(ahora);
+    if st.last.as_deref() == Some(&body) {
+        return None;
+    }
+    sellar_los_vivos(app, &mut body, st.last.as_deref(), ahora);
+    Some(Arc::new(body))
 }
 
 /// Ahora, en milisegundos desde el epoch. Cero si el reloj del sistema está
@@ -15905,7 +16028,10 @@ mod session_push_tests {
         app.session.detached = true;
         let (mut st, mut ordenes, avisos) = SessionPush::de_prueba();
         avisos
-            .try_send(SessionAviso::Duena { revision: 9 })
+            .try_send(SessionAviso::Duena {
+                revision: 9,
+                huerfanos: std::collections::BTreeMap::new(),
+            })
             .expect("cabe");
         push_session(&mut app, &mut st);
         assert!(!app.session.detached);
@@ -15937,7 +16063,96 @@ mod session_push_tests {
         );
     }
 
-    /// **#231**: de un cuerpo ajeno se conserva lo que solo estaba en él. Los
+    /// **La última foto al salir ESPERA su turno.**
+    ///
+    /// El canal tiene capacidad 1 y en la salida no hay un tick siguiente, así
+    /// que mandarla con `try_send` la tiraba justo cuando el escritor estaba
+    /// ocupado —un `fsync` lento, un daemon parado—, que es el caso para el que
+    /// se añadió.
+    #[tokio::test]
+    async fn la_ultima_foto_al_salir_espera_su_turno() {
+        let mut app = app();
+        let (mut st, mut ordenes, _avisos) = SessionPush::de_prueba();
+        // El escritor está ocupado: el canal ya lleva una orden sin consumir.
+        st.ordenes
+            .try_send(SessionOrden::Pregunta)
+            .expect("cabe una");
+        let ultima = captura_session(&mut app, &mut st).expect("hay pantalla que guardar");
+        let recibidas = tokio::spawn(async move {
+            let mut v = Vec::new();
+            while let Some(o) = ordenes.recv().await {
+                v.push(o);
+            }
+            v
+        });
+        st.cierra(Some(ultima)).await;
+        let v = recibidas.await.expect("join");
+        assert_eq!(v.len(), 2, "la que ocupaba el canal y la última foto");
+        assert!(matches!(v[1], SessionOrden::Escribe(_)));
+    }
+
+    /// Perder la propiedad a media vida se DICE, y se vuelve a preguntar en el
+    /// tick siguiente.
+    ///
+    /// Es lo que pasa tras un relevo de daemon: la conexión nueva no ha
+    /// reclamado nada, el `put` sale `PermissionDenied` y el escritor se apaga.
+    /// Sin el aviso, la ventana se creía la dueña y no volvía a guardar en el
+    /// resto de su vida — ni lo decía.
+    #[test]
+    fn perder_la_propiedad_se_dice_y_se_vuelve_a_preguntar() {
+        let mut app = app();
+        let (mut st, mut ordenes, avisos) = SessionPush::de_prueba();
+        avisos.try_send(SessionAviso::Suelta).expect("cabe");
+        push_session(&mut app, &mut st);
+        assert!(app.session.detached, "esta ventana ya no manda");
+        assert!(app.message.is_some(), "y lo dice");
+        // Y en el tick siguiente pregunta, sin esperar los treinta segundos.
+        push_session(&mut app, &mut st);
+        assert!(matches!(ordenes.try_recv(), Ok(SessionOrden::Pregunta)));
+    }
+
+    /// **El relevo conserva lo que guardaba quien se fue.**
+    ///
+    /// Un relevo no pasa por `Conflict` —se adopta justo la revisión vigente,
+    /// así que la siguiente escritura encaja—, y ese era el agujero: la ventana
+    /// que tomaba la sesión pisaba en su primer volcado todo lo que la otra
+    /// hubiera guardado mientras ésta corría suelta.
+    #[test]
+    fn al_tomar_el_relevo_no_se_pisa_lo_que_guardaba_la_otra() {
+        let mut app = app();
+        app.session.detached = true;
+        let (mut st, _ordenes, avisos) = SessionPush::de_prueba();
+        let mut huerfanos = std::collections::BTreeMap::new();
+        huerfanos.insert(77, slot("file:///lo-suyo"));
+        avisos
+            .try_send(SessionAviso::Duena {
+                revision: 5,
+                huerfanos,
+            })
+            .expect("cabe");
+        push_session(&mut app, &mut st);
+        assert!(!app.session.detached);
+        assert_eq!(app.session.revision, 5);
+        assert_eq!(
+            app.session_body().slots[&77].path,
+            VPath::parse("file:///lo-suyo").expect("wire"),
+            "lo de la otra ventana sigue ahí y se vuelve a escribir"
+        );
+    }
+
+    /// Un escritor muerto no deja a la pantalla hablando sola: se dice y se
+    /// deja de guardar.
+    #[test]
+    fn si_el_escritor_se_muere_la_pantalla_se_entera() {
+        let mut app = app();
+        let (mut st, ordenes, _avisos) = SessionPush::de_prueba();
+        drop(ordenes);
+        push_session(&mut app, &mut st);
+        assert!(app.session.detached);
+        assert!(app.message.is_some());
+    }
+
+    /// **#231**: de un cuerpo ajeno se conserva lo que solo estaba en él.    /// **#231**: de un cuerpo ajeno se conserva lo que solo estaba en él. Los
     /// huecos que el layout VIVO tiene son nuestros —esta pantalla es la que
     /// acaba de moverse—; los demás vuelven al rincón de huérfanos.
     #[test]

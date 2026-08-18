@@ -970,7 +970,7 @@ struct EmbeddedSession {
     /// después, y con la decisión congelada esta ventana no volvía a escribir
     /// en toda su vida — su pantalla se moría con ella aunque el fichero
     /// estuviera libre desde hace horas.
-    escritura: std::sync::Mutex<Option<crate::ui_session::disk::SessionLock>>,
+    escritura: std::sync::Mutex<Escritura>,
     /// Serializa `take_dirty` + volcado.
     ///
     /// El daemon tiene UN escritor que espera cada volcado, así que sus
@@ -980,6 +980,26 @@ struct EmbeddedSession {
     /// memoria dice la nueva. Hoy solo llama la TUI y va en serie, así que
     /// esto es el cierre de una puerta abierta, no un incendio apagado.
     writing: std::sync::Mutex<()>,
+}
+
+/// El estado del derecho a escribir, que se reintenta cada poco.
+#[derive(Default)]
+struct Escritura {
+    /// El derecho, si se tiene.
+    lock: Option<crate::ui_session::disk::SessionLock>,
+    /// Ya se avisó de que no se puede tomar. Sin esto, una ventana suelta
+    /// contra un directorio de estado que no se deja abrir avisa cada treinta
+    /// segundos durante todo el día: un indicador que parpadea es un indicador
+    /// que nadie mira (#178).
+    avisado: bool,
+    /// El fichero lo escribió un binario más nuevo, así que este proceso se
+    /// RINDE: no se vuelve a intentar.
+    ///
+    /// Reintentar tenía dos costes y ninguna ventaja: releer hasta un mega cada
+    /// treinta segundos para volver a rehusarlo, y un aviso por vuelta. El
+    /// arranque siguiente vuelve a mirar, que es cuando la respuesta puede
+    /// haber cambiado de verdad.
+    rendido: bool,
 }
 
 /// El almacén de este proceso, abriéndolo la primera vez.
@@ -995,27 +1015,35 @@ fn ui_session_blocking() -> &'static EmbeddedSession {
             return EmbeddedSession {
                 store: Arc::new(crate::ui_session::SessionStore::default()),
                 dir: None,
-                escritura: std::sync::Mutex::new(None),
+                escritura: std::sync::Mutex::new(Escritura::default()),
                 writing: std::sync::Mutex::new(()),
             };
         };
-        let lock = toma_el_lock(&dir);
+        let lock = toma_el_lock(&dir, true);
         let recuperada = crate::ui_session::disk::load_or_default(&dir);
         EmbeddedSession {
             dir: Some(dir),
             store: Arc::new(crate::ui_session::SessionStore::new(recuperada.session)),
             // El derecho a escribir son DOS cosas: el lock, y que lo que había
             // en disco no sea de un binario más nuevo.
-            escritura: std::sync::Mutex::new(lock.filter(|_| recuperada.writable)),
+            escritura: std::sync::Mutex::new(Escritura {
+                lock: lock.filter(|_| recuperada.writable),
+                avisado: false,
+                rendido: !recuperada.writable,
+            }),
             writing: std::sync::Mutex::new(()),
         }
     })
 }
 
-/// Intenta el lock de escritura de `dir`, sin ruido si lo tiene otro.
-fn toma_el_lock(dir: &Path) -> Option<crate::ui_session::disk::SessionLock> {
+/// Intenta el lock de escritura de `dir`. `avisa` decide si un fallo se cuenta:
+/// esto se reintenta cada treinta segundos y un aviso por vuelta es ruido, no
+/// información.
+fn toma_el_lock(dir: &Path, avisa: bool) -> Option<crate::ui_session::disk::SessionLock> {
     crate::ui_session::disk::lock(dir).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "no se pudo tomar el lock de la sesión de UI");
+        if avisa {
+            tracing::warn!(error = %e, "no se pudo tomar el lock de la sesión de UI");
+        }
         None
     })
 }
@@ -1028,11 +1056,13 @@ fn toma_el_lock(dir: &Path) -> Option<crate::ui_session::disk::SessionLock> {
 ///
 /// - Si mientras corríamos lo escribió un binario MÁS NUEVO, no se pisa: se
 ///   suelta el lock que acabamos de tomar y se sigue sin escribir.
-/// - Si lo escribió otra ventana de esta misma versión, su revisión es la que
-///   va en el fichero, y la nuestra se pone a la altura. La siguiente
-///   escritura del cliente traerá una revisión rancia, contestará `Conflict`, y
-///   ese camino ya sabe re-leer y conservar lo ajeno — que es exactamente lo
-///   que se quería, y no renumerar el fichero hacia atrás.
+/// - Si lo escribió otra ventana de esta misma versión, su DOCUMENTO es el
+///   vigente y se adopta entero, cuerpo incluido. Quedarse solo con la revisión
+///   parecía suficiente y no lo era: el cliente recibía su propio cuerpo con el
+///   número del otro, su siguiente escritura encajaba sin conflicto, y lo que
+///   la otra ventana hubiera guardado desaparecía sin que nada lo notara. Con
+///   el cuerpo delante, el cliente decide qué conserva —él es el único que sabe
+///   leerlo— y de paso el número no va hacia atrás.
 ///
 /// Síncrono: lo llaman los dos envoltorios desde dentro de un `spawn_blocking`
 /// (regla 2).
@@ -1044,21 +1074,28 @@ fn puede_escribir(s: &EmbeddedSession) -> bool {
         .escritura
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if guarda.is_some() {
+    if guarda.lock.is_some() {
         return true;
     }
-    let Some(lock) = toma_el_lock(dir) else {
+    if guarda.rendido {
+        return false;
+    }
+    let Some(lock) = toma_el_lock(dir, !guarda.avisado) else {
+        guarda.avisado = true;
         return false;
     };
     let recuperada = crate::ui_session::disk::load_or_default(dir);
     if !recuperada.writable {
-        // Un binario más nuevo escribió mientras estábamos sueltos.
+        // Un binario más nuevo escribió mientras estábamos sueltos: se suelta
+        // el lock recién tomado y no se vuelve a intentar en todo el proceso.
         drop(lock);
+        guarda.rendido = true;
         return false;
     }
-    s.store.adopt_revision(recuperada.session.revision);
+    s.store.adopt_from_disk(recuperada.session);
     tracing::info!("la sesión de UI quedó libre: esta ventana vuelve a guardarla");
-    *guarda = Some(lock);
+    guarda.lock = Some(lock);
+    guarda.avisado = false;
     true
 }
 
@@ -1083,10 +1120,11 @@ pub async fn session_get() -> (norte_proto::methods::Session, bool) {
 
 /// Reemplaza la sesión y la vuelca, si este proceso es quien escribe.
 ///
-/// Un proceso SUELTO —el que no consiguió el lock— sí actualiza su sesión en
-/// memoria y no toca el disco: es la misma semántica que el segundo cliente de
-/// un daemon, y lo que hace que abrir una segunda ventana no le cueste la
-/// pantalla a la primera.
+/// Un proceso SUELTO —el que no consiguió el lock— no escribe NI en memoria: se
+/// le contesta `PermissionDenied` antes de tocar el almacén. Aceptarlo en
+/// memoria y devolver una revisión nueva era prometerle que había guardado algo
+/// que no iba a ninguna parte; abrir una segunda ventana sigue sin costarle la
+/// pantalla a la primera, que es lo que importaba.
 ///
 /// **Solo para un humano.** El gate `Actor::User` de ADR 0059 lo hace el
 /// handler del daemon, y aquí no hay handler: esta función y su hermana son
@@ -1126,6 +1164,10 @@ pub async fn session_put(
             crate::ui_session::PutError::TooLarge { .. } => norte_proto::Error::LimitExceeded {
                 limit: norte_proto::Error::LIMIT_SESSION_BODY.to_owned(),
             },
+            // Un almacén embebido no se cierra —lo cierra el apagado de un
+            // daemon—, pero nombrarlo aquí es lo que hace que añadir un cierre
+            // en este brazo sea un error de compilación y no un silencio.
+            crate::ui_session::PutError::Sealed => norte_proto::Error::Cancelled,
         })?;
         // `take_dirty` y el volcado, bajo UN lock: es lo que hace que dos
         // escrituras a la vez no dejen en disco la vieja.
@@ -1328,7 +1370,7 @@ mod tests {
         EmbeddedSession {
             store: Arc::new(crate::ui_session::SessionStore::default()),
             dir: Some(dir.to_path_buf()),
-            escritura: std::sync::Mutex::new(None),
+            escritura: std::sync::Mutex::new(Escritura::default()),
             writing: std::sync::Mutex::new(()),
         }
     }

@@ -70,8 +70,8 @@ behind a core that is alive and does not intend to let go. A frontend without a
 daemon takes the same lock over the same file, so an embedded window and a
 daemon do not overwrite each other either.
 
-**Detached is not a life sentence.** A window that lost the try-lock asks again
-every thirty seconds, because the window that held it can close and nothing
+**Detached is not a life sentence.** A window without a daemon that lost the
+try-lock asks again every thirty seconds, because the window that held it can close and nothing
 announces that — there is no `session.changed`, on purpose. Taking the lock late
 re-reads the file for two different reasons: a newer binary may have written it
 while we were detached, and then the lock is let go again rather than overwrite
@@ -79,7 +79,12 @@ it; or another window of this version wrote it, and its revision is the one on
 disk, so ours rises to meet it instead of renumbering the file backwards. The
 body is not adopted — the screen that gets saved is the one still on screen —
 and what to keep of the other window's document is the client's decision, since
-the core does not read it.
+the core does not read it — it gets the document back to decide with, which is
+the whole point of adopting the body and not only the number.
+
+A daemon that started while another core held the lock does not retry: it
+decides once, at bind, and runs without a writer for its whole life. That is
+worth fixing and is not fixed here.
 
 **The caps are the client's, and they live in the type.** History is 64
 entries per slot and direction, orphan slots are 128, and an orphan untouched

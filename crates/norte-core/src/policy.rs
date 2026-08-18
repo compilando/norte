@@ -200,7 +200,7 @@ pub fn local_root_vpath(dir: &Path) -> Option<VPath> {
 pub fn walk_exclusions(actor: &Actor) -> Vec<VPath> {
     match actor {
         Actor::User => Vec::new(),
-        Actor::Agent { .. } | Actor::Plugin { .. } => daemon_state_root().into_iter().collect(),
+        Actor::Agent { .. } | Actor::Plugin { .. } => protected_roots(),
     }
 }
 
@@ -218,6 +218,37 @@ pub fn walk_exclusions(actor: &Actor) -> Vec<VPath> {
 #[must_use]
 pub fn daemon_state_root() -> Option<VPath> {
     local_root_vpath(&crate::connect::config_dir())
+}
+
+/// La OTRA raíz protegida: el directorio de ESTADO del usuario
+/// (`$XDG_STATE_HOME/norte`), donde viven `session.json` —con su lock— y
+/// `logs/`.
+///
+/// Son dos directorios distintos y por eso hacen falta dos funciones: el de
+/// configuración lleva `journal.db`, los spools y los secretos; este lleva la
+/// pantalla y los registros. Protegerlo importa por lo mismo que el otro y por
+/// algo más concreto: `session.json` ES la lista de rutas por las que se mueve
+/// el lector, así que un scope sobre `$HOME` que lo alcanzara le entregaría a
+/// un agente el historial entero por la puerta de delante — justo lo que el
+/// modo 0600 y los diagnósticos sin contenido existen para evitar. Y su
+/// `session.json.lock` es un mutex ENTRE PROCESOS: borrarlo no destruye datos,
+/// hace que dos norte se crean a la vez el único escritor.
+///
+/// `None` por la misma razón que [`daemon_state_root`]: sin ruta absoluta no
+/// hay raíz que proteger.
+#[must_use]
+pub fn ui_state_root() -> Option<VPath> {
+    norte_config::dirs::state_dir().and_then(|d| local_root_vpath(&d))
+}
+
+/// Todo lo que este proceso protege por defecto, sin que nadie tenga que
+/// acordarse de ninguna de las dos.
+#[must_use]
+pub fn protected_roots() -> Vec<VPath> {
+    daemon_state_root()
+        .into_iter()
+        .chain(ui_state_root())
+        .collect()
 }
 
 /// Resultado de la comprobación de frontera de scope.
@@ -252,8 +283,9 @@ impl Default for ScopeRegistry {
 }
 
 impl ScopeRegistry {
-    /// Registro vacío, con el directorio de estado del daemon YA protegido
-    /// ([`daemon_state_root`]).
+    /// Registro vacío, con los dos directorios de estado YA protegidos
+    /// ([`protected_roots`]): el de configuración —`journal.db`, spools,
+    /// secretos— y el de estado del usuario, donde vive la sesión de UI.
     ///
     /// Protege por DEFECTO a propósito: la exclusión existe justo porque se
     /// concede sin querer —un scope sobre `$HOME` contiene
@@ -263,7 +295,7 @@ impl ScopeRegistry {
     /// embebedores) está [`Self::with_protected_roots`].
     #[must_use]
     pub fn new() -> Self {
-        Self::with_protected_roots(daemon_state_root().into_iter().collect())
+        Self::with_protected_roots(protected_roots())
     }
     /// Registro vacío con las raíces protegidas EXPLÍCITAS (no consulta el
     /// entorno). Para tests y para un embebedor que ancla su estado en otro
@@ -697,13 +729,64 @@ mod tests {
         );
     }
 
+    /// La sesión de UI no vive donde `journal.db`, y esa es la trampa entera:
+    /// el issue #165 protegió `$XDG_CONFIG_HOME/norte` y la pantalla se guarda
+    /// en `$XDG_STATE_HOME/norte`, un directorio que estaba fuera. Un scope
+    /// sobre `$HOME` —«ordéname las descargas»— lo alcanzaba, y ahí dentro
+    /// `session.json` es la lista de rutas por las que anda el lector.
+    #[test]
+    fn el_dir_de_estado_del_usuario_tampoco_lo_concede_un_scope_sobre_el_padre() {
+        let estado = vp("file:///home/u/.local/state/norte");
+        let reg = ScopeRegistry::with_protected_roots(vec![estado.clone()]);
+        reg.grant(
+            "s1",
+            Scope::forever(vec![vp("file:///home/u")], OpSet::all()),
+        );
+        let now = Instant::now();
+        for p in [
+            "file:///home/u/.local/state/norte",
+            "file:///home/u/.local/state/norte/session.json",
+            // El lock es un mutex ENTRE PROCESOS: borrarlo no borra datos,
+            // hace que dos norte se crean a la vez el único escritor.
+            "file:///home/u/.local/state/norte/session.json.lock",
+            "file:///home/u/.local/state/norte/logs/norte.log",
+        ] {
+            assert_eq!(
+                reg.permits(
+                    "s1",
+                    PolicyOp::Delete {
+                        mode: DeleteMode::Permanent,
+                    },
+                    &vp(p),
+                    now
+                ),
+                ScopeVerdict::OutOfScope,
+                "{p} tenía que estar fuera de alcance"
+            );
+        }
+    }
+
+    /// Las DOS raíces son distintas, y protegerlas es cosa de una función que
+    /// nadie tiene que recordar llamar.
+    #[test]
+    fn las_dos_raices_protegidas_son_dos() {
+        let (Some(config), Some(estado)) = (daemon_state_root(), ui_state_root()) else {
+            // Sin `HOME` ni passwd no hay rutas absolutas que proteger; el
+            // resto del test no aplica.
+            return;
+        };
+        assert_ne!(config, estado, "config y estado son dos directorios");
+        let todas = protected_roots();
+        assert!(todas.contains(&config) && todas.contains(&estado));
+    }
+
     #[test]
     fn el_registro_por_defecto_protege_el_estado_del_daemon() {
         // El pin del wiring: `new()` (y `default()`, que es `new()`) llevan la
         // raíz del proceso, sin que nadie tenga que acordarse. En un proceso
         // sin HOME ni passwd el dir resuelto es relativo y no hay raíz: el
         // test compara contra la MISMA función, así que ambos casos valen.
-        let esperado: Vec<VPath> = daemon_state_root().into_iter().collect();
+        let esperado: Vec<VPath> = protected_roots();
         assert_eq!(ScopeRegistry::new().protected_roots(), esperado.as_slice());
         assert_eq!(
             ScopeRegistry::default().protected_roots(),
@@ -740,7 +823,7 @@ mod tests {
             walk_exclusions(&Actor::User).is_empty(),
             "el humano busca en sus propios ficheros"
         );
-        let esperado: Vec<VPath> = daemon_state_root().into_iter().collect();
+        let esperado: Vec<VPath> = protected_roots();
         assert_eq!(
             walk_exclusions(&Actor::Agent {
                 session: "s1".into()

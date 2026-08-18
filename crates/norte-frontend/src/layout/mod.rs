@@ -97,6 +97,10 @@ pub enum LayoutDiagnostic {
     },
     /// Cromo apartado PARA ESTE FRAME porque, con él, no cabía ni un listado
     /// usable (#229). El árbol no se toca: al crecer el terminal vuelve.
+    ///
+    /// Hoy no lo pinta nadie —los frontends no leen `diagnostics`—, así que
+    /// «por qué no está mi sidebar» todavía no tiene respuesta en pantalla:
+    /// eso es #232, junto con la marca de ventana suelta.
     ChromeSetAside {
         /// El hueco que se apartó.
         slot: SlotId,

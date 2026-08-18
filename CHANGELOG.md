@@ -9,6 +9,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **An agent cannot reach your session file.** The policy engine protects the
+  directory holding `journal.db` and the sync spools, but the screen norte saves
+  lives in a different one — `~/.local/state/norte` — which was outside it. An
+  agent granted a scope over `$HOME` could therefore read `session.json`, which
+  is the list of every directory you have visited, or delete the lock beside it
+  and leave two norte windows both believing they were the only writer. Both
+  directories are protected now.
+
 - **Navigating no longer stutters once a second.** Saving the session ended in
   an `fsync`, or in a round trip to the daemon, and the terminal was not reading
   your keys while that was in flight — once a second, and precisely while you
