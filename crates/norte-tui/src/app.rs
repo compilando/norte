@@ -3566,7 +3566,7 @@ impl App {
     /// devolver un `F8` apuntando a lo que uno marcó ayer.
     ///
     /// Los huecos que la sesión traía y este layout no tiene viajan de vuelta
-    /// intactos ([`SessionUi::orphans`]).
+    /// intactos, en el rincón de huérfanos de [`SessionUi`].
     #[must_use]
     pub fn session_body(&self) -> norte_frontend::session::SessionBody {
         use norte_frontend::session::{SessionBody, SlotState};
