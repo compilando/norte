@@ -47,20 +47,17 @@ pub fn resolve(area: Rect, tree: &Node, decls: &KindRegistry) -> Resolved {
     let mut podado = tree.clone();
     let mut apartados: Vec<SlotId> = Vec::new();
     let mut corto = ejes_cortos(&out, tree, decls);
-    loop {
-        // El más grande DE UN EJE CORTO. Los candidatos se recalculan sobre el
-        // árbol ya podado —apartar un hijo mueve los índices de sus hermanos— y
-        // los ejes también: apartar un panel ancho puede dejar el ancho
-        // resuelto y el alto no. Cada vuelta quita uno, así que termina.
-        let Some(elegido) = cromo_de_mayor_a_menor(&podado, decls)
-            .into_iter()
-            .find(|c| match c.eje {
-                Dir::Horizontal => corto.0,
-                Dir::Vertical => corto.1,
-            })
-        else {
-            break;
-        };
+    // El más grande DE UN EJE CORTO, uno por vuelta. Los candidatos se
+    // recalculan sobre el árbol ya podado —apartar un hijo mueve los índices de
+    // sus hermanos— y los ejes también: apartar un panel ancho puede dejar el
+    // ancho resuelto y el alto no. Cada vuelta quita uno, así que termina.
+    while let Some(elegido) = cromo_de_mayor_a_menor(&podado, decls)
+        .into_iter()
+        .find(|c| match c.eje {
+            Dir::Horizontal => corto.0,
+            Dir::Vertical => corto.1,
+        })
+    {
         let Some(mas_pequeno) = sin_camino(&podado, &elegido.camino) else {
             break;
         };
