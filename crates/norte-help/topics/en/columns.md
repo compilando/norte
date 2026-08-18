@@ -5,6 +5,11 @@ tags = ["doing"]
 see_also = ["finding", "panes", "remote"]
 commands = [
     "pane.columns",
+    "pane.sort-name",
+    "pane.sort-ext",
+    "pane.sort-size",
+    "pane.sort-time",
+    "pane.sort-menu",
     "dialog.toggle-enabled",
     "dialog.move-up",
     "dialog.move-down",
@@ -64,3 +69,19 @@ it, rather than inventing a ranking.
 Sorting is per pane and is remembered while the pane lives, so the two panes
 can be sorted differently — which is the point when one of them is a listing
 you are reading and the other a destination you are filling.
+
+# Sorting without opening anything
+
+Four keys sort the focused pane without going through the dialog:
+{{cmd:pane.sort-name}}, {{cmd:pane.sort-ext}}, {{cmd:pane.sort-size}} and
+{{cmd:pane.sort-time}}. Pressing the one already in use reverses the direction,
+exactly like clicking a header twice. {{cmd:pane.sort-menu}} opens the columns
+dialog, which is where the direction and "directories first" live: no sort key
+touches those, because they are your preferences rather than a property of a
+column.
+
+Sorting by extension looks at what follows the LAST dot. `.TXT` and `.txt` land
+together — grouping them is what sorting by extension is for — even though they
+remain different names for everything else. A name that starts with a dot has no
+extension: `.bashrc` is a whole name. Anything with no extension sorts last, in
+both directions, like a size the backend cannot tell you.

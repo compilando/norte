@@ -270,11 +270,15 @@ pub const CATALOGUE: &[CommandDef] = &[
     // family's reason id (`keymap-reason-shell`) went with them, out of both
     // locales, because nothing else claimed it.
     planned("pane.tree", "keymap-reason-tree", 136),
-    planned("pane.sort-name", "keymap-reason-sort", 138),
-    planned("pane.sort-ext", "keymap-reason-sort", 138),
-    planned("pane.sort-size", "keymap-reason-sort", 138),
-    planned("pane.sort-time", "keymap-reason-sort", 138),
-    planned("pane.sort-menu", "keymap-reason-sort", 138),
+    // Orden por tecla (#138). `sort-menu` no abre un menú propio: abre el
+    // diálogo de columnas, que es donde vive el orden desde #108 —tiene la
+    // columna, la dirección y `dirs_first` en un sitio— y así no hay dos
+    // pantallas que digan lo mismo con distinta letra.
+    live("pane.sort-name", false),
+    live("pane.sort-ext", false),
+    live("pane.sort-size", false),
+    live("pane.sort-time", false),
+    live("pane.sort-menu", false),
     planned("pane.properties", "keymap-reason-properties", 139),
     planned("pane.dir-size", "keymap-reason-properties", 139),
     planned("pane.connect", "keymap-reason-connections", 140),

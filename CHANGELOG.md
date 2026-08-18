@@ -7,6 +7,17 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **Sorting has keys now.** Sort the focused panel by name, extension, size or
+  date without opening anything; pressing the one already in use reverses it,
+  exactly like clicking a header twice. The presets that bind these keys — Far's
+  Ctrl+F3..F6 and its Ctrl+F12 sort menu, Total Commander's, Krusader's — stop
+  saying "not built". Sorting by extension is new as an order: `.TXT` and `.txt`
+  land together, `.bashrc` counts as a name rather than an extension, and
+  anything without one sorts last in both directions. It can also be your
+  default, with `sort.column = "extension"` under `[ui.columns]` (#138).
+
 ### Fixed
 
 - **An agent cannot reach your session file.** The policy engine protects the

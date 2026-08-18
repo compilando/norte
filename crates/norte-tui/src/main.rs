@@ -6282,6 +6282,7 @@ async fn apply_picked_columns(
                     norte_frontend::SortColumn::Name => "name",
                     norte_frontend::SortColumn::Size => "size",
                     norte_frontend::SortColumn::Mtime => "mtime",
+                    norte_frontend::SortColumn::Extension => "extension",
                 },
                 descending: sort.dir == norte_frontend::SortDir::Desc,
                 dirs_first: sort.dirs_first,
@@ -11808,6 +11809,26 @@ async fn dispatch(
         // plugin salen de `plugin.list` (aprobado + activado). Un fetch
         // fallido NO impide abrir el picker — degrada a builtins + attrs,
         // igual que la palette degrada a built-ins.
+        // #138: la misma semántica que un click en la cabecera
+        // (`SortSpec::after_click`) — la columna activa invierte, una nueva
+        // ordena ascendente— y sobre el pane con el FOCO, no sobre los dos: el
+        // orden es de un listado, como el cursor.
+        Command::PaneSortName => app.sort_focused_by(norte_frontend::SortColumn::Name),
+        Command::PaneSortExt => app.sort_focused_by(norte_frontend::SortColumn::Extension),
+        Command::PaneSortSize => app.sort_focused_by(norte_frontend::SortColumn::Size),
+        Command::PaneSortTime => app.sort_focused_by(norte_frontend::SortColumn::Mtime),
+        // El «menú de orden» es el diálogo de columnas: ahí está la columna,
+        // la dirección y `dirs_first`, y `dialog.sort` ordena por la fila bajo
+        // el cursor. Una segunda pantalla para lo mismo sería otra que
+        // mantener y otra que aprender.
+        Command::PaneSortMenu => {
+            let plugins = backend
+                .plugins_list()
+                .await
+                .map(|l| l.plugins)
+                .unwrap_or_default();
+            app.open_columns_picker(&plugins);
+        }
         Command::PaneColumns => {
             let plugins = backend
                 .plugins_list()

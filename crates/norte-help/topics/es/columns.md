@@ -5,6 +5,11 @@ tags = ["doing"]
 see_also = ["finding", "panes", "remote"]
 commands = [
     "pane.columns",
+    "pane.sort-name",
+    "pane.sort-ext",
+    "pane.sort-size",
+    "pane.sort-time",
+    "pane.sort-menu",
     "dialog.toggle-enabled",
     "dialog.move-up",
     "dialog.move-down",
@@ -65,3 +70,20 @@ hace nada al pulsarla, en vez de inventarse un ranking.
 El orden es por panel y se conserva mientras el panel viva, así que los dos
 pueden estar ordenados distinto: que es justo lo que quieres cuando uno es un
 listado que estás leyendo y el otro un destino que estás llenando.
+
+# Ordenar sin abrir nada
+
+Cuatro teclas ordenan el panel con el foco sin pasar por el diálogo:
+{{cmd:pane.sort-name}}, {{cmd:pane.sort-ext}}, {{cmd:pane.sort-size}} y
+{{cmd:pane.sort-time}}. Pulsar la que ya está activa invierte la dirección,
+igual que hacer clic dos veces en una cabecera. {{cmd:pane.sort-menu}} abre el
+diálogo de columnas, que es donde viven la dirección y el «directorios
+primero»: ninguna tecla de orden los toca, porque son preferencias tuyas y no
+criterios de una columna.
+
+Ordenar por extensión mira lo que va después del ÚLTIMO punto. `.TXT` y `.txt`
+caen juntas —agruparlas es de lo que va ordenar por extensión— aunque sigan
+siendo nombres distintos para todo lo demás. Un nombre que empieza por punto no
+tiene extensión: `.bashrc` es un nombre entero. Lo que no tiene extensión va al
+final, en las dos direcciones, igual que un tamaño que el backend no sabe
+decir.

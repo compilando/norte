@@ -50,6 +50,7 @@ fn persistir(dir: &std::path::Path, picked: &norte_frontend::columns_picker::Pic
                 SortColumn::Name => "name",
                 SortColumn::Size => "size",
                 SortColumn::Mtime => "mtime",
+                SortColumn::Extension => "extension",
             },
             descending: picked.sort.dir == SortDir::Desc,
             dirs_first: picked.sort.dirs_first,

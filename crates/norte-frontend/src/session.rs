@@ -426,6 +426,11 @@ mod tests {
 
     /// Una columna de ORDEN que este binario no conoce no tira la pantalla
     /// entera: se cae al orden por defecto y vuelve todo lo demás.
+    ///
+    /// La fixture era `extension` hasta que #138 la construyó, que es
+    /// exactamente el caso que esta tolerancia existe para cubrir: la columna
+    /// hipotética de ayer es la real de hoy, y un binario viejo tiene que
+    /// seguir abriendo la sesión que escribió uno nuevo.
     #[test]
     fn una_columna_de_orden_desconocida_no_tira_el_cuerpo() {
         let v = serde_json::json!({
@@ -434,7 +439,7 @@ mod tests {
             "slots": { "1": {
                 "path": "file:///casa",
                 "back": ["file:///antes"],
-                "sort": { "column": "extension", "dir": "asc", "dirs_first": true },
+                "sort": { "column": "creacion", "dir": "asc", "dirs_first": true },
             }},
         });
         let b = SessionBody::from_value(&v).expect("parsea");

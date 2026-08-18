@@ -1238,6 +1238,8 @@ pub enum SortColumnKey {
     Size,
     /// Fecha de modificación.
     Mtime,
+    /// Extensión del nombre (#138).
+    Extension,
 }
 
 /// `[ui.columns]` resuelto (#108): ids CRUDOS (set abierto — los parsea el
@@ -1733,10 +1735,11 @@ fn parse_sort_section(
         None | Some("name") => SortColumnKey::Name,
         Some("size") => SortColumnKey::Size,
         Some("mtime") => SortColumnKey::Mtime,
+        Some("extension") => SortColumnKey::Extension,
         Some(_) => {
             return Err(ConfigError::Toml {
                 path: norte.to_path_buf(),
-                message: "[ui.columns] sort.column: name | size | mtime".to_owned(),
+                message: "[ui.columns] sort.column: name | size | mtime | extension".to_owned(),
             });
         }
     };

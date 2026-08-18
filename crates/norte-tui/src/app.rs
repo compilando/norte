@@ -4079,6 +4079,20 @@ impl App {
         self.panes[pane].set_sort(spec);
     }
 
+    /// Ordena el pane con el FOCO por `col`, con la semántica del click de
+    /// cabecera (#138).
+    ///
+    /// La columna activa invierte su dirección; una nueva ordena ascendente.
+    /// `dirs_first` no lo toca ninguna tecla de orden: es una preferencia del
+    /// usuario, no un criterio de columna — se cambia en el diálogo de
+    /// columnas, que es donde vive.
+    ///
+    /// Solo el pane enfocado: el orden es de UN listado, igual que el cursor.
+    pub fn sort_focused_by(&mut self, col: norte_frontend::SortColumn) {
+        let spec = self.focused().sort().after_click(col);
+        self.focused_mut().set_sort(spec);
+    }
+
     /// Abre el modal de marcado por patrón (#103).
     pub fn open_mark_pattern(&mut self, mark: bool) {
         self.modal = Some(Modal::MarkPattern {
@@ -7856,6 +7870,45 @@ mod tests {
         assert_eq!(kind, TransferKind::Move);
         assert_eq!(from, VPath::parse("mem:///a.txt").unwrap());
         assert_eq!(dest, VPath::parse("mem:///a.txt2").unwrap());
+    }
+
+    /// #138: la tecla de orden hace lo mismo que un click en la cabecera —
+    /// invierte si ya está activa, ordena ascendente si es nueva— y SOLO sobre
+    /// el panel con el foco: el orden es de un listado, como el cursor.
+    #[test]
+    fn una_tecla_de_orden_solo_toca_el_panel_con_el_foco() {
+        use norte_frontend::{SortColumn, SortDir};
+
+        let mut app = app_dos_panes();
+        let otro = app.panes[1].sort();
+        app.sort_focused_by(SortColumn::Size);
+        assert_eq!(app.focused().sort().column, SortColumn::Size);
+        assert_eq!(app.focused().sort().dir, SortDir::Asc, "una nueva, ascendente");
+        assert_eq!(app.panes[1].sort(), otro, "el otro panel no se entera");
+
+        app.sort_focused_by(SortColumn::Size);
+        assert_eq!(
+            app.focused().sort().dir,
+            SortDir::Desc,
+            "la misma otra vez invierte"
+        );
+        app.sort_focused_by(SortColumn::Extension);
+        assert_eq!(app.focused().sort().column, SortColumn::Extension);
+        assert_eq!(app.focused().sort().dir, SortDir::Asc);
+    }
+
+    /// Y `dirs_first` no lo toca ninguna tecla de orden: es una preferencia,
+    /// no un criterio de columna.
+    #[test]
+    fn una_tecla_de_orden_no_toca_los_directorios_primero() {
+        use norte_frontend::SortColumn;
+
+        let mut app = app_dos_panes();
+        let mut spec = app.focused().sort();
+        spec.dirs_first = false;
+        app.focused_mut().set_sort(spec);
+        app.sort_focused_by(SortColumn::Mtime);
+        assert!(!app.focused().sort().dirs_first);
     }
 
     /// #108 b4: `apply_scheme_sort` aplica el orden de la config al pane
