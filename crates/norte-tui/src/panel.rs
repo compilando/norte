@@ -17,9 +17,7 @@
 
 use std::ops::{Index, IndexMut};
 
-use norte_frontend::layout::{
-    BySlot, Dir, KindId, Node, Params, Rect as LayoutRect, Size, SlotId, SlotStore,
-};
+use norte_frontend::layout::{BySlot, KindId, Node, Params, Rect as LayoutRect, SlotId, SlotStore};
 
 use crate::app::Pane;
 
@@ -446,28 +444,23 @@ impl std::ops::IndexMut<usize> for Histories {
 ///   └── status    ← Fixed(1)
 /// ```
 ///
-/// El `Auto` de la franja de tareas es la razón de que exista [`Size::Auto`]:
+/// El `Auto` de la franja de tareas es la razón de que exista
+/// [`Size::Auto`](norte_frontend::layout::Size::Auto):
 /// hoy vale cero con el sistema en reposo, así que un `Fixed(6)` pintaría seis
 /// filas vacías donde ahora no hay nada. Lo sustituye el frontend con
 /// [`Node::substitute_auto`] antes de repartir, porque el único que sabe
 /// cuántas tareas hay es quien tiene el `TaskBoard` delante.
+///
+/// Sale del PRESET de fábrica, no de un árbol escrito aquí: dos definiciones
+/// de la misma pantalla se separan, y la que se cargue de un fichero ganaría
+/// sin que nadie lo note. El test de este módulo fija que son iguales.
 #[must_use]
 pub fn orthodox() -> Node {
-    Node::Split {
-        dir: Dir::Vertical,
-        sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
-        children: vec![
-            Node::split(
-                Dir::Horizontal,
-                vec![
-                    Node::slot(SLOT_LEFT, KindId::browser()),
-                    Node::slot(SLOT_RIGHT, KindId::browser()),
-                ],
-            ),
-            Node::slot(SLOT_TASKS, KindId::new("tasks")),
-            Node::slot(SLOT_STATUS, KindId::new("status")),
-        ],
-    }
+    // El `unwrap` está justificado por los tests de `layout::presets`, que
+    // parsean y validan los cinco presets en cada CI: si este fallara, el
+    // binario se envió con un fichero embebido que no compila como árbol.
+    norte_frontend::layout::presets::tree("orthodox")
+        .unwrap_or_else(|e| unreachable!("el preset de fábrica no parsea: {e}"))
 }
 
 /// Celdas a `ratatui::layout::Rect`, campo a campo. Los nombres coinciden a
@@ -500,6 +493,28 @@ mod tests {
 
     fn pane(wire: &str) -> Pane {
         Pane::new(VPath::parse(wire).expect("wire"), Vec::new())
+    }
+
+    /// Los cuatro huecos que el TUI nombra son los cuatro que trae el fichero.
+    ///
+    /// `orthodox()` ya no construye el árbol, lo lee del preset de fábrica, y
+    /// una igualdad contra sí mismo no probaría nada. Lo que hay que fijar es
+    /// lo otro: que `SLOT_LEFT` y sus tres compañeros siguen queriendo decir
+    /// en el fichero lo que quieren decir en el código. Renumerar el fichero
+    /// dejaría a los ~212 sitios que dicen `app.panes[0]` apuntando a un hueco
+    /// que no es un listado.
+    #[test]
+    fn los_huecos_con_nombre_son_los_del_fichero() {
+        let arbol = orthodox();
+        assert_eq!(
+            arbol.slot_ids(),
+            vec![SLOT_LEFT, SLOT_RIGHT, SLOT_TASKS, SLOT_STATUS]
+        );
+        let kind = |id| arbol.kind_of(id).expect("kind").as_str().to_owned();
+        assert_eq!(kind(SLOT_LEFT), "browser");
+        assert_eq!(kind(SLOT_RIGHT), "browser");
+        assert_eq!(kind(SLOT_TASKS), "tasks");
+        assert_eq!(kind(SLOT_STATUS), "status");
     }
 
     /// Indexar por lado da el mismo listado que antes daba el array.
