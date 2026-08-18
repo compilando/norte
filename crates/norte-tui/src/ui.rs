@@ -1565,7 +1565,9 @@ fn draw_connections_picker(
     let ancho = u16::try_from(ancho).unwrap_or(u16::MAX).max(24);
     let pie = format!(" {hint} ");
     let ancho = ancho.max(u16::try_from(pie.chars().count()).unwrap_or(u16::MAX));
-    let alto = u16::try_from(cuerpo.len()).unwrap_or(u16::MAX).saturating_add(2);
+    let alto = u16::try_from(cuerpo.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
     let area = centered(frame.area(), ancho.saturating_add(2), alto);
     clear_themed(frame, area, theme);
     let bloque = Block::default()
@@ -3746,11 +3748,7 @@ fn attr_texto(v: &norte_proto::AttrValue) -> (String, bool) {
         AttrValue::Uint(n) => (n.to_string(), false),
         AttrValue::Int(i) => (i.to_string(), false),
         AttrValue::TimeMs(ms) => (
-            norte_frontend::columns::format_mtime(
-                *ms,
-                norte_frontend::columns::TimeFormat::Iso,
-                0,
-            ),
+            norte_frontend::columns::format_mtime(*ms, norte_frontend::columns::TimeFormat::Iso, 0),
             false,
         ),
         AttrValue::Bool(b) => (t(if *b { "col-cell-yes" } else { "col-cell-no" }), false),
@@ -5871,6 +5869,14 @@ fn draw_pane(
             " [{}]",
             norte_i18n::ta("pane-loading", &[("n", &pane.entries().len().to_string())])
         );
+    }
+    // Un pane que NO se pudo listar al restaurar la sesión lo dice mientras
+    // dure (#235): sin esto la pantalla afirma que el directorio está vacío,
+    // que es precisamente lo que no se sabe. Va donde la paginación y por la
+    // misma razón — un listado que no es el listado jamás es silencioso.
+    if pane.unlisted {
+        use std::fmt::Write as _;
+        let _ = write!(title, " [{}]", norte_i18n::t("pane-unlisted"));
     }
     // El DESTINO se marca en el cromo, y solo cuando hace falta: con dos
     // paneles el destino es el otro y nadie necesita que se lo digan, pero a

@@ -74,6 +74,12 @@ pub struct SlotState {
     /// Columnas visibles, en su forma string estable (`name`, `attr:…`,
     /// `plugin:…/…`): la MISMA que la configuración, y no un segundo
     /// vocabulario que mantener.
+    ///
+    /// **Hoy viaja SIEMPRE vacío desde la TUI (#236)**, donde las columnas
+    /// visibles son configuración por scheme y no estado por hueco. El campo
+    /// existe porque un frontend que sí las tenga por hueco lo necesita, y
+    /// porque quitarlo después costaría subir [`SCHEMA_VERSION`]; quien lo
+    /// llene tiene que llenarlo en la captura, no aquí.
     #[serde(default, with = "columnas")]
     pub columns: Vec<ColumnId>,
     /// Si se ven los ocultos.
@@ -183,6 +189,139 @@ impl SessionBody {
     }
 }
 
+/// Qué toca hacer con la sesión en ESTE tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushStep {
+    /// Nada: o no ha cambiado nada, o hay algo delante que dice que no es
+    /// momento de guardar dónde estás.
+    Skip,
+    /// Preguntar si esta ventana ya puede escribir. Solo lo pide una ventana
+    /// SUELTA, cada `retry_every` ticks.
+    Ask,
+    /// Capturar la pantalla y, si [`PushPolicy::prepare`] dice que ha
+    /// cambiado, mandarla.
+    Capture,
+}
+
+/// La política de escritura de la sesión: cuándo se manda, cuándo no se
+/// repite, cuándo se vuelve a pedir la propiedad y qué se recorta antes de
+/// mandar.
+///
+/// **Vive aquí y no en el frontend (#236).** El primer cliente de `session.put`
+/// fue la TUI y toda esta política nació dentro de su bucle de eventos, con el
+/// estado de recorte incluido; el segundo frontend la habría reimplementado
+/// entera, bugs de recorte incluidos. Lo que NO está aquí es la fontanería:
+/// los canales, el reloj y el `put` son de quien tenga runtime.
+#[derive(Debug)]
+pub struct PushPolicy {
+    /// Lo último que se MANDÓ a escribir: se compara para no mandar dos veces
+    /// lo mismo. Comparar el documento entero cuesta menos que un flag de
+    /// sucio puesto a mano en los cientos de sitios que mueven un cursor —y no
+    /// se puede olvidar en uno.
+    last: Option<std::sync::Arc<SessionBody>>,
+    /// Ticks que quedan para volver a preguntar por la propiedad.
+    retry_in: u32,
+    /// Cada cuántos ticks pregunta una ventana suelta.
+    retry_every: u32,
+}
+
+impl PushPolicy {
+    /// Una política que pregunta por la propiedad cada `retry_every` ticks.
+    ///
+    /// `retry_every` en 0 se trata como 1: preguntar «cada cero ticks» no es
+    /// una cadencia, y la alternativa —no preguntar jamás— es el bug #234 otra
+    /// vez.
+    #[must_use]
+    pub fn new(retry_every: u32) -> Self {
+        let retry_every = retry_every.max(1);
+        Self {
+            last: None,
+            retry_in: retry_every,
+            retry_every,
+        }
+    }
+
+    /// Qué toca este tick.
+    ///
+    /// `detached`: esta ventana no es la dueña, así que no escribe —pero sí
+    /// vuelve a preguntar, porque la dueña pudo cerrarse hace un rato y de eso
+    /// no avisa nadie (#234)—. `blocked`: hay algo delante (un modal) y la
+    /// sesión trata de dónde estás, no de lo que estás decidiendo.
+    pub fn tick(&mut self, detached: bool, blocked: bool) -> PushStep {
+        if detached {
+            self.retry_in = self.retry_in.saturating_sub(1);
+            if self.retry_in == 0 {
+                self.retry_in = self.retry_every;
+                return PushStep::Ask;
+            }
+            return PushStep::Skip;
+        }
+        if blocked {
+            return PushStep::Skip;
+        }
+        PushStep::Capture
+    }
+
+    /// Recorta el cuerpo a sus topes y, si ha cambiado desde lo último
+    /// mandado, sella los huecos VIVOS que se movieron.
+    ///
+    /// `None` es «no ha cambiado»: este tick no manda nada. `Some(sellados)`
+    /// son los huecos que el llamante tiene que sellar TAMBIÉN en su propio
+    /// estado, con este mismo `now_ms` — el sello no puede salir de la captura
+    /// porque hace falta saber contra qué comparar.
+    ///
+    /// Y solo los vivos: sellar también los huérfanos les devolvería la
+    /// juventud en cada arranque y la barrida por edad no barrería nunca.
+    pub fn prepare(
+        &self,
+        body: &mut SessionBody,
+        live: &[SlotId],
+        now_ms: u64,
+    ) -> Option<Vec<SlotId>> {
+        body.prune(now_ms);
+        if self.last.as_deref() == Some(&*body) {
+            return None;
+        }
+        let mut sellados = Vec::new();
+        for id in live {
+            let Some(estado) = body.slots.get_mut(&id.0) else {
+                continue;
+            };
+            if self
+                .last
+                .as_deref()
+                .and_then(|b| b.slots.get(&id.0))
+                .is_some_and(|antes| antes == estado)
+            {
+                continue;
+            }
+            estado.touched_ms = now_ms;
+            sellados.push(*id);
+        }
+        Some(sellados)
+    }
+
+    /// El cuerpo se mandó de verdad. Solo entonces cuenta como escrito: darlo
+    /// por mandado cuando el canal estaba lleno pierde ese cuerpo para
+    /// siempre.
+    pub fn sent(&mut self, body: std::sync::Arc<SessionBody>) {
+        self.last = Some(body);
+    }
+
+    /// Lo mandado NO llegó (otra ventana escribió antes): que la comparación
+    /// no lo dé por escrito.
+    pub fn resend(&mut self) {
+        self.last = None;
+    }
+
+    /// Preguntar por la propiedad en el tick SIGUIENTE y no dentro de la
+    /// cadencia entera: tras un relevo de daemon la sesión suele estar ya
+    /// libre.
+    pub fn ask_soon(&mut self) {
+        self.retry_in = 1;
+    }
+}
+
 /// El error de serde SIN su mensaje: su `Display` cita el valor que no encajó,
 /// y ese valor sale de un documento que lleva rutas.
 fn diagnose(e: &serde_json::Error) -> String {
@@ -265,6 +404,101 @@ mod tests {
             show_hidden: false,
             touched_ms: 0,
         }
+    }
+
+    /// #236: la cadencia de una ventana SUELTA es de la política.
+    ///
+    /// Una suelta no escribe nunca, pero pregunta cada `retry_every` ticks: la
+    /// dueña pudo cerrarse hace un rato y de eso no avisa nadie (#234).
+    #[test]
+    fn una_ventana_suelta_pregunta_con_cadencia_y_no_escribe() {
+        let mut p = PushPolicy::new(3);
+        assert_eq!(p.tick(true, false), PushStep::Skip);
+        assert_eq!(p.tick(true, false), PushStep::Skip);
+        assert_eq!(p.tick(true, false), PushStep::Ask, "al tercero pregunta");
+        assert_eq!(p.tick(true, false), PushStep::Skip, "y vuelve a contar");
+
+        // Tras un relevo de daemon la sesión ya suele estar libre: se pregunta
+        // en el tick siguiente, no dentro de la cadencia entera.
+        p.ask_soon();
+        assert_eq!(p.tick(true, false), PushStep::Ask);
+    }
+
+    /// Con un modal delante no se guarda: la sesión trata de dónde estás, no
+    /// de lo que estás decidiendo. Y sin nada delante, toca capturar.
+    #[test]
+    fn un_modal_tapa_la_escritura_y_nada_mas_la_deja_pasar() {
+        let mut p = PushPolicy::new(3);
+        assert_eq!(p.tick(false, true), PushStep::Skip);
+        assert_eq!(p.tick(false, false), PushStep::Capture);
+    }
+
+    /// Sellar es de la política, y sella SOLO los huecos vivos que cambiaron:
+    /// sellar un huérfano le devuelve la juventud en cada arranque y la
+    /// barrida por edad no barre nunca.
+    #[test]
+    fn se_sellan_los_vivos_que_cambiaron_y_nadie_mas() {
+        let mut p = PushPolicy::new(3);
+        let mut body = SessionBody::default();
+        body.slots.insert(1, slot("file:///uno"));
+        body.slots.insert(2, slot("file:///dos"));
+        // El 9 es huérfano: ninguna disposición lo menciona y no está en
+        // `vivos`. Nace con un sello viejo para que la barrida no se lo lleve.
+        let mut viejo = slot("file:///nueve");
+        viejo.touched_ms = 1_000;
+        body.slots.insert(9, viejo);
+
+        let vivos = [SlotId(1), SlotId(2)];
+        let sellados = p.prepare(&mut body, &vivos, 5_000).expect("es la primera");
+        assert_eq!(sellados, vec![SlotId(1), SlotId(2)]);
+        assert_eq!(body.slots[&1].touched_ms, 5_000);
+        assert_eq!(
+            body.slots[&9].touched_ms, 1_000,
+            "el huérfano no rejuvenece"
+        );
+
+        // Mandado. El mismo cuerpo otra vez no se manda dos veces.
+        p.sent(std::sync::Arc::new(body.clone()));
+        let mut igual = body.clone();
+        assert!(
+            p.prepare(&mut igual, &vivos, 6_000).is_none(),
+            "lo mismo no se repite"
+        );
+        assert_eq!(igual.slots[&1].touched_ms, 5_000, "ni se resella");
+
+        // Mueve UNO: se sella ese y no el otro.
+        let mut movido = body.clone();
+        movido.slots.get_mut(&2).expect("el dos").cursor = 7;
+        let sellados = p.prepare(&mut movido, &vivos, 7_000).expect("ha cambiado");
+        assert_eq!(sellados, vec![SlotId(2)]);
+        assert_eq!(movido.slots[&1].touched_ms, 5_000, "el quieto no se toca");
+    }
+
+    /// Lo que no llegó vuelve a mandarse: si `resend` no borrara el último,
+    /// la comparación daría por escrito un cuerpo que otra ventana pisó.
+    #[test]
+    fn lo_que_no_llego_se_vuelve_a_mandar() {
+        let mut p = PushPolicy::new(3);
+        let mut body = SessionBody::default();
+        body.slots.insert(1, slot("file:///uno"));
+        p.prepare(&mut body, &[SlotId(1)], 5_000).expect("primera");
+        p.sent(std::sync::Arc::new(body.clone()));
+        assert!(p.prepare(&mut body.clone(), &[SlotId(1)], 6_000).is_none());
+
+        p.resend();
+        assert!(
+            p.prepare(&mut body, &[SlotId(1)], 6_000).is_some(),
+            "tras un conflicto se vuelve a mandar"
+        );
+    }
+
+    /// Una cadencia de cero no es una cadencia: se trata como 1. Lo otro sería
+    /// no preguntar jamás, que es el #234 otra vez.
+    #[test]
+    fn una_cadencia_de_cero_pregunta_cada_tick() {
+        let mut p = PushPolicy::new(0);
+        assert_eq!(p.tick(true, false), PushStep::Ask);
+        assert_eq!(p.tick(true, false), PushStep::Ask);
     }
 
     /// Round trip por JSON: lo que sale es lo que entró.

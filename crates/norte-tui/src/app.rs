@@ -47,6 +47,15 @@ pub struct Pane {
     /// [`Pane::virtual_search`]; la barra lo pinta para el hit bajo el
     /// cursor. Se limpia al salir del modo virtual (cd/listado real).
     pub search_matches: std::collections::HashMap<VPath, norte_proto::methods::MatchInfo>,
+    /// El listado de este pane NO se pudo hacer al restaurar la sesión, y lo
+    /// que se ve no es «este directorio está vacío» (#235).
+    ///
+    /// Se marca en el TÍTULO del pane, igual que la paginación en curso, y no
+    /// en un `message`: es un estado que dura hasta que alguien liste de
+    /// verdad, y un mensaje lo borra la tecla siguiente — que es justo el bug
+    /// que #232 arregla dos hunks más arriba. Cualquier listado real
+    /// ([`Pane::set_listing`], [`Pane::begin_listing`]) lo apaga.
+    pub unlisted: bool,
     /// Preferencia de ocultos del USUARIO (#107): el pane virtual de
     /// búsqueda SUSPENDE el filtro (un hit es una petición EXPLÍCITA — un
     /// `.env` buscado que desapareciera en silencio bajo `[ui] show_hidden
@@ -135,6 +144,7 @@ impl Pane {
             search_error: None,
             search_matches: std::collections::HashMap::new(),
             show_hidden_pref: true,
+            unlisted: false,
         }
     }
 
@@ -361,6 +371,7 @@ impl Pane {
         self.virtual_search = false;
         self.search_matches.clear();
         self.state.set_skipped(None);
+        self.unlisted = false;
     }
 
     /// Primera página de un listado paginado: reemplaza el contenido y MARCA
@@ -391,6 +402,7 @@ impl Pane {
         self.virtual_search = false;
         self.search_matches.clear();
         self.state.set_skipped(skipped);
+        self.unlisted = false;
     }
 
     /// Añade un lote del drenador: re-ordena TODO y re-ancla el cursor al path
@@ -895,8 +907,8 @@ pub enum KeyOwner {
 pub struct SessionUi {
     /// Esta ventana NO es la dueña: otra la tiene, así que ésta arranca con la
     /// misma pantalla y a partir de ahí va por su cuenta sin escribir nada. Se
-    /// dice al abrir, con un mensaje (una marca permanente en la barra de
-    /// estado está pendiente, ver el issue de la fase B).
+    /// dice al abrir con un mensaje y, mientras dure, con una marca permanente
+    /// en la barra de estado ([`App::session_banner`], #232).
     ///
     /// También se pone suelta la ventana que encuentra un cuerpo de una
     /// versión más nueva: no se lee, y sobre todo no se pisa.
@@ -2825,11 +2837,30 @@ impl App {
     /// conexión va en claro», y es el único que habla de TODA la sesión.
     #[must_use]
     pub fn persistent_banner(&self) -> Option<String> {
-        match (self.journal_banner(), self.connection_banner()) {
-            (Some(j), Some(c)) => Some(format!("{j}  {c}")),
-            (Some(uno), None) | (None, Some(uno)) => Some(uno),
-            (None, None) => None,
-        }
+        let partes: Vec<String> = [
+            self.journal_banner(),
+            self.connection_banner(),
+            self.session_banner(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        (!partes.is_empty()).then(|| partes.join("  "))
+    }
+
+    /// El aviso PERSISTENTE de ventana SUELTA, o `None` si ésta es la dueña
+    /// de la sesión (#232).
+    ///
+    /// Una ventana suelta no escribe nunca: es una segunda ventana, un core
+    /// sin el lock, o una que encontró un cuerpo de una versión más nueva. Se
+    /// decía con un `message` al arrancar, y el primer mensaje que llegara
+    /// después lo borraba — a partir de ahí la ventana dejaba de guardar la
+    /// pantalla sin nada que lo dijera. Misma disciplina que el resto de esta
+    /// línea: un estado que dura toda la sesión se pinta en cada frame, no
+    /// una vez.
+    #[must_use]
+    pub fn session_banner(&self) -> Option<String> {
+        self.session.detached.then(|| t("status-session-detached"))
     }
 
     /// El pane con foco.
@@ -3660,10 +3691,7 @@ impl App {
 
     /// Abre el selector de conexiones (#140) con lo que haya en
     /// `connections.toml`. Leerlo es del frontend: este tipo no toca disco.
-    pub fn open_connections_picker(
-        &mut self,
-        filas: Vec<norte_frontend::connections_picker::Row>,
-    ) {
+    pub fn open_connections_picker(&mut self, filas: Vec<norte_frontend::connections_picker::Row>) {
         self.connections_picker = Some(
             norte_frontend::connections_picker::ConnectionsPicker::open(filas),
         );
@@ -4269,8 +4297,16 @@ impl App {
     /// una selección—, y enseñar ese número aquí sería contestar otra pregunta.
     ///
     /// Devuelve `true` si era el suyo.
-    pub fn properties_sized(&mut self, task: norte_proto::TaskId, bytes: u64, entries: u64) -> bool {
-        let Some(Modal::Properties { size_task, size, .. }) = &mut self.modal else {
+    pub fn properties_sized(
+        &mut self,
+        task: norte_proto::TaskId,
+        bytes: u64,
+        entries: u64,
+    ) -> bool {
+        let Some(Modal::Properties {
+            size_task, size, ..
+        }) = &mut self.modal
+        else {
             return false;
         };
         if *size_task != Some(task) {
@@ -7337,6 +7373,50 @@ mod tests {
         );
     }
 
+    /// #232: una ventana SUELTA lo dice una vez y luego se le olvida.
+    ///
+    /// El mensaje de arranque lo borra la siguiente tecla, y a partir de ahí
+    /// la ventana no guarda la pantalla sin nada en pantalla que lo diga.
+    #[test]
+    fn la_ventana_suelta_tiene_indicador_persistente() {
+        let mut app = app_dos_panes();
+        assert!(app.session_banner().is_none(), "la dueña no avisa de nada");
+
+        app.session.detached = true;
+        app.message = Some("algo".to_owned());
+        // Lo que borra el `message` en el run loop, tecla a tecla.
+        app.message = None;
+        let banner = app.persistent_banner().expect("hay aviso");
+        assert_eq!(
+            banner,
+            app.session_banner().expect("hay session_banner"),
+            "sin nada más encendido, la barra es justo ese aviso: {banner}"
+        );
+    }
+
+    /// Y convive con los otros dos: son tres hechos simultáneos de la misma
+    /// clase, y el de la sesión es el que menos pesa, así que va el último.
+    #[test]
+    fn los_tres_indicadores_persistentes_caben_juntos() {
+        let mut app = app_dos_panes();
+        app.note_no_journal(norte_core::embedded::NoJournal::Busy);
+        app.note_degraded(degradacion_de_test("sftp", "a.org"));
+        app.session.detached = true;
+        let banner = app.persistent_banner().expect("hay aviso");
+        assert!(
+            banner.starts_with(&app.journal_banner().expect("hay journal_banner")),
+            "el del journal sigue primero: {banner}"
+        );
+        assert!(
+            banner.contains("a.org"),
+            "la conexión sigue nombrada: {banner}"
+        );
+        assert!(
+            banner.ends_with(&app.session_banner().expect("hay session_banner")),
+            "y el de la sesión cierra: {banner}"
+        );
+    }
+
     /// MINOR-5: el `Option<String>` de #44 estaba acotado por construcción;
     /// una colección con clave que viene del WIRE no lo está. El tope es
     /// generoso —hay siete schemes— así que solo lo alcanza algo anómalo, y
@@ -8130,7 +8210,11 @@ mod tests {
         let mut app = app_dos_panes();
         app.toggle_tree();
         let id = app.tree_slot().expect("abierto");
-        let res = resolve(Rect::new(0, 0, 110, 30), &app.layout, &KindRegistry::builtin());
+        let res = resolve(
+            Rect::new(0, 0, 110, 30),
+            &app.layout,
+            &KindRegistry::builtin(),
+        );
         assert!(
             res.placements.iter().any(|(p, _)| *p == id),
             "el hueco del árbol no se colocó: {:?}",
@@ -8149,7 +8233,10 @@ mod tests {
         assert!(app.tree_slot().is_some());
         app.return_keys_to_panes();
         app.toggle_tree();
-        assert!(app.tree_slot().is_some(), "la segunda solo recupera el teclado");
+        assert!(
+            app.tree_slot().is_some(),
+            "la segunda solo recupera el teclado"
+        );
         assert_eq!(app.key_owner(), KeyOwner::Tree);
         app.toggle_tree();
         assert!(app.tree_slot().is_none(), "y la tercera cierra");
@@ -8208,7 +8295,11 @@ mod tests {
         let otro = app.panes[1].sort();
         app.sort_focused_by(SortColumn::Size);
         assert_eq!(app.focused().sort().column, SortColumn::Size);
-        assert_eq!(app.focused().sort().dir, SortDir::Asc, "una nueva, ascendente");
+        assert_eq!(
+            app.focused().sort().dir,
+            SortDir::Asc,
+            "una nueva, ascendente"
+        );
         assert_eq!(app.panes[1].sort(), otro, "el otro panel no se entera");
 
         app.sort_focused_by(SortColumn::Size);

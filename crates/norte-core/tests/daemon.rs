@@ -7344,7 +7344,11 @@ async fn session_get_y_put_por_el_socket() {
 /// rompió».
 #[tokio::test]
 async fn session_put_rancio_es_conflict() {
-    let d = spawn_daemon(None).await;
+    // CON `state_dir`: desde la revisión de #237 un core que no persiste
+    // rehúsa el `put` entero, así que un conflicto de revisión solo se puede
+    // provocar donde de verdad se escribe.
+    let estado = tempfile::tempdir().expect("tmp");
+    let d = spawn_daemon_estado(estado.path()).await;
     let c = connected_client(&d).await;
     let _: methods::SessionGetResult = c
         .call(methods::SESSION_GET, &serde_json::json!({}))
@@ -7383,7 +7387,10 @@ async fn session_put_rancio_es_conflict() {
 /// se queda como estaba.
 #[tokio::test]
 async fn session_put_sobre_el_tope_es_limit_exceeded() {
-    let d = spawn_daemon(None).await;
+    // CON `state_dir`, por lo mismo que el test de arriba: el tope se
+    // comprueba después de la propiedad, y sin escritor no se llega.
+    let estado = tempfile::tempdir().expect("tmp");
+    let d = spawn_daemon_estado(estado.path()).await;
     let c = connected_client(&d).await;
     let _: methods::SessionGetResult = c
         .call(methods::SESSION_GET, &serde_json::json!({}))
@@ -7638,6 +7645,88 @@ async fn la_sesion_sobrevive_a_un_relevo() {
     assert_eq!(g.session.version, 1);
 }
 
+/// #237: un daemon que arranca mientras OTRO core tiene el lock de la sesión
+/// no lo volvía a intentar jamás.
+///
+/// `session_persists` se calculaba una vez en el bind, así que contestaba
+/// `owner: false` durante toda su vida — también horas después de que el otro
+/// proceso se hubiera ido y el fichero llevara libre desde entonces. El brazo
+/// embebido ya reintentaba (#234); éste es el del daemon.
+///
+/// Y al tomarlo tarde ADOPTA el documento de disco: lo que el otro core
+/// escribió después de que éste arrancara es lo vigente, y servir la copia
+/// vieja con el número nuevo sería perderlo sin que nada lo notara.
+#[tokio::test]
+async fn un_daemon_suelto_toma_la_sesion_cuando_queda_libre() {
+    let estado = tempfile::tempdir().expect("tmp");
+    let uno = spawn_daemon_estado(estado.path()).await;
+    let c1 = connected_client(&uno).await;
+    let g1: methods::SessionGetResult = c1
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(g1.owner, "el primero tiene el lock");
+
+    // El segundo arranca CON el lock tomado: corre suelto.
+    let dos = spawn_daemon_estado(estado.path()).await;
+    let c2 = connected_client(&dos).await;
+    let g2: methods::SessionGetResult = c2
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(!g2.owner, "con el lock de otro, suelto");
+
+    // El primero escribe DESPUÉS de que el segundo haya arrancado: esto es lo
+    // que el segundo tiene que adoptar, y no puede haberlo leído al nacer.
+    let _: methods::SessionPutResult = c1
+        .call(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: serde_json::json!({ "quien": "el primero" }),
+            },
+        )
+        .await
+        .expect("la dueña escribe");
+    let _: DaemonShutdownResult = c1
+        .call(
+            methods::DAEMON_SHUTDOWN,
+            &DaemonShutdownParams {
+                graceful: true,
+                mode: methods::ShutdownMode::Stop,
+            },
+        )
+        .await
+        .expect("daemon.shutdown");
+    drop(c1);
+    uno.run.await.expect("join").expect("apagado limpio");
+
+    // El límite es de TIEMPO y no un número de vueltas: el escritor reintenta
+    // en su tick, y bajo carga contar vueltas es un rojo intermitente.
+    let tomada = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let g: methods::SessionGetResult = c2
+                .call(methods::SESSION_GET, &serde_json::json!({}))
+                .await
+                .expect("session.get");
+            if g.owner {
+                return g;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("el segundo nunca tomó una sesión que llevaba libre");
+
+    assert_eq!(
+        tomada.session.body["quien"],
+        serde_json::json!("el primero"),
+        "y adopta el documento que dejó el otro, no el que tenía al nacer"
+    );
+    assert_eq!(tomada.session.revision, 1, "con su revisión");
+}
+
 /// **La promesa de ADR 0059, de punta a punta**: una sesión que escribió un
 /// binario MÁS NUEVO no se lee y —lo que importa— no se pisa.
 ///
@@ -7666,10 +7755,12 @@ async fn una_sesion_del_futuro_no_se_pisa_por_el_socket() {
         .expect("session.get");
     assert!(!g.owner, "no se lee, así que tampoco se escribe");
     assert_eq!(g.session.revision, 0, "arranca desde la configuración");
-    // Y un cliente que IGNORE `owner` tampoco la pisa: lo escrito se queda en
-    // la memoria de este core y no llega al disco.
-    let _: methods::SessionPutResult = c
-        .call(
+    // Y un cliente que IGNORE `owner` tampoco la pisa. Antes se le aceptaba en
+    // memoria y el cuerpo moría con el proceso; desde la revisión de #237 se
+    // rehúsa de plano, que es lo que ya hacía el brazo embebido — y lo que hay
+    // que hacer en cuanto el escritor puede tomar el lock tarde.
+    let err = c
+        .call::<_, methods::SessionPutResult>(
             methods::SESSION_PUT,
             &methods::SessionPutParams {
                 version: 1,
@@ -7678,7 +7769,13 @@ async fn una_sesion_del_futuro_no_se_pisa_por_el_socket() {
             },
         )
         .await
-        .expect("en su propia memoria sí escribe");
+        .expect_err("sobre una sesión del futuro no se escribe ni en memoria");
+    match err {
+        ClientError::Rpc(ref rpc) => {
+            assert_eq!(rpc.data, Some(Error::PermissionDenied), "{:?}", rpc.data);
+        }
+        ref other => panic!("esperaba Rpc, fue {other:?}"),
+    }
     let _: DaemonShutdownResult = c
         .call(
             methods::DAEMON_SHUTDOWN,
@@ -7736,8 +7833,12 @@ async fn un_core_suelto_no_escribe_el_estado_ajeno() {
     // —el primer tick de su escritor es inmediato—. Fijar el cero aquí era
     // afirmar quién ganaba esa carrera, y bajo carga la perdía: rojo
     // intermitente en un test que no habla de revisiones.
-    let _: methods::SessionPutResult = c2
-        .call(
+    // Y desde la revisión de #237 el `put` de un core suelto se REHÚSA, igual
+    // que en el brazo embebido: aceptarlo en memoria dejó de ser inocuo cuando
+    // el escritor pudo tomar el lock tarde —el cuerpo aceptado suelto
+    // sobrevivía a la adopción y se publicaba encima de la pantalla ajena—.
+    let err = c2
+        .call::<_, methods::SessionPutResult>(
             methods::SESSION_PUT,
             &methods::SessionPutParams {
                 version: 1,
@@ -7746,7 +7847,13 @@ async fn un_core_suelto_no_escribe_el_estado_ajeno() {
             },
         )
         .await
-        .expect("en su propia memoria sí escribe");
+        .expect_err("un core suelto no escribe NI en memoria");
+    match err {
+        ClientError::Rpc(ref rpc) => {
+            assert_eq!(rpc.data, Some(Error::PermissionDenied), "{:?}", rpc.data);
+        }
+        ref other => panic!("esperaba Rpc, fue {other:?}"),
+    }
     let _: DaemonShutdownResult = c2
         .call(
             methods::DAEMON_SHUTDOWN,

@@ -82,9 +82,16 @@ and what to keep of the other window's document is the client's decision, since
 the core does not read it — it gets the document back to decide with, which is
 the whole point of adopting the body and not only the number.
 
-A daemon that started while another core held the lock does not retry: it
-decides once, at bind, and runs without a writer for its whole life. That is
-worth fixing and is not fixed here.
+**Both arms retry, and the daemon's does it in its writer** (#237). The daemon
+used to decide once, at bind, and run without a writer for its whole life — the
+worst case being a handover, where the successor starts precisely while the
+predecessor still holds the lock, and then never writes again. Its session
+writer is now spawned whenever there is a `state_dir` at all, holds the lock
+itself, and re-tries it once a second while it does not have it. It retries
+every second rather than every thirty because the case that matters is that
+handover, where the wait is seconds and a failed `flock` costs nothing. Taking
+it late does what the embedded arm does: adopt the document from disk, or, if
+that document is from a newer binary, let the lock go and never try again.
 
 **The caps are the client's, and they live in the type.** History is 64
 entries per slot and direction, orphan slots are 128, and an orphan untouched
