@@ -12,6 +12,8 @@
 //! protegerse a sí mismo: la `revision` (un escritor rancio no pisa al
 //! vigente) y el tope de 1 MiB (un cliente con un bug no llena el disco).
 
+pub mod disk;
+
 use std::sync::Mutex;
 
 use norte_proto::methods::{SESSION_BODY_MAX, Session};
