@@ -207,6 +207,17 @@ pub struct Bindings {
     pub follows: Option<Follow>,
 }
 
+impl Bindings {
+    /// ¿No vincula nada? Lo usa la serialización para no escribir una tabla
+    /// vacía por cada hueco: la mayoría de los huecos no miran a nadie, y un
+    /// `[...slot.bindings]` sin contenido es ruido en el fichero que un
+    /// usuario copia y bytes en el cuerpo de la sesión.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.follows.is_none()
+    }
+}
+
 /// Cómo queda una [`Node::Tabs`] tras una operación: sus hijos nuevos y cuál
 /// queda activa. Recibe los hijos de ahora y la posición del que se opera.
 type ReTab<'a> = dyn Fn(&[Node], usize) -> (Vec<Node>, usize) + 'a;
@@ -245,7 +256,7 @@ pub enum Node {
         #[serde(default, skip_serializing_if = "Params::is_empty")]
         params: Params,
         /// A quién mira.
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Bindings::is_empty")]
         bindings: Bindings,
     },
 }

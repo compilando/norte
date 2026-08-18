@@ -1,0 +1,58 @@
+[split]
+dir = "vertical"
+
+[[split.children]]
+
+[split.children.split]
+dir = "horizontal"
+
+[[split.children.split.children]]
+
+[split.children.split.children.slot]
+id = 5
+kind = "places"
+
+[[split.children.split.children]]
+
+[split.children.split.children.slot]
+id = 1
+kind = "browser"
+
+[[split.children.split.children]]
+
+[split.children.split.children.slot]
+id = 6
+kind = "viewer"
+
+[split.children.split.children.slot.bindings.follows]
+role = "active"
+
+[[split.children.split.sizes]]
+fixed = 16
+
+[[split.children.split.sizes]]
+weight = 1
+
+[[split.children.split.sizes]]
+weight = 1
+
+[[split.children]]
+
+[split.children.slot]
+id = 7
+kind = "processes"
+
+[[split.children]]
+
+[split.children.slot]
+id = 4
+kind = "status"
+
+[[split.sizes]]
+weight = 1
+
+[[split.sizes]]
+fixed = 8
+
+[[split.sizes]]
+fixed = 1

@@ -1,0 +1,25 @@
+[split]
+dir = "vertical"
+sizes = [
+    { weight = 1 },
+    "auto",
+    { fixed = 1 },
+]
+
+[[split.children]]
+
+[split.children.slot]
+id = 1
+kind = "browser"
+
+[[split.children]]
+
+[split.children.slot]
+id = 3
+kind = "tasks"
+
+[[split.children]]
+
+[split.children.slot]
+id = 4
+kind = "status"
