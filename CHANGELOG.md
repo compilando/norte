@@ -9,6 +9,10 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A sidebar you can widen.** Grow and shrink did nothing to a panel with a
+  fixed width, which is every sidebar, so the places panel was stuck at the
+  width it opened with. It now moves two columns at a time (#227).
+
 - **A plugin-backed connection no longer dies after ten seconds.** The time
   budget a plugin gets was being handed out once, when the connection opened,
   instead of once per operation — so an FTP session stopped answering ten
@@ -30,6 +34,33 @@ independently through `PROTOCOL_VERSION`.
   after a fifth of a second and answers with what it already knew.
 
 ### Added
+
+- **Five screens to choose from, instead of one.** `orthodox` is what norte has
+  always looked like and still the default. `simple` is one panel, for a narrow
+  terminal or a shared screen. `krusader` adds the places sidebar to the two.
+  `explorer` is one panel with the sidebar, the docked viewer and a processes
+  panel. `full` turns everything on. Pick one from the layout list, start in one
+  with `ntc --layout <name>`, or set `[ui] layout` and always get it. Each row
+  of the list draws the screen it would give you, from the layout itself rather
+  than from a picture saved beside it, so it cannot go stale. A layout named
+  after a file manager does not touch your keys: the layout and the keymap
+  preset are separate settings, and the list says so where the names meet.
+
+- **A processes panel, and an attribute sheet.** The processes panel gives every
+  running task a row with its progress and cancels the one under the cursor —
+  the strip at the foot of the screen stays exactly as it was, and the panel is
+  what you open when you want to act on a task rather than watch it. The
+  attribute sheet shows what is known about the entry under the cursor and
+  follows it as you move, reading nothing to do it: everything it shows was
+  already in the listing.
+
+- **A copy with nowhere obvious to go now asks instead of failing.** In a layout
+  with a single listing there is no other panel to copy into, and with three
+  there is no obvious one either. Copying now opens a prompt for the destination
+  address, prefilled with the panel's own, in the same form the hotlist takes;
+  edit its tail and press ⏎ and it is the ordinary confirmation from there. A
+  destination is never guessed, because copying into a panel you did not have in
+  mind is silent data loss.
 
 - **A sidebar with your drives and your favourites, and a viewer that follows
   the cursor.** `Alt+b` opens a panel down the left with every mount and how
