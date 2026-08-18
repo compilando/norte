@@ -38,7 +38,8 @@ commands = [
     "layout.processes",
     "layout.metadata",
     "layout.pick",
-]
+
+    "pane.tree",]
 context = ["browse"]
 +++
 Two panes are on screen at once. One has focus: it is the one the cursor moves
@@ -323,3 +324,21 @@ that the coincidence is a convenience and not a trap.
 A file of yours wins over the factory layout of the same name: `layouts/simple.toml`
 is what `simple` loads. Delete the file to get the original back. `--layout <name>`
 picks one for a single run without touching your config.
+
+# The directory tree
+
+{{cmd:pane.tree}} opens a column on the left with the tree hanging from the
+directory you are looking at. `⏎` on a branch expands it and sends the listing
+there: seeing what is inside and being inside are the same answer.
+
+It is read **branch by branch**: opening one lists THAT directory and nothing
+else. A tree that read itself whole would take minutes on a big folder and far
+longer on a remote one, and what is inside does not change by collapsing it — so
+collapsing and reopening costs no second trip.
+
+Only directories show. A tree with files in it would be a worse copy of the
+listing you already have next to it; what this panel answers is how the place is
+organised.
+
+Three presses, like the places panel: the first opens it and takes the keyboard,
+the second takes the keyboard back if you dropped it, the third closes it.

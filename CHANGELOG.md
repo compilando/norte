@@ -9,6 +9,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A directory tree panel.** `pane.tree` opens a column on the left with the
+  tree hanging from the directory you are looking at; `⏎` on a branch expands it
+  and sends the listing there. It is read branch by branch — opening one lists
+  that directory and nothing else — because a tree that read itself whole would
+  take minutes on a big folder and far longer on a remote one. Only directories
+  show: a tree with files in it is a worse copy of the listing next to it. Three
+  presses like the places panel: open and take the keyboard, take it back, close
+  (#136).
+
 - **Opening and closing a connection from the keyboard.** `pane.connect`
   (Ctrl+N in the Total Commander and Krusader presets) lists what is in your
   `connections.toml` — name and address, never a password — and takes the panel
@@ -47,6 +56,12 @@ independently through `PROTOCOL_VERSION`.
   land together, `.bashrc` counts as a name rather than an extension, and
   anything without one sorts last in both directions. It can also be your
   default, with `sort.column = "extension"` under `[ui.columns]` (#138).
+
+- **The default preset binds all of it.** F4 edits and Alt+F4 keeps the old
+  "open with the system handler"; Ctrl+F3..F6 sort; Alt+Enter shows properties
+  and Ctrl+L counts a folder; Alt+T opens the tree; Ctrl+N opens a connection
+  and Alt+N closes it. The four transcribed presets already bound these names
+  and were waiting for the commands to exist.
 
 ### Fixed
 

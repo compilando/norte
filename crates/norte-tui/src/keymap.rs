@@ -202,6 +202,7 @@ commands! {
     "pane.sort-menu" => PaneSortMenu,
     "pane.properties" => PaneProperties,
     "pane.edit" => PaneEdit,
+    "pane.tree" => PaneTree,
     "pane.connect" => PaneConnect,
     "pane.disconnect" => PaneDisconnect,
     "pane.edit-new" => PaneEditNew,

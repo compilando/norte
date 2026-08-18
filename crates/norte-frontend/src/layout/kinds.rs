@@ -85,6 +85,11 @@ impl KindRegistry {
                 // vínculo que el visor acoplado. 24 columnas es la etiqueta
                 // más larga con su valor al lado.
                 decl("metadata", (24, 4), true, true, false, SIN_ROLES),
+                // El árbol de directorios (#136): se enfoca, toma teclas y hay
+                // UNO. No opta a ningún rol —un árbol no es el destino de una
+                // copia, igual que el sidebar—, y 16 columnas es lo que ocupa
+                // un nombre corto con dos niveles de sangrado y el marco.
+                decl("tree", (16, 5), true, true, false, SIN_ROLES),
             ],
         }
     }

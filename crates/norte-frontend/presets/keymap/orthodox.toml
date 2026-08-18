@@ -40,7 +40,31 @@ keymap = [
     { on = ["shift+f8"], run = "pane.delete-permanent" },
     { on = ["ctrl+k"], run = "task.cancel" },
     { on = ["f3"], run = "pane.view" },
-    { on = ["f4"], run = "pane.open" },
+    # F4 EDITA (#133), que es lo que hace en los cuatro managers que este
+    # preset recoge y lo que un lector espera de la tecla. Abrir con el
+    # programa del sistema —lo que hacía F4 antes— se queda en `alt+f4`: sigue
+    # a una tecla de distancia y ya no ocupa la que todo el mundo usa para
+    # editar.
+    { on = ["f4"], run = "pane.edit" },
+    { on = ["shift+f4"], run = "pane.edit-new" },
+    { on = ["alt+f4"], run = "pane.open" },
+    # #138: el orden por tecla, con los chords de Far/TC (Ctrl+F3..F6). El menú
+    # de orden es el diálogo de columnas, que ya tiene el suyo en `alt+c`.
+    { on = ["ctrl+f3"], run = "pane.sort-name" },
+    { on = ["ctrl+f4"], run = "pane.sort-ext" },
+    { on = ["ctrl+f5"], run = "pane.sort-time" },
+    { on = ["ctrl+f6"], run = "pane.sort-size" },
+    # #139: propiedades y recuento, con los chords de TC/Krusader.
+    { on = ["alt+enter"], run = "pane.properties" },
+    { on = ["ctrl+l"], run = "pane.dir-size" },
+    # #136: el árbol de directorios. Far usa Ctrl+T; aquí `alt+t`, porque
+    # Ctrl+T en este preset ya es una pestaña nueva.
+    { on = ["alt+t"], run = "pane.tree" },
+    # #140: abrir una conexión guardada y cerrarla. Ctrl+N es el de TC y
+    # Krusader; el cierre no tiene chord común entre managers, así que va con
+    # el mismo modificador que el resto de esta familia.
+    { on = ["ctrl+n"], run = "pane.connect" },
+    { on = ["alt+n"], run = "pane.disconnect" },
     { on = ["/"], run = "pane.quick-search" },
     { on = ["alt+down"], run = "pane.history" },
     { on = ["alt+f7"], run = "pane.search" },

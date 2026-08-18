@@ -271,7 +271,8 @@ pub const CATALOGUE: &[CommandDef] = &[
     // The three of issue #135 left this block in S4 and are `live` above; the
     // family's reason id (`keymap-reason-shell`) went with them, out of both
     // locales, because nothing else claimed it.
-    planned("pane.tree", "keymap-reason-tree", 136),
+    // #136: el árbol de directorios, acoplado a la izquierda del listado.
+    live("pane.tree", false),
     // Orden por tecla (#138). `sort-menu` no abre un menú propio: abre el
     // diálogo de columnas, que es donde vive el orden desde #108 —tiene la
     // columna, la dirección y `dirs_first` en un sitio— y así no hay dos

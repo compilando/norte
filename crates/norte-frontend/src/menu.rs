@@ -97,6 +97,9 @@ pub const MENUS: &[Menu] = &[
         title: "menu-view",
         items: &[
             "layout.places",
+            // #136: el árbol es otra columna de navegación al lado del
+            // listado, como el sidebar.
+            "pane.tree",
             "layout.preview",
             "layout.processes",
             "layout.metadata",

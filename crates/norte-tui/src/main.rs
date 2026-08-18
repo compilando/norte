@@ -2845,6 +2845,32 @@ async fn run(
                 }
                 None => {}
             }
+            // #136: el árbol SÍ pide, y por eso pide UNA rama por vuelta: un
+            // directorio de diez mil entradas o un remoto lento no pueden
+            // trabar el bucle, y la siguiente vuelta pide la siguiente.
+            if let Some(dir) = app.tree().and_then(norte_tui::tree::Tree::wants) {
+                let hijos = match backend.list(&dir).await {
+                    Ok(mut entries) => {
+                        // El MISMO orden que el listado de al lado, con el
+                        // mismo comparador: dos columnas que enseñan lo mismo
+                        // en distinto orden se leen como si dijeran cosas
+                        // distintas.
+                        norte_frontend::sort_entries(&mut entries);
+                        entries
+                            .into_iter()
+                            .filter(|e| e.kind == norte_proto::EntryKind::Dir)
+                            .map(|e| e.path)
+                            .collect()
+                    }
+                    // Una rama que no se deja leer se marca como leída y VACÍA:
+                    // sin esto se volvería a pedir en cada vuelta, que es un
+                    // bucle de peticiones contra un directorio prohibido.
+                    Err(_) => Vec::new(),
+                };
+                if let Some(t) = app.tree_mut() {
+                    t.insert_children(dir, hijos);
+                }
+            }
             // La hoja de atributos NO pide nada: lo que enseña ya vino en el
             // listado, así que esto es una copia, no una petición. Un hueco
             // que el reparto no colocó no produce objetivo y no se toca.
@@ -3758,6 +3784,28 @@ async fn run(
                                     key.code,
                                 )
                                 .await;
+                            } else if app.key_owner() == norte_tui::app::KeyOwner::Tree
+                                && !modal_wins(app)
+                            {
+                                // #136: el árbol manda el listado a la rama
+                                // elegida por el flujo de cd de siempre.
+                                let outcome = on_tree_key(
+                                    app,
+                                    backend,
+                                    &mut events,
+                                    dialog_resolver,
+                                    key.modifiers,
+                                    key.code,
+                                )
+                                .await;
+                                apply_cd(
+                                    &app.panes,
+                                    &mut fill,
+                                    &mut decorate_fetch,
+                                    &mut last_probed,
+                                    &mut search_run,
+                                    outcome,
+                                );
                             } else if app.key_owner() == norte_tui::app::KeyOwner::Places
                                 && !modal_wins(app)
                             {
@@ -7882,6 +7930,73 @@ async fn open_drive_popup(app: &mut App, backend: &Backend, pane: usize, include
 /// El sidebar no navega por su cuenta: Enter devuelve una ruta y el `cd` va al
 /// LISTADO enfocado, por el mismo camino que cualquier otro. Es lo que hace
 /// que abrirlo no cambie a dónde van las operaciones.
+/// Teclas del árbol (#136): mismo reparto y mismo allowlist que el sidebar.
+///
+/// `⏎` sobre una rama la despliega o la pliega; `dialog.confirm` con la rama ya
+/// abierta MANDA el listado ahí, que es para lo que se abre un árbol. Cancelar
+/// suelta el teclado y deja el panel abierto — cerrarlo es `pane.tree`, la
+/// misma tercera pulsación que el sidebar.
+async fn on_tree_key(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) -> Cd {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return Cd::Cancelled;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return Cd::Cancelled;
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run { command: cmd, .. } => cmd,
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
+            resolver.reset();
+            return Cd::Cancelled;
+        }
+        Resolution::Reset => return Cd::Cancelled,
+    };
+    if !ALLOW_PLACES.contains(&cmd.as_str()) {
+        return Cd::Cancelled;
+    }
+    match cmd.as_str() {
+        "dialog.up" => {
+            if let Some(t) = app.tree_mut() {
+                t.up();
+            }
+        }
+        "dialog.down" => {
+            if let Some(t) = app.tree_mut() {
+                t.down();
+            }
+        }
+        "dialog.toggle-enabled" => {
+            if let Some(t) = app.tree_mut() {
+                t.toggle();
+            }
+        }
+        "dialog.cancel" => app.return_keys_to_panes(),
+        "pane.tree" => app.toggle_tree(),
+        "dialog.confirm" => {
+            let destino = app.tree().and_then(norte_tui::tree::Tree::selected);
+            if let Some(dir) = destino {
+                // Desplegar Y navegar: quien pulsa Enter sobre una rama quiere
+                // ver qué hay dentro, y verlo en el listado es la respuesta
+                // completa.
+                if let Some(t) = app.tree_mut() {
+                    t.expand();
+                }
+                return cd(app, backend, events, dir).await;
+            }
+        }
+        _ => {}
+    }
+    Cd::Cancelled
+}
+
 async fn on_places_key(
     app: &mut App,
     backend: &Backend,
@@ -11659,6 +11774,9 @@ async fn dispatch(
         // `preview::want` en el bucle, contra el cursor de cada frame.
         Command::LayoutPreview => app.toggle_preview(),
         Command::LayoutProcesses => app.toggle_processes(),
+        // #136: el árbol se abre, se enfoca y se cierra como el sidebar. Su
+        // contenido lo pide el run loop, una rama por vuelta.
+        Command::PaneTree => app.toggle_tree(),
         Command::LayoutMetadata => app.toggle_metadata(),
         // El listado del directorio de layouts se hace AQUÍ, fuera del
         // runtime, y llega hecho al `App` (regla 2). Un directorio que no se

@@ -883,6 +883,8 @@ pub enum KeyOwner {
     Processes,
     /// La hoja de atributos.
     Metadata,
+    /// El árbol de directorios (#136).
+    Tree,
 }
 
 /// Lo que este proceso sabe de la sesión guardada (L2).
@@ -3104,6 +3106,17 @@ impl App {
                 Some(crate::metadata::KIND) if self.panes.metadata(id).is_none() => {
                     self.panes.insert_metadata(id, None);
                 }
+                // #136: anclado donde está el listado, igual que al abrirlo a
+                // mano. Un layout guardado con el árbol dentro —una sesión de
+                // ayer, un preset que lo traiga— llega por aquí, y sin este
+                // brazo el hueco se pinta en blanco para siempre: el toggle
+                // que habría creado su estado no se va a pulsar, porque el
+                // panel ya está en pantalla.
+                Some(crate::tree::KIND) if self.panes.tree(id).is_none() => {
+                    let mut arbol = crate::tree::Tree::default();
+                    arbol.anchor(dir.clone());
+                    self.panes.insert_tree(id, arbol);
+                }
                 _ => {}
             }
             // Los ids del layout no pueden chocar con los que se acuñen luego.
@@ -3338,6 +3351,74 @@ impl App {
                 self.panes.refresh_visible(&self.layout);
             }
         }
+    }
+
+    /// El hueco del árbol, si está abierto.
+    #[must_use]
+    pub fn tree_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::tree::KIND)
+    }
+
+    /// Abre el árbol de directorios, lo enfoca, o lo cierra (#136).
+    ///
+    /// Tres estados como el sidebar y el panel de procesos: un árbol se abre
+    /// para MOVERSE por él, así que llevarse el teclado al abrir es lo que se
+    /// espera.
+    ///
+    /// Se ancla en el directorio del listado con foco. Un árbol que colgara
+    /// siempre de la raíz del sistema enseñaría diez mil ramas para llegar a
+    /// donde ya estás.
+    pub fn toggle_tree(&mut self) {
+        use norte_frontend::layout::{Edge, KindId, Node, Size};
+        match self.tree_slot() {
+            Some(id) if self.key_owner == KeyOwner::Tree => {
+                if let Some(nuevo) = self.layout.close_slot(id) {
+                    self.layout = nuevo;
+                    self.panes.refresh_visible(&self.layout);
+                    self.history.retain_tree(&self.layout);
+                }
+                self.key_owner = KeyOwner::Panes;
+            }
+            Some(id) => {
+                // Re-anclar al abrirlo de nuevo: el listado puede estar en otro
+                // sitio desde la última vez.
+                let dir = self.focused().dir().clone();
+                if let Some(t) = self.panes.tree_mut(id) {
+                    t.anchor(dir);
+                }
+                self.key_owner = KeyOwner::Tree;
+            }
+            None => {
+                let id = self.mint_slot();
+                let mut arbol = crate::tree::Tree::default();
+                arbol.anchor(self.focused().dir().clone());
+                self.panes.insert_tree(id, arbol);
+                self.layout = self.layout.dock(
+                    self.focused_slot(),
+                    Edge::Left,
+                    // A la izquierda y con el ancho del sidebar: es el mismo
+                    // gesto —una columna de navegación al lado del listado— y
+                    // dos anchos distintos para lo mismo se notan.
+                    Size::Fixed(24),
+                    &Node::slot(id, KindId::new(crate::tree::KIND)),
+                );
+                self.panes.refresh_visible(&self.layout);
+                self.key_owner = KeyOwner::Tree;
+            }
+        }
+    }
+
+    /// El árbol abierto, para mutarlo.
+    pub fn tree_mut(&mut self) -> Option<&mut crate::tree::Tree> {
+        let id = self.tree_slot()?;
+        self.panes.tree_mut(id)
+    }
+
+    /// El árbol abierto.
+    #[must_use]
+    pub fn tree(&self) -> Option<&crate::tree::Tree> {
+        let id = self.tree_slot()?;
+        self.panes.tree(id)
     }
 
     /// El hueco del panel de procesos, si está abierto.
@@ -7994,6 +8075,84 @@ mod tests {
         assert_eq!(kind, TransferKind::Move);
         assert_eq!(from, VPath::parse("mem:///a.txt").unwrap());
         assert_eq!(dest, VPath::parse("mem:///a.txt2").unwrap());
+    }
+
+    /// #136: el árbol se abre anclado DONDE está el listado, no en la raíz del
+    /// sistema: un árbol que colgara siempre de `/` enseñaría diez mil ramas
+    /// para llegar a donde ya estás.
+    #[test]
+    fn el_arbol_se_ancla_donde_esta_el_listado() {
+        let mut app = app_dos_panes();
+        let dir = app.focused().dir().clone();
+        app.toggle_tree();
+        assert_eq!(app.tree().and_then(|t| t.root().cloned()), Some(dir));
+        assert_eq!(app.key_owner(), KeyOwner::Tree, "se lleva el teclado");
+    }
+
+    /// **Un layout RESTAURADO con el árbol dentro trae su estado.**
+    ///
+    /// Es el fallo que encontró pilotar la TUI: la sesión de ayer guarda el
+    /// árbol, al arrancar el hueco vuelve… y se pinta en blanco, porque el
+    /// toggle que habría creado su estado no se va a pulsar — el panel ya está
+    /// ahí. `set_layout` siembra el estado de CADA kind por esta razón, y el
+    /// árbol tenía que entrar en esa lista.
+    #[test]
+    fn un_layout_con_arbol_trae_su_estado() {
+        use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+
+        let mut app = app_dos_panes();
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Fixed(24), Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(90), KindId::new(crate::tree::KIND)),
+                Node::slot(SlotId(91), KindId::browser()),
+            ],
+        };
+        app.set_layout(arbol);
+        assert!(
+            app.panes.tree(SlotId(90)).is_some(),
+            "el hueco del árbol llegó sin estado y se pintaría vacío"
+        );
+        assert!(
+            app.panes.tree(SlotId(90)).and_then(|t| t.root()).is_some(),
+            "y anclado en algún sitio, o no pide nada"
+        );
+    }
+
+    /// Y el hueco del árbol SE COLOCA en el reparto: sin esto el layout le
+    /// reserva sitio y nadie lo pinta, que es una columna en blanco.
+    #[test]
+    fn el_hueco_del_arbol_se_coloca() {
+        use norte_frontend::layout::{KindRegistry, Rect, resolve};
+
+        let mut app = app_dos_panes();
+        app.toggle_tree();
+        let id = app.tree_slot().expect("abierto");
+        let res = resolve(Rect::new(0, 0, 110, 30), &app.layout, &KindRegistry::builtin());
+        assert!(
+            res.placements.iter().any(|(p, _)| *p == id),
+            "el hueco del árbol no se colocó: {:?}",
+            res.placements
+        );
+        assert!(app.panes.tree(id).is_some(), "y su panel está");
+    }
+
+    /// Tres pulsaciones, como el sidebar: abre y enfoca, vuelve a enfocar,
+    /// cierra. La del medio es la que hace que soltar el teclado no cierre el
+    /// panel.
+    #[test]
+    fn el_arbol_abre_enfoca_y_cierra() {
+        let mut app = app_dos_panes();
+        app.toggle_tree();
+        assert!(app.tree_slot().is_some());
+        app.return_keys_to_panes();
+        app.toggle_tree();
+        assert!(app.tree_slot().is_some(), "la segunda solo recupera el teclado");
+        assert_eq!(app.key_owner(), KeyOwner::Tree);
+        app.toggle_tree();
+        assert!(app.tree_slot().is_none(), "y la tercera cierra");
+        assert_eq!(app.key_owner(), KeyOwner::Panes);
     }
 
     /// #139: las propiedades salen del LISTADO, y sobre una carpeta piden lo

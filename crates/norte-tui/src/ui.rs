@@ -551,6 +551,17 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
             app.key_owner() == crate::app::KeyOwner::Processes,
         );
     }
+    if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::tree::KIND)
+        && let Some(t) = app.panes.tree(id)
+    {
+        draw_tree(
+            frame,
+            rect,
+            t,
+            app,
+            app.key_owner() == crate::app::KeyOwner::Tree,
+        );
+    }
     if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::metadata::KIND)
         && let Some(e) = app.panes.metadata(id)
     {
@@ -2849,6 +2860,79 @@ fn progreso_pct(p: &norte_proto::TaskProgress) -> u64 {
 /// Las filas salen del `TaskBoard` que ya pinta la franja — este panel no
 /// guarda una segunda lista — y el cursor se acota AQUÍ contra las filas de
 /// este frame: una tarea puede terminar y desaparecer entre dos pinturas.
+/// El árbol de directorios (#136).
+///
+/// Un nombre por fila, sangrado por profundidad, con un indicador de tres
+/// estados: desplegada, plegada-con-hijos, y sin leer. El tercero importa —
+/// pintar «hoja» a algo que todavía no se ha listado sería inventarse la
+/// respuesta— y es el mismo criterio que el resto de la pantalla: lo que no se
+/// sabe se dice, no se rellena.
+///
+/// Los nombres van por `display_name`, como el listado: un directorio con bidi
+/// o invisibles no reordena esta columna.
+fn draw_tree(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    arbol: &crate::tree::Tree,
+    app: &App,
+    con_teclado: bool,
+) {
+    let theme = &app.theme;
+    let borde = if con_teclado {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("tree-title")))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(borde));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let filas = arbol.rows();
+    if filas.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::styled(t("tree-loading"), theme.role(Role::Title))),
+            inner,
+        );
+        return;
+    }
+    let cursor = arbol.cursor();
+    let items: Vec<ListItem<'_>> = filas
+        .iter()
+        .map(|r| {
+            let marca = match (r.expanded, r.children) {
+                (true, _) => "▾",
+                (false, Some(true)) => "▸",
+                // Leída y sin hijos: una hoja de verdad.
+                (false, Some(false)) => " ",
+                // Sin leer: ni hoja ni rama, todavía.
+                (false, None) => "·",
+            };
+            let (nombre, hostil) = display_name(
+                r.path
+                    .file_name()
+                    .map_or(b"/".as_slice(), norte_proto::Segment::as_bytes),
+            );
+            let sangria = "  ".repeat(r.depth);
+            let texto = if hostil {
+                format!("{sangria}{marca} {HOSTILE_BADGE} {nombre}")
+            } else {
+                format!("{sangria}{marca} {nombre}")
+            };
+            ListItem::new(Line::raw(texto))
+        })
+        .collect();
+    let mut estado_lista = ListState::default();
+    estado_lista.select(Some(cursor));
+    let lista = List::new(items).highlight_style(theme.role(Role::Selection));
+    frame.render_stateful_widget(lista, inner, &mut estado_lista);
+}
+
 fn draw_processes(
     frame: &mut Frame<'_>,
     area: Rect,
