@@ -65,6 +65,54 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A detached window says so for as long as it lasts.** A window that does
+  not own the session — a second window, a core without the lock, one that
+  found a screen written by a newer binary — said it once at startup, and the
+  next message erased it. From then on it silently stopped saving your screen.
+  It is now a permanent indicator in the status bar, alongside the journal and
+  degraded-connection ones (#232).
+
+- **A dead panel no longer hangs the startup.** Restoring your session listed
+  every panel in turn with no deadline, on a path that runs before the event
+  loop exists — so a panel left on an unreachable SFTP or NFS mount hung norte
+  before `Ctrl+C` was even wired, and the only way out was another terminal.
+  The restore now runs the listings together under one five-second budget, so
+  a dead remote costs the wait and not the healthy panels beside it, and a
+  panel that did not list says `[not listed]` in its own frame until something
+  lists it — an empty listing you cannot tell from an empty directory is a
+  screen that lies (#235).
+
+- **`fs.compare` gets its tracing span back.** Adding `connection.close` and
+  `fs.dir_size` inserted the two handlers between an attribute and the
+  function it decorated, so `fs.compare`'s `#[instrument]` and its whole doc
+  block landed on `connection.close`: comparing silently stopped emitting its
+  span, and `connection.close` published rustdoc describing gates it does not
+  have. Both are back where they belong, and `fs.dir_size` has one now too
+  (found by `protocol-guardian`).
+
+- **A detached core no longer accepts a screen it cannot save.** `session.put`
+  against a daemon that is not the writer answered `Ok` and kept the body in
+  memory, where the embedded half had always refused it outright. That stopped
+  being harmless the moment the daemon's writer could take the lock late: a
+  body accepted while detached outran the revision on disk, survived the
+  adoption, and was published over the other window's saved screen in the same
+  tick — undetectably, because the revision only ever rises. It is
+  `PermissionDenied` now, on both halves (found by `security-reviewer`).
+
+- **A daemon that starts while another holds the session retries.** It computed
+  "can I persist the session?" once, at bind, and answered from that for the
+  rest of its life — so a daemon that started during a handover never wrote
+  your screen again, even hours after the other process was gone and the file
+  had been free the whole time. Its session writer now retries the lock every
+  second, and on taking it adopts the document from disk, which is what the
+  embedded half already did (#237).
+
+- **The session write policy is shared, not the TUI's.** What to send, what not
+  to resend, when to ask for ownership again and what to trim before writing
+  lived inside the terminal's event loop; the GUI would have reimplemented all
+  of it, trimming bugs included. It is now `norte-frontend`'s, with the field
+  that always travels empty documented as such (#236).
+
 - **An agent cannot reach your session file.** The policy engine protects the
   directory holding `journal.db` and the sync spools, but the screen norte saves
   lives in a different one — `~/.local/state/norte` — which was outside it. An

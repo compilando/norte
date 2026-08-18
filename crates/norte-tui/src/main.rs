@@ -13261,12 +13261,69 @@ async fn restore_session(app: &mut App, backend: &Backend) {
         return;
     }
     app.apply_session_value(&sesion.body);
-    for id in app.layout.slot_ids() {
-        let Some(dir) = app.panes.browser(id).map(|p| p.dir().clone()) else {
+    restore_slots(app, backend, PRESUPUESTO_RESTAURACION).await;
+}
+
+/// Lo que el arranque dedica ENTERO a listar los huecos de la sesión (#235).
+///
+/// Cinco segundos para TODOS los huecos, no cinco por hueco: lo que se acota
+/// es cuánto puede tardar la ventana en aparecer, y eso no depende de cuántos
+/// huecos tenga la disposición.
+const PRESUPUESTO_RESTAURACION: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Rellena los huecos de la sesión con un listado real, dentro de `presupuesto`
+/// (#235).
+///
+/// Esto corre ANTES de que exista el bucle de eventos: no hay `Ctrl+C`
+/// cableado todavía, así que un hueco sobre un SFTP muerto colgaba el arranque
+/// entero y la única salida era otra terminal. La regla 3 es sobre esto mismo,
+/// en un camino anterior a la maquinaria de tasks.
+///
+/// **Los listados van EN PARALELO bajo un plazo común**, y eso es lo que hace
+/// que el presupuesto sea del arranque y no de cada hueco. En serie, un solo
+/// panel aparcado en un host caído se comía los cinco segundos enteros y los
+/// otros tres —locales, de milisegundos— se quedaban sin listar por haber
+/// llegado tarde a un reparto que nunca fue suyo: la forma corriente del bug
+/// (un remoto muerto entre locales) dejaba media pantalla en blanco en cada
+/// arranque mientras durase la avería.
+///
+/// Lo que no se pudo listar se queda sobre su ruta y **marcado**
+/// ([`Pane::unlisted`]): una pantalla con listados vacíos y sin explicación
+/// afirma que esos directorios están vacíos, que es justo lo que no se sabe.
+/// La marca dura hasta que alguien liste de verdad, porque el estado dura
+/// hasta entonces.
+async fn restore_slots(app: &mut App, backend: &Backend, presupuesto: std::time::Duration) {
+    let plazo = tokio::time::Instant::now() + presupuesto;
+    // Se recogen primero las peticiones: el `&mut App` de la aplicación no
+    // puede vivir dentro de los futures.
+    let peticiones: Vec<(norte_frontend::layout::SlotId, VPath, Vec<String>)> = app
+        .layout
+        .slot_ids()
+        .into_iter()
+        .filter_map(|id| {
+            let dir = app.panes.browser(id).map(|p| p.dir().clone())?;
+            let attrs = app.columns.attr_ids_for(dir.scheme());
+            Some((id, dir, attrs))
+        })
+        .collect();
+    let listados = futures::future::join_all(peticiones.into_iter().map(|(id, dir, attrs)| {
+        let backend = backend.clone();
+        async move {
+            let r = tokio::time::timeout_at(plazo, initial_pane(&backend, &dir, &attrs)).await;
+            (id, r)
+        }
+    }))
+    .await;
+
+    for (id, listado) in listados {
+        let Ok(listado) = listado else {
+            tracing::warn!("un hueco de la sesión no listó dentro del presupuesto");
+            if let Some(p) = app.panes.browser_mut(id) {
+                p.unlisted = true;
+            }
             continue;
         };
-        let attrs = app.columns.attr_ids_for(dir.scheme());
-        match initial_pane(backend, &dir, &attrs).await {
+        match listado {
             Ok(pane) => {
                 // El orden y los ocultos son de la SESIÓN, no del listado
                 // nuevo: se conservan al reemplazar el pane.
@@ -13287,7 +13344,9 @@ async fn restore_session(app: &mut App, backend: &Backend) {
             }
             // Un directorio que ya no está NO deja el arranque a medias: el
             // pane se queda vacío en esa ruta y el lector navega desde ahí,
-            // que es lo mismo que pasa si lo borran contigo dentro.
+            // que es lo mismo que pasa si lo borran contigo dentro. NO se
+            // marca `unlisted`: el listado se hizo y la respuesta fue un
+            // error, que es otra cosa que «no dio tiempo».
             Err(e) => tracing::warn!(error = %e, "un hueco de la sesión no se pudo listar"),
         }
     }
@@ -13370,11 +13429,11 @@ enum SessionAviso {
 /// `try_send` y `try_recv`: **esta struct no tiene ni un `await`, y por eso el
 /// arreglo no se puede deshacer sin que se note** (#230).
 struct SessionPush {
-    /// Lo último que se MANDÓ a escribir: se compara para no mandar lo mismo
-    /// dos veces. Comparar el documento entero cuesta menos que un flag de
-    /// sucio puesto a mano en los cientos de sitios que mueven un cursor —y no
-    /// se puede olvidar en uno.
-    last: Option<Arc<norte_frontend::session::SessionBody>>,
+    /// Qué se manda, qué no se repite y cuándo se vuelve a pedir la
+    /// propiedad. Vive en `norte-frontend` (#236): es política de sesión, no
+    /// del bucle de eventos de la TUI, y el siguiente frontend la hereda en
+    /// vez de reinventarla.
+    policy: norte_frontend::session::PushPolicy,
     /// Hacia el escritor. Capacidad 1: si está ocupado, este tick se salta, que
     /// es coalescing y no pérdida —el cuerpo siguiente lleva lo mismo y más—.
     ordenes: tokio::sync::mpsc::Sender<SessionOrden>,
@@ -13382,8 +13441,6 @@ struct SessionPush {
     avisos: tokio::sync::mpsc::Receiver<SessionAviso>,
     /// El escritor, para esperarlo al salir.
     tarea: Option<tokio::task::JoinHandle<()>>,
-    /// Ticks que quedan para volver a preguntar por la propiedad.
-    reintento: u32,
 }
 
 impl SessionPush {
@@ -13402,11 +13459,10 @@ impl SessionPush {
         let (avisos_tx, avisos_rx) = tokio::sync::mpsc::channel(4);
         (
             Self {
-                last: None,
+                policy: norte_frontend::session::PushPolicy::new(REINTENTO_DUENA),
                 ordenes: ordenes_tx,
                 avisos: avisos_rx,
                 tarea: None,
-                reintento: REINTENTO_DUENA,
             },
             ordenes_rx,
             avisos_tx,
@@ -13420,11 +13476,10 @@ impl SessionPush {
         let b = backend.clone();
         let tarea = tokio::spawn(escribe_la_sesion(b, revision, ordenes_rx, avisos_tx));
         Self {
-            last: None,
+            policy: norte_frontend::session::PushPolicy::new(REINTENTO_DUENA),
             ordenes: ordenes_tx,
             avisos: avisos_rx,
             tarea: Some(tarea),
-            reintento: REINTENTO_DUENA,
         }
     }
 
@@ -13464,7 +13519,7 @@ async fn escribe_la_sesion(
     mut ordenes: tokio::sync::mpsc::Receiver<SessionOrden>,
     avisos: tokio::sync::mpsc::Sender<SessionAviso>,
 ) {
-    use norte_frontend::session::{SessionBody, SCHEMA_VERSION};
+    use norte_frontend::session::{SCHEMA_VERSION, SessionBody};
 
     // Ya se supo que no cabe: a partir de aquí se escribe SIN historial.
     // Recortar solo la copia de un tick era no recortar nada — el tick
@@ -13489,7 +13544,10 @@ async fn escribe_la_sesion(
                     // primer volcado del relevo se lo lleva por delante.
                     let huerfanos = SessionBody::from_value(&sesion.body)
                         .map(|remoto| {
-                            huerfanos_ajenos(ultimo.as_ref().unwrap_or(&SessionBody::default()), &remoto)
+                            huerfanos_ajenos(
+                                ultimo.as_ref().unwrap_or(&SessionBody::default()),
+                                &remoto,
+                            )
                         })
                         .unwrap_or_default();
                     let _ = avisos
@@ -13616,40 +13674,6 @@ fn vaciar_historial(body: &mut norte_frontend::session::SessionBody) {
     }
 }
 
-/// Sella AHORA los huecos VIVOS cuyo estado ha cambiado desde el último
-/// volcado.
-///
-/// Capturar no es tocar —dos capturas seguidas de la misma pantalla tienen que
-/// dar el mismo documento, o el coalescing de un segundo no coalesce nada—, así
-/// que el sello no puede ir en `session_body`. Va aquí, que es el único sitio
-/// que sabe contra qué comparar: si el hueco cambió, se ha usado.
-///
-/// Y solo los VIVOS: sellar también los huérfanos les devolvería la juventud en
-/// cada arranque, y entonces la barrida por edad no barrería nunca. Sin sello
-/// ninguno, `touched_ms` se quedaba en 0 contra un reloj epoch y la barrida se
-/// llevaba TODOS los huérfanos en el primer volcado — la promesa de «volver a
-/// la disposición de ayer devuelve el panel donde estaba» no se cumplía jamás.
-fn sellar_los_vivos(
-    app: &mut App,
-    body: &mut norte_frontend::session::SessionBody,
-    ultimo: Option<&norte_frontend::session::SessionBody>,
-    ahora: u64,
-) {
-    for id in app.layout.slot_ids() {
-        let Some(estado) = body.slots.get_mut(&id.0) else {
-            continue;
-        };
-        if ultimo
-            .and_then(|b| b.slots.get(&id.0))
-            .is_some_and(|antes| antes == estado)
-        {
-            continue;
-        }
-        estado.touched_ms = ahora;
-        app.touch_session_slot(id, ahora);
-    }
-}
-
 /// Manda la sesión a escribir si ha cambiado, y atiende lo que el escritor
 /// tenga que decir (L2).
 ///
@@ -13663,20 +13687,15 @@ fn sellar_los_vivos(
 /// bucle de eventos una vez por segundo.
 fn push_session(app: &mut App, st: &mut SessionPush) {
     drena_avisos(app, st);
-    if app.session.detached {
-        // Una ventana suelta no escribe, pero sí vuelve a preguntar: la dueña
-        // pudo cerrarse hace un rato y nadie avisa de eso (#234).
-        st.reintento = st.reintento.saturating_sub(1);
-        if st.reintento == 0 {
-            st.reintento = REINTENTO_DUENA;
+    // La decisión —suelta, tapada por un modal, o toca capturar— es de la
+    // política; la fontanería del canal es de aquí.
+    match st.policy.tick(app.session.detached, app.modal.is_some()) {
+        norte_frontend::session::PushStep::Skip => return,
+        norte_frontend::session::PushStep::Ask => {
             let _ = st.ordenes.try_send(SessionOrden::Pregunta);
+            return;
         }
-        return;
-    }
-    if app.modal.is_some() {
-        // Con un modal delante no se escribe: la sesión trata de dónde estás,
-        // no de lo que estás decidiendo.
-        return;
+        norte_frontend::session::PushStep::Capture => {}
     }
     let Some(body) = captura_session(app, st) else {
         return;
@@ -13684,8 +13703,11 @@ fn push_session(app: &mut App, st: &mut SessionPush) {
     // `try_send` y no `send`: con el escritor ocupado, este tick se salta y el
     // siguiente manda un cuerpo más nuevo. Y `last` solo se actualiza si de
     // verdad se mandó, o un cuerpo saltado se daría por escrito.
-    match st.ordenes.try_send(SessionOrden::Escribe(Arc::clone(&body))) {
-        Ok(()) => st.last = Some(body),
+    match st
+        .ordenes
+        .try_send(SessionOrden::Escribe(Arc::clone(&body)))
+    {
+        Ok(()) => st.policy.sent(body),
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
         // El escritor se murió (un panic dentro de la task). Sin esto la
         // pantalla reintentaba contra un canal cerrado el resto del run sin
@@ -13706,7 +13728,7 @@ fn drena_avisos(app: &mut App, st: &mut SessionPush) {
             SessionAviso::Reintenta { huerfanos } => {
                 app.adopt_session_orphans(huerfanos);
                 // Lo mandado no llegó: que la comparación no lo dé por escrito.
-                st.last = None;
+                st.policy.resend();
             }
             SessionAviso::Duena {
                 revision,
@@ -13723,7 +13745,7 @@ fn drena_avisos(app: &mut App, st: &mut SessionPush) {
                 // Se vuelve a preguntar en el tick siguiente y no dentro de
                 // treinta segundos: esto suele ser un relevo de daemon, y la
                 // sesión ya está libre.
-                st.reintento = 1;
+                st.policy.ask_soon();
             }
         }
     }
@@ -13740,11 +13762,16 @@ fn captura_session(
 ) -> Option<Arc<norte_frontend::session::SessionBody>> {
     let ahora = now_ms();
     let mut body = app.session_body();
-    body.prune(ahora);
-    if st.last.as_deref() == Some(&body) {
-        return None;
+    let vivos = app.layout.slot_ids();
+    // La política recorta, compara y sella. Lo que queda aquí es lo único que
+    // ella no puede hacer: llevar el mismo sello al estado de la pantalla,
+    // porque capturar no puede TOCAR —dos capturas seguidas de la misma
+    // pantalla tienen que dar el mismo documento, o el coalescing de un
+    // segundo no coalesce nada.
+    let sellados = st.policy.prepare(&mut body, &vivos, ahora)?;
+    for id in sellados {
+        app.touch_session_slot(id, ahora);
     }
-    sellar_los_vivos(app, &mut body, st.last.as_deref(), ahora);
     Some(Arc::new(body))
 }
 
@@ -16383,6 +16410,69 @@ mod session_push_tests {
         }
     }
 
+    /// #235: restaurar la sesión listaba TODOS los huecos en serie, sin plazo
+    /// y ANTES de que existiera el bucle de eventos — así que un hueco sobre
+    /// un SFTP muerto colgaba el arranque con `Ctrl+C` todavía sin cablear, y
+    /// la única salida era otra terminal.
+    ///
+    /// Reloj de tokio pausado: la latencia del provider y el plazo son el
+    /// mismo reloj virtual, así que esto es determinista y no duerme.
+    #[tokio::test(start_paused = true)]
+    async fn restaurar_la_sesion_no_puede_colgar_el_arranque() {
+        use norte_core::backend::Backend;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let mem = norte_testkit::MemProvider::new();
+        mem.faults()
+            .set_latency_per_op(Some(Duration::from_hours(1)));
+        let engine = norte_core::Engine::new();
+        engine.register_provider(Arc::new(mem));
+        let backend = Backend::Embedded(Arc::new(engine));
+
+        let d = VPath::parse("mem:///").expect("wire de test");
+        let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
+        // El conjunto esperado se calcula como lo calcula el código, no a
+        // mano: si la disposición de fábrica gana un browser, esto sigue
+        // diciendo la verdad en vez de fallar por una cadena.
+        let browsers: Vec<_> = app
+            .layout
+            .slot_ids()
+            .into_iter()
+            .filter(|id| app.panes.browser(*id).is_some())
+            .collect();
+        assert!(browsers.len() >= 2, "la de fábrica tiene al menos dos");
+
+        let presupuesto = Duration::from_millis(50);
+        let t0 = tokio::time::Instant::now();
+        super::restore_slots(&mut app, &backend, presupuesto).await;
+
+        assert!(
+            t0.elapsed() < Duration::from_secs(1),
+            "el arranque se acota al presupuesto, no a la latencia del provider: {:?}",
+            t0.elapsed()
+        );
+        // Y el plazo es COMÚN: en serie, el primer hueco se lo comía entero y
+        // los demás ni se intentaban. Todos tienen que quedar marcados.
+        for id in browsers {
+            assert!(
+                app.panes.browser(id).is_some_and(|p| p.unlisted),
+                "el hueco {id:?} se queda marcado, no fingiendo un dir vacío"
+            );
+        }
+    }
+
+    /// Y la marca se APAGA en cuanto alguien lista de verdad: es un estado,
+    /// no un aviso, así que ni la borra una tecla ni sobrevive al listado.
+    #[test]
+    fn la_marca_de_sin_listar_se_va_con_el_primer_listado() {
+        let d = VPath::parse("mem:///").expect("wire de test");
+        let mut p = Pane::new(d.clone(), Vec::new());
+        p.unlisted = true;
+        p.set_listing(d, Vec::new());
+        assert!(!p.unlisted, "un listado real la apaga");
+    }
+
     /// **#230, y es un test de FORMA**: `push_session` se llama desde un `#[test]`
     /// corriente, sin runtime y sin `await`. Si alguien le devuelve el `async`,
     /// esto no compila — que es exactamente la garantía que se quería, porque el
@@ -16627,7 +16717,10 @@ mod edit_tests {
     #[test]
     fn en_un_pane_remoto_no_se_edita() {
         let d = VPath::parse("sftp://host/casa").expect("wire");
-        let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d.clone(), Vec::new()));
+        let mut app = App::new(
+            Pane::new(d.clone(), Vec::new()),
+            Pane::new(d.clone(), Vec::new()),
+        );
         app.panes[0].begin_listing(
             d.clone(),
             vec![norte_proto::Entry {
@@ -16660,7 +16753,11 @@ mod edit_tests {
             None,
         );
         let pendiente = editar_lo_de_debajo(&app).expect("local y fichero");
-        assert_eq!(pendiente.argv.len(), 2, "programa y ruta, sin línea de shell");
+        assert_eq!(
+            pendiente.argv.len(),
+            2,
+            "programa y ruta, sin línea de shell"
+        );
         assert_eq!(
             pendiente.argv[1],
             std::ffi::OsString::from("/tmp/a.txt"),

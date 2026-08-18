@@ -231,7 +231,11 @@ mod tests {
         let mut t = con_raiz();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
         t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/x")]);
-        assert_eq!(t.rows().len(), 2, "la raíz y su hijo; el nieto está plegado");
+        assert_eq!(
+            t.rows().len(),
+            2,
+            "la raíz y su hijo; el nieto está plegado"
+        );
         t.down();
         t.expand();
         let filas = t.rows();
@@ -249,7 +253,11 @@ mod tests {
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
         assert_eq!(t.rows()[1].children, None, "de `a` no se sabe nada aún");
         t.insert_children(vp("mem:///r/a"), Vec::new());
-        assert_eq!(t.rows()[1].children, Some(false), "y ahora se sabe: ninguno");
+        assert_eq!(
+            t.rows()[1].children,
+            Some(false),
+            "y ahora se sabe: ninguno"
+        );
     }
 
     /// Cambiar de raíz tira lo leído: las ramas abiertas de otro árbol no

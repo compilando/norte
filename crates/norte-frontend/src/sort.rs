@@ -735,7 +735,11 @@ mod extension_tests {
                 e("punto.", EntryKind::File),
             ];
             sort_entries_with(&mut v, por_extension(dir));
-            assert_eq!(nombres(&v)[0], "a.rs", "el único con extensión manda ({dir:?})");
+            assert_eq!(
+                nombres(&v)[0],
+                "a.rs",
+                "el único con extensión manda ({dir:?})"
+            );
         }
     }
 

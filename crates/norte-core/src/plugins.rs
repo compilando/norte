@@ -2564,10 +2564,7 @@ pub(crate) struct LocationMint {
 impl LocationMint {
     /// Un acuñador con las raíces protegidas de este proceso.
     pub(crate) fn new(bounds: norte_vfs_local::Bounds) -> std::sync::Arc<Self> {
-        Self::with_protected(
-            crate::policy::protected_roots(),
-            bounds,
-        )
+        Self::with_protected(crate::policy::protected_roots(), bounds)
     }
 
     /// Como [`Self::new`], diciendo qué raíces están protegidas (tests).
