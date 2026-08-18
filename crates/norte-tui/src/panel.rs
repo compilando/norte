@@ -54,6 +54,14 @@ pub enum TuiPanel {
     /// para él es lo que mantiene `app.panes[i]` queriendo decir «el i-ésimo
     /// LISTADO»: un sidebar no es un lado.
     Places(Box<norte_frontend::places::PlacesState>),
+    /// El panel de procesos (fase A): su cursor. Las filas son del
+    /// `TaskBoard`, que es de `App`: aquí no hay una segunda copia.
+    Processes(Box<crate::processes::Processes>),
+    /// La hoja de atributos (fase A): la entrada que se está enseñando.
+    ///
+    /// Guarda la `Entry` y no su ruta: la hoja se dibuja entera desde ella y
+    /// no hay una segunda lectura que pueda llegar tarde.
+    Metadata(Box<Option<norte_proto::Entry>>),
     /// Un kind que este binario no conoce: se pinta como una caja con su
     /// nombre y sus `params` se conservan intactos, para que abrir el layout
     /// de la GUI en el TUI no le borre nada.
@@ -71,7 +79,11 @@ impl TuiPanel {
     pub fn as_browser(&self) -> Option<&Pane> {
         match self {
             Self::Browser(p) => Some(p),
-            Self::Places(_) | Self::Preview(_) | Self::Unknown { .. } => None,
+            Self::Places(_)
+            | Self::Preview(_)
+            | Self::Processes(_)
+            | Self::Metadata(_)
+            | Self::Unknown { .. } => None,
         }
     }
 
@@ -79,7 +91,11 @@ impl TuiPanel {
     pub fn as_browser_mut(&mut self) -> Option<&mut Pane> {
         match self {
             Self::Browser(p) => Some(p),
-            Self::Places(_) | Self::Preview(_) | Self::Unknown { .. } => None,
+            Self::Places(_)
+            | Self::Preview(_)
+            | Self::Processes(_)
+            | Self::Metadata(_)
+            | Self::Unknown { .. } => None,
         }
     }
 
@@ -88,7 +104,11 @@ impl TuiPanel {
     pub fn as_places(&self) -> Option<&norte_frontend::places::PlacesState> {
         match self {
             Self::Places(s) => Some(s),
-            Self::Browser(_) | Self::Preview(_) | Self::Unknown { .. } => None,
+            Self::Browser(_)
+            | Self::Preview(_)
+            | Self::Processes(_)
+            | Self::Metadata(_)
+            | Self::Unknown { .. } => None,
         }
     }
 
@@ -96,7 +116,11 @@ impl TuiPanel {
     pub fn as_places_mut(&mut self) -> Option<&mut norte_frontend::places::PlacesState> {
         match self {
             Self::Places(s) => Some(s),
-            Self::Browser(_) | Self::Preview(_) | Self::Unknown { .. } => None,
+            Self::Browser(_)
+            | Self::Preview(_)
+            | Self::Processes(_)
+            | Self::Metadata(_)
+            | Self::Unknown { .. } => None,
         }
     }
 }
@@ -287,6 +311,50 @@ impl PaneSlots {
     /// Mete un preview nuevo en el store, para un hueco recién acuñado.
     pub fn insert_preview(&mut self, id: SlotId, p: crate::preview::Preview) {
         self.store.insert(id, TuiPanel::Preview(Box::new(p)));
+    }
+
+    /// El panel de procesos de un hueco, si lo hay.
+    #[must_use]
+    pub fn processes(&self, id: SlotId) -> Option<&crate::processes::Processes> {
+        match self.store.get(id) {
+            Some(TuiPanel::Processes(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// El panel de procesos de un hueco, para mover su cursor.
+    pub fn processes_mut(&mut self, id: SlotId) -> Option<&mut crate::processes::Processes> {
+        match self.store.get_mut(id) {
+            Some(TuiPanel::Processes(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Mete un panel de procesos nuevo, para un hueco recién acuñado.
+    pub fn insert_processes(&mut self, id: SlotId, p: crate::processes::Processes) {
+        self.store.insert(id, TuiPanel::Processes(Box::new(p)));
+    }
+
+    /// Lo que enseña la hoja de atributos de un hueco, si lo hay.
+    #[must_use]
+    pub fn metadata(&self, id: SlotId) -> Option<&Option<norte_proto::Entry>> {
+        match self.store.get(id) {
+            Some(TuiPanel::Metadata(e)) => Some(e),
+            _ => None,
+        }
+    }
+
+    /// La hoja de atributos de un hueco, para ponerla al día.
+    pub fn metadata_mut(&mut self, id: SlotId) -> Option<&mut Option<norte_proto::Entry>> {
+        match self.store.get_mut(id) {
+            Some(TuiPanel::Metadata(e)) => Some(e),
+            _ => None,
+        }
+    }
+
+    /// Mete una hoja de atributos nueva, para un hueco recién acuñado.
+    pub fn insert_metadata(&mut self, id: SlotId, e: Option<norte_proto::Entry>) {
+        self.store.insert(id, TuiPanel::Metadata(Box::new(e)));
     }
 
     /// Mete un sidebar nuevo en el store, para un hueco recién acuñado.

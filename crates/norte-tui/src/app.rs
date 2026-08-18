@@ -873,6 +873,10 @@ pub enum KeyOwner {
     Places,
     /// El visor acoplado.
     Preview,
+    /// El panel de procesos.
+    Processes,
+    /// La hoja de atributos.
+    Metadata,
 }
 
 /// Estado completo del TUI: los paneles y el foco.
@@ -3242,6 +3246,99 @@ impl App {
                     &Node::slot_bound(
                         id,
                         KindId::new(crate::preview::KIND),
+                        Bindings {
+                            follows: Some(Follow::Role(RoleId::Active)),
+                        },
+                    ),
+                );
+                self.panes.refresh_visible(&self.layout);
+            }
+        }
+    }
+
+    /// El hueco del panel de procesos, si está abierto.
+    #[must_use]
+    pub fn processes_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::processes::KIND)
+    }
+
+    /// Abre el panel de procesos, lo enfoca, o lo cierra.
+    ///
+    /// Tres estados como el sidebar y NO como el visor acoplado: un panel de
+    /// procesos se abre para mirar Y para cancelar algo concreto, así que
+    /// llevarse el teclado al abrir es lo que se espera. (El preview hace lo
+    /// contrario porque se abre para seguir navegando; L3 aprendió la
+    /// distinción pilotando la TUI en tmux.)
+    ///
+    /// La franja `tasks` no se toca: sigue ahí, y sigue siendo lo que trae
+    /// `orthodox`. Este panel es lo que se abre para ACTUAR sobre una tarea.
+    pub fn toggle_processes(&mut self) {
+        use norte_frontend::layout::{Edge, KindId, Node, Size};
+        match self.processes_slot() {
+            Some(id) if self.key_owner == KeyOwner::Processes => {
+                if let Some(nuevo) = self.layout.close_slot(id) {
+                    self.layout = nuevo;
+                    self.panes.refresh_visible(&self.layout);
+                    self.history.retain_tree(&self.layout);
+                }
+                self.key_owner = KeyOwner::Panes;
+            }
+            Some(_) => self.key_owner = KeyOwner::Processes,
+            None => {
+                let id = self.mint_slot();
+                self.panes
+                    .insert_processes(id, crate::processes::Processes::default());
+                self.layout = self.layout.dock(
+                    self.focused_slot(),
+                    Edge::Bottom,
+                    // Ocho filas: seis de tareas —el tope del `TaskBoard`— más
+                    // el marco. `Auto` es de la franja, que vale cero en
+                    // reposo; un panel que se abre a mano no desaparece.
+                    Size::Fixed(8),
+                    &Node::slot(id, KindId::new(crate::processes::KIND)),
+                );
+                self.panes.refresh_visible(&self.layout);
+                self.key_owner = KeyOwner::Processes;
+            }
+        }
+    }
+
+    /// El hueco de la hoja de atributos, si está abierta.
+    #[must_use]
+    pub fn metadata_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::metadata::KIND)
+    }
+
+    /// Abre la hoja de atributos, la enfoca, o la cierra.
+    ///
+    /// Como el preview: abre SIN llevarse el teclado, porque sigue al cursor y
+    /// tomarlo apagaría lo único que hace. Se acopla a la DERECHA con
+    /// `follows: Role(Active)`.
+    pub fn toggle_metadata(&mut self) {
+        use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, RoleId, Size};
+        match self.metadata_slot() {
+            Some(id) if self.key_owner == KeyOwner::Metadata => {
+                if let Some(nuevo) = self.layout.close_slot(id) {
+                    self.layout = nuevo;
+                    self.panes.refresh_visible(&self.layout);
+                    self.history.retain_tree(&self.layout);
+                }
+                self.key_owner = KeyOwner::Panes;
+            }
+            Some(_) => self.key_owner = KeyOwner::Metadata,
+            None => {
+                let id = self.mint_slot();
+                self.panes.insert_metadata(id, None);
+                self.layout = self.layout.dock(
+                    self.focused_slot(),
+                    Edge::Right,
+                    // Treinta celdas: la etiqueta más larga con su valor al
+                    // lado. Fijo y no ponderado porque una hoja de atributos
+                    // no gana nada con la mitad de la pantalla.
+                    Size::Fixed(30),
+                    &Node::slot_bound(
+                        id,
+                        KindId::new(crate::metadata::KIND),
                         Bindings {
                             follows: Some(Follow::Role(RoleId::Active)),
                         },
