@@ -46,19 +46,22 @@ pub fn resolve(area: Rect, tree: &Node, decls: &KindRegistry) -> Resolved {
     // colapso (ADR 0058 D5).
     let mut podado = tree.clone();
     let mut apartados: Vec<SlotId> = Vec::new();
-    let mut candidatos = cromo_de_mayor_a_menor(tree, decls);
     let mut corto = ejes_cortos(&out, tree, decls);
-    while !candidatos.is_empty() {
-        // El más grande DE UN EJE CORTO. Los ejes se recalculan en cada vuelta:
-        // apartar un panel ancho puede dejar el ancho resuelto y el alto no.
-        let Some(i) = candidatos.iter().position(|c| match c.eje {
-            Dir::Horizontal => corto.0,
-            Dir::Vertical => corto.1,
-        }) else {
+    loop {
+        // El más grande DE UN EJE CORTO. Los candidatos se recalculan sobre el
+        // árbol ya podado —apartar un hijo mueve los índices de sus hermanos— y
+        // los ejes también: apartar un panel ancho puede dejar el ancho
+        // resuelto y el alto no. Cada vuelta quita uno, así que termina.
+        let Some(elegido) = cromo_de_mayor_a_menor(&podado, decls)
+            .into_iter()
+            .find(|c| match c.eje {
+                Dir::Horizontal => corto.0,
+                Dir::Vertical => corto.1,
+            })
+        else {
             break;
         };
-        let elegido = candidatos.remove(i);
-        let Some(mas_pequeno) = sin_estos(&podado, &elegido.slots) else {
+        let Some(mas_pequeno) = sin_camino(&podado, &elegido.camino) else {
             break;
         };
         podado = mas_pequeno;
@@ -155,7 +158,7 @@ fn tiene_listado(node: &Node, decls: &KindRegistry) -> bool {
 /// interiores no son decisiones separadas.
 fn cromo_de_mayor_a_menor(node: &Node, decls: &KindRegistry) -> Vec<Cromo> {
     let mut fuera = Vec::new();
-    recoge_cromo(node, decls, &mut fuera);
+    recoge_cromo(node, decls, &[], &mut fuera);
     // Empate resuelto por los ids: el reparto de un frame no puede depender
     // del orden en que un `sort_unstable` deje dos panes del mismo tamaño.
     fuera.sort_by(|a, b| {
@@ -173,12 +176,21 @@ struct Cromo {
     declarado: u16,
     /// El eje del `Split` que lo contiene: el sitio que devuelve al apartarlo.
     eje: Dir,
+    /// Los índices de hijo desde la raíz hasta él.
+    ///
+    /// Por POSICIÓN y no por sus `SlotId`, y no es un detalle: un árbol puede
+    /// traer el mismo id dos veces —[`super::validate`] lo rechaza, pero
+    /// `resolve` tiene que aguantar cualquier árbol— y apartar «los huecos con
+    /// este id» se llevaba también la otra copia, que se quedaba sin pintar y
+    /// sin suspender. Un hueco vivo que nadie pinta y nadie suspende es un
+    /// watch abierto mirando a nada, y lo cazó la propiedad de partición.
+    camino: Vec<usize>,
     /// Los huecos que se lleva.
     slots: Vec<SlotId>,
 }
 
-/// Acumula el cromo de `node` en `fuera`.
-fn recoge_cromo(node: &Node, decls: &KindRegistry, fuera: &mut Vec<Cromo>) {
+/// Acumula el cromo de `node` en `fuera`, arrastrando el camino desde la raíz.
+fn recoge_cromo(node: &Node, decls: &KindRegistry, aqui: &[usize], fuera: &mut Vec<Cromo>) {
     let (Node::Split { children, .. } | Node::Tabs { children, .. }) = node else {
         return;
     };
@@ -190,13 +202,16 @@ fn recoge_cromo(node: &Node, decls: &KindRegistry, fuera: &mut Vec<Cromo>) {
         Dir::Horizontal
     };
     for (i, c) in children.iter().enumerate() {
+        let mut camino = aqui.to_vec();
+        camino.push(i);
         match (sizes_get(node, i), tiene_listado(c, decls)) {
             (Some(Size::Fixed(n)), false) => fuera.push(Cromo {
                 declarado: n,
                 eje,
+                camino,
                 slots: c.slot_ids(),
             }),
-            _ => recoge_cromo(c, decls, fuera),
+            _ => recoge_cromo(c, decls, &camino, fuera),
         }
     }
 }
@@ -210,21 +225,20 @@ fn sizes_get(node: &Node, i: usize) -> Option<Size> {
     }
 }
 
-/// El árbol sin los huecos `fuera`, o `None` si no queda nada.
+/// El árbol sin el hijo que `camino` señala, o `None` si no queda nada.
 ///
 /// Privada a propósito, y no un método de [`Node`]: los de allí son
 /// intenciones del usuario y se PERSISTEN. Esto es un apaño de un frame, y
 /// tenerlo a mano donde se guarda un layout es cómo el tamaño del terminal
 /// acaba borrándole el sidebar a alguien para siempre.
-fn sin_estos(node: &Node, fuera: &[SlotId]) -> Option<Node> {
+fn sin_camino(node: &Node, camino: &[usize]) -> Option<Node> {
+    let Some((&i, resto)) = camino.split_first() else {
+        // Camino agotado: este nodo ES el que se va.
+        return None;
+    };
     match node {
-        Node::Slot { id, .. } => {
-            if fuera.contains(id) {
-                None
-            } else {
-                Some(node.clone())
-            }
-        }
+        // Un camino que atraviesa un hueco no existe; el árbol se queda igual.
+        Node::Slot { .. } => Some(node.clone()),
         Node::Split {
             dir,
             children,
@@ -232,10 +246,15 @@ fn sin_estos(node: &Node, fuera: &[SlotId]) -> Option<Node> {
         } => {
             let mut hijos = Vec::new();
             let mut tam = Vec::new();
-            for (i, c) in children.iter().enumerate() {
-                if let Some(q) = sin_estos(c, fuera) {
+            for (j, c) in children.iter().enumerate() {
+                let queda = if j == i {
+                    sin_camino(c, resto)
+                } else {
+                    Some(c.clone())
+                };
+                if let Some(q) = queda {
                     hijos.push(q);
-                    tam.push(sizes.get(i).copied().unwrap_or(Size::Weight(1)));
+                    tam.push(sizes.get(j).copied().unwrap_or(Size::Weight(1)));
                 }
             }
             if hijos.is_empty() {
@@ -248,7 +267,17 @@ fn sin_estos(node: &Node, fuera: &[SlotId]) -> Option<Node> {
             })
         }
         Node::Tabs { children, active } => {
-            let hijos: Vec<Node> = children.iter().filter_map(|c| sin_estos(c, fuera)).collect();
+            let mut hijos = Vec::new();
+            for (j, c) in children.iter().enumerate() {
+                let queda = if j == i {
+                    sin_camino(c, resto)
+                } else {
+                    Some(c.clone())
+                };
+                if let Some(q) = queda {
+                    hijos.push(q);
+                }
+            }
             if hijos.is_empty() {
                 return None;
             }
@@ -757,6 +786,40 @@ mod tests {
             "sin diagnóstico: {:?}",
             out.diagnostics
         );
+    }
+
+    /// Un árbol con el MISMO id dos veces no pierde una copia al apartar cromo.
+    ///
+    /// [`super::validate`] rechaza los ids repetidos, pero `resolve` tiene que
+    /// aguantar cualquier árbol, y la primera versión de esta regla apartaba
+    /// «los huecos con estos ids»: se llevaba también la otra copia, que se
+    /// quedaba sin pintar Y sin suspender —un watch abierto mirando a nada—. Lo
+    /// cazó la propiedad de partición; el caso mínimo está pineado en
+    /// `proptest-regressions/layout/resolve.txt` y esto lo dice con nombre.
+    #[test]
+    fn con_ids_repetidos_apartar_cromo_no_pierde_un_hueco() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
+            children: vec![
+                Node::Split {
+                    dir: Dir::Vertical,
+                    sizes: vec![Size::Fixed(2)],
+                    children: vec![Node::slot(SlotId(10), KindId::new("tasks"))],
+                },
+                Node::Tabs {
+                    active: 1,
+                    children: vec![browser(1), Node::slot(SlotId(10), KindId::browser())],
+                },
+            ],
+        };
+        let out = resolve(r(0, 0, 4, 4), &arbol, &reg());
+        let mut vistos: Vec<SlotId> = out.placements.iter().map(|(id, _)| *id).collect();
+        vistos.extend(out.hidden.iter().copied());
+        vistos.sort_unstable();
+        let mut todos = arbol.slot_ids();
+        todos.sort_unstable();
+        assert_eq!(vistos, todos, "un hueco se quedó sin pintar y sin suspender");
     }
 
     /// Cuando solo falta ALTO, el cromo de ancho no se toca. Es el mismo `full`
