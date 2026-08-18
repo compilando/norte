@@ -359,6 +359,7 @@ impl PaneSlots {
         self.store.insert(id, TuiPanel::Tree(Box::new(t)));
     }
 
+    /// Mete el panel de procesos en un hueco.
     pub fn insert_processes(&mut self, id: SlotId, p: crate::processes::Processes) {
         self.store.insert(id, TuiPanel::Processes(Box::new(p)));
     }

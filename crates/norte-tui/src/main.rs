@@ -2639,14 +2639,7 @@ async fn run(
         }
         // #140: el panel que acaba de desconectar vuelve a casa por el mismo
         // `cd` que cualquier otra navegación, con su ritual de vuelta.
-        if std::mem::take(&mut app.pending_disconnect_home) {
-            // A casa, o a la raíz local si el entorno no dice cuál es: lo que
-            // no puede pasar es que el panel se quede en la conexión que se
-            // acaba de cerrar.
-            let casa = std::env::home_dir()
-                .and_then(|h| norte_vfs_local::vpath_from_native(&h).ok())
-                .or_else(|| VPath::parse("file:///").ok())
-                .unwrap_or_else(|| app.focused().dir().clone());
+        if let Some(casa) = app.pending_disconnect_home.take() {
             let outcome = cd(app, backend, &mut events, casa).await;
             apply_cd(
                 &app.panes,
@@ -9161,7 +9154,12 @@ async fn on_dialog_key(
                 // devuelve `None` para ambos, así que `on_dialog_key` ya
                 // habría retornado antes de llegar a este match: inalcanzable
                 // aquí, no-op defensivo.
-                Modal::Collision { .. }
+                // Y las propiedades (#139) tampoco: `dialog_action` solo les
+                // entiende cancelar, así que un «confirmar» no llega aquí —
+                // nombrarlas es lo que hace que añadir uno sea un error de
+                // compilación y no un Enter que hace algo a escondidas.
+                Modal::Properties { .. }
+                | Modal::Collision { .. }
                 | Modal::TrustLuaInit { .. }
                 | Modal::MarkPattern { .. }
                 | Modal::Mkdir { .. }
@@ -9207,11 +9205,6 @@ async fn on_dialog_key(
                         return outcome;
                     }
                 }
-                // #139: las propiedades no llegan aquí —`dialog_action` solo
-                // les entiende cancelar—, y nombrarlas es lo que hace que
-                // añadir un «confirmar» a este cuadro sea un error de
-                // compilación en vez de un Enter que hace algo a escondidas.
-                Modal::Properties { .. } => {}
             }
             // Todas las ramas salvo el retry TOFU (que ya volvió) abren aquí
             // la siguiente pendiente, con el modal ya cerrado.
@@ -11233,7 +11226,12 @@ async fn desconectar(app: &mut App, backend: &Backend) {
             // A casa: el panel no puede quedarse mirando una conexión que
             // acaba de cerrarse. La navegación la pide el run loop en la
             // siguiente vuelta, como cualquier otra.
-            app.pending_disconnect_home = true;
+            // A casa, o a la raíz local si el entorno no dice cuál es: lo que
+            // no puede pasar es que el panel se quede mirando la conexión que
+            // se acaba de cerrar.
+            app.pending_disconnect_home = std::env::home_dir()
+                .and_then(|h| norte_vfs_local::vpath_from_native(&h).ok())
+                .or_else(|| VPath::parse("file:///").ok());
         }
         Err(e) => app.message = Some(error_message(&e)),
     }

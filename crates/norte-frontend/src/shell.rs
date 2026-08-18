@@ -259,7 +259,7 @@ pub fn editor_argv_from(
     fn trocea(spec: &std::ffi::OsStr) -> Vec<OsString> {
         use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
         spec.as_bytes()
-            .split(|b| b.is_ascii_whitespace())
+            .split(u8::is_ascii_whitespace)
             .filter(|t| !t.is_empty())
             .map(|t| OsString::from_vec(t.to_vec()))
             .collect()

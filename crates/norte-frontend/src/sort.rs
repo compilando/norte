@@ -220,29 +220,29 @@ fn ext_bytes(e: &Entry) -> Option<&[u8]> {
 /// El camino común (extensión ASCII) no reserva memoria; el raro delega en el
 /// mismo `fold` que usa la búsqueda rápida, para no inventar un segundo
 /// vocabulario de plegado.
-fn cmp_ext_bytes(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
-    if a.is_ascii() && b.is_ascii() {
-        return a
+fn cmp_ext_bytes(uno: &[u8], otro: &[u8]) -> std::cmp::Ordering {
+    if uno.is_ascii() && otro.is_ascii() {
+        return uno
             .iter()
             .map(u8::to_ascii_lowercase)
-            .cmp(b.iter().map(u8::to_ascii_lowercase));
+            .cmp(otro.iter().map(u8::to_ascii_lowercase));
     }
-    crate::nav::fold(a).cmp(&crate::nav::fold(b))
+    crate::nav::fold(uno).cmp(&crate::nav::fold(otro))
 }
 
 /// La columna EXTENSIÓN: ausente al final en las dos direcciones, igual que un
 /// tamaño o una fecha que no se conocen.
-fn cmp_ext(a: &Entry, b: &Entry, dir: SortDir) -> std::cmp::Ordering {
+fn cmp_ext(izq: &Entry, der: &Entry, dir: SortDir) -> std::cmp::Ordering {
     use std::cmp::Ordering;
-    match (ext_bytes(a), ext_bytes(b)) {
+    match (ext_bytes(izq), ext_bytes(der)) {
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Greater,
         (Some(_), None) => Ordering::Less,
-        (Some(x), Some(y)) => {
-            let o = cmp_ext_bytes(x, y);
+        (Some(uno), Some(otro)) => {
+            let orden = cmp_ext_bytes(uno, otro);
             match dir {
-                SortDir::Asc => o,
-                SortDir::Desc => o.reverse(),
+                SortDir::Asc => orden,
+                SortDir::Desc => orden.reverse(),
             }
         }
     }

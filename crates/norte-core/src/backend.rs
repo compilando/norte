@@ -1241,6 +1241,47 @@ impl Backend {
         }
     }
 
+    /// Comparación de dos árboles (`fs.compare`, 0.39.0, ADR 0048): devuelve
+    /// la Task ([`TaskRef`], cancelable) y el STREAM de lotes de filas
+    /// ([`norte_proto::methods::CompareRowsBatch`]).
+    ///
+    /// Mismo ciclo de vida del canal que [`Self::search`]: embebido, el walk
+    /// cierra el `tx` al terminar; remoto, la bomba enruta cada `compare.rows`
+    /// por `task_id` y el route se retira tras el terminal (con la misma
+    /// gracia). El criterio de "comparación terminada" es el estado terminal
+    /// de la [`TaskRef`]; el cierre del `rx` es la señal cómoda.
+    ///
+    /// **No muta nada**: sin journal, sin undo (regla dura 4 no aplica).
+    ///
+    /// # Cuándo están TODAS las filas
+    /// El cierre del `rx` NO significa «llegaron todas»: una notificación se
+    /// puede perder (el daemon expulsa a un suscriptor que no drena, la bomba
+    /// del cliente descarta un lote si su buffer se llena, y una reconexión
+    /// suelta los routes cerrando el `rx` de forma indistinguible de un final
+    /// limpio). La señal es
+    /// [`TaskProgress::entries_done`](norte_proto::TaskProgress::entries_done),
+    /// que en una Task [`TaskKind::Compare`](norte_proto::TaskKind::Compare)
+    /// cuenta FILAS emitidas: se comparan las recibidas con ese número, y
+    /// **DESPUÉS de que el `rx` se cierre**, no al llegar el snapshot terminal
+    /// —la bomba de filas y la de progreso son tasks distintas, así que el
+    /// terminal puede adelantar al último lote—. Quien vaya a ESCRIBIR a
+    /// partir de estas filas (el plan de sincronización de la spec 2) tiene
+    /// que hacer esa comprobación.
+    ///
+    /// # Errors
+    /// Dos raíces iguales → [`Error::InvalidPath`]; `follow_symlinks: true` →
+    /// [`Error::Unsupported`]. Los dos se comprueban AQUÍ, antes de elegir
+    /// brazo, para que el embebido y el remoto contesten lo mismo: el daemon
+    /// los rechaza con `-32602` pelado (es su contrato publicado) y
+    /// `to_taxonomy` convertiría eso en `Internal`, o sea la misma respuesta
+    /// que da un provider que panica. El daemon los sigue comprobando por su
+    /// cuenta: aquello es la frontera, esto es la paridad de las dos vías
+    /// (mismo criterio que `check_pairs_cap`).
+    ///
+    /// Un daemon N-1 (0.38.x) sin el método responde `METHOD_NOT_FOUND`, que
+    /// se entrega como [`Error::Unsupported`] — «tu daemon es más viejo», no
+    /// un fallo real. Resto, taxonomía del protocolo; daemon caído =
+    /// `ProviderUnavailable`.
     pub async fn compare(
         &self,
         params: norte_proto::methods::FsCompareParams,

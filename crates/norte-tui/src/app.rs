@@ -1200,12 +1200,13 @@ pub struct App {
     /// 0049). Un `Box` porque es el mayor de los `pending_*` con diferencia y
     /// clippy mide el `App` entero.
     pub pending_sync_apply: Option<Box<norte_proto::methods::PlanHash>>,
-    /// El panel acaba de desconectar y hay que llevarlo a casa (#140).
+    /// A dónde llevar el panel que acaba de desconectar (#140).
     ///
-    /// Bandera y no la navegación en sitio, por lo mismo que el resto de esta
-    /// familia: navegar es del run loop —tiene el backend, el flujo de eventos
-    /// y el ritual de la vuelta— y el despacho solo decide QUÉ hay que hacer.
-    pub pending_disconnect_home: bool,
+    /// La RUTA y no una bandera, por dos razones: el bucle no tiene que
+    /// adivinar a dónde —lo decide quien desconectó— y `App` no engorda su
+    /// cuenta de `bool`s, que es un lint de este repo y una señal de que el
+    /// estado se estaba volviendo una bolsa de banderitas.
+    pub pending_disconnect_home: Option<VPath>,
     /// Reinterpretación de nombres (#57) del lado ORIGEN, congelada junto con
     /// [`Self::pending_sync`] y no cuando el run loop abre el panel: entre una
     /// cosa y la otra el lector puede haber pulsado `Alt+E`, y un plan que se
@@ -2152,7 +2153,7 @@ impl App {
             sync: None,
             pending_sync: None,
             pending_sync_apply: None,
-            pending_disconnect_home: false,
+            pending_disconnect_home: None,
             pending_sync_encoding: (None, None),
             // Fail-CLOSED: el `App` de un test no tiene backend, y ofrecer
             // sincronizar por defecto convertiría cada test en un permiso.

@@ -3676,7 +3676,7 @@ fn properties_modal_text(
         EntryKind::Dir => t("props-kind-dir"),
         EntryKind::File => t("props-kind-file"),
         EntryKind::Symlink => t("props-kind-symlink"),
-        _ => t("props-kind-other"),
+        EntryKind::Other => t("props-kind-other"),
     };
     let mut lineas = vec![format!("{}: {}", t("props-kind"), clase)];
     // El tamaño de una CARPETA no sale del listado: o se ha contado, o se está
