@@ -90,6 +90,43 @@ independently through `PROTOCOL_VERSION`.
   have. Both are back where they belong, and `fs.dir_size` has one now too
   (found by `protocol-guardian`).
 
+- **A plugin with `location = "read"` can no longer read through a protected
+  root.** Confinement bounds a plugin from above and said nothing about what
+  lies below, so a perfectly ordinary root contained everything that matters:
+  with a panel open on your config directory, an approved columns plugin could
+  read `norte/secrets.age`, `norte/journal.db` and `norte/connections.toml`,
+  and with a panel on `/` it could read the disk as you. The protected roots
+  now travel into the confinement itself and are enforced by `(dev, ino)` on
+  every directory of the path — a symlink pointing at one resolves to the same
+  inode and is refused the same way (found by `security-reviewer`, #238).
+
+- **An agent no longer escapes its scope by one directory through a columns
+  plugin.** The location handed to the plugin is the parent of the page, and
+  it was never gated — the comment claimed the paths' gate covered it, which
+  it does not, because a scope's own root is inside its scope. An agent scoped
+  to `~/work` could ask for columns over that root and hand the plugin a
+  confined root over `~`. The parent now passes the read gate on its own; when
+  it does not, the plugin runs without a location and its column comes back
+  blank, rather than the call failing and turning the column into an oracle
+  for what exists outside the sandbox (#239).
+
+- **A FIFO can no longer wedge the daemon's blocking pool.** The location read
+  checked the node type *after* opening, and `open(O_RDONLY)` on a FIFO with
+  no writer never returns. A hostile archive carrying `.git/index` as a FIFO
+  cost one blocking thread per repaint, and wasmtime's epoch deadline cannot
+  interrupt that. Opens are `O_NONBLOCK | O_NOCTTY` now. The same read also
+  bounded itself by `st_size`, which a file being appended to — or any FUSE
+  mount the user controls — can lie about; it is capped for real, and a file
+  that outgrows the cap while being read is refused rather than truncated
+  (#240).
+
+- **A symlinked `.git` no longer widens a plugin's root.** The project-root
+  marker was accepted on `symlink_metadata().is_ok()`, so a dangling
+  `ln -s /nada /tmp/.git` — and creating a name in `/tmp` is available to
+  anyone — made every panel under `/tmp` hand the plugin all of `/tmp`. A
+  symlink is refused; a real `.git`, directory or worktree `gitdir:` file, is
+  not (#241).
+
 - **A detached core no longer accepts a screen it cannot save.** `session.put`
   against a daemon that is not the writer answered `Ok` and kept the body in
   memory, where the embedded half had always refused it outright. That stopped
