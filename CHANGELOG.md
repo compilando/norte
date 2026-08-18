@@ -9,6 +9,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **F4 edits.** It opened the file with the system handler, which is a
+  different thing and is what #133 was about. `pane.edit` now hands the file to
+  your editor — `$VISUAL`, then `$EDITOR`, then `vi` — and steps aside while it
+  runs, exactly as it does for a shell; leaving the editor brings the panels
+  back and reloads the listing. `pane.edit-new` opens an empty buffer in the
+  directory you are looking at, and lets the editor ask for the name when you
+  save. The path travels as its own argument rather than inside a command line,
+  so a filename with a quote or a newline in it reaches the editor unchanged
+  instead of breaking the line. It refuses a folder and a remote panel, and says
+  which (#133).
+
 - **Properties, and how much a folder actually takes.** `pane.properties`
   (Alt+Enter in the Total Commander and Krusader presets, Ctrl+A in Far) opens
   what norte knows about the entry under the cursor: kind, size, date, path and

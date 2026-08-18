@@ -25,6 +25,8 @@ pub const MENUS: &[Menu] = &[
         title: "menu-file",
         items: &[
             "pane.view",
+            "pane.edit",
+            "pane.edit-new",
             "pane.open",
             // #139: las propiedades son del FICHERO, así que van con lo que se
             // hace a un fichero, no con lo que se cambia de la pantalla.

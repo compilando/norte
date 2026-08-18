@@ -260,8 +260,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     planned("pane.test-archive", "keymap-reason-archive-write", 132),
     planned("pane.split-file", "keymap-reason-archive-write", 132),
     planned("pane.combine-files", "keymap-reason-archive-write", 132),
-    planned("pane.edit", "keymap-reason-editor", 133),
-    planned("pane.edit-new", "keymap-reason-editor", 133),
+    // #133: norte no trae editor —lo suyo es el gestor— y F4 abre el TUYO,
+    // que es lo que hacen los cuatro presets al atarlo.
+    live("pane.edit", false),
+    live("pane.edit-new", false),
     // #134's second half (`pane.sync-dirs`) left this block and is `live`
     // above; `keymap-reason-sync` went with it, out of both locales, because
     // nothing else claimed it — same disposal as `keymap-reason-shell` when

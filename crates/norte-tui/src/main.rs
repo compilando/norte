@@ -11011,6 +11011,40 @@ fn submit_command_line(app: &mut App, cmd: &str) {
 /// con permiso de escritura en el padre puede cambiar el directorio por un
 /// symlink. Cerrarlo de verdad pide `openat`/`fchdir` y no lo hace ninguna
 /// otra ruta de norte; está dicho en los límites honestos del tema de ayuda.
+/// El editor sobre la entrada bajo el cursor (#133).
+///
+/// Un editor abre un FICHERO DEL SISTEMA: sobre un pane remoto no hay ninguno
+/// que darle —bajarlo, editarlo y volverlo a subir es otra feature, con su
+/// conflicto y su reversa—, así que se dice y no se abre nada. Es el mismo
+/// guard, y el mismo mensaje, que el shell y la línea de comandos.
+///
+/// Sobre un directorio tampoco: quien quiera entrar tiene `nav.enter`, y
+/// abrirle un editor a una carpeta es enseñarle al editor lo que no sabe.
+fn editar_lo_de_debajo(app: &App) -> Result<norte_tui::app::PendingShell, String> {
+    let Some(entrada) = app.focused().selected() else {
+        return Err(t("msg-edit-nothing"));
+    };
+    if entrada.kind == norte_proto::EntryKind::Dir {
+        return Err(t("msg-edit-not-a-file"));
+    }
+    let Ok(native) = norte_vfs_local::vpath_to_native(&entrada.path) else {
+        return Err(shell_remote_message(app));
+    };
+    // El cwd del hijo es el directorio que se está mirando, como con el shell:
+    // un `:w otro.txt` del editor cae donde el humano está, no donde arrancó
+    // norte.
+    let cwd = norte_vfs_local::vpath_to_native(app.focused().dir())
+        .ok()
+        .and_then(|d| norte_frontend::shell::child_cwd(&d));
+    Ok(norte_tui::app::PendingShell {
+        argv: norte_frontend::shell::editor_argv(&native),
+        cwd,
+        // Un editor de pantalla completa se despide él solo; esperar una tecla
+        // después sería un paso de más entre guardar y volver a los paneles.
+        wait_for_key: false,
+    })
+}
+
 fn shell_cwd(app: &App) -> Result<std::path::PathBuf, String> {
     let Ok(native) = norte_vfs_local::vpath_to_native(app.focused().dir()) else {
         return Err(shell_remote_message(app));
@@ -11769,6 +11803,32 @@ async fn dispatch(
             }
         }
         Command::PaneOpen => resolve_opener(app),
+        // #133: F4 EDITA. Lo ejecuta el run loop, como el shell y como
+        // `pane.open`: es él quien tiene la terminal, y suspender la TUI para
+        // devolvérsela a un programa de pantalla completa es exactamente lo
+        // que ya hace `app.terminal`.
+        //
+        // La ruta viaja como ARGUMENTO y no dentro de una línea de comandos:
+        // un nombre con una comilla, un `$` o un salto de línea o rompe la
+        // línea o ejecuta parte de sí mismo, y aquí los nombres son bytes
+        // (regla 1).
+        Command::PaneEdit => match editar_lo_de_debajo(app) {
+            Ok(pendiente) => app.pending_shell = Some(pendiente),
+            Err(msg) => app.message = Some(msg),
+        },
+        // Shift+F4: el editor con un buffer VACÍO en este directorio, que es
+        // lo que hacen mc y Krusader. El nombre es cosa del editor —lo pide al
+        // guardar—, y pedirlo aquí sería un diálogo que hace lo mismo peor.
+        Command::PaneEditNew => match shell_cwd(app) {
+            Ok(dir) => {
+                app.pending_shell = Some(norte_tui::app::PendingShell {
+                    argv: vec![norte_frontend::shell::login_shell_editor()],
+                    cwd: Some(dir),
+                    wait_for_key: false,
+                });
+            }
+            Err(msg) => app.message = Some(msg),
+        },
         // #135 (S4, design §D): los tres se RESUELVEN aquí y los ejecuta el
         // run loop, que es el dueño de la terminal — mismo reparto que
         // `pane.open`. Nada de esto va al journal: un shell que abre el
@@ -16276,5 +16336,89 @@ mod session_push_tests {
             VPath::parse("file:///x").expect("wire"),
             "y un hueco VIVO no lo pisa la sesión de otra ventana"
         );
+    }
+}
+#[cfg(test)]
+mod edit_tests {
+    use super::*;
+
+    fn app_local() -> App {
+        let d = VPath::parse("file:///tmp").expect("wire de test");
+        App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
+    }
+
+    /// #133: sin nada bajo el cursor no hay nada que editar, y se dice.
+    #[test]
+    fn editar_la_nada_lo_dice() {
+        let app = app_local();
+        assert!(editar_lo_de_debajo(&app).is_err());
+    }
+
+    /// Una CARPETA no se edita: para entrar está `nav.enter`, y abrirle un
+    /// editor a un directorio es enseñarle al editor lo que no sabe.
+    #[test]
+    fn una_carpeta_no_se_edita() {
+        let mut app = app_local();
+        app.panes[0].begin_listing(
+            VPath::parse("file:///tmp").expect("wire"),
+            vec![norte_proto::Entry {
+                path: VPath::parse("file:///tmp/sub").expect("wire"),
+                kind: norte_proto::EntryKind::Dir,
+                size: None,
+                mtime_ms: None,
+                attrs: std::collections::BTreeMap::new(),
+            }],
+            false,
+            None,
+        );
+        let err = editar_lo_de_debajo(&app).expect_err("una carpeta no");
+        assert!(!err.is_empty());
+    }
+
+    /// Un pane REMOTO no tiene fichero de sistema que darle al editor, así que
+    /// se dice en vez de abrir nada.
+    #[test]
+    fn en_un_pane_remoto_no_se_edita() {
+        let d = VPath::parse("sftp://host/casa").expect("wire");
+        let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d.clone(), Vec::new()));
+        app.panes[0].begin_listing(
+            d.clone(),
+            vec![norte_proto::Entry {
+                path: VPath::parse("sftp://host/casa/a.txt").expect("wire"),
+                kind: norte_proto::EntryKind::File,
+                size: Some(1),
+                mtime_ms: None,
+                attrs: std::collections::BTreeMap::new(),
+            }],
+            false,
+            None,
+        );
+        assert!(editar_lo_de_debajo(&app).is_err());
+    }
+
+    /// Y sobre un fichero local sale el argv del editor con la ruta APARTE.
+    #[test]
+    fn sobre_un_fichero_local_sale_el_editor_con_la_ruta_aparte() {
+        let mut app = app_local();
+        app.panes[0].begin_listing(
+            VPath::parse("file:///tmp").expect("wire"),
+            vec![norte_proto::Entry {
+                path: VPath::parse("file:///tmp/a.txt").expect("wire"),
+                kind: norte_proto::EntryKind::File,
+                size: Some(1),
+                mtime_ms: None,
+                attrs: std::collections::BTreeMap::new(),
+            }],
+            false,
+            None,
+        );
+        let pendiente = editar_lo_de_debajo(&app).expect("local y fichero");
+        assert_eq!(pendiente.argv.len(), 2, "programa y ruta, sin línea de shell");
+        assert_eq!(
+            pendiente.argv[1],
+            std::ffi::OsString::from("/tmp/a.txt"),
+            "la ruta va como su propio argumento"
+        );
+        assert!(!pendiente.wait_for_key, "un editor se despide solo");
     }
 }
