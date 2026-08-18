@@ -1,29 +1,67 @@
 {
   "permissions": {
+    "defaultMode": "default",
     "allow": [
-      "Bash(cargo build*)", "Bash(cargo nextest*)", "Bash(cargo clippy*)",
-      "Bash(cargo fmt*)", "Bash(cargo doc*)", "Bash(cargo llvm-cov*)",
-      "Bash(cargo deny*)", "Bash(just *)", "Bash(git status*)", "Bash(git diff*)",
-      "Bash(git log*)", "Bash(git add*)", "Bash(git commit*)"
+      "Bash(cargo build*)",
+      "Bash(cargo nextest*)",
+      "Bash(cargo clippy*)",
+      "Bash(cargo fmt*)",
+      "Bash(cargo doc*)",
+      "Bash(cargo insta*)",
+      "Bash(cargo llvm-cov*)",
+      "Bash(cargo deny*)",
+      "Bash(just *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add*)",
+      "Bash(git commit*)"
     ],
     "deny": [
-      "Bash(git push --force*)", "Bash(rm -rf /*)", "Read(.env*)",
-      "Read(**/secrets/**)", "Bash(curl * | sh)", "Bash(cargo publish*)"
+      "Bash(git push --force*)",
+      "Bash(rm -rf /*)",
+      "Read(.env*)",
+      "Read(**/secrets/**)",
+      "Bash(curl * | sh)",
+      "Bash(cargo publish*)"
     ]
   },
   "hooks": {
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
-        "hooks": [{ "type": "command",
-          "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *.rs) command -v cargo >/dev/null && cargo fmt -- \"$f\" 2>/dev/null || true;; esac" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *.rs) command -v cargo >/dev/null && cargo fmt -- \"$f\" >/dev/null 2>&1 || true;; esac",
+            "timeout": 60,
+            "statusMessage": "rustfmt"
+          }
+        ]
       }
     ],
     "PreToolUse": [
       {
         "matcher": "Bash(git commit*)",
-        "hooks": [{ "type": "command",
-          "command": "[ -f Cargo.toml ] || exit 0; cargo clippy --workspace --all-targets -q -- -D warnings && cargo nextest run --workspace -q" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -f Cargo.toml ] || exit 0; out=$(just ci-fast 2>&1) || { printf '%s\\n' \"$out\" | tail -c 3000 >&2; echo 'just ci-fast failed; reproduce it with `just t <crate>` and fix it there before committing' >&2; exit 2; }",
+            "timeout": 600,
+            "statusMessage": "just ci-fast antes del commit"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // empty'); if printf '%s' \"$cmd\" | grep -q '\\.snap' && printf '%s' \"$cmd\" | grep -qE '(^|[;&|( ])(sed|mv|rm)( |$)'; then echo 'Snapshots: use `cargo insta accept`. Never sed, mv or rm a .snap file by hand.' >&2; exit 2; fi",
+            "timeout": 10,
+            "statusMessage": "guardia de snapshots"
+          }
+        ]
       }
     ]
   }
