@@ -88,6 +88,9 @@ pub const MENUS: &[Menu] = &[
         items: &[
             "layout.places",
             "layout.preview",
+            "layout.processes",
+            "layout.metadata",
+            "layout.pick",
             "pane.toggle-hidden",
             "pane.columns",
             "pane.names-encoding",

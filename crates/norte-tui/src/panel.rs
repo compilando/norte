@@ -17,9 +17,7 @@
 
 use std::ops::{Index, IndexMut};
 
-use norte_frontend::layout::{
-    BySlot, Dir, KindId, Node, Params, Rect as LayoutRect, Size, SlotId, SlotStore,
-};
+use norte_frontend::layout::{BySlot, KindId, Node, Params, Rect as LayoutRect, SlotId, SlotStore};
 
 use crate::app::Pane;
 
@@ -56,6 +54,14 @@ pub enum TuiPanel {
     /// para él es lo que mantiene `app.panes[i]` queriendo decir «el i-ésimo
     /// LISTADO»: un sidebar no es un lado.
     Places(Box<norte_frontend::places::PlacesState>),
+    /// El panel de procesos (fase A): su cursor. Las filas son del
+    /// `TaskBoard`, que es de `App`: aquí no hay una segunda copia.
+    Processes(Box<crate::processes::Processes>),
+    /// La hoja de atributos (fase A): la entrada que se está enseñando.
+    ///
+    /// Guarda la `Entry` y no su ruta: la hoja se dibuja entera desde ella y
+    /// no hay una segunda lectura que pueda llegar tarde.
+    Metadata(Box<Option<norte_proto::Entry>>),
     /// Un kind que este binario no conoce: se pinta como una caja con su
     /// nombre y sus `params` se conservan intactos, para que abrir el layout
     /// de la GUI en el TUI no le borre nada.
@@ -73,7 +79,11 @@ impl TuiPanel {
     pub fn as_browser(&self) -> Option<&Pane> {
         match self {
             Self::Browser(p) => Some(p),
-            Self::Places(_) | Self::Preview(_) | Self::Unknown { .. } => None,
+            Self::Places(_)
+            | Self::Preview(_)
+            | Self::Processes(_)
+            | Self::Metadata(_)
+            | Self::Unknown { .. } => None,
         }
     }
 
@@ -81,7 +91,11 @@ impl TuiPanel {
     pub fn as_browser_mut(&mut self) -> Option<&mut Pane> {
         match self {
             Self::Browser(p) => Some(p),
-            Self::Places(_) | Self::Preview(_) | Self::Unknown { .. } => None,
+            Self::Places(_)
+            | Self::Preview(_)
+            | Self::Processes(_)
+            | Self::Metadata(_)
+            | Self::Unknown { .. } => None,
         }
     }
 
@@ -90,7 +104,11 @@ impl TuiPanel {
     pub fn as_places(&self) -> Option<&norte_frontend::places::PlacesState> {
         match self {
             Self::Places(s) => Some(s),
-            Self::Browser(_) | Self::Preview(_) | Self::Unknown { .. } => None,
+            Self::Browser(_)
+            | Self::Preview(_)
+            | Self::Processes(_)
+            | Self::Metadata(_)
+            | Self::Unknown { .. } => None,
         }
     }
 
@@ -98,7 +116,11 @@ impl TuiPanel {
     pub fn as_places_mut(&mut self) -> Option<&mut norte_frontend::places::PlacesState> {
         match self {
             Self::Places(s) => Some(s),
-            Self::Browser(_) | Self::Preview(_) | Self::Unknown { .. } => None,
+            Self::Browser(_)
+            | Self::Preview(_)
+            | Self::Processes(_)
+            | Self::Metadata(_)
+            | Self::Unknown { .. } => None,
         }
     }
 }
@@ -291,6 +313,50 @@ impl PaneSlots {
         self.store.insert(id, TuiPanel::Preview(Box::new(p)));
     }
 
+    /// El panel de procesos de un hueco, si lo hay.
+    #[must_use]
+    pub fn processes(&self, id: SlotId) -> Option<&crate::processes::Processes> {
+        match self.store.get(id) {
+            Some(TuiPanel::Processes(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// El panel de procesos de un hueco, para mover su cursor.
+    pub fn processes_mut(&mut self, id: SlotId) -> Option<&mut crate::processes::Processes> {
+        match self.store.get_mut(id) {
+            Some(TuiPanel::Processes(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Mete un panel de procesos nuevo, para un hueco recién acuñado.
+    pub fn insert_processes(&mut self, id: SlotId, p: crate::processes::Processes) {
+        self.store.insert(id, TuiPanel::Processes(Box::new(p)));
+    }
+
+    /// Lo que enseña la hoja de atributos de un hueco, si lo hay.
+    #[must_use]
+    pub fn metadata(&self, id: SlotId) -> Option<&Option<norte_proto::Entry>> {
+        match self.store.get(id) {
+            Some(TuiPanel::Metadata(e)) => Some(e),
+            _ => None,
+        }
+    }
+
+    /// La hoja de atributos de un hueco, para ponerla al día.
+    pub fn metadata_mut(&mut self, id: SlotId) -> Option<&mut Option<norte_proto::Entry>> {
+        match self.store.get_mut(id) {
+            Some(TuiPanel::Metadata(e)) => Some(e),
+            _ => None,
+        }
+    }
+
+    /// Mete una hoja de atributos nueva, para un hueco recién acuñado.
+    pub fn insert_metadata(&mut self, id: SlotId, e: Option<norte_proto::Entry>) {
+        self.store.insert(id, TuiPanel::Metadata(Box::new(e)));
+    }
+
     /// Mete un sidebar nuevo en el store, para un hueco recién acuñado.
     pub fn insert_places(&mut self, id: SlotId, state: norte_frontend::places::PlacesState) {
         self.store.insert(id, TuiPanel::Places(Box::new(state)));
@@ -446,28 +512,23 @@ impl std::ops::IndexMut<usize> for Histories {
 ///   └── status    ← Fixed(1)
 /// ```
 ///
-/// El `Auto` de la franja de tareas es la razón de que exista [`Size::Auto`]:
+/// El `Auto` de la franja de tareas es la razón de que exista
+/// [`Size::Auto`](norte_frontend::layout::Size::Auto):
 /// hoy vale cero con el sistema en reposo, así que un `Fixed(6)` pintaría seis
 /// filas vacías donde ahora no hay nada. Lo sustituye el frontend con
 /// [`Node::substitute_auto`] antes de repartir, porque el único que sabe
 /// cuántas tareas hay es quien tiene el `TaskBoard` delante.
+///
+/// Sale del PRESET de fábrica, no de un árbol escrito aquí: dos definiciones
+/// de la misma pantalla se separan, y la que se cargue de un fichero ganaría
+/// sin que nadie lo note. El test de este módulo fija que son iguales.
 #[must_use]
 pub fn orthodox() -> Node {
-    Node::Split {
-        dir: Dir::Vertical,
-        sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
-        children: vec![
-            Node::split(
-                Dir::Horizontal,
-                vec![
-                    Node::slot(SLOT_LEFT, KindId::browser()),
-                    Node::slot(SLOT_RIGHT, KindId::browser()),
-                ],
-            ),
-            Node::slot(SLOT_TASKS, KindId::new("tasks")),
-            Node::slot(SLOT_STATUS, KindId::new("status")),
-        ],
-    }
+    // El `unwrap` está justificado por los tests de `layout::presets`, que
+    // parsean y validan los cinco presets en cada CI: si este fallara, el
+    // binario se envió con un fichero embebido que no compila como árbol.
+    norte_frontend::layout::presets::tree("orthodox")
+        .unwrap_or_else(|e| unreachable!("el preset de fábrica no parsea: {e}"))
 }
 
 /// Celdas a `ratatui::layout::Rect`, campo a campo. Los nombres coinciden a
@@ -500,6 +561,28 @@ mod tests {
 
     fn pane(wire: &str) -> Pane {
         Pane::new(VPath::parse(wire).expect("wire"), Vec::new())
+    }
+
+    /// Los cuatro huecos que el TUI nombra son los cuatro que trae el fichero.
+    ///
+    /// `orthodox()` ya no construye el árbol, lo lee del preset de fábrica, y
+    /// una igualdad contra sí mismo no probaría nada. Lo que hay que fijar es
+    /// lo otro: que `SLOT_LEFT` y sus tres compañeros siguen queriendo decir
+    /// en el fichero lo que quieren decir en el código. Renumerar el fichero
+    /// dejaría a los ~212 sitios que dicen `app.panes[0]` apuntando a un hueco
+    /// que no es un listado.
+    #[test]
+    fn los_huecos_con_nombre_son_los_del_fichero() {
+        let arbol = orthodox();
+        assert_eq!(
+            arbol.slot_ids(),
+            vec![SLOT_LEFT, SLOT_RIGHT, SLOT_TASKS, SLOT_STATUS]
+        );
+        let kind = |id| arbol.kind_of(id).expect("kind").as_str().to_owned();
+        assert_eq!(kind(SLOT_LEFT), "browser");
+        assert_eq!(kind(SLOT_RIGHT), "browser");
+        assert_eq!(kind(SLOT_TASKS), "tasks");
+        assert_eq!(kind(SLOT_STATUS), "status");
     }
 
     /// Indexar por lado da el mismo listado que antes daba el array.

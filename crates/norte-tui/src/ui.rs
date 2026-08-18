@@ -540,6 +540,28 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
             app,
         );
     }
+    if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::processes::KIND)
+        && let Some(p) = app.panes.processes(id)
+    {
+        draw_processes(
+            frame,
+            rect,
+            p,
+            app,
+            app.key_owner() == crate::app::KeyOwner::Processes,
+        );
+    }
+    if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::metadata::KIND)
+        && let Some(e) = app.panes.metadata(id)
+    {
+        draw_metadata(
+            frame,
+            rect,
+            e.as_ref(),
+            app,
+            app.key_owner() == crate::app::KeyOwner::Metadata,
+        );
+    }
     draw_tasks(frame, tasks_area, app);
     draw_status(frame, status_area, app);
 }
@@ -586,6 +608,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     }
     if let Some(p) = &app.columns_picker {
         draw_columns_picker(frame, p, &app.theme, &app.dialog_hints.columns);
+    }
+    // Fase A: el selector de disposiciones, con el mismo allowlist de teclas
+    // que el de temas (`ALLOW_PICKER`) y por eso el mismo hint.
+    if let Some(p) = &app.layout_picker {
+        draw_layout_picker(frame, p, &app.theme, &app.dialog_hints.picker);
     }
     if let Some(mgr) = &app.extensions {
         if let Some(panel) = &mgr.config {
@@ -1459,6 +1486,155 @@ fn draw_columns_picker(
     let mut state = ListState::default();
     state.select(Some(p.cursor()));
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// Ancho, en celdas, de la vista previa del selector de disposiciones.
+///
+/// Fijo, y no proporcional al frame: la vista previa es un DIBUJO a escala de
+/// la pantalla, y su parecido con lo que saldrá no mejora por ser más grande.
+const LAYOUT_PREVIEW_W: u16 = 30;
+
+/// Alto de esa misma vista previa. La proporción importa más que el tamaño —
+/// una vista previa cuadrada haría pasar por alto un `simple` por un
+/// `orthodox`.
+const LAYOUT_PREVIEW_H: u16 = 10;
+
+/// Fase A: el selector de disposiciones. Las filas a la izquierda y, a la
+/// derecha, la pantalla que daría la que está bajo el cursor.
+///
+/// **La vista previa sale del REPARTO del árbol**, no de un dibujo guardado al
+/// lado del fichero: un dibujo guardado empieza a mentir en cuanto alguien
+/// toca un tamaño, y el lector no tiene forma de saber cuál de los dos es la
+/// pantalla de verdad.
+///
+/// Solo se dibuja la de un preset DE FÁBRICA, cuyo TOML va embebido. Una
+/// disposición del usuario vive en disco, y leer un fichero en el camino de
+/// pintado —una vez por frame— es la clase de coste que no se ve hasta que la
+/// config está en un directorio de red.
+fn draw_layout_picker(
+    frame: &mut Frame<'_>,
+    p: &norte_frontend::layout_picker::LayoutPicker,
+    theme: &TuiTheme,
+    hint: &str,
+) {
+    use norte_frontend::layout::{KindRegistry, presets};
+    use norte_frontend::layout_picker::preview;
+
+    let filas: Vec<String> = p
+        .rows()
+        .iter()
+        .map(|r| {
+            let procedencia = if r.factory {
+                t("layout-picker-factory")
+            } else {
+                t("layout-picker-mine")
+            };
+            // El nombre viene de `NAMES` o de un STEM de fichero, que el
+            // listador ya filtró a UTF-8; el enmascarado es cinturón, como en
+            // el picker de columnas.
+            let nombre = norte_encoding::mask_terminal_hazards(&r.name);
+            format!(" {nombre} · {procedencia}")
+        })
+        .collect();
+    // La nota del keymap habla de la fila BAJO EL CURSOR, no de la lista: es
+    // un aviso sobre lo que el lector está a punto de elegir.
+    // La nota va DENTRO de la caja, en su propia línea, y no en el pie: un
+    // aviso que se corta a media frase por no caber en el borde es peor que
+    // no darlo, y a 80 columnas el pie no da para las dos cosas.
+    let texto_nota = format!(" {}", t("layout-picker-keymap-note"));
+    let hay_nota = p
+        .rows()
+        .get(p.cursor())
+        .is_some_and(|r| r.shares_keymap_name);
+    let pie = format!(" {hint} ");
+
+    let lista_w = filas
+        .iter()
+        .map(|f| Line::raw(f.as_str()).width())
+        .max()
+        .unwrap_or(0);
+    let lista_w = u16::try_from(lista_w).unwrap_or(u16::MAX).max(18);
+    let dentro = lista_w.saturating_add(LAYOUT_PREVIEW_W).saturating_add(1);
+    // `+ 2` por los bordes, y el pie se mide DENTRO de ellos: sin sumarlos
+    // aquí la nota del keymap se corta a media palabra, que es peor que no
+    // darla.
+    // El ancho se reserva para la nota SIEMPRE que alguna fila pueda pedirla,
+    // no solo cuando la pide la de ahora: si no, la caja se encoge y se
+    // ensancha mientras el cursor recorre las filas, y lo que se compara es
+    // justamente el dibujo de dentro.
+    let nota_w = if p.rows().iter().any(|r| r.shares_keymap_name) {
+        u16::try_from(Line::raw(texto_nota.as_str()).width()).unwrap_or(u16::MAX)
+    } else {
+        0
+    };
+    let ancho = dentro
+        .max(u16::try_from(Line::raw(pie.as_str()).width()).unwrap_or(u16::MAX))
+        .max(nota_w)
+        .saturating_add(2)
+        .min(frame.area().width);
+    let alto_filas = u16::try_from(filas.len()).unwrap_or(u16::MAX);
+    // La línea de la nota se reserva SIEMPRE que la lista pueda pedirla, por
+    // lo mismo que el ancho: la caja no debe cambiar de alto al moverse.
+    let alto_nota = u16::from(nota_w > 0);
+    let alto = alto_filas
+        .max(LAYOUT_PREVIEW_H)
+        .saturating_add(2)
+        .saturating_add(alto_nota)
+        .min(frame.area().height.max(3));
+    let area = centered(frame.area(), ancho, alto);
+    clear_themed(frame, area, theme);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("layout-picker-title")))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(Line::raw(pie))
+        .border_style(theme.role(Role::ModalBorder));
+    let dentro_area = block.inner(area);
+    frame.render_widget(block, area);
+
+    let franjas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(alto_nota)])
+        .split(dentro_area);
+    if hay_nota && franjas[1].height > 0 {
+        frame.render_widget(
+            Paragraph::new(Line::raw(texto_nota.as_str())).style(theme.role(Role::Info)),
+            franjas[1],
+        );
+    }
+    let mitades = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(lista_w.min(franjas[0].width)),
+            Constraint::Min(0),
+        ])
+        .split(franjas[0]);
+
+    let items: Vec<ListItem<'_>> = filas.into_iter().map(ListItem::new).collect();
+    let list = List::new(items).highlight_style(theme.role(Role::Selection));
+    let mut state = ListState::default();
+    state.select(Some(p.cursor()));
+    frame.render_stateful_widget(list, mitades[0], &mut state);
+
+    if mitades[1].width == 0 || mitades[1].height == 0 {
+        return; // un frame estrecho se queda con la lista, que es lo que se elige
+    }
+    let arbol = p
+        .rows()
+        .get(p.cursor())
+        .filter(|r| r.factory)
+        .and_then(|r| presets::tree(&r.name).ok());
+    if let Some(arbol) = arbol {
+        let lineas = preview(
+            &arbol,
+            mitades[1].width,
+            mitades[1].height,
+            &KindRegistry::builtin(),
+        );
+        let texto: Vec<Line<'_>> = lineas.into_iter().map(Line::raw).collect();
+        frame.render_widget(Paragraph::new(texto), mitades[1]);
+    }
 }
 
 /// Lower bound in CELLS of the help sidebar: the width it used to have,
@@ -2586,6 +2762,185 @@ fn cabeza(texto: &str, ancho: usize) -> String {
     out
 }
 
+/// El porcentaje de una tarea: por bytes si se conocen, si no por entradas.
+///
+/// Una sola copia porque la franja y el panel de procesos pintan lo mismo, y
+/// dos aritméticas del mismo número acaban dividiendo una de ellas por un
+/// total que puede ser cero.
+fn progreso_pct(p: &norte_proto::TaskProgress) -> u64 {
+    match (p.bytes_total, p.entries_total) {
+        (Some(total), _) if total > 0 => (p.bytes_done.saturating_mul(100) / total).min(100),
+        (_, Some(total)) if total > 0 => (p.entries_done.saturating_mul(100) / total).min(100),
+        _ => 0,
+    }
+}
+
+/// El panel de procesos (fase A): una fila por tarea, con barra y estado.
+///
+/// Las filas salen del `TaskBoard` que ya pinta la franja — este panel no
+/// guarda una segunda lista — y el cursor se acota AQUÍ contra las filas de
+/// este frame: una tarea puede terminar y desaparecer entre dos pinturas.
+fn draw_processes(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    estado: &crate::processes::Processes,
+    app: &App,
+    con_teclado: bool,
+) {
+    let theme = &app.theme;
+    let borde = if con_teclado {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("processes-title")))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(borde));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let filas = app.board.rows();
+    if filas.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::styled(t("processes-empty"), theme.role(Role::Title))),
+            inner,
+        );
+        return;
+    }
+    let cursor = estado.cursor(filas.len());
+    let items: Vec<ListItem<'_>> = filas
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let p = &row.last;
+            let pct = progreso_pct(p);
+            // Diez celdas de barra: cabe en un panel estrecho y sigue
+            // diciendo de un vistazo por dónde va.
+            let llenas = usize::try_from(pct / 10).unwrap_or(0).min(10);
+            let barra: String = "█".repeat(llenas) + &"░".repeat(10 - llenas);
+            let (estado_txt, role) = match &p.state {
+                norte_proto::TaskState::Completed => ("✓".to_owned(), Some(Role::Info)),
+                norte_proto::TaskState::Cancelled => (t("task-cancelled"), Some(Role::Warning)),
+                norte_proto::TaskState::Failed { .. } => (t("task-failed"), Some(Role::Error)),
+                _ => (format!("{pct}%"), None),
+            };
+            let cabecera = format!(
+                "{} #{} {barra} ",
+                if i == cursor { '▶' } else { ' ' },
+                p.task_id.get()
+            );
+            let cola = match role {
+                Some(r) => Span::styled(estado_txt, theme.role(r)),
+                None => Span::raw(estado_txt),
+            };
+            ListItem::new(Line::from(vec![Span::raw(cabecera), cola]))
+        })
+        .collect();
+    frame.render_widget(List::new(items), inner);
+}
+
+/// La hoja de atributos (fase A): lo que se sabe de la entrada bajo el cursor.
+///
+/// Todo sale de la `Entry` que el listado ya tenía, así que esta función no
+/// puede pedir nada aunque quisiera. El tamaño va por `human_bytes_short`, que
+/// redondea hacia ABAJO y no se recorta: un tamaño cortado por la cabeza es un
+/// número FALSO, no una etiqueta truncada (la lección de L3).
+fn draw_metadata(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    entrada: Option<&norte_proto::Entry>,
+    app: &App,
+    con_teclado: bool,
+) {
+    let theme = &app.theme;
+    let borde = if con_teclado {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("metadata-title")))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(borde));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let Some(e) = entrada else {
+        frame.render_widget(
+            Paragraph::new(Line::styled(t("metadata-empty"), theme.role(Role::Title))),
+            inner,
+        );
+        return;
+    };
+
+    let mut lineas: Vec<Line<'_>> = Vec::new();
+    let mut campo = |clave: &str, valor: String| {
+        lineas.push(Line::from(vec![
+            Span::styled(format!("{} ", t(clave)), theme.role(Role::Title)),
+            Span::raw(valor),
+        ]));
+    };
+
+    let nombre = e
+        .path
+        .file_name()
+        .map_or_else(Vec::new, |s| s.as_bytes().to_vec());
+    let (texto, hostil) = display_name(&nombre);
+    campo("metadata-name", con_badge(&texto, hostil));
+    campo(
+        "metadata-kind",
+        t(match e.kind {
+            norte_proto::EntryKind::Dir => "metadata-kind-dir",
+            norte_proto::EntryKind::File => "metadata-kind-file",
+            norte_proto::EntryKind::Symlink => "metadata-kind-symlink",
+            norte_proto::EntryKind::Other => "metadata-kind-other",
+        }),
+    );
+    if let Some(n) = e.size {
+        campo(
+            "metadata-size",
+            format!("{} ({n})", norte_frontend::human_bytes_short(n)),
+        );
+    }
+    if let Some(ms) = e.mtime_ms {
+        campo(
+            "metadata-mtime",
+            norte_frontend::columns::format_mtime(ms, norte_frontend::columns::TimeFormat::Iso, ms),
+        );
+    }
+    // Los atributos que el provider YA había traído con el listado. Se pintan
+    // por la misma puerta que la columna equivalente —`styled_cell`, con el
+    // estilo por defecto del id— para que la hoja y la columna no puedan
+    // discrepar sobre lo que vale un atributo.
+    let catalogo = app.attr_catalog(e.path.scheme());
+    let ahora = e.mtime_ms.unwrap_or(0);
+    for id in e.attrs.keys() {
+        let col: norte_frontend::columns::ColumnId =
+            norte_frontend::columns::ColumnId::Attr(id.clone());
+        let estilo = norte_frontend::columns::ColumnStyle::default_for_id(&col, catalogo);
+        let etiqueta = norte_frontend::columns::header_label(&col, &estilo, catalogo);
+        if let Some(celda) = norte_frontend::columns::styled_cell(e, &col, ahora, &estilo) {
+            campo_libre(&mut lineas, theme, &etiqueta, &celda);
+        }
+    }
+    frame.render_widget(Paragraph::new(lineas), inner);
+}
+
+/// Una fila etiqueta/valor cuya etiqueta no sale de Fluent sino del catálogo.
+fn campo_libre(lineas: &mut Vec<Line<'static>>, theme: &TuiTheme, etiqueta: &str, valor: &str) {
+    lineas.push(Line::from(vec![
+        Span::styled(format!("{etiqueta} "), theme.role(Role::Title)),
+        Span::raw(valor.to_owned()),
+    ]));
+}
+
 fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
     if area.height == 0 {
         return;
@@ -2598,15 +2953,7 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .take(area.height as usize)
         .map(|row| {
             let p = &row.last;
-            let pct = match (p.bytes_total, p.entries_total) {
-                (Some(total), _) if total > 0 => {
-                    (p.bytes_done.saturating_mul(100) / total).min(100)
-                }
-                (_, Some(total)) if total > 0 => {
-                    (p.entries_done.saturating_mul(100) / total).min(100)
-                }
-                _ => 0,
-            };
+            let pct = progreso_pct(p);
             // Por CATEGORÍA (Display estable), jamás Debug de cara al usuario.
             // El estado se colorea por rol (error rojo, hecho info).
             let (estado, role) = match &p.state {
@@ -2655,6 +3002,43 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
 /// pueden superar las 60 col históricas — p. ej. colisión: `[esc] … [w] más
 /// nuevo` — y truncarlos escondería teclas reales. Techo = ancho del frame
 /// menos margen; suelo = las 60 históricas. MINOR-1 (H1 close): se mide en
+/// Recorta una fila de spans a `max` CELDAS, cortando por la derecha y
+/// respetando fronteras de carácter.
+///
+/// El último span que no cabe entero se corta por caracteres (jamás por
+/// bytes): partir un carácter ancho por la mitad pinta media celda basura, y
+/// partirlo por bytes ni siquiera es UTF-8.
+fn clamp_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut queda = max;
+    for sp in spans {
+        if queda == 0 {
+            break;
+        }
+        let w = sp.content.width();
+        if w <= queda {
+            queda -= w;
+            out.push(sp);
+            continue;
+        }
+        let mut texto = String::new();
+        let mut acc = 0_usize;
+        for c in sp.content.chars() {
+            let cw = UnicodeWidthChar::width(c).unwrap_or(0);
+            if acc + cw > queda {
+                break;
+            }
+            acc += cw;
+            texto.push(c);
+        }
+        if !texto.is_empty() {
+            out.push(Span::styled(texto, sp.style));
+        }
+        break;
+    }
+    out
+}
+
 /// CELDAS de terminal (`UnicodeWidthStr::width`, mismo idioma que
 /// [`draw_nav_popup`]/[`middle_ellipsis`]), no en `chars` — un cuerpo con
 /// CJK (dos celdas por char, p. ej. un path con `日本語`) desbordaba la caja
@@ -2720,6 +3104,7 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         // Sin error caen al comodín `6` de abajo (match_same_arms).
         Modal::MarkPattern { error: Some(_), .. }
         | Modal::Mkdir { error: Some(_), .. }
+        | Modal::TransferDest { error: Some(_), .. }
         | Modal::CommandLine { error: Some(_), .. }
         | Modal::AiRenameInstruction { error: Some(_), .. }
         | Modal::SemanticQuery { error: Some(_), .. } => 7,
@@ -2902,6 +3287,17 @@ fn modal_title_body(
         Modal::Mkdir { name, error } => {
             free_text_modal_text("modal-mkdir", "modal-mkdir-hint", name, error.as_deref())
         }
+        // Mismo enmascarado: la dirección tecleada y su diagnóstico son texto
+        // de usuario, y una dirección llega por paste tan fácil como un nombre.
+        Modal::TransferDest { kind, input, error } => free_text_modal_text(
+            match kind {
+                crate::app::TransferKind::Copy => "modal-transfer-dest-copy",
+                crate::app::TransferKind::Move => "modal-transfer-dest-move",
+            },
+            "modal-transfer-dest-hint",
+            input,
+            error.as_deref(),
+        ),
         // M4-IA: mismo enmascarado que mkdir — instrucción y error son texto
         // de usuario (paste con bidi/invisibles incluido).
         // #135: mismo enmascarado que la instrucción IA — la línea de
@@ -5405,6 +5801,15 @@ fn entry_item<'a>(
             let body_w = name_w.saturating_sub(otros);
             let recortado = middle_ellipsis(&spans[2].content, body_w);
             spans[2] = Span::styled(recortado, spans[2].style);
+        }
+        let usado: usize = spans.iter().map(|sp| sp.content.width()).sum();
+        // Ni con el nombre recortado a cero cabe siempre: en una columna de
+        // una o dos celdas —lo que deja `full` en un terminal de 40— el
+        // canalón y el badge ya la llenan solos. Se recorta el bloque ENTERO
+        // por la derecha. Antes esto era un `debug_assert`, que en tests es un
+        // panic y en release una fila pintando fuera de su columna.
+        if usado > name_w {
+            spans = clamp_spans(std::mem::take(&mut spans), name_w);
         }
         let usado: usize = spans.iter().map(|sp| sp.content.width()).sum();
         debug_assert!(

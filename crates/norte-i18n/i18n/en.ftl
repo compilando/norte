@@ -35,6 +35,12 @@ modal-mkdir-hint = name of the new directory
 modal-transfer-name-copy = Copy to
 modal-transfer-name-move = Move to
 modal-transfer-name-hint = destination name (edit to rename)
+# The typed destination: F5/F6 when there is no other panel to copy to (the
+# `simple` layout). The address is the wire form, the same one `[[hotlist]]`
+# takes, prefilled with this panel's own.
+modal-transfer-dest-copy = Copy to address
+modal-transfer-dest-move = Move to address
+modal-transfer-dest-hint = address, for example file:///home/you/work
 # `pane.command-line` (#135): the free-text prompt whose Enter runs
 # `$SHELL -c CMD` in the pane's directory, with the TUI suspended. Same mould
 # as the mkdir/AI-rename prompts.
@@ -541,6 +547,22 @@ places-title = Places
 places-section-drives = Drives
 places-section-favorites = Favorites
 places-empty = nothing here yet
+
+# Fase A: el panel de procesos y la hoja de atributos. Dos paneles nuevos que
+# se abren a mano; la franja de tareas de siempre no se toca.
+processes-title = Processes
+processes-empty = nothing running
+task-failed = failed
+metadata-title = Details
+metadata-empty = nothing under the cursor
+metadata-name = Name
+metadata-kind = Kind
+metadata-size = Size
+metadata-mtime = Modified
+metadata-kind-dir = folder
+metadata-kind-file = file
+metadata-kind-symlink = link
+metadata-kind-other = other
 # L3: what the docked viewer says INSTEAD of a file. A directory is never
 # read: a preview follows the cursor, so reading whatever the cursor lands
 # on is how one turns into opening a block device by accident.
@@ -608,6 +630,9 @@ menu-item-layout-equalize = Equalise
 menu-item-layout-set-target = Set destination
 menu-item-layout-places = Places sidebar
 menu-item-layout-preview = Docked viewer
+menu-item-layout-processes = Processes panel
+menu-item-layout-metadata = Details panel
+menu-item-layout-pick = Layout...
 menu-item-pane-tab-new = New tab
 menu-item-pane-tab-close = Close tab
 menu-item-pane-tab-next = Next tab
@@ -661,9 +686,17 @@ help-cmd-layout-equalize = equalise panels
 help-cmd-layout-set-target = set destination
 help-cmd-layout-places = show or hide the places sidebar
 help-cmd-layout-preview = show or hide the docked viewer
+help-cmd-layout-processes = show or hide the processes panel
+help-cmd-layout-metadata = show or hide the details panel
+help-cmd-layout-pick = choose a layout
 msg-layout-last-panel = cannot close the last panel
-msg-layout-no-target = with more than two panels, set the destination first
+msg-transfer-dest-invalid = that is not an address: {$err}
 msg-layout-load-failed = could not load layout "{$name}": {$err}
+msg-layout-applied = layout applied: { $name }
+layout-picker-title = Layout
+layout-picker-factory = built in
+layout-picker-mine = yours
+layout-picker-keymap-note = the layout does not change your keys ([keymap] preset does)
 help-cmd-cursor-up = move cursor up
 help-cmd-cursor-down = move cursor down
 help-cmd-cursor-page-up = page up

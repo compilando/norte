@@ -1,0 +1,14 @@
+---
+source: crates/norte-tui/tests/layout_anchor.rs
+expression: "lineas.join(\"\\n\")"
+---
+┌⟨file⟩/casa───────────────────────────┐
+│Nombre▲               Tamaño     Fecha│
+│   f00                   1 B          │
+│   f01                   1 B          │
+│   f02                   1 B          │
+│   f03                   1 B          │
+│   f04                   1 B          │
+│   f05                   1 B          │
+└──────────────────────────────────────┘
+ ⟨file⟩/casa  1/60

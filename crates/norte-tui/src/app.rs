@@ -873,6 +873,10 @@ pub enum KeyOwner {
     Places,
     /// El visor acoplado.
     Preview,
+    /// El panel de procesos.
+    Processes,
+    /// La hoja de atributos.
+    Metadata,
 }
 
 /// Estado completo del TUI: los paneles y el foco.
@@ -988,6 +992,9 @@ pub struct App {
     pub theme: crate::theme::TuiTheme,
     /// Selector de tema abierto (popup): None = cerrado.
     pub theme_picker: Option<ThemePicker>,
+    /// Selector de disposición abierto (F9 → `layout.pick`): None = cerrado.
+    /// El modelo vive en norte-frontend (regla 7); aquí solo se guarda.
+    pub layout_picker: Option<norte_frontend::layout_picker::LayoutPicker>,
     /// Overlay del picker de columnas (#108 7a): mismo patrón que
     /// `theme_picker` — un Option en App, NO una variante de Modal (Modal es
     /// confirmación; esto es lista con cursor). El modelo vive en
@@ -2065,6 +2072,7 @@ impl App {
             pending_approvals: std::collections::VecDeque::new(),
             theme: crate::theme::TuiTheme::default(),
             theme_picker: None,
+            layout_picker: None,
             columns_picker: None,
             extensions: None,
             lua_pending_trust: None,
@@ -3011,12 +3019,33 @@ impl App {
     pub fn set_layout(&mut self, tree: norte_frontend::layout::Node) {
         let dir = self.panes[self.focus].dir().clone();
         for id in tree.slot_ids() {
-            let es_browser = tree
-                .kind_of(id)
-                .is_some_and(|k| *k == norte_frontend::layout::KindId::browser());
-            if es_browser && self.panes.browser(id).is_none() {
-                self.panes
-                    .insert_browser(id, Pane::new(dir.clone(), Vec::new()));
+            // Se siembra TODO kind con estado propio, no solo el listado: un
+            // preset trae sidebar, visor, procesos y hoja de atributos, y un
+            // hueco sin su estado se pinta vacío para siempre —el toggle que
+            // lo habría creado no se va a pulsar, porque el panel ya está ahí.
+            // Lo que ya existe se respeta: cambiar de layout no borra tu
+            // navegación.
+            match tree.kind_of(id).map(norte_frontend::layout::KindId::as_str) {
+                Some("browser") if self.panes.browser(id).is_none() => {
+                    self.panes
+                        .insert_browser(id, Pane::new(dir.clone(), Vec::new()));
+                }
+                Some("places") if self.panes.places(id).is_none() => {
+                    self.panes
+                        .insert_places(id, norte_frontend::places::PlacesState::new());
+                }
+                Some("viewer") if self.panes.preview(id).is_none() => {
+                    self.panes
+                        .insert_preview(id, crate::preview::Preview::new());
+                }
+                Some(crate::processes::KIND) if self.panes.processes(id).is_none() => {
+                    self.panes
+                        .insert_processes(id, crate::processes::Processes::default());
+                }
+                Some(crate::metadata::KIND) if self.panes.metadata(id).is_none() => {
+                    self.panes.insert_metadata(id, None);
+                }
+                _ => {}
             }
             // Los ids del layout no pueden chocar con los que se acuñen luego.
             self.next_slot = self.next_slot.max(id.0.saturating_add(1));
@@ -3252,6 +3281,99 @@ impl App {
         }
     }
 
+    /// El hueco del panel de procesos, si está abierto.
+    #[must_use]
+    pub fn processes_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::processes::KIND)
+    }
+
+    /// Abre el panel de procesos, lo enfoca, o lo cierra.
+    ///
+    /// Tres estados como el sidebar y NO como el visor acoplado: un panel de
+    /// procesos se abre para mirar Y para cancelar algo concreto, así que
+    /// llevarse el teclado al abrir es lo que se espera. (El preview hace lo
+    /// contrario porque se abre para seguir navegando; L3 aprendió la
+    /// distinción pilotando la TUI en tmux.)
+    ///
+    /// La franja `tasks` no se toca: sigue ahí, y sigue siendo lo que trae
+    /// `orthodox`. Este panel es lo que se abre para ACTUAR sobre una tarea.
+    pub fn toggle_processes(&mut self) {
+        use norte_frontend::layout::{Edge, KindId, Node, Size};
+        match self.processes_slot() {
+            Some(id) if self.key_owner == KeyOwner::Processes => {
+                if let Some(nuevo) = self.layout.close_slot(id) {
+                    self.layout = nuevo;
+                    self.panes.refresh_visible(&self.layout);
+                    self.history.retain_tree(&self.layout);
+                }
+                self.key_owner = KeyOwner::Panes;
+            }
+            Some(_) => self.key_owner = KeyOwner::Processes,
+            None => {
+                let id = self.mint_slot();
+                self.panes
+                    .insert_processes(id, crate::processes::Processes::default());
+                self.layout = self.layout.dock(
+                    self.focused_slot(),
+                    Edge::Bottom,
+                    // Ocho filas: seis de tareas —el tope del `TaskBoard`— más
+                    // el marco. `Auto` es de la franja, que vale cero en
+                    // reposo; un panel que se abre a mano no desaparece.
+                    Size::Fixed(8),
+                    &Node::slot(id, KindId::new(crate::processes::KIND)),
+                );
+                self.panes.refresh_visible(&self.layout);
+                self.key_owner = KeyOwner::Processes;
+            }
+        }
+    }
+
+    /// El hueco de la hoja de atributos, si está abierta.
+    #[must_use]
+    pub fn metadata_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::metadata::KIND)
+    }
+
+    /// Abre la hoja de atributos, la enfoca, o la cierra.
+    ///
+    /// Como el preview: abre SIN llevarse el teclado, porque sigue al cursor y
+    /// tomarlo apagaría lo único que hace. Se acopla a la DERECHA con
+    /// `follows: Role(Active)`.
+    pub fn toggle_metadata(&mut self) {
+        use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, RoleId, Size};
+        match self.metadata_slot() {
+            Some(id) if self.key_owner == KeyOwner::Metadata => {
+                if let Some(nuevo) = self.layout.close_slot(id) {
+                    self.layout = nuevo;
+                    self.panes.refresh_visible(&self.layout);
+                    self.history.retain_tree(&self.layout);
+                }
+                self.key_owner = KeyOwner::Panes;
+            }
+            Some(_) => self.key_owner = KeyOwner::Metadata,
+            None => {
+                let id = self.mint_slot();
+                self.panes.insert_metadata(id, None);
+                self.layout = self.layout.dock(
+                    self.focused_slot(),
+                    Edge::Right,
+                    // Treinta celdas: la etiqueta más larga con su valor al
+                    // lado. Fijo y no ponderado porque una hoja de atributos
+                    // no gana nada con la mitad de la pantalla.
+                    Size::Fixed(30),
+                    &Node::slot_bound(
+                        id,
+                        KindId::new(crate::metadata::KIND),
+                        Bindings {
+                            follows: Some(Follow::Role(RoleId::Active)),
+                        },
+                    ),
+                );
+                self.panes.refresh_visible(&self.layout);
+            }
+        }
+    }
+
     /// El preview no pudo leer: se pinta el motivo DENTRO del hueco.
     ///
     /// Y no se pregunta nada. El preview sigue al cursor, así que una
@@ -3381,6 +3503,94 @@ impl App {
             original: self.theme.clone(),
         });
         self.preview_theme();
+    }
+
+    /// Abre el selector de disposición: las cinco de fábrica más lo que haya
+    /// en `<dir>/layouts/*.toml`.
+    ///
+    /// El listado del directorio lo hace el llamante y llega ya hecho: leer
+    /// un directorio es I/O, y esto se llama desde un contexto async
+    /// (regla 2).
+    pub fn open_layout_picker(&mut self, del_usuario: &[String]) {
+        self.layout_picker = Some(norte_frontend::layout_picker::LayoutPicker::open(
+            del_usuario,
+        ));
+    }
+
+    /// Pone la disposición `name`, y dice si lo consiguió.
+    ///
+    /// Primero `<dir>/layouts/<name>.toml` y después el preset de fábrica del
+    /// mismo nombre: gana el fichero del usuario, como en todas las demás
+    /// capas de configuración, y un preset se recupera borrando el fichero.
+    /// Si el fichero está roto se avisa Y se cae al preset — un layout que no
+    /// parsea no puede dejar a norte sin pantalla.
+    ///
+    /// Lee un fichero pequeño de config en el hilo que llama, como el
+    /// `[ui] layout` del arranque.
+    pub fn apply_layout(&mut self, name: &str, dir: &std::path::Path) -> bool {
+        use norte_frontend::layout::{LayoutError, config, presets};
+        let roto = match config::load(dir, name) {
+            Ok(arbol) => {
+                self.set_layout(arbol);
+                return true;
+            }
+            // Que no haya fichero es lo NORMAL para uno de fábrica: no se
+            // avisa de nada.
+            Err(LayoutError::NotFound(_)) => None,
+            Err(e) => Some(e),
+        };
+        match presets::tree(name) {
+            Ok(arbol) => {
+                self.set_layout(arbol);
+                if let Some(e) = roto {
+                    self.message = Some(ta(
+                        "msg-layout-load-failed",
+                        &[("name", name), ("err", &e.to_string())],
+                    ));
+                }
+                true
+            }
+            Err(e) => {
+                self.message = Some(ta(
+                    "msg-layout-load-failed",
+                    &[("name", name), ("err", &roto.unwrap_or(e).to_string())],
+                ));
+                false
+            }
+        }
+    }
+
+    /// Procesa una acción del usuario sobre el selector de disposición.
+    ///
+    /// A diferencia del selector de tema NO hay preview en vivo: aplicar un
+    /// layout recrea paneles y mueve el foco, así que pasar el cursor por la
+    /// lista rehaciendo la pantalla cinco veces sería peor que verla una vez.
+    /// La miniatura de cada fila hace ese trabajo.
+    pub fn layout_picker_input(&mut self, action: PickerAction, dir: &std::path::Path) {
+        match action {
+            PickerAction::Up => {
+                if let Some(p) = &mut self.layout_picker {
+                    p.up();
+                }
+            }
+            PickerAction::Down => {
+                if let Some(p) = &mut self.layout_picker {
+                    p.down();
+                }
+            }
+            PickerAction::Confirm => {
+                let name = self
+                    .layout_picker
+                    .take()
+                    .and_then(|p| p.chosen().map(String::from));
+                if let Some(n) = name
+                    && self.apply_layout(&n, dir)
+                {
+                    self.message = Some(ta("msg-layout-applied", &[("name", &n)]));
+                }
+            }
+            PickerAction::Cancel => self.layout_picker = None,
+        }
     }
 
     /// Abre el picker de columnas para el pane con foco (#108 7a): parte del
@@ -3558,6 +3768,24 @@ impl App {
         to: usize,
         promoted: Option<usize>,
     ) {
+        let to_dir = self.panes[to].dir().clone();
+        self.open_transfer_to_dir(kind, from, to_dir, promoted);
+    }
+
+    /// Como [`Self::open_transfer`] pero contra un DIRECTORIO, no contra un
+    /// panel.
+    ///
+    /// Existe porque no siempre hay «el otro panel»: con un solo listado
+    /// —`simple`— el destino lo teclea el lector ([`Self::open_transfer_dest`]),
+    /// y esa transferencia tiene que entrar por la MISMA puerta que F5, o se
+    /// queda sin confirmación, sin colisión y sin undo.
+    pub fn open_transfer_to_dir(
+        &mut self,
+        kind: TransferKind,
+        from: usize,
+        to_dir: VPath,
+        promoted: Option<usize>,
+    ) {
         let items: Vec<VPath> = match promoted {
             Some(idx) => self.panes[from]
                 .entries()
@@ -3566,7 +3794,6 @@ impl App {
                 .unwrap_or_default(),
             None => self.panes[from].marked_paths(),
         };
-        let to_dir = self.panes[to].dir().clone();
         match items.as_slice() {
             [] => {}
             [one] => {
@@ -3975,6 +4202,84 @@ impl App {
     pub fn mkdir_set_error(&mut self, msg: String) {
         if let Some(Modal::Mkdir { error, .. }) = &mut self.modal {
             *error = Some(msg);
+        }
+    }
+
+    /// Abre el prompt de destino de una transferencia ([`Modal::TransferDest`]).
+    ///
+    /// Prellenado con la dirección del panel con foco, en forma wire: es la
+    /// que [`Self::transfer_dest_confirm`] sabe volver a leer, y editarle la
+    /// cola es más corto que teclearla entera. No-op si no hay nada que
+    /// transferir: jamás un diálogo sobre un lote vacío.
+    pub fn open_transfer_dest(&mut self, kind: TransferKind) {
+        if self.focused().marked_paths().is_empty() {
+            return;
+        }
+        self.modal = Some(Modal::TransferDest {
+            kind,
+            input: self.focused().dir().to_wire(),
+            error: None,
+        });
+    }
+
+    /// Añade un carácter al destino en curso. No-op sin su modal. Mismo tope
+    /// que el resto de los prompts de texto libre.
+    pub fn transfer_dest_push(&mut self, c: char) {
+        if let Some(Modal::TransferDest { input, error, .. }) = &mut self.modal {
+            if input.chars().count() >= MARK_PATTERN_MAX_CHARS {
+                return;
+            }
+            input.push(c);
+            *error = None;
+        }
+    }
+
+    /// Borra el último carácter del destino. No-op sin su modal.
+    pub fn transfer_dest_pop(&mut self) {
+        if let Some(Modal::TransferDest { input, error, .. }) = &mut self.modal {
+            input.pop();
+            *error = None;
+        }
+    }
+
+    /// Cancela el prompt de destino sin transferir nada.
+    pub fn cancel_transfer_dest(&mut self) {
+        if !matches!(self.modal, Some(Modal::TransferDest { .. })) {
+            debug_assert!(
+                false,
+                "solo los modales de texto libre se cierran sin decisión"
+            );
+            return;
+        }
+        self.modal = None;
+        self.open_next_pending();
+    }
+
+    /// Lee el destino tecleado y ABRE la transferencia por la puerta de
+    /// siempre ([`Self::open_transfer_to_dir`]).
+    ///
+    /// Una dirección que no parsea deja su diagnóstico en el propio modal y
+    /// conserva lo tecleado, como el resto de los prompts. Devuelve `true` si
+    /// se pasó al modal siguiente.
+    pub fn transfer_dest_confirm(&mut self) -> bool {
+        let Some(Modal::TransferDest { kind, input, .. }) = &self.modal else {
+            return false;
+        };
+        let (kind, input) = (*kind, input.clone());
+        // Se lee la forma WIRE y nada más: un texto que parece una ruta local
+        // (`/home/…`) no es una dirección de norte, y adivinarle un scheme es
+        // como una copia acaba en otro backend del que el lector creía.
+        match VPath::parse(&input) {
+            Ok(dir) => {
+                self.open_transfer_to_dir(kind, self.focus(), dir, None);
+                true
+            }
+            Err(e) => {
+                if let Some(Modal::TransferDest { error, .. }) = &mut self.modal {
+                    *error = Some(ta("msg-transfer-dest-invalid", &[("err", &e.to_string())]));
+                }
+                false
+            }
         }
     }
 
@@ -5219,6 +5524,27 @@ pub enum Modal {
         /// Diagnóstico del último intento inválido.
         error: Option<String>,
     },
+    /// Destino TECLEADO de una transferencia: F5/F6 cuando no hay «el otro
+    /// panel» al que copiar.
+    ///
+    /// Con un solo listado —el preset `simple`— el rol `target` no tiene
+    /// candidato, y la regla de L1 para eso es que la operación PREGUNTA en
+    /// vez de fallar. Se teclea la dirección en su forma wire (la misma que
+    /// escribes en `[[hotlist]]`), prellenada con la del propio panel: lo
+    /// normal es editarle la cola, no escribirla entera.
+    ///
+    /// Texto libre como [`Modal::Mkdir`], y por el mismo motivo: lo tecleado
+    /// se enmascara al pintarlo. Confirmar NO transfiere — abre el modal que
+    /// habría abierto un F5 con dos paneles, que es donde vive la
+    /// confirmación.
+    TransferDest {
+        /// Copy o Move.
+        kind: TransferKind,
+        /// Lo tecleado hasta ahora, en forma wire.
+        input: String,
+        /// Diagnóstico del último intento inválido, bajo el campo.
+        error: Option<String>,
+    },
     /// Crear directorio (F7, #104). Texto libre como [`Modal::MarkPattern`]:
     /// el nombre CRUDO del usuario, enmascarado al pintarlo (un nombre
     /// llega por paste con bidi/invisibles tan fácil como un patrón).
@@ -5634,6 +5960,7 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         | Modal::CommandLine { .. }
         | Modal::AiRenameInstruction { .. }
         | Modal::SemanticQuery { .. }
+        | Modal::TransferDest { .. }
         | Modal::TransferName { .. } => None,
     }
 }

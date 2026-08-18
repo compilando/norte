@@ -27,6 +27,7 @@ mod by_slot;
 pub mod config;
 mod focus;
 mod kinds;
+pub mod presets;
 mod resolve;
 mod roles;
 mod store;

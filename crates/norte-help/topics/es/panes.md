@@ -35,6 +35,9 @@ commands = [
     "layout.set-target",
     "layout.places",
     "layout.preview",
+    "layout.processes",
+    "layout.metadata",
+    "layout.pick",
 ]
 context = ["browse"]
 +++
@@ -293,3 +296,36 @@ Un directorio no se lee: la caja dice que lo es. Un fichero que no se puede
 leer tampoco pregunta nada — el motivo se pinta dentro, porque un panel que
 sigue al cursor no puede abrir un diálogo por cada tecla que bajas. Y un visor
 acoplado que no se ve —detrás de una pestaña, o sin sitio— no lee NADA.
+
+{{cmd:layout.processes}} abre un panel con una fila por tarea en marcha: su
+barra, por dónde va, y cancelar la fila bajo el cursor. La franja de tareas del
+pie no se va — el panel es lo que se abre para **actuar** sobre una tarea, no
+para mirarla. Toma el teclado al abrirse y la segunda pulsación lo cierra: al
+revés que el visor acoplado, y a propósito, porque lo abriste para pulsar algo
+dentro.
+
+No hay pausa. El protocolo tiene cancelar y nada más, y un control que no hace
+lo que dice es peor que un control que falta.
+
+{{cmd:layout.metadata}} abre a la derecha un panel de detalles que también
+sigue al cursor: nombre, clase, tamaño, cuándo se modificó y lo que el provider
+ya hubiera dicho de la entrada. Para eso no lee **nada** —todo lo que enseña
+vino con el listado—, así que bajar por un directorio con él abierto no cuesta
+ni una petición.
+
+{{cmd:layout.pick}} lista las disposiciones: las cinco que norte trae
+—**orthodox** (los dos listados de siempre), **simple** (un listado),
+**krusader** (dos listados y el sidebar de sitios), **explorer** (un listado,
+sitios, visor acoplado y procesos) y **full** (todo a la vez)— y las que tengas
+guardadas en `layouts/`, dentro de tu directorio de configuración. Cada fila
+dibuja cómo quedaría la pantalla, sacado de la propia disposición y no de una
+imagen guardada al lado, así que el dibujo no puede quedarse viejo.
+
+El nombre de una disposición y el de un preset de teclas son dos ajustes
+distintos. `krusader` es los dos, y elegir la **disposición** mueve paneles sin
+cambiar ni una tecla; las teclas son `[keymap] preset`. El diálogo lo dice en
+su pie, para que la coincidencia sea una comodidad y no una trampa.
+
+Un fichero tuyo gana al de fábrica con el mismo nombre: `layouts/simple.toml`
+es lo que carga `simple`. Borra el fichero y vuelve el original. `--layout
+<nombre>` elige una para un solo arranque, sin tocar tu configuración.

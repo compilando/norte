@@ -43,6 +43,7 @@ pub mod help_badge;
 pub mod keymap;
 pub mod keysheet;
 pub mod layout;
+pub mod layout_picker;
 pub mod menu;
 mod modal;
 pub mod mouse;

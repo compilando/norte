@@ -207,6 +207,17 @@ pub struct Bindings {
     pub follows: Option<Follow>,
 }
 
+impl Bindings {
+    /// ¿No vincula nada? Lo usa la serialización para no escribir una tabla
+    /// vacía por cada hueco: la mayoría de los huecos no miran a nadie, y un
+    /// `[...slot.bindings]` sin contenido es ruido en el fichero que un
+    /// usuario copia y bytes en el cuerpo de la sesión.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.follows.is_none()
+    }
+}
+
 /// Cómo queda una [`Node::Tabs`] tras una operación: sus hijos nuevos y cuál
 /// queda activa. Recibe los hijos de ahora y la posición del que se opera.
 type ReTab<'a> = dyn Fn(&[Node], usize) -> (Vec<Node>, usize) + 'a;
@@ -245,7 +256,7 @@ pub enum Node {
         #[serde(default, skip_serializing_if = "Params::is_empty")]
         params: Params,
         /// A quién mira.
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Bindings::is_empty")]
         bindings: Bindings,
     },
 }
@@ -536,17 +547,36 @@ impl Node {
         }
     }
 
-    /// Cambia el peso del hijo que contiene `id` en `delta`, entre 1 y 10.
+    /// Cambia el tamaño del hijo que contiene `id` en `delta`.
     ///
-    /// Solo toca hijos PONDERADOS: un fijo pidió un tamaño y agrandarlo por
-    /// una tecla lo convertiría en otra cosa sin decirlo.
+    /// Un hijo PONDERADO se mueve de peso, entre 1 y 10. Un hijo FIJO se mueve
+    /// en CELDAS, dos por pulsación, entre 2 y 100: un sidebar pidió un ancho
+    /// concreto, y hasta #227 eso quería decir que el teclado no podía
+    /// cambiarlo — que es un ancho impuesto, no un ancho elegido. El tope de
+    /// abajo no es cosmético: a cero el panel desaparece y con él la forma de
+    /// devolverlo.
+    ///
+    /// [`Size::Auto`] no se toca: se sustituye por un fijo ANTES de repartir,
+    /// así que un número guardado aquí lo pisaría el siguiente frame y la
+    /// tecla parecería rota.
     #[must_use]
     pub fn resize(&self, id: SlotId, delta: i16) -> Self {
+        /// Celdas por pulsación en un hijo fijo.
+        const PASO: i32 = 2;
         self.map_split_of(id, &|sizes, pos| {
             let mut ns = sizes.to_vec();
-            if let Some(Size::Weight(w)) = ns.get(pos) {
-                let nuevo = i32::from(*w).saturating_add(i32::from(delta)).clamp(1, 10);
-                ns[pos] = Size::Weight(u16::try_from(nuevo).unwrap_or(1));
+            match ns.get(pos) {
+                Some(Size::Weight(w)) => {
+                    let nuevo = i32::from(*w).saturating_add(i32::from(delta)).clamp(1, 10);
+                    ns[pos] = Size::Weight(u16::try_from(nuevo).unwrap_or(1));
+                }
+                Some(Size::Fixed(n)) => {
+                    let nuevo = i32::from(*n)
+                        .saturating_add(i32::from(delta).saturating_mul(PASO))
+                        .clamp(2, 100);
+                    ns[pos] = Size::Fixed(u16::try_from(nuevo).unwrap_or(2));
+                }
+                Some(Size::Auto) | None => {}
             }
             ns
         })
@@ -1219,10 +1249,15 @@ mod tests {
         assert_eq!(sizes[0], Size::Weight(10), "no crece sin fin");
     }
 
-    /// Un hijo FIJO no se agranda por una tecla: pidió un tamaño, y cambiarlo
-    /// en silencio lo convertiría en otra cosa.
+    /// Un hijo FIJO SÍ se agranda desde #227, en celdas: era lo que dejaba el
+    /// sidebar atascado en el ancho con el que se abría.
+    ///
+    /// Lo que protege a la barra de estado —el otro hijo fijo que hay en la
+    /// pantalla— no es esta función: es que `layout.grow` solo nombra al hueco
+    /// CON EL FOCO, y el kind `status` no es enfocable. Un tope aquí por el
+    /// tamaño del hijo sería adivinar cuál de los dos fijos es un sidebar.
     #[test]
-    fn agrandar_no_toca_un_hijo_fijo() {
+    fn agrandar_mueve_un_hijo_fijo_en_celdas() {
         let arbol = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(1)],
@@ -1232,7 +1267,7 @@ mod tests {
         let Node::Split { sizes, .. } = &nuevo else {
             panic!("split")
         };
-        assert_eq!(sizes[1], Size::Fixed(1));
+        assert_eq!(sizes[1], Size::Fixed(7));
     }
 
     /// Igualar devuelve los pesos a uno y deja los fijos en paz.
@@ -1422,5 +1457,59 @@ mod tests {
             &Node::slot(SlotId(9), KindId::new("places")),
         );
         assert_eq!(con.close_slot(SlotId(9)), Some(arbol));
+    }
+
+    /// El ancho del primer hijo de un `Split`, para los tests de `resize`.
+    fn ancho(n: &Node) -> Size {
+        match n {
+            Node::Split { sizes, .. } => sizes[0],
+            _ => panic!("split"),
+        }
+    }
+
+    fn con_sidebar(ancho: u16) -> Node {
+        Node::Split {
+            dir: Dir::Horizontal,
+            children: vec![
+                Node::slot(SlotId(5), KindId::new("places")),
+                Node::slot(SlotId(1), KindId::browser()),
+            ],
+            sizes: vec![Size::Fixed(ancho), Size::Weight(1)],
+        }
+    }
+
+    /// #227: un hijo FIJO —el ancho del sidebar— se mueve en CELDAS. Antes
+    /// `resize` solo tocaba pesos, así que el panel de sitios no se podía
+    /// ensanchar con el teclado y los presets con sidebar nacían atascados.
+    #[test]
+    fn un_hijo_fijo_se_mueve_en_celdas() {
+        let arbol = con_sidebar(16);
+        assert_eq!(ancho(&arbol.resize(SlotId(5), 1)), Size::Fixed(18));
+        assert_eq!(ancho(&arbol.resize(SlotId(5), -1)), Size::Fixed(14));
+    }
+
+    /// El tope de abajo existe para que no se pueda dejar en cero: un panel de
+    /// ancho cero no se ve y no hay forma de volver a agrandarlo.
+    #[test]
+    fn un_hijo_fijo_no_baja_de_dos_ni_pasa_de_cien() {
+        assert_eq!(ancho(&con_sidebar(2).resize(SlotId(5), -1)), Size::Fixed(2));
+        assert_eq!(
+            ancho(&con_sidebar(100).resize(SlotId(5), 1)),
+            Size::Fixed(100)
+        );
+    }
+
+    /// Y un hijo PONDERADO sigue haciendo exactamente lo de antes.
+    #[test]
+    fn un_hijo_ponderado_no_cambia_de_comportamiento() {
+        let arbol = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        assert_eq!(ancho(&arbol.resize(SlotId(1), 1)), Size::Weight(2));
+        assert_eq!(ancho(&arbol.resize(SlotId(1), -1)), Size::Weight(1));
     }
 }

@@ -124,6 +124,16 @@ pub const CATALOGUE: &[CommandDef] = &[
     // L3: el visor acoplado. Mismo motivo para estar en `layout.*`: acopla un
     // panel. Lo que hay DENTRO es el kind `viewer` de siempre.
     live("layout.preview", false),
+    // Fase A: el panel de procesos y la hoja de atributos. Sin acorde en
+    // ningún preset: quince `layout.*` por siete presets es #228, y ligar dos
+    // aquí dejaría la familia a medias sin regla que diga qué mitad. Se
+    // alcanzan desde la paleta y desde el menú.
+    live("layout.processes", false),
+    live("layout.metadata", false),
+    // El selector de disposición. Sin acorde por el mismo #228, y además
+    // porque el nombre de una disposición NO es el de un preset de teclas
+    // aunque coincida: el diálogo lo dice en su pie.
+    live("layout.pick", false),
     live("pane.mirror", false),
     live("pane.pull", false),
     live("pane.swap", false),

@@ -20,6 +20,7 @@ context = [
     "dialog.confirm",
     "dialog.collision",
     "dialog.transfer-name",
+    "dialog.transfer-dest",
     "dialog.mkdir",
 ]
 +++
@@ -102,3 +103,16 @@ a dialog that can destroy data should not be answerable by leaning on a key.
 > ⚠ **keep newer** does not guess. When either side has no usable timestamp, that entry stops and asks again rather than being replaced or skipped on a hunch.
 
 > ⚠ Case collisions are judged against the **destination**, not the source: `README` and `readme` live together happily on Linux and land on the same file on macOS or Windows, and it is the destination that decides.
+
+When there is no other pane
+
+A layout with a single listing — `simple` — has no other pane to be the
+destination, and neither does a layout with three, where which one it would be
+is not obvious. In both cases {{cmd:pane.copy}} **asks** instead of failing: it
+opens a prompt for the destination address, prefilled with this panel's own, in
+the same form `[[hotlist]]` takes (`file:///home/you/work`, `sftp://host/srv`).
+Edit its tail and press ⏎; from there it is the ordinary confirmation, with the
+same collisions and the same undo.
+
+A destination is never guessed. Copying into a panel you did not have in mind
+is silent data loss, and one prompt is cheaper than finding out afterwards.

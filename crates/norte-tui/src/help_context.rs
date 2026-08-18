@@ -36,6 +36,7 @@ pub const CONTEXTS: &[&str] = &[
     "dialog.quit",
     "dialog.mark-pattern",
     "dialog.transfer-name",
+    "dialog.transfer-dest",
     "dialog.mkdir",
     "dialog.command-line",
     "dialog.ai-rename",
@@ -69,6 +70,7 @@ fn modal_context(modal: &Modal) -> &'static str {
         Modal::MarkPattern { .. } => "dialog.mark-pattern",
         Modal::TransferName { .. } => "dialog.transfer-name",
         Modal::Mkdir { .. } => "dialog.mkdir",
+        Modal::TransferDest { .. } => "dialog.transfer-dest",
         Modal::CommandLine { .. } => "dialog.command-line",
         Modal::AiRenameInstruction { .. } | Modal::AiRenamePlan { .. } => "dialog.ai-rename",
         Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => "dialog.semantic-search",
@@ -111,6 +113,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         Modal::TrustLuaInit { .. }
         | Modal::MarkPattern { .. }
         | Modal::Mkdir { .. }
+        | Modal::TransferDest { .. }
         | Modal::CommandLine { .. }
         | Modal::AiRenameInstruction { .. }
         | Modal::SemanticQuery { .. }
@@ -230,6 +233,11 @@ mod tests {
             Modal::MarkPattern {
                 mark: true,
                 pattern: "*.rs".into(),
+                error: None,
+            },
+            Modal::TransferDest {
+                kind: TransferKind::Copy,
+                input: "file:///y".into(),
                 error: None,
             },
             Modal::TransferName {

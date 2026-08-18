@@ -1,0 +1,51 @@
+[split]
+dir = "vertical"
+sizes = [
+    { weight = 1 },
+    "auto",
+    { fixed = 1 },
+]
+
+[[split.children]]
+
+[split.children.split]
+dir = "horizontal"
+
+[[split.children.split.children]]
+
+[split.children.split.children.slot]
+id = 5
+kind = "places"
+
+[[split.children.split.children]]
+
+[split.children.split.children.slot]
+id = 1
+kind = "browser"
+
+[[split.children.split.children]]
+
+[split.children.split.children.slot]
+id = 2
+kind = "browser"
+
+[[split.children.split.sizes]]
+fixed = 16
+
+[[split.children.split.sizes]]
+weight = 1
+
+[[split.children.split.sizes]]
+weight = 1
+
+[[split.children]]
+
+[split.children.slot]
+id = 3
+kind = "tasks"
+
+[[split.children]]
+
+[split.children.slot]
+id = 4
+kind = "status"

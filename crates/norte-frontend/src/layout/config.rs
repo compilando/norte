@@ -33,6 +33,37 @@ pub fn load(dir: &Path, name: &str) -> Result<Node, LayoutError> {
     Ok(arbol)
 }
 
+/// Los nombres de los layouts que el usuario tiene en `<dir>/layouts/`,
+/// ordenados.
+///
+/// No valida ni parsea: el selector los ENSEÑA, y quien elija uno roto se
+/// entera al elegirlo con el error del cargador. Parsear todos para pintar una
+/// lista es leer N ficheros por cada F9.
+///
+/// Un directorio que no existe no es un error: es un usuario que no ha
+/// guardado ninguno.
+#[must_use]
+pub fn list(dir: &Path) -> Vec<String> {
+    let Ok(entradas) = std::fs::read_dir(dir.join(LAYOUTS_DIR)) else {
+        return Vec::new();
+    };
+    let mut nombres: Vec<String> = entradas
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "toml"))
+        // `to_str` y no `to_string_lossy`: un nombre de fichero que no es
+        // UTF-8 no se puede volver a componer para abrirlo, así que se deja
+        // fuera en vez de ofrecer una fila que fallaría al pulsarla.
+        .filter_map(|e| {
+            e.path()
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_owned)
+        })
+        .collect();
+    nombres.sort();
+    nombres
+}
+
 /// El árbol como TOML, para escribirlo.
 ///
 /// # Errors
@@ -64,6 +95,18 @@ mod tests {
         std::fs::create_dir_all(&layouts).expect("mkdir");
         std::fs::write(layouts.join("mio.toml"), to_toml(&arbol()).expect("toml")).expect("write");
         assert_eq!(load(dir.path(), "mio").expect("carga"), arbol());
+    }
+
+    #[test]
+    fn listar_devuelve_los_toml_ordenados_y_sin_extension() {
+        let dir = tempfile::tempdir().expect("tmp");
+        assert!(list(dir.path()).is_empty(), "sin directorio, sin nombres");
+        let layouts = dir.path().join(LAYOUTS_DIR);
+        std::fs::create_dir_all(&layouts).expect("mkdir");
+        for n in ["zeta.toml", "alfa.toml", "notas.txt"] {
+            std::fs::write(layouts.join(n), "").expect("write");
+        }
+        assert_eq!(list(dir.path()), vec!["alfa".to_owned(), "zeta".to_owned()]);
     }
 
     /// Un nombre con separadores NO construye una ruta: viene de la config
