@@ -805,6 +805,7 @@ fn golden_methods() {
     check_methods_connection(&fixtures);
     check_methods_policy(&fixtures);
     check_methods_session(&fixtures);
+    check_methods_ui_session(&fixtures);
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
@@ -849,7 +850,45 @@ fn golden_methods() {
     // y daemon_going_away. El relevo tiene fixture PROPIA en vez de cambiar la
     // de la parada, que es lo que deja ver de un vistazo que el mensaje de una
     // parada corriente no ha cambiado un byte.
-    assert_eq!(fixtures.len(), 144, "[methods.json] fixtures sin caso Rust");
+    // 144 → 147 en 0.48.0 (L2): + session_get_result, session_put_params y
+    // session_put_result. El GET y el PUT llevan la MISMA sesión a propósito:
+    // lo que la fixture demuestra es que el cuerpo vuelve igual que fue.
+    assert_eq!(fixtures.len(), 147, "[methods.json] fixtures sin caso Rust");
+}
+
+/// Familia `session.*` de UI (0.48.0, L2): la pantalla que el daemon guarda.
+/// El golden congela que `body` viaja TAL CUAL —un objeto arbitrario, ni
+/// envuelto ni re-serializado a string— y que `owner` va en el result del GET
+/// y no dentro de la sesión: quién manda es del CANAL, no del documento.
+fn check_methods_ui_session(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{Session, SessionGetResult, SessionPutParams, SessionPutResult};
+    let body = serde_json::json!({ "slots": { "1": { "cursor": 12 } } });
+    check_one(
+        fixtures,
+        "session_get_result",
+        &SessionGetResult {
+            session: Session {
+                version: 1,
+                revision: 3,
+                body: body.clone(),
+            },
+            owner: true,
+        },
+    );
+    check_one(
+        fixtures,
+        "session_put_params",
+        &SessionPutParams {
+            version: 1,
+            revision: 3,
+            body,
+        },
+    );
+    check_one(
+        fixtures,
+        "session_put_result",
+        &SessionPutResult { revision: 4 },
+    );
 }
 
 /// Familia `fs.rename_batch*` (0.36.0): las PETICIONES de plan y de ejecución.
@@ -3028,7 +3067,10 @@ fn method_names_frozen() {
     // `version_compatible` no negocia un minor de cliente MAYOR que el del
     // servidor. MINOR.
     assert!(norte_proto::ARCHIVE_FORMATS.contains(&"rar"));
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.47.0");
+    // 0.48.0 (L2): `session.get`/`session.put` y sus cuatro tipos. Aditivo: no
+    // toca un solo mensaje existente, y el cuerpo de la sesión es OPACO —el
+    // wire congela que viaja tal cual, no qué lleva dentro—. MINOR.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.48.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

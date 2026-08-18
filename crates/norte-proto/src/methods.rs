@@ -624,7 +624,11 @@ use crate::{
 /// por su arm `_` de dispatch, que es la respuesta honesta— porque
 /// [`version_compatible`] no negocia un cliente con minor MAYOR que el
 /// servidor: la conexión ni se establece. Aditivo, por tanto, MINOR.
-pub const PROTOCOL_VERSION: &str = "0.47.0";
+/// **0.48.0** (L2, la sesión de UI): [`SESSION_GET`] y [`SESSION_PUT`], con
+/// [`Session`], [`SessionGetResult`], [`SessionPutParams`] y
+/// [`SessionPutResult`]. Aditivo: ningún mensaje existente cambia de forma, y
+/// el cuerpo de la sesión es OPACO para este crate y para el core.
+pub const PROTOCOL_VERSION: &str = "0.48.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -6046,3 +6050,140 @@ pub struct PluginSetConfigParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginSetConfigResult {}
+
+/// `session.get` — la sesión de UI del daemon (L2, 0.48.0): la disposición y
+/// el estado por hueco que el cliente dejó, para que un relevo del daemon
+/// (ADR 0055) no cueste la pantalla.
+///
+/// El resultado dice además si ESTA conexión es la DUEÑA. La primera conexión
+/// humana que pregunta se la queda; las siguientes reciben una COPIA y corren
+/// sueltas —misma pantalla, mismas rutas, y a partir de ahí divergen sin
+/// escribir—. Abrir un segundo terminal da lo que el lector esperaba y nunca
+/// hay dos escritores sobre un estado.
+///
+/// SOLO conexiones humanas: una sesión de agente no tiene pantalla que
+/// guardar. Un agente recibe `INVALID_REQUEST`.
+///
+/// ```
+/// assert_eq!(norte_proto::methods::SESSION_GET, "session.get");
+/// ```
+pub const SESSION_GET: &str = "session.get";
+
+/// `session.put` — reemplaza la sesión ENTERA (L2, 0.48.0).
+///
+/// Viaja el blob completo y el cliente coalesce: el cursor se mueve en cada
+/// flecha, y una familia de métodos por campo serían quince métodos, quince
+/// goldens y un motor de fusión que nadie pidió.
+///
+/// [`SessionPutParams::revision`] es toda la historia de concurrencia: un
+/// `put` con una revisión rancia se rechaza con [`crate::Error::Conflict`] y
+/// el cliente re-lee. No está para editores simultáneos —no los hay— sino
+/// para el cliente que reconecta tras un relevo con estado de antes.
+///
+/// ```
+/// assert_eq!(norte_proto::methods::SESSION_PUT, "session.put");
+/// ```
+pub const SESSION_PUT: &str = "session.put";
+
+/// Tope del `body` de una sesión, en bytes serializados: 1 MiB.
+///
+/// Lo comprueba el core, que es lo ÚNICO que puede comprobar honestamente de
+/// un documento que no lee. Por encima, [`crate::Error::LimitExceeded`] y la
+/// sesión almacenada se queda como estaba: jamás se trunca un documento cuyo
+/// esquema no se conoce.
+///
+/// ```
+/// assert_eq!(norte_proto::methods::SESSION_BODY_MAX, 1024 * 1024);
+/// ```
+pub const SESSION_BODY_MAX: usize = 1024 * 1024;
+
+/// La sesión de UI tal y como cruza el wire (L2).
+///
+/// `body` es OPACO para el core: `Node`, `SortSpec` y `ColumnId` viven en
+/// `norte-frontend`, que depende de este crate y no al revés, y espejarlos
+/// aquí duplicaría cuatro tipos a través de una arista de dependencias y
+/// convertiría cada campo nuevo de UI en un cambio de wire con su bump y su
+/// golden. Añadir un campo al cuerpo es subir la `version` DENTRO del cuerpo,
+/// en el crate que le da significado.
+///
+/// ```
+/// use norte_proto::methods::Session;
+/// let s = Session {
+///     version: 1,
+///     revision: 3,
+///     body: serde_json::json!({ "slots": {} }),
+/// };
+/// let j = serde_json::to_value(&s).expect("json");
+/// assert_eq!(j["revision"], serde_json::json!(3));
+/// // Y una sesión que nadie ha escrito todavía es la revisión cero:
+/// assert_eq!(Session::default().revision, 0);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Session {
+    /// Esquema de `body`, propiedad de los frontends. 1 en esta versión; 0 en
+    /// una sesión que nadie ha escrito todavía.
+    pub version: u32,
+    /// La sube el core en cada `put` aceptado. 0 = sesión nunca escrita.
+    pub revision: u64,
+    /// El documento. El core lo guarda, lo versiona y lo devuelve; no lo lee.
+    pub body: serde_json::Value,
+}
+
+/// Result de [`SESSION_GET`].
+///
+/// ```
+/// use norte_proto::methods::{Session, SessionGetResult};
+/// let r = SessionGetResult {
+///     session: Session::default(),
+///     owner: false,
+/// };
+/// let j = serde_json::to_value(&r).expect("json");
+/// assert_eq!(j["owner"], serde_json::json!(false));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionGetResult {
+    /// La sesión almacenada, o una vacía con `revision: 0`.
+    pub session: Session,
+    /// `true` si esta conexión es la dueña y sus `put` se aceptan.
+    pub owner: bool,
+}
+
+/// Params de [`SESSION_PUT`].
+///
+/// ```
+/// use norte_proto::methods::SessionPutParams;
+/// let p = SessionPutParams {
+///     version: 1,
+///     revision: 3,
+///     body: serde_json::json!({}),
+/// };
+/// let j = serde_json::to_value(&p).expect("json");
+/// assert_eq!(j["revision"], serde_json::json!(3));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionPutParams {
+    /// Esquema de `body` que escribe este cliente.
+    pub version: u32,
+    /// La revisión que el cliente cree vigente. Rancia = [`crate::Error::Conflict`].
+    pub revision: u64,
+    /// El documento entero.
+    pub body: serde_json::Value,
+}
+
+/// Result de [`SESSION_PUT`]: la revisión NUEVA.
+///
+/// ```
+/// use norte_proto::methods::SessionPutResult;
+/// let r = SessionPutResult { revision: 4 };
+/// let j = serde_json::to_value(&r).expect("json");
+/// assert_eq!(j["revision"], serde_json::json!(4));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionPutResult {
+    /// Revisión resultante; el cliente la guarda para su siguiente `put`.
+    pub revision: u64,
+}

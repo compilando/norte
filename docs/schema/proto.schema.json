@@ -3399,6 +3399,91 @@
       ],
       "type": "object"
     },
+    "Session": {
+      "description": "La sesión de UI tal y como cruza el wire (L2).\n\n`body` es OPACO para el core: `Node`, `SortSpec` y `ColumnId` viven en\n`norte-frontend`, que depende de este crate y no al revés, y espejarlos\naquí duplicaría cuatro tipos a través de una arista de dependencias y\nconvertiría cada campo nuevo de UI en un cambio de wire con su bump y su\ngolden. Añadir un campo al cuerpo es subir la `version` DENTRO del cuerpo,\nen el crate que le da significado.\n\n```\nuse norte_proto::methods::Session;\nlet s = Session {\n    version: 1,\n    revision: 3,\n    body: serde_json::json!({ \"slots\": {} }),\n};\nlet j = serde_json::to_value(&s).expect(\"json\");\nassert_eq!(j[\"revision\"], serde_json::json!(3));\n// Y una sesión que nadie ha escrito todavía es la revisión cero:\nassert_eq!(Session::default().revision, 0);\n```",
+      "properties": {
+        "body": {
+          "description": "El documento. El core lo guarda, lo versiona y lo devuelve; no lo lee."
+        },
+        "revision": {
+          "description": "La sube el core en cada `put` aceptado. 0 = sesión nunca escrita.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "version": {
+          "description": "Esquema de `body`, propiedad de los frontends. 1 en esta versión; 0 en\nuna sesión que nadie ha escrito todavía.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "revision",
+        "body"
+      ],
+      "type": "object"
+    },
+    "SessionGetResult": {
+      "description": "Result de [`SESSION_GET`].\n\n```\nuse norte_proto::methods::{Session, SessionGetResult};\nlet r = SessionGetResult {\n    session: Session::default(),\n    owner: false,\n};\nlet j = serde_json::to_value(&r).expect(\"json\");\nassert_eq!(j[\"owner\"], serde_json::json!(false));\n```",
+      "properties": {
+        "owner": {
+          "description": "`true` si esta conexión es la dueña y sus `put` se aceptan.",
+          "type": "boolean"
+        },
+        "session": {
+          "$ref": "#/$defs/Session",
+          "description": "La sesión almacenada, o una vacía con `revision: 0`."
+        }
+      },
+      "required": [
+        "session",
+        "owner"
+      ],
+      "type": "object"
+    },
+    "SessionPutParams": {
+      "description": "Params de [`SESSION_PUT`].\n\n```\nuse norte_proto::methods::SessionPutParams;\nlet p = SessionPutParams {\n    version: 1,\n    revision: 3,\n    body: serde_json::json!({}),\n};\nlet j = serde_json::to_value(&p).expect(\"json\");\nassert_eq!(j[\"revision\"], serde_json::json!(3));\n```",
+      "properties": {
+        "body": {
+          "description": "El documento entero."
+        },
+        "revision": {
+          "description": "La revisión que el cliente cree vigente. Rancia = [`crate::Error::Conflict`].",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "version": {
+          "description": "Esquema de `body` que escribe este cliente.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "revision",
+        "body"
+      ],
+      "type": "object"
+    },
+    "SessionPutResult": {
+      "description": "Result de [`SESSION_PUT`]: la revisión NUEVA.\n\n```\nuse norte_proto::methods::SessionPutResult;\nlet r = SessionPutResult { revision: 4 };\nlet j = serde_json::to_value(&r).expect(\"json\");\nassert_eq!(j[\"revision\"], serde_json::json!(4));\n```",
+      "properties": {
+        "revision": {
+          "description": "Revisión resultante; el cliente la guarda para su siguiente `put`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision"
+      ],
+      "type": "object"
+    },
     "ShutdownMode": {
       "description": "Qué clase de apagado es (0.46.0).\n\nORTOGONAL a [`DaemonShutdownParams::graceful`], que decide qué pasa con las\ntasks vivas. Éste decide quién viene después.\n\n**Sin `#[serde(other)]`, a diferencia de casi todo este wire.** El resto de\nlos enums degradan ante un valor desconocido porque malinterpretarlos cuesta\nuna feature; malinterpretar éste apaga un daemon de una forma que el que\nllamó no pidió. Misma asimetría que las políticas de mutación (ADR 0005).\n\n```\nuse norte_proto::methods::ShutdownMode;\nassert_eq!(ShutdownMode::default(), ShutdownMode::Stop);\nassert!(serde_json::from_str::<ShutdownMode>(r#\"\"inventado\"\"#).is_err());\n```",
       "oneOf": [
@@ -4895,6 +4980,18 @@
     "server_info": {
       "$ref": "#/$defs/ServerInfo"
     },
+    "session": {
+      "$ref": "#/$defs/Session"
+    },
+    "session_get_result": {
+      "$ref": "#/$defs/SessionGetResult"
+    },
+    "session_put_params": {
+      "$ref": "#/$defs/SessionPutParams"
+    },
+    "session_put_result": {
+      "$ref": "#/$defs/SessionPutResult"
+    },
     "side": {
       "$ref": "#/$defs/Side"
     },
@@ -5130,6 +5227,10 @@
     "sync_mode",
     "sync_plan_done",
     "sync_plan_params",
+    "session",
+    "session_get_result",
+    "session_put_params",
+    "session_put_result",
     "sync_reason",
     "sync_report_params",
     "sync_report_result",
