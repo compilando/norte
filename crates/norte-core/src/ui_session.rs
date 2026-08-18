@@ -152,6 +152,26 @@ impl SessionStore {
         Some(g.session.clone())
     }
 
+    /// Sube la revisión a la que ya hay EN DISCO, si es más alta.
+    ///
+    /// Es para un caso concreto: un proceso que arrancó sin el derecho a
+    /// escribir y lo consigue más tarde (la ventana que lo tenía se cerró).
+    /// Mientras estaba suelto, la otra siguió subiendo la revisión del fichero,
+    /// y volcar la nuestra tal cual la renumeraría HACIA ATRÁS — «la sube el
+    /// core en cada put aceptado» dejaría de ser verdad para quien lea el
+    /// fichero después.
+    ///
+    /// El cuerpo NO se toca: la pantalla que se guarda es la de esta ventana,
+    /// que es la que sigue viva. Lo que el cliente tiene que hacer con lo que
+    /// guardó la otra —conservarle los huecos que solo ella tenía— lo decide
+    /// el cliente, que es el único que sabe leer el cuerpo.
+    pub fn adopt_revision(&self, revision: u64) {
+        let mut g = self.lock();
+        if revision > g.session.revision {
+            g.session.revision = revision;
+        }
+    }
+
     /// Vuelve a marcar sucio lo que [`Self::take_dirty`] se llevó y no se pudo
     /// escribir.
     ///

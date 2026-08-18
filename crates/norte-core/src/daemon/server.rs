@@ -2510,7 +2510,9 @@ fn handle_session_get(
 
 /// `session.put` (L2, 0.48.0) — reemplaza la sesión entera.
 ///
-/// Tres negativas, y cada una dice algo distinto al cliente:
+/// Cuatro negativas, y cada una dice algo distinto al cliente:
+/// [`norte_proto::Error::Cancelled`] si el daemon se está apagando (no hay a
+/// dónde escribir ya; contra el sucesor del relevo la misma escritura vale),
 /// [`norte_proto::Error::PermissionDenied`] si no es la dueña (releer no
 /// arregla nada: esta conexión no escribe nunca),
 /// [`norte_proto::Error::Conflict`] con
@@ -2519,27 +2521,79 @@ fn handle_session_get(
 /// [`norte_proto::Error::LIMIT_SESSION_BODY`] si el cuerpo pasa del tope
 /// (releer no; tirar historial y reintentar, sí). En los tres casos lo
 /// almacenado se queda exactamente como estaba.
+/// Por qué un `session.put` no llega a la sesión.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionPutVeto {
+    /// Una sesión de agente no tiene pantalla que guardar.
+    NoEsHumano,
+    /// Este daemon ya se está apagando: nada de lo que entre ahora se persiste.
+    ApagandoSe,
+    /// Otra conexión es la dueña.
+    NoEsLaDuena,
+}
+
+impl From<SessionPutVeto> for RpcError {
+    fn from(v: SessionPutVeto) -> Self {
+        match v {
+            SessionPutVeto::NoEsHumano => Self::protocol(
+                codes::INVALID_REQUEST,
+                "only a human (non-agent) connection has a UI session",
+            ),
+            // `Cancelled` y no `PermissionDenied`: el cliente sí mandaba, y lo
+            // que le ha pasado a su escritura es que llegó tarde. Contra el
+            // sucesor de un relevo, la misma escritura vale.
+            SessionPutVeto::ApagandoSe => Self::from(norte_proto::Error::Cancelled),
+            SessionPutVeto::NoEsLaDuena => Self::from(norte_proto::Error::PermissionDenied),
+        }
+    }
+}
+
+/// Quién puede escribir la sesión, en el orden en que se pregunta.
+///
+/// Pura y aparte del handler porque las dos condiciones interesantes son
+/// CARRERAS —el apagado y el relevo de dueña— y una carrera no se prueba
+/// provocándola: se prueba decidiendo sobre los mismos cuatro datos. Es lo que
+/// se hizo con el gate de SIGINT del CLI (#212).
+///
+/// El orden no es cosmético. Humano primero, porque un agente no debería ni
+/// enterarse de si hay dueña. **Apagándose antes que la propiedad** (#233):
+/// entre el último volcado del escritor y el cierre de las conexiones cabe un
+/// `put`, y contestarle `Ok(revision)` sería prometerle que se guardó algo que
+/// ya no va a escribir nadie —y encima con el lock ya soltado—. Y la propiedad
+/// antes de la revisión y del tope, porque a quien no manda las otras dos
+/// respuestas le darían consejos falsos («re-lee», «recorta») sobre una
+/// escritura que jamás se va a aceptar.
+fn session_put_veto(
+    es_humano: bool,
+    apagandose: bool,
+    duena: Option<u64>,
+    conn_id: u64,
+) -> Option<SessionPutVeto> {
+    if !es_humano {
+        return Some(SessionPutVeto::NoEsHumano);
+    }
+    if apagandose {
+        return Some(SessionPutVeto::ApagandoSe);
+    }
+    if duena != Some(conn_id) {
+        return Some(SessionPutVeto::NoEsLaDuena);
+    }
+    None
+}
+
 fn handle_session_put(
     actor: &Actor,
     conn_id: u64,
     p: methods::SessionPutParams,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
-    if !matches!(actor, Actor::User) {
-        return Err(RpcError::protocol(
-            codes::INVALID_REQUEST,
-            "only a human (non-agent) connection has a UI session",
-        ));
-    }
-    // La propiedad se comprueba ANTES que la revisión y que el tope: para una
-    // conexión que no manda, las otras dos respuestas serían consejos falsos
-    // («re-lee», «recorta») sobre una escritura que jamás se va a aceptar.
-    if shared.ui_session.owner() != Some(conn_id) {
-        // Con TAXONOMÍA, como las otras dos negativas (#182): un cliente que
-        // solo tuviera la prosa inglesa no podría distinguir «no mandas» de
-        // «tus params están mal», y es la misma negativa que el brazo embebido
-        // ya daba como `PermissionDenied`.
-        return Err(RpcError::from(norte_proto::Error::PermissionDenied));
+    if let Some(veto) = session_put_veto(
+        matches!(actor, Actor::User),
+        shared.shutdown.is_cancelled(),
+        shared.ui_session.owner(),
+        conn_id,
+    ) {
+        return Err(veto.into());
     }
     match shared.ui_session.put(p.version, p.revision, p.body) {
         Ok(revision) => to_value(&methods::SessionPutResult { revision }),
@@ -4614,6 +4668,45 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{DirIdentity, is_default_tmp_fallback, peer_allowed, prepare_socket_dir};
+
+    /// El veto de `session.put`, que es donde viven dos carreras (#233).
+    ///
+    /// La que costaba una sesión: entre el ÚLTIMO volcado del escritor y el
+    /// cierre de las conexiones, un `put` podía entrar, mutar el store y
+    /// contestar `Ok(revision)` —una promesa de durabilidad sobre un fichero
+    /// que ya nadie va a escribir y cuyo lock ya está soltado—.
+    #[test]
+    fn un_put_mientras_el_daemon_se_apaga_no_promete_nada() {
+        use super::{SessionPutVeto, session_put_veto};
+
+        // Dueña y todo en orden: pasa.
+        assert_eq!(session_put_veto(true, false, Some(7), 7), None);
+        // Apagándose: se rehúsa AUNQUE sea la dueña, que es el caso entero.
+        assert_eq!(
+            session_put_veto(true, true, Some(7), 7),
+            Some(SessionPutVeto::ApagandoSe)
+        );
+        // Y el orden: apagándose gana a «no eres la dueña», porque el consejo
+        // útil es «reintenta contra el sucesor» y no «no mandas».
+        assert_eq!(
+            session_put_veto(true, true, Some(1), 7),
+            Some(SessionPutVeto::ApagandoSe)
+        );
+        // Un agente no llega ni a preguntar por lo demás.
+        assert_eq!(
+            session_put_veto(false, true, Some(7), 7),
+            Some(SessionPutVeto::NoEsHumano)
+        );
+        assert_eq!(
+            session_put_veto(true, false, Some(1), 7),
+            Some(SessionPutVeto::NoEsLaDuena)
+        );
+        assert_eq!(
+            session_put_veto(true, false, None, 7),
+            Some(SessionPutVeto::NoEsLaDuena),
+            "sin dueña tampoco escribe quien no la reclamó"
+        );
+    }
 
     /// `send_to_conn` es envío DIRIGIDO (los hits de una búsqueda son del que la
     /// lanzó): solo la conexión destino recibe; una conexión desconocida es

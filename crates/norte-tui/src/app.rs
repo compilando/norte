@@ -3660,6 +3660,29 @@ impl App {
         }
     }
 
+    /// Adopta huecos que otra ventana guardaba y esta no tenía (#231).
+    ///
+    /// Los que el layout VIVO tiene ganan los nuestros: esta pantalla es la que
+    /// acaba de moverse. Los demás se guardan en el rincón de huérfanos y se
+    /// vuelven a escribir tal cual — el único camino que trae este mapa es un
+    /// relevo de propiedad, o sea justo cuando lo guardado no es nuestro, y
+    /// reescribir encima sin más le tiraría a alguien el historial de un panel
+    /// al que iba a volver.
+    pub fn adopt_session_orphans(
+        &mut self,
+        ajenos: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
+    ) {
+        let vivos: std::collections::BTreeSet<u32> =
+            self.layout.slot_ids().into_iter().map(|s| s.0).collect();
+        for (id, estado) in ajenos {
+            if vivos.contains(&id) {
+                continue;
+            }
+            self.session.touched.insert(id, estado.touched_ms);
+            self.session.orphans.insert(id, estado);
+        }
+    }
+
     /// Marca un hueco como tocado AHORA, para la barrida por edad.
     pub fn touch_session_slot(&mut self, id: norte_frontend::layout::SlotId, now_ms: u64) {
         self.session.touched.insert(id.0, now_ms);

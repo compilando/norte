@@ -70,6 +70,17 @@ behind a core that is alive and does not intend to let go. A frontend without a
 daemon takes the same lock over the same file, so an embedded window and a
 daemon do not overwrite each other either.
 
+**Detached is not a life sentence.** A window that lost the try-lock asks again
+every thirty seconds, because the window that held it can close and nothing
+announces that — there is no `session.changed`, on purpose. Taking the lock late
+re-reads the file for two different reasons: a newer binary may have written it
+while we were detached, and then the lock is let go again rather than overwrite
+it; or another window of this version wrote it, and its revision is the one on
+disk, so ours rises to meet it instead of renumbering the file backwards. The
+body is not adopted — the screen that gets saved is the one still on screen —
+and what to keep of the other window's document is the client's decision, since
+the core does not read it.
+
 **The caps are the client's, and they live in the type.** History is 64
 entries per slot and direction, orphan slots are 128, and an orphan untouched
 for thirty days is swept. A slot some layout mentions is never swept — what is
@@ -103,6 +114,13 @@ paths its reader walks. A corrupt file is a diagnosis and a start from
 configuration, never a blank screen — and the diagnosis is category and
 position, never the content, for the same reason.
 
+**A put that arrives while the daemon is going away is refused, not accepted.**
+Between the writer's final flush and the closing of the connections there is a
+window where a `put` could still be taken, answered `Ok(revision)`, and never
+written — with the lock already released. It answers `Cancelled` instead, which
+is the honest word: the client did own the session, and its write was late. The
+same body is good against the successor of a handover.
+
 **It is written on quiet, on handover, and on the last goodbye.** One writer
 task coalesces on a one-second tick — the cursor moves on every arrow key and
 this is a file, not a database — the last connection to leave nudges it early,
@@ -114,7 +132,12 @@ withdrawing the path is what lets a successor start.
 - A reader gets their screen back: arrangement, directories, cursors, history,
   sort and hidden flag, across a daemon that was replaced under them.
 - A second window is honest about being a copy, and cannot cost the first one
-  its state.
+  its state — and if the first one closes, the second takes over rather than
+  spending the rest of its life unable to save.
+- The client never waits on the session. The write is a channel send; the put,
+  the fsync and the socket round trip happen in a task of their own, because a
+  once-a-second write that blocks the event loop is a key dropped once a second
+  while you navigate — and navigating is exactly when the body changes.
 - The protocol carries UI state without knowing any of it. The wire freezes
   that the body travels intact, not what is inside it, so the layout line can
   keep moving without a bump.

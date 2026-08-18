@@ -2493,7 +2493,7 @@ async fn run(
     // tareas mira un `watch` en memoria y esto acaba en un fichero.
     let mut session_tick = tokio::time::interval(std::time::Duration::from_secs(1));
     session_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut session_push = SessionPush::new(app.session.revision);
+    let mut session_push = SessionPush::arranca(backend, app.session.revision);
     // Debounce del hot-reload SIN bloquear el loop (revisión fase 6): cada
     // evento de config empuja el deadline; el reload corre cuando vence.
     let mut reload_at: Option<tokio::time::Instant> = None;
@@ -2752,6 +2752,12 @@ async fn run(
         // runtime multi-thread).
         let pintado = terminal.draw(|f| ui::draw(f, app))?;
         if app.quit {
+            // La última foto, y esperarla. El tick de un segundo se pierde lo
+            // que pasó dentro de ese segundo, y salir es cuando más duele:
+            // hasta aquí, cerrar norte justo después de un `cd` guardaba el
+            // directorio anterior.
+            push_session(app, &mut session_push);
+            session_push.cierra().await;
             return Ok(());
         }
         // #124: el alto REAL del viewport vuelve al modelo tras cada frame —
@@ -2854,7 +2860,7 @@ async fn run(
         }
         tokio::select! {
                     _ = session_tick.tick() => {
-                        push_session(app, backend, &mut session_push).await;
+                        push_session(app, &mut session_push);
                     }
                     _ = tick.tick() => {
                         // Mutación terminada → refresh de panes; el ritual completo
@@ -12875,38 +12881,242 @@ async fn restore_session(app: &mut App, backend: &Backend) {
     }
 }
 
-/// Lo que hace falta para ir escribiendo la sesión durante el run (L2).
-struct SessionPush {
-    /// La revisión que el core dio en el último `get`/`put`.
-    revision: u64,
-    /// Lo último que se escribió: se compara para no escribir lo mismo dos
-    /// veces. Comparar el documento entero cuesta menos que un flag de sucio
-    /// puesto a mano en los cientos de sitios que mueven un cursor —y no se
-    /// puede olvidar en uno.
-    last: Option<norte_frontend::session::SessionBody>,
-    /// El cuerpo no cabe ni sin historial: se deja de escribir en este run y
-    /// se dice UNA vez.
-    stopped: bool,
-    /// Ya no cupo una vez: a partir de aquí se escribe SIN historial.
+/// Cada cuántos ticks una ventana SUELTA vuelve a preguntar si ya puede
+/// escribir (#234).
+///
+/// Treinta segundos. No hay notificación que avise —no la hay a propósito: el
+/// único que puede escribir es el que cambió algo, así que un
+/// `session.changed` no tendría destinatario correcto— y sin volver a
+/// preguntar, la ventana que sobrevive a la dueña no guarda nada nunca más y
+/// su pantalla muere con ella. Preguntar cada segundo sería un viaje por
+/// segundo para siempre a cambio de enterarse antes de algo que pasa una vez.
+const REINTENTO_DUENA: u32 = 30;
+
+/// Lo que dura la espera por el último volcado al salir.
+///
+/// Salir no se cuelga por una sesión: si el core no contesta, se pierde la
+/// última foto y ya.
+const ESPERA_AL_SALIR: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Lo que la pantalla le manda al escritor de la sesión.
+enum SessionOrden {
+    /// Escribe esto.
     ///
-    /// Se recuerda porque recortar solo la copia del tick era recortar nada:
-    /// el tick siguiente volvía a capturar el historial entero desde `App`,
-    /// el cuerpo volvía a no caber, y lo que salía era un `put` rehusado y un
-    /// aviso POR SEGUNDO, encima de cualquier otro mensaje que el lector
-    /// estuviera intentando leer.
-    trimmed: bool,
+    /// `Box` porque el cuerpo lleva el árbol y el estado de cada hueco, y una
+    /// variante gorda engorda el enum entero (`clippy::large_enum_variant`).
+    Escribe(Box<norte_frontend::session::SessionBody>),
+    /// ¿Ya puedo escribir? La hace una ventana suelta cada [`REINTENTO_DUENA`]
+    /// ticks.
+    Pregunta,
+}
+
+/// Lo que el escritor le cuenta a la pantalla.
+enum SessionAviso {
+    /// No cabía; se ha tirado el historial. Se dice UNA vez.
+    NoCabe,
+    /// El cuerpo no llegó porque otra ventana escribió antes.
+    ///
+    /// `huerfanos` son los huecos que ELLA guardaba y esta pantalla no tenía:
+    /// vuelven aquí en vez de tirarse, porque el único camino que llega a este
+    /// aviso es un relevo de propiedad, o sea justo cuando lo guardado NO es
+    /// nuestro (#231).
+    Reintenta {
+        /// Los huecos ajenos que había que conservar.
+        huerfanos: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
+    },
+    /// Esta ventana ya es la dueña: puede volver a escribir desde la revisión
+    /// que viene.
+    Duena {
+        /// La revisión vigente en el momento de tomarla.
+        revision: u64,
+    },
+}
+
+/// El lado de la PANTALLA del escritor de sesión (L2).
+///
+/// Lo que era una función `async` dentro del `select!` es ahora un canal, y el
+/// motivo es medible: el volcado acaba en un `fsync` (brazo embebido) o en un
+/// viaje por el socket (daemon), y mientras eso estaba en vuelo el bucle de
+/// eventos no procesaba una tecla. Una vez por segundo, y justo mientras
+/// navegas, que es cuando el cuerpo cambia. Ahora el bucle solo hace
+/// `try_send` y `try_recv`: **esta struct no tiene ni un `await`, y por eso el
+/// arreglo no se puede deshacer sin que se note** (#230).
+struct SessionPush {
+    /// Lo último que se MANDÓ a escribir: se compara para no mandar lo mismo
+    /// dos veces. Comparar el documento entero cuesta menos que un flag de
+    /// sucio puesto a mano en los cientos de sitios que mueven un cursor —y no
+    /// se puede olvidar en uno.
+    last: Option<norte_frontend::session::SessionBody>,
+    /// Hacia el escritor. Capacidad 1: si está ocupado, este tick se salta, que
+    /// es coalescing y no pérdida —el cuerpo siguiente lleva lo mismo y más—.
+    ordenes: tokio::sync::mpsc::Sender<SessionOrden>,
+    /// Desde el escritor.
+    avisos: tokio::sync::mpsc::Receiver<SessionAviso>,
+    /// El escritor, para esperarlo al salir.
+    tarea: Option<tokio::task::JoinHandle<()>>,
+    /// Ticks que quedan para volver a preguntar por la propiedad.
+    reintento: u32,
 }
 
 impl SessionPush {
-    /// Al arrancar no se ha escrito nada todavía.
-    fn new(revision: u64) -> Self {
+    /// El lado de la pantalla SIN escritor, para probar lo que decide el bucle
+    /// sin un core al otro lado.
+    ///
+    /// Devuelve los dos extremos que se queda el escritor de verdad, así que un
+    /// test puede leer lo que se manda y fingir lo que se contesta.
+    #[cfg(test)]
+    fn de_prueba() -> (
+        Self,
+        tokio::sync::mpsc::Receiver<SessionOrden>,
+        tokio::sync::mpsc::Sender<SessionAviso>,
+    ) {
+        let (ordenes_tx, ordenes_rx) = tokio::sync::mpsc::channel(1);
+        let (avisos_tx, avisos_rx) = tokio::sync::mpsc::channel(4);
+        (
+            Self {
+                last: None,
+                ordenes: ordenes_tx,
+                avisos: avisos_rx,
+                tarea: None,
+                reintento: REINTENTO_DUENA,
+            },
+            ordenes_rx,
+            avisos_tx,
+        )
+    }
+
+    /// Arranca el escritor de la sesión de este run.
+    fn arranca(backend: &Backend, revision: u64) -> Self {
+        let (ordenes_tx, ordenes_rx) = tokio::sync::mpsc::channel(1);
+        let (avisos_tx, avisos_rx) = tokio::sync::mpsc::channel(4);
+        let b = backend.clone();
+        let tarea = tokio::spawn(escribe_la_sesion(b, revision, ordenes_rx, avisos_tx));
         Self {
-            revision,
             last: None,
-            stopped: false,
-            trimmed: false,
+            ordenes: ordenes_tx,
+            avisos: avisos_rx,
+            tarea: Some(tarea),
+            reintento: REINTENTO_DUENA,
         }
     }
+
+    /// Suelta el canal y espera al escritor: la última foto tiene que estar en
+    /// disco antes de que el proceso se vaya.
+    async fn cierra(&mut self) {
+        let (vacio, _) = tokio::sync::mpsc::channel(1);
+        // Soltar el emisor es lo que termina el bucle del escritor.
+        self.ordenes = vacio;
+        if let Some(tarea) = self.tarea.take() {
+            let _ = tokio::time::timeout(ESPERA_AL_SALIR, tarea).await;
+        }
+    }
+}
+
+/// El escritor de la sesión: el ÚNICO que habla con el core de esto.
+///
+/// Tiene la revisión, el recorte y la parada porque es quien ve las respuestas.
+/// Las dos negativas se contestan distinto y por eso están aquí y no en el
+/// `Backend`: un conflicto se arregla releyendo —otra ventana escribió— y un
+/// exceso de tamaño se arregla tirando historial, que es lo que más ocupa y lo
+/// que menos duele perder.
+async fn escribe_la_sesion(
+    backend: Backend,
+    mut revision: u64,
+    mut ordenes: tokio::sync::mpsc::Receiver<SessionOrden>,
+    avisos: tokio::sync::mpsc::Sender<SessionAviso>,
+) {
+    use norte_frontend::session::{SessionBody, SCHEMA_VERSION};
+
+    // Ya se supo que no cabe: a partir de aquí se escribe SIN historial.
+    // Recortar solo la copia de un tick era no recortar nada — el tick
+    // siguiente volvía a capturar el historial entero y lo que salía era un
+    // `put` rehusado y un aviso POR SEGUNDO.
+    let mut recortando = false;
+    // No cupo ni sin historial: se deja de escribir en este run.
+    let mut parado = false;
+    while let Some(orden) = ordenes.recv().await {
+        let mut body = match orden {
+            SessionOrden::Pregunta => {
+                if let Ok((sesion, duena)) = backend.session_get().await
+                    && duena
+                {
+                    revision = sesion.revision;
+                    parado = false;
+                    let _ = avisos.send(SessionAviso::Duena { revision }).await;
+                }
+                continue;
+            }
+            SessionOrden::Escribe(body) => *body,
+        };
+        if parado {
+            continue;
+        }
+        if recortando {
+            vaciar_historial(&mut body);
+        }
+        match backend
+            .session_put(SCHEMA_VERSION, revision, body.to_value())
+            .await
+        {
+            Ok(rev) => revision = rev,
+            // Otra ventana escribió entre nuestro último `get` y este `put`.
+            // Se re-lee para saber contra qué, y lo que ella guardaba y esta
+            // pantalla no tiene se le devuelve a la pantalla: reescribir el
+            // cuerpo local a pelo le tiraría los huecos huérfanos a alguien
+            // que quizá los tenía desde ayer (#231).
+            Err(Error::Conflict { .. }) => {
+                let mut huerfanos = std::collections::BTreeMap::new();
+                if let Ok((sesion, _)) = backend.session_get().await {
+                    revision = sesion.revision;
+                    if let Ok(remoto) = SessionBody::from_value(&sesion.body) {
+                        huerfanos = huerfanos_ajenos(&body, &remoto);
+                    }
+                }
+                let _ = avisos.send(SessionAviso::Reintenta { huerfanos }).await;
+            }
+            Err(Error::LimitExceeded { .. }) => {
+                if recortando {
+                    // Ni sin historial cabe: reintentarlo cada segundo sería un
+                    // error por segundo.
+                    parado = true;
+                } else {
+                    recortando = true;
+                    vaciar_historial(&mut body);
+                    let _ = avisos.send(SessionAviso::NoCabe).await;
+                    match backend
+                        .session_put(SCHEMA_VERSION, revision, body.to_value())
+                        .await
+                    {
+                        Ok(rev) => revision = rev,
+                        Err(_) => parado = true,
+                    }
+                }
+            }
+            // Esta ventana ya no escribe: perdió la propiedad, o el daemon se
+            // está apagando. Las dos se arreglan volviendo a preguntar, y de
+            // eso se encarga `Pregunta`.
+            Err(Error::PermissionDenied | Error::Cancelled) => parado = true,
+            Err(e) => tracing::debug!(error = %e, "la sesión no se pudo escribir"),
+        }
+    }
+}
+
+/// Los huecos que `remoto` guarda y `local` no tiene.
+///
+/// Es lo que hay que conservar de un cuerpo ajeno: nuestros huecos son los
+/// buenos —esta pantalla es la que acaba de moverse— pero los que solo están
+/// en el suyo no los conoce nadie más, y tirarlos es tirar el historial de un
+/// panel al que su dueña iba a volver.
+fn huerfanos_ajenos(
+    local: &norte_frontend::session::SessionBody,
+    remoto: &norte_frontend::session::SessionBody,
+) -> std::collections::BTreeMap<u32, norte_frontend::session::SlotState> {
+    remoto
+        .slots
+        .iter()
+        .filter(|(id, _)| !local.slots.contains_key(*id))
+        .map(|(id, s)| (*id, s.clone()))
+        .collect()
 }
 
 /// Tira los dos rastros de cada hueco: es lo que más ocupa de una sesión y lo
@@ -12922,16 +13132,15 @@ fn vaciar_historial(body: &mut norte_frontend::session::SessionBody) {
 /// volcado.
 ///
 /// Capturar no es tocar —dos capturas seguidas de la misma pantalla tienen que
-/// dar el mismo documento, o el coalescing no coalesce nada—, así que el sello
-/// no puede ir en `session_body`. Va aquí, que es el único sitio que sabe
-/// contra qué comparar: si el hueco cambió, se ha usado.
+/// dar el mismo documento, o el coalescing de un segundo no coalesce nada—, así
+/// que el sello no puede ir en `session_body`. Va aquí, que es el único sitio
+/// que sabe contra qué comparar: si el hueco cambió, se ha usado.
 ///
-/// Y solo los VIVOS: sellar también los huérfanos les devolvería la juventud
-/// en cada arranque, y entonces la barrida por edad no barrería nunca. Sin
-/// sello ninguno, `touched_ms` se quedaba en 0 contra un reloj epoch y la
-/// barrida se llevaba TODOS los huérfanos en el primer volcado — la promesa de
-/// «volver a la disposición de ayer devuelve el panel donde estaba» no se
-/// cumplía jamás.
+/// Y solo los VIVOS: sellar también los huérfanos les devolvería la juventud en
+/// cada arranque, y entonces la barrida por edad no barrería nunca. Sin sello
+/// ninguno, `touched_ms` se quedaba en 0 contra un reloj epoch y la barrida se
+/// llevaba TODOS los huérfanos en el primer volcado — la promesa de «volver a
+/// la disposición de ayer devuelve el panel donde estaba» no se cumplía jamás.
 fn sellar_los_vivos(
     app: &mut App,
     body: &mut norte_frontend::session::SessionBody,
@@ -12953,83 +13162,66 @@ fn sellar_los_vivos(
     }
 }
 
-/// Escribe la sesión si ha cambiado (L2).
+/// Manda la sesión a escribir si ha cambiado, y atiende lo que el escritor
+/// tenga que decir (L2).
 ///
 /// Se llama una vez por segundo. Coalescer es el punto: el cursor se mueve en
 /// cada flecha, y esto acaba en un fichero.
 ///
-/// Las dos negativas del core se contestan distinto, y por eso están aquí y no
-/// en el `Backend`: un conflicto se arregla releyendo —otra ventana escribió—
-/// y un exceso de tamaño se arregla tirando historial, que es lo que más ocupa
-/// y lo que menos duele perder. Si tirándolo tampoco cabe, se deja de escribir
-/// en este run: reintentar cada segundo un cuerpo que no cabe es un error por
-/// segundo.
-async fn push_session(app: &mut App, backend: &Backend, st: &mut SessionPush) {
-    use norte_frontend::session::SCHEMA_VERSION;
-
-    if st.stopped || app.session.detached || app.modal.is_some() {
+/// **No es `async`, y eso es el arreglo de #230.** Todo lo que puede tardar
+/// —el `put`, el `fsync`, el viaje por el socket— vive en
+/// [`escribe_la_sesion`]; aquí solo se captura, se compara y se empuja por un
+/// canal. Volver a poner un `await` en esta función es volver a trabar el
+/// bucle de eventos una vez por segundo.
+fn push_session(app: &mut App, st: &mut SessionPush) {
+    // Lo que el escritor contó desde la última vuelta.
+    while let Ok(aviso) = st.avisos.try_recv() {
+        match aviso {
+            SessionAviso::NoCabe => app.message = Some(t("msg-session-too-large")),
+            SessionAviso::Reintenta { huerfanos } => {
+                app.adopt_session_orphans(huerfanos);
+                // Lo mandado no llegó: que la comparación de abajo no lo dé
+                // por escrito.
+                st.last = None;
+            }
+            SessionAviso::Duena { revision } => {
+                app.session.detached = false;
+                app.session.revision = revision;
+                app.message = Some(t("msg-session-owned"));
+            }
+        }
+    }
+    if app.session.detached {
+        // Una ventana suelta no escribe, pero sí vuelve a preguntar: la dueña
+        // pudo cerrarse hace un rato y nadie avisa de eso (#234).
+        st.reintento = st.reintento.saturating_sub(1);
+        if st.reintento == 0 {
+            st.reintento = REINTENTO_DUENA;
+            let _ = st.ordenes.try_send(SessionOrden::Pregunta);
+        }
+        return;
+    }
+    if app.modal.is_some() {
         // Con un modal delante no se escribe: la sesión trata de dónde estás,
         // no de lo que estás decidiendo.
         return;
     }
     let ahora = now_ms();
     let mut body = app.session_body();
-    // Si ya se supo que no cabe, se captura recortado DESDE EL PRINCIPIO: es
-    // lo que hace que la comparación de abajo vuelva a servir de freno.
-    if st.trimmed {
-        vaciar_historial(&mut body);
-    }
     body.prune(ahora);
     if st.last.as_ref() == Some(&body) {
         return;
     }
     sellar_los_vivos(app, &mut body, st.last.as_ref(), ahora);
-    match backend
-        .session_put(SCHEMA_VERSION, st.revision, body.to_value())
-        .await
+    // `try_send` y no `send`: con el escritor ocupado, este tick se salta y el
+    // siguiente manda un cuerpo más nuevo. Y `last` solo se actualiza si de
+    // verdad se mandó, o un cuerpo saltado se daría por escrito.
+    if st
+        .ordenes
+        .try_send(SessionOrden::Escribe(Box::new(body.clone())))
+        .is_ok()
     {
-        Ok(rev) => {
-            st.revision = rev;
-            st.last = Some(body);
-        }
-        // Otra ventana escribió entre nuestro último `get` y este `put`: se
-        // relee y se reintenta UNA vez con la revisión de verdad. La pantalla
-        // que gana es la de quien acaba de moverse, que es esta.
-        Err(Error::Conflict { .. }) => {
-            if let Ok((sesion, _)) = backend.session_get().await {
-                st.revision = sesion.revision;
-                if let Ok(rev) = backend
-                    .session_put(SCHEMA_VERSION, st.revision, body.to_value())
-                    .await
-                {
-                    st.revision = rev;
-                    st.last = Some(body);
-                }
-            }
-        }
-        Err(Error::LimitExceeded { .. }) => {
-            if st.trimmed {
-                // Ya venía recortado y sigue sin caber: reintentarlo cada
-                // segundo sería un error por segundo.
-                st.stopped = true;
-                return;
-            }
-            st.trimmed = true;
-            vaciar_historial(&mut body);
-            // Se dice UNA vez, la del recorte: el historial se ha perdido y a
-            // partir de aquí ya no se vuelve a intentar entero.
-            app.message = Some(t("msg-session-too-large"));
-            if let Ok(rev) = backend
-                .session_put(SCHEMA_VERSION, st.revision, body.to_value())
-                .await
-            {
-                st.revision = rev;
-                st.last = Some(body);
-            } else {
-                st.stopped = true;
-            }
-        }
-        Err(e) => tracing::debug!(error = %e, "la sesión no se pudo escribir"),
+        st.last = Some(body);
     }
 }
 
@@ -15642,6 +15834,139 @@ mod refresh_ritual_tests {
             app.help_chords.availability("pane.view").reason(),
             Some(norte_help::Reason::WrongTarget),
             "el listado cambió: los hechos tienen que volver a congelarse"
+        );
+    }
+}
+
+#[cfg(test)]
+mod session_push_tests {
+    use super::*;
+
+    fn app() -> App {
+        let d = VPath::parse("file:///x").expect("wire de test");
+        App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
+    }
+
+    fn slot(path: &str) -> norte_frontend::session::SlotState {
+        norte_frontend::session::SlotState {
+            path: VPath::parse(path).expect("wire de test"),
+            cursor: 0,
+            back: Vec::new(),
+            forward: Vec::new(),
+            sort: norte_frontend::SortSpec::default(),
+            columns: Vec::new(),
+            show_hidden: false,
+            touched_ms: 7,
+        }
+    }
+
+    /// **#230, y es un test de FORMA**: `push_session` se llama desde un `#[test]`
+    /// corriente, sin runtime y sin `await`. Si alguien le devuelve el `async`,
+    /// esto no compila — que es exactamente la garantía que se quería, porque el
+    /// coste de aquel `await` era una tecla perdida por segundo mientras se
+    /// navegaba, y eso no lo enseña ningún assert.
+    #[test]
+    fn mandar_la_sesion_no_bloquea_el_bucle() {
+        let mut app = app();
+        let (mut st, mut ordenes, _avisos) = SessionPush::de_prueba();
+        push_session(&mut app, &mut st);
+        assert!(
+            matches!(ordenes.try_recv(), Ok(SessionOrden::Escribe(_))),
+            "la primera vuelta manda la pantalla"
+        );
+        // Y no se manda lo mismo dos veces: coalescer es el punto de todo esto.
+        push_session(&mut app, &mut st);
+        assert!(ordenes.try_recv().is_err(), "nada ha cambiado");
+    }
+
+    /// Una ventana SUELTA no escribe, pero vuelve a preguntar (#234): la dueña
+    /// pudo cerrarse, y no hay notificación que lo cuente.
+    #[test]
+    fn una_ventana_suelta_no_escribe_y_vuelve_a_preguntar() {
+        let mut app = app();
+        app.session.detached = true;
+        let (mut st, mut ordenes, _avisos) = SessionPush::de_prueba();
+        for _ in 0..REINTENTO_DUENA - 1 {
+            push_session(&mut app, &mut st);
+            assert!(ordenes.try_recv().is_err(), "suelta no escribe ni pregunta");
+        }
+        push_session(&mut app, &mut st);
+        assert!(
+            matches!(ordenes.try_recv(), Ok(SessionOrden::Pregunta)),
+            "a los {REINTENTO_DUENA} ticks pregunta"
+        );
+    }
+
+    /// Y cuando el escritor dice que ya es la dueña, esta ventana vuelve a
+    /// escribir desde la revisión que le den.
+    #[test]
+    fn al_tomar_la_propiedad_se_vuelve_a_escribir() {
+        let mut app = app();
+        app.session.detached = true;
+        let (mut st, mut ordenes, avisos) = SessionPush::de_prueba();
+        avisos
+            .try_send(SessionAviso::Duena { revision: 9 })
+            .expect("cabe");
+        push_session(&mut app, &mut st);
+        assert!(!app.session.detached);
+        assert_eq!(app.session.revision, 9);
+        assert!(
+            matches!(ordenes.try_recv(), Ok(SessionOrden::Escribe(_))),
+            "y ya escribe"
+        );
+    }
+
+    /// Un cuerpo que no llegó NO se da por escrito: sin esto, el conflicto de
+    /// una sola vuelta dejaba la pantalla sin guardar hasta que el lector
+    /// volviera a mover algo.
+    #[test]
+    fn lo_que_no_llego_se_vuelve_a_mandar() {
+        let mut app = app();
+        let (mut st, mut ordenes, avisos) = SessionPush::de_prueba();
+        push_session(&mut app, &mut st);
+        assert!(ordenes.try_recv().is_ok());
+        avisos
+            .try_send(SessionAviso::Reintenta {
+                huerfanos: std::collections::BTreeMap::new(),
+            })
+            .expect("cabe");
+        push_session(&mut app, &mut st);
+        assert!(
+            matches!(ordenes.try_recv(), Ok(SessionOrden::Escribe(_))),
+            "se vuelve a mandar aunque la pantalla no haya cambiado"
+        );
+    }
+
+    /// **#231**: de un cuerpo ajeno se conserva lo que solo estaba en él. Los
+    /// huecos que el layout VIVO tiene son nuestros —esta pantalla es la que
+    /// acaba de moverse—; los demás vuelven al rincón de huérfanos.
+    #[test]
+    fn de_un_conflicto_se_conservan_los_huecos_ajenos() {
+        let mut local = norte_frontend::session::SessionBody::default();
+        local.slots.insert(1, slot("file:///mio"));
+        let mut remoto = norte_frontend::session::SessionBody::default();
+        remoto.slots.insert(1, slot("file:///suyo"));
+        remoto.slots.insert(42, slot("file:///solo-suyo"));
+
+        let ajenos = huerfanos_ajenos(&local, &remoto);
+        assert_eq!(ajenos.len(), 1, "solo lo que no teníamos");
+        assert!(ajenos.contains_key(&42));
+
+        let mut app = app();
+        let vivo = app.panes.slot_of(0).0;
+        let mut con_vivo = ajenos.clone();
+        con_vivo.insert(vivo, slot("file:///no-pises-mi-pantalla"));
+        app.adopt_session_orphans(con_vivo);
+        let cuerpo = app.session_body();
+        assert_eq!(
+            cuerpo.slots[&42].path,
+            VPath::parse("file:///solo-suyo").expect("wire"),
+            "el huérfano ajeno se conserva y se vuelve a escribir"
+        );
+        assert_eq!(
+            cuerpo.slots[&vivo].path,
+            VPath::parse("file:///x").expect("wire"),
+            "y un hueco VIVO no lo pisa la sesión de otra ventana"
         );
     }
 }
