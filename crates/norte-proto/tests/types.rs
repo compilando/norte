@@ -546,6 +546,20 @@ fn escapes_root_round_trips_and_a_future_subtype_still_degrades() {
 }
 
 #[test]
+fn stale_revision_round_trips_as_a_conflict() {
+    // L2: la sesión de UI que se escribe contra una revisión que ya no es la
+    // vigente. Es conflicto y no error de parámetros porque nada se escribió y
+    // el caller arregla releyendo — y un cliente 0.47 lo degrada a `Unknown`,
+    // que le deja exactamente la misma conducta.
+    let e = Error::Conflict {
+        conflict: ConflictKind::StaleRevision,
+    };
+    let json = serde_json::to_value(&e).expect("serializa");
+    assert_eq!(json["conflict"], "stale_revision");
+    assert_eq!(roundtrip(&e), e);
+}
+
+#[test]
 fn error_unknown_kind_degrades() {
     // Tolerancia N/N-1: categoría desconocida → error genérico, no reventón.
     let e: Error = serde_json::from_str(r#"{"kind": "quota_del_futuro"}"#).unwrap();

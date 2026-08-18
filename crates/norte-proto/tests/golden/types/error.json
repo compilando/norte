@@ -18,6 +18,10 @@
     "conflict": "escapes_root",
     "kind": "conflict"
   },
+  "conflict_stale_revision": {
+    "conflict": "stale_revision",
+    "kind": "conflict"
+  },
   "conflict_type_mismatch": {
     "conflict": "type_mismatch",
     "kind": "conflict"

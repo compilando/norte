@@ -316,6 +316,12 @@ fn golden_error() {
                 },
             ),
             (
+                "conflict_stale_revision",
+                Error::Conflict {
+                    conflict: ConflictKind::StaleRevision,
+                },
+            ),
+            (
                 "provider_unavailable_retryable",
                 Error::ProviderUnavailable { retryable: true },
             ),
@@ -3067,9 +3073,15 @@ fn method_names_frozen() {
     // `version_compatible` no negocia un minor de cliente MAYOR que el del
     // servidor. MINOR.
     assert!(norte_proto::ARCHIVE_FORMATS.contains(&"rar"));
-    // 0.48.0 (L2): `session.get`/`session.put` y sus cuatro tipos. Aditivo: no
-    // toca un solo mensaje existente, y el cuerpo de la sesión es OPACO —el
-    // wire congela que viaja tal cual, no qué lleva dentro—. MINOR.
+    // 0.48.0 (L2): `session.get`/`session.put` y sus cuatro tipos, más
+    // `ConflictKind::StaleRevision` y el token `Error::LIMIT_SESSION_BODY`.
+    // Aditivo: no toca un solo mensaje existente, y el cuerpo de la sesión es
+    // OPACO —el wire congela que viaja tal cual, no qué lleva dentro—. El
+    // subtipo degrada a `Unknown` por el `#[serde(other)]` de ADR 0005 y el
+    // token de límite es vocabulario ABIERTO que un cliente N-1 enseña tal
+    // cual: los dos dejan al cliente viejo con la conducta correcta —volver a
+    // leer, y no reintentar el mismo cuerpo—. MINOR.
+    assert_eq!(norte_proto::Error::LIMIT_SESSION_BODY, "session-body");
     assert_eq!(norte_proto::PROTOCOL_VERSION, "0.48.0");
 }
 
