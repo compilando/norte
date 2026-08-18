@@ -1196,6 +1196,20 @@ impl Backend {
     /// se entrega como [`Error::Unsupported`] — «tu daemon es más viejo», no
     /// un fallo real. Resto, taxonomía del protocolo; daemon caído =
     /// `ProviderUnavailable`.
+    /// Cierra la sesión remota de `path` (#140). `false` = no había ninguna.
+    ///
+    /// # Errors
+    ///
+    /// Lo que devuelva el transporte. Un daemon N-1 sin el método contesta
+    /// `METHOD_NOT_FOUND` → [`Error::Unsupported`].
+    pub async fn close_connection(&self, path: &norte_proto::VPath) -> Result<bool, Error> {
+        match self {
+            Self::Embedded(engine) => Ok(engine.close_connection(path)),
+            #[cfg(unix)]
+            Self::Remote(r) => r.close_connection(path).await,
+        }
+    }
+
     /// Cuánto ocupa lo que se le pase, como Task (`fs.dir_size`, 0.49.0,
     /// #139).
     ///
@@ -3475,6 +3489,28 @@ pub mod remote {
                 &i.compare_routes
             });
             Ok((self.own_task(id, TaskKind::Compare), rx))
+        }
+
+        /// `connection.close` (0.49.0, #140): suelta la sesión de esa ruta.
+        pub(super) async fn close_connection(
+            &self,
+            path: &norte_proto::VPath,
+        ) -> Result<bool, Error> {
+            let client = self.client().await?;
+            let params = methods::ConnectionCloseParams { path: path.clone() };
+            let call = client.call::<_, methods::ConnectionCloseResult>(
+                methods::CONNECTION_CLOSE,
+                &params,
+            );
+            match tokio::time::timeout(CALL_TIMEOUT, call).await {
+                Ok(Err(ClientError::Rpc(ref rpc)))
+                    if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+                {
+                    Err(Error::Unsupported)
+                }
+                Ok(res) => res.map(|r| r.closed).map_err(to_taxonomy),
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            }
         }
 
         /// `fs.dir_size` (0.49.0, #139): lanza la Task y devuelve su

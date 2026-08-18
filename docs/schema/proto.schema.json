@@ -622,6 +622,30 @@
         }
       ]
     },
+    "ConnectionCloseParams": {
+      "description": "Params de [`CONNECTION_CLOSE`] (0.49.0, #140).\n\n```\nuse norte_proto::methods::ConnectionCloseParams;\nlet p: ConnectionCloseParams =\n    serde_json::from_str(r#\"{\"path\":\"sftp://host/casa\"}\"#).expect(\"params\");\nassert_eq!(p.path.scheme(), \"sftp\");\n```",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "Una ruta CUALQUIERA de la conexión. Se cierra por\n`scheme://authority`, que es como el core la tiene cacheada: el\nfrontend manda el sitio donde está el panel y no tiene que saber cómo\nse llavea una sesión por dentro."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "ConnectionCloseResult": {
+      "description": "Result de [`CONNECTION_CLOSE`].\n\n```\nuse norte_proto::methods::ConnectionCloseResult;\nlet r = ConnectionCloseResult { closed: true };\nassert!(serde_json::to_value(&r).expect(\"json\")[\"closed\"].as_bool().expect(\"bool\"));\n```",
+      "properties": {
+        "closed": {
+          "default": false,
+          "description": "`true` si había una sesión y se soltó; `false` si no había ninguna.\n\nNo es un error: quien desconecta quiere quedarse sin conexión, y ya lo\nestá. Lo dice para que un frontend pueda distinguir «la he cerrado» de\n«no había nada», que es la diferencia entre un mensaje útil y uno que\nmiente.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ConnectionDegraded": {
       "description": "Notificación [`CONNECTION_DEGRADED`] (server→client): una sesión remota se\nestableció con seguridad degradada. Las rutas/host van REDACTADOS (rule 10):\n`host` jamás lleva userinfo.",
       "properties": {
@@ -4700,6 +4724,12 @@
     "conflict_kind": {
       "$ref": "#/$defs/ConflictKind"
     },
+    "connection_close_params": {
+      "$ref": "#/$defs/ConnectionCloseParams"
+    },
+    "connection_close_result": {
+      "$ref": "#/$defs/ConnectionCloseResult"
+    },
     "connection_degraded": {
       "$ref": "#/$defs/ConnectionDegraded"
     },
@@ -5137,6 +5167,8 @@
     "compare_verdict",
     "conflict_kind",
     "connection_degraded",
+    "connection_close_params",
+    "connection_close_result",
     "connection_trust_host_key_params",
     "connection_trust_host_key_result",
     "daemon_going_away",

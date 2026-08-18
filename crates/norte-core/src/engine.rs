@@ -733,6 +733,21 @@ impl Engine {
         }
     }
 
+    /// Cierra la sesión remota de `p` (#140). `false` si no había ninguna.
+    ///
+    /// Un scheme de PROCESO —`file://`, `mem://`, el de un provider-plugin— no
+    /// se cierra: no hay sesión que soltar, y decir que sí sería mentir sobre
+    /// algo que sigue exactamente igual. La siguiente operación sobre esa
+    /// autoridad vuelve a conectar por el camino de siempre: cerrar suelta, no
+    /// prohíbe.
+    pub fn close_connection(&self, p: &VPath) -> bool {
+        // Registrado por scheme entero = provider de proceso, no una sesión.
+        if self.sessions.lookup(p.scheme()).is_some() {
+            return false;
+        }
+        self.sessions.close(&Self::provider_key(p))
+    }
+
     async fn provider_for(&self, p: &VPath) -> Result<Arc<dyn Provider>, Error> {
         let key = Self::provider_key(p);
         // Primero el provider de proceso registrado para el scheme entero

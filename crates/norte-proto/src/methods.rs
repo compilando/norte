@@ -1174,6 +1174,22 @@ pub const TASK_CANCEL: &str = "task.cancel";
 /// HUMANA: para una conexión de agente es `INVALID_REQUEST`, como p. ej.
 /// `policy.grant_scope`/`decide`/`undo_session`.
 pub const CONNECTION_TRUST_HOST_KEY: &str = "connection.trust_host_key";
+
+/// `connection.close` — cierra la sesión remota de una ruta (0.49.0, #140).
+///
+/// Lo que se cierra es la SESIÓN cacheada bajo `scheme://authority`, con los
+/// providers de archivo compuestos que colgaran de ella: sin esto, «desconectar»
+/// no desconectaba nada — el panel se iba a otro sitio y el socket seguía
+/// abierto hasta que la sesión venciera sola.
+///
+/// Idempotente: cerrar lo que ya no estaba contesta `closed: false` y no es un
+/// error. Un scheme de PROCESO —`file://`, y los providers registrados por un
+/// plugin— no se cierra: no hay sesión que soltar, y contestar que sí sería
+/// mentir sobre algo que sigue exactamente igual.
+///
+/// La siguiente operación sobre esa autoridad vuelve a conectar por el camino
+/// de siempre. Cerrar no prohíbe nada: suelta.
+pub const CONNECTION_CLOSE: &str = "connection.close";
 /// `connection.degraded` — notificación server→client (#44): una sesión remota
 /// se estableció con seguridad DEGRADADA (hoy: FTP con `tls="allow"` cayó a
 /// texto plano porque el servidor rechazó `AUTH TLS`). Solo informa (el usuario
@@ -3331,6 +3347,44 @@ impl CompareRow {
             _ => self.reason.is_none(),
         }
     }
+}
+
+/// Params de [`CONNECTION_CLOSE`] (0.49.0, #140).
+///
+/// ```
+/// use norte_proto::methods::ConnectionCloseParams;
+/// let p: ConnectionCloseParams =
+///     serde_json::from_str(r#"{"path":"sftp://host/casa"}"#).expect("params");
+/// assert_eq!(p.path.scheme(), "sftp");
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionCloseParams {
+    /// Una ruta CUALQUIERA de la conexión. Se cierra por
+    /// `scheme://authority`, que es como el core la tiene cacheada: el
+    /// frontend manda el sitio donde está el panel y no tiene que saber cómo
+    /// se llavea una sesión por dentro.
+    pub path: VPath,
+}
+
+/// Result de [`CONNECTION_CLOSE`].
+///
+/// ```
+/// use norte_proto::methods::ConnectionCloseResult;
+/// let r = ConnectionCloseResult { closed: true };
+/// assert!(serde_json::to_value(&r).expect("json")["closed"].as_bool().expect("bool"));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConnectionCloseResult {
+    /// `true` si había una sesión y se soltó; `false` si no había ninguna.
+    ///
+    /// No es un error: quien desconecta quiere quedarse sin conexión, y ya lo
+    /// está. Lo dice para que un frontend pueda distinguir «la he cerrado» de
+    /// «no había nada», que es la diferencia entre un mensaje útil y uno que
+    /// miente.
+    pub closed: bool,
 }
 
 /// Params de [`FS_DIR_SIZE`] (0.49.0, #139).

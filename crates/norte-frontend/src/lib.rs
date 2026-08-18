@@ -31,6 +31,7 @@ pub mod availability;
 pub mod cli;
 pub mod columns;
 pub mod columns_picker;
+pub mod connections_picker;
 pub mod compare;
 pub mod config;
 pub mod confine;

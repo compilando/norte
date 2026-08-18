@@ -36,6 +36,8 @@ struct ProtocolSchema {
     compare_verdict: CompareVerdict,
     conflict_kind: ConflictKind,
     connection_degraded: ConnectionDegraded,
+    connection_close_params: ConnectionCloseParams,
+    connection_close_result: ConnectionCloseResult,
     connection_trust_host_key_params: ConnectionTrustHostKeyParams,
     connection_trust_host_key_result: ConnectionTrustHostKeyResult,
     daemon_going_away: DaemonGoingAway,

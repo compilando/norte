@@ -56,6 +56,10 @@ pub const MENUS: &[Menu] = &[
         title: "menu-panels",
         items: &[
             "pane.switch",
+            // #140: conectar y desconectar cambian DÓNDE mira un panel, que es
+            // de lo que va este menú.
+            "pane.connect",
+            "pane.disconnect",
             "pane.mirror",
             "pane.pull",
             "pane.swap",

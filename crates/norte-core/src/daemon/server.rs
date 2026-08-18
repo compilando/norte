@@ -3559,6 +3559,33 @@ fn content_gate(
 /// misma asimetría que ya tienen los criterios de `fs.search`, y el contrato
 /// publicado en `methods::FS_COMPARE` es el código, no la taxonomía.)
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
+/// `connection.close` (0.49.0, #140): suelta la sesión remota de una ruta.
+///
+/// Gate de LECTURA sobre la ruta, que es el mismo criterio que para mirarla:
+/// cerrar una conexión no destruye datos —la siguiente operación reconecta—
+/// pero sí interrumpe a quien la estuviera usando, y quien no puede ni leer ahí
+/// no tiene por qué poder hacer eso.
+///
+/// SOLO humanos: desconectar es una decisión de quien está delante. Un agente
+/// que pudiera cerrar la sesión de su humano tendría una palanca de denegación
+/// de servicio gratis, sin que le sirva para nada de lo suyo.
+fn handle_connection_close(
+    actor: &Actor,
+    params: Option<serde_json::Value>,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::ConnectionCloseParams = parse_params(params)?;
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection closes a session",
+        ));
+    }
+    read_gate(actor, &p.path, shared)?;
+    let closed = shared.engine.close_connection(&p.path);
+    to_value(&methods::ConnectionCloseResult { closed })
+}
+
 /// `fs.dir_size` (0.49.0, #139): cuánto ocupa lo que se pida, como Task.
 ///
 /// Gate de LECTURA sobre CADA raíz, y antes de validar nada más: un actor sin
@@ -4132,6 +4159,8 @@ async fn dispatch_fs_task(
         // fs.dir_size (0.49.0, #139): sin conn_id — no enruta nada, el total
         // viaja en el progreso que ya escucha todo el mundo.
         methods::FS_DIR_SIZE => handle_fs_dir_size(req.params, &actor, shared).await,
+        // connection.close (0.49.0, #140): humano, con gate de lectura.
+        methods::CONNECTION_CLOSE => handle_connection_close(&actor, req.params, shared),
         // sync.plan (0.40.0): los PASOS son del que lo lanzó, y el plan queda
         // RETENIDO a nombre de esta conexión → conn_id por partida doble.
         methods::SYNC_PLAN => handle_sync_plan(req.params, conn_id, &actor, shared).await,

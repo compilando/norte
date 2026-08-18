@@ -614,6 +614,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(p) = &app.layout_picker {
         draw_layout_picker(frame, p, &app.theme, &app.dialog_hints.picker);
     }
+    // #140: el selector de conexiones, mismo allowlist y mismo hint que los
+    // otros dos — es una lista con cursor que no muta nada.
+    if let Some(p) = &app.connections_picker {
+        draw_connections_picker(frame, p, &app.theme, &app.dialog_hints.picker);
+    }
     if let Some(mgr) = &app.extensions {
         if let Some(panel) = &mgr.config {
             draw_plugin_config_panel(frame, panel, &app.theme, &app.dialog_hints.plugin_config);
@@ -1511,6 +1516,70 @@ const LAYOUT_PREVIEW_H: u16 = 10;
 /// disposición del usuario vive en disco, y leer un fichero en el camino de
 /// pintado —una vez por frame— es la clase de coste que no se ve hasta que la
 /// config está en un directorio de red.
+/// El selector de conexiones (#140).
+///
+/// Nombre y dirección, que es lo que hay en `connections.toml`: jamás un
+/// secreto — las credenciales se referencian (ADR 0015) y aquí no llegan. Las
+/// dos cosas se enmascaran igual: son texto de un fichero que el usuario
+/// escribió, y un nombre con bidi no reordena este cuadro.
+fn draw_connections_picker(
+    frame: &mut Frame<'_>,
+    p: &norte_frontend::connections_picker::ConnectionsPicker,
+    theme: &TuiTheme,
+    hint: &str,
+) {
+    let filas: Vec<String> = p
+        .rows()
+        .iter()
+        .map(|r| {
+            format!(
+                " {} · {}",
+                norte_encoding::mask_terminal_hazards(&r.name),
+                norte_encoding::mask_terminal_hazards(&r.url)
+            )
+        })
+        .collect();
+    // Sin conexiones se enseña POR QUÉ está vacío y dónde se ponen: una caja
+    // vacía deja al lector pensando que la tecla se rompió.
+    let cuerpo: Vec<String> = if filas.is_empty() {
+        vec![format!(" {}", t("connections-picker-empty"))]
+    } else {
+        filas
+    };
+    let ancho = cuerpo
+        .iter()
+        .map(|f| Line::raw(f.as_str()).width())
+        .max()
+        .unwrap_or(0);
+    let ancho = u16::try_from(ancho).unwrap_or(u16::MAX).max(24);
+    let pie = format!(" {hint} ");
+    let ancho = ancho.max(u16::try_from(pie.chars().count()).unwrap_or(u16::MAX));
+    let alto = u16::try_from(cuerpo.len()).unwrap_or(u16::MAX).saturating_add(2);
+    let area = centered(frame.area(), ancho.saturating_add(2), alto);
+    clear_themed(frame, area, theme);
+    let bloque = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("connections-picker-title")))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(Line::raw(pie))
+        .border_style(theme.role(Role::ModalBorder));
+    let dentro = bloque.inner(area);
+    frame.render_widget(bloque, area);
+    let lineas: Vec<Line<'_>> = cuerpo
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let l = Line::raw(f.as_str());
+            if i == p.cursor() && !p.rows().is_empty() {
+                l.style(theme.role(Role::Selection))
+            } else {
+                l
+            }
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lineas), dentro);
+}
+
 fn draw_layout_picker(
     frame: &mut Frame<'_>,
     p: &norte_frontend::layout_picker::LayoutPicker,

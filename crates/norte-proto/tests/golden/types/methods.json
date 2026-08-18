@@ -1135,5 +1135,11 @@
       "file:///a",
       "file:///b/c"
     ]
+  },
+  "connection_close_params": {
+    "path": "sftp://host/casa"
+  },
+  "connection_close_result": {
+    "closed": true
   }
 }

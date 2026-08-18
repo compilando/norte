@@ -679,6 +679,7 @@ fn route_paste(app: &mut App, text: &str) {
 
     let outcome = if (app.theme_picker.is_some()
         || app.layout_picker.is_some()
+        || app.connections_picker.is_some()
         || app.columns_picker.is_some())
         && !modal_wins(app)
     {
@@ -2636,6 +2637,26 @@ async fn run(
         if let Some(hash) = app.pending_sync_apply.take() {
             launch_sync_apply(app, backend, &mut sync_run, &hash).await;
         }
+        // #140: el panel que acaba de desconectar vuelve a casa por el mismo
+        // `cd` que cualquier otra navegación, con su ritual de vuelta.
+        if std::mem::take(&mut app.pending_disconnect_home) {
+            // A casa, o a la raíz local si el entorno no dice cuál es: lo que
+            // no puede pasar es que el panel se quede en la conexión que se
+            // acaba de cerrar.
+            let casa = std::env::home_dir()
+                .and_then(|h| norte_vfs_local::vpath_from_native(&h).ok())
+                .or_else(|| VPath::parse("file:///").ok())
+                .unwrap_or_else(|| app.focused().dir().clone());
+            let outcome = cd(app, backend, &mut events, casa).await;
+            apply_cd(
+                &app.panes,
+                &mut fill,
+                &mut decorate_fetch,
+                &mut last_probed,
+                &mut search_run,
+                outcome,
+            );
+        }
         if let Some(pending) = app.pending_shell.take() {
             let norte_tui::app::PendingShell {
                 argv,
@@ -3675,6 +3696,34 @@ async fn run(
                                 }
                             } else if app.theme_picker.is_some() && !modal_wins(app) {
                                 on_theme_picker_key(app, dialog_resolver, key.modifiers, key.code).await;
+                            } else if app.connections_picker.is_some() && !modal_wins(app) {
+                                // #140: confirmar devuelve la URL y navegar es
+                                // un `cd` como cualquier otro — con su ritual
+                                // de vuelta, para que el drenador paginado y
+                                // las sondas del pane anterior no sigan vivos.
+                                if let Some(url) =
+                                    on_connections_picker_key(app, dialog_resolver, key.modifiers, key.code)
+                                {
+                                    match VPath::parse(&url) {
+                                        Ok(destino) => {
+                                            let outcome = cd(app, backend, &mut events, destino).await;
+                                            apply_cd(
+                                                &app.panes,
+                                                &mut fill,
+                                                &mut decorate_fetch,
+                                                &mut last_probed,
+                                                &mut search_run,
+                                                outcome,
+                                            );
+                                        }
+                                        Err(_) => {
+                                            app.message = Some(ta(
+                                                "msg-connect-bad-url",
+                                                &[("url", &norte_encoding::mask_terminal_hazards(&url))],
+                                            ));
+                                        }
+                                    }
+                                }
                             } else if app.layout_picker.is_some() && !modal_wins(app) {
                                 // Mismo puesto en la cadena y el MISMO
                                 // allowlist que el selector de tema: los dos
@@ -4872,6 +4921,40 @@ async fn on_theme_picker_key(
 /// No es `async` y no persiste nada: elegir una disposición vale para esta
 /// sesión, y lo que la fija entre arranques es `[ui] layout` en tu config.
 /// Guardarla al vuelo convertiría una prueba en un cambio permanente.
+/// Teclas del selector de conexiones (#140): mismo reparto y mismo allowlist
+/// que el de disposiciones. Devuelve la URL elegida, si se confirmó.
+fn on_connections_picker_key(
+    app: &mut App,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) -> Option<String> {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return None;
+    }
+    let chord = chord_from_crossterm(mods, code)?;
+    let cmd = match resolver.push(chord) {
+        Resolution::Run { command: cmd, .. } => cmd,
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
+            resolver.reset();
+            return None;
+        }
+        Resolution::Reset => return None,
+    };
+    if !ALLOW_PICKER.contains(&cmd.as_str()) {
+        return None;
+    }
+    let action = match cmd.as_str() {
+        "dialog.up" => PickerAction::Up,
+        "dialog.down" => PickerAction::Down,
+        "dialog.confirm" => PickerAction::Confirm,
+        "dialog.cancel" => PickerAction::Cancel,
+        _ => return None,
+    };
+    app.connections_picker_input(action)
+}
+
 fn on_layout_picker_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code: KeyCode) {
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.quit = true;
@@ -11011,6 +11094,36 @@ fn submit_command_line(app: &mut App, cmd: &str) {
 /// con permiso de escritura en el padre puede cambiar el directorio por un
 /// symlink. Cerrarlo de verdad pide `openat`/`fchdir` y no lo hace ninguna
 /// otra ruta de norte; está dicho en los límites honestos del tema de ayuda.
+/// Cierra la sesión del panel con foco y lo devuelve a casa (#140).
+///
+/// Las dos mitades importan y en este orden: primero se suelta la sesión
+/// —mientras la ruta del panel sigue siendo la remota, que es de donde sale la
+/// clave— y después se navega. Al revés habría que recordar de dónde se venía.
+///
+/// En un panel LOCAL no hay nada que cerrar y se dice: una tecla que contesta
+/// «hecho» sobre algo que no ha hecho nada enseña a no fiarse del mensaje.
+async fn desconectar(app: &mut App, backend: &Backend) {
+    let dir = app.focused().dir().clone();
+    if norte_vfs_local::vpath_to_native(&dir).is_ok() {
+        app.message = Some(t("msg-disconnect-local"));
+        return;
+    }
+    match backend.close_connection(&dir).await {
+        Ok(cerrada) => {
+            app.message = Some(t(if cerrada {
+                "msg-disconnect-done"
+            } else {
+                "msg-disconnect-none"
+            }));
+            // A casa: el panel no puede quedarse mirando una conexión que
+            // acaba de cerrarse. La navegación la pide el run loop en la
+            // siguiente vuelta, como cualquier otra.
+            app.pending_disconnect_home = true;
+        }
+        Err(e) => app.message = Some(error_message(&e)),
+    }
+}
+
 /// El editor sobre la entrada bajo el cursor (#133).
 ///
 /// Un editor abre un FICHERO DEL SISTEMA: sobre un pane remoto no hay ninguno
@@ -11802,6 +11915,24 @@ async fn dispatch(
                 open_viewer(app, backend, events, path).await;
             }
         }
+        // #140: elegir de `connections.toml`. Leer el fichero es del frontend
+        // —el selector no toca disco— y navegar, del run loop.
+        Command::PaneConnect => {
+            let dir = norte_core::connect::config_dir();
+            match norte_core::connect::named_connections(&dir).await {
+                Ok(filas) => app.open_connections_picker(
+                    filas
+                        .into_iter()
+                        .map(|(name, url)| norte_frontend::connections_picker::Row { name, url })
+                        .collect(),
+                ),
+                Err(e) => app.message = Some(error_message(&e)),
+            }
+        }
+        // Y desconectar SUELTA la sesión, no solo se va del panel: si no, el
+        // socket seguiría abierto hasta que la sesión venciera sola y
+        // «desconectar» sería un nombre para irse a otro sitio.
+        Command::PaneDisconnect => desconectar(app, backend).await,
         Command::PaneOpen => resolve_opener(app),
         // #133: F4 EDITA. Lo ejecuta el run loop, como el shell y como
         // `pane.open`: es él quien tiene la terminal, y suspender la TUI para

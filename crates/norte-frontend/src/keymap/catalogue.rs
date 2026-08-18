@@ -285,8 +285,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     // CUENTA, y por eso es una Task cancelable y no un campo del diálogo.
     live("pane.properties", false),
     live("pane.dir-size", false),
-    planned("pane.connect", "keymap-reason-connections", 140),
-    planned("pane.disconnect", "keymap-reason-connections", 140),
+    // #140: abrir es elegir de `connections.toml`; desconectar SUELTA la
+    // sesión de verdad, no solo se va del panel.
+    live("pane.connect", false),
+    live("pane.disconnect", false),
 ];
 
 /// The entry for `name`, or `None` if the vocabulary has never heard of it —

@@ -9,6 +9,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Opening and closing a connection from the keyboard.** `pane.connect`
+  (Ctrl+N in the Total Commander and Krusader presets) lists what is in your
+  `connections.toml` — name and address, never a password — and takes the panel
+  to the one you pick. `pane.disconnect` (Ctrl+Shift+D) does both things its
+  name promises: it releases the session, so the socket closes now instead of
+  when it eventually times out, and sends the panel home. On a local panel it
+  says there is nothing to close rather than answering "done" (#140).
+
 - **F4 edits.** It opened the file with the system handler, which is a
   different thing and is what #133 was about. `pane.edit` now hands the file to
   your editor — `$VISUAL`, then `$EDITOR`, then `vi` — and steps aside while it

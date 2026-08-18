@@ -1043,6 +1043,8 @@ pub struct App {
     /// Selector de disposición abierto (F9 → `layout.pick`): None = cerrado.
     /// El modelo vive en norte-frontend (regla 7); aquí solo se guarda.
     pub layout_picker: Option<norte_frontend::layout_picker::LayoutPicker>,
+    /// El selector de conexiones (#140), si está abierto.
+    pub connections_picker: Option<norte_frontend::connections_picker::ConnectionsPicker>,
     /// Overlay del picker de columnas (#108 7a): mismo patrón que
     /// `theme_picker` — un Option en App, NO una variante de Modal (Modal es
     /// confirmación; esto es lista con cursor). El modelo vive en
@@ -1196,6 +1198,12 @@ pub struct App {
     /// 0049). Un `Box` porque es el mayor de los `pending_*` con diferencia y
     /// clippy mide el `App` entero.
     pub pending_sync_apply: Option<Box<norte_proto::methods::PlanHash>>,
+    /// El panel acaba de desconectar y hay que llevarlo a casa (#140).
+    ///
+    /// Bandera y no la navegación en sitio, por lo mismo que el resto de esta
+    /// familia: navegar es del run loop —tiene el backend, el flujo de eventos
+    /// y el ritual de la vuelta— y el despacho solo decide QUÉ hay que hacer.
+    pub pending_disconnect_home: bool,
     /// Reinterpretación de nombres (#57) del lado ORIGEN, congelada junto con
     /// [`Self::pending_sync`] y no cuando el run loop abre el panel: entre una
     /// cosa y la otra el lector puede haber pulsado `Alt+E`, y un plan que se
@@ -2122,6 +2130,7 @@ impl App {
             theme: crate::theme::TuiTheme::default(),
             theme_picker: None,
             layout_picker: None,
+            connections_picker: None,
             columns_picker: None,
             extensions: None,
             lua_pending_trust: None,
@@ -2141,6 +2150,7 @@ impl App {
             sync: None,
             pending_sync: None,
             pending_sync_apply: None,
+            pending_disconnect_home: false,
             pending_sync_encoding: (None, None),
             // Fail-CLOSED: el `App` de un test no tiene backend, y ofrecer
             // sincronizar por defecto convertiría cada test en un permiso.
@@ -3564,6 +3574,45 @@ impl App {
         self.layout_picker = Some(norte_frontend::layout_picker::LayoutPicker::open(
             del_usuario,
         ));
+    }
+
+    /// Abre el selector de conexiones (#140) con lo que haya en
+    /// `connections.toml`. Leerlo es del frontend: este tipo no toca disco.
+    pub fn open_connections_picker(
+        &mut self,
+        filas: Vec<norte_frontend::connections_picker::Row>,
+    ) {
+        self.connections_picker = Some(
+            norte_frontend::connections_picker::ConnectionsPicker::open(filas),
+        );
+    }
+
+    /// Teclas del selector de conexiones. Confirmar devuelve la URL elegida
+    /// —navegar es del run loop, que es quien tiene el backend— y cerrar el
+    /// selector es parte de confirmar: la conexión se pide una vez.
+    pub fn connections_picker_input(&mut self, action: PickerAction) -> Option<String> {
+        match action {
+            PickerAction::Up => {
+                if let Some(p) = &mut self.connections_picker {
+                    p.up();
+                }
+                None
+            }
+            PickerAction::Down => {
+                if let Some(p) = &mut self.connections_picker {
+                    p.down();
+                }
+                None
+            }
+            PickerAction::Confirm => self
+                .connections_picker
+                .take()
+                .and_then(|p| p.chosen().map(String::from)),
+            PickerAction::Cancel => {
+                self.connections_picker = None;
+                None
+            }
+        }
     }
 
     /// La pantalla de AHORA como cuerpo de sesión (L2).
