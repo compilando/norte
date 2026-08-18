@@ -73,14 +73,49 @@ fn un_hueco_que_el_layout_no_tiene_no_rompe_la_aplicacion() {
 }
 
 /// Un cuerpo corrupto no deja pantalla en blanco: se ignora y queda el layout
-/// de la config, con un aviso.
+/// de la config, con un aviso. Y se SIGUE escribiendo: lo que había ilegible
+/// ya está perdido, y no volver a guardar nunca sería peor.
 #[test]
 fn un_cuerpo_corrupto_deja_la_pantalla_de_la_config() {
     let mut app = app_basica();
     let antes = app.layout.clone();
-    app.apply_session_value(&serde_json::json!({ "version": 999 }));
+    // Malformado de verdad: un hueco sin `path`, que es el único campo que no
+    // tiene default.
+    app.apply_session_value(&serde_json::json!({ "slots": { "1": { "cursor": 3 } } }));
     assert_eq!(app.layout, antes);
     assert!(app.message.is_some(), "y lo dice");
+    assert!(!app.session.detached, "y esta ventana sigue escribiendo");
+}
+
+/// Un cuerpo de una versión MÁS NUEVA deja esta ventana SUELTA: no se lee y,
+/// sobre todo, no se vuelve a escribir encima. Sin esto el aviso salía y un
+/// segundo después el volcado publicaba la pantalla de la configuración sobre
+/// la sesión del binario nuevo.
+#[test]
+fn un_cuerpo_del_futuro_deja_la_ventana_suelta() {
+    let mut app = app_basica();
+    let antes = app.layout.clone();
+    app.apply_session_value(&serde_json::json!({ "version": 999 }));
+    assert_eq!(app.layout, antes);
+    assert!(app.session.detached, "no se pisa lo que no se sabe leer");
+    assert!(app.message.is_some(), "y lo dice");
+}
+
+/// Las dos versiones de esquema —la del core, que decide si un fichero se
+/// puede pisar, y la del frontend, que decide si un cuerpo se puede leer— van
+/// del brazo.
+///
+/// Viven en crates distintos porque el core no puede depender del frontend, y
+/// nada las ata en tiempo de compilación: subir SOLO la del frontend hace que
+/// el core rehúse su propio fichero en cada arranque, para siempre y detrás de
+/// un `warn!`. Éste es el único crate que ve las dos.
+#[test]
+fn las_dos_versiones_de_esquema_van_del_brazo() {
+    assert_eq!(
+        norte_core::ui_session::disk::SCHEMA_VERSION,
+        norte_frontend::session::SCHEMA_VERSION,
+        "si subes una, sube la otra"
+    );
 }
 
 /// El cursor se coloca cuando llega el listado, no antes: sobre un pane vacío

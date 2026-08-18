@@ -56,6 +56,13 @@ not inside the session, because who may write is about the connection, not
 about the screen. Agents are refused outright: an agent session has no screen
 to keep.
 
+**`owner` means "your writes will be kept", not "you asked first".** It is the
+one field a client steers by, and the three things that decide it are the same
+thing to whoever reads it: this connection claimed the session, this process
+holds the lock, and there is a file it may write. A core that answers `true`
+without a writer sends its client to save a screen every second and lose all of
+it at exit, in silence.
+
 **Between processes the same question is a `flock`** on a `session.json.lock`
 sibling — never on the file itself, which is replaced by rename. It is a
 try-lock: whoever loses runs detached, because waiting would hang a start
@@ -83,7 +90,14 @@ a temporary file and renamed with the `sync_all` before the rename. No envelope:
 the only thing anyone needs to know about the file is which body version it
 carries, and that already travels inside. A file from a newer version is
 neither read nor overwritten — losing the session a newer binary wrote does not
-come back, and respecting it costs one start from configuration. The file is
+come back, and respecting it costs one start from configuration. Those are two
+decisions and not one, and only the second is hard: refusing to *read* it and
+then starting fresh is exactly how the file gets destroyed a second later, so
+the refusal travels up as "there is no writer here". The core spawns no writer
+task, the frontend marks itself detached, and `session.get` answers
+`owner: false`. What the lock makes durable is that nobody else can put a newer
+file underneath us while we hold it, so the check is worth making once, at
+load. The file is
 0600 from the `open` and the directory 0700, because a session is the list of
 paths its reader walks. A corrupt file is a diagnosis and a start from
 configuration, never a blank screen — and the diagnosis is category and
@@ -106,12 +120,25 @@ withdrawing the path is what lets a successor start.
   keep moving without a bump.
 - A 0.47 client does not know `session.*`: it starts without the screen it left
   and never writes one. It does not break — it silently loses exactly what this
-  phase exists to keep, which is why the compatibility window moved.
+  phase exists to keep. (The compatibility window moving to {0.48, 0.47} is not
+  a decision this ADR took: `version_compatible` derives the window from
+  `PROTOCOL_VERSION` alone, so any minor bump shifts it. The only peer that
+  loses anything real is 0.46, and what it loses is the connection. An earlier
+  commit message argued the silent degradation *justified* narrowing the
+  window; that reasoning is backwards — degrading correctly is the argument for
+  compatibility, not against it — and it is corrected here.)
 - The core cannot help a client that writes nonsense into the body. It can only
   refuse the size, and it does.
 - Two numbers to keep straight instead of one: `PROTOCOL_VERSION` for the
   envelope and `SCHEMA_VERSION` for the body. That is the price of the opacity,
   and it is paid once per field added rather than once per release.
+
+- **Not journalled, and deliberately (hard rule 4).** A UI session is not a
+  mutation of the user's files: it is this process's own state, it has no
+  inverse worth recording, and journalling it would copy the list of paths its
+  reader walks into a durable audit log — the one thing the 0600 file and the
+  content-free diagnostics exist to prevent. Classified `Irreversible` in the
+  sense the rule means: losing it costs one start from configuration.
 
 ## Alternatives considered
 

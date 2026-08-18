@@ -3408,85 +3408,81 @@
       "description": "La sesión de UI tal y como cruza el wire (L2).\n\n`body` es OPACO para el core: `Node`, `SortSpec` y `ColumnId` viven en\n`norte-frontend`, que depende de este crate y no al revés, y espejarlos\naquí duplicaría cuatro tipos a través de una arista de dependencias y\nconvertiría cada campo nuevo de UI en un cambio de wire con su bump y su\ngolden. Añadir un campo al cuerpo es subir la `version` DENTRO del cuerpo,\nen el crate que le da significado.\n\n```\nuse norte_proto::methods::Session;\nlet s = Session {\n    version: 1,\n    revision: 3,\n    body: serde_json::json!({ \"slots\": {} }),\n};\nlet j = serde_json::to_value(&s).expect(\"json\");\nassert_eq!(j[\"revision\"], serde_json::json!(3));\n// Y una sesión que nadie ha escrito todavía es la revisión cero:\nassert_eq!(Session::default().revision, 0);\n```",
       "properties": {
         "body": {
+          "default": null,
           "description": "El documento. El core lo guarda, lo versiona y lo devuelve; no lo lee."
         },
         "revision": {
+          "default": 0,
           "description": "La sube el core en cada `put` aceptado. 0 = sesión nunca escrita.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
         "version": {
+          "default": 0,
           "description": "Esquema de `body`, propiedad de los frontends. 1 en esta versión; 0 en\nuna sesión que nadie ha escrito todavía.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
         }
       },
-      "required": [
-        "version",
-        "revision",
-        "body"
-      ],
       "type": "object"
     },
     "SessionGetResult": {
       "description": "Result de [`SESSION_GET`].\n\n```\nuse norte_proto::methods::{Session, SessionGetResult};\nlet r = SessionGetResult {\n    session: Session::default(),\n    owner: false,\n};\nlet j = serde_json::to_value(&r).expect(\"json\");\nassert_eq!(j[\"owner\"], serde_json::json!(false));\n```",
       "properties": {
         "owner": {
-          "description": "`true` si esta conexión es la dueña y sus `put` se aceptan.",
+          "default": false,
+          "description": "`true` si lo que esta conexión escriba se va a GUARDAR: es la dueña, y\nel core que la atiende tiene dónde y derecho a volcarlo.\n\nLas dos cosas son la misma pregunta para quien lee esto —«¿mis\nescrituras sobreviven?»— y separarlas solo servía para contestar que sí\na un cliente que iba a perderlo todo al salir.",
           "type": "boolean"
         },
         "session": {
           "$ref": "#/$defs/Session",
+          "default": {
+            "body": null,
+            "revision": 0,
+            "version": 0
+          },
           "description": "La sesión almacenada, o una vacía con `revision: 0`."
         }
       },
-      "required": [
-        "session",
-        "owner"
-      ],
       "type": "object"
     },
     "SessionPutParams": {
       "description": "Params de [`SESSION_PUT`].\n\n```\nuse norte_proto::methods::SessionPutParams;\nlet p = SessionPutParams {\n    version: 1,\n    revision: 3,\n    body: serde_json::json!({}),\n};\nlet j = serde_json::to_value(&p).expect(\"json\");\nassert_eq!(j[\"revision\"], serde_json::json!(3));\n```",
       "properties": {
         "body": {
+          "default": null,
           "description": "El documento entero."
         },
         "revision": {
+          "default": 0,
           "description": "La revisión que el cliente cree vigente. Rancia = [`crate::Error::Conflict`].",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
         "version": {
+          "default": 0,
           "description": "Esquema de `body` que escribe este cliente.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
         }
       },
-      "required": [
-        "version",
-        "revision",
-        "body"
-      ],
       "type": "object"
     },
     "SessionPutResult": {
       "description": "Result de [`SESSION_PUT`]: la revisión NUEVA.\n\n```\nuse norte_proto::methods::SessionPutResult;\nlet r = SessionPutResult { revision: 4 };\nlet j = serde_json::to_value(&r).expect(\"json\");\nassert_eq!(j[\"revision\"], serde_json::json!(4));\n```",
       "properties": {
         "revision": {
+          "default": 0,
           "description": "Revisión resultante; el cliente la guarda para su siguiente `put`.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         }
       },
-      "required": [
-        "revision"
-      ],
       "type": "object"
     },
     "ShutdownMode": {
@@ -5218,6 +5214,10 @@
     "segment",
     "semantic_hit",
     "server_info",
+    "session",
+    "session_get_result",
+    "session_put_params",
+    "session_put_result",
     "side",
     "span_wire",
     "step_reversal",
@@ -5232,10 +5232,6 @@
     "sync_mode",
     "sync_plan_done",
     "sync_plan_params",
-    "session",
-    "session_get_result",
-    "session_put_params",
-    "session_put_result",
     "sync_reason",
     "sync_report_params",
     "sync_report_result",

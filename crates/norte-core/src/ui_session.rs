@@ -33,11 +33,6 @@ pub enum PutError {
         /// Bytes serializados que traía.
         bytes: usize,
     },
-    /// Quien escribe no es la conexión dueña. Lo construye el HANDLER, que es
-    /// la capa que sabe qué conexión habla; vive aquí para que las dos capas
-    /// nombren el rechazo igual.
-    #[error("esta conexión no es la dueña de la sesión")]
-    NotOwner,
 }
 
 /// La sesión viva del daemon: una por proceso, con su revisión y su dueña.
@@ -157,6 +152,18 @@ impl SessionStore {
         Some(g.session.clone())
     }
 
+    /// Vuelve a marcar sucio lo que [`Self::take_dirty`] se llevó y no se pudo
+    /// escribir.
+    ///
+    /// Sin esto, un fallo de volcado —un disco lleno, un `EIO` de un momento—
+    /// no se reintenta jamás: la marca ya estaba limpia, así que el tick
+    /// siguiente no ve nada que hacer y la sesión se pierde hasta que el
+    /// humano vuelva a mover algo. El precio de reintentar es un `open` por
+    /// segundo mientras dure el fallo.
+    pub fn mark_dirty(&self) {
+        self.lock().dirty = true;
+    }
+
     /// El lock, recuperado de un envenenamiento: un panic en otro hilo
     /// mientras se clonaba una sesión no es razón para tirar el daemon, y el
     /// invariante que protege es «un campo consistente con otro», no memoria.
@@ -231,6 +238,70 @@ mod tests {
         let bytes = serde_json::to_vec(&justo).expect("serializa").len();
         assert!(bytes <= SESSION_BODY_MAX, "{bytes}");
         s.put(1, 0, justo).expect("justo por debajo entra");
+    }
+
+    /// El tope es un `<=`, y eso se comprueba en el byte exacto: un cuerpo de
+    /// justo [`SESSION_BODY_MAX`] entra, y uno de un byte más no.
+    #[test]
+    fn el_tope_exacto_entra_y_uno_mas_no() {
+        let s = SessionStore::default();
+        assert!(s.claim(1));
+        // `{"x":"…"}` son 8 bytes de sobre.
+        let justo = serde_json::json!({ "x": "y".repeat(SESSION_BODY_MAX - 8) });
+        assert_eq!(
+            serde_json::to_vec(&justo).expect("serializa").len(),
+            SESSION_BODY_MAX,
+            "la fixture tiene que medir el tope EXACTO"
+        );
+        s.put(1, 0, justo).expect("el tope exacto entra");
+        let pasado = serde_json::json!({ "x": "y".repeat(SESSION_BODY_MAX - 7) });
+        let e = s.put(1, 1, pasado).expect_err("uno más no");
+        assert!(matches!(e, PutError::TooLarge { .. }), "{e:?}");
+    }
+
+    /// Un volcado que falla vuelve a marcar sucio: sin esto la marca ya estaba
+    /// limpia y el tick siguiente no reintentaba NADA.
+    #[test]
+    fn un_volcado_fallido_se_vuelve_a_marcar() {
+        let s = SessionStore::default();
+        assert!(s.claim(1));
+        s.put(1, 0, body(1)).expect("put");
+        let llevada = s.take_dirty().expect("hay que escribir");
+        assert!(!s.dirty());
+        // Aquí el escritor falla (disco lleno, EIO…).
+        s.mark_dirty();
+        assert!(s.dirty(), "el siguiente tick lo reintenta");
+        assert_eq!(s.take_dirty().expect("otra vez").body, llevada.body);
+    }
+
+    /// Dos escritores a la vez sobre el mismo store: las revisiones salen
+    /// consecutivas y ninguna se pierde. El mutex es el que lo garantiza, y
+    /// esto es lo que lo fija.
+    #[test]
+    fn dos_hilos_no_se_pisan_la_revision() {
+        let s = std::sync::Arc::new(SessionStore::default());
+        assert!(s.claim(1));
+        let hilos: Vec<_> = (0..4)
+            .map(|_| {
+                let s = std::sync::Arc::clone(&s);
+                std::thread::spawn(move || {
+                    let mut hechos = 0_u32;
+                    for _ in 0..50 {
+                        let rev = s.get().revision;
+                        if s.put(1, rev, body(1)).is_ok() {
+                            hechos += 1;
+                        }
+                    }
+                    hechos
+                })
+            })
+            .collect();
+        let aceptados: u32 = hilos.into_iter().map(|h| h.join().expect("hilo")).sum();
+        assert_eq!(
+            u64::from(aceptados),
+            s.get().revision,
+            "una revisión por put aceptado, ni una de más"
+        );
     }
 
     /// La dueña es la PRIMERA que la reclama; soltarla la libera para la

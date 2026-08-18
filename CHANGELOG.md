@@ -39,8 +39,10 @@ independently through `PROTOCOL_VERSION`.
   arrangement, the directories, the cursor, the history, the sort and whether
   hidden files are shown, for every panel, and gives them back when you start
   it again — across a daemon that was replaced under you. A second window opens on the same
-  screen and then goes its own way: it says so in the status bar, and it never
-  writes over the first one's state.
+  screen and then goes its own way: it says so when it opens, and it never
+  writes over the first one's state. Neither does an older norte started on a
+  session a newer one wrote — it starts from your configuration and leaves the
+  file alone.
 
 - **Five screens to choose from, instead of one.** `orthodox` is what norte has
   always looked like and still the default. `simple` is one panel, for a narrow

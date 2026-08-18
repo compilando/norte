@@ -285,6 +285,15 @@ fn golden_error() {
                     limit: Error::LIMIT_DECOMPRESSED_BYTES.into(),
                 },
             ),
+            // El tope de la sesión de UI (0.48.0, L2). Congelado como los
+            // otros dos: el token es lo ÚNICO que distingue «recorta el
+            // historial» de «hay demasiadas entradas», y es un string.
+            (
+                "limit_exceeded_session_body",
+                Error::LimitExceeded {
+                    limit: Error::LIMIT_SESSION_BODY.into(),
+                },
+            ),
             (
                 "conflict_exists",
                 Error::Conflict {
@@ -856,10 +865,12 @@ fn golden_methods() {
     // y daemon_going_away. El relevo tiene fixture PROPIA en vez de cambiar la
     // de la parada, que es lo que deja ver de un vistazo que el mensaje de una
     // parada corriente no ha cambiado un byte.
-    // 144 → 147 en 0.48.0 (L2): + session_get_result, session_put_params y
-    // session_put_result. El GET y el PUT llevan la MISMA sesión a propósito:
-    // lo que la fixture demuestra es que el cuerpo vuelve igual que fue.
-    assert_eq!(fixtures.len(), 147, "[methods.json] fixtures sin caso Rust");
+    // 144 → 148 en 0.48.0 (L2): + session_get_result, session_get_result_empty,
+    // session_put_params y session_put_result. El GET y el PUT llevan la MISMA
+    // sesión a propósito: lo que la fixture demuestra es que el cuerpo vuelve
+    // igual que fue. La VACÍA tiene fixture propia porque es la que sale en
+    // cada primer arranque y la única con `body: null`.
+    assert_eq!(fixtures.len(), 148, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `session.*` de UI (0.48.0, L2): la pantalla que el daemon guarda.
@@ -879,6 +890,18 @@ fn check_methods_ui_session(fixtures: &BTreeMap<String, Value>) {
                 body: body.clone(),
             },
             owner: true,
+        },
+    );
+    // La sesión VACÍA, que es la respuesta más común de todo este wire: la de
+    // cada primer `session.get` de cada instalación. `body` es `null` y NO
+    // `{}` — el único caso en que no es un objeto—, así que si algo lo
+    // cambiara a `{}` ningún otro golden se enteraría.
+    check_one(
+        fixtures,
+        "session_get_result_empty",
+        &SessionGetResult {
+            session: Session::default(),
+            owner: false,
         },
     );
     check_one(
@@ -3082,6 +3105,11 @@ fn method_names_frozen() {
     // cual: los dos dejan al cliente viejo con la conducta correcta —volver a
     // leer, y no reintentar el mismo cuerpo—. MINOR.
     assert_eq!(norte_proto::Error::LIMIT_SESSION_BODY, "session-body");
+    // Los NOMBRES, como los de todas las demás familias: renombrar un método
+    // es un cambio de wire, y el doctest que los enseña no es el sitio donde
+    // este test dice que lo mira.
+    assert_eq!(methods::SESSION_GET, "session.get");
+    assert_eq!(methods::SESSION_PUT, "session.put");
     assert_eq!(norte_proto::PROTOCOL_VERSION, "0.48.0");
 }
 

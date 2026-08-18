@@ -947,6 +947,12 @@ impl crate::observer::MutationObserver for LazyJournal {
 /// Uno por proceso, y por eso es un `OnceLock`: dos almacenes vivos serían dos
 /// candidatos al mismo lock dentro del mismo proceso, y el segundo se vería
 /// suelto por culpa del primero.
+///
+/// El `state_dir` se resuelve UNA vez, así que un test que llame aquí escribe
+/// el estado REAL del usuario y le deja la sesión tomada a la norte que tenga
+/// abierta: para aislarlo hay que poner `XDG_STATE_HOME` antes de la primera
+/// llamada (el daemon tiene `state_dir` en su config justo por esto). Un
+/// cambio de `HOME` a media vida del proceso tampoco se ve.
 static UI_SESSION: std::sync::OnceLock<EmbeddedSession> = std::sync::OnceLock::new();
 
 /// El almacén embebido: la sesión viva, dónde se escribe, y el derecho a
@@ -954,11 +960,21 @@ static UI_SESSION: std::sync::OnceLock<EmbeddedSession> = std::sync::OnceLock::n
 struct EmbeddedSession {
     /// La sesión viva de ESTE proceso.
     store: Arc<crate::ui_session::SessionStore>,
-    /// Dónde volcarla. `Some` solo si además se tiene el lock: sin él no se
-    /// escribe, y guardar la ruta invitaría a hacerlo.
+    /// Dónde volcarla. `Some` solo si además se tiene el lock Y lo que había
+    /// en disco se puede pisar: sin las dos cosas no se escribe, y guardar la
+    /// ruta invitaría a hacerlo.
     dir: Option<PathBuf>,
     /// El derecho a escribir, mientras el proceso viva.
     _lock: Option<crate::ui_session::disk::SessionLock>,
+    /// Serializa `take_dirty` + volcado.
+    ///
+    /// El daemon tiene UN escritor que espera cada volcado, así que sus
+    /// escrituras salen en orden por construcción. Aquí escribe quien llama, y
+    /// dos `session_put` a la vez pueden entrelazarse —A toma la revisión 1, B
+    /// toma la 2, B escribe, A escribe— y dejar en disco la VIEJA mientras la
+    /// memoria dice la nueva. Hoy solo llama la TUI y va en serie, así que
+    /// esto es el cierre de una puerta abierta, no un incendio apagado.
+    writing: std::sync::Mutex<()>,
 }
 
 /// El almacén de este proceso, abriéndolo la primera vez.
@@ -975,19 +991,22 @@ fn ui_session_blocking() -> &'static EmbeddedSession {
                 store: Arc::new(crate::ui_session::SessionStore::default()),
                 dir: None,
                 _lock: None,
+                writing: std::sync::Mutex::new(()),
             };
         };
         let lock = crate::ui_session::disk::lock(&dir).unwrap_or_else(|e| {
             tracing::warn!(error = %e, "no se pudo tomar el lock de la sesión de UI");
             None
         });
-        let session = crate::ui_session::disk::load_or_default(&dir);
+        let recuperada = crate::ui_session::disk::load_or_default(&dir);
         EmbeddedSession {
-            // El derecho a escribir es del lock: sin él hay ruta en el disco y
-            // no hay a dónde escribir.
-            dir: lock.is_some().then_some(dir),
-            store: Arc::new(crate::ui_session::SessionStore::new(session)),
+            // El derecho a escribir son DOS cosas: el lock, y que lo que había
+            // en disco no sea de un binario más nuevo. Sin las dos hay ruta en
+            // el disco y no hay a dónde escribir.
+            dir: (lock.is_some() && recuperada.writable).then_some(dir),
+            store: Arc::new(crate::ui_session::SessionStore::new(recuperada.session)),
             _lock: lock,
+            writing: std::sync::Mutex::new(()),
         }
     })
 }
@@ -1003,7 +1022,12 @@ pub async fn session_get() -> (norte_proto::methods::Session, bool) {
         (s.store.get(), dueño)
     })
     .await
-    .unwrap_or_default()
+    // Un panic dentro del closure NO es «otra ventana tiene la sesión», que es
+    // lo que el frontend pinta con `false`: se dice, y luego se degrada.
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "la lectura de la sesión de UI se cayó");
+        (norte_proto::methods::Session::default(), false)
+    })
 }
 
 /// Reemplaza la sesión y la vuelca, si este proceso es quien escribe.
@@ -1013,11 +1037,19 @@ pub async fn session_get() -> (norte_proto::methods::Session, bool) {
 /// un daemon, y lo que hace que abrir una segunda ventana no le cueste la
 /// pantalla a la primera.
 ///
+/// **Solo para un humano.** El gate `Actor::User` de ADR 0059 lo hace el
+/// handler del daemon, y aquí no hay handler: esta función y su hermana son
+/// `pub`, así que quien las llame responde de que la superficie que hay
+/// detrás es una persona. Hoy no hay ninguna que no lo sea —ni MCP ni los
+/// plugins llegan al `Backend` embebido—, y añadir una es añadir ese gate.
+///
 /// # Errors
 ///
+/// [`norte_proto::Error::PermissionDenied`] si este proceso no es quien
+/// escribe (no tiene el lock, o el fichero es de un binario más nuevo),
 /// [`norte_proto::Error::Conflict`] con `StaleRevision` y
 /// [`norte_proto::Error::LimitExceeded`] con `LIMIT_SESSION_BODY`: las mismas
-/// dos negativas que da el daemon, para que el cliente no tenga dos caminos.
+/// tres negativas que da el daemon, para que el cliente no tenga dos caminos.
 pub async fn session_put(
     version: u32,
     revision: u64,
@@ -1025,6 +1057,14 @@ pub async fn session_put(
 ) -> Result<u64, norte_proto::Error> {
     tokio::task::spawn_blocking(move || {
         let s = ui_session_blocking();
+        // No ser quien escribe se dice ANTES de tocar la memoria, y con la
+        // misma negativa que da el daemon: aceptar el `put` y devolver una
+        // revisión nueva le prometería al llamante que ha guardado algo que no
+        // va a llegar a ningún sitio. Aquí «dueño» es el lock, porque en
+        // embebido hay UNA superficie y no hay conexiones que se disputen nada.
+        let Some(dir) = s.dir.as_ref() else {
+            return Err(norte_proto::Error::PermissionDenied);
+        };
         let rev = s.store.put(version, revision, body).map_err(|e| match e {
             crate::ui_session::PutError::Conflict { .. } => norte_proto::Error::Conflict {
                 conflict: norte_proto::ConflictKind::StaleRevision,
@@ -1032,15 +1072,20 @@ pub async fn session_put(
             crate::ui_session::PutError::TooLarge { .. } => norte_proto::Error::LimitExceeded {
                 limit: norte_proto::Error::LIMIT_SESSION_BODY.to_owned(),
             },
-            crate::ui_session::PutError::NotOwner => norte_proto::Error::PermissionDenied,
         })?;
-        if let Some(dir) = &s.dir
-            && let Some(sesion) = s.store.take_dirty()
+        // `take_dirty` y el volcado, bajo UN lock: es lo que hace que dos
+        // escrituras a la vez no dejen en disco la vieja.
+        let _turno = s
+            .writing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(sesion) = s.store.take_dirty()
             && let Err(e) = crate::ui_session::disk::write(dir, &sesion)
         {
-            // Un volcado fallido no tumba nada: la sesión viva sigue en pie y
-            // el siguiente `put` la vuelve a intentar entera.
-            tracing::warn!(error = %e, "no se pudo escribir la sesión de UI");
+            // Un volcado fallido no tumba nada, y se vuelve a marcar sucio
+            // para que el siguiente `put` lo reintente entero.
+            tracing::warn!(error = %e, "no se pudo escribir la sesión de UI; se reintenta");
+            s.store.mark_dirty();
         }
         Ok(rev)
     })

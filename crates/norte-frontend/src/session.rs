@@ -69,7 +69,7 @@ pub struct SlotState {
     #[serde(default)]
     pub forward: Vec<VPath>,
     /// Orden del listado.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "orden::deserialize")]
     pub sort: SortSpec,
     /// Columnas visibles, en su forma string estable (`name`, `attr:…`,
     /// `plugin:…/…`): la MISMA que la configuración, y no un segundo
@@ -225,6 +225,24 @@ mod columnas {
     }
 }
 
+/// El orden se lee TOLERANTE, por la misma razón que las columnas: una
+/// columna de orden que este binario no conoce —`extension`, cuando la
+/// añadan— es una preferencia de un panel, y hacerla fatal tiraría la pantalla
+/// ENTERA (disposición, rutas e historial de todos los huecos) por ella. Sin
+/// esto, añadir una variante a [`crate::sort::SortColumn`] sería un cambio de
+/// [`SCHEMA_VERSION`], que es justo lo que este esquema dice que no cuesta.
+mod orden {
+    use serde::{Deserialize as _, Deserializer};
+
+    use crate::sort::SortSpec;
+
+    /// Un orden que no se entiende es el orden por defecto, no un cuerpo roto.
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<SortSpec, D::Error> {
+        let raw = serde_json::Value::deserialize(d)?;
+        Ok(serde_json::from_value(raw).unwrap_or_default())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,16 +347,36 @@ mod tests {
         );
     }
 
+    /// Un reloj de verdad, y no el cero: con `now_ms == 0` la barrida por edad
+    /// no barre NADA, así que un test que pode en el cero no prueba que el
+    /// huérfano sobreviva — prueba que la resta no llegó a hacerse.
+    const AHORA: u64 = 1_750_000_000_000;
+
     /// Un layout que no menciona un hueco NO borra su estado: cambiar de
     /// disposición no te tira el historial.
     #[test]
     fn el_estado_huerfano_sobrevive_al_cambio_de_layout() {
         let mut b = SessionBody::default();
+        let mut huerfano = slot("file:///lejos");
+        huerfano.touched_ms = AHORA;
+        b.slots.insert(7, huerfano);
+        b.layouts
+            .insert("default".into(), Node::slot(SlotId(1), KindId::browser()));
+        b.prune(AHORA);
+        assert!(b.slots.contains_key(&7), "el huérfano se queda");
+    }
+
+    /// Y el que NADIE ha tocado nunca —`touched_ms` a cero contra un reloj de
+    /// verdad— se va: sin sellar la marca al capturar, esto se lleva por
+    /// delante todos los huérfanos en el primer volcado.
+    #[test]
+    fn un_huerfano_sin_sellar_se_barre_contra_un_reloj_de_verdad() {
+        let mut b = SessionBody::default();
         b.slots.insert(7, slot("file:///lejos"));
         b.layouts
             .insert("default".into(), Node::slot(SlotId(1), KindId::browser()));
-        b.prune(0);
-        assert!(b.slots.contains_key(&7), "el huérfano se queda");
+        b.prune(AHORA);
+        assert!(!b.slots.contains_key(&7), "sin sello no hay edad que valga");
     }
 
     /// Los huérfanos tienen tope, y cae el que hace más que no se toca.
@@ -382,8 +420,31 @@ mod tests {
         b.slots.insert(1, s);
         b.layouts
             .insert("default".into(), Node::slot(SlotId(1), KindId::browser()));
-        b.prune(MAX_AGE_MS * 10);
+        b.prune(AHORA);
         assert!(b.slots.contains_key(&1));
+    }
+
+    /// Una columna de ORDEN que este binario no conoce no tira la pantalla
+    /// entera: se cae al orden por defecto y vuelve todo lo demás.
+    #[test]
+    fn una_columna_de_orden_desconocida_no_tira_el_cuerpo() {
+        let v = serde_json::json!({
+            "version": SCHEMA_VERSION,
+            "layouts": {},
+            "slots": { "1": {
+                "path": "file:///casa",
+                "back": ["file:///antes"],
+                "sort": { "column": "extension", "dir": "asc", "dirs_first": true },
+            }},
+        });
+        let b = SessionBody::from_value(&v).expect("parsea");
+        assert_eq!(b.slots[&1].sort, SortSpec::default());
+        assert_eq!(b.slots[&1].path, vp("file:///casa"));
+        assert_eq!(
+            b.slots[&1].back,
+            vec![vp("file:///antes")],
+            "y el historial"
+        );
     }
 
     /// Un cuerpo de una versión que este binario no conoce se rehúsa: mejor

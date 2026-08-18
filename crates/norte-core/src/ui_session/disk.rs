@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use norte_proto::methods::Session;
+use norte_proto::methods::{SESSION_BODY_MAX, Session};
 
 /// La versión de cuerpo más alta que este binario sabe entregarle a su
 /// frontend.
@@ -23,7 +23,25 @@ use norte_proto::methods::Session;
 /// se carga y —esto es lo que importa— no se pisa: perder la sesión que
 /// escribió un binario más nuevo no se recupera, y el precio de respetarla es
 /// arrancar una vez desde la configuración.
+///
+/// Va del brazo de `norte_frontend::session::SCHEMA_VERSION`, que es quien le
+/// da significado al cuerpo. Los dos números viven en crates distintos porque
+/// el core NO puede depender del frontend; que no se separen lo comprueba un
+/// test en `norte-tui`, el único crate que ve los dos
+/// (`las_dos_versiones_de_esquema_van_del_brazo`).
 pub const SCHEMA_VERSION: u32 = 1;
+
+/// Lo más grande que se acepta LEER del disco.
+///
+/// `put` topa el cuerpo en [`SESSION_BODY_MAX`]; sin un tope simétrico al
+/// cargar, un fichero de varios GB —que cualquier proceso del mismo uid puede
+/// dejar mientras nadie tiene el lock— se leería entero a memoria en el
+/// arranque. El margen es para el sobre (`version`, `revision` y las llaves).
+const MAX_FILE_BYTES: u64 = SESSION_BODY_MAX as u64 + 4096;
+
+/// Distingue el temporal de DOS volcados del mismo proceso, para que
+/// `create_new` no se encuentre nunca el suyo propio.
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Qué se encontró al cargar.
 #[derive(Debug)]
@@ -59,6 +77,18 @@ pub fn path(state_dir: &Path) -> PathBuf {
 #[must_use]
 pub fn load(state_dir: &Path) -> LoadOutcome {
     let file = path(state_dir);
+    // El tope ANTES de leer: el tamaño es del inodo, no del contenido, así que
+    // decirlo no cita un solo byte del fichero.
+    if let Ok(m) = std::fs::metadata(&file)
+        && m.len() > MAX_FILE_BYTES
+    {
+        return LoadOutcome::Corrupt {
+            reason: format!(
+                "ocupa {} bytes y el tope de carga es {MAX_FILE_BYTES}",
+                m.len()
+            ),
+        };
+    }
     let raw = match std::fs::read(&file) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return LoadOutcome::Fresh,
@@ -128,24 +158,71 @@ pub fn write(state_dir: &Path, session: &Session) -> std::io::Result<()> {
     ensure_dir(state_dir)?;
     let file = path(state_dir);
     // El temporal es del MISMO directorio a propósito: `rename` solo es
-    // atómico dentro de un sistema de ficheros.
-    let tmp = file.with_extension("json.tmp");
+    // atómico dentro de un sistema de ficheros. Y lleva el pid en el nombre
+    // porque un nombre fijo es un fichero que puede estar YA ahí: `mode` solo
+    // se aplica al CREAR, así que un `.tmp` heredado se publicaría con los
+    // permisos —o el destino de enlace— que otro le dejó puestos.
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = file.with_extension(format!("json.{}.{seq}.tmp", std::process::id()));
     // El fichero ES el documento del wire, sin sobre: la misma forma que
     // `session.get` devuelve. Un formato de fichero aparte sería una segunda
     // cosa que versionar para no ganar nada — lo único que hay que saber de
     // este fichero es qué versión de cuerpo lleva, y eso ya viaja dentro.
     let bytes = serde_json::to_vec(session).map_err(std::io::Error::other)?;
-    write_private(&tmp, &bytes)?;
-    std::fs::rename(&tmp, &file)
+    // Un temporal a medias no se queda de recuerdo: el siguiente volcado con
+    // este pid lo encontraría y `create_new` fallaría para siempre.
+    if let Err(e) = write_private(&tmp, &bytes) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&tmp, &file) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    // Y el `rename` también se sincroniza: los datos del temporal estaban en
+    // disco, pero el NOMBRE nuevo vive en el directorio, y un corte de luz sin
+    // esto deja el nombre viejo apuntando a lo de antes.
+    sync_dir(state_dir);
+    Ok(())
+}
+
+/// Sincroniza el directorio para que el `rename` sobreviva a un corte.
+///
+/// Silencioso a propósito: un `fsync` de directorio que no se puede hacer
+/// —algunos sistemas de ficheros de red— no invalida un volcado que ya está
+/// escrito y renombrado.
+fn sync_dir(dir: &Path) {
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+}
+
+/// Lo que se recuperó del disco, y si se puede escribir encima.
+///
+/// El segundo campo es la mitad que importa: «no se lee» y «no se pisa» son
+/// decisiones distintas, y la primera sin la segunda es exactamente cómo un
+/// binario viejo se come la sesión de uno nuevo —arranca vacío, el cliente
+/// escribe contra la revisión 0, y el volcado siguiente publica ese vacío
+/// encima del fichero que no supo leer—.
+#[derive(Debug)]
+pub struct Restored {
+    /// La sesión recuperada, o una vacía si no había ninguna legible.
+    pub session: Session,
+    /// Si este proceso puede volcar sobre el fichero que había.
+    pub writable: bool,
 }
 
 /// La sesión de `state_dir`, contando en voz alta lo que no sea «cargada».
 ///
-/// Los tres desenlaces que no traen sesión tienen la MISMA respuesta —arrancar
-/// desde la configuración— y solo se diferencian en lo que hay que decirle al
-/// humano, así que la elección de qué hacer no es del llamante: lo único suyo
-/// es dónde vive el estado. Lo comparten el daemon y el frontend embebido, que
-/// si no dirían dos cosas distintas del mismo fichero.
+/// Tres de los cuatro desenlaces arrancan desde la configuración y se
+/// diferencian solo en lo que hay que decirle al humano, así que esa elección
+/// no es del llamante: lo único suyo es dónde vive el estado. Lo comparten el
+/// daemon y el frontend embebido, que si no dirían dos cosas distintas del
+/// mismo fichero.
+///
+/// El CUARTO —un fichero del futuro— además prohíbe escribir, y eso sí tiene
+/// que subir hasta quien decide si hay escritor: la promesa de ADR 0059 no es
+/// «no se lee», es «no se pierde».
 ///
 /// Los avisos son la mitad del valor de estos desenlaces: sin ellos, «la
 /// pantalla salió en blanco» es indistinguible de «nunca se guardó».
@@ -153,21 +230,37 @@ pub fn write(state_dir: &Path, session: &Session) -> std::io::Result<()> {
 /// Síncrono: los dos llamantes lo invocan dentro de un `spawn_blocking`
 /// (regla 2).
 #[must_use]
-pub fn load_or_default(state_dir: &Path) -> Session {
+pub fn load_or_default(state_dir: &Path) -> Restored {
     match load(state_dir) {
-        LoadOutcome::Loaded(s) => s,
-        LoadOutcome::Fresh => Session::default(),
+        LoadOutcome::Loaded(session) => Restored {
+            session,
+            writable: true,
+        },
+        LoadOutcome::Fresh => Restored {
+            session: Session::default(),
+            writable: true,
+        },
+        // Un fichero ILEGIBLE sí se pisa, y es lo contrario de una excepción:
+        // lo que llevaba dentro ya está perdido, y no volver a escribir nunca
+        // dejaría al lector sin sesión para siempre por un corte de luz de
+        // hace un mes.
         LoadOutcome::Corrupt { reason } => {
             tracing::warn!(%reason, "sesión de UI ilegible: se arranca desde la configuración");
-            Session::default()
+            Restored {
+                session: Session::default(),
+                writable: true,
+            }
         }
         LoadOutcome::FromTheFuture { version } => {
             tracing::warn!(
                 version,
                 conocida = SCHEMA_VERSION,
-                "sesión de UI de una versión más nueva: no se lee y NO se pisa"
+                "sesión de UI de una versión más nueva: no se lee y NO se escribe"
             );
-            Session::default()
+            Restored {
+                session: Session::default(),
+                writable: false,
+            }
         }
     }
 }
@@ -206,11 +299,16 @@ pub fn lock(state_dir: &Path) -> std::io::Result<Option<SessionLock>> {
     // sobre un lockfile que otro proceso tiene tomado puede fallar en Windows
     // en vez de llegar al intento de lock, que es justo la contención que esto
     // existe para resolver.
-    let handle = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(PathBuf::from(name))?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(false);
+    // Vacío y sin secretos, pero al lado de un fichero 0600: un lockfile
+    // 0644 solo cuenta a quien mire que aquí hay una sesión.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600);
+    }
+    let handle = opts.open(PathBuf::from(name))?;
     match handle.try_lock() {
         Ok(()) => Ok(Some(SessionLock { _file: handle })),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
@@ -218,15 +316,27 @@ pub fn lock(state_dir: &Path) -> std::io::Result<Option<SessionLock>> {
     }
 }
 
-/// Crea `<state_dir>` con permisos de solo-el-dueño.
+/// Crea `<state_dir>` con permisos de solo-el-dueño, y ESTRECHA el que ya
+/// estuviera abierto.
+///
+/// `DirBuilder::mode` solo se aplica al crear, así que un directorio de estado
+/// heredado de una versión anterior —o creado por otro subsistema con otro
+/// umask— se quedaría a 0755 con la sesión dentro. Es el mismo agujero que
+/// `create_dir_locked` repara en `logging`.
 fn ensure_dir(dir: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt as _;
+        use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
-            .create(dir)
+            .create(dir)?;
+        if let Ok(md) = std::fs::metadata(dir)
+            && md.permissions().mode() & 0o077 != 0
+        {
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        }
+        Ok(())
     }
     #[cfg(not(unix))]
     {
@@ -234,13 +344,19 @@ fn ensure_dir(dir: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Escribe `bytes` en `file`, creándolo a 0600 y sincronizándolo antes de
-/// devolver: quien llama va a renombrarlo acto seguido.
+/// Escribe `bytes` en `file`, creándolo NUEVO a 0600 y sincronizándolo antes
+/// de devolver: quien llama va a renombrarlo acto seguido.
+///
+/// `create_new` y no `create`: el modo de `open` solo manda cuando el fichero
+/// se CREA, así que abrir uno que ya estaba es publicar los permisos —o el
+/// enlace— que le dejó puestos quien lo dejó ahí. Con `O_NOFOLLOW` encima, un
+/// symlink en el sitio del temporal es un error y no una escritura a donde
+/// apunte.
 fn write_private(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
 
     let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
+    opts.write(true).create_new(true);
     // El modo va en el `open`, no en un `set_permissions` posterior: entre
     // crear a 0644 y ajustarlo hay una ventana en la que otro usuario del
     // sistema puede abrirlo, y lo que hay dentro son las rutas del lector.
@@ -248,6 +364,11 @@ fn write_private(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
     {
         use std::os::unix::fs::OpenOptionsExt as _;
         opts.mode(0o600);
+        // rustix y no libc, por la regla 5: la constante es la misma y viene
+        // sin `unsafe` (ver el Cargo.toml de este crate).
+        if let Ok(nofollow) = i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits()) {
+            opts.custom_flags(nofollow);
+        }
     }
     let mut f = opts.open(file)?;
     f.write_all(bytes)?;
@@ -333,6 +454,64 @@ mod tests {
             panic!("del futuro")
         };
         assert_eq!(version, SCHEMA_VERSION + 1);
+        // Y lo que hace que «no se pisa» sea verdad y no una frase: el
+        // desenlace SUBE hasta quien decide si hay escritor.
+        let r = load_or_default(d.path());
+        assert!(!r.writable, "un fichero del futuro no se escribe");
+        assert_eq!(r.session.revision, 0, "y tampoco se lee");
+    }
+
+    /// Un fichero ILEGIBLE sí se pisa: lo que llevaba ya está perdido, y no
+    /// volver a escribir jamás dejaría al lector sin sesión para siempre.
+    #[test]
+    fn un_fichero_corrupto_si_se_pisa() {
+        let d = tempfile::tempdir().expect("tmp");
+        std::fs::write(path(d.path()), b"{ esto no es json").expect("escribe");
+        assert!(load_or_default(d.path()).writable);
+    }
+
+    /// Un fichero enorme no se lee a memoria: se rehúsa por tamaño, y el
+    /// diagnóstico dice bytes, que son del inodo y no del contenido.
+    #[test]
+    fn un_fichero_gigante_no_se_carga() {
+        let d = tempfile::tempdir().expect("tmp");
+        let gordo = vec![b'x'; usize::try_from(MAX_FILE_BYTES).expect("cabe") + 1];
+        std::fs::write(path(d.path()), &gordo).expect("escribe");
+        let LoadOutcome::Corrupt { reason } = load(d.path()) else {
+            panic!("por tamaño")
+        };
+        assert!(reason.contains("bytes"), "{reason}");
+    }
+
+    /// El directorio de estado se ESTRECHA aunque ya existiera abierto: la
+    /// sesión vive dentro y `mode` solo manda al crear.
+    #[cfg(unix)]
+    #[test]
+    fn el_directorio_heredado_se_estrecha() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let d = tempfile::tempdir().expect("tmp");
+        let dir = d.path().join("estado");
+        std::fs::create_dir(&dir).expect("mkdir");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        write(&dir, &sesion(1, 1)).expect("escribe");
+        let modo = std::fs::metadata(&dir).expect("stat").permissions().mode();
+        assert_eq!(modo & 0o077, 0, "modo {modo:o}");
+    }
+
+    /// Un `.tmp` que ya estaba —de otro usuario, o apuntando a otro sitio— no
+    /// se reutiliza: el nombre lleva pid y secuencia, y el `open` es
+    /// `create_new`.
+    #[test]
+    fn un_temporal_heredado_no_se_reutiliza() {
+        let d = tempfile::tempdir().expect("tmp");
+        let viejo = path(d.path()).with_extension("json.tmp");
+        std::fs::write(&viejo, b"de otro").expect("escribe");
+        write(d.path(), &sesion(1, 1)).expect("escribe igual");
+        let LoadOutcome::Loaded(s) = load(d.path()) else {
+            panic!("cargada")
+        };
+        assert_eq!(s.revision, 1);
+        assert_eq!(std::fs::read(&viejo).expect("sigue"), b"de otro");
     }
 
     /// La escritura es atómica: no deja `.tmp` detrás.

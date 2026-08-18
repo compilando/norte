@@ -233,6 +233,15 @@ struct Shared {
     /// conexión dueña. `Arc` porque el volcado a disco la mira desde otra
     /// task. El core la guarda y no la lee (ADR 0058).
     ui_session: Arc<crate::ui_session::SessionStore>,
+    /// Si lo que se escriba en esa sesión va a LLEGAR al disco: hay
+    /// `state_dir`, este core tiene el lock, y el fichero que había no es de
+    /// una versión más nueva.
+    ///
+    /// Es lo que `session.get` contesta como `owner`, y no solo «te la
+    /// quedaste»: para el cliente las dos cosas son la misma pregunta —«¿mis
+    /// escrituras se guardan?»— y contestar que sí cuando no hay escritor es
+    /// prometer una pantalla que se pierde entera y en silencio.
+    session_persists: bool,
     /// Despierta al escritor de la sesión fuera de su tick: la última
     /// conexión que se va no debería dejar un segundo de pantalla sin volcar.
     /// `Arc` porque el escritor NO retiene el `Shared` (lo mantendría vivo).
@@ -538,8 +547,35 @@ pub struct Daemon {
     session_lock: Option<crate::ui_session::disk::SessionLock>,
     /// El escritor de la sesión, si lo hay. Se espera a que termine ANTES de
     /// soltar el lock: el sucesor de un relevo tiene que encontrar el fichero
-    /// ya escrito y el lock ya libre.
-    session_writer: Option<tokio::task::JoinHandle<()>>,
+    /// ya escrito y el lock ya libre. Y si el daemon se va por cualquier otro
+    /// camino, su `Drop` lo aborta (ver [`SessionWriter`]).
+    session_writer: Option<SessionWriter>,
+}
+
+/// El escritor de la sesión, que se PARA si su daemon muere sin apagarse.
+///
+/// Dropear un `JoinHandle` de tokio DESLIGA la task, no la para. Sin este
+/// envoltorio, un daemon que se va por un camino que no es el apagado ordenado
+/// —un `accept` que falla, un bind que se dropea, un test que abandona— suelta
+/// su `session_lock` y deja la task viva: un proceso escribiendo el fichero
+/// SIN el derecho a escribirlo, que es exactamente el segundo escritor que
+/// todo esto existe para que no haya.
+struct SessionWriter(Option<tokio::task::JoinHandle<()>>);
+
+impl SessionWriter {
+    /// El handle, para ESPERARLO en el apagado ordenado. Lo que queda ya no
+    /// aborta nada.
+    fn take(&mut self) -> Option<tokio::task::JoinHandle<()>> {
+        self.0.take()
+    }
+}
+
+impl Drop for SessionWriter {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
 }
 
 impl std::fmt::Debug for Daemon {
@@ -658,7 +694,11 @@ impl Daemon {
         // van a un pool blocking (regla 2). Sin `state_dir` no se persiste
         // nada, que es lo que quiere un test; con él, quien no consigue el
         // lock arranca CON la pantalla y sin escritor —clona y corre suelto—.
-        let (session_lock, sesion) = open_session(cfg.state_dir.clone()).await?;
+        let (session_lock, sesion, escribible) = open_session(cfg.state_dir.clone()).await?;
+        // Persistir es las TRES cosas a la vez, y por eso se calcula una sola
+        // vez y en un sitio: hay dónde, se tiene el derecho, y lo que hay en
+        // disco no es de un binario más nuevo.
+        let session_persists = session_lock.is_some() && cfg.state_dir.is_some() && escribible;
         let session_flush = Arc::new(tokio::sync::Notify::new());
 
         tracing::info!(socket = %socket_path.display(), uid, "daemon enlazado");
@@ -683,6 +723,7 @@ impl Daemon {
             plugin_runtime,
             directed_feeds: Mutex::new(HashMap::new()),
             ui_session: Arc::new(crate::ui_session::SessionStore::new(sesion)),
+            session_persists,
             session_flush: Arc::clone(&session_flush),
         });
         // La salida del router de aprobaciones hacia los suscriptores. `Weak`
@@ -714,16 +755,18 @@ impl Daemon {
             .set_connection_observer(Arc::new(DaemonConnectionObserver {
                 shared: Arc::downgrade(&shared),
             }));
-        // El escritor solo existe si esta instancia es la DUEÑA del estado.
-        // Un core suelto tiene la pantalla y no la escribe: es exactamente la
-        // diferencia que el lock decide.
-        let session_writer = match (&session_lock, cfg.state_dir) {
-            (Some(_), Some(dir)) => Some(tokio::spawn(session_writer(
+        // El escritor solo existe si esta instancia es la DUEÑA del estado y
+        // lo que hay en disco se puede pisar. Un core suelto —o uno que
+        // encontró una sesión de un binario más nuevo— tiene la pantalla y no
+        // la escribe: sin este gate, «no se lee» acababa siendo «se pisa un
+        // segundo después», que es justo lo contrario de lo que promete.
+        let session_writer = match (session_persists, cfg.state_dir) {
+            (true, Some(dir)) => Some(SessionWriter(Some(tokio::spawn(session_writer(
                 Arc::clone(&shared.ui_session),
                 dir,
                 session_flush,
                 shared.shutdown.clone(),
-            ))),
+            ))))),
             _ => None,
         };
         Ok(Self {
@@ -761,10 +804,19 @@ impl Daemon {
     pub async fn run(mut self) -> Result<(), DaemonError> {
         let shared = Arc::clone(&self.shared);
         let mut idle_since = tokio::time::Instant::now();
+        // Un `accept` que falla NO sale por `?`: saliendo por ahí se saltaría
+        // el apagado ordenado de abajo, y lo que queda detrás es un escritor
+        // de sesión SUELTO —el `JoinHandle` se dropea sin abortar, o sea que
+        // la task sigue— escribiendo el fichero con el lock ya soltado. El
+        // error se guarda y se devuelve DESPUÉS de apagar.
+        let mut fallo: Option<std::io::Error> = None;
         loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
-                    let (stream, _addr) = accepted?;
+                    let (stream, _addr) = match accepted {
+                        Ok(v) => v,
+                        Err(e) => { fallo = Some(e); break }
+                    };
                     // El keepalive de inactividad NO cuenta conexiones sin
                     // autenticar (la resetea serve tras la auth); el cap
                     // anti-agotamiento corta aquí, antes de gastar nada.
@@ -797,8 +849,10 @@ impl Daemon {
         // relevo promete. El token se cancela también aquí porque el camino de
         // inactividad sale del bucle sin pasar por `daemon.shutdown`.
         shared.shutdown.cancel();
-        if let Some(writer) = self.session_writer.take() {
-            let _ = writer.await;
+        if let Some(mut writer) = self.session_writer.take()
+            && let Some(handle) = writer.take()
+        {
+            let _ = handle.await;
         }
         drop(self.session_lock.take());
 
@@ -840,7 +894,10 @@ impl Daemon {
         }
         let _ = socket_path;
         tracing::info!("daemon apagado");
-        Ok(())
+        match fallo {
+            Some(e) => Err(DaemonError::Io(e)),
+            None => Ok(()),
+        }
     }
 
     /// Token que CANCELA las tasks vivas además de apagar (segunda señal
@@ -865,11 +922,12 @@ async fn open_session(
     (
         Option<crate::ui_session::disk::SessionLock>,
         norte_proto::methods::Session,
+        bool,
     ),
     DaemonError,
 > {
     let Some(dir) = state_dir else {
-        return Ok((None, norte_proto::methods::Session::default()));
+        return Ok((None, norte_proto::methods::Session::default(), false));
     };
     tokio::task::spawn_blocking(move || {
         // Un lock que no se puede ni intentar (permisos, disco lleno) NO
@@ -879,7 +937,8 @@ async fn open_session(
             tracing::warn!(error = %e, "no se pudo tomar el lock de la sesión de UI");
             None
         });
-        (lock, crate::ui_session::disk::load_or_default(&dir))
+        let r = crate::ui_session::disk::load_or_default(&dir);
+        (lock, r.session, r.writable)
     })
     .await
     .map_err(|e| DaemonError::Io(std::io::Error::other(e)))
@@ -893,8 +952,11 @@ async fn open_session(
 /// conexión, y el token lo termina — con un último volcado, que es el del
 /// relevo y la razón de ser de todo esto.
 ///
-/// Un fallo de escritura es un `warn!` y el siguiente tick reintenta: perder
-/// una sesión es una tarde mala, y tumbar el daemon por ella es peor.
+/// Un fallo de escritura es un `warn!`, la marca de sucio VUELVE a ponerse y
+/// el siguiente tick reintenta: perder una sesión es una tarde mala, y tumbar
+/// el daemon por ella es peor. (Reintentar de verdad es lo que hace
+/// `mark_dirty`; sin él la marca ya estaba limpia y el aviso era todo lo que
+/// pasaba.)
 async fn session_writer(
     store: Arc<crate::ui_session::SessionStore>,
     dir: PathBuf,
@@ -929,8 +991,17 @@ async fn flush_session(store: &Arc<crate::ui_session::SessionStore>, dir: &Path)
         tokio::task::spawn_blocking(move || crate::ui_session::disk::write(&dir, &session)).await;
     match escrito {
         Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::warn!(error = %e, "no se pudo escribir la sesión de UI"),
-        Err(e) => tracing::warn!(error = %e, "el volcado de la sesión de UI se cayó"),
+        // Lo sucio se lo llevó `take_dirty`, así que un fallo SIN volver a
+        // marcarlo no se reintenta nunca: el tick siguiente no vería nada que
+        // hacer y la pantalla se perdería por un `ENOSPC` de un segundo.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "no se pudo escribir la sesión de UI; se reintenta");
+            store.mark_dirty();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "el volcado de la sesión de UI se cayó; se reintenta");
+            store.mark_dirty();
+        }
     }
 }
 
@@ -2424,7 +2495,13 @@ fn handle_session_get(
             "only a human (non-agent) connection has a UI session",
         ));
     }
-    let owner = shared.ui_session.claim(conn_id);
+    // Dueña Y con dónde escribir: un daemon sin `state_dir`, sin el lock, o
+    // que encontró en disco una sesión de un binario más nuevo, acepta `put`
+    // en memoria y no persiste nada. Decir `owner: true` ahí sería mandar al
+    // cliente a escribir cada segundo una pantalla que se pierde al salir, sin
+    // un solo aviso — y el brazo embebido ya contestaba lo correcto, así que
+    // era además la MISMA pregunta con dos respuestas.
+    let owner = shared.ui_session.claim(conn_id) && shared.session_persists;
     to_value(&methods::SessionGetResult {
         session: shared.ui_session.get(),
         owner,
@@ -2434,8 +2511,9 @@ fn handle_session_get(
 /// `session.put` (L2, 0.48.0) — reemplaza la sesión entera.
 ///
 /// Tres negativas, y cada una dice algo distinto al cliente:
-/// `INVALID_REQUEST` si no es la dueña (releer no arregla nada: esta conexión
-/// no escribe nunca), [`norte_proto::Error::Conflict`] con
+/// [`norte_proto::Error::PermissionDenied`] si no es la dueña (releer no
+/// arregla nada: esta conexión no escribe nunca),
+/// [`norte_proto::Error::Conflict`] con
 /// [`norte_proto::ConflictKind::StaleRevision`] si trae una revisión pasada
 /// (releer SÍ lo arregla) y [`norte_proto::Error::LimitExceeded`] con
 /// [`norte_proto::Error::LIMIT_SESSION_BODY`] si el cuerpo pasa del tope
@@ -2457,10 +2535,11 @@ fn handle_session_put(
     // conexión que no manda, las otras dos respuestas serían consejos falsos
     // («re-lee», «recorta») sobre una escritura que jamás se va a aceptar.
     if shared.ui_session.owner() != Some(conn_id) {
-        return Err(RpcError::protocol(
-            codes::INVALID_REQUEST,
-            "another connection owns the UI session",
-        ));
+        // Con TAXONOMÍA, como las otras dos negativas (#182): un cliente que
+        // solo tuviera la prosa inglesa no podría distinguir «no mandas» de
+        // «tus params están mal», y es la misma negativa que el brazo embebido
+        // ya daba como `PermissionDenied`.
+        return Err(RpcError::from(norte_proto::Error::PermissionDenied));
     }
     match shared.ui_session.put(p.version, p.revision, p.body) {
         Ok(revision) => to_value(&methods::SessionPutResult { revision }),
@@ -2481,12 +2560,6 @@ fn handle_session_put(
                 limit: norte_proto::Error::LIMIT_SESSION_BODY.to_owned(),
             }))
         }
-        // El store nombra `NotOwner` para que las dos capas lo llamen igual,
-        // pero lo construye ESTA, que es la que sabe qué conexión habla.
-        Err(crate::ui_session::PutError::NotOwner) => Err(RpcError::protocol(
-            codes::INVALID_REQUEST,
-            "another connection owns the UI session",
-        )),
     }
 }
 

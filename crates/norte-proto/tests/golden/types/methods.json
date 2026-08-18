@@ -1121,5 +1121,13 @@
     "label": "//4=",
     "mount": "file:///media/informe%FF%FE",
     "read_only": true
+  },
+  "session_get_result_empty": {
+    "owner": false,
+    "session": {
+      "body": null,
+      "revision": 0,
+      "version": 0
+    }
   }
 }

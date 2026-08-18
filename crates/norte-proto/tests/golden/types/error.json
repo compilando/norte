@@ -123,5 +123,9 @@
   },
   "journal_unavailable": {
     "kind": "journal_unavailable"
+  },
+  "limit_exceeded_session_body": {
+    "kind": "limit_exceeded",
+    "limit": "session-body"
   }
 }

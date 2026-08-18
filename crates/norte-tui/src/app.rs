@@ -892,8 +892,12 @@ pub enum KeyOwner {
 #[derive(Debug, Default)]
 pub struct SessionUi {
     /// Esta ventana NO es la dueña: otra la tiene, así que ésta arranca con la
-    /// misma pantalla y a partir de ahí va por su cuenta sin escribir nada. Lo
-    /// dice la barra de estado.
+    /// misma pantalla y a partir de ahí va por su cuenta sin escribir nada. Se
+    /// dice al abrir, con un mensaje (una marca permanente en la barra de
+    /// estado está pendiente, ver el issue de la fase B).
+    ///
+    /// También se pone suelta la ventana que encuentra un cuerpo de una
+    /// versión más nueva: no se lee, y sobre todo no se pisa.
     pub detached: bool,
     /// La revisión que este proceso tiene por vigente: la del último
     /// `get`/`put`. Un `put` que la traiga rancia se rehúsa, que es toda la
@@ -3670,6 +3674,16 @@ impl App {
         match norte_frontend::session::SessionBody::from_value(v) {
             Ok(body) => {
                 self.apply_session(&body);
+            }
+            // Un cuerpo de una versión MÁS NUEVA no se lee y tampoco se pisa:
+            // esta ventana se declara suelta y deja de escribir. Sin esto, el
+            // aviso salía y un segundo después el volcado publicaba encima la
+            // pantalla de la configuración — «no se lee» acabando en «se
+            // pierde», que es lo que ADR 0059 promete que no pasa.
+            Err(e @ norte_frontend::session::SessionError::FromTheFuture { .. }) => {
+                tracing::warn!(error = %e, "sesión de UI de una versión más nueva: no se escribe");
+                self.session.detached = true;
+                self.message = Some(t("msg-session-unreadable"));
             }
             Err(e) => {
                 tracing::warn!(error = %e, "sesión de UI ilegible");

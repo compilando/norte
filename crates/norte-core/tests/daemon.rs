@@ -7300,7 +7300,10 @@ async fn sync_report_ajeno_contesta_lo_mismo_que_un_id_inventado() {
 /// pregunta se la queda.
 #[tokio::test]
 async fn session_get_y_put_por_el_socket() {
-    let d = spawn_daemon(None).await;
+    // Con `state_dir`, porque `owner` significa «esto se guarda»: un daemon
+    // sin dónde escribir contesta que no, y con razón.
+    let estado = tempfile::tempdir().expect("tempdir");
+    let d = spawn_daemon_estado(estado.path()).await;
     let c = connected_client(&d).await;
     let g: methods::SessionGetResult = c
         .call(methods::SESSION_GET, &serde_json::json!({}))
@@ -7448,7 +7451,8 @@ async fn session_es_de_humanos() {
 /// `put` se rehúsa y la sesión de la dueña se queda intacta.
 #[tokio::test]
 async fn el_segundo_cliente_recibe_copia_y_no_escribe() {
-    let d = spawn_daemon(None).await;
+    let estado = tempfile::tempdir().expect("tempdir");
+    let d = spawn_daemon_estado(estado.path()).await;
     let uno = connected_client(&d).await;
     let g1: methods::SessionGetResult = uno
         .call(methods::SESSION_GET, &serde_json::json!({}))
@@ -7489,7 +7493,16 @@ async fn el_segundo_cliente_recibe_copia_y_no_escribe() {
         )
         .await
         .expect_err("quien no es dueña no escribe");
-    assert_rpc_code(&err, codes::INVALID_REQUEST);
+    // Con taxonomía y no con prosa: el cliente distingue «no mandas» de «tus
+    // params están mal» sin leer inglés — y es la misma negativa que da el
+    // brazo embebido.
+    match err {
+        ClientError::Rpc(ref rpc) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert_eq!(rpc.data, Some(Error::PermissionDenied), "{:?}", rpc.data);
+        }
+        ref other => panic!("esperaba Rpc, fue {other:?}"),
+    }
     let g3: methods::SessionGetResult = uno
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
@@ -7501,7 +7514,8 @@ async fn el_segundo_cliente_recibe_copia_y_no_escribe() {
 /// Sin esto, un cliente que muere deja la pantalla de rehén hasta el relevo.
 #[tokio::test]
 async fn al_morir_la_duena_la_sesion_queda_libre() {
-    let d = spawn_daemon(None).await;
+    let estado = tempfile::tempdir().expect("tempdir");
+    let d = spawn_daemon_estado(estado.path()).await;
     let uno = connected_client(&d).await;
     let g1: methods::SessionGetResult = uno
         .call(methods::SESSION_GET, &serde_json::json!({}))
@@ -7510,21 +7524,41 @@ async fn al_morir_la_duena_la_sesion_queda_libre() {
     assert!(g1.owner);
     drop(uno);
 
-    // La desconexión se procesa en el servidor; se reintenta hasta verla.
-    let mut dueña = false;
-    for _ in 0..50 {
-        let dos = connected_client(&d).await;
-        let g: methods::SessionGetResult = dos
-            .call(methods::SESSION_GET, &serde_json::json!({}))
-            .await
-            .expect("session.get");
-        if g.owner {
-            dueña = true;
-            break;
+    // La desconexión se procesa en el servidor; se reintenta hasta verla. El
+    // límite es de TIEMPO y no un número de vueltas: bajo carga, «50 yields»
+    // es una carrera que se pierde y un rojo intermitente.
+    let libre = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let dos = connected_client(&d).await;
+            let g: methods::SessionGetResult = dos
+                .call(methods::SESSION_GET, &serde_json::json!({}))
+                .await
+                .expect("session.get");
+            if g.owner {
+                return;
+            }
+            tokio::task::yield_now().await;
         }
-        tokio::task::yield_now().await;
-    }
-    assert!(dueña, "la sesión quedó de rehén de una conexión muerta");
+    })
+    .await;
+    assert!(
+        libre.is_ok(),
+        "la sesión quedó de rehén de una conexión muerta"
+    );
+}
+
+/// Un daemon SIN dónde escribir no dice que manda: `owner: false`, y el
+/// cliente se ve suelto en vez de escribir cada segundo una pantalla que no
+/// va a llegar a ningún disco.
+#[tokio::test]
+async fn sin_state_dir_nadie_es_duena() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let g: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(!g.owner, "sin escritor no hay dueña que prometer");
 }
 
 /// Daemon con `state_dir` propio: el que persiste la sesión de UI (L2). El
@@ -7602,6 +7636,67 @@ async fn la_sesion_sobrevive_a_un_relevo() {
     assert_eq!(g.session.body["dir"], serde_json::json!("file:///casa"));
     assert_eq!(g.session.revision, 1, "la revisión también sobrevive");
     assert_eq!(g.session.version, 1);
+}
+
+/// **La promesa de ADR 0059, de punta a punta**: una sesión que escribió un
+/// binario MÁS NUEVO no se lee y —lo que importa— no se pisa.
+///
+/// Sin el gate en el escritor, esto se rompía en un segundo y en silencio: el
+/// fichero del futuro no se cargaba, el core arrancaba en la revisión 0, el
+/// primer `put` del cliente la aceptaba, y el volcado siguiente publicaba
+/// encima. Perder la sesión de un binario nuevo contra uno viejo no se
+/// recupera, así que la afirmación es sobre los BYTES del fichero.
+#[tokio::test]
+async fn una_sesion_del_futuro_no_se_pisa_por_el_socket() {
+    let estado = tempfile::tempdir().expect("tmp");
+    let futura = methods::Session {
+        version: norte_core::ui_session::disk::SCHEMA_VERSION + 1,
+        revision: 7,
+        body: serde_json::json!({ "de": "un binario más nuevo" }),
+    };
+    norte_core::ui_session::disk::write(estado.path(), &futura).expect("escribe la del futuro");
+    let fichero = norte_core::ui_session::disk::path(estado.path());
+    let antes = std::fs::read(&fichero).expect("lee");
+
+    let d = spawn_daemon_estado(estado.path()).await;
+    let c = connected_client(&d).await;
+    let g: methods::SessionGetResult = c
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(!g.owner, "no se lee, así que tampoco se escribe");
+    assert_eq!(g.session.revision, 0, "arranca desde la configuración");
+    // Y un cliente que IGNORE `owner` tampoco la pisa: lo escrito se queda en
+    // la memoria de este core y no llega al disco.
+    let _: methods::SessionPutResult = c
+        .call(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: serde_json::json!({ "yo": "el binario viejo" }),
+            },
+        )
+        .await
+        .expect("en su propia memoria sí escribe");
+    let _: DaemonShutdownResult = c
+        .call(
+            methods::DAEMON_SHUTDOWN,
+            &DaemonShutdownParams {
+                graceful: true,
+                mode: methods::ShutdownMode::Stop,
+            },
+        )
+        .await
+        .expect("daemon.shutdown");
+    drop(c);
+    d.run.await.expect("join").expect("apagado limpio");
+
+    assert_eq!(
+        std::fs::read(&fichero).expect("lee"),
+        antes,
+        "el fichero del futuro tiene que seguir byte a byte como estaba"
+    );
 }
 
 /// El core que no tiene el lock sirve la pantalla y NO la escribe: dos cores

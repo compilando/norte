@@ -6064,6 +6064,11 @@ pub struct PluginSetConfigResult {}
 /// SOLO conexiones humanas: una sesión de agente no tiene pantalla que
 /// guardar. Un agente recibe `INVALID_REQUEST`.
 ///
+/// **No lleva params, y en 0.48 el servidor no mira los que le manden.** Un
+/// params futuro (p. ej. «lee sin reclamar») no sería aditivo por eso: un
+/// daemon 0.48 lo IGNORARÍA y reclamaría igual, así que quien lo añada tiene
+/// que hacerlo con su bump y su método o su campo comprobable.
+///
 /// ```
 /// assert_eq!(norte_proto::methods::SESSION_GET, "session.get");
 /// ```
@@ -6120,6 +6125,9 @@ pub const SESSION_BODY_MAX: usize = 1024 * 1024;
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+// Campos con default, como el resto del wire: a un par que omita uno le
+// falta un campo, no le sobra un error.
+#[serde(default)]
 pub struct Session {
     /// Esquema de `body`, propiedad de los frontends. 1 en esta versión; 0 en
     /// una sesión que nadie ha escrito todavía.
@@ -6143,10 +6151,18 @@ pub struct Session {
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+// Campos con default, como el resto del wire: a un par que omita uno le
+// falta un campo, no le sobra un error.
+#[serde(default)]
 pub struct SessionGetResult {
     /// La sesión almacenada, o una vacía con `revision: 0`.
     pub session: Session,
-    /// `true` si esta conexión es la dueña y sus `put` se aceptan.
+    /// `true` si lo que esta conexión escriba se va a GUARDAR: es la dueña, y
+    /// el core que la atiende tiene dónde y derecho a volcarlo.
+    ///
+    /// Las dos cosas son la misma pregunta para quien lee esto —«¿mis
+    /// escrituras sobreviven?»— y separarlas solo servía para contestar que sí
+    /// a un cliente que iba a perderlo todo al salir.
     pub owner: bool,
 }
 
@@ -6164,6 +6180,9 @@ pub struct SessionGetResult {
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+// Campos con default, como el resto del wire: a un par que omita uno le
+// falta un campo, no le sobra un error.
+#[serde(default)]
 pub struct SessionPutParams {
     /// Esquema de `body` que escribe este cliente.
     pub version: u32,
@@ -6183,6 +6202,9 @@ pub struct SessionPutParams {
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+// Campos con default, como el resto del wire: a un par que omita uno le
+// falta un campo, no le sobra un error.
+#[serde(default)]
 pub struct SessionPutResult {
     /// Revisión resultante; el cliente la guarda para su siguiente `put`.
     pub revision: u64,
