@@ -20,6 +20,7 @@ context = [
     "dialog.confirm",
     "dialog.collision",
     "dialog.transfer-name",
+    "dialog.transfer-dest",
     "dialog.mkdir",
 ]
 +++
@@ -102,3 +103,17 @@ contestar de carrerilla.
 > ⚠ **más nuevo** no adivina. Si a cualquiera de los dos lados le falta una fecha utilizable, esa entrada se detiene y vuelve a preguntar, en vez de reemplazarse o saltarse por corazonada.
 
 > ⚠ Las colisiones por mayúsculas se juzgan contra el **destino**, no contra el origen: `README` y `readme` conviven sin problema en Linux y caen sobre el mismo fichero en macOS o Windows, y quien decide es el destino.
+
+Cuando no hay otro panel
+
+Una disposición de un solo listado —`simple`— no tiene otro panel que sea el
+destino, y una de tres tampoco: cuál sería no es evidente. En los dos casos
+{{cmd:pane.copy}} **pregunta** en vez de fallar: abre un prompt con la
+dirección de destino, prellenada con la de este panel y en la misma forma que
+acepta `[[hotlist]]` (`file:///home/tu/trabajo`, `sftp://host/srv`). Edítale la
+cola y pulsa ⏎; a partir de ahí es la confirmación de siempre, con las mismas
+colisiones y el mismo undo.
+
+Un destino jamás se adivina. Copiar hacia un panel que no tenías en la cabeza
+es pérdida de datos silenciosa, y preguntar una vez cuesta menos que
+descubrirlo después.

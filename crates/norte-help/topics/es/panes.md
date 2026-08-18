@@ -37,6 +37,7 @@ commands = [
     "layout.preview",
     "layout.processes",
     "layout.metadata",
+    "layout.pick",
 ]
 context = ["browse"]
 +++
@@ -311,3 +312,20 @@ sigue al cursor: nombre, clase, tamaño, cuándo se modificó y lo que el provid
 ya hubiera dicho de la entrada. Para eso no lee **nada** —todo lo que enseña
 vino con el listado—, así que bajar por un directorio con él abierto no cuesta
 ni una petición.
+
+{{cmd:layout.pick}} lista las disposiciones: las cinco que norte trae
+—**orthodox** (los dos listados de siempre), **simple** (un listado),
+**krusader** (dos listados y el sidebar de sitios), **explorer** (un listado,
+sitios, visor acoplado y procesos) y **full** (todo a la vez)— y las que tengas
+guardadas en `layouts/`, dentro de tu directorio de configuración. Cada fila
+dibuja cómo quedaría la pantalla, sacado de la propia disposición y no de una
+imagen guardada al lado, así que el dibujo no puede quedarse viejo.
+
+El nombre de una disposición y el de un preset de teclas son dos ajustes
+distintos. `krusader` es los dos, y elegir la **disposición** mueve paneles sin
+cambiar ni una tecla; las teclas son `[keymap] preset`. El diálogo lo dice en
+su pie, para que la coincidencia sea una comodidad y no una trampa.
+
+Un fichero tuyo gana al de fábrica con el mismo nombre: `layouts/simple.toml`
+es lo que carga `simple`. Borra el fichero y vuelve el original. `--layout
+<nombre>` elige una para un solo arranque, sin tocar tu configuración.

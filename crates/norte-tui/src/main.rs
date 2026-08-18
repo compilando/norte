@@ -677,7 +677,9 @@ fn route_paste(app: &mut App, text: &str) {
     let (first_line, discarded) = first_pasted_line(text);
     let first_line = first_line.as_str();
 
-    let outcome = if (app.theme_picker.is_some() || app.columns_picker.is_some())
+    let outcome = if (app.theme_picker.is_some()
+        || app.layout_picker.is_some()
+        || app.columns_picker.is_some())
         && !modal_wins(app)
     {
         PasteOutcome::Ignored // pickers: navigation only, nothing to fill
@@ -777,6 +779,12 @@ fn route_paste(app: &mut App, text: &str) {
             Some(Modal::Mkdir { .. }) => {
                 for c in first_line.chars() {
                     app.mkdir_push(c);
+                }
+                PasteOutcome::Inserted
+            }
+            Some(Modal::TransferDest { .. }) => {
+                for c in first_line.chars() {
+                    app.transfer_dest_push(c);
                 }
                 PasteOutcome::Inserted
             }
@@ -1815,8 +1823,9 @@ async fn main() -> Result<()> {
     let Some(args) = args_or_exit(parsed)? else {
         return Ok(()); // `--help`/`--version`: ya impreso.
     };
-    let (cli_preset, cli_daemon, cli_socket, cli_pick, cli_cd_file) = (
+    let (cli_preset, cli_layout, cli_daemon, cli_socket, cli_pick, cli_cd_file) = (
         args.text("--preset"),
+        args.text("--layout"),
         args.has("--daemon"),
         args.path("--socket"),
         args.has("--pick"),
@@ -1908,21 +1917,14 @@ async fn main() -> Result<()> {
     // `[ui] layout`: una disposición guardada. Un layout que no carga NO deja
     // a norte sin pantalla — se avisa por la barra y se arranca con
     // `orthodox`, que es lo que el usuario tenía antes de escribir la clave.
-    if let Some(nombre) = cfg.common.ui_layout.as_deref()
-        && nombre != "orthodox"
+    // `--layout` gana a `[ui] layout`: elegir una disposición para UN arranque
+    // no debe tocar tu config, que es justo lo que hace la clave.
+    if let Some(nombre) = cli_layout
+        .as_deref()
+        .or(cfg.common.ui_layout.as_deref())
+        .filter(|n| *n != "orthodox")
     {
-        match norte_frontend::layout::config::load(
-            &config::user_config_dir().unwrap_or_default(),
-            nombre,
-        ) {
-            Ok(arbol) => app.set_layout(arbol),
-            Err(e) => {
-                app.message = Some(norte_i18n::ta(
-                    "msg-layout-load-failed",
-                    &[("name", nombre), ("err", &e.to_string())],
-                ));
-            }
-        }
+        app.apply_layout(nombre, &config::user_config_dir().unwrap_or_default());
     }
     apply_theme(&mut app, &cfg);
     // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
@@ -2159,7 +2161,7 @@ fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App, out: &mut tty::TtyOut) -
 /// Flags booleanos del TUI.
 const BOOL_FLAGS: &[&str] = &["--daemon", "--pick"];
 /// Flags con valor del TUI.
-const VALUE_FLAGS: &[&str] = &["--preset", "--socket", "--cd-file"];
+const VALUE_FLAGS: &[&str] = &["--preset", "--layout", "--socket", "--cd-file"];
 
 /// Texto de `--help`. En INGLÉS y sin Fluent a propósito: se imprime ANTES
 /// de negociar el idioma (que sale de la config, que aún no se ha leído).
@@ -2173,6 +2175,8 @@ Arguments:
 
 Options:
       --preset <NAME>    Keymap preset (orthodox|vim|cua); overrides norte.toml
+      --layout <NAME>    Layout for this run (orthodox|simple|krusader|explorer|full,
+                         or one of your own under `layouts/`); overrides norte.toml
       --daemon           Talk to the daemon instead of the embedded core
       --socket <PATH>    Daemon socket (default: $XDG_RUNTIME_DIR/norte/daemon.sock)
       --pick             print the selection, NUL-terminated, and exit
@@ -3639,6 +3643,11 @@ async fn run(
                                 }
                             } else if app.theme_picker.is_some() && !modal_wins(app) {
                                 on_theme_picker_key(app, dialog_resolver, key.modifiers, key.code).await;
+                            } else if app.layout_picker.is_some() && !modal_wins(app) {
+                                // Mismo puesto en la cadena y el MISMO
+                                // allowlist que el selector de tema: los dos
+                                // son una lista con cursor que no muta datos.
+                                on_layout_picker_key(app, dialog_resolver, key.modifiers, key.code);
                             } else if app.columns_picker.is_some() && !modal_wins(app) {
                                 // Picker de columnas (#108 7a): mismo puesto en la
                                 // cadena que el selector de tema (overlay antes que
@@ -4092,6 +4101,25 @@ async fn run(
                                             }
                                         }
                                         KeyCode::Esc if plain => app.cancel_mkdir(),
+                                        _ => {}
+                                    }
+                                    continue;
+                                }
+                                // `Modal::TransferDest`: mismo molde de texto libre.
+                                // Enter no transfiere — abre el modal de siempre
+                                // (`open_transfer_to_dir`), que es donde vive la
+                                // confirmación; un destino que no parsea deja su
+                                // diagnóstico y conserva lo tecleado.
+                                if matches!(app.modal, Some(Modal::TransferDest { .. })) {
+                                    let plain = key.modifiers.is_empty()
+                                        || key.modifiers == KeyModifiers::SHIFT;
+                                    match key.code {
+                                        KeyCode::Char(c) if plain => app.transfer_dest_push(c),
+                                        KeyCode::Backspace if plain => app.transfer_dest_pop(),
+                                        KeyCode::Enter if plain => {
+                                            let _ = app.transfer_dest_confirm();
+                                        }
+                                        KeyCode::Esc if plain => app.cancel_transfer_dest(),
                                         _ => {}
                                     }
                                     continue;
@@ -4801,6 +4829,49 @@ async fn on_theme_picker_key(
             Err(_) => {}
         }
     }
+}
+
+/// Teclas del selector de disposición: resuelve por keymap (pantalla
+/// `dialog`) y filtra por [`ALLOW_PICKER`], el MISMO allowlist que el selector
+/// de tema — los dos son una lista con cursor que no muta nada fuera de sí
+/// misma, así que Enter sí dispara. `ctrl+c` conserva su salida global,
+/// hardcodeado antes de resolver, y `F9` cierra como en el de tema.
+///
+/// No es `async` y no persiste nada: elegir una disposición vale para esta
+/// sesión, y lo que la fija entre arranques es `[ui] layout` en tu config.
+/// Guardarla al vuelo convertiría una prueba en un cambio permanente.
+fn on_layout_picker_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code: KeyCode) {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return;
+    }
+    if mods.is_empty() && code == KeyCode::F(9) {
+        app.layout_picker = None;
+        return;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return; // tecla no modelada por el keymap: ignorar
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run { command: cmd, .. } => cmd,
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
+            resolver.reset();
+            return;
+        }
+        Resolution::Reset => return,
+    };
+    if !ALLOW_PICKER.contains(&cmd.as_str()) {
+        return; // fuera del allowlist de este overlay: inerte
+    }
+    let action = match cmd.as_str() {
+        "dialog.up" => PickerAction::Up,
+        "dialog.down" => PickerAction::Down,
+        "dialog.confirm" => PickerAction::Confirm,
+        "dialog.cancel" => PickerAction::Cancel,
+        _ => return, // ya filtrado por ALLOW_PICKER; inalcanzable en la práctica
+    };
+    let dir = config::user_config_dir().unwrap_or_default();
+    app.layout_picker_input(action, &dir);
 }
 
 /// Teclas del picker de columnas (#108 7a): resuelve por keymap (pantalla
@@ -8850,6 +8921,7 @@ async fn on_dialog_key(
                 | Modal::CommandLine { .. }
                 | Modal::AiRenameInstruction { .. }
                 | Modal::SemanticQuery { .. }
+                | Modal::TransferDest { .. }
                 | Modal::TransferName { .. } => {}
                 // `AiRenamePlan` (M4-IA) SÍ es una superficie de decisión:
                 // confirmar aplica el plan REVISADO por el ejecutor
@@ -11355,6 +11427,18 @@ async fn dispatch(
         Command::LayoutPreview => app.toggle_preview(),
         Command::LayoutProcesses => app.toggle_processes(),
         Command::LayoutMetadata => app.toggle_metadata(),
+        // El listado del directorio de layouts se hace AQUÍ, fuera del
+        // runtime, y llega hecho al `App` (regla 2). Un directorio que no se
+        // puede leer da lista vacía: quedan las cinco de fábrica, que es más
+        // que nada.
+        Command::LayoutPick => {
+            let dir = config::user_config_dir().unwrap_or_default();
+            let mios =
+                tokio::task::spawn_blocking(move || norte_frontend::layout::config::list(&dir))
+                    .await
+                    .unwrap_or_default();
+            app.open_layout_picker(&mios);
+        }
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
             let plan = mirror_plan(app);
@@ -11493,10 +11577,15 @@ async fn dispatch(
             // Sin destino designado y con más de dos paneles, no se adivina:
             // una copia hacia un panel que el lector no tenía en la cabeza es
             // pérdida de datos silenciosa (ADR 0058 D7).
+            // Sin candidato al rol `target` la operación PREGUNTA (spec L1):
+            // con un solo listado no hay «el otro panel», y con tres o más no
+            // se adivina cuál — en los dos casos se teclea la dirección en vez
+            // de fallar. Adivinarla sería pérdida de datos silenciosa
+            // (ADR 0058 D7); callarse, una tecla muerta.
             if let Some(destino) = app.target_index() {
                 app.open_transfer(kind, app.focus(), destino, None);
             } else {
-                app.message = Some(norte_i18n::t("msg-layout-no-target"));
+                app.open_transfer_dest(kind);
             }
         }
         // #105: shift+F6 — rename in situ (Move al PADRE de `from`, nombre

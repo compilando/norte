@@ -2848,6 +2848,43 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
 /// pueden superar las 60 col históricas — p. ej. colisión: `[esc] … [w] más
 /// nuevo` — y truncarlos escondería teclas reales. Techo = ancho del frame
 /// menos margen; suelo = las 60 históricas. MINOR-1 (H1 close): se mide en
+/// Recorta una fila de spans a `max` CELDAS, cortando por la derecha y
+/// respetando fronteras de carácter.
+///
+/// El último span que no cabe entero se corta por caracteres (jamás por
+/// bytes): partir un carácter ancho por la mitad pinta media celda basura, y
+/// partirlo por bytes ni siquiera es UTF-8.
+fn clamp_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut queda = max;
+    for sp in spans {
+        if queda == 0 {
+            break;
+        }
+        let w = sp.content.width();
+        if w <= queda {
+            queda -= w;
+            out.push(sp);
+            continue;
+        }
+        let mut texto = String::new();
+        let mut acc = 0_usize;
+        for c in sp.content.chars() {
+            let cw = UnicodeWidthChar::width(c).unwrap_or(0);
+            if acc + cw > queda {
+                break;
+            }
+            acc += cw;
+            texto.push(c);
+        }
+        if !texto.is_empty() {
+            out.push(Span::styled(texto, sp.style));
+        }
+        break;
+    }
+    out
+}
+
 /// CELDAS de terminal (`UnicodeWidthStr::width`, mismo idioma que
 /// [`draw_nav_popup`]/[`middle_ellipsis`]), no en `chars` — un cuerpo con
 /// CJK (dos celdas por char, p. ej. un path con `日本語`) desbordaba la caja
@@ -2913,6 +2950,7 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         // Sin error caen al comodín `6` de abajo (match_same_arms).
         Modal::MarkPattern { error: Some(_), .. }
         | Modal::Mkdir { error: Some(_), .. }
+        | Modal::TransferDest { error: Some(_), .. }
         | Modal::CommandLine { error: Some(_), .. }
         | Modal::AiRenameInstruction { error: Some(_), .. }
         | Modal::SemanticQuery { error: Some(_), .. } => 7,
@@ -3095,6 +3133,17 @@ fn modal_title_body(
         Modal::Mkdir { name, error } => {
             free_text_modal_text("modal-mkdir", "modal-mkdir-hint", name, error.as_deref())
         }
+        // Mismo enmascarado: la dirección tecleada y su diagnóstico son texto
+        // de usuario, y una dirección llega por paste tan fácil como un nombre.
+        Modal::TransferDest { kind, input, error } => free_text_modal_text(
+            match kind {
+                crate::app::TransferKind::Copy => "modal-transfer-dest-copy",
+                crate::app::TransferKind::Move => "modal-transfer-dest-move",
+            },
+            "modal-transfer-dest-hint",
+            input,
+            error.as_deref(),
+        ),
         // M4-IA: mismo enmascarado que mkdir — instrucción y error son texto
         // de usuario (paste con bidi/invisibles incluido).
         // #135: mismo enmascarado que la instrucción IA — la línea de
@@ -5598,6 +5647,15 @@ fn entry_item<'a>(
             let body_w = name_w.saturating_sub(otros);
             let recortado = middle_ellipsis(&spans[2].content, body_w);
             spans[2] = Span::styled(recortado, spans[2].style);
+        }
+        let usado: usize = spans.iter().map(|sp| sp.content.width()).sum();
+        // Ni con el nombre recortado a cero cabe siempre: en una columna de
+        // una o dos celdas —lo que deja `full` en un terminal de 40— el
+        // canalón y el badge ya la llenan solos. Se recorta el bloque ENTERO
+        // por la derecha. Antes esto era un `debug_assert`, que en tests es un
+        // panic y en release una fila pintando fuera de su columna.
+        if usado > name_w {
+            spans = clamp_spans(std::mem::take(&mut spans), name_w);
         }
         let usado: usize = spans.iter().map(|sp| sp.content.width()).sum();
         debug_assert!(

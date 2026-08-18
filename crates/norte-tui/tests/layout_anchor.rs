@@ -672,3 +672,110 @@ fn la_geometria_declarada_coincide_con_lo_pintado_con_el_sidebar_abierto() {
         );
     }
 }
+
+/// Cada preset, pintado, a dos tamaños. El grande es la pantalla de verdad; el
+/// pequeño es donde tres columnas ya no caben, así que es el que ejercita el
+/// colapso — el camino que ningún test de `resolve` a 100x30 toca.
+///
+/// Dos cosas que los snapshots dejan ESCRITAS y conviene leer como lo que son:
+///
+/// - La hoja de detalles sale con «nada bajo el cursor». No es un fallo: la
+///   llena el run loop cada vuelta (`metadata::want`), y aquí solo se pinta un
+///   frame. Lo que la hoja enseña de verdad lo fijan los tests de `metadata`.
+/// - A 40x10, `explorer` y `full` se quedan sin listado visible: los tamaños
+///   FIJOS (16 del sidebar, 30 de la columna derecha, 8 de procesos) se
+///   respetan aunque el hermano ponderado caiga por debajo de su mínimo, que
+///   es la regla del motor. Un layout que en un terminal diminuto no enseña
+///   ni un listado es deuda —#229—, no la conducta que queremos.
+#[test]
+fn los_cinco_presets_pintan_lo_que_dicen() {
+    for name in norte_frontend::layout::presets::NAMES {
+        for (w, h) in [(80_u16, 24_u16), (40, 10)] {
+            let mut app = app_de_prueba_con(60);
+            app.set_layout(norte_frontend::layout::presets::tree(name).expect("de fábrica"));
+            let lineas = pintar_en(&mut app, w, h);
+            assert_eq!(lineas.len(), h as usize, "{name} {w}x{h}");
+            insta::assert_snapshot!(format!("preset-{name}-{w}x{h}"), lineas.join("\n"));
+        }
+    }
+}
+
+/// Con UN listado no hay «el otro panel», así que una copia no tiene destino
+/// por defecto. La regla de L1 es que la operación PREGUNTA — abre el prompt
+/// de dirección — en vez de fallar. `simple` es el primer preset donde eso
+/// deja de ser hipotético, y este test es lo que impide que vuelva a ser un
+/// mensaje de error.
+#[test]
+fn con_un_solo_listado_una_copia_pregunta_el_destino() {
+    use norte_tui::app::{Modal, TransferKind};
+
+    let mut app = app_de_prueba_con(3);
+    app.set_layout(norte_frontend::layout::presets::tree("simple").expect("s"));
+    let _ = pintar(&mut app);
+    assert_eq!(app.panes.len(), 1, "un solo listado");
+    assert_eq!(app.target_index(), None, "y por tanto ningún destino");
+
+    // El mismo camino que toma F5 cuando `target_index()` no contesta.
+    app.open_transfer_dest(TransferKind::Copy);
+    let Some(Modal::TransferDest { kind, input, error }) = &app.modal else {
+        panic!("pregunta la dirección en vez de fallar: {:?}", app.modal)
+    };
+    assert_eq!(*kind, TransferKind::Copy);
+    assert_eq!(
+        input,
+        &app.panes[0].dir().to_wire(),
+        "prellenado con la dirección del propio panel"
+    );
+    assert!(error.is_none());
+}
+
+/// Confirmar el prompt no transfiere: abre el modal que habría abierto un F5
+/// con dos paneles. Un segundo camino para someter una transferencia es un
+/// camino que se queda sin confirmación, sin colisión y sin undo.
+#[test]
+fn confirmar_el_destino_abre_el_modal_de_siempre() {
+    use norte_tui::app::{Modal, TransferKind};
+
+    let mut app = app_de_prueba_con(3);
+    app.set_layout(norte_frontend::layout::presets::tree("simple").expect("s"));
+    let _ = pintar(&mut app);
+    app.open_transfer_dest(TransferKind::Copy);
+    for _ in 0..app.panes[0].dir().to_wire().chars().count() {
+        app.transfer_dest_pop();
+    }
+    for c in "file:///otro".chars() {
+        app.transfer_dest_push(c);
+    }
+    assert!(app.transfer_dest_confirm(), "la dirección parsea");
+
+    let Some(Modal::TransferName { kind, to_dir, .. }) = &app.modal else {
+        panic!("el modal de siempre: {:?}", app.modal)
+    };
+    assert_eq!(*kind, TransferKind::Copy);
+    assert_eq!(to_dir.to_wire(), "file:///otro");
+}
+
+/// Una dirección que no parsea CONSERVA lo tecleado y deja su diagnóstico: el
+/// prompt no se cierra tragándose la operación.
+#[test]
+fn un_destino_que_no_es_una_direccion_deja_el_prompt_abierto() {
+    use norte_tui::app::{Modal, TransferKind};
+
+    let mut app = app_de_prueba_con(3);
+    app.set_layout(norte_frontend::layout::presets::tree("simple").expect("s"));
+    let _ = pintar(&mut app);
+    app.open_transfer_dest(TransferKind::Move);
+    for _ in 0..app.panes[0].dir().to_wire().chars().count() {
+        app.transfer_dest_pop();
+    }
+    for c in "/home/yo".chars() {
+        app.transfer_dest_push(c);
+    }
+    assert!(!app.transfer_dest_confirm(), "una ruta local no es wire");
+
+    let Some(Modal::TransferDest { input, error, .. }) = &app.modal else {
+        panic!("sigue abierto: {:?}", app.modal)
+    };
+    assert_eq!(input, "/home/yo", "lo tecleado sobrevive");
+    assert!(error.is_some(), "y dice por qué");
+}

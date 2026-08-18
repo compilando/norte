@@ -37,6 +37,7 @@ commands = [
     "layout.preview",
     "layout.processes",
     "layout.metadata",
+    "layout.pick",
 ]
 context = ["browse"]
 +++
@@ -305,3 +306,20 @@ the cursor: name, kind, size, when it was last modified, and whatever the
 provider already said about the entry. It reads **nothing** to do it —
 everything it shows arrived with the listing — so walking down a directory with
 it open costs no requests at all.
+
+{{cmd:layout.pick}} lists the layouts: the five norte ships with — **orthodox**
+(the two listings you already know), **simple** (one listing), **krusader**
+(two listings and the places sidebar), **explorer** (one listing, sidebar,
+docked viewer and processes) and **full** (everything at once) — plus whatever
+you have saved in `layouts/` inside your config directory. Each row draws what
+the screen would look like, worked out from the layout itself rather than from
+a picture stored beside it, so the drawing cannot go stale.
+
+A layout name and a keymap preset name are two different settings. `krusader`
+is both, and choosing the **layout** moves panels around without rebinding a
+single key; the keys are `[keymap] preset`. The dialog says so at the foot, so
+that the coincidence is a convenience and not a trap.
+
+A file of yours wins over the factory layout of the same name: `layouts/simple.toml`
+is what `simple` loads. Delete the file to get the original back. `--layout <name>`
+picks one for a single run without touching your config.

@@ -140,6 +140,7 @@ commands! {
     "layout.preview" => LayoutPreview,
     "layout.processes" => LayoutProcesses,
     "layout.metadata" => LayoutMetadata,
+    "layout.pick" => LayoutPick,
     "pane.mirror" => PaneMirror,
     "pane.pull" => PanePull,
     "pane.swap" => PaneSwap,

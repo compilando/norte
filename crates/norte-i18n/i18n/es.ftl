@@ -36,6 +36,12 @@ modal-mkdir-hint = nombre del directorio nuevo
 modal-transfer-name-copy = Copiar a
 modal-transfer-name-move = Mover a
 modal-transfer-name-hint = nombre en el destino (edítalo para renombrar)
+# El destino tecleado: F5/F6 cuando no hay otro panel al que copiar (la
+# disposición `simple`). La dirección va en forma wire, la misma que acepta
+# `[[hotlist]]`, prellenada con la del propio panel.
+modal-transfer-dest-copy = Copiar a la dirección
+modal-transfer-dest-move = Mover a la dirección
+modal-transfer-dest-hint = dirección, por ejemplo file:///home/tu/trabajo
 # `pane.command-line` (#135): el prompt de texto libre cuyo Enter corre
 # `$SHELL -c CMD` en el directorio del pane, con la TUI suspendida. Mismo
 # molde que los prompts de mkdir/renombrado IA.
@@ -621,6 +627,7 @@ menu-item-layout-places = Panel de sitios
 menu-item-layout-preview = Visor acoplado
 menu-item-layout-processes = Panel de procesos
 menu-item-layout-metadata = Panel de detalles
+menu-item-layout-pick = Disposición...
 menu-item-pane-tab-new = Abrir pestaña
 menu-item-pane-tab-close = Cerrar pestaña
 menu-item-pane-tab-next = Pestaña siguiente
@@ -676,9 +683,15 @@ help-cmd-layout-places = enseñar u ocultar el panel de sitios
 help-cmd-layout-preview = enseñar u ocultar el visor acoplado
 help-cmd-layout-processes = muestra u oculta el panel de procesos
 help-cmd-layout-metadata = muestra u oculta el panel de detalles
+help-cmd-layout-pick = elige una disposición
 msg-layout-last-panel = no se puede cerrar el último panel
-msg-layout-no-target = con más de dos paneles hay que fijar el destino
+msg-transfer-dest-invalid = eso no es una dirección: {$err}
 msg-layout-load-failed = no se pudo cargar el layout «{$name}»: {$err}
+msg-layout-applied = disposición aplicada: { $name }
+layout-picker-title = Disposición
+layout-picker-factory = de fábrica
+layout-picker-mine = tuya
+layout-picker-keymap-note = la disposición no cambia tus teclas (eso es [keymap] preset)
 help-cmd-cursor-up = subir el cursor
 help-cmd-cursor-down = bajar el cursor
 help-cmd-cursor-page-up = subir una página
