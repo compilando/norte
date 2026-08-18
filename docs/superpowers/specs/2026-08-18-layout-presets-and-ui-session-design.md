@@ -87,19 +87,26 @@ orthodox (today, the default)      simple
 krusader                           explorer
 ┌───┬─────┬─────┐                  ┌───┬──────┬─────┐
 │pla│ brow│ brow│                  │pla│ brow │ pre │
-│   ├─────┴─────┤                  │   ├──────┴─────┤
-│   │   tasks   │                  │   │ processes  │
-└───┴───────────┘                  └───┴────────────┘
+├───┴─────┴─────┤                  ├───┴──────┴─────┤
+│     tasks     │                  │   processes    │
+└───────────────┘                  └────────────────┘
 
 full
 ┌───┬─────┬─────┬─────┐
 │pla│ brow│ brow│ pre │
 │   │     │     ├─────┤
 │   │     │     │ met │
-│   ├─────┴─────┴─────┤
-│   │    processes    │
-└───┴─────────────────┘
+├───┴─────┴─────┴─────┤
+│      processes      │
+└─────────────────────┘
 ```
+
+The sidebar sits beside the **panes**, not beside the chrome, and the task
+strip runs the full width under it. That is not a drawing choice: it is exactly
+what `Node::dock` produces from `orthodox` today, and the cheapest possible
+test says so — `orthodox` docked with a `places` slot **is** `krusader`. A
+preset that could not be reached by pressing keys would be a second, silent
+definition of what docking means.
 
 | name | what it is for |
 | --- | --- |
@@ -202,10 +209,15 @@ never the destination of a copy.
 ### Picking a layout
 
 ```text
-layout.pick     open the picker
-layout.use      by name, from the palette and the CLI
+layout.pick                           open the picker
 layout.processes, layout.metadata     toggle those two panels
+ntc --layout <name>                   by name, beside the existing --preset
 ```
+
+There is no `layout.use <name>` command. The catalogue maps a chord to a
+command id with no arguments, and inventing a parameterised command for this
+would be a new concept in the keymap for one caller. By name is what
+`[ui] layout` and the flag are for; the picker is what the keyboard gets.
 
 The picker lists the five factory layouts and whatever is in
 `<config>/layouts/*.toml`, each with an **ASCII preview rendered from the tree**
