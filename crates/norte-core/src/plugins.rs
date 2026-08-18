@@ -2185,6 +2185,41 @@ header = "Size"
         );
     }
 
+    /// #241: un marcador que es un SYMLINK no cuenta, ni colgando.
+    ///
+    /// `ln -s /nada /tmp/.git` — y crear un nombre en `/tmp` puede cualquiera,
+    /// el sticky bit solo impide borrar los ajenos — hacía que todo panel bajo
+    /// `/tmp` le entregase al plugin el `/tmp` entero. Un `.git` legítimo es un
+    /// directorio o el fichero `gitdir:` de un worktree; enlace, nunca.
+    #[test]
+    fn un_marcador_que_es_symlink_no_abre_el_ancestro() {
+        let raiz = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/no-existe", raiz.path().join(".git")).unwrap();
+        std::fs::create_dir(raiz.path().join("sub")).unwrap();
+        let dir = crate::policy::local_root_vpath(&raiz.path().join("sub")).unwrap();
+
+        let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
+        let sesion = mint.mint_for(&dir, Some(".git"), true).expect("acuña");
+        assert!(
+            sesion.as_ref().prefix.is_empty(),
+            "no se subió: la raíz es el directorio visible, no el ancestro"
+        );
+    }
+
+    /// Y el fichero `gitdir:` de un worktree SÍ cuenta: es un `.git` de verdad,
+    /// y exigir un directorio habría roto los worktrees y los submódulos.
+    #[test]
+    fn un_marcador_que_es_fichero_si_abre_el_ancestro() {
+        let raiz = tempfile::tempdir().unwrap();
+        std::fs::write(raiz.path().join(".git"), b"gitdir: /otro/sitio").unwrap();
+        std::fs::create_dir(raiz.path().join("sub")).unwrap();
+        let dir = crate::policy::local_root_vpath(&raiz.path().join("sub")).unwrap();
+
+        let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
+        let sesion = mint.mint_for(&dir, Some(".git"), true).expect("acuña");
+        assert_eq!(sesion.as_ref().prefix, b"sub");
+    }
+
     /// Sin `climb` no se sube: un agente acotado a su scope no gana un ancestro
     /// porque el plugin declare un marcador.
     #[test]
@@ -2617,7 +2652,18 @@ impl LocationMint {
             Some(marker) => self.climb_to_marker(dir, &native, marker),
             None => (native, Vec::new()),
         };
-        let root = norte_vfs_local::ConfinedRoot::open(&root_native, self.bounds).ok()?;
+        // Las raíces protegidas viajan a la confinación (#238): que la raíz no
+        // ESTÉ bajo una de ellas —lo que comprueba `is_protected` arriba— no
+        // dice nada sobre si CONTIENE alguna, y contenerla es el caso normal
+        // (`$XDG_CONFIG_HOME` contiene `norte/`). Sin esto, un panel abierto en
+        // el directorio de configuración le servía al plugin el journal, los
+        // secretos y el fichero de conexiones.
+        let vetadas: Vec<std::path::PathBuf> = self
+            .protected
+            .iter()
+            .filter_map(|p| norte_vfs_local::vpath_to_native(p).ok())
+            .collect();
+        let root = norte_vfs_local::ConfinedRoot::open(&root_native, self.bounds, &vetadas).ok()?;
         let token = mint_token();
         self.live
             .lock()
@@ -2653,7 +2699,19 @@ impl LocationMint {
         let mut actual_v = dir.clone();
         let mut actual_n = native.to_path_buf();
         for _ in 0..=Self::MAX_CLIMB {
-            if actual_n.join(marker).symlink_metadata().is_ok() {
+            // El marcador NO puede ser un symlink (#241). Con
+            // `symlink_metadata().is_ok()` a secas valía hasta uno colgando:
+            // `ln -s /nada /tmp/.git` —y `/tmp` lo escribe cualquiera, que el
+            // sticky bit impida BORRAR nombres ajenos no impide CREAR uno—
+            // hacía que cualquier panel bajo `/tmp` le entregara al plugin
+            // todo `/tmp`. Un `.git` de verdad es un directorio, o el fichero
+            // `gitdir:` de un worktree; ninguno de los dos es un enlace, y
+            // aceptar enlaces solo compra el ataque.
+            if actual_n
+                .join(marker)
+                .symlink_metadata()
+                .is_ok_and(|m| !m.file_type().is_symlink())
+            {
                 return (actual_n, prefix.join(&b'/'));
             }
             let Some(padre_v) = actual_v.parent() else {

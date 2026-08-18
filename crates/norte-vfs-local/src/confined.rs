@@ -103,6 +103,11 @@ impl LocalRoot {
         Ok((fd, last))
     }
 
+    /// El fd de la raíz, para identificarla por `(dev, ino)` (#238).
+    pub(crate) fn raw_fd(&self) -> RawFd {
+        self.fd.as_raw_fd()
+    }
+
     /// Abre el directorio `parents` bajo la raíz, confinado.
     pub(crate) fn resolve_dir(&self, parents: &[Segment]) -> Result<OwnedFd, Error> {
         if parents.is_empty() {
@@ -360,7 +365,7 @@ fn is_beneath(fd: RawFd, root_id: (u64, u64)) -> Result<bool, Error> {
 
 /// `(dev, ino)` de un fd abierto.
 #[allow(unsafe_code)]
-fn node_id_of(fd: RawFd) -> Result<(u64, u64), Error> {
+pub(crate) fn node_id_of(fd: RawFd) -> Result<(u64, u64), Error> {
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
     // SAFETY: `fd` está vivo y `st` es un `stat` propio y alineado que la
     // llamada rellena entero. Solo se lee tras comprobar el retorno.

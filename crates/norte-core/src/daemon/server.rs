@@ -3447,6 +3447,21 @@ fn read_gate_all(
     Ok(())
 }
 
+/// La ubicación que se le acuña a un plugin de columnas: el directorio padre
+/// de la página, **si el actor podría leerlo él mismo** (#239).
+///
+/// Función aparte y con el permiso como predicado por lo mismo que
+/// `send_to_conn_impl`: la decisión se prueba sin levantar un `Shared`, y lo
+/// que hay que fijar es que el padre pasa por una puerta —antes no pasaba por
+/// ninguna, y el comentario del handler afirmaba lo contrario.
+fn location_permitida(
+    primero: Option<&norte_proto::VPath>,
+    permitido: impl Fn(&norte_proto::VPath) -> bool,
+) -> Option<norte_proto::VPath> {
+    let padre = primero.and_then(norte_proto::VPath::parent)?;
+    permitido(&padre).then_some(padre)
+}
+
 /// `plugin.decorate` (G3b, ADR 0037 decisión 2): la SUPERPOSICIÓN de TODOS
 /// los plugins `decorator` APROBADOS y ACTIVADOS sobre `params.paths`
 /// (batched, POSICIONAL 1:1 — ver el rustdoc de
@@ -3547,10 +3562,30 @@ async fn handle_plugin_column_values(
     };
     let runtime = Arc::clone(&shared.plugin_runtime);
     let column_id = p.column_id;
-    // La UBICACIÓN es el directorio padre de la página (ADR 0057). Se toma del
-    // primer path, que ya pasó el gate de lectura de arriba: el plugin no
-    // alcanza nada que el actor no pudiera listar él mismo.
-    let location = p.paths.first().and_then(norte_proto::VPath::parent);
+    // La UBICACIÓN es el directorio padre de la página (ADR 0057), y **pasa su
+    // propio gate de lectura** (#239).
+    //
+    // El comentario que había aquí decía que el padre venía gatado «de arriba»
+    // porque los paths lo estaban. No es verdad: `read_gate_all` mira los
+    // PATHS, y el padre de un path en scope puede estar fuera. Y una raíz de
+    // scope está en su propio scope —hay un test que lo fija—, así que un
+    // agente con scope sobre `file:///home/u/work` pedía columnas SOBRE esa
+    // raíz y el plugin recibía una raíz confinada sobre `file:///home/u`: el
+    // home entero, un nivel por encima de su sandbox, y sin necesidad de la
+    // subida al marcador (que ya iba desactivada para agentes). Con un scope
+    // que apunta a un fichero suelto, el directorio que lo contiene.
+    //
+    // Sin permiso NO se acuña: el plugin corre sin ubicación y su columna sale
+    // en blanco. Es una degradación honesta — negar la llamada entera
+    // convertiría la columna en un oráculo de qué directorios existen fuera
+    // del scope, que es justo la fuga que este gate cierra.
+    let location = location_permitida(p.paths.first(), |padre| {
+        let permitido = read_gate(actor, padre, shared).is_ok();
+        if !permitido {
+            tracing::debug!("ubicación fuera de scope: el plugin corre sin ella");
+        }
+        permitido
+    });
     let climb = matches!(actor, Actor::User);
     let values = tokio::task::spawn_blocking(move || {
         crate::plugins::run_column_values(
@@ -4989,6 +5024,52 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{DirIdentity, is_default_tmp_fallback, peer_allowed, prepare_socket_dir};
+
+    /// #239: la ubicación que se le da a un plugin PASA su propia puerta.
+    ///
+    /// Se creía gatada porque los `paths` lo estaban, y no es lo mismo: una
+    /// raíz de scope está en su propio scope —`covers_read` lo fija con todas
+    /// las letras—, así que pedir columnas SOBRE la raíz entregaba al plugin
+    /// una raíz confinada un nivel POR ENCIMA del sandbox del agente. Con un
+    /// scope que apunta a un fichero, el directorio que lo contiene.
+    #[test]
+    fn la_ubicacion_de_un_plugin_pasa_el_gate_de_lectura() {
+        use super::location_permitida;
+        use crate::policy::{Scope, ScopeRegistry, ScopeVerdict};
+        use norte_proto::VPath;
+
+        let vp = |w: &str| VPath::parse(w).expect("wire de test");
+        let reg = ScopeRegistry::new();
+        reg.grant(
+            "s1",
+            Scope::forever(
+                vec![vp("mem:///home/u/work")],
+                crate::policy::OpSet::of(&["copy"]),
+            ),
+        );
+        let ahora = std::time::Instant::now();
+        let permitido = |p: &VPath| reg.covers_read("s1", p, ahora) == ScopeVerdict::Within;
+
+        // Dentro del scope: la ubicación es el padre, y se acuña.
+        assert_eq!(
+            location_permitida(Some(&vp("mem:///home/u/work/sub/f")), permitido),
+            Some(vp("mem:///home/u/work/sub")),
+        );
+        // LA RAÍZ del scope: su padre es el home entero, fuera del sandbox.
+        // Sin ubicación, y el plugin corre sin ella.
+        assert_eq!(
+            location_permitida(Some(&vp("mem:///home/u/work")), permitido),
+            None,
+            "el padre de la raíz del scope está FUERA del scope"
+        );
+        // Un humano no se sandboxea: el predicado dice que sí a todo.
+        assert_eq!(
+            location_permitida(Some(&vp("mem:///home/u/work")), |_| true),
+            Some(vp("mem:///home/u")),
+        );
+        // Sin paths no hay ubicación que acuñar.
+        assert_eq!(location_permitida(None, |_| true), None);
+    }
 
     /// El veto de `session.put`: quién puede escribir, y en qué orden se
     /// pregunta.
