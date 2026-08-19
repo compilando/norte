@@ -532,6 +532,13 @@ pub fn build_keymaps(
     Ok((browse, viewer, dialog))
 }
 
+/// K3c: el editor de atajos, conducido por el mismo camino que las teclas —
+/// [`shortcuts_key`] — y llevado hasta el disco y de vuelta.
+///
+/// El test que importa es el de ida y vuelta completa: `reload_config` aplica
+/// TODO o NADA, así que una escritura que produjese una capa inválida dejaría
+/// el mapa viejo en su sitio, el editor diría «guardado» y la tecla nueva no
+/// haría nada. Eso no se ve en ningún test que se quede en la puerta.
 #[cfg(test)]
 mod shortcuts_editor_tests {
     use super::{Maps, ShortcutsKeyOutcome, build_keymaps, plan_rebind, shortcut_rows};
