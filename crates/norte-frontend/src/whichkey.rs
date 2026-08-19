@@ -280,7 +280,13 @@ keymap = [
         // build no lo ejecuta. La fila lo nombra en cristiano y explica por
         // qué la tecla no hará nada, que es más de lo que se podía decir
         // cuando la capacidad no estaba construida.
-        assert_eq!(p.label, norte_i18n::t("help-cmd-pane-pack"));
+        // `t_in` y no `t`: el panel se construyó con `Lang::En` explícito, y
+        // `t` traduce con el idioma GLOBAL —que sale del entorno—. Comparar
+        // uno contra otro era verde solo donde `LANG` ya era inglés.
+        assert_eq!(
+            p.label,
+            norte_i18n::t_in(norte_i18n::Lang::En, "help-cmd-pane-pack")
+        );
     }
 
     /// A row that opens more keys claims nothing: not the command at the end

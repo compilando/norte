@@ -384,6 +384,11 @@ mod tests {
 
     #[test]
     fn dialog_hints_omite_comandos_sin_binding() {
+        // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
+        // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
+        // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
+        // los tests de render de este crate ya llevaba.
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
         let preset = parse_keymap(
             r#"
             [dialog]
@@ -399,6 +404,11 @@ mod tests {
 
     #[test]
     fn dialog_hints_respeta_el_orden_del_efectivo_no_del_allowlist() {
+        // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
+        // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
+        // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
+        // los tests de render de este crate ya llevaba.
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
         let preset = parse_keymap(
             r#"
             [dialog]
@@ -421,6 +431,11 @@ mod tests {
 
     #[test]
     fn dialog_hints_usa_la_primera_chord_ante_un_duplicado() {
+        // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
+        // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
+        // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
+        // los tests de render de este crate ya llevaba.
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
         let preset = parse_keymap(
             r#"
             [dialog]
@@ -582,6 +597,11 @@ mod tests {
     /// [`dialog_hints`], que sigue el efectivo) y omite lo no ligado.
     #[test]
     fn dialog_hints_in_order_sigue_al_caller_no_al_efectivo() {
+        // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
+        // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
+        // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
+        // los tests de render de este crate ya llevaba.
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
         let preset = parse_keymap(
             r#"
             [dialog]

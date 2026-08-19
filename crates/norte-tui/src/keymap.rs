@@ -821,3 +821,66 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
         }
     }
 }
+
+/// Parsea una `key` de fila de plugin de la palette
+/// (`plugin:{plugin_id}:{command_id}`, [`crate::palette::plugin_rows`])
+/// de vuelta a `(plugin_id, command_id)`. El `plugin_id` es reverse-DNS
+/// charset-validado por el core (`is_valid_plugin_id`, norte-plugin-host
+/// manifest.rs — nunca lleva `:`); el `command_id` del manifiesto NO tiene
+/// charset validado, así que puede llevar CUALQUIER byte, incluidos `:` o
+/// saltos de línea. El PRIMER `:` que sigue al prefijo `plugin:` separa
+/// ambos sin ambigüedad (el `plugin_id` no puede contenerlo) — el resto,
+/// TODO lo que quede tras ese primer `:`, es el `command_id` crudo, tomado
+/// ENTERO y jamás vuelto a partir.
+#[must_use]
+pub fn parse_plugin_key(cmd: &str) -> Option<(&str, &str)> {
+    let (id, command) = cmd.strip_prefix("plugin:")?.split_once(':')?;
+    (!id.is_empty()).then_some((id, command))
+}
+
+#[cfg(test)]
+mod parse_plugin_key_tests {
+    use super::parse_plugin_key;
+
+    #[test]
+    fn separa_plugin_id_y_command_id() {
+        assert_eq!(
+            parse_plugin_key("plugin:org.norte.demo:greet"),
+            Some(("org.norte.demo", "greet"))
+        );
+    }
+
+    /// El `command_id` NO tiene charset validado (a diferencia del
+    /// `plugin_id`): puede llevar `:` o saltos de línea, y el split se
+    /// queda con TODO lo que sigue al primero, sin volver a partir.
+    #[test]
+    fn command_id_hostil_se_toma_entero_sin_repartir() {
+        assert_eq!(
+            parse_plugin_key("plugin:org.norte.demo:a:b\nc"),
+            Some(("org.norte.demo", "a:b\nc"))
+        );
+    }
+
+    #[test]
+    fn sin_prefijo_plugin_es_none() {
+        assert_eq!(parse_plugin_key("app.quit"), None);
+        assert_eq!(parse_plugin_key(""), None);
+    }
+
+    /// Sin el segundo `:` (formato mínimo `plugin:x` sin `command_id`): `None`
+    /// — un despacho parcial jamás corre `plugin_run_command` con un id
+    /// vacío o adivinado.
+    #[test]
+    fn sin_segundo_separador_es_none() {
+        assert_eq!(parse_plugin_key("plugin:org.norte.demo"), None);
+    }
+
+    /// `plugin_id` vacío (`"plugin::greet"`) es `None` — nunca alcanzable
+    /// desde una fila real (`PluginInfo.id` siempre no-vacío, validado por
+    /// el core), pero el parser no debe entregar un id vacío a
+    /// `plugin_run_command` si alguna vez lo fuera.
+    #[test]
+    fn plugin_id_vacio_es_none() {
+        assert_eq!(parse_plugin_key("plugin::greet"), None);
+    }
+}

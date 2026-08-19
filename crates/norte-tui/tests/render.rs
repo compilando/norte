@@ -273,6 +273,11 @@ fn viewer_pinta_indicador_via_plugin_y_sus_lineas() {
 /// status de encoding del viewer crudo).
 #[test]
 fn viewer_preview_lossy_pinta_el_aviso() {
+    // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
+    // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
+    // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
+    // los tests de render de este crate ya llevaba.
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
