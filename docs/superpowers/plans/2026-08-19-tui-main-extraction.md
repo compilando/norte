@@ -1,13 +1,13 @@
 # Extraer `norte-tui/src/main.rs` — lo hecho, y el grafo real de dependencias
 
-> **Estado:** COMPLETO. Las siete tareas hechas, `just ci` verde (lint 9 s,
-> test 92 s, docs 12 s, check-gui 2 s, cov 164 s con exit 0), 892 tests de
-> `norte-tui` y 5.069 del workspace en verde. 26 commits en
+> **Estado:** COMPLETO, y cobrado. Las siete tareas hechas más el epílogo que
+> las paga: `main.rs` no tiene ya código de test. `just ci` verde, 892 tests de
+> `norte-tui` y 5.069 del workspace. 30 commits en
 > `refactor/tui-main-extraction`, sin pushear.
 >
-> `main.rs`: **11.612 → 599 líneas de producción** y 5.543 → 915 de test inline.
-> Lo que queda es `main`, la terminal, los flags, los tres `anyhow::Result` que
-> la regla 6 clava en un binario, y siete módulos de test.
+> `main.rs`: **11.612 → 592 líneas** y 5.543 → **0** de test inline. Lo que
+> queda es `main`, la terminal, los flags y los tres `anyhow::Result` que la
+> regla 6 clava en un binario. Nada más.
 >
 > **Fecha:** 2026-08-19.
 
@@ -337,11 +337,26 @@ los siete se encontraron exactamente así.
 
 ## Lo que sigue, y ya no es este plan
 
-- **Los siete módulos de test de `main.rs` (915 líneas) pueden ser ficheros de
-  `tests/`.** Ya no nombran nada del binario: es el objetivo original del
-  refactor, cumplido pero sin cobrar. El precio es que un test de integración es
-  otro crate, así que exige `pub` en lo que hoy alcanzan por módulo hermano —
-  hay que mirar caso por caso si ese `pub` es una superficie que queramos.
+- ~~**Los siete módulos de test de `main.rs` (915 líneas) pueden ser ficheros
+  de `tests/`.**~~ **Hecho**, en cuatro commits (`65a556d3`..`630aab59`), y el
+  precio que este punto anunciaba no existía: **cero `pub` nuevos**. La
+  afirmación de que «exige `pub` en lo que hoy alcanzan por módulo hermano» era
+  falsa, y falsa por una razón que conviene no volver a olvidar: esos módulos no
+  alcanzaban nada por módulo hermano. Vivían en el root del BINARIO, que ya es
+  un crate distinto de la lib, así que sus `use` eran `norte_tui::…` desde el
+  primer día — el commit del bucle de eventos los había reescrito así. Un mod de
+  test dentro del binario y un fichero de `tests/` ven la lib exactamente igual.
+  La comprobación que lo decide, y cuesta un segundo:
+  `grep -n 'super::\|crate::' crates/norte-tui/src/main.rs` sin resultados.
+
+  El movimiento fue entonces mecánico: quitar el `#[cfg(test)]` y el `mod X {`,
+  desindentar un nivel, y `///` → `//!`. Las únicas líneas del diff que no
+  venían de `main.rs` son 13 de cabecera `//!`, porque seis de los siete módulos
+  no tenían doc y la convención de `tests/` la pide (35 de 35 ficheros la
+  llevan). El multiconjunto de líneas no vacías lo demuestra commit a commit.
+
+  **Lo que sí costó, y es lo único:** siete targets de integración nuevos son
+  siete binarios más que linkar en un directorio que ya tenía 35.
 - **Partir `run` (2.521 líneas) y `dispatch` (640).** Ahora sobre ficheros de
   2.700 y 680 líneas en vez de sobre uno de 11.612. Partir `run` sigue siendo
   rediseño, no movimiento: hay que convertir la cadena `else if` de 19 ramas en
