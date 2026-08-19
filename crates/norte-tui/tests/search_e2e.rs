@@ -133,11 +133,11 @@ async fn criterio_de_salida_año() {
         primero.path.display_lossy(),
         vp("mem:///f1").display_lossy()
     );
-    let nombre = primero.path.file_name().expect("nombre").clone();
-    let destino = vp("mem:///otro").join(nombre);
+    let name = primero.path.file_name().expect("nombre").clone();
+    let dest = vp("mem:///otro").join(name);
 
     let copy_task = backend
-        .copy(&primero.path, &destino, TransferOptions::default())
+        .copy(&primero.path, &dest, TransferOptions::default())
         .await
         .expect("copy");
     assert_eq!(copy_task.join().await, TaskState::Completed);
@@ -146,7 +146,7 @@ async fn criterio_de_salida_año() {
         .read(&primero.path, None)
         .await
         .expect("read original");
-    let copiado = backend.read(&destino, None).await.expect("read copia");
+    let copiado = backend.read(&dest, None).await.expect("read copia");
     assert_eq!(copiado, original, "F5 desde un hit es byte-exacto");
     assert_eq!(original, "un año".as_bytes());
 }
@@ -196,7 +196,7 @@ async fn cancel_conserva_lo_llegado() {
 #[tokio::test]
 async fn nombre_hostil() {
     let (backend, mem) = backend_mem();
-    let hostil = write_named(&mem, &[0xFF, 0xFE], b"x").await;
+    let hostile = write_named(&mem, &[0xFF, 0xFE], b"x").await;
 
     let (task, rx) = backend
         .search(FsSearchParams {
@@ -215,7 +215,7 @@ async fn nombre_hostil() {
         "búsqueda de solo nombre: sin contexto de contenido"
     );
     assert_eq!(
-        entry.path, hostil,
+        entry.path, hostile,
         "el VPath del hit llega con los bytes crudos intactos"
     );
     assert_eq!(

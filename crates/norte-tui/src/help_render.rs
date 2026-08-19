@@ -990,30 +990,30 @@ mod tests {
             80,
             &theme(),
         );
-        let texto = flatten(&out.lines);
+        let text = flatten(&out.lines);
         assert!(
-            texto.contains(&norte_i18n::t_in(Lang::En, "reason-read-only")),
-            "la razón acompaña a la fila atenuada: {texto}"
+            text.contains(&norte_i18n::t_in(Lang::En, "reason-read-only")),
+            "la razón acompaña a la fila atenuada: {text}"
         );
         // Y una fila que SÍ puede correr no arrastra ninguna razón: si la
         // pintara, el lector no distinguiría lo que puede pulsar.
-        let libre = render_topic(
+        let free = render_topic(
             topic(Lang::En, "copying").expect("copying"),
             Lang::En,
             &Libre,
             80,
             &theme(),
         );
-        let libre = flatten(&libre.lines);
+        let free = flatten(&free.lines);
         assert!(
-            !libre.contains(&norte_i18n::t_in(Lang::En, "reason-read-only")),
-            "razón pintada en una página sin nada vetado: {libre}"
+            !free.contains(&norte_i18n::t_in(Lang::En, "reason-read-only")),
+            "razón pintada en una página sin nada vetado: {free}"
         );
     }
 
     /// Estrecho: la RAZÓN sobrevive y la etiqueta se lleva la elipsis.
     ///
-    /// Al revés — componer `etiqueta — razón` y recortar el conjunto — el lector
+    /// Al revés — componer `label — razón` y recortar el conjunto — el lector
     /// se queda con el nombre del comando (que ya está en la prosa de arriba y
     /// en la columna del chord) y pierde el único dato que la atenuación
     /// planteaba. Y la fila sigue siendo UNA línea cueste lo que cueste: el
@@ -1021,12 +1021,12 @@ mod tests {
     #[test]
     fn en_una_fila_estrecha_la_razon_sobrevive_y_la_etiqueta_se_recorta() {
         let razon = norte_i18n::t_in(Lang::En, "reason-read-only");
-        let filas_a = |ancho: usize| -> Vec<String> {
+        let rows_a = |width: usize| -> Vec<String> {
             let out = render_topic(
                 topic(Lang::En, "copying").expect("copying"),
                 Lang::En,
                 &Vetado,
-                ancho,
+                width,
                 &theme(),
             );
             // Ninguna FILA se sale del ancho, con razón o sin ella. (Sólo las
@@ -1035,8 +1035,8 @@ mod tests {
             for &y in &out.action_lines {
                 let line = &out.lines[y];
                 assert!(
-                    cells(line) <= ancho,
-                    "fila de {} celdas en un cuerpo de {ancho}: {:?}",
+                    cells(line) <= width,
+                    "fila de {} celdas en un cuerpo de {width}: {:?}",
                     cells(line),
                     flatten(std::slice::from_ref(line))
                 );
@@ -1049,30 +1049,30 @@ mod tests {
 
         // La razón entera sobrevive en todo ancho donde QUEPA, aunque la
         // etiqueta no.
-        for ancho in [30, 40, 60, 80] {
-            let filas = filas_a(ancho);
+        for width in [30, 40, 60, 80] {
+            let rows = rows_a(width);
             assert!(
-                filas.iter().any(|f| f.contains(&razon)),
-                "a {ancho} celdas la razón entera sigue ahí: {filas:?}"
+                rows.iter().any(|f| f.contains(&razon)),
+                "a {width} celdas la razón entera sigue ahí: {rows:?}"
             );
         }
 
         // A 40 celdas la etiqueta más larga de la página ya no cabe: es ELLA
         // la que se recorta, con la razón intacta detrás.
-        let filas = filas_a(40);
+        let rows = rows_a(40);
         assert!(
-            filas.iter().any(|f| f.contains('…') && f.contains(&razon)),
-            "la etiqueta cede y la razón queda: {filas:?}"
+            rows.iter().any(|f| f.contains('…') && f.contains(&razon)),
+            "la etiqueta cede y la razón queda: {rows:?}"
         );
 
         // Y cuando ni la razón cabe, se lleva ella la elipsis y la etiqueta
         // desaparece: no hay nada más que ceder.
-        let estrechas = filas_a(20);
-        let fila = estrechas.first().expect("hay filas");
-        assert!(fila.contains('…'), "la razón se recorta: {fila:?}");
+        let narrow = rows_a(20);
+        let row = narrow.first().expect("hay filas");
+        assert!(row.contains('…'), "la razón se recorta: {row:?}");
         assert!(
-            !fila.contains("do pane"),
-            "sin sitio, la etiqueta no se pinta a medias: {fila:?}"
+            !row.contains("do pane"),
+            "sin sitio, la etiqueta no se pinta a medias: {row:?}"
         );
 
         // MINOR-8: los anchos donde a la etiqueta le tocaban una o dos celdas.
@@ -1080,16 +1080,16 @@ mod tests {
         // la fila salía como `f5    … — read-only backend`: una elipsis
         // solitaria no es un nombre acortado, es lo que parece un fallo del
         // pintor. Se pliegan al mismo caso que el cero.
-        for ancho in 27..=29 {
-            let filas = filas_a(ancho);
-            let fila = filas.first().expect("hay filas");
+        for width in 27..=29 {
+            let rows = rows_a(width);
+            let row = rows.first().expect("hay filas");
             assert!(
-                fila.contains(&razon),
-                "a {ancho} celdas la razón es lo que se conserva: {fila:?}"
+                row.contains(&razon),
+                "a {width} celdas la razón es lo que se conserva: {row:?}"
             );
             assert!(
-                !fila.contains(" … — ") && !fila.contains("… — "),
-                "elipsis solitaria donde iba la etiqueta ({ancho}): {fila:?}"
+                !row.contains(" … — ") && !row.contains("… — "),
+                "elipsis solitaria donde iba la etiqueta ({width}): {row:?}"
             );
         }
     }
@@ -1529,26 +1529,26 @@ mod tests {
         // de 60 celdas, así que recortarla se comía justo los segmentos que
         // avisan — y se los comía en los terminales estrechos, donde el lector
         // menos puede adivinar lo que faltaba.
-        for ancho in [40, 60, 100] {
-            let out = render_topic(&parsed.topic, Lang::En, &Vetado, ancho, &theme());
+        for width in [40, 60, 100] {
+            let out = render_topic(&parsed.topic, Lang::En, &Vetado, width, &theme());
             for line in &out.lines {
-                assert!(cells(line) <= ancho, "desborda a {ancho}: {line:?}");
+                assert!(cells(line) <= width, "desborda a {width}: {line:?}");
             }
             // Unido SIN saltos: una frase partida por el envoltorio sigue
             // siendo la misma frase para quien la lee.
-            let texto = flatten(&out.lines).replace('\n', " ");
+            let text = flatten(&out.lines).replace('\n', " ");
             assert!(
-                texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-origin")),
-                "la página se declara de un tercero ({ancho}): {texto}"
+                text.contains(&norte_i18n::t_in(Lang::En, "help-plugin-origin")),
+                "la página se declara de un tercero ({width}): {text}"
             );
-            assert!(texto.contains("ACME"), "el publicador se nombra: {texto}");
+            assert!(text.contains("ACME"), "el publicador se nombra: {text}");
             assert!(
-                texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
-                "un cuerpo cortado se declara ({ancho}): {texto}"
+                text.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
+                "un cuerpo cortado se declara ({width}): {text}"
             );
             assert!(
-                texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")),
-                "una decodificación con pérdida se declara ({ancho}): {texto}"
+                text.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")),
+                "una decodificación con pérdida se declara ({width}): {text}"
             );
         }
     }
@@ -1581,10 +1581,10 @@ mod tests {
             "una página de plugin SIEMPRE se declara"
         );
         let out = render_topic(&parsed.topic, Lang::En, &Libre, 60, &theme());
-        let texto = flatten(&out.lines);
+        let text = flatten(&out.lines);
         assert!(
-            texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-origin")),
-            "la marca de procedencia está: {texto}"
+            text.contains(&norte_i18n::t_in(Lang::En, "help-plugin-origin")),
+            "la marca de procedencia está: {text}"
         );
 
         // Y la forma de la página NO coincide con la de una del corpus: la del
@@ -1701,9 +1701,9 @@ mod tests {
             60,
             &theme(),
         );
-        let texto = flatten(&out.lines);
-        assert!(!texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")));
-        assert!(!texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")));
+        let text = flatten(&out.lines);
+        assert!(!text.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")));
+        assert!(!text.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")));
     }
 
     #[test]
@@ -1715,13 +1715,13 @@ mod tests {
             None,
         );
         let out = render_topic(&parsed.topic, Lang::En, &Vetado, 60, &theme());
-        let texto = flatten(&out.lines);
-        assert!(!texto.contains('\u{202E}'), "sin override bidi: {texto:?}");
-        assert!(!texto.contains('\u{200B}'), "sin invisibles: {texto:?}");
+        let text = flatten(&out.lines);
+        assert!(!text.contains('\u{202E}'), "sin override bidi: {text:?}");
+        assert!(!text.contains('\u{200B}'), "sin invisibles: {text:?}");
         // Anti-vacuidad: el texto hostil SÍ llegó a la página, enmascarado.
         assert!(
-            texto.contains('\u{FFFD}'),
-            "el peligro llegó y se enmascaró: {texto:?}"
+            text.contains('\u{FFFD}'),
+            "el peligro llegó y se enmascaró: {text:?}"
         );
     }
 
@@ -1739,11 +1739,11 @@ mod tests {
             Some("ACME".to_owned()),
         )
         .fold_flags(true, false);
-        let prestada = render_topic(&parsed.topic, Lang::En, &Vetado, 60, &theme());
-        let propia = into_static(prestada.clone());
-        assert_eq!(propia.action_lines, prestada.action_lines);
-        assert_eq!(propia.lines.len(), prestada.lines.len());
-        for (a, b) in propia.lines.iter().zip(&prestada.lines) {
+        let borrowed = render_topic(&parsed.topic, Lang::En, &Vetado, 60, &theme());
+        let own = into_static(borrowed.clone());
+        assert_eq!(own.action_lines, borrowed.action_lines);
+        assert_eq!(own.lines.len(), borrowed.lines.len());
+        for (a, b) in own.lines.iter().zip(&borrowed.lines) {
             assert_eq!(a.style, b.style, "estilo de línea perdido");
             assert_eq!(a.alignment, b.alignment, "alineación perdida");
             assert_eq!(a.spans.len(), b.spans.len());
@@ -1754,13 +1754,13 @@ mod tests {
         }
         // Anti-vacuidad: la página tiene MÁS de un estilo, o comparar estilos
         // no prueba nada.
-        let estilos: std::collections::BTreeSet<String> = prestada
+        let styles: std::collections::BTreeSet<String> = borrowed
             .lines
             .iter()
             .flat_map(|l| l.spans.iter())
             .map(|s| format!("{:?}", s.style))
             .collect();
-        assert!(estilos.len() > 1, "la página es monoestilo: {estilos:?}");
+        assert!(styles.len() > 1, "la página es monoestilo: {styles:?}");
     }
 
     #[test]

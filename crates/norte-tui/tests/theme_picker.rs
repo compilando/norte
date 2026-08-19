@@ -29,11 +29,8 @@ fn abrir_lista_los_presets_y_previsualiza() {
     // El popup se pinta (el título y los nombres salen en el buffer).
     let mut t = Terminal::new(TestBackend::new(60, 16)).expect("term");
     t.draw(|f| ui::draw(f, &app)).expect("draw");
-    let texto = t.backend().to_string();
-    assert!(
-        texto.contains("nord"),
-        "el popup no lista los temas: {texto}"
-    );
+    let text = t.backend().to_string();
+    assert!(text.contains("nord"), "el popup no lista los temas: {text}");
 }
 
 #[test]
@@ -69,12 +66,12 @@ fn navegar_previsualiza_y_enter_fija() {
 #[test]
 fn cancelar_revierte_al_tema_previo() {
     let mut app = app();
-    let antes = app.theme.name().map(String::from);
+    let before = app.theme.name().map(String::from);
     app.open_theme_picker();
     app.theme_picker_input(PickerAction::Down);
     app.theme_picker_input(PickerAction::Down);
     // Cancela: vuelve al tema de antes de abrir.
     app.theme_picker_input(PickerAction::Cancel);
     assert!(app.theme_picker.is_none());
-    assert_eq!(app.theme.name().map(String::from), antes);
+    assert_eq!(app.theme.name().map(String::from), before);
 }

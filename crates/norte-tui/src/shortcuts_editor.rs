@@ -619,13 +619,13 @@ mod shortcuts_editor_tests {
         let (layers, cfg) = cfg_en(dir.path());
         let (browse, viewer, dialog) = maps(&cfg);
         let f5 = chord("f5");
-        let antes = browse
+        let before = browse
             .bindings_all_seq()
             .into_iter()
             .find(|(seq, _, _)| *seq == [f5])
             .map(|(_, run, _)| run.to_owned())
             .expect("el preset activo bindea F5");
-        assert_ne!(antes, "pane.mkdir", "si no, el test no prueba nada");
+        assert_ne!(before, "pane.mkdir", "si no, el test no prueba nada");
 
         let mut sc = editor_en(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
         let m = Maps {
@@ -664,13 +664,13 @@ mod shortcuts_editor_tests {
         // `persist_keymap_unbind`: un editor que solo añade no arregla nada.
         // Los mismos argumentos que arma `unbind_shortcut` a partir de la fila.
         let row_seq: Vec<String> = seq.iter().map(ToString::to_string).collect();
-        let quitado = config::persist_keymap_unbind(dir.path(), w.section, &row_seq, &command)
+        let removed = config::persist_keymap_unbind(dir.path(), w.section, &row_seq, &command)
             .expect("quita");
-        assert!(quitado.changed, "había algo que quitar");
+        assert!(removed.changed, "había algo que quitar");
         let (_, cfg3) = cfg_en(dir.path());
         let (browse3, _, _) = maps(&cfg3);
         assert!(
-            browse3.single_chord_runs(f5, &antes),
+            browse3.single_chord_runs(f5, &before),
             "sin la capa del usuario vuelve a mandar el preset"
         );
     }

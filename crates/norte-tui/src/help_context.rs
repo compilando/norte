@@ -347,10 +347,10 @@ mod tests {
     fn el_vocabulario_no_tiene_duplicados_ni_huecos() {
         // Un id repetido haría que dos modales compartieran página sin que
         // nadie lo hubiera decidido; uno vacío abriría la nada.
-        let mut vistos = std::collections::BTreeSet::new();
+        let mut seen = std::collections::BTreeSet::new();
         for id in CONTEXTS {
             assert!(!id.is_empty(), "id vacío en el vocabulario");
-            assert!(vistos.insert(*id), "id duplicado: {id}");
+            assert!(seen.insert(*id), "id duplicado: {id}");
         }
     }
 
@@ -361,22 +361,22 @@ mod tests {
     /// una página para una pantalla que no existe.
     #[test]
     fn cada_id_de_dialogo_lo_produce_un_modal_y_esta_en_el_vocabulario() {
-        let mut producidos = std::collections::BTreeSet::new();
+        let mut produced = std::collections::BTreeSet::new();
         for modal in un_modal_de_cada_variante() {
             let id = modal_context(&modal);
             assert!(
                 CONTEXTS.contains(&id),
                 "{id} sale del mapa pero no está en CONTEXTS"
             );
-            producidos.insert(id);
+            produced.insert(id);
         }
-        let declarados: std::collections::BTreeSet<&str> = CONTEXTS
+        let declared: std::collections::BTreeSet<&str> = CONTEXTS
             .iter()
             .copied()
             .filter(|id| id.starts_with("dialog."))
             .collect();
         assert_eq!(
-            producidos, declarados,
+            produced, declared,
             "todo id `dialog.*` del vocabulario lo produce algún modal, y al revés"
         );
     }

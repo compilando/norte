@@ -47,15 +47,15 @@ pub async fn launch_compare(
             app.message = None;
             // Las dos reinterpretaciones (#57) salen de los dos panes de
             // los que salieron las raíces, en ese mismo orden.
-            let izq = app.focus();
+            let left = app.focus();
             let (left_encoding, right_encoding) = (
-                app.panes[izq].name_encoding(),
-                app.panes[izq ^ 1].name_encoding(),
+                app.panes[left].name_encoding(),
+                app.panes[left ^ 1].name_encoding(),
             );
             app.compare = Some(crate::app::CompareView::new(
                 left_root,
                 right_root,
-                izq,
+                left,
                 left_encoding,
                 right_encoding,
             ));
@@ -124,7 +124,7 @@ pub fn drain_compare(
             // El mapeo entero —los cuatro brazos— es del modelo. Aquí solo
             // queda el aviso PASAJERO de la barra, que es lo único que esta
             // superficie tiene y la GUI no.
-            let aviso = view
+            let notice = view
                 .finish_from_task(
                     &snapshot.state,
                     expected,
@@ -133,7 +133,7 @@ pub fn drain_compare(
                 )
                 .map(error_message);
             c.state = view.state;
-            if let Some(m) = aviso {
+            if let Some(m) = notice {
                 app.message = Some(m);
             }
         } else {
@@ -382,7 +382,7 @@ pub async fn on_compare_enter(
     // El directorio al que ir lo decide el MODELO (regla 7): el propio path
     // si la fila es un directorio, su padre si es un fichero — la misma regla
     // que necesitará la GUI.
-    let Some(destino) = view.pane.navigation_target() else {
+    let Some(dest) = view.pane.navigation_target() else {
         // Hay entrada pero no hay a dónde ir: un fichero colgado de la raíz
         // de su scheme no tiene padre. Se DICE, igual que el caso de arriba —
         // un `Enter` que no hace nada y no explica por qué se lee como que la
@@ -397,19 +397,19 @@ pub async fn on_compare_enter(
     // consume el listado al aterrizar; si ya no existe, cae al default). La
     // GUI lo hacía y esta rama no, mientras su comentario reclamaba paridad
     // (revisión de rama, MINOR-8).
-    let foco = view.pane.target_path().cloned();
+    let focus = view.pane.target_path().cloned();
     // Al pane del lado ACTIVO, y el foco con él: mandar SIEMPRE al pane con
     // foco le costaba al lector el otro directorio para ir a ver este.
-    let destino_pane = app.compare_active_pane().unwrap_or_else(|| app.focus());
+    let dest_pane = app.compare_active_pane().unwrap_or_else(|| app.focus());
     if let Some(c) = compare_run.take() {
         c.task.cancel();
     }
     app.close_compare();
-    app.set_focus(destino_pane);
-    if let Some(p) = foco {
-        app.panes[destino_pane].set_pending_focus(p);
+    app.set_focus(dest_pane);
+    if let Some(p) = focus {
+        app.panes[dest_pane].set_pending_focus(p);
     }
-    let outcome = cd(app, backend, events, destino).await;
+    let outcome = cd(app, backend, events, dest).await;
     apply_cd(
         &app.panes,
         fill,
@@ -438,10 +438,10 @@ mod compare_tests {
         VPath::parse(wire).expect("wire de test")
     }
 
-    fn app_en(izq: &str, der: &str) -> App {
+    fn app_en(left: &str, right: &str) -> App {
         App::new(
-            Pane::new(vp(izq), Vec::new()),
-            Pane::new(vp(der), Vec::new()),
+            Pane::new(vp(left), Vec::new()),
+            Pane::new(vp(right), Vec::new()),
         )
     }
 
@@ -480,7 +480,7 @@ mod compare_tests {
         )
     }
 
-    fn fila(id: u64) -> CompareRow {
+    fn row(id: u64) -> CompareRow {
         CompareRow {
             id,
             left: None,
@@ -622,7 +622,7 @@ mod compare_tests {
             &mut run,
             Some(CompareRowsBatch {
                 task_id: norte_proto::TaskId::new(1),
-                rows: vec![fila(1), fila(2)],
+                rows: vec![row(1), row(2)],
             }),
         );
         drain_compare(&mut app, &mut run, None);
@@ -644,7 +644,7 @@ mod compare_tests {
             &mut run,
             Some(CompareRowsBatch {
                 task_id: norte_proto::TaskId::new(1),
-                rows: vec![fila(1)],
+                rows: vec![row(1)],
             }),
         );
         assert!(run.is_none(), "el run tiene que soltarse");

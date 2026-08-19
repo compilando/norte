@@ -44,9 +44,9 @@ pub struct Tree {
     /// Desde dónde cuelga.
     root: Option<VPath>,
     /// Los hijos DIRECTORIO de cada directorio ya listado.
-    hijos: BTreeMap<VPath, Vec<VPath>>,
+    child_dirs: BTreeMap<VPath, Vec<VPath>>,
     /// Qué ramas están desplegadas.
-    abiertas: BTreeSet<VPath>,
+    expanded_dirs: BTreeSet<VPath>,
     /// Dónde está el cursor, por posición en las filas visibles.
     cursor: usize,
 }
@@ -62,8 +62,8 @@ impl Tree {
             return;
         }
         self.root = Some(root);
-        self.hijos.clear();
-        self.abiertas.clear();
+        self.child_dirs.clear();
+        self.expanded_dirs.clear();
         self.cursor = 0;
     }
 
@@ -78,8 +78,8 @@ impl Tree {
     /// El ORDEN que llega es el que se pinta: lo decide quien listó, con el
     /// mismo comparador que el listado de al lado. Reordenar aquí sería un
     /// segundo criterio que se separa del primero en cuanto alguien cambie uno.
-    pub fn insert_children(&mut self, dir: VPath, hijos: Vec<VPath>) {
-        self.hijos.insert(dir, hijos);
+    pub fn insert_children(&mut self, dir: VPath, child_dirs: Vec<VPath>) {
+        self.child_dirs.insert(dir, child_dirs);
     }
 
     /// Qué directorio hace falta listar para pintar lo que está abierto, si
@@ -92,12 +92,12 @@ impl Tree {
     #[must_use]
     pub fn wants(&self) -> Option<VPath> {
         let root = self.root.as_ref()?;
-        if !self.hijos.contains_key(root) {
+        if !self.child_dirs.contains_key(root) {
             return Some(root.clone());
         }
         self.rows()
             .into_iter()
-            .find(|r| r.expanded && !self.hijos.contains_key(&r.path))
+            .find(|r| r.expanded && !self.child_dirs.contains_key(&r.path))
             .map(|r| r.path)
     }
 
@@ -108,24 +108,24 @@ impl Tree {
             return Vec::new();
         };
         let mut out = Vec::new();
-        self.empuja(&root, 0, &mut out);
+        self.push_rows(&root, 0, &mut out);
         out
     }
 
-    fn empuja(&self, dir: &VPath, depth: usize, out: &mut Vec<Row>) {
-        let hijos = self.hijos.get(dir);
-        let expanded = self.abiertas.contains(dir) || depth == 0;
+    fn push_rows(&self, dir: &VPath, depth: usize, out: &mut Vec<Row>) {
+        let child_dirs = self.child_dirs.get(dir);
+        let expanded = self.expanded_dirs.contains(dir) || depth == 0;
         out.push(Row {
             path: dir.clone(),
             depth,
             expanded,
-            children: hijos.map(|h| !h.is_empty()),
+            children: child_dirs.map(|h| !h.is_empty()),
         });
         if !expanded {
             return;
         }
-        for h in hijos.into_iter().flatten() {
-            self.empuja(h, depth + 1, out);
+        for h in child_dirs.into_iter().flatten() {
+            self.push_rows(h, depth + 1, out);
         }
     }
 
@@ -139,8 +139,8 @@ impl Tree {
     /// El directorio bajo el cursor.
     #[must_use]
     pub fn selected(&self) -> Option<VPath> {
-        let filas = self.rows();
-        filas.get(self.cursor()).map(|r| r.path.clone())
+        let rows = self.rows();
+        rows.get(self.cursor()).map(|r| r.path.clone())
     }
 
     /// Sube.
@@ -157,7 +157,7 @@ impl Tree {
     /// Despliega la rama bajo el cursor. La raíz siempre está desplegada.
     pub fn expand(&mut self) {
         if let Some(p) = self.selected() {
-            self.abiertas.insert(p);
+            self.expanded_dirs.insert(p);
         }
     }
 
@@ -167,17 +167,17 @@ impl Tree {
     /// contenido de un directorio no cambia por plegarlo.
     pub fn collapse(&mut self) {
         if let Some(p) = self.selected() {
-            self.abiertas.remove(&p);
+            self.expanded_dirs.remove(&p);
         }
     }
 
     /// Pliega o despliega, según esté.
     pub fn toggle(&mut self) {
         let Some(p) = self.selected() else { return };
-        if self.abiertas.contains(&p) {
-            self.abiertas.remove(&p);
+        if self.expanded_dirs.contains(&p) {
+            self.expanded_dirs.remove(&p);
         } else {
-            self.abiertas.insert(p);
+            self.expanded_dirs.insert(p);
         }
     }
 }
@@ -238,10 +238,10 @@ mod tests {
         );
         t.down();
         t.expand();
-        let filas = t.rows();
-        assert_eq!(filas.len(), 3);
-        assert_eq!(filas[2].depth, 2);
-        assert_eq!(filas[2].path, vp("mem:///r/a/x"));
+        let rows = t.rows();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2].depth, 2);
+        assert_eq!(rows[2].path, vp("mem:///r/a/x"));
     }
 
     /// «Sin hijos» y «todavía no se ha mirado» son distintos, y el panel los

@@ -27,7 +27,7 @@ pub enum SyncTick {
         /// brazo sobre un future ya listo y gira. Se decide igual que
         /// `TaskRef::join`, que ante lo mismo sintetiza un fallo en vez de
         /// heredar la invariante de otro crate.
-        vivo: bool,
+        alive: bool,
     },
 }
 
@@ -119,11 +119,11 @@ pub async fn launch_sync_apply(
             // porque estaba en el envoltorio de la GUI y esta rama lo dejaba
             // dependiendo del flujo de control (revisión de rama, rust
             // MAJOR-2). Quien la niega la cancela: nadie más la conoce.
-            let adoptada = app
+            let adopted = app
                 .sync
                 .as_mut()
                 .is_some_and(|view| view.on_apply_started(task.id()));
-            if !adoptada {
+            if !adopted {
                 task.cancel();
                 return;
             }
@@ -207,9 +207,9 @@ pub fn drain_sync_plan(
             // verdad difiere entre frontends, y por eso se queda aquí.
             view.run = crate::app::SyncRunState::from_task_state(&snapshot.state);
             if let norte_proto::TaskState::Failed { error } = snapshot.state {
-                let categoria = detail_for_bar(&error_category(&error));
-                view.error = Some(categoria.clone());
-                app.message = Some(ta("sync-status-failed", &[("error", &categoria)]));
+                let category = detail_for_bar(&error_category(&error));
+                view.error = Some(category.clone());
+                app.message = Some(ta("sync-status-failed", &[("error", &category)]));
             }
             // El canal se acabó: el `SyncRun` ya no tiene nada que drenar,
             // pero se conserva para que `Esc` siga pudiendo cancelar si la
@@ -229,7 +229,7 @@ pub async fn harvest_sync_apply(
     app: &mut App,
     backend: &Backend,
     sync_run: &mut Option<SyncRun>,
-    vivo: bool,
+    alive: bool,
 ) {
     let Some(run) = sync_run.as_mut() else {
         return;
@@ -238,12 +238,12 @@ pub async fn harvest_sync_apply(
     // Sin emisores no va a llegar nada más, así que un estado no terminal aquí
     // es todo lo que se va a saber: se cosecha igual. Volver sin cosechar
     // rearmaría el brazo sobre un `changed()` que devuelve `Err` al instante.
-    if vivo && !snapshot.state.is_terminal() {
+    if alive && !snapshot.state.is_terminal() {
         return;
     }
     let task_id = run.task.id();
     *sync_run = None;
-    let informe = backend.sync_report(task_id).await;
+    let report = backend.sync_report(task_id).await;
     let Some(view) = app.sync.as_mut() else {
         return;
     };
@@ -256,11 +256,11 @@ pub async fn harvest_sync_apply(
     // explicación en una barra transitoria. Lo que se queda de este lado es la
     // única mitad que de verdad difiere entre frontends: cómo se sanea la
     // categoría y dónde se pinta.
-    let categoria = view
-        .on_apply_ended(&snapshot.state, informe)
+    let category = view
+        .on_apply_ended(&snapshot.state, report)
         .map(|c| detail_for_bar(&c));
-    view.error.clone_from(&categoria);
-    if let Some(c) = categoria {
+    view.error.clone_from(&category);
+    if let Some(c) = category {
         app.message = Some(ta("sync-status-failed", &[("error", &c)]));
     }
 }
@@ -364,14 +364,14 @@ pub fn on_sync_key(
         return;
     };
     let running = view.run == crate::app::SyncRunState::Running;
-    let accion = sync_key(
+    let action = sync_key(
         mods,
         code,
         running,
         view.cancel_requested,
         view.confirming.is_some(),
     );
-    match accion {
+    match action {
         SyncKey::Ignore => {}
         SyncKey::Quit => {
             if let Some(s) = sync_run.take() {
@@ -952,12 +952,12 @@ mod sync_tests {
         let mut app = app_con_plan_listo();
         app.sync.as_mut().expect("panel").cancel_requested = true;
         let (run, _tx, _prog) = run_sync(norte_proto::TaskState::Running, true);
-        let cancelador = run.task.canceller();
+        let canceller = run.task.canceller();
         let mut sync_run = Some(run);
         on_sync_key(&mut app, &mut sync_run, M::NONE, KeyCode::Esc);
         assert!(app.sync.is_none(), "el panel se cierra");
         assert!(sync_run.is_none(), "y el run se suelta");
-        drop(cancelador);
+        drop(canceller);
     }
 
     /// Un lote con el panel ya cerrado cancela la Task en vez de seguir
@@ -1071,7 +1071,7 @@ mod sync_tests {
         assert!(aplicando.rx.is_none() && aplicando.applying);
         assert_ne!(
             std::mem::discriminant(&SyncTick::Plan(None)),
-            std::mem::discriminant(&SyncTick::Applied { vivo: true })
+            std::mem::discriminant(&SyncTick::Applied { alive: true })
         );
     }
 

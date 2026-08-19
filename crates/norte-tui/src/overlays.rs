@@ -589,9 +589,8 @@ mod palette_help_tests {
     #[test]
     fn f1_en_la_palette_abre_la_pagina_del_comando_bajo_el_cursor() {
         let app = app_with_palette_on("pane.copy");
-        let abierto =
-            palette_help_target(&app, norte_help::Lang::En).expect("pane.copy tiene página");
-        assert_eq!(abierto.id.as_str(), "copying");
+        let open = palette_help_target(&app, norte_help::Lang::En).expect("pane.copy tiene página");
+        assert_eq!(open.id.as_str(), "copying");
     }
 
     /// …y la abre de verdad: la palette se cierra (la tecla siguiente es de la

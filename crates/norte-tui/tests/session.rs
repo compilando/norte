@@ -28,10 +28,10 @@ fn app_basica() -> App {
 fn capturar_y_aplicar_es_la_identidad() {
     let mut app = app_basica();
     app.set_layout(norte_frontend::layout::presets::tree("krusader").expect("preset"));
-    let antes = app.session_body();
-    let mut otra = app_basica();
-    otra.apply_session(&antes);
-    assert_eq!(otra.session_body(), antes);
+    let before = app.session_body();
+    let mut other = app_basica();
+    other.apply_session(&before);
+    assert_eq!(other.session_body(), before);
 }
 
 /// El historial viaja: `nav.back` sigue funcionando tras un reinicio.
@@ -40,13 +40,13 @@ fn el_rastro_de_vuelta_sobrevive() {
     let mut app = app_basica();
     let slot = app.panes.slot_of(0);
     app.history.for_slot_mut(slot).record(vp("file:///antes"));
-    let cuerpo = app.session_body();
-    assert_eq!(cuerpo.slots[&slot.0].back, vec![vp("file:///antes")]);
+    let body = app.session_body();
+    assert_eq!(body.slots[&slot.0].back, vec![vp("file:///antes")]);
 
-    let mut otra = app_basica();
-    otra.apply_session(&cuerpo);
+    let mut other = app_basica();
+    other.apply_session(&body);
     assert_eq!(
-        otra.history.for_slot(slot).expect("historial").trail(),
+        other.history.for_slot(slot).expect("historial").trail(),
         [vp("file:///antes")]
     );
 }
@@ -78,14 +78,14 @@ fn un_hueco_que_el_layout_no_tiene_no_rompe_la_aplicacion() {
 #[test]
 fn un_cuerpo_corrupto_deja_la_pantalla_de_la_config() {
     let mut app = app_basica();
-    let antes = app.layout.clone();
+    let before = app.layout.clone();
     // Malformado de verdad: un hueco sin `path`, que es el único campo que no
     // tiene default.
     app.apply_session_value(
         norte_frontend::session::SCHEMA_VERSION,
         &serde_json::json!({ "slots": { "1": { "cursor": 3 } } }),
     );
-    assert_eq!(app.layout, antes);
+    assert_eq!(app.layout, before);
     assert!(app.message.is_some(), "y lo dice");
     assert!(!app.session.detached, "y esta ventana sigue escribiendo");
 }
@@ -99,14 +99,14 @@ fn un_cuerpo_corrupto_deja_la_pantalla_de_la_config() {
 #[test]
 fn la_version_del_sobre_tambien_deja_la_ventana_suelta() {
     let mut app = app_basica();
-    let antes = app.layout.clone();
+    let before = app.layout.clone();
     // Cuerpo SIN copia dentro, que es lo que escribe un cliente que sigue el
     // contrato documentado.
     app.apply_session_value(
         norte_frontend::session::SCHEMA_VERSION + 1,
         &serde_json::json!({ "layouts": {}, "slots": {} }),
     );
-    assert_eq!(app.layout, antes, "no se aplica lo que no se sabe leer");
+    assert_eq!(app.layout, before, "no se aplica lo que no se sabe leer");
     assert!(app.session.detached, "y sobre todo no se pisa");
     assert!(app.message.is_some(), "y lo dice");
 }
@@ -118,12 +118,12 @@ fn la_version_del_sobre_tambien_deja_la_ventana_suelta() {
 #[test]
 fn un_cuerpo_del_futuro_deja_la_ventana_suelta() {
     let mut app = app_basica();
-    let antes = app.layout.clone();
+    let before = app.layout.clone();
     app.apply_session_value(
         norte_frontend::session::SCHEMA_VERSION,
         &serde_json::json!({ "version": 999 }),
     );
-    assert_eq!(app.layout, antes);
+    assert_eq!(app.layout, before);
     assert!(app.session.detached, "no se pisa lo que no se sabe leer");
     assert!(app.message.is_some(), "y lo dice");
 }
@@ -180,14 +180,14 @@ fn el_directorio_y_el_orden_vuelven() {
     spec.dirs_first = !spec.dirs_first;
     app.panes[0].set_sort(spec);
     app.panes[0].set_show_hidden(false);
-    let cuerpo = app.session_body();
+    let body = app.session_body();
 
-    let mut otra = app_basica();
-    let pedir = otra.apply_session(&cuerpo);
-    assert!(pedir.contains(&slot), "hay que listarlo");
-    assert_eq!(otra.panes[0].dir(), &vp("file:///izq"));
-    assert_eq!(otra.panes[0].sort(), spec);
-    assert!(!otra.panes[0].show_hidden());
+    let mut other = app_basica();
+    let ask = other.apply_session(&body);
+    assert!(ask.contains(&slot), "hay que listarlo");
+    assert_eq!(other.panes[0].dir(), &vp("file:///izq"));
+    assert_eq!(other.panes[0].sort(), spec);
+    assert!(!other.panes[0].show_hidden());
 }
 
 /// Un layout que este binario no sabe pintar viaja igual: la sesión guarda el
@@ -202,10 +202,10 @@ fn un_kind_desconocido_viaja_en_el_layout() {
             Node::slot(SlotId(2), KindId::new("kind-de-otro-binario")),
         ],
     ));
-    let cuerpo = app.session_body();
+    let body = app.session_body();
     let vuelta = norte_frontend::session::SessionBody::from_value(
         norte_frontend::session::SCHEMA_VERSION,
-        &cuerpo.to_value(),
+        &body.to_value(),
     )
     .expect("parsea");
     assert_eq!(vuelta.layouts["default"], app.layout);

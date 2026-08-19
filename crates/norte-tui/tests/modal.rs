@@ -140,7 +140,7 @@ fn confirmacion_acepta_y_cancela() {
 
 #[test]
 fn colision_elige_politica_o_cancela() {
-    let casos = [
+    let cases = [
         ("dialog.overwrite", CollisionPolicy::Overwrite),
         ("dialog.skip", CollisionPolicy::Skip),
         ("dialog.rename", CollisionPolicy::RenameAuto),
@@ -149,7 +149,7 @@ fn colision_elige_politica_o_cancela() {
         // arriba, `colision_ignora_confirm_y_deny`).
         ("dialog.newer", CollisionPolicy::Newer),
     ];
-    for (cmd, policy) in casos {
+    for (cmd, policy) in cases {
         assert_eq!(
             dialog_action(&collision(), cmd),
             Some(DialogOutcome::Retry(policy)),
@@ -614,26 +614,26 @@ fn semantic_query_vacia_no_confirma() {
 /// sigue (baja al pasar del borde inferior, sube al pasar del superior).
 #[test]
 fn semantic_hits_cursor_scroll_clampa() {
-    let estado = |app: &norte_tui::app::App| match &app.modal {
+    let state = |app: &norte_tui::app::App| match &app.modal {
         Some(Modal::SemanticHits { offset, cursor, .. }) => (*offset, *cursor),
         other => panic!("modal inesperado: {other:?}"),
     };
     let mut app = app();
     app.modal = Some(semantic_hits(12));
     app.semantic_cursor(false);
-    assert_eq!(estado(&app), (0, 0), "no retrocede bajo cero");
+    assert_eq!(state(&app), (0, 0), "no retrocede bajo cero");
     for _ in 0..99 {
         app.semantic_cursor(true);
     }
     assert_eq!(
-        estado(&app),
+        state(&app),
         (2, 11),
         "cursor clampa en len-1 y la ventana lo sigue (12 - 10)"
     );
     for _ in 0..99 {
         app.semantic_cursor(false);
     }
-    assert_eq!(estado(&app), (0, 0), "la ventana vuelve a subir con él");
+    assert_eq!(state(&app), (0, 0), "la ventana vuelve a subir con él");
 }
 
 /// M4-IA-2: `SemanticHits` confirma como decisión (`ALLOW_CONFIRM`, Enter

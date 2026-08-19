@@ -18,10 +18,10 @@ use norte_tui::overlays::open_contextual_help;
 /// los dos panes ahí: sin destino escribible, `pane.copy` no puede correr.
 #[test]
 fn abrir_la_ayuda_congela_los_hechos_del_contexto() {
-    let dentro = VPath::parse("zip+file:///a.zip/!").expect("wire de test");
+    let inside = VPath::parse("zip+file:///a.zip/!").expect("wire de test");
     let mut app = App::new(
-        Pane::new(dentro.clone(), Vec::new()),
-        Pane::new(dentro, Vec::new()),
+        Pane::new(inside.clone(), Vec::new()),
+        Pane::new(inside, Vec::new()),
     );
     assert!(
         app.help_chords.availability("pane.copy").is_available(),

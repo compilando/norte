@@ -56,15 +56,15 @@ fn frame_pinta_panes_y_badge_no_utf8() {
     let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal de test");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
 
-    let contenido = terminal.backend().to_string();
-    assert!(contenido.contains("/docs"), "dir con marcador: {contenido}");
+    let content = terminal.backend().to_string();
+    assert!(content.contains("/docs"), "dir con marcador: {content}");
     assert!(
-        contenido.contains('\u{FFFD}') && contenido.contains("! "),
-        "no-UTF8 lossy Y con badge en prefijo: {contenido}"
+        content.contains('\u{FFFD}') && content.contains("! "),
+        "no-UTF8 lossy Y con badge en prefijo: {content}"
     );
     assert!(
-        contenido.contains("1/2"),
-        "posición del cursor en status: {contenido}"
+        content.contains("1/2"),
+        "posición del cursor en status: {content}"
     );
 }
 
@@ -119,18 +119,18 @@ fn columna_plugin_configurada_pinta_cabecera_y_celda() {
 
     let mut terminal = Terminal::new(TestBackend::new(80, 10)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
     assert!(
-        contenido.contains("git/branch"),
-        "cabecera de la columna plugin visible: {contenido}"
+        content.contains("git/branch"),
+        "cabecera de la columna plugin visible: {content}"
     );
     assert!(
-        contenido.contains("main"),
-        "celda del side-map visible: {contenido}"
+        content.contains("main"),
+        "celda del side-map visible: {content}"
     );
     assert!(
-        !contenido.contains('\u{202E}') && contenido.contains('\u{FFFD}'),
-        "el RLO del valor hostil llega ENMASCARADO al frame: {contenido}"
+        !content.contains('\u{202E}') && content.contains('\u{FFFD}'),
+        "el RLO del valor hostil llega ENMASCARADO al frame: {content}"
     );
 }
 
@@ -164,10 +164,10 @@ fn omitidas_del_contenedor_se_ven_en_la_status_bar() {
     app.panes[0].begin_listing(dir.clone(), Vec::new(), false, Some(3));
     let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let con_badge = terminal.backend().to_string();
+    let with_badge = terminal.backend().to_string();
     assert!(
-        con_badge.contains('3') && con_badge.contains("omit"),
-        "badge de omitidas visible: {con_badge}"
+        with_badge.contains('3') && with_badge.contains("omit"),
+        "badge de omitidas visible: {with_badge}"
     );
 
     // Some(0) = contenedor indexado SIN omisiones: nada que señalizar.
@@ -198,10 +198,10 @@ fn badge_sobrevive_al_truncado_en_pane_estrecho() {
 
     let mut terminal = Terminal::new(TestBackend::new(40, 8)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
     assert!(
-        contenido.contains("!xxx") || contenido.contains("! xxx"),
-        "la marca es visible aunque el � truncado no lo sea: {contenido}"
+        content.contains("!xxx") || content.contains("! xxx"),
+        "la marca es visible aunque el � truncado no lo sea: {content}"
     );
 }
 
@@ -228,14 +228,14 @@ fn panel_de_tasks_y_modal_se_pintan() {
 
     let mut terminal = Terminal::new(TestBackend::new(80, 14)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
     assert!(
-        contenido.contains("destination exists"),
-        "mensaje por categoría visible: {contenido}"
+        content.contains("destination exists"),
+        "mensaje por categoría visible: {content}"
     );
     assert!(
-        contenido.contains("[o]") && contenido.contains("[r]"),
-        "el diálogo de colisión lista sus opciones: {contenido}"
+        content.contains("[o]") && content.contains("[r]"),
+        "el diálogo de colisión lista sus opciones: {content}"
     );
 }
 
@@ -257,14 +257,14 @@ fn viewer_pinta_indicador_via_plugin_y_sus_lineas() {
     ));
     let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
     assert!(
-        contenido.contains("via Markdown"),
-        "indicador del previewer visible: {contenido}"
+        content.contains("via Markdown"),
+        "indicador del previewer visible: {content}"
     );
     assert!(
-        contenido.contains("titulo") && contenido.contains("cuerpo"),
-        "las líneas del preview se pintan: {contenido}"
+        content.contains("titulo") && content.contains("cuerpo"),
+        "las líneas del preview se pintan: {content}"
     );
 }
 
@@ -291,10 +291,10 @@ fn viewer_preview_lossy_pinta_el_aviso() {
     ));
     let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
     assert!(
-        contenido.contains("via Markdown") && contenido.contains("lossy"),
-        "el aviso lossy acompaña al «via …»: {contenido}"
+        content.contains("via Markdown") && content.contains("lossy"),
+        "el aviso lossy acompaña al «via …»: {content}"
     );
 }
 
@@ -392,33 +392,30 @@ fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
     });
     let mut terminal = Terminal::new(TestBackend::new(60, 14)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
 
     // El destino real sigue visible en su propia línea etiquetada.
     assert!(
-        contenido.contains("dst.txt"),
-        "el destino jamás se expulsa de la caja: {contenido}"
+        content.contains("dst.txt"),
+        "el destino jamás se expulsa de la caja: {content}"
     );
     // La ruta hostil quedó enmascarada Y marcada con el badge.
     assert!(
-        contenido.contains('\u{FFFD}'),
-        "controles/bidi → �: {contenido}"
+        content.contains('\u{FFFD}'),
+        "controles/bidi → �: {content}"
     );
     assert!(
-        contenido.contains('!'),
-        "el enmascarado se MARCA (spec §6): {contenido}"
+        content.contains('!'),
+        "el enmascarado se MARCA (spec §6): {content}"
     );
     // Las dos rutas van etiquetadas fuera de banda (posición + número).
     assert!(
-        contenido.contains("1:") && contenido.contains("2:"),
-        "una ruta por línea con etiqueta: {contenido}"
+        content.contains("1:") && content.contains("2:"),
+        "una ruta por línea con etiqueta: {content}"
     );
     // La sesión se pinta entre comillas (delimitada) y la línea de teclas
     // legítima está presente UNA vez al final del cuerpo.
-    assert!(
-        contenido.contains("\"s1\""),
-        "sesión delimitada: {contenido}"
-    );
+    assert!(content.contains("\"s1\""), "sesión delimitada: {content}");
 }
 
 /// Review H3c MINOR-5: cuántas rutas trae la petición lo elige el AGENTE, y el
@@ -456,24 +453,21 @@ fn el_pie_del_modal_de_aprobacion_se_pinta_con_un_lote_gigante() {
 
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
 
     assert!(
-        contenido.contains(&norte_i18n::t("modal-hint-help-open")),
-        "el aviso de teclas inertes se pinta con 400 rutas: {contenido}"
+        content.contains(&norte_i18n::t("modal-hint-help-open")),
+        "el aviso de teclas inertes se pinta con 400 rutas: {content}"
     );
     assert!(
-        contenido.contains(&norte_i18n::t("modal-approval-title")),
-        "y la pregunta sigue a la vista: {contenido}"
+        content.contains(&norte_i18n::t("modal-approval-title")),
+        "y la pregunta sigue a la vista: {content}"
     );
     // La lista está ACOTADA y resumida: la cola no se pinta ni empuja nada.
+    assert!(!content.contains("f400"), "la cola no se pinta: {content}");
     assert!(
-        !contenido.contains("f400"),
-        "la cola no se pinta: {contenido}"
-    );
-    assert!(
-        contenido.contains("390"),
-        "el resumen dice cuántas quedan fuera: {contenido}"
+        content.contains("390"),
+        "el resumen dice cuántas quedan fuera: {content}"
     );
 }
 
@@ -507,20 +501,20 @@ fn modal_de_plan_ai_enmascara_y_no_oculta_el_destino() {
     });
     let mut terminal = Terminal::new(TestBackend::new(60, 14)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
 
     assert!(
-        contenido.contains("destino-final"),
-        "el destino jamás se expulsa de la caja: {contenido}"
+        content.contains("destino-final"),
+        "el destino jamás se expulsa de la caja: {content}"
     );
-    assert!(contenido.contains('\u{FFFD}'), "bidi → �: {contenido}");
+    assert!(content.contains('\u{FFFD}'), "bidi → �: {content}");
     assert!(
-        contenido.contains('!'),
-        "el enmascarado se MARCA (spec §6): {contenido}"
+        content.contains('!'),
+        "el enmascarado se MARCA (spec §6): {content}"
     );
     assert!(
-        contenido.contains('→'),
-        "flecha fuera de banda en la línea del destino: {contenido}"
+        content.contains('→'),
+        "flecha fuera de banda en la línea del destino: {content}"
     );
 }
 
@@ -569,15 +563,15 @@ fn el_veredicto_del_lote_sobrevive_a_un_terminal_corto() {
     // 14 filas: el modal pide 21 y no cabe.
     let mut terminal = Terminal::new(TestBackend::new(80, 14)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
 
     assert!(
-        contenido.contains(&norte_i18n::t("modal-rename-batch-not-applicable")),
-        "el veredicto sobrevive al recorte: {contenido}"
+        content.contains(&norte_i18n::t("modal-rename-batch-not-applicable")),
+        "el veredicto sobrevive al recorte: {content}"
     );
     assert!(
-        !contenido.contains(&norte_i18n::t("modal-ai-rename-plan-hint")),
-        "y el pie jamás ofrece una tecla muda: {contenido}"
+        !content.contains(&norte_i18n::t("modal-ai-rename-plan-hint")),
+        "y el pie jamás ofrece una tecla muda: {content}"
     );
 }
 
@@ -642,21 +636,21 @@ fn footer_de_aprobacion_enmascara_chord_hostil_de_una_capa() {
 
         let mut terminal = Terminal::new(TestBackend::new(60, 14)).expect("terminal");
         terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-        let contenido = terminal.backend().to_string();
+        let content = terminal.backend().to_string();
 
         assert!(
-            contenido.contains('\u{FFFD}'),
-            "[{}] el pie del modal de aprobación debe llevar U+FFFD: {contenido}",
+            content.contains('\u{FFFD}'),
+            "[{}] el pie del modal de aprobación debe llevar U+FFFD: {content}",
             hazard.id
         );
         // El check es del TOKEN concreto, no un blanket `is_terminal_hazard`
-        // sobre `contenido`: la stringificación de `TestBackend` UNE filas
+        // sobre `content`: la stringificación de `TestBackend` UNE filas
         // con `\n` (un hazard legítimo del formato de grilla, no del dato
         // pintado) — comparar contra el hazard exacto evita ese falso
         // positivo.
         assert!(
-            !contenido.contains(hazard.token),
-            "[{}] el chord crudo no debe sobrevivir en el frame pintado: {contenido}",
+            !content.contains(hazard.token),
+            "[{}] el chord crudo no debe sobrevivir en el frame pintado: {content}",
             hazard.id
         );
     }
@@ -685,18 +679,18 @@ fn reinterpretar_nombres_pinta_legible_con_badge_e_indicador() {
 
     let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
     assert!(
-        contenido.contains("Папка"),
-        "nombre reinterpretado legible: {contenido}"
+        content.contains("Папка"),
+        "nombre reinterpretado legible: {content}"
     );
     assert!(
-        contenido.contains("! "),
-        "badge hostil conservado (el texto no son los bytes): {contenido}"
+        content.contains("! "),
+        "badge hostil conservado (el texto no son los bytes): {content}"
     );
     assert!(
-        contenido.contains("IBM866"),
-        "indicador persistente en la barra: {contenido}"
+        content.contains("IBM866"),
+        "indicador persistente en la barra: {content}"
     );
 
     // M1 del review: el ciclo da la VUELTA COMPLETA — desde la sugerencia
@@ -713,10 +707,10 @@ fn reinterpretar_nombres_pinta_legible_con_badge_e_indicador() {
         "vuelta completa con wrap: cp437 alcanzable desde cualquier entrada"
     );
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let apagado = terminal.backend().to_string();
+    let off = terminal.backend().to_string();
     assert!(
-        apagado.contains('\u{FFFD}'),
-        "apagado = lossy de siempre: {apagado}"
+        off.contains('\u{FFFD}'),
+        "apagado = lossy de siempre: {off}"
     );
 }
 
@@ -747,15 +741,12 @@ fn modal_de_confirmacion_sigue_la_reinterpretacion() {
     });
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
     assert!(
-        contenido.contains("Папка"),
-        "el modal pinta el texto por el que se navegó: {contenido}"
+        content.contains("Папка"),
+        "el modal pinta el texto por el que se navegó: {content}"
     );
-    assert!(
-        !contenido.contains("�����"),
-        "no el lossy crudo: {contenido}"
-    );
+    assert!(!content.contains("�����"), "no el lossy crudo: {content}");
 }
 
 /// #103 T10: el modal de un LOTE pinta una ruta POR LÍNEA (jamás dos
@@ -781,34 +772,31 @@ fn el_modal_de_un_lote_pinta_una_ruta_por_linea_y_resume_el_resto() {
     });
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let pintado = terminal.backend().to_string();
+    let painted = terminal.backend().to_string();
     // Los 10 primeros, cada uno en su línea; el 11.º YA no se lista.
-    let nombres: Vec<String> = (0..norte_frontend::MODAL_ITEM_LIMIT)
+    let names: Vec<String> = (0..norte_frontend::MODAL_ITEM_LIMIT)
         .map(|i| format!("f{i:02}"))
         .collect();
-    for nombre in &nombres {
-        let lineas = pintado.lines().filter(|l| l.contains(nombre)).count();
-        assert_eq!(
-            lineas, 1,
-            "{nombre} va en UNA línea, no {lineas}: {pintado}"
-        );
+    for nombre in &names {
+        let lines = painted.lines().filter(|l| l.contains(nombre)).count();
+        assert_eq!(lines, 1, "{nombre} va en UNA línea, no {lines}: {painted}");
     }
-    for linea in pintado.lines() {
-        let cuantos = nombres.iter().filter(|n| linea.contains(*n)).count();
+    for linea in painted.lines() {
+        let cuantos = names.iter().filter(|n| linea.contains(*n)).count();
         assert!(cuantos <= 1, "dos ítems en la misma línea: {linea:?}");
     }
-    assert!(!pintado.contains("f10"), "el 11.º no se lista: {pintado}");
+    assert!(!painted.contains("f10"), "el 11.º no se lista: {painted}");
     // …y el resumen dice cuántos quedan fuera (14 - 10 = 4).
     assert!(
-        pintado.lines().any(|l| l.contains('…') && l.contains('4')),
-        "falta el resumen de los que no caben: {pintado}"
+        painted.lines().any(|l| l.contains('…') && l.contains('4')),
+        "falta el resumen de los que no caben: {painted}"
     );
     // El destino, en su propia línea y con la flecha fuera de banda.
     assert!(
-        pintado
+        painted
             .lines()
             .any(|l| l.contains('→') && l.contains("/otro")),
-        "el destino va en su línea: {pintado}"
+        "el destino va en su línea: {painted}"
     );
 }
 
@@ -848,7 +836,7 @@ fn mark_pattern_modal_enmascara_el_patron_hostil_y_su_error() {
 
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
     // Review MAJOR M4: `!contains('\u{202E}')` por sí sola NUNCA puede
     // fallar aquí — U+202E es de ancho cero y el renderer de párrafo de
     // ratatui se COME los grafemas de ancho cero, enmascarados o no. Se
@@ -860,12 +848,12 @@ fn mark_pattern_modal_enmascara_el_patron_hostil_y_su_error() {
     // `mark_pattern_modal_text` (ui.rs) cubre el enmascarado en sí; este
     // E2E cubre que la ruta completa (push → confirm → draw) lo conserva.
     assert!(
-        !contenido.contains('\u{202E}'),
-        "el override RTL crudo no debe llegar al buffer (patrón NI error): {contenido}"
+        !content.contains('\u{202E}'),
+        "el override RTL crudo no debe llegar al buffer (patrón NI error): {content}"
     );
     assert!(
-        contenido.matches('\u{FFFD}').count() >= 2,
-        "patrón Y error deben enmascararse — no solo uno: {contenido}"
+        content.matches('\u{FFFD}').count() >= 2,
+        "patrón Y error deben enmascararse — no solo uno: {content}"
     );
 }
 
@@ -898,16 +886,16 @@ fn preview_del_match_bajo_el_cursor_en_la_barra() {
     );
     let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
     assert!(
-        contenido.contains(":42") && contenido.contains("hola"),
-        "línea y preview del hit en la barra: {contenido}"
+        content.contains(":42") && content.contains("hola"),
+        "línea y preview del hit en la barra: {content}"
     );
     // El cinturón (detail_for_bar) enmascara: ESC/bidi jamás crudos aunque
     // un core buggy los colara en el preview.
     assert!(
-        !contenido.contains('\u{1b}') && !contenido.contains('\u{202e}'),
-        "controles/bidi enmascarados en la barra: {contenido:?}"
+        !content.contains('\u{1b}') && !content.contains('\u{202e}'),
+        "controles/bidi enmascarados en la barra: {content:?}"
     );
 }
 
@@ -940,24 +928,24 @@ fn modal_semantic_enmascara_hits_hostiles() {
     });
     let mut terminal = Terminal::new(TestBackend::new(70, 12)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
 
     assert!(
-        contenido.contains("0.91"),
-        "el score jamás se expulsa de la caja: {contenido}"
+        content.contains("0.91"),
+        "el score jamás se expulsa de la caja: {content}"
     );
-    assert!(contenido.contains('\u{FFFD}'), "bidi → �: {contenido}");
+    assert!(content.contains('\u{FFFD}'), "bidi → �: {content}");
     assert!(
-        contenido.contains('!'),
-        "el enmascarado se MARCA (spec §6): {contenido}"
-    );
-    assert!(
-        contenido.contains('>'),
-        "marcador de cursor fuera de banda: {contenido}"
+        content.contains('!'),
+        "el enmascarado se MARCA (spec §6): {content}"
     );
     assert!(
-        contenido.contains("limpio.txt"),
-        "el hit limpio se pinta entero: {contenido}"
+        content.contains('>'),
+        "marcador de cursor fuera de banda: {content}"
+    );
+    assert!(
+        content.contains("limpio.txt"),
+        "el hit limpio se pinta entero: {content}"
     );
 }
 
@@ -995,10 +983,10 @@ fn la_ayuda_se_pinta_sobre_el_viewer() {
     let mut terminal = Terminal::new(TestBackend::new(70, 12)).expect("terminal");
     app.refresh_help(40, 8);
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
     assert!(
-        contenido.contains("this help"),
-        "la ayuda es visible sobre el viewer: {contenido}"
+        content.contains("this help"),
+        "la ayuda es visible sobre el viewer: {content}"
     );
 }
 
@@ -1026,10 +1014,10 @@ fn un_modal_se_pinta_sobre_el_viewer() {
     });
     let mut terminal = Terminal::new(TestBackend::new(70, 12)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
     assert!(
-        contenido.contains("borrame.txt"),
-        "el modal es visible sobre el viewer: {contenido}"
+        content.contains("borrame.txt"),
+        "el modal es visible sobre el viewer: {content}"
     );
 }
 
@@ -1062,18 +1050,18 @@ fn el_modal_de_nombre_en_destino_elide_las_rutas() {
     });
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let contenido = terminal.backend().to_string();
+    let content = terminal.backend().to_string();
     assert!(
-        contenido.contains('…'),
-        "la ruta larga se elide, no se corta a pelo: {contenido}"
+        content.contains('…'),
+        "la ruta larga se elide, no se corta a pelo: {content}"
     );
     assert!(
-        contenido.contains("destino"),
-        "la COLA del destino sobrevive al recorte: {contenido}"
+        content.contains("destino"),
+        "la COLA del destino sobrevive al recorte: {content}"
     );
     assert!(
-        contenido.contains("grande.log"),
-        "el nombre editable sigue visible: {contenido}"
+        content.contains("grande.log"),
+        "el nombre editable sigue visible: {content}"
     );
 }
 
@@ -1104,15 +1092,15 @@ fn pane_list_rows_cuenta_las_filas_que_de_verdad_se_pintan() {
     for alto in [10u16, 16, 24] {
         let mut terminal = Terminal::new(TestBackend::new(60, alto)).expect("terminal");
         terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-        let pintado = terminal.backend().to_string();
-        let filas = pintado.lines().filter(|l| l.contains(".txt")).count();
+        let painted = terminal.backend().to_string();
+        let rows = painted.lines().filter(|l| l.contains(".txt")).count();
         assert_eq!(
             usize::from(ui::pane_list_rows(
                 &app,
                 ratatui::layout::Rect::new(0, 0, 60, alto)
             )),
-            filas,
-            "alto {alto}: la cuenta debe ser la del buffer real:\n{pintado}"
+            rows,
+            "alto {alto}: la cuenta debe ser la del buffer real:\n{painted}"
         );
     }
     // Con el visor abierto no se pinta ningún pane: cero filas visibles.

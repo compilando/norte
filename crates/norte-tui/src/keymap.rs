@@ -700,7 +700,7 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
     /// pass this pin would be exactly the approximation rule 1 forbids.
     #[test]
     fn pane_gesture_chords_resolve_in_the_three_presets() {
-        let comunes = [
+        let common = [
             ((CtMods::ALT, CtCode::Char('i')), "pane.mirror"),
             ((CtMods::ALT, CtCode::Char('u')), "pane.pull"),
             ((CtMods::ALT, CtCode::Left), "nav.back"),
@@ -717,7 +717,7 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
             } else {
                 (CtMods::CONTROL, CtCode::Char('u'))
             };
-            for ((mods, code), command) in comunes.iter().chain(&[(swap, "pane.swap")]) {
+            for ((mods, code), command) in common.iter().chain(&[(swap, "pane.swap")]) {
                 let mut r = Resolver::new(eff.clone());
                 let chord = chord_from_crossterm(*mods, *code)
                     .unwrap_or_else(|| panic!("preset {name}: chord no modelado {code:?}"));

@@ -20,9 +20,9 @@ proptest! {
     fn toml_valido_con_formas_raras(
         seccion in "[a-z]{1,10}",
         clave in "[a-z_]{1,12}",
-        valor in ".{0,40}",
+        value in ".{0,40}",
     ) {
-        let doc = format!("[{seccion}]\n{clave} = {valor:?}\n");
+        let doc = format!("[{seccion}]\n{clave} = {value:?}\n");
         let _ = parse_keymap(&doc);
         let _ = toml::from_str::<norte_tui::config::NorteToml>(&doc);
     }

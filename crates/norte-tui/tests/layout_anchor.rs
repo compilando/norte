@@ -110,8 +110,8 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
 
 /// El trozo de la fila `row` que ocupa un pane que empieza en `x` y mide
 /// `width`. Por CARACTERES: `TestBackend` da una celda por carácter.
-fn recorte(lineas: &[String], row: u16, x: u16, width: u16) -> String {
-    lineas
+fn recorte(lines: &[String], row: u16, x: u16, width: u16) -> String {
+    lines
         .get(row as usize)
         .map(|l| {
             l.chars()
@@ -124,9 +124,9 @@ fn recorte(lineas: &[String], row: u16, x: u16, width: u16) -> String {
 
 /// El nombre de la entrada que va en la fila `offset` del pane `i`.
 fn nombre_visible(app: &App, i: usize, offset: usize) -> String {
-    let entrada = &app.panes[i].entries()[offset];
+    let entry = &app.panes[i].entries()[offset];
     String::from_utf8_lossy(
-        entrada
+        entry
             .path
             .file_name()
             .expect("una entrada de test tiene nombre")
@@ -138,7 +138,7 @@ fn nombre_visible(app: &App, i: usize, offset: usize) -> String {
 #[test]
 fn la_geometria_declarada_coincide_con_las_filas_pintadas() {
     let mut app = app_de_prueba_con(60);
-    let lineas = pintar(&mut app);
+    let lines = pintar(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
     let geom = ui::pane_geometry(&app, area).expect("dos panes pintados");
 
@@ -147,7 +147,7 @@ fn la_geometria_declarada_coincide_con_las_filas_pintadas() {
         let esperada = nombre_visible(&app, i, g.offset);
 
         // La primera fila de listado lleva la primera entrada visible.
-        let primera = recorte(&lineas, g.first_list_row, g.x, g.width);
+        let primera = recorte(&lines, g.first_list_row, g.x, g.width);
         assert!(
             primera.contains(&esperada),
             "pane {i}: la fila {} debería llevar {esperada:?}, lleva {primera:?}",
@@ -155,18 +155,18 @@ fn la_geometria_declarada_coincide_con_las_filas_pintadas() {
         );
 
         // La fila JUSTO ENCIMA es cromo (cabecera de columnas): nunca listado.
-        let cabecera = recorte(&lineas, g.first_list_row - 1, g.x, g.width);
+        let header = recorte(&lines, g.first_list_row - 1, g.x, g.width);
         assert!(
-            !cabecera.contains(&esperada),
-            "pane {i}: la cabecera no puede llevar contenido de listado: {cabecera:?}"
+            !header.contains(&esperada),
+            "pane {i}: la cabecera no puede llevar contenido de listado: {header:?}"
         );
 
         // Y la fila justo DEBAJO de la última de listado es el borde inferior.
         let bajo = g.first_list_row + g.list_rows;
-        let borde = recorte(&lineas, bajo, g.x, g.width);
+        let border = recorte(&lines, bajo, g.x, g.width);
         assert!(
-            borde.contains('─') && !borde.contains(&esperada),
-            "pane {i}: la fila {bajo} debería ser el borde inferior: {borde:?}"
+            border.contains('─') && !border.contains(&esperada),
+            "pane {i}: la fila {bajo} debería ser el borde inferior: {border:?}"
         );
         assert_eq!(
             bajo,
@@ -186,7 +186,7 @@ fn la_geometria_declarada_coincide_con_las_filas_pintadas() {
 #[test]
 fn con_ancho_impar_los_dos_panes_suman_el_frame() {
     let mut app = app_de_prueba_con(60);
-    let lineas = pintar_en(&mut app, 101, H);
+    let lines = pintar_en(&mut app, 101, H);
     let area = ratatui::layout::Rect::new(0, 0, 101, H);
     let geom = ui::pane_geometry(&app, area).expect("dos panes");
     assert_eq!(geom[0].x, 0);
@@ -200,9 +200,9 @@ fn con_ancho_impar_los_dos_panes_suman_el_frame() {
         "el derecho empieza donde acaba el izquierdo"
     );
     // Y lo pintado coincide: la última columna del frame no queda en blanco.
-    let borde = recorte(&lineas, 0, geom[1].x, geom[1].width);
+    let border = recorte(&lines, 0, geom[1].x, geom[1].width);
     assert_eq!(
-        borde.chars().count(),
+        border.chars().count(),
         geom[1].width as usize,
         "el pane derecho no llega al borde del frame"
     );
@@ -247,26 +247,26 @@ fn el_foco_abandona_el_pane_que_el_colapso_dejo_fuera() {
 #[test]
 fn con_una_pestana_abierta_la_geometria_sigue_cuadrando() {
     let mut app = app_de_prueba_con(60);
-    let antes =
+    let before =
         ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("dos panes")[0];
     app.tab_new();
-    let lineas = pintar(&mut app);
+    let lines = pintar(&mut app);
     let geom = ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("dos panes");
     assert_eq!(
         geom[0].first_list_row,
-        antes.first_list_row + 1,
+        before.first_list_row + 1,
         "la barra de pestañas baja el listado una fila"
     );
     assert_eq!(
         geom[0].list_rows,
-        antes.list_rows - 1,
+        before.list_rows - 1,
         "y le quita una fila de listado"
     );
     let esperada = nombre_visible(&app, 0, geom[0].offset);
-    let fila = recorte(&lineas, geom[0].first_list_row, geom[0].x, geom[0].width);
+    let row = recorte(&lines, geom[0].first_list_row, geom[0].x, geom[0].width);
     assert!(
-        fila.contains(&esperada),
-        "la primera fila de listado debería llevar {esperada:?}, lleva {fila:?}"
+        row.contains(&esperada),
+        "la primera fila de listado debería llevar {esperada:?}, lleva {row:?}"
     );
 }
 
@@ -287,14 +287,14 @@ fn una_pestana_nueva_nace_llena_y_en_el_mismo_sitio() {
 #[test]
 fn al_cerrar_la_ultima_pestana_el_pane_recupera_su_fila() {
     let mut app = app_de_prueba_con(60);
-    let antes =
+    let before =
         ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("dos panes")[0];
     app.tab_new();
     let _ = pintar(&mut app);
     app.tab_close();
     let _ = pintar(&mut app);
     let geom = ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("dos panes");
-    assert_eq!(geom[0].list_rows, antes.list_rows);
+    assert_eq!(geom[0].list_rows, before.list_rows);
 }
 
 /// Cambiar de pestaña cambia el listado que el lado enseña, y cada una
@@ -335,11 +335,11 @@ fn no_se_puede_cerrar_el_ultimo_panel() {
 fn agrandar_un_panel_le_da_sitio_y_al_otro_se_lo_quita() {
     let mut app = app_de_prueba_con(60);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
-    let antes = ui::pane_geometry(&app, area).expect("dos panes")[0].width;
+    let before = ui::pane_geometry(&app, area).expect("dos panes")[0].width;
     app.layout_resize(1);
     let _ = pintar(&mut app);
     let geom = ui::pane_geometry(&app, area).expect("dos panes");
-    assert!(geom[0].width > antes, "el enfocado crece");
+    assert!(geom[0].width > before, "el enfocado crece");
     assert_eq!(
         u32::from(geom[0].width) + u32::from(geom[1].width),
         u32::from(W),
@@ -394,18 +394,18 @@ fn cada_pestana_conserva_su_historial() {
 fn partir_da_tres_paneles_y_los_tres_cuadran() {
     let mut app = app_de_prueba_con(60);
     app.layout_split(norte_frontend::layout::Dir::Horizontal);
-    let lineas = pintar(&mut app);
+    let lines = pintar(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
     let geom = ui::pane_geometry(&app, area).expect("hay geometría");
     assert_eq!(geom.len(), 3, "tres paneles");
-    let ancho: u32 = geom.iter().map(|g| u32::from(g.width)).sum();
-    assert_eq!(ancho, u32::from(W), "y suman el frame entero");
+    let width: u32 = geom.iter().map(|g| u32::from(g.width)).sum();
+    assert_eq!(width, u32::from(W), "y suman el frame entero");
     for (i, g) in geom.iter().enumerate() {
         let esperada = nombre_visible(&app, i, g.offset);
-        let fila = recorte(&lineas, g.first_list_row, g.x, g.width);
+        let row = recorte(&lines, g.first_list_row, g.x, g.width);
         assert!(
-            fila.contains(&esperada),
-            "panel {i}: la fila {} debería llevar {esperada:?}, lleva {fila:?}",
+            row.contains(&esperada),
+            "panel {i}: la fila {} debería llevar {esperada:?}, lleva {row:?}",
             g.first_list_row
         );
     }
@@ -416,10 +416,10 @@ fn partir_da_tres_paneles_y_los_tres_cuadran() {
 #[test]
 fn el_panel_recien_partido_se_queda_el_foco() {
     let mut app = app_de_prueba_con(60);
-    let antes = app.focused_slot();
+    let before = app.focused_slot();
     app.layout_split(norte_frontend::layout::Dir::Horizontal);
     let _ = pintar(&mut app);
-    assert_ne!(app.focused_slot(), antes, "el foco viaja al nuevo");
+    assert_ne!(app.focused_slot(), before, "el foco viaja al nuevo");
 }
 
 /// Con tres paneles, cerrar uno vuelve a dos y el foco sobrevive.
@@ -450,8 +450,8 @@ fn con_tres_paneles_no_hay_destino_hasta_que_se_designa() {
     assert_eq!(app.target_index(), None, "con tres, hay que designarlo");
     app.layout_set_target();
     let _ = pintar(&mut app);
-    let destino = app.target_index().expect("designado");
-    assert_ne!(destino, app.focus(), "y nunca es uno mismo");
+    let dest = app.target_index().expect("designado");
+    assert_ne!(dest, app.focus(), "y nunca es uno mismo");
 }
 
 /// El destino designado se MARCA en su cromo, y solo a partir de tres: con
@@ -491,10 +491,10 @@ fn los_botones_de_la_barra_de_pestanas_se_pulsan() {
         .find(|z| z.pane == 0 && z.action == ui::TabAction::Goto(0))
         .copied()
         .expect("la primera pestaña tiene su zona");
-    let antes = app.focused_slot();
+    let before = app.focused_slot();
     pulsar(&mut app, primera.x0, primera.row);
     let _ = pintar(&mut app);
-    assert_ne!(app.focused_slot(), antes, "cambió de pestaña");
+    assert_ne!(app.focused_slot(), before, "cambió de pestaña");
 
     // `[+]` abre otra.
     let zonas = ui::tab_zones(&app, area);
@@ -506,7 +506,7 @@ fn los_botones_de_la_barra_de_pestanas_se_pulsan() {
     pulsar(&mut app, mas.x0, mas.row);
     let _ = pintar(&mut app);
     let t = ui::tab_strip_for(&app, 0).expect("sigue habiendo grupo");
-    assert_eq!(t.titulos.len(), 3, "el botón abrió una tercera");
+    assert_eq!(t.titles.len(), 3, "el botón abrió una tercera");
 
     // `[x]` cierra la activa.
     let zonas = ui::tab_zones(&app, area);
@@ -518,7 +518,7 @@ fn los_botones_de_la_barra_de_pestanas_se_pulsan() {
     pulsar(&mut app, equis.x0, equis.row);
     let _ = pintar(&mut app);
     let t = ui::tab_strip_for(&app, 0).expect("quedan dos");
-    assert_eq!(t.titulos.len(), 2, "y el otro la cerró");
+    assert_eq!(t.titles.len(), 2, "y el otro la cerró");
 }
 
 /// Un click en la fila de la barra pero FUERA de toda zona no hace nada.
@@ -529,19 +529,19 @@ fn un_click_en_el_hueco_de_la_barra_no_hace_nada() {
     let _ = pintar(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
     let zonas = ui::tab_zones(&app, area);
-    let fila = zonas[0].row;
-    let ultima = zonas
+    let row = zonas[0].row;
+    let last = zonas
         .iter()
         .filter(|z| z.pane == 0)
         .map(|z| z.x1)
         .max()
         .expect("hay zonas");
-    let antes = ui::tab_strip_for(&app, 0).expect("grupo").titulos.len();
-    pulsar(&mut app, ultima + 1, fila);
+    let before = ui::tab_strip_for(&app, 0).expect("grupo").titles.len();
+    pulsar(&mut app, last + 1, row);
     let _ = pintar(&mut app);
     assert_eq!(
-        ui::tab_strip_for(&app, 0).expect("grupo").titulos.len(),
-        antes
+        ui::tab_strip_for(&app, 0).expect("grupo").titles.len(),
+        before
     );
 }
 
@@ -551,21 +551,21 @@ fn un_click_en_el_hueco_de_la_barra_no_hace_nada() {
 fn el_menu_se_pinta_y_sus_zonas_coinciden() {
     let mut app = app_de_prueba_con(60);
     app.menu = Some(norte_frontend::menu::MenuState::new());
-    let lineas = pintar(&mut app);
+    let lines = pintar(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
     let zonas = ui::menu_zones(&app, area);
     assert!(!zonas.is_empty(), "hay títulos y elementos que pulsar");
 
     // El primer título está pintado donde su zona dice.
-    let titulo = zonas
+    let title = zonas
         .iter()
         .find(|z| z.hit == ui::MenuHit::Title(0))
         .copied()
         .expect("el primer título tiene zona");
-    let texto = recorte(&lineas, titulo.row, titulo.x0, titulo.x1 - titulo.x0 + 1);
+    let text = recorte(&lines, title.row, title.x0, title.x1 - title.x0 + 1);
     assert!(
-        texto.trim() == norte_i18n::t("menu-file"),
-        "la zona del título no cae donde se pintó: {texto:?}"
+        text.trim() == norte_i18n::t("menu-file"),
+        "la zona del título no cae donde se pintó: {text:?}"
     );
 
     // Y el primer elemento del desplegable lleva su etiqueta.
@@ -574,9 +574,9 @@ fn el_menu_se_pinta_y_sus_zonas_coinciden() {
         .find(|z| z.hit == ui::MenuHit::Item(0))
         .copied()
         .expect("el primer elemento tiene zona");
-    let fila = recorte(&lineas, item.row, item.x0, item.x1 - item.x0 + 1);
+    let row = recorte(&lines, item.row, item.x0, item.x1 - item.x0 + 1);
     assert!(
-        !fila.trim().is_empty(),
+        !row.trim().is_empty(),
         "el desplegable no pintó su primer elemento"
     );
 }
@@ -614,12 +614,12 @@ fn pulsar_un_titulo_abre_su_menu_y_fuera_cierra() {
 #[test]
 fn un_menu_abierto_es_dueno_del_teclado() {
     let mut app = app_de_prueba_con(60);
-    let antes = app.panes[0].cursor();
+    let before = app.panes[0].cursor();
     app.menu = Some(norte_frontend::menu::MenuState::new());
     let _ = pintar(&mut app);
     assert_eq!(
         app.panes[0].cursor(),
-        antes,
+        before,
         "abrir el menú no mueve nada de detrás"
     );
 }
@@ -633,8 +633,8 @@ fn un_menu_abierto_es_dueno_del_teclado() {
 #[test]
 fn la_pantalla_orthodox_no_se_mueve() {
     let mut app = app_de_prueba_con(60);
-    let lineas = pintar(&mut app);
-    insta::assert_snapshot!("orthodox-100x30", lineas.join("\n"));
+    let lines = pintar(&mut app);
+    insta::assert_snapshot!("orthodox-100x30", lines.join("\n"));
 }
 
 /// El ancla, otra vez, CON el sidebar abierto (L3).
@@ -648,7 +648,7 @@ fn la_pantalla_orthodox_no_se_mueve() {
 fn la_geometria_declarada_coincide_con_lo_pintado_con_el_sidebar_abierto() {
     let mut app = app_de_prueba_con(60);
     app.toggle_places();
-    let lineas = pintar(&mut app);
+    let lines = pintar(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
     let geom = ui::pane_geometry(&app, area).expect("dos panes pintados");
 
@@ -665,7 +665,7 @@ fn la_geometria_declarada_coincide_con_lo_pintado_con_el_sidebar_abierto() {
 
     for (i, g) in geom.iter().enumerate() {
         let esperada = nombre_visible(&app, i, g.offset);
-        let primera = recorte(&lineas, g.first_list_row, g.x, g.width);
+        let primera = recorte(&lines, g.first_list_row, g.x, g.width);
         assert!(
             primera.contains(&esperada),
             "pane {i}: la fila {} debería llevar {esperada:?}, lleva {primera:?}",
@@ -695,9 +695,9 @@ fn los_cinco_presets_pintan_lo_que_dicen() {
         for (w, h) in [(80_u16, 24_u16), (40, 10)] {
             let mut app = app_de_prueba_con(60);
             app.set_layout(norte_frontend::layout::presets::tree(name).expect("de fábrica"));
-            let lineas = pintar_en(&mut app, w, h);
-            assert_eq!(lineas.len(), h as usize, "{name} {w}x{h}");
-            insta::assert_snapshot!(format!("preset-{name}-{w}x{h}"), lineas.join("\n"));
+            let lines = pintar_en(&mut app, w, h);
+            assert_eq!(lines.len(), h as usize, "{name} {w}x{h}");
+            insta::assert_snapshot!(format!("preset-{name}-{w}x{h}"), lines.join("\n"));
         }
     }
 }

@@ -144,10 +144,10 @@ fn every_hostile_name_survives_as_a_cwd_and_is_masked_on_screen() {
         // (c) What a human is shown carries no terminal hazard. This is the
         //     line `msg-shell-remote` interpolates, and it lands on a
         //     terminal norte has already released.
-        let (texto, _hostil) = norte_frontend::path_display(&dir);
+        let (text, _hostil) = norte_frontend::path_display(&dir);
         assert!(
-            !texto.chars().any(norte_encoding::is_terminal_hazard),
-            "{}: a hazard reached the status bar: {texto:?} ({})",
+            !text.chars().any(norte_encoding::is_terminal_hazard),
+            "{}: a hazard reached the status bar: {text:?} ({})",
             name.id,
             name.why
         );

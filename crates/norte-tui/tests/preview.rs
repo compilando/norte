@@ -19,7 +19,7 @@ fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire válido")
 }
 
-fn entrada(dir: &VPath, nombre: &str, kind: EntryKind) -> Entry {
+fn entry(dir: &VPath, nombre: &str, kind: EntryKind) -> Entry {
     Entry {
         attrs: std::collections::BTreeMap::new(),
         path: dir
@@ -36,17 +36,20 @@ fn entrada(dir: &VPath, nombre: &str, kind: EntryKind) -> Entry {
 /// `Pane::new` ORDENA, y el orden pone los directorios primero: el cursor
 /// arranca sobre `carpeta`, no sobre el fichero. Los tests lo colocan a mano.
 fn app_de_prueba() -> App {
-    let izq = vp("file:///izq");
-    let der = vp("file:///der");
+    let left = vp("file:///izq");
+    let right = vp("file:///der");
     App::new(
         Pane::new(
-            izq.clone(),
+            left.clone(),
             vec![
-                entrada(&izq, "uno.txt", EntryKind::File),
-                entrada(&izq, "carpeta", EntryKind::Dir),
+                entry(&left, "uno.txt", EntryKind::File),
+                entry(&left, "carpeta", EntryKind::Dir),
             ],
         ),
-        Pane::new(der.clone(), vec![entrada(&der, "dos.txt", EntryKind::File)]),
+        Pane::new(
+            right.clone(),
+            vec![entry(&right, "dos.txt", EntryKind::File)],
+        ),
     )
 }
 
@@ -137,16 +140,16 @@ fn si_muere_el_hueco_seguido_se_degrada_al_activo_y_lo_dice() {
     use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, Size, SlotId};
     let mut app = app_de_prueba();
     app.toggle_preview();
-    let hueco = app.preview_slot().expect("abierto");
+    let slot = app.preview_slot().expect("abierto");
     // Se vuelve a acoplar el MISMO hueco atado a uno CONCRETO que no existe:
     // es el estado en que queda un `follows: Slot(id)` cuyo panel se cerró.
-    let foco = app.focused_slot();
-    app.layout = app.layout.close_slot(hueco).expect("se puede cerrar").dock(
-        foco,
+    let focus = app.focused_slot();
+    app.layout = app.layout.close_slot(slot).expect("se puede cerrar").dock(
+        focus,
         Edge::Right,
         Size::Weight(1),
         &Node::slot_bound(
-            hueco,
+            slot,
             KindId::new("viewer"),
             Bindings {
                 follows: Some(Follow::Slot(SlotId(777))),
@@ -159,12 +162,8 @@ fn si_muere_el_hueco_seguido_se_degrada_al_activo_y_lo_dice() {
         "el reparto en sí no tiene nada que arreglar"
     );
     let mut diags = Vec::new();
-    let destino =
-        norte_frontend::layout::resolve_follow(&app.layout, hueco, &app.roles, &mut diags);
-    assert_eq!(
-        destino,
-        app.roles.get(norte_frontend::layout::RoleId::Active)
-    );
+    let dest = norte_frontend::layout::resolve_follow(&app.layout, slot, &app.roles, &mut diags);
+    assert_eq!(dest, app.roles.get(norte_frontend::layout::RoleId::Active));
     assert!(
         diags
             .iter()
@@ -185,9 +184,9 @@ fn si_muere_el_hueco_seguido_se_degrada_al_activo_y_lo_dice() {
 #[test]
 fn abrir_el_preview_no_se_lleva_el_teclado() {
     let mut app = app_de_prueba();
-    let antes = (app.panes.len(), app.focus());
+    let before = (app.panes.len(), app.focus());
     app.toggle_preview();
-    assert_eq!((app.panes.len(), app.focus()), antes);
+    assert_eq!((app.panes.len(), app.focus()), before);
     assert_eq!(app.key_owner(), KeyOwner::Panes);
     assert!(app.preview_slot().is_some());
 }
@@ -207,11 +206,11 @@ fn la_segunda_pulsacion_enfoca_el_preview() {
 #[test]
 fn la_tercera_pulsacion_cierra_y_devuelve_el_arbol_de_antes() {
     let mut app = app_de_prueba();
-    let antes = app.layout.clone();
+    let before = app.layout.clone();
     app.toggle_preview();
     app.toggle_preview();
     app.toggle_preview();
-    assert_eq!(app.layout, antes);
+    assert_eq!(app.layout, before);
     assert!(app.preview_slot().is_none());
     assert_eq!(app.key_owner(), KeyOwner::Panes);
 }
@@ -224,8 +223,8 @@ fn la_tercera_pulsacion_cierra_y_devuelve_el_arbol_de_antes() {
 fn una_lectura_denegada_pinta_el_motivo_y_no_abre_modal() {
     let mut app = app_de_prueba();
     app.toggle_preview();
-    let hueco = app.preview_slot().expect("abierto");
-    app.preview_failed(hueco, "err-permission-denied");
+    let slot = app.preview_slot().expect("abierto");
+    app.preview_failed(slot, "err-permission-denied");
     assert!(app.modal.is_none(), "no se pregunta nada");
 
     let mut terminal =
@@ -235,11 +234,11 @@ fn una_lectura_denegada_pinta_el_motivo_y_no_abre_modal() {
     terminal
         .draw(|f| norte_tui::ui::draw(f, &app))
         .expect("draw");
-    let texto = terminal.backend().to_string();
-    let motivo = norte_i18n::t_in(norte_i18n::Lang::Es, "err-permission-denied");
+    let text = terminal.backend().to_string();
+    let reason = norte_i18n::t_in(norte_i18n::Lang::Es, "err-permission-denied");
     assert!(
-        texto.contains(&motivo),
-        "el motivo se lee dentro del hueco:\n{texto}"
+        text.contains(&reason),
+        "el motivo se lee dentro del hueco:\n{text}"
     );
 }
 

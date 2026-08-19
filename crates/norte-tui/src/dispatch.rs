@@ -19,11 +19,11 @@ use crate::app::{
 };
 use crate::config;
 use crate::gestures::{
-    desconectar, editar_lo_de_debajo, mirror_plan, pull_plan, resolve_opener, run_pane_gesture,
+    disconnect, edit_under_cursor, mirror_plan, pull_plan, resolve_opener, run_pane_gesture,
     shell_cwd,
 };
 use crate::keymap::Command;
-use crate::mutations::{comprueba_archivo, desempaqueta, junta_trozos, lanza_recuento};
+use crate::mutations::{combine_pieces, launch_size_count, test_archive, unpack};
 use crate::nav;
 use crate::navigate::{Cd, cd};
 use crate::overlays::open_contextual_help;
@@ -128,9 +128,9 @@ pub async fn dispatch(
         // ÚNICO junto con desplegar su sección. Si ya estaba abierto no se
         // vuelven a pedir: esa pulsación solo se lleva el teclado.
         Command::LayoutPlaces => {
-            let estaba = app.places_slot().is_some();
+            let was = app.places_slot().is_some();
             app.toggle_places();
-            if !estaba && app.places_drives_visible() {
+            if !was && app.places_drives_visible() {
                 refresh_places_drives(app, backend).await;
             }
             refresh_places_favorites(app);
@@ -154,7 +154,7 @@ pub async fn dispatch(
             // hay ficheros de usuario: quedan las cinco de fábrica. Antes se
             // caía a `PathBuf::default()`, que es leer `./layouts/` del
             // directorio actual — o sea, clonar un repo y pulsar F9 (#244 m3).
-            let mios = match config::user_config_dir() {
+            let mine = match config::user_config_dir() {
                 Some(dir) => tokio::task::spawn_blocking(move || {
                     use norte_frontend::layout::config;
                     config::list(&dir)
@@ -169,7 +169,7 @@ pub async fn dispatch(
                 .unwrap_or_default(),
                 None => Vec::new(),
             };
-            app.open_layout_picker(mios);
+            app.open_layout_picker(mine);
         }
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
@@ -240,12 +240,12 @@ pub async fn dispatch(
         // #124: una PÁGINA es una pantalla del pane (menos una fila de
         // contexto), no una constante — el alto real llega del último frame.
         Command::CursorPageUp => {
-            let paso = app.focused().page_step();
-            app.focused_mut().move_up(paso);
+            let step = app.focused().page_step();
+            app.focused_mut().move_up(step);
         }
         Command::CursorPageDown => {
-            let paso = app.focused().page_step();
-            app.focused_mut().move_down(paso);
+            let step = app.focused().page_step();
+            app.focused_mut().move_down(step);
         }
         Command::CursorTop => app.focused_mut().move_to_start(),
         Command::CursorBottom => app.focused_mut().move_to_end(),
@@ -314,8 +314,8 @@ pub async fn dispatch(
             // se adivina cuál — en los dos casos se teclea la dirección en vez
             // de fallar. Adivinarla sería pérdida de datos silenciosa
             // (ADR 0058 D7); callarse, una tecla muerta.
-            if let Some(destino) = app.target_index() {
-                app.open_transfer(kind, app.focus(), destino, None);
+            if let Some(dest) = app.target_index() {
+                app.open_transfer(kind, app.focus(), dest, None);
             } else {
                 app.open_transfer_dest(kind);
             }
@@ -394,11 +394,11 @@ pub async fn dispatch(
             // así que N sondeos serían N round-trips de red para la misma
             // respuesta.
             if let Some(first) = app.focused().marked_paths().first() {
-                let hay_papelera = backend
+                let has_trash = backend
                     .capabilities(first)
                     .await
                     .is_ok_and(|c| c.flags.contains(norte_proto::CapabilityFlags::TRASH));
-                let permanent = cmd == Command::PaneDeletePermanent || !hay_papelera;
+                let permanent = cmd == Command::PaneDeletePermanent || !has_trash;
                 app.open_delete_modal(permanent);
             }
         }
@@ -431,7 +431,7 @@ pub async fn dispatch(
         // Y desconectar SUELTA la sesión, no solo se va del panel: si no, el
         // socket seguiría abierto hasta que la sesión venciera sola y
         // «desconectar» sería un nombre para irse a otro sitio.
-        Command::PaneDisconnect => desconectar(app, backend).await,
+        Command::PaneDisconnect => disconnect(app, backend).await,
         Command::PaneOpen => resolve_opener(app),
         // #133: F4 EDITA. Lo ejecuta el run loop, como el shell y como
         // `pane.open`: es él quien tiene la terminal, y suspender la TUI para
@@ -442,7 +442,7 @@ pub async fn dispatch(
         // un nombre con una comilla, un `$` o un salto de línea o rompe la
         // línea o ejecuta parte de sí mismo, y aquí los nombres son bytes
         // (regla 1).
-        Command::PaneEdit => match editar_lo_de_debajo(app) {
+        Command::PaneEdit => match edit_under_cursor(app) {
             Ok(pendiente) => app.pending_shell = Some(pendiente),
             Err(msg) => app.message = Some(msg),
         },
@@ -582,22 +582,22 @@ pub async fn dispatch(
                 if let Ok(fresca) = backend.stat(&dir).await {
                     app.properties_hydrate(fresca);
                 }
-                lanza_recuento(app, backend, vec![dir], true).await;
+                launch_size_count(app, backend, vec![dir], true).await;
             }
         }
         // Y contar a mano, sobre lo MARCADO (o el cursor si no hay marcas):
         // «¿cuánto ocupa todo esto?» es una pregunta sobre la selección.
         Command::PaneDirSize => {
-            let objetivos = app.focused().marked_paths();
-            lanza_recuento(app, backend, objetivos, false).await;
+            let targets = app.focused().marked_paths();
+            launch_size_count(app, backend, targets, false).await;
         }
         // #132: escribir archivos. Los cinco comandos que los cuatro presets
         // atan y norte no tenía.
         Command::PanePack => app.open_pack(),
         Command::PaneSplitFile => app.open_split(),
-        Command::PaneUnpack => desempaqueta(app, backend).await,
-        Command::PaneTestArchive => comprueba_archivo(app, backend).await,
-        Command::PaneCombineFiles => junta_trozos(app, backend).await,
+        Command::PaneUnpack => unpack(app, backend).await,
+        Command::PaneTestArchive => test_archive(app, backend).await,
+        Command::PaneCombineFiles => combine_pieces(app, backend).await,
         Command::PaneColumns => {
             let plugins = backend
                 .plugins_list()

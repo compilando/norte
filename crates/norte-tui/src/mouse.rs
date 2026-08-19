@@ -128,7 +128,7 @@ pub struct Hit {
 /// re-ordenado— el índice pasa a nombrar otro fichero, y el gesto ha dejado
 /// de ser el que el usuario hizo.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-struct Vigencia {
+struct Validity {
     /// [`crate::app::Pane::listing_epoch`] de cada pane VISIBLE, en orden.
     ///
     /// Longitud variable desde P6: con splits hay más de dos, y un vector que
@@ -170,8 +170,8 @@ pub struct MouseState {
     drag: Drag,
     /// `(cuándo, dónde)` del último click izquierdo, para el doble.
     last_click: Option<(Instant, Spot)>,
-    /// La [`Vigencia`] del frame anterior, para detectar el cambio.
-    vigencia: Vigencia,
+    /// La [`Validity`] del frame anterior, para detectar el cambio.
+    validity: Validity,
     /// Los modificadores del ÚLTIMO evento de ratón, para que [`drop_hint`]
     /// pueda preguntarle a [`Drag::pending`] qué haría soltar AHORA.
     ///
@@ -225,7 +225,7 @@ pub fn after_frame(
     menu_zones: Vec<crate::ui::MenuZone>,
     places_zones: Vec<crate::ui::PlaceZone>,
 ) {
-    let vigencia = Vigencia {
+    let validity = Validity {
         epochs: app
             .panes
             .iter()
@@ -235,10 +235,10 @@ pub fn after_frame(
         overlay: overlay_open(app),
     };
     // Sin panes pintados (visor abierto) tampoco hay dónde soltar.
-    if vigencia != app.mouse.vigencia || geometry.is_none() {
+    if validity != app.mouse.validity || geometry.is_none() {
         app.mouse.invalidate();
     }
-    app.mouse.vigencia = vigencia;
+    app.mouse.validity = validity;
     app.mouse.geometry = geometry;
     app.mouse.tab_zones = tab_zones;
     app.mouse.menu_zones = menu_zones;
@@ -335,11 +335,11 @@ pub fn drop_hint(app: &App) -> Option<String> {
     }
     // El dir destino, con el MISMO saneado que la cabecera del pane (regla
     // 1: display siempre lossy, y marcado si es hostil).
-    let (to_txt, hostil) = norte_frontend::path_display_with(
+    let (to_txt, hostile) = norte_frontend::path_display_with(
         app.panes[to_pane].dir(),
         app.panes[to_pane].name_encoding(),
     );
-    let to_txt = if hostil {
+    let to_txt = if hostile {
         format!("{HOSTILE_BADGE} {to_txt}")
     } else {
         to_txt
@@ -400,13 +400,13 @@ fn overlay_open(app: &App) -> bool {
 /// [`After::MenuAccept`], porque ejecutar un comando es asíncrono y este módulo
 /// no tiene el backend. El run loop lo remata por el mismo camino que `Enter`.
 fn menu_click(app: &mut App, col: u16, row: u16) -> After {
-    let zona = app
+    let zone = app
         .mouse
         .menu_zones
         .iter()
         .find(|z| z.row == row && col >= z.x0 && col <= z.x1)
         .copied();
-    match zona.map(|z| z.hit) {
+    match zone.map(|z| z.hit) {
         Some(crate::ui::MenuHit::Title(i)) => {
             if let Some(m) = &mut app.menu {
                 m.open(i);

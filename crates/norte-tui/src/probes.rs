@@ -64,7 +64,7 @@ pub fn spawn_stat_probe(backend: &Backend, paths: Vec<(usize, VPath)>) -> StatPr
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
     tokio::spawn(async move {
-        let hidratadas: Vec<(usize, VPath, Entry)> = futures::stream::iter(paths)
+        let hydrated: Vec<(usize, VPath, Entry)> = futures::stream::iter(paths)
             .map(|(pane, path)| {
                 let b = b.clone();
                 async move {
@@ -79,7 +79,7 @@ pub fn spawn_stat_probe(backend: &Backend, paths: Vec<(usize, VPath)>) -> StatPr
             .filter_map(|r| async move { r })
             .collect()
             .await;
-        let _ = tx.send(hidratadas);
+        let _ = tx.send(hydrated);
     });
     StatProbe { rx }
 }
@@ -112,7 +112,7 @@ pub fn spawn_compare_stat_probe(
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
     tokio::spawn(async move {
-        let resultado: Vec<(VPath, Option<Entry>)> = futures::stream::iter(paths)
+        let result: Vec<(VPath, Option<Entry>)> = futures::stream::iter(paths)
             .map(|path| {
                 let b = b.clone();
                 async move {
@@ -126,7 +126,7 @@ pub fn spawn_compare_stat_probe(
             .buffer_unordered(STAT_BATCH_CONCURRENCY)
             .collect()
             .await;
-        let _ = tx.send(resultado);
+        let _ = tx.send(result);
     });
     CompareStatProbe { rx, generation }
 }

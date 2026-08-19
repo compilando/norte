@@ -97,20 +97,20 @@ fn pintar(app: &mut App) -> Vec<String> {
 ///
 /// Compara contra el nombre de la entrada, no contra un literal: `Pane::new`
 /// ORDENA, así que `entries[13]` no es «f13».
-fn assert_fila(lineas: &[String], app: &App, row: u16, index: usize) {
-    let entrada = &app.panes[0].entries()[index];
-    let nombre = String::from_utf8_lossy(
-        entrada
+fn assert_fila(lines: &[String], app: &App, row: u16, index: usize) {
+    let entry = &app.panes[0].entries()[index];
+    let name = String::from_utf8_lossy(
+        entry
             .path
             .file_name()
             .expect("una entrada de test tiene nombre")
             .as_bytes(),
     )
     .into_owned();
-    let pintada = &lineas[usize::from(row)];
+    let pintada = &lines[usize::from(row)];
     assert!(
-        pintada.contains(&format!("{nombre} ")),
-        "la fila {row} debería pintar `{nombre}` (índice {index}) y pinta: {pintada}"
+        pintada.contains(&format!("{name} ")),
+        "la fila {row} debería pintar `{name}` (índice {index}) y pinta: {pintada}"
     );
 }
 
@@ -142,23 +142,26 @@ fn el_layout_de_estos_tests_es_el_que_se_pinta() {
     // ESTE test con un mensaje claro, y no los seis siguientes con
     // aritmética confusa.
     let mut app = app_pintada(5);
-    let lineas = pintar(&mut app);
+    let lines = pintar(&mut app);
     let geom = app.mouse.geometry().expect("hay geometría");
-    let (izq, der) = (geom[0], geom[1]);
-    assert_eq!((izq.x, izq.y, izq.width, izq.height), (0, 0, 30, 11));
-    assert_eq!((der.x, der.y, der.width, der.height), (30, 0, 30, 11));
-    assert_eq!(izq.first_list_row, FILA0, "borde superior + cabecera");
-    assert_eq!(izq.list_rows, FILAS, "interior menos la cabecera");
-    assert_eq!(izq.offset, 0, "cursor en la primera: sin scroll");
+    let (left, right) = (geom[0], geom[1]);
+    assert_eq!((left.x, left.y, left.width, left.height), (0, 0, 30, 11));
+    assert_eq!(
+        (right.x, right.y, right.width, right.height),
+        (30, 0, 30, 11)
+    );
+    assert_eq!(left.first_list_row, FILA0, "borde superior + cabecera");
+    assert_eq!(left.list_rows, FILAS, "interior menos la cabecera");
+    assert_eq!(left.offset, 0, "cursor en la primera: sin scroll");
     // Y lo que de verdad hay PINTADO en esas filas. El indicador de orden
     // (`▲`) en vez del rótulo de la columna: el rótulo está traducido y
     // estos tests no fijan idioma.
     assert!(
-        lineas[1].contains('▲'),
+        lines[1].contains('▲'),
         "fila 1 = cabecera de columnas: {}",
-        lineas[1]
+        lines[1]
     );
-    assert_fila(&lineas, &app, FILA0, 0);
+    assert_fila(&lines, &app, FILA0, 0);
 }
 
 #[test]
@@ -254,16 +257,16 @@ fn un_click_enfoca_ese_pane_y_mueve_el_cursor() {
 fn un_click_sobre_un_listado_desplazado_suma_el_scroll() {
     let mut app = app_pintada(40);
     app.panes[0].set_cursor(20);
-    let lineas = pintar(&mut app);
+    let lines = pintar(&mut app);
     let offset = app.mouse.geometry().expect("geometría")[0].offset;
     assert_eq!(offset, 21 - usize::from(FILAS), "el cursor va al borde");
     let hit = mouse::hit_test(&app, 5, FILA0).expect("dentro del pane");
     assert_eq!(hit.index, Some(offset), "la primera fila PINTADA");
     // Contra el buffer: la fila que se resuelve es la que se ve.
-    assert_fila(&lineas, &app, FILA0, offset);
+    assert_fila(&lines, &app, FILA0, offset);
     let hit = mouse::hit_test(&app, 5, FILA0 + FILAS - 1).expect("dentro del pane");
     assert_eq!(hit.index, Some(20), "la última pintada es el cursor");
-    assert_fila(&lineas, &app, FILA0 + FILAS - 1, 20);
+    assert_fila(&lines, &app, FILA0 + FILAS - 1, 20);
 }
 
 /// La rueda desplaza el listado BAJO EL PUNTERO y no toca el foco. Mirar un
@@ -397,10 +400,10 @@ fn un_arrastre_marca_lo_que_barre() {
 fn un_drop_abre_el_mismo_modal_que_la_tecla_de_copiar() {
     let mut app = app_pintada(10);
     // Dos marcas a mano (con dos, la puerta abre el confirm de lista).
-    for fila in [1, 2] {
+    for row in [1, 2] {
         let _ = mouse::handle(
             &mut app,
-            ev_con(ABAJO, 5, FILA0 + fila, KeyModifiers::CONTROL),
+            ev_con(ABAJO, 5, FILA0 + row, KeyModifiers::CONTROL),
         );
     }
     assert_eq!(app.panes[0].marks_len(), 2);
@@ -469,14 +472,14 @@ fn un_arrastre_promovido_lleva_su_fila_y_devuelve_lo_que_barrio() {
     );
     let _ = mouse::handle(&mut app, ev(ARRIBA, 35, FILA0 + 1));
 
-    let esperado = app.panes[0].entries()[1].path.clone();
+    let expected = app.panes[0].entries()[1].path.clone();
     let Some(Modal::TransferName {
         from, from_marks, ..
     }) = &app.modal
     else {
         panic!("un solo ítem: nombre editable, como F5 con una entrada");
     };
-    assert_eq!(from, &esperado, "la fila del press, no la marca ajena");
+    assert_eq!(from, &expected, "la fila del press, no la marca ajena");
     assert!(!from_marks, "el envío no puede consumir una marca ajena");
     assert_eq!(app.panes[0].marks_len(), 1, "y sigue intacta");
 }
@@ -505,20 +508,20 @@ fn soltar_en_el_panel_de_origen_no_somete_nada() {
 #[test]
 fn un_arrastre_cancelado_restituye_las_marcas() {
     let mut app = app_pintada(10);
-    for fila in [5, 6] {
+    for row in [5, 6] {
         let _ = mouse::handle(
             &mut app,
-            ev_con(ABAJO, 5, FILA0 + fila, KeyModifiers::CONTROL),
+            ev_con(ABAJO, 5, FILA0 + row, KeyModifiers::CONTROL),
         );
     }
-    let marcadas = |app: &App| -> Vec<bool> {
+    let marked = |app: &App| -> Vec<bool> {
         app.panes[0]
             .entries()
             .iter()
             .map(|e| app.panes[0].is_marked(e))
             .collect()
     };
-    let antes = marcadas(&app);
+    let before = marked(&app);
 
     // Press en una fila sin marcar, barre, cruza (promueve) y suelta en la
     // barra de estado, que no pertenece a ningún pane.
@@ -528,11 +531,7 @@ fn un_arrastre_cancelado_restituye_las_marcas() {
     let _ = mouse::handle(&mut app, ev(ARRIBA, 5, H - 1));
 
     assert!(app.modal.is_none(), "cancelar no somete nada");
-    assert_eq!(
-        marcadas(&app),
-        antes,
-        "las marcas, exactamente las de antes"
-    );
+    assert_eq!(marked(&app), before, "las marcas, exactamente las de antes");
 }
 
 /// El aviso de la barra sale de `Drag::pending`, la MISMA fuente que lee el
@@ -563,10 +562,10 @@ fn la_barra_anuncia_lo_que_haria_soltar_ahora() {
     let copia = mouse::drop_hint(&app).expect("hay drop pendiente");
     assert!(copia.contains('2'), "las dos marcas: {copia}");
     // El destino con el MISMO saneado que la cabecera del pane (regla 1).
-    let (destino, _) = norte_frontend::path_display_with(app.panes[1].dir(), None);
+    let (dest, _) = norte_frontend::path_display_with(app.panes[1].dir(), None);
     assert_eq!(
         copia,
-        norte_i18n::ta("drag-copy", &[("n", "2"), ("to", &destino)]),
+        norte_i18n::ta("drag-copy", &[("n", "2"), ("to", &dest)]),
     );
     // …y la barra lo PINTA (por encima de cualquier mensaje pendiente).
     app.message = Some("un mensaje cualquiera".to_owned());
@@ -574,7 +573,7 @@ fn la_barra_anuncia_lo_que_haria_soltar_ahora() {
         pintar(&mut app).last().expect("barra de estado").contains(
             copia
                 .split_once("  ")
-                .map_or(copia.as_str(), |(cabeza, _)| cabeza)
+                .map_or(copia.as_str(), |(head, _)| head)
         ),
         "el aviso manda sobre la barra mientras dura el arrastre"
     );
@@ -586,7 +585,7 @@ fn la_barra_anuncia_lo_que_haria_soltar_ahora() {
     let mover = mouse::drop_hint(&app).expect("sigue habiendo drop");
     assert_eq!(
         mover,
-        norte_i18n::ta("drag-move", &[("n", "2"), ("to", &destino)]),
+        norte_i18n::ta("drag-move", &[("n", "2"), ("to", &dest)]),
     );
     let _ = mouse::handle(&mut app, ev_con(ARRIBA, 35, FILA0 + 2, KeyModifiers::SHIFT));
     assert!(
@@ -660,12 +659,12 @@ fn marcar_bajo_un_filtro_no_alcanza_lo_que_el_filtro_esconde() {
         3,
         "las tres visibles, no las cinco del rango absoluto"
     );
-    let marcadas: Vec<bool> = app.panes[0]
+    let marked: Vec<bool> = app.panes[0]
         .entries()
         .iter()
         .map(|e| app.panes[0].is_marked(e))
         .collect();
-    assert_eq!(marcadas, [true, false, true, false, true, false]);
+    assert_eq!(marked, [true, false, true, false, true, false]);
 }
 
 /// Un click LIMPIO sí cierra el filtro, y por eso puede: no marca nada. El
@@ -678,13 +677,13 @@ fn un_click_limpio_cierra_el_quick_search_sobre_la_fila_pulsada() {
     app.panes[0].quick_start(norte_tui::nav::Mode::Filter);
     app.panes[0].quick_char('f');
     let _ = pintar(&mut app);
-    let esperado = app.mouse.geometry().expect("geometría")[0].offset + 2;
+    let expected = app.mouse.geometry().expect("geometría")[0].offset + 2;
 
     let hit = mouse::hit_test(&app, 5, FILA0 + 2).expect("dentro del pane");
     let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 2));
     assert!(app.panes[0].quick_visible().is_none(), "filtro cerrado");
     assert_eq!(app.panes[0].cursor(), hit.index.expect("fila"));
-    assert_eq!(app.panes[0].cursor(), esperado, "el índice es el ABSOLUTO");
+    assert_eq!(app.panes[0].cursor(), expected, "el índice es el ABSOLUTO");
     assert_eq!(app.panes[0].marks_len(), 0, "y no marcó nada");
 }
 
@@ -717,23 +716,23 @@ fn un_release_que_se_comio_otro_pump_no_deja_el_gesto_armado() {
     let dir = app.panes[0].dir().clone();
     let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
     let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 2));
-    let marcas = app.panes[0].marks_len();
-    assert!(marcas > 0, "el barrido iba en marcha");
+    let marks = app.panes[0].marks_len();
+    assert!(marks > 0, "el barrido iba en marcha");
 
     // …el release cae dentro de un pump que solo mira teclas: jamás llega.
     // Lo que sí pasa es que ese pump refresca el listado.
     app.panes[0].refresh_listing(entradas(&dir, 10));
     let _ = pintar(&mut app);
 
-    let despues = app.panes[0].marks_len();
+    let after = app.panes[0].marks_len();
     let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 7));
     assert_eq!(
         app.panes[0].marks_len(),
-        despues,
+        after,
         "la motion no continúa un barrido que ya no existe"
     );
     let _ = mouse::handle(&mut app, ev(ARRIBA, 5, FILA0 + 7));
-    assert_eq!(app.panes[0].marks_len(), despues, "ni el release tardío");
+    assert_eq!(app.panes[0].marks_len(), after, "ni el release tardío");
 }
 
 /// Un click de ANTES de un cd y otro de después no son un doble click.
@@ -753,8 +752,8 @@ fn un_click_antes_y_otro_despues_de_un_cd_no_son_un_doble_click() {
     );
 
     // cd: el pane pasa a otro listado (el camino real de `nav.enter`).
-    let otro = vp("file:///casa/subdir");
-    app.panes[0].set_listing(otro.clone(), entradas(&otro, 10));
+    let other = vp("file:///casa/subdir");
+    app.panes[0].set_listing(other.clone(), entradas(&other, 10));
     let _ = pintar(&mut app);
 
     assert_eq!(
@@ -775,7 +774,7 @@ fn un_modal_abierto_a_mitad_de_un_arrastre_se_lleva_el_gesto() {
     let mut app = app_pintada(10);
     let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
     let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 2));
-    let marcas = app.panes[0].marks_len();
+    let marks = app.panes[0].marks_len();
 
     app.modal = Some(norte_tui::app::Modal::ConfirmQuit);
     let _ = pintar(&mut app);
@@ -783,7 +782,7 @@ fn un_modal_abierto_a_mitad_de_un_arrastre_se_lleva_el_gesto() {
     let _ = pintar(&mut app);
 
     let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 7));
-    assert_eq!(app.panes[0].marks_len(), marcas, "gesto muerto");
+    assert_eq!(app.panes[0].marks_len(), marks, "gesto muerto");
 }
 
 /// Y lo que NO debe caducar: un frame normal, sin nada que se mueva, deja el
@@ -824,11 +823,11 @@ fn un_intercambio_de_panes_a_mitad_de_un_arrastre_se_lleva_el_gesto() {
 
     // Las marcas del barrido viajaron con su pane al lado 1; el pane 0 es
     // ahora el otro listado, y el gesto armado sigue nombrando `pane: 0`.
-    let antes = app.panes[0].marks_len();
+    let before = app.panes[0].marks_len();
     let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 7));
     assert_eq!(
         app.panes[0].marks_len(),
-        antes,
+        before,
         "el arrastre no puede continuar sobre el contenido del otro lado"
     );
 }

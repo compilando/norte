@@ -6,7 +6,7 @@ use std::path::Path;
 
 #[test]
 fn los_schemas_publicados_no_divergen() {
-    let casos = [
+    let cases = [
         (
             "norte.schema.json",
             serde_json::to_value(schemars::schema_for!(norte_tui::config::NorteToml)).unwrap(),
@@ -17,7 +17,7 @@ fn los_schemas_publicados_no_divergen() {
         ),
     ];
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/schema");
-    for (name, schema) in casos {
+    for (name, schema) in cases {
         let json = format!("{}\n", serde_json::to_string_pretty(&schema).unwrap());
         let path = base.join(name);
         if std::env::var_os("NORTE_UPDATE_SCHEMA").is_some() {

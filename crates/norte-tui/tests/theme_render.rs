@@ -231,8 +231,8 @@ fn el_texto_de_cada_preset_llega_al_suelo_de_contraste() {
     }
     fn contraste(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
         let (l1, l2) = (luminancia(a), luminancia(b));
-        let (alto, bajo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
-        (alto + 0.05) / (bajo + 0.05)
+        let (height, bajo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+        (height + 0.05) / (bajo + 0.05)
     }
     fn rgb(c: Color) -> Option<(u8, u8, u8)> {
         match c {

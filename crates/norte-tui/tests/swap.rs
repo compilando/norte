@@ -249,13 +249,16 @@ fn watch_targets_sigue_a_los_panes_tras_el_intercambio() {
         Pane::new(vp("file:///izq"), Vec::new()),
         Pane::new(vp("file:///der"), Vec::new()),
     );
-    let antes = watch_targets(&app);
+    let before = watch_targets(&app);
     app.swap_panes();
-    let despues = watch_targets(&app);
+    let after = watch_targets(&app);
     assert_eq!(
-        antes[0], despues[1],
+        before[0], after[1],
         "el dir izquierdo pasa a vigilarse a la derecha"
     );
-    assert_eq!(antes[1], despues[0]);
-    assert_ne!(antes[0], antes[1], "los dos dirs eran distintos de partida");
+    assert_eq!(before[1], after[0]);
+    assert_ne!(
+        before[0], before[1],
+        "los dos dirs eran distintos de partida"
+    );
 }

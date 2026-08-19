@@ -26,7 +26,7 @@ fn texto_del_corpus_se_ve_decodificado() {
         // (`preview_bidi_ctrl_injection`), así que el esperado es la primera
         // línea decodificada con esa misma neutralización (los fixtures limpios
         // no tienen controles → esperado idéntico al decoded).
-        let esperado: Option<String> = f.decoded.lines().next().map(|l| {
+        let expected: Option<String> = f.decoded.lines().next().map(|l| {
             l.chars()
                 .map(|c| {
                     if norte_encoding::is_terminal_hazard(c) {
@@ -39,7 +39,7 @@ fn texto_del_corpus_se_ve_decodificado() {
         });
         assert_eq!(
             rows.first().cloned(),
-            esperado,
+            expected,
             "{}: primera línea decodificada (controles neutralizados)",
             f.id
         );
@@ -72,11 +72,11 @@ fn recargar_como_cicla_y_marca_forzado() {
 #[test]
 fn scroll_con_topes_y_truncado_visible() {
     use std::fmt::Write;
-    let mut texto = String::new();
+    let mut text = String::new();
     for i in 0..50 {
-        let _ = writeln!(texto, "línea {i}");
+        let _ = writeln!(text, "línea {i}");
     }
-    let mut v = Viewer::new(vp(), texto.into_bytes(), true);
+    let mut v = Viewer::new(vp(), text.into_bytes(), true);
     assert!(status(&v).contains("[cabecera]"), "{}", status(&v));
     assert!(
         status(&v).contains("LF"),

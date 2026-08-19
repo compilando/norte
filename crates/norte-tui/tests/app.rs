@@ -102,18 +102,18 @@ fn selected_devuelve_la_entrada_bajo_el_cursor() {
 #[test]
 fn display_marca_toda_perdida_y_neutraliza_controles() {
     // Nombre UTF-8 limpio: idéntico y sin badge.
-    let (texto, hostil) = display_name(b"normal.txt");
-    assert_eq!(texto, "normal.txt");
-    assert!(!hostil);
+    let (text, hostile) = display_name(b"normal.txt");
+    assert_eq!(text, "normal.txt");
+    assert!(!hostile);
 
     // Propiedad de la spec §6: badge EXACTAMENTE cuando el texto pintado
     // difiere del nombre real (lossy, controles enmascarados o bidi).
     for n in norte_testkit::corpus::hostile_names() {
-        let (texto, hostil) = display_name(&n.bytes);
-        assert!(!texto.is_empty(), "{}: display jamás vacío", n.id);
-        let identico = texto.as_bytes() == n.bytes.as_slice();
+        let (text, hostile) = display_name(&n.bytes);
+        assert!(!text.is_empty(), "{}: display jamás vacío", n.id);
+        let identico = text.as_bytes() == n.bytes.as_slice();
         assert_eq!(
-            hostil, !identico,
+            hostile, !identico,
             "{}: badge exactamente cuando el display difiere del real",
             n.id
         );
@@ -121,14 +121,14 @@ fn display_marca_toda_perdida_y_neutraliza_controles() {
         // ratatui los BORRARÍA en silencio (nombre visible ≠ real) y un
         // frontend directo ejecutaría ANSI / reordenaría RTL.
         assert!(
-            !texto.chars().any(|c| c.is_control()
+            !text.chars().any(|c| c.is_control()
                 || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')),
             "{}: sin Cc ni Cf-bidi en el display",
             n.id
         );
         if !identico {
             assert!(
-                texto.contains('\u{FFFD}'),
+                text.contains('\u{FFFD}'),
                 "{}: la pérdida se ve (spec §6: lossy marcado)",
                 n.id
             );
@@ -137,9 +137,9 @@ fn display_marca_toda_perdida_y_neutraliza_controles() {
 
     // Un archivo REALMENTE llamado � (UTF-8 válido) no lleva badge: la
     // distinción con un lossy depende del badge, no del glifo.
-    let (texto, hostil) = display_name("\u{FFFD}".as_bytes());
-    assert_eq!(texto, "\u{FFFD}");
-    assert!(!hostil);
+    let (text, hostile) = display_name("\u{FFFD}".as_bytes());
+    assert_eq!(text, "\u{FFFD}");
+    assert!(!hostile);
 }
 
 #[test]
@@ -170,14 +170,14 @@ fn sort_junta_las_variantes_de_normalizacion() {
 #[test]
 fn path_display_marca_paths_con_segmentos_hostiles() {
     use norte_tui::app::path_display;
-    let limpio = vp("file:///casa/docs");
-    let (texto, hostil) = path_display(&limpio);
-    assert!(texto.contains("docs"));
-    assert!(!hostil);
+    let clean = vp("file:///casa/docs");
+    let (text, hostile) = path_display(&clean);
+    assert!(text.contains("docs"));
+    assert!(!hostile);
 
-    let feo = limpio.join(Segment::new(vec![0xE9]).unwrap());
-    let (_, hostil) = path_display(&feo);
-    assert!(hostil, "un segmento no-UTF8 marca el path entero");
+    let feo = clean.join(Segment::new(vec![0xE9]).unwrap());
+    let (_, hostile) = path_display(&feo);
+    assert!(hostile, "un segmento no-UTF8 marca el path entero");
 }
 
 #[test]

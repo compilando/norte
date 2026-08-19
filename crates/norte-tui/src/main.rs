@@ -137,16 +137,16 @@ async fn main() -> Result<()> {
     // `orthodox`, que es lo que el usuario tenía antes de escribir la clave.
     // `--layout` gana a `[ui] layout`: elegir una disposición para UN arranque
     // no debe tocar tu config, que es justo lo que hace la clave.
-    let nombre_layout: Option<std::ffi::OsString> = cli_layout
+    let layout_name: Option<std::ffi::OsString> = cli_layout
         .clone()
         .or_else(|| cfg.common.ui_layout.clone().map(std::ffi::OsString::from))
         .filter(|n| n != std::ffi::OsStr::new("orthodox"));
-    if let Some(nombre) = nombre_layout {
+    if let Some(name) = layout_name {
         // El fichero se lee FUERA del runtime (regla 2), y sin directorio de
         // config no hay fichero que valga: queda el preset de ese nombre.
-        let cargado = match config::user_config_dir() {
+        let loaded = match config::user_config_dir() {
             Some(dir) => {
-                let n = nombre.clone();
+                let n = name.clone();
                 tokio::task::spawn_blocking(move || norte_frontend::layout::config::load(&dir, &n))
                     .await
                     .unwrap_or_else(|_| {
@@ -155,7 +155,7 @@ async fn main() -> Result<()> {
             }
             None => Err(norte_frontend::layout::LayoutError::NotFound(String::new())),
         };
-        app.apply_loaded_layout(&nombre, cargado);
+        app.apply_loaded_layout(&name, loaded);
     }
     // L2: la pantalla que dejaste. Va DESPUÉS de `[ui] layout` a propósito —
     // una sesión guardada es más específica que una preferencia de config, y
@@ -295,8 +295,8 @@ fn write_cd_file(app: &App, cd_file: Option<&std::path::Path>) {
         // gives the badge as a bool because a raw stderr line has no
         // styling to hang it on, so a hostile name is marked with a
         // leading `!` instead of colour.
-        let (texto, hostil) = norte_frontend::path_display(app.focused().dir());
-        let marcado = if hostil { format!("!{texto}") } else { texto };
+        let (text, hostile) = norte_frontend::path_display(app.focused().dir());
+        let marcado = if hostile { format!("!{text}") } else { text };
         eprintln!("{}", ta("msg-cd-not-local", &[("path", &marcado)]));
     }
 }
@@ -379,12 +379,12 @@ fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App, out: &mut tty::TtyOut) -
     // llama. El closure no puede tomar prestado `out` (el préstamo no
     // sobrevive a esta función), así que abre un handle nuevo a la terminal
     // de control en el momento del pánico — igual que hace `tty::init`.
-    let previo = std::panic::take_hook();
+    let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if let Ok(mut tty_out) = tty::open_controlling_terminal() {
             let _ = crossterm::execute!(tty_out, crossterm::event::DisableMouseCapture);
         }
-        previo(info);
+        previous(info);
     }));
     let mut capture = mouse::Capture::new();
     if let Err(e) = capture.set(cfg.common.ui_mouse.unwrap_or(true), out) {
@@ -432,7 +432,7 @@ Options:
 /// restituye como base de la raíz del OS (#22). Uno irrepresentable da
 /// error claro, jamás un panic.
 fn start_dir(dir: Option<std::path::PathBuf>) -> Result<VPath> {
-    let nativo = match dir {
+    let native = match dir {
         Some(d) => {
             let meta = std::fs::metadata(&d)
                 .with_context(|| format!("no se puede abrir {}", d.display()))?;
@@ -441,8 +441,8 @@ fn start_dir(dir: Option<std::path::PathBuf>) -> Result<VPath> {
         }
         None => std::env::current_dir().context("cwd")?,
     };
-    norte_vfs_local::vpath_from_native(&nativo)
-        .map_err(|e| anyhow::anyhow!("{} no representable como VPath: {e}", nativo.display()))
+    norte_vfs_local::vpath_from_native(&native)
+        .map_err(|e| anyhow::anyhow!("{} no representable como VPath: {e}", native.display()))
 }
 
 /// Resuelve los argumentos "de salida inmediata": imprime `--help`/

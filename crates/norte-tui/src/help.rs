@@ -955,22 +955,19 @@ mod tests {
     /// puede cambiar de veredicto bajo el cursor del lector.
     #[test]
     fn congelar_los_hechos_no_toca_el_resolver_de_partida() {
-        let antes = orthodox_resolver();
-        let dentro_de_un_zip = antes.with_facts(norte_frontend::availability::Facts {
+        let before = orthodox_resolver();
+        let inside_a_zip = before.with_facts(norte_frontend::availability::Facts {
             source_read_only: true,
             ..facts_normales()
         });
-        assert!(!dentro_de_un_zip.availability("pane.delete").is_available());
+        assert!(!inside_a_zip.availability("pane.delete").is_available());
         assert!(
-            antes.availability("pane.delete").is_available(),
+            before.availability("pane.delete").is_available(),
             "el resolver de partida siguió intacto"
         );
         // Y los chords viajan con la copia: congelar hechos no puede costar la
         // tecla del lector.
-        assert_eq!(
-            dentro_de_un_zip.chord("pane.copy"),
-            antes.chord("pane.copy")
-        );
+        assert_eq!(inside_a_zip.chord("pane.copy"), before.chord("pane.copy"));
     }
 
     /// H3e: la fila de un comando de un plugin APAGADO sale atenuada, con su
@@ -1036,7 +1033,7 @@ mod tests {
     }
 
     /// Un mapa de títulos con la forma que sale de `plugin.list`.
-    fn titulos(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    fn titles(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -1046,7 +1043,7 @@ mod tests {
     fn resolver_con_titulos(pairs: &[(&str, &str)]) -> TuiChords {
         resolver_con(facts_normales()).with_plugins(
             ["org.norte.demo".to_owned()].into_iter().collect(),
-            titulos(pairs),
+            titles(pairs),
         )
     }
 
@@ -1103,23 +1100,23 @@ mod tests {
     #[test]
     fn una_clave_de_plugin_hostil_no_se_pinta_cruda() {
         let r = resolver_con_titulos(&[]);
-        let hostil = "plugin:acme.ftp:\u{202E}x\u{200B}y";
-        let pintado = r.label(hostil);
+        let hostile = "plugin:acme.ftp:\u{202E}x\u{200B}y";
+        let painted = r.label(hostile);
         assert!(
-            !pintado.chars().any(norte_encoding::is_terminal_hazard),
-            "sin peligros de terminal: {pintado:?}"
+            !painted.chars().any(norte_encoding::is_terminal_hazard),
+            "sin peligros de terminal: {painted:?}"
         );
-        assert!(pintado.contains('\u{FFFD}'), "anti-vacuidad: {pintado:?}");
+        assert!(painted.contains('\u{FFFD}'), "anti-vacuidad: {painted:?}");
         assert_eq!(
-            render_command(hostil, &r),
-            CommandText::Name(pintado),
+            render_command(hostile, &r),
+            CommandText::Name(painted),
             "y es lo que la cadena de `norte-help` acaba nombrando"
         );
         // Una clave MALFORMADA (que `plugin_of_command` rechaza) también: la
         // pregunta «¿esto es texto de tercero?» es más laxa que «¿esto
         // identifica un comando?», a propósito.
-        let malformada = r.label("plugin:\u{202E}");
-        assert!(!malformada.chars().any(norte_encoding::is_terminal_hazard));
+        let malformed = r.label("plugin:\u{202E}");
+        assert!(!malformed.chars().any(norte_encoding::is_terminal_hazard));
     }
 
     /// Un título hostil llega ENMASCARADO y ACOTADO — el enmascarado ocurre en
@@ -1127,10 +1124,10 @@ mod tests {
     /// este resolver entrega sus cadenas directas al pintor.
     #[test]
     fn un_titulo_hostil_llega_enmascarado_y_acotado() {
-        let hostil = format!("Gre\u{202E}et\u{200B}{}", "x".repeat(5_000));
+        let hostile = format!("Gre\u{202E}et\u{200B}{}", "x".repeat(5_000));
         let r = resolver_con_titulos(&[(
             "plugin:org.norte.demo:greet",
-            &crate::app::plugin_label(&hostil),
+            &crate::app::plugin_label(&hostile),
         )]);
         let label = r.label("plugin:org.norte.demo:greet");
         assert!(

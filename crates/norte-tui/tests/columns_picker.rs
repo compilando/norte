@@ -202,7 +202,7 @@ fn picker_cicla_formato_y_persiste_spec() {
 fn picker_cancel_no_toca_nada() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut app = app();
-    let antes = builtins(&app);
+    let before = builtins(&app);
     let sort_antes = app.focused().sort();
     app.open_columns_picker(&[]);
     {
@@ -212,7 +212,7 @@ fn picker_cancel_no_toca_nada() {
         p.sort_current();
     }
     app.columns_picker = None; // cancel: descarta sin finish/apply/persist
-    assert_eq!(builtins(&app), antes, "cancel no toca el layout");
+    assert_eq!(builtins(&app), before, "cancel no toca el layout");
     assert_eq!(app.focused().sort(), sort_antes, "cancel no toca el sort");
     assert!(
         !dir.path().join("norte.toml").exists(),

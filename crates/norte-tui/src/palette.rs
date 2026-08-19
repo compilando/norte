@@ -94,7 +94,7 @@ mod tests {
             .into_iter()
             .find(|(n, _)| *n == "orthodox")
             .expect("preset orthodox");
-        let viewer_vacio = Effective::build_for(&preset, &[], COMMANDS, Screen::Viewer).unwrap();
+        let viewer_empty = Effective::build_for(&preset, &[], COMMANDS, Screen::Viewer).unwrap();
         for hazard in norte_testkit::corpus::hostile_chords() {
             let token_esc = format!("\\u{:04X}", hazard.token as u32);
             let layer_src = format!(
@@ -106,7 +106,7 @@ mod tests {
             let layer = crate::keymap::parse_keymap(&layer_src).unwrap();
             let browse = Effective::build_for(&preset, &[layer], COMMANDS, Screen::Browse)
                 .unwrap_or_else(|e| panic!("[{}] keymap efectivo: {e}", hazard.id));
-            let rows = build_rows(&browse, &viewer_vacio);
+            let rows = build_rows(&browse, &viewer_empty);
             let copy = rows
                 .iter()
                 .find(|r| r.key == "pane.copy")
@@ -133,17 +133,17 @@ mod tests {
     fn rows_for_context_oculta_viewer_desde_browse() {
         let (browse, viewer) = orthodox_effs();
         let rows = build_rows(&browse, &viewer);
-        let filtradas = rows_for_context(&rows, false);
+        let filtered = rows_for_context(&rows, false);
         assert!(
-            filtradas.iter().all(|r| !r.key.starts_with("viewer.")),
+            filtered.iter().all(|r| !r.key.starts_with("viewer.")),
             "ninguna fila viewer.* debería sobrevivir al filtrado desde browse"
         );
         assert!(
-            filtradas.iter().any(|r| r.key.starts_with("pane.")),
+            filtered.iter().any(|r| r.key.starts_with("pane.")),
             "las filas pane.* siguen presentes"
         );
         assert!(
-            filtradas.len() < rows.len(),
+            filtered.len() < rows.len(),
             "el filtrado debe quitar AL MENOS las filas viewer.*"
         );
     }

@@ -97,20 +97,20 @@ fn render_muestra_nombre_badge_y_aviso() {
     let app = app_with(mgr());
     let mut t = Terminal::new(TestBackend::new(80, 24)).expect("term");
     t.draw(|f| ui::draw(f, &app)).expect("draw");
-    let texto = t.backend().to_string();
+    let text = t.backend().to_string();
     // Un nombre de plugin.
-    assert!(texto.contains("Alpha Indexer"), "falta el nombre: {texto}");
+    assert!(text.contains("Alpha Indexer"), "falta el nombre: {text}");
     // Un capability badge.
     assert!(
-        texto.contains("fs-read"),
-        "falta el badge de capability: {texto}"
+        text.contains("fs-read"),
+        "falta el badge de capability: {text}"
     );
     // El aviso de no-aprobado (Beta Preview).
-    assert!(texto.contains("sin aprobar"), "falta el aviso: {texto}");
+    assert!(text.contains("sin aprobar"), "falta el aviso: {text}");
     // Cabecera de grupo por categoría.
     assert!(
-        texto.contains("previewer"),
-        "falta la cabecera de grupo: {texto}"
+        text.contains("previewer"),
+        "falta la cabecera de grupo: {text}"
     );
 }
 
@@ -145,14 +145,14 @@ fn render_enmascara_nombre_hostil() {
     });
     let mut t = Terminal::new(TestBackend::new(60, 12)).expect("term");
     t.draw(|f| ui::draw(f, &app)).expect("draw");
-    let texto = t.backend().to_string();
+    let text = t.backend().to_string();
     assert!(
-        !texto.contains('\u{0007}'),
-        "el byte de control se pintó crudo: {texto:?}"
+        !text.contains('\u{0007}'),
+        "el byte de control se pintó crudo: {text:?}"
     );
     assert!(
-        texto.contains('\u{FFFD}'),
-        "no se marcó el enmascarado: {texto:?}"
+        text.contains('\u{FFFD}'),
+        "no se marcó el enmascarado: {text:?}"
     );
 }
 
@@ -194,7 +194,7 @@ fn render_muestra_errores_de_carga() {
     });
     let mut t = Terminal::new(TestBackend::new(70, 12)).expect("term");
     t.draw(|f| ui::draw(f, &app)).expect("draw");
-    let texto = t.backend().to_string();
-    assert!(texto.contains("roto"), "falta el dir del error: {texto}");
-    assert!(texto.contains("inválido"), "falta el motivo: {texto}");
+    let text = t.backend().to_string();
+    assert!(text.contains("roto"), "falta el dir del error: {text}");
+    assert!(text.contains("inválido"), "falta el motivo: {text}");
 }

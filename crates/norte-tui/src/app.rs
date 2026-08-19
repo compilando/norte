@@ -6,64 +6,29 @@
 //! clave ESTABLE de [`error_key`].
 
 use norte_i18n::{Lang, t, ta};
-use norte_proto::{Entry, EntryKind, Error, VPath};
+use norte_proto::{EntryKind, Error, VPath};
 
-/// Un panel: directorio actual y sus entradas YA ordenadas.
-///
-/// La mecánica PURA de un pane —directorio, entradas, cursor, `loading` y
-/// quick search— vive UNA sola vez en [`norte_frontend::PaneState`],
-/// compartida con la GUI (#82): el `Pane` de la TUI la EMBEBE en su campo
-/// `state` (privado) y delega en ella
-/// (`dir`/`entries`/`cursor`/`selected`/`move_*`/`quick_*`…). Lo propio de la
-/// TUI —la búsqueda viva (`virtual_search`, `search_state`, `search_error`) y
-/// el fill paginado (ADR 0017, [`Pane::extend_listing`] y compañía)— se queda
-/// aquí, encima de ese estado.
-#[derive(Debug)]
-pub struct Pane {
-    /// Estado no-render compartido (cursor + quick + listado). Privado: se
-    /// accede por los delegados ([`Pane::dir`], [`Pane::entries`], …) para que
-    /// el invariante del cursor lo custodie `PaneState`.
-    state: norte_frontend::PaneState,
-    /// El pane muestra los HITS de una búsqueda viva (`Alt+F7`, liveSearch),
-    /// no un listado de directorio real: `dir` es la RAÍZ del walk y las
-    /// `entries` son los resultados que van llegando por streaming
-    /// ([`Pane::extend_listing`], reusando el molde de paginación). Con él la
-    /// barra de estado pinta `search-status-*` en vez del `pos/total` normal;
-    /// cualquier `cd`/refresh normal lo apaga (los listados reales lo ponen a
-    /// `false`). `F5`/`F8`/`F3` operan sobre el hit bajo el cursor SOLOS
-    /// ([`Pane::selected`] da la `Entry` con su `VPath` completo).
-    pub virtual_search: bool,
-    /// Estado de presentación de la búsqueda viva (solo significativo con
-    /// [`Pane::virtual_search`]): decide qué variante `search-status-*` pinta
-    /// la barra. El run loop lo actualiza al llegar el estado terminal.
-    pub search_state: SearchState,
-    /// Categoría del error de una búsqueda que FALLÓ (`SearchState::Failed`),
-    /// ya localizada y saneada: la barra la pinta de forma PERSISTENTE
-    /// (`search-status-failed`) tras limpiarse `App::message` — un fallo no
-    /// puede degradar a «done» en la siguiente tecla (review MINOR-2).
-    pub search_error: Option<String>,
-    /// Contexto del match de contenido por hit de la búsqueda viva (#81):
-    /// `path → (línea, preview YA saneado en origen)`. Solo significativo con
-    /// [`Pane::virtual_search`]; la barra lo pinta para el hit bajo el
-    /// cursor. Se limpia al salir del modo virtual (cd/listado real).
-    pub search_matches: std::collections::HashMap<VPath, norte_proto::methods::MatchInfo>,
-    /// El listado de este pane NO se pudo hacer al restaurar la sesión, y lo
-    /// que se ve no es «este directorio está vacío» (#235).
-    ///
-    /// Se marca en el TÍTULO del pane, igual que la paginación en curso, y no
-    /// en un `message`: es un estado que dura hasta que alguien liste de
-    /// verdad, y un mensaje lo borra la tecla siguiente — que es justo el bug
-    /// que #232 arregla dos hunks más arriba. Cualquier listado real
-    /// ([`Pane::set_listing`], [`Pane::begin_listing`]) lo apaga.
-    pub unlisted: bool,
-    /// Preferencia de ocultos del USUARIO (#107): el pane virtual de
-    /// búsqueda SUSPENDE el filtro (un hit es una petición EXPLÍCITA — un
-    /// `.env` buscado que desapareciera en silencio bajo `[ui] show_hidden
-    /// = false` es el MAJOR-1 del review), y al volver a un listado real se
-    /// restaura esto. Un Ctrl+H DENTRO del pane virtual actúa sobre los
-    /// resultados pero no toca la preferencia.
-    show_hidden_pref: bool,
-}
+mod help_view;
+mod modal;
+mod nav_popup;
+mod palette;
+mod pane;
+mod plugins;
+mod trail;
+
+pub use help_view::*;
+pub use modal::*;
+pub use nav_popup::*;
+pub use palette::*;
+pub use pane::*;
+pub use plugins::*;
+pub use trail::*;
+
+// Privados en `app` antes del reparto: el glob de arriba solo reexporta
+// lo `pub`, asi que estos tres se nombran uno a uno.
+use help_view::default_help_chords;
+use modal::pop_wire_char;
+use nav_popup::nav_item_display;
 
 /// El formato de archivo que sugiere un NOMBRE, entre los que se saben
 /// ESCRIBIR (#132).
@@ -74,18 +39,18 @@ pub struct Pane {
 /// para leer (ADR 0056)—, así que un `.rar` cae en `None` y el diálogo lo dice
 /// en vez de empaquetar un zip con nombre de rar.
 #[must_use]
-pub fn formato_por_nombre(name: &[u8]) -> Option<norte_proto::methods::ArchiveFormat> {
+pub fn format_by_name(name: &[u8]) -> Option<norte_proto::methods::ArchiveFormat> {
     use norte_proto::methods::ArchiveFormat as F;
-    let acaba = |suf: &[u8]| {
+    let ends = |suf: &[u8]| {
         name.len() >= suf.len() && name[name.len() - suf.len()..].eq_ignore_ascii_case(suf)
     };
-    if acaba(b".tar.gz") || acaba(b".tgz") {
+    if ends(b".tar.gz") || ends(b".tgz") {
         return Some(F::TarGz);
     }
-    if acaba(b".tar") {
+    if ends(b".tar") {
         return Some(F::Tar);
     }
-    if acaba(b".zip") {
+    if ends(b".zip") {
         return Some(F::Zip);
     }
     None
@@ -97,7 +62,7 @@ pub fn formato_por_nombre(name: &[u8]) -> Option<norte_proto::methods::ArchiveFo
 /// Sufijos binarios, que es lo que significan en un gestor de ficheros: `M` es
 /// 1 MiB y no un millón. Sin sufijo son bytes.
 #[must_use]
-pub fn parse_tamano(s: &str) -> Option<u64> {
+pub fn parse_size(s: &str) -> Option<u64> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -110,26 +75,6 @@ pub fn parse_tamano(s: &str) -> Option<u64> {
     };
     let n: u64 = num.trim().parse().ok()?;
     n.checked_mul(mult).filter(|v| *v > 0)
-}
-
-/// Estado de presentación de una búsqueda viva (`Alt+F7`, liveSearch T6): el
-/// run loop lo refleja en [`Pane::search_state`] para que la barra elija la
-/// variante `search-status-*`. `Failed` no se pinta en la barra del pane (el
-/// error concreto viaja por [`App::message`] vía `error_message`); se
-/// conserva la variante por completitud del estado del run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SearchState {
-    /// El walker sigue emitiendo hits.
-    #[default]
-    Running,
-    /// Terminó y no se alcanzó el tope de hits.
-    Done,
-    /// Terminó por alcanzar `max_hits` (resultados posiblemente incompletos).
-    Truncated,
-    /// El usuario canceló (los hits ya llegados se conservan).
-    Cancelled,
-    /// La Task de búsqueda falló (el error va por la barra de mensajes).
-    Failed,
 }
 
 /// El estado del run (`CompareState`) y el panel abierto (`CompareView`)
@@ -160,632 +105,6 @@ use norte_frontend::sync::SyncRoots;
 /// actualizaciones de «se aprobó y arrancó `sync.apply`»
 /// ([`SyncView::on_apply_started`]), no solo la struct.
 pub use norte_frontend::sync::{SyncRunState, SyncView};
-
-impl Pane {
-    /// Pane sobre `dir` con `entries`: #54, ya no hace falta ordenarlas antes
-    /// — [`norte_frontend::PaneState::new`] normaliza internamente (dirs
-    /// primero, NFC, empate por bytes, ver [`sort_entries`]).
-    #[must_use]
-    pub fn new(dir: VPath, entries: Vec<Entry>) -> Self {
-        Self {
-            state: norte_frontend::PaneState::new(dir, entries),
-            virtual_search: false,
-            search_state: SearchState::Running,
-            search_error: None,
-            search_matches: std::collections::HashMap::new(),
-            show_hidden_pref: true,
-            unlisted: false,
-        }
-    }
-
-    /// Cicla la reinterpretación de nombres (#57): delegado puro — la
-    /// mecánica (sugerencia, vuelta completa del ciclo, re-pliegue del quick
-    /// vivo) vive en [`norte_frontend::PaneState::cycle_name_encoding`]
-    /// (#98/m2: la GUI la reusa tal cual).
-    pub fn cycle_name_encoding(&mut self) -> Option<&'static str> {
-        self.state.cycle_name_encoding()
-    }
-
-    /// Reinterpretación de nombres activa (#57), para render.
-    #[must_use]
-    pub fn name_encoding(&self) -> Option<norte_encoding::NameEncoding> {
-        self.state.name_encoding()
-    }
-
-    // --- Delegados de solo-lectura sobre el estado compartido (#82) ---
-
-    /// Directorio listado.
-    #[must_use]
-    pub fn dir(&self) -> &VPath {
-        self.state.dir()
-    }
-
-    /// Entradas ordenadas ([`sort_entries`]).
-    #[must_use]
-    pub fn entries(&self) -> &[Entry] {
-        self.state.entries()
-    }
-
-    /// Índice bajo el cursor real (0 incluso con lista vacía).
-    #[must_use]
-    pub fn cursor(&self) -> usize {
-        self.state.cursor()
-    }
-
-    /// El listado se está RELLENANDO en background (paginación, ADR 0017): la
-    /// primera página ya se pintó y llegan más entradas. La UI lo marca — un
-    /// listado incompleto JAMÁS es silencioso.
-    #[must_use]
-    pub fn loading(&self) -> bool {
-        self.state.loading()
-    }
-
-    /// Quick search vivo (`/`, spec 2026-07-18) para el render; `None` =
-    /// navegación normal.
-    #[must_use]
-    pub fn quick(&self) -> Option<&crate::nav::QuickSearch> {
-        self.state.quick()
-    }
-
-    /// La entrada seleccionada: con quick search en modo Filter, la
-    /// selección DENTRO del filtro (así F5/F8/F3… operan sobre lo filtrado
-    /// sin que cada comando sepa del quick search — feed-to-listbox); si el
-    /// filtro no tiene matches, `None` (las ops no-opean, jamás actúan
-    /// sobre una entrada que el usuario no ve). Sin filtro (o en Jump, que
-    /// mueve el cursor real), la entrada bajo el cursor.
-    #[must_use]
-    pub fn selected(&self) -> Option<&Entry> {
-        self.state.selected()
-    }
-
-    /// Índices REALES visibles bajo el filtro; `None` = sin filtro (quick
-    /// inactivo, o modo Jump: el listado se pinta entero).
-    #[must_use]
-    pub fn quick_visible(&self) -> Option<&[usize]> {
-        self.state.quick_visible()
-    }
-
-    // --- Delegados de mutación de cursor + quick (#82) ---
-
-    /// Arranca el quick search (`/`) en `mode` sobre las entries actuales.
-    pub fn quick_start(&mut self, mode: crate::nav::Mode) {
-        self.state.quick_start(mode);
-    }
-
-    /// Un carácter tecleado con el quick search activo.
-    pub fn quick_char(&mut self, c: char) {
-        self.state.quick_char(c);
-    }
-
-    /// Backspace con el quick search activo.
-    pub fn quick_backspace(&mut self) {
-        self.state.quick_backspace();
-    }
-
-    /// Selección del quick search una posición abajo.
-    pub fn quick_down(&mut self) {
-        self.state.quick_down();
-    }
-
-    /// Selección del quick search una posición arriba.
-    pub fn quick_up(&mut self) {
-        self.state.quick_up();
-    }
-
-    /// Siguiente match con wrap (Tab en modo Jump).
-    pub fn quick_next(&mut self) {
-        self.state.quick_next();
-    }
-
-    /// Cierra el quick search SIN tocar el cursor real: en Filter el listado
-    /// completo vuelve con el cursor donde estaba (el filtro nunca lo movió
-    /// — test del plan); en Jump el cursor se queda donde saltó.
-    pub fn quick_cancel(&mut self) {
-        self.state.quick_cancel();
-    }
-
-    /// Cierra el quick search fijando el cursor REAL a la selección (Enter:
-    /// la op siguiente parte de ahí). Devuelve `true` si el cursor apunta a
-    /// una entrada que el usuario VEÍA: en Filter sin matches devuelve
-    /// `false` (la lista pintada estaba vacía — jamás despachar sobre una
-    /// entrada invisible); en Jump sin matches devuelve `true` si hay
-    /// entradas (el listado se pinta ENTERO: el cursor real es visible por
-    /// definición — edge de T4, observación del reviewer).
-    pub fn quick_confirm(&mut self) -> bool {
-        self.state.quick_confirm()
-    }
-
-    /// Sube el cursor `n` posiciones (con tope en 0).
-    pub fn move_up(&mut self, n: usize) {
-        self.state.page_up(n);
-    }
-
-    /// Baja el cursor `n` posiciones (con tope en la última entrada).
-    pub fn move_down(&mut self, n: usize) {
-        self.state.page_down(n);
-    }
-
-    /// Filas de listado pintadas en el último frame (#124) — delegado puro a
-    /// [`norte_frontend::PaneState::set_viewport_rows`].
-    pub fn set_viewport_rows(&mut self, rows: usize) {
-        self.state.set_viewport_rows(rows);
-    }
-
-    /// Deja la ventana lista para pintar `rows` filas — delegado puro a
-    /// [`norte_frontend::PaneState::reconcile_viewport`]. El run loop lo llama
-    /// ANTES de cada draw.
-    pub fn reconcile_viewport(&mut self, rows: usize) {
-        self.state.reconcile_viewport(rows);
-    }
-
-    /// La primera fila visible del listado — delegado puro a
-    /// [`norte_frontend::PaneState::viewport_offset`]. Lo leen el pintado y el
-    /// hit test del ratón, que tienen que ver la MISMA ventana.
-    #[must_use]
-    pub fn viewport_offset(&self) -> usize {
-        self.state.viewport_offset()
-    }
-
-    /// Cuántas filas mueve una página en este pane (#124) — delegado puro a
-    /// [`norte_frontend::PaneState::page_step`].
-    #[must_use]
-    pub fn page_step(&self) -> usize {
-        self.state.page_step()
-    }
-
-    /// Cursor a la primera entrada.
-    pub fn move_to_start(&mut self) {
-        self.state.home();
-    }
-
-    /// Cursor a la última entrada.
-    pub fn move_to_end(&mut self) {
-        self.state.end();
-    }
-
-    /// Fija el cursor REAL a `i` (con tope en la última entrada): re-anclar
-    /// tras localizar un índice concreto, p. ej. un hit de búsqueda.
-    pub fn set_cursor(&mut self, i: usize) {
-        self.state.set_cursor(i);
-    }
-
-    /// Foco pendiente (spec 2026-07-24 §S1, `nav.parent`): el próximo
-    /// [`Pane::begin_listing`] selecciona `child` si aparece en el listado
-    /// nuevo, por delante de la memoria de cursor. Ver
-    /// [`norte_frontend::PaneState::set_pending_focus`].
-    pub fn set_pending_focus(&mut self, child: VPath) {
-        self.state.set_pending_focus(child);
-    }
-
-    /// Descarta un foco pendiente sin consumirlo (revisión S, M2). Ver
-    /// [`norte_frontend::PaneState::clear_pending_focus`].
-    pub fn clear_pending_focus(&mut self) {
-        self.state.clear_pending_focus();
-    }
-
-    // --- Listado + búsqueda viva (propio de la TUI, encima del estado) ---
-
-    /// Marca (o desmarca) el flag de carga de un fill paginado (ADR 0017).
-    pub fn set_loading(&mut self, loading: bool) {
-        self.state.set_loading(loading);
-    }
-
-    /// Arranca el pane virtual de una búsqueda viva (`Alt+F7`, liveSearch T6):
-    /// `root` es la raíz del walk, las entries empiezan vacías y los hits
-    /// entran por [`Pane::extend_listing`] como un listado paginado. Marca el
-    /// pane como virtual (la barra pinta `search-status-running`) y mata
-    /// cualquier quick search vivo (filtraba OTRA cosa).
-    pub fn begin_search(&mut self, root: VPath) {
-        // #107: los hits son EXPLÍCITOS — el filtro de ocultos se suspende
-        // en el pane virtual (la preferencia queda en `show_hidden_pref`).
-        self.state.set_show_hidden(true);
-        self.state.set_listing(root, Vec::new());
-        self.virtual_search = true;
-        self.search_state = SearchState::Running;
-        self.search_error = None;
-        // #81 (MAJOR-4 del review): re-lanzar Alt+F7 sin cd de por medio no
-        // debe arrastrar previews de la búsqueda ANTERIOR (un hit de la
-        // query B solo-nombre pintaría el :línea de la query A) ni crecer
-        // el mapa sin límite entre búsquedas.
-        self.search_matches.clear();
-    }
-
-    /// Reemplaza el contenido tras un cd/refresh, reseteando el cursor.
-    /// Un quick search vivo muere: filtraba OTRO listado.
-    pub fn set_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
-        // #107: al volver a un listado real, la preferencia de ocultos del
-        // usuario vuelve a mandar ANTES de ingerir (el filtro se aplica al
-        // entrar el listado).
-        self.state.set_show_hidden(self.show_hidden_pref);
-        self.state.set_listing(dir, entries);
-        self.virtual_search = false;
-        self.search_matches.clear();
-        self.state.set_skipped(None);
-        self.unlisted = false;
-    }
-
-    /// Primera página de un listado paginado: reemplaza el contenido y MARCA
-    /// que faltan entradas por llegar (ADR 0017). El drenador irá llamando a
-    /// [`Pane::extend_listing`] y, al terminar, [`Pane::finish_listing`].
-    /// `skipped` = omitidas del contenedor (#93), del open del listado.
-    ///
-    /// Punto de captura de la memoria de cursor (spec §S1) para la TUI: a
-    /// diferencia de la GUI (que tiene una fase `begin_loading` optimista
-    /// ANTES del fetch async), la TUI espera el listado ENTERO antes de
-    /// tocar el pane (`cd` en `main.rs` no llama a
-    /// [`norte_frontend::PaneState::begin_loading`] — este método es el
-    /// único punto donde `self.state` todavía refleja el dir VIEJO). Grabar
-    /// aquí, antes de `set_listing`, es el equivalente exacto.
-    pub fn begin_listing(
-        &mut self,
-        dir: VPath,
-        first_page: Vec<Entry>,
-        more: bool,
-        skipped: Option<u64>,
-    ) {
-        self.state.remember_cursor();
-        // #107: mismo restablecimiento que `set_listing` — este es el cd
-        // real paginado de la TUI.
-        self.state.set_show_hidden(self.show_hidden_pref);
-        self.state.set_listing(dir, first_page);
-        self.state.set_loading(more);
-        self.virtual_search = false;
-        self.search_matches.clear();
-        self.state.set_skipped(skipped);
-        self.unlisted = false;
-    }
-
-    /// Añade un lote del drenador: re-ordena TODO y re-ancla el cursor al path
-    /// que estaba seleccionado (si desapareció del re-orden, clamp por índice)
-    /// para que rellenar no mueva la selección del usuario bajo sus pies. Un
-    /// quick search vivo se RE-APLICA sobre el listado nuevo (spec: el filtro
-    /// no se congela mientras el fill sigue), conservando su selección por
-    /// path. La mecánica pura vive en [`norte_frontend::PaneState::extend`].
-    pub fn extend_listing(&mut self, batch: Vec<Entry>) {
-        self.state.extend(batch);
-    }
-
-    /// Hidrata size/mtime de la entrada `path` con el resultado de una sonda
-    /// de stat on-focus (#52, listado lazy). No reordena; no-op si la entrada
-    /// ya no está. Delegado puro a [`norte_frontend::PaneState::hydrate`].
-    pub fn hydrate(&mut self, path: &VPath, size: Option<u64>, mtime_ms: Option<i64>) {
-        self.state.hydrate(path, size, mtime_ms);
-    }
-
-    /// Paths VISIBLES sin `size` a `radius` filas del cursor (#52) —
-    /// delegado puro a [`norte_frontend::PaneState::needs_stat_window`].
-    #[must_use]
-    pub fn needs_stat_window(&self, radius: usize) -> Vec<VPath> {
-        self.state.needs_stat_window(radius)
-    }
-
-    /// El drenador terminó: el listado ya está completo. El quick search se
-    /// re-aplica por contrato (hoy no muta entries: refresh barato; si algún
-    /// día el cierre re-sortea, el filtro no se queda con índices muertos).
-    pub fn finish_listing(&mut self) {
-        self.state.set_loading(false);
-        self.state.refresh_quick();
-    }
-
-    /// Listado COMPLETO nuevo del MISMO dir (refresh tras una mutación):
-    /// cursor conservado por ÍNDICE con clamp (tras un delete queda en la
-    /// siguiente entrada — semántica ortodoxa) y quick search re-aplicado
-    /// por path (los índices del listado viejo no identifican nada).
-    pub fn refresh_listing(&mut self, entries: Vec<Entry>) {
-        self.state.refill(entries);
-        self.state.set_loading(false);
-        self.virtual_search = false;
-        self.search_matches.clear();
-    }
-
-    /// Omitidas del contenedor del listado actual (#93/#96): delegado puro a
-    /// [`norte_frontend::PaneState::skipped`]. La barra pinta `Some(n)`, n>0.
-    #[must_use]
-    pub fn skipped(&self) -> Option<u64> {
-        self.state.skipped()
-    }
-
-    /// Fija las omitidas frescas (#96) — ver `PaneState::set_skipped`.
-    pub fn set_skipped(&mut self, skipped: Option<u64>) {
-        self.state.set_skipped(skipped);
-    }
-
-    /// Decoración de plugin de `path` (G3b, ADR 0037) — delegado puro a
-    /// [`norte_frontend::PaneState::decoration_for`]. El render la pinta
-    /// como badge tras el hueco del badge hostil.
-    #[must_use]
-    pub fn decoration_for(&self, path: &VPath) -> Option<&norte_frontend::Decoration> {
-        self.state.decoration_for(path)
-    }
-
-    /// ¿Está marcada esta entrada? (#103) — delegado puro a
-    /// [`norte_frontend::PaneState::is_marked`]. El render pinta un canalón
-    /// textual (`*`) al inicio de la fila.
-    #[must_use]
-    pub fn is_marked(&self, entry: &Entry) -> bool {
-        self.state.is_marked(entry)
-    }
-
-    /// Celda de una columna `plugin:` (#117-follow-up) — delegado puro a
-    /// [`norte_frontend::PaneState::plugin_cell`].
-    #[must_use]
-    pub fn plugin_cell(&self, display_id: &str, path: &VPath) -> Option<String> {
-        self.state.plugin_cell(display_id, path)
-    }
-
-    /// Instala el lote de valores de columnas `plugin:` (#117-follow-up) —
-    /// delegado puro a [`norte_frontend::PaneState::set_plugin_columns`].
-    pub fn set_plugin_columns(
-        &mut self,
-        columns: std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,
-    ) {
-        self.state.set_plugin_columns(columns);
-    }
-
-    /// Togglea la marca de la entrada seleccionada. Delegado puro (#103).
-    pub fn toggle_mark(&mut self) {
-        self.state.toggle_mark();
-    }
-
-    /// mc/Total Commander: togglea la marca de la selección VISIBLE y avanza
-    /// (dentro del filtro si hay uno activo, si no el cursor real; sin
-    /// envolver en la última fila). Delegado puro a
-    /// [`norte_frontend::PaneState::toggle_mark_and_advance`] (#103, review:
-    /// la mecánica de "sobre qué avanza" no puede reimplementarse aquí ni en
-    /// el dispatch — vive una sola vez en el modelo compartido).
-    pub fn toggle_mark_and_advance(&mut self) {
-        self.state.toggle_mark_and_advance();
-    }
-
-    /// Marca todas las entradas visibles. Delegado puro (#103).
-    pub fn mark_all(&mut self) {
-        self.state.mark_all();
-    }
-
-    /// Cuántas veces ha MOVIDO índices el listado de este pane — delegado
-    /// puro a [`norte_frontend::PaneState::listing_epoch`]. Lo lee el ratón
-    /// para soltar un gesto cuyos índices ya no nombran lo que se pintó.
-    #[must_use]
-    pub fn listing_epoch(&self) -> u64 {
-        self.state.listing_epoch()
-    }
-
-    /// Marca (o desmarca) UNA entrada por su índice. Delegado puro al
-    /// primitivo que necesita el ctrl+click
-    /// ([`norte_frontend::PaneState::set_mark`]).
-    pub fn set_mark(&mut self, index: usize, marked: bool) {
-        self.state.set_mark(index, marked);
-    }
-
-    /// Marca el rango entre dos índices, inclusive y en cualquier orden;
-    /// devuelve cuántas marcas cambió. ADITIVO. Delegado puro a
-    /// [`norte_frontend::PaneState::mark_range`].
-    pub fn mark_range(&mut self, from: usize, to: usize) -> usize {
-        self.state.mark_range(from, to)
-    }
-
-    /// Arma un barrido de puntero. Delegado puro a
-    /// [`norte_frontend::PaneState::begin_sweep`].
-    pub fn begin_sweep(&mut self) {
-        self.state.begin_sweep();
-    }
-
-    /// Fija la extensión ACTUAL de un barrido (rubber-band: devuelve lo que
-    /// deja de cubrir). Delegado puro a
-    /// [`norte_frontend::PaneState::apply_sweep`].
-    pub fn apply_sweep(&mut self, from: usize, to: usize) -> usize {
-        self.state.apply_sweep(from, to)
-    }
-
-    /// Devuelve lo que marcó el barrido en curso, dejándolo armado.
-    /// Delegado puro a [`norte_frontend::PaneState::revert_sweep`].
-    pub fn revert_sweep(&mut self) {
-        self.state.revert_sweep();
-    }
-
-    /// Cierra un barrido, soltando su baseline. Delegado puro a
-    /// [`norte_frontend::PaneState::end_sweep`].
-    pub fn end_sweep(&mut self) {
-        self.state.end_sweep();
-    }
-
-    /// Invierte las marcas de las entradas visibles. Delegado puro (#103).
-    pub fn invert_marks(&mut self) {
-        self.state.invert_marks();
-    }
-
-    /// Quita todas las marcas. Delegado puro (#103).
-    pub fn clear_marks(&mut self) {
-        self.state.clear_marks();
-    }
-
-    /// Marca/desmarca por glob; devuelve cuántas marcas cambió (#103).
-    ///
-    /// # Errors
-    /// Si el patrón no compila.
-    pub fn mark_glob(
-        &mut self,
-        pattern: &str,
-        mark: bool,
-    ) -> Result<usize, norte_frontend::PatternError> {
-        self.state.mark_glob(pattern, mark)
-    }
-
-    /// Cuántas entradas marcadas. Delegado puro (#103).
-    #[must_use]
-    pub fn marks_len(&self) -> usize {
-        self.state.marks_len()
-    }
-
-    /// Tamaño total de los FICHEROS marcados. Delegado puro (#103).
-    #[must_use]
-    pub fn marked_bytes(&self) -> u64 {
-        self.state.marked_bytes()
-    }
-
-    /// Cuántas entradas marcadas son directorios. Delegado puro (#103) —
-    /// ver [`norte_frontend::PaneState::marked_dirs`].
-    #[must_use]
-    pub fn marked_dirs(&self) -> usize {
-        self.state.marked_dirs()
-    }
-
-    /// Marcas que el último refresh en el mismo directorio descartó porque su
-    /// entrada desapareció. Delegado puro (#103) — ver
-    /// [`norte_frontend::PaneState::pruned_marks`].
-    #[must_use]
-    pub fn pruned_marks(&self) -> usize {
-        self.state.pruned_marks()
-    }
-
-    /// Sobre qué opera la acción: marcas, o cursor si no hay. Delegado puro (#103).
-    #[must_use]
-    pub fn marked_paths(&self) -> Vec<VPath> {
-        self.state.marked_paths()
-    }
-
-    /// Toggle de ocultos (#107); devuelve el estado nuevo. En el pane
-    /// virtual actúa sobre los RESULTADOS sin tocar la preferencia — al
-    /// volver a un listado real manda `show_hidden_pref`.
-    pub fn toggle_hidden(&mut self) -> bool {
-        let now = self.state.toggle_hidden();
-        if !self.virtual_search {
-            self.show_hidden_pref = now;
-        }
-        now
-    }
-
-    /// Siembra la visibilidad de ocultos desde `[ui] show_hidden` (#107):
-    /// fija la preferencia Y el estado actual.
-    pub fn set_show_hidden(&mut self, show: bool) {
-        self.show_hidden_pref = show;
-        self.state.set_show_hidden(show);
-    }
-
-    /// ¿Se ven los ocultos? Delegado puro.
-    #[must_use]
-    pub fn show_hidden(&self) -> bool {
-        self.state.show_hidden()
-    }
-
-    /// Entradas apartadas por la ocultación (#107). Delegado puro.
-    #[must_use]
-    pub fn hidden_count(&self) -> usize {
-        self.state.hidden_count()
-    }
-
-    /// El orden activo del listado (#108). Delegado puro.
-    #[must_use]
-    pub fn sort(&self) -> norte_frontend::SortSpec {
-        self.state.sort()
-    }
-
-    /// Cambia el orden del listado (#108). Delegado puro.
-    pub fn set_sort(&mut self, spec: norte_frontend::SortSpec) {
-        self.state.set_sort(spec);
-    }
-
-    /// Instala el lote de decoraciones resuelto (G3b) — ver
-    /// `PaneState::set_decorations`.
-    pub fn set_decorations(
-        &mut self,
-        decorations: std::collections::HashMap<VPath, norte_frontend::Decoration>,
-    ) {
-        self.state.set_decorations(decorations);
-    }
-}
-
-/// Campo de texto activo del diálogo de búsqueda (`Alt+F7`, liveSearch T6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchField {
-    /// Patrón sobre el NOMBRE (glob o regex).
-    Name,
-    /// Texto/regex sobre el CONTENIDO.
-    Content,
-}
-
-/// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): dos campos de texto
-/// (nombre y contenido) y dos toggles (regex, case). El `regex` decide, por
-/// eje, glob-vs-regex (nombre) y literal-vs-regex (contenido) al construir los
-/// [`FsSearchParams`](norte_proto::methods::FsSearchParams) en el run loop.
-/// La raíz del walk es el `cwd` del pane con foco (no editable, se muestra en
-/// el modal). Sus teclas van hardcodeadas como los demás overlays (#24).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SearchDialog {
-    /// Patrón de nombre (glob o, con `regex`, regex).
-    pub name: String,
-    /// Texto de contenido (literal o, con `regex`, regex).
-    pub content: String,
-    /// Campo que recibe los imprimibles/backspace (Tab alterna).
-    pub field: SearchField,
-    /// `F2`: interpreta ambos patrones como regex en vez de glob/literal.
-    pub regex: bool,
-    /// `F3`: matching sensible a mayúsculas.
-    pub case: bool,
-}
-
-impl Default for SearchDialog {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            content: String::new(),
-            field: SearchField::Name,
-            regex: false,
-            case: false,
-        }
-    }
-}
-
-impl SearchDialog {
-    /// Diálogo vacío con el foco en el campo de nombre.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// El campo de texto activo, mutable.
-    fn active_mut(&mut self) -> &mut String {
-        match self.field {
-            SearchField::Name => &mut self.name,
-            SearchField::Content => &mut self.content,
-        }
-    }
-
-    /// Un carácter imprimible al campo activo.
-    pub fn push_char(&mut self, c: char) {
-        self.active_mut().push(c);
-    }
-
-    /// Backspace en el campo activo.
-    pub fn backspace(&mut self) {
-        self.active_mut().pop();
-    }
-
-    /// Tab: alterna el campo activo Name ⇄ Content.
-    pub fn toggle_field(&mut self) {
-        self.field = match self.field {
-            SearchField::Name => SearchField::Content,
-            SearchField::Content => SearchField::Name,
-        };
-    }
-
-    /// F2: alterna glob/literal ⇄ regex (aplica a AMBOS ejes).
-    pub fn toggle_regex(&mut self) {
-        self.regex = !self.regex;
-    }
-
-    /// F3: alterna sensibilidad a mayúsculas.
-    pub fn toggle_case(&mut self) {
-        self.case = !self.case;
-    }
-
-    /// ¿Hay algún criterio no vacío? Enter no lanza si ambos campos están
-    /// vacíos (una búsqueda sin criterio es un no-op con aviso).
-    #[must_use]
-    pub fn has_criteria(&self) -> bool {
-        !self.name.is_empty() || !self.content.is_empty()
-    }
-}
 
 // El saneado de nombres ([`display_name`]/[`path_display`]/`must_mask`) y el
 // orden del listado ([`sort_entries`] + `nfc_key`/`name_bytes`) viven ahora en
@@ -1392,777 +711,6 @@ pub struct App {
     pub picked: Option<Vec<VPath>>,
 }
 
-/// Qué popup de navegación está abierto (spec 2026-07-18).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NavPopupKind {
-    /// Historial de directorios del pane con foco (sesión, no persistido).
-    History,
-    /// Favoritos persistidos en el `norte.toml` del USUARIO.
-    Hotlist,
-    /// Volúmenes del host (`pane.select-drive`/`-left`/`-right`, design
-    /// 2026-08-10-volumes-design.md §D): snapshot congelada al abrir vía
-    /// `Backend::volumes` — `main.rs` hace el fetch async (app.rs no conoce
-    /// `Backend`) y entrega los items ya construidos a
-    /// [`App::open_volumes_popup`].
-    Volumes,
-}
-
-/// Un item del popup de navegación, CONGELADO al construirse en
-/// [`App::open_nav_popup`]: display ya saneado, destino ya parseado y (en
-/// hotlist) la clave cruda del favorito. El popup es una snapshot a
-/// propósito — todo lo que una tecla necesita viaja dentro del item, nada
-/// se re-resuelve contra un estado que pudo cambiar debajo.
-#[derive(Debug, Clone)]
-pub struct NavItem {
-    /// Display YA saneado, listo para pintar.
-    pub display: String,
-    /// Destino parseado; `None` = entrada de hotlist inválida (se muestra
-    /// con su aviso, no navega).
-    pub target: Option<VPath>,
-    /// `name` CRUDO del favorito — la clave del borrado con `d`
-    /// ([`App::nav_popup_selected_hotlist_name`]), congelada al abrir: un
-    /// hot-reload puede mutar `App::hotlist` bajo el popup y el borrado
-    /// debe caer sobre lo MOSTRADO, jamás sobre lo que ahora ocupe ese
-    /// índice en la lista nueva (review MAJOR T5). `None` en historial.
-    pub hotlist_name: Option<String>,
-}
-
-/// Popup de navegación (`Alt+↓` historial / `Ctrl+D` hotlist). Los `items`
-/// se construyen YA saneados en [`App::open_nav_popup`] (ver [`NavItem`]):
-/// el render no re-decide nada y Enter no re-parsea nada.
-#[derive(Debug, Clone)]
-pub struct NavPopup {
-    /// Historial, hotlist o volúmenes (decide título, footer y qué teclas
-    /// extra acepta).
-    pub kind: NavPopupKind,
-    /// Items congelados al abrir.
-    items: Vec<NavItem>,
-    /// Índice resaltado.
-    cursor: usize,
-    /// Input de nombre abierto (`a` en hotlist): captura imprimibles antes
-    /// que nada (main.rs); `None` = navegación normal del popup.
-    pub name_input: Option<String>,
-    /// El pane que `Confirm` navega. El foco para historial, hotlist y
-    /// `pane.select-drive`; un LADO fijo para `-left`/`-right`
-    /// independientemente de dónde esté el foco (design §D — así se
-    /// comportan `Alt+F1`/`Alt+F2` de Total Commander). Congelado al abrir,
-    /// misma razón que el resto del item: nada aquí se re-resuelve contra un
-    /// foco que pudo moverse debajo del popup.
-    target_pane: usize,
-    /// Solo volúmenes: si la lista ACTUAL incluye pseudo-filesystems (el
-    /// toggle "mostrar todo" del design §E). Sin sentido en historial/
-    /// hotlist, donde queda `false`.
-    include_pseudo: bool,
-}
-
-impl NavPopup {
-    /// Sube el cursor (tope arriba).
-    pub fn up(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
-    }
-
-    /// Baja el cursor (tope en el último item).
-    pub fn down(&mut self) {
-        if self.cursor + 1 < self.items.len() {
-            self.cursor += 1;
-        }
-    }
-
-    /// Items congelados para el render.
-    #[must_use]
-    pub fn items(&self) -> &[NavItem] {
-        &self.items
-    }
-
-    /// Índice resaltado.
-    #[must_use]
-    pub fn cursor(&self) -> usize {
-        self.cursor
-    }
-
-    /// El item resaltado, si lo hay.
-    #[must_use]
-    pub fn selected(&self) -> Option<&NavItem> {
-        self.items.get(self.cursor)
-    }
-
-    /// El pane que `Confirm` debe navegar — ver el campo.
-    #[must_use]
-    pub fn target_pane(&self) -> usize {
-        self.target_pane
-    }
-
-    /// Si la lista de volúmenes actual incluye pseudo-filesystems — ver el
-    /// campo. Sin significado fuera de `NavPopupKind::Volumes`.
-    #[must_use]
-    pub fn include_pseudo(&self) -> bool {
-        self.include_pseudo
-    }
-}
-
-/// Display de un item del popup de navegación: `[name — ]path` con el badge
-/// hostil como PREFIJO si cualquier parte saldría alterada (mismo criterio
-/// que los panes: lossy y MARCADO, spec §6).
-fn nav_item_display(
-    name: Option<&str>,
-    path: &VPath,
-    enc: Option<norte_encoding::NameEncoding>,
-) -> String {
-    // #98/F4: los popups son superficie de DECISIÓN (elegir destino de
-    // salto) — siguen la reinterpretación del pane con foco, como la barra.
-    let (texto, path_hostil) = norte_frontend::path_display_with(path, enc);
-    let (prefix, name_hostil) = match name {
-        Some(n) => {
-            let (nt, nh) = display_name(n.as_bytes());
-            (format!("{nt} — "), nh)
-        }
-        None => (String::new(), false),
-    };
-    if path_hostil || name_hostil {
-        format!("{} {prefix}{texto}", crate::ui::HOSTILE_BADGE)
-    } else {
-        format!("{prefix}{texto}")
-    }
-}
-
-/// Rows for the volumes popup (design §D): `main.rs` calls this right after
-/// `Backend::volumes` answers and hands the result to
-/// [`App::open_volumes_popup`] — this function owns none of the I/O, only the
-/// presentation, same split as the rest of the popup family.
-#[must_use]
-pub fn volume_items(
-    volumes: &[norte_proto::methods::Volume],
-    enc: Option<norte_encoding::NameEncoding>,
-) -> Vec<NavItem> {
-    volumes
-        .iter()
-        .map(|v| NavItem {
-            display: volume_item_display(v, enc),
-            target: Some(v.mount.clone()),
-            hotlist_name: None,
-        })
-        .collect()
-}
-
-/// One volume row: `[label — ]mount  fs_type  free / total`. Every text
-/// field the platform hands us — label, mount AND `fs_type` — goes through
-/// the same masking [`nav_item_display`] uses (`display_name`/
-/// `path_display_with`, both backed by `norte_encoding::is_terminal_hazard`)
-/// before it reaches the screen. `fs_type` is not the closed, ASCII-only
-/// vocabulary it looks like: a FUSE mount's `fuse.<subtype>` component is the
-/// `-o subtype=` value an UNPRIVILEGED user picks (`sshfs`, `rclone mount`,
-/// `encfs`…), so it is exactly as untrusted as a filename — encoding-auditor
-/// review caught it reaching the row unmasked in an earlier draft of this
-/// function, the same class of bug `control_escape` in the canonical corpus
-/// exists to catch. `free`/`total` print `volumes-size-unknown` instead of a
-/// number when the filesystem did not answer in time — design §A is explicit
-/// that a bare `0` here would read as "full", the opposite of what an absent
-/// size means.
-///
-/// `label` is `Option<Vec<u8>>` (V3.5, a second encoding-auditor finding on
-/// the same review pass that caught `fs_type` above): it reaches
-/// [`display_name`] as the raw bytes the wire carried, with NO `String`
-/// upstream to have already thrown away or lossily rewritten a non-UTF-8
-/// label before the masking ever saw it — otherwise the badge below would
-/// be protecting evidence that was already gone.
-fn volume_item_display(
-    v: &norte_proto::methods::Volume,
-    enc: Option<norte_encoding::NameEncoding>,
-) -> String {
-    // #98/F4 (same reasoning `nav_item_display` carries): a popup is a
-    // decision surface, so it follows the focused pane's reinterpretation.
-    let (path_text, path_hostil) = norte_frontend::path_display_with(&v.mount, enc);
-    let (label_prefix, label_hostil) = match v.label.as_deref() {
-        Some(l) => {
-            let (nt, nh) = display_name(l);
-            (format!("{nt} — "), nh)
-        }
-        None => (String::new(), false),
-    };
-    let (fs_type_text, fs_type_hostil) = display_name(v.fs_type.as_bytes());
-    let free = v
-        .free_bytes
-        .map_or_else(|| t("volumes-size-unknown"), norte_frontend::human_bytes);
-    let total = v
-        .total_bytes
-        .map_or_else(|| t("volumes-size-unknown"), norte_frontend::human_bytes);
-    let body = format!("{label_prefix}{path_text}  {fs_type_text}  {free} / {total}");
-    if path_hostil || label_hostil || fs_type_hostil {
-        format!("{} {body}", crate::ui::HOSTILE_BADGE)
-    } else {
-        body
-    }
-}
-
-/// Tope defensivo sobre `PluginInfo.description` en el wire (P1 encoding
-/// audit F1): el manifiesto YA limita a 280 chars al PARSEAR
-/// (`norte-plugin-host` manifest.rs, `ManifestError::DescriptionTooLong`) —
-/// pero eso solo protege el camino honesto (un plugin bien formado, un
-/// daemon fiel al server que lo cargó). Un daemon hostil o comprometido
-/// podría mandar CUALQUIER longitud por el wire — el cliente no debe
-/// confiar en que el server respetó su propio límite. Mismo valor que el
-/// tope del manifiesto: mirror deliberado, no coincidencia.
-pub const PLUGIN_DESCRIPTION_WIRE_CAP: usize = 280;
-
-/// Tope defensivo sobre las etiquetas cortas de un plugin en el wire (H3e):
-/// `PluginInfo.name`, `.publisher` y `PluginCommandInfo.title`.
-///
-/// El manifiesto acota SOLO el tercero — 120,
-/// `norte_plugin_host::manifest::COMMAND_TITLE_MAX_CHARS` — y no acota `name`
-/// ni `publisher`, así que para esos dos no hay límite de origen que reflejar y
-/// el cliente pone el suyo. Se elige EL MISMO valor a propósito: son el mismo
-/// tipo de texto (una etiqueta corta de tercero que va a una fila) y la ayuda
-/// los pinta uno al lado del otro. Para `title` el tope es además un espejo del
-/// del manifiesto, con el mismo criterio que
-/// [`PLUGIN_DESCRIPTION_WIRE_CAP`]: el límite de parseo solo protege el camino
-/// honesto, y un daemon hostil o comprometido puede mandar cualquier longitud.
-///
-/// Sin él, un `name` kilométrico no desborda el pintado (la lateral recorta),
-/// pero sí el FILTRO del modelo, que pliega el título entero en cada tecla.
-pub const PLUGIN_NAME_WIRE_CAP: usize = 120;
-
-/// Acota ([`PLUGIN_NAME_WIRE_CAP`]) y enmascara ([`display_name`]) una etiqueta
-/// corta de tercero — el `name`, el `publisher` o el título de un comando de un
-/// plugin — para que pueda entrar en el modelo de la ayuda (H3e).
-///
-/// En el PUNTO DE ENTRADA, no al pintar: `norte_frontend::help::PluginNode`
-/// documenta su `title` como «ya enmascarado y acotado», el modelo no enmascara
-/// nada — filtra sobre el título crudo que le den — y
-/// [`crate::help::TuiChords`] entrega sus etiquetas directas al pintor.
-///
-/// Un recorte se MARCA con `…`, como lo marcan los vecinos que hacen esto mismo
-/// (`masked_and_capped` en el doctor, [`norte_frontend::middle_ellipsis`] en la línea
-/// de descripción del gestor). Cortar en seco presenta un nombre truncado como
-/// si estuviera completo, que es la misma clase de mentira que H3d fue a
-/// perseguir a los pies de overlay: quien lee no puede saber que falta algo, y
-/// un nombre acabado en mitad de una palabra es precisamente lo que un tercero
-/// usaría para que su etiqueta pase por otra.
-///
-/// Elipsis por la DERECHA y no media: estas etiquetas se distinguen por su
-/// principio (`middle_ellipsis` existe para las rutas, donde lo que identifica
-/// está al final).
-/// Se acota ANTES de enmascarar, y eso es seguro porque sobre texto ya UTF-8
-/// [`display_name`] es 1:1 en chars (mapea char a char, nunca inserta ni
-/// borra). Al revés habría que enmascarar los 50 000 chars que un daemon
-/// hostil quiera mandar para quedarse con 120.
-#[must_use]
-pub fn plugin_label(raw: &str) -> String {
-    let mut chars = raw.chars();
-    let head: String = chars.by_ref().take(PLUGIN_NAME_WIRE_CAP).collect();
-    let overflowed = chars.next().is_some();
-    let mut out = display_name(head.as_bytes()).0;
-    if overflowed {
-        out.push('…');
-    }
-    out
-}
-
-/// Clampa ([`PLUGIN_DESCRIPTION_WIRE_CAP`]) y enmascara ([`display_name`])
-/// la `description` de CADA plugin de `plugins`, IN PLACE — en el único
-/// punto donde un `PluginListResult` recién llegado del `Backend` entra al
-/// estado del TUI (`main::dispatch`, brazos `app.extensions`/
-/// `app.palette`). El trabajo se hace UNA vez por plugin aquí, no por fila
-/// ni por frame: ambos consumidores ([`ExtensionManager`],
-/// [`crate::palette::plugin_rows`]) comparten el resultado ya seguro para
-/// pintar — `ExtensionManager` la repinta cada frame
-/// (`ui::plugin_description_line`), y antes de este fix recalculaba el
-/// enmascarado del String crudo (sin tope) en CADA uno.
-pub fn clamp_plugin_descriptions(plugins: &mut [norte_proto::methods::PluginInfo]) {
-    for p in plugins {
-        if let Some(raw) = &p.description {
-            let clamped: String = raw.chars().take(PLUGIN_DESCRIPTION_WIRE_CAP).collect();
-            let (masked, _) = display_name(clamped.as_bytes());
-            p.description = Some(masked);
-        }
-    }
-}
-
-#[cfg(test)]
-mod clamp_plugin_descriptions_tests {
-    use super::clamp_plugin_descriptions;
-    use norte_proto::methods::PluginInfo;
-
-    fn plugin(description: Option<&str>) -> PluginInfo {
-        PluginInfo {
-            id: "org.norte.demo".into(),
-            name: "Demo".into(),
-            publisher: "norte".into(),
-            version: "1.0.0".into(),
-            category: "previewer".into(),
-            capabilities: Vec::new(),
-            approved: true,
-            enabled: true,
-            description: description.map(str::to_owned),
-            commands: Vec::new(),
-            columns: Vec::new(),
-            has_help: false,
-        }
-    }
-
-    /// P1 encoding audit F1 (MEDIUM): `PluginInfo.description` no tiene tope
-    /// en el wire (el manifiesto solo lo limita al PARSEAR, en el camino
-    /// honesto) — un daemon hostil/comprometido podría mandar cualquier
-    /// longitud. `clamp_plugin_descriptions` es el único punto donde
-    /// `plugins_list` entra al estado del TUI (`main::dispatch`); debe
-    /// recortarla ahí, de una vez, para ambos consumidores.
-    #[test]
-    fn clampa_al_tope_del_wire() {
-        let mut plugins = vec![plugin(Some(&"a".repeat(50_000)))];
-        clamp_plugin_descriptions(&mut plugins);
-        assert_eq!(
-            plugins[0].description.as_deref().unwrap().chars().count(),
-            super::PLUGIN_DESCRIPTION_WIRE_CAP
-        );
-    }
-
-    #[test]
-    fn none_se_queda_none() {
-        let mut plugins = vec![plugin(None)];
-        clamp_plugin_descriptions(&mut plugins);
-        assert_eq!(plugins[0].description, None);
-    }
-
-    #[test]
-    fn corta_bajo_el_tope_no_se_toca() {
-        let mut plugins = vec![plugin(Some("una description corta"))];
-        clamp_plugin_descriptions(&mut plugins);
-        assert_eq!(
-            plugins[0].description.as_deref(),
-            Some("una description corta")
-        );
-    }
-
-    /// El override RTL nunca sobrevive crudo al clamp — se enmascara aquí,
-    /// no en cada frame del gestor de extensiones.
-    #[test]
-    fn enmascara_override_rtl() {
-        let mut plugins = vec![plugin(Some("abc\u{202E}gpj.exe"))];
-        clamp_plugin_descriptions(&mut plugins);
-        let d = plugins[0].description.as_deref().unwrap();
-        assert!(!d.contains('\u{202E}'));
-        assert!(d.contains('\u{FFFD}'));
-    }
-}
-
-/// Overlay del catálogo de extensiones (M4-P3): la lista de plugins descubierta
-/// por el core (YA ordenada por categoría e id) más los directorios que
-/// fallaron al cargar, con un cursor de selección. Regla 7: el TUI no decide
-/// nada — aprobar/activar viaja al core por el `Backend`; aquí solo se navega y
-/// se refleja el estado. El `name`/`publisher` de cada plugin son texto LIBRE
-/// de un tercero: se enmascaran con [`display_name`] al pintar (superficie de
-/// decisión de seguridad).
-#[derive(Debug, Clone)]
-pub struct ExtensionManager {
-    /// Plugins descubiertos, en el orden del core (categoría, luego id).
-    pub plugins: Vec<norte_proto::methods::PluginInfo>,
-    /// Directorios que no cargaron (diagnóstico), se pintan al final.
-    pub errors: Vec<norte_proto::methods::PluginLoadError>,
-    /// Índice del plugin resaltado.
-    pub cursor: usize,
-    /// Drill-down editor over the SELECTED plugin's `[config]` (G3c):
-    /// `Some` while open — `dialog.confirm` on the plugin list opens it
-    /// (fetches `plugin.get_config`), `dialog.cancel` inside it closes
-    /// back to the plugin list (never the whole overlay).
-    pub config: Option<PluginConfigPanel>,
-}
-
-/// The extension manager's config drill-down (G3c): which plugin, its
-/// masked name (for the header — `Row`'s `name`/`desc` inside `state` are
-/// ALREADY masked by `norte_frontend::plugin_config::sanitize_config_keys`,
-/// this is just the plugin's own display name), and the pure editor state.
-#[derive(Debug, Clone)]
-pub struct PluginConfigPanel {
-    /// Id of the plugin being configured — needed to call
-    /// `Backend::plugin_set_config(id, key, value)` on commit.
-    pub plugin_id: String,
-    /// Masked plugin name, for the panel header.
-    pub plugin_name: String,
-    /// The pure cursor+edit widget over this plugin's `[config]` keys.
-    pub state: norte_frontend::plugin_config::PluginConfigState,
-}
-
-impl ExtensionManager {
-    /// Sube el cursor (tope arriba).
-    pub fn up(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
-    }
-
-    /// Baja el cursor (tope al último plugin).
-    pub fn down(&mut self) {
-        let max = self.plugins.len().saturating_sub(1);
-        self.cursor = (self.cursor + 1).min(max);
-    }
-
-    /// El plugin bajo el cursor, si lo hay.
-    #[must_use]
-    pub fn selected(&self) -> Option<&norte_proto::methods::PluginInfo> {
-        self.plugins.get(self.cursor)
-    }
-
-    /// Togglea el bool LOCAL de aprobación del plugin bajo el cursor, para
-    /// feedback inmediato tras un `plugins_set_approval` OK en el Backend (la
-    /// verdad vive en el core; esto solo evita un relistado para repintar).
-    pub fn set_local_approved(&mut self, approved: bool) {
-        if let Some(p) = self.plugins.get_mut(self.cursor) {
-            p.approved = approved;
-        }
-    }
-
-    /// Análogo a [`Self::set_local_approved`] para el estado de activación.
-    pub fn set_local_enabled(&mut self, enabled: bool) {
-        if let Some(p) = self.plugins.get_mut(self.cursor) {
-            p.enabled = enabled;
-        }
-    }
-}
-
-/// Acción del usuario sobre el overlay de extensiones (el frontend traduce las
-/// teclas; el efecto —llamar al `Backend`— vive en `main`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExtAction {
-    /// Resalta el anterior.
-    Up,
-    /// Resalta el siguiente.
-    Down,
-    /// Togglea la aprobación del plugin resaltado.
-    ToggleApprove,
-    /// Togglea la activación del plugin resaltado.
-    ToggleEnable,
-    /// Cierra el overlay.
-    Close,
-}
-
-/// Popup de selección de tema: lista de presets con preview EN VIVO (mover el
-/// cursor aplica el tema al vuelo; Esc revierte al que había, Enter lo fija).
-#[derive(Debug, Clone)]
-pub struct ThemePicker {
-    /// Nombres de preset a elegir.
-    pub names: Vec<String>,
-    /// Índice resaltado.
-    pub cursor: usize,
-    /// Tema que había ANTES de abrir, para revertir al cancelar.
-    pub original: crate::theme::TuiTheme,
-}
-
-impl ThemePicker {
-    /// Sube el cursor (tope arriba).
-    pub fn up(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
-    }
-
-    /// Baja el cursor (tope al último).
-    pub fn down(&mut self) {
-        if self.cursor + 1 < self.names.len() {
-            self.cursor += 1;
-        }
-    }
-
-    /// El nombre resaltado.
-    #[must_use]
-    pub fn selected(&self) -> Option<&str> {
-        self.names.get(self.cursor).map(String::as_str)
-    }
-}
-
-/// Acción del usuario sobre el popup de tema (el frontend traduce las teclas).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PickerAction {
-    /// Resalta el anterior (con preview).
-    Up,
-    /// Resalta el siguiente (con preview).
-    Down,
-    /// Fija el tema resaltado y cierra.
-    Confirm,
-    /// Revierte al tema previo y cierra.
-    Cancel,
-}
-
-/// Command palette (`Ctrl+P`/vim `:`, H1 T4, spec-promised): filtro libre
-/// sobre TODOS los comandos de [`crate::keymap::COMMANDS`]. A diferencia de
-/// los overlays de H1 T2 (modal/theme-picker/extensions/nav-popup), sus
-/// teclas NO resuelven contra el contexto `dialog` — es un editor de texto
-/// libre como el diálogo de búsqueda (`SearchDialog`, decisión 8 del plan
-/// H1): no hay vocabulario `dialog.*` para "teclear un carácter" o "correr
-/// la selección", así que el run loop las trata como fijas, hardcodeadas.
-///
-/// Las `rows` llegan YA construidas ([`crate::palette::build_rows`],
-/// `App::palette_rows`, precomputadas como `help_lines`/`dialog_hints` —
-/// mismo criterio: reconstruidas en el arranque y en cada hot-reload OK,
-/// ANTES de que los efectivos se muevan al `Resolver`); `Palette::new` solo
-/// pliega el haystack de cada fila. Mismo patrón de cache que
-/// [`crate::nav::QuickSearch`] (#77): el fold por fila se computa UNA vez
-/// aquí, no por keystroke — los keystrokes solo pliegan la query.
-#[derive(Debug, Clone)]
-pub struct Palette {
-    /// `(comando, descripción, chord-o-guion)` — snapshot congelado al abrir.
-    rows: Vec<crate::palette::Row>,
-    /// Haystack plegado por fila (nombre + descripción, [`crate::nav::fold`]),
-    /// índice-paralelo a `rows`.
-    folds: Vec<String>,
-    /// Bytes tecleados tal cual (matching SIN sanear; el saneado es solo al
-    /// pintar, [`Self::query_display`] — mismo contrato que
-    /// [`crate::nav::QuickSearch::query_display`]).
-    query: Vec<u8>,
-    /// Índices REALES en `rows` que casan (query vacía = todas).
-    visible: Vec<usize>,
-    /// Posición de la selección DENTRO de `visible`.
-    cursor: usize,
-}
-
-impl Palette {
-    /// Abre la palette sobre `rows` (la snapshot precomputada de `App`):
-    /// pliega el haystack de cada fila y arranca con la query vacía (todo
-    /// visible). El fold es sobre `text`+`desc` (lo PINTADO, ya enmascarado
-    /// para una fila de plugin) — jamás sobre `key` (P1: podría llevar el
-    /// `command_id` crudo del manifiesto, sin charset validado).
-    #[must_use]
-    pub fn new(rows: Vec<crate::palette::Row>) -> Self {
-        let folds = rows
-            .iter()
-            .map(|row| crate::nav::fold(format!("{} {}", row.text, row.desc).as_bytes()))
-            .collect();
-        let mut p = Self {
-            rows,
-            folds,
-            query: Vec::new(),
-            visible: Vec::new(),
-            cursor: 0,
-        };
-        p.recompute();
-        p
-    }
-
-    /// Recalcula `visible` a partir de la query actual sobre `self.folds`
-    /// (el cache YA vigente) y clampa el cursor.
-    fn recompute(&mut self) {
-        self.visible = if self.query.is_empty() {
-            (0..self.rows.len()).collect()
-        } else {
-            let q = crate::nav::fold(&self.query);
-            self.folds
-                .iter()
-                .enumerate()
-                .filter(|(_, f)| f.contains(&q))
-                .map(|(i, _)| i)
-                .collect()
-        };
-        self.clamp_cursor();
-    }
-
-    fn clamp_cursor(&mut self) {
-        if self.visible.is_empty() {
-            self.cursor = 0;
-        } else if self.cursor >= self.visible.len() {
-            self.cursor = self.visible.len() - 1;
-        }
-    }
-
-    /// Añade un carácter tecleado a la query y recalcula (mismo contrato que
-    /// [`crate::nav::QuickSearch::push_char`]).
-    pub fn push_char(&mut self, c: char) {
-        let mut buf = [0u8; 4];
-        self.query
-            .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
-        self.recompute();
-    }
-
-    /// Retira el último char UTF-8 completo tecleado y recalcula.
-    pub fn backspace(&mut self) {
-        if self.query.is_empty() {
-            return;
-        }
-        let mut cut = self.query.len() - 1;
-        while cut > 0 && (self.query[cut] & 0b1100_0000) == 0b1000_0000 {
-            cut -= 1;
-        }
-        self.query.truncate(cut);
-        self.recompute();
-    }
-
-    /// Sube la selección (tope arriba).
-    pub fn up(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
-    }
-
-    /// Baja la selección (tope al final).
-    pub fn down(&mut self) {
-        if self.cursor + 1 < self.visible.len() {
-            self.cursor += 1;
-        }
-    }
-
-    /// Sube `n` posiciones (pgup).
-    pub fn page_up(&mut self, n: usize) {
-        self.cursor = self.cursor.saturating_sub(n);
-    }
-
-    /// Baja `n` posiciones, tope al final (pgdn).
-    pub fn page_down(&mut self, n: usize) {
-        self.cursor = (self.cursor + n).min(self.visible.len().saturating_sub(1));
-    }
-
-    /// Índices REALES en `rows()` visibles con la query actual.
-    #[must_use]
-    pub fn visible(&self) -> &[usize] {
-        &self.visible
-    }
-
-    /// Todas las filas ([`crate::palette::Row`]) — `rows()[visible()[i]]`
-    /// para pintar la fila `i`-ésima de la lista filtrada. Solo `text`/
-    /// `desc`/`chord` se pintan; `key` es de despacho interno (ver doc de
-    /// [`crate::palette::Row`]).
-    #[must_use]
-    pub fn rows(&self) -> &[crate::palette::Row] {
-        &self.rows
-    }
-
-    /// Posición de la selección DENTRO de `visible()` (para `ListState`).
-    #[must_use]
-    pub fn cursor(&self) -> usize {
-        self.cursor
-    }
-
-    /// La CLAVE de despacho bajo el cursor, si hay alguna visible (P1: ya no
-    /// es `&'static str` — una fila de plugin trae una `key` construida en
-    /// tiempo de ejecución, `plugin:{id}:{command}`; se clona porque
-    /// `main::dispatch` la usa DESPUÉS de cerrar la palette, `app.palette =
-    /// None`, que dropea `rows`).
-    #[must_use]
-    pub fn selected(&self) -> Option<String> {
-        self.visible
-            .get(self.cursor)
-            .map(|&i| self.rows[i].key.clone())
-    }
-
-    /// Query para pintar (lossy, enmascarada — mismo contrato que
-    /// [`crate::nav::QuickSearch::query_display`]: sin bracketed paste un
-    /// paste hostil llega como stream de `push_char` y pintaría bidi/
-    /// invisibles crudos en el borde).
-    #[must_use]
-    pub fn query_display(&self) -> String {
-        String::from_utf8_lossy(&self.query)
-            .chars()
-            .map(|c| {
-                if norte_encoding::is_terminal_hazard(c) {
-                    '\u{FFFD}'
-                } else {
-                    c
-                }
-            })
-            .collect()
-    }
-}
-
-#[cfg(test)]
-mod palette_tests {
-    use super::Palette;
-
-    fn row(key: &str, desc: &str, chord: &str) -> crate::palette::Row {
-        crate::palette::Row {
-            key: key.to_owned(),
-            text: key.to_owned(),
-            desc: desc.to_owned(),
-            chord: chord.to_owned(),
-        }
-    }
-
-    fn rows() -> Vec<crate::palette::Row> {
-        vec![
-            row("app.quit", "quit norte", "q"),
-            row("app.help", "this help", "f1"),
-        ]
-    }
-
-    #[test]
-    fn palette_filtra_y_selecciona() {
-        let mut p = Palette::new(rows());
-        for c in "quit".chars() {
-            p.push_char(c);
-        }
-        assert_eq!(p.visible().len(), 1, "solo app.quit casa con 'quit'");
-        assert_eq!(p.selected().as_deref(), Some("app.quit"));
-    }
-
-    #[test]
-    fn palette_query_hostil_se_enmascara() {
-        let mut p = Palette::new(rows());
-        for c in "a\u{202E}b".chars() {
-            p.push_char(c);
-        }
-        let display = p.query_display();
-        assert!(
-            !display.chars().any(norte_encoding::is_terminal_hazard),
-            "query_display dejó un hazard crudo: {display:?}"
-        );
-    }
-
-    #[test]
-    fn palette_filtro_vacio_muestra_todo() {
-        let p = Palette::new(rows());
-        assert_eq!(p.visible().len(), 2, "query vacía = todas las filas");
-        assert_eq!(
-            p.selected().as_deref(),
-            Some("app.quit"),
-            "cursor arranca en la primera"
-        );
-    }
-
-    /// Filtro que NO casa con ninguna fila: `selected()` devuelve `None`
-    /// (jamás un índice fantasma) y `up`/`down`/páginas no panican sobre
-    /// `visible` vacío.
-    #[test]
-    fn palette_sin_matches_selected_es_none_y_no_panica() {
-        let mut p = Palette::new(rows());
-        for c in "zzz".chars() {
-            p.push_char(c);
-        }
-        assert!(p.visible().is_empty());
-        assert_eq!(p.selected(), None);
-        p.up();
-        p.down();
-        p.page_up(3);
-        p.page_down(3);
-        assert_eq!(p.selected(), None);
-    }
-
-    /// (P1) Filas de plugin ([`crate::palette::plugin_rows`]) mezcladas con
-    /// las built-in: el filtro de texto libre casa contra el TÍTULO YA
-    /// enmascarado (`text`), y Enter (`selected()`) devuelve la `key` de
-    /// despacho `plugin:{id}:{command}` — jamás el texto pintado.
-    #[test]
-    fn palette_filas_de_plugin_se_filtran_por_titulo_y_despachan_por_key() {
-        let plugin = norte_proto::methods::PluginInfo {
-            id: "org.norte.demo".into(),
-            name: "Demo".into(),
-            publisher: "norte".into(),
-            version: "0.1.0".into(),
-            category: "command".into(),
-            capabilities: Vec::new(),
-            approved: true,
-            enabled: true,
-            description: None,
-            commands: vec![norte_proto::methods::PluginCommandInfo {
-                id: "greet".into(),
-                title: "Greet loudly".into(),
-            }],
-            columns: Vec::new(),
-            has_help: false,
-        };
-        let mut all = rows();
-        all.extend(crate::palette::plugin_rows(&[plugin]));
-        let mut p = Palette::new(all);
-        for c in "loudly".chars() {
-            p.push_char(c);
-        }
-        assert_eq!(
-            p.visible().len(),
-            1,
-            "solo la fila de plugin casa con 'loudly' (el título)"
-        );
-        assert_eq!(p.selected().as_deref(), Some("plugin:org.norte.demo:greet"));
-    }
-}
-
 // `PendingWrite`/`SettingsEditError`/`Settings`/`cycle` (S3 overlay editor)
 // hoisted to `norte_frontend::settings` in S4 (GUI settings view): the code
 // had ZERO TUI-specific coupling (no ratatui/crossterm, pure state +
@@ -2402,14 +950,14 @@ impl App {
     /// y aquí solo se le da lo que esta TUI sabe.
     #[must_use]
     fn sync_roots(&self) -> SyncRoots {
-        let otro = &self.panes[self.focus() ^ 1];
+        let other = &self.panes[self.focus() ^ 1];
         norte_frontend::sync::sync_roots(
             self.sync_source_view(),
             &norte_frontend::sync::Panes {
                 focused_root: self.focused().dir(),
                 focused_encoding: self.focused().name_encoding(),
-                other_root: otro.dir(),
-                other_encoding: otro.name_encoding(),
+                other_root: other.dir(),
+                other_encoding: other.name_encoding(),
             },
         )
     }
@@ -2512,12 +1060,12 @@ impl App {
         dest: &VPath,
     ) -> Result<Option<Vec<norte_proto::methods::RelPath>>, norte_frontend::sync::IncludeError>
     {
-        let marcadas = self
+        let marked = self
             .compare
             .as_ref()
             .map(|v| v.pane.marked_rows())
             .unwrap_or_default();
-        norte_frontend::sync::include_from_rows(source, dest, &marcadas)
+        norte_frontend::sync::include_from_rows(source, dest, &marked)
     }
 
     /// Cierra el panel de sincronización. La cancelación de la Task es del run
@@ -2828,8 +1376,8 @@ impl App {
             &norte_frontend::display_name(last.host.as_bytes()).0,
             HOST_MAX,
         );
-        let otras = self.degraded.len() - 1;
-        if otras == 0 {
+        let others = self.degraded.len() - 1;
+        if others == 0 {
             return Some(ta(
                 "status-connection-degraded",
                 &[("scheme", &scheme), ("host", &host)],
@@ -2840,7 +1388,7 @@ impl App {
             &[
                 ("scheme", &scheme),
                 ("host", &host),
-                ("n", &otras.to_string()),
+                ("n", &others.to_string()),
             ],
         ))
     }
@@ -2896,7 +1444,7 @@ impl App {
     #[must_use]
     pub fn journal_banner(&self) -> Option<String> {
         use norte_core::embedded::NoJournal as N;
-        self.no_journal.as_ref().map(|estado| match estado {
+        self.no_journal.as_ref().map(|state| match state {
             // #203: el mismo hecho que un `Busy` con otra explicación. La
             // frase suave sale también cuando hay un daemon vivo —el caso
             // corriente— así que sobre un ocupante sin explicar dice
@@ -2918,7 +1466,7 @@ impl App {
     /// conexión va en claro», y es el único que habla de TODA la sesión.
     #[must_use]
     pub fn persistent_banner(&self) -> Option<String> {
-        let partes: Vec<String> = [
+        let parts: Vec<String> = [
             self.journal_banner(),
             self.connection_banner(),
             self.session_banner(),
@@ -2926,7 +1474,7 @@ impl App {
         .into_iter()
         .flatten()
         .collect();
-        (!partes.is_empty()).then(|| partes.join("  "))
+        (!parts.is_empty()).then(|| parts.join("  "))
     }
 
     /// El aviso PERSISTENTE de ventana SUELTA, o `None` si ésta es la dueña
@@ -3100,7 +1648,7 @@ impl App {
     /// directorio que se está mirando, así que la pestaña aparece llena en el
     /// acto y no parpadea vacía mientras alguien vuelve a leer lo mismo.
     pub fn tab_new(&mut self) {
-        let foco = self.focused_slot();
+        let focus = self.focused_slot();
         let (dir, entradas) = {
             let p = &self.panes[self.focus];
             (p.dir().clone(), p.entries().to_vec())
@@ -3108,7 +1656,7 @@ impl App {
         let id = self.mint_slot();
         self.panes.insert_browser(id, Pane::new(dir, entradas));
         self.layout = self.layout.add_tab(
-            foco,
+            focus,
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
         );
         self.panes.refresh_visible(&self.layout);
@@ -3117,8 +1665,8 @@ impl App {
 
     /// Cierra la pestaña enfocada. Sin efecto si el pane no está en un grupo.
     pub fn tab_close(&mut self) {
-        let foco = self.focused_slot();
-        if let Some(nuevo) = self.layout.close_tab(foco) {
+        let focus = self.focused_slot();
+        if let Some(nuevo) = self.layout.close_tab(focus) {
             self.layout = nuevo;
             self.panes.refresh_visible(&self.layout);
             self.history.retain_tree(&self.layout);
@@ -3127,26 +1675,26 @@ impl App {
 
     /// Cambia de pestaña dentro del grupo enfocado, ciclando.
     pub fn tab_cycle(&mut self, delta: isize) {
-        let foco = self.focused_slot();
-        let Some((tabs, activa)) = self.layout.tabs_of(foco) else {
+        let focus = self.focused_slot();
+        let Some((tabs, active)) = self.layout.tabs_of(focus) else {
             return;
         };
         if tabs.is_empty() {
             return;
         }
         let n = isize::try_from(tabs.len()).unwrap_or(1);
-        let i = isize::try_from(activa).unwrap_or(0);
-        let destino = usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0);
-        self.layout = self.layout.set_active_for(foco, destino);
+        let i = isize::try_from(active).unwrap_or(0);
+        let dest = usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0);
+        self.layout = self.layout.set_active_for(focus, dest);
         self.panes.refresh_visible(&self.layout);
         self.history.retain_tree(&self.layout);
     }
 
     /// Va a la pestaña `n` (base 1) del grupo enfocado.
     pub fn tab_goto(&mut self, n: usize) {
-        let foco = self.focused_slot();
-        if self.layout.tabs_of(foco).is_some() {
-            self.layout = self.layout.set_active_for(foco, n.saturating_sub(1));
+        let focus = self.focused_slot();
+        if self.layout.tabs_of(focus).is_some() {
+            self.layout = self.layout.set_active_for(focus, n.saturating_sub(1));
             self.panes.refresh_visible(&self.layout);
             self.history.retain_tree(&self.layout);
         }
@@ -3156,16 +1704,16 @@ impl App {
     /// pestaña que salta del final al principio por una pulsación de más es
     /// justo lo que nadie quería.
     pub fn tab_move(&mut self, delta: isize) {
-        let foco = self.focused_slot();
-        if self.layout.tabs_of(foco).is_some() {
-            self.layout = self.layout.move_tab(foco, delta);
+        let focus = self.focused_slot();
+        if self.layout.tabs_of(focus).is_some() {
+            self.layout = self.layout.move_tab(focus, delta);
             self.panes.refresh_visible(&self.layout);
             self.history.retain_tree(&self.layout);
         }
     }
 
     /// Cuántos `browser` hay en el árbol, visibles u ocultos.
-    fn browsers_en_el_arbol(&self) -> usize {
+    fn browsers_in_tree(&self) -> usize {
         self.layout
             .slot_ids()
             .into_iter()
@@ -3226,9 +1774,9 @@ impl App {
                 // que habría creado su estado no se va a pulsar, porque el
                 // panel ya está en pantalla.
                 Some(crate::tree::KIND) if self.panes.tree(id).is_none() => {
-                    let mut arbol = crate::tree::Tree::default();
-                    arbol.anchor(dir.clone());
-                    self.panes.insert_tree(id, arbol);
+                    let mut tree = crate::tree::Tree::default();
+                    tree.anchor(dir.clone());
+                    self.panes.insert_tree(id, tree);
                 }
                 _ => {}
             }
@@ -3248,7 +1796,7 @@ impl App {
     /// lleno en vez de parpadear vacío mientras alguien relee lo mismo. Y se
     /// queda con el FOCO, que es lo que uno acaba de pedir.
     pub fn layout_split(&mut self, dir: norte_frontend::layout::Dir) {
-        let foco = self.focused_slot();
+        let focus = self.focused_slot();
         let (d, entradas) = {
             let p = &self.panes[self.focus];
             (p.dir().clone(), p.entries().to_vec())
@@ -3256,7 +1804,7 @@ impl App {
         let id = self.mint_slot();
         self.panes.insert_browser(id, Pane::new(d, entradas));
         self.layout = self.layout.split_slot(
-            foco,
+            focus,
             dir,
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
         );
@@ -3380,7 +1928,7 @@ impl App {
         let Some(id) = self.places_slot() else {
             return PlacesClick::Focused;
         };
-        let ya_estaba = self.key_owner == KeyOwner::Places
+        let was_already = self.key_owner == KeyOwner::Places
             && self.panes.places(id).is_some_and(|s| s.cursor() == index);
         let Some(s) = self.panes.places_mut(id) else {
             return PlacesClick::Focused;
@@ -3389,13 +1937,13 @@ impl App {
             return PlacesClick::Focused;
         }
         s.set_cursor(index);
-        let es_cabecera = matches!(s.rows().get(index), Some(PlaceRow::Header { .. }));
+        let is_header = matches!(s.rows().get(index), Some(PlaceRow::Header { .. }));
         self.key_owner = KeyOwner::Places;
-        if es_cabecera {
+        if is_header {
             self.places_toggle_fold();
             return PlacesClick::Folded;
         }
-        if ya_estaba {
+        if was_already {
             PlacesClick::Activate
         } else {
             PlacesClick::Focused
@@ -3439,18 +1987,18 @@ impl App {
     pub fn places_activate(&mut self) -> Option<VPath> {
         use norte_frontend::places::PlaceRow;
         let id = self.places_slot()?;
-        let estado = self.panes.places(id)?;
+        let state = self.panes.places(id)?;
         if let Some(PlaceRow::Favorite {
             target: Err(clave), ..
-        }) = estado.rows().get(estado.cursor())
+        }) = state.rows().get(state.cursor())
         {
-            let motivo = t(clave);
-            self.message = Some(motivo);
+            let reason = t(clave);
+            self.message = Some(reason);
             return None;
         }
-        let destino = estado.activate()?.clone();
+        let dest = state.activate()?.clone();
         self.key_owner = KeyOwner::Panes;
-        Some(destino)
+        Some(dest)
     }
 
     /// El hueco del visor acoplado, si está en el árbol.
@@ -3545,9 +2093,9 @@ impl App {
             }
             None => {
                 let id = self.mint_slot();
-                let mut arbol = crate::tree::Tree::default();
-                arbol.anchor(self.focused().dir().clone());
-                self.panes.insert_tree(id, arbol);
+                let mut tree = crate::tree::Tree::default();
+                tree.anchor(self.focused().dir().clone());
+                self.panes.insert_tree(id, tree);
                 self.layout = self.layout.dock(
                     self.focused_slot(),
                     Edge::Left,
@@ -3634,11 +2182,11 @@ impl App {
 
     /// Baja el cursor del panel de procesos, sin pasarse de la última fila.
     pub fn processes_down(&mut self) {
-        let filas = self.board.rows().len();
+        let rows = self.board.rows().len();
         if let Some(id) = self.processes_slot()
             && let Some(p) = self.panes.processes_mut(id)
         {
-            p.down(filas);
+            p.down(rows);
         }
     }
 
@@ -3654,8 +2202,8 @@ impl App {
         let Some(id) = self.processes_slot() else {
             return false;
         };
-        let filas = self.board.rows().len();
-        let Some(cursor) = self.panes.processes(id).map(|p| p.cursor(filas)) else {
+        let rows = self.board.rows().len();
+        let Some(cursor) = self.panes.processes(id).map(|p| p.cursor(rows)) else {
             return false;
         };
         self.board.cancel_at(cursor)
@@ -3745,9 +2293,9 @@ impl App {
     /// denegación de policy no puede abrir un diálogo: bajar por un directorio
     /// sería una ráfaga de modales, y el lector no ha pedido abrir nada.
     pub fn preview_failed(&mut self, slot: norte_frontend::layout::SlotId, clave: &str) {
-        let texto = t(clave);
+        let text = t(clave);
         if let Some(p) = self.panes.preview_mut(slot) {
-            p.say(None, texto);
+            p.say(None, text);
         }
     }
 
@@ -3760,11 +2308,11 @@ impl App {
     ///
     /// Devuelve `false` si no se pudo, para que el llamante avise.
     pub fn layout_close_slot(&mut self) -> bool {
-        if self.browsers_en_el_arbol() <= 2 {
+        if self.browsers_in_tree() <= 2 {
             return false;
         }
-        let foco = self.focused_slot();
-        let Some(nuevo) = self.layout.close_slot(foco) else {
+        let focus = self.focused_slot();
+        let Some(nuevo) = self.layout.close_slot(focus) else {
             return false;
         };
         self.layout = nuevo;
@@ -3796,14 +2344,14 @@ impl App {
 
     /// Agranda (`delta > 0`) o encoge el panel que tiene el teclado.
     pub fn layout_resize(&mut self, delta: i16) {
-        let objetivo = self.resize_target();
-        self.layout = self.layout.resize(objetivo, delta);
+        let target = self.resize_target();
+        self.layout = self.layout.resize(target, delta);
     }
 
     /// Devuelve a los hermanos del panel enfocado el mismo tamaño.
     pub fn layout_equalize(&mut self) {
-        let foco = self.focused_slot();
-        self.layout = self.layout.equalize(foco);
+        let focus = self.focused_slot();
+        self.layout = self.layout.equalize(focus);
     }
 
     /// Designa el OTRO lado visible como destino de las operaciones.
@@ -3816,14 +2364,14 @@ impl App {
         if n < 2 {
             return;
         }
-        let actual = self
+        let current = self
             .roles
             .get(norte_frontend::layout::RoleId::Target)
             .and_then(|t| (0..n).find(|i| self.panes.slot_of(*i) == t))
             .unwrap_or(self.focus);
         // El siguiente que no sea el enfocado: designarse a uno mismo como
         // destino es pedirle a una copia que se copie encima.
-        let mut i = (actual + 1) % n;
+        let mut i = (current + 1) % n;
         if i == self.focus {
             i = (i + 1) % n;
         }
@@ -3897,13 +2445,8 @@ impl App {
     /// El listado del directorio lo hace el llamante y llega ya hecho: leer
     /// un directorio es I/O, y esto se llama desde un contexto async
     /// (regla 2).
-    pub fn open_layout_picker(
-        &mut self,
-        del_usuario: Vec<norte_frontend::layout_picker::UserLayout>,
-    ) {
-        self.layout_picker = Some(norte_frontend::layout_picker::LayoutPicker::open(
-            del_usuario,
-        ));
+    pub fn open_layout_picker(&mut self, user: Vec<norte_frontend::layout_picker::UserLayout>) {
+        self.layout_picker = Some(norte_frontend::layout_picker::LayoutPicker::open(user));
     }
 
     /// Abre el selector de conexiones (#140) con lo que haya en
@@ -3963,14 +2506,14 @@ impl App {
             let Some(pane) = self.panes.browser(id) else {
                 continue;
             };
-            let historia = self.history.for_slot(id);
+            let history = self.history.for_slot(id);
             body.slots.insert(
                 id.0,
                 SlotState {
                     path: pane.dir().clone(),
                     cursor: pane.cursor() as u64,
-                    back: historia.map(|h| h.trail().to_vec()).unwrap_or_default(),
-                    forward: historia
+                    back: history.map(|h| h.trail().to_vec()).unwrap_or_default(),
+                    forward: history
                         .map(|h| h.forward_trail().to_vec())
                         .unwrap_or_default(),
                     sort: pane.sort(),
@@ -3999,10 +2542,10 @@ impl App {
         &mut self,
         body: &norte_frontend::session::SessionBody,
     ) -> Vec<norte_frontend::layout::SlotId> {
-        if let Some(arbol) = body.layouts.get("default") {
-            self.set_layout(arbol.clone());
+        if let Some(tree) = body.layouts.get("default") {
+            self.set_layout(tree.clone());
         }
-        let mut pedir = Vec::new();
+        let mut ask = Vec::new();
         self.session.orphans.clear();
         for (raw, estado) in &body.slots {
             let id = norte_frontend::layout::SlotId(*raw);
@@ -4021,9 +2564,9 @@ impl App {
             self.history
                 .for_slot_mut(id)
                 .seed(estado.back.clone(), estado.forward.clone());
-            pedir.push(id);
+            ask.push(id);
         }
-        pedir
+        ask
     }
 
     /// Coloca el cursor que traía la sesión, ahora que el listado ya está.
@@ -4032,11 +2575,11 @@ impl App {
     /// —un directorio con menos entradas que ayer no deja el cursor fuera— y
     /// eso lo hace [`Pane::set_cursor`].
     pub fn restore_cursor(&mut self, id: norte_frontend::layout::SlotId) {
-        let Some(fila) = self.session.cursors.remove(&id.0) else {
+        let Some(row) = self.session.cursors.remove(&id.0) else {
             return;
         };
         if let Some(pane) = self.panes.browser_mut(id) {
-            pane.set_cursor(usize::try_from(fila).unwrap_or(usize::MAX));
+            pane.set_cursor(usize::try_from(row).unwrap_or(usize::MAX));
         }
     }
 
@@ -4052,10 +2595,10 @@ impl App {
         &mut self,
         ajenos: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
     ) {
-        let vivos: std::collections::BTreeSet<u32> =
+        let alive: std::collections::BTreeSet<u32> =
             self.layout.slot_ids().into_iter().map(|s| s.0).collect();
         for (id, estado) in ajenos {
-            if vivos.contains(&id) {
+            if alive.contains(&id) {
                 continue;
             }
             self.session.touched.insert(id, estado.touched_ms);
@@ -4114,11 +2657,11 @@ impl App {
         // El nombre se PINTA, y viene de un fichero o de la línea de
         // comandos: lossy marcado y hazards enmascarados, como cualquier otro
         // nombre (#246 m3). Los bytes no se tocan: los usó el cargador.
-        let (mostrable, _) = norte_frontend::display_os_name(name);
-        let mostrable = norte_encoding::mask_terminal_hazards(&mostrable);
-        let roto = match loaded {
-            Ok(arbol) => {
-                self.set_layout(arbol);
+        let (showable, _) = norte_frontend::display_os_name(name);
+        let showable = norte_encoding::mask_terminal_hazards(&showable);
+        let broken = match loaded {
+            Ok(tree) => {
+                self.set_layout(tree);
                 return true;
             }
             // Que no haya fichero es lo NORMAL para uno de fábrica: no se
@@ -4128,16 +2671,16 @@ impl App {
         };
         // Un preset de fábrica se llama por su nombre ASCII: un nombre que no
         // es texto no puede ser uno de ellos.
-        let de_fabrica = name
+        let factory = name
             .to_str()
-            .map_or(Err(LayoutError::NotFound(mostrable.clone())), presets::tree);
-        match de_fabrica {
-            Ok(arbol) => {
-                self.set_layout(arbol);
-                if let Some(e) = roto {
+            .map_or(Err(LayoutError::NotFound(showable.clone())), presets::tree);
+        match factory {
+            Ok(tree) => {
+                self.set_layout(tree);
+                if let Some(e) = broken {
                     self.message = Some(ta(
                         "msg-layout-load-failed",
-                        &[("name", &mostrable), ("err", &e.to_string())],
+                        &[("name", &showable), ("err", &e.to_string())],
                     ));
                 }
                 true
@@ -4146,8 +2689,8 @@ impl App {
                 self.message = Some(ta(
                     "msg-layout-load-failed",
                     &[
-                        ("name", &mostrable),
-                        ("err", &roto.unwrap_or(e).to_string()),
+                        ("name", &showable),
+                        ("err", &broken.unwrap_or(e).to_string()),
                     ],
                 ));
                 false
@@ -4180,22 +2723,21 @@ impl App {
             // repintado, progreso de tareas y `Ctrl+C` a la vez (#244 M2,
             // regla 2).
             PickerAction::Confirm => {
-                let Some(fila) = self.layout_picker.take().and_then(|p| p.current().cloned())
-                else {
+                let Some(row) = self.layout_picker.take().and_then(|p| p.current().cloned()) else {
                     return;
                 };
-                let (mostrable, _) = norte_frontend::display_os_name(&fila.name);
-                let mostrable = norte_encoding::mask_terminal_hazards(&mostrable);
-                if let Some(arbol) = fila.tree {
-                    self.set_layout(arbol);
-                    self.message = Some(ta("msg-layout-applied", &[("name", &mostrable)]));
+                let (showable, _) = norte_frontend::display_os_name(&row.name);
+                let showable = norte_encoding::mask_terminal_hazards(&showable);
+                if let Some(tree) = row.tree {
+                    self.set_layout(tree);
+                    self.message = Some(ta("msg-layout-applied", &[("name", &showable)]));
                 } else {
                     // Una fila que no parsea se eligió a sabiendas: el
                     // selector ya lo decía en su mitad derecha.
-                    let err = fila.problem.unwrap_or_default();
+                    let err = row.problem.unwrap_or_default();
                     self.message = Some(ta(
                         "msg-layout-load-failed",
-                        &[("name", &mostrable), ("err", &err)],
+                        &[("name", &showable), ("err", &err)],
                     ));
                 }
             }
@@ -4508,13 +3050,13 @@ impl App {
     /// dice qué hace falta y quien puede lo pide.
     pub fn open_properties(&mut self) -> Option<VPath> {
         let entry = self.focused().selected()?.clone();
-        let contar = (entry.kind == norte_proto::EntryKind::Dir).then(|| entry.path.clone());
+        let count = (entry.kind == norte_proto::EntryKind::Dir).then(|| entry.path.clone());
         self.modal = Some(Modal::Properties {
             entry: Box::new(entry),
             size_task: None,
             size: None,
         });
-        contar
+        count
     }
 
     /// Mete en el diálogo la entrada RECIÉN pedida al backend.
@@ -4822,13 +3364,13 @@ impl App {
             self.message = Some(t("msg-pack-read-only"));
             return;
         }
-        let marcadas = self.focused().marked_paths();
-        if marcadas.is_empty() {
+        let marked = self.focused().marked_paths();
+        if marked.is_empty() {
             self.message = Some(t("msg-pack-nothing"));
             return;
         }
-        let base = if marcadas.len() == 1 {
-            marcadas[0].file_name().map(|s| s.as_bytes().to_vec())
+        let base = if marked.len() == 1 {
+            marked[0].file_name().map(|s| s.as_bytes().to_vec())
         } else {
             self.focused()
                 .dir()
@@ -4844,12 +3386,12 @@ impl App {
         // [`Self::pack_confirm`] REHÚSA confirmarlo, igual que el prompt de
         // renombrar: un nombre con el carácter de reemplazo dentro no es el
         // nombre de nadie.
-        let sugerido = match self.focused().name_encoding() {
+        let suggested = match self.focused().name_encoding() {
             Some(enc) => format!("{}.zip", norte_encoding::decode_name(&base, enc)),
             None => format!("{}.zip", String::from_utf8_lossy(&base)),
         };
         self.modal = Some(Modal::Pack {
-            name: sugerido,
+            name: suggested,
             error: None,
         });
     }
@@ -4907,7 +3449,7 @@ impl App {
             self.pack_set_error(t("msg-transfer-name-fffd"));
             return None;
         }
-        let Some(format) = formato_por_nombre(name.as_bytes()) else {
+        let Some(format) = format_by_name(name.as_bytes()) else {
             self.pack_set_error(t("msg-pack-unknown-format"));
             return None;
         };
@@ -4971,8 +3513,8 @@ impl App {
         // rehusaba partir un fichero que estuviera en un sitio de solo lectura
         // —dentro de un archivo, en un export SFTP— y se aceptaba partir HACIA
         // uno, que fallaba después con un error crudo.
-        let destino = self.split_dest_pane();
-        if self.pane_read_only(destino) {
+        let dest = self.split_dest_pane();
+        if self.pane_read_only(dest) {
             self.message = Some(t("msg-pack-read-only"));
             return;
         }
@@ -5029,7 +3571,7 @@ impl App {
         let Some(Modal::Split { size, .. }) = &self.modal else {
             return None;
         };
-        let Some(bytes) = parse_tamano(size) else {
+        let Some(bytes) = parse_size(size) else {
             self.split_set_error(t("msg-split-bad-size"));
             return None;
         };
@@ -5602,12 +4144,12 @@ impl App {
                         // review MINOR T5: el flag hostil del name NO se
                         // descarta — una inválida con name bidi también
                         // lleva el badge (mismo criterio que el resto).
-                        let (name, hostil) = display_name(h.name.as_bytes());
-                        let aviso = t("hotlist-invalid");
-                        let display = if hostil {
-                            format!("{} {name} {aviso}", crate::ui::HOSTILE_BADGE)
+                        let (name, hostile) = display_name(h.name.as_bytes());
+                        let notice = t("hotlist-invalid");
+                        let display = if hostile {
+                            format!("{} {name} {notice}", crate::ui::HOSTILE_BADGE)
                         } else {
-                            format!("{name} {aviso}")
+                            format!("{name} {notice}")
                         };
                         (display, None)
                     };
@@ -5756,898 +4298,6 @@ impl App {
     }
 }
 
-/// The resolver [`App::new`] starts with: the ORTHODOX preset with no user
-/// and no project layer, in the language of the environment.
-///
-/// `main.rs` OVERWRITES [`App::help_chords`] at startup and on every hot
-/// reload with the effectives actually in force, exactly as it does with
-/// `help_lines`, `palette_rows` and `dialog_hints` — a rebind that does not
-/// reach the resolver is a help page that teaches the OLD key. This default
-/// only exists so `App::new` stays infallible for the render tests and the
-/// paths that never load a keymap at all.
-///
-/// Built ONCE per process: `Effective::build_for` materialises the whole
-/// merged keymap for three screens, and `App::new` runs in every render test.
-///
-/// Which makes this dead weight in the BINARY, and deliberately so: `App::new`
-/// forces it and `main.rs` throws it away on the very next lines. It earns its
-/// place in the render tests, which build an `App` and never load a keymap —
-/// and nowhere else.
-///
-/// One consequence a test author has to know: the LABEL of every row is frozen
-/// here at `Lang::from_env()`, because `TuiChords` resolves labels once, when
-/// it is built. The prose and the chords do not depend on it, but a test that
-/// asserts on a help label through this default reads whatever locale the
-/// machine running it happens to have — so such a test must build its own
-/// `TuiChords` with the language it means (`snapshots_ui.rs`'s `open_help`
-/// does exactly that).
-fn default_help_chords() -> std::sync::Arc<crate::help::TuiChords> {
-    static DEFAULT: std::sync::LazyLock<std::sync::Arc<crate::help::TuiChords>> =
-        std::sync::LazyLock::new(|| {
-            // Both `expect`s rest on the same invariant: the preset and the
-            // vocabulary are BINARY CONSTANTS, and `tests/keymap.rs` merges
-            // this exact combination for all three screens — an invalid one
-            // fails the suite, never a user's session. `presets()` itself
-            // panics on the same grounds.
-            let (_, preset) = crate::keymap::presets()
-                .into_iter()
-                .find(|(n, _)| *n == "orthodox")
-                .expect("`presets()` always ships the orthodox preset");
-            // The `dialog` effective merges `[global]` too, so the vocabulary
-            // is the UNION — `DIALOG_COMMANDS` alone would reject the preset.
-            let known: Vec<&str> = crate::keymap::COMMANDS
-                .iter()
-                .copied()
-                .chain(crate::keymap::DIALOG_COMMANDS.iter().copied())
-                .collect();
-            let eff = |screen| {
-                crate::keymap::Effective::build_for(&preset, &[], &known, screen)
-                    .expect("the embedded orthodox preset merges for every screen")
-            };
-            std::sync::Arc::new(crate::help::TuiChords::new(
-                &eff(crate::keymap::Screen::Browse),
-                &eff(crate::keymap::Screen::Viewer),
-                &eff(crate::keymap::Screen::Dialog),
-                norte_i18n::Lang::from_env(),
-            ))
-        });
-    std::sync::Arc::clone(&DEFAULT)
-}
-
-/// State of the help overlay (H3b): the shared navigation model, the
-/// generated keyboard page, and the body as last laid out.
-///
-/// The body is PRE-RENDERED into the state rather than laid out by the
-/// painter, which is this repo's existing idiom (`help_lines`,
-/// [`App::palette_rows`], [`crate::hints::DialogHints`] are all precomputed
-/// and rebuilt on hot reload). The reason is concrete:
-/// `HelpState::reveal`/`clamp_scroll` need the laid-out LINE COUNT, `draw_*`
-/// only ever gets a `&App`, and a renderer that cannot tell the model what it
-/// laid out leaves `body_scroll` unbounded — a reader who pages past the end
-/// gets a permanently blank body.
-#[derive(Debug, Clone)]
-pub struct HelpView {
-    /// Sidebar, body scroll, filter, history and focus.
-    pub state: norte_frontend::help::HelpState,
-    /// The effective-keymap cheatsheet ([`crate::help::build`]), the body of
-    /// the synthetic `keys` entry — already styled (K3b: an unavailable row
-    /// is dimmed there, not here). Rebuilt on hot reload with everything else
-    /// derived from the keymap.
-    pub keys_lines: Vec<ratatui::text::Line<'static>>,
-    /// Body lines and the action→line map of whatever `state.current()` is,
-    /// laid out for `width`. See [`HelpView::refresh`].
-    ///
-    /// `'static` because a rendering that borrowed from [`Self::state`] would
-    /// make this a self-referential struct. That is free for the corpus —
-    /// `HelpState::topic` hands back a `&'static Topic`, so `render_topic`
-    /// produces a `Rendered<'static>` outright — and costs one clone of the
-    /// VISIBLE page for a plugin's, whose topic `HelpState` owns
-    /// (`crate::help_render::into_static`, H3e).
-    body: crate::help_render::Rendered<'static>,
-    /// Plugin ids whose page has already been ASKED FOR in this overlay (H3e).
-    ///
-    /// `HelpState::plugin_needs_fetch` is a POLLING question, not an event: it
-    /// keeps answering `Some(id)` until the page is installed, so the run loop
-    /// would re-issue the request on every frame — and forever against a daemon
-    /// that cannot answer. This set is what turns it into an event, and it
-    /// covers BOTH halves at once: the request in flight, and the ones that
-    /// already answered. A success stops answering by itself
-    /// (`install_plugin_topic`); a failure is what needs remembering.
-    ///
-    /// Lives on the VIEW, so its scope is the open overlay: closing and
-    /// reopening the help asks again, which is the only retry a reader has and
-    /// the only one they can ask for.
-    asked: std::collections::BTreeSet<String>,
-    /// Publisher of each plugin of the snapshot, keyed by id — already masked
-    /// and capped ([`plugin_label`]).
-    ///
-    /// Kept here and not in `norte_frontend::help::PluginNode` because only one
-    /// caller needs it and only once: `norte_help::parse_untrusted` takes the
-    /// publisher as the attribution of the page it is about to build, and the
-    /// page is parsed when its `plugin.help` answer arrives — long after the
-    /// snapshot that knew the publisher was taken.
-    publishers: std::collections::BTreeMap<String, String>,
-    /// `true` when the overlay was opened while a modal was ALREADY on screen
-    /// (H3c).
-    ///
-    /// It decides who owns the keys, and the two directions are different
-    /// events:
-    ///
-    /// * opened FROM a modal (this flag `true`) the help owns them. The reader
-    ///   asked to read about the question in front of them, so `Esc` has to put
-    ///   them back in front of it rather than answer it, and the modal's own
-    ///   verbs stay unreachable meanwhile — an agent operation is approved by
-    ///   looking at it, never by a key pressed blind through a page.
-    /// * a modal ARRIVING over an already-open help (this flag `false`) closes
-    ///   the help instead, exactly as it closes the palette and the settings
-    ///   overlay: the next key must land where the pixels point.
-    ///
-    /// Two consequences, both deliberate. The modal keeps being painted LAST
-    /// ([`crate::ui::draw`]), so a help opened over it does not hide the
-    /// question — the box stays on top of the page, and its verbs simply do
-    /// nothing until the help closes. And a help page left open over an agent
-    /// approval lets its TTL expire, which DENIES the agent: fail-closed, which
-    /// is the direction to fail in.
-    pub over_modal: bool,
-}
-
-impl HelpView {
-    /// Opens the overlay on the index topic of `lang`, with `keys_lines` as
-    /// the body of the synthetic keyboard entry.
-    ///
-    /// The label of that entry is resolved HERE and handed to the model:
-    /// `norte_frontend::help` has no Fluent access on purpose, and this is
-    /// the frontend that names the page. Resolving it once, at the seam,
-    /// keeps the sidebar and the filter looking at the same string — a
-    /// painter-side special case would only make the row unfindable by the
-    /// name it wears.
-    ///
-    /// The body starts EMPTY: nothing has been laid out yet because nothing
-    /// knows how wide the terminal is. [`refresh`](Self::refresh) is what
-    /// fills it, and the run loop calls it before every paint.
-    #[must_use]
-    pub fn new(lang: norte_help::Lang, keys_lines: Vec<ratatui::text::Line<'static>>) -> Self {
-        Self {
-            state: norte_frontend::help::HelpState::new(lang, t("help-topic-keys")),
-            keys_lines,
-            body: crate::help_render::Rendered {
-                lines: Vec::new(),
-                action_lines: Vec::new(),
-            },
-            asked: std::collections::BTreeSet::new(),
-            publishers: std::collections::BTreeMap::new(),
-            over_modal: false,
-        }
-    }
-
-    /// Opens the overlay on the page for `context`, falling back to the index
-    /// when no page claims it.
-    ///
-    /// The fallback is not a papering-over: `norte_help::check_contexts` fails
-    /// the documentation gate for a context with no page, so the pages that are
-    /// still missing are on a shrinking allowlist and nothing else can reach
-    /// here. The index is the least surprising place to land.
-    ///
-    /// The contextual page arrives as the ROOT of the trail
-    /// (`HelpState::open_as_root`): `F1` putting the reader on a page is not
-    /// navigation the reader did, so `Esc` must close the overlay instead of
-    /// walking back to an index they never asked for.
-    ///
-    /// `over_modal` is the caller's answer to "was a modal already on screen?"
-    /// — see the field for what it decides.
-    #[must_use]
-    pub fn new_at(
-        lang: norte_help::Lang,
-        keys_lines: Vec<ratatui::text::Line<'static>>,
-        context: &str,
-        over_modal: bool,
-    ) -> Self {
-        if let Some(topic) = norte_help::topic_for_context(lang, context) {
-            return Self::new_at_topic(lang, keys_lines, &topic.id, over_modal);
-        }
-        let mut view = Self::new(lang, keys_lines);
-        view.over_modal = over_modal;
-        view
-    }
-
-    /// Opens the help on a page the caller already picked, instead of on a
-    /// context the corpus resolves (H3c).
-    ///
-    /// The sibling of [`new_at`](Self::new_at) for the other bridge into the
-    /// corpus: `F1` on a command palette row opens the page that DOCUMENTS that
-    /// command ([`norte_help::topic_for_command`]), which is a topic id in hand
-    /// and not a place the reader is standing in.
-    ///
-    /// Same trail treatment for the same reason — the page arrives as the ROOT
-    /// (`HelpState::open_as_root`), because being PUT on a page is not
-    /// navigation the reader did and `Esc` has to close the overlay rather than
-    /// walk back to an index they never saw.
-    #[must_use]
-    pub fn new_at_topic(
-        lang: norte_help::Lang,
-        keys_lines: Vec<ratatui::text::Line<'static>>,
-        topic: &norte_help::TopicId,
-        over_modal: bool,
-    ) -> Self {
-        let mut view = Self::new(lang, keys_lines);
-        view.over_modal = over_modal;
-        view.state.open_as_root(topic);
-        view
-    }
-
-    /// Lays the open page out for `width` and re-establishes the scroll
-    /// invariants: clamps `body_scroll` to what exists, and reveals the
-    /// focused action when the body has the focus.
-    ///
-    /// Call after ANY change to what is shown — opening a topic, going back,
-    /// moving either cursor, editing the filter, a resize, a hot reload —
-    /// and before painting. Cheap: the corpus is static and eight topics.
-    pub fn refresh(
-        &mut self,
-        chords: &crate::help::TuiChords,
-        width: usize,
-        height: usize,
-        theme: &crate::theme::TuiTheme,
-    ) {
-        let lang = self.state.lang();
-        self.body = if let Some(topic) = self.state.topic() {
-            // A corpus page. Asked for FIRST and through `topic()` rather than
-            // `current_topic()` for the lifetime alone: this one is `'static`,
-            // so the common case keeps rendering straight into the field with
-            // nothing cloned. `current_topic()` resolves the corpus first too,
-            // so the two can never pick different pages.
-            crate::help_render::render_topic(topic, lang, chords, width, theme)
-        } else if let Some(topic) = self.state.current_topic() {
-            // A plugin page (H3e): owned by the model, so the rendering that
-            // borrows it has to be detached before it can be stored.
-            crate::help_render::into_static(crate::help_render::render_topic(
-                topic, lang, chords, width, theme,
-            ))
-        } else if self.state.current().as_str() == norte_frontend::help::KEYS_ID {
-            // The synthetic `keys` page: its body is the effective keymap,
-            // generated text with no runnable rows and therefore no action
-            // map — a chord is not something Enter runs.
-            //
-            // Keyed on the ID and not on "no topic resolved", which is the same
-            // branch written the safe way round. Three different states answer
-            // `None` to `current_topic()` — the keyboard page, a plugin page in
-            // flight, and a `current` naming a page that no longer exists — and
-            // only the first is this one. `HelpState` can reach the third:
-            // `rebuild_rows` moves the body onto a surviving row, but with the
-            // sidebar left EMPTY by a filter there is nowhere to move to and it
-            // deliberately keeps showing what was being read. Unreachable in
-            // this binary (the catalogue is only ever installed on the open
-            // path, before any filter), but "unreachable" is a claim about
-            // callers and this is a claim about the id.
-            // Already styled (K3b: an unavailable row is dimmed by
-            // `crate::help::build`, not here) — no `Line::raw` mapping left
-            // to do.
-            crate::help_render::Rendered {
-                lines: self.keys_lines.clone(),
-                action_lines: Vec::new(),
-            }
-        } else {
-            // A plugin page still in flight — and any other page that resolves
-            // to nothing. EMPTY, never the keyboard page: nothing else on
-            // screen tells the two apart, and the whole cheatsheet appearing
-            // under an extension's name would read as that extension's own
-            // documentation.
-            crate::help_render::Rendered {
-                lines: Vec::new(),
-                action_lines: Vec::new(),
-            }
-        };
-        self.state.clamp_scroll(self.body.lines.len());
-        if self.state.focus() != norte_frontend::help::Focus::Body {
-            return;
-        }
-        // El foco ACABA de llegar al cuerpo (o el lector acaba de paginar):
-        // entonces manda la VISTA. El cursor se posa en la primera acción que
-        // cae dentro de la ventana, y si no hay ninguna se queda donde esté
-        // sin arrastrar nada. Antes de esto, `Tab` te llevaba a la primera
-        // línea ejecutable —detrás de toda la prosa en una página larga—, así
-        // que no parecía cambiar de columna: parecía saltar al final.
-        if self.state.action_follows_view() {
-            let ventana = self.state.body_scroll()..self.state.body_scroll().saturating_add(height);
-            if let Some(i) = self
-                .body
-                .action_lines
-                .iter()
-                .position(|line| ventana.contains(line))
-            {
-                self.state.settle_action_cursor(i);
-            }
-            return;
-        }
-        // Y si el cursor se movió, manda ÉL: la vista lo persigue.
-        //
-        // The guard is not defensive noise: a topic with neither commands nor
-        // `see_also` has no line to reveal, and `HelpState` only refuses the
-        // FOCUS on an empty action list — the cursor itself can be stale for
-        // one frame after a filter rebuilt the page under it.
-        if let Some(&line) = self.body.action_lines.get(self.state.action_cursor()) {
-            self.state.reveal(line, height);
-        }
-    }
-
-    /// Body lines to paint and the line each action landed on.
-    #[must_use]
-    pub fn body(&self) -> (&[ratatui::text::Line<'static>], &[usize]) {
-        (&self.body.lines, &self.body.action_lines)
-    }
-
-    /// The plugin id whose page must be fetched NOW, claiming it so the next
-    /// call does not ask again (H3e). `None` when there is nothing to fetch or
-    /// the open page has already been asked for.
-    ///
-    /// The claim is what makes `HelpState::plugin_needs_fetch` — which polls,
-    /// see the view's own `asked` set — usable from a run loop that visits it
-    /// every frame.
-    /// Claiming BEFORE the request, rather than after it succeeds, is the whole
-    /// point: the case worth guarding is the one where the answer never comes.
-    ///
-    /// ```
-    /// use norte_frontend::help::PluginNode;
-    /// use norte_help::{Lang, TopicId};
-    /// use norte_tui::app::HelpView;
-    ///
-    /// let mut view = HelpView::new(Lang::En, Vec::new());
-    /// view.state.set_plugins(vec![PluginNode {
-    ///     id: "acme.ftp".to_owned(),
-    ///     title: "FTP".to_owned(),
-    ///     has_help: true,
-    ///     active: true,
-    /// }]);
-    /// view.state.open(&TopicId::new("acme.ftp"));
-    /// assert_eq!(view.claim_plugin_fetch().as_deref(), Some("acme.ftp"));
-    /// // Asked once. A page that never arrives is not asked for again.
-    /// assert_eq!(view.claim_plugin_fetch(), None);
-    /// ```
-    pub fn claim_plugin_fetch(&mut self) -> Option<String> {
-        let id = self.state.plugin_needs_fetch()?.to_owned();
-        self.asked.insert(id.clone()).then_some(id)
-    }
-
-    /// Installs the plugin catalogue this overlay was opened with (H3e).
-    ///
-    /// The ONE ingest point for third-party text into the help model: `name`
-    /// and `publisher` are masked and capped HERE ([`plugin_label`]), exactly as
-    /// the palette does with a plugin's `description`, because
-    /// `norte_frontend::help::PluginNode` documents its `title` as already safe
-    /// and the model masks nothing.
-    ///
-    /// A node is ACTIVE when the plugin is approved AND enabled. That decides
-    /// whether its command rows are runnable, never whether its page shows: a
-    /// human reads a plugin's documentation precisely in order to decide
-    /// whether to enable it.
-    ///
-    /// A BLANK `name` falls back to the plugin's id. `name` is required in the
-    /// manifest but never checked for content, so `name = "\u{3164}\u{3164}"`
-    /// — HANGUL FILLERs, which are not whitespace and survive masking — is a
-    /// legal manifest whose sidebar row paints as an empty line under the
-    /// `Extensions` header: a page the reader can move onto, open, and read,
-    /// attached to a name that says nothing. The id is the one identifier the
-    /// host assigns, so it is what the row falls back to; it goes through
-    /// [`plugin_label`] like everything else, because until the id itself is
-    /// validated at this seam it is no more trustworthy than the name.
-    ///
-    /// `norte_help::is_blank_id` and not `str::trim().is_empty()`: the filler
-    /// characters this exists to catch are not whitespace, so a trim-based
-    /// check answers "not blank" about a string that paints nothing. Asked
-    /// AFTER masking, so a name of zero-width spaces — hazards rather than
-    /// invisibles — has already become `U+FFFD` and counts as blank too.
-    ///
-    /// The extension MANAGER has the same gap and is deliberately left alone:
-    /// its row carries the version and the approval badges beside the name, so
-    /// a blank name there is an odd-looking row rather than an unattributed
-    /// one. Seen and judged, not missed.
-    ///
-    /// # The id is validated HERE, and a bad one is DROPPED
-    ///
-    /// `PluginInfo.id` arrives over the wire. Our own host will only ever send
-    /// a reverse-DNS id it validated, but this frontend does not get to assume
-    /// the peer enforced what our host enforces — the same reasoning
-    /// `norte_frontend::help::HelpState::set_plugins` gives for its own
-    /// duplicate and corpus-collision guards. An id is a LOOKUP KEY that flows
-    /// straight into `TopicId`, into `plugin_needs_fetch`, and back out as the
-    /// argument to `plugin.help`, so it is the one field that must be right
-    /// rather than merely paintable.
-    ///
-    /// DROPPED, never rewritten. Masking an id is not a safety measure — it is
-    /// not injective, so it silently maps two distinct plugins onto one row —
-    /// and a repaired id would be a key that resolves to nothing or, worse, to
-    /// something else. Refusing the node is the only answer that cannot lie:
-    /// the reader loses a help page for a plugin the host should not have
-    /// announced, and `norte doctor` is where that gets diagnosed. Same
-    /// discipline as `norte_help::parse_untrusted`'s command keys, which are
-    /// refused rather than rewritten for exactly this reason.
-    ///
-    /// It also bounds the work: `is_valid_plugin_id` caps the length at 128, so
-    /// a megabyte of `id` costs one rejected comparison instead of a masked,
-    /// capped copy per plugin and a `TopicId` the sidebar filter folds on every
-    /// keystroke.
-    pub fn set_plugins(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
-        let plugins: Vec<&norte_proto::methods::PluginInfo> = plugins
-            .iter()
-            .filter(|p| norte_core::is_valid_plugin_id(&p.id))
-            .collect();
-        self.publishers = plugins
-            .iter()
-            .map(|p| (p.id.clone(), plugin_label(&p.publisher)))
-            .collect();
-        self.state.set_plugins(
-            plugins
-                .iter()
-                .map(|p| {
-                    let named = plugin_label(&p.name);
-                    norte_frontend::help::PluginNode {
-                        id: p.id.clone(),
-                        title: if norte_help::is_blank_id(&named) {
-                            plugin_label(&p.id)
-                        } else {
-                            named
-                        },
-                        has_help: p.has_help,
-                        active: p.approved && p.enabled,
-                    }
-                })
-                .collect(),
-        );
-    }
-
-    /// Who to attribute `id`'s page to, ready to hand to
-    /// `norte_help::parse_untrusted`. `None` for a plugin outside the snapshot
-    /// or one that declares no publisher — a blank attribution is worse than
-    /// none, because the badge would print `published by ` with nothing after
-    /// it, which reads as a rendering fault rather than as an absence.
-    ///
-    /// Blankness is `norte_help::is_blank_id`, not `str::trim().is_empty()`:
-    /// `publisher` is a required TOML field that the manifest never checks for
-    /// content, and `"\u{3164}"` (HANGUL FILLER) is not whitespace, so a
-    /// trim-based check would call it a publisher. Asked AFTER
-    /// [`plugin_label`] has masked, so a publisher of zero-width spaces — a
-    /// hazard rather than an invisible — is already `U+FFFD` by the time this
-    /// looks, and counts as blank too.
-    #[must_use]
-    pub fn publisher_of(&self, id: &str) -> Option<String> {
-        self.publishers
-            .get(id)
-            .filter(|p| !norte_help::is_blank_id(p))
-            .cloned()
-    }
-
-    /// `true` while the body shows the generated keyboard page.
-    ///
-    /// The same predicate [`refresh`](Self::refresh) branches on, so the two
-    /// cannot disagree about which body is on screen. Since H3e "no corpus
-    /// page" is no longer enough — a plugin page, fetched or in flight, is not
-    /// a corpus page either — so both ask the ID.
-    #[must_use]
-    pub fn on_keys_page(&self) -> bool {
-        self.state.current().as_str() == norte_frontend::help::KEYS_ID
-    }
-}
-
-/// Tipo de transferencia pendiente de confirmación/colisión.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransferKind {
-    /// Copia (F5).
-    Copy,
-    /// Movimiento (F6).
-    Move,
-}
-
-/// Si una navegación se REGISTRA en el rastro del pane, o es el rastro
-/// reproduciéndose a sí mismo.
-///
-/// Sin esta distinción `nav.back` se alimenta de su propio rastro: volver de
-/// B a A registraría "estuve en B", así que el siguiente back devuelve a B y
-/// el lector oscila entre dos directorios — el defecto exacto que el rastro
-/// existe para evitar, un nivel más arriba.
-///
-/// Vive aquí (y no junto al `cd` del binario) porque [`Modal::TrustHostKey`]
-/// lo TRANSPORTA: el reintento tras confiar en la host key debe reanudar la
-/// MISMA navegación que el TOFU interrumpió, y la lib no puede referirse a
-/// un tipo declarado en `main.rs`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Trail {
-    /// El usuario pidió este movimiento: entra en la MRU y en el rastro, y
-    /// poda la rama de forward.
-    Record,
-    /// `nav.back`/`nav.forward` están reproduciendo, y ESTE es el paso que
-    /// están dando. El rastro ya lo sabe, así que la navegación no se
-    /// registra; el paso viaja dentro porque un `Replay` sin saber en qué
-    /// sentido va no se puede deshacer, y quien tenga que rebobinarlo puede
-    /// no ser quien lo empezó: el TOFU suspende la navegación y la respuesta
-    /// al modal la termina, minutos después y desde otro sitio del código.
-    ///
-    /// Va DENTRO de la variante, y no en un campo aparte junto a ella, para
-    /// que «registrar» y «tener sentido» no puedan contradecirse: un
-    /// `Record` con sentido, o un `Replay` sin él, serían estados que alguien
-    /// tendría que acordarse de no construir.
-    Replay(TrailStep),
-}
-
-impl Trail {
-    /// El paso del rastro que esta navegación está dando, si es que está
-    /// dando alguno. `None` para un [`Trail::Record`]: no salió del rastro,
-    /// así que no hay nada que rebobinar si acaba mal.
-    #[must_use]
-    pub fn step(self) -> Option<TrailStep> {
-        match self {
-            Self::Record => None,
-            Self::Replay(step) => Some(step),
-        }
-    }
-}
-
-/// Which way `nav.back`/`nav.forward` are walking the trail. The two are the
-/// same operation mirrored, so they share one body rather than two arms that
-/// must be kept in step by hand.
-///
-/// Vive aquí por el mismo motivo que [`Trail`], que lo transporta: el modal
-/// TOFU ([`Modal::TrustHostKey`]) suspende una navegación que puede ser un
-/// paso del rastro, y quien responda al modal necesita saber en qué sentido
-/// iba para deshacerlo si la respuesta acaba abandonándola.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrailStep {
-    /// `nav.back`.
-    Back,
-    /// `nav.forward`.
-    Forward,
-}
-
-impl TrailStep {
-    /// Fluent id for "there is nothing this way". A key that goes silent is
-    /// indistinguishable from a broken one, so the exhausted trail SAYS so.
-    #[must_use]
-    pub fn empty_message(self) -> &'static str {
-        match self {
-            Self::Back => "msg-nav-no-back",
-            Self::Forward => "msg-nav-no-forward",
-        }
-    }
-}
-
-/// Diálogo modal activo. Sus teclas resuelven contra el contexto `dialog`
-/// del keymap (H1, issue #24 — CERRADO): el run loop pasa la tecla por el
-/// [`Resolver`](crate::keymap::Resolver) del efectivo `dialog` y el comando
-/// resultante se filtra por el ALLOWLIST del modal concreto
-/// ([`dialog_action`]) — la semántica de SEGURIDAD (qué confirma, qué
-/// deniega, qué es inerte) vive en código, jamás en el keymap; solo la
-/// ASIGNACIÓN de tecla→comando es rebindeable. Única excepción:
-/// `Modal::TrustLuaInit`, que el run loop intercepta ANTES (necesita el
-/// `LuaHost`) y resuelve con [`trust_lua_key`] — decisión 8 del plan H1, no
-/// migrado.
-///
-/// Sin `Eq` (M4-IA-2): [`Modal::SemanticHits`] arrastra el `score: f64` de
-/// [`norte_proto::methods::SemanticHit`], que es solo `PartialEq` — como su
-/// tipo de proto.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Modal {
-    /// Las propiedades de la entrada bajo el cursor (#139).
-    ///
-    /// Lo que enseña sale del LISTADO, que ya lo tiene: nombre, clase, tamaño,
-    /// fecha y los atributos que el provider haya reportado. Abrirlo no pide
-    /// nada — salvo una cosa, y es justo la que un listado no puede saber: lo
-    /// que ocupa una carpeta. Eso se cuenta, y mientras se cuenta el diálogo lo
-    /// dice.
-    Properties {
-        /// La entrada, tal como está en el listado.
-        entry: Box<norte_proto::Entry>,
-        /// El recuento en marcha, si se lanzó uno (solo para directorios).
-        size_task: Option<norte_proto::TaskId>,
-        /// `(bytes, entradas)` cuando el recuento terminó.
-        size: Option<(u64, u64)>,
-    },
-    /// Confirmación de borrado (F8) sobre las MARCAS. `permanent = false` →
-    /// papelera.
-    ConfirmDelete {
-        /// Los ítems a borrar, en orden de listado.
-        items: Vec<VPath>,
-        /// Permanente (shift+F8, o sin papelera en el provider): el diálogo
-        /// AVISA (ADR 0009).
-        permanent: bool,
-    },
-    /// Confirmación de copia/movimiento sobre las MARCAS (#103). `to` es el
-    /// DIRECTORIO destino (el del otro pane): con varios ítems no hay un
-    /// nombre único que editar. El destino editable de un solo ítem, y el
-    /// rename que trae, viven en #105.
-    ConfirmTransfer {
-        /// Copy o Move.
-        kind: TransferKind,
-        /// Los orígenes, en orden de listado.
-        items: Vec<VPath>,
-        /// Directorio destino.
-        to: VPath,
-        /// El aviso de espacio, cuando lo hay (#149): lo escribe el run loop
-        /// —preguntar por los volúmenes es I/O— y lo pinta este modal.
-        ///
-        /// `None` es el caso NORMAL, y significa las tres cosas honestas a la
-        /// vez: cabe, o el destino no sabe decir cuánto le queda, o no se sabe
-        /// cuánto se va a mover. Ninguna de las tres se anuncia.
-        space: Option<String>,
-        /// El aviso de confinamiento, cuando lo hay (#164): igual que
-        /// [`Modal::ConfirmTransfer::space`], lo escribe el run loop y lo pinta
-        /// este modal.
-        ///
-        /// `None` = este destino sabe sujetar sus escrituras, que es el caso
-        /// normal en Linux y macOS y no se anuncia.
-        confine: Option<String>,
-    },
-    /// Colisión: elegir política y REENVIAR la operación entera (ADR 0005:
-    /// el engine trata Ask como Fail; el TUI pregunta a nivel de task).
-    /// Porta el `RetrySpec` COMPLETO: el reintento conserva las opciones
-    /// originales, solo cambia la política de colisión.
-    Collision {
-        /// La transferencia que colisionó, lista para reenviar.
-        retry: crate::tasks::RetrySpec,
-    },
-    /// Aprobación de una op de AGENTE bajo regla `ask` (M3-3b T5): el daemon
-    /// difundió `policy.approval_required` y espera `policy.decide`. Las
-    /// rutas son SOLO display (redactadas server-side): jamás se reparsean.
-    /// `y` aprueba, `n`/Esc deniegan; Enter NO aprueba (aprobar una mutación
-    /// de agente no es una respuesta inocua que merezca dispararse sola —
-    /// mismo principio que la colisión).
-    ApproveAgentOp {
-        /// La aprobación pendiente tal como llegó del daemon.
-        req: norte_proto::methods::PolicyApprovalRequired,
-    },
-    /// Primer contacto TOFU con un host SSH desconocido (#45, ADR 0015 D):
-    /// un `Error::HostKeyUnknown` al navegar a `dir`. Muestra host/algo/
-    /// fingerprint para que el usuario los COMPARE fuera de banda; `y`
-    /// confía (`connection.trust_host_key`) y reintenta la navegación,
-    /// `n`/Esc cancelan. Enter NO confía (decisión de seguridad, mismo
-    /// principio que la aprobación de agente). host/algo/fingerprint vienen
-    /// del servidor remoto (no confiable): se enmascaran al pintar.
-    TrustHostKey {
-        /// Host desnudo al que se conecta (el del `HostKeyUnknown`).
-        host: String,
-        /// Puerto (ausente = default del scheme).
-        port: Option<u16>,
-        /// Algoritmo de la clave (p. ej. `ssh-ed25519`).
-        algo: String,
-        /// Fingerprint OpenSSH `SHA256:<base64>` — la MISMA cadena que va a
-        /// `connection.trust_host_key`.
-        fingerprint: String,
-        /// La ruta remota a la que reintentar navegar tras confiar.
-        dir: VPath,
-        /// El pane que estaba navegando cuando saltó el TOFU. El modal lo
-        /// CARGA porque la navegación interrumpida no es necesariamente la
-        /// del pane con el foco (`pane.mirror` manda el OTRO pane a un sitio
-        /// mientras el foco se queda quieto): reintentar contra el foco
-        /// reanudaría en el pane EQUIVOCADO.
-        pane: usize,
-        /// Si la navegación interrumpida se REGISTRA en el rastro o es el
-        /// rastro reproduciéndose — y, en ese caso, QUÉ paso estaba dando
-        /// ([`Trail::step`]). Se transporta por el mismo motivo que `pane`:
-        /// el reintento debe ser la MISMA navegación que el TOFU interrumpió,
-        /// no una nueva.
-        ///
-        /// El paso viaja porque este modal es el ÚNICO sitio donde una
-        /// navegación sobrevive a quien la empezó: `walk_trail` ya devolvió
-        /// `Suspended` y no rebobinó nada (el reintento iba a terminar el
-        /// paso), así que si la respuesta al modal acaba abandonando la
-        /// navegación —denegar, o un reintento que falla— el rastro se queda
-        /// creyendo que el lector se fue de donde sigue estando. Quien
-        /// responde al modal rebobina, y para eso necesita el sentido.
-        trail: Trail,
-    },
-    /// TOFU del `./.norte/init.lua` de PROYECTO (M4 Lua, ADR 0026): un repo
-    /// AJENO trae un script que correría con los permisos del usuario —
-    /// primer contacto pregunta. `y` confía y evalúa, `n`/Esc deniegan
-    /// (persistido por (path, hash) hasta que el fichero cambie); Enter NO
-    /// aprueba (decisión de seguridad, mismo principio que
-    /// [`Modal::ApproveAgentOp`]). Los BYTES aprobados viven en
-    /// [`App::lua_pending_trust`] (anti-TOCTOU: lo aprobado = lo evaluado).
-    TrustLuaInit {
-        /// Path del script YA SANEADO por quien construye el modal
-        /// (`detail_for_bar`): solo display, jamás se reparsea.
-        path: String,
-        /// sha256 abreviado (32 hex = 128 bits — forjar una colisión corta
-        /// cuesta minutos; el humano compara lo que ve) del contenido, para
-        /// correlar con el `lua-trust.toml` a ojo.
-        hash_abbrev: String,
-    },
-    /// Confirmar `app.quit` (S2, `[ui] confirm_quit`): abierto por el brazo
-    /// de despacho de `app.quit` en `main.rs` cuando [`quit_needs_confirm`]
-    /// lo pide — SIN datos propios (a diferencia del equivalente de la GUI,
-    /// que cuenta tasks/marcas para el título): sin riesgo de seguridad que
-    /// enmascarar, así que reutiliza el ALLOWLIST/hint de
-    /// [`ALLOW_CONFIRM`]/`DialogHints::confirm` sin necesitar los suyos
-    /// propios. Los Ctrl+C hardcodeados del resto de `main.rs` NO pasan por
-    /// aquí a propósito (ver el comentario junto al brazo de despacho): ese
-    /// atajo de salida de emergencia se mantiene inmediato en todos los
-    /// overlays, igual que antes de S2.
-    ConfirmQuit,
-    /// Marcar (`mark = true`) o desmarcar por patrón (`+`/`-`, #103). El
-    /// texto es la query CRUDA del usuario; se enmascara al pintarla, igual
-    /// que el quick search (un patrón puede llegar por PASTE con bidi o
-    /// invisibles).
-    MarkPattern {
-        /// Marcar, o desmarcar.
-        mark: bool,
-        /// Lo tecleado hasta ahora.
-        pattern: String,
-        /// Diagnóstico del último intento fallido, para pintarlo bajo el
-        /// campo. `None` = aún no se ha confirmado nada.
-        error: Option<String>,
-    },
-    /// Nombre de destino editable (#105): F5/F6 de UN solo ítem, y el
-    /// rename in situ (shift+F6 — `to_dir` es el MISMO dir). Multi-ítem
-    /// sigue en [`Modal::ConfirmTransfer`]: no hay un nombre único que
-    /// editar. Texto libre como [`Modal::Mkdir`].
-    TransferName {
-        /// Copy o Move (rename = Move con `to_dir` == dir de `from`).
-        kind: TransferKind,
-        /// Origen, bytes exactos.
-        from: VPath,
-        /// Directorio destino (el del otro pane; el propio en rename).
-        to_dir: VPath,
-        /// El nombre como TEXTO editable (lo que se pinta, enmascarado).
-        /// Solo manda si `touched`; sin tocar, el confirm usa `original`.
-        name: String,
-        /// Bytes ORIGINALES del nombre de `from` (regla 1): un F5 sin
-        /// editar copia estos bytes, jamás la forma lossy del prefill.
-        original: Vec<u8>,
-        /// ¿Se editó alguna vez? El primer push/pop lo fija: desde ahí el
-        /// nombre es el texto (doctrina #103: editas lo que VES).
-        touched: bool,
-        /// El origen era la MARCA (no el cursor): el submit que encola la
-        /// CONSUME (#105 review MAJOR-1 — mc/TC: la selección se consume al
-        /// enviar, también con un solo ítem). Un rename (cursor) jamás.
-        from_marks: bool,
-        /// Reinterpretación de nombres del pane al ABRIR (#98/M1 y #105
-        /// review MAJOR-2): el prefill de un nombre no-UTF8 es el TEXTO que
-        /// el pane pinta bajo ella (decode #57), no el lossy — sin esto un
-        /// fichero cp437 era irrenombrable (todo edit tropezaba con el
-        /// guard de U+FFFD). El render del dir destino usa la misma.
-        enc: Option<norte_encoding::NameEncoding>,
-        /// Diagnóstico del último intento inválido.
-        error: Option<String>,
-    },
-    /// Destino TECLEADO de una transferencia: F5/F6 cuando no hay «el otro
-    /// panel» al que copiar.
-    ///
-    /// Con un solo listado —el preset `simple`— el rol `target` no tiene
-    /// candidato, y la regla de L1 para eso es que la operación PREGUNTA en
-    /// vez de fallar. Se teclea la dirección en su forma wire (la misma que
-    /// escribes en `[[hotlist]]`), prellenada con la del propio panel: lo
-    /// normal es editarle la cola, no escribirla entera.
-    ///
-    /// Texto libre como [`Modal::Mkdir`], y por el mismo motivo: lo tecleado
-    /// se enmascara al pintarlo. Confirmar NO transfiere — abre el modal que
-    /// habría abierto un F5 con dos paneles, que es donde vive la
-    /// confirmación.
-    TransferDest {
-        /// Copy o Move.
-        kind: TransferKind,
-        /// Lo tecleado hasta ahora, en forma wire.
-        input: String,
-        /// Diagnóstico del último intento inválido, bajo el campo.
-        error: Option<String>,
-    },
-    /// Empaquetar (#132). Texto libre: el NOMBRE del archivo que se va a
-    /// crear, prellenado con el del directorio o la entrada de partida más la
-    /// extensión de zip.
-    ///
-    /// El formato sale del nombre y se enseña en el propio diálogo: lo que
-    /// viaja por el wire es la decisión ya tomada, no un nombre para que el
-    /// servidor adivine (ver `ARCHIVE_PACK`).
-    Pack {
-        /// Lo tecleado hasta ahora.
-        name: String,
-        /// Diagnóstico del último intento inválido.
-        error: Option<String>,
-    },
-    /// Partir un fichero (#132). Texto libre: el tamaño de cada trozo, con
-    /// sufijo (`10M`, `700M`, `4096`).
-    Split {
-        /// Lo tecleado hasta ahora.
-        size: String,
-        /// Diagnóstico del último intento inválido.
-        error: Option<String>,
-    },
-    /// Crear directorio (F7, #104). Texto libre como [`Modal::MarkPattern`]:
-    /// el nombre CRUDO del usuario, enmascarado al pintarlo (un nombre
-    /// llega por paste con bidi/invisibles tan fácil como un patrón).
-    Mkdir {
-        /// Lo tecleado hasta ahora.
-        name: String,
-        /// Diagnóstico del último intento inválido (`VPath` o del engine),
-        /// pintado bajo el campo.
-        error: Option<String>,
-    },
-    /// `pane.command-line` (#135). Texto libre, molde [`Modal::Mkdir`]: la
-    /// línea CRUDA del usuario, enmascarada al pintarla.
-    ///
-    /// Lo que Enter hace con ella NO pasa por el core: se la lleva el shell
-    /// con la TUI suspendida, que es el usuario actuando con sus propios
-    /// permisos y no una mutación de norte (design §D — el journal no ve nada
-    /// de esto, y decirlo así es más honesto que meter entradas
-    /// irreversibles en la cadena).
-    ///
-    /// # Es el único sitio de norte donde lo pintado es código a aprobar
-    ///
-    /// Dos consecuencias que la review de S4 dejó decididas, no heredadas:
-    ///
-    /// - **El pegado multilínea confirma en el primer salto** (encoding H2).
-    ///   La TUI no tiene bracketed paste —un pegado llega como pulsaciones
-    ///   sueltas y crossterm mapea `\n` a `Enter`—, así que la primera línea
-    ///   se envía sola. El RESTO no se ejecuta: [`crate::app::PendingShell`]
-    ///   se drena con el type-ahead ya descartado, así que no llega ni al
-    ///   hijo ni al despacho de la TUI como comandos. Está dicho en los
-    ///   límites honestos del tema `shell`. El arreglo completo (activar
-    ///   bracketed paste y enrutar `Event::Paste` en las SEIS superficies de
-    ///   texto libre que hay) es trabajo de la TUI entera, no de este item, y
-    ///   hacerlo a medias rompería el pegado en las otras cinco.
-    /// - **ZWJ y NBSP pasan sin marcar.** `must_mask` los permite a sabiendas
-    ///   (fidelidad de emoji), lo cual es correcto para un NOMBRE de fichero.
-    ///   Aquí `git\u{200D}status` se lee igual que `git status` y el shell lo
-    ///   parte distinto. Se acepta el mismo trato que el resto de campos —una
-    ///   excepción por superficie sería peor de razonar— y se hace constar:
-    ///   lo peligroso de verdad (RLO y compañía) SÍ se enmascara.
-    CommandLine {
-        /// Lo tecleado hasta ahora.
-        command: String,
-        /// Diagnóstico del último intento inválido, bajo el campo.
-        error: Option<String>,
-    },
-    /// Prompt de instrucción del rename IA (M4-IA). Texto libre, molde
-    /// [`Modal::Mkdir`]: la instrucción CRUDA del usuario, enmascarada al
-    /// pintarla (una instrucción llega por paste con bidi/invisibles tan
-    /// fácil como un nombre).
-    AiRenameInstruction {
-        /// Lo tecleado hasta ahora.
-        instruction: String,
-        /// Diagnóstico del último intento fallido, bajo el campo.
-        error: Option<String>,
-    },
-    /// Plan de rename IA revisable (M4-IA): superficie de DECISIÓN. Confirmar
-    /// aplica (contenido revisado por el humano); Esc/cancel descarta.
-    AiRenamePlan {
-        /// Dir sobre el que se aplican los renames.
-        dir: VPath,
-        /// Parejas from→to del modelo (proto, UTF-8 garantizado).
-        entries: Vec<norte_proto::methods::AiRenameEntry>,
-        /// Primera pareja visible de la ventana (audit MAJOR-3): el plan
-        /// ENTERO es revisable por scroll ([`App::ai_plan_scroll`]) — sin
-        /// esto, la cola de un plan > [`AI_RENAME_PAIR_LIMIT`] se aplicaba
-        /// sin poder verse.
-        offset: usize,
-        /// El plan del LOTE que contestó `fs.rename_batch_plan` (spec §17,
-        /// ADR 0042): veredictos, si es aplicable y el `plan_hash` que hay
-        /// que devolver para ejecutar EXACTAMENTE lo que se enseñó.
-        ///
-        /// Nace [`norte_frontend::BatchPlan::Pending`] —el modal abre y se
-        /// rellena cuando el core contesta— y sin un plan APLICABLE
-        /// confirmar está DESHABILITADO ([`dialog_action`]): no hay hash
-        /// aprobado que mandar.
-        plan: norte_frontend::BatchPlan,
-    },
-    /// Prompt de consulta de la búsqueda semántica (M4-IA-2). Texto libre,
-    /// molde [`Modal::AiRenameInstruction`]: la consulta CRUDA del usuario,
-    /// enmascarada al pintarla (una consulta llega por paste con
-    /// bidi/invisibles tan fácil como una instrucción).
-    SemanticQuery {
-        /// Lo tecleado hasta ahora.
-        query: String,
-        /// Diagnóstico del último intento fallido, bajo el campo.
-        error: Option<String>,
-    },
-    /// Hits de la búsqueda semántica (M4-IA-2): superficie de DECISIÓN con
-    /// cursor. Confirmar NAVEGA al hit bajo el cursor (cd al padre +
-    /// re-anclado, molde `on_search_enter`); Esc/cancel cierra.
-    SemanticHits {
-        /// Hits del índice, mejor primero (proto, score siempre finito).
-        hits: Vec<norte_proto::methods::SemanticHit>,
-        /// Primer hit visible de la ventana (sigue al cursor).
-        offset: usize,
-        /// Hit resaltado — el que Enter abre.
-        cursor: usize,
-    },
-}
-
 /// Hits semánticos visibles a la vez en [`Modal::SemanticHits`] (ventana de
 /// scroll) — la constante vive en `norte-frontend` (compartida con la GUI,
 /// mismo criterio que [`AI_RENAME_PAIR_LIMIT`]); re-export para el render
@@ -6659,88 +4309,6 @@ pub use norte_frontend::SEMANTIC_HIT_LIMIT;
 /// (compartida con la GUI, quality review 78eb243 MAJOR-1); re-export para
 /// el render (`ui`), el alto del modal y el clamp de [`App::ai_plan_scroll`].
 pub use norte_frontend::AI_RENAME_PAIR_LIMIT;
-
-/// Tope de caracteres del patrón de [`Modal::MarkPattern`] (#103 T9 review
-/// MINOR): en `chars()`, no bytes — igual criterio que [`DETAIL_MAX_CHARS`],
-/// un carácter multibyte cuenta una vez.
-pub const MARK_PATTERN_MAX_CHARS: usize = 256;
-
-/// Borra el último CARÁCTER de un texto en forma WIRE.
-///
-/// Un carácter puede ser hasta cuatro bytes y cada byte no ASCII viaja como
-/// `%XX`, así que «borrar un carácter» son entre uno y doce caracteres del
-/// texto. Se quitan los escapes de continuación (`%80`–`%BF`) y luego el de
-/// cabeza; lo que no es un escape se borra como siempre.
-fn pop_wire_char(s: &mut String) {
-    /// El byte de un `%XX` al final, si lo hay.
-    fn escape_final(s: &str) -> Option<u8> {
-        let cola = s.get(s.len().checked_sub(3)?..)?;
-        let resto = cola.strip_prefix('%')?;
-        u8::from_str_radix(resto, 16).ok().filter(|_| {
-            // `from_str_radix` acepta `+7f` y espacios; aquí solo hex.
-            resto.len() == 2 && resto.bytes().all(|b| b.is_ascii_hexdigit())
-        })
-    }
-
-    // Un carácter UTF-8 son como mucho cuatro bytes: tres continuaciones.
-    for _ in 0..3 {
-        match escape_final(s) {
-            Some(b) if (0x80..=0xBF).contains(&b) => {
-                s.truncate(s.len() - 3);
-            }
-            Some(_) => {
-                s.truncate(s.len() - 3);
-                return;
-            }
-            None => {
-                s.pop();
-                return;
-            }
-        }
-    }
-    // Solo continuaciones: la de cabeza, si está, se va con ellas.
-    if escape_final(s).is_some() {
-        s.truncate(s.len() - 3);
-    }
-}
-
-/// Tope de caracteres del destino de [`Modal::TransferDest`].
-///
-/// APARTE de [`MARK_PATTERN_MAX_CHARS`] y mucho mayor, porque lo que se mide
-/// aquí NO es un patrón sino una dirección en forma WIRE, que va
-/// porcentualmente codificada: un byte inválido cuesta tres caracteres, así
-/// que la fixture `name_max_255_invalid_tail` ocupa 765 en UN solo segmento y
-/// un directorio hondo pasa de 256 él solo. Con el tope de los patrones, el
-/// prompt podía ABRIR ya por encima del límite y entonces cada tecla era un
-/// no-op mudo (#246 M3).
-pub const TRANSFER_DEST_MAX_CHARS: usize = 8192;
-
-/// S2 (`[ui] confirm_quit`): si el brazo de despacho de `app.quit` debe abrir
-/// [`Modal::ConfirmQuit`] en vez de cerrar de inmediato. Pura — el run loop
-/// aporta `board_has_active` ([`crate::tasks::TaskBoard::has_active`]), así
-/// que es testeable sin ratatui/tokio. `Auto` (por defecto) es el
-/// comportamiento pre-S2: confirma solo si el panel de tasks tiene trabajo en
-/// vuelo; `Always`/`Never` son incondicionales. Envoltorio fino (revisión S,
-/// M6): la decisión de tres vías era byte-idéntica a la de la GUI
-/// (`confirm_quit_should_open`) — hoisteada a
-/// [`norte_frontend::settings::quit_needs_confirm`].
-#[must_use]
-pub fn quit_needs_confirm(mode: crate::config::ConfirmQuit, board_has_active: bool) -> bool {
-    norte_frontend::settings::quit_needs_confirm(mode, board_has_active)
-}
-
-/// Resultado de una tecla sobre un modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DialogOutcome {
-    /// Tecla irrelevante: el diálogo sigue abierto.
-    Open,
-    /// Cerrado sin hacer nada.
-    Cancelled,
-    /// Confirmado (Enter/y).
-    Confirmed,
-    /// Reintentar la transferencia con esta política.
-    Retry(norte_proto::CollisionPolicy),
-}
 
 /// ALLOWLIST de `Modal::ConfirmDelete`/`Modal::ConfirmTransfer`/
 /// `Modal::ConfirmQuit` (S2, `[ui] confirm_quit`): `approve` y `confirm`
@@ -6976,11 +4544,11 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
             if !ALLOW_CONFIRM.contains(&cmd) {
                 return None;
             }
-            let confirma = matches!(cmd, "dialog.approve" | "dialog.confirm");
-            if confirma && !plan.confirmable() {
+            let confirms = matches!(cmd, "dialog.approve" | "dialog.confirm");
+            if confirms && !plan.confirmable() {
                 return None;
             }
-            Some(if confirma {
+            Some(if confirms {
                 DialogOutcome::Confirmed
             } else {
                 DialogOutcome::Cancelled // dialog.deny | dialog.cancel
@@ -7256,6 +4824,7 @@ pub fn keymaps_error_category(e: &KeymapsError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use norte_proto::Entry;
     use norte_proto::{EntryKind, Scheme};
 
     fn root() -> VPath {
@@ -7340,45 +4909,45 @@ mod tests {
         };
         let mut dir_lazy = lazy("z-dir");
         dir_lazy.kind = EntryKind::Dir;
-        let izq = vec![lazy("a.txt"), lazy("b.txt"), lazy("c.txt"), dir_lazy];
-        let der = vec![lazy("d.txt"), file("e.txt")];
-        let mut app = App::new(Pane::new(root(), izq), Pane::new(root(), der));
+        let left = vec![lazy("a.txt"), lazy("b.txt"), lazy("c.txt"), dir_lazy];
+        let right = vec![lazy("d.txt"), file("e.txt")];
+        let mut app = App::new(Pane::new(root(), left), Pane::new(root(), right));
         // `Pane::new` ordena (dirs primero): [z-dir, a, b, c].
         app.panes[0].set_cursor(1);
 
-        let ventana = app.needs_stat_window(1);
-        let nombres: Vec<String> = ventana
+        let window = app.needs_stat_window(1);
+        let names: Vec<String> = window
             .iter()
             .map(|(p, path)| format!("{p}:{}", path.display_lossy()))
             .collect();
         assert!(
-            nombres
+            names
                 .iter()
                 .any(|n| n.starts_with("0:") && n.ends_with("/a.txt"))
-                && nombres
+                && names
                     .iter()
                     .any(|n| n.starts_with("0:") && n.ends_with("/b.txt")),
-            "cursor ± radio del pane con foco: {nombres:?}"
+            "cursor ± radio del pane con foco: {names:?}"
         );
         assert!(
-            !nombres.iter().any(|n| n.contains("c.txt")),
-            "fuera del radio no se sondea: {nombres:?}"
+            !names.iter().any(|n| n.contains("c.txt")),
+            "fuera del radio no se sondea: {names:?}"
         );
         assert!(
-            !nombres.iter().any(|n| n.contains("z-dir")),
-            "un Dir jamás se sondea: {nombres:?}"
+            !names.iter().any(|n| n.contains("z-dir")),
+            "un Dir jamás se sondea: {names:?}"
         );
         assert!(
-            nombres
+            names
                 .iter()
                 .any(|n| n.starts_with("1:") && n.ends_with("/d.txt")),
-            "el pane SIN foco también se pinta: {nombres:?}"
+            "el pane SIN foco también se pinta: {names:?}"
         );
         assert!(
-            !nombres.iter().any(|n| n.contains("e.txt")),
-            "ya hidratada, no es candidata: {nombres:?}"
+            !names.iter().any(|n| n.contains("e.txt")),
+            "ya hidratada, no es candidata: {names:?}"
         );
-        assert_eq!(ventana[0].0, 0, "el pane con foco va primero");
+        assert_eq!(window[0].0, 0, "el pane con foco va primero");
 
         // Un radio generoso alcanza el listado entero de ambos panes.
         assert_eq!(app.needs_stat_window(64).len(), 4);
@@ -7448,9 +5017,9 @@ mod tests {
     fn compare_size_probe_targets_solo_file_sin_size_y_no_repite() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
-        let fila = fila_huerfana(1, EntryKind::File, None);
-        let path = fila.left.as_ref().unwrap().path.clone();
-        view.pane.extend(vec![fila]);
+        let row = fila_huerfana(1, EntryKind::File, None);
+        let path = row.left.as_ref().unwrap().path.clone();
+        view.pane.extend(vec![row]);
         app.compare = Some(view);
 
         assert_eq!(
@@ -7478,21 +5047,21 @@ mod tests {
     fn una_sonda_de_la_comparacion_anterior_no_aterriza_en_la_nueva() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
-        let fila = fila_huerfana(1, EntryKind::File, None);
-        let path = fila.left.as_ref().expect("izquierda").path.clone();
-        view.pane.extend(vec![fila.clone()]);
+        let row = fila_huerfana(1, EntryKind::File, None);
+        let path = row.left.as_ref().expect("izquierda").path.clone();
+        view.pane.extend(vec![row.clone()]);
         app.compare = Some(view);
-        let vieja = app.compare_generation();
+        let old = app.compare_generation();
 
         // Otra comparación empieza: la caché se vacía y la generación avanza.
         app.begin_compare_generation();
         let mut view = CompareView::new(vp("mem:///c"), vp("mem:///d"), 0, None, None);
-        view.pane.extend(vec![fila]);
+        view.pane.extend(vec![row]);
         app.compare = Some(view);
-        assert_ne!(app.compare_generation(), vieja);
+        assert_ne!(app.compare_generation(), old);
 
         // Llega la sonda de la comparación VIEJA.
-        app.hydrate_compare_size(vieja, path.clone(), Some(42));
+        app.hydrate_compare_size(old, path.clone(), Some(42));
         assert!(
             app.compare_size_hints.is_empty(),
             "ni el tamaño de la anterior"
@@ -7504,8 +5073,8 @@ mod tests {
         );
 
         // Y la de la nueva sí.
-        let ahora = app.compare_generation();
-        app.hydrate_compare_size(ahora, path.clone(), Some(7));
+        let now = app.compare_generation();
+        app.hydrate_compare_size(now, path.clone(), Some(7));
         assert_eq!(app.compare_size_hints.get(&path), Some(&7));
     }
 
@@ -7516,9 +5085,9 @@ mod tests {
     fn compare_size_probe_targets_no_reintenta_un_stat_fallido() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
-        let fila = fila_huerfana(1, EntryKind::File, None);
-        let path = fila.left.as_ref().unwrap().path.clone();
-        view.pane.extend(vec![fila]);
+        let row = fila_huerfana(1, EntryKind::File, None);
+        let path = row.left.as_ref().unwrap().path.clone();
+        view.pane.extend(vec![row]);
         app.compare = Some(view);
 
         app.hydrate_compare_size(app.compare_generation(), path, None);
@@ -7683,10 +5252,10 @@ mod tests {
         assert_eq!(p.cursor(), 1, "el cursor real queda donde estaba");
 
         // Con el pane VACÍO ni Jump confirma (no hay nada visible).
-        let mut vacio = pane_con(&[]);
-        vacio.quick_start(crate::nav::Mode::Jump);
+        let mut empty = pane_con(&[]);
+        empty.quick_start(crate::nav::Mode::Jump);
         assert!(
-            !vacio.quick_confirm(),
+            !empty.quick_confirm(),
             "sin entradas no hay nada que operar"
         );
     }
@@ -7764,12 +5333,12 @@ mod tests {
         let app = app_dos_panes();
         assert!(!app.pane_read_only(0), "mem:// no es de solo lectura");
 
-        let dentro_de_un_zip = app_en("zip+file:///a.zip/!", "file:///casa");
+        let inside_a_zip = app_en("zip+file:///a.zip/!", "file:///casa");
         assert!(
-            dentro_de_un_zip.pane_read_only(0),
+            inside_a_zip.pane_read_only(0),
             "un scheme de archivo es de solo lectura por construcción"
         );
-        assert!(!dentro_de_un_zip.pane_read_only(1));
+        assert!(!inside_a_zip.pane_read_only(1));
     }
 
     /// Cuando las caps SÍ llegaron mandan ellas: un provider que anuncia
@@ -7949,11 +5518,11 @@ mod tests {
     fn el_ocupante_sin_daemon_tiene_su_propia_frase() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
-        let suave = app.journal_banner().expect("indicador encendido");
+        let soft = app.journal_banner().expect("indicador encendido");
 
         app.note_journal_squatted();
-        let fuerte = app.journal_banner().expect("sigue encendido");
-        assert_ne!(suave, fuerte, "dos hechos distintos, dos frases");
+        let strong = app.journal_banner().expect("sigue encendido");
+        assert_ne!(soft, strong, "dos hechos distintos, dos frases");
 
         // Y se apaga igual: una recuperación borra los dos.
         app.note_journal_recovered();
@@ -7962,7 +5531,7 @@ mod tests {
         // Un `Busy` posterior vuelve a la frase suave y no se queda con la
         // fuerte pegada.
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
-        assert_eq!(app.journal_banner().as_deref(), Some(suave.as_str()));
+        assert_eq!(app.journal_banner().as_deref(), Some(soft.as_str()));
     }
 
     #[test]
@@ -8135,10 +5704,10 @@ mod tests {
 
     /// `App` con cada pane sobre SU dir (el `app_dos_panes` de arriba pone
     /// los dos sobre `root()`, que no distingue lados).
-    fn app_en(izq: &str, der: &str) -> App {
+    fn app_en(left: &str, right: &str) -> App {
         App::new(
-            Pane::new(vp(izq), Vec::new()),
-            Pane::new(vp(der), Vec::new()),
+            Pane::new(vp(left), Vec::new()),
+            Pane::new(vp(right), Vec::new()),
         )
     }
 
@@ -8453,10 +6022,13 @@ mod tests {
     #[test]
     fn volume_label_hostile_corpus_sweep() {
         let mount = vp("mem:///media/usb");
-        let (path_text, path_hostil) = norte_frontend::path_display_with(&mount, None);
-        assert!(!path_hostil, "control: el mount fijo del test no es hostil");
-        let (fs_text, fs_hostil) = display_name(b"vfat");
-        assert!(!fs_hostil, "control: \"vfat\" no es hostil");
+        let (path_text, path_hostile) = norte_frontend::path_display_with(&mount, None);
+        assert!(
+            !path_hostile,
+            "control: el mount fijo del test no es hostil"
+        );
+        let (fs_text, fs_hostile) = display_name(b"vfat");
+        assert!(!fs_hostile, "control: \"vfat\" no es hostil");
         let sizes = format!("{u} / {u}", u = t("volumes-size-unknown"));
         for fixture in norte_testkit::corpus::hostile_names() {
             let vol = norte_proto::methods::Volume {
@@ -8470,9 +6042,9 @@ mod tests {
             };
             let items = volume_items(std::slice::from_ref(&vol), None);
             let display = &items[0].display;
-            let (label_text, label_hostil) = display_name(&fixture.bytes);
+            let (label_text, label_hostile) = display_name(&fixture.bytes);
             let body = format!("{label_text} — {path_text}  {fs_text}  {sizes}");
-            let expected = if label_hostil {
+            let expected = if label_hostile {
                 format!("{} {body}", crate::ui::HOSTILE_BADGE)
             } else {
                 body
@@ -8845,7 +6417,7 @@ mod tests {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
         let mut app = app_dos_panes();
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Fixed(24), Size::Weight(1)],
             children: vec![
@@ -8853,7 +6425,7 @@ mod tests {
                 Node::slot(SlotId(91), KindId::browser()),
             ],
         };
-        app.set_layout(arbol);
+        app.set_layout(tree);
         assert!(
             app.panes.tree(SlotId(90)).is_some(),
             "el hueco del árbol llegó sin estado y se pintaría vacío"
@@ -8926,13 +6498,13 @@ mod tests {
 
         let mut app = app_with_entries(&["a.txt"]);
         app.open_properties();
-        let mio = TaskId::new(7);
-        app.properties_counting(mio);
+        let mine = TaskId::new(7);
+        app.properties_counting(mine);
         assert!(
             !app.properties_sized(TaskId::new(8), 1, 1),
             "el de otro no entra"
         );
-        assert!(app.properties_sized(mio, 4096, 12), "el mío sí");
+        assert!(app.properties_sized(mine, 4096, 12), "el mío sí");
         let Some(Modal::Properties { size, .. }) = &app.modal else {
             panic!("sigue abierto")
         };
@@ -8955,7 +6527,7 @@ mod tests {
         use norte_frontend::{SortColumn, SortDir};
 
         let mut app = app_dos_panes();
-        let otro = app.panes[1].sort();
+        let other = app.panes[1].sort();
         app.sort_focused_by(SortColumn::Size);
         assert_eq!(app.focused().sort().column, SortColumn::Size);
         assert_eq!(
@@ -8963,7 +6535,7 @@ mod tests {
             SortDir::Asc,
             "una nueva, ascendente"
         );
-        assert_eq!(app.panes[1].sort(), otro, "el otro panel no se entera");
+        assert_eq!(app.panes[1].sort(), other, "el otro panel no se entera");
 
         app.sort_focused_by(SortColumn::Size);
         assert_eq!(
@@ -9017,13 +6589,13 @@ mod tests {
         };
         app.columns = ColumnsSettings::resolve(&cfg);
         app.apply_scheme_sort(0);
-        let orden: Vec<_> = app.panes[0]
+        let order: Vec<_> = app.panes[0]
             .entries()
             .iter()
             .map(|e| e.path.clone())
             .collect();
         assert_eq!(
-            orden,
+            order,
             vec![
                 VPath::parse("mem:///b").unwrap(),
                 VPath::parse("mem:///a").unwrap()
@@ -9668,30 +7240,30 @@ mod error_message_tests {
     fn cada_relacion_de_solape_tiene_su_propia_frase() {
         use super::{error_category, error_key};
         use norte_proto::RootOverlap;
-        let mut vistas = std::collections::BTreeSet::new();
+        let mut seen = std::collections::BTreeSet::new();
         for relation in [
             RootOverlap::Same,
             RootOverlap::SourceInsideDest,
             RootOverlap::DestInsideSource,
         ] {
-            let clave = error_key(&Error::OverlappingRoots { relation });
+            let key = error_key(&Error::OverlappingRoots { relation });
             assert!(
-                clave.starts_with("err-overlapping-roots"),
-                "{relation:?} → {clave}"
+                key.starts_with("err-overlapping-roots"),
+                "{relation:?} → {key}"
             );
-            assert!(vistas.insert(clave), "dos relaciones comparten {clave}");
+            assert!(seen.insert(key), "dos relaciones comparten {key}");
             for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
-                let texto = norte_i18n::t_in(lang, clave);
-                assert_ne!(texto, clave, "{clave} sin traducir en {lang:?}");
+                let text = norte_i18n::t_in(lang, key);
+                assert_ne!(text, key, "{key} sin traducir en {lang:?}");
                 assert_ne!(
-                    texto,
+                    text,
                     norte_i18n::t_in(lang, "err-unknown"),
-                    "{clave} dice lo mismo que «error desconocido»"
+                    "{key} dice lo mismo que «error desconocido»"
                 );
                 assert_ne!(
-                    texto,
+                    text,
                     norte_i18n::t_in(lang, "err-internal"),
-                    "{clave} dice lo mismo que «error interno»"
+                    "{key} dice lo mismo que «error interno»"
                 );
             }
         }
@@ -9801,749 +7373,5 @@ mod error_message_tests {
         });
         assert!(s.contains("invalid keymap"), "localizado: {s}");
         assert!(s.contains("F5"), "el detalle diagnóstico se conserva: {s}");
-    }
-}
-
-#[cfg(test)]
-mod help_view_tests {
-    use super::{ALLOW_HELP, HelpOutcome, HelpView, help_action};
-    use crate::keymap::DIALOG_COMMANDS;
-    use norte_frontend::help::{Focus, KEYS_ID};
-    use norte_help::{Lang, TopicId};
-
-    /// The default resolver plus the shipped theme: deterministic, and the
-    /// same pair `App` starts with.
-    fn refresh(view: &mut HelpView, width: usize, height: usize) {
-        let chords = super::default_help_chords();
-        let theme = crate::theme::TuiTheme::new(
-            norte_theme::Theme::preset_default(),
-            norte_theme::ColorDepth::Truecolor,
-        );
-        view.refresh(&chords, width, height, &theme);
-    }
-
-    fn flatten(lines: &[ratatui::text::Line<'static>]) -> String {
-        lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    #[test]
-    fn a_new_view_opens_on_the_index_with_an_empty_body() {
-        let view = HelpView::new(Lang::En, Vec::new());
-        assert_eq!(view.state.current().as_str(), "index");
-        assert!(!view.on_keys_page(), "the index IS a corpus topic");
-        let (lines, actions) = view.body();
-        assert!(
-            lines.is_empty() && actions.is_empty(),
-            "nothing is laid out until `refresh` knows how wide the terminal is"
-        );
-    }
-
-    /// The allowlist and the dispatcher are ONE list: a verb the footer hint
-    /// advertises (`DialogHints::help`, generated from `ALLOW_HELP`) and that
-    /// dispatch drops is a hint that lies. Swept over the WHOLE `dialog`
-    /// vocabulary, so a verb added to `ALLOW_HELP` without an arm — or an arm
-    /// added without the allowlist — fails here.
-    #[test]
-    fn help_action_accepts_exactly_the_allowlist() {
-        for cmd in ALLOW_HELP {
-            assert!(
-                help_action(cmd).is_some(),
-                "{cmd} is allowed but dispatches to nothing"
-            );
-        }
-        let mut outside = 0_usize;
-        for cmd in DIALOG_COMMANDS {
-            if ALLOW_HELP.contains(cmd) {
-                continue;
-            }
-            outside += 1;
-            assert_eq!(
-                help_action(cmd),
-                None,
-                "{cmd} is outside `ALLOW_HELP`: the key must be INERT"
-            );
-        }
-        assert!(
-            outside > 5,
-            "the sweep must actually cover verbs the overlay refuses: {outside}"
-        );
-        assert_eq!(help_action("pane.copy"), None, "not even a `dialog.*` verb");
-        // Named samples, so a regression says WHICH arm was transposed.
-        assert_eq!(help_action("dialog.confirm"), Some(HelpOutcome::Activate));
-        assert_eq!(help_action("dialog.cancel"), Some(HelpOutcome::Close));
-        assert_eq!(help_action("dialog.pane"), Some(HelpOutcome::TogglePane));
-        assert_eq!(help_action("dialog.back"), Some(HelpOutcome::Back));
-        assert_eq!(help_action("dialog.filter"), Some(HelpOutcome::StartFilter));
-    }
-
-    /// Why the body is pre-rendered at all: `page_down` deliberately does not
-    /// bound itself (the model cannot know how many lines the prose wrapped
-    /// into), so without this clamp a reader who pages past the end gets a
-    /// PERMANENTLY blank body — no key scrolls back into a body that is not
-    /// there.
-    #[test]
-    fn refresh_clamps_a_scroll_paged_past_the_end() {
-        let mut view = HelpView::new(Lang::En, Vec::new());
-        view.state.open(&TopicId::new("copying"));
-        view.state.toggle_focus();
-        assert_eq!(view.state.focus(), Focus::Body, "`copying` has actions");
-        view.state.page_down(1_000_000);
-        refresh(&mut view, 60, 10);
-        let (lines, _) = view.body();
-        assert!(!lines.is_empty(), "the topic laid out");
-        assert!(
-            view.state.body_scroll() < lines.len(),
-            "scroll {} outside a body of {} lines: the page is blank",
-            view.state.body_scroll(),
-            lines.len()
-        );
-    }
-
-    /// The other half of the same contract: with the focus on the body, the
-    /// action the cursor is on has to be ON SCREEN — the cursor walks
-    /// ACTIONS and the body scrolls in LINES, and only the renderer can
-    /// translate one into the other.
-    #[test]
-    fn refresh_reveals_the_focused_action() {
-        let mut view = HelpView::new(Lang::En, Vec::new());
-        view.state.open(&TopicId::new("copying"));
-        view.state.toggle_focus();
-        assert_eq!(view.state.focus(), Focus::Body);
-        for _ in 0..50 {
-            view.state.down();
-        }
-        let height = 6;
-        refresh(&mut view, 60, height);
-        let (_, action_lines) = view.body();
-        let line = action_lines[view.state.action_cursor()];
-        let first = view.state.body_scroll();
-        assert!(
-            (first..first + height).contains(&line),
-            "action line {line} outside the window [{first}, {}): the reader \
-             cannot see what Enter would run",
-            first + height
-        );
-    }
-
-    #[test]
-    fn the_keys_page_paints_keys_lines_and_maps_no_action() {
-        let mut view = HelpView::new(
-            Lang::En,
-            vec![
-                ratatui::text::Line::raw("── Browsing ──"),
-                ratatui::text::Line::raw("  f5   copy"),
-            ],
-        );
-        view.state.open(&TopicId::new(KEYS_ID));
-        assert!(view.on_keys_page());
-        refresh(&mut view, 60, 10);
-        let (lines, action_lines) = view.body();
-        assert_eq!(lines.len(), 2, "one painted line per generated line");
-        assert!(flatten(lines).contains("f5   copy"), "{:?}", flatten(lines));
-        assert!(
-            action_lines.is_empty(),
-            "its rows are chords, and a chord is not something Enter runs"
-        );
-
-        // And going back to a corpus topic restores a real action map: the
-        // empty one above is the KEYS page, not a renderer that lost it.
-        view.state.open(&TopicId::new("copying"));
-        refresh(&mut view, 60, 10);
-        assert!(!view.on_keys_page());
-        assert!(!view.body().1.is_empty());
-    }
-
-    /// Un plugin del catálogo, con la forma que llega por el wire.
-    fn plugin(id: &str, name: &str) -> norte_proto::methods::PluginInfo {
-        norte_proto::methods::PluginInfo {
-            id: id.to_owned(),
-            name: name.to_owned(),
-            publisher: "ACME".to_owned(),
-            version: "1.0.0".to_owned(),
-            category: "command".to_owned(),
-            capabilities: Vec::new(),
-            approved: true,
-            enabled: true,
-            description: None,
-            commands: Vec::new(),
-            columns: Vec::new(),
-            has_help: true,
-        }
-    }
-
-    /// H3e: la página de un plugin que aún NO ha llegado se pinta VACÍA, jamás
-    /// como la página de teclado. Las dos son «no hay tema del corpus» para
-    /// `HelpState::topic`, y sin la distinción el chuletario entero aparecería
-    /// bajo el nombre de una extensión, leyéndose como su documentación.
-    #[test]
-    fn una_pagina_de_plugin_en_vuelo_sale_vacia_y_no_es_el_teclado() {
-        let mut view = HelpView::new(Lang::En, vec![ratatui::text::Line::raw("  f5   copy")]);
-        view.set_plugins(&[plugin("acme.ftp", "FTP")]);
-        view.state.open(&TopicId::new("acme.ftp"));
-        assert!(
-            !view.on_keys_page(),
-            "una página de plugin no es la de teclado"
-        );
-        refresh(&mut view, 60, 10);
-        let (lines, action_lines) = view.body();
-        assert!(lines.is_empty(), "cuerpo vacío mientras llega: {lines:?}");
-        assert!(action_lines.is_empty());
-
-        // Y cuando llega, se pinta — con su insignia de procedencia.
-        let parsed = norte_help::parse_untrusted(
-            b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n+++\ncuerpo del plugin",
-            "acme.ftp",
-            view.publisher_of("acme.ftp"),
-        )
-        .fold_flags(true, false);
-        view.state.install_plugin_topic(parsed.topic);
-        refresh(&mut view, 60, 10);
-        let pintado = flatten(view.body().0);
-        assert!(pintado.contains("cuerpo del plugin"), "{pintado}");
-        assert!(
-            pintado.contains("ACME"),
-            "el publicador acompaña: {pintado}"
-        );
-        assert!(
-            pintado.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
-            "y la insignia de recorte: {pintado}"
-        );
-    }
-
-    /// El texto de terceros se enmascara y se acota en el PUNTO DE ENTRADA:
-    /// `PluginNode::title` promete llegar seguro y el modelo no enmascara nada
-    /// — filtra sobre lo que le den.
-    #[test]
-    fn el_nombre_de_un_plugin_entra_enmascarado_y_acotado() {
-        let mut view = HelpView::new(Lang::En, Vec::new());
-        let mut p = plugin("acme.ftp", &format!("a\u{202E}{}", "x".repeat(5_000)));
-        p.publisher = "AC\u{202E}ME".to_owned();
-        view.set_plugins(&[p]);
-        let fila = view
-            .state
-            .rows()
-            .iter()
-            .find_map(|r| match r {
-                norte_frontend::help::SidebarRow::Topic { id, title }
-                    if id.as_str() == "acme.ftp" =>
-                {
-                    Some(title.clone())
-                }
-                _ => None,
-            })
-            .expect("el nodo está en la barra");
-        assert!(!fila.contains('\u{202E}'), "sin bidi crudo: {fila:?}");
-        assert!(
-            fila.chars().count() <= super::PLUGIN_NAME_WIRE_CAP + 1,
-            "acotado: {} chars",
-            fila.chars().count()
-        );
-        assert!(
-            fila.ends_with('…'),
-            "y el recorte se MARCA, como lo marcan los vecinos que hacen esto \
-             mismo: presentar un nombre cortado como completo es la mentira \
-             que la fase fue a perseguir: {fila:?}"
-        );
-        let pub_ = view.publisher_of("acme.ftp").expect("hay publicador");
-        assert!(!pub_.contains('\u{202E}'), "publicador limpio: {pub_:?}");
-    }
-
-    /// H3e: un `name` en BLANCO cae al id del plugin.
-    ///
-    /// `name` es obligatorio en el manifiesto pero nadie comprueba que tenga
-    /// contenido, y U+3164 (HANGUL FILLER) no es espacio en blanco: sobrevive
-    /// al `trim` y al enmascarado. Sin el repliegue, la barra pinta una fila
-    /// VACÍA bajo la cabecera «Extensiones» — una página que el lector puede
-    /// pisar, abrir y leer, colgando de un nombre que no dice nada.
-    #[test]
-    fn un_nombre_en_blanco_cae_al_id_del_plugin() {
-        let mut view = HelpView::new(Lang::En, Vec::new());
-        let mut p = plugin("acme.ftp", "\u{3164}\u{3164}");
-        p.publisher = "\u{3164}".to_owned();
-        view.set_plugins(&[p]);
-        let fila = view
-            .state
-            .rows()
-            .iter()
-            .find_map(|r| match r {
-                norte_frontend::help::SidebarRow::Topic { id, title }
-                    if id.as_str() == "acme.ftp" =>
-                {
-                    Some(title.clone())
-                }
-                _ => None,
-            })
-            .expect("el nodo está en la barra");
-        assert_eq!(fila, "acme.ftp", "la fila se nombra con el id: {fila:?}");
-
-        // Y un publicador en blanco no se atribuye: la insignia pintaría
-        // «publicada por » sin nada detrás, que se lee como un fallo del
-        // pintor y no como una ausencia.
-        assert_eq!(view.publisher_of("acme.ftp"), None);
-
-        // Anti-vacuidad: un nombre REAL no se toca.
-        let mut view = HelpView::new(Lang::En, Vec::new());
-        view.set_plugins(&[plugin("acme.ftp", "FTP")]);
-        assert!(view.state.rows().iter().any(|r| matches!(
-            r,
-            norte_frontend::help::SidebarRow::Topic { title, .. } if title == "FTP"
-        )));
-        assert_eq!(view.publisher_of("acme.ftp").as_deref(), Some("ACME"));
-    }
-
-    /// H3e: un id que NO es un id de plugin válido se DESCARTA en el punto de
-    /// entrada — nunca se repara.
-    ///
-    /// El id llega por el wire y es una CLAVE: viaja a `TopicId`, a
-    /// `plugin_needs_fetch` y de vuelta como argumento de `plugin.help`.
-    /// Enmascararlo no sería una medida de seguridad (el enmascarado no es
-    /// inyectivo: dos plugins distintos caerían en la misma fila) y un id
-    /// «reparado» sería una clave que no resuelve a nada, o peor, a otra cosa.
-    /// Negarse es la única respuesta que no puede mentir. Mismo criterio que
-    /// las claves de comando de `parse_untrusted`, que se rechazan en vez de
-    /// reescribirse.
-    #[test]
-    fn un_id_que_no_es_de_plugin_se_descarta_en_la_entrada() {
-        let mut view = HelpView::new(Lang::En, Vec::new());
-        let mut bidi = plugin("acme.\u{202E}ftp", "Bidi");
-        bidi.publisher = "ACME".to_owned();
-        view.set_plugins(&[
-            plugin("acme.ftp", "Bueno"),
-            bidi,
-            plugin("sinpunto", "Sin punto"),
-            plugin(&"a.".repeat(500), "Kilométrico"),
-        ]);
-        let ids: Vec<String> = view
-            .state
-            .rows()
-            .iter()
-            .filter_map(|r| match r {
-                norte_frontend::help::SidebarRow::Topic { id, .. } => Some(id.as_str().to_owned()),
-                norte_frontend::help::SidebarRow::Group { .. } => None,
-            })
-            // La barra lleva TODO el corpus además de las extensiones: lo que
-            // se mira aquí son las filas de plugin, que son las que este
-            // filtro decide.
-            .filter(|id| {
-                id != norte_frontend::help::KEYS_ID && norte_help::topic(Lang::En, id).is_none()
-            })
-            .collect();
-        assert_eq!(
-            ids,
-            vec!["acme.ftp".to_owned()],
-            "solo sobrevive el id válido: {ids:?}"
-        );
-        // Y no se queda una atribución colgando del que se fue.
-        assert_eq!(view.publisher_of("acme.\u{202E}ftp"), None);
-    }
-
-    /// Un nombre de invisibles que son HAZARDS (no `INVISIBLE`) también cuenta
-    /// como blanco — porque se pregunta DESPUÉS de enmascarar, cuando ya son
-    /// `U+FFFD`. Es el orden lo que hace que una sola pregunta cubra las dos
-    /// familias.
-    #[test]
-    fn un_nombre_de_espacios_de_ancho_cero_tambien_cae_al_id() {
-        let mut view = HelpView::new(Lang::En, Vec::new());
-        view.set_plugins(&[plugin("acme.ftp", "\u{200B}\u{200B}")]);
-        assert!(view.state.rows().iter().any(|r| matches!(
-            r,
-            norte_frontend::help::SidebarRow::Topic { title, .. } if title == "acme.ftp"
-        )));
-    }
-
-    /// `plugin_needs_fetch` PREGUNTA, no avisa: sigue contestando `Some` hasta
-    /// que la página se instala, y el run loop lo visita en cada vuelta. Sin la
-    /// reclamación, un daemon que no contesta se reintentaría a ritmo de frame.
-    #[test]
-    fn la_pagina_se_pide_una_sola_vez_por_overlay() {
-        let mut view = HelpView::new(Lang::En, Vec::new());
-        view.set_plugins(&[plugin("acme.ftp", "FTP")]);
-        view.state.open(&TopicId::new("acme.ftp"));
-        assert_eq!(view.claim_plugin_fetch().as_deref(), Some("acme.ftp"));
-        for _ in 0..100 {
-            assert_eq!(
-                view.claim_plugin_fetch(),
-                None,
-                "un fallo no se reintenta dentro del mismo overlay"
-            );
-            assert_eq!(
-                view.state.plugin_needs_fetch(),
-                Some("acme.ftp"),
-                "y el modelo sigue diciendo que falta: es la reclamación la que \
-                 corta el bucle, no el modelo"
-            );
-        }
-        // Cerrar y reabrir la ayuda SÍ vuelve a pedir: es el único reintento
-        // que el lector tiene, y el único que puede pedir.
-        let mut otra = HelpView::new(Lang::En, Vec::new());
-        otra.set_plugins(&[plugin("acme.ftp", "FTP")]);
-        otra.state.open(&TopicId::new("acme.ftp"));
-        assert_eq!(otra.claim_plugin_fetch().as_deref(), Some("acme.ftp"));
-    }
-
-    /// Una página del corpus no pide nada, y la de teclado tampoco: pedir por
-    /// ellas sería una llamada al daemon por frame durante toda la lectura.
-    #[test]
-    fn una_pagina_del_corpus_no_pide_nada() {
-        let mut view = HelpView::new(Lang::En, Vec::new());
-        view.set_plugins(&[plugin("acme.ftp", "FTP")]);
-        assert_eq!(view.claim_plugin_fetch(), None, "el índice no pide nada");
-        view.state.open(&TopicId::new(KEYS_ID));
-        assert_eq!(view.claim_plugin_fetch(), None, "el teclado tampoco");
-    }
-}
-
-#[cfg(test)]
-mod help_plugin_snapshot_tests {
-    use super::App;
-    use norte_help::ChordResolver;
-    use norte_vfs::VPath;
-
-    fn app() -> App {
-        let d = VPath::parse("file:///x").expect("wire de test");
-        App::new(
-            super::Pane::new(d.clone(), Vec::new()),
-            super::Pane::new(d, Vec::new()),
-        )
-    }
-
-    fn plugin(id: &str, approved: bool, enabled: bool) -> norte_proto::methods::PluginInfo {
-        norte_proto::methods::PluginInfo {
-            id: id.to_owned(),
-            name: id.to_owned(),
-            publisher: "ACME".to_owned(),
-            version: "1.0.0".to_owned(),
-            category: "command".to_owned(),
-            capabilities: Vec::new(),
-            approved,
-            enabled,
-            description: None,
-            commands: Vec::new(),
-            columns: Vec::new(),
-            has_help: true,
-        }
-    }
-
-    /// El MISMO `help.md` en los dos casos del test de abajo: declara el
-    /// comando en su front matter (la fila) y lo cita en la prosa (la marca en
-    /// línea). Fíjese en lo que NO lleva: un título. El header de un tema no
-    /// tiene dónde ponerlo — `parse_untrusted` solo conserva claves de
-    /// despacho — así que el nombre solo puede salir del manifiesto.
-    const PAGINA: &[u8] = b"+++\nid = \"org.norte.demo\"\ntitle = \"Demo\"\n\
-                            commands = [\"plugin:org.norte.demo:greet\"]\n+++\n\
-                            La marca propia: {{cmd:plugin:org.norte.demo:greet}}";
-
-    /// El nombre de un comando sale de la FOTO (el manifiesto), jamás del
-    /// `help.md`. El plugin escribe los dos, así que solo uno puede mandar, y
-    /// tiene que ser el que ve el humano que aprueba el plugin: el gestor de
-    /// extensiones, la paleta y la solicitud de aprobación muestran el del
-    /// manifiesto, y una página que llamara `greet` de otra manera dejaría al
-    /// lector sin saber qué está aprobando.
-    ///
-    /// Se demuestra cambiando el manifiesto con los MISMOS bytes de página: si
-    /// el texto pintado sigue al manifiesto, la página no es la fuente.
-    #[test]
-    fn el_nombre_de_un_comando_sale_de_la_foto_no_de_la_pagina() {
-        let pintado_con = |titulo: &str| -> String {
-            let mut app = app();
-            app.help = Some(super::HelpView::new(norte_help::Lang::En, Vec::new()));
-            let mut p = plugin("org.norte.demo", true, true);
-            p.commands = vec![norte_proto::methods::PluginCommandInfo {
-                id: "greet".to_owned(),
-                title: titulo.to_owned(),
-            }];
-            app.freeze_help_plugins(&[p]);
-            let help = app.help.as_mut().expect("abierta");
-            help.state.open(&norte_help::TopicId::new("org.norte.demo"));
-            let parsed = norte_help::parse_untrusted(PAGINA, "org.norte.demo", None);
-            help.state.install_plugin_topic(parsed.topic);
-            app.refresh_help(70, 20);
-            let (lines, _) = app.help.as_ref().expect("abierta").body();
-            lines
-                .iter()
-                .map(|l| {
-                    l.spans
-                        .iter()
-                        .map(|s| s.content.as_ref())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-
-        let texto = pintado_con("Greet the world");
-        assert!(
-            texto.contains("Greet the world"),
-            "la fila y la marca llevan el nombre del manifiesto: {texto}"
-        );
-        assert!(
-            !texto.contains("plugin:org.norte.demo:greet"),
-            "y NO su clave de despacho, ni en la prosa ni en la fila: {texto}"
-        );
-        // Dos veces: una en la prosa (la marca en línea) y otra en la tabla de
-        // filas ejecutables. `render_command` y `rows_of` comparten
-        // `label_or_id` justo para que no puedan discrepar.
-        assert_eq!(texto.matches("Greet the world").count(), 2, "{texto}");
-
-        // Mismos bytes de página, otro manifiesto: manda el manifiesto.
-        let otro = pintado_con("Saludar al mundo");
-        assert!(otro.contains("Saludar al mundo"), "{otro}");
-        assert!(!otro.contains("Greet the world"), "{otro}");
-    }
-
-    /// H3e: la foto congela las DOS mitades a la vez — la barra ofrece la
-    /// página de cada plugin con `help.md`, y el resolver atenúa los comandos
-    /// de los que no están aprobados-y-activos. Si sólo cuajara una, el lector
-    /// leería una página cuyas filas prometen lo que la app va a rechazar.
-    #[test]
-    fn la_foto_llega_a_la_barra_y_al_resolver() {
-        let mut app = app();
-        app.help = Some(super::HelpView::new(norte_help::Lang::En, Vec::new()));
-        app.freeze_help_plugins(&[
-            plugin("acme.ftp", true, true),
-            plugin("otro.off", true, false),
-        ]);
-
-        let help = app.help.as_ref().expect("la ayuda está abierta");
-        let ids: Vec<String> = help
-            .state
-            .rows()
-            .iter()
-            .filter_map(|r| match r {
-                norte_frontend::help::SidebarRow::Topic { id, .. } => Some(id.as_str().to_owned()),
-                norte_frontend::help::SidebarRow::Group { .. } => None,
-            })
-            .collect();
-        assert!(ids.iter().any(|i| i == "acme.ftp"), "{ids:?}");
-        assert!(
-            ids.iter().any(|i| i == "otro.off"),
-            "un plugin apagado CONSERVA su página — leerla es cómo se decide \
-             encenderlo: {ids:?}"
-        );
-
-        assert!(
-            app.help_chords
-                .availability("plugin:acme.ftp:sync")
-                .is_available()
-        );
-        assert_eq!(
-            app.help_chords
-                .availability("plugin:otro.off:sync")
-                .reason(),
-            Some(norte_help::Reason::PluginInactive),
-            "pero sus filas no se ofrecen"
-        );
-    }
-
-    /// La misma puerta, en la mitad del RESOLVER: ni el conjunto de activos ni
-    /// el mapa de títulos pueden guardar un id que el host no debió anunciar.
-    ///
-    /// El id sale del corpus canónico (`plugin_id_bidi_segment`) y no de un
-    /// literal: la GUI prueba su mitad de esta misma puerta contra la misma
-    /// fixture, y dos frontends con su propia ortografía del adversario es
-    /// justo la deriva que el corpus existe para no tener.
-    #[test]
-    fn un_id_invalido_no_entra_en_la_foto_del_resolver() {
-        let fixture = norte_testkit::corpus::hostile_names()
-            .into_iter()
-            .find(|n| n.id == "plugin_id_bidi_segment")
-            .expect("la fixture vive en el corpus canónico");
-        let id = String::from_utf8(fixture.bytes).expect("la fixture es UTF-8");
-        let key = format!("plugin:{id}:sync");
-        let mut app = app();
-        app.help = Some(super::HelpView::new(norte_help::Lang::En, Vec::new()));
-        let mut malo = plugin(&id, true, true);
-        malo.commands = vec![norte_proto::methods::PluginCommandInfo {
-            id: "sync".to_owned(),
-            title: "Sincronizar".to_owned(),
-        }];
-        app.freeze_help_plugins(&[malo]);
-        assert_eq!(
-            norte_help::ChordResolver::availability(&*app.help_chords, &key).reason(),
-            Some(norte_help::Reason::PluginInactive),
-            "no está activo: su id nunca entró en el conjunto"
-        );
-        assert_eq!(
-            norte_help::ChordResolver::label(&*app.help_chords, &key)
-                .chars()
-                .filter(|c| norte_encoding::is_terminal_hazard(*c))
-                .count(),
-            0,
-            "y su título no llegó al mapa: la etiqueta cae al repliegue seguro"
-        );
-    }
-
-    /// El re-congelado de hechos que el embudo de refresco hace con la ayuda
-    /// abierta (`main::after_panes_refresh`) NO puede apagar las filas de
-    /// plugin a mitad de lectura, ni al revés.
-    #[test]
-    fn recongelar_los_hechos_no_pierde_la_foto_de_plugins() {
-        let mut app = app();
-        app.help = Some(super::HelpView::new(norte_help::Lang::En, Vec::new()));
-        app.freeze_help_plugins(&[plugin("acme.ftp", true, true)]);
-        app.freeze_help_facts();
-        assert!(
-            app.help_chords
-                .availability("plugin:acme.ftp:sync")
-                .is_available()
-        );
-    }
-}
-
-#[cfg(test)]
-mod which_key_tests {
-    use super::{App, Pane};
-    use norte_frontend::keymap::{
-        Availability, Effective, Resolution, Resolver, Screen, parse_chord, parse_keymap,
-    };
-    use norte_i18n::Lang;
-    use norte_proto::{Scheme, VPath};
-
-    /// Counts ON, one `g` prefix with an available branch, an unavailable one
-    /// and a deeper branch.
-    ///
-    /// The unavailable one used to be `pane.pack`, `Planned` under #132. That
-    /// issue is built, and with it the catalogue ran out of `Planned` entries
-    /// altogether — every command a preset names is now a command norte has.
-    /// So the dimmed row this test needs is the OTHER unavailable: a live
-    /// command this build does not implement, which is what a GUI-only
-    /// binding looks like from the terminal.
-    fn resolver() -> Resolver {
-        let src = r#"
-counts = true
-
-[pane]
-keymap = [
-    { on = ["g", "g"], run = "cursor.top" },
-    { on = ["g", "p"], run = "pane.pack" },
-    { on = ["j"], run = "cursor.down" },
-]
-"#;
-        let preset = parse_keymap(src).expect("fixture parses");
-        let known = ["cursor.top", "cursor.down"];
-        let eff =
-            Effective::build_for(&preset, &[], &known, Screen::Browse).expect("fixture builds");
-        Resolver::new(eff)
-    }
-
-    fn app() -> App {
-        let root = VPath::root(Scheme::new("mem").expect("scheme"), None);
-        App::new(
-            Pane::new(root.clone(), Vec::new()),
-            Pane::new(root, Vec::new()),
-        )
-    }
-
-    fn push(app: &mut App, r: &mut Resolver, key: &str) -> Resolution {
-        let res = r.push(parse_chord(key).expect("chord"));
-        match res {
-            Resolution::Pending(_) | Resolution::Counting(_) => app.show_pending(r, Lang::En),
-            _ => app.clear_pending(),
-        }
-        res
-    }
-
-    /// The pending arm OPENS it — on the keystroke itself, with no delay of
-    /// any kind (ADR 0006) — and the `Run` that ends the sequence closes it.
-    #[test]
-    fn a_pending_prefix_opens_the_panel_and_a_run_closes_it() {
-        let (mut app, mut r) = (app(), resolver());
-        assert!(matches!(
-            push(&mut app, &mut r, "g"),
-            Resolution::Pending(1)
-        ));
-        let wk = app.which_key.as_ref().expect("the panel is open");
-        assert_eq!(wk.title, "g");
-        let chords: Vec<&str> = wk.rows.iter().map(|row| row.chord.as_str()).collect();
-        assert_eq!(chords, vec!["g", "p"], "{chords:?}");
-
-        assert!(matches!(
-            push(&mut app, &mut r, "g"),
-            Resolution::Run { .. }
-        ));
-        assert!(
-            app.which_key.is_none(),
-            "the sequence ended: so does the panel"
-        );
-        assert!(app.pending.is_empty(), "and the bar segment goes with it");
-    }
-
-    /// A BARE count does not open it: the continuation of a count is any key
-    /// at all, so the panel would be the whole keymap. The bar still paints
-    /// the number (K2a) — a count that cannot be seen cannot be cancelled.
-    #[test]
-    fn a_bare_count_does_not_open_the_panel() {
-        let (mut app, mut r) = (app(), resolver());
-        assert!(matches!(
-            push(&mut app, &mut r, "1"),
-            Resolution::Counting(1)
-        ));
-        assert!(matches!(
-            push(&mut app, &mut r, "2"),
-            Resolution::Counting(12)
-        ));
-        assert!(app.which_key.is_none(), "a bare count has no panel");
-        assert_eq!(app.pending, "12", "but the bar shows it");
-    }
-
-    /// A count BEHIND a prefix is the state a reader most often cannot
-    /// explain, so the panel that opens says the number is still in flight.
-    #[test]
-    fn a_count_behind_a_prefix_shows_in_the_title() {
-        let (mut app, mut r) = (app(), resolver());
-        push(&mut app, &mut r, "1");
-        push(&mut app, &mut r, "2");
-        push(&mut app, &mut r, "g");
-        let wk = app.which_key.as_ref().expect("the panel is open");
-        assert_eq!(wk.title, "12 g");
-    }
-
-    /// An unavailable continuation is a ROW, dimmed and explained — hiding it
-    /// would recreate the silence K1 removed.
-    #[test]
-    fn the_rows_include_an_unavailable_binding_with_its_reason() {
-        let (mut app, mut r) = (app(), resolver());
-        push(&mut app, &mut r, "g");
-        let wk = app.which_key.as_ref().expect("the panel is open");
-        let p = wk
-            .rows
-            .iter()
-            .find(|row| row.chord == "p")
-            .expect("the row of the command this build does not run");
-        assert!(matches!(p.avail, Availability::NotHere), "{:?}", p.avail);
-        assert!(!p.reason.is_empty(), "and it says why: {:?}", p.reason);
-    }
-
-    /// `Esc` cancels a sequence, and every other end of the pending state
-    /// closes the panel with the bar segment: the two are written by the same
-    /// pair of methods precisely so they cannot disagree.
-    #[test]
-    fn esc_and_a_miss_close_it_too() {
-        let (mut app, mut r) = (app(), resolver());
-        push(&mut app, &mut r, "g");
-        assert!(matches!(push(&mut app, &mut r, "esc"), Resolution::Reset));
-        assert!(app.which_key.is_none(), "Esc cancelled the sequence");
-
-        push(&mut app, &mut r, "g");
-        // A chord that continues nothing is a miss: same treatment.
-        assert!(matches!(push(&mut app, &mut r, "z"), Resolution::Reset));
-        assert!(app.which_key.is_none());
-
-        // And a key the frontend does not model at all reaches neither arm:
-        // the run loop resets the resolver and clears both by hand.
-        push(&mut app, &mut r, "g");
-        r.reset();
-        app.clear_pending();
-        assert!(app.which_key.is_none());
-        assert!(app.pending.is_empty());
     }
 }

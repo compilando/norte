@@ -64,26 +64,26 @@ fn default_dialog_hints() -> norte_tui::hints::DialogHints {
 }
 
 fn app_base() -> App {
-    let izq = vp("file:///casa");
-    let der = vp("file:///otro");
+    let left = vp("file:///casa");
+    let right = vp("file:///otro");
     let mut entries = vec![
-        entry(&izq, b"docs", EntryKind::Dir, None),
-        entry(&izq, b"src", EntryKind::Dir, None),
-        entry(&izq, b"notas.txt", EntryKind::File, Some(420)),
+        entry(&left, b"docs", EntryKind::Dir, None),
+        entry(&left, b"src", EntryKind::Dir, None),
+        entry(&left, b"notas.txt", EntryKind::File, Some(420)),
         entry(
-            &izq,
+            &left,
             &[0xE9, b'.', b'd', b'a', b't'],
             EntryKind::File,
             Some(7),
         ),
-        entry(&izq, b"enlace", EntryKind::Symlink, None),
+        entry(&left, b"enlace", EntryKind::Symlink, None),
     ];
     sort_entries(&mut entries);
     let mut app = App::new(
-        Pane::new(izq, entries),
+        Pane::new(left, entries),
         Pane::new(
-            der.clone(),
-            vec![entry(&der, b"cosa", EntryKind::File, Some(1))],
+            right.clone(),
+            vec![entry(&right, b"cosa", EntryKind::File, Some(1))],
         ),
     );
     app.focused_mut().move_down(1);
@@ -124,27 +124,30 @@ fn el_modal_de_transferencia_pinta_el_aviso_de_espacio() {
         terminal.backend().to_string()
     };
 
-    let aviso = norte_frontend::space::warning(
+    let notice = norte_frontend::space::warning(
         Some(4_200_000_000),
         Some(1_100_000_000),
         norte_i18n::active(),
     )
     .expect("no cabe: hay aviso");
-    let con = pintar(Some(aviso.clone()));
-    let lineas: Vec<&str> = con.lines().collect();
-    let fila = |aguja: &str| {
-        lineas
+    let con = pintar(Some(notice.clone()));
+    let lines: Vec<&str> = con.lines().collect();
+    let row = |aguja: &str| {
+        lines
             .iter()
             .position(|l| l.contains(aguja))
             .unwrap_or_else(|| panic!("falta {aguja:?} en:\n{con}"))
     };
-    let destino = fila("medios");
-    let avisada = fila(aviso.split_whitespace().next().expect("primera palabra"));
-    assert!(avisada > destino, "el aviso va debajo del destino:\n{con}");
+    let dest = row("medios");
+    let avisada = row(notice.split_whitespace().next().expect("primera palabra"));
+    assert!(avisada > dest, "el aviso va debajo del destino:\n{con}");
 
     // Sin aviso, ni rastro de él.
     let sin = pintar(None);
-    assert!(!sin.contains(&aviso), "cuando cabe no se dice nada:\n{sin}");
+    assert!(
+        !sin.contains(&notice),
+        "cuando cabe no se dice nada:\n{sin}"
+    );
 }
 
 /// #164: y debajo del de espacio, el de confinamiento — misma clase de línea
@@ -187,19 +190,19 @@ fn el_modal_de_transferencia_pinta_el_aviso_de_confinamiento() {
     .expect("no cabe: hay aviso");
 
     let con = pintar(Some(espacio.clone()), Some(sin_confinar.clone()));
-    let lineas: Vec<&str> = con.lines().collect();
-    let fila = |aguja: &str| {
-        lineas
+    let lines: Vec<&str> = con.lines().collect();
+    let row = |aguja: &str| {
+        lines
             .iter()
             .position(|l| l.contains(aguja))
             .unwrap_or_else(|| panic!("falta {aguja:?} en:\n{con}"))
     };
-    let destino = fila("medios");
-    let del_espacio = fila(espacio.split_whitespace().next().expect("palabra"));
+    let dest = row("medios");
+    let del_espacio = row(espacio.split_whitespace().next().expect("palabra"));
     // El modal envuelve, así que se busca una palabra que la línea no comparta
     // con ninguna otra en vez de la frase entera.
-    let del_confinamiento = fila("symlink");
-    assert!(del_espacio > destino, "espacio bajo el destino:\n{con}");
+    let del_confinamiento = row("symlink");
+    assert!(del_espacio > dest, "espacio bajo el destino:\n{con}");
     assert!(
         del_confinamiento > del_espacio,
         "y el confinamiento debajo del espacio:\n{con}"
@@ -240,7 +243,7 @@ fn la_barra_de_estado_recorta_la_ruta_y_no_el_contador() {
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
     ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 80, 24));
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let barra = terminal
+    let bar = terminal
         .backend()
         .to_string()
         .lines()
@@ -249,13 +252,10 @@ fn la_barra_de_estado_recorta_la_ruta_y_no_el_contador() {
         .to_owned();
 
     assert!(
-        barra.contains("8/42"),
-        "el contador entero, que es lo que dice cuánto hay: {barra:?}"
+        bar.contains("8/42"),
+        "el contador entero, que es lo que dice cuánto hay: {bar:?}"
     );
-    assert!(
-        barra.contains('…'),
-        "y la ruta cede por el medio: {barra:?}"
-    );
+    assert!(bar.contains('…'), "y la ruta cede por el medio: {bar:?}");
 }
 
 #[test]
@@ -400,16 +400,16 @@ fn snapshot_popup_hotlist() {
 fn snapshot_theme_picker_80x24() {
     let mut app = app_base();
     app.open_theme_picker();
-    let texto = render_80x24(&app);
-    insta::assert_snapshot!(texto.clone());
+    let text = render_80x24(&app);
+    insta::assert_snapshot!(text.clone());
     let hint = &app.dialog_hints.picker;
     assert!(
         !hint.is_empty(),
         "el preset orthodox liga confirm/cancel al picker"
     );
     assert!(
-        texto.contains(hint.as_str()),
-        "el hint generado debe caber ENTERO, sin cortes: hint={hint:?}\n{texto}"
+        text.contains(hint.as_str()),
+        "el hint generado debe caber ENTERO, sin cortes: hint={hint:?}\n{text}"
     );
 }
 
@@ -433,21 +433,21 @@ fn snapshot_columns_picker_80x24() {
     };
     app.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
     app.open_columns_picker(&[]);
-    let texto = render_80x24(&app);
+    let text = render_80x24(&app);
     let hint = &app.dialog_hints.columns;
     assert!(
         !hint.is_empty(),
         "el preset orthodox liga toggle/sort/confirm/cancel al picker"
     );
     assert!(
-        texto.contains(hint.as_str()),
-        "el hint generado debe caber ENTERO, sin cortes: hint={hint:?}\n{texto}"
+        text.contains(hint.as_str()),
+        "el hint generado debe caber ENTERO, sin cortes: hint={hint:?}\n{text}"
     );
     assert!(
-        !texto.contains('\u{202E}'),
-        "el RLO de la config jamás llega crudo al terminal:\n{texto}"
+        !text.contains('\u{202E}'),
+        "el RLO de la config jamás llega crudo al terminal:\n{text}"
     );
-    insta::assert_snapshot!(texto);
+    insta::assert_snapshot!(text);
 }
 
 /// Fase A: el selector de disposiciones a 80×24. Las cinco de fábrica con su
@@ -462,21 +462,21 @@ fn snapshot_columns_picker_80x24() {
 fn snapshot_layout_picker_80x24() {
     let mut app = app_base();
     app.open_layout_picker(Vec::new());
-    let texto = render_80x24(&app);
+    let text = render_80x24(&app);
     let hint = &app.dialog_hints.picker;
     assert!(
         !hint.is_empty(),
         "el preset orthodox liga confirmar/cancelar"
     );
     assert!(
-        texto.contains("orthodox") && texto.contains("full"),
-        "las cinco de fábrica se ofrecen:\n{texto}"
+        text.contains("orthodox") && text.contains("full"),
+        "las cinco de fábrica se ofrecen:\n{text}"
     );
     assert!(
-        texto.contains(&norte_i18n::t("layout-picker-keymap-note")),
-        "la nota del keymap cabe entera bajo la fila que la merece:\n{texto}"
+        text.contains(&norte_i18n::t("layout-picker-keymap-note")),
+        "la nota del keymap cabe entera bajo la fila que la merece:\n{text}"
     );
-    insta::assert_snapshot!(texto);
+    insta::assert_snapshot!(text);
 }
 
 /// #117 encoding-audit L1: un id de config KILOMÉTRICO que no parsea se
@@ -492,15 +492,15 @@ fn picker_capa_un_id_opaco_kilometrico() {
     };
     app.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
     app.open_columns_picker(&[]);
-    let texto = render_80x24(&app);
+    let text = render_80x24(&app);
     let cap = norte_frontend::columns::HEADER_MAX_CHARS;
     assert!(
-        texto.contains(&"x".repeat(cap)),
-        "la fila capada debe verse:\n{texto}"
+        text.contains(&"x".repeat(cap)),
+        "la fila capada debe verse:\n{text}"
     );
     assert!(
-        !texto.contains(&"x".repeat(cap + 1)),
-        "jamás más de {cap} chars del id opaco:\n{texto}"
+        !text.contains(&"x".repeat(cap + 1)),
+        "jamás más de {cap} chars del id opaco:\n{text}"
     );
 }
 
@@ -512,19 +512,19 @@ fn picker_capa_un_id_opaco_kilometrico() {
 /// point es `ColumnsSettings::resolve` (unit test en norte-frontend).
 #[test]
 fn snapshot_columns_spec_size_si_header_custom_kind_izquierda() {
-    let izq = vp("file:///casa");
-    let der = vp("file:///otro");
+    let left = vp("file:///casa");
+    let right = vp("file:///otro");
     let mut entries = vec![
-        entry(&izq, b"docs", EntryKind::Dir, None),
-        entry(&izq, b"grande.bin", EntryKind::File, Some(1500)),
-        entry(&izq, b"notas.txt", EntryKind::File, Some(420)),
+        entry(&left, b"docs", EntryKind::Dir, None),
+        entry(&left, b"grande.bin", EntryKind::File, Some(1500)),
+        entry(&left, b"notas.txt", EntryKind::File, Some(420)),
     ];
     sort_entries(&mut entries);
     let mut app = App::new(
-        Pane::new(izq, entries),
+        Pane::new(left, entries),
         Pane::new(
-            der.clone(),
-            vec![entry(&der, b"cosa", EntryKind::File, Some(1))],
+            right.clone(),
+            vec![entry(&right, b"cosa", EntryKind::File, Some(1))],
         ),
     );
     app.dialog_hints = default_dialog_hints();
@@ -557,13 +557,13 @@ fn snapshot_columns_spec_size_si_header_custom_kind_izquierda() {
         },
     );
     app.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
-    let texto = render(&app);
-    assert!(texto.contains("Peso"), "cabecera custom del spec:\n{texto}");
+    let text = render(&app);
+    assert!(text.contains("Peso"), "cabecera custom del spec:\n{text}");
     assert!(
-        texto.contains("1.5 kB") && !texto.contains("KiB"),
-        "size en SI, no IEC:\n{texto}"
+        text.contains("1.5 kB") && !text.contains("KiB"),
+        "size en SI, no IEC:\n{text}"
     );
-    insta::assert_snapshot!(texto);
+    insta::assert_snapshot!(text);
 }
 
 /// MAJOR-1 item (d): igual que el selector de tema, para el gestor de
@@ -592,16 +592,16 @@ fn snapshot_extensions_80x24() {
         cursor: 0,
         config: None,
     });
-    let texto = render_80x24(&app);
-    insta::assert_snapshot!(texto.clone());
+    let text = render_80x24(&app);
+    insta::assert_snapshot!(text.clone());
     let hint = &app.dialog_hints.extensions;
     assert!(
         !hint.is_empty(),
         "el preset orthodox liga approve/toggle-enabled/cancel a extensiones"
     );
     assert!(
-        texto.contains(hint.as_str()),
-        "el hint generado debe caber ENTERO, sin cortes: hint={hint:?}\n{texto}"
+        text.contains(hint.as_str()),
+        "el hint generado debe caber ENTERO, sin cortes: hint={hint:?}\n{text}"
     );
 }
 
@@ -612,11 +612,11 @@ fn snapshot_extensions_80x24() {
 /// (`extensions.rs`), a nivel de snapshot completo.
 #[test]
 fn snapshot_extensions_description_hostil_80x24() {
-    let hostil = norte_testkit::corpus::hostile_names()
+    let hostile = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
         .expect("fixture del corpus");
-    let descripcion = String::from_utf8_lossy(&hostil.bytes).into_owned();
+    let descripcion = String::from_utf8_lossy(&hostile.bytes).into_owned();
     let mut app = app_base();
     app.extensions = Some(norte_tui::app::ExtensionManager {
         plugins: vec![norte_proto::methods::PluginInfo {
@@ -637,21 +637,21 @@ fn snapshot_extensions_description_hostil_80x24() {
         cursor: 0,
         config: None,
     });
-    let texto = render_80x24(&app);
+    let text = render_80x24(&app);
     // El check es sobre el CARÁCTER inyectado, no "ningún hazard en toda la
     // pantalla" — `to_string()` del backend une líneas con `\n`, que
     // `is_terminal_hazard` (correctamente) también marca como control: un
     // check ciego sobre TODO el render daría un falso positivo por el
     // formato del propio buffer, no por texto hostil filtrado.
     assert!(
-        !texto.contains('\u{202E}'),
-        "el override RTL de la description se pintó crudo: {texto}"
+        !text.contains('\u{202E}'),
+        "el override RTL de la description se pintó crudo: {text}"
     );
     assert!(
-        texto.contains('\u{FFFD}'),
-        "la description hostil debe enmascararse a U+FFFD: {texto}"
+        text.contains('\u{FFFD}'),
+        "la description hostil debe enmascararse a U+FFFD: {text}"
     );
-    insta::assert_snapshot!(texto);
+    insta::assert_snapshot!(text);
 }
 
 /// G3c: el panel de `[config]` de un plugin (drill-down del gestor de
@@ -661,11 +661,11 @@ fn snapshot_extensions_description_hostil_80x24() {
 #[test]
 fn snapshot_plugin_config_panel_80x24() {
     use norte_frontend::plugin_config::{PluginConfigState, sanitize_config_keys};
-    let hostil = norte_testkit::corpus::hostile_names()
+    let hostile = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
         .expect("fixture del corpus");
-    let desc_hostil = String::from_utf8_lossy(&hostil.bytes).into_owned();
+    let desc_hostil = String::from_utf8_lossy(&hostile.bytes).into_owned();
     let mut app = app_base();
     let wire_keys = vec![
         norte_proto::methods::PluginConfigKeyWire {
@@ -699,17 +699,17 @@ fn snapshot_plugin_config_panel_80x24() {
             state: PluginConfigState::new(sanitize_config_keys(&wire_keys)),
         }),
     });
-    let texto = render_80x24(&app);
+    let text = render_80x24(&app);
     assert!(
-        !texto.contains('\u{202E}'),
-        "el override RTL de la description se pintó crudo: {texto}"
+        !text.contains('\u{202E}'),
+        "el override RTL de la description se pintó crudo: {text}"
     );
     assert!(
-        texto.contains('\u{FFFD}'),
-        "la description hostil debe enmascararse a U+FFFD: {texto}"
+        text.contains('\u{FFFD}'),
+        "la description hostil debe enmascararse a U+FFFD: {text}"
     );
-    assert!(texto.contains("verbose: true"));
-    insta::assert_snapshot!(texto);
+    assert!(text.contains("verbose: true"));
+    insta::assert_snapshot!(text);
 }
 
 /// BAJA-3: los items largos del popup de navegación van con elipsis MEDIA
@@ -724,12 +724,12 @@ fn popup_items_largos_con_elipsis_media_siguen_distinguibles() {
     app.history[0].push(vp(&format!("file:///{prefijo}/uno.txt")));
     app.history[0].push(vp(&format!("file:///{prefijo}/dos.txt")));
     app.open_nav_popup(norte_tui::app::NavPopupKind::History);
-    let texto = render(&app);
+    let text = render(&app);
     assert!(
-        texto.contains("uno.txt") && texto.contains("dos.txt"),
-        "las colas distintas sobreviven al recorte (elipsis media): {texto}"
+        text.contains("uno.txt") && text.contains("dos.txt"),
+        "las colas distintas sobreviven al recorte (elipsis media): {text}"
     );
-    assert!(texto.contains('…'), "el recorte se marca: {texto}");
+    assert!(text.contains('…'), "el recorte se marca: {text}");
 }
 
 #[test]
@@ -800,8 +800,8 @@ fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
     // `vp` (que es quien lo fuerza en el resto del archivo) todavía no ha
     // corrido aquí.
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
-    let etiqueta = |cmd: &str| norte_i18n::t(&norte_tui::keymap::dialog_hint_id(cmd));
-    let aviso = norte_i18n::t("modal-hint-help-open");
+    let label = |cmd: &str| norte_i18n::t(&norte_tui::keymap::dialog_hint_id(cmd));
+    let notice = norte_i18n::t("modal-hint-help-open");
     let verbos = default_dialog_hints().approval;
 
     let mut app = app_base();
@@ -819,7 +819,7 @@ fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
     let tapado = render(&app);
 
     assert!(
-        tapado.contains(&aviso),
+        tapado.contains(&notice),
         "el pie tiene que decir por qué las teclas del modal no responden:\n{tapado}"
     );
     assert!(
@@ -830,7 +830,7 @@ fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
     // de la ayuda lista los suyos, que sí responden).
     for cmd in ["dialog.approve", "dialog.deny"] {
         assert!(
-            !tapado.contains(&etiqueta(cmd)),
+            !tapado.contains(&label(cmd)),
             "{cmd} está inerte y el pie lo sigue ofreciendo:\n{tapado}"
         );
     }
@@ -850,7 +850,7 @@ fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
     app.help = None;
     let visible = render(&app);
     assert!(
-        !visible.contains(&aviso),
+        !visible.contains(&notice),
         "sin ayuda por encima no hay nada que cerrar:\n{visible}"
     );
     assert!(
@@ -869,7 +869,7 @@ fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
 #[test]
 fn ningun_modal_con_hint_generado_ofrece_verbos_bajo_la_ayuda() {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
-    let aviso = norte_i18n::t("modal-hint-help-open");
+    let notice = norte_i18n::t("modal-hint-help-open");
     let hints = default_dialog_hints();
     let modales = [
         (
@@ -931,7 +931,7 @@ fn ningun_modal_con_hint_generado_ofrece_verbos_bajo_la_ayuda() {
         open_help_over_modal(&mut app);
         let tapado = render(&app);
         assert!(
-            tapado.contains(&aviso),
+            tapado.contains(&notice),
             "este modal no dice por qué sus teclas no responden:\n{tapado}"
         );
         assert!(
@@ -970,22 +970,22 @@ fn modal_trust_host_muestra_fingerprint_y_enmascara_host_hostil() {
         pane: 0,
         trail: Trail::Record,
     });
-    let texto = render(&app);
+    let text = render(&app);
     assert!(
-        texto.contains("SHA256:abc123XYZ"),
-        "el fingerprint se muestra para comparar: {texto}"
+        text.contains("SHA256:abc123XYZ"),
+        "el fingerprint se muestra para comparar: {text}"
     );
     assert!(
-        !texto.contains('\u{202E}'),
-        "el override bidi del host NO llega al render: {texto:?}"
+        !text.contains('\u{202E}'),
+        "el override bidi del host NO llega al render: {text:?}"
     );
     assert!(
-        texto.contains("ssh-ed25519"),
-        "el algoritmo se muestra: {texto}"
+        text.contains("ssh-ed25519"),
+        "el algoritmo se muestra: {text}"
     );
     assert!(
-        texto.contains('!'),
-        "el host hostil lleva el badge que AVISA al usuario: {texto}"
+        text.contains('!'),
+        "el host hostil lleva el badge que AVISA al usuario: {text}"
     );
 }
 
@@ -1005,15 +1005,12 @@ fn modal_trust_host_fingerprint_hostil_y_sha256_completo() {
         pane: 0,
         trail: Trail::Record,
     });
-    let texto = render(&app);
+    let text = render(&app);
     assert!(
-        !texto.contains('\u{202E}'),
-        "el bidi del fingerprint NO llega al render: {texto:?}"
+        !text.contains('\u{202E}'),
+        "el bidi del fingerprint NO llega al render: {text:?}"
     );
-    assert!(
-        texto.contains('!'),
-        "fingerprint manipulado → badge: {texto}"
-    );
+    assert!(text.contains('!'), "fingerprint manipulado → badge: {text}");
 
     // Un SHA256 real (7 + 43 = 50 chars) cabe entero, sin truncar.
     app.modal = Some(Modal::TrustHostKey {
@@ -1025,12 +1022,12 @@ fn modal_trust_host_fingerprint_hostil_y_sha256_completo() {
         pane: 0,
         trail: Trail::Record,
     });
-    let texto = render(&app);
+    let text = render(&app);
     assert!(
-        texto.contains("SHA256:oXf6dQ7pC3vN2mK9tR1sB4jW8yZ0aL5eH6gU3iO7wA"),
-        "el SHA256 canónico se muestra COMPLETO (sin elipsis): {texto}"
+        text.contains("SHA256:oXf6dQ7pC3vN2mK9tR1sB4jW8yZ0aL5eH6gU3iO7wA"),
+        "el SHA256 canónico se muestra COMPLETO (sin elipsis): {text}"
     );
-    assert!(!texto.contains('…'), "no se trunca: {texto}");
+    assert!(!text.contains('…'), "no se trunca: {text}");
 }
 
 #[test]
@@ -1041,7 +1038,7 @@ fn snapshot_viewer_texto_y_hex() {
         b"a\xF1o 2026\nsegunda l\xEDnea\n".to_vec(),
         false,
     ));
-    let texto = render(&app);
+    let text = render(&app);
     let mut v = Viewer::new(
         vp("file:///casa/logo.png"),
         b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec(),
@@ -1050,7 +1047,7 @@ fn snapshot_viewer_texto_y_hex() {
     v.scroll_down(0);
     app.viewer = Some(v);
     let hex = render(&app);
-    insta::assert_snapshot!(format!("{texto}\n===\n{hex}"));
+    insta::assert_snapshot!(format!("{text}\n===\n{hex}"));
 }
 
 /// Abre el overlay de ayuda (H3b) tal cual lo hace el binario: el cheatsheet
@@ -1125,8 +1122,8 @@ fn refresh_help_en(app: &mut App, w: u16, h: u16) {
     let Some(lang) = app.help.as_ref().map(|v| v.state.lang()) else {
         return;
     };
-    let (ancho, alto) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, w, h), lang);
-    app.refresh_help(ancho, alto);
+    let (width, height) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, w, h), lang);
+    app.refresh_help(width, height);
 }
 
 /// Como [`render`], pero devuelve el BUFFER: el volcado de texto no lleva
@@ -1184,7 +1181,7 @@ fn el_pie_de_la_ayuda_se_adapta_al_ancho() {
             .to_owned()
     };
 
-    let ancho = pie_a(124, 16);
+    let width = pie_a(124, 16);
     for verbo in [
         "índice ↔ texto",
         "bajar",
@@ -1195,13 +1192,13 @@ fn el_pie_de_la_ayuda_se_adapta_al_ancho() {
         "cancelar",
     ] {
         assert!(
-            ancho.contains(verbo),
-            "en un frame ancho caben los siete grupos, y `{verbo}` falta: {ancho:?}"
+            width.contains(verbo),
+            "en un frame ancho caben los siete grupos, y `{verbo}` falta: {width:?}"
         );
     }
     assert!(
-        !ancho.contains('…'),
-        "…y sin marca de pérdida, porque no se perdió nada: {ancho:?}"
+        !width.contains('…'),
+        "…y sin marca de pérdida, porque no se perdió nada: {width:?}"
     );
 
     let estrecho = pie_a(80, 16);
@@ -1220,7 +1217,7 @@ fn el_pie_de_la_ayuda_se_adapta_al_ancho() {
         "y el recorte se MARCA — un pie recortado en silencio miente: {estrecho:?}"
     );
     // Grupo entero o nada: ningún corchete queda huérfano.
-    for pie in [&ancho, &estrecho] {
+    for pie in [&width, &estrecho] {
         assert_eq!(
             pie.matches('[').count(),
             pie.matches(']').count(),
@@ -1281,7 +1278,7 @@ fn help_footer_row(w: u16, h: u16) -> usize {
 ///
 /// La aserción anti-vacuidad va acotada al PIE, no al frame (review MEDIA):
 /// `app_base` siembra una entrada `\xE9.dat` que se pinta con su propio
-/// `U+FFFD` en el pane de detrás, así que un `texto.contains('\u{FFFD}')`
+/// `U+FFFD` en el pane de detrás, así que un `text.contains('\u{FFFD}')`
 /// sobre todo el frame pasaría aunque el pie no pintase absolutamente nada.
 /// Hoy el overlay tapa esa fila a 80×16 y da igual; la maquetación cambió en
 /// esta misma fase, así que «hoy da igual» no es un sitio donde apoyarse.
@@ -1300,11 +1297,11 @@ fn help_footer_row(w: u16, h: u16) -> usize {
 /// hace pasar por la documentación de la app.
 #[test]
 fn snapshot_ayuda_pagina_de_plugin_hostil() {
-    let hostil = norte_testkit::corpus::hostile_names()
+    let hostile = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
         .expect("fixture del corpus");
-    let nombre = String::from_utf8_lossy(&hostil.bytes).into_owned();
+    let nombre = String::from_utf8_lossy(&hostile.bytes).into_owned();
     let mut app = app_base();
     open_help(&mut app);
     let plugin = norte_proto::methods::PluginInfo {
@@ -1339,26 +1336,26 @@ fn snapshot_ayuda_pagina_de_plugin_hostil() {
     );
     view.state.install_plugin_topic(parsed.topic);
     refresh_help(&mut app);
-    let texto = render(&app);
+    let text = render(&app);
     // Mismo barrido POR LÍNEA que `snapshot_ayuda_filtro_hostil`, y por la
     // misma razón (los `\n` del volcado son controles).
-    for (n, linea) in texto.lines().enumerate() {
+    for (n, linea) in text.lines().enumerate() {
         assert!(
             !linea.chars().any(norte_encoding::is_terminal_hazard),
             "la página de plugin pintó un hazard de terminal (fila {n}): \
-             {linea:?}\n{texto}"
+             {linea:?}\n{text}"
         );
     }
     // Lo que el snapshot NO puede afirmar por sí solo: que la página se
     // DECLARA de un tercero incluso sin publicador que nombrar.
     assert!(
-        texto.contains(&norte_i18n::t_in(
+        text.contains(&norte_i18n::t_in(
             norte_i18n::Lang::Es,
             "help-plugin-origin"
         )),
-        "sin marca de procedencia la página se lee como del manual:\n{texto}"
+        "sin marca de procedencia la página se lee como del manual:\n{text}"
     );
-    insta::assert_snapshot!(texto);
+    insta::assert_snapshot!(text);
 }
 
 #[test]
@@ -1375,30 +1372,30 @@ fn snapshot_ayuda_filtro_hostil() {
         view.state.push_char(c);
     }
     refresh_help(&mut app);
-    let texto = render(&app);
-    for (n, linea) in texto.lines().enumerate() {
+    let text = render(&app);
+    for (n, linea) in text.lines().enumerate() {
         assert!(
             !linea.chars().any(norte_encoding::is_terminal_hazard),
             "el pie del overlay de ayuda pintó un hazard de terminal \
-             (fila {n}, fixture {}): {linea:?}\n{texto}",
+             (fila {n}, fixture {}): {linea:?}\n{text}",
             rlo.id
         );
     }
-    let pie = texto
+    let footer = text
         .lines()
         .nth(help_footer_row(80, 16))
         .expect("el pie cae dentro del frame");
     assert!(
-        pie.contains('\u{FFFD}'),
+        footer.contains('\u{FFFD}'),
         "y el filtro SÍ se pinta, enmascarado a U+FFFD — sin esto el test \
-         pasaría igual con un pie que no pintase nada:\n{pie:?}\n{texto}"
+         pasaría igual con un pie que no pintase nada:\n{footer:?}\n{text}"
     );
     assert!(
-        pie.contains("copiar"),
+        footer.contains("copiar"),
         "el resto del needle llega al pie tal cual: el enmascarado es del \
-         hazard, no del texto:\n{pie:?}"
+         hazard, no del texto:\n{footer:?}"
     );
-    insta::assert_snapshot!(texto);
+    insta::assert_snapshot!(text);
 }
 
 /// La compañera del test de arriba, por el otro camino: un título HOSTIL que
@@ -1442,31 +1439,31 @@ fn ayuda_un_titulo_hostil_llega_crudo_a_la_lateral() {
         view.state.push_char(c);
     }
     refresh_help(&mut app);
-    let texto = render(&app);
+    let text = render(&app);
 
-    let fila = texto
+    let row = text
         .lines()
         .find(|l| l.contains('\u{2066}'))
         .unwrap_or_else(|| {
             panic!(
                 "el título de la fila sintética `keys` no llegó a la lateral: \
-                 el camino que este test existe para recorrer no se recorrió\n{texto}"
+                 el camino que este test existe para recorrer no se recorrió\n{text}"
             )
         });
     // Verbatim hasta el recorte: el prefijo del título, aislante incluido,
     // sale tal cual. `right_ellipsis` corta por la DERECHA, así que la cabeza
     // sobrevive entera.
-    let cabeza: String = bidi.text.chars().take(10).collect();
+    let head: String = bidi.text.chars().take(10).collect();
     assert!(
-        fila.contains(&cabeza),
+        row.contains(&head),
         "la lateral pinta el título VERBATIM (recortado por la derecha): \
-         {fila:?} debería empezar por {cabeza:?}"
+         {row:?} debería empezar por {head:?}"
     );
     assert!(
-        fila.chars().any(norte_encoding::is_terminal_hazard),
+        row.chars().any(norte_encoding::is_terminal_hazard),
         "…y sin enmascarar: si esto se pone rojo es que alguien añadió un \
          filtro en el pintor de la lateral, lo cual está BIEN — actualiza este \
-         test y la nota de `draw_help` a la vez: {fila:?}"
+         test y la nota de `draw_help` a la vez: {row:?}"
     );
 }
 
@@ -1518,14 +1515,14 @@ fn la_lateral_de_la_ayuda_se_dimensiona_a_sus_titulos() {
 
     // Frame ANCHO: manda el contenido, y dos corpus distintos dan dos anchos
     // distintos. Una constante pasaría lo de abajo y fallaría aquí.
-    let ancho = Rect::new(0, 0, 160, 40);
+    let width = Rect::new(0, 0, 160, 40);
     assert_eq!(
-        usize::from(ui::help_sidebar_width(ancho, Lang::Es)),
+        usize::from(ui::help_sidebar_width(width, Lang::Es)),
         es,
         "con sitio de sobra la lateral pide exactamente lo que mide su fila \
          más ancha"
     );
-    assert_eq!(usize::from(ui::help_sidebar_width(ancho, Lang::En)), en);
+    assert_eq!(usize::from(ui::help_sidebar_width(width, Lang::En)), en);
 
     // Frame ESTRECHO: el tope del 35 % del frame gana, y el suelo histórico
     // de 24 celdas se respeta — ni una lateral que se come la prosa ni una
@@ -1551,8 +1548,8 @@ fn la_lateral_de_la_ayuda_se_dimensiona_a_sus_titulos() {
     // Y el cuerpo tiene medida tipográfica: la prosa no crece con el terminal
     // más allá de lo que se lee de un vistazo. Una celda menos que la medida:
     // la última columna del cuerpo es su barra de scroll.
-    let (cuerpo, _) = ui::help_body_size(Rect::new(0, 0, 200, 40), Lang::Es);
-    assert_eq!(cuerpo, 71, "la prosa se corta en su medida, no en el borde");
+    let (body, _) = ui::help_body_size(Rect::new(0, 0, 200, 40), Lang::Es);
+    assert_eq!(body, 71, "la prosa se corta en su medida, no en el borde");
 }
 
 /// …y con sitio, NINGÚN título sale recortado.
@@ -1564,19 +1561,19 @@ fn la_lateral_de_la_ayuda_se_dimensiona_a_sus_titulos() {
 fn a_120_columnas_ningun_titulo_de_la_ayuda_sale_recortado() {
     let mut app = app_base();
     open_help(&mut app);
-    let texto = render_ayuda(&mut app, 120, 36);
+    let text = render_ayuda(&mut app, 120, 36);
     for tema in norte_help::topics(norte_i18n::Lang::Es) {
         assert!(
-            texto.lines().any(|l| l.contains(&tema.title)),
-            "el título {:?} no aparece entero en la lateral:\n{texto}",
+            text.lines().any(|l| l.contains(&tema.title)),
+            "el título {:?} no aparece entero en la lateral:\n{text}",
             tema.title
         );
     }
     assert!(
-        !texto
+        !text
             .lines()
             .any(|l| l.contains("…") && l.contains("  SFTP")),
-        "…y sin elipsis en la fila más larga:\n{texto}"
+        "…y sin elipsis en la fila más larga:\n{text}"
     );
 }
 
@@ -1592,20 +1589,24 @@ fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
     open_help(&mut app);
 
     // 80×16: el índice no cabe ni de lejos en las 12 filas del cuerpo.
-    let texto = render_ayuda(&mut app, 80, 16);
+    let text = render_ayuda(&mut app, 80, 16);
     let view = app.help.as_ref().expect("overlay abierto");
     let total = view.body().0.len();
-    let (_, alto) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, 80, 16), view.state.lang());
-    assert!(total > alto, "el índice no cabe en {alto} filas ({total})");
-    let pie = texto
+    let (_, height) =
+        ui::help_body_size(ratatui::layout::Rect::new(0, 0, 80, 16), view.state.lang());
+    assert!(
+        total > height,
+        "el índice no cabe en {height} filas ({total})"
+    );
+    let footer = text
         .lines()
         .nth(help_footer_row(80, 16))
         .expect("el pie cae dentro del frame");
     // Pegado al borde derecho de la caja: el volcado del backend entrecomilla
     // cada fila, así que el ancla es el `│` de la caja y no el fin de línea.
     assert!(
-        pie.contains(&format!("1/{total} │")),
-        "el pie sitúa al lector en la primera línea, a la DERECHA: {pie:?}"
+        footer.contains(&format!("1/{total} │")),
+        "el pie sitúa al lector en la primera línea, a la DERECHA: {footer:?}"
     );
 
     // Y sigue al scroll. El foco entra en el cuerpo para que `page_down`
@@ -1615,35 +1616,38 @@ fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
     // verdad está arriba, no que se movieran cinco.
     app.help.as_mut().expect("overlay").state.toggle_focus();
     app.help.as_mut().expect("overlay").state.page_down(5);
-    let texto = render_ayuda(&mut app, 80, 16);
+    let text = render_ayuda(&mut app, 80, 16);
     let scroll = app.help.as_ref().expect("overlay").state.body_scroll();
     assert!(scroll > 0, "el cuerpo se desplazó");
-    let pie = texto
+    let footer = text
         .lines()
         .nth(help_footer_row(80, 16))
         .expect("el pie cae dentro del frame");
     assert!(
-        pie.contains(&format!("{}/{total} │", scroll + 1)),
-        "el indicador va con el scroll ({scroll}): {pie:?}"
+        footer.contains(&format!("{}/{total} │", scroll + 1)),
+        "el indicador va con el scroll ({scroll}): {footer:?}"
     );
 
     // Frame de sobra: la página entra entera y el indicador SOBRA — un `1/9`
     // sobre nueve líneas visibles no informa de nada. El alto va holgado a
     // propósito: el índice CRECE con cada página que H3h escribe, y un frame
     // ajustado convertiría "escribir una página" en "arreglar este test".
-    let texto = render_ayuda(&mut app, 120, 90);
+    let text = render_ayuda(&mut app, 120, 90);
     let view = app.help.as_ref().expect("overlay abierto");
     let total = view.body().0.len();
-    let (_, alto) =
+    let (_, height) =
         ui::help_body_size(ratatui::layout::Rect::new(0, 0, 120, 90), view.state.lang());
-    assert!(total <= alto, "la página cabe en {alto} filas ({total})");
-    let pie = texto
+    assert!(
+        total <= height,
+        "la página cabe en {height} filas ({total})"
+    );
+    let footer = text
         .lines()
         .nth(help_footer_row(120, 90))
         .expect("el pie cae dentro del frame");
     assert!(
-        !pie.contains(&format!("/{total}")),
-        "con la página entera a la vista el pie no dice nada: {pie:?}"
+        !footer.contains(&format!("/{total}")),
+        "con la página entera a la vista el pie no dice nada: {footer:?}"
     );
 }
 
@@ -1714,13 +1718,13 @@ fn all_row_styles(buf: &ratatui::buffer::Buffer) -> Vec<Vec<ratatui::style::Styl
 /// prosa de arriba y en la columna del chord.
 #[test]
 fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
-    let dentro = vp("zip+file:///a.zip/!");
+    let inside = vp("zip+file:///a.zip/!");
     let mut app = App::new(
         Pane::new(
-            dentro.clone(),
-            vec![entry(&dentro, b"leeme.txt", EntryKind::File, Some(3))],
+            inside.clone(),
+            vec![entry(&inside, b"leeme.txt", EntryKind::File, Some(3))],
         ),
-        Pane::new(dentro, Vec::new()),
+        Pane::new(inside, Vec::new()),
     );
     app.dialog_hints = default_dialog_hints();
     open_help(&mut app);
@@ -1736,13 +1740,13 @@ fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
 
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let texto = terminal.backend().to_string();
+    let text = terminal.backend().to_string();
     let buffer = terminal.backend().buffer().clone();
 
     let razon = norte_i18n::t_in(norte_i18n::Lang::Es, "reason-read-only");
     assert!(
-        texto.contains(&razon),
-        "la fila vetada tiene que decir POR QUÉ ({razon}):\n{texto}"
+        text.contains(&razon),
+        "la fila vetada tiene que decir POR QUÉ ({razon}):\n{text}"
     );
 
     // Y la OTRA mitad de la función: la fila está ATENUADA. Decir la razón
@@ -1754,16 +1758,16 @@ fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
     // chord (`Mark` si se puede pulsar, `Info` si no — una fila apagada no
     // puede vestir de tecla) y el texto. Solo el color de FRENTE: el fondo se
     // lo pone el bloque del overlay y no dice nada de la disponibilidad.
-    let filas = row_texts(&buffer);
-    let estilos = all_row_styles(&buffer);
-    let y = filas
+    let rows = row_texts(&buffer);
+    let styles = all_row_styles(&buffer);
+    let y = rows
         .iter()
         .position(|f| f.contains(&razon))
         .expect("la fila con la razón cae dentro del frame");
-    let fg_de = |x: usize| estilos[y][x].fg.expect("cada celda pintada tiene frente");
+    let fg_de = |x: usize| styles[y][x].fg.expect("cada celda pintada tiene frente");
     let en = |aguja: &str| -> usize {
-        let byte = filas[y].find(aguja).expect("el trozo está en la fila");
-        filas[y][..byte].chars().count()
+        let byte = rows[y].find(aguja).expect("el trozo está en la fila");
+        rows[y][..byte].chars().count()
     };
     let atenuado = app.theme.role(norte_theme::Role::Info).fg;
     let normal = app.theme.role(norte_theme::Role::Regular).fg;
@@ -1779,7 +1783,7 @@ fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
             Some(fg_de(x)),
             atenuado,
             "la fila dice la razón pero se pinta como si se pudiera pulsar: {:?}",
-            filas[y]
+            rows[y]
         );
     }
     let x_chord = en("F5");
@@ -1787,7 +1791,7 @@ fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
         Some(fg_de(x_chord)),
         atenuado,
         "el chord de una fila vetada no puede seguir vestido de tecla: {:?}",
-        filas[y]
+        rows[y]
     );
     assert_ne!(Some(fg_de(x_chord)), tecla);
 }
@@ -1825,7 +1829,7 @@ fn snapshot_ayuda_cuerpo_con_foco() {
          (scroll={scroll})"
     );
     let con_foco = render_buffer(&app);
-    let texto = render(&app);
+    let text = render(&app);
 
     // Y el resalte es DEL FOCO, no de la fila: devuelto el foco a la lateral,
     // el cursor del cuerpo sigue existiendo pero ya no es el que mueven las
@@ -1856,12 +1860,12 @@ fn snapshot_ayuda_cuerpo_con_foco() {
     let chord = resolver
         .chord(&comando)
         .unwrap_or_else(|| panic!("{comando} tiene chord en el preset orthodox"));
-    let etiqueta = resolver.label(&comando);
-    let fila = &row_texts(&con_foco)[distintas[0]];
+    let label = resolver.label(&comando);
+    let row = &row_texts(&con_foco)[distintas[0]];
     assert!(
-        fila.contains(&chord) && fila.contains(&etiqueta),
+        row.contains(&chord) && row.contains(&label),
         "la fila resaltada tiene que ser la de `{comando}` ({chord} / \
-         {etiqueta}), no otra: {fila:?}"
+         {label}), no otra: {row:?}"
     );
     // …y NO la de su vecina. Un mapa desplazado una posición resaltaría
     // `pane.copy` mientras `Enter` despacha `pane.move`.
@@ -1870,12 +1874,12 @@ fn snapshot_ayuda_cuerpo_con_foco() {
         .chord(vecino)
         .unwrap_or_else(|| panic!("{vecino} tiene chord en el preset orthodox"));
     assert!(
-        !fila.contains(&resolver.label(vecino)) && !fila.contains(&chord_vecino),
+        !row.contains(&resolver.label(vecino)) && !row.contains(&chord_vecino),
         "la fila resaltada es la de la acción VECINA: el mapa acción→línea \
-         está desplazado: {fila:?}"
+         está desplazado: {row:?}"
     );
 
-    insta::assert_snapshot!(texto);
+    insta::assert_snapshot!(text);
 }
 
 /// Command palette (`Ctrl+P`/vim `:`, H1 T4): filtrada a "principio" deja
@@ -1909,11 +1913,11 @@ fn snapshot_palette_abierta() {
 /// crudos, y que la fila queda distinguible de un built-in.
 #[test]
 fn snapshot_palette_fila_de_plugin_hostil() {
-    let hostil = norte_testkit::corpus::hostile_names()
+    let hostile = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
         .expect("fixture del corpus");
-    let titulo = String::from_utf8_lossy(&hostil.bytes).into_owned();
+    let titulo = String::from_utf8_lossy(&hostile.bytes).into_owned();
     let mut app = app_base();
     let plugin = norte_proto::methods::PluginInfo {
         id: "org.evil.demo".into(),
@@ -1938,20 +1942,20 @@ fn snapshot_palette_fila_de_plugin_hostil() {
     let rows = norte_tui::palette::plugin_rows(std::slice::from_ref(&plugin));
     let palette = norte_tui::app::Palette::new(rows);
     app.palette = Some(palette);
-    let texto = render(&app);
+    let text = render(&app);
     // Ver comentario equivalente en `snapshot_extensions_description_hostil_80x24`:
     // el check es sobre el CARÁCTER inyectado, no sobre "ningún control en
     // toda la pantalla" (los saltos de línea de `to_string()` también son
     // controles, falso positivo si se escanea el buffer entero).
     assert!(
-        !texto.contains('\u{202E}'),
-        "el override RTL del título se pintó crudo: {texto}"
+        !text.contains('\u{202E}'),
+        "el override RTL del título se pintó crudo: {text}"
     );
     assert!(
-        texto.contains('\u{FFFD}'),
-        "el título hostil debe enmascararse a U+FFFD: {texto}"
+        text.contains('\u{FFFD}'),
+        "el título hostil debe enmascararse a U+FFFD: {text}"
     );
-    insta::assert_snapshot!(texto);
+    insta::assert_snapshot!(text);
 }
 
 fn cfg_vacia() -> norte_tui::config::LoadedConfig {
@@ -2062,12 +2066,12 @@ fn fila_compare(
     derecha: bool,
 ) -> norte_proto::methods::CompareRow {
     use norte_proto::methods::{CompareReason, CompareRow, CompareVerdict};
-    let izq = vp("file:///casa");
-    let der = vp("file:///otro");
+    let left = vp("file:///casa");
+    let right = vp("file:///otro");
     CompareRow {
         id,
-        left: izquierda.then(|| entry(&izq, nombre, EntryKind::File, Some(1024))),
-        right: derecha.then(|| entry(&der, nombre, EntryKind::File, Some(2048))),
+        left: izquierda.then(|| entry(&left, nombre, EntryKind::File, Some(1024))),
+        right: derecha.then(|| entry(&right, nombre, EntryKind::File, Some(2048))),
         verdict,
         criterion,
         confidence,
@@ -2083,14 +2087,14 @@ fn fila_compare(
 fn snapshot_compare_pane() {
     use norte_proto::methods::{CompareConfidence, CompareCriterion, CompareVerdict};
 
-    let izq = vp("file:///casa");
-    let der = vp("file:///otro");
-    let fila = fila_compare;
+    let left = vp("file:///casa");
+    let right = vp("file:///otro");
+    let row = fila_compare;
 
-    let mut view = norte_tui::app::CompareView::new(izq, der, 0, None, None);
+    let mut view = norte_tui::app::CompareView::new(left, right, 0, None, None);
     view.pane.extend(vec![
         // Probado por el hash, y solo sugerido por la fecha: DOS respuestas.
-        fila(
+        row(
             1,
             b"probado.bin",
             CompareVerdict::Same,
@@ -2099,7 +2103,7 @@ fn snapshot_compare_pane() {
             true,
             true,
         ),
-        fila(
+        row(
             2,
             b"supuesto.bin",
             CompareVerdict::Same,
@@ -2109,7 +2113,7 @@ fn snapshot_compare_pane() {
             true,
         ),
         // Un provider que no puede decirlo (un .zip): respuesta, no fallo.
-        fila(
+        row(
             3,
             b"en-archivo.txt",
             CompareVerdict::Same,
@@ -2118,7 +2122,7 @@ fn snapshot_compare_pane() {
             true,
             true,
         ),
-        fila(
+        row(
             4,
             b"distinto.txt",
             CompareVerdict::Different,
@@ -2127,7 +2131,7 @@ fn snapshot_compare_pane() {
             true,
             true,
         ),
-        fila(
+        row(
             5,
             &[0xE9, b'.', b'd', b'a', b't'],
             CompareVerdict::OnlyLeft,
@@ -2136,7 +2140,7 @@ fn snapshot_compare_pane() {
             true,
             false,
         ),
-        fila(
+        row(
             6,
             b"solo-derecha",
             CompareVerdict::OnlyRight,
@@ -2145,7 +2149,7 @@ fn snapshot_compare_pane() {
             false,
             true,
         ),
-        fila(
+        row(
             7,
             b"clase-distinta",
             CompareVerdict::TypeMismatch,
@@ -2155,7 +2159,7 @@ fn snapshot_compare_pane() {
             true,
         ),
         // C6, hallazgo 7: un `Error` puede no traer NINGÚN lado.
-        fila(
+        row(
             8,
             b"ilegible",
             CompareVerdict::Error,
@@ -2184,7 +2188,7 @@ fn paso_sync(
     use norte_proto::methods::{
         CompareConfidence, CompareCriterion, RelPath, StepReversal, SyncReason, SyncStep,
     };
-    let paso = SyncStep {
+    let step = SyncStep {
         id,
         kind,
         rel: RelPath::parse_wire(rel).expect("rel"),
@@ -2198,10 +2202,10 @@ fn paso_sync(
         reason: (reversal == StepReversal::Irreversible).then_some(SyncReason::NoTrashOnTarget),
     };
     assert!(
-        paso.shape_is_consistent(),
-        "paso de test mal formado: {paso:?}"
+        step.shape_is_consistent(),
+        "paso de test mal formado: {step:?}"
     );
-    paso
+    step
 }
 
 fn cierre_sync(
@@ -2241,7 +2245,7 @@ fn snapshot_sync_pane_update_con_papelera() {
         None,
         None,
     );
-    let pasos = vec![
+    let steps = vec![
         paso_sync(
             1,
             SyncStepKind::CreateDir,
@@ -2283,7 +2287,7 @@ fn snapshot_sync_pane_update_con_papelera() {
         unknown_kind: 0,
     };
     view.state =
-        norte_frontend::sync::SyncState::ready(pasos, cierre_sync(counts, DestTrash::Restorable));
+        norte_frontend::sync::SyncState::ready(steps, cierre_sync(counts, DestTrash::Restorable));
     view.run = norte_tui::app::SyncRunState::Done;
 
     let mut app = app_base();
@@ -2312,7 +2316,7 @@ fn snapshot_sync_pane_mirror_sin_papelera() {
         None,
         None,
     );
-    let pasos = vec![
+    let steps = vec![
         paso_sync(
             1,
             SyncStepKind::Copy,
@@ -2354,7 +2358,7 @@ fn snapshot_sync_pane_mirror_sin_papelera() {
         unknown_kind: 0,
     };
     view.state =
-        norte_frontend::sync::SyncState::ready(pasos, cierre_sync(counts, DestTrash::Absent));
+        norte_frontend::sync::SyncState::ready(steps, cierre_sync(counts, DestTrash::Absent));
     view.run = norte_tui::app::SyncRunState::Done;
     view.confirming = view
         .state

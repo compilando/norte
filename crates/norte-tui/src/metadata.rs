@@ -47,10 +47,10 @@ pub fn slot(app: &App, res: &Resolved) -> Option<SlotId> {
 pub fn want(app: &App, res: &Resolved) -> Option<(SlotId, Want)> {
     let hueco = slot(app, res)?;
     let mut diags = Vec::new();
-    let seguido =
+    let in_a_row =
         norte_frontend::layout::resolve_follow(&app.layout, hueco, &app.roles, &mut diags)
             .or_else(|| app.roles.get(norte_frontend::layout::RoleId::Active))?;
-    let pane = app.panes.browser(seguido)?;
+    let pane = app.panes.browser(in_a_row)?;
     match pane.selected() {
         Some(e) => Some((hueco, Want::Entry(Box::new(e.clone())))),
         None => Some((hueco, Want::Note("metadata-empty"))),

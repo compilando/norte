@@ -97,7 +97,7 @@ pub async fn on_dialog_key(
             }
         }
         DialogOutcome::Confirmed => {
-            if let Some(cd) = confirma_el_modal(app, backend, events, modal).await {
+            if let Some(cd) = confirm_modal(app, backend, events, modal).await {
                 return cd;
             }
         }
@@ -128,7 +128,7 @@ pub async fn on_dialog_key(
 /// El `match` sigue siendo EXHAUSTIVO a propósito: nombrar los modales que no
 /// confirman nada es lo que hace que añadir uno nuevo sea un error de
 /// compilación en vez de un Enter que hace algo a escondidas.
-pub async fn confirma_el_modal(
+pub async fn confirm_modal(
     app: &mut App,
     backend: &Backend,
     events: &mut EventStream,
@@ -298,7 +298,7 @@ pub async fn submit_deletes(app: &mut App, backend: &Backend, items: &[VPath], p
 ///
 /// El total no vuelve por aquí: llega en el progreso terminal de la Task, que
 /// es lo que `on_tick` ya está mirando para todas las demás.
-pub async fn lanza_recuento(
+pub async fn launch_size_count(
     app: &mut App,
     backend: &Backend,
     paths: Vec<VPath>,
@@ -330,11 +330,11 @@ pub async fn lanza_recuento(
 /// interior de un archivo como origen, así que desempaquetar es la copia que
 /// el usuario podría haber hecho a mano, con el journal, el undo, la política
 /// de colisiones y la cancelación que la copia ya tiene.
-pub async fn desempaqueta(app: &mut App, backend: &Backend) {
-    let Some(entrada) = app.focused().selected().cloned() else {
+pub async fn unpack(app: &mut App, backend: &Backend) {
+    let Some(entry) = app.focused().selected().cloned() else {
         return;
     };
-    let Some(raiz) = crate::nav::archive_root_for(&entrada) else {
+    let Some(raiz) = crate::nav::archive_root_for(&entry) else {
         app.message = Some(t("msg-unpack-not-archive"));
         return;
     };
@@ -346,16 +346,13 @@ pub async fn desempaqueta(app: &mut App, backend: &Backend) {
     // tres o cuatro paneles, y ahí `pane_read_only` contesta `false` sin mirar
     // nada — el gate quedaba inerte justo donde hay más sitios a los que
     // apuntar por error.
-    let otro = app.split_dest_pane();
-    if app.pane_read_only(otro) {
+    let other = app.split_dest_pane();
+    if app.pane_read_only(other) {
         app.message = Some(t("msg-pack-read-only"));
         return;
     }
-    let destino = app.panes[otro].dir().clone();
-    match backend
-        .copy(&raiz, &destino, TransferOptions::default())
-        .await
-    {
+    let dest = app.panes[other].dir().clone();
+    match backend.copy(&raiz, &dest, TransferOptions::default()).await {
         Ok(task) => {
             app.message = Some(t("msg-unpack-started"));
             app.board.push(&task, None);
@@ -365,17 +362,17 @@ pub async fn desempaqueta(app: &mut App, backend: &Backend) {
 }
 
 /// `pane.test-archive` (#132): comprueba el contenedor bajo el cursor.
-pub async fn comprueba_archivo(app: &mut App, backend: &Backend) {
-    let Some(entrada) = app.focused().selected().cloned() else {
+pub async fn test_archive(app: &mut App, backend: &Backend) {
+    let Some(entry) = app.focused().selected().cloned() else {
         return;
     };
-    if crate::nav::archive_root_for(&entrada).is_none() {
+    if crate::nav::archive_root_for(&entry).is_none() {
         app.message = Some(t("msg-unpack-not-archive"));
         return;
     }
     match backend
         .test_archive(norte_proto::methods::ArchiveTestParams {
-            path: entrada.path.clone(),
+            path: entry.path.clone(),
         })
         .await
     {
@@ -389,22 +386,22 @@ pub async fn comprueba_archivo(app: &mut App, backend: &Backend) {
 
 /// `pane.combine-files` (#132): junta los trozos a partir del `.001` bajo el
 /// cursor.
-pub async fn junta_trozos(app: &mut App, backend: &Backend) {
-    let Some(entrada) = app.focused().selected().cloned() else {
+pub async fn combine_pieces(app: &mut App, backend: &Backend) {
+    let Some(entry) = app.focused().selected().cloned() else {
         return;
     };
-    let nombre = entrada
+    let name = entry
         .path
         .file_name()
         .map(|s| s.as_bytes().to_vec())
         .unwrap_or_default();
     // Solo desde el PRIMER trozo: empezar por el `.007` uniría media cosa, y
     // el core ya solo sabe buscar hacia delante.
-    let Some(base) = nombre
+    let Some(base) = name
         .len()
         .checked_sub(4)
-        .filter(|n| nombre[*n] == b'.' && &nombre[n + 1..] == b"001")
-        .map(|n| nombre[..n].to_vec())
+        .filter(|n| name[*n] == b'.' && &name[n + 1..] == b"001")
+        .map(|n| name[..n].to_vec())
     else {
         app.message = Some(t("msg-combine-needs-first"));
         return;
@@ -416,7 +413,7 @@ pub async fn junta_trozos(app: &mut App, backend: &Backend) {
     let destino = app.focused().dir().join(seg);
     match backend
         .combine_files(norte_proto::methods::FileCombineParams {
-            first: entrada.path,
+            first: entry.path,
             dest: destino,
         })
         .await
@@ -542,10 +539,10 @@ mod bulk_tests {
     #[test]
     fn a_bulk_transfer_submits_every_item_not_just_the_first() {
         let items = vec![vp("mem:///src/a"), vp("mem:///src/b"), vp("mem:///src/c")];
-        let pares = transfer_dests(&items, &vp("mem:///dst"));
-        assert_eq!(pares.len(), 3, "una task POR ítem");
+        let pairs = transfer_dests(&items, &vp("mem:///dst"));
+        assert_eq!(pairs.len(), 3, "una task POR ítem");
         assert_eq!(
-            pares.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
+            pairs.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
             vec![vp("mem:///dst/a"), vp("mem:///dst/b"), vp("mem:///dst/c")],
         );
     }
@@ -557,10 +554,10 @@ mod bulk_tests {
         let raw = b"caf\xff\xfe.txt".to_vec();
         let seg = norte_proto::Segment::new(raw.clone()).expect("segmento");
         let from = vp("mem:///src").join(seg);
-        let pares = transfer_dests(std::slice::from_ref(&from), &vp("mem:///dst"));
-        assert_eq!(pares.len(), 1);
+        let pairs = transfer_dests(std::slice::from_ref(&from), &vp("mem:///dst"));
+        assert_eq!(pairs.len(), 1);
         assert_eq!(
-            pares[0].1.file_name().map(|s| s.as_bytes().to_vec()),
+            pairs[0].1.file_name().map(|s| s.as_bytes().to_vec()),
             Some(raw),
             "los bytes del nombre viajan intactos al destino",
         );
@@ -572,8 +569,8 @@ mod bulk_tests {
     #[test]
     fn a_same_directory_transfer_maps_each_item_onto_itself() {
         let items = vec![vp("mem:///src/a")];
-        let pares = transfer_dests(&items, &vp("mem:///src"));
-        assert_eq!(pares[0].0, pares[0].1);
+        let pairs = transfer_dests(&items, &vp("mem:///src"));
+        assert_eq!(pairs[0].0, pairs[0].1);
     }
 
     /// Una raíz de scheme no tiene nombre que colgar del destino: se
