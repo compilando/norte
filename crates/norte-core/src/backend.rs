@@ -2595,7 +2595,7 @@ pub mod remote {
             let cursor = st.cursor.take();
             let page: FsListResult = st
                 .backend
-                .call_timed(
+                .call_timed_guarded(
                     methods::FS_LIST,
                     &FsListParams {
                         path: st.dir.clone(),
@@ -3167,6 +3167,15 @@ pub mod remote {
         /// daemon envuelve en su brazo de cancelación (#72) todos esos
         /// métodos MENOS `index.build`: para ese el guard es best-effort (el
         /// `rpc.cancel` no encuentra dispatch que cortar).
+        ///
+        /// **También lo usan las LECTURAS** (`fs.list`, `fs.stat`, `fs.read`,
+        /// `fs.capabilities`) desde #248, y ahí no protege un efecto a medias
+        /// —una lectura no deja ninguno— sino la CONEXIÓN: `serve_connection`
+        /// despacha en serie, así que una lectura abandonada —el presupuesto
+        /// de cinco segundos de la sesión (#235), un future dropeado— dejaba a
+        /// todas las peticiones siguientes esperando detrás de ella, cada una
+        /// muriendo en su propio [`CALL_TIMEOUT`] de 30 s. La TUI arrancaba,
+        /// se veía, y no servía para nada sin decirlo.
         async fn call_timed_guarded<P, R>(&self, method: &str, params: &P) -> Result<R, Error>
         where
             P: serde::Serialize,
@@ -3229,7 +3238,7 @@ pub mod remote {
             // Primera página síncrona: un `NotFound`/`TypeMismatch` sale en el
             // Result, no como primer item del stream (paridad con el embebido).
             let first: FsListResult = self
-                .call_timed(
+                .call_timed_guarded(
                     methods::FS_LIST,
                     &FsListParams {
                         path: dir.clone(),
@@ -3270,7 +3279,7 @@ pub mod remote {
             &self,
             path: &VPath,
         ) -> Result<FsCapabilitiesResult, Error> {
-            self.call_timed(
+            self.call_timed_guarded(
                 methods::FS_CAPABILITIES,
                 &FsCapabilitiesParams { path: path.clone() },
             )
@@ -3279,7 +3288,7 @@ pub mod remote {
 
         pub(super) async fn stat(&self, path: &VPath, attrs: Vec<String>) -> Result<Entry, Error> {
             let r: FsStatResult = self
-                .call_timed(
+                .call_timed_guarded(
                     methods::FS_STAT,
                     &FsStatParams {
                         path: path.clone(),
@@ -3337,7 +3346,7 @@ pub mod remote {
                     return Ok(out);
                 }
                 let r: FsReadResult = self
-                    .call_timed(
+                    .call_timed_guarded(
                         methods::FS_READ,
                         &FsReadParams {
                             path: path.clone(),
@@ -3546,6 +3555,34 @@ pub mod remote {
                 )
                 .await?;
             Ok(self.own_task(result.task_id, TaskKind::RenameBatch))
+        }
+
+        /// Como [`Self::call_timed`], traduciendo `METHOD_NOT_FOUND` a
+        /// [`Error::Unsupported`] (#247).
+        ///
+        /// Es la primitiva de «degrada Y dilo»: contra un daemon más viejo,
+        /// «tu daemon no sabe de esto» y un fallo de verdad no son lo mismo, y
+        /// un `session.get` que devuelve un error genérico deja al frontend
+        /// diciendo que la sesión falló cuando lo que pasa es que no la hay.
+        async fn call_no_method_is_unsupported<P, R>(
+            &self,
+            method: &str,
+            params: &P,
+        ) -> Result<R, Error>
+        where
+            P: serde::Serialize,
+            R: serde::de::DeserializeOwned,
+        {
+            let client = self.client().await?;
+            match tokio::time::timeout(CALL_TIMEOUT, client.call::<_, R>(method, params)).await {
+                Ok(Err(ClientError::Rpc(ref rpc)))
+                    if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+                {
+                    Err(Error::Unsupported)
+                }
+                Ok(res) => res.map_err(to_taxonomy),
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            }
         }
 
         /// `fs.rename_batch_report` (0.36.0): informe del lote. Un daemon N-1
@@ -4009,7 +4046,7 @@ pub mod remote {
         /// es la dueña.
         pub(super) async fn session_get(&self) -> Result<(methods::Session, bool), Error> {
             let r: methods::SessionGetResult = self
-                .call_timed(methods::SESSION_GET, &serde_json::json!({}))
+                .call_no_method_is_unsupported(methods::SESSION_GET, &serde_json::json!({}))
                 .await?;
             Ok((r.session, r.owner))
         }
@@ -4022,7 +4059,7 @@ pub mod remote {
             body: serde_json::Value,
         ) -> Result<u64, Error> {
             let r: methods::SessionPutResult = self
-                .call_timed(
+                .call_no_method_is_unsupported(
                     methods::SESSION_PUT,
                     &methods::SessionPutParams {
                         version,

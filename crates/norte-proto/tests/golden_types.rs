@@ -3362,7 +3362,11 @@ fn method_names_frozen() {
     assert_eq!(methods::FILE_SPLIT_MAX_PARTS, 999);
     assert_eq!(methods::FILE_SPLIT_MIN_BYTES, 4096);
     assert_eq!(methods::ARCHIVE_TEST_MAX_FAILURES, 256);
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.50.0");
+    // 0.51.0 (#247): ni un tipo ni un campo nuevos — lo que cambió es lo que
+    // `session.put` ACEPTA (un esquema que este core no sabe leer se rehúsa,
+    // en vez de escribirse y matar la persistencia desde el arranque
+    // siguiente). Un bump por comportamiento del wire, que también cuenta.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.51.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

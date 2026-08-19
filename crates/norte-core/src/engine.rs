@@ -1259,6 +1259,22 @@ impl Engine {
             tracing::debug!("fs.dir_size sin rutas");
             return Err(Error::InvalidPath);
         };
+        // Raíces que se solapan se RECHAZAN, como en `fs.compare` y
+        // `sync.plan` (#247). Sin esto, `["file:///a", "file:///a/b"]` contaba
+        // `b` dos veces y devolvía un número mayor que el sitio que ocupa —
+        // justo lo contrario de para lo que existe el método, que es contestar
+        // «¿cabe esto en el destino?». Se rechaza en vez de deduplicar porque
+        // deduplicar es decidir por el llamante qué quiso decir, y la
+        // selección de un panel jamás anida (son hermanos): quien manda raíces
+        // anidadas lo hace desde un guion, y ahí un error es una respuesta.
+        for (i, a) in params.paths.iter().enumerate() {
+            for b in params.paths.iter().skip(i + 1) {
+                if let Some(relation) = structural_overlap(a, b) {
+                    tracing::debug!(?relation, "fs.dir_size con raíces solapadas");
+                    return Err(Error::OverlappingRoots { relation });
+                }
+            }
+        }
         // La cola del scheduler es la de la PRIMERA raíz. Una selección
         // mezclada de providers tiene que encolarse en algún sitio, y elegir
         // otro no cambiaría nada.

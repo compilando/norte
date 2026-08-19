@@ -233,5 +233,21 @@
       "646f632e747874"
     ],
     "display": "⟨zip+tar+file⟩/b.tar/!/inner.zip/!/doc.txt"
+  },
+  {
+    "description": "0.47.0 (ADR 0056): rar por delegación — el compuesto se PARSEA como cualquier otro; que el interior solo se sirva sobre file:// local es del engine, no del wire",
+    "wire": "rar+file:///home/o/a.rar/!/docs/x.txt",
+    "canonical_wire": "rar+file:///home/o/a.rar/!/docs/x.txt",
+    "scheme": "rar+file",
+    "authority": null,
+    "segments_hex": [
+      "686f6d65",
+      "6f",
+      "612e726172",
+      "21",
+      "646f6373",
+      "782e747874"
+    ],
+    "display": "⟨rar+file⟩/home/o/a.rar/!/docs/x.txt"
   }
 ]

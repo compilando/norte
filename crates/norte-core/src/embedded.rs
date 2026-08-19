@@ -1168,6 +1168,10 @@ pub async fn session_put(
             // daemon—, pero nombrarlo aquí es lo que hace que añadir un cierre
             // en este brazo sea un error de compilación y no un silencio.
             crate::ui_session::PutError::Sealed => norte_proto::Error::Cancelled,
+            // Mismo trato que en el daemon (#247): un esquema que este core no
+            // sabe leer no se escribe, porque escribirlo mata la persistencia
+            // desde el arranque siguiente.
+            crate::ui_session::PutError::UnknownSchema { .. } => norte_proto::Error::Unsupported,
         })?;
         // `take_dirty` y el volcado, bajo UN lock: es lo que hace que dos
         // escrituras a la vez no dejen en disco la vieja.

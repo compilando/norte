@@ -2215,6 +2215,21 @@ async fn handle_value(
                     // cobró— lo devuelve el `Drop` de `ApplyClaim` en el
                     // engine, que existe exactamente para este camino.
                     | methods::SYNC_APPLY
+                    // #248: las LECTURAS puras, y por otra razón. Aquí no hay
+                    // efecto que dejar a medias —una lectura no escribe nada,
+                    // así que dropear su dispatch no puede dejar rastro—; lo
+                    // que se libera es la CONEXIÓN. `serve_connection` despacha
+                    // en serie, así que un `fs.list` que el cliente abandonó
+                    // (el presupuesto de cinco segundos del arranque, #235)
+                    // seguía corriendo contra un provider colgado y TODAS las
+                    // peticiones siguientes esperaban detrás de él, muriendo
+                    // una a una en su `CALL_TIMEOUT` de 30 s. El cliente ya
+                    // manda el `rpc.cancel` (guard de `call_timed_guarded`);
+                    // sin este brazo no lo escuchaba nadie.
+                    | methods::FS_LIST
+                    | methods::FS_STAT
+                    | methods::FS_READ
+                    | methods::FS_CAPABILITIES
             );
             let response = if cancelable {
                 let cancel = CancellationToken::new();
@@ -2866,6 +2881,14 @@ fn handle_session_put(
             Err(RpcError::from(norte_proto::Error::LimitExceeded {
                 limit: norte_proto::Error::LIMIT_SESSION_BODY.to_owned(),
             }))
+        }
+        // `Unsupported` y no `InvalidPath`: lo que falta no es un parámetro
+        // bien formado, es un core capaz de leer ese esquema — «tu daemon es
+        // más viejo», que es exactamente lo que ese error dice en el resto del
+        // wire (#247).
+        Err(crate::ui_session::PutError::UnknownSchema { version, known }) => {
+            tracing::warn!(version, known, "session.put de un esquema desconocido");
+            Err(RpcError::from(norte_proto::Error::Unsupported))
         }
     }
 }

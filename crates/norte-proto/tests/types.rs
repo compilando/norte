@@ -1126,10 +1126,17 @@ fn version_ventana_actual() {
     // comportamiento que 0.46 existe para arreglar.
     //
     // 0.47.0 (roadmap ítem 11): `rar` entra en `ARCHIVE_FORMATS`. No mueve un
-    // byte de ningún mensaje: mueve qué schemes compuestos se pueden FORMAR.
-    // Un cliente 0.46 no forma `rar+file://…` —su whitelist no lo trae— y se
-    // queda sin la funcionalidad, que es la misma clase de pérdida silenciosa
-    // que desplaza la ventana en los bumps anteriores.
+    // byte de ningún mensaje: mueve qué schemes compuestos se pueden OFRECER.
+    // Un cliente 0.46 no los ofrece —su whitelist no los trae— y se queda sin
+    // la funcionalidad, que es la misma clase de pérdida silenciosa que
+    // desplaza la ventana en los bumps anteriores.
+    //
+    // Lo que NO es cierto, y aquí se decía (#247): que un 0.46 «no forma» ese
+    // path. `VPath::parse` no consulta la whitelist —solo `archive_compose` lo
+    // hace—, así que un `rar+file:///a.rar/!/x` guardado en un marcador, en el
+    // historial o en el cuerpo de una sesión lo parsea sin queja y se queda
+    // con un scheme desconocido y un `!` literal. Falla al pedirlo, que es
+    // aguas abajo y sin corromper nada; el bump sigue siendo MINOR.
     //
     // 0.48.0 (L2, la sesión de UI): `session.get` y `session.put` con sus
     // cuatro tipos. Aditivo —ningún tipo existente cambia de forma—, y aun así
@@ -1148,10 +1155,18 @@ fn version_ventana_actual() {
     // ventana se desplaza igual: un cliente 0.49 no sabe empaquetar. Lo que
     // NO cambia es el provider de archivos —sigue `READ_ONLY`, ADR 0018—, así
     // que no hay ninguna operación vieja que se comporte distinto.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.50.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.49.0"), "N-1");
+    //
+    // 0.51.0 (#247): NI un tipo ni un campo nuevos, y aun así bump — lo que
+    // cambia es lo que `session.put` acepta. Un `version` que el core no sabe
+    // leer se rehúsa con `Unsupported` en vez de escribirse, porque escribirlo
+    // dejaba la sesión «del futuro» desde el arranque siguiente y sin
+    // persistencia para siempre. La ventana se desplaza por lo de siempre y en
+    // la dirección menos habitual: contra un daemon 0.50 no se pierde
+    // funcionalidad, se pierde la PROTECCIÓN.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.51.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.50.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.48.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.49.9"),
         "N-2 fuera de la ventana"
     );
 }

@@ -163,6 +163,9 @@ pub struct MouseState {
     ///
     /// Vacío = ningún panel tiene pestañas, que es el caso de siempre.
     tab_zones: Vec<crate::ui::TabZone>,
+    /// Las filas pulsables del sidebar de sitios del último frame (#226).
+    /// Vacío = sidebar cerrado, o sin sitio donde pintarlo.
+    places_zones: Vec<crate::ui::PlaceZone>,
     /// La máquina de gestos compartida (`norte-frontend`).
     drag: Drag,
     /// `(cuándo, dónde)` del último click izquierdo, para el doble.
@@ -220,6 +223,7 @@ pub fn after_frame(
     geometry: Option<Vec<PaneGeometry>>,
     tab_zones: Vec<crate::ui::TabZone>,
     menu_zones: Vec<crate::ui::MenuZone>,
+    places_zones: Vec<crate::ui::PlaceZone>,
 ) {
     let vigencia = Vigencia {
         epochs: app
@@ -238,6 +242,7 @@ pub fn after_frame(
     app.mouse.geometry = geometry;
     app.mouse.tab_zones = tab_zones;
     app.mouse.menu_zones = menu_zones;
+    app.mouse.places_zones = places_zones;
 }
 
 /// Qué debe hacer el run loop tras un evento de ratón. Todo lo que se puede
@@ -256,6 +261,13 @@ pub enum After {
     /// del teclado (jamás un segundo camino que entre en directorios por su
     /// cuenta).
     Enter,
+    /// Se plegó o desplegó una sección del sidebar de sitios (#226):
+    /// desplegar las unidades es el momento de volver a pedirlas, y es el
+    /// MISMO camino que toma la tecla.
+    PlacesFolded,
+    /// Se activó una fila del sidebar: hay que llevar el listado a donde
+    /// diga `App::places_activate`, por el flujo de `cd` de siempre.
+    PlacesActivate,
 }
 
 /// El índice ABSOLUTO en `entries` de una posición PINTADA del pane.
@@ -423,6 +435,15 @@ fn tab_zone_at(app: &App, col: u16, row: u16) -> Option<crate::ui::TabZone> {
         .copied()
 }
 
+/// La fila del sidebar de sitios bajo `(col, row)`, si la hay (#226).
+fn place_zone_at(app: &App, col: u16, row: u16) -> Option<crate::ui::PlaceZone> {
+    app.mouse
+        .places_zones
+        .iter()
+        .find(|z| z.row == row && col >= z.x0 && col <= z.x1)
+        .copied()
+}
+
 /// Aplica lo que hace pulsar una zona de la barra de pestañas.
 fn apply_tab_zone(app: &mut App, z: crate::ui::TabZone) {
     // El panel de la barra pulsada pasa a tener el foco: pulsar una pestaña
@@ -465,6 +486,21 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     {
         apply_tab_zone(app, z);
         return After::Nothing;
+    }
+    // El sidebar de sitios, por lo mismo: sus celdas no son de ningún
+    // listado, así que un click ahí caía en «fuera de los panes» y no hacía
+    // nada — el panel se pintaba y no se podía tocar (#226). El arrastre se
+    // cancela: desde aquí no se arrastra nada.
+    if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
+        && let Some(z) = place_zone_at(app, ev.column, ev.row)
+    {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        return match app.places_click(z.index) {
+            crate::app::PlacesClick::Focused => After::Nothing,
+            crate::app::PlacesClick::Folded => After::PlacesFolded,
+            crate::app::PlacesClick::Activate => After::PlacesActivate,
+        };
     }
     let hit = hit_test(app, ev.column, ev.row);
     let m = mods(ev.modifiers);

@@ -36,6 +36,22 @@ pub enum PutError {
     /// La sesión está CERRADA: este proceso ya volcó por última vez.
     #[error("la sesión ya está cerrada; no queda quien la escriba")]
     Sealed,
+    /// El cuerpo dice ser de un esquema que este core no sabe LEER (#247).
+    ///
+    /// Aceptarlo era el peor de los desenlaces: el core volcaba a disco un
+    /// documento que su propio guard de carga rechaza, así que a partir del
+    /// siguiente arranque `session.get` contestaba «del futuro», la sesión
+    /// dejaba de tener dueña y la persistencia moría en silencio hasta que
+    /// alguien borrara el fichero a mano. Un `ntc` más nuevo contra un `norte`
+    /// más viejo —los dos `SCHEMA_VERSION` viven en crates distintos— es todo
+    /// lo que hacía falta.
+    #[error("el cuerpo es de la versión {version} y este core sabe {known}")]
+    UnknownSchema {
+        /// La que traía el cliente.
+        version: u32,
+        /// La más nueva que este core sabe leer.
+        known: u32,
+    },
 }
 
 /// La sesión viva del daemon: una por proceso, con su revisión y su dueña.
@@ -109,6 +125,18 @@ impl SessionStore {
         if g.session.revision != revision {
             return Err(PutError::Conflict {
                 current: g.session.revision,
+            });
+        }
+        // Un esquema que este core no sabe leer NO se escribe (#247). El
+        // guard vive aquí y no en el handler por lo mismo que el del tamaño:
+        // lo comprueba quien va a guardarlo, que es el único que sabe qué
+        // puede volver a leer. `0` es «el cliente no lo dijo» y también se
+        // rechaza: la sesión almacenada la lee `disk::load`, que decide por
+        // este número, y un cero acaba escrito junto a un cuerpo de verdad.
+        if version == 0 || version > crate::ui_session::disk::SCHEMA_VERSION {
+            return Err(PutError::UnknownSchema {
+                version,
+                known: crate::ui_session::disk::SCHEMA_VERSION,
             });
         }
         g.session.version = version;
@@ -268,6 +296,35 @@ mod tests {
         let g = s.get();
         assert_eq!(g.revision, 0);
         assert_eq!(g.version, 0, "sin esquema hasta que alguien escriba uno");
+    }
+
+    /// Un cuerpo de un esquema que este core no sabe LEER no se escribe
+    /// (#247).
+    ///
+    /// Aceptarlo era el peor desenlace posible: el core volcaba un documento
+    /// que su propio guard de carga rechaza, así que desde el arranque
+    /// siguiente la sesión quedaba «del futuro» para siempre, sin dueña y sin
+    /// persistencia, hasta que alguien borrase el fichero a mano. Un `ntc` más
+    /// nuevo contra un `norte` más viejo bastaba: los dos `SCHEMA_VERSION`
+    /// viven en crates distintos.
+    #[test]
+    fn un_esquema_que_este_core_no_sabe_leer_no_se_escribe() {
+        let s = SessionStore::default();
+        assert!(matches!(
+            s.put(disk::SCHEMA_VERSION + 1, 0, body(1)),
+            Err(PutError::UnknownSchema { .. })
+        ));
+        assert_eq!(s.get().revision, 0, "y no cuenta como escritura");
+        assert!(s.take_dirty().is_none(), "ni deja nada que volcar");
+        // El cero es «el cliente no lo dijo», y la sesión almacenada se lee
+        // POR ese número: escribirlo junto a un cuerpo de verdad es dejar un
+        // fichero que no se sabe interpretar.
+        assert!(matches!(
+            s.put(0, 0, body(1)),
+            Err(PutError::UnknownSchema { .. })
+        ));
+        // Y la versión que este core sabe leer sí entra.
+        assert_eq!(s.put(disk::SCHEMA_VERSION, 0, body(1)).ok(), Some(1));
     }
 
     /// Cada `put` aceptado sube la revisión, y la que devuelve es la que el

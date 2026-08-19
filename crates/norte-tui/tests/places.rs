@@ -146,6 +146,21 @@ fn app_con_sidebar() -> App {
     app
 }
 
+/// Pulsa el botón izquierdo en una celda, por el mismo camino que el run
+/// loop.
+fn pulsar_en(app: &mut App, col: u16, row: u16) -> norte_tui::mouse::After {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    norte_tui::mouse::handle(
+        app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        },
+    )
+}
+
 fn buffer_de(app: &App, w: u16, h: u16) -> ratatui::buffer::Buffer {
     let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
     terminal
@@ -338,6 +353,97 @@ fn layout_places_esta_atado_en_los_siete_presets_y_en_las_dos_pantallas() {
             );
         }
     }
+}
+
+/// El ratón: pulsar una fila la selecciona y trae el teclado; pulsarla otra
+/// vez la ACTIVA, que es lo mismo que `Enter` (#226).
+///
+/// El sidebar se envió con teclado y nada más: sus celdas no son de ningún
+/// listado, así que un click ahí caía en «fuera de los panes» y no hacía nada
+/// — un panel que se pinta y no se puede tocar.
+#[test]
+fn pulsar_una_fila_del_sidebar_la_selecciona_y_repulsarla_la_activa() {
+    let mut app = app_con_sidebar();
+    let area = ratatui::layout::Rect::new(0, 0, 100, 30);
+    let _ = buffer_de(&app, 100, 30);
+    let (geo, tabs, menus, sitios) = (
+        norte_tui::ui::pane_geometry(&app, area),
+        norte_tui::ui::tab_zones(&app, area),
+        norte_tui::ui::menu_zones(&app, area),
+        norte_tui::ui::places_zones(&app, area),
+    );
+    norte_tui::mouse::after_frame(&mut app, geo, tabs, menus, sitios);
+    let zonas = norte_tui::ui::places_zones(&app, area);
+    assert!(!zonas.is_empty(), "el sidebar tiene filas pulsables");
+    // La primera unidad: la fila 0 es la cabecera de la sección.
+    let unidad = zonas
+        .iter()
+        .find(|z| z.index == 1)
+        .copied()
+        .expect("la primera unidad se ve");
+
+    app.return_keys_to_panes();
+    let after = pulsar_en(&mut app, unidad.x0 + 1, unidad.row);
+    assert_eq!(after, norte_tui::mouse::After::Nothing, "solo selecciona");
+    assert_eq!(app.key_owner(), KeyOwner::Places, "y trae el teclado");
+    let cursor = app
+        .places_slot()
+        .and_then(|id| app.panes.places(id))
+        .map(norte_frontend::places::PlacesState::cursor);
+    assert_eq!(cursor, Some(1));
+
+    // La misma fila otra vez: eso es activar, y activarla la resuelve el run
+    // loop por el flujo de `cd` de siempre.
+    let after = pulsar_en(&mut app, unidad.x0 + 1, unidad.row);
+    assert_eq!(after, norte_tui::mouse::After::PlacesActivate);
+    assert!(
+        app.places_activate().is_some(),
+        "y hay sitio a donde llevar el listado"
+    );
+}
+
+/// Pulsar una CABECERA pliega su sección de una sola pulsación, y lo dice
+/// para que el run loop vuelva a pedir las unidades — el mismo camino que la
+/// tecla, y no un cuarto disparador de refresco (#226).
+#[test]
+fn pulsar_una_cabecera_pliega_su_seccion() {
+    let mut app = app_con_sidebar();
+    let area = ratatui::layout::Rect::new(0, 0, 100, 30);
+    let _ = buffer_de(&app, 100, 30);
+    let (geo, tabs, menus, sitios) = (
+        norte_tui::ui::pane_geometry(&app, area),
+        norte_tui::ui::tab_zones(&app, area),
+        norte_tui::ui::menu_zones(&app, area),
+        norte_tui::ui::places_zones(&app, area),
+    );
+    norte_tui::mouse::after_frame(&mut app, geo, tabs, menus, sitios);
+    let zonas = norte_tui::ui::places_zones(&app, area);
+    let cabecera = zonas
+        .iter()
+        .find(|z| z.index == 0)
+        .copied()
+        .expect("la cabecera se ve");
+    let filas_antes = app
+        .places_slot()
+        .and_then(|id| app.panes.places(id))
+        .map(|s| s.rows().len())
+        .expect("sidebar");
+
+    let after = pulsar_en(&mut app, cabecera.x0 + 1, cabecera.row);
+    assert_eq!(after, norte_tui::mouse::After::PlacesFolded);
+    let filas_ahora = app
+        .places_slot()
+        .and_then(|id| app.panes.places(id))
+        .map(|s| s.rows().len())
+        .expect("sidebar");
+    assert!(
+        filas_ahora < filas_antes,
+        "plegar esconde sus filas: {filas_antes} → {filas_ahora}"
+    );
+    assert!(
+        !app.places_drives_visible(),
+        "y las unidades quedan plegadas"
+    );
 }
 
 /// Con el teclado DENTRO del sidebar, `layout.grow` cambia el ancho DEL

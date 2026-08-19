@@ -157,7 +157,19 @@ impl SessionBody {
         }
     }
 
-    /// El cuerpo como documento JSON, con su `version` dentro.
+    /// El cuerpo como documento JSON.
+    ///
+    /// **Sin `version` dentro** desde #247: el esquema del cuerpo lo declara
+    /// [`norte_proto::methods::SessionPutParams::version`], que es el campo
+    /// que el protocolo documenta y el único que el core mira. Había DOS, y
+    /// el documentado no lo leía nadie — un cliente ajeno que hiciera lo que
+    /// dice el contrato (poner un cuerpo v2 y `version: 2` en el sobre)
+    /// llegaba a un lector que solo miraba la copia de dentro, la veía
+    /// ausente, la tomaba por 0 y se comía los campos que no entendía.
+    ///
+    /// Un cuerpo escrito por una versión anterior SÍ trae la copia, y
+    /// [`Self::from_value`] la sigue leyendo: quitarla de aquí no puede
+    /// invalidar lo que ya está en disco.
     ///
     /// # Panics
     ///
@@ -165,29 +177,32 @@ impl SessionBody {
     /// con clave no-string la tiene numérica.
     #[must_use]
     pub fn to_value(&self) -> serde_json::Value {
-        let mut v = serde_json::to_value(self).expect("SessionBody serializa siempre");
-        if let Some(obj) = v.as_object_mut() {
-            obj.insert(
-                "version".to_owned(),
-                serde_json::Value::from(SCHEMA_VERSION),
-            );
-        }
-        v
+        serde_json::to_value(self).expect("SessionBody serializa siempre")
     }
 
     /// Lee un cuerpo, comprobando la versión ANTES que la forma.
     ///
+    /// `envelope` es la versión que declara el SOBRE
+    /// ([`norte_proto::methods::Session::version`]), que es la que el
+    /// protocolo documenta. Manda la MAYOR de las dos —el sobre y la copia
+    /// que los cuerpos antiguos llevan dentro—, porque las dos son una
+    /// afirmación de quién lo escribió y rehusar es lo seguro: leer un cuerpo
+    /// más nuevo del que se entiende y volver a escribirlo pierde campos en
+    /// silencio, que es lo que ADR 0059 promete que no pasa (#247).
+    ///
     /// # Errors
     ///
-    /// [`SessionError::FromTheFuture`] si lo escribió un binario más nuevo, y
-    /// [`SessionError::Malformed`] si no encaja con el esquema.
-    pub fn from_value(v: &serde_json::Value) -> Result<Self, SessionError> {
+    /// [`SessionError::FromTheFuture`] si lo escribió un binario más nuevo,
+    /// [`SessionError::Malformed`] si no encaja con el esquema y
+    /// [`SessionError::BadLayout`] si trae una disposición inservible.
+    pub fn from_value(envelope: u32, v: &serde_json::Value) -> Result<Self, SessionError> {
         // Primero la versión: rehusar un cuerpo del futuro no puede depender
         // de que su forma le encaje a este binario.
-        let version = v
+        let dentro = v
             .get("version")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
+        let version = dentro.max(u64::from(envelope));
         if version > u64::from(SCHEMA_VERSION) {
             return Err(SessionError::FromTheFuture {
                 version: u32::try_from(version).unwrap_or(u32::MAX),
@@ -446,7 +461,7 @@ mod tests {
         };
         let v = body.to_value();
         assert!(matches!(
-            SessionBody::from_value(&v),
+            SessionBody::from_value(SCHEMA_VERSION, &v),
             Err(SessionError::BadLayout { .. })
         ));
     }
@@ -558,7 +573,7 @@ mod tests {
         s.cursor = 12;
         s.show_hidden = true;
         b.slots.insert(1, s);
-        let vuelta = SessionBody::from_value(&b.to_value()).expect("parsea");
+        let vuelta = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("parsea");
         assert_eq!(vuelta, b);
     }
 
@@ -577,7 +592,7 @@ mod tests {
                     ..slot("file:///casa")
                 },
             );
-            let vuelta = SessionBody::from_value(&b.to_value()).expect("parsea");
+            let vuelta = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("parsea");
             assert_eq!(
                 vuelta.slots[&1].path.file_name().map(Segment::as_bytes),
                 ruta.file_name().map(Segment::as_bytes),
@@ -611,7 +626,7 @@ mod tests {
         );
         let mut b = SessionBody::default();
         b.layouts.insert("default".into(), arbol.clone());
-        let vuelta = SessionBody::from_value(&b.to_value()).expect("parsea");
+        let vuelta = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("parsea");
         assert_eq!(vuelta.layouts["default"], arbol);
     }
 
@@ -729,7 +744,7 @@ mod tests {
                 "sort": { "column": "creacion", "dir": "asc", "dirs_first": true },
             }},
         });
-        let b = SessionBody::from_value(&v).expect("parsea");
+        let b = SessionBody::from_value(SCHEMA_VERSION, &v).expect("parsea");
         assert_eq!(b.slots[&1].sort, SortSpec::default());
         assert_eq!(b.slots[&1].path, vp("file:///casa"));
         assert_eq!(
@@ -745,7 +760,7 @@ mod tests {
     fn un_esquema_del_futuro_se_rehusa() {
         let v = serde_json::json!({ "version": SCHEMA_VERSION + 1, "layouts": {}, "slots": {} });
         assert!(matches!(
-            SessionBody::from_value(&v),
+            SessionBody::from_value(SCHEMA_VERSION, &v),
             Err(SessionError::FromTheFuture { .. })
         ));
     }
@@ -762,7 +777,7 @@ mod tests {
                 "columns": ["name", "columna-de-otro-binario"],
             }},
         });
-        let b = SessionBody::from_value(&v).expect("parsea");
+        let b = SessionBody::from_value(SCHEMA_VERSION, &v).expect("parsea");
         assert_eq!(b.slots[&1].columns, vec!["name".parse().expect("name")]);
         assert_eq!(b.slots[&1].path, vp("file:///casa"));
     }

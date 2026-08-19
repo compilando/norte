@@ -89,6 +89,9 @@ independently through `PROTOCOL_VERSION`.
   name promises: it releases the session, so the socket closes now instead of
   when it eventually times out, and sends the panel home. On a local panel it
   says there is nothing to close rather than answering "done" (#140).
+  On the wire that is protocol **0.49.0**, together with `fs.dir_size` below:
+  `connection.close` closes by PATH, not by a session key the frontend has no
+  reason to know.
 
 - **F4 edits.** It opened the file with the system handler, which is a
   different thing and is what #133 was about. `pane.edit` now hands the file to
@@ -110,7 +113,10 @@ independently through `PROTOCOL_VERSION`.
   says so while it counts. `pane.dir-size` (Ctrl+L in TC, Alt+Shift+S in
   Krusader) counts without opening anything, over what you marked. Counting is a
   cancellable task like any other, and an unreadable folder in the middle of a
-  big tree costs its own subtree rather than the whole count (#139).
+  big tree costs its own subtree rather than the whole count (#139). On the
+  wire that is protocol **0.49.0**: `fs.dir_size` delivers its answer through
+  the PROGRESS of a task instead of a result type of its own — the last
+  snapshot is the result.
 
 - **Sorting has keys now.** Sort the focused panel by name, extension, size or
   date without opening anything; pressing the one already in use reverses it,
@@ -128,6 +134,54 @@ independently through `PROTOCOL_VERSION`.
   and were waiting for the commands to exist.
 
 ### Fixed
+
+- **The session's schema version has one home now.** Two numbers described the
+  same document and the documented one was read by nobody: the protocol says
+  `Session.version` is the body's schema, and norte's own frontends instead
+  wrote — and read — an undocumented copy inside the body. A client following
+  the written contract (`version: 2` in the envelope, a v2 body) reached a
+  reader that saw no copy, took it for version 0, dropped every field it did
+  not understand and wrote the remains back. And the core accepted a `put`
+  whose version it could not read, which wrote a file it would refuse from the
+  next start onwards — a newer terminal against an older daemon killed
+  persistence permanently, until the file was deleted by hand. The reader now
+  takes the envelope's version (the greater of the two, so bodies already on
+  disk still read), and the core refuses a schema it cannot read with "your
+  daemon is older" instead of writing it. On the wire that is protocol
+  **0.51.0** and **ADR 0062**; the two decisions protocol 0.49.0 made without
+  one are recorded in **ADR 0063** (#247).
+
+- **Counting a folder no longer counts anything twice.** `fs.dir_size` took a
+  list of roots and summed them with no overlap check, so `/a` and `/a/b`
+  together reported more than the space they occupy — the opposite of the
+  question the method exists to answer. Overlapping roots are refused now, the
+  same as `fs.compare` and `sync.plan` do, and the method's own documentation
+  stops claiming a number it does not compute: it sums apparent size, does not
+  deduplicate hard links, and has no way yet to say that an unreadable subtree
+  made the total a floor (#247).
+
+- **An abandoned listing no longer wedges the connection.** A daemon serves one
+  request at a time per connection, and a read that the client stopped waiting
+  for — the five-second budget the session restore now uses, or any dropped
+  future — kept running against the stuck provider with everything behind it
+  queued, each request dying at its own thirty-second timeout. The terminal
+  came up, drew itself and did nothing, without saying why. Reads now send
+  `rpc.cancel` when abandoned, like mutations always have, and the daemon acts
+  on it for `fs.list`, `fs.stat`, `fs.read` and `fs.capabilities` — dropping a
+  read leaves nothing half-done, which is why they can be cut at all (#248).
+
+### Added
+
+- **The places sidebar answers the mouse.** It shipped keyboard-only: clicking
+  a drive or a favourite did nothing, because its cells belong to no listing
+  and the hit test landed outside every pane. A click now selects the row and
+  brings the keyboard over, clicking the selected row activates it — the same
+  thing `Enter` does — and clicking a section header folds or unfolds it, which
+  is what the arrow it already draws promises. Unfolding the drives asks for
+  them again through the same path the key uses, not a fourth refresh trigger.
+  The clickable rows are measured by the function that paints them, scroll
+  offset included, so a click cannot activate the row next to the one under the
+  pointer (#226).
 
 - **The GUI's mirror can be narrowed to a selection.** The diff pane had no
   mark gesture, so `include` went out as "the whole tree" every time: under
@@ -374,7 +428,9 @@ independently through `PROTOCOL_VERSION`.
   screen and then goes its own way: it says so when it opens, and it never
   writes over the first one's state. Neither does an older norte started on a
   session a newer one wrote — it starts from your configuration and leaves the
-  file alone.
+  file alone. On the wire that is protocol **0.48.0** (ADR 0059): `session.get`
+  and `session.put`, with a body the core stores, versions and hands back
+  without reading.
 
 - **Five screens to choose from, instead of one.** `orthodox` is what norte has
   always looked like and still the default. `simple` is one panel, for a narrow
@@ -459,7 +515,10 @@ independently through `PROTOCOL_VERSION`.
   rather than quietly downloaded whole. If you want to choose the program
   yourself, `[archive] rar_delegate` in your `norte.toml` does it — and it is
   ignored from a repository's own config file, because a folder you happen to
-  `cd` into does not get to pick which binaries run.
+  `cd` into does not get to pick which binaries run. On the wire that is
+  protocol **0.47.0** (ADR 0056): `rar` joins the composed-scheme whitelist,
+  which is what a client may OFFER — it does not stop an older one from
+  parsing such a path it is handed.
 
 - **Upgrading norte no longer drops what you had open.** Replacing a running
   daemon used to look identical, from a window's point of view, to somebody
@@ -477,7 +536,9 @@ independently through `PROTOCOL_VERSION`.
   What does not survive: a synchronisation you approved but had not applied has
   to be planned again, because a plan belongs to the connection that approved it
   — deliberately, so nobody else can redeem it. `norte daemon stop --handover`
-  is the switch, for whoever is doing the replacing.
+  is the switch, for whoever is doing the replacing. On the wire that is
+  protocol **0.46.0** (ADR 0055): `daemon.going_away` says which of the two is
+  happening before the socket closes.
 
 - **The graphical interface notices changes it did not make.** Something else
   writes a file into a folder you are looking at — another program, a download,

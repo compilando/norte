@@ -2770,9 +2770,83 @@ fn draw_places(
         })
         .collect();
     let list = List::new(items).highlight_style(theme.role(Role::Selection));
-    let mut estado = ListState::default();
+    // El desplazamiento se calcula AQUÍ y no lo decide el widget, para que
+    // `places_zones` pueda decir con qué fila del modelo se corresponde cada
+    // fila de la pantalla (#226). Es el mismo número que ratatui elegía por su
+    // cuenta —desplazamiento mínimo para que el cursor se vea, partiendo de
+    // cero en cada frame—, así que la pantalla no cambia; lo que cambia es que
+    // ahora hay UNA fuente y el ratón la puede leer.
+    let mut estado = ListState::default().with_offset(if con_teclado {
+        places_offset(state.cursor(), inner.height as usize)
+    } else {
+        0
+    });
     estado.select(con_teclado.then(|| state.cursor()));
     frame.render_stateful_widget(list, inner, &mut estado);
+}
+
+/// Primera fila del modelo que se ve, para un cursor y un alto.
+///
+/// Desplazamiento MÍNIMO para que el cursor entre, empezando de cero: es lo
+/// que hacía el widget con un `ListState` nuevo en cada frame, escrito para
+/// que el hit test del ratón no tenga que adivinarlo.
+const fn places_offset(cursor: usize, height: usize) -> usize {
+    cursor.saturating_sub(height.saturating_sub(1))
+}
+
+/// Una fila pulsable del sidebar de sitios, en el frame de `area`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaceZone {
+    /// Fila de la pantalla.
+    pub row: u16,
+    /// Primera columna, inclusive.
+    pub x0: u16,
+    /// Última columna, inclusive.
+    pub x1: u16,
+    /// Índice dentro de [`norte_frontend::places::PlacesState::rows`].
+    pub index: usize,
+}
+
+/// Las filas pulsables del sidebar, en el frame de `area`.
+///
+/// Vive junto al pintado y comparte con él el reparto y el desplazamiento
+/// —igual que [`tab_zones`] y por lo mismo—: medir por un lado y pintar por
+/// otro es cómo un click acaba activando la fila de al lado.
+#[must_use]
+pub fn places_zones(app: &App, area: Rect) -> Vec<PlaceZone> {
+    let res = resolved_for(app, area);
+    let Some((id, rect)) = placed_of_kind(&res, &app.layout, "places") else {
+        return Vec::new();
+    };
+    let Some(state) = app.panes.places(id) else {
+        return Vec::new();
+    };
+    // El interior del bloque: el marco no es pulsable.
+    let inner = Block::default().borders(Borders::ALL).inner(rect);
+    if inner.width == 0 || inner.height == 0 {
+        return Vec::new();
+    }
+    let offset = if app.key_owner() == crate::app::KeyOwner::Places {
+        places_offset(state.cursor(), inner.height as usize)
+    } else {
+        0
+    };
+    (0..inner.height as usize)
+        .filter_map(|fila| {
+            let index = offset.checked_add(fila)?;
+            if index >= state.rows().len() {
+                return None;
+            }
+            Some(PlaceZone {
+                row: inner
+                    .y
+                    .saturating_add(u16::try_from(fila).unwrap_or(u16::MAX)),
+                x0: inner.x,
+                x1: inner.x.saturating_add(inner.width).saturating_sub(1),
+                index,
+            })
+        })
+        .collect()
 }
 
 /// El texto con su badge de nombre hostil delante, si lo lleva.
