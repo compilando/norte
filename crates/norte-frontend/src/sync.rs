@@ -408,6 +408,34 @@ pub fn undo_glyph(undo: StepUndo) -> char {
     }
 }
 
+/// The sentence for a refusal from [`include_from_rows`].
+///
+/// Here and not in a frontend because BOTH have to say it: the terminal grew
+/// the marks first and kept this translation to itself, and when the graphical
+/// diff pane learnt to mark (#249) the alternative was a second copy of three
+/// phrases about a destructive plan. All three REFUSE rather than narrowing: a
+/// selection that shrinks by itself leaves the reader approving something else
+/// — or, in the root's case, the whole tree.
+///
+/// ```
+/// use norte_frontend::sync::{IncludeError, include_error_message};
+/// use norte_i18n::Lang;
+/// let msg = include_error_message(&IncludeError::RootSelected, Lang::En);
+/// assert!(!msg.is_empty());
+/// ```
+#[must_use]
+pub fn include_error_message(e: &IncludeError, lang: Lang) -> String {
+    match e {
+        IncludeError::TooMany { marked, max } => ta_in(
+            lang,
+            "msg-sync-too-many-marks",
+            &[("n", &marked.to_string()), ("max", &max.to_string())],
+        ),
+        IncludeError::Unrooted => t_in(lang, "msg-sync-mark-outside-roots"),
+        IncludeError::RootSelected => t_in(lang, "msg-sync-mark-is-the-root"),
+    }
+}
+
 /// The reader's word for a [`StepUndo`].
 ///
 /// ```

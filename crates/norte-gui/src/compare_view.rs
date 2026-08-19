@@ -151,6 +151,29 @@ pub fn open(slot: &mut Option<CompareView>, started: Started) -> Option<TaskId> 
     superseded
 }
 
+/// La lista `include` que sale de las filas MARCADAS del panel, o el motivo
+/// por el que no hay una (#249).
+///
+/// Aquí y no dentro de `App::start_sync` para que se pueda probar sin ventana:
+/// lo que hacía falta demostrar es que las marcas LLEGAN al plan, y el defecto
+/// era exactamente que no llegaban —`include: None` incondicional, o sea el
+/// árbol entero, o sea, bajo `Mirror`, un `DeleteTree` por cada huérfano del
+/// destino—. QUÉ cuenta como negativa y contra qué raíz se mide cada marca lo
+/// decide [`norte_frontend::sync::include_from_rows`], que es la misma que usa
+/// la TUI: dos respuestas a «qué entra en el plan» es la clase de divergencia
+/// que produce un plan plausible sobre el árbol equivocado.
+///
+/// # Errors
+/// Lo que devuelva aquella; el llamante lo traduce con
+/// [`norte_frontend::sync::include_error_message`].
+pub fn include_from_marks(
+    run: &norte_frontend::compare::CompareView,
+    source: &norte_proto::VPath,
+    dest: &norte_proto::VPath,
+) -> Result<Option<Vec<norte_proto::methods::RelPath>>, norte_frontend::sync::IncludeError> {
+    norte_frontend::sync::include_from_rows(source, dest, &run.pane.marked_rows())
+}
+
 /// La frase de un `fs.compare` RECHAZADO antes de existir Task alguna, o
 /// `None` si esa petición ya está SUPERADA.
 ///
@@ -473,6 +496,14 @@ pub enum Key {
     /// pedirse desde esta frontend era `Mirror`: el dispatch conocía un único
     /// punto de entrada y era el otro modo.
     Sync(norte_proto::methods::SyncMode),
+    /// Marcar o desmarcar la fila del cursor: lo que se marque siembra el
+    /// `include` del plan (#249).
+    ///
+    /// Sin esto, el espejo de esta frontend era SIEMPRE el árbol entero: cada
+    /// huérfano del destino un `DeleteTree`, y ninguna forma de reducirlo. Con
+    /// `Update` era inerte; con `Mirror` es la diferencia entre «borra estos
+    /// tres» y «borra todo lo que el origen no tiene».
+    Mark,
 }
 
 /// Traduce una tecla de GPUI (`"escape"`, `"pagedown"`, `"1"`…) a lo que
@@ -491,9 +522,34 @@ pub enum Key {
 ///   apagado y esa era la única pantalla de la que no se salía. Una ventana
 ///   tiene el botón de cerrar del gestor de ventanas, que no es algo que
 ///   este panel pueda comerse.
+/// * **`held` descarta la repetición de teclado, y solo para `s`/`m`.** Todas
+///   las demás teclas de este panel son locales; esas dos cuestan un recorrido
+///   RECURSIVO de los dos árboles, y cada pulsación sube `sync_gen` y lanza un
+///   `sync.plan` nuevo. Un plan superado solo se cancela cuando llega su
+///   propio `SyncPlanStarted`, un viaje de ida y vuelta después, así que
+///   mantener `m` pulsada dos segundos contra un par SFTP arrancaba decenas de
+///   recorridos concurrentes antes de que llegara la primera cancelación
+///   (#249). Moverse por la lista con la flecha pulsada sigue siendo lo
+///   normal.
+///
+///   **`held` no basta y no es el freno principal**: el backend de X11 de GPUI
+///   pone `is_held: false` SIEMPRE —la repetición automática llega como
+///   pulsaciones normales—, y solo el de Wayland lo marca. El freno que
+///   funciona en los dos es `App::awaiting_sync_plan`, que no deja salir una
+///   segunda petición mientras la primera está en vuelo. Esto es la mitad
+///   barata: en Wayland corta antes de construir nada.
 #[must_use]
-pub fn key_meaning(key: &str, modified: bool, running: bool, cancel_requested: bool) -> Key {
+pub fn key_meaning(
+    key: &str,
+    modified: bool,
+    running: bool,
+    cancel_requested: bool,
+    held: bool,
+) -> Key {
     if modified {
+        return Key::Ignore;
+    }
+    if held && matches!(key, "s" | "m") {
         return Key::Ignore;
     }
     match key {
@@ -518,6 +574,9 @@ pub fn key_meaning(key: &str, modified: bool, running: bool, cancel_requested: b
         // `sync_roots` no se alcanzaba con el panel abierto.
         "s" => Key::Sync(norte_proto::methods::SyncMode::Update),
         "m" => Key::Sync(norte_proto::methods::SyncMode::Mirror),
+        // `insert`, la misma tecla que la TUI: marcar es del lector sobre la
+        // FILA entera, no sobre uno de los dos lados.
+        "insert" => Key::Mark,
         // El rango del patrón es exactamente el de `CATEGORIES`, así que el
         // índice no puede salirse.
         "1" | "2" | "3" | "4" | "5" => key
@@ -715,6 +774,7 @@ pub fn render(
                                 render_row(
                                     row,
                                     selected == Some(row.id),
+                                    run.pane.is_marked(row.id),
                                     run.left_encoding,
                                     run.right_encoding,
                                     &palette,
@@ -830,6 +890,9 @@ pub fn render(
                 .items_center()
                 .px(px(sp::S))
                 .text_color(palette.dim)
+                // El hueco de la marca del lector, para que la cabecera caiga
+                // sobre sus columnas y no una celda a la izquierda.
+                .child(gpui::div().w(px(MARK_W)).flex_none())
                 .child(
                     gpui::div()
                         .flex_1()
@@ -868,10 +931,17 @@ pub fn render(
         )
 }
 
-/// Una fila: cara izquierda, las dos marcas, cara derecha.
+/// Ancho de la columna de la marca del lector. Fijo, a la izquierda del todo
+/// y fuera de las dos caras: es una decisión sobre la FILA, no sobre un lado
+/// (mismo sitio que en la TUI).
+const MARK_W: f32 = 12.0;
+
+/// Una fila: la marca del lector, cara izquierda, las dos marcas del
+/// veredicto, cara derecha.
 fn render_row(
     row: &CompareRow,
     selected: bool,
+    marked: bool,
     left_encoding: Option<norte_encoding::NameEncoding>,
     right_encoding: Option<norte_encoding::NameEncoding>,
     palette: &Palette,
@@ -918,7 +988,13 @@ fn render_row(
         // molde `format!` que `render_row` del listado.
         .id(gpui::SharedString::from(format!("compare-row-{}", row.id)))
         .role(gpui::Role::ListItem)
-        .aria_label(text.a11y.clone())
+        // La marca va TAMBIÉN en el nombre accesible: un lector de pantalla no
+        // ve el asterisco, y lo que está marcado es lo que el plan va a tocar.
+        .aria_label(gpui::SharedString::from(if marked {
+            format!("{} · {}", norte_i18n::t("gui-compare-marked"), text.a11y)
+        } else {
+            text.a11y.to_string()
+        }))
         .aria_selected(selected)
         .flex()
         .flex_row()
@@ -926,6 +1002,13 @@ fn render_row(
         .h(row_h)
         .px(px(sp::S))
         .rounded(px(sp::RADIUS_ROW))
+        .child(
+            gpui::div()
+                .w(px(MARK_W))
+                .flex_none()
+                .text_color(palette.warn)
+                .child(gpui::SharedString::from(if marked { "*" } else { " " })),
+        )
         .child(face(&text.left, "left"))
         .child(
             gpui::div()
@@ -1367,9 +1450,15 @@ mod tests {
     /// tras su review BLOCKER-1.
     #[test]
     fn el_primer_esc_cancela_y_el_segundo_cierra_pase_lo_que_pase() {
-        assert_eq!(key_meaning("escape", false, true, false), Key::CancelTask);
-        assert_eq!(key_meaning("escape", false, true, true), Key::Close);
-        assert_eq!(key_meaning("escape", false, false, false), Key::Close);
+        assert_eq!(
+            key_meaning("escape", false, true, false, false),
+            Key::CancelTask
+        );
+        assert_eq!(key_meaning("escape", false, true, true, false), Key::Close);
+        assert_eq!(
+            key_meaning("escape", false, false, false, false),
+            Key::Close
+        );
     }
 
     /// #188: las dos teclas de sincronizar, y la que NO es.
@@ -1384,28 +1473,105 @@ mod tests {
     fn las_dos_teclas_de_sincronizar_del_panel() {
         use norte_proto::methods::SyncMode;
         assert_eq!(
-            key_meaning("s", false, false, false),
+            key_meaning("s", false, false, false, false),
             Key::Sync(SyncMode::Update)
         );
         assert_eq!(
-            key_meaning("m", false, false, false),
+            key_meaning("m", false, false, false, false),
             Key::Sync(SyncMode::Mirror)
         );
         // Con modificador, nada: `ctrl+s` es de la aplicación, no del panel.
-        assert_eq!(key_meaning("s", true, false, false), Key::Ignore);
+        assert_eq!(key_meaning("s", true, false, false, false), Key::Ignore);
         // Y una letra cualquiera sigue sin significar nada aquí.
-        assert_eq!(key_meaning("z", false, false, false), Key::Ignore);
+        assert_eq!(key_meaning("z", false, false, false, false), Key::Ignore);
+    }
+
+    /// #249: lo marcado ACOTA el plan, y lo no marcado es el árbol entero.
+    ///
+    /// El defecto era `include: None` incondicional en `start_sync`: bajo
+    /// `Mirror`, cada huérfano del destino un `DeleteTree` y ninguna forma de
+    /// reducirlo desde esta frontend. La confirmación daba la cuenta, que era
+    /// lo único que lo salvaba.
+    #[test]
+    fn lo_marcado_acota_el_plan() {
+        let src = vp("file:///a");
+        let dst = vp("file:///b");
+        let mut slot = None;
+        let _ = open(&mut slot, arranque(1));
+        route_rows(
+            &mut slot,
+            TaskId::new(1),
+            vec![fila_same(1), fila_distinta(2)],
+        );
+        let view = slot.as_mut().expect("abierto");
+
+        // Sin marcas: el campo AUSENTE, que en el wire es «los dos árboles
+        // enteros». Jamás una lista vacía, que sería un plan de cero pasos.
+        assert_eq!(super::include_from_marks(&view.run, &src, &dst), Ok(None));
+
+        view.run.pane.toggle_mark(2);
+        let include = super::include_from_marks(&view.run, &src, &dst)
+            .expect("una marca dentro de las raíces")
+            .expect("hay selección");
+        assert_eq!(include.len(), 1, "solo la fila marcada: {include:?}");
+    }
+
+    /// #249: marcar filas, con la MISMA tecla que la TUI.
+    ///
+    /// Sin marcas, `include` iba siempre a `None` y el espejo de esta frontend
+    /// era el árbol entero: cada huérfano del destino un `DeleteTree`, y
+    /// ninguna forma de reducirlo desde aquí. Con `Update` era inerte; con
+    /// `Mirror` es la diferencia entre «borra estos tres» y «borra todo lo que
+    /// el origen no tiene».
+    #[test]
+    fn insert_marca_la_fila() {
+        assert_eq!(key_meaning("insert", false, false, false, false), Key::Mark);
+        // Con modificador no, como todo lo demás en este panel.
+        assert_eq!(
+            key_meaning("insert", true, false, false, false),
+            Key::Ignore
+        );
+        // Y la repetición SÍ vale aquí: marcar es local, y marcar una tira de
+        // filas seguidas es el gesto.
+        assert_eq!(key_meaning("insert", false, false, false, true), Key::Mark);
+    }
+
+    /// #249: la repetición de teclado NO encola planes — la mitad de Wayland.
+    ///
+    /// La otra mitad, la que funciona también en X11 (donde `is_held` es
+    /// siempre `false`), es `App::awaiting_sync_plan`: una petición en vuelo
+    /// no deja salir la siguiente.
+    ///
+    /// Cada pulsación de `s`/`m` sube `sync_gen` y lanza un `sync.plan`
+    /// nuevo, y un plan superado solo se cancela cuando llega su propio
+    /// `SyncPlanStarted`, un viaje de ida y vuelta después: mantener `m`
+    /// pulsada dos segundos contra un par SFTP arrancaba decenas de recorridos
+    /// recursivos concurrentes antes de la primera cancelación. Son las dos
+    /// únicas teclas de este panel que cuestan un viaje remoto.
+    #[test]
+    fn la_repeticion_no_encola_sincronizaciones_pero_si_mueve_el_cursor() {
+        use norte_proto::methods::SyncMode;
+        assert_eq!(key_meaning("s", false, false, false, true), Key::Ignore);
+        assert_eq!(key_meaning("m", false, false, false, true), Key::Ignore);
+        // La primera pulsación, la de verdad, sigue valiendo.
+        assert_eq!(
+            key_meaning("m", false, false, false, false),
+            Key::Sync(SyncMode::Mirror)
+        );
+        // Y todo lo demás es LOCAL: bajar con la flecha pulsada es lo normal.
+        assert_eq!(key_meaning("down", false, false, false, true), Key::Move(1));
+        assert_eq!(key_meaning("escape", false, false, false, true), Key::Close);
     }
 
     /// Un modificador no pinta nada aquí: sin este filtro `alt+1` toggleaba
     /// un filtro y `ctrl+tab` cambiaba de lado.
     #[test]
     fn un_modificador_no_significa_nada_en_el_panel() {
-        assert_eq!(key_meaning("1", true, false, false), Key::Ignore);
-        assert_eq!(key_meaning("escape", true, true, false), Key::Ignore);
-        assert_eq!(key_meaning("1", false, false, false), Key::Filter(0));
-        assert_eq!(key_meaning("5", false, false, false), Key::Filter(4));
-        assert_eq!(key_meaning("6", false, false, false), Key::Ignore);
+        assert_eq!(key_meaning("1", true, false, false, false), Key::Ignore);
+        assert_eq!(key_meaning("escape", true, true, false, false), Key::Ignore);
+        assert_eq!(key_meaning("1", false, false, false, false), Key::Filter(0));
+        assert_eq!(key_meaning("5", false, false, false, false), Key::Filter(4));
+        assert_eq!(key_meaning("6", false, false, false, false), Key::Ignore);
     }
 
     fn arranque(task_id: u64) -> Started {

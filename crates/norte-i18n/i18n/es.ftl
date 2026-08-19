@@ -867,7 +867,8 @@ compare-hint = tab lado · 1-5 filtro · ins marcar · s sinc · m espejo · ent
 # para sembrar un plan de sincronización, y esa superficie (#161) todavía no
 # está construida aquí. Prometer `s sinc` en un frontend que no sincroniza
 # sería un atajo documentado y muerto — este repo ya envió uno.
-gui-compare-hint = tab lado · 1-5 filtro · s sincr · m espejo · enter ir · esc cerrar
+gui-compare-hint = tab lado · 1-5 filtro · ins marcar · s sincr · m espejo · enter ir · esc cerrar
+gui-compare-marked = marcada
 compare-active-side = actuando sobre: { $side }
 compare-status-running = comparación: { $n } filas (comparando…)
 compare-status-done = comparación: { $n } filas

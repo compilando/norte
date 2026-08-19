@@ -871,7 +871,8 @@ compare-hint = tab side · 1-5 filter · ins mark · s sync · m mirror · enter
 # synchronisation plan, and that surface (#161) is not built here yet. A key
 # line that promised `s sync` in a frontend that cannot sync would be a
 # documented dead shortcut — this repository has shipped one already.
-gui-compare-hint = tab side · 1-5 filter · s sync · m mirror · enter go · esc close
+gui-compare-hint = tab side · 1-5 filter · ins mark · s sync · m mirror · enter go · esc close
+gui-compare-marked = marked
 compare-active-side = acting on: { $side }
 compare-status-running = compare: { $n } rows (comparing…)
 compare-status-done = compare: { $n } rows
