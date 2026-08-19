@@ -366,3 +366,254 @@ pub fn write_resume_prologue(out: &mut impl std::io::Write) -> std::io::Result<(
     )?;
     out.flush()
 }
+
+#[cfg(test)]
+mod suspend_tests {
+    use super::run_suspended;
+    use crate::app::{App, Modal, Pane};
+    use crate::gestures::{shell_remote_message, submit_command_line};
+    use norte_proto::VPath;
+
+    fn app_en(wire: &str) -> App {
+        let d = VPath::parse(wire).expect("wire de test");
+        App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
+    }
+
+    /// La terminal de control para los dos tests que suspenden de verdad, o
+    /// `None` con un aviso — jamás un salto mudo (estilo de los saltos de
+    /// wasm/MinIO).
+    ///
+    /// Tres condiciones, y las tres hacen falta:
+    ///
+    /// - `NORTE_TTY_TESTS`: sin el opt-in no se corre. Meter la terminal del
+    ///   desarrollador en la pantalla alternativa y en raw mode a mitad del
+    ///   gate es peor que no tener el test.
+    /// - una `/dev/tty` que abra: sin ella no hay nada que suspender.
+    /// - un **stdin** que sea terminal. Esto no es celo: `Terminal::clear`
+    ///   (ratatui 0.30) pregunta la posición del cursor con un DSR y ESPERA
+    ///   la respuesta POR STDIN. Bajo nextest stdin es `/dev/null` aunque el
+    ///   proceso corra dentro de tmux, así que la respuesta no llega nunca y
+    ///   la suspensión falla a los dos segundos por algo que no es un bug del
+    ///   producto. Comprobarlo aquí es lo que impide que ese artefacto se lea
+    ///   como un fallo.
+    fn tty_for_test() -> Option<crate::tty::TtyOut> {
+        use std::io::IsTerminal as _;
+        if std::env::var_os("NORTE_TTY_TESTS").is_none() {
+            eprintln!("skip: NORTE_TTY_TESTS unset (this one drives a real terminal)");
+            return None;
+        }
+        if !std::io::stdin().is_terminal() {
+            eprintln!("skip: stdin is not a terminal (the DSR of `clear` would never be answered)");
+            return None;
+        }
+        match crate::tty::open_controlling_terminal() {
+            Ok(out) => Some(out),
+            Err(e) => {
+                eprintln!("skip: no controlling terminal ({e})");
+                None
+            }
+        }
+    }
+
+    /// Un pane remoto NO abre shell: la negativa es que la conversión a ruta
+    /// nativa falle, y el mensaje NOMBRA el pane para que no parezca que la
+    /// tecla está rota.
+    #[test]
+    fn un_pane_remoto_no_tiene_donde_poner_un_shell() {
+        let app = app_en("sftp://host/x");
+        assert!(
+            norte_vfs_local::vpath_to_native(app.focused().dir()).is_err(),
+            "si esta conversión llegara a funcionar, el brazo abriría un \
+             shell en el sitio equivocado sin decir nada"
+        );
+        // `path_display` es quien decide la forma («⟨sftp host⟩/x»); lo que
+        // este test pincha es que el pane SE NOMBRA, no el formato.
+        let msg = shell_remote_message(&app);
+        assert!(msg.contains("sftp") && msg.contains("host"), "{msg}");
+    }
+
+    /// El nombre de un directorio puede traer bidi/invisibles, y esta línea
+    /// se pinta en la barra: sale SANEADA y con badge, jamás cruda.
+    #[test]
+    fn el_aviso_sanea_un_directorio_hostil() {
+        // RLO dentro del nombre: el clásico para invertir lo que se lee.
+        let app = app_en("sftp://host/a%E2%80%AEb");
+        let msg = shell_remote_message(&app);
+        assert!(
+            !msg.contains('\u{202E}'),
+            "el override bidi jamás llega a la barra: {msg:?}"
+        );
+        assert!(
+            msg.contains(crate::ui::HOSTILE_BADGE),
+            "y va marcado como hostil: {msg:?}"
+        );
+    }
+
+    /// El prompt de `pane.command-line` devuelve la línea TAL CUAL (un
+    /// espacio inicial es la convención `HISTCONTROL=ignorespace`, no basura
+    /// que recortar) y una línea en blanco no lanza nada.
+    #[test]
+    fn la_linea_de_comandos_no_recorta_y_rechaza_lo_vacio() {
+        let mut app = app_en("file:///tmp");
+        app.open_command_line();
+        for c in " make test".chars() {
+            app.command_line_push(c);
+        }
+        assert_eq!(app.command_line_confirm().as_deref(), Some(" make test"));
+        let mut app = app_en("file:///tmp");
+        app.open_command_line();
+        for c in "   ".chars() {
+            app.command_line_push(c);
+        }
+        assert!(app.command_line_confirm().is_none());
+        assert!(
+            matches!(app.modal, Some(Modal::CommandLine { error: Some(_), .. })),
+            "y el diagnóstico se queda bajo el campo"
+        );
+    }
+
+    /// El Enter de la línea de comandos arma `$SHELL -c CMD` con la línea
+    /// ENTERA como un solo argumento y el dir del pane como cwd.
+    #[test]
+    fn el_enter_de_la_linea_arma_shell_menos_c() {
+        let mut app = app_en("file:///tmp");
+        submit_command_line(&mut app, "ls | wc -l");
+        let p = app.pending_shell.expect("deja la suspensión pendiente");
+        assert_eq!(p.argv.len(), 3, "binario, -c y la línea: {:?}", p.argv);
+        assert_eq!(p.argv[1], std::ffi::OsString::from("-c"));
+        assert_eq!(
+            p.argv[2],
+            std::ffi::OsString::from("ls | wc -l"),
+            "la línea no se trocea: la parsea el shell"
+        );
+        assert_eq!(p.cwd, Some(std::path::PathBuf::from("/tmp")));
+        assert!(p.wait_for_key, "la salida tiene que poder leerse");
+        assert!(app.modal.is_none(), "y el prompt se cierra");
+    }
+
+    /// El pane se fue a un remoto entre abrir el prompt y confirmarlo: no se
+    /// ejecuta NADA (correrlo en el dir de norte sería hacerlo donde el
+    /// usuario no está mirando), se avisa, y el prompt se cierra igual.
+    #[test]
+    fn una_linea_confirmada_sobre_un_pane_remoto_no_ejecuta_nada() {
+        let mut app = app_en("sftp://host/x");
+        submit_command_line(&mut app, "rm -rf .");
+        assert!(app.pending_shell.is_none(), "nada que ejecutar");
+        assert!(app.message.is_some(), "y se dice por qué");
+        assert!(app.modal.is_none());
+    }
+
+    /// La regla de qué error gana cuando fallan varias cosas, probada SIN
+    /// terminal (review de S4, M6). El efecto —quién toca la pantalla— pide
+    /// una tty; la POLÍTICA no, y es donde vive lo que puede equivocarse.
+    #[test]
+    fn el_resultado_del_hijo_manda_sobre_la_espera_y_la_restauracion() {
+        use std::io::{Error, ErrorKind};
+        let ok_status = || {
+            // Un `ExitStatus` real sin lanzar nada: el de un hijo trivial.
+            std::process::Command::new("true")
+                .status()
+                .expect("`true` existe en cualquier unix")
+        };
+        // Todo bien: sale el status del hijo.
+        let r = super::suspension_outcome(Ok(Ok(Some(ok_status()))), Ok(()), Ok(()));
+        assert!(r.expect("ok").is_some());
+
+        // Sin hijo (argv vacío) tampoco es un error.
+        assert!(
+            super::suspension_outcome(Ok(Ok(None)), Ok(()), Ok(()))
+                .expect("ok")
+                .is_none()
+        );
+
+        // El error del hijo GANA al de la espera y al de la restauración: es
+        // la respuesta a lo que el usuario pidió.
+        let e = super::suspension_outcome(
+            Ok(Err(Error::new(ErrorKind::NotFound, "no shell"))),
+            Err(Error::other("espera")),
+            Err(Error::other("restore")),
+        )
+        .expect_err("el hijo falló");
+        assert_eq!(e.kind(), ErrorKind::NotFound, "{e}");
+
+        // Sin fallo del hijo, la espera va delante de la restauración.
+        let e = super::suspension_outcome(
+            Ok(Ok(None)),
+            Err(Error::other("espera")),
+            Err(Error::other("restore")),
+        )
+        .expect_err("falló la espera");
+        assert!(e.to_string().contains("espera"), "{e}");
+
+        // Y un fallo SOLO de la restauración se propaga: dejar la terminal a
+        // medias jamás se traga.
+        let e = super::suspension_outcome(Ok(Ok(None)), Ok(()), Err(Error::other("restore")))
+            .expect_err("falló la restauración");
+        assert!(e.to_string().contains("restore"), "{e}");
+    }
+
+    /// El aviso que precede a «pulsa una tecla» DEVUELVE la terminal a un
+    /// estado conocido antes de escribir nada (review de S4, L4): el hijo
+    /// pudo dejar SGR activo, el juego G1 de dibujo de líneas seleccionado o
+    /// el autowrap apagado, y `clear()` restituye atributos por celda pero no
+    /// esas tres cosas. Comprobable sin tty porque el prólogo escribe en
+    /// cualquier `Write`.
+    #[test]
+    fn el_prologo_resetea_la_terminal_antes_del_aviso() {
+        let mut out: Vec<u8> = Vec::new();
+        super::write_resume_prologue(&mut out).expect("escribe en un Vec");
+        let s = String::from_utf8(out).expect("UTF-8");
+        assert!(s.starts_with("\x1b[0m"), "SGR reset primero: {s:?}");
+        assert!(s.contains("\x1b(B"), "US-ASCII en G0: {s:?}");
+        assert!(s.contains("\x1b[?7h"), "autowrap on: {s:?}");
+        assert!(
+            s.contains("\r\n"),
+            "con retorno de carro: el raw mode que viene ya no traduce \\n"
+        );
+    }
+
+    /// La suspensión restaura la terminal en TODOS los caminos, incluido el
+    /// que es fácil de olvidar: un hijo que FALLA. Que la función devuelva
+    /// —con el status del hijo dentro— es la prueba de que el fallo no
+    /// cortocircuitó la restauración.
+    ///
+    /// Necesita una terminal de control DE VERDAD, así que es opt-in
+    /// (`NORTE_TTY_TESTS=1`): correrla en el gate metería a la terminal del
+    /// desarrollador en la pantalla alternativa y en raw mode a mitad de la
+    /// suite. Salta con un aviso, en el estilo de los saltos de wasm/MinIO,
+    /// jamás en silencio.
+    #[tokio::test]
+    async fn un_hijo_que_falla_no_se_salta_la_restauracion() {
+        let Some(out) = tty_for_test() else { return };
+        let mut term = crate::tty::init(out).expect("init");
+        let mut capture = crate::mouse::Capture::default();
+        let status = run_suspended(
+            &mut term,
+            &mut capture,
+            vec![std::ffi::OsString::from("false")],
+            None,
+            false,
+        )
+        .await
+        .expect("la suspensión devuelve");
+        let _ = crate::tty::restore(&mut term);
+        let status = status.expect("un argv no vacío tiene status");
+        assert!(
+            !status.success(),
+            "`false` falla, y eso es lo que se propaga"
+        );
+    }
+
+    /// Un argv VACÍO no lanza nada y no es un error: es `app.toggle-panels`.
+    #[tokio::test]
+    async fn un_argv_vacio_no_lanza_nada() {
+        let Some(out) = tty_for_test() else { return };
+        let mut term = crate::tty::init(out).expect("init");
+        let mut capture = crate::mouse::Capture::default();
+        let status = run_suspended(&mut term, &mut capture, Vec::new(), None, false)
+            .await
+            .expect("la suspensión devuelve");
+        let _ = crate::tty::restore(&mut term);
+        assert!(status.is_none(), "no hubo hijo, así que no hay status");
+    }
+}
