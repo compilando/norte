@@ -133,6 +133,16 @@ pub fn spelling_twins() -> Vec<SpellingTwin> {
             right: "greek_mu_twin",
             kind: TwinKind::CaseFold,
         },
+        // Orthodox / orthodox: el pliegue de toda la vida, en ASCII puro. Los
+        // otros ocho pares son exotica no-ASCII, así que una ruta que solo se
+        // rompe con mayúsculas corrientes —un nombre de disposición
+        // comparado byte a byte y recompuesto en un fichero (#245)— no tenía
+        // ninguna fixture que la pillara.
+        SpellingTwin {
+            left: "ascii_case_twin_upper",
+            right: "ascii_case_twin_lower",
+            kind: TwinKind::CaseFold,
+        },
         // ﬅ / ﬆ: la única ligadura con pliegue simple.
         SpellingTwin {
             left: "ligature_long_st",

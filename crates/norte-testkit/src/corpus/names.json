@@ -318,5 +318,20 @@
     "id": "full_fold_armenian_plain",
     "hex": "d5b4d5a52e747874",
     "why": "մե.txt (U+0574 U+0565) — the twin of `full_fold_armenian_ligature`: the two letters its ligature expands to under FULL case folding. Non-ASCII on BOTH sides, unlike the ß and ﬁ pairs, which is what makes it the pair that catches an expansion table written as if only ASCII came out the other end"
+  },
+  {
+    "id": "ascii_case_twin_upper",
+    "hex": "4f7274686f646f78",
+    "why": "Orthodox: the plain-ASCII case pair the corpus lacked — its eight other case twins are all non-ASCII exotica, so a path that only breaks under ordinary ASCII case folding had no fixture at all (#245)"
+  },
+  {
+    "id": "ascii_case_twin_lower",
+    "hex": "6f7274686f646f78",
+    "why": "orthodox: the twin of the above. ONE file on APFS/NTFS, two on ext4 — which is why a layout name has to be resolved byte-exactly against the directory"
+  },
+  {
+    "id": "win_drive_relative",
+    "hex": "433a",
+    "why": "C: — exactly ONE Path component on Windows (a Prefix), so any \"single component\" guard admits it, and `join` with it replaces the whole base (#246)"
   }
 ]

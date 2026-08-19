@@ -49,6 +49,38 @@ pub fn display_name(bytes: &[u8]) -> (String, bool) {
     (texto, lossy || masked)
 }
 
+/// [`display_name`] para un nombre del SISTEMA DE FICHEROS.
+///
+/// Un [`std::ffi::OsStr`] no es texto, y en Unix son bytes: se pintan por el
+/// mismo camino que cualquier otro nombre —lossy MARCADO, hazards
+/// enmascarados— sin tocar los bytes con los que se abre el fichero. En
+/// Windows no hay bytes que sacar sin pasar por UTF-16, así que se usa la
+/// conversión lossy de la plataforma y el flag se pone igual.
+///
+/// ```
+/// use std::ffi::OsStr;
+/// use norte_frontend::display_os_name;
+///
+/// assert_eq!(display_os_name(OsStr::new("mio")), ("mio".to_owned(), false));
+/// ```
+#[must_use]
+pub fn display_os_name(name: &std::ffi::OsStr) -> (String, bool) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        display_name(name.as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        let texto = name.to_string_lossy();
+        let (pintado, hostil) = display_name(texto.as_bytes());
+        (
+            pintado,
+            hostil || matches!(texto, std::borrow::Cow::Owned(_)),
+        )
+    }
+}
+
 /// [`display_name`] con REINTERPRETACIÓN opcional (#57, spec §6.1): con
 /// `Some(enc)`, un nombre NO-UTF8 se decodifica con `enc` para display en
 /// vez de al lossy `�` — los bytes jamás se mutan (regla 1) y el flag

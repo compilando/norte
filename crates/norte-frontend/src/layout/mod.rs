@@ -64,6 +64,11 @@ pub enum LayoutError {
     /// El fichero no es TOML válido, o no describe un árbol.
     #[error("el layout no se pudo leer: {0}")]
     Parse(String),
+    /// Un árbol sin ningún `browser` no es una disposición: es una pantalla
+    /// sin listado, y el frontend que la aplique se queda sin panel al que
+    /// apuntar.
+    #[error("la disposición no tiene ningún hueco de listado")]
+    NoBrowser,
     /// Los tamaños son índice-paralelos a los hijos.
     #[error("{count} tamaños para {children} hijos")]
     WeightsMismatch {
@@ -120,6 +125,19 @@ pub enum LayoutDiagnostic {
 pub fn validate(tree: &Node) -> Result<(), LayoutError> {
     if let Some(id) = tree.duplicate_slot_ids().first() {
         return Err(LayoutError::DuplicateSlotId(*id));
+    }
+    // Sin listado no hay disposición (#242). La regla es la misma que ya
+    // aplica `layout.close-slot` —«una pantalla sin ningún listado no es un
+    // layout, es un cuelgue con bordes»—, y aquí es donde hay que aplicarla:
+    // el frontend siembra un panel POR HUECO, así que un árbol que llame
+    // `places` al hueco donde estaba el listado no deja ninguno, y el primer
+    // acceso por lado panica en modo raw sobre la pantalla alternativa.
+    if !tree
+        .slot_ids()
+        .into_iter()
+        .any(|id| tree.kind_of(id).is_some_and(|k| *k == KindId::browser()))
+    {
+        return Err(LayoutError::NoBrowser);
     }
     validate_shape(tree)
 }
@@ -195,6 +213,38 @@ mod tests {
                 children: 2
             })
         );
+    }
+
+    /// Un árbol sin `browser` PASABA la validación, y entonces el frontend
+    /// sembraba el hueco con el kind que el árbol pedía —pisando el listado
+    /// que había en ese id— y el primer acceso por lado panicaba (#242).
+    /// Persistido en la sesión, panicaba en CADA arranque.
+    #[test]
+    fn un_arbol_sin_listado_no_es_una_disposicion() {
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(1), KindId::new("places")),
+                Node::slot(SlotId(4), KindId::new("status")),
+            ],
+        };
+        assert_eq!(validate(&arbol), Err(LayoutError::NoBrowser));
+    }
+
+    /// Un listado dentro de una pestaña que ahora no se ve SIGUE siendo un
+    /// listado: la pestaña activa cambia con una tecla, y rechazar el árbol
+    /// por dónde estaba el foco al guardarlo sería rechazar layouts sanos.
+    #[test]
+    fn un_listado_en_una_pestana_oculta_cuenta() {
+        let arbol = Node::Tabs {
+            active: 1,
+            children: vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::new("viewer")),
+            ],
+        };
+        assert_eq!(validate(&arbol), Ok(()));
     }
 
     #[test]

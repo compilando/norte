@@ -69,7 +69,8 @@ pub mod whichkey;
 
 pub use decoration::{BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_decoration};
 pub use display::{
-    cells, display_name, display_name_with, middle_ellipsis, path_display, path_display_with,
+    cells, display_name, display_name_with, display_os_name, middle_ellipsis, path_display,
+    path_display_with,
 };
 pub use format::{human_bytes, human_bytes_short};
 pub use modal::{

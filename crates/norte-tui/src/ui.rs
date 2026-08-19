@@ -11,7 +11,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState,
+    ScrollbarState, Wrap,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -565,13 +565,10 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
     if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::metadata::KIND)
         && let Some(e) = app.panes.metadata(id)
     {
-        draw_metadata(
-            frame,
-            rect,
-            e.as_ref(),
-            app,
-            app.key_owner() == crate::app::KeyOwner::Metadata,
-        );
+        // Sin borde de foco NUNCA: la hoja no toma el teclado, y un borde
+        // resaltado sobre un panel que no lee ninguna tecla era la mitad
+        // visible del control que no hacía lo que decía (#243).
+        draw_metadata(frame, rect, e.as_ref(), app, false);
     }
     draw_tasks(frame, tasks_area, app);
     draw_status(frame, status_area, app);
@@ -1599,9 +1596,6 @@ fn draw_layout_picker(
     theme: &TuiTheme,
     hint: &str,
 ) {
-    use norte_frontend::layout::{KindRegistry, presets};
-    use norte_frontend::layout_picker::preview;
-
     let filas: Vec<String> = p
         .rows()
         .iter()
@@ -1611,11 +1605,13 @@ fn draw_layout_picker(
             } else {
                 t("layout-picker-mine")
             };
-            // El nombre viene de `NAMES` o de un STEM de fichero, que el
-            // listador ya filtró a UTF-8; el enmascarado es cinturón, como en
-            // el picker de columnas.
-            let nombre = norte_encoding::mask_terminal_hazards(&r.name);
-            format!(" {nombre} · {procedencia}")
+            // El nombre es un STEM de fichero y puede no ser texto: lossy
+            // MARCADO con su badge y hazards enmascarados, como cualquier
+            // otro nombre de la pantalla (#246 m2/m3).
+            let (nombre, hostil) = norte_frontend::display_os_name(&r.name);
+            let nombre = norte_encoding::mask_terminal_hazards(&nombre);
+            let badge = if hostil { " ⚠" } else { "" };
+            format!(" {nombre}{badge} · {procedencia}")
         })
         .collect();
     // La nota del keymap habla de la fila BAJO EL CURSOR, no de la lista: es
@@ -1702,20 +1698,41 @@ fn draw_layout_picker(
     if mitades[1].width == 0 || mitades[1].height == 0 {
         return; // un frame estrecho se queda con la lista, que es lo que se elige
     }
-    let arbol = p
-        .rows()
-        .get(p.cursor())
-        .filter(|r| r.factory)
-        .and_then(|r| presets::tree(&r.name).ok());
-    if let Some(arbol) = arbol {
-        let lineas = preview(
-            &arbol,
-            mitades[1].width,
-            mitades[1].height,
-            &KindRegistry::builtin(),
-        );
+    if let Some(fila) = p.current() {
+        draw_layout_preview(frame, mitades[1], fila, theme);
+    }
+}
+
+/// La mitad derecha del selector: la pantalla de la fila bajo el cursor.
+///
+/// Sale de la fila, sea de fábrica o del usuario. Filtrar por `factory`
+/// dejaba la mitad derecha en blanco para los ficheros propios —y para uno de
+/// fábrica TAPADO por un fichero— mientras la ayuda prometía que cada fila
+/// dibuja su pantalla (#244 M3).
+fn draw_layout_preview(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    fila: &norte_frontend::layout_picker::Row,
+    theme: &TuiTheme,
+) {
+    use norte_frontend::layout::KindRegistry;
+    use norte_frontend::layout_picker::preview;
+
+    if let Some(arbol) = fila.tree.as_ref() {
+        let lineas = preview(arbol, area.width, area.height, &KindRegistry::builtin());
         let texto: Vec<Line<'_>> = lineas.into_iter().map(Line::raw).collect();
-        frame.render_widget(Paragraph::new(texto), mitades[1]);
+        frame.render_widget(Paragraph::new(texto), area);
+    } else if let Some(problema) = fila.problem.as_deref() {
+        // Un fichero que no parsea DICE por qué, en el sitio donde iría su
+        // pantalla: un hueco en blanco no se distingue de una disposición
+        // vacía. El diagnóstico viene de un fichero, así que se enmascara.
+        let texto = norte_encoding::mask_terminal_hazards(problema);
+        frame.render_widget(
+            Paragraph::new(texto)
+                .style(theme.role(Role::Warning))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
     }
 }
 
@@ -3185,6 +3202,19 @@ fn clamp_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
             }
             acc += cw;
             texto.push(c);
+        }
+        // Cortar por carácter no basta: un ZWJ o un selector de variación
+        // miden CERO, así que caben siempre y el trozo puede acabar en un
+        // juntador que se compone con lo que se pinte a continuación —
+        // `emoji_zwj_family` recortado a tres celdas dejaba la familia unida
+        // al carácter siguiente (#246 m1). `middle_ellipsis` arregló el
+        // espejo de esto drenando por delante; aquí se drena por detrás.
+        while texto
+            .chars()
+            .next_back()
+            .is_some_and(|c| UnicodeWidthChar::width(c).unwrap_or(0) == 0 && !c.is_ascii())
+        {
+            texto.pop();
         }
         if !texto.is_empty() {
             out.push(Span::styled(texto, sp.style));
@@ -7720,6 +7750,66 @@ keymap = [
             tiny.draw(|f| draw_which_key(f, &panel(None), &theme))
                 .expect("draw");
         }
+    }
+}
+
+#[cfg(test)]
+mod clamp_spans_tests {
+    use super::clamp_spans;
+    use ratatui::text::Span;
+    use unicode_width::UnicodeWidthStr as _;
+
+    fn corta(texto: &str, max: usize) -> String {
+        clamp_spans(vec![Span::raw(texto.to_owned())], max)
+            .into_iter()
+            .map(|s| s.content.into_owned())
+            .collect()
+    }
+
+    /// Lo que cabe entero pasa entero, y lo que no se corta por CELDAS.
+    #[test]
+    fn recorta_por_celdas_y_no_por_bytes() {
+        assert_eq!(corta("abcdef", 10), "abcdef");
+        assert_eq!(corta("abcdef", 3), "abc");
+        // CJK: dos celdas por carácter, así que en tres celdas cabe uno.
+        assert_eq!(corta("日本語", 3), "日");
+        assert!(corta("日本語", 3).width() <= 3);
+    }
+
+    /// Un juntador mide CERO, así que cabía siempre y el trozo acababa en él:
+    /// lo que se pintara detrás se componía con la familia recortada (#246
+    /// m1). `middle_ellipsis` drena por delante; esto drena por detrás.
+    #[test]
+    fn no_termina_en_un_juntador() {
+        let familia = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        for max in 0..=8 {
+            let salida = corta(familia, max);
+            assert!(
+                !salida.ends_with('\u{200D}'),
+                "a {max} celdas quedó un ZWJ al final: {salida:?}"
+            );
+        }
+    }
+
+    /// Un `max` de cero no pinta nada, y nunca pánico.
+    #[test]
+    fn cero_celdas_no_pinta_nada() {
+        assert_eq!(corta("hola", 0), "");
+        assert_eq!(corta("", 5), "");
+    }
+
+    /// Los spans que caben se conservan como SPANS, con su estilo: el
+    /// recorte no puede fundir en uno lo que el badge hostil separa.
+    #[test]
+    fn conserva_los_spans_que_caben() {
+        let spans = vec![
+            Span::raw("ab".to_owned()),
+            Span::raw("cd".to_owned()),
+            Span::raw("ef".to_owned()),
+        ];
+        let salida = clamp_spans(spans, 5);
+        assert_eq!(salida.len(), 3);
+        assert_eq!(salida[2].content.as_ref(), "e");
     }
 }
 

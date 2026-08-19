@@ -127,7 +127,7 @@ pub fn check_layout(layers: &Layers) -> Vec<Finding> {
     else {
         return Vec::new();
     };
-    match norte_frontend::layout::config::load(dir, nombre) {
+    match norte_frontend::layout::config::load(dir, std::ffi::OsStr::new(nombre)) {
         Ok(_) => vec![Finding {
             section: "layout",
             severity: Severity::Ok,

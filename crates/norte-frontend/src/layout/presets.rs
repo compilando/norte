@@ -243,6 +243,59 @@ mod tests {
         }
     }
 
+    /// TODO preset, en TODA pantalla razonable, deja un listado que se puede
+    /// usar.
+    ///
+    /// `full` se envió con una pantalla de 40×10 sin ningún listado —los fijos
+    /// cobran primero, 16 del sidebar más 30 de la columna derecha sobre 40
+    /// columnas dejaban los dos browsers a cero— y el snapshot que la
+    /// aprobó era la única puerta que había: pintaba lo que pintaba, así que
+    /// bendijo el vacío (#244 M4). Lo que faltaba era la PROPIEDAD, y es
+    /// esto. El remedio (#229, apartar el cromo) vive en `resolve`; este test
+    /// es lo que dice si sigue haciendo su trabajo.
+    #[test]
+    fn ningun_preset_deja_una_pantalla_sin_listado_usable() {
+        use crate::layout::{Rect, resolve};
+
+        // El suelo que el rescate de #229 promete: `resolve::CONTENIDO`, el
+        // tope con el que se acota el mínimo de cada kind. En pantallas
+        // holgadas se exige además el mínimo PROPIO del listado, que es lo
+        // que se ve cuando no hay que apretar nada.
+        const USABLE: (u16, u16) = (12, 4);
+
+        let reg = KindRegistry::builtin();
+        let (mw, mh) = reg.min_of(&crate::layout::KindId::browser());
+        for name in NAMES {
+            let arbol = tree(name).expect(name);
+            for (w, h) in [(40_u16, 10_u16), (60, 15), (80, 24), (120, 40)] {
+                // A 120 columnas no hay nada que apretar y se exige el
+                // mínimo PROPIO del listado; por debajo manda el suelo del
+                // rescate, que es lo que #229 promete — `full` a 80 deja 17
+                // columnas por listado (16 de sidebar + 30 de hoja de
+                // atributos son fijos) y eso es apretado, no roto.
+                let (pw, ph) = if w >= 120 { (mw, mh) } else { USABLE };
+                let res = resolve(Rect::new(0, 0, w, h), &arbol, &reg);
+                let mejor = res
+                    .placements
+                    .iter()
+                    .filter(|(id, _)| {
+                        arbol
+                            .kind_of(*id)
+                            .is_some_and(|k| *k == crate::layout::KindId::browser())
+                    })
+                    .map(|(_, r)| (r.width, r.height))
+                    .max();
+                let Some((bw, bh)) = mejor else {
+                    panic!("{name} a {w}x{h}: ningún listado colocado");
+                };
+                assert!(
+                    bw >= pw && bh >= ph,
+                    "{name} a {w}x{h}: el mejor listado mide {bw}x{bh}, por debajo de {pw}x{ph}"
+                );
+            }
+        }
+    }
+
     /// `NAMES` y `source` son dos items y se pueden desincronizar. No aquí.
     #[test]
     fn el_catalogo_y_la_busqueda_dicen_lo_mismo() {

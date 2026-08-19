@@ -161,11 +161,15 @@ fn un_nombre_no_utf8_llega_entero() {
     assert_eq!(w, Want::Entry(Box::new(hostil)));
 }
 
-/// Abrir la hoja NO se lleva el teclado: sigue al cursor, y con las flechas
-/// dentro dejaría de seguir a nada. La segunda pulsación sí lo toma, la
-/// tercera cierra.
+/// La hoja NO se lleva el teclado NUNCA: sigue al cursor, y con las flechas
+/// dentro dejaría de seguir a nada. Dos estados, abrir y cerrar.
+///
+/// Tenía tres, y el del medio era falso: ponía un `KeyOwner` que no consumía
+/// nadie, así que la hoja cogía el borde de foco mientras las flechas seguían
+/// moviendo el listado de al lado, y hacía falta una tercera pulsación para
+/// cerrar lo que la segunda no había enfocado (#243).
 #[test]
-fn la_hoja_no_se_lleva_el_teclado_al_abrir() {
+fn la_hoja_no_se_lleva_el_teclado_nunca() {
     let mut app = app_de_prueba();
     app.toggle_metadata();
     assert!(app.metadata_slot().is_some(), "abierta");
@@ -176,11 +180,7 @@ fn la_hoja_no_se_lleva_el_teclado_al_abrir() {
     );
 
     app.toggle_metadata();
-    assert_eq!(app.key_owner(), KeyOwner::Metadata);
-    assert!(app.metadata_slot().is_some(), "sigue abierta");
-
-    app.toggle_metadata();
-    assert!(app.metadata_slot().is_none(), "cerrada");
+    assert!(app.metadata_slot().is_none(), "la segunda cierra");
     assert_eq!(app.key_owner(), KeyOwner::Panes);
 }
 
@@ -229,7 +229,6 @@ fn cerrar_devuelve_el_arbol_de_antes() {
     let mut app = app_de_prueba();
     let antes = app.layout.clone();
 
-    app.toggle_metadata();
     app.toggle_metadata();
     app.toggle_metadata();
     assert_eq!(app.layout, antes, "la hoja no dejó rastro");

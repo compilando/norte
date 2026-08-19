@@ -174,6 +174,23 @@ impl TaskBoard {
         false
     }
 
+    /// Cancela la task de la fila `i`. `false` si no hay fila, o si ya
+    /// terminó.
+    ///
+    /// Consulta el estado EN VIVO, igual que [`Self::cancel_last_running`]: el
+    /// snapshot del tick puede tener hasta 100 ms, y «cancelando…» no se dice
+    /// de algo que ya acabó.
+    pub fn cancel_at(&mut self, i: usize) -> bool {
+        let Some(row) = self.rows.get(i) else {
+            return false;
+        };
+        if row.rx.borrow().state.is_terminal() {
+            return false;
+        }
+        row.task.cancel();
+        true
+    }
+
     /// Las filas visibles (recientes al final).
     #[must_use]
     pub fn rows(&self) -> &[TaskRow] {

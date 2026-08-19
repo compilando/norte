@@ -689,6 +689,7 @@ help-cmd-layout-metadata = muestra u oculta el panel de detalles
 help-cmd-layout-pick = elige una disposición
 msg-layout-last-panel = no se puede cerrar el último panel
 msg-transfer-dest-invalid = eso no es una dirección: {$err}
+msg-transfer-dest-same = ahí es donde ya están: teclea otro destino
 msg-layout-load-failed = no se pudo cargar el layout «{$name}»: {$err}
 msg-session-detached = otra ventana tiene la sesión; ésta va por su cuenta
 msg-session-slots-timeout = { $n } paneles no listaron a tiempo al arrancar: entra en ellos para rellenarlos

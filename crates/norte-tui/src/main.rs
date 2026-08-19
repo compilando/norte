@@ -1826,7 +1826,10 @@ async fn main() -> Result<()> {
     };
     let (cli_preset, cli_layout, cli_daemon, cli_socket, cli_pick, cli_cd_file) = (
         args.text("--preset"),
-        args.text("--layout"),
+        // `--layout` NO es texto por contrato: acaba siendo un nombre de
+        // fichero, y por `to_string_lossy` dos bytes inválidos distintos
+        // abrían el mismo `\u{FFFD}.toml` (#246 M1).
+        args.os_text("--layout").map(std::ffi::OsString::from),
         args.has("--daemon"),
         args.path("--socket"),
         args.has("--pick"),
@@ -1920,12 +1923,25 @@ async fn main() -> Result<()> {
     // `orthodox`, que es lo que el usuario tenía antes de escribir la clave.
     // `--layout` gana a `[ui] layout`: elegir una disposición para UN arranque
     // no debe tocar tu config, que es justo lo que hace la clave.
-    if let Some(nombre) = cli_layout
-        .as_deref()
-        .or(cfg.common.ui_layout.as_deref())
-        .filter(|n| *n != "orthodox")
-    {
-        app.apply_layout(nombre, &config::user_config_dir().unwrap_or_default());
+    let nombre_layout: Option<std::ffi::OsString> = cli_layout
+        .clone()
+        .or_else(|| cfg.common.ui_layout.clone().map(std::ffi::OsString::from))
+        .filter(|n| n != std::ffi::OsStr::new("orthodox"));
+    if let Some(nombre) = nombre_layout {
+        // El fichero se lee FUERA del runtime (regla 2), y sin directorio de
+        // config no hay fichero que valga: queda el preset de ese nombre.
+        let cargado = match config::user_config_dir() {
+            Some(dir) => {
+                let n = nombre.clone();
+                tokio::task::spawn_blocking(move || norte_frontend::layout::config::load(&dir, &n))
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(norte_frontend::layout::LayoutError::NotFound(String::new()))
+                    })
+            }
+            None => Err(norte_frontend::layout::LayoutError::NotFound(String::new())),
+        };
+        app.apply_loaded_layout(&nombre, cargado);
     }
     // L2: la pantalla que dejaste. Va DESPUÉS de `[ui] layout` a propósito —
     // una sesión guardada es más específica que una preferencia de config, y
@@ -3833,6 +3849,17 @@ async fn run(
                                     &mut search_run,
                                     outcome,
                                 );
+                            } else if app.key_owner() == norte_tui::app::KeyOwner::Processes
+                                && !modal_wins(app)
+                            {
+                                // Panel de procesos (#243): las teclas llegan
+                                // AQUÍ, y no al listado de detrás. Sin este
+                                // brazo el panel cogía el borde de foco, el
+                                // `▶` no se movía nunca y F8 abría el diálogo
+                                // de borrar sobre la selección del listado
+                                // mientras el lector creía tener el teclado en
+                                // la lista de tareas.
+                                on_processes_key(app, dialog_resolver, key.modifiers, key.code);
                             } else if app.nav_popup.is_some() && !modal_wins(app) {
                                 // Popup historial/hotlist (spec 2026-07-18): Enter
                                 // sobre un item NAVEGA por el flujo de cd normal —
@@ -5078,8 +5105,7 @@ fn on_layout_picker_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifie
         "dialog.cancel" => PickerAction::Cancel,
         _ => return, // ya filtrado por ALLOW_PICKER; inalcanzable en la práctica
     };
-    let dir = config::user_config_dir().unwrap_or_default();
-    app.layout_picker_input(action, &dir);
+    app.layout_picker_input(action);
 }
 
 /// Teclas del picker de columnas (#108 7a): resuelve por keymap (pantalla
@@ -8024,6 +8050,9 @@ async fn on_tree_key(
             }
         }
         "dialog.cancel" => app.return_keys_to_panes(),
+        // El ancho del árbol, por lo mismo que el del sidebar (#244 M1).
+        "layout.grow" => app.layout_resize(1),
+        "layout.shrink" => app.layout_resize(-1),
         "pane.tree" => app.toggle_tree(),
         "dialog.confirm" => {
             let destino = app.tree().and_then(norte_tui::tree::Tree::selected);
@@ -8040,6 +8069,36 @@ async fn on_tree_key(
         _ => {}
     }
     Cd::Cancelled
+}
+
+/// Teclas del panel de procesos (#243): resuelve por keymap (pantalla
+/// `dialog`) y filtra por [`norte_tui::app::ALLOW_PROCESSES`] — misma disciplina de
+/// única-fuente que el resto de paneles con teclado (#24).
+///
+/// Síncrona y sin backend: cancelar es soltarle el token a una task que este
+/// proceso ya observa, no una llamada.
+fn on_processes_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code: KeyCode) {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return; // tecla no modelada por el keymap: ignorar
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run { command: cmd, .. } => cmd,
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
+            resolver.reset();
+            return;
+        }
+        Resolution::Reset => return,
+    };
+    // El despacho vive en el `App` (biblioteca) para que un test pueda meter
+    // una tecla de verdad por él; aquí queda la resolución, que es lo que este
+    // binario tiene y el `App` no.
+    if let Some(msg) = app.processes_command(&cmd) {
+        app.message = Some(msg);
+    }
 }
 
 async fn on_places_key(
@@ -8082,6 +8141,12 @@ async fn on_places_key(
         }
         // Suelta el teclado, NO cierra el panel: cerrarlo es `layout.places`.
         "dialog.cancel" => app.return_keys_to_panes(),
+        // El ancho del sidebar, que es el ÚNICO camino por el que se puede
+        // cambiar: el llamante de `layout_resize` pasa siempre un listado
+        // visible, así que la rama de `Size::Fixed` no la alcanzaba nadie
+        // (#244 M1).
+        "layout.grow" => app.layout_resize(1),
+        "layout.shrink" => app.layout_resize(-1),
         // Y `layout.places` con el teclado DENTRO cierra: es la tercera
         // pulsación de la secuencia abrir → enfocar → cerrar.
         "layout.places" => app.toggle_places(),
@@ -11964,12 +12029,28 @@ async fn dispatch(
         // puede leer da lista vacía: quedan las cinco de fábrica, que es más
         // que nada.
         Command::LayoutPick => {
-            let dir = config::user_config_dir().unwrap_or_default();
-            let mios =
-                tokio::task::spawn_blocking(move || norte_frontend::layout::config::list(&dir))
-                    .await
-                    .unwrap_or_default();
-            app.open_layout_picker(&mios);
+            // Listar Y LEER, las dos cosas fuera del runtime: cada fila del
+            // selector pinta su pantalla, y leerla al pasar el cursor sería
+            // I/O en el bucle (#244 M2, regla 2). Sin directorio de config no
+            // hay ficheros de usuario: quedan las cinco de fábrica. Antes se
+            // caía a `PathBuf::default()`, que es leer `./layouts/` del
+            // directorio actual — o sea, clonar un repo y pulsar F9 (#244 m3).
+            let mios = match config::user_config_dir() {
+                Some(dir) => tokio::task::spawn_blocking(move || {
+                    use norte_frontend::layout::config;
+                    config::list(&dir)
+                        .into_iter()
+                        .map(|name| norte_frontend::layout_picker::UserLayout {
+                            tree: config::load(&dir, &name).map_err(|e| e.to_string()),
+                            name,
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await
+                .unwrap_or_default(),
+                None => Vec::new(),
+            };
+            app.open_layout_picker(mios);
         }
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
