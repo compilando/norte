@@ -207,7 +207,8 @@ pub(crate) fn plugin_line<'a>(
 /// `plugin_line`). Estilo atenuado (`Role::BorderUnfocused`, "presente pero
 /// no activo" — mismo criterio que documenta ese rol): es contexto, no el
 /// dato principal de la fila.
-pub(crate) fn plugin_description_line(
+#[must_use]
+pub fn plugin_description_line(
     p: &norte_proto::methods::PluginInfo,
     theme: &TuiTheme,
     inner: usize,
@@ -227,7 +228,7 @@ pub(crate) fn plugin_description_line(
 /// pinta. `hint` (H1 T3, #24) es el hint GENERADO (`app.dialog_hints.picker`).
 /// MAJOR-1(c) H1 close: 34 columnas era un ancho FIJO que no crecía con el
 /// hint generado (se cortaba en terminales angostas) — mismo criterio de
-/// sizing que [`draw_nav_popup`]/[`draw_extensions`], footer en CELDAS
+/// sizing que `draw_nav_popup`/`draw_extensions`, footer en CELDAS
 /// (`Line::width`), suelo 34 (el listado de nombres de preset ya cabía),
 /// tope el ancho del frame.
 /// The which-key panel (K3a): while a chord sequence is PENDING, what can
@@ -247,7 +248,7 @@ pub(crate) fn plugin_description_line(
 /// Every string it paints is masked at the source: chords come through
 /// `paint_chord` (a project layer can bind any lone codepoint) and the rest is
 /// Fluent text or a catalogue command name.
-pub(crate) fn draw_which_key(
+pub fn draw_which_key(
     frame: &mut Frame<'_>,
     wk: &norte_frontend::whichkey::WhichKeyRows,
     theme: &TuiTheme,
@@ -526,7 +527,7 @@ pub(crate) fn shortcuts_section(screen: norte_frontend::keymap::Screen) -> Strin
 }
 
 /// Editor de atajos (`app.shortcuts`, K3c): mismo idioma visual que
-/// [`draw_settings`] —Paragraph con cabeceras de sección, filtro en el pie,
+/// `draw_settings` —Paragraph con cabeceras de sección, filtro en el pie,
 /// línea de detalle reservada abajo— con dos diferencias que son el editor:
 ///
 /// - la lista SCROLLEA. Ajustes cabe en una pantalla; esto son todas las
@@ -542,7 +543,7 @@ pub(crate) fn shortcuts_section(screen: norte_frontend::keymap::Screen) -> Strin
 /// [`paint_chord`](norte_frontend::keymap::paint_chord) — una capa de proyecto
 /// puede bindear cualquier codepoint suelto y esto va a una terminal. Aquí solo
 /// queda el ancho.
-pub(crate) fn draw_shortcuts(frame: &mut Frame<'_>, sc: &crate::app::Shortcuts, theme: &TuiTheme) {
+pub fn draw_shortcuts(frame: &mut Frame<'_>, sc: &crate::app::Shortcuts, theme: &TuiTheme) {
     let width = frame
         .area()
         .width

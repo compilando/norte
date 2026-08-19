@@ -28,12 +28,12 @@ use norte_i18n::t;
 /// para eso, a propósito — sus filas no cambian tras `extend`). Solo se
 /// consulta cuando el propio `Entry` no trajo tamaño; un tamaño real del
 /// listado nunca se pisa.
-pub(crate) fn draw_compare(
+pub fn draw_compare<S: std::hash::BuildHasher>(
     frame: &mut Frame<'_>,
     area: Rect,
     view: &crate::app::CompareView,
     theme: &TuiTheme,
-    size_hints: &std::collections::HashMap<norte_proto::VPath, u64>,
+    size_hints: &std::collections::HashMap<norte_proto::VPath, u64, S>,
 ) {
     use norte_frontend::compare::cells_for;
 

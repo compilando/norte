@@ -104,9 +104,10 @@ pub fn help_sidebar_width(base: Rect, lang: norte_help::Lang) -> u16 {
 /// del cuerpo justo en los bordes (el fallo que el pre-render evita).
 ///
 /// `sidebar_desired` es lo que la lateral necesitaría para pintar sus filas
-/// enteras ([`help_sidebar_desired`]); llega como parámetro para que esto siga
+/// enteras (`help_sidebar_desired`); llega como parámetro para que esto siga
 /// siendo una función de números, medible a cualquier tamaño sin corpus.
-pub(crate) fn help_layout(base: Rect, sidebar_desired: u16) -> (Rect, Rect, Rect, Rect) {
+#[must_use]
+pub fn help_layout(base: Rect, sidebar_desired: u16) -> (Rect, Rect, Rect, Rect) {
     let area = centered(
         base,
         base.width.saturating_sub(4).max(20),
@@ -193,11 +194,11 @@ pub fn help_body_size(base: Rect, lang: norte_help::Lang) -> (usize, usize) {
 /// Enmascarado: los títulos del corpus vienen del binario (built-in) o ya
 /// enmascarados por `norte_help::parse_untrusted` (plugin), y las líneas del
 /// cuerpo las produjo [`crate::help_render`] sobre esa misma entrada — este
-/// draw no vuelve a filtrarlas, igual que [`draw_palette`] con sus filas. La
+/// draw no vuelve a filtrarlas, igual que `draw_palette` con sus filas. La
 /// ÚNICA entrada libre es el filtro tecleado por el usuario, que pasa por el
 /// mismo doble filtro que la barra de quick search (`filter_display` — jamás
 /// `filter_raw` — más [`display_name`]).
-pub(crate) fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiTheme, hint: &str) {
+pub fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiTheme, hint: &str) {
     use norte_frontend::help::{Focus, SidebarRow};
 
     let (area, sidebar, body_area, footer_area) =

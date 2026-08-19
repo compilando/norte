@@ -26,8 +26,8 @@ use norte_i18n::t;
 /// Cuántos items pinta un pane y cuál va resaltado, EN COORDENADAS DE LO
 /// PINTADO (posición dentro del filtro cuando hay quick search en modo
 /// filtro, índice absoluto si no). Lo comparten `draw_pane` y
-/// [`pane_geometry`] para que el scroll salga del mismo cálculo.
-pub(crate) fn painted_len_and_selection(pane: &Pane) -> (usize, Option<usize>) {
+/// [`super::geometry::pane_geometry`] para que el scroll salga del mismo cálculo.
+pub fn painted_len_and_selection(pane: &Pane) -> (usize, Option<usize>) {
     match pane.quick_visible() {
         Some(vis) => (
             vis.len(),

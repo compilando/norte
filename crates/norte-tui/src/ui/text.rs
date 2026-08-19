@@ -84,7 +84,8 @@ pub(crate) fn hint_groups(hint: &str) -> Vec<&str> {
 /// A group is therefore emitted WHOLE or not at all, and the `…` says that
 /// something was dropped. Groups are kept in order, stopping at the first
 /// that does not fit: the footer is then a true prefix of the real hint.
-pub(crate) fn fit_hint_groups(hint: &str, max: usize) -> String {
+#[must_use]
+pub fn fit_hint_groups(hint: &str, max: usize) -> String {
     if cells(hint) <= max {
         return hint.to_owned();
     }

@@ -11,7 +11,9 @@ use super::{centered, clear_themed};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
 
-pub(crate) fn draw_theme_picker(
+/// El selector de tema: la lista de temas disponibles sobre un modal
+/// centrado, con el vigente resaltado.
+pub fn draw_theme_picker(
     frame: &mut Frame<'_>,
     picker: &crate::app::ThemePicker,
     theme: &TuiTheme,
