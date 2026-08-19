@@ -333,5 +333,15 @@
     "id": "win_drive_relative",
     "hex": "433a",
     "why": "C: — exactly ONE Path component on Windows (a Prefix), so any \"single component\" guard admits it, and `join` with it replaces the whole base (#246)"
+  },
+  {
+    "id": "tar_ustar_name_100",
+    "hex": "61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+    "why": "100 bytes of `a` — exactly the ustar name field. The corpus jumped from short names to 172 bytes, so nothing straddled the boundary where a tar writer must switch to a GNU `L` header (#250)"
+  },
+  {
+    "id": "tar_ustar_name_101",
+    "hex": "6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616162",
+    "why": "the same 100 bytes plus one: the first name that does NOT fit ustar. Paired with `tar_ustar_name_100` it is also the 100-byte-prefix collision a writer that truncates instead of extending would produce"
   }
 ]

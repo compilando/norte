@@ -135,6 +135,28 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A link planted after indexing cannot feed a denied file to the embedder.**
+  `index.embed` classified a candidate from the row `index.build` left behind
+  and read it later, so anyone who could write in the indexed tree could
+  replace a `.txt` with a link to a file under `denied_prefixes` and its first
+  32 KiB went to the embedding provider — the one thing that module promises
+  does not happen. What is read is checked again right before reading it, and
+  anything that is no longer a regular file is skipped. A hard link still
+  defeats the path filter without racing at all, and that is now written down
+  where the check is rather than assumed away (#122).
+
+### Added
+
+- **What norte writes is now checked by tools that are not norte.** The archive
+  round-trip read what this crate wrote with this crate's own reader — a fine
+  encoder/decoder consistency check, and blind to every place where we and the
+  rest of the world disagree, which is exactly where both format blockers of
+  the archive branch lived. `unzip -t` verifies our zips and extracts them,
+  GNU `tar` lists and extracts our tars and tar.gz, including a name past the
+  100-byte ustar boundary. Missing tools skip with a message rather than
+  passing quietly. The corpus grew the two names that straddle that boundary,
+  which nothing had (#250).
+
 - **A terminal that copied one file no longer holds the journal all day.** The
   embedded session took the lock on its first mutation and kept it until it
   exited, so a copy at 09:00 left `norte daemon run` and `norte audit` unable
