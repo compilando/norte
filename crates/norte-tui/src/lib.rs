@@ -20,6 +20,7 @@ pub mod palette;
 pub mod panel;
 pub mod paste;
 pub mod preview;
+pub mod probes;
 pub mod processes;
 pub mod session_push;
 pub mod settings;
