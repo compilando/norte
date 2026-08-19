@@ -152,6 +152,14 @@ pub struct Engine {
     /// primera. El actor guardado es el DUEÑO de la Task; el daemon lo necesita
     /// para decidir quién puede leerlo.
     sync_reports: std::sync::Mutex<std::collections::VecDeque<SyncReportEntry>>,
+    /// Anillo ACOTADO de informes de `archive.test`, por `task_id`
+    /// ([`Engine::archive_test_report`]).
+    ///
+    /// Tercero de la misma familia y por la misma razón: una Task no puede
+    /// devolver un valor, y lo que `archive.test` tiene que contar —qué entrada
+    /// falló y por qué— no cabe en un `Failed`. El mismo desalojo, con la misma
+    /// regla de «primero lo que no cuenta nada».
+    test_reports: std::sync::Mutex<std::collections::VecDeque<TestReportEntry>>,
 }
 
 /// La puerta de policy, capturable (#171).
@@ -260,6 +268,7 @@ impl Engine {
             spool: RwLock::new(None),
             batch_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             sync_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            test_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -1763,6 +1772,273 @@ impl Engine {
         Ok((handle, report))
     }
 
+    /// Fabrica un archivo como Task cancelable (`archive.pack`, 0.50.0, #132).
+    ///
+    /// **No escribe dentro de ningún contenedor**: el provider de archivos
+    /// sigue siendo `READ_ONLY` (ADR 0018). Lee las fuentes por su provider y
+    /// escribe UN fichero nuevo por el del destino, que puede ser otro. Muta,
+    /// así que va al journal (regla 4) como una creación, y deshacerlo es
+    /// borrar el archivo.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidPath`] sin fuentes, o si alguna no cuelga de `base` —el
+    /// nombre guardado se calcula contra ella, y sin nombre no hay entrada—, y
+    /// lo que devuelva la resolución de providers.
+    pub async fn pack_as(
+        &self,
+        params: norte_proto::methods::ArchivePackParams,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        if params.sources.is_empty() {
+            return Err(Error::InvalidPath);
+        }
+        // Gate de MUTACIÓN (regla 9 y ADR 0025): empaquetar LEE las fuentes y
+        // ESCRIBE el destino, que es exactamente lo que hace una copia, así
+        // que se pregunta por lo mismo y con la misma op. Antes de resolver
+        // providers: una petición denegada no abre conexiones.
+        let mut refs: Vec<&VPath> = params.sources.iter().collect();
+        refs.push(&params.dest);
+        self.gate(&actor, crate::policy::PolicyOp::Copy, &refs)
+            .await?;
+        let provider_destino = self.provider_for(&params.dest).await?;
+        let mut fuentes = Vec::with_capacity(params.sources.len());
+        for p in params.sources {
+            let provider = self.provider_for(&p).await?;
+            fuentes.push((provider, p));
+        }
+        // La cola es la del DESTINO: es el único provider por el que esta Task
+        // escribe, y encolar por el origen mezclaría escrituras de un mismo
+        // destino en colas distintas.
+        let key = params.dest.scheme().to_owned();
+        let observer = Arc::clone(&self.observer);
+        let dest = params.dest;
+        let base = params.base;
+        let format = params.format;
+        let level = params.level;
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::Pack,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    crate::pack::pack(
+                        fuentes,
+                        crate::pack::Destino {
+                            provider: provider_destino,
+                            dest,
+                        },
+                        crate::pack::Empaquetado {
+                            base,
+                            format,
+                            level,
+                        },
+                        observer,
+                        &ctx,
+                    )
+                    .await
+                })
+            }),
+        );
+        Ok(handle)
+    }
+
+    /// Comprueba un archivo como Task cancelable (`archive.test`, 0.50.0,
+    /// #132). Devuelve el handle y el informe VIVO.
+    ///
+    /// No muta: sin journal, sin undo, ni un byte escrito. Lo que comprueba lo
+    /// hace el LECTOR del formato —el de zip verifica el CRC de cada entrada
+    /// que se lee entera—, así que esto recorre y recoge en vez de tener una
+    /// segunda opinión sobre la misma integridad.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] si el nombre no corresponde a ningún formato de
+    /// [`ARCHIVE_FORMATS`](norte_proto::ARCHIVE_FORMATS) —comprobar «un
+    /// fichero cualquiera» no significa nada— y lo que devuelva la resolución
+    /// de providers.
+    ///
+    /// # Panics
+    ///
+    /// Si el mutex del anillo de informes está envenenado, que solo pasa si
+    /// otro hilo panicó teniéndolo. Es el mismo trato que sus dos gemelos en
+    /// el camino de ESCRITURA del anillo: aquí sí se panica, porque un anillo
+    /// a medias de actualizar no es un informe rancio, es una entrada que
+    /// nadie va a poder leer nunca.
+    pub async fn test_archive_as(
+        &self,
+        params: norte_proto::methods::ArchiveTestParams,
+        actor: crate::journal::Actor,
+    ) -> Result<
+        (
+            TaskHandle,
+            Arc<std::sync::Mutex<norte_proto::methods::ArchiveTestResult>>,
+        ),
+        Error,
+    > {
+        let nombre = params
+            .path
+            .file_name()
+            .map(|s| s.as_bytes().to_vec())
+            .ok_or(Error::InvalidPath)?;
+        let token = crate::pack::formato_de_nombre(&nombre).ok_or(Error::Unsupported)?;
+        let raiz = norte_proto::VPath::archive_compose(token, &params.path, &[])
+            .map_err(|_| Error::InvalidPath)?;
+        let provider = self.provider_for(&raiz).await?;
+        let checked = crate::pack::que_se_comprueba(token);
+        let informe = Arc::new(std::sync::Mutex::new(
+            norte_proto::methods::ArchiveTestResult::default(),
+        ));
+        let key = params.path.scheme().to_owned();
+        let owner = actor.clone();
+        let vivo = Arc::clone(&informe);
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::TestArchive,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    crate::pack::test_archive(provider, raiz, checked, vivo, &ctx).await
+                })
+            }),
+        );
+        {
+            let mut ring = self.test_reports.lock().expect("test_reports lock sano");
+            ring.push_back((handle.id(), owner, Arc::clone(&informe)));
+            evict_test_reports(&mut ring);
+        }
+        Ok((handle, informe))
+    }
+
+    /// Informe de un `archive.test` ya lanzado, por `task_id`, más el ACTOR que
+    /// lo pidió. `None` si ese id nunca fue un test de esta instancia o si el
+    /// anillo ya lo desalojó (su tope es el mismo que el de sus dos gemelos).
+    ///
+    /// Snapshot, como sus dos gemelos, y por la misma razón se sirve también
+    /// antes del terminal: comprobar un archivo grande tarda, y el informe
+    /// parcial es lo único que dice por dónde va.
+    #[must_use]
+    pub fn archive_test_report(
+        &self,
+        task_id: TaskId,
+    ) -> Option<(
+        crate::journal::Actor,
+        norte_proto::methods::ArchiveTestResult,
+    )> {
+        let ring = self
+            .test_reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ring.iter()
+            .find(|(id, _, _)| *id == task_id)
+            .map(|(_, owner, r)| {
+                (
+                    owner.clone(),
+                    r.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone(),
+                )
+            })
+    }
+
+    /// Parte un fichero en trozos numerados como Task cancelable
+    /// (`file.split`, 0.50.0, #132). Muta: una creación por trozo en el
+    /// journal.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidPath`] con un trozo por debajo de
+    /// [`FILE_SPLIT_MIN_BYTES`](norte_proto::methods::FILE_SPLIT_MIN_BYTES),
+    /// [`Error::LimitExceeded`] si saldrían más de
+    /// [`FILE_SPLIT_MAX_PARTS`](norte_proto::methods::FILE_SPLIT_MAX_PARTS)
+    /// —comprobado ANTES de escribir nada—, y lo que devuelva la resolución de
+    /// providers.
+    pub async fn split_as(
+        &self,
+        params: norte_proto::methods::FileSplitParams,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        self.gate(
+            &actor,
+            crate::policy::PolicyOp::Copy,
+            &[&params.path, &params.dest_dir],
+        )
+        .await?;
+        let src = self.provider_for(&params.path).await?;
+        let provider_destino = self.provider_for(&params.dest_dir).await?;
+        let key = params.dest_dir.scheme().to_owned();
+        let observer = Arc::clone(&self.observer);
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::Split,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    crate::pack::split(
+                        src,
+                        params.path,
+                        params.part_bytes,
+                        provider_destino,
+                        params.dest_dir,
+                        observer,
+                        &ctx,
+                    )
+                    .await
+                })
+            }),
+        );
+        Ok(handle)
+    }
+
+    /// Junta los trozos de un split como Task cancelable (`file.combine`,
+    /// 0.50.0, #132). Muta: una creación en el journal.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidPath`] si el primero no acaba en `.NNN`,
+    /// [`Error::NotFound`] si no hay ni un trozo, [`Error::Conflict`] ante un
+    /// hueco o un trozo intermedio corto, y lo que devuelva la resolución de
+    /// providers.
+    pub async fn combine_as(
+        &self,
+        params: norte_proto::methods::FileCombineParams,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        self.gate(
+            &actor,
+            crate::policy::PolicyOp::Copy,
+            &[&params.first, &params.dest],
+        )
+        .await?;
+        let src = self.provider_for(&params.first).await?;
+        let provider_destino = self.provider_for(&params.dest).await?;
+        let key = params.dest.scheme().to_owned();
+        let observer = Arc::clone(&self.observer);
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::Combine,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    crate::pack::combine(
+                        src,
+                        params.first,
+                        provider_destino,
+                        params.dest,
+                        observer,
+                        &ctx,
+                    )
+                    .await
+                })
+            }),
+        );
+        Ok(handle)
+    }
+
     /// Informe de una aplicación de plan ya lanzada, por `task_id`, más el ACTOR
     /// que la pidió (`sync.report`, ADR 0049). `None` si ese id nunca fue una
     /// aplicación de esta instancia o si el anillo ya lo desalojó
@@ -3141,6 +3417,9 @@ type BatchReportEntry = ReportEntry<crate::rename::BatchReport>;
 /// El anillo de informes de aplicaciones de plan ([`Engine::sync_report`]).
 type SyncReportEntry = ReportEntry<norte_proto::methods::SyncReportResult>;
 
+/// El anillo de informes de `archive.test` ([`Engine::archive_test_report`]).
+type TestReportEntry = ReportEntry<norte_proto::methods::ArchiveTestResult>;
+
 /// Poda el anillo de informes de lote hasta sus topes, sacrificando SIEMPRE lo
 /// que menos hace falta.
 ///
@@ -3270,6 +3549,25 @@ pub const SYNC_REPORTS_MAX: usize = 32;
 /// [`BATCH_REPORTS_AGENTS_MAX`]. No se reexporta en la raíz del crate por lo
 /// mismo que su gemelo: el tope que un cliente necesita conocer es el total.
 pub(crate) const SYNC_REPORTS_AGENTS_MAX: usize = 16;
+
+/// Cuántos informes de `archive.test` se retienen. El tercero de la familia,
+/// mismo criterio.
+pub const TEST_REPORTS_MAX: usize = 32;
+
+/// Sub-tope por clase del anillo de `archive.test`.
+pub(crate) const TEST_REPORTS_AGENTS_MAX: usize = 16;
+
+/// Desalojo del anillo de `archive.test`: lo que no cuenta nada —un archivo
+/// que pasó entero— se sacrifica antes que un informe con fallos, que es el
+/// único sitio donde alguien puede enterarse de qué entrada está corrupta.
+fn evict_test_reports(ring: &mut std::collections::VecDeque<TestReportEntry>) {
+    evict_reports(
+        ring,
+        TEST_REPORTS_MAX,
+        TEST_REPORTS_AGENTS_MAX,
+        |r: &norte_proto::methods::ArchiveTestResult| !r.failed.is_empty() || r.truncated,
+    );
+}
 
 /// Todos los nombres base de `dir`, en bytes crudos (regla 1).
 ///

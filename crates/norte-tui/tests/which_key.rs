@@ -62,8 +62,17 @@ fn the_panel_reaches_the_frame_with_its_unavailable_row() {
     pending(&mut app, &mut r);
     let text = painted(&app);
     assert!(text.contains("go to top"), "the available row: {text}");
-    assert!(text.contains("pane.pack"), "the unavailable row: {text}");
-    assert!(text.contains("#132"), "the issue tracking it: {text}");
+    // The unavailable row used to be a `Planned` command with its issue
+    // number. #132 built the last of those, so the row that is dimmed now is a
+    // command this build does not implement — same row, same explanation.
+    assert!(
+        text.contains("pack into an archive"),
+        "the unavailable row: {text}"
+    );
+    assert!(
+        text.contains(&norte_i18n::t("keymap-short-not-here")),
+        "and the reason it does nothing: {text}"
+    );
     assert!(text.contains("[g …]"), "the bar keeps its segment: {text}");
 }
 

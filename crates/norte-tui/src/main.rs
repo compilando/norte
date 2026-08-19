@@ -4227,6 +4227,58 @@ async fn run(
                                     }
                                     continue;
                                 }
+                                // #132: empaquetar. Mismo molde de texto
+                                // libre que Mkdir, y el submit AQUÍ por lo
+                                // mismo: es async y la task va al board.
+                                if matches!(app.modal, Some(Modal::Pack { .. })) {
+                                    let plain = key.modifiers.is_empty()
+                                        || key.modifiers == KeyModifiers::SHIFT;
+                                    match key.code {
+                                        KeyCode::Char(c) if plain => app.pack_push(c),
+                                        KeyCode::Backspace if plain => app.pack_pop(),
+                                        KeyCode::Enter if plain => {
+                                            if let Some(params) = app.pack_confirm() {
+                                                match backend.pack(params).await {
+                                                    Ok(task) => {
+                                                        app.board.push(&task, None);
+                                                        app.pack_submitted();
+                                                    }
+                                                    Err(e) => {
+                                                        app.pack_set_error(error_message(&e));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        KeyCode::Esc if plain => app.cancel_pack(),
+                                        _ => {}
+                                    }
+                                    continue;
+                                }
+                                // #132: partir. Igual.
+                                if matches!(app.modal, Some(Modal::Split { .. })) {
+                                    let plain = key.modifiers.is_empty()
+                                        || key.modifiers == KeyModifiers::SHIFT;
+                                    match key.code {
+                                        KeyCode::Char(c) if plain => app.split_push(c),
+                                        KeyCode::Backspace if plain => app.split_pop(),
+                                        KeyCode::Enter if plain => {
+                                            if let Some(params) = app.split_confirm() {
+                                                match backend.split_file(params).await {
+                                                    Ok(task) => {
+                                                        app.board.push(&task, None);
+                                                        app.split_submitted();
+                                                    }
+                                                    Err(e) => {
+                                                        app.split_set_error(error_message(&e));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        KeyCode::Esc if plain => app.cancel_split(),
+                                        _ => {}
+                                    }
+                                    continue;
+                                }
                                 // `Modal::TransferDest`: mismo molde de texto libre.
                                 // Enter no transfiere — abre el modal de siempre
                                 // (`open_transfer_to_dir`), que es donde vive la
@@ -9133,82 +9185,9 @@ async fn on_dialog_key(
             }
         }
         DialogOutcome::Confirmed => {
-            app.modal = None;
-            // OJO (MAJOR del rust-reviewer): NO abrir la siguiente pendiente
-            // ANTES del match — el retry TOFU (`return cd`) puede reabrir un
-            // TrustHostKey y PISAR una aprobación de agente ya sacada de la
-            // cola (quedaría huérfana hasta su TTL). Se difiere al final.
-            match modal {
-                Modal::ConfirmDelete { items, permanent } => {
-                    submit_deletes(app, backend, &items, permanent).await;
-                }
-                Modal::ConfirmTransfer {
-                    kind, items, to, ..
-                } => {
-                    submit_transfers(app, backend, kind, &items, &to, TransferOptions::default())
-                        .await;
-                }
-                // TrustLuaInit se intercepta ANTES en el run loop (necesita
-                // el LuaHost); MarkPattern (#103 T9) también, como texto
-                // libre (mismo motivo que la búsqueda) — `dialog_action`
-                // devuelve `None` para ambos, así que `on_dialog_key` ya
-                // habría retornado antes de llegar a este match: inalcanzable
-                // aquí, no-op defensivo.
-                // Y las propiedades (#139) tampoco: `dialog_action` solo les
-                // entiende cancelar, así que un «confirmar» no llega aquí —
-                // nombrarlas es lo que hace que añadir uno sea un error de
-                // compilación y no un Enter que hace algo a escondidas.
-                Modal::Properties { .. }
-                | Modal::Collision { .. }
-                | Modal::TrustLuaInit { .. }
-                | Modal::MarkPattern { .. }
-                | Modal::Mkdir { .. }
-                | Modal::CommandLine { .. }
-                | Modal::AiRenameInstruction { .. }
-                | Modal::SemanticQuery { .. }
-                | Modal::TransferDest { .. }
-                | Modal::TransferName { .. } => {}
-                // `AiRenamePlan` (M4-IA) SÍ es una superficie de decisión:
-                // confirmar aplica el plan REVISADO por el ejecutor
-                // transaccional de lotes (§17) — UNA task gobernada (journal
-                // + policy) para el lote entero, en el orden que decidió el
-                // core. Se aplican TODAS las parejas, no solo la ventana
-                // visible: el scroll (audit MAJOR-3) hace revisable el plan
-                // entero.
-                Modal::AiRenamePlan {
-                    dir, entries, plan, ..
-                } => {
-                    apply_ai_rename(app, backend, &dir, &entries, &plan).await;
-                }
-                // M4-IA-2: confirmar NAVEGA al hit bajo el cursor
-                // (`semantic_hit_cd`). El `Cd` vuelve al caller (apply_cd +
-                // decorate), como el retry TOFU; si el cd abrió un modal
-                // (otro HostKeyUnknown), la siguiente pendiente espera —
-                // jamás pisar.
-                Modal::SemanticHits { hits, cursor, .. } => {
-                    let outcome = semantic_hit_cd(app, backend, events, &hits, cursor).await;
-                    if app.modal.is_none() {
-                        app.open_next_pending();
-                    }
-                    return outcome;
-                }
-                // S2 (`[ui] confirm_quit`): confirmar cierra — el run loop
-                // lo detecta en su chequeo de `app.quit` de cada vuelta
-                // (main.rs, tope del `loop`).
-                Modal::ConfirmQuit => app.quit = true,
-                Modal::ApproveAgentOp { req } => {
-                    decide_approval(app, backend, req.approval_id, true).await;
-                }
-                // TOFU (#45): confía en la host key y REINTENTA la navegación.
-                m @ Modal::TrustHostKey { .. } => {
-                    if let Some(outcome) = trust_host_retry(app, backend, events, m).await {
-                        return outcome;
-                    }
-                }
+            if let Some(cd) = confirma_el_modal(app, backend, events, modal).await {
+                return cd;
             }
-            // Todas las ramas salvo el retry TOFU (que ya volvió) abren aquí
-            // la siguiente pendiente, con el modal ya cerrado.
-            app.open_next_pending();
         }
         DialogOutcome::Retry(policy) => {
             app.modal = None;
@@ -9225,6 +9204,104 @@ async fn on_dialog_key(
     }
     // Salvo el retry TOFU (que hace `return cd(...)`), un modal no navega.
     Cd::Cancelled
+}
+
+/// Lo que hace CONFIRMAR cada modal.
+///
+/// Extraída del `match` de [`on_dialog_key`] cuando éste pasó de cien líneas
+/// (#132 le añadió dos brazos). El `Some(cd)` es el único camino que NAVEGA —
+/// el retry TOFU y el salto a un hit semántico—, y por eso vuelve al llamante
+/// en vez de resolverse aquí: es él quien decide qué hacer con un `Cd`.
+///
+/// El `match` sigue siendo EXHAUSTIVO a propósito: nombrar los modales que no
+/// confirman nada es lo que hace que añadir uno nuevo sea un error de
+/// compilación en vez de un Enter que hace algo a escondidas.
+async fn confirma_el_modal(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    modal: Modal,
+) -> Option<Cd> {
+    app.modal = None;
+    // OJO (MAJOR del rust-reviewer): NO abrir la siguiente pendiente
+    // ANTES del match — el retry TOFU (`return cd`) puede reabrir un
+    // TrustHostKey y PISAR una aprobación de agente ya sacada de la
+    // cola (quedaría huérfana hasta su TTL). Se difiere al final.
+    match modal {
+        Modal::ConfirmDelete { items, permanent } => {
+            submit_deletes(app, backend, &items, permanent).await;
+        }
+        Modal::ConfirmTransfer {
+            kind, items, to, ..
+        } => {
+            let o = TransferOptions::default();
+            submit_transfers(app, backend, kind, &items, &to, o).await;
+        }
+        // TrustLuaInit se intercepta ANTES en el run loop (necesita
+        // el LuaHost); MarkPattern (#103 T9) también, como texto
+        // libre (mismo motivo que la búsqueda) — `dialog_action`
+        // devuelve `None` para ambos, así que `on_dialog_key` ya
+        // habría retornado antes de llegar a este match: inalcanzable
+        // aquí, no-op defensivo.
+        // Y las propiedades (#139) tampoco: `dialog_action` solo les
+        // entiende cancelar, así que un «confirmar» no llega aquí —
+        // nombrarlas es lo que hace que añadir uno sea un error de
+        // compilación y no un Enter que hace algo a escondidas.
+        Modal::Properties { .. }
+        | Modal::Collision { .. }
+        | Modal::TrustLuaInit { .. }
+        | Modal::MarkPattern { .. }
+        | Modal::Mkdir { .. }
+        | Modal::CommandLine { .. }
+        | Modal::AiRenameInstruction { .. }
+        | Modal::SemanticQuery { .. }
+        | Modal::TransferDest { .. }
+        | Modal::Pack { .. }
+        | Modal::Split { .. }
+        | Modal::TransferName { .. } => {}
+        // `AiRenamePlan` (M4-IA) SÍ es una superficie de decisión:
+        // confirmar aplica el plan REVISADO por el ejecutor
+        // transaccional de lotes (§17) — UNA task gobernada (journal
+        // + policy) para el lote entero, en el orden que decidió el
+        // core. Se aplican TODAS las parejas, no solo la ventana
+        // visible: el scroll (audit MAJOR-3) hace revisable el plan
+        // entero.
+        Modal::AiRenamePlan {
+            dir, entries, plan, ..
+        } => {
+            apply_ai_rename(app, backend, &dir, &entries, &plan).await;
+        }
+        // M4-IA-2: confirmar NAVEGA al hit bajo el cursor
+        // (`semantic_hit_cd`). El `Cd` vuelve al caller (apply_cd +
+        // decorate), como el retry TOFU; si el cd abrió un modal
+        // (otro HostKeyUnknown), la siguiente pendiente espera —
+        // jamás pisar.
+        Modal::SemanticHits { hits, cursor, .. } => {
+            let outcome = semantic_hit_cd(app, backend, events, &hits, cursor).await;
+            if app.modal.is_none() {
+                app.open_next_pending();
+            }
+            return Some(outcome);
+        }
+        // S2 (`[ui] confirm_quit`): confirmar cierra — el run loop
+        // lo detecta en su chequeo de `app.quit` de cada vuelta
+        // (main.rs, tope del `loop`).
+        Modal::ConfirmQuit => app.quit = true,
+        Modal::ApproveAgentOp { req } => {
+            decide_approval(app, backend, req.approval_id, true).await;
+        }
+
+        // TOFU (#45): confía en la host key y REINTENTA la navegación.
+        m @ Modal::TrustHostKey { .. } => {
+            if let Some(outcome) = trust_host_retry(app, backend, events, m).await {
+                return Some(outcome);
+            }
+        }
+    }
+    // Todas las ramas salvo el retry TOFU (que ya volvió) abren aquí
+    // la siguiente pendiente, con el modal ya cerrado.
+    app.open_next_pending();
+    None
 }
 
 /// Resuelve una aprobación de policy (`policy.decide`, M3-3b T5). Un error
@@ -9327,6 +9404,107 @@ async fn lanza_recuento(
             } else {
                 app.message = Some(t("msg-dir-size-counting"));
             }
+            app.board.push(&task, None);
+        }
+        Err(e) => app.message = Some(error_message(&e)),
+    }
+}
+
+/// `pane.unpack` (#132): copia el INTERIOR del contenedor bajo el cursor al
+/// otro panel.
+///
+/// No lleva método propio y no le hace falta: el motor de copia ya acepta el
+/// interior de un archivo como origen, así que desempaquetar es la copia que
+/// el usuario podría haber hecho a mano, con el journal, el undo, la política
+/// de colisiones y la cancelación que la copia ya tiene.
+async fn desempaqueta(app: &mut App, backend: &Backend) {
+    let Some(entrada) = app.focused().selected().cloned() else {
+        return;
+    };
+    let Some(raiz) = crate::nav::archive_root_for(&entrada) else {
+        app.message = Some(t("msg-unpack-not-archive"));
+        return;
+    };
+    // El destino es el OTRO panel, que es donde un gestor ortodoxo
+    // desempaqueta. Con uno solo, el mismo — que es lo que hace F5 cuando no
+    // hay otro sitio al que apuntar.
+    let otro = app.focus() ^ 1;
+    if app.pane_read_only(otro) {
+        app.message = Some(t("msg-pack-read-only"));
+        return;
+    }
+    let destino = app.panes[otro].dir().clone();
+    match backend
+        .copy(&raiz, &destino, TransferOptions::default())
+        .await
+    {
+        Ok(task) => {
+            app.message = Some(t("msg-unpack-started"));
+            app.board.push(&task, None);
+        }
+        Err(e) => app.message = Some(error_message(&e)),
+    }
+}
+
+/// `pane.test-archive` (#132): comprueba el contenedor bajo el cursor.
+async fn comprueba_archivo(app: &mut App, backend: &Backend) {
+    let Some(entrada) = app.focused().selected().cloned() else {
+        return;
+    };
+    if crate::nav::archive_root_for(&entrada).is_none() {
+        app.message = Some(t("msg-unpack-not-archive"));
+        return;
+    }
+    match backend
+        .test_archive(norte_proto::methods::ArchiveTestParams {
+            path: entrada.path.clone(),
+        })
+        .await
+    {
+        Ok(task) => {
+            app.message = Some(t("msg-test-archive-started"));
+            app.board.push(&task, None);
+        }
+        Err(e) => app.message = Some(error_message(&e)),
+    }
+}
+
+/// `pane.combine-files` (#132): junta los trozos a partir del `.001` bajo el
+/// cursor.
+async fn junta_trozos(app: &mut App, backend: &Backend) {
+    let Some(entrada) = app.focused().selected().cloned() else {
+        return;
+    };
+    let nombre = entrada
+        .path
+        .file_name()
+        .map(|s| s.as_bytes().to_vec())
+        .unwrap_or_default();
+    // Solo desde el PRIMER trozo: empezar por el `.007` uniría media cosa, y
+    // el core ya solo sabe buscar hacia delante.
+    let Some(base) = nombre
+        .len()
+        .checked_sub(4)
+        .filter(|n| nombre[*n] == b'.' && &nombre[n + 1..] == b"001")
+        .map(|n| nombre[..n].to_vec())
+    else {
+        app.message = Some(t("msg-combine-needs-first"));
+        return;
+    };
+    let Ok(seg) = norte_proto::Segment::new(base) else {
+        app.message = Some(t("msg-combine-needs-first"));
+        return;
+    };
+    let destino = app.focused().dir().join(seg);
+    match backend
+        .combine_files(norte_proto::methods::FileCombineParams {
+            first: entrada.path,
+            dest: destino,
+        })
+        .await
+    {
+        Ok(task) => {
+            app.message = Some(t("msg-combine-started"));
             app.board.push(&task, None);
         }
         Err(e) => app.message = Some(error_message(&e)),
@@ -12208,6 +12386,13 @@ async fn dispatch(
             let objetivos = app.focused().marked_paths();
             lanza_recuento(app, backend, objetivos, false).await;
         }
+        // #132: escribir archivos. Los cinco comandos que los cuatro presets
+        // atan y norte no tenía.
+        Command::PanePack => app.open_pack(),
+        Command::PaneSplitFile => app.open_split(),
+        Command::PaneUnpack => desempaqueta(app, backend).await,
+        Command::PaneTestArchive => comprueba_archivo(app, backend).await,
+        Command::PaneCombineFiles => junta_trozos(app, backend).await,
         Command::PaneColumns => {
             let plugins = backend
                 .plugins_list()

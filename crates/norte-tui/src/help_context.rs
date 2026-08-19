@@ -79,6 +79,10 @@ fn modal_context(modal: &Modal) -> &'static str {
         Modal::AiRenameInstruction { .. } | Modal::AiRenamePlan { .. } => "dialog.ai-rename",
         Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => "dialog.semantic-search",
         Modal::Properties { .. } => "dialog.properties",
+        // #132: los dos diálogos de escribir archivos comparten página — se
+        // teclea una cosa y se confirma, y lo que hay que contar (qué formato
+        // sale del nombre, qué sufijos entiende el tamaño) es lo mismo.
+        Modal::Pack { .. } | Modal::Split { .. } => "dialog.archive",
     }
 }
 
@@ -122,7 +126,12 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::CommandLine { .. }
         | Modal::AiRenameInstruction { .. }
         | Modal::SemanticQuery { .. }
-        | Modal::TransferName { .. } => false,
+        | Modal::TransferName { .. }
+        // #132: los dos de escribir archivos son editores de texto libre, y el
+        // run loop los intercepta antes del keymap `dialog` igual que a los
+        // demás. `F1` encima tecleraría una efe en el nombre.
+        | Modal::Pack { .. }
+        | Modal::Split { .. } => false,
         Modal::ConfirmDelete { .. }
         | Modal::ConfirmTransfer { .. }
         | Modal::ConfirmQuit

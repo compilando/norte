@@ -30,6 +30,9 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 # Fichero ANÓNIMO (ya unlinked, sin pathname) para el spool descomprimido
 # de tar.gz calientes (#95.1); ya estaba centralizado en el workspace.
 tempfile.workspace = true
+# Errores tipados del escritor (#132), regla dura 6: una librería usa
+# `thiserror`, jamás `anyhow`.
+thiserror.workspace = true
 # warn! de entradas hostiles omitidas (ADR 0018 C2: omitir CON señal).
 tracing.workspace = true
 

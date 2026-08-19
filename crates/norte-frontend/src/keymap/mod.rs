@@ -1362,7 +1362,14 @@ keymap = [{ on = ["x"], run = "app.quit" }]"#,
         let hits: Vec<_> = all.iter().filter(|(seq, _, _)| seq == "x").collect();
         assert_eq!(hits.len(), 1, "el dedup deja UNA por secuencia: {all:?}");
         assert_eq!(hits[0].1, "pane.pack", "gana el contexto específico");
-        assert!(matches!(hits[0].2, Availability::NotBuilt { .. }));
+        // No disponible, y da igual POR QUÉ: lo que se prueba es que la
+        // sombra la echa igual. (Era `NotBuilt` hasta que #132 dejó la tabla
+        // sin comandos `Planned`; hoy es `NotHere`.)
+        assert!(
+            !matches!(hits[0].2, Availability::Here),
+            "{:?}",
+            hits[0].2
+        );
         // El `app.quit` de `[global]` sigue SOMBREADO: no aflora.
         assert!(
             !eff.bindings().iter().any(|(seq, _)| seq == "x"),
@@ -1529,31 +1536,17 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
         }
     }
 
-    /// A preset that binds a Planned command LOADS, and the binding survives
-    /// carrying its reason. Without this a faithful Total Commander preset
-    /// cannot exist: a third of it names commands norte has not built.
-    #[test]
-    fn un_binding_a_comando_planned_sobrevive_marcado() {
-        let preset = parse_keymap(
-            r#"
-[pane]
-keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
-"#,
-        )
-        .unwrap();
-        let eff = Effective::build_for(&preset, &[], &["pane.copy"], Screen::Browse).unwrap();
-        let all = eff.bindings_all();
-        let (_, run, avail) = all
-            .iter()
-            .find(|(_, run, _)| *run == "pane.pack")
-            .expect("el binding no puede desaparecer");
-        assert_eq!(*run, "pane.pack");
-        assert!(matches!(avail, Availability::NotBuilt { .. }), "{avail:?}");
-    }
-
     /// A command the catalogue calls Live but THIS frontend does not implement
     /// is kept as `NotHere` instead of being filtered away in silence — the
     /// H3f bug.
+    ///
+    /// **Y es la única cobertura viva de «un binding que no se puede ejecutar
+    /// SOBREVIVE marcado».** Había un test gemelo con un comando `Planned`,
+    /// que era el caso de un preset fiel a Total Commander cuando un tercio de
+    /// él nombraba cosas sin construir. #132 construyó la última, la tabla se
+    /// quedó sin `Planned`, y un test sobre datos que ya no existen no prueba
+    /// nada: se retiró. Cuando vuelva a haber una capacidad prometida, su
+    /// gemelo vuelve con ella.
     #[test]
     fn un_comando_live_que_este_frontend_no_implementa_es_not_here() {
         let preset = parse_keymap(
@@ -1630,7 +1623,9 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
         let hits: Vec<_> = all.iter().filter(|(seq, _, _)| seq == "alt+f1").collect();
         assert_eq!(hits.len(), 1, "el dedup deja UNA por secuencia: {all:?}");
         assert_eq!(hits[0].1, "pane.pack", "gana el contexto específico");
-        assert!(matches!(hits[0].2, Availability::NotBuilt { .. }));
+        // No disponible; el porqué da igual aquí (`NotBuilt` hasta que #132
+        // vació la lista de `Planned`, `NotHere` ahora).
+        assert!(!matches!(hits[0].2, Availability::Here), "{:?}", hits[0].2);
     }
 
     /// Unavailable bindings take part in the prefix-free check: the shape of
@@ -1669,7 +1664,10 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
         match r.push(chord) {
             Resolution::Unavailable { command, why } => {
                 assert_eq!(command, "pane.pack");
-                assert!(matches!(why, Availability::NotBuilt { .. }), "{why:?}");
+                // `NotHere` desde #132: el comando existe y este frontend
+                // no lo implementa. Lo que se prueba es que la tecla
+                // resuelve a «no disponible» y NO ejecuta nada.
+                assert!(matches!(why, Availability::NotHere), "{why:?}");
             }
             other => panic!("esperaba Unavailable, salió {other:?}"),
         }

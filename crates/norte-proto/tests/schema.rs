@@ -16,6 +16,14 @@ use norte_proto::*;
 #[allow(dead_code)]
 struct ProtocolSchema {
     ai_rename_entry: AiRenameEntry,
+    archive_format: methods::ArchiveFormat,
+    archive_pack_params: methods::ArchivePackParams,
+    archive_test_failure: methods::ArchiveTestFailure,
+    archive_test_params: methods::ArchiveTestParams,
+    archive_test_report_params: methods::ArchiveTestReportParams,
+    archive_test_result: methods::ArchiveTestResult,
+    file_combine_params: methods::FileCombineParams,
+    file_split_params: methods::FileSplitParams,
     ai_rename_plan_params: AiRenamePlanParams,
     ai_rename_plan_result: AiRenamePlanResult,
     attr_hint: AttrHint,

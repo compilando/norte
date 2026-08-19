@@ -9,6 +9,31 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Archives can be written.** The last five commands the presets bound and
+  norte did not have (#132). {{pack}} builds a new archive from what you
+  marked — the name you type decides the format, and the dialog says which one
+  it is going to write before you press Enter: `.zip`, `.tar`, `.tar.gz` or
+  `.tgz`. `.rar` is refused rather than quietly written as something else,
+  because norte reads rar by delegating to another program and that program is
+  not asked to write. Unpacking needs no dialog and no new machinery: it is a
+  copy out of the archive into the other panel, with the collision questions,
+  the journal entry and the undo that copying already had. Testing reads every
+  entry to the end and says **what it checked** — a zip has a CRC per entry, a
+  `.tar.gz` one for the whole stream, and a plain tar none at all, so
+  "passed" means three different things and the report distinguishes them.
+  Splitting cuts a file into `name.001`, `name.002`… in the other panel, and
+  joining puts them back from the `.001`; a gap in the numbering or a short
+  piece in the middle stops the join instead of producing a corrupt file that
+  looks fine. On the wire that is protocol **0.50.0** and **ADR 0060**.
+
+  What did *not* change is that an archive is read-only from the inside: none
+  of this writes into a container, and copying into one is still refused. A
+  cancelled pack leaves no file — an archive written halfway still looks like
+  an archive.
+
+  With those five, **the shared catalogue has no `Planned` commands left**:
+  every command a preset names is one norte has.
+
 - **A directory tree panel.** `pane.tree` opens a column on the left with the
   tree hanging from the directory you are looking at; `⏎` on a branch expands it
   and sends the listing there. It is read branch by branch — opening one lists

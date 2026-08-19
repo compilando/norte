@@ -952,9 +952,13 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
         );
     }
 
-    /// The K2b case: the key the user wants is bound to something norte has
-    /// not built, and the editor has to be able to SAY so — which is the whole
-    /// reason `Replaces` carries the availability.
+    /// The K2b case: the key the user wants is bound to something this build
+    /// cannot run, and the editor has to be able to SAY so — which is the
+    /// whole reason `Replaces` carries the availability.
+    ///
+    /// It was a `Planned` command until #132 built the last of them; what a
+    /// key can now be bound to and still not run is a command this frontend
+    /// does not implement.
     #[test]
     fn replaces_carries_the_availability_of_what_it_displaces() {
         let v = rebind_check(&eff(BROWSE, Screen::Browse), &[c("alt+f5")]);
@@ -962,10 +966,7 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
             v,
             Rebind::Replaces {
                 command: "pane.pack".to_owned(),
-                avail: Availability::NotBuilt {
-                    reason: "keymap-reason-archive-write",
-                    issue: 132
-                },
+                avail: Availability::NotHere,
             }
         );
         assert!(
@@ -1361,10 +1362,15 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
     }
 
     /// `Shadowed` carries the availability for the same reason `Replaces`
-    /// does: "`pane.pack` keeps that key, and it is not built yet" is a
+    /// does: "`pane.pack` keeps that key, and this build cannot run it" is a
     /// different sentence from "`cursor.top` keeps it", and only the editor
     /// that can say which one avoids sending a user to look for a feature
-    /// that does not exist.
+    /// that is not there.
+    ///
+    /// It used to say "and it is not built yet": #132 built the last `Planned`
+    /// command in the catalogue, so the availability that a shadow can carry
+    /// today is `NotHere` — the command exists and this frontend does not run
+    /// it. The point of the field is unchanged.
     #[test]
     fn shadowed_says_whether_what_keeps_the_key_even_works() {
         let preset = parse_keymap(BROWSE).expect("preset");
@@ -1383,10 +1389,7 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
                 &err,
                 RebindError::Shadowed {
                     by,
-                    avail: Availability::NotBuilt {
-                        reason: "keymap-reason-archive-write",
-                        issue: 132,
-                    },
+                    avail: Availability::NotHere,
                 } if by == "pane.pack"
             ),
             "{err:?}"

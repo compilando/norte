@@ -65,6 +65,53 @@ pub struct Pane {
     show_hidden_pref: bool,
 }
 
+/// El formato de archivo que sugiere un NOMBRE, entre los que se saben
+/// ESCRIBIR (#132).
+///
+/// Azúcar de presentación, igual que el mapa de `nav::archive_root_for`: lo
+/// que decide es el campo explícito del wire, y esto solo rellena el diálogo
+/// con lo que el usuario acaba de teclear. `rar` no está — se delega y solo
+/// para leer (ADR 0056)—, así que un `.rar` cae en `None` y el diálogo lo dice
+/// en vez de empaquetar un zip con nombre de rar.
+#[must_use]
+pub fn formato_por_nombre(name: &[u8]) -> Option<norte_proto::methods::ArchiveFormat> {
+    use norte_proto::methods::ArchiveFormat as F;
+    let acaba = |suf: &[u8]| {
+        name.len() >= suf.len() && name[name.len() - suf.len()..].eq_ignore_ascii_case(suf)
+    };
+    if acaba(b".tar.gz") || acaba(b".tgz") {
+        return Some(F::TarGz);
+    }
+    if acaba(b".tar") {
+        return Some(F::Tar);
+    }
+    if acaba(b".zip") {
+        return Some(F::Zip);
+    }
+    None
+}
+
+/// Un tamaño con sufijo (`4096`, `10M`, `1G`) en bytes, o `None` si no se
+/// entiende (#132).
+///
+/// Sufijos binarios, que es lo que significan en un gestor de ficheros: `M` es
+/// 1 MiB y no un millón. Sin sufijo son bytes.
+#[must_use]
+pub fn parse_tamano(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (num, mult) = match s.as_bytes()[s.len() - 1].to_ascii_uppercase() {
+        b'K' => (&s[..s.len() - 1], 1024_u64),
+        b'M' => (&s[..s.len() - 1], 1024 * 1024),
+        b'G' => (&s[..s.len() - 1], 1024 * 1024 * 1024),
+        _ => (s, 1),
+    };
+    let n: u64 = num.trim().parse().ok()?;
+    n.checked_mul(mult).filter(|v| *v > 0)
+}
+
 /// Estado de presentación de una búsqueda viva (`Alt+F7`, liveSearch T6): el
 /// run loop lo refleja en [`Pane::search_state`] para que la barra elija la
 /// variante `search-status-*`. `Failed` no se pinta en la barra del pane (el
@@ -4559,6 +4606,220 @@ impl App {
         }
     }
 
+    /// Abre el diálogo de empaquetar (#132), o deja el motivo si no se puede.
+    ///
+    /// El nombre por defecto sale de lo que se va a empaquetar: con una marca
+    /// sola o el cursor encima, el de esa entrada; con varias, el del
+    /// directorio. Es lo que hacen los gestores de los que vienen estas
+    /// teclas, y ahorra teclear el caso normal.
+    ///
+    /// Sobre un panel de solo lectura no se abre: el archivo se escribe AHÍ, y
+    /// preguntar el nombre para fallar después es hacer teclear para nada.
+    pub fn open_pack(&mut self) {
+        if self.pane_read_only(self.focus()) {
+            self.message = Some(t("msg-pack-read-only"));
+            return;
+        }
+        let marcadas = self.focused().marked_paths();
+        if marcadas.is_empty() {
+            self.message = Some(t("msg-pack-nothing"));
+            return;
+        }
+        let base = if marcadas.len() == 1 {
+            marcadas[0].file_name().map(|s| s.as_bytes().to_vec())
+        } else {
+            self.focused()
+                .dir()
+                .file_name()
+                .map(|s| s.as_bytes().to_vec())
+        };
+        let base = base.unwrap_or_else(|| b"archivo".to_vec());
+        // Con pérdidas y a sabiendas: es un campo de texto que el usuario va a
+        // editar. Los BYTES de las entradas no pasan por aquí — el nombre del
+        // archivo lo teclea una persona, y las entradas viajan por su `VPath`.
+        let sugerido = format!("{}.zip", String::from_utf8_lossy(&base));
+        self.modal = Some(Modal::Pack {
+            name: sugerido,
+            error: None,
+        });
+    }
+
+    /// Añade un carácter al nombre del archivo. No-op sin su modal.
+    pub fn pack_push(&mut self, c: char) {
+        if let Some(Modal::Pack { name, error }) = &mut self.modal {
+            if name.chars().count() >= MARK_PATTERN_MAX_CHARS {
+                return;
+            }
+            name.push(c);
+            *error = None;
+        }
+    }
+
+    /// Borra el último carácter. No-op sin su modal.
+    pub fn pack_pop(&mut self) {
+        if let Some(Modal::Pack { name, error }) = &mut self.modal {
+            name.pop();
+            *error = None;
+        }
+    }
+
+    /// Cancela el diálogo de empaquetar sin escribir nada.
+    pub fn cancel_pack(&mut self) {
+        if !matches!(self.modal, Some(Modal::Pack { .. })) {
+            debug_assert!(
+                false,
+                "solo los modales de texto libre se cierran sin decisión"
+            );
+            return;
+        }
+        self.modal = None;
+        self.open_next_pending();
+    }
+
+    /// Los params de `archive.pack` que el diálogo describe, o `None` si el
+    /// nombre no vale.
+    ///
+    /// El FORMATO sale del nombre tecleado y viaja explícito; un nombre sin
+    /// extensión conocida se rehúsa aquí en vez de empaquetar en un formato
+    /// que el usuario no pidió.
+    #[must_use]
+    pub fn pack_confirm(&mut self) -> Option<norte_proto::methods::ArchivePackParams> {
+        let Some(Modal::Pack { name, .. }) = &self.modal else {
+            return None;
+        };
+        let name = name.clone();
+        let Some(format) = formato_por_nombre(name.as_bytes()) else {
+            self.pack_set_error(t("msg-pack-unknown-format"));
+            return None;
+        };
+        let Ok(seg) = norte_proto::Segment::new(name.into_bytes()) else {
+            self.pack_set_error(t("msg-pack-bad-name"));
+            return None;
+        };
+        let dir = self.focused().dir().clone();
+        let dest = dir.join(seg);
+        Some(norte_proto::methods::ArchivePackParams {
+            sources: self.focused().marked_paths(),
+            dest,
+            format,
+            level: None,
+            // La base es el directorio del panel: los nombres guardados son
+            // los que se ven en pantalla, que es lo que espera quien luego
+            // desempaqueta.
+            base: dir,
+        })
+    }
+
+    /// El diálogo se cerró porque la task encoló.
+    pub fn pack_submitted(&mut self) {
+        if matches!(self.modal, Some(Modal::Pack { .. })) {
+            self.modal = None;
+            self.open_next_pending();
+        }
+    }
+
+    /// Deja el diagnóstico y conserva lo tecleado.
+    pub fn pack_set_error(&mut self, msg: String) {
+        if let Some(Modal::Pack { error, .. }) = &mut self.modal {
+            *error = Some(msg);
+        }
+    }
+
+    /// Abre el diálogo de partir un fichero (#132).
+    pub fn open_split(&mut self) {
+        if self.pane_read_only(self.focus()) {
+            self.message = Some(t("msg-pack-read-only"));
+            return;
+        }
+        if self
+            .focused()
+            .selected()
+            .is_none_or(|e| e.kind != EntryKind::File)
+        {
+            self.message = Some(t("msg-split-needs-file"));
+            return;
+        }
+        self.modal = Some(Modal::Split {
+            size: "10M".to_owned(),
+            error: None,
+        });
+    }
+
+    /// Añade un carácter al tamaño. No-op sin su modal.
+    pub fn split_push(&mut self, c: char) {
+        if let Some(Modal::Split { size, error }) = &mut self.modal {
+            if size.chars().count() >= 32 {
+                return;
+            }
+            size.push(c);
+            *error = None;
+        }
+    }
+
+    /// Borra el último carácter. No-op sin su modal.
+    pub fn split_pop(&mut self) {
+        if let Some(Modal::Split { size, error }) = &mut self.modal {
+            size.pop();
+            *error = None;
+        }
+    }
+
+    /// Cancela el diálogo de partir.
+    pub fn cancel_split(&mut self) {
+        if !matches!(self.modal, Some(Modal::Split { .. })) {
+            debug_assert!(
+                false,
+                "solo los modales de texto libre se cierran sin decisión"
+            );
+            return;
+        }
+        self.modal = None;
+        self.open_next_pending();
+    }
+
+    /// Los params de `file.split` que el diálogo describe, o `None` si el
+    /// tamaño no vale.
+    #[must_use]
+    pub fn split_confirm(&mut self) -> Option<norte_proto::methods::FileSplitParams> {
+        let Some(Modal::Split { size, .. }) = &self.modal else {
+            return None;
+        };
+        let Some(bytes) = parse_tamano(size) else {
+            self.split_set_error(t("msg-split-bad-size"));
+            return None;
+        };
+        let path = self.focused().selected().map(|e| e.path.clone())?;
+        // Los trozos van al OTRO panel si lo hay, y si no al mismo: es lo que
+        // hace la copia, y por lo mismo — partir un fichero de un giga en el
+        // sitio donde ya está suele no caber.
+        let dest_dir = self
+            .panes
+            .browser(self.layout.slot_ids().into_iter().find(|id| {
+                self.panes.browser(*id).is_some() && self.panes.slot_of(self.focus()) != *id
+            })?)
+            .map_or_else(|| self.focused().dir().clone(), |p| p.dir().clone());
+        Some(norte_proto::methods::FileSplitParams {
+            path,
+            part_bytes: bytes,
+            dest_dir,
+        })
+    }
+
+    /// El diálogo se cerró porque la task encoló.
+    pub fn split_submitted(&mut self) {
+        if matches!(self.modal, Some(Modal::Split { .. })) {
+            self.modal = None;
+            self.open_next_pending();
+        }
+    }
+
+    /// Deja el diagnóstico y conserva lo tecleado.
+    pub fn split_set_error(&mut self, msg: String) {
+        if let Some(Modal::Split { error, .. }) = &mut self.modal {
+            *error = Some(msg);
+        }
+    }
+
     /// Abre el modal de crear directorio (F7, #104).
     pub fn open_mkdir(&mut self) {
         self.modal = Some(Modal::Mkdir {
@@ -5999,6 +6260,27 @@ pub enum Modal {
         /// Diagnóstico del último intento inválido, bajo el campo.
         error: Option<String>,
     },
+    /// Empaquetar (#132). Texto libre: el NOMBRE del archivo que se va a
+    /// crear, prellenado con el del directorio o la entrada de partida más la
+    /// extensión de zip.
+    ///
+    /// El formato sale del nombre y se enseña en el propio diálogo: lo que
+    /// viaja por el wire es la decisión ya tomada, no un nombre para que el
+    /// servidor adivine (ver `ARCHIVE_PACK`).
+    Pack {
+        /// Lo tecleado hasta ahora.
+        name: String,
+        /// Diagnóstico del último intento inválido.
+        error: Option<String>,
+    },
+    /// Partir un fichero (#132). Texto libre: el tamaño de cada trozo, con
+    /// sufijo (`10M`, `700M`, `4096`).
+    Split {
+        /// Lo tecleado hasta ahora.
+        size: String,
+        /// Diagnóstico del último intento inválido.
+        error: Option<String>,
+    },
     /// Crear directorio (F7, #104). Texto libre como [`Modal::MarkPattern`]:
     /// el nombre CRUDO del usuario, enmascarado al pintarlo (un nombre
     /// llega por paste con bidi/invisibles tan fácil como un patrón).
@@ -6419,6 +6701,9 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         | Modal::AiRenameInstruction { .. }
         | Modal::SemanticQuery { .. }
         | Modal::TransferDest { .. }
+        // #132: los dos de escribir archivos, por lo mismo.
+        | Modal::Pack { .. }
+        | Modal::Split { .. }
         | Modal::TransferName { .. } => None,
     }
 }
@@ -9746,8 +10031,14 @@ mod which_key_tests {
     use norte_proto::{Scheme, VPath};
 
     /// Counts ON, one `g` prefix with an available branch, an unavailable one
-    /// (`pane.pack` is `Planned`, #132 — with K2b's presets that is a normal
-    /// row, not an edge case) and a deeper branch.
+    /// and a deeper branch.
+    ///
+    /// The unavailable one used to be `pane.pack`, `Planned` under #132. That
+    /// issue is built, and with it the catalogue ran out of `Planned` entries
+    /// altogether — every command a preset names is now a command norte has.
+    /// So the dimmed row this test needs is the OTHER unavailable: a live
+    /// command this build does not implement, which is what a GUI-only
+    /// binding looks like from the terminal.
     fn resolver() -> Resolver {
         let src = r#"
 counts = true
@@ -9849,9 +10140,9 @@ keymap = [
             .rows
             .iter()
             .find(|row| row.chord == "p")
-            .expect("the pane.pack row");
-        assert!(matches!(p.avail, Availability::NotBuilt { issue: 132, .. }));
-        assert!(p.reason.contains("132"), "{:?}", p.reason);
+            .expect("the row of the command this build does not run");
+        assert!(matches!(p.avail, Availability::NotHere), "{:?}", p.avail);
+        assert!(!p.reason.is_empty(), "and it says why: {:?}", p.reason);
     }
 
     /// `Esc` cancels a sequence, and every other end of the pending state
