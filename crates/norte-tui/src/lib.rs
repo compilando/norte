@@ -27,3 +27,4 @@ pub mod tree;
 pub mod tty;
 pub mod ui;
 pub mod viewer;
+pub mod viewer_open;
