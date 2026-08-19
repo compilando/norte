@@ -506,11 +506,11 @@ pub async fn run(
             // frame y no en el siguiente.
             fetch_plugin_page(backend, app).await;
             let size = terminal.size().map_err(RunError::Terminal)?;
-            let (width, alto) = ui::help_body_size(
+            let (width, height) = ui::help_body_size(
                 ratatui::layout::Rect::new(0, 0, size.width, size.height),
                 lang,
             );
-            app.refresh_help(width, alto);
+            app.refresh_help(width, height);
         }
         // La ventana de cada pane se reconcilia ANTES de pintar (#124 + el
         // scroll pegajoso): el cursor ya está donde lo dejó la tecla, así que

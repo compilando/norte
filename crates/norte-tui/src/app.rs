@@ -1510,15 +1510,15 @@ fn nav_item_display(
 ) -> String {
     // #98/F4: los popups son superficie de DECISIÓN (elegir destino de
     // salto) — siguen la reinterpretación del pane con foco, como la barra.
-    let (text, path_hostil) = norte_frontend::path_display_with(path, enc);
-    let (prefix, name_hostil) = match name {
+    let (text, path_hostile) = norte_frontend::path_display_with(path, enc);
+    let (prefix, name_hostile) = match name {
         Some(n) => {
             let (nt, nh) = display_name(n.as_bytes());
             (format!("{nt} — "), nh)
         }
         None => (String::new(), false),
     };
-    if path_hostil || name_hostil {
+    if path_hostile || name_hostile {
         format!("{} {prefix}{text}", crate::ui::HOSTILE_BADGE)
     } else {
         format!("{prefix}{text}")
@@ -1571,15 +1571,15 @@ fn volume_item_display(
 ) -> String {
     // #98/F4 (same reasoning `nav_item_display` carries): a popup is a
     // decision surface, so it follows the focused pane's reinterpretation.
-    let (path_text, path_hostil) = norte_frontend::path_display_with(&v.mount, enc);
-    let (label_prefix, label_hostil) = match v.label.as_deref() {
+    let (path_text, path_hostile) = norte_frontend::path_display_with(&v.mount, enc);
+    let (label_prefix, label_hostile) = match v.label.as_deref() {
         Some(l) => {
             let (nt, nh) = display_name(l);
             (format!("{nt} — "), nh)
         }
         None => (String::new(), false),
     };
-    let (fs_type_text, fs_type_hostil) = display_name(v.fs_type.as_bytes());
+    let (fs_type_text, fs_type_hostile) = display_name(v.fs_type.as_bytes());
     let free = v
         .free_bytes
         .map_or_else(|| t("volumes-size-unknown"), norte_frontend::human_bytes);
@@ -1587,7 +1587,7 @@ fn volume_item_display(
         .total_bytes
         .map_or_else(|| t("volumes-size-unknown"), norte_frontend::human_bytes);
     let body = format!("{label_prefix}{path_text}  {fs_type_text}  {free} / {total}");
-    if path_hostil || label_hostil || fs_type_hostil {
+    if path_hostile || label_hostile || fs_type_hostile {
         format!("{} {body}", crate::ui::HOSTILE_BADGE)
     } else {
         body
@@ -2896,7 +2896,7 @@ impl App {
     #[must_use]
     pub fn journal_banner(&self) -> Option<String> {
         use norte_core::embedded::NoJournal as N;
-        self.no_journal.as_ref().map(|estado| match estado {
+        self.no_journal.as_ref().map(|state| match state {
             // #203: el mismo hecho que un `Busy` con otra explicación. La
             // frase suave sale también cuando hay un daemon vivo —el caso
             // corriente— así que sobre un ocupante sin explicar dice
@@ -8453,10 +8453,10 @@ mod tests {
     #[test]
     fn volume_label_hostile_corpus_sweep() {
         let mount = vp("mem:///media/usb");
-        let (path_text, path_hostil) = norte_frontend::path_display_with(&mount, None);
-        assert!(!path_hostil, "control: el mount fijo del test no es hostil");
-        let (fs_text, fs_hostil) = display_name(b"vfat");
-        assert!(!fs_hostil, "control: \"vfat\" no es hostil");
+        let (path_text, path_hostile) = norte_frontend::path_display_with(&mount, None);
+        assert!(!path_hostile, "control: el mount fijo del test no es hostil");
+        let (fs_text, fs_hostile) = display_name(b"vfat");
+        assert!(!fs_hostile, "control: \"vfat\" no es hostil");
         let sizes = format!("{u} / {u}", u = t("volumes-size-unknown"));
         for fixture in norte_testkit::corpus::hostile_names() {
             let vol = norte_proto::methods::Volume {
@@ -8470,9 +8470,9 @@ mod tests {
             };
             let items = volume_items(std::slice::from_ref(&vol), None);
             let display = &items[0].display;
-            let (label_text, label_hostil) = display_name(&fixture.bytes);
+            let (label_text, label_hostile) = display_name(&fixture.bytes);
             let body = format!("{label_text} — {path_text}  {fs_text}  {sizes}");
-            let expected = if label_hostil {
+            let expected = if label_hostile {
                 format!("{} {body}", crate::ui::HOSTILE_BADGE)
             } else {
                 body

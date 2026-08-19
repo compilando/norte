@@ -156,13 +156,13 @@ pub fn before_frame(app: &mut App, area: Rect) {
     // lado y no el scroll en silencio.
     let body = overlay_body(app, area);
     if let Some(view) = &mut app.sync {
-        let (_, lista, _) = sync_layout_rows(body, view);
+        let (_, list, _) = sync_layout_rows(body, view);
         if let Some(plan) = view.state.plan_mut() {
-            plan.reconcile_viewport(usize::from(lista.height));
+            plan.reconcile_viewport(usize::from(list.height));
         }
     } else if let Some(view) = &mut app.compare {
-        let (_, lista, _, _) = compare_layout(block_inner(body));
-        view.pane.reconcile_viewport(usize::from(lista.height));
+        let (_, list, _, _) = compare_layout(block_inner(body));
+        view.pane.reconcile_viewport(usize::from(list.height));
     }
 }
 
@@ -742,8 +742,8 @@ fn draw_search_dialog(
     let name_active = dialog.field == SearchField::Name;
     // #98/F4: la raíz del walk es superficie de decisión — sigue la
     // reinterpretación del pane (la barra de abajo pinta el mismo dir así).
-    let (root_txt, root_hostil) = norte_frontend::path_display_with(root, enc);
-    let root_line = if root_hostil {
+    let (root_txt, root_hostile) = norte_frontend::path_display_with(root, enc);
+    let root_line = if root_hostile {
         format!("{HOSTILE_BADGE} {root_txt}")
     } else {
         root_txt
@@ -1929,14 +1929,14 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiThem
         .collect();
     // La última columna del cuerpo es su barra: la prosa ya viene envuelta a
     // una celda menos (`help_body_size`), así que aquí solo se reparte.
-    let (texto_area, barra_cuerpo) = split_scrollbar(body_area);
-    frame.render_widget(Paragraph::new(body), texto_area);
+    let (text_area, body_bar) = split_scrollbar(body_area);
+    frame.render_widget(Paragraph::new(body), text_area);
     // Las DOS columnas dicen por dónde van. Hasta ahora ninguna lo decía: el
     // `N/M` del pie habla solo del cuerpo y solo cuando no cabe, así que en el
     // índice no había NADA que dijera que quedaban filas debajo.
     render_scrollbar(
         frame,
-        barra_cuerpo,
+        body_bar,
         theme,
         lines.len(),
         state.body_scroll(),
@@ -2849,16 +2849,16 @@ fn draw_tree(
                 // Sin leer: ni hoja ni rama, todavía.
                 (false, None) => "·",
             };
-            let (nombre, hostile) = display_name(
+            let (name, hostile) = display_name(
                 r.path
                     .file_name()
                     .map_or(b"/".as_slice(), norte_proto::Segment::as_bytes),
             );
             let indent = "  ".repeat(r.depth);
             let text = if hostile {
-                format!("{indent}{mark} {HOSTILE_BADGE} {nombre}")
+                format!("{indent}{mark} {HOSTILE_BADGE} {name}")
             } else {
-                format!("{indent}{mark} {nombre}")
+                format!("{indent}{mark} {name}")
             };
             ListItem::new(Line::raw(text))
         })
@@ -2911,7 +2911,7 @@ fn draw_processes(
             // diciendo de un vistazo por dónde va.
             let full = usize::try_from(pct / 10).unwrap_or(0).min(10);
             let bar: String = "█".repeat(full) + &"░".repeat(10 - full);
-            let (estado_txt, role) = match &p.state {
+            let (state_txt, role) = match &p.state {
                 norte_proto::TaskState::Completed => ("✓".to_owned(), Some(Role::Info)),
                 norte_proto::TaskState::Cancelled => (t("task-cancelled"), Some(Role::Warning)),
                 norte_proto::TaskState::Failed { .. } => (t("task-failed"), Some(Role::Error)),
@@ -2923,8 +2923,8 @@ fn draw_processes(
                 p.task_id.get()
             );
             let tail = match role {
-                Some(r) => Span::styled(estado_txt, theme.role(r)),
-                None => Span::raw(estado_txt),
+                Some(r) => Span::styled(state_txt, theme.role(r)),
+                None => Span::raw(state_txt),
             };
             ListItem::new(Line::from(vec![Span::raw(header), tail]))
         })
@@ -3045,7 +3045,7 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
             let pct = progress_pct(p);
             // Por CATEGORÍA (Display estable), jamás Debug de cara al usuario.
             // El estado se colorea por rol (error rojo, hecho info).
-            let (estado, role) = match &p.state {
+            let (state, role) = match &p.state {
                 norte_proto::TaskState::Completed => ("✓".to_owned(), Some(Role::Info)),
                 norte_proto::TaskState::Cancelled => (t("task-cancelled"), Some(Role::Warning)),
                 norte_proto::TaskState::Failed { error } => {
@@ -3078,8 +3078,8 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
             };
             let head = Span::raw(format!(" {kind} #{} ", p.task_id.get()));
             let tail = match role {
-                Some(r) => Span::styled(estado, app.theme.role(r)),
-                None => Span::raw(estado),
+                Some(r) => Span::styled(state, app.theme.role(r)),
+                None => Span::raw(state),
             };
             Line::from(vec![head, tail])
         })
@@ -3444,7 +3444,7 @@ fn draw_modal(
     hints: &crate::hints::DialogHints,
 ) {
     use crate::app::Modal;
-    let (titulo, body) = modal_title_body(modal, reinterpret, hints);
+    let (title, body) = modal_title_body(modal, reinterpret, hints);
     // Un borrado PERMANENTE (o aprobar una mutación de agente) tiñe el borde
     // de aviso (rol `warning`).
     let border = if is_warning_modal(modal) {
@@ -3456,14 +3456,14 @@ fn draw_modal(
     let height = modal_height(modal);
     let area = centered(
         frame.area(),
-        modal_width(&titulo, &body, frame.area().width),
+        modal_width(&title, &body, frame.area().width),
         height,
     );
     clear_themed(frame, area, theme);
     let mut body = Paragraph::new(body).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(titulo)
+            .title(title)
             .title_style(theme.role(Role::Title))
             .border_style(border),
     );
@@ -3573,16 +3573,16 @@ fn properties_modal_text(
 ) -> (String, String) {
     use norte_proto::EntryKind;
 
-    let (nombre, hostile) = display_name(
+    let (name, hostile) = display_name(
         entry
             .path
             .file_name()
             .map_or(b"".as_slice(), norte_proto::Segment::as_bytes),
     );
     let title = if hostile {
-        format!("{HOSTILE_BADGE} {nombre}")
+        format!("{HOSTILE_BADGE} {name}")
     } else {
-        nombre
+        name
     };
     let class = match entry.kind {
         EntryKind::Dir => t("props-kind-dir"),
@@ -3619,11 +3619,11 @@ fn properties_modal_text(
             )
         )
     ));
-    let (ruta, ruta_hostil) = display_name(entry.path.to_wire().as_bytes());
+    let (ruta, path_hostile) = display_name(entry.path.to_wire().as_bytes());
     lines.push(format!(
         "{}: {}{}",
         t("props-path"),
-        if ruta_hostil {
+        if path_hostile {
             format!("{HOSTILE_BADGE} ")
         } else {
             String::new()
@@ -3633,10 +3633,10 @@ fn properties_modal_text(
     // Los atributos que el provider haya reportado, tal cual: los pinta quien
     // los pidió, y esta ventana no pide ninguno de más.
     for (id, value) in &entry.attrs {
-        let (v, v_hostil) = attr_text(value);
+        let (v, v_hostile) = attr_text(value);
         lines.push(format!(
             "{id}: {}{v}",
-            if v_hostil {
+            if v_hostile {
                 format!("{HOSTILE_BADGE} ")
             } else {
                 String::new()
@@ -3781,9 +3781,9 @@ fn ai_rename_plan_modal_text(
     // offset fuera de rango jamás debe pintar una ventana vacía.
     let offset = offset.min(entries.len().saturating_sub(AI_RENAME_PAIR_LIMIT));
     let last = (offset + AI_RENAME_PAIR_LIMIT).min(entries.len());
-    let (dir_txt, dir_hostil) = norte_frontend::path_display(dir);
+    let (dir_txt, dir_hostile) = norte_frontend::path_display(dir);
     let mut lines = vec![badge_prefixed(
-        dir_hostil,
+        dir_hostile,
         ta(
             "modal-ai-rename-dir",
             &[("dir", &middle_ellipsis(&dir_txt, 46))],
@@ -3795,10 +3795,10 @@ fn ai_rename_plan_modal_text(
     // perderse — es la que dice si esto va a renombrar algo.
     lines.push(t(plan.status_key()));
     for (i, e) in entries.iter().enumerate().take(last).skip(offset) {
-        let (from, from_hostil) = display_name(e.from.as_bytes());
-        let (to, to_hostil) = display_name(e.to.as_bytes());
+        let (from, from_hostile) = display_name(e.from.as_bytes());
+        let (to, to_hostile) = display_name(e.to.as_bytes());
         lines.push(badge_prefixed(
-            from_hostil,
+            from_hostile,
             ta(
                 "modal-ai-rename-pair-from",
                 &[
@@ -3808,7 +3808,7 @@ fn ai_rename_plan_modal_text(
             ),
         ));
         lines.push(badge_prefixed(
-            to_hostil,
+            to_hostile,
             ta(
                 "modal-ai-rename-pair-to",
                 &[("to", &middle_ellipsis(&to, 44))],
@@ -4217,7 +4217,7 @@ mod transfer_name_modal_text_tests {
         let hostile = "abc\u{202E}rid";
         let from = VPath::parse("mem:///src/a%FF.txt").unwrap();
         let to_dir = VPath::parse("mem:///dst%FE").unwrap();
-        let (_, cuerpo) = transfer_name_modal_text(
+        let (_, body) = transfer_name_modal_text(
             TransferKind::Move,
             &from,
             &to_dir,
@@ -4225,14 +4225,14 @@ mod transfer_name_modal_text_tests {
             Some(hostile),
             None,
         );
-        assert!(!cuerpo.contains('\u{202E}'), "{cuerpo:?}");
+        assert!(!body.contains('\u{202E}'), "{body:?}");
         assert!(
-            cuerpo.matches('\u{FFFD}').count() >= 4,
-            "nombre + error (RLO) y origen + destino (bytes): {cuerpo:?}"
+            body.matches('\u{FFFD}').count() >= 4,
+            "nombre + error (RLO) y origen + destino (bytes): {body:?}"
         );
         assert!(
-            cuerpo.matches(super::HOSTILE_BADGE).count() >= 2,
-            "{cuerpo:?}"
+            body.matches(super::HOSTILE_BADGE).count() >= 2,
+            "{body:?}"
         );
     }
 }
@@ -4253,9 +4253,9 @@ mod free_text_modal_text_tests {
             ("modal-semantic", "modal-semantic-hint"),
         ];
         for (titulo, hint) in cases {
-            let (t, cuerpo) = free_text_modal_text(titulo, hint, "x", None);
+            let (t, body) = free_text_modal_text(titulo, hint, "x", None);
             assert_ne!(t, titulo, "{titulo} sin traducción: sale el id crudo");
-            let hint_line = cuerpo.lines().nth(1).expect("hint");
+            let hint_line = body.lines().nth(1).expect("hint");
             assert_ne!(hint_line, hint, "{hint} sin traducción: sale el id crudo");
         }
     }
@@ -4266,13 +4266,13 @@ mod free_text_modal_text_tests {
     #[test]
     fn un_valor_largo_ensena_su_cola_y_marca_el_corte() {
         let long = "a".repeat(300);
-        let (_, cuerpo) = free_text_modal_text(
+        let (_, body) = free_text_modal_text(
             "modal-command-line",
             "modal-command-line-hint",
             &long,
             None,
         );
-        let field = cuerpo.lines().next().expect("campo");
+        let field = body.lines().next().expect("campo");
         assert!(field.starts_with('…'), "el corte se marca: {field:?}");
         assert!(field.ends_with('_'), "y el cursor se ve: {field:?}");
         assert!(
@@ -4299,10 +4299,10 @@ mod free_text_modal_text_tests {
     #[test]
     fn masks_a_raw_rtl_override_in_name_and_error() {
         let hostile = "abc\u{202E}rid";
-        let (_, cuerpo) =
+        let (_, body) =
             free_text_modal_text("modal-mkdir", "modal-mkdir-hint", hostile, Some(hostile));
-        assert!(!cuerpo.contains('\u{202E}'), "{cuerpo:?}");
-        assert_eq!(cuerpo.matches('\u{FFFD}').count(), 2, "{cuerpo:?}");
+        assert!(!body.contains('\u{202E}'), "{body:?}");
+        assert_eq!(body.matches('\u{FFFD}').count(), 2, "{body:?}");
     }
 }
 
@@ -4322,15 +4322,15 @@ mod mark_pattern_modal_text_tests {
     #[test]
     fn masks_a_raw_rtl_override_in_both_the_pattern_and_the_error() {
         let hostile = "abc\u{202E}gpj.exe";
-        let (_, cuerpo) = mark_pattern_modal_text(true, hostile, Some(hostile));
+        let (_, body) = mark_pattern_modal_text(true, hostile, Some(hostile));
         assert!(
-            !cuerpo.contains('\u{202E}'),
-            "raw RTL override must not survive: {cuerpo:?}"
+            !body.contains('\u{202E}'),
+            "raw RTL override must not survive: {body:?}"
         );
         assert_eq!(
-            cuerpo.matches('\u{FFFD}').count(),
+            body.matches('\u{FFFD}').count(),
             2,
-            "one U+FFFD per masked line (pattern + error): {cuerpo:?}"
+            "one U+FFFD per masked line (pattern + error): {body:?}"
         );
     }
 
@@ -4338,8 +4338,8 @@ mod mark_pattern_modal_text_tests {
     #[test]
     fn masks_only_the_pattern_line_when_there_is_no_error() {
         let hostile = "abc\u{202E}gpj.exe";
-        let (_, cuerpo) = mark_pattern_modal_text(true, hostile, None);
-        assert_eq!(cuerpo.matches('\u{FFFD}').count(), 1);
+        let (_, body) = mark_pattern_modal_text(true, hostile, None);
+        assert_eq!(body.matches('\u{FFFD}').count(), 1);
     }
 }
 
@@ -4357,33 +4357,33 @@ fn trust_host_modal_text(
     fingerprint: &str,
     hint: &str,
 ) -> (String, String) {
-    let (host_txt, host_hostil) = display_name(host.as_bytes());
+    let (host_txt, host_hostile) = display_name(host.as_bytes());
     let hostport = match port {
         Some(p) => format!("{}:{p}", clamp_chars(&host_txt, 48)),
         None => clamp_chars(&host_txt, 48),
     };
-    let (algo_disp, algo_hostil) = display_name(algo.as_bytes());
+    let (algo_disp, algo_hostile) = display_name(algo.as_bytes());
     let algo_txt = clamp_chars(&algo_disp, 24);
-    let (fp_txt, fp_hostil) = display_name(fingerprint.as_bytes());
+    let (fp_txt, fp_hostile) = display_name(fingerprint.as_bytes());
     let lines = [
         ta(
             "modal-trust-host-host",
             &[
-                ("badge", if host_hostil { HOSTILE_BADGE } else { "" }),
+                ("badge", if host_hostile { HOSTILE_BADGE } else { "" }),
                 ("host", &hostport),
             ],
         ),
         ta(
             "modal-trust-host-algo",
             &[
-                ("badge", if algo_hostil { HOSTILE_BADGE } else { "" }),
+                ("badge", if algo_hostile { HOSTILE_BADGE } else { "" }),
                 ("algo", &algo_txt),
             ],
         ),
         ta(
             "modal-trust-host-fp",
             &[
-                ("badge", if fp_hostil { HOSTILE_BADGE } else { "" }),
+                ("badge", if fp_hostile { HOSTILE_BADGE } else { "" }),
                 ("fingerprint", &clamp_chars(&fp_txt, 52)),
             ],
         ),
@@ -4481,7 +4481,7 @@ fn draw_compare(
     // cortaba a media palabra — el snapshot lo cazó, que es exactamente para
     // lo que está. Con el marco tan corto que no caben, la lista se queda con
     // todo: un panel sin filas no explica nada.
-    let (cabecera, inner, filtros_area, teclas_area) = compare_layout(outer);
+    let (header, inner, filtros_area, keys_area) = compare_layout(outer);
 
     // Anchos: las dos marcas y su separación en el centro, el resto a partes
     // iguales entre las dos caras. `saturating_sub` porque un terminal
@@ -4489,7 +4489,7 @@ fn draw_compare(
     let sides = inner.width.saturating_sub(COMPARE_MARKS_W + 1);
     let face_w = usize::from(sides / 2).max(1);
 
-    if let Some(a) = cabecera {
+    if let Some(a) = header {
         frame.render_widget(compare_header(face_w, theme), a);
     }
 
@@ -4586,7 +4586,7 @@ fn draw_compare(
             a,
         );
     }
-    if let Some(a) = teclas_area {
+    if let Some(a) = keys_area {
         // Las teclas de sincronizar caben en la MISMA línea, y esa es la razón
         // de que la línea entera perdiera los corchetes: a 80 columnas el
         // marco tiene 78 y la versión con corchetes se cortaba a media
@@ -4677,9 +4677,9 @@ fn compare_title_halves(
     view: &crate::app::CompareView,
     frame_width: usize,
 ) -> (CompareTitleHalf, CompareTitleHalf) {
-    let (left_txt, left_hostil) =
+    let (left_txt, left_hostile) =
         norte_frontend::path_display_with(&view.left_root, view.left_encoding);
-    let (right_txt, right_hostil) =
+    let (right_txt, right_hostile) =
         norte_frontend::path_display_with(&view.right_root, view.right_encoding);
     let badge_w = |h: bool| if h { HOSTILE_BADGE.width() } else { 0 };
     let prefix_w = format!(" {} — ", t("compare-title")).width();
@@ -4687,18 +4687,18 @@ fn compare_title_halves(
     // dos marcas — todo lo que NO es texto de raíz, reservado antes de
     // repartir lo que queda.
     let fixed =
-        2 + prefix_w + COMPARE_TITLE_SEP.width() + 1 + badge_w(left_hostil) + badge_w(right_hostil);
+        2 + prefix_w + COMPARE_TITLE_SEP.width() + 1 + badge_w(left_hostile) + badge_w(right_hostile);
     let roots_w = frame_width.saturating_sub(fixed).max(2);
     let left_w = (roots_w / 2).max(1);
     let right_w = roots_w.saturating_sub(left_w).max(1);
     (
         CompareTitleHalf {
             text: norte_frontend::middle_ellipsis(&left_txt, left_w),
-            hostile: left_hostil,
+            hostile: left_hostile,
         },
         CompareTitleHalf {
             text: norte_frontend::middle_ellipsis(&right_txt, right_w),
-            hostile: right_hostil,
+            hostile: right_hostile,
         },
     )
 }
@@ -4920,12 +4920,12 @@ fn compare_mark_style(theme: &TuiTheme, verdict: norte_proto::methods::CompareVe
 /// pregunta. Aquí solo se reparte el sitio y se elige el color, y el color
 /// nunca es lo único que distingue nada (§17) — las marcas son glifos ASCII.
 fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, theme: &TuiTheme) {
-    let (source_txt, source_hostil) =
+    let (source_txt, source_hostile) =
         norte_frontend::path_display_with(&view.source_root, view.source_encoding);
     // Con la reinterpretación del DESTINO, no la del origen: un share CP1251
     // en el otro pane se pintaba `????` en el título aunque el lector hubiera
     // pulsado `Alt+E` sobre él.
-    let (dest_txt, dest_hostil) =
+    let (dest_txt, dest_hostile) =
         norte_frontend::path_display_with(&view.dest_root, view.dest_encoding);
     let badge = |h: bool| if h { HOSTILE_BADGE } else { "" };
     // El brazo `_` NO cae en «actualizar»: `SyncMode` es `#[non_exhaustive]`,
@@ -4949,9 +4949,9 @@ fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, the
     let title = format!(
         " {} ({mode}) — {}{} → {}{} ",
         t("sync-title"),
-        badge(source_hostil),
+        badge(source_hostile),
         source_txt,
-        badge(dest_hostil),
+        badge(dest_hostile),
         dest_txt
     );
     let block = Block::default()
@@ -4968,8 +4968,8 @@ fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, the
     if outer.width == 0 || outer.height == 0 {
         return;
     }
-    let (resumen_area, inner, teclas_area) = sync_layout(outer, view);
-    if let Some(a) = resumen_area {
+    let (summary_area, inner, keys_area) = sync_layout(outer, view);
+    if let Some(a) = summary_area {
         frame.render_widget(sync_summary(view, theme), a);
     }
     // Los pasos se pintan LLEGANDO, no solo cerrados: mientras el plan viaja
@@ -5017,7 +5017,7 @@ fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, the
             &mut state,
         );
     }
-    if let Some(a) = teclas_area {
+    if let Some(a) = keys_area {
         // La pregunta y CÓMO se contesta van en dos líneas, no en una: a 80
         // columnas la pregunta sola ya llena la fila, y la versión unida se
         // cortaba justo por donde decía qué tecla la contesta — que es la
@@ -5707,8 +5707,8 @@ fn draw_pane(
     } else {
         theme.role(Role::BorderUnfocused)
     };
-    let (title, title_hostil) = norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
-    let mut title = if title_hostil {
+    let (title, title_hostile) = norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
+    let mut title = if title_hostile {
         format!("{HOSTILE_BADGE} {title}")
     } else {
         title
@@ -6138,9 +6138,9 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         format!("  {pos}/{total}")
     };
     let (marked, pruned) = marks_status_segments(pane);
-    let (dir_text, dir_hostil) =
+    let (dir_text, dir_hostile) =
         norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
-    let mark = if dir_hostil { HOSTILE_BADGE } else { "" };
+    let mark = if dir_hostile { HOSTILE_BADGE } else { "" };
     // Sin chuleta de teclas: mentiría según el preset. La secuencia pendiente
     // SÍ se pinta (ADR 0006), y desde K3a el panel which-key
     // ([`draw_which_key`]) pinta encima de esta barra lo que puede SEGUIR a
@@ -7212,9 +7212,9 @@ mod approval_modal_tests {
         );
 
         // Con TODAS las ocultas limpias, no marca (o el badge no diría nada).
-        let (_, limpio) = approval_modal_text(&req(rutas(limit + 2)), "PIE");
-        let clean_summary = limpio.lines().nth(limit + 1).expect("resumen");
-        assert!(!clean_summary.starts_with(HOSTILE_BADGE), "{limpio:?}");
+        let (_, clean) = approval_modal_text(&req(rutas(limit + 2)), "PIE");
+        let clean_summary = clean.lines().nth(limit + 1).expect("resumen");
+        assert!(!clean_summary.starts_with(HOSTILE_BADGE), "{clean:?}");
     }
 }
 

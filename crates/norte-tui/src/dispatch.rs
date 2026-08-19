@@ -314,8 +314,8 @@ pub async fn dispatch(
             // se adivina cuál — en los dos casos se teclea la dirección en vez
             // de fallar. Adivinarla sería pérdida de datos silenciosa
             // (ADR 0058 D7); callarse, una tecla muerta.
-            if let Some(destino) = app.target_index() {
-                app.open_transfer(kind, app.focus(), destino, None);
+            if let Some(dest) = app.target_index() {
+                app.open_transfer(kind, app.focus(), dest, None);
             } else {
                 app.open_transfer_dest(kind);
             }

@@ -1125,8 +1125,8 @@ fn refresh_help_en(app: &mut App, w: u16, h: u16) {
     let Some(lang) = app.help.as_ref().map(|v| v.state.lang()) else {
         return;
     };
-    let (width, alto) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, w, h), lang);
-    app.refresh_help(width, alto);
+    let (width, height) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, w, h), lang);
+    app.refresh_help(width, height);
 }
 
 /// Como [`render`], pero devuelve el BUFFER: el volcado de texto no lleva
@@ -1551,8 +1551,8 @@ fn la_lateral_de_la_ayuda_se_dimensiona_a_sus_titulos() {
     // Y el cuerpo tiene medida tipográfica: la prosa no crece con el terminal
     // más allá de lo que se lee de un vistazo. Una celda menos que la medida:
     // la última columna del cuerpo es su barra de scroll.
-    let (cuerpo, _) = ui::help_body_size(Rect::new(0, 0, 200, 40), Lang::Es);
-    assert_eq!(cuerpo, 71, "la prosa se corta en su medida, no en el borde");
+    let (body, _) = ui::help_body_size(Rect::new(0, 0, 200, 40), Lang::Es);
+    assert_eq!(body, 71, "la prosa se corta en su medida, no en el borde");
 }
 
 /// …y con sitio, NINGÚN título sale recortado.
@@ -1595,8 +1595,8 @@ fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
     let text = render_ayuda(&mut app, 80, 16);
     let view = app.help.as_ref().expect("overlay abierto");
     let total = view.body().0.len();
-    let (_, alto) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, 80, 16), view.state.lang());
-    assert!(total > alto, "el índice no cabe en {alto} filas ({total})");
+    let (_, height) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, 80, 16), view.state.lang());
+    assert!(total > height, "el índice no cabe en {height} filas ({total})");
     let footer = text
         .lines()
         .nth(help_footer_row(80, 16))
@@ -1634,9 +1634,9 @@ fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
     let text = render_ayuda(&mut app, 120, 90);
     let view = app.help.as_ref().expect("overlay abierto");
     let total = view.body().0.len();
-    let (_, alto) =
+    let (_, height) =
         ui::help_body_size(ratatui::layout::Rect::new(0, 0, 120, 90), view.state.lang());
-    assert!(total <= alto, "la página cabe en {alto} filas ({total})");
+    assert!(total <= height, "la página cabe en {height} filas ({total})");
     let footer = text
         .lines()
         .nth(help_footer_row(120, 90))

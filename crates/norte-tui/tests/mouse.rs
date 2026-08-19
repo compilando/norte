@@ -563,10 +563,10 @@ fn la_barra_anuncia_lo_que_haria_soltar_ahora() {
     let copia = mouse::drop_hint(&app).expect("hay drop pendiente");
     assert!(copia.contains('2'), "las dos marcas: {copia}");
     // El destino con el MISMO saneado que la cabecera del pane (regla 1).
-    let (destino, _) = norte_frontend::path_display_with(app.panes[1].dir(), None);
+    let (dest, _) = norte_frontend::path_display_with(app.panes[1].dir(), None);
     assert_eq!(
         copia,
-        norte_i18n::ta("drag-copy", &[("n", "2"), ("to", &destino)]),
+        norte_i18n::ta("drag-copy", &[("n", "2"), ("to", &dest)]),
     );
     // …y la barra lo PINTA (por encima de cualquier mensaje pendiente).
     app.message = Some("un mensaje cualquiera".to_owned());
@@ -586,7 +586,7 @@ fn la_barra_anuncia_lo_que_haria_soltar_ahora() {
     let mover = mouse::drop_hint(&app).expect("sigue habiendo drop");
     assert_eq!(
         mover,
-        norte_i18n::ta("drag-move", &[("n", "2"), ("to", &destino)]),
+        norte_i18n::ta("drag-move", &[("n", "2"), ("to", &dest)]),
     );
     let _ = mouse::handle(&mut app, ev_con(ARRIBA, 35, FILA0 + 2, KeyModifiers::SHIFT));
     assert!(

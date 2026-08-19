@@ -170,12 +170,12 @@ fn sort_junta_las_variantes_de_normalizacion() {
 #[test]
 fn path_display_marca_paths_con_segmentos_hostiles() {
     use norte_tui::app::path_display;
-    let limpio = vp("file:///casa/docs");
-    let (text, hostile) = path_display(&limpio);
+    let clean = vp("file:///casa/docs");
+    let (text, hostile) = path_display(&clean);
     assert!(text.contains("docs"));
     assert!(!hostile);
 
-    let feo = limpio.join(Segment::new(vec![0xE9]).unwrap());
+    let feo = clean.join(Segment::new(vec![0xE9]).unwrap());
     let (_, hostile) = path_display(&feo);
     assert!(hostile, "un segmento no-UTF8 marca el path entero");
 }

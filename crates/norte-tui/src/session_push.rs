@@ -293,9 +293,9 @@ impl SessionPush {
             )
             .await;
         }
-        let (vacio, _) = tokio::sync::mpsc::channel(1);
+        let (empty, _) = tokio::sync::mpsc::channel(1);
         // Soltar el emisor es lo que termina el bucle del escritor.
-        self.ordenes = vacio;
+        self.ordenes = empty;
         if let Some(task) = self.task.take() {
             let _ = tokio::time::timeout(SHUTDOWN_GRACE, task).await;
         }
@@ -518,8 +518,8 @@ pub fn push_session(app: &mut App, st: &mut SessionPush) {
 
 /// Lo que el escritor contó desde la última vuelta.
 pub fn drain_notices(app: &mut App, st: &mut SessionPush) {
-    while let Ok(aviso) = st.avisos.try_recv() {
-        match aviso {
+    while let Ok(notice) = st.avisos.try_recv() {
+        match notice {
             SessionNotice::TooLarge => app.message = Some(t("msg-session-too-large")),
             SessionNotice::Retry { orphans } => {
                 app.adopt_session_orphans(orphans);

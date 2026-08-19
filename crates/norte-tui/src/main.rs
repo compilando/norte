@@ -141,12 +141,12 @@ async fn main() -> Result<()> {
         .clone()
         .or_else(|| cfg.common.ui_layout.clone().map(std::ffi::OsString::from))
         .filter(|n| n != std::ffi::OsStr::new("orthodox"));
-    if let Some(nombre) = layout_name {
+    if let Some(name) = layout_name {
         // El fichero se lee FUERA del runtime (regla 2), y sin directorio de
         // config no hay fichero que valga: queda el preset de ese nombre.
         let loaded = match config::user_config_dir() {
             Some(dir) => {
-                let n = nombre.clone();
+                let n = name.clone();
                 tokio::task::spawn_blocking(move || norte_frontend::layout::config::load(&dir, &n))
                     .await
                     .unwrap_or_else(|_| {
@@ -155,7 +155,7 @@ async fn main() -> Result<()> {
             }
             None => Err(norte_frontend::layout::LayoutError::NotFound(String::new())),
         };
-        app.apply_loaded_layout(&nombre, loaded);
+        app.apply_loaded_layout(&name, loaded);
     }
     // L2: la pantalla que dejaste. Va DESPUÉS de `[ui] layout` a propósito —
     // una sesión guardada es más específica que una preferencia de config, y

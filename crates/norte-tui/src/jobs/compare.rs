@@ -382,7 +382,7 @@ pub async fn on_compare_enter(
     // El directorio al que ir lo decide el MODELO (regla 7): el propio path
     // si la fila es un directorio, su padre si es un fichero — la misma regla
     // que necesitará la GUI.
-    let Some(destino) = view.pane.navigation_target() else {
+    let Some(dest) = view.pane.navigation_target() else {
         // Hay entrada pero no hay a dónde ir: un fichero colgado de la raíz
         // de su scheme no tiene padre. Se DICE, igual que el caso de arriba —
         // un `Enter` que no hace nada y no explica por qué se lee como que la
@@ -409,7 +409,7 @@ pub async fn on_compare_enter(
     if let Some(p) = focus {
         app.panes[dest_pane].set_pending_focus(p);
     }
-    let outcome = cd(app, backend, events, destino).await;
+    let outcome = cd(app, backend, events, dest).await;
     apply_cd(
         &app.panes,
         fill,
