@@ -302,12 +302,12 @@ impl DialogHints {
     /// footer must not undo it.
     #[must_use]
     pub fn with_modals_inert(&self) -> Self {
-        let aviso = t("modal-hint-help-open");
+        let notice = t("modal-hint-help-open");
         Self {
-            confirm: aviso.clone(),
-            collision: aviso.clone(),
-            approval: aviso.clone(),
-            trust_host: aviso,
+            confirm: notice.clone(),
+            collision: notice.clone(),
+            approval: notice.clone(),
+            trust_host: notice,
             modals_inert: true,
             ..self.clone()
         }
@@ -523,13 +523,13 @@ mod tests {
     #[test]
     fn el_pie_de_la_ayuda_ofrece_todos_sus_verbos_en_orden_de_prioridad() {
         let hints = DialogHints::build(&orthodox_dialog());
-        let posicion = |cmd: &str| {
+        let position = |cmd: &str| {
             hints
                 .help
                 .find(&t(&help_hint_id(cmd)))
                 .unwrap_or_else(|| panic!("{cmd} debe estar en el pie de la ayuda: {}", hints.help))
         };
-        let order: Vec<usize> = HELP_HINT_PRIORITY.iter().map(|c| posicion(c)).collect();
+        let order: Vec<usize> = HELP_HINT_PRIORITY.iter().map(|c| position(c)).collect();
         assert!(
             order.windows(2).all(|w| w[0] < w[1]),
             "los verbos salen en el orden de prioridad, que es el que decide \
@@ -631,25 +631,25 @@ mod tests {
     /// decisión de entonces, no lo que esta función arregla.
     #[test]
     fn los_pies_de_modal_dejan_de_ofrecer_verbos_bajo_la_ayuda() {
-        let vivos = DialogHints::build(&orthodox_dialog());
-        let inertes = vivos.with_modals_inert();
-        let aviso = t("modal-hint-help-open");
+        let alive = DialogHints::build(&orthodox_dialog());
+        let inert = alive.with_modals_inert();
+        let notice = t("modal-hint-help-open");
         for pie in [
-            &inertes.confirm,
-            &inertes.collision,
-            &inertes.approval,
-            &inertes.trust_host,
+            &inert.confirm,
+            &inert.collision,
+            &inert.approval,
+            &inert.trust_host,
         ] {
-            assert_eq!(pie, &aviso);
+            assert_eq!(pie, &notice);
         }
         // Ningún verbo del vocabulario `dialog.*` sobrevive en ellos.
         for cmd in crate::keymap::DIALOG_COMMANDS {
             let label = t(&dialog_hint_id(cmd));
             for pie in [
-                &inertes.confirm,
-                &inertes.collision,
-                &inertes.approval,
-                &inertes.trust_host,
+                &inert.confirm,
+                &inert.collision,
+                &inert.approval,
+                &inert.trust_host,
             ] {
                 assert!(
                     !pie.contains(&label),
@@ -658,12 +658,12 @@ mod tests {
             }
         }
         // Y lo que no es un modal no se toca.
-        assert_eq!(inertes.picker, vivos.picker);
-        assert_eq!(inertes.columns, vivos.columns);
-        assert_eq!(inertes.extensions, vivos.extensions);
-        assert_eq!(inertes.plugin_config, vivos.plugin_config);
-        assert_eq!(inertes.nav_list, vivos.nav_list);
-        assert_eq!(inertes.help, vivos.help, "la ayuda SÍ tiene las teclas");
+        assert_eq!(inert.picker, alive.picker);
+        assert_eq!(inert.columns, alive.columns);
+        assert_eq!(inert.extensions, alive.extensions);
+        assert_eq!(inert.plugin_config, alive.plugin_config);
+        assert_eq!(inert.nav_list, alive.nav_list);
+        assert_eq!(inert.help, alive.help, "la ayuda SÍ tiene las teclas");
     }
 
     /// [`without_navigation`] filtra SOLO las cuatro entradas de navegación,

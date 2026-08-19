@@ -346,14 +346,14 @@ pub async fn unpack(app: &mut App, backend: &Backend) {
     // tres o cuatro paneles, y ahí `pane_read_only` contesta `false` sin mirar
     // nada — el gate quedaba inerte justo donde hay más sitios a los que
     // apuntar por error.
-    let otro = app.split_dest_pane();
-    if app.pane_read_only(otro) {
+    let other = app.split_dest_pane();
+    if app.pane_read_only(other) {
         app.message = Some(t("msg-pack-read-only"));
         return;
     }
-    let destino = app.panes[otro].dir().clone();
+    let dest = app.panes[other].dir().clone();
     match backend
-        .copy(&raiz, &destino, TransferOptions::default())
+        .copy(&raiz, &dest, TransferOptions::default())
         .await
     {
         Ok(task) => {
@@ -393,18 +393,18 @@ pub async fn combine_pieces(app: &mut App, backend: &Backend) {
     let Some(entry) = app.focused().selected().cloned() else {
         return;
     };
-    let nombre = entry
+    let name = entry
         .path
         .file_name()
         .map(|s| s.as_bytes().to_vec())
         .unwrap_or_default();
     // Solo desde el PRIMER trozo: empezar por el `.007` uniría media cosa, y
     // el core ya solo sabe buscar hacia delante.
-    let Some(base) = nombre
+    let Some(base) = name
         .len()
         .checked_sub(4)
-        .filter(|n| nombre[*n] == b'.' && &nombre[n + 1..] == b"001")
-        .map(|n| nombre[..n].to_vec())
+        .filter(|n| name[*n] == b'.' && &name[n + 1..] == b"001")
+        .map(|n| name[..n].to_vec())
     else {
         app.message = Some(t("msg-combine-needs-first"));
         return;
@@ -542,10 +542,10 @@ mod bulk_tests {
     #[test]
     fn a_bulk_transfer_submits_every_item_not_just_the_first() {
         let items = vec![vp("mem:///src/a"), vp("mem:///src/b"), vp("mem:///src/c")];
-        let pares = transfer_dests(&items, &vp("mem:///dst"));
-        assert_eq!(pares.len(), 3, "una task POR ítem");
+        let pairs = transfer_dests(&items, &vp("mem:///dst"));
+        assert_eq!(pairs.len(), 3, "una task POR ítem");
         assert_eq!(
-            pares.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
+            pairs.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
             vec![vp("mem:///dst/a"), vp("mem:///dst/b"), vp("mem:///dst/c")],
         );
     }
@@ -557,10 +557,10 @@ mod bulk_tests {
         let raw = b"caf\xff\xfe.txt".to_vec();
         let seg = norte_proto::Segment::new(raw.clone()).expect("segmento");
         let from = vp("mem:///src").join(seg);
-        let pares = transfer_dests(std::slice::from_ref(&from), &vp("mem:///dst"));
-        assert_eq!(pares.len(), 1);
+        let pairs = transfer_dests(std::slice::from_ref(&from), &vp("mem:///dst"));
+        assert_eq!(pairs.len(), 1);
         assert_eq!(
-            pares[0].1.file_name().map(|s| s.as_bytes().to_vec()),
+            pairs[0].1.file_name().map(|s| s.as_bytes().to_vec()),
             Some(raw),
             "los bytes del nombre viajan intactos al destino",
         );
@@ -572,8 +572,8 @@ mod bulk_tests {
     #[test]
     fn a_same_directory_transfer_maps_each_item_onto_itself() {
         let items = vec![vp("mem:///src/a")];
-        let pares = transfer_dests(&items, &vp("mem:///src"));
-        assert_eq!(pares[0].0, pares[0].1);
+        let pairs = transfer_dests(&items, &vp("mem:///src"));
+        assert_eq!(pairs[0].0, pairs[0].1);
     }
 
     /// Una raíz de scheme no tiene nombre que colgar del destino: se

@@ -214,7 +214,7 @@ impl PaneSlots {
     /// dice: quien pregunte por «el otro pane» recibe ese mismo, que es la
     /// verdad — no hay otro.
     pub fn refresh_visible(&mut self, tree: &Node) {
-        let vivos: Vec<SlotId> = tree
+        let alive: Vec<SlotId> = tree
             .visible_slot_ids()
             .into_iter()
             .filter(|id| {
@@ -222,8 +222,8 @@ impl PaneSlots {
                     && matches!(self.store.get(*id), Some(TuiPanel::Browser(_)))
             })
             .collect();
-        if !vivos.is_empty() {
-            self.visible = vivos;
+        if !alive.is_empty() {
+            self.visible = alive;
         }
         self.store.sync_with(tree);
         self.rescue_visible();

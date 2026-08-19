@@ -432,9 +432,9 @@ mod tests {
         let content = b"c";
         let mut store = TrustStore::open(p.clone()).unwrap();
         store.record(hostile, content, true).unwrap();
-        let reabierto = TrustStore::open(p).unwrap();
-        assert_eq!(reabierto.check(hostile, content), TrustDecision::Trusted);
-        assert_eq!(reabierto.entries.len(), 1);
+        let reopened = TrustStore::open(p).unwrap();
+        assert_eq!(reopened.check(hostile, content), TrustDecision::Trusted);
+        assert_eq!(reopened.entries.len(), 1);
     }
 
     /// Si la persistencia falla, la entrada NO debe quedar "trusted" en
@@ -449,9 +449,9 @@ mod tests {
         // ...y DESPUÉS rompemos el "directorio padre" convirtiéndolo en un
         // fichero: crear el dir falla, y con él debe fallar `record` entero
         // (acceso al campo privado `path`, legal desde el submódulo test).
-        let bloqueador = dir.path().join("no-es-un-dir");
-        std::fs::write(&bloqueador, b"soy un fichero, no un directorio").unwrap();
-        store.path = bloqueador.join("subdir").join("lua-trust.toml");
+        let blocker = dir.path().join("no-es-un-dir");
+        std::fs::write(&blocker, b"soy un fichero, no un directorio").unwrap();
+        store.path = blocker.join("subdir").join("lua-trust.toml");
         let p = Path::new("/x/init.lua");
         assert!(store.record(p, b"c", true).is_err());
         assert_eq!(store.check(p, b"c"), TrustDecision::Unknown);

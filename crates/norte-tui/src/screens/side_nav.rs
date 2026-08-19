@@ -101,8 +101,8 @@ pub async fn on_tree_key(
         "layout.shrink" => app.layout_resize(-1),
         "pane.tree" => app.toggle_tree(),
         "dialog.confirm" => {
-            let destino = app.tree().and_then(crate::tree::Tree::selected);
-            if let Some(dir) = destino {
+            let dest = app.tree().and_then(crate::tree::Tree::selected);
+            if let Some(dir) = dest {
                 // Desplegar Y navegar: quien pulsa Enter sobre una rama quiere
                 // ver qué hay dentro, y verlo en el listado es la respuesta
                 // completa.

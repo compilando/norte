@@ -64,15 +64,15 @@ fn tecla_de(eff: &Effective, cmd: &str) -> Vec<Chord> {
 
 /// Mete una tecla por el camino de verdad y devuelve lo que el panel diga.
 fn pulsar(app: &mut App, resolver: &mut Resolver, seq: Vec<Chord>) -> Option<String> {
-    let mut ultimo = None;
+    let mut last = None;
     for chord in seq {
         match resolver.push(chord) {
-            Resolution::Run { command, .. } => ultimo = app.processes_command(&command),
+            Resolution::Run { command, .. } => last = app.processes_command(&command),
             Resolution::Pending(_) | Resolution::Counting(_) => {}
             otro => panic!("la tecla no resuelve a un comando: {otro:?}"),
         }
     }
-    ultimo
+    last
 }
 
 /// Enter sobre el panel CANCELA, que es lo que el CHANGELOG y los dos temas

@@ -124,7 +124,7 @@ pub fn drain_compare(
             // El mapeo entero —los cuatro brazos— es del modelo. Aquí solo
             // queda el aviso PASAJERO de la barra, que es lo único que esta
             // superficie tiene y la GUI no.
-            let aviso = view
+            let notice = view
                 .finish_from_task(
                     &snapshot.state,
                     expected,
@@ -133,7 +133,7 @@ pub fn drain_compare(
                 )
                 .map(error_message);
             c.state = view.state;
-            if let Some(m) = aviso {
+            if let Some(m) = notice {
                 app.message = Some(m);
             }
         } else {
@@ -397,17 +397,17 @@ pub async fn on_compare_enter(
     // consume el listado al aterrizar; si ya no existe, cae al default). La
     // GUI lo hacía y esta rama no, mientras su comentario reclamaba paridad
     // (revisión de rama, MINOR-8).
-    let foco = view.pane.target_path().cloned();
+    let focus = view.pane.target_path().cloned();
     // Al pane del lado ACTIVO, y el foco con él: mandar SIEMPRE al pane con
     // foco le costaba al lector el otro directorio para ir a ver este.
-    let destino_pane = app.compare_active_pane().unwrap_or_else(|| app.focus());
+    let dest_pane = app.compare_active_pane().unwrap_or_else(|| app.focus());
     if let Some(c) = compare_run.take() {
         c.task.cancel();
     }
     app.close_compare();
-    app.set_focus(destino_pane);
-    if let Some(p) = foco {
-        app.panes[destino_pane].set_pending_focus(p);
+    app.set_focus(dest_pane);
+    if let Some(p) = focus {
+        app.panes[dest_pane].set_pending_focus(p);
     }
     let outcome = cd(app, backend, events, destino).await;
     apply_cd(

@@ -400,13 +400,13 @@ fn overlay_open(app: &App) -> bool {
 /// [`After::MenuAccept`], porque ejecutar un comando es asíncrono y este módulo
 /// no tiene el backend. El run loop lo remata por el mismo camino que `Enter`.
 fn menu_click(app: &mut App, col: u16, row: u16) -> After {
-    let zona = app
+    let zone = app
         .mouse
         .menu_zones
         .iter()
         .find(|z| z.row == row && col >= z.x0 && col <= z.x1)
         .copied();
-    match zona.map(|z| z.hit) {
+    match zone.map(|z| z.hit) {
         Some(crate::ui::MenuHit::Title(i)) => {
             if let Some(m) = &mut app.menu {
                 m.open(i);

@@ -133,11 +133,11 @@ async fn criterio_de_salida_año() {
         primero.path.display_lossy(),
         vp("mem:///f1").display_lossy()
     );
-    let nombre = primero.path.file_name().expect("nombre").clone();
-    let destino = vp("mem:///otro").join(nombre);
+    let name = primero.path.file_name().expect("nombre").clone();
+    let dest = vp("mem:///otro").join(name);
 
     let copy_task = backend
-        .copy(&primero.path, &destino, TransferOptions::default())
+        .copy(&primero.path, &dest, TransferOptions::default())
         .await
         .expect("copy");
     assert_eq!(copy_task.join().await, TaskState::Completed);
@@ -146,7 +146,7 @@ async fn criterio_de_salida_año() {
         .read(&primero.path, None)
         .await
         .expect("read original");
-    let copiado = backend.read(&destino, None).await.expect("read copia");
+    let copiado = backend.read(&dest, None).await.expect("read copia");
     assert_eq!(copiado, original, "F5 desde un hit es byte-exacto");
     assert_eq!(original, "un año".as_bytes());
 }

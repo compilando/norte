@@ -997,17 +997,17 @@ mod tests {
         );
         // Y una fila que SÍ puede correr no arrastra ninguna razón: si la
         // pintara, el lector no distinguiría lo que puede pulsar.
-        let libre = render_topic(
+        let free = render_topic(
             topic(Lang::En, "copying").expect("copying"),
             Lang::En,
             &Libre,
             80,
             &theme(),
         );
-        let libre = flatten(&libre.lines);
+        let free = flatten(&free.lines);
         assert!(
-            !libre.contains(&norte_i18n::t_in(Lang::En, "reason-read-only")),
-            "razón pintada en una página sin nada vetado: {libre}"
+            !free.contains(&norte_i18n::t_in(Lang::En, "reason-read-only")),
+            "razón pintada en una página sin nada vetado: {free}"
         );
     }
 
@@ -1021,7 +1021,7 @@ mod tests {
     #[test]
     fn en_una_fila_estrecha_la_razon_sobrevive_y_la_etiqueta_se_recorta() {
         let razon = norte_i18n::t_in(Lang::En, "reason-read-only");
-        let filas_a = |width: usize| -> Vec<String> {
+        let rows_a = |width: usize| -> Vec<String> {
             let out = render_topic(
                 topic(Lang::En, "copying").expect("copying"),
                 Lang::En,
@@ -1050,25 +1050,25 @@ mod tests {
         // La razón entera sobrevive en todo ancho donde QUEPA, aunque la
         // etiqueta no.
         for width in [30, 40, 60, 80] {
-            let filas = filas_a(width);
+            let rows = rows_a(width);
             assert!(
-                filas.iter().any(|f| f.contains(&razon)),
-                "a {width} celdas la razón entera sigue ahí: {filas:?}"
+                rows.iter().any(|f| f.contains(&razon)),
+                "a {width} celdas la razón entera sigue ahí: {rows:?}"
             );
         }
 
         // A 40 celdas la etiqueta más larga de la página ya no cabe: es ELLA
         // la que se recorta, con la razón intacta detrás.
-        let filas = filas_a(40);
+        let rows = rows_a(40);
         assert!(
-            filas.iter().any(|f| f.contains('…') && f.contains(&razon)),
-            "la etiqueta cede y la razón queda: {filas:?}"
+            rows.iter().any(|f| f.contains('…') && f.contains(&razon)),
+            "la etiqueta cede y la razón queda: {rows:?}"
         );
 
         // Y cuando ni la razón cabe, se lleva ella la elipsis y la etiqueta
         // desaparece: no hay nada más que ceder.
-        let estrechas = filas_a(20);
-        let row = estrechas.first().expect("hay filas");
+        let narrow = rows_a(20);
+        let row = narrow.first().expect("hay filas");
         assert!(row.contains('…'), "la razón se recorta: {row:?}");
         assert!(
             !row.contains("do pane"),
@@ -1081,8 +1081,8 @@ mod tests {
         // solitaria no es un nombre acortado, es lo que parece un fallo del
         // pintor. Se pliegan al mismo caso que el cero.
         for width in 27..=29 {
-            let filas = filas_a(width);
-            let row = filas.first().expect("hay filas");
+            let rows = rows_a(width);
+            let row = rows.first().expect("hay filas");
             assert!(
                 row.contains(&razon),
                 "a {width} celdas la razón es lo que se conserva: {row:?}"
@@ -1739,11 +1739,11 @@ mod tests {
             Some("ACME".to_owned()),
         )
         .fold_flags(true, false);
-        let prestada = render_topic(&parsed.topic, Lang::En, &Vetado, 60, &theme());
-        let propia = into_static(prestada.clone());
-        assert_eq!(propia.action_lines, prestada.action_lines);
-        assert_eq!(propia.lines.len(), prestada.lines.len());
-        for (a, b) in propia.lines.iter().zip(&prestada.lines) {
+        let borrowed = render_topic(&parsed.topic, Lang::En, &Vetado, 60, &theme());
+        let own = into_static(borrowed.clone());
+        assert_eq!(own.action_lines, borrowed.action_lines);
+        assert_eq!(own.lines.len(), borrowed.lines.len());
+        for (a, b) in own.lines.iter().zip(&borrowed.lines) {
             assert_eq!(a.style, b.style, "estilo de línea perdido");
             assert_eq!(a.alignment, b.alignment, "alineación perdida");
             assert_eq!(a.spans.len(), b.spans.len());
@@ -1754,13 +1754,13 @@ mod tests {
         }
         // Anti-vacuidad: la página tiene MÁS de un estilo, o comparar estilos
         // no prueba nada.
-        let estilos: std::collections::BTreeSet<String> = prestada
+        let styles: std::collections::BTreeSet<String> = borrowed
             .lines
             .iter()
             .flat_map(|l| l.spans.iter())
             .map(|s| format!("{:?}", s.style))
             .collect();
-        assert!(estilos.len() > 1, "la página es monoestilo: {estilos:?}");
+        assert!(styles.len() > 1, "la página es monoestilo: {styles:?}");
     }
 
     #[test]

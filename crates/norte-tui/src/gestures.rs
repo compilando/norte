@@ -340,11 +340,11 @@ pub fn shell_cwd(app: &App) -> Result<std::path::PathBuf, String> {
 /// que una ruta larga se lleva por delante justo la parte que explica por qué
 /// la tecla no hizo nada, y la tecla parece rota.
 fn badged(text: &str, hostile: bool) -> String {
-    let corto = norte_frontend::middle_ellipsis(text, SHELL_MSG_PATH_MAX);
+    let short = norte_frontend::middle_ellipsis(text, SHELL_MSG_PATH_MAX);
     if hostile {
-        format!("{} {corto}", crate::ui::HOSTILE_BADGE)
+        format!("{} {short}", crate::ui::HOSTILE_BADGE)
     } else {
-        corto
+        short
     }
 }
 
@@ -645,8 +645,8 @@ mod pane_gestures_tests {
         app.history[0].record(vp("mem:///a"));
         app.history[0].record(vp("mem:///b"));
 
-        let a_donde = back_target(&mut app).expect("hay rastro");
-        assert_eq!(a_donde, vp("mem:///b"));
+        let where_to = back_target(&mut app).expect("hay rastro");
+        assert_eq!(where_to, vp("mem:///b"));
         poner_en(&mut app, "mem:///b");
         assert_eq!(back_target(&mut app), Some(vp("mem:///a")));
         poner_en(&mut app, "mem:///a");
@@ -674,11 +674,11 @@ mod pane_gestures_tests {
         let mut app = app_en("mem:///c", "mem:///otro");
         app.set_focus(0);
         app.history[0].record(vp("mem:///b"));
-        let antes = app.history[0].back_len();
+        let before = app.history[0].back_len();
         let _ = back_target(&mut app);
         assert_eq!(
             app.history[0].back_len(),
-            antes - 1,
+            before - 1,
             "un paso atrás CONSUME rastro; jamás lo produce"
         );
     }
@@ -1054,8 +1054,8 @@ mod pane_gestures_tests {
     #[test]
     fn un_reintento_que_aterriza_deja_el_paso_dado_y_no_lo_registra() {
         let (mut app, dir) = app_con_paso_suspendido();
-        let antes = (app.history[0].back_len(), app.history[0].fwd_len());
-        let mru_antes: Vec<VPath> = app.history[0].entries().iter().cloned().collect();
+        let before = (app.history[0].back_len(), app.history[0].fwd_len());
+        let mru_before: Vec<VPath> = app.history[0].entries().iter().cloned().collect();
         // El modal TRANSPORTA el rastro de la navegación interrumpida, y el
         // reintento se lo pasa a `cd_in` tal cual: sigue siendo un `Replay`.
         let trail = Trail::Replay(TrailStep::Back);
@@ -1065,12 +1065,12 @@ mod pane_gestures_tests {
 
         assert_eq!(
             (app.history[0].back_len(), app.history[0].fwd_len()),
-            antes,
+            before,
             "el paso ya estaba contado: terminarlo no lo cuenta otra vez"
         );
         assert_eq!(
             app.history[0].entries().iter().cloned().collect::<Vec<_>>(),
-            mru_antes,
+            mru_before,
             "y un reintento que aterriza sigue siendo un Replay: no entra en la MRU"
         );
     }
@@ -1117,8 +1117,8 @@ mod pane_gestures_tests {
     #[test]
     fn un_reintento_que_vuelve_a_suspenderse_no_rebobina_ni_registra() {
         let (mut app, dir) = app_con_paso_suspendido();
-        let antes = (app.history[0].back_len(), app.history[0].fwd_len());
-        let mru_antes: Vec<VPath> = app.history[0].entries().iter().cloned().collect();
+        let before = (app.history[0].back_len(), app.history[0].fwd_len());
+        let mru_before: Vec<VPath> = app.history[0].entries().iter().cloned().collect();
 
         settle_suspended_trail(
             &mut app,
@@ -1137,12 +1137,12 @@ mod pane_gestures_tests {
 
         assert_eq!(
             (app.history[0].back_len(), app.history[0].fwd_len()),
-            antes,
+            before,
             "el paso sigue pendiente de terminar, ni rebobinado ni duplicado"
         );
         assert_eq!(
             app.history[0].entries().iter().cloned().collect::<Vec<_>>(),
-            mru_antes,
+            mru_before,
             "y un Replay no entra en la MRU por reintentarse"
         );
     }
@@ -1152,13 +1152,13 @@ mod pane_gestures_tests {
     #[test]
     fn un_cd_normal_suspendido_no_tiene_paso_que_rebobinar() {
         let (mut app, dir) = app_con_paso_suspendido();
-        let antes = (app.history[0].back_len(), app.history[0].fwd_len());
+        let before = (app.history[0].back_len(), app.history[0].fwd_len());
 
         settle_suspended_trail(&mut app, 0, &dir, Trail::Record, &Cd::Cancelled);
 
         assert_eq!(
             (app.history[0].back_len(), app.history[0].fwd_len()),
-            antes,
+            before,
             "una navegación que no salió del rastro no le debe nada"
         );
     }
@@ -1270,13 +1270,13 @@ mod open_tests {
                 app.openers =
                     norte_frontend::openers::OpenersConfig::parse(c).expect("config de test");
             }
-            let esperado = norte_vfs_local::vpath_to_native(app.focused().dir())
+            let expected = norte_vfs_local::vpath_to_native(app.focused().dir())
                 .expect("el pane de test es local");
             resolve_opener(&mut app);
             let pending = app.pending_open.expect("F4 resuelve algo");
             assert_eq!(
                 pending.cwd.as_deref(),
-                Some(esperado.as_path()),
+                Some(expected.as_path()),
                 "{nombre}: el hijo abre donde el lector está mirando"
             );
         }
@@ -1379,17 +1379,17 @@ mod edit_tests {
             false,
             None,
         );
-        let pendiente = edit_under_cursor(&app).expect("local y fichero");
+        let pending = edit_under_cursor(&app).expect("local y fichero");
         assert_eq!(
-            pendiente.argv.len(),
+            pending.argv.len(),
             2,
             "programa y ruta, sin línea de shell"
         );
         assert_eq!(
-            pendiente.argv[1],
+            pending.argv[1],
             std::ffi::OsString::from("/tmp/a.txt"),
             "la ruta va como su propio argumento"
         );
-        assert!(!pendiente.wait_for_key, "un editor se despide solo");
+        assert!(!pending.wait_for_key, "un editor se despide solo");
     }
 }

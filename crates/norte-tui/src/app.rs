@@ -76,16 +76,16 @@ pub struct Pane {
 #[must_use]
 pub fn format_by_name(name: &[u8]) -> Option<norte_proto::methods::ArchiveFormat> {
     use norte_proto::methods::ArchiveFormat as F;
-    let acaba = |suf: &[u8]| {
+    let ends = |suf: &[u8]| {
         name.len() >= suf.len() && name[name.len() - suf.len()..].eq_ignore_ascii_case(suf)
     };
-    if acaba(b".tar.gz") || acaba(b".tgz") {
+    if ends(b".tar.gz") || ends(b".tgz") {
         return Some(F::TarGz);
     }
-    if acaba(b".tar") {
+    if ends(b".tar") {
         return Some(F::Tar);
     }
-    if acaba(b".zip") {
+    if ends(b".zip") {
         return Some(F::Zip);
     }
     None
@@ -2402,14 +2402,14 @@ impl App {
     /// y aquí solo se le da lo que esta TUI sabe.
     #[must_use]
     fn sync_roots(&self) -> SyncRoots {
-        let otro = &self.panes[self.focus() ^ 1];
+        let other = &self.panes[self.focus() ^ 1];
         norte_frontend::sync::sync_roots(
             self.sync_source_view(),
             &norte_frontend::sync::Panes {
                 focused_root: self.focused().dir(),
                 focused_encoding: self.focused().name_encoding(),
-                other_root: otro.dir(),
-                other_encoding: otro.name_encoding(),
+                other_root: other.dir(),
+                other_encoding: other.name_encoding(),
             },
         )
     }
@@ -2512,12 +2512,12 @@ impl App {
         dest: &VPath,
     ) -> Result<Option<Vec<norte_proto::methods::RelPath>>, norte_frontend::sync::IncludeError>
     {
-        let marcadas = self
+        let marked = self
             .compare
             .as_ref()
             .map(|v| v.pane.marked_rows())
             .unwrap_or_default();
-        norte_frontend::sync::include_from_rows(source, dest, &marcadas)
+        norte_frontend::sync::include_from_rows(source, dest, &marked)
     }
 
     /// Cierra el panel de sincronización. La cancelación de la Task es del run
@@ -2828,8 +2828,8 @@ impl App {
             &norte_frontend::display_name(last.host.as_bytes()).0,
             HOST_MAX,
         );
-        let otras = self.degraded.len() - 1;
-        if otras == 0 {
+        let others = self.degraded.len() - 1;
+        if others == 0 {
             return Some(ta(
                 "status-connection-degraded",
                 &[("scheme", &scheme), ("host", &host)],
@@ -2840,7 +2840,7 @@ impl App {
             &[
                 ("scheme", &scheme),
                 ("host", &host),
-                ("n", &otras.to_string()),
+                ("n", &others.to_string()),
             ],
         ))
     }
@@ -2918,7 +2918,7 @@ impl App {
     /// conexión va en claro», y es el único que habla de TODA la sesión.
     #[must_use]
     pub fn persistent_banner(&self) -> Option<String> {
-        let partes: Vec<String> = [
+        let parts: Vec<String> = [
             self.journal_banner(),
             self.connection_banner(),
             self.session_banner(),
@@ -2926,7 +2926,7 @@ impl App {
         .into_iter()
         .flatten()
         .collect();
-        (!partes.is_empty()).then(|| partes.join("  "))
+        (!parts.is_empty()).then(|| parts.join("  "))
     }
 
     /// El aviso PERSISTENTE de ventana SUELTA, o `None` si ésta es la dueña
@@ -3100,7 +3100,7 @@ impl App {
     /// directorio que se está mirando, así que la pestaña aparece llena en el
     /// acto y no parpadea vacía mientras alguien vuelve a leer lo mismo.
     pub fn tab_new(&mut self) {
-        let foco = self.focused_slot();
+        let focus = self.focused_slot();
         let (dir, entradas) = {
             let p = &self.panes[self.focus];
             (p.dir().clone(), p.entries().to_vec())
@@ -3108,7 +3108,7 @@ impl App {
         let id = self.mint_slot();
         self.panes.insert_browser(id, Pane::new(dir, entradas));
         self.layout = self.layout.add_tab(
-            foco,
+            focus,
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
         );
         self.panes.refresh_visible(&self.layout);
@@ -3117,8 +3117,8 @@ impl App {
 
     /// Cierra la pestaña enfocada. Sin efecto si el pane no está en un grupo.
     pub fn tab_close(&mut self) {
-        let foco = self.focused_slot();
-        if let Some(nuevo) = self.layout.close_tab(foco) {
+        let focus = self.focused_slot();
+        if let Some(nuevo) = self.layout.close_tab(focus) {
             self.layout = nuevo;
             self.panes.refresh_visible(&self.layout);
             self.history.retain_tree(&self.layout);
@@ -3127,26 +3127,26 @@ impl App {
 
     /// Cambia de pestaña dentro del grupo enfocado, ciclando.
     pub fn tab_cycle(&mut self, delta: isize) {
-        let foco = self.focused_slot();
-        let Some((tabs, activa)) = self.layout.tabs_of(foco) else {
+        let focus = self.focused_slot();
+        let Some((tabs, active)) = self.layout.tabs_of(focus) else {
             return;
         };
         if tabs.is_empty() {
             return;
         }
         let n = isize::try_from(tabs.len()).unwrap_or(1);
-        let i = isize::try_from(activa).unwrap_or(0);
-        let destino = usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0);
-        self.layout = self.layout.set_active_for(foco, destino);
+        let i = isize::try_from(active).unwrap_or(0);
+        let dest = usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0);
+        self.layout = self.layout.set_active_for(focus, dest);
         self.panes.refresh_visible(&self.layout);
         self.history.retain_tree(&self.layout);
     }
 
     /// Va a la pestaña `n` (base 1) del grupo enfocado.
     pub fn tab_goto(&mut self, n: usize) {
-        let foco = self.focused_slot();
-        if self.layout.tabs_of(foco).is_some() {
-            self.layout = self.layout.set_active_for(foco, n.saturating_sub(1));
+        let focus = self.focused_slot();
+        if self.layout.tabs_of(focus).is_some() {
+            self.layout = self.layout.set_active_for(focus, n.saturating_sub(1));
             self.panes.refresh_visible(&self.layout);
             self.history.retain_tree(&self.layout);
         }
@@ -3156,9 +3156,9 @@ impl App {
     /// pestaña que salta del final al principio por una pulsación de más es
     /// justo lo que nadie quería.
     pub fn tab_move(&mut self, delta: isize) {
-        let foco = self.focused_slot();
-        if self.layout.tabs_of(foco).is_some() {
-            self.layout = self.layout.move_tab(foco, delta);
+        let focus = self.focused_slot();
+        if self.layout.tabs_of(focus).is_some() {
+            self.layout = self.layout.move_tab(focus, delta);
             self.panes.refresh_visible(&self.layout);
             self.history.retain_tree(&self.layout);
         }
@@ -3248,7 +3248,7 @@ impl App {
     /// lleno en vez de parpadear vacío mientras alguien relee lo mismo. Y se
     /// queda con el FOCO, que es lo que uno acaba de pedir.
     pub fn layout_split(&mut self, dir: norte_frontend::layout::Dir) {
-        let foco = self.focused_slot();
+        let focus = self.focused_slot();
         let (d, entradas) = {
             let p = &self.panes[self.focus];
             (p.dir().clone(), p.entries().to_vec())
@@ -3256,7 +3256,7 @@ impl App {
         let id = self.mint_slot();
         self.panes.insert_browser(id, Pane::new(d, entradas));
         self.layout = self.layout.split_slot(
-            foco,
+            focus,
             dir,
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
         );
@@ -3380,7 +3380,7 @@ impl App {
         let Some(id) = self.places_slot() else {
             return PlacesClick::Focused;
         };
-        let ya_estaba = self.key_owner == KeyOwner::Places
+        let was_already = self.key_owner == KeyOwner::Places
             && self.panes.places(id).is_some_and(|s| s.cursor() == index);
         let Some(s) = self.panes.places_mut(id) else {
             return PlacesClick::Focused;
@@ -3389,13 +3389,13 @@ impl App {
             return PlacesClick::Focused;
         }
         s.set_cursor(index);
-        let es_cabecera = matches!(s.rows().get(index), Some(PlaceRow::Header { .. }));
+        let is_header = matches!(s.rows().get(index), Some(PlaceRow::Header { .. }));
         self.key_owner = KeyOwner::Places;
-        if es_cabecera {
+        if is_header {
             self.places_toggle_fold();
             return PlacesClick::Folded;
         }
-        if ya_estaba {
+        if was_already {
             PlacesClick::Activate
         } else {
             PlacesClick::Focused
@@ -3439,18 +3439,18 @@ impl App {
     pub fn places_activate(&mut self) -> Option<VPath> {
         use norte_frontend::places::PlaceRow;
         let id = self.places_slot()?;
-        let estado = self.panes.places(id)?;
+        let state = self.panes.places(id)?;
         if let Some(PlaceRow::Favorite {
             target: Err(clave), ..
-        }) = estado.rows().get(estado.cursor())
+        }) = state.rows().get(state.cursor())
         {
-            let motivo = t(clave);
-            self.message = Some(motivo);
+            let reason = t(clave);
+            self.message = Some(reason);
             return None;
         }
-        let destino = estado.activate()?.clone();
+        let dest = state.activate()?.clone();
         self.key_owner = KeyOwner::Panes;
-        Some(destino)
+        Some(dest)
     }
 
     /// El hueco del visor acoplado, si está en el árbol.
@@ -3634,11 +3634,11 @@ impl App {
 
     /// Baja el cursor del panel de procesos, sin pasarse de la última fila.
     pub fn processes_down(&mut self) {
-        let filas = self.board.rows().len();
+        let rows = self.board.rows().len();
         if let Some(id) = self.processes_slot()
             && let Some(p) = self.panes.processes_mut(id)
         {
-            p.down(filas);
+            p.down(rows);
         }
     }
 
@@ -3654,8 +3654,8 @@ impl App {
         let Some(id) = self.processes_slot() else {
             return false;
         };
-        let filas = self.board.rows().len();
-        let Some(cursor) = self.panes.processes(id).map(|p| p.cursor(filas)) else {
+        let rows = self.board.rows().len();
+        let Some(cursor) = self.panes.processes(id).map(|p| p.cursor(rows)) else {
             return false;
         };
         self.board.cancel_at(cursor)
@@ -3763,8 +3763,8 @@ impl App {
         if self.browsers_in_tree() <= 2 {
             return false;
         }
-        let foco = self.focused_slot();
-        let Some(nuevo) = self.layout.close_slot(foco) else {
+        let focus = self.focused_slot();
+        let Some(nuevo) = self.layout.close_slot(focus) else {
             return false;
         };
         self.layout = nuevo;
@@ -3796,14 +3796,14 @@ impl App {
 
     /// Agranda (`delta > 0`) o encoge el panel que tiene el teclado.
     pub fn layout_resize(&mut self, delta: i16) {
-        let objetivo = self.resize_target();
-        self.layout = self.layout.resize(objetivo, delta);
+        let target = self.resize_target();
+        self.layout = self.layout.resize(target, delta);
     }
 
     /// Devuelve a los hermanos del panel enfocado el mismo tamaño.
     pub fn layout_equalize(&mut self) {
-        let foco = self.focused_slot();
-        self.layout = self.layout.equalize(foco);
+        let focus = self.focused_slot();
+        self.layout = self.layout.equalize(focus);
     }
 
     /// Designa el OTRO lado visible como destino de las operaciones.
@@ -3816,14 +3816,14 @@ impl App {
         if n < 2 {
             return;
         }
-        let actual = self
+        let current = self
             .roles
             .get(norte_frontend::layout::RoleId::Target)
             .and_then(|t| (0..n).find(|i| self.panes.slot_of(*i) == t))
             .unwrap_or(self.focus);
         // El siguiente que no sea el enfocado: designarse a uno mismo como
         // destino es pedirle a una copia que se copie encima.
-        let mut i = (actual + 1) % n;
+        let mut i = (current + 1) % n;
         if i == self.focus {
             i = (i + 1) % n;
         }
@@ -3963,14 +3963,14 @@ impl App {
             let Some(pane) = self.panes.browser(id) else {
                 continue;
             };
-            let historia = self.history.for_slot(id);
+            let history = self.history.for_slot(id);
             body.slots.insert(
                 id.0,
                 SlotState {
                     path: pane.dir().clone(),
                     cursor: pane.cursor() as u64,
-                    back: historia.map(|h| h.trail().to_vec()).unwrap_or_default(),
-                    forward: historia
+                    back: history.map(|h| h.trail().to_vec()).unwrap_or_default(),
+                    forward: history
                         .map(|h| h.forward_trail().to_vec())
                         .unwrap_or_default(),
                     sort: pane.sort(),
@@ -4002,7 +4002,7 @@ impl App {
         if let Some(tree) = body.layouts.get("default") {
             self.set_layout(tree.clone());
         }
-        let mut pedir = Vec::new();
+        let mut ask = Vec::new();
         self.session.orphans.clear();
         for (raw, estado) in &body.slots {
             let id = norte_frontend::layout::SlotId(*raw);
@@ -4021,9 +4021,9 @@ impl App {
             self.history
                 .for_slot_mut(id)
                 .seed(estado.back.clone(), estado.forward.clone());
-            pedir.push(id);
+            ask.push(id);
         }
-        pedir
+        ask
     }
 
     /// Coloca el cursor que traía la sesión, ahora que el listado ya está.
@@ -4052,10 +4052,10 @@ impl App {
         &mut self,
         ajenos: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
     ) {
-        let vivos: std::collections::BTreeSet<u32> =
+        let alive: std::collections::BTreeSet<u32> =
             self.layout.slot_ids().into_iter().map(|s| s.0).collect();
         for (id, estado) in ajenos {
-            if vivos.contains(&id) {
+            if alive.contains(&id) {
                 continue;
             }
             self.session.touched.insert(id, estado.touched_ms);
@@ -4114,9 +4114,9 @@ impl App {
         // El nombre se PINTA, y viene de un fichero o de la línea de
         // comandos: lossy marcado y hazards enmascarados, como cualquier otro
         // nombre (#246 m3). Los bytes no se tocan: los usó el cargador.
-        let (mostrable, _) = norte_frontend::display_os_name(name);
-        let mostrable = norte_encoding::mask_terminal_hazards(&mostrable);
-        let roto = match loaded {
+        let (showable, _) = norte_frontend::display_os_name(name);
+        let showable = norte_encoding::mask_terminal_hazards(&showable);
+        let broken = match loaded {
             Ok(tree) => {
                 self.set_layout(tree);
                 return true;
@@ -4128,16 +4128,16 @@ impl App {
         };
         // Un preset de fábrica se llama por su nombre ASCII: un nombre que no
         // es texto no puede ser uno de ellos.
-        let de_fabrica = name
+        let factory = name
             .to_str()
-            .map_or(Err(LayoutError::NotFound(mostrable.clone())), presets::tree);
-        match de_fabrica {
+            .map_or(Err(LayoutError::NotFound(showable.clone())), presets::tree);
+        match factory {
             Ok(tree) => {
                 self.set_layout(tree);
-                if let Some(e) = roto {
+                if let Some(e) = broken {
                     self.message = Some(ta(
                         "msg-layout-load-failed",
-                        &[("name", &mostrable), ("err", &e.to_string())],
+                        &[("name", &showable), ("err", &e.to_string())],
                     ));
                 }
                 true
@@ -4146,8 +4146,8 @@ impl App {
                 self.message = Some(ta(
                     "msg-layout-load-failed",
                     &[
-                        ("name", &mostrable),
-                        ("err", &roto.unwrap_or(e).to_string()),
+                        ("name", &showable),
+                        ("err", &broken.unwrap_or(e).to_string()),
                     ],
                 ));
                 false
@@ -4184,18 +4184,18 @@ impl App {
                 else {
                     return;
                 };
-                let (mostrable, _) = norte_frontend::display_os_name(&row.name);
-                let mostrable = norte_encoding::mask_terminal_hazards(&mostrable);
+                let (showable, _) = norte_frontend::display_os_name(&row.name);
+                let showable = norte_encoding::mask_terminal_hazards(&showable);
                 if let Some(tree) = row.tree {
                     self.set_layout(tree);
-                    self.message = Some(ta("msg-layout-applied", &[("name", &mostrable)]));
+                    self.message = Some(ta("msg-layout-applied", &[("name", &showable)]));
                 } else {
                     // Una fila que no parsea se eligió a sabiendas: el
                     // selector ya lo decía en su mitad derecha.
                     let err = row.problem.unwrap_or_default();
                     self.message = Some(ta(
                         "msg-layout-load-failed",
-                        &[("name", &mostrable), ("err", &err)],
+                        &[("name", &showable), ("err", &err)],
                     ));
                 }
             }
@@ -4508,13 +4508,13 @@ impl App {
     /// dice qué hace falta y quien puede lo pide.
     pub fn open_properties(&mut self) -> Option<VPath> {
         let entry = self.focused().selected()?.clone();
-        let contar = (entry.kind == norte_proto::EntryKind::Dir).then(|| entry.path.clone());
+        let count = (entry.kind == norte_proto::EntryKind::Dir).then(|| entry.path.clone());
         self.modal = Some(Modal::Properties {
             entry: Box::new(entry),
             size_task: None,
             size: None,
         });
-        contar
+        count
     }
 
     /// Mete en el diálogo la entrada RECIÉN pedida al backend.
@@ -4822,13 +4822,13 @@ impl App {
             self.message = Some(t("msg-pack-read-only"));
             return;
         }
-        let marcadas = self.focused().marked_paths();
-        if marcadas.is_empty() {
+        let marked = self.focused().marked_paths();
+        if marked.is_empty() {
             self.message = Some(t("msg-pack-nothing"));
             return;
         }
-        let base = if marcadas.len() == 1 {
-            marcadas[0].file_name().map(|s| s.as_bytes().to_vec())
+        let base = if marked.len() == 1 {
+            marked[0].file_name().map(|s| s.as_bytes().to_vec())
         } else {
             self.focused()
                 .dir()
@@ -4844,12 +4844,12 @@ impl App {
         // [`Self::pack_confirm`] REHÚSA confirmarlo, igual que el prompt de
         // renombrar: un nombre con el carácter de reemplazo dentro no es el
         // nombre de nadie.
-        let sugerido = match self.focused().name_encoding() {
+        let suggested = match self.focused().name_encoding() {
             Some(enc) => format!("{}.zip", norte_encoding::decode_name(&base, enc)),
             None => format!("{}.zip", String::from_utf8_lossy(&base)),
         };
         self.modal = Some(Modal::Pack {
-            name: sugerido,
+            name: suggested,
             error: None,
         });
     }
@@ -4971,8 +4971,8 @@ impl App {
         // rehusaba partir un fichero que estuviera en un sitio de solo lectura
         // —dentro de un archivo, en un export SFTP— y se aceptaba partir HACIA
         // uno, que fallaba después con un error crudo.
-        let destino = self.split_dest_pane();
-        if self.pane_read_only(destino) {
+        let dest = self.split_dest_pane();
+        if self.pane_read_only(dest) {
             self.message = Some(t("msg-pack-read-only"));
             return;
         }
@@ -5603,11 +5603,11 @@ impl App {
                         // descarta — una inválida con name bidi también
                         // lleva el badge (mismo criterio que el resto).
                         let (name, hostile) = display_name(h.name.as_bytes());
-                        let aviso = t("hotlist-invalid");
+                        let notice = t("hotlist-invalid");
                         let display = if hostile {
-                            format!("{} {name} {aviso}", crate::ui::HOSTILE_BADGE)
+                            format!("{} {name} {notice}", crate::ui::HOSTILE_BADGE)
                         } else {
-                            format!("{name} {aviso}")
+                            format!("{name} {notice}")
                         };
                         (display, None)
                     };
@@ -6048,12 +6048,12 @@ impl HelpView {
         // línea ejecutable —detrás de toda la prosa en una página larga—, así
         // que no parecía cambiar de columna: parecía saltar al final.
         if self.state.action_follows_view() {
-            let ventana = self.state.body_scroll()..self.state.body_scroll().saturating_add(height);
+            let window = self.state.body_scroll()..self.state.body_scroll().saturating_add(height);
             if let Some(i) = self
                 .body
                 .action_lines
                 .iter()
-                .position(|line| ventana.contains(line))
+                .position(|line| window.contains(line))
             {
                 self.state.settle_action_cursor(i);
             }
@@ -6674,11 +6674,11 @@ pub const MARK_PATTERN_MAX_CHARS: usize = 256;
 fn pop_wire_char(s: &mut String) {
     /// El byte de un `%XX` al final, si lo hay.
     fn escape_final(s: &str) -> Option<u8> {
-        let cola = s.get(s.len().checked_sub(3)?..)?;
-        let resto = cola.strip_prefix('%')?;
-        u8::from_str_radix(resto, 16).ok().filter(|_| {
+        let tail = s.get(s.len().checked_sub(3)?..)?;
+        let rest = tail.strip_prefix('%')?;
+        u8::from_str_radix(rest, 16).ok().filter(|_| {
             // `from_str_radix` acepta `+7f` y espacios; aquí solo hex.
-            resto.len() == 2 && resto.bytes().all(|b| b.is_ascii_hexdigit())
+            rest.len() == 2 && rest.bytes().all(|b| b.is_ascii_hexdigit())
         })
     }
 
@@ -6976,11 +6976,11 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
             if !ALLOW_CONFIRM.contains(&cmd) {
                 return None;
             }
-            let confirma = matches!(cmd, "dialog.approve" | "dialog.confirm");
-            if confirma && !plan.confirmable() {
+            let confirms = matches!(cmd, "dialog.approve" | "dialog.confirm");
+            if confirms && !plan.confirmable() {
                 return None;
             }
-            Some(if confirma {
+            Some(if confirms {
                 DialogOutcome::Confirmed
             } else {
                 DialogOutcome::Cancelled // dialog.deny | dialog.cancel
@@ -7346,39 +7346,39 @@ mod tests {
         // `Pane::new` ordena (dirs primero): [z-dir, a, b, c].
         app.panes[0].set_cursor(1);
 
-        let ventana = app.needs_stat_window(1);
-        let nombres: Vec<String> = ventana
+        let window = app.needs_stat_window(1);
+        let names: Vec<String> = window
             .iter()
             .map(|(p, path)| format!("{p}:{}", path.display_lossy()))
             .collect();
         assert!(
-            nombres
+            names
                 .iter()
                 .any(|n| n.starts_with("0:") && n.ends_with("/a.txt"))
-                && nombres
+                && names
                     .iter()
                     .any(|n| n.starts_with("0:") && n.ends_with("/b.txt")),
-            "cursor ± radio del pane con foco: {nombres:?}"
+            "cursor ± radio del pane con foco: {names:?}"
         );
         assert!(
-            !nombres.iter().any(|n| n.contains("c.txt")),
-            "fuera del radio no se sondea: {nombres:?}"
+            !names.iter().any(|n| n.contains("c.txt")),
+            "fuera del radio no se sondea: {names:?}"
         );
         assert!(
-            !nombres.iter().any(|n| n.contains("z-dir")),
-            "un Dir jamás se sondea: {nombres:?}"
+            !names.iter().any(|n| n.contains("z-dir")),
+            "un Dir jamás se sondea: {names:?}"
         );
         assert!(
-            nombres
+            names
                 .iter()
                 .any(|n| n.starts_with("1:") && n.ends_with("/d.txt")),
-            "el pane SIN foco también se pinta: {nombres:?}"
+            "el pane SIN foco también se pinta: {names:?}"
         );
         assert!(
-            !nombres.iter().any(|n| n.contains("e.txt")),
-            "ya hidratada, no es candidata: {nombres:?}"
+            !names.iter().any(|n| n.contains("e.txt")),
+            "ya hidratada, no es candidata: {names:?}"
         );
-        assert_eq!(ventana[0].0, 0, "el pane con foco va primero");
+        assert_eq!(window[0].0, 0, "el pane con foco va primero");
 
         // Un radio generoso alcanza el listado entero de ambos panes.
         assert_eq!(app.needs_stat_window(64).len(), 4);
@@ -7482,17 +7482,17 @@ mod tests {
         let path = row.left.as_ref().expect("izquierda").path.clone();
         view.pane.extend(vec![row.clone()]);
         app.compare = Some(view);
-        let vieja = app.compare_generation();
+        let old = app.compare_generation();
 
         // Otra comparación empieza: la caché se vacía y la generación avanza.
         app.begin_compare_generation();
         let mut view = CompareView::new(vp("mem:///c"), vp("mem:///d"), 0, None, None);
         view.pane.extend(vec![row]);
         app.compare = Some(view);
-        assert_ne!(app.compare_generation(), vieja);
+        assert_ne!(app.compare_generation(), old);
 
         // Llega la sonda de la comparación VIEJA.
-        app.hydrate_compare_size(vieja, path.clone(), Some(42));
+        app.hydrate_compare_size(old, path.clone(), Some(42));
         assert!(
             app.compare_size_hints.is_empty(),
             "ni el tamaño de la anterior"
@@ -7504,8 +7504,8 @@ mod tests {
         );
 
         // Y la de la nueva sí.
-        let ahora = app.compare_generation();
-        app.hydrate_compare_size(ahora, path.clone(), Some(7));
+        let now = app.compare_generation();
+        app.hydrate_compare_size(now, path.clone(), Some(7));
         assert_eq!(app.compare_size_hints.get(&path), Some(&7));
     }
 
@@ -7683,10 +7683,10 @@ mod tests {
         assert_eq!(p.cursor(), 1, "el cursor real queda donde estaba");
 
         // Con el pane VACÍO ni Jump confirma (no hay nada visible).
-        let mut vacio = pane_con(&[]);
-        vacio.quick_start(crate::nav::Mode::Jump);
+        let mut empty = pane_con(&[]);
+        empty.quick_start(crate::nav::Mode::Jump);
         assert!(
-            !vacio.quick_confirm(),
+            !empty.quick_confirm(),
             "sin entradas no hay nada que operar"
         );
     }
@@ -7764,12 +7764,12 @@ mod tests {
         let app = app_dos_panes();
         assert!(!app.pane_read_only(0), "mem:// no es de solo lectura");
 
-        let dentro_de_un_zip = app_en("zip+file:///a.zip/!", "file:///casa");
+        let inside_a_zip = app_en("zip+file:///a.zip/!", "file:///casa");
         assert!(
-            dentro_de_un_zip.pane_read_only(0),
+            inside_a_zip.pane_read_only(0),
             "un scheme de archivo es de solo lectura por construcción"
         );
-        assert!(!dentro_de_un_zip.pane_read_only(1));
+        assert!(!inside_a_zip.pane_read_only(1));
     }
 
     /// Cuando las caps SÍ llegaron mandan ellas: un provider que anuncia
@@ -7949,11 +7949,11 @@ mod tests {
     fn el_ocupante_sin_daemon_tiene_su_propia_frase() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
-        let suave = app.journal_banner().expect("indicador encendido");
+        let soft = app.journal_banner().expect("indicador encendido");
 
         app.note_journal_squatted();
-        let fuerte = app.journal_banner().expect("sigue encendido");
-        assert_ne!(suave, fuerte, "dos hechos distintos, dos frases");
+        let strong = app.journal_banner().expect("sigue encendido");
+        assert_ne!(soft, strong, "dos hechos distintos, dos frases");
 
         // Y se apaga igual: una recuperación borra los dos.
         app.note_journal_recovered();
@@ -7962,7 +7962,7 @@ mod tests {
         // Un `Busy` posterior vuelve a la frase suave y no se queda con la
         // fuerte pegada.
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
-        assert_eq!(app.journal_banner().as_deref(), Some(suave.as_str()));
+        assert_eq!(app.journal_banner().as_deref(), Some(soft.as_str()));
     }
 
     #[test]
@@ -8926,13 +8926,13 @@ mod tests {
 
         let mut app = app_with_entries(&["a.txt"]);
         app.open_properties();
-        let mio = TaskId::new(7);
-        app.properties_counting(mio);
+        let mine = TaskId::new(7);
+        app.properties_counting(mine);
         assert!(
             !app.properties_sized(TaskId::new(8), 1, 1),
             "el de otro no entra"
         );
-        assert!(app.properties_sized(mio, 4096, 12), "el mío sí");
+        assert!(app.properties_sized(mine, 4096, 12), "el mío sí");
         let Some(Modal::Properties { size, .. }) = &app.modal else {
             panic!("sigue abierto")
         };
@@ -8955,7 +8955,7 @@ mod tests {
         use norte_frontend::{SortColumn, SortDir};
 
         let mut app = app_dos_panes();
-        let otro = app.panes[1].sort();
+        let other = app.panes[1].sort();
         app.sort_focused_by(SortColumn::Size);
         assert_eq!(app.focused().sort().column, SortColumn::Size);
         assert_eq!(
@@ -8963,7 +8963,7 @@ mod tests {
             SortDir::Asc,
             "una nueva, ascendente"
         );
-        assert_eq!(app.panes[1].sort(), otro, "el otro panel no se entera");
+        assert_eq!(app.panes[1].sort(), other, "el otro panel no se entera");
 
         app.sort_focused_by(SortColumn::Size);
         assert_eq!(
@@ -9668,30 +9668,30 @@ mod error_message_tests {
     fn cada_relacion_de_solape_tiene_su_propia_frase() {
         use super::{error_category, error_key};
         use norte_proto::RootOverlap;
-        let mut vistas = std::collections::BTreeSet::new();
+        let mut seen = std::collections::BTreeSet::new();
         for relation in [
             RootOverlap::Same,
             RootOverlap::SourceInsideDest,
             RootOverlap::DestInsideSource,
         ] {
-            let clave = error_key(&Error::OverlappingRoots { relation });
+            let key = error_key(&Error::OverlappingRoots { relation });
             assert!(
-                clave.starts_with("err-overlapping-roots"),
-                "{relation:?} → {clave}"
+                key.starts_with("err-overlapping-roots"),
+                "{relation:?} → {key}"
             );
-            assert!(vistas.insert(clave), "dos relaciones comparten {clave}");
+            assert!(seen.insert(key), "dos relaciones comparten {key}");
             for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
-                let text = norte_i18n::t_in(lang, clave);
-                assert_ne!(text, clave, "{clave} sin traducir en {lang:?}");
+                let text = norte_i18n::t_in(lang, key);
+                assert_ne!(text, key, "{key} sin traducir en {lang:?}");
                 assert_ne!(
                     text,
                     norte_i18n::t_in(lang, "err-unknown"),
-                    "{clave} dice lo mismo que «error desconocido»"
+                    "{key} dice lo mismo que «error desconocido»"
                 );
                 assert_ne!(
                     text,
                     norte_i18n::t_in(lang, "err-internal"),
-                    "{clave} dice lo mismo que «error interno»"
+                    "{key} dice lo mismo que «error interno»"
                 );
             }
         }
@@ -10007,15 +10007,15 @@ mod help_view_tests {
         .fold_flags(true, false);
         view.state.install_plugin_topic(parsed.topic);
         refresh(&mut view, 60, 10);
-        let pintado = flatten(view.body().0);
-        assert!(pintado.contains("cuerpo del plugin"), "{pintado}");
+        let painted = flatten(view.body().0);
+        assert!(painted.contains("cuerpo del plugin"), "{painted}");
         assert!(
-            pintado.contains("ACME"),
-            "el publicador acompaña: {pintado}"
+            painted.contains("ACME"),
+            "el publicador acompaña: {painted}"
         );
         assert!(
-            pintado.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
-            "y la insignia de recorte: {pintado}"
+            painted.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
+            "y la insignia de recorte: {painted}"
         );
     }
 
@@ -10184,10 +10184,10 @@ mod help_view_tests {
         }
         // Cerrar y reabrir la ayuda SÍ vuelve a pedir: es el único reintento
         // que el lector tiene, y el único que puede pedir.
-        let mut otra = HelpView::new(Lang::En, Vec::new());
-        otra.set_plugins(&[plugin("acme.ftp", "FTP")]);
-        otra.state.open(&TopicId::new("acme.ftp"));
-        assert_eq!(otra.claim_plugin_fetch().as_deref(), Some("acme.ftp"));
+        let mut other = HelpView::new(Lang::En, Vec::new());
+        other.set_plugins(&[plugin("acme.ftp", "FTP")]);
+        other.state.open(&TopicId::new("acme.ftp"));
+        assert_eq!(other.claim_plugin_fetch().as_deref(), Some("acme.ftp"));
     }
 
     /// Una página del corpus no pide nada, y la de teclado tampoco: pedir por
@@ -10253,7 +10253,7 @@ mod help_plugin_snapshot_tests {
     /// el texto pintado sigue al manifiesto, la página no es la fuente.
     #[test]
     fn el_nombre_de_un_comando_sale_de_la_foto_no_de_la_pagina() {
-        let pintado_con = |titulo: &str| -> String {
+        let painted_with = |titulo: &str| -> String {
             let mut app = app();
             app.help = Some(super::HelpView::new(norte_help::Lang::En, Vec::new()));
             let mut p = plugin("org.norte.demo", true, true);
@@ -10280,7 +10280,7 @@ mod help_plugin_snapshot_tests {
                 .join("\n")
         };
 
-        let text = pintado_con("Greet the world");
+        let text = painted_with("Greet the world");
         assert!(
             text.contains("Greet the world"),
             "la fila y la marca llevan el nombre del manifiesto: {text}"
@@ -10295,9 +10295,9 @@ mod help_plugin_snapshot_tests {
         assert_eq!(text.matches("Greet the world").count(), 2, "{text}");
 
         // Mismos bytes de página, otro manifiesto: manda el manifiesto.
-        let otro = pintado_con("Saludar al mundo");
-        assert!(otro.contains("Saludar al mundo"), "{otro}");
-        assert!(!otro.contains("Greet the world"), "{otro}");
+        let other = painted_with("Saludar al mundo");
+        assert!(other.contains("Saludar al mundo"), "{other}");
+        assert!(!other.contains("Greet the world"), "{other}");
     }
 
     /// H3e: la foto congela las DOS mitades a la vez — la barra ofrece la
@@ -10361,12 +10361,12 @@ mod help_plugin_snapshot_tests {
         let key = format!("plugin:{id}:sync");
         let mut app = app();
         app.help = Some(super::HelpView::new(norte_help::Lang::En, Vec::new()));
-        let mut malo = plugin(&id, true, true);
-        malo.commands = vec![norte_proto::methods::PluginCommandInfo {
+        let mut bad = plugin(&id, true, true);
+        bad.commands = vec![norte_proto::methods::PluginCommandInfo {
             id: "sync".to_owned(),
             title: "Sincronizar".to_owned(),
         }];
-        app.freeze_help_plugins(&[malo]);
+        app.freeze_help_plugins(&[bad]);
         assert_eq!(
             norte_help::ChordResolver::availability(&*app.help_chords, &key).reason(),
             Some(norte_help::Reason::PluginInactive),

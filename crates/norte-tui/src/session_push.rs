@@ -89,10 +89,10 @@ const RESTORE_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 /// La marca dura hasta que alguien liste de verdad, porque el estado dura
 /// hasta entonces.
 async fn restore_slots(app: &mut App, backend: &Backend, presupuesto: std::time::Duration) {
-    let plazo = tokio::time::Instant::now() + presupuesto;
+    let deadline = tokio::time::Instant::now() + presupuesto;
     // Se recogen primero las peticiones: el `&mut App` de la aplicación no
     // puede vivir dentro de los futures.
-    let peticiones: Vec<(norte_frontend::layout::SlotId, VPath, Vec<String>)> = app
+    let requests: Vec<(norte_frontend::layout::SlotId, VPath, Vec<String>)> = app
         .layout
         .slot_ids()
         .into_iter()
@@ -102,16 +102,16 @@ async fn restore_slots(app: &mut App, backend: &Backend, presupuesto: std::time:
             Some((id, dir, attrs))
         })
         .collect();
-    let listados = futures::future::join_all(peticiones.into_iter().map(|(id, dir, attrs)| {
+    let listed = futures::future::join_all(requests.into_iter().map(|(id, dir, attrs)| {
         let backend = backend.clone();
         async move {
-            let r = tokio::time::timeout_at(plazo, initial_pane(&backend, &dir, &attrs)).await;
+            let r = tokio::time::timeout_at(deadline, initial_pane(&backend, &dir, &attrs)).await;
             (id, r)
         }
     }))
     .await;
 
-    for (id, listado) in listados {
+    for (id, listado) in listed {
         let Ok(listado) = listado else {
             tracing::warn!("un hueco de la sesión no listó dentro del presupuesto");
             if let Some(p) = app.panes.browser_mut(id) {
@@ -321,12 +321,12 @@ async fn write_session(
     // Recortar solo la copia de un tick era no recortar nada — el tick
     // siguiente volvía a capturar el historial entero y lo que salía era un
     // `put` rehusado y un aviso POR SEGUNDO.
-    let mut recortando = false;
+    let mut truncating = false;
     // No cupo ni sin historial: se deja de escribir en este run.
-    let mut parado = false;
+    let mut stopped = false;
     // Lo último que se mandó a escribir, para saber qué de un documento ajeno
     // no teníamos.
-    let mut ultimo: Option<SessionBody> = None;
+    let mut last: Option<SessionBody> = None;
     while let Some(order) = ordenes.recv().await {
         let mut body = match order {
             SessionOrder::Ask => {
@@ -334,14 +334,14 @@ async fn write_session(
                     && duena
                 {
                     revision = sesion.revision;
-                    parado = false;
+                    stopped = false;
                     // El documento que había: lo que guardó quien tenía la
                     // sesión y esta pantalla no conoce viaja de vuelta, o el
                     // primer volcado del relevo se lo lleva por delante.
                     let orphans = SessionBody::from_value(sesion.version, &sesion.body)
                         .map(|remote| {
                             foreign_orphans(
-                                ultimo.as_ref().unwrap_or(&SessionBody::default()),
+                                last.as_ref().unwrap_or(&SessionBody::default()),
                                 &remote,
                             )
                         })
@@ -357,10 +357,10 @@ async fn write_session(
             }
             SessionOrder::Write(body) => (*body).clone(),
         };
-        if parado {
+        if stopped {
             continue;
         }
-        if recortando {
+        if truncating {
             clear_history(&mut body);
         }
         match backend
@@ -369,7 +369,7 @@ async fn write_session(
         {
             Ok(rev) => {
                 revision = rev;
-                ultimo = Some(body);
+                last = Some(body);
             }
             // Otra ventana escribió entre nuestro último `get` y este `put`.
             // Se re-lee para saber contra qué, y lo que ella guardaba y esta
@@ -395,18 +395,18 @@ async fn write_session(
                         .await
                     {
                         revision = rev;
-                        ultimo = Some(body);
+                        last = Some(body);
                     }
                 }
                 let _ = avisos.send(SessionNotice::Retry { orphans }).await;
             }
             Err(Error::LimitExceeded { .. }) => {
-                if recortando {
+                if truncating {
                     // Ni sin historial cabe: reintentarlo cada segundo sería un
                     // error por segundo.
-                    parado = true;
+                    stopped = true;
                 } else {
-                    recortando = true;
+                    truncating = true;
                     clear_history(&mut body);
                     let _ = avisos.send(SessionNotice::TooLarge).await;
                     match backend
@@ -414,7 +414,7 @@ async fn write_session(
                         .await
                     {
                         Ok(rev) => revision = rev,
-                        Err(_) => parado = true,
+                        Err(_) => stopped = true,
                     }
                 }
             }
@@ -424,7 +424,7 @@ async fn write_session(
             // —`Ask` solo sale de una ventana que se sabe suelta— y la
             // pantalla se perdía en silencio tras cualquier relevo de daemon.
             Err(Error::PermissionDenied | Error::Cancelled) => {
-                parado = true;
+                stopped = true;
                 let _ = avisos.send(SessionNotice::Released).await;
             }
             // Cualquier otro fallo —transporte caído, un `Io`, un plazo— NO da
@@ -556,17 +556,17 @@ pub fn capture_session(
     app: &mut App,
     st: &mut SessionPush,
 ) -> Option<Arc<norte_frontend::session::SessionBody>> {
-    let ahora = now_ms();
+    let now = now_ms();
     let mut body = app.session_body();
-    let vivos = app.layout.slot_ids();
+    let alive = app.layout.slot_ids();
     // La política recorta, compara y sella. Lo que queda aquí es lo único que
     // ella no puede hacer: llevar el mismo sello al estado de la pantalla,
     // porque capturar no puede TOCAR —dos capturas seguidas de la misma
     // pantalla tienen que dar el mismo documento, o el coalescing de un
     // segundo no coalesce nada.
-    let sellados = st.policy.prepare(&mut body, &vivos, ahora)?;
-    for id in sellados {
-        app.touch_session_slot(id, ahora);
+    let sealed = st.policy.prepare(&mut body, &alive, now)?;
+    for id in sealed {
+        app.touch_session_slot(id, now);
     }
     Some(Arc::new(body))
 }
@@ -634,9 +634,9 @@ mod session_push_tests {
             .collect();
         assert!(browsers.len() >= 2, "la de fábrica tiene al menos dos");
 
-        let presupuesto = Duration::from_millis(50);
+        let budget = Duration::from_millis(50);
         let t0 = tokio::time::Instant::now();
-        super::restore_slots(&mut app, &backend, presupuesto).await;
+        super::restore_slots(&mut app, &backend, budget).await;
 
         assert!(
             t0.elapsed() < Duration::from_secs(1),
@@ -759,7 +759,7 @@ mod session_push_tests {
             .try_send(SessionOrder::Ask)
             .expect("cabe una");
         let last = capture_session(&mut app, &mut st).expect("hay pantalla que guardar");
-        let recibidas = tokio::spawn(async move {
+        let received = tokio::spawn(async move {
             let mut v = Vec::new();
             while let Some(o) = ordenes.recv().await {
                 v.push(o);
@@ -767,7 +767,7 @@ mod session_push_tests {
             v
         });
         st.close(Some(last)).await;
-        let v = recibidas.await.expect("join");
+        let v = received.await.expect("join");
         assert_eq!(v.len(), 2, "la que ocupaba el canal y la última foto");
         assert!(matches!(v[1], SessionOrder::Write(_)));
     }
@@ -844,23 +844,23 @@ mod session_push_tests {
         remote.slots.insert(1, slot("file:///suyo"));
         remote.slots.insert(42, slot("file:///solo-suyo"));
 
-        let ajenos = foreign_orphans(&local, &remote);
-        assert_eq!(ajenos.len(), 1, "solo lo que no teníamos");
-        assert!(ajenos.contains_key(&42));
+        let foreign = foreign_orphans(&local, &remote);
+        assert_eq!(foreign.len(), 1, "solo lo que no teníamos");
+        assert!(foreign.contains_key(&42));
 
         let mut app = app();
-        let vivo = app.panes.slot_of(0).0;
-        let mut con_vivo = ajenos.clone();
-        con_vivo.insert(vivo, slot("file:///no-pises-mi-pantalla"));
-        app.adopt_session_orphans(con_vivo);
-        let cuerpo = app.session_body();
+        let alive = app.panes.slot_of(0).0;
+        let mut with_alive = foreign.clone();
+        with_alive.insert(alive, slot("file:///no-pises-mi-pantalla"));
+        app.adopt_session_orphans(with_alive);
+        let body = app.session_body();
         assert_eq!(
-            cuerpo.slots[&42].path,
+            body.slots[&42].path,
             VPath::parse("file:///solo-suyo").expect("wire"),
             "el huérfano ajeno se conserva y se vuelve a escribir"
         );
         assert_eq!(
-            cuerpo.slots[&vivo].path,
+            body.slots[&alive].path,
             VPath::parse("file:///x").expect("wire"),
             "y un hueco VIVO no lo pisa la sesión de otra ventana"
         );

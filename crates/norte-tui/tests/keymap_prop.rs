@@ -35,8 +35,8 @@ fn to_toml(section: &str, bindings: &[(Vec<String>, String)], key: &str) -> Stri
     use std::fmt::Write;
     let mut out = format!("[{section}]\n{key} = [\n");
     for (on, run) in bindings {
-        let teclas: Vec<String> = on.iter().map(|k| format!("{k:?}")).collect();
-        let _ = writeln!(out, "  {{ on = [{}], run = {run:?} }},", teclas.join(", "));
+        let keys: Vec<String> = on.iter().map(|k| format!("{k:?}")).collect();
+        let _ = writeln!(out, "  {{ on = [{}], run = {run:?} }},", keys.join(", "));
     }
     out.push_str("]\n");
     out
@@ -194,13 +194,13 @@ proptest! {
         global in arb_bindings_contador(),
         stream in proptest::collection::vec(arb_pulsacion(), 0..24),
     ) {
-        let cuerpo = format!(
+        let body = format!(
             "{}{}",
             to_toml("pane", &pane, "keymap"),
             to_toml("global", &global, "keymap"),
         );
-        let con = parse_keymap(&format!("counts = true\n\n{cuerpo}")).expect("TOML generado válido");
-        let sin = parse_keymap(&cuerpo).expect("TOML generado válido");
+        let con = parse_keymap(&format!("counts = true\n\n{body}")).expect("TOML generado válido");
+        let sin = parse_keymap(&body).expect("TOML generado válido");
         let (con, sin) = (
             Effective::build(&con, None, CONOCIDOS),
             Effective::build(&sin, None, CONOCIDOS),
@@ -222,14 +222,14 @@ proptest! {
         let mut r_sin = Resolver::new(sin);
         for k in &stream {
             let c = parse_chord(k).expect("tecla del alfabeto");
-            let antes = r.count();
+            let before = r.count();
             let res = r.push(c);
             match &res {
                 Resolution::Counting(n) => {
                     // 4: ni desborda ni retrocede.
                     prop_assert!((1..=MAX_COUNT).contains(n), "fuera de rango: {:?}", res);
                     prop_assert_eq!(r.count(), Some(*n), "lo que se pinta es lo que hay");
-                    if let Some(previo) = antes {
+                    if let Some(previo) = before {
                         prop_assert!(*n >= previo, "el contador retrocedió: {previo} → {n}");
                         // Un dígito solo puede DESCARTARSE por el techo. Sin
                         // esto, un acumulador que dejara de sumar antes de
@@ -252,14 +252,14 @@ proptest! {
                         .is_some_and(|d| d.counts);
                     match count {
                         // 2: ni inventa…
-                        Count::None => prop_assert_eq!(antes, None, "contador inventado"),
+                        Count::None => prop_assert_eq!(before, None, "contador inventado"),
                         // …ni redondea.
                         Count::Repeat(n) => {
-                            prop_assert_eq!(antes, Some(*n), "contador alterado");
+                            prop_assert_eq!(before, Some(*n), "contador alterado");
                             prop_assert!(acepta, "{command} no acepta contador y le llegó Repeat");
                         }
                         Count::Ignored(n) => {
-                            prop_assert_eq!(antes, Some(*n), "contador alterado");
+                            prop_assert_eq!(before, Some(*n), "contador alterado");
                             prop_assert!(!acepta, "{command} acepta contador y le llegó Ignored");
                         }
                     }
@@ -270,7 +270,7 @@ proptest! {
                 }
                 // Una secuencia a medias NO toca el contador: en `12gg`
                 // conviven.
-                Resolution::Pending(_) => prop_assert_eq!(r.count(), antes, "el contador se movió"),
+                Resolution::Pending(_) => prop_assert_eq!(r.count(), before, "el contador se movió"),
             }
 
             // 5, segunda mitad: el mismo stream sin el flag del preset.

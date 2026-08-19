@@ -214,7 +214,7 @@ fn archive_limits_ultimo_gana_y_proyecto_no_los_toca() {
 /// que sí carga config, instala el subscriber y sale sin abrir la TTY.
 #[test]
 fn el_frontend_de_terminal_loguea_al_fichero_y_no_a_la_pantalla() {
-    let estado = tempfile::tempdir().expect("tmp");
+    let state = tempfile::tempdir().expect("tmp");
     let config = tempfile::tempdir().expect("tmp");
     // Config VÁLIDA con un proveedor de IA que no resuelve: parsea (el tipo de
     // proveedor no se valida al leer, a propósito — lo rechaza la puerta de la
@@ -228,10 +228,10 @@ fn el_frontend_de_terminal_loguea_al_fichero_y_no_a_la_pantalla() {
     )
     .expect("config");
 
-    let salida = std::process::Command::new(env!("CARGO_BIN_EXE_ntc"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ntc"))
         .arg("--pick")
-        .arg(estado.path())
-        .env("XDG_STATE_HOME", estado.path())
+        .arg(state.path())
+        .env("XDG_STATE_HOME", state.path())
         .env("NORTE_CONFIG_DIR", config.path())
         .env("RUST_LOG", "warn")
         .output()
@@ -241,14 +241,14 @@ fn el_frontend_de_terminal_loguea_al_fichero_y_no_a_la_pantalla() {
     // propósito: es lo que le dice al usuario por qué no arrancó. Lo que no
     // puede aparecer ahí es el DIAGNÓSTICO, que es lo que rompería la pantalla
     // si hubiera pantalla.
-    let stderr = String::from_utf8_lossy(&salida.stderr).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(
         !stderr.contains("proveedor de IA no disponible"),
         "el aviso no puede salir por la pantalla: {stderr}"
     );
 
     // Y la otra mitad: el aviso ESTÁ, en el fichero.
-    let logs = estado.path().join("norte").join("logs");
+    let logs = state.path().join("norte").join("logs");
     let text: String = std::fs::read_dir(&logs)
         .unwrap_or_else(|e| panic!("no hay directorio de logs en {logs:?}: {e}"))
         .flatten()

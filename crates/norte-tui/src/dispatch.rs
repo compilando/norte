@@ -128,9 +128,9 @@ pub async fn dispatch(
         // ÚNICO junto con desplegar su sección. Si ya estaba abierto no se
         // vuelven a pedir: esa pulsación solo se lleva el teclado.
         Command::LayoutPlaces => {
-            let estaba = app.places_slot().is_some();
+            let was = app.places_slot().is_some();
             app.toggle_places();
-            if !estaba && app.places_drives_visible() {
+            if !was && app.places_drives_visible() {
                 refresh_places_drives(app, backend).await;
             }
             refresh_places_favorites(app);
@@ -154,7 +154,7 @@ pub async fn dispatch(
             // hay ficheros de usuario: quedan las cinco de fábrica. Antes se
             // caía a `PathBuf::default()`, que es leer `./layouts/` del
             // directorio actual — o sea, clonar un repo y pulsar F9 (#244 m3).
-            let mios = match config::user_config_dir() {
+            let mine = match config::user_config_dir() {
                 Some(dir) => tokio::task::spawn_blocking(move || {
                     use norte_frontend::layout::config;
                     config::list(&dir)
@@ -169,7 +169,7 @@ pub async fn dispatch(
                 .unwrap_or_default(),
                 None => Vec::new(),
             };
-            app.open_layout_picker(mios);
+            app.open_layout_picker(mine);
         }
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
@@ -240,12 +240,12 @@ pub async fn dispatch(
         // #124: una PÁGINA es una pantalla del pane (menos una fila de
         // contexto), no una constante — el alto real llega del último frame.
         Command::CursorPageUp => {
-            let paso = app.focused().page_step();
-            app.focused_mut().move_up(paso);
+            let step = app.focused().page_step();
+            app.focused_mut().move_up(step);
         }
         Command::CursorPageDown => {
-            let paso = app.focused().page_step();
-            app.focused_mut().move_down(paso);
+            let step = app.focused().page_step();
+            app.focused_mut().move_down(step);
         }
         Command::CursorTop => app.focused_mut().move_to_start(),
         Command::CursorBottom => app.focused_mut().move_to_end(),
@@ -394,11 +394,11 @@ pub async fn dispatch(
             // así que N sondeos serían N round-trips de red para la misma
             // respuesta.
             if let Some(first) = app.focused().marked_paths().first() {
-                let hay_papelera = backend
+                let has_trash = backend
                     .capabilities(first)
                     .await
                     .is_ok_and(|c| c.flags.contains(norte_proto::CapabilityFlags::TRASH));
-                let permanent = cmd == Command::PaneDeletePermanent || !hay_papelera;
+                let permanent = cmd == Command::PaneDeletePermanent || !has_trash;
                 app.open_delete_modal(permanent);
             }
         }
@@ -588,8 +588,8 @@ pub async fn dispatch(
         // Y contar a mano, sobre lo MARCADO (o el cursor si no hay marcas):
         // «¿cuánto ocupa todo esto?» es una pregunta sobre la selección.
         Command::PaneDirSize => {
-            let objetivos = app.focused().marked_paths();
-            launch_size_count(app, backend, objetivos, false).await;
+            let targets = app.focused().marked_paths();
+            launch_size_count(app, backend, targets, false).await;
         }
         // #132: escribir archivos. Los cinco comandos que los cuatro presets
         // atan y norte no tenía.

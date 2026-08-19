@@ -955,21 +955,21 @@ mod tests {
     /// puede cambiar de veredicto bajo el cursor del lector.
     #[test]
     fn congelar_los_hechos_no_toca_el_resolver_de_partida() {
-        let antes = orthodox_resolver();
-        let dentro_de_un_zip = antes.with_facts(norte_frontend::availability::Facts {
+        let before = orthodox_resolver();
+        let inside_a_zip = before.with_facts(norte_frontend::availability::Facts {
             source_read_only: true,
             ..facts_normales()
         });
-        assert!(!dentro_de_un_zip.availability("pane.delete").is_available());
+        assert!(!inside_a_zip.availability("pane.delete").is_available());
         assert!(
-            antes.availability("pane.delete").is_available(),
+            before.availability("pane.delete").is_available(),
             "el resolver de partida siguió intacto"
         );
         // Y los chords viajan con la copia: congelar hechos no puede costar la
         // tecla del lector.
         assert_eq!(
-            dentro_de_un_zip.chord("pane.copy"),
-            antes.chord("pane.copy")
+            inside_a_zip.chord("pane.copy"),
+            before.chord("pane.copy")
         );
     }
 
@@ -1104,22 +1104,22 @@ mod tests {
     fn una_clave_de_plugin_hostil_no_se_pinta_cruda() {
         let r = resolver_con_titulos(&[]);
         let hostile = "plugin:acme.ftp:\u{202E}x\u{200B}y";
-        let pintado = r.label(hostile);
+        let painted = r.label(hostile);
         assert!(
-            !pintado.chars().any(norte_encoding::is_terminal_hazard),
-            "sin peligros de terminal: {pintado:?}"
+            !painted.chars().any(norte_encoding::is_terminal_hazard),
+            "sin peligros de terminal: {painted:?}"
         );
-        assert!(pintado.contains('\u{FFFD}'), "anti-vacuidad: {pintado:?}");
+        assert!(painted.contains('\u{FFFD}'), "anti-vacuidad: {painted:?}");
         assert_eq!(
             render_command(hostile, &r),
-            CommandText::Name(pintado),
+            CommandText::Name(painted),
             "y es lo que la cadena de `norte-help` acaba nombrando"
         );
         // Una clave MALFORMADA (que `plugin_of_command` rechaza) también: la
         // pregunta «¿esto es texto de tercero?» es más laxa que «¿esto
         // identifica un comando?», a propósito.
-        let malformada = r.label("plugin:\u{202E}");
-        assert!(!malformada.chars().any(norte_encoding::is_terminal_hazard));
+        let malformed = r.label("plugin:\u{202E}");
+        assert!(!malformed.chars().any(norte_encoding::is_terminal_hazard));
     }
 
     /// Un título hostil llega ENMASCARADO y ACOTADO — el enmascarado ocurre en

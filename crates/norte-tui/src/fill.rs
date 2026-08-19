@@ -251,26 +251,26 @@ mod search_fill_tests {
             Pane::new(root.clone(), vec![file(&root, "a")]),
             Pane::new(root.clone(), vec![]),
         );
-        let antes = app.panes[0].entries().len();
-        let fantasma = norte_frontend::layout::SlotId(9_999);
+        let before = app.panes[0].entries().len();
+        let ghost = norte_frontend::layout::SlotId(9_999);
         let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
         let mut fill: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
-        fill.insert(fantasma, Fill { rx });
+        fill.insert(ghost, Fill { rx });
 
         apply_fill_msg(
             &mut app,
             &mut fill,
-            fantasma,
+            ghost,
             Some(FillMsg::Batch(vec![file(&root, "de-otro-sitio")])),
         );
 
         assert_eq!(
             app.panes[0].entries().len(),
-            antes,
+            before,
             "el listado visible no recibe entradas de un panel cerrado"
         );
         assert!(
-            fill.get(fantasma).is_none(),
+            fill.get(ghost).is_none(),
             "y el hueco fantasma se suelta en vez de quedarse drenando"
         );
     }

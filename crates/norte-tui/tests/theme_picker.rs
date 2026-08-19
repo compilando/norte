@@ -69,12 +69,12 @@ fn navegar_previsualiza_y_enter_fija() {
 #[test]
 fn cancelar_revierte_al_tema_previo() {
     let mut app = app();
-    let antes = app.theme.name().map(String::from);
+    let before = app.theme.name().map(String::from);
     app.open_theme_picker();
     app.theme_picker_input(PickerAction::Down);
     app.theme_picker_input(PickerAction::Down);
     // Cancela: vuelve al tema de antes de abrir.
     app.theme_picker_input(PickerAction::Cancel);
     assert!(app.theme_picker.is_none());
-    assert_eq!(app.theme.name().map(String::from), antes);
+    assert_eq!(app.theme.name().map(String::from), before);
 }

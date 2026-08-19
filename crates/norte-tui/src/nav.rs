@@ -361,14 +361,14 @@ mod tests {
         h.push(vp("mem:///a"));
         h.push(vp("mem:///b"));
         h.push(vp("mem:///a")); // NO consecutivo con el primer "a" (hay "b" en medio)
-        let contar_a = |h: &History| h.entries().iter().filter(|p| **p == vp("mem:///a")).count();
+        let count_to = |h: &History| h.entries().iter().filter(|p| **p == vp("mem:///a")).count();
         assert_eq!(
-            contar_a(&h),
+            count_to(&h),
             2,
             "repetido no consecutivo: dos apariciones de a"
         );
         h.remove(&vp("mem:///a"));
-        assert_eq!(contar_a(&h), 0, "remove retira TODAS las ocurrencias");
+        assert_eq!(count_to(&h), 0, "remove retira TODAS las ocurrencias");
     }
 
     #[test]
@@ -409,11 +409,11 @@ mod tests {
         let mut h = History::default();
         h.record(vp("mem:///a"));
         h.record(vp("mem:///b"));
-        let antes: Vec<VPath> = h.entries().iter().cloned().collect();
+        let before: Vec<VPath> = h.entries().iter().cloned().collect();
         let _ = h.step_back(vp("mem:///c"));
         let _ = h.step_forward(vp("mem:///b"));
-        let despues: Vec<VPath> = h.entries().iter().cloned().collect();
-        assert_eq!(antes, despues, "la MRU es asunto aparte");
+        let after: Vec<VPath> = h.entries().iter().cloned().collect();
+        assert_eq!(before, after, "la MRU es asunto aparte");
     }
 
     /// «Este directorio ya no está» es UN hecho: `remove` lo aplica a la MRU
@@ -458,37 +458,37 @@ mod tests {
     #[test]
     fn el_tope_aguanta_alternando_las_tres_operaciones() {
         let mut h = History::default();
-        let suma = |h: &History| h.back_len() + h.fwd_len();
+        let total = |h: &History| h.back_len() + h.fwd_len();
 
         let mut cur = vp("mem:///start");
         for i in 0..(HISTORY_MAX * 2) {
             h.record(cur.clone());
             cur = vp(&format!("mem:///d{i}"));
-            assert!(suma(&h) <= HISTORY_MAX, "record no desborda la suma");
+            assert!(total(&h) <= HISTORY_MAX, "record no desborda la suma");
         }
         assert_eq!(h.back_len(), HISTORY_MAX, "el rastro está lleno");
 
         // Hasta el fondo: cada paso mueve un dir de una pila a la otra.
-        let mut pasos = 0;
+        let mut steps = 0;
         while let Some(target) = h.step_back(cur.clone()) {
             cur = target;
-            pasos += 1;
-            assert!(suma(&h) <= HISTORY_MAX, "atrás no desborda la suma");
+            steps += 1;
+            assert!(total(&h) <= HISTORY_MAX, "atrás no desborda la suma");
         }
-        assert_eq!(pasos, HISTORY_MAX, "se recorrió el rastro entero");
+        assert_eq!(steps, HISTORY_MAX, "se recorrió el rastro entero");
         assert_eq!(h.fwd_len(), HISTORY_MAX, "toda la memoria está delante");
 
         // Y de vuelta: aquí es donde `step_forward` empuja a `back` sin
         // comprobar el tope. Sin el invariante, `back` acabaría por encima.
         while let Some(target) = h.step_forward(cur.clone()) {
             cur = target;
-            assert!(suma(&h) <= HISTORY_MAX, "adelante no desborda la suma");
+            assert!(total(&h) <= HISTORY_MAX, "adelante no desborda la suma");
         }
         assert_eq!(h.back_len(), HISTORY_MAX, "el rastro vuelve a estar lleno");
 
         // Una navegación nueva desde el tope tampoco lo desborda.
         h.record(cur);
-        assert!(suma(&h) <= HISTORY_MAX);
+        assert!(total(&h) <= HISTORY_MAX);
         assert_eq!(h.fwd_len(), 0, "y poda la rama de delante");
     }
 }

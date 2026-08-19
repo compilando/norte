@@ -784,7 +784,7 @@ mod help_key_tests {
     /// TOFU de `init.lua`, que NO tiene TTL.
     #[test]
     fn los_modales_interceptados_no_admiten_ayuda_por_encima() {
-        let interceptados = [
+        let intercepted = [
             Modal::TrustLuaInit {
                 path: "repo/.norte/init.lua".into(),
                 hash_abbrev: "ab12cd34ef56ab78ab12cd34ef56ab78".into(),
@@ -822,7 +822,7 @@ mod help_key_tests {
                 error: None,
             },
         ];
-        for modal in interceptados {
+        for modal in intercepted {
             let label = format!("{modal:?}");
             let mut app = app_with_help_closed();
             app.modal = Some(modal);
@@ -894,14 +894,14 @@ mod help_key_tests {
         for c in "copying".chars() {
             press(&mut app, &mut r, KeyCode::Char(c));
         }
-        let filtrados = topic_ids(&app);
+        let filtered = topic_ids(&app);
         assert_eq!(
-            filtrados,
+            filtered,
             vec!["copying".to_owned()],
             "la lateral se estrecha a lo tecleado"
         );
         assert!(
-            filtrados.len() < todos.len(),
+            filtered.len() < todos.len(),
             "el filtro tiene que quitar algo o no filtra nada"
         );
 
@@ -1086,7 +1086,7 @@ mod help_key_tests {
         // El índice no tiene `commands`: todas sus acciones son `see_also`.
         press(&mut app, &mut r, KeyCode::Tab);
         assert_eq!(state(&app).focus(), Focus::Body);
-        let destino = match state(&app).action() {
+        let dest = match state(&app).action() {
             Some(norte_frontend::help::Action::Open(id)) => id.as_str().to_owned(),
             otro => panic!("la primera acción del índice es un enlace: {otro:?}"),
         };
@@ -1094,7 +1094,7 @@ mod help_key_tests {
         let cmd = press(&mut app, &mut r, KeyCode::Enter);
         assert_eq!(cmd, None, "un enlace no despacha nada");
         assert!(app.help.is_some(), "…y el overlay SIGUE abierto");
-        assert_eq!(state(&app).current().as_str(), destino);
+        assert_eq!(state(&app).current().as_str(), dest);
 
         press(&mut app, &mut r, KeyCode::Backspace);
         assert!(app.help.is_some(), "volver tampoco cierra");
@@ -1149,8 +1149,8 @@ mod help_key_tests {
             press(&mut app, &mut r, KeyCode::Down);
         }
         press(&mut app, &mut r, KeyCode::Enter);
-        let abierto = state(&app).current().as_str().to_owned();
-        assert_ne!(abierto, "copying", "el enlace llevó a otra página");
+        let open = state(&app).current().as_str().to_owned();
+        assert_ne!(open, "copying", "el enlace llevó a otra página");
         assert_eq!(
             state(&app).selected_topic().map(TopicId::as_str),
             Some("copying"),
@@ -1189,11 +1189,11 @@ mod help_key_tests {
     fn a_verb_outside_the_allowlist_is_inert() {
         let mut app = app_with_help();
         let mut r = dialog_resolver();
-        let antes = state(&app).current().clone();
+        let before = state(&app).current().clone();
         let cmd = press(&mut app, &mut r, KeyCode::Char('y'));
         assert_eq!(cmd, None);
         assert!(app.help.is_some(), "`dialog.approve` no cierra la ayuda");
-        assert_eq!(state(&app).current(), &antes, "ni navega");
+        assert_eq!(state(&app).current(), &before, "ni navega");
     }
 
     /// La tecla que abre la ayuda la cierra: F1 resuelve a `app.help`, que

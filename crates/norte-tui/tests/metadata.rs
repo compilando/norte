@@ -227,13 +227,13 @@ fn el_panel_de_procesos_toma_el_teclado_al_abrir() {
 #[test]
 fn cerrar_devuelve_el_arbol_de_antes() {
     let mut app = app_de_prueba();
-    let antes = app.layout.clone();
+    let before = app.layout.clone();
 
     app.toggle_metadata();
     app.toggle_metadata();
-    assert_eq!(app.layout, antes, "la hoja no dejó rastro");
+    assert_eq!(app.layout, before, "la hoja no dejó rastro");
 
     app.toggle_processes();
     app.toggle_processes();
-    assert_eq!(app.layout, antes, "el panel de procesos tampoco");
+    assert_eq!(app.layout, before, "el panel de procesos tampoco");
 }

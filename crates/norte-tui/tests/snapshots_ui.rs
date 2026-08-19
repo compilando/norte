@@ -124,13 +124,13 @@ fn el_modal_de_transferencia_pinta_el_aviso_de_espacio() {
         terminal.backend().to_string()
     };
 
-    let aviso = norte_frontend::space::warning(
+    let notice = norte_frontend::space::warning(
         Some(4_200_000_000),
         Some(1_100_000_000),
         norte_i18n::active(),
     )
     .expect("no cabe: hay aviso");
-    let con = pintar(Some(aviso.clone()));
+    let con = pintar(Some(notice.clone()));
     let lines: Vec<&str> = con.lines().collect();
     let row = |aguja: &str| {
         lines
@@ -138,13 +138,13 @@ fn el_modal_de_transferencia_pinta_el_aviso_de_espacio() {
             .position(|l| l.contains(aguja))
             .unwrap_or_else(|| panic!("falta {aguja:?} en:\n{con}"))
     };
-    let destino = row("medios");
-    let avisada = row(aviso.split_whitespace().next().expect("primera palabra"));
-    assert!(avisada > destino, "el aviso va debajo del destino:\n{con}");
+    let dest = row("medios");
+    let avisada = row(notice.split_whitespace().next().expect("primera palabra"));
+    assert!(avisada > dest, "el aviso va debajo del destino:\n{con}");
 
     // Sin aviso, ni rastro de él.
     let sin = pintar(None);
-    assert!(!sin.contains(&aviso), "cuando cabe no se dice nada:\n{sin}");
+    assert!(!sin.contains(&notice), "cuando cabe no se dice nada:\n{sin}");
 }
 
 /// #164: y debajo del de espacio, el de confinamiento — misma clase de línea
@@ -194,12 +194,12 @@ fn el_modal_de_transferencia_pinta_el_aviso_de_confinamiento() {
             .position(|l| l.contains(aguja))
             .unwrap_or_else(|| panic!("falta {aguja:?} en:\n{con}"))
     };
-    let destino = row("medios");
+    let dest = row("medios");
     let del_espacio = row(espacio.split_whitespace().next().expect("palabra"));
     // El modal envuelve, así que se busca una palabra que la línea no comparta
     // con ninguna otra en vez de la frase entera.
     let del_confinamiento = row("symlink");
-    assert!(del_espacio > destino, "espacio bajo el destino:\n{con}");
+    assert!(del_espacio > dest, "espacio bajo el destino:\n{con}");
     assert!(
         del_confinamiento > del_espacio,
         "y el confinamiento debajo del espacio:\n{con}"
@@ -240,7 +240,7 @@ fn la_barra_de_estado_recorta_la_ruta_y_no_el_contador() {
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
     ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 80, 24));
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let barra = terminal
+    let bar = terminal
         .backend()
         .to_string()
         .lines()
@@ -249,12 +249,12 @@ fn la_barra_de_estado_recorta_la_ruta_y_no_el_contador() {
         .to_owned();
 
     assert!(
-        barra.contains("8/42"),
-        "el contador entero, que es lo que dice cuánto hay: {barra:?}"
+        bar.contains("8/42"),
+        "el contador entero, que es lo que dice cuánto hay: {bar:?}"
     );
     assert!(
-        barra.contains('…'),
-        "y la ruta cede por el medio: {barra:?}"
+        bar.contains('…'),
+        "y la ruta cede por el medio: {bar:?}"
     );
 }
 
@@ -801,7 +801,7 @@ fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
     // corrido aquí.
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
     let label = |cmd: &str| norte_i18n::t(&norte_tui::keymap::dialog_hint_id(cmd));
-    let aviso = norte_i18n::t("modal-hint-help-open");
+    let notice = norte_i18n::t("modal-hint-help-open");
     let verbos = default_dialog_hints().approval;
 
     let mut app = app_base();
@@ -819,7 +819,7 @@ fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
     let tapado = render(&app);
 
     assert!(
-        tapado.contains(&aviso),
+        tapado.contains(&notice),
         "el pie tiene que decir por qué las teclas del modal no responden:\n{tapado}"
     );
     assert!(
@@ -850,7 +850,7 @@ fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
     app.help = None;
     let visible = render(&app);
     assert!(
-        !visible.contains(&aviso),
+        !visible.contains(&notice),
         "sin ayuda por encima no hay nada que cerrar:\n{visible}"
     );
     assert!(
@@ -869,7 +869,7 @@ fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
 #[test]
 fn ningun_modal_con_hint_generado_ofrece_verbos_bajo_la_ayuda() {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
-    let aviso = norte_i18n::t("modal-hint-help-open");
+    let notice = norte_i18n::t("modal-hint-help-open");
     let hints = default_dialog_hints();
     let modales = [
         (
@@ -931,7 +931,7 @@ fn ningun_modal_con_hint_generado_ofrece_verbos_bajo_la_ayuda() {
         open_help_over_modal(&mut app);
         let tapado = render(&app);
         assert!(
-            tapado.contains(&aviso),
+            tapado.contains(&notice),
             "este modal no dice por qué sus teclas no responden:\n{tapado}"
         );
         assert!(
@@ -1384,19 +1384,19 @@ fn snapshot_ayuda_filtro_hostil() {
             rlo.id
         );
     }
-    let pie = text
+    let footer = text
         .lines()
         .nth(help_footer_row(80, 16))
         .expect("el pie cae dentro del frame");
     assert!(
-        pie.contains('\u{FFFD}'),
+        footer.contains('\u{FFFD}'),
         "y el filtro SÍ se pinta, enmascarado a U+FFFD — sin esto el test \
-         pasaría igual con un pie que no pintase nada:\n{pie:?}\n{text}"
+         pasaría igual con un pie que no pintase nada:\n{footer:?}\n{text}"
     );
     assert!(
-        pie.contains("copiar"),
+        footer.contains("copiar"),
         "el resto del needle llega al pie tal cual: el enmascarado es del \
-         hazard, no del texto:\n{pie:?}"
+         hazard, no del texto:\n{footer:?}"
     );
     insta::assert_snapshot!(text);
 }
@@ -1597,15 +1597,15 @@ fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
     let total = view.body().0.len();
     let (_, alto) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, 80, 16), view.state.lang());
     assert!(total > alto, "el índice no cabe en {alto} filas ({total})");
-    let pie = text
+    let footer = text
         .lines()
         .nth(help_footer_row(80, 16))
         .expect("el pie cae dentro del frame");
     // Pegado al borde derecho de la caja: el volcado del backend entrecomilla
     // cada fila, así que el ancla es el `│` de la caja y no el fin de línea.
     assert!(
-        pie.contains(&format!("1/{total} │")),
-        "el pie sitúa al lector en la primera línea, a la DERECHA: {pie:?}"
+        footer.contains(&format!("1/{total} │")),
+        "el pie sitúa al lector en la primera línea, a la DERECHA: {footer:?}"
     );
 
     // Y sigue al scroll. El foco entra en el cuerpo para que `page_down`
@@ -1618,13 +1618,13 @@ fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
     let text = render_ayuda(&mut app, 80, 16);
     let scroll = app.help.as_ref().expect("overlay").state.body_scroll();
     assert!(scroll > 0, "el cuerpo se desplazó");
-    let pie = text
+    let footer = text
         .lines()
         .nth(help_footer_row(80, 16))
         .expect("el pie cae dentro del frame");
     assert!(
-        pie.contains(&format!("{}/{total} │", scroll + 1)),
-        "el indicador va con el scroll ({scroll}): {pie:?}"
+        footer.contains(&format!("{}/{total} │", scroll + 1)),
+        "el indicador va con el scroll ({scroll}): {footer:?}"
     );
 
     // Frame de sobra: la página entra entera y el indicador SOBRA — un `1/9`
@@ -1637,13 +1637,13 @@ fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
     let (_, alto) =
         ui::help_body_size(ratatui::layout::Rect::new(0, 0, 120, 90), view.state.lang());
     assert!(total <= alto, "la página cabe en {alto} filas ({total})");
-    let pie = text
+    let footer = text
         .lines()
         .nth(help_footer_row(120, 90))
         .expect("el pie cae dentro del frame");
     assert!(
-        !pie.contains(&format!("/{total}")),
-        "con la página entera a la vista el pie no dice nada: {pie:?}"
+        !footer.contains(&format!("/{total}")),
+        "con la página entera a la vista el pie no dice nada: {footer:?}"
     );
 }
 
@@ -1714,13 +1714,13 @@ fn all_row_styles(buf: &ratatui::buffer::Buffer) -> Vec<Vec<ratatui::style::Styl
 /// prosa de arriba y en la columna del chord.
 #[test]
 fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
-    let dentro = vp("zip+file:///a.zip/!");
+    let inside = vp("zip+file:///a.zip/!");
     let mut app = App::new(
         Pane::new(
-            dentro.clone(),
-            vec![entry(&dentro, b"leeme.txt", EntryKind::File, Some(3))],
+            inside.clone(),
+            vec![entry(&inside, b"leeme.txt", EntryKind::File, Some(3))],
         ),
-        Pane::new(dentro, Vec::new()),
+        Pane::new(inside, Vec::new()),
     );
     app.dialog_hints = default_dialog_hints();
     open_help(&mut app);
@@ -1754,16 +1754,16 @@ fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
     // chord (`Mark` si se puede pulsar, `Info` si no — una fila apagada no
     // puede vestir de tecla) y el texto. Solo el color de FRENTE: el fondo se
     // lo pone el bloque del overlay y no dice nada de la disponibilidad.
-    let filas = row_texts(&buffer);
-    let estilos = all_row_styles(&buffer);
-    let y = filas
+    let rows = row_texts(&buffer);
+    let styles = all_row_styles(&buffer);
+    let y = rows
         .iter()
         .position(|f| f.contains(&razon))
         .expect("la fila con la razón cae dentro del frame");
-    let fg_de = |x: usize| estilos[y][x].fg.expect("cada celda pintada tiene frente");
+    let fg_de = |x: usize| styles[y][x].fg.expect("cada celda pintada tiene frente");
     let en = |aguja: &str| -> usize {
-        let byte = filas[y].find(aguja).expect("el trozo está en la fila");
-        filas[y][..byte].chars().count()
+        let byte = rows[y].find(aguja).expect("el trozo está en la fila");
+        rows[y][..byte].chars().count()
     };
     let atenuado = app.theme.role(norte_theme::Role::Info).fg;
     let normal = app.theme.role(norte_theme::Role::Regular).fg;
@@ -1779,7 +1779,7 @@ fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
             Some(fg_de(x)),
             atenuado,
             "la fila dice la razón pero se pinta como si se pudiera pulsar: {:?}",
-            filas[y]
+            rows[y]
         );
     }
     let x_chord = en("F5");
@@ -1787,7 +1787,7 @@ fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
         Some(fg_de(x_chord)),
         atenuado,
         "el chord de una fila vetada no puede seguir vestido de tecla: {:?}",
-        filas[y]
+        rows[y]
     );
     assert_ne!(Some(fg_de(x_chord)), tecla);
 }
@@ -2184,7 +2184,7 @@ fn paso_sync(
     use norte_proto::methods::{
         CompareConfidence, CompareCriterion, RelPath, StepReversal, SyncReason, SyncStep,
     };
-    let paso = SyncStep {
+    let step = SyncStep {
         id,
         kind,
         rel: RelPath::parse_wire(rel).expect("rel"),
@@ -2198,10 +2198,10 @@ fn paso_sync(
         reason: (reversal == StepReversal::Irreversible).then_some(SyncReason::NoTrashOnTarget),
     };
     assert!(
-        paso.shape_is_consistent(),
-        "paso de test mal formado: {paso:?}"
+        step.shape_is_consistent(),
+        "paso de test mal formado: {step:?}"
     );
-    paso
+    step
 }
 
 fn cierre_sync(
@@ -2241,7 +2241,7 @@ fn snapshot_sync_pane_update_con_papelera() {
         None,
         None,
     );
-    let pasos = vec![
+    let steps = vec![
         paso_sync(
             1,
             SyncStepKind::CreateDir,
@@ -2283,7 +2283,7 @@ fn snapshot_sync_pane_update_con_papelera() {
         unknown_kind: 0,
     };
     view.state =
-        norte_frontend::sync::SyncState::ready(pasos, cierre_sync(counts, DestTrash::Restorable));
+        norte_frontend::sync::SyncState::ready(steps, cierre_sync(counts, DestTrash::Restorable));
     view.run = norte_tui::app::SyncRunState::Done;
 
     let mut app = app_base();
@@ -2312,7 +2312,7 @@ fn snapshot_sync_pane_mirror_sin_papelera() {
         None,
         None,
     );
-    let pasos = vec![
+    let steps = vec![
         paso_sync(
             1,
             SyncStepKind::Copy,
@@ -2354,7 +2354,7 @@ fn snapshot_sync_pane_mirror_sin_papelera() {
         unknown_kind: 0,
     };
     view.state =
-        norte_frontend::sync::SyncState::ready(pasos, cierre_sync(counts, DestTrash::Absent));
+        norte_frontend::sync::SyncState::ready(steps, cierre_sync(counts, DestTrash::Absent));
     view.run = norte_tui::app::SyncRunState::Done;
     view.confirming = view
         .state

@@ -89,7 +89,7 @@ pub async fn run_suspended(
     // mata al hijo» arriba. Un fallo al registrar no impide suspender —
     // significa volver al comportamiento de antes, no quedarse sin la tecla.
     #[cfg(unix)]
-    let _senales = {
+    let _signals = {
         use tokio::signal::unix::{SignalKind, signal};
         (
             signal(SignalKind::interrupt()).ok(),
@@ -99,11 +99,11 @@ pub async fn run_suspended(
     // El estado de la captura se lee ANTES de tocar nada: si la propia
     // liberación falla a mitad, la restauración tiene que saber a qué volver
     // (review de S4, MINOR-6).
-    let raton = capture.active();
+    let mouse_on = capture.active();
     // ---- frontera: de aquí en adelante, todo camino pasa por `resume_terminal`.
-    let cedida = suspend_terminal(terminal, capture);
-    if let Err(e) = cedida {
-        let _ = resume_terminal(terminal, capture, raton);
+    let yielded = suspend_terminal(terminal, capture);
+    if let Err(e) = yielded {
+        let _ = resume_terminal(terminal, capture, mouse_on);
         return Err(e);
     }
     let child = if argv.is_empty() {
@@ -145,7 +145,7 @@ pub async fn run_suspended(
     // comandos contra un listado que acaba de cambiar (review de S4,
     // MINOR-2): el resto de un pegado multilínea es el caso que duele.
     drain_type_ahead().await;
-    let restored = resume_terminal(terminal, capture, raton);
+    let restored = resume_terminal(terminal, capture, mouse_on);
     suspension_outcome(child, waited, restored)
 }
 
@@ -200,7 +200,7 @@ pub fn suspend_terminal(
 pub fn resume_terminal(
     terminal: &mut tty::Tui,
     capture: &mut mouse::Capture,
-    raton: bool,
+    mouse_on: bool,
 ) -> std::io::Result<()> {
     use crossterm::event::EnableBracketedPaste;
     use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
@@ -211,7 +211,7 @@ pub fn resume_terminal(
         EnableBracketedPaste
     )?;
     enable_raw_mode()?;
-    mouse::restore_after_suspend(capture, raton, terminal.backend_mut())?;
+    mouse::restore_after_suspend(capture, mouse_on, terminal.backend_mut())?;
     // NO `Terminal::clear()`, y esto no es una preferencia de estilo: en
     // ratatui 0.30 esa función pregunta por la posición del cursor
     // (`get_cursor_position` → `crossterm::cursor::position`), que emite el

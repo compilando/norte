@@ -313,8 +313,8 @@ fn lua_prefijado_pasa_la_validacion_de_comandos() {
     );
 
     // Nombres fuera del charset [a-z0-9._-]{1,64}: error de CARGA.
-    let largo = format!("lua:{}", "a".repeat(65));
-    for bad in ["lua:", "lua:Mayuscula", "lua:con espacio", largo.as_str()] {
+    let long = format!("lua:{}", "a".repeat(65));
+    for bad in ["lua:", "lua:Mayuscula", "lua:con espacio", long.as_str()] {
         let preset = format!(
             r#"
             [pane]
@@ -621,7 +621,7 @@ fn todo_comando_tiene_ayuda_traducida() {
 fn toda_cabecera_de_grupo_de_la_ayuda_tiene_etiqueta_traducida() {
     use norte_frontend::help::{HelpState, SidebarRow};
 
-    let mut vistos = 0usize;
+    let mut seen = 0usize;
     for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
         // La etiqueta de `keys` no se está probando aquí (la cubre
         // `ids_decoracion`); da igual cuál sea mientras no esté vacía.
@@ -633,7 +633,7 @@ fn toda_cabecera_de_grupo_de_la_ayuda_tiene_etiqueta_traducida() {
             if !norte_tui::ui::help_group_is_painted(state.rows(), i) {
                 continue;
             }
-            vistos += 1;
+            seen += 1;
             let id = format!("help-group-{tag}");
             assert_ne!(
                 norte_i18n::t_in(lang, &id),
@@ -652,8 +652,8 @@ fn toda_cabecera_de_grupo_de_la_ayuda_tiene_etiqueta_traducida() {
     // grupos PINTADOS por locale (`basics`, `doing`, `remote`; la cabecera de
     // la sintética `keys` no se pinta).
     assert!(
-        vistos >= 6,
-        "el barrido no vio cabeceras de grupo suficientes ({vistos}): el modelo \
+        seen >= 6,
+        "el barrido no vio cabeceras de grupo suficientes ({seen}): el modelo \
          dejó de agrupar y este test pasaría en vacío"
     );
 }

@@ -360,7 +360,7 @@ pub async fn run(
         // saberlo: fail-open en una línea de seguridad. Si no se sabe, se
         // avisa (revisión de seguridad de W5 B).
         if let Some(check) = app.pending_dest_check.take() {
-            let libre = match check.total {
+            let free = match check.total {
                 // Sin total no hay pregunta de espacio que hacer, y enumerar
                 // volúmenes para tirar la respuesta es I/O por nada.
                 None => None,
@@ -370,9 +370,9 @@ pub async fn run(
                     .ok()
                     .and_then(|vols| norte_frontend::space::free_for(&check.to, &vols)),
             };
-            let aviso_espacio =
-                norte_frontend::space::warning(check.total, libre, norte_i18n::active());
-            let aviso_confinamiento = match backend.capabilities(&check.to).await {
+            let space_notice =
+                norte_frontend::space::warning(check.total, free, norte_i18n::active());
+            let confinement_notice = match backend.capabilities(&check.to).await {
                 Ok(caps) => norte_frontend::confine::warning(caps, norte_i18n::active()),
                 Err(_) => norte_frontend::confine::warning(
                     norte_proto::Capabilities {
@@ -383,8 +383,8 @@ pub async fn run(
                 ),
             };
             if let Some(Modal::ConfirmTransfer { space, confine, .. }) = app.modal.as_mut() {
-                *space = aviso_espacio;
-                *confine = aviso_confinamiento;
+                *space = space_notice;
+                *confine = confinement_notice;
             }
         }
         // `Ctrl+Y` / `s` / `m`: el despacho resolvió QUÉ sincronizar, y aquí
@@ -422,16 +422,16 @@ pub async fn run(
             // shell vive en el log. Sin la línea de comandos —es del usuario
             // y no tiene por qué acabar en un fichero— y con el programa a
             // secas.
-            let lanzado = argv.first().map(|a| a.to_string_lossy().into_owned());
+            let launched = argv.first().map(|a| a.to_string_lossy().into_owned());
             tracing::info!(
-                program = lanzado.as_deref().unwrap_or("(none)"),
+                program = launched.as_deref().unwrap_or("(none)"),
                 wait_for_key,
                 "TUI suspended for a user-started program (not journalled: no actor, no reversal)"
             );
             // Nada que ejecutar = `app.toggle-panels`: solo enseña la
             // terminal anfitriona. Refrescar tras él costaría un re-listado
             // completo (remoto incluido) por una tecla que no toca el disco.
-            let lanzo_algo = !argv.is_empty();
+            let launched_something = !argv.is_empty();
             if let Err(e) = run_suspended(terminal, capture, argv, cwd, wait_for_key).await {
                 // `detail_for_bar`, jamás el `Display` crudo del OS (review
                 // de S4, L1/m4): el sistema lo localiza por su cuenta, no
@@ -442,7 +442,7 @@ pub async fn run(
                 app.message = Some(ta(
                     "msg-shell-failed",
                     &[
-                        ("program", lanzado.as_deref().unwrap_or("-")),
+                        ("program", launched.as_deref().unwrap_or("-")),
                         ("error", &crate::app::detail_for_bar(&e.to_string())),
                     ],
                 ));
@@ -459,7 +459,7 @@ pub async fn run(
             // usuario hasta que la aprobación caduca. Si no se puede
             // refrescar ahora, el watcher (canal de capacidad 1) o el tick
             // lo hacen al cerrarse el overlay.
-            if lanzo_algo && watch_refresh_allowed(app) {
+            if launched_something && watch_refresh_allowed(app) {
                 let refreshed = refresh_panes(app, backend, &mut events).await;
                 after_panes_refresh(app, refreshed, &mut fill, &mut last_probed, &mut search_run);
             }
@@ -525,7 +525,7 @@ pub async fn run(
         // Exención puntual de la regla 2: el draw escribe la terminal de
         // control síncronamente (patrón async oficial de ratatui; acotado,
         // runtime multi-thread).
-        let pintado = terminal
+        let painted = terminal
             .draw(|f| ui::draw(f, app))
             .map_err(RunError::Terminal)?;
         if app.quit {
@@ -553,7 +553,7 @@ pub async fn run(
         // El alto REAL del frame que se acaba de pintar: si la terminal cambió
         // de tamaño entre `before_frame` y el draw, este es el bueno, y de él
         // salen la paginación y el radio de la sonda de stat.
-        ui::before_frame(app, pintado.area);
+        ui::before_frame(app, painted.area);
         // MISMO trato para la geometría del ratón: el draw es quien sabe
         // dónde cayó cada pane y con qué scroll, así que la devuelve al
         // modelo y el hit test resuelve contra la pantalla que el usuario
@@ -562,10 +562,10 @@ pub async fn run(
         // no falla ruidosamente: marca el fichero de al lado.
         mouse::after_frame(
             app,
-            ui::pane_geometry(app, pintado.area),
-            ui::tab_zones(app, pintado.area),
-            ui::menu_zones(app, pintado.area),
-            ui::places_zones(app, pintado.area),
+            ui::pane_geometry(app, painted.area),
+            ui::tab_zones(app, painted.area),
+            ui::menu_zones(app, painted.area),
+            ui::places_zones(app, painted.area),
         );
         // L3: el visor acoplado sigue al cursor del listado activo. Lo que se
         // pide sale de `preview::want`, que devuelve `None` cuando el hueco no
@@ -574,7 +574,7 @@ pub async fn run(
         // comprobación que alguien pueda olvidarse de escribir: sin objetivo
         // no hay nada que pedir.
         {
-            let res = ui::resolved_for(app, pintado.area);
+            let res = ui::resolved_for(app, painted.area);
             match crate::preview::want(app, &res) {
                 Some((slot, crate::preview::Want::File(path))) => {
                     let ya = app
@@ -582,8 +582,8 @@ pub async fn run(
                         .preview(slot)
                         .and_then(|p| p.shown().cloned())
                         .is_some_and(|s| s == path);
-                    let en_vuelo = preview_fetch.get(slot).is_some_and(|f| f.path == path);
-                    if !ya && !en_vuelo {
+                    let in_flight = preview_fetch.get(slot).is_some_and(|f| f.path == path);
+                    if !ya && !in_flight {
                         // Empezar otra SUSTITUYE la que hubiera: el `Receiver`
                         // viejo se cae aquí y su respuesta no se aplica nunca.
                         preview_fetch.set(slot, Some(spawn_preview_fetch(backend, path)));
@@ -661,11 +661,11 @@ pub async fn run(
         }
         // #157: la fila seleccionada del panel de diferencias, mismo trato.
         if compare_stat_probe.is_none() {
-            let objetivos = app.compare_size_probe_targets();
-            if !objetivos.is_empty() {
+            let targets = app.compare_size_probe_targets();
+            if !targets.is_empty() {
                 compare_stat_probe = Some(spawn_compare_stat_probe(
                     backend,
-                    objetivos,
+                    targets,
                     app.compare_generation(),
                 ));
             }
@@ -766,7 +766,7 @@ pub async fn run(
                         // preguntar por scheme cuál se degradó.
                         app.note_degraded(d);
                     }
-                    Some(estado) = async {
+                    Some(state) = async {
                         match &mut journal_warnings {
                             Some(rx) => rx.recv().await,
                             None => std::future::pending().await,
@@ -785,7 +785,7 @@ pub async fn run(
                         // dejaría a una sesión de tres horas enseñando «no se registra»
                         // sobre mutaciones que sí se registran.
                         use norte_core::embedded::JournalStatus;
-                        match estado {
+                        match state {
                             JournalStatus::Lost(why) => {
                                 app.message = Some(journal_warning_i18n(&why));
                                 app.note_no_journal(why);
@@ -968,8 +968,8 @@ pub async fn run(
                             // cambie de estado. `changed()` con el emisor caído
                             // devuelve `Err`, y eso también es un final — se sale y el
                             // cosechado lee el snapshot que haya.
-                            let vivo = s.progress.changed().await.is_ok();
-                            return SyncTick::Applied { vivo };
+                            let alive = s.progress.changed().await.is_ok();
+                            return SyncTick::Applied { alive };
                         }
                         match &mut s.rx {
                             // Un canal ya cerrado devolvería `None` en bucle (spin):
@@ -980,8 +980,8 @@ pub async fn run(
                     } => {
                         match tick {
                             SyncTick::Plan(event) => drain_sync_plan(app, &mut sync_run, event),
-                            SyncTick::Applied { vivo } => {
-                                harvest_sync_apply(app, backend, &mut sync_run, vivo).await;
+                            SyncTick::Applied { alive } => {
+                                harvest_sync_apply(app, backend, &mut sync_run, alive).await;
                             }
                         }
                     }
@@ -1025,7 +1025,7 @@ pub async fn run(
                                     // MAJOR-2): una pareja que no es un `Segment`
                                     // delata un daemon hostil/roto — ni se le pide
                                     // plan al core, y confirmar queda muerto.
-                                    let estado = if let Some(pairs) =
+                                    let state = if let Some(pairs) =
                                         norte_frontend::rename_pairs(&plan.entries)
                                     {
                                         let b = backend.clone();
@@ -1048,7 +1048,7 @@ pub async fn run(
                                     let ready = PendingAiPlan {
                                         dir: run.dir,
                                         entries: plan.entries,
-                                        plan: estado,
+                                        plan: state,
                                     };
                                     if app.modal.is_none() {
                                         app.modal = Some(Modal::AiRenamePlan {
@@ -1088,7 +1088,7 @@ pub async fn run(
                         }
                     } => {
                         if rename_batch_run.take().is_some() {
-                            let estado = match res {
+                            let state = match res {
                                 Ok(Ok(plan)) => norte_frontend::BatchPlan::Ready(Box::new(plan)),
                                 Ok(Err(e)) => {
                                     app.message = Some(ta(
@@ -1105,11 +1105,11 @@ pub async fn run(
                             // El modal puede estar abierto, RETENIDO tras otro, o ya
                             // cerrado por el humano. En los dos primeros casos se
                             // rellena; en el tercero la respuesta se tira.
-                            if !app.settle_ai_batch_plan(&estado)
+                            if !app.settle_ai_batch_plan(&state)
                                 && let Some(p) = &mut pending_ai_plan
                                 && p.plan == norte_frontend::BatchPlan::Pending
                             {
-                                p.plan = estado;
+                                p.plan = state;
                             }
                         }
                     }
@@ -1293,12 +1293,12 @@ pub async fn run(
                                 // que es lo que hace que un menú y una tecla no
                                 // puedan divergir.
                                 mouse::After::MenuAccept => {
-                                    let elegido = app
+                                    let chosen = app
                                         .menu
                                         .as_ref()
                                         .and_then(norte_frontend::menu::MenuState::selected);
                                     app.menu = None;
-                                    if let Some(id) = elegido
+                                    if let Some(id) = chosen
                                         && let Some(cmd) = Command::parse(id)
                                     {
                                         let outcome = dispatch(
@@ -1451,12 +1451,12 @@ pub async fn run(
                                         // hacerlo por detrás de este dejaría el
                                         // menú comiéndose las teclas del que
                                         // acaba de abrirse.
-                                        let elegido = app
+                                        let chosen = app
                                             .menu
                                             .as_ref()
                                             .and_then(norte_frontend::menu::MenuState::selected);
                                         app.menu = None;
-                                        if let Some(id) = elegido
+                                        if let Some(id) = chosen
                                             && let Some(cmd) = Command::parse(id)
                                         {
                                             // MISMO camino que la palette y que

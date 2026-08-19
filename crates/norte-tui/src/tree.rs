@@ -139,8 +139,8 @@ impl Tree {
     /// El directorio bajo el cursor.
     #[must_use]
     pub fn selected(&self) -> Option<VPath> {
-        let filas = self.rows();
-        filas.get(self.cursor()).map(|r| r.path.clone())
+        let rows = self.rows();
+        rows.get(self.cursor()).map(|r| r.path.clone())
     }
 
     /// Sube.
@@ -238,10 +238,10 @@ mod tests {
         );
         t.down();
         t.expand();
-        let filas = t.rows();
-        assert_eq!(filas.len(), 3);
-        assert_eq!(filas[2].depth, 2);
-        assert_eq!(filas[2].path, vp("mem:///r/a/x"));
+        let rows = t.rows();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2].depth, 2);
+        assert_eq!(rows[2].path, vp("mem:///r/a/x"));
     }
 
     /// «Sin hijos» y «todavía no se ha mirado» son distintos, y el panel los
