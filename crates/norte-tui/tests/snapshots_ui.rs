@@ -461,7 +461,7 @@ fn snapshot_columns_picker_80x24() {
 #[test]
 fn snapshot_layout_picker_80x24() {
     let mut app = app_base();
-    app.open_layout_picker(&[]);
+    app.open_layout_picker(Vec::new());
     let texto = render_80x24(&app);
     let hint = &app.dialog_hints.picker;
     assert!(

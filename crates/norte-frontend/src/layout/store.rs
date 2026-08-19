@@ -107,6 +107,11 @@ impl<P> SlotStore<P> {
         self.slots.values_mut()
     }
 
+    /// Los pares `(id, estado)`, en orden de [`SlotId`].
+    pub fn iter(&self) -> impl Iterator<Item = (SlotId, &P)> {
+        self.slots.iter().map(|(id, p)| (*id, p))
+    }
+
     /// Los pares `(id, estado)`, en orden de [`SlotId`], para mutarlos.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (SlotId, &mut P)> {
         self.slots.iter_mut().map(|(id, p)| (*id, p))

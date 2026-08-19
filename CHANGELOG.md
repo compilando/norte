@@ -129,6 +129,70 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A layout with no file listing no longer panics the TUI.** A layout file
+  that gave the listing's slot to another kind — `places`, `status`, anything
+  — passed validation, and the frontend then seeded that slot with the kind
+  the tree asked for, leaving the screen without a single listing. The first
+  access by side panicked, in raw mode, on the alternate screen. Persisted
+  into your UI session it panicked on **every** start until the file was
+  deleted by hand. A tree with no `browser` slot is now a load error, in every
+  door it can come through — the layout file, a preset, and the saved session
+  — and the side list is rescued independently, so it can never point at a
+  slot that stopped holding a listing (#242).
+
+- **The processes panel has the keys it claimed.** It took the focus border
+  and consumed nothing: the arrows moved the *file list* behind it, `F8`
+  opened the delete dialog for that list's selection, and the `▶` sat on row 0
+  forever — while the changelog and both help topics promised "cancels the one
+  under the cursor". The panel now dispatches its own vocabulary: up, down,
+  Enter to cancel the task under the cursor, Escape to hand the keyboard back
+  without closing, and its own key to close from inside. The attributes sheet
+  went the other way: it never wanted the keyboard — it follows the cursor —
+  so its half-implemented focus state is gone and it opens and closes in two
+  presses instead of three (#243).
+
+- **A layout name is a filename, and is now treated as one.** Two bugs with
+  one cause. `--layout` went through `to_string_lossy`, so `$'\xff'` opened
+  `layouts/\u{FFFD}.toml`: the real file was unreachable and two different
+  invalid bytes landed on the same one, silently. And a name was recomposed
+  into a path and left to the OS to resolve, so on macOS or Windows a saved
+  `Orthodox.toml` was what the row labelled *factory* loaded — the preview
+  showed the preset and the user's tree was applied. Names now travel as
+  `OsString` from the command line to the filesystem, the file is resolved
+  byte-exactly against the directory listing, and the guard on what may be a
+  layout name rejects what the old single-component check admitted: `C:` (one
+  `Path` component on Windows, and `join` with it replaces the whole base),
+  NTFS alternate streams, Win32 device names like `CON` and `NUL`, and
+  trailing dots and spaces. Non-UTF-8 layout files also stop disappearing from
+  the picker, and `MIO.TOML` stops being invisible there while `--layout MIO`
+  loaded it (#245, #246).
+
+- **Opening a layout no longer reads disk from the event loop.** Enter on a
+  picker row called the loader from inside the loop, so with the config
+  directory on a mount that had gone away, input, redraw, task progress and
+  `Ctrl+C` all hung for the mount's timeout. The rows now arrive already read,
+  which is also what gives the user's own layouts the preview the help had
+  promised them — and a file that does not parse says why, in the place its
+  screen would have been, instead of showing a blank half that cannot be told
+  from an empty layout (#244).
+
+- **The places sidebar can be resized again.** Its width was fixed at whatever
+  it opened with: `layout.grow`/`layout.shrink` always resized the *focused
+  listing*, so the branch that resizes a fixed-width panel was unreachable
+  from any production path. With the keyboard inside a chrome panel — places,
+  the directory tree, processes — those two commands now resize that panel
+  (#244).
+
+- **The transfer destination prompt stops corrupting what you type.** It is a
+  wire address, where one invalid byte costs three characters, and it was
+  capped at 256 of them — a cap chosen for a mark pattern — so a deep or
+  hostile directory opened the prompt already over budget and every keystroke
+  was a silent no-op. Backspace popped one character of the *text*, so
+  retreating over `%C3%A9` left `%C3%A`, which no longer parses: one press
+  did not delete one letter, it broke an escape. And confirming without
+  editing submitted a copy of every mark onto itself, which surfaced as N
+  failed tasks instead of one line in the dialog (#246, #244).
+
 - **A detached window says so for as long as it lasts.** A window that does
   not own the session — a second window, a core without the lock, one that
   found a screen written by a newer binary — said it once at startup, and the

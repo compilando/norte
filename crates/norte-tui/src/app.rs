@@ -940,8 +940,6 @@ pub enum KeyOwner {
     Preview,
     /// El panel de procesos.
     Processes,
-    /// La hoja de atributos.
-    Metadata,
     /// El árbol de directorios (#136).
     Tree,
 }
@@ -3547,49 +3545,119 @@ impl App {
         }
     }
 
+    /// Sube el cursor del panel de procesos. No-op si no está abierto.
+    pub fn processes_up(&mut self) {
+        if let Some(id) = self.processes_slot()
+            && let Some(p) = self.panes.processes_mut(id)
+        {
+            p.up();
+        }
+    }
+
+    /// Baja el cursor del panel de procesos, sin pasarse de la última fila.
+    pub fn processes_down(&mut self) {
+        let filas = self.board.rows().len();
+        if let Some(id) = self.processes_slot()
+            && let Some(p) = self.panes.processes_mut(id)
+        {
+            p.down(filas);
+        }
+    }
+
+    /// Cancela la tarea bajo el cursor del panel. `false` si no hay panel,
+    /// ni filas, o si esa ya había terminado.
+    ///
+    /// Es lo que el CHANGELOG y los dos temas de ayuda llevaban prometiendo
+    /// desde la fase A —«cancela la que está bajo el cursor»— sin que ninguna
+    /// tecla llegara al panel: el `KeyOwner` se ponía y no lo leía nadie, así
+    /// que las flechas movían el LISTADO de detrás y F8 abría el diálogo de
+    /// borrar sobre su selección (#243).
+    pub fn processes_cancel(&mut self) -> bool {
+        let Some(id) = self.processes_slot() else {
+            return false;
+        };
+        let filas = self.board.rows().len();
+        let Some(cursor) = self.panes.processes(id).map(|p| p.cursor(filas)) else {
+            return false;
+        };
+        self.board.cancel_at(cursor)
+    }
+
+    /// Despacha UN comando del keymap sobre el panel de procesos.
+    ///
+    /// Vive aquí y no en el binario para que un test pueda meter una tecla de
+    /// verdad —preset → `Effective` → `Resolver` → comando— y ver qué hace el
+    /// panel. Los tests que había afirmaban `key_owner()`, que es exactamente
+    /// lo que dejó invisible que ninguna tecla llegara (#243).
+    ///
+    /// Devuelve el mensaje para la barra, si el comando deja uno.
+    pub fn processes_command(&mut self, cmd: &str) -> Option<String> {
+        if !ALLOW_PROCESSES.contains(&cmd) {
+            return None; // fuera del allowlist de este panel: inerte
+        }
+        match cmd {
+            "dialog.up" => self.processes_up(),
+            "dialog.down" => self.processes_down(),
+            // Suelta el teclado, NO cierra el panel: cerrarlo es
+            // `layout.processes`.
+            "dialog.cancel" => self.return_keys_to_panes(),
+            "layout.grow" => self.layout_resize(1),
+            "layout.shrink" => self.layout_resize(-1),
+            "layout.processes" => self.toggle_processes(),
+            "dialog.confirm" => {
+                return Some(if self.processes_cancel() {
+                    t("msg-cancelling")
+                } else {
+                    t("msg-no-tasks")
+                });
+            }
+            _ => {}
+        }
+        None
+    }
+
     /// El hueco de la hoja de atributos, si está abierta.
     #[must_use]
     pub fn metadata_slot(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind(crate::metadata::KIND)
     }
 
-    /// Abre la hoja de atributos, la enfoca, o la cierra.
+    /// Abre la hoja de atributos, o la cierra.
     ///
-    /// Como el preview: abre SIN llevarse el teclado, porque sigue al cursor y
-    /// tomarlo apagaría lo único que hace. Se acopla a la DERECHA con
-    /// `follows: Role(Active)`.
+    /// DOS estados y no tres, al contrario que el sidebar y el panel de
+    /// procesos: la hoja sigue al cursor del listado, así que llevarse el
+    /// teclado apagaría lo único que hace. Antes tenía un `KeyOwner` propio
+    /// que se ponía en la segunda pulsación y no consumía nadie: la hoja
+    /// cogía el borde de foco, las flechas seguían moviendo el listado de al
+    /// lado, y la tercera pulsación era la única que cerraba (#243).
+    /// Se acopla a la DERECHA con `follows: Role(Active)`.
     pub fn toggle_metadata(&mut self) {
         use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, RoleId, Size};
-        match self.metadata_slot() {
-            Some(id) if self.key_owner == KeyOwner::Metadata => {
-                if let Some(nuevo) = self.layout.close_slot(id) {
-                    self.layout = nuevo;
-                    self.panes.refresh_visible(&self.layout);
-                    self.history.retain_tree(&self.layout);
-                }
-                self.key_owner = KeyOwner::Panes;
-            }
-            Some(_) => self.key_owner = KeyOwner::Metadata,
-            None => {
-                let id = self.mint_slot();
-                self.panes.insert_metadata(id, None);
-                self.layout = self.layout.dock(
-                    self.focused_slot(),
-                    Edge::Right,
-                    // Treinta celdas: la etiqueta más larga con su valor al
-                    // lado. Fijo y no ponderado porque una hoja de atributos
-                    // no gana nada con la mitad de la pantalla.
-                    Size::Fixed(30),
-                    &Node::slot_bound(
-                        id,
-                        KindId::new(crate::metadata::KIND),
-                        Bindings {
-                            follows: Some(Follow::Role(RoleId::Active)),
-                        },
-                    ),
-                );
+        if let Some(id) = self.metadata_slot() {
+            if let Some(nuevo) = self.layout.close_slot(id) {
+                self.layout = nuevo;
                 self.panes.refresh_visible(&self.layout);
+                self.history.retain_tree(&self.layout);
             }
+        } else {
+            let id = self.mint_slot();
+            self.panes.insert_metadata(id, None);
+            self.layout = self.layout.dock(
+                self.focused_slot(),
+                Edge::Right,
+                // Treinta celdas: la etiqueta más larga con su valor al lado.
+                // Fijo y no ponderado porque una hoja de atributos no gana
+                // nada con la mitad de la pantalla.
+                Size::Fixed(30),
+                &Node::slot_bound(
+                    id,
+                    KindId::new(crate::metadata::KIND),
+                    Bindings {
+                        follows: Some(Follow::Role(RoleId::Active)),
+                    },
+                ),
+            );
+            self.panes.refresh_visible(&self.layout);
         }
     }
 
@@ -3627,10 +3695,31 @@ impl App {
         true
     }
 
-    /// Agranda (`delta > 0`) o encoge el panel enfocado.
+    /// El hueco al que apuntan `layout.grow`/`layout.shrink`: el que tiene el
+    /// TECLADO, no el listado enfocado.
+    ///
+    /// `focused_slot()` es siempre un listado visible —`layout_focus` cicla
+    /// sobre `panes.len()`—, así que con él la rama de `Size::Fixed` de
+    /// `Node::resize` no la alcanzaba ningún camino de producción: la barra
+    /// lateral se quedaba con el ancho con el que abría y el CHANGELOG
+    /// anunciaba lo contrario (#244 M1). Los tests pasaban porque llamaban a
+    /// `resize` con el id del sidebar a mano, un argumento que el llamante de
+    /// verdad no sabía producir.
+    #[must_use]
+    fn resize_target(&self) -> norte_frontend::layout::SlotId {
+        match self.key_owner {
+            KeyOwner::Places => self.places_slot(),
+            KeyOwner::Tree => self.tree_slot(),
+            KeyOwner::Processes => self.processes_slot(),
+            KeyOwner::Panes | KeyOwner::Preview => None,
+        }
+        .unwrap_or_else(|| self.focused_slot())
+    }
+
+    /// Agranda (`delta > 0`) o encoge el panel que tiene el teclado.
     pub fn layout_resize(&mut self, delta: i16) {
-        let foco = self.focused_slot();
-        self.layout = self.layout.resize(foco, delta);
+        let objetivo = self.resize_target();
+        self.layout = self.layout.resize(objetivo, delta);
     }
 
     /// Devuelve a los hermanos del panel enfocado el mismo tamaño.
@@ -3730,7 +3819,10 @@ impl App {
     /// El listado del directorio lo hace el llamante y llega ya hecho: leer
     /// un directorio es I/O, y esto se llama desde un contexto async
     /// (regla 2).
-    pub fn open_layout_picker(&mut self, del_usuario: &[String]) {
+    pub fn open_layout_picker(
+        &mut self,
+        del_usuario: Vec<norte_frontend::layout_picker::UserLayout>,
+    ) {
         self.layout_picker = Some(norte_frontend::layout_picker::LayoutPicker::open(
             del_usuario,
         ));
@@ -3935,9 +4027,18 @@ impl App {
     ///
     /// Lee un fichero pequeño de config en el hilo que llama, como el
     /// `[ui] layout` del arranque.
-    pub fn apply_layout(&mut self, name: &str, dir: &std::path::Path) -> bool {
-        use norte_frontend::layout::{LayoutError, config, presets};
-        let roto = match config::load(dir, name) {
+    pub fn apply_loaded_layout(
+        &mut self,
+        name: &std::ffi::OsStr,
+        loaded: Result<norte_frontend::layout::Node, norte_frontend::layout::LayoutError>,
+    ) -> bool {
+        use norte_frontend::layout::{LayoutError, presets};
+        // El nombre se PINTA, y viene de un fichero o de la línea de
+        // comandos: lossy marcado y hazards enmascarados, como cualquier otro
+        // nombre (#246 m3). Los bytes no se tocan: los usó el cargador.
+        let (mostrable, _) = norte_frontend::display_os_name(name);
+        let mostrable = norte_encoding::mask_terminal_hazards(&mostrable);
+        let roto = match loaded {
             Ok(arbol) => {
                 self.set_layout(arbol);
                 return true;
@@ -3947,13 +4048,18 @@ impl App {
             Err(LayoutError::NotFound(_)) => None,
             Err(e) => Some(e),
         };
-        match presets::tree(name) {
+        // Un preset de fábrica se llama por su nombre ASCII: un nombre que no
+        // es texto no puede ser uno de ellos.
+        let de_fabrica = name
+            .to_str()
+            .map_or(Err(LayoutError::NotFound(mostrable.clone())), presets::tree);
+        match de_fabrica {
             Ok(arbol) => {
                 self.set_layout(arbol);
                 if let Some(e) = roto {
                     self.message = Some(ta(
                         "msg-layout-load-failed",
-                        &[("name", name), ("err", &e.to_string())],
+                        &[("name", &mostrable), ("err", &e.to_string())],
                     ));
                 }
                 true
@@ -3961,7 +4067,10 @@ impl App {
             Err(e) => {
                 self.message = Some(ta(
                     "msg-layout-load-failed",
-                    &[("name", name), ("err", &roto.unwrap_or(e).to_string())],
+                    &[
+                        ("name", &mostrable),
+                        ("err", &roto.unwrap_or(e).to_string()),
+                    ],
                 ));
                 false
             }
@@ -3974,7 +4083,7 @@ impl App {
     /// layout recrea paneles y mueve el foco, así que pasar el cursor por la
     /// lista rehaciendo la pantalla cinco veces sería peor que verla una vez.
     /// La miniatura de cada fila hace ese trabajo.
-    pub fn layout_picker_input(&mut self, action: PickerAction, dir: &std::path::Path) {
+    pub fn layout_picker_input(&mut self, action: PickerAction) {
         match action {
             PickerAction::Up => {
                 if let Some(p) = &mut self.layout_picker {
@@ -3986,15 +4095,30 @@ impl App {
                     p.down();
                 }
             }
+            // Confirmar NO lee disco: la fila ya trae su árbol, leído fuera
+            // del bucle al abrir el selector. Antes, `Enter` sobre una fila
+            // llamaba al cargador desde dentro del bucle de eventos, y con el
+            // directorio de config en un montaje caído se colgaban entrada,
+            // repintado, progreso de tareas y `Ctrl+C` a la vez (#244 M2,
+            // regla 2).
             PickerAction::Confirm => {
-                let name = self
-                    .layout_picker
-                    .take()
-                    .and_then(|p| p.chosen().map(String::from));
-                if let Some(n) = name
-                    && self.apply_layout(&n, dir)
-                {
-                    self.message = Some(ta("msg-layout-applied", &[("name", &n)]));
+                let Some(fila) = self.layout_picker.take().and_then(|p| p.current().cloned())
+                else {
+                    return;
+                };
+                let (mostrable, _) = norte_frontend::display_os_name(&fila.name);
+                let mostrable = norte_encoding::mask_terminal_hazards(&mostrable);
+                if let Some(arbol) = fila.tree {
+                    self.set_layout(arbol);
+                    self.message = Some(ta("msg-layout-applied", &[("name", &mostrable)]));
+                } else {
+                    // Una fila que no parsea se eligió a sabiendas: el
+                    // selector ya lo decía en su mitad derecha.
+                    let err = fila.problem.unwrap_or_default();
+                    self.message = Some(ta(
+                        "msg-layout-load-failed",
+                        &[("name", &mostrable), ("err", &err)],
+                    ));
                 }
             }
             PickerAction::Cancel => self.layout_picker = None,
@@ -4967,7 +5091,14 @@ impl App {
     /// que el resto de los prompts de texto libre.
     pub fn transfer_dest_push(&mut self, c: char) {
         if let Some(Modal::TransferDest { input, error, .. }) = &mut self.modal {
-            if input.chars().count() >= MARK_PATTERN_MAX_CHARS {
+            if input.chars().count() >= TRANSFER_DEST_MAX_CHARS {
+                // Se DICE, como en la línea de comandos: este prompt había
+                // copiado la variante muda, y justo en el camino que designa
+                // un destino (#246 M3).
+                *error = Some(ta(
+                    "modal-command-line-too-long",
+                    &[("max", &TRANSFER_DEST_MAX_CHARS.to_string())],
+                ));
                 return;
             }
             input.push(c);
@@ -4975,10 +5106,16 @@ impl App {
         }
     }
 
-    /// Borra el último carácter del destino. No-op sin su modal.
+    /// Borra el último CARÁCTER del destino, escape porcentual incluido.
+    /// No-op sin su modal.
+    ///
+    /// `String::pop` borraba un carácter del TEXTO, y el texto es forma wire:
+    /// retroceder sobre `%C3%A9` dejaba `%C3%A`, que ya no parsea
+    /// (`BadEscape`) — una pulsación no borraba una letra del nombre, corrompía
+    /// un escape (#246 M3).
     pub fn transfer_dest_pop(&mut self) {
         if let Some(Modal::TransferDest { input, error, .. }) = &mut self.modal {
-            input.pop();
+            pop_wire_char(input);
             *error = None;
         }
     }
@@ -5011,6 +5148,17 @@ impl App {
         // (`/home/…`) no es una dirección de norte, y adivinarle un scheme es
         // como una copia acaba en otro backend del que el lector creía.
         match VPath::parse(&input) {
+            Ok(dir) if dir == *self.focused().dir() => {
+                // El prompt se PRELLENA con el directorio de origen, así que
+                // un `Enter` sin editar pedía copiar cada marca sobre sí
+                // misma: `ops::copy_task` lo rechaza, pero una a una, y el
+                // lector se encontraba N tareas fallidas en vez de una línea
+                // en el propio diálogo (#244 m6).
+                if let Some(Modal::TransferDest { error, .. }) = &mut self.modal {
+                    *error = Some(t("msg-transfer-dest-same"));
+                }
+                false
+            }
             Ok(dir) => {
                 self.open_transfer_to_dir(kind, self.focus(), dir, None);
                 true
@@ -6439,6 +6587,56 @@ pub use norte_frontend::AI_RENAME_PAIR_LIMIT;
 /// un carácter multibyte cuenta una vez.
 pub const MARK_PATTERN_MAX_CHARS: usize = 256;
 
+/// Borra el último CARÁCTER de un texto en forma WIRE.
+///
+/// Un carácter puede ser hasta cuatro bytes y cada byte no ASCII viaja como
+/// `%XX`, así que «borrar un carácter» son entre uno y doce caracteres del
+/// texto. Se quitan los escapes de continuación (`%80`–`%BF`) y luego el de
+/// cabeza; lo que no es un escape se borra como siempre.
+fn pop_wire_char(s: &mut String) {
+    /// El byte de un `%XX` al final, si lo hay.
+    fn escape_final(s: &str) -> Option<u8> {
+        let cola = s.get(s.len().checked_sub(3)?..)?;
+        let resto = cola.strip_prefix('%')?;
+        u8::from_str_radix(resto, 16).ok().filter(|_| {
+            // `from_str_radix` acepta `+7f` y espacios; aquí solo hex.
+            resto.len() == 2 && resto.bytes().all(|b| b.is_ascii_hexdigit())
+        })
+    }
+
+    // Un carácter UTF-8 son como mucho cuatro bytes: tres continuaciones.
+    for _ in 0..3 {
+        match escape_final(s) {
+            Some(b) if (0x80..=0xBF).contains(&b) => {
+                s.truncate(s.len() - 3);
+            }
+            Some(_) => {
+                s.truncate(s.len() - 3);
+                return;
+            }
+            None => {
+                s.pop();
+                return;
+            }
+        }
+    }
+    // Solo continuaciones: la de cabeza, si está, se va con ellas.
+    if escape_final(s).is_some() {
+        s.truncate(s.len() - 3);
+    }
+}
+
+/// Tope de caracteres del destino de [`Modal::TransferDest`].
+///
+/// APARTE de [`MARK_PATTERN_MAX_CHARS`] y mucho mayor, porque lo que se mide
+/// aquí NO es un patrón sino una dirección en forma WIRE, que va
+/// porcentualmente codificada: un byte inválido cuesta tres caracteres, así
+/// que la fixture `name_max_255_invalid_tail` ocupa 765 en UN solo segmento y
+/// un directorio hondo pasa de 256 él solo. Con el tope de los patrones, el
+/// prompt podía ABRIR ya por encima del límite y entonces cada tecla era un
+/// no-op mudo (#246 M3).
+pub const TRANSFER_DEST_MAX_CHARS: usize = 8192;
+
 /// S2 (`[ui] confirm_quit`): si el brazo de despacho de `app.quit` debe abrir
 /// [`Modal::ConfirmQuit`] en vez de cerrar de inmediato. Pura — el run loop
 /// aporta `board_has_active` ([`crate::tasks::TaskBoard::has_active`]), así
@@ -6573,12 +6771,36 @@ pub const ALLOW_PLACES: &[&str] = &[
     "dialog.confirm",
     "dialog.toggle-enabled",
     "dialog.cancel",
+    // Ancho: con el teclado DENTRO, `layout.grow`/`shrink` cambian el ancho
+    // de ESTE panel. Es el único camino por el que se puede — el llamante de
+    // `layout_resize` pasa siempre un listado visible (#244 M1).
+    "layout.grow",
+    "layout.shrink",
     // Su PROPIA tecla, que por eso está atada en `[global]`: sin ella el
     // sidebar se queda el `alt+b` y no puede cerrarse a sí mismo — abrías el
     // panel y la misma tecla dejaba de existir. Lo destapó pilotar la TUI en
     // tmux con la suite entera en verde, que es exactamente para lo que
     // sirve el harness.
     "layout.places",
+];
+
+/// ALLOWLIST del panel de procesos (`on_processes_key` en main.rs).
+///
+/// El mismo vocabulario `dialog.*` del sidebar, por lo mismo: un panel que se
+/// mueve con flechas y actúa con Enter no necesita idioma propio, y dárselo
+/// serían siete presets tocados por una tecla nueva. `confirm` CANCELA la
+/// tarea bajo el cursor —es la única acción que el protocolo tiene sobre una
+/// task—, `cancel` devuelve el teclado a los listados sin cerrar el panel, y
+/// `layout.processes` cierra desde dentro (tercera pulsación de abrir →
+/// enfocar → cerrar, igual que `layout.places`).
+pub const ALLOW_PROCESSES: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.confirm",
+    "dialog.cancel",
+    "layout.grow",
+    "layout.shrink",
+    "layout.processes",
 ];
 
 /// ALLOWLIST de DESPACHO del popup de navegación (`on_nav_popup_key`,

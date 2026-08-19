@@ -340,6 +340,46 @@ fn layout_places_esta_atado_en_los_siete_presets_y_en_las_dos_pantallas() {
     }
 }
 
+/// Con el teclado DENTRO del sidebar, `layout.grow` cambia el ancho DEL
+/// SIDEBAR.
+///
+/// Antes no lo cambiaba nada: `layout_resize` pasaba siempre
+/// `focused_slot()`, que es un listado visible, así que la rama de
+/// `Size::Fixed` de `Node::resize` no la alcanzaba ningún camino de
+/// producción — el sidebar se quedaba con el ancho con el que abría y el
+/// CHANGELOG anunciaba lo contrario (#244 M1). Los tests de `resize` pasaban
+/// porque le daban el id del sidebar a mano.
+#[test]
+fn con_el_teclado_dentro_el_sidebar_cambia_de_ancho() {
+    use norte_frontend::layout::Size;
+
+    let mut app = app_de_prueba();
+    app.toggle_places();
+    assert_eq!(app.key_owner(), KeyOwner::Places, "el teclado está dentro");
+    let id = app.places_slot().expect("abierto");
+    let ancho = |app: &App| {
+        app.layout
+            .sizes_of(id)
+            .and_then(|(sizes, pos)| sizes.get(pos).copied())
+    };
+    let antes = ancho(&app).expect("el sidebar tiene tamaño");
+    assert!(matches!(antes, Size::Fixed(_)), "y es FIJO: {antes:?}");
+
+    app.layout_resize(1);
+    assert_ne!(ancho(&app), Some(antes), "creció");
+
+    // Y con el teclado FUERA vuelve a mandar el listado enfocado: el sidebar
+    // no se mueve solo.
+    app.return_keys_to_panes();
+    let ahora = ancho(&app);
+    app.layout_resize(1);
+    assert_eq!(
+        ancho(&app),
+        ahora,
+        "el sidebar no se toca desde los listados"
+    );
+}
+
 /// Y el sidebar DESPACHA su propia tecla: sin esto la tecla llega y se cae en
 /// el allowlist, que es la misma pantalla muerta con otro culpable.
 #[test]

@@ -3,13 +3,33 @@
 //! Vive aquí y no en un frontend por la regla 7 —la lógica no va en la TUI— y
 //! porque la GUI necesitará el mismo selector con otro pintor.
 
+use std::ffi::{OsStr, OsString};
+
 use crate::layout::{KindRegistry, Node, Rect, SlotId, presets, resolve};
+
+/// Una disposición del usuario, ya leída de disco.
+///
+/// Llega leída y no por nombre porque el selector PINTA la pantalla de cada
+/// fila: leerla al pasar el cursor sería I/O en el bucle de eventos, y no
+/// leerla dejaba a las filas del usuario con la mitad derecha en blanco
+/// mientras la documentación prometía lo contrario (#244 M3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserLayout {
+    /// El nombre del fichero sin extensión, con sus bytes (#246).
+    pub name: OsString,
+    /// Su árbol, o por qué no se pudo leer.
+    pub tree: Result<Node, String>,
+}
 
 /// Una fila del selector.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     /// El nombre con el que se carga.
-    pub name: String,
+    ///
+    /// [`OsString`] y no `String`: es un nombre de FICHERO y acaba en
+    /// `layouts/<nombre>.toml`, así que pasarlo por texto cambiaba cuál se
+    /// abre (#246).
+    pub name: OsString,
     /// De fábrica, o de `layouts/<nombre>.toml` en el directorio de config.
     pub factory: bool,
     /// Si el nombre coincide con un preset de KEYMAP.
@@ -18,6 +38,11 @@ pub struct Row {
     /// tecla: son dos ajustes distintos que comparten nombre, y sin la línea
     /// la coincidencia es una trampa en vez de una comodidad.
     pub shares_keymap_name: bool,
+    /// El árbol que se aplicaría, para la vista previa. `None` cuando el
+    /// fichero no parsea: entonces manda [`Self::problem`].
+    pub tree: Option<Node>,
+    /// Por qué esta fila no tiene vista previa, cuando no la tiene.
+    pub problem: Option<String>,
 }
 
 /// El selector de disposiciones.
@@ -28,27 +53,52 @@ pub struct LayoutPicker {
 }
 
 impl LayoutPicker {
-    /// Abre el selector con los cinco de fábrica y los nombres de usuario que
-    /// se le pasen.
+    /// Abre el selector con los cinco de fábrica y las disposiciones de
+    /// usuario que se le pasen, ya leídas.
     ///
-    /// Los ficheros los lista quien tiene el disco delante: este crate no lee
-    /// directorios.
+    /// Los ficheros los lee quien tiene el disco delante: este crate no toca
+    /// directorios (regla 2 — esto se llama desde un bucle async).
+    ///
+    /// La coincidencia con una de fábrica es BYTE A BYTE, como la del
+    /// cargador: en un sistema que no distingue mayúsculas, `Orthodox.toml`
+    /// es un fichero distinto de la disposición `orthodox` y las dos filas
+    /// son dos elecciones distintas — lo que no puede pasar es que la que
+    /// dice «de fábrica» cargue la otra, y de eso se encarga
+    /// [`crate::layout::config::load`] (#245).
     #[must_use]
-    pub fn open(user: &[String]) -> Self {
-        let fila = |name: &str, factory: bool| Row {
-            name: name.to_owned(),
-            factory,
+    pub fn open(user: Vec<UserLayout>) -> Self {
+        let de_fabrica = |name: &str| Row {
+            name: OsString::from(name),
+            factory: true,
             shares_keymap_name: crate::keymap::presets::NAMES.contains(&name),
+            tree: presets::tree(name).ok(),
+            problem: None,
         };
-        let mut rows: Vec<Row> = presets::NAMES.iter().map(|n| fila(n, true)).collect();
-        // Un fichero del usuario que se llama como uno de fábrica NO se
-        // duplica: gana el del usuario, que es lo que hacen todas las demás
-        // capas de configuración.
-        for n in user {
-            if let Some(r) = rows.iter_mut().find(|r| &r.name == n) {
+        let mut rows: Vec<Row> = presets::NAMES.iter().map(|n| de_fabrica(n)).collect();
+        // Un fichero del usuario que se llama EXACTAMENTE como uno de fábrica
+        // no se duplica: gana el del usuario, que es lo que hacen todas las
+        // demás capas de configuración.
+        for u in user {
+            let comparte = u
+                .name
+                .to_str()
+                .is_some_and(|n| crate::keymap::presets::NAMES.contains(&n));
+            let (tree, problem) = match u.tree {
+                Ok(t) => (Some(t), None),
+                Err(e) => (None, Some(e)),
+            };
+            if let Some(r) = rows.iter_mut().find(|r| r.name == u.name) {
                 r.factory = false;
+                r.tree = tree;
+                r.problem = problem;
             } else {
-                rows.push(fila(n, false));
+                rows.push(Row {
+                    name: u.name,
+                    factory: false,
+                    shares_keymap_name: comparte,
+                    tree,
+                    problem,
+                });
             }
         }
         Self { rows, cursor: 0 }
@@ -78,8 +128,14 @@ impl LayoutPicker {
 
     /// El nombre de la fila resaltada.
     #[must_use]
-    pub fn chosen(&self) -> Option<&str> {
-        self.rows.get(self.cursor()).map(|r| r.name.as_str())
+    pub fn chosen(&self) -> Option<&OsStr> {
+        self.rows.get(self.cursor()).map(|r| r.name.as_os_str())
+    }
+
+    /// La fila resaltada entera, para pintar su vista previa.
+    #[must_use]
+    pub fn current(&self) -> Option<&Row> {
+        self.rows.get(self.cursor())
     }
 }
 
@@ -154,12 +210,69 @@ pub fn preview(tree: &Node, w: u16, h: u16, decls: &KindRegistry) -> Vec<String>
 mod tests {
     use super::*;
 
+    fn mio(name: &str, tree: Result<Node, String>) -> UserLayout {
+        UserLayout {
+            name: OsString::from(name),
+            tree,
+        }
+    }
+
+    #[expect(clippy::unnecessary_wraps, reason = "el campo `tree` es un Result")]
+    fn arbol_de(n: &str) -> Result<Node, String> {
+        Ok(presets::tree(n).expect(n))
+    }
+
     #[test]
     fn los_cinco_de_fabrica_salen_en_orden() {
-        let p = LayoutPicker::open(&[]);
-        let nombres: Vec<&str> = p.rows().iter().map(|r| r.name.as_str()).collect();
+        let p = LayoutPicker::open(Vec::new());
+        let nombres: Vec<&str> = p
+            .rows()
+            .iter()
+            .map(|r| r.name.to_str().expect("de fábrica es ASCII"))
+            .collect();
         assert_eq!(nombres, presets::NAMES);
         assert!(p.rows().iter().all(|r| r.factory));
+        assert!(
+            p.rows().iter().all(|r| r.tree.is_some()),
+            "toda fila de fábrica trae su árbol para la vista previa"
+        );
+    }
+
+    /// La fila del usuario TRAE su árbol: la mitad derecha del selector se
+    /// pintaba en blanco para ella, y la documentación decía que cada fila
+    /// dibuja su pantalla (#244 M3).
+    #[test]
+    fn una_fila_de_usuario_trae_su_vista_previa() {
+        let p = LayoutPicker::open(vec![mio("mio", arbol_de("krusader"))]);
+        let fila = p.rows().last().expect("mio");
+        assert_eq!(fila.name, OsString::from("mio"));
+        assert!(fila.tree.is_some());
+        assert!(fila.problem.is_none());
+    }
+
+    /// Y una que no parsea lo DICE, en vez de enseñar un hueco en blanco que
+    /// no se distingue de una disposición vacía.
+    #[test]
+    fn una_fila_que_no_parsea_lleva_su_diagnostico() {
+        let p = LayoutPicker::open(vec![mio("roto", Err("no es TOML".to_owned()))]);
+        let fila = p.rows().last().expect("roto");
+        assert!(fila.tree.is_none());
+        assert_eq!(fila.problem.as_deref(), Some("no es TOML"));
+    }
+
+    /// Un nombre que no es UTF-8 tiene su fila: antes el listador lo tiraba
+    /// sin decir nada (#246 m2).
+    #[cfg(unix)]
+    #[test]
+    fn un_nombre_que_no_es_utf8_tiene_su_fila() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let crudo = OsStr::from_bytes(b"m\xffl").to_os_string();
+        let p = LayoutPicker::open(vec![UserLayout {
+            name: crudo.clone(),
+            tree: arbol_de("simple"),
+        }]);
+        assert_eq!(p.rows().last().expect("suyo").name, crudo);
     }
 
     /// `krusader` es TAMBIÉN un preset de keymap, y elegir la disposición no
@@ -167,11 +280,11 @@ mod tests {
     /// desaparece y la coincidencia de nombres pasa a ser una trampa.
     #[test]
     fn la_fila_avisa_cuando_el_nombre_es_tambien_de_keymap() {
-        let p = LayoutPicker::open(&[]);
+        let p = LayoutPicker::open(Vec::new());
         let f = |n: &str| {
             p.rows()
                 .iter()
-                .find(|r| r.name == n)
+                .find(|r| r.name == OsStr::new(n))
                 .expect(n)
                 .shares_keymap_name
         };
@@ -183,29 +296,54 @@ mod tests {
     /// Un fichero del usuario con nombre de fábrica no aparece dos veces.
     #[test]
     fn un_layout_de_usuario_con_nombre_de_fabrica_no_se_duplica() {
-        let p = LayoutPicker::open(&["simple".to_owned(), "mio".to_owned()]);
+        let p = LayoutPicker::open(vec![
+            mio("simple", arbol_de("krusader")),
+            mio("mio", arbol_de("simple")),
+        ]);
+        assert_eq!(p.rows().len(), presets::NAMES.len() + 1);
+        let simple = p
+            .rows()
+            .iter()
+            .find(|r| r.name == OsStr::new("simple"))
+            .expect("simple");
+        assert!(!simple.factory);
+        assert_eq!(
+            simple.tree.as_ref(),
+            presets::tree("krusader").ok().as_ref(),
+            "la fila del usuario enseña SU árbol, no el de fábrica que tapa"
+        );
+        assert_eq!(p.rows().last().expect("mio").name, OsString::from("mio"));
+    }
+
+    /// Un fichero que solo difiere en mayúsculas NO tapa al de fábrica: son
+    /// dos ficheros distintos y dos elecciones distintas, y el cargador
+    /// resuelve byte a byte para que la fila «de fábrica» no acabe abriendo
+    /// la del usuario (#245).
+    #[test]
+    fn un_nombre_con_otras_mayusculas_es_otra_fila() {
+        let p = LayoutPicker::open(vec![mio("Orthodox", arbol_de("krusader"))]);
         assert_eq!(p.rows().len(), presets::NAMES.len() + 1);
         assert!(
-            !p.rows()
+            p.rows()
                 .iter()
-                .find(|r| r.name == "simple")
-                .expect("simple")
-                .factory
+                .find(|r| r.name == OsStr::new("orthodox"))
+                .expect("orthodox")
+                .factory,
+            "la de fábrica sigue siendo de fábrica"
         );
-        assert_eq!(p.rows().last().expect("mio").name, "mio");
     }
 
     #[test]
     fn el_cursor_no_se_sale() {
-        let mut p = LayoutPicker::open(&[]);
+        let mut p = LayoutPicker::open(Vec::new());
         for _ in 0..20 {
             p.down();
         }
-        assert_eq!(p.chosen(), Some("full"));
+        assert_eq!(p.chosen(), Some(OsStr::new("full")));
         for _ in 0..20 {
             p.up();
         }
-        assert_eq!(p.chosen(), Some("orthodox"));
+        assert_eq!(p.chosen(), Some(OsStr::new("orthodox")));
     }
 
     /// La vista previa sale del reparto: `simple` tiene UN listado y

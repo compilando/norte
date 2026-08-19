@@ -49,6 +49,16 @@ pub enum SessionError {
         /// Categoría y posición, nunca el valor que no encajó.
         reason: String,
     },
+    /// El cuerpo parsea, pero una de sus disposiciones no se puede usar.
+    ///
+    /// Va aparte de [`Self::Malformed`] porque la causa es otra y la cura
+    /// también: aquí el JSON estaba bien y lo que no vale es el árbol, así
+    /// que quien lo escribió fue una versión de norte, no un editor de texto.
+    #[error("la sesión trae una disposición inválida: {reason}")]
+    BadLayout {
+        /// Qué le pasa al árbol. Nunca el contenido de un hueco.
+        reason: String,
+    },
 }
 
 /// El estado de UN hueco: dónde está, cómo mira y por dónde ha pasado.
@@ -183,9 +193,21 @@ impl SessionBody {
                 version: u32::try_from(version).unwrap_or(u32::MAX),
             });
         }
-        serde_json::from_value(v.clone()).map_err(|e| SessionError::Malformed {
-            reason: diagnose(&e),
-        })
+        let cuerpo: Self =
+            serde_json::from_value(v.clone()).map_err(|e| SessionError::Malformed {
+                reason: diagnose(&e),
+            })?;
+        // Una disposición sin listado PARSEA —el esquema no la prohíbe— y
+        // panicaba al aplicarse, en cada arranque mientras el fichero de
+        // sesión siguiera ahí (#242). Se rechaza el cuerpo entero: el usuario
+        // arranca de su configuración, que es reparable, en vez de de una
+        // pantalla que no lo es.
+        for (nombre, arbol) in &cuerpo.layouts {
+            crate::layout::validate(arbol).map_err(|e| SessionError::BadLayout {
+                reason: format!("{nombre}: {e}"),
+            })?;
+        }
+        Ok(cuerpo)
     }
 }
 
@@ -406,6 +428,29 @@ mod tests {
         }
     }
 
+    /// Una disposición sin listado PARSEA, y al aplicarse dejaba la TUI sin
+    /// panel al que apuntar: panic en modo raw, en cada arranque, hasta
+    /// borrar el fichero de sesión a mano (#242). Se rechaza al leer.
+    #[test]
+    fn una_sesion_con_una_disposicion_sin_listado_no_se_lee() {
+        let sin_listado = crate::layout::Node::split(
+            crate::layout::Dir::Horizontal,
+            vec![
+                crate::layout::Node::slot(crate::layout::SlotId(1), KindId::new("places")),
+                crate::layout::Node::slot(crate::layout::SlotId(4), KindId::new("status")),
+            ],
+        );
+        let body = SessionBody {
+            layouts: std::iter::once(("default".to_owned(), sin_listado)).collect(),
+            slots: std::collections::BTreeMap::new(),
+        };
+        let v = body.to_value();
+        assert!(matches!(
+            SessionBody::from_value(&v),
+            Err(SessionError::BadLayout { .. })
+        ));
+    }
+
     /// #236: la cadencia de una ventana SUELTA es de la política.
     ///
     /// Una suelta no escribe nunca, pero pregunta cada `retry_every` ticks: la
@@ -550,12 +595,20 @@ mod tests {
         let mut params = crate::layout::Params::new();
         params.set("grados", serde_json::json!(3));
         params.set("lo_que_sea", serde_json::json!({ "x": [1, 2] }));
-        let arbol = Node::Slot {
-            id: SlotId(4),
-            kind: KindId::new("kind-de-otro-binario"),
-            params,
-            bindings: crate::layout::Bindings::default(),
-        };
+        // Con un listado al lado: un árbol que no tiene ninguno no se lee
+        // (#242), y lo que este test fija es que el kind AJENO vuelve intacto.
+        let arbol = Node::split(
+            crate::layout::Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::Slot {
+                    id: SlotId(4),
+                    kind: KindId::new("kind-de-otro-binario"),
+                    params,
+                    bindings: crate::layout::Bindings::default(),
+                },
+            ],
+        );
         let mut b = SessionBody::default();
         b.layouts.insert("default".into(), arbol.clone());
         let vuelta = SessionBody::from_value(&b.to_value()).expect("parsea");

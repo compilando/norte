@@ -65,3 +65,5 @@ edits.
 | [0057](0057-a-plugin-may-be-given-a-location-it-cannot-name.md) | A plugin may be given a location it cannot name | accepted |
 | [0058](0058-a-screen-is-a-tree-the-core-keeps-and-does-not-read.md) | A screen is a tree the core keeps and does not read | accepted |
 | [0059](0059-the-session-is-a-document-with-one-writer.md) | The session is a document with one writer | accepted |
+| [0060](0060-writing-an-archive-is-not-writing-into-one.md) | Writing an archive is not writing into one | accepted |
+| [0061](0061-a-configuration-name-that-becomes-a-filename.md) | A configuration name that becomes a filename is bytes, and resolves byte-exactly | accepted |

@@ -49,6 +49,18 @@ impl Cli {
             .map(|v| v.to_string_lossy().into_owned())
     }
 
+    /// Valor de un flag con valor, con los BYTES intactos.
+    ///
+    /// Para lo que no es texto por contrato aunque lo parezca: el nombre de
+    /// una disposición acaba siendo `layouts/<nombre>.toml`, así que pasarlo
+    /// por [`Cli::text`] cambiaba qué fichero se abre —dos bytes inválidos
+    /// distintos aterrizaban en el mismo `\u{FFFD}.toml`— sin decir nada
+    /// (#246).
+    #[must_use]
+    pub fn os_text(&self, flag: &str) -> Option<&std::ffi::OsStr> {
+        self.values.get(flag).map(OsString::as_os_str)
+    }
+
     /// Valor de un flag con valor, como ruta (bytes intactos).
     #[must_use]
     pub fn path(&self, flag: &str) -> Option<PathBuf> {

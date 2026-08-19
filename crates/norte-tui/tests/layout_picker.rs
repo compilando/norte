@@ -5,8 +5,10 @@
 //! nombre. Es lo que hacen las demás capas de configuración, y el preset se
 //! recupera borrando el fichero.
 
+use std::ffi::{OsStr, OsString};
+
 use norte_frontend::layout::{Dir, KindId, Node, SlotId, config::to_toml};
-use norte_frontend::layout_picker::LayoutPicker;
+use norte_frontend::layout_picker::{LayoutPicker, UserLayout};
 use norte_proto::VPath;
 use norte_tui::app::{App, Pane};
 
@@ -34,6 +36,26 @@ fn arbol_mio() -> Node {
     )
 }
 
+/// Cargar y aplicar, que es lo que hace el binario en dos pasos: el fichero
+/// se lee FUERA del bucle de eventos (regla 2, #244 M2) y el `App` solo
+/// decide qué hacer con lo leído.
+fn aplicar(app: &mut App, nombre: &str, dir: &std::path::Path) -> bool {
+    let n = OsStr::new(nombre);
+    app.apply_loaded_layout(n, norte_frontend::layout::config::load(dir, n))
+}
+
+/// Lo que el binario le pasa al selector: cada fichero del directorio, ya
+/// leído.
+fn del_usuario(dir: &std::path::Path) -> Vec<UserLayout> {
+    norte_frontend::layout::config::list(dir)
+        .into_iter()
+        .map(|name| UserLayout {
+            tree: norte_frontend::layout::config::load(dir, &name).map_err(|e| e.to_string()),
+            name,
+        })
+        .collect()
+}
+
 fn escribir(dir: &std::path::Path, nombre: &str, arbol: &Node) {
     let layouts = dir.join("layouts");
     std::fs::create_dir_all(&layouts).expect("mkdir");
@@ -48,7 +70,7 @@ fn escribir(dir: &std::path::Path, nombre: &str, arbol: &Node) {
 fn un_preset_de_fabrica_se_aplica_sin_fichero_ninguno() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut app = app_de_prueba();
-    assert!(app.apply_layout("simple", dir.path()));
+    assert!(aplicar(&mut app, "simple", dir.path()));
     assert_eq!(
         app.layout,
         norte_frontend::layout::presets::tree("simple").expect("de fábrica")
@@ -63,7 +85,7 @@ fn un_preset_de_fabrica_se_aplica_sin_fichero_ninguno() {
 fn un_preset_completo_siembra_el_estado_de_cada_hueco() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut app = app_de_prueba();
-    assert!(app.apply_layout("full", dir.path()));
+    assert!(aplicar(&mut app, "full", dir.path()));
     for id in app.layout.slot_ids() {
         let kind = app
             .layout
@@ -89,7 +111,7 @@ fn un_fichero_del_usuario_gana_al_preset_del_mismo_nombre() {
     let dir = tempfile::tempdir().expect("tmp");
     escribir(dir.path(), "simple", &arbol_mio());
     let mut app = app_de_prueba();
-    assert!(app.apply_layout("simple", dir.path()));
+    assert!(aplicar(&mut app, "simple", dir.path()));
     assert_eq!(app.layout, arbol_mio(), "se cargó el del usuario");
     assert!(app.message.is_none());
 }
@@ -104,7 +126,7 @@ fn un_fichero_roto_avisa_y_cae_al_preset() {
     std::fs::write(layouts.join("simple.toml"), "esto no es un layout").expect("write");
 
     let mut app = app_de_prueba();
-    assert!(app.apply_layout("simple", dir.path()));
+    assert!(aplicar(&mut app, "simple", dir.path()));
     assert_eq!(
         app.layout,
         norte_frontend::layout::presets::tree("simple").expect("de fábrica"),
@@ -121,7 +143,7 @@ fn un_nombre_desconocido_no_cambia_el_arbol() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut app = app_de_prueba();
     let antes = app.layout.clone();
-    assert!(!app.apply_layout("no-existe", dir.path()));
+    assert!(!aplicar(&mut app, "no-existe", dir.path()));
     assert_eq!(app.layout, antes);
     assert!(app.message.is_some(), "lo dice");
 }
@@ -133,7 +155,7 @@ fn cambiar_de_layout_conserva_los_listados_que_ya_habia() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut app = app_de_prueba();
     let izq = app.panes[0].dir().clone();
-    assert!(app.apply_layout("full", dir.path()));
+    assert!(aplicar(&mut app, "full", dir.path()));
     assert_eq!(app.panes[0].dir(), &izq, "el listado no se reinició");
 }
 
@@ -143,22 +165,31 @@ fn cambiar_de_layout_conserva_los_listados_que_ya_habia() {
 fn el_selector_lista_las_de_fabrica_y_las_del_usuario() {
     let dir = tempfile::tempdir().expect("tmp");
     escribir(dir.path(), "mio", &arbol_mio());
-    let mios = norte_frontend::layout::config::list(dir.path());
-    assert_eq!(mios, vec!["mio".to_owned()]);
+    let mios = del_usuario(dir.path());
+    assert_eq!(
+        mios.iter().map(|u| u.name.clone()).collect::<Vec<_>>(),
+        vec![OsString::from("mio")]
+    );
 
-    let p = LayoutPicker::open(&mios);
-    let nombres: Vec<&str> = p.rows().iter().map(|r| r.name.as_str()).collect();
+    let p = LayoutPicker::open(mios);
+    let nombres: Vec<OsString> = p.rows().iter().map(|r| r.name.clone()).collect();
     assert_eq!(
         nombres,
-        vec!["orthodox", "simple", "krusader", "explorer", "full", "mio"]
+        ["orthodox", "simple", "krusader", "explorer", "full", "mio"]
+            .map(OsString::from)
+            .to_vec()
     );
     assert!(
         p.rows()
             .iter()
-            .find(|r| r.name == "krusader")
+            .find(|r| r.name == OsStr::new("krusader"))
             .expect("krusader")
             .shares_keymap_name,
         "el diálogo avisa de que el nombre es también de keymap"
+    );
+    assert!(
+        p.rows().last().expect("mio").tree.as_ref() == Some(&arbol_mio()),
+        "la fila del usuario trae SU árbol para la vista previa (#244 M3)"
     );
     assert!(
         !p.rows().last().expect("mio").factory,
@@ -174,14 +205,14 @@ fn confirmar_aplica_y_cancelar_no_toca_nada() {
     let mut app = app_de_prueba();
     let antes = app.layout.clone();
 
-    app.open_layout_picker(&[]);
-    app.layout_picker_input(PickerAction::Cancel, dir.path());
+    app.open_layout_picker(del_usuario(dir.path()));
+    app.layout_picker_input(PickerAction::Cancel);
     assert!(app.layout_picker.is_none(), "cerrado");
     assert_eq!(app.layout, antes, "cancelar no aplica");
 
-    app.open_layout_picker(&[]);
-    app.layout_picker_input(PickerAction::Down, dir.path()); // simple
-    app.layout_picker_input(PickerAction::Confirm, dir.path());
+    app.open_layout_picker(del_usuario(dir.path()));
+    app.layout_picker_input(PickerAction::Down); // simple
+    app.layout_picker_input(PickerAction::Confirm);
     assert!(app.layout_picker.is_none(), "confirmar cierra");
     assert_eq!(
         app.layout,

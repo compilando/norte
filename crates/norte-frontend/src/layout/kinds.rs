@@ -84,7 +84,12 @@ impl KindRegistry {
                 // La hoja de atributos: sigue al rol `active` con el mismo
                 // vínculo que el visor acoplado. 24 columnas es la etiqueta
                 // más larga con su valor al lado.
-                decl("metadata", (24, 4), true, true, false, SIN_ROLES),
+                //
+                // NO toma teclas, y declararlo era la mitad de #243: la hoja
+                // sigue al cursor del listado, así que con el teclado dentro
+                // dejaría de seguir a nada. Se enfoca —el reparto la cuenta—
+                // pero no consume ninguna tecla.
+                decl("metadata", (24, 4), true, false, false, SIN_ROLES),
                 // El árbol de directorios (#136): se enfoca, toma teclas y hay
                 // UNO. No opta a ningún rol —un árbol no es el destino de una
                 // copia, igual que el sidebar—, y 16 columnas es lo que ocupa
@@ -132,17 +137,34 @@ mod tests {
     /// procesos y una hoja de atributos jamás son el destino de una copia, y
     /// dejarles `Target` es como una tecla de copiar acaba apuntando a una
     /// caja que no es un directorio.
+    ///
+    /// Y solo UNO de los dos toma teclas. La hoja sigue al cursor del
+    /// listado, así que con el teclado dentro dejaría de seguir a nada;
+    /// declararlo al revés era la mitad de #243 —la otra mitad era que nadie
+    /// leía el `KeyOwner` que se ponía—, y el resultado en pantalla era un
+    /// panel con borde de foco cuyas flechas movían la lista de al lado.
     #[test]
     fn processes_y_metadata_se_enfocan_pero_no_son_destino() {
         let reg = KindRegistry::builtin();
         for id in ["processes", "metadata"] {
             let d = reg.get(&KindId::new(id)).expect("declarado");
             assert!(d.focusable, "{id} se enfoca");
-            assert!(d.takes_keys, "{id} toma teclas");
             assert!(!d.multi, "{id} es uno solo");
             assert!(d.roles.is_empty(), "{id} no opta a rol");
             assert!(!reg.holds_role(&KindId::new(id), RoleId::Target));
         }
+        assert!(
+            reg.get(&KindId::new("processes"))
+                .expect("declarado")
+                .takes_keys,
+            "el panel de procesos SÍ toma teclas: se recorre y cancela"
+        );
+        assert!(
+            !reg.get(&KindId::new("metadata"))
+                .expect("declarado")
+                .takes_keys,
+            "la hoja de atributos NO: sigue al cursor del listado"
+        );
         assert_eq!(reg.min_of(&KindId::new("processes")), (30, 4));
         assert_eq!(reg.min_of(&KindId::new("metadata")), (24, 4));
     }

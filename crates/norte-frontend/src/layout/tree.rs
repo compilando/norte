@@ -596,6 +596,52 @@ impl Node {
         })
     }
 
+    /// El tamaño con el que reparte el `Split` que contiene `id`, y en qué
+    /// posición está su hijo.
+    ///
+    /// Es lo que [`Self::resize`] cambia, para poder MIRARLO: sin esto, un
+    /// test del ancho de un panel acaba comparando árboles enteros o llamando
+    /// a `resize` con un id que el llamante de verdad no produce — que es
+    /// exactamente cómo #244 M1 pasó desapercibida.
+    ///
+    /// ```
+    /// use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+    ///
+    /// let arbol = Node::split(
+    ///     Dir::Horizontal,
+    ///     vec![
+    ///         Node::slot(SlotId(1), KindId::browser()),
+    ///         Node::slot(SlotId(2), KindId::browser()),
+    ///     ],
+    /// );
+    /// let (sizes, pos) = arbol.sizes_of(SlotId(2)).expect("está en un split");
+    /// assert_eq!((sizes[pos], pos), (Size::Weight(1), 1));
+    /// assert!(Node::slot(SlotId(1), KindId::browser()).sizes_of(SlotId(1)).is_none());
+    /// ```
+    #[must_use]
+    pub fn sizes_of(&self, id: SlotId) -> Option<(&[Size], usize)> {
+        let hijos = match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => children,
+            Self::Slot { .. } => return None,
+        };
+        for c in hijos {
+            if c.contains(id)
+                && !matches!(c, Self::Slot { .. })
+                && let Some(dentro) = c.sizes_of(id)
+            {
+                return Some(dentro);
+            }
+        }
+        if let Self::Split {
+            children, sizes, ..
+        } = self
+            && let Some(pos) = children.iter().position(|c| c.contains(id))
+        {
+            return Some((sizes.as_slice(), pos));
+        }
+        None
+    }
+
     /// Aplica `f` a los tamaños del `Split` que contiene `id`, dándole la
     /// posición del hijo que lo contiene.
     fn map_split_of(&self, id: SlotId, f: &dyn Fn(&[Size], usize) -> Vec<Size>) -> Self {

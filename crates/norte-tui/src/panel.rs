@@ -178,6 +178,30 @@ impl PaneSlots {
         if !orden.is_empty() {
             self.visible = orden.to_vec();
         }
+        self.rescue_visible();
+    }
+
+    /// Echa de `visible` los huecos que ya NO llevan listado, y si con eso se
+    /// queda sin ninguno coge cualquier listado del store.
+    ///
+    /// Es la red del invariante que documentan [`Index`] e [`IndexMut`]: sin
+    /// ella, un hueco cuyo contenido pasó a ser otro kind se quedaba en la
+    /// lista —«vacía no borra nada» conserva lo ANTERIOR, no lo válido— y el
+    /// primer acceso por lado panicaba (#242). Que el árbol traiga un listado
+    /// lo garantiza [`norte_frontend::layout::validate`]; que la lista apunte
+    /// a uno, esto.
+    fn rescue_visible(&mut self) {
+        self.visible
+            .retain(|id| matches!(self.store.get(*id), Some(TuiPanel::Browser(_))));
+        if self.visible.is_empty()
+            && let Some(id) = self
+                .store
+                .iter()
+                .find(|(_, p)| matches!(p, TuiPanel::Browser(_)))
+                .map(|(id, _)| id)
+        {
+            self.visible = vec![id];
+        }
     }
 
     /// Pone al día los lados a partir del ÁRBOL, sin repartir nada.
@@ -202,6 +226,7 @@ impl PaneSlots {
             self.visible = vivos;
         }
         self.store.sync_with(tree);
+        self.rescue_visible();
     }
 
     /// El listado de un hueco cualquiera, visible o no. Lo pide la barra de
@@ -597,6 +622,7 @@ pub const fn from_ratatui(r: ratatui::layout::Rect) -> LayoutRect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use norte_frontend::layout::Dir;
     use norte_proto::VPath;
 
     fn pane(wire: &str) -> Pane {
@@ -623,6 +649,28 @@ mod tests {
         assert_eq!(kind(SLOT_RIGHT), "browser");
         assert_eq!(kind(SLOT_TASKS), "tasks");
         assert_eq!(kind(SLOT_STATUS), "status");
+    }
+
+    /// Un árbol que llama `places` al hueco donde estaba el listado dejaba
+    /// `visible` apuntando a un hueco que YA no lleva uno —la lista vacía
+    /// «conserva lo anterior»— y el primer `panes[0]` panicaba (#242). Con la
+    /// validación puesta ese árbol ya no llega, pero la lista tiene que ser
+    /// coherente por sí sola: es lo que documenta el `expect` de `Index`.
+    #[test]
+    fn un_lado_nunca_apunta_a_un_hueco_sin_listado() {
+        let mut slots = PaneSlots::new(pane("mem:///izq"), pane("mem:///der"));
+        let arbol = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SLOT_LEFT, KindId::new("places")),
+                Node::slot(SlotId(5), KindId::browser()),
+            ],
+        );
+        slots.insert_places(SLOT_LEFT, norte_frontend::places::PlacesState::new());
+        slots.insert_browser(SlotId(5), pane("mem:///cinco"));
+        slots.refresh_visible(&arbol);
+        assert_eq!(slots.slot_of(0), SlotId(5), "el lado va al listado que hay");
+        assert_eq!(slots[0].dir(), &VPath::parse("mem:///cinco").expect("wire"));
     }
 
     /// Indexar por lado da el mismo listado que antes daba el array.

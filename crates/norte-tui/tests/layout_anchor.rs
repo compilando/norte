@@ -756,6 +756,50 @@ fn confirmar_el_destino_abre_el_modal_de_siempre() {
     assert_eq!(to_dir.to_wire(), "file:///otro");
 }
 
+/// Retroceder borra UNA letra del nombre, no un carácter del texto: el texto
+/// es forma wire, así que `é` son seis caracteres (`%C3%A9`) y `String::pop`
+/// dejaba `%C3%A`, que ya no parsea (#246 M3).
+#[test]
+fn retroceder_sobre_un_escape_borra_la_letra_entera() {
+    use norte_tui::app::{Modal, TransferKind};
+
+    let dir = vp("file:///caf%C3%A9");
+    let mut app = App::new(
+        Pane::new(dir.clone(), entradas(&dir, 3)),
+        Pane::new(dir.clone(), entradas(&dir, 3)),
+    );
+    app.focused_mut().toggle_mark();
+    app.open_transfer_dest(TransferKind::Copy);
+    app.transfer_dest_pop();
+
+    let Some(Modal::TransferDest { input, .. }) = &app.modal else {
+        panic!("abierto: {:?}", app.modal)
+    };
+    assert_eq!(input, "file:///caf", "se fue la é entera, no medio escape");
+    assert!(
+        VPath::parse(input).is_ok(),
+        "y lo que queda sigue siendo una dirección"
+    );
+}
+
+/// El prompt se prellena con el directorio de ORIGEN, así que `Enter` sin
+/// editar pedía copiar cada marca sobre sí misma: N tareas fallidas en vez de
+/// una línea en el diálogo (#244 m6).
+#[test]
+fn confirmar_el_destino_de_origen_lo_dice_en_el_prompt() {
+    use norte_tui::app::{Modal, TransferKind};
+
+    let mut app = app_de_prueba_con(3);
+    app.focused_mut().toggle_mark();
+    app.open_transfer_dest(TransferKind::Copy);
+    assert!(!app.transfer_dest_confirm(), "no somete nada");
+
+    let Some(Modal::TransferDest { error, .. }) = &app.modal else {
+        panic!("sigue abierto: {:?}", app.modal)
+    };
+    assert!(error.is_some(), "y dice por qué");
+}
+
 /// Una dirección que no parsea CONSERVA lo tecleado y deja su diagnóstico: el
 /// prompt no se cierra tragándose la operación.
 #[test]
