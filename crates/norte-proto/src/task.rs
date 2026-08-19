@@ -133,6 +133,32 @@ pub enum TaskKind {
     /// [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que
     /// `Search`/`Index`/`Embed`/`RenameBatch`/`Compare`.
     DirSize,
+    /// Fabricar un archivo
+    /// (`archive.pack`/[`ARCHIVE_PACK`](crate::methods::ARCHIVE_PACK), 0.50.0,
+    /// #132). MUTA: journal como UNA creación, y deshacerlo es borrar el
+    /// archivo.
+    ///
+    /// Entra CON el método, y los cuatro de este bump se degradan igual: un
+    /// cliente N-1 (0.49.x) los convierte en [`TaskKind::Unknown`] por el
+    /// `serde(other)` de abajo, como `Search`/`Index`/`Embed`/`RenameBatch`/
+    /// `Compare`/`DirSize` antes que ellos.
+    ///
+    /// El progreso cuenta bytes LEÍDOS del origen y entradas empaquetadas; los
+    /// bytes escritos no se pueden saber por adelantado —el compresor decide—
+    /// y prometer un total que va a fallar es peor que no darlo.
+    Pack,
+    /// Comprobar un archivo
+    /// (`archive.test`/[`ARCHIVE_TEST`](crate::methods::ARCHIVE_TEST), 0.50.0,
+    /// #132). Lectura pura: sin journal.
+    TestArchive,
+    /// Partir un fichero en trozos
+    /// (`file.split`/[`FILE_SPLIT`](crate::methods::FILE_SPLIT), 0.50.0,
+    /// #132). MUTA: una creación por trozo.
+    Split,
+    /// Juntar los trozos
+    /// (`file.combine`/[`FILE_COMBINE`](crate::methods::FILE_COMBINE), 0.50.0,
+    /// #132). MUTA: una creación.
+    Combine,
     /// Planificación de una sincronización de un sentido
     /// (`sync.plan`/[`SYNC_PLAN`](crate::methods::SYNC_PLAN), 0.40.0, ADR
     /// 0049). Lectura pura (regla 4 no aplica): planificar no escribe un byte

@@ -47,6 +47,13 @@ const fn live(name: &'static str, counts: bool) -> CommandDef {
     }
 }
 
+/// **Ahora mismo no hay ninguno**, y eso es un hito: con #132 construido, la
+/// tabla se quedó sin `Planned` — cada comando que un preset nombra es un
+/// comando que norte tiene. El constructor se queda porque la maquinaria
+/// (fila atenuada, motivo traducido, número de issue) es lo que hace que la
+/// próxima capacidad prometida se anuncie en gris en vez de en silencio, y
+/// reconstruirla costaría más que dejarla.
+#[allow(dead_code, reason = "el vocabulario está entero: ver el doc de arriba")]
 const fn planned(name: &'static str, reason: &'static str, issue: u32) -> CommandDef {
     CommandDef {
         name,
@@ -255,11 +262,15 @@ pub const CATALOGUE: &[CommandDef] = &[
     // seven families remain. Each is one capability and one issue;
     // `planned()` forces `counts: false`, which is right for all of them —
     // none is a clamped in-memory mover (ADR 0044).
-    planned("pane.pack", "keymap-reason-archive-write", 132),
-    planned("pane.unpack", "keymap-reason-archive-write", 132),
-    planned("pane.test-archive", "keymap-reason-archive-write", 132),
-    planned("pane.split-file", "keymap-reason-archive-write", 132),
-    planned("pane.combine-files", "keymap-reason-archive-write", 132),
+    // #132: los cinco, construidos. Ninguno escribe DENTRO de un contenedor
+    // —el provider de archivos sigue read-only, ADR 0018—: empaquetar, partir
+    // y juntar fabrican ficheros nuevos, comprobar solo lee, y desempaquetar
+    // es la copia de siempre desde el interior del archivo.
+    live("pane.pack", false),
+    live("pane.unpack", false),
+    live("pane.test-archive", false),
+    live("pane.split-file", false),
+    live("pane.combine-files", false),
     // #133: norte no trae editor —lo suyo es el gestor— y F4 abre el TUYO,
     // que es lo que hacen los cuatro presets al atarlo.
     live("pane.edit", false),
@@ -300,10 +311,9 @@ pub const CATALOGUE: &[CommandDef] = &[
 ///
 /// assert_eq!(lookup("cursor.down").map(|d| d.counts), Some(true));
 /// assert_eq!(lookup("app.quit").map(|d| d.counts), Some(false));
-/// assert!(matches!(
-///     lookup("pane.pack").map(|d| d.status),
-///     Some(Status::Planned { issue: 132, .. })
-/// ));
+/// // #132 construyó el último `Planned` del vocabulario: hoy no queda
+/// // ninguno, y `pane.pack` es `Live` como todo lo demás que un preset ata.
+/// assert_eq!(lookup("pane.pack").map(|d| d.status), Some(Status::Live));
 /// assert_eq!(lookup("pane.select-drive").map(|d| d.status), Some(Status::Live));
 /// assert_eq!(lookup("pane.compare-dirs").map(|d| d.status), Some(Status::Live));
 /// assert_eq!(lookup("pane.sync-dirs").map(|d| d.status), Some(Status::Live));

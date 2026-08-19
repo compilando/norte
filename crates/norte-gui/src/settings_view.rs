@@ -94,6 +94,26 @@ pub fn gui_applies_live(id: &str) -> bool {
 /// crossterm's `KeyCode`. The caller (`NorteGui::on_settings_key`) has
 /// already gated ctrl/alt/platform modifiers out before calling this (a
 /// ctrl-chord must never be typed into the filter/edit buffer).
+/// Un carácter PEGADO (#200): al editor de un valor si hay uno abierto, y si
+/// no al filtro de la lista.
+///
+/// (El párrafo de contrato que hay justo encima es de [`on_key`], no de esto:
+/// esta función se insertó delante y se lo quedó. Y ese párrafo ya no es
+/// cierto tal cual — `on_settings_key` NO filtra todos los chords con
+/// ctrl/alt/platform desde #200: `ctrl+v` llega aquí.)
+///
+/// Aparte de `on_key` porque un pegado no es una tecla: llega ya saneado
+/// ([`crate::modal::pegado_para_campo`]) y no puede activar nada — pegar
+/// «enter» en un campo no confirma.
+pub fn paste_char(view: &mut SettingsView, c: char) {
+    let s = &mut view.state;
+    if s.is_editing() {
+        s.edit_push_char(c);
+    } else {
+        s.push_char(c);
+    }
+}
+
 pub fn on_key(view: &mut SettingsView, key: &str, key_char: Option<&str>) -> SettingsOutcome {
     let s = &mut view.state;
     if s.is_editing() {

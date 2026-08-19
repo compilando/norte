@@ -9,6 +9,70 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The graphical frontend can paste.** It could not — at all: no input
+  handler, no clipboard read for text, and `Cmd+V` filtered out before it
+  reached any field. So a path, a rename, a search term or a filter had to be
+  retyped. Pasting now works in the rename prompt, the AI-rename and semantic
+  prompts, the command palette, the live filter and the settings editor, and
+  what arrives is filtered exactly like what is typed: terminal hazards are
+  dropped, and a newline **cuts** instead of confirming — pasting two lines
+  into a one-line field cannot mean "accept the first and carry on with the
+  second", because nobody has read the second. Decision dialogs still take no
+  paste: a yes/no has no field, and giving it one is how something gets
+  approved by accident (#200).
+
+- **The GUI's diff pane can mirror.** `s` plans an update and `m` plans a
+  mirror, the same two letters the terminal uses. `SyncMode::Mirror` was
+  unreachable from this frontend — the dispatch knew one entry point and it
+  was `Update` — so the whole destructive half of the sync spec was written
+  for a mode the GUI could not ask for. The panel stays open when you press
+  them, and that is not cosmetic: the plan takes its source from the pane's
+  ACTIVE side, and that branch was previously reachable only through the help
+  overlay, because the diff pane owns the keyboard and `pane.sync-dirs` never
+  arrived while it was up (#188).
+
+- **Archives can be written.** The last five commands the presets bound and
+  norte did not have (#132). {{pack}} builds a new archive from what you
+  marked — the name you type decides the format, and the dialog says which one
+  it is going to write before you press Enter: `.zip`, `.tar`, `.tar.gz` or
+  `.tgz`. `.rar` is refused rather than quietly written as something else,
+  because norte reads rar by delegating to another program and that program is
+  not asked to write. Unpacking needs no dialog and no new machinery: it is a
+  copy out of the archive into the other panel, with the collision questions,
+  the journal entry and the undo that copying already had. Testing reads every
+  entry to the end and says **what it checked** — a zip has a CRC per entry, a
+  `.tar.gz` one for the whole stream, and a plain tar none at all, so
+  "passed" means three different things and the report distinguishes them.
+  Splitting cuts a file into `name.001`, `name.002`… in the other panel, and
+  joining puts them back from the `.001`; a gap in the numbering or a short
+  piece in the middle stops the join instead of producing a corrupt file that
+  looks fine. On the wire that is protocol **0.50.0** and **ADR 0060**.
+
+  What did *not* change is that an archive is read-only from the inside: none
+  of this writes into a container, and copying into one is still refused. A
+  cancelled pack leaves no file — an archive written halfway still looks like
+  an archive.
+
+  With those five, **the shared catalogue has no `Planned` commands left**:
+  every command a preset names is one norte has.
+
+  Four reviews of this branch found things worth naming here, because two of
+  them were silent. **An agent could have used packing as a laundry**: the read
+  gate looks at the root of a request and nothing else, so a legitimate scope
+  over a large tree packed the daemon's state directory with it — `journal.db`,
+  `secrets.age`, `connections.toml` — and the archive was then readable entry
+  by entry through a file inside that same scope. The walk now consults the
+  same exclusion list `fs.search` and `fs.compare` use. **Two size fields could
+  be written wrong**: a tar entry of 8 GiB or more recorded a size of zero (the
+  octal field kept the low digits) and a zip past 4 GiB flagged one field for
+  zip64 while writing three, which our own reader — and every conformant one —
+  reads as garbage. Both now refuse or write correctly, and both have tests
+  that need neither 8 GiB nor 4 GiB of disk. **Joining across a gap** built a
+  short file and called it done, which is the exact failure this command exists
+  to prevent; the test that should have caught it asserted the bug. And a split
+  that is cancelled now takes its pieces with it, because half a set of pieces
+  is indistinguishable from a whole one.
+
 - **A directory tree panel.** `pane.tree` opens a column on the left with the
   tree hanging from the directory you are looking at; `⏎` on a branch expands it
   and sends the listing there. It is read branch by branch — opening one lists

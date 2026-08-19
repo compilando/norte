@@ -3,7 +3,17 @@ id = "archives"
 title = "Inside an archive"
 tags = ["remote"]
 see_also = ["copying", "remote"]
-commands = ["nav.enter", "nav.parent", "pane.view", "pane.names-encoding"]
+commands = [
+    "nav.enter",
+    "nav.parent",
+    "pane.view",
+    "pane.names-encoding",
+    "pane.pack",
+    "pane.unpack",
+    "pane.test-archive",
+    "pane.split-file",
+    "pane.combine-files",
+]
 +++
 {{cmd:nav.enter}} on an archive walks into it. The pane lists what is inside,
 the cursor moves as usual, {{cmd:pane.view}} opens an entry in the viewer, and
@@ -41,7 +51,40 @@ left is an ordinary file on the outer backend — which may itself be remote, so
 `zip+sftp://` is a real address and reading a zip on an SSH host needs no
 download first.
 
-> ⚠ An archive is **read-only**. Copying out of one is an ordinary copy and works with any destination; copying into one is refused.
+> ⚠ An archive is **read-only** from the inside: copying out of one is an ordinary copy and works with any destination, copying *into* one is refused. Making a **new** archive is a different thing, and it is below.
+
+# Making one
+
+{{cmd:pane.pack}} writes a new archive from what you marked, or from the entry
+under the cursor. It asks for the name, and the name decides the format —
+`.zip`, `.tar`, `.tar.gz` or `.tgz`; the dialog says which one it is going to
+write before you press Enter. `.rar` is not on that list: norte reads rar by
+handing it to an external program, and that program is not asked to write.
+
+The names stored inside are the ones you see on screen, relative to the panel
+you packed from. Cancelling leaves nothing behind — no half-written file that
+looks like an archive.
+
+{{cmd:pane.unpack}} is the reverse and needs no dialog: it copies the archive's
+contents into the other panel, which is an ordinary copy with the ordinary
+questions about collisions, and an ordinary undo.
+
+{{cmd:pane.test-archive}} reads every entry to the end and reports what failed.
+What "passed" means depends on the format, and the report says so: a zip
+carries a CRC per entry, a `.tar.gz` one checksum for the whole stream, and a
+plain tar carries none at all — there, all that can be verified is that every
+declared size is reachable.
+
+# Splitting a big file
+
+{{cmd:pane.split-file}} cuts a file into numbered pieces — `name.001`,
+`name.002` — in the other panel, with the size you ask for (`10M`, `700M`,
+`4096`). More than 999 pieces is refused before anything is written, because a
+set that runs out of numbers halfway is a set nobody can put back together.
+
+{{cmd:pane.combine-files}} puts them back, starting from the `.001`. A gap in
+the numbering, or a middle piece shorter than the first, stops it: a badly
+joined file is a corrupt file that looks fine.
 
 # Names that are not UTF-8
 

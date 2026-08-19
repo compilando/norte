@@ -1071,9 +1071,13 @@ mod tests {
     }
 
     /// K3b: the rows K2b's imported presets made necessary. Total Commander's
-    /// `Alt+F5` packs; norte does not pack yet. Before K3b the page simply had
-    /// no such line, so the one artefact a migrant reads to learn the keys was
-    /// silent about a third of the preset.
+    /// `Alt+F5` packs, and before K3b the page had no such line at all — the
+    /// one artefact a migrant reads to learn the keys was silent about a third
+    /// of the preset.
+    ///
+    /// That third was `Planned`; #132 built the last of it, so the row this
+    /// asserts is now an ordinary built one. What has to hold either way is
+    /// that the key a migrant looks for IS on the page, named in prose.
     #[test]
     fn una_tecla_no_construida_es_una_fila_que_dice_por_que() {
         let chords = CliChords::from_preset("total-commander", Lang::En);
@@ -1083,14 +1087,10 @@ mod tests {
             .find(|l| l.contains("Alt+F5"))
             .expect("the key is where a Total Commander migrant looks for it");
         assert!(
-            row.contains("pane.pack"),
-            "no help text exists for an unbuilt command, so the label is its NAME: {row}"
+            row.contains(&norte_i18n::t_in(Lang::En, "help-cmd-pane-pack")),
+            "named in prose, not as a raw command id: {row}"
         );
-        assert!(row.contains("132"), "the issue is the way out: {row}");
-        assert!(
-            row.contains(&norte_i18n::t_in(Lang::En, "keymap-reason-archive-write")),
-            "the reason is TRANSLATED, not the catalogue's Fluent id: {row}"
-        );
+        assert!(!row.contains("help-cmd-"), "a raw Fluent id: {row}");
     }
 
     /// The v2 wire words, pinned as LITERALS. Nothing else pins them: the
@@ -1117,32 +1117,13 @@ mod tests {
         );
     }
 
-    /// And a real `not-built` row reaches the wire end to end — the golden
-    /// cannot show one, because the default preset binds no planned command.
-    #[test]
-    fn una_fila_no_construida_llega_al_json_con_su_issue() {
-        let chords = CliChords::from_preset("total-commander", Lang::En);
-        let doc = json_doc(Lang::En, &chords, Some(KEYS_ID));
-        let keys = doc.topics[0].keys.as_ref().expect("the keyboard page");
-        let pack = keys
-            .iter()
-            .find(|k| k.command == "pane.pack")
-            .expect("total-commander binds pane.pack");
-        let json = serde_json::to_value(&pack.availability).expect("serializa");
-        assert_eq!(json["state"], "not-built");
-        assert_eq!(json["issue"], 132);
-        assert_eq!(
-            json["reason"],
-            norte_i18n::t_in(Lang::En, "keymap-reason-archive-write"),
-            "translated prose, not the catalogue's Fluent id"
-        );
-        assert!(
-            keys.iter().any(
-                |k| serde_json::to_value(&k.availability).expect("serializa")["state"] == "built"
-            ),
-            "and the built ones are still built"
-        );
-    }
+    // El test que llevaba aquí —una fila `not-built` de verdad llegando al
+    // JSON con su issue— se retiró con #132: construida la última capacidad
+    // `Planned`, el catálogo no tiene con qué producir esa fila, y un test
+    // sobre datos que ya no existen no prueba nada. Las PALABRAS del contrato
+    // («not-built» incluida) las sigue pineando
+    // `las_palabras_del_contrato_v2_son_literales`, que es lo que impide que
+    // un renombrado de la variante retire en silencio la rama de un consumidor.
 
     /// Interleaved in key order, never a section of leftovers at the bottom:
     /// the sheet answers "what does this key do", and a reader scanning the

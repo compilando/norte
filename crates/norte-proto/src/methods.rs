@@ -628,7 +628,30 @@ use crate::{
 /// [`Session`], [`SessionGetResult`], [`SessionPutParams`] y
 /// [`SessionPutResult`]. Aditivo: ningún mensaje existente cambia de forma, y
 /// el cuerpo de la sesión es OPACO para este crate y para el core.
-pub const PROTOCOL_VERSION: &str = "0.49.0";
+/// **0.49.0** (#139, #140): [`FS_DIR_SIZE`] con [`FsDirSizeParams`] y
+/// [`TaskKind::DirSize`](crate::TaskKind::DirSize), y [`CONNECTION_CLOSE`] con
+/// [`ConnectionCloseParams`]/[`ConnectionCloseResult`]. Dos métodos en un solo
+/// bump porque la rama no llegó a publicarse por separado. Aditivo: `dir_size`
+/// entrega su resultado por el PROGRESO de una Task en vez de por un tipo
+/// nuevo, y `connection.close` cierra por RUTA en vez de por una clave de
+/// sesión que el frontend no tiene por qué conocer.
+/// **0.50.0** (#132, escribir archivos): [`ARCHIVE_PACK`], [`ARCHIVE_TEST`],
+/// [`ARCHIVE_TEST_REPORT`], [`FILE_SPLIT`] y [`FILE_COMBINE`] —CINCO métodos—,
+/// con [`ArchivePackParams`], [`ArchiveTestParams`], [`ArchiveTestResult`],
+/// [`ArchiveTestFailure`], [`ArchiveTestReportParams`], [`FileSplitParams`],
+/// [`FileCombineParams`], [`ArchiveFormat`] y cuatro
+/// [`TaskKind`](crate::TaskKind) nuevos.
+///
+/// Aditivo, y no toca el provider de archivos: ninguno de los cuatro escribe
+/// DENTRO de un contenedor —eso seguiría siendo `READ_ONLY` (ADR 0018)—, los
+/// cuatro fabrican ficheros nuevos. Desempaquetar no está aquí porque no hace
+/// falta: es un `fs.copy` desde el interior del contenedor, que ya funciona.
+///
+/// Ventana N=0.50.x / N-1=0.49.x: un cliente 0.49 no conoce los métodos y no
+/// los llama; un cliente 0.50 contra un daemon 0.49 recibe `METHOD_NOT_FOUND`,
+/// que el `Backend` traduce a [`Error::Unsupported`](crate::Error) — «tu
+/// daemon es más viejo», no un fallo genérico.
+pub const PROTOCOL_VERSION: &str = "0.50.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -1015,6 +1038,77 @@ pub const FS_COMPARE: &str = "fs.compare";
 /// carpeta de tres horas no puede morirse en un `EACCES` de la hoja 40 000, y
 /// el número que sale es el de lo que se pudo leer.
 pub const FS_DIR_SIZE: &str = "fs.dir_size";
+/// `archive.pack` — fabrica un archivo NUEVO a partir de un conjunto de rutas
+/// (0.50.0, #132).
+///
+/// Devuelve una Task ([`FsTaskResult`], [`TaskKind::Pack`](crate::TaskKind))
+/// cancelable, y **no escribe dentro de ningún contenedor**: el provider de
+/// archivos sigue siendo `READ_ONLY` (ADR 0018). Lo que hace es leer las
+/// entradas por su provider y escribir UN fichero por el provider del destino,
+/// que puede ser otro cualquiera.
+///
+/// MUTA, así que va al journal (regla 4) como UNA creación: deshacerlo es
+/// borrar el archivo, y eso es un undo completo.
+///
+/// El [`ArchiveFormat`] viaja EXPLÍCITO. El frontend lo deduce del nombre que
+/// el usuario escribe y se lo enseña antes de mandarlo; deducirlo aquí sería
+/// decidir por él sin decírselo, y dos clientes con dos heurísticas darían dos
+/// archivos distintos de la misma petición.
+pub const ARCHIVE_PACK: &str = "archive.pack";
+/// `archive.test` — comprueba lo que el formato promete de cada entrada
+/// (0.50.0, #132).
+///
+/// Task cancelable ([`TaskKind::TestArchive`](crate::TaskKind)) que devuelve
+/// [`ArchiveTestResult`] al terminar. NO muta: sin journal, sin undo, ni un
+/// byte escrito.
+///
+/// Lo que se comprueba depende del formato y **el resultado lo dice**
+/// ([`ArchiveTestResult::checked`]): un zip tiene un CRC-32 por entrada y un
+/// `tar.gz` un CRC en su cola, pero un tar plano no tiene ninguna suma de
+/// comprobación de contenido, así que decir «pasa» sobre un tar sin más sería
+/// afirmar más de lo que el formato puede sostener.
+pub const ARCHIVE_TEST: &str = "archive.test";
+/// `file.split` — parte un fichero en trozos numerados (0.50.0, #132).
+///
+/// Task cancelable ([`TaskKind::Split`](crate::TaskKind)), journalizada con
+/// una creación por trozo. La convención de nombres es la de Total Commander
+/// —`nombre.001`, `nombre.002`…—, que es la que tienen los usuarios de las
+/// teclas que piden esto.
+pub const FILE_SPLIT: &str = "file.split";
+/// `file.combine` — vuelve a juntar los trozos de un [`FILE_SPLIT`] (0.50.0,
+/// #132).
+///
+/// Task cancelable ([`TaskKind::Combine`](crate::TaskKind)), journalizada como
+/// una creación. Se le da el PRIMER trozo y encuentra el resto por la
+/// convención. Un hueco en la numeración, o un trozo intermedio de tamaño
+/// distinto del primero, es [`Error::Conflict`](crate::Error) y no un fichero
+/// corto: un fichero mal unido es un fichero corrupto con buena pinta.
+pub const FILE_COMBINE: &str = "file.combine";
+/// `archive.test_report` — el informe de un [`ARCHIVE_TEST`] ya lanzado
+/// (0.50.0, #132).
+///
+/// Existe por lo mismo que [`FS_RENAME_BATCH_REPORT`]: una Task no devuelve un
+/// valor, y lo que este método tiene que contar —qué entrada está corrupta y
+/// por qué— no cabe en el `Failed` de una Task. Se pide con el `task_id`, y
+/// solo lo ve quien podría ver esa Task: un id ajeno contesta lo mismo que uno
+/// que no existe.
+pub const ARCHIVE_TEST_REPORT: &str = "archive.test_report";
+/// Trozos como mucho de un [`FILE_SPLIT`], que es lo que da la convención
+/// `.001`.
+///
+/// Se comprueba ANTES de escribir nada: descubrirlo en el trozo 1000 deja un
+/// conjunto que nadie puede volver a juntar.
+pub const FILE_SPLIT_MAX_PARTS: u64 = 999;
+/// Trozo mínimo que acepta [`FILE_SPLIT`], para que partir un fichero no
+/// produzca un millón de ficheros de un byte.
+pub const FILE_SPLIT_MIN_BYTES: u64 = 4096;
+/// Fallos que [`ARCHIVE_TEST`] llega a listar antes de recortar.
+///
+/// Un archivo en el que TODO está corrupto no puede costarle al cliente un
+/// informe de un giga; el que sobra se cuenta en
+/// [`ArchiveTestResult::truncated`], que es la misma disciplina que
+/// [`COMPARE_ROWS_MAX_BATCH`].
+pub const ARCHIVE_TEST_MAX_FAILURES: usize = 256;
 /// `compare.rows` — notificación server→client con un LOTE de filas de
 /// [`FS_COMPARE`] ([`CompareRowsBatch`]). SOLO viaja a la conexión que lanzó
 /// la comparación (jamás broadcast, mismo criterio direccional que
@@ -3407,6 +3501,222 @@ pub struct FsDirSizeParams {
     /// Un fichero suelto vale: cuenta su propio tamaño y no recorre nada.
     /// Vacío es `-32602`: medir la nada no es una petición.
     pub paths: Vec<VPath>,
+}
+
+/// Formato de archivo que se sabe ESCRIBIR (0.50.0, #132).
+///
+/// Menos que los que se saben leer, a propósito: `rar` se delega a un programa
+/// externo y solo para lectura (ADR 0056), y 7z no se lee siquiera. Un enum y
+/// no un string libre: el conjunto es cerrado y el servidor no tiene que
+/// validar vocabulario.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveFormat {
+    /// zip con `deflate`, o `store` a nivel 0.
+    #[default]
+    Zip,
+    /// tar plano, sin comprimir.
+    Tar,
+    /// tar comprimido con gzip.
+    TarGz,
+}
+
+/// Params de [`ARCHIVE_PACK`] (0.50.0, #132).
+///
+/// ```
+/// use norte_proto::methods::{ArchiveFormat, ArchivePackParams};
+/// let p: ArchivePackParams = serde_json::from_str(
+///     r#"{"sources":["file:///a/x"],"dest":"file:///a.zip","base":"file:///a","format":"zip"}"#,
+/// )
+/// .expect("params");
+/// assert_eq!(p.format, ArchiveFormat::Zip);
+/// assert_eq!(p.level, None, "el nivel sí lo elige el core");
+/// // Y sin `format` NO parsea: es la decisión del cliente, no un default.
+/// assert!(
+///     serde_json::from_str::<ArchivePackParams>(
+///         r#"{"sources":["file:///a/x"],"dest":"file:///a.zip","base":"file:///a"}"#,
+///     )
+///     .is_err()
+/// );
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchivePackParams {
+    /// Lo que se empaqueta. Un directorio entra con su árbol.
+    pub sources: Vec<VPath>,
+    /// El archivo que se crea. Tiene que NO existir: sobrescribir aquí sería
+    /// una pérdida silenciosa, y el frontend ya sabe preguntar.
+    pub dest: VPath,
+    /// Formato, explícito y OBLIGATORIO. Ver [`ARCHIVE_PACK`] para por qué no
+    /// se deduce del nombre en el servidor — y por qué tampoco tiene default:
+    /// con uno, `{"dest":"backup.tar.gz"}` sin `format` producía un ZIP
+    /// llamado `backup.tar.gz`, en silencio y contradiciendo el nombre. Eso es
+    /// peor que la inferencia que este método rechaza. Exigirlo en un tipo
+    /// NUEVO no cuesta compatibilidad; exigirlo después sí sería romperla.
+    pub format: ArchiveFormat,
+    /// Nivel de compresión 0..=9, o `None` para el del core. 0 es «guardar sin
+    /// comprimir» en los formatos que lo permiten.
+    ///
+    /// Un valor por encima de 9 se RECORTA a 9 en vez de rechazarse: el nivel
+    /// es una preferencia, no una petición, y tirar un empaquetado de media
+    /// hora por un 42 sería peor que comprimirlo bien.
+    #[serde(default)]
+    pub level: Option<u8>,
+    /// El directorio contra el que se calculan los nombres GUARDADOS.
+    ///
+    /// Sin esto, «empaqueta estas tres marcas» no tiene un nombre definido
+    /// para cada entrada, y dos clientes que eligieran distinto darían dos
+    /// archivos distintos de la misma petición. Toda `source` tiene que caer
+    /// bajo esta base.
+    pub base: VPath,
+}
+
+/// Params de [`ARCHIVE_TEST_REPORT`] (0.50.0, #132).
+///
+/// ```
+/// use norte_proto::methods::ArchiveTestReportParams;
+/// let p: ArchiveTestReportParams =
+///     serde_json::from_str(r#"{"task_id":7}"#).expect("params");
+/// assert_eq!(p.task_id.get(), 7);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveTestReportParams {
+    /// La Task cuyo informe se pide.
+    pub task_id: crate::TaskId,
+}
+
+/// Params de [`ARCHIVE_TEST`] (0.50.0, #132).
+///
+/// ```
+/// use norte_proto::methods::ArchiveTestParams;
+/// let p: ArchiveTestParams =
+///     serde_json::from_str(r#"{"path":"file:///a.zip"}"#).expect("params");
+/// assert_eq!(p.path.to_wire(), "file:///a.zip");
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveTestParams {
+    /// El contenedor, como fichero (no como raíz interior): lo que se prueba
+    /// es el archivo entero, no una entrada suya.
+    pub path: VPath,
+}
+
+/// Una entrada que no pasó [`ARCHIVE_TEST`].
+///
+/// ```
+/// use norte_proto::methods::ArchiveTestFailure;
+/// let f: ArchiveTestFailure =
+///     serde_json::from_str(r#"{"name":"a.txt","reason":"crc"}"#).expect("fallo");
+/// assert_eq!(f.reason, "crc");
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArchiveTestFailure {
+    /// La entrada que falló, ENTERA y en su forma wire — que es la única que
+    /// conserva los bytes (regla 1).
+    ///
+    /// Empezó siendo solo el `name` con pérdidas de abajo, y las dos mitades
+    /// de eso estaban mal: `a/x.txt` y `b/x.txt` reportaban lo mismo, y un
+    /// nombre que no es UTF-8 volvía como `U+FFFD` sin nada que dijera cuál de
+    /// los dos era. Este informe es el ÚNICO sitio donde se nombra la entrada
+    /// corrupta, así que tiene que poder señalarla — es el mismo criterio que
+    /// [`RenameStuckStep`], que lleva `VPath` por lo mismo.
+    #[serde(default = "wire_vacio")]
+    pub path: String,
+    /// El nombre para ENSEÑAR, con la conversión con pérdidas que lleva
+    /// cualquier otro nombre que se pinte. Acompaña a [`Self::path`]; no lo
+    /// sustituye.
+    pub name: String,
+    /// Categoría del fallo, vocabulario ABIERTO comparable por igualdad:
+    /// `crc`, `truncated`, `unsupported`, `io`. Puede CRECER de forma aditiva
+    /// —un formato futuro falla de formas que este conjunto no tiene—, así que
+    /// un cliente que reciba una que no conozca la enseña tal cual y jamás
+    /// rechaza el informe por ella. Mismo contrato que
+    /// [`ConnectionDegraded::reason`].
+    pub reason: String,
+}
+
+/// El `path` por defecto de un [`ArchiveTestFailure`] deserializado sin él (un
+/// informe de un daemon 0.50 antes de que el campo existiera).
+fn wire_vacio() -> String {
+    String::new()
+}
+
+/// Resultado de [`ARCHIVE_TEST`] (0.50.0, #132).
+///
+/// ```
+/// use norte_proto::methods::ArchiveTestResult;
+/// let r: ArchiveTestResult = serde_json::from_str(r#"{"entries":3}"#).expect("result");
+/// assert!(r.failed.is_empty() && !r.truncated);
+/// assert!(r.checked.is_empty(), "sin decir qué se comprobó, no se afirma nada");
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArchiveTestResult {
+    /// Entradas recorridas.
+    pub entries: u64,
+    /// Las que fallaron, hasta [`ARCHIVE_TEST_MAX_FAILURES`].
+    pub failed: Vec<ArchiveTestFailure>,
+    /// `true` si hubo más fallos de los que caben en `failed`.
+    pub truncated: bool,
+    /// QUÉ se ha comprobado de verdad: `crc` cuando el formato lleva suma por
+    /// entrada, `gzip_crc` para la cola de un `tar.gz`, `sizes` cuando lo
+    /// único verificable es que cada tamaño declarado es alcanzable.
+    ///
+    /// `snake_case`, como cada otro token que acuña este protocolo
+    /// (`tar_gz`, `dir_size`, `rename_batch`): un guion aquí era una
+    /// invitación a que un cliente escribiera `gzip_crc`, no encontrara nada y
+    /// no encendiera nunca el caso de `tar.gz`. Los tres viajan en el golden.
+    ///
+    /// Va en el resultado y no en la documentación porque «pasa» significa
+    /// cosas distintas en cada formato, y un cliente que pinte «íntegro» sobre
+    /// un tar plano estaría afirmando lo que el formato no puede sostener.
+    pub checked: Vec<String>,
+}
+
+/// Params de [`FILE_SPLIT`] (0.50.0, #132).
+///
+/// ```
+/// use norte_proto::methods::FileSplitParams;
+/// let p: FileSplitParams = serde_json::from_str(
+///     r#"{"path":"file:///g.iso","part_bytes":1048576,"dest_dir":"file:///trozos"}"#,
+/// )
+/// .expect("params");
+/// assert_eq!(p.part_bytes, 1_048_576);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileSplitParams {
+    /// El fichero que se parte. No se toca: los trozos son ficheros nuevos.
+    pub path: VPath,
+    /// Bytes por trozo, al menos [`FILE_SPLIT_MIN_BYTES`]. El último puede ser
+    /// más pequeño; si la división es exacta NO hay un trozo vacío al final.
+    pub part_bytes: u64,
+    /// Dónde se dejan los trozos.
+    pub dest_dir: VPath,
+}
+
+/// Params de [`FILE_COMBINE`] (0.50.0, #132).
+///
+/// ```
+/// use norte_proto::methods::FileCombineParams;
+/// let p: FileCombineParams =
+///     serde_json::from_str(r#"{"first":"file:///g.iso.001","dest":"file:///g.iso"}"#)
+///         .expect("params");
+/// assert_eq!(p.first.to_wire(), "file:///g.iso.001");
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileCombineParams {
+    /// El PRIMER trozo (`.001`). El resto se encuentra por la convención, y un
+    /// hueco es un error en vez de una unión a través de él.
+    pub first: VPath,
+    /// El fichero que se crea. Tiene que no existir.
+    pub dest: VPath,
 }
 
 /// Params de [`FS_COMPARE`] (0.39.0, ADR 0048).

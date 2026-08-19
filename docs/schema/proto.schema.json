@@ -52,6 +52,149 @@
       ],
       "type": "object"
     },
+    "ArchiveFormat": {
+      "description": "Formato de archivo que se sabe ESCRIBIR (0.50.0, #132).\n\nMenos que los que se saben leer, a propósito: `rar` se delega a un programa\nexterno y solo para lectura (ADR 0056), y 7z no se lee siquiera. Un enum y\nno un string libre: el conjunto es cerrado y el servidor no tiene que\nvalidar vocabulario.",
+      "oneOf": [
+        {
+          "const": "zip",
+          "description": "zip con `deflate`, o `store` a nivel 0.",
+          "type": "string"
+        },
+        {
+          "const": "tar",
+          "description": "tar plano, sin comprimir.",
+          "type": "string"
+        },
+        {
+          "const": "tar_gz",
+          "description": "tar comprimido con gzip.",
+          "type": "string"
+        }
+      ]
+    },
+    "ArchivePackParams": {
+      "description": "Params de [`ARCHIVE_PACK`] (0.50.0, #132).\n\n```\nuse norte_proto::methods::{ArchiveFormat, ArchivePackParams};\nlet p: ArchivePackParams = serde_json::from_str(\n    r#\"{\"sources\":[\"file:///a/x\"],\"dest\":\"file:///a.zip\",\"base\":\"file:///a\",\"format\":\"zip\"}\"#,\n)\n.expect(\"params\");\nassert_eq!(p.format, ArchiveFormat::Zip);\nassert_eq!(p.level, None, \"el nivel sí lo elige el core\");\n// Y sin `format` NO parsea: es la decisión del cliente, no un default.\nassert!(\n    serde_json::from_str::<ArchivePackParams>(\n        r#\"{\"sources\":[\"file:///a/x\"],\"dest\":\"file:///a.zip\",\"base\":\"file:///a\"}\"#,\n    )\n    .is_err()\n);\n```",
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/VPath",
+          "description": "El directorio contra el que se calculan los nombres GUARDADOS.\n\nSin esto, «empaqueta estas tres marcas» no tiene un nombre definido\npara cada entrada, y dos clientes que eligieran distinto darían dos\narchivos distintos de la misma petición. Toda `source` tiene que caer\nbajo esta base."
+        },
+        "dest": {
+          "$ref": "#/$defs/VPath",
+          "description": "El archivo que se crea. Tiene que NO existir: sobrescribir aquí sería\nuna pérdida silenciosa, y el frontend ya sabe preguntar."
+        },
+        "format": {
+          "$ref": "#/$defs/ArchiveFormat",
+          "description": "Formato, explícito y OBLIGATORIO. Ver [`ARCHIVE_PACK`] para por qué no\nse deduce del nombre en el servidor — y por qué tampoco tiene default:\ncon uno, `{\"dest\":\"backup.tar.gz\"}` sin `format` producía un ZIP\nllamado `backup.tar.gz`, en silencio y contradiciendo el nombre. Eso es\npeor que la inferencia que este método rechaza. Exigirlo en un tipo\nNUEVO no cuesta compatibilidad; exigirlo después sí sería romperla."
+        },
+        "level": {
+          "default": null,
+          "description": "Nivel de compresión 0..=9, o `None` para el del core. 0 es «guardar sin\ncomprimir» en los formatos que lo permiten.\n\nUn valor por encima de 9 se RECORTA a 9 en vez de rechazarse: el nivel\nes una preferencia, no una petición, y tirar un empaquetado de media\nhora por un 42 sería peor que comprimirlo bien.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sources": {
+          "description": "Lo que se empaqueta. Un directorio entra con su árbol.",
+          "items": {
+            "$ref": "#/$defs/VPath"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sources",
+        "dest",
+        "format",
+        "base"
+      ],
+      "type": "object"
+    },
+    "ArchiveTestFailure": {
+      "description": "Una entrada que no pasó [`ARCHIVE_TEST`].\n\n```\nuse norte_proto::methods::ArchiveTestFailure;\nlet f: ArchiveTestFailure =\n    serde_json::from_str(r#\"{\"name\":\"a.txt\",\"reason\":\"crc\"}\"#).expect(\"fallo\");\nassert_eq!(f.reason, \"crc\");\n```",
+      "properties": {
+        "name": {
+          "default": "",
+          "description": "El nombre para ENSEÑAR, con la conversión con pérdidas que lleva\ncualquier otro nombre que se pinte. Acompaña a [`Self::path`]; no lo\nsustituye.",
+          "type": "string"
+        },
+        "path": {
+          "default": "",
+          "description": "La entrada que falló, ENTERA y en su forma wire — que es la única que\nconserva los bytes (regla 1).\n\nEmpezó siendo solo el `name` con pérdidas de abajo, y las dos mitades\nde eso estaban mal: `a/x.txt` y `b/x.txt` reportaban lo mismo, y un\nnombre que no es UTF-8 volvía como `U+FFFD` sin nada que dijera cuál de\nlos dos era. Este informe es el ÚNICO sitio donde se nombra la entrada\ncorrupta, así que tiene que poder señalarla — es el mismo criterio que\n[`RenameStuckStep`], que lleva `VPath` por lo mismo.",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "description": "Categoría del fallo, vocabulario ABIERTO comparable por igualdad:\n`crc`, `truncated`, `unsupported`, `io`. Puede CRECER de forma aditiva\n—un formato futuro falla de formas que este conjunto no tiene—, así que\nun cliente que reciba una que no conozca la enseña tal cual y jamás\nrechaza el informe por ella. Mismo contrato que\n[`ConnectionDegraded::reason`].",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ArchiveTestParams": {
+      "description": "Params de [`ARCHIVE_TEST`] (0.50.0, #132).\n\n```\nuse norte_proto::methods::ArchiveTestParams;\nlet p: ArchiveTestParams =\n    serde_json::from_str(r#\"{\"path\":\"file:///a.zip\"}\"#).expect(\"params\");\nassert_eq!(p.path.to_wire(), \"file:///a.zip\");\n```",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "El contenedor, como fichero (no como raíz interior): lo que se prueba\nes el archivo entero, no una entrada suya."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "ArchiveTestReportParams": {
+      "description": "Params de [`ARCHIVE_TEST_REPORT`] (0.50.0, #132).\n\n```\nuse norte_proto::methods::ArchiveTestReportParams;\nlet p: ArchiveTestReportParams =\n    serde_json::from_str(r#\"{\"task_id\":7}\"#).expect(\"params\");\nassert_eq!(p.task_id.get(), 7);\n```",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "La Task cuyo informe se pide."
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "ArchiveTestResult": {
+      "description": "Resultado de [`ARCHIVE_TEST`] (0.50.0, #132).\n\n```\nuse norte_proto::methods::ArchiveTestResult;\nlet r: ArchiveTestResult = serde_json::from_str(r#\"{\"entries\":3}\"#).expect(\"result\");\nassert!(r.failed.is_empty() && !r.truncated);\nassert!(r.checked.is_empty(), \"sin decir qué se comprobó, no se afirma nada\");\n```",
+      "properties": {
+        "checked": {
+          "default": [],
+          "description": "QUÉ se ha comprobado de verdad: `crc` cuando el formato lleva suma por\nentrada, `gzip_crc` para la cola de un `tar.gz`, `sizes` cuando lo\núnico verificable es que cada tamaño declarado es alcanzable.\n\n`snake_case`, como cada otro token que acuña este protocolo\n(`tar_gz`, `dir_size`, `rename_batch`): un guion aquí era una\ninvitación a que un cliente escribiera `gzip_crc`, no encontrara nada y\nno encendiera nunca el caso de `tar.gz`. Los tres viajan en el golden.\n\nVa en el resultado y no en la documentación porque «pasa» significa\ncosas distintas en cada formato, y un cliente que pinte «íntegro» sobre\nun tar plano estaría afirmando lo que el formato no puede sostener.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "entries": {
+          "default": 0,
+          "description": "Entradas recorridas.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failed": {
+          "default": [],
+          "description": "Las que fallaron, hasta [`ARCHIVE_TEST_MAX_FAILURES`].",
+          "items": {
+            "$ref": "#/$defs/ArchiveTestFailure"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "default": false,
+          "description": "`true` si hubo más fallos de los que caben en `failed`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "AttrHint": {
       "description": "What an attribute MEANS, so a frontend can pick a default format and\nalignment without a hard-coded table of ids. Two `Uint`s render very\ndifferently depending on this.\n\n`\"unknown\"` is a RESERVED wire tag: no future protocol version may name a\nreal variant that. A component that reads a value and writes it back\n(a proxy, a cache) collapses a newer tag to `unknown` in the round trip —\nthe same accepted trade-off as [`EntryKind::Other`](crate::EntryKind::Other).\n\n```\nuse norte_proto::attrs::AttrHint;\nlet h: AttrHint = serde_json::from_str(\"\\\"pista_del_futuro\\\"\").unwrap();\nassert_eq!(h, AttrHint::Unknown);\n```",
       "oneOf": [
@@ -1294,6 +1437,49 @@
           "type": "object"
         }
       ]
+    },
+    "FileCombineParams": {
+      "description": "Params de [`FILE_COMBINE`] (0.50.0, #132).\n\n```\nuse norte_proto::methods::FileCombineParams;\nlet p: FileCombineParams =\n    serde_json::from_str(r#\"{\"first\":\"file:///g.iso.001\",\"dest\":\"file:///g.iso\"}\"#)\n        .expect(\"params\");\nassert_eq!(p.first.to_wire(), \"file:///g.iso.001\");\n```",
+      "properties": {
+        "dest": {
+          "$ref": "#/$defs/VPath",
+          "description": "El fichero que se crea. Tiene que no existir."
+        },
+        "first": {
+          "$ref": "#/$defs/VPath",
+          "description": "El PRIMER trozo (`.001`). El resto se encuentra por la convención, y un\nhueco es un error en vez de una unión a través de él."
+        }
+      },
+      "required": [
+        "first",
+        "dest"
+      ],
+      "type": "object"
+    },
+    "FileSplitParams": {
+      "description": "Params de [`FILE_SPLIT`] (0.50.0, #132).\n\n```\nuse norte_proto::methods::FileSplitParams;\nlet p: FileSplitParams = serde_json::from_str(\n    r#\"{\"path\":\"file:///g.iso\",\"part_bytes\":1048576,\"dest_dir\":\"file:///trozos\"}\"#,\n)\n.expect(\"params\");\nassert_eq!(p.part_bytes, 1_048_576);\n```",
+      "properties": {
+        "dest_dir": {
+          "$ref": "#/$defs/VPath",
+          "description": "Dónde se dejan los trozos."
+        },
+        "part_bytes": {
+          "description": "Bytes por trozo, al menos [`FILE_SPLIT_MIN_BYTES`]. El último puede ser\nmás pequeño; si la división es exacta NO hay un trozo vacío al final.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "El fichero que se parte. No se toca: los trozos son ficheros nuevos."
+        }
+      },
+      "required": [
+        "path",
+        "part_bytes",
+        "dest_dir"
+      ],
+      "type": "object"
     },
     "FsCapabilitiesParams": {
       "description": "Params de [`FS_CAPABILITIES`].",
@@ -4332,6 +4518,26 @@
           "type": "string"
         },
         {
+          "const": "pack",
+          "description": "Fabricar un archivo\n(`archive.pack`/[`ARCHIVE_PACK`](crate::methods::ARCHIVE_PACK), 0.50.0,\n#132). MUTA: journal como UNA creación, y deshacerlo es borrar el\narchivo.\n\nEntra CON el método, y los cuatro de este bump se degradan igual: un\ncliente N-1 (0.49.x) los convierte en [`TaskKind::Unknown`] por el\n`serde(other)` de abajo, como `Search`/`Index`/`Embed`/`RenameBatch`/\n`Compare`/`DirSize` antes que ellos.\n\nEl progreso cuenta bytes LEÍDOS del origen y entradas empaquetadas; los\nbytes escritos no se pueden saber por adelantado —el compresor decide—\ny prometer un total que va a fallar es peor que no darlo.",
+          "type": "string"
+        },
+        {
+          "const": "test_archive",
+          "description": "Comprobar un archivo\n(`archive.test`/[`ARCHIVE_TEST`](crate::methods::ARCHIVE_TEST), 0.50.0,\n#132). Lectura pura: sin journal.",
+          "type": "string"
+        },
+        {
+          "const": "split",
+          "description": "Partir un fichero en trozos\n(`file.split`/[`FILE_SPLIT`](crate::methods::FILE_SPLIT), 0.50.0,\n#132). MUTA: una creación por trozo.",
+          "type": "string"
+        },
+        {
+          "const": "combine",
+          "description": "Juntar los trozos\n(`file.combine`/[`FILE_COMBINE`](crate::methods::FILE_COMBINE), 0.50.0,\n#132). MUTA: una creación.",
+          "type": "string"
+        },
+        {
           "const": "sync_plan",
           "description": "Planificación de una sincronización de un sentido\n(`sync.plan`/[`SYNC_PLAN`](crate::methods::SYNC_PLAN), 0.40.0, ADR\n0049). Lectura pura (regla 4 no aplica): planificar no escribe un byte\n— lo que escribe es [`TaskKind::Sync`]. El progreso cuenta PASOS\nemitidos, no bytes, por el mismo motivo que\n[`TaskKind::Compare`]: es la comparación de debajo con una decisión por\nfila, y con el rung de hash apagado no se lee contenido alguno.\n\nEntra CON el método, en su mismo bump, y por la misma razón que\n`Compare`: el `task_id` de un lote de\n[`SYNC_STEPS`](crate::methods::SYNC_STEPS) correlaciona con una Task que\nel cliente tiene que poder clasificar en `task.list`. Un cliente N-1\n(0.39.x) la degrada a [`TaskKind::Unknown`] por el `serde(other)` de\nabajo.",
           "type": "string"
@@ -4673,6 +4879,24 @@
     "ai_rename_plan_result": {
       "$ref": "#/$defs/AiRenamePlanResult"
     },
+    "archive_format": {
+      "$ref": "#/$defs/ArchiveFormat"
+    },
+    "archive_pack_params": {
+      "$ref": "#/$defs/ArchivePackParams"
+    },
+    "archive_test_failure": {
+      "$ref": "#/$defs/ArchiveTestFailure"
+    },
+    "archive_test_params": {
+      "$ref": "#/$defs/ArchiveTestParams"
+    },
+    "archive_test_report_params": {
+      "$ref": "#/$defs/ArchiveTestReportParams"
+    },
+    "archive_test_result": {
+      "$ref": "#/$defs/ArchiveTestResult"
+    },
     "attr_hint": {
       "$ref": "#/$defs/AttrHint"
     },
@@ -4768,6 +4992,12 @@
     },
     "error": {
       "$ref": "#/$defs/Error"
+    },
+    "file_combine_params": {
+      "$ref": "#/$defs/FileCombineParams"
+    },
+    "file_split_params": {
+      "$ref": "#/$defs/FileSplitParams"
     },
     "fs_capabilities_params": {
       "$ref": "#/$defs/FsCapabilitiesParams"
@@ -5147,6 +5377,14 @@
   },
   "required": [
     "ai_rename_entry",
+    "archive_format",
+    "archive_pack_params",
+    "archive_test_failure",
+    "archive_test_params",
+    "archive_test_report_params",
+    "archive_test_result",
+    "file_combine_params",
+    "file_split_params",
     "ai_rename_plan_params",
     "ai_rename_plan_result",
     "attr_hint",

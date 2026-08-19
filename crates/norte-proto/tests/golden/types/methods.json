@@ -1141,5 +1141,52 @@
   },
   "connection_close_result": {
     "closed": true
+  },
+  "archive_pack_params": {
+    "sources": [
+      "file:///proj/src",
+      "file:///proj/LEEME"
+    ],
+    "dest": "file:///proj.zip",
+    "format": "tar_gz",
+    "level": 9,
+    "base": "file:///proj"
+  },
+  "archive_test_params": {
+    "path": "file:///a.zip"
+  },
+  "archive_test_result": {
+    "entries": 3,
+    "failed": [
+      {
+        "path": "zip+file:///a.zip/!/roto.txt",
+        "name": "roto.txt",
+        "reason": "crc"
+      }
+    ],
+    "truncated": false,
+    "checked": [
+      "crc"
+    ]
+  },
+  "file_split_params": {
+    "path": "file:///g.iso",
+    "part_bytes": 1048576,
+    "dest_dir": "file:///trozos"
+  },
+  "file_combine_params": {
+    "first": "file:///g.iso.001",
+    "dest": "file:///g.iso"
+  },
+  "archive_test_report_params": {
+    "task_id": 7
+  },
+  "archive_test_result_clean": {
+    "entries": 9,
+    "failed": [],
+    "truncated": false,
+    "checked": [
+      "gzip_crc"
+    ]
   }
 }

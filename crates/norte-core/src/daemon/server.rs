@@ -3884,6 +3884,132 @@ async fn handle_fs_dir_size(
     to_value(&methods::FsTaskResult { task_id })
 }
 
+/// `archive.pack` (0.50.0, #132): fabrica un archivo como Task.
+///
+/// El gate de MUTACIÓN lo hace el engine (misma op que una copia: se leen las
+/// fuentes y se escribe el destino). Aquí va el de LECTURA sobre las fuentes,
+/// por lo mismo que en `fs.dir_size`: sin él, un agente fuera de scope
+/// enumeraría un árbol ajeno a través de los errores de esta llamada.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+async fn handle_archive_pack(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::ArchivePackParams = parse_params(params)?;
+    if p.sources.is_empty() {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "archive.pack: sources must not be empty",
+        ));
+    }
+    for path in &p.sources {
+        read_gate(actor, path, shared)?;
+    }
+    let handle = shared
+        .engine
+        .pack_as(p, actor.clone())
+        .await
+        .map_err(RpcError::from)?;
+    // INVARIANTE (#64): CERO `.await` entre el submit y este register.
+    let task_id = register_task_id(shared, handle, actor.clone())?;
+    to_value(&methods::FsTaskResult { task_id })
+}
+
+/// `archive.test` (0.50.0, #132): comprueba un archivo como Task.
+///
+/// No muta, así que solo gate de LECTURA. El informe se recoge después con
+/// [`methods::ARCHIVE_TEST_REPORT`], igual que el de un lote de renames: una
+/// Task no devuelve valor, y «qué entrada está corrupta» no cabe en un
+/// `Failed`.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+async fn handle_archive_test(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::ArchiveTestParams = parse_params(params)?;
+    read_gate(actor, &p.path, shared)?;
+    let (handle, _informe) = shared
+        .engine
+        .test_archive_as(p, actor.clone())
+        .await
+        .map_err(RpcError::from)?;
+    let task_id = register_task_id(shared, handle, actor.clone())?;
+    to_value(&methods::FsTaskResult { task_id })
+}
+
+/// `archive.test_report` (0.50.0, #132): el informe de un test ya lanzado.
+///
+/// Gemelo exacto de `fs.rename_batch_report`, VISIBILIDAD incluida: solo lo ve
+/// quien lanzó la Task, y un id de otro actor se contesta igual que uno que no
+/// existe — decir «existe pero no es tuyo» ya sería contar algo.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+fn handle_archive_test_report(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::ArchiveTestReportParams = parse_params(params)?;
+    // Una sola respuesta para las tres situaciones —desalojado del anillo,
+    // nunca fue un test, es de otro actor—, y la tercera es la razón:
+    // separarla confirmaría que la task de otro existió.
+    let unknown = || RpcError::from(norte_proto::Error::NotFound);
+    let (owner, informe) = shared
+        .engine
+        .archive_test_report(p.task_id)
+        .ok_or_else(unknown)?;
+    if !may_observe(actor, &owner) {
+        // Material de auditoría, como en sus gemelos: preguntar por informes
+        // ajenos deja rastro aunque la respuesta no diga nada.
+        tracing::warn!(actor = ?actor, "archive.test_report de otro actor");
+        return Err(unknown());
+    }
+    to_value(&informe)
+}
+
+/// `file.split` (0.50.0, #132): parte un fichero como Task.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+async fn handle_file_split(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::FileSplitParams = parse_params(params)?;
+    read_gate(actor, &p.path, shared)?;
+    let handle = shared
+        .engine
+        .split_as(p, actor.clone())
+        .await
+        .map_err(RpcError::from)?;
+    let task_id = register_task_id(shared, handle, actor.clone())?;
+    to_value(&methods::FsTaskResult { task_id })
+}
+
+/// `file.combine` (0.50.0, #132): junta los trozos como Task.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+async fn handle_file_combine(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::FileCombineParams = parse_params(params)?;
+    read_gate(actor, &p.first, shared)?;
+    // Y el DIRECTORIO, porque los demás trozos se derivan por convención y no
+    // los nombra la petición: un scope sobre el fichero `.001` a secas no
+    // cubre a sus hermanos.
+    if let Some(dir) = p.first.parent() {
+        read_gate(actor, &dir, shared)?;
+    }
+    let handle = shared
+        .engine
+        .combine_as(p, actor.clone())
+        .await
+        .map_err(RpcError::from)?;
+    let task_id = register_task_id(shared, handle, actor.clone())?;
+    to_value(&methods::FsTaskResult { task_id })
+}
+
 /// `fs.compare` (0.39.0, ADR 0048): compara dos árboles como Task cancelable.
 /// Las FILAS llegan por `compare.rows` SOLO a la conexión `conn_id` que la
 /// lanzó (envío dirigido, jamás broadcast — mismo criterio que `search.hits`).
@@ -4452,6 +4578,13 @@ async fn dispatch_fs_task(
         // fs.dir_size (0.49.0, #139): sin conn_id — no enruta nada, el total
         // viaja en el progreso que ya escucha todo el mundo.
         methods::FS_DIR_SIZE => handle_fs_dir_size(req.params, &actor, shared).await,
+        // 0.50.0 (#132): escribir archivos. Ninguno escribe DENTRO de un
+        // contenedor — el provider de archivos sigue `READ_ONLY` (ADR 0018).
+        methods::ARCHIVE_PACK => handle_archive_pack(req.params, &actor, shared).await,
+        methods::ARCHIVE_TEST => handle_archive_test(req.params, &actor, shared).await,
+        methods::ARCHIVE_TEST_REPORT => handle_archive_test_report(req.params, &actor, shared),
+        methods::FILE_SPLIT => handle_file_split(req.params, &actor, shared).await,
+        methods::FILE_COMBINE => handle_file_combine(req.params, &actor, shared).await,
         // connection.close (0.49.0, #140): humano, con gate de lectura.
         methods::CONNECTION_CLOSE => handle_connection_close(&actor, req.params, shared),
         // sync.plan (0.40.0): los PASOS son del que lo lanzó, y el plan queda

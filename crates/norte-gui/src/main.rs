@@ -2633,6 +2633,14 @@ impl NorteGui {
             }
             compare_view::Key::Close => self.close_compare(),
             compare_view::Key::Open => self.compare_enter(cx),
+            // #188: las dos teclas de sincronizar del panel de diferencias.
+            // El panel se queda ABIERTO, igual que en la TUI, y eso no es
+            // cosmético: `sync_roots` mira `self.compare` para tomar el lado
+            // ACTIVO como origen, y cerrarlo antes haría que el sentido lo
+            // decidiera el foco. Es justo la rama que hasta ahora solo
+            // alcanzaba la ayuda, porque el panel se come el teclado y
+            // `pane.sync-dirs` no llegaba nunca con él abierto.
+            compare_view::Key::Sync(mode) => self.start_sync(mode),
             otra => {
                 let Some(v) = self.compare.as_mut() else {
                     return;
@@ -2664,6 +2672,17 @@ impl NorteGui {
                 }
             }
         }
+    }
+
+    /// ¿Es esta tecla PEGAR? (#200)
+    ///
+    /// `cmd+v` en macOS y `ctrl+v` en el resto, que es lo que la plataforma
+    /// entrega en `modifiers.platform` y `modifiers.control`. No se pasa por
+    /// el keymap: pegar no es un comando de norte, es una operación del campo
+    /// de texto, y atarla a otra tecla dejaría al usuario con un campo en el
+    /// que la tecla de pegar de su sistema no pega.
+    fn es_pegar(ks: &gpui::Keystroke) -> bool {
+        ks.key == "v" && (ks.modifiers.platform || ks.modifiers.control) && !ks.modifiers.alt
     }
 
     /// Pide un plan de sincronización entre los dos panes (#161,
@@ -2710,7 +2729,12 @@ impl NorteGui {
     fn start_sync(&mut self, mode: norte_proto::methods::SyncMode) {
         let f = self.focus;
         if !self.journalled {
-            self.errors[f] = Some(norte_i18n::t("msg-sync-needs-daemon"));
+            // Por `flash` y no por `errors[f]`: desde #188 estas teclas viven
+            // DENTRO del panel de diferencias, y `errors[f]` solo se pinta en
+            // el pane —que con un panel abierto no se ve—. La negativa de la
+            // regla 4 se quedaba en un array que nadie renderiza: pulsar `m`
+            // contra un backend sin journal era un no-op mudo.
+            self.flash = Some((norte_i18n::t("msg-sync-needs-daemon"), true));
             return;
         }
         // Las reinterpretaciones vuelven CON las raíces y de la misma llamada
@@ -2732,7 +2756,7 @@ impl NorteGui {
             },
         );
         if source == dest {
-            self.errors[f] = Some(norte_i18n::t("compare-same-path"));
+            self.flash = Some((norte_i18n::t("compare-same-path"), true));
             return;
         }
         self.sync_gen = self.sync_gen.wrapping_add(1);
@@ -2743,7 +2767,11 @@ impl NorteGui {
         // Decirlo mientras el RPC va y viene, molde `start_compare`: con la
         // clave COMPARTIDA y `n = 0`, que es la verdad —todavía no ha llegado
         // ningún paso—.
-        self.errors[f] = Some(norte_i18n::ta("sync-planning", &[("n", "0")]));
+        // También por `flash`: es el acuse de recibo de la tecla, y sin él un
+        // lector que no ve nada vuelve a pulsar —o sigue tecleando, y el panel
+        // del plan le roba el teclado a media pulsación con `a` e `y` a un
+        // paso—.
+        self.flash = Some((norte_i18n::ta("sync-planning", &[("n", "0")]), false));
         let _ = self.cmds.send(SessionCmd::SyncPlan {
             source_pane: f,
             generation: self.sync_gen,
@@ -3319,6 +3347,10 @@ impl NorteGui {
             //
             // `Update`, no `Mirror`: el modo que BORRA se elige, no se hereda
             // de una tecla.
+            // `pane.sync-dirs` es el ATAJO de fuera del panel, y sigue siendo
+            // `Update`: el sentido destructivo se pide desde el panel de
+            // diferencias, donde el lector tiene delante lo que va a borrar
+            // (#188).
             "pane.sync-dirs" => self.start_sync(norte_proto::methods::SyncMode::Update),
             // 2026-08-10-volumes.md task V4 (design §D): `-left`/`-right`
             // name a SIDE, not the focus — Total Commander's `Alt+F1`/
@@ -3417,6 +3449,18 @@ impl NorteGui {
             return;
         }
         if ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform {
+            // …salvo pegar (#200): el editor de un valor de configuración es
+            // un campo de texto, y el filtro de la lista también.
+            if Self::es_pegar(ks)
+                && let Some(texto) = cx.read_from_clipboard().and_then(|c| c.text())
+                && let Some(view) = &mut self.settings_view
+            {
+                let limpio = modal::pegado_para_campo(&texto, modal::RENAME_NAME_MAX_BYTES);
+                for c in limpio.chars() {
+                    settings_view::paste_char(view, c);
+                }
+                cx.notify();
+            }
             return;
         }
         let Some(view) = &mut self.settings_view else {
@@ -4298,6 +4342,21 @@ impl NorteGui {
             return;
         }
         if ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform {
+            // …salvo pegar (#200): el filtro de la palette es un campo de
+            // texto como cualquier otro, y lo pegado pasa por el mismo saneado
+            // que lo tecleado.
+            if Self::es_pegar(ks)
+                && let Some(texto) = cx.read_from_clipboard().and_then(|c| c.text())
+                && let Some(view) = &mut self.palette
+            {
+                // El filtro de la palette no tiene tope propio —lo acota la
+                // lista, no el campo—, así que se usa el del nombre: pegar un
+                // mega de texto en un filtro no filtra nada.
+                for c in modal::pegado_para_campo(&texto, modal::RENAME_NAME_MAX_BYTES).chars() {
+                    view.push_char(c);
+                }
+                cx.notify();
+            }
             return;
         }
         let Some(view) = &mut self.palette else {
@@ -5074,6 +5133,19 @@ impl NorteGui {
     /// no binding).
     fn quick_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
         let f = self.focus;
+        // Pegar en el filtro vivo (#200): un término de búsqueda es lo que más
+        // se pega de todo, y hasta ahora `ctrl+v` aquí no hacía nada.
+        if Self::es_pegar(ks) {
+            if let Some(texto) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                for c in modal::pegado_para_campo(&texto, modal::RENAME_NAME_MAX_BYTES).chars() {
+                    if !c.is_control() {
+                        self.panes[f].quick_char(c);
+                        self.query[f].push(c);
+                    }
+                }
+            }
+            return true;
+        }
         match ks.key.as_str() {
             "backspace" => {
                 self.panes[f].quick_backspace();
@@ -5214,6 +5286,19 @@ impl NorteGui {
                     | Modal::RenamePrompt { .. }
             ) && (ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform)
             {
+                // …salvo PEGAR (#200). Este gate es el que dejaba a la GUI sin
+                // pegado de ninguna clase: `ctrl+v`/`cmd+v` caía aquí y no
+                // llegaba a ningún campo. Lo pegado pasa por el MISMO filtro de
+                // peligros que el tecleo, y un salto de línea corta en vez de
+                // confirmar — pegar dos líneas en un nombre no puede aceptar la
+                // primera y seguir con la segunda.
+                if Self::es_pegar(ks)
+                    && let Some(texto) = cx.read_from_clipboard().and_then(|c| c.text())
+                    && modal::paste(m, &texto)
+                {
+                    cx.notify();
+                    return;
+                }
                 cx.notify();
                 return;
             }
@@ -5553,6 +5638,14 @@ impl NorteGui {
         // al keymap (un ctrl+algo con el filtro abierto sigue siendo un
         // comando — p. ej. ctrl+c). Si `quick_key` consume la tecla, termina
         // aquí (contrato del plan GUI-c T3).
+        // El pegado entra ANTES del gate de modificadores: `ctrl+v` es
+        // justamente un chord, así que el gate lo excluía y la rama de pegado
+        // de `quick_key` no se ejecutaba nunca (la escribí muerta, lo vio la
+        // revisión). Un `v` pelado sigue cayendo por el camino de siempre.
+        if quick_active && Self::es_pegar(ks) && self.quick_key(ks, cx) {
+            cx.notify();
+            return;
+        }
         if quick_active && !(mods.control || mods.alt || mods.platform) && self.quick_key(ks, cx) {
             self.debug_log_key(&ks.key, "quick");
             cx.notify();

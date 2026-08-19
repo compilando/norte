@@ -102,8 +102,8 @@ pub struct SheetRow {
 /// ]
 /// "#;
 /// let preset = parse_keymap(src).unwrap();
-/// // `pane.pack` is NOT in the frontend's command list, so the catalogue
-/// // answers for it: planned, tracked by #132.
+/// // `pane.pack` is NOT in this frontend's command list, so the catalogue
+/// // answers for it: live, but not here.
 /// let known = ["pane.copy", "pane.move"];
 /// let eff = Effective::build_for(&preset, &[], &known, Screen::Browse).unwrap();
 ///
@@ -111,7 +111,7 @@ pub struct SheetRow {
 /// let chords: Vec<&str> = rows.iter().map(|r| r.chord.as_str()).collect();
 /// // Interleaved, in the map's order: the unavailable key keeps its place.
 /// assert_eq!(chords, ["F5", "Alt+F5", "F6"]);
-/// assert!(matches!(rows[1].avail, Availability::NotBuilt { issue: 132, .. }));
+/// assert!(matches!(rows[1].avail, Availability::NotHere));
 /// ```
 #[must_use]
 pub fn sheet(effectives: &[(Screen, Effective)]) -> Vec<SheetRow> {
@@ -166,6 +166,14 @@ mod tests {
                         crate::keymap::catalogue::lookup(n)
                             .is_none_or(|d| d.status == crate::keymap::Status::Live)
                     })
+                    // `pane.pack` se deja FUERA a propósito: la hoja tiene que
+                    // tener alguna fila no ejecutable para que estos tests
+                    // digan algo, y desde #132 el catálogo no tiene ni un
+                    // `Planned` — así que la que queda es la otra clase, un
+                    // comando vivo que ESTE frontend no implementa. Es
+                    // exactamente lo que le pasa a la GUI con la mitad de la
+                    // lista, no un caso inventado.
+                    .filter(|n| *n != "pane.pack")
                     .collect();
                 Effective::build_for(&kf, &[], &known, screen)
                     .ok()
@@ -174,8 +182,9 @@ mod tests {
             .collect()
     }
 
-    /// The row K2b made necessary: Total Commander's `Alt+F5` packs, norte
-    /// does not pack yet, and the sheet says both things at once.
+    /// The row K2b made necessary: Total Commander's `Alt+F5` packs, this
+    /// build does not run that command, and the sheet says both things at
+    /// once — the key and why it will do nothing.
     #[test]
     fn a_planned_binding_is_a_row_with_its_issue() {
         let rows = sheet(&effectives("total-commander"));
@@ -184,13 +193,7 @@ mod tests {
             .find(|r| r.command == "pane.pack")
             .expect("total-commander binds pane.pack");
         assert_eq!(pack.chord, "Alt+F5");
-        assert_eq!(
-            pack.avail,
-            Availability::NotBuilt {
-                reason: "keymap-reason-archive-write",
-                issue: 132
-            }
-        );
+        assert_eq!(pack.avail, Availability::NotHere);
     }
 
     /// The whole reason the sheet stopped calling `bindings()`: nothing is

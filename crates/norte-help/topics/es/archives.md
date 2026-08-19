@@ -3,7 +3,17 @@ id = "archives"
 title = "Dentro de un archivo comprimido"
 tags = ["remote"]
 see_also = ["copying", "remote"]
-commands = ["nav.enter", "nav.parent", "pane.view", "pane.names-encoding"]
+commands = [
+    "nav.enter",
+    "nav.parent",
+    "pane.view",
+    "pane.names-encoding",
+    "pane.pack",
+    "pane.unpack",
+    "pane.test-archive",
+    "pane.split-file",
+    "pane.combine-files",
+]
 +++
 {{cmd:nav.enter}} sobre un archivo comprimido entra en él. El panel lista lo
 que hay dentro, el cursor se mueve como siempre, {{cmd:pane.view}} abre una
@@ -42,7 +52,40 @@ a su izquierda es un fichero corriente en el backend exterior, que a su vez
 puede ser remoto: `zip+sftp://` es una dirección real, y leer un zip en un
 host SSH no exige descargarlo antes.
 
-> ⚠ Un archivo comprimido es de **solo lectura**. Copiar hacia fuera es una copia normal y vale con cualquier destino; copiar hacia dentro se rechaza.
+> ⚠ Un archivo comprimido es de **solo lectura** por dentro: copiar hacia fuera es una copia normal y vale con cualquier destino, copiar hacia *dentro* se rechaza. Hacer uno **nuevo** es otra cosa, y está aquí abajo.
+
+# Hacer uno
+
+{{cmd:pane.pack}} escribe un archivo nuevo con lo que tengas marcado, o con la
+entrada bajo el cursor. Pregunta el nombre, y el nombre decide el formato —
+`.zip`, `.tar`, `.tar.gz` o `.tgz`; el diálogo dice cuál va a escribir antes de
+que pulses Enter. `.rar` no está en esa lista: norte lee rar delegando en un
+programa externo, y a ese programa no se le pide que escriba.
+
+Los nombres que se guardan dentro son los que ves en pantalla, relativos al
+panel desde el que empaquetas. Cancelar no deja nada — ni un fichero a medias
+con pinta de archivo.
+
+{{cmd:pane.unpack}} es lo contrario y no pregunta nada: copia el contenido del
+archivo al otro panel, que es una copia normal con las preguntas normales sobre
+colisiones y con el deshacer de siempre.
+
+{{cmd:pane.test-archive}} lee cada entrada hasta el final y dice qué ha fallado.
+Lo que significa «pasa» depende del formato, y el informe lo dice: un zip lleva
+un CRC por entrada, un `.tar.gz` una suma de todo el flujo, y un tar pelado no
+lleva ninguna — ahí lo único que se puede comprobar es que cada tamaño
+declarado se alcanza.
+
+# Partir un fichero grande
+
+{{cmd:pane.split-file}} corta un fichero en trozos numerados — `nombre.001`,
+`nombre.002` — en el otro panel, del tamaño que le pidas (`10M`, `700M`,
+`4096`). Más de 999 trozos se rehúsa antes de escribir nada: un conjunto que se
+queda sin números a la mitad no lo vuelve a juntar nadie.
+
+{{cmd:pane.combine-files}} los junta, empezando por el `.001`. Un hueco en la
+numeración, o un trozo intermedio más corto que el primero, lo para: un fichero
+mal unido es un fichero corrupto con buena pinta.
 
 # Nombres que no son UTF-8
 

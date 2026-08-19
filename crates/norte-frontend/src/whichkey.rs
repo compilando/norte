@@ -202,8 +202,9 @@ pub fn pending_title(prefix: &[Chord], count: Option<u32>) -> String {
 /// `help-cmd-…` painted at the reader — the failure mode that actually
 /// shipped once in the F1 page. The miss is detected by testing for that echo,
 /// which IS the failure mode, so the check cannot drift out of agreement with
-/// it. It is not rare here: a `Planned` command (K2b binds ~30 of them) has no
-/// help text, because there is nothing to help with yet.
+/// it. The case that made it common —a `Planned` command with no help text,
+/// because there was nothing to help with yet— is gone: #132 built the last of
+/// them. What still falls back is a command from outside the catalogue.
 ///
 /// A `lua:<name>` command is never in the catalogue — its registry is a
 /// runtime one — so it always falls back to its own name, which is the most a
@@ -216,8 +217,8 @@ pub fn pending_title(prefix: &[Chord], count: Option<u32>) -> String {
 /// assert_eq!(command_label("app.quit", Lang::En), "quit norte");
 /// // `dialog.*` is routed to the other catalogue, prefix stripped.
 /// assert_eq!(command_label("dialog.approve", Lang::En), "approve");
-/// // Nothing has written help for a command that does not exist yet.
-/// assert_eq!(command_label("pane.pack", Lang::En), "pane.pack");
+/// // A command the catalogue knows is named in prose, built or not.
+/// assert_eq!(command_label("pane.pack", Lang::En), "pack into an archive");
 /// assert_eq!(command_label("lua:greet", Lang::En), "lua:greet");
 /// ```
 #[must_use]
@@ -253,9 +254,12 @@ keymap = [
     }
 
     /// An unavailable key is a ROW — dimmed and explained, never missing.
-    /// With K2b's presets naming ~30 `Planned` commands this is a normal
-    /// sight, not an edge case, so it must read as an answer and not as a
-    /// glitch.
+    ///
+    /// It was the `Planned` commands of K2b's presets that made this the
+    /// normal sight; #132 built the last of them, and what is left is the
+    /// other unavailability — a live command this frontend does not run,
+    /// which is what every GUI-only binding looks like from here. Same row,
+    /// same requirement: it must read as an answer, not as a glitch.
     #[test]
     fn an_unavailable_row_carries_the_short_reason_and_its_issue() {
         let panel =
@@ -265,14 +269,18 @@ keymap = [
             .iter()
             .find(|r| r.chord == "p")
             .expect("the pane.pack row");
-        assert!(matches!(p.avail, Availability::NotBuilt { issue: 132, .. }));
-        assert!(p.reason.contains("132"), "{:?}", p.reason);
+        assert!(matches!(p.avail, Availability::NotHere), "{:?}", p.avail);
+        assert!(!p.reason.is_empty(), "{:?}", p.reason);
         assert!(
-            !p.reason.contains("keymap-reason-"),
+            !p.reason.contains("keymap-"),
             "the reason is a Fluent id and must be TRANSLATED: {:?}",
             p.reason
         );
-        assert_eq!(p.label, "pane.pack", "no help text exists for it yet");
+        // Y ahora SÍ tiene texto de ayuda: el comando existe, solo que este
+        // build no lo ejecuta. La fila lo nombra en cristiano y explica por
+        // qué la tecla no hará nada, que es más de lo que se podía decir
+        // cuando la capacidad no estaba construida.
+        assert_eq!(p.label, norte_i18n::t("help-cmd-pane-pack"));
     }
 
     /// A row that opens more keys claims nothing: not the command at the end

@@ -462,6 +462,17 @@ pub enum Key {
     Filter(usize),
     /// Ir a donde vive la fila del cursor, por el lado activo.
     Open,
+    /// Pedir un plan de sincronización en ese sentido (#188).
+    ///
+    /// Las dos letras están aquí y no en el keymap por lo mismo que en la TUI:
+    /// dentro de este panel el teclado es entero suyo, así que no chocan con
+    /// nada.
+    ///
+    /// `pane.sync-dirs` SÍ se alcanza con el panel abierto —por la ayuda, que
+    /// se despacha antes—, pero solo lleva `Update`. Lo que no tenía forma de
+    /// pedirse desde esta frontend era `Mirror`: el dispatch conocía un único
+    /// punto de entrada y era el otro modo.
+    Sync(norte_proto::methods::SyncMode),
 }
 
 /// Traduce una tecla de GPUI (`"escape"`, `"pagedown"`, `"1"`…) a lo que
@@ -501,6 +512,12 @@ pub fn key_meaning(key: &str, modified: bool, running: bool, cancel_requested: b
         "home" => Key::First,
         "end" => Key::Last,
         "enter" => Key::Open,
+        // LETRAS PELADAS, las mismas que la TUI (#188): `s` actualiza y `m`
+        // espeja. Sin ellas `SyncMode::Mirror` era código muerto en esta
+        // frontend —la mitad DESTRUCTIVA del spec §5.2, sin superficie— y
+        // `sync_roots` no se alcanzaba con el panel abierto.
+        "s" => Key::Sync(norte_proto::methods::SyncMode::Update),
+        "m" => Key::Sync(norte_proto::methods::SyncMode::Mirror),
         // El rango del patrón es exactamente el de `CATEGORIES`, así que el
         // índice no puede salirse.
         "1" | "2" | "3" | "4" | "5" => key
@@ -1353,6 +1370,31 @@ mod tests {
         assert_eq!(key_meaning("escape", false, true, false), Key::CancelTask);
         assert_eq!(key_meaning("escape", false, true, true), Key::Close);
         assert_eq!(key_meaning("escape", false, false, false), Key::Close);
+    }
+
+    /// #188: las dos teclas de sincronizar, y la que NO es.
+    ///
+    /// `SyncMode::Mirror` no tenía forma de pedirse desde esta frontend: el
+    /// dispatch solo conocía `pane.sync-dirs` con `Update`, y ese comando ni
+    /// siquiera llega mientras el panel de diferencias tiene el teclado. Con
+    /// lo cual la mitad DESTRUCTIVA del spec §5.2 —el `DeleteTree`, el
+    /// contador de borrados de la confirmación, `RelAnchor::Dest`— estaba
+    /// escrita para un modo que la GUI no podía pedir.
+    #[test]
+    fn las_dos_teclas_de_sincronizar_del_panel() {
+        use norte_proto::methods::SyncMode;
+        assert_eq!(
+            key_meaning("s", false, false, false),
+            Key::Sync(SyncMode::Update)
+        );
+        assert_eq!(
+            key_meaning("m", false, false, false),
+            Key::Sync(SyncMode::Mirror)
+        );
+        // Con modificador, nada: `ctrl+s` es de la aplicación, no del panel.
+        assert_eq!(key_meaning("s", true, false, false), Key::Ignore);
+        // Y una letra cualquiera sigue sin significar nada aquí.
+        assert_eq!(key_meaning("z", false, false, false), Key::Ignore);
     }
 
     /// Un modificador no pinta nada aquí: sin este filtro `alt+1` toggleaba

@@ -3457,6 +3457,23 @@ fn modal_title_body(
         Modal::Mkdir { name, error } => {
             free_text_modal_text("modal-mkdir", "modal-mkdir-hint", name, error.as_deref())
         }
+        // #132: mismo enmascarado y mismo molde. El pie del de empaquetar dice
+        // qué formato sale del nombre TECLEADO, no del sugerido: es la única
+        // forma de que el usuario vea la decisión antes de confirmarla.
+        Modal::Pack { name, error } => free_text_modal_text(
+            "modal-pack",
+            match crate::app::formato_por_nombre(name.as_bytes()) {
+                Some(norte_proto::methods::ArchiveFormat::Zip) => "modal-pack-hint-zip",
+                Some(norte_proto::methods::ArchiveFormat::Tar) => "modal-pack-hint-tar",
+                Some(norte_proto::methods::ArchiveFormat::TarGz) => "modal-pack-hint-targz",
+                None => "modal-pack-hint-unknown",
+            },
+            name,
+            error.as_deref(),
+        ),
+        Modal::Split { size, error } => {
+            free_text_modal_text("modal-split", "modal-split-hint", size, error.as_deref())
+        }
         // Mismo enmascarado: la dirección tecleada y su diagnóstico son texto
         // de usuario, y una dirección llega por paste tan fácil como un nombre.
         Modal::TransferDest { kind, input, error } => free_text_modal_text(
@@ -7625,11 +7642,20 @@ keymap = [
         let text = terminal.backend().to_string();
         assert!(text.contains("12 g"), "the count in flight: {text}");
         assert!(text.contains("go to top"), "the available row: {text}");
-        // No help text exists for a command that is not built: the row falls
-        // back to the NAME, never to a raw `help-cmd-…` id.
-        assert!(text.contains("pane.pack"), "the unavailable row: {text}");
+        // The unavailable row still names its command and says why. It used
+        // to be a `Planned` one, with its issue number; #132 built the last of
+        // those, so what is unavailable now is a command this frontend does
+        // not implement — the row and the reason work the same way, which is
+        // the property under test.
+        assert!(
+            text.contains("pack into an archive"),
+            "the unavailable row: {text}"
+        );
         assert!(!text.contains("help-cmd-"), "a raw Fluent id: {text}");
-        assert!(text.contains("#132"), "the issue that tracks it: {text}");
+        assert!(
+            text.contains(&norte_i18n::t("keymap-short-not-here")),
+            "and why: {text}"
+        );
         assert!(text.contains('…'), "the row that opens more keys: {text}");
 
         // The `p` row is dimmed; the `g` row is not.
@@ -7644,7 +7670,10 @@ keymap = [
             }
             panic!("no row painted {needle}");
         };
-        assert!(dim_of("pane.pack"), "an unavailable row is dimmed");
+        assert!(
+            dim_of("pack into an archive"),
+            "an unavailable row is dimmed"
+        );
         assert!(!dim_of("go to top"), "an available one is not");
     }
 
@@ -7749,12 +7778,21 @@ mod draw_shortcuts_tests {
     /// Un comando sin tecla se ve (la fila que la hoja de referencia no puede
     /// tener), y una tecla que este build no puede ejecutar se ve con su
     /// razón — nada se cae en silencio.
+    ///
+    /// El ejemplo de «no ejecutable» era una capacidad `Planned` con su número
+    /// de issue. Con #132 construido no quedan: la razón que se pinta ahora es
+    /// la del comando que existe y este frontend no implementa, que es la otra
+    /// mitad de lo mismo — y sigue siendo una fila con explicación en vez de
+    /// una tecla que no hace nada.
     #[test]
     fn se_ven_la_fila_sin_tecla_y_la_no_construida() {
         let eff = eff();
         let text = painted(&state(&eff));
         assert!(text.contains(&norte_i18n::t("shortcuts-no-key")), "{text}");
-        assert!(text.contains("132"), "la razón con su issue: {text}");
+        assert!(
+            text.contains(&norte_i18n::t("keymap-short-not-here")),
+            "la razón de la fila que este build no ejecuta: {text}"
+        );
     }
 
     /// El veredicto se pinta ANTES de confirmar, y el chord capturado va

@@ -1142,10 +1142,16 @@ fn version_ventana_actual() {
     // doble —un método que un cliente viejo no forma y una variante de kind que
     // su `serde(other)` degrada desde 0.10—, y la ventana se desplaza por lo de
     // siempre: un cliente 0.48 no sabe preguntar cuánto ocupa una carpeta.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.49.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.48.0"), "N-1");
+    //
+    // 0.50.0 (#132): `archive.pack`, `archive.test`, `file.split` y
+    // `file.combine`, con sus tipos y sus cuatro kinds. Aditivo igual, y la
+    // ventana se desplaza igual: un cliente 0.49 no sabe empaquetar. Lo que
+    // NO cambia es el provider de archivos —sigue `READ_ONLY`, ADR 0018—, así
+    // que no hay ninguna operación vieja que se comporte distinto.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.50.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.49.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.47.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.48.9"),
         "N-2 fuera de la ventana"
     );
 }

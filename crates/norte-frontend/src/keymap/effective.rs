@@ -20,7 +20,10 @@ use super::{KeymapDiagnostic, KeymapError};
 /// .unwrap();
 /// let eff = Effective::build_for(&preset, &[], &["pane.copy"], Screen::Browse).unwrap();
 /// let all = eff.bindings_all();
-/// assert!(matches!(all[0].2, Availability::NotBuilt { issue: 132, .. }));
+/// // `pane.pack` existe y este build no lo declara conocido: la tecla se
+/// // queda, marcada. (Fue el ejemplo de `NotBuilt` mientras el catálogo tuvo
+/// // comandos `Planned`; #132 construyó el último.)
+/// assert!(matches!(all[0].2, Availability::NotHere));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Availability {
@@ -859,8 +862,14 @@ keymap = [
     }
 
     /// A key bound to something this build has not got is a ROW, not a hole:
-    /// hiding it is the silence K1 removed, and with K2b's presets naming
-    /// ~30 `Planned` commands it is the common case, not an edge one.
+    /// hiding it is the silence K1 removed.
+    ///
+    /// The example was a `Planned` command with its issue number. #132 built
+    /// the last of those — the catalogue has no `Planned` entries left, which
+    /// means every command a preset names is one norte has — so the
+    /// unavailable row this asserts is now the other kind: a live command that
+    /// this build does not implement, which is what a GUI-only binding looks
+    /// like from the terminal. The row and the reason work the same way.
     #[test]
     fn an_unavailable_continuation_is_listed_with_its_reason() {
         let eff = vim_shaped();
@@ -869,17 +878,7 @@ keymap = [
             .iter()
             .find(|c| c.command == "pane.pack")
             .expect("the unavailable row");
-        assert!(
-            matches!(
-                p.avail,
-                Availability::NotBuilt {
-                    issue: 132,
-                    reason: "keymap-reason-archive-write"
-                }
-            ),
-            "{:?}",
-            p.avail
-        );
+        assert!(matches!(p.avail, Availability::NotHere), "{:?}", p.avail);
     }
 
     /// Same map, same order, every time: the panel must not reshuffle between

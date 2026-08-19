@@ -491,6 +491,94 @@ fn golden_task_progress() {
                 },
             ),
             (
+                // 0.49.0 (#139): TaskKind::DirSize, y la fixture que no se
+                // escribió cuando entró el método (hallazgo de
+                // `protocol-guardian`). Su progreso es el ÚNICO cuyo
+                // `bytes_done` ES el resultado — no hay tipo de result—, y por
+                // eso los totales van a `None` hasta el snapshot terminal: una
+                // barra hacia un número inventado sería peor que ninguna.
+                "running_dir_size",
+                TaskProgress {
+                    task_id: TaskId::new(31),
+                    kind: TaskKind::DirSize,
+                    state: TaskState::Running,
+                    bytes_done: 4096,
+                    bytes_total: None,
+                    entries_done: 12,
+                    entries_total: None,
+                    current: Some(vpath("file:///home/user/proj/src")),
+                },
+            ),
+            (
+                // 0.50.0 (#132): TaskKind::Pack. `bytes_*` cuenta lo LEÍDO del
+                // origen, no lo escrito: cuánto va a ocupar el archivo lo
+                // decide el compresor, y prometer ese total sería prometer un
+                // número que va a fallar. `entries_*` sí tiene total, porque
+                // las entradas se enumeran antes de empezar.
+                "running_pack",
+                TaskProgress {
+                    task_id: TaskId::new(32),
+                    kind: TaskKind::Pack,
+                    state: TaskState::Running,
+                    bytes_done: 2048,
+                    bytes_total: Some(8192),
+                    entries_done: 2,
+                    entries_total: Some(5),
+                    current: Some(vpath("file:///proj/src/main.rs")),
+                },
+            ),
+            (
+                // 0.50.0 (#132): TaskKind::TestArchive. Se conocen las entradas
+                // (están en el índice) pero no cuántos bytes hay que leer hasta
+                // haberlos leído — un zip declara tamaños que el test existe
+                // justo para no creerse.
+                "running_test_archive",
+                TaskProgress {
+                    task_id: TaskId::new(33),
+                    kind: TaskKind::TestArchive,
+                    state: TaskState::Running,
+                    bytes_done: 1024,
+                    bytes_total: None,
+                    entries_done: 4,
+                    entries_total: Some(9),
+                    current: Some(vpath("file:///a.zip")),
+                },
+            ),
+            (
+                // 0.50.0 (#132): TaskKind::Split. Los dos totales se saben
+                // desde el principio —el tamaño del fichero y la división
+                // entera—, así que es de las pocas barras honestas de punta a
+                // punta. `current` es el TROZO que se está escribiendo.
+                "running_split",
+                TaskProgress {
+                    task_id: TaskId::new(34),
+                    kind: TaskKind::Split,
+                    state: TaskState::Running,
+                    bytes_done: 1_048_576,
+                    bytes_total: Some(3_145_728),
+                    entries_done: 1,
+                    entries_total: Some(3),
+                    current: Some(vpath("file:///trozos/g.iso.002")),
+                },
+            ),
+            (
+                // 0.50.0 (#132): TaskKind::Combine, el reverso: los trozos se
+                // enumeran y se miden ANTES de escribir nada —es lo que permite
+                // rechazar un hueco sin haber creado el destino—, así que
+                // también lleva los dos totales.
+                "running_combine",
+                TaskProgress {
+                    task_id: TaskId::new(35),
+                    kind: TaskKind::Combine,
+                    state: TaskState::Running,
+                    bytes_done: 2_097_152,
+                    bytes_total: Some(3_145_728),
+                    entries_done: 2,
+                    entries_total: Some(3),
+                    current: Some(vpath("file:///g.iso")),
+                },
+            ),
+            (
                 // 0.39.0 (ADR 0048): TaskKind::Compare en el wire, y con él la
                 // SEMÁNTICA del progreso de una comparación — `entries_*`
                 // cuenta PAREJAS emitidas, y `bytes_*` es cero/`None` porque
@@ -822,6 +910,7 @@ fn golden_methods() {
     check_methods_session(&fixtures);
     check_methods_ui_session(&fixtures);
     check_methods_dir_size(&fixtures);
+    check_methods_archive_write(&fixtures);
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
@@ -875,7 +964,18 @@ fn golden_methods() {
     // `connection.close` (#140). El RESULT no tiene
     // fixture propia porque no tiene tipo propio — es el `FsTaskResult` de
     // siempre, ya congelado.
-    assert_eq!(fixtures.len(), 151, "[methods.json] fixtures sin caso Rust");
+    // 151 → 156 en 0.50.0 (#132): + archive_pack_params, archive_test_params,
+    // archive_test_result, file_split_params y file_combine_params. Los tres
+    // results de pack/split/combine no tienen fixture porque no tienen tipo
+    // propio — son el `FsTaskResult` de siempre, ya congelado. Desempaquetar no
+    // aparece en absoluto: es un `fs.copy`, y su forma lleva congelada desde
+    // 0.10.
+    // 156 → 158 al aplicar la revisión: + archive_test_report_params (el
+    // QUINTO método del bump, que no estaba congelado en ningún sitio) y
+    // archive_test_result_clean (la forma que de verdad devuelve un archivo
+    // sano: con todos los campos `serde(default)`, un resultado limpio es `{}`
+    // en el wire, y es el que ningún golden fijaba).
+    assert_eq!(fixtures.len(), 158, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
@@ -906,6 +1006,93 @@ fn check_methods_dir_size(fixtures: &BTreeMap<String, Value>) {
                 norte_proto::VPath::parse("file:///a").expect("vpath"),
                 norte_proto::VPath::parse("file:///b/c").expect("vpath"),
             ],
+        },
+    );
+}
+
+/// Familia de escritura de archivos (0.50.0, #132).
+///
+/// Lo que se congela: el FORMATO viaja como un token cerrado y explícito —no
+/// se deduce del nombre en el servidor, ver `ARCHIVE_PACK`—, la BASE viaja
+/// siempre porque sin ella los nombres guardados no están definidos, y el
+/// resultado del test dice QUÉ comprobó además de qué falló: «pasa» significa
+/// cosas distintas en un zip y en un tar plano, y sin `checked` un cliente
+/// pintaría «íntegro» sobre un formato que no tiene con qué sostenerlo.
+fn check_methods_archive_write(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        ArchiveFormat, ArchivePackParams, ArchiveTestFailure, ArchiveTestParams, ArchiveTestResult,
+        FileCombineParams, FileSplitParams,
+    };
+    check_one(
+        fixtures,
+        "archive_pack_params",
+        &ArchivePackParams {
+            sources: vec![vpath("file:///proj/src"), vpath("file:///proj/LEEME")],
+            dest: vpath("file:///proj.zip"),
+            format: ArchiveFormat::TarGz,
+            level: Some(9),
+            base: vpath("file:///proj"),
+        },
+    );
+    check_one(
+        fixtures,
+        "archive_test_params",
+        &ArchiveTestParams {
+            path: vpath("file:///a.zip"),
+        },
+    );
+    check_one(
+        fixtures,
+        "archive_test_result",
+        &ArchiveTestResult {
+            entries: 3,
+            failed: vec![ArchiveTestFailure {
+                // La ruta ENTERA en forma wire: es la que señala CUÁL de las
+                // dos `x.txt` de un archivo está corrupta, y la única que
+                // conserva los bytes de un nombre que no es UTF-8.
+                path: "zip+file:///a.zip/!/roto.txt".to_owned(),
+                name: "roto.txt".to_owned(),
+                reason: "crc".to_owned(),
+            }],
+            truncated: false,
+            checked: vec!["crc".to_owned()],
+        },
+    );
+    // Un archivo SANO, que es la respuesta corriente: sin fallos y diciendo
+    // qué comprobó. Los tres tokens de `checked` son vocabulario del wire y
+    // este golden es lo único que los congela.
+    check_one(
+        fixtures,
+        "archive_test_result_clean",
+        &ArchiveTestResult {
+            entries: 9,
+            failed: Vec::new(),
+            truncated: false,
+            checked: vec!["gzip_crc".to_owned()],
+        },
+    );
+    check_one(
+        fixtures,
+        "archive_test_report_params",
+        &norte_proto::methods::ArchiveTestReportParams {
+            task_id: norte_proto::TaskId::new(7),
+        },
+    );
+    check_one(
+        fixtures,
+        "file_split_params",
+        &FileSplitParams {
+            path: vpath("file:///g.iso"),
+            part_bytes: 1_048_576,
+            dest_dir: vpath("file:///trozos"),
+        },
+    );
+    check_one(
+        fixtures,
+        "file_combine_params",
+        &FileCombineParams {
+            first: vpath("file:///g.iso.001"),
+            dest: vpath("file:///g.iso"),
         },
     );
 }
@@ -3155,7 +3342,27 @@ fn method_names_frozen() {
     // MINOR.
     assert_eq!(methods::FS_DIR_SIZE, "fs.dir_size");
     assert_eq!(methods::CONNECTION_CLOSE, "connection.close");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.49.0");
+    // 0.50.0: escribir archivos (#132). Cuatro métodos y cuatro kinds nuevos,
+    // aditivos por la misma razón que los de arriba. Ninguno escribe DENTRO de
+    // un contenedor —el provider de archivos sigue `READ_ONLY`, ADR 0018—: los
+    // cuatro fabrican ficheros nuevos. Desempaquetar no aparece porque no
+    // necesita método: es un `fs.copy` desde el interior, que ya existía.
+    // MINOR.
+    assert_eq!(methods::ARCHIVE_PACK, "archive.pack");
+    assert_eq!(methods::ARCHIVE_TEST, "archive.test");
+    assert_eq!(methods::FILE_SPLIT, "file.split");
+    assert_eq!(methods::FILE_COMBINE, "file.combine");
+    // El QUINTO: sin esta línea, renombrar `archive.test_report` pasaba la
+    // suite entera. Es el método por el que se recoge qué entrada está
+    // corrupta, así que su nombre es contrato igual que los otros cuatro.
+    assert_eq!(methods::ARCHIVE_TEST_REPORT, "archive.test_report");
+    // Los topes que un cliente puede enseñar ANTES de mandar nada: 999 trozos
+    // es la convención `.001`, y descubrirlo en el trozo 1000 dejaría un
+    // conjunto que nadie puede volver a juntar.
+    assert_eq!(methods::FILE_SPLIT_MAX_PARTS, 999);
+    assert_eq!(methods::FILE_SPLIT_MIN_BYTES, 4096);
+    assert_eq!(methods::ARCHIVE_TEST_MAX_FAILURES, 256);
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.50.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

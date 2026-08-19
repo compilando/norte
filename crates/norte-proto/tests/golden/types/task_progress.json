@@ -14,7 +14,9 @@
   "running_mid_copy": {
     "task_id": 7,
     "kind": "copy",
-    "state": { "kind": "running" },
+    "state": {
+      "kind": "running"
+    },
     "bytes_done": 1024,
     "bytes_total": 4096,
     "entries_done": 1,
@@ -72,7 +74,9 @@
   "pending_unknown_totals": {
     "task_id": 1,
     "kind": "move",
-    "state": { "kind": "pending" },
+    "state": {
+      "kind": "pending"
+    },
     "bytes_done": 0,
     "bytes_total": null,
     "entries_done": 0,
@@ -82,7 +86,9 @@
   "terminal_cancelled": {
     "task_id": 3,
     "kind": "delete",
-    "state": { "kind": "cancelled" },
+    "state": {
+      "kind": "cancelled"
+    },
     "bytes_done": 512,
     "bytes_total": 4096,
     "entries_done": 0,
@@ -92,11 +98,73 @@
   "running_rename_batch": {
     "task_id": 13,
     "kind": "rename_batch",
-    "state": { "kind": "running" },
+    "state": {
+      "kind": "running"
+    },
     "bytes_done": 0,
     "bytes_total": null,
     "entries_done": 2,
     "entries_total": 3,
     "current": "file:///home/user/fotos/informe%FF%FE.dat"
+  },
+  "running_dir_size": {
+    "task_id": 31,
+    "kind": "dir_size",
+    "state": {
+      "kind": "running"
+    },
+    "bytes_done": 4096,
+    "bytes_total": null,
+    "entries_done": 12,
+    "entries_total": null,
+    "current": "file:///home/user/proj/src"
+  },
+  "running_pack": {
+    "task_id": 32,
+    "kind": "pack",
+    "state": {
+      "kind": "running"
+    },
+    "bytes_done": 2048,
+    "bytes_total": 8192,
+    "entries_done": 2,
+    "entries_total": 5,
+    "current": "file:///proj/src/main.rs"
+  },
+  "running_test_archive": {
+    "task_id": 33,
+    "kind": "test_archive",
+    "state": {
+      "kind": "running"
+    },
+    "bytes_done": 1024,
+    "bytes_total": null,
+    "entries_done": 4,
+    "entries_total": 9,
+    "current": "file:///a.zip"
+  },
+  "running_split": {
+    "task_id": 34,
+    "kind": "split",
+    "state": {
+      "kind": "running"
+    },
+    "bytes_done": 1048576,
+    "bytes_total": 3145728,
+    "entries_done": 1,
+    "entries_total": 3,
+    "current": "file:///trozos/g.iso.002"
+  },
+  "running_combine": {
+    "task_id": 35,
+    "kind": "combine",
+    "state": {
+      "kind": "running"
+    },
+    "bytes_done": 2097152,
+    "bytes_total": 3145728,
+    "entries_done": 2,
+    "entries_total": 3,
+    "current": "file:///g.iso"
   }
 }

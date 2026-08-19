@@ -1155,6 +1155,115 @@ impl Backend {
         }
     }
 
+    /// Fabrica un archivo (`archive.pack`, 0.50.0, #132).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidPath`] sin fuentes, y lo que devuelva el core. Un
+    /// daemon N-1 sin el método contesta `METHOD_NOT_FOUND` →
+    /// [`Error::Unsupported`].
+    pub async fn pack(
+        &self,
+        params: norte_proto::methods::ArchivePackParams,
+    ) -> Result<TaskRef, Error> {
+        if params.sources.is_empty() {
+            return Err(Error::InvalidPath);
+        }
+        match self {
+            Self::Embedded(engine) => {
+                let handle = engine.pack_as(params, crate::journal::Actor::User).await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.pack(params).await,
+        }
+    }
+
+    /// Comprueba un archivo (`archive.test`, 0.50.0, #132).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] si el nombre no es de un formato conocido, y lo
+    /// que devuelva el core.
+    pub async fn test_archive(
+        &self,
+        params: norte_proto::methods::ArchiveTestParams,
+    ) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let (handle, _) = engine
+                    .test_archive_as(params, crate::journal::Actor::User)
+                    .await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.test_archive(params).await,
+        }
+    }
+
+    /// El informe de un `archive.test` ya lanzado (0.50.0, #132).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] si ese id no fue un test de esta instancia, si el
+    /// anillo ya lo desalojó o si es de otro actor — las tres con la misma
+    /// respuesta, que es lo que hace el daemon.
+    pub async fn archive_test_report(
+        &self,
+        task_id: norte_proto::TaskId,
+    ) -> Result<norte_proto::methods::ArchiveTestResult, Error> {
+        match self {
+            Self::Embedded(engine) => engine
+                .archive_test_report(task_id)
+                .map(|(_, r)| r)
+                .ok_or(Error::NotFound),
+            #[cfg(unix)]
+            Self::Remote(r) => r.archive_test_report(task_id).await,
+        }
+    }
+
+    /// Parte un fichero en trozos (`file.split`, 0.50.0, #132).
+    ///
+    /// # Errors
+    ///
+    /// Lo que devuelva el core: trozo demasiado pequeño, demasiados trozos, o
+    /// un fallo de I/O.
+    pub async fn split_file(
+        &self,
+        params: norte_proto::methods::FileSplitParams,
+    ) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let handle = engine.split_as(params, crate::journal::Actor::User).await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.split_file(params).await,
+        }
+    }
+
+    /// Junta los trozos de un split (`file.combine`, 0.50.0, #132).
+    ///
+    /// # Errors
+    ///
+    /// Lo que devuelva el core: un hueco en la numeración, un trozo intermedio
+    /// corto, o un fallo de I/O.
+    pub async fn combine_files(
+        &self,
+        params: norte_proto::methods::FileCombineParams,
+    ) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let handle = engine
+                    .combine_as(params, crate::journal::Actor::User)
+                    .await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.combine_files(params).await,
+        }
+    }
+
     /// Comparación de dos árboles (`fs.compare`, 0.39.0, ADR 0048): devuelve
     /// la Task ([`TaskRef`], cancelable) y el STREAM de lotes de filas
     /// ([`norte_proto::methods::CompareRowsBatch`]).
@@ -3571,6 +3680,63 @@ pub mod remote {
                 Err(_) => return Err(Error::ProviderUnavailable { retryable: true }),
             };
             Ok(self.own_task(result.task_id, TaskKind::DirSize))
+        }
+
+        /// `archive.pack` (0.50.0, #132).
+        pub(super) async fn pack(
+            &self,
+            params: methods::ArchivePackParams,
+        ) -> Result<TaskRef, Error> {
+            let result: FsTaskResult = self
+                .call_maybe_unknown(methods::ARCHIVE_PACK, &params)
+                .await?;
+            Ok(self.own_task(result.task_id, TaskKind::Pack))
+        }
+
+        /// `archive.test` (0.50.0, #132).
+        pub(super) async fn test_archive(
+            &self,
+            params: methods::ArchiveTestParams,
+        ) -> Result<TaskRef, Error> {
+            let result: FsTaskResult = self
+                .call_maybe_unknown(methods::ARCHIVE_TEST, &params)
+                .await?;
+            Ok(self.own_task(result.task_id, TaskKind::TestArchive))
+        }
+
+        /// `archive.test_report` (0.50.0, #132): el informe, cuando la Task ya
+        /// ha terminado (o antes, parcial).
+        pub(super) async fn archive_test_report(
+            &self,
+            task_id: norte_proto::TaskId,
+        ) -> Result<methods::ArchiveTestResult, Error> {
+            self.call_maybe_unknown(
+                methods::ARCHIVE_TEST_REPORT,
+                &methods::ArchiveTestReportParams { task_id },
+            )
+            .await
+        }
+
+        /// `file.split` (0.50.0, #132).
+        pub(super) async fn split_file(
+            &self,
+            params: methods::FileSplitParams,
+        ) -> Result<TaskRef, Error> {
+            let result: FsTaskResult = self
+                .call_maybe_unknown(methods::FILE_SPLIT, &params)
+                .await?;
+            Ok(self.own_task(result.task_id, TaskKind::Split))
+        }
+
+        /// `file.combine` (0.50.0, #132).
+        pub(super) async fn combine_files(
+            &self,
+            params: methods::FileCombineParams,
+        ) -> Result<TaskRef, Error> {
+            let result: FsTaskResult = self
+                .call_maybe_unknown(methods::FILE_COMBINE, &params)
+                .await?;
+            Ok(self.own_task(result.task_id, TaskKind::Combine))
         }
 
         /// `sync.plan` (0.40.0, ADR 0049): lanza la Task y devuelve el `rx` por

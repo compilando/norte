@@ -22,6 +22,7 @@ pub mod journal;
 pub mod logging;
 mod observer;
 mod ops;
+mod pack;
 pub mod plugin_provider;
 pub mod plugins;
 pub mod policy;

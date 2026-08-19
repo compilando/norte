@@ -986,6 +986,118 @@ async fn agente_sin_scope_no_puede_index_build_ni_query() {
 
 /// M3-3b Task 3: round-trip de scope. Un agente pide (`request_scope`) — sin
 /// concesión su copia dentro sigue denegada —; un humano concede
+/// #132, y lo encontró `protocol-guardian`: **`archive.pack` no puede ser un
+/// lavadero.**
+///
+/// El gate de lectura mira la RAÍZ de la petición y nada más, así que un
+/// agente con un scope legítimo sobre un árbol grande podía empaquetarlo
+/// entero —directorio de estado del daemon incluido: `journal.db`,
+/// `secrets.age`, `connections.toml`— y luego leerse el archivo entrada por
+/// entrada, sobre un fichero que está en su propio scope. Un `fs.read` de
+/// cualquiera de esos ficheros se deniega; el empaquetado los blanqueaba
+/// todos.
+///
+/// Lo que cierra el agujero son las MISMAS exclusiones que ya usan `fs.search`
+/// y `fs.compare` (`policy::walk_exclusions`), aplicadas al recorrido.
+#[tokio::test]
+async fn un_agente_no_empaqueta_lo_que_no_puede_recorrer() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///proj/visible.txt", b"esto se ve").await;
+
+    let agent = connected_agent(&d, "s1").await;
+    let req: RequestScopeResult = agent
+        .call(
+            methods::POLICY_REQUEST_SCOPE,
+            &RequestScopeParams {
+                session: "s1".into(),
+                roots: vec![vp("mem:///proj")],
+                ops: vec!["copy".into()],
+                ttl_ms: 60_000,
+            },
+        )
+        .await
+        .expect("request_scope");
+    let human = connected_client(&d).await;
+    let _grant: GrantScopeResult = human
+        .call(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams {
+                request_id: req.request_id,
+            },
+        )
+        .await
+        .expect("grant_scope");
+
+    // Dentro del scope, empaquetar procede: el gate NO es un «no» a todo.
+    let ok: FsTaskResult = agent
+        .call(
+            methods::ARCHIVE_PACK,
+            &methods::ArchivePackParams {
+                sources: vec![vp("mem:///proj/visible.txt")],
+                dest: vp("mem:///proj/out.zip"),
+                format: methods::ArchiveFormat::Zip,
+                level: None,
+                base: vp("mem:///proj"),
+            },
+        )
+        .await
+        .expect("dentro del scope se empaqueta");
+    assert!(ok.task_id.get() > 0);
+
+    // Y FUERA no: una fuente sin scope se deniega antes de crear Task alguna.
+    let err = agent
+        .call::<_, FsTaskResult>(
+            methods::ARCHIVE_PACK,
+            &methods::ArchivePackParams {
+                sources: vec![vp("mem:///otro")],
+                dest: vp("mem:///proj/fuera.zip"),
+                format: methods::ArchiveFormat::Zip,
+                level: None,
+                base: vp("mem:///"),
+            },
+        )
+        .await
+        .expect_err("fuera del scope no");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { .. })),
+            "PolicyDenied, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// El informe de `archive.test` es de quien lanzó la Task: un id ajeno se
+/// contesta igual que uno que no existió nunca, que es lo que hacen sus dos
+/// gemelos (`fs.rename_batch_report`, `sync.report`).
+#[tokio::test]
+async fn el_informe_de_un_test_de_archivo_no_es_de_cualquiera() {
+    let d = spawn_daemon(None).await;
+    let humano = connected_client(&d).await;
+    let err = humano
+        .call::<_, methods::ArchiveTestResult>(
+            methods::ARCHIVE_TEST_REPORT,
+            &methods::ArchiveTestReportParams {
+                task_id: norte_proto::TaskId::new(4242),
+            },
+        )
+        .await
+        .expect_err("ese id nunca fue un test");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(
+                rpc.data,
+                Some(norte_proto::Error::NotFound),
+                "{:?}",
+                rpc.data
+            );
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
 /// (`grant_scope`) y entonces la copia DENTRO del scope procede, pero FUERA
 /// sigue denegada. Prueba que el registro es el MISMO que consulta el gate.
 #[tokio::test]
