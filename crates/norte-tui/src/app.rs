@@ -993,6 +993,15 @@ pub struct SessionUi {
     cursors: std::collections::HashMap<u32, u64>,
 }
 
+/// Filas que salta `cursor.page-up/down` (fijo hasta que el alto real del
+/// pane viaje con el comando).
+///
+/// Vive aquí y no en el binario porque lo pagina TODO lo que tiene lista: los
+/// panes, la ayuda, los ajustes y el editor de atajos — y ese último salió del
+/// binario antes que el resto, que es cuando una constante compartida deja de
+/// poder vivir en el que se va.
+pub const PAGE: usize = 10;
+
 /// Estado completo del TUI: los paneles y el foco.
 pub struct App {
     /// Los dos paneles (izquierda, derecha), guardados por hueco.

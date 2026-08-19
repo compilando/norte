@@ -23,6 +23,7 @@ pub mod preview;
 pub mod processes;
 pub mod session_push;
 pub mod settings;
+pub mod shortcuts_editor;
 pub mod tasks;
 pub mod theme;
 pub mod tree;
