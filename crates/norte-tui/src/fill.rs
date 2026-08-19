@@ -174,3 +174,104 @@ pub fn spawn_fill(mut stream: EntryStream) -> Fill {
     });
     Fill { rx }
 }
+
+#[cfg(test)]
+mod search_fill_tests {
+    use super::{Fill, FillMsg, apply_fill_msg};
+    use crate::app::{App, Pane};
+    use norte_proto::{Entry, EntryKind, Segment, VPath};
+
+    fn vp(w: &str) -> VPath {
+        VPath::parse(w).expect("wire de test")
+    }
+
+    fn file(dir: &VPath, name: &str) -> Entry {
+        Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: dir.join(Segment::new(name.as_bytes().to_vec()).unwrap()),
+            kind: EntryKind::File,
+            size: Some(1),
+            mtime_ms: None,
+        }
+    }
+
+    /// review MAJOR T6: un dir grande PAGINÁNDOSE (fill vivo) + `Alt+F7` sobre
+    /// ese pane → `begin_search` lo marca virtual y lo vacía; un lote POSTERIOR
+    /// del drenador del listado REAL jamás debe entrar en el pane virtual (se
+    /// colaría como hit — el propio root de la búsqueda entre los resultados).
+    #[test]
+    fn fill_no_contamina_el_pane_virtual() {
+        let root = vp("file:///d");
+        let mut app = App::new(
+            Pane::new(root.clone(), vec![]),
+            Pane::new(root.clone(), vec![]),
+        );
+        // Relleno paginado vivo del pane 0 (dir aún cargándose).
+        let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
+        let mut fill: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        fill.insert(crate::panel::SLOT_LEFT, Fill { rx });
+        // Alt+F7 sobre el pane 0: pasa a virtual y se vacía.
+        app.panes[0].begin_search(root.clone());
+        // Llega un lote del drenador del listado REAL.
+        apply_fill_msg(
+            &mut app,
+            &mut fill,
+            crate::panel::SLOT_LEFT,
+            Some(FillMsg::Batch(vec![
+                file(&root, "real1"),
+                file(&root, "real2"),
+            ])),
+        );
+        assert!(
+            app.panes[0].entries().is_empty(),
+            "el listado real NO entra en el pane virtual"
+        );
+        assert!(
+            fill.get(crate::panel::SLOT_LEFT).is_none(),
+            "el fill obsoleto se suelta"
+        );
+        assert!(
+            app.panes[0].virtual_search,
+            "el pane sigue en modo búsqueda"
+        );
+    }
+
+    /// Un lote que llega para un hueco que YA NO EXISTE se tira.
+    ///
+    /// Es el fallo que paga el refactor de P6. Con el relleno archivado por
+    /// POSICIÓN, el lote de un panel cerrado se aplicaba a quien ocupara esa
+    /// posición al llegar: el lector veía crecer un listado con las entradas
+    /// de otro directorio, sin que nada lo dijera y sin que ninguna suite
+    /// verde lo viera, porque el listado seguía llegando — solo que al sitio
+    /// que no era.
+    #[test]
+    fn un_lote_para_un_hueco_cerrado_se_tira() {
+        let root = vp("mem:///d");
+        let mut app = App::new(
+            Pane::new(root.clone(), vec![file(&root, "a")]),
+            Pane::new(root.clone(), vec![]),
+        );
+        let antes = app.panes[0].entries().len();
+        let fantasma = norte_frontend::layout::SlotId(9_999);
+        let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
+        let mut fill: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
+        fill.insert(fantasma, Fill { rx });
+
+        apply_fill_msg(
+            &mut app,
+            &mut fill,
+            fantasma,
+            Some(FillMsg::Batch(vec![file(&root, "de-otro-sitio")])),
+        );
+
+        assert_eq!(
+            app.panes[0].entries().len(),
+            antes,
+            "el listado visible no recibe entradas de un panel cerrado"
+        );
+        assert!(
+            fill.get(fantasma).is_none(),
+            "y el hueco fantasma se suelta en vez de quedarse drenando"
+        );
+    }
+}
