@@ -26,6 +26,7 @@ use norte_tui::app::{
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::config_reload::reload_config;
+use norte_tui::event_loop::RunError;
 use norte_tui::fill::{Fill, apply_fill_msg};
 // `FillMsg` ya no se nombra en producción —quien lo construía y quien lo
 // consumía se fueron con `fill.rs`—, pero cinco `mod` de test lo fabrican.
@@ -786,7 +787,7 @@ async fn run(
     mut journal_warnings: Option<
         tokio::sync::mpsc::UnboundedReceiver<norte_core::embedded::JournalStatus>,
     >,
-) -> Result<()> {
+) -> Result<(), RunError> {
     let mut events = EventStream::new();
     // Tick del panel de tasks: copia snapshots del watch (jamás bloquea).
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
@@ -1046,7 +1047,7 @@ async fn run(
             // maquetar, para que la página recién llegada se pinte en ESTE
             // frame y no en el siguiente.
             fetch_plugin_page(backend, app).await;
-            let size = terminal.size()?;
+            let size = terminal.size().map_err(RunError::Terminal)?;
             let (ancho, alto) = ui::help_body_size(
                 ratatui::layout::Rect::new(0, 0, size.width, size.height),
                 lang,
@@ -1060,13 +1061,15 @@ async fn run(
         // ventana pintada, o sea desaparecer de la pantalla justo al llegar
         // al borde.
         {
-            let s = terminal.size()?;
+            let s = terminal.size().map_err(RunError::Terminal)?;
             ui::before_frame(app, ratatui::layout::Rect::new(0, 0, s.width, s.height));
         }
         // Exención puntual de la regla 2: el draw escribe la terminal de
         // control síncronamente (patrón async oficial de ratatui; acotado,
         // runtime multi-thread).
-        let pintado = terminal.draw(|f| ui::draw(f, app))?;
+        let pintado = terminal
+            .draw(|f| ui::draw(f, app))
+            .map_err(RunError::Terminal)?;
         if app.quit {
             // La última foto, y esperarla. El tick de un segundo se pierde lo
             // que pasó dentro de ese segundo, y salir es cuando más duele:
@@ -1816,7 +1819,7 @@ async fn run(
                         // guarda la última foto de la sesión. Saliendo aquí con
                         // un `return` se perdía.
                         let Some(event) = maybe else { app.quit = true; continue; };
-                        let event = event.context("evento de terminal")?;
+                        let event = event.map_err(RunError::Event)?;
                         // Ratón (`[ui] mouse`): solo llega si la captura está
                         // pedida — sin ella el emulador no reporta nada y este
                         // brazo no corre. La semántica del gesto (marcar, barrer,
