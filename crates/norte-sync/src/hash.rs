@@ -1026,6 +1026,7 @@ mod tests {
                 kind: EntryKind::File,
                 size: Some(99),
                 mtime_ms: Some(7),
+                entries: None,
             }),
         });
         let mut otro = hasher(&opts_update());
@@ -1035,6 +1036,7 @@ mod tests {
                 kind: EntryKind::Dir,
                 size: None,
                 mtime_ms: None,
+                entries: None,
             }),
         });
         let (sin, con, otro) = (sin.finish(), con.finish(), otro.finish());

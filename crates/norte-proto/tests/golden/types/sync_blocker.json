@@ -27,5 +27,10 @@
     "kind": "type_mismatch_dir",
     "rel": "informe%FF.d",
     "side": "left"
+  },
+  "illegal_dest_name": {
+    "kind": "illegal_dest_name",
+    "rel": "CON",
+    "side": "right"
   }
 }

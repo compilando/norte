@@ -119,6 +119,29 @@ pub trait Provider: Send + Sync {
         Ok(self.capabilities())
     }
 
+    /// ¿Puede EXISTIR un nombre con estos bytes en este backend?
+    ///
+    /// Pura y sin I/O: son las reglas del sistema de ficheros, no el estado
+    /// del árbol. El default dice que sí a todo, que es lo correcto para
+    /// cualquier backend que acepte cualquier secuencia de bytes sin `/` ni
+    /// NUL — que es el caso de POSIX y el de la mayoría de los remotos.
+    ///
+    /// Existe para el DESTINO de una copia o de una sincronización (#163):
+    /// nada comprobaba que un nombre legal bajo la raíz de origen lo fuera
+    /// bajo la de destino, así que `CON`, `f:ads` o un punto final —todos
+    /// legales en ext4— se descubrían al ejecutar. El peor de los cuatro es
+    /// `f:ads`: en NTFS **funciona** y escribe un flujo alternativo, con lo
+    /// que la copia dice que fue bien y el fichero no está.
+    ///
+    /// Quien lo implementa es quien conoce sus reglas, y por eso es del
+    /// provider y no de una tabla en el core: un `sftp` a un servidor Windows
+    /// y un `file://` en Linux no tienen las mismas, y el core no sabe cuál
+    /// hay al otro lado.
+    fn name_is_legal(&self, name: &[u8]) -> bool {
+        let _ = name;
+        true
+    }
+
     /// Abre `root` como RAÍZ CONFINADA: todo lo que se haga con el handle
     /// direcciona segmentos RELATIVOS a ella y no puede salirse, sea cual sea
     /// la forma del árbol por debajo — un componente INTERMEDIO que sea un

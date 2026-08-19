@@ -135,6 +135,45 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A comparison asks each directory, not just the two roots.** Under one
+  `file://` there are mounts — an exFAT stick, an ext4 subtree in `+F`, a
+  read-only bind — and the walk applied the roots' answer to the whole tree, so
+  case collisions inside a mounted subdirectory were lost in silence. It asks
+  per directory now, which costs nothing for backends whose locations are all
+  alike (that is the trait default, no I/O) and is cached by directory identity
+  in the one that really probes. The same question inside a copy —"is this
+  move a rename onto itself?"— had the same defect and now asks about the
+  destination LOCATION, folding with the shared key instead of a `to_lowercase`
+  that is no filesystem's rule (#215).
+
+- **A tree deletion checks how much is inside it, not just the folder.** A
+  directory's `stat` only moves when its DIRECT children change, so a subtree
+  that gained a hundred files two levels down between approving a plan and
+  applying it revalidated clean and was deleted whole — the step with the
+  widest blast radius had the weakest check. The witness now carries the count
+  of its first level and the executor counts again before destroying. It still
+  cannot see a change in a grandchild; that is written where the check is
+  rather than assumed away (#176).
+
+- **A name the destination cannot have blocks the plan instead of surfacing
+  mid-copy.** Nothing checked that a name legal under the source root was legal
+  under the destination's, so `CON`, `f:ads` or a trailing dot — all legal on
+  ext4 — were discovered while writing. `f:ads` is the worst of them: on NTFS
+  it SUCCEEDS, writing an alternate data stream, so the copy reports fine and
+  the file is not there. The destination's provider decides, because it is the
+  one that knows its rules, and the answer arrives as a plan blocker where a
+  human can act on it. On the wire that is protocol **0.52.0** and **ADR
+  0064**, which records the three decisions together (#163).
+
+- **An undo that cannot happen now says which file is where.** An `Overwrite`
+  writes two journal rows, and a `created` that failed after a `trashed` had
+  succeeded left a batch whose undo blocks — it would have to delete a file it
+  has no row for before restoring the buried one. Compensating means two more
+  mutations down the path where the journal has already proven unreliable, so
+  it is not compensated; it is reported, with the buried path and its place in
+  the trash inside the error, which is the difference between "it failed" and
+  "your file is here" (#206).
+
 - **A link planted after indexing cannot feed a denied file to the embedder.**
   `index.embed` classified a candidate from the row `index.build` left behind
   and read it later, so anyone who could write in the indexed tree could

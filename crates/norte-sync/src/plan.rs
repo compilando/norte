@@ -107,17 +107,41 @@ pub struct DestWitness {
     /// La fecha que tenía, en ms; `None` = el provider no la dijo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtime_ms: Option<i64>,
+    /// Cuántas entradas tenía su PRIMER NIVEL, para un directorio (#176).
+    ///
+    /// `None` = no se contó: no es un directorio, o tenía más de las que se
+    /// cuentan sin que contar sea el trabajo. Un `None` **no** relaja nada por
+    /// su cuenta — la revalidación solo compara lo que las dos fotos traen,
+    /// igual que con el tamaño y la fecha.
+    ///
+    /// Existe porque el `stat` de un directorio solo se mueve cuando cambian
+    /// sus hijos DIRECTOS, así que un `DeleteTree` revalidaba limpio con un
+    /// subárbol que había ganado cien ficheros dos niveles más abajo. El
+    /// recuento no cierra ese caso —sigue sin ver un nieto— y sí caza el
+    /// corriente: alguien metió algo ahí mientras el humano decidía. Es la
+    /// comprobación más floja del paso con más radio de acción, y ahora es
+    /// menos floja.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entries: Option<u64>,
 }
 
 impl DestWitness {
-    /// La foto de `entry`.
+    /// La foto de `entry`, sin recuento de hijos: quien pueda contarlos —el
+    /// que tiene provider— lo añade con [`Self::with_entries`].
     #[must_use]
     pub fn of(entry: &Entry) -> Self {
         Self {
             kind: entry.kind,
             size: entry.size,
             mtime_ms: entry.mtime_ms,
+            entries: None,
         }
+    }
+
+    /// La misma foto, con el recuento del primer nivel (#176).
+    #[must_use]
+    pub fn with_entries(self, entries: Option<u64>) -> Self {
+        Self { entries, ..self }
     }
 }
 
