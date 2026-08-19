@@ -26,6 +26,7 @@ use crate::fill::{Fill, release_refreshed_fill, spawn_fill};
 use crate::jobs::SearchRun;
 use crate::nav;
 use crate::probes::{DecorateFetch, Probed};
+use crate::trail::{rewind_for, rewind_trail};
 
 /// Entradas de la PRIMERA página que un cd pinta antes de rellenar en
 /// background (ADR 0017): con esto el primer render no espera al listado
@@ -466,5 +467,121 @@ pub async fn cd_in(
                 }
             }
         }
+    }
+}
+
+/// Confiar en la host key y REINTENTAR la navegación que el TOFU interrumpió
+/// (#45). `Some(cd)` = el desenlace debe volver YA al caller (la pendiente
+/// siguiente ya se gestionó aquí); `None` = confiar falló y el mensaje quedó
+/// en la barra — el caller sigue por su camino común.
+///
+/// Vive fuera de [`crate::mutations::on_dialog_key`] porque el brazo entero (destructurar el
+/// modal + el `trust_host_key` + el reintento) no cabe en el presupuesto de
+/// líneas de esa función.
+pub async fn trust_host_retry(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    modal: Modal,
+) -> Option<Cd> {
+    let Modal::TrustHostKey {
+        host,
+        port,
+        algo,
+        fingerprint,
+        dir,
+        pane,
+        trail,
+    } = modal
+    else {
+        // El caller solo llama con este modal (brazo `Modal::TrustHostKey`).
+        return None;
+    };
+    match backend
+        .trust_host_key(&host, port, &algo, &fingerprint)
+        .await
+    {
+        Ok(()) => {
+            // El engine re-verifica el fingerprint contra la clave que el
+            // host presenta AHORA (anti-TOCTOU, ADR 0015 D); si aún falla,
+            // el retry lo mostrará.
+            //
+            // `cd_in` (no `cd`): se reanuda la navegación que el TOFU
+            // interrumpió — su pane y su rastro —, que no tiene por qué ser
+            // la del foco actual.
+            let outcome = cd_in(app, backend, events, pane, dir.clone(), trail).await;
+            // Y si era un paso del rastro, ESTE es el sitio donde se termina:
+            // `walk_trail` lo dejó dado porque contaba con este reintento.
+            settle_suspended_trail(app, pane, &dir, trail, &outcome);
+            // Solo abrir la siguiente pendiente si el retry NO dejó un modal
+            // (otro HostKeyUnknown): jamás pisar.
+            if app.modal.is_none() {
+                app.open_next_pending();
+            }
+            Some(outcome)
+        }
+        Err(e) => {
+            app.message = Some(error_message(&e));
+            // Confiar FALLÓ: no hay reintento, así que la navegación que el
+            // TOFU suspendió muere aquí — para el rastro es idéntica a un cd
+            // abandonado, y el paso tiene que volver.
+            settle_suspended_trail(app, pane, &dir, trail, &Cd::Cancelled);
+            None
+        }
+    }
+}
+
+/// Enter sobre un hit del modal semántico (M4-IA-2): cd al PADRE del hit y
+/// deja el cursor sobre él por path (molde [`crate::jobs::on_search_enter`]; si cayó en
+/// una página aún no drenada, el cursor se queda arriba, v1). Devuelve el
+/// `Cd` para que el caller lo aplique (`apply_cd` + decorate);
+/// `Cd::Cancelled` = nada que navegar (hits vacíos defensivo o hit raíz sin
+/// padre).
+pub async fn semantic_hit_cd(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    hits: &[norte_proto::methods::SemanticHit],
+    cursor: usize,
+) -> Cd {
+    let Some(hit) = hits.get(cursor).map(|h| h.path.clone()) else {
+        return Cd::Cancelled;
+    };
+    let Some(parent) = hit.parent() else {
+        return Cd::Cancelled;
+    };
+    let pane = app.focus();
+    let outcome = cd(app, backend, events, parent).await;
+    if let Some(i) = app.panes[pane].entries().iter().position(|e| e.path == hit) {
+        app.panes[pane].set_cursor(i);
+    }
+    outcome
+}
+
+/// Settles the trail of a navigation the TOFU prompt SUSPENDED, once that
+/// prompt has been answered.
+///
+/// [`crate::trail::walk_trail`] deliberately leaves a `Cd::Suspended` step taken: the retry
+/// was going to finish it. But the retry is not guaranteed to happen — the
+/// reader can deny the key, trusting it can fail, and the retry itself can
+/// fail or be abandoned — and when it does not, the step is left standing for
+/// a move that never occurred. That is the same lie [`rewind_for`] exists to
+/// stop, on the one path where the navigation OUTLIVES the function that
+/// started it, which is why nobody was there to undo it.
+///
+/// Runs the answer's outcome through the very same [`rewind_for`] the trail
+/// walker runs. `trail.step()` of `None` (a `Trail::Record` navigation: a
+/// plain cd that happened to meet an unknown host) means there is no step to
+/// rewind, so this is a no-op — and a second `Suspended` (another unknown
+/// key, or the same one asked again) is a no-op TOO: the modal is open again
+/// carrying the same trail, so the step is still going to be settled by
+/// whoever answers THAT one.
+///
+/// Rewinding here cannot double up with [`crate::trail::walk_trail`]: the walker saw
+/// `Suspended` and did nothing, so this is the FIRST and only rewind of that
+/// step.
+pub fn settle_suspended_trail(app: &mut App, pane: usize, dir: &VPath, trail: Trail, outcome: &Cd) {
+    if let Some(step) = trail.step() {
+        rewind_trail(app, pane, step, dir, rewind_for(outcome));
     }
 }
