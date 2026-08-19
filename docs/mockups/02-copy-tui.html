@@ -1,0 +1,98 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 02 copiar/mover · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">02</span><span class="sep">/</span>
+    <span>Copiar y mover · TUI</span><span class="sep">·</span>
+    <span class="keys">F5 copy · F6 move · Ctrl+K cancel</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">task 7f3a · journal: entry abierta</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">norte</span><span class="dim">  copiando 3 elementos → sftp://build@norte-ci/srv/artifacts/2026-08-14</span>
+        <span style="flex:1"></span><span class="dim">Ctrl+K cancela · deja .norte-partial</span>
+      </div>
+
+      <div class="modal-wrap">
+        <div class="panes" style="height:100%">
+          <div class="pane active">
+            <div class="pane-title"><span class="ph">▌</span>local:/home/oscar/media/2026<span style="flex:1"></span><span class="dim">28 items</span></div>
+            <div class="pane-head"><span style="flex:1">Name</span><span style="width:10ch;text-align:right">Size</span><span style="width:13ch;text-align:right">Modified</span></div>
+            <div class="pane-body">
+              <div class="e dim"><span class="n">..</span><span class="s">UP--DIR</span><span class="d"></span></div>
+              <div class="e dir"><span class="n">▸ campaña-otoño</span><span class="s">DIR</span><span class="d">08-14 11:02</span></div>
+              <div class="e mark"><span class="n">  DSC_2048.ARW</span><span class="s">42.1 MB</span><span class="d">08-14 10:58</span></div>
+              <div class="e mark"><span class="n">  DSC_2049.ARW</span><span class="s">41.7 MB</span><span class="d">08-14 10:58</span></div>
+              <div class="e cur mark"><span class="n">  DSC_2050.ARW</span><span class="s">43.0 MB</span><span class="d">08-14 10:59</span></div>
+              <div class="e"><span class="n">  DSC_2051.ARW</span><span class="s">40.9 MB</span><span class="d">08-14 10:59</span></div>
+              <div class="e"><span class="n">  informe-año.md</span><span class="s">14 KB</span><span class="d">08-09 08:12</span></div>
+            </div>
+            <div class="pane-foot"><span class="am">3 marcados · 126.8 MB</span><span style="flex:1"></span><span class="dim">libre 412 GB</span></div>
+          </div>
+          <div class="pane">
+            <div class="pane-title"><span class="dim">▌</span>sftp://build@norte-ci/…/2026-08-14<span style="flex:1"></span><span class="dim">2 items</span></div>
+            <div class="pane-head"><span style="flex:1">Name</span><span style="width:10ch;text-align:right">Size</span><span style="width:13ch;text-align:right">Modified</span></div>
+            <div class="pane-body">
+              <div class="e dim"><span class="n">..</span><span class="s">UP--DIR</span><span class="d"></span></div>
+              <div class="e"><span class="n">  DSC_2048.ARW</span><span class="s">42.1 MB</span><span class="d">08-14 11:06</span></div>
+              <div class="e dim"><span class="n">  .norte-partial-DSC_2049.ARW</span><span class="s">18.2 MB</span><span class="d">08-14 11:07</span></div>
+            </div>
+            <div class="pane-foot"><span class="dim">destino</span><span style="flex:1"></span><span class="cy">sftp · 4 flujos</span></div>
+          </div>
+        </div>
+
+        <!-- Progreso: por elemento y total, con la política de conflicto abierta. -->
+        <div class="modal" style="width:96ch">
+          <div class="mtitle">Copiar · task 7f3a · 2 de 3</div>
+          <div class="mrow"><span class="mu">Origen  </span><span>local:/home/oscar/media/2026/DSC_2049.ARW</span></div>
+          <div class="mrow"><span class="mu">Destino </span><span>sftp://build@norte-ci/srv/artifacts/2026-08-14/</span></div>
+          <div class="mrow"></div>
+          <div class="mrow"><span class="mu">Elemento </span><span class="bar">████████████████████<span class="rest">████████████████████</span></span><span class="mu">  44 %   18.2 / 41.7 MB</span></div>
+          <div class="mrow"><span class="mu">Total    </span><span class="bar">██████████████████████████<span class="rest">██████████████</span></span><span class="mu">  61 %   77.4 / 126.8 MB</span></div>
+          <div class="mrow"></div>
+          <div class="mrow"><span class="mu">Velocidad </span><span class="ph">31.4 MB/s</span><span class="mu">   ETA </span><span class="ph">00:01:34</span><span class="mu">   Verificación </span><span class="cy">blake3 al cerrar</span></div>
+          <div class="mrow"><span class="mu">Cancelar deja </span><span class="am">.norte-partial-DSC_2049.ARW</span><span class="mu">, nunca un fichero parcial sin marcar.</span></div>
+          <div class="mrow"></div>
+          <div class="mrow" style="border-top:1px solid var(--line);margin:0 -2ch;padding:0 2ch"></div>
+          <div class="mrow"><span class="am">⚠ Conflicto</span><span class="mu">  ya existe </span><span>DSC_2048.ARW</span><span class="mu">  ·  destino 42.1 MB 11:06  ·  origen 42.1 MB 10:58</span></div>
+          <div class="mrow">
+            <span class="btn primary">S̲obrescribir</span><span> </span>
+            <span class="btn">O̲mitir</span><span> </span>
+            <span class="btn">R̲enombrar</span><span> </span>
+            <span class="btn">Más n̲uevo</span><span> </span>
+            <span class="btn">T̲odos</span><span> </span>
+            <span class="btn danger">C̲ancelar</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="status">
+        <span class="mu">task 7f3a · running</span><span class="dim">journal entry 0x91ac abierta · fija por Task (pin_for_task)</span>
+        <span style="flex:1"></span><span class="dim">Ctrl+K cancela la tarea, no la sesión</span>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Menu</span></span>
+        <span class="k"><b>3</b><span>View</span></span>
+        <span class="k"><b>4</b><span>Open</span></span>
+        <span class="k"><b>5</b><span>Copy</span></span>
+        <span class="k"><b>6</b><span>Move</span></span>
+        <span class="k"><b>7</b><span>Mkdir</span></span>
+        <span class="k"><b>8</b><span>Delete</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Quit</span></span>
+      </div>
+    </div>
+  </div>
+</div>

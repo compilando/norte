@@ -1,0 +1,84 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 13 control de agente · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">13</span><span class="sep">/</span>
+    <span>Control de agente · TUI</span><span class="sep">·</span>
+    <span class="keys">el agente planea; el humano aprueba; el core ejecuta</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">mcp serve · 2 sesiones</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">Agentes</span><span class="dim">  ningún agente toca el disco: todo pasa por el core y el motor de políticas</span>
+        <span style="flex:1"></span><span class="dim">a permite · d deniega</span>
+      </div>
+
+      <div class="pane active" style="height:calc(9 * var(--cell-h));flex:0 0 auto">
+        <div class="pane-title"><span class="ph">▌</span>Sesiones MCP<span style="flex:1"></span><span class="dim">local · sin red</span></div>
+        <div class="pane-head"><span style="width:16ch">CLIENTE</span><span style="width:14ch">SESIÓN</span><span style="flex:1">ÁMBITO CONCEDIDO</span><span style="width:14ch;text-align:right">LLAMADAS</span></div>
+        <div class="pane-body">
+          <div class="e cur"><span style="width:16ch">claude-code</span><span style="width:14ch">s-4a17</span><span class="n">read ~/proyectos · write ~/proyectos/borradores</span><span style="width:14ch;text-align:right">128</span></div>
+          <div class="e"><span style="width:16ch">codex</span><span style="width:14ch">s-9b02</span><span class="n dim">read ~/media/2026 (sólo metadatos)</span><span style="width:14ch;text-align:right" class="dim">41</span></div>
+          <div class="e dim"><span style="width:16ch">plugin:git-cols</span><span style="width:14ch">wasm</span><span class="n">read del directorio visible · sin red · sin fs directo</span><span style="width:14ch;text-align:right">3 402</span></div>
+        </div>
+        <div class="pane-foot"><span class="dim">el ámbito se concede por sesión y caduca al cerrarla · nada se hereda entre sesiones</span></div>
+      </div>
+
+      <!-- La petición que espera decisión: el gate de políticas. -->
+      <div class="pane" style="height:calc(13 * var(--cell-h));flex:0 0 auto">
+        <div class="pane-title"><span class="am">▌</span>Permiso solicitado<span style="flex:1"></span><span class="am">claude-code · s-4a17 · esperando</span></div>
+        <div class="pane-body">
+          <div class="e"><span class="n"><span class="mu">Quiere    </span><span class="am">escribir</span> en <span>local:/home/oscar/proyectos/clientes/acme</span></span></div>
+          <div class="e"><span class="n"><span class="mu">Operación </span>renombrar 14 ficheros (plan c81f, ya previsualizado)</span></div>
+          <div class="e"><span class="n"><span class="mu">Motivo    </span><span class="dim">«normalizar los nombres de factura del Q2»</span></span></div>
+          <div class="e"><span class="n"><span class="mu">Ámbito    </span>hoy tiene <span class="ph">read</span> aquí, y <span class="ph">write</span> sólo en <span class="dim">…/borradores</span></span></div>
+          <div class="e dim"><span class="n"></span></div>
+          <div class="e"><span class="n"><span class="mu">Efecto    </span>14 renombres reversibles · 0 borrados · 0 sobrescrituras</span></div>
+          <div class="e"><span class="n"><span class="mu">Journal   </span>entrada nueva con el id de sesión del agente y el hash del plan</span></div>
+          <div class="e dim"><span class="n"></span></div>
+          <div class="e"><span class="n"><span class="btn primary">a  permitir una vez</span> <span class="btn">s  toda la sesión</span> <span class="btn">e  ampliar ámbito…</span> <span class="btn danger">d  denegar</span></span></div>
+          <div class="e dim"><span class="n">denegar devuelve un error tipado al agente; no se le miente diciendo que salió bien</span></div>
+        </div>
+      </div>
+
+      <div class="pane" style="flex:1 1 auto;min-height:0">
+        <div class="pane-title"><span class="dim">▌</span>Auditoría<span style="flex:1"></span><span class="dim">local · rotada · no sale de la máquina</span></div>
+        <div class="pane-body">
+          <div class="e dim"><span class="n">11:14:22  s-4a17  fs.list      ~/proyectos/clientes/acme            <span class="ph">allow</span>   ámbito de sesión</span></div>
+          <div class="e dim"><span class="n">11:14:25  s-4a17  fs.read      …/acme/2026-Q2/factura-0148.md       <span class="ph">allow</span>   12 KB</span></div>
+          <div class="e dim"><span class="n">11:14:31  s-4a17  rename.plan  14 pares · hash c81f                 <span class="ph">allow</span>   planear no muta</span></div>
+          <div class="e dim"><span class="n">11:14:31  s-4a17  rename.apply plan c81f                            <span class="am">ask</span>     <span class="am">← esperando</span></span></div>
+          <div class="e dim"><span class="n">11:09:03  s-9b02  fs.read      ~/media/2026/DSC_2050.ARW            <span class="dg">deny</span>    fuera de ámbito (sólo metadatos)</span></div>
+        </div>
+        <div class="pane-foot"><span class="dim">un plan sólo lo canjea la conexión que lo pidió: el hash no vale para otra sesión</span></div>
+      </div>
+
+      <div class="status">
+        <span class="mu">políticas por ruta y operación</span><span class="dim">sin puertas traseras temporales: si no está concedido, se pregunta o se deniega</span>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Permitir</span></span>
+        <span class="k"><b>3</b><span>Plan</span></span>
+        <span class="k"><b>4</b><span>Ámbito</span></span>
+        <span class="k"><b>5</b><span>Sesión</span></span>
+        <span class="k"><b>6</b><span>Políticas</span></span>
+        <span class="k"><b>7</b><span>Auditoría</span></span>
+        <span class="k"><b>8</b><span>Denegar</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Cerrar</span></span>
+      </div>
+    </div>
+  </div>
+</div>

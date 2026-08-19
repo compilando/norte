@@ -1,0 +1,73 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 11 volúmenes · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">11</span><span class="sep">/</span>
+    <span>Volúmenes y montajes · TUI</span><span class="sep">·</span>
+    <span class="keys">Alt+F1/F2 cambia unidad · e expulsa</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">volúmenes · 6</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">Unidades</span><span class="dim">  elegir una la abre en el pane activo · el espacio se comprueba ANTES de copiar</span>
+        <span style="flex:1"></span><span class="dim">Esc cierra</span>
+      </div>
+
+      <div class="pane active" style="flex:1 1 auto;min-height:0">
+        <div class="pane-head"><span style="width:20ch">ETIQUETA</span><span style="width:18ch">MONTAJE</span><span style="width:8ch">FS</span><span style="flex:1">OCUPACIÓN</span><span style="width:12ch;text-align:right">LIBRE</span></div>
+        <div class="pane-body">
+          <div class="e cur"><span style="width:20ch">Sistema</span><span style="width:18ch">/</span><span style="width:8ch">ext4</span><span style="flex:1"><span class="bar">██████████████<span class="rest">██████████████████████</span></span></span><span style="width:12ch;text-align:right">412 GB</span></div>
+          <div class="e"><span style="width:20ch">Datos</span><span style="width:18ch">/mnt/datos</span><span style="width:8ch">btrfs</span><span style="flex:1"><span class="bar">████████<span class="rest">████████████████████████████</span></span></span><span style="width:12ch;text-align:right">1.8 TB</span></div>
+          <div class="e"><span style="width:20ch">win-data</span><span style="width:18ch">/mnt/win-data</span><span style="width:8ch" class="am">ntfs</span><span style="flex:1"><span class="bar am">████████████████████████████<span class="rest">████████</span></span></span><span style="width:12ch;text-align:right" class="am">88 GB</span></div>
+          <div class="e mark"><span style="width:20ch">SONY_CARD ⏏</span><span style="width:18ch">/run/media/oscar/…</span><span style="width:8ch">exfat</span><span style="flex:1"><span class="bar am">██████████████████████████████████<span class="rest">██</span></span></span><span style="width:12ch;text-align:right" class="am">1.2 GB</span></div>
+          <div class="e"><span style="width:20ch" class="cy">norte-ci</span><span style="width:18ch" class="dim">sftp://build@…</span><span style="width:8ch" class="dim">sftp</span><span style="flex:1" class="dim">remoto · sin cuota conocida</span><span style="width:12ch;text-align:right" class="dim">—</span></div>
+          <div class="e"><span style="width:20ch" class="cy">assets-eu</span><span style="width:18ch" class="dim">s3://assets-eu</span><span style="width:8ch" class="dim">s3</span><span style="flex:1" class="dim">objeto · facturado por uso</span><span style="width:12ch;text-align:right" class="dim">—</span></div>
+          <div class="e dim"><span style="width:20ch">tmpfs</span><span style="width:18ch">/tmp</span><span style="width:8ch">tmpfs</span><span style="flex:1"><span class="bar"><span class="rest">████████████████████████████████████</span></span></span><span style="width:12ch;text-align:right">31 GB</span></div>
+        </div>
+        <div class="pane-foot"><span class="dim">e expulsa · m monta · u desmonta · Enter abre en el pane activo</span><span style="flex:1"></span><span class="dim">7 entradas</span></div>
+      </div>
+
+      <!-- Expulsión: no es un botón, es una comprobación. -->
+      <div class="pane" style="height:calc(11 * var(--cell-h));flex:0 0 auto">
+        <div class="pane-title"><span class="ph">▌</span>SONY_CARD · expulsar<span style="flex:1"></span><span class="dim">e</span></div>
+        <div class="pane-body">
+          <div class="e"><span class="n"><span class="mu">Etiqueta   </span>SONY_CARD  ·  exfat  ·  28 GB  ·  extraíble  ·  montado 11:02</span></div>
+          <div class="e"><span class="n"><span class="mu">En uso     </span><span class="am">1 tarea escribiendo</span> <span class="dim">— b7d0 copy voz-en-off.wav (45 %, pausada)</span></span></div>
+          <div class="e"><span class="n"><span class="mu">Abiertos   </span><span class="dim">ningún fichero abierto por el visor</span></span></div>
+          <div class="e"><span class="n"><span class="mu">Escrituras </span><span class="dim">18 MB sin volcar en la caché del kernel</span></span></div>
+          <div class="e dim"><span class="n"></span></div>
+          <div class="e"><span class="n am">Expulsar aborta la tarea b7d0 y deja .norte-partial-voz-en-off.wav en la tarjeta.</span></div>
+          <div class="e"><span class="n dim">Se hará sync() antes de desmontar; si el kernel dice EBUSY, no se fuerza.</span></div>
+          <div class="e"><span class="n"><span class="btn primary">Expulsar igual</span> <span class="btn">Terminar la tarea primero</span> <span class="btn">Cancelar</span></span></div>
+        </div>
+      </div>
+
+      <div class="status">
+        <span class="mu">espacio previo</span><span class="dim">copiar 126.8 MB a SONY_CARD (1.2 GB libres) → cabe; a win-data cabría pero es ntfs sin papelera</span>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Montar</span></span>
+        <span class="k"><b>3</b><span>Info</span></span>
+        <span class="k"><b>4</b><span>Abrir</span></span>
+        <span class="k"><b>5</b><span>Expulsar</span></span>
+        <span class="k"><b>6</b><span>Etiqueta</span></span>
+        <span class="k"><b>7</b><span>Refrescar</span></span>
+        <span class="k"><b>8</b><span>Desmontar</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Cerrar</span></span>
+      </div>
+    </div>
+  </div>
+</div>

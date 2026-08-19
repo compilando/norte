@@ -1,0 +1,92 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 10 archivos y remotos · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">10</span><span class="sep">/</span>
+    <span>Archivos y remotos · TUI</span><span class="sep">·</span>
+    <span class="keys">Enter entra en el zip · el pane no presupone disco</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">providers: local · archive · sftp · s3</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">Providers</span><span class="dim">  un zip es un directorio; un bucket es un directorio; ninguno conoce al otro</span>
+        <span style="flex:1"></span><span class="dim">Alt+E recodifica nombres</span>
+      </div>
+
+      <div class="panes">
+        <!-- Dentro de un archivo con nombres en CP437. -->
+        <div class="pane active">
+          <div class="pane-title"><span class="ph">▌</span>zip:archivo/2025.zip!/q4<span style="flex:1"></span><span class="dim">sólo lectura</span></div>
+          <div class="pane-head"><span style="flex:1">Name</span><span style="width:9ch;text-align:right">Size</span><span style="width:8ch;text-align:right">Ratio</span></div>
+          <div class="pane-body">
+            <div class="e dim"><span class="n">..</span><span class="s">UP--DIR</span><span style="width:8ch"></span></div>
+            <div class="e dir"><span class="n">▸ adjuntos</span><span class="s">DIR</span><span style="width:8ch;text-align:right" class="dim">—</span></div>
+            <div class="e cur"><span class="n">  factura-0099.pdf</span><span class="s">412 KB</span><span style="width:8ch;text-align:right">18 %</span></div>
+            <div class="e"><span class="n">  facturación.xls</span><span class="s">88 KB</span><span style="width:8ch;text-align:right" class="dim">62 %</span></div>
+            <div class="e am"><span class="n">  a�o-cerrado.txt</span><span class="s">4 KB</span><span style="width:8ch;text-align:right">71 %</span></div>
+            <div class="e"><span class="n">  albarán 12.pdf</span><span class="s">120 KB</span><span style="width:8ch;text-align:right" class="dim">9 %</span></div>
+            <div class="e dim"><span class="n">  README.TXT</span><span class="s">1 KB</span><span style="width:8ch;text-align:right">55 %</span></div>
+          </div>
+          <div class="pane-foot"><span class="am">bit 11 apagado → CP437</span><span style="flex:1"></span><span class="dim">Alt+E prueba otra</span></div>
+        </div>
+
+        <!-- Un bucket de objetos: sin directorios de verdad. -->
+        <div class="pane">
+          <div class="pane-title"><span class="dim">▌</span>s3://assets-eu/campaign/2026/<span style="flex:1"></span><span class="dim">objeto</span></div>
+          <div class="pane-head"><span style="flex:1">Key</span><span style="width:9ch;text-align:right">Size</span><span style="width:8ch;text-align:right">Clase</span></div>
+          <div class="pane-body">
+            <div class="e dim"><span class="n">..</span><span class="s">UP--DIR</span><span style="width:8ch"></span></div>
+            <div class="e dir"><span class="n">▸ hero/</span><span class="s">PREFIX</span><span style="width:8ch;text-align:right" class="dim">—</span></div>
+            <div class="e dir"><span class="n">▸ social/</span><span class="s">PREFIX</span><span style="width:8ch;text-align:right" class="dim">—</span></div>
+            <div class="e"><span class="n">  hero-master.webp</span><span class="s">2.1 MB</span><span style="width:8ch;text-align:right" class="dim">STD</span></div>
+            <div class="e"><span class="n">  hero-master.psd</span><span class="s">612 MB</span><span style="width:8ch;text-align:right" class="cy">IA</span></div>
+            <div class="e dim"><span class="n">  cold/2024-master.tar</span><span class="s">18 GB</span><span style="width:8ch;text-align:right" class="am">GLACIER</span></div>
+            <div class="e dim"><span class="n">  manifest.json</span><span class="s">12 KB</span><span style="width:8ch;text-align:right">STD</span></div>
+          </div>
+          <div class="pane-foot"><span class="am">GLACIER: leerlo exige restaurar antes</span><span style="flex:1"></span><span class="cy">v4 · keyring</span></div>
+        </div>
+      </div>
+
+      <!-- Capacidades POR RUTA: lo que este destino sabe hacer, no lo que el provider promete. -->
+      <div class="pane" style="height:calc(10 * var(--cell-h));flex:0 0 auto">
+        <div class="pane-title"><span class="ph">▌</span>Capacidades de esta ubicación<span style="flex:1"></span><span class="dim">se preguntan por ruta, no por provider</span></div>
+        <div class="pane-body">
+          <div class="e"><span style="width:26ch" class="mu">zip:2025.zip!/q4</span><span class="n"><span class="ph">leer</span> <span class="dim">·</span> <span class="dg">escribir no</span> <span class="dim">·</span> <span class="dg">renombrar no</span> <span class="dim">·</span> <span class="dg">papelera no</span> <span class="dim">· nombres CP437</span></span></div>
+          <div class="e"><span style="width:26ch" class="mu">s3://assets-eu/campaign</span><span class="n"><span class="ph">leer</span> <span class="dim">·</span> <span class="ph">escribir</span> <span class="dim">·</span> <span class="am">renombrar = copiar+borrar</span> <span class="dim">·</span> <span class="dg">papelera no</span> <span class="dim">· sin mtime propio</span></span></div>
+          <div class="e"><span style="width:26ch" class="mu">sftp://norte-ci/srv</span><span class="n"><span class="ph">leer</span> <span class="dim">·</span> <span class="ph">escribir</span> <span class="dim">·</span> <span class="ph">renombrar</span> <span class="dim">·</span> <span class="dg">papelera no</span> <span class="dim">·</span> <span class="am">reemplazo no atómico</span></span></div>
+          <div class="e"><span style="width:26ch" class="mu">local:/home/oscar</span><span class="n"><span class="ph">leer</span> <span class="dim">·</span> <span class="ph">escribir</span> <span class="dim">·</span> <span class="ph">renombrar</span> <span class="dim">·</span> <span class="ph">papelera</span> <span class="dim">·</span> <span class="ph">atómico</span> <span class="dim">· ext4 · case-sensitive</span></span></div>
+          <div class="e"><span style="width:26ch" class="mu">local:/mnt/win-data</span><span class="n"><span class="ph">leer</span> <span class="dim">·</span> <span class="ph">escribir</span> <span class="dim">·</span> <span class="ph">renombrar</span> <span class="dim">·</span> <span class="dg">papelera no</span> <span class="dim">·</span> <span class="am">ntfs · case-insensitive</span></span></div>
+        </div>
+        <div class="pane-foot"><span class="dim">la misma máquina puede tener dos raíces con capacidades distintas: por eso la respuesta es por ubicación</span></div>
+      </div>
+
+      <div class="status">
+        <span class="mu">extraer es una tarea</span><span class="dim">con progreso, cancelación y journal, como copiar</span>
+        <span style="flex:1"></span><span class="dim">F5 extrae al otro pane</span>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Conectar</span></span>
+        <span class="k"><b>3</b><span>Ver</span></span>
+        <span class="k"><b>4</b><span>Abrir</span></span>
+        <span class="k"><b>5</b><span>Extraer</span></span>
+        <span class="k"><b>6</b><span>Comprimir</span></span>
+        <span class="k"><b>7</b><span>Nombres</span></span>
+        <span class="k off"><b>8</b><span>Delete</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Quit</span></span>
+      </div>
+    </div>
+  </div>
+</div>

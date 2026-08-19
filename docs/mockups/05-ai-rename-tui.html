@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 05 rename con IA · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">05</span><span class="sep">/</span>
+    <span>Rename con IA · TUI</span><span class="sep">·</span>
+    <span class="keys">el modelo propone pares · el ejecutor es el mismo del lote</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">ai.rename · nada se aplica sin aprobación</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">Rename con IA</span><span class="dim">  38 ficheros · proveedor </span><span class="cy">anthropic/claude</span><span class="dim"> · contexto: sólo nombres y metadatos</span>
+        <span style="flex:1"></span><span class="dim">Esc descarta</span>
+      </div>
+
+      <div class="pane active" style="height:calc(7 * var(--cell-h));flex:0 0 auto">
+        <div class="pane-title"><span class="ph">▌</span>Instrucción<span style="flex:1"></span><span class="dim">Ctrl+Enter propone</span></div>
+        <div class="pane-body">
+          <div class="e"><span class="n">&gt; nombra las fotos por lo que sale en el nombre original y la fecha EXIF,</span></div>
+          <div class="e"><span class="n">&gt; formato <span class="ph">aaaa-mm-dd_tema_nnn</span>, en minúsculas, sin acentos en el tema_</span></div>
+          <div class="e dim"><span class="n"></span></div>
+          <div class="e dim"><span class="n">contexto enviado: nombre, tamaño, mtime, EXIF fecha/cámara. NO el contenido.</span></div>
+          <div class="e dim"><span class="n">política: ai.read-metadata permitido en este scope · 0 bytes de fichero salen</span></div>
+        </div>
+      </div>
+
+      <div class="pane" style="flex:1 1 auto;min-height:0">
+        <div class="pane-title"><span class="dim">▌</span>Propuesta · 38 pares<span style="flex:1"></span><span class="dim">Space acepta/rechaza · a todos · n ninguno</span></div>
+        <div class="pane-head"><span style="width:3ch"></span><span style="flex:1">ACTUAL</span><span style="width:3ch"></span><span style="flex:1">PROPUESTO</span><span style="width:14ch;text-align:right">CONFIANZA</span></div>
+        <div class="pane-body">
+          <div class="e"><span style="width:3ch" class="ph">✓</span><span class="n">IMG_4471.JPG</span><span style="width:3ch" class="dim">→</span><span class="n">2026-08-14_vendimia_001.jpg</span><span style="width:14ch;text-align:right" class="ph">alta</span></div>
+          <div class="e"><span style="width:3ch" class="ph">✓</span><span class="n">IMG_4472.JPG</span><span style="width:3ch" class="dim">→</span><span class="n">2026-08-14_vendimia_002.jpg</span><span style="width:14ch;text-align:right" class="ph">alta</span></div>
+          <div class="e cur"><span style="width:3ch">✓</span><span class="n">DSC_2050.ARW</span><span style="width:3ch">→</span><span class="n">2026-08-14_bodega_001.arw</span><span style="width:14ch;text-align:right">alta</span></div>
+          <div class="e"><span style="width:3ch" class="ph">✓</span><span class="n">DSC_2051.ARW</span><span style="width:3ch" class="dim">→</span><span class="n">2026-08-14_bodega_002.arw</span><span style="width:14ch;text-align:right" class="ph">alta</span></div>
+          <div class="e"><span style="width:3ch" class="am">?</span><span class="n am">CAFÉ.jpg</span><span style="width:3ch" class="dim">→</span><span class="n am">2026-08-12_cafe_001.jpg</span><span style="width:14ch;text-align:right" class="am">media</span></div>
+          <div class="e"><span style="width:3ch" class="am">?</span><span class="n am">escaneo0001.pdf</span><span style="width:3ch" class="dim">→</span><span class="n am">2026-08-10_contrato_001.pdf</span><span style="width:14ch;text-align:right" class="am">media</span></div>
+          <div class="e"><span style="width:3ch" class="dg">✕</span><span class="n dim">notas de la llamada.txt</span><span style="width:3ch" class="dim">→</span><span class="n dim">2026-08-08_reunion_001.txt</span><span style="width:14ch;text-align:right" class="dg">rechazado</span></div>
+          <div class="e"><span style="width:3ch" class="dg">!</span><span class="n dg">informe-año.md</span><span style="width:3ch" class="dim">→</span><span class="n dg">informe-ano.md</span><span style="width:14ch;text-align:right" class="dg">pierde ñ</span></div>
+          <div class="e dim"><span style="width:3ch"></span><span class="n">… 30 pares más</span><span style="width:3ch"></span><span class="n"></span><span style="width:14ch"></span></div>
+        </div>
+        <div class="pane-foot">
+          <span class="ph">34 aceptados</span><span class="dim"> · </span><span class="dg">3 rechazados</span><span class="dim"> · </span><span class="am">1 aviso de encoding</span>
+          <span style="flex:1"></span><span class="dim">el plan pasa por Shift+F6 antes de tocar disco</span>
+        </div>
+      </div>
+
+      <div class="status">
+        <span class="cy">coste 1 llamada · 4 812 tok · 0,014 €</span>
+        <span class="dim">respuesta validada contra el esquema; un par mal formado se descarta, no se ejecuta</span>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Aplicar</span></span>
+        <span class="k"><b>3</b><span>Diff</span></span>
+        <span class="k"><b>4</b><span>Editar</span></span>
+        <span class="k"><b>5</b><span>Reintentar</span></span>
+        <span class="k"><b>6</b><span>Modelo</span></span>
+        <span class="k"><b>7</b><span>Prompt</span></span>
+        <span class="k"><b>8</b><span>Rechazar</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Cerrar</span></span>
+      </div>
+    </div>
+  </div>
+</div>

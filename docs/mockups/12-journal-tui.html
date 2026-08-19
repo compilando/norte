@@ -1,0 +1,78 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 12 journal y undo · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">12</span><span class="sep">/</span>
+    <span>Journal y deshacer · TUI</span><span class="sep">·</span>
+    <span class="keys">toda mutación pasa por aquí, o se marca irreversible con motivo</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">journal.db · embebido</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">Journal</span><span class="dim">  sesión 2026-08-14 · 11 entradas · el TUI sin daemon también registra</span>
+        <span style="flex:1"></span><span class="dim">u deshace · U deshace la sesión</span>
+      </div>
+
+      <div class="pane active" style="flex:1 1 auto;min-height:0">
+        <div class="pane-head"><span style="width:10ch">HORA</span><span style="width:13ch">OPERACIÓN</span><span style="flex:1">QUÉ</span><span style="width:22ch;text-align:right">REVERSIÓN</span></div>
+        <div class="pane-body">
+          <div class="e cur"><span style="width:10ch">11:07:03</span><span style="width:13ch">copy</span><span class="n">3 elementos → norte-ci:/srv/artifacts</span><span style="width:22ch;text-align:right">borrar destino</span></div>
+          <div class="e"><span style="width:10ch">11:02:41</span><span style="width:13ch">delete</span><span class="n">12 elementos → papelera</span><span style="width:22ch;text-align:right" class="ph">restaurar papelera</span></div>
+          <div class="e"><span style="width:10ch">10:47:19</span><span style="width:13ch">rename</span><span class="n">lote de 38 en campaña-otoño</span><span style="width:22ch;text-align:right" class="ph">38 pares inversos</span></div>
+          <div class="e"><span style="width:10ch">10:41:55</span><span style="width:13ch">mkdir</span><span class="n">campaña-otoño/seleccion</span><span style="width:22ch;text-align:right" class="ph">borrar si vacío</span></div>
+          <div class="e"><span style="width:10ch">10:38:02</span><span style="width:13ch">move</span><span class="n">raw/*.ARW → archivo/2026 (412)</span><span style="width:22ch;text-align:right" class="ph">mover de vuelta</span></div>
+          <div class="e"><span style="width:10ch">10:12:47</span><span style="width:13ch">sync</span><span class="n">media/2026 → norte-ci (plan 8a1e)</span><span style="width:22ch;text-align:right" class="am">parcial: 2 de 3</span></div>
+          <div class="e"><span style="width:10ch" class="dg">10:12:44</span><span style="width:13ch" class="dg">delete</span><span class="n dg">nightly/ en sftp (312 ficheros)</span><span style="width:22ch;text-align:right" class="dg">IRREVERSIBLE</span></div>
+          <div class="e"><span style="width:10ch">09:58:31</span><span style="width:13ch">chmod</span><span class="n">render.sh 0644 → 0755</span><span style="width:22ch;text-align:right" class="ph">0755 → 0644</span></div>
+          <div class="e"><span style="width:10ch">09:40:10</span><span style="width:13ch">extract</span><span class="n">2025.zip → archivo/2025 (188)</span><span style="width:22ch;text-align:right" class="ph">borrar extraídos</span></div>
+          <div class="e dim"><span style="width:10ch">09:31:02</span><span style="width:13ch">agent.plan</span><span class="n">mcp:codex propuso 14 renombres</span><span style="width:22ch;text-align:right">no aplicado</span></div>
+        </div>
+        <div class="pane-foot"><span class="dim">Enter abre la entrada · u deshace ésta · U deshace toda la sesión · / busca</span><span style="flex:1"></span><span class="dim">10 de 11</span></div>
+      </div>
+
+      <!-- Entrada seleccionada: qué haría exactamente el undo. -->
+      <div class="pane" style="height:calc(12 * var(--cell-h));flex:0 0 auto">
+        <div class="pane-title"><span class="ph">▌</span>Entrada 0x91ac · copy · 11:07:03<span style="flex:1"></span><span class="dim">tarea 7f3a · usuario oscar · ntc embebido</span></div>
+        <div class="pane-body">
+          <div class="e"><span class="n"><span class="mu">Reversión  </span><span class="ph">borrar en destino los 3 ficheros creados</span> <span class="dim">(no toca el origen)</span></span></div>
+          <div class="e dim"><span class="n">  1  sftp://…/2026-08-14/DSC_2048.ARW   42.1 MB  blake3 9f2c…  creado</span></div>
+          <div class="e dim"><span class="n">  2  sftp://…/2026-08-14/DSC_2049.ARW   41.7 MB  blake3 1b07…  creado</span></div>
+          <div class="e dim"><span class="n">  3  sftp://…/2026-08-14/DSC_2050.ARW   43.0 MB  blake3 c4d1…  creado</span></div>
+          <div class="e dim"><span class="n"></span></div>
+          <div class="e"><span class="n"><span class="mu">Comprobación</span>  el undo verifica el blake3 antes de borrar: si el fichero cambió, para y avisa.</span></div>
+          <div class="e"><span class="n am">La entrada se abrió una vez por Task (pin_for_task): media operación nunca se revierte a medias.</span></div>
+          <div class="e dim"><span class="n"></span></div>
+          <div class="e"><span class="n"><span class="btn primary">u  deshacer esta</span> <span class="btn">Enter  ver diff</span> <span class="btn">x  exportar</span></span></div>
+        </div>
+      </div>
+
+      <div class="status">
+        <span class="dg">1 entrada irreversible</span>
+        <span class="dim">borrado en sftp sin papelera · el motivo queda escrito, no se finge que se puede deshacer</span>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Deshacer</span></span>
+        <span class="k"><b>3</b><span>Ver</span></span>
+        <span class="k"><b>4</b><span>Diff</span></span>
+        <span class="k"><b>5</b><span>Sesión</span></span>
+        <span class="k"><b>6</b><span>Filtrar</span></span>
+        <span class="k"><b>7</b><span>Buscar</span></span>
+        <span class="k"><b>8</b><span>Exportar</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Cerrar</span></span>
+      </div>
+    </div>
+  </div>
+</div>

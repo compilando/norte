@@ -1,0 +1,95 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 07 sincronizar · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">07</span><span class="sep">/</span>
+    <span>Sincronizar · GUI</span><span class="sep">·</span>
+    <span class="keys">el plan se retiene por conexión y caduca</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">Sincronizar</span>
+      <span class="wpath">media/2026 → norte-ci:/srv/artifacts</span>
+      <span class="wright">
+        <span class="pill">plan 4f2c</span>
+        <span class="pill warn"><i></i>caduca en 09:41</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <aside class="side" style="width:300px;flex:0 0 300px">
+        <h4>Dirección</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">→</span>Una vía · izq. gana</div>
+          <div class="it"><span class="ico">←</span>Una vía · der. gana</div>
+          <div class="it"><span class="ico">⇄</span>Dos vías · por fecha</div>
+        </div>
+
+        <h4>Alcance</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">✓</span>Crear<span class="tail">2</span></div>
+          <div class="it on"><span class="ico">✓</span>Actualizar<span class="tail">2</span></div>
+          <div class="it on"><span class="ico">✓</span>Borrar sobrantes<span class="tail">3</span></div>
+          <div class="it"><span class="ico">·</span>Permisos</div>
+        </div>
+
+        <h4>Sobrantes del destino</h4>
+        <div class="grp">
+          <div class="it"><span class="ico">·</span>Dejarlos</div>
+          <div class="it on"><span class="ico">◆</span>A la papelera del destino</div>
+          <div class="it"><span class="ico">·</span>Borrar de verdad</div>
+        </div>
+
+        <h4>Excluir</h4>
+        <div class="card" style="padding:10px 12px">
+          <div class="mono cy" style="font-size:10.5px;line-height:1.7">.git/<br>node_modules/<br>*.tmp<br>.norte-partial-*</div>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div style="flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:var(--base)">
+          <div class="gcols" style="grid-template-columns:118px 1fr 104px 190px">
+            <span>Acción</span><span style="text-align:left">Ruta</span><span>Tamaño</span><span style="text-align:right">Reversión</span>
+          </div>
+          <div class="grows">
+            <div class="gr" style="grid-template-columns:118px 1fr 104px 190px"><span class="cy mono" style="font-size:11px">crear</span><span class="gn"><span class="ico cy">◫</span><span class="txt">DSC_2050.ARW</span></span><span class="gs">43.0 MB</span><span class="gd">borrar destino</span></div>
+            <div class="gr" style="grid-template-columns:118px 1fr 104px 190px"><span class="cy mono" style="font-size:11px">crear</span><span class="gn"><span class="ico cy">▸</span><span class="txt">raw/ <span class="dim">24 310 ficheros</span></span></span><span class="gs">1.9 TB</span><span class="gd">borrar destino</span></div>
+            <div class="gr sel" style="grid-template-columns:118px 1fr 104px 190px"><span class="mono" style="font-size:11px">actualizar</span><span class="gn"><span class="ico">·</span><span class="txt">release-notes.md</span></span><span class="gs">7 KB</span><span class="gd">copia previa</span></div>
+            <div class="gr" style="grid-template-columns:118px 1fr 104px 190px"><span class="mono" style="font-size:11px">actualizar</span><span class="gn"><span class="ico">·</span><span class="txt">informe-año.md</span></span><span class="gs">14 KB</span><span class="gd">copia previa</span></div>
+            <div class="gr" style="grid-template-columns:118px 1fr 104px 190px;background:rgba(240,198,116,.07)"><span class="am mono" style="font-size:11px">borrar</span><span class="gn"><span class="ico am">·</span><span class="txt am">provenance.intoto.jsonl</span></span><span class="gs">9 KB</span><span class="gd am">papelera destino</span></div>
+            <div class="gr" style="grid-template-columns:118px 1fr 104px 190px;background:rgba(240,198,116,.07)"><span class="am mono" style="font-size:11px">borrar</span><span class="gn"><span class="ico am">·</span><span class="txt am">sbom.spdx.json</span></span><span class="gs">340 KB</span><span class="gd am">papelera destino</span></div>
+            <div class="gr" style="grid-template-columns:118px 1fr 104px 190px;background:rgba(255,107,107,.1)"><span class="dg mono" style="font-size:11px">borrar</span><span class="gn"><span class="ico dg">▸</span><span class="txt dg">nightly/ <span class="dim">312 ficheros</span></span></span><span class="gs">4.1 GB</span><span class="gd dg">IRREVERSIBLE</span></div>
+            <div class="gr" style="grid-template-columns:118px 1fr 104px 190px;opacity:.55"><span class="mono dim" style="font-size:11px">saltar</span><span class="gn"><span class="txt">café.jpg <span class="dim">NFD vs NFC, mismo contenido</span></span></span><span class="gs">2.1 MB</span><span class="gd dim">—</span></div>
+            <div class="gr" style="grid-template-columns:118px 1fr 104px 190px;opacity:.55"><span class="mono dim" style="font-size:11px">saltar</span><span class="gn"><span class="txt">19 ficheros iguales</span></span><span class="gs">618 MB</span><span class="gd dim">—</span></div>
+          </div>
+        </div>
+
+        <!-- Lo irreversible se dice antes de firmar, no después. -->
+        <div style="flex:0 0 auto;padding:14px 20px;border-top:1px solid var(--line);background:var(--elevated);display:flex;gap:14px;align-items:center">
+          <div class="card" style="flex:1;border-color:rgba(255,107,107,.45);padding:11px 14px">
+            <div class="mono dg" style="font-size:10px;letter-spacing:.14em">EL DESTINO NO TIENE PAPELERA</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5">
+              En <span class="mono">sftp://norte-ci</span> no hay papelera, así que <b style="color:var(--ink)">nightly/</b> (312 ficheros, 4.1 GB) se borra de verdad.
+              El journal lo anota como <span class="mono dg">Irreversible</span> con ese motivo; los otros dos borrados sí vuelven.
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <span class="kbd" style="padding:7px 16px;border-color:var(--phosphor);background:var(--phosphor);color:var(--base)">Aprobar plan</span>
+            <span class="kbd" style="padding:7px 16px">Simular (dry-run)</span>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="k">crear 2 · actualizar 2 · borrar 3 · saltar 21 · neto +1.9 TB</span>
+          <span>hash 4f2c… · retenido por conexión: nadie más lo canjea</span>
+          <span class="right"><span class="k"><b>Ctrl+Y</b> sincronizar</span> &nbsp; <span class="k"><b>F2</b> aprobar</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

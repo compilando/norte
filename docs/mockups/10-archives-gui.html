@@ -1,0 +1,116 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 10 archivos y remotos · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">10</span><span class="sep">/</span>
+    <span>Archivos y remotos · GUI</span><span class="sep">·</span>
+    <span class="keys">conectar, entrar en el zip, y ver qué permite cada ubicación</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">norte</span>
+      <span class="wpath">zip:2025.zip!/q4 ⟷ s3://assets-eu/campaign/2026</span>
+      <span class="wright">
+        <span class="pill warn"><i></i>nombres CP437</span>
+        <span class="pill">secretos en keyring</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <aside class="side" style="width:290px;flex:0 0 290px">
+        <h4>Conexiones</h4>
+        <div class="grp">
+          <div class="it"><span class="ico">↗</span>norte-ci<span class="tail">sftp</span></div>
+          <div class="it on"><span class="ico">↗</span>assets-eu<span class="tail">s3</span></div>
+          <div class="it"><span class="ico">↗</span>backup-nas<span class="tail">smb</span></div>
+          <div class="it"><span class="ico">+</span>Nueva conexión…</div>
+        </div>
+
+        <h4>Credenciales</h4>
+        <div class="card" style="padding:11px 13px">
+          <div class="mono" style="font-size:10.5px;line-height:1.7;color:var(--muted)">
+            usuario <span style="color:var(--ink)">build</span><br>
+            clave <span class="cy">keyring://norte/assets-eu</span><br>
+            <span class="dim">la configuración guarda la referencia, nunca el secreto</span>
+          </div>
+        </div>
+
+        <h4>Nombres del archivo</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">◆</span>CP437<span class="tail">bit 11 = 0</span></div>
+          <div class="it"><span class="ico">◇</span>UTF-8</div>
+          <div class="it"><span class="ico">◇</span>CP1252</div>
+        </div>
+        <p style="margin:10px 6px 0;font-size:11px;line-height:1.5;color:var(--muted)">
+          El zip declara la codificación en un bit. Si está apagado, no es UTF-8 — y adivinar rompe nombres.
+        </p>
+      </aside>
+
+      <div class="stage">
+        <div class="gpanes" style="flex:1 1 auto;min-height:0">
+          <section class="gpane active">
+            <div class="gpane-head"><span class="dotk"></span>zip:archivo/2025.zip!/q4<span style="margin-left:auto" class="dim">sólo lectura</span></div>
+            <div class="gcols" style="grid-template-columns:1fr 92px 70px"><span>Nombre</span><span>Tamaño</span><span style="text-align:right">Ratio</span></div>
+            <div class="grows">
+              <div class="gr dir" style="grid-template-columns:1fr 92px 70px"><span class="gn"><span class="ico">▸</span><span class="txt">adjuntos</span></span><span class="gs">—</span><span class="gd dim">—</span></div>
+              <div class="gr sel" style="grid-template-columns:1fr 92px 70px"><span class="gn"><span class="ico">·</span><span class="txt">factura-0099.pdf</span></span><span class="gs">412 KB</span><span class="gd">18 %</span></div>
+              <div class="gr" style="grid-template-columns:1fr 92px 70px"><span class="gn"><span class="ico">·</span><span class="txt">facturación.xls</span></span><span class="gs">88 KB</span><span class="gd">62 %</span></div>
+              <div class="gr" style="grid-template-columns:1fr 92px 70px;background:rgba(240,198,116,.08)"><span class="gn"><span class="ico am">·</span><span class="txt am">a�o-cerrado.txt</span></span><span class="gs">4 KB</span><span class="gd am">71 %</span></div>
+              <div class="gr" style="grid-template-columns:1fr 92px 70px"><span class="gn"><span class="ico">·</span><span class="txt">albarán 12.pdf</span></span><span class="gs">120 KB</span><span class="gd">9 %</span></div>
+            </div>
+          </section>
+
+          <section class="gpane">
+            <div class="gpane-head"><span class="dotk"></span>s3://assets-eu/campaign/2026/<span style="margin-left:auto" class="dim">objeto</span></div>
+            <div class="gcols" style="grid-template-columns:1fr 92px 84px"><span>Key</span><span>Tamaño</span><span style="text-align:right">Clase</span></div>
+            <div class="grows">
+              <div class="gr dir" style="grid-template-columns:1fr 92px 84px"><span class="gn"><span class="ico">▸</span><span class="txt">hero/</span></span><span class="gs">prefijo</span><span class="gd dim">—</span></div>
+              <div class="gr dir" style="grid-template-columns:1fr 92px 84px"><span class="gn"><span class="ico">▸</span><span class="txt">social/</span></span><span class="gs">prefijo</span><span class="gd dim">—</span></div>
+              <div class="gr" style="grid-template-columns:1fr 92px 84px"><span class="gn"><span class="ico">◫</span><span class="txt">hero-master.webp</span></span><span class="gs">2.1 MB</span><span class="gd">STD</span></div>
+              <div class="gr" style="grid-template-columns:1fr 92px 84px"><span class="gn"><span class="ico">◫</span><span class="txt">hero-master.psd</span></span><span class="gs">612 MB</span><span class="gd cy">IA</span></div>
+              <div class="gr" style="grid-template-columns:1fr 92px 84px;background:rgba(240,198,116,.07)"><span class="gn"><span class="ico am">◇</span><span class="txt am">cold/2024-master.tar</span></span><span class="gs">18 GB</span><span class="gd am">GLACIER</span></div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Capacidades por ubicación: la tabla que decide qué botones existen. -->
+        <div style="flex:0 0 auto;border-top:1px solid var(--line);background:var(--elevated);padding:14px 20px">
+          <div class="mono dim" style="font-size:9.5px;letter-spacing:.16em;margin-bottom:10px">CAPACIDADES · SE PREGUNTAN POR UBICACIÓN, NO POR PROVIDER</div>
+          <div style="display:grid;grid-template-columns:216px repeat(5, 1fr);gap:0 10px;font-family:var(--mono);font-size:10.5px;line-height:2.05;color:var(--muted)">
+            <span class="dim" style="font-size:9px;letter-spacing:.12em">UBICACIÓN</span>
+            <span class="dim" style="font-size:9px;letter-spacing:.12em">LEER</span>
+            <span class="dim" style="font-size:9px;letter-spacing:.12em">ESCRIBIR</span>
+            <span class="dim" style="font-size:9px;letter-spacing:.12em">RENOMBRAR</span>
+            <span class="dim" style="font-size:9px;letter-spacing:.12em">PAPELERA</span>
+            <span class="dim" style="font-size:9px;letter-spacing:.12em">REEMPLAZO</span>
+
+            <span style="color:var(--ink)">zip:2025.zip!/q4</span>
+            <span class="ph">sí</span><span class="dg">no</span><span class="dg">no</span><span class="dg">no</span><span class="dg">no</span>
+
+            <span style="color:var(--ink)">s3://assets-eu/campaign</span>
+            <span class="ph">sí</span><span class="ph">sí</span><span class="am">copiar+borrar</span><span class="dg">no</span><span class="am">no atómico</span>
+
+            <span style="color:var(--ink)">sftp://norte-ci/srv</span>
+            <span class="ph">sí</span><span class="ph">sí</span><span class="ph">sí</span><span class="dg">no</span><span class="am">no atómico</span>
+
+            <span style="color:var(--ink)">local:/home/oscar <span class="dim">ext4</span></span>
+            <span class="ph">sí</span><span class="ph">sí</span><span class="ph">sí</span><span class="ph">sí</span><span class="ph">atómico</span>
+
+            <span style="color:var(--ink)">local:/mnt/win-data <span class="dim">ntfs</span></span>
+            <span class="ph">sí</span><span class="ph">sí</span><span class="ph">sí</span><span class="dg">no</span><span class="am">case-insensitive</span>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="k">extraer y comprimir son tareas: progreso, cancelación y journal</span>
+          <span class="right"><span class="k"><b>Enter</b> entrar</span> &nbsp; <span class="k"><b>F5</b> extraer</span> &nbsp; <span class="k"><b>Alt+E</b> nombres</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

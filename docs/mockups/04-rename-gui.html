@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 04 rename por lotes · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">04</span><span class="sep">/</span>
+    <span>Rename por lotes · GUI</span><span class="sep">·</span>
+    <span class="keys">reglas a la izquierda, plan completo a la derecha</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">Renombrar lote</span>
+      <span class="wpath">campaña-otoño · 38 marcados</span>
+      <span class="wright">
+        <span class="pill warn"><i></i>2 colisiones</span>
+        <span class="pill">1 ciclo</span>
+        <span class="pill">un solo undo</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <!-- Pila de reglas: mismas cinco que la TUI, en el mismo orden. -->
+      <aside class="side" style="width:330px;flex:0 0 330px">
+        <h4>Reglas · el orden importa</h4>
+        <div class="grp" style="display:flex;flex-direction:column;gap:8px">
+          <div class="card" style="padding:10px 12px">
+            <div style="display:flex;gap:8px;align-items:center"><span class="mono dim" style="font-size:10px">1</span><span style="font-size:12.5px;color:var(--ink)">Regex</span><span class="mono dim" style="margin-left:auto;font-size:10px">nombre</span></div>
+            <div class="mono" style="font-size:11px;margin-top:6px"><span class="cy">^IMG_(\d+)</span> <span class="dim">→</span> <span class="ph">otoño-$1</span></div>
+          </div>
+          <div class="card" style="padding:10px 12px">
+            <div style="display:flex;gap:8px;align-items:center"><span class="mono dim" style="font-size:10px">2</span><span style="font-size:12.5px;color:var(--ink)">Minúsculas</span><span class="mono dim" style="margin-left:auto;font-size:10px">extensión</span></div>
+            <div class="mono dim" style="font-size:11px;margin-top:6px">JPG → jpg</div>
+          </div>
+          <div class="card" style="padding:10px 12px">
+            <div style="display:flex;gap:8px;align-items:center"><span class="mono dim" style="font-size:10px">3</span><span style="font-size:12.5px;color:var(--ink)">Limpiar</span><span class="mono dim" style="margin-left:auto;font-size:10px">NFC</span></div>
+            <div class="mono dim" style="font-size:11px;margin-top:6px">espacios dobles · ( ) · guiones</div>
+          </div>
+          <div class="card" style="padding:10px 12px;border-color:rgba(183,255,82,.45)">
+            <div style="display:flex;gap:8px;align-items:center"><span class="mono ph" style="font-size:10px">4</span><span style="font-size:12.5px;color:var(--ink)">Contador</span><span class="mono dim" style="margin-left:auto;font-size:10px">sufijo</span></div>
+            <div class="mono" style="font-size:11px;margin-top:6px;color:var(--muted)">001 · paso 1 · 3 dígitos</div>
+          </div>
+          <div class="card" style="padding:10px 12px">
+            <div style="display:flex;gap:8px;align-items:center"><span class="mono dim" style="font-size:10px">5</span><span style="font-size:12.5px;color:var(--ink)">Recorte</span><span class="mono dim" style="margin-left:auto;font-size:10px">final</span></div>
+            <div class="mono dim" style="font-size:11px;margin-top:6px">«-copia» · «(1)» · « final»</div>
+          </div>
+          <div class="it" style="margin-top:2px"><span class="ico">+</span>Añadir regla…</div>
+        </div>
+
+        <h4>Presets</h4>
+        <div class="grp">
+          <div class="it"><span class="ico">★</span>Sesión de foto<span class="tail">5</span></div>
+          <div class="it"><span class="ico">★</span>Entrega a cliente<span class="tail">3</span></div>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div style="flex:1 1 auto;min-height:0;background:var(--base);display:flex;flex-direction:column">
+          <div class="gcols" style="grid-template-columns:1fr 28px 1fr 170px">
+            <span>Actual</span><span></span><span style="text-align:left">Nuevo</span><span style="text-align:right">Estado</span>
+          </div>
+          <div class="grows">
+            <div class="gr" style="grid-template-columns:1fr 28px 1fr 170px"><span class="gn"><span class="txt">IMG_4471.JPG</span></span><span class="dim">→</span><span class="gn"><span class="txt" style="color:var(--ink)">otoño-001.jpg</span></span><span class="gd ph">ok</span></div>
+            <div class="gr" style="grid-template-columns:1fr 28px 1fr 170px"><span class="gn"><span class="txt">IMG_4472.JPG</span></span><span class="dim">→</span><span class="gn"><span class="txt" style="color:var(--ink)">otoño-002.jpg</span></span><span class="gd ph">ok</span></div>
+            <div class="gr" style="grid-template-columns:1fr 28px 1fr 170px"><span class="gn"><span class="txt">IMG_4473 (1).JPG</span></span><span class="dim">→</span><span class="gn"><span class="txt" style="color:var(--ink)">otoño-003.jpg</span></span><span class="gd ph">ok</span></div>
+            <div class="gr mark" style="grid-template-columns:1fr 28px 1fr 170px"><span class="gn"><span class="txt">otoño-004.jpg</span></span><span class="dim">→</span><span class="gn"><span class="txt">otoño-005.jpg</span></span><span class="gd am">ciclo · seguro</span></div>
+            <div class="gr mark" style="grid-template-columns:1fr 28px 1fr 170px"><span class="gn"><span class="txt">otoño-005.jpg</span></span><span class="dim">→</span><span class="gn"><span class="txt">otoño-004.jpg</span></span><span class="gd am">ciclo · seguro</span></div>
+            <div class="gr sel" style="grid-template-columns:1fr 28px 1fr 170px"><span class="gn"><span class="txt">IMG_4476.JPG</span></span><span class="dim">→</span><span class="gn"><span class="txt">otoño-006.jpg</span></span><span class="gd">ok</span></div>
+            <div class="gr" style="grid-template-columns:1fr 28px 1fr 170px;background:rgba(255,107,107,.09)"><span class="gn"><span class="txt dg">IMG_4477.JPG</span></span><span class="dim">→</span><span class="gn"><span class="txt dg">otoño-007.jpg</span></span><span class="gd dg">colisión</span></div>
+            <div class="gr" style="grid-template-columns:1fr 28px 1fr 170px;background:rgba(255,107,107,.09)"><span class="gn"><span class="txt dg">IMG_4478.jpg</span></span><span class="dim">→</span><span class="gn"><span class="txt dg">otoño-007.jpg</span></span><span class="gd dg">colisión</span></div>
+            <div class="gr" style="grid-template-columns:1fr 28px 1fr 170px"><span class="gn"><span class="txt am">CAFÉ.jpg</span></span><span class="dim">→</span><span class="gn"><span class="txt am">café.jpg</span></span><span class="gd am">sólo may/min</span></div>
+            <div class="gr" style="grid-template-columns:1fr 28px 1fr 170px"><span class="gn"><span class="txt">informe final.pdf</span></span><span class="dim">→</span><span class="gn"><span class="txt" style="color:var(--ink)">informe.pdf</span></span><span class="gd ph">ok</span></div>
+            <div class="gr" style="grid-template-columns:1fr 28px 1fr 170px"><span class="gn"><span class="txt">notas  de  la  llamada.txt</span></span><span class="dim">→</span><span class="gn"><span class="txt" style="color:var(--ink)">notas-de-la-llamada.txt</span></span><span class="gd ph">ok</span></div>
+            <div class="gr" style="grid-template-columns:1fr 28px 1fr 170px"><span class="gn"><span class="txt dim">… 27 pares más</span></span><span></span><span></span><span></span></div>
+          </div>
+        </div>
+
+        <!-- El aviso explica POR QUÉ está bloqueado, no sólo que lo está. -->
+        <div style="flex:0 0 auto;padding:14px 20px;border-top:1px solid var(--line);background:var(--elevated);display:flex;gap:14px;align-items:center">
+          <div class="card" style="flex:1;border-color:rgba(255,107,107,.45);padding:11px 14px">
+            <div class="mono dg" style="font-size:10px;letter-spacing:.14em">PLAN BLOQUEADO · 2 COLISIONES</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5">
+              Dos orígenes piden <span class="mono">otoño-007.jpg</span>. El ejecutor es transaccional: entran los 38 pares o no entra ninguno.
+              El ciclo <span class="mono">004↔005</span> no es un problema — se ordena solo con un temporal.
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <span class="kbd" style="padding:7px 16px;opacity:.45">Aplicar 38</span>
+            <span class="kbd" style="padding:7px 16px">Resolver colisiones</span>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="k">las reglas producen pares · el rename de IA alimenta este mismo ejecutor</span>
+          <span class="right"><span class="k"><b>Shift+F6</b> abrir</span> &nbsp; <span class="k"><b>F2</b> aplicar</span> &nbsp; <span class="k"><b>Esc</b> cancelar</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

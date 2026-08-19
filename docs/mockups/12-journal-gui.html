@@ -1,0 +1,118 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 12 journal y undo · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">12</span><span class="sep">/</span>
+    <span>Journal y deshacer · GUI</span><span class="sep">·</span>
+    <span class="keys">la línea de tiempo dice qué vuelve y qué no</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">Journal</span>
+      <span class="wpath">sesión 2026-08-14 · 11 entradas</span>
+      <span class="wright">
+        <span class="pill on"><i></i>journal.db embebido</span>
+        <span class="pill warn"><i></i>1 irreversible</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <aside class="side" style="width:272px;flex:0 0 272px">
+        <h4>Sesiones</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">◆</span>Hoy<span class="tail">11</span></div>
+          <div class="it"><span class="ico">◇</span>13 ago<span class="tail">42</span></div>
+          <div class="it"><span class="ico">◇</span>12 ago<span class="tail">7</span></div>
+        </div>
+
+        <h4>Operación</h4>
+        <div class="grp">
+          <div class="it"><span class="ico">↦</span>copy<span class="tail">3</span></div>
+          <div class="it"><span class="ico">✕</span>delete<span class="tail">2</span></div>
+          <div class="it"><span class="ico">A</span>rename<span class="tail">1</span></div>
+          <div class="it"><span class="ico">⇄</span>sync<span class="tail">1</span></div>
+          <div class="it"><span class="ico">◆</span>agent<span class="tail">1</span></div>
+        </div>
+
+        <div class="card" style="margin-top:20px;border-color:rgba(255,107,107,.4)">
+          <h5 class="dg">Irreversible</h5>
+          <p style="margin:0;font-size:11.5px;line-height:1.55;color:var(--muted)">
+            El borrado de <span class="mono">nightly/</span> en sftp no tiene vuelta: el destino no tiene papelera.
+            El motivo queda escrito en la entrada — no se finge un undo que no existe.
+          </p>
+        </div>
+
+        <div class="card" style="margin-top:14px">
+          <h5>Deshacer sesión</h5>
+          <p style="margin:0;font-size:11.5px;line-height:1.55;color:var(--muted)">
+            Revierte de la más nueva a la más vieja y se detiene en la primera que no cuadre.
+          </p>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div style="flex:1 1 auto;min-height:0;display:flex">
+          <div style="flex:1 1 54%;min-width:0;display:flex;flex-direction:column;background:var(--base)">
+            <div class="gcols" style="grid-template-columns:88px 108px 1fr"><span>Hora</span><span style="text-align:left">Operación</span><span style="text-align:left">Qué</span></div>
+            <div class="grows">
+              <div class="gr sel" style="grid-template-columns:88px 108px 1fr"><span class="mono" style="font-size:11px">11:07:03</span><span class="mono" style="font-size:11px">copy</span><span class="gn"><span class="txt">3 elementos → norte-ci</span></span></div>
+              <div class="gr" style="grid-template-columns:88px 108px 1fr"><span class="mono dim" style="font-size:11px">11:02:41</span><span class="mono" style="font-size:11px">delete</span><span class="gn"><span class="txt">12 elementos → papelera</span></span></div>
+              <div class="gr" style="grid-template-columns:88px 108px 1fr"><span class="mono dim" style="font-size:11px">10:47:19</span><span class="mono" style="font-size:11px">rename</span><span class="gn"><span class="txt">lote de 38 en campaña-otoño</span></span></div>
+              <div class="gr" style="grid-template-columns:88px 108px 1fr"><span class="mono dim" style="font-size:11px">10:41:55</span><span class="mono" style="font-size:11px">mkdir</span><span class="gn"><span class="txt">campaña-otoño/seleccion</span></span></div>
+              <div class="gr" style="grid-template-columns:88px 108px 1fr"><span class="mono dim" style="font-size:11px">10:38:02</span><span class="mono" style="font-size:11px">move</span><span class="gn"><span class="txt">412 ARW → archivo/2026</span></span></div>
+              <div class="gr" style="grid-template-columns:88px 108px 1fr;background:rgba(240,198,116,.07)"><span class="mono dim" style="font-size:11px">10:12:47</span><span class="mono am" style="font-size:11px">sync</span><span class="gn"><span class="txt am">plan 8a1e · parcial 2 de 3</span></span></div>
+              <div class="gr" style="grid-template-columns:88px 108px 1fr;background:rgba(255,107,107,.1)"><span class="mono dim" style="font-size:11px">10:12:44</span><span class="mono dg" style="font-size:11px">delete</span><span class="gn"><span class="txt dg">nightly/ en sftp · 312 ficheros</span></span></div>
+              <div class="gr" style="grid-template-columns:88px 108px 1fr"><span class="mono dim" style="font-size:11px">09:58:31</span><span class="mono" style="font-size:11px">chmod</span><span class="gn"><span class="txt">render.sh 0644 → 0755</span></span></div>
+              <div class="gr" style="grid-template-columns:88px 108px 1fr"><span class="mono dim" style="font-size:11px">09:40:10</span><span class="mono" style="font-size:11px">extract</span><span class="gn"><span class="txt">2025.zip → archivo/2025</span></span></div>
+              <div class="gr" style="grid-template-columns:88px 108px 1fr;opacity:.6"><span class="mono dim" style="font-size:11px">09:31:02</span><span class="mono cy" style="font-size:11px">agent.plan</span><span class="gn"><span class="txt">mcp:codex propuso 14 renombres</span></span></div>
+            </div>
+          </div>
+
+          <!-- Detalle: exactamente qué haría el undo. -->
+          <div style="flex:1 1 46%;min-width:0;border-left:1px solid var(--line);background:#080b0c;padding:18px 20px;overflow:hidden">
+            <div class="mono dim" style="font-size:9.5px;letter-spacing:.16em">ENTRADA 0x91AC · COPY · 11:07:03</div>
+            <div style="font-size:15px;color:var(--ink);margin-top:10px">Deshacer borra en destino los 3 ficheros creados</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:6px">No toca el origen. Verifica el blake3 antes de borrar.</div>
+
+            <div class="card" style="margin-top:16px;padding:12px 14px">
+              <div class="mono" style="font-size:10.5px;line-height:2;color:var(--muted)">
+                <div><span class="ph">1</span> DSC_2048.ARW <span class="dim">42.1 MB · blake3 9f2c… · creado</span></div>
+                <div><span class="ph">2</span> DSC_2049.ARW <span class="dim">41.7 MB · blake3 1b07… · creado</span></div>
+                <div><span class="ph">3</span> DSC_2050.ARW <span class="dim">43.0 MB · blake3 c4d1… · creado</span></div>
+              </div>
+            </div>
+
+            <div class="card" style="margin-top:12px;padding:12px 14px;border-color:rgba(240,198,116,.4)">
+              <div class="mono am" style="font-size:9.5px;letter-spacing:.14em">POR QUÉ NO HAY MEDIAS ENTRADAS</div>
+              <div style="font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.55">
+                La entrada se abre <b style="color:var(--ink)">una vez por tarea</b> (<span class="mono">pin_for_task</span>).
+                Si se abriera por operación, una copia larga podría quedar registrada a medias y el undo la revertiría a medias.
+              </div>
+            </div>
+
+            <div style="display:flex;gap:8px;margin-top:16px">
+              <span class="kbd" style="padding:7px 14px;border-color:var(--phosphor);background:var(--phosphor);color:var(--base)">Deshacer esta</span>
+              <span class="kbd" style="padding:7px 14px">Ver diff</span>
+              <span class="kbd" style="padding:7px 14px">Exportar</span>
+            </div>
+
+            <div class="mono dim" style="font-size:10px;margin-top:16px;line-height:1.7">
+              tarea 7f3a · usuario oscar · ntc embebido<br>
+              journal abierto en la primera mutación, no al arrancar
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="k">10 de 11 entradas reversibles · 1 irreversible con motivo</span>
+          <span class="right"><span class="k"><b>U</b> deshacer sesión</span> &nbsp; <span class="k"><b>U</b>+Shift sesión entera</span> &nbsp; <span class="k"><b>/</b> buscar</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,98 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 05 rename con IA · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">05</span><span class="sep">/</span>
+    <span>Rename con IA · GUI</span><span class="sep">·</span>
+    <span class="keys">propone, no aplica · el humano firma el plan</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">Rename con IA</span>
+      <span class="wpath">campaña-otoño · 38 ficheros</span>
+      <span class="wright">
+        <span class="pill">anthropic/claude</span>
+        <span class="pill on"><i></i>sólo metadatos</span>
+        <span class="pill">0,014 €</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <aside class="side" style="width:330px;flex:0 0 330px">
+        <h4>Instrucción</h4>
+        <div class="card" style="padding:12px 13px">
+          <div style="font-size:12.5px;line-height:1.55;color:var(--ink)">
+            Nombra las fotos por lo que sale en el nombre original y la fecha EXIF, formato
+            <span class="mono ph">aaaa-mm-dd_tema_nnn</span>, en minúsculas, sin acentos en el tema.
+          </div>
+        </div>
+
+        <h4>Qué sale de la máquina</h4>
+        <div class="grp">
+          <div class="it"><span class="ico ph">✓</span>Nombre<span class="tail">38</span></div>
+          <div class="it"><span class="ico ph">✓</span>Tamaño y mtime<span class="tail">38</span></div>
+          <div class="it"><span class="ico ph">✓</span>EXIF fecha/cámara<span class="tail">31</span></div>
+          <div class="it"><span class="ico dg">✕</span>Contenido<span class="tail">0 B</span></div>
+        </div>
+
+        <h4>Política</h4>
+        <div class="card" style="padding:11px 13px">
+          <div class="mono" style="font-size:10.5px;line-height:1.6;color:var(--muted)">
+            scope <span class="cy">ai.read-metadata</span><br>
+            path <span class="cy">…/campaña-otoño</span><br>
+            verdict <span class="ph">allow · sesión</span>
+          </div>
+        </div>
+
+        <h4>Modelo</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">◆</span>claude · nube<span class="tail">4 812 tok</span></div>
+          <div class="it"><span class="ico">◇</span>ollama · local<span class="tail">0 €</span></div>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div style="flex:1 1 auto;min-height:0;background:var(--base);display:flex;flex-direction:column">
+          <div class="gcols" style="grid-template-columns:34px 1fr 28px 1fr 132px">
+            <span></span><span>Actual</span><span></span><span style="text-align:left">Propuesto</span><span style="text-align:right">Confianza</span>
+          </div>
+          <div class="grows">
+            <div class="gr" style="grid-template-columns:34px 1fr 28px 1fr 132px"><span class="ph">✓</span><span class="gn"><span class="txt">IMG_4471.JPG</span></span><span class="dim">→</span><span class="gn"><span class="txt" style="color:var(--ink)">2026-08-14_vendimia_001.jpg</span></span><span class="gd ph">alta</span></div>
+            <div class="gr" style="grid-template-columns:34px 1fr 28px 1fr 132px"><span class="ph">✓</span><span class="gn"><span class="txt">IMG_4472.JPG</span></span><span class="dim">→</span><span class="gn"><span class="txt" style="color:var(--ink)">2026-08-14_vendimia_002.jpg</span></span><span class="gd ph">alta</span></div>
+            <div class="gr sel" style="grid-template-columns:34px 1fr 28px 1fr 132px"><span class="ph">✓</span><span class="gn"><span class="txt">DSC_2050.ARW</span></span><span class="dim">→</span><span class="gn"><span class="txt">2026-08-14_bodega_001.arw</span></span><span class="gd ph">alta</span></div>
+            <div class="gr" style="grid-template-columns:34px 1fr 28px 1fr 132px"><span class="ph">✓</span><span class="gn"><span class="txt">DSC_2051.ARW</span></span><span class="dim">→</span><span class="gn"><span class="txt" style="color:var(--ink)">2026-08-14_bodega_002.arw</span></span><span class="gd ph">alta</span></div>
+            <div class="gr" style="grid-template-columns:34px 1fr 28px 1fr 132px;background:rgba(240,198,116,.07)"><span class="am">?</span><span class="gn"><span class="txt am">CAFÉ.jpg</span></span><span class="dim">→</span><span class="gn"><span class="txt am">2026-08-12_cafe_001.jpg</span></span><span class="gd am">media</span></div>
+            <div class="gr" style="grid-template-columns:34px 1fr 28px 1fr 132px;background:rgba(240,198,116,.07)"><span class="am">?</span><span class="gn"><span class="txt am">escaneo0001.pdf</span></span><span class="dim">→</span><span class="gn"><span class="txt am">2026-08-10_contrato_001.pdf</span></span><span class="gd am">media</span></div>
+            <div class="gr" style="grid-template-columns:34px 1fr 28px 1fr 132px;opacity:.5"><span class="dg">✕</span><span class="gn"><span class="txt">notas de la llamada.txt</span></span><span class="dim">→</span><span class="gn"><span class="txt">2026-08-08_reunion_001.txt</span></span><span class="gd dg">rechazado</span></div>
+            <div class="gr" style="grid-template-columns:34px 1fr 28px 1fr 132px;background:rgba(255,107,107,.09)"><span class="dg">!</span><span class="gn"><span class="txt dg">informe-año.md</span></span><span class="dim">→</span><span class="gn"><span class="txt dg">informe-ano.md</span></span><span class="gd dg">pierde ñ</span></div>
+            <div class="gr" style="grid-template-columns:34px 1fr 28px 1fr 132px"><span></span><span class="gn"><span class="txt dim">… 30 pares más</span></span><span></span><span></span><span></span></div>
+          </div>
+        </div>
+
+        <div style="flex:0 0 auto;padding:14px 20px;border-top:1px solid var(--line);background:var(--elevated);display:flex;gap:14px;align-items:center">
+          <div class="card" style="flex:1;padding:11px 14px">
+            <div class="mono dim" style="font-size:10px;letter-spacing:.14em">EL MODELO NO TOCA EL DISCO</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5">
+              La respuesta se valida contra el esquema y se convierte en pares. Los pares entran en el <b style="color:var(--ink)">mismo ejecutor transaccional</b> del rename por lotes:
+              previsualización de colisiones, orden a prueba de ciclos y un solo undo.
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <span class="kbd" style="padding:7px 16px;border-color:var(--phosphor);background:var(--phosphor);color:var(--base)">Revisar plan (34)</span>
+            <span class="kbd" style="padding:7px 16px">Reproponer</span>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="k">34 aceptados · 3 rechazados · <span class="am">1 aviso de encoding</span></span>
+          <span class="right"><span class="k"><b>Space</b> aceptar</span> &nbsp; <span class="k"><b>A</b> todos</span> &nbsp; <span class="k"><b>Esc</b> descartar</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

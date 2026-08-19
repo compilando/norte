@@ -1,0 +1,93 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 06 comparar directorios · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">06</span><span class="sep">/</span>
+    <span>Comparar directorios · TUI</span><span class="sep">·</span>
+    <span class="keys">Shift+F2 · el pane de diferencias es operable</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">fs.compare · task c447</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">Comparar</span><span class="dim">  local:/home/oscar/media/2026  ⟷  sftp://build@norte-ci/srv/artifacts</span>
+        <span style="flex:1"></span><span class="dim">criterio: tamaño + mtime + blake3</span>
+      </div>
+
+      <div class="panes">
+        <!-- Los dos panes se mantienen: comparar no sustituye la navegación. -->
+        <div class="pane active">
+          <div class="pane-title"><span class="ph">▌</span>izquierda · 28 entradas<span style="flex:1"></span><span class="dim">1 204 hasheadas</span></div>
+          <div class="pane-head"><span style="flex:1">Name</span><span style="width:10ch;text-align:right">Size</span><span style="width:9ch;text-align:right">Estado</span></div>
+          <div class="pane-body">
+            <div class="e"><span class="n">  DSC_2048.ARW</span><span class="s">42.1 MB</span><span style="width:9ch;text-align:right" class="ph">=</span></div>
+            <div class="e cur"><span class="n">  DSC_2049.ARW</span><span class="s">41.7 MB</span><span style="width:9ch;text-align:right">≠</span></div>
+            <div class="e"><span class="n">  DSC_2050.ARW</span><span class="s">43.0 MB</span><span style="width:9ch;text-align:right" class="cy">→</span></div>
+            <div class="e"><span class="n">  informe-año.md</span><span class="s">14 KB</span><span style="width:9ch;text-align:right" class="am">≠ mtime</span></div>
+            <div class="e"><span class="n">  release-notes.md</span><span class="s">6 KB</span><span style="width:9ch;text-align:right" class="dg">←</span></div>
+            <div class="e dim"><span class="n">  (no está)</span><span class="s"></span><span style="width:9ch;text-align:right"></span></div>
+            <div class="e"><span class="n">  SHA256SUMS</span><span class="s">412 B</span><span style="width:9ch;text-align:right" class="ph">=</span></div>
+            <div class="e"><span class="n">  café.jpg</span><span class="s">2.1 MB</span><span style="width:9ch;text-align:right" class="am">NFC/NFD</span></div>
+          </div>
+          <div class="pane-foot"><span class="dim">sólo aquí 4 · distintos 3 · iguales 19</span><span style="flex:1"></span><span class="dim">ext4 · case-sensitive</span></div>
+        </div>
+
+        <div class="pane">
+          <div class="pane-title"><span class="dim">▌</span>derecha · 19 entradas<span style="flex:1"></span><span class="dim">sftp</span></div>
+          <div class="pane-head"><span style="flex:1">Name</span><span style="width:10ch;text-align:right">Size</span><span style="width:9ch;text-align:right">Estado</span></div>
+          <div class="pane-body">
+            <div class="e"><span class="n">  DSC_2048.ARW</span><span class="s">42.1 MB</span><span style="width:9ch;text-align:right" class="ph">=</span></div>
+            <div class="e"><span class="n">  DSC_2049.ARW</span><span class="s">41.7 MB</span><span style="width:9ch;text-align:right">≠</span></div>
+            <div class="e dim"><span class="n">  (no está)</span><span class="s"></span><span style="width:9ch;text-align:right"></span></div>
+            <div class="e"><span class="n">  informe-año.md</span><span class="s">14 KB</span><span style="width:9ch;text-align:right" class="am">≠ mtime</span></div>
+            <div class="e"><span class="n">  release-notes.md</span><span class="s">7 KB</span><span style="width:9ch;text-align:right" class="dg">←</span></div>
+            <div class="e"><span class="n">  provenance.intoto.jsonl</span><span class="s">9 KB</span><span style="width:9ch;text-align:right" class="dg">←</span></div>
+            <div class="e"><span class="n">  SHA256SUMS</span><span class="s">412 B</span><span style="width:9ch;text-align:right" class="ph">=</span></div>
+            <div class="e"><span class="n">  café.jpg</span><span class="s">2.1 MB</span><span style="width:9ch;text-align:right" class="am">NFC/NFD</span></div>
+          </div>
+          <div class="pane-foot"><span class="dim">sólo allí 2 · distintos 3 · iguales 19</span><span style="flex:1"></span><span class="dim">macOS origen · NFD</span></div>
+        </div>
+      </div>
+
+      <!-- Resumen: un lado que se expande expande el par (commit 323c2aa). -->
+      <div class="pane" style="height:calc(9 * var(--cell-h));flex:0 0 auto">
+        <div class="pane-title"><span class="ph">▌</span>Diferencias<span style="flex:1"></span><span class="dim">Enter abre el par · Space marca a ambos lados</span></div>
+        <div class="pane-body">
+          <div class="e"><span style="width:16ch" class="ph">iguales   19</span><span class="n dim">tamaño y blake3 coinciden; no se vuelven a leer</span></div>
+          <div class="e"><span style="width:16ch">distintos  3</span><span class="n dim">mismo nombre, contenido o mtime distintos</span></div>
+          <div class="e"><span style="width:16ch" class="cy">sólo izq.  4</span><span class="n dim">DSC_2050.ARW · launch-assets.zip · raw/ · storyboard-final-FINAL.psd</span></div>
+          <div class="e"><span style="width:16ch" class="dg">sólo der.  2</span><span class="n dim">provenance.intoto.jsonl · sbom.spdx.json</span></div>
+          <div class="e"><span style="width:16ch" class="am">avisos     1</span><span class="n am">café.jpg: el origen es NFD y el destino NFC — mismo nombre, bytes distintos</span></div>
+        </div>
+        <div class="pane-foot"><span class="dim">comparar no muta nada · Ctrl+Y convierte estas diferencias en un plan de sincronización</span></div>
+      </div>
+
+      <div class="status">
+        <span class="mu">hash 34 % · 1 204 ficheros</span><span class="dim">se compara en NFC preservando los bytes originales</span>
+        <span style="flex:1"></span><span class="dim">Ctrl+K cancela</span>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Criterio</span></span>
+        <span class="k"><b>3</b><span>Ver par</span></span>
+        <span class="k"><b>4</b><span>Diff</span></span>
+        <span class="k"><b>5</b><span>Copiar →</span></span>
+        <span class="k"><b>6</b><span>Copiar ←</span></span>
+        <span class="k"><b>7</b><span>Filtro</span></span>
+        <span class="k"><b>8</b><span>Sync</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Cerrar</span></span>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,75 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 08 búsqueda · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">08</span><span class="sep">/</span>
+    <span>Búsqueda viva e indexada · TUI</span><span class="sep">·</span>
+    <span class="keys">Alt+F7 · los resultados son un pane operable</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">task 3b91 · streaming</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">Buscar</span><span class="dim">  «factura del trimestre» en ~/proyectos  ·  341 aciertos y subiendo</span>
+        <span style="flex:1"></span><span class="dim">Ctrl+K para</span>
+      </div>
+
+      <div class="pane active" style="height:calc(7 * var(--cell-h));flex:0 0 auto">
+        <div class="pane-title"><span class="ph">▌</span>Consulta<span style="flex:1"></span><span class="dim">Enter busca · Ctrl+Enter añade al pane</span></div>
+        <div class="pane-body">
+          <div class="e"><span class="n">&gt; factura del trimestre_</span></div>
+          <div class="e"><span class="n"><span class="mu">Modo    </span>( ) nombre   (<span class="ph">•</span>) contenido   ( ) <span class="cy">semántico (índice)</span>   ( ) regex</span></div>
+          <div class="e"><span class="n"><span class="mu">Dónde   </span>~/proyectos   <span class="dim">·  recursivo · sigue enlaces: no · ocultos: no</span></span></div>
+          <div class="e"><span class="n"><span class="mu">Texto   </span>[<span class="ph">x</span>] detectar codificación (UTF-8, CP1252, UTF-16LE)   [ ] distinguir may/min</span></div>
+          <div class="e"><span class="n"><span class="mu">Índice  </span><span class="cy">2 917 / 24 310 ficheros</span><span class="dim">  · lo no indexado se busca en vivo, no se omite</span></span></div>
+        </div>
+      </div>
+
+      <div class="pane" style="flex:1 1 auto;min-height:0">
+        <div class="pane-title"><span class="dim">▌</span>Resultados · pane virtual<span style="flex:1"></span><span class="dim">F5 copia · F8 borra · Space marca — como cualquier pane</span></div>
+        <div class="pane-head"><span style="flex:1">RUTA</span><span style="width:8ch;text-align:right">LÍNEA</span><span style="width:30ch">COINCIDENCIA</span></div>
+        <div class="pane-body">
+          <div class="e cur"><span class="n">clientes/acme/2026-Q2/factura-0148.md</span><span style="width:8ch;text-align:right">12</span><span style="width:30ch">…la <b>factura del trimestre</b> se…</span></div>
+          <div class="e"><span class="n">clientes/acme/2026-Q2/notas.txt</span><span style="width:8ch;text-align:right">4</span><span style="width:30ch" class="dim">…enviar <span class="ph">factura</span> del <span class="ph">trimestre</span>…</span></div>
+          <div class="e"><span class="n">clientes/bruma/contabilidad.ods</span><span style="width:8ch;text-align:right" class="dim">—</span><span style="width:30ch" class="dim">hoja «Q2» · <span class="cy">semántico 0.88</span></span></div>
+          <div class="e"><span class="n">archivo/2025.zip → q4/factura-0099.pdf</span><span style="width:8ch;text-align:right" class="dim">—</span><span style="width:30ch" class="dim">dentro del archivo · CP437</span></div>
+          <div class="e"><span class="n">correo/adjuntos/Factura_Trimestre.PDF</span><span style="width:8ch;text-align:right" class="dim">—</span><span style="width:30ch" class="dim">texto extraído · 2 páginas</span></div>
+          <div class="e"><span class="n">sftp://norte-ci/srv/facturas/0148.md</span><span style="width:8ch;text-align:right">12</span><span style="width:30ch" class="dim">…la <span class="ph">factura del trimestre</span>…</span></div>
+          <div class="e"><span class="n am">legacy/facturación-1998.txt</span><span style="width:8ch;text-align:right" class="am">31</span><span style="width:30ch" class="am">CP1252 · «factura del trimestre»</span></div>
+          <div class="e dim"><span class="n">… 334 más, llegando</span><span style="width:8ch;text-align:right"></span><span style="width:30ch"></span></div>
+        </div>
+        <div class="pane-foot">
+          <span class="cy">341 aciertos</span><span class="dim"> · 6 fuentes · local, sftp, dentro de archivos y del índice semántico</span>
+          <span style="flex:1"></span><span class="dim">88 %</span>
+        </div>
+      </div>
+
+      <div class="status">
+        <span class="mu">los resultados llegan mientras buscas</span>
+        <span class="dim">y ya se pueden marcar y operar; cancelar deja lo encontrado</span>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Guardar</span></span>
+        <span class="k"><b>3</b><span>Ver</span></span>
+        <span class="k"><b>4</b><span>Abrir</span></span>
+        <span class="k"><b>5</b><span>Copiar</span></span>
+        <span class="k"><b>6</b><span>Mover</span></span>
+        <span class="k"><b>7</b><span>Refinar</span></span>
+        <span class="k"><b>8</b><span>Borrar</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Cerrar</span></span>
+      </div>
+    </div>
+  </div>
+</div>

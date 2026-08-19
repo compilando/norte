@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 14 teclado · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">14</span><span class="sep">/</span>
+    <span>Teclado: which-key y paleta · TUI</span><span class="sep">·</span>
+    <span class="keys">Ctrl+P paleta · F1 ayuda · presets orthodox/vim/cua</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">preset orthodox · capa de usuario activa</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">Teclado</span><span class="dim">  cada comando tiene nombre de protocolo: la tecla, la paleta, Lua y el agente llaman a lo mismo</span>
+        <span style="flex:1"></span><span class="dim">Esc</span>
+      </div>
+
+      <div class="modal-wrap">
+        <div class="panes" style="height:100%">
+          <div class="pane active">
+            <div class="pane-title"><span class="ph">▌</span>local:/home/oscar/media/2026<span style="flex:1"></span><span class="dim">28 items</span></div>
+            <div class="pane-head"><span style="flex:1">Name</span><span style="width:10ch;text-align:right">Size</span></div>
+            <div class="pane-body">
+              <div class="e dir"><span class="n">▸ campaña-otoño</span><span class="s">DIR</span></div>
+              <div class="e dir"><span class="n">▸ design-system</span><span class="s">DIR</span></div>
+              <div class="e cur"><span class="n">  DSC_2050.ARW</span><span class="s">43.0 MB</span></div>
+              <div class="e"><span class="n">  informe-año.md</span><span class="s">14 KB</span></div>
+              <div class="e"><span class="n">  launch-assets.zip</span><span class="s">1.2 GB</span></div>
+            </div>
+            <div class="pane-foot"><span class="dim">pane</span></div>
+          </div>
+          <div class="pane">
+            <div class="pane-title"><span class="dim">▌</span>sftp://build@norte-ci/srv/artifacts<span style="flex:1"></span><span class="dim">19 items</span></div>
+            <div class="pane-head"><span style="flex:1">Name</span><span style="width:10ch;text-align:right">Size</span></div>
+            <div class="pane-body">
+              <div class="e dir"><span class="n">▸ 2026-08-14</span><span class="s">DIR</span></div>
+              <div class="e"><span class="n">  SHA256SUMS</span><span class="s">412 B</span></div>
+              <div class="e"><span class="n">  release-notes.md</span><span class="s">7 KB</span></div>
+            </div>
+            <div class="pane-foot"><span class="dim">pane</span></div>
+          </div>
+        </div>
+
+        <!-- Which-key: qué continúa la secuencia que acabas de empezar. -->
+        <div class="modal" style="width:90ch;top:auto;bottom:0;transform:translate(-50%,0)">
+          <div class="mtitle">Alt+…  ·  which-key  ·  10 continuaciones</div>
+          <div class="mrow"><span class="ph" style="width:10ch">Alt+i</span><span class="mu" style="width:26ch">pane.mirror</span><span class="dim">llevar esta ruta al otro pane</span></div>
+          <div class="mrow"><span class="ph" style="width:10ch">Alt+u</span><span class="mu" style="width:26ch">pane.pull</span><span class="dim">traer la ruta del otro pane</span></div>
+          <div class="mrow"><span class="ph" style="width:10ch">Alt+e</span><span class="mu" style="width:26ch">pane.names-encoding</span><span class="dim">releer los nombres con otra codificación</span></div>
+          <div class="mrow"><span class="ph" style="width:10ch">Alt+c</span><span class="mu" style="width:26ch">pane.columns</span><span class="dim">elegir columnas</span></div>
+          <div class="mrow"><span class="ph" style="width:10ch">Alt+.</span><span class="mu" style="width:26ch">pane.toggle-hidden</span><span class="dim">mostrar ocultos</span></div>
+          <div class="mrow"><span class="ph" style="width:10ch">Alt+←/→</span><span class="mu" style="width:26ch">nav.back / nav.forward</span><span class="dim">historial del pane</span></div>
+          <div class="mrow"><span class="ph" style="width:10ch">Alt+↓</span><span class="mu" style="width:26ch">pane.history</span><span class="dim">rutas visitadas</span></div>
+          <div class="mrow"><span class="am" style="width:10ch">Alt+F7</span><span class="mu" style="width:26ch">pane.search</span><span class="am">bajo tmux no llega (#159)</span></div>
+          <div class="mrow"></div>
+          <div class="mrow"><span class="dim">secuencias libres de prefijo: si Alt+i existe, ninguna otra empieza por ahí</span></div>
+        </div>
+      </div>
+
+      <div class="status">
+        <span class="mu">preset orthodox</span><span class="dim">+ capa de usuario (3 cambios) · Tab entre panes es sagrada: ningún preset la reasigna</span>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Menu</span></span>
+        <span class="k"><b>3</b><span>View</span></span>
+        <span class="k"><b>4</b><span>Open</span></span>
+        <span class="k"><b>5</b><span>Copy</span></span>
+        <span class="k"><b>6</b><span>Move</span></span>
+        <span class="k"><b>7</b><span>Mkdir</span></span>
+        <span class="k"><b>8</b><span>Delete</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Quit</span></span>
+      </div>
+    </div>
+  </div>
+</div>

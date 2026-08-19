@@ -1,0 +1,118 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 08 búsqueda · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">08</span><span class="sep">/</span>
+    <span>Búsqueda viva e indexada · GUI</span><span class="sep">·</span>
+    <span class="keys">resultado = pane de verdad, con previsualización</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">Buscar</span>
+      <span class="wpath">«factura del trimestre» en ~/proyectos</span>
+      <span class="wright">
+        <span class="pill on"><i></i>341 aciertos</span>
+        <span class="pill">streaming 88 %</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <aside class="side" style="width:284px;flex:0 0 284px">
+        <h4>Modo</h4>
+        <div class="grp">
+          <div class="it"><span class="ico">A</span>Nombre</div>
+          <div class="it on"><span class="ico">¶</span>Contenido</div>
+          <div class="it"><span class="ico cy">◆</span>Semántico<span class="tail">índice</span></div>
+          <div class="it"><span class="ico">.*</span>Regex</div>
+        </div>
+
+        <h4>Fuentes</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">▤</span>Disco local<span class="tail">287</span></div>
+          <div class="it on"><span class="ico">↗</span>sftp norte-ci<span class="tail">31</span></div>
+          <div class="it on"><span class="ico">◇</span>Dentro de archivos<span class="tail">18</span></div>
+          <div class="it on"><span class="ico cy">◆</span>Índice semántico<span class="tail">5</span></div>
+        </div>
+
+        <h4>Texto</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">✓</span>Detectar codificación</div>
+          <div class="it"><span class="ico">·</span>Distinguir may/min</div>
+          <div class="it"><span class="ico">·</span>Palabra completa</div>
+        </div>
+
+        <div class="card" style="margin-top:20px">
+          <h5>Índice</h5>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="track cyan" style="height:5px"><i style="width:12%"></i></span>
+            <span class="mono cy" style="font-size:10.5px">12 %</span>
+          </div>
+          <p style="margin:8px 0 0;font-size:11px;line-height:1.5;color:var(--muted)">
+            Lo aún no indexado se busca en vivo. Nunca se omite en silencio.
+          </p>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div style="flex:1 1 auto;min-height:0;display:flex">
+          <!-- Resultados -->
+          <div style="flex:1 1 58%;min-width:0;display:flex;flex-direction:column;background:var(--base);border-right:1px solid var(--line)">
+            <div class="gcols" style="grid-template-columns:1fr 74px 110px"><span>Ruta</span><span>Línea</span><span style="text-align:right">Fuente</span></div>
+            <div class="grows">
+              <div class="gr sel" style="grid-template-columns:1fr 74px 110px"><span class="gn"><span class="ico">¶</span><span class="txt">clientes/acme/2026-Q2/factura-0148.md</span></span><span class="gs">12</span><span class="gd">local</span></div>
+              <div class="gr" style="grid-template-columns:1fr 74px 110px"><span class="gn"><span class="ico">¶</span><span class="txt">clientes/acme/2026-Q2/notas.txt</span></span><span class="gs">4</span><span class="gd">local</span></div>
+              <div class="gr" style="grid-template-columns:1fr 74px 110px"><span class="gn"><span class="ico cy">◆</span><span class="txt">clientes/bruma/contabilidad.ods</span></span><span class="gs dim">—</span><span class="gd cy">0.88 sem.</span></div>
+              <div class="gr" style="grid-template-columns:1fr 74px 110px"><span class="gn"><span class="ico">◇</span><span class="txt">archivo/2025.zip → q4/factura-0099.pdf</span></span><span class="gs dim">—</span><span class="gd">archivo</span></div>
+              <div class="gr" style="grid-template-columns:1fr 74px 110px"><span class="gn"><span class="ico">·</span><span class="txt">correo/adjuntos/Factura_Trimestre.PDF</span></span><span class="gs dim">—</span><span class="gd">pdf</span></div>
+              <div class="gr" style="grid-template-columns:1fr 74px 110px"><span class="gn"><span class="ico">↗</span><span class="txt">sftp://norte-ci/srv/facturas/0148.md</span></span><span class="gs">12</span><span class="gd">sftp</span></div>
+              <div class="gr" style="grid-template-columns:1fr 74px 110px;background:rgba(240,198,116,.07)"><span class="gn"><span class="ico am">¶</span><span class="txt am">legacy/facturación-1998.txt</span></span><span class="gs am">31</span><span class="gd am">CP1252</span></div>
+              <div class="gr" style="grid-template-columns:1fr 74px 110px"><span class="gn"><span class="ico">¶</span><span class="txt">clientes/acme/2025-Q4/factura-0091.md</span></span><span class="gs">9</span><span class="gd">local</span></div>
+              <div class="gr" style="grid-template-columns:1fr 74px 110px"><span class="gn"><span class="txt dim">… 334 más, llegando</span></span><span></span><span></span></div>
+            </div>
+          </div>
+
+          <!-- Previsualización del acierto bajo el cursor. -->
+          <div style="flex:1 1 42%;min-width:0;display:flex;flex-direction:column;background:#080b0c">
+            <div class="gpane-head"><span class="dotk"></span>factura-0148.md<span style="margin-left:auto" class="dim">UTF-8 · LF · 41 líneas</span></div>
+            <div style="flex:1;padding:14px 18px;font-family:var(--mono);font-size:12px;line-height:1.85;color:var(--muted);overflow:hidden">
+              <div><span class="dim" style="display:inline-block;width:3ch;text-align:right">9</span>  ## Resumen</div>
+              <div><span class="dim" style="display:inline-block;width:3ch;text-align:right">10</span>  </div>
+              <div><span class="dim" style="display:inline-block;width:3ch;text-align:right">11</span>  Cliente: ACME S.L.</div>
+              <div style="background:rgba(183,255,82,.12);margin:0 -18px;padding:0 18px"><span class="dim" style="display:inline-block;width:3ch;text-align:right">12</span>  la <span class="ph" style="background:rgba(183,255,82,.22)">factura del trimestre</span> se emite el día 5</div>
+              <div><span class="dim" style="display:inline-block;width:3ch;text-align:right">13</span>  con vencimiento a 30 días.</div>
+              <div><span class="dim" style="display:inline-block;width:3ch;text-align:right">14</span>  </div>
+              <div><span class="dim" style="display:inline-block;width:3ch;text-align:right">15</span>  | Concepto        | Importe  |</div>
+              <div><span class="dim" style="display:inline-block;width:3ch;text-align:right">16</span>  | --------------- | -------- |</div>
+              <div><span class="dim" style="display:inline-block;width:3ch;text-align:right">17</span>  | Horas Q2        | 8 400 €  |</div>
+            </div>
+            <div style="padding:12px 18px;border-top:1px solid var(--line)">
+              <div class="mono dim" style="font-size:10px;letter-spacing:.14em">EL PANE DE RESULTADOS ES UN PANE</div>
+              <div style="font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.5">
+                Marcar, copiar (F5), mover (F6) y borrar (F8) funcionan aquí igual que en un directorio. Guardar la consulta la deja como carpeta virtual.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tray">
+          <div class="tray-row">
+            <span class="tname">Buscar «factura del trimestre»</span>
+            <span class="track cyan"><i style="width:88%"></i></span>
+            <span class="tpct" style="color:var(--cyan)">88 %</span>
+            <span class="tmeta">cancelar conserva los 341 encontrados</span>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <span class="k">6 fuentes · local · sftp · dentro de archivos · índice</span>
+          <span class="right"><span class="k"><b>Alt+F7</b> buscar</span> &nbsp; <span class="k"><b>Enter</b> abrir</span> &nbsp; <span class="k"><b>Ctrl+K</b> parar</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

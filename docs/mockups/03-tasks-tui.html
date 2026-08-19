@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 03 tareas async · TUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">03</span><span class="sep">/</span>
+    <span>Cola de tareas · TUI</span><span class="sep">·</span>
+    <span class="keys">Ctrl+K cancelar · p pausar · r reintentar · Enter traza</span>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+      <span class="title">ntc — 120×36</span>
+      <span class="right">scheduler · 4 en curso · 2 en cola</span>
+    </div>
+
+    <div class="screen">
+      <div class="row" style="color:var(--muted)">
+        <span class="ph">Tareas</span><span class="dim">  toda operación larga es una tarea cancelable; ninguna bloquea los panes</span>
+        <span style="flex:1"></span><span class="dim">Tab vuelve a los panes</span>
+      </div>
+
+      <div class="pane active" style="flex:1 1 auto;min-height:0">
+        <div class="pane-head"><span style="width:8ch">ID</span><span style="width:14ch">TIPO</span><span style="flex:1">OBJETIVO</span><span style="width:24ch">PROGRESO</span><span style="width:12ch;text-align:right">ESTADO</span></div>
+        <div class="pane-body">
+          <div class="e cur"><span style="width:8ch">7f3a</span><span style="width:14ch">copy</span><span class="n">3 elementos → norte-ci:/srv/artifacts</span><span style="width:24ch"><span class="bar">████████████<span class="rest">████████</span></span> 61 %</span><span style="width:12ch;text-align:right">running</span></div>
+          <div class="e"><span style="width:8ch">a10c</span><span style="width:14ch">index</span><span class="n">local:/home/oscar/media/2026/raw</span><span style="width:24ch"><span class="bar">██<span class="rest">██████████████████</span></span> 12 %</span><span style="width:12ch;text-align:right" class="cy">running</span></div>
+          <div class="e"><span style="width:8ch">3b91</span><span style="width:14ch">search</span><span class="n">contenido «factura» en ~/proyectos</span><span style="width:24ch"><span class="bar">██████████████████<span class="rest">██</span></span> 88 %</span><span style="width:12ch;text-align:right" class="cy">streaming</span></div>
+          <div class="e"><span style="width:8ch">c447</span><span style="width:14ch">hash</span><span class="n">blake3 de 1 204 ficheros (comparar)</span><span style="width:24ch"><span class="bar">███████<span class="rest">█████████████</span></span> 34 %</span><span style="width:12ch;text-align:right" class="cy">running</span></div>
+          <div class="e dim"><span style="width:8ch">d902</span><span style="width:14ch">sync</span><span class="n">plan retenido · espera aprobación</span><span style="width:24ch"><span class="rest">████████████████████</span>  —</span><span style="width:12ch;text-align:right">queued</span></div>
+          <div class="e dim"><span style="width:8ch">e115</span><span style="width:14ch">extract</span><span class="n">launch-assets.zip → ./launch</span><span style="width:24ch"><span class="rest">████████████████████</span>  —</span><span style="width:12ch;text-align:right">queued</span></div>
+          <div class="e mark"><span style="width:8ch">b7d0</span><span style="width:14ch">copy</span><span class="n">voz-en-off.wav → SONY_CARD</span><span style="width:24ch"><span class="bar am">█████████<span class="rest">███████████</span></span> 45 %</span><span style="width:12ch;text-align:right">paused</span></div>
+          <div class="e"><span style="width:8ch" class="dg">f331</span><span style="width:14ch" class="dg">move</span><span class="n dg">informe-año.md → Datos (EBUSY)</span><span style="width:24ch" class="dg">reintento 3/5 en 00:04</span><span style="width:12ch;text-align:right" class="dg">failing</span></div>
+          <div class="e dim"><span style="width:8ch">9c02</span><span style="width:14ch">delete</span><span class="n">12 elementos → papelera</span><span style="width:24ch">completada 11:02:41</span><span style="width:12ch;text-align:right" class="ph">done</span></div>
+          <div class="e dim"><span style="width:8ch">4471</span><span style="width:14ch">rename</span><span class="n">lote de 38 en campaña-otoño</span><span style="width:24ch">completada 10:47:19 · undo 1</span><span style="width:12ch;text-align:right" class="ph">done</span></div>
+        </div>
+        <div class="pane-foot"><span class="dim">Ctrl+K cancela · p pausa · r reintenta ya · Enter abre la traza · x limpia terminadas</span><span style="flex:1"></span><span class="dim">10 tareas</span></div>
+      </div>
+
+      <!-- Detalle de la tarea bajo el cursor: la traza es local y se puede leer. -->
+      <div class="pane" style="height:calc(11 * var(--cell-h));flex:0 0 auto">
+        <div class="pane-title"><span class="ph">▌</span>task 7f3a · copy · traza local<span style="flex:1"></span><span class="dim">nada sale de la máquina</span></div>
+        <div class="pane-body">
+          <div class="e dim"><span class="n">11:06:02.114  <span class="mu">task.start</span>      kind=copy items=3 bytes=126.8MB dst=sftp://build@norte-ci/…</span></div>
+          <div class="e dim"><span class="n">11:06:02.118  <span class="mu">journal.open</span>    entry=0x91ac reversal=restore_from_trash pin_for_task=yes</span></div>
+          <div class="e dim"><span class="n">11:06:02.140  <span class="mu">policy.check</span>    scope=write:sftp://norte-ci/srv/artifacts verdict=<span class="ph">allow</span></span></div>
+          <div class="e dim"><span class="n">11:06:02.361  <span class="mu">vfs.caps</span>        loc=sftp://…/2026-08-14 rename=yes atomic_replace=<span class="am">no</span> perms=posix</span></div>
+          <div class="e dim"><span class="n">11:06:09.884  <span class="mu">item.done</span>       DSC_2048.ARW 42.1MB 34.2MB/s verify=blake3 ok</span></div>
+          <div class="e dim"><span class="n">11:06:31.207  <span class="mu">item.conflict</span>   DSC_2048.ARW exists dst_mtime&gt;src_mtime → <span class="am">espera decisión</span></span></div>
+          <div class="e dim"><span class="n">11:07:03.550  <span class="mu">item.progress</span>   DSC_2049.ARW 18.2/41.7MB partial=.norte-partial-DSC_2049.ARW</span></div>
+        </div>
+      </div>
+
+      <div class="status">
+        <span class="mu">cancelar es cooperativo</span><span class="dim">cada bucle mira el CancellationToken</span>
+        <span style="flex:1"></span><span class="dim">un panic falla su tarea, no el daemon</span>
+      </div>
+
+      <div class="fkeys">
+        <span class="k"><b>1</b><span>Help</span></span>
+        <span class="k"><b>2</b><span>Menu</span></span>
+        <span class="k off"><b>3</b><span>View</span></span>
+        <span class="k off"><b>4</b><span>Open</span></span>
+        <span class="k off"><b>5</b><span>Copy</span></span>
+        <span class="k off"><b>6</b><span>Move</span></span>
+        <span class="k off"><b>7</b><span>Mkdir</span></span>
+        <span class="k"><b>8</b><span>Cancel</span></span>
+        <span class="k"><b>9</b><span>Theme</span></span>
+        <span class="k"><b>10</b><span>Quit</span></span>
+      </div>
+    </div>
+  </div>
+</div>

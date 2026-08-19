@@ -1,0 +1,113 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 13 control de agente · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">13</span><span class="sep">/</span>
+    <span>Control de agente · GUI</span><span class="sep">·</span>
+    <span class="keys">qué pide, qué tiene concedido y qué pasaría si dices que sí</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">Agentes</span>
+      <span class="wpath">mcp serve · 2 sesiones · 1 plugin wasm</span>
+      <span class="wright">
+        <span class="pill warn"><i></i>1 permiso esperando</span>
+        <span class="pill">auditoría local</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <aside class="side" style="width:286px;flex:0 0 286px">
+        <h4>Sesiones</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">◆</span>claude-code<span class="tail">128</span></div>
+          <div class="it"><span class="ico">◇</span>codex<span class="tail">41</span></div>
+          <div class="it"><span class="ico">▣</span>plugin git-cols<span class="tail">wasm</span></div>
+        </div>
+
+        <h4>Ámbito de s-4a17</h4>
+        <div class="grp">
+          <div class="it"><span class="ico ph">✓</span>read ~/proyectos</div>
+          <div class="it"><span class="ico ph">✓</span>write …/borradores</div>
+          <div class="it"><span class="ico dg">✕</span>write …/clientes</div>
+          <div class="it"><span class="ico dg">✕</span>red</div>
+          <div class="it"><span class="ico dg">✕</span>ejecutar procesos</div>
+        </div>
+
+        <div class="card" style="margin-top:20px">
+          <h5>Regla de la casa</h5>
+          <p style="margin:0;font-size:11.5px;line-height:1.55;color:var(--muted)">
+            Ni agentes ni plugins tocan el sistema de ficheros. Todo pasa por el core y el motor de políticas —
+            <b style="color:var(--ink)">sin excepciones temporales</b>.
+          </p>
+        </div>
+
+        <div class="card" style="margin-top:14px">
+          <h5>Plan retenido</h5>
+          <p style="margin:0;font-size:11.5px;line-height:1.55;color:var(--muted)">
+            <span class="mono">c81f</span> se guarda por conexión. Otra sesión con el mismo hash no lo canjea.
+          </p>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div style="flex:1 1 auto;min-height:0;background:var(--base);padding:18px 20px;display:flex;flex-direction:column;gap:13px;overflow:hidden">
+
+          <!-- La decisión, arriba y sin ambigüedad. -->
+          <div class="card" style="border-color:rgba(240,198,116,.55);padding:16px 18px">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="pill warn"><i></i>esperando decisión</span>
+              <span class="mono dim" style="font-size:10.5px">claude-code · s-4a17 · 11:14:31</span>
+            </div>
+            <div style="font-size:16px;color:var(--ink);margin-top:12px">
+              Quiere <span class="am">escribir</span> en <span class="mono">~/proyectos/clientes/acme</span>
+            </div>
+            <div style="font-size:12.5px;color:var(--muted);margin-top:7px;line-height:1.55">
+              Renombrar 14 ficheros (plan <span class="mono">c81f</span>, ya previsualizado). Motivo declarado:
+              «normalizar los nombres de factura del Q2». Hoy sólo tiene <span class="mono ph">read</span> en esa ruta.
+            </div>
+            <div style="display:flex;gap:26px;margin-top:13px;font-family:var(--mono);font-size:10.5px;color:var(--muted)">
+              <span><span class="ph">14</span> renombres reversibles</span>
+              <span><span class="ph">0</span> borrados</span>
+              <span><span class="ph">0</span> sobrescrituras</span>
+              <span>journal: entrada con id de sesión y hash del plan</span>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+              <span class="kbd" style="padding:7px 15px;border-color:var(--phosphor);background:var(--phosphor);color:var(--base)">Permitir una vez</span>
+              <span class="kbd" style="padding:7px 15px">Toda la sesión</span>
+              <span class="kbd" style="padding:7px 15px">Ampliar ámbito…</span>
+              <span class="kbd" style="padding:7px 15px;color:var(--danger);border-color:rgba(255,107,107,.45)">Denegar</span>
+            </div>
+            <div class="mono dim" style="font-size:10px;margin-top:10px">denegar devuelve un error tipado al agente; no se le dice que salió bien</div>
+          </div>
+
+          <!-- Auditoría -->
+          <div style="flex:1 1 auto;min-height:0;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;overflow:hidden">
+            <div class="gcols" style="grid-template-columns:88px 92px 108px 1fr 96px;border-bottom:1px solid var(--line)">
+              <span>Hora</span><span style="text-align:left">Sesión</span><span style="text-align:left">Llamada</span><span style="text-align:left">Objetivo</span><span style="text-align:right">Veredicto</span>
+            </div>
+            <div class="grows" style="padding:4px 0">
+              <div class="gr" style="grid-template-columns:88px 92px 108px 1fr 96px;height:32px"><span class="mono dim" style="font-size:10.5px">11:14:22</span><span class="mono dim" style="font-size:10.5px">s-4a17</span><span class="mono" style="font-size:10.5px">fs.list</span><span class="gn"><span class="txt">~/proyectos/clientes/acme</span></span><span class="gd ph">allow</span></div>
+              <div class="gr" style="grid-template-columns:88px 92px 108px 1fr 96px;height:32px"><span class="mono dim" style="font-size:10.5px">11:14:25</span><span class="mono dim" style="font-size:10.5px">s-4a17</span><span class="mono" style="font-size:10.5px">fs.read</span><span class="gn"><span class="txt">…/2026-Q2/factura-0148.md</span></span><span class="gd ph">allow</span></div>
+              <div class="gr" style="grid-template-columns:88px 92px 108px 1fr 96px;height:32px"><span class="mono dim" style="font-size:10.5px">11:14:31</span><span class="mono dim" style="font-size:10.5px">s-4a17</span><span class="mono" style="font-size:10.5px">rename.plan</span><span class="gn"><span class="txt">14 pares · hash c81f <span class="dim">planear no muta</span></span></span><span class="gd ph">allow</span></div>
+              <div class="gr" style="grid-template-columns:88px 92px 108px 1fr 96px;height:32px;background:rgba(240,198,116,.09)"><span class="mono dim" style="font-size:10.5px">11:14:31</span><span class="mono dim" style="font-size:10.5px">s-4a17</span><span class="mono am" style="font-size:10.5px">rename.apply</span><span class="gn"><span class="txt am">plan c81f</span></span><span class="gd am">ask</span></div>
+              <div class="gr" style="grid-template-columns:88px 92px 108px 1fr 96px;height:32px;background:rgba(255,107,107,.08)"><span class="mono dim" style="font-size:10.5px">11:09:03</span><span class="mono dim" style="font-size:10.5px">s-9b02</span><span class="mono" style="font-size:10.5px">fs.read</span><span class="gn"><span class="txt dg">~/media/2026/DSC_2050.ARW <span class="dim">fuera de ámbito</span></span></span><span class="gd dg">deny</span></div>
+              <div class="gr" style="grid-template-columns:88px 92px 108px 1fr 96px;height:32px"><span class="mono dim" style="font-size:10.5px">11:02:10</span><span class="mono dim" style="font-size:10.5px">wasm</span><span class="mono" style="font-size:10.5px">cols.git</span><span class="gn"><span class="txt">directorio visible · sin red</span></span><span class="gd ph">allow</span></div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="statusbar">
+          <span class="k">políticas por ruta y operación · auditoría local rotada · nada sale de la máquina</span>
+          <span class="right"><span class="k"><b>A</b> permitir</span> &nbsp; <span class="k"><b>S</b> sesión</span> &nbsp; <span class="k"><b>D</b> denegar</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,118 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>norte · 01 dos panes · GUI</title>
+<link rel="stylesheet" href="norte-mock.css">
+
+<div class="shot">
+  <div class="caption">
+    <span class="num">01</span><span class="sep">/</span>
+    <span>Dos panes · GUI</span><span class="sep">·</span>
+    <span class="keys">mismas teclas que la TUI · misma sesión del core</span>
+  </div>
+
+  <div class="win">
+    <div class="win-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="wtitle">norte</span>
+      <span class="wpath">local:/home/oscar/media/2026</span>
+      <span class="wright">
+        <span class="pill on"><i></i>core embebido</span>
+        <span class="pill">journal on</span>
+        <span class="pill">orthodox</span>
+      </span>
+    </div>
+
+    <div class="win-body">
+      <!-- Sidebar: volúmenes, remotos y guardados. La TUI llega a lo mismo con Ctrl+D. -->
+      <aside class="side">
+        <h4>Volúmenes</h4>
+        <div class="grp">
+          <div class="it on"><span class="ico">▤</span>Sistema<span class="tail">412 GB</span></div>
+          <div class="it"><span class="ico">▤</span>Datos<span class="tail">1.8 TB</span></div>
+          <div class="it"><span class="ico">⏏</span>SONY_CARD<span class="tail">28 GB</span></div>
+        </div>
+
+        <h4>Remotos</h4>
+        <div class="grp">
+          <div class="it"><span class="ico">↗</span>norte-ci<span class="tail">sftp</span></div>
+          <div class="it"><span class="ico">↗</span>assets-eu<span class="tail">s3</span></div>
+        </div>
+
+        <h4>Guardados</h4>
+        <div class="grp">
+          <div class="it"><span class="ico">★</span>campaña-otoño</div>
+          <div class="it"><span class="ico">★</span>release-candidates</div>
+          <div class="it"><span class="ico">★</span>~/proyectos</div>
+        </div>
+
+        <h4>Selección</h4>
+        <div class="grp">
+          <div class="it"><span class="ico">◆</span>*.ARW de hoy<span class="tail">3</span></div>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <div class="gpanes">
+          <!-- Pane activo: mismas marcas y mismo cursor que la captura de TUI. -->
+          <section class="gpane active">
+            <div class="gpane-head">
+              <span class="dotk"></span>local:/home/oscar/media/2026
+              <span style="margin-left:auto" class="dim">28 · nombre ▲</span>
+            </div>
+            <div class="gcols"><span>Nombre</span><span>Tamaño</span><span>Modificado</span></div>
+            <div class="grows">
+              <div class="gr dir"><span class="gn"><span class="ico">▸</span><span class="txt">campaña-otoño</span></span><span class="gs">—</span><span class="gd">08-14 11:02</span></div>
+              <div class="gr dir"><span class="gn"><span class="ico">▸</span><span class="txt">design-system</span></span><span class="gs">—</span><span class="gd">08-13 18:40</span></div>
+              <div class="gr dir"><span class="gn"><span class="ico">▸</span><span class="txt">raw</span></span><span class="gs">—</span><span class="gd">08-12 09:15</span></div>
+              <div class="gr dir"><span class="gn"><span class="ico">▸</span><span class="txt">release-candidates</span></span><span class="gs">—</span><span class="gd">08-11 22:07</span></div>
+              <div class="gr mark"><span class="gn"><span class="ico">◫</span><span class="txt">DSC_2048.ARW</span></span><span class="gs">42.1 MB</span><span class="gd">08-14 10:58</span></div>
+              <div class="gr mark"><span class="gn"><span class="ico">◫</span><span class="txt">DSC_2049.ARW</span></span><span class="gs">41.7 MB</span><span class="gd">08-14 10:58</span></div>
+              <div class="gr mark sel"><span class="gn"><span class="ico">◫</span><span class="txt">DSC_2050.ARW</span></span><span class="gs">43.0 MB</span><span class="gd">08-14 10:59</span></div>
+              <div class="gr"><span class="gn"><span class="ico">◫</span><span class="txt">DSC_2051.ARW</span></span><span class="gs">40.9 MB</span><span class="gd">08-14 10:59</span></div>
+              <div class="gr"><span class="gn"><span class="ico">·</span><span class="txt">contrato firmado (v3).pdf</span></span><span class="gs">1.2 MB</span><span class="gd">08-10 17:31</span></div>
+              <div class="gr"><span class="gn"><span class="ico">·</span><span class="txt">informe-año.md</span></span><span class="gs">14 KB</span><span class="gd">08-09 08:12</span></div>
+              <div class="gr"><span class="gn"><span class="ico">◇</span><span class="txt">launch-assets.zip</span></span><span class="gs">1.2 GB</span><span class="gd">08-08 20:44</span></div>
+              <div class="gr"><span class="gn"><span class="ico">·</span><span class="txt">notas de la llamada.txt</span></span><span class="gs">6 KB</span><span class="gd">08-08 12:03</span></div>
+              <div class="gr"><span class="gn"><span class="ico">›</span><span class="txt">render.sh</span></span><span class="gs">2 KB</span><span class="gd">08-07 19:20</span></div>
+              <div class="gr"><span class="gn"><span class="ico">·</span><span class="txt">résumé.docx</span></span><span class="gs">88 KB</span><span class="gd">08-06 15:55</span></div>
+              <div class="gr"><span class="gn"><span class="ico">·</span><span class="txt">заметки-de-la-reunión.md</span></span><span class="gs">3 KB</span><span class="gd">08-05 10:10</span></div>
+              <div class="gr"><span class="gn"><span class="ico">▶</span><span class="txt">sesión·2026-08-04.mov</span></span><span class="gs">3.4 GB</span><span class="gd">08-04 21:37</span></div>
+              <div class="gr"><span class="gn"><span class="ico">◫</span><span class="txt">storyboard-final-FINAL.psd</span></span><span class="gs">612 MB</span><span class="gd">08-04 16:22</span></div>
+            </div>
+          </section>
+
+          <!-- Pane inactivo, remoto: el pane no presupone disco local. -->
+          <section class="gpane">
+            <div class="gpane-head">
+              <span class="dotk"></span>sftp://build@norte-ci/srv/artifacts
+              <span style="margin-left:auto" class="dim">19 · nombre ▲</span>
+            </div>
+            <div class="gcols"><span>Nombre</span><span>Tamaño</span><span>Modificado</span></div>
+            <div class="grows">
+              <div class="gr dir"><span class="gn"><span class="ico">▸</span><span class="txt">2026-08-14</span></span><span class="gs">—</span><span class="gd">08-14 03:11</span></div>
+              <div class="gr dir"><span class="gn"><span class="ico">▸</span><span class="txt">nightly</span></span><span class="gs">—</span><span class="gd">08-14 03:11</span></div>
+              <div class="gr"><span class="gn"><span class="ico">◇</span><span class="txt">norte-linux-x86_64.tar.zst</span></span><span class="gs">18.4 MB</span><span class="gd">08-14 03:09</span></div>
+              <div class="gr"><span class="gn"><span class="ico">◇</span><span class="txt">norte-macos-aarch64.tar.zst</span></span><span class="gs">17.9 MB</span><span class="gd">08-14 03:09</span></div>
+              <div class="gr"><span class="gn"><span class="ico">◇</span><span class="txt">norte-windows-x86_64.zip</span></span><span class="gs">20.1 MB</span><span class="gd">08-14 03:10</span></div>
+              <div class="gr"><span class="gn"><span class="ico">·</span><span class="txt">SHA256SUMS</span></span><span class="gs">412 B</span><span class="gd">08-14 03:10</span></div>
+              <div class="gr"><span class="gn"><span class="ico">·</span><span class="txt">SHA256SUMS.sig</span></span><span class="gs">566 B</span><span class="gd">08-14 03:10</span></div>
+              <div class="gr"><span class="gn"><span class="ico">·</span><span class="txt">release-notes.md</span></span><span class="gs">7 KB</span><span class="gd">08-14 02:58</span></div>
+              <div class="gr"><span class="gn"><span class="ico">◇</span><span class="txt">norte-0.3.0-alpha.2.deb</span></span><span class="gs">21.3 MB</span><span class="gd">08-13 03:12</span></div>
+              <div class="gr"><span class="gn"><span class="ico">◇</span><span class="txt">norte-0.3.0-alpha.2.rpm</span></span><span class="gs">21.5 MB</span><span class="gd">08-13 03:12</span></div>
+              <div class="gr"><span class="gn"><span class="ico">·</span><span class="txt">sbom.spdx.json</span></span><span class="gs">340 KB</span><span class="gd">08-13 03:11</span></div>
+              <div class="gr"><span class="gn"><span class="ico">·</span><span class="txt">provenance.intoto.jsonl</span></span><span class="gs">9 KB</span><span class="gd">08-13 03:11</span></div>
+              <div class="gr"><span class="gn"><span class="ico">·</span><span class="txt">coverage-summary.txt</span></span><span class="gs">2 KB</span><span class="gd">08-12 23:40</span></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="statusbar">
+          <span class="k">/home/oscar/media/2026/DSC_2050.ARW</span>
+          <span>rw-r--r-- · oscar:oscar</span>
+          <span class="am">3 marcados · 126.8 MB</span>
+          <span class="right"><span class="k"><b>Tab</b> pane</span> &nbsp; <span class="k"><b>Space</b> marcar</span> &nbsp; <span class="k"><b>F5</b> copiar</span> &nbsp; <span class="k"><b>Ctrl+P</b> paleta</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
