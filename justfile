@@ -79,7 +79,16 @@ test:
 # corre `clean --workspace`: se paga cuando hace falta disco, no en cada gate.
 cov:
     cargo llvm-cov clean --profraw-only
-    CARGO_INCREMENTAL=0 cargo llvm-cov nextest -p norte-proto -p norte-vfs -p norte-core --fail-under-lines 85
+    # `--features norte-core/testing` y no `{{features}}`: `cov` selecciona con
+    # `-p`, y con un solo paquete seleccionado cargo rechaza una feature de otro
+    # («el paquete no contiene esas features») — la misma trampa que la receta
+    # `t` documenta. Sin esta feature, `tests/columns_git_e2e.rs` no ve
+    # `plugins::run_column_values_for_test` (gateada
+    # `cfg(any(test, feature = "testing"))`) y `cov` no compilaba: un test de
+    # integración es otro crate y no hereda el `cfg(test)` de la lib. Roto desde
+    # que entró ese test, y no se vio porque `cov` es lo último de `just ci` y
+    # `ci-fast` no lo incluye.
+    CARGO_INCREMENTAL=0 cargo llvm-cov nextest -p norte-proto -p norte-vfs -p norte-core --features norte-core/testing --fail-under-lines 85
 
 docs:
     RUSTDOCFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo doc {{core_pkgs}} --no-deps
