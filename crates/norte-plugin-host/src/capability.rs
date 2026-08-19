@@ -264,23 +264,33 @@ impl Capabilities {
 
     /// Etiquetas cortas de los permisos concedidos, para el badge del gestor
     /// (ADR 0022 D5): p. ej. `["fs-read", "net"]`.
+    ///
+    /// La de ubicación DICE EL MARCADOR cuando lo hay
+    /// (`location-root:.git`, #241): con `location` a secas, quien aprueba lee
+    /// «puede leer donde estoy mirando», y lo que concede es «puede leer el
+    /// ancestro más cercano que contenga esto» — que en un repositorio son
+    /// todos los ficheros del proyecto, no la carpeta que está abierta. El
+    /// permiso más ancho es el que hay que nombrar.
     #[must_use]
-    pub fn badges(&self) -> Vec<&'static str> {
-        let mut out = Vec::new();
+    pub fn badges(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
         if self.fs_read.granted() {
-            out.push("fs-read");
+            out.push("fs-read".to_owned());
         }
         if self.fs_write.granted() {
-            out.push("fs-write");
+            out.push("fs-write".to_owned());
         }
         if self.net.is_some() {
-            out.push("net");
+            out.push("net".to_owned());
         }
         if self.ai.is_some() {
-            out.push("ai");
+            out.push("ai".to_owned());
         }
         if self.location.granted() {
-            out.push("location");
+            match &self.location_root_marker {
+                Some(marker) => out.push(format!("location-root:{marker}")),
+                None => out.push("location".to_owned()),
+            }
         }
         out
     }

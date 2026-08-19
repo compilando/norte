@@ -8,6 +8,15 @@ rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+# `testing`: expone puertas que un e2e necesita y un embebedor NO debe tener
+# (#241). `run_column_values_for_test` acuña un token de ubicación con el
+# `climb` que le pasen, y el `climb` solo es del actor humano — en la
+# biblioteca publicada eso es un camino de acuñado sin política. Los tests de
+# integración son crates aparte, así que `cfg(test)` no basta: hace falta una
+# feature, y el gate la activa (`features` en el justfile).
+[features]
+testing = []
+
 [dependencies]
 # Providers de la cadena de salida = crates core (ADR 0010): el connection
 # manager de fase 6e (ADR 0015 A) resuelve connections.toml + secreto vía

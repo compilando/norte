@@ -133,6 +133,22 @@ pub enum SessionCmd {
         /// Rutas visibles sin `size`, en el orden del listado.
         paths: Vec<VPath>,
     },
+    /// Hidrata el tamaño de las rutas de la fila SELECCIONADA del panel de
+    /// diferencias (#199, la mitad de #157 que la GUI no tenía).
+    ///
+    /// Solo la fila seleccionada, nunca una ventana: un huérfano sin tamaño es
+    /// justo la fila que decide si se copia, y es la que el lector está
+    /// mirando. Un fallo viaja como `None` en vez de perderse — el caller lo
+    /// marca sondeado y no lo reintenta en cada frame.
+    CompareStat {
+        /// Generación de la comparación que lo pidió (guard anti-stale: una
+        /// respuesta de la comparación anterior no entra en las tablas de la
+        /// siguiente, que es el defecto #198 que la TUI ya pagó).
+        generation: u64,
+        /// Rutas sin `size` de la fila seleccionada (una por cara, a lo sumo
+        /// dos).
+        paths: Vec<VPath>,
+    },
     /// Valores de columna (G3c; #117-follow-up: CONFIG-driven): pide
     /// `plugin.column_values` para cada par (plugin, columna) CONFIGURADO
     /// en `[ui.columns]` (`requested`), validando pertenencia contra el
@@ -449,6 +465,15 @@ pub enum SessionEvent {
         dir: VPath,
         /// Decoraciones ya saneadas, por ruta.
         decorations: HashMap<VPath, norte_frontend::Decoration>,
+    },
+    /// Resultado de un [`SessionCmd::CompareStat`] (#199): `(ruta, tamaño)`,
+    /// con `None` para lo que no contestó — el caller lo marca sondeado igual,
+    /// que es lo que impide reintentarlo en cada frame.
+    CompareStatted {
+        /// Generación de la comparación que lo pidió.
+        generation: u64,
+        /// Lo sondeado, contestara o no.
+        sizes: Vec<(VPath, Option<u64>)>,
     },
     /// Resultado de un `StatBatch` (#52/#123): `(ruta, size, mtime_ms)` de
     /// los stats que RESPONDIERON. Un stat fallido o vencido simplemente no
@@ -933,6 +958,21 @@ pub fn spawn(
                                 dir,
                                 entries,
                             });
+                        });
+                    }
+                    SessionCmd::CompareStat { generation, paths } => {
+                        if paths.is_empty() {
+                            continue;
+                        }
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            let mut sizes = Vec::with_capacity(paths.len());
+                            for path in paths {
+                                let size = backend.stat(&path).await.ok().and_then(|e| e.size);
+                                sizes.push((path, size));
+                            }
+                            let _ = tx.send(SessionEvent::CompareStatted { generation, sizes });
                         });
                     }
                     SessionCmd::Columns {

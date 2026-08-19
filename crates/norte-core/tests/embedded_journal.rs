@@ -660,6 +660,64 @@ async fn dos_mutaciones_a_la_vez_abren_un_solo_handle() {
 /// Soltar con alguien más sosteniendo el handle NO suelta: abrir un segundo
 /// handle sobre el mismo fichero sería este proceso quitándose el journal a sí
 /// mismo.
+/// #179, la política: se suelta cuando lleva un rato SIN USARSE, y no antes.
+///
+/// El proceso tomaba el journal en la primera mutación y no lo devolvía hasta
+/// salir: una copia a las 09:00 dejaba a `norte daemon run` y a `norte audit`
+/// sin poder abrir el fichero en todo el día.
+#[tokio::test]
+async fn soltar_por_ocioso_espera_a_que_lo_este() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::ZERO);
+
+    let h = engine.mkdir(&vp("mem:///uno")).await.expect("mkdir");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    // Recién usado: no se suelta, y sigue siendo nuestro.
+    assert!(
+        !lazy
+            .release_if_idle(std::time::Duration::from_mins(1))
+            .await,
+        "acaba de usarse: soltarlo sería soltar lo que alguien pidió hace un instante"
+    );
+    assert!(
+        SqliteJournal::open(&journal_path(dir.path()))
+            .await
+            .is_err(),
+        "y el fichero sigue ocupado por esta sesión"
+    );
+
+    // Con el umbral a cero, lo está por definición.
+    assert!(lazy.release_if_idle(std::time::Duration::ZERO).await);
+    {
+        let otro = SqliteJournal::open(&journal_path(dir.path()))
+            .await
+            .expect("soltado de verdad: el fichero está libre");
+        otro.close().await;
+    }
+
+    // Y la ventana se REABRE sola en la siguiente mutación, releyendo la
+    // cadena — que es lo que hace que soltar sea seguro.
+    let h = engine.mkdir(&vp("mem:///dos")).await.expect("mkdir");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert!(
+        !lazy
+            .release_if_idle(std::time::Duration::from_mins(1))
+            .await,
+        "vuelve a ser nuestro"
+    );
+}
+
+/// Sin haberlo tenido nunca, «soltar por ocioso» contesta que el fichero está
+/// libre: no hay nada que soltar, y decir `false` haría que el llamante
+/// creyera que lo tiene.
+#[tokio::test]
+async fn soltar_por_ocioso_sin_haberlo_tomado_es_cierto() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::ZERO);
+    assert!(lazy.release_if_idle(std::time::Duration::ZERO).await);
+}
+
 #[tokio::test]
 async fn soltar_con_el_handle_prestado_no_suelta() {
     let dir = tempfile::tempdir().expect("tempdir");

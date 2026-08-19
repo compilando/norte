@@ -34,7 +34,7 @@ fn manifiesto_completo_parsea() {
     );
     assert_eq!(m.capabilities.fs_read, Scope::Scoped);
     assert_eq!(m.capabilities.fs_write, Scope::None);
-    assert_eq!(m.capabilities.badges(), vec!["fs-read"]);
+    assert_eq!(m.capabilities.badges(), vec!["fs-read".to_owned()]);
 }
 
 #[test]
@@ -407,7 +407,7 @@ fn net_capability_lista_hosts() {
         m.capabilities.net.as_ref().unwrap().hosts,
         ["dav.example.com"]
     );
-    assert_eq!(m.capabilities.badges(), vec!["net"]);
+    assert_eq!(m.capabilities.badges(), vec!["net".to_owned()]);
 }
 
 fn write_plugin(root: &std::path::Path, id: &str, toml: &str) {
@@ -634,7 +634,30 @@ fn location_declarada_entra_en_el_digest_de_aprobacion() {
         "pedir una capacidad nueva EXIGE aprobarla de nuevo"
     );
     assert!(con.capabilities.location.granted());
-    assert!(con.capabilities.badges().contains(&"location"));
+    assert!(
+        con.capabilities
+            .badges()
+            .iter()
+            .any(|b| b.starts_with("location")),
+        "el badge nombra la capacidad de ubicación"
+    );
+
+    // Y con MARCADOR, el badge lo DICE (#241): «location» a secas se lee como
+    // «puede leer donde estoy mirando», y lo que se concede es el ancestro más
+    // cercano que contenga el marcador — el proyecto entero, no la carpeta.
+    let con_marcador = Manifest::from_toml(&COLUMNS_PLUGIN.replace(
+        "[capabilities]",
+        "[capabilities]\nlocation = \"read\"\nlocation-root-marker = \".git\"",
+    ))
+    .unwrap();
+    assert!(
+        con_marcador
+            .capabilities
+            .badges()
+            .contains(&"location-root:.git".to_owned()),
+        "el badge dice qué marcador abre el ancestro: {:?}",
+        con_marcador.capabilities.badges()
+    );
 }
 
 /// Vocabulario CERRADO, como `exec`: un valor inventado es un manifiesto

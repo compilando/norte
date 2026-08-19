@@ -444,6 +444,25 @@ impl Engine {
         }
     }
 
+    /// Suelta el journal si lleva `ocioso` sin usarse (#179). `true` si al
+    /// volver el fichero está libre.
+    ///
+    /// El engine del daemon y el que no journaliza contestan `true` sin hacer
+    /// nada: no tienen ventana que soltar. El del daemon, además, es dueño a
+    /// propósito — se niega a arrancar sin journal, así que soltarlo sería
+    /// quitarse a sí mismo lo que exige tener.
+    ///
+    /// # Esto NO es cancel-safe (ver
+    /// [`LazyJournal::release`](crate::embedded::LazyJournal::release)).
+    /// Córrelo entero, en el CUERPO de una rama de `select!`, jamás en su
+    /// condición.
+    pub async fn release_journal_if_idle(&self, ocioso: std::time::Duration) -> bool {
+        match &self.journal {
+            JournalSource::None | JournalSource::Open(_) => true,
+            JournalSource::Lazy(l) => l.release_if_idle(ocioso).await,
+        }
+    }
+
     /// Lo mismo, diciendo POR QUÉ no.
     ///
     /// `None` = esta sesión SÍ registra, o este engine no tiene ventana que

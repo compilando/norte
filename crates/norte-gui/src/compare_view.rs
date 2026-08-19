@@ -355,10 +355,26 @@ pub fn row_text(
     row: &CompareRow,
     left_reinterpret: Option<norte_encoding::NameEncoding>,
     right_reinterpret: Option<norte_encoding::NameEncoding>,
+    hints: &std::collections::HashMap<norte_proto::VPath, u64>,
 ) -> RowText {
     use norte_frontend::compare::{cells_for, confidence_label, verdict_label};
 
-    let cells = cells_for(row, left_reinterpret, right_reinterpret);
+    let mut cells = cells_for(row, left_reinterpret, right_reinterpret);
+    // #199: los tamaños sondeados se SUPERPONEN sobre la cara, no sustituyen
+    // lo que trajo el motor. Un listado local llega perezoso (`size: None`) y
+    // el motor de comparación no statea por entrada, así que la celda de un
+    // huérfano —la fila que decide si se copia— se quedaba vacía para siempre.
+    for (cara, entrada) in [
+        (cells.left.as_mut(), row.left.as_ref()),
+        (cells.right.as_mut(), row.right.as_ref()),
+    ] {
+        if let (Some(cara), Some(entrada)) = (cara, entrada)
+            && cara.size.is_none()
+            && let Some(&hinted) = hints.get(&entrada.path)
+        {
+            cara.size = Some(hinted);
+        }
+    }
     let left = face_text(cells.left.as_ref());
     let right = face_text(cells.right.as_ref());
     let lang = norte_i18n::active();
@@ -775,10 +791,13 @@ pub fn render(
                                     row,
                                     selected == Some(row.id),
                                     run.pane.is_marked(row.id),
-                                    run.left_encoding,
-                                    run.right_encoding,
-                                    &palette,
-                                    row_h,
+                                    &RowPaint {
+                                        left_encoding: run.left_encoding,
+                                        right_encoding: run.right_encoding,
+                                        hints: &this.compare_size_hints,
+                                        palette: &palette,
+                                        row_h,
+                                    },
                                 )
                             })
                             .collect()
@@ -936,20 +955,37 @@ pub fn render(
 /// (mismo sitio que en la TUI).
 const MARK_W: f32 = 12.0;
 
+/// Lo que TODAS las filas de un frame comparten: cómo se leen los nombres de
+/// cada lado, los tamaños sondeados, la paleta y el alto.
+///
+/// Junto y no ocho parámetros: se resuelve una vez por frame y ninguna fila lo
+/// cambia, así que pasarlo pieza a pieza solo daba sitio a cruzarlas.
+struct RowPaint<'a> {
+    left_encoding: Option<norte_encoding::NameEncoding>,
+    right_encoding: Option<norte_encoding::NameEncoding>,
+    hints: &'a std::collections::HashMap<norte_proto::VPath, u64>,
+    palette: &'a Palette,
+    row_h: gpui::Pixels,
+}
+
 /// Una fila: la marca del lector, cara izquierda, las dos marcas del
 /// veredicto, cara derecha.
 fn render_row(
     row: &CompareRow,
     selected: bool,
     marked: bool,
-    left_encoding: Option<norte_encoding::NameEncoding>,
-    right_encoding: Option<norte_encoding::NameEncoding>,
-    palette: &Palette,
-    row_h: gpui::Pixels,
+    paint: &RowPaint<'_>,
 ) -> gpui::AnyElement {
+    let RowPaint {
+        left_encoding,
+        right_encoding,
+        hints,
+        palette,
+        row_h,
+    } = *paint;
     use gpui::{ParentElement, Styled, prelude::*};
 
-    let text = row_text(row, left_encoding, right_encoding);
+    let text = row_text(row, left_encoding, right_encoding, hints);
     // Cada cara es su propio nodo accesible, con su propio nombre: así el
     // nombre de un fichero no queda pegado a la palabra que dice el
     // veredicto, y no puede falsificarla (auditoría de encoding MAJOR-2).
@@ -1214,8 +1250,13 @@ mod tests {
     /// habría regresado lo que la TUI hace bien.
     #[test]
     fn cada_fila_pinta_los_dos_glifos_como_texto() {
-        let iguales = row_text(&fila_same(1), None, None);
-        let distintas = row_text(&fila_distinta(2), None, None);
+        let iguales = row_text(&fila_same(1), None, None, &std::collections::HashMap::new());
+        let distintas = row_text(
+            &fila_distinta(2),
+            None,
+            None,
+            &std::collections::HashMap::new(),
+        );
 
         assert_eq!(iguales.marks.chars().count(), 2, "veredicto y confianza");
         assert!(!iguales.marks.contains(' '), "ninguna marca en blanco");
@@ -1263,7 +1304,7 @@ mod tests {
             verdict: CompareVerdict::OnlyLeft,
             ..fila_same(1)
         };
-        let pintado = row_text(&row, None, None);
+        let pintado = row_text(&row, None, None, &std::collections::HashMap::new());
         assert!(
             !pintado.left.label.is_empty(),
             "el nombre sí se pinta, solo que en su propio elemento"
@@ -1350,7 +1391,12 @@ mod tests {
             ..fila_same(1)
         };
         // Solo el lado IZQUIERDO reinterpreta cp437.
-        let pintado = row_text(&row, Some(norte_encoding::NameEncoding::Cp437), None);
+        let pintado = row_text(
+            &row,
+            Some(norte_encoding::NameEncoding::Cp437),
+            None,
+            &std::collections::HashMap::new(),
+        );
         assert!(
             pintado.left.label.contains("CAFÉ.TXT"),
             "la izquierda usa la suya: {}",
@@ -1392,7 +1438,7 @@ mod tests {
                 verdict: CompareVerdict::OnlyLeft,
                 ..fila_same(1)
             };
-            let pintado = row_text(&row, None, None);
+            let pintado = row_text(&row, None, None, &std::collections::HashMap::new());
             assert!(
                 pintado.left.label.starts_with(crate::HOSTILE_BADGE),
                 "{}: llegó sin marcar → {:?}",
@@ -1417,7 +1463,7 @@ mod tests {
             verdict: CompareVerdict::OnlyLeft,
             ..fila_same(1)
         };
-        let pintado = row_text(&row, None, None);
+        let pintado = row_text(&row, None, None, &std::collections::HashMap::new());
         assert!(!pintado.left.label.is_empty());
         assert!(pintado.right.label.is_empty(), "sin relleno inventado");
         assert!(pintado.right.size.is_empty());
@@ -1484,6 +1530,39 @@ mod tests {
         assert_eq!(key_meaning("s", true, false, false, false), Key::Ignore);
         // Y una letra cualquiera sigue sin significar nada aquí.
         assert_eq!(key_meaning("z", false, false, false, false), Key::Ignore);
+    }
+
+    /// #199: el tamaño sondeado se SUPERPONE sobre la cara que no lo traía.
+    ///
+    /// Un listado local llega perezoso (`size: None`) y el motor de
+    /// comparación no statea por entrada, así que la celda de tamaño de un
+    /// huérfano —la fila que decide si se copia— se quedaba vacía para
+    /// siempre en esta frontend. La TUI lo resolvió en #157 y esta se quedó
+    /// sin ello.
+    #[test]
+    fn el_tamano_sondeado_se_superpone_sobre_la_cara_sin_el() {
+        let mut fila = fila_same(1);
+        // Perezosa: llegó sin tamaño, como llega un listado local.
+        if let Some(e) = fila.left.as_mut() {
+            e.size = None;
+        }
+        let sin = row_text(&fila, None, None, &std::collections::HashMap::new());
+        assert!(sin.left.size.is_empty(), "sin sondear, sin tamaño");
+
+        let mut hints = std::collections::HashMap::new();
+        hints.insert(fila.left.as_ref().expect("izquierda").path.clone(), 4096);
+        let con = row_text(&fila, None, None, &hints);
+        assert!(
+            !con.left.size.is_empty(),
+            "el tamaño sondeado se pinta: {:?}",
+            con.left.size
+        );
+        // Y la cara que SÍ traía tamaño no se toca: la superposición rellena,
+        // no sustituye.
+        assert_eq!(
+            con.right.size, sin.right.size,
+            "la otra cara sigue diciendo lo que dijo el motor"
+        );
     }
 
     /// #249: lo marcado ACOTA el plan, y lo no marcado es el árbol entero.

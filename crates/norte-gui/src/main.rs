@@ -450,6 +450,18 @@ struct NorteGui {
     /// propia task de tokio, así que dos peticiones seguidas pueden contestar
     /// en orden inverso y solo la vigente puede abrir panel.
     compare_gen: u64,
+    /// Tamaños hidratados bajo demanda para el panel de diferencias (#199,
+    /// la mitad de #157 que esta frontend no tenía).
+    ///
+    /// Solo la fila SELECCIONADA se sondea: un huérfano sin tamaño es la fila
+    /// que decide si se copia, y es la que el lector está mirando. Es una
+    /// caché de PRESENTACIÓN —jamás viaja por el wire, y `ComparePane` no
+    /// tiene forma de mutar una fila ya llegada—, así que se pinta como
+    /// superposición, igual que en la TUI.
+    compare_size_hints: std::collections::HashMap<VPath, u64>,
+    /// Rutas YA sondeadas, contestaran o no: un `stat` que falló no se
+    /// reintenta en cada frame.
+    compare_size_probed: std::collections::HashSet<VPath>,
     /// El panel de diferencias abierto (#158, `pane.compare-dirs`), o `None`
     /// = cerrado.
     ///
@@ -1263,6 +1275,8 @@ impl NorteGui {
                     extensions: None,
                     compare: None,
                     compare_gen: 0,
+                    compare_size_hints: std::collections::HashMap::new(),
+                    compare_size_probed: std::collections::HashSet::new(),
                     compare_scroll: UniformListScrollHandle::new(),
                     sync: None,
                     sync_gen: 0,
@@ -1371,6 +1385,8 @@ impl NorteGui {
                     extensions: None,
                     compare: None,
                     compare_gen: 0,
+                    compare_size_hints: std::collections::HashMap::new(),
+                    compare_size_probed: std::collections::HashSet::new(),
                     compare_scroll: UniformListScrollHandle::new(),
                     sync: None,
                     sync_gen: 0,
@@ -2187,6 +2203,11 @@ impl NorteGui {
                 // los dos caminos que lo sueltan ya lo hacen (ver
                 // `compare_view::route_rows`).
                 compare_view::route_rows(&mut self.compare, task_id, rows);
+                // La PRIMERA tanda trae la fila que queda seleccionada, y ese
+                // es el momento de pedir su tamaño: sin esto, la primera fila
+                // del panel se quedaba sin él hasta que el lector se moviera
+                // (#199).
+                self.probe_compare_size();
             }
             SessionEvent::CompareDone {
                 task_id,
@@ -2230,6 +2251,21 @@ impl NorteGui {
             // los mismos motivos: el panel se abre con la Task ya creada,
             // porque es su `task_id` lo que después distingue sus pasos de los
             // de un plan anterior.
+            // #199: el tamaño de la fila seleccionada, ya sondeado. La
+            // generación es el guard: una respuesta de la comparación anterior
+            // no entra en las tablas de ésta.
+            SessionEvent::CompareStatted { generation, sizes } => {
+                if generation == self.compare_gen {
+                    for (path, size) in sizes {
+                        if let Some(size) = size {
+                            self.compare_size_hints.insert(path.clone(), size);
+                        }
+                        // Marcado sondeado CONTESTARA O NO: un `stat` que
+                        // falló tampoco se reintenta en cada frame.
+                        self.compare_size_probed.insert(path);
+                    }
+                }
+            }
             SessionEvent::SyncPlanStarted {
                 task_id,
                 source_pane,
@@ -2589,6 +2625,35 @@ impl NorteGui {
     /// El resto de params son los mismos que pide la TUI, por el mismo
     /// motivo (ver `norte_frontend::compare::MTIME_TOLERANCE_MS` y los dos
     /// toggles que no existen).
+    /// Pide el tamaño de la fila SELECCIONADA del panel de diferencias, si le
+    /// falta y no se ha pedido ya (#199).
+    ///
+    /// Solo esa fila, y no una ventana: es la que decide si un huérfano se
+    /// copia, y es la que el lector está mirando. Sin sondeo, la celda de
+    /// tamaño de un huérfano se quedaba vacía para siempre — el listado local
+    /// llega perezoso y el motor de comparación no statea por entrada.
+    fn probe_compare_size(&mut self) {
+        let Some(view) = self.compare.as_ref() else {
+            return;
+        };
+        let Some(fila) = view.run.pane.selected_row() else {
+            return;
+        };
+        let paths: Vec<VPath> = [fila.left.as_ref(), fila.right.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter(|e| e.size.is_none() && !self.compare_size_probed.contains(&e.path))
+            .map(|e| e.path.clone())
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        let _ = self.cmds.send(SessionCmd::CompareStat {
+            generation: self.compare_gen,
+            paths,
+        });
+    }
+
     fn start_compare(&mut self) {
         let left = self.panes[self.focus].dir().clone();
         let right = self.panes[self.focus ^ 1].dir().clone();
@@ -2597,6 +2662,12 @@ impl NorteGui {
             return;
         }
         self.compare_gen = self.compare_gen.wrapping_add(1);
+        // Las tablas de tamaños son de UNA comparación (#199): vaciarlas aquí
+        // y avanzar la generación es lo que impide que una sonda en vuelo de
+        // la anterior aterrice en las de ésta — el defecto #198 que la TUI ya
+        // pagó, y que aquí no se copia.
+        self.compare_size_hints.clear();
+        self.compare_size_probed.clear();
         // Decirlo mientras el RPC va y viene, molde `request_volumes`: sin
         // esto la tecla no contesta nada hasta que hay Task. Con la clave
         // COMPARTIDA y `n = 0` —que es la verdad, todavía no ha llegado
@@ -2691,6 +2762,10 @@ impl NorteGui {
                     }
                     _ => {}
                 }
+                // #199: la fila que acaba de quedar seleccionada puede no
+                // traer tamaño. Se pide aquí y no en el render porque el
+                // render corre por frame y esto es una petición.
+                self.probe_compare_size();
                 // La lista está virtualizada: un cursor fuera de la ventana
                 // no se ve, así que moverlo tiene que traerlo (mismo gesto
                 // que `reveal_cursor` en los panes). Una selección que un

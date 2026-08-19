@@ -2926,6 +2926,21 @@ async fn run(
         tokio::select! {
                     _ = session_tick.tick() => {
                         push_session(app, &mut session_push);
+                        // #179: soltar el journal cuando lleva un rato sin
+                        // usarse. Este proceso lo tomaba en la primera mutación
+                        // y no lo devolvía hasta salir, así que una copia a las
+                        // 09:00 dejaba a `norte daemon run` y a `norte audit`
+                        // sin poder abrirlo en todo el día. La ventana se
+                        // reabre sola en la siguiente mutación, y la reapertura
+                        // RELEE la cadena, que es lo que lo hace seguro.
+                        //
+                        // En el CUERPO de la rama y no en su condición: el
+                        // cierre NO es cancel-safe, y dropearlo a medias deja
+                        // el pool agonizando en el worker de sqlx y al
+                        // siguiente `resolve` chocando contra nuestro propio
+                        // lock — un aviso de «sesión sin registro» que nos
+                        // habríamos inventado nosotros.
+                        backend.release_journal_if_idle(JOURNAL_OCIOSO).await;
                     }
                     _ = tick.tick() => {
                         // Mutación terminada → refresh de panes; el ritual completo
@@ -13570,6 +13585,15 @@ async fn restore_session(app: &mut App, backend: &Backend) {
     restore_slots(app, backend, PRESUPUESTO_RESTAURACION).await;
 }
 
+/// Cuánto puede llevar el journal sin usarse antes de que esta sesión lo
+/// suelte (#179).
+///
+/// Treinta segundos: bastante como para que una ráfaga de copias no pague un
+/// cierre y una reapertura entre dos, y poco como para que un `ntc` abierto
+/// toda la tarde no bloquee a `norte daemon run` ni a `norte audit` más allá
+/// del rato en que de verdad estuvo escribiendo.
+const JOURNAL_OCIOSO: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Lo que el arranque dedica ENTERO a listar los huecos de la sesión (#235).
 ///
 /// Cinco segundos para TODOS los huecos, no cinco por hueco: lo que se acota
@@ -14143,15 +14167,15 @@ fn cache_capabilities(
 /// has to ask about both, which is the whole reason this is a named function
 /// and not an `is_none()` inline in [`cd_in`]. The attribute catalogue is per
 /// scheme — a wrong column hint is cosmetic. The capability flags are per
-/// scheme AND authority (`App::caps`), because a veto that answers for the
-/// wrong server is not cosmetic: gating on the catalogue alone meant the first
-/// `sftp` host to be visited answered "is this read-only?" for every other
-/// `sftp` host of the session, since no second call was ever made.
+/// DIRECTORY (`App::caps`, #215), because a veto that answers for the wrong
+/// place is not cosmetic: gating on the catalogue alone meant the first `sftp`
+/// host visited answered "is this read-only?" for every other host of the
+/// session, and keying by connection meant `/home` answered for the exFAT
+/// stick mounted under the same `file://`.
 ///
 /// So it fetches when EITHER half is missing, and the redundant fetch — a
-/// second authority of a scheme whose catalogue is already cached — is one
-/// call per connection, which is what asking the connection its own
-/// capabilities costs.
+/// second location of a scheme whose catalogue is already cached — is one call
+/// per directory, which is what asking a location about itself costs.
 fn needs_capabilities(app: &App, dir: &VPath) -> bool {
     app.attr_catalog(dir.scheme()).is_none() || app.caps(dir).is_none()
 }
@@ -14880,6 +14904,62 @@ mod caps_cache_tests {
             needs_capabilities(&app, &b),
             "b.org no ha contestado nunca: hay que preguntarle a ÉL"
         );
+    }
+
+    /// #215: otro DIRECTORIO del mismo backend vuelve a preguntar.
+    ///
+    /// Desde ADR 0054 el daemon contesta por UBICACIÓN, y la caché seguía
+    /// indexando por conexión: bajo un mismo `file://` hay montajes —un pincho
+    /// exFAT que pliega caja, un subárbol ext4 en `+F`, un bind de solo
+    /// lectura— y la respuesta de `/home` se servía para todos ellos.
+    #[test]
+    fn otro_directorio_del_mismo_backend_vuelve_a_preguntar() {
+        let casa = vp("file:///home/yo");
+        let pincho = vp("file:///media/pincho");
+        let mut app = app_en(&casa);
+
+        cache_capabilities(
+            &mut app,
+            &casa,
+            (
+                norte_proto::Capabilities {
+                    flags: norte_proto::CapabilityFlags::empty(),
+                    max_path: None,
+                },
+                norte_proto::AttrCatalog::new(Vec::new()),
+            ),
+        );
+
+        assert!(!needs_capabilities(&app, &casa));
+        assert!(
+            needs_capabilities(&app, &pincho),
+            "un montaje distinto contesta por su cuenta"
+        );
+        assert!(
+            app.caps(&pincho).is_none(),
+            "y hasta que conteste, no hay respuesta suya que servir"
+        );
+    }
+
+    /// La caché tiene TOPE: una clave por directorio ya no está acotada por
+    /// los siete schemes que existen, y recorrer un árbol grande la haría
+    /// crecer sin fin. Se desaloja el más viejo por orden de llegada.
+    #[test]
+    fn la_cache_de_capacidades_tiene_tope() {
+        let primero = vp("file:///d0");
+        let mut app = app_en(&primero);
+        let caps = norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::empty(),
+            max_path: None,
+        };
+        for i in 0..200 {
+            app.insert_caps(&vp(&format!("file:///d{i}")), caps);
+        }
+        assert!(
+            app.caps(&primero).is_none(),
+            "el primero se fue al llenarse"
+        );
+        assert!(app.caps(&vp("file:///d199")).is_some(), "y el último sigue");
     }
 
     /// La costura entera, contra un backend REAL: `first_page` con la puerta

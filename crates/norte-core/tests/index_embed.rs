@@ -177,6 +177,54 @@ async fn embed_denied_prefixes_excluded_before_read() {
     );
 }
 
+/// #122: un ENLACE puesto entre el `build` y el `embed` no cuela el contenido
+/// de un prefijo denegado.
+///
+/// El candidato sale de la fila que dejó el build (`kind = file`, ruta), y la
+/// lectura ocurre después: quien pueda escribir en el árbol indexado cambia un
+/// `.txt` por un enlace a un fichero denegado y sus 32 KiB se iban al
+/// proveedor de embeddings, con lo que «ni un byte de un prefijo denegado se
+/// lee» dejaba de ser cierto justo donde el módulo lo promete.
+#[tokio::test]
+async fn un_enlace_puesto_tras_el_build_no_cuela_un_prefijo_denegado() {
+    let mut cfg = ai_cfg();
+    cfg.denied_prefixes = vec![vp("mem:///secreto")];
+    let (engine, mem, fake) = setup_with(FakeEmbed::new(8), cfg).await;
+    mem.mkdir(&vp("mem:///secreto")).await.expect("mkdir");
+    write_file(&mem, "mem:///secreto/clave.txt", b"SECRETO").await;
+    // Un candidato legítimo, indexado como fichero de texto.
+    write_file(&mem, "mem:///normal.txt", b"contenido normal").await;
+    write_file(&mem, "mem:///trampa.txt", b"parece texto").await;
+    build(&engine, "mem:///").await;
+
+    // Y ENTRE el build y el embed, la sustitución.
+    mem.remove(&vp("mem:///trampa.txt")).await.expect("remove");
+    mem.symlink(
+        &vp("mem:///trampa.txt"),
+        b"secreto/clave.txt",
+        norte_vfs::SymlinkKind::File,
+    )
+    .await
+    .expect("symlink");
+
+    let h = engine
+        .index_embed_as(vp("mem:///"), Actor::User)
+        .await
+        .expect("index_embed_as");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let inputs = sent_inputs(&fake);
+    assert!(
+        inputs.iter().all(|t| !t.contains("SECRETO")),
+        "el enlace no puede traer lo denegado: {inputs:?}"
+    );
+    assert_eq!(
+        inputs.len(),
+        1,
+        "el candidato sustituido se salta, y el legítimo sigue: {inputs:?}"
+    );
+}
+
 /// Espera (acotada) a que el proveedor fake haya recibido al menos un batch:
 /// la task está provablemente en vuelo.
 async fn wait_first_call(fake: &FakeEmbed) {

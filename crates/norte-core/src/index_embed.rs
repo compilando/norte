@@ -96,7 +96,31 @@ pub(crate) fn index_to_proto(e: &norte_index::IndexError) -> Error {
 /// Lee los primeros [`EMBED_PREFIX_BYTES`] de `path` vía el provider. El
 /// `len` acota en el provider; el break + truncate son el cinturón por si
 /// alguno entrega de más (espejo de `handle_plugin_preview`).
+///
+/// **Se vuelve a mirar QUÉ es antes de leerlo (#122).** El candidato viene de
+/// la fila que dejó `index.build`, y entre aquel build y este embed cabe una
+/// sustitución: quien pueda escribir en el árbol indexado cambia un `.txt` por
+/// un enlace a un fichero DENEGADO, y sus 32 KiB se iban al proveedor de
+/// embeddings — con lo que «ni un byte de un prefijo denegado se lee» dejaba
+/// de ser cierto. `Provider::stat` describe el ENLACE y jamás su destino, así
+/// que exigir `File` aquí cierra la puerta; lo que queda es la ventana entre
+/// este `stat` y el `read`, que es la mitigación estándar y no la ausencia de
+/// una.
+///
+/// Lo que esto NO cubre, y hay que decirlo: un ENLACE DURO al fichero
+/// denegado. Tiene `kind = File` y una ruta que el filtro no reconoce, así que
+/// pasa sin carrera ninguna. Cerrarlo pide comparar inodos contra el conjunto
+/// denegado, que es otra cosa.
 async fn read_prefix(provider: &dyn Provider, path: &VPath) -> Result<Vec<u8>, Error> {
+    if provider.stat(path).await?.kind != norte_proto::EntryKind::File {
+        tracing::debug!(
+            path = %crate::engine::span_path(path),
+            "index.embed: el candidato ya no es un fichero regular; no se lee"
+        );
+        return Err(Error::Conflict {
+            conflict: norte_proto::ConflictKind::TypeMismatch,
+        });
+    }
     let range = norte_proto::ByteRange {
         offset: 0,
         len: Some(EMBED_PREFIX_BYTES),

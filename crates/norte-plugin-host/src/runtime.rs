@@ -96,6 +96,13 @@ const EPOCH_TICK: Duration = Duration::from_millis(50);
 /// hilo ticker, así que un host cargado se los come igual. Con el corte por
 /// llamada eso deja de ser un flake de la suite —era `#211`— y pasa a ser lo
 /// que dice: una operación no puede durar más de diez segundos.
+///
+/// Cuando vence, el error es [`RuntimeError::Deadline`] y **nunca** un trap
+/// (#211): la diferencia es lo que el lector acaba leyendo, y «este plugin
+/// está roto» es la única respuesta que seguro es falsa cuando lo que pasó es
+/// que la máquina iba cargada. Fuera de este crate se traduce a
+/// `ProviderUnavailable { retryable: true }`, que es lo que de verdad
+/// ocurrió.
 const DEFAULT_EPOCH_DEADLINE: u64 = 200;
 
 /// Fallo del runtime de plugins.
@@ -110,6 +117,17 @@ pub enum RuntimeError {
     /// El guest atrapó (trap) durante la ejecución de un export.
     #[error("trap del guest: {0}")]
     Trap(String),
+    /// Se acabó el PRESUPUESTO de la llamada: el guest seguía corriendo
+    /// cuando venció su deadline de época (#211).
+    ///
+    /// Aparte de [`Self::Trap`] porque no es lo mismo y el mensaje importa:
+    /// un trap dice «este plugin está roto», y esto dice «no le dio tiempo».
+    /// El deadline se mide en RELOJ —las épocas las avanza un ticker—, así
+    /// que una máquina cargada puede agotarlo con un plugin que solo es
+    /// lento, y llamar a eso un plugin roto es la única respuesta que seguro
+    /// es falsa.
+    #[error("el guest agotó su presupuesto de llamada")]
+    Deadline,
     /// El guest devolvió un `Err` legible desde su lógica.
     #[error("error del plugin: {0}")]
     Guest(String),
@@ -367,6 +385,19 @@ impl host_config::Host for HostState {
 
 /// El motor wasmtime del host, reutilizable entre instanciaciones.
 ///
+/// Traduce el error de una llamada al guest.
+///
+/// Un vencimiento de época NO es un trap del guest (#211): wasmtime los
+/// entrega los dos por el mismo camino, y contarlos igual convertía «tu
+/// máquina iba cargada» en «tu plugin está roto» — que es la única lectura
+/// que seguro es falsa.
+fn map_call_error(e: &wasmtime::Error) -> RuntimeError {
+    if e.downcast_ref::<wasmtime::Trap>() == Some(&wasmtime::Trap::Interrupt) {
+        return RuntimeError::Deadline;
+    }
+    RuntimeError::Trap(e.to_string())
+}
+
 /// Arranca un hilo "ticker" que incrementa la época del motor cada `EPOCH_TICK`
 /// (50 ms); combinado con el deadline por store ([`Store::set_epoch_deadline`])
 /// pone un tope de RELOJ a cada llamada del guest (regla dura 3). El hilo se para
@@ -797,7 +828,7 @@ impl PluginInstance {
             .bindings
             .norte_plugin_previewer()
             .call_render(&mut self.store, &input)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))?
+            .map_err(|e| map_call_error(&e))?
             .map_err(RuntimeError::Guest)?;
         cap_return_value(out)
     }
@@ -827,7 +858,7 @@ impl PluginInstance {
             .bindings
             .norte_plugin_previewer()
             .call_render_styled(&mut self.store, &input)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))?
+            .map_err(|e| map_call_error(&e))?
             .map_err(RuntimeError::Guest)?;
         cap_styled_text(out)
     }
@@ -845,7 +876,7 @@ impl PluginInstance {
             .bindings
             .norte_plugin_command()
             .call_run(&mut self.store, id, arg)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))?
+            .map_err(|e| map_call_error(&e))?
             .map_err(RuntimeError::Guest)?;
         cap_return_value(out)
     }
@@ -901,7 +932,7 @@ impl ProviderInstance {
         self.bindings
             .norte_provider_provider()
             .call_capabilities(&mut self.store)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))
+            .map_err(|e| map_call_error(&e))
     }
 
     /// `stat` de una entrada por sus segmentos. El `Ok` interno es el resultado
@@ -917,7 +948,7 @@ impl ProviderInstance {
         self.bindings
             .norte_provider_provider()
             .call_stat(&mut self.store, segments)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))
+            .map_err(|e| map_call_error(&e))
     }
 
     /// Una PÁGINA del listado de un directorio (equiv. un tramo del
@@ -935,7 +966,7 @@ impl ProviderInstance {
         self.bindings
             .norte_provider_provider()
             .call_list_dir(&mut self.store, segments, cursor)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))
+            .map_err(|e| map_call_error(&e))
     }
 
     /// Un RANGO acotado de un fichero (equiv. un chunk del `ByteStream`): a lo
@@ -961,7 +992,7 @@ impl ProviderInstance {
             .bindings
             .norte_provider_provider()
             .call_read(&mut self.store, segments, offset, len)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))?;
+            .map_err(|e| map_call_error(&e))?;
         if let Ok(bytes) = &out
             && bytes.len() > MAX_RETURN_BYTES
         {
@@ -988,7 +1019,7 @@ impl ProviderInstance {
         self.bindings
             .norte_provider_provider()
             .call_configure(&mut self.store, cfg)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))
+            .map_err(|e| map_call_error(&e))
     }
 
     // ---- escritura (#30 stage 2b-write) ----
@@ -1007,7 +1038,7 @@ impl ProviderInstance {
         self.bindings
             .norte_provider_provider()
             .call_open_writer(&mut self.store, segments)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))
+            .map_err(|e| map_call_error(&e))
     }
 
     /// Añade un chunk al staging del `writer`.
@@ -1024,7 +1055,7 @@ impl ProviderInstance {
             .norte_provider_provider()
             .writer()
             .call_write(&mut self.store, writer, chunk)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))
+            .map_err(|e| map_call_error(&e))
     }
 
     /// Publica el staging del `writer` en el path final.
@@ -1040,7 +1071,7 @@ impl ProviderInstance {
             .norte_provider_provider()
             .writer()
             .call_commit(&mut self.store, writer)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))
+            .map_err(|e| map_call_error(&e))
     }
 
     /// Descarta el staging del `writer` sin publicar.
@@ -1056,7 +1087,7 @@ impl ProviderInstance {
             .norte_provider_provider()
             .writer()
             .call_abort(&mut self.store, writer)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))
+            .map_err(|e| map_call_error(&e))
     }
 
     /// Libera el handle del `writer` (drop del recurso del guest). Se llama
@@ -1068,7 +1099,7 @@ impl ProviderInstance {
         self.rearm();
         writer
             .resource_drop(&mut self.store)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))
+            .map_err(|e| map_call_error(&e))
     }
 
     /// Crea un directorio (equiv. `Provider::mkdir`).
@@ -1083,7 +1114,7 @@ impl ProviderInstance {
         self.bindings
             .norte_provider_provider()
             .call_make_dir(&mut self.store, segments)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))
+            .map_err(|e| map_call_error(&e))
     }
 
     /// Borra una entrada (equiv. `Provider::remove`).
@@ -1098,7 +1129,7 @@ impl ProviderInstance {
         self.bindings
             .norte_provider_provider()
             .call_remove(&mut self.store, segments)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))
+            .map_err(|e| map_call_error(&e))
     }
 
     /// Renombra/mueve (equiv. `Provider::rename`).
@@ -1114,7 +1145,7 @@ impl ProviderInstance {
         self.bindings
             .norte_provider_provider()
             .call_rename(&mut self.store, src, dst)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))
+            .map_err(|e| map_call_error(&e))
     }
 }
 
@@ -1191,7 +1222,7 @@ impl DecoratorInstance {
             .bindings
             .norte_plugin_decorator()
             .call_decorate(&mut self.store, entries)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))?;
+            .map_err(|e| map_call_error(&e))?;
         let total: usize = out
             .iter()
             .map(|d| d.badge.as_deref().map_or(0, str::len) + d.role.as_deref().map_or(0, str::len))
@@ -1259,7 +1290,7 @@ impl ColumnsInstance {
             .bindings
             .norte_plugin_columns()
             .call_column_values(&mut self.store, id, location, entries)
-            .map_err(|e| RuntimeError::Trap(e.to_string()))?;
+            .map_err(|e| map_call_error(&e))?;
         let total: usize = out.iter().map(|v| v.as_deref().map_or(0, str::len)).sum();
         cap_total_bytes(total)?;
         Ok(out)

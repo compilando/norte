@@ -135,6 +135,84 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A link planted after indexing cannot feed a denied file to the embedder.**
+  `index.embed` classified a candidate from the row `index.build` left behind
+  and read it later, so anyone who could write in the indexed tree could
+  replace a `.txt` with a link to a file under `denied_prefixes` and its first
+  32 KiB went to the embedding provider — the one thing that module promises
+  does not happen. What is read is checked again right before reading it, and
+  anything that is no longer a regular file is skipped. A hard link still
+  defeats the path filter without racing at all, and that is now written down
+  where the check is rather than assumed away (#122).
+
+### Added
+
+- **What norte writes is now checked by tools that are not norte.** The archive
+  round-trip read what this crate wrote with this crate's own reader — a fine
+  encoder/decoder consistency check, and blind to every place where we and the
+  rest of the world disagree, which is exactly where both format blockers of
+  the archive branch lived. `unzip -t` verifies our zips and extracts them,
+  GNU `tar` lists and extracts our tars and tar.gz, including a name past the
+  100-byte ustar boundary. Missing tools skip with a message rather than
+  passing quietly. The corpus grew the two names that straddle that boundary,
+  which nothing had (#250).
+
+- **A terminal that copied one file no longer holds the journal all day.** The
+  embedded session took the lock on its first mutation and kept it until it
+  exited, so a copy at 09:00 left `norte daemon run` and `norte audit` unable
+  to open `journal.db` until the window was closed. It is released after thirty
+  seconds without use and reopened by the next mutation — the reopen re-reads
+  the chain from the file, which is what makes letting go safe (#179).
+
+- **The graphical diff pane fills in an orphan's size.** A local listing
+  arrives lazily and the comparison engine does not stat per entry, so the size
+  cell of a file that exists on one side only — the row that decides whether it
+  gets copied — stayed blank forever. The selected row is probed, exactly as
+  the terminal does, and a probe belonging to a previous comparison is dropped
+  by generation rather than landing in the current one's tables (#199).
+
+- **A plugin that ran out of time no longer reports as a crashed plugin.** The
+  guest's budget is measured in wall clock — a ticker advances the epochs — so
+  a loaded machine spends it on a plugin that is merely slow, and that arrived
+  as "internal error, the plugin panicked": the one reading that is certainly
+  wrong. An expired budget is its own error now, and outside the host it
+  becomes "unavailable, try again", which is what actually happened (#211).
+
+- **A capability answer is cached per directory, not per connection.** Since
+  the daemon began answering per location, the terminal was still keying that
+  cache by scheme and authority — so the answer for `/home` was served for the
+  exFAT stick, the `+F` subtree and the read-only bind mounted under the same
+  `file://`. Nothing had broken yet because the read-only veto is the only
+  reader today, which is exactly the kind of latency that makes the next flag
+  the one that finds out. The cache is bounded now, because a key per directory
+  is not bounded by the seven schemes that exist (#215).
+
+- **A plugin's approval now covers its binary, not only its manifest.** Approving
+  a plugin anchored what it asked for and when it fires — so editing
+  `plugin.toml` after approval correctly forced a fresh consent — and said
+  nothing about the code. Swapping `plugin.wasm` and leaving the manifest alone
+  kept the approval, which is the same confused-deputy the anchor exists to
+  close, entering by the other door of the bundle. The anchor is now the pair,
+  so a changed binary asks again. **Every existing approval is reset by this**,
+  deliberately: the question a human answered did not include "and this
+  binary", so their answer does not cover what is being asked now (#241).
+
+- **A `.git` in your home no longer hands a plugin your home.** The climb that
+  finds a project root stopped at 64 levels and nothing else, so one stray
+  marker at `$HOME` — a badly extracted archive, a careless installer — turned
+  every folder of yours that is not a repository into a root covering the lot.
+  It stops at your home now; a marker AT home still counts, since the ceiling
+  is "no further", not "ignore what is there". The badge also names the marker
+  (`location-root:.git`) instead of just saying `location`: what is granted is
+  the nearest ancestor containing it, which in a repository is the whole
+  project rather than the folder you have open (#241).
+
+- **The root a plugin gets is the one that was checked.** Between deciding a
+  path was the project root and opening it, the path was resolved again from
+  `/`, following symlinks and unconfined — renaming a component in between
+  swapped the root for whatever whoever could rename it wanted. The open now
+  requires the same `(dev, ino)` the climb saw, and refuses otherwise (#241).
+
 - **The session's schema version has one home now.** Two numbers described the
   same document and the documented one was read by nobody: the protocol says
   `Session.version` is the body's schema, and norte's own frontends instead

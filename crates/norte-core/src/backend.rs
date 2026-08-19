@@ -416,9 +416,9 @@ impl Backend {
     /// rename`, y desde esta tarea `norte sync`).
     ///
     /// - Embebido: delega en [`Engine::ensure_journal`], que toma el lock
-    ///   perezoso AQUÍ (no en la primera mutación) y lo conserva hasta que
-    ///   alguien lo suelte (`LazyJournal::release`, que hoy no llama nadie por
-    ///   su cuenta — #179).
+    ///   perezoso AQUÍ (no en la primera mutación) y lo conserva hasta que se
+    ///   suelte por ocioso ([`Self::release_journal_if_idle`], que el TUI
+    ///   llama en su tick — #179).
     /// - Remoto: siempre `true`. El daemon es DUEÑO del journal y se niega a
     ///   arrancar sin uno (ver el arranque de `norte daemon run`); no hay un
     ///   viaje de ida y vuelta que hacer para saberlo, y una conexión remota
@@ -443,6 +443,28 @@ impl Backend {
     pub async fn ensure_journal(&self) -> bool {
         match self {
             Self::Embedded(engine) => engine.ensure_journal().await,
+            #[cfg(unix)]
+            Self::Remote(_) => true,
+        }
+    }
+
+    /// Suelta el journal si lleva `ocioso` sin usarse (#179).
+    ///
+    /// Un `ntc` que copió un fichero a las 09:00 se quedaba `journal.db` hasta
+    /// salir, así que `norte daemon run` y `norte audit` no podían abrirlo en
+    /// todo el día. La ventana se reabre sola en la siguiente mutación, y la
+    /// reapertura RELEE la cadena — que es lo que hace que soltar sea seguro.
+    ///
+    /// Remoto: `true` sin hacer nada. El journal es del DAEMON, que se niega a
+    /// arrancar sin uno; soltarlo desde aquí no es que sea inútil, es que no
+    /// es de este proceso.
+    ///
+    /// # Esto NO es cancel-safe. En el CUERPO de una rama de `select!`, jamás
+    /// en su condición (ver
+    /// [`LazyJournal::release`](crate::embedded::LazyJournal::release)).
+    pub async fn release_journal_if_idle(&self, ocioso: std::time::Duration) -> bool {
+        match self {
+            Self::Embedded(engine) => engine.release_journal_if_idle(ocioso).await,
             #[cfg(unix)]
             Self::Remote(_) => true,
         }
