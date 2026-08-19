@@ -185,11 +185,91 @@ Al cerrar: `cargo test -p norte-tui --doc` y `cargo doc -p norte-tui --no-deps`
 por tarea (segundos, y son los puntos ciegos), `just ci-fast` cada ~3 tareas,
 `just ci` una vez.
 
+## El bucle de verificación, medido (tarea 1, 2026-08-19)
+
+La tarea 1 se hizo con `just t` FUERA del bucle, y no se perdió nada. Los
+tiempos son de esta máquina, en caliente, tocando solo `norte-tui`:
+
+| comando | coste | qué cazó en la tarea 1 |
+| --- | --- | --- |
+| `grep -c '#\[test\]'` sobre `src/` + `tests/` | 0 s | el invariante de 888 atributos, en cada paso |
+| multiconjunto de líneas no vacías (`scripts` ad hoc) | 0 s | que de ~1.900 «inserciones» ni una fuese lógica |
+| `just c` | **4–61 s** | **11 fallos**: imports muertos, `must_use_candidate`, `items_after_test_module`, un `use super::Pane` sin dueño |
+| `cargo doc -p norte-tui --no-deps` | 10 s | **3 fallos**, los tres invisibles a clippy y a nextest |
+| `cargo test -p norte-tui --doc` | 11 s | 0 |
+| `just t norte-tui` | 31 s | **0** |
+
+`just c` es el bucle. No linka nada (clippy no produce binarios), en vacío
+cuesta 1,6 s, y es el único de los tres que ve el impuesto de visibilidad —que
+es el 60% del trabajo de cada movimiento—. Los 61 s del peor caso son cuando
+cambia la superficie que compilan los 30 targets de test; el caso normal son 4
+a 12 s.
+
+**Y `just t` no cazó nada, estructuralmente, no por suerte.** En un movimiento
+puro el comportamiento no puede cambiar: lo único que nextest puede descubrir
+es un módulo de test que desapareció al mover su fichero, y eso lo dice
+`grep -c '#[test]'` gratis y al instante. El coste real de `just t` no son sus
+31 s sino que hay que esperarlos con el árbol quieto, veinte veces por tarea.
+
+Política, entonces:
+
+| cuándo | qué |
+| --- | --- |
+| cada paso (docenas) | `just c` + recuento por grep + multiconjunto de líneas |
+| cada tarea (una vez) | `cargo doc -p norte-tui --no-deps` y `cargo test -p norte-tui --doc` |
+| cada ~3 tareas | `just ci-fast` UNA vez — y aquí es donde entra `just t` de verdad |
+| al cerrar la rama | `just ci` UNA vez |
+
+Lo que se pierde por sacar nextest del bucle es real y es pequeño: un test que
+compila pero afirma sobre otro item del mismo nombre. No ha pasado en 16
+commits de esta rama.
+
+### Tres herramientas que valen más que el gate
+
+**Un extractor de items de primer nivel** (unas 60 líneas de Python que caminan
+a profundidad 0 de llaves y emiten `inicio-fin  tipo  firma`). Con él, mover
+1.685 líneas no exigió LEER ni el cuerpo de `on_help_key` (199 líneas) ni las
+951 de `help_key_tests`: los límites salen calculados. Es el mayor ahorro de la
+tarea, y no es de tiempo de máquina sino de tokens del controlador.
+
+**Extraer por rango de líneas, no reescribiendo.** El movimiento lo hace un
+`del L[a-1:b]` y un `'\n'.join(bloques)`. Así el multiconjunto de líneas cuadra
+POR CONSTRUCCIÓN, y el `pub`/`crate::` se aplica después con un `sed` de siete
+patrones que el propio diff enumera.
+
+**El multiconjunto de líneas, en un script y no a mano.** Cuatro commits, cuatro
+ejecuciones, cero tokens de razonamiento por ejecución.
+
+## Cuatro rustdoc desplazados, y es una familia
+
+Sin buscarlos, en las 1.685 líneas de la tarea 1 aparecieron **cuatro** bloques
+de rustdoc separados de su función, todos secuela de movimientos mecánicos
+anteriores:
+
+1. el de `reload_config` colgaba de `apply_theme`;
+2. el de `on_layout_picker_key`, de `on_connections_picker_key`;
+3. los de `on_places_key` y `on_nav_popup_key`, APILADOS sobre `on_tree_key`
+   (tres doc-comments seguidos delante de una sola función);
+4. el de `shortcuts_editor_tests` se quedó en `main.rs` cuando su módulo se fue
+   a `shortcuts_editor.rs`, y acabó documentando un módulo de test de i18n con
+   el que no tiene nada que ver.
+
+El quinto era peor: el rustdoc de `on_help_key` estaba **partido en dos**. La
+introducción, hasta el «TWO REGIMES, the same split ... already have:» que
+anuncia una lista, había quedado sobre `HelpDispatch`; la lista que ese dos
+puntos promete seguía sobre la función.
+
+**La regla que sale de esto, y es accionable para las tareas que faltan:** un
+`missing_docs` sobre un item que acabas de mover NO es una invitación a
+escribir documentación nueva. Es la señal de que su documentación está varada
+unas líneas más arriba, encima de otra función. Mirar hacia arriba antes de
+escribir. Dos de los cuatro se encontraron exactamente así.
+
 ## Lo que queda, en orden de dependencias
 
 | # | módulo | prod aprox. | notas |
 | --- | --- | --- | --- |
-| 1 | `screens/{help,settings,pickers,extensions,side_nav}.rs` | ~1.700 | La banda más grande que no toca `run`. Se lleva `help_key_tests` (945 líneas) y `extensions_help_tests`. `side_nav` porque `src/nav.rs` ya existe. |
+| ~~1~~ | ~~`screens/{help,settings,pickers,extensions,side_nav}.rs`~~ | 1.685 | **HECHA** (4 commits, 892/892). El estimado de ~1.700 dio en el clavo. Cuatro ficheros salieron en cuatro commits y `pickers`+`settings` en uno solo: parecían un ciclo y no lo eran —las dos referencias mutuas son menciones en comentarios, no llamadas—. `main.rs`: 6.583 → 5.001 de producción, 3.099 → 2.108 de test inline. |
 | 2 | `refresh.rs` | ~250 | `on_tick`, `refresh_panes`, `after_panes_refresh`. Lo necesitan cuatro de los `mod` de test diferidos. |
 | 3 | `gestures.rs` + `suspend.rs` | ~800 | Gestos de panel, línea de comandos, shell, openers y suspensión de terminal. Se lleva `suspend_tests`, `open_tests`, `pane_gestures_tests`, `edit_tests`. |
 | 4 | `config_reload.rs` | ~140 | `reload_config`, 12 parámetros. Sale del plan original (estaba mal agrupado con Lua). |
