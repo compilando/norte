@@ -8,11 +8,13 @@
 //! Un fichero por pantalla y `mod.rs` de pura fachada, el mismo patrón que
 //! [`crate::jobs`].
 
+pub mod extensions;
 pub mod help;
 pub mod pickers;
 pub mod settings;
-mod side_nav;
+pub mod side_nav;
 
+pub use extensions::on_extensions_key;
 pub use help::{HelpDispatch, on_help_key, run_plugin_command};
 pub use pickers::{
     apply_theme, on_columns_key, on_connections_picker_key, on_layout_picker_key,
