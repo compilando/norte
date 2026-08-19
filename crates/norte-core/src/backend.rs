@@ -2595,7 +2595,7 @@ pub mod remote {
             let cursor = st.cursor.take();
             let page: FsListResult = st
                 .backend
-                .call_timed(
+                .call_timed_guarded(
                     methods::FS_LIST,
                     &FsListParams {
                         path: st.dir.clone(),
@@ -3167,6 +3167,15 @@ pub mod remote {
         /// daemon envuelve en su brazo de cancelación (#72) todos esos
         /// métodos MENOS `index.build`: para ese el guard es best-effort (el
         /// `rpc.cancel` no encuentra dispatch que cortar).
+        ///
+        /// **También lo usan las LECTURAS** (`fs.list`, `fs.stat`, `fs.read`,
+        /// `fs.capabilities`) desde #248, y ahí no protege un efecto a medias
+        /// —una lectura no deja ninguno— sino la CONEXIÓN: `serve_connection`
+        /// despacha en serie, así que una lectura abandonada —el presupuesto
+        /// de cinco segundos de la sesión (#235), un future dropeado— dejaba a
+        /// todas las peticiones siguientes esperando detrás de ella, cada una
+        /// muriendo en su propio [`CALL_TIMEOUT`] de 30 s. La TUI arrancaba,
+        /// se veía, y no servía para nada sin decirlo.
         async fn call_timed_guarded<P, R>(&self, method: &str, params: &P) -> Result<R, Error>
         where
             P: serde::Serialize,
@@ -3229,7 +3238,7 @@ pub mod remote {
             // Primera página síncrona: un `NotFound`/`TypeMismatch` sale en el
             // Result, no como primer item del stream (paridad con el embebido).
             let first: FsListResult = self
-                .call_timed(
+                .call_timed_guarded(
                     methods::FS_LIST,
                     &FsListParams {
                         path: dir.clone(),
@@ -3270,7 +3279,7 @@ pub mod remote {
             &self,
             path: &VPath,
         ) -> Result<FsCapabilitiesResult, Error> {
-            self.call_timed(
+            self.call_timed_guarded(
                 methods::FS_CAPABILITIES,
                 &FsCapabilitiesParams { path: path.clone() },
             )
@@ -3279,7 +3288,7 @@ pub mod remote {
 
         pub(super) async fn stat(&self, path: &VPath, attrs: Vec<String>) -> Result<Entry, Error> {
             let r: FsStatResult = self
-                .call_timed(
+                .call_timed_guarded(
                     methods::FS_STAT,
                     &FsStatParams {
                         path: path.clone(),
@@ -3337,7 +3346,7 @@ pub mod remote {
                     return Ok(out);
                 }
                 let r: FsReadResult = self
-                    .call_timed(
+                    .call_timed_guarded(
                         methods::FS_READ,
                         &FsReadParams {
                             path: path.clone(),

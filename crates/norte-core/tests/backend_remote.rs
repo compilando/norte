@@ -1057,6 +1057,90 @@ async fn submit_abandonado_envia_rpc_cancel_y_mata_el_dispatch() {
     }
 }
 
+/// #248: un `fs.list` ABANDONADO no se queda la conexión.
+///
+/// `serve_connection` despacha en serie, así que un listado que el cliente
+/// dejó de esperar —el presupuesto de cinco segundos del arranque de sesión
+/// (#235), o cualquier future dropeado— seguía corriendo contra un provider
+/// colgado y TODO lo que viniera detrás esperaba su turno, muriendo en su
+/// propio `CALL_TIMEOUT` de 30 s. La TUI arrancaba, se veía, y no servía para
+/// nada sin decir por qué.
+///
+/// Este test prueba las DOS mitades, que son dos cambios distintos: que el
+/// cliente MANDA el `rpc.cancel` al abandonar una lectura (antes las lecturas
+/// iban por `call_timed`, sin guard), y que el daemon lo ESCUCHA para
+/// `fs.list` (antes solo las mutaciones estaban en el brazo cancelable, así
+/// que el aviso llegaba y no cortaba nada).
+#[tokio::test]
+async fn un_listado_abandonado_no_se_queda_la_conexion() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let engine = Arc::new(Engine::new());
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let conn = Arc::new(ProbedHangingConnector {
+        started: std::sync::atomic::AtomicUsize::new(0),
+        cancelled: cancelled.clone(),
+    });
+    engine.set_connector(conn.clone());
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
+            state_dir: None,
+        },
+    )
+    .await
+    .expect("bind");
+    let _run = tokio::spawn(daemon.run());
+    let backend = Backend::Remote(
+        RemoteBackend::connect(
+            socket,
+            None,
+            ClientInfo {
+                name: "backend-test".into(),
+                version: "0.0.0".into(),
+            },
+        )
+        .await
+        .expect("connect"),
+    );
+
+    let b2 = backend.clone();
+    let listado = tokio::spawn(async move { b2.list(&vp("sftp://h/dir")).await });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while conn.started.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        assert!(tokio::time::Instant::now() < deadline, "el dial no arrancó");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // El caller deja de esperar: es lo que hace `tokio::time::timeout` al
+    // vencer, que es como llega este caso de verdad.
+    listado.abort();
+    let _ = listado.await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "el dispatch del listado sigue vivo: el abandono no lo cortó (#248)"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // Y la conexión SIGUE SIRVIENDO: esta es la mitad que se notaba. Sin el
+    // corte, esta petición esperaba detrás del listado colgado y moría a los
+    // 30 s con `ProviderUnavailable`.
+    let siguiente = tokio::time::timeout(Duration::from_secs(5), backend.list(&vp("mem:///")))
+        .await
+        .expect("la conexión responde en vez de quedarse encolada");
+    assert!(
+        siguiente.is_err() || siguiente.is_ok(),
+        "lo que importa es que CONTESTÓ, no qué contestó"
+    );
+}
+
 // ---------- sync.plan / sync.apply remotos (0.40.0, ADR 0049) ----------
 
 /// Daemon con journal y spool: lo que hace falta para planificar y aplicar.

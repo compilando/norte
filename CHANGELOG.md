@@ -129,6 +129,29 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **An abandoned listing no longer wedges the connection.** A daemon serves one
+  request at a time per connection, and a read that the client stopped waiting
+  for — the five-second budget the session restore now uses, or any dropped
+  future — kept running against the stuck provider with everything behind it
+  queued, each request dying at its own thirty-second timeout. The terminal
+  came up, drew itself and did nothing, without saying why. Reads now send
+  `rpc.cancel` when abandoned, like mutations always have, and the daemon acts
+  on it for `fs.list`, `fs.stat`, `fs.read` and `fs.capabilities` — dropping a
+  read leaves nothing half-done, which is why they can be cut at all (#248).
+
+### Added
+
+- **The places sidebar answers the mouse.** It shipped keyboard-only: clicking
+  a drive or a favourite did nothing, because its cells belong to no listing
+  and the hit test landed outside every pane. A click now selects the row and
+  brings the keyboard over, clicking the selected row activates it — the same
+  thing `Enter` does — and clicking a section header folds or unfolds it, which
+  is what the arrow it already draws promises. Unfolding the drives asks for
+  them again through the same path the key uses, not a fourth refresh trigger.
+  The clickable rows are measured by the function that paints them, scroll
+  offset included, so a click cannot activate the row next to the one under the
+  pointer (#226).
+
 - **The GUI's mirror can be narrowed to a selection.** The diff pane had no
   mark gesture, so `include` went out as "the whole tree" every time: under
   `Update` that was inert, but `m` turns every destination orphan into a

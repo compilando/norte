@@ -927,6 +927,21 @@ pub enum KeyOwner {
     Tree,
 }
 
+/// Lo que hace un click sobre una fila del sidebar de sitios (#226).
+///
+/// Lo que el modelo podía hacer ya está hecho al volver; esto es lo que
+/// necesita al backend, que [`App`] no tiene.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlacesClick {
+    /// Se movió el cursor y el teclado se vino al sidebar. Nada más que hacer.
+    Focused,
+    /// Se plegó o desplegó una sección: desplegar las unidades es el momento
+    /// de volver a pedirlas, igual que por teclado.
+    Folded,
+    /// Hay que llevar el listado a donde diga [`App::places_activate`].
+    Activate,
+}
+
 /// Lo que este proceso sabe de la sesión guardada (L2).
 ///
 /// Junto y no cinco campos sueltos en [`App`]: son una sola cosa —la pantalla
@@ -3307,6 +3322,48 @@ impl App {
             && let Some(s) = self.panes.places_mut(id)
         {
             s.down();
+        }
+    }
+
+    /// Un CLICK sobre la fila `index` del sidebar (#226).
+    ///
+    /// La decisión vive aquí y no en el módulo del ratón para que se pueda
+    /// probar sin terminal, y porque es la misma que toma el teclado con otras
+    /// teclas: el ratón no puede tener su propia idea de qué hace activar una
+    /// fila. Tres desenlaces:
+    ///
+    /// - una CABECERA pliega o despliega su sección de una sola pulsación —
+    ///   es lo que dice la flecha que ya pinta;
+    /// - una fila que NO está seleccionada se selecciona, y el teclado se
+    ///   viene al sidebar: el click dice «me interesa esto», no «vete ahí»;
+    /// - la fila que YA estaba seleccionada se activa, que es lo mismo que
+    ///   `Enter`. Sin ventana de tiempo: un doble click funciona por ser dos
+    ///   clicks sobre la misma fila, y quien prefiera dos pulsaciones lentas
+    ///   obtiene lo mismo.
+    pub fn places_click(&mut self, index: usize) -> PlacesClick {
+        use norte_frontend::places::PlaceRow;
+        let Some(id) = self.places_slot() else {
+            return PlacesClick::Focused;
+        };
+        let ya_estaba = self.key_owner == KeyOwner::Places
+            && self.panes.places(id).is_some_and(|s| s.cursor() == index);
+        let Some(s) = self.panes.places_mut(id) else {
+            return PlacesClick::Focused;
+        };
+        if index >= s.rows().len() {
+            return PlacesClick::Focused;
+        }
+        s.set_cursor(index);
+        let es_cabecera = matches!(s.rows().get(index), Some(PlaceRow::Header { .. }));
+        self.key_owner = KeyOwner::Places;
+        if es_cabecera {
+            self.places_toggle_fold();
+            return PlacesClick::Folded;
+        }
+        if ya_estaba {
+            PlacesClick::Activate
+        } else {
+            PlacesClick::Focused
         }
     }
 

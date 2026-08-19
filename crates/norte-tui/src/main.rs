@@ -2818,6 +2818,7 @@ async fn run(
             ui::pane_geometry(app, pintado.area),
             ui::tab_zones(app, pintado.area),
             ui::menu_zones(app, pintado.area),
+            ui::places_zones(app, pintado.area),
         );
         // L3: el visor acoplado sigue al cursor del listado activo. Lo que se
         // pide sale de `preview::want`, que devuelve `None` cuando el hueco no
@@ -3616,6 +3617,36 @@ async fn run(
                                     // un hit apaga el modo virtual del pane, y hay
                                     // que cosechar el run (regla 3).
                                     reap_search_run(app, &mut search_run);
+                                }
+                                // #226: el sidebar con el ratón toma los MISMOS
+                                // caminos que su teclado. Desplegar las unidades
+                                // es el momento de volver a pedirlas —y plegarlas,
+                                // el de no pedirlas—, así que el ratón no puede
+                                // ser un cuarto disparador de refresco: es este.
+                                mouse::After::PlacesFolded => {
+                                    if app.places_drives_visible() {
+                                        refresh_places_drives(app, backend).await;
+                                    }
+                                }
+                                // Y activar una fila lleva el listado por el
+                                // flujo de `cd` de siempre, igual que `Enter`
+                                // dentro del sidebar.
+                                mouse::After::PlacesActivate => {
+                                    app.abandon_pending(resolver);
+                                    if let Some(path) = app.places_activate() {
+                                        let pane = app.focus();
+                                        let outcome =
+                                            cd_in(app, backend, &mut events, pane, path, Trail::Record)
+                                                .await;
+                                        apply_cd(
+                                            &app.panes,
+                                            &mut fill,
+                                            &mut decorate_fetch,
+                                            &mut last_probed,
+                                            &mut search_run,
+                                            outcome,
+                                        );
+                                    }
                                 }
                             }
                         } else if let Event::Key(key) = event

@@ -191,6 +191,17 @@ impl PlacesState {
         self.cursor
     }
 
+    /// Pone el cursor en la fila `i`, acotado a las que hay.
+    ///
+    /// Lo pide el RATÓN (#226): un click nombra una fila por su POSICIÓN, y
+    /// llegar a ella a base de `up`/`down` sería reimplementar la aritmética
+    /// del cursor en el frontend. Fuera de rango se acota en vez de no hacer
+    /// nada: una lista que encogió entre el frame y el click no debe dejar el
+    /// cursor donde estaba.
+    pub fn set_cursor(&mut self, i: usize) {
+        self.cursor = i.min(self.rows.len().saturating_sub(1));
+    }
+
     /// Sube una fila. En la primera se queda.
     pub const fn up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
