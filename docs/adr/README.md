@@ -67,3 +67,5 @@ edits.
 | [0059](0059-the-session-is-a-document-with-one-writer.md) | The session is a document with one writer | accepted |
 | [0060](0060-writing-an-archive-is-not-writing-into-one.md) | Writing an archive is not writing into one | accepted |
 | [0061](0061-a-configuration-name-that-becomes-a-filename.md) | A configuration name that becomes a filename is bytes, and resolves byte-exactly | accepted |
+| [0062](0062-the-session-schema-version-has-one-home.md) | The session's schema version has one home, and the core refuses what it cannot read | accepted |
+| [0063](0063-a-result-that-travels-as-progress.md) | A result that travels as progress, and a connection closed by path | accepted |

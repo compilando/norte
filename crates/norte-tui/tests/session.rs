@@ -81,10 +81,34 @@ fn un_cuerpo_corrupto_deja_la_pantalla_de_la_config() {
     let antes = app.layout.clone();
     // Malformado de verdad: un hueco sin `path`, que es el único campo que no
     // tiene default.
-    app.apply_session_value(&serde_json::json!({ "slots": { "1": { "cursor": 3 } } }));
+    app.apply_session_value(
+        norte_frontend::session::SCHEMA_VERSION,
+        &serde_json::json!({ "slots": { "1": { "cursor": 3 } } }),
+    );
     assert_eq!(app.layout, antes);
     assert!(app.message.is_some(), "y lo dice");
     assert!(!app.session.detached, "y esta ventana sigue escribiendo");
+}
+
+/// La versión del SOBRE deja la ventana suelta igual que la de dentro (#247).
+///
+/// El cuerpo llevaba una copia sin documentar de la versión, y era la única
+/// que se leía: un cliente ajeno que hiciera lo que dice el contrato —`version`
+/// en el sobre, cuerpo v2— llegaba a un lector que la veía ausente, la tomaba
+/// por 0, se comía los campos que no entendía y los reescribía perdidos.
+#[test]
+fn la_version_del_sobre_tambien_deja_la_ventana_suelta() {
+    let mut app = app_basica();
+    let antes = app.layout.clone();
+    // Cuerpo SIN copia dentro, que es lo que escribe un cliente que sigue el
+    // contrato documentado.
+    app.apply_session_value(
+        norte_frontend::session::SCHEMA_VERSION + 1,
+        &serde_json::json!({ "layouts": {}, "slots": {} }),
+    );
+    assert_eq!(app.layout, antes, "no se aplica lo que no se sabe leer");
+    assert!(app.session.detached, "y sobre todo no se pisa");
+    assert!(app.message.is_some(), "y lo dice");
 }
 
 /// Un cuerpo de una versión MÁS NUEVA deja esta ventana SUELTA: no se lee y,
@@ -95,7 +119,10 @@ fn un_cuerpo_corrupto_deja_la_pantalla_de_la_config() {
 fn un_cuerpo_del_futuro_deja_la_ventana_suelta() {
     let mut app = app_basica();
     let antes = app.layout.clone();
-    app.apply_session_value(&serde_json::json!({ "version": 999 }));
+    app.apply_session_value(
+        norte_frontend::session::SCHEMA_VERSION,
+        &serde_json::json!({ "version": 999 }),
+    );
     assert_eq!(app.layout, antes);
     assert!(app.session.detached, "no se pisa lo que no se sabe leer");
     assert!(app.message.is_some(), "y lo dice");
@@ -176,7 +203,10 @@ fn un_kind_desconocido_viaja_en_el_layout() {
         ],
     ));
     let cuerpo = app.session_body();
-    let vuelta =
-        norte_frontend::session::SessionBody::from_value(&cuerpo.to_value()).expect("parsea");
+    let vuelta = norte_frontend::session::SessionBody::from_value(
+        norte_frontend::session::SCHEMA_VERSION,
+        &cuerpo.to_value(),
+    )
+    .expect("parsea");
     assert_eq!(vuelta.layouts["default"], app.layout);
 }

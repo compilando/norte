@@ -618,8 +618,19 @@ use crate::{
 /// aunque no mueva un solo byte de un mensaje existente.
 ///
 /// Ventana N=0.47.x / N-1=0.46.x, y la asimetría es la de siempre: un cliente
-/// 0.46 no forma `rar+file://…` porque su propia whitelist no lo trae, así
-/// que sencillamente no ve la funcionalidad. Al revés, un cliente 0.47 contra
+/// 0.46 no OFRECE `rar+file://…` porque su propia whitelist no lo trae, así
+/// que sencillamente no ve la funcionalidad.
+///
+/// Lo que ese cliente sí hace —y la primera redacción de este párrafo decía
+/// lo contrario (#247)— es PARSEAR uno que le llegue: [`crate::VPath::parse`]
+/// no consulta [`ARCHIVE_FORMATS`](crate::ARCHIVE_FORMATS); solo lo hace
+/// `archive_compose`. Un 0.46 que reciba `rar+file:///a.rar/!/x` por un
+/// marcador, por el historial o por el cuerpo de una sesión se queda con un
+/// scheme que no conoce y un segmento `!` literal, y falla aguas abajo al
+/// pedirlo. No se corrompe nada y el bump sigue siendo MINOR; lo que no vale
+/// es el razonamiento de que no llega a formarse.
+///
+/// Al revés, un cliente 0.47 contra
 /// un daemon 0.46 sí forma el path —y el daemon viejo responde `Unsupported`
 /// por su arm `_` de dispatch, que es la respuesta honesta— porque
 /// [`version_compatible`] no negocia un cliente con minor MAYOR que el
@@ -651,7 +662,32 @@ use crate::{
 /// los llama; un cliente 0.50 contra un daemon 0.49 recibe `METHOD_NOT_FOUND`,
 /// que el `Backend` traduce a [`Error::Unsupported`](crate::Error) — «tu
 /// daemon es más viejo», no un fallo genérico.
-pub const PROTOCOL_VERSION: &str = "0.50.0";
+/// **0.51.0** (#247): ni un tipo nuevo ni un campo nuevo — lo que cambia es
+/// lo que [`SESSION_PUT`] ACEPTA, y por eso es un bump.
+///
+/// Un `put` cuyo `version` este core no sabe leer se rehúsa ahora con
+/// [`Error::Unsupported`](crate::Error), y `0` cuenta como desconocido. Antes
+/// se aceptaba: el core volcaba a disco un documento que su propio guard de
+/// carga rechaza, así que desde el arranque siguiente la sesión quedaba «del
+/// futuro» para siempre —sin dueña, sin persistencia— hasta que alguien
+/// borrase el fichero a mano. Bastaba un `ntc` más nuevo contra un `norte`
+/// más viejo: los dos `SCHEMA_VERSION` viven en crates distintos y solo los
+/// ata un test.
+///
+/// Y el esquema del cuerpo lo declara [`SessionPutParams::version`] y NADA
+/// más: los frontends de norte metían además una copia sin documentar dentro
+/// del `body`, y era la única que su lector miraba. Un cliente ajeno que
+/// hiciera lo que dice este contrato —`version: 2` en el sobre, cuerpo v2—
+/// llegaba a un lector que la veía ausente, la tomaba por 0, se comía los
+/// campos que no entendía y los reescribía perdidos. El lector toma ahora la
+/// MAYOR de las dos, así que un cuerpo antiguo con su copia dentro se sigue
+/// leyendo igual.
+///
+/// Ventana N=0.51.x / N-1=0.50.x: un cliente 0.50 manda `version: 1` como
+/// siempre y no nota nada; un cliente 0.51 contra un daemon 0.50 tampoco —el
+/// daemon viejo acepta lo que aceptaba—. Lo que se pierde contra el viejo es
+/// la protección, no la funcionalidad.
+pub const PROTOCOL_VERSION: &str = "0.51.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -1036,7 +1072,19 @@ pub const FS_COMPARE: &str = "fs.compare";
 ///
 /// Un subdirectorio ilegible cuesta lo suyo y el recorrido sigue: contar una
 /// carpeta de tres horas no puede morirse en un `EACCES` de la hoja 40 000, y
-/// el número que sale es el de lo que se pudo leer.
+/// el número que sale es el de lo que se pudo leer. **Hoy el progreso no
+/// tiene forma de decir que el número es un SUELO** —cuántas ramas se
+/// saltaron no viaja—, y eso es deuda anotada, no un olvido.
+///
+/// Dos raíces que se solapan se RECHAZAN con
+/// [`Error::OverlappingRoots`](crate::Error), como en `fs.compare` y
+/// `sync.plan` (#247): `["file:///a", "file:///a/b"]` contaba `b` dos veces y
+/// devolvía un número mayor que el sitio que ocupa, que es lo contrario de lo
+/// que este método existe para contestar.
+///
+/// Suma tamaño APARENTE y no bloques, y no deduplica enlaces duros: dos
+/// nombres del mismo inodo cuentan dos veces. Para «¿cabe esto en el
+/// destino?» —que es la pregunta— pasarse es el lado seguro.
 pub const FS_DIR_SIZE: &str = "fs.dir_size";
 /// `archive.pack` — fabrica un archivo NUEVO a partir de un conjunto de rutas
 /// (0.50.0, #132).

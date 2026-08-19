@@ -13562,7 +13562,11 @@ async fn restore_session(app: &mut App, backend: &Backend) {
     if sesion.revision == 0 {
         return;
     }
-    app.apply_session_value(&sesion.body);
+    // La versión del SOBRE, que es la que el protocolo documenta (#247): el
+    // cuerpo llevaba una copia sin documentar y era la única que se leía, así
+    // que un cliente ajeno que hiciera lo que dice el contrato tenía su cuerpo
+    // interpretado como si fuera de la versión 0.
+    app.apply_session_value(sesion.version, &sesion.body);
     restore_slots(app, backend, PRESUPUESTO_RESTAURACION).await;
 }
 
@@ -13844,7 +13848,7 @@ async fn escribe_la_sesion(
                     // El documento que había: lo que guardó quien tenía la
                     // sesión y esta pantalla no conoce viaja de vuelta, o el
                     // primer volcado del relevo se lo lleva por delante.
-                    let huerfanos = SessionBody::from_value(&sesion.body)
+                    let huerfanos = SessionBody::from_value(sesion.version, &sesion.body)
                         .map(|remoto| {
                             huerfanos_ajenos(
                                 ultimo.as_ref().unwrap_or(&SessionBody::default()),
@@ -13887,7 +13891,7 @@ async fn escribe_la_sesion(
                 let mut huerfanos = std::collections::BTreeMap::new();
                 if let Ok((sesion, _)) = backend.session_get().await {
                     revision = sesion.revision;
-                    if let Ok(remoto) = SessionBody::from_value(&sesion.body) {
+                    if let Ok(remoto) = SessionBody::from_value(sesion.version, &sesion.body) {
                         huerfanos = huerfanos_ajenos(&body, &remoto);
                         for (id, estado) in &huerfanos {
                             body.slots.insert(*id, estado.clone());

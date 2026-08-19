@@ -88,6 +88,46 @@ async fn un_fichero_suelto_cuenta_su_propio_tamano() {
 
 /// VARIAS raíces suman UN número: lo que el humano tiene marcado es una
 /// selección, y la pregunta que hace es «¿cuánto ocupa TODO esto?».
+/// Dos raíces que se solapan se RECHAZAN, como en `fs.compare` y `sync.plan`
+/// (#247).
+///
+/// Sin esto, `["mem:///p", "mem:///p/sub"]` contaba `sub` DOS veces y devolvía
+/// un número mayor que el sitio que ocupa — lo contrario de lo que el método
+/// existe para contestar («¿cabe esto en el destino?»). Se rechaza en vez de
+/// deduplicar: una selección de panel no anida nunca (son hermanos), así que
+/// unas raíces anidadas vienen de un guion, y ahí un error es una respuesta.
+#[tokio::test]
+async fn dos_raices_que_se_solapan_se_rechazan() {
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    mkdir(&mem, "mem:///p").await;
+    mkdir(&mem, "mem:///p/sub").await;
+    write_file(&mem, "mem:///p/sub/b", 23).await;
+
+    let Err(err) = engine
+        .dir_size_as(params(&["mem:///p", "mem:///p/sub"]), Actor::User)
+        .await
+    else {
+        panic!("unas raíces anidadas no pueden lanzarse")
+    };
+    assert!(
+        matches!(err, ProtoError::OverlappingRoots { .. }),
+        "y lo dice por su nombre: {err:?}"
+    );
+    // La misma raíz dos veces es el mismo problema con otra cara.
+    let Err(err) = engine
+        .dir_size_as(params(&["mem:///p", "mem:///p"]), Actor::User)
+        .await
+    else {
+        panic!("la misma raíz dos veces tampoco")
+    };
+    assert!(
+        matches!(err, ProtoError::OverlappingRoots { .. }),
+        "{err:?}"
+    );
+}
+
 #[tokio::test]
 async fn varias_raices_dan_un_solo_total() {
     let (engine, mem) = setup();

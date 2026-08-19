@@ -3557,6 +3557,34 @@ pub mod remote {
             Ok(self.own_task(result.task_id, TaskKind::RenameBatch))
         }
 
+        /// Como [`Self::call_timed`], traduciendo `METHOD_NOT_FOUND` a
+        /// [`Error::Unsupported`] (#247).
+        ///
+        /// Es la primitiva de «degrada Y dilo»: contra un daemon más viejo,
+        /// «tu daemon no sabe de esto» y un fallo de verdad no son lo mismo, y
+        /// un `session.get` que devuelve un error genérico deja al frontend
+        /// diciendo que la sesión falló cuando lo que pasa es que no la hay.
+        async fn call_no_method_is_unsupported<P, R>(
+            &self,
+            method: &str,
+            params: &P,
+        ) -> Result<R, Error>
+        where
+            P: serde::Serialize,
+            R: serde::de::DeserializeOwned,
+        {
+            let client = self.client().await?;
+            match tokio::time::timeout(CALL_TIMEOUT, client.call::<_, R>(method, params)).await {
+                Ok(Err(ClientError::Rpc(ref rpc)))
+                    if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+                {
+                    Err(Error::Unsupported)
+                }
+                Ok(res) => res.map_err(to_taxonomy),
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            }
+        }
+
         /// `fs.rename_batch_report` (0.36.0): informe del lote. Un daemon N-1
         /// sin el método responde `METHOD_NOT_FOUND` → `Unsupported`, para que
         /// el caller lo distinga de un fallo REAL — mismo criterio que
@@ -4018,7 +4046,7 @@ pub mod remote {
         /// es la dueña.
         pub(super) async fn session_get(&self) -> Result<(methods::Session, bool), Error> {
             let r: methods::SessionGetResult = self
-                .call_timed(methods::SESSION_GET, &serde_json::json!({}))
+                .call_no_method_is_unsupported(methods::SESSION_GET, &serde_json::json!({}))
                 .await?;
             Ok((r.session, r.owner))
         }
@@ -4031,7 +4059,7 @@ pub mod remote {
             body: serde_json::Value,
         ) -> Result<u64, Error> {
             let r: methods::SessionPutResult = self
-                .call_timed(
+                .call_no_method_is_unsupported(
                     methods::SESSION_PUT,
                     &methods::SessionPutParams {
                         version,

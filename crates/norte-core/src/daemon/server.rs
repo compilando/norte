@@ -2882,6 +2882,14 @@ fn handle_session_put(
                 limit: norte_proto::Error::LIMIT_SESSION_BODY.to_owned(),
             }))
         }
+        // `Unsupported` y no `InvalidPath`: lo que falta no es un parámetro
+        // bien formado, es un core capaz de leer ese esquema — «tu daemon es
+        // más viejo», que es exactamente lo que ese error dice en el resto del
+        // wire (#247).
+        Err(crate::ui_session::PutError::UnknownSchema { version, known }) => {
+            tracing::warn!(version, known, "session.put de un esquema desconocido");
+            Err(RpcError::from(norte_proto::Error::Unsupported))
+        }
     }
 }
 

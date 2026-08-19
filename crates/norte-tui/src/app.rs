@@ -4038,8 +4038,8 @@ impl App {
     /// Un cuerpo que no se puede leer NO deja pantalla en blanco: se queda la
     /// disposición de la configuración y se avisa. Es la misma decisión que
     /// toma el core con un fichero corrupto, un proceso más allá.
-    pub fn apply_session_value(&mut self, v: &serde_json::Value) {
-        match norte_frontend::session::SessionBody::from_value(v) {
+    pub fn apply_session_value(&mut self, version: u32, v: &serde_json::Value) {
+        match norte_frontend::session::SessionBody::from_value(version, v) {
             Ok(body) => {
                 self.apply_session(&body);
             }
