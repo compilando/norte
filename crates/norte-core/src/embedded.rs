@@ -53,8 +53,10 @@
 //! - **Y se suelta**, con [`LazyJournal::release`], que cierra el pool y
 //!   devuelve el fichero. Solo cuando nadie más sostiene el handle: abrir un
 //!   segundo sobre el mismo fichero sería este proceso quitándose el journal a
-//!   sí mismo. Quién lo llama y cuándo es del frontend — aquí está la
-//!   primitiva, no la política de ociosidad.
+//!   sí mismo. La POLÍTICA es [`LazyJournal::release_if_idle`], y vive aquí y
+//!   no en el frontend porque el reloj de «cuándo se usó» es de esta ventana y
+//!   porque decidir y cerrar tienen que pasar bajo el MISMO lock; el frontend
+//!   solo elige cada cuánto preguntar (el TUI, en su tick de sesión).
 //! - **Reabrir RELEE la cadena, y eso no es negociable.** `ChainState`
 //!   (`last_seq`, `last_hash`) sale del fichero en CADA adquisición porque
 //!   [`crate::journal::Journal`] se construye de nuevo: un par viejo choca
@@ -419,6 +421,9 @@ struct Ventana {
     ultimo_fallo: Option<(std::time::Instant, NoJournal)>,
     /// Lo último que se le contó al sink, para no repetirlo ni contradecirlo.
     anunciado: Option<JournalStatus>,
+    /// Cuándo se usó el handle por última vez, para la política de ociosidad
+    /// (#179). `None` mientras no se tiene.
+    ultimo_uso: Option<std::time::Instant>,
     /// Desde cuándo lleva ocupado este EPISODIO (#203): lo pone el primer
     /// `Busy` y lo borra cualquier otra cosa —una apertura buena, un `Failed`—,
     /// porque lo que se mide es «cuánto lleva ESTE ocupante», no cuántos ha
@@ -613,7 +618,47 @@ impl LazyJournal {
     /// de la rama, no en la condición.
     pub async fn release(&self) -> bool {
         let mut v = self.estado.lock().await;
+        Self::release_bajo_lock(&mut v).await
+    }
+
+    /// Suelta el journal **si lleva `ocioso` sin usarse** (#179).
+    ///
+    /// Es la política que la primitiva no traía, y vive aquí y no en el
+    /// frontend por dos razones: el reloj de «cuándo se usó» es de esta
+    /// ventana —el frontend tendría que espiarlo—, y la decisión y el cierre
+    /// tienen que ocurrir bajo el MISMO lock, o entre mirar y soltar cabe una
+    /// mutación que se queda sin registro.
+    ///
+    /// Devuelve `true` si al volver el fichero está libre: se soltó ahora, o
+    /// no lo teníamos. `false` = sigue siendo nuestro, porque aún no está
+    /// ocioso o porque alguien sostiene el handle (una Task en vuelo lo fija
+    /// entero, ver [`Self::release`]).
+    ///
+    /// Lo que esto arregla es que un `ntc` que copió un fichero a las 09:00 se
+    /// quedaba `journal.db` hasta salir, así que `norte daemon run` y `norte
+    /// audit` no podían abrirlo en todo el día. La reapertura RELEE la cadena,
+    /// que es lo que hace que soltar sea seguro.
+    ///
+    /// # Esto NO es cancel-safe, por lo mismo que [`Self::release`].
+    pub async fn release_if_idle(&self, ocioso: std::time::Duration) -> bool {
+        let mut v = self.estado.lock().await;
+        if v.handle.is_none() {
+            return true;
+        }
+        // Sin sello de uso no se suelta: se acaba de adquirir por un camino
+        // que no pasó por `resolver_bajo_lock`, y tratarlo como ocioso sería
+        // soltar lo que alguien pidió hace un instante.
+        let ocioso_desde = v.ultimo_uso.filter(|t| t.elapsed() >= ocioso);
+        if ocioso_desde.is_none() {
+            return false;
+        }
+        Self::release_bajo_lock(&mut v).await
+    }
+
+    /// El cuerpo de [`Self::release`], con la ventana YA tomada.
+    async fn release_bajo_lock(v: &mut Ventana) -> bool {
         let Some(handle) = v.handle.take() else {
+            v.ultimo_uso = None;
             return true;
         };
         match Arc::try_unwrap(handle) {
@@ -637,6 +682,7 @@ impl LazyJournal {
                          ocupado un rato más"
                     );
                 }
+                v.ultimo_uso = None;
                 true
             }
             Err(vivo) => {
@@ -703,6 +749,7 @@ impl LazyJournal {
         v: &mut Ventana,
     ) -> Result<Arc<crate::journal::SqliteJournal>, NoJournal> {
         if let Some(j) = &v.handle {
+            v.ultimo_uso = Some(std::time::Instant::now());
             return Ok(Arc::clone(j));
         }
         // El freno, y SOLO para `Busy`. Lo que el freno ahorra es la espera del

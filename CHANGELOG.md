@@ -135,6 +135,36 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A terminal that copied one file no longer holds the journal all day.** The
+  embedded session took the lock on its first mutation and kept it until it
+  exited, so a copy at 09:00 left `norte daemon run` and `norte audit` unable
+  to open `journal.db` until the window was closed. It is released after thirty
+  seconds without use and reopened by the next mutation — the reopen re-reads
+  the chain from the file, which is what makes letting go safe (#179).
+
+- **The graphical diff pane fills in an orphan's size.** A local listing
+  arrives lazily and the comparison engine does not stat per entry, so the size
+  cell of a file that exists on one side only — the row that decides whether it
+  gets copied — stayed blank forever. The selected row is probed, exactly as
+  the terminal does, and a probe belonging to a previous comparison is dropped
+  by generation rather than landing in the current one's tables (#199).
+
+- **A plugin that ran out of time no longer reports as a crashed plugin.** The
+  guest's budget is measured in wall clock — a ticker advances the epochs — so
+  a loaded machine spends it on a plugin that is merely slow, and that arrived
+  as "internal error, the plugin panicked": the one reading that is certainly
+  wrong. An expired budget is its own error now, and outside the host it
+  becomes "unavailable, try again", which is what actually happened (#211).
+
+- **A capability answer is cached per directory, not per connection.** Since
+  the daemon began answering per location, the terminal was still keying that
+  cache by scheme and authority — so the answer for `/home` was served for the
+  exFAT stick, the `+F` subtree and the read-only bind mounted under the same
+  `file://`. Nothing had broken yet because the read-only veto is the only
+  reader today, which is exactly the kind of latency that makes the next flag
+  the one that finds out. The cache is bounded now, because a key per directory
+  is not bounded by the seven schemes that exist (#215).
+
 - **A plugin's approval now covers its binary, not only its manifest.** Approving
   a plugin anchored what it asked for and when it fires — so editing
   `plugin.toml` after approval correctly forced a fresh consent — and said

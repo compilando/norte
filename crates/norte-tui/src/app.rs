@@ -843,21 +843,32 @@ pub struct PendingShell {
     pub wait_for_key: bool,
 }
 
-/// The key of the capability cache: a scheme AND the authority it is served
-/// by, which together are ONE backend. Owned because the map owns its keys and
-/// the lookups are per help open, not per frame.
-type CapsKey = (String, Option<String>);
+/// The key of the capability cache: the DIRECTORY, in wire form.
+///
+/// It used to be `(scheme, authority)` — one backend — and that stopped being
+/// the right question when ADR 0054 made the daemon answer per LOCATION
+/// (#215). Under one `file://` there are mounts: an exFAT stick that folds
+/// case, an ext4 subtree in `+F`, a read-only bind. An answer cached for
+/// `/home` was served for every one of them.
+///
+/// Owned because the map owns its keys, and the lookups are per help open and
+/// per cd — not per frame.
+type CapsKey = String;
 
-/// The location `at` belongs to, as a cache key. Everything below the
-/// authority is dropped on purpose: capabilities are a property of the
-/// backend, not of the directory (a flag that varies per directory needs a
-/// probe — see `App::caps`).
+/// The location `at` belongs to, as a cache key: the directory itself.
 fn caps_key(at: &VPath) -> CapsKey {
-    (
-        at.scheme().to_owned(),
-        at.authority().map(std::borrow::ToOwned::to_owned),
-    )
+    at.to_wire()
 }
+
+/// How many locations the capability cache keeps.
+///
+/// It was unbounded when the key was one per backend — there are seven schemes
+/// — and a key per DIRECTORY is not: a session that walks a big tree would
+/// grow it without end. Sixty-four is far more than the directories a reader
+/// keeps coming back to, and the eviction is by insertion order, which for a
+/// cache whose entries cost one round trip each is the honest cheap answer:
+/// the oldest location is the one least likely to be the next cd.
+const CAPS_CACHE_MAX: usize = 64;
 
 /// How many connection degradations `App` retains at once.
 ///
@@ -1024,26 +1035,28 @@ pub struct App {
     /// [`Self::attr_catalogs`] (`main::first_page`), so caching it costs
     /// nothing.
     ///
-    /// Keyed by scheme AND authority (`caps_key`), which the attr catalogue
-    /// beside it is not, and the asymmetry is the point: a scheme is not one
-    /// place. `sftp://a.org` and `sftp://b.org` are two servers that answer
-    /// this question independently, as are two S3 endpoints and two FTP
-    /// connections of the same plugin provider. Keyed by scheme alone, the
-    /// first host to answer would veto — or fail to veto — every other host of
-    /// its scheme for the rest of the session, and nothing would ever correct
-    /// it. No built-in provider makes `READ_ONLY` differ per authority today
-    /// (an archive and a plugin provider both decide it per scheme), so that
-    /// bug would not fire yet; [`Self::caps`] is a general accessor to every
-    /// flag, and the next one to be read this way must not be the one that
-    /// finds out.
+    /// Keyed by the DIRECTORY (`caps_key`), which the attr catalogue beside it
+    /// is not, and the asymmetry is the point.
     ///
-    /// It is still a per-LOCATION cache and not a per-PATH one: a flag that
-    /// can differ between two directories of one connection needs a probe, and
-    /// `pane.delete`'s `TRASH` check stays a probe for exactly that reason.
+    /// It was keyed by `(scheme, authority)` — one backend — and that was the
+    /// right shape until ADR 0054 made the daemon answer per LOCATION (#215).
+    /// Under one `file://` there are mounts: an exFAT stick that folds case,
+    /// an ext4 subtree in `+F`, a read-only bind. The answer cached for
+    /// `/home` was served for all of them, and the only reason nothing had
+    /// broken yet is that `pane_read_only` was the sole reader and no built-in
+    /// provider varies `READ_ONLY` below its scheme. [`Self::caps`] is a
+    /// general accessor to every flag, and the next flag read this way must
+    /// not be the one that finds out.
+    ///
+    /// Bounded by [`CAPS_CACHE_MAX`]: a key per backend was bounded by the
+    /// seven schemes that exist; a key per directory is not.
     ///
     /// Private: read through [`Self::caps`], written through
     /// [`Self::insert_caps`].
     caps: std::collections::HashMap<CapsKey, norte_proto::Capabilities>,
+    /// Orden de llegada de las claves de [`Self::caps`], para desalojar la más
+    /// vieja cuando se llena ([`CAPS_CACHE_MAX`]).
+    caps_order: std::collections::VecDeque<CapsKey>,
     /// Índice del pane con foco (invariante 0|1: privado, ver [`Self::focus`]).
     focus: usize,
     /// `true` cuando el usuario pidió salir.
@@ -2172,6 +2185,7 @@ impl App {
             render_now_ms: None,
             attr_catalogs: std::collections::HashMap::new(),
             caps: std::collections::HashMap::new(),
+            caps_order: std::collections::VecDeque::new(),
             columns: norte_frontend::columns::ColumnsSettings::default(),
             focus: 0,
             quit: false,
@@ -2567,7 +2581,19 @@ impl App {
     /// the halves of ONE `fs.capabilities` response — see [`Self::caps`]'
     /// field docs for why keeping only the attrs was waste.
     pub fn insert_caps(&mut self, at: &VPath, caps: norte_proto::Capabilities) {
-        self.caps.insert(caps_key(at), caps);
+        let key = caps_key(at);
+        if !self.caps.contains_key(&key) && self.caps.len() >= CAPS_CACHE_MAX {
+            // El más viejo por ORDEN DE LLEGADA, que es lo que
+            // `caps_order` recuerda: un `HashMap` no tiene orden y elegir
+            // «cualquiera» dejaría la caché tirando la ubicación que se acaba
+            // de mirar tan a menudo como la de hace media hora.
+            if let Some(viejo) = self.caps_order.pop_front() {
+                self.caps.remove(&viejo);
+            }
+        }
+        if self.caps.insert(key.clone(), caps).is_none() {
+            self.caps_order.push_back(key);
+        }
     }
 
     /// Whether the pane's location refuses mutation.

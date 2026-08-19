@@ -100,9 +100,12 @@ fn guest_en_bucle_trapea_por_deadline_no_cuelga_el_host() {
         .expect("instancia");
     let err = inst
         .run_command("spin", "")
-        .expect_err("un guest en bucle debe trapear, no colgar");
+        .expect_err("un guest en bucle debe cortarse, no colgar");
+    // `Deadline` y NO `Trap` (#211): el presupuesto venció, que no es lo mismo
+    // que el guest crashease — y contarlos igual convertía «tu máquina iba
+    // cargada» en «tu plugin está roto», la única lectura que seguro es falsa.
     assert!(
-        matches!(err, norte_plugin_host::RuntimeError::Trap(_)),
+        matches!(err, norte_plugin_host::RuntimeError::Deadline),
         "fue {err:?}"
     );
 }
@@ -138,9 +141,9 @@ fn el_presupuesto_de_epoca_se_rearma_en_cada_llamada() {
     // Y sigue cortando lo que tiene que cortar: un bucle dentro de UNA llamada.
     let err = inst
         .run_command("spin", "")
-        .expect_err("un bucle sigue trapando");
+        .expect_err("un bucle sigue cortándose");
     assert!(
-        matches!(err, norte_plugin_host::RuntimeError::Trap(_)),
+        matches!(err, norte_plugin_host::RuntimeError::Deadline),
         "fue {err:?}"
     );
 }

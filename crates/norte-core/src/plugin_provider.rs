@@ -279,12 +279,22 @@ fn map_vfs_error(e: provider_iface::VfsError) -> Error {
     }
 }
 
-/// Fallo del runtime del guest. Solo un TRAP es panic-clase (el guest crasheó);
-/// un rechazo controlado (tope de retorno, deadline, instanciación) es un fallo
-/// interno NO-panic.
+/// Fallo del runtime del guest.
+///
+/// Solo un TRAP es panic-clase (el guest crasheó); un rechazo controlado
+/// —tope de retorno, instanciación— es un fallo interno NO-panic.
+///
+/// Un PRESUPUESTO agotado no es ninguna de las dos cosas (#211): el deadline
+/// se mide en reloj, así que una máquina cargada se lo come con un plugin que
+/// solo es lento, y decir «el plugin crasheó» es la única respuesta que seguro
+/// es falsa. Va a `ProviderUnavailable { retryable: true }`, que es lo que de
+/// verdad pasó: no le dio tiempo, y otra vez puede que sí.
 pub(crate) fn map_runtime_error(e: &RuntimeError) -> Error {
-    Error::Internal {
-        panic: matches!(e, RuntimeError::Trap(_)),
+    match e {
+        RuntimeError::Deadline => Error::ProviderUnavailable { retryable: true },
+        otro => Error::Internal {
+            panic: matches!(otro, RuntimeError::Trap(_)),
+        },
     }
 }
 
