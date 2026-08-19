@@ -23,7 +23,7 @@ use crate::gestures::{
     shell_cwd,
 };
 use crate::keymap::Command;
-use crate::mutations::{test_archive, unpack, combine_pieces, launch_size_count};
+use crate::mutations::{combine_pieces, launch_size_count, test_archive, unpack};
 use crate::nav;
 use crate::navigate::{Cd, cd};
 use crate::overlays::open_contextual_help;

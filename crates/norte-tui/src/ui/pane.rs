@@ -1,6 +1,6 @@
 //! Pintar un pane: la fila por entrada, la cabecera de columnas y el reparto de
 //! anchos que las dos comparten.
-//! 
+//!
 //! `entry_item` es la función más caliente del render — se llama una vez por fila
 //! visible y por frame — y por eso recibe todo por parámetro en vez de mirar
 //! `App`: agrupar sus argumentos en una struct de un solo uso solo movería la
@@ -14,9 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::text::{
-    clamp_spans, take_width,
-    };
+use super::text::{clamp_spans, take_width};
 use super::{HOSTILE_BADGE, TARGET_BADGE, TabStrip, draw_tab_strip};
 use crate::app::{Pane, display_name};
 use crate::theme::TuiTheme;
@@ -170,7 +168,8 @@ pub(crate) fn draw_pane(
     } else {
         theme.role(Role::BorderUnfocused)
     };
-    let (title, title_hostile) = norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
+    let (title, title_hostile) =
+        norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
     let mut title = if title_hostile {
         format!("{HOSTILE_BADGE} {title}")
     } else {
@@ -334,10 +333,7 @@ pub(crate) fn entry_item<'a>(
         theme.role(Role::HostileBadge),
     );
     // Color por tipo/extensión de la entrada (ADR 0020 D2).
-    let body = Span::styled(
-        format!("{kind_glyph}{text}"),
-        theme.entry(name, entry.kind),
-    );
+    let body = Span::styled(format!("{kind_glyph}{text}"), theme.entry(name, entry.kind));
     // Canalón de marca (#103): señal TEXTUAL, jamás solo color — el fallback
     // monocromo de `Role::Mark` es `dim`, que por sí solo se lee «inactivo»,
     // no «seleccionado». Va ANTES del badge hostil para que ni el badge ni la

@@ -352,10 +352,7 @@ pub async fn unpack(app: &mut App, backend: &Backend) {
         return;
     }
     let dest = app.panes[other].dir().clone();
-    match backend
-        .copy(&raiz, &dest, TransferOptions::default())
-        .await
-    {
+    match backend.copy(&raiz, &dest, TransferOptions::default()).await {
         Ok(task) => {
             app.message = Some(t("msg-unpack-started"));
             app.board.push(&task, None);

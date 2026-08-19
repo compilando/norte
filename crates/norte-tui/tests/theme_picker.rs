@@ -30,10 +30,7 @@ fn abrir_lista_los_presets_y_previsualiza() {
     let mut t = Terminal::new(TestBackend::new(60, 16)).expect("term");
     t.draw(|f| ui::draw(f, &app)).expect("draw");
     let text = t.backend().to_string();
-    assert!(
-        text.contains("nord"),
-        "el popup no lista los temas: {text}"
-    );
+    assert!(text.contains("nord"), "el popup no lista los temas: {text}");
 }
 
 #[test]

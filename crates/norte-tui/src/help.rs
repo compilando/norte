@@ -967,10 +967,7 @@ mod tests {
         );
         // Y los chords viajan con la copia: congelar hechos no puede costar la
         // tecla del lector.
-        assert_eq!(
-            inside_a_zip.chord("pane.copy"),
-            before.chord("pane.copy")
-        );
+        assert_eq!(inside_a_zip.chord("pane.copy"), before.chord("pane.copy"));
     }
 
     /// H3e: la fila de un comando de un plugin APAGADO sale atenuada, con su

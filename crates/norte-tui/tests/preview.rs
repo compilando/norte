@@ -46,7 +46,10 @@ fn app_de_prueba() -> App {
                 entry(&left, "carpeta", EntryKind::Dir),
             ],
         ),
-        Pane::new(right.clone(), vec![entry(&right, "dos.txt", EntryKind::File)]),
+        Pane::new(
+            right.clone(),
+            vec![entry(&right, "dos.txt", EntryKind::File)],
+        ),
     )
 }
 
@@ -159,12 +162,8 @@ fn si_muere_el_hueco_seguido_se_degrada_al_activo_y_lo_dice() {
         "el reparto en sí no tiene nada que arreglar"
     );
     let mut diags = Vec::new();
-    let dest =
-        norte_frontend::layout::resolve_follow(&app.layout, slot, &app.roles, &mut diags);
-    assert_eq!(
-        dest,
-        app.roles.get(norte_frontend::layout::RoleId::Active)
-    );
+    let dest = norte_frontend::layout::resolve_follow(&app.layout, slot, &app.roles, &mut diags);
+    assert_eq!(dest, app.roles.get(norte_frontend::layout::RoleId::Active));
     assert!(
         diags
             .iter()

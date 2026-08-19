@@ -1380,11 +1380,7 @@ mod edit_tests {
             None,
         );
         let pending = edit_under_cursor(&app).expect("local y fichero");
-        assert_eq!(
-            pending.argv.len(),
-            2,
-            "programa y ruta, sin línea de shell"
-        );
+        assert_eq!(pending.argv.len(), 2, "programa y ruta, sin línea de shell");
         assert_eq!(
             pending.argv[1],
             std::ffi::OsString::from("/tmp/a.txt"),

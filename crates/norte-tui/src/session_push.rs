@@ -287,11 +287,9 @@ impl SessionPush {
     /// escritura que este camino existe para no perder.
     pub async fn close(&mut self, last: Option<Arc<norte_frontend::session::SessionBody>>) {
         if let Some(body) = last {
-            let _ = tokio::time::timeout(
-                SHUTDOWN_GRACE,
-                self.ordenes.send(SessionOrder::Write(body)),
-            )
-            .await;
+            let _ =
+                tokio::time::timeout(SHUTDOWN_GRACE, self.ordenes.send(SessionOrder::Write(body)))
+                    .await;
         }
         let (empty, _) = tokio::sync::mpsc::channel(1);
         // Soltar el emisor es lo que termina el bucle del escritor.
@@ -347,10 +345,7 @@ async fn write_session(
                         })
                         .unwrap_or_default();
                     let _ = avisos
-                        .send(SessionNotice::Owner {
-                            revision,
-                            orphans,
-                        })
+                        .send(SessionNotice::Owner { revision, orphans })
                         .await;
                 }
                 continue;
@@ -499,10 +494,7 @@ pub fn push_session(app: &mut App, st: &mut SessionPush) {
     // `try_send` y no `send`: con el escritor ocupado, este tick se salta y el
     // siguiente manda un cuerpo más nuevo. Y `last` solo se actualiza si de
     // verdad se mandó, o un cuerpo saltado se daría por escrito.
-    match st
-        .ordenes
-        .try_send(SessionOrder::Write(Arc::clone(&body)))
-    {
+    match st.ordenes.try_send(SessionOrder::Write(Arc::clone(&body))) {
         Ok(()) => st.policy.sent(body),
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
         // El escritor se murió (un panic dentro de la task). Sin esto la
@@ -526,10 +518,7 @@ pub fn drain_notices(app: &mut App, st: &mut SessionPush) {
                 // Lo mandado no llegó: que la comparación no lo dé por escrito.
                 st.policy.resend();
             }
-            SessionNotice::Owner {
-                revision,
-                orphans,
-            } => {
+            SessionNotice::Owner { revision, orphans } => {
                 app.session.detached = false;
                 app.session.revision = revision;
                 app.adopt_session_orphans(orphans);
@@ -755,9 +744,7 @@ mod session_push_tests {
         let mut app = app();
         let (mut st, mut ordenes, _avisos) = SessionPush::for_test();
         // El escritor está ocupado: el canal ya lleva una orden sin consumir.
-        st.ordenes
-            .try_send(SessionOrder::Ask)
-            .expect("cabe una");
+        st.ordenes.try_send(SessionOrder::Ask).expect("cabe una");
         let last = capture_session(&mut app, &mut st).expect("hay pantalla que guardar");
         let received = tokio::spawn(async move {
             let mut v = Vec::new();

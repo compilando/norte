@@ -1,5 +1,5 @@
 //! Recortar y medir texto para la celda en la que cabe.
-//! 
+//!
 //! Nada de aquí sabe de `App` ni de ratatui salvo `Span`: son las funciones que
 //! deciden dónde entra la elipsis, cuántas celdas ocupa un glifo y qué badge
 //! lleva delante un nombre hostil.
@@ -128,7 +128,12 @@ pub(crate) fn with_badge(text: &str, hostile: bool) -> String {
 /// un TAMAÑO, y un `38.2 GiB` recortado por la cabeza pinta `8.2 GiB`, que no
 /// es una etiqueta rota sino un número FALSO. Si no cabe entero, se cae el
 /// campo derecho y queda solo el nombre.
-pub(crate) fn two_fields(left: &str, right: &str, width: usize, truncate: fn(&str, usize) -> String) -> String {
+pub(crate) fn two_fields(
+    left: &str,
+    right: &str,
+    width: usize,
+    truncate: fn(&str, usize) -> String,
+) -> String {
     /// Celdas por debajo de las cuales el nombre deja de identificar nada.
     const FLOOR: usize = 6;
     let d = norte_frontend::cells(right);

@@ -415,10 +415,7 @@ fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
     );
     // La sesión se pinta entre comillas (delimitada) y la línea de teclas
     // legítima está presente UNA vez al final del cuerpo.
-    assert!(
-        content.contains("\"s1\""),
-        "sesión delimitada: {content}"
-    );
+    assert!(content.contains("\"s1\""), "sesión delimitada: {content}");
 }
 
 /// Review H3c MINOR-5: cuántas rutas trae la petición lo elige el AGENTE, y el
@@ -467,10 +464,7 @@ fn el_pie_del_modal_de_aprobacion_se_pinta_con_un_lote_gigante() {
         "y la pregunta sigue a la vista: {content}"
     );
     // La lista está ACOTADA y resumida: la cola no se pinta ni empuja nada.
-    assert!(
-        !content.contains("f400"),
-        "la cola no se pinta: {content}"
-    );
+    assert!(!content.contains("f400"), "la cola no se pinta: {content}");
     assert!(
         content.contains("390"),
         "el resumen dice cuántas quedan fuera: {content}"
@@ -752,10 +746,7 @@ fn modal_de_confirmacion_sigue_la_reinterpretacion() {
         content.contains("Папка"),
         "el modal pinta el texto por el que se navegó: {content}"
     );
-    assert!(
-        !content.contains("�����"),
-        "no el lossy crudo: {content}"
-    );
+    assert!(!content.contains("�����"), "no el lossy crudo: {content}");
 }
 
 /// #103 T10: el modal de un LOTE pinta una ruta POR LÍNEA (jamás dos
@@ -788,10 +779,7 @@ fn el_modal_de_un_lote_pinta_una_ruta_por_linea_y_resume_el_resto() {
         .collect();
     for nombre in &names {
         let lines = painted.lines().filter(|l| l.contains(nombre)).count();
-        assert_eq!(
-            lines, 1,
-            "{nombre} va en UNA línea, no {lines}: {painted}"
-        );
+        assert_eq!(lines, 1, "{nombre} va en UNA línea, no {lines}: {painted}");
     }
     for linea in painted.lines() {
         let cuantos = names.iter().filter(|n| linea.contains(*n)).count();

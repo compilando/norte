@@ -257,5 +257,8 @@ fn watch_targets_sigue_a_los_panes_tras_el_intercambio() {
         "el dir izquierdo pasa a vigilarse a la derecha"
     );
     assert_eq!(before[1], after[0]);
-    assert_ne!(before[0], before[1], "los dos dirs eran distintos de partida");
+    assert_ne!(
+        before[0], before[1],
+        "los dos dirs eran distintos de partida"
+    );
 }

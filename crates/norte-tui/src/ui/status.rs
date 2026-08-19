@@ -6,9 +6,8 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
 
-use super::text::{
-    cells, };
 use super::HOSTILE_BADGE;
+use super::text::cells;
 use crate::app::{App, Pane};
 use norte_i18n::ta;
 

@@ -1,5 +1,5 @@
 //! Dónde va cada cosa: resolver el reparto para un frame y traducirlo a `Rect`.
-//! 
+//!
 //! Nada de aquí pinta. Es lo que `draw` consulta antes de repartir el frame, y
 //! también lo que consulta el enrutado de ratón para saber qué hay bajo el
 //! cursor sin haber pintado.
@@ -7,10 +7,10 @@
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders};
 
-use crate::app::App;
 use super::chrome::TabStrip;
 use super::compare::compare_layout;
 use super::sync::sync_layout;
+use crate::app::App;
 
 /// Filas del panel de tasks en un frame (tope 6): parte del layout de
 /// [`draw`], extraída para que [`pane_list_rows`] cuente lo MISMO que se
@@ -306,7 +306,10 @@ pub(crate) fn block_inner(area: Rect) -> Rect {
 
 /// Como [`sync_layout`], desde el área EXTERNA del panel (la que recibe
 /// `draw_sync`): descuenta el borde antes de repartir.
-pub(crate) fn sync_layout_rows(area: Rect, view: &crate::app::SyncView) -> (Option<Rect>, Rect, Option<Rect>) {
+pub(crate) fn sync_layout_rows(
+    area: Rect,
+    view: &crate::app::SyncView,
+) -> (Option<Rect>, Rect, Option<Rect>) {
     sync_layout(block_inner(area), view)
 }
 

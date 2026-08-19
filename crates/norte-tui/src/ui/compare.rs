@@ -262,8 +262,12 @@ pub(crate) fn compare_title_halves(
     // Bordes del marco (2) + prefijo + separador + el espacio final + las
     // dos marcas — todo lo que NO es texto de raíz, reservado antes de
     // repartir lo que queda.
-    let fixed =
-        2 + prefix_w + COMPARE_TITLE_SEP.width() + 1 + badge_w(left_hostile) + badge_w(right_hostile);
+    let fixed = 2
+        + prefix_w
+        + COMPARE_TITLE_SEP.width()
+        + 1
+        + badge_w(left_hostile)
+        + badge_w(right_hostile);
     let roots_w = frame_width.saturating_sub(fixed).max(2);
     let left_w = (roots_w / 2).max(1);
     let right_w = roots_w.saturating_sub(left_w).max(1);
@@ -378,7 +382,10 @@ pub(crate) fn compare_status_line(view: &crate::app::CompareView) -> String {
 /// Un filtro APAGADO se marca con un glifo (`-` frente a `+`) y no solo con
 /// un color (spec §17), y la cuenta se sigue enseñando: esconder categorías
 /// es justo lo que haría mentir al panel si no lo dijera.
-pub(crate) fn compare_filter_spans(view: &crate::app::CompareView, theme: &TuiTheme) -> Vec<Span<'static>> {
+pub(crate) fn compare_filter_spans(
+    view: &crate::app::CompareView,
+    theme: &TuiTheme,
+) -> Vec<Span<'static>> {
     use norte_frontend::compare::CATEGORIES;
 
     let mut spans = Vec::new();
@@ -410,7 +417,10 @@ pub(crate) fn compare_filter_spans(view: &crate::app::CompareView, theme: &TuiTh
 /// El color de las dos marcas de una fila. El GLIFO ya distingue el veredicto
 /// sin color ninguno (spec §17, `norte_frontend::compare::verdict_glyph`);
 /// esto solo lo refuerza para quien sí lo ve.
-pub(crate) fn compare_mark_style(theme: &TuiTheme, verdict: norte_proto::methods::CompareVerdict) -> Style {
+pub(crate) fn compare_mark_style(
+    theme: &TuiTheme,
+    verdict: norte_proto::methods::CompareVerdict,
+) -> Style {
     use norte_proto::methods::CompareVerdict as V;
     match verdict {
         V::Same => theme.role(Role::Regular),

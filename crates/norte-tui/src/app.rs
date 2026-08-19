@@ -3897,13 +3897,8 @@ impl App {
     /// El listado del directorio lo hace el llamante y llega ya hecho: leer
     /// un directorio es I/O, y esto se llama desde un contexto async
     /// (regla 2).
-    pub fn open_layout_picker(
-        &mut self,
-        user: Vec<norte_frontend::layout_picker::UserLayout>,
-    ) {
-        self.layout_picker = Some(norte_frontend::layout_picker::LayoutPicker::open(
-            user,
-        ));
+    pub fn open_layout_picker(&mut self, user: Vec<norte_frontend::layout_picker::UserLayout>) {
+        self.layout_picker = Some(norte_frontend::layout_picker::LayoutPicker::open(user));
     }
 
     /// Abre el selector de conexiones (#140) con lo que haya en
@@ -4180,8 +4175,7 @@ impl App {
             // repintado, progreso de tareas y `Ctrl+C` a la vez (#244 M2,
             // regla 2).
             PickerAction::Confirm => {
-                let Some(row) = self.layout_picker.take().and_then(|p| p.current().cloned())
-                else {
+                let Some(row) = self.layout_picker.take().and_then(|p| p.current().cloned()) else {
                     return;
                 };
                 let (showable, _) = norte_frontend::display_os_name(&row.name);
@@ -8454,7 +8448,10 @@ mod tests {
     fn volume_label_hostile_corpus_sweep() {
         let mount = vp("mem:///media/usb");
         let (path_text, path_hostile) = norte_frontend::path_display_with(&mount, None);
-        assert!(!path_hostile, "control: el mount fijo del test no es hostil");
+        assert!(
+            !path_hostile,
+            "control: el mount fijo del test no es hostil"
+        );
         let (fs_text, fs_hostile) = display_name(b"vfat");
         assert!(!fs_hostile, "control: \"vfat\" no es hostil");
         let sizes = format!("{u} / {u}", u = t("volumes-size-unknown"));

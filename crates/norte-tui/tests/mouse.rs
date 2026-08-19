@@ -146,7 +146,10 @@ fn el_layout_de_estos_tests_es_el_que_se_pinta() {
     let geom = app.mouse.geometry().expect("hay geometría");
     let (left, right) = (geom[0], geom[1]);
     assert_eq!((left.x, left.y, left.width, left.height), (0, 0, 30, 11));
-    assert_eq!((right.x, right.y, right.width, right.height), (30, 0, 30, 11));
+    assert_eq!(
+        (right.x, right.y, right.width, right.height),
+        (30, 0, 30, 11)
+    );
     assert_eq!(left.first_list_row, FILA0, "borde superior + cabecera");
     assert_eq!(left.list_rows, FILAS, "interior menos la cabecera");
     assert_eq!(left.offset, 0, "cursor en la primera: sin scroll");
@@ -528,11 +531,7 @@ fn un_arrastre_cancelado_restituye_las_marcas() {
     let _ = mouse::handle(&mut app, ev(ARRIBA, 5, H - 1));
 
     assert!(app.modal.is_none(), "cancelar no somete nada");
-    assert_eq!(
-        marked(&app),
-        before,
-        "las marcas, exactamente las de antes"
-    );
+    assert_eq!(marked(&app), before, "las marcas, exactamente las de antes");
 }
 
 /// El aviso de la barra sale de `Drag::pending`, la MISMA fuente que lee el

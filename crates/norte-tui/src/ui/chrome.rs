@@ -1,6 +1,6 @@
 //! El cromo de la ventana: la barra de menú con sus zonas de clic, y la tira de
 //! pestañas de cada lado.
-//! 
+//!
 //! Las dos siguen la misma forma: una función MIDE las zonas (`menu_zones`,
 //! `tab_zones`) y otra PINTA, porque quien enruta un clic necesita la geometría
 //! sin haber pintado nada.
@@ -11,8 +11,8 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::geometry::{pane_rects, tab_strip_for};
 use super::clear_themed;
+use super::geometry::{pane_rects, tab_strip_for};
 use crate::app::App;
 use crate::theme::TuiTheme;
 

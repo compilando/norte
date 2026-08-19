@@ -479,11 +479,7 @@ fn con_el_teclado_dentro_el_sidebar_cambia_de_ancho() {
     app.return_keys_to_panes();
     let now = width(&app);
     app.layout_resize(1);
-    assert_eq!(
-        width(&app),
-        now,
-        "el sidebar no se toca desde los listados"
-    );
+    assert_eq!(width(&app), now, "el sidebar no se toca desde los listados");
 }
 
 /// Y el sidebar DESPACHA su propia tecla: sin esto la tecla llega y se cae en

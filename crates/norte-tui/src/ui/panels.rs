@@ -1,6 +1,6 @@
 //! Los paneles laterales: árbol, procesos, metadatos y tareas, más el visor, la
 //! previsualización y la lista de sitios.
-//! 
+//!
 //! Cada uno ocupa un hueco del reparto y pinta lo que hay en su modelo; ninguno
 //! decide dónde va.
 
@@ -11,8 +11,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
-use super::text::{
-    head, middle, two_fields, with_badge, };
+use super::text::{head, middle, two_fields, with_badge};
 use super::{HOSTILE_BADGE, placed_of_kind, resolved_for};
 use crate::app::{App, display_name};
 use crate::theme::TuiTheme;
@@ -634,7 +633,12 @@ pub(crate) fn draw_metadata(
 }
 
 /// Una fila etiqueta/valor cuya etiqueta no sale de Fluent sino del catálogo.
-pub(crate) fn free_field(lines: &mut Vec<Line<'static>>, theme: &TuiTheme, label: &str, value: &str) {
+pub(crate) fn free_field(
+    lines: &mut Vec<Line<'static>>,
+    theme: &TuiTheme,
+    label: &str,
+    value: &str,
+) {
     lines.push(Line::from(vec![
         Span::styled(format!("{label} "), theme.role(Role::Title)),
         Span::raw(value.to_owned()),

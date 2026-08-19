@@ -7,8 +7,7 @@ use norte_theme::Role;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui::widgets::{
-    Block, Borders, List, ListItem, ListState, Paragraph, };
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use crate::app::{App, display_name};
 use crate::theme::TuiTheme;
@@ -31,9 +30,7 @@ mod text;
 // que es la API de este modulo y no baja a `pub(crate)`.
 pub use chrome::{MenuHit, MenuZone, TabAction, TabZone, menu_zones, tab_zones};
 pub use compare::draw_compare;
-pub use geometry::{
-    before_frame, pane_geometry, pane_list_rows, resolved_for, tab_strip_for,
-};
+pub use geometry::{before_frame, pane_geometry, pane_list_rows, resolved_for, tab_strip_for};
 pub use help::{draw_help, help_body_size, help_group_is_painted, help_layout, help_sidebar_width};
 pub use overlays::{draw_shortcuts, draw_which_key, plugin_description_line};
 pub use pane::painted_len_and_selection;
@@ -41,11 +38,11 @@ pub use panels::{PlaceZone, places_zones};
 pub use pickers::draw_theme_picker;
 pub use text::fit_hint_groups;
 
+use chrome::draw_menu;
 pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
 pub(crate) use geometry::{
     body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_rect,
 };
-use chrome::draw_menu;
 use modals::draw_modal;
 use overlays::{draw_extensions, draw_palette, draw_plugin_config_panel, draw_settings};
 use pane::draw_pane;
@@ -55,7 +52,6 @@ use panels::{
 use pickers::{draw_columns_picker, draw_connections_picker, draw_layout_picker};
 use status::draw_status;
 use sync::draw_sync;
-
 
 /// Badge de nombre hostil: PREFIJO en columna fija (al final moriría en el
 /// truncado por ancho de ratatui y el nombre se pintaría "limpio") y en

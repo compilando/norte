@@ -1,5 +1,5 @@
 //! El texto de cada modal, y el alto que hay que reservarle.
-//! 
+//!
 //! Un `*_modal_text` no pinta: DEVUELVE el cuerpo ya compuesto, y por eso se
 //! puede afirmar sobre él sin un backend de test. `modal_height` es la otra
 //! mitad del contrato — si las dos se desincronizan, el modal se recorta.
@@ -15,7 +15,6 @@ use crate::app::{AI_RENAME_PAIR_LIMIT, SEMANTIC_HIT_LIMIT, display_name};
 use crate::theme::TuiTheme;
 use norte_frontend::middle_ellipsis;
 use norte_i18n::{t, ta};
-
 
 /// Presupuesto en CHARS de una ruta dentro de un modal, antes de la elipsis
 /// media. El mismo que ya usaban el modal de aprobación y el de colisión:
@@ -309,9 +308,7 @@ pub(crate) fn modal_height(modal: &crate::app::Modal) -> u16 {
         Modal::ConfirmDelete { items, .. } | Modal::ConfirmTransfer { items, .. } => {
             let listed = items.len().min(norte_frontend::MODAL_ITEM_LIMIT)
                 + usize::from(items.len() > norte_frontend::MODAL_ITEM_LIMIT);
-            u16::try_from(listed)
-                .unwrap_or(u16::MAX)
-                .saturating_add(5)
+            u16::try_from(listed).unwrap_or(u16::MAX).saturating_add(5)
         }
         // TrustHostKey: host + algo + fingerprint + nota + teclas (5 líneas)
         // + bordes. TransferName con error (#105): origen + dir destino +
@@ -606,7 +603,11 @@ pub(crate) fn attr_text(v: &norte_proto::AttrValue) -> (String, bool) {
     }
 }
 
-pub(crate) fn mark_pattern_modal_text(mark: bool, pattern: &str, error: Option<&str>) -> (String, String) {
+pub(crate) fn mark_pattern_modal_text(
+    mark: bool,
+    pattern: &str,
+    error: Option<&str>,
+) -> (String, String) {
     let (masked, hostile) = display_name(pattern.as_bytes());
     // #103 T9 review MINOR: `PaneState::mark_glob` compila el patrón CRUDO,
     // no el enmascarado — aquí el display difiere de verdad de lo que
@@ -945,10 +946,7 @@ mod transfer_name_modal_text_tests {
             body.matches('\u{FFFD}').count() >= 4,
             "nombre + error (RLO) y origen + destino (bytes): {body:?}"
         );
-        assert!(
-            body.matches(super::HOSTILE_BADGE).count() >= 2,
-            "{body:?}"
-        );
+        assert!(body.matches(super::HOSTILE_BADGE).count() >= 2, "{body:?}");
     }
 }
 
@@ -981,12 +979,8 @@ mod free_text_modal_text_tests {
     #[test]
     fn un_valor_largo_ensena_su_cola_y_marca_el_corte() {
         let long = "a".repeat(300);
-        let (_, body) = free_text_modal_text(
-            "modal-command-line",
-            "modal-command-line-hint",
-            &long,
-            None,
-        );
+        let (_, body) =
+            free_text_modal_text("modal-command-line", "modal-command-line-hint", &long, None);
         let field = body.lines().next().expect("campo");
         assert!(field.starts_with('…'), "el corte se marca: {field:?}");
         assert!(field.ends_with('_'), "y el cursor se ve: {field:?}");
@@ -1913,7 +1907,11 @@ mod approval_modal_tests {
             req: req(rutas(total)),
         };
         let height = modal_height(&modal);
-        assert_eq!(height, u16::try_from(limit + 3).expect("cabe") + 2, "{height}");
+        assert_eq!(
+            height,
+            u16::try_from(limit + 3).expect("cabe") + 2,
+            "{height}"
+        );
         assert_eq!(
             modal_height(&crate::app::Modal::ApproveAgentOp { req: req(rutas(1)) }),
             5,

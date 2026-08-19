@@ -144,7 +144,10 @@ fn el_modal_de_transferencia_pinta_el_aviso_de_espacio() {
 
     // Sin aviso, ni rastro de él.
     let sin = pintar(None);
-    assert!(!sin.contains(&notice), "cuando cabe no se dice nada:\n{sin}");
+    assert!(
+        !sin.contains(&notice),
+        "cuando cabe no se dice nada:\n{sin}"
+    );
 }
 
 /// #164: y debajo del de espacio, el de confinamiento — misma clase de línea
@@ -252,10 +255,7 @@ fn la_barra_de_estado_recorta_la_ruta_y_no_el_contador() {
         bar.contains("8/42"),
         "el contador entero, que es lo que dice cuánto hay: {bar:?}"
     );
-    assert!(
-        bar.contains('…'),
-        "y la ruta cede por el medio: {bar:?}"
-    );
+    assert!(bar.contains('…'), "y la ruta cede por el medio: {bar:?}");
 }
 
 #[test]
@@ -1010,10 +1010,7 @@ fn modal_trust_host_fingerprint_hostil_y_sha256_completo() {
         !text.contains('\u{202E}'),
         "el bidi del fingerprint NO llega al render: {text:?}"
     );
-    assert!(
-        text.contains('!'),
-        "fingerprint manipulado → badge: {text}"
-    );
+    assert!(text.contains('!'), "fingerprint manipulado → badge: {text}");
 
     // Un SHA256 real (7 + 43 = 50 chars) cabe entero, sin truncar.
     app.modal = Some(Modal::TrustHostKey {
@@ -1595,8 +1592,12 @@ fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
     let text = render_ayuda(&mut app, 80, 16);
     let view = app.help.as_ref().expect("overlay abierto");
     let total = view.body().0.len();
-    let (_, height) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, 80, 16), view.state.lang());
-    assert!(total > height, "el índice no cabe en {height} filas ({total})");
+    let (_, height) =
+        ui::help_body_size(ratatui::layout::Rect::new(0, 0, 80, 16), view.state.lang());
+    assert!(
+        total > height,
+        "el índice no cabe en {height} filas ({total})"
+    );
     let footer = text
         .lines()
         .nth(help_footer_row(80, 16))
@@ -1636,7 +1637,10 @@ fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
     let total = view.body().0.len();
     let (_, height) =
         ui::help_body_size(ratatui::layout::Rect::new(0, 0, 120, 90), view.state.lang());
-    assert!(total <= height, "la página cabe en {height} filas ({total})");
+    assert!(
+        total <= height,
+        "la página cabe en {height} filas ({total})"
+    );
     let footer = text
         .lines()
         .nth(help_footer_row(120, 90))

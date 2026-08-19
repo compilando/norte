@@ -428,7 +428,11 @@ pub(crate) fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette,
 /// buffer de edición SÍ es entrada del usuario vía terminal (paste incluido)
 /// — se enmascara igual que la query, mismo contrato que `NavPopup::
 /// name_input`.
-pub(crate) fn draw_settings(frame: &mut Frame<'_>, settings: &crate::app::Settings, theme: &TuiTheme) {
+pub(crate) fn draw_settings(
+    frame: &mut Frame<'_>,
+    settings: &crate::app::Settings,
+    theme: &TuiTheme,
+) {
     let width = frame
         .area()
         .width

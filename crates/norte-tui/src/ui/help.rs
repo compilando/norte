@@ -1,6 +1,6 @@
 //! La pantalla de ayuda: su reparto en barra lateral + cuerpo, el scrollbar que
 //! comparten los dos, y el pie que resume los atajos vivos.
-//! 
+//!
 //! El ancho de la barra lateral depende del IDIOMA (`help_sidebar_desired`),
 //! porque las etiquetas traducidas no miden lo mismo.
 
@@ -476,10 +476,10 @@ pub(crate) fn keys_only_group(rows: &[norte_frontend::help::SidebarRow], header:
 
 #[cfg(test)]
 mod help_footer_tests {
-    use crate::ui::text::{cells, fit_hint_groups, hint_groups};
     use crate::app::ALLOW_HELP;
     use crate::hints::{dialog_hints, without_navigation};
     use crate::keymap::{COMMANDS, DIALOG_COMMANDS, Effective, Screen, presets};
+    use crate::ui::text::{cells, fit_hint_groups, hint_groups};
 
     /// The `dialog` effective of the shipped default preset — the very one
     /// the help overlay's footer is generated from at runtime.

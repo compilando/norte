@@ -9,8 +9,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::text::wrapped_rows;
 use super::HOSTILE_BADGE;
+use super::text::wrapped_rows;
 use crate::theme::TuiTheme;
 use norte_i18n::t;
 
@@ -21,7 +21,12 @@ use norte_i18n::t;
 /// resumen, las tres marcas de cada paso, qué devuelve el undo y la segunda
 /// pregunta. Aquí solo se reparte el sitio y se elige el color, y el color
 /// nunca es lo único que distingue nada (§17) — las marcas son glifos ASCII.
-pub(crate) fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, theme: &TuiTheme) {
+pub(crate) fn draw_sync(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    view: &crate::app::SyncView,
+    theme: &TuiTheme,
+) {
     let (source_txt, source_hostile) =
         norte_frontend::path_display_with(&view.source_root, view.source_encoding);
     // Con la reinterpretación del DESTINO, no la del origen: un share CP1251
@@ -160,7 +165,10 @@ pub(crate) fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::Sy
 /// las frases que deciden la aprobación, y recortarlas a una sola línea es
 /// esconder justamente el «esto no se puede deshacer». Con el marco tan corto
 /// que no cabe nada, la LISTA se lo queda todo.
-pub(crate) fn sync_layout(outer: Rect, view: &crate::app::SyncView) -> (Option<Rect>, Rect, Option<Rect>) {
+pub(crate) fn sync_layout(
+    outer: Rect,
+    view: &crate::app::SyncView,
+) -> (Option<Rect>, Rect, Option<Rect>) {
     if outer.height < 5 {
         return (None, outer, None);
     }
