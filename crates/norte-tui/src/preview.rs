@@ -103,10 +103,10 @@ impl Preview {
     ///
     /// `path` es de qué va el texto, para que una nota de un cursor viejo no
     /// se quede puesta cuando el cursor ya está en otro sitio.
-    pub fn say(&mut self, path: Option<VPath>, texto: String) {
+    pub fn say(&mut self, path: Option<VPath>, text: String) {
         self.shown = path;
         self.viewer = None;
-        self.note = Some(texto);
+        self.note = Some(text);
     }
 }
 
@@ -136,11 +136,11 @@ pub fn want(app: &App, res: &Resolved) -> Option<(SlotId, Want)> {
         norte_frontend::layout::resolve_follow(&app.layout, hueco, &app.roles, &mut diags)
             .or_else(|| app.roles.get(norte_frontend::layout::RoleId::Active))?;
     let pane = app.panes.browser(seguido)?;
-    let Some(entrada) = pane.selected() else {
+    let Some(entry) = pane.selected() else {
         return Some((hueco, Want::Note("preview-empty")));
     };
-    match entrada.kind {
-        EntryKind::File => Some((hueco, Want::File(entrada.path.clone()))),
+    match entry.kind {
+        EntryKind::File => Some((hueco, Want::File(entry.path.clone()))),
         EntryKind::Dir => Some((hueco, Want::Note("preview-directory"))),
         // Un enlace o algo que el provider no clasifica: no se lee a ciegas,
         // porque leer «lo que sea» es justo como un preview automático se

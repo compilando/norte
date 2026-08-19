@@ -19,7 +19,7 @@ fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire válido")
 }
 
-fn entrada(dir: &VPath, nombre: &[u8], kind: EntryKind) -> Entry {
+fn entry(dir: &VPath, nombre: &[u8], kind: EntryKind) -> Entry {
     Entry {
         attrs: std::collections::BTreeMap::new(),
         path: dir
@@ -32,19 +32,19 @@ fn entrada(dir: &VPath, nombre: &[u8], kind: EntryKind) -> Entry {
 }
 
 fn app_de_prueba() -> App {
-    let izq = vp("file:///izq");
-    let der = vp("file:///der");
+    let left = vp("file:///izq");
+    let right = vp("file:///der");
     App::new(
         Pane::new(
-            izq.clone(),
+            left.clone(),
             vec![
-                entrada(&izq, b"uno.txt", EntryKind::File),
-                entrada(&izq, b"carpeta", EntryKind::Dir),
+                entry(&left, b"uno.txt", EntryKind::File),
+                entry(&left, b"carpeta", EntryKind::Dir),
             ],
         ),
         Pane::new(
-            der.clone(),
-            vec![entrada(&der, b"dos.txt", EntryKind::File)],
+            right.clone(),
+            vec![entry(&right, b"dos.txt", EntryKind::File)],
         ),
     )
 }
@@ -150,15 +150,15 @@ fn cambiar_de_listado_cambia_lo_que_ensena() {
 #[test]
 fn un_nombre_no_utf8_llega_entero() {
     let dir = vp("file:///izq");
-    let hostil = entrada(&dir, b"m\xffl.txt", EntryKind::File);
+    let hostile = entry(&dir, b"m\xffl.txt", EntryKind::File);
     let mut app = App::new(
-        Pane::new(dir.clone(), vec![hostil.clone()]),
+        Pane::new(dir.clone(), vec![hostile.clone()]),
         Pane::new(vp("file:///der"), Vec::new()),
     );
     app.toggle_metadata();
     let res = resolver(&mut app);
     let (_, w) = want(&app, &res).expect("objetivo");
-    assert_eq!(w, Want::Entry(Box::new(hostil)));
+    assert_eq!(w, Want::Entry(Box::new(hostile)));
 }
 
 /// La hoja NO se lleva el teclado NUNCA: sigue al cursor, y con las flechas

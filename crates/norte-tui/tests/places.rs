@@ -194,8 +194,8 @@ fn el_sidebar_ocupa_dieciseis_celdas_y_el_listado_empieza_en_la_diecisiete() {
     let buf = buffer_de(&app, 100, 30);
     let f = filas(&buf);
     // Fila 1: dentro de los dos bloques, ya sin el borde superior.
-    let fila = &f[1];
-    let celda = |x: usize| fila.chars().nth(x).expect("la celda está pintada");
+    let row = &f[1];
+    let celda = |x: usize| row.chars().nth(x).expect("la celda está pintada");
     assert_eq!(celda(0), '│', "borde izquierdo del sidebar");
     assert_eq!(celda(15), '│', "borde derecho del sidebar, en la celda 15");
     assert_eq!(
@@ -230,7 +230,7 @@ fn el_favorito_roto_se_pinta_marcado_y_atenuado() {
     let f = filas(&buf);
     let y = f
         .iter()
-        .position(|fila| fila.chars().take(16).collect::<String>().contains("roto"))
+        .position(|row| row.chars().take(16).collect::<String>().contains("roto"))
         .expect("la fila del favorito roto está pintada");
     let sidebar: String = f[y].chars().take(16).collect();
     assert!(sidebar.contains('!'), "va marcada: {sidebar:?}");
@@ -259,7 +259,7 @@ fn cerrado_no_pinta_nada() {
     let f = filas(&buf);
     assert!(
         !f.iter()
-            .any(|fila| fila.contains(&norte_i18n::t_in(norte_i18n::Lang::Es, "places-title"))),
+            .any(|row| row.contains(&norte_i18n::t_in(norte_i18n::Lang::Es, "places-title"))),
         "sin abrirlo, el título del sidebar no aparece"
     );
 }
@@ -463,24 +463,24 @@ fn con_el_teclado_dentro_el_sidebar_cambia_de_ancho() {
     app.toggle_places();
     assert_eq!(app.key_owner(), KeyOwner::Places, "el teclado está dentro");
     let id = app.places_slot().expect("abierto");
-    let ancho = |app: &App| {
+    let width = |app: &App| {
         app.layout
             .sizes_of(id)
             .and_then(|(sizes, pos)| sizes.get(pos).copied())
     };
-    let antes = ancho(&app).expect("el sidebar tiene tamaño");
+    let antes = width(&app).expect("el sidebar tiene tamaño");
     assert!(matches!(antes, Size::Fixed(_)), "y es FIJO: {antes:?}");
 
     app.layout_resize(1);
-    assert_ne!(ancho(&app), Some(antes), "creció");
+    assert_ne!(width(&app), Some(antes), "creció");
 
     // Y con el teclado FUERA vuelve a mandar el listado enfocado: el sidebar
     // no se mueve solo.
     app.return_keys_to_panes();
-    let ahora = ancho(&app);
+    let ahora = width(&app);
     app.layout_resize(1);
     assert_eq!(
-        ancho(&app),
+        width(&app),
         ahora,
         "el sidebar no se toca desde los listados"
     );

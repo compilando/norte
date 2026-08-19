@@ -529,9 +529,9 @@ mod tests {
                 .find(&t(&help_hint_id(cmd)))
                 .unwrap_or_else(|| panic!("{cmd} debe estar en el pie de la ayuda: {}", hints.help))
         };
-        let orden: Vec<usize> = HELP_HINT_PRIORITY.iter().map(|c| posicion(c)).collect();
+        let order: Vec<usize> = HELP_HINT_PRIORITY.iter().map(|c| posicion(c)).collect();
         assert!(
-            orden.windows(2).all(|w| w[0] < w[1]),
+            order.windows(2).all(|w| w[0] < w[1]),
             "los verbos salen en el orden de prioridad, que es el que decide \
              qué sobrevive a un frame estrecho: {}",
             hints.help
@@ -644,7 +644,7 @@ mod tests {
         }
         // Ningún verbo del vocabulario `dialog.*` sobrevive en ellos.
         for cmd in crate::keymap::DIALOG_COMMANDS {
-            let etiqueta = t(&dialog_hint_id(cmd));
+            let label = t(&dialog_hint_id(cmd));
             for pie in [
                 &inertes.confirm,
                 &inertes.collision,
@@ -652,7 +652,7 @@ mod tests {
                 &inertes.trust_host,
             ] {
                 assert!(
-                    !pie.contains(&etiqueta),
+                    !pie.contains(&label),
                     "{cmd} sigue anunciado en un pie inerte: {pie:?}"
                 );
             }

@@ -174,9 +174,9 @@ impl PaneSlots {
     /// Una lista VACÍA no borra nada: pasa cuando el reparto no coloca ningún
     /// pane (visor abierto, o una ventana imposible), y en ese frame lo que
     /// había sigue siendo lo correcto.
-    pub fn set_visible(&mut self, orden: &[SlotId]) {
-        if !orden.is_empty() {
-            self.visible = orden.to_vec();
+    pub fn set_visible(&mut self, order: &[SlotId]) {
+        if !order.is_empty() {
+            self.visible = order.to_vec();
         }
         self.rescue_visible();
     }
@@ -278,7 +278,7 @@ impl PaneSlots {
     }
 
     /// Los huecos visibles, sin repetir.
-    fn visibles(&self) -> Vec<SlotId> {
+    fn visible(&self) -> Vec<SlotId> {
         let mut v = self.visible.clone();
         v.dedup();
         v
@@ -291,14 +291,14 @@ impl PaneSlots {
     /// una página, refrescar—, y una pestaña que nadie mira no debe costar
     /// nada. La suspensión de un hueco oculto no es código aparte: es esto.
     pub fn iter(&self) -> impl Iterator<Item = &Pane> {
-        self.visibles()
+        self.visible()
             .into_iter()
             .filter_map(|id| self.store.get(id).and_then(TuiPanel::as_browser))
     }
 
     /// Como [`Self::iter`], para mutarlos.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Pane> {
-        let ids = self.visibles();
+        let ids = self.visible();
         self.store
             .iter_mut()
             .filter(move |(id, _)| ids.contains(id))
@@ -488,8 +488,8 @@ impl<'a> IntoIterator for &'a mut PaneSlots {
 /// se ve al cambiar de pestaña.
 #[derive(Debug, Default)]
 pub struct Histories {
-    por_hueco: BySlot<crate::nav::History>,
-    orden: Vec<SlotId>,
+    by_slot: BySlot<crate::nav::History>,
+    order: Vec<SlotId>,
 }
 
 impl Histories {
@@ -497,22 +497,22 @@ impl Histories {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            por_hueco: BySlot::new(),
-            orden: vec![SLOT_LEFT, SLOT_RIGHT],
+            by_slot: BySlot::new(),
+            order: vec![SLOT_LEFT, SLOT_RIGHT],
         }
     }
 
     /// Dice qué hueco ocupa cada posición visible.
-    pub fn set_order(&mut self, orden: &[SlotId]) {
-        if !orden.is_empty() {
-            self.orden = orden.to_vec();
+    pub fn set_order(&mut self, order: &[SlotId]) {
+        if !order.is_empty() {
+            self.order = order.to_vec();
         }
     }
 
     /// El hueco de una posición.
     fn slot_of(&self, side: usize) -> SlotId {
-        let i = side.min(self.orden.len().saturating_sub(1));
-        self.orden.get(i).copied().unwrap_or(SLOT_LEFT)
+        let i = side.min(self.order.len().saturating_sub(1));
+        self.order.get(i).copied().unwrap_or(SLOT_LEFT)
     }
 
     /// Intercambia el historial de dos posiciones, para el gesto de
@@ -522,29 +522,29 @@ impl Histories {
         if sa == sb {
             return;
         }
-        let (va, vb) = (self.por_hueco.remove(sa), self.por_hueco.remove(sb));
+        let (va, vb) = (self.by_slot.remove(sa), self.by_slot.remove(sb));
         if let Some(v) = vb {
-            self.por_hueco.insert(sa, v);
+            self.by_slot.insert(sa, v);
         }
         if let Some(v) = va {
-            self.por_hueco.insert(sb, v);
+            self.by_slot.insert(sb, v);
         }
     }
 
     /// El historial de UN hueco, por su id.
     #[must_use]
     pub fn for_slot(&self, id: SlotId) -> Option<&crate::nav::History> {
-        self.por_hueco.get(id)
+        self.by_slot.get(id)
     }
 
     /// El historial de UN hueco, creándolo vacío si no lo tenía.
     pub fn for_slot_mut(&mut self, id: SlotId) -> &mut crate::nav::History {
-        self.por_hueco.entry(id)
+        self.by_slot.entry(id)
     }
 
     /// Tira los historiales de los huecos que el árbol ya no tiene.
     pub fn retain_tree(&mut self, tree: &Node) {
-        self.por_hueco.retain_tree(tree);
+        self.by_slot.retain_tree(tree);
     }
 }
 
@@ -554,17 +554,17 @@ impl std::ops::Index<usize> for Histories {
     fn index(&self, side: usize) -> &Self::Output {
         // Un hueco sin historial todavía es un hueco recién abierto: se le
         // devuelve uno vacío, que es exactamente su historia.
-        static VACIO: std::sync::OnceLock<crate::nav::History> = std::sync::OnceLock::new();
-        self.por_hueco
+        static EMPTY: std::sync::OnceLock<crate::nav::History> = std::sync::OnceLock::new();
+        self.by_slot
             .get(self.slot_of(side))
-            .unwrap_or_else(|| VACIO.get_or_init(crate::nav::History::default))
+            .unwrap_or_else(|| EMPTY.get_or_init(crate::nav::History::default))
     }
 }
 
 impl std::ops::IndexMut<usize> for Histories {
     fn index_mut(&mut self, side: usize) -> &mut Self::Output {
         let id = self.slot_of(side);
-        self.por_hueco.entry(id)
+        self.by_slot.entry(id)
     }
 }
 
@@ -639,12 +639,12 @@ mod tests {
     /// que no es un listado.
     #[test]
     fn los_huecos_con_nombre_son_los_del_fichero() {
-        let arbol = orthodox();
+        let tree = orthodox();
         assert_eq!(
-            arbol.slot_ids(),
+            tree.slot_ids(),
             vec![SLOT_LEFT, SLOT_RIGHT, SLOT_TASKS, SLOT_STATUS]
         );
-        let kind = |id| arbol.kind_of(id).expect("kind").as_str().to_owned();
+        let kind = |id| tree.kind_of(id).expect("kind").as_str().to_owned();
         assert_eq!(kind(SLOT_LEFT), "browser");
         assert_eq!(kind(SLOT_RIGHT), "browser");
         assert_eq!(kind(SLOT_TASKS), "tasks");
@@ -659,7 +659,7 @@ mod tests {
     #[test]
     fn un_lado_nunca_apunta_a_un_hueco_sin_listado() {
         let mut slots = PaneSlots::new(pane("mem:///izq"), pane("mem:///der"));
-        let arbol = Node::split(
+        let tree = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SLOT_LEFT, KindId::new("places")),
@@ -668,7 +668,7 @@ mod tests {
         );
         slots.insert_places(SLOT_LEFT, norte_frontend::places::PlacesState::new());
         slots.insert_browser(SlotId(5), pane("mem:///cinco"));
-        slots.refresh_visible(&arbol);
+        slots.refresh_visible(&tree);
         assert_eq!(slots.slot_of(0), SlotId(5), "el lado va al listado que hay");
         assert_eq!(slots[0].dir(), &VPath::parse("mem:///cinco").expect("wire"));
     }

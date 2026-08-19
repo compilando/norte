@@ -84,7 +84,7 @@ fn el_corpus_que_enviamos_esta_integro() {
     assert!(
         issues.is_empty(),
         "el corpus tiene problemas de integridad:\n{}",
-        lineas(&issues)
+        lines(&issues)
     );
 }
 
@@ -102,7 +102,7 @@ fn el_corpus_no_nombra_comandos_que_no_existen() {
     assert!(
         desconocidos.is_empty(),
         "el corpus nombra comandos fuera del vocabulario de la TUI:\n{}",
-        lineas(&desconocidos)
+        lines(&desconocidos)
     );
 }
 
@@ -134,7 +134,7 @@ fn todo_comando_del_vocabulario_esta_documentado() {
     assert!(
         issues.is_empty(),
         "hallazgos que esta puerta no clasifica:\n{}",
-        lineas(&issues)
+        lines(&issues)
     );
 }
 
@@ -208,7 +208,7 @@ fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
 }
 
 /// Un hallazgo por línea, como los imprimiría `norte doctor` (H3g).
-fn lineas(issues: &[Issue]) -> String {
+fn lines(issues: &[Issue]) -> String {
     issues
         .iter()
         .map(ToString::to_string)

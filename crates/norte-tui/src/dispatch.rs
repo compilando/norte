@@ -19,11 +19,11 @@ use crate::app::{
 };
 use crate::config;
 use crate::gestures::{
-    desconectar, editar_lo_de_debajo, mirror_plan, pull_plan, resolve_opener, run_pane_gesture,
+    disconnect, edit_under_cursor, mirror_plan, pull_plan, resolve_opener, run_pane_gesture,
     shell_cwd,
 };
 use crate::keymap::Command;
-use crate::mutations::{comprueba_archivo, desempaqueta, junta_trozos, lanza_recuento};
+use crate::mutations::{test_archive, unpack, combine_pieces, launch_size_count};
 use crate::nav;
 use crate::navigate::{Cd, cd};
 use crate::overlays::open_contextual_help;
@@ -431,7 +431,7 @@ pub async fn dispatch(
         // Y desconectar SUELTA la sesión, no solo se va del panel: si no, el
         // socket seguiría abierto hasta que la sesión venciera sola y
         // «desconectar» sería un nombre para irse a otro sitio.
-        Command::PaneDisconnect => desconectar(app, backend).await,
+        Command::PaneDisconnect => disconnect(app, backend).await,
         Command::PaneOpen => resolve_opener(app),
         // #133: F4 EDITA. Lo ejecuta el run loop, como el shell y como
         // `pane.open`: es él quien tiene la terminal, y suspender la TUI para
@@ -442,7 +442,7 @@ pub async fn dispatch(
         // un nombre con una comilla, un `$` o un salto de línea o rompe la
         // línea o ejecuta parte de sí mismo, y aquí los nombres son bytes
         // (regla 1).
-        Command::PaneEdit => match editar_lo_de_debajo(app) {
+        Command::PaneEdit => match edit_under_cursor(app) {
             Ok(pendiente) => app.pending_shell = Some(pendiente),
             Err(msg) => app.message = Some(msg),
         },
@@ -582,22 +582,22 @@ pub async fn dispatch(
                 if let Ok(fresca) = backend.stat(&dir).await {
                     app.properties_hydrate(fresca);
                 }
-                lanza_recuento(app, backend, vec![dir], true).await;
+                launch_size_count(app, backend, vec![dir], true).await;
             }
         }
         // Y contar a mano, sobre lo MARCADO (o el cursor si no hay marcas):
         // «¿cuánto ocupa todo esto?» es una pregunta sobre la selección.
         Command::PaneDirSize => {
             let objetivos = app.focused().marked_paths();
-            lanza_recuento(app, backend, objetivos, false).await;
+            launch_size_count(app, backend, objetivos, false).await;
         }
         // #132: escribir archivos. Los cinco comandos que los cuatro presets
         // atan y norte no tenía.
         Command::PanePack => app.open_pack(),
         Command::PaneSplitFile => app.open_split(),
-        Command::PaneUnpack => desempaqueta(app, backend).await,
-        Command::PaneTestArchive => comprueba_archivo(app, backend).await,
-        Command::PaneCombineFiles => junta_trozos(app, backend).await,
+        Command::PaneUnpack => unpack(app, backend).await,
+        Command::PaneTestArchive => test_archive(app, backend).await,
+        Command::PaneCombineFiles => combine_pieces(app, backend).await,
         Command::PaneColumns => {
             let plugins = backend
                 .plugins_list()

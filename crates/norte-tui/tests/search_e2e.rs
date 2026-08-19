@@ -196,7 +196,7 @@ async fn cancel_conserva_lo_llegado() {
 #[tokio::test]
 async fn nombre_hostil() {
     let (backend, mem) = backend_mem();
-    let hostil = write_named(&mem, &[0xFF, 0xFE], b"x").await;
+    let hostile = write_named(&mem, &[0xFF, 0xFE], b"x").await;
 
     let (task, rx) = backend
         .search(FsSearchParams {
@@ -215,7 +215,7 @@ async fn nombre_hostil() {
         "búsqueda de solo nombre: sin contexto de contenido"
     );
     assert_eq!(
-        entry.path, hostil,
+        entry.path, hostile,
         "el VPath del hit llega con los bytes crudos intactos"
     );
     assert_eq!(

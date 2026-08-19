@@ -823,20 +823,20 @@ mod help_key_tests {
             },
         ];
         for modal in interceptados {
-            let etiqueta = format!("{modal:?}");
+            let label = format!("{modal:?}");
             let mut app = app_with_help_closed();
             app.modal = Some(modal);
             assert!(
                 !modal_help_toggle(&mut app, "app.help", Lang::En, &[]),
-                "{etiqueta}: el hook no puede CONSUMIR la tecla de un modal que \
+                "{label}: el hook no puede CONSUMIR la tecla de un modal que \
                  no admite ayuda — quien decide vuelve a ser el allowlist"
             );
             assert!(
                 app.help.is_none(),
-                "{etiqueta}: F1 no abre una página sobre un editor de texto \
+                "{label}: F1 no abre una página sobre un editor de texto \
                  libre ni sobre el TOFU de Lua"
             );
-            assert!(app.modal.is_some(), "{etiqueta}: y el modal sigue ahí");
+            assert!(app.modal.is_some(), "{label}: y el modal sigue ahí");
         }
     }
 

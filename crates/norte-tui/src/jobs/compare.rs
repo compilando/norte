@@ -47,15 +47,15 @@ pub async fn launch_compare(
             app.message = None;
             // Las dos reinterpretaciones (#57) salen de los dos panes de
             // los que salieron las raíces, en ese mismo orden.
-            let izq = app.focus();
+            let left = app.focus();
             let (left_encoding, right_encoding) = (
-                app.panes[izq].name_encoding(),
-                app.panes[izq ^ 1].name_encoding(),
+                app.panes[left].name_encoding(),
+                app.panes[left ^ 1].name_encoding(),
             );
             app.compare = Some(crate::app::CompareView::new(
                 left_root,
                 right_root,
-                izq,
+                left,
                 left_encoding,
                 right_encoding,
             ));
@@ -438,10 +438,10 @@ mod compare_tests {
         VPath::parse(wire).expect("wire de test")
     }
 
-    fn app_en(izq: &str, der: &str) -> App {
+    fn app_en(left: &str, right: &str) -> App {
         App::new(
-            Pane::new(vp(izq), Vec::new()),
-            Pane::new(vp(der), Vec::new()),
+            Pane::new(vp(left), Vec::new()),
+            Pane::new(vp(right), Vec::new()),
         )
     }
 
@@ -480,7 +480,7 @@ mod compare_tests {
         )
     }
 
-    fn fila(id: u64) -> CompareRow {
+    fn row(id: u64) -> CompareRow {
         CompareRow {
             id,
             left: None,
@@ -622,7 +622,7 @@ mod compare_tests {
             &mut run,
             Some(CompareRowsBatch {
                 task_id: norte_proto::TaskId::new(1),
-                rows: vec![fila(1), fila(2)],
+                rows: vec![row(1), row(2)],
             }),
         );
         drain_compare(&mut app, &mut run, None);
@@ -644,7 +644,7 @@ mod compare_tests {
             &mut run,
             Some(CompareRowsBatch {
                 task_id: norte_proto::TaskId::new(1),
-                rows: vec![fila(1)],
+                rows: vec![row(1)],
             }),
         );
         assert!(run.is_none(), "el run tiene que soltarse");

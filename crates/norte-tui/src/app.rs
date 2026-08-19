@@ -74,7 +74,7 @@ pub struct Pane {
 /// para leer (ADR 0056)—, así que un `.rar` cae en `None` y el diálogo lo dice
 /// en vez de empaquetar un zip con nombre de rar.
 #[must_use]
-pub fn formato_por_nombre(name: &[u8]) -> Option<norte_proto::methods::ArchiveFormat> {
+pub fn format_by_name(name: &[u8]) -> Option<norte_proto::methods::ArchiveFormat> {
     use norte_proto::methods::ArchiveFormat as F;
     let acaba = |suf: &[u8]| {
         name.len() >= suf.len() && name[name.len() - suf.len()..].eq_ignore_ascii_case(suf)
@@ -97,7 +97,7 @@ pub fn formato_por_nombre(name: &[u8]) -> Option<norte_proto::methods::ArchiveFo
 /// Sufijos binarios, que es lo que significan en un gestor de ficheros: `M` es
 /// 1 MiB y no un millón. Sin sufijo son bytes.
 #[must_use]
-pub fn parse_tamano(s: &str) -> Option<u64> {
+pub fn parse_size(s: &str) -> Option<u64> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -1510,7 +1510,7 @@ fn nav_item_display(
 ) -> String {
     // #98/F4: los popups son superficie de DECISIÓN (elegir destino de
     // salto) — siguen la reinterpretación del pane con foco, como la barra.
-    let (texto, path_hostil) = norte_frontend::path_display_with(path, enc);
+    let (text, path_hostil) = norte_frontend::path_display_with(path, enc);
     let (prefix, name_hostil) = match name {
         Some(n) => {
             let (nt, nh) = display_name(n.as_bytes());
@@ -1519,9 +1519,9 @@ fn nav_item_display(
         None => (String::new(), false),
     };
     if path_hostil || name_hostil {
-        format!("{} {prefix}{texto}", crate::ui::HOSTILE_BADGE)
+        format!("{} {prefix}{text}", crate::ui::HOSTILE_BADGE)
     } else {
-        format!("{prefix}{texto}")
+        format!("{prefix}{text}")
     }
 }
 
@@ -3165,7 +3165,7 @@ impl App {
     }
 
     /// Cuántos `browser` hay en el árbol, visibles u ocultos.
-    fn browsers_en_el_arbol(&self) -> usize {
+    fn browsers_in_tree(&self) -> usize {
         self.layout
             .slot_ids()
             .into_iter()
@@ -3226,9 +3226,9 @@ impl App {
                 // que habría creado su estado no se va a pulsar, porque el
                 // panel ya está en pantalla.
                 Some(crate::tree::KIND) if self.panes.tree(id).is_none() => {
-                    let mut arbol = crate::tree::Tree::default();
-                    arbol.anchor(dir.clone());
-                    self.panes.insert_tree(id, arbol);
+                    let mut tree = crate::tree::Tree::default();
+                    tree.anchor(dir.clone());
+                    self.panes.insert_tree(id, tree);
                 }
                 _ => {}
             }
@@ -3545,9 +3545,9 @@ impl App {
             }
             None => {
                 let id = self.mint_slot();
-                let mut arbol = crate::tree::Tree::default();
-                arbol.anchor(self.focused().dir().clone());
-                self.panes.insert_tree(id, arbol);
+                let mut tree = crate::tree::Tree::default();
+                tree.anchor(self.focused().dir().clone());
+                self.panes.insert_tree(id, tree);
                 self.layout = self.layout.dock(
                     self.focused_slot(),
                     Edge::Left,
@@ -3745,9 +3745,9 @@ impl App {
     /// denegación de policy no puede abrir un diálogo: bajar por un directorio
     /// sería una ráfaga de modales, y el lector no ha pedido abrir nada.
     pub fn preview_failed(&mut self, slot: norte_frontend::layout::SlotId, clave: &str) {
-        let texto = t(clave);
+        let text = t(clave);
         if let Some(p) = self.panes.preview_mut(slot) {
-            p.say(None, texto);
+            p.say(None, text);
         }
     }
 
@@ -3760,7 +3760,7 @@ impl App {
     ///
     /// Devuelve `false` si no se pudo, para que el llamante avise.
     pub fn layout_close_slot(&mut self) -> bool {
-        if self.browsers_en_el_arbol() <= 2 {
+        if self.browsers_in_tree() <= 2 {
             return false;
         }
         let foco = self.focused_slot();
@@ -3899,10 +3899,10 @@ impl App {
     /// (regla 2).
     pub fn open_layout_picker(
         &mut self,
-        del_usuario: Vec<norte_frontend::layout_picker::UserLayout>,
+        user: Vec<norte_frontend::layout_picker::UserLayout>,
     ) {
         self.layout_picker = Some(norte_frontend::layout_picker::LayoutPicker::open(
-            del_usuario,
+            user,
         ));
     }
 
@@ -3999,8 +3999,8 @@ impl App {
         &mut self,
         body: &norte_frontend::session::SessionBody,
     ) -> Vec<norte_frontend::layout::SlotId> {
-        if let Some(arbol) = body.layouts.get("default") {
-            self.set_layout(arbol.clone());
+        if let Some(tree) = body.layouts.get("default") {
+            self.set_layout(tree.clone());
         }
         let mut pedir = Vec::new();
         self.session.orphans.clear();
@@ -4032,11 +4032,11 @@ impl App {
     /// —un directorio con menos entradas que ayer no deja el cursor fuera— y
     /// eso lo hace [`Pane::set_cursor`].
     pub fn restore_cursor(&mut self, id: norte_frontend::layout::SlotId) {
-        let Some(fila) = self.session.cursors.remove(&id.0) else {
+        let Some(row) = self.session.cursors.remove(&id.0) else {
             return;
         };
         if let Some(pane) = self.panes.browser_mut(id) {
-            pane.set_cursor(usize::try_from(fila).unwrap_or(usize::MAX));
+            pane.set_cursor(usize::try_from(row).unwrap_or(usize::MAX));
         }
     }
 
@@ -4117,8 +4117,8 @@ impl App {
         let (mostrable, _) = norte_frontend::display_os_name(name);
         let mostrable = norte_encoding::mask_terminal_hazards(&mostrable);
         let roto = match loaded {
-            Ok(arbol) => {
-                self.set_layout(arbol);
+            Ok(tree) => {
+                self.set_layout(tree);
                 return true;
             }
             // Que no haya fichero es lo NORMAL para uno de fábrica: no se
@@ -4132,8 +4132,8 @@ impl App {
             .to_str()
             .map_or(Err(LayoutError::NotFound(mostrable.clone())), presets::tree);
         match de_fabrica {
-            Ok(arbol) => {
-                self.set_layout(arbol);
+            Ok(tree) => {
+                self.set_layout(tree);
                 if let Some(e) = roto {
                     self.message = Some(ta(
                         "msg-layout-load-failed",
@@ -4180,19 +4180,19 @@ impl App {
             // repintado, progreso de tareas y `Ctrl+C` a la vez (#244 M2,
             // regla 2).
             PickerAction::Confirm => {
-                let Some(fila) = self.layout_picker.take().and_then(|p| p.current().cloned())
+                let Some(row) = self.layout_picker.take().and_then(|p| p.current().cloned())
                 else {
                     return;
                 };
-                let (mostrable, _) = norte_frontend::display_os_name(&fila.name);
+                let (mostrable, _) = norte_frontend::display_os_name(&row.name);
                 let mostrable = norte_encoding::mask_terminal_hazards(&mostrable);
-                if let Some(arbol) = fila.tree {
-                    self.set_layout(arbol);
+                if let Some(tree) = row.tree {
+                    self.set_layout(tree);
                     self.message = Some(ta("msg-layout-applied", &[("name", &mostrable)]));
                 } else {
                     // Una fila que no parsea se eligió a sabiendas: el
                     // selector ya lo decía en su mitad derecha.
-                    let err = fila.problem.unwrap_or_default();
+                    let err = row.problem.unwrap_or_default();
                     self.message = Some(ta(
                         "msg-layout-load-failed",
                         &[("name", &mostrable), ("err", &err)],
@@ -4907,7 +4907,7 @@ impl App {
             self.pack_set_error(t("msg-transfer-name-fffd"));
             return None;
         }
-        let Some(format) = formato_por_nombre(name.as_bytes()) else {
+        let Some(format) = format_by_name(name.as_bytes()) else {
             self.pack_set_error(t("msg-pack-unknown-format"));
             return None;
         };
@@ -5029,7 +5029,7 @@ impl App {
         let Some(Modal::Split { size, .. }) = &self.modal else {
             return None;
         };
-        let Some(bytes) = parse_tamano(size) else {
+        let Some(bytes) = parse_size(size) else {
             self.split_set_error(t("msg-split-bad-size"));
             return None;
         };
@@ -5602,9 +5602,9 @@ impl App {
                         // review MINOR T5: el flag hostil del name NO se
                         // descarta — una inválida con name bidi también
                         // lleva el badge (mismo criterio que el resto).
-                        let (name, hostil) = display_name(h.name.as_bytes());
+                        let (name, hostile) = display_name(h.name.as_bytes());
                         let aviso = t("hotlist-invalid");
-                        let display = if hostil {
+                        let display = if hostile {
                             format!("{} {name} {aviso}", crate::ui::HOSTILE_BADGE)
                         } else {
                             format!("{name} {aviso}")
@@ -7340,9 +7340,9 @@ mod tests {
         };
         let mut dir_lazy = lazy("z-dir");
         dir_lazy.kind = EntryKind::Dir;
-        let izq = vec![lazy("a.txt"), lazy("b.txt"), lazy("c.txt"), dir_lazy];
-        let der = vec![lazy("d.txt"), file("e.txt")];
-        let mut app = App::new(Pane::new(root(), izq), Pane::new(root(), der));
+        let left = vec![lazy("a.txt"), lazy("b.txt"), lazy("c.txt"), dir_lazy];
+        let right = vec![lazy("d.txt"), file("e.txt")];
+        let mut app = App::new(Pane::new(root(), left), Pane::new(root(), right));
         // `Pane::new` ordena (dirs primero): [z-dir, a, b, c].
         app.panes[0].set_cursor(1);
 
@@ -7448,9 +7448,9 @@ mod tests {
     fn compare_size_probe_targets_solo_file_sin_size_y_no_repite() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
-        let fila = fila_huerfana(1, EntryKind::File, None);
-        let path = fila.left.as_ref().unwrap().path.clone();
-        view.pane.extend(vec![fila]);
+        let row = fila_huerfana(1, EntryKind::File, None);
+        let path = row.left.as_ref().unwrap().path.clone();
+        view.pane.extend(vec![row]);
         app.compare = Some(view);
 
         assert_eq!(
@@ -7478,16 +7478,16 @@ mod tests {
     fn una_sonda_de_la_comparacion_anterior_no_aterriza_en_la_nueva() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
-        let fila = fila_huerfana(1, EntryKind::File, None);
-        let path = fila.left.as_ref().expect("izquierda").path.clone();
-        view.pane.extend(vec![fila.clone()]);
+        let row = fila_huerfana(1, EntryKind::File, None);
+        let path = row.left.as_ref().expect("izquierda").path.clone();
+        view.pane.extend(vec![row.clone()]);
         app.compare = Some(view);
         let vieja = app.compare_generation();
 
         // Otra comparación empieza: la caché se vacía y la generación avanza.
         app.begin_compare_generation();
         let mut view = CompareView::new(vp("mem:///c"), vp("mem:///d"), 0, None, None);
-        view.pane.extend(vec![fila]);
+        view.pane.extend(vec![row]);
         app.compare = Some(view);
         assert_ne!(app.compare_generation(), vieja);
 
@@ -7516,9 +7516,9 @@ mod tests {
     fn compare_size_probe_targets_no_reintenta_un_stat_fallido() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
-        let fila = fila_huerfana(1, EntryKind::File, None);
-        let path = fila.left.as_ref().unwrap().path.clone();
-        view.pane.extend(vec![fila]);
+        let row = fila_huerfana(1, EntryKind::File, None);
+        let path = row.left.as_ref().unwrap().path.clone();
+        view.pane.extend(vec![row]);
         app.compare = Some(view);
 
         app.hydrate_compare_size(app.compare_generation(), path, None);
@@ -8135,10 +8135,10 @@ mod tests {
 
     /// `App` con cada pane sobre SU dir (el `app_dos_panes` de arriba pone
     /// los dos sobre `root()`, que no distingue lados).
-    fn app_en(izq: &str, der: &str) -> App {
+    fn app_en(left: &str, right: &str) -> App {
         App::new(
-            Pane::new(vp(izq), Vec::new()),
-            Pane::new(vp(der), Vec::new()),
+            Pane::new(vp(left), Vec::new()),
+            Pane::new(vp(right), Vec::new()),
         )
     }
 
@@ -8845,7 +8845,7 @@ mod tests {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
         let mut app = app_dos_panes();
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Fixed(24), Size::Weight(1)],
             children: vec![
@@ -8853,7 +8853,7 @@ mod tests {
                 Node::slot(SlotId(91), KindId::browser()),
             ],
         };
-        app.set_layout(arbol);
+        app.set_layout(tree);
         assert!(
             app.panes.tree(SlotId(90)).is_some(),
             "el hueco del árbol llegó sin estado y se pintaría vacío"
@@ -9017,13 +9017,13 @@ mod tests {
         };
         app.columns = ColumnsSettings::resolve(&cfg);
         app.apply_scheme_sort(0);
-        let orden: Vec<_> = app.panes[0]
+        let order: Vec<_> = app.panes[0]
             .entries()
             .iter()
             .map(|e| e.path.clone())
             .collect();
         assert_eq!(
-            orden,
+            order,
             vec![
                 VPath::parse("mem:///b").unwrap(),
                 VPath::parse("mem:///a").unwrap()
@@ -9681,15 +9681,15 @@ mod error_message_tests {
             );
             assert!(vistas.insert(clave), "dos relaciones comparten {clave}");
             for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
-                let texto = norte_i18n::t_in(lang, clave);
-                assert_ne!(texto, clave, "{clave} sin traducir en {lang:?}");
+                let text = norte_i18n::t_in(lang, clave);
+                assert_ne!(text, clave, "{clave} sin traducir en {lang:?}");
                 assert_ne!(
-                    texto,
+                    text,
                     norte_i18n::t_in(lang, "err-unknown"),
                     "{clave} dice lo mismo que «error desconocido»"
                 );
                 assert_ne!(
-                    texto,
+                    text,
                     norte_i18n::t_in(lang, "err-internal"),
                     "{clave} dice lo mismo que «error interno»"
                 );
@@ -10028,7 +10028,7 @@ mod help_view_tests {
         let mut p = plugin("acme.ftp", &format!("a\u{202E}{}", "x".repeat(5_000)));
         p.publisher = "AC\u{202E}ME".to_owned();
         view.set_plugins(&[p]);
-        let fila = view
+        let row = view
             .state
             .rows()
             .iter()
@@ -10041,17 +10041,17 @@ mod help_view_tests {
                 _ => None,
             })
             .expect("el nodo está en la barra");
-        assert!(!fila.contains('\u{202E}'), "sin bidi crudo: {fila:?}");
+        assert!(!row.contains('\u{202E}'), "sin bidi crudo: {row:?}");
         assert!(
-            fila.chars().count() <= super::PLUGIN_NAME_WIRE_CAP + 1,
+            row.chars().count() <= super::PLUGIN_NAME_WIRE_CAP + 1,
             "acotado: {} chars",
-            fila.chars().count()
+            row.chars().count()
         );
         assert!(
-            fila.ends_with('…'),
+            row.ends_with('…'),
             "y el recorte se MARCA, como lo marcan los vecinos que hacen esto \
              mismo: presentar un nombre cortado como completo es la mentira \
-             que la fase fue a perseguir: {fila:?}"
+             que la fase fue a perseguir: {row:?}"
         );
         let pub_ = view.publisher_of("acme.ftp").expect("hay publicador");
         assert!(!pub_.contains('\u{202E}'), "publicador limpio: {pub_:?}");
@@ -10070,7 +10070,7 @@ mod help_view_tests {
         let mut p = plugin("acme.ftp", "\u{3164}\u{3164}");
         p.publisher = "\u{3164}".to_owned();
         view.set_plugins(&[p]);
-        let fila = view
+        let row = view
             .state
             .rows()
             .iter()
@@ -10083,7 +10083,7 @@ mod help_view_tests {
                 _ => None,
             })
             .expect("el nodo está en la barra");
-        assert_eq!(fila, "acme.ftp", "la fila se nombra con el id: {fila:?}");
+        assert_eq!(row, "acme.ftp", "la fila se nombra con el id: {row:?}");
 
         // Y un publicador en blanco no se atribuye: la insignia pintaría
         // «publicada por » sin nada detrás, que se lee como un fallo del
@@ -10280,19 +10280,19 @@ mod help_plugin_snapshot_tests {
                 .join("\n")
         };
 
-        let texto = pintado_con("Greet the world");
+        let text = pintado_con("Greet the world");
         assert!(
-            texto.contains("Greet the world"),
-            "la fila y la marca llevan el nombre del manifiesto: {texto}"
+            text.contains("Greet the world"),
+            "la fila y la marca llevan el nombre del manifiesto: {text}"
         );
         assert!(
-            !texto.contains("plugin:org.norte.demo:greet"),
-            "y NO su clave de despacho, ni en la prosa ni en la fila: {texto}"
+            !text.contains("plugin:org.norte.demo:greet"),
+            "y NO su clave de despacho, ni en la prosa ni en la fila: {text}"
         );
         // Dos veces: una en la prosa (la marca en línea) y otra en la tabla de
         // filas ejecutables. `render_command` y `rows_of` comparten
         // `label_or_id` justo para que no puedan discrepar.
-        assert_eq!(texto.matches("Greet the world").count(), 2, "{texto}");
+        assert_eq!(text.matches("Greet the world").count(), 2, "{text}");
 
         // Mismos bytes de página, otro manifiesto: manda el manifiesto.
         let otro = pintado_con("Saludar al mundo");

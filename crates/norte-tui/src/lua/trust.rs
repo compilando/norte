@@ -428,12 +428,12 @@ mod tests {
     fn path_hostil_con_sintaxis_toml_embebida_sobrevive_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("lua-trust.toml");
-        let hostil = Path::new("/tmp/\"comillas\"\n[[entry]]\npath = \"inyectado\"\n/init.lua");
+        let hostile = Path::new("/tmp/\"comillas\"\n[[entry]]\npath = \"inyectado\"\n/init.lua");
         let content = b"c";
         let mut store = TrustStore::open(p.clone()).unwrap();
-        store.record(hostil, content, true).unwrap();
+        store.record(hostile, content, true).unwrap();
         let reabierto = TrustStore::open(p).unwrap();
-        assert_eq!(reabierto.check(hostil, content), TrustDecision::Trusted);
+        assert_eq!(reabierto.check(hostile, content), TrustDecision::Trusted);
         assert_eq!(reabierto.entries.len(), 1);
     }
 

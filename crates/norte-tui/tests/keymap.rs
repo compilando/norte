@@ -586,8 +586,8 @@ fn todo_comando_tiene_ayuda_traducida() {
     let ids = COMANDOS.iter().map(|cmd| help_id(cmd));
     for id in ids.chain(ids_decoracion) {
         for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
-            let texto = norte_i18n::t_in(lang, &id);
-            assert_ne!(texto, id, "{id}: sin traducción en {lang:?}");
+            let text = norte_i18n::t_in(lang, &id);
+            assert_ne!(text, id, "{id}: sin traducción en {lang:?}");
         }
     }
 }
@@ -670,8 +670,8 @@ fn todo_dialog_command_tiene_etiqueta_traducida() {
     for cmd in DIALOG_COMMANDS {
         let id = dialog_hint_id(cmd);
         for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
-            let texto = norte_i18n::t_in(lang, &id);
-            assert_ne!(texto, id, "{id}: sin traducción en {lang:?}");
+            let text = norte_i18n::t_in(lang, &id);
+            assert_ne!(text, id, "{id}: sin traducción en {lang:?}");
         }
     }
 }

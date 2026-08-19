@@ -109,12 +109,12 @@ pub fn pane_list_rows(app: &App, area: Rect) -> u16 {
 pub fn before_frame(app: &mut App, area: Rect) {
     let res = resolved_frame(app, area);
     // Quién se ve dónde: con pestañas, el hueco de cada lado cambia.
-    let vis = browsers_visibles(&res, &app.layout);
-    let orden: Vec<_> = vis.iter().map(|(id, _)| *id).collect();
+    let vis = visible_browsers(&res, &app.layout);
+    let order: Vec<_> = vis.iter().map(|(id, _)| *id).collect();
     // Las dos juntas, siempre: dos listas de orden que se puedan desincronizar
     // son un fallo que solo se ve al cambiar de pestaña.
-    app.panes.set_visible(&orden);
-    app.history.set_order(&orden);
+    app.panes.set_visible(&order);
+    app.history.set_order(&order);
     let cols = pane_cols(&res, &app.layout);
     // El foco no puede quedarse en un pane que este frame no pinta: sería un
     // teclado que mueve un cursor que nadie ve. Con dos lados esto es
@@ -126,8 +126,8 @@ pub fn before_frame(app: &mut App, area: Rect) {
     // Y los roles se ponen al día con lo que hay en pantalla: `active` es el
     // foco, `target` es el otro si sigue visible.
     let foco = app.panes.slot_of(app.focus());
-    let (arbol, kinds) = (app.layout.clone(), app.kinds.clone());
-    app.roles.reconcile(&arbol, &res, &kinds, foco);
+    let (tree, kinds) = (app.layout.clone(), app.kinds.clone());
+    app.roles.reconcile(&tree, &res, &kinds, foco);
     // Una ventana POR PANE: el que no se pinta no tiene filas, y reconciliar
     // el suyo contra el alto del otro le dejaría una ventana que nadie vio.
     let visor = app.viewer.is_some();
@@ -154,7 +154,7 @@ pub fn before_frame(app: &mut App, area: Rect) {
             plan.reconcile_viewport(usize::from(lista.height));
         }
     } else if let Some(view) = &mut app.compare {
-        let (_, lista, _, _) = compare_layout(inner_de_bloque(cuerpo));
+        let (_, lista, _, _) = compare_layout(block_inner(cuerpo));
         view.pane.reconcile_viewport(usize::from(lista.height));
     }
 }
@@ -165,8 +165,8 @@ pub fn before_frame(app: &mut App, area: Rect) {
 /// Sustituir aquí y no dentro de `resolve` es lo que mantiene al motor puro y
 /// sin closures en su firma.
 fn resolved_frame(app: &App, area: Rect) -> norte_frontend::layout::Resolved {
-    let arbol = app.layout.substitute_auto(&|id| natural(app, id));
-    norte_frontend::layout::resolve(crate::panel::from_ratatui(area), &arbol, &app.kinds)
+    let tree = app.layout.substitute_auto(&|id| natural(app, id));
+    norte_frontend::layout::resolve(crate::panel::from_ratatui(area), &tree, &app.kinds)
 }
 
 /// El reparto de este frame, para quien no pinta.
@@ -228,7 +228,7 @@ fn body_rect(
     tree: &norte_frontend::layout::Node,
 ) -> Option<Rect> {
     let mut caja: Option<Rect> = None;
-    for (_, r) in browsers_visibles(res, tree) {
+    for (_, r) in visible_browsers(res, tree) {
         caja = Some(match caja {
             None => r,
             Some(c) => {
@@ -273,7 +273,7 @@ fn overlay_body(app: &App, area: Rect) -> Rect {
 /// «el pane izquierdo» deja de ser un id fijo y pasa a ser una POSICIÓN: el
 /// browser colocado más a la izquierda. Ordenar por `(x, y)` es exactamente lo
 /// que el usuario ve, y es lo que mantiene el significado de `app.panes[0]`.
-fn browsers_visibles(
+fn visible_browsers(
     res: &norte_frontend::layout::Resolved,
     tree: &norte_frontend::layout::Node,
 ) -> Vec<(norte_frontend::layout::SlotId, Rect)> {
@@ -299,7 +299,7 @@ fn pane_cols(
     res: &norte_frontend::layout::Resolved,
     tree: &norte_frontend::layout::Node,
 ) -> Vec<Rect> {
-    browsers_visibles(res, tree)
+    visible_browsers(res, tree)
         .into_iter()
         .map(|(_, r)| r)
         .collect()
@@ -321,7 +321,7 @@ fn pane_rects(app: &App, area: Rect) -> Vec<Rect> {
 pub fn tab_strip_for(app: &App, side: usize) -> Option<TabStrip> {
     let slot = app.panes.slot_of(side);
     let (huecos, activa) = app.layout.tabs_of(slot)?;
-    let titulos = huecos
+    let titles = huecos
         .iter()
         .map(|id| {
             app.panes
@@ -340,7 +340,7 @@ pub fn tab_strip_for(app: &App, side: usize) -> Option<TabStrip> {
                 .unwrap_or_default()
         })
         .collect();
-    Some(TabStrip { titulos, activa })
+    Some(TabStrip { titles, activa })
 }
 
 /// Cuántas filas del pane son CROMO: los dos bordes, la cabecera de columnas
@@ -350,14 +350,14 @@ fn pane_chrome_rows(app: &App, side: usize) -> u16 {
 }
 
 /// El interior de un bloque con borde por los cuatro lados./// El interior de un bloque con borde por los cuatro lados./// El interior de un bloque con borde por los cuatro lados.
-fn inner_de_bloque(area: Rect) -> Rect {
+fn block_inner(area: Rect) -> Rect {
     Block::default().borders(Borders::ALL).inner(area)
 }
 
 /// Como [`sync_layout`], desde el área EXTERNA del panel (la que recibe
 /// `draw_sync`): descuenta el borde antes de repartir.
 fn sync_layout_rows(area: Rect, view: &crate::app::SyncView) -> (Option<Rect>, Rect, Option<Rect>) {
-    sync_layout(inner_de_bloque(area), view)
+    sync_layout(block_inner(area), view)
 }
 
 /// La geometría PINTADA de los dos panes en un frame de `area`, o `None`
@@ -814,11 +814,11 @@ fn draw_nav_popup(
         None
     };
     let footer_w = footer.as_ref().map_or(0, Line::width);
-    let ancho = u16::try_from(footer_w.saturating_add(4))
+    let width = u16::try_from(footer_w.saturating_add(4))
         .unwrap_or(u16::MAX)
         .max(64);
     let rows = u16::try_from(popup.items().len().max(1)).unwrap_or(8) + 2;
-    let area = centered(frame.area(), ancho, rows.min(frame.area().height.max(3)));
+    let area = centered(frame.area(), width, rows.min(frame.area().height.max(3)));
     clear_themed(frame, area, theme);
     // Items largos: elipsis MEDIA (cabeza + cola, como los modales de
     // rutas) al ancho interior — el truncado derecho de ratatui haría
@@ -1066,7 +1066,7 @@ fn draw_extensions(
     // `Line::width`, y crecer si hace falta), tope en el ancho del frame.
     let footer_w = Line::raw(format!(" {hint} ")).width();
     let ancho_min = u16::try_from(footer_w.saturating_add(4)).unwrap_or(u16::MAX);
-    let ancho = frame
+    let width = frame
         .area()
         .width
         .saturating_sub(6)
@@ -1075,12 +1075,12 @@ fn draw_extensions(
         .min(frame.area().width);
     let area = centered(
         frame.area(),
-        ancho,
+        width,
         frame.area().height.saturating_sub(4).max(6),
     );
     clear_themed(frame, area, theme);
     // Ancho útil para la segunda línea (description, P1): igual criterio que
-    // `draw_palette` (borde + margen), NO el `ancho` de la caja completa.
+    // `draw_palette` (borde + margen), NO el `width` de la caja completa.
     let inner = usize::from(area.width.saturating_sub(4));
     let mut lines: Vec<Line<'_>> = Vec::new();
     if mgr.plugins.is_empty() && mgr.errors.is_empty() {
@@ -1134,7 +1134,7 @@ fn draw_plugin_config_panel(
 ) {
     let footer_w = Line::raw(format!(" {hint} ")).width();
     let ancho_min = u16::try_from(footer_w.saturating_add(4)).unwrap_or(u16::MAX);
-    let ancho = frame
+    let width = frame
         .area()
         .width
         .saturating_sub(6)
@@ -1143,7 +1143,7 @@ fn draw_plugin_config_panel(
         .min(frame.area().width);
     let area = centered(
         frame.area(),
-        ancho,
+        width,
         frame.area().height.saturating_sub(4).max(6),
     );
     clear_themed(frame, area, theme);
@@ -1249,8 +1249,8 @@ fn plugin_description_line(
         .take(crate::app::PLUGIN_DESCRIPTION_WIRE_CAP)
         .collect();
     let (masked, _) = display_name(clamped.as_bytes());
-    let texto = format!("   {}", middle_ellipsis(&masked, inner.saturating_sub(3)));
-    Some(Line::styled(texto, theme.role(Role::BorderUnfocused)))
+    let text = format!("   {}", middle_ellipsis(&masked, inner.saturating_sub(3)));
+    Some(Line::styled(text, theme.role(Role::BorderUnfocused)))
 }
 
 /// Popup selector de tema: lista de presets con el vigente resaltado (ADR
@@ -1383,12 +1383,12 @@ fn draw_theme_picker(
     hint: &str,
 ) {
     let footer_w = Line::raw(format!(" {hint} ")).width();
-    let ancho = u16::try_from(footer_w.saturating_add(4))
+    let width = u16::try_from(footer_w.saturating_add(4))
         .unwrap_or(u16::MAX)
         .max(34)
         .min(frame.area().width);
     let rows = u16::try_from(picker.names.len()).unwrap_or(8) + 2;
-    let area = centered(frame.area(), ancho, rows.min(frame.area().height.max(3)));
+    let area = centered(frame.area(), width, rows.min(frame.area().height.max(3)));
     clear_themed(frame, area, theme);
     let items: Vec<ListItem<'_>> = picker
         .names
@@ -1434,7 +1434,7 @@ fn draw_columns_picker(
         .iter()
         .map(|r| {
             let marca = if r.enabled { "[x]" } else { "[ ]" };
-            let etiqueta = match r.builtin {
+            let label = match r.builtin {
                 Some(Builtin::Name) => t("col-header-name"),
                 Some(Builtin::Size) => t("col-header-size"),
                 Some(Builtin::Mtime) => t("col-header-mtime"),
@@ -1466,7 +1466,7 @@ fn draw_columns_picker(
                 .as_deref()
                 .map(|f| format!(" · {f}"))
                 .unwrap_or_default();
-            format!(" {marca} {etiqueta}{flecha}{formato}")
+            format!(" {marca} {label}{flecha}{formato}")
         })
         .collect();
     let footer_w = Line::raw(format!(" {hint} ")).width();
@@ -1475,7 +1475,7 @@ fn draw_columns_picker(
         .map(|f| Line::raw(f.as_str()).width())
         .max()
         .unwrap_or(0);
-    let ancho = u16::try_from(footer_w.max(contenido_w).saturating_add(4))
+    let width = u16::try_from(footer_w.max(contenido_w).saturating_add(4))
         .unwrap_or(u16::MAX)
         .max(34)
         .min(frame.area().width);
@@ -1484,7 +1484,7 @@ fn draw_columns_picker(
     let rows = u16::try_from(p.rows().len())
         .unwrap_or(u16::MAX)
         .saturating_add(2);
-    let area = centered(frame.area(), ancho, rows.min(frame.area().height.max(3)));
+    let area = centered(frame.area(), width, rows.min(frame.area().height.max(3)));
     clear_themed(frame, area, theme);
     let items: Vec<ListItem<'_>> = filas.into_iter().map(ListItem::new).collect();
     let block = Block::default()
@@ -1554,18 +1554,18 @@ fn draw_connections_picker(
     } else {
         filas
     };
-    let ancho = cuerpo
+    let width = cuerpo
         .iter()
         .map(|f| Line::raw(f.as_str()).width())
         .max()
         .unwrap_or(0);
-    let ancho = u16::try_from(ancho).unwrap_or(u16::MAX).max(24);
+    let width = u16::try_from(width).unwrap_or(u16::MAX).max(24);
     let pie = format!(" {hint} ");
-    let ancho = ancho.max(u16::try_from(pie.chars().count()).unwrap_or(u16::MAX));
+    let width = width.max(u16::try_from(pie.chars().count()).unwrap_or(u16::MAX));
     let alto = u16::try_from(cuerpo.len())
         .unwrap_or(u16::MAX)
         .saturating_add(2);
-    let area = centered(frame.area(), ancho.saturating_add(2), alto);
+    let area = centered(frame.area(), width.saturating_add(2), alto);
     clear_themed(frame, area, theme);
     let bloque = Block::default()
         .borders(Borders::ALL)
@@ -1575,7 +1575,7 @@ fn draw_connections_picker(
         .border_style(theme.role(Role::ModalBorder));
     let dentro = bloque.inner(area);
     frame.render_widget(bloque, area);
-    let lineas: Vec<Line<'_>> = cuerpo
+    let lines: Vec<Line<'_>> = cuerpo
         .iter()
         .enumerate()
         .map(|(i, f)| {
@@ -1587,7 +1587,7 @@ fn draw_connections_picker(
             }
         })
         .collect();
-    frame.render_widget(Paragraph::new(lineas), dentro);
+    frame.render_widget(Paragraph::new(lines), dentro);
 }
 
 fn draw_layout_picker(
@@ -1608,9 +1608,9 @@ fn draw_layout_picker(
             // El nombre es un STEM de fichero y puede no ser texto: lossy
             // MARCADO con su badge y hazards enmascarados, como cualquier
             // otro nombre de la pantalla (#246 m2/m3).
-            let (nombre, hostil) = norte_frontend::display_os_name(&r.name);
+            let (nombre, hostile) = norte_frontend::display_os_name(&r.name);
             let nombre = norte_encoding::mask_terminal_hazards(&nombre);
-            let badge = if hostil { " ⚠" } else { "" };
+            let badge = if hostile { " ⚠" } else { "" };
             format!(" {nombre}{badge} · {procedencia}")
         })
         .collect();
@@ -1645,7 +1645,7 @@ fn draw_layout_picker(
     } else {
         0
     };
-    let ancho = dentro
+    let width = dentro
         .max(u16::try_from(Line::raw(pie.as_str()).width()).unwrap_or(u16::MAX))
         .max(nota_w)
         .saturating_add(2)
@@ -1659,7 +1659,7 @@ fn draw_layout_picker(
         .saturating_add(2)
         .saturating_add(alto_nota)
         .min(frame.area().height.max(3));
-    let area = centered(frame.area(), ancho, alto);
+    let area = centered(frame.area(), width, alto);
     clear_themed(frame, area, theme);
 
     let block = Block::default()
@@ -1698,8 +1698,8 @@ fn draw_layout_picker(
     if mitades[1].width == 0 || mitades[1].height == 0 {
         return; // un frame estrecho se queda con la lista, que es lo que se elige
     }
-    if let Some(fila) = p.current() {
-        draw_layout_preview(frame, mitades[1], fila, theme);
+    if let Some(row) = p.current() {
+        draw_layout_preview(frame, mitades[1], row, theme);
     }
 }
 
@@ -1712,23 +1712,23 @@ fn draw_layout_picker(
 fn draw_layout_preview(
     frame: &mut Frame<'_>,
     area: Rect,
-    fila: &norte_frontend::layout_picker::Row,
+    row: &norte_frontend::layout_picker::Row,
     theme: &TuiTheme,
 ) {
     use norte_frontend::layout::KindRegistry;
     use norte_frontend::layout_picker::preview;
 
-    if let Some(arbol) = fila.tree.as_ref() {
-        let lineas = preview(arbol, area.width, area.height, &KindRegistry::builtin());
-        let texto: Vec<Line<'_>> = lineas.into_iter().map(Line::raw).collect();
-        frame.render_widget(Paragraph::new(texto), area);
-    } else if let Some(problema) = fila.problem.as_deref() {
+    if let Some(tree) = row.tree.as_ref() {
+        let lines = preview(tree, area.width, area.height, &KindRegistry::builtin());
+        let text: Vec<Line<'_>> = lines.into_iter().map(Line::raw).collect();
+        frame.render_widget(Paragraph::new(text), area);
+    } else if let Some(problema) = row.problem.as_deref() {
         // Un fichero que no parsea DICE por qué, en el sitio donde iría su
         // pantalla: un hueco en blanco no se distingue de una disposición
         // vacía. El diagnóstico viene de un fichero, así que se enmascara.
-        let texto = norte_encoding::mask_terminal_hazards(problema);
+        let text = norte_encoding::mask_terminal_hazards(problema);
         frame.render_widget(
-            Paragraph::new(texto)
+            Paragraph::new(text)
                 .style(theme.role(Role::Warning))
                 .wrap(Wrap { trim: false }),
             area,
@@ -2070,7 +2070,7 @@ fn draw_help_footer(
     body_height: u16,
 ) {
     // Dónde está el lector dentro de la página, con el MISMO idioma que el
-    // visor (`{fila}/{total}`, `draw_viewer`). Solo cuando la página NO cabe:
+    // visor (`{row}/{total}`, `draw_viewer`). Solo cuando la página NO cabe:
     // un `1/9` sobre nueve líneas visibles es ruido. Importa más aquí que en
     // el visor porque las filas ejecutables — la columna de chords y el
     // `Enter` para el que existe este overlay — se pintan DETRÁS de toda la
@@ -2087,9 +2087,9 @@ fn draw_help_footer(
     // El indicador se lleva su trozo del pie ANTES de recortar el hint: a la
     // derecha jamás le disputa el borde izquierdo al hint, y el hint jamás se
     // le come a él (`fit_hint_groups` tira grupos enteros, no celdas sueltas).
-    let ancho = usize::from(footer_area.width);
-    let izq_max = ancho.saturating_sub(cells(&pos));
-    let izq = if state.filtering() {
+    let width = usize::from(footer_area.width);
+    let izq_max = width.saturating_sub(cells(&pos));
+    let left = if state.filtering() {
         let (query, _) = display_name(state.filter_display().as_bytes());
         middle_ellipsis(&format!(" /{query}"), izq_max)
     } else {
@@ -2097,9 +2097,9 @@ fn draw_help_footer(
         // [`fit_hint_groups`]. Una celda del pie es del margen izquierdo.
         format!(" {}", fit_hint_groups(hint, izq_max.saturating_sub(1)))
     };
-    let hueco = ancho.saturating_sub(cells(&izq) + cells(&pos));
+    let hueco = width.saturating_sub(cells(&left) + cells(&pos));
     let footer = Line::from(vec![
-        Span::raw(izq),
+        Span::raw(left),
         Span::raw(" ".repeat(hueco)),
         Span::raw(pos),
     ]);
@@ -2116,7 +2116,7 @@ fn split_scrollbar(area: Rect) -> (Rect, Rect) {
     if area.width < 2 {
         return (area, Rect::new(area.x, area.y, 0, area.height));
     }
-    let texto = Rect {
+    let text = Rect {
         width: area.width - HELP_SCROLLBAR,
         ..area
     };
@@ -2125,7 +2125,7 @@ fn split_scrollbar(area: Rect) -> (Rect, Rect) {
         width: HELP_SCROLLBAR,
         ..area
     };
-    (texto, barra)
+    (text, barra)
 }
 
 /// Pinta una barra de scroll vertical en `area` para un contenido de `total`
@@ -2192,7 +2192,7 @@ fn keys_only_group(rows: &[norte_frontend::help::SidebarRow], header: usize) -> 
 /// Command palette (`Ctrl+P`/vim `:`, H1 T4, spec-promised): filtro libre
 /// sobre TODOS los comandos, mismo idioma visual que [`draw_nav_popup`]
 /// (centrado, input al pie, `Clear` antes de pintar) pero MÁS ancha (60
-/// columnas: `{texto} {descripción} {chord}` no cabe en el ancho de un
+/// columnas: `{text} {descripción} {chord}` no cabe en el ancho de un
 /// popup normal). Una fila built-in ([`crate::palette::build_rows`]) trae
 /// `text`/`desc`/`chord` CONFIABLES (constantes del binario + catálogo
 /// Fluent) — este draw jamás los enmascara. Una fila de plugin (P1,
@@ -2231,8 +2231,8 @@ fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette, theme: &Tu
                 .iter()
                 .map(|&i| {
                     let row = &palette.rows()[i];
-                    let texto = format!(" {:<24} {:<32} {}", row.text, row.desc, row.chord);
-                    ListItem::new(Line::raw(middle_ellipsis(&texto, inner)))
+                    let text = format!(" {:<24} {:<32} {}", row.text, row.desc, row.chord);
+                    ListItem::new(Line::raw(middle_ellipsis(&text, inner)))
                 })
                 .collect(),
             Some(palette.cursor()),
@@ -2272,14 +2272,14 @@ fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette, theme: &Tu
 /// — se enmascara igual que la query, mismo contrato que `NavPopup::
 /// name_input`.
 fn draw_settings(frame: &mut Frame<'_>, settings: &crate::app::Settings, theme: &TuiTheme) {
-    let ancho = frame
+    let width = frame
         .area()
         .width
         .saturating_sub(6)
         .clamp(30, 80)
         .min(frame.area().width);
     let alto = frame.area().height.saturating_sub(4).max(6);
-    let area = centered(frame.area(), ancho, alto);
+    let area = centered(frame.area(), width, alto);
     clear_themed(frame, area, theme);
 
     let footer = if settings.is_editing() {
@@ -2329,12 +2329,12 @@ fn draw_settings(frame: &mut Frame<'_>, settings: &crate::app::Settings, theme: 
             }
             let selected = pos == settings.cursor();
             let cursor = if selected { ">" } else { " " };
-            let texto = if row.is_plugins_note() {
+            let text = if row.is_plugins_note() {
                 format!("{cursor} {}", row.name)
             } else {
                 format!("{cursor} {:<28} {}", row.name, row.value)
             };
-            let mut line = Line::raw(middle_ellipsis(&texto, inner_w));
+            let mut line = Line::raw(middle_ellipsis(&text, inner_w));
             if selected {
                 line = line.style(theme.role(Role::Selection));
             }
@@ -2387,14 +2387,14 @@ fn shortcuts_section(screen: norte_frontend::keymap::Screen) -> String {
 /// puede bindear cualquier codepoint suelto y esto va a una terminal. Aquí solo
 /// queda el ancho.
 fn draw_shortcuts(frame: &mut Frame<'_>, sc: &crate::app::Shortcuts, theme: &TuiTheme) {
-    let ancho = frame
+    let width = frame
         .area()
         .width
         .saturating_sub(4)
         .clamp(30, 92)
         .min(frame.area().width);
     let alto = frame.area().height.saturating_sub(2).max(6);
-    let area = centered(frame.area(), ancho, alto);
+    let area = centered(frame.area(), width, alto);
     clear_themed(frame, area, theme);
 
     let capture = sc.capture();
@@ -2510,9 +2510,9 @@ fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App)
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(frame.area());
-    let (title, hostil) =
+    let (title, hostile) =
         norte_frontend::path_display_with(&viewer.path, app.focused().name_encoding());
-    let title = if hostil {
+    let title = if hostile {
         format!("{HOSTILE_BADGE} {title}")
     } else {
         title
@@ -2612,36 +2612,36 @@ fn draw_preview(
         Role::BorderUnfocused
     };
     let Some(viewer) = preview.viewer() else {
-        let texto = preview.note().unwrap_or_default().to_owned();
+        let text = preview.note().unwrap_or_default().to_owned();
         let block = Block::default()
             .borders(Borders::ALL)
             .title(format!(" {} ", t("preview-title")))
             .title_style(app.theme.role(Role::Title))
             .border_style(app.theme.role(borde));
         frame.render_widget(
-            Paragraph::new(Line::styled(texto, app.theme.role(Role::Info))).block(block),
+            Paragraph::new(Line::styled(text, app.theme.role(Role::Info))).block(block),
             area,
         );
         return;
     };
-    let (title, hostil) =
+    let (title, hostile) =
         norte_frontend::path_display_with(&viewer.path, app.focused().name_encoding());
-    let title = if hostil {
+    let title = if hostile {
         format!("{HOSTILE_BADGE} {title}")
     } else {
         title
     };
-    let ancho = usize::from(area.width.saturating_sub(2));
+    let width = usize::from(area.width.saturating_sub(2));
     let mut block = Block::default()
         .borders(Borders::ALL)
         // La ruta se recorta por el MEDIO: en un hueco estrecho lo que
         // identifica un fichero es su nombre, o sea la cola.
-        .title(norte_frontend::middle_ellipsis(&title, ancho))
+        .title(norte_frontend::middle_ellipsis(&title, width))
         .title_style(app.theme.role(Role::Title))
         .border_style(app.theme.role(borde))
         .title_bottom(Line::raw(norte_frontend::middle_ellipsis(
             &crate::viewer::status(viewer),
-            ancho,
+            width,
         )));
     if let Some(plugin) = viewer.preview_plugin() {
         block = block.title(
@@ -2712,23 +2712,23 @@ fn draw_places(
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let ancho = inner.width as usize;
+    let width = inner.width as usize;
     let items: Vec<ListItem<'_>> = state
         .rows()
         .iter()
-        .map(|fila| match fila {
+        .map(|row| match row {
             PlaceRow::Header { section, folded } => {
                 let flecha = if *folded { '▸' } else { '▾' };
                 ListItem::new(Line::styled(
-                    cabeza(&format!("{flecha} {}", t(section.label_key())), ancho),
+                    head(&format!("{flecha} {}", t(section.label_key())), width),
                     theme.role(Role::Title),
                 ))
             }
             PlaceRow::Drive {
                 label, mount, free, ..
             } => {
-                let (nombre, hostil) = if label.is_empty() {
-                    nombre_de_montaje(mount)
+                let (nombre, hostile) = if label.is_empty() {
+                    mount_name(mount)
                 } else {
                     display_name(label)
                 };
@@ -2742,18 +2742,18 @@ fn draw_places(
                 // identifica `/home/oscar/.cache` es la cola, y con seis
                 // montajes bajo `/home` una lista recortada por delante son
                 // seis filas que ponen lo mismo.
-                ListItem::new(Line::raw(dos_campos(
-                    &con_badge(&nombre, hostil),
+                ListItem::new(Line::raw(two_fields(
+                    &with_badge(&nombre, hostile),
                     &libre,
-                    ancho,
+                    width,
                     medio,
                 )))
             }
             PlaceRow::Favorite { name, target } => {
-                let (texto, hostil) = display_name(name.as_bytes());
-                let izq = con_badge(&texto, hostil);
+                let (text, hostile) = display_name(name.as_bytes());
+                let left = with_badge(&text, hostile);
                 match target {
-                    Ok(_) => ListItem::new(Line::raw(cabeza(&format!(" {izq}"), ancho))),
+                    Ok(_) => ListItem::new(Line::raw(head(&format!(" {left}"), width))),
                     // Roto: marca `!` y fila ATENUADA. El motivo entero no
                     // cabe en catorce celdas —«ruta inválida» son trece— y
                     // recortarlo dejaría media palabra diciendo nada, así que
@@ -2762,7 +2762,7 @@ fn draw_places(
                     // esconderla: un favorito que desaparece solo es un fallo
                     // de config invisible.
                     Err(_) => ListItem::new(Line::styled(
-                        dos_campos(&izq, "!", ancho, cabeza),
+                        two_fields(&left, "!", width, head),
                         theme.role(Role::Info),
                     )),
                 }
@@ -2832,15 +2832,15 @@ pub fn places_zones(app: &App, area: Rect) -> Vec<PlaceZone> {
         0
     };
     (0..inner.height as usize)
-        .filter_map(|fila| {
-            let index = offset.checked_add(fila)?;
+        .filter_map(|row| {
+            let index = offset.checked_add(row)?;
             if index >= state.rows().len() {
                 return None;
             }
             Some(PlaceZone {
                 row: inner
                     .y
-                    .saturating_add(u16::try_from(fila).unwrap_or(u16::MAX)),
+                    .saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
                 x0: inner.x,
                 x1: inner.x.saturating_add(inner.width).saturating_sub(1),
                 index,
@@ -2850,11 +2850,11 @@ pub fn places_zones(app: &App, area: Rect) -> Vec<PlaceZone> {
 }
 
 /// El texto con su badge de nombre hostil delante, si lo lleva.
-fn con_badge(texto: &str, hostil: bool) -> String {
-    if hostil {
-        format!("{HOSTILE_BADGE} {texto}")
+fn with_badge(text: &str, hostile: bool) -> String {
+    if hostile {
+        format!("{HOSTILE_BADGE} {text}")
     } else {
-        texto.to_owned()
+        text.to_owned()
     }
 }
 
@@ -2865,67 +2865,67 @@ fn con_badge(texto: &str, hostil: bool) -> String {
 /// celdas ese prefijo se come la ruta entera y deja al lector mirando seis
 /// filas que ponen lo mismo. El enmascarado no se pierde — cada segmento pasa
 /// por `display_name` igual que hace `path_display`.
-fn nombre_de_montaje(mount: &norte_proto::VPath) -> (String, bool) {
+fn mount_name(mount: &norte_proto::VPath) -> (String, bool) {
     if mount.scheme() != "file" || mount.authority().is_some() {
         return norte_frontend::path_display(mount);
     }
-    let mut texto = String::new();
-    let mut hostil = false;
+    let mut text = String::new();
+    let mut hostile = false;
     for seg in mount.segments() {
         let (t, h) = display_name(seg);
-        texto.push('/');
-        texto.push_str(&t);
-        hostil |= h;
+        text.push('/');
+        text.push_str(&t);
+        hostile |= h;
     }
-    if texto.is_empty() {
-        texto.push('/');
+    if text.is_empty() {
+        text.push('/');
     }
-    (texto, hostil)
+    (text, hostile)
 }
 
-/// Una fila de dos campos en `ancho` celdas: `izq` a la izquierda, `der`
+/// Una fila de dos campos en `width` celdas: `left` a la izquierda, `right`
 /// pegado a la derecha.
 ///
 /// El campo de la derecha NUNCA se recorta, y esa es la regla que importa: es
 /// un TAMAÑO, y un `38.2 GiB` recortado por la cabeza pinta `8.2 GiB`, que no
 /// es una etiqueta rota sino un número FALSO. Si no cabe entero, se cae el
 /// campo derecho y queda solo el nombre.
-fn dos_campos(izq: &str, der: &str, ancho: usize, corta: fn(&str, usize) -> String) -> String {
+fn two_fields(left: &str, right: &str, width: usize, truncate: fn(&str, usize) -> String) -> String {
     /// Celdas por debajo de las cuales el nombre deja de identificar nada.
-    const SUELO: usize = 6;
-    let d = norte_frontend::cells(der);
+    const FLOOR: usize = 6;
+    let d = norte_frontend::cells(right);
     // Aire a los dos lados del par, MÁS una celda de separación entre los dos
     // campos: sin ella un nombre que llena su sitio deja el `…` pegado al
     // número (`/home/os…1P`), que se lee como un dato y no como un recorte.
-    if d + 3 + SUELO >= ancho {
-        return corta(&format!(" {izq}"), ancho);
+    if d + 3 + FLOOR >= width {
+        return truncate(&format!(" {left}"), width);
     }
-    let sitio = ancho - d - 3;
-    let i = corta(&format!(" {izq}"), sitio);
+    let sitio = width - d - 3;
+    let i = truncate(&format!(" {left}"), sitio);
     let hueco = sitio.saturating_sub(norte_frontend::cells(&i)) + 1;
-    format!("{i}{}{der} ", " ".repeat(hueco))
+    format!("{i}{}{right} ", " ".repeat(hueco))
 }
 
 /// Recorte por el MEDIO, para lo que se identifica por su cola: una ruta.
-fn medio(texto: &str, ancho: usize) -> String {
-    norte_frontend::middle_ellipsis(texto, ancho)
+fn medio(text: &str, width: usize) -> String {
+    norte_frontend::middle_ellipsis(text, width)
 }
 
-/// Recorta por la COLA a `ancho` celdas, marcando con `…`.
+/// Recorta por la COLA a `width` celdas, marcando con `…`.
 ///
 /// Por la cola y no por el medio ([`norte_frontend::middle_ellipsis`]) porque
 /// aquí lo que identifica la fila está al principio: el nombre de un favorito
 /// y el de una sección. La elipsis media existe para rutas, donde lo que
 /// identifica es el final.
-fn cabeza(texto: &str, ancho: usize) -> String {
-    if norte_frontend::cells(texto) <= ancho {
-        return texto.to_owned();
+fn head(text: &str, width: usize) -> String {
+    if norte_frontend::cells(text) <= width {
+        return text.to_owned();
     }
     let mut out = String::new();
     let mut usado = 0usize;
-    for c in texto.chars() {
+    for c in text.chars() {
         let w = UnicodeWidthChar::width(c).unwrap_or(0);
-        if usado + w + 1 > ancho {
+        if usado + w + 1 > width {
             break;
         }
         usado += w;
@@ -2940,7 +2940,7 @@ fn cabeza(texto: &str, ancho: usize) -> String {
 /// Una sola copia porque la franja y el panel de procesos pintan lo mismo, y
 /// dos aritméticas del mismo número acaban dividiendo una de ellas por un
 /// total que puede ser cero.
-fn progreso_pct(p: &norte_proto::TaskProgress) -> u64 {
+fn progress_pct(p: &norte_proto::TaskProgress) -> u64 {
     match (p.bytes_total, p.entries_total) {
         (Some(total), _) if total > 0 => (p.bytes_done.saturating_mul(100) / total).min(100),
         (_, Some(total)) if total > 0 => (p.entries_done.saturating_mul(100) / total).min(100),
@@ -2966,7 +2966,7 @@ fn progreso_pct(p: &norte_proto::TaskProgress) -> u64 {
 fn draw_tree(
     frame: &mut Frame<'_>,
     area: Rect,
-    arbol: &crate::tree::Tree,
+    tree: &crate::tree::Tree,
     app: &App,
     con_teclado: bool,
 ) {
@@ -2986,7 +2986,7 @@ fn draw_tree(
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let filas = arbol.rows();
+    let filas = tree.rows();
     if filas.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::styled(t("tree-loading"), theme.role(Role::Title))),
@@ -2994,7 +2994,7 @@ fn draw_tree(
         );
         return;
     }
-    let cursor = arbol.cursor();
+    let cursor = tree.cursor();
     let items: Vec<ListItem<'_>> = filas
         .iter()
         .map(|r| {
@@ -3006,18 +3006,18 @@ fn draw_tree(
                 // Sin leer: ni hoja ni rama, todavía.
                 (false, None) => "·",
             };
-            let (nombre, hostil) = display_name(
+            let (nombre, hostile) = display_name(
                 r.path
                     .file_name()
                     .map_or(b"/".as_slice(), norte_proto::Segment::as_bytes),
             );
             let sangria = "  ".repeat(r.depth);
-            let texto = if hostil {
+            let text = if hostile {
                 format!("{sangria}{marca} {HOSTILE_BADGE} {nombre}")
             } else {
                 format!("{sangria}{marca} {nombre}")
             };
-            ListItem::new(Line::raw(texto))
+            ListItem::new(Line::raw(text))
         })
         .collect();
     let mut estado_lista = ListState::default();
@@ -3029,7 +3029,7 @@ fn draw_tree(
 fn draw_processes(
     frame: &mut Frame<'_>,
     area: Rect,
-    estado: &crate::processes::Processes,
+    processes: &crate::processes::Processes,
     app: &App,
     con_teclado: bool,
 ) {
@@ -3057,13 +3057,13 @@ fn draw_processes(
         );
         return;
     }
-    let cursor = estado.cursor(filas.len());
+    let cursor = processes.cursor(filas.len());
     let items: Vec<ListItem<'_>> = filas
         .iter()
         .enumerate()
         .map(|(i, row)| {
             let p = &row.last;
-            let pct = progreso_pct(p);
+            let pct = progress_pct(p);
             // Diez celdas de barra: cabe en un panel estrecho y sigue
             // diciendo de un vistazo por dónde va.
             let llenas = usize::try_from(pct / 10).unwrap_or(0).min(10);
@@ -3098,7 +3098,7 @@ fn draw_processes(
 fn draw_metadata(
     frame: &mut Frame<'_>,
     area: Rect,
-    entrada: Option<&norte_proto::Entry>,
+    entry: Option<&norte_proto::Entry>,
     app: &App,
     con_teclado: bool,
 ) {
@@ -3118,7 +3118,7 @@ fn draw_metadata(
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let Some(e) = entrada else {
+    let Some(e) = entry else {
         frame.render_widget(
             Paragraph::new(Line::styled(t("metadata-empty"), theme.role(Role::Title))),
             inner,
@@ -3126,11 +3126,11 @@ fn draw_metadata(
         return;
     };
 
-    let mut lineas: Vec<Line<'_>> = Vec::new();
-    let mut campo = |clave: &str, valor: String| {
-        lineas.push(Line::from(vec![
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    let mut campo = |clave: &str, value: String| {
+        lines.push(Line::from(vec![
             Span::styled(format!("{} ", t(clave)), theme.role(Role::Title)),
-            Span::raw(valor),
+            Span::raw(value),
         ]));
     };
 
@@ -3138,8 +3138,8 @@ fn draw_metadata(
         .path
         .file_name()
         .map_or_else(Vec::new, |s| s.as_bytes().to_vec());
-    let (texto, hostil) = display_name(&nombre);
-    campo("metadata-name", con_badge(&texto, hostil));
+    let (text, hostile) = display_name(&nombre);
+    campo("metadata-name", with_badge(&text, hostile));
     campo(
         "metadata-kind",
         t(match e.kind {
@@ -3171,19 +3171,19 @@ fn draw_metadata(
         let col: norte_frontend::columns::ColumnId =
             norte_frontend::columns::ColumnId::Attr(id.clone());
         let estilo = norte_frontend::columns::ColumnStyle::default_for_id(&col, catalogo);
-        let etiqueta = norte_frontend::columns::header_label(&col, &estilo, catalogo);
+        let label = norte_frontend::columns::header_label(&col, &estilo, catalogo);
         if let Some(celda) = norte_frontend::columns::styled_cell(e, &col, ahora, &estilo) {
-            campo_libre(&mut lineas, theme, &etiqueta, &celda);
+            free_field(&mut lines, theme, &label, &celda);
         }
     }
-    frame.render_widget(Paragraph::new(lineas), inner);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// Una fila etiqueta/valor cuya etiqueta no sale de Fluent sino del catálogo.
-fn campo_libre(lineas: &mut Vec<Line<'static>>, theme: &TuiTheme, etiqueta: &str, valor: &str) {
-    lineas.push(Line::from(vec![
-        Span::styled(format!("{etiqueta} "), theme.role(Role::Title)),
-        Span::raw(valor.to_owned()),
+fn free_field(lines: &mut Vec<Line<'static>>, theme: &TuiTheme, label: &str, value: &str) {
+    lines.push(Line::from(vec![
+        Span::styled(format!("{label} "), theme.role(Role::Title)),
+        Span::raw(value.to_owned()),
     ]));
 }
 
@@ -3199,7 +3199,7 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .take(area.height as usize)
         .map(|row| {
             let p = &row.last;
-            let pct = progreso_pct(p);
+            let pct = progress_pct(p);
             // Por CATEGORÍA (Display estable), jamás Debug de cara al usuario.
             // El estado se colorea por rol (error rojo, hecho info).
             let (estado, role) = match &p.state {
@@ -3267,7 +3267,7 @@ fn clamp_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
             out.push(sp);
             continue;
         }
-        let mut texto = String::new();
+        let mut text = String::new();
         let mut acc = 0_usize;
         for c in sp.content.chars() {
             let cw = UnicodeWidthChar::width(c).unwrap_or(0);
@@ -3275,7 +3275,7 @@ fn clamp_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
                 break;
             }
             acc += cw;
-            texto.push(c);
+            text.push(c);
         }
         // Cortar por carácter no basta: un ZWJ o un selector de variación
         // miden CERO, así que caben siempre y el trozo puede acabar en un
@@ -3283,15 +3283,15 @@ fn clamp_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
         // `emoji_zwj_family` recortado a tres celdas dejaba la familia unida
         // al carácter siguiente (#246 m1). `middle_ellipsis` arregló el
         // espejo de esto drenando por delante; aquí se drena por detrás.
-        while texto
+        while text
             .chars()
             .next_back()
             .is_some_and(|c| UnicodeWidthChar::width(c).unwrap_or(0) == 0 && !c.is_ascii())
         {
-            texto.pop();
+            text.pop();
         }
-        if !texto.is_empty() {
-            out.push(Span::styled(texto, sp.style));
+        if !text.is_empty() {
+            out.push(Span::styled(text, sp.style));
         }
         break;
     }
@@ -3332,11 +3332,11 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
             let total = usize::try_from(req.paths_total)
                 .unwrap_or(usize::MAX)
                 .max(req.paths.len());
-            let lineas = 1 + mostradas + usize::from(total > mostradas) + 1;
+            let lines = 1 + mostradas + usize::from(total > mostradas) + 1;
             // `+ 2` (los bordes), no el `+ 3` de ConfirmDelete: este modal
             // siempre ajustó exacto y acotar la lista no es motivo para
             // moverle la caja una fila.
-            u16::try_from(lineas).unwrap_or(u16::MAX).saturating_add(2)
+            u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(2)
         }
         // #103 T10: una línea POR ítem listado (más la de resumen, si el
         // lote no cabe entero), más las dos fijas (destino/modo + teclas) y
@@ -3378,27 +3378,27 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         // #139: nombre, clase, tamaño, fecha y ruta, más un atributo por línea
         // y la línea del recuento cuando la entrada es una carpeta.
         Modal::Properties { entry, size, .. } => {
-            let lineas = 5
+            let lines = 5
                 + entry.attrs.len()
                 + usize::from(entry.kind == norte_proto::EntryKind::Dir || size.is_some());
-            u16::try_from(lineas).unwrap_or(u16::MAX).saturating_add(3)
+            u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(3)
         }
         Modal::AiRenamePlan { entries, plan, .. } => {
-            let lineas = 2
+            let lines = 2
                 + 2 * entries.len().min(AI_RENAME_PAIR_LIMIT)
                 + usize::from(entries.len() > AI_RENAME_PAIR_LIMIT)
                 + plan.detail_line_count()
                 + 1;
-            u16::try_from(lineas).unwrap_or(u16::MAX).saturating_add(3)
+            u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(3)
         }
         // M4-IA-2: un hit POR LÍNEA de la ventana + el indicador (si el
         // lote no cabe entero) + el hint — mismo cómputo dinámico
         // `body_lines + 3` que el plan IA. Estable al scroll.
         Modal::SemanticHits { hits, .. } => {
-            let lineas = hits.len().min(SEMANTIC_HIT_LIMIT)
+            let lines = hits.len().min(SEMANTIC_HIT_LIMIT)
                 + usize::from(hits.len() > SEMANTIC_HIT_LIMIT)
                 + 1;
-            u16::try_from(lineas).unwrap_or(u16::MAX).saturating_add(3)
+            u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(3)
         }
         _ => 6,
     }
@@ -3566,7 +3566,7 @@ fn modal_title_body(
         // forma de que el usuario vea la decisión antes de confirmarla.
         Modal::Pack { name, error } => free_text_modal_text(
             "modal-pack",
-            match crate::app::formato_por_nombre(name.as_bytes()) {
+            match crate::app::format_by_name(name.as_bytes()) {
                 Some(norte_proto::methods::ArchiveFormat::Zip) => "modal-pack-hint-zip",
                 Some(norte_proto::methods::ArchiveFormat::Tar) => "modal-pack-hint-tar",
                 Some(norte_proto::methods::ArchiveFormat::TarGz) => "modal-pack-hint-targz",
@@ -3719,19 +3719,19 @@ fn approval_modal_text(
 ) -> (String, String) {
     let session = clamp_chars(&display_name(session_bytes(req)).0, 40);
     let op = clamp_chars(&display_name(req.op.as_bytes()).0, 16);
-    let mut lineas = vec![ta(
+    let mut lines = vec![ta(
         "modal-approval-body",
         &[("session", &session), ("op", &op)],
     )];
     let limite = norte_frontend::MODAL_ITEM_LIMIT;
     for (i, p) in req.paths.iter().take(limite).enumerate() {
-        let (texto, hostil) = display_name(p.as_bytes());
-        lineas.push(ta(
+        let (text, hostile) = display_name(p.as_bytes());
+        lines.push(ta(
             "modal-approval-path",
             &[
-                ("badge", if hostil { HOSTILE_BADGE } else { "" }),
+                ("badge", if hostile { HOSTILE_BADGE } else { "" }),
                 ("n", &(i + 1).to_string()),
-                ("path", &middle_ellipsis(&texto, 46)),
+                ("path", &middle_ellipsis(&text, 46)),
             ],
         ));
     }
@@ -3756,13 +3756,13 @@ fn approval_modal_text(
         // Clave COMPARTIDA con `item_lines_with` (la de ConfirmDelete): el
         // resumen dice lo mismo en los dos sitios o el lector aprende dos
         // frases para un solo hecho.
-        lineas.push(badge_prefixed(
+        lines.push(badge_prefixed(
             oculta_hostil,
             ta("gui-modal-more", &[("n", &(total - mostradas).to_string())]),
         ));
     }
-    lineas.push(hint.to_owned());
-    (t("modal-approval-title"), lineas.join("\n"))
+    lines.push(hint.to_owned());
+    (t("modal-approval-title"), lines.join("\n"))
 }
 
 /// Título+cuerpo de `Modal::MarkPattern` (#103 T9), factorizado fuera de
@@ -3784,13 +3784,13 @@ fn properties_modal_text(
 ) -> (String, String) {
     use norte_proto::EntryKind;
 
-    let (nombre, hostil) = display_name(
+    let (nombre, hostile) = display_name(
         entry
             .path
             .file_name()
             .map_or(b"".as_slice(), norte_proto::Segment::as_bytes),
     );
-    let titulo = if hostil {
+    let titulo = if hostile {
         format!("{HOSTILE_BADGE} {nombre}")
     } else {
         nombre
@@ -3801,7 +3801,7 @@ fn properties_modal_text(
         EntryKind::Symlink => t("props-kind-symlink"),
         EntryKind::Other => t("props-kind-other"),
     };
-    let mut lineas = vec![format!("{}: {}", t("props-kind"), clase)];
+    let mut lines = vec![format!("{}: {}", t("props-kind"), clase)];
     // El tamaño de una CARPETA no sale del listado: o se ha contado, o se está
     // contando, o —si nadie lo pidió— se dice que se puede pedir. Fingir un
     // cero sería la única respuesta claramente falsa.
@@ -3817,8 +3817,8 @@ fn properties_modal_text(
             .size
             .map_or_else(|| t("props-size-unknown"), norte_frontend::human_bytes),
     };
-    lineas.push(format!("{}: {}", t("props-size"), tamano));
-    lineas.push(format!(
+    lines.push(format!("{}: {}", t("props-size"), tamano));
+    lines.push(format!(
         "{}: {}",
         t("props-modified"),
         entry.mtime_ms.map_or_else(
@@ -3831,7 +3831,7 @@ fn properties_modal_text(
         )
     ));
     let (ruta, ruta_hostil) = display_name(entry.path.to_wire().as_bytes());
-    lineas.push(format!(
+    lines.push(format!(
         "{}: {}{}",
         t("props-path"),
         if ruta_hostil {
@@ -3843,9 +3843,9 @@ fn properties_modal_text(
     ));
     // Los atributos que el provider haya reportado, tal cual: los pinta quien
     // los pidió, y esta ventana no pide ninguno de más.
-    for (id, valor) in &entry.attrs {
-        let (v, v_hostil) = attr_texto(valor);
-        lineas.push(format!(
+    for (id, value) in &entry.attrs {
+        let (v, v_hostil) = attr_text(value);
+        lines.push(format!(
             "{id}: {}{v}",
             if v_hostil {
                 format!("{HOSTILE_BADGE} ")
@@ -3854,8 +3854,8 @@ fn properties_modal_text(
             }
         ));
     }
-    lineas.push(t("props-hint"));
-    (titulo, lineas.join("\n"))
+    lines.push(t("props-hint"));
+    (titulo, lines.join("\n"))
 }
 
 /// El valor de un atributo, listo para pintar, y si hubo que enmascararlo.
@@ -3863,7 +3863,7 @@ fn properties_modal_text(
 /// Los dos de TERCEROS —texto y bytes— pasan por `display_name`, el mismo
 /// camino lossy-con-badge que un nombre de fichero: un `owner` con bidi no
 /// reordena este diálogo, y los bytes originales no se tocan (regla 1).
-fn attr_texto(v: &norte_proto::AttrValue) -> (String, bool) {
+fn attr_text(v: &norte_proto::AttrValue) -> (String, bool) {
     use norte_proto::AttrValue;
     match v {
         AttrValue::Uint(n) => (n.to_string(), false),
@@ -3882,13 +3882,13 @@ fn attr_texto(v: &norte_proto::AttrValue) -> (String, bool) {
 }
 
 fn mark_pattern_modal_text(mark: bool, pattern: &str, error: Option<&str>) -> (String, String) {
-    let (masked, hostil) = display_name(pattern.as_bytes());
+    let (masked, hostile) = display_name(pattern.as_bytes());
     // #103 T9 review MINOR: `PaneState::mark_glob` compila el patrón CRUDO,
     // no el enmascarado — aquí el display difiere de verdad de lo que
     // decide el match, así que un patrón hostil lleva el mismo badge que un
     // nombre de fichero hostil (mismo idioma que `draw_search_dialog`'s
     // root line).
-    let campo = if hostil {
+    let campo = if hostile {
         format!("{HOSTILE_BADGE} {masked}_")
     } else {
         format!("{masked}_")
@@ -3932,7 +3932,7 @@ fn free_text_modal_text(
     value: &str,
     error: Option<&str>,
 ) -> (String, String) {
-    let (masked, hostil) = display_name(value.as_bytes());
+    let (masked, hostile) = display_name(value.as_bytes());
     // Ventana anclada a la DERECHA (review de S4, M4): el cuerpo del modal es
     // un `Paragraph` sin wrap y de ancho acotado, así que un valor largo
     // pintaba solo su cabeza y dejaba el cursor `_` fuera de pantalla — con
@@ -3940,7 +3940,7 @@ fn free_text_modal_text(
     // Se recorta por delante, marcando el corte, que es lo que hace cualquier
     // editor de una línea.
     let visible = tail_window(&masked, FREE_TEXT_FIELD_MAX);
-    let campo = if hostil {
+    let campo = if hostile {
         format!("{HOSTILE_BADGE} {visible}_")
     } else {
         format!("{visible}_")
@@ -3976,8 +3976,8 @@ fn tail_window(s: &str, max: usize) -> String {
 /// Prefija el badge hostil FUERA de la traducción (audit MINOR-5: el
 /// mecanismo del badge no puede depender de que cada locale conserve un
 /// `{ $badge }` — concatenación Rust-side, translation-proof).
-fn badge_prefixed(hostil: bool, line: String) -> String {
-    if hostil {
+fn badge_prefixed(hostile: bool, line: String) -> String {
+    if hostile {
         format!("{HOSTILE_BADGE}{line}")
     } else {
         line
@@ -4076,7 +4076,7 @@ fn ai_rename_plan_modal_text(
     lines.extend(
         plan.detail_lines(entries.len())
             .into_iter()
-            .map(|(linea, hostil)| badge_prefixed(hostil, linea)),
+            .map(|(linea, hostile)| badge_prefixed(hostile, linea)),
     );
     // H3c: con una ayuda encima, `y`/`n` no responden — el pie dice eso en
     // vez de ofrecerlos (gemelo de `DialogHints::with_modals_inert`, para los
@@ -4118,9 +4118,9 @@ fn semantic_hits_modal_text(
     let last = (offset + SEMANTIC_HIT_LIMIT).min(hits.len());
     let mut lines = Vec::new();
     for (i, h) in hits.iter().enumerate().take(last).skip(offset) {
-        let (path, hostil) = norte_frontend::path_display(&h.path);
+        let (path, hostile) = norte_frontend::path_display(&h.path);
         let line = badge_prefixed(
-            hostil,
+            hostile,
             ta(
                 "modal-semantic-hit",
                 &[
@@ -4176,8 +4176,8 @@ fn transfer_name_modal_text(
     error: Option<&str>,
     enc: Option<norte_encoding::NameEncoding>,
 ) -> (String, String) {
-    let (masked, hostil) = display_name(name.as_bytes());
-    let campo = if hostil {
+    let (masked, hostile) = display_name(name.as_bytes());
+    let campo = if hostile {
         format!("{HOSTILE_BADGE} {masked}_")
     } else {
         format!("{masked}_")
@@ -4192,9 +4192,9 @@ fn transfer_name_modal_text(
     // destino — justo lo que el usuario necesita ver para saber dónde
     // aterriza la copia — sin ni un `…` que lo delatara.
     let badge_line = |p: &norte_proto::VPath| {
-        let (line, hostil) = norte_frontend::path_display_with(p, enc);
+        let (line, hostile) = norte_frontend::path_display_with(p, enc);
         let line = middle_ellipsis(&line, MODAL_PATH_CHARS);
-        if hostil {
+        if hostile {
             format!("{HOSTILE_BADGE} {line}")
         } else {
             line
@@ -4267,8 +4267,8 @@ mod entry_item_columns_tests {
         let area = Rect::new(0, 0, 21, 1);
         let mut buf = Buffer::empty(area);
         List::new(vec![item]).render(area, &mut buf);
-        let fila: String = (0..21).map(|x| buf[(x, 0)].symbol().to_string()).collect();
-        assert_eq!(fila, "   f.txt          7 B", "{fila:?}");
+        let row: String = (0..21).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert_eq!(row, "   f.txt          7 B", "{row:?}");
     }
 }
 
@@ -4602,7 +4602,7 @@ fn trust_host_modal_text(
     let (algo_disp, algo_hostil) = display_name(algo.as_bytes());
     let algo_txt = clamp_chars(&algo_disp, 24);
     let (fp_txt, fp_hostil) = display_name(fingerprint.as_bytes());
-    let lineas = [
+    let lines = [
         ta(
             "modal-trust-host-host",
             &[
@@ -4627,7 +4627,7 @@ fn trust_host_modal_text(
         t("modal-trust-host-note"),
         hint.to_owned(),
     ];
-    (t("modal-trust-host-title"), lineas.join("\n"))
+    (t("modal-trust-host-title"), lines.join("\n"))
 }
 
 fn clamp_chars(s: &str, max: usize) -> String {
@@ -4747,11 +4747,11 @@ fn draw_compare(
     // llenaba el canal de filas, cuyos lotes `route_batch` DESCARTA — es
     // decir, el cliente destruía la completitud de la respuesta y luego
     // culpaba al transporte con «se perdieron algunas por el camino».
-    let visibles = view.pane.visible_len();
+    let visible = view.pane.visible_len();
     let alto = usize::from(inner.height);
     let selected = view.pane.visible_index();
     // La ventana la decide el MODELO (#210, pegajosa como la del listado).
-    let offset = view.pane.viewport_offset().min(visibles.saturating_sub(1));
+    let offset = view.pane.viewport_offset().min(visible.saturating_sub(1));
     let rows: Vec<ListItem<'_>> = view
         .pane
         .visible()
@@ -4794,7 +4794,7 @@ fn draw_compare(
             ]))
         })
         .collect();
-    if visibles == 0 {
+    if visible == 0 {
         // «Todavía no hay filas» y «están todas ocultas» no son lo mismo: la
         // segunda la desmienten las propias cuentas de la línea de filtros, y
         // lo que toca hacer después es distinto (revisión rust MINOR-2 de la
@@ -4880,7 +4880,7 @@ fn compare_title(
     frame_width: u16,
     theme: &TuiTheme,
 ) -> Line<'static> {
-    let (izq, der) = compare_title_halves(view, usize::from(frame_width));
+    let (left, right) = compare_title_halves(view, usize::from(frame_width));
     let badge_span = |h: bool| {
         Span::styled(
             if h { HOSTILE_BADGE } else { "" },
@@ -4892,11 +4892,11 @@ fn compare_title(
             format!(" {} — ", t("compare-title")),
             theme.role(Role::Title),
         ),
-        badge_span(izq.hostile),
-        Span::styled(izq.text, theme.role(Role::Title)),
+        badge_span(left.hostile),
+        Span::styled(left.text, theme.role(Role::Title)),
         Span::styled(COMPARE_TITLE_SEP, theme.role(Role::Info)),
-        badge_span(der.hostile),
-        Span::styled(der.text, theme.role(Role::Title)),
+        badge_span(right.hostile),
+        Span::styled(right.text, theme.role(Role::Title)),
         Span::raw(" "),
     ])
 }
@@ -4974,16 +4974,16 @@ mod compare_title_tests {
         let seg = norte_proto::Segment::new(spoof.bytes.clone()).expect("segmento");
         let izquierda = vp("mem:///izquierda").join(seg);
         let derecha = vp("mem:///derecha/de/verdad");
-        let (izq, der) = compare_title_halves(&vista(izquierda, derecha), 200);
+        let (left, right) = compare_title_halves(&vista(izquierda, derecha), 200);
         assert!(
-            izq.text.contains('→'),
+            left.text.contains('→'),
             "la flecha se queda DENTRO de su mitad: {}",
-            izq.text
+            left.text
         );
         assert!(
-            der.text.ends_with("de/verdad"),
+            right.text.ends_with("de/verdad"),
             "y la derecha llega intacta a la suya: {}",
-            der.text
+            right.text
         );
     }
 
@@ -4995,12 +4995,12 @@ mod compare_title_tests {
         let larga =
             vp("mem:///").join(norte_proto::Segment::new(vec![b'x'; 4096]).expect("segmento"));
         let derecha = vp("mem:///derecha/de/verdad");
-        let (izq, der) = compare_title_halves(&vista(larga, derecha), 60);
-        assert!(izq.text.contains('…'), "el corte se MARCA: {}", izq.text);
+        let (left, right) = compare_title_halves(&vista(larga, derecha), 60);
+        assert!(left.text.contains('…'), "el corte se MARCA: {}", left.text);
         assert!(
-            der.text.ends_with("de/verdad") || der.text.contains("de/verdad"),
+            right.text.ends_with("de/verdad") || right.text.contains("de/verdad"),
             "la otra raíz sigue intacta: {}",
-            der.text
+            right.text
         );
     }
 
@@ -5008,12 +5008,12 @@ mod compare_title_tests {
     /// son hostiles).
     #[test]
     fn sin_saneado_las_dos_raices_llegan_completas() {
-        let (izq, der) =
+        let (left, right) =
             compare_title_halves(&vista(vp("mem:///izquierda"), vp("mem:///derecha")), 200);
-        assert!(!izq.hostile);
-        assert!(!der.hostile);
-        assert!(izq.text.contains("izquierda"));
-        assert!(der.text.contains("derecha"));
+        assert!(!left.hostile);
+        assert!(!right.hostile);
+        assert!(left.text.contains("izquierda"));
+        assert!(right.text.contains("derecha"));
     }
 }
 
@@ -5278,7 +5278,7 @@ fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, the
         // la revisión MAJOR-1 arregló entre el pie y la tecla; ahora hay UNA
         // respuesta y la comparten los dos frontends.
         let id = norte_frontend::sync::hint_id(view);
-        let lineas = match &view.confirming {
+        let lines = match &view.confirming {
             Some(c) => vec![
                 Line::from(Span::styled(c.text.clone(), theme.role(Role::Warning))),
                 Line::from(Span::styled(t(id), theme.role(Role::Warning))),
@@ -5291,28 +5291,28 @@ fn draw_sync(frame: &mut Frame<'_>, area: Rect, view: &crate::app::SyncView, the
         // del «¿Seguir?» — la pregunta desaparecía de la pantalla que la
         // hace. Lo cazó el snapshot, otra vez.
         frame.render_widget(
-            Paragraph::new(lineas).wrap(ratatui::widgets::Wrap { trim: false }),
+            Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }),
             a,
         );
     }
 }
 
-/// Cuántas filas ocupa `texto` envuelto a `ancho` columnas.
+/// Cuántas filas ocupa `text` envuelto a `width` columnas.
 ///
 /// Cuenta CELDAS, no bytes ni `char`s: medir en bytes reservaría de más y en
 /// `char`s de menos — y de menos es lo que corta la frase que dice que esto no
 /// se puede deshacer.
-fn wrapped_rows(texto: &str, ancho: u16) -> u16 {
-    if ancho == 0 {
+fn wrapped_rows(text: &str, width: u16) -> u16 {
+    if width == 0 {
         return 1;
     }
-    let celdas = u16::try_from(texto.width()).unwrap_or(u16::MAX);
-    let exactas = celdas.div_ceil(ancho).max(1);
+    let celdas = u16::try_from(text.width()).unwrap_or(u16::MAX);
+    let exactas = celdas.div_ceil(width).max(1);
     // Una fila de holgura en cuanto la frase envuelve: `Wrap` parte por
-    // PALABRAS, así que `ceil(celdas / ancho)` es una cota INFERIOR y quedarse
+    // PALABRAS, así que `ceil(celdas / width)` es una cota INFERIOR y quedarse
     // en ella recorta la última línea — que es la que dice que esto no se puede
     // deshacer. El tope de `sync_layout` acota lo que la holgura puede costar.
-    if celdas > ancho {
+    if celdas > width {
         exactas.saturating_add(1)
     } else {
         exactas
@@ -5369,7 +5369,7 @@ fn sync_layout(outer: Rect, view: &crate::app::SyncView) -> (Option<Rect>, Rect,
 /// El resumen del plan: lo que [`norte_frontend::sync::SyncPlan::summary_lines`]
 /// dijo, envuelto.
 fn sync_summary(view: &crate::app::SyncView, theme: &TuiTheme) -> Paragraph<'static> {
-    let lineas: Vec<Line<'static>> = view
+    let lines: Vec<Line<'static>> = view
         .state
         .plan()
         .map(|p| p.summary_lines(norte_i18n::active()))
@@ -5380,7 +5380,7 @@ fn sync_summary(view: &crate::app::SyncView, theme: &TuiTheme) -> Paragraph<'sta
     // Envuelto y NO recortado a lo ancho: la primera línea es lo que el
     // deshacer devuelve y la segunda de qué papelera se habla. Cortarlas deja
     // al lector aprobando con media frase.
-    Paragraph::new(lineas).wrap(ratatui::widgets::Wrap { trim: false })
+    Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false })
 }
 
 /// Una fila del panel: las tres marcas, la ruta y el tamaño.
@@ -5391,7 +5391,7 @@ fn sync_summary(view: &crate::app::SyncView, theme: &TuiTheme) -> Paragraph<'sta
 fn sync_step_item(
     step: &norte_proto::methods::SyncStep,
     view: &crate::app::SyncView,
-    ancho: usize,
+    width: usize,
     theme: &TuiTheme,
 ) -> ListItem<'static> {
     // Las DOS reinterpretaciones, de una pieza: `render_step` lee cada ruta
@@ -5415,7 +5415,7 @@ fn sync_step_item(
     );
     // Por CELDAS y no por `char`s: un ancla o un tamaño con caracteres anchos
     // presupuestaría de menos y la fila desbordaría el marco (#79).
-    let ruta_w = ancho
+    let ruta_w = width
         .saturating_sub(marcas.width() + ancla.width() + tam.width() + 2)
         .max(1);
     // La ortografía del DESTINO cuando la hay (#152): la escritura cae sobre
@@ -5620,7 +5620,7 @@ fn sync_status_line(view: &crate::app::SyncView) -> String {
 /// hostil dentro de una pestaña es tan hostil como dentro de un listado.
 pub struct TabStrip {
     /// Título de cada pestaña, en orden.
-    pub titulos: Vec<String>,
+    pub titles: Vec<String>,
     /// Cuál está activa.
     pub activa: usize,
 }
@@ -5653,11 +5653,11 @@ pub struct MenuZone {
 /// barra de pestañas: medirlo dos veces es cómo un click abre el menú de al
 /// lado.
 struct MenuGeom {
-    /// `(etiqueta, x0, x1)` de cada título.
+    /// `(label, x0, x1)` de cada título.
     titles: Vec<(String, u16, u16)>,
     /// La caja del desplegable.
     drop: Rect,
-    /// `(etiqueta, chord)` de cada elemento del menú abierto.
+    /// `(label, chord)` de cada elemento del menú abierto.
     items: Vec<(String, String)>,
 }
 
@@ -5673,10 +5673,10 @@ fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
     let mut titles = Vec::new();
     let mut x = area.x;
     for m in norte_frontend::menu::MENUS {
-        let etiqueta = format!(" {} ", norte_i18n::t(m.title));
-        let w = u16::try_from(UnicodeWidthStr::width(etiqueta.as_str())).unwrap_or(0);
+        let label = format!(" {} ", norte_i18n::t(m.title));
+        let w = u16::try_from(UnicodeWidthStr::width(label.as_str())).unwrap_or(0);
         let x1 = x.saturating_add(w).saturating_sub(1);
-        titles.push((etiqueta, x, x1));
+        titles.push((label, x, x1));
         x = x.saturating_add(w);
     }
     let m = norte_frontend::menu::MENUS.get(st.menu())?;
@@ -5688,13 +5688,13 @@ fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
             // `help-cmd-*`: esa es una descripción, y usarla hacía el
             // desplegable de setenta columnas y tapaba los dos paneles. Lo
             // destapó pilotar la TUI en tmux, no la suite.
-            let etiqueta = norte_i18n::t(&format!("menu-item-{}", id.replace('.', "-")));
+            let label = norte_i18n::t(&format!("menu-item-{}", id.replace('.', "-")));
             let chord = app
                 .palette_rows
                 .iter()
                 .find(|r| r.key == *id)
                 .map_or_else(|| "—".to_owned(), |r| r.chord.clone());
-            (etiqueta, chord)
+            (label, chord)
         })
         .collect();
     // Ancho: la etiqueta más larga, su tecla, dos bordes y el hueco entre
@@ -5778,13 +5778,13 @@ fn draw_menu(frame: &mut Frame<'_>, app: &App) {
         .titles
         .iter()
         .enumerate()
-        .map(|(i, (etiqueta, _, _))| {
+        .map(|(i, (label, _, _))| {
             let estilo = if i == st.menu() {
                 app.theme.role(Role::Selection)
             } else {
                 app.theme.role(Role::Title)
             };
-            ratatui::text::Span::styled(etiqueta.clone(), estilo)
+            ratatui::text::Span::styled(label.clone(), estilo)
         })
         .collect();
     frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), barra);
@@ -5797,25 +5797,25 @@ fn draw_menu(frame: &mut Frame<'_>, app: &App) {
             .border_style(app.theme.role(Role::BorderFocus)),
         g.drop,
     );
-    let ancho = usize::from(interior.width);
-    let lineas: Vec<ratatui::text::Line<'static>> = g
+    let width = usize::from(interior.width);
+    let lines: Vec<ratatui::text::Line<'static>> = g
         .items
         .iter()
         .enumerate()
-        .map(|(i, (etiqueta, chord))| {
-            let hueco = ancho
-                .saturating_sub(UnicodeWidthStr::width(etiqueta.as_str()))
+        .map(|(i, (label, chord))| {
+            let hueco = width
+                .saturating_sub(UnicodeWidthStr::width(label.as_str()))
                 .saturating_sub(UnicodeWidthStr::width(chord.as_str()));
-            let texto = format!("{etiqueta}{}{chord}", " ".repeat(hueco));
+            let text = format!("{label}{}{chord}", " ".repeat(hueco));
             let estilo = if i == st.item() {
                 app.theme.role(Role::Selection)
             } else {
                 app.theme.role(Role::Regular)
             };
-            ratatui::text::Line::styled(texto, estilo)
+            ratatui::text::Line::styled(text, estilo)
         })
         .collect();
-    frame.render_widget(Paragraph::new(lineas), interior);
+    frame.render_widget(Paragraph::new(lines), interior);
 }
 
 /// Lo que se puede pulsar en una barra de pestañas.
@@ -5857,7 +5857,7 @@ const TAB_CLOSE: &str = "[x]";
 /// Los trozos de la barra, cada uno con su ancho y qué hace pulsarlo.
 fn tab_pieces(t: &TabStrip) -> Vec<(String, TabAction)> {
     let mut v: Vec<(String, TabAction)> = t
-        .titulos
+        .titles
         .iter()
         .enumerate()
         .map(|(i, titulo)| (format!(" {titulo} "), TabAction::Goto(i)))
@@ -5883,8 +5883,8 @@ pub fn tab_zones(app: &App, area: Rect) -> Vec<TabZone> {
         let row = rect.y.saturating_add(1);
         let mut x = rect.x.saturating_add(1);
         let tope = rect.x.saturating_add(rect.width).saturating_sub(1);
-        for (texto, action) in tab_pieces(&t) {
-            let w = u16::try_from(UnicodeWidthStr::width(texto.as_str())).unwrap_or(0);
+        for (text, action) in tab_pieces(&t) {
+            let w = u16::try_from(UnicodeWidthStr::width(text.as_str())).unwrap_or(0);
             if w == 0 || x >= tope {
                 break;
             }
@@ -5942,13 +5942,13 @@ fn tab_strip_line<'a>(t: &TabStrip, theme: &TuiTheme) -> ratatui::text::Line<'a>
     // su cuenta, un click resolvería a la pestaña de al lado.
     let spans = tab_pieces(t)
         .into_iter()
-        .map(|(texto, action)| {
+        .map(|(text, action)| {
             let estilo = if action == TabAction::Goto(t.activa) {
                 theme.role(Role::Selection)
             } else {
                 ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)
             };
-            ratatui::text::Span::styled(texto, estilo)
+            ratatui::text::Span::styled(text, estilo)
         })
         .collect::<Vec<_>>();
     ratatui::text::Line::from(spans)
@@ -6128,19 +6128,19 @@ fn entry_item<'a>(
     // #57: con reinterpretación activa, los nombres no-UTF8 se decodifican
     // con el encoding elegido (display-only; el badge hostil se conserva —
     // el texto pintado difiere de los bytes reales).
-    let (texto, hostil) = norte_frontend::display_name_with(name, reinterpret);
+    let (text, hostile) = norte_frontend::display_name_with(name, reinterpret);
     let kind_glyph = match entry.kind {
         EntryKind::Dir => "/",
         EntryKind::Symlink => "@",
         EntryKind::File | EntryKind::Other => " ",
     };
     let badge = Span::styled(
-        if hostil { HOSTILE_BADGE } else { " " },
+        if hostile { HOSTILE_BADGE } else { " " },
         theme.role(Role::HostileBadge),
     );
     // Color por tipo/extensión de la entrada (ADR 0020 D2).
     let body = Span::styled(
-        format!("{kind_glyph}{texto}"),
+        format!("{kind_glyph}{text}"),
         theme.entry(name, entry.kind),
     );
     // Canalón de marca (#103): señal TEXTUAL, jamás solo color — el fallback
@@ -6252,7 +6252,7 @@ fn entry_item<'a>(
             } else {
                 cell
             };
-            let texto = match style.align {
+            let text = match style.align {
                 norte_frontend::columns::Align::Right => {
                     let pad = w.saturating_sub(recortada.width());
                     format!("{}{recortada}", " ".repeat(pad))
@@ -6263,7 +6263,7 @@ fn entry_item<'a>(
                 }
             };
             spans.push(Span::styled(
-                texto,
+                text,
                 ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
             ));
         }
@@ -6701,8 +6701,8 @@ mod ellipsis_tests {
             .into_iter()
             .find(|n| n.id == "nfd_e_acute")
             .expect("fixture del corpus");
-        let texto = String::from_utf8(fixture.bytes).expect("nfd_e_acute es UTF-8 válido");
-        let (base, combining) = texto.split_at(1); // "e" + "\u{0301}"
+        let text = String::from_utf8(fixture.bytes).expect("nfd_e_acute es UTF-8 válido");
+        let (base, combining) = text.split_at(1); // "e" + "\u{0301}"
         let flood: String = std::iter::once(base)
             .chain(std::iter::repeat_n(combining, 100_000))
             .collect();
@@ -6834,7 +6834,7 @@ mod ai_rename_plan_modal_tests {
                 ("limpio.txt".to_owned(), name.clone()),
             ];
             for (from, to) in casos {
-                let hostil = display_name(from.as_bytes()).1 || display_name(to.as_bytes()).1;
+                let hostile = display_name(from.as_bytes()).1 || display_name(to.as_bytes()).1;
                 let (_, body) = ai_rename_plan_modal_text(
                     &dir(),
                     &[entry(&from, &to)],
@@ -6851,7 +6851,7 @@ mod ai_rename_plan_modal_tests {
                     "corpus {}: un hazard sobrevivió al render: {body:?}",
                     n.id
                 );
-                if hostil {
+                if hostile {
                     assert!(
                         body.contains(HOSTILE_BADGE),
                         "corpus {}: enmascarado SIN badge: {body:?}",
@@ -7262,7 +7262,7 @@ mod semantic_hits_modal_tests {
             let path = VPath::parse("mem:///d")
                 .expect("wire válido")
                 .join(Segment::new(n.bytes.clone()).expect("segmento del corpus"));
-            let hostil = norte_frontend::path_display(&path).1;
+            let hostile = norte_frontend::path_display(&path).1;
             let (_, body) = semantic_hits_modal_text(
                 &[hit(path, 0.5)],
                 0,
@@ -7278,7 +7278,7 @@ mod semantic_hits_modal_tests {
                 "corpus {}: un hazard sobrevivió al render: {body:?}",
                 n.id
             );
-            if hostil {
+            if hostile {
                 assert!(
                     body.contains(HOSTILE_BADGE),
                     "corpus {}: enmascarado SIN badge: {body:?}",
@@ -7682,11 +7682,11 @@ mod plugin_description_line_tests {
         let p = sample_plugin(Some(&"a".repeat(50_000)));
         let line =
             plugin_description_line(&p, &TuiTheme::default(), 10_000).expect("hay description");
-        let texto = line_text(&line);
+        let text = line_text(&line);
         assert_eq!(
-            texto.chars().filter(|&c| c == 'a').count(),
+            text.chars().filter(|&c| c == 'a').count(),
             crate::app::PLUGIN_DESCRIPTION_WIRE_CAP,
-            "el draw procesó más de PLUGIN_DESCRIPTION_WIRE_CAP chars del original: {texto:?}"
+            "el draw procesó más de PLUGIN_DESCRIPTION_WIRE_CAP chars del original: {text:?}"
         );
     }
 
@@ -7698,9 +7698,9 @@ mod plugin_description_line_tests {
         let p = sample_plugin(Some("abc\u{202E}gpj.exe"));
         let line =
             plugin_description_line(&p, &TuiTheme::default(), 10_000).expect("hay description");
-        let texto = line_text(&line);
-        assert!(!texto.contains('\u{202E}'));
-        assert!(texto.contains('\u{FFFD}'));
+        let text = line_text(&line);
+        assert!(!text.contains('\u{202E}'));
+        assert!(text.contains('\u{FFFD}'));
     }
 }
 
@@ -7838,8 +7838,8 @@ mod clamp_spans_tests {
     use ratatui::text::Span;
     use unicode_width::UnicodeWidthStr as _;
 
-    fn corta(texto: &str, max: usize) -> String {
-        clamp_spans(vec![Span::raw(texto.to_owned())], max)
+    fn truncate(text: &str, max: usize) -> String {
+        clamp_spans(vec![Span::raw(text.to_owned())], max)
             .into_iter()
             .map(|s| s.content.into_owned())
             .collect()
@@ -7848,11 +7848,11 @@ mod clamp_spans_tests {
     /// Lo que cabe entero pasa entero, y lo que no se corta por CELDAS.
     #[test]
     fn recorta_por_celdas_y_no_por_bytes() {
-        assert_eq!(corta("abcdef", 10), "abcdef");
-        assert_eq!(corta("abcdef", 3), "abc");
+        assert_eq!(truncate("abcdef", 10), "abcdef");
+        assert_eq!(truncate("abcdef", 3), "abc");
         // CJK: dos celdas por carácter, así que en tres celdas cabe uno.
-        assert_eq!(corta("日本語", 3), "日");
-        assert!(corta("日本語", 3).width() <= 3);
+        assert_eq!(truncate("日本語", 3), "日");
+        assert!(truncate("日本語", 3).width() <= 3);
     }
 
     /// Un juntador mide CERO, así que cabía siempre y el trozo acababa en él:
@@ -7862,7 +7862,7 @@ mod clamp_spans_tests {
     fn no_termina_en_un_juntador() {
         let familia = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
         for max in 0..=8 {
-            let salida = corta(familia, max);
+            let salida = truncate(familia, max);
             assert!(
                 !salida.ends_with('\u{200D}'),
                 "a {max} celdas quedó un ZWJ al final: {salida:?}"
@@ -7873,8 +7873,8 @@ mod clamp_spans_tests {
     /// Un `max` de cero no pinta nada, y nunca pánico.
     #[test]
     fn cero_celdas_no_pinta_nada() {
-        assert_eq!(corta("hola", 0), "");
-        assert_eq!(corta("", 5), "");
+        assert_eq!(truncate("hola", 0), "");
+        assert_eq!(truncate("", 5), "");
     }
 
     /// Los spans que caben se conservan como SPANS, con su estilo: el

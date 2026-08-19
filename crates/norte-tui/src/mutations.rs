@@ -97,7 +97,7 @@ pub async fn on_dialog_key(
             }
         }
         DialogOutcome::Confirmed => {
-            if let Some(cd) = confirma_el_modal(app, backend, events, modal).await {
+            if let Some(cd) = confirm_modal(app, backend, events, modal).await {
                 return cd;
             }
         }
@@ -128,7 +128,7 @@ pub async fn on_dialog_key(
 /// El `match` sigue siendo EXHAUSTIVO a propósito: nombrar los modales que no
 /// confirman nada es lo que hace que añadir uno nuevo sea un error de
 /// compilación en vez de un Enter que hace algo a escondidas.
-pub async fn confirma_el_modal(
+pub async fn confirm_modal(
     app: &mut App,
     backend: &Backend,
     events: &mut EventStream,
@@ -298,7 +298,7 @@ pub async fn submit_deletes(app: &mut App, backend: &Backend, items: &[VPath], p
 ///
 /// El total no vuelve por aquí: llega en el progreso terminal de la Task, que
 /// es lo que `on_tick` ya está mirando para todas las demás.
-pub async fn lanza_recuento(
+pub async fn launch_size_count(
     app: &mut App,
     backend: &Backend,
     paths: Vec<VPath>,
@@ -330,11 +330,11 @@ pub async fn lanza_recuento(
 /// interior de un archivo como origen, así que desempaquetar es la copia que
 /// el usuario podría haber hecho a mano, con el journal, el undo, la política
 /// de colisiones y la cancelación que la copia ya tiene.
-pub async fn desempaqueta(app: &mut App, backend: &Backend) {
-    let Some(entrada) = app.focused().selected().cloned() else {
+pub async fn unpack(app: &mut App, backend: &Backend) {
+    let Some(entry) = app.focused().selected().cloned() else {
         return;
     };
-    let Some(raiz) = crate::nav::archive_root_for(&entrada) else {
+    let Some(raiz) = crate::nav::archive_root_for(&entry) else {
         app.message = Some(t("msg-unpack-not-archive"));
         return;
     };
@@ -365,17 +365,17 @@ pub async fn desempaqueta(app: &mut App, backend: &Backend) {
 }
 
 /// `pane.test-archive` (#132): comprueba el contenedor bajo el cursor.
-pub async fn comprueba_archivo(app: &mut App, backend: &Backend) {
-    let Some(entrada) = app.focused().selected().cloned() else {
+pub async fn test_archive(app: &mut App, backend: &Backend) {
+    let Some(entry) = app.focused().selected().cloned() else {
         return;
     };
-    if crate::nav::archive_root_for(&entrada).is_none() {
+    if crate::nav::archive_root_for(&entry).is_none() {
         app.message = Some(t("msg-unpack-not-archive"));
         return;
     }
     match backend
         .test_archive(norte_proto::methods::ArchiveTestParams {
-            path: entrada.path.clone(),
+            path: entry.path.clone(),
         })
         .await
     {
@@ -389,11 +389,11 @@ pub async fn comprueba_archivo(app: &mut App, backend: &Backend) {
 
 /// `pane.combine-files` (#132): junta los trozos a partir del `.001` bajo el
 /// cursor.
-pub async fn junta_trozos(app: &mut App, backend: &Backend) {
-    let Some(entrada) = app.focused().selected().cloned() else {
+pub async fn combine_pieces(app: &mut App, backend: &Backend) {
+    let Some(entry) = app.focused().selected().cloned() else {
         return;
     };
-    let nombre = entrada
+    let nombre = entry
         .path
         .file_name()
         .map(|s| s.as_bytes().to_vec())
@@ -416,7 +416,7 @@ pub async fn junta_trozos(app: &mut App, backend: &Backend) {
     let destino = app.focused().dir().join(seg);
     match backend
         .combine_files(norte_proto::methods::FileCombineParams {
-            first: entrada.path,
+            first: entry.path,
             dest: destino,
         })
         .await

@@ -164,10 +164,10 @@ fn omitidas_del_contenedor_se_ven_en_la_status_bar() {
     app.panes[0].begin_listing(dir.clone(), Vec::new(), false, Some(3));
     let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let con_badge = terminal.backend().to_string();
+    let with_badge = terminal.backend().to_string();
     assert!(
-        con_badge.contains('3') && con_badge.contains("omit"),
-        "badge de omitidas visible: {con_badge}"
+        with_badge.contains('3') && with_badge.contains("omit"),
+        "badge de omitidas visible: {with_badge}"
     );
 
     // Some(0) = contenedor indexado SIN omisiones: nada que señalizar.
@@ -787,10 +787,10 @@ fn el_modal_de_un_lote_pinta_una_ruta_por_linea_y_resume_el_resto() {
         .map(|i| format!("f{i:02}"))
         .collect();
     for nombre in &nombres {
-        let lineas = pintado.lines().filter(|l| l.contains(nombre)).count();
+        let lines = pintado.lines().filter(|l| l.contains(nombre)).count();
         assert_eq!(
-            lineas, 1,
-            "{nombre} va en UNA línea, no {lineas}: {pintado}"
+            lines, 1,
+            "{nombre} va en UNA línea, no {lines}: {pintado}"
         );
     }
     for linea in pintado.lines() {

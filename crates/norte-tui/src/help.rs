@@ -1036,7 +1036,7 @@ mod tests {
     }
 
     /// Un mapa de títulos con la forma que sale de `plugin.list`.
-    fn titulos(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    fn titles(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -1046,7 +1046,7 @@ mod tests {
     fn resolver_con_titulos(pairs: &[(&str, &str)]) -> TuiChords {
         resolver_con(facts_normales()).with_plugins(
             ["org.norte.demo".to_owned()].into_iter().collect(),
-            titulos(pairs),
+            titles(pairs),
         )
     }
 
@@ -1103,15 +1103,15 @@ mod tests {
     #[test]
     fn una_clave_de_plugin_hostil_no_se_pinta_cruda() {
         let r = resolver_con_titulos(&[]);
-        let hostil = "plugin:acme.ftp:\u{202E}x\u{200B}y";
-        let pintado = r.label(hostil);
+        let hostile = "plugin:acme.ftp:\u{202E}x\u{200B}y";
+        let pintado = r.label(hostile);
         assert!(
             !pintado.chars().any(norte_encoding::is_terminal_hazard),
             "sin peligros de terminal: {pintado:?}"
         );
         assert!(pintado.contains('\u{FFFD}'), "anti-vacuidad: {pintado:?}");
         assert_eq!(
-            render_command(hostil, &r),
+            render_command(hostile, &r),
             CommandText::Name(pintado),
             "y es lo que la cadena de `norte-help` acaba nombrando"
         );
@@ -1127,10 +1127,10 @@ mod tests {
     /// este resolver entrega sus cadenas directas al pintor.
     #[test]
     fn un_titulo_hostil_llega_enmascarado_y_acotado() {
-        let hostil = format!("Gre\u{202E}et\u{200B}{}", "x".repeat(5_000));
+        let hostile = format!("Gre\u{202E}et\u{200B}{}", "x".repeat(5_000));
         let r = resolver_con_titulos(&[(
             "plugin:org.norte.demo:greet",
-            &crate::app::plugin_label(&hostil),
+            &crate::app::plugin_label(&hostile),
         )]);
         let label = r.label("plugin:org.norte.demo:greet");
         assert!(

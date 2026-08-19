@@ -72,11 +72,11 @@ fn recargar_como_cicla_y_marca_forzado() {
 #[test]
 fn scroll_con_topes_y_truncado_visible() {
     use std::fmt::Write;
-    let mut texto = String::new();
+    let mut text = String::new();
     for i in 0..50 {
-        let _ = writeln!(texto, "línea {i}");
+        let _ = writeln!(text, "línea {i}");
     }
-    let mut v = Viewer::new(vp(), texto.into_bytes(), true);
+    let mut v = Viewer::new(vp(), text.into_bytes(), true);
     assert!(status(&v).contains("[cabecera]"), "{}", status(&v));
     assert!(
         status(&v).contains("LF"),

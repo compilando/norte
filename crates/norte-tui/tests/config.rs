@@ -249,13 +249,13 @@ fn el_frontend_de_terminal_loguea_al_fichero_y_no_a_la_pantalla() {
 
     // Y la otra mitad: el aviso ESTÁ, en el fichero.
     let logs = estado.path().join("norte").join("logs");
-    let texto: String = std::fs::read_dir(&logs)
+    let text: String = std::fs::read_dir(&logs)
         .unwrap_or_else(|e| panic!("no hay directorio de logs en {logs:?}: {e}"))
         .flatten()
         .map(|f| std::fs::read_to_string(f.path()).unwrap_or_default())
         .collect();
     assert!(
-        texto.contains("proveedor de IA no disponible"),
-        "el aviso tiene que estar en el log: {texto}"
+        text.contains("proveedor de IA no disponible"),
+        "el aviso tiene que estar en el log: {text}"
     );
 }

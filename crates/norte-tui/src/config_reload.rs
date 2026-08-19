@@ -144,7 +144,7 @@ pub async fn reload_config(
                 }
                 // S3: el overlay de ajustes, si está abierto, se REFRESCA
                 // (no se cierra como `help`/`palette` arriba) — sus filas son
-                // solo `(nombre, descripción, valor)` leídas de `cfg`, seguras
+                // solo `(nombre, descripción, value)` leídas de `cfg`, seguras
                 // de recomputar sin tirar el filtro/edición en curso del
                 // usuario (`Settings::refresh`).
                 if let Some(settings) = &mut app.settings {

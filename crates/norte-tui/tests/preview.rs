@@ -19,7 +19,7 @@ fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire válido")
 }
 
-fn entrada(dir: &VPath, nombre: &str, kind: EntryKind) -> Entry {
+fn entry(dir: &VPath, nombre: &str, kind: EntryKind) -> Entry {
     Entry {
         attrs: std::collections::BTreeMap::new(),
         path: dir
@@ -36,17 +36,17 @@ fn entrada(dir: &VPath, nombre: &str, kind: EntryKind) -> Entry {
 /// `Pane::new` ORDENA, y el orden pone los directorios primero: el cursor
 /// arranca sobre `carpeta`, no sobre el fichero. Los tests lo colocan a mano.
 fn app_de_prueba() -> App {
-    let izq = vp("file:///izq");
-    let der = vp("file:///der");
+    let left = vp("file:///izq");
+    let right = vp("file:///der");
     App::new(
         Pane::new(
-            izq.clone(),
+            left.clone(),
             vec![
-                entrada(&izq, "uno.txt", EntryKind::File),
-                entrada(&izq, "carpeta", EntryKind::Dir),
+                entry(&left, "uno.txt", EntryKind::File),
+                entry(&left, "carpeta", EntryKind::Dir),
             ],
         ),
-        Pane::new(der.clone(), vec![entrada(&der, "dos.txt", EntryKind::File)]),
+        Pane::new(right.clone(), vec![entry(&right, "dos.txt", EntryKind::File)]),
     )
 }
 
@@ -235,11 +235,11 @@ fn una_lectura_denegada_pinta_el_motivo_y_no_abre_modal() {
     terminal
         .draw(|f| norte_tui::ui::draw(f, &app))
         .expect("draw");
-    let texto = terminal.backend().to_string();
+    let text = terminal.backend().to_string();
     let motivo = norte_i18n::t_in(norte_i18n::Lang::Es, "err-permission-denied");
     assert!(
-        texto.contains(&motivo),
-        "el motivo se lee dentro del hueco:\n{texto}"
+        text.contains(&motivo),
+        "el motivo se lee dentro del hueco:\n{text}"
     );
 }
 

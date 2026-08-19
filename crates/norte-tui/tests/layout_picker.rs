@@ -46,7 +46,7 @@ fn aplicar(app: &mut App, nombre: &str, dir: &std::path::Path) -> bool {
 
 /// Lo que el binario le pasa al selector: cada fichero del directorio, ya
 /// leído.
-fn del_usuario(dir: &std::path::Path) -> Vec<UserLayout> {
+fn user(dir: &std::path::Path) -> Vec<UserLayout> {
     norte_frontend::layout::config::list(dir)
         .into_iter()
         .map(|name| UserLayout {
@@ -56,12 +56,12 @@ fn del_usuario(dir: &std::path::Path) -> Vec<UserLayout> {
         .collect()
 }
 
-fn escribir(dir: &std::path::Path, nombre: &str, arbol: &Node) {
+fn escribir(dir: &std::path::Path, nombre: &str, tree: &Node) {
     let layouts = dir.join("layouts");
     std::fs::create_dir_all(&layouts).expect("mkdir");
     std::fs::write(
         layouts.join(format!("{nombre}.toml")),
-        to_toml(arbol).expect("toml"),
+        to_toml(tree).expect("toml"),
     )
     .expect("write");
 }
@@ -154,9 +154,9 @@ fn un_nombre_desconocido_no_cambia_el_arbol() {
 fn cambiar_de_layout_conserva_los_listados_que_ya_habia() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut app = app_de_prueba();
-    let izq = app.panes[0].dir().clone();
+    let left = app.panes[0].dir().clone();
     assert!(aplicar(&mut app, "full", dir.path()));
-    assert_eq!(app.panes[0].dir(), &izq, "el listado no se reinició");
+    assert_eq!(app.panes[0].dir(), &left, "el listado no se reinició");
 }
 
 /// El selector: cinco de fábrica más lo del directorio, y el aviso de que el
@@ -165,7 +165,7 @@ fn cambiar_de_layout_conserva_los_listados_que_ya_habia() {
 fn el_selector_lista_las_de_fabrica_y_las_del_usuario() {
     let dir = tempfile::tempdir().expect("tmp");
     escribir(dir.path(), "mio", &arbol_mio());
-    let mios = del_usuario(dir.path());
+    let mios = user(dir.path());
     assert_eq!(
         mios.iter().map(|u| u.name.clone()).collect::<Vec<_>>(),
         vec![OsString::from("mio")]
@@ -205,12 +205,12 @@ fn confirmar_aplica_y_cancelar_no_toca_nada() {
     let mut app = app_de_prueba();
     let antes = app.layout.clone();
 
-    app.open_layout_picker(del_usuario(dir.path()));
+    app.open_layout_picker(user(dir.path()));
     app.layout_picker_input(PickerAction::Cancel);
     assert!(app.layout_picker.is_none(), "cerrado");
     assert_eq!(app.layout, antes, "cancelar no aplica");
 
-    app.open_layout_picker(del_usuario(dir.path()));
+    app.open_layout_picker(user(dir.path()));
     app.layout_picker_input(PickerAction::Down); // simple
     app.layout_picker_input(PickerAction::Confirm);
     assert!(app.layout_picker.is_none(), "confirmar cierra");

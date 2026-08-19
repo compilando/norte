@@ -59,7 +59,7 @@ use crate::screens::{
     on_theme_picker_key, on_tree_key, pane_attr_ids, refresh_places_drives, run_plugin_command,
 };
 use crate::session_push::{
-    JOURNAL_OCIOSO, SessionPush, captura_session, drena_avisos, push_session,
+    JOURNAL_IDLE, SessionPush, capture_session, drain_notices, push_session,
 };
 use crate::shortcuts_editor::{Maps, on_shortcuts_key};
 use crate::suspend::run_suspended;
@@ -255,7 +255,7 @@ pub async fn run(
     // tareas mira un `watch` en memoria y esto acaba en un fichero.
     let mut session_tick = tokio::time::interval(std::time::Duration::from_secs(1));
     session_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut session_push = SessionPush::arranca(backend, app.session.revision);
+    let mut session_push = SessionPush::start(backend, app.session.revision);
     // Debounce del hot-reload SIN bloquear el loop (revisión fase 6): cada
     // evento de config empuja el deadline; el reload corre cuando vence.
     let mut reload_at: Option<tokio::time::Instant> = None;
@@ -506,11 +506,11 @@ pub async fn run(
             // frame y no en el siguiente.
             fetch_plugin_page(backend, app).await;
             let size = terminal.size().map_err(RunError::Terminal)?;
-            let (ancho, alto) = ui::help_body_size(
+            let (width, alto) = ui::help_body_size(
                 ratatui::layout::Rect::new(0, 0, size.width, size.height),
                 lang,
             );
-            app.refresh_help(ancho, alto);
+            app.refresh_help(width, alto);
         }
         // La ventana de cada pane se reconcilia ANTES de pintar (#124 + el
         // scroll pegajoso): el cursor ya está donde lo dejó la tecla, así que
@@ -538,11 +538,11 @@ pub async fn run(
             // «no guardes lo que estoy decidiendo», y aquí ya no se está
             // decidiendo nada — se está saliendo, y lo que hay que guardar es
             // dónde se estaba.
-            drena_avisos(app, &mut session_push);
-            let ultima = (!app.session.detached)
-                .then(|| captura_session(app, &mut session_push))
+            drain_notices(app, &mut session_push);
+            let last = (!app.session.detached)
+                .then(|| capture_session(app, &mut session_push))
                 .flatten();
-            session_push.cierra(ultima).await;
+            session_push.close(last).await;
             return Ok(());
         }
         // #124: el alto REAL del viewport vuelve al modelo tras cada frame —
@@ -593,11 +593,11 @@ pub async fn run(
                     // Un directorio no se lee: se dice lo que es. Y lo que
                     // hubiera en vuelo deja de importar.
                     preview_fetch.remove(slot);
-                    let texto = t(clave);
+                    let text = t(clave);
                     if let Some(p) = app.panes.preview_mut(slot)
-                        && (p.note().is_none_or(|n| n != texto) || p.shown().is_some())
+                        && (p.note().is_none_or(|n| n != text) || p.shown().is_some())
                     {
-                        p.say(None, texto);
+                        p.say(None, text);
                     }
                 }
                 None => {}
@@ -606,7 +606,7 @@ pub async fn run(
             // directorio de diez mil entradas o un remoto lento no pueden
             // trabar el bucle, y la siguiente vuelta pide la siguiente.
             if let Some(dir) = app.tree().and_then(crate::tree::Tree::wants) {
-                let hijos = match backend.list(&dir).await {
+                let child_dirs = match backend.list(&dir).await {
                     Ok(mut entries) => {
                         // El MISMO orden que el listado de al lado, con el
                         // mismo comparador: dos columnas que enseñan lo mismo
@@ -625,7 +625,7 @@ pub async fn run(
                     Err(_) => Vec::new(),
                 };
                 if let Some(t) = app.tree_mut() {
-                    t.insert_children(dir, hijos);
+                    t.insert_children(dir, child_dirs);
                 }
             }
             // La hoja de atributos NO pide nada: lo que enseña ya vino en el
@@ -687,7 +687,7 @@ pub async fn run(
                         // siguiente `resolve` chocando contra nuestro propio
                         // lock — un aviso de «sesión sin registro» que nos
                         // habríamos inventado nosotros.
-                        backend.release_journal_if_idle(JOURNAL_OCIOSO).await;
+                        backend.release_journal_if_idle(JOURNAL_IDLE).await;
                     }
                     _ = tick.tick() => {
                         // Mutación terminada → refresh de panes; el ritual completo

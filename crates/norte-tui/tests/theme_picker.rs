@@ -29,10 +29,10 @@ fn abrir_lista_los_presets_y_previsualiza() {
     // El popup se pinta (el título y los nombres salen en el buffer).
     let mut t = Terminal::new(TestBackend::new(60, 16)).expect("term");
     t.draw(|f| ui::draw(f, &app)).expect("draw");
-    let texto = t.backend().to_string();
+    let text = t.backend().to_string();
     assert!(
-        texto.contains("nord"),
-        "el popup no lista los temas: {texto}"
+        text.contains("nord"),
+        "el popup no lista los temas: {text}"
     );
 }
 

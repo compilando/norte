@@ -97,17 +97,17 @@ fn pintar(app: &mut App) -> Vec<String> {
 ///
 /// Compara contra el nombre de la entrada, no contra un literal: `Pane::new`
 /// ORDENA, así que `entries[13]` no es «f13».
-fn assert_fila(lineas: &[String], app: &App, row: u16, index: usize) {
-    let entrada = &app.panes[0].entries()[index];
+fn assert_fila(lines: &[String], app: &App, row: u16, index: usize) {
+    let entry = &app.panes[0].entries()[index];
     let nombre = String::from_utf8_lossy(
-        entrada
+        entry
             .path
             .file_name()
             .expect("una entrada de test tiene nombre")
             .as_bytes(),
     )
     .into_owned();
-    let pintada = &lineas[usize::from(row)];
+    let pintada = &lines[usize::from(row)];
     assert!(
         pintada.contains(&format!("{nombre} ")),
         "la fila {row} debería pintar `{nombre}` (índice {index}) y pinta: {pintada}"
@@ -142,23 +142,23 @@ fn el_layout_de_estos_tests_es_el_que_se_pinta() {
     // ESTE test con un mensaje claro, y no los seis siguientes con
     // aritmética confusa.
     let mut app = app_pintada(5);
-    let lineas = pintar(&mut app);
+    let lines = pintar(&mut app);
     let geom = app.mouse.geometry().expect("hay geometría");
-    let (izq, der) = (geom[0], geom[1]);
-    assert_eq!((izq.x, izq.y, izq.width, izq.height), (0, 0, 30, 11));
-    assert_eq!((der.x, der.y, der.width, der.height), (30, 0, 30, 11));
-    assert_eq!(izq.first_list_row, FILA0, "borde superior + cabecera");
-    assert_eq!(izq.list_rows, FILAS, "interior menos la cabecera");
-    assert_eq!(izq.offset, 0, "cursor en la primera: sin scroll");
+    let (left, right) = (geom[0], geom[1]);
+    assert_eq!((left.x, left.y, left.width, left.height), (0, 0, 30, 11));
+    assert_eq!((right.x, right.y, right.width, right.height), (30, 0, 30, 11));
+    assert_eq!(left.first_list_row, FILA0, "borde superior + cabecera");
+    assert_eq!(left.list_rows, FILAS, "interior menos la cabecera");
+    assert_eq!(left.offset, 0, "cursor en la primera: sin scroll");
     // Y lo que de verdad hay PINTADO en esas filas. El indicador de orden
     // (`▲`) en vez del rótulo de la columna: el rótulo está traducido y
     // estos tests no fijan idioma.
     assert!(
-        lineas[1].contains('▲'),
+        lines[1].contains('▲'),
         "fila 1 = cabecera de columnas: {}",
-        lineas[1]
+        lines[1]
     );
-    assert_fila(&lineas, &app, FILA0, 0);
+    assert_fila(&lines, &app, FILA0, 0);
 }
 
 #[test]
@@ -254,16 +254,16 @@ fn un_click_enfoca_ese_pane_y_mueve_el_cursor() {
 fn un_click_sobre_un_listado_desplazado_suma_el_scroll() {
     let mut app = app_pintada(40);
     app.panes[0].set_cursor(20);
-    let lineas = pintar(&mut app);
+    let lines = pintar(&mut app);
     let offset = app.mouse.geometry().expect("geometría")[0].offset;
     assert_eq!(offset, 21 - usize::from(FILAS), "el cursor va al borde");
     let hit = mouse::hit_test(&app, 5, FILA0).expect("dentro del pane");
     assert_eq!(hit.index, Some(offset), "la primera fila PINTADA");
     // Contra el buffer: la fila que se resuelve es la que se ve.
-    assert_fila(&lineas, &app, FILA0, offset);
+    assert_fila(&lines, &app, FILA0, offset);
     let hit = mouse::hit_test(&app, 5, FILA0 + FILAS - 1).expect("dentro del pane");
     assert_eq!(hit.index, Some(20), "la última pintada es el cursor");
-    assert_fila(&lineas, &app, FILA0 + FILAS - 1, 20);
+    assert_fila(&lines, &app, FILA0 + FILAS - 1, 20);
 }
 
 /// La rueda desplaza el listado BAJO EL PUNTERO y no toca el foco. Mirar un
@@ -397,10 +397,10 @@ fn un_arrastre_marca_lo_que_barre() {
 fn un_drop_abre_el_mismo_modal_que_la_tecla_de_copiar() {
     let mut app = app_pintada(10);
     // Dos marcas a mano (con dos, la puerta abre el confirm de lista).
-    for fila in [1, 2] {
+    for row in [1, 2] {
         let _ = mouse::handle(
             &mut app,
-            ev_con(ABAJO, 5, FILA0 + fila, KeyModifiers::CONTROL),
+            ev_con(ABAJO, 5, FILA0 + row, KeyModifiers::CONTROL),
         );
     }
     assert_eq!(app.panes[0].marks_len(), 2);
@@ -505,10 +505,10 @@ fn soltar_en_el_panel_de_origen_no_somete_nada() {
 #[test]
 fn un_arrastre_cancelado_restituye_las_marcas() {
     let mut app = app_pintada(10);
-    for fila in [5, 6] {
+    for row in [5, 6] {
         let _ = mouse::handle(
             &mut app,
-            ev_con(ABAJO, 5, FILA0 + fila, KeyModifiers::CONTROL),
+            ev_con(ABAJO, 5, FILA0 + row, KeyModifiers::CONTROL),
         );
     }
     let marcadas = |app: &App| -> Vec<bool> {
@@ -574,7 +574,7 @@ fn la_barra_anuncia_lo_que_haria_soltar_ahora() {
         pintar(&mut app).last().expect("barra de estado").contains(
             copia
                 .split_once("  ")
-                .map_or(copia.as_str(), |(cabeza, _)| cabeza)
+                .map_or(copia.as_str(), |(head, _)| head)
         ),
         "el aviso manda sobre la barra mientras dura el arrastre"
     );

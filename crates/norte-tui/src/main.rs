@@ -295,8 +295,8 @@ fn write_cd_file(app: &App, cd_file: Option<&std::path::Path>) {
         // gives the badge as a bool because a raw stderr line has no
         // styling to hang it on, so a hostile name is marked with a
         // leading `!` instead of colour.
-        let (texto, hostil) = norte_frontend::path_display(app.focused().dir());
-        let marcado = if hostil { format!("!{texto}") } else { texto };
+        let (text, hostile) = norte_frontend::path_display(app.focused().dir());
+        let marcado = if hostile { format!("!{text}") } else { text };
         eprintln!("{}", ta("msg-cd-not-local", &[("path", &marcado)]));
     }
 }

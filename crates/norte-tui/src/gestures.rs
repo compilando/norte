@@ -8,13 +8,13 @@
 //!
 //! Lo que une a estas funciones es una forma, no un tema: TODAS deciden y
 //! ninguna ejecuta. `resolve_opener` deja un `PendingOpen`, `submit_command_line`
-//! y `editar_lo_de_debajo` dejan un `PendingShell`, y `mirror_plan`/`pull_plan`
+//! y `edit_under_cursor` dejan un `PendingShell`, y `mirror_plan`/`pull_plan`
 //! devuelven un [`PaneMove`] en vez de navegar. El dueño de la terminal —el
 //! bucle de eventos— es quien lanza. Es lo que hace que la DECISIÓN se pueda
 //! probar sin un `Backend` ni un flujo de eventos, y esos son justo los tests
 //! que venían pegados a un binario.
 //!
-//! El rustdoc de [`shell_cwd`] estaba varado sobre `desconectar` en `main.rs`,
+//! El rustdoc de [`shell_cwd`] estaba varado sobre `disconnect` en `main.rs`,
 //! dos doc-comments seguidos delante de una sola función. Vuelve al suyo sin
 //! tocar una palabra.
 
@@ -232,7 +232,7 @@ pub fn submit_command_line(app: &mut App, cmd: &str) {
 ///
 /// En un panel LOCAL no hay nada que cerrar y se dice: una tecla que contesta
 /// «hecho» sobre algo que no ha hecho nada enseña a no fiarse del mensaje.
-pub async fn desconectar(app: &mut App, backend: &Backend) {
+pub async fn disconnect(app: &mut App, backend: &Backend) {
     let dir = app.focused().dir().clone();
     if norte_vfs_local::vpath_to_native(&dir).is_ok() {
         app.message = Some(t("msg-disconnect-local"));
@@ -274,14 +274,14 @@ pub async fn desconectar(app: &mut App, backend: &Backend) {
 /// la barra tal cual: no hay entrada bajo el cursor, es un directorio, o el pane
 /// es remoto (y entonces sale por [`shell_remote_message`], con la ubicación
 /// saneada).
-pub fn editar_lo_de_debajo(app: &App) -> Result<crate::app::PendingShell, String> {
-    let Some(entrada) = app.focused().selected() else {
+pub fn edit_under_cursor(app: &App) -> Result<crate::app::PendingShell, String> {
+    let Some(entry) = app.focused().selected() else {
         return Err(t("msg-edit-nothing"));
     };
-    if entrada.kind == norte_proto::EntryKind::Dir {
+    if entry.kind == norte_proto::EntryKind::Dir {
         return Err(t("msg-edit-not-a-file"));
     }
-    let Ok(native) = norte_vfs_local::vpath_to_native(&entrada.path) else {
+    let Ok(native) = norte_vfs_local::vpath_to_native(&entry.path) else {
         return Err(shell_remote_message(app));
     };
     // El cwd del hijo es el directorio que se está mirando, como con el shell:
@@ -323,10 +323,10 @@ pub fn shell_cwd(app: &App) -> Result<std::path::PathBuf, String> {
         return Err(shell_remote_message(app));
     };
     norte_frontend::shell::child_cwd(&native).ok_or_else(|| {
-        let (texto, hostil) = norte_frontend::path_display(app.focused().dir());
+        let (text, hostile) = norte_frontend::path_display(app.focused().dir());
         ta(
             "msg-shell-cwd-unsupported",
-            &[("path", &badged(&texto, hostil))],
+            &[("path", &badged(&text, hostile))],
         )
     })
 }
@@ -339,9 +339,9 @@ pub fn shell_cwd(app: &App) -> Result<std::path::PathBuf, String> {
 /// una línea) como el flash de la GUI cortan por la derecha sin marca — así
 /// que una ruta larga se lleva por delante justo la parte que explica por qué
 /// la tecla no hizo nada, y la tecla parece rota.
-fn badged(texto: &str, hostil: bool) -> String {
-    let corto = norte_frontend::middle_ellipsis(texto, SHELL_MSG_PATH_MAX);
-    if hostil {
+fn badged(text: &str, hostile: bool) -> String {
+    let corto = norte_frontend::middle_ellipsis(text, SHELL_MSG_PATH_MAX);
+    if hostile {
         format!("{} {corto}", crate::ui::HOSTILE_BADGE)
     } else {
         corto
@@ -360,8 +360,8 @@ const SHELL_MSG_PATH_MAX: usize = 48;
 /// demás que viene del disco.
 #[must_use]
 pub fn shell_remote_message(app: &App) -> String {
-    let (texto, hostil) = norte_frontend::path_display(app.focused().dir());
-    ta("msg-shell-remote", &[("path", &badged(&texto, hostil))])
+    let (text, hostile) = norte_frontend::path_display(app.focused().dir());
+    ta("msg-shell-remote", &[("path", &badged(&text, hostile))])
 }
 
 /// Where a pane gesture wants to send a pane.
@@ -527,10 +527,10 @@ mod pane_gestures_tests {
     /// (`Pane::new`) en vez de mover un pane existente: es el mismo molde que
     /// usan los demás módulos de test de este fichero y no hace falta ningún
     /// setter `#[cfg(test)]` nuevo.
-    fn app_en(izq: &str, der: &str) -> App {
+    fn app_en(left: &str, right: &str) -> App {
         App::new(
-            Pane::new(vp(izq), Vec::new()),
-            Pane::new(vp(der), Vec::new()),
+            Pane::new(vp(left), Vec::new()),
+            Pane::new(vp(right), Vec::new()),
         )
     }
 
@@ -806,18 +806,18 @@ mod pane_gestures_tests {
     /// que el lector intenta pararlo alimentaría el reintento siguiente.
     #[test]
     fn un_paso_del_rastro_que_no_aterriza_para_el_contador() {
-        for (etiqueta, outcome) in [
+        for (label, outcome) in [
             ("abandonado", Cd::Cancelled),
             ("no existe", Cd::Failed(Error::NotFound)),
             ("sin permiso", Cd::Failed(Error::PermissionDenied)),
         ] {
             assert!(
                 nav_stalled(Command::NavBack, &outcome),
-                "atrás {etiqueta} debe parar"
+                "atrás {label} debe parar"
             );
             assert!(
                 nav_stalled(Command::NavForward, &outcome),
-                "adelante {etiqueta} debe parar"
+                "adelante {label} debe parar"
             );
         }
     }
@@ -1315,7 +1315,7 @@ mod edit_tests {
     #[test]
     fn editar_la_nada_lo_dice() {
         let app = app_local();
-        assert!(editar_lo_de_debajo(&app).is_err());
+        assert!(edit_under_cursor(&app).is_err());
     }
 
     /// Una CARPETA no se edita: para entrar está `nav.enter`, y abrirle un
@@ -1335,7 +1335,7 @@ mod edit_tests {
             false,
             None,
         );
-        let err = editar_lo_de_debajo(&app).expect_err("una carpeta no");
+        let err = edit_under_cursor(&app).expect_err("una carpeta no");
         assert!(!err.is_empty());
     }
 
@@ -1360,7 +1360,7 @@ mod edit_tests {
             false,
             None,
         );
-        assert!(editar_lo_de_debajo(&app).is_err());
+        assert!(edit_under_cursor(&app).is_err());
     }
 
     /// Y sobre un fichero local sale el argv del editor con la ruta APARTE.
@@ -1379,7 +1379,7 @@ mod edit_tests {
             false,
             None,
         );
-        let pendiente = editar_lo_de_debajo(&app).expect("local y fichero");
+        let pendiente = edit_under_cursor(&app).expect("local y fichero");
         assert_eq!(
             pendiente.argv.len(),
             2,
