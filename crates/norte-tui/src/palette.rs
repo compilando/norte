@@ -60,6 +60,11 @@ mod tests {
 
     #[test]
     fn build_rows_una_fila_por_comando_con_chord_de_browse() {
+        // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
+        // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
+        // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
+        // los tests de render de este crate ya llevaba.
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
         let (browse, viewer) = orthodox_effs();
         let rows = build_rows(&browse, &viewer);
         assert_eq!(rows.len(), COMMANDS.len(), "una fila por comando, sin más");

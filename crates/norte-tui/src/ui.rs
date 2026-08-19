@@ -7738,6 +7738,11 @@ keymap = [
     /// the key does nothing instead of not finding the key at all.
     #[test]
     fn the_panel_paints_every_continuation_and_dims_the_unavailable_one() {
+        // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
+        // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
+        // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
+        // los tests de render de este crate ya llevaba.
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
         let theme = TuiTheme::default();
         let mut terminal = Terminal::new(TestBackend::new(60, 12)).expect("terminal de test");
         terminal
