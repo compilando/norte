@@ -1,8 +1,13 @@
 # Extraer `norte-tui/src/main.rs` — lo hecho, y el grafo real de dependencias
 
-> **Estado:** fase 1 completa y mergeable (13 commits en
-> `refactor/tui-main-extraction`). El resto está pendiente, con el orden ya
-> medido más abajo.
+> **Estado:** COMPLETO. Las siete tareas hechas, `just ci` verde (lint 9 s,
+> test 92 s, docs 12 s, check-gui 2 s, cov 164 s con exit 0), 892 tests de
+> `norte-tui` y 5.069 del workspace en verde. 26 commits en
+> `refactor/tui-main-extraction`, sin pushear.
+>
+> `main.rs`: **11.612 → 599 líneas de producción** y 5.543 → 915 de test inline.
+> Lo que queda es `main`, la terminal, los flags, los tres `anyhow::Result` que
+> la regla 6 clava en un binario, y siete módulos de test.
 >
 > **Fecha:** 2026-08-19.
 
@@ -265,29 +270,92 @@ escribir documentación nueva. Es la señal de que su documentación está varad
 unas líneas más arriba, encima de otra función. Mirar hacia arriba antes de
 escribir. Dos de los cuatro se encontraron exactamente así.
 
-## Lo que queda, en orden de dependencias
+## Las siete tareas, como salieron
 
-| # | módulo | prod aprox. | notas |
-| --- | --- | --- | --- |
-| ~~1~~ | ~~`screens/{help,settings,pickers,extensions,side_nav}.rs`~~ | 1.685 | **HECHA** (4 commits, 892/892). El estimado de ~1.700 dio en el clavo. Cuatro ficheros salieron en cuatro commits y `pickers`+`settings` en uno solo: parecían un ciclo y no lo eran —las dos referencias mutuas son menciones en comentarios, no llamadas—. `main.rs`: 6.583 → 5.001 de producción, 3.099 → 2.108 de test inline. |
-| 2 | `refresh.rs` | ~250 | `on_tick`, `refresh_panes`, `after_panes_refresh`. Lo necesitan cuatro de los `mod` de test diferidos. |
-| 3 | `gestures.rs` + `suspend.rs` | ~800 | Gestos de panel, línea de comandos, shell, openers y suspensión de terminal. Se lleva `suspend_tests`, `open_tests`, `pane_gestures_tests`, `edit_tests`. |
-| 4 | `config_reload.rs` | ~140 | `reload_config`, 12 parámetros. Sale del plan original (estaba mal agrupado con Lua). |
-| 5 | **estrechar `run` a error tipado** | — | **Commit propio, y es cambio de firma.** La regla 6 prohíbe `anyhow` en libs y `run` devuelve `anyhow::Result<()>`. El muro son CUATRO líneas: `terminal.size()` ×2, `terminal.draw()` y un `.context("evento de terminal")`. Se paga con un `thiserror` de dos variantes (`Io(std::io::Error)` + evento de terminal) y cuatro `?`. |
-| 6 | `dispatch.rs` | ~690 | La tabla comando→efecto ENTERA, sin partir: es un `match` plano de 109 brazos, y este repo ya argumentó por escrito contra trocear tablas planas (`norte-core/src/daemon/server.rs:2360-2364`). |
-| 7 | `event_loop.rs` | ~2.500 | `run`. Último. **Este plan no lo parte.** |
+| # | módulo | prod estimada | prod real | qué se aprendió |
+| --- | --- | --- | --- | --- |
+| 1 | `screens/{help,settings,pickers,extensions,side_nav}.rs` | ~1.700 | 1.685 | El estimado dio en el clavo. Cuatro commits; `pickers`+`settings` salieron juntos porque parecían un ciclo y no lo eran (las dos referencias mutuas son menciones en comentarios). |
+| 2 | `refresh.rs` | ~250 | 229 | Se llevó también `reap_search_run`, que el plan no había asignado: lo llama `after_panes_refresh`. Y los módulos de test que lo tenían anclado eran DOS, no cuatro. |
+| 3 | `gestures.rs` + `suspend.rs` | ~800 | 511 + 370 | La mitad más productiva: se llevó 1.135 líneas de test en cuatro módulos. `suspend.rs` no toca el `App` en absoluto — la suspensión es un asunto entre la terminal y un proceso hijo, y sus dos únicos imports del crate lo dicen. |
+| 4 | `config_reload.rs` | ~140 | 170 | `plugin_config_summaries` salió con él pero a OTRO fichero: su doc dice para qué existe («the Plugins-section summaries for the settings overlay»), así que vive junto al overlay que las pinta. |
+| 5 | estrechar `run` a error tipado | — | 30 | El muro medía exactamente las cuatro líneas previstas. `RunError` nació ya en `event_loop.rs` para que la tarea 7 no tuviera que crear ningún item. |
+| 6 | `dispatch.rs` | ~690 | 640 | Entera y sin partir. Un fichero de 640 líneas necesita solo dieciocho `use`: es la medida de lo que las cinco rondas anteriores sacaron de debajo. |
+| 7 | `event_loop.rs` | ~2.500 | 2.705 | `run` no tenía rustdoc. Ni una línea, para la función de 2.521 que es el corazón del TUI — privada en un binario, no le hacía falta. |
 
-Tras 1–7, `main.rs` queda en unas **470 líneas**: cabecera, `main`,
-`make_backend`, `build_keymaps` ya no, `open_terminal_or_exit`,
-`restore_terminal`, `arm_mouse`, `write_cd_file`, `finish_pick`, `apply_theme`, y
-la banda de flags que la regla 6 clava ahí (`start_dir` y `args_or_exit`
-devuelven `anyhow::Result`).
+Y una tarea que no estaba en el plan y salió gratis dentro de la 7: los siete
+módulos de test que se quedan ya no entran por el prelude del binario, sus
+`use super::{...}` nombran la lib. Es lo que permitió bajar el prelude de
+`main.rs` de 38 bloques `use` a diez, y con él murieron los seis
+`#[cfg(test)] use` de la raíz: el mecanismo que existía para que `cargo fix` no
+los borrase ya no tiene nada que proteger.
 
-De las 178 funciones de producción originales, **solo 5** llevaban
-`anyhow::Result`: `start_dir`, `args_or_exit`, `make_backend` (las tres se
-quedan), `initial_pane` (ya estrechada a `Result<Pane, Error>`, y era `anyhow`
-solo para stringificar un `norte_proto::Error`) y `run`. El muro de la regla 6
-era mucho más pequeño de lo que parecía.
+### Dos puntos ciegos de podar imports automáticamente
+
+La poda de imports se hizo por script (copiar el prelude del binario y quedarse
+con lo que el cuerpo nombra) en las tareas 6 y 7, y funcionó — de 40 bloques a
+18, de 38 a 10 — con dos excepciones que volverán a aparecer:
+
+- **Un `use` de TRAIT no se puede podar por uso del nombre.**
+  `futures::StreamExt` (por `.next()`) y `anyhow::Context` (por `.context()`)
+  desaparecieron. Los cazó el compilador acto seguido, pero un grep no los ve.
+- **Un nombre que solo aparece en un comentario cuenta como usado.** Tres se
+  colaron así en la tarea 6 (`PAGE`, `build_keymaps`, `ui`) y clippy los quitó
+  detrás.
+
+La conclusión práctica es que la poda automática vale la pena PORQUE clippy la
+corrige: el script hace el 95% y el compilador es el revisor.
+
+## Siete rustdoc desplazados, y es una familia
+
+Sin buscarlos, en las diez rondas aparecieron **siete** bloques de rustdoc
+separados de su función, todos secuela de movimientos mecánicos anteriores:
+
+1. el de `reload_config` colgaba de `apply_theme`;
+2. el de `on_layout_picker_key`, de `on_connections_picker_key`;
+3. y 4. los de `on_places_key` y `on_nav_popup_key`, APILADOS sobre
+   `on_tree_key` — tres doc-comments seguidos delante de una sola función;
+5. el de `shortcuts_editor_tests` se quedó en `main.rs` cuando su módulo se fue,
+   y acabó documentando un módulo de test de i18n con el que no tiene relación;
+6. el de `shell_cwd` colgaba de `desconectar`;
+7. el de `on_help_key` estaba **partido en dos**: la introducción, hasta el
+   «TWO REGIMES, the same split … already have:» que anuncia una lista, había
+   quedado sobre `HelpDispatch`, y la lista que ese dos puntos promete seguía
+   sobre la función.
+
+Los siete vuelven a su sitio sin tocar una palabra. Hubo un octavo caso que se
+BORRÓ, el único borrado de contenido de la rama: tres líneas que documentaban
+`main` como «`F1` sobre una fila de la command palette (H3c)». No estaba
+huérfano, estaba MINTIENDO sobre un item que sigue existiendo, y su dueño
+(`overlays::palette_help_target`) ya lleva el mismo contenido en inglés y en su
+sitio.
+
+**La regla que sale de esto, y sirve para cualquier movimiento futuro:** un
+`missing_docs` sobre un item que acabas de mover NO es una invitación a escribir
+documentación nueva. Es la señal de que su documentación está varada unas líneas
+más arriba, encima de otra función. Mirar hacia arriba antes de escribir. Tres de
+los siete se encontraron exactamente así.
+
+## Lo que sigue, y ya no es este plan
+
+- **Los siete módulos de test de `main.rs` (915 líneas) pueden ser ficheros de
+  `tests/`.** Ya no nombran nada del binario: es el objetivo original del
+  refactor, cumplido pero sin cobrar. El precio es que un test de integración es
+  otro crate, así que exige `pub` en lo que hoy alcanzan por módulo hermano —
+  hay que mirar caso por caso si ese `pub` es una superficie que queramos.
+- **Partir `run` (2.521 líneas) y `dispatch` (640).** Ahora sobre ficheros de
+  2.700 y 680 líneas en vez de sobre uno de 11.612. Partir `run` sigue siendo
+  rediseño, no movimiento: hay que convertir la cadena `else if` de 19 ramas en
+  una tabla de precedencia de overlays y decidir la frontera entre «drenar una
+  tarea en curso» y «enrutar una tecla», y eso cambia el orden de los `await`
+  dentro de un `tokio::select!` de 23 brazos.
+- **`app.rs` (7.085 prod) y `ui.rs` (5.970).** Sin tocar, y por los motivos de
+  la sección siguiente.
+- **Los nombres en dos idiomas.** `main.rs` mezclaba `confirma_el_modal`,
+  `desempaqueta`, `escribe_la_sesion` con `submit_transfers`, `drain_search`, y
+  con híbridos (`captura_session`, `SessionOrden`). Esos nombres viajaron intactos
+  a los módulos nuevos, así que la mezcla sigue ahí, ahora repartida. Merece una
+  pasada mecánica en UN commit, para no contaminar la verificación por
+  compilación de ningún movimiento.
 
 ## Lo que este plan NO hace, y por qué
 
