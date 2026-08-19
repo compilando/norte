@@ -316,6 +316,104 @@ async fn compared_rows<'a>(
     )
 }
 
+/// Tope de entradas que se cuentan del primer nivel de un `DeleteTree` (#176).
+///
+/// Por encima, el testigo se queda SIN recuento: contar un directorio de un
+/// millón de entradas al planificar cuesta el listado entero, y el recuento
+/// existe para ser barato. Un testigo sin recuento no relaja nada — la
+/// revalidación solo compara lo que las dos fotos traen, igual que con el
+/// tamaño y la fecha.
+const CONTEO_MAX: u64 = 4096;
+
+/// Completa el testigo de un `DeleteTree` con el recuento de su primer nivel.
+///
+/// Cualquier otra clase de paso vuelve tal cual: solo el borrado de un árbol
+/// revalida un DIRECTORIO, y solo ahí el recuento dice algo.
+async fn contar_si_borra_arbol(
+    item: PlanItem,
+    dest: &dyn Provider,
+    dest_root: &norte_proto::VPath,
+    cancel: &CancellationToken,
+) -> PlanItem {
+    use futures::StreamExt as _;
+
+    let PlanItem::Step { step, dest: foto } = item else {
+        return item;
+    };
+    let (Some(foto), SyncStepKind::DeleteTree) = (foto, step.kind) else {
+        return PlanItem::Step { step, dest: foto };
+    };
+    let mut path = dest_root.clone();
+    for segmento in step.dest_rel.as_ref().unwrap_or(&step.rel).segments() {
+        path = path.join(segmento.clone());
+    }
+    let contadas = match dest.list(&path).await {
+        Ok(mut stream) => {
+            let mut n = 0_u64;
+            loop {
+                if cancel.is_cancelled() {
+                    break None;
+                }
+                match stream.next().await {
+                    Some(Ok(_)) => {
+                        n += 1;
+                        if n > CONTEO_MAX {
+                            break None; // demasiadas: contar deja de ser barato
+                        }
+                    }
+                    // Una entrada ilegible deja el recuento SIN respuesta: un
+                    // número que se saltó algo es peor que ningún número.
+                    Some(Err(_)) => break None,
+                    None => break Some(n),
+                }
+            }
+        }
+        Err(_) => None,
+    };
+    PlanItem::Step {
+        step,
+        dest: Some(foto.with_entries(contadas)),
+    }
+}
+
+/// Convierte en BLOQUEO un paso cuyo nombre de destino ese provider no puede
+/// tener (#163).
+///
+/// Solo mira los pasos que CREAN un nombre allí: un borrado nombra algo que ya
+/// existe, así que su legalidad está demostrada por su existencia.
+///
+/// Bloquea en vez de saltar por lo mismo que `TypeMismatchDir`: quien pidió un
+/// espejo pidió que el destino quedara como el origen, y un nombre que no
+/// puede existir allí es una divergencia estructural que ningún informe
+/// posterior arregla.
+fn bloquear_si_el_nombre_no_cabe(item: PlanItem, dest: &dyn Provider) -> PlanItem {
+    use norte_proto::methods::{SyncBlocker, SyncBlockerKind};
+
+    let PlanItem::Step { step, dest: foto } = item else {
+        return item;
+    };
+    let crea = matches!(
+        step.kind,
+        SyncStepKind::Copy | SyncStepKind::Overwrite | SyncStepKind::CreateDir
+    );
+    let rel = step.dest_rel.as_ref().unwrap_or(&step.rel);
+    if !crea
+        || rel
+            .segments()
+            .iter()
+            .all(|s| dest.name_is_legal(s.as_bytes()))
+    {
+        return PlanItem::Step { step, dest: foto };
+    }
+    PlanItem::Blocker(SyncBlocker {
+        rel: rel.clone(),
+        kind: SyncBlockerKind::IllegalDestName,
+        // El lado es SIEMPRE el destino: es su sistema de ficheros el que
+        // rehúsa el nombre, no el origen el que lo escribió mal.
+        side: Some(norte_proto::methods::Side::Right),
+    })
+}
+
 /// # Errors
 /// [`Error::Cancelled`] si se canceló o si el dueño dejó de recibir;
 /// [`Error::Io`] si el spool no se pudo escribir; [`Error::Internal`] si el
@@ -428,6 +526,23 @@ pub(crate) async fn run_sync_plan(
         {
             continue;
         }
+        // El testigo de un `DeleteTree` se completa con el RECUENTO de su
+        // primer nivel (#176). Va aquí y no en el transductor porque el
+        // transductor es puro y no tiene provider — y va al PLANIFICAR y no al
+        // aplicar porque lo que se compara es «lo que había cuando el humano
+        // decidió» contra «lo que hay ahora».
+        //
+        // Es un listado por paso destructivo, y es el paso con más radio de
+        // acción de todos: el `stat` de un directorio solo se mueve cuando
+        // cambian sus hijos DIRECTOS, así que sin esto un subárbol que ganó
+        // cien ficheros entre aprobar y aplicar revalidaba limpio y se borraba
+        // entero.
+        let item = contar_si_borra_arbol(item, dest.as_ref(), &opts.dest_root, &ctx.cancel).await;
+        // Y un nombre que el DESTINO no puede tener bloquea el plan en vez de
+        // descubrirse al ejecutar (#163). Lo decide el provider del destino,
+        // que es quien conoce sus reglas; aquí solo se pregunta, y preguntar
+        // no cuesta I/O.
+        let item = bloquear_si_el_nombre_no_cabe(item, dest.as_ref());
         // Hashea, cuenta y escribe en la MISMA llamada: el lote de abajo se
         // lleva exactamente lo mismo.
         if let Err(e) = writer.push(&item).await {
@@ -624,6 +739,103 @@ mod tests {
             reversal: Some(norte_proto::methods::StepReversal::Delete),
             reason: None,
         }
+    }
+
+    /// #163: un nombre que el DESTINO no puede tener bloquea el plan, en vez
+    /// de descubrirse al ejecutar.
+    ///
+    /// Lo decide el provider del destino —quien conoce sus reglas—, y aquí se
+    /// prueba el CABLEADO con uno que rehúsa a propósito: las reglas de Win32
+    /// de verdad las pone `norte-vfs-local` y no se pueden ejecutar en esta
+    /// máquina, pero que un «no» suyo se convierta en bloqueo sí.
+    #[test]
+    fn un_nombre_que_el_destino_no_admite_bloquea_el_plan() {
+        use norte_proto::Error;
+        use norte_proto::methods::{SyncBlockerKind, SyncStepKind};
+        use norte_vfs::Provider;
+
+        /// Un destino a la manera de Windows: no admite dos puntos.
+        struct SinDosPuntos;
+
+        #[async_trait::async_trait]
+        impl Provider for SinDosPuntos {
+            #[allow(clippy::unnecessary_literal_bound)] // la firma del trait es `-> &str`
+            fn scheme(&self) -> &str {
+                "mem"
+            }
+            fn capabilities(&self) -> norte_proto::Capabilities {
+                norte_proto::Capabilities {
+                    flags: norte_proto::CapabilityFlags::empty(),
+                    max_path: None,
+                }
+            }
+            fn name_is_legal(&self, name: &[u8]) -> bool {
+                !name.contains(&b':')
+            }
+            async fn stat(&self, _p: &norte_proto::VPath) -> Result<norte_proto::Entry, Error> {
+                Err(Error::NotFound)
+            }
+            async fn list(&self, _p: &norte_proto::VPath) -> Result<norte_vfs::EntryStream, Error> {
+                Err(Error::NotFound)
+            }
+            async fn read(
+                &self,
+                _p: &norte_proto::VPath,
+                _r: Option<norte_proto::ByteRange>,
+            ) -> Result<norte_vfs::ByteStream, Error> {
+                Err(Error::NotFound)
+            }
+            async fn write(
+                &self,
+                _p: &norte_proto::VPath,
+            ) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+                Err(Error::Unsupported)
+            }
+            async fn mkdir(&self, _p: &norte_proto::VPath) -> Result<(), Error> {
+                Err(Error::Unsupported)
+            }
+            async fn remove(&self, _p: &norte_proto::VPath) -> Result<(), Error> {
+                Err(Error::Unsupported)
+            }
+            async fn rename(
+                &self,
+                _a: &norte_proto::VPath,
+                _b: &norte_proto::VPath,
+            ) -> Result<(), Error> {
+                Err(Error::Unsupported)
+            }
+        }
+
+        let copia = |wire: &str| super::PlanItem::Step {
+            step: step(SyncStepKind::Copy, wire),
+            dest: None,
+        };
+
+        // Legal: sale como paso, intacto.
+        assert!(matches!(
+            super::bloquear_si_el_nombre_no_cabe(copia("informe.txt"), &SinDosPuntos),
+            super::PlanItem::Step { .. }
+        ));
+
+        // Ilegal ahí: bloqueo, con el lado del DESTINO.
+        let bloqueo = super::bloquear_si_el_nombre_no_cabe(copia("f%3Aads"), &SinDosPuntos);
+        let super::PlanItem::Blocker(b) = bloqueo else {
+            panic!("un nombre que el destino no admite tiene que bloquear")
+        };
+        assert_eq!(b.kind, SyncBlockerKind::IllegalDestName);
+        assert_eq!(b.side, Some(norte_proto::methods::Side::Right));
+        assert_eq!(b.rel, rel("f%3Aads"));
+
+        // Y un BORRADO no se mira: nombra algo que ya existe allí, así que su
+        // legalidad la demuestra su existencia.
+        let borrado = super::PlanItem::Step {
+            step: step(SyncStepKind::DeleteTree, "f%3Aads"),
+            dest: None,
+        };
+        assert!(matches!(
+            super::bloquear_si_el_nombre_no_cabe(borrado, &SinDosPuntos),
+            super::PlanItem::Step { .. }
+        ));
     }
 
     #[test]

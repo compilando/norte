@@ -1022,6 +1022,60 @@ impl Provider for LocalProvider {
         .unwrap_or(Ok(declared_on_timeout))
     }
 
+    /// Las reglas de nombre de ESTA plataforma (#163).
+    ///
+    /// En unix, cualquier secuencia de bytes sin `/` ni NUL — y un `Segment`
+    /// ya lo garantiza, así que aquí no hay nada que rechazar.
+    ///
+    /// En Windows sí: los nombres de dispositivo (`CON`, `NUL`, `COM1`…) no
+    /// son ficheros, los `<>:"|?*` y los controles no son legales, y un punto
+    /// o un espacio FINALES los borra Win32 en silencio — con lo que el
+    /// fichero que queda no es el que se pidió. `f:ads` es el peor de todos y
+    /// por eso los dos puntos están en la lista: ahí no falla, escribe un
+    /// flujo alternativo, y la copia dice que fue bien mientras el fichero no
+    /// está.
+    ///
+    /// **Sin verificar en una máquina Windows**, como el resto de la deuda de
+    /// esa plataforma (#217, #220, #221, #222): las reglas salen de la
+    /// documentación de Win32, no de una ejecución. Lo que sí está probado es
+    /// el CABLEADO —que un nombre rehusado bloquea el plan en vez de
+    /// descubrirse al ejecutar—, con un provider de test que rehúsa a
+    /// propósito.
+    fn name_is_legal(&self, name: &[u8]) -> bool {
+        /// Los nombres de dispositivo de Win32, que no son ficheros.
+        const RESERVADOS: &[&[u8]] = &[
+            b"CON", b"PRN", b"AUX", b"NUL", b"COM1", b"COM2", b"COM3", b"COM4", b"COM5", b"COM6",
+            b"COM7", b"COM8", b"COM9", b"LPT1", b"LPT2", b"LPT3", b"LPT4", b"LPT5", b"LPT6",
+            b"LPT7", b"LPT8", b"LPT9",
+        ];
+
+        if !cfg!(windows) {
+            return true;
+        }
+        if name.is_empty() {
+            return false;
+        }
+        // Los bytes prohibidos por Win32, más los controles.
+        if name.iter().any(|b| {
+            matches!(
+                b,
+                0..=0x1F | b'<' | b'>' | b':' | b'"' | b'|' | b'?' | b'*' | b'\\'
+            )
+        }) {
+            return false;
+        }
+        // Punto o espacio finales: Win32 los quita, así que el nombre que
+        // queda no es el que se pidió.
+        if matches!(name.last(), Some(b'.' | b' ')) {
+            return false;
+        }
+        // Los nombres de dispositivo, con o sin extensión detrás.
+        let raiz: &[u8] = name.split(|b| *b == b'.').next().unwrap_or(name);
+        !RESERVADOS
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case(&raiz.to_ascii_uppercase()))
+    }
+
     #[cfg(unix)]
     async fn open_root(&self, root: &VPath) -> Result<Box<dyn norte_vfs::ConfinedRoot>, Error> {
         self.ensure_caps().await;

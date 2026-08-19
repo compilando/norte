@@ -96,7 +96,7 @@ use std::pin::Pin;
 
 use futures::StreamExt;
 use futures::stream::{self, FusedStream};
-use norte_proto::{Entry, EntryKind, VPath};
+use norte_proto::{Capabilities, Entry, EntryKind, VPath};
 use norte_vfs::Provider;
 use tokio_util::sync::CancellationToken;
 
@@ -123,6 +123,12 @@ use crate::{
 /// una cancelación) es legal sobre este flujo (#175).
 pub type CompareStream<'a> =
     Pin<Box<dyn FusedStream<Item = Result<CompareRow, CompareError>> + Send + 'a>>;
+
+/// Las capabilities del directorio `dir` según su provider, o `None` si no hay
+/// directorio (un lado ausente) o la sonda no supo.
+async fn capabilities_de(provider: &dyn Provider, dir: Option<&Entry>) -> Option<Capabilities> {
+    provider.capabilities_at(&dir?.path).await.ok()
+}
 
 /// Compara dos árboles y emite una fila por pareja.
 ///
@@ -580,6 +586,25 @@ impl Walk<'_> {
         Ok(entries)
     }
 
+    /// Cómo empareja ESTE par de directorios.
+    ///
+    /// Sale de [`Provider::capabilities_at`] de cada lado (ADR 0054) y cae a
+    /// lo que decidió el llamante —las reglas de la RAÍZ— cuando un lado no
+    /// está (el descenso por un huérfano) o cuando la sonda falla. Degradar a
+    /// las de la raíz y no a «no pliegues nada» importa: lo segundo convierte
+    /// un directorio que no supo contestar en uno que no reporta colisiones de
+    /// caja, que es la mentira más cara de las dos.
+    async fn sides_de(&self, frame: &Frame) -> Sides {
+        let (izq, der) = futures::join!(
+            capabilities_de(self.left, frame.left.as_ref()),
+            capabilities_de(self.right, frame.right.as_ref()),
+        );
+        match (izq, der) {
+            (Some(izq), Some(der)) => Sides::from_capabilities(izq, der),
+            _ => self.sides,
+        }
+    }
+
     async fn visit(&mut self, frame: Frame) {
         debug_assert!(
             frame.left.is_some() || frame.right.is_some(),
@@ -614,7 +639,18 @@ impl Walk<'_> {
             return;
         };
 
-        let sides = self.sides;
+        // Las reglas de emparejamiento son de ESTE directorio, no de la raíz
+        // (#215). Bajo una misma raíz hay montajes: un pincho exFAT colgado de
+        // `/data/backup`, un subárbol ext4 en `+F`, un bind. Comparar sus
+        // entradas con las reglas de la raíz es #153 un nivel más abajo — la
+        // misma pérdida silenciosa de colisiones, con otro nombre.
+        //
+        // No cuesta lo que parece: `Provider::capabilities_at` responde la
+        // declaración SIN I/O para todo backend cuyas ubicaciones son iguales
+        // (el default del trait), y `norte-vfs-local`, que es el que de verdad
+        // sondea, cachea por identidad de directorio. Un remoto no paga un
+        // viaje por directorio, que sería #156 otra vez.
+        let sides = self.sides_de(&frame).await;
         let left_index = index_side(&lefts, sides);
         let right_index = index_side(&rights, sides);
         let left_collided = collided_keys(&left_index, sides);
@@ -1463,6 +1499,118 @@ mod tests {
 
     fn compare_default<'a>(left: &'a MemProvider, right: &'a MemProvider) -> CompareStream<'a> {
         compare_with(left, right, CompareOptions::cheap())
+    }
+
+    /// Un provider cuyas ubicaciones NO son todas iguales: la raíz distingue
+    /// caja y un subdirectorio no, que es lo que pasa cuando hay un montaje
+    /// colgado ahí (un pincho exFAT en `/data/backup`, un ext4 en `+F`).
+    struct PorMontajes {
+        inner: MemProvider,
+        /// El nombre del directorio que NO distingue caja.
+        pliega: &'static [u8],
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for PorMontajes {
+        fn scheme(&self) -> &str {
+            self.inner.scheme()
+        }
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+        async fn capabilities_at(&self, p: &VPath) -> Result<Capabilities, norte_proto::Error> {
+            let mut caps = self.inner.capabilities();
+            let dentro = p.segments().any(|seg| seg == self.pliega);
+            caps.flags
+                .set(norte_proto::CapabilityFlags::CASE_SENSITIVE, !dentro);
+            Ok(caps)
+        }
+        async fn stat(&self, p: &VPath) -> Result<Entry, norte_proto::Error> {
+            self.inner.stat(p).await
+        }
+        async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, norte_proto::Error> {
+            self.inner.list(p).await
+        }
+        async fn read(
+            &self,
+            p: &VPath,
+            r: Option<norte_proto::ByteRange>,
+        ) -> Result<norte_vfs::ByteStream, norte_proto::Error> {
+            self.inner.read(p, r).await
+        }
+        async fn write(
+            &self,
+            p: &VPath,
+        ) -> Result<Box<dyn norte_vfs::ByteSink>, norte_proto::Error> {
+            self.inner.write(p).await
+        }
+        async fn mkdir(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.mkdir(p).await
+        }
+        async fn remove(&self, p: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.remove(p).await
+        }
+        async fn rename(&self, a: &VPath, b: &VPath) -> Result<(), norte_proto::Error> {
+            self.inner.rename(a, b).await
+        }
+    }
+
+    /// #215: las reglas de emparejamiento son del DIRECTORIO, no de la raíz.
+    ///
+    /// Bajo una raíz que distingue caja puede haber un montaje que no la
+    /// distingue, y comparar sus entradas con las reglas de la raíz pierde sus
+    /// colisiones en silencio — que es #153 un nivel más abajo.
+    #[tokio::test]
+    async fn las_reglas_salen_del_directorio_y_no_de_la_raiz() {
+        let izq = PorMontajes {
+            inner: tree(&["backup/A.txt", "backup/a.txt"]).await,
+            pliega: b"backup",
+        };
+        let der = PorMontajes {
+            inner: tree(&["backup/A.txt"]).await,
+            pliega: b"backup",
+        };
+        // La RAÍZ distingue caja en los dos lados: con las reglas de la raíz,
+        // `A.txt` y `a.txt` son dos nombres distintos y no colisiona nada.
+        let sides_de_la_raiz = Sides::from_capabilities(
+            izq.capabilities_at(&MemProvider::root())
+                .await
+                .expect("raíz"),
+            der.capabilities_at(&MemProvider::root())
+                .await
+                .expect("raíz"),
+        );
+        assert!(
+            !sides_de_la_raiz.folds_case(),
+            "la raíz de este montaje distingue caja"
+        );
+
+        let filas = collect(compare(
+            &izq,
+            &MemProvider::root(),
+            &der,
+            &MemProvider::root(),
+            CompareOptions::cheap(),
+            sides_de_la_raiz,
+            Vec::new(),
+            CancellationToken::new(),
+        ))
+        .await;
+
+        assert!(
+            filas.iter().any(|f| f.verdict == CompareVerdict::Ambiguous),
+            "el subdirectorio que pliega tiene que reportar la colisión: {:?}",
+            filas
+                .iter()
+                .map(|f| (
+                    f.verdict,
+                    f.left
+                        .as_ref()
+                        .or(f.right.as_ref())
+                        .map(|e| e.path.display_lossy())
+                ))
+                .collect::<Vec<_>>()
+        );
     }
 
     async fn collect(stream: CompareStream<'_>) -> Vec<CompareRow> {

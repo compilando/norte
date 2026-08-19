@@ -687,7 +687,26 @@ use crate::{
 /// siempre y no nota nada; un cliente 0.51 contra un daemon 0.50 tampoco —el
 /// daemon viejo acepta lo que aceptaba—. Lo que se pierde contra el viejo es
 /// la protección, no la funcionalidad.
-pub const PROTOCOL_VERSION: &str = "0.51.0";
+/// **0.52.0** (#163): [`SyncBlockerKind::IllegalDestName`], un nombre que el
+/// DESTINO no puede tener.
+///
+/// Nada comprobaba que un nombre legal bajo la raíz de origen lo fuera bajo la
+/// de destino, así que `CON`, `f:ads` o un punto final —los tres legales en
+/// ext4— se descubrían al EJECUTAR. El peor es `f:ads`: en NTFS funciona y
+/// escribe un flujo alternativo, con lo que la copia dice que fue bien y el
+/// fichero no está. Ahora lo decide el provider del destino, que es quien
+/// conoce sus reglas, y sale como bloqueo del PLAN — donde un humano puede
+/// hacer algo al respecto.
+///
+/// Aditivo: [`SyncBlockerKind`] es `#[non_exhaustive]` con `#[serde(other)]
+/// Unknown`, así que un cliente 0.51 pinta el bloqueo como «clase
+/// desconocida» y **no aprueba el plan**, que es exactamente lo que tiene que
+/// pasar — un bloqueo que no se entiende sigue bloqueando.
+///
+/// Ventana N=0.52.x / N-1=0.51.x: un daemon 0.51 no emite la clase y un
+/// cliente 0.51 la degrada. Lo que se pierde contra el viejo es la
+/// comprobación, no la corrección.
+pub const PROTOCOL_VERSION: &str = "0.52.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -4469,6 +4488,20 @@ pub enum SyncBlockerKind {
     /// prefiere el `Skip`, hace falta un [`SyncReason`] nuevo — vocabulario
     /// CERRADO daemon→client, o sea un bump y un argumento de compatibilidad.
     TypeMismatchDir,
+    /// Un nombre que el DESTINO no puede tener (0.52.0, #163).
+    ///
+    /// Lo decide el provider del destino (`Provider::name_is_legal`), que es
+    /// quien conoce sus reglas: `CON`, `f:ads`, un punto o un espacio finales
+    /// —todos legales en ext4— no lo son en NTFS, y `f:ads` es el peor de los
+    /// cuatro porque ahí **funciona**: escribe un flujo alternativo, y la
+    /// copia dice que fue bien mientras el fichero no está.
+    ///
+    /// Bloquea en vez de saltar por lo mismo que [`Self::TypeMismatchDir`]:
+    /// quien pidió un espejo pidió que el destino quedara como el origen, y un
+    /// nombre que no puede existir allí es una divergencia estructural que
+    /// ningún informe posterior arregla. El remedio es renombrar en el origen
+    /// o acotar el plan con `include`.
+    IllegalDestName,
     /// Clase que este decodificador no conoce (`#[serde(other)]`). El core
     /// jamás la emite.
     #[doc(hidden)]

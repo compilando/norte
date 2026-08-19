@@ -753,7 +753,7 @@ async fn same_node(
             Err(e) => return Err(e),
         }
     }
-    Ok(same_node_heuristic(from, to, dst))
+    Ok(same_node_heuristic(from, to, dst).await)
 }
 
 /// El modo de identidad del ORIGEN según la política de symlinks: bajo
@@ -767,27 +767,37 @@ fn follow_links_for(opts: TransferOptions) -> FollowLinks {
     }
 }
 
-/// Heurística conservadora de M1 para providers sin identidad: byte-igual
-/// siempre; en destino case-insensitive, también la variante que solo
-/// difiere en caja (lowercase Unicode de std). NO cubre pliegues más
-/// anchos del FS — por eso la identidad real tiene prioridad.
-fn same_node_heuristic(from: &VPath, to: &VPath, dst: &dyn Provider) -> bool {
-    if dst
-        .capabilities()
-        .flags
-        .contains(norte_proto::CapabilityFlags::CASE_SENSITIVE)
-    {
+/// Heurística conservadora para providers sin identidad de nodo: byte-igual
+/// siempre; y, cuando el DESTINO no distingue caja, también la variante que
+/// pliega a lo mismo. La identidad real tiene prioridad; esto es lo que queda
+/// cuando el backend no la da.
+///
+/// Pregunta por la UBICACIÓN y no por el provider (#215): `capabilities()`
+/// contesta por el mount del provider, así que bajo un mismo `file://` un
+/// pincho exFAT montado en `/mnt` recibía la respuesta de `/home` — y lo que
+/// se decide con ella es si un `move` es un rename sobre sí mismo, que es un
+/// camino de COPIA. Que la función sea `async` no cuesta nada: su único
+/// llamante ya lo era.
+///
+/// Y pliega con la clave compartida (`norte_encoding::name_key`, ADR 0051) en
+/// vez de con un `to_lowercase`: el `to_lowercase` de std no es el pliegue de
+/// ningún filesystem —le faltan las 22 deltas de #129— y en un ext4 `+F` no es
+/// ni de lejos el pliegue que ese directorio hace. La clave ya sabe cuál toca
+/// a partir de las capabilities.
+async fn same_node_heuristic(from: &VPath, to: &VPath, dst: &dyn Provider) -> bool {
+    let caps = dst
+        .capabilities_at(to)
+        .await
+        .unwrap_or_else(|_| dst.capabilities());
+    let mode = norte_compare::Sides::mode_of(caps);
+    if mode == norte_encoding::FoldMode::None {
         return false;
     }
     let a: Vec<&[u8]> = from.segments().collect();
     let b: Vec<&[u8]> = to.segments().collect();
     a.len() == b.len()
         && a.iter().zip(&b).all(|(x, y)| {
-            x == y
-                || match (std::str::from_utf8(x), std::str::from_utf8(y)) {
-                    (Ok(x), Ok(y)) => x.to_lowercase() == y.to_lowercase(),
-                    _ => false,
-                }
+            x == y || norte_encoding::name_key(x, mode) == norte_encoding::name_key(y, mode)
         })
 }
 
@@ -2431,7 +2441,92 @@ fn is_descendant(child: &VPath, ancestor: &VPath) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::rename_auto_candidate;
+    use norte_proto::{Entry, Error};
+
+    use super::{rename_auto_candidate, same_node_heuristic};
+
+    /// #215: la heurística de identidad pregunta por la UBICACIÓN, no por el
+    /// provider, y pliega con la clave compartida y no con `to_lowercase`.
+    ///
+    /// `capabilities()` contesta por el mount del provider, así que bajo un
+    /// mismo `file://` un pincho que no distingue caja recibía la respuesta de
+    /// `/home`. Lo que se decide con ella es si un `move` es un rename sobre
+    /// sí mismo — o sea, un camino de copia que puede destruir el origen.
+    #[tokio::test]
+    async fn la_heuristica_de_identidad_pregunta_por_la_ubicacion() {
+        use norte_proto::{CapabilityFlags, VPath};
+
+        /// Distingue caja en todas partes MENOS bajo `/pincho`.
+        struct PorMontajes(norte_testkit::MemProvider);
+
+        #[async_trait::async_trait]
+        impl norte_vfs::Provider for PorMontajes {
+            fn scheme(&self) -> &str {
+                self.0.scheme()
+            }
+            fn capabilities(&self) -> norte_proto::Capabilities {
+                let mut c = self.0.capabilities();
+                c.flags.insert(CapabilityFlags::CASE_SENSITIVE);
+                c
+            }
+            async fn capabilities_at(&self, p: &VPath) -> Result<norte_proto::Capabilities, Error> {
+                let mut c = self.capabilities();
+                if p.segments().any(|s| s == b"pincho") {
+                    c.flags.remove(CapabilityFlags::CASE_SENSITIVE);
+                }
+                Ok(c)
+            }
+            async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+                self.0.stat(p).await
+            }
+            async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+                self.0.list(p).await
+            }
+            async fn read(
+                &self,
+                p: &VPath,
+                r: Option<norte_proto::ByteRange>,
+            ) -> Result<norte_vfs::ByteStream, Error> {
+                self.0.read(p, r).await
+            }
+            async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+                self.0.write(p).await
+            }
+            async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
+                self.0.mkdir(p).await
+            }
+            async fn remove(&self, p: &VPath) -> Result<(), Error> {
+                self.0.remove(p).await
+            }
+            async fn rename(&self, a: &VPath, b: &VPath) -> Result<(), Error> {
+                self.0.rename(a, b).await
+            }
+        }
+
+        let dst = PorMontajes(norte_testkit::MemProvider::new());
+        let vp = |w: &str| VPath::parse(w).expect("wire");
+
+        // Bajo la raíz, que distingue caja: dos nombres, no uno.
+        assert!(
+            !same_node_heuristic(&vp("mem:///casa/A.txt"), &vp("mem:///casa/a.txt"), &dst).await
+        );
+        // Bajo el montaje que NO la distingue: el mismo fichero.
+        assert!(
+            same_node_heuristic(&vp("mem:///pincho/A.txt"), &vp("mem:///pincho/a.txt"), &dst).await,
+            "el mount decide, no el provider"
+        );
+        // Y pliega con la clave compartida: el signo micro y la mu griega son
+        // el mismo nombre bajo pliegue, y `to_lowercase` no los mueve.
+        assert!(
+            same_node_heuristic(
+                &vp("mem:///pincho/%C2%B5"),
+                &vp("mem:///pincho/%CE%BC"),
+                &dst
+            )
+            .await,
+            "la clave de plegado, no un to_lowercase"
+        );
+    }
 
     /// Cancelación limpia de `trash_retrying` (regla 3): un token ya cancelado
     /// devuelve `Cancelled` SIN tocar el provider (la víctima inexistente ni

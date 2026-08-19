@@ -3895,6 +3895,11 @@
           "type": "string"
         },
         {
+          "const": "illegal_dest_name",
+          "description": "Un nombre que el DESTINO no puede tener (0.52.0, #163).\n\nLo decide el provider del destino (`Provider::name_is_legal`), que es\nquien conoce sus reglas: `CON`, `f:ads`, un punto o un espacio finales\n—todos legales en ext4— no lo son en NTFS, y `f:ads` es el peor de los\ncuatro porque ahí **funciona**: escribe un flujo alternativo, y la\ncopia dice que fue bien mientras el fichero no está.\n\nBloquea en vez de saltar por lo mismo que [`Self::TypeMismatchDir`]:\nquien pidió un espejo pidió que el destino quedara como el origen, y un\nnombre que no puede existir allí es una divergencia estructural que\nningún informe posterior arregla. El remedio es renombrar en el origen\no acotar el plan con `include`.",
+          "type": "string"
+        },
+        {
           "const": "unknown",
           "description": "Clase que este decodificador no conoce (`#[serde(other)]`). El core\njamás la emite.",
           "type": "string"

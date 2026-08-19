@@ -349,6 +349,12 @@ enum Applied {
 #[derive(Debug)]
 pub(crate) struct Unrecorded {
     /// La ruta que se enterró: lo que el usuario cree que sigue ahí.
+    ///
+    /// Dos caminos llegan aquí y los dos dejan el mismo hueco: el `trashed`
+    /// que no se pudo escribir y tampoco compensar (#160), y el `created` que
+    /// falla DESPUÉS de un `trashed` que sí quedó (#206) — ahí el fichero
+    /// nuevo está puesto, el viejo está en la papelera, y el lote no se puede
+    /// deshacer porque le falta la mitad de su par.
     pub buried: VPath,
     /// Dónde fue a parar, si la papelera del destino NOMBRA lo que se lleva.
     /// `None` con `DestTrash::Opaque` (macOS, Windows), y entonces no hay
@@ -516,26 +522,24 @@ async fn stat(
 ///   testigo a medias, y declarar un conflicto por eso rechazaría el plan entero
 ///   en el sistema de ficheros más común.
 ///
-/// # El residual, dicho en voz alta
-/// **Un `DeleteTree` revalida el DIRECTORIO, no su contenido.** El `stat` de un
-/// directorio solo se mueve cuando cambian sus hijos DIRECTOS, así que un
-/// subárbol que ganó cien ficheros dos niveles más abajo entre aprobar y aplicar
-/// revalida limpio y se borra entero. Es el paso con más radio de acción de toda
-/// la función y su comprobación es la más floja; cerrarlo pediría un re-listado
-/// o un recuento en el testigo, que es un listado por paso destructivo.
-/// **#176 decidió lo que se podía decidir aquí y no más.** La frase de
-/// aprobación lo dice ahora en las CUATRO variantes de borrado: un árbol se
-/// vuelve a comprobar en el directorio, no por dentro. Un riesgo conocido que
-/// solo vive en un rustdoc no lo ve quien tiene que decidir sobre él, y quien
-/// decide está mirando ese diálogo.
+/// # Un `DeleteTree` mira también CUÁNTAS cosas hay dentro (#176)
+/// El `stat` de un directorio solo se mueve cuando cambian sus hijos DIRECTOS,
+/// así que un subárbol que ganó cien ficheros dos niveles más abajo entre
+/// aprobar y aplicar revalidaba limpio y se borraba entero: el paso con más
+/// radio de acción con la comprobación más floja.
 ///
-/// Contar las entradas del primer nivel —la opción barata que el issue
-/// proponía— NO entra aquí: el testigo lo pone el transductor de
-/// `norte-sync::plan`, que es puro y no tiene provider, y el recorrido de
-/// comparación no desciende en un huérfano del destino a propósito (es lo que
-/// hace que un subárbol sea UNA entrada de journal y no cuarenta mil). Un
-/// recuento pediría darle provider a esa capa, que es un cambio de diseño y no
-/// un arreglo de deuda. Queda en #176 con ese motivo escrito.
+/// Ahora el testigo de un borrado de árbol lleva el RECUENTO de su primer
+/// nivel y aquí se vuelve a contar. Lo pone el cableado del core al
+/// planificar, no el transductor —que es puro y no tiene provider—, y por eso
+/// cuesta un listado por paso destructivo al planificar y otro al aplicar,
+/// sobre el paso que iba a listarlo entero de todas formas.
+///
+/// **Lo que sigue sin ver**: un cambio en un NIETO. Un fichero añadido tres
+/// niveles más abajo no mueve ni el `stat` del directorio ni la cuenta de su
+/// primer nivel. Cerrar eso pide un recorrido de revalidación, que es
+/// exactamente el coste que el diseño de «un huérfano es UNA entrada de
+/// journal» evita. La frase de aprobación lo dice en las cuatro variantes de
+/// borrado: un árbol se vuelve a comprobar por fuera, no hoja por hoja.
 ///
 /// Y con un testigo sin tamaño ni fecha esto se queda en «sigue
 /// existiendo y sigue siendo de la misma clase». Es menos de lo que la spec
@@ -577,7 +581,47 @@ async fn revalidate(
             conflict: ConflictKind::Exists,
         });
     }
+    // Y el recuento del primer nivel, cuando el plan lo anotó (#176): el
+    // `stat` de un directorio solo se mueve cuando cambian sus hijos DIRECTOS,
+    // así que sin esto un subárbol que ganó ficheros entre aprobar y aplicar
+    // revalidaba limpio. Solo se compara si las DOS fotos lo traen, igual que
+    // el tamaño y la fecha — un `None` es «no se sabe», jamás «cero».
+    if let Some(antes) = before.entries {
+        let ahora = contar_primer_nivel(provider, path, ctx).await;
+        if ahora != Some(antes) {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            });
+        }
+    }
     Ok(())
+}
+
+/// Cuántas entradas tiene el primer nivel de `path`, o `None` si no se pudo
+/// contar barato (#176).
+///
+/// Mismo tope que al planificar: por encima el plan tampoco anotó nada, así
+/// que las dos fotos coinciden en no saber.
+async fn contar_primer_nivel(provider: &dyn Provider, path: &VPath, ctx: &TaskCtx) -> Option<u64> {
+    use futures::StreamExt as _;
+
+    let mut stream = provider.list(path).await.ok()?;
+    let mut n = 0_u64;
+    loop {
+        if ctx.cancel.is_cancelled() {
+            return None;
+        }
+        match stream.next().await {
+            Some(Ok(_)) => {
+                n += 1;
+                if n > crate::sync::CONTEO_MAX {
+                    return None;
+                }
+            }
+            Some(Err(_)) => return None,
+            None => return Some(n),
+        }
+    }
 }
 
 /// Copia UNA hoja del origen al destino y devuelve los bytes que movió.
@@ -857,18 +901,23 @@ async fn destroy_tree(
 /// «¿dónde está mi fichero?» solo lo contestaba quien estuviera leyendo el log
 /// del daemon en ese instante.
 ///
-/// **Lo que sigue sin compensarse** es la otra mitad del par de un `Overwrite`:
-/// un `created` que falla DESPUÉS de un `trashed` que sí quedó deja un lote
-/// cuyo undo BLOQUEA. Devolverlo pediría borrar la copia recién puesta Y
-/// desenterrar, o sea dos mutaciones más por el camino en el que el journal ya
-/// no funciona. Eso NO se arregla aquí: es #206.
+/// **La otra mitad del par de un `Overwrite` tampoco se compensa, pero ya se
+/// DICE (#206).** Un `created` que falla después de un `trashed` que sí quedó
+/// deja un lote cuyo undo bloquea: baja por `seq` y tendría que borrar un
+/// fichero del que no tiene fila antes de poder desenterrar el otro.
+/// Devolverlo pediría borrar la copia recién puesta Y desenterrar la vieja —
+/// dos mutaciones más por el camino en el que el journal ya demostró no
+/// funcionar, y ninguna de las dos quedaría registrada tampoco. Así que no se
+/// compensa: sale como [`StepError::Unrecoverable`] con la ruta enterrada y su
+/// sitio en la papelera dentro, que es la diferencia entre «falló» y «tu
+/// fichero está aquí».
 async fn bury(
     targets: &SyncTargets,
     recorder: &dyn StepJournal,
     to: &VPath,
     step_id: u64,
     ctx: &TaskCtx,
-) -> Result<(), StepError> {
+) -> Result<Option<VPath>, StepError> {
     let buried =
         crate::ops::trash_retrying(targets.dest.as_ref(), to, &trash_id(step_id), &ctx.cancel)
             .await
@@ -916,7 +965,9 @@ async fn bury(
             source: e,
         })));
     }
-    Ok(())
+    // Adónde fue a parar, para quien tenga que decirlo si la OTRA mitad del
+    // par falla (#206).
+    Ok(buried)
 }
 
 /// Una reversa que este core no emite para esta clase de paso.
@@ -983,8 +1034,27 @@ async fn overwrite(
     let (from, entry) = source_leaf(targets, record, ctx).await?;
     match record.step.reversal {
         Some(StepReversal::RestoreTrash) => {
-            bury(targets, recorder, to, record.step.id, ctx).await?;
-            place(targets, &from, &entry, recorder, to, Reversal::Delete, ctx).await
+            let at = bury(targets, recorder, to, record.step.id, ctx).await?;
+            // A mano y no por `place` (#206): en cuanto el `trashed` quedó
+            // escrito, un `created` que falle deja un LOTE cuyo undo bloquea —
+            // el undo baja por `seq` y tendría que borrar un fichero del que no
+            // tiene fila antes de poder desenterrar el otro. Compensarlo
+            // pediría dos mutaciones más justo por el camino en el que el
+            // journal ya demostró no funcionar, así que no se compensa: se
+            // DICE, con la ruta enterrada y su sitio en la papelera dentro del
+            // error, que es lo que convierte «no se pudo deshacer» en «esto
+            // está aquí».
+            let bytes = copy_leaf(targets, &from, to, &entry, ctx)
+                .await
+                .map_err(StepError::from_provider)?;
+            if let Err(source) = recorder.created(to, Reversal::Delete).await {
+                return Err(StepError::Unrecoverable(Box::new(Unrecorded {
+                    buried: to.clone(),
+                    at,
+                    source,
+                })));
+            }
+            Ok(Applied::Wrote(bytes))
         }
         Some(StepReversal::Irreversible) => {
             destroy_leaf(targets, to, record.step.id, ctx)
@@ -1421,6 +1491,24 @@ mod tests {
         }
     }
 
+    /// Un recorder que falla EXACTAMENTE en `created`, que es el arma del
+    /// #206: el `trashed` quedó escrito y su pareja no.
+    #[derive(Default)]
+    struct CreatedFalla;
+
+    #[async_trait]
+    impl StepJournal for CreatedFalla {
+        async fn created(&self, _path: &VPath, _reversal: Reversal) -> Result<(), Error> {
+            Err(Error::Io { retryable: false })
+        }
+        async fn trashed(&self, _path: &VPath, _dest: Option<&VPath>) -> Result<(), Error> {
+            Ok(())
+        }
+        async fn removed(&self, _path: &VPath) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
     fn step(kind: SyncStepKind, rel_wire: &str, reversal: Option<StepReversal>) -> SyncStep {
         SyncStep {
             id: 1,
@@ -1488,6 +1576,43 @@ mod tests {
         assert_eq!(source_path(&t, &record).to_wire(), "mem:///s/caf\u{e9}.txt");
     }
 
+    /// #176: un `DeleteTree` mira también CUÁNTAS cosas hay dentro.
+    ///
+    /// El `stat` de un directorio solo se mueve cuando cambian sus hijos
+    /// DIRECTOS —y en `MemProvider` ni eso—, así que sin el recuento un
+    /// subárbol que ganó ficheros entre aprobar y aplicar revalidaba limpio y
+    /// se borraba entero: el paso con más radio de acción con la comprobación
+    /// más floja.
+    #[tokio::test]
+    async fn un_borrado_de_arbol_cuenta_su_primer_nivel() {
+        let mem = Arc::new(MemProvider::new());
+        let c = ctx(CancellationToken::new());
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d/sub")).await.expect("mkdir");
+        write(&mem, "mem:///d/sub/a.txt", b"a").await;
+
+        let entry = mem.stat(&vp("mem:///d/sub")).await.expect("stat");
+        let foto = DestWitness::of(&entry).with_entries(Some(1));
+        // Como se planificó: una entrada dentro.
+        revalidate(mem.as_ref(), &vp("mem:///d/sub"), Some(foto), &c)
+            .await
+            .expect("nada cambió");
+
+        // Alguien mete algo mientras el humano decide.
+        write(&mem, "mem:///d/sub/b.txt", b"b").await;
+        let err = revalidate(mem.as_ref(), &vp("mem:///d/sub"), Some(foto), &c)
+            .await
+            .expect_err("el árbol ya no es el que se aprobó");
+        assert_eq!(cause_of(&err), SyncFailureCause::Conflict);
+
+        // Y un testigo SIN recuento no puede declarar conflicto por eso: es
+        // «no se sabe», jamás «cero» (mismo criterio que el tamaño).
+        let sin_cuenta = DestWitness::of(&entry);
+        revalidate(mem.as_ref(), &vp("mem:///d/sub"), Some(sin_cuenta), &c)
+            .await
+            .expect("sin recuento, no hay nada que comparar");
+    }
+
     /// La revalidación mira lo que las DOS fotos traen. Un tamaño que se movió
     /// es un conflicto; un testigo sin tamaño no puede serlo (`file://` lista
     /// así de serie y rechazaría el plan entero).
@@ -1517,6 +1642,7 @@ mod tests {
             kind: entry.kind,
             size: None,
             mtime_ms: None,
+            entries: None,
         };
         revalidate(mem.as_ref(), &vp("mem:///d/a.txt"), Some(sin_medidas), &c)
             .await
@@ -2110,6 +2236,62 @@ mod tests {
             b"tambien viejo",
             "y la Task paró: el paso siguiente no llegó a correr"
         );
+    }
+
+    /// #206: un `created` que falla DESPUÉS de un `trashed` que sí quedó deja
+    /// un LOTE cuyo undo bloquea, y eso se DICE con la ruta y su sitio en la
+    /// papelera dentro del error.
+    ///
+    /// No se compensa, y esa es la decisión: devolverlo pediría borrar la
+    /// copia recién puesta Y desenterrar la vieja, o sea dos mutaciones más
+    /// por el camino en el que el journal ya demostró no funcionar — y
+    /// ninguna de las dos quedaría registrada tampoco. Lo que sí se puede es
+    /// no dejar al operador buscando: sale como `Unrecoverable`, no como un
+    /// `Fatal` cualquiera, que es la diferencia entre «falló» y «tu fichero
+    /// está AQUÍ».
+    #[tokio::test]
+    async fn un_created_que_falla_tras_enterrar_dice_donde_quedo_todo() {
+        let mem = Arc::new(MemProvider::new());
+        mem.mkdir(&vp("mem:///s")).await.expect("mkdir");
+        mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+        write(&mem, "mem:///s/a.txt", b"nuevo").await;
+        write(&mem, "mem:///d/a.txt", b"viejo").await;
+        let t = targets(&mem);
+        let record = SpoolStep {
+            step: step(
+                SyncStepKind::Overwrite,
+                "a.txt",
+                Some(StepReversal::RestoreTrash),
+            ),
+            dest: Some(DestWitness::of(
+                &mem.stat(&vp("mem:///d/a.txt")).await.expect("stat"),
+            )),
+        };
+
+        let err = super::overwrite(
+            &t,
+            &record,
+            &CreatedFalla,
+            &vp("mem:///d/a.txt"),
+            &ctx(CancellationToken::new()),
+        )
+        .await
+        .expect_err("la fila del `created` no llegó");
+        let StepError::Unrecoverable(u) = err else {
+            panic!("el lote quedó sin poder deshacerse: eso es un ESTADO, no un fallo: {err:?}");
+        };
+        assert_eq!(
+            u.buried,
+            vp("mem:///d/a.txt"),
+            "el error nombra QUÉ quedó sin poder deshacerse"
+        );
+        assert_eq!(
+            u.at, None,
+            "y adónde fue, si la papelera lo nombra: ésta no (mismo `None` que \
+             el brazo opaco de #160)"
+        );
+        // Y el árbol quedó como quedó: el nuevo puesto, el viejo enterrado.
+        assert_eq!(read(&mem, "mem:///d/a.txt").await, b"nuevo");
     }
 
     /// #160, el otro brazo: una papelera "vanish" (macOS/Windows, `Opaque`) no

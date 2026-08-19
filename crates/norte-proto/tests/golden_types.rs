@@ -3366,7 +3366,7 @@ fn method_names_frozen() {
     // `session.put` ACEPTA (un esquema que este core no sabe leer se rehúsa,
     // en vez de escribirse y matar la persistencia desde el arranque
     // siguiente). Un bump por comportamiento del wire, que también cuenta.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.51.0");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.52.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,
@@ -4155,6 +4155,17 @@ fn golden_sync_blocker() {
                 SyncBlocker {
                     rel: rel_path("fotos"),
                     kind: Kind::DirTooLarge,
+                    side: Some(Side::Right),
+                },
+            ),
+            (
+                // 0.52.0 (#163): un nombre que el destino no puede tener. El
+                // lado es SIEMPRE el destino — es su sistema de ficheros el
+                // que lo rehúsa, no el origen el que lo escribió mal.
+                "illegal_dest_name",
+                SyncBlocker {
+                    rel: rel_path("CON"),
+                    kind: Kind::IllegalDestName,
                     side: Some(Side::Right),
                 },
             ),

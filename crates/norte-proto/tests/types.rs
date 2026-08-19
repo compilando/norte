@@ -1163,10 +1163,16 @@ fn version_ventana_actual() {
     // persistencia para siempre. La ventana se desplaza por lo de siempre y en
     // la dirección menos habitual: contra un daemon 0.50 no se pierde
     // funcionalidad, se pierde la PROTECCIÓN.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.51.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.50.0"), "N-1");
+    //
+    // 0.52.0 (#163): `SyncBlockerKind::IllegalDestName`. Aditivo sobre un enum
+    // `#[serde(other)]`, así que un cliente 0.51 lo degrada a `Unknown` — y un
+    // bloqueo que no se entiende SIGUE bloqueando, que es la degradación que
+    // hace falta. Lo que se pierde contra un daemon viejo es la comprobación,
+    // no la corrección.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.52.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.51.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.49.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.50.9"),
         "N-2 fuera de la ventana"
     );
 }
