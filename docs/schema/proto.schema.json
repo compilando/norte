@@ -73,7 +73,7 @@
       ]
     },
     "ArchivePackParams": {
-      "description": "Params de [`ARCHIVE_PACK`] (0.50.0, #132).\n\n```\nuse norte_proto::methods::{ArchiveFormat, ArchivePackParams};\nlet p: ArchivePackParams = serde_json::from_str(\n    r#\"{\"sources\":[\"file:///a/x\"],\"dest\":\"file:///a.zip\",\"base\":\"file:///a\"}\"#,\n)\n.expect(\"params\");\nassert_eq!(p.format, ArchiveFormat::Zip, \"el formato por defecto es zip\");\nassert_eq!(p.level, None, \"y el nivel lo elige el core\");\n```",
+      "description": "Params de [`ARCHIVE_PACK`] (0.50.0, #132).\n\n```\nuse norte_proto::methods::{ArchiveFormat, ArchivePackParams};\nlet p: ArchivePackParams = serde_json::from_str(\n    r#\"{\"sources\":[\"file:///a/x\"],\"dest\":\"file:///a.zip\",\"base\":\"file:///a\",\"format\":\"zip\"}\"#,\n)\n.expect(\"params\");\nassert_eq!(p.format, ArchiveFormat::Zip);\nassert_eq!(p.level, None, \"el nivel sí lo elige el core\");\n// Y sin `format` NO parsea: es la decisión del cliente, no un default.\nassert!(\n    serde_json::from_str::<ArchivePackParams>(\n        r#\"{\"sources\":[\"file:///a/x\"],\"dest\":\"file:///a.zip\",\"base\":\"file:///a\"}\"#,\n    )\n    .is_err()\n);\n```",
       "properties": {
         "base": {
           "$ref": "#/$defs/VPath",

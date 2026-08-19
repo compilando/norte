@@ -1365,11 +1365,7 @@ keymap = [{ on = ["x"], run = "app.quit" }]"#,
         // No disponible, y da igual POR QUÉ: lo que se prueba es que la
         // sombra la echa igual. (Era `NotBuilt` hasta que #132 dejó la tabla
         // sin comandos `Planned`; hoy es `NotHere`.)
-        assert!(
-            !matches!(hits[0].2, Availability::Here),
-            "{:?}",
-            hits[0].2
-        );
+        assert!(!matches!(hits[0].2, Availability::Here), "{:?}", hits[0].2);
         // El `app.quit` de `[global]` sigue SOMBREADO: no aflora.
         assert!(
             !eff.bindings().iter().any(|(seq, _)| seq == "x"),

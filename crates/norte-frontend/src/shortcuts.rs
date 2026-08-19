@@ -853,7 +853,11 @@ keymap = [
         // No ejecutable, y con su motivo escrito. Era una capacidad `Planned`
         // con número de issue hasta que #132 construyó la última; hoy la fila
         // no ejecutable es la del comando que este build no implementa.
-        assert!(matches!(pack.avail, Availability::NotHere), "{:?}", pack.avail);
+        assert!(
+            matches!(pack.avail, Availability::NotHere),
+            "{:?}",
+            pack.avail
+        );
         assert!(!pack.reason.is_empty(), "{:?}", pack.reason);
         // A command NOT in `bindable` gets no unbound row: it would answer
         // "how do I press X" with a key that does nothing on this screen.

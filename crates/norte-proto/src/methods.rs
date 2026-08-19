@@ -3527,11 +3527,18 @@ pub enum ArchiveFormat {
 /// ```
 /// use norte_proto::methods::{ArchiveFormat, ArchivePackParams};
 /// let p: ArchivePackParams = serde_json::from_str(
-///     r#"{"sources":["file:///a/x"],"dest":"file:///a.zip","base":"file:///a"}"#,
+///     r#"{"sources":["file:///a/x"],"dest":"file:///a.zip","base":"file:///a","format":"zip"}"#,
 /// )
 /// .expect("params");
-/// assert_eq!(p.format, ArchiveFormat::Zip, "el formato por defecto es zip");
-/// assert_eq!(p.level, None, "y el nivel lo elige el core");
+/// assert_eq!(p.format, ArchiveFormat::Zip);
+/// assert_eq!(p.level, None, "el nivel sí lo elige el core");
+/// // Y sin `format` NO parsea: es la decisión del cliente, no un default.
+/// assert!(
+///     serde_json::from_str::<ArchivePackParams>(
+///         r#"{"sources":["file:///a/x"],"dest":"file:///a.zip","base":"file:///a"}"#,
+///     )
+///     .is_err()
+/// );
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
