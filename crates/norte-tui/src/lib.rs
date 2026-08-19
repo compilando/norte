@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod config;
+pub mod config_reload;
 pub mod fill;
 pub mod help;
 pub mod help_context;

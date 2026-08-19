@@ -10,6 +10,7 @@
 //! resultado al disco.
 
 use crossterm::event::{KeyCode, KeyModifiers};
+use norte_core::backend::Backend;
 use norte_i18n::{t, ta};
 
 use crate::app::{App, PAGE, PendingWrite, SettingsEditError, Shortcuts, io_error_category};
@@ -199,6 +200,41 @@ pub async fn persist_setting(app: &mut App, write: PendingWrite) {
 /// hoisteado a [`norte_frontend::settings::edit_error_message`].
 fn settings_edit_error_message(e: &SettingsEditError) -> String {
     norte_frontend::settings::edit_error_message(e)
+}
+
+/// Builds the Plugins-section summaries for the settings overlay (G3c):
+/// `plugins_list` (approved+enabled only — same gate the palette's
+/// `plugin_rows` and the extension manager's actionable rows use) then one
+/// `plugin.get_config` PER surviving plugin, keeping only those with at
+/// least one `[config.<key>]` (nothing to summarize/drill into otherwise).
+/// Best-effort: a plugin whose `get_config` call fails (daemon hiccup, a
+/// remote N-1 without the method) is simply DROPPED from the section — an
+/// enrichment lost, never a hard error that would block opening settings
+/// at all (same fallback contract as `plugin.decorate`/`column_values`).
+/// `name` is masked here (plugin text, untrusted) — the ONLY point this
+/// summary crosses into `norte_frontend::settings::Row`.
+pub async fn plugin_config_summaries(
+    backend: &Backend,
+) -> Vec<norte_frontend::settings::PluginConfigSummary> {
+    let Ok(list) = backend.plugins_list().await else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for p in list.plugins.iter().filter(|p| p.approved && p.enabled) {
+        let Ok(cfg) = backend.plugin_get_config(&p.id).await else {
+            continue;
+        };
+        if cfg.keys.is_empty() {
+            continue;
+        }
+        let (name, _) = crate::app::display_name(p.name.as_bytes());
+        out.push(norte_frontend::settings::PluginConfigSummary {
+            plugin_id: p.id.clone(),
+            name,
+            key_count: cfg.keys.len(),
+        });
+    }
+    out
 }
 
 #[cfg(test)]
