@@ -3995,6 +3995,12 @@ async fn handle_file_combine(
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::FileCombineParams = parse_params(params)?;
     read_gate(actor, &p.first, shared)?;
+    // Y el DIRECTORIO, porque los demás trozos se derivan por convención y no
+    // los nombra la petición: un scope sobre el fichero `.001` a secas no
+    // cubre a sus hermanos.
+    if let Some(dir) = p.first.parent() {
+        read_gate(actor, &dir, shared)?;
+    }
     let handle = shared
         .engine
         .combine_as(p, actor.clone())

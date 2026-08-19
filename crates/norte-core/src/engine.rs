@@ -1967,6 +1967,9 @@ impl Engine {
         )
         .await?;
         let src = self.provider_for(&params.path).await?;
+        // Se mide ANTES de crear la Task: un rechazo del REQUEST es un error
+        // del RPC y no el fallo de algo que ya estaba corriendo.
+        crate::pack::mide_el_reparto(&*src, &params.path, params.part_bytes).await?;
         let provider_destino = self.provider_for(&params.dest_dir).await?;
         let key = params.dest_dir.scheme().to_owned();
         let observer = Arc::clone(&self.observer);
@@ -2007,10 +2010,17 @@ impl Engine {
         params: norte_proto::methods::FileCombineParams,
         actor: crate::journal::Actor,
     ) -> Result<TaskHandle, Error> {
+        // El gate va sobre el DIRECTORIO de los trozos, no solo sobre el
+        // primero: juntar lee `.002`…`.999` como hermanos derivados por
+        // convención, y `is_under` es prefijo exacto de segmentos, así que un
+        // scope clavado en el fichero `…/x.bin.001` cubría el primero y ningún
+        // otro. Un agente con ese scope se llevaba el conjunto entero a un
+        // destino que sí podía leer.
+        let dir_trozos = params.first.parent().ok_or(Error::InvalidPath)?;
         self.gate(
             &actor,
             crate::policy::PolicyOp::Copy,
-            &[&params.first, &params.dest],
+            &[&params.first, &dir_trozos, &params.dest],
         )
         .await?;
         let src = self.provider_for(&params.first).await?;

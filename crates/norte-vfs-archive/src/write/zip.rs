@@ -74,6 +74,8 @@ struct EnCurso {
     dos_date: u16,
     offset: u64,
     external_attrs: u32,
+    /// La cabecera local anunció zip64 (por el tamaño declarado).
+    zip64: bool,
     crc: flate2::Crc,
     uncomp: u64,
     comp: u64,
@@ -107,6 +109,20 @@ impl ZipWriter {
             curso: None,
             nivel,
         }
+    }
+
+    /// Un escritor que se cree que ya ha entregado `pos` bytes.
+    ///
+    /// Existe para los TESTS de zip64, y no hay otra forma honesta: el caso
+    /// que importa —un archivo que pasa de 4 GiB con miembros pequeños— se
+    /// reproduce con este asiento en microsegundos y con cuatro gigas de disco
+    /// en ningún sitio.
+    #[cfg(test)]
+    #[must_use]
+    pub(super) fn desde(pos: u64, nivel: u32) -> Self {
+        let mut w = Self::new(nivel);
+        w.entregados = pos;
+        w
     }
 
     /// Bytes producidos hasta ahora. Se vacía el búfer: el llamante es quien
@@ -155,9 +171,34 @@ impl ZipWriter {
         let flags = FLAG_DATA_DESCRIPTOR | if utf8 { FLAG_UTF8 } else { 0 };
         let (dos_time, dos_date) = dos_datetime(entry.mtime_ms);
         let offset = self.pos();
+        // **La cabecera LOCAL tiene que decir si la entrada es zip64**, y se
+        // sabe aquí: el tamaño viene en la entrada. Un lector en STREAMING
+        // —`unzip` desde una tubería, bsdtar, `zipfile` en modo flujo— no ha
+        // visto el directorio central todavía, así que decide el ancho del
+        // descriptor de datos por esto. Sin el marcador leía 12 bytes donde
+        // escribimos 20 y se desincronizaba en la primera entrada de más de
+        // 4 GiB; el directorio central lo salvaba, y por eso el round-trip con
+        // nuestro propio lector no lo veía.
+        let entrada_64 = entry.size > U32_MAX;
+        let mut extra_local: Vec<u8> = Vec::new();
+        if entrada_64 {
+            put_u16(&mut extra_local, 0x0001);
+            put_u16(&mut extra_local, 16);
+            // Los valores REALES no se saben todavía (el descriptor los
+            // lleva); lo que importa es el ancho que anuncia el registro.
+            put_u64(&mut extra_local, 0);
+            put_u64(&mut extra_local, 0);
+        }
 
         put_u32(&mut self.out, LOCAL_SIG);
-        put_u16(&mut self.out, VERSION_BASE);
+        put_u16(
+            &mut self.out,
+            if entrada_64 {
+                VERSION_ZIP64
+            } else {
+                VERSION_BASE
+            },
+        );
         put_u16(&mut self.out, flags);
         put_u16(&mut self.out, method);
         put_u16(&mut self.out, dos_time);
@@ -165,11 +206,12 @@ impl ZipWriter {
         // CRC y tamaños van a cero: los lleva el descriptor de datos, que es
         // lo que el bit 3 anuncia.
         put_u32(&mut self.out, 0);
-        put_u32(&mut self.out, 0);
-        put_u32(&mut self.out, 0);
+        put_u32(&mut self.out, if entrada_64 { u32::MAX } else { 0 });
+        put_u32(&mut self.out, if entrada_64 { u32::MAX } else { 0 });
         put_u16(&mut self.out, u16::try_from(name.len()).unwrap_or(u16::MAX));
-        put_u16(&mut self.out, 0);
+        put_u16(&mut self.out, u16::try_from(extra_local.len()).unwrap_or(0));
         self.out.extend_from_slice(&name);
+        self.out.extend_from_slice(&extra_local);
 
         let cuerpo = if method == METHOD_DEFLATE {
             Cuerpo::Deflate(Box::new(flate2::write::DeflateEncoder::new(
@@ -187,6 +229,7 @@ impl ZipWriter {
             dos_date,
             offset,
             external_attrs: external_attrs(entry),
+            zip64: entrada_64,
             crc: flate2::Crc::new(),
             uncomp: 0,
             comp: 0,
@@ -238,7 +281,10 @@ impl ZipWriter {
             self.out.extend_from_slice(&cola);
         }
         let crc = std::mem::replace(&mut curso.crc, flate2::Crc::new()).sum();
-        let zip64 = curso.comp > U32_MAX || curso.uncomp > U32_MAX;
+        // El ancho del descriptor es el que ANUNCIÓ la cabecera local, no el
+        // que resulte de los tamaños: quien lee en streaming ya decidió con
+        // ella, y cambiar de opinión aquí es la desincronización otra vez.
+        let zip64 = curso.zip64 || curso.comp > U32_MAX || curso.uncomp > U32_MAX;
         put_u32(&mut self.out, DD_SIG);
         put_u32(&mut self.out, crc);
         if zip64 {
@@ -322,18 +368,27 @@ impl ZipWriter {
     }
 
     /// Una entrada del directorio central, con su extra zip64 si hace falta.
+    ///
+    /// **Si hace falta para UNO, los TRES campos fijos van al centinela.** El
+    /// extra 0x0001 lleva solo los campos que en el registro fijo valen
+    /// `0xFFFFFFFF`, en orden (APPNOTE 4.5.3), así que emitir los tres valores
+    /// marcando uno solo hace que un lector conforme —el nuestro incluido,
+    /// `zip_cd::resolve_extra`, que es estricto a propósito— lea el primer u64
+    /// como si fuera el campo que sí estaba marcado. Un archivo de más de
+    /// 4 GiB con miembros pequeños tomaba el TAMAÑO como offset del header
+    /// local, y no lo abría nadie.
     fn escribe_cd(&mut self, e: &Written) {
         let zip64 = e.comp_size > U32_MAX || e.uncomp_size > U32_MAX || e.offset > U32_MAX;
         let mut extra: Vec<u8> = Vec::new();
         if zip64 {
-            // Header 0x0001: los tres campos en 64 bits, en este orden y solo
-            // los que en el registro fijo van a 0xFFFFFFFF.
             put_u16(&mut extra, 0x0001);
             put_u16(&mut extra, 24);
             put_u64(&mut extra, e.uncomp_size);
             put_u64(&mut extra, e.comp_size);
             put_u64(&mut extra, e.offset);
         }
+        // El centinela, para los tres a la vez.
+        let fijo = |v: u64| if zip64 { u32::MAX } else { trunca(v) };
         put_u32(&mut self.out, CD_SIG);
         // «Hecho por»: 3 = Unix en el byte alto, para que los permisos del
         // campo de atributos externos signifiquen algo.
@@ -347,8 +402,8 @@ impl ZipWriter {
         put_u16(&mut self.out, e.dos_time);
         put_u16(&mut self.out, e.dos_date);
         put_u32(&mut self.out, e.crc);
-        put_u32(&mut self.out, trunca(e.comp_size));
-        put_u32(&mut self.out, trunca(e.uncomp_size));
+        put_u32(&mut self.out, fijo(e.comp_size));
+        put_u32(&mut self.out, fijo(e.uncomp_size));
         put_u16(
             &mut self.out,
             u16::try_from(e.name.len()).unwrap_or(u16::MAX),
@@ -362,7 +417,7 @@ impl ZipWriter {
         put_u16(&mut self.out, 0);
         put_u16(&mut self.out, 0);
         put_u32(&mut self.out, e.external_attrs);
-        put_u32(&mut self.out, trunca(e.offset));
+        put_u32(&mut self.out, fijo(e.offset));
         self.out.extend_from_slice(&e.name);
         self.out.extend_from_slice(&extra);
     }
@@ -448,4 +503,89 @@ fn put_u32(out: &mut Vec<u8>, v: u32) {
 
 fn put_u64(out: &mut Vec<u8>, v: u64) {
     out.extend_from_slice(&v.to_le_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// El offset de una entrada más allá de 4 GiB viaja por el extra de
+    /// zip64, y los TRES campos fijos van al centinela.
+    ///
+    /// Con solo el offset marcado, un lector conforme —el nuestro entre
+    /// ellos— lee el primer u64 del extra (el tamaño SIN comprimir) como si
+    /// fuera el offset, salta ahí, no encuentra la firma del header local y
+    /// devuelve `Corrupt`. Un zip de más de 4 GiB con miembros pequeños es lo
+    /// más corriente del mundo, y no lo abría nadie.
+    #[test]
+    fn una_entrada_mas_alla_de_4gib_marca_los_tres_campos() {
+        const ALTO: u64 = 0x1_0000_0000;
+        let mut w = ZipWriter::desde(ALTO, 0);
+        w.begin(&PackEntry::file(b"x".to_vec(), 4)).expect("abre");
+        w.data(b"hola").expect("datos");
+        w.end().expect("cierra");
+        w.finish().expect("termina");
+        let bytes = w.take();
+
+        // La entrada del directorio central empieza en su firma.
+        let cd = bytes
+            .windows(4)
+            .position(|v| v == CD_SIG.to_le_bytes())
+            .expect("hay directorio central");
+        let le32 = |i: usize| {
+            u32::from_le_bytes([
+                bytes[cd + i],
+                bytes[cd + i + 1],
+                bytes[cd + i + 2],
+                bytes[cd + i + 3],
+            ])
+        };
+        assert_eq!(le32(20), u32::MAX, "comprimido al centinela");
+        assert_eq!(le32(24), u32::MAX, "sin comprimir también");
+        assert_eq!(le32(42), u32::MAX, "y el offset, que es el que se pasó");
+
+        let extra_len = u16::from_le_bytes([bytes[cd + 30], bytes[cd + 31]]);
+        assert_eq!(extra_len, 28, "cabecera de 4 + tres u64");
+        let name_len = u16::from_le_bytes([bytes[cd + 28], bytes[cd + 29]]);
+        let extra = cd + 46 + usize::from(name_len);
+        let le64 = |i: usize| {
+            let mut v = [0_u8; 8];
+            v.copy_from_slice(&bytes[i..i + 8]);
+            u64::from_le_bytes(v)
+        };
+        assert_eq!(le64(extra + 20), ALTO, "el offset REAL, el tercero");
+    }
+
+    /// Y una entrada que declara más de 4 GiB lo dice en su cabecera LOCAL: es
+    /// lo único que tiene un lector en streaming para saber que el descriptor
+    /// de datos trae ocho bytes por tamaño y no cuatro.
+    #[test]
+    fn una_entrada_grande_lo_anuncia_en_la_cabecera_local() {
+        let mut w = ZipWriter::new(0);
+        // Se DECLARA grande y no se escribe: lo que se prueba es la cabecera.
+        w.begin(&PackEntry::file(b"g".to_vec(), U32_MAX + 1))
+            .expect("abre");
+        let bytes = w.take();
+        assert_eq!(
+            u16::from_le_bytes([bytes[4], bytes[5]]),
+            VERSION_ZIP64,
+            "versión necesaria 4.5"
+        );
+        let extra_len = u16::from_le_bytes([bytes[28], bytes[29]]);
+        assert_eq!(
+            extra_len, 20,
+            "y el extra 0x0001 de 16 bytes con su cabecera"
+        );
+    }
+
+    /// Una entrada normal NO lleva nada de eso: el zip corriente tiene que
+    /// seguir siendo un zip corriente.
+    #[test]
+    fn una_entrada_normal_no_anuncia_zip64() {
+        let mut w = ZipWriter::new(6);
+        w.begin(&PackEntry::file(b"p".to_vec(), 4)).expect("abre");
+        let bytes = w.take();
+        assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), VERSION_BASE);
+        assert_eq!(u16::from_le_bytes([bytes[28], bytes[29]]), 0, "sin extra");
+    }
 }

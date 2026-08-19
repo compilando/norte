@@ -20,7 +20,10 @@ use super::{KeymapDiagnostic, KeymapError};
 /// .unwrap();
 /// let eff = Effective::build_for(&preset, &[], &["pane.copy"], Screen::Browse).unwrap();
 /// let all = eff.bindings_all();
-/// assert!(matches!(all[0].2, Availability::NotBuilt { issue: 132, .. }));
+/// // `pane.pack` existe y este build no lo declara conocido: la tecla se
+/// // queda, marcada. (Fue el ejemplo de `NotBuilt` mientras el catálogo tuvo
+/// // comandos `Planned`; #132 construyó el último.)
+/// assert!(matches!(all[0].2, Availability::NotHere));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Availability {

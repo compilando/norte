@@ -970,7 +970,12 @@ fn golden_methods() {
     // propio — son el `FsTaskResult` de siempre, ya congelado. Desempaquetar no
     // aparece en absoluto: es un `fs.copy`, y su forma lleva congelada desde
     // 0.10.
-    assert_eq!(fixtures.len(), 156, "[methods.json] fixtures sin caso Rust");
+    // 156 → 158 al aplicar la revisión: + archive_test_report_params (el
+    // QUINTO método del bump, que no estaba congelado en ningún sitio) y
+    // archive_test_result_clean (la forma que de verdad devuelve un archivo
+    // sano: con todos los campos `serde(default)`, un resultado limpio es `{}`
+    // en el wire, y es el que ningún golden fijaba).
+    assert_eq!(fixtures.len(), 158, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
@@ -1042,11 +1047,35 @@ fn check_methods_archive_write(fixtures: &BTreeMap<String, Value>) {
         &ArchiveTestResult {
             entries: 3,
             failed: vec![ArchiveTestFailure {
+                // La ruta ENTERA en forma wire: es la que señala CUÁL de las
+                // dos `x.txt` de un archivo está corrupta, y la única que
+                // conserva los bytes de un nombre que no es UTF-8.
+                path: "zip+file:///a.zip/!/roto.txt".to_owned(),
                 name: "roto.txt".to_owned(),
                 reason: "crc".to_owned(),
             }],
             truncated: false,
             checked: vec!["crc".to_owned()],
+        },
+    );
+    // Un archivo SANO, que es la respuesta corriente: sin fallos y diciendo
+    // qué comprobó. Los tres tokens de `checked` son vocabulario del wire y
+    // este golden es lo único que los congela.
+    check_one(
+        fixtures,
+        "archive_test_result_clean",
+        &ArchiveTestResult {
+            entries: 9,
+            failed: Vec::new(),
+            truncated: false,
+            checked: vec!["gzip_crc".to_owned()],
+        },
+    );
+    check_one(
+        fixtures,
+        "archive_test_report_params",
+        &norte_proto::methods::ArchiveTestReportParams {
+            task_id: norte_proto::TaskId::new(7),
         },
     );
     check_one(
@@ -3323,6 +3352,10 @@ fn method_names_frozen() {
     assert_eq!(methods::ARCHIVE_TEST, "archive.test");
     assert_eq!(methods::FILE_SPLIT, "file.split");
     assert_eq!(methods::FILE_COMBINE, "file.combine");
+    // El QUINTO: sin esta línea, renombrar `archive.test_report` pasaba la
+    // suite entera. Es el método por el que se recoge qué entrada está
+    // corrupta, así que su nombre es contrato igual que los otros cuatro.
+    assert_eq!(methods::ARCHIVE_TEST_REPORT, "archive.test_report");
     // Los topes que un cliente puede enseñar ANTES de mandar nada: 999 trozos
     // es la convención `.001`, y descubrirlo en el trozo 1000 dejaría un
     // conjunto que nadie puede volver a juntar.

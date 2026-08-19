@@ -58,6 +58,12 @@ impl TarWriter {
         if self.curso.is_some() || self.cerrado {
             return Err(PackError::Estado);
         }
+        // El tamaño tiene que caber en los once dígitos octales de ustar: por
+        // encima, la cabecera mentiría y el archivo sería ilegible a partir de
+        // esa entrada. Se dice; no se escribe (ver [`TAR_SIZE_MAX`]).
+        if !entry.dir && entry.size > TAR_SIZE_MAX {
+            return Err(PackError::Tamano);
+        }
         let mut name = entry.name.clone();
         if entry.dir && !name.ends_with(b"/") {
             name.push(b'/');
@@ -187,14 +193,88 @@ fn escribe_cabecera(
     h[155] = b' ';
 }
 
+/// Lo más grande que cabe en el campo de tamaño de ustar: once dígitos
+/// octales, o sea 8 GiB menos uno.
+///
+/// No es una curiosidad del formato: `octal` se quedaba con los dígitos BAJOS,
+/// así que un fichero de exactamente 8 GiB se anunciaba como de tamaño CERO y
+/// detrás iban sus ocho gigas. El relleno se calculaba del tamaño real, así
+/// que el flujo seguía alineado y la corrupción no se veía hasta que un lector
+/// intentaba parsear esos bytes como cabeceras. Un archivo así lo escribía la
+/// task entera sin un solo error, y el journal anotaba un `Created`.
+pub(super) const TAR_SIZE_MAX: u64 = 0o777_7777_7777;
+
 /// Un número en octal ASCII, alineado a la derecha con ceros y terminado en
 /// NUL, que es como tar los lleva.
+///
+/// El valor tiene que CABER: quien llama comprueba antes
+/// ([`TAR_SIZE_MAX`]). Aquí, si no cupiera, se rellena de nueves octales —
+/// un valor visiblemente absurdo— en vez de quedarse con los dígitos bajos,
+/// que es lo que convertía un desbordamiento en un tamaño plausible y falso.
 fn octal(campo: &mut [u8], v: u64, digitos: usize) {
     let s = format!("{v:0>digitos$o}");
     let bytes = s.as_bytes();
-    let n = bytes.len().min(digitos);
-    campo[..n].copy_from_slice(&bytes[bytes.len() - n..]);
+    if bytes.len() > digitos {
+        campo[..digitos].fill(b'7');
+    } else {
+        let n = bytes.len().min(digitos);
+        campo[digitos - n..digitos].copy_from_slice(bytes);
+    }
     if digitos < campo.len() {
         campo[digitos] = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **Un tamaño que no cabe en once dígitos octales se DICE.**
+    ///
+    /// `octal` se quedaba con los dígitos bajos, así que 8 GiB exactos se
+    /// escribían como tamaño CERO con ocho gigas detrás: el relleno salía del
+    /// tamaño real, el flujo seguía alineado, y la corrupción no aparecía
+    /// hasta que un lector intentaba parsear esos bytes como cabeceras. La
+    /// task terminaba en verde y el journal anotaba un `Created`.
+    #[test]
+    fn un_tamano_que_no_cabe_en_ustar_se_rehusa() {
+        let mut w = TarWriter::new();
+        assert_eq!(
+            w.begin(&PackEntry::file(b"vm.img".to_vec(), TAR_SIZE_MAX + 1)),
+            Err(PackError::Tamano)
+        );
+        // Y justo debajo del tope sí entra.
+        assert!(
+            w.begin(&PackEntry::file(b"vm.img".to_vec(), TAR_SIZE_MAX))
+                .is_ok()
+        );
+    }
+
+    /// El campo octal es de dígitos ALTOS: si algo no cupiera, se ve que no
+    /// cupo en vez de parecer un número plausible.
+    #[test]
+    fn el_octal_no_se_queda_con_los_digitos_bajos() {
+        let mut campo = [0_u8; 12];
+        octal(&mut campo, 8, 11);
+        assert_eq!(&campo[..11], b"00000000010", "ocho es 10 en octal");
+        // Un valor que se pasa: nueves, no ceros.
+        octal(&mut campo, TAR_SIZE_MAX + 1, 11);
+        assert_eq!(&campo[..11], b"77777777777");
+    }
+
+    /// La cabecera de un nombre largo NO recorta el nombre: viaja entero en su
+    /// entrada `L`, y el que se queda en los 100 bytes es una copia.
+    #[test]
+    fn un_nombre_largo_viaja_entero_en_su_entrada_propia() {
+        let largo = vec![b'a'; 150];
+        let mut w = TarWriter::new();
+        w.begin(&PackEntry::file(largo.clone(), 0)).expect("abre");
+        let bytes = w.take();
+        assert_eq!(&bytes[..13], b"././@LongLink", "la entrada GNU va delante");
+        assert_eq!(bytes[156], TYPE_LONGNAME);
+        assert_eq!(&bytes[BLOQUE..BLOQUE + largo.len()], &largo[..], "entero");
+        // Y detrás, la cabecera de verdad con los 100 primeros bytes.
+        let real = BLOQUE * 2;
+        assert_eq!(&bytes[real..real + 100], &largo[..100]);
     }
 }

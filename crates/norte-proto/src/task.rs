@@ -138,6 +138,11 @@ pub enum TaskKind {
     /// #132). MUTA: journal como UNA creación, y deshacerlo es borrar el
     /// archivo.
     ///
+    /// Entra CON el método, y los cuatro de este bump se degradan igual: un
+    /// cliente N-1 (0.49.x) los convierte en [`TaskKind::Unknown`] por el
+    /// `serde(other)` de abajo, como `Search`/`Index`/`Embed`/`RenameBatch`/
+    /// `Compare`/`DirSize` antes que ellos.
+    ///
     /// El progreso cuenta bytes LEÍDOS del origen y entradas empaquetadas; los
     /// bytes escritos no se pueden saber por adelantado —el compresor decide—
     /// y prometer un total que va a fallar es peor que no darlo.

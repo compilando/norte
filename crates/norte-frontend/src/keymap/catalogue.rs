@@ -311,10 +311,9 @@ pub const CATALOGUE: &[CommandDef] = &[
 ///
 /// assert_eq!(lookup("cursor.down").map(|d| d.counts), Some(true));
 /// assert_eq!(lookup("app.quit").map(|d| d.counts), Some(false));
-/// assert!(matches!(
-///     lookup("pane.pack").map(|d| d.status),
-///     Some(Status::Planned { issue: 132, .. })
-/// ));
+/// // #132 construyó el último `Planned` del vocabulario: hoy no queda
+/// // ninguno, y `pane.pack` es `Live` como todo lo demás que un preset ata.
+/// assert_eq!(lookup("pane.pack").map(|d| d.status), Some(Status::Live));
 /// assert_eq!(lookup("pane.select-drive").map(|d| d.status), Some(Status::Live));
 /// assert_eq!(lookup("pane.compare-dirs").map(|d| d.status), Some(Status::Live));
 /// assert_eq!(lookup("pane.sync-dirs").map(|d| d.status), Some(Status::Live));

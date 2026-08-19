@@ -333,6 +333,93 @@ pub fn dest_for(to_dir: &VPath, item: &VPath) -> Option<VPath> {
 /// llama a esto cuando hay un modal abierto, ANTES del mapeo de navegación.
 /// `key_char` solo lo consume [`Modal::AiRenamePrompt`] (tecleo libre, molde
 /// `PaletteView`); el caller ya lo anula bajo ctrl/alt/platform.
+/// Lo que un PEGADO aporta a un campo de una línea (#200).
+///
+/// (El doc de contrato de [`on_key`] está en `on_key`: estas dos funciones se
+/// metieron delante de él y se lo quedaron por el camino, que es lo que pasa
+/// cuando se inserta código encima de un comentario.)
+///
+/// Filtra lo mismo que el tecleo y por lo mismo: un portapapeles trae lo que
+/// otro programa puso ahí, y en un gestor de ficheros eso incluye rutas
+/// copiadas de una web con un `U+202E` dentro o un escape de terminal. El
+/// predicado es [`norte_encoding::is_terminal_hazard`], el MISMO que usa cada
+/// otra superficie de este repositorio — dos listas de peligros son dos
+/// opiniones que divergen a la primera.
+///
+/// **Un salto de línea CORTA, no confirma.** Es la pregunta que #147 dejó
+/// abierta: pegar un texto de dos líneas en un campo de nombre no puede
+/// significar «acepta el nombre y sigue con el resto», porque el resto no es
+/// un nombre y nadie lo ha leído. Se queda la primera línea, que es lo que el
+/// usuario ve pegado.
+///
+/// Sus casos están en `pegado_de_un_campo` (abajo) y no en un doctest: este
+/// crate es un BINARIO, no tiene `lib.rs`, y rustdoc no recoge doctests de un
+/// target `[[bin]]` — un ejemplo aquí sería decorativo.
+#[must_use]
+pub fn pegado_para_campo(texto: &str, tope_chars: usize) -> String {
+    texto
+        .split(['\n', '\r'])
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !norte_encoding::is_terminal_hazard(*c))
+        .take(tope_chars)
+        .collect()
+}
+
+/// Recorta a `tope` BYTES sin partir un carácter.
+///
+/// El corte cae en la frontera anterior: medio carácter en un nombre no es
+/// medio nombre, es un nombre distinto.
+fn recorta_a_bytes(s: &str, tope: usize) -> String {
+    if s.len() <= tope {
+        return s.to_owned();
+    }
+    let mut corte = tope;
+    while corte > 0 && !s.is_char_boundary(corte) {
+        corte -= 1;
+    }
+    s[..corte].to_owned()
+}
+
+/// Pega en el modal ABIERTO, si es uno de los que se teclean (#200).
+///
+/// `true` si el modal se quedó con algo. Los modales de DECISIÓN —confirmar,
+/// resolver una colisión, aprobar— devuelven `false`: pegar texto en un
+/// diálogo de sí/no no significa nada, y hacer que signifique algo es la
+/// clase de atajo que aprueba cosas sin querer.
+pub fn paste(modal: &mut Modal, texto: &str) -> bool {
+    match modal {
+        Modal::RenamePrompt { name, error, .. } => {
+            // El tope de este campo es de BYTES y el nombre es un `Vec<u8>`,
+            // así que el hueco se gasta en bytes: pasarle el número a un
+            // `take` de CARACTERES dejaba entrar 512 emojis, o sea 2 KiB, en
+            // un campo cuyo tope existe justamente para que un pegado
+            // accidental no lo desborde. El test no lo veía porque pegaba
+            // «x», el único carácter para el que las dos cuentas coinciden.
+            let hueco = RENAME_NAME_MAX_BYTES.saturating_sub(name.len());
+            let trozo = recorta_a_bytes(&pegado_para_campo(texto, hueco), hueco);
+            if trozo.is_empty() {
+                return false;
+            }
+            name.extend_from_slice(trozo.as_bytes());
+            *error = None;
+            true
+        }
+        Modal::AiRenamePrompt { query, .. } | Modal::SemanticQuery { query } => {
+            let hueco = AI_INSTRUCTION_MAX_CHARS
+                .saturating_sub(String::from_utf8_lossy(query).chars().count());
+            let trozo = pegado_para_campo(texto, hueco);
+            if trozo.is_empty() {
+                return false;
+            }
+            query.extend_from_slice(trozo.as_bytes());
+            true
+        }
+        _ => false,
+    }
+}
+
 pub fn on_key(modal: &mut Modal, key: &str, key_char: Option<&str>) -> ModalOutcome {
     match modal {
         Modal::ConfirmTransfer { kind, items, to } => match key {
@@ -697,6 +784,97 @@ pub fn on_key(modal: &mut Modal, key: &str, key_char: Option<&str>) -> ModalOutc
 
 #[cfg(test)]
 mod tests {
+
+    /// #200: pegar en un campo de nombre añade lo pegado, saneado.
+    ///
+    /// La GUI no tenía pegado de NINGUNA clase: no hay `InputHandler`, no se
+    /// leía el portapapeles para texto, y `cmd+v` se filtraba antes de llegar
+    /// a un campo. Lo que faltaba no era solo la lectura: era el filtro, que
+    /// es lo que hace que un `U+202E` copiado de una web no entre en el nombre
+    /// de un fichero.
+    #[test]
+    fn pegar_en_el_nombre_anade_lo_pegado_saneado() {
+        let mut m = Modal::RenamePrompt {
+            from: vp("mem:///d/a.txt"),
+            to_dir: vp("mem:///d"),
+            name: b"a".to_vec(),
+            error: Some("lo que fuera".to_owned()),
+        };
+        assert!(paste(&mut m, "\u{202e}.txt"));
+        let Modal::RenamePrompt { name, error, .. } = &m else {
+            panic!("sigue siendo el prompt");
+        };
+        assert_eq!(name, b"a.txt", "sin el peligro, y pegado al final");
+        assert!(error.is_none(), "un pegado limpia el diagnóstico viejo");
+    }
+
+    /// Un salto de línea CORTA. Pegar dos líneas en un campo de una no puede
+    /// significar «acepta la primera y sigue con la segunda»: la segunda no la
+    /// ha leído nadie.
+    #[test]
+    fn un_pegado_multilinea_se_corta_y_no_somete() {
+        let mut m = Modal::SemanticQuery { query: Vec::new() };
+        assert!(paste(&mut m, "informes de 2024\nrm -rf /"));
+        let Modal::SemanticQuery { query } = &m else {
+            panic!("sigue abierto");
+        };
+        assert_eq!(query, b"informes de 2024");
+    }
+
+    /// Y en un modal de DECISIÓN no se pega: un sí/no no tiene campo, y
+    /// hacer que lo tenga es la clase de atajo que aprueba cosas sin querer.
+    #[test]
+    fn en_un_modal_de_decision_no_se_pega() {
+        let mut m = Modal::ConfirmDelete {
+            items: vec![vp("mem:///d/a")],
+            permanent: false,
+        };
+        assert!(!paste(&mut m, "y"));
+    }
+
+    /// El tope se respeta: un portapapeles con un mega de texto no desborda un
+    /// campo de nombre.
+    #[test]
+    fn el_pegado_respeta_el_tope_del_campo() {
+        let mut m = Modal::RenamePrompt {
+            from: vp("mem:///d/a"),
+            to_dir: vp("mem:///d"),
+            name: Vec::new(),
+            error: None,
+        };
+        // **Con un carácter de CUATRO bytes**, que es lo que destapa la
+        // trampa: el tope es de bytes y se estaba gastando en caracteres, así
+        // que 512 emojis entraban como 2 KiB en un campo de 512. Con «x» —lo
+        // que este test pegaba— las dos cuentas coinciden y el fallo era
+        // invisible.
+        assert!(paste(&mut m, &"😀".repeat(RENAME_NAME_MAX_BYTES)));
+        let Modal::RenamePrompt { name, .. } = &m else {
+            panic!("sigue abierto");
+        };
+        assert!(
+            name.len() <= RENAME_NAME_MAX_BYTES,
+            "el tope es de BYTES: {}",
+            name.len()
+        );
+        assert!(
+            std::str::from_utf8(name).is_ok(),
+            "y el corte no parte un carácter"
+        );
+
+        let mut m = Modal::RenamePrompt {
+            from: vp("mem:///d/a"),
+            to_dir: vp("mem:///d"),
+            name: Vec::new(),
+            error: None,
+        };
+        assert!(paste(&mut m, &"x".repeat(RENAME_NAME_MAX_BYTES + 100)));
+        let Modal::RenamePrompt { name, .. } = &m else {
+            panic!("sigue abierto");
+        };
+        assert_eq!(name.len(), RENAME_NAME_MAX_BYTES);
+        // Y lleno, un pegado más no hace nada.
+        assert!(!paste(&mut m, "mas"));
+    }
     use super::*;
 
     fn vp(s: &str) -> VPath {

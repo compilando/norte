@@ -70,7 +70,7 @@ replacement characters everywhere else (hard rule 1).
 
 ### 5. "It passed" says what was checked
 
-`archive.test` returns `checked`: `crc` for a zip, `gzip-crc` for a `tar.gz`,
+`archive.test` returns `checked`: `crc` for a zip, `gzip_crc` for a `tar.gz`,
 `sizes` for a plain tar. A tar carries no content checksum at all, and
 answering a bare "passed" over one would claim more than the format can
 support. The verification itself is the reader's — reading a zip entry whole
@@ -89,13 +89,37 @@ Refusals happen before anything is written: a source that does not hang from
 `base`, a destination that already exists, a split that would need more than
 999 pieces, a join with a gap or with a short middle piece.
 
+### 7. An agent cannot pack what it cannot walk
+
+The read gate looks at the ROOT of a request and nothing else, so an agent
+holding a legitimate scope over a large tree could pack the whole thing —
+including the daemon's state directory — and then read the archive back entry
+by entry, through a file that is inside its own scope. A direct `fs.read` of
+`journal.db` is denied; packing laundered it.
+
+The walk therefore consults `policy::walk_exclusions`, the same list
+`fs.search` and `fs.compare` already use. Two lists of what an agent may not
+walk would be two lists that diverge.
+
+For the same reason `file.combine` gates the DIRECTORY of the pieces and not
+only the first one: the rest are derived by naming convention, and a scope
+pinned to `…/x.bin.001` covers that file and none of its siblings.
+
+### 8. A split that is cut short takes its pieces with it
+
+Every other cancelled operation here leaves what it had already finished — a
+half-copied tree is visible at a glance. Half a set of pieces is not: they are
+all the requested size, there is no gap, and joining the first three of ten
+produces a short file that passes every check. So a cancelled or failed split
+removes the pieces it published, and journals each removal.
+
 ## Consequences
 
 - ADR 0018 is untouched: `norte-vfs-archive` answers `Unsupported` to every
   mutation, and no path in this work asks it for one.
 - **rar and 7z are not writable**, and the dialog says so rather than writing a
   zip with a rar name. Delegation is read-only by design (ADR 0056).
-- Protocol 0.50.0 is additive: four new methods, one report method, and four
+- Protocol 0.50.0 is additive: five new methods and four
   `TaskKind`s. Old clients do not form them; a new client against an old daemon
   gets `Unsupported`, not a generic failure.
 - **The catalogue has no `Planned` commands left.** Every command a preset
@@ -110,4 +134,32 @@ Refusals happen before anything is written: a source that does not hang from
   not have yet.
 - An entry whose name would be the `!` marker is refused: the reader's index
   omits that component (ADR 0018), so writing it would produce an entry norte
-  cannot address afterwards.
+  cannot address afterwards. The same reasoning caps the stored name at 4096
+  bytes and the depth at 64 — the reader's own limits — and refuses two sources
+  that would produce the same stored name.
+
+## Accepted limitations
+
+These are known, deliberate, and not fixed here. They came out of the
+encoding, protocol and Rust reviews of the branch.
+
+- **No fold or normalisation collision check.** Two entries that are distinct
+  here — `café` in NFC and NFD, `µ` and `μ`, `file.` and `file ` — extract to
+  one file on APFS, on Windows, or on ext4 with `+F`. The copy engine consults
+  the fold key for exactly this; packing does not yet.
+- **`a\b` is stored verbatim**, which is right on Linux and becomes a
+  directory separator in 7-Zip and Explorer. Likewise a name with `:` becomes
+  an NTFS alternate data stream on extraction, and `CON` cannot be extracted at
+  all. Our own reader round-trips all three exactly, which is why the round-trip
+  test cannot see them.
+- **A tar name over 100 bytes travels in a GNU `L` entry**, which every modern
+  reader honours. A POSIX-only reader sees the 100-byte truncation, so two
+  names sharing a 100-byte prefix collide there.
+- **The interop claim rests on our own reader.** The round-trip oracle is
+  `norte-vfs-archive` itself; nothing in CI runs `unzip -t` or `tar -tvf` over
+  what we write. During development the zip writer was validated against
+  Python's `zipfile`, which is how the central-directory layout bug was found —
+  that check should become a test.
+- **Compression runs on the async worker.** It is CPU, not blocking I/O, and
+  the loop yields at every sink write, but a level-9 deflate of a large tree
+  holds a runtime thread in long bursts.

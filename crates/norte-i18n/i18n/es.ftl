@@ -700,7 +700,7 @@ modal-pack-hint-tar = tar · Enter empaqueta · Esc cancela
 modal-pack-hint-targz = tar.gz · Enter empaqueta · Esc cancela
 modal-pack-hint-unknown = extensión desconocida — usa .zip, .tar, .tar.gz o .tgz
 modal-split = Partir en trozos de
-modal-split-hint = 4096, 10M, 700M · Enter parte · Esc cancela
+modal-split-hint = 4096, 10M, 700M · los trozos van al otro panel · Enter parte · Esc cancela
 msg-pack-read-only = ese panel es de solo lectura: ahí no se puede escribir
 msg-pack-nothing = no hay nada marcado ni bajo el cursor
 msg-pack-unknown-format = norte escribe .zip, .tar y .tar.gz; el .rar lo lee pero no lo escribe
@@ -866,7 +866,7 @@ compare-hint = tab lado · 1-5 filtro · ins marcar · s sinc · m espejo · ent
 # para sembrar un plan de sincronización, y esa superficie (#161) todavía no
 # está construida aquí. Prometer `s sinc` en un frontend que no sincroniza
 # sería un atajo documentado y muerto — este repo ya envió uno.
-gui-compare-hint = tab lado · 1-5 filtro · enter ir · esc cerrar
+gui-compare-hint = tab lado · 1-5 filtro · s sincr · m espejo · enter ir · esc cerrar
 compare-active-side = actuando sobre: { $side }
 compare-status-running = comparación: { $n } filas (comparando…)
 compare-status-done = comparación: { $n } filas

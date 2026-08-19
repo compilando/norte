@@ -705,7 +705,7 @@ modal-pack-hint-tar = tar · Enter packs · Esc cancels
 modal-pack-hint-targz = tar.gz · Enter packs · Esc cancels
 modal-pack-hint-unknown = unknown extension — use .zip, .tar, .tar.gz or .tgz
 modal-split = Split into pieces of
-modal-split-hint = 4096, 10M, 700M · Enter splits · Esc cancels
+modal-split-hint = 4096, 10M, 700M · pieces land in the other panel · Enter splits · Esc cancels
 msg-pack-read-only = that panel is read-only: nothing can be written there
 msg-pack-nothing = nothing marked and nothing under the cursor
 msg-pack-unknown-format = norte writes .zip, .tar and .tar.gz; it reads .rar but cannot write it
@@ -870,7 +870,7 @@ compare-hint = tab side · 1-5 filter · ins mark · s sync · m mirror · enter
 # synchronisation plan, and that surface (#161) is not built here yet. A key
 # line that promised `s sync` in a frontend that cannot sync would be a
 # documented dead shortcut — this repository has shipped one already.
-gui-compare-hint = tab side · 1-5 filter · enter go · esc close
+gui-compare-hint = tab side · 1-5 filter · s sync · m mirror · enter go · esc close
 compare-active-side = acting on: { $side }
 compare-status-running = compare: { $n } rows (comparing…)
 compare-status-done = compare: { $n } rows

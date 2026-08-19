@@ -636,9 +636,10 @@ use crate::{
 /// nuevo, y `connection.close` cierra por RUTA en vez de por una clave de
 /// sesión que el frontend no tiene por qué conocer.
 /// **0.50.0** (#132, escribir archivos): [`ARCHIVE_PACK`], [`ARCHIVE_TEST`],
-/// [`FILE_SPLIT`] y [`FILE_COMBINE`], con [`ArchivePackParams`],
-/// [`ArchiveTestParams`], [`ArchiveTestResult`], [`ArchiveTestFailure`],
-/// [`FileSplitParams`], [`FileCombineParams`], [`ArchiveFormat`] y cuatro
+/// [`ARCHIVE_TEST_REPORT`], [`FILE_SPLIT`] y [`FILE_COMBINE`] —CINCO métodos—,
+/// con [`ArchivePackParams`], [`ArchiveTestParams`], [`ArchiveTestResult`],
+/// [`ArchiveTestFailure`], [`ArchiveTestReportParams`], [`FileSplitParams`],
+/// [`FileCombineParams`], [`ArchiveFormat`] y cuatro
 /// [`TaskKind`](crate::TaskKind) nuevos.
 ///
 /// Aditivo, y no toca el provider de archivos: ninguno de los cuatro escribe
@@ -3540,13 +3541,19 @@ pub struct ArchivePackParams {
     /// El archivo que se crea. Tiene que NO existir: sobrescribir aquí sería
     /// una pérdida silenciosa, y el frontend ya sabe preguntar.
     pub dest: VPath,
-    /// Formato, explícito. Ver [`ARCHIVE_PACK`] para por qué no se deduce del
-    /// nombre en el servidor. Ausente es `zip`, que es el que todo el mundo
-    /// puede abrir.
-    #[serde(default)]
+    /// Formato, explícito y OBLIGATORIO. Ver [`ARCHIVE_PACK`] para por qué no
+    /// se deduce del nombre en el servidor — y por qué tampoco tiene default:
+    /// con uno, `{"dest":"backup.tar.gz"}` sin `format` producía un ZIP
+    /// llamado `backup.tar.gz`, en silencio y contradiciendo el nombre. Eso es
+    /// peor que la inferencia que este método rechaza. Exigirlo en un tipo
+    /// NUEVO no cuesta compatibilidad; exigirlo después sí sería romperla.
     pub format: ArchiveFormat,
     /// Nivel de compresión 0..=9, o `None` para el del core. 0 es «guardar sin
     /// comprimir» en los formatos que lo permiten.
+    ///
+    /// Un valor por encima de 9 se RECORTA a 9 en vez de rechazarse: el nivel
+    /// es una preferencia, no una petición, y tirar un empaquetado de media
+    /// hora por un 42 sería peor que comprimirlo bien.
     #[serde(default)]
     pub level: Option<u8>,
     /// El directorio contra el que se calculan los nombres GUARDADOS.
@@ -3601,15 +3608,34 @@ pub struct ArchiveTestParams {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ArchiveTestFailure {
-    /// El nombre DENTRO del archivo, con la misma conversión con pérdidas que
-    /// cualquier otro nombre que se pinte: los bytes crudos no caben en un
-    /// campo de texto JSON, y esto es para enseñárselo a una persona.
+    /// La entrada que falló, ENTERA y en su forma wire — que es la única que
+    /// conserva los bytes (regla 1).
+    ///
+    /// Empezó siendo solo el `name` con pérdidas de abajo, y las dos mitades
+    /// de eso estaban mal: `a/x.txt` y `b/x.txt` reportaban lo mismo, y un
+    /// nombre que no es UTF-8 volvía como `U+FFFD` sin nada que dijera cuál de
+    /// los dos era. Este informe es el ÚNICO sitio donde se nombra la entrada
+    /// corrupta, así que tiene que poder señalarla — es el mismo criterio que
+    /// [`RenameStuckStep`], que lleva `VPath` por lo mismo.
+    #[serde(default = "wire_vacio")]
+    pub path: String,
+    /// El nombre para ENSEÑAR, con la conversión con pérdidas que lleva
+    /// cualquier otro nombre que se pinte. Acompaña a [`Self::path`]; no lo
+    /// sustituye.
     pub name: String,
-    /// Categoría del fallo, vocabulario cerrado: `crc`, `truncated`,
-    /// `unsupported`, `io`. Texto y no enum porque un formato futuro puede
-    /// fallar de una forma que este enum no tendría, y un cliente que no la
-    /// conozca la pinta igual.
+    /// Categoría del fallo, vocabulario ABIERTO comparable por igualdad:
+    /// `crc`, `truncated`, `unsupported`, `io`. Puede CRECER de forma aditiva
+    /// —un formato futuro falla de formas que este conjunto no tiene—, así que
+    /// un cliente que reciba una que no conozca la enseña tal cual y jamás
+    /// rechaza el informe por ella. Mismo contrato que
+    /// [`ConnectionDegraded::reason`].
     pub reason: String,
+}
+
+/// El `path` por defecto de un [`ArchiveTestFailure`] deserializado sin él (un
+/// informe de un daemon 0.50 antes de que el campo existiera).
+fn wire_vacio() -> String {
+    String::new()
 }
 
 /// Resultado de [`ARCHIVE_TEST`] (0.50.0, #132).
@@ -3631,8 +3657,13 @@ pub struct ArchiveTestResult {
     /// `true` si hubo más fallos de los que caben en `failed`.
     pub truncated: bool,
     /// QUÉ se ha comprobado de verdad: `crc` cuando el formato lleva suma por
-    /// entrada, `gzip-crc` para la cola de un `tar.gz`, `sizes` cuando lo
+    /// entrada, `gzip_crc` para la cola de un `tar.gz`, `sizes` cuando lo
     /// único verificable es que cada tamaño declarado es alcanzable.
+    ///
+    /// `snake_case`, como cada otro token que acuña este protocolo
+    /// (`tar_gz`, `dir_size`, `rename_batch`): un guion aquí era una
+    /// invitación a que un cliente escribiera `gzip_crc`, no encontrara nada y
+    /// no encendiera nunca el caso de `tar.gz`. Los tres viajan en el golden.
     ///
     /// Va en el resultado y no en la documentación porque «pasa» significa
     /// cosas distintas en cada formato, y un cliente que pinte «íntegro» sobre

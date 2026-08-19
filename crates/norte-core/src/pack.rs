@@ -20,6 +20,16 @@ use norte_vfs_archive::write::{ArchiveWriter, PackEntry, PackFormat};
 use crate::observer::{Mutation, MutationObserver};
 use crate::scheduler::TaskCtx;
 
+/// Tope de bytes del nombre de una entrada, el MISMO con el que el índice de
+/// lectura mira un archivo (`norte_vfs_archive::Limits`).
+///
+/// Escribir por encima produce entradas que este mismo programa omitirá al
+/// abrirlo: un archivo que se traga ficheros en silencio.
+const MAX_NOMBRE_ENTRADA: usize = 4_096;
+
+/// Tope de componentes de una entrada, por lo mismo.
+const MAX_PROFUNDIDAD_ENTRADA: usize = 64;
+
 /// Nivel de compresión por defecto cuando el cliente no dice ninguno.
 const NIVEL_POR_DEFECTO: u8 = 6;
 
@@ -98,7 +108,7 @@ pub(crate) fn formato_de_nombre(name: &[u8]) -> Option<&'static str> {
 pub(crate) fn que_se_comprueba(token: &str) -> Vec<String> {
     let v = match token {
         "zip" => "crc",
-        "tar+gz" => "gzip-crc",
+        "tar+gz" => "gzip_crc",
         // tar plano y rar delegado: solo que los tamaños se alcanzan.
         _ => "sizes",
     };
@@ -146,6 +156,19 @@ async fn enumera(
     base: &VPath,
     ctx: &TaskCtx,
 ) -> Result<Vec<Pieza>, Error> {
+    // Lo que este ACTOR no puede recorrer (#209, y antes #165): el gate de
+    // lectura mira la RAÍZ de la petición y nada más, así que empaquetar
+    // `$HOME` es legítimo y se llevaba por delante el directorio de estado del
+    // daemon con él — `journal.db`, `secrets.age`, `connections.toml`,
+    // `session.json`. Y un archivo es peor que una comparación: el agente lo
+    // vuelve a leer entrada por entrada por el provider de archivos, sobre un
+    // fichero que está en su propio scope. Un `fs.read` de cualquiera de esos
+    // ficheros se deniega; sin esto, `archive.pack` los blanqueaba todos.
+    //
+    // Sale del MISMO sitio que las exclusiones de `fs.search` y `fs.compare`:
+    // dos listas de lo que un agente no puede recorrer serían dos listas que
+    // divergen.
+    let excluidas = crate::policy::walk_exclusions(&ctx.actor);
     let mut out = Vec::new();
     for (provider, raiz) in fuentes {
         if ctx.cancel.is_cancelled() {
@@ -156,8 +179,30 @@ async fn enumera(
             if ctx.cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
+            // Se comprueba ANTES del `stat`: que la entrada exista tampoco es
+            // asunto de quien no puede recorrerla.
+            if excluidas
+                .iter()
+                .any(|raiz| crate::policy::is_under(raiz, &p))
+            {
+                tracing::debug!("archive.pack: subárbol excluido para este actor");
+                continue;
+            }
             let e = provider.stat(&p).await?;
             let nombre = nombre_relativo(base, &p).ok_or(Error::InvalidPath)?;
+            // Los MISMOS topes que el índice de lectura (ADR 0018): un nombre
+            // más largo que `max_name_bytes` o una profundidad por encima de
+            // `max_depth` se OMITEN al leer, así que escribirlos produce un
+            // archivo cuyas entradas norte no vuelve a ver — el mismo agujero
+            // que el rechazo del marcador `!` cierra, por otra puerta.
+            // `split` y no un contador de bytes: son nombres de ruta, no un
+            // flujo, y la sugerencia de clippy (traerse `bytecount`) es una
+            // dependencia entera para contar barras en 4 KiB.
+            let hondura = nombre.split(|b| *b == b'/').count();
+            if nombre.len() > MAX_NOMBRE_ENTRADA || hondura > MAX_PROFUNDIDAD_ENTRADA {
+                tracing::warn!("archive.pack: una entrada no cabría en el índice de lectura");
+                return Err(Error::InvalidPath);
+            }
             match e.kind {
                 EntryKind::Dir => {
                     out.push(Pieza {
@@ -193,6 +238,18 @@ async fn enumera(
     // Los directorios primero dentro de cada nivel, y estable: un archivo cuyo
     // orden depende del orden de listado del provider no es reproducible.
     out.sort_by(|a, b| a.entry.name.cmp(&b.entry.name));
+    // **Dos entradas con el MISMO nombre guardado no se escriben.** Pasa con
+    // raíces que se solapan —`sources: ["/p/a", "/p/a/b"]`, que el wire acepta
+    // aunque las marcas de la TUI no lo formen— y el archivo resultante lleva
+    // la entrada dos veces, con su contenido dos veces: nuestro índice resuelve
+    // «gana la última» y otras herramientas la extraen dos veces. Ordenado
+    // como está, encontrarlo es una comparación.
+    if out.windows(2).any(|p| p[0].entry.name == p[1].entry.name) {
+        tracing::warn!("archive.pack: dos fuentes dan el mismo nombre dentro del archivo");
+        return Err(Error::Conflict {
+            conflict: norte_proto::ConflictKind::Exists,
+        });
+    }
     Ok(out)
 }
 
@@ -445,9 +502,10 @@ fn anota(informe: &Arc<std::sync::Mutex<methods::ArchiveTestResult>>, path: &VPa
         return;
     }
     i.failed.push(methods::ArchiveTestFailure {
-        // Con pérdidas y a sabiendas: esto es para enseñárselo a una persona,
-        // y un campo de texto JSON no lleva bytes crudos. La ruta REAL no hace
-        // falta aquí — el que la quiera la tiene en su propio listado.
+        // La ruta ENTERA y en forma wire: es lo único que conserva los bytes,
+        // y este informe es el único sitio donde se nombra la entrada que
+        // falló. El `name` con pérdidas va aparte, para enseñarlo.
+        path: path.to_wire(),
         name: path
             .file_name()
             .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
@@ -473,18 +531,176 @@ pub(crate) async fn split(
     observer: Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
+    let observer = crate::observer::pin_for_task(observer).await?;
+    let (nombre, total, trozos) = mide_el_reparto(&*src, &path, part_bytes).await?;
+    ctx.progress.update(|p| {
+        p.bytes_total = Some(total);
+        p.entries_total = Some(trozos);
+    });
+
+    sitio_libre(&*provider_destino, &dest_dir, &nombre, trozos).await?;
+
+    // **Sin acumular.** La primera versión juntaba `part_bytes` en un `Vec` y
+    // luego lo drenaba: pico de dos veces el tamaño del trozo, y con un
+    // `part_bytes` que el wire no acota —`u64::MAX` es un valor legal— un
+    // cliente cualquiera se llevaba el daemon por delante con un OOM. Ahora se
+    // escribe según llega y el trozo se cierra cuando se llena, así que la
+    // memoria es la de UN chunk del provider. De paso, la cancelación se mira
+    // por chunk y no por trozo: con trozos de un giga, esperar al final del
+    // trozo es no cancelar.
+    let mut stream = src.read(&path, None).await?;
+    let mut hechos: u64 = 0;
+    let mut escritos: u64 = 0;
+    let mut sink: Option<Box<dyn norte_vfs::ByteSink>> = None;
+    let mut en_curso: u64 = 0;
+    let mut destino_actual: Option<VPath> = None;
+    // Los que ya están publicados, para poder retirarlos si esto se corta:
+    // medio conjunto de trozos es indistinguible de uno entero (ver
+    // [`retira_los_trozos`]).
+    let mut publicados: Vec<VPath> = Vec::new();
+
+    macro_rules! deshaciendo {
+        ($sink:expr, $publicados:expr, $e:expr) => {{
+            if let Some(s) = $sink.take() {
+                let _ = s.abort().await;
+            }
+            retira_los_trozos(&*provider_destino, &$publicados, &observer, ctx).await;
+            return Err($e);
+        }};
+    }
+
+    while let Some(chunk) = stream.next().await {
+        if ctx.cancel.is_cancelled() {
+            deshaciendo!(sink, publicados, Error::Cancelled);
+        }
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => deshaciendo!(sink, publicados, e),
+        };
+        let mut resto = &chunk[..];
+        while !resto.is_empty() {
+            if sink.is_none() {
+                if hechos >= methods::FILE_SPLIT_MAX_PARTS {
+                    // El tope, contra lo que se está ESCRIBIENDO y no contra
+                    // la estimación del `stat`: un fichero que crece mientras
+                    // se lee pasaba la estimación con 800 trozos y escribía
+                    // 1200, y `.1000` no lo vuelve a juntar nadie.
+                    deshaciendo!(
+                        sink,
+                        publicados,
+                        Error::LimitExceeded {
+                            limit: "split-parts".to_owned(),
+                        }
+                    );
+                }
+                let destino = dest_dir.join(
+                    norte_proto::Segment::new(nombre_trozo(&nombre, hechos + 1))
+                        .map_err(|_| Error::InvalidPath)?,
+                );
+                sink = Some(provider_destino.write(&destino).await?);
+                destino_actual = Some(destino);
+                en_curso = 0;
+            }
+            let cabe = usize::try_from(part_bytes - en_curso).unwrap_or(usize::MAX);
+            let corte = cabe.min(resto.len());
+            let (ahora, luego) = resto.split_at(corte);
+            let fallo = match sink.as_mut() {
+                Some(s) => s.write(bytes::Bytes::copy_from_slice(ahora)).await.err(),
+                None => None,
+            };
+            if let Some(e) = fallo {
+                deshaciendo!(sink, publicados, e);
+            }
+            en_curso += ahora.len() as u64;
+            escritos = escritos.saturating_add(ahora.len() as u64);
+            resto = luego;
+            if en_curso == part_bytes {
+                let cerrado = cierra_trozo(
+                    &mut sink,
+                    destino_actual.take(),
+                    &observer,
+                    &mut hechos,
+                    escritos,
+                    ctx,
+                )
+                .await;
+                match cerrado {
+                    Ok(Some(p)) => publicados.push(p),
+                    Ok(None) => {}
+                    Err(e) => deshaciendo!(sink, publicados, e),
+                }
+            }
+        }
+        ctx.progress.update(|p| p.bytes_done = escritos);
+    }
+    // El último, que casi nunca está lleno. Si la división fue exacta no queda
+    // ninguno abierto, y por eso NO se escribe un trozo vacío al final.
+    let cerrado = cierra_trozo(
+        &mut sink,
+        destino_actual.take(),
+        &observer,
+        &mut hechos,
+        escritos,
+        ctx,
+    )
+    .await;
+    match cerrado {
+        Ok(_) => Ok(()),
+        Err(e) => deshaciendo!(sink, publicados, e),
+    }
+}
+
+/// Retira los trozos ya publicados de un split que se cortó.
+///
+/// Cancelar o fallar a mitad deja un conjunto que PARECE completo, y ésa es la
+/// trampa que este op existe para no tender: los trozos escritos son todos del
+/// tamaño pedido, no hay hueco, y juntar los tres primeros de diez da un
+/// fichero corto que pasa todos los guardas. Un árbol copiado a medias se ve a
+/// simple vista; medio conjunto de trozos, no.
+///
+/// Cada retirada se anota: el journal cuenta lo que hay, no lo que hubo. Lo
+/// que no se pueda retirar se dice en el log y no se reintenta — este camino
+/// ya está saliendo por un error.
+async fn retira_los_trozos(
+    provider_destino: &dyn Provider,
+    publicados: &[VPath],
+    observer: &Arc<dyn MutationObserver>,
+    ctx: &TaskCtx,
+) {
+    for p in publicados.iter().rev() {
+        match provider_destino.remove(p).await {
+            Ok(()) => {
+                let _ = observer
+                    .on_mutation(&Mutation::Removed(p), &ctx.actor)
+                    .await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "file.split: un trozo a medias no se pudo retirar");
+            }
+        }
+    }
+}
+
+/// El nombre base, el tamaño y CUÁNTOS trozos van a salir — o por qué no.
+///
+/// Todo lo que se puede saber antes de escribir un byte, junto: el trozo no es
+/// ridículo, el origen es un fichero, y el conjunto cabe en la convención de
+/// tres dígitos. Descubrir lo último en el trozo 1000 dejaría un conjunto que
+/// nadie puede volver a juntar.
+pub(crate) async fn mide_el_reparto(
+    src: &dyn Provider,
+    path: &VPath,
+    part_bytes: u64,
+) -> Result<(Vec<u8>, u64, u64), Error> {
     if part_bytes < methods::FILE_SPLIT_MIN_BYTES {
         return Err(Error::InvalidPath);
     }
-    let observer = crate::observer::pin_for_task(observer).await?;
-    let e = src.stat(&path).await?;
+    let e = src.stat(path).await?;
     if e.kind != EntryKind::File {
         return Err(Error::InvalidPath);
     }
     let total = e.size.unwrap_or(0);
     let trozos = total.div_ceil(part_bytes).max(1);
-    // ANTES de escribir nada: descubrir que no caben en el trozo 1000 dejaría
-    // un conjunto que nadie puede volver a juntar.
     if trozos > methods::FILE_SPLIT_MAX_PARTS {
         return Err(Error::LimitExceeded {
             limit: "split-parts".to_owned(),
@@ -494,60 +710,101 @@ pub(crate) async fn split(
         .file_name()
         .map(|s| s.as_bytes().to_vec())
         .ok_or(Error::InvalidPath)?;
-    ctx.progress.update(|p| {
-        p.bytes_total = Some(total);
-        p.entries_total = Some(trozos);
-    });
+    Ok((nombre, total, trozos))
+}
 
-    let mut stream = src.read(&path, None).await?;
-    let mut pendiente: Vec<u8> = Vec::new();
-    let mut hechos: u64 = 0;
-    let mut escritos: u64 = 0;
-    let mut fin = false;
-    while !fin {
-        if ctx.cancel.is_cancelled() {
-            return Err(Error::Cancelled);
-        }
-        // Se junta hasta llenar un trozo, o hasta que el origen se acaba.
-        while (pendiente.len() as u64) < part_bytes {
-            let Some(chunk) = stream.next().await else {
-                fin = true;
-                break;
-            };
-            pendiente.extend_from_slice(&chunk?);
-        }
-        if pendiente.is_empty() {
-            break;
-        }
-        let corte = usize::try_from(part_bytes.min(pendiente.len() as u64)).unwrap_or(usize::MAX);
-        let cuerpo: Vec<u8> = pendiente.drain(..corte).collect();
-        let destino = dest_dir.join(
-            norte_proto::Segment::new(nombre_trozo(&nombre, hechos + 1))
-                .map_err(|_| Error::InvalidPath)?,
+/// Ningún trozo del conjunto puede existir ya.
+///
+/// Se comprueba ANTES de escribir el primero: descubrirlo en el cuarto deja
+/// tres trozos nuevos mezclados con los rancios de una tanda anterior, y ese
+/// conjunto se junta sin que nada chirríe.
+async fn sitio_libre(
+    provider_destino: &dyn Provider,
+    dest_dir: &VPath,
+    nombre: &[u8],
+    trozos: u64,
+) -> Result<(), Error> {
+    for i in 1..=trozos {
+        let p = dest_dir.join(
+            norte_proto::Segment::new(nombre_trozo(nombre, i)).map_err(|_| Error::InvalidPath)?,
         );
-        if provider_destino.stat(&destino).await.is_ok() {
+        if provider_destino.stat(&p).await.is_ok() {
             return Err(Error::Conflict {
                 conflict: norte_proto::ConflictKind::Exists,
             });
         }
-        let mut sink = provider_destino.write(&destino).await?;
-        escritos = escritos.saturating_add(cuerpo.len() as u64);
-        if let Err(e) = sink.write(bytes::Bytes::from(cuerpo)).await {
-            let _ = sink.abort().await;
-            return Err(e);
-        }
-        sink.commit().await?;
-        observer
-            .on_mutation(&Mutation::Created(&destino), &ctx.actor)
-            .await?;
-        hechos += 1;
-        ctx.progress.update(|p| {
-            p.entries_done = hechos;
-            p.bytes_done = escritos;
-            p.current = Some(destino.clone());
-        });
     }
     Ok(())
+}
+
+/// Publica el trozo abierto —si lo hay— y lo anota en el journal.
+///
+/// El `Created` va DESPUÉS del commit, que es cuando el nodo existe (regla 4).
+async fn cierra_trozo(
+    sink: &mut Option<Box<dyn norte_vfs::ByteSink>>,
+    destino: Option<VPath>,
+    observer: &Arc<dyn MutationObserver>,
+    hechos: &mut u64,
+    escritos: u64,
+    ctx: &TaskCtx,
+) -> Result<Option<VPath>, Error> {
+    let (Some(s), Some(destino)) = (sink.take(), destino) else {
+        return Ok(None);
+    };
+    s.commit().await?;
+    observer
+        .on_mutation(&Mutation::Created(&destino), &ctx.actor)
+        .await?;
+    *hechos += 1;
+    let n = *hechos;
+    ctx.progress.update(|p| {
+        p.entries_done = n;
+        p.bytes_done = escritos;
+        p.current = Some(destino.clone());
+    });
+    Ok(Some(destino))
+}
+
+/// ¿Hay algún trozo numerado POR ENCIMA de `hasta`?
+///
+/// Es la comprobación del hueco, y se hace listando: derivar los nombres de
+/// uno en uno hasta 999 serían 999 `stat` contra un provider remoto, y parar
+/// antes es justo el bug. El nombre se compara en BYTES contra
+/// `<base>.NNN` — nada se decodifica (regla 1).
+async fn hay_trozos_por_encima(
+    src: &dyn Provider,
+    dir: &VPath,
+    base: &[u8],
+    hasta: u64,
+    ctx: &TaskCtx,
+) -> Result<bool, Error> {
+    let mut stream = src.list(dir).await?;
+    while let Some(e) = stream.next().await {
+        if ctx.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let e = e?;
+        let Some(nombre) = e.path.file_name().map(|s| s.as_bytes().to_vec()) else {
+            continue;
+        };
+        // `<base>.NNN` y nada más: `x.iso.001` cuenta, `x.iso.001.bak` no.
+        let Some(cola) = nombre
+            .strip_prefix(base)
+            .and_then(|c| c.strip_prefix(b"."))
+            .filter(|c| c.len() == 3 && c.iter().all(u8::is_ascii_digit))
+        else {
+            continue;
+        };
+        let n: u64 = std::str::from_utf8(cola)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        if n > hasta {
+            tracing::warn!("file.combine: falta un trozo intermedio");
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// `file.combine`: junta los trozos de un split.
@@ -577,39 +834,7 @@ pub(crate) async fn combine(
         .map(|n| nombre[..n].to_vec())
         .ok_or(Error::InvalidPath)?;
     let dir = first.parent().ok_or(Error::InvalidPath)?;
-
-    let mut trozos: Vec<(VPath, u64)> = Vec::new();
-    let mut n = 1_u64;
-    loop {
-        if n > methods::FILE_SPLIT_MAX_PARTS {
-            break;
-        }
-        let p = dir.join(
-            norte_proto::Segment::new(nombre_trozo(&base, n)).map_err(|_| Error::InvalidPath)?,
-        );
-        match src.stat(&p).await {
-            Ok(e) if e.kind == EntryKind::File => {
-                trozos.push((p, e.size.unwrap_or(0)));
-                n += 1;
-            }
-            _ => break,
-        }
-    }
-    if trozos.is_empty() {
-        return Err(Error::NotFound);
-    }
-    // Todos menos el último miden lo mismo que el primero. Un intermedio más
-    // corto es un trozo que se copió a medias, y unir a través de él da un
-    // fichero que parece entero.
-    let primero = trozos[0].1;
-    if trozos[..trozos.len() - 1]
-        .iter()
-        .any(|(_, s)| *s != primero)
-    {
-        return Err(Error::Conflict {
-            conflict: norte_proto::ConflictKind::Exists,
-        });
-    }
+    let trozos = enumera_trozos(&*src, &dir, &base, ctx).await?;
     let total: u64 = trozos.iter().map(|(_, s)| *s).sum();
     ctx.progress.update(|p| {
         p.bytes_total = Some(total);
@@ -620,8 +845,91 @@ pub(crate) async fn combine(
             conflict: norte_proto::ConflictKind::Exists,
         });
     }
+    escribe_juntos(&*src, trozos, &*provider_destino, &dest, ctx).await?;
+    observer
+        .on_mutation(&Mutation::Created(&dest), &ctx.actor)
+        .await?;
+    Ok(())
+}
 
-    let mut sink = provider_destino.write(&dest).await?;
+/// Los trozos del conjunto, en orden y con su tamaño — y todas las razones por
+/// las que un conjunto NO se une.
+///
+/// Aparte de [`combine`] para que ninguna de las dos pase de cien líneas, y
+/// porque lo que hay aquí es una sola pregunta con tres formas de contestar
+/// que no: falta un trozo, sobra un trozo, o uno de en medio está a medias.
+async fn enumera_trozos(
+    src: &dyn Provider,
+    dir: &VPath,
+    base: &[u8],
+    ctx: &TaskCtx,
+) -> Result<Vec<(VPath, u64)>, Error> {
+    let mut trozos: Vec<(VPath, u64)> = Vec::new();
+    let mut n = 1_u64;
+    loop {
+        let p = dir.join(
+            norte_proto::Segment::new(nombre_trozo(base, n)).map_err(|_| Error::InvalidPath)?,
+        );
+        match src.stat(&p).await {
+            Ok(e) if e.kind == EntryKind::File => {
+                trozos.push((p, e.size.unwrap_or(0)));
+                n += 1;
+            }
+            _ => break,
+        }
+        // Pasado el tope se REHÚSA, no se corta. Cortar aquí unía los 999
+        // primeros de un conjunto de 1200 —de 7-Zip, por ejemplo, que numera
+        // hasta `.1000`— y publicaba un fichero corto que pasa todos los
+        // guardas: no hay hueco y todos los trozos recogidos miden lo mismo.
+        if n > methods::FILE_SPLIT_MAX_PARTS {
+            let siguiente = dir.join(
+                norte_proto::Segment::new(nombre_trozo(base, n)).map_err(|_| Error::InvalidPath)?,
+            );
+            if src.stat(&siguiente).await.is_ok() {
+                return Err(Error::LimitExceeded {
+                    limit: "split-parts".to_owned(),
+                });
+            }
+            break;
+        }
+    }
+    if trozos.is_empty() {
+        return Err(Error::NotFound);
+    }
+    // **Un HUECO no se une a través, y encontrarlo pide MIRAR.** El paseo de
+    // arriba se para en el primer número que falta, así que un conjunto
+    // `.001 .003 .004` se veía como uno de un solo trozo y se unía: la task
+    // decía `Completed`, el journal anotaba un `Created`, y en disco quedaba
+    // el 20 % de una ISO que monta como imagen corrupta.
+    if hay_trozos_por_encima(src, dir, base, trozos.len() as u64, ctx).await? {
+        return Err(Error::Conflict {
+            conflict: norte_proto::ConflictKind::TypeMismatch,
+        });
+    }
+    // Todos menos el último miden lo mismo que el primero. Un intermedio más
+    // corto es un trozo que se copió a medias, y unir a través de él da un
+    // fichero que parece entero.
+    let primero = trozos[0].1;
+    if trozos[..trozos.len() - 1]
+        .iter()
+        .any(|(_, s)| *s != primero)
+    {
+        return Err(Error::Conflict {
+            conflict: norte_proto::ConflictKind::TypeMismatch,
+        });
+    }
+    Ok(trozos)
+}
+
+/// Escribe el destino a partir de los trozos, en orden.
+async fn escribe_juntos(
+    src: &dyn Provider,
+    trozos: Vec<(VPath, u64)>,
+    provider_destino: &dyn Provider,
+    dest: &VPath,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    let mut sink = provider_destino.write(dest).await?;
     let mut escritos: u64 = 0;
     for (i, (p, _)) in trozos.iter().enumerate() {
         if ctx.cancel.is_cancelled() {
@@ -637,6 +945,12 @@ pub(crate) async fn combine(
             }
         };
         while let Some(chunk) = stream.next().await {
+            // Por CHUNK: un trozo de 700 MB no puede ser un punto en el que
+            // cancelar no hace nada durante medio minuto.
+            if ctx.cancel.is_cancelled() {
+                let _ = sink.abort().await;
+                return Err(Error::Cancelled);
+            }
             let chunk = match chunk {
                 Ok(c) => c,
                 Err(e) => {
@@ -654,9 +968,6 @@ pub(crate) async fn combine(
         ctx.progress.update(|q| q.entries_done = i as u64 + 1);
     }
     sink.commit().await?;
-    observer
-        .on_mutation(&Mutation::Created(&dest), &ctx.actor)
-        .await?;
     Ok(())
 }
 
@@ -707,7 +1018,7 @@ mod tests {
     #[test]
     fn cada_formato_dice_que_comprueba() {
         assert_eq!(que_se_comprueba("zip"), vec!["crc".to_owned()]);
-        assert_eq!(que_se_comprueba("tar+gz"), vec!["gzip-crc".to_owned()]);
+        assert_eq!(que_se_comprueba("tar+gz"), vec!["gzip_crc".to_owned()]);
         assert_eq!(que_se_comprueba("tar"), vec!["sizes".to_owned()]);
         assert_eq!(que_se_comprueba("rar"), vec!["sizes".to_owned()]);
     }

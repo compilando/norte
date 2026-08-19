@@ -85,12 +85,11 @@
         },
         "format": {
           "$ref": "#/$defs/ArchiveFormat",
-          "default": "zip",
-          "description": "Formato, explícito. Ver [`ARCHIVE_PACK`] para por qué no se deduce del\nnombre en el servidor. Ausente es `zip`, que es el que todo el mundo\npuede abrir."
+          "description": "Formato, explícito y OBLIGATORIO. Ver [`ARCHIVE_PACK`] para por qué no\nse deduce del nombre en el servidor — y por qué tampoco tiene default:\ncon uno, `{\"dest\":\"backup.tar.gz\"}` sin `format` producía un ZIP\nllamado `backup.tar.gz`, en silencio y contradiciendo el nombre. Eso es\npeor que la inferencia que este método rechaza. Exigirlo en un tipo\nNUEVO no cuesta compatibilidad; exigirlo después sí sería romperla."
         },
         "level": {
           "default": null,
-          "description": "Nivel de compresión 0..=9, o `None` para el del core. 0 es «guardar sin\ncomprimir» en los formatos que lo permiten.",
+          "description": "Nivel de compresión 0..=9, o `None` para el del core. 0 es «guardar sin\ncomprimir» en los formatos que lo permiten.\n\nUn valor por encima de 9 se RECORTA a 9 en vez de rechazarse: el nivel\nes una preferencia, no una petición, y tirar un empaquetado de media\nhora por un 42 sería peor que comprimirlo bien.",
           "format": "uint8",
           "maximum": 255,
           "minimum": 0,
@@ -110,6 +109,7 @@
       "required": [
         "sources",
         "dest",
+        "format",
         "base"
       ],
       "type": "object"
@@ -119,12 +119,17 @@
       "properties": {
         "name": {
           "default": "",
-          "description": "El nombre DENTRO del archivo, con la misma conversión con pérdidas que\ncualquier otro nombre que se pinte: los bytes crudos no caben en un\ncampo de texto JSON, y esto es para enseñárselo a una persona.",
+          "description": "El nombre para ENSEÑAR, con la conversión con pérdidas que lleva\ncualquier otro nombre que se pinte. Acompaña a [`Self::path`]; no lo\nsustituye.",
+          "type": "string"
+        },
+        "path": {
+          "default": "",
+          "description": "La entrada que falló, ENTERA y en su forma wire — que es la única que\nconserva los bytes (regla 1).\n\nEmpezó siendo solo el `name` con pérdidas de abajo, y las dos mitades\nde eso estaban mal: `a/x.txt` y `b/x.txt` reportaban lo mismo, y un\nnombre que no es UTF-8 volvía como `U+FFFD` sin nada que dijera cuál de\nlos dos era. Este informe es el ÚNICO sitio donde se nombra la entrada\ncorrupta, así que tiene que poder señalarla — es el mismo criterio que\n[`RenameStuckStep`], que lleva `VPath` por lo mismo.",
           "type": "string"
         },
         "reason": {
           "default": "",
-          "description": "Categoría del fallo, vocabulario cerrado: `crc`, `truncated`,\n`unsupported`, `io`. Texto y no enum porque un formato futuro puede\nfallar de una forma que este enum no tendría, y un cliente que no la\nconozca la pinta igual.",
+          "description": "Categoría del fallo, vocabulario ABIERTO comparable por igualdad:\n`crc`, `truncated`, `unsupported`, `io`. Puede CRECER de forma aditiva\n—un formato futuro falla de formas que este conjunto no tiene—, así que\nun cliente que reciba una que no conozca la enseña tal cual y jamás\nrechaza el informe por ella. Mismo contrato que\n[`ConnectionDegraded::reason`].",
           "type": "string"
         }
       },
@@ -144,7 +149,7 @@
       "type": "object"
     },
     "ArchiveTestReportParams": {
-      "description": "Params de [`ARCHIVE_TEST_REPORT`] (0.50.0, #132).\n\n```\nuse norte_proto::methods::ArchiveTestReportParams;\nlet p: ArchiveTestReportParams =\n    serde_json::from_str(r#\"{\"task_id\":7}\"#).expect(\"params\");\nassert_eq!(u64::from(p.task_id), 7);\n```",
+      "description": "Params de [`ARCHIVE_TEST_REPORT`] (0.50.0, #132).\n\n```\nuse norte_proto::methods::ArchiveTestReportParams;\nlet p: ArchiveTestReportParams =\n    serde_json::from_str(r#\"{\"task_id\":7}\"#).expect(\"params\");\nassert_eq!(p.task_id.get(), 7);\n```",
       "properties": {
         "task_id": {
           "$ref": "#/$defs/TaskId",
@@ -161,7 +166,7 @@
       "properties": {
         "checked": {
           "default": [],
-          "description": "QUÉ se ha comprobado de verdad: `crc` cuando el formato lleva suma por\nentrada, `gzip-crc` para la cola de un `tar.gz`, `sizes` cuando lo\núnico verificable es que cada tamaño declarado es alcanzable.\n\nVa en el resultado y no en la documentación porque «pasa» significa\ncosas distintas en cada formato, y un cliente que pinte «íntegro» sobre\nun tar plano estaría afirmando lo que el formato no puede sostener.",
+          "description": "QUÉ se ha comprobado de verdad: `crc` cuando el formato lleva suma por\nentrada, `gzip_crc` para la cola de un `tar.gz`, `sizes` cuando lo\núnico verificable es que cada tamaño declarado es alcanzable.\n\n`snake_case`, como cada otro token que acuña este protocolo\n(`tar_gz`, `dir_size`, `rename_batch`): un guion aquí era una\ninvitación a que un cliente escribiera `gzip_crc`, no encontrara nada y\nno encendiera nunca el caso de `tar.gz`. Los tres viajan en el golden.\n\nVa en el resultado y no en la documentación porque «pasa» significa\ncosas distintas en cada formato, y un cliente que pinte «íntegro» sobre\nun tar plano estaría afirmando lo que el formato no puede sostener.",
           "items": {
             "type": "string"
           },
@@ -4514,7 +4519,7 @@
         },
         {
           "const": "pack",
-          "description": "Fabricar un archivo\n(`archive.pack`/[`ARCHIVE_PACK`](crate::methods::ARCHIVE_PACK), 0.50.0,\n#132). MUTA: journal como UNA creación, y deshacerlo es borrar el\narchivo.\n\nEl progreso cuenta bytes LEÍDOS del origen y entradas empaquetadas; los\nbytes escritos no se pueden saber por adelantado —el compresor decide—\ny prometer un total que va a fallar es peor que no darlo.",
+          "description": "Fabricar un archivo\n(`archive.pack`/[`ARCHIVE_PACK`](crate::methods::ARCHIVE_PACK), 0.50.0,\n#132). MUTA: journal como UNA creación, y deshacerlo es borrar el\narchivo.\n\nEntra CON el método, y los cuatro de este bump se degradan igual: un\ncliente N-1 (0.49.x) los convierte en [`TaskKind::Unknown`] por el\n`serde(other)` de abajo, como `Search`/`Index`/`Embed`/`RenameBatch`/\n`Compare`/`DirSize` antes que ellos.\n\nEl progreso cuenta bytes LEÍDOS del origen y entradas empaquetadas; los\nbytes escritos no se pueden saber por adelantado —el compresor decide—\ny prometer un total que va a fallar es peor que no darlo.",
           "type": "string"
         },
         {

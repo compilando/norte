@@ -1159,6 +1159,7 @@
     "entries": 3,
     "failed": [
       {
+        "path": "zip+file:///a.zip/!/roto.txt",
         "name": "roto.txt",
         "reason": "crc"
       }
@@ -1176,5 +1177,16 @@
   "file_combine_params": {
     "first": "file:///g.iso.001",
     "dest": "file:///g.iso"
+  },
+  "archive_test_report_params": {
+    "task_id": 7
+  },
+  "archive_test_result_clean": {
+    "entries": 9,
+    "failed": [],
+    "truncated": false,
+    "checked": [
+      "gzip_crc"
+    ]
   }
 }

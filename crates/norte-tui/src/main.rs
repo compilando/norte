@@ -9428,7 +9428,12 @@ async fn desempaqueta(app: &mut App, backend: &Backend) {
     // El destino es el OTRO panel, que es donde un gestor ortodoxo
     // desempaqueta. Con uno solo, el mismo — que es lo que hace F5 cuando no
     // hay otro sitio al que apuntar.
-    let otro = app.focus() ^ 1;
+    // La misma noción de «el otro» que usa partir: por POSICIÓN visible, y con
+    // un solo panel el mismo. `focus() ^ 1` daba un índice fuera de rango con
+    // tres o cuatro paneles, y ahí `pane_read_only` contesta `false` sin mirar
+    // nada — el gate quedaba inerte justo donde hay más sitios a los que
+    // apuntar por error.
+    let otro = app.split_dest_pane();
     if app.pane_read_only(otro) {
         app.message = Some(t("msg-pack-read-only"));
         return;

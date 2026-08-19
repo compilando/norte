@@ -23,10 +23,19 @@ async fn engine_con(ficheros: &[(&str, &[u8])]) -> (Engine, Arc<MemProvider>) {
     let mem = Arc::new(MemProvider::new());
     for (wire, datos) in ficheros {
         let p = vp(wire);
-        if let Some(padre) = p.parent()
-            && !padre.is_root()
-        {
-            let _ = mem.mkdir(&padre).await;
+        // Toda la cadena de padres, no solo el inmediato: `mem:///p/a/b`
+        // necesita `p` y `p/a`.
+        let mut cadena = Vec::new();
+        let mut actual = p.parent();
+        while let Some(d) = actual {
+            if d.is_root() {
+                break;
+            }
+            actual = d.parent();
+            cadena.push(d);
+        }
+        for d in cadena.into_iter().rev() {
+            let _ = mem.mkdir(&d).await;
         }
         let mut sink = mem.write(&p).await.expect("write");
         sink.write(Bytes::copy_from_slice(datos))
@@ -197,6 +206,37 @@ async fn una_fuente_fuera_de_la_base_se_niega() {
     );
 }
 
+/// Dos fuentes que dan el MISMO nombre dentro del archivo se rehúsan.
+///
+/// Pasa con raíces que se solapan, que el wire acepta aunque las marcas de la
+/// TUI no las formen: el archivo llevaría la entrada dos veces con su
+/// contenido dos veces, nuestro índice resolvería «gana la última» y otras
+/// herramientas la extraerían dos veces.
+#[tokio::test]
+async fn dos_fuentes_con_el_mismo_nombre_se_niegan() {
+    let (engine, _mem) = engine_con(&[("mem:///p/a/b", b"x")]).await;
+    let h = engine
+        .pack_as(
+            methods::ArchivePackParams {
+                sources: vec![vp("mem:///p/a"), vp("mem:///p/a/b")],
+                dest: vp("mem:///out.zip"),
+                format: methods::ArchiveFormat::Zip,
+                level: None,
+                base: vp("mem:///p"),
+            },
+            norte_core::journal::Actor::User,
+        )
+        .await
+        .expect("arranca");
+    assert!(matches!(
+        h.join().await,
+        TaskState::Failed {
+            error: norte_proto::Error::Conflict { .. },
+            ..
+        }
+    ));
+}
+
 /// El destino no se sobrescribe: fabricar un archivo encima de un fichero que
 /// ya está es pérdida silenciosa.
 #[tokio::test]
@@ -342,6 +382,74 @@ async fn partir_y_juntar_da_el_original() {
     assert_eq!(lee(&mem, "mem:///vuelta.bin").await, datos, "byte a byte");
 }
 
+/// **Cancelar un split no deja medio conjunto.**
+///
+/// Y es lo contrario de lo que hace una copia cancelada, a propósito: un árbol
+/// copiado a medias se ve a simple vista, pero medio conjunto de trozos es
+/// indistinguible de uno entero —todos del tamaño pedido, sin huecos— y
+/// juntarlo da un fichero corto que pasa todos los guardas. Así que los que ya
+/// estaban publicados se retiran.
+#[tokio::test]
+async fn cancelar_un_split_retira_los_trozos_ya_escritos() {
+    let datos = vec![b'x'; 4096 * 40];
+    let (engine, mem) = engine_con(&[("mem:///big.bin", &datos)]).await;
+    mem.mkdir(&vp("mem:///piezas")).await.expect("mkdir");
+    let h = engine
+        .split_as(
+            methods::FileSplitParams {
+                path: vp("mem:///big.bin"),
+                part_bytes: 4096,
+                dest_dir: vp("mem:///piezas"),
+            },
+            norte_core::journal::Actor::User,
+        )
+        .await
+        .expect("arranca");
+    h.cancel();
+    let estado = h.join().await;
+    if matches!(estado, TaskState::Cancelled) {
+        assert!(
+            mem.stat(&vp("mem:///piezas/big.bin.001")).await.is_err(),
+            "cancelado = ni un trozo suelto que parezca el principio de un conjunto"
+        );
+    }
+}
+
+/// Un trozo del conjunto que YA existe para el intento anterior se dice antes
+/// de escribir el primero: mezclar trozos nuevos con rancios produce un
+/// conjunto que se junta sin que nada chirríe.
+#[tokio::test]
+async fn un_trozo_preexistente_para_el_split_antes_de_empezar() {
+    let datos = vec![b'y'; 4096 * 3];
+    let (engine, mem) = engine_con(&[
+        ("mem:///d.bin", &datos[..]),
+        ("mem:///p/d.bin.002", &vec![b'z'; 10][..]),
+    ])
+    .await;
+    let h = engine
+        .split_as(
+            methods::FileSplitParams {
+                path: vp("mem:///d.bin"),
+                part_bytes: 4096,
+                dest_dir: vp("mem:///p"),
+            },
+            norte_core::journal::Actor::User,
+        )
+        .await
+        .expect("arranca");
+    assert!(matches!(
+        h.join().await,
+        TaskState::Failed {
+            error: norte_proto::Error::Conflict { .. },
+            ..
+        }
+    ));
+    assert!(
+        mem.stat(&vp("mem:///p/d.bin.001")).await.is_err(),
+        "ni el primero se escribió"
+    );
+}
+
 /// Una división EXACTA no deja un trozo vacío al final: un `.004` de cero
 /// bytes es un fichero que nadie sabe si sobra o falta.
 #[tokio::test]
@@ -368,8 +476,15 @@ async fn una_division_exacta_no_deja_trozo_vacio() {
     );
 }
 
-/// Un hueco en la numeración NO se une a través: un fichero mal unido es un
-/// fichero corrupto con buena pinta.
+/// Un hueco en la numeración NO se une a través, **y tampoco se une lo que
+/// hay antes de él**.
+///
+/// Este test afirmaba lo contrario y pasaba: el paseo se paraba en el número
+/// que falta, veía un conjunto de UN trozo y lo unía. La task decía
+/// `Completed`, el journal anotaba un `Created`, y en disco quedaba el 20 % de
+/// una ISO que monta como imagen corrupta — sin error, sin marca de parcial, y
+/// contra lo que prometen el ADR 0060 y cuatro rustdocs. Lo encontró
+/// `rust-reviewer` leyendo el nombre del test contra su assert.
 #[tokio::test]
 async fn juntar_con_un_hueco_se_niega() {
     let (engine, mem) = engine_con(&[
@@ -387,24 +502,32 @@ async fn juntar_con_un_hueco_se_niega() {
         )
         .await
         .expect("arranca");
-    // Con un hueco, lo que hay es UN trozo: se une ese y ya. Lo que no puede
-    // pasar es que el `.003` entre como si fuera el segundo.
-    assert!(matches!(h.join().await, TaskState::Completed));
-    assert_eq!(
-        lee(&mem, "mem:///x.bin").await.len(),
-        100,
-        "solo el primero, jamás saltando el hueco"
+    assert!(
+        matches!(
+            h.join().await,
+            TaskState::Failed {
+                error: norte_proto::Error::Conflict { .. },
+                ..
+            }
+        ),
+        "un conjunto incompleto es un error, no un fichero corto"
+    );
+    assert!(
+        mem.stat(&vp("mem:///x.bin")).await.is_err(),
+        "y no se creó el destino"
     );
 }
 
-/// Un trozo intermedio más corto que el primero es un trozo que se copió a
-/// medias: se rechaza ANTES de crear el destino.
+/// Un conjunto COMPLETO de tres se une entero: la comprobación del hueco no
+/// puede rechazar lo que sí está bien.
 #[tokio::test]
-async fn juntar_con_un_trozo_corto_en_medio_se_niega() {
+async fn juntar_un_conjunto_completo_los_une_todos() {
     let (engine, mem) = engine_con(&[
         ("mem:///t/y.bin.001", &vec![b'a'; 100][..]),
-        ("mem:///t/y.bin.002", &vec![b'b'; 40][..]),
-        ("mem:///t/y.bin.003", &vec![b'c'; 100][..]),
+        ("mem:///t/y.bin.002", &vec![b'b'; 100][..]),
+        ("mem:///t/y.bin.003", &vec![b'c'; 40][..]),
+        // Un vecino que NO es un trozo no estorba.
+        ("mem:///t/y.bin.001.bak", &vec![b'z'; 5][..]),
     ])
     .await;
     let h = engine
@@ -412,6 +535,30 @@ async fn juntar_con_un_trozo_corto_en_medio_se_niega() {
             methods::FileCombineParams {
                 first: vp("mem:///t/y.bin.001"),
                 dest: vp("mem:///y.bin"),
+            },
+            norte_core::journal::Actor::User,
+        )
+        .await
+        .expect("arranca");
+    assert!(matches!(h.join().await, TaskState::Completed));
+    assert_eq!(lee(&mem, "mem:///y.bin").await.len(), 240);
+}
+
+/// Un trozo intermedio más corto que el primero es un trozo que se copió a
+/// medias: se rechaza ANTES de crear el destino.
+#[tokio::test]
+async fn juntar_con_un_trozo_corto_en_medio_se_niega() {
+    let (engine, mem) = engine_con(&[
+        ("mem:///t/z.bin.001", &vec![b'a'; 100][..]),
+        ("mem:///t/z.bin.002", &vec![b'b'; 40][..]),
+        ("mem:///t/z.bin.003", &vec![b'c'; 100][..]),
+    ])
+    .await;
+    let h = engine
+        .combine_as(
+            methods::FileCombineParams {
+                first: vp("mem:///t/z.bin.001"),
+                dest: vp("mem:///z.bin"),
             },
             norte_core::journal::Actor::User,
         )
@@ -425,7 +572,7 @@ async fn juntar_con_un_trozo_corto_en_medio_se_niega() {
         }
     ));
     assert!(
-        mem.stat(&vp("mem:///y.bin")).await.is_err(),
+        mem.stat(&vp("mem:///z.bin")).await.is_err(),
         "y no se creó el destino"
     );
 }
@@ -435,7 +582,10 @@ async fn juntar_con_un_trozo_corto_en_medio_se_niega() {
 #[tokio::test]
 async fn un_trozo_minusculo_se_niega() {
     let (engine, _mem) = engine_con(&[("mem:///p.bin", b"12345678")]).await;
-    let h = engine
+    // **En el SUBMIT, no en la Task.** Con la negativa dentro del cuerpo, el
+    // RPC contestaba `{task_id}` y un cliente con guion leía un éxito: escribía
+    // «partiendo…», salía, y no había pasado nada.
+    let r = engine
         .split_as(
             methods::FileSplitParams {
                 path: vp("mem:///p.bin"),
@@ -444,15 +594,11 @@ async fn un_trozo_minusculo_se_niega() {
             },
             norte_core::journal::Actor::User,
         )
-        .await
-        .expect("arranca");
-    assert!(matches!(
-        h.join().await,
-        TaskState::Failed {
-            error: norte_proto::Error::InvalidPath,
-            ..
-        }
-    ));
+        .await;
+    match r {
+        Err(e) => assert_eq!(e, norte_proto::Error::InvalidPath),
+        Ok(_) => panic!("un trozo de dos bytes no es una petición"),
+    }
 }
 
 /// Más de 999 trozos no cabe en la convención `.001`, y se dice ANTES de
@@ -463,7 +609,7 @@ async fn demasiados_trozos_se_niegan_antes_de_escribir() {
     let datos = vec![b'x'; 4096 * 1001];
     let (engine, mem) = engine_con(&[("mem:///enorme.bin", &datos)]).await;
     mem.mkdir(&vp("mem:///td")).await.expect("mkdir");
-    let h = engine
+    let r = engine
         .split_as(
             methods::FileSplitParams {
                 path: vp("mem:///enorme.bin"),
@@ -472,15 +618,12 @@ async fn demasiados_trozos_se_niegan_antes_de_escribir() {
             },
             norte_core::journal::Actor::User,
         )
-        .await
-        .expect("arranca");
-    assert!(matches!(
-        h.join().await,
-        TaskState::Failed {
-            error: norte_proto::Error::LimitExceeded { .. },
-            ..
-        }
-    ));
+        .await;
+    match r {
+        Err(norte_proto::Error::LimitExceeded { .. }) => {}
+        Err(otro) => panic!("esperaba LimitExceeded, fue {otro:?}"),
+        Ok(_) => panic!("más de 999 trozos se dice en el SUBMIT, no después"),
+    }
     assert!(
         mem.stat(&vp("mem:///td/enorme.bin.001")).await.is_err(),
         "ni el primero se llegó a escribir"

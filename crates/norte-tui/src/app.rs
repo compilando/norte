@@ -4634,10 +4634,18 @@ impl App {
                 .map(|s| s.as_bytes().to_vec())
         };
         let base = base.unwrap_or_else(|| b"archivo".to_vec());
-        // Con pérdidas y a sabiendas: es un campo de texto que el usuario va a
-        // editar. Los BYTES de las entradas no pasan por aquí — el nombre del
-        // archivo lo teclea una persona, y las entradas viajan por su `VPath`.
-        let sugerido = format!("{}.zip", String::from_utf8_lossy(&base));
+        // La sugerencia sale de los bytes del origen, y con la
+        // REINTERPRETACIÓN activa si la hay (#57): con «ver nombres como
+        // cp866» puesto, el pane pinta `Папка` y el diálogo sugería
+        // `?????.zip` — el diálogo contradiciendo al panel desde el que se
+        // abrió. Lo que no se puede leer se queda en `U+FFFD` y
+        // [`Self::pack_confirm`] REHÚSA confirmarlo, igual que el prompt de
+        // renombrar: un nombre con el carácter de reemplazo dentro no es el
+        // nombre de nadie.
+        let sugerido = match self.focused().name_encoding() {
+            Some(enc) => format!("{}.zip", norte_encoding::decode_name(&base, enc)),
+            None => format!("{}.zip", String::from_utf8_lossy(&base)),
+        };
         self.modal = Some(Modal::Pack {
             name: sugerido,
             error: None,
@@ -4688,6 +4696,15 @@ impl App {
             return None;
         };
         let name = name.clone();
+        // El carácter de reemplazo no puede llegar a un nombre de fichero: es
+        // lo que queda de unos bytes que no se pudieron leer, y dos nombres
+        // distintos producen el MISMO `U+FFFD` — el segundo empaquetado
+        // chocaría contra el archivo del primero. Mismo criterio, y misma
+        // clave, que el prompt de renombrar.
+        if name.contains('\u{FFFD}') {
+            self.pack_set_error(t("msg-transfer-name-fffd"));
+            return None;
+        }
         let Some(format) = formato_por_nombre(name.as_bytes()) else {
             self.pack_set_error(t("msg-pack-unknown-format"));
             return None;
@@ -4725,9 +4742,35 @@ impl App {
         }
     }
 
+    /// El panel al que van los trozos de un split: el siguiente VISIBLE, o el
+    /// mismo si no hay otro (#132).
+    ///
+    /// Por posición visible y no por id de hueco: `slot_ids()` incluye las
+    /// pestañas que no están en pantalla, así que los trozos podían aterrizar
+    /// en el directorio de una pestaña de fondo — cuatro gigas en un sitio que
+    /// el lector no está mirando y que el diálogo no nombra.
+    #[must_use]
+    pub fn split_dest_pane(&self) -> usize {
+        // Por POSICIÓN visible, que es la misma noción de «pane» que usan el
+        // foco, `pane_read_only` y el resto de la TUI. Con un solo panel el
+        // destino es él mismo — que es lo que hace F5 cuando no hay otro sitio
+        // al que apuntar—, no `None`.
+        let n = self.panes.len();
+        if n <= 1 {
+            return self.focus();
+        }
+        (self.focus() + 1) % n
+    }
+
     /// Abre el diálogo de partir un fichero (#132).
     pub fn open_split(&mut self) {
-        if self.pane_read_only(self.focus()) {
+        // El de solo lectura es el DESTINO, no el de origen: partir lee el
+        // panel con foco y escribe en el otro. Con el gate al revés se
+        // rehusaba partir un fichero que estuviera en un sitio de solo lectura
+        // —dentro de un archivo, en un export SFTP— y se aceptaba partir HACIA
+        // uno, que fallaba después con un error crudo.
+        let destino = self.split_dest_pane();
+        if self.pane_read_only(destino) {
             self.message = Some(t("msg-pack-read-only"));
             return;
         }
@@ -4789,15 +4832,13 @@ impl App {
             return None;
         };
         let path = self.focused().selected().map(|e| e.path.clone())?;
-        // Los trozos van al OTRO panel si lo hay, y si no al mismo: es lo que
-        // hace la copia, y por lo mismo — partir un fichero de un giga en el
-        // sitio donde ya está suele no caber.
-        let dest_dir = self
-            .panes
-            .browser(self.layout.slot_ids().into_iter().find(|id| {
-                self.panes.browser(*id).is_some() && self.panes.slot_of(self.focus()) != *id
-            })?)
-            .map_or_else(|| self.focused().dir().clone(), |p| p.dir().clone());
+        // Los trozos van al OTRO panel visible si lo hay, y si no al mismo: es
+        // lo que hace la copia, y por lo mismo — partir un fichero de un giga
+        // en el sitio donde ya está suele no caber. **Sin `?` sobre la
+        // búsqueda**: con un solo panel no había «otro», la función entera
+        // devolvía `None`, y Enter no hacía absolutamente nada — ni task, ni
+        // error, ni cerrar el diálogo.
+        let dest_dir = self.panes[self.split_dest_pane()].dir().clone();
         Some(norte_proto::methods::FileSplitParams {
             path,
             part_bytes: bytes,
@@ -7656,6 +7697,43 @@ mod tests {
             banner.starts_with(&app.journal_banner().expect("hay journal_banner")),
             "y el del journal va primero: {banner}"
         );
+    }
+
+    /// #132: la sugerencia del diálogo de empaquetar puede salir con pérdidas
+    /// —el nombre del origen no siempre es UTF-8—, y confirmarla tal cual
+    /// crearía un fichero con el carácter de reemplazo dentro.
+    ///
+    /// Dos nombres distintos que no se pueden leer dan la MISMA sugerencia, así
+    /// que el segundo empaquetado chocaría contra el archivo del primero. Es el
+    /// mismo rechazo, y la misma clave, que el prompt de renombrar.
+    #[test]
+    fn empaquetar_rehusa_un_nombre_con_el_caracter_de_reemplazo() {
+        let mut app = app_dos_panes();
+        app.modal = Some(Modal::Pack {
+            name: "caf\u{FFFD}.zip".to_owned(),
+            error: None,
+        });
+        assert!(app.pack_confirm().is_none(), "no se empaqueta con eso");
+        let Some(Modal::Pack { error, .. }) = &app.modal else {
+            panic!("el diálogo sigue abierto para corregirlo");
+        };
+        assert_eq!(error.as_deref(), Some(t("msg-transfer-name-fffd").as_str()));
+    }
+
+    /// Y una extensión que norte no sabe ESCRIBIR se dice en el diálogo, en vez
+    /// de empaquetar un zip con nombre de rar.
+    #[test]
+    fn empaquetar_rehusa_una_extension_que_no_se_escribe() {
+        let mut app = app_dos_panes();
+        app.modal = Some(Modal::Pack {
+            name: "cosas.rar".to_owned(),
+            error: None,
+        });
+        assert!(app.pack_confirm().is_none());
+        let Some(Modal::Pack { error, .. }) = &app.modal else {
+            panic!("sigue abierto");
+        };
+        assert!(error.is_some(), "y dice por qué");
     }
 
     /// #232: una ventana SUELTA lo dice una vez y luego se le olvida.
