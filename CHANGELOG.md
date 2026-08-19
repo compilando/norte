@@ -129,6 +129,25 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The GUI's mirror can be narrowed to a selection.** The diff pane had no
+  mark gesture, so `include` went out as "the whole tree" every time: under
+  `Update` that was inert, but `m` turns every destination orphan into a
+  `DeleteTree`, and the reader had no way to reduce it — the confirmation's
+  count was the only thing standing between them and it. `ins` now marks a row
+  there, the same key as the terminal, and what is marked is what the plan
+  covers. A marked row says so to a screen reader too, not only with the
+  asterisk (#249).
+
+- **Holding the sync key no longer queues whole-tree walks.** Every press of
+  `s`/`m` in the GUI's diff pane bumped a generation and started a fresh
+  `sync.plan`, and a superseded plan is only cancelled when its own start
+  event lands — a full round trip later. Holding `m` for two seconds against
+  an SFTP pair started dozens of concurrent recursive two-tree walks before
+  the first cancellation arrived. A request in flight now blocks the next one
+  until its answer arrives, and on Wayland the auto-repeat is dropped before a
+  request is even built. It could not be only the second: GPUI's X11 backend
+  never reports a key as held (#249).
+
 - **A layout with no file listing no longer panics the TUI.** A layout file
   that gave the listing's slot to another kind — `places`, `status`, anything
   — passed validation, and the frontend then seeded that slot with the kind

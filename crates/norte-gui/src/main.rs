@@ -469,6 +469,20 @@ struct NorteGui {
     /// mismo papel que [`Self::compare_gen`], y propio y no compartido con él
     /// porque son dos peticiones distintas que pueden estar en vuelo a la vez).
     sync_gen: u64,
+    /// La generación del plan cuya respuesta se ESPERA, si hay una en vuelo.
+    ///
+    /// Es el freno de la repetición de teclado (#249), y va aparte de
+    /// `is_held` porque `is_held` no basta: el backend de X11 lo pone SIEMPRE
+    /// a `false` —la repetición automática llega como pulsaciones normales—,
+    /// así que allí no frenaría nada. Y lo que hay que frenar es caro: cada
+    /// `s`/`m` es un recorrido RECURSIVO de los dos árboles, y un plan
+    /// superado no se cancela hasta que llega su propio `SyncPlanStarted`, un
+    /// viaje de ida y vuelta después.
+    ///
+    /// Se limpia con la respuesta —empiece o falle—, con el cierre del panel
+    /// de diferencias y al abrir uno nuevo: nada puede dejarlo puesto para
+    /// siempre, porque con él puesto las dos teclas no hacen nada.
+    awaiting_sync_plan: Option<u64>,
     /// El panel de sincronización abierto (#161, `pane.sync-dirs`), o `None`
     /// = cerrado.
     ///
@@ -1252,6 +1266,7 @@ impl NorteGui {
                     compare_scroll: UniformListScrollHandle::new(),
                     sync: None,
                     sync_gen: 0,
+                    awaiting_sync_plan: None,
                     sync_scroll: UniformListScrollHandle::new(),
                     pending_sync_encoding: sync_view::SyncEncodings::default(),
                     plugin_config_summaries: Vec::new(),
@@ -1359,6 +1374,7 @@ impl NorteGui {
                     compare_scroll: UniformListScrollHandle::new(),
                     sync: None,
                     sync_gen: 0,
+                    awaiting_sync_plan: None,
                     sync_scroll: UniformListScrollHandle::new(),
                     pending_sync_encoding: sync_view::SyncEncodings::default(),
                     plugin_config_summaries: Vec::new(),
@@ -2225,6 +2241,13 @@ impl NorteGui {
                 // El índice cruza un canal: acotarlo es más barato que el
                 // panic que evita.
                 let pane = source_pane & 1;
+                // Llegó la respuesta: las teclas vuelven (#249). Se compara la
+                // generación porque una respuesta VENCIDA no libera a la que
+                // la superó — si lo hiciera, el freno se levantaría con la
+                // primera de dos peticiones y la segunda se quedaría sin él.
+                if self.awaiting_sync_plan == Some(generation) {
+                    self.awaiting_sync_plan = None;
+                }
                 let encodings = self.pending_sync_encoding;
                 // La decisión entera —guard de generación incluido, y a quién
                 // hay que cancelar— es de `sync_view::on_start`, que es pura y
@@ -2331,6 +2354,9 @@ impl NorteGui {
                 // «planificando…» que esta misma petición puso: es el defecto
                 // que C1 shipeó en `CompareFailed` (una negativa superada
                 // describiendo algo ya reemplazado) y que aquí no se repite.
+                if self.awaiting_sync_plan == Some(generation) {
+                    self.awaiting_sync_plan = None;
+                }
                 self.errors[source_pane & 1] =
                     sync_view::failed_banner(self.sync_gen, generation, &error);
             }
@@ -2606,7 +2632,7 @@ impl NorteGui {
     /// que chocar. Lo que una tecla SIGNIFICA lo decide
     /// [`compare_view::key_meaning`], que es puro y se testea sin ventana;
     /// esto solo lo ejecuta.
-    fn on_compare_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+    fn on_compare_key(&mut self, ks: &gpui::Keystroke, held: bool, cx: &mut Context<Self>) {
         use norte_frontend::compare::CATEGORIES;
 
         let m = ks.modifiers;
@@ -2618,6 +2644,7 @@ impl NorteGui {
             m.control || m.alt || m.platform,
             compare_view::is_running(&view.run),
             view.run.cancel_requested,
+            held,
         );
         match meaning {
             compare_view::Key::Ignore => {}
@@ -2653,6 +2680,13 @@ impl NorteGui {
                     compare_view::Key::Filter(i) => {
                         if let Some(cat) = CATEGORIES.get(i) {
                             v.run.pane.toggle_filter(*cat);
+                        }
+                    }
+                    // #249: lo que se marque acota el plan. Sin esto el espejo
+                    // de esta frontend era siempre el árbol entero.
+                    compare_view::Key::Mark => {
+                        if let Some(id) = v.run.pane.selected_id() {
+                            v.run.pane.toggle_mark(id);
                         }
                     }
                     _ => {}
@@ -2759,6 +2793,35 @@ impl NorteGui {
             self.flash = Some((norte_i18n::t("compare-same-path"), true));
             return;
         }
+        // Una petición en vuelo frena la siguiente (#249). El freno no puede
+        // ser solo `is_held`: X11 no lo pone nunca, así que allí la repetición
+        // automática es indistinguible de pulsar de verdad. La ventana que
+        // esto protege es exactamente la del viaje de ida y vuelta: en cuanto
+        // llega el `SyncPlanStarted`, el panel del plan se queda el teclado y
+        // estas teclas ya no llegan.
+        if self.awaiting_sync_plan.is_some() {
+            return;
+        }
+        // Lo que el lector MARCÓ acota el plan (#249). Va antes de subir la
+        // generación: una negativa no debe dejar contada una petición que no
+        // se llegó a mandar. Las tres se NIEGAN en vez de recortar — una
+        // selección que se encoge sola deja al lector aprobando otra cosa, y
+        // en `Mirror` esa otra cosa es «borra todo lo que el origen no tiene».
+        let include = match self
+            .compare
+            .as_ref()
+            .map(|v| compare_view::include_from_marks(&v.run, &source, &dest))
+            .transpose()
+        {
+            Ok(include) => include.flatten(),
+            Err(e) => {
+                self.flash = Some((
+                    norte_frontend::sync::include_error_message(&e, norte_i18n::active()),
+                    true,
+                ));
+                return;
+            }
+        };
         self.sync_gen = self.sync_gen.wrapping_add(1);
         self.pending_sync_encoding = sync_view::SyncEncodings {
             source: source_encoding,
@@ -2772,6 +2835,7 @@ impl NorteGui {
         // del plan le roba el teclado a media pulsación con `a` e `y` a un
         // paso—.
         self.flash = Some((norte_i18n::ta("sync-planning", &[("n", "0")]), false));
+        self.awaiting_sync_plan = Some(self.sync_gen);
         let _ = self.cmds.send(SessionCmd::SyncPlan {
             source_pane: f,
             generation: self.sync_gen,
@@ -2785,7 +2849,7 @@ impl NorteGui {
                 // dos antes de que exista Task alguna).
                 compare: norte_proto::methods::SyncCompareOptions::default(),
                 on_unknown: norte_proto::methods::OnUnknown::default(),
-                include: None,
+                include,
             }),
         });
     }
@@ -2802,6 +2866,11 @@ impl NorteGui {
         if let Some(view) = self.compare.take() {
             let _ = self.cmds.send(SessionCmd::Cancel(view.task_id));
         }
+        // El freno de la repetición no sobrevive al panel (#249): sin esto,
+        // una respuesta que no llegue nunca —un daemon caído a mitad del
+        // viaje— dejaría `s`/`m` inertes para la siguiente comparación, que
+        // es otra petición y no tiene por qué pagar la anterior.
+        self.awaiting_sync_plan = None;
     }
 
     /// Despacha una tecla del panel de sincronización (#161, fase C2 tarea 3).
@@ -5624,7 +5693,7 @@ impl NorteGui {
                 cx.notify();
                 return;
             }
-            self.on_compare_key(ks, cx);
+            self.on_compare_key(ks, event.is_held, cx);
             cx.notify();
             return;
         }

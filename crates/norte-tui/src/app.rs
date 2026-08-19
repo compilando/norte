@@ -141,23 +141,6 @@ pub enum SearchState {
 /// baste.
 pub use norte_frontend::compare::{CompareState, CompareView};
 
-/// La frase para una negativa de
-/// [`norte_frontend::sync::include_from_rows`].
-///
-/// Las tres se NIEGAN en vez de recortar: una selección que se encoge sola deja
-/// al lector aprobando otra cosa —o el árbol entero, en el caso de la raíz—.
-fn sync_include_message(e: &norte_frontend::sync::IncludeError) -> String {
-    use norte_frontend::sync::IncludeError;
-    match e {
-        IncludeError::TooMany { marked, max } => ta(
-            "msg-sync-too-many-marks",
-            &[("n", &marked.to_string()), ("max", &max.to_string())],
-        ),
-        IncludeError::Unrooted => t("msg-sync-mark-outside-roots"),
-        IncludeError::RootSelected => t("msg-sync-mark-is-the-root"),
-    }
-}
-
 /// Las dos raíces de una sincronización y cómo se leen sus nombres.
 ///
 /// Vive en [`norte_frontend::sync`] desde #161, con la función que las decide:
@@ -2448,7 +2431,10 @@ impl App {
         let include = match self.sync_include(&source, &dest) {
             Ok(include) => include,
             Err(e) => {
-                self.message = Some(sync_include_message(&e));
+                self.message = Some(norte_frontend::sync::include_error_message(
+                    &e,
+                    norte_i18n::active(),
+                ));
                 return None;
             }
         };
