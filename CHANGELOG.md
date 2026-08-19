@@ -135,6 +135,32 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A plugin's approval now covers its binary, not only its manifest.** Approving
+  a plugin anchored what it asked for and when it fires — so editing
+  `plugin.toml` after approval correctly forced a fresh consent — and said
+  nothing about the code. Swapping `plugin.wasm` and leaving the manifest alone
+  kept the approval, which is the same confused-deputy the anchor exists to
+  close, entering by the other door of the bundle. The anchor is now the pair,
+  so a changed binary asks again. **Every existing approval is reset by this**,
+  deliberately: the question a human answered did not include "and this
+  binary", so their answer does not cover what is being asked now (#241).
+
+- **A `.git` in your home no longer hands a plugin your home.** The climb that
+  finds a project root stopped at 64 levels and nothing else, so one stray
+  marker at `$HOME` — a badly extracted archive, a careless installer — turned
+  every folder of yours that is not a repository into a root covering the lot.
+  It stops at your home now; a marker AT home still counts, since the ceiling
+  is "no further", not "ignore what is there". The badge also names the marker
+  (`location-root:.git`) instead of just saying `location`: what is granted is
+  the nearest ancestor containing it, which in a repository is the whole
+  project rather than the folder you have open (#241).
+
+- **The root a plugin gets is the one that was checked.** Between deciding a
+  path was the project root and opening it, the path was resolved again from
+  `/`, following symlinks and unconfined — renaming a component in between
+  swapped the root for whatever whoever could rename it wanted. The open now
+  requires the same `(dev, ino)` the climb saw, and refuses otherwise (#241).
+
 - **The session's schema version has one home now.** Two numbers described the
   same document and the documented one was read by nobody: the protocol says
   `Session.version` is the body's schema, and norte's own frontends instead

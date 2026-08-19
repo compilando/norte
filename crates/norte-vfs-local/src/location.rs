@@ -200,7 +200,38 @@ impl ConfinedRoot {
         bounds: Bounds,
         protected: &[std::path::PathBuf],
     ) -> Result<Self, LocationError> {
+        Self::open_verified(dir, bounds, protected, None)
+    }
+
+    /// Como [`Self::open`], exigiendo que lo que se abra sea el nodo que el
+    /// llamante YA miró (#241).
+    ///
+    /// `expect` es el `(dev, ino)` que el llamante observó cuando decidió que
+    /// esta ruta era la raíz. Entre aquella mirada y este `open` hay una
+    /// ventana: la ruta se resuelve otra vez desde `/`, siguiendo enlaces y
+    /// sin confinar, así que renombrar un componente por medio cambiaba la
+    /// raíz por la que quisiera quien pudo renombrarlo. Con el nodo esperado,
+    /// una raíz que ha cambiado bajo los pies se rehúsa en vez de servirse.
+    ///
+    /// `None` es «no lo miré antes», que es lo que hace [`Self::open`].
+    ///
+    /// # Errors
+    ///
+    /// Lo que devuelva [`Self::open`], y [`LocationError::Denied`] si el nodo
+    /// abierto no es el esperado.
+    pub fn open_verified(
+        dir: &Path,
+        bounds: Bounds,
+        protected: &[std::path::PathBuf],
+        expect: Option<(u64, u64)>,
+    ) -> Result<Self, LocationError> {
         let root = LocalRoot::open(dir).map_err(|e| from_proto(&e))?;
+        if let Some(esperado) = expect {
+            let abierto = crate::confined::node_id_of(root.raw_fd()).map_err(|e| from_proto(&e))?;
+            if abierto != esperado {
+                return Err(LocationError::Denied);
+            }
+        }
         // Se resuelven por `(dev, ino)` y no por prefijo de ruta: comparar
         // cadenas lo rodea un symlink, y la raíz que se abre aquí puede haber
         // llegado por uno.

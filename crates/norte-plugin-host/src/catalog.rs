@@ -41,6 +41,59 @@ pub struct PluginEntry {
     pub settings: BTreeMap<String, String>,
     /// Qué hay en `<dir>/help.md` al descubrir (H3e).
     pub help: HelpPresence,
+    /// Sha256 hex de `<dir>/plugin.wasm` al DESCUBRIR, o `None` si no hay
+    /// binario que hashear (#241).
+    ///
+    /// Entra en [`Self::approval_anchor`], y ese es todo su motivo: el digest
+    /// del manifiesto cierra el TOCTOU de aprobar↔ejecutar por el lado del
+    /// `plugin.toml`, y dejaba el otro lado abierto de par en par. Quien
+    /// pudiera cambiar el `.wasm` sin tocar el `.toml` —un instalador, un
+    /// paquete comprometido, cualquier proceso del usuario— se quedaba con
+    /// las capacidades que un humano aprobó para OTRO código.
+    ///
+    /// Se calcula UNA vez, al descubrir, y no en cada llamada: la aprobación
+    /// se comprueba por cada previsualización y por cada página de columnas,
+    /// y leer megabytes ahí sería pagar el hash en el bucle de pintado.
+    pub wasm_digest: Option<String>,
+}
+
+impl PluginEntry {
+    /// El ancla de una aprobación humana: manifiesto **y** binario (#241).
+    ///
+    /// [`Manifest::approval_digest`] contesta «¿sigue pidiendo lo mismo, y
+    /// disparándose igual?». Le faltaba la otra mitad: «¿sigue siendo el mismo
+    /// código?». Sin ella, cambiar `plugin.wasm` y dejar el `plugin.toml`
+    /// quieto conservaba la aprobación — que es justo el confused-deputy que
+    /// el digest existe para cerrar, entrando por la otra puerta del bundle.
+    ///
+    /// Un plugin sin binario ancla solo el manifiesto: no hay código que
+    /// pueda cambiar sin que se note, porque no hay código.
+    ///
+    /// **Subir esto invalida todas las aprobaciones ya dadas**, y es
+    /// deliberado: la pregunta que el humano contestó no incluía «y este
+    /// binario», así que su respuesta no cubre lo que se le está preguntando
+    /// ahora.
+    #[must_use]
+    pub fn approval_anchor(&self) -> String {
+        use sha2::Digest as _;
+        let mut h = sha2::Sha256::new();
+        h.update(
+            b"norte-plugin-approval:v2
+",
+        );
+        let manifiesto = self.manifest.approval_digest();
+        h.update((manifiesto.len() as u64).to_le_bytes());
+        h.update(manifiesto.as_bytes());
+        match &self.wasm_digest {
+            None => h.update([0u8]),
+            Some(d) => {
+                h.update([1u8]);
+                h.update((d.len() as u64).to_le_bytes());
+                h.update(d.as_bytes());
+            }
+        }
+        crate::capability::hex_lower(&h.finalize())
+    }
 }
 
 /// Qué encontró el descubrimiento en `<dir>/help.md` (H3e).
@@ -96,6 +149,21 @@ impl HelpPresence {
     pub fn is_servable(self) -> bool {
         matches!(self, Self::Servable)
     }
+}
+
+/// Sha256 hex de `<dir>/plugin.wasm`, por la misma guarda con la que se
+/// ejecuta ([`verified_child`]) — hashear un fichero y ejecutar otro sería
+/// peor que no hashear.
+///
+/// `None` cuando no hay binario servible: un plugin sin `.wasm` no ejecuta
+/// nada, así que no hay código que anclar.
+fn wasm_digest(dir: &Path) -> Option<String> {
+    use sha2::Digest as _;
+    let path = verified_child(dir, "plugin.wasm")?;
+    let bytes = std::fs::read(path).ok()?;
+    let mut h = sha2::Sha256::new();
+    h.update(&bytes);
+    Some(crate::capability::hex_lower(&h.finalize()))
 }
 
 /// Resuelve el tri-estado de `<dir>/help.md` (H3e). El `is_file` LAXO sigue
@@ -232,6 +300,7 @@ impl Catalog {
                 match resolve_settings(&manifest, &dir) {
                     Ok(settings) => cat.plugins.push(PluginEntry {
                         help: help_presence(&dir),
+                        wasm_digest: wasm_digest(&dir),
                         manifest,
                         dir,
                         enabled: false,

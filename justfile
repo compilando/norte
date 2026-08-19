@@ -11,7 +11,11 @@ default: ci
 #
 # Features EXPLÍCITAS y no `--all-features`: `it-openssh` (norte-vfs-sftp) es
 # un test nightly contra Docker (ADR 0013) y no debe ni compilar aquí.
-features := "--features norte-tui/schema --features norte-config/watch --features norte-proto/schema"
+#
+# `norte-core/testing` abre las puertas que los e2e necesitan y la biblioteca
+# publicada NO debe tener (#241): sin ella, `columns_git_e2e` no compila, que
+# es exactamente lo que se quiere de una puerta de test.
+features := "--features norte-tui/schema --features norte-config/watch --features norte-proto/schema --features norte-core/testing"
 
 # Los paquetes del gate: TODO el workspace MENOS la GUI. Esto NO es una
 # optimización de tiempo, es de corrección, y `default-members` no basta porque

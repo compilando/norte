@@ -475,18 +475,12 @@ impl PluginRegistry {
                     publisher: e.manifest.publisher.clone(),
                     version: e.manifest.version.clone(),
                     category: e.manifest.category.as_str().to_string(),
-                    capabilities: e
-                        .manifest
-                        .capabilities
-                        .badges()
-                        .into_iter()
-                        .map(String::from)
-                        .collect(),
+                    capabilities: e.manifest.capabilities.badges(),
                     // Aprobación EFECTIVA (issue #69): `approved` en el fichero
                     // pero con el digest de capabilities CASANDO el del manifiesto
                     // actual. Si las capabilities cambiaron en disco tras aprobar,
                     // la UI ve `approved = false` y vuelve a pedir consentimiento.
-                    approved: Self::approval_is_current(&st, &e.manifest),
+                    approved: Self::approval_is_current(&st, e),
                     enabled: st.enabled,
                     // (P1) manifest `description` is cosmetic/untrusted, same
                     // as `name`; `commands` mirrors `Contributions.command` in
@@ -895,7 +889,7 @@ impl PluginRegistry {
         // Fail-closed: sin aprobación vigente cuyo digest CASE las capabilities
         // actuales (issue #69), se trata como sin aprobar — aunque el flag
         // `approved` siga a `true` en disco (el manifiesto cambió tras aprobar).
-        if !Self::approval_is_current(&st, &entry.manifest) {
+        if !Self::approval_is_current(&st, entry) {
             return Err(PluginRunError::NotApproved(id.to_string()));
         }
         if !st.enabled {
@@ -927,7 +921,7 @@ impl PluginRegistry {
             let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
             // Fail-closed con digest vigente (issue #69): un previewer cuyo
             // manifiesto cambió tras aprobar NO se elige hasta re-consentir.
-            if !Self::approval_is_current(&st, &e.manifest) || !st.enabled {
+            if !Self::approval_is_current(&st, e) || !st.enabled {
                 return None;
             }
             let handles = e
@@ -972,7 +966,7 @@ impl PluginRegistry {
                     return None;
                 }
                 let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
-                if !Self::approval_is_current(&st, &e.manifest) || !st.enabled {
+                if !Self::approval_is_current(&st, e) || !st.enabled {
                     return None;
                 }
                 let wasm = Self::verified_wasm(&e.dir)?;
@@ -1030,7 +1024,7 @@ impl PluginRegistry {
                 return None;
             }
             let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
-            if !Self::approval_is_current(&st, &e.manifest) || !st.enabled {
+            if !Self::approval_is_current(&st, e) || !st.enabled {
                 return None;
             }
             let declares = e
@@ -1096,16 +1090,16 @@ impl PluginRegistry {
             .plugins
             .iter()
             .find(|e| e.manifest.id == id)
-            .map(|e| e.manifest.approval_digest())
+            .map(norte_plugin_host::PluginEntry::approval_anchor)
     }
 
     /// `true` si la aprobación es VIGENTE (issue #69): el humano aprobó Y el
-    /// digest anclado casa el del manifiesto actual (no solo sus capabilities,
-    /// también `category`/`contributions` — cuándo/cómo se dispara). Un
-    /// `approved_digest` ausente (aprobación heredada sin ancla) NUNCA casa →
-    /// re-consentimiento.
-    fn approval_is_current(st: &PluginState, manifest: &norte_plugin_host::Manifest) -> bool {
-        st.approved && st.approved_digest.as_deref() == Some(manifest.approval_digest().as_str())
+    /// ancla guardada casa la de AHORA — el manifiesto (capabilities,
+    /// `category`, `contributions`: qué pide y cuándo se dispara) **y el
+    /// binario** (#241). Un `approved_digest` ausente (aprobación heredada sin
+    /// ancla) NUNCA casa → re-consentimiento.
+    fn approval_is_current(st: &PluginState, entry: &norte_plugin_host::PluginEntry) -> bool {
+        st.approved && st.approved_digest.as_deref() == Some(entry.approval_anchor().as_str())
     }
 
     /// Resuelve `<dir>/plugin.wasm` y verifica, canonicalizando, que el binario
@@ -1494,6 +1488,46 @@ max = 10
         );
     }
 
+    /// #241: cambiar el BINARIO invalida la aprobación, aunque el manifiesto
+    /// no se toque.
+    ///
+    /// El ancla del issue #69 cubría el `plugin.toml` —qué pide y cuándo se
+    /// dispara— y dejaba la otra puerta del bundle abierta: quien pudiera
+    /// escribir el `.wasm` sin tocar el `.toml` se quedaba con las
+    /// capacidades que un humano aprobó para OTRO código.
+    #[test]
+    fn cambiar_el_binario_invalida_la_aprobacion() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
+        let wasm = tmp
+            .path()
+            .join("plugins")
+            .join("org.norte.demo")
+            .join("plugin.wasm");
+        std::fs::write(&wasm, b"\0asm-uno").unwrap();
+
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.set_approval("org.norte.demo", true).unwrap());
+        assert!(
+            reg.list().plugins[0].approved,
+            "aprobado con este binario delante"
+        );
+
+        // El manifiesto NO se toca; solo el binario.
+        std::fs::write(&wasm, b"\0asm-otro").unwrap();
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(
+            !reg.list().plugins[0].approved,
+            "otro binario es otra pregunta: hay que volver a consentir"
+        );
+
+        // Y devolver el binario de antes devuelve la aprobación: el ancla es
+        // el CONTENIDO, no un contador de cambios.
+        std::fs::write(&wasm, b"\0asm-uno").unwrap();
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.list().plugins[0].approved);
+    }
+
     #[test]
     fn plugins_manifiesto_roto_aparece_en_errors_sin_tumbar_discover() {
         let tmp = TempDir::new().unwrap();
@@ -1530,13 +1564,18 @@ max = 10
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         let st = reg.state.get("org.norte.demo").cloned().unwrap();
         assert!(st.approved && !st.enabled);
-        // El digest del manifiesto anclado al aprobar (issue #69) también
-        // sobrevive al round-trip y casa el manifiesto actual.
-        let manifest = norte_plugin_host::Manifest::from_toml(DEMO_MANIFEST).unwrap();
+        // El ancla guardada al aprobar (issue #69, #241) también sobrevive al
+        // round-trip y casa la de AHORA — que es manifiesto Y binario.
+        let entrada = reg
+            .catalog
+            .plugins
+            .iter()
+            .find(|e| e.manifest.id == "org.norte.demo")
+            .expect("descubierto");
         assert_eq!(
             st.approved_digest.as_deref(),
-            Some(manifest.approval_digest().as_str()),
-            "el digest del manifiesto debe persistir y casar el manifiesto"
+            Some(entrada.approval_anchor().as_str()),
+            "el ancla debe persistir y casar el bundle"
         );
     }
 
@@ -2220,6 +2259,47 @@ header = "Size"
         assert_eq!(sesion.as_ref().prefix, b"sub");
     }
 
+    /// #241: la subida NO pasa de `$HOME`.
+    ///
+    /// `touch $HOME/.git` —un archivo mal extraído, un instalador descuidado,
+    /// cualquier proceso del usuario— convertía cada directorio suyo que no
+    /// fuera un repositorio en una raíz que abarcaba la casa entera:
+    /// `MAX_CLIMB` es 64 y no había nada más. El marcador EN `$HOME` sigue
+    /// valiendo; lo que no se hace es pasar de ahí.
+    #[test]
+    fn la_subida_se_para_en_home() {
+        let casa = tempfile::tempdir().unwrap();
+        // Un `.git` por ENCIMA de la casa: el caso que hay que no alcanzar.
+        std::fs::write(casa.path().join(".git"), b"gitdir: /x").unwrap();
+        let hijo = casa.path().join("proyectos/uno");
+        std::fs::create_dir_all(&hijo).unwrap();
+        let dir = crate::policy::local_root_vpath(&hijo).unwrap();
+
+        // Con la casa EN el ancestro que lleva el marcador: se abre ese, que es
+        // el caso legítimo — el techo es no pasar de la casa, no ignorar lo
+        // que hay en ella.
+        let mint = LocationMint::with_protected_and_home(
+            Vec::new(),
+            norte_vfs_local::Bounds::default(),
+            Some(casa.path().to_path_buf()),
+        );
+        let sesion = mint.mint_for(&dir, Some(".git"), true).expect("acuña");
+        assert_eq!(sesion.as_ref().prefix, b"proyectos/uno");
+
+        // Y con la casa en el hijo, la subida se para ahí: el `.git` de encima
+        // ya no cuenta.
+        let mint = LocationMint::with_protected_and_home(
+            Vec::new(),
+            norte_vfs_local::Bounds::default(),
+            Some(hijo.clone()),
+        );
+        let sesion = mint.mint_for(&dir, Some(".git"), true).expect("acuña");
+        assert!(
+            sesion.as_ref().prefix.is_empty(),
+            "no se subió por encima de la casa"
+        );
+    }
+
     /// Sin `climb` no se sube: un agente acotado a su scope no gana un ancestro
     /// porque el plugin declare un marcador.
     #[test]
@@ -2591,9 +2671,30 @@ pub(crate) struct LocationMint {
     /// directorio de estado del daemon no se rodea porque el que pregunta sea
     /// un plugin en vez de un agente).
     protected: Vec<norte_proto::VPath>,
+    /// El techo de la subida al marcador de raíz (#241): por encima de la casa
+    /// no hay proyectos, hay sistema. `None` = sin `$HOME`, y entonces manda
+    /// `MAX_CLIMB` sola.
+    home: Option<std::path::PathBuf>,
     live: std::sync::Mutex<
         std::collections::HashMap<String, std::sync::Arc<norte_vfs_local::ConfinedRoot>>,
     >,
+}
+
+/// El HOME del usuario, si el entorno lo dice. Techo de la subida (#241).
+fn home_del_entorno() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+/// `(dev, ino)` de una ruta, o `None` si no se pudo mirar.
+///
+/// `None` no relaja nada por su cuenta: quien lo recibe abre sin verificar,
+/// que es lo que se hacía antes de #241 — y una ruta que no se puede `stat`ear
+/// tampoco se va a poder abrir dos líneas después.
+fn node_id_de(p: &std::path::Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt as _;
+    std::fs::metadata(p).ok().map(|m| (m.dev(), m.ino()))
 }
 
 impl LocationMint {
@@ -2607,9 +2708,24 @@ impl LocationMint {
         protected: Vec<norte_proto::VPath>,
         bounds: norte_vfs_local::Bounds,
     ) -> std::sync::Arc<Self> {
+        Self::with_protected_and_home(protected, bounds, home_del_entorno())
+    }
+
+    /// Como [`Self::with_protected`] diciendo también dónde está la casa
+    /// (tests): `$HOME` es el techo de la subida (#241) y un test no puede
+    /// tocarlo —`std::env::set_var` es `unsafe` en la edición 2024 y la regla
+    /// 5 lo prohíbe fuera de `norte-vfs-local`—, así que el techo se INYECTA.
+    /// Leerlo una vez al construir, y no en cada subida, es además lo correcto:
+    /// la casa no cambia a media vida del proceso.
+    pub(crate) fn with_protected_and_home(
+        protected: Vec<norte_proto::VPath>,
+        bounds: norte_vfs_local::Bounds,
+        home: Option<std::path::PathBuf>,
+    ) -> std::sync::Arc<Self> {
         std::sync::Arc::new(Self {
             bounds,
             protected,
+            home,
             live: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
     }
@@ -2648,9 +2764,11 @@ impl LocationMint {
             return None;
         }
         let native = norte_vfs_local::vpath_to_native(dir).ok()?;
-        let (root_native, prefix) = match marker.filter(|_| climb) {
-            Some(marker) => self.climb_to_marker(dir, &native, marker),
-            None => (native, Vec::new()),
+        let (root_native, prefix, esperado) = if let Some(marker) = marker.filter(|_| climb) {
+            self.climb_to_marker(dir, &native, marker)
+        } else {
+            let id = node_id_de(&native);
+            (native, Vec::new(), id)
         };
         // Las raíces protegidas viajan a la confinación (#238): que la raíz no
         // ESTÉ bajo una de ellas —lo que comprueba `is_protected` arriba— no
@@ -2663,7 +2781,15 @@ impl LocationMint {
             .iter()
             .filter_map(|p| norte_vfs_local::vpath_to_native(p).ok())
             .collect();
-        let root = norte_vfs_local::ConfinedRoot::open(&root_native, self.bounds, &vetadas).ok()?;
+        // `open_verified` y no `open`: lo que se abre tiene que ser el nodo que
+        // esta función miró para decidir que era la raíz (#241).
+        let root = norte_vfs_local::ConfinedRoot::open_verified(
+            &root_native,
+            self.bounds,
+            &vetadas,
+            esperado,
+        )
+        .ok()?;
         let token = mint_token();
         self.live
             .lock()
@@ -2686,15 +2812,30 @@ impl LocationMint {
     /// camino desde él hasta `dir` en bytes. Si no hay ninguno, `dir` mismo con
     /// prefijo vacío — nunca se sube «por si acaso».
     ///
-    /// La subida se corta en la primera raíz protegida (ADR 0052) y a los
-    /// [`Self::MAX_CLIMB`] niveles.
+    /// La subida se corta **en `$HOME`** (#241) y a los [`Self::MAX_CLIMB`]
+    /// niveles.
+    ///
+    /// El techo de `$HOME` es lo que impide que un `touch $HOME/.git` —un
+    /// archivo mal extraído, un instalador descuidado, cualquier proceso del
+    /// usuario— convierta cada directorio suyo que no sea un repositorio en
+    /// una raíz que abarca la casa entera. El marcador EN `$HOME` sí vale: el
+    /// techo es no pasar de ahí, no ignorar lo que hay ahí. Por encima de
+    /// `$HOME` no hay proyectos, hay sistema.
+    ///
+    /// Antes había también un corte en la primera raíz protegida. Era código
+    /// muerto y decía hacer algo: `is_protected(p)` significa «p está bajo una
+    /// raíz protegida», y si lo está un ANCESTRO lo está también `dir`, con lo
+    /// que [`Self::mint_for`] ya devolvió `None` antes de llegar aquí. Lo que
+    /// de verdad hace falta —no entregar una raíz que CONTIENE una protegida—
+    /// lo hace la confinación con sus `vetadas` (#238).
     fn climb_to_marker(
         &self,
         dir: &norte_proto::VPath,
         native: &std::path::Path,
         marker: &str,
-    ) -> (std::path::PathBuf, Vec<u8>) {
+    ) -> (std::path::PathBuf, Vec<u8>, Option<(u64, u64)>) {
         use std::os::unix::ffi::OsStrExt as _;
+        let casa = self.home.as_deref();
         let mut prefix: Vec<Vec<u8>> = Vec::new();
         let mut actual_v = dir.clone();
         let mut actual_n = native.to_path_buf();
@@ -2712,7 +2853,19 @@ impl LocationMint {
                 .symlink_metadata()
                 .is_ok_and(|m| !m.file_type().is_symlink())
             {
-                return (actual_n, prefix.join(&b'/'));
+                // El nodo que se MIRÓ, para exigirlo al abrir: entre esta
+                // decisión y el `open` la ruta se resuelve otra vez desde `/`,
+                // siguiendo enlaces, y renombrar un componente por medio
+                // cambiaba la raíz por la que quisiera quien pudo renombrarlo
+                // (#241).
+                let id = node_id_de(&actual_n);
+                return (actual_n, prefix.join(&b'/'), id);
+            }
+            // El techo: se mira el marcador EN `$HOME` (arriba) y de ahí no se
+            // pasa. Sin esto, `MAX_CLIMB` era el único límite y un `.git`
+            // suelto en la casa se llevaba la casa entera (#241).
+            if casa == Some(actual_n.as_path()) {
+                break;
             }
             let Some(padre_v) = actual_v.parent() else {
                 break;
@@ -2720,9 +2873,6 @@ impl LocationMint {
             let Some(padre_n) = actual_n.parent().map(std::path::Path::to_path_buf) else {
                 break;
             };
-            if self.is_protected(&padre_v) {
-                break;
-            }
             let nombre = actual_n
                 .file_name()
                 .map(|n| n.as_bytes().to_vec())
@@ -2731,7 +2881,7 @@ impl LocationMint {
             actual_v = padre_v;
             actual_n = padre_n;
         }
-        (native.to_path_buf(), Vec::new())
+        (native.to_path_buf(), Vec::new(), node_id_de(native))
     }
 
     fn resolve(
@@ -2878,6 +3028,11 @@ fn meta_to_wire(meta: &norte_vfs_local::LocationMeta) -> norte_plugin_host::loca
 /// instalado como el de un tercero— vive fuera de este crate. Reexportar la
 /// función es preferible a que el test monte su propia versión del camino,
 /// que es como dos caminos se separan.
+/// **Solo con la feature `testing`** (#241): en la biblioteca publicada esto
+/// era un camino de acuñado SIN política —toma `location_dir` y `climb` tal
+/// cual, y el `climb` solo es del actor humano—, disponible para cualquiera
+/// que dependa de este crate.
+#[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]
 #[must_use]
 pub fn run_column_values_for_test(

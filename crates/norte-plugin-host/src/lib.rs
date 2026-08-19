@@ -22,7 +22,7 @@
 //!     fs-read = "scoped"
 //! "#).unwrap();
 //! assert_eq!(m.category, Category::Command);
-//! assert_eq!(m.capabilities.badges(), vec!["fs-read"]);
+//! assert_eq!(m.capabilities.badges(), vec!["fs-read".to_owned()]);
 //! ```
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
