@@ -277,6 +277,10 @@ renamed `norte-tui`→`ntc` once already and the installed copy kept the old nam
 - `crates/norte-client`: the daemon client SDK (ADR 0066). It may depend on
   `norte-proto` and runtime crates and NOTHING else of ours; its
   `tests/dependency_boundary.rs` fails the build otherwise.
+- `crates/norte-ui-host`: the semantic state of a graphical frontend, over the
+  SDK and `norte-frontend` (ADR 0066). It must not know any painting toolkit
+  nor the core — same kind of boundary test. Renderers are adapters over its
+  bridge, not layers.
 - `crates/norte-{index,ai,mcp,plugin-host}`: core subsystems.
 - `crates/norte-{tui,cli}`: frontends. Business logic belongs in the core or
   a UI-independent shared crate. The GPUI `norte-gui` was retired on 2026-08-20
