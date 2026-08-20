@@ -13,14 +13,14 @@ impl App {
     /// Teclea en el prompt `kind`, si es el que está abierto. No-op si no lo
     /// es: cada tabla de despacho llama a la suya y una tecla no debe
     /// escribir en el campo de otro modal.
-    fn prompt_push(&mut self, kind: PromptKind, c: char) {
+    pub(crate) fn prompt_push(&mut self, kind: PromptKind, c: char) {
         if let Some(prompt) = self.open_prompt(kind) {
             prompt.push(c);
         }
     }
 
     /// Borra hacia atrás en el prompt `kind`. No-op si no es el abierto.
-    fn prompt_pop(&mut self, kind: PromptKind) {
+    pub(crate) fn prompt_pop(&mut self, kind: PromptKind) {
         if let Some(prompt) = self.open_prompt(kind) {
             prompt.pop();
         }
@@ -51,7 +51,7 @@ impl App {
     /// —colisión, aprobación, TOFU— tiene que denegar por `on_dialog_key`, y
     /// llegar aquí con uno abierto es un bug de enrutado: se asegura en debug
     /// y se ignora en release, jamás se cierra a ciegas la decisión de otro.
-    pub(super) fn cancel_prompt(&mut self, kind: PromptKind) {
+    pub(crate) fn cancel_prompt(&mut self, kind: PromptKind) {
         if self.modal.as_ref().and_then(Modal::prompt_kind) != Some(kind) {
             debug_assert!(
                 false,

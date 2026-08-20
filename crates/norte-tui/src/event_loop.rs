@@ -17,8 +17,8 @@
 //! exactamente el uso que el `.context` anterior les daba.
 
 use crate::app::{
-    App, CompareState, Modal, PAGE, Palette, SearchState, Trail, detail_for_bar, error_category,
-    error_message,
+    App, CompareState, Modal, PAGE, Palette, PromptKind, SearchState, Trail, detail_for_bar,
+    error_category, error_message,
 };
 use crate::config::{self, Layers};
 use crate::config_reload::reload_config;
@@ -1990,269 +1990,156 @@ pub async fn run(
                                     app.quit = true;
                                     continue;
                                 }
-                                // `Modal::MarkPattern` (#103 T9) es TEXTO libre, como
-                                // el diálogo de búsqueda de arriba: consume
-                                // caracteres crudos ANTES del contexto `dialog` — no
-                                // tiene ALLOWLIST de `dialog_action` (`ctrl+c` ya
-                                // quedó resuelto arriba, igual que para el resto de
-                                // modales).
-                                if matches!(app.modal, Some(Modal::MarkPattern { .. })) {
+                                // Los nueve prompts de TEXTO LIBRE comparten
+                                // teclado: teclear, borrar y Esc son la misma
+                                // operación sobre el prompt abierto, y consumen
+                                // la tecla ANTES del contexto `dialog` —ninguno
+                                // tiene ALLOWLIST de `dialog_action`, y `ctrl+c`
+                                // ya quedó resuelto arriba—. Lo único propio de
+                                // cada uno es Enter: ahí vive su submit, que es
+                                // async y por eso está aquí y no en `App`.
+                                let prompt = app.modal.as_ref().and_then(Modal::prompt_kind);
+                                if let Some(kind) = prompt {
                                     let plain = key.modifiers.is_empty()
                                         || key.modifiers == KeyModifiers::SHIFT;
                                     match key.code {
-                                        KeyCode::Char(c) if plain => app.mark_pattern_push(c),
-                                        KeyCode::Backspace if plain => app.mark_pattern_pop(),
-                                        // Un `Err` deja el diagnóstico en el propio
-                                        // modal (`mark_pattern_confirm`, que lo deja
-                                        // abierto): nada más que hacer aquí.
-                                        KeyCode::Enter if plain => {
-                                            if let Ok(n) = app.mark_pattern_confirm() {
-                                                app.message = Some(ta(
-                                                    "msg-marked-by-pattern",
-                                                    &[("n", &n.to_string())],
-                                                ));
-                                            }
-                                        }
-                                        KeyCode::Esc if plain => app.cancel_mark_pattern(),
-                                        _ => {}
-                                    }
-                                    continue;
-                                }
-                                // `Modal::Mkdir` (#104): mismo molde de texto libre.
-                                // El submit vive AQUÍ (async): el modal valida y
-                                // devuelve el destino; la task se registra en el
-                                // board como cualquier otra mutación.
-                                if matches!(app.modal, Some(Modal::Mkdir { .. })) {
-                                    let plain = key.modifiers.is_empty()
-                                        || key.modifiers == KeyModifiers::SHIFT;
-                                    match key.code {
-                                        KeyCode::Char(c) if plain => app.mkdir_push(c),
-                                        KeyCode::Backspace if plain => app.mkdir_pop(),
-                                        KeyCode::Enter if plain => {
-                                            if let Some(target) = app.mkdir_confirm() {
-                                                match backend.mkdir(&target).await {
-                                                    Ok(task) => {
-                                                        app.board.push(&task, None);
-                                                        app.mkdir_submitted();
-                                                    }
-                                                    // MINOR-1: el nombre sobrevive
-                                                    // al fallo del submit.
-                                                    Err(e) => app
-                                                        .mkdir_set_error(error_message(&e)),
-                                                }
-                                            }
-                                        }
-                                        KeyCode::Esc if plain => app.cancel_mkdir(),
-                                        _ => {}
-                                    }
-                                    continue;
-                                }
-                                // #132: empaquetar. Mismo molde de texto
-                                // libre que Mkdir, y el submit AQUÍ por lo
-                                // mismo: es async y la task va al board.
-                                if matches!(app.modal, Some(Modal::Pack { .. })) {
-                                    let plain = key.modifiers.is_empty()
-                                        || key.modifiers == KeyModifiers::SHIFT;
-                                    match key.code {
-                                        KeyCode::Char(c) if plain => app.pack_push(c),
-                                        KeyCode::Backspace if plain => app.pack_pop(),
-                                        KeyCode::Enter if plain => {
-                                            if let Some(params) = app.pack_confirm() {
-                                                match backend.pack(params).await {
-                                                    Ok(task) => {
-                                                        app.board.push(&task, None);
-                                                        app.pack_submitted();
-                                                    }
-                                                    Err(e) => {
-                                                        app.pack_set_error(error_message(&e));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        KeyCode::Esc if plain => app.cancel_pack(),
-                                        _ => {}
-                                    }
-                                    continue;
-                                }
-                                // #132: partir. Igual.
-                                if matches!(app.modal, Some(Modal::Split { .. })) {
-                                    let plain = key.modifiers.is_empty()
-                                        || key.modifiers == KeyModifiers::SHIFT;
-                                    match key.code {
-                                        KeyCode::Char(c) if plain => app.split_push(c),
-                                        KeyCode::Backspace if plain => app.split_pop(),
-                                        KeyCode::Enter if plain => {
-                                            if let Some(params) = app.split_confirm() {
-                                                match backend.split_file(params).await {
-                                                    Ok(task) => {
-                                                        app.board.push(&task, None);
-                                                        app.split_submitted();
-                                                    }
-                                                    Err(e) => {
-                                                        app.split_set_error(error_message(&e));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        KeyCode::Esc if plain => app.cancel_split(),
-                                        _ => {}
-                                    }
-                                    continue;
-                                }
-                                // `Modal::TransferDest`: mismo molde de texto libre.
-                                // Enter no transfiere — abre el modal de siempre
-                                // (`open_transfer_to_dir`), que es donde vive la
-                                // confirmación; un destino que no parsea deja su
-                                // diagnóstico y conserva lo tecleado.
-                                if matches!(app.modal, Some(Modal::TransferDest { .. })) {
-                                    let plain = key.modifiers.is_empty()
-                                        || key.modifiers == KeyModifiers::SHIFT;
-                                    match key.code {
-                                        KeyCode::Char(c) if plain => app.transfer_dest_push(c),
-                                        KeyCode::Backspace if plain => app.transfer_dest_pop(),
-                                        KeyCode::Enter if plain => {
-                                            let _ = app.transfer_dest_confirm();
-                                        }
-                                        KeyCode::Esc if plain => app.cancel_transfer_dest(),
-                                        _ => {}
-                                    }
-                                    continue;
-                                }
-                                // `Modal::CommandLine` (#135): mismo molde de texto
-                                // libre que Mkdir. Enter deja la SUSPENSIÓN pendiente
-                                // (la ejecuta la cabecera de la vuelta, que es donde
-                                // vive la terminal) y cierra el prompt.
-                                if matches!(app.modal, Some(Modal::CommandLine { .. })) {
-                                    let plain = key.modifiers.is_empty()
-                                        || key.modifiers == KeyModifiers::SHIFT;
-                                    match key.code {
-                                        KeyCode::Char(c) if plain => app.command_line_push(c),
-                                        KeyCode::Backspace if plain => app.command_line_pop(),
-                                        KeyCode::Enter if plain => {
-                                            if let Some(cmd) = app.command_line_confirm() {
-                                                submit_command_line(app, &cmd);
-                                            }
-                                        }
-                                        KeyCode::Esc if plain => app.cancel_command_line(),
-                                        _ => {}
-                                    }
-                                    continue;
-                                }
-                                // `Modal::AiRenameInstruction` (M4-IA): mismo molde de
-                                // texto libre que Mkdir. Enter SPAWNEA la petición al
-                                // modelo (la única llamada larga del loop) y cierra el
-                                // prompt; la cosecha vive en el select.
-                                if matches!(app.modal, Some(Modal::AiRenameInstruction { .. })) {
-                                    let plain = key.modifiers.is_empty()
-                                        || key.modifiers == KeyModifiers::SHIFT;
-                                    match key.code {
-                                        KeyCode::Char(c) if plain => app.ai_rename_push(c),
-                                        KeyCode::Backspace if plain => app.ai_rename_pop(),
-                                        KeyCode::Enter if plain => {
-                                            if let Some(instruction) = app.ai_rename_confirm() {
-                                                let dir = app.focused().dir().clone();
-                                                let b = backend.clone();
-                                                let d = dir.clone();
-                                                let handle = tokio::spawn(async move {
-                                                    b.ai_rename_plan(&d, &instruction).await
-                                                });
-                                                // Relanzar con un run vivo lo ABORTA
-                                                // (dropear el handle solo desvincula):
-                                                // a lo sumo una petición en vuelo.
-                                                if let Some(old) =
-                                                    ai_rename_run.replace(AiRenameRun { handle, dir })
-                                                {
-                                                    old.handle.abort();
-                                                }
-                                                // Invariante: lanzar VACÍA el stash —
-                                                // un plan retenido de una petición
-                                                // ANTERIOR jamás debe abrirse como si
-                                                // fuera de esta.
-                                                pending_ai_plan = None;
-                                                app.message = Some(t("msg-ai-rename-running"));
-                                                app.ai_rename_submitted();
-                                            }
-                                        }
-                                        KeyCode::Esc if plain => app.cancel_ai_rename(),
-                                        _ => {}
-                                    }
-                                    continue;
-                                }
-                                // `Modal::SemanticQuery` (M4-IA-2): mismo molde de
-                                // texto libre. Enter SPAWNEA la consulta al índice
-                                // (root = None: todos los roots) y cierra el prompt;
-                                // la cosecha vive en el select.
-                                if matches!(app.modal, Some(Modal::SemanticQuery { .. })) {
-                                    let plain = key.modifiers.is_empty()
-                                        || key.modifiers == KeyModifiers::SHIFT;
-                                    match key.code {
-                                        KeyCode::Char(c) if plain => app.semantic_push(c),
-                                        KeyCode::Backspace if plain => app.semantic_pop(),
-                                        KeyCode::Enter if plain => {
-                                            if let Some(query) = app.semantic_confirm() {
-                                                let b = backend.clone();
-                                                let handle = tokio::spawn(async move {
-                                                    b.index_search_semantic(None, &query, SEMANTIC_K)
-                                                        .await
-                                                });
-                                                // Relanzar con un run vivo lo ABORTA
-                                                // (dropear el handle solo desvincula):
-                                                // a lo sumo una consulta en vuelo.
-                                                if let Some(old) =
-                                                    semantic_run.replace(SemanticRun { handle })
-                                                {
-                                                    old.handle.abort();
-                                                }
-                                                // Invariante: lanzar VACÍA el stash —
-                                                // unos hits retenidos de una consulta
-                                                // ANTERIOR jamás deben abrirse como si
-                                                // fueran de esta.
-                                                pending_semantic = None;
-                                                app.message = Some(t("msg-semantic-running"));
-                                                app.semantic_submitted();
-                                            }
-                                        }
-                                        KeyCode::Esc if plain => app.cancel_semantic(),
-                                        _ => {}
-                                    }
-                                    continue;
-                                }
-                                // `Modal::TransferName` (#105): mismo molde. El
-                                // submit reusa `submit_transfer` — colisiones por el
-                                // camino existente (`Modal::Collision` + backlog).
-                                if matches!(app.modal, Some(Modal::TransferName { .. })) {
-                                    let plain = key.modifiers.is_empty()
-                                        || key.modifiers == KeyModifiers::SHIFT;
-                                    match key.code {
-                                        KeyCode::Char(c) if plain => app.transfer_name_push(c),
-                                        KeyCode::Backspace if plain => app.transfer_name_pop(),
-                                        KeyCode::Enter if plain => {
-                                            if let Some((kind, from, dest)) =
-                                                app.transfer_name_confirm()
-                                            {
-                                                // Cierra SOLO si encoló (disciplina
-                                                // MINOR-1 de #104): un submit
-                                                // fallido conserva el nombre; el
-                                                // detalle queda en la barra.
-                                                if submit_transfer(
-                                                    app,
-                                                    backend,
-                                                    kind,
-                                                    from,
-                                                    dest,
-                                                    TransferOptions::default(),
-                                                )
-                                                .await
-                                                {
-                                                    app.transfer_name_submitted();
-                                                } else {
-                                                    app.transfer_name_set_error(t(
-                                                        "msg-transfer-name-failed",
+                                        KeyCode::Char(c) if plain => app.prompt_push(kind, c),
+                                        KeyCode::Backspace if plain => app.prompt_pop(kind),
+                                        KeyCode::Esc if plain => app.cancel_prompt(kind),
+                                        KeyCode::Enter if plain => match kind {
+                                            PromptKind::MarkPattern => {
+                                                if let Ok(n) = app.mark_pattern_confirm() {
+                                                    app.message = Some(ta(
+                                                        "msg-marked-by-pattern",
+                                                        &[("n", &n.to_string())],
                                                     ));
                                                 }
                                             }
-                                        }
-                                        KeyCode::Esc if plain => app.cancel_transfer_name(),
+                                            PromptKind::Mkdir => {
+                                                if let Some(target) = app.mkdir_confirm() {
+                                                    match backend.mkdir(&target).await {
+                                                        Ok(task) => {
+                                                            app.board.push(&task, None);
+                                                            app.mkdir_submitted();
+                                                        }
+                                                        // MINOR-1: el nombre sobrevive
+                                                        // al fallo del submit.
+                                                        Err(e) => app
+                                                            .mkdir_set_error(error_message(&e)),
+                                                    }
+                                                }
+                                            }
+                                            PromptKind::Pack => {
+                                                if let Some(params) = app.pack_confirm() {
+                                                    match backend.pack(params).await {
+                                                        Ok(task) => {
+                                                            app.board.push(&task, None);
+                                                            app.pack_submitted();
+                                                        }
+                                                        Err(e) => {
+                                                            app.pack_set_error(error_message(&e));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            PromptKind::Split => {
+                                                if let Some(params) = app.split_confirm() {
+                                                    match backend.split_file(params).await {
+                                                        Ok(task) => {
+                                                            app.board.push(&task, None);
+                                                            app.split_submitted();
+                                                        }
+                                                        Err(e) => {
+                                                            app.split_set_error(error_message(&e));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            PromptKind::TransferDest => {
+                                                let _ = app.transfer_dest_confirm();
+                                            }
+                                            PromptKind::CommandLine => {
+                                                if let Some(cmd) = app.command_line_confirm() {
+                                                    submit_command_line(app, &cmd);
+                                                }
+                                            }
+                                            PromptKind::AiRename => {
+                                                if let Some(instruction) = app.ai_rename_confirm() {
+                                                    let dir = app.focused().dir().clone();
+                                                    let b = backend.clone();
+                                                    let d = dir.clone();
+                                                    let handle = tokio::spawn(async move {
+                                                        b.ai_rename_plan(&d, &instruction).await
+                                                    });
+                                                    // Relanzar con un run vivo lo ABORTA
+                                                    // (dropear el handle solo desvincula):
+                                                    // a lo sumo una petición en vuelo.
+                                                    let run = AiRenameRun { handle, dir };
+                                                    if let Some(old) = ai_rename_run.replace(run) {
+                                                        old.handle.abort();
+                                                    }
+                                                    // Invariante: lanzar VACÍA el stash —
+                                                    // un plan retenido de una petición
+                                                    // ANTERIOR jamás debe abrirse como si
+                                                    // fuera de esta.
+                                                    pending_ai_plan = None;
+                                                    app.message = Some(t("msg-ai-rename-running"));
+                                                    app.ai_rename_submitted();
+                                                }
+                                            }
+                                            PromptKind::Semantic => {
+                                                if let Some(query) = app.semantic_confirm() {
+                                                    let b = backend.clone();
+                                                    let handle = tokio::spawn(async move {
+                                                        b.index_search_semantic(
+                                                            None, &query, SEMANTIC_K,
+                                                        )
+                                                        .await
+                                                    });
+                                                    // Relanzar con un run vivo lo ABORTA
+                                                    // (dropear el handle solo desvincula):
+                                                    // a lo sumo una consulta en vuelo.
+                                                    if let Some(old) =
+                                                        semantic_run.replace(SemanticRun { handle })
+                                                    {
+                                                        old.handle.abort();
+                                                    }
+                                                    // Invariante: lanzar VACÍA el stash —
+                                                    // unos hits retenidos de una consulta
+                                                    // ANTERIOR jamás deben abrirse como si
+                                                    // fueran de esta.
+                                                    pending_semantic = None;
+                                                    app.message = Some(t("msg-semantic-running"));
+                                                    app.semantic_submitted();
+                                                }
+                                            }
+                                            PromptKind::TransferName => {
+                                                if let Some((kind, from, dest)) =
+                                                    app.transfer_name_confirm()
+                                                {
+                                                    // Cierra SOLO si encoló (disciplina
+                                                    // MINOR-1 de #104): un submit
+                                                    // fallido conserva el nombre; el
+                                                    // detalle queda en la barra.
+                                                    if submit_transfer(
+                                                        app,
+                                                        backend,
+                                                        kind,
+                                                        from,
+                                                        dest,
+                                                        TransferOptions::default(),
+                                                    )
+                                                    .await
+                                                    {
+                                                        app.transfer_name_submitted();
+                                                    } else {
+                                                        app.transfer_name_set_error(t(
+                                                            "msg-transfer-name-failed",
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                        },
                                         _ => {}
                                     }
                                     continue;
