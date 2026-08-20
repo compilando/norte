@@ -528,8 +528,12 @@ impl TextPrompt<'_> {
         *self.error = None;
     }
 
-    /// Borra hacia atrás. Sobre un campo vacío no toca nada — ni el
-    /// `touched` del nombre editable (#105 review MINOR-5: un pop vacío no
+    /// Borra hacia atrás.
+    ///
+    /// El diagnóstico se va aunque no haya nada que borrar: quien pulsa
+    /// retroceso está corrigiendo, y el aviso del intento anterior ya no
+    /// describe lo que hay. El `touched` del nombre editable NO: ese solo se
+    /// fija si de verdad borró algo (#105 review MINOR-5, un pop vacío no
     /// debe estrechar la vía de los bytes originales).
     pub fn pop(self) {
         let borro = match self.pop {
@@ -540,10 +544,7 @@ impl TextPrompt<'_> {
                 self.text.len() != antes
             }
         };
-        if !borro {
-            return;
-        }
-        if let Some(touched) = self.touched {
+        if borro && let Some(touched) = self.touched {
             *touched = true;
         }
         *self.error = None;
@@ -835,5 +836,16 @@ mod tests {
             matches!(vacio, Modal::TransferName { touched: false, .. }),
             "un pop vacío no estrecha la vía de bytes originales"
         );
+    }
+
+    /// El retroceso limpia el diagnóstico aunque no borre nada.
+    #[test]
+    fn el_retroceso_en_vacio_limpia_el_diagnostico() {
+        let mut m = Modal::Mkdir {
+            name: String::new(),
+            error: Some(String::from("ya existe")),
+        };
+        m.text_prompt().expect("campo").pop();
+        assert!(m.text_prompt().expect("campo").error().is_none());
     }
 }
