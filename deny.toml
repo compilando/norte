@@ -35,12 +35,61 @@ exceptions = [
     # transitiva de reqsign (firma sigv4) vía const-random. Mismo criterio
     # que notify: CC0 acotado por-crate, jamás en el allow global.
     { name = "tiny-keccak", allow = ["CC0-1.0"] },
+    # Fase 3 del plan multi-frontend (spike de Tauri, ADR 0067). Las cuatro
+    # entran SOLO por `norte-gui-tauri`, que no se publica (`publish = false`),
+    # y son MPL-2.0: copyleft POR FICHERO, no viral sobre el binario que las
+    # enlaza — no obliga a nada al resto del árbol mientras no se modifiquen
+    # sus ficheros. Acotadas por crate a propósito: MPL nunca entra al `allow`
+    # global.
+    #
+    # `cssparser`, `cssparser-macros`, `dtoa-short` y `selectors` son el
+    # parser de CSS de Servo, que llega vía `tauri` → `stylua`/`selectors`;
+    # `option-ext` llega por `dirs-sys`. Si el spike se convierte en producto,
+    # esta lista se revisa ANTES de publicar.
+    { name = "cssparser", allow = ["MPL-2.0"] },
+    { name = "cssparser-macros", allow = ["MPL-2.0"] },
+    { name = "dtoa-short", allow = ["MPL-2.0"] },
+    { name = "option-ext", allow = ["MPL-2.0"] },
+    { name = "selectors", allow = ["MPL-2.0"] },
 ]
 confidence-threshold = 0.9
 
 [advisories]
 yanked = "deny"
 ignore = [
+    # ─────────────────────────────────────────────────────────────────────
+    # Fase 3 del plan multi-frontend: el árbol de Tauri 2 en Linux (ADR 0067).
+    # NINGUNA es una vulnerabilidad: todas son «sin mantener». Entran solo por
+    # `norte-gui-tauri`, que no se publica y está fuera del gate por defecto.
+    #
+    # Las ocho de gtk-rs son las MISMAS bindings de GTK3 que WRY necesita para
+    # abrir una WebKitGTK, y gtk-rs las declaró sin mantener al pasar a GTK4.
+    # No hay alternativa dentro de Tauri 2: es una consecuencia DIRECTA de la
+    # elección de toolkit, y está anotada como tal en el informe del spike
+    # (`docs/spike-tauri-2026-08-20.md`) — si el spike se convierte en
+    # producto, esto vuelve a la mesa antes de la GA, no después.
+    "RUSTSEC-2024-0411", # gdkwayland-sys
+    "RUSTSEC-2024-0412", # gdk
+    "RUSTSEC-2024-0413", # atk
+    "RUSTSEC-2024-0415", # gtk
+    "RUSTSEC-2024-0416", # atk-sys
+    "RUSTSEC-2024-0418", # gdk-sys
+    "RUSTSEC-2024-0419", # gtk3-macros
+    "RUSTSEC-2024-0420", # gtk-sys
+    # `proc-macro-error` 1.x, sin mantener: proc-macro de BUILD-TIME que entra
+    # por `gtk3-macros`. Mismo criterio que `proc-macro-error2`, ya ignorado
+    # más abajo por el mismo motivo: no hay runtime que atacar.
+    "RUSTSEC-2024-0370",
+    # El grupo `unic-*` (propiedades Unicode), sin mantener desde 2019; entra
+    # por `tauri` → `plist`/`unic-langid`. Son TABLAS de datos Unicode: sin
+    # I/O, sin unsafe de red, sin superficie de ataque más allá de datos
+    # desactualizados.
+    "RUSTSEC-2025-0075", # unic-char-range
+    "RUSTSEC-2025-0080", # unic-common
+    "RUSTSEC-2025-0081", # unic-char-property
+    "RUSTSEC-2025-0098", # unic-ucd-version
+    "RUSTSEC-2025-0100", # unic-ucd-ident
+    # ─────────────────────────────────────────────────────────────────────
     # RUSTSEC-2023-0071 — Marvin Attack: sidechannel de temporización en las
     # operaciones de CLAVE PRIVADA RSA del crate `rsa`. Entra transitivamente
     # por `russh` → `ssh-key` → `rsa` (norte-vfs-sftp, ADR 0013). SIN fix

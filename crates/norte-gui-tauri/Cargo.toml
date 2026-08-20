@@ -1,0 +1,75 @@
+[package]
+name = "norte-gui-tauri"
+description = "El renderer de referencia de norte: una webview de Tauri sobre norte-ui-host"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+# El spike no se publica: es una respuesta a una pregunta, no un producto.
+publish = false
+
+# El ÚNICO crate del workspace que puede nombrar a Tauri, a WRY o a un runtime
+# de JavaScript (ADR 0066, decisión D2). `norte-client`, `norte-frontend` y
+# `norte-ui-host` compilan y pasan sus tests sin Tauri y sin Node instalados, y
+# sus tests de frontera lo vigilan.
+#
+# Fuera del gate por defecto (`core_pkgs` en el justfile lo excluye) mientras el
+# spike no cierre su go/no-go: arrastra WebKitGTK, GTK3 y libsoup3 del sistema,
+# que ninguna otra parte del árbol necesita para compilar.
+
+[features]
+# La instrumentación de la tarea 3.6: añade el comando `metrics`, por el que
+# el renderer devuelve lo que midió. NO está en el binario por defecto — la
+# superficie de comandos de producción es la que clava
+# `tests/webview_boundary.rs`.
+metrics = []
+
+[lib]
+name = "norte_gui_tauri"
+path = "src/lib.rs"
+
+[[bin]]
+name = "norte-gui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+norte-client.workspace = true
+norte-config.workspace = true
+norte-frontend.workspace = true
+norte-i18n.workspace = true
+norte-proto.workspace = true
+norte-theme.workspace = true
+norte-ui-host.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing.workspace = true
+# El log al fichero se monta AQUÍ y no con el helper de `norte-core`: este
+# binario habla con el daemon por un socket y no puede arrastrar el motor, los
+# providers y el host de plugins para escribir una línea (ADR 0066). Las dos
+# ya son dependencias del workspace; no entra nada nuevo al árbol.
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+# `vpath_from_native`: la ÚNICA función que convierte una ruta del sistema en
+# un `VPath`, y ya está en el grafo — `norte-frontend` depende de ella por la
+# conversión inversa. Re-derivar aquí las reglas del esquema local sería
+# exactamente la duplicación que ese crate existe para evitar (regla 1).
+norte-vfs-local.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dev-dependencies]
+norte-core.workspace = true
+norte-testkit.workspace = true
+norte-vfs.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

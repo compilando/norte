@@ -27,6 +27,39 @@
     ],
     "update": "patch"
   },
+  "patch_layout": {
+    "base_sequence": 13,
+    "changes": [
+      {
+        "cells": [
+          120,
+          40
+        ],
+        "change": "layout",
+        "placements": [
+          {
+            "focus_index": 0,
+            "height": 38,
+            "role": "active",
+            "slot_id": 1,
+            "width": 60,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "focus_index": 1,
+            "height": 38,
+            "role": "target",
+            "slot_id": 2,
+            "width": 60,
+            "x": 60,
+            "y": 0
+          }
+        ]
+      }
+    ],
+    "update": "patch"
+  },
   "patch_rows": {
     "base_sequence": 12,
     "changes": [
@@ -89,6 +122,32 @@
       }
     ],
     "focus": 1,
+    "layout": {
+      "cells": [
+        120,
+        40
+      ],
+      "placements": [
+        {
+          "focus_index": 0,
+          "height": 38,
+          "role": "active",
+          "slot_id": 1,
+          "width": 60,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "focus_index": 1,
+          "height": 38,
+          "role": "target",
+          "slot_id": 2,
+          "width": 60,
+          "x": 60,
+          "y": 0
+        }
+      ]
+    },
     "locale": "es",
     "slots": [
       {

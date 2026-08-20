@@ -26,7 +26,13 @@ features := "--features norte-tui/schema --features norte-config/watch --feature
 # ponía cinco tests en rojo sin que nadie tocara código. Retirada la GUI GPUI
 # (ADR 0065), la exclusión sobra — pero la lección no: si un miembro nuevo trae
 # una feature que cambia el comportamiento del core, se saca de aquí otra vez.
-core_pkgs := "--workspace"
+# `norte-gui-tauri` queda FUERA hasta que el spike cierre su go/no-go (fase 3
+# del plan multi-frontend): compilarlo exige WebKitGTK, GTK3 y libsoup3 del
+# sistema, y ninguna otra parte del árbol los necesita — un gate que no arranca
+# en una máquina sin ellos deja de ser un gate. Está en `members` a propósito:
+# así el `Cargo.lock` fija las versiones de Tauri y `cargo fmt --all` lo cubre.
+# Su gate propio es `just gui-ci`.
+core_pkgs := "--workspace --exclude norte-gui-tauri"
 
 # Suelo de disco libre (GiB) por debajo del cual `just ci` se niega a
 # arrancar. Un `cargo build` del workspace más el target instrumentado de
@@ -399,3 +405,47 @@ dist-publish tag:
         docs/schema/keymap.schema.json \
         --clobber
     @echo "subido a {{tag}}. Comprueba: gh release view {{tag}}"
+
+# ---------------------------------------------------------------------------
+# El spike del renderer de Tauri (fase 3 del plan multi-frontend).
+#
+# Fuera del gate por defecto a propósito (ver `core_pkgs`): compilarlo exige
+# WebKitGTK, GTK3 y libsoup3 del sistema. Su gate es este, y se corre a mano.
+# ---------------------------------------------------------------------------
+
+gui_dir := "crates/norte-gui-tauri"
+
+# Las dependencias de JS, desde el lockfile y sin tocarlo (`npm ci`).
+gui-deps:
+    cd {{gui_dir}}/ui && npm ci
+
+# El bundle de la webview: typecheck + Vite. Assets locales, nada remoto.
+gui-build: 
+    cd {{gui_dir}}/ui && npm run build
+
+# Los tests del renderer (vitest, jsdom): ni ventana ni WebKitGTK.
+gui-test-ui:
+    cd {{gui_dir}}/ui && npm run test
+
+# Formato y lint del renderer.
+gui-lint-ui:
+    cd {{gui_dir}}/ui && npm run fmt:check && npm run lint && npm run typecheck
+
+# El gate del spike, entero. `gui-build` va ANTES de los tests de Rust porque
+# uno de ellos audita el bundle empaquetado (`el_bundle_no_llama_a_casa`).
+gui-ci: gui-lint-ui gui-test-ui gui-build
+    CARGO_INCREMENTAL=0 cargo clippy -p norte-gui-tauri --all-targets -- -D warnings
+    CARGO_INCREMENTAL=0 cargo nextest run -p norte-gui-tauri --no-tests=pass
+    CARGO_INCREMENTAL=0 cargo test -p norte-gui-tauri --doc
+
+# Arranca el renderer contra el daemon. Necesita un daemon vivo.
+gui-run *args: gui-build
+    cargo run -p norte-gui-tauri --bin norte-gui -- {{args}}
+
+# Lo mismo en release: es lo ÚNICO que vale para medir (la 3.6).
+gui-run-release *args: gui-build
+    cargo run --release -p norte-gui-tauri --bin norte-gui -- {{args}}
+
+# El paquete (deb + AppImage). Necesita la CLI de Tauri del lockfile.
+gui-package: gui-build
+    cd {{gui_dir}}/ui && npx tauri build --no-bundle

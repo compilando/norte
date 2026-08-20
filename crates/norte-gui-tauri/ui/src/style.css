@@ -1,0 +1,244 @@
+/* Todo el color sale del tema resuelto EN RUST: estas variables las escribe
+   `applyTheme()` con lo que el host proyecta. Lo que hay aquí es geometría. */
+:root {
+  --cell-w: 8px;
+  --cell-h: 20px;
+  --bg: #101216;
+  --fg: #d8dee9;
+  --panel-bg: #14171c;
+  --panel-focus-bg: #171b22;
+  --border: #2b323c;
+  --border-focus: #4c8fd0;
+  --selection-bg: #2d4f76;
+  --selection-fg: #ffffff;
+  --mark-bg: #6b4b16;
+  --hostile-fg: #e0a33a;
+  --status-bg: #191d24;
+  --title-fg: #9fb6cc;
+  --error-fg: #e06c75;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    ui-monospace, "DejaVu Sans Mono", "Cascadia Mono", "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: var(--cell-h);
+}
+
+#screen {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+}
+
+.slot {
+  position: absolute;
+  overflow: hidden;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.slot[data-role="active"] {
+  border-color: var(--border-focus);
+  background: var(--panel-focus-bg);
+}
+
+.slot-title {
+  flex: 0 0 var(--cell-h);
+  padding: 0 6px;
+  color: var(--title-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.slot[data-role="target"] .slot-title::after {
+  content: " →";
+  color: var(--border-focus);
+}
+
+.hostile {
+  color: var(--hostile-fg);
+}
+
+.hostile-badge {
+  color: var(--hostile-fg);
+  margin-left: 4px;
+}
+
+.scroller {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  outline: none;
+}
+
+.canvas {
+  position: relative;
+  width: 100%;
+}
+
+.row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: var(--cell-h);
+  display: flex;
+  gap: 8px;
+  padding: 0 6px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.row[data-marked="true"] {
+  background: var(--mark-bg);
+}
+
+.row[aria-selected="true"][data-marked="true"] {
+  background: var(--selection-bg);
+  box-shadow: inset 3px 0 0 var(--mark-bg);
+}
+
+.cell-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cell {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.kind-dir .cell-name::before {
+  content: "/";
+  opacity: 0.6;
+}
+
+.empty,
+.loading,
+.error {
+  padding: 6px;
+  opacity: 0.8;
+}
+
+.error {
+  color: var(--error-fg);
+}
+
+.statusbar {
+  background: var(--status-bg);
+  padding: 0 6px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.pending {
+  color: var(--border-focus);
+  margin-left: 8px;
+}
+
+.tasks {
+  padding: 0 6px;
+  overflow: auto;
+}
+
+.task {
+  display: flex;
+  gap: 8px;
+}
+
+#dialogs:empty {
+  display: none;
+}
+
+#dialogs {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 45%);
+}
+
+.dialog {
+  min-width: 380px;
+  max-width: 70vw;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  padding: 12px;
+}
+
+.dialog h2 {
+  margin: 0 0 8px;
+  font-size: 1em;
+  color: var(--title-fg);
+}
+
+.dialog input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 4px;
+  font: inherit;
+}
+
+.choices {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  justify-content: flex-end;
+}
+
+.choices button {
+  background: var(--panel-focus-bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.choices button[data-destructive="true"] {
+  border-color: var(--error-fg);
+  color: var(--error-fg);
+}
+
+.banner {
+  color: var(--hostile-fg);
+  margin-right: 8px;
+}
+
+#fatal {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 24px;
+  text-align: center;
+}
+
+#fatal[data-shown="true"] {
+  display: flex;
+}

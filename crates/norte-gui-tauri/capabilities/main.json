@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Lo MÍNIMO que la webview necesita: escuchar los eventos del host y nada más. Sin filesystem, sin shell, sin http, sin diálogo nativo, sin ventana programable (ADR 0066, decisión D11). Los comandos del propio binario no pasan por aquí —Tauri solo capabilitiza los de plugin—, y por eso son ellos los que validan tipos y frescura.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

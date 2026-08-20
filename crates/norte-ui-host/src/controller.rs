@@ -28,9 +28,9 @@ use crate::bridge::{
 };
 use crate::commands::{Efecto, efecto_de};
 use crate::dto::{
-    BrowserSlotView, ConnectionView, DialogChoice, DialogView, PendingView, RowKind, RowView,
-    SlotState, SlotView, StatusView, TaskStateView, TaskView, UiNotice, UiUpdate, ViewChange,
-    ViewPatch, ViewSnapshot,
+    BrowserSlotView, ConnectionView, DialogChoice, DialogView, LayoutView, PendingView, RowKind,
+    RowView, SlotPlacement, SlotRole, SlotState, SlotView, StatusView, TaskStateView, TaskView,
+    UiNotice, UiUpdate, ViewChange, ViewPatch, ViewSnapshot,
 };
 
 /// Capacidad del buzón del actor. Acotado a propósito: si el renderer manda
@@ -48,6 +48,10 @@ const FIRST_PAGE: usize = 100;
 /// Entradas por lote mientras se drena el resto. Ni una a una —un mensaje
 /// por entrada ahoga el buzón del actor— ni todas de golpe.
 const FILL_BATCH: usize = 500;
+
+/// Cuántas entradas se sondean de una tanda. Es una PANTALLA con holgura:
+/// más no se ve, y cada sondeo es un viaje al daemon.
+const MAX_SONDEOS: usize = 200;
 
 /// Actualizaciones retenidas para un suscriptor lento. Al pasarse, el
 /// suscriptor se entera de que se quedó atrás y pide un snapshot: es la
@@ -134,6 +138,9 @@ enum Mensaje {
     Aprobacion(Box<norte_proto::methods::PolicyApprovalRequired>),
     /// Más entradas del listado que se está drenando por detrás.
     MasEntradas(Box<(RequestToken, u32, Vec<Entry>)>),
+    /// Lo que un sondeo averiguó de unas cuantas entradas (tamaño y fecha de
+    /// un listado perezoso).
+    Hidratado(Box<(RequestToken, u32, Vec<Entry>)>),
     /// Una Task recién encolada, con su progreso y su cancelación.
     TaskNueva(Box<crate::backend::HostTask>),
     /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
@@ -179,6 +186,13 @@ impl UiHost {
         // El primer listado se pide ANTES de publicar nada: el snapshot 0
         // describe una pantalla que ya existe, no una promesa.
         estado.listar_inicial(&options.backend, &tx2).await;
+        // Y se sondea lo que ya se ve: el listado local no trae tamaño ni
+        // fecha (#52), así que sin esto la primera pantalla nace con dos
+        // columnas en blanco y no se llenan hasta que algo la mueva.
+        let visibles: Vec<u32> = estado.huecos.keys().copied().collect();
+        for slot in visibles {
+            estado.sondear(slot, &options.backend, &tx2);
+        }
         let primero = estado.snapshot();
 
         // Los dos canales de la conexión son del PRIMER dueño, así que se
@@ -325,26 +339,26 @@ async fn actor(
                     continue;
                 }
                 estado.aterriza(dir, res);
+                let slot = estado.activo();
+                estado.sondear(slot, &backend, &buzon);
                 // Un `cd` cambia la pantalla entera —directorio, filas,
                 // cursor, marcas—, así que se manda una foto en vez de
                 // enumerar parches que el renderer tendría que casar.
                 let snap = estado.snapshot();
                 let _ = updates.send(estado.sobre(UiUpdate::Snapshot(snap)));
             }
+            Mensaje::Hidratado(datos) => {
+                let (token, slot, sondas) = *datos;
+                if let Some(u) = estado.aplicar_sondas(slot, token, &sondas) {
+                    let _ = updates.send(u);
+                }
+            }
             Mensaje::MasEntradas(datos) => {
                 let (token, slot, batch) = *datos;
-                let Some(hueco) = estado.huecos.get_mut(&slot) else {
-                    continue;
-                };
-                if hueco.en_vuelo != Some(token) {
-                    // Un lote de una navegación que ya fue relevada. Se
-                    // descarta aquí: pegarlo al listado de otro directorio
-                    // sería mezclar dos árboles en una pantalla.
-                    continue;
+                if let Some(u) = estado.aplicar_lote(slot, token, batch) {
+                    let _ = updates.send(u);
+                    estado.sondear(slot, &backend, &buzon);
                 }
-                hueco.pane.extend(batch);
-                let u = estado.parche_filas();
-                let _ = updates.send(u);
             }
             Mensaje::Conexion(ev) => {
                 let (vista, clave) = match ev {
@@ -470,6 +484,10 @@ struct Hueco {
     /// renderer.
     en_vuelo: Option<RequestToken>,
     estado: SlotState,
+    /// Los paths que ya se sondearon (hayan contestado o no). Sin esta
+    /// memoria, un `stat` que falla vuelve a pedirse en cada repintado y el
+    /// sondeo se convierte en un bucle contra el daemon.
+    sondeados: std::collections::HashSet<VPath>,
 }
 
 /// Un diálogo abierto y lo que hará si se confirma.
@@ -532,6 +550,10 @@ struct Estado {
     /// El reparto del ÚLTIMO tamaño conocido: quién se pinta, quién no, y en
     /// qué orden se tabula. Vive y muere con el tamaño, no con el árbol.
     reparto: Resolved,
+    /// El último tamaño repartido, en celdas. Viaja al renderer con el
+    /// reparto: sin él no puede saber sobre qué rejilla están medidos los
+    /// rectángulos que recibe.
+    viewport: (u16, u16),
     /// Quién tiene el foco y quién es el destino.
     roles: Roles,
     /// Las columnas configuradas.
@@ -616,6 +638,7 @@ impl Estado {
                         visibles: 64,
                         en_vuelo: None,
                         estado: SlotState::Loading,
+                        sondeados: std::collections::HashSet::new(),
                     },
                 );
             }
@@ -636,6 +659,7 @@ impl Estado {
             arbol,
             kinds,
             reparto,
+            viewport,
             roles,
             columnas,
             attrs,
@@ -892,6 +916,9 @@ impl Estado {
                 self.hueco_mut().primera_visible = first;
                 self.hueco_mut().visibles =
                     count.min(u32::try_from(MAX_ROWS_PER_BATCH).unwrap_or(u32::MAX));
+                // Scroll = filas nuevas a la vista, y puede que sin tamaño
+                // todavía: el sondeo va con la ventana, no con el cursor.
+                self.sondear(slot_id, backend, buzon);
                 (self.aplicada(), vec![self.parche_filas()])
             }
             UiAction::FocusSlot { slot_id } => {
@@ -903,14 +930,34 @@ impl Estado {
                 }
                 self.roles.set(RoleId::Active, SlotId(slot_id));
                 self.reconcilia_roles();
-                let snap = self.snapshot();
-                (self.aplicada(), vec![self.sobre(UiUpdate::Snapshot(snap))])
+                // Un cambio de foco NO reenvía la pantalla: lo único que
+                // cambia es quién lleva cada papel. Mandar la foto entera
+                // costaba todas las filas de todos los listados por cada
+                // tabulador — el mismo derroche que el bridge acota en el
+                // cursor (decisión D7).
+                let cambio = ViewChange::Layout(self.disposicion());
+                (self.aplicada(), vec![self.parche(vec![cambio])])
+            }
+            UiAction::MarkRange { slot_id, from, to } => {
+                let (slot_id, from, to) = (*slot_id, *from, *to);
+                if slot_id != self.activo() {
+                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                }
+                // Los DOS extremos tienen que ser de esta generación: medio
+                // rango válido significa marcar hasta un sitio que ya no es
+                // el que el usuario señaló.
+                let (Some(a), Some(b)) = (self.fila_valida(from), self.fila_valida(to)) else {
+                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                };
+                self.hueco_mut().pane.mark_range(a, b);
+                (self.aplicada(), vec![self.parche_filas()])
             }
             UiAction::Activate { .. } | UiAction::Parent { .. } | UiAction::History { .. } => {
                 self.navegacion(accion, backend, buzon)
             }
             UiAction::SetViewport { width, height } => {
-                self.reparto = resolve(rect((*width, *height)), &self.arbol, &self.kinds);
+                self.viewport = (*width, *height);
+                self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
                 // El destino no puede apuntar a algo que no se ve: una copia
                 // que aterriza en un panel oculto es una copia que el usuario
                 // no verá llegar.
@@ -1200,7 +1247,9 @@ impl Estado {
             vista: vista.clone(),
             al_confirmar: Some(Pendiente::Borrar { paths, permanente }),
         });
-        let cambio = ViewChange::Dialogs(self.vistas_de_dialogos());
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
@@ -1293,7 +1342,9 @@ impl Estado {
                 approval_id: req.approval_id,
             }),
         });
-        let cambio = ViewChange::Dialogs(self.vistas_de_dialogos());
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
         vec![self.parche(vec![cambio])]
     }
 
@@ -1328,7 +1379,9 @@ impl Estado {
             vista: vista.clone(),
             al_confirmar: Some(Pendiente::CrearDirectorio { dir }),
         });
-        let cambio = ViewChange::Dialogs(self.vistas_de_dialogos());
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
@@ -1351,7 +1404,9 @@ impl Estado {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
         dialogo.vista.input = Some(clamp_display(texto.to_owned()));
-        let cambio = ViewChange::Dialogs(self.vistas_de_dialogos());
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
@@ -1437,7 +1492,9 @@ impl Estado {
                 let _ = backend.policy_decide(approval_id, false).await;
             });
         }
-        let cambio = ViewChange::Dialogs(self.vistas_de_dialogos());
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
         salidas.push(self.parche(vec![cambio]));
         (self.aplicada(), salidas)
     }
@@ -1527,7 +1584,9 @@ impl Estado {
                 }
             }
         });
-        let cambio = ViewChange::Tasks(self.vistas_de_tasks());
+        let cambio = ViewChange::Tasks {
+            tasks: self.vistas_de_tasks(),
+        };
         vec![self.parche(vec![cambio])]
     }
 
@@ -1540,7 +1599,9 @@ impl Estado {
         viva.vista = Self::vista_de(p);
         // De quién es la task no lo dice el progreso: lo dice de dónde vino.
         viva.vista.foreign = ajena;
-        let cambio = ViewChange::Tasks(self.vistas_de_tasks());
+        let cambio = ViewChange::Tasks {
+            tasks: self.vistas_de_tasks(),
+        };
         vec![self.parche(vec![cambio])]
     }
 
@@ -1853,6 +1914,115 @@ impl Estado {
         self.parche(vec![cambio])
     }
 
+    /// Sondea lo que la ventana visible de un hueco todavía no sabe.
+    ///
+    /// El listado local es PEREZOSO a propósito (#52): `readdir` da el tipo
+    /// pero no el tamaño, y statear medio millón de entradas para pintar
+    /// cuarenta filas es justo lo que esa decisión evita. Quien enseña
+    /// columnas de tamaño y fecha tiene que pedirlas para lo que se ve — el
+    /// TUI lo hace desde su bucle, y esto es lo mismo con la ventana que el
+    /// renderer declaró. La regla de QUÉ hace falta es la compartida
+    /// (`needs_stat_at`), no una de aquí.
+    fn sondear(
+        &mut self,
+        slot: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let attrs = self.attrs.clone();
+        let Some(hueco) = self.huecos.get_mut(&slot) else {
+            return;
+        };
+        let primera = usize::try_from(hueco.primera_visible).unwrap_or(0);
+        let cuantas = usize::try_from(hueco.visibles).unwrap_or(0);
+        let candidatos: Vec<VPath> = hueco
+            .pane
+            .needs_stat_at(primera..primera.saturating_add(cuantas))
+            .into_iter()
+            .filter(|p| !hueco.sondeados.contains(p))
+            .take(MAX_SONDEOS)
+            .collect();
+        if candidatos.is_empty() {
+            return;
+        }
+        for p in &candidatos {
+            hueco.sondeados.insert(p.clone());
+        }
+        let token = hueco.en_vuelo.unwrap_or(RequestToken(0));
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let mut sondas = Vec::with_capacity(candidatos.len());
+            for p in candidatos {
+                // Un sondeo que falla no es un error de pantalla: esa celda
+                // se queda en blanco y no se vuelve a pedir.
+                if let Ok(e) = backend.stat(p, attrs.clone()).await {
+                    sondas.push(e);
+                }
+            }
+            if sondas.is_empty() {
+                return;
+            }
+            let _ = buzon
+                .send(Mensaje::Hidratado(Box::new((token, slot, sondas))))
+                .await;
+        });
+    }
+
+    /// Pega un lote del relleno al listado que lo pidió.
+    ///
+    /// `None` si el hueco desapareció o el lote es de una navegación ya
+    /// relevada: pegarlo sería mezclar dos árboles en una pantalla.
+    fn aplicar_lote(
+        &mut self,
+        slot: u32,
+        token: RequestToken,
+        batch: Vec<Entry>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let hueco = self.huecos.get_mut(&slot)?;
+        if hueco.en_vuelo != Some(token) {
+            return None;
+        }
+        hueco.pane.extend(batch);
+        Some(self.parche_filas())
+    }
+
+    /// Pega lo que un sondeo averiguó al listado que lo pidió.
+    ///
+    /// `None` si no hay nada que repintar: el hueco desapareció, o el listado
+    /// que se sondeó ya fue relevado —pegarle tamaños a otro directorio sería
+    /// mentir sobre lo que se ve—.
+    fn aplicar_sondas(
+        &mut self,
+        slot: u32,
+        token: RequestToken,
+        sondas: &[Entry],
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let hueco = self.huecos.get_mut(&slot)?;
+        if hueco.en_vuelo.is_some() && hueco.en_vuelo != Some(token) {
+            return None;
+        }
+        for e in sondas {
+            hueco.pane.hydrate(&e.path, e.size, e.mtime_ms);
+        }
+        Some(self.parche_filas_de(slot))
+    }
+
+    /// Las filas visibles de UN hueco concreto, no del que tenga el foco.
+    fn parche_filas_de(&mut self, slot: u32) -> BridgeEnvelope<UiUpdate> {
+        let (generacion, primera, filas) = match self.huecos.get(&slot) {
+            Some(h) => (h.pane.listing_epoch(), h.primera_visible, self.filas_de(h)),
+            None => (0, 0, Vec::new()),
+        };
+        let cambio = ViewChange::Rows {
+            slot_id: slot,
+            generation: generacion,
+            first_visible: primera,
+            rows: filas,
+        };
+        self.parche(vec![cambio])
+    }
+
     /// Lo que cambia una marca o un scroll: las filas visibles.
     fn parche_filas(&mut self) -> BridgeEnvelope<UiUpdate> {
         let cambio = ViewChange::Rows {
@@ -2030,12 +2200,63 @@ impl Estado {
         }
         ViewSnapshot {
             connection: self.conexion.clone(),
+            layout: self.disposicion(),
             slots,
             focus: Some(self.activo()),
             status: self.status.clone(),
-            dialogs: Vec::new(),
-            tasks: Vec::new(),
+            // Una foto REEMPLAZA lo que el renderer tenga, así que va
+            // entera: un resync que se dejara fuera el diálogo abierto
+            // dejaría al usuario mirando una pantalla sin la pregunta que
+            // está esperando respuesta, con la operación destructiva todavía
+            // viva. Lo mismo con el tablero.
+            dialogs: self.vistas_de_dialogos(),
+            tasks: self.vistas_de_tasks(),
             locale: self.locale.clone(),
+        }
+    }
+
+    /// El reparto de ESTE tamaño, con los papeles puestos.
+    ///
+    /// Sale del mismo `resolve` que usa el TUI: el renderer recibe rectángulos
+    /// en celdas y no una lista de huecos que tenga que colocar él, que sería
+    /// una segunda regla de disposición escrita en otro lenguaje (decisión
+    /// D14).
+    fn disposicion(&self) -> LayoutView {
+        let activo = self.roles.get(RoleId::Active);
+        let destino = self.roles.get(RoleId::Target);
+        let placements = self
+            .reparto
+            .placements
+            .iter()
+            .map(|(slot, r)| {
+                let SlotId(id) = *slot;
+                let role = if Some(*slot) == activo {
+                    Some(SlotRole::Active)
+                } else if Some(*slot) == destino {
+                    Some(SlotRole::Target)
+                } else {
+                    None
+                };
+                let focus_index = self
+                    .reparto
+                    .focus_order
+                    .iter()
+                    .position(|s| s == slot)
+                    .unwrap_or(usize::MAX);
+                SlotPlacement {
+                    slot_id: id,
+                    x: r.x,
+                    y: r.y,
+                    width: r.width,
+                    height: r.height,
+                    role,
+                    focus_index: u32::try_from(focus_index).unwrap_or(u32::MAX),
+                }
+            })
+            .collect();
+        LayoutView {
+            cells: self.viewport,
+            placements,
         }
     }
 

@@ -29,6 +29,12 @@ pub struct Falso {
     pub escrito: std::sync::Mutex<Option<serde_json::Value>>,
     /// La escritura falla con conflicto: otra ventana escribió en medio.
     pub conflicto: bool,
+    /// El listado viene PEREZOSO, como el del provider local: sin tamaño ni
+    /// fecha. Quien las quiera, que sondee.
+    pub lazy: bool,
+    /// Los paths que se sondearon, en orden: es lo que permite comprobar que
+    /// un sondeo fallido no se repite en bucle.
+    pub sondeos: std::sync::Mutex<Vec<VPath>>,
     /// Lo que se pidió borrar, en orden.
     pub borrados: std::sync::Mutex<Vec<(VPath, DeleteMode)>>,
     /// Cuántas veces se pidió cancelar la task que se lanzó.
@@ -89,7 +95,7 @@ impl Falso {
                 },
                 // Un directorio no tiene tamaño, como en la vida real: es lo
                 // que hace que la AUSENCIA de celda se pueda probar.
-                size: if es_dir { None } else { Some(1) },
+                size: if es_dir || self.lazy { None } else { Some(1) },
                 mtime_ms: None,
                 attrs: std::collections::BTreeMap::new(),
             })
@@ -121,6 +127,31 @@ pub fn arbol_de_prueba() -> Falso {
 }
 
 impl HostBackend for Falso {
+    fn stat(&self, path: VPath, _attrs: Vec<String>) -> BoxFuture<'static, Result<Entry, Error>> {
+        self.sondeos.lock().expect("sondeos").push(path.clone());
+        // El padre del path dice en qué directorio buscarlo; la entrada sale
+        // del mismo árbol, pero AHORA con tamaño: es lo que hace un `stat`.
+        let entrada = path.parent().and_then(|dir| {
+            self.arbol.get(&dir.to_wire()).and_then(|entradas| {
+                entradas
+                    .iter()
+                    .find(|(n, _)| path.file_name().is_some_and(|f| f.as_bytes() == n))
+                    .map(|(_, es_dir)| Entry {
+                        path: path.clone(),
+                        kind: if *es_dir {
+                            EntryKind::Dir
+                        } else {
+                            EntryKind::File
+                        },
+                        size: if *es_dir { None } else { Some(1) },
+                        mtime_ms: Some(1_700_000_000_000),
+                        attrs: std::collections::BTreeMap::new(),
+                    })
+            })
+        });
+        Box::pin(async move { entrada.ok_or(Error::NotFound) })
+    }
+
     fn attr_catalog(
         &self,
         _dir: VPath,
@@ -190,6 +221,7 @@ impl HostBackend for Falso {
         if !self.arbol.contains_key(&dir.to_wire()) {
             return Box::pin(async { Err(Error::NotFound) });
         }
+        let lazy = self.lazy;
         // Sin ordenar: ordenar es cosa de `PaneState`, y devolverlo ya
         // ordenado escondería que el host lo delega.
         let entradas: Vec<Entry> = self
@@ -206,8 +238,10 @@ impl HostBackend for Falso {
                     EntryKind::File
                 },
                 // Un directorio no tiene tamaño, como en la vida real: es lo
-                // que hace que la AUSENCIA de celda se pueda probar.
-                size: if es_dir { None } else { Some(1) },
+                // que hace que la AUSENCIA de celda se pueda probar. Con
+                // `lazy`, tampoco lo tiene un fichero: es el listado del
+                // provider local (#52), donde el tamaño se sondea aparte.
+                size: if es_dir || lazy { None } else { Some(1) },
                 mtime_ms: None,
                 attrs: {
                     let mut m = std::collections::BTreeMap::new();

@@ -16,9 +16,9 @@ use std::path::Path;
 use norte_ui_host::action::UiAction;
 use norte_ui_host::bridge::{ActionAck, BridgeEnvelope, InstanceId, ModalId, RowKey, StaleAction};
 use norte_ui_host::dto::{
-    BrowserSlotView, CellView, ConnectionView, DialogChoice, DialogView, RowKind, RowView,
-    SlotState, SlotView, StatusView, TaskStateView, TaskView, UiNotice, UiUpdate, ViewChange,
-    ViewPatch, ViewSnapshot,
+    BrowserSlotView, CellView, ConnectionView, DialogChoice, DialogView, LayoutView, RowKind,
+    RowView, SlotPlacement, SlotRole, SlotState, SlotView, StatusView, TaskStateView, TaskView,
+    UiNotice, UiUpdate, ViewChange, ViewPatch, ViewSnapshot,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -120,6 +120,14 @@ fn acciones() {
                 },
             ),
             (
+                "mark_range",
+                UiAction::MarkRange {
+                    slot_id: 1,
+                    from: RowKey(2),
+                    to: RowKey(5),
+                },
+            ),
+            (
                 "move_cursor",
                 UiAction::MoveCursor {
                     slot_id: 1,
@@ -190,9 +198,71 @@ fn acuses() {
 
 /// El snapshot de referencia: una pantalla con un listado (una fila hostil),
 /// un hueco que este host aún no proyecta, un diálogo y una task viva.
+/// El diálogo que clavan las fixtures.
+fn dialogo_de_referencia() -> DialogView {
+    DialogView {
+        id: ModalId(3),
+        title_key: "modal-mkdir-title".to_owned(),
+        body: vec!["/home/oscar".to_owned()],
+        choices: vec![
+            DialogChoice {
+                id: "confirm".to_owned(),
+                label_key: "dialog-confirm".to_owned(),
+                destructive: false,
+            },
+            DialogChoice {
+                id: "cancel".to_owned(),
+                label_key: "dialog-cancel".to_owned(),
+                destructive: false,
+            },
+        ],
+        input: Some(String::new()),
+    }
+}
+
+/// La task que clavan las fixtures.
+fn task_de_referencia() -> TaskView {
+    TaskView {
+        task_id: 7,
+        kind: "copy".to_owned(),
+        state: TaskStateView::Running,
+        percent: Some(40),
+        detail: Some("notas.txt".to_owned()),
+        foreign: false,
+    }
+}
+
+/// El reparto que las fixtures clavan: dos huecos, papeles puestos.
+fn disposicion_de_referencia() -> LayoutView {
+    LayoutView {
+        cells: (120, 40),
+        placements: vec![
+            SlotPlacement {
+                slot_id: 1,
+                x: 0,
+                y: 0,
+                width: 60,
+                height: 38,
+                role: Some(SlotRole::Active),
+                focus_index: 0,
+            },
+            SlotPlacement {
+                slot_id: 2,
+                x: 60,
+                y: 0,
+                width: 60,
+                height: 38,
+                role: Some(SlotRole::Target),
+                focus_index: 1,
+            },
+        ],
+    }
+}
+
 fn snapshot_de_referencia() -> ViewSnapshot {
     ViewSnapshot {
         connection: ConnectionView::Connected,
+        layout: disposicion_de_referencia(),
         slots: vec![
             SlotView::Browser(BrowserSlotView {
                 slot_id: 1,
@@ -228,32 +298,8 @@ fn snapshot_de_referencia() -> ViewSnapshot {
                 count: Some(12),
             }),
         },
-        dialogs: vec![DialogView {
-            id: ModalId(3),
-            title_key: "modal-mkdir-title".to_owned(),
-            body: vec!["/home/oscar".to_owned()],
-            choices: vec![
-                DialogChoice {
-                    id: "confirm".to_owned(),
-                    label_key: "dialog-confirm".to_owned(),
-                    destructive: false,
-                },
-                DialogChoice {
-                    id: "cancel".to_owned(),
-                    label_key: "dialog-cancel".to_owned(),
-                    destructive: false,
-                },
-            ],
-            input: Some(String::new()),
-        }],
-        tasks: vec![TaskView {
-            task_id: 7,
-            kind: "copy".to_owned(),
-            state: TaskStateView::Running,
-            percent: Some(40),
-            detail: Some("notas.txt".to_owned()),
-            foreign: false,
-        }],
+        dialogs: vec![dialogo_de_referencia()],
+        tasks: vec![task_de_referencia()],
         locale: "es".to_owned(),
     }
 }
@@ -310,6 +356,13 @@ fn actualizaciones() {
                     ],
                 }),
             ),
+            (
+                "patch_layout",
+                UiUpdate::Patch(ViewPatch {
+                    base_sequence: 13,
+                    changes: vec![ViewChange::Layout(disposicion_de_referencia())],
+                }),
+            ),
             ("snapshot", UiUpdate::Snapshot(snapshot)),
         ],
     );
@@ -358,4 +411,70 @@ fn nada_serializado_lleva_una_ruta_cruda() {
             "el bridge no debe llevar {prohibido}"
         );
     }
+}
+
+/// TODOS los cambios, uno a uno.
+///
+/// La familia de `updates.json` clava dos parches de ejemplo, y eso dejaba
+/// variantes de [`ViewChange`] que jamás se serializaban en ningún test —
+/// que es como una de ellas puede resultar IMPOSIBLE de serializar sin que
+/// nada se ponga rojo. Aquí la cobertura 1:1 es contra la lista de variantes.
+#[test]
+fn cada_cambio_cruza_el_bridge() {
+    check_family(
+        "changes.json",
+        &[
+            (
+                "connection",
+                ViewChange::Connection(ConnectionView::Lost {
+                    reason_key: "conn-lost".to_owned(),
+                }),
+            ),
+            (
+                "cursor",
+                ViewChange::Cursor {
+                    slot_id: 1,
+                    generation: 4,
+                    cursor: Some(RowKey(2)),
+                },
+            ),
+            (
+                "dialogs",
+                ViewChange::Dialogs {
+                    dialogs: vec![dialogo_de_referencia()],
+                },
+            ),
+            ("layout", ViewChange::Layout(disposicion_de_referencia())),
+            (
+                "rows",
+                ViewChange::Rows {
+                    slot_id: 1,
+                    generation: 5,
+                    first_visible: 40,
+                    rows: vec![fila(41, "otro.txt", false)],
+                },
+            ),
+            (
+                "slot_state",
+                ViewChange::SlotState {
+                    slot_id: 1,
+                    state: SlotState::Loading,
+                },
+            ),
+            (
+                "status",
+                ViewChange::Status(StatusView {
+                    message: Some("2 entradas".to_owned()),
+                    banners: Vec::new(),
+                    pending: None,
+                }),
+            ),
+            (
+                "tasks",
+                ViewChange::Tasks {
+                    tasks: vec![task_de_referencia()],
+                },
+            ),
+        ],
+    );
 }

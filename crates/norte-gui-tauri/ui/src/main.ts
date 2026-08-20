@@ -1,0 +1,256 @@
+// El arranque del renderer: engancha el bridge, pinta lo que llega y manda lo
+// que el usuario hace. Nada más vive aquí.
+
+import { invokeMetrics, tauriPort } from "./bridge";
+import type { HostPort } from "./bridge";
+import { keyAction, keyInputOf } from "./keys";
+import { Screen } from "./render";
+import { Session } from "./session";
+import type { UiAction } from "./types";
+
+/** Medidas del spike: latencia tecla→pintado. Las lee el arnés de la 3.6. */
+export interface Metrics {
+  keyToPaint: number[];
+  scrollToPaint: number[];
+  updates: number;
+  resyncs: number;
+}
+
+export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
+  const screenEl = doc.getElementById("screen");
+  const dialogsEl = doc.getElementById("dialogs");
+  const fatalEl = doc.getElementById("fatal");
+  if (screenEl === null || dialogsEl === null || fatalEl === null) {
+    throw new Error("el documento no tiene los anclajes del renderer");
+  }
+  const metrics: Metrics = { keyToPaint: [], scrollToPaint: [], updates: 0, resyncs: 0 };
+  const session = new Session();
+  const catalog = await port.catalog();
+  applyTheme(doc, catalog.theme);
+
+  // Lo que se está esperando pintar, y desde cuándo. La medida es del gesto
+  // al frame que lo enseña: cualquier cosa más corta mide otra cosa.
+  let pending: { at: number; what: "key" | "scroll" } | null = null;
+  const send = (action: UiAction): void => {
+    void port.dispatch(action).then((ack) => {
+      if (ack.status === "unavailable") {
+        // Un comando atenuado no es un error: el host ya dijo por qué.
+        console.info("no disponible:", screen.t(ack.reason_key));
+      }
+    });
+  };
+  const screen = new Screen(screenEl, dialogsEl, catalog, send);
+
+  const repaint = (): void => {
+    const view = session.view();
+    if (view === null) {
+      return;
+    }
+    screen.paint(view);
+    if (pending !== null) {
+      const { at, what } = pending;
+      pending = null;
+      requestAnimationFrame(() => {
+        const dt = performance.now() - at;
+        if (what === "key") {
+          metrics.keyToPaint.push(dt);
+        } else {
+          metrics.scrollToPaint.push(dt);
+        }
+      });
+    }
+  };
+
+  const resync = (): void => {
+    metrics.resyncs += 1;
+    void port.requestSnapshot();
+  };
+
+  await port.onUpdate((env) => {
+    metrics.updates += 1;
+    const out = session.receive(env);
+    switch (out.kind) {
+      case "applied":
+        repaint();
+        return;
+      case "gap":
+        // Jamás se deduce lo que faltó: se pide la foto entera.
+        resync();
+        return;
+      case "incompatible":
+        showFatal(
+          fatalEl,
+          `bridge ${String(out.version)} ≠ ${String(catalog.bridge_version)}`,
+        );
+        return;
+      case "notice":
+        if (out.notice.notice === "fatal") {
+          showFatal(fatalEl, screen.t(out.notice.key));
+        }
+        repaint();
+        return;
+      case "ignored":
+        return;
+    }
+  });
+  await port.onLagged(resync);
+
+  // El snapshot inicial viene en el MISMO sobre que el resto: una sola forma
+  // en el cable es una sola forma que mantener.
+  const first = await port.initialSnapshot();
+  session.receive(first);
+  repaint();
+  sendViewport(send, screen, doc);
+
+  doc.addEventListener("keydown", (e) => {
+    const k = keyInputOf(e);
+    if (k === null) {
+      return;
+    }
+    const target = e.target;
+    if (target instanceof HTMLInputElement && k.key.length === 1) {
+      // Un campo de texto abierto es dueño de las teclas de texto.
+      return;
+    }
+    e.preventDefault();
+    pending ??= { at: performance.now(), what: "key" };
+    send(keyAction(k));
+  });
+
+  let resizeHandle: number | null = null;
+  (doc.defaultView ?? window).addEventListener("resize", () => {
+    if (resizeHandle !== null) {
+      return;
+    }
+    resizeHandle = requestAnimationFrame(() => {
+      resizeHandle = null;
+      sendViewport(send, screen, doc);
+    });
+  });
+
+  if (catalog.measure) {
+    // La pasada de la 3.6: se mide sola, con eventos sintéticos y por el
+    // camino COMPLETO del renderer (evento → invoke → host → evento →
+    // DOM → siguiente frame). Fuera quedan la entrega del evento por el
+    // sistema y el compositor, y eso se dice en el informe.
+    await medir(doc, metrics, port, () => {
+      pending ??= { at: performance.now(), what: "scroll" };
+    });
+  }
+  return metrics;
+}
+
+/** Latencias de una pasada guionizada: teclas primero, scroll después. */
+async function medir(
+  doc: Document,
+  metrics: Metrics,
+  port: HostPort,
+  marcarScroll: () => void,
+): Promise<void> {
+  const frame = (): Promise<number> =>
+    new Promise((r) => {
+      requestAnimationFrame(() => {
+        r(performance.now());
+      });
+    });
+  // Estado ESTABLE primero: un listado de cien mil entradas sigue llegando
+  // por detrás durante segundos, y medir encima de ese relleno mide el
+  // relleno. Se espera a que el host se calle (dos segundos sin
+  // actualizaciones), con tope de un minuto.
+  {
+    let visto = metrics.updates;
+    let quieto = 0;
+    for (let i = 0; i < 600 && quieto < 20; i += 1) {
+      await new Promise((r) => setTimeout(r, 100));
+      quieto = metrics.updates === visto ? quieto + 1 : 0;
+      visto = metrics.updates;
+    }
+  }
+
+  // El SUELO de la máquina: qué tarda un frame sin hacer nada. Sin esta
+  // referencia, «33 ms por frame» no distingue un renderer lento de una
+  // pantalla que presenta a 30 Hz.
+  const vacio: number[] = [];
+  {
+    let anterior = await frame();
+    for (let i = 0; i < 200; i += 1) {
+      const ahora = await frame();
+      vacio.push(ahora - anterior);
+      anterior = ahora;
+    }
+  }
+
+  // El scroll LOCAL: lo que cuesta un frame mientras se arrastra, sin
+  // esperar a Rust. Es lo que el presupuesto de la 3.6 llama «trabajo de las
+  // filas visibles», y es el camino que NO cruza el bridge.
+  const local: number[] = [];
+  const scrollerLocal = doc.querySelector(".scroller");
+  if (scrollerLocal instanceof HTMLElement) {
+    let anterior = await frame();
+    for (let i = 0; i < 200; i += 1) {
+      scrollerLocal.scrollTop = i * 40;
+      const ahora = await frame();
+      local.push(ahora - anterior);
+      anterior = ahora;
+    }
+  }
+
+  // Las muestras las apunta `repaint`: del gesto al frame que lo enseña.
+  for (let i = 0; i < 200; i += 1) {
+    doc.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await frame();
+    await frame();
+  }
+  const scroller = doc.querySelector(".scroller");
+  for (let i = 0; i < 200 && scroller instanceof HTMLElement; i += 1) {
+    scroller.scrollTop = i * 40;
+    marcarScroll();
+    scroller.dispatchEvent(new Event("scroll"));
+    await frame();
+    await frame();
+  }
+  const teclas = metrics.keyToPaint;
+  const scroll = metrics.scrollToPaint;
+  const enviar = async (what: string, samples: number[]): Promise<void> => {
+    try {
+      await invokeMetrics(what, samples);
+    } catch {
+      // Sin la feature `metrics` el comando no existe: no es un fallo, es un
+      // binario de producción. Las muestras se quedan en `__norteMetrics`.
+    }
+  };
+  await enviar("key-to-paint", teclas);
+  await enviar("scroll-to-rows", scroll);
+  await enviar("scroll-frame-local", local);
+  await enviar("idle-frame", vacio);
+  await port.dispatch({ action: "resync" });
+}
+
+function sendViewport(send: (a: UiAction) => void, screen: Screen, doc: Document): void {
+  const cell = screen.cell();
+  const view = doc.defaultView ?? window;
+  send({
+    action: "set_viewport",
+    width: Math.max(1, Math.floor(view.innerWidth / cell.w)),
+    height: Math.max(1, Math.floor(view.innerHeight / cell.h)),
+  });
+}
+
+/** Los colores salen del tema resuelto EN RUST; aquí solo se enchufan. */
+function applyTheme(doc: Document, theme: Record<string, string>): void {
+  for (const [name, value] of Object.entries(theme)) {
+    doc.documentElement.style.setProperty(`--${name}`, value);
+  }
+}
+
+function showFatal(el: HTMLElement, text: string): void {
+  el.textContent = text;
+  el.dataset["shown"] = "true";
+}
+
+if (typeof document !== "undefined" && document.getElementById("screen") !== null) {
+  void boot(tauriPort, document).then((m) => {
+    // El arnés de medida de la tarea 3.6 lee esto; no hay nada sensible.
+    (window as unknown as { __norteMetrics: Metrics }).__norteMetrics = m;
+  });
+}
