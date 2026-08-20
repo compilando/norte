@@ -108,12 +108,11 @@ mod presets_catalog_tests {
 ///
 /// - **Check 1** (builds for `Screen::{Browse, Viewer, Dialog}` against a
 ///   FRONTEND's command set) needs a frontend's actual `COMMANDS` list, which
-///   this crate cannot see — `norte-frontend` is upstream of `norte-tui` and
-///   `norte-gui`, not the other way round. Its TUI half is
+///   this crate cannot see — `norte-frontend` is upstream of every frontend,
+///   not the other way round. Its TUI half is
 ///   `norte_tui::keymap::tests::todos_los_presets_construyen_las_tres_pantallas_del_tui`;
-///   its GUI half is
-///   `norte_gui::keymap::tests::todos_los_presets_construyen_las_tres_pantallas_de_la_gui`
-///   (only `just gui-ci` runs it — `norte-gui` is outside the workspace).
+///   its graphical half died with the GPUI frontend (ADR 0065) and is owed by
+///   whatever replaces it.
 /// - **Check 6** ("only `vim` sets `counts`") already has a pinned test that
 ///   iterates `NAMES`/`source` exactly this way:
 ///   [`super::tests::solo_vim_trae_los_contadores_encendidos`] in this

@@ -40,12 +40,7 @@ fn frontend_program(exe: Option<&std::path::Path>, bin: &str) -> PathBuf {
 /// `exec`, con el usuario delante.
 const TUI_BIN: &str = "ntc";
 
-/// Nombre del binario del frontend GRÁFICO. Mismo criterio que [`TUI_BIN`],
-/// sin el cruce: `norte-gui` está fuera del `default-members`, así que su
-/// manifiesto no se compila en el gate del core.
-const GUI_BIN: &str = "norte-gui";
-
-/// Localiza un binario HERMANO (`norte-tui`/`norte-gui`) y le cede el
+/// Localiza un binario HERMANO (hoy solo `ntc`) y le cede el
 /// proceso. Busca primero JUNTO a este ejecutable —así un `norte` recién
 /// instalado usa el `norte-tui` de la misma tanda, y no otro más viejo que
 /// haya antes en el `PATH`— y si no está, deja que el `PATH` decida.
@@ -237,14 +232,6 @@ enum Cmd {
     #[command(disable_help_flag = true)]
     Tui {
         /// Argumentos para `norte-tui`, verbatim
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<std::ffi::OsString>,
-    },
-    /// Abre el frontend GRÁFICO (`norte-gui`). Los argumentos viajan tal
-    /// cual al binario
-    #[command(disable_help_flag = true)]
-    Gui {
-        /// Argumentos para `norte-gui`, verbatim
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<std::ffi::OsString>,
     },
@@ -666,12 +653,11 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if let Cmd::Audit { cmd } = cli.cmd {
         return audit_cmd(cmd).await;
     }
-    // Los frontends son procesos APARTE (el TUI toma la terminal, la GUI
-    // abre ventana): este CLI solo los localiza y les cede el proceso —
-    // nada de engine ni daemon aquí.
+    // Un frontend es un proceso APARTE (el TUI toma la terminal; el gráfico,
+    // cuando lo haya, abrirá ventana): este CLI solo lo localiza y le cede el
+    // proceso — nada de engine ni daemon aquí.
     match cli.cmd {
         Cmd::Tui { ref args } => return exec_frontend(TUI_BIN, args),
-        Cmd::Gui { ref args } => return exec_frontend(GUI_BIN, args),
         _ => {}
     }
     // Doctor es solo-lectura sobre config/keymaps (H2): ni engine ni daemon.
@@ -913,8 +899,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         | Cmd::Doctor { .. }
         | Cmd::Help { .. }
         | Cmd::ShellInit { .. }
-        | Cmd::Tui { .. }
-        | Cmd::Gui { .. } => unreachable!("manejado arriba"),
+        | Cmd::Tui { .. } => unreachable!("manejado arriba"),
         #[cfg(unix)]
         Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {
             unreachable!("manejado arriba")
@@ -4203,8 +4188,8 @@ mod frontend_tests {
         assert_eq!(frontend_program(Some(&exe), "norte-tui"), hermano);
         // Sin saber dónde estamos: el PATH decide.
         assert_eq!(
-            frontend_program(None, "norte-gui"),
-            std::path::PathBuf::from("norte-gui")
+            frontend_program(None, "otro-frontend"),
+            std::path::PathBuf::from("otro-frontend")
         );
     }
 }

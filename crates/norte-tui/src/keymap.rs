@@ -507,10 +507,10 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
     /// `presets::NAMES` and the shared catalogue live) cannot see EITHER
     /// frontend's `COMMANDS` list — it is upstream of both — so only a
     /// frontend that owns a list can check a preset against it. This is
-    /// HALF A; half B is
-    /// `norte_gui::keymap::tests::todos_los_presets_construyen_las_tres_pantallas_de_la_gui`,
-    /// covered only by `just gui-ci` (`norte-gui` sits outside the
-    /// workspace).
+    /// HALF A. Half B belonged to the GPUI frontend, retired on 2026-08-20
+    /// (ADR 0065): the graphical frontend that replaces it owes this repo the
+    /// same test against ITS command list, and until it exists no preset is
+    /// checked against a graphical surface at all.
     #[test]
     fn todos_los_presets_construyen_las_tres_pantallas_del_tui() {
         let dialog_known: Vec<&str> = COMMANDS

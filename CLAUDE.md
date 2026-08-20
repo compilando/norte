@@ -72,7 +72,7 @@ minutes.
 | where the session went | |
 | --- | --- |
 | token generation (controller + subagents) | ~1M tokens, ~5.5h equivalent |
-| gate (`ci`, `ci-fast`, `t`, `c`, `gui-ci`) | 78 min |
+| gate (`ci`, `ci-fast`, `t`, `c`) | 78 min |
 | agents idling on `sleep` / `tail -f /dev/null` | 19 min |
 | waiting for a human to answer a question | 4.9h, of which 4.6h was two questions |
 
@@ -202,7 +202,7 @@ doc link: `cargo doc -p <crate> --no-deps`. Seconds each.
   claimed to close an issue and described work it did not contain.
 - **`just ci` does not fit in a background job here** — it is killed at about
   five minutes. Run the recipes one at a time in the foreground (`lint`, `test`,
-  `docs`, `gui-ci`, `cov`), and never through `| tail`: a killed pipe leaves
+  `docs`, `cov`), and never through `| tail`: a killed pipe leaves
   nothing behind, so five minutes of compute reports nothing at all.
 
 ### Tier work by reading the issue, never the title
@@ -275,8 +275,10 @@ renamed `norte-tui`→`ntc` once already and the installed copy kept the old nam
 - `crates/norte-core`: task scheduler, daemon, policy engine, journal, and
   sessions.
 - `crates/norte-{index,ai,mcp,plugin-host}`: core subsystems.
-- `crates/norte-{tui,gui,cli}`: frontends. Business logic belongs in the core or
-  a UI-independent shared crate.
+- `crates/norte-{tui,cli}`: frontends. Business logic belongs in the core or
+  a UI-independent shared crate. The GPUI `norte-gui` was retired on 2026-08-20
+  (ADR 0065); its replacement is being built to the boundary in
+  `docs/superpowers/plans/2026-08-19-multi-frontend-tauri-transition.md`.
 - `crates/norte-testkit`: `MemProvider`, hostile fixtures, and proptest
   strategies.
 - `docs/adr/`: architecture decision records. `docs/spec/`: specification.

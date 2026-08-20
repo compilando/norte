@@ -17,21 +17,16 @@ default: ci
 # es exactamente lo que se quiere de una puerta de test.
 features := "--features norte-tui/schema --features norte-config/watch --features norte-proto/schema --features norte-core/testing"
 
-# Los paquetes del gate: TODO el workspace MENOS la GUI. Esto NO es una
-# optimización de tiempo, es de corrección, y `default-members` no basta porque
-# `--workspace` lo pisa.
+# Los paquetes del gate: el workspace entero.
 #
-# GPUI activa `serde_json/preserve_order`. Las features de cargo se UNIFICAN
-# por invocación: si `norte-gui` entra en el mismo `cargo` que el core, el
-# `serde_json` del core pasa de mapas ordenados (BTreeMap) a orden de inserción
-# (IndexMap) — y con él cambia el JSON Schema que PUBLICAMOS, el `--json` del
-# CLI y los goldens. Se descubrió al meter la GUI en `members`: cinco tests en
-# rojo, ninguno por un cambio de código.
-#
-# Así que el core se compila y se prueba EXACTAMENTE como se distribuye: sin la
-# GUI en la invocación. La GUI tiene su gate propio (`just gui-ci`), donde la
-# unificación es asunto suyo.
-core_pkgs := "--workspace --exclude norte-gui"
+# Hasta 2026-08-20 esto excluía `norte-gui`, y no por tiempo sino por
+# corrección: GPUI activaba `serde_json/preserve_order` y las features de cargo
+# se unifican POR invocación, así que meterla en el mismo `cargo` que el core
+# cambiaba el JSON que publicamos (mapas ordenados → orden de inserción) y
+# ponía cinco tests en rojo sin que nadie tocara código. Retirada la GUI GPUI
+# (ADR 0065), la exclusión sobra — pero la lección no: si un miembro nuevo trae
+# una feature que cambia el comportamiento del core, se saca de aquí otra vez.
+core_pkgs := "--workspace"
 
 # Suelo de disco libre (GiB) por debajo del cual `just ci` se niega a
 # arrancar. Un `cargo build` del workspace más el target instrumentado de
@@ -93,23 +88,13 @@ cov:
 docs:
     RUSTDOCFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo doc {{core_pkgs}} --no-deps
 
-# Chequeo barato de norte-gui (GP review): el gate del core la deja fuera a
-# propósito (ver `core_pkgs`), así que un bump de proto/frontend/core puede
-# romper la GUI sin que nada lo note hasta correr `gui-ci` a mano. Solo
-# `cargo check` (no el gate completo `gui-ci`: nextest+clippy+fmt son caros
-# para correr en cada `just ci`) — suficiente para atrapar una API rota.
-# `--locked`: el lockfile es ahora el del workspace (la GUI es miembro y ya no
-# tiene el suyo); sin esta bandera el chequeo podría reescribirlo en silencio.
-check-gui:
-    cd crates/norte-gui && cargo check --locked
-
 # Rupturas de API pública contra el último tag (ADR 0038, #13).
 #
 # Se nombran los paquetes UNO A UNO, y no con `--workspace`, por dos razones
 # distintas que empujan en la misma dirección:
 #
 # 1. Lo que importa son las librerías PUBLICABLES (MIT/Apache): son las que
-#    consume un tercero. Los binarios AGPL —cli, tui, gui— y las librerías
+#    consume un tercero. Los binarios AGPL —cli y tui— y las librerías
 #    internas AGPL no tienen API pública que romper.
 # 2. `--workspace` ABORTA, no avisa, cuando un miembro no existía en la
 #    baseline: contra `v0.3.0-alpha.2` se para en `norte-help` con «package
@@ -142,7 +127,7 @@ semver baseline="v0.3.0-alpha.2":
 
 # Lo que corre CI. `_disk` primero: quedarse sin disco a mitad de un build no
 # falla limpio, corrompe artefactos.
-ci: _disk lint test cov docs check-gui
+ci: _disk lint test cov docs
 
 # Iteración rápida: todo el gate MENOS cobertura (cov recompila proto/vfs/core
 # instrumentados en su propio target y re-corre sus tests: ~34 s fijos incluso
@@ -275,35 +260,6 @@ link dir="debug":
     done
     echo "recuerda: el symlink apunta a ESTE árbol; un 'just prune-all' lo deja colgando"
 
-# La GUI (GPUI). EXCLUIDA del workspace (spike M5, regla 7) → --manifest-path,
-# NUNCA entra en `just ci`. Es siempre por daemon: arranca antes `norte daemon
-# run`. Dir inicial vía `NORTE_DIR=file:///ruta just gui`; socket vía
-# `NORTE_SOCKET`. Args libres: `just gui --release`.
-gui *args:
-    cargo run --manifest-path crates/norte-gui/Cargo.toml {{args}}
-
-# La GUI en UN solo comando: arranca un daemon EFÍMERO (socket propio, sin
-# idle-shutdown), lanza la GUI contra él, y para el daemon al cerrar la ventana.
-# Para probar sin gestionar el daemon a mano. Dir inicial vía
-# `NORTE_DIR=file:///ruta just gui-demo`. Args extra van a la GUI (`--release`).
-gui-demo *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    sockdir="${XDG_RUNTIME_DIR:-/tmp}/norte-gui-demo"
-    sock="$sockdir/daemon.sock"
-    mkdir -p "$sockdir"; chmod 700 "$sockdir"; rm -f "$sock"
-    echo "[gui-demo] compilando daemon + GUI…"
-    cargo build -q -p norte-cli {{features}}
-    cargo build -q --manifest-path crates/norte-gui/Cargo.toml
-    echo "[gui-demo] arrancando daemon efímero en $sock"
-    cargo run -q -p norte-cli {{features}} -- daemon run --socket "$sock" --idle-timeout 0 &
-    dpid=$!
-    trap 'kill "$dpid" 2>/dev/null || true' EXIT INT TERM
-    for _ in $(seq 1 100); do [ -S "$sock" ] && break; sleep 0.1; done
-    [ -S "$sock" ] || { echo "[gui-demo] el daemon no abrió el socket a tiempo"; exit 1; }
-    echo "[gui-demo] lanzando GUI (cierra la ventana para parar el daemon)"
-    NORTE_SOCKET="$sock" cargo run --manifest-path crates/norte-gui/Cargo.toml {{args}}
-
 # El CLI de humo (paths NATIVOS): `just cli ls /tmp`, `just cli cp a b`…
 # Con `{{features}}` como todo lo que compila el core: sin ellas se fabricaba
 # su propio universo de artefactos que ninguna otra receta reusaba.
@@ -372,35 +328,6 @@ uninstall:
     cargo uninstall norte-tui
     cargo uninstall norte-cli
 
-# Gate PROPIO de norte-gui (M5): el crate es miembro del workspace pero está
-# FUERA de `default-members` a propósito (GPUI = deps GPU pesadas; regla 7:
-# solo habla norte-proto), así que `just ci` no lo cubre — este es su gate a un
-# comando. Correrlo al tocar norte-gui o cualquier crate que la GUI consume
-# (frontend/proto/core).
-# Gate del plugin oficial de columnas (`plugins/git-status`, roadmap ítem 6).
-# Está FUERA del workspace, como los guests de `examples-wasm/`: compila a
-# `wasm32-wasip2` con su propio lockfile. Lo que corre aquí en el HOST son sus
-# tests puros —el parser del índice de git y el matcher de ignores—, porque
-# meterlos dentro de un wasm sería pagar un runtime para no ganar nada.
-plugin-git-ci:
-    cargo nextest run --manifest-path plugins/git-status/Cargo.toml
-    cargo clippy --manifest-path plugins/git-status/Cargo.toml --all-targets -- -D warnings
-    cargo fmt --manifest-path plugins/git-status/Cargo.toml --check
-
-# Recompila el plugin de git a wasm32-wasip2 y deja el componente donde el
-# instalador lo espera.
-build-git-wasm:
-    cargo build --release --target wasm32-wasip2 --manifest-path plugins/git-status/Cargo.toml
-    @echo "componente en plugins/git-status/target/wasm32-wasip2/release/git_status.wasm"
-
-gui-ci:
-    cd crates/norte-gui && cargo nextest run && cargo clippy --all-targets -- -D warnings && cargo fmt --check
-    # La GUI es miembro del workspace pero está FUERA del grafo de `cargo deny`
-    # del core (`[graph] exclude`): el árbol de GPUI trae git-sources y
-    # licencias que no deben relajar la auditoría de las librerías publicables.
-    # Se audita aquí, contra su propia política, con su manifiesto como ÚNICA
-    # raíz del grafo.
-    cargo deny --manifest-path crates/norte-gui/Cargo.toml check --config crates/norte-gui/deny.toml
 
 # Construye e INSTALA el previewer de syntect: el primer plugin real que se
 # puede tener instalado, en vez de existir solo como fixture de un test.

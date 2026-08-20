@@ -769,9 +769,9 @@ pub(crate) fn ai_rename_plan_modal_text(
         ));
     }
     // El saneado del detalle (enmascarado, elipsis, índice de pareja, tope
-    // de colisiones) vive en `norte-frontend`, compartido byte a byte con la
-    // GUI: `norte-gui` está FUERA del workspace y `just ci` no la compila, así
-    // que una política duplicada aquí se le desviaría sin que nada avisara.
+    // de colisiones) vive en `norte-frontend` para que lo compartan TODAS las
+    // superficies: son nombres que controla un atacante, y una política
+    // duplicada por frontend se desvía en uno de ellos sin que nada avise.
     // Este frontend solo pone SU badge.
     lines.extend(
         plan.detail_lines(entries.len())
