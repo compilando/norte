@@ -103,6 +103,16 @@ fn acciones() {
             ),
             ("focus_slot", UiAction::FocusSlot { slot_id: 2 }),
             (
+                "key",
+                UiAction::Key(norte_ui_host::keys::KeyInput {
+                    key: "ArrowDown".to_owned(),
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                    meta: false,
+                }),
+            ),
+            (
                 "history",
                 UiAction::History {
                     slot_id: 1,
@@ -208,6 +218,10 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         status: StatusView {
             message: Some("2 entradas".to_owned()),
             banners: vec![],
+            pending: Some(norte_ui_host::dto::PendingView {
+                chords: "ctrl+x".to_owned(),
+                count: Some(12),
+            }),
         },
         dialogs: vec![DialogView {
             id: ModalId(3),

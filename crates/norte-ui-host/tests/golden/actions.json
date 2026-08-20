@@ -27,6 +27,14 @@
     "back": true,
     "slot_id": 1
   },
+  "key": {
+    "action": "key",
+    "alt": false,
+    "ctrl": false,
+    "key": "ArrowDown",
+    "meta": false,
+    "shift": false
+  },
   "move_cursor": {
     "action": "move_cursor",
     "delta": -1,

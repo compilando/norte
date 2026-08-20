@@ -88,6 +88,7 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
         backend: Falso::con(&nombres),
         initial_dir: dir(),
         locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
     })
     .await
     .expect("arranca")
@@ -289,6 +290,7 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
         backend,
         initial_dir: dir(),
         locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
     })
     .await
     .expect("arranca")
@@ -558,5 +560,133 @@ async fn un_listado_enorme_no_cruza_entero() {
     match &p.changes[0] {
         norte_ui_host::dto::ViewChange::Rows { rows, .. } => assert_eq!(rows.len(), 40),
         otro => panic!("se esperaban filas: {otro:?}"),
+    }
+}
+
+fn tecla(k: &str) -> UiAction {
+    UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: k.to_owned(),
+        ctrl: false,
+        alt: false,
+        shift: false,
+        meta: false,
+    })
+}
+
+/// Una tecla del preset resuelve al comando del CATÁLOGO compartido y el
+/// host solo la ejecuta: no hay un segundo keymap.
+#[tokio::test]
+async fn una_tecla_del_preset_mueve_el_cursor() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let antes = listado(&snap).cursor;
+    let mut sub = h.subscribe();
+    let ack = h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }));
+    let Update::Message(m) = sub.recv().await.expect("llega") else {
+        panic!("sin retraso");
+    };
+    let UiUpdate::Patch(p) = &m.payload else {
+        panic!("un parche");
+    };
+    match &p.changes[0] {
+        norte_ui_host::dto::ViewChange::Cursor { cursor, .. } => {
+            assert_ne!(*cursor, antes, "el cursor se movió");
+        }
+        otro => panic!("se esperaba el cursor: {otro:?}"),
+    }
+}
+
+/// El contador lo resuelve Rust, no el renderer: `3` y luego `j` baja tres.
+#[tokio::test]
+async fn el_contador_lo_resuelve_el_host() {
+    let mut falso = Falso::default();
+    let nombres: Vec<(Vec<u8>, bool)> = (0..10u32)
+        .map(|n| (format!("f{n}").into_bytes(), false))
+        .collect();
+    falso.pon("mem:///casa", nombres);
+    let backend = Arc::new(falso);
+    let (host, _snap) = UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        // `vim` es el preset que habilita contadores.
+        keymap: norte_ui_host::keys::keymap_de_preset("vim").expect("preset"),
+    })
+    .await
+    .expect("arranca");
+
+    // Tecleando el contador, el host lo PINTA: lo que no se ve no se puede
+    // cancelar.
+    let mut sub = host.subscribe();
+    host.dispatch(tecla("3")).await.expect("host vivo");
+    let Update::Message(m) = sub.recv().await.expect("llega") else {
+        panic!("sin retraso");
+    };
+    let UiUpdate::Patch(p) = &m.payload else {
+        panic!("un parche");
+    };
+    match &p.changes[0] {
+        norte_ui_host::dto::ViewChange::Status(s) => {
+            assert_eq!(s.pending.as_ref().and_then(|p| p.count), Some(3));
+        }
+        otro => panic!("se esperaba el estado: {otro:?}"),
+    }
+
+    host.dispatch(tecla("j")).await.expect("host vivo");
+    host.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(
+        listado(&foto).cursor,
+        Some(norte_ui_host::RowKey(3)),
+        "tres filas, no una"
+    );
+}
+
+/// Una tecla ligada a un comando que este host no implementa NO ejecuta
+/// nada, y lo dice con la misma frase que el TUI.
+#[tokio::test]
+async fn un_comando_que_el_host_no_hace_no_dispara_nada() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let antes = listado(&snap).clone();
+    // `F5` es copiar en el preset ortodoxo: existe, está ligada, y este host
+    // todavía no muta nada.
+    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    match ack {
+        ActionAck::Unavailable { reason_key } => assert_eq!(reason_key, "cmd-not-here"),
+        otro => panic!("se esperaba no disponible: {otro:?}"),
+    }
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let ahora = listado(&foto);
+    assert_eq!(ahora.generation, antes.generation, "nada cambió");
+    assert!(
+        foto.status.message.is_some(),
+        "y la barra lo dice en vez de callarse"
+    );
+}
+
+/// Una tecla sin binding se descarta dejando el estado limpio: ni ejecuta
+/// nada ni deja un prefijo colgando.
+#[tokio::test]
+async fn una_tecla_sin_binding_se_descarta() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    // `Insert` no está ligada en el preset ortodoxo.
+    let ack = h.dispatch(tecla("Insert")).await.expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Applied { .. }),
+        "una tecla suelta no es un error: {ack:?}"
+    );
+}
+
+/// Y una tecla que el adaptador no entiende tampoco se adivina.
+#[tokio::test]
+async fn una_tecla_que_no_se_entiende_no_se_inventa() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let ack = h.dispatch(tecla("Compose")).await.expect("host vivo");
+    match ack {
+        ActionAck::Unavailable { reason_key } => assert_eq!(reason_key, "host-key-unmapped"),
+        otro => panic!("se esperaba no disponible: {otro:?}"),
     }
 }
