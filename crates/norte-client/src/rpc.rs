@@ -2,8 +2,8 @@
 //! requests correlacionadas por id y stream de notificaciones.
 //!
 //! No sabe por dónde viaja. Recibe una mitad de lectura y otra de escritura
-//! —quién las abrió y cómo autenticó al peer es asunto de
-//! [`crate::transport`]— para que un transporte nuevo no obligue a copiar la
+//! —quién las abrió y cómo autenticó al peer es asunto del módulo privado
+//! `transport`— para que un transporte nuevo no obligue a copiar la
 //! correlación ni el enmarcado (ADR 0066).
 
 use std::collections::HashMap;

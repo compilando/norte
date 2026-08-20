@@ -1,0 +1,63 @@
+//! Los valores que el SDK necesita nombrar por su cuenta.
+//!
+//! Ninguno es una copia por comodidad: son las cosas que un cliente remoto
+//! usa y que vivían en `norte-core` solo porque el cliente vivía allí. Cada
+//! una está aquí por un motivo distinto, y el motivo está escrito al lado.
+
+use std::time::Duration;
+
+use norte_proto::{CollisionPolicy, Entry, Error, ResumePolicy, SymlinkPolicy, VerifyPolicy};
+
+/// Timeout de llamadas de IA: el proveedor (modelo remoto) tarda
+/// legítimamente mucho más que un `fs.*`.
+pub const AI_CALL_TIMEOUT: Duration = Duration::from_mins(2);
+
+/// El stream de un listado paginado.
+///
+/// Alias PROPIO y no el de `norte-vfs` (que es idéntico) porque arrastrar el
+/// crate del contrato de providers a un cliente que solo habla por socket
+/// sería pagar un árbol entero por un alias (ADR 0066).
+pub type EntryStream = futures::stream::BoxStream<'static, Result<Entry, Error>>;
+
+/// Las opciones de una transferencia, tal como viajan por el wire.
+///
+/// Gemela de `norte_core::engine::TransferOptions`, y a propósito: la del
+/// core es la entrada del ENGINE y puede crecer con cosas que solo el motor
+/// entiende; esta es lo que un cliente remoto pone en los params. El core
+/// convierte entre las dos con un `From` exhaustivo, así que un campo nuevo
+/// en cualquiera de ellas es un error de compilación y no una opción que se
+/// pierde en silencio.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransferOptions {
+    /// Qué hacer si el destino ya existe.
+    pub on_collision: CollisionPolicy,
+    /// Qué hacer con los symlinks del origen.
+    pub symlinks: SymlinkPolicy,
+    /// Reanudación de transferencias interrumpidas (ADR 0012).
+    pub resume: ResumePolicy,
+    /// Verificación del parcial al reanudar (solo con `resume=On`).
+    pub verify: VerifyPolicy,
+}
+
+/// Lo que un `sync.plan` va emitiendo.
+///
+/// Vive en el SDK y `norte_core::sync` lo re-exporta —en vez de tener cada
+/// uno el suyo— porque sus dos variantes SON tipos del wire: el plan
+/// embebido y el remoto emiten exactamente lo mismo, y dos definiciones
+/// serían dos sitios donde añadir una variante.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SyncPlanEvent {
+    /// Un lote de pasos, acotado por `SYNC_STEPS_MAX_BATCH`.
+    Steps(norte_proto::methods::SyncStepsBatch),
+    /// El cierre del plan. Como mucho UNO por Task, y siempre el último.
+    Done(norte_proto::methods::SyncPlanDone),
+}
+
+/// Evento de conexión del backend remoto (para la barra de mensajes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnEvent {
+    /// La conexión con el daemon se perdió; reconectando en background.
+    Lost,
+    /// Reconectado (y resincronizado vía `task.list`).
+    Restored,
+}

@@ -25,6 +25,8 @@ tracing.workspace = true
 [dev-dependencies]
 # El test de frontera lee el grafo de cargo y lo recorre.
 serde_json.workspace = true
+# Los tests del backend remoto levantan sockets en directorios temporales.
+tempfile.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 
 [lints]

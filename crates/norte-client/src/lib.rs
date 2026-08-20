@@ -8,17 +8,23 @@
 //!
 //! Tres capas, de abajo arriba:
 //!
-//! - [`transport`]: cómo se llega al daemon y cómo se le autentica. Hoy, un
-//!   socket UNIX con credenciales del peer.
+//! - `transport` (privado): cómo se llega al daemon y cómo se le autentica.
+//!   Hoy, un socket UNIX con credenciales del peer.
 //! - [`rpc`]: el JSON-RPC enmarcado, que no sabe por dónde viaja.
 //! - `remote`: el backend tipado que los frontends usan de verdad.
 //!
 //! La frontera de este crate es su lista de dependencias, y hay un test que
 //! la vigila: `tests/dependency_boundary.rs`.
 
+pub mod remote;
 pub mod rpc;
 pub mod socket;
+pub mod task;
 mod transport;
+pub mod types;
 
+pub use remote::RemoteBackend;
 pub use rpc::{Client, ClientError, is_version_mismatch};
 pub use socket::{default_socket_path, process_uid_best_effort};
+pub use task::{RemoteTask, RemoteTaskCanceller};
+pub use types::{AI_CALL_TIMEOUT, ConnEvent, EntryStream, SyncPlanEvent, TransferOptions};
