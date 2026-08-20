@@ -19,6 +19,13 @@
 //! de USUARIO, no un comentario: vive en el tema `mouse` de la ayuda y en
 //! la descripción del ajuste `ui.mouse`.
 
+use crate::app::Trail;
+use crate::dispatch::dispatch;
+use crate::event_loop::{launch_pending_open, run_command};
+use crate::keymap::Command;
+use crate::navigate::{apply_cd, cd_in};
+use crate::refresh::reap_search_run;
+use crate::screens::refresh_places_drives;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -836,4 +843,134 @@ pub fn restore_after_suspend(
     out: &mut impl Write,
 ) -> std::io::Result<()> {
     cap.set(was, out)
+}
+
+/// Aplica un evento de ratón y remata lo que el gesto deje pedido.
+///
+/// La semántica del gesto —qué marca, qué barre, qué transfiere— vive en
+/// `norte-frontend` (regla 7) y la resuelve [`handle`]; lo que queda aquí es
+/// lo que solo el bucle puede hacer: despachar el comando de un elemento de
+/// menú, navegar, o lanzar el opener que un doble click dejó resuelto.
+///
+/// Es el gemelo de [`crate::keys::on_key`]: un gesto es OTRA entrada, y toma
+/// exactamente los mismos caminos que la tecla equivalente — que es lo que
+/// impide que el ratón y el teclado diverjan.
+#[allow(clippy::too_many_arguments)] // wiring del bucle, no API
+pub async fn on_mouse(
+    app: &mut crate::app::App,
+    backend: &norte_core::backend::Backend,
+    terminal: &mut crate::tty::Tui,
+    capture: &mut Capture,
+    events: &mut crossterm::event::EventStream,
+    resolver: &mut crate::keymap::Resolver,
+    help_lines: &mut Vec<ratatui::text::Line<'static>>,
+    lang: norte_i18n::Lang,
+    quick_mode: crate::nav::Mode,
+    confirm_quit: crate::config::ConfirmQuit,
+    cfg: &crate::config::LoadedConfig,
+    work: &mut crate::jobs::InFlight,
+    me: crossterm::event::MouseEvent,
+) {
+    match self::handle(app, me) {
+        self::After::Nothing => {}
+        // Pulsar un elemento del menú: el ratón ya
+        // dejó el cursor encima; ejecutarlo es
+        // asíncrono y necesita el backend, así que se
+        // remata aquí — el MISMO camino que `Enter`,
+        // que es lo que hace que un menú y una tecla no
+        // puedan divergir.
+        self::After::MenuAccept => {
+            let chosen = app
+                .menu
+                .as_ref()
+                .and_then(norte_frontend::menu::MenuState::selected);
+            app.menu = None;
+            if let Some(id) = chosen
+                && let Some(cmd) = Command::parse(id)
+            {
+                let outcome = dispatch(
+                    app,
+                    backend,
+                    events,
+                    help_lines,
+                    lang,
+                    quick_mode,
+                    confirm_quit,
+                    cfg,
+                    cmd,
+                )
+                .await;
+                apply_cd(
+                    &app.panes,
+                    &mut work.fill,
+                    &mut work.decorate,
+                    &mut work.probed,
+                    &mut work.search,
+                    outcome,
+                );
+                reap_search_run(app, &mut work.search);
+                launch_pending_open(app, terminal, capture).await;
+            }
+        }
+        // Doble click = `nav.enter`, por el MISMO `dispatch`
+        // que la tecla: mismo cd, mismo relleno paginado,
+        // misma cosecha de la búsqueda viva. Un segundo
+        // camino para entrar en un directorio sería un
+        // segundo sitio donde arreglar cada bug de cd.
+        self::After::Enter => {
+            // K3a: un gesto es OTRA entrada. La secuencia que
+            // el lector estuviera tecleando se abandona con su
+            // panel — no la completa el ratón, y dejarla
+            // armada haría que la siguiente tecla disparase un
+            // comando pedido antes de cambiar de directorio.
+            app.abandon_pending(resolver);
+            // Paridad con el sitio del resolver: entrar en
+            // un hit apaga el modo virtual del pane, y hay
+            // que cosechar el run (regla 3).
+            run_command(
+                app,
+                backend,
+                events,
+                help_lines,
+                lang,
+                quick_mode,
+                confirm_quit,
+                cfg,
+                &mut work.fill,
+                &mut work.decorate,
+                &mut work.probed,
+                &mut work.search,
+                Command::NavEnter,
+            )
+            .await;
+        }
+        // #226: el sidebar con el ratón toma los MISMOS
+        // caminos que su teclado. Desplegar las unidades
+        // es el momento de volver a pedirlas —y plegarlas,
+        // el de no pedirlas—, así que el ratón no puede
+        // ser un cuarto disparador de refresco: es este.
+        self::After::PlacesFolded => {
+            if app.places_drives_visible() {
+                refresh_places_drives(app, backend).await;
+            }
+        }
+        // Y activar una fila lleva el listado por el
+        // flujo de `cd` de siempre, igual que `Enter`
+        // dentro del sidebar.
+        self::After::PlacesActivate => {
+            app.abandon_pending(resolver);
+            if let Some(path) = app.places_activate() {
+                let pane = app.focus();
+                let outcome = cd_in(app, backend, events, pane, path, Trail::Record).await;
+                apply_cd(
+                    &app.panes,
+                    &mut work.fill,
+                    &mut work.decorate,
+                    &mut work.probed,
+                    &mut work.search,
+                    outcome,
+                );
+            }
+        }
+    }
 }
