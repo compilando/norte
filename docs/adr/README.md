@@ -71,3 +71,4 @@ edits.
 | [0063](0063-a-result-that-travels-as-progress.md) | A result that travels as progress, and a connection closed by path | accepted |
 | [0064](0064-what-a-plan-can-promise-about-the-destination.md) | What a plan can promise about the destination | accepted |
 | [0065](0065-a-frontend-is-retired-before-its-replacement-exists.md) | A frontend is retired before its replacement exists | accepted |
+| [0066](0066-renderers-use-a-rust-ui-host.md) | Renderers use a Rust UI host, and a client SDK below it | accepted |
