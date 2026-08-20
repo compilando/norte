@@ -23,13 +23,14 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use crate::action::UiAction;
 use crate::backend::HostBackend;
 use crate::bridge::{
-    ActionAck, BridgeEnvelope, InstanceId, MAX_ROWS_PER_BATCH, RequestToken, RowKey, StaleAction,
-    clamp_display,
+    ActionAck, BridgeEnvelope, InstanceId, MAX_ROWS_PER_BATCH, MAX_TASKS, ModalId, RequestToken,
+    RowKey, StaleAction, clamp_display,
 };
 use crate::commands::{Efecto, efecto_de};
 use crate::dto::{
-    BrowserSlotView, ConnectionView, PendingView, RowKind, RowView, SlotState, SlotView,
-    StatusView, UiNotice, UiUpdate, ViewChange, ViewPatch, ViewSnapshot,
+    BrowserSlotView, ConnectionView, DialogChoice, DialogView, PendingView, RowKind, RowView,
+    SlotState, SlotView, StatusView, TaskStateView, TaskView, UiNotice, UiUpdate, ViewChange,
+    ViewPatch, ViewSnapshot,
 };
 
 /// Capacidad del buzón del actor. Acotado a propósito: si el renderer manda
@@ -112,6 +113,13 @@ enum Mensaje {
     /// La respuesta de un listado que se pidió antes. Vuelve al actor como
     /// un mensaje más: así el estado lo sigue tocando un solo escritor.
     Listado(Box<(RequestToken, VPath, Result<Vec<Entry>, Error>)>),
+    /// Una Task recién encolada, con su progreso y su cancelación.
+    TaskNueva(Box<crate::backend::HostTask>),
+    /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
+    TaskFallida(Box<Error>),
+    /// Un snapshot de progreso. Por la MISMA cola que todo lo demás, que es
+    /// lo que garantiza que un estado terminal no se adelante ni se pierda.
+    Progreso(Box<norte_proto::TaskProgress>),
     Apagar(oneshot::Sender<ShutdownReport>),
 }
 
@@ -242,6 +250,28 @@ async fn actor(
                 let snap = estado.snapshot();
                 let _ = updates.send(estado.sobre(UiUpdate::Snapshot(snap)));
             }
+            Mensaje::TaskNueva(task) => {
+                for u in estado.registrar_task(*task, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::TaskFallida(e) => {
+                let clave = norte_frontend::error::error_key(&e).to_owned();
+                estado.status.message = Some(clamp_display(clave.clone()));
+                let cambio = ViewChange::Status(estado.status.clone());
+                let u = estado.parche(vec![cambio]);
+                let _ = updates.send(u);
+                let n = estado.sobre(UiUpdate::Notice(UiNotice::Message {
+                    key: clave,
+                    detail: None,
+                }));
+                let _ = updates.send(n);
+            }
+            Mensaje::Progreso(p) => {
+                for u in estado.progreso(&p) {
+                    let _ = updates.send(u);
+                }
+            }
             Mensaje::Apagar(responde) => {
                 let informe = estado.apagar(backend.as_ref()).await;
                 let _ = updates.send(estado.sobre(UiUpdate::Notice(UiNotice::Shutdown {
@@ -318,6 +348,32 @@ struct Hueco {
     estado: SlotState,
 }
 
+/// Un diálogo abierto y lo que hará si se confirma.
+struct Dialogo {
+    id: ModalId,
+    vista: DialogView,
+    /// Lo que la confirmación ejecuta. `None` = solo informa.
+    al_confirmar: Option<Pendiente>,
+}
+
+/// Lo que un diálogo tiene pendiente de hacer.
+enum Pendiente {
+    /// Borrar estas entradas, a la papelera o permanentemente.
+    Borrar {
+        /// Qué se borra, en orden de listado.
+        paths: Vec<VPath>,
+        /// Permanente (sin papelera): el diálogo lo AVISA.
+        permanente: bool,
+    },
+}
+
+/// Una task viva en el tablero.
+struct TaskViva {
+    vista: TaskView,
+    /// Cómo pedirle que pare. Cancelar dos veces no es un error.
+    cancel: std::sync::Arc<dyn Fn() + Send + Sync>,
+}
+
 /// El estado semántico. Solo el actor lo toca.
 struct Estado {
     instance: InstanceId,
@@ -343,6 +399,15 @@ struct Estado {
     roles: Roles,
     /// Los huecos con estado, por id.
     huecos: std::collections::BTreeMap<u32, Hueco>,
+    /// Los diálogos abiertos, en orden de apertura. Cada uno con su id: un
+    /// segundo `Confirm` con el mismo id no vuelve a lanzar nada, y uno con
+    /// un id viejo no cierra el que hay ahora.
+    dialogos: Vec<Dialogo>,
+    /// El siguiente id de diálogo. Monótono: un id no se reutiliza jamás,
+    /// que es lo que hace que «viejo» se pueda distinguir de «actual».
+    siguiente_modal: u64,
+    /// El tablero: lo que está en marcha, por id de task.
+    tasks: std::collections::BTreeMap<u64, TaskViva>,
     /// La sesión de UI: qué revisión se leyó, si esta ventana es su dueña, y
     /// si el esquema que hay guardado es de una versión que este host no
     /// entiende (ADR 0059).
@@ -419,6 +484,9 @@ impl Estado {
             reparto,
             roles,
             huecos,
+            dialogos: Vec::new(),
+            siguiente_modal: 1,
+            tasks: std::collections::BTreeMap::new(),
             sesion: Sesion {
                 revision: 0,
                 owner: false,
@@ -626,12 +694,12 @@ impl Estado {
                 let snap = self.snapshot();
                 (self.aplicada(), vec![self.sobre(UiUpdate::Snapshot(snap))])
             }
-            // Lo que todavía no hace este host se DICE, no se traga: un
-            // renderer tiene que poder distinguir «aún no» de «no pasó nada»
-            // (tareas 2.4 a 2.6).
-            UiAction::Dialog { .. }
-            | UiAction::DialogInput { .. }
-            | UiAction::CancelTask { .. } => (
+            UiAction::Dialog { id, choice } => self.responder_dialogo(*id, choice, backend, buzon),
+            UiAction::CancelTask { task_id } => self.cancelar(*task_id),
+            // Un diálogo con campo de texto llega con la tarea que lo traiga
+            // (crear directorio, renombrar). Decirlo es más honesto que
+            // aceptar texto que nadie va a leer.
+            UiAction::DialogInput { .. } => (
                 ActionAck::Unavailable {
                     reason_key: "host-action-not-implemented".to_owned(),
                 },
@@ -788,6 +856,266 @@ impl Estado {
                 self.hueco_mut().pane.clear_marks();
                 (self.aplicada(), vec![self.parche_filas()])
             }
+            Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
+        }
+    }
+
+    /// Abre la confirmación de un borrado. NO borra.
+    ///
+    /// Todas las vías —tecla, menú, gesto— pasan por aquí. Una operación
+    /// destructiva con dos puertas acaba teniendo una sin cerrojo, y la que
+    /// se olvida es siempre la que no se usa a diario.
+    fn pedir_borrado(&mut self, permanente: bool) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let hueco = self.hueco();
+        let mut paths: Vec<VPath> = hueco.pane.marked_paths();
+        if paths.is_empty() {
+            // Sin marcas, lo que hay bajo el cursor. Sin cursor, nada que
+            // borrar: y eso no abre un diálogo sobre un lote vacío.
+            match hueco.pane.selected() {
+                Some(e) => paths.push(e.path.clone()),
+                None => {
+                    return (
+                        ActionAck::Unavailable {
+                            reason_key: "msg-nothing-selected".to_owned(),
+                        },
+                        Vec::new(),
+                    );
+                }
+            }
+        }
+        // Los nombres del cuerpo son de un atacante potencial: se pintan con
+        // el saneado canónico y acotados, igual que en el listado.
+        let cuerpo: Vec<String> = paths
+            .iter()
+            .take(16)
+            .map(|p| {
+                let (texto, _hostil) = norte_frontend::path_display(p);
+                clamp_display(texto)
+            })
+            .collect();
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: if permanente {
+                "modal-delete-permanent-title"
+            } else {
+                "modal-delete-title"
+            }
+            .to_owned(),
+            body: cuerpo,
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    // Lo destructivo se DICE en el propio contrato del
+                    // diálogo: el renderer no tiene que adivinar cuál de las
+                    // respuestas borra.
+                    destructive: true,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: None,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista: vista.clone(),
+            al_confirmar: Some(Pendiente::Borrar { paths, permanente }),
+        });
+        let cambio = ViewChange::Dialogs(self.vistas_de_dialogos());
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Responde a un diálogo.
+    ///
+    /// Un id que no es el del diálogo abierto —porque ya se contestó, porque
+    /// el renderer tardó— no hace nada y lo dice: confirmar dos veces NO
+    /// borra dos veces.
+    fn responder_dialogo(
+        &mut self,
+        id: ModalId,
+        choice: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(pos) = self.dialogos.iter().position(|d| d.id == id) else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        // Una respuesta que el diálogo no ofreció no se interpreta: no hay
+        // respuestas implícitas en una superficie de decisión.
+        if !self.dialogos[pos]
+            .vista
+            .choices
+            .iter()
+            .any(|c| c.id == choice)
+        {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        let dialogo = self.dialogos.remove(pos);
+        let mut salidas = Vec::new();
+        if choice == "confirm"
+            && let Some(Pendiente::Borrar { paths, permanente }) = dialogo.al_confirmar
+        {
+            Self::lanzar_borrado(paths, permanente, backend, buzon);
+        }
+        let cambio = ViewChange::Dialogs(self.vistas_de_dialogos());
+        salidas.push(self.parche(vec![cambio]));
+        (self.aplicada(), salidas)
+    }
+
+    /// Encola una Task por entrada y engancha su progreso al actor.
+    fn lanzar_borrado(
+        paths: Vec<VPath>,
+        permanente: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let mode = if permanente {
+            norte_proto::DeleteMode::Permanent
+        } else {
+            norte_proto::DeleteMode::Trash
+        };
+        for path in paths {
+            let backend = Arc::clone(backend);
+            let buzon = buzon.clone();
+            tokio::spawn(async move {
+                match backend.delete(path, mode).await {
+                    Ok(task) => {
+                        let _ = buzon.send(Mensaje::TaskNueva(Box::new(task))).await;
+                    }
+                    Err(e) => {
+                        let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    }
+                }
+            });
+        }
+    }
+
+    /// Mete una Task recién encolada en el tablero y deja su progreso
+    /// bombeando hacia el actor.
+    fn registrar_task(
+        &mut self,
+        task: crate::backend::HostTask,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let id = task.id.get();
+        if self.tasks.len() >= MAX_TASKS {
+            // El tablero está acotado: lo más viejo TERMINADO se cae antes de
+            // que la memoria del host dependa de cuántas operaciones lanzó
+            // alguien.
+            if let Some(viejo) = self
+                .tasks
+                .iter()
+                .find(|(_, t)| Self::terminal(t.vista.state))
+                .map(|(k, _)| *k)
+            {
+                self.tasks.remove(&viejo);
+            }
+        }
+        let mut rx = task.progress.clone();
+        let vista = Self::vista_de(&rx.borrow());
+        self.tasks.insert(
+            id,
+            TaskViva {
+                vista,
+                cancel: task.cancel,
+            },
+        );
+        let buzon2 = buzon.clone();
+        tokio::spawn(async move {
+            // El estado de AHORA ya lo proyectó el registro; lo que bombea
+            // esto son los CAMBIOS. El terminal va por la misma cola ordenada
+            // que todo lo demás y se manda antes de soltar el canal: un
+            // desenlace que se pierde deja al usuario mirando un progreso que
+            // no avanza.
+            while rx.changed().await.is_ok() {
+                let snapshot = rx.borrow_and_update().clone();
+                let terminal = matches!(
+                    snapshot.state,
+                    norte_proto::TaskState::Completed
+                        | norte_proto::TaskState::Cancelled
+                        | norte_proto::TaskState::Failed { .. }
+                );
+                if buzon2
+                    .send(Mensaje::Progreso(Box::new(snapshot)))
+                    .await
+                    .is_err()
+                    || terminal
+                {
+                    return;
+                }
+            }
+        });
+        let cambio = ViewChange::Tasks(self.vistas_de_tasks());
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// Aplica un snapshot de progreso al tablero.
+    fn progreso(&mut self, p: &norte_proto::TaskProgress) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(viva) = self.tasks.get_mut(&p.task_id.get()) else {
+            return Vec::new();
+        };
+        viva.vista = Self::vista_de(p);
+        let cambio = ViewChange::Tasks(self.vistas_de_tasks());
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// Pide la cancelación de una task. Idempotente por contrato: pedirla dos
+    /// veces no es un error ni cambia nada.
+    fn cancelar(&mut self, task_id: u64) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(viva) = self.tasks.get(&task_id) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        (viva.cancel)();
+        (self.aplicada(), Vec::new())
+    }
+
+    fn vistas_de_dialogos(&self) -> Vec<DialogView> {
+        self.dialogos.iter().map(|d| d.vista.clone()).collect()
+    }
+
+    fn vistas_de_tasks(&self) -> Vec<TaskView> {
+        self.tasks.values().map(|t| t.vista.clone()).collect()
+    }
+
+    fn terminal(estado: TaskStateView) -> bool {
+        matches!(
+            estado,
+            TaskStateView::Done | TaskStateView::Failed | TaskStateView::Cancelled
+        )
+    }
+
+    /// Proyecta un snapshot del daemon a lo que el renderer pinta.
+    fn vista_de(p: &norte_proto::TaskProgress) -> TaskView {
+        let porcentaje = p.bytes_total.filter(|t| *t > 0).map(|total| {
+            let hecho = p.bytes_done.min(total);
+            u8::try_from(hecho.saturating_mul(100) / total).unwrap_or(100)
+        });
+        TaskView {
+            task_id: p.task_id.get(),
+            kind: format!("{:?}", p.kind).to_lowercase(),
+            state: match p.state {
+                norte_proto::TaskState::Completed => TaskStateView::Done,
+                norte_proto::TaskState::Cancelled => TaskStateView::Cancelled,
+                norte_proto::TaskState::Failed { .. } => TaskStateView::Failed,
+                norte_proto::TaskState::Running | norte_proto::TaskState::Paused => {
+                    TaskStateView::Running
+                }
+                // Un estado que este host todavía no conoce se pinta como
+                // encolado: es lo único que no miente sobre algo que sigue
+                // vivo (`TaskState` es no exhaustivo por contrato del wire).
+                _ => TaskStateView::Queued,
+            },
+            percent: porcentaje,
+            detail: p.current.as_ref().map(|path| {
+                let (texto, _hostil) = norte_frontend::path_display(path);
+                clamp_display(texto)
+            }),
+            foreign: false,
         }
     }
 

@@ -25,6 +25,8 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "nav.forward",
     "mark.toggle",
     "mark.clear",
+    "pane.delete",
+    "pane.delete-permanent",
 ];
 
 /// Lo que un comando le pide al hueco con el foco.
@@ -57,6 +59,14 @@ pub enum Efecto {
     Marcar,
     /// Quita todas las marcas.
     DesmarcarTodo,
+    /// Pide borrar lo marcado (o lo que haya bajo el cursor). NO borra: abre
+    /// la confirmación, que es por donde pasan TODAS las vías —tecla, menú,
+    /// gesto—, porque una operación destructiva con dos puertas acaba
+    /// teniendo una sin cerrojo.
+    Borrar {
+        /// Permanente, sin papelera.
+        permanente: bool,
+    },
 }
 
 /// Traduce un comando del catálogo al efecto que el host aplica.
@@ -82,6 +92,8 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "nav.forward" => Efecto::Rastro { atras: false },
         "mark.toggle" => Efecto::Marcar,
         "mark.clear" => Efecto::DesmarcarTodo,
+        "pane.delete" => Efecto::Borrar { permanente: false },
+        "pane.delete-permanent" => Efecto::Borrar { permanente: true },
         _ => return None,
     })
 }

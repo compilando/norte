@@ -31,6 +31,12 @@ struct Falso {
     escrito: std::sync::Mutex<Option<serde_json::Value>>,
     /// La escritura falla con conflicto: otra ventana escribió en medio.
     conflicto: bool,
+    /// Lo que se pidió borrar, en orden.
+    borrados: std::sync::Mutex<Vec<(VPath, norte_proto::DeleteMode)>>,
+    /// Cuántas veces se pidió cancelar la task que se lanzó.
+    cancelaciones: Arc<AtomicUsize>,
+    /// El emisor del progreso de la última task, para que el test lo mueva.
+    progreso: std::sync::Mutex<Option<tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
 }
 
 impl Falso {
@@ -77,6 +83,36 @@ impl HostBackend for Falso {
         }
         *self.escrito.lock().expect("escrito") = Some(body);
         Box::pin(async { Ok(9) })
+    }
+
+    fn delete(
+        &self,
+        path: VPath,
+        mode: norte_proto::DeleteMode,
+    ) -> BoxFuture<'static, Result<norte_ui_host::backend::HostTask, Error>> {
+        self.borrados.lock().expect("borrados").push((path, mode));
+        let progreso = norte_proto::TaskProgress {
+            task_id: norte_proto::TaskId::new(7),
+            kind: norte_proto::TaskKind::Delete,
+            state: norte_proto::TaskState::Running,
+            bytes_done: 0,
+            bytes_total: Some(10),
+            entries_done: 0,
+            entries_total: Some(1),
+            current: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        *self.progreso.lock().expect("progreso") = Some(tx);
+        let cancelaciones = Arc::clone(&self.cancelaciones);
+        Box::pin(async move {
+            Ok(norte_ui_host::backend::HostTask {
+                id: norte_proto::TaskId::new(7),
+                progress: rx,
+                cancel: Arc::new(move || {
+                    cancelaciones.fetch_add(1, Ordering::SeqCst);
+                }),
+            })
+        })
     }
 
     fn list(&self, dir: VPath) -> BoxFuture<'static, Result<Vec<Entry>, Error>> {
@@ -198,7 +234,10 @@ async fn una_fila_que_no_existe_es_una_carrera_no_un_error() {
 async fn lo_no_implementado_se_dice() {
     let (h, _snap) = host(vec!["a"]).await;
     let ack = h
-        .dispatch(UiAction::CancelTask { task_id: 1 })
+        .dispatch(UiAction::DialogInput {
+            id: norte_ui_host::ModalId(1),
+            text: "algo".to_owned(),
+        })
         .await
         .expect("host vivo");
     assert!(matches!(ack, ActionAck::Unavailable { .. }));
@@ -1031,4 +1070,231 @@ async fn un_conflicto_no_pisa_a_nadie_y_se_dice() {
         "lo nuestro no llegó, y apagar en silencio sería mentir"
     );
     assert!(backend.escrito.lock().expect("escrito").is_none());
+}
+
+/// Espera la siguiente actualización que traiga tasks.
+async fn siguientes_tasks(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> Vec<norte_ui_host::dto::TaskView> {
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización con tasks, no un cuelgue")
+            .expect("el host sigue vivo");
+        match siguiente {
+            Update::Message(m) => {
+                if let UiUpdate::Patch(p) = &m.payload {
+                    for c in &p.changes {
+                        if let norte_ui_host::dto::ViewChange::Tasks(t) = c {
+                            return t.clone();
+                        }
+                    }
+                }
+                if let UiUpdate::Snapshot(s) = &m.payload
+                    && !s.tasks.is_empty()
+                {
+                    return s.tasks.clone();
+                }
+            }
+            Update::Lagged => panic!("sin retraso en este test"),
+        }
+    }
+    panic!("no llegó ninguna actualización con tasks");
+}
+
+/// Espera la siguiente actualización que traiga diálogos.
+async fn siguientes_dialogos(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> Vec<norte_ui_host::dto::DialogView> {
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización con diálogos, no un cuelgue")
+            .expect("el host sigue vivo");
+        match siguiente {
+            Update::Message(m) => {
+                if let UiUpdate::Patch(p) = &m.payload {
+                    for c in &p.changes {
+                        if let norte_ui_host::dto::ViewChange::Dialogs(d) = c {
+                            return d.clone();
+                        }
+                    }
+                }
+            }
+            Update::Lagged => panic!("sin retraso en este test"),
+        }
+    }
+    panic!("no llegó ninguna actualización con diálogos");
+}
+
+/// Borrar NO borra: abre la confirmación, y la respuesta destructiva viene
+/// marcada como tal para que el renderer no tenga que adivinar cuál es.
+#[tokio::test]
+async fn borrar_pide_confirmacion_antes_de_tocar_nada() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogos.len(), 1, "se abre UN diálogo");
+    assert!(
+        dialogos[0].choices.iter().any(|c| c.destructive),
+        "y dice cuál de las respuestas destruye"
+    );
+    assert!(
+        backend.borrados.lock().expect("borrados").is_empty(),
+        "abrir el diálogo no borra nada"
+    );
+}
+
+/// Confirmar dos veces con el MISMO id no borra dos veces: el segundo es una
+/// carrera del renderer, no una segunda orden.
+#[tokio::test]
+async fn confirmar_dos_veces_no_borra_dos_veces() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let id = dialogos[0].id;
+
+    let primero = h
+        .dispatch(UiAction::Dialog {
+            id,
+            choice: "confirm".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(primero, ActionAck::Applied { .. }));
+
+    let segundo = h
+        .dispatch(UiAction::Dialog {
+            id,
+            choice: "confirm".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        segundo,
+        ActionAck::Stale {
+            reason: StaleAction::Modal
+        },
+        "el segundo confirm es una carrera, no una orden"
+    );
+
+    // Y solo se pidió UN borrado.
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert_eq!(backend.borrados.lock().expect("borrados").len(), 1);
+}
+
+/// Una respuesta que el diálogo no ofreció no se interpreta: en una
+/// superficie de decisión no hay respuestas implícitas.
+#[tokio::test]
+async fn una_respuesta_que_no_existe_no_se_interpreta() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    let ack = h
+        .dispatch(UiAction::Dialog {
+            id,
+            choice: "borra-y-no-preguntes".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Stale {
+            reason: StaleAction::Modal
+        }
+    );
+    assert!(backend.borrados.lock().expect("borrados").is_empty());
+}
+
+/// Confirmado el borrado, la task aparece en el tablero y su estado TERMINAL
+/// llega: un desenlace que se pierde deja al usuario mirando un progreso que
+/// no avanza.
+#[tokio::test]
+async fn la_task_aparece_y_su_desenlace_no_se_pierde() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    let tasks = siguientes_tasks(&mut sub).await;
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id, 7);
+
+    // El daemon termina la task.
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| {
+        p.state = norte_proto::TaskState::Completed;
+        p.bytes_done = 10;
+    });
+    let tasks = siguientes_tasks(&mut sub).await;
+    assert_eq!(
+        tasks[0].state,
+        norte_ui_host::dto::TaskStateView::Done,
+        "el estado terminal llega al tablero"
+    );
+    assert_eq!(tasks[0].percent, Some(100));
+}
+
+/// Cancelar es idempotente: pedirlo dos veces no es un error.
+#[tokio::test]
+async fn cancelar_es_idempotente() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    siguientes_tasks(&mut sub).await;
+
+    for _ in 0..2 {
+        let ack = h
+            .dispatch(UiAction::CancelTask { task_id: 7 })
+            .await
+            .expect("host vivo");
+        assert!(matches!(ack, ActionAck::Applied { .. }));
+    }
+    assert_eq!(
+        backend.cancelaciones.load(Ordering::SeqCst),
+        2,
+        "las dos peticiones llegan; el contrato de idempotencia es del daemon"
+    );
+}
+
+/// Cancelar una task que el tablero no conoce es una carrera, no un error.
+#[tokio::test]
+async fn cancelar_lo_que_no_existe_es_una_carrera() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let ack = h
+        .dispatch(UiAction::CancelTask { task_id: 999 })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Stale {
+            reason: StaleAction::Generation
+        }
+    );
 }
