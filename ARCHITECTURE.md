@@ -27,6 +27,7 @@ the protocol, a frontend cannot provide it.
 | `norte-index` | SQLite FTS5 name/metadata search index (ADR 0034). Raw-bytes path authority + lossy-UTF-8 matching. Content/embeddings/tags are future work. | AGPL-3.0-only |
 | `norte-compare` | Directory comparison engine (ADR 0048): pairing key, the cheap-to-expensive criterion cascade, and the streamed rows. A pure function of two `Provider`s — it knows nothing of the daemon, the scheduler or the policy gate, and mutates nothing. | AGPL-3.0-only |
 | `norte-sync` | One-way synchronisation planner (ADR 0049): a transducer from `norte-compare`'s rows to the plan's steps and blockers. It touches no provider — the two capability answers it needs arrive already resolved in its options — which is what makes the whole matrix of step kinds, modes and confidences testable without a daemon. Executing the plan is `norte-core`'s job. | AGPL-3.0-only |
+| `norte-client` | The daemon client SDK (ADR 0066): transport, framed JSON-RPC, reconnection with resynchronisation, remote task primitives and the typed `RemoteBackend`. Depends on `norte-proto` and nothing else of ours — a dependency test fails the build if the core, a provider, the index, the AI layer, the plugin host or the presentation crate ever reaches it. | MIT OR Apache-2.0 |
 | `norte-testkit` | Deterministic `MemProvider`, injectable failures, hostile fixtures, and proptest strategies. | MIT OR Apache-2.0 |
 | `norte-core` | Task scheduling, transfers, sessions, policy enforcement, journaling, and the daemon. Its `sync/` module owns the half of ADR 0049 that touches the world: the **spool** (the approved plan retained on disk, keyed to the connection that produced it, single-use, with five ways to die), the executor that revalidates before every destructive step, and the journal batch that makes the result undoable. | AGPL-3.0-only |
 | `norte-plugin-host` | WASM plugin manifests, capabilities, catalogue, and runtime. Hosts the first-party FTP provider guest (`examples-wasm/ftp-provider`), which replaces the former `norte-vfs-ftp` crate (ADR 0033). | AGPL-3.0-only |
@@ -34,7 +35,7 @@ the protocol, a frontend cannot provide it.
 | `norte-cli` | A command-line client and manual core test bed. | AGPL-3.0-only |
 | `norte-tui` | The ratatui dual-pane terminal frontend. | AGPL-3.0-only |
 | `norte-frontend` | UI-independent state and behaviour shared by every frontend. | MIT OR Apache-2.0 |
-| `norte-help` | Help corpus and markdown-lite model, consumed by TUI/GUI/CLI (ADR 0040). | MIT OR Apache-2.0 |
+| `norte-help` | Help corpus and markdown-lite model, consumed by every frontend and the CLI (ADR 0040). | MIT OR Apache-2.0 |
 | `norte-encoding` | Text encoding detection and decoding. | MIT OR Apache-2.0 |
 | `norte-i18n` | Fluent localization resources shared by the frontends. | MIT OR Apache-2.0 |
 | `norte-theme` | Semantic theme roles, true-colour values, terminal fallbacks, and bundled presets. | MIT OR Apache-2.0 |
