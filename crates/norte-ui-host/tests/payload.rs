@@ -130,10 +130,12 @@ async fn un_parche_de_filas_pesa_lo_que_la_ventana() {
     })
     .await
     .expect("host vivo");
+    // Del hueco 1, que es al que se le declaró la ventana: la disposición
+    // tiene dos listados y el otro manda las suyas con SU tamaño.
     let m = siguiente_parche(&mut sub, |p| {
         p.changes
             .iter()
-            .any(|c| matches!(c, ViewChange::Rows { .. }))
+            .any(|c| matches!(c, ViewChange::Rows { slot_id: 1, .. }))
     })
     .await;
     let n = bytes(&m);
@@ -144,7 +146,9 @@ async fn un_parche_de_filas_pesa_lo_que_la_ventana() {
         .changes
         .iter()
         .map(|c| match c {
-            ViewChange::Rows { rows, .. } => rows.len(),
+            ViewChange::Rows {
+                slot_id: 1, rows, ..
+            } => rows.len(),
             _ => 0,
         })
         .sum();

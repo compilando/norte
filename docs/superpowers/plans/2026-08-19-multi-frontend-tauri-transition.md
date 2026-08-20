@@ -1395,14 +1395,31 @@ review:
 
 | Metric | Gate |
 | --- | --- |
-| warm start to first real listing | no more than 20% slower than GPUI baseline, and target <= 500 ms |
+| warm start to first real listing | ~~no more than 20% slower than GPUI baseline~~, target <= 500 ms |
 | cold start | target <= 3 s on baseline machine |
-| cursor input-to-paint p95 | <= 50 ms |
-| continuous local scroll | p95 frame <= 20 ms for visible-row work |
+| cursor input-to-paint p95 | <= 50 ms **and <= idle frame + one frame** |
+| continuous local scroll | p95 frame **<= the platform's idle frame** (was: <= 20 ms) |
 | 100,000-entry directory | no full-directory JSON resend on cursor/mark change |
 | idle RSS | recorded and explicitly accepted; unexplained growth across 30 min is a failure |
 | patch payload | routine cursor patch <= 16 KiB; row-window patch explicitly capped |
-| reconnect | no task/session semantic regression against GPUI |
+| reconnect | ~~no semantic regression against GPUI~~ no task/session semantic regression against the terminal frontend |
+
+**Amended 2026-08-20, after the measurement** (condition 1 of the go/no-go,
+`docs/spike-tauri-2026-08-20.md`):
+
+- **The two GPUI comparisons are struck.** That frontend was retired before
+  this one existed (ADR 0065), so there is no baseline to be 20% of. Parity is
+  measured against the terminal frontend and against `norte-frontend`'s tests.
+- **The frame budgets are relative to the platform, not to 60 Hz.** Measured
+  on the reference machine, an idle WebKitGTK page gets a frame every 32–33 ms
+  — about 30 Hz, on displays running at 100 and 144 Hz. A fixed 20 ms budget
+  is unreachable there by construction, and a renderer that meets the idle
+  frame exactly is adding nothing. So the question the gate asks is "how much
+  does the renderer add to the platform's own cadence", and the answer has to
+  be: nothing for local scroll, at most one frame for a round trip.
+- **Every run records the idle frame first.** A latency number without the
+  floor beside it cannot distinguish a slow renderer from a slow compositor;
+  the measurement pass emits `idle-frame` for exactly this reason.
 
 Go if:
 

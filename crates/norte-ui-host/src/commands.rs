@@ -25,6 +25,10 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "nav.forward",
     "mark.toggle",
     "mark.clear",
+    "pane.switch",
+    "layout.focus-next",
+    "layout.focus-prev",
+    "layout.set-target",
     "pane.quick-search",
     "pane.mkdir",
     "pane.delete",
@@ -61,6 +65,17 @@ pub enum Efecto {
     Marcar,
     /// Quita todas las marcas.
     DesmarcarTodo,
+    /// Mueve el foco al siguiente hueco enfocable (o al anterior).
+    ///
+    /// Con dos paneles es el cambio de siempre; con más, sigue el ORDEN de
+    /// tabulación que resuelve la capa compartida, que ya se salta lo que no
+    /// se ve y lo que no se enfoca.
+    Foco {
+        /// `true` = hacia atrás.
+        atras: bool,
+    },
+    /// Designa OTRO hueco como destino de la siguiente operación.
+    Destino,
     /// Abre el buscador incremental del listado.
     BuscarRapido,
     /// Abre el prompt de crear directorio.
@@ -98,6 +113,12 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "nav.forward" => Efecto::Rastro { atras: false },
         "mark.toggle" => Efecto::Marcar,
         "mark.clear" => Efecto::DesmarcarTodo,
+        // `pane.switch` es el cambio clásico entre dos paneles; con más de
+        // dos, lo honesto es seguir el mismo recorrido que el tabulador en
+        // vez de inventar un segundo orden.
+        "pane.switch" | "layout.focus-next" => Efecto::Foco { atras: false },
+        "layout.focus-prev" => Efecto::Foco { atras: true },
+        "layout.set-target" => Efecto::Destino,
         "pane.quick-search" => Efecto::BuscarRapido,
         "pane.mkdir" => Efecto::CrearDirectorio,
         "pane.delete" => Efecto::Borrar { permanente: false },

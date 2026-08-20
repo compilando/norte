@@ -131,7 +131,11 @@ enum Mensaje {
     Accion(Box<UiAction>, oneshot::Sender<ActionAck>),
     /// La respuesta de un listado que se pidió antes. Vuelve al actor como
     /// un mensaje más: así el estado lo sigue tocando un solo escritor.
-    Listado(Box<(RequestToken, VPath, Result<Vec<Entry>, Error>)>),
+    ///
+    /// Lleva el HUECO que lo pidió y no se resuelve al llegar: si mientras
+    /// volaba el foco se movió al panel de al lado, aterrizar «en el activo»
+    /// sería meter un directorio en la pantalla equivocada.
+    Listado(Box<(RequestToken, u32, VPath, Result<Vec<Entry>, Error>)>),
     /// El catálogo de atributos de un esquema, ya resuelto.
     Catalogo(Box<(String, norte_proto::AttrCatalog)>),
     /// Una op de agente espera decisión humana.
@@ -332,14 +336,13 @@ async fn actor(
                 }
             }
             Mensaje::Listado(datos) => {
-                let (token, dir, res) = *datos;
-                if estado.hueco().en_vuelo != Some(token) {
+                let (token, slot, dir, res) = *datos;
+                if estado.huecos.get(&slot).and_then(|h| h.en_vuelo) != Some(token) {
                     // Llegó tarde: otra navegación la relevó. Se descarta
                     // AQUÍ, no se esconde en el renderer.
                     continue;
                 }
-                estado.aterriza(dir, res);
-                let slot = estado.activo();
+                estado.aterriza_en(slot, dir, res);
                 estado.sondear(slot, &backend, &buzon);
                 // Un `cd` cambia la pantalla entera —directorio, filas,
                 // cursor, marcas—, así que se manda una foto en vez de
@@ -910,16 +913,22 @@ impl Estado {
                 count,
             } => {
                 let (slot_id, first, count) = (*slot_id, *first, *count);
-                if slot_id != self.activo() {
+                // NO se exige que sea el hueco activo: declarar qué filas se
+                // ven no es actuar sobre el listado, es decir dónde está
+                // mirando el usuario. La rueda sobre el panel de al lado
+                // mueve ESE panel y no le roba el foco a nadie.
+                if !self.huecos.contains_key(&slot_id) || self.oculto(slot_id) {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 }
-                self.hueco_mut().primera_visible = first;
-                self.hueco_mut().visibles =
-                    count.min(u32::try_from(MAX_ROWS_PER_BATCH).unwrap_or(u32::MAX));
+                let tope = count.min(u32::try_from(MAX_ROWS_PER_BATCH).unwrap_or(u32::MAX));
+                if let Some(h) = self.huecos.get_mut(&slot_id) {
+                    h.primera_visible = first;
+                    h.visibles = tope;
+                }
                 // Scroll = filas nuevas a la vista, y puede que sin tamaño
                 // todavía: el sondeo va con la ventana, no con el cursor.
                 self.sondear(slot_id, backend, buzon);
-                (self.aplicada(), vec![self.parche_filas()])
+                (self.aplicada(), vec![self.parche_filas_de(slot_id)])
             }
             UiAction::FocusSlot { slot_id } => {
                 let slot_id = *slot_id;
@@ -1167,6 +1176,60 @@ impl Estado {
             Efecto::DesmarcarTodo => {
                 self.hueco_mut().pane.clear_marks();
                 (self.aplicada(), vec![self.parche_filas()])
+            }
+            Efecto::Foco { atras } => {
+                // El recorrido es el COMPARTIDO: `focus_order` ya se salta lo
+                // que no se ve y lo que no se enfoca (una barra de estado no
+                // recibe el foco), así que aquí no hay una segunda regla que
+                // pueda divergir de la del TUI.
+                let actual = SlotId(self.activo());
+                let siguiente = if atras {
+                    norte_frontend::layout::focus_prev(&self.reparto, actual)
+                } else {
+                    norte_frontend::layout::focus_next(&self.reparto, actual)
+                };
+                let Some(SlotId(id)) = siguiente else {
+                    // Un solo hueco: no hay a dónde ir, y decirlo es más
+                    // honesto que fingir que pasó algo.
+                    return (
+                        ActionAck::Unavailable {
+                            reason_key: "host-no-other-slot".to_owned(),
+                        },
+                        Vec::new(),
+                    );
+                };
+                self.roles.set(RoleId::Active, SlotId(id));
+                self.reconcilia_roles();
+                let cambio = ViewChange::Layout(self.disposicion());
+                (self.aplicada(), vec![self.parche(vec![cambio])])
+            }
+            Efecto::Destino => {
+                // El siguiente que NO sea el enfocado: designarse a uno mismo
+                // como destino es pedirle a una copia que se copie encima.
+                // Misma regla que el TUI.
+                let activo = self.activo();
+                let candidatos: Vec<u32> = self
+                    .huecos
+                    .keys()
+                    .copied()
+                    .filter(|id| *id != activo && !self.oculto(*id))
+                    .collect();
+                let actual = self.roles.get(RoleId::Target).map(|SlotId(id)| id);
+                let siguiente = match actual.and_then(|a| candidatos.iter().position(|c| *c == a)) {
+                    Some(i) => candidatos.get((i + 1) % candidatos.len()).copied(),
+                    None => candidatos.first().copied(),
+                };
+                let Some(id) = siguiente else {
+                    return (
+                        ActionAck::Unavailable {
+                            reason_key: "host-no-other-slot".to_owned(),
+                        },
+                        Vec::new(),
+                    );
+                };
+                self.roles.set(RoleId::Target, SlotId(id));
+                let cambio = ViewChange::Layout(self.disposicion());
+                (self.aplicada(), vec![self.parche(vec![cambio])])
             }
             Efecto::BuscarRapido => {
                 // Filtrar es el modo por defecto: es el que no mueve el
@@ -1793,7 +1856,7 @@ impl Estado {
             let res = Estado::primera_pagina(stream, slot, token, buzon.clone()).await;
             // Si el actor ya no está, la respuesta no le importa a nadie.
             let _ = buzon
-                .send(Mensaje::Listado(Box::new((token, dir, res))))
+                .send(Mensaje::Listado(Box::new((token, slot, dir, res))))
                 .await;
         });
 
@@ -1984,7 +2047,7 @@ impl Estado {
             return None;
         }
         hueco.pane.extend(batch);
-        Some(self.parche_filas())
+        Some(self.parche_filas_de(slot))
     }
 
     /// Pega lo que un sondeo averiguó al listado que lo pidió.
