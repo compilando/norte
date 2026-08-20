@@ -48,6 +48,8 @@ interface SlotDom {
 export class Screen {
   private readonly slots = new Map<number, SlotDom>();
   private placementsKey = "";
+  /** El diálogo cuyo campo de texto ya se sembró. */
+  private dialogoPintado: number | null = null;
   private pendingRange = new Map<number, number>();
 
   constructor(
@@ -423,6 +425,7 @@ export class Screen {
   private paintDialogs(dialogs: DialogView[]): void {
     if (dialogs.length === 0) {
       this.dialogsRoot.replaceChildren();
+      this.dialogoPintado = null;
       return;
     }
     const top = dialogs[dialogs.length - 1];
@@ -443,10 +446,25 @@ export class Screen {
       p.textContent = line;
       box.append(p);
     }
+    if (top.input_hostile) {
+      // Es la ÚNICA superficie donde se aprueba un nombre: si lo que se pinta
+      // difiere de lo que se creará, se dice aquí.
+      const aviso = document.createElement("p");
+      aviso.className = "hostile";
+      aviso.setAttribute("role", "alert");
+      aviso.textContent = this.t("hostile-name");
+      box.append(aviso);
+    }
     if (top.input !== null) {
       const input = document.createElement("input");
       input.type = "text";
-      input.value = top.input;
+      // El valor se pone UNA vez, al crear el campo. Reescribirlo en cada
+      // repintado devolvía al campo la proyección del host —enmascarada y
+      // acotada— y el siguiente evento la mandaba de vuelta como si fuera lo
+      // tecleado: el nombre se convertía en su propia sombra.
+      if (this.dialogoPintado !== top.id) {
+        input.value = top.input;
+      }
       input.setAttribute("aria-labelledby", h.id);
       input.addEventListener("input", () => {
         this.send({ action: "dialog_input", id: top.id, text: input.value });
@@ -470,6 +488,7 @@ export class Screen {
     }
     box.append(choices);
     this.dialogsRoot.replaceChildren(box);
+    this.dialogoPintado = top.id;
   }
 }
 

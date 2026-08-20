@@ -36,7 +36,7 @@ pub mod config;
 pub mod confine;
 pub mod connections_picker;
 mod decoration;
-mod display;
+pub mod display;
 pub mod error;
 mod format;
 pub mod help;
@@ -69,8 +69,8 @@ pub mod whichkey;
 
 pub use decoration::{BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_decoration};
 pub use display::{
-    cells, display_name, display_name_with, display_os_name, middle_ellipsis, path_display,
-    path_display_with,
+    cells, display_name, display_name_with, display_os_name, ellipsis_at_bytes, middle_ellipsis,
+    path_display, path_display_with,
 };
 pub use format::{human_bytes, human_bytes_short};
 pub use modal::{

@@ -118,6 +118,7 @@
         ],
         "id": 3,
         "input": "",
+        "input_hostile": false,
         "title_key": "modal-mkdir-title"
       }
     ],

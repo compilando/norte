@@ -321,8 +321,14 @@ pub struct DialogView {
     pub body: Vec<String>,
     /// Lo que se puede responder.
     pub choices: Vec<DialogChoice>,
-    /// El diálogo pide texto libre, y esto es lo tecleado hasta ahora.
+    /// El diálogo pide texto libre, y esto es lo tecleado hasta ahora, YA
+    /// enmascarado y acotado para pintar. No es el operando: lo que se va a
+    /// crear son los bytes que el usuario tecleó, que el host guarda aparte.
     pub input: Option<String>,
+    /// Lo tecleado se pinta DISTINTO de lo que es (controles, marcas de
+    /// dirección). Es la única superficie donde se pide aprobar un nombre, y
+    /// enseñarlo crudo es como se aprueba otra cosa.
+    pub input_hostile: bool,
 }
 
 /// Una respuesta posible de un diálogo.

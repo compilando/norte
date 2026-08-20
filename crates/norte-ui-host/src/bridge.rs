@@ -168,23 +168,20 @@ pub enum ActionAck {
     },
 }
 
-/// Recorta una cadena al tope del bridge SIN partir un carácter.
+/// Recorta una cadena al tope del bridge sin partir un clúster.
 ///
-/// Se recorta en la frontera de display y se DICE (`…`), que es la misma
-/// regla que el resto del proyecto aplica a lo pintable: nunca se pierde algo
-/// en silencio.
+/// Se DICE (`…`), que es la misma regla que el resto del proyecto aplica a lo
+/// pintable: nunca se pierde algo en silencio.
 #[must_use]
-pub fn clamp_display(mut s: String) -> String {
+pub fn clamp_display(s: String) -> String {
     if s.len() <= MAX_STRING_BYTES {
         return s;
     }
-    let mut corte = MAX_STRING_BYTES.saturating_sub('…'.len_utf8());
-    while corte > 0 && !s.is_char_boundary(corte) {
-        corte -= 1;
-    }
-    s.truncate(corte);
-    s.push('…');
-    s
+    // El recorte es el COMPARTIDO. Una frontera de carácter no basta: corta
+    // dentro de un clúster y deja una marca combinante huérfana que se
+    // compone con el `…`. Esa regla ya estaba resuelta y probada contra el
+    // corpus en `norte-frontend`; tener aquí una segunda era tener dos.
+    norte_frontend::display::ellipsis_at_bytes(&s, MAX_STRING_BYTES)
 }
 
 #[cfg(test)]

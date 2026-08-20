@@ -125,6 +125,7 @@ export interface DialogView {
   body: string[];
   choices: DialogChoice[];
   input: string | null;
+  input_hostile: boolean;
 }
 
 export type TaskStateView = "queued" | "running" | "done" | "failed" | "cancelled";

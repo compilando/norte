@@ -204,6 +204,40 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The name you type is the name that gets created.** The `mkdir` field's
+  text travelled through the *display* truncator, which cuts at 4 KiB and
+  appends `…` — and `Segment::new` accepts an ellipsis, so a directory could be
+  created with a name nobody typed. The host now keeps the typed bytes as the
+  operand and projects a separate masked, bounded copy for painting; the
+  renderer no longer writes that projection back into the field on every
+  repaint. A name whose painted form differs from what will be created says so
+  in the dialog — it is the one surface where a name is approved, and it was
+  being shown raw.
+
+- **The bridge's truncator no longer cuts inside a grapheme.** It cut on a
+  character boundary and appended `…`, so an accent could migrate from its
+  letter to the ellipsis and a ZWJ family emoji could be cut into unrelated
+  people. It now uses the shared truncator in `norte-frontend`, which had
+  carried the tested fix for this class since the H3b audit, and the test
+  sweeps the hostile corpus instead of only asserting valid UTF-8.
+
+- **Column ids, unsupported slot names and peer error text are masked.** All
+  three reached the DOM raw: a column id comes from configuration (a project
+  layer can name a `plugin:` column), a slot kind comes from a layout file and
+  `KindId` validates nothing, and an error string from a newer peer is
+  documented as "show it as-is". The status bar also painted a raw Fluent key
+  (`err-not-found`) in a field whose contract says the host already translated
+  it.
+
+- **Text keys reach a text field again.** The renderer measured "one
+  character" in UTF-16 code units, so an emoji or a decomposed `é` fell
+  through, `preventDefault` ate it, and it could not be typed into a name.
+
+- **A right-to-left filename no longer drags the hostile badge to the wrong
+  side.** Hebrew and Arabic names are legitimate text and carry no control
+  characters, so nothing flags them — and without bidi isolation they reorder
+  the line box around the badge and the directory marker that describe them.
+
 - **The size and date columns stopped filling after the first two hundred
   rows.** Each probing round is capped, and nothing asked for the next one: a
   tall window got 200 sizes and the rest stayed blank until the user scrolled.

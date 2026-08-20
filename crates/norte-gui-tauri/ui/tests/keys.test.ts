@@ -34,3 +34,21 @@ describe("las teclas", () => {
     expect(k).toEqual({ key: "q", ctrl: true, alt: false, shift: false, meta: false });
   });
 });
+
+describe("una tecla de TEXTO", () => {
+  it("se mide en puntos de código, no en unidades UTF-16", () => {
+    // Un emoji son dos unidades UTF-16 y UN punto de código: si se mide con
+    // `length`, el campo de texto no lo recibe y no se puede escribir en un
+    // nombre.
+    const emoji = keyInputOf(ev({ key: "😀" }));
+    expect(emoji).not.toBeNull();
+    expect([...(emoji?.key ?? "")].length).toBe(1);
+    expect((emoji?.key ?? "").length).toBe(2);
+  });
+
+  it("una é en NFD son DOS puntos de código: no es una tecla de texto", () => {
+    const nfd = keyInputOf(ev({ key: "e\u0301" }));
+    expect(nfd).not.toBeNull();
+    expect([...(nfd?.key ?? "")].length).toBe(2);
+  });
+});

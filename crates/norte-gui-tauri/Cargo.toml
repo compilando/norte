@@ -35,8 +35,9 @@ name = "norte-gui"
 path = "src/main.rs"
 
 [dependencies]
-anyhow.workspace = true
 norte-client.workspace = true
+# El predicado de peligros de terminal: el MISMO que enmascara los nombres.
+norte-encoding.workspace = true
 norte-config.workspace = true
 norte-frontend.workspace = true
 norte-i18n.workspace = true

@@ -43,15 +43,15 @@ pub enum LinkError {
 /// assert_eq!(validar("javascript:alert(1)"), Err(LinkError::Scheme));
 /// ```
 pub fn validar(url: &str) -> Result<(), LinkError> {
-    // Controles, blancos y —sobre todo— las marcas de dirección: un
-    // `U+202E` convierte `…/gpj.exe` en algo que se lee `…/exe.jpg`. Un
-    // enlace que no se lee como lo que abre no se abre.
-    let sospechoso = |c: char| {
-        c.is_control()
-            || c.is_whitespace()
-            || matches!(c, '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-    };
-    if url.chars().any(sospechoso) {
+    // El MISMO predicado que enmascara los nombres
+    // (`norte_encoding::is_terminal_hazard`), y no una cuarta lista escrita a
+    // mano: la de aquí se dejaba fuera `U+061C` —que es una marca de
+    // dirección— y todos los invisibles de anchura cero. Un enlace que no se
+    // lee como lo que abre no se abre, y esa regla ya existe una vez.
+    if url
+        .chars()
+        .any(|c| norte_encoding::is_terminal_hazard(c) || c.is_whitespace())
+    {
         return Err(LinkError::Control);
     }
     let Some((esquema, resto)) = url.split_once(':') else {
@@ -66,6 +66,9 @@ pub fn validar(url: &str) -> Result<(), LinkError> {
     let esquema = esquema.to_ascii_lowercase();
     if !ESQUEMAS.contains(&esquema.as_str()) {
         return Err(LinkError::Scheme);
+    }
+    if esquema == "mailto" && resto.contains('?') {
+        return Err(LinkError::Shape);
     }
     Ok(())
 }
@@ -104,5 +107,20 @@ mod tests {
     fn los_controles_no_pasan() {
         assert_eq!(validar("https://a.test/\u{202e}x"), Err(LinkError::Control));
         assert_eq!(validar("https://a.test/ x"), Err(LinkError::Control));
+        // Los que la lista escrita a mano se dejaba fuera.
+        assert_eq!(validar("https://a.test/\u{061c}x"), Err(LinkError::Control));
+        assert_eq!(validar("https://a.test/\u{200b}x"), Err(LinkError::Control));
+        assert_eq!(validar("https://a.test/\u{feff}x"), Err(LinkError::Control));
+    }
+
+    /// Un `mailto:` con consulta no pasa: históricamente se ha usado para
+    /// adjuntar ficheros del disco desde un enlace.
+    #[test]
+    fn un_mailto_con_consulta_no_pasa() {
+        assert_eq!(
+            validar("mailto:a@b.test?attach=/etc/shadow"),
+            Err(LinkError::Shape)
+        );
+        assert!(validar("mailto:a@b.test").is_ok());
     }
 }

@@ -5224,10 +5224,10 @@ dependencies = [
 name = "norte-gui-tauri"
 version = "0.3.0-alpha.2"
 dependencies = [
- "anyhow",
  "norte-client",
  "norte-config",
  "norte-core",
+ "norte-encoding",
  "norte-frontend",
  "norte-i18n",
  "norte-proto",

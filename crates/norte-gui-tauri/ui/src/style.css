@@ -56,6 +56,7 @@ body {
 }
 
 .slot-title {
+  unicode-bidi: isolate;
   flex: 0 0 var(--cell-h);
   padding: 0 6px;
   color: var(--title-fg);
@@ -151,6 +152,11 @@ body {
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Un nombre en escritura RTL —hebreo, árabe— es legítimo y NO lleva
+     controles, así que no viene marcado como hostil. Sin aislar, reordena la
+     línea entera y se lleva el badge y el `/` de directorio al otro lado del
+     nombre que marcan. */
+  unicode-bidi: isolate;
 }
 
 .cell {
@@ -269,6 +275,10 @@ body {
   margin: 0 0 8px;
   font-size: 1em;
   color: var(--title-fg);
+}
+
+.dialog p {
+  unicode-bidi: isolate;
 }
 
 .dialog input {

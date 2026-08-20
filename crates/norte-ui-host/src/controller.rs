@@ -49,6 +49,12 @@ const FIRST_PAGE: usize = 100;
 /// por entrada ahoga el buzón del actor— ni todas de golpe.
 const FILL_BATCH: usize = 500;
 
+/// Tope de un nombre tecleado, en bytes. Ni `NAME_MAX` (que es del sistema
+/// de ficheros y no lo sabemos aquí) ni el de pantalla: un tope generoso que
+/// impide que un renderer mande un megabyte, y que RECHAZA en vez de
+/// recortar — recortar un nombre es inventarse otro.
+const MAX_NOMBRE: usize = 4096;
+
 /// Lo que el visor lee de un fichero: una cabecera de 256 KiB. El resto NO
 /// se lee — el mismo presupuesto que el TUI, y por el mismo motivo (ADR
 /// 0005): un visor no es una excusa para traerse un fichero de un giga.
@@ -435,13 +441,16 @@ async fn actor(
                 }
             }
             Mensaje::TaskFallida(e) => {
-                let clave = norte_frontend::error::error_key(&e).to_owned();
-                estado.status.message = Some(clamp_display(clave.clone()));
+                // `error_key` devuelve una CLAVE Fluent, y el contrato de
+                // `StatusView.message` dice «ya traducido por el host»: sin
+                // traducir, el usuario leía `err-not-found` en la barra.
+                let clave = norte_frontend::error::error_key(&e);
+                estado.status.message = Some(clamp_display(norte_i18n::t(clave)));
                 let cambio = ViewChange::Status(estado.status.clone());
                 let u = estado.parche(vec![cambio]);
                 let _ = updates.send(u);
                 let n = estado.sobre(UiUpdate::Notice(UiNotice::Message {
-                    key: clave,
+                    key: clave.to_owned(),
                     detail: None,
                 }));
                 let _ = updates.send(n);
@@ -469,6 +478,16 @@ async fn actor(
 /// mínimos de cada kind están declarados así y los comparte con el TUI, que
 /// es lo que hace que «este panel no cabe» signifique lo mismo en las dos
 /// superficies.
+/// El id de una columna, listo para pintar.
+///
+/// Un id `attr:` o `plugin:` es texto de CONFIGURACIÓN —puede venir de la
+/// capa de proyecto— y `ColumnId::Display` lo escribe crudo. Lo que cruza va
+/// enmascarado, como cualquier otra cosa ajena.
+fn id_pintable(id: &norte_frontend::columns::ColumnId) -> String {
+    let (pintable, _) = norte_frontend::display_name(id.to_string().as_bytes());
+    pintable
+}
+
 fn rect((width, height): (u16, u16)) -> Rect {
     Rect {
         x: 0,
@@ -559,6 +578,14 @@ struct Dialogo {
     vista: DialogView,
     /// Lo que la confirmación ejecuta. `None` = solo informa.
     al_confirmar: Option<Pendiente>,
+    /// Lo que el usuario tecleó, TAL CUAL.
+    ///
+    /// Separado de `vista.input`, que es su proyección para pintar —
+    /// enmascarada y acotada—, porque este texto acaba siendo un NOMBRE DE
+    /// FICHERO. Pasarlo por el recorte de pantalla creaba directorios con
+    /// una elipsis dentro: el mismo error que ADR 0061 decidió no volver a
+    /// cometer, en miniatura.
+    input_crudo: String,
 }
 
 /// Lo que un diálogo tiene pendiente de hacer.
@@ -1312,7 +1339,12 @@ impl Estado {
             Err(e) => {
                 // No se pudo leer: se DICE y no se abre un visor vacío que
                 // parezca un fichero de cero bytes.
-                self.status.message = Some(clamp_display(format!("{e}")));
+                // El texto de un error puede venir de un peer más nuevo
+                // (`LimitExceeded` con un token desconocido, una huella de
+                // host) y acaba en el DOM: se enmascara como cualquier otro
+                // texto ajeno.
+                let (pintable, _) = norte_frontend::display_name(format!("{e}").as_bytes());
+                self.status.message = Some(clamp_display(pintable));
                 let cambio = ViewChange::Status(self.status.clone());
                 return self.parche(vec![cambio]);
             }
@@ -1502,10 +1534,12 @@ impl Estado {
                 },
             ],
             input: None,
+            input_hostile: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
+            input_crudo: String::new(),
             al_confirmar: Some(Pendiente::Borrar { paths, permanente }),
         });
         let cambio = ViewChange::Dialogs {
@@ -1595,10 +1629,12 @@ impl Estado {
                 },
             ],
             input: None,
+            input_hostile: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
+            input_crudo: String::new(),
             al_confirmar: Some(Pendiente::Decidir {
                 approval_id: req.approval_id,
             }),
@@ -1634,10 +1670,12 @@ impl Estado {
             // Con campo de texto: es lo que hace que el renderer sepa que
             // aquí se teclea, sin que tenga que deducirlo del título.
             input: Some(String::new()),
+            input_hostile: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
+            input_crudo: String::new(),
             al_confirmar: Some(Pendiente::CrearDirectorio { dir }),
         });
         let cambio = ViewChange::Dialogs {
@@ -1664,7 +1702,22 @@ impl Estado {
             // que nadie va a leer sería peor que decirlo.
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
-        dialogo.vista.input = Some(clamp_display(texto.to_owned()));
+        if texto.len() > MAX_NOMBRE {
+            // Ni se recorta ni se acepta a medias: un nombre no es una
+            // cadena de pantalla, y recortarlo es inventarse otro.
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-name-too-long".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        texto.clone_into(&mut dialogo.input_crudo);
+        // Lo que se PINTA es otra cosa: enmascarado (un `U+202E` en el
+        // nombre que te van a pedir aprobar se ve) y acotado.
+        let (pintable, hostil) = norte_frontend::display_name(texto.as_bytes());
+        dialogo.vista.input = Some(clamp_display(pintable));
+        dialogo.vista.input_hostile = hostil;
         let cambio = ViewChange::Dialogs {
             dialogs: self.vistas_de_dialogos(),
         };
@@ -1708,7 +1761,7 @@ impl Estado {
                     Self::lanzar_borrado(paths, permanente, backend, buzon);
                 }
                 Some(Pendiente::CrearDirectorio { dir }) => {
-                    let nombre = dialogo.vista.input.unwrap_or_default();
+                    let nombre = dialogo.input_crudo.clone();
                     // El nombre se valida AQUÍ, con la misma regla que
                     // cualquier otro segmento: ni vacío, ni `/`, ni NUL, ni
                     // `.`/`..`. Un nombre que no vale no encola nada y lo
@@ -2397,7 +2450,7 @@ impl Estado {
                     ),
                 };
                 crate::dto::CellView {
-                    column: col.to_string(),
+                    column: clamp_display(id_pintable(col)),
                     text: texto.map(clamp_display),
                 }
             })
@@ -2499,9 +2552,13 @@ impl Estado {
             } else {
                 let nombre = kind_de(&self.arbol, *slot)
                     .map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
+                // El kind sale de un fichero de disposición y `KindId` no
+                // valida nada: es texto que puede traer controles, y acaba en
+                // el DOM y en un `aria-label`.
+                let (pintable, _) = norte_frontend::display_name(nombre.as_bytes());
                 slots.push(SlotView::Unsupported {
                     slot_id: id,
-                    kind_name: clamp_display(nombre),
+                    kind_name: clamp_display(pintable),
                 });
             }
         }
@@ -2810,7 +2867,12 @@ impl Estado {
                     .to_owned()
                 });
                 ColumnHeader {
-                    id: id.to_string(),
+                    // El id se acota y se enmascara como todo lo demás: sale
+                    // de la configuración (una columna `plugin:` de una capa
+                    // de proyecto es texto ajeno) y viaja en CADA fila. Era
+                    // la excepción que nadie había clavado al tope del
+                    // bridge.
+                    id: clamp_display(id_pintable(id)),
                     label: clamp_display(header_label(id, &estilo, catalogo)),
                     sort,
                     sortable: ordena.is_some(),

@@ -109,8 +109,13 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
       return;
     }
     const target = e.target;
-    if (target instanceof HTMLInputElement && k.key.length === 1) {
-      // Un campo de texto abierto es dueño de las teclas de texto.
+    // Un campo de texto abierto es dueño de las teclas de TEXTO. «Una
+    // tecla de texto» se mide en puntos de código, no en unidades UTF-16:
+    // `length === 1` deja fuera un emoji (dos unidades) y una `é` en NFD
+    // (macOS), así que `preventDefault` se los llevaba y no se podían
+    // escribir en un nombre.
+    const esTexto = !k.ctrl && !k.alt && !k.meta && [...k.key].length === 1;
+    if (target instanceof HTMLInputElement && esTexto) {
       return;
     }
     e.preventDefault();

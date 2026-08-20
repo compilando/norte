@@ -2657,3 +2657,132 @@ async fn un_provider_que_devuelve_otra_ortografia_no_deja_la_celda_en_blanco() {
     }
     panic!("la celda sigue en blanco: se casó por la ruta devuelta");
 }
+
+// ---------------------------------------------------------------------------
+// Nombres y texto (revisión de encoding).
+// ---------------------------------------------------------------------------
+
+/// Lo que se teclea en el diálogo es lo que se crea, byte a byte.
+///
+/// El nombre viajaba por `clamp_display`, que recorta a 4 KiB y AÑADE `…`, y
+/// `Segment::new` acepta la elipsis: se creaba un directorio con un nombre
+/// que nadie tecleó. Es ADR 0061 en miniatura — un texto de pantalla que
+/// acaba siendo un nombre de fichero.
+#[tokio::test]
+async fn el_nombre_que_se_teclea_es_el_que_se_crea() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F7")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+
+    // Un nombre con un carácter de control dentro: legal en Unix, y lo que
+    // se cree tiene que ser EXACTAMENTE eso.
+    let crudo = "caf\u{202e}e.txt";
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: crudo.to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    // Lo que se PINTA está enmascarado y se dice que lo está.
+    let pintado = siguientes_dialogos(&mut sub).await;
+    assert!(
+        pintado[0].input_hostile,
+        "un nombre con una marca de dirección se DICE: {:?}",
+        pintado[0].input
+    );
+    assert!(
+        !pintado[0]
+            .input
+            .as_deref()
+            .unwrap_or_default()
+            .contains('\u{202e}'),
+        "y no se pinta crudo"
+    );
+
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let creados = backend.creados.lock().expect("creados").clone();
+    assert_eq!(creados.len(), 1, "se encoló una creación");
+    let nombre = creados[0]
+        .file_name()
+        .expect("tiene nombre")
+        .as_bytes()
+        .to_vec();
+    assert_eq!(
+        nombre,
+        crudo.as_bytes(),
+        "lo creado son los bytes tecleados, no su proyección"
+    );
+}
+
+/// Un nombre imposible se RECHAZA en vez de recortarse.
+#[tokio::test]
+async fn un_nombre_desmesurado_no_se_recorta() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F7")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    let ack = h
+        .dispatch(UiAction::DialogInput {
+            id,
+            text: "a".repeat(5000),
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Unavailable { .. }),
+        "se dice que no cabe: {ack:?}"
+    );
+}
+
+/// El id de una columna hostil llega acotado y enmascarado, y viaja así en
+/// cada fila.
+#[tokio::test]
+async fn el_id_de_una_columna_hostil_no_cruza_crudo() {
+    let backend = arbol();
+    let (h, snap) = UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        columns: vec![
+            norte_frontend::columns::ColumnId::Builtin(norte_frontend::columns::Builtin::Name),
+            norte_frontend::columns::ColumnId::Plugin {
+                plugin: "acme.\u{202e}ftp".to_owned(),
+                column: "x".to_owned(),
+            },
+        ],
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    drop(h);
+    let b = listado(&snap);
+    for c in &b.columns {
+        assert!(
+            !c.id.contains('\u{202e}'),
+            "el id de la cabecera va crudo: {:?}",
+            c.id
+        );
+    }
+    for fila in &b.rows {
+        for celda in &fila.cells {
+            assert!(
+                !celda.column.contains('\u{202e}'),
+                "el id de la celda va crudo: {:?}",
+                celda.column
+            );
+        }
+    }
+}

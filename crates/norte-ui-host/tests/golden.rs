@@ -245,6 +245,7 @@ fn dialogo_de_referencia() -> DialogView {
             },
         ],
         input: Some(String::new()),
+        input_hostile: false,
     }
 }
 

@@ -188,6 +188,56 @@ pub fn cells(s: &str) -> usize {
         .sum()
 }
 
+/// Recorta a un tope de BYTES por la cola, marcando el recorte con `…`.
+///
+/// Es el truncador de las fronteras que miden en bytes —el bridge del host
+/// gráfico, un campo de un mensaje— y no de las que miden en celdas, que es
+/// lo que hace [`middle_ellipsis`]. Comparten lo que importa: no se pierde
+/// nada en silencio (el `…` lo dice) y no se parte un clúster.
+///
+/// El corte cae en frontera de CARÁCTER y luego retrocede mientras lo último
+/// que queda sea de ancho cero —una marca combinante, un ZWJ, un selector de
+/// variación—: si no, el `…` que se añade después se compone con la marca
+/// huérfana y el acento se muda de su letra a la elipsis (el mismo FIX 3(b)
+/// que este módulo ya aplica en la cola de `middle_ellipsis`), o una familia
+/// de emoji se corta por su unión y se pinta como gente suelta.
+///
+/// ```
+/// use norte_frontend::display::ellipsis_at_bytes;
+///
+/// assert_eq!(ellipsis_at_bytes("hola", 16), "hola");
+/// let recortado = ellipsis_at_bytes(&"a".repeat(100), 10);
+/// assert!(recortado.len() <= 10 && recortado.ends_with('…'));
+/// ```
+#[must_use]
+pub fn ellipsis_at_bytes(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_owned();
+    }
+    let elipsis = '…';
+    let Some(presupuesto) = max_bytes.checked_sub(elipsis.len_utf8()) else {
+        // No cabe ni la marca: mejor nada que una marca sola, que no dice
+        // qué se recortó.
+        return String::new();
+    };
+    let mut corte = presupuesto;
+    while corte > 0 && !s.is_char_boundary(corte) {
+        corte -= 1;
+    }
+    let mut recortado = &s[..corte];
+    // Y atrás mientras lo último sea de ancho cero: esas marcas ya perdieron
+    // su base, y dejarlas es reparentarlas al `…`.
+    while let Some(c) = recortado.chars().next_back() {
+        if UnicodeWidthChar::width(c).unwrap_or(0) > 0 {
+            break;
+        }
+        recortado = &recortado[..recortado.len() - c.len_utf8()];
+    }
+    let mut out = recortado.to_owned();
+    out.push(elipsis);
+    out
+}
+
 /// Elipsis MEDIA a `max` CELDAS de terminal: conserva cabeza (scheme) y cola
 /// (nombre) —lo que identifica la ruta ante un humano— y marca el recorte con
 /// `…`. Presupuesta por ANCHO DE CELDA (CJK/emoji ocupan 2 columnas), no por
@@ -527,5 +577,43 @@ mod tests {
             middle_ellipsis(gemelo, 200),
             "con sitio de sobra los dos títulos son distinguibles"
         );
+    }
+
+    /// El recorte por bytes no parte un clúster: ni deja una marca
+    /// combinante huérfana pegada al `…`, ni corta una familia de emoji por
+    /// su unión. Es el mismo FIX 3(b) por la otra punta.
+    #[test]
+    fn ellipsis_at_bytes_no_deja_marcas_huerfanas() {
+        let corpus = norte_testkit::corpus::hostile_names();
+        for id in ["nfd_e_acute", "emoji_zwj_family"] {
+            let n = corpus
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("{id} en el corpus"));
+            let texto = String::from_utf8_lossy(&n.bytes).into_owned();
+            // Un tope justo DENTRO del clúster, probado en cada byte posible.
+            for tope in 4..=texto.len() + 4 {
+                let out = ellipsis_at_bytes(&texto, tope);
+                assert!(out.len() <= tope, "[{id}/{tope}] se pasa del tope");
+                if out.ends_with('…') {
+                    let sin_marca = &out[..out.len() - '…'.len_utf8()];
+                    if let Some(ultimo) = sin_marca.chars().next_back() {
+                        assert!(
+                            UnicodeWidthChar::width(ultimo).unwrap_or(0) > 0,
+                            "[{id}/{tope}] la elipsis se queda con una marca huérfana: {out:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Lo que cabe viaja intacto, y un tope que no da ni para la marca
+    /// devuelve vacío en vez de una elipsis que no dice qué se recortó.
+    #[test]
+    fn ellipsis_at_bytes_en_los_bordes() {
+        assert_eq!(ellipsis_at_bytes("hola", 4), "hola");
+        assert_eq!(ellipsis_at_bytes("hola", 2), "");
+        assert!(ellipsis_at_bytes("holaaa", 5).ends_with('…'));
     }
 }

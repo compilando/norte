@@ -262,6 +262,7 @@ describe("Screen", () => {
           { id: "cancel", label_key: "dialog-cancel", destructive: false },
         ],
         input: null,
+        input_hostile: false,
       },
     ];
     screen.paint(v);
@@ -282,6 +283,7 @@ describe("Screen", () => {
         body: [],
         choices: [{ id: "cancel", label_key: "dialog-cancel", destructive: false }],
         input: null,
+        input_hostile: false,
       },
     ];
     screen.paint(v);
@@ -423,5 +425,39 @@ describe("la generación", () => {
     if (accion?.action === "select_row") {
       expect(accion.generation).toBe(8);
     }
+  });
+});
+
+describe("el campo de texto de un diálogo", () => {
+  function conDialogo(input: string, hostile: boolean) {
+    const v = vista({});
+    v.dialogs = [
+      {
+        id: 9,
+        title_key: "modal-mkdir-title",
+        body: [],
+        choices: [{ id: "confirm", label_key: "dialog-confirm", destructive: false }],
+        input,
+        input_hostile: hostile,
+      },
+    ];
+    return v;
+  }
+
+  it("no se pisa en cada repintado: lo tecleado manda", () => {
+    const { screen } = montar();
+    screen.paint(conDialogo("", false));
+    const input = document.querySelector(".dialog input") as HTMLInputElement;
+    // El usuario escribe; el host contesta con SU proyección.
+    input.value = "carpeta nueva";
+    screen.paint(conDialogo("carpeta nu…", false));
+    expect(input.value).toBe("carpeta nueva");
+  });
+
+  it("un nombre que se pinta distinto de lo que es lo DICE", () => {
+    const { screen } = montar();
+    screen.paint(conDialogo("caf\ufffde.txt", true));
+    const aviso = document.querySelector('.dialog [role="alert"]');
+    expect(aviso).not.toBeNull();
   });
 });
