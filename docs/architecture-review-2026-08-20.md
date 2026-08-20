@@ -134,8 +134,22 @@ No es que esté mal probado en absoluto —tiene 2.886 líneas de test y pasa el
 contrato de providers—, es que es justo el sitio donde una regresión no avisa:
 syscalls, `openat2`, papelera freedesktop, montajes por plataforma.
 
-**Qué hacer:** meterlo en `just cov` (`-p norte-vfs-local`) y ver dónde cae.
-Es una línea en el justfile y un número que decir.
+**HECHO el mismo día.** `norte-vfs-local` entra en `just cov`, y el número
+resultó barato: el total del gate se queda en **88,10 %** (suelo 85 %). Por
+fichero, lo que enseña:
+
+| fichero | líneas cubiertas |
+| --- | --- |
+| `location.rs` | 92,0 % |
+| `native_path.rs` | 91,2 % |
+| `caps_at.rs` | 90,1 % |
+| `trash_fdo.rs` | 89,8 % |
+| `provider.rs` | 83,1 % |
+| **`confined.rs`** | **79,8 %** |
+
+O sea: el punto flojo es justo el confinamiento (`openat2` /
+`RESOLVE_BENEATH`), que es lo que sujeta las escrituras de un agente. Ahí es
+donde poner los tests siguientes, y ahora hay un número que lo dice.
 
 ### H7 — 32 ficheros por encima de 1.500 líneas
 
@@ -167,16 +181,23 @@ que hay que auditar cuando salga un aviso de seguridad.
 
 **Qué hacer:** revisarlo en la próxima `release-check`, no antes.
 
-### H10 — El `target/` está en 139 GB
+### H10 — El `target/` estaba en 139 GB, y `just prune` estaba ROTO
 
-El presupuesto de disco de CLAUDE.md fija el estado estable en ~30 GB. `just
-prune` está pendiente desde hace días.
+El presupuesto de disco de CLAUDE.md fija el estado estable en ~30 GB.
+
+Al ejecutarlo se vio por qué llevaba días sin bajar: la receta barre
+`target/debug/deps` y `target/release/deps`, y en una máquina que solo compila
+en debug el segundo no existe → `find` sale con error → con `set -euo
+pipefail` la receta MORÍA justo antes de barrer nada, después de haber hecho
+solo la parte barata. Arreglado (se barren los directorios que existan).
+
+Con eso: **139 GB → 64 GB**. Lo que queda son artefactos de hoy; decaen solos.
 
 ## 4. Qué haría, y en qué orden
 
 | ola | qué | por qué ahí |
 | --- | --- | --- |
-| **0** | `just prune` (H10) y `-p norte-vfs-local` en `cov` (H6) | minutos, y el segundo da un número que hoy no existe |
+| ~~**0**~~ | ~~`just prune` (H10) y `-p norte-vfs-local` en `cov` (H6)~~ | **HECHO**: 139 → 64 GB, `prune` arreglado, gate en 88,10 % con el crate del `unsafe` dentro |
 | **1** | decidir `norte-gui` (H1) | bloquea todo lo demás de arquitectura: si se borra, H3 y H4 cambian de forma |
 | **2** | `norte-script` fuera de la TUI (H2) | mecánico, verificado por el compilador, y quita 2.700 líneas del crate más grande de frontend |
 | **3** | repartir `norte-frontend/src/sync.rs` y `pane.rs` (H4) | la receta ya está probada dos veces en este mismo repositorio |

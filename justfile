@@ -88,7 +88,7 @@ cov:
     # integración es otro crate y no hereda el `cfg(test)` de la lib. Roto desde
     # que entró ese test, y no se vio porque `cov` es lo último de `just ci` y
     # `ci-fast` no lo incluye.
-    CARGO_INCREMENTAL=0 cargo llvm-cov nextest -p norte-proto -p norte-vfs -p norte-core --features norte-core/testing --fail-under-lines 85
+    CARGO_INCREMENTAL=0 cargo llvm-cov nextest -p norte-proto -p norte-vfs -p norte-core -p norte-vfs-local --features norte-core/testing --fail-under-lines 85
 
 docs:
     RUSTDOCFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo doc {{core_pkgs}} --no-deps
@@ -211,8 +211,18 @@ prune days="2":
     # .rlib/.rmeta. Es deliberado: si el barrido se lleva uno que aún estaba
     # vivo, cargo lo vuelve a ENLAZAR (segundos con lld), no a compilar. Un
     # .rlib borrado por error sí costaría una compilación entera.
-    barridos=$(find target/debug/deps target/release/deps -maxdepth 1 -type f -executable \
-        ! -name '*.*' -mtime +{{days}} -print -delete 2>/dev/null | wc -l)
+    # Los directorios de `deps` que EXISTAN: sin `release/` (lo normal en una
+    # máquina que solo compila en debug) `find` sale con error, y con
+    # `pipefail` eso mataba la receta ENTERA justo antes de barrer nada.
+    dirs=()
+    for d in target/debug/deps target/release/deps; do
+        [ -d "$d" ] && dirs+=("$d")
+    done
+    barridos=0
+    if [ ${#dirs[@]} -gt 0 ]; then
+        barridos=$(find "${dirs[@]}" -maxdepth 1 -type f -executable \
+            ! -name '*.*' -mtime +{{days}} -print -delete 2>/dev/null | wc -l)
+    fi
     despues=$(du -sk target 2>/dev/null | cut -f1 || echo 0)
     echo "exes de test barridos (>{{days}} días): $barridos"
     echo "target: $((antes / 1024 / 1024)) GiB → $((despues / 1024 / 1024)) GiB"
