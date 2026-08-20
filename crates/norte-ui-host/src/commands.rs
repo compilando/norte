@@ -25,6 +25,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "nav.forward",
     "mark.toggle",
     "mark.clear",
+    "pane.quick-search",
     "pane.delete",
     "pane.delete-permanent",
 ];
@@ -59,6 +60,8 @@ pub enum Efecto {
     Marcar,
     /// Quita todas las marcas.
     DesmarcarTodo,
+    /// Abre el buscador incremental del listado.
+    BuscarRapido,
     /// Pide borrar lo marcado (o lo que haya bajo el cursor). NO borra: abre
     /// la confirmación, que es por donde pasan TODAS las vías —tecla, menú,
     /// gesto—, porque una operación destructiva con dos puertas acaba
@@ -92,6 +95,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "nav.forward" => Efecto::Rastro { atras: false },
         "mark.toggle" => Efecto::Marcar,
         "mark.clear" => Efecto::DesmarcarTodo,
+        "pane.quick-search" => Efecto::BuscarRapido,
         "pane.delete" => Efecto::Borrar { permanente: false },
         "pane.delete-permanent" => Efecto::Borrar { permanente: true },
         _ => return None,

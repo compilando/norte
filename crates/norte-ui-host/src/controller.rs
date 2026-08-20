@@ -815,6 +815,14 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Con el buscador abierto, las teclas de TEXTO son suyas. Es el
+        // contexto de entrada del listado, y dejar que el resolver se las
+        // quede convertiría teclear «d» en «borrar».
+        if self.hueco().pane.quick().is_some()
+            && let Some(salida) = self.tecla_en_quick(k)
+        {
+            return salida;
+        }
         let Ok(chord) = k.to_chord() else {
             // Una tecla que el adaptador no entiende no se adivina.
             return (
@@ -889,6 +897,39 @@ impl Estado {
         }
     }
 
+    /// La tecla, cuando el buscador incremental está abierto.
+    ///
+    /// `None` = esta tecla no es suya y sigue su camino normal (una tecla de
+    /// función, un atajo con modificador): abrir el buscador NO desconecta el
+    /// resto del teclado, solo se queda el texto, el borrado y las tres
+    /// teclas que lo gobiernan.
+    fn tecla_en_quick(
+        &mut self,
+        k: &crate::keys::KeyInput,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        if k.ctrl || k.alt || k.meta {
+            return None;
+        }
+        let pane = &mut self.hueco_mut().pane;
+        match k.key.as_str() {
+            "Escape" | "esc" => pane.quick_cancel(),
+            "Enter" | "enter" => {
+                pane.quick_confirm();
+            }
+            "Backspace" | "backspace" => pane.quick_backspace(),
+            "ArrowDown" | "down" => pane.quick_down(),
+            "ArrowUp" | "up" => pane.quick_up(),
+            otro => {
+                let mut chars = otro.chars();
+                let (Some(c), None) = (chars.next(), chars.next()) else {
+                    return None;
+                };
+                pane.quick_char(c);
+            }
+        }
+        Some((self.aplicada(), vec![self.parche_filas()]))
+    }
+
     /// Ejecuta lo que un comando pide sobre el hueco con el foco.
     ///
     /// Es el MISMO camino que toman las acciones directas del renderer (un
@@ -948,6 +989,14 @@ impl Estado {
             }
             Efecto::DesmarcarTodo => {
                 self.hueco_mut().pane.clear_marks();
+                (self.aplicada(), vec![self.parche_filas()])
+            }
+            Efecto::BuscarRapido => {
+                // Filtrar es el modo por defecto: es el que no mueve el
+                // listado bajo el cursor mientras se teclea.
+                self.hueco_mut()
+                    .pane
+                    .quick_start(norte_frontend::nav::Mode::Filter);
                 (self.aplicada(), vec![self.parche_filas()])
             }
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
@@ -1625,6 +1674,15 @@ impl Estado {
                 .then_some(RowKey(hueco.pane.cursor() as u64)),
             marks: hueco.pane.marks_len() as u64,
             state: hueco.estado.clone(),
+            quick: hueco.pane.quick().map(|q| crate::dto::QuickView {
+                query: clamp_display(q.query_display()),
+                mode: match q.mode() {
+                    norte_frontend::nav::Mode::Filter => "filter",
+                    norte_frontend::nav::Mode::Jump => "jump",
+                }
+                .to_owned(),
+                matches: q.visible().len() as u64,
+            }),
         }
     }
 }

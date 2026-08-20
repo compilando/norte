@@ -93,6 +93,21 @@ pub struct BrowserSlotView {
     pub marks: u64,
     /// En qué anda el hueco.
     pub state: SlotState,
+    /// El buscador incremental, si está abierto. Mientras lo esté, las
+    /// teclas de texto son SUYAS: es el contexto de entrada del listado.
+    pub quick: Option<QuickView>,
+}
+
+/// El buscador incremental de un listado.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuickView {
+    /// Lo tecleado, ya saneado para pintar.
+    pub query: String,
+    /// Filtra el listado (`filter`) o salta al primer match (`jump`).
+    pub mode: String,
+    /// Cuántas filas casan. Con cero, el renderer lo dice: un buscador que
+    /// no encuentra nada y no lo enseña parece roto.
+    pub matches: u64,
 }
 
 /// Lo que le pasa a un listado ahora mismo.

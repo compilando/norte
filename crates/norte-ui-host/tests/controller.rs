@@ -1186,3 +1186,37 @@ async fn cancelar_lo_que_no_existe_es_una_carrera() {
         }
     );
 }
+
+/// El buscador incremental se abre por su comando, se queda las teclas de
+/// TEXTO y filtra el listado. Es el contexto de entrada del listado: dejar
+/// que el resolver se quedara la «d» convertiría teclear en borrar.
+#[tokio::test]
+async fn el_buscador_se_queda_el_texto_y_filtra() {
+    let (host, _snap) = host_arbol(arbol()).await;
+    let mut sub = host.subscribe();
+
+    host.dispatch(tecla("/")).await.expect("host vivo");
+    host.dispatch(UiAction::Resync).await.expect("host vivo");
+    let abierto = siguiente_foto(&mut sub).await;
+    assert!(
+        listado(&abierto).quick.is_some(),
+        "el buscador está abierto"
+    );
+
+    // Teclear NO ejecuta comandos: filtra.
+    for c in ["n", "o"] {
+        host.dispatch(tecla(c)).await.expect("host vivo");
+    }
+    host.dispatch(UiAction::Resync).await.expect("host vivo");
+    let filtrado = siguiente_foto(&mut sub).await;
+    let quick = listado(&filtrado).quick.clone().expect("sigue abierto");
+    assert_eq!(quick.query, "no");
+    assert_eq!(quick.matches, 1, "solo `notas.txt` casa");
+
+    // Y Esc lo cierra sin tocar el listado.
+    host.dispatch(tecla("Escape")).await.expect("host vivo");
+    host.dispatch(UiAction::Resync).await.expect("host vivo");
+    let cerrado = siguiente_foto(&mut sub).await;
+    assert!(listado(&cerrado).quick.is_none());
+    assert_eq!(listado(&cerrado).rows.len(), 3, "el listado sigue entero");
+}

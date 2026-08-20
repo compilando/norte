@@ -208,6 +208,11 @@ fn snapshot_de_referencia() -> ViewSnapshot {
                 cursor: Some(RowKey(1)),
                 marks: 0,
                 state: SlotState::Ready,
+                quick: Some(norte_ui_host::dto::QuickView {
+                    query: "no".to_owned(),
+                    mode: "filter".to_owned(),
+                    matches: 1,
+                }),
             }),
             SlotView::Unsupported {
                 slot_id: 2,
