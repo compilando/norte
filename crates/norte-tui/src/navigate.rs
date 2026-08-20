@@ -101,6 +101,55 @@ pub enum Cd {
     Swapped,
 }
 
+/// El desenlace COMPLETO de un `cd`: el pane que aterrizó se reordena por el
+/// esquema de su localización, se le piden las decoraciones de plugin y se
+/// aplica el resultado ([`apply_cd`]: relleno paginado y sonda).
+///
+/// Estaba copiado en los NUEVE sitios del bucle de eventos que provocan un
+/// cd —el resolver, la palette, el menú, el ratón, el árbol, el sidebar, el
+/// selector de conexiones, el TOFU—. Lo que de verdad los distingue, y ahora
+/// se lee en el call site porque es lo único que queda ahí, es si además
+/// cosechan la búsqueda viva o lanzan el opener externo que el comando dejó
+/// pendiente.
+pub fn settle_cd(
+    app: &mut App,
+    backend: &Backend,
+    fill: &mut BySlot<Fill>,
+    decorate_fetch: &mut BySlot<DecorateFetch>,
+    last_probed: &mut Probed,
+    search_run: &mut Option<SearchRun>,
+    outcome: Cd,
+) {
+    if let Some(pane) = cd_landed_pane(&outcome) {
+        app.apply_scheme_sort(pane);
+        let dir = app.panes[pane].dir().clone();
+        let paths: Vec<VPath> = app.panes[pane]
+            .entries()
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+        decorate_fetch.set(
+            app.panes.slot_of(pane),
+            crate::probes::spawn_decorate_fetch(
+                backend,
+                app.panes.slot_of(pane),
+                dir,
+                paths,
+                plugin_cols,
+            ),
+        );
+    }
+    apply_cd(
+        &app.panes,
+        fill,
+        decorate_fetch,
+        last_probed,
+        search_run,
+        outcome,
+    );
+}
+
 /// Aplica el desenlace de un cd a los rellenos paginados en curso: uno nuevo
 /// ocupa el hueco DE SU PANE (el rx anterior de ESE pane, dropeado, mata su
 /// drenador → suelta el stream, regla 3); un REEMPLAZO del MISMO pane lo
