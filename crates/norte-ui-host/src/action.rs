@@ -42,6 +42,20 @@ pub enum UiAction {
         /// Fila.
         key: RowKey,
     },
+    /// Marca TODO el rango entre dos filas, extremos incluidos.
+    ///
+    /// Un barrido con el ratón (shift+click, arrastre) es UNA acción y no una
+    /// ristra de `ToggleMark`: qué entra en un rango —y qué no, como `..`—
+    /// es una regla de selección, y esas viven en `norte-frontend`, no en el
+    /// renderer (ADR 0066, decisión D14). El orden de los extremos da igual.
+    MarkRange {
+        /// Hueco.
+        slot_id: u32,
+        /// Un extremo.
+        from: RowKey,
+        /// El otro.
+        to: RowKey,
+    },
     /// Abre lo que haya bajo esa fila: entra en el directorio, o abre el
     /// fichero por el camino de siempre.
     Activate {

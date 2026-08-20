@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use norte_client::{ConnEvent, EntryStream};
-use norte_proto::{AttrCatalog, DeleteMode, Error, TaskId, TaskProgress, VPath, methods};
+use norte_proto::{AttrCatalog, DeleteMode, Entry, Error, TaskId, TaskProgress, VPath, methods};
 use tokio::sync::watch;
 
 /// Una Task en marcha, en la forma mínima que el host necesita: su id, su
@@ -70,6 +70,15 @@ pub trait HostBackend: Send + Sync + 'static {
 
     /// Crea UN directorio. Devuelve la Task ya encolada.
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>>;
+
+    /// Los datos de UNA entrada.
+    ///
+    /// Un listado puede venir PEREZOSO —el provider local devuelve `size` y
+    /// `mtime` a `None` y los rellena quien los necesite (#52)—, así que sin
+    /// esto las columnas de tamaño y fecha se quedan en blanco para siempre
+    /// sobre `file://`, que es la vista por defecto. El TUI ya sondea su
+    /// ventana visible; este es el mismo camino para el host.
+    fn stat(&self, path: VPath, attrs: Vec<String>) -> BoxFuture<'static, Result<Entry, Error>>;
 
     /// El catálogo de atributos de una localización.
     ///
@@ -137,6 +146,11 @@ impl HostBackend for norte_client::RemoteBackend {
             let (stream, _total) = backend.list_stream(&dir, attrs).await?;
             Ok(stream)
         })
+    }
+
+    fn stat(&self, path: VPath, attrs: Vec<String>) -> BoxFuture<'static, Result<Entry, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.stat(&path, attrs).await })
     }
 
     fn attr_catalog(&self, dir: VPath) -> BoxFuture<'static, Result<AttrCatalog, Error>> {

@@ -203,3 +203,30 @@ async fn la_sesion_sobrevive_al_cierre() {
         listado(&otra).path_display
     );
 }
+
+/// Las columnas configuradas llegan CON su valor.
+///
+/// El spike de Tauri las enseñó vacías contra un daemon de verdad, y el
+/// backend de tabla no lo veía: sus entradas se construyen a mano y siempre
+/// traen tamaño. Lo que cruza el wire es otra cosa.
+#[tokio::test]
+async fn las_celdas_traen_valor_contra_el_daemon() {
+    let d = daemon().await;
+    let (_h, snap) = host_contra(&d).await;
+    let b = listado(&snap);
+    let fichero = b
+        .rows
+        .iter()
+        .find(|r| r.display_name == "notas.txt")
+        .expect("el fichero está");
+    let size = fichero
+        .cells
+        .iter()
+        .find(|c| c.column == "size")
+        .expect("la columna size está configurada");
+    assert!(
+        size.text.is_some(),
+        "un fichero con tamaño trae su celda: {:?}",
+        fichero.cells
+    );
+}

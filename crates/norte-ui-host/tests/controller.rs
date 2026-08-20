@@ -775,8 +775,18 @@ async fn el_foco_cambia_y_el_destino_lo_sigue() {
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
         .expect("host vivo");
-    let despues = siguiente_foto(&mut sub).await;
-    assert_eq!(despues.focus, Some(2));
+    // Cambiar de foco NO reenvía la pantalla: viaja el reparto con los
+    // papeles nuevos, que es lo único que cambió.
+    let despues = siguiente_disposicion(&mut sub).await;
+    let rol = |id: u32| {
+        despues
+            .placements
+            .iter()
+            .find(|p| p.slot_id == id)
+            .and_then(|p| p.role)
+    };
+    assert_eq!(rol(2), Some(norte_ui_host::dto::SlotRole::Active));
+    assert_eq!(rol(1), Some(norte_ui_host::dto::SlotRole::Target));
 }
 
 /// Enfocar un hueco que no se ve es una carrera con un reparto anterior, no
@@ -981,7 +991,7 @@ async fn siguientes_tasks(
             Update::Message(m) => {
                 if let UiUpdate::Patch(p) = &m.payload {
                     for c in &p.changes {
-                        if let norte_ui_host::dto::ViewChange::Tasks(t) = c {
+                        if let norte_ui_host::dto::ViewChange::Tasks { tasks: t } = c {
                             return t.clone();
                         }
                     }
@@ -1011,7 +1021,7 @@ async fn siguientes_dialogos(
             Update::Message(m) => {
                 if let UiUpdate::Patch(p) = &m.payload {
                     for c in &p.changes {
-                        if let norte_ui_host::dto::ViewChange::Dialogs(d) = c {
+                        if let norte_ui_host::dto::ViewChange::Dialogs { dialogs: d } = c {
                             return d.clone();
                         }
                     }
@@ -1577,5 +1587,307 @@ async fn el_catalogo_da_sentido_a_un_attr() {
         celda.text.as_deref(),
         Some("-rw-r--r--"),
         "el catálogo convierte el número en un modo legible"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// La disposición proyectada, y un snapshot que de verdad reemplaza (fase 3).
+// ---------------------------------------------------------------------------
+
+/// Espera la siguiente actualización que traiga disposición.
+async fn siguiente_disposicion(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> norte_ui_host::dto::LayoutView {
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización con disposición, no un cuelgue")
+            .expect("el host sigue vivo");
+        match siguiente {
+            Update::Message(m) => {
+                if let UiUpdate::Patch(p) = &m.payload {
+                    for c in &p.changes {
+                        if let norte_ui_host::dto::ViewChange::Layout(l) = c {
+                            return l.clone();
+                        }
+                    }
+                }
+                if let UiUpdate::Snapshot(s) = &m.payload {
+                    return s.layout.clone();
+                }
+            }
+            Update::Lagged => panic!("sin retraso en este test"),
+        }
+    }
+    panic!("no llegó ninguna actualización con disposición");
+}
+
+/// El renderer no reparte la pantalla: la recibe repartida.
+///
+/// Sin esto, colocar dos paneles sería una regla de presentación escrita en
+/// TypeScript — exactamente lo que la decisión D14 prohíbe—, y encima una
+/// distinta de la del TUI.
+#[tokio::test]
+async fn el_snapshot_reparte_la_pantalla_por_el_renderer() {
+    let (_h, snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let l = &snap.layout;
+    assert_eq!(l.cells, (120, 40), "el reparto es del tamaño que se le dio");
+    let listados: Vec<&norte_ui_host::dto::SlotPlacement> = l
+        .placements
+        .iter()
+        .filter(|p| [1, 2].contains(&p.slot_id))
+        .collect();
+    assert_eq!(
+        listados.len(),
+        2,
+        "la disposición de siempre son dos listados"
+    );
+    let izq = listados[0];
+    let der = listados[1];
+    assert!(
+        izq.width > 0 && izq.height > 0,
+        "un hueco pintable tiene área"
+    );
+    assert!(
+        izq.x + izq.width <= der.x,
+        "y los dos listados no se solapan: {izq:?} vs {der:?}"
+    );
+}
+
+/// Activo y destino los resuelve el host, con la MISMA regla que el TUI: el
+/// destino es el otro listado visible. El renderer solo los pinta.
+#[tokio::test]
+async fn los_roles_los_resuelve_el_host_no_el_renderer() {
+    use norte_ui_host::dto::SlotRole;
+    let (h, snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let rol = |l: &norte_ui_host::dto::LayoutView, id: u32| {
+        l.placements
+            .iter()
+            .find(|p| p.slot_id == id)
+            .and_then(|p| p.role)
+    };
+    assert_eq!(rol(&snap.layout, 1), Some(SlotRole::Active));
+    assert_eq!(rol(&snap.layout, 2), Some(SlotRole::Target));
+
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    let despues = siguiente_disposicion(&mut sub).await;
+    assert_eq!(rol(&despues, 2), Some(SlotRole::Active), "el foco cambió");
+    assert_eq!(
+        rol(&despues, 1),
+        Some(SlotRole::Target),
+        "y el destino también"
+    );
+}
+
+/// Cambiar el tamaño de la ventana reparte otra vez, y el renderer se entera
+/// por el mismo canal ordenado que todo lo demás.
+#[tokio::test]
+async fn un_resize_reparte_otra_vez_y_lo_dice() {
+    let (h, snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let ancho_antes = snap
+        .layout
+        .placements
+        .iter()
+        .find(|p| p.slot_id == 1)
+        .expect("el listado izquierdo se pinta")
+        .width;
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::SetViewport {
+        width: 200,
+        height: 60,
+    })
+    .await
+    .expect("host vivo");
+    let despues = siguiente_disposicion(&mut sub).await;
+    assert_eq!(despues.cells, (200, 60));
+    let ancho_despues = despues
+        .placements
+        .iter()
+        .find(|p| p.slot_id == 1)
+        .expect("sigue pintándose")
+        .width;
+    assert!(
+        ancho_despues > ancho_antes,
+        "una ventana más ancha da listados más anchos: {ancho_antes} -> {ancho_despues}"
+    );
+}
+
+/// Un snapshot REEMPLAZA el estado del renderer, así que tiene que llevarlo
+/// entero. Si un resync se comiera el diálogo abierto, el renderer se quedaría
+/// pintando una pantalla sin la pregunta que está esperando respuesta — y la
+/// operación destructiva seguiría ahí, viva y sin confirmar.
+#[tokio::test]
+async fn un_resync_no_se_come_el_dialogo_abierto() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let abierto = siguientes_dialogos(&mut sub).await;
+    assert_eq!(abierto.len(), 1);
+
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(
+        foto.dialogs, abierto,
+        "el snapshot lleva el diálogo que hay abierto"
+    );
+}
+
+/// Lo mismo para el tablero: una copia en marcha no puede desaparecer porque
+/// el renderer haya pedido una foto nueva.
+#[tokio::test]
+async fn un_resync_no_se_come_las_tasks_vivas() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F7")).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let id = dialogos[0].id;
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: "nueva".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let vivas = siguientes_tasks(&mut sub).await;
+    assert!(!vivas.is_empty(), "hay una task en el tablero");
+
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(foto.tasks, vivas, "el snapshot lleva el tablero entero");
+}
+
+/// Un barrido con el ratón marca el rango entero de UNA vez, con la regla
+/// compartida: qué entra en el rango no lo decide quien pinta.
+#[tokio::test]
+async fn un_rango_se_marca_de_una_vez() {
+    let (h, snap) = host(vec!["a", "b", "c", "d", "e"]).await;
+    assert_eq!(listado(&snap).marks, 0);
+    let mut sub = h.subscribe();
+    let ack = h
+        .dispatch(UiAction::MarkRange {
+            slot_id: 1,
+            from: RowKey(3),
+            to: RowKey(1),
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }));
+    let _ = sub.recv().await.expect("el host sigue vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(
+        listado(&foto).marks,
+        3,
+        "los extremos entran, y el orden en que se dan da igual"
+    );
+}
+
+/// Un extremo de una generación anterior no marca A MEDIAS: marcar hasta un
+/// sitio que ya no es el que el usuario señaló es peor que no marcar nada.
+#[tokio::test]
+async fn un_rango_con_un_extremo_viejo_no_marca_nada() {
+    let (h, _snap) = host(vec!["a", "b"]).await;
+    let ack = h
+        .dispatch(UiAction::MarkRange {
+            slot_id: 1,
+            from: RowKey(0),
+            to: RowKey(99),
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Stale {
+            reason: StaleAction::Generation
+        }
+    );
+}
+
+/// Un listado PEREZOSO —el del provider local (#52): sin tamaño ni fecha—
+/// no deja las columnas en blanco: el host sonda lo que se ve.
+///
+/// El backend de tabla daba tamaño en el propio listado, así que esta
+/// diferencia solo se vio cuando el spike de Tauri pintó un directorio real
+/// y enseñó dos columnas vacías.
+#[tokio::test]
+async fn un_listado_perezoso_se_sondea_y_las_celdas_se_llenan() {
+    let mut f = Falso {
+        lazy: true,
+        ..Falso::default()
+    };
+    f.pon(
+        "mem:///casa",
+        vec![(b"a.txt".to_vec(), false), (b"b.txt".to_vec(), false)],
+    );
+    let backend = Arc::new(f);
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    assert!(
+        listado(&snap).rows[0]
+            .cells
+            .iter()
+            .all(|c| c.text.is_none()),
+        "el listado llega sin tamaño, como el de verdad: {:?}",
+        listado(&snap).rows[0].cells
+    );
+
+    let mut sub = h.subscribe();
+    // El sondeo sale solo, en cuanto el listado aterriza. Se le da tiempo al
+    // viaje de ida y vuelta y se pide una foto: lo que importa es que la
+    // pantalla acabe con las celdas llenas, no por qué mensaje llegó.
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let lleno = listado(&foto)
+            .rows
+            .iter()
+            .any(|r| r.cells.iter().any(|c| c.text.is_some()));
+        if lleno {
+            assert!(
+                !backend.sondeos.lock().expect("sondeos").is_empty(),
+                "y se llenaron sondeando, no inventando"
+            );
+            return;
+        }
+    }
+    panic!("las celdas siguen en blanco: el sondeo no llegó");
+}
+
+/// Lo ya sondeado no se vuelve a sondear: un `stat` por repintado sería un
+/// bucle contra el daemon, y uno que falla lo sería para siempre.
+#[tokio::test]
+async fn lo_sondeado_no_se_vuelve_a_pedir() {
+    let mut f = Falso {
+        lazy: true,
+        ..Falso::default()
+    };
+    f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    for _ in 0..5 {
+        h.dispatch(UiAction::SetVisibleRange {
+            slot_id: 1,
+            first: 0,
+            count: 40,
+        })
+        .await
+        .expect("host vivo");
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let sondeos = backend.sondeos.lock().expect("sondeos").clone();
+    assert_eq!(
+        sondeos.len(),
+        1,
+        "una entrada se sondea UNA vez, no una por repintado: {sondeos:?}"
     );
 }

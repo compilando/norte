@@ -1,0 +1,113 @@
+{
+  "connection": {
+    "change": "connection",
+    "reason_key": "conn-lost",
+    "state": "lost"
+  },
+  "cursor": {
+    "change": "cursor",
+    "cursor": 2,
+    "generation": 4,
+    "slot_id": 1
+  },
+  "dialogs": {
+    "change": "dialogs",
+    "dialogs": [
+      {
+        "body": [
+          "/home/oscar"
+        ],
+        "choices": [
+          {
+            "destructive": false,
+            "id": "confirm",
+            "label_key": "dialog-confirm"
+          },
+          {
+            "destructive": false,
+            "id": "cancel",
+            "label_key": "dialog-cancel"
+          }
+        ],
+        "id": 3,
+        "input": "",
+        "title_key": "modal-mkdir-title"
+      }
+    ]
+  },
+  "layout": {
+    "cells": [
+      120,
+      40
+    ],
+    "change": "layout",
+    "placements": [
+      {
+        "focus_index": 0,
+        "height": 38,
+        "role": "active",
+        "slot_id": 1,
+        "width": 60,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "focus_index": 1,
+        "height": 38,
+        "role": "target",
+        "slot_id": 2,
+        "width": 60,
+        "x": 60,
+        "y": 0
+      }
+    ]
+  },
+  "rows": {
+    "change": "rows",
+    "first_visible": 40,
+    "generation": 5,
+    "rows": [
+      {
+        "cells": [
+          {
+            "column": "size",
+            "text": "1.2 KiB"
+          }
+        ],
+        "display_name": "otro.txt",
+        "hostile": false,
+        "key": 41,
+        "kind": "file",
+        "marked": false,
+        "selected": false
+      }
+    ],
+    "slot_id": 1
+  },
+  "slot_state": {
+    "change": "slot_state",
+    "slot_id": 1,
+    "state": {
+      "state": "loading"
+    }
+  },
+  "status": {
+    "banners": [],
+    "change": "status",
+    "message": "2 entradas",
+    "pending": null
+  },
+  "tasks": {
+    "change": "tasks",
+    "tasks": [
+      {
+        "detail": "notas.txt",
+        "foreign": false,
+        "kind": "copy",
+        "percent": 40,
+        "state": "running",
+        "task_id": 7
+      }
+    ]
+  }
+}

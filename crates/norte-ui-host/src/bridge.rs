@@ -12,7 +12,12 @@ use serde::{Deserialize, Serialize};
 /// No es la del protocolo del daemon: son dos fronteras distintas y se mueven
 /// por motivos distintos. Un renderer que no reconoce esta versión NO
 /// interpreta el mensaje: enseña una pantalla de incompatibilidad (ADR 0066).
-pub const BRIDGE_VERSION: u32 = 1;
+///
+/// - **2**: el snapshot lleva el reparto de la pantalla
+///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
+///   incluidos); un cambio de foco viaja como parche y no como foto.
+/// - **1**: el contrato inicial de la fase 2.
+pub const BRIDGE_VERSION: u32 = 2;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

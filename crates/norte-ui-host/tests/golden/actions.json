@@ -35,6 +35,12 @@
     "meta": false,
     "shift": false
   },
+  "mark_range": {
+    "action": "mark_range",
+    "from": 2,
+    "slot_id": 1,
+    "to": 5
+  },
   "move_cursor": {
     "action": "move_cursor",
     "delta": -1,

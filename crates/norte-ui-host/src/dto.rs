@@ -22,6 +22,9 @@ use crate::bridge::{ModalId, RowKey};
 pub struct ViewSnapshot {
     /// Estado de la conexión con el daemon.
     pub connection: ConnectionView,
+    /// Dónde va cada hueco y con qué papel. El renderer NO reparte la
+    /// pantalla: la recibe repartida (ADR 0066, decisión D14).
+    pub layout: LayoutView,
     /// Los huecos de la disposición, por id.
     pub slots: Vec<SlotView>,
     /// Hueco con el foco de teclado.
@@ -34,6 +37,52 @@ pub struct ViewSnapshot {
     pub tasks: Vec<TaskView>,
     /// Idioma negociado, para que el renderer pida el catálogo correcto.
     pub locale: String,
+}
+
+/// El reparto de la pantalla: quién se pinta, dónde, y con qué papel.
+///
+/// Se mide en CELDAS de layout y no en píxeles, que es como están declarados
+/// los mínimos de cada panel y como los comparte el TUI: «esto no cabe»
+/// significa lo mismo en las dos superficies. El renderer multiplica por el
+/// tamaño de su celda —eso sí es suyo— y pinta.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayoutView {
+    /// El tamaño que se repartió, en celdas.
+    pub cells: (u16, u16),
+    /// Los huecos que se pintan, en orden de pintado. Un hueco que no está
+    /// aquí es que no cabe o es una pestaña inactiva: no se pinta, y eso lo
+    /// decidió el mismo repartidor que usa el TUI.
+    pub placements: Vec<SlotPlacement>,
+}
+
+/// Un hueco colocado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SlotPlacement {
+    /// Id del hueco.
+    pub slot_id: u32,
+    /// Columna de la esquina superior izquierda, en celdas.
+    pub x: u16,
+    /// Fila de la esquina superior izquierda, en celdas.
+    pub y: u16,
+    /// Ancho en celdas.
+    pub width: u16,
+    /// Alto en celdas.
+    pub height: u16,
+    /// Su papel AHORA, si tiene alguno.
+    pub role: Option<SlotRole>,
+    /// Orden de tabulación. El renderer no lo calcula: mover el foco con el
+    /// tabulador es la misma regla en las dos superficies.
+    pub focus_index: u32,
+}
+
+/// El papel de un hueco.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlotRole {
+    /// Tiene el foco de teclado.
+    Active,
+    /// Es el DESTINO de una operación que necesita un segundo sitio.
+    Target,
 }
 
 /// Estado de la conexión, tal como se pinta.
@@ -299,11 +348,27 @@ pub enum ViewChange {
     /// La barra de estado cambió.
     Status(StatusView),
     /// El tablero de tasks cambió.
-    Tasks(Vec<TaskView>),
-    /// Los diálogos abiertos cambiaron.
-    Dialogs(Vec<DialogView>),
+    ///
+    /// Variante de STRUCT y no de tupla, y no por gusto: un enum etiquetado
+    /// por dentro (`tag = "change"`) no puede serializar una variante que
+    /// envuelva una secuencia — serde no tiene dónde poner la etiqueta. Como
+    /// tupla, esto compilaba y fallaba en tiempo de ejecución en el primer
+    /// renderer que lo pidiera por JSON.
+    Tasks {
+        /// El tablero entero.
+        tasks: Vec<TaskView>,
+    },
+    /// Los diálogos abiertos cambiaron. Struct por el mismo motivo que
+    /// [`ViewChange::Tasks`].
+    Dialogs {
+        /// Los diálogos abiertos, en orden de apertura.
+        dialogs: Vec<DialogView>,
+    },
     /// La conexión cambió de estado.
     Connection(ConnectionView),
+    /// El reparto cambió: la ventana se redimensionó, o el foco (y con él
+    /// los papeles) se movió de hueco.
+    Layout(LayoutView),
 }
 
 /// Algo que decir que no es un cambio de pantalla.
