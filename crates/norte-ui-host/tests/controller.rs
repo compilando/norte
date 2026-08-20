@@ -2786,3 +2786,66 @@ async fn el_id_de_una_columna_hostil_no_cruza_crudo() {
         }
     }
 }
+
+/// Una lectura del visor que llega tarde no abre nada.
+///
+/// F3 sobre un fichero en un montaje lento, `esc`, y segundos después el
+/// visor aparecía solo — y como las teclas se enrutan por «hay visor», la
+/// siguiente tecla la interpretaba otro mapa sin que nadie lo pidiera.
+#[tokio::test]
+async fn un_visor_que_llega_tarde_no_se_abre_solo() {
+    let mut f = Falso {
+        // La lectura tarda; da tiempo a cerrar.
+        retraso_ms: 150,
+        ..Falso::default()
+    };
+    f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    f.contenido
+        .insert("mem:///casa/notas.txt".to_owned(), b"hola\n".to_vec());
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    // Antes de que llegue el contenido, se cierra.
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(
+        foto.viewer.is_none(),
+        "el visor no se abre por su cuenta después de cerrarlo"
+    );
+}
+
+/// Una disposición sin ningún listado se rechaza al ARRANCAR.
+///
+/// Es #242 en esta superficie: no panicaba al arrancar sino en la primera
+/// tecla, dentro de la task del actor —sin log, sin caída visible— y la
+/// ventana se quedaba muerta contestando `Down` para siempre.
+#[tokio::test]
+async fn una_disposicion_sin_listado_no_arranca() {
+    let arbol_sin_listado = norte_frontend::layout::Node::slot(
+        norte_frontend::layout::SlotId(1),
+        norte_frontend::layout::KindId::new("status"),
+    );
+    let salida = UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: arbol_sin_listado,
+        viewport: (120, 40),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await;
+    assert!(
+        matches!(
+            salida,
+            Err(norte_ui_host::controller::UiError::NoBrowserSlot)
+        ),
+        "una pantalla sin listado no es una pantalla"
+    );
+}

@@ -65,6 +65,14 @@ pub enum StartupError {
         #[source]
         source: norte_proto::Error,
     },
+    /// Un valor de la línea de órdenes que no existe.
+    #[error("{que}: «{valor}» no existe")]
+    Desconocido {
+        /// Qué opción.
+        que: &'static str,
+        /// Lo que se pidió.
+        valor: String,
+    },
     /// El host no arrancó.
     #[error("el host no arrancó: {0}")]
     Host(#[from] norte_ui_host::controller::UiError),
@@ -77,10 +85,15 @@ pub struct Cli {
     pub dir: Option<PathBuf>,
     /// Socket del daemon.
     pub socket: Option<PathBuf>,
-    /// Disposición pedida para ESTE arranque.
-    pub layout: Option<String>,
+    /// Disposición pedida para ESTE arranque, con los BYTES intactos.
+    ///
+    /// Un nombre de disposición acaba siendo un nombre de fichero
+    /// (`layouts/<nombre>.toml`), y dos bytes inválidos distintos colapsan al
+    /// MISMO `\u{FFFD}` con una conversión lossy: abrirían el mismo fichero
+    /// (#246, ADR 0061). El TUI ya lo lee así.
+    pub layout: Option<std::ffi::OsString>,
     /// Preset de teclado pedido para ESTE arranque.
-    pub preset: Option<String>,
+    pub preset: Option<std::ffi::OsString>,
     /// Se pidió la ayuda.
     pub help: bool,
     /// Se pidió la versión.
@@ -104,12 +117,8 @@ where
     Ok(Cli {
         dir: crudo.dir.clone(),
         socket: crudo.path("--socket"),
-        // El spike solo acepta disposiciones de FÁBRICA, así que el nombre es
-        // texto por contrato. En cuanto se carguen ficheros de `layouts/`
-        // tendrá que ser `os_text` (bytes): dos nombres inválidos distintos
-        // no pueden abrir el mismo fichero (#246).
-        layout: crudo.text("--layout"),
-        preset: crudo.text("--preset"),
+        layout: crudo.os_text("--layout").map(std::ffi::OsString::from),
+        preset: crudo.os_text("--preset").map(std::ffi::OsString::from),
         help: crudo.help,
         version: crudo.version,
     })
@@ -150,7 +159,15 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     let _ = norte_i18n::force(lang);
 
     let theme = tema(cfg.common.ui_theme.as_deref());
-    let inicio = start_dir(cli.dir.clone())?;
+    // Fuera del runtime (regla 2): `metadata` sobre un NFS caído bloquea el
+    // hilo de trabajo hasta que expire el montaje, y encima antes de que
+    // exista ventana donde decirlo. La lectura de la configuración de arriba
+    // ya iba por `spawn_blocking`; esta se quedó a ocho líneas.
+    let dir_pedido = cli.dir.clone();
+    let inicio = match tokio::task::spawn_blocking(move || start_dir(dir_pedido)).await {
+        Ok(res) => res?,
+        Err(e) => std::panic::resume_unwind(e.into_panic()),
+    };
 
     let socket = cli
         .socket
@@ -175,37 +192,56 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         source,
     })?;
 
-    let preset = cli
-        .preset
-        .clone()
-        .unwrap_or_else(|| cfg.common.preset.clone());
+    let preset = if let Some(p) = &cli.preset {
+        nombre_de(p, "--preset")?
+    } else {
+        cfg.common.preset.clone()
+    };
     // SOLO LECTURA hasta la fase 5. El preset ata F7/F8 a crear y borrar, y
     // que la tecla exista no es permiso: el gate de salida de la fase 4 dice
     // que ninguna mutación está viva hasta que la fase 5 traiga su camino
     // seguro. Aquí eso significa que esos comandos no entran en el keymap
     // efectivo —la tecla se responde «aquí no» en vez de quedarse muda— y que
     // el host los rechaza aunque llegaran por otra vía.
-    let keymap = norte_ui_host::keys::keymap_de_preset_con(&preset, EFECTOS)
-        .or_else(|_| norte_ui_host::keys::keymap_de_preset_con("orthodox", EFECTOS))
-        .map_err(|e| StartupError::Config(e.to_string()))?;
+    // Un preset que no existe se DICE. El mismo fichero rechaza a gritos un
+    // flag mal escrito; tragarse un VALOR mal escrito y arrancar con otra
+    // cosa es la incoherencia contraria.
+    let keymap = norte_ui_host::keys::keymap_de_preset_con(&preset, EFECTOS).map_err(|_| {
+        StartupError::Desconocido {
+            que: "preset",
+            valor: preset.clone(),
+        }
+    })?;
     // El visor es otra PANTALLA, con el mismo preset: `esc` cierra y `e`
     // recarga con otro encoding porque eso es lo que dice el preset, no
     // porque el renderer lo decida.
-    let keymap_viewer = norte_ui_host::keys::keymap_visor_de_preset(&preset)
-        .or_else(|_| norte_ui_host::keys::keymap_visor_de_preset("orthodox"))
-        .map_err(|e| StartupError::Config(e.to_string()))?;
+    let keymap_viewer = norte_ui_host::keys::keymap_visor_de_preset(&preset).map_err(|_| {
+        StartupError::Desconocido {
+            que: "preset",
+            valor: preset.clone(),
+        }
+    })?;
 
-    let nombre_layout = cli
-        .layout
-        .clone()
-        .or_else(|| cfg.common.ui_layout.clone())
-        .unwrap_or_else(|| "orthodox".to_owned());
-    // Una disposición que no carga NO deja la ventana sin pantalla: se cae a
-    // la de siempre, que es lo que el usuario tenía antes de escribir la
-    // clave (la misma regla que el TUI).
-    let layout = norte_frontend::layout::presets::tree(&nombre_layout)
-        .or_else(|_| norte_frontend::layout::presets::tree("orthodox"))
-        .map_err(|e| StartupError::Config(e.to_string()))?;
+    // De la línea de órdenes se exige que exista; de la CONFIGURACIÓN se cae
+    // a la de siempre, que es lo que el usuario tenía antes de escribir la
+    // clave (la misma regla que el TUI). La diferencia es quién lo acaba de
+    // teclear.
+    let layout = if let Some(l) = &cli.layout {
+        let nombre = nombre_de(l, "--layout")?;
+        norte_frontend::layout::presets::tree(&nombre).map_err(|_| StartupError::Desconocido {
+            que: "--layout",
+            valor: nombre,
+        })?
+    } else {
+        let nombre = cfg
+            .common
+            .ui_layout
+            .clone()
+            .unwrap_or_else(|| "orthodox".to_owned());
+        norte_frontend::layout::presets::tree(&nombre)
+            .or_else(|_| norte_frontend::layout::presets::tree("orthodox"))
+            .map_err(|e| StartupError::Config(e.to_string()))?
+    };
 
     let columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
     let (host, snapshot) = UiHost::start(UiHostOptions {
@@ -235,6 +271,21 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         lang,
         theme,
     })
+}
+
+/// Un valor de la línea de órdenes que TIENE que ser texto para poder
+/// compararlo con una lista de nombres conocidos.
+///
+/// Los bytes se conservan hasta aquí (`OsString`) y la conversión falla en
+/// vez de colapsar: dos nombres inválidos distintos no pueden acabar siendo
+/// el mismo (#246).
+fn nombre_de(v: &std::ffi::OsStr, que: &'static str) -> Result<String, StartupError> {
+    v.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| StartupError::Desconocido {
+            que,
+            valor: v.to_string_lossy().into_owned(),
+        })
 }
 
 fn tema(nombre: Option<&str>) -> Theme {
@@ -281,7 +332,7 @@ mod tests {
             cli.socket.as_deref(),
             Some(std::path::Path::new("/tmp/x.sock"))
         );
-        assert_eq!(cli.layout.as_deref(), Some("simple"));
+        assert_eq!(cli.layout.as_deref(), Some(std::ffi::OsStr::new("simple")));
         assert!(!cli.help);
     }
 
@@ -294,6 +345,20 @@ mod tests {
             matches!(&e, StartupError::UnknownFlag(f) if f == "--socketo"),
             "{e}"
         );
+    }
+
+    /// Dos nombres de disposición con bytes DISTINTOS no pueden acabar
+    /// siendo el mismo: con una conversión lossy los dos colapsaban a
+    /// `caf\u{FFFD}` y abrían el mismo fichero (#246).
+    #[cfg(unix)]
+    #[test]
+    fn dos_nombres_invalidos_distintos_siguen_siendo_distintos() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let uno = std::ffi::OsString::from_vec(b"caf\xff".to_vec());
+        let otro = std::ffi::OsString::from_vec(b"caf\xfe".to_vec());
+        let a = parse([std::ffi::OsString::from("--layout"), uno]).expect("parsea");
+        let b = parse([std::ffi::OsString::from("--layout"), otro]).expect("parsea");
+        assert_ne!(a.layout, b.layout, "los bytes se conservan");
     }
 
     #[test]

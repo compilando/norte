@@ -204,6 +204,44 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Closing the window could hang it.** The shutdown ran on the event-loop
+  thread and waited on a daemon round-trip with no deadline, so a stalled
+  socket meant a window that stopped repainting and never closed — and killing
+  the process is the one path that guarantees losing the session. Two seconds,
+  then it closes and says the session may not have been written.
+
+- **A layout with no listing killed the window on the first keystroke.** Not
+  at start-up: the panic happened inside the actor's task, with no log and no
+  visible crash, and every later action answered "the host is gone". It is
+  refused at construction now, with a typed error (#242 on a new surface).
+
+- **A slow viewer read no longer opens a viewer nobody asked for.** F3 on a
+  file over a slow mount, then Esc, and seconds later the viewer appeared —
+  and since keys route on "is the viewer open", the next keystroke was
+  interpreted by a different keymap. The read carries a token, any listing key
+  cancels it, and it has a deadline.
+
+- **The start directory is no longer stat'ed on the runtime thread**, where a
+  dead NFS mount blocked a worker for the mount's full timeout before the
+  window existed (hard rule 2).
+
+- **`--layout` and `--preset` keep their bytes**, so two different invalid
+  names can no longer collapse to the same one (#246), and a value that names
+  nothing is refused instead of silently falling back — the same file already
+  refused a misspelled *flag* loudly.
+
+- **Actions reach the host in the order they were made.** The renderer fired
+  each `invoke` independently, so the `focus_slot` and `select_row` of one
+  click could arrive inverted and the click would select nothing, now and
+  then. They queue in a single chain.
+
+- **An incompatible renderer stops sending.** It painted an incompatibility
+  screen and kept dispatching keystrokes; and the outcome of the very first
+  snapshot — the one message a mismatched renderer is guaranteed to see — was
+  discarded, so the screen never appeared at all. A patch kind the renderer
+  does not know now forces a resync instead of being dropped while the
+  sequence advances.
+
 - **The name you type is the name that gets created.** The `mkdir` field's
   text travelled through the *display* truncator, which cuts at 4 KiB and
   appends `…` — and `Segment::new` accepts an ellipsis, so a directory could be

@@ -132,3 +132,28 @@ describe("Session", () => {
     }
   });
 });
+
+describe("un cambio que no se conoce", () => {
+  it("NO avanza la secuencia: pide una foto", () => {
+    const s = new Session();
+    s.receive({
+      bridge_version: BRIDGE_VERSION,
+      instance_id: "host-1",
+      sequence: 0,
+      payload: golden("updates.json")["snapshot"] as UiUpdate,
+    });
+    const out = s.receive({
+      bridge_version: BRIDGE_VERSION,
+      instance_id: "host-1",
+      sequence: 1,
+      payload: {
+        update: "patch",
+        base_sequence: 0,
+        // Un `ViewChange` de un host más nuevo.
+        changes: [{ change: "algo_que_no_existe" }],
+      } as unknown as UiUpdate,
+    });
+    expect(out.kind).toBe("gap");
+    expect(s.sequence()).toBe(0);
+  });
+});

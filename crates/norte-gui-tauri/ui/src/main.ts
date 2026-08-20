@@ -32,13 +32,31 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   // Lo que se está esperando pintar, y desde cuándo. La medida es del gesto
   // al frame que lo enseña: cualquier cosa más corta mide otra cosa.
   let pending: { at: number; what: "key" | "scroll" } | null = null;
+  // El host promete que las acciones se aplican EN ORDEN, y esa promesa vale
+  // para su buzón — no para el camino que lo alimenta. Dos `invoke` sueltos
+  // son dos tareas que compiten por entrar: `focus_slot` y `select_row` de un
+  // mismo click podían invertirse y el click no seleccionaba nada, de vez en
+  // cuando. Una sola cadena de promesas: como mucho un `dispatch` en vuelo, y
+  // la cola se drena en orden.
+  let cola: Promise<void> = Promise.resolve();
+  let muerto = false;
   const send = (action: UiAction): void => {
-    void port.dispatch(action).then((ack) => {
-      if (ack.status === "unavailable") {
-        // Un comando atenuado no es un error: el host ya dijo por qué.
-        console.info("no disponible:", screen.t(ack.reason_key));
-      }
-    });
+    if (muerto) {
+      // Contrato incompatible o fallo fatal: no se manda NADA más. Pintar un
+      // cartel y seguir despachando teclas es lo peor de los dos mundos.
+      return;
+    }
+    cola = cola
+      .then(() => port.dispatch(action))
+      .then((ack) => {
+        if (ack.status === "unavailable") {
+          // Un comando atenuado no es un error: el host ya dijo por qué.
+          console.info("no disponible:", screen.t(ack.reason_key));
+        }
+      })
+      .catch((e: unknown) => {
+        console.error("el host no aceptó la acción:", e);
+      });
   };
   const screen = new Screen(screenEl, viewerEl, dialogsEl, catalog, send);
 
@@ -86,6 +104,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
         return;
       case "notice":
         if (out.notice.notice === "fatal") {
+          muerto = true;
           showFatal(fatalEl, screen.t(out.notice.key));
         }
         repaint();
@@ -99,7 +118,18 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   // El snapshot inicial viene en el MISMO sobre que el resto: una sola forma
   // en el cable es una sola forma que mantener.
   const first = await port.initialSnapshot();
-  session.receive(first);
+  // El desenlace de la PRIMERA foto no se tira: es el único mensaje que un
+  // renderer desfasado ve seguro, y descartarlo dejaba una ventana en blanco
+  // en vez de la pantalla de incompatibilidad.
+  const inicial = session.receive(first);
+  if (inicial.kind === "incompatible") {
+    muerto = true;
+    showFatal(
+      fatalEl,
+      `bridge ${String(inicial.version)} ≠ ${String(catalog.bridge_version)}`,
+    );
+    return metrics;
+  }
   repaint();
   sendViewport(send, screen, doc);
 
@@ -255,8 +285,20 @@ function showFatal(el: HTMLElement, text: string): void {
 }
 
 if (typeof document !== "undefined" && document.getElementById("screen") !== null) {
-  void boot(tauriPort, document).then((m) => {
-    // El arnés de medida de la tarea 3.6 lee esto; no hay nada sensible.
-    (window as unknown as { __norteMetrics: Metrics }).__norteMetrics = m;
-  });
+  void boot(tauriPort, document)
+    .then((m) => {
+      // El arnés de medida de la tarea 3.6 lee esto; no hay nada sensible.
+      (window as unknown as { __norteMetrics: Metrics }).__norteMetrics = m;
+    })
+    .catch((e: unknown) => {
+      // Sin daemon, `catalog()` rechaza y `boot` lanza. El proceso monta la
+      // ventana a propósito para poder DECIR qué pasó (un binario que muere
+      // en el terminal no le cuenta nada a quien lo abrió desde un lanzador),
+      // y sin este `catch` el usuario veía una ventana vacía.
+      const fatal = document.getElementById("fatal");
+      if (fatal !== null) {
+        fatal.textContent = e instanceof Error ? e.message : String(e);
+        fatal.dataset["shown"] = "true";
+      }
+    });
 }

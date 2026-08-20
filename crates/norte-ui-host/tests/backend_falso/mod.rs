@@ -153,7 +153,11 @@ impl HostBackend for Falso {
         range: Option<norte_proto::ByteRange>,
     ) -> BoxFuture<'static, Result<Vec<u8>, Error>> {
         let bytes = self.contenido.get(&path.to_wire()).cloned();
+        let retraso = self.retraso_ms;
         Box::pin(async move {
+            if retraso > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
+            }
             let mut b = bytes.ok_or(Error::NotFound)?;
             if let Some(r) = range {
                 let off = usize::try_from(r.offset).unwrap_or(usize::MAX).min(b.len());

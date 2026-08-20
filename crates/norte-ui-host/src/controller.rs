@@ -49,6 +49,9 @@ const FIRST_PAGE: usize = 100;
 /// por entrada ahoga el buzón del actor— ni todas de golpe.
 const FILL_BATCH: usize = 500;
 
+/// Lo que se espera a la lectura del visor.
+const PLAZO_VISOR: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// Tope de un nombre tecleado, en bytes. Ni `NAME_MAX` (que es del sistema
 /// de ficheros y no lo sabemos aquí) ni el de pantalla: un tope generoso que
 /// impide que un renderer mande un megabyte, y que RECHAZA en vez de
@@ -181,7 +184,7 @@ enum Mensaje {
     /// Más entradas del listado que se está drenando por detrás.
     MasEntradas(Box<(RequestToken, u32, Vec<Entry>)>),
     /// El contenido que el visor pidió.
-    Contenido(Box<(VPath, Result<Vec<u8>, Error>)>),
+    Contenido(Box<(RequestToken, VPath, Result<Vec<u8>, Error>)>),
     /// Lo que un sondeo averiguó de unas cuantas entradas (tamaño y fecha de
     /// un listado perezoso).
     ///
@@ -216,8 +219,8 @@ impl UiHost {
     /// tiene.
     ///
     /// # Errors
-    /// Hoy ninguno; la firma lo reserva para cuando arrancar hable con el
-    /// daemon (sesión, capacidades) en la tarea 2.5.
+    /// [`UiError::NoBrowserSlot`] si la disposición no declara ningún
+    /// `browser`: sin listado no hay pantalla que pintar.
     pub async fn start(options: UiHostOptions) -> Result<(Self, ViewSnapshot), UiError> {
         let instance = InstanceId::new(nueva_instancia());
         let (updates, _) = broadcast::channel(UPDATE_BUFFER);
@@ -227,6 +230,9 @@ impl UiHost {
         let tx2 = tx.clone();
 
         let (mut estado, backend) = Estado::nuevo(instance.clone(), options);
+        if estado.huecos.is_empty() {
+            return Err(UiError::NoBrowserSlot);
+        }
         // La sesión primero: dice DÓNDE estaba cada hueco, y listar antes
         // sería traer un directorio para tirarlo.
         estado.leer_sesion(backend.as_ref()).await;
@@ -349,6 +355,15 @@ pub enum UiError {
     /// El host se apagó (o se cayó): su estado ya no existe.
     #[error("el host no está")]
     Down,
+    /// La disposición no tiene ningún listado.
+    ///
+    /// Una pantalla sin listado no es una pantalla: es un cuelgue con
+    /// bordes. Se rechaza AQUÍ y no en la primera tecla, donde el pánico
+    /// caería dentro de la task del actor —sin log y sin caída visible— y
+    /// dejaría la ventana muerta contestando `Down` para siempre (es la
+    /// forma de #242 en esta superficie).
+    #[error("la disposición no tiene ningún listado")]
+    NoBrowserSlot,
 }
 
 /// El bucle del ÚNICO escritor.
@@ -395,8 +410,10 @@ async fn actor(
                 let _ = updates.send(estado.sobre(UiUpdate::Snapshot(Box::new(snap))));
             }
             Mensaje::Contenido(datos) => {
-                let (path, leido) = *datos;
-                let _ = updates.send(estado.abrir_visor(path, leido));
+                let (token, path, leido) = *datos;
+                if let Some(u) = estado.abrir_visor(token, path, leido) {
+                    let _ = updates.send(u);
+                }
             }
             Mensaje::Hidratado(datos) => {
                 let (dir, slot, sondas) = *datos;
@@ -635,6 +652,13 @@ struct Estado {
     resolver_visor: Resolver,
     /// Si este frontend puede escribir.
     efectos: crate::commands::Efectos,
+    /// El testigo de la lectura del visor en vuelo, si la hay.
+    ///
+    /// Sin él, una lectura lenta abría el visor DESPUÉS de que el usuario lo
+    /// cerrara o se fuera a otro sitio — y como las teclas se enrutan por
+    /// «hay visor», la siguiente tecla la interpretaba otro mapa sin que
+    /// nadie hubiera pedido nada.
+    visor_en_vuelo: Option<RequestToken>,
     /// El visor abierto, si lo hay. El modelo es el COMPARTIDO
     /// (`norte_frontend::viewer::Viewer`): decodificación, hexadecimal y
     /// desplazamiento son suyos.
@@ -769,6 +793,7 @@ impl Estado {
             resolver: Resolver::new(keymap),
             resolver_visor: Resolver::new(keymap_visor),
             efectos,
+            visor_en_vuelo: None,
             visor: None,
             arbol,
             kinds,
@@ -1107,6 +1132,12 @@ impl Estado {
         if self.visor.is_some() {
             return self.tecla_en_visor(k);
         }
+        // Cualquier tecla del LISTADO cancela una lectura de visor en vuelo.
+        // El usuario pulsó F3, se cansó y siguió a lo suyo: abrirle el visor
+        // medio segundo después es abrir una ventana que ya nadie pidió — y
+        // cambiarle el teclado de mapa sin gesto suyo. (Un segundo F3 pide su
+        // propia lectura y se queda con el testigo nuevo.)
+        self.visor_en_vuelo = None;
         // Con el buscador abierto, las teclas de TEXTO son suyas. Es el
         // contexto de entrada del listado, y dejar que el resolver se las
         // quede convertiría teclear «d» en «borrar».
@@ -1237,7 +1268,10 @@ impl Estado {
         };
         let pasos = |n: i64| usize::try_from(n.abs()).unwrap_or(usize::MAX);
         match efecto {
-            crate::commands::EfectoVisor::Cerrar => self.visor = None,
+            crate::commands::EfectoVisor::Cerrar => {
+                self.visor = None;
+                self.visor_en_vuelo = None;
+            }
             crate::commands::EfectoVisor::Linea(n) if n < 0 => v.scroll_up(pasos(n)),
             crate::commands::EfectoVisor::Linea(n) => v.scroll_down(pasos(n)),
             crate::commands::EfectoVisor::Pagina(n) if n < 0 => {
@@ -1299,23 +1333,33 @@ impl Estado {
                 Vec::new(),
             );
         }
+        self.token += 1;
+        let token = RequestToken(self.token);
+        self.visor_en_vuelo = Some(token);
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         let path = entrada.path.clone();
         tokio::spawn(async move {
             // Un byte de más que el presupuesto: es lo que delata que el
             // fichero seguía. El resto NO se lee.
-            let leido = backend
-                .read(
-                    path.clone(),
-                    Some(norte_proto::ByteRange {
-                        offset: 0,
-                        len: Some(VISOR_CAP + 1),
-                    }),
-                )
-                .await;
+            let lectura = backend.read(
+                path.clone(),
+                Some(norte_proto::ByteRange {
+                    offset: 0,
+                    len: Some(VISOR_CAP + 1),
+                }),
+            );
+            // Con plazo: un montaje colgado no puede dejar la tecla F3 sin
+            // desenlace para siempre.
+            let leido = match tokio::time::timeout(PLAZO_VISOR, lectura).await {
+                Ok(r) => r,
+                // El wire no tiene «se acabó el tiempo»; lo que hubo es una
+                // lectura que no llegó, y para el usuario es lo mismo que un
+                // provider que no responde.
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
             let _ = buzon
-                .send(Mensaje::Contenido(Box::new((path, leido))))
+                .send(Mensaje::Contenido(Box::new((token, path, leido))))
                 .await;
         });
         (self.aplicada(), Vec::new())
@@ -1324,9 +1368,17 @@ impl Estado {
     /// Abre el visor con lo que se leyó.
     fn abrir_visor(
         &mut self,
+        token: RequestToken,
         path: VPath,
         leido: Result<Vec<u8>, Error>,
-    ) -> BridgeEnvelope<UiUpdate> {
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        if self.visor_en_vuelo != Some(token) {
+            // El usuario cerró el visor, pidió otro fichero o se fue a otro
+            // sitio mientras esto volaba. Abrirlo ahora sería abrir una
+            // ventana que nadie ha pedido — y cambiarle el teclado de mapa.
+            return None;
+        }
+        self.visor_en_vuelo = None;
         match leido {
             Ok(mut bytes) => {
                 let cap = usize::try_from(VISOR_CAP).unwrap_or(usize::MAX);
@@ -1346,11 +1398,11 @@ impl Estado {
                 let (pintable, _) = norte_frontend::display_name(format!("{e}").as_bytes());
                 self.status.message = Some(clamp_display(pintable));
                 let cambio = ViewChange::Status(self.status.clone());
-                return self.parche(vec![cambio]);
+                return Some(self.parche(vec![cambio]));
             }
         }
         let snap = self.snapshot();
-        self.sobre(UiUpdate::Snapshot(Box::new(snap)))
+        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
     }
 
     fn tecla_en_quick(

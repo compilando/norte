@@ -176,13 +176,24 @@ fn main() -> ExitCode {
                     // Cerrar vuelca la sesión: es la única oportunidad de
                     // guardar dónde estaba cada panel, y hacerlo en un hilo
                     // suelto sería cerrarla a medias.
-                    let informe = tauri::async_runtime::block_on(bridge.host().shutdown());
+                    // CON PLAZO: esto corre en el hilo del bucle de eventos y
+                    // `apagar` espera una respuesta del daemon. Con el socket
+                    // atascado, la ventana dejaba de repintarse y no se
+                    // cerraba nunca — y matar el proceso es justo el camino
+                    // que garantiza perder la sesión.
+                    let informe = tauri::async_runtime::block_on(async {
+                        tokio::time::timeout(PLAZO_APAGADO, bridge.host().shutdown()).await
+                    });
                     match informe {
-                        Ok(r) if r.incomplete => {
+                        Ok(Ok(r)) if r.incomplete => {
                             tracing::warn!("quedó trabajo sin terminar al cerrar");
                         }
-                        Ok(_) => {}
-                        Err(e) => tracing::warn!(error = %e, "el apagado falló"),
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => tracing::warn!(error = %e, "el apagado falló"),
+                        Err(_) => tracing::warn!(
+                            "el apagado no contestó en {PLAZO_APAGADO:?}: la sesión puede \
+                             haberse quedado sin escribir"
+                        ),
                     }
                 }
             }
@@ -224,6 +235,9 @@ fn guardia_de_navegacion<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         })
         .build()
 }
+
+/// Lo que se espera al apagar antes de cerrar la ventana de todas formas.
+const PLAZO_APAGADO: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Ficheros de log que sobreviven a la rotación.
 const RETENCION: usize = 7;

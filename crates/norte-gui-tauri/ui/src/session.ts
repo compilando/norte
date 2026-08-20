@@ -68,35 +68,41 @@ export class Session {
       return { kind: "gap", expected: this.seq, got: p.base_sequence };
     }
     for (const c of p.changes) {
-      this.applyChange(c);
+      if (!this.applyChange(c)) {
+        // Un cambio que este renderer no conoce NO se descarta avanzando la
+        // secuencia: eso deja una copia divergente de la pantalla que pasa
+        // todas las comprobaciones posteriores. Se pide una foto.
+        return { kind: "gap", expected: this.seq, got: env.sequence };
+      }
     }
     this.seq = env.sequence;
     return { kind: "applied" };
   }
 
+  /** `false` si el cambio no se reconoce: hay que pedir una foto. */
   private applyChange(
     c: Extract<UiUpdate, { update: "patch" }>["changes"][number],
-  ): void {
+  ): boolean {
     const s = this.snapshot;
     if (s === null) {
-      return;
+      return false;
     }
     switch (c.change) {
       case "cursor": {
         const slot = browser(s, c.slot_id);
         if (slot === null || slot.generation !== c.generation) {
-          return;
+          return true;
         }
         slot.cursor = c.cursor;
         for (const r of slot.rows) {
           r.selected = c.cursor !== null && r.key === c.cursor;
         }
-        return;
+        return true;
       }
       case "rows": {
         const slot = browser(s, c.slot_id);
         if (slot === null) {
-          return;
+          return true;
         }
         slot.generation = c.generation;
         slot.first_visible = c.first_visible;
@@ -105,37 +111,39 @@ export class Session {
         if (cur !== undefined) {
           slot.cursor = cur.key;
         }
-        return;
+        return true;
       }
       case "slot_state": {
         const slot = browser(s, c.slot_id);
         if (slot !== null) {
           slot.state = c.state;
         }
-        return;
+        return true;
       }
       case "status": {
         s.status = { message: c.message, banners: c.banners, pending: c.pending };
-        return;
+        return true;
       }
       case "tasks":
         s.tasks = c.tasks;
-        return;
+        return true;
       case "dialogs":
         s.dialogs = c.dialogs;
-        return;
+        return true;
       case "connection": {
         const { change: _c, ...rest } = c;
         s.connection = rest;
-        return;
+        return true;
       }
       case "layout": {
         s.layout = { cells: c.cells, placements: c.placements };
         // El foco es de quien tenga el papel `active`, y lo dice el host.
         const activo = c.placements.find((p) => p.role === "active");
         s.focus = activo === undefined ? null : activo.slot_id;
-        return;
+        return true;
       }
+      default:
+        return false;
     }
   }
 }
